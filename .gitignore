@@ -68,3 +68,17 @@ htmlcov/
 
 # mypy
 .mypy_cache/
+
+# Project output (generated reports & snapshots)
+data/reports/
+data/report_snapshots/
+data/report_preferences.json
+data/docs/
+
+# Claude Code local config
+.claude/
+
+# Misc auto-generated
+=0.2.0
+*技术报告.md
+report_agent/data/

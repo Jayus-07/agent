@@ -3,38 +3,13 @@
 为函数调用添加超时保护，防止长时间卡死
 """
 import signal
-import functools
-from typing import Optional, Callable, Any
+from typing import Callable, Any
 from utils.logger import logger
 
 
 class TimeoutError(Exception):
     """超时异常"""
     pass
-
-
-def timeout_decorator(seconds: int, error_message: str = "操作超时"):
-    """
-    超时装饰器（仅适用于Unix/Linux/Mac）
-    
-    Args:
-        seconds: 超时秒数
-        error_message: 超时错误消息
-        
-    Returns:
-        装饰器函数
-    """
-    def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            # Windows不支持signal.alarm，使用备选方案
-            import platform
-            if platform.system() == 'Windows':
-                return _timeout_windows(func, seconds, error_message, *args, **kwargs)
-            else:
-                return _timeout_unix(func, seconds, error_message, *args, **kwargs)
-        return wrapper
-    return decorator
 
 
 def _timeout_unix(func: Callable, seconds: int, error_message: str, *args, **kwargs):

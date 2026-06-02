@@ -1,0 +1,74 @@
+from utils.logger import logger
+
+
+class CustomRetriever:
+
+    def __init__(self, vectordb):
+        self.vectordb = vectordb
+
+    def retrieve(
+            self,
+            question,
+            k=5,
+            debug=1,
+            doc_ids=None,
+            metadata_filter=None
+    ):
+        """
+        检索文档
+
+        参数:
+            question: 查询问题
+            k: 返回数量
+            debug: 是否打印调试信息
+            doc_ids: 文档ID列表过滤
+            metadata_filter: 额外的元数据过滤条件字典
+                例如: {"person_names": "吴浩", "doc_type": "resume"}
+        """
+
+        filter_dict = {}
+
+        if doc_ids:
+            filter_dict["doc_id"] = {"$in": list(doc_ids)}
+
+        if metadata_filter:
+            for key, value in metadata_filter.items():
+                if isinstance(value, list):
+                    filter_dict[key] = {"$in": value}
+                else:
+                    filter_dict[key] = value
+
+        if filter_dict:
+            docs_with_scores = (
+                self.vectordb
+                .similarity_search_with_score(
+                    question,
+                    k=k * 2,
+                    filter=filter_dict
+                )
+            )
+            if debug:
+                logger.debug(f"Metadata Filter: {filter_dict}")
+        else:
+            docs_with_scores = (
+                self.vectordb
+                .similarity_search_with_score(
+                    question,
+                    k=k
+                )
+            )
+            if debug:
+                logger.debug("Global search (no filter)")
+
+        if debug:
+            for i, (doc, score) in enumerate(docs_with_scores):
+                logger.debug(
+                    f"[{i+1}] vector_score={score:.4f} "
+                    f"source={doc.metadata.get('source_file')} "
+                    f"chunk={doc.metadata.get('chunk_id')} "
+                    f"content={doc.page_content[:50]}..."
+                )
+
+        docs = [doc for doc, score in docs_with_scores]
+
+        return docs

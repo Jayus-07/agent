@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python -c \"import py_compile; py_compile.compile\\('rag_demo.py', doraise=True\\); py_compile.compile\\('rag/hybrid_search.py', doraise=True\\); py_compile.compile\\('rag/multi_query.py', doraise=True\\); print\\('All syntax OK'\\)\")",
-      "Bash(.venv/Scripts/python -c ' *)"
-    ]
-  }
-}

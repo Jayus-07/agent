@@ -1,0 +1,65 @@
+"""
+sql_generator.py — 调用 LLM 生成 SQL
+
+只接收有限表名的 schema 描述，生成纯 SELECT 语句。
+"""
+from llm.llm_factory import llm
+from sql_agent.schema_loader import schema_loader
+from utils.logger import logger
+
+GENERATE_PROMPT = """你是 SQL 查询生成助手。根据用户问题和提供的表结构，生成一条 PostgreSQL 语法的 SELECT 语句。
+
+规则:
+1. 只生成 SELECT 语句
+2. 只使用提供的表名和列名，不要编造
+3. 使用标准 PostgreSQL 语法
+4. 字符串比较使用 LIKE 或 =，ILIKE 用于不区分大小写的匹配
+5. 如果是对敏感列（phone, password）查询，不要生成
+6. 只输出 SQL 语句本身，不要加 markdown 代码块标记
+7. 不要在 SQL 末尾加分号
+
+数据库表结构:
+{table_info}
+
+用户问题: {question}
+
+直接输出 SQL:"""
+
+
+def generate_sql(question: str, table_names: list) -> str:
+    """
+    生成 SQL 语句。
+
+    参数:
+        question: 用户自然语言问题
+        table_names: 相关表名列表
+
+    返回:
+        SQL 字符串
+    """
+    table_info = schema_loader.get_table_info(table_names)
+
+    prompt = GENERATE_PROMPT.format(table_info=table_info, question=question)
+
+    try:
+        resp = llm.invoke(prompt)
+        sql = resp.content.strip()
+
+        # 去除可能的 markdown 标记
+        if sql.startswith("```"):
+            lines = sql.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            sql = "\n".join(lines).strip()
+
+        # 去掉末尾分号
+        sql = sql.rstrip(";").rstrip()
+
+        logger.info(f"[SQLGen] 生成 SQL: {sql[:120]}")
+        return sql
+
+    except Exception as e:
+        logger.error(f"[SQLGen] LLM 生成 SQL 失败: {e}")
+        raise
