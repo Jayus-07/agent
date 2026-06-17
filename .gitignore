@@ -51,7 +51,7 @@ data/doc_versions.json  # 文档版本索引（自动生成）
 *.sqlite3
 
 # Models
-models/
+/models/
 .cache/
 
 # OS
