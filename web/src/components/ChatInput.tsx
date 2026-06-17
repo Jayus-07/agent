@@ -2,14 +2,15 @@
 
 import { useState, useRef, useEffect, KeyboardEvent } from 'react'
 import { Send, Loader2 } from 'lucide-react'
-import { useChatStore } from '@/store/chat'
-import { useSendMessage } from '@/hooks/useChat'
 
-export default function ChatInput() {
+interface Props {
+  onSend: (text: string) => void
+  isLoading: boolean
+}
+
+export default function ChatInput({ onSend, isLoading }: Props) {
   const [input, setInput] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const isLoading = useChatStore((s) => s.isLoading)
-  const { send } = useSendMessage()
 
   // 自动调整 textarea 高度
   useEffect(() => {
@@ -24,7 +25,7 @@ export default function ChatInput() {
     const trimmed = input.trim()
     if (!trimmed || isLoading) return
     setInput('')
-    send(trimmed)
+    onSend(trimmed)
   }
 
   function handleKeyDown(e: KeyboardEvent) {
