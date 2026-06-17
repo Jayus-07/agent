@@ -102,8 +102,8 @@ class MemoryService:
                 await db_session.rollback()
                 logger.error(f"[MemoryService] end_turn 失败: {e}")
 
-        # L3: background write via dedicated event-loop thread
-        _run_in_bg(self.store(question, answer, session_id, user_id))
+        # L3: background write — caller's loop must keep running (Manager handles this)
+        asyncio.ensure_future(self.store(question, answer, session_id, user_id))
 
     # ============================================================
     # Retrieval

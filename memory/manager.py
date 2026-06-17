@@ -32,10 +32,16 @@ class MemoryManager:
         # This thread stays alive serving future _run() calls
 
     def _run(self, coro):
-        """Run async coroutine on the persistent background loop."""
-        future = self._executor.submit(
-            lambda: asyncio.get_event_loop().run_until_complete(coro)
-        )
+        """Run async coroutine on the persistent loop, then drain pending tasks."""
+        def _execute():
+            loop = asyncio.get_event_loop()
+            result = loop.run_until_complete(coro)
+            # Give pending background tasks (e.g. L3 store) a chance to run
+            pending = asyncio.all_tasks(loop)
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            return result
+        future = self._executor.submit(_execute)
         return future.result(timeout=120)
 
     def _shutdown(self) -> None:
