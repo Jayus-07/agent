@@ -28,7 +28,7 @@ export default function ChatView() {
         <div ref={bottomRef} />
       </div>
 
-      <ChatInput />
+      <ChatInput onSend={send} isLoading={isLoading} />
     </div>
   )
 }
