@@ -1,5 +1,6 @@
 """MemoryService — 企业级统一记忆服务入口"""
 import asyncio
+import threading
 from memory.database import get_session, AsyncSessionLocal
 from memory.repository.session_repo import SessionRepository
 from memory.repository.memory_repo import MemoryRepository
@@ -13,6 +14,19 @@ from memory.decay import MemoryDecayService
 from memory.pii_filter import scan_and_sanitize
 from langchain_core.messages import SystemMessage
 from utils.logger import logger
+
+
+def _run_in_bg(coro):
+    """Run a coroutine in a dedicated background thread with its own event loop.
+    Survives the caller's event loop lifecycle — the bg loop stays alive forever.
+    """
+    _bg = getattr(_run_in_bg, '_loop', None)
+    if _bg is None:
+        _bg = asyncio.new_event_loop()
+        _run_in_bg._loop = _bg
+        t = threading.Thread(target=_bg.run_forever, daemon=True)
+        t.start()
+    return asyncio.run_coroutine_threadsafe(coro, _bg)
 
 
 class MemoryService:
@@ -88,8 +102,8 @@ class MemoryService:
                 await db_session.rollback()
                 logger.error(f"[MemoryService] end_turn 失败: {e}")
 
-        # L3: async background write
-        asyncio.create_task(self.store(question, answer, session_id, user_id))
+        # L3: background write via dedicated event-loop thread
+        _run_in_bg(self.store(question, answer, session_id, user_id))
 
     # ============================================================
     # Retrieval
