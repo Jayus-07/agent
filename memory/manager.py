@@ -1,27 +1,55 @@
 """MemoryManager — L1+L2+L3 lifecycle orchestrator, backward-compat wrapper"""
 import asyncio
+import concurrent.futures
+import atexit
 from memory.service import MemoryService
 from memory.short_term import ShortTermBuffer
 from utils.logger import logger
 
 
 class MemoryManager:
+    """Sync→async bridge using a persistent background event loop.
+
+    SQLAlchemy async engine pools are event-loop-bound. Using asyncio.run()
+    per call destroys the loop each time, corrupting the pool. Instead we
+    keep one dedicated thread with one event loop alive for the process
+    lifetime.
+    """
+
     def __init__(self):
         self._service = MemoryService()
-        self._loop = None
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        # Warm up: create the loop and keep it alive
+        self._ready = False
+        self._executor.submit(self._init_loop).result(timeout=10)
+        atexit.register(self._shutdown)
+
+    def _init_loop(self) -> None:
+        """Create a persistent event loop in this thread."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._ready = True
+        # This thread stays alive serving future _run() calls
 
     def _run(self, coro):
-        """Sync wrapper for async calls"""
+        """Run async coroutine on the persistent background loop."""
+        future = self._executor.submit(
+            lambda: asyncio.get_event_loop().run_until_complete(coro)
+        )
+        return future.result(timeout=120)
+
+    def _shutdown(self) -> None:
+        """Clean shutdown — close the engine's connections."""
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop and loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, coro)
-                return future.result()
-        return asyncio.run(coro)
+            async def _close():
+                from memory.database import async_engine
+                await async_engine.dispose()
+            self._executor.submit(
+                lambda: asyncio.get_event_loop().run_until_complete(_close())
+            ).result(timeout=5)
+        except Exception:
+            pass
+        self._executor.shutdown(wait=False)
 
     def start_session(self, session_id: str, question: str) -> ShortTermBuffer:
         return self._run(self._service.start_session(session_id))
