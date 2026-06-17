@@ -8,10 +8,18 @@ from memory.dedup import DedupDecision  # kept for type hint
 from utils.logger import logger
 from dataclasses import dataclass, field
 
-_FACT_EXTRACTION_PROMPT = """提取对话中的关键信息。每条信息一行，格式: 类型|内容
+_FACT_EXTRACTION_PROMPT = """从对话中提取值得长期记忆的关键信息。每条一行，严格使用竖线分隔: 类型|内容
 
-类型只能是: user_fact(用户信息), preference(偏好), decision(决策), knowledge(知识)
-没有重要信息则输出: NONE
+类型: user_fact(用户身份/角色/技能), preference(偏好/习惯), decision(决策), knowledge(知识)
+没有重要信息则只输出: NONE
+
+示例:
+用户: 我叫张三，是后端工程师，喜欢用FastAPI
+助手: 好的张三，你是后端工程师
+输出:
+user_fact|用户名张三
+user_fact|职业是后端工程师
+preference|喜欢使用FastAPI框架
 
 对话:
 {conversation}
@@ -59,16 +67,47 @@ class LongTermMemory:
             return []
         facts = []
         valid_types = {"user_fact", "preference", "decision", "knowledge"}
+
         for line in text.splitlines():
             line = line.strip()
-            if not line or "|" not in line:
+            if not line or line.upper().startswith("NONE"):
                 continue
-            parts = line.split("|", 1)
-            ft = parts[0].strip()
-            content = parts[1].strip() if len(parts) > 1 else ""
-            if ft in valid_types and content:
-                scan = scan_and_sanitize(content)
-                facts.append(MemoryFact(fact_type=ft, content=scan.sanitized))
+
+            # Format 1: "类型|内容" (pipe)
+            if "|" in line:
+                parts = line.split("|", 1)
+                ft = parts[0].strip()
+                content = parts[1].strip() if len(parts) > 1 else ""
+                if ft in valid_types and content:
+                    scan = scan_and_sanitize(content)
+                    facts.append(MemoryFact(fact_type=ft, content=scan.sanitized))
+                continue
+
+            # Format 2: LLM free-form "类型: user_fact, 内容: xxx" → normalize
+            import re
+            m = re.match(r'.*?[:：]\s*(\w+)\s*[,，].*?[:：]\s*(.+)', line)
+            if m:
+                ft_raw = m.group(1).strip()
+                content = m.group(2).strip()
+                # Map Chinese/English type names
+                ft_map = {
+                    "user_fact": "user_fact", "用户信息": "user_fact",
+                    "preference": "preference", "偏好": "preference",
+                    "decision": "decision", "决策": "decision",
+                    "knowledge": "knowledge", "知识": "knowledge",
+                }
+                ft = ft_map.get(ft_raw, ft_raw)
+                if ft in valid_types and len(content) > 2:
+                    scan = scan_and_sanitize(content)
+                    facts.append(MemoryFact(fact_type=ft, content=scan.sanitized))
+                continue
+
+            # Format 3: Bare text with minimum length → treat as knowledge
+            clean = re.sub(r'^[-*\d.]+\s*', '', line).strip()
+            if len(clean) > 5:
+                scan = scan_and_sanitize(clean)
+                facts.append(MemoryFact(fact_type="knowledge", content=scan.sanitized))
+
         return facts
 
     # ── Retrieval ──
