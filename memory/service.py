@@ -152,7 +152,7 @@ class MemoryService:
                 for fact in facts:
                     # 2. PII already applied in extract_facts
                     # 3. Classify
-                    if self._trigger.classify(fact.content) == "IGNORE":
+                    if self._trigger.classify(fact.content, fact.fact_type) == "IGNORE":
                         continue
                     # 4. Score
                     fact.importance_score = self._importance.score(fact.fact_type, fact.content)

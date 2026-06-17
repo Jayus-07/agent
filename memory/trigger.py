@@ -37,18 +37,20 @@ _TRIGGER_PROMPT = """判断这条信息是否值得存入长期记忆。只需�
 
 
 class MemoryWorthinessClassifier:
-    def classify(self, content: str) -> str:
-        # Rule layer: check IGNORE first (short circuits)
+    def classify(self, content: str, fact_type: str = "") -> str:
+        # user_fact / preference from LLM extraction → strong STORE signal
+        if fact_type in ("user_fact", "preference"):
+            return "STORE"
+        # Rule layer: IGNORE first
         for pat in _IGNORE_SIGNALS:
             if re.search(pat, content):
                 return "IGNORE"
         for pat in _STORE_SIGNALS:
             if re.search(pat, content):
                 return "STORE"
-        # Heuristic: too short with no context → IGNORE
+        # Heuristic: too short → IGNORE
         if len(content) < 4:
             return "IGNORE"
-        # LLM fallback
         return self._llm_classify(content)
 
     def _llm_classify(self, content: str) -> str:
