@@ -54,13 +54,6 @@ export interface SSEEvent {
 
 export type ChatMode = 'chat' | 'sql' | 'rag' | 'report'
 
-export const MODE_LABELS: Record<ChatMode, string> = {
-  chat: '对话',
-  sql: 'SQL',
-  rag: '知识库',
-  report: '报告',
-}
-
 // ========================================
 // 消息
 // ========================================

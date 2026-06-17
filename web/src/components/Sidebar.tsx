@@ -3,7 +3,6 @@
 import { Plus, PanelLeftClose, PanelLeft } from 'lucide-react'
 import { useChatStore } from '@/store/chat'
 import SessionList from './SessionList'
-import ModeTabs from './ModeTabs'
 
 interface Props {
   collapsed: boolean
@@ -52,13 +51,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
         </div>
       </div>
 
-      {/* 模式选择 */}
-      <ModeTabs />
-
-      {/* 分隔线 */}
-      <div className="h-px bg-[#2f2f2f] mx-3" />
-
-      {/* 会话列表 */}
+      {/* Session list */}
       <div className="flex-1 overflow-y-auto px-2 py-2">
         <p className="text-[11px] text-[#8e8e8e] px-2 mb-1.5 uppercase tracking-wide">历史会话</p>
         <SessionList />
