@@ -39,6 +39,10 @@ class CustomRetriever:
                     filter_dict[key] = value
 
         if filter_dict:
+            # ChromaDB requires exactly one top-level operator.
+            # Multiple keys → wrap in $and.
+            if len(filter_dict) > 1:
+                filter_dict = {"$and": [{k: v} for k, v in filter_dict.items()]}
             docs_with_scores = (
                 self.vectordb
                 .similarity_search_with_score(
