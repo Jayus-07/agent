@@ -1,28 +1,27 @@
 """
 LangChain LCEL 主 Chain
-= 历史感知检索 + 多查询 + 自适应检索 + 上下文压缩 + 会话记忆
+= 历史感知检索 + 多查询 + 自适应检索 + 上下文压缩 + 三层记忆
 
 架构:
-  ask() 手动管理 SQLChatMessageHistory ← 持久化会话记忆
-    └── chain                        ← ChunkLevel → MultiQuery → Adaptive → Rerank → HistoryAware
+  L1 短期: 当前调用的消息缓冲区
+  L2 会话: PostgreSQL 持久化 (via SessionRepository)
+  L3 长期: PostgreSQL + pgvector (via MemoryRepository)
+  MemoryManager 统一管理三层，chain 只持有引用。
 """
 from langchain_classic.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_classic.retrievers.multi_query import MultiQueryRetriever
 from langchain_classic.retrievers import ContextualCompressionRetriever
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
-from langchain_community.chat_message_histories import SQLChatMessageHistory
+from langchain_core.runnables import RunnableLambda
 
 from llm.llm_factory import llm
 from retrieval.retrievers import ChunkLevelRetriever, AdaptiveRetriever
 from retrieval.reranker import RerankCompressor
-from config import (
-    CHAT_HISTORY_DB,
-    ENABLE_HISTORY_AWARE_RETRIEVAL,
-    ENABLE_LLM_COMPRESSION,
-)
+from config import ENABLE_HISTORY_AWARE_RETRIEVAL, ENABLE_LLM_COMPRESSION, CITATION_SUPPORT_THRESHOLD, RERANK_TIMEOUT
 from utils.logger import logger
+from utils.timeout import safe_call_with_timeout
 
 
 # =====================================================
@@ -46,7 +45,7 @@ CONTEXTUALIZE_PROMPT = ChatPromptTemplate.from_messages([
 ])
 
 # =====================================================
-# Prompt: QA 回答
+# Prompt: QA 回答（含内联引用标注）
 # =====================================================
 
 # 用于最终生成答案，结合检索到的文档和对话历史
@@ -56,10 +55,11 @@ QA_PROMPT = ChatPromptTemplate.from_messages([
 请基于提供的资料回答问题。
 
 要求：
-1. 不编造不存在的信息
-2. 如果资料不足，基于已有信息归纳，不要凭空补充
-3. 输出详细，使用分点或分段说明
-4. 资料中提到的背景、细节、职责应充分展开
+1. 引用资料时在句末标注来源编号，如 [1]、[2]、[3]
+2. 不编造不存在的信息
+3. 如果资料不足，基于已有信息归纳，不要凭空补充
+4. 输出详细，使用分点或分段说明
+5. 资料中提到的背景、细节、职责应充分展开
 
 资料：
 {context}"""),
@@ -67,20 +67,10 @@ QA_PROMPT = ChatPromptTemplate.from_messages([
     ("human", "{input}"),
 ])
 
-
-# =====================================================
-# 会话历史持久化
-# =====================================================
-
-def _get_session_history(session_id: str):
-    """
-    根据 session_id 获取 SQLite 持久化的对话历史对象。
-    使用 SQLChatMessageHistory 自动管理消息的存储和加载。
-    """
-    return SQLChatMessageHistory(
-        session_id=session_id,
-        connection=CHAT_HISTORY_DB,
-    )
+# 单文档格式化：用序号标注每个文档
+DOCUMENT_PROMPT = PromptTemplate.from_template(
+    "[文档{index}] 来源: {source_file}\n{page_content}"
+)
 
 
 # =====================================================
@@ -88,7 +78,7 @@ def _get_session_history(session_id: str):
 # =====================================================
 
 class RAGChain:
-    """LangChain 高层封装的 RAG 管道，整合两阶段自适应检索、多查询、上下文压缩、历史感知、会话记忆。"""
+    """LangChain 高层封装的 RAG 管道，整合三层记忆系统。"""
 
     def __init__(
         self,
@@ -97,12 +87,14 @@ class RAGChain:
         chunk_retriever,
         bm25,
         person_index: dict = None,
+        memory_manager=None,
     ):
         self.doc_db = doc_db
         self.vectordb = vectordb
         self.chunk_retriever = chunk_retriever
         self.bm25 = bm25
         self.person_index = person_index or {}
+        self._memory = memory_manager
 
         self._build_retrievers()
         self._build_chains()
@@ -135,7 +127,21 @@ class RAGChain:
           - 集中在 1-2 个文档 → 补全文档全文
           - 分散在多个文档 → 只给 chunks
         """
-        stuff_chain = create_stuff_documents_chain(llm, QA_PROMPT)
+        # Citation Filter: 注入文档序号 + 自定义文档格式，使 LLM 可内联引用 [1][2]
+        def _index_docs(input_dict):
+            docs = input_dict.get("context", [])
+            for i, doc in enumerate(docs, 1):
+                doc.metadata["index"] = i
+            return input_dict
+
+        stuff_chain = (
+            RunnableLambda(_index_docs)
+            | create_stuff_documents_chain(
+                llm, QA_PROMPT,
+                document_prompt=DOCUMENT_PROMPT,
+                document_separator="\n\n---\n\n",
+            )
+        )
 
         retriever = self.chunk_retriever_base
 
@@ -178,16 +184,188 @@ class RAGChain:
     def ask(self, question: str, session_id: str = "default") -> str:
         logger.info(f"[RAGChain] 收到问题: {question[:60]}... (session={session_id})")
 
-        history = _get_session_history(session_id)
-        chat_history = history.messages
-        logger.info(f"[RAGChain] 历史消息: {(chat_history)}")
+        # L1/L2/L3: 加载会话上下文 (由 MemoryManager 统一管理)
+        l1 = self._memory.start_session(session_id, question) if self._memory else None
+        chat_history = list(l1.messages) if l1 else []
 
         result = self.chain.invoke({
             "input": question,
             "chat_history": chat_history,
         })
 
-        history.add_message(HumanMessage(content=question))
-        history.add_message(AIMessage(content=result["answer"]))
+        answer = result["answer"]
+        context_docs = result.get("context", [])
 
-        return result["answer"]
+        # Citation Filter: 用 CrossEncoder 验证每个 chunk 是否真正支撑答案
+        if context_docs:
+            answer, verified_docs = _verify_support(answer, context_docs, question)
+        else:
+            verified_docs = []
+
+        # 附加参考文献（仅显示文中引用 + 验证通过 的来源）
+        references = _format_references(verified_docs, answer)
+        if references:
+            answer = answer + references
+
+        # L2/L3: 持久化本轮（MemoryManager 委托 MemoryService → PostgreSQL）
+        if self._memory:
+            self._memory.end_turn(session_id, question, answer)
+
+        return answer
+
+
+def _verify_support(answer: str, docs: list, question: str = "") -> tuple:
+    """
+    Citation Filter 核心：用 CrossEncoder 反向验证每个 chunk 是否真正支撑答案。
+
+    阶段 1: 以问题为 query 对每个 chunk 打分，过滤不相关的 chunk
+    阶段 2: 以句子为单位验证是否被剩余 chunk 支撑，无支撑则标记 [推断]
+    返回: (cleaned_answer, verified_docs)
+    """
+    from retrieval.reranker import reranker as _ce
+
+    if not docs:
+        return answer, []
+
+    # —— 阶段 1: 以问题为 query，对每个 chunk 打分（判断 chunk 是否与问题相关） ——
+    pairs = [(question or answer, doc.page_content[:800]) for doc in docs]
+    scores = safe_call_with_timeout(
+        _ce.predict,
+        timeout=RERANK_TIMEOUT,
+        default_value=None,
+        error_message="Citation 支撑验证超时",
+        sentences=pairs,
+    )
+
+    if scores is None:
+        logger.warning("[CitationFilter] 验证失败，回退到原始结果")
+        return answer, docs
+
+    # —— 阶段 2: 过滤 + 写入 support_score ——
+    verified = []
+    for doc, score in zip(docs, scores):
+        if float(score) > CITATION_SUPPORT_THRESHOLD:
+            doc.metadata["support_score"] = round(float(score), 4)
+            verified.append(doc)
+
+    logger.info(
+        f"[CitationFilter] 支撑验证: {len(docs)} → {len(verified)} 个 chunk "
+        f"(threshold={CITATION_SUPPORT_THRESHOLD})"
+    )
+
+    if not verified:
+        logger.warning("[CitationFilter] 所有 chunk 未通过验证，回退")
+        return answer, docs
+
+    # —— 阶段 3: 句子级验证 ——
+    cleaned = _mark_unsupported_sentences(answer, verified)
+
+    return cleaned, verified
+
+
+def _mark_unsupported_sentences(answer: str, verified_docs: list) -> str:
+    """检查每个句子是否有 chunk 支撑，无支撑则标记 [推断]"""
+    import re
+    from collections import defaultdict
+    from retrieval.reranker import reranker as _ce
+
+    # 剥离已有参考文献部分（避免把来源列表当正文检查）
+    ref_marker = "\n\n---\n\n### 参考文献"
+    ref_start = answer.find(ref_marker)
+    body = answer[:ref_start] if ref_start != -1 else answer
+
+    # 分句
+    raw_sentences = re.split(r'(?<=[。！？])\s*', body)
+
+    # 过滤空句和纯格式行
+    sentences = []
+    for s in raw_sentences:
+        stripped = s.strip()
+        if not stripped or re.match(r'^[\s\[\]\d,，、\-—#*>\-|]+$', stripped):
+            sentences.append((s, True))  # skip verification
+        else:
+            sentences.append((s, False))
+
+    # 批量建所有 sentence×chunk 对，一次 CrossEncoder 调用
+    all_pairs = []
+    pair_index = []  # (sent_idx, doc_idx)
+    for i, (_, skip) in enumerate(sentences):
+        if skip:
+            continue
+        for j, doc in enumerate(verified_docs):
+            all_pairs.append((sentences[i][0].strip(), doc.page_content[:500]))
+            pair_index.append((i, j))
+
+    if not all_pairs:
+        return answer
+
+    all_scores = safe_call_with_timeout(
+        _ce.predict,
+        timeout=RERANK_TIMEOUT,
+        default_value=None,
+        error_message="句子验证超时",
+        sentences=all_pairs,
+    )
+
+    # 按句子聚合最高分
+    sent_max = defaultdict(float)
+    if all_scores is not None:
+        for (sent_idx, _), score in zip(pair_index, all_scores):
+            sent_max[sent_idx] = max(sent_max[sent_idx], float(score))
+
+    # 组装输出
+    result_parts = []
+    for i, (original, skip) in enumerate(sentences):
+        if skip:
+            result_parts.append(original)
+        elif sent_max.get(i, 0) < CITATION_SUPPORT_THRESHOLD:
+            result_parts.append(f"[推断] {original}")
+        else:
+            result_parts.append(original)
+
+    return "".join(result_parts)
+
+
+def _format_references(docs: list, answer: str = "") -> str:
+    """生成参考文献列表，仅显示文中实际引用到的来源"""
+    if not docs:
+        return ""
+
+    # 从回答中提取所有引用编号 [1] [2] ...
+    import re
+    cited = set()
+    for m in re.finditer(r"\[(\d+)\]", answer):
+        cited.add(int(m.group(1)))
+
+    seen = {}
+    for doc in docs:
+        idx = doc.metadata.get("index")
+        fname = doc.metadata.get("source_file", doc.metadata.get("source", ""))
+        if not fname or idx is None:
+            continue
+        # 仅保留文中实际引用的来源
+        if idx not in cited:
+            continue
+        if fname not in seen:
+            seen[fname] = (idx, doc.metadata)
+
+    if not seen:
+        return ""
+
+    # 按 index 排序，与文中标注 [1][2] 顺序一致
+    items = sorted(seen.values(), key=lambda x: x[0])
+
+    lines = ["", "---", "", "### 参考文献", ""]
+    for idx, meta in items:
+        doc_type = meta.get("doc_type", "")
+        score = meta.get("score", meta.get("rerank_score", None))
+        type_label = {"resume": "简历", "project": "项目文档", "report": "报告", "manual": "操作手册", "policy": "制度规范"}.get(doc_type, doc_type)
+        fname = meta.get("source_file", meta.get("source", ""))
+        parts = [f"{idx}. **{fname}**"]
+        if type_label:
+            parts.append(f" ({type_label})")
+        if score is not None:
+            parts.append(f" — 相关度: {score:.2f}")
+        lines.append("".join(parts))
+
+    return "\n".join(lines)

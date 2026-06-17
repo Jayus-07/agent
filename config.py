@@ -39,6 +39,9 @@ HYBRID_SEARCH_K = int(os.getenv("HYBRID_SEARCH_K", "20"))
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "8"))
 RERANK_SCORE_THRESHOLD = float(os.getenv("RERANK_SCORE_THRESHOLD", "0.3"))
 
+# Citation Filter: chunk 支撑答案的最低 CrossEncoder 分数（高于检索的 rerank 阈值，更严格）
+CITATION_SUPPORT_THRESHOLD = float(os.getenv("CITATION_SUPPORT_THRESHOLD", "0.4"))
+
 
 # ====================================
 # 数据库路径
@@ -190,15 +193,51 @@ OVERALL_REQUEST_TIMEOUT = int(os.getenv("OVERALL_REQUEST_TIMEOUT", "60"))
 ENABLE_RESOURCE_MONITOR = os.getenv("ENABLE_RESOURCE_MONITOR", "true").lower() == "true"
 
 # ====================================
-# 会话记忆配置
+# 会话记忆配置 (L2)
 # ====================================
-CHAT_HISTORY_DB = os.getenv("CHAT_HISTORY_DB", "sqlite:///data/chat_history.db")
 ENABLE_HISTORY_AWARE_RETRIEVAL = os.getenv("ENABLE_HISTORY_AWARE_RETRIEVAL", "true").lower() == "true"
+
+# ====================================
+# 短期记忆配置 (L1)
+# ====================================
+SHORT_TERM_MAX_MESSAGES = int(os.getenv("SHORT_TERM_MAX_MESSAGES", "20"))
+
+# ====================================
+# 会话记忆配置 (L2)
+# ====================================
+SESSION_MAX_MESSAGES = int(os.getenv("SESSION_MAX_MESSAGES", "50"))
+
+# ====================================
+# 长期记忆配置 (L3)
+# ====================================
+ENABLE_LONG_TERM_MEMORY = os.getenv("ENABLE_LONG_TERM_MEMORY", "true").lower() == "true"
+
+# L3 企业级 PostgreSQL + pgvector 后端 (已替代 ChromaDB)
+
+# PII 过滤器: 写入前自动脱敏身份证号/手机号/银行卡/邮箱等
+L3_PII_FILTER_ENABLED = os.getenv("L3_PII_FILTER_ENABLED", "true").lower() == "true"
+
+# 去重阈值 (余弦相似度)
+L3_DEDUP_COSINE_THRESHOLD = float(os.getenv("L3_DEDUP_COSINE_THRESHOLD", "0.85"))
+L3_SUPERSEDE_THRESHOLD = float(os.getenv("L3_SUPERSEDE_THRESHOLD", "0.92"))
+
+# 时间衰减: 记忆每天衰减此比例 (0 = 不衰减, 0.01 = 每天衰减1%)
+L3_DECAY_RATE = float(os.getenv("L3_DECAY_RATE", "0.01"))
+
+# 陈旧的记忆自动清理 (30天 + 访问 < 2次)
+L3_CLEANUP_MIN_DAYS = int(os.getenv("L3_CLEANUP_MIN_DAYS", "30"))
+L3_CLEANUP_MIN_ACCESS = int(os.getenv("L3_CLEANUP_MIN_ACCESS", "2"))
 
 # ====================================
 # 上下文压缩配置
 # ====================================
 ENABLE_LLM_COMPRESSION = os.getenv("ENABLE_LLM_COMPRESSION", "false").lower() == "true"
+
+# ====================================
+# Memory — Enterprise PostgreSQL
+# ====================================
+MEMORY_ASYNC_POOL_SIZE = int(os.getenv("MEMORY_ASYNC_POOL_SIZE", "20"))
+MEMORY_ASYNC_MAX_OVERFLOW = int(os.getenv("MEMORY_ASYNC_MAX_OVERFLOW", "10"))
 
 DB_CONFIG = {
     "host":     os.getenv("PGHOST", "localhost"),

@@ -34,6 +34,9 @@ class MemoryService:
                 srepo = SessionRepository(db_session)
                 mrepo = MemoryRepository(db_session)
 
+                # Ensure chat_sessions row exists (FK target for chat_messages)
+                await srepo.get_or_create(session_id, user_id)
+
                 # L2 → L1
                 l2 = await SessionMemory.create(session_id, srepo, user_id)
                 self._sessions[session_id] = l2
@@ -66,6 +69,9 @@ class MemoryService:
         async with AsyncSessionLocal() as db_session:
             try:
                 srepo = SessionRepository(db_session)
+
+                # Ensure chat_sessions row exists (may not if start_session was never called)
+                await srepo.get_or_create(session_id, user_id)
 
                 # L2 persistence
                 await srepo.save_turn(session_id, question, answer)
