@@ -3,14 +3,25 @@ import re
 from llm.llm_factory import llm
 from utils.logger import logger
 
+# Order matters — earlier patterns match first
 _STORE_SIGNALS = [
-    r"我是", r"我在", r"我喜欢", r"我习惯", r"我常用", r"我偏好",
-    r"项目", r"系统", r"架构", r"技术栈", r"负责", r"管理",
-    r"开发", r"部署", r"配置", r"数据库", r"方案", r"决策",
+    # Identity / role / skill
+    r"(?<!\w)(工程师|经理|主管|总监|架构师|设计师|产品经理|开发|测试|运维|运营)(?!\w)",
+    r"(?<!\w)(后端|前端|全栈|算法|数据|AI|ML|DevOps|SRE)(?!\w)",
+    r"我是", r"我叫", r"我在", r"我的", r"我负责", r"我管理",
+    r"我喜欢", r"我习惯", r"我常用", r"我偏好", r"我擅长",
+    # Project / technical
+    r"项目", r"系统", r"架构", r"技术栈", r"方案", r"决策",
+    r"开发", r"部署", r"配置", r"数据库", r"框架",
+    r"代码", r"测试", r"上线", r"运维", r"监控",
+    r"FastAPI", r"Django", r"Flask", r"React", r"Vue",
+    r"Docker", r"K8s", r"Kubernetes", r"Redis", r"PostgreSQL",
 ]
+
 _IGNORE_SIGNALS = [
     r"天气", r"你好", r"谢谢", r"好的", r"收到", r"明白",
     r"今天.*吃", r"周末.*去", r"哈哈", r"嗯", r"哦",
+    r"再见", r"拜拜", r"稍等", r"等一下",
 ]
 
 _TRIGGER_PROMPT = """判断这条信息是否值得存入长期记忆。只需回答 STORE 或 IGNORE。
@@ -27,13 +38,16 @@ _TRIGGER_PROMPT = """判断这条信息是否值得存入长期记忆。只需�
 
 class MemoryWorthinessClassifier:
     def classify(self, content: str) -> str:
-        # Rule layer
-        for pat in _STORE_SIGNALS:
-            if re.search(pat, content):
-                return "STORE"
+        # Rule layer: check IGNORE first (short circuits)
         for pat in _IGNORE_SIGNALS:
             if re.search(pat, content):
                 return "IGNORE"
+        for pat in _STORE_SIGNALS:
+            if re.search(pat, content):
+                return "STORE"
+        # Heuristic: too short with no context → IGNORE
+        if len(content) < 4:
+            return "IGNORE"
         # LLM fallback
         return self._llm_classify(content)
 

@@ -39,13 +39,21 @@ class MemoryRepository:
     async def find_similar(
         self, embedding: list[float], user_id: str, threshold: float = 0.85,
     ) -> MemoryRecord | None:
-        """Find most similar active record above threshold"""
-        result = await self._s.execute(
-            select(MemoryRecord, (1.0 - MemoryRecord.embedding.cosine_distance(embedding)).label("sim"))
+        """Find most similar active record above threshold via subquery"""
+        sub = (
+            select(
+                MemoryRecord.id,
+                (1.0 - MemoryRecord.embedding.cosine_distance(embedding)).label("sim"),
+            )
             .where(MemoryRecord.is_active == True, MemoryRecord.user_id == user_id)
-            .having(text(f"1.0 - (embedding <=> :emb) >= {threshold}"))
-            .order_by(text("sim DESC")).limit(1),
-            {"emb": embedding},
+            .subquery()
+        )
+        result = await self._s.execute(
+            select(MemoryRecord, sub.c.sim)
+            .join(sub, MemoryRecord.id == sub.c.id)
+            .where(sub.c.sim >= threshold)
+            .order_by(sub.c.sim.desc())
+            .limit(1),
         )
         row = result.first()
         return row[0] if row else None
