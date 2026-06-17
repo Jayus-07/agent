@@ -56,3 +56,10 @@ psycopg2-binary>=2.9.0
 
 # SQL 语法解析（SQL Agent 安全校验）
 sqlglot>=25.0.0
+
+# ====================================
+# Memory Enterprise 依赖
+# ====================================
+asyncpg>=0.30.0
+pgvector>=0.4.0
+sqlalchemy[asyncio]>=2.0.0
