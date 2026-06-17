@@ -4,9 +4,8 @@ import { useMemo } from 'react'
 import { Loader2, CheckCircle2, XCircle, Brain, Database, Library, FileText } from 'lucide-react'
 import { useChatStore } from '@/store/chat'
 import { parseProgress } from '@/lib/sse-parser'
-import type { SSEEvent } from '@/lib/types'
 
-const workerIcons: Record<string, React.ReactNode> = {
+const WORKER_ICONS: Record<string, React.ReactNode> = {
   sql_worker:    <Database size={13} />,
   rag_worker:    <Library size={13} />,
   report_worker: <FileText size={13} />,
@@ -35,7 +34,7 @@ export default function StatusBar() {
           <div className="flex items-center gap-2 text-sm text-[#b4b4b4] min-w-0">
             <Loader2 size={14} className="text-blue-400 animate-spin shrink-0" />
             <span className="text-[#8e8e8e] shrink-0">
-              {workerIcons[progress.running.node] ?? null}
+              {WORKER_ICONS[progress.running.node] ?? null}
             </span>
             <span className="truncate text-[#ececec]">{progress.running.description}</span>
           </div>

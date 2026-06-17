@@ -4,15 +4,9 @@ import { useMemo } from 'react'
 import { User, Bot, Loader2 } from 'lucide-react'
 import type { Message } from '@/lib/types'
 import { parseProgress } from '@/lib/sse-parser'
+import { WORKER_EMOJI } from '@/lib/constants'
 import MarkdownContent from './MarkdownContent'
 import ThinkingPanel from './ThinkingPanel'
-
-const WORKER_ICONS: Record<string, string> = {
-  sql_worker:    '📊',
-  rag_worker:    '📚',
-  report_worker: '📄',
-  planner:       '🧠',
-}
 
 export default function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user'
@@ -51,7 +45,7 @@ export default function MessageBubble({ message }: { message: Message }) {
               <div className="flex items-center gap-2 text-sm text-[#b4b4b4] py-1">
                 <Loader2 size={14} className="text-blue-400 animate-spin shrink-0" />
                 <span className="text-[#8e8e8e] shrink-0">
-                  {WORKER_ICONS[progress.running.node] ?? '🔧'}
+                  {WORKER_EMOJI[progress.running.node] ?? '🔧'}
                 </span>
                 <span className="truncate text-[#ececec]">{progress.running.description}</span>
                 {progress.total > 0 && (

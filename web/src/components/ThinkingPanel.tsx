@@ -3,13 +3,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, CheckCircle2, XCircle, Circle, SkipForward } from 'lucide-react'
 import type { SSEEvent } from '@/lib/types'
-
-const WORKER_ICONS: Record<string, string> = {
-  sql_worker: '📊',
-  rag_worker: '📚',
-  report_worker: '📄',
-  planner: '🧠',
-}
+import { WORKER_EMOJI } from '@/lib/constants'
 
 function statusIcon(status?: string) {
   switch (status) {
@@ -30,7 +24,7 @@ interface RenderItem {
 }
 
 function stageToItem(e: SSEEvent): RenderItem | null {
-  const icon = WORKER_ICONS[e.node] ?? ''
+  const icon = WORKER_EMOJI[e.node] ?? ''
 
   switch (e.stage) {
     case 'planning':

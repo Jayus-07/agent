@@ -12,7 +12,6 @@ interface ChatState {
   error: string | null
 
   // — 计算属性 —
-  currentSession: () => Session | undefined
   currentMessages: () => Message[]
 
   // — 会话操作 —
@@ -21,12 +20,10 @@ interface ChatState {
   renameSession: (id: string, title: string) => void
   deleteSession: (id: string) => void
 
-  // — 消息操作 —
-  addMessage: (role: 'user' | 'assistant', content: string, thinking?: SSEEvent[]) => void
-  appendToLastAssistant: (chunk: string) => void
-  setThinking: (events: SSEEvent[]) => void
-  addThinkingEvent: (event: SSEEvent) => void
-  replaceLastAssistant: (content: string, thinking?: SSEEvent[]) => void
+  // — 消息操作 (sessionId 可选，用于 SSE 流固定目标会话) —
+  addMessage: (role: 'user' | 'assistant', content: string, thinking?: SSEEvent[], sessionId?: string) => void
+  addThinkingEvent: (event: SSEEvent, sessionId?: string) => void
+  replaceLastAssistant: (content: string, thinking?: SSEEvent[], sessionId?: string) => void
 
   // — 状态 —
   setLoading: (v: boolean) => void
@@ -45,6 +42,11 @@ function createSession(): Session {
   }
 }
 
+/** 返回目标 session id：显式传入者优先，否则用当前会话 */
+function targetId(state: ChatState, sid?: string): string {
+  return sid ?? state.currentId
+}
+
 export const useChatStore = create<ChatState>((set, get) => {
   const initialSession = createSession()
   return {
@@ -55,7 +57,6 @@ export const useChatStore = create<ChatState>((set, get) => {
     error: null,
 
     // —— 计算属性 ——
-    currentSession: () => get().sessions.find((s) => s.id === get().currentId),
     currentMessages: () => {
       const s = get().sessions.find((s) => s.id === get().currentId)
       return s?.messages ?? []
@@ -88,7 +89,6 @@ export const useChatStore = create<ChatState>((set, get) => {
     deleteSession: (id) => {
       set((state) => {
         const remaining = state.sessions.filter((s) => s.id !== id)
-        // 至少保留一个会话
         if (remaining.length === 0) {
           const fallback = createSession()
           return { sessions: [fallback], currentId: fallback.id }
@@ -101,7 +101,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     // —— 消息 ——
-    addMessage: (role, content, thinking) => {
+    addMessage: (role, content, thinking, sessionId) => {
       const msg: Message = {
         id: nanoid(),
         role,
@@ -110,9 +110,9 @@ export const useChatStore = create<ChatState>((set, get) => {
         thinking,
       }
       set((state) => {
+        const sid = targetId(state, sessionId)
         const sessions = state.sessions.map((s) => {
-          if (s.id !== state.currentId) return s
-          // 首条用户消息作为标题
+          if (s.id !== sid) return s
           const title = s.messages.length === 0 && role === 'user'
             ? content.slice(0, 30) + (content.length > 30 ? '...' : '')
             : s.title
@@ -123,35 +123,25 @@ export const useChatStore = create<ChatState>((set, get) => {
             updatedAt: Date.now(),
           }
         })
-        return { sessions, thinking: [] }
+        return { sessions, thinking: sessionId ? state.thinking : [] }
       })
     },
 
-    appendToLastAssistant: (chunk) => {
+    addThinkingEvent: (event, sessionId) => {
       set((state) => {
-        const sessions = state.sessions.map((s) => {
-          if (s.id !== state.currentId) return s
-          const msgs = [...s.messages]
-          const last = msgs[msgs.length - 1]
-          if (last && last.role === 'assistant') {
-            msgs[msgs.length - 1] = { ...last, content: last.content + chunk }
-          }
-          return { ...s, messages: msgs, updatedAt: Date.now() }
-        })
-        return { sessions }
+        // 如果指定了 sessionId 且与当前不同，不污染当前 thinking 显示
+        if (sessionId && sessionId !== state.currentId) {
+          return {} // 静默写入消息 thinking 字段（由 replaceLastAssistant 完成）
+        }
+        return { thinking: [...state.thinking, event] }
       })
     },
 
-    setThinking: (events) => set({ thinking: events }),
-
-    addThinkingEvent: (event) => {
-      set((state) => ({ thinking: [...state.thinking, event] }))
-    },
-
-    replaceLastAssistant: (content, thinking) => {
+    replaceLastAssistant: (content, thinking, sessionId) => {
       set((state) => ({
         sessions: state.sessions.map((s) => {
-          if (s.id !== state.currentId) return s
+          const sid = targetId(state, sessionId)
+          if (s.id !== sid) return s
           const msgs = [...s.messages]
           const lastIdx = msgs.length - 1
           if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {

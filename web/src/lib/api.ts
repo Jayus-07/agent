@@ -74,11 +74,12 @@ export async function sendReport(reportType: string, filters: Record<string, unk
 // SSE 流式对话 (POST /chat/stream)
 // ========================================
 
-export async function* streamChat(req: ChatRequest): AsyncGenerator<SSEEvent> {
+export async function* streamChat(req: ChatRequest, signal?: AbortSignal): AsyncGenerator<SSEEvent> {
   const res = await fetch(`${API_BASE}/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
+    signal,
   })
 
   if (!res.ok) {
@@ -92,7 +93,15 @@ export async function* streamChat(req: ChatRequest): AsyncGenerator<SSEEvent> {
 
   while (true) {
     const { done, value } = await reader.read()
-    if (done) break
+    if (done) {
+      // Flush remaining buffer — final SSE event may lack trailing \n
+      if (buffer.trim().startsWith('data: ')) {
+        try {
+          yield JSON.parse(buffer.trim().slice(6)) as SSEEvent
+        } catch { /* ignore malformed final chunk */ }
+      }
+      break
+    }
 
     buffer += decoder.decode(value, { stream: true })
     const lines = buffer.split('\n')
