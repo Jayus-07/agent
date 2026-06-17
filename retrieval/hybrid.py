@@ -1,4 +1,4 @@
-def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60):
+def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60, metadata_filter=None):
     """
     混合检索函数：结合向量检索和BM25检索，使用RRF算法融合排序
 
@@ -14,7 +14,7 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
         合并排序后的前k个文档列表
     """
 
-    vector_docs = vector_retriever.retrieve(query, k=k, doc_ids=doc_ids)
+    vector_docs = vector_retriever.retrieve(query, k=k, doc_ids=doc_ids, metadata_filter=metadata_filter)
 
     bm25_docs = bm25_retriever.invoke(query)
 

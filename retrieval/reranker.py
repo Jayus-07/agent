@@ -69,6 +69,10 @@ def rerank(
         if score > RERANK_SCORE_THRESHOLD
     ]
 
+    # 将重排序分数写入 metadata，供来源展示使用
+    for doc, score in scored_docs:
+        doc.metadata["rerank_score"] = round(float(score), 4)
+
     if debug:
 
         print("\n================ 全局重排序结果 ================\n")

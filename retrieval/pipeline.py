@@ -1,4 +1,6 @@
+"""RAG 管道 — 主入口"""
 import asyncio
+import concurrent.futures
 import os
 import hashlib
 import shutil
@@ -26,6 +28,17 @@ from utils.resource_monitor import resource_monitor
 
 os.environ['HF_HUB_OFFLINE'] = '1'
 os.environ['TRANSFORMERS_OFFLINE'] = '1'
+
+
+def _run_async(coro):
+    """安全地运行异步协程 — 兼容有/无事件循环两种场景"""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result()
 
 
 class RAGPipeline:
@@ -67,7 +80,7 @@ class RAGPipeline:
 
     def _build_metadata(self):
         logger.info("开始异步批量构建元数据...")
-        doc_level_texts, doc_level_meta = asyncio.run(
+        doc_level_texts, doc_level_meta = _run_async(
             build_all_metadata_async(self.docs, self.doc_map)
         )
         self.doc_level_texts = doc_level_texts
@@ -112,12 +125,14 @@ class RAGPipeline:
         self.person_index = self._build_person_index()
 
         from retrieval.chain import RAGChain
+        from memory import memory_manager
         self.lc_chain = RAGChain(
             doc_db=self.doc_db,
             vectordb=self.vectordb,
             chunk_retriever=self.chunk_retriever,
             bm25=self.bm25,
             person_index=self.person_index,
+            memory_manager=memory_manager,
         )
 
     # =====================================================
@@ -191,6 +206,70 @@ class RAGPipeline:
     # =====================================================
     # 公共入口
     # =====================================================
+
+    def search(self, question: str, session_id: str = "default") -> str:
+        """企业级检索入口：QueryAnalyzer → MetadataFilter → contextvars 透传 → 现有链。
+
+        与 ask() 的区别：
+          - ask() 直接调用链（向后兼容，无 filter）
+          - search() 先做结构化查询分析，再通过 contextvars 注入 filter
+        """
+        from retrieval.query_analyzer import QueryAnalyzer
+        from retrieval.context import RequestContext, set_context
+        from retrieval.metrics import RetrievalMetrics, metrics_collector, timed
+
+        analyzer = QueryAnalyzer()
+        m = RetrievalMetrics()
+
+        t0 = time.time()
+
+        # 1. 查询分析
+        parsed = analyzer.analyze(question)
+        metadata_filter = parsed.to_metadata_filter()
+
+        # 2. 上下文注入
+        ctx = RequestContext(
+            metadata_filter=metadata_filter,
+            intent_label=parsed.intent,
+            query=question,
+        )
+        set_context(ctx)
+
+        m.intent = parsed.intent
+        m.filter_applied = bool(metadata_filter)
+
+        logger.info(
+            f"[Search] intent={parsed.intent}, "
+            f"persons={parsed.persons}, "
+            f"filter={metadata_filter}"
+        )
+
+        # 3. 委托现有链
+        logger.info(f"收到问题: {question} (session={session_id})")
+
+        if ENABLE_RESOURCE_MONITOR:
+            resource_monitor.increment_request()
+            if not resource_monitor.check_resources():
+                logger.warning("系统资源紧张，请求被拒绝")
+                return "系统资源紧张，请稍后重试"
+            resource_monitor.log_status()
+
+        try:
+            with timed(m, 'retrieval_time_ms'):
+                result = self.lc_chain.ask(question, session_id=session_id)
+
+            elapsed = time.time() - t0
+            m.total_time_ms = elapsed * 1000
+            logger.info(f"请求完成，耗时: {elapsed:.2f}s")
+            if elapsed > OVERALL_REQUEST_TIMEOUT * 0.8:
+                logger.warning(f"请求耗时较长: {elapsed:.2f}s")
+
+            metrics_collector.record(m)
+            return result
+        except Exception as e:
+            elapsed = time.time() - t0
+            logger.error(f"请求失败 (耗时: {elapsed:.2f}s): {e}", exc_info=True)
+            raise
 
     def ask(self, question: str, session_id: str = "default") -> str:
         print("\n==============================")

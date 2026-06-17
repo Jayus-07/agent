@@ -127,11 +127,38 @@ class ChunkLevelRetriever(BaseRetriever):
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> List[Document]:
         # — Stage 1: Doc 级检索 —
+        # Check for request-scoped metadata_filter (set by RAGPipeline.search() via contextvars)
+        request_metadata_filter = {}
+        try:
+            from retrieval.context import get_context
+            ctx = get_context()
+            request_metadata_filter = ctx.metadata_filter
+        except Exception:
+            pass
+
         person_names = extract_person_names(query)
         doc_ids = None
 
         if self.need_global_search:
             logger.info("ChunkLevelRetriever: 全局检索模式")
+        elif request_metadata_filter:
+            # MetadataFilter has already determined the scope — use it directly
+            known_persons = request_metadata_filter.get("person_names")
+            if known_persons:
+                p = known_persons
+                if isinstance(p, list):
+                    p = p[0]
+                matched_ids = self.person_index.get(p, [])
+                if matched_ids:
+                    doc_ids = matched_ids
+                else:
+                    doc_ids = []
+            else:
+                doc_ids = []  # No person filter — fall through to standard doc filter
+            logger.info(
+                f"ChunkLevelRetriever Stage 1: metadata_filter={request_metadata_filter} "
+                f"→ doc_ids={len(doc_ids)} matched"
+            )
         else:
             if person_names:
                 person_name = person_names[0] if isinstance(person_names, list) else person_names
@@ -159,6 +186,7 @@ class ChunkLevelRetriever(BaseRetriever):
             res = hybrid_retrieve(
                 q, self.chunk_retriever, self.bm25,
                 k=self.k, doc_ids=doc_ids,
+                metadata_filter=request_metadata_filter,
             )
             for d in res:
                 cid = d.metadata["chunk_id"]
