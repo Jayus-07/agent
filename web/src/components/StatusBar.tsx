@@ -3,6 +3,7 @@
 import { useMemo } from 'react'
 import { Loader2, CheckCircle2, XCircle, Brain, Database, Library, FileText } from 'lucide-react'
 import { useChatStore } from '@/store/chat'
+import { parseProgress } from '@/lib/sse-parser'
 import type { SSEEvent } from '@/lib/types'
 
 const workerIcons: Record<string, React.ReactNode> = {
@@ -19,44 +20,12 @@ export default function StatusBar() {
   // 解析 thinking 事件 → 进度信息
   const progress = useMemo(() => {
     if (!thinking.length) return null
-
-    // 统计各 worker 状态
-    const stepMap = new Map<string, { status: string; description: string; node: string }>()
-    let planCount = 0
-    let doneElapsed = ''
-
-    for (const e of thinking) {
-      if (e.stage === 'planning') {
-        planCount = e.data.task_count ?? 0
-      }
-      if (e.stage === 'executing' && e.data.step_id) {
-        const existing = stepMap.get(e.data.step_id)
-        if (!existing || existing.status === 'running') {
-          stepMap.set(e.data.step_id, {
-            status: e.data.status ?? 'running',
-            description: e.data.description ?? '',
-            node: e.node,
-          })
-        }
-      }
-      if (e.stage === 'done') {
-        doneElapsed = e.message
-      }
-    }
-
-    const steps = Array.from(stepMap.values())
-    const total = planCount || steps.length
-    const completed = steps.filter((s) => s.status === 'success').length
-    const failed = steps.filter((s) => s.status === 'failed').length
-    const running = steps.find((s) => s.status === 'running')
-    const lastDone = thinking.some((e) => e.stage === 'done')
-
-    return { total, completed, failed, running, lastDone, doneElapsed }
+    return parseProgress(thinking)
   }, [thinking])
 
   // 不显示的条件
   if (!isLoading && !progress) return null
-  if (progress?.lastDone) return null  // done 后自动消失
+  if (progress?.isDone) return null  // done 后自动消失
 
   return (
     <div className="shrink-0 border-t border-[#3f3f3f] bg-[#1a1a1a] px-4 py-2">
@@ -75,7 +44,7 @@ export default function StatusBar() {
             <Loader2 size={14} className="text-blue-400 animate-spin shrink-0" />
             <span className="text-[#ececec]">正在分析问题...</span>
           </div>
-        ) : progress && !progress.lastDone ? (
+        ) : progress && !progress.isDone ? (
           <div className="flex items-center gap-2 text-sm text-emerald-400">
             <CheckCircle2 size={14} className="shrink-0" />
             <span>等待下一步...</span>
