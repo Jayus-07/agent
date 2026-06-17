@@ -1,38 +1,17 @@
 'use client'
 
 import { useMemo } from 'react'
-import { User, Bot, Loader2, CheckCircle2, XCircle } from 'lucide-react'
-import type { Message, SSEEvent } from '@/lib/types'
+import { User, Bot, Loader2 } from 'lucide-react'
+import type { Message } from '@/lib/types'
+import { parseProgress } from '@/lib/sse-parser'
 import MarkdownContent from './MarkdownContent'
 import ThinkingPanel from './ThinkingPanel'
 
-const workerIcons: Record<string, string> = {
+const WORKER_ICONS: Record<string, string> = {
   sql_worker:    '📊',
   rag_worker:    '📚',
   report_worker: '📄',
   planner:       '🧠',
-}
-
-function getRunningStep(events: SSEEvent[]) {
-  const stepMap = new Map<string, { status: string; description: string; node: string; elapsed?: number }>()
-  for (const e of events) {
-    if (e.stage === 'executing' && e.data.step_id) {
-      const existing = stepMap.get(e.data.step_id)
-      if (!existing || existing.status === 'running') {
-        stepMap.set(e.data.step_id, {
-          status: e.data.status ?? 'running',
-          description: e.data.description ?? '',
-          node: e.node,
-          elapsed: e.data.elapsed,
-        })
-      }
-    }
-  }
-  const steps = Array.from(stepMap.values())
-  const running = steps.find((s) => s.status === 'running')
-  const completed = steps.filter((s) => s.status === 'success').length
-  const failed = steps.filter((s) => s.status === 'failed').length
-  return { running, completed, failed, total: steps.length }
 }
 
 export default function MessageBubble({ message }: { message: Message }) {
@@ -42,7 +21,7 @@ export default function MessageBubble({ message }: { message: Message }) {
 
   const progress = useMemo(() => {
     if (!thinking?.length) return null
-    return getRunningStep(thinking)
+    return parseProgress(thinking)
   }, [thinking])
 
   return (
@@ -72,7 +51,7 @@ export default function MessageBubble({ message }: { message: Message }) {
               <div className="flex items-center gap-2 text-sm text-[#b4b4b4] py-1">
                 <Loader2 size={14} className="text-blue-400 animate-spin shrink-0" />
                 <span className="text-[#8e8e8e] shrink-0">
-                  {workerIcons[progress.running.node] ?? '🔧'}
+                  {WORKER_ICONS[progress.running.node] ?? '🔧'}
                 </span>
                 <span className="truncate text-[#ececec]">{progress.running.description}</span>
                 {progress.total > 0 && (
