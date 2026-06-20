@@ -19,10 +19,15 @@ try:
         model=LLM_MODEL,
         temperature=LLM_TEMPERATURE,
         num_ctx=LLM_CONTEXT_LENGTH,
-        request_timeout=LLM_REQUEST_TIMEOUT  # 添加超时保护
+        request_timeout=LLM_REQUEST_TIMEOUT,
     )
     logger.info(f"LLM init OK: {LLM_MODEL} (temperature={LLM_TEMPERATURE}, context={LLM_CONTEXT_LENGTH}, timeout={LLM_REQUEST_TIMEOUT}s)")
 except Exception as e:
     logger.error(f"❌ LLM 初始化失败: {e}")
     raise
+
+
+def get_llm():
+    """返回模块级 LLM 单例。用于需要惰性获取 LLM 的场景（如 evaluation judge）。"""
+    return llm
 
