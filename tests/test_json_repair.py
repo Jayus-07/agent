@@ -34,7 +34,7 @@ def test_trailing_comma_in_array():
 
 def test_chinese_quotes():
     """Layer 2: 中文引号替换"""
-    text = '{"nodes": {"1": {"step_id": "1"}}}'
+    text = '{"nodes": {“1”: {“step_id”: “1”}}}'
     result = _extract_json(text)
     assert result["nodes"]["1"]["step_id"] == "1"
 
