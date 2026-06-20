@@ -1,0 +1,209 @@
+{
+  "module": "planner",
+  "version": "1.0",
+  "description": "Planner 任务规划评估数据集 — 验证 LLM 是否正确拆解问题为 capability DAG",
+  "test_cases": [
+    {
+      "id": "P001",
+      "question": "技术部有多少人？",
+      "expected": {
+        "capabilities": ["query_database"],
+        "max_steps": 1,
+        "should_not_contain": ["search_knowledge", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "single_sql"}
+    },
+    {
+      "id": "P002",
+      "question": "查询员工张伟的邮箱和所属部门",
+      "expected": {
+        "capabilities": ["query_database"],
+        "max_steps": 1,
+        "should_not_contain": ["search_knowledge", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "single_sql"}
+    },
+    {
+      "id": "P003",
+      "question": "列出预算最高的3个项目",
+      "expected": {
+        "capabilities": ["query_database"],
+        "max_steps": 1,
+        "should_not_contain": ["search_knowledge", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "single_sql"}
+    },
+    {
+      "id": "P004",
+      "question": "按部门统计员工人数",
+      "expected": {
+        "capabilities": ["query_database"],
+        "max_steps": 1,
+        "should_not_contain": ["search_knowledge", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "single_sql_aggregate"}
+    },
+    {
+      "id": "P005",
+      "question": "张伟参与了哪些项目？请列出项目名称和他的角色",
+      "expected": {
+        "capabilities": ["query_database"],
+        "max_steps": 1,
+        "should_not_contain": ["search_knowledge", "generate_report"]
+      },
+      "metadata": {"difficulty": "medium", "type": "multi_table_sql"}
+    },
+    {
+      "id": "P006",
+      "question": "正在进行的项目总预算是多少？",
+      "expected": {
+        "capabilities": ["query_database"],
+        "max_steps": 1,
+        "should_not_contain": ["search_knowledge", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "single_sql_aggregate"}
+    },
+    {
+      "id": "P007",
+      "question": "叶菜类蔬菜当天没卖完怎么处理？",
+      "expected": {
+        "capabilities": ["search_knowledge"],
+        "max_steps": 1,
+        "should_not_contain": ["query_database", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "single_rag", "kb_id": "policy"}
+    },
+    {
+      "id": "P008",
+      "question": "冷藏肉类的保质期是多久？",
+      "expected": {
+        "capabilities": ["search_knowledge"],
+        "max_steps": 1,
+        "should_not_contain": ["query_database", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "single_rag", "kb_id": "policy"}
+    },
+    {
+      "id": "P009",
+      "question": "诚安e生保的等待期多长？",
+      "expected": {
+        "capabilities": ["search_knowledge"],
+        "max_steps": 1,
+        "should_not_contain": ["query_database", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "single_rag", "kb_id": "policy"}
+    },
+    {
+      "id": "P010",
+      "question": "如何重置企业邮箱密码？",
+      "expected": {
+        "capabilities": ["search_knowledge"],
+        "max_steps": 1,
+        "should_not_contain": ["query_database", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "single_rag", "kb_id": "tech"}
+    },
+    {
+      "id": "P011",
+      "question": "CNC设备报警代码E-102怎么处理？",
+      "expected": {
+        "capabilities": ["search_knowledge"],
+        "max_steps": 1,
+        "should_not_contain": ["query_database", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "single_rag", "kb_id": "tech"}
+    },
+    {
+      "id": "P012",
+      "question": "一般医疗保险金的年度赔付限额是多少？",
+      "expected": {
+        "capabilities": ["search_knowledge"],
+        "max_steps": 1,
+        "should_not_contain": ["query_database", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "single_rag", "kb_id": "policy"}
+    },
+    {
+      "id": "P013",
+      "question": "海鲜活鲜死亡超过20分钟怎么处理？",
+      "expected": {
+        "capabilities": ["search_knowledge"],
+        "max_steps": 1,
+        "should_not_contain": ["query_database", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "single_rag", "kb_id": "policy"}
+    },
+    {
+      "id": "P014",
+      "question": "请假审批流程是怎样的？每月允许迟到几次？",
+      "expected": {
+        "capabilities": ["search_knowledge"],
+        "max_steps": 1,
+        "should_not_contain": ["query_database", "generate_report"]
+      },
+      "metadata": {"difficulty": "medium", "type": "single_rag_multi_fact", "kb_id": "hr"}
+    },
+    {
+      "id": "P015",
+      "question": "查询项目预算情况，同时从知识库查找项目管理经验",
+      "expected": {
+        "capabilities": ["query_database", "search_knowledge"],
+        "max_steps": 2
+      },
+      "metadata": {"difficulty": "medium", "type": "mixed_sql_rag"}
+    },
+    {
+      "id": "P016",
+      "question": "分析技术部预算使用情况，从知识库查找项目管理经验，生成部门综合分析报告",
+      "expected": {
+        "capabilities": ["query_database", "search_knowledge", "generate_report"],
+        "min_steps": 3,
+        "edges": [
+          {"from": "query_database", "to": "generate_report"},
+          {"from": "search_knowledge", "to": "generate_report"}
+        ]
+      },
+      "metadata": {"difficulty": "hard", "type": "mixed_all"}
+    },
+    {
+      "id": "P017",
+      "question": "你是谁？",
+      "expected": {
+        "capabilities": [],
+        "max_steps": 0,
+        "should_not_contain": ["query_database", "search_knowledge", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "fallback_chitchat"}
+    },
+    {
+      "id": "P018",
+      "question": "主轴冷却液多久更换一次？",
+      "expected": {
+        "capabilities": ["search_knowledge"],
+        "max_steps": 1,
+        "should_not_contain": ["query_database", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "single_rag", "kb_id": "tech"}
+    },
+    {
+      "id": "P019",
+      "question": "财务报销超过多少元需要总监审批？",
+      "expected": {
+        "capabilities": ["search_knowledge"],
+        "max_steps": 1,
+        "should_not_contain": ["query_database", "generate_report"]
+      },
+      "metadata": {"difficulty": "easy", "type": "single_rag", "kb_id": "finance"}
+    },
+    {
+      "id": "P020",
+      "question": "产品部有多少人？他们的平均项目参与数是多少？",
+      "expected": {
+        "capabilities": ["query_database"],
+        "max_steps": 1,
+        "should_not_contain": ["search_knowledge", "generate_report"]
+      },
+      "metadata": {"difficulty": "medium", "type": "single_sql_aggregate"}
+    }
+  ]
+}

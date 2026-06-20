@@ -1,0 +1,338 @@
+{
+  "module": "rag",
+  "version": "1.0",
+  "description": "RAG 检索评估数据集 — 验证向量检索+BM25+Reranker 的召回质量",
+  "test_cases": [
+    {
+      "id": "R001",
+      "question": "冷藏肉类的保质期是多久？",
+      "kb_id": "policy",
+      "expected": {
+        "relevant_docs": ["policy/优品超市 - 《生鲜营运标准手册》V4.0（节选）.txt"],
+        "relevant_snippets": ["冷藏肉类到货后48小时"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "fresh_food"}
+    },
+    {
+      "id": "R002",
+      "question": "叶菜类蔬菜当天没卖完怎么处理？",
+      "kb_id": "policy",
+      "expected": {
+        "relevant_docs": ["policy/优品超市 - 《生鲜营运标准手册》V4.0（节选）.txt"],
+        "relevant_snippets": ["22:00前报损"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "fresh_food"}
+    },
+    {
+      "id": "R003",
+      "question": "海鲜活鲜死亡超过20分钟怎么处理？",
+      "kb_id": "policy",
+      "expected": {
+        "relevant_docs": ["policy/优品超市 - 《生鲜营运标准手册》V4.0（节选）.txt"],
+        "relevant_snippets": ["5折销售", "死亡减价品"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "fresh_food"}
+    },
+    {
+      "id": "R004",
+      "question": "熟食热柜存放超过多长时间需要销毁？",
+      "kb_id": "policy",
+      "expected": {
+        "relevant_docs": ["policy/优品超市 - 《生鲜营运标准手册》V4.0（节选）.txt"],
+        "relevant_snippets": ["热柜存放不超过4小时"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "fresh_food"}
+    },
+    {
+      "id": "R005",
+      "question": "活鲜氧气含量最低要求是多少？",
+      "kb_id": "policy",
+      "expected": {
+        "relevant_docs": ["policy/优品超市 - 《生鲜营运标准手册》V4.0（节选）.txt"],
+        "relevant_snippets": ["O2≥6mg/L"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "hard", "domain": "fresh_food"}
+    },
+    {
+      "id": "R006",
+      "question": "诚安e生保的一般医疗保险金年度限额是多少？",
+      "kb_id": "policy",
+      "expected": {
+        "relevant_docs": ["policy/诚安保险 - 《健康险产品条款汇编》（节选）.txt"],
+        "relevant_snippets": ["200万元"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "insurance"}
+    },
+    {
+      "id": "R007",
+      "question": "诚安e生保的等待期多长？",
+      "kb_id": "policy",
+      "expected": {
+        "relevant_docs": ["policy/诚安保险 - 《健康险产品条款汇编》（节选）.txt"],
+        "relevant_snippets": ["90日"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "insurance"}
+    },
+    {
+      "id": "R008",
+      "question": "未用社保身份结算的赔付比例是多少？",
+      "kb_id": "policy",
+      "expected": {
+        "relevant_docs": ["policy/诚安保险 - 《健康险产品条款汇编》（节选）.txt"],
+        "relevant_snippets": ["60%"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "insurance"}
+    },
+    {
+      "id": "R009",
+      "question": "重大疾病保险金的年度限额和免赔额是多少？",
+      "kb_id": "policy",
+      "expected": {
+        "relevant_docs": ["policy/诚安保险 - 《健康险产品条款汇编》（节选）.txt"],
+        "relevant_snippets": ["400万元", "0免赔"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "insurance"}
+    },
+    {
+      "id": "R010",
+      "question": "一般医疗保险金的免赔额是多少？",
+      "kb_id": "policy",
+      "expected": {
+        "relevant_docs": ["policy/诚安保险 - 《健康险产品条款汇编》（节选）.txt"],
+        "relevant_snippets": ["1万元"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "insurance"}
+    },
+    {
+      "id": "R011",
+      "question": "如何重置企业邮箱密码？",
+      "kb_id": "tech",
+      "expected": {
+        "relevant_docs": ["tech/云创科技 - 《员工 IT 服务手册》V3.2（节选）.txt"],
+        "relevant_snippets": ["自助重置"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "it_service"}
+    },
+    {
+      "id": "R012",
+      "question": "企业邮箱容量上限是多少？",
+      "kb_id": "tech",
+      "expected": {
+        "relevant_docs": ["tech/云创科技 - 《员工 IT 服务手册》V3.2（节选）.txt"],
+        "relevant_snippets": ["50GB"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "it_service"}
+    },
+    {
+      "id": "R013",
+      "question": "邮箱密码的复杂度要求是什么？",
+      "kb_id": "tech",
+      "expected": {
+        "relevant_docs": ["tech/云创科技 - 《员工 IT 服务手册》V3.2（节选）.txt"],
+        "relevant_snippets": ["8位", "大写字母", "小写字母", "数字", "特殊符号"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "it_service"}
+    },
+    {
+      "id": "R014",
+      "question": "CNC设备E-102报警代码是什么故障？",
+      "kb_id": "tech",
+      "expected": {
+        "relevant_docs": ["tech/精工制造 -《CNC 设备故障处理手册》2024版（节选）.txt"],
+        "relevant_snippets": ["主轴过热"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "cnc"}
+    },
+    {
+      "id": "R015",
+      "question": "VMC-850L的E-102报警怎么排查？",
+      "kb_id": "tech",
+      "expected": {
+        "relevant_docs": ["tech/精工制造 -《CNC 设备故障处理手册》2024版（节选）.txt"],
+        "relevant_snippets": ["冷却液液位", "循环泵", "过滤网", "温度传感器"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "cnc"}
+    },
+    {
+      "id": "R016",
+      "question": "主轴冷却液多久更换一次？",
+      "kb_id": "tech",
+      "expected": {
+        "relevant_docs": ["tech/精工制造 -《CNC 设备故障处理手册》2024版（节选）.txt"],
+        "relevant_snippets": ["每运行200小时"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "cnc"}
+    },
+    {
+      "id": "R017",
+      "question": "员工请假流程怎么走？",
+      "kb_id": "hr",
+      "expected": {
+        "relevant_docs": ["hr/hr.txt"],
+        "relevant_snippets": ["OA系统", "审批"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "hr"}
+    },
+    {
+      "id": "R018",
+      "question": "每月允许迟到几次？有什么限制？",
+      "kb_id": "hr",
+      "expected": {
+        "relevant_docs": ["hr/hr.txt"],
+        "relevant_snippets": ["3次", "10分钟"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "hr"}
+    },
+    {
+      "id": "R019",
+      "question": "连续旷工几天会被解除劳动合同？",
+      "kb_id": "hr",
+      "expected": {
+        "relevant_docs": ["hr/hr.txt"],
+        "relevant_snippets": ["3天"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "hr"}
+    },
+    {
+      "id": "R020",
+      "question": "季度绩效评分的等级有哪些？",
+      "kb_id": "hr",
+      "expected": {
+        "relevant_docs": ["hr/hr.txt"],
+        "relevant_snippets": ["A", "B", "C", "D"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "hr"}
+    },
+    {
+      "id": "R021",
+      "question": "财务报销超过多少元需要总监审批？",
+      "kb_id": "finance",
+      "expected": {
+        "relevant_docs": ["finance/finance.txt"],
+        "relevant_snippets": ["5000元"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "finance"}
+    },
+    {
+      "id": "R022",
+      "question": "财务数据导出的安全规范是什么？",
+      "kb_id": "finance",
+      "expected": {
+        "relevant_docs": ["finance/finance.txt"],
+        "relevant_snippets": ["审批", "加密"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "finance"}
+    },
+    {
+      "id": "R023",
+      "question": "产品A的活跃用户数变化趋势如何？",
+      "kb_id": "hr",
+      "expected": {
+        "relevant_docs": ["hr/product.txt"],
+        "relevant_snippets": ["下降15%"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "product_ops"}
+    },
+    {
+      "id": "R024",
+      "question": "Q1销售同比增长了多少？哪个地区表现最差？",
+      "kb_id": "sales",
+      "expected": {
+        "relevant_docs": ["sales/sales.txt"],
+        "relevant_snippets": ["12%", "华东地区"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "sales"}
+    },
+    {
+      "id": "R025",
+      "question": "获客成本上升了多少？续约率有什么变化？",
+      "kb_id": "sales",
+      "expected": {
+        "relevant_docs": ["sales/sales.txt"],
+        "relevant_snippets": ["18%", "82%", "74%"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "sales"}
+    },
+    {
+      "id": "R026",
+      "question": "微服务架构中如何保证高并发评分的性能？",
+      "kb_id": "tech",
+      "expected": {
+        "relevant_docs": ["tech/项目一：企业员工绩效反馈与匿名评分系统（升级版）.md"],
+        "relevant_snippets": ["Redis", "消息队列", "异步"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "hard", "domain": "project_architecture"}
+    },
+    {
+      "id": "R027",
+      "question": "为什么选择RocketMQ而不是Kafka？",
+      "kb_id": "tech",
+      "expected": {
+        "relevant_docs": ["tech/项目一：企业员工绩效反馈与匿名评分系统（升级版）.md"],
+        "relevant_snippets": ["RocketMQ"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "hard", "domain": "project_architecture"}
+    },
+    {
+      "id": "R028",
+      "question": "Kubernetes集群支付服务CPU使用率超85%时怎么处理？",
+      "kb_id": "default",
+      "expected": {
+        "relevant_docs": ["_default/操作文档/tech.txt"],
+        "relevant_snippets": ["扩容", "HPA"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "devops"}
+    },
+    {
+      "id": "R029",
+      "question": "金丝雀发布流程是怎样的？",
+      "kb_id": "default",
+      "expected": {
+        "relevant_docs": ["_default/操作文档/tech.txt"],
+        "relevant_snippets": ["金丝雀"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "devops"}
+    },
+    {
+      "id": "R030",
+      "question": "薪酬支付延迟了怎么处理？",
+      "kb_id": "hr",
+      "expected": {
+        "relevant_docs": ["hr/hr.txt"],
+        "relevant_snippets": [],
+        "min_relevant_chunks": 0
+      },
+      "metadata": {"difficulty": "edge_case", "domain": "hr",
+                   "note": "知识库中没有相关内容，期望检索不到相关chunk"}
+    }
+  ]
+}

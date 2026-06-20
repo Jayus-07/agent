@@ -1,0 +1,227 @@
+{
+  "module": "e2e",
+  "version": "1.0",
+  "description": "端到端评估数据集 — 验证完整 Agent 链路的答案质量",
+  "test_cases": [
+    {
+      "id": "E001",
+      "question": "冷藏肉类的保质期是多久？",
+      "expected_routing": ["search_knowledge"],
+      "rubric": {
+        "completeness": "必须给出48小时的具体规定",
+        "faithfulness": "数字48小时必须来自生鲜手册原文",
+        "citation": "必须引用生鲜营运标准手册"
+      },
+      "metadata": {"difficulty": "easy", "type": "single_rag"}
+    },
+    {
+      "id": "E002",
+      "question": "技术部有多少人？",
+      "expected_routing": ["query_database"],
+      "rubric": {
+        "completeness": "必须给出具体人数（3人）",
+        "faithfulness": "数字必须来自数据库查询结果",
+        "citation": "不需要引用文档"
+      },
+      "metadata": {"difficulty": "easy", "type": "single_sql"}
+    },
+    {
+      "id": "E003",
+      "question": "叶菜类蔬菜当天没卖完怎么处理？预计产品部有多少员工？",
+      "expected_routing": ["search_knowledge", "query_database"],
+      "rubric": {
+        "completeness": "必须同时包含叶菜处理流程（22:00前报损）和产品部人数",
+        "faithfulness": "叶菜规定必须来自生鲜手册，人数必须来自数据库",
+        "citation": "叶菜部分需引用生鲜手册"
+      },
+      "metadata": {"difficulty": "medium", "type": "mixed_sql_rag"}
+    },
+    {
+      "id": "E004",
+      "question": "CNC设备E-102报警怎么处理？主轴冷却液维护周期是多久？",
+      "expected_routing": ["search_knowledge"],
+      "rubric": {
+        "completeness": "必须包含故障排查4步骤和维护周期（200小时）",
+        "faithfulness": "所有步骤必须来自CNC手册原文",
+        "citation": "必须引用CNC故障处理手册"
+      },
+      "metadata": {"difficulty": "medium", "type": "multi_fact_rag"}
+    },
+    {
+      "id": "E005",
+      "question": "诚安e生保等待期多长？一般医疗保险金限额和免赔额各是多少？",
+      "expected_routing": ["search_knowledge"],
+      "rubric": {
+        "completeness": "必须包含等待期90天、限额200万、免赔额1万",
+        "faithfulness": "所有数字必须来自保险条款原文",
+        "citation": "必须引用健康险产品条款汇编"
+      },
+      "metadata": {"difficulty": "medium", "type": "multi_fact_rag"}
+    },
+    {
+      "id": "E006",
+      "question": "查询预算最高的3个项目，并列出每个项目的负责人",
+      "expected_routing": ["query_database"],
+      "rubric": {
+        "completeness": "必须列出3个项目名称、预算、负责人",
+        "faithfulness": "数据必须来自数据库，预算数字正确",
+        "citation": "不需要引用文档"
+      },
+      "metadata": {"difficulty": "medium", "type": "multi_table_sql"}
+    },
+    {
+      "id": "E007",
+      "question": "如何重置邮箱密码？邮箱容量满了怎么办？",
+      "expected_routing": ["search_knowledge"],
+      "rubric": {
+        "completeness": "必须包含密码重置流程和50GB容量限制及归档策略",
+        "faithfulness": "操作步骤必须来自IT服务手册",
+        "citation": "必须引用IT服务手册"
+      },
+      "metadata": {"difficulty": "medium", "type": "multi_fact_rag"}
+    },
+    {
+      "id": "E008",
+      "question": "请假流程怎么走？每月可以迟到几次？绩效评分有哪些等级？",
+      "expected_routing": ["search_knowledge"],
+      "rubric": {
+        "completeness": "必须包含OA系统请假、每月3次迟到、A/B/C/D四级评分",
+        "faithfulness": "所有规定必须来自HR文档",
+        "citation": "必须引用HR文档"
+      },
+      "metadata": {"difficulty": "medium", "type": "multi_fact_rag"}
+    },
+    {
+      "id": "E009",
+      "question": "正在进行的项目总预算是多少？财务报销超过多少需要总监审批？",
+      "expected_routing": ["query_database", "search_knowledge"],
+      "rubric": {
+        "completeness": "必须同时包含项目总预算（13亿）和报销审批阈值（5000元）",
+        "faithfulness": "预算来自数据库，审批阈值来自财务文档",
+        "citation": "财务规定部分需引用finance文档"
+      },
+      "metadata": {"difficulty": "medium", "type": "mixed_sql_rag"}
+    },
+    {
+      "id": "E010",
+      "question": "按部门统计员工人数，哪个部门人最多？",
+      "expected_routing": ["query_database"],
+      "rubric": {
+        "completeness": "必须列出各部门人数并指出技术部最多（3人）",
+        "faithfulness": "数据来自数据库",
+        "citation": "不需要引用文档"
+      },
+      "metadata": {"difficulty": "medium", "type": "sql_with_reasoning"}
+    },
+    {
+      "id": "E011",
+      "question": "张伟参与了哪些项目？每个项目的预算和状态是什么？",
+      "expected_routing": ["query_database"],
+      "rubric": {
+        "completeness": "必须列出张伟参与的项目、角色、预算、状态",
+        "faithfulness": "数据来自数据库",
+        "citation": "不需要引用文档"
+      },
+      "metadata": {"difficulty": "hard", "type": "multi_join_sql"}
+    },
+    {
+      "id": "E012",
+      "question": "查询项目预算情况，同时从知识库查找项目管理经验",
+      "expected_routing": ["query_database", "search_knowledge"],
+      "rubric": {
+        "completeness": "必须同时给出预算数据和项目管理经验",
+        "faithfulness": "预算数据正确，经验来自项目架构文档",
+        "citation": "经验部分需引用项目文档"
+      },
+      "metadata": {"difficulty": "medium", "type": "mixed_sql_rag"}
+    },
+    {
+      "id": "E013",
+      "question": "未用社保身份结算的赔付比例是多少？免赔额条件下的实际赔付怎么计算？",
+      "expected_routing": ["search_knowledge"],
+      "rubric": {
+        "completeness": "必须给出60%比例和计算示例",
+        "faithfulness": "60%来自保险条款原文",
+        "citation": "必须引用健康险产品条款汇编"
+      },
+      "metadata": {"difficulty": "hard", "type": "rag_with_reasoning"}
+    },
+    {
+      "id": "E014",
+      "question": "产品A活跃用户下降了，Q1销售华东地区也下降，这两件事有关系吗？",
+      "expected_routing": ["search_knowledge"],
+      "rubric": {
+        "completeness": "必须分别给出两个下降的数据（15%和5%），并分析关联",
+        "faithfulness": "数据必须来自product和sales文档",
+        "citation": "需引用两个文档"
+      },
+      "metadata": {"difficulty": "hard", "type": "cross_domain_rag"}
+    },
+    {
+      "id": "E015",
+      "question": "你是谁？能做什么？",
+      "expected_routing": [],
+      "rubric": {
+        "completeness": "应自我介绍并说明能力范围",
+        "faithfulness": "不应编造数据或引用不存在的文档",
+        "citation": "不需要引用"
+      },
+      "metadata": {"difficulty": "easy", "type": "chitchat"}
+    },
+    {
+      "id": "E016",
+      "question": "查询所有员工的姓名和邮箱",
+      "expected_routing": ["query_database"],
+      "rubric": {
+        "completeness": "必须列出5名员工姓名和邮箱（邮箱需脱敏）",
+        "faithfulness": "数据来自数据库",
+        "citation": "不需要引用文档"
+      },
+      "metadata": {"difficulty": "easy", "type": "sql_with_masking"}
+    },
+    {
+      "id": "E017",
+      "question": "熟食热柜超过4小时和冷柜超过8小时分别怎么处理？",
+      "expected_routing": ["search_knowledge"],
+      "rubric": {
+        "completeness": "必须说明两种情况都需销毁",
+        "faithfulness": "规定必须来自生鲜手册",
+        "citation": "必须引用生鲜手册"
+      },
+      "metadata": {"difficulty": "medium", "type": "rag_comparison"}
+    },
+    {
+      "id": "E018",
+      "question": "哪些项目状态是planning？它们的预算是多少？",
+      "expected_routing": ["query_database"],
+      "rubric": {
+        "completeness": "必须列出BI报表系统，预算3.5亿",
+        "faithfulness": "数据来自数据库",
+        "citation": "不需要引用文档"
+      },
+      "metadata": {"difficulty": "easy", "type": "single_sql"}
+    },
+    {
+      "id": "E019",
+      "question": "微服务架构中系统支持哪些角色和权限？技术选型为什么选RocketMQ？",
+      "expected_routing": ["search_knowledge"],
+      "rubric": {
+        "completeness": "必须包含RBAC角色列表和RocketMQ选型理由",
+        "faithfulness": "内容来自项目架构文档",
+        "citation": "必须引用项目一文档"
+      },
+      "metadata": {"difficulty": "hard", "type": "rag_architecture"}
+    },
+    {
+      "id": "E020",
+      "question": "金丝雀发布流程是什么？Kubernetes集群扩容策略是什么？",
+      "expected_routing": ["search_knowledge"],
+      "rubric": {
+        "completeness": "必须包含发布流程和HPA扩容策略",
+        "faithfulness": "内容来自tech操作文档",
+        "citation": "必须引用操作文档"
+      },
+      "metadata": {"difficulty": "medium", "type": "rag_devops"}
+    }
+  ]
+}
