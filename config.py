@@ -204,6 +204,12 @@ LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "30"))
 RERANK_TIMEOUT = int(os.getenv("RERANK_TIMEOUT", "15"))
 OVERALL_REQUEST_TIMEOUT = int(os.getenv("OVERALL_REQUEST_TIMEOUT", "60"))
 
+# =====================================================
+# Plan Critique 配置
+# =====================================================
+ENABLE_PLAN_CRITIQUE = True    # 启用 Plan Critique 自我纠错（+1 LLM 调用）
+RERANKER_THRESHOLD = 0.35      # Context Filter 最低相关度阈值（0.0-1.0）
+
 # ====================================
 # 资源监控配置
 # ====================================
