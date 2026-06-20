@@ -82,6 +82,22 @@ class ToolRegistry:
             lines.append(f"  - {cap_name}: {schema['description']}")
         return "\n".join(lines)
 
+    def get_capabilities_schema_text(self) -> str:
+        """生成完整的 capability schema 文本（含描述、参数、示例），用于 Critique prompt"""
+        import json
+        lines = []
+        for cap_name in self.get_available_capabilities():
+            schema = self.get_schema(cap_name)
+            if not schema:
+                continue
+            lines.append(f"### {cap_name}")
+            lines.append(f"描述: {schema['description']}")
+            lines.append(f"参数: {json.dumps(schema['params'], ensure_ascii=False)}")
+            if "示例" in schema:
+                lines.append(f"示例: {json.dumps(schema['示例'], ensure_ascii=False)}")
+            lines.append("")
+        return "\n".join(lines)
+
 
 # 全局单例
 tool_registry = ToolRegistry()
