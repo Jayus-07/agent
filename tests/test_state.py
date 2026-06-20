@@ -3,13 +3,15 @@ state.py 测试 — 状态定义与 reducer
 
 覆盖:
   - _merge_step_results(): 并发状态合并
+  - StepResult / AgentState 类型定义完整性
+  - 新字段: row_count, is_empty, error_type, alerts, 内部追踪字段
 """
 import pytest
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from multi_agent.state import _merge_step_results
+from multi_agent.state import StepResult, AgentState, _merge_step_results
 
 
 class TestMergeStepResults:
@@ -117,3 +119,72 @@ class TestMergeStepResults:
 
         merged2 = _merge_step_results({"1": {"step_id": "1", "status": "success"}}, None)
         assert "1" in merged2
+
+
+# ============================================================
+# 类型定义完整性测试（StepResult / AgentState 新字段）
+# ============================================================
+
+def test_step_result_with_structured_fields():
+    """StepResult 支持 row_count, is_empty, error_type 结构化字段"""
+    sr: StepResult = {
+        "step_id": "1",
+        "capability": "query_database",
+        "description": "查询员工",
+        "status": "success",
+        "output": "共 5 条记录",
+        "row_count": 5,
+        "is_empty": False,
+        "error_type": None,
+    }
+    assert sr["row_count"] == 5
+    assert not sr["is_empty"]
+
+
+def test_step_result_empty_sql():
+    """SQL 空结果: is_empty=True, row_count=0"""
+    sr: StepResult = {
+        "step_id": "2",
+        "status": "success",
+        "output": "无结果",
+        "row_count": 0,
+        "is_empty": True,
+    }
+    assert sr["is_empty"]
+    assert sr["row_count"] == 0
+
+
+def test_agent_state_alert_fields():
+    """AgentState 包含 alerts 和内部追踪字段"""
+    state: AgentState = {
+        "question": "测试",
+        "kb_id": "default",
+        "plan": {"nodes": {}, "edges": {}},
+        "step_results": {},
+        "current_step_id": None,
+        "messages": [],
+        "final_answer": "",
+        "alerts": [],
+        "_supervisor_loop_count": 0,
+        "_plan_critiqued": False,
+        "_plan_changed": False,
+    }
+    assert state["_supervisor_loop_count"] == 0
+    assert state["_plan_critiqued"] is False
+    assert isinstance(state["alerts"], list)
+
+
+def test_merge_preserves_new_fields():
+    """Reducer 合并后新字段值来自 right"""
+    left = {"1": {"step_id": "1", "status": "running", "row_count": None, "is_empty": None, "error_type": None}}
+    right = {"1": {"step_id": "1", "status": "success", "row_count": 3, "is_empty": False, "error_type": None}}
+    merged = _merge_step_results(left, right)
+    assert merged["1"]["status"] == "success"
+    assert merged["1"]["row_count"] == 3
+    assert merged["1"]["is_empty"] is False
+
+
+def test_merge_empty_handling():
+    """Reducer 空值处理不变"""
+    assert _merge_step_results({}, {"1": {"status": "ok"}}) == {"1": {"status": "ok"}}
+    assert _merge_step_results({"1": {"status": "ok"}}, {}) == {"1": {"status": "ok"}}

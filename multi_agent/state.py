@@ -35,6 +35,10 @@ class StepResult(TypedDict, total=False):
     retries: int                                # 已重试次数
     started_at: float                           # 开始时间 (time.time())
     finished_at: float                          # 完成时间
+    # ⭐ 新增：结构化结果字段
+    row_count: int | None                       # SQL 查询返回行数
+    is_empty: bool | None                       # 是否为空结果（SQL 无数据 / RAG 无匹配）
+    error_type: str | None                      # 错误分类: timeout / parse / auth / network / unknown
 
 
 class AgentState(TypedDict):
@@ -48,3 +52,8 @@ class AgentState(TypedDict):
     current_step_id: str | None                 # 当前正在执行的 step（Worker 用）
     messages: Annotated[list, add_messages]     # ReAct 对话历史
     final_answer: str                           # Reporter 产物
+    # ⭐ 新增：可观测性 + 流程控制字段
+    alerts: list[dict]                          # PlanAlert 列表（SSE 流展示）
+    _supervisor_loop_count: int                 # Supervisor 调度轮次计数
+    _plan_critiqued: bool                       # 是否经过了 Plan Critique
+    _plan_changed: bool                         # Critique 是否修改了计划
