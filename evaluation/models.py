@@ -1,10 +1,28 @@
-"""评估体系数据模型 — 所有子模块共用的 Pydantic 类型定义。"""
+"""评估体系数据模型 — 所有子模块共用的 Pydantic 类型定义。
+
+可移植性：此文件零项目依赖，可复制到任何 Python 项目直接使用。
+"""
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, Callable
 from pydantic import BaseModel, Field
 
 ModuleKind = Literal["planner", "rag", "sql", "e2e"]
+
+
+class RunnerFunc(Protocol):
+    """Runner 函数协议：接收测试用例列表和可选参数，返回评估结果列表。
+
+    新项目对接时只需实现符合此协议的函数，然后通过 registry.register_runner() 注册。
+    """
+    def __call__(self, cases: list["TestCase"], **kwargs: Any) -> list["EvalResult"]: ...
+
+
+class RunnerEntry:
+    """已注册的 runner 元数据。"""
+    def __init__(self, func: RunnerFunc, needs_live: bool = True):
+        self.func = func
+        self.needs_live = needs_live
 
 
 class TestCase(BaseModel):

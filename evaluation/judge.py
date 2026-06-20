@@ -1,6 +1,51 @@
-"""LLM-as-Judge 评分器 — 用 LLM 对端到端答案进行 4 维质量评分。"""
+"""LLM-as-Judge 评分器 — 用 LLM 对端到端答案进行 4 维质量评分。
 
+可移植性：此文件不硬编码任何特定 LLM 实现。通过 set_llm_callable() 注入 LLM 调用函数，
+即可在任何项目中使用。默认 fallback 返回 3.0 分。
+"""
+
+from typing import Callable
 from pydantic import BaseModel, Field, model_validator
+
+# 可注入的 LLM 调用函数：接受 prompt 字符串，返回 response 字符串
+_llm_callable: Callable[[str], str] | None = None
+
+
+def set_llm_callable(fn: Callable[[str], str]) -> None:
+    """注入 LLM 调用函数。新项目复制评估框架后调用此函数设置自己的 LLM。
+
+    Args:
+        fn: 签名为 (prompt: str) -> str 的可调用对象。
+            如果 LLM 返回对象，需要包装成提取 .content 的函数。
+
+    Example:
+        >>> from llm.llm_factory import get_llm
+        >>> llm = get_llm()
+        >>> def my_llm(prompt: str) -> str:
+        ...     resp = llm.invoke(prompt)
+        ...     return resp.content if hasattr(resp, 'content') else str(resp)
+        >>> set_llm_callable(my_llm)
+    """
+    global _llm_callable
+    _llm_callable = fn
+
+
+def _get_llm_response(prompt: str) -> str:
+    """获取 LLM 回复：优先使用注入的可调用对象，否则尝试默认导入。"""
+    global _llm_callable
+    if _llm_callable is not None:
+        return _llm_callable(prompt)
+    # fallback: 尝试导入项目默认 LLM
+    try:
+        from llm.llm_factory import get_llm
+        llm = get_llm()
+        resp = llm.invoke(prompt)
+        return resp.content if hasattr(resp, "content") else str(resp)
+    except ImportError:
+        raise RuntimeError(
+            "LLM not available. Either call evaluation.judge.set_llm_callable(fn) "
+            "or ensure llm.llm_factory.get_llm() is importable."
+        )
 
 
 class JudgeResult(BaseModel):
@@ -97,13 +142,10 @@ def judge_answer(
         JudgeResult: 包含各维度分数、综合分、理由和置信度
     """
     try:
-        from llm.llm_factory import get_llm
         import json
 
-        llm = get_llm()
         prompt = build_judge_prompt(question, expected_rubric, actual_answer)
-        response = llm.invoke(prompt)
-        content = response.content if hasattr(response, "content") else str(response)
+        content = _get_llm_response(prompt)
 
         # 尝试从 LLM 输出中提取 JSON
         content = content.strip()

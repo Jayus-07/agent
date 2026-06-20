@@ -1,6 +1,11 @@
-"""CLI 入口 — python -m evaluation [module] [options]"""
+"""CLI 入口 — python -m evaluation [module] [options]
+
+可移植性：此文件零项目依赖。通过 --runner-config 或默认导入 runners_config
+来注册项目特定的 runner。复制到新项目后无需修改此文件。
+"""
 
 import argparse
+import importlib
 import sys
 from pathlib import Path
 from evaluation.runner import run_all
@@ -11,6 +16,24 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
+
+_DEFAULT_RUNNER_CONFIG = "evaluation.runners_config"
+
+
+def _bootstrap_runners(config_module: str | None = None):
+    """在 run_all() 之前注册 runner。
+
+    1. 如果指定了 config_module，导入它
+    2. 否则尝试导入默认的 evaluation.runners_config
+    3. 如果默认也不存在（纯净框架），静默跳过——所有模块返回 skip
+    """
+    module_name = config_module or _DEFAULT_RUNNER_CONFIG
+    try:
+        importlib.import_module(module_name)
+    except ImportError:
+        if config_module:
+            print(f"⚠️  Runner config module not found: {config_module}")
+            print("   No runners registered. All modules will return 'skip'.")
 
 
 def main():
@@ -47,8 +70,15 @@ def main():
         "--verbose", action="store_true",
         help="输出每条用例的详细结果",
     )
+    parser.add_argument(
+        "--runner-config", type=str, default=None, metavar="MODULE",
+        help="自定义 runner 注册模块 (e.g. myproject.eval_runners)",
+    )
 
     args = parser.parse_args()
+
+    # 注册 runner（在 run_all 之前）
+    _bootstrap_runners(args.runner_config)
 
     live = args.live or args.judge
 
