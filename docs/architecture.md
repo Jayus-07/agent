@@ -42,7 +42,7 @@ graph TB
     subgraph 数据层
         PG[(PostgreSQL 18<br/>:5432)]
         CHROMA[(ChromaDB<br/>向量检索)]
-        OLLAMA[Ollama<br/>qwen2.5:3b :11434]
+        OLLAMA[Ollama<br/>qwen2.5:4b :11434]
         DOCS_DISK[data/docs/<br/>文档文件]
     end
 

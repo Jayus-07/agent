@@ -19,6 +19,10 @@ class JudgeResult(BaseModel):
         return self
 
 
+# JUDGE_SYSTEM_PROMPT 是文档/参考常量，定义 4 维评分标准和加权公式。
+# 注意：此常量不直接发送给 LLM。由于 ChatOllama 不支持 system 消息角色，
+# 评分维度以 inline 方式嵌入在 build_judge_prompt() 的 user prompt 中。
+# 保留此常量便于维护者理解评分框架，修改评分维度时需同步更新 build_judge_prompt()。
 JUDGE_SYSTEM_PROMPT = """你是一个严格但公正的评估裁判。你的任务是评估 AI 助手对用户问题的回答质量。
 
 请从以下 4 个维度评分（每个维度 1-5 分）：

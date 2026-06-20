@@ -1,0 +1,112 @@
+# Agent Platform — 一键启动
+#
+# 启动:  docker compose up -d
+# 查看:  docker compose logs -f api
+# 停止:  docker compose down
+# 重建:  docker compose up -d --build
+#
+# 服务:
+#   ollama    — LLM 模型服务 (qwen2.5:4b)
+#   postgres  — PostgreSQL 数据库 (demo 库)
+#   api       — FastAPI 服务 (port 8000)
+
+services:
+
+  # ── LLM 模型服务 ──────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: agent-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # GPU 加速（有 NVIDIA GPU 时取消注释）
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    environment:
+      - OLLAMA_KEEP_ALIVE=300s
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_NUM_THREADS=4
+      - OLLAMA_MAX_LOADED_MODELS=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── PostgreSQL 数据库 ─────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: agent-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: demo
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d demo"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── FastAPI 服务 ──────────────────────────────
+  api:
+    build: .
+    container_name: agent-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # LLM
+      - LLM_MODEL=qwen2.5:4b
+      - LLM_TEMPERATURE=0.1
+      - LLM_CONTEXT_LENGTH=2048
+      - OLLAMA_HOST=http://ollama:11434
+      # PostgreSQL
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGDATABASE=demo
+      - PGUSER=postgres
+      - PGPASSWORD=postgres
+      # Embedding & Reranker
+      - EMBEDDING_MODEL_PATH=/app/models/bge-small-zh-v1.5
+      - RERANKER_MODEL_PATH=/app/models/bge-reranker-base
+      # 向量库 & 文档
+      - CHROMA_PATH=/app/data/chroma
+      - DOC_DB_PATH=/app/data/doc_db
+      - DOCS_DIRECTORY=/app/data/docs
+      # 其他
+      - LOG_LEVEL=INFO
+      - ENABLE_RESOURCE_MONITOR=true
+      - ENABLE_LONG_TERM_MEMORY=false
+      - MEMORY_ASYNC_POOL_SIZE=5
+      - MEMORY_ASYNC_MAX_OVERFLOW=5
+    volumes:
+      - app_data:/app/data          # ChromaDB + 报告 + 会话持久化
+      - models_cache:/app/models    # Embedding 模型缓存
+      - ./data/docs:/app/data/docs:ro  # 文档只读挂载
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+
+volumes:
+  ollama_data:    # LLM 模型持久化
+  postgres_data:  # 数据库持久化
+  app_data:       # ChromaDB / 报告 / 会话
+  models_cache:   # Embedding 模型缓存

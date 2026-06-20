@@ -22,7 +22,7 @@ def _get_sql_agent():
     if _sql_agent is None:
         from config import DB_CONFIG
         from sql_agent.sql_agent import init_sql_agent
-        _sql_agent = init_sql_agent(dict(DB_CONFIG), max_retries=1)
+        _sql_agent = init_sql_agent(dict(DB_CONFIG), max_retries=2)
     return _sql_agent
 
 
@@ -52,15 +52,15 @@ def sql_query_tool(question: str) -> str:
 
 
 @tool
-def search_knowledge_tool(question: str) -> str:
+def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
     """
-    从知识库检索文档内容、经验、最佳实践等。
-    输入检索问题，返回基于相关文档生成的回答。
+    从指定知识库检索文档内容、经验、最佳实践等。
+    输入检索问题和知识库ID，返回基于相关文档生成的回答。
     适用场景：概念解释、经验查询、流程规范、技术方案参考。
     """
-    logger.info(f"[Tool:search_knowledge] 检索: {question[:80]}...")
+    logger.info(f"[Tool:search_knowledge] 检索: {question[:80]}... (kb={kb_id})")
     pipeline = _get_rag_pipeline()
-    return pipeline.ask(question, session_id="multi-agent-default")
+    return pipeline.ask(question, session_id="multi-agent-default", kb_id=kb_id)
 
 
 @tool

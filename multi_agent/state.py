@@ -40,6 +40,7 @@ class StepResult(TypedDict, total=False):
 class AgentState(TypedDict):
     """Multi-Agent 工作流全局状态"""
     question: str                               # 用户原始问题
+    kb_id: str                                  # 知识库ID（policy/tech/finance/hr/default）
     plan: dict                                  # Planner 产出的 DAG:
                                                 # {"nodes": {"1": {...}, "2": {...}},
                                                 #  "edges": {"3": ["1","2"]}}

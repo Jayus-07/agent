@@ -263,14 +263,20 @@ def run_sql(cases: list[TestCase], live: bool = False) -> list[EvalResult]:
             try:
                 expected_security = case.expected.get("security_checks", [])
 
-                # 安全检查类用例：预期被拦截，不需要实际执行
-                if "sensitive_column_blocked" in expected_security or "write_blocked" in expected_security:
-                    # 这些用例依赖安全层拦截，在 live 模式下通过 SQLAgent 全流程测试
-                    from sql_agent.sql_agent import SQLAgent
-                    agent = SQLAgent(db_config=DB_CONFIG)
-                    outcome = agent.ask(case.question)
-                    # 如果返回的是错误/拦截信息，说明安全层生效
-                    is_blocked = "错误" in outcome or "拦截" in outcome or "不允许" in outcome
+                # 统一路由：所有 live SQL 用例都通过 SQLAgent.ask() 执行，
+                # 确保完整的 6 层安全管线（Router→Generator→Validator→RowSecurity→Executor）
+                from sql_agent.sql_agent import SQLAgent
+                agent = SQLAgent(db_config=DB_CONFIG)
+                outcome = agent.ask(case.question)
+
+                is_security_test = (
+                    "sensitive_column_blocked" in expected_security
+                    or "write_blocked" in expected_security
+                )
+
+                if is_security_test:
+                    # 安全测试用例：预期被安全层拦截
+                    is_blocked = "错误" in outcome or "拦截" in outcome or "不允许" in outcome or "访问控制" in outcome
                     results.append(EvalResult(
                         case_id=case.id, module="sql",
                         status="pass" if is_blocked else "fail",
@@ -284,33 +290,19 @@ def run_sql(cases: list[TestCase], live: bool = False) -> list[EvalResult]:
                         duration_ms=int((time.time() - t0) * 1000),
                     ))
                 else:
-                    # 正常查询类用例：生成 SQL → 执行 → 对比结果
-                    from sql_agent.sql_generator import generate_sql
-                    from sql_agent.router import select_tables
-                    from sql_agent.executor import execute_sql
+                    # 正常查询用例：预期安全层放行并返回结果
+                    is_error = "失败" in outcome or "错误" in outcome or "访问控制" in outcome
 
-                    table_names = select_tables(case.question)
-                    if not table_names:
-                        table_names = ["users", "departments", "projects", "project_members"]
-
-                    actual_sql = generate_sql(case.question, table_names)
-
-                    # 语法检查
-                    try:
-                        import sqlglot
-                        sqlglot.parse(actual_sql)
-                        syntax_ok = 1.0
-                    except Exception:
-                        syntax_ok = 0.0
-
-                    # 执行 SQL 并获取结果
-                    try:
-                        raw_result = execute_sql(actual_sql, DB_CONFIG)
-                        # 尝试从 markdown 表格解析结果
-                        actual_result = _parse_markdown_table(raw_result)
-                    except Exception:
+                    if is_error:
+                        # 安全层或执行层异常（预期应成功却被拦截/失败）
                         actual_result = []
-                        raw_result = ""
+                        syntax_ok = 0.0
+                        security_pass = 0.0
+                    else:
+                        # 成功：解析 markdown 表格结果
+                        actual_result = _parse_markdown_table(outcome)
+                        syntax_ok = 1.0
+                        security_pass = 1.0
 
                     # 结果比对
                     expected_result = case.expected.get("expected_result", [])
@@ -319,18 +311,17 @@ def run_sql(cases: list[TestCase], live: bool = False) -> list[EvalResult]:
                     else:
                         result_ok = float(len(actual_result) > 0) if actual_result else 0.0
 
-                    security_pass = True
-                    passed = security_pass and (syntax_ok > 0 or result_ok > 0)
+                    passed = security_pass == 1.0 and (syntax_ok > 0 or result_ok > 0)
 
                     results.append(EvalResult(
                         case_id=case.id, module="sql",
                         status="pass" if passed else "fail",
                         expected=case.expected,
-                        actual={"sql": actual_sql, "result": actual_result},
+                        actual={"sql": "routed via SQLAgent.ask()", "result": actual_result},
                         metrics={
                             "syntax_valid": syntax_ok,
                             "result_match": result_ok,
-                            "security_pass": 1.0 if security_pass else 0.0,
+                            "security_pass": security_pass,
                         },
                         duration_ms=int((time.time() - t0) * 1000),
                     ))
@@ -484,10 +475,11 @@ def _infer_routing_from_answer(answer: str, expected_routing: set) -> set:
     if "参考文献" in answer or "来源" in answer:
         actual_caps.add("search_knowledge")
 
-    # 如果没有任何特征但期望 routing 中有某能力，保守地包含
+    # 如果没有任何特征，说明系统未实际路由到任何能力
+    # 不将 expected_routing 兜底复制到 actual_caps：这样 routing_accuracy
+    # 会正确反映系统未执行预期路由的情况，而非虚假的 100%
     if expected_routing and not actual_caps:
-        # 兜底：包含所有期望的能力（避免全部标记为 routing 失败）
-        actual_caps = expected_routing.copy()
+        pass  # actual_caps 保持为空，路由检测诚实失败
 
     return actual_caps
 

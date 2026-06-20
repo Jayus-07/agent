@@ -1,68 +1,39 @@
 'use client'
 
-import { useMemo } from 'react'
-import { Loader2, CheckCircle2, XCircle, Brain, Database, Library, FileText } from 'lucide-react'
 import { useChatStore } from '@/store/chat'
-import { parseProgress } from '@/lib/sse-parser'
 
-const WORKER_ICONS: Record<string, React.ReactNode> = {
-  sql_worker:    <Database size={13} />,
-  rag_worker:    <Library size={13} />,
-  report_worker: <FileText size={13} />,
-  planner:       <Brain size={13} />,
-}
-
+/**
+ * 顶部宏观状态栏 — 纯 node → emoji 映射，不拼接参数。
+ *
+ * 数据源: store.currentStatus (由 SSE status 事件更新)
+ * 映射表: store.nodeLabels  (由 SSE meta 事件下发)
+ */
 export default function StatusBar() {
-  const thinking = useChatStore((s) => s.thinking)
+  const currentStatus = useChatStore((s) => s.currentStatus)
+  const nodeLabels = useChatStore((s) => s.nodeLabels)
   const isLoading = useChatStore((s) => s.isLoading)
+  const isDone = useChatStore((s) =>
+    s.streamEvents.some((e) => e.event === 'done'),
+  )
 
-  // 解析 thinking 事件 → 进度信息
-  const progress = useMemo(() => {
-    if (!thinking.length) return null
-    return parseProgress(thinking)
-  }, [thinking])
+  // done 后自动隐藏
+  if (!isLoading && (isDone || !currentStatus)) return null
 
-  // 不显示的条件
-  if (!isLoading && !progress) return null
-  if (progress?.isDone) return null  // done 后自动消失
+  const label = nodeLabels[currentStatus] || currentStatus || '🤔 思考中'
 
   return (
     <div className="shrink-0 border-t border-[#3f3f3f] bg-[#1a1a1a] px-4 py-2">
-      <div className="max-w-3xl mx-auto flex items-center gap-3">
-        {/* 左侧：当前动作 */}
-        {progress?.running ? (
-          <div className="flex items-center gap-2 text-sm text-[#b4b4b4] min-w-0">
-            <Loader2 size={14} className="text-blue-400 animate-spin shrink-0" />
-            <span className="text-[#8e8e8e] shrink-0">
-              {WORKER_ICONS[progress.running.node] ?? null}
-            </span>
-            <span className="truncate text-[#ececec]">{progress.running.description}</span>
-          </div>
-        ) : !progress && isLoading ? (
-          <div className="flex items-center gap-2 text-sm text-[#b4b4b4]">
-            <Loader2 size={14} className="text-blue-400 animate-spin shrink-0" />
-            <span className="text-[#ececec]">正在分析问题...</span>
-          </div>
-        ) : progress && !progress.isDone ? (
-          <div className="flex items-center gap-2 text-sm text-emerald-400">
-            <CheckCircle2 size={14} className="shrink-0" />
-            <span>等待下一步...</span>
-          </div>
-        ) : null}
-
-        {/* 右侧：进度数字 */}
-        {progress && progress.total > 0 && (
-          <div className="flex items-center gap-2 ml-auto text-xs text-[#8e8e8e] shrink-0">
-            {progress.failed > 0 && (
-              <span className="flex items-center gap-1 text-red-400">
-                <XCircle size={12} />
-                {progress.failed}
-              </span>
-            )}
-            <span className={progress.completed === progress.total ? 'text-emerald-400' : ''}>
-              [{progress.completed}/{progress.total}]
-            </span>
-          </div>
+      <div className="max-w-3xl mx-auto flex items-center gap-2">
+        {/* 状态标签 — 柔和过渡动效 */}
+        <span
+          key={currentStatus}
+          className="text-sm text-[#ececec] animate-fade-in transition-opacity duration-300"
+        >
+          {label}
+        </span>
+        {/* 加载指示器 */}
+        {isLoading && !isDone && (
+          <span className="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
         )}
       </div>
     </div>

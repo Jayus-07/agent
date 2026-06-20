@@ -8,6 +8,9 @@ LangChain LCEL 主 Chain
   L3 长期: PostgreSQL + pgvector (via MemoryRepository)
   MemoryManager 统一管理三层，chain 只持有引用。
 """
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List
+
 from langchain_classic.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_classic.retrievers.multi_query import MultiQueryRetriever
@@ -15,6 +18,8 @@ from langchain_classic.retrievers import ContextualCompressionRetriever
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.runnables import RunnableLambda
+from langchain_core.documents import Document
+from langchain_core.retrievers import BaseRetriever
 
 from llm.llm_factory import llm
 from retrieval.retrievers import ChunkLevelRetriever, AdaptiveRetriever
@@ -22,6 +27,45 @@ from retrieval.reranker import RerankCompressor
 from config import ENABLE_HISTORY_AWARE_RETRIEVAL, ENABLE_LLM_COMPRESSION, CITATION_SUPPORT_THRESHOLD, RERANK_TIMEOUT
 from utils.logger import logger
 from utils.timeout import safe_call_with_timeout
+
+
+# =====================================================
+# 并行 MultiQueryRetriever（替换 LangChain 默认串行版本）
+# =====================================================
+
+class ParallelMultiQueryRetriever(MultiQueryRetriever):
+    """
+    与 MultiQueryRetriever 相同，但多个查询变体的检索并发执行。
+    继承父类的 generate_queries，只覆盖 retrieve_documents 为并发版本。
+    """
+    max_workers: int = 3
+
+    def retrieve_documents(
+        self, queries: List[str], run_manager=None
+    ) -> List[Document]:
+        """并发检索所有查询变体，合并去重"""
+        all_docs: List[Document] = []
+
+        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(queries))) as executor:
+            futures = {
+                executor.submit(self._retrieve_single, q): q
+                for q in queries
+            }
+            for future in as_completed(futures):
+                try:
+                    docs = future.result()
+                    all_docs.extend(docs)
+                except Exception as e:
+                    logger.warning(f"[ParallelMultiQuery] 检索失败 '{futures[future][:50]}': {e}")
+
+        logger.info(f"[ParallelMultiQuery] {len(queries)} 查询 → {len(all_docs)} 文档 (并发={self.max_workers})")
+        # 使用父类的去重方法
+        return self.unique_union(all_docs)
+
+    def _retrieve_single(self, query: str) -> List[Document]:
+        """单个查询的检索（线程安全）"""
+        # LangChain BaseRetriever 的标准调用方式: invoke() → _get_relevant_documents()
+        return self.retriever.invoke(query)
 
 
 # =====================================================
@@ -50,16 +94,15 @@ CONTEXTUALIZE_PROMPT = ChatPromptTemplate.from_messages([
 
 # 用于最终生成答案，结合检索到的文档和对话历史
 QA_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """你是企业知识库助手。
-
-请基于提供的资料回答问题。
+    ("system", """你是企业知识库助手。你**只能**根据下方提供的资料回答问题，**严禁**使用资料之外的知识。
 
 要求：
-1. 引用资料时在句末标注来源编号，如 [1]、[2]、[3]
-2. 不编造不存在的信息
-3. 如果资料不足，基于已有信息归纳，不要凭空补充
-4. 输出详细，使用分点或分段说明
-5. 资料中提到的背景、细节、职责应充分展开
+1. **每个事实/数据必须标注来源编号**，格式如 [1]、[2]、[3]
+   - 正确示例：「根据公司规定，报销需在每月5日前提交 [1]」
+   - 错误示例：「一般来说报销需要5天处理」 ← 没有引用，违规
+2. **绝对禁止编造或使用外部知识**。资料中没有的信息，明确说"资料未提及"并给出已有相关内容
+3. 输出详实，用分点或分段说明，尽量展开资料中的具体细节
+4. 资料中的数字、日期、名称等具体信息必须准确引用
 
 资料：
 {context}"""),
@@ -153,8 +196,11 @@ class RAGChain:
         #         base_retriever=retriever,
         #     )
 
-        # MultiQuery: 用 LLM 生成多个角度查询，提升召回率
-        retriever = MultiQueryRetriever.from_llm(retriever=retriever, llm=llm)
+        # MultiQuery: 用 LLM 生成多个角度查询 → **并发检索**，提升召回率
+        retriever = ParallelMultiQueryRetriever.from_llm(
+            retriever=retriever, llm=llm
+        )
+        retriever.max_workers = 3  # 在 from_llm 之后设置自定义属性
         logger.info("retriever: " + str(retriever))
 
         # Adaptive: 检查 MultiQuery 合并后的 chunk 文档分布，按需补全文档全文
@@ -206,6 +252,9 @@ class RAGChain:
         references = _format_references(verified_docs, answer)
         if references:
             answer = answer + references
+
+        # 提取结构化来源（供前端 SourceCard 展示）
+        self._last_sources = _extract_sources(verified_docs, answer)
 
         # L2/L3: 持久化本轮（MemoryManager 委托 MemoryService → PostgreSQL）
         if self._memory:
@@ -327,7 +376,11 @@ def _mark_unsupported_sentences(answer: str, verified_docs: list) -> str:
 
 
 def _format_references(docs: list, answer: str = "") -> str:
-    """生成参考文献列表，仅显示文中实际引用到的来源"""
+    """生成参考文献列表。
+
+    - 优先显示文中 [1][2] 实际引用到的来源
+    - 兜底：如果 LLM 未生成引用标注，展示所有通过验证的文档
+    """
     if not docs:
         return ""
 
@@ -343,9 +396,10 @@ def _format_references(docs: list, answer: str = "") -> str:
         fname = doc.metadata.get("source_file", doc.metadata.get("source", ""))
         if not fname or idx is None:
             continue
-        # 仅保留文中实际引用的来源
-        if idx not in cited:
+        # 有引用标注时仅保留文中实际引用的来源
+        if cited and idx not in cited:
             continue
+        # 无引用标注（兜底）：展示所有 verified docs
         if fname not in seen:
             seen[fname] = (idx, doc.metadata)
 
@@ -369,3 +423,44 @@ def _format_references(docs: list, answer: str = "") -> str:
         lines.append("".join(parts))
 
     return "\n".join(lines)
+
+
+def _extract_sources(docs: list, answer: str = "") -> list[dict]:
+    """从 verified docs 中提取结构化来源信息（供前端 SourceCard 展示）。
+
+    - 优先通过文中 [1][2] 引用标注精确匹配
+    - 兜底：如果 LLM 未生成引用标注，返回所有通过验证的文档
+    """
+    if not docs:
+        return []
+
+    import re
+    cited = set()
+    for m in re.finditer(r"\[(\d+)\]", answer):
+        cited.add(int(m.group(1)))
+
+    type_label_map = {
+        "resume": "简历", "project": "项目文档", "report": "报告",
+        "manual": "操作手册", "policy": "制度规范",
+    }
+
+    seen = {}
+    for doc in docs:
+        idx = doc.metadata.get("index")
+        fname = doc.metadata.get("source_file", doc.metadata.get("source", ""))
+        if not fname or idx is None:
+            continue
+        # 有引用标注时仅保留文中实际引用的来源；无引用时兜底展示全部
+        if cited and idx not in cited:
+            continue
+        if fname not in seen:
+            doc_type = doc.metadata.get("doc_type", "")
+            score = doc.metadata.get("score", doc.metadata.get("rerank_score", doc.metadata.get("support_score")))
+            seen[fname] = {
+                "filename": fname,
+                "doc_type": doc_type,
+                "type_label": type_label_map.get(doc_type, doc_type),
+                "score": round(float(score), 2) if score is not None else None,
+            }
+
+    return sorted(seen.values(), key=lambda s: s["filename"])

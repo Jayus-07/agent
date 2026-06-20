@@ -207,12 +207,13 @@ class RAGPipeline:
     # 公共入口
     # =====================================================
 
-    def search(self, question: str, session_id: str = "default") -> str:
+    def search(self, question: str, session_id: str = "default", kb_id: str = "default") -> str:
         """企业级检索入口：QueryAnalyzer → MetadataFilter → contextvars 透传 → 现有链。
 
         与 ask() 的区别：
           - ask() 直接调用链（向后兼容，无 filter）
           - search() 先做结构化查询分析，再通过 contextvars 注入 filter
+          - kb_id: 知识库隔离（policy/tech/finance/hr/default）
         """
         from retrieval.query_analyzer import QueryAnalyzer
         from retrieval.context import RequestContext, set_context
@@ -227,7 +228,12 @@ class RAGPipeline:
         parsed = analyzer.analyze(question)
         metadata_filter = parsed.to_metadata_filter()
 
-        # 2. 上下文注入
+        # 2. KB 隔离：kb_id 合并入 metadata_filter
+        # "default" / "*" = 不隔离，查询所有知识库
+        if kb_id and kb_id != "*" and kb_id != "default":
+            metadata_filter["kb_id"] = kb_id
+
+        # 3. 上下文注入
         ctx = RequestContext(
             metadata_filter=metadata_filter,
             intent_label=parsed.intent,
@@ -239,13 +245,13 @@ class RAGPipeline:
         m.filter_applied = bool(metadata_filter)
 
         logger.info(
-            f"[Search] intent={parsed.intent}, "
+            f"[Search] kb_id={kb_id}, intent={parsed.intent}, "
             f"persons={parsed.persons}, "
             f"filter={metadata_filter}"
         )
 
-        # 3. 委托现有链
-        logger.info(f"收到问题: {question} (session={session_id})")
+        # 4. 委托现有链
+        logger.info(f"收到问题: {question[:80]} (session={session_id}, kb={kb_id})")
 
         if ENABLE_RESOURCE_MONITOR:
             resource_monitor.increment_request()
@@ -271,12 +277,24 @@ class RAGPipeline:
             logger.error(f"请求失败 (耗时: {elapsed:.2f}s): {e}", exc_info=True)
             raise
 
-    def ask(self, question: str, session_id: str = "default") -> str:
+    def ask(self, question: str, session_id: str = "default", kb_id: str = "default") -> str:
         print("\n==============================")
-        print("问题:", question)
+        print(f"问题: {question}  (kb={kb_id})")
         print("==============================")
 
-        logger.info(f"收到问题: {question} (session={session_id})")
+        logger.info(f"收到问题: {question[:80]} (session={session_id}, kb={kb_id})")
+
+        # KB 隔离：注入 kb_id 到 contextvars filter
+        # "default" / "*" = 不隔离，查询所有知识库
+        if kb_id and kb_id != "*" and kb_id != "default":
+            from retrieval.context import RequestContext, set_context
+            ctx = RequestContext(
+                metadata_filter={"kb_id": kb_id},
+                intent_label="",
+                query=question,
+            )
+            set_context(ctx)
+            logger.info(f"[RAG.ask] kb_id={kb_id} → metadata_filter 已注入")
 
         if ENABLE_RESOURCE_MONITOR:
             resource_monitor.increment_request()

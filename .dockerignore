@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+
+# Git
+.git/
+.gitignore
+
+# Data (volume mounted or generated at runtime)
+data/chroma/
+data/doc_db/
+data/reports/
+data/report_snapshots/
+data/long_term_memory/
+data/chat_history.db
+data/report_preferences.json
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker/
+
+# Misc
+.claude/
+.env

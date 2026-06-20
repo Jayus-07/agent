@@ -1,4 +1,4 @@
-import type { ChatRequest, ChatResponse, SSEEvent } from './types'
+import type { ChatRequest, ChatResponse, SSEStreamEvent } from './types'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || ''
 
@@ -74,7 +74,11 @@ export async function sendReport(reportType: string, filters: Record<string, unk
 // SSE 流式对话 (POST /chat/stream)
 // ========================================
 
-export async function* streamChat(req: ChatRequest, signal?: AbortSignal): AsyncGenerator<SSEEvent> {
+/** SSE v2 解析器：支持 event: 字段分流 */
+export async function* streamChat(
+  req: ChatRequest,
+  signal?: AbortSignal,
+): AsyncGenerator<SSEStreamEvent> {
   const res = await fetch(`${API_BASE}/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -90,16 +94,14 @@ export async function* streamChat(req: ChatRequest, signal?: AbortSignal): Async
   const reader = res.body!.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let currentEvent = ''   // 暂存 event: 行
 
   while (true) {
     const { done, value } = await reader.read()
     if (done) {
-      // Flush remaining buffer — final SSE event may lack trailing \n
-      if (buffer.trim().startsWith('data: ')) {
-        try {
-          yield JSON.parse(buffer.trim().slice(6)) as SSEEvent
-        } catch { /* ignore malformed final chunk */ }
-      }
+      // Flush remaining buffer
+      const parsed = _tryParseEvent(currentEvent, buffer.trim())
+      if (parsed) yield parsed
       break
     }
 
@@ -109,13 +111,42 @@ export async function* streamChat(req: ChatRequest, signal?: AbortSignal): Async
 
     for (const line of lines) {
       const trimmed = line.trim()
+      if (trimmed === '') {
+        // 空行 = 事件帧结束
+        // currentEvent 已被上一轮设置，buffer 在上一行 data: 中暂存
+        // 此处不需要额外处理 — 帧解析在 data: 行完成
+        continue
+      }
+      if (trimmed.startsWith('event: ')) {
+        currentEvent = trimmed.slice(7)
+        continue
+      }
       if (trimmed.startsWith('data: ')) {
-        try {
-          yield JSON.parse(trimmed.slice(6)) as SSEEvent
-        } catch {
-          // 忽略解析失败的行
-        }
+        const jsonStr = trimmed.slice(6)
+        const parsed = _tryParseEvent(currentEvent, jsonStr)
+        if (parsed) yield parsed
+        currentEvent = ''
       }
     }
   }
+}
+
+/** 安全解析单个 SSE 事件帧 */
+function _tryParseEvent(evtType: string, jsonStr: string): SSEStreamEvent | null {
+  if (!evtType || !jsonStr) return null
+  try {
+    const data = JSON.parse(jsonStr)
+    return { event: evtType, data } as SSEStreamEvent
+  } catch {
+    return null
+  }
+}
+
+/** 发送中止信号到后端 */
+export async function abortChat(sessionId: string, requestId: string): Promise<void> {
+  await fetch(`${API_BASE}/chat/abort`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, request_id: requestId }),
+  }).catch(() => { /* 中止请求本身失败不影响主流程 */ })
 }

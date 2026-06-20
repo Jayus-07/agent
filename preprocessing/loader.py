@@ -1,59 +1,22 @@
 import os
-import hashlib
 from langchain_community.document_loaders import (
     TextLoader,
     PyPDFLoader,
 )
-from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
 
-from config import CHUNK_SIZE, CHUNK_OVERLAP
+from config import CHUNK_SIZE, CHUNK_OVERLAP, DEFAULT_KB_ID
 from utils.logger import logger
 
 
-def split_documents(docs, file_path, chunk_size=500, chunk_overlap=50):
-    """智能拆分文档，保留父文档信息"""
-    ext = os.path.splitext(file_path)[1].lower()
-    all_chunks = []
+def split_documents(docs, file_path, chunk_size=None, chunk_overlap=None):
+    """文档类型感知的智能分块 → 委托给 ChunkStrategyRouter"""
+    from preprocessing.chunking import ChunkStrategyRouter
 
-    parent_doc_id = hashlib.md5(file_path.encode()).hexdigest()[:10]
-
-    for doc in docs:
-        if ext == '.md':
-            headers_to_split_on = [
-                ("#", "Header 1"),
-                ("##", "Header 2"),
-                ("###", "Header 3"),
-            ]
-            splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
-            sub_docs = splitter.split_text(doc.page_content)
-        else:
-            splitter = RecursiveCharacterTextSplitter(
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                length_function=len,
-                separators=["\n\n", "\n", "。", "！", "？", ".", "!", "?", " ", ""]
-            )
-            sub_docs = splitter.split_text(doc.page_content)
-
-        for i, chunk in enumerate(sub_docs):
-            if isinstance(chunk, str):
-                from langchain_core.documents import Document
-                chunk_doc = Document(page_content=chunk, metadata=doc.metadata.copy())
-            else:
-                chunk_doc = chunk
-                chunk_doc.metadata = doc.metadata.copy()
-
-            chunk_doc.metadata.update({
-                "parent_doc_id": parent_doc_id,
-                "chunk_index": i,
-                "total_chunks": len(sub_docs),
-                "source_file": os.path.basename(file_path),
-                "file_path": file_path
-            })
-            all_chunks.append(chunk_doc)
-
-    logger.debug(f"\U0001f4c4 {os.path.basename(file_path)} 拆分为 {len(all_chunks)} 个chunks")
-    return all_chunks
+    router = ChunkStrategyRouter(
+        fallback_chunk_size=chunk_size or CHUNK_SIZE,
+        fallback_chunk_overlap=chunk_overlap or CHUNK_OVERLAP,
+    )
+    return router.route(docs, file_path)
 
 
 def load_documents_from_directory(directory_path: str, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP):
@@ -67,6 +30,10 @@ def load_documents_from_directory(directory_path: str, chunk_size=CHUNK_SIZE, ch
     }
 
     for root, dirs, files in os.walk(directory_path):
+        # 第一级子目录名 = kb_id
+        rel = os.path.relpath(root, directory_path)
+        kb_id = rel.split(os.sep)[0] if rel != "." else DEFAULT_KB_ID
+
         for file in files:
             file_path = os.path.join(root, file)
             ext = os.path.splitext(file)[1].lower()
@@ -82,9 +49,14 @@ def load_documents_from_directory(directory_path: str, chunk_size=CHUNK_SIZE, ch
 
                     docs = loader.load()
                     chunks = split_documents(docs, file_path, chunk_size, chunk_overlap)
+
+                    # KB 隔离：注入 kb_id 到每个 chunk metadata
+                    for c in chunks:
+                        c.metadata["kb_id"] = kb_id
+
                     all_documents.extend(chunks)
 
-                    logger.debug(f"✅ 加载成功: {file} ({len(docs)} 页 -> {len(chunks)} chunks)")
+                    logger.debug(f"✅ 加载成功: {file} (kb={kb_id}, {len(docs)} 页 -> {len(chunks)} chunks)")
 
                 except Exception as e:
                     logger.error(f"❌ 加载失败: {file} - 错误: {e}")

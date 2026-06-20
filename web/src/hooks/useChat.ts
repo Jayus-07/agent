@@ -6,7 +6,7 @@ import { useSSE } from './useSSE'
 
 export function useSendMessage() {
   const currentId = useChatStore((s) => s.currentId)
-  const { startStream } = useSSE()
+  const { startStream, stopStream } = useSSE()
 
   const send = useCallback(
     async (question: string) => {
@@ -15,5 +15,5 @@ export function useSendMessage() {
     [currentId, startStream],
   )
 
-  return { send }
+  return { send, stopStream }
 }

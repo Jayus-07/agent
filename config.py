@@ -23,7 +23,7 @@ RERANKER_MODEL_PATH = os.getenv(
     "C:/Users/wh/.cache/modelscope/hub/models/BAAI/bge-reranker-base"
 )
 
-LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:3b")
+LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:4b")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 LLM_CONTEXT_LENGTH = int(os.getenv("LLM_CONTEXT_LENGTH", "4096"))
 
@@ -33,6 +33,23 @@ LLM_CONTEXT_LENGTH = int(os.getenv("LLM_CONTEXT_LENGTH", "4096"))
 # ====================================
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
+
+# ====================================
+# 文档类型感知分块配置
+# ====================================
+# project/report: header-first split, max chars per section; only sub-chunk if exceeded
+PROJECT_CHUNK_SIZE = int(os.getenv("PROJECT_CHUNK_SIZE", "1500"))
+
+# general/fallback: RecursiveCharacterTextSplitter params (overrides CHUNK_SIZE/CHUNK_OVERLAP)
+GENERAL_CHUNK_SIZE = int(os.getenv("GENERAL_CHUNK_SIZE", "1000"))
+GENERAL_CHUNK_OVERLAP = int(os.getenv("GENERAL_CHUNK_OVERLAP", "100"))
+
+# manual/policy & resume: NO size cap — section integrity first (no config needed)
+
+# ====================================
+# Knowledge Base 隔离配置
+# ====================================
+DEFAULT_KB_ID = os.getenv("DEFAULT_KB_ID", "default")
 
 BM25_SEARCH_K = int(os.getenv("BM25_SEARCH_K", "20"))
 HYBRID_SEARCH_K = int(os.getenv("HYBRID_SEARCH_K", "20"))
