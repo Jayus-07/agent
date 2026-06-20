@@ -23,39 +23,41 @@ from multi_agent.planner import (
 
 
 class TestExtractJson:
-    """JSON 从 LLM 输出中提取"""
+    """JSON 从 LLM 输出中提取（4 层修复管道，返回 dict）"""
 
     def test_pure_json(self):
         text = '{"nodes": [], "edges": {}}'
-        assert _extract_json(text) == text
+        result = _extract_json(text)
+        assert result == {"nodes": [], "edges": {}}
 
     def test_json_with_markdown_fence(self):
         text = '```json\n{"nodes": [], "edges": {}}\n```'
         result = _extract_json(text)
-        assert '"nodes"' in result
-        assert '"edges"' in result
-        assert not result.startswith("```")
+        assert "nodes" in result
+        assert "edges" in result
+        assert result["nodes"] == []
 
     def test_json_without_lang_specifier(self):
         text = '```\n{"nodes": [], "edges": {}}\n```'
         result = _extract_json(text)
-        assert '"nodes"' in result
+        assert "nodes" in result
+        assert result["nodes"] == []
 
     def test_json_with_prefix_text(self):
         text = '这是分析结果：\n{"nodes": [{"step_id": "1", "capability": "search_knowledge"}]}'
         result = _extract_json(text)
-        assert result.startswith("{")
-        assert result.endswith("}")
+        assert isinstance(result, dict)
+        assert "nodes" in result
 
     def test_no_json(self):
         text = "没有 JSON 内容"
         result = _extract_json(text)
-        assert result == text  # 原样返回
+        assert result == {}  # 返回空 dict，触发 _fallback_plan
 
     def test_nested_braces(self):
         text = '{"nodes": {"1": {"step_id": "1"}}, "edges": {}}'
         result = _extract_json(text)
-        assert result == text
+        assert result["nodes"]["1"]["step_id"] == "1"
 
 
 class TestNormalizePlan:

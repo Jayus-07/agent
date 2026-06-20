@@ -176,9 +176,8 @@ def planner_node(state: dict) -> dict:
         ])
         content = resp.content.strip()
 
-        # 提取 JSON
-        content = _extract_json(content)
-        plan = json.loads(content)
+        # 提取 JSON（现在直接返回 dict）
+        plan = _extract_json(content)
 
         # 校验
         plan = _normalize_plan(plan)
@@ -220,9 +219,13 @@ def planner_node(state: dict) -> dict:
 # 辅助函数
 # =====================================================
 
-def _extract_json(text: str) -> str:
-    """从 LLM 输出中提取 JSON 部分"""
-    # 去掉可能的 markdown 代码块标记
+# =====================================================
+# JSON 修复管道（4 层）
+# =====================================================
+
+def _strip_markdown_code_block(text: str) -> str:
+    """去除 markdown 代码块标记 (```json ... ```)"""
+    text = text.strip()
     if text.startswith("```"):
         lines = text.split("\n")
         if lines[0].startswith("```"):
@@ -230,13 +233,121 @@ def _extract_json(text: str) -> str:
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines)
+    return text.strip()
 
-    # 找到 JSON 边界
+
+def _find_outer_braces(text: str) -> tuple[int, int] | None:
+    """找到最外层的 { } 边界，返回 (start, end) 或 None"""
     start = text.find("{")
     end = text.rfind("}")
-    if start != -1 and end != -1:
-        return text[start:end + 1]
+    if start != -1 and end != -1 and end > start:
+        return start, end
+    return None
+
+
+def _replace_single_quotes_in_json(text: str) -> str:
+    """在 JSON 上下文中的单引号替换为双引号（保守策略：仅替换 key 和顶层字符串值）"""
+    # 匹配 'key': 模式 -> "key":
+    import re
+    text = re.sub(r"'([^']*)'(\s*:)", r'"\1"\2', text)
+    # 匹配 : 'value' 模式 -> : "value"
+    text = re.sub(r"(:\s*)'([^']*)'", r'\1"\2"', text)
     return text
+
+
+def _fix_unquoted_keys(text: str) -> str:
+    """修复缺失引号的 key: {key: "value"} -> {"key": "value"}"""
+    import re
+    # 匹配 { 或 , 后的无引号标识符后跟 :（不在字符串内部）
+    text = re.sub(r'([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', text)
+    return text
+
+
+def _repair_common_json_errors(text: str) -> str:
+    """修复小模型常见的 JSON 格式错误"""
+    import re
+
+    # 1. 尾逗号：{"a": 1,} -> {"a": 1}
+    text = re.sub(r',\s*}', '}', text)
+    text = re.sub(r',\s*]', ']', text)
+
+    # 2. 中文引号 -> 英文引号
+    text = text.replace('“', '"').replace('”', '"')
+    text = text.replace('‘', "'").replace('’', "'")
+
+    # 3. 未转义的控制字符在字符串值中（保留 \n \t \r）
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
+
+    # 4. 缺失引号的 key（非标准但常见）
+    text = _fix_unquoted_keys(text)
+
+    # 5. 单引号替换（在修复 key 之后做，避免破坏 key 修复的正则）
+    text = _replace_single_quotes_in_json(text)
+
+    return text
+
+
+def _brute_force_extract(text: str) -> dict:
+    """暴力提取：用正则找最外层的完整 JSON 对象"""
+    import re
+    # 找 { 开头，匹配到对应的 }
+    matches = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
+    for match in sorted(matches, key=len, reverse=True):
+        try:
+            return json.loads(match)
+        except json.JSONDecodeError:
+            continue
+    return {}
+
+
+def _extract_json(text: str) -> dict:
+    """4 层修复管道：每层尝试解析，成功即返回。
+
+    Layer 0: 直接解析（最快路径）
+    Layer 1: 截取最外层 {} 再解析
+    Layer 2: 修复常见小模型 JSON 错误后解析
+    Layer 3: 暴力正则提取
+
+    全失败返回空 dict（触发 _fallback_plan）。
+    """
+    from multi_agent.alerts import make_alert, log_degradation
+
+    text = _strip_markdown_code_block(text)
+
+    # Layer 0: 直接解析
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Layer 1: 截取最外层 {}
+    bounds = _find_outer_braces(text)
+    if bounds:
+        try:
+            return json.loads(text[bounds[0]:bounds[1] + 1])
+        except json.JSONDecodeError:
+            pass
+
+    # Layer 2: 修复常见错误
+    try:
+        repaired = _repair_common_json_errors(text)
+        bounds = _find_outer_braces(repaired)
+        if bounds:
+            return json.loads(repaired[bounds[0]:bounds[1] + 1])
+        return json.loads(repaired)
+    except json.JSONDecodeError:
+        pass
+
+    # Layer 3: 暴力提取
+    result = _brute_force_extract(text)
+    if result:
+        return result
+
+    # 全失败
+    logger.warning("[Planner] JSON 修复管道全部失败，触发兜底")
+    alert = make_alert("PLAN_JSON_INVALID", {"text_preview": text[:200]})
+    log_degradation(alert)
+    return {}
 
 
 # 知识库关键词：问题包含这些词时才可能需要 search_knowledge
