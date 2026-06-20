@@ -2,35 +2,59 @@
 workers/base.py — Worker 公共逻辑
 
 所有 Worker 共享的:
-  - retry 机制（失败自动重试）
-  - timeout 保护
+  - asyncio 超时保护（asyncio.wait_for）
+  - 指数退避重试（1.5s → 2.25s）
+  - 错误分类（可重试 vs 不可重试）
   - 状态写回 state.step_results
 """
 
+import asyncio
 import time
 from utils.logger import logger
 
 # 全局配置
-DEFAULT_MAX_RETRIES = 2
-DEFAULT_TIMEOUT = 60  # 秒
+DEFAULT_TIMEOUT = 60       # 单次调用超时（秒）
+DEFAULT_MAX_RETRIES = 2    # 最大重试次数（总共最多 3 次尝试）
+RETRY_BACKOFF_BASE = 1.5   # 指数退避基数（秒）: 1.5, 2.25
+
+# 不可重试的错误模式（参数错误/资源不存在等，重试无意义）
+UNRETRYABLE_PATTERNS = [
+    "no such table",
+    "column not found",
+    "syntax error",
+    "invalid parameter",
+    "权限不足",
+    "permission denied",
+    "table does not exist",
+]
 
 
-def execute_with_retry(
+def _is_retryable(error: str) -> bool:
+    """判断错误是否值得重试"""
+    error_lower = error.lower()
+    return not any(p.lower() in error_lower for p in UNRETRYABLE_PATTERNS)
+
+
+async def execute_with_retry(
     state: dict,
     tool_fn,
     max_retries: int = DEFAULT_MAX_RETRIES,
+    timeout: float = DEFAULT_TIMEOUT,
 ) -> dict:
     """
-    执行工具调用，带 retry + 状态管理。
+    执行工具调用，带 retry + timeout + 状态管理。
 
     参数:
-        state:      当前 AgentState
-        tool_fn:    工具调用函数 (接收 **params)
-        max_retries:最大重试次数
+        state:       当前 AgentState
+        tool_fn:     工具调用函数 (接收 **params)
+        max_retries: 最大重试次数（默认 2，总共最多 3 次尝试）
+        timeout:     单次调用超时秒数
 
     返回:
         {"step_results": {...}} 状态更新字典
     """
+    from multi_agent.alerts import make_alert, log_degradation
+
     step_id = state.get("current_step_id")
     if not step_id:
         logger.error("[Worker] current_step_id 为空，无法执行")
@@ -54,6 +78,7 @@ def execute_with_retry(
     params = step_info.get("params", {})
 
     # —— 重试循环 ——
+    last_error = None
     for attempt in range(max_retries + 1):
         sr["status"] = "running"
         sr["started_at"] = time.time()
@@ -61,34 +86,77 @@ def execute_with_retry(
         step_results[step_id] = dict(sr)
 
         try:
-            logger.info(f"[Worker] 执行 step={step_id} "
-                        f"cap={sr['capability']} "
-                        f"(第{attempt+1}次)")
-            output = tool_fn.invoke(params)
+            logger.info(
+                f"[Worker] 执行 step={step_id} "
+                f"cap={sr['capability']} "
+                f"(第{attempt+1}/{max_retries+1}次，timeout={timeout}s)"
+            )
+
+            # ⭐ asyncio 超时保护：将同步 Tool 放到线程池中执行
+            output = await asyncio.wait_for(
+                asyncio.to_thread(tool_fn.invoke, params),
+                timeout=timeout,
+            )
 
             sr["status"] = "success"
             sr["output"] = output
             sr["error"] = None
+            sr["error_type"] = None
             sr["finished_at"] = time.time()
             step_results[step_id] = dict(sr)
 
-            logger.info(f"[Worker] step={step_id} 成功 "
-                        f"(耗时 {sr['finished_at'] - sr['started_at']:.2f}s)")
+            elapsed = sr["finished_at"] - sr.get("started_at", sr["finished_at"])
+            logger.info(
+                f"[Worker] step={step_id} 成功 "
+                f"(耗时 {elapsed:.2f}s)"
+            )
             break
 
+        except asyncio.TimeoutError:
+            last_error = f"步骤执行超时（{timeout}s）"
+            logger.warning(
+                f"[Worker] step={step_id} 超时 "
+                f"(第{attempt+1}/{max_retries+1}次)"
+            )
+
         except Exception as e:
-            logger.warning(f"[Worker] step={step_id} 失败 "
-                           f"(第{attempt+1}次): {e}")
+            last_error = str(e)
+            logger.warning(
+                f"[Worker] step={step_id} 失败 "
+                f"(第{attempt+1}/{max_retries+1}次): {e}"
+            )
 
-            if attempt < max_retries:
-                logger.info(f"[Worker] step={step_id} 重试中...")
-                continue
+        # 检查是否值得重试
+        if not _is_retryable(str(last_error)):
+            logger.warning(
+                f"[Worker] step={step_id} 错误不可重试，直接失败"
+            )
+            break
 
-            # 最终失败
-            sr["status"] = "failed"
-            sr["error"] = str(e)
-            sr["finished_at"] = time.time()
-            step_results[step_id] = dict(sr)
-            logger.error(f"[Worker] step={step_id} 最终失败: {e}")
+        # 指数退避
+        if attempt < max_retries:
+            delay = RETRY_BACKOFF_BASE ** (attempt + 1)
+            logger.info(f"[Worker] step={step_id} 等待 {delay:.1f}s 后重试")
+            await asyncio.sleep(delay)
+
+    else:
+        # 循环正常结束（非 break），说明重试耗尽
+        pass
+
+    # 检查最终状态：如果仍为 running，标记为 failed
+    if sr.get("status") == "running":
+        sr["status"] = "failed"
+        sr["error"] = last_error
+        sr["error_type"] = "timeout" if "超时" in str(last_error) else "unknown"
+        sr["finished_at"] = time.time()
+        step_results[step_id] = dict(sr)
+
+        # 告警
+        if sr.get("error_type") == "timeout":
+            alert = make_alert("WORKER_TIMEOUT", {"step_id": step_id, "error": last_error})
+        else:
+            alert = make_alert("WORKER_RETRY_EXHAUST", {"step_id": step_id, "error": last_error})
+        log_degradation(alert)
+        logger.error(f"[Worker] step={step_id} 最终失败: {last_error}")
 
     return {"step_results": step_results}

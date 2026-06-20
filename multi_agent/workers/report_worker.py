@@ -9,7 +9,7 @@ from multi_agent.workers.base import execute_with_retry
 from utils.logger import logger
 
 
-def report_worker_node(state: dict) -> dict:
+async def report_worker_node(state: dict) -> dict:
     """
     Report Worker: 生成结构化报告。
 
@@ -17,4 +17,4 @@ def report_worker_node(state: dict) -> dict:
     调用 generate_report_tool，结果写回 state.step_results。
     """
     logger.info(f"[Report Worker] 开始执行 step={state.get('current_step_id')}")
-    return execute_with_retry(state, generate_report_tool)
+    return await execute_with_retry(state, generate_report_tool)

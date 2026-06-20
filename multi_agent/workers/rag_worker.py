@@ -9,7 +9,7 @@ from multi_agent.workers.base import execute_with_retry
 from utils.logger import logger
 
 
-def rag_worker_node(state: dict) -> dict:
+async def rag_worker_node(state: dict) -> dict:
     """
     RAG Worker: 从知识库检索文档。
 
@@ -17,4 +17,4 @@ def rag_worker_node(state: dict) -> dict:
     调用 search_knowledge_tool，结果写回 state.step_results。
     """
     logger.info(f"[RAG Worker] 开始执行 step={state.get('current_step_id')}")
-    return execute_with_retry(state, search_knowledge_tool)
+    return await execute_with_retry(state, search_knowledge_tool)
