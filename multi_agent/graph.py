@@ -22,12 +22,14 @@ from multi_agent.workers.sql_worker import sql_worker_node
 from multi_agent.workers.rag_worker import rag_worker_node
 from multi_agent.workers.report_worker import report_worker_node
 from multi_agent.reporter import reporter_node
+from multi_agent.critique import critique_node
 from utils.logger import logger
 
 
 # 节点名 → 用户可读的阶段标签
 _NODE_LABELS = {
     "planner":       "任务规划",
+    "critique":      "计划审查",
     "supervisor":    "调度决策",
     "sql_worker":    "数据库查询",
     "rag_worker":    "知识库检索",
@@ -51,6 +53,15 @@ def route_after_planner(state: AgentState) -> str:
     return "reporter"
 
 
+def route_after_critique(state: AgentState) -> str:
+    """Critique 后的路由：空计划直接到 Reporter，否则到 Supervisor"""
+    plan = state.get("plan", {})
+    if not plan.get("nodes"):
+        logger.info("[Graph] 空 plan，跳过 Supervisor")
+        return "reporter"
+    return "supervisor"
+
+
 # =====================================================
 # 图构建
 # =====================================================
@@ -61,6 +72,7 @@ def build_graph():
 
     # — 节点 —
     wf.add_node("planner", planner_node)
+    wf.add_node("critique", critique_node)
     wf.add_node("supervisor", supervisor_node)
     wf.add_node("sql_worker", sql_worker_node)
     wf.add_node("rag_worker", rag_worker_node)
@@ -70,9 +82,11 @@ def build_graph():
     # — 边 —
     wf.add_edge(START, "planner")
 
+    wf.add_edge("planner", "critique")
+
     wf.add_conditional_edges(
-        "planner",
-        route_after_planner,
+        "critique",
+        route_after_critique,
         {"supervisor": "supervisor", "reporter": "reporter"},
     )
 
@@ -91,7 +105,7 @@ def build_graph():
 
     wf.add_edge("reporter", END)
 
-    logger.info("[Graph] 图编译完成 (Planner → Supervisor ⇄ Workers → Reporter)")
+    logger.info("[Graph] 图编译完成 (Planner → Critique → Supervisor ⇄ Workers → Reporter)")
     return wf.compile()
 
 
@@ -132,6 +146,10 @@ class MultiAgentSystem:
             "current_step_id": None,
             "messages": list(l1.messages),
             "final_answer": "",
+            "alerts": [],
+            "_supervisor_loop_count": 0,
+            "_plan_critiqued": False,
+            "_plan_changed": False,
         }
 
         try:
@@ -197,6 +215,10 @@ class MultiAgentSystem:
             "current_step_id": None,
             "messages": list(l1.messages),
             "final_answer": "",
+            "alerts": [],
+            "_supervisor_loop_count": 0,
+            "_plan_critiqued": False,
+            "_plan_changed": False,
         }
 
         final_answer = ""
@@ -242,6 +264,36 @@ class MultiAgentSystem:
                             "ts": time.time(),
                         },
                     }
+
+                # —— Critique ——
+                elif node_name == "critique":
+                    plan_changed = node_output.get("_plan_changed", False)
+                    plan = node_output.get("plan", {})
+                    nodes = plan.get("nodes", {})
+                    if plan_changed:
+                        yield {
+                            "event": "log",
+                            "data": {
+                                "level": "warn",
+                                "node": node_name,
+                                "step_id": "critique",
+                                "message": f"计划已修正，共 {len(nodes)} 个步骤",
+                                "payload": {"plan_changed": True, "task_count": len(nodes)},
+                                "ts": time.time(),
+                            },
+                        }
+                    else:
+                        yield {
+                            "event": "log",
+                            "data": {
+                                "level": "info",
+                                "node": node_name,
+                                "step_id": "critique",
+                                "message": "计划审查通过，无需修正",
+                                "payload": {"plan_changed": False, "task_count": len(nodes)},
+                                "ts": time.time(),
+                            },
+                        }
 
                 # —— Supervisor ——
                 elif node_name == "supervisor":
