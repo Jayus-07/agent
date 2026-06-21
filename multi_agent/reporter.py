@@ -12,9 +12,7 @@ reporter.py — Reporter 节点
 
 from llm.llm_factory import llm
 from utils.logger import logger
-
-# Context Filter: RAG 输出与问题的最低相关度阈值
-_CONTEXT_RELEVANCE_THRESHOLD = 0.35
+from config import RERANKER_THRESHOLD as _CONTEXT_RELEVANCE_THRESHOLD
 
 # =====================================================
 # Reporter Prompt
@@ -62,9 +60,7 @@ def reporter_node(state: dict) -> dict:
     # —— 全部失败 / 无有效输出：直接返回，不让 LLM 编造 ——
     all_success = {
         sid: sr for sid, sr in step_results.items()
-        if sr.get("status") == "success" and sr.get("output")
-        and len(str(sr.get("output", "")).strip()) > 20
-        and "系统资源紧张" not in str(sr.get("output", ""))
+        if _is_step_successful(sr)
     }
     if not all_success:
         failed_info = []
@@ -137,6 +133,98 @@ def reporter_node(state: dict) -> dict:
 # 辅助函数
 # =====================================================
 
+def _is_step_successful(result: dict) -> bool:
+    """检查步骤是否真正成功（结构化判断，非字符串匹配）
+
+    成功条件:
+      1. status == "success"
+      2. output 不为空且长度 > 20
+      3. is_empty 不为 True
+      4. error_type 为 None
+    """
+    if result.get("status") != "success":
+        return False
+    if result.get("is_empty"):
+        return False
+    if result.get("error_type"):
+        return False
+    output = str(result.get("output", ""))
+    if len(output.strip()) <= 20:
+        return False
+    return True
+
+
+def _check_reranker_available() -> bool:
+    """检查 CrossEncoder 是否可用"""
+    try:
+        from retrieval.reranker import reranker as _ce
+        return _ce is not None
+    except Exception:
+        return False
+
+
+def _filter_by_bm25(step_results: dict, question: str) -> dict:
+    """BM25 关键词匹配过滤（CrossEncoder 不可用时的降级方案）
+
+    对每个 RAG 输出，计算问题关键词命中率。
+    低于阈值的折叠为 <details>。
+    """
+    from multi_agent.alerts import make_alert, log_degradation
+
+    alert = make_alert("RERANKER_UNAVAILABLE", {"question": question[:80]})
+    log_degradation(alert)
+    logger.warning("[ContextFilter] CrossEncoder 不可用，降级为关键词匹配过滤")
+
+    _BM25_FALLBACK_THRESHOLD = 0.1  # 关键词命中率阈值
+
+    rag_steps = {
+        sid: sr for sid, sr in step_results.items()
+        if sr.get("capability") == "search_knowledge" and sr.get("status") == "success"
+    }
+    if not rag_steps:
+        return step_results
+
+    # 分词：简单的中文按字符 + 英文按空格
+    import re
+    q_chars = set(re.findall(r'[一-鿿]|\w+', question.lower()))
+
+    filtered = dict(step_results)
+    filtered_count = 0
+
+    for sid, sr in rag_steps.items():
+        output = str(sr.get("output", ""))
+        if not output or len(output) <= 20:
+            continue
+
+        output_lower = output.lower()
+        hits = sum(1 for c in q_chars if c in output_lower)
+        hit_rate = hits / max(len(q_chars), 1)
+
+        if hit_rate < _BM25_FALLBACK_THRESHOLD:
+            original = dict(sr)
+            original_output = str(original.get("output", ""))
+            original["output"] = (
+                f"*(此条检索结果与问题「{question[:40]}...」相关性较低 "
+                f"(关键词命中率={hit_rate:.2%})，已自动过滤。"
+                f"如需参考，原始内容如下)*\n\n"
+                f"<details>\n<summary>展开原始内容 ({len(original_output)} 字符)</summary>\n\n"
+                f"{original_output[:500]}\n\n</details>"
+            )
+            original["_filtered"] = True
+            original["_relevance_score"] = round(hit_rate, 4)
+            filtered[sid] = original
+            filtered_count += 1
+            logger.info(
+                f"[ContextFilter-BM25] 过滤 step={sid} "
+                f"hit_rate={hit_rate:.2%} < {_BM25_FALLBACK_THRESHOLD}"
+            )
+
+    if filtered_count > 0:
+        logger.info(f"[ContextFilter-BM25] 共过滤 {filtered_count}/{len(rag_steps)} 条无关 RAG 结果")
+
+    return filtered
+
+
 def _filter_step_results(step_results: dict, question: str) -> dict:
     """
     Context Filter: 过滤与问题无关的 RAG 检索结果。
@@ -154,6 +242,10 @@ def _filter_step_results(step_results: dict, question: str) -> dict:
 
     if not rag_steps:
         return step_results
+
+    # 检查 CrossEncoder 可用性
+    if not _check_reranker_available():
+        return _filter_by_bm25(step_results, question)
 
     # 批量收集需要验证的 RAG 输出
     rag_ids = []
@@ -182,12 +274,12 @@ def _filter_step_results(step_results: dict, question: str) -> dict:
             sentences=pairs,
         )
     except Exception as e:
-        logger.warning(f"[ContextFilter] 模型加载失败，跳过过滤: {e}")
-        return step_results
+        logger.warning(f"[ContextFilter] CrossEncoder 调用失败: {e}，降级为 BM25")
+        return _filter_by_bm25(step_results, question)
 
     if scores is None:
-        logger.warning("[ContextFilter] 验证失败，跳过过滤")
-        return step_results
+        logger.warning("[ContextFilter] 验证返回 None，降级为 BM25")
+        return _filter_by_bm25(step_results, question)
 
     filtered = dict(step_results)
     filtered_count = 0
