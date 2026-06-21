@@ -14,60 +14,13 @@ import time
 from langgraph.types import Send
 
 from multi_agent.tool_registry import tool_registry
+from multi_agent.degradation import execute_degradation, can_degrade, get_fallback_capability
+from multi_agent.alerts import make_alert, log_degradation
 from utils.logger import logger
 
 
-# SQL 空结果关键词（中文 + 英文）
-_SQL_EMPTY_PATTERNS = ["(无结果)", "无结果", "0 rows", "no results", "没有找到", "未找到相关", "暂无数据"]
-
-
-def _check_sql_fallback(nodes: dict, edges: dict, step_results: dict, ready_dispatch: list):
-    """SQL 查询返回空结果时，仅在问题涉及知识库时才自动添加 search_knowledge 降级步骤"""
-    has_rag = any(
-        n.get("capability") == "search_knowledge"
-        for n in nodes.values()
-    )
-    if has_rag:
-        return step_results, ready_dispatch, False
-
-    # 找到返回空结果的 SQL 步骤
-    empty_sql_step = None
-    for sid, n in nodes.items():
-        sr = step_results.get(sid, {})
-        if sr.get("capability") != "query_database":
-            continue
-        if sr.get("status") != "success":
-            continue
-        output = str(sr.get("output", ""))
-        if any(p in output for p in _SQL_EMPTY_PATTERNS):
-            empty_sql_step = sid
-            break
-
-    if not empty_sql_step:
-        return step_results, ready_dispatch, False
-
-    # SQL 空结果 → 无条件触发 RAG 降级（数据库查不到就去知识库找）
-    question = str(nodes[empty_sql_step].get("params", {}).get("question", ""))
-    logger.info(
-        f"[Supervisor] SQL step={empty_sql_step} 返回空，自动触发 RAG 降级"
-    )
-
-    # 动态插入 RAG 降级步骤
-    fallback_id = f"{empty_sql_step}_rag_fallback"
-    nodes[fallback_id] = {
-        "step_id": fallback_id,
-        "capability": "search_knowledge",
-        "description": f"数据库无结果，知识库降级检索: {question[:30]}...",
-        "params": {"question": question},
-    }
-
-    worker = tool_registry.get_worker("search_knowledge")
-    if worker:
-        logger.info(f"[Supervisor] SQL step={empty_sql_step} 返回空，降级到 RAG (step={fallback_id})")
-        step_results[fallback_id] = {"status": "pending"}
-        ready_dispatch.append({"worker": worker, "step_id": fallback_id})
-
-    return step_results, ready_dispatch, True
+# 循环上限
+MAX_SUPERVISOR_LOOPS = 10
 
 
 def supervisor_node(state: dict) -> dict:
@@ -82,12 +35,56 @@ def supervisor_node(state: dict) -> dict:
     edges = plan.get("edges", {})
     step_results = dict(state.get("step_results", {}))
 
+    # 循环上限检查
+    loop_count = state.get("_supervisor_loop_count", 0)
+    if loop_count >= MAX_SUPERVISOR_LOOPS:
+        logger.error(
+            f"[Supervisor] 达到最大循环次数 {MAX_SUPERVISOR_LOOPS}，强制终止"
+        )
+        alert = make_alert("SUPERVISOR_MAX_LOOP", {
+            "loop_count": loop_count,
+            "nodes": list(nodes.keys()),
+        })
+        log_degradation(alert)
+
+        # 将所有 pending/running 步骤标记为 failed
+        for sid, node_info in nodes.items():
+            sr = step_results.get(sid, {})
+            if sr.get("status") in ("pending", "running"):
+                step_results[sid] = {
+                    "step_id": sid,
+                    "capability": node_info.get("capability", ""),
+                    "description": node_info.get("description", ""),
+                    "status": "failed",
+                    "output": None,
+                    "error": f"超出最大调度轮次（{MAX_SUPERVISOR_LOOPS}）",
+                    "error_type": "timeout",
+                    "retries": 0,
+                    "started_at": 0,
+                    "finished_at": 0,
+                }
+
+        alerts = state.get("alerts", [])
+        return {
+            "_all_steps_done": True,
+            "_ready_dispatch": [],
+            "step_results": step_results,
+            "_supervisor_loop_count": loop_count,
+            "alerts": alerts + [make_alert("SUPERVISOR_MAX_LOOP", {})],
+        }
+
     if not nodes:
         logger.info("[Supervisor] 空 plan，完成")
-        return {"_all_steps_done": True, "step_results": step_results}
+        return {
+            "_all_steps_done": True,
+            "_ready_dispatch": [],
+            "step_results": step_results,
+            "_supervisor_loop_count": loop_count,
+        }
 
     new_results = dict(step_results)
-    ready_dispatch = []  # 收集就绪的步骤信息，由路由函数转为 Send
+    ready_dispatch = []
+    degraded_steps = state.get("_degraded_steps", set())
 
     for step_id, node_info in nodes.items():
         sr = new_results.get(step_id, {})
@@ -115,6 +112,7 @@ def supervisor_node(state: dict) -> dict:
                 "status": "skipped",
                 "output": None,
                 "error": "前置步骤执行失败",
+                "error_type": None,
                 "retries": 0,
                 "started_at": 0,
                 "finished_at": 0,
@@ -148,6 +146,7 @@ def supervisor_node(state: dict) -> dict:
                     "status": "failed",
                     "output": None,
                     "error": f"未注册的 capability: {capability}",
+                    "error_type": None,
                     "retries": 0,
                     "started_at": 0,
                     "finished_at": 0,
@@ -162,18 +161,22 @@ def supervisor_node(state: dict) -> dict:
 
     if not ready_dispatch:
         if all_done:
-            # ── SQL 空结果降级 → 自动添加 RAG 步骤 ──
-            new_results, ready_dispatch, plan_modified = _check_sql_fallback(
-                nodes, edges, new_results, ready_dispatch
+            # 通用降级链：检查是否需要降级
+            question = state.get("question", "")
+            new_results, ready_dispatch, degraded_steps = execute_degradation(
+                nodes, edges, new_results, ready_dispatch,
+                degraded_steps, question,
             )
+
             if ready_dispatch:
                 result = {
                     "_all_steps_done": False,
                     "_ready_dispatch": ready_dispatch,
                     "step_results": new_results,
+                    "_supervisor_loop_count": loop_count + 1,
+                    "_degraded_steps": degraded_steps,
+                    "plan": plan,  # plan.nodes 可能已被 execute_degradation 修改
                 }
-                if plan_modified:
-                    result["plan"] = plan
                 return result
 
             success_count = sum(
@@ -185,6 +188,8 @@ def supervisor_node(state: dict) -> dict:
                 "_all_steps_done": True,
                 "_ready_dispatch": [],
                 "step_results": new_results,
+                "_supervisor_loop_count": loop_count + 1,
+                "_degraded_steps": degraded_steps,
             }
         else:
             running = [
@@ -196,6 +201,8 @@ def supervisor_node(state: dict) -> dict:
                 "_all_steps_done": False,
                 "_ready_dispatch": [],
                 "step_results": new_results,
+                "_supervisor_loop_count": loop_count + 1,
+                "_degraded_steps": degraded_steps,
             }
 
     # 有就绪步骤
@@ -203,6 +210,8 @@ def supervisor_node(state: dict) -> dict:
         "_all_steps_done": False,
         "_ready_dispatch": ready_dispatch,
         "step_results": new_results,
+        "_supervisor_loop_count": loop_count + 1,
+        "_degraded_steps": degraded_steps,
     }
 
 
@@ -230,8 +239,11 @@ def route_after_supervisor(state: dict) -> str | list:
                     "current_step_id": item["step_id"],
                     "messages": state.get("messages", []),
                     "final_answer": state.get("final_answer", ""),
+                    "alerts": state.get("alerts", []),
                     "_all_steps_done": False,
                     "_ready_dispatch": [],
+                    "_supervisor_loop_count": state.get("_supervisor_loop_count", 0),
+                    "_degraded_steps": state.get("_degraded_steps", set()),
                 })
             )
         return sends
