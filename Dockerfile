@@ -10,7 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HUB_OFFLINE=0 \
     TRANSFORMERS_OFFLINE=0 \
     # 默认值，docker-compose 可覆盖
-    LLM_MODEL=qwen2.5:4b \
+    LLM_MODEL=qwen2.5:3b \
     OLLAMA_HOST=http://ollama:11434 \
     PGHOST=postgres \
     PGPORT=5432 \
@@ -27,6 +27,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
+    curl \
     # matplotlib 中文字体
     fonts-wqy-microhei \
     fonts-wqy-zenhei \
