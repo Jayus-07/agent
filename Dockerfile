@@ -39,13 +39,13 @@ RUN pip install --upgrade pip setuptools wheel
 # 安装依赖（分层缓存）
 # ========================================
 
-# Layer 1: PyTorch CPU 版（先安装以兼容 requirements.txt 中的 torch 依赖）
-RUN pip install --no-cache-dir \
-    torch --index-url https://download.pytorch.org/whl/cpu
-
-# Layer 2: 核心依赖
+# Layer 1: 核心依赖（先装 requirements.txt）
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Layer 2: PyTorch CPU 版覆盖（避免拉取 CUDA 版 torch）
+RUN pip install --no-cache-dir --force-reinstall \
+    torch --index-url https://download.pytorch.org/whl/cpu
 
 # Layer 3: FastAPI 服务依赖
 RUN pip install --no-cache-dir \

@@ -50,6 +50,21 @@ until python -c "import psycopg2; psycopg2.connect(host='${PGHOST-postgres}', po
 done
 echo "[OK] PostgreSQL 已就绪"
 
+# ── 2b. 运行记忆系统迁移（幂等） ──────────────
+echo ""
+echo "── 运行记忆系统迁移 ──"
+python -c "
+import psycopg2
+conn = psycopg2.connect(host='${PGHOST-postgres}', port=${PGPORT-5432}, dbname='${PGDATABASE-demo}', user='${PGUSER-postgres}', password='${PGPASSWORD-postgres}')
+conn.autocommit = True
+with open('/app/memory/migrations/001_init.sql') as f:
+    sql = f.read()
+with conn.cursor() as cur:
+    cur.execute(sql)
+conn.close()
+print('[OK] 记忆系统迁移完成')
+"
+
 # ── 3. 等待 Ollama ─────────────────────────
 echo ""
 echo "── 等待 Ollama (${OLLAMA_API}) ──"

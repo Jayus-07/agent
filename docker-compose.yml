@@ -1,4 +1,4 @@
-# Agent Platform — 一键启动
+# Agent Platform — 一键启动全栈
 #
 # 启动:  docker compose up -d
 # 查看:  docker compose logs -f api
@@ -6,9 +6,10 @@
 # 重建:  docker compose up -d --build
 #
 # 服务:
-#   ollama    — LLM 模型服务 (qwen2.5:4b)
+#   ollama    — LLM 模型服务
 #   postgres  — PostgreSQL 数据库 (demo 库)
 #   api       — FastAPI 服务 (port 8000)
+#   web       — Next.js 前端 (port 3000)
 
 services:
 
@@ -30,11 +31,11 @@ services:
     #           count: 1
     #           capabilities: [gpu]
     environment:
-      - OLLAMA_KEEP_ALIVE=300s
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-300s}
       - OLLAMA_HOST=0.0.0.0
-      - OLLAMA_NUM_PARALLEL=1
-      - OLLAMA_NUM_THREADS=4
-      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-1}
+      - OLLAMA_NUM_THREADS=${OLLAMA_NUM_THREADS:-4}
+      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-1}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 10s
@@ -44,21 +45,21 @@ services:
 
   # ── PostgreSQL 数据库 ─────────────────────────
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16  # 内置 pgvector 扩展，无需手动 CREATE EXTENSION
     container_name: agent-postgres
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
-      POSTGRES_DB: demo
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${PGDATABASE:-demo}
+      POSTGRES_USER: ${PGUSER:-postgres}
+      POSTGRES_PASSWORD: ${PGPASSWORD:-postgres}
       POSTGRES_HOST_AUTH_METHOD: scram-sha-256
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d demo"]
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-postgres} -d ${PGDATABASE:-demo}"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -72,29 +73,44 @@ services:
       - "8000:8000"
     environment:
       # LLM
-      - LLM_MODEL=qwen2.5:4b
-      - LLM_TEMPERATURE=0.1
-      - LLM_CONTEXT_LENGTH=2048
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:4b}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.1}
+      - LLM_CONTEXT_LENGTH=${LLM_CONTEXT_LENGTH:-2048}
+      - LLM_REQUEST_TIMEOUT=${LLM_REQUEST_TIMEOUT:-30}
       - OLLAMA_HOST=http://ollama:11434
       # PostgreSQL
       - PGHOST=postgres
       - PGPORT=5432
-      - PGDATABASE=demo
-      - PGUSER=postgres
-      - PGPASSWORD=postgres
-      # Embedding & Reranker
+      - PGDATABASE=${PGDATABASE:-demo}
+      - PGUSER=${PGUSER:-postgres}
+      - PGPASSWORD=${PGPASSWORD:-postgres}
+      # Embedding & Reranker（容器内路径，不从 .env 继承）
       - EMBEDDING_MODEL_PATH=/app/models/bge-small-zh-v1.5
       - RERANKER_MODEL_PATH=/app/models/bge-reranker-base
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
       # 向量库 & 文档
       - CHROMA_PATH=/app/data/chroma
       - DOC_DB_PATH=/app/data/doc_db
       - DOCS_DIRECTORY=/app/data/docs
+      # RAG 检索参数
+      - CHUNK_SIZE=${CHUNK_SIZE:-300}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-30}
+      - VECTOR_SEARCH_K=${VECTOR_SEARCH_K:-5}
+      - BM25_SEARCH_K=${BM25_SEARCH_K:-20}
+      - HYBRID_SEARCH_K=${HYBRID_SEARCH_K:-20}
+      - RERANK_TOP_K=${RERANK_TOP_K:-6}
+      - RERANK_SCORE_THRESHOLD=${RERANK_SCORE_THRESHOLD:-0.3}
+      - CITATION_SUPPORT_THRESHOLD=${CITATION_SUPPORT_THRESHOLD:-0.4}
+      # API 并发控制
+      - MAX_CONCURRENT_REQUESTS=${MAX_CONCURRENT_REQUESTS:-2}
+      # Memory
+      - MEMORY_ASYNC_POOL_SIZE=${MEMORY_ASYNC_POOL_SIZE:-5}
+      - MEMORY_ASYNC_MAX_OVERFLOW=${MEMORY_ASYNC_MAX_OVERFLOW:-5}
+      - ENABLE_LONG_TERM_MEMORY=${ENABLE_LONG_TERM_MEMORY:-true}
       # 其他
-      - LOG_LEVEL=INFO
-      - ENABLE_RESOURCE_MONITOR=true
-      - ENABLE_LONG_TERM_MEMORY=false
-      - MEMORY_ASYNC_POOL_SIZE=5
-      - MEMORY_ASYNC_MAX_OVERFLOW=5
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ENABLE_RESOURCE_MONITOR=${ENABLE_RESOURCE_MONITOR:-true}
     volumes:
       - app_data:/app/data          # ChromaDB + 报告 + 会话持久化
       - models_cache:/app/models    # Embedding 模型缓存
@@ -104,6 +120,22 @@ services:
         condition: service_healthy
       ollama:
         condition: service_healthy
+
+  # ── Next.js 前端 ──────────────────────────────
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        - API_URL=http://api:8000
+    container_name: agent-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - API_URL=http://api:8000
+    depends_on:
+      - api
 
 volumes:
   ollama_data:    # LLM 模型持久化
