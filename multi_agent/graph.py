@@ -10,6 +10,7 @@ Graph 拓扑:
 返回 list[Send] 实现并行扇出，LangGraph 自动处理并发执行和结果合并。
 """
 
+import asyncio
 import time
 from typing import Generator
 
@@ -63,6 +64,19 @@ def route_after_critique(state: AgentState) -> str:
 
 
 # =====================================================
+# async→sync 适配 (worker 节点是 async，graph 用 sync invoke)
+# =====================================================
+
+def _make_sync(async_fn):
+    """将 async 函数包装为同步函数，避免 LangGraph sync invoke 报错"""
+    import functools
+    @functools.wraps(async_fn)
+    def wrapper(state: dict) -> dict:
+        return asyncio.run(async_fn(state))
+    return wrapper
+
+
+# =====================================================
 # 图构建
 # =====================================================
 
@@ -70,13 +84,13 @@ def build_graph():
     """构建 Multi-Agent StateGraph"""
     wf = StateGraph(AgentState)
 
-    # — 节点 —
+    # — 节点 (worker 节点用 _make_sync 适配 async→sync) —
     wf.add_node("planner", planner_node)
     wf.add_node("critique", critique_node)
     wf.add_node("supervisor", supervisor_node)
-    wf.add_node("sql_worker", sql_worker_node)
-    wf.add_node("rag_worker", rag_worker_node)
-    wf.add_node("report_worker", report_worker_node)
+    wf.add_node("sql_worker", _make_sync(sql_worker_node))
+    wf.add_node("rag_worker", _make_sync(rag_worker_node))
+    wf.add_node("report_worker", _make_sync(report_worker_node))
     wf.add_node("reporter", reporter_node)
 
     # — 边 —

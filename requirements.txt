@@ -18,6 +18,7 @@ transformers==5.8.0
 
 # BM25 检索
 rank-bm25==0.2.2
+jieba>=0.42
 
 # 文档加载器
 pypdf==6.11.0
