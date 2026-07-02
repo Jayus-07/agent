@@ -77,6 +77,13 @@ async def execute_with_retry(
 
     params = step_info.get("params", {})
 
+    # 过滤掉 LangChain Tool schema 不识别的内部字段
+    # （如 _previous_outputs 等 Worker 内部约定的字段，不属于 Tool 的 args_schema）
+    # 注意：_template / _title 是 report_agent.filters 内部的合法字段（用户可显式传），
+    #       在 generate_report() 内部通过 filters.pop 消费，不能在这里过滤。
+    if isinstance(params, dict):
+        params.pop("_previous_outputs", None)
+
     # —— 重试循环 ——
     last_error = None
     for attempt in range(max_retries + 1):

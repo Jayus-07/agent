@@ -8,6 +8,7 @@ import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import EmptyState from './EmptyState'
 import StatusBar from './StatusBar'
+import LLMSwitcher from './LLMSwitcher'
 
 export default function ChatView() {
   const messages = useChatStore((s) => s.currentMessages())
@@ -78,6 +79,11 @@ export default function ChatView() {
           </span>
         </div>
       )}
+
+      {/* LLM 切换器 + 余额 */}
+      <div className="shrink-0 px-4 py-1.5 border-b border-gray-100 bg-white/50 flex items-center justify-end">
+        <LLMSwitcher />
+      </div>
 
       {/* 可滚动内容区 */}
       <div

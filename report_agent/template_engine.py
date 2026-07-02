@@ -44,16 +44,41 @@ def _percent(value, decimals=1):
 
 
 def _date_cn(value):
-    """日期转中文格式"""
-    if value is None:
+    """日期转中文格式（YYYY年MM月DD日）
+
+    支持多种输入格式：
+      - datetime / date 对象：直接格式化
+      - "2026-05-24"（ISO）  → strptime
+      - "2026/05/24"（斜杠） → strptime
+      - "2026.05.24"（点）   → strptime
+      - "2026年5月24日"（中文） → strptime（兼容旧快照）
+    """
+    if value is None or value == "":
         return "—"
-    if isinstance(value, str):
-        try:
-            value = datetime.fromisoformat(value)
-        except ValueError:
-            return value
+
+    # datetime/date 对象
     if isinstance(value, datetime):
         return value.strftime("%Y年%m月%d日")
+    if hasattr(value, "strftime"):  # 兼容 date
+        return value.strftime("%Y年%m月%d日")
+
+    if isinstance(value, str):
+        s = value.strip()
+        # 尝试多种格式
+        for fmt in (
+            "%Y-%m-%d",      # ISO 短横线
+            "%Y/%m/%d",      # 斜杠
+            "%Y.%m.%d",      # 点
+            "%Y年%m月%d日",   # 中文
+        ):
+            try:
+                dt = datetime.strptime(s, fmt)
+                return dt.strftime("%Y年%m月%d日")
+            except ValueError:
+                continue
+        # 兜底：返回原值
+        return s
+
     return str(value)
 
 
@@ -183,13 +208,31 @@ class TemplateEngine:
 > 生成时间：{{ metadata.fetched_at }}
 
 {% for row in data %}
-### {{ row.get("name", row.get("dept_name", "未命名")) | dash }}
-{% for key, val in row.items() %}
-{% if key not in ("name", "dept_name") %}
-- **{{ key }}**：{{ val | dash }}
-{% endif %}
+### {{ row.get("部门", row.get("dept_name", row.get("name", "未命名"))) | dash }}
+- **员工数**：{{ row.get("员工数", row.get("employee_count", "—")) }}
+- **项目数**：{{ row.get("项目数", row.get("project_count", "—")) }}
+- **总预算**：{{ (row.get("总预算", row.get("total_budget", 0)) or 0) | money }}
+
 {% endfor %}
 
+{% if data | length == 0 %}
+*(暂无数据)*
+{% endif %}
+""",
+            "budget_usage.j2": """## {{ metadata.get("title", "预算使用分析报告") }}
+> 生成时间：{{ metadata.fetched_at }}，共 {{ metadata.row_count }} 个项目
+
+| 项目名称 | 所属部门 | 预算金额 | 状态 | 成员数 | 开始日期 | 结束日期 | 周期(天) |
+|---------|---------|---------|------|--------|---------|---------|---------|
+{% for row in data %}
+| {{ row.get("项目名称", row.get("project_name", "—")) | dash }}
+| {{ row.get("所属部门", row.get("dept_name", "—")) | dash }}
+| {{ row.get("预算金额", row.get("budget_amount", row.get("budget", 0)) or 0) | money }}
+| {{ row.get("状态", row.get("status", "—")) | status }}
+| {{ row.get("成员数", row.get("member_count", 0)) }}
+| {{ row.get("开始日期", row.get("start_date", None)) | date_cn }}
+| {{ row.get("结束日期", row.get("end_date", None)) | date_cn }}
+| {{ row.get("周期天数", row.get("duration_days", "—")) }} |
 {% endfor %}
 
 {% if data | length == 0 %}
@@ -265,6 +308,54 @@ class TemplateEngine:
     # 渲染
     # ---------------------------------------------------
 
+    # 模板名 → 必需列名集合（render 入口校验，缺列则降级到 fallback）
+    # 列名匹配为"包含任一即可"（OR 语义），兼容中英文别名
+    _REQUIRED_COLUMNS: Dict[str, set] = {
+        "sales_summary.j2":   {"dept_name", "project_count", "total_budget",
+                               "active_count", "completed_count"},
+        "sales_detail.j2":    {"dept_name", "project_count", "total_budget",
+                               "active_count", "completed_count"},
+        "project_progress.j2": {"project_name", "owner_dept", "status",
+                                "budget", "start_date", "end_date", "member_count"},
+        "dept_overview.j2":   {"部门", "dept_name", "员工数", "employee_count",
+                               "项目数", "project_count", "总预算", "total_budget"},
+        "budget_usage.j2":    {"项目名称", "project_name", "所属部门", "dept_name",
+                               "预算金额", "budget_amount", "budget", "status", "状态"},
+    }
+
+    def _check_required_columns(
+        self, template_name: str, data: list
+    ) -> tuple:
+        """检查数据是否包含模板所需的所有列（OR 语义：每组别名列至少有一个存在即可）。
+
+        返回:
+            (is_ok, missing_keys) — is_ok=True 表示所有必需列都有；
+                                   False 时 missing_keys 为缺失的组别名。
+        """
+        required = self._REQUIRED_COLUMNS.get(template_name)
+        if not required or not data:
+            return True, set()
+
+        if not isinstance(data[0], dict):
+            return True, set()
+
+        available = set(data[0].keys())
+
+        # 把必需列按"组"切分：相邻的英中别名视为同一组（如 dept_name / 部门）
+        # 简化：每两个为一组 [英文, 中文]
+        groups = []
+        cols = list(required)
+        for i in range(0, len(cols), 2):
+            groups.append(set(cols[i:i+2]))
+
+        missing = set()
+        for group in groups:
+            if not (group & available):
+                # 这一组一个都没匹配
+                missing.add("/".join(sorted(group)))
+
+        return len(missing) == 0, missing
+
     def render(
         self,
         report_type: str,
@@ -287,6 +378,36 @@ class TemplateEngine:
             Markdown 字符串
         """
         template_str = self.get_template(report_type, preferred=template_name)
+
+        # 推断实际使用的模板名（用于列名校验）
+        actual_template_name = template_name
+        if not actual_template_name or (
+            actual_template_name not in self._template_cache
+            and actual_template_name not in self._builtin_templates
+        ):
+            try:
+                from report_agent.data_fetcher import REPORT_REGISTRY
+                reg = REPORT_REGISTRY.get(report_type, {})
+                for tpl in reg.get("templates", []):
+                    if tpl in self._builtin_templates or tpl in self._template_cache:
+                        actual_template_name = tpl
+                        break
+            except Exception:
+                pass
+
+        # 列名校验：缺列时降级到 fallback_render
+        data = result.get("data", [])
+        if data and actual_template_name:
+            cols_ok, missing = self._check_required_columns(actual_template_name, data)
+            if not cols_ok:
+                logger.warning(
+                    f"[TemplateEngine] {report_type} 模板 {actual_template_name} "
+                    f"缺少必需列 {sorted(missing)}，降级到自动表格"
+                )
+                return self._fallback_render(
+                    result,
+                    f"数据 schema 不匹配，缺少列: {', '.join(sorted(missing))}"
+                )
 
         # 构建模板上下文
         context = {

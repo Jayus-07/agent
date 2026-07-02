@@ -50,11 +50,17 @@ class ToolRegistry:
         "generate_report": {
             "description": "生成结构化 Markdown 报告（含图表），基于数据库中的实时数据。必须有前序步骤提供数据后再调用。",
             "params": {
-                "report_type": "报告类型: dept_summary(部门综合分析) / project_progress(项目进度) / demo_dept_summary(演示用)",
+                "report_type": (
+                    "报告类型，可选值：\n"
+                    "  - budget_usage: 预算使用分析（项目预算金额、状态、周期、成员数）\n"
+                    "  - dept_summary: 部门概览（员工数/项目数/总预算）\n"
+                    "  - project_progress: 项目进度（项目状态/起止日期/成员）\n"
+                    "  - monthly_sales: 月度销售（部门预算+项目数对比）"
+                ),
                 "filters": "筛选条件字典，如 {'dept': '技术部'}",
             },
             "示例": {
-                "report_type": "dept_summary",
+                "report_type": "budget_usage",
                 "filters": {"dept": "技术部"},
             },
         },

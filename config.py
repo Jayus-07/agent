@@ -27,6 +27,10 @@ LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:4b")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 LLM_CONTEXT_LENGTH = int(os.getenv("LLM_CONTEXT_LENGTH", "4096"))
 
+# DeepSeek 配置（用于多 LLM provider 切换）
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
+
 
 # ====================================
 # 检索配置

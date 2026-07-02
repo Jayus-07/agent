@@ -150,3 +150,64 @@ export async function abortChat(sessionId: string, requestId: string): Promise<v
     body: JSON.stringify({ session_id: sessionId, request_id: requestId }),
   }).catch(() => { /* 中止请求本身失败不影响主流程 */ })
 }
+
+// ========================================
+// LLM 切换 + 余额查询
+// ========================================
+
+export interface LLMModel {
+  provider: string
+  name: string
+  display: string
+  description: string
+}
+
+export interface LLMBalance {
+  ok: boolean
+  provider?: string
+  balance?: string
+  currency?: string
+  note?: string
+  error?: string
+}
+
+/** GET /llm/models — 列出可用模型 */
+export async function listLLMModels(): Promise<{ models: LLMModel[]; current: string }> {
+  const res = await fetch(`${API_BASE}/llm/models`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+/** GET /llm/current — 获取当前模型 */
+export async function getCurrentLLM(): Promise<{ model: string; provider: string }> {
+  const res = await fetch(`${API_BASE}/llm/current`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+/** POST /llm/switch — 切换当前模型 */
+export async function switchLLM(model: string): Promise<{ ok: boolean; model?: string; provider?: string; error?: string }> {
+  const res = await fetch(`${API_BASE}/llm/switch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    // 400/503: detail 字段含 {ok:false, error}
+    const errMsg = (data.detail && (data.detail.error || data.detail)) || `HTTP ${res.status}`
+    throw new Error(errMsg)
+  }
+  return data
+}
+
+/** GET /llm/balance — 查询余额 */
+export async function getLLMBalance(provider?: string): Promise<LLMBalance> {
+  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : ''
+  const res = await fetch(`${API_BASE}/llm/balance${qs}`)
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    return data.detail || { ok: false, error: `HTTP ${res.status}` }
+  }
+  return data
+}

@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from api.routes import chat, sql, rag, report
+from api.routes import chat, sql, rag, report, llm
 
 # ── 并发控制：从环境变量读取最大并发请求数 ──────────
 _MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_REQUESTS", "1"))
@@ -72,6 +72,7 @@ app.include_router(chat.router)
 app.include_router(sql.router)
 app.include_router(rag.router)
 app.include_router(report.router)
+app.include_router(llm.router)
 
 
 # ── 健康检查 ──────────────────────────────────────

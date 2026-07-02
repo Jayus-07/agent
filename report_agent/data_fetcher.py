@@ -91,6 +91,40 @@ REPORT_REGISTRY: Dict[str, Dict[str, Any]] = {
         "templates": ["dept_overview.j2"],
         "charts": [],
     },
+    "budget_usage": {
+        "name": "预算使用分析报告",
+        "source": {
+            "type": "sql",
+            "sql": """
+                SELECT
+                    p.name AS 项目名称,
+                    d.name AS 所属部门,
+                    p.budget AS 预算金额,
+                    p.status AS 状态,
+                    COUNT(pm.user_id) AS 成员数,
+                    p.start_date AS 开始日期,
+                    p.end_date AS 结束日期,
+                    CASE
+                        WHEN p.end_date IS NOT NULL AND p.start_date IS NOT NULL
+                        THEN (p.end_date - p.start_date)
+                        ELSE NULL
+                    END AS 周期天数
+                FROM projects p
+                LEFT JOIN users u ON u.id = p.owner_id
+                LEFT JOIN departments d ON d.id = u.dept_id
+                LEFT JOIN project_members pm ON pm.project_id = p.id
+                WHERE 1=1
+                GROUP BY p.id, p.name, d.name, p.budget, p.status,
+                         p.start_date, p.end_date
+                ORDER BY p.budget DESC NULLS LAST
+            """,
+        },
+        "templates": ["budget_usage.j2"],
+        "charts": [
+            {"type": "bar", "x": "项目名称", "y": "预算金额", "title": "项目预算对比"},
+            {"type": "pie", "x": "所属部门", "y": "预算金额", "title": "部门预算占比"},
+        ],
+    },
 }
 
 
