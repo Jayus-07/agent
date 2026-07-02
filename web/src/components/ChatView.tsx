@@ -80,8 +80,8 @@ export default function ChatView() {
         </div>
       )}
 
-      {/* LLM 切换器 + 余额 */}
-      <div className="shrink-0 px-4 py-1.5 border-b border-gray-100 bg-white/50 flex items-center justify-end">
+      {/* LLM 切换器 + 余额（Google 风格：透明背景 + 右对齐） */}
+      <div className="shrink-0 px-5 py-2 flex items-center justify-end">
         <LLMSwitcher />
       </div>
 

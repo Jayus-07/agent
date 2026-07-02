@@ -263,7 +263,12 @@ class LLMFactory:
                 }
 
             body = resp.json()
-            # DeepSeek 官方返回结构：{"balance_available": "10.50", ...}
+            # DeepSeek 官方返回结构：
+            #   {"is_available": true,
+            #    "balance_infos": [{"currency": "CNY",
+            #                       "total_balance": "3.99",
+            #                       "granted_balance": "0.00",
+            #                       "topped_up_balance": "3.99"}]}
             if not body.get("is_available", True):
                 return {
                     "ok": False,
@@ -271,11 +276,22 @@ class LLMFactory:
                     "raw": body,
                 }
 
+            # 从 balance_infos 列表取首个币种的总额
+            balance_infos = body.get("balance_infos") or []
+            if balance_infos:
+                first = balance_infos[0]
+                balance_str = first.get("total_balance", "0.00")
+                currency = first.get("currency", "CNY")
+            else:
+                # 兜底：旧字段（兼容未来 API 变化）
+                balance_str = body.get("balance_available", "0.00")
+                currency = "CNY"
+
             return {
                 "ok": True,
                 "provider": "deepseek",
-                "balance": body.get("balance_available", "未知"),
-                "currency": "CNY",
+                "balance": balance_str,
+                "currency": currency,
                 "raw": body,
             }
         except Exception as e:
