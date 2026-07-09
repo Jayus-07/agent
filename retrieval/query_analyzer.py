@@ -1,12 +1,12 @@
 """QueryAnalyzer — pure-rule structured query understanding, ~5ms, zero LLM calls.
 
 Reuses existing preprocessing modules and config rules:
-  - preprocessing/entity.py   → extract_person_names()
+  - preprocessing/entity.py   → extract_person_names() + extract_sku_codes() + extract_platforms()
   - preprocessing/keyword.py  → extract_chunk_keywords()
   - config.TIME_PATTERNS      → time expression regex
-  - config.DOMAIN_RULES       → domain classification
+  - config.DOMAIN_RULES       → domain classification (9 e-commerce domains)
   - config.DOC_TYPE_RULES     → doc type classification
-  - config.SIGNAL_RULES       → technology / system keyword matching
+  - config.SIGNAL_RULES       → e-commerce domain signal keywords
 """
 
 import re
@@ -21,10 +21,10 @@ class ParsedQuery:
     original: str = ""
 
     # Entities
-    persons: list[str] = field(default_factory=list)
-    organizations: list[str] = field(default_factory=list)
-    technologies: list[str] = field(default_factory=list)
-    projects: list[str] = field(default_factory=list)
+    persons: list[str] = field(default_factory=list)       # 品牌/平台/关键实体
+    organizations: list[str] = field(default_factory=list)  # 平台/渠道名
+    technologies: list[str] = field(default_factory=list)   # 领域信号词
+    sku_codes: list[str] = field(default_factory=list)      # SKU 编码
 
     # Time
     time_expressions: list[str] = field(default_factory=list)
@@ -35,7 +35,7 @@ class ParsedQuery:
     domains: list[str] = field(default_factory=list)
     doc_types: list[str] = field(default_factory=list)
 
-    # Intent (rule-based, ~0ms)
+    # Intent (rule-based, ~0ms) — 跨境电商场景
     intent: str = "summary_query"
 
     def to_metadata_filter(self) -> dict:
@@ -56,25 +56,47 @@ class ParsedQuery:
 
 
 # ────────────────────────────────────────────────
-# Intent classifier (20 lines, 0ms)
+# Intent classifier — 跨境电商 7 类意图
 # ────────────────────────────────────────────────
 
-_ENTITY_SIGNALS = ["是谁", "做过", "负责", "参与", "担任", "管理", "属于", "在哪个", "在什么"]
+_ENTITY_SIGNALS = ["是什么", "哪个品牌", "哪个平台", "哪个渠道", "规格", "参数", "属性"]
 _FACT_SIGNALS = ["多少", "几个", "总共", "统计", "平均", "最高", "最低", "合计", "汇总"]
-_REPORT_SIGNALS = ["报告", "分析报告", "生成报告", "总结", "概述"]
+_ORDER_SIGNALS = ["订单", "发货", "物流", "签收", "退款", "取消", "追踪号"]
+_INVENTORY_SIGNALS = ["库存", "FBA", "缺货", "还有多少", "够不够", "快没了"]
+_AD_SIGNALS = ["ACoS", "ROAS", "广告", "Campaign", "投放", "竞价", "曝光"]
+_REPORT_SIGNALS = ["报告", "分析报告", "生成报告", "总结", "概述", "日报", "周报", "月报"]
 
 
 def classify_intent(query: str) -> str:
-    """Rule-based intent classification. Zero LLM cost."""
-    for w in _ENTITY_SIGNALS:
-        if w in query:
-            return "entity_query"
-    for w in _FACT_SIGNALS:
-        if w in query:
-            return "fact_query"
+    """Rule-based intent classification. Zero LLM cost.
+
+    跨境电商意图分类：
+      entity_query   → 商品/品牌/平台信息查询
+      order_query    → 订单状态/物流追踪
+      inventory_query→ 库存查询/预警
+      ad_query       → 广告效果分析
+      fact_query     → 数据统计/聚合查询
+      report_query   → 报告生成
+      summary_query  → 通用问答
+    """
     for w in _REPORT_SIGNALS:
         if w in query:
             return "report_query"
+    for w in _AD_SIGNALS:
+        if w in query:
+            return "ad_query"
+    for w in _ORDER_SIGNALS:
+        if w in query:
+            return "order_query"
+    for w in _INVENTORY_SIGNALS:
+        if w in query:
+            return "inventory_query"
+    for w in _FACT_SIGNALS:
+        if w in query:
+            return "fact_query"
+    for w in _ENTITY_SIGNALS:
+        if w in query:
+            return "entity_query"
     return "summary_query"
 
 
@@ -85,6 +107,7 @@ def classify_intent(query: str) -> str:
 _TIME_UNITS = {
     "去年": (-365, -1), "今年": (0, 0), "上季度": (-90, -1),
     "最近一个月": (-30, 0), "最近两周": (-14, 0), "昨天": (-1, -1),
+    "最近一周": (-7, 0), "本周": (-7, 0), "本月": (-30, 0),
     "第一季度": (0, 89), "第二季度": (91, 181), "第三季度": (182, 273), "第四季度": (274, 365),
 }
 
@@ -109,20 +132,21 @@ def _resolve_time_range(expressions: list[str]) -> tuple[str, str]:
 
 
 # ────────────────────────────────────────────────
-# Organization patterns
+# Platform / channel patterns (跨境电商平台)
 # ────────────────────────────────────────────────
 
-_ORG_PATTERNS = [
-    r"(技术部|销售部|市场部|财务部|人事部|运营部|产品部|研发部|设计部|测试部|运维部|行政部)",
-    r"(技术中心|研发中心|数据中心|运营中心)",
+_PLATFORM_PATTERNS = [
+    r"(Amazon|Shopify|TikTok\s?Shop|eBay|Walmart)",
+    r"(美国|欧洲|日本|英国|德国|北美|欧盟)",
+    r"(美西|美东|德国仓|日本仓|深圳仓)",
 ]
 
 
-def _extract_orgs(query: str) -> list[str]:
-    """Regex-based organization extraction."""
+def _extract_platforms(query: str) -> list[str]:
+    """Regex-based platform/channel extraction."""
     results = []
-    for pat in _ORG_PATTERNS:
-        results.extend(re.findall(pat, query))
+    for pat in _PLATFORM_PATTERNS:
+        results.extend(re.findall(pat, query, re.IGNORECASE))
     return list(set(results))
 
 
@@ -131,12 +155,12 @@ def _extract_orgs(query: str) -> list[str]:
 # ────────────────────────────────────────────────
 
 class QueryAnalyzer:
-    """Pure-rule query analyzer. Reuses existing preprocessing + config modules."""
+    """Pure-rule query analyzer for cross-border e-commerce. Reuses existing preprocessing + config modules."""
 
     def analyze(self, query: str) -> ParsedQuery:
         pq = ParsedQuery(original=query)
 
-        # ── Persons ──
+        # ── Entities: 品牌/平台名（复用 entity.py） ──
         try:
             from preprocessing.entity import extract_person_names
             pq.persons = extract_person_names(query)
@@ -145,10 +169,17 @@ class QueryAnalyzer:
         except Exception:
             pass
 
-        # ── Organizations ──
-        pq.organizations = _extract_orgs(query)
+        # ── SKU codes ──
+        try:
+            from preprocessing.entity import extract_sku_codes
+            pq.sku_codes = extract_sku_codes(query)
+        except Exception:
+            pass
 
-        # ── Technologies (via SIGNAL_RULES) ──
+        # ── Platforms ──
+        pq.organizations = _extract_platforms(query)
+
+        # ── Domain signals (via SIGNAL_RULES) ──
         try:
             from config import SIGNAL_RULES
             ql = query.lower()

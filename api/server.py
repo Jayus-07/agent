@@ -10,7 +10,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from api.routes import chat, sql, rag, report, llm
+from api.routes import chat, sql, rag, report, llm, observability
+from utils.logger import logger
 
 # ── 并发控制：从环境变量读取最大并发请求数 ──────────
 _MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_REQUESTS", "1"))
@@ -60,11 +61,33 @@ app.add_middleware(
 )
 
 # ── 全局异常处理 ──────────────────────────────────
+# 只兜底"非业务预期"异常（ValueError / RuntimeError / Exception）。
+# FastAPI 自带 HTTPException 处理：业务层 raise HTTPException(503) 会保持 503 状态码。
+# 这里不拦截 HTTPException，让它走 FastAPI 默认路径。
+from fastapi import HTTPException
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """业务层 HTTPException（如 503/404/422）保持原状态码，不再被吞为 500"""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.__class__.__name__, "detail": exc.detail},
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    """非业务异常的兜底：记录堆栈 → 返回 500（避免泄露内部信息到 detail）"""
+    import traceback
+    logger.error(
+        f"[Unhandled] {request.method} {request.url.path} → "
+        f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+    )
     return JSONResponse(
         status_code=500,
-        content={"error": str(type(exc).__name__), "detail": str(exc)},
+        content={"error": type(exc).__name__, "detail": "服务器内部错误"},
     )
 
 # ── 注册路由 ──────────────────────────────────────
@@ -73,6 +96,7 @@ app.include_router(sql.router)
 app.include_router(rag.router)
 app.include_router(report.router)
 app.include_router(llm.router)
+app.include_router(observability.router)
 
 
 # ── 健康检查 ──────────────────────────────────────

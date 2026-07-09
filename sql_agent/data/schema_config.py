@@ -28,49 +28,218 @@ SCHEMA_CONFIG: Dict[str, Any] = {
     #   columns:     {列名: 描述}  — 描述会喂给 LLM 帮助它生成正确的 SQL
     #   description: str           — 表的业务说明，用于 router.py 选表时的提示词
     #
-    # 注意：敏感列（如 phone）虽然在 columns 中定义，但 get_table_info()
+    # 注意：敏感列（如 email）虽然在 columns 中定义，但 get_table_info()
     # 生成 LLM 提示词时会自动排除这些列，从源头防止 LLM 知道它们的存在。
+    #
+    # ═══ 跨境电商核心表（对应 seed_data 9 领域数据模型）═══
 
     "tables": {
-        "users": {
+        # ── 商品域 ──
+        "products": {
             "columns": {
-                "id":         "用户ID (SERIAL PRIMARY KEY)",
-                "name":       "姓名 (VARCHAR)",
-                "email":      "邮箱地址 (VARCHAR)",
-                "phone":      "手机号码 (VARCHAR, 敏感信息)",
-                "dept_id":    "所属部门ID (INTEGER, FK → departments.id)",
-                "role":       "角色 (VARCHAR, 如 admin/manager/staff)",
-                "created_at": "入职日期 (DATE)",
+                "product_id":      "SPU ID (SERIAL PRIMARY KEY)",
+                "code":            "产品编码 (VARCHAR, 如 MK202)",
+                "name":            "产品名称 (VARCHAR)",
+                "brand_id":        "品牌ID (INTEGER, FK → brands.id)",
+                "category_id":     "类目ID (INTEGER, FK → categories.id)",
+                "lifecycle_stage": "生命周期 (VARCHAR, new/growth/mature/decline)",
+                "target_market":   "目标市场 (VARCHAR)",
+                "status":          "状态 (VARCHAR, active/inactive/discontinued)",
             },
-            "description": "用户表，存储所有员工的基本信息、联系方式和部门归属。",
+            "description": "SPU 产品主表，一个产品有多个 SKU。注意列名是 products.name 不是 product_name。",
         },
-        "departments": {
+        "skus": {
             "columns": {
-                "id":        "部门ID (SERIAL PRIMARY KEY)",
-                "name":      "部门名称 (VARCHAR, 注意列名是 name 不是 department_name)",
-                "parent_id": "上级部门ID (INTEGER, 自引用)",
+                "sku_id":            "SKU ID (SERIAL PRIMARY KEY)",
+                "product_id":        "所属 SPU ID (INTEGER, FK → products.product_id)",
+                "variant_attrs":     "变体属性 (JSONB, 如 {color:Red, size:L})",
+                "barcode":           "条形码 (VARCHAR)",
+                "weight_g":          "重量克 (INTEGER)",
+                "cost_price":        "成本价 (NUMERIC)",
+                "selling_price":     "售价 (NUMERIC)",
+                "hs_code":           "海关编码 (VARCHAR)",
+                "country_of_origin": "原产国 (VARCHAR)",
+                "status":            "状态 (VARCHAR, active/inactive)",
             },
-            "description": "部门组织架构表，列名 departments.name 表示部门名称。",
+            "description": "SKU 库存单位表，商品最小管理单元。通过 product_id 关联 products。",
         },
-        "projects": {
+        "brands": {
             "columns": {
-                "id":          "项目ID (SERIAL PRIMARY KEY)",
-                "name":        "项目名称 (VARCHAR, 注意列名是 name 不是 project_name)",
-                "owner_id":    "项目负责人ID (INTEGER, FK → users.id)",
-                "budget":      "预算金额 (NUMERIC, 万元)",
-                "status":      "项目状态 (VARCHAR, planning/active/completed)",
-                "start_date":  "开始日期 (DATE)",
-                "end_date":    "结束日期 (DATE)",
+                "brand_id":     "品牌ID (SERIAL PRIMARY KEY)",
+                "name":         "品牌名称 (VARCHAR, 注意列名是 name 不是 brand_name)",
+                "trademark_no": "商标号 (VARCHAR)",
+                "owner":        "品牌归属 (VARCHAR)",
             },
-            "description": "项目表，记录公司所有项目。列名 projects.name 表示项目名称。",
+            "description": "品牌表，products.brand_id 外键关联此表。",
         },
-        "project_members": {
+        "categories": {
             "columns": {
-                "project_id": "项目ID (INTEGER, FK → projects.id)",
-                "user_id":    "用户ID (INTEGER, FK → users.id)",
-                "role":       "项目内角色 (VARCHAR, 如 lead/member/reviewer)",
+                "category_id": "类目ID (SERIAL PRIMARY KEY)",
+                "parent_id":   "父级类目ID (INTEGER, 自引用 FK)",
+                "name":        "类目名称 (VARCHAR)",
             },
-            "description": "项目成员关联表，记录每个项目有哪些人参与。",
+            "description": "商品类目表，自引用树形结构。",
+        },
+
+        # ── 渠道域 ──
+        "channels": {
+            "columns": {
+                "channel_id":   "渠道ID (SERIAL PRIMARY KEY)",
+                "code":         "平台代码 (VARCHAR, AMAZON_US/SHOPIFY/TIKTOK_SHOP/EBAY/WALMART)",
+                "name":         "平台名称 (VARCHAR)",
+                "country":      "国家/地区 (VARCHAR)",
+                "currency":     "默认币种 (VARCHAR, USD/EUR/JPY)",
+                "status":       "状态 (VARCHAR, active/inactive)",
+            },
+            "description": "销售平台/渠道表，一个渠道有多个订单和 Listing。",
+        },
+
+        # ── 订单域 ──
+        "orders": {
+            "columns": {
+                "order_id":        "订单ID (SERIAL PRIMARY KEY)",
+                "channel_id":      "渠道ID (INTEGER, FK → channels.channel_id)",
+                "channel_order_id": "平台订单号 (VARCHAR)",
+                "customer_id":     "客户ID (INTEGER, FK → customers.customer_id)",
+                "status":          "订单状态 (VARCHAR, pending/paid/allocated/picking/shipped/delivered/cancelled/refunded)",
+                "order_total":     "订单金额 (NUMERIC)",
+                "currency":        "币种 (VARCHAR)",
+                "placed_at":       "下单时间 (TIMESTAMP)",
+                "paid_at":         "付款时间 (TIMESTAMP)",
+                "shipped_at":      "发货时间 (TIMESTAMP)",
+                "delivered_at":    "签收时间 (TIMESTAMP)",
+            },
+            "description": "统一订单表。列名 orders.status 表示订单状态，channel_order_id 保留平台原始订单号。",
+        },
+        "order_items": {
+            "columns": {
+                "order_id":   "订单ID (INTEGER, FK → orders.order_id)",
+                "line_id":    "订单行号 (INTEGER)",
+                "sku_id":     "SKU ID (INTEGER, FK → skus.sku_id)",
+                "quantity":   "数量 (INTEGER)",
+                "unit_price": "单价 (NUMERIC)",
+                "line_total": "行总价 (NUMERIC)",
+                "status":     "状态 (VARCHAR)",
+            },
+            "description": "订单明细表，一个订单可含多行商品。通过 sku_id 关联 skus。",
+        },
+
+        # ── 库存域 ──
+        "warehouses": {
+            "columns": {
+                "warehouse_id": "仓库ID (SERIAL PRIMARY KEY)",
+                "code":         "仓库编码 (VARCHAR, FBA_US/FBA_EU/3PL_USW/DOMESTIC_SZ)",
+                "name":         "仓库名称 (VARCHAR)",
+                "type":         "类型 (VARCHAR, DOMESTIC/FBA/3PL/TRANSIT)",
+                "country":      "所在国家 (VARCHAR)",
+                "region":       "区域 (VARCHAR)",
+                "is_active":    "是否启用 (BOOLEAN)",
+            },
+            "description": "仓库表，包含国内仓/FBA/3PL/中转仓。注意列名是 warehouses.name 不是 warehouse_name。",
+        },
+        "inventory_levels": {
+            "columns": {
+                "warehouse_id":   "仓库ID (INTEGER, FK → warehouses.warehouse_id)",
+                "sku_id":         "SKU ID (INTEGER, FK → skus.sku_id)",
+                "qty_on_hand":    "现有库存 (INTEGER)",
+                "qty_reserved":   "已预留库存 (INTEGER)",
+                "qty_in_transit": "在途库存 (INTEGER)",
+                "last_updated":   "最后更新时间 (TIMESTAMP)",
+            },
+            "description": "多仓库存快照表，复合主键 (warehouse_id, sku_id)。qty_available = qty_on_hand - qty_reserved。",
+        },
+        "inventory_transactions": {
+            "columns": {
+                "txn_id":       "事务ID (SERIAL PRIMARY KEY)",
+                "warehouse_id": "仓库ID (INTEGER)",
+                "sku_id":       "SKU ID (INTEGER)",
+                "type":         "事务类型 (VARCHAR, INBOUND/OUTBOUND/TRANSFER/ADJUSTMENT/RESERVE/RELEASE)",
+                "quantity":     "数量 (INTEGER)",
+                "ref_type":     "关联单据类型 (VARCHAR, PO/SHIPMENT/ORDER)",
+                "ref_id":       "关联单据ID (INTEGER)",
+                "occurred_at":  "发生时间 (TIMESTAMP)",
+            },
+            "description": "库存流水表（append-only），不可变审计日志。",
+        },
+
+        # ── 物流域 ──
+        "shipments": {
+            "columns": {
+                "shipment_id":   "运单ID (SERIAL PRIMARY KEY)",
+                "order_id":      "订单ID (INTEGER, FK → orders.order_id)",
+                "warehouse_id":  "发货仓库ID (INTEGER, FK → warehouses.warehouse_id)",
+                "carrier":       "承运商 (VARCHAR, FedEx/UPS/DHL/USPS)",
+                "tracking_no":   "追踪号 (VARCHAR)",
+                "status":        "物流状态 (VARCHAR, label_created/in_transit/out_for_delivery/delivered)",
+                "shipped_at":    "发运时间 (TIMESTAMP)",
+                "delivered_at":  "签收时间 (TIMESTAMP)",
+                "cost":          "运费 (NUMERIC)",
+            },
+            "description": "尾程物流运单表。一个订单可拆成多个 shipment。注意列名是 shipments.status。",
+        },
+
+        # ── 客户域 ──
+        "customers": {
+            "columns": {
+                "customer_id":    "客户ID (SERIAL PRIMARY KEY)",
+                "channel_id":     "渠道ID (INTEGER, FK → channels.channel_id)",
+                "channel_user_id":"平台用户ID (VARCHAR)",
+                "name":           "客户名 (VARCHAR)",
+                "email":          "邮箱 (VARCHAR, 敏感信息)",
+                "country":        "国家 (VARCHAR)",
+                "segment":        "客户分层 (VARCHAR, vip/loyal/regular/new)",
+                "lifetime_value": "LTV (NUMERIC)",
+                "order_count":    "累计订单数 (INTEGER)",
+                "first_order_at": "首单时间 (TIMESTAMP)",
+                "last_order_at":  "末单时间 (TIMESTAMP)",
+            },
+            "description": "客户表（终端买家）。注意列名是 customers.name 不是 customer_name。",
+        },
+
+        # ── 广告域 ──
+        "campaigns": {
+            "columns": {
+                "campaign_id":  "广告活动ID (SERIAL PRIMARY KEY)",
+                "ad_account_id":"广告账户ID (INTEGER)",
+                "channel":      "广告平台 (VARCHAR, AMAZON_ADS/GOOGLE_ADS/META_ADS/TIKTOK_ADS)",
+                "name":         "活动名称 (VARCHAR)",
+                "type":         "活动类型 (VARCHAR, SP/PRODUCT_DISPLAY/BRAND/VIDEO)",
+                "status":       "状态 (VARCHAR, active/paused/ended)",
+                "daily_budget": "日预算 (NUMERIC)",
+                "total_budget": "总预算 (NUMERIC)",
+                "start_date":   "开始日期 (DATE)",
+                "end_date":     "结束日期 (DATE)",
+            },
+            "description": "跨平台广告活动表。注意列名是 campaigns.name 不是 campaign_name。",
+        },
+        "spend_records": {
+            "columns": {
+                "spend_id":    "花费记录ID (SERIAL PRIMARY KEY)",
+                "ad_id":       "广告ID (INTEGER)",
+                "campaign_id": "活动ID (INTEGER, FK → campaigns.campaign_id)",
+                "date":        "日期 (DATE)",
+                "spend":       "花费 (NUMERIC)",
+                "impressions": "展示数 (INTEGER)",
+                "clicks":      "点击数 (INTEGER)",
+                "conversions": "转化数 (INTEGER)",
+                "sales":       "广告销售额 (NUMERIC)",
+            },
+            "description": "广告花费日报表。可计算 ACoS = spend / sales, ROAS = sales / spend。",
+        },
+
+        # ── 供应商域 ──
+        "suppliers": {
+            "columns": {
+                "supplier_id":  "供应商ID (SERIAL PRIMARY KEY)",
+                "name":         "供应商名称 (VARCHAR, 注意列名是 name 不是 supplier_name)",
+                "type":         "类型 (VARCHAR, MANUFACTURER/WHOLESALER)",
+                "country":      "所在国家 (VARCHAR)",
+                "contact_name": "联系人 (VARCHAR)",
+                "payment_terms":"付款条款 (VARCHAR, NET30/NET60/TT)",
+                "status":       "合作状态 (VARCHAR, active/inactive/blacklisted)",
+                "rating":       "评分 (NUMERIC, 1-5)",
+            },
+            "description": "供应商表。注意列名是 suppliers.name 不是 supplier_name。",
         },
     },
 
@@ -79,12 +248,9 @@ SCHEMA_CONFIG: Dict[str, Any] = {
     #
     # 规则：任何 SQL 查询如果引用了此列表中的列，sql_validator.py 的 Layer 3
     # 会直接抛出 ValidationError，拒绝执行。这不是警告，是硬拦截。
-    #
-    # 典型场景：phone 是个人隐私数据，任何 SELECT 都不允许查。
-    # 即使用户问"我的手机号是多少"，也直接拒绝，不给 LLM 绕过的机会。
 
     "sensitive_columns": [
-        "users.phone",
+        "customers.email",
     ],
 
     # ── 脱敏列 ─────────────────────────────────────────
@@ -92,44 +258,25 @@ SCHEMA_CONFIG: Dict[str, Any] = {
     #
     # 规则：这些列允许在 SQL 中查询，但 executor.py 返回结果前会对值做脱敏处理。
     # 脱敏算法：保留前 prefix_len 个字符 + "***" + 后 suffix_len 个字符
-    #   例如 email="zhangwei@corp.com" + (2,1) → "zh***m"
-    #
-    # 脱敏在 executor.py 的 Python 层面执行，不依赖数据库的列级权限。
-    # 这意味着即使 LLM 生成了 "SELECT email FROM users"，数据库返回了真实值，
-    # 在返回给用户之前也会被打码。双重保险。
 
     "masked_columns": {
-        "users.email": (2, 1),
+        "customers.email": (2, 1),
+        "customers.name":  (1, 0),
     },
 
     # ── 行级安全策略 ────────────────────────────────────
     # 定义格式: {table: {column, param}}
-    #   column: 表中用于过滤的列名
-    #   param:  参数名，由 SQLAgent.ask() 的 current_user_id 传入
     #
-    # 规则：row_security.py 用 sqlglot 解析 SQL 的 AST，在 WHERE 子句中
-    # 自动注入 "table.column = current_user_id" 条件。
-    #
-    # 示例：用户 103 问"我参与的项目"→ 生成的 WHERE 自动包含
-    #   users.id = 103 AND project_members.user_id = 103
-    #
-    # 如果 SQL 已有 WHERE，新条件用 AND 追加；如果没有 WHERE，创建 WHERE。
-    # 如果 user_id 为 None（未登录），则不注入任何条件，返回全部数据。
-    #
-    # 设计要点：
-    #   - users 用 id 过滤：当前用户只能看自己的信息
-    #   - project_members 用 user_id 过滤：只显示自己参与的项目
-    #   - departments 和 projects 没有策略：所有人可见
+    # 跨境电商场景说明：
+    # - 内部系统不做按角色的数据隔离（所有运营人员可查看所有渠道数据）
+    # - 如需按渠道(channel)做数据隔离，可在此配置
 
     "row_security": {
-        "users": {
-            "column": "id",
-            "param":  "current_user_id",
-        },
-        "project_members": {
-            "column": "user_id",
-            "param":  "current_user_id",
-        },
+        # 预留：按渠道隔离示例
+        # "orders": {
+        #     "column": "channel_id",
+        #     "param":  "current_channel_id",
+        # },
     },
 
     # ── 查询限制 ────────────────────────────────────────

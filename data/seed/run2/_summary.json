@@ -1,0 +1,13 @@
+{
+  "profile": "tiny",
+  "description": "CI 快速验证 — 最小数据量，生成时间 < 5 秒",
+  "seed": 42,
+  "generated_at": "2026-07-02T17:51:05.830648",
+  "entity_counts": {
+    "brand": 3,
+    "category": 11,
+    "channel": 3,
+    "warehouse": 3,
+    "supplier": 5
+  }
+}

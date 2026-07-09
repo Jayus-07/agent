@@ -24,7 +24,7 @@ from langchain_core.retrievers import BaseRetriever
 from llm.llm_factory import llm
 from retrieval.retrievers import ChunkLevelRetriever, AdaptiveRetriever
 from retrieval.reranker import RerankCompressor
-from config import ENABLE_HISTORY_AWARE_RETRIEVAL, ENABLE_LLM_COMPRESSION, CITATION_SUPPORT_THRESHOLD, RERANK_TIMEOUT
+from config import ENABLE_HISTORY_AWARE_RETRIEVAL, CITATION_SUPPORT_THRESHOLD, RERANK_TIMEOUT
 from utils.logger import logger
 from utils.timeout import safe_call_with_timeout
 
@@ -74,7 +74,7 @@ class ParallelMultiQueryRetriever(MultiQueryRetriever):
 
 # 用于将带有上下文依赖的问题（如包含代词或省略）重写为独立的检索查询
 CONTEXTUALIZE_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """你是企业知识库的查询重写助手。
+    ("system", """你是跨境电商知识库的查询重写助手。
 
 根据对话历史，将用户问题重新表述为独立的检索查询。
 
@@ -94,7 +94,7 @@ CONTEXTUALIZE_PROMPT = ChatPromptTemplate.from_messages([
 
 # 用于最终生成答案，结合检索到的文档和对话历史
 QA_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """你是企业知识库助手。你**只能**根据下方提供的资料回答问题，**严禁**使用资料之外的知识。
+    ("system", """你是跨境电商知识库助手。你**只能**根据下方提供的资料回答问题，**严禁**使用资料之外的知识。
 
 要求：
 1. **每个事实/数据必须标注来源编号**，格式如 [1]、[2]、[3]
@@ -187,14 +187,6 @@ class RAGChain:
         )
 
         retriever = self.chunk_retriever_base
-
-        # 可选 LLM 压缩
-        # if ENABLE_LLM_COMPRESSION:
-        #     from langchain_classic.retrievers.document_compressors import LLMChainExtractor
-        #     retriever = ContextualCompressionRetriever(
-        #         base_compressor=LLMChainExtractor.from_llm(llm),
-        #         base_retriever=retriever,
-        #     )
 
         # MultiQuery: 用 LLM 生成多个角度查询 → **并发检索**，提升召回率
         retriever = ParallelMultiQueryRetriever.from_llm(
@@ -413,7 +405,11 @@ def _format_references(docs: list, answer: str = "") -> str:
     for idx, meta in items:
         doc_type = meta.get("doc_type", "")
         score = meta.get("score", meta.get("rerank_score", None))
-        type_label = {"resume": "简历", "project": "项目文档", "report": "报告", "manual": "操作手册", "policy": "制度规范"}.get(doc_type, doc_type)
+        type_label = {
+            "listing": "Listing", "sop": "SOP", "ad_policy": "广告政策",
+            "faq": "FAQ", "product_spec": "产品规格", "training": "培训",
+            "policy": "制度规范", "report": "报告", "manual": "操作手册",
+        }.get(doc_type, doc_type)
         fname = meta.get("source_file", meta.get("source", ""))
         parts = [f"{idx}. **{fname}**"]
         if type_label:
@@ -440,8 +436,9 @@ def _extract_sources(docs: list, answer: str = "") -> list[dict]:
         cited.add(int(m.group(1)))
 
     type_label_map = {
-        "resume": "简历", "project": "项目文档", "report": "报告",
-        "manual": "操作手册", "policy": "制度规范",
+        "listing": "Listing", "sop": "SOP", "ad_policy": "广告政策",
+        "faq": "FAQ", "product_spec": "产品规格", "training": "培训",
+        "policy": "制度规范", "report": "报告", "manual": "操作手册",
     }
 
     seen = {}

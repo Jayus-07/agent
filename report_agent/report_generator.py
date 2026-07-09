@@ -185,11 +185,11 @@ class ReportGenerator:
                 chart_type=chart_type,
             )
 
-            # 定期清理过期快照
+            # 定期清理过期快照（失败仅记录，不影响主报告生成）
             try:
                 cleanup_old_snapshots()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[ReportGen] 快照清理失败（非致命）: {e}")
 
             elapsed = time.time() - start_time
             logger.info(f"[ReportGen] ====== 报告完成: {len(final)} 字符, "
@@ -248,8 +248,18 @@ class ReportGenerator:
 # Agent 工具函数
 # =====================================================
 
-# 全局单例
-_report_generator: Optional[ReportGenerator] = None
+_generator: Optional[ReportGenerator] = None
+
+
+def _get_generator(output_dir: str = None) -> ReportGenerator:
+    """懒加载全局 ReportGenerator（首次调用时实例化）"""
+    global _generator
+    if _generator is None:
+        _generator = ReportGenerator(output_dir=output_dir)
+        logger.info("[ReportGen] ReportAgent 初始化完成")
+    elif output_dir is not None:
+        _generator.output_dir = output_dir
+    return _generator
 
 
 def init_report_agent(
@@ -257,13 +267,13 @@ def init_report_agent(
     template_dir: str = None,
     output_dir: str = None,
 ) -> ReportGenerator:
-    """初始化全局报告生成器单例"""
-    global _report_generator
-    _report_generator = ReportGenerator(
+    """构造并缓存 ReportGenerator。可重复调用重新初始化（demo/测试用）。"""
+    global _generator
+    _generator = ReportGenerator(
         db_config=db_config, template_dir=template_dir, output_dir=output_dir,
     )
     logger.info("[ReportGen] ReportAgent 初始化完成")
-    return _report_generator
+    return _generator
 
 
 def generate_report(
@@ -273,29 +283,5 @@ def generate_report(
     polish: bool = True,
     output_dir: str = None,
 ) -> str:
-    """
-    报告生成入口（Agent 工具函数）。
-
-    参数:
-        report_type: 报告类型，如 "monthly_sales" / "project_progress" / "dept_summary"
-        filters:     筛选条件，如 {"dept_id": 1, "month": "2026-05"}
-        user_id:     用户标识
-        polish:      是否启用 LLM 润色
-
-    返回:
-        Markdown 格式的报告字符串
-
-    用法:
-        report = generate_report("monthly_sales", {"month": "2026-05"}, user_id="user_001")
-        print(report)
-    """
-    global _report_generator
-
-    if _report_generator is None:
-        _report_generator = init_report_agent()
-
-    # 允许每次调用动态设置 output_dir
-    if output_dir is not None:
-        _report_generator.output_dir = output_dir
-
-    return _report_generator.generate(report_type, filters, user_id, polish)
+    """报告生成入口（Agent 工具函数）。"""
+    return _get_generator(output_dir=output_dir).generate(report_type, filters, user_id, polish)

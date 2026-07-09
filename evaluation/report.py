@@ -1,5 +1,6 @@
-"""报告生成器 — 控制台摘要 + Markdown 详细报告 + 历史对比。"""
+"""报告生成器 — 控制台摘要 + Markdown 详细报告 + 历史对比 + JSON 全量导出。"""
 
+import json
 from pathlib import Path
 from datetime import datetime
 from evaluation.models import EvalReport, ModuleSummary
@@ -73,6 +74,51 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
     print(f"Report saved to: {path}")
+    return path
+
+
+def write_json_report(report: EvalReport, output_dir: Path) -> Path:
+    """生成 JSON 详细报告（含每条用例的完整检索轨迹），保存到 output_dir，返回文件路径。"""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = output_dir / f"eval-{report.module}-{ts}.json"
+
+    data = {
+        "timestamp": report.timestamp,
+        "module": report.module,
+        "mode": report.mode,
+        "smoke": report.smoke,
+        "total_score": report.total_score,
+        "summaries": [
+            {
+                "module": s.module,
+                "total": s.total,
+                "passed": s.passed,
+                "failed": s.failed,
+                "errors": s.errors,
+                "skipped": s.skipped,
+                "pass_rate": s.pass_rate,
+                "metrics": s.metrics,
+            }
+            for s in report.summaries
+        ],
+        "results": [
+            {
+                "case_id": r.case_id,
+                "module": r.module,
+                "status": r.status,
+                "expected": r.expected,
+                "actual": r.actual,
+                "metrics": r.metrics,
+                "duration_ms": r.duration_ms,
+                "error_msg": r.error_msg,
+            }
+            for r in report.results
+        ],
+    }
+
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"JSON report saved to: {path}")
     return path
 
 

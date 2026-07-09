@@ -35,7 +35,6 @@
       "Bash(date)",
       "Bash(seq *)",
       "Bash(cd *)",
-
       "Bash(rm *)",
       "Bash(rmdir *)",
       "Bash(git add *)",
@@ -53,7 +52,6 @@
       "Bash(git status *)",
       "Bash(git show *)",
       "Bash(git rev-parse *)",
-
       "Bash(python -m api.server)",
       "Bash(python multi_agent/demo.py)",
       "Bash(cd * && python *)"
@@ -66,6 +64,37 @@
       "Bash(rm -rf .git*)",
       "Bash(shutdown *)",
       "Bash(reboot *)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat >/dev/null || true; git rev-parse --git-dir >/dev/null 2>&1 && code-review-graph update --skip-flows --repo \"D:/Program Files/workplace/agent\" || true",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat >/dev/null || true; git rev-parse --git-dir >/dev/null 2>&1 && code-review-graph status --repo \"D:/Program Files/workplace/agent\" || echo 'Not a git repo, skipping'",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "powershell.exe -Command \"if (-not (Get-NetTCPConnection -LocalPort 5555 -ErrorAction SilentlyContinue)) { Start-Process -WindowStyle Hidden -FilePath 'D:\\Program Files\\workplace\\agent\\.venv\\Scripts\\python.exe' -ArgumentList '-m','code_review_graph','serve','--http','--repo','D:\\Program Files\\workplace\\agent','--port','5555' }\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

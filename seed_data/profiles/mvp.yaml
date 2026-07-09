@@ -1,0 +1,55 @@
+# mvp profile — MVP 演示 + 集成测试
+# 完整打通 9 个领域，支撑 SQL Agent、RAG、Report Agent 演示
+name: mvp
+description: "MVP 演示 + 集成测试（~1000 SKU, 5 万订单, 100 篇知识文档）"
+seed: 42
+
+entities:
+  brand:          { count: 8 }
+  category:       { count: 40, max_depth: 3 }
+  channel:        { count: 7, fixed: true }
+  warehouse:      { count: 8, fixed: true }
+  supplier:       { count: 30 }
+  product:        { count: 200 }
+  sku:            { count: 1000 }
+  listing:        { count: 2000 }
+  customer:       { count: 10000 }
+  order:          { count: 50000 }
+  order_item:     { count: 125000 }
+  shipment:       { count: 48000 }
+  tracking_event: { count: 200000 }
+  knowledge_doc:  { count: 100 }
+  knowledge_chunk: { count: 2000 }   # 100 篇文档 × ~20 chunks/doc（派生值，近似）
+  campaign:       { count: 30 }
+  ad:             { count: 200 }
+  spend_record:   { count: 18000 }
+  review:         { count: 8000 }
+
+distributions:
+  order:
+    status:
+      DELIVERED: 0.70
+      SHIPPED: 0.12
+      CANCELLED: 0.08
+      REFUNDED: 0.05
+      PICKING: 0.03
+      PAID: 0.02
+    seasonality:
+      monthly_factors: [0.8, 0.8, 0.9, 1.0, 1.0, 1.1, 1.1, 1.0, 1.1, 1.3, 1.8, 2.0]
+      weekend_boost: 1.25
+
+  sku:
+    price_distribution: "pareto"
+    price_range: [5, 200]
+    price_alpha: 1.5
+
+  inventory:
+    warehouse_allocation:
+      FBA_US: 0.45
+      FBA_EU: 0.20
+      FBA_JP: 0.08
+      3PL_USW: 0.10
+      3PL_USE: 0.07
+      3PL_DE: 0.05
+      3PL_JP: 0.03
+      DOMESTIC_SZ: 0.02

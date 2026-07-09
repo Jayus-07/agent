@@ -1,5 +1,5 @@
 // ========================================
-// API 请求 / 响应类型
+// API 请求类型
 // ========================================
 
 export interface ChatRequest {
@@ -7,12 +7,6 @@ export interface ChatRequest {
   session_id: string
   kb_id?: string
   request_id?: string   // 用于中止信号路由
-}
-
-export interface ChatResponse {
-  answer: string
-  session_id: string
-  sources?: Source[]
 }
 
 // ========================================
@@ -73,45 +67,6 @@ export type SSEStreamEvent =
   | { event: 'error';  data: ErrorEvent }
 
 // ========================================
-// 兼容旧版 (v1) — 逐步废弃
-// ========================================
-
-/** @deprecated 使用 SSEStreamEvent 替代 */
-export type SSEStage =
-  | 'planning'
-  | 'supervising'
-  | 'executing'
-  | 'reporting'
-  | 'done'
-  | 'error'
-
-/** @deprecated 使用 SSEStreamEvent 替代 */
-export interface SSEEvent {
-  stage: SSEStage
-  label: string
-  message: string
-  node: string
-  data: {
-    task_count?: number
-    tasks?: string[]
-    ready?: string[]
-    completed?: string[]
-    all_done?: boolean
-    success_count?: number
-    step_id?: string
-    status?: 'running' | 'success' | 'failed' | 'skipped'
-    description?: string
-    error?: string
-    preview?: string
-    final_answer?: string
-    elapsed?: number
-    started_at?: number
-    finished_at?: number
-    sources?: Source[]
-  }
-}
-
-// ========================================
 // 对话模式
 // ========================================
 
@@ -126,9 +81,7 @@ export interface Message {
   role: 'user' | 'assistant'
   content: string
   timestamp: number
-  /** @deprecated 使用 streamEvents 替代 */
-  thinking?: SSEEvent[]
-  /** SSE v2 流式事件（替代 thinking） */
+  /** SSE v2 流式事件 */
   streamEvents?: SSEStreamEvent[]
   /** 来源文档（仅 RAG 类问题有值） */
   sources?: Source[]

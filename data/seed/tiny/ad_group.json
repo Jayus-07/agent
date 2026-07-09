@@ -1,0 +1,72 @@
+[
+  {
+    "ad_group_id": "AG0001",
+    "campaign_id": "CAMP0003",
+    "name": "AdGroup-48",
+    "default_bid": 3.2,
+    "status": "ACTIVE"
+  },
+  {
+    "ad_group_id": "AG0002",
+    "campaign_id": "CAMP0003",
+    "name": "AdGroup-35",
+    "default_bid": 1.49,
+    "status": "ACTIVE"
+  },
+  {
+    "ad_group_id": "AG0003",
+    "campaign_id": "CAMP0001",
+    "name": "AdGroup-41",
+    "default_bid": 2.49,
+    "status": "ACTIVE"
+  },
+  {
+    "ad_group_id": "AG0004",
+    "campaign_id": "CAMP0005",
+    "name": "AdGroup-8",
+    "default_bid": 2.18,
+    "status": "ACTIVE"
+  },
+  {
+    "ad_group_id": "AG0005",
+    "campaign_id": "CAMP0004",
+    "name": "AdGroup-1",
+    "default_bid": 1.75,
+    "status": "ACTIVE"
+  },
+  {
+    "ad_group_id": "AG0006",
+    "campaign_id": "CAMP0002",
+    "name": "AdGroup-11",
+    "default_bid": 0.48,
+    "status": "ACTIVE"
+  },
+  {
+    "ad_group_id": "AG0007",
+    "campaign_id": "CAMP0001",
+    "name": "AdGroup-26",
+    "default_bid": 2.87,
+    "status": "ACTIVE"
+  },
+  {
+    "ad_group_id": "AG0008",
+    "campaign_id": "CAMP0001",
+    "name": "AdGroup-42",
+    "default_bid": 4.19,
+    "status": "ACTIVE"
+  },
+  {
+    "ad_group_id": "AG0009",
+    "campaign_id": "CAMP0003",
+    "name": "AdGroup-7",
+    "default_bid": 1.22,
+    "status": "ACTIVE"
+  },
+  {
+    "ad_group_id": "AG0010",
+    "campaign_id": "CAMP0003",
+    "name": "AdGroup-18",
+    "default_bid": 3.37,
+    "status": "ACTIVE"
+  }
+]

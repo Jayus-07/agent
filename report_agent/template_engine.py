@@ -160,79 +160,80 @@ class TemplateEngine:
     # ---------------------------------------------------
 
     def _load_builtin_templates(self):
-        """注册内置兜底模板，即使 templates/ 目录为空也能用"""
+        """注册内置兜底模板 — 跨境电商报告（即使 templates/ 目录为空也能用）"""
         self._builtin_templates = {
-            "sales_summary.j2": """## {{ metadata.get("title", "月度销售报告") }}
+            "daily_sales.j2": """## {{ metadata.get("title", "销售日报") }}
 > 生成时间：{{ metadata.fetched_at }}，共 {{ metadata.row_count }} 条记录
 
-| 部门 | 项目数 | 总预算 | 进行中 | 已完成 |
-|------|--------|--------|--------|--------|
+| 日期 | 渠道 | 订单数 | 销售额 | 下单客户数 | 客单价 |
+|------|------|--------|--------|------------|--------|
 {% for row in data %}
-| {{ row.dept_name | dash }} | {{ row.project_count }} | {{ row.total_budget | money }} | {{ row.active_count }} | {{ row.completed_count }} |
+| {{ row.get("日期", row.get("date", "—")) }} | {{ row.get("渠道", row.get("channel", "—")) }} | {{ row.get("订单数", row.get("order_count", 0)) }} | {{ row.get("销售额", row.get("sales_amount", 0)) | money }} | {{ row.get("下单客户数", row.get("customer_count", 0)) }} | {{ row.get("客单价", row.get("avg_order_value", 0)) | money }} |
 {% endfor %}
 
 {% if data | length == 0 %}
 *(暂无数据)*
 {% endif %}
 """,
-            "sales_detail.j2": """## {{ metadata.get("title", "月度销售详细报告") }}
+            "product_performance.j2": """## {{ metadata.get("title", "商品动销分析报告") }}
+> 生成时间：{{ metadata.fetched_at }}，共 {{ metadata.row_count }} 个 SKU
+
+| 产品名称 | 品牌 | 销售订单数 | 销售数量 | 销售额 | 毛利 | 毛利率 |
+|----------|------|------------|----------|--------|------|--------|
+{% for row in data %}
+| {{ row.get("产品名称", row.get("product_name", "—")) }} | {{ row.get("品牌", row.get("brand", "—")) }} | {{ row.get("销售订单数", row.get("order_count", 0)) }} | {{ row.get("销售数量", row.get("qty_sold", 0)) }} | {{ row.get("销售额", row.get("sales_amount", 0)) | money }} | {{ row.get("毛利", row.get("gross_profit", 0)) | money }} | {{ row.get("毛利率", row.get("gross_margin", 0)) }}% |
+{% endfor %}
+
+{% if data | length == 0 %}
+*(暂无数据)*
+{% endif %}
+""",
+            "inventory_health.j2": """## {{ metadata.get("title", "库存健康报告") }}
 > 生成时间：{{ metadata.fetched_at }}
 
+| 仓库 | 仓库类型 | 产品名称 | SKU编码 | 现有库存 | 已预留 | 在途 | 可用库存 | 库存状态 |
+|------|---------|----------|---------|----------|--------|------|----------|----------|
 {% for row in data %}
-### {{ row.dept_name | dash }}
-- 📊 项目总数：**{{ row.project_count }}** 个
-- 💰 总预算：**{{ row.total_budget | money }}**
-- 🟢 进行中：{{ row.active_count }} 个
-- ✅ 已完成：{{ row.completed_count }} 个
-
+| {{ row.get("仓库", row.get("warehouse", "—")) }} | {{ row.get("仓库类型", row.get("warehouse_type", "—")) }} | {{ row.get("产品名称", row.get("product_name", "—")) }} | {{ row.get("SKU编码", row.get("sku_code", "—")) }} | {{ row.get("现有库存", row.get("qty_on_hand", 0)) }} | {{ row.get("已预留", row.get("qty_reserved", 0)) }} | {{ row.get("在途库存", row.get("qty_in_transit", 0)) }} | {{ row.get("可用库存", row.get("qty_available", 0)) }} | {{ row.get("库存状态", row.get("inventory_status", "—")) }} |
 {% endfor %}
 
 {% if data | length == 0 %}
 *(暂无数据)*
 {% endif %}
 """,
-            "project_progress.j2": """## {{ metadata.get("title", "项目进度报告") }}
+            "ad_performance.j2": """## {{ metadata.get("title", "广告效果分析报告") }}
+> 生成时间：{{ metadata.fetched_at }}，近 30 天数据
+
+| 广告平台 | 活动名称 | 类型 | 状态 | 总花费 | 总展示 | 总点击 | CTR | CPC | 总转化 | 广告销售额 | ACoS | ROAS |
+|----------|---------|------|------|--------|--------|--------|-----|-----|--------|-----------|------|------|
+{% for row in data %}
+| {{ row.get("广告平台", row.get("ad_channel", "—")) }} | {{ row.get("活动名称", row.get("campaign_name", "—")) }} | {{ row.get("活动类型", row.get("campaign_type", "—")) }} | {{ row.get("状态", row.get("status", "—")) }} | {{ row.get("总花费", row.get("total_spend", 0)) | money }} | {{ row.get("总展示", row.get("impressions", 0)) }} | {{ row.get("总点击", row.get("clicks", 0)) }} | {{ row.get("CTR", 0) }}% | {{ row.get("CPC", 0) | money }} | {{ row.get("总转化", row.get("conversions", 0)) }} | {{ row.get("广告销售额", row.get("ad_sales", 0)) | money }} | {{ row.get("ACoS", 0) }}% | {{ row.get("ROAS", 0) }} |
+{% endfor %}
+
+{% if data | length == 0 %}
+*(暂无数据)*
+{% endif %}
+""",
+            "order_fulfillment.j2": """## {{ metadata.get("title", "订单履约报告") }}
+> 生成时间：{{ metadata.fetched_at }}，近 30 天数据
+
+| 渠道 | 订单状态 | 订单数 | 金额合计 | 平均发货耗时(h) | 平均签收耗时(h) | 退款订单数 | 退款率 |
+|------|---------|--------|----------|----------------|----------------|-----------|--------|
+{% for row in data %}
+| {{ row.get("渠道", row.get("channel", "—")) }} | {{ row.get("订单状态", row.get("order_status", "—")) }} | {{ row.get("订单数", row.get("order_count", 0)) }} | {{ row.get("金额合计", row.get("total_amount", 0)) | money }} | {{ row.get("平均发货耗时小时", row.get("avg_pick_hours", "—")) }} | {{ row.get("平均签收耗时小时", row.get("avg_delivery_hours", "—")) }} | {{ row.get("退款订单数", row.get("refund_count", 0)) }} | {{ row.get("退款率", row.get("refund_rate", 0)) }}% |
+{% endfor %}
+
+{% if data | length == 0 %}
+*(暂无数据)*
+{% endif %}
+""",
+            "customer_analysis.j2": """## {{ metadata.get("title", "客户分析报告") }}
 > 生成时间：{{ metadata.fetched_at }}
 
-| 项目名称 | 所属部门 | 状态 | 预算 | 开始日期 | 结束日期 | 成员数 |
-|----------|----------|------|------|----------|----------|--------|
+| 国家 | 客户分层 | 客户数 | 平均LTV | 平均订单数 | 近30天活跃 | 活跃率 | 累计订单总数 |
+|------|---------|--------|---------|-----------|-----------|--------|-------------|
 {% for row in data %}
-| {{ row.project_name | dash }} | {{ row.owner_dept | dash }} | {{ row.status | status }} | {{ row.budget | money }} | {{ row.start_date | date_cn }} | {{ row.end_date | date_cn }} | {{ row.member_count }} |
-{% endfor %}
-
-{% if data | length == 0 %}
-*(暂无数据)*
-{% endif %}
-""",
-            "dept_overview.j2": """## {{ metadata.get("title", "部门概览报告") }}
-> 生成时间：{{ metadata.fetched_at }}
-
-{% for row in data %}
-### {{ row.get("部门", row.get("dept_name", row.get("name", "未命名"))) | dash }}
-- **员工数**：{{ row.get("员工数", row.get("employee_count", "—")) }}
-- **项目数**：{{ row.get("项目数", row.get("project_count", "—")) }}
-- **总预算**：{{ (row.get("总预算", row.get("total_budget", 0)) or 0) | money }}
-
-{% endfor %}
-
-{% if data | length == 0 %}
-*(暂无数据)*
-{% endif %}
-""",
-            "budget_usage.j2": """## {{ metadata.get("title", "预算使用分析报告") }}
-> 生成时间：{{ metadata.fetched_at }}，共 {{ metadata.row_count }} 个项目
-
-| 项目名称 | 所属部门 | 预算金额 | 状态 | 成员数 | 开始日期 | 结束日期 | 周期(天) |
-|---------|---------|---------|------|--------|---------|---------|---------|
-{% for row in data %}
-| {{ row.get("项目名称", row.get("project_name", "—")) | dash }}
-| {{ row.get("所属部门", row.get("dept_name", "—")) | dash }}
-| {{ row.get("预算金额", row.get("budget_amount", row.get("budget", 0)) or 0) | money }}
-| {{ row.get("状态", row.get("status", "—")) | status }}
-| {{ row.get("成员数", row.get("member_count", 0)) }}
-| {{ row.get("开始日期", row.get("start_date", None)) | date_cn }}
-| {{ row.get("结束日期", row.get("end_date", None)) | date_cn }}
-| {{ row.get("周期天数", row.get("duration_days", "—")) }} |
+| {{ row.get("国家", row.get("country", "—")) }} | {{ row.get("客户分层", row.get("segment", "—")) }} | {{ row.get("客户数", row.get("customer_count", 0)) }} | {{ row.get("平均LTV", row.get("avg_ltv", 0)) | money }} | {{ row.get("平均订单数", row.get("avg_orders", 0)) }} | {{ row.get("近30天活跃", row.get("active_30d", 0)) }} | {{ row.get("活跃率", row.get("active_rate", 0)) }}% | {{ row.get("累计订单总数", row.get("total_orders", 0)) }} |
 {% endfor %}
 
 {% if data | length == 0 %}
@@ -311,16 +312,23 @@ class TemplateEngine:
     # 模板名 → 必需列名集合（render 入口校验，缺列则降级到 fallback）
     # 列名匹配为"包含任一即可"（OR 语义），兼容中英文别名
     _REQUIRED_COLUMNS: Dict[str, set] = {
-        "sales_summary.j2":   {"dept_name", "project_count", "total_budget",
-                               "active_count", "completed_count"},
-        "sales_detail.j2":    {"dept_name", "project_count", "total_budget",
-                               "active_count", "completed_count"},
-        "project_progress.j2": {"project_name", "owner_dept", "status",
-                                "budget", "start_date", "end_date", "member_count"},
-        "dept_overview.j2":   {"部门", "dept_name", "员工数", "employee_count",
-                               "项目数", "project_count", "总预算", "total_budget"},
-        "budget_usage.j2":    {"项目名称", "project_name", "所属部门", "dept_name",
-                               "预算金额", "budget_amount", "budget", "status", "状态"},
+        "daily_sales.j2":          {"日期", "date", "渠道", "channel", "订单数", "order_count",
+                                     "销售额", "sales_amount", "下单客户数", "customer_count", "客单价", "avg_order_value"},
+        "product_performance.j2":   {"产品名称", "product_name", "品牌", "brand",
+                                     "销售订单数", "order_count", "销售数量", "qty_sold",
+                                     "销售额", "sales_amount", "毛利", "gross_profit", "毛利率", "gross_margin"},
+        "inventory_health.j2":      {"仓库", "warehouse", "产品名称", "product_name",
+                                     "SKU编码", "sku_code", "现有库存", "qty_on_hand",
+                                     "可用库存", "qty_available", "库存状态", "inventory_status"},
+        "ad_performance.j2":        {"广告平台", "ad_channel", "活动名称", "campaign_name",
+                                     "总花费", "total_spend", "ACoS", "ROAS",
+                                     "CTR", "CPC", "总转化", "conversions"},
+        "order_fulfillment.j2":     {"渠道", "channel", "订单状态", "order_status",
+                                     "订单数", "order_count", "金额合计", "total_amount",
+                                     "退款率", "refund_rate"},
+        "customer_analysis.j2":     {"国家", "country", "客户分层", "segment",
+                                     "客户数", "customer_count", "平均LTV", "avg_ltv",
+                                     "活跃率", "active_rate"},
     }
 
     def _check_required_columns(

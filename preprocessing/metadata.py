@@ -20,8 +20,8 @@ from utils.logger import logger
 # 文档类型分类（改进：使用正则、优先级顺序）
 # =====================================================
 
-def classify_doc_type(text: str) -> Literal["resume", "project", "report", "manual", "policy", "general"]:
-    """分类文档类型，优先级按字典顺序（可调整）"""
+def classify_doc_type(text: str) -> str:
+    """分类文档类型，优先级按 DOC_TYPE_RULES 字典顺序"""
     text_lower = text.lower()
     for doc_type, patterns in DOC_TYPE_RULES.items():
         for pattern in patterns:
@@ -144,7 +144,7 @@ async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = 
     """使用LLM生成摘要和人名（带缓存、超时保护和并发控制）"""
     safe_text = text.encode('utf-8', errors='ignore')[:4000].decode('utf-8', errors='ignore')
     prompt = f"""
-你是企业级RAG系统的文档压缩与检索增强助手。
+你是跨境电商RAG系统的文档压缩与检索增强助手。
 
 你的任务是：
 1. 将文档压缩为"可用于语义检索"的高信息密度摘要

@@ -1,0 +1,79 @@
+[
+  {
+    "category_id": "CAT0001",
+    "parent_id": null,
+    "name": "母婴用品",
+    "depth": 0,
+    "status": "ACTIVE"
+  },
+  {
+    "category_id": "CAT0002",
+    "parent_id": null,
+    "name": "户外用品",
+    "depth": 0,
+    "status": "ACTIVE"
+  },
+  {
+    "category_id": "CAT0003",
+    "parent_id": "CAT0002",
+    "name": "露营装备",
+    "depth": 1,
+    "status": "ACTIVE"
+  },
+  {
+    "category_id": "CAT0004",
+    "parent_id": null,
+    "name": "宠物用品",
+    "depth": 0,
+    "status": "ACTIVE"
+  },
+  {
+    "category_id": "CAT0005",
+    "parent_id": "CAT0004",
+    "name": "宠物玩具",
+    "depth": 1,
+    "status": "ACTIVE"
+  },
+  {
+    "category_id": "CAT0006",
+    "parent_id": "CAT0002",
+    "name": "运动配件",
+    "depth": 1,
+    "status": "ACTIVE"
+  },
+  {
+    "category_id": "CAT0007",
+    "parent_id": null,
+    "name": "家居用品",
+    "depth": 0,
+    "status": "ACTIVE"
+  },
+  {
+    "category_id": "CAT0008",
+    "parent_id": "CAT0007",
+    "name": "卫浴用品",
+    "depth": 1,
+    "status": "ACTIVE"
+  },
+  {
+    "category_id": "CAT0009",
+    "parent_id": "CAT0001",
+    "name": "婴儿安全",
+    "depth": 1,
+    "status": "ACTIVE"
+  },
+  {
+    "category_id": "CAT0010",
+    "parent_id": null,
+    "name": "小型电子产品",
+    "depth": 0,
+    "status": "ACTIVE"
+  },
+  {
+    "category_id": "CAT0011",
+    "parent_id": "CAT0010",
+    "name": "音频设备",
+    "depth": 1,
+    "status": "ACTIVE"
+  }
+]

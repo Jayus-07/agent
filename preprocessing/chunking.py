@@ -373,11 +373,16 @@ class ChunkStrategyRouter:
 
     def __init__(self, fallback_chunk_size: int = None, fallback_chunk_overlap: int = None):
         self._strategies = {
+            # 按章节切分（保持章节完整性）
             "manual": ManualPolicyChunkStrategy(),
             "policy": ManualPolicyChunkStrategy(),
-            "resume": ResumeChunkStrategy(),
-            "project": ProjectReportChunkStrategy(),
-            "report": ProjectReportChunkStrategy(),
+            "sop": ManualPolicyChunkStrategy(),
+            "ad_policy": ManualPolicyChunkStrategy(),
+            "product_spec": ManualPolicyChunkStrategy(),
+            # 综合文档用通用切分
+            "listing": ProjectReportChunkStrategy(),
+            "faq": ProjectReportChunkStrategy(),
+            "training": ProjectReportChunkStrategy(),
         }
         self._fallback = GeneralChunkStrategy(
             chunk_size=fallback_chunk_size,

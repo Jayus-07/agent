@@ -1,0 +1,67 @@
+[
+  {
+    "supplier_id": "SUP0001",
+    "name": "Figueroa and Sons",
+    "type": "WHOLESALER",
+    "country": "CN",
+    "city": "泉州",
+    "contact_name": "Brian Yang",
+    "contact_email": "fjohnson@example.org",
+    "contact_phone": "790.683.8637x94026",
+    "payment_terms": "T/T 50% + 50%",
+    "cooperation_status": "ACTIVE",
+    "rating": 3
+  },
+  {
+    "supplier_id": "SUP0002",
+    "name": "Bernard LLC",
+    "type": "MANUFACTURER",
+    "country": "CN",
+    "city": "台州",
+    "contact_name": "Brent Abbott",
+    "contact_email": "changlei@example.org",
+    "contact_phone": "001-278-516-1849x5931",
+    "payment_terms": "NET 30",
+    "cooperation_status": "ACTIVE",
+    "rating": 3
+  },
+  {
+    "supplier_id": "SUP0003",
+    "name": "创汇科技有限公司",
+    "type": "WHOLESALER",
+    "country": "CN",
+    "city": "台州",
+    "contact_name": "Sharon James",
+    "contact_email": "yanping@example.org",
+    "contact_phone": "13413389083",
+    "payment_terms": "T/T 30% + 70%",
+    "cooperation_status": "ACTIVE",
+    "rating": 4
+  },
+  {
+    "supplier_id": "SUP0004",
+    "name": "Kelly-Santiago",
+    "type": "WHOLESALER",
+    "country": "CN",
+    "city": "金华",
+    "contact_name": "Carolyn Daniel",
+    "contact_email": "ogray@example.net",
+    "contact_phone": "+1-850-930-5641x39537",
+    "payment_terms": "NET 60",
+    "cooperation_status": "ACTIVE",
+    "rating": 5
+  },
+  {
+    "supplier_id": "SUP0005",
+    "name": "Taylor-Mcgee",
+    "type": "MANUFACTURER",
+    "country": "CN",
+    "city": "苏州",
+    "contact_name": "刘萍",
+    "contact_email": "guoyan@example.com",
+    "contact_phone": "15742351161",
+    "payment_terms": "NET 30",
+    "cooperation_status": "ACTIVE",
+    "rating": 5
+  }
+]

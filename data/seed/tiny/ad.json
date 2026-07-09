@@ -1,0 +1,142 @@
+[
+  {
+    "ad_id": "AD0001",
+    "ad_group_id": "CAMP0001",
+    "type": "KEYWORD",
+    "status": "ACTIVE",
+    "bid": 2.13
+  },
+  {
+    "ad_id": "AD0002",
+    "ad_group_id": "CAMP0004",
+    "type": "PRODUCT",
+    "status": "ACTIVE",
+    "bid": 2.1
+  },
+  {
+    "ad_id": "AD0003",
+    "ad_group_id": "CAMP0001",
+    "type": "ASIN",
+    "status": "ACTIVE",
+    "bid": 0.13
+  },
+  {
+    "ad_id": "AD0004",
+    "ad_group_id": "CAMP0001",
+    "type": "PRODUCT",
+    "status": "ACTIVE",
+    "bid": 1.63
+  },
+  {
+    "ad_id": "AD0005",
+    "ad_group_id": "CAMP0004",
+    "type": "PRODUCT",
+    "status": "ACTIVE",
+    "bid": 2.91
+  },
+  {
+    "ad_id": "AD0006",
+    "ad_group_id": "CAMP0003",
+    "type": "PRODUCT",
+    "status": "ACTIVE",
+    "bid": 1.3
+  },
+  {
+    "ad_id": "AD0007",
+    "ad_group_id": "CAMP0002",
+    "type": "KEYWORD",
+    "status": "ACTIVE",
+    "bid": 1.75
+  },
+  {
+    "ad_id": "AD0008",
+    "ad_group_id": "CAMP0003",
+    "type": "AUTO",
+    "status": "ACTIVE",
+    "bid": 2.14
+  },
+  {
+    "ad_id": "AD0009",
+    "ad_group_id": "CAMP0001",
+    "type": "KEYWORD",
+    "status": "ACTIVE",
+    "bid": 1.7
+  },
+  {
+    "ad_id": "AD0010",
+    "ad_group_id": "CAMP0005",
+    "type": "AUTO",
+    "status": "ACTIVE",
+    "bid": 1.16
+  },
+  {
+    "ad_id": "AD0011",
+    "ad_group_id": "CAMP0001",
+    "type": "KEYWORD",
+    "status": "ACTIVE",
+    "bid": 1.82
+  },
+  {
+    "ad_id": "AD0012",
+    "ad_group_id": "CAMP0001",
+    "type": "AUTO",
+    "status": "ACTIVE",
+    "bid": 1.27
+  },
+  {
+    "ad_id": "AD0013",
+    "ad_group_id": "CAMP0003",
+    "type": "KEYWORD",
+    "status": "ACTIVE",
+    "bid": 0.46
+  },
+  {
+    "ad_id": "AD0014",
+    "ad_group_id": "CAMP0002",
+    "type": "AUTO",
+    "status": "ACTIVE",
+    "bid": 2.75
+  },
+  {
+    "ad_id": "AD0015",
+    "ad_group_id": "CAMP0004",
+    "type": "PRODUCT",
+    "status": "ACTIVE",
+    "bid": 2.44
+  },
+  {
+    "ad_id": "AD0016",
+    "ad_group_id": "CAMP0003",
+    "type": "PRODUCT",
+    "status": "ACTIVE",
+    "bid": 2.39
+  },
+  {
+    "ad_id": "AD0017",
+    "ad_group_id": "CAMP0001",
+    "type": "PRODUCT",
+    "status": "ACTIVE",
+    "bid": 2.06
+  },
+  {
+    "ad_id": "AD0018",
+    "ad_group_id": "CAMP0005",
+    "type": "ASIN",
+    "status": "ACTIVE",
+    "bid": 1.86
+  },
+  {
+    "ad_id": "AD0019",
+    "ad_group_id": "CAMP0003",
+    "type": "KEYWORD",
+    "status": "ACTIVE",
+    "bid": 0.26
+  },
+  {
+    "ad_id": "AD0020",
+    "ad_group_id": "CAMP0005",
+    "type": "AUTO",
+    "status": "ACTIVE",
+    "bid": 2.92
+  }
+]

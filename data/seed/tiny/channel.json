@@ -1,0 +1,26 @@
+[
+  {
+    "channel_id": "CH0001",
+    "code": "AMAZON_US",
+    "name": "Amazon US",
+    "country": "US",
+    "default_currency": "USD",
+    "status": "ACTIVE"
+  },
+  {
+    "channel_id": "CH0002",
+    "code": "AMAZON_EU",
+    "name": "Amazon EU",
+    "country": "DE",
+    "default_currency": "EUR",
+    "status": "ACTIVE"
+  },
+  {
+    "channel_id": "CH0003",
+    "code": "AMAZON_JP",
+    "name": "Amazon Japan",
+    "country": "JP",
+    "default_currency": "JPY",
+    "status": "ACTIVE"
+  }
+]

@@ -1,0 +1,122 @@
+[
+  {
+    "product_id": "P0001",
+    "code": "SPU-00001",
+    "name": "可调节鞋柜",
+    "name_en": "可调节 Shoe Rack",
+    "brand_id": "B0001",
+    "category_id": "CAT0011",
+    "status": "ACTIVE",
+    "lifecycle_stage": "ACTIVE",
+    "target_market": "US",
+    "created_at": "2025-04-05"
+  },
+  {
+    "product_id": "P0002",
+    "code": "SPU-00001",
+    "name": "抗菌蓝牙耳机",
+    "name_en": "抗菌 Bluetooth Earbuds",
+    "brand_id": "B0001",
+    "category_id": "CAT0003",
+    "status": "ACTIVE",
+    "lifecycle_stage": "NEW",
+    "target_market": "JP",
+    "created_at": "2024-10-16"
+  },
+  {
+    "product_id": "P0003",
+    "code": "SPU-00001",
+    "name": "可调节奶瓶",
+    "name_en": "可调节 Baby Bottle",
+    "brand_id": "B0002",
+    "category_id": "CAT0006",
+    "status": "ACTIVE",
+    "lifecycle_stage": "ACTIVE",
+    "target_market": "JP",
+    "created_at": "2026-04-20"
+  },
+  {
+    "product_id": "P0004",
+    "code": "SPU-00001",
+    "name": "折叠浴帘",
+    "name_en": "折叠 Shower Curtain",
+    "brand_id": "B0003",
+    "category_id": "CAT0005",
+    "status": "ACTIVE",
+    "lifecycle_stage": "ACTIVE",
+    "target_market": "ALL",
+    "created_at": "2026-02-08"
+  },
+  {
+    "product_id": "P0005",
+    "code": "SPU-00001",
+    "name": "速干户外灯",
+    "name_en": "速干 Outdoor Lantern",
+    "brand_id": "B0003",
+    "category_id": "CAT0009",
+    "status": "ACTIVE",
+    "lifecycle_stage": "ACTIVE",
+    "target_market": "JP",
+    "created_at": "2026-04-30"
+  },
+  {
+    "product_id": "P0006",
+    "code": "SPU-00001",
+    "name": "防水挂钩",
+    "name_en": "防水 Hooks",
+    "brand_id": "B0002",
+    "category_id": "CAT0008",
+    "status": "ACTIVE",
+    "lifecycle_stage": "ACTIVE",
+    "target_market": "US",
+    "created_at": "2024-10-27"
+  },
+  {
+    "product_id": "P0007",
+    "code": "SPU-00001",
+    "name": "大容量智能灯带",
+    "name_en": "大容量 Smart LED Strip",
+    "brand_id": "B0003",
+    "category_id": "CAT0008",
+    "status": "ACTIVE",
+    "lifecycle_stage": "NEW",
+    "target_market": "ALL",
+    "created_at": "2026-03-08"
+  },
+  {
+    "product_id": "P0008",
+    "code": "SPU-00001",
+    "name": "速干充电线",
+    "name_en": "速干 Charging Cable",
+    "brand_id": "B0001",
+    "category_id": "CAT0011",
+    "status": "ACTIVE",
+    "lifecycle_stage": "MATURE",
+    "target_market": "JP",
+    "created_at": "2025-03-25"
+  },
+  {
+    "product_id": "P0009",
+    "code": "SPU-00001",
+    "name": "智能砧板",
+    "name_en": "智能 Cutting Board",
+    "brand_id": "B0002",
+    "category_id": "CAT0006",
+    "status": "ACTIVE",
+    "lifecycle_stage": "ACTIVE",
+    "target_market": "EU",
+    "created_at": "2025-04-25"
+  },
+  {
+    "product_id": "P0010",
+    "code": "SPU-00001",
+    "name": "耐用厨房秤",
+    "name_en": "耐用 Kitchen Scale",
+    "brand_id": "B0001",
+    "category_id": "CAT0003",
+    "status": "ACTIVE",
+    "lifecycle_stage": "ACTIVE",
+    "target_market": "EU",
+    "created_at": "2025-10-12"
+  }
+]

@@ -29,8 +29,8 @@ export function useSSE() {
     setCurrentRequestId(requestId)
 
     // 添加占位消息
-    addMessage('user', question, undefined, sessionId)
-    addMessage('assistant', '', undefined, sessionId)
+    addMessage('user', question, sessionId)
+    addMessage('assistant', '', sessionId)
 
     const streamEvents: SSEStreamEvent[] = []
     try {
@@ -47,7 +47,6 @@ export function useSSE() {
         if (evt.event === 'error') {
           replaceLastAssistant(
             `## ${evt.data.message}`,
-            undefined,
             sessionId,
           )
           setLoading(false)
@@ -59,7 +58,6 @@ export function useSSE() {
           const finalState = useChatStore.getState()
           replaceLastAssistant(
             finalState.deltaText || '(空回答)',
-            undefined,
             sessionId,
             evt.data.sources,
           )
@@ -73,13 +71,11 @@ export function useSSE() {
       if (finalState.deltaText) {
         replaceLastAssistant(
           finalState.deltaText + `\n\n---\n\n⚠️ **请求中断**: ${err.message || '未知错误'}`,
-          undefined,
           sessionId,
         )
       } else {
         replaceLastAssistant(
           `## 请求失败\n\n${err.message || '未知错误'}`,
-          undefined,
           sessionId,
         )
       }

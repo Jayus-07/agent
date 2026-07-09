@@ -1,0 +1,602 @@
+[
+  {
+    "health_id": "IH0001",
+    "sku_id": "SKU0001",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 148,
+    "sell_through_rate": 42.35,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-05-09T18:19:17.784632",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0002",
+    "sku_id": "SKU0001",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 11,
+    "sell_through_rate": 49.44,
+    "age_bucket": "31-90",
+    "last_sale_at": "2026-06-10T18:19:17.784632",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0003",
+    "sku_id": "SKU0002",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 72,
+    "sell_through_rate": 67.42,
+    "age_bucket": "31-90",
+    "last_sale_at": "2026-05-21T18:19:17.784632",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0004",
+    "sku_id": "SKU0002",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 96,
+    "sell_through_rate": 35.4,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-04-19T18:19:17.784632",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0005",
+    "sku_id": "SKU0003",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 46,
+    "sell_through_rate": 29.28,
+    "age_bucket": "0-30",
+    "last_sale_at": "2026-04-16T18:19:17.784632",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0006",
+    "sku_id": "SKU0003",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 179,
+    "sell_through_rate": 63.97,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-05-14T18:19:17.784632",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0007",
+    "sku_id": "SKU0004",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 67,
+    "sell_through_rate": 93.56,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-06-29T18:19:17.784632",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0008",
+    "sku_id": "SKU0004",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 115,
+    "sell_through_rate": 51.17,
+    "age_bucket": "31-90",
+    "last_sale_at": "2026-06-24T18:19:17.784632",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0009",
+    "sku_id": "SKU0005",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 113,
+    "sell_through_rate": 1.16,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-06-19T18:19:17.784632",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0010",
+    "sku_id": "SKU0005",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 36,
+    "sell_through_rate": 15.98,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-04-19T18:19:17.784632",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0011",
+    "sku_id": "SKU0006",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 62,
+    "sell_through_rate": 82.55,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-05-28T18:19:17.784632",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0012",
+    "sku_id": "SKU0006",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 138,
+    "sell_through_rate": 54.67,
+    "age_bucket": "0-30",
+    "last_sale_at": "2026-04-29T18:19:17.784632",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0013",
+    "sku_id": "SKU0007",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 68,
+    "sell_through_rate": 53.46,
+    "age_bucket": "31-90",
+    "last_sale_at": "2026-04-15T18:19:17.784632",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0014",
+    "sku_id": "SKU0007",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 111,
+    "sell_through_rate": 13.75,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-05-13T18:19:17.784632",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0015",
+    "sku_id": "SKU0008",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 122,
+    "sell_through_rate": 15.13,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-04-16T18:19:17.784632",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0016",
+    "sku_id": "SKU0008",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 108,
+    "sell_through_rate": 2.21,
+    "age_bucket": "0-30",
+    "last_sale_at": "2026-06-21T18:19:17.784632",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0017",
+    "sku_id": "SKU0009",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 18,
+    "sell_through_rate": 21.45,
+    "age_bucket": "0-30",
+    "last_sale_at": "2026-04-18T18:19:17.784632",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0018",
+    "sku_id": "SKU0009",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 63,
+    "sell_through_rate": 35.77,
+    "age_bucket": "31-90",
+    "last_sale_at": "2026-06-06T18:19:17.784632",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0019",
+    "sku_id": "SKU0010",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 104,
+    "sell_through_rate": 10.8,
+    "age_bucket": "31-90",
+    "last_sale_at": "2026-05-03T18:19:17.784632",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0020",
+    "sku_id": "SKU0010",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 104,
+    "sell_through_rate": 89.44,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-06-09T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0021",
+    "sku_id": "SKU0011",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 63,
+    "sell_through_rate": 4.38,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-05-22T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0022",
+    "sku_id": "SKU0011",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 142,
+    "sell_through_rate": 51.1,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-05-21T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0023",
+    "sku_id": "SKU0012",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 179,
+    "sell_through_rate": 2.19,
+    "age_bucket": "31-90",
+    "last_sale_at": "2026-05-17T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0024",
+    "sku_id": "SKU0012",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 71,
+    "sell_through_rate": 75.05,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-06-14T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0025",
+    "sku_id": "SKU0013",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 31,
+    "sell_through_rate": 61.63,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-05-23T18:19:17.785659",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0026",
+    "sku_id": "SKU0013",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 49,
+    "sell_through_rate": 69.7,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-06-29T18:19:17.785659",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0027",
+    "sku_id": "SKU0014",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 102,
+    "sell_through_rate": 84.51,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-05-02T18:19:17.785659",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0028",
+    "sku_id": "SKU0014",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 132,
+    "sell_through_rate": 12.68,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-04-17T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0029",
+    "sku_id": "SKU0015",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 137,
+    "sell_through_rate": 57.32,
+    "age_bucket": "0-30",
+    "last_sale_at": "2026-04-24T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0030",
+    "sku_id": "SKU0015",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 102,
+    "sell_through_rate": 46.17,
+    "age_bucket": "31-90",
+    "last_sale_at": "2026-06-20T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0031",
+    "sku_id": "SKU0016",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 69,
+    "sell_through_rate": 7.96,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-05-11T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0032",
+    "sku_id": "SKU0016",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 132,
+    "sell_through_rate": 84.78,
+    "age_bucket": "0-30",
+    "last_sale_at": "2026-06-04T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0033",
+    "sku_id": "SKU0017",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 159,
+    "sell_through_rate": 18.47,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-04-13T18:19:17.785659",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0034",
+    "sku_id": "SKU0017",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 67,
+    "sell_through_rate": 54.59,
+    "age_bucket": "31-90",
+    "last_sale_at": "2026-04-04T18:19:17.785659",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0035",
+    "sku_id": "SKU0018",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 148,
+    "sell_through_rate": 39.58,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-05-24T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0036",
+    "sku_id": "SKU0018",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 129,
+    "sell_through_rate": 38.12,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-04-05T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0037",
+    "sku_id": "SKU0019",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 23,
+    "sell_through_rate": 32.73,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-05-23T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0038",
+    "sku_id": "SKU0019",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 168,
+    "sell_through_rate": 4.93,
+    "age_bucket": "0-30",
+    "last_sale_at": "2026-04-15T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0039",
+    "sku_id": "SKU0020",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 34,
+    "sell_through_rate": 72.24,
+    "age_bucket": "31-90",
+    "last_sale_at": "2026-06-25T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0040",
+    "sku_id": "SKU0020",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 175,
+    "sell_through_rate": 78.1,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-06-01T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0041",
+    "sku_id": "SKU0021",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 178,
+    "sell_through_rate": 92.87,
+    "age_bucket": "0-30",
+    "last_sale_at": "2026-05-19T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0042",
+    "sku_id": "SKU0021",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 29,
+    "sell_through_rate": 7.04,
+    "age_bucket": "0-30",
+    "last_sale_at": "2026-05-09T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0043",
+    "sku_id": "SKU0022",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 174,
+    "sell_through_rate": 72.82,
+    "age_bucket": "31-90",
+    "last_sale_at": "2026-04-17T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0044",
+    "sku_id": "SKU0022",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 53,
+    "sell_through_rate": 42.12,
+    "age_bucket": "31-90",
+    "last_sale_at": "2026-05-11T18:19:17.785659",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0045",
+    "sku_id": "SKU0023",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 165,
+    "sell_through_rate": 12.58,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-05-22T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0046",
+    "sku_id": "SKU0023",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 95,
+    "sell_through_rate": 59.95,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-05-01T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0047",
+    "sku_id": "SKU0024",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 1,
+    "sell_through_rate": 4.92,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-06-15T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0048",
+    "sku_id": "SKU0024",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 76,
+    "sell_through_rate": 53.04,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-06-10T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0049",
+    "sku_id": "SKU0025",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 12,
+    "sell_through_rate": 29.33,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-05-15T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0050",
+    "sku_id": "SKU0025",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 174,
+    "sell_through_rate": 86.52,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-05-08T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0051",
+    "sku_id": "SKU0026",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 127,
+    "sell_through_rate": 41.05,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-05-08T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0052",
+    "sku_id": "SKU0026",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 41,
+    "sell_through_rate": 1.44,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-05-23T18:19:17.785659",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0053",
+    "sku_id": "SKU0027",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 108,
+    "sell_through_rate": 86.52,
+    "age_bucket": "180+",
+    "last_sale_at": "2026-05-07T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0054",
+    "sku_id": "SKU0027",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 87,
+    "sell_through_rate": 53.75,
+    "age_bucket": "0-30",
+    "last_sale_at": "2026-04-20T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0055",
+    "sku_id": "SKU0028",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 115,
+    "sell_through_rate": 78.25,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-05-23T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0056",
+    "sku_id": "SKU0028",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 49,
+    "sell_through_rate": 78.13,
+    "age_bucket": "0-30",
+    "last_sale_at": "2026-05-09T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0057",
+    "sku_id": "SKU0029",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 62,
+    "sell_through_rate": 85.7,
+    "age_bucket": "91-180",
+    "last_sale_at": "2026-05-30T18:19:17.785659",
+    "status": "HEALTHY"
+  },
+  {
+    "health_id": "IH0058",
+    "sku_id": "SKU0029",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 97,
+    "sell_through_rate": 78.33,
+    "age_bucket": "31-90",
+    "last_sale_at": "2026-05-10T18:19:17.785659",
+    "status": "SLOW"
+  },
+  {
+    "health_id": "IH0059",
+    "sku_id": "SKU0030",
+    "warehouse_id": "WH0001",
+    "days_of_supply": 179,
+    "sell_through_rate": 28.92,
+    "age_bucket": "0-30",
+    "last_sale_at": "2026-05-13T18:19:17.785659",
+    "status": "AGED"
+  },
+  {
+    "health_id": "IH0060",
+    "sku_id": "SKU0030",
+    "warehouse_id": "WH0002",
+    "days_of_supply": 154,
+    "sell_through_rate": 60.82,
+    "age_bucket": "31-90",
+    "last_sale_at": "2026-06-26T18:19:17.785659",
+    "status": "SLOW"
+  }
+]

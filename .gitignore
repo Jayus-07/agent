@@ -86,3 +86,5 @@ evaluation/results/
 =0.2.0
 *技术报告.md
 report_agent/data/
+# Added by code-review-graph
+.code-review-graph/

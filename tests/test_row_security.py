@@ -1,4 +1,4 @@
-"""RowSecurity 测试 — 行级安全注入"""
+"""RowSecurity 测试 — 行级安全注入（参数化版本）"""
 import pytest
 
 import sys, os
@@ -25,56 +25,78 @@ from sql_agent.row_security import inject_row_filter, RowSecurityError
 
 
 class TestRowSecurity:
-    """行级安全注入"""
+    """行级安全注入（参数化版本）"""
 
     def test_injects_user_id_filter(self):
+        """正常注入：SQL 出现列名 + params 字典持有值（值不进 SQL）"""
         sql = "SELECT * FROM tasks"
-        result = inject_row_filter(sql, {"current_user_id": 101})
-        assert "assignee_id" in result.lower()
-        assert "101" in result
+        new_sql, params = inject_row_filter(sql, {"current_user_id": 101})
+        assert "assignee_id" in new_sql.lower()
+        # 参数化：值 101 在 params 字典里，**不在 SQL 文本里**
+        assert params.get("tasks_assignee_id") == 101
+        assert "101" not in new_sql  # 关键：不进 SQL
+        assert "%(tasks_assignee_id)s" in new_sql  # 关键：占位符在
 
     def test_no_injection_for_public_table(self):
+        """非保护表不注入"""
         sql = "SELECT * FROM public_info"
-        result = inject_row_filter(sql, {"current_user_id": 101})
-        assert "assignee_id" not in result.lower()
-        assert "101" not in result  # 不应注入
+        new_sql, params = inject_row_filter(sql, {"current_user_id": 101})
+        assert "assignee_id" not in new_sql.lower()
+        assert params == {}  # 无参数
 
     def test_injection_with_existing_where(self):
+        """已有 WHERE 时正确合并"""
         sql = "SELECT * FROM tasks WHERE id > 5"
-        result = inject_row_filter(sql, {"current_user_id": 101})
-        assert "assignee_id" in result.lower()
-        assert "101" in result
-        assert "id > 5" in result.lower()
+        new_sql, params = inject_row_filter(sql, {"current_user_id": 101})
+        assert "assignee_id" in new_sql.lower()
+        assert params.get("tasks_assignee_id") == 101
+        assert "id > 5" in new_sql.lower()
 
-    def test_missing_param_skips_injection(self):
-        """缺少上下文参数时跳过该表"""
+    def test_missing_param_raises_strict(self):
+        """严格模式：受保护表缺少 param → 抛 RowSecurityError（不再静默跳过）"""
         sql = "SELECT * FROM tasks"
-        result = inject_row_filter(sql, {})  # 无 current_user_id
-        assert "assignee_id" not in result.lower()
+        with pytest.raises(RowSecurityError, match="行级安全要求参数"):
+            inject_row_filter(sql, {})  # 无 current_user_id
 
     def test_multi_table_injection(self):
-        """两张表都有行级安全时同时注入"""
+        """两张受保护表共享同一 param → 各自独立占位符，params 去重"""
         sql = "SELECT * FROM tasks JOIN notes ON tasks.id = notes.id"
-        result = inject_row_filter(sql, {"current_user_id": 202})
-        assert "assignee_id" in result.lower()
-        assert "author_id" in result.lower()
-        assert "202" in result
+        new_sql, params = inject_row_filter(sql, {"current_user_id": 202})
+        assert "assignee_id" in new_sql.lower()
+        assert "author_id" in new_sql.lower()
+        # 两个不同表 → 两个不同占位符
+        assert "tasks_assignee_id" in params
+        assert "notes_author_id" in params
+        # 值 202 不进 SQL 文本
+        assert "202" not in new_sql
+        assert "%(" in new_sql  # 占位符语法
 
     def test_original_sql_not_modified_for_no_match(self):
+        """非受保护表原样返回"""
         sql = "SELECT * FROM public_info"
-        result = inject_row_filter(sql, {"current_user_id": 99})
-        # public_info 没有策略，原样返回
-        assert result == sql
+        new_sql, params = inject_row_filter(sql, {"current_user_id": 99})
+        assert new_sql == sql
+        assert params == {}
 
     def test_sql_with_join_and_aliases(self):
         """JOIN 表别名场景"""
         sql = "SELECT t.id FROM tasks t WHERE t.id = 1"
-        result = inject_row_filter(sql, {"current_user_id": 303})
-        # 注入到别名表
-        assert "assignee_id" in result.lower()
+        new_sql, params = inject_row_filter(sql, {"current_user_id": 303})
+        assert "assignee_id" in new_sql.lower()
+        assert params.get("tasks_assignee_id") == 303
 
     def test_preserves_select_structure(self):
         """注入后仍是合法 SELECT"""
         sql = "SELECT id, title FROM tasks"
-        result = inject_row_filter(sql, {"current_user_id": 101})
-        assert result.upper().startswith("SELECT")
+        new_sql, params = inject_row_filter(sql, {"current_user_id": 101})
+        assert new_sql.upper().startswith("SELECT")
+
+    def test_placeholder_is_named_param_format(self):
+        """占位符是 psycopg2 %(name)s 格式"""
+        sql = "SELECT * FROM tasks"
+        new_sql, params = inject_row_filter(sql, {"current_user_id": 555})
+        # psycopg2 命名占位符格式: %(name)s
+        import re
+        assert re.search(r"%\([a-z_]+\)s", new_sql), f"期望命名占位符，实际: {new_sql}"
+        # 不应有裸 %s
+        assert re.search(r"%s\b(?!\w)", new_sql) is None or "%(" in new_sql

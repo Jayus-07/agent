@@ -1,0 +1,62 @@
+[
+  {
+    "campaign_id": "CAMP0001",
+    "ad_account_id": "2",
+    "name": "Campaign-事情-892",
+    "type": "PRODUCT_DISPLAY",
+    "status": "ACTIVE",
+    "daily_budget": 35.97,
+    "total_budget": 8349.7,
+    "start_date": "2026-07-01",
+    "end_date": null,
+    "target_market": "JP"
+  },
+  {
+    "campaign_id": "CAMP0002",
+    "ad_account_id": "2",
+    "name": "Campaign-标准-477",
+    "type": "BRAND",
+    "status": "ACTIVE",
+    "daily_budget": 199.23,
+    "total_budget": 2499.66,
+    "start_date": "2026-07-01",
+    "end_date": null,
+    "target_market": "EU"
+  },
+  {
+    "campaign_id": "CAMP0003",
+    "ad_account_id": "1",
+    "name": "Campaign-MESSAGE-192",
+    "type": "VIDEO",
+    "status": "ACTIVE",
+    "daily_budget": 23.1,
+    "total_budget": 3665.51,
+    "start_date": "2026-07-01",
+    "end_date": null,
+    "target_market": "JP"
+  },
+  {
+    "campaign_id": "CAMP0004",
+    "ad_account_id": "2",
+    "name": "Campaign-因为-353",
+    "type": "VIDEO",
+    "status": "PAUSED",
+    "daily_budget": 14.55,
+    "total_budget": 4825.67,
+    "start_date": "2026-07-01",
+    "end_date": null,
+    "target_market": "EU"
+  },
+  {
+    "campaign_id": "CAMP0005",
+    "ad_account_id": "1",
+    "name": "Campaign-现在-398",
+    "type": "VIDEO",
+    "status": "PAUSED",
+    "daily_budget": 144.71,
+    "total_budget": 4071.13,
+    "start_date": "2026-07-01",
+    "end_date": null,
+    "target_market": "US"
+  }
+]

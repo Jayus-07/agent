@@ -1,0 +1,3002 @@
+[
+  {
+    "spend_id": "SPD0001",
+    "ad_id": "AD0018",
+    "date": "2026-06-03",
+    "spend": 44.61,
+    "impressions": 8099,
+    "clicks": 171,
+    "conversions": 19,
+    "sales": 400.83
+  },
+  {
+    "spend_id": "SPD0002",
+    "ad_id": "AD0015",
+    "date": "2026-04-14",
+    "spend": 4.07,
+    "impressions": 2553,
+    "clicks": 85,
+    "conversions": 4,
+    "sales": 164.94
+  },
+  {
+    "spend_id": "SPD0003",
+    "ad_id": "AD0009",
+    "date": "2026-05-25",
+    "spend": 1.83,
+    "impressions": 2790,
+    "clicks": 40,
+    "conversions": 4,
+    "sales": 151.12
+  },
+  {
+    "spend_id": "SPD0004",
+    "ad_id": "AD0015",
+    "date": "2026-05-24",
+    "spend": 42.65,
+    "impressions": 6006,
+    "clicks": 147,
+    "conversions": 8,
+    "sales": 571.65
+  },
+  {
+    "spend_id": "SPD0005",
+    "ad_id": "AD0013",
+    "date": "2026-06-25",
+    "spend": 5.95,
+    "impressions": 6387,
+    "clicks": 102,
+    "conversions": 12,
+    "sales": 476.1
+  },
+  {
+    "spend_id": "SPD0006",
+    "ad_id": "AD0003",
+    "date": "2026-04-20",
+    "spend": 29.44,
+    "impressions": 5944,
+    "clicks": 226,
+    "conversions": 23,
+    "sales": 1680.97
+  },
+  {
+    "spend_id": "SPD0007",
+    "ad_id": "AD0011",
+    "date": "2026-05-17",
+    "spend": 29.34,
+    "impressions": 2687,
+    "clicks": 90,
+    "conversions": 7,
+    "sales": 304.6
+  },
+  {
+    "spend_id": "SPD0008",
+    "ad_id": "AD0009",
+    "date": "2026-06-20",
+    "spend": 15.28,
+    "impressions": 836,
+    "clicks": 5,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0009",
+    "ad_id": "AD0018",
+    "date": "2026-05-21",
+    "spend": 0.62,
+    "impressions": 3031,
+    "clicks": 116,
+    "conversions": 7,
+    "sales": 133.91
+  },
+  {
+    "spend_id": "SPD0010",
+    "ad_id": "AD0007",
+    "date": "2026-05-28",
+    "spend": 39.08,
+    "impressions": 4291,
+    "clicks": 190,
+    "conversions": 13,
+    "sales": 313.88
+  },
+  {
+    "spend_id": "SPD0011",
+    "ad_id": "AD0018",
+    "date": "2026-04-24",
+    "spend": 11.82,
+    "impressions": 113,
+    "clicks": 2,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0012",
+    "ad_id": "AD0003",
+    "date": "2026-05-30",
+    "spend": 46.29,
+    "impressions": 4621,
+    "clicks": 101,
+    "conversions": 11,
+    "sales": 224.84
+  },
+  {
+    "spend_id": "SPD0013",
+    "ad_id": "AD0016",
+    "date": "2026-05-25",
+    "spend": 29.22,
+    "impressions": 3343,
+    "clicks": 39,
+    "conversions": 1,
+    "sales": 31.95
+  },
+  {
+    "spend_id": "SPD0014",
+    "ad_id": "AD0019",
+    "date": "2026-05-04",
+    "spend": 26.54,
+    "impressions": 7744,
+    "clicks": 244,
+    "conversions": 14,
+    "sales": 267.81
+  },
+  {
+    "spend_id": "SPD0015",
+    "ad_id": "AD0001",
+    "date": "2026-05-25",
+    "spend": 1.19,
+    "impressions": 5379,
+    "clicks": 95,
+    "conversions": 7,
+    "sales": 401.04
+  },
+  {
+    "spend_id": "SPD0016",
+    "ad_id": "AD0014",
+    "date": "2026-06-19",
+    "spend": 25.93,
+    "impressions": 948,
+    "clicks": 34,
+    "conversions": 4,
+    "sales": 190.53
+  },
+  {
+    "spend_id": "SPD0017",
+    "ad_id": "AD0002",
+    "date": "2026-06-19",
+    "spend": 36.29,
+    "impressions": 8880,
+    "clicks": 236,
+    "conversions": 12,
+    "sales": 423.38
+  },
+  {
+    "spend_id": "SPD0018",
+    "ad_id": "AD0019",
+    "date": "2026-06-21",
+    "spend": 16.57,
+    "impressions": 1163,
+    "clicks": 18,
+    "conversions": 1,
+    "sales": 49.77
+  },
+  {
+    "spend_id": "SPD0019",
+    "ad_id": "AD0006",
+    "date": "2026-04-12",
+    "spend": 5.64,
+    "impressions": 342,
+    "clicks": 9,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0020",
+    "ad_id": "AD0004",
+    "date": "2026-06-26",
+    "spend": 30.95,
+    "impressions": 6741,
+    "clicks": 225,
+    "conversions": 13,
+    "sales": 449.51
+  },
+  {
+    "spend_id": "SPD0021",
+    "ad_id": "AD0011",
+    "date": "2026-05-04",
+    "spend": 42.03,
+    "impressions": 6760,
+    "clicks": 229,
+    "conversions": 23,
+    "sales": 348.44
+  },
+  {
+    "spend_id": "SPD0022",
+    "ad_id": "AD0014",
+    "date": "2026-04-18",
+    "spend": 33.0,
+    "impressions": 4104,
+    "clicks": 191,
+    "conversions": 21,
+    "sales": 823.17
+  },
+  {
+    "spend_id": "SPD0023",
+    "ad_id": "AD0009",
+    "date": "2026-06-09",
+    "spend": 35.48,
+    "impressions": 3314,
+    "clicks": 18,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0024",
+    "ad_id": "AD0002",
+    "date": "2026-06-08",
+    "spend": 47.97,
+    "impressions": 7173,
+    "clicks": 318,
+    "conversions": 46,
+    "sales": 2757.23
+  },
+  {
+    "spend_id": "SPD0025",
+    "ad_id": "AD0011",
+    "date": "2026-04-03",
+    "spend": 1.43,
+    "impressions": 5448,
+    "clicks": 251,
+    "conversions": 9,
+    "sales": 303.66
+  },
+  {
+    "spend_id": "SPD0026",
+    "ad_id": "AD0004",
+    "date": "2026-06-19",
+    "spend": 14.82,
+    "impressions": 2613,
+    "clicks": 16,
+    "conversions": 1,
+    "sales": 17.38
+  },
+  {
+    "spend_id": "SPD0027",
+    "ad_id": "AD0011",
+    "date": "2026-06-22",
+    "spend": 13.18,
+    "impressions": 9747,
+    "clicks": 297,
+    "conversions": 6,
+    "sales": 473.41
+  },
+  {
+    "spend_id": "SPD0028",
+    "ad_id": "AD0013",
+    "date": "2026-05-08",
+    "spend": 44.7,
+    "impressions": 3471,
+    "clicks": 149,
+    "conversions": 13,
+    "sales": 303.77
+  },
+  {
+    "spend_id": "SPD0029",
+    "ad_id": "AD0005",
+    "date": "2026-05-27",
+    "spend": 2.35,
+    "impressions": 5334,
+    "clicks": 82,
+    "conversions": 12,
+    "sales": 281.78
+  },
+  {
+    "spend_id": "SPD0030",
+    "ad_id": "AD0006",
+    "date": "2026-06-25",
+    "spend": 18.94,
+    "impressions": 2391,
+    "clicks": 82,
+    "conversions": 2,
+    "sales": 116.22
+  },
+  {
+    "spend_id": "SPD0031",
+    "ad_id": "AD0020",
+    "date": "2026-06-26",
+    "spend": 42.59,
+    "impressions": 1965,
+    "clicks": 76,
+    "conversions": 4,
+    "sales": 139.75
+  },
+  {
+    "spend_id": "SPD0032",
+    "ad_id": "AD0008",
+    "date": "2026-04-19",
+    "spend": 5.5,
+    "impressions": 3832,
+    "clicks": 129,
+    "conversions": 8,
+    "sales": 388.85
+  },
+  {
+    "spend_id": "SPD0033",
+    "ad_id": "AD0004",
+    "date": "2026-06-04",
+    "spend": 8.34,
+    "impressions": 9892,
+    "clicks": 162,
+    "conversions": 20,
+    "sales": 835.24
+  },
+  {
+    "spend_id": "SPD0034",
+    "ad_id": "AD0010",
+    "date": "2026-05-20",
+    "spend": 6.75,
+    "impressions": 5085,
+    "clicks": 67,
+    "conversions": 4,
+    "sales": 260.85
+  },
+  {
+    "spend_id": "SPD0035",
+    "ad_id": "AD0010",
+    "date": "2026-04-14",
+    "spend": 22.41,
+    "impressions": 181,
+    "clicks": 2,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0036",
+    "ad_id": "AD0007",
+    "date": "2026-05-28",
+    "spend": 9.11,
+    "impressions": 993,
+    "clicks": 37,
+    "conversions": 3,
+    "sales": 114.54
+  },
+  {
+    "spend_id": "SPD0037",
+    "ad_id": "AD0014",
+    "date": "2026-05-04",
+    "spend": 32.01,
+    "impressions": 7858,
+    "clicks": 260,
+    "conversions": 34,
+    "sales": 1045.93
+  },
+  {
+    "spend_id": "SPD0038",
+    "ad_id": "AD0019",
+    "date": "2026-04-22",
+    "spend": 32.03,
+    "impressions": 6006,
+    "clicks": 77,
+    "conversions": 6,
+    "sales": 180.5
+  },
+  {
+    "spend_id": "SPD0039",
+    "ad_id": "AD0013",
+    "date": "2026-06-20",
+    "spend": 17.06,
+    "impressions": 3009,
+    "clicks": 150,
+    "conversions": 22,
+    "sales": 908.13
+  },
+  {
+    "spend_id": "SPD0040",
+    "ad_id": "AD0011",
+    "date": "2026-04-20",
+    "spend": 42.43,
+    "impressions": 4482,
+    "clicks": 120,
+    "conversions": 16,
+    "sales": 1238.86
+  },
+  {
+    "spend_id": "SPD0041",
+    "ad_id": "AD0012",
+    "date": "2026-05-31",
+    "spend": 43.68,
+    "impressions": 8470,
+    "clicks": 65,
+    "conversions": 9,
+    "sales": 378.65
+  },
+  {
+    "spend_id": "SPD0042",
+    "ad_id": "AD0004",
+    "date": "2026-05-28",
+    "spend": 23.9,
+    "impressions": 6153,
+    "clicks": 91,
+    "conversions": 6,
+    "sales": 316.83
+  },
+  {
+    "spend_id": "SPD0043",
+    "ad_id": "AD0012",
+    "date": "2026-06-11",
+    "spend": 14.78,
+    "impressions": 7334,
+    "clicks": 293,
+    "conversions": 42,
+    "sales": 3151.98
+  },
+  {
+    "spend_id": "SPD0044",
+    "ad_id": "AD0013",
+    "date": "2026-05-07",
+    "spend": 36.12,
+    "impressions": 3922,
+    "clicks": 79,
+    "conversions": 7,
+    "sales": 422.93
+  },
+  {
+    "spend_id": "SPD0045",
+    "ad_id": "AD0014",
+    "date": "2026-06-15",
+    "spend": 38.21,
+    "impressions": 9546,
+    "clicks": 284,
+    "conversions": 18,
+    "sales": 562.31
+  },
+  {
+    "spend_id": "SPD0046",
+    "ad_id": "AD0010",
+    "date": "2026-06-06",
+    "spend": 43.93,
+    "impressions": 6461,
+    "clicks": 175,
+    "conversions": 16,
+    "sales": 549.72
+  },
+  {
+    "spend_id": "SPD0047",
+    "ad_id": "AD0011",
+    "date": "2026-05-02",
+    "spend": 4.55,
+    "impressions": 7598,
+    "clicks": 333,
+    "conversions": 36,
+    "sales": 1518.93
+  },
+  {
+    "spend_id": "SPD0048",
+    "ad_id": "AD0007",
+    "date": "2026-04-12",
+    "spend": 27.58,
+    "impressions": 3779,
+    "clicks": 73,
+    "conversions": 3,
+    "sales": 173.57
+  },
+  {
+    "spend_id": "SPD0049",
+    "ad_id": "AD0014",
+    "date": "2026-04-22",
+    "spend": 16.76,
+    "impressions": 7131,
+    "clicks": 114,
+    "conversions": 10,
+    "sales": 418.42
+  },
+  {
+    "spend_id": "SPD0050",
+    "ad_id": "AD0004",
+    "date": "2026-05-12",
+    "spend": 36.67,
+    "impressions": 2510,
+    "clicks": 45,
+    "conversions": 3,
+    "sales": 169.59
+  },
+  {
+    "spend_id": "SPD0051",
+    "ad_id": "AD0020",
+    "date": "2026-04-15",
+    "spend": 37.73,
+    "impressions": 9051,
+    "clicks": 365,
+    "conversions": 10,
+    "sales": 212.52
+  },
+  {
+    "spend_id": "SPD0052",
+    "ad_id": "AD0008",
+    "date": "2026-04-06",
+    "spend": 47.34,
+    "impressions": 1464,
+    "clicks": 14,
+    "conversions": 1,
+    "sales": 48.49
+  },
+  {
+    "spend_id": "SPD0053",
+    "ad_id": "AD0007",
+    "date": "2026-04-04",
+    "spend": 23.36,
+    "impressions": 578,
+    "clicks": 9,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0054",
+    "ad_id": "AD0005",
+    "date": "2026-05-14",
+    "spend": 3.42,
+    "impressions": 2820,
+    "clicks": 112,
+    "conversions": 13,
+    "sales": 991.82
+  },
+  {
+    "spend_id": "SPD0055",
+    "ad_id": "AD0009",
+    "date": "2026-04-24",
+    "spend": 30.87,
+    "impressions": 7996,
+    "clicks": 385,
+    "conversions": 52,
+    "sales": 844.55
+  },
+  {
+    "spend_id": "SPD0056",
+    "ad_id": "AD0005",
+    "date": "2026-05-13",
+    "spend": 36.73,
+    "impressions": 9501,
+    "clicks": 136,
+    "conversions": 5,
+    "sales": 114.81
+  },
+  {
+    "spend_id": "SPD0057",
+    "ad_id": "AD0010",
+    "date": "2026-05-12",
+    "spend": 39.3,
+    "impressions": 9801,
+    "clicks": 387,
+    "conversions": 47,
+    "sales": 2055.38
+  },
+  {
+    "spend_id": "SPD0058",
+    "ad_id": "AD0006",
+    "date": "2026-05-21",
+    "spend": 32.3,
+    "impressions": 2461,
+    "clicks": 95,
+    "conversions": 14,
+    "sales": 785.88
+  },
+  {
+    "spend_id": "SPD0059",
+    "ad_id": "AD0013",
+    "date": "2026-04-03",
+    "spend": 15.18,
+    "impressions": 6743,
+    "clicks": 95,
+    "conversions": 11,
+    "sales": 592.46
+  },
+  {
+    "spend_id": "SPD0060",
+    "ad_id": "AD0015",
+    "date": "2026-06-14",
+    "spend": 37.53,
+    "impressions": 9685,
+    "clicks": 423,
+    "conversions": 40,
+    "sales": 2938.12
+  },
+  {
+    "spend_id": "SPD0061",
+    "ad_id": "AD0001",
+    "date": "2026-06-04",
+    "spend": 20.07,
+    "impressions": 9482,
+    "clicks": 159,
+    "conversions": 20,
+    "sales": 403.9
+  },
+  {
+    "spend_id": "SPD0062",
+    "ad_id": "AD0004",
+    "date": "2026-06-08",
+    "spend": 32.28,
+    "impressions": 6379,
+    "clicks": 238,
+    "conversions": 22,
+    "sales": 456.46
+  },
+  {
+    "spend_id": "SPD0063",
+    "ad_id": "AD0014",
+    "date": "2026-05-05",
+    "spend": 49.48,
+    "impressions": 519,
+    "clicks": 12,
+    "conversions": 1,
+    "sales": 29.57
+  },
+  {
+    "spend_id": "SPD0064",
+    "ad_id": "AD0011",
+    "date": "2026-06-03",
+    "spend": 30.2,
+    "impressions": 638,
+    "clicks": 6,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0065",
+    "ad_id": "AD0019",
+    "date": "2026-06-28",
+    "spend": 6.12,
+    "impressions": 4145,
+    "clicks": 126,
+    "conversions": 6,
+    "sales": 318.19
+  },
+  {
+    "spend_id": "SPD0066",
+    "ad_id": "AD0003",
+    "date": "2026-06-07",
+    "spend": 11.71,
+    "impressions": 4559,
+    "clicks": 222,
+    "conversions": 10,
+    "sales": 746.47
+  },
+  {
+    "spend_id": "SPD0067",
+    "ad_id": "AD0014",
+    "date": "2026-05-01",
+    "spend": 33.01,
+    "impressions": 3460,
+    "clicks": 166,
+    "conversions": 9,
+    "sales": 599.82
+  },
+  {
+    "spend_id": "SPD0068",
+    "ad_id": "AD0010",
+    "date": "2026-06-26",
+    "spend": 41.36,
+    "impressions": 9037,
+    "clicks": 369,
+    "conversions": 20,
+    "sales": 1246.88
+  },
+  {
+    "spend_id": "SPD0069",
+    "ad_id": "AD0003",
+    "date": "2026-05-07",
+    "spend": 24.93,
+    "impressions": 3647,
+    "clicks": 24,
+    "conversions": 3,
+    "sales": 222.2
+  },
+  {
+    "spend_id": "SPD0070",
+    "ad_id": "AD0003",
+    "date": "2026-06-18",
+    "spend": 20.32,
+    "impressions": 4735,
+    "clicks": 146,
+    "conversions": 16,
+    "sales": 929.43
+  },
+  {
+    "spend_id": "SPD0071",
+    "ad_id": "AD0003",
+    "date": "2026-06-28",
+    "spend": 2.85,
+    "impressions": 5204,
+    "clicks": 179,
+    "conversions": 25,
+    "sales": 1827.15
+  },
+  {
+    "spend_id": "SPD0072",
+    "ad_id": "AD0002",
+    "date": "2026-06-12",
+    "spend": 26.72,
+    "impressions": 6935,
+    "clicks": 300,
+    "conversions": 42,
+    "sales": 1733.46
+  },
+  {
+    "spend_id": "SPD0073",
+    "ad_id": "AD0018",
+    "date": "2026-06-27",
+    "spend": 37.53,
+    "impressions": 1285,
+    "clicks": 57,
+    "conversions": 5,
+    "sales": 155.1
+  },
+  {
+    "spend_id": "SPD0074",
+    "ad_id": "AD0005",
+    "date": "2026-06-16",
+    "spend": 47.76,
+    "impressions": 3386,
+    "clicks": 56,
+    "conversions": 7,
+    "sales": 530.21
+  },
+  {
+    "spend_id": "SPD0075",
+    "ad_id": "AD0010",
+    "date": "2026-04-22",
+    "spend": 13.43,
+    "impressions": 2654,
+    "clicks": 132,
+    "conversions": 6,
+    "sales": 167.02
+  },
+  {
+    "spend_id": "SPD0076",
+    "ad_id": "AD0014",
+    "date": "2026-06-24",
+    "spend": 34.92,
+    "impressions": 9364,
+    "clicks": 461,
+    "conversions": 14,
+    "sales": 971.97
+  },
+  {
+    "spend_id": "SPD0077",
+    "ad_id": "AD0019",
+    "date": "2026-06-19",
+    "spend": 10.67,
+    "impressions": 9005,
+    "clicks": 199,
+    "conversions": 6,
+    "sales": 397.01
+  },
+  {
+    "spend_id": "SPD0078",
+    "ad_id": "AD0004",
+    "date": "2026-04-03",
+    "spend": 44.25,
+    "impressions": 8218,
+    "clicks": 83,
+    "conversions": 11,
+    "sales": 724.62
+  },
+  {
+    "spend_id": "SPD0079",
+    "ad_id": "AD0004",
+    "date": "2026-04-18",
+    "spend": 34.25,
+    "impressions": 365,
+    "clicks": 18,
+    "conversions": 1,
+    "sales": 45.16
+  },
+  {
+    "spend_id": "SPD0080",
+    "ad_id": "AD0001",
+    "date": "2026-06-11",
+    "spend": 48.55,
+    "impressions": 8632,
+    "clicks": 258,
+    "conversions": 27,
+    "sales": 912.77
+  },
+  {
+    "spend_id": "SPD0081",
+    "ad_id": "AD0004",
+    "date": "2026-06-15",
+    "spend": 42.1,
+    "impressions": 7626,
+    "clicks": 330,
+    "conversions": 19,
+    "sales": 453.85
+  },
+  {
+    "spend_id": "SPD0082",
+    "ad_id": "AD0016",
+    "date": "2026-04-03",
+    "spend": 4.22,
+    "impressions": 3591,
+    "clicks": 174,
+    "conversions": 14,
+    "sales": 674.17
+  },
+  {
+    "spend_id": "SPD0083",
+    "ad_id": "AD0016",
+    "date": "2026-05-14",
+    "spend": 15.08,
+    "impressions": 7123,
+    "clicks": 95,
+    "conversions": 2,
+    "sales": 102.03
+  },
+  {
+    "spend_id": "SPD0084",
+    "ad_id": "AD0003",
+    "date": "2026-06-27",
+    "spend": 45.94,
+    "impressions": 8280,
+    "clicks": 153,
+    "conversions": 22,
+    "sales": 1270.4
+  },
+  {
+    "spend_id": "SPD0085",
+    "ad_id": "AD0013",
+    "date": "2026-06-16",
+    "spend": 39.23,
+    "impressions": 4790,
+    "clicks": 60,
+    "conversions": 6,
+    "sales": 136.4
+  },
+  {
+    "spend_id": "SPD0086",
+    "ad_id": "AD0010",
+    "date": "2026-06-25",
+    "spend": 4.27,
+    "impressions": 3990,
+    "clicks": 34,
+    "conversions": 2,
+    "sales": 73.09
+  },
+  {
+    "spend_id": "SPD0087",
+    "ad_id": "AD0014",
+    "date": "2026-04-16",
+    "spend": 33.34,
+    "impressions": 3139,
+    "clicks": 70,
+    "conversions": 5,
+    "sales": 157.31
+  },
+  {
+    "spend_id": "SPD0088",
+    "ad_id": "AD0012",
+    "date": "2026-05-19",
+    "spend": 8.78,
+    "impressions": 5394,
+    "clicks": 69,
+    "conversions": 7,
+    "sales": 441.52
+  },
+  {
+    "spend_id": "SPD0089",
+    "ad_id": "AD0003",
+    "date": "2026-07-01",
+    "spend": 7.38,
+    "impressions": 6052,
+    "clicks": 107,
+    "conversions": 12,
+    "sales": 230.7
+  },
+  {
+    "spend_id": "SPD0090",
+    "ad_id": "AD0015",
+    "date": "2026-04-18",
+    "spend": 27.37,
+    "impressions": 4620,
+    "clicks": 131,
+    "conversions": 18,
+    "sales": 689.9
+  },
+  {
+    "spend_id": "SPD0091",
+    "ad_id": "AD0013",
+    "date": "2026-04-15",
+    "spend": 14.48,
+    "impressions": 9442,
+    "clicks": 464,
+    "conversions": 45,
+    "sales": 3544.9
+  },
+  {
+    "spend_id": "SPD0092",
+    "ad_id": "AD0001",
+    "date": "2026-05-15",
+    "spend": 5.75,
+    "impressions": 5682,
+    "clicks": 139,
+    "conversions": 9,
+    "sales": 523.09
+  },
+  {
+    "spend_id": "SPD0093",
+    "ad_id": "AD0013",
+    "date": "2026-06-05",
+    "spend": 18.6,
+    "impressions": 8371,
+    "clicks": 153,
+    "conversions": 5,
+    "sales": 396.92
+  },
+  {
+    "spend_id": "SPD0094",
+    "ad_id": "AD0015",
+    "date": "2026-04-11",
+    "spend": 36.36,
+    "impressions": 7565,
+    "clicks": 90,
+    "conversions": 6,
+    "sales": 386.56
+  },
+  {
+    "spend_id": "SPD0095",
+    "ad_id": "AD0012",
+    "date": "2026-05-11",
+    "spend": 18.66,
+    "impressions": 4343,
+    "clicks": 96,
+    "conversions": 2,
+    "sales": 32.93
+  },
+  {
+    "spend_id": "SPD0096",
+    "ad_id": "AD0002",
+    "date": "2026-06-21",
+    "spend": 15.06,
+    "impressions": 4596,
+    "clicks": 45,
+    "conversions": 2,
+    "sales": 158.29
+  },
+  {
+    "spend_id": "SPD0097",
+    "ad_id": "AD0013",
+    "date": "2026-04-27",
+    "spend": 32.59,
+    "impressions": 6997,
+    "clicks": 306,
+    "conversions": 16,
+    "sales": 1058.95
+  },
+  {
+    "spend_id": "SPD0098",
+    "ad_id": "AD0017",
+    "date": "2026-05-06",
+    "spend": 39.01,
+    "impressions": 1781,
+    "clicks": 79,
+    "conversions": 1,
+    "sales": 56.48
+  },
+  {
+    "spend_id": "SPD0099",
+    "ad_id": "AD0014",
+    "date": "2026-05-10",
+    "spend": 27.3,
+    "impressions": 1066,
+    "clicks": 37,
+    "conversions": 5,
+    "sales": 336.37
+  },
+  {
+    "spend_id": "SPD0100",
+    "ad_id": "AD0004",
+    "date": "2026-04-30",
+    "spend": 7.21,
+    "impressions": 2405,
+    "clicks": 12,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0101",
+    "ad_id": "AD0004",
+    "date": "2026-06-16",
+    "spend": 17.88,
+    "impressions": 2743,
+    "clicks": 30,
+    "conversions": 1,
+    "sales": 24.63
+  },
+  {
+    "spend_id": "SPD0102",
+    "ad_id": "AD0006",
+    "date": "2026-04-21",
+    "spend": 8.17,
+    "impressions": 315,
+    "clicks": 9,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0103",
+    "ad_id": "AD0017",
+    "date": "2026-06-07",
+    "spend": 18.22,
+    "impressions": 9783,
+    "clicks": 311,
+    "conversions": 7,
+    "sales": 229.18
+  },
+  {
+    "spend_id": "SPD0104",
+    "ad_id": "AD0002",
+    "date": "2026-04-22",
+    "spend": 13.76,
+    "impressions": 1997,
+    "clicks": 30,
+    "conversions": 4,
+    "sales": 86.46
+  },
+  {
+    "spend_id": "SPD0105",
+    "ad_id": "AD0004",
+    "date": "2026-05-31",
+    "spend": 17.68,
+    "impressions": 586,
+    "clicks": 24,
+    "conversions": 3,
+    "sales": 106.31
+  },
+  {
+    "spend_id": "SPD0106",
+    "ad_id": "AD0011",
+    "date": "2026-05-06",
+    "spend": 46.42,
+    "impressions": 2798,
+    "clicks": 110,
+    "conversions": 9,
+    "sales": 211.78
+  },
+  {
+    "spend_id": "SPD0107",
+    "ad_id": "AD0001",
+    "date": "2026-05-07",
+    "spend": 14.82,
+    "impressions": 5988,
+    "clicks": 287,
+    "conversions": 26,
+    "sales": 459.18
+  },
+  {
+    "spend_id": "SPD0108",
+    "ad_id": "AD0015",
+    "date": "2026-04-25",
+    "spend": 12.39,
+    "impressions": 2191,
+    "clicks": 102,
+    "conversions": 2,
+    "sales": 39.46
+  },
+  {
+    "spend_id": "SPD0109",
+    "ad_id": "AD0010",
+    "date": "2026-06-18",
+    "spend": 31.29,
+    "impressions": 5497,
+    "clicks": 87,
+    "conversions": 2,
+    "sales": 73.28
+  },
+  {
+    "spend_id": "SPD0110",
+    "ad_id": "AD0005",
+    "date": "2026-04-27",
+    "spend": 38.17,
+    "impressions": 1666,
+    "clicks": 78,
+    "conversions": 4,
+    "sales": 182.08
+  },
+  {
+    "spend_id": "SPD0111",
+    "ad_id": "AD0014",
+    "date": "2026-05-04",
+    "spend": 14.75,
+    "impressions": 2211,
+    "clicks": 65,
+    "conversions": 2,
+    "sales": 113.4
+  },
+  {
+    "spend_id": "SPD0112",
+    "ad_id": "AD0018",
+    "date": "2026-04-14",
+    "spend": 11.55,
+    "impressions": 6416,
+    "clicks": 96,
+    "conversions": 6,
+    "sales": 472.72
+  },
+  {
+    "spend_id": "SPD0113",
+    "ad_id": "AD0018",
+    "date": "2026-04-10",
+    "spend": 35.66,
+    "impressions": 508,
+    "clicks": 17,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0114",
+    "ad_id": "AD0004",
+    "date": "2026-04-07",
+    "spend": 7.72,
+    "impressions": 3735,
+    "clicks": 157,
+    "conversions": 15,
+    "sales": 1107.28
+  },
+  {
+    "spend_id": "SPD0115",
+    "ad_id": "AD0015",
+    "date": "2026-05-30",
+    "spend": 46.59,
+    "impressions": 4024,
+    "clicks": 168,
+    "conversions": 12,
+    "sales": 629.05
+  },
+  {
+    "spend_id": "SPD0116",
+    "ad_id": "AD0011",
+    "date": "2026-05-20",
+    "spend": 27.85,
+    "impressions": 5743,
+    "clicks": 265,
+    "conversions": 32,
+    "sales": 1712.1
+  },
+  {
+    "spend_id": "SPD0117",
+    "ad_id": "AD0010",
+    "date": "2026-04-03",
+    "spend": 38.52,
+    "impressions": 9024,
+    "clicks": 353,
+    "conversions": 15,
+    "sales": 1097.42
+  },
+  {
+    "spend_id": "SPD0118",
+    "ad_id": "AD0001",
+    "date": "2026-05-09",
+    "spend": 30.34,
+    "impressions": 7143,
+    "clicks": 217,
+    "conversions": 5,
+    "sales": 171.86
+  },
+  {
+    "spend_id": "SPD0119",
+    "ad_id": "AD0005",
+    "date": "2026-04-26",
+    "spend": 30.58,
+    "impressions": 9000,
+    "clicks": 218,
+    "conversions": 15,
+    "sales": 934.69
+  },
+  {
+    "spend_id": "SPD0120",
+    "ad_id": "AD0013",
+    "date": "2026-05-20",
+    "spend": 21.31,
+    "impressions": 4041,
+    "clicks": 62,
+    "conversions": 7,
+    "sales": 273.92
+  },
+  {
+    "spend_id": "SPD0121",
+    "ad_id": "AD0002",
+    "date": "2026-06-21",
+    "spend": 20.25,
+    "impressions": 2457,
+    "clicks": 61,
+    "conversions": 1,
+    "sales": 29.47
+  },
+  {
+    "spend_id": "SPD0122",
+    "ad_id": "AD0018",
+    "date": "2026-06-23",
+    "spend": 15.29,
+    "impressions": 9141,
+    "clicks": 69,
+    "conversions": 4,
+    "sales": 225.1
+  },
+  {
+    "spend_id": "SPD0123",
+    "ad_id": "AD0017",
+    "date": "2026-05-27",
+    "spend": 10.13,
+    "impressions": 6628,
+    "clicks": 216,
+    "conversions": 8,
+    "sales": 438.69
+  },
+  {
+    "spend_id": "SPD0124",
+    "ad_id": "AD0013",
+    "date": "2026-05-25",
+    "spend": 13.83,
+    "impressions": 7633,
+    "clicks": 303,
+    "conversions": 25,
+    "sales": 1852.77
+  },
+  {
+    "spend_id": "SPD0125",
+    "ad_id": "AD0011",
+    "date": "2026-06-30",
+    "spend": 26.81,
+    "impressions": 3117,
+    "clicks": 49,
+    "conversions": 1,
+    "sales": 31.28
+  },
+  {
+    "spend_id": "SPD0126",
+    "ad_id": "AD0007",
+    "date": "2026-05-24",
+    "spend": 25.86,
+    "impressions": 622,
+    "clicks": 10,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0127",
+    "ad_id": "AD0004",
+    "date": "2026-05-20",
+    "spend": 17.43,
+    "impressions": 6626,
+    "clicks": 212,
+    "conversions": 13,
+    "sales": 480.64
+  },
+  {
+    "spend_id": "SPD0128",
+    "ad_id": "AD0015",
+    "date": "2026-05-26",
+    "spend": 42.37,
+    "impressions": 9683,
+    "clicks": 452,
+    "conversions": 31,
+    "sales": 2145.7
+  },
+  {
+    "spend_id": "SPD0129",
+    "ad_id": "AD0019",
+    "date": "2026-05-14",
+    "spend": 1.24,
+    "impressions": 4647,
+    "clicks": 57,
+    "conversions": 4,
+    "sales": 122.18
+  },
+  {
+    "spend_id": "SPD0130",
+    "ad_id": "AD0007",
+    "date": "2026-06-03",
+    "spend": 33.03,
+    "impressions": 5636,
+    "clicks": 199,
+    "conversions": 11,
+    "sales": 294.62
+  },
+  {
+    "spend_id": "SPD0131",
+    "ad_id": "AD0008",
+    "date": "2026-06-21",
+    "spend": 16.45,
+    "impressions": 8911,
+    "clicks": 414,
+    "conversions": 15,
+    "sales": 602.2
+  },
+  {
+    "spend_id": "SPD0132",
+    "ad_id": "AD0002",
+    "date": "2026-05-27",
+    "spend": 1.5,
+    "impressions": 2390,
+    "clicks": 77,
+    "conversions": 5,
+    "sales": 369.07
+  },
+  {
+    "spend_id": "SPD0133",
+    "ad_id": "AD0020",
+    "date": "2026-04-16",
+    "spend": 4.99,
+    "impressions": 2687,
+    "clicks": 25,
+    "conversions": 1,
+    "sales": 25.2
+  },
+  {
+    "spend_id": "SPD0134",
+    "ad_id": "AD0005",
+    "date": "2026-06-15",
+    "spend": 1.81,
+    "impressions": 1525,
+    "clicks": 35,
+    "conversions": 3,
+    "sales": 194.97
+  },
+  {
+    "spend_id": "SPD0135",
+    "ad_id": "AD0004",
+    "date": "2026-05-17",
+    "spend": 34.38,
+    "impressions": 9772,
+    "clicks": 126,
+    "conversions": 9,
+    "sales": 488.41
+  },
+  {
+    "spend_id": "SPD0136",
+    "ad_id": "AD0016",
+    "date": "2026-07-01",
+    "spend": 20.11,
+    "impressions": 2167,
+    "clicks": 90,
+    "conversions": 10,
+    "sales": 781.26
+  },
+  {
+    "spend_id": "SPD0137",
+    "ad_id": "AD0004",
+    "date": "2026-06-02",
+    "spend": 29.53,
+    "impressions": 8293,
+    "clicks": 58,
+    "conversions": 5,
+    "sales": 379.73
+  },
+  {
+    "spend_id": "SPD0138",
+    "ad_id": "AD0012",
+    "date": "2026-07-01",
+    "spend": 9.65,
+    "impressions": 838,
+    "clicks": 19,
+    "conversions": 2,
+    "sales": 36.34
+  },
+  {
+    "spend_id": "SPD0139",
+    "ad_id": "AD0019",
+    "date": "2026-06-01",
+    "spend": 32.33,
+    "impressions": 3567,
+    "clicks": 77,
+    "conversions": 3,
+    "sales": 162.82
+  },
+  {
+    "spend_id": "SPD0140",
+    "ad_id": "AD0003",
+    "date": "2026-04-15",
+    "spend": 3.56,
+    "impressions": 1052,
+    "clicks": 35,
+    "conversions": 1,
+    "sales": 52.81
+  },
+  {
+    "spend_id": "SPD0141",
+    "ad_id": "AD0011",
+    "date": "2026-05-07",
+    "spend": 5.42,
+    "impressions": 2495,
+    "clicks": 33,
+    "conversions": 2,
+    "sales": 123.02
+  },
+  {
+    "spend_id": "SPD0142",
+    "ad_id": "AD0009",
+    "date": "2026-04-03",
+    "spend": 24.87,
+    "impressions": 8523,
+    "clicks": 326,
+    "conversions": 21,
+    "sales": 1133.59
+  },
+  {
+    "spend_id": "SPD0143",
+    "ad_id": "AD0001",
+    "date": "2026-05-05",
+    "spend": 29.18,
+    "impressions": 2436,
+    "clicks": 37,
+    "conversions": 2,
+    "sales": 131.35
+  },
+  {
+    "spend_id": "SPD0144",
+    "ad_id": "AD0007",
+    "date": "2026-06-14",
+    "spend": 37.27,
+    "impressions": 1457,
+    "clicks": 70,
+    "conversions": 7,
+    "sales": 318.27
+  },
+  {
+    "spend_id": "SPD0145",
+    "ad_id": "AD0018",
+    "date": "2026-06-22",
+    "spend": 14.6,
+    "impressions": 6274,
+    "clicks": 113,
+    "conversions": 13,
+    "sales": 903.0
+  },
+  {
+    "spend_id": "SPD0146",
+    "ad_id": "AD0015",
+    "date": "2026-06-30",
+    "spend": 39.23,
+    "impressions": 2037,
+    "clicks": 66,
+    "conversions": 9,
+    "sales": 341.36
+  },
+  {
+    "spend_id": "SPD0147",
+    "ad_id": "AD0020",
+    "date": "2026-04-03",
+    "spend": 45.67,
+    "impressions": 1415,
+    "clicks": 49,
+    "conversions": 7,
+    "sales": 299.7
+  },
+  {
+    "spend_id": "SPD0148",
+    "ad_id": "AD0014",
+    "date": "2026-05-08",
+    "spend": 17.33,
+    "impressions": 5745,
+    "clicks": 74,
+    "conversions": 6,
+    "sales": 439.57
+  },
+  {
+    "spend_id": "SPD0149",
+    "ad_id": "AD0014",
+    "date": "2026-06-23",
+    "spend": 6.69,
+    "impressions": 9528,
+    "clicks": 116,
+    "conversions": 3,
+    "sales": 181.56
+  },
+  {
+    "spend_id": "SPD0150",
+    "ad_id": "AD0011",
+    "date": "2026-05-01",
+    "spend": 27.6,
+    "impressions": 6764,
+    "clicks": 235,
+    "conversions": 29,
+    "sales": 1613.03
+  },
+  {
+    "spend_id": "SPD0151",
+    "ad_id": "AD0005",
+    "date": "2026-06-15",
+    "spend": 12.67,
+    "impressions": 1965,
+    "clicks": 44,
+    "conversions": 4,
+    "sales": 236.74
+  },
+  {
+    "spend_id": "SPD0152",
+    "ad_id": "AD0015",
+    "date": "2026-06-28",
+    "spend": 19.63,
+    "impressions": 7928,
+    "clicks": 265,
+    "conversions": 12,
+    "sales": 371.94
+  },
+  {
+    "spend_id": "SPD0153",
+    "ad_id": "AD0005",
+    "date": "2026-06-06",
+    "spend": 34.36,
+    "impressions": 2116,
+    "clicks": 61,
+    "conversions": 5,
+    "sales": 98.27
+  },
+  {
+    "spend_id": "SPD0154",
+    "ad_id": "AD0005",
+    "date": "2026-05-14",
+    "spend": 41.03,
+    "impressions": 8567,
+    "clicks": 320,
+    "conversions": 33,
+    "sales": 1283.58
+  },
+  {
+    "spend_id": "SPD0155",
+    "ad_id": "AD0008",
+    "date": "2026-04-29",
+    "spend": 4.65,
+    "impressions": 4786,
+    "clicks": 206,
+    "conversions": 20,
+    "sales": 550.33
+  },
+  {
+    "spend_id": "SPD0156",
+    "ad_id": "AD0002",
+    "date": "2026-06-28",
+    "spend": 46.98,
+    "impressions": 4111,
+    "clicks": 104,
+    "conversions": 6,
+    "sales": 444.25
+  },
+  {
+    "spend_id": "SPD0157",
+    "ad_id": "AD0019",
+    "date": "2026-04-24",
+    "spend": 28.45,
+    "impressions": 2533,
+    "clicks": 112,
+    "conversions": 12,
+    "sales": 237.06
+  },
+  {
+    "spend_id": "SPD0158",
+    "ad_id": "AD0005",
+    "date": "2026-05-29",
+    "spend": 22.15,
+    "impressions": 9921,
+    "clicks": 343,
+    "conversions": 29,
+    "sales": 1151.49
+  },
+  {
+    "spend_id": "SPD0159",
+    "ad_id": "AD0020",
+    "date": "2026-06-05",
+    "spend": 6.78,
+    "impressions": 7943,
+    "clicks": 309,
+    "conversions": 27,
+    "sales": 857.54
+  },
+  {
+    "spend_id": "SPD0160",
+    "ad_id": "AD0016",
+    "date": "2026-04-08",
+    "spend": 27.91,
+    "impressions": 8241,
+    "clicks": 194,
+    "conversions": 18,
+    "sales": 1302.39
+  },
+  {
+    "spend_id": "SPD0161",
+    "ad_id": "AD0011",
+    "date": "2026-06-05",
+    "spend": 46.01,
+    "impressions": 2384,
+    "clicks": 16,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0162",
+    "ad_id": "AD0001",
+    "date": "2026-05-13",
+    "spend": 40.29,
+    "impressions": 2781,
+    "clicks": 101,
+    "conversions": 7,
+    "sales": 188.72
+  },
+  {
+    "spend_id": "SPD0163",
+    "ad_id": "AD0015",
+    "date": "2026-06-03",
+    "spend": 43.64,
+    "impressions": 6142,
+    "clicks": 48,
+    "conversions": 1,
+    "sales": 26.9
+  },
+  {
+    "spend_id": "SPD0164",
+    "ad_id": "AD0009",
+    "date": "2026-05-22",
+    "spend": 47.18,
+    "impressions": 3714,
+    "clicks": 179,
+    "conversions": 24,
+    "sales": 1122.85
+  },
+  {
+    "spend_id": "SPD0165",
+    "ad_id": "AD0012",
+    "date": "2026-04-06",
+    "spend": 19.92,
+    "impressions": 6422,
+    "clicks": 209,
+    "conversions": 30,
+    "sales": 957.35
+  },
+  {
+    "spend_id": "SPD0166",
+    "ad_id": "AD0015",
+    "date": "2026-04-27",
+    "spend": 15.03,
+    "impressions": 7077,
+    "clicks": 86,
+    "conversions": 4,
+    "sales": 268.56
+  },
+  {
+    "spend_id": "SPD0167",
+    "ad_id": "AD0010",
+    "date": "2026-05-15",
+    "spend": 41.61,
+    "impressions": 455,
+    "clicks": 8,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0168",
+    "ad_id": "AD0014",
+    "date": "2026-04-18",
+    "spend": 6.92,
+    "impressions": 9397,
+    "clicks": 224,
+    "conversions": 15,
+    "sales": 1130.59
+  },
+  {
+    "spend_id": "SPD0169",
+    "ad_id": "AD0004",
+    "date": "2026-06-13",
+    "spend": 41.01,
+    "impressions": 988,
+    "clicks": 43,
+    "conversions": 5,
+    "sales": 318.98
+  },
+  {
+    "spend_id": "SPD0170",
+    "ad_id": "AD0014",
+    "date": "2026-04-29",
+    "spend": 9.38,
+    "impressions": 3891,
+    "clicks": 148,
+    "conversions": 16,
+    "sales": 878.44
+  },
+  {
+    "spend_id": "SPD0171",
+    "ad_id": "AD0019",
+    "date": "2026-06-04",
+    "spend": 13.24,
+    "impressions": 4512,
+    "clicks": 198,
+    "conversions": 5,
+    "sales": 262.05
+  },
+  {
+    "spend_id": "SPD0172",
+    "ad_id": "AD0010",
+    "date": "2026-05-07",
+    "spend": 43.5,
+    "impressions": 6182,
+    "clicks": 281,
+    "conversions": 12,
+    "sales": 794.19
+  },
+  {
+    "spend_id": "SPD0173",
+    "ad_id": "AD0010",
+    "date": "2026-04-29",
+    "spend": 23.34,
+    "impressions": 202,
+    "clicks": 3,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0174",
+    "ad_id": "AD0019",
+    "date": "2026-05-03",
+    "spend": 42.97,
+    "impressions": 2343,
+    "clicks": 51,
+    "conversions": 6,
+    "sales": 203.61
+  },
+  {
+    "spend_id": "SPD0175",
+    "ad_id": "AD0002",
+    "date": "2026-05-04",
+    "spend": 1.7,
+    "impressions": 3871,
+    "clicks": 132,
+    "conversions": 11,
+    "sales": 231.93
+  },
+  {
+    "spend_id": "SPD0176",
+    "ad_id": "AD0015",
+    "date": "2026-04-21",
+    "spend": 34.19,
+    "impressions": 2459,
+    "clicks": 97,
+    "conversions": 4,
+    "sales": 227.73
+  },
+  {
+    "spend_id": "SPD0177",
+    "ad_id": "AD0005",
+    "date": "2026-04-04",
+    "spend": 3.28,
+    "impressions": 9396,
+    "clicks": 342,
+    "conversions": 18,
+    "sales": 344.92
+  },
+  {
+    "spend_id": "SPD0178",
+    "ad_id": "AD0013",
+    "date": "2026-04-30",
+    "spend": 20.31,
+    "impressions": 7395,
+    "clicks": 40,
+    "conversions": 1,
+    "sales": 55.96
+  },
+  {
+    "spend_id": "SPD0179",
+    "ad_id": "AD0005",
+    "date": "2026-04-26",
+    "spend": 21.6,
+    "impressions": 171,
+    "clicks": 1,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0180",
+    "ad_id": "AD0005",
+    "date": "2026-06-28",
+    "spend": 41.17,
+    "impressions": 902,
+    "clicks": 40,
+    "conversions": 4,
+    "sales": 194.68
+  },
+  {
+    "spend_id": "SPD0181",
+    "ad_id": "AD0017",
+    "date": "2026-05-28",
+    "spend": 6.76,
+    "impressions": 4247,
+    "clicks": 169,
+    "conversions": 22,
+    "sales": 621.06
+  },
+  {
+    "spend_id": "SPD0182",
+    "ad_id": "AD0007",
+    "date": "2026-05-08",
+    "spend": 42.53,
+    "impressions": 9541,
+    "clicks": 211,
+    "conversions": 30,
+    "sales": 1443.54
+  },
+  {
+    "spend_id": "SPD0183",
+    "ad_id": "AD0018",
+    "date": "2026-04-15",
+    "spend": 20.57,
+    "impressions": 1505,
+    "clicks": 54,
+    "conversions": 3,
+    "sales": 211.11
+  },
+  {
+    "spend_id": "SPD0184",
+    "ad_id": "AD0009",
+    "date": "2026-04-15",
+    "spend": 45.91,
+    "impressions": 7224,
+    "clicks": 321,
+    "conversions": 31,
+    "sales": 513.41
+  },
+  {
+    "spend_id": "SPD0185",
+    "ad_id": "AD0012",
+    "date": "2026-05-09",
+    "spend": 14.36,
+    "impressions": 951,
+    "clicks": 9,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0186",
+    "ad_id": "AD0012",
+    "date": "2026-06-20",
+    "spend": 45.45,
+    "impressions": 3625,
+    "clicks": 79,
+    "conversions": 10,
+    "sales": 779.93
+  },
+  {
+    "spend_id": "SPD0187",
+    "ad_id": "AD0001",
+    "date": "2026-06-22",
+    "spend": 5.86,
+    "impressions": 5536,
+    "clicks": 100,
+    "conversions": 3,
+    "sales": 112.27
+  },
+  {
+    "spend_id": "SPD0188",
+    "ad_id": "AD0017",
+    "date": "2026-04-04",
+    "spend": 44.78,
+    "impressions": 1083,
+    "clicks": 31,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0189",
+    "ad_id": "AD0017",
+    "date": "2026-04-19",
+    "spend": 32.13,
+    "impressions": 685,
+    "clicks": 12,
+    "conversions": 1,
+    "sales": 18.98
+  },
+  {
+    "spend_id": "SPD0190",
+    "ad_id": "AD0002",
+    "date": "2026-05-28",
+    "spend": 12.48,
+    "impressions": 5810,
+    "clicks": 135,
+    "conversions": 18,
+    "sales": 667.72
+  },
+  {
+    "spend_id": "SPD0191",
+    "ad_id": "AD0007",
+    "date": "2026-05-20",
+    "spend": 9.95,
+    "impressions": 1788,
+    "clicks": 31,
+    "conversions": 3,
+    "sales": 138.08
+  },
+  {
+    "spend_id": "SPD0192",
+    "ad_id": "AD0015",
+    "date": "2026-05-22",
+    "spend": 17.94,
+    "impressions": 918,
+    "clicks": 12,
+    "conversions": 1,
+    "sales": 15.78
+  },
+  {
+    "spend_id": "SPD0193",
+    "ad_id": "AD0013",
+    "date": "2026-04-26",
+    "spend": 46.6,
+    "impressions": 6349,
+    "clicks": 112,
+    "conversions": 3,
+    "sales": 208.96
+  },
+  {
+    "spend_id": "SPD0194",
+    "ad_id": "AD0015",
+    "date": "2026-04-22",
+    "spend": 13.48,
+    "impressions": 1594,
+    "clicks": 76,
+    "conversions": 7,
+    "sales": 175.42
+  },
+  {
+    "spend_id": "SPD0195",
+    "ad_id": "AD0015",
+    "date": "2026-04-08",
+    "spend": 5.58,
+    "impressions": 8736,
+    "clicks": 316,
+    "conversions": 32,
+    "sales": 904.75
+  },
+  {
+    "spend_id": "SPD0196",
+    "ad_id": "AD0004",
+    "date": "2026-05-07",
+    "spend": 5.12,
+    "impressions": 6093,
+    "clicks": 171,
+    "conversions": 12,
+    "sales": 945.14
+  },
+  {
+    "spend_id": "SPD0197",
+    "ad_id": "AD0017",
+    "date": "2026-05-08",
+    "spend": 6.08,
+    "impressions": 9418,
+    "clicks": 289,
+    "conversions": 36,
+    "sales": 1441.79
+  },
+  {
+    "spend_id": "SPD0198",
+    "ad_id": "AD0012",
+    "date": "2026-04-18",
+    "spend": 36.92,
+    "impressions": 8641,
+    "clicks": 121,
+    "conversions": 5,
+    "sales": 209.49
+  },
+  {
+    "spend_id": "SPD0199",
+    "ad_id": "AD0016",
+    "date": "2026-06-26",
+    "spend": 36.11,
+    "impressions": 560,
+    "clicks": 11,
+    "conversions": 1,
+    "sales": 28.48
+  },
+  {
+    "spend_id": "SPD0200",
+    "ad_id": "AD0007",
+    "date": "2026-05-30",
+    "spend": 18.15,
+    "impressions": 8932,
+    "clicks": 71,
+    "conversions": 4,
+    "sales": 145.06
+  },
+  {
+    "spend_id": "SPD0201",
+    "ad_id": "AD0005",
+    "date": "2026-04-23",
+    "spend": 18.8,
+    "impressions": 6075,
+    "clicks": 290,
+    "conversions": 43,
+    "sales": 2261.91
+  },
+  {
+    "spend_id": "SPD0202",
+    "ad_id": "AD0019",
+    "date": "2026-04-27",
+    "spend": 8.57,
+    "impressions": 2708,
+    "clicks": 60,
+    "conversions": 6,
+    "sales": 126.76
+  },
+  {
+    "spend_id": "SPD0203",
+    "ad_id": "AD0016",
+    "date": "2026-05-20",
+    "spend": 28.2,
+    "impressions": 1190,
+    "clicks": 42,
+    "conversions": 3,
+    "sales": 97.2
+  },
+  {
+    "spend_id": "SPD0204",
+    "ad_id": "AD0014",
+    "date": "2026-05-08",
+    "spend": 27.63,
+    "impressions": 3508,
+    "clicks": 18,
+    "conversions": 2,
+    "sales": 56.31
+  },
+  {
+    "spend_id": "SPD0205",
+    "ad_id": "AD0005",
+    "date": "2026-04-27",
+    "spend": 17.38,
+    "impressions": 2681,
+    "clicks": 122,
+    "conversions": 9,
+    "sales": 415.21
+  },
+  {
+    "spend_id": "SPD0206",
+    "ad_id": "AD0013",
+    "date": "2026-05-07",
+    "spend": 29.83,
+    "impressions": 3736,
+    "clicks": 61,
+    "conversions": 1,
+    "sales": 39.11
+  },
+  {
+    "spend_id": "SPD0207",
+    "ad_id": "AD0002",
+    "date": "2026-06-10",
+    "spend": 16.34,
+    "impressions": 8584,
+    "clicks": 186,
+    "conversions": 10,
+    "sales": 219.22
+  },
+  {
+    "spend_id": "SPD0208",
+    "ad_id": "AD0008",
+    "date": "2026-07-01",
+    "spend": 40.29,
+    "impressions": 7753,
+    "clicks": 324,
+    "conversions": 46,
+    "sales": 712.89
+  },
+  {
+    "spend_id": "SPD0209",
+    "ad_id": "AD0019",
+    "date": "2026-05-02",
+    "spend": 6.69,
+    "impressions": 230,
+    "clicks": 7,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0210",
+    "ad_id": "AD0006",
+    "date": "2026-05-01",
+    "spend": 39.77,
+    "impressions": 7786,
+    "clicks": 198,
+    "conversions": 23,
+    "sales": 1474.72
+  },
+  {
+    "spend_id": "SPD0211",
+    "ad_id": "AD0004",
+    "date": "2026-04-28",
+    "spend": 14.98,
+    "impressions": 5327,
+    "clicks": 57,
+    "conversions": 6,
+    "sales": 344.46
+  },
+  {
+    "spend_id": "SPD0212",
+    "ad_id": "AD0013",
+    "date": "2026-06-06",
+    "spend": 0.55,
+    "impressions": 9972,
+    "clicks": 77,
+    "conversions": 5,
+    "sales": 101.96
+  },
+  {
+    "spend_id": "SPD0213",
+    "ad_id": "AD0003",
+    "date": "2026-06-25",
+    "spend": 41.45,
+    "impressions": 4665,
+    "clicks": 52,
+    "conversions": 3,
+    "sales": 101.6
+  },
+  {
+    "spend_id": "SPD0214",
+    "ad_id": "AD0007",
+    "date": "2026-04-06",
+    "spend": 48.23,
+    "impressions": 5814,
+    "clicks": 222,
+    "conversions": 18,
+    "sales": 1231.33
+  },
+  {
+    "spend_id": "SPD0215",
+    "ad_id": "AD0015",
+    "date": "2026-05-02",
+    "spend": 5.15,
+    "impressions": 7099,
+    "clicks": 334,
+    "conversions": 36,
+    "sales": 1903.2
+  },
+  {
+    "spend_id": "SPD0216",
+    "ad_id": "AD0016",
+    "date": "2026-06-18",
+    "spend": 19.12,
+    "impressions": 7218,
+    "clicks": 149,
+    "conversions": 10,
+    "sales": 650.28
+  },
+  {
+    "spend_id": "SPD0217",
+    "ad_id": "AD0014",
+    "date": "2026-05-25",
+    "spend": 2.51,
+    "impressions": 6287,
+    "clicks": 179,
+    "conversions": 9,
+    "sales": 303.23
+  },
+  {
+    "spend_id": "SPD0218",
+    "ad_id": "AD0009",
+    "date": "2026-06-29",
+    "spend": 1.36,
+    "impressions": 6107,
+    "clicks": 72,
+    "conversions": 10,
+    "sales": 695.76
+  },
+  {
+    "spend_id": "SPD0219",
+    "ad_id": "AD0005",
+    "date": "2026-04-06",
+    "spend": 19.3,
+    "impressions": 6072,
+    "clicks": 83,
+    "conversions": 6,
+    "sales": 168.11
+  },
+  {
+    "spend_id": "SPD0220",
+    "ad_id": "AD0006",
+    "date": "2026-06-15",
+    "spend": 41.97,
+    "impressions": 9593,
+    "clicks": 80,
+    "conversions": 4,
+    "sales": 315.86
+  },
+  {
+    "spend_id": "SPD0221",
+    "ad_id": "AD0001",
+    "date": "2026-05-04",
+    "spend": 1.55,
+    "impressions": 4761,
+    "clicks": 126,
+    "conversions": 6,
+    "sales": 109.53
+  },
+  {
+    "spend_id": "SPD0222",
+    "ad_id": "AD0004",
+    "date": "2026-05-20",
+    "spend": 24.9,
+    "impressions": 9713,
+    "clicks": 98,
+    "conversions": 13,
+    "sales": 472.8
+  },
+  {
+    "spend_id": "SPD0223",
+    "ad_id": "AD0004",
+    "date": "2026-06-26",
+    "spend": 3.93,
+    "impressions": 2580,
+    "clicks": 61,
+    "conversions": 1,
+    "sales": 17.13
+  },
+  {
+    "spend_id": "SPD0224",
+    "ad_id": "AD0013",
+    "date": "2026-05-18",
+    "spend": 28.25,
+    "impressions": 3523,
+    "clicks": 123,
+    "conversions": 15,
+    "sales": 1111.99
+  },
+  {
+    "spend_id": "SPD0225",
+    "ad_id": "AD0020",
+    "date": "2026-05-04",
+    "spend": 43.24,
+    "impressions": 3430,
+    "clicks": 51,
+    "conversions": 2,
+    "sales": 95.05
+  },
+  {
+    "spend_id": "SPD0226",
+    "ad_id": "AD0007",
+    "date": "2026-05-17",
+    "spend": 24.85,
+    "impressions": 1562,
+    "clicks": 49,
+    "conversions": 1,
+    "sales": 52.08
+  },
+  {
+    "spend_id": "SPD0227",
+    "ad_id": "AD0016",
+    "date": "2026-04-20",
+    "spend": 5.02,
+    "impressions": 4231,
+    "clicks": 94,
+    "conversions": 13,
+    "sales": 795.69
+  },
+  {
+    "spend_id": "SPD0228",
+    "ad_id": "AD0014",
+    "date": "2026-04-11",
+    "spend": 19.67,
+    "impressions": 4747,
+    "clicks": 168,
+    "conversions": 8,
+    "sales": 201.0
+  },
+  {
+    "spend_id": "SPD0229",
+    "ad_id": "AD0007",
+    "date": "2026-06-20",
+    "spend": 47.15,
+    "impressions": 8207,
+    "clicks": 296,
+    "conversions": 37,
+    "sales": 1535.44
+  },
+  {
+    "spend_id": "SPD0230",
+    "ad_id": "AD0012",
+    "date": "2026-06-13",
+    "spend": 39.04,
+    "impressions": 2426,
+    "clicks": 46,
+    "conversions": 4,
+    "sales": 128.61
+  },
+  {
+    "spend_id": "SPD0231",
+    "ad_id": "AD0019",
+    "date": "2026-06-10",
+    "spend": 49.43,
+    "impressions": 8260,
+    "clicks": 290,
+    "conversions": 16,
+    "sales": 280.97
+  },
+  {
+    "spend_id": "SPD0232",
+    "ad_id": "AD0002",
+    "date": "2026-04-04",
+    "spend": 44.09,
+    "impressions": 2414,
+    "clicks": 14,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0233",
+    "ad_id": "AD0010",
+    "date": "2026-04-07",
+    "spend": 37.44,
+    "impressions": 386,
+    "clicks": 7,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0234",
+    "ad_id": "AD0011",
+    "date": "2026-05-27",
+    "spend": 10.82,
+    "impressions": 2446,
+    "clicks": 66,
+    "conversions": 2,
+    "sales": 154.07
+  },
+  {
+    "spend_id": "SPD0235",
+    "ad_id": "AD0007",
+    "date": "2026-06-24",
+    "spend": 44.02,
+    "impressions": 3346,
+    "clicks": 165,
+    "conversions": 10,
+    "sales": 423.53
+  },
+  {
+    "spend_id": "SPD0236",
+    "ad_id": "AD0007",
+    "date": "2026-05-14",
+    "spend": 30.11,
+    "impressions": 3389,
+    "clicks": 140,
+    "conversions": 4,
+    "sales": 75.14
+  },
+  {
+    "spend_id": "SPD0237",
+    "ad_id": "AD0002",
+    "date": "2026-04-17",
+    "spend": 3.09,
+    "impressions": 9851,
+    "clicks": 310,
+    "conversions": 8,
+    "sales": 350.55
+  },
+  {
+    "spend_id": "SPD0238",
+    "ad_id": "AD0004",
+    "date": "2026-07-01",
+    "spend": 40.57,
+    "impressions": 5174,
+    "clicks": 224,
+    "conversions": 19,
+    "sales": 340.4
+  },
+  {
+    "spend_id": "SPD0239",
+    "ad_id": "AD0017",
+    "date": "2026-04-10",
+    "spend": 49.13,
+    "impressions": 3878,
+    "clicks": 78,
+    "conversions": 11,
+    "sales": 211.1
+  },
+  {
+    "spend_id": "SPD0240",
+    "ad_id": "AD0018",
+    "date": "2026-04-16",
+    "spend": 37.92,
+    "impressions": 928,
+    "clicks": 30,
+    "conversions": 1,
+    "sales": 75.03
+  },
+  {
+    "spend_id": "SPD0241",
+    "ad_id": "AD0008",
+    "date": "2026-04-11",
+    "spend": 22.45,
+    "impressions": 7058,
+    "clicks": 63,
+    "conversions": 7,
+    "sales": 284.23
+  },
+  {
+    "spend_id": "SPD0242",
+    "ad_id": "AD0018",
+    "date": "2026-04-10",
+    "spend": 1.72,
+    "impressions": 1449,
+    "clicks": 16,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0243",
+    "ad_id": "AD0017",
+    "date": "2026-06-23",
+    "spend": 17.77,
+    "impressions": 9472,
+    "clicks": 176,
+    "conversions": 14,
+    "sales": 844.64
+  },
+  {
+    "spend_id": "SPD0244",
+    "ad_id": "AD0009",
+    "date": "2026-05-04",
+    "spend": 42.42,
+    "impressions": 5793,
+    "clicks": 266,
+    "conversions": 12,
+    "sales": 954.94
+  },
+  {
+    "spend_id": "SPD0245",
+    "ad_id": "AD0003",
+    "date": "2026-06-27",
+    "spend": 48.98,
+    "impressions": 9086,
+    "clicks": 432,
+    "conversions": 46,
+    "sales": 2907.63
+  },
+  {
+    "spend_id": "SPD0246",
+    "ad_id": "AD0001",
+    "date": "2026-04-14",
+    "spend": 21.92,
+    "impressions": 3422,
+    "clicks": 110,
+    "conversions": 11,
+    "sales": 372.5
+  },
+  {
+    "spend_id": "SPD0247",
+    "ad_id": "AD0005",
+    "date": "2026-06-19",
+    "spend": 28.11,
+    "impressions": 2144,
+    "clicks": 82,
+    "conversions": 3,
+    "sales": 127.33
+  },
+  {
+    "spend_id": "SPD0248",
+    "ad_id": "AD0008",
+    "date": "2026-05-02",
+    "spend": 49.94,
+    "impressions": 5932,
+    "clicks": 202,
+    "conversions": 23,
+    "sales": 500.25
+  },
+  {
+    "spend_id": "SPD0249",
+    "ad_id": "AD0016",
+    "date": "2026-05-08",
+    "spend": 24.21,
+    "impressions": 1710,
+    "clicks": 47,
+    "conversions": 3,
+    "sales": 214.6
+  },
+  {
+    "spend_id": "SPD0250",
+    "ad_id": "AD0005",
+    "date": "2026-04-08",
+    "spend": 26.77,
+    "impressions": 3651,
+    "clicks": 85,
+    "conversions": 4,
+    "sales": 201.63
+  },
+  {
+    "spend_id": "SPD0251",
+    "ad_id": "AD0012",
+    "date": "2026-06-28",
+    "spend": 4.85,
+    "impressions": 6596,
+    "clicks": 293,
+    "conversions": 35,
+    "sales": 892.33
+  },
+  {
+    "spend_id": "SPD0252",
+    "ad_id": "AD0013",
+    "date": "2026-06-09",
+    "spend": 29.81,
+    "impressions": 3115,
+    "clicks": 75,
+    "conversions": 5,
+    "sales": 242.29
+  },
+  {
+    "spend_id": "SPD0253",
+    "ad_id": "AD0017",
+    "date": "2026-06-30",
+    "spend": 28.71,
+    "impressions": 3290,
+    "clicks": 82,
+    "conversions": 5,
+    "sales": 383.62
+  },
+  {
+    "spend_id": "SPD0254",
+    "ad_id": "AD0011",
+    "date": "2026-06-10",
+    "spend": 9.77,
+    "impressions": 9966,
+    "clicks": 352,
+    "conversions": 39,
+    "sales": 3037.5
+  },
+  {
+    "spend_id": "SPD0255",
+    "ad_id": "AD0001",
+    "date": "2026-05-03",
+    "spend": 14.93,
+    "impressions": 9663,
+    "clicks": 153,
+    "conversions": 9,
+    "sales": 448.24
+  },
+  {
+    "spend_id": "SPD0256",
+    "ad_id": "AD0005",
+    "date": "2026-05-21",
+    "spend": 17.4,
+    "impressions": 7908,
+    "clicks": 210,
+    "conversions": 8,
+    "sales": 287.81
+  },
+  {
+    "spend_id": "SPD0257",
+    "ad_id": "AD0020",
+    "date": "2026-04-29",
+    "spend": 19.32,
+    "impressions": 508,
+    "clicks": 15,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0258",
+    "ad_id": "AD0018",
+    "date": "2026-06-28",
+    "spend": 16.2,
+    "impressions": 1286,
+    "clicks": 59,
+    "conversions": 8,
+    "sales": 271.27
+  },
+  {
+    "spend_id": "SPD0259",
+    "ad_id": "AD0015",
+    "date": "2026-06-18",
+    "spend": 44.65,
+    "impressions": 6449,
+    "clicks": 127,
+    "conversions": 11,
+    "sales": 299.76
+  },
+  {
+    "spend_id": "SPD0260",
+    "ad_id": "AD0003",
+    "date": "2026-06-14",
+    "spend": 29.72,
+    "impressions": 5875,
+    "clicks": 258,
+    "conversions": 16,
+    "sales": 336.53
+  },
+  {
+    "spend_id": "SPD0261",
+    "ad_id": "AD0018",
+    "date": "2026-05-06",
+    "spend": 4.47,
+    "impressions": 1970,
+    "clicks": 84,
+    "conversions": 5,
+    "sales": 214.27
+  },
+  {
+    "spend_id": "SPD0262",
+    "ad_id": "AD0002",
+    "date": "2026-04-09",
+    "spend": 18.37,
+    "impressions": 814,
+    "clicks": 4,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0263",
+    "ad_id": "AD0020",
+    "date": "2026-04-11",
+    "spend": 9.46,
+    "impressions": 7427,
+    "clicks": 224,
+    "conversions": 30,
+    "sales": 1131.68
+  },
+  {
+    "spend_id": "SPD0264",
+    "ad_id": "AD0015",
+    "date": "2026-06-25",
+    "spend": 31.51,
+    "impressions": 372,
+    "clicks": 14,
+    "conversions": 1,
+    "sales": 16.17
+  },
+  {
+    "spend_id": "SPD0265",
+    "ad_id": "AD0004",
+    "date": "2026-06-12",
+    "spend": 17.32,
+    "impressions": 316,
+    "clicks": 2,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0266",
+    "ad_id": "AD0002",
+    "date": "2026-04-29",
+    "spend": 14.12,
+    "impressions": 9465,
+    "clicks": 368,
+    "conversions": 8,
+    "sales": 464.02
+  },
+  {
+    "spend_id": "SPD0267",
+    "ad_id": "AD0020",
+    "date": "2026-05-18",
+    "spend": 7.89,
+    "impressions": 3068,
+    "clicks": 37,
+    "conversions": 4,
+    "sales": 166.1
+  },
+  {
+    "spend_id": "SPD0268",
+    "ad_id": "AD0007",
+    "date": "2026-06-16",
+    "spend": 31.88,
+    "impressions": 356,
+    "clicks": 7,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0269",
+    "ad_id": "AD0016",
+    "date": "2026-04-11",
+    "spend": 10.18,
+    "impressions": 2329,
+    "clicks": 96,
+    "conversions": 11,
+    "sales": 811.86
+  },
+  {
+    "spend_id": "SPD0270",
+    "ad_id": "AD0014",
+    "date": "2026-06-14",
+    "spend": 13.35,
+    "impressions": 9507,
+    "clicks": 240,
+    "conversions": 12,
+    "sales": 917.25
+  },
+  {
+    "spend_id": "SPD0271",
+    "ad_id": "AD0010",
+    "date": "2026-06-28",
+    "spend": 35.02,
+    "impressions": 5451,
+    "clicks": 148,
+    "conversions": 18,
+    "sales": 377.67
+  },
+  {
+    "spend_id": "SPD0272",
+    "ad_id": "AD0009",
+    "date": "2026-05-23",
+    "spend": 19.86,
+    "impressions": 9890,
+    "clicks": 212,
+    "conversions": 15,
+    "sales": 982.55
+  },
+  {
+    "spend_id": "SPD0273",
+    "ad_id": "AD0016",
+    "date": "2026-05-30",
+    "spend": 2.96,
+    "impressions": 6332,
+    "clicks": 186,
+    "conversions": 15,
+    "sales": 428.07
+  },
+  {
+    "spend_id": "SPD0274",
+    "ad_id": "AD0010",
+    "date": "2026-05-30",
+    "spend": 47.02,
+    "impressions": 3685,
+    "clicks": 60,
+    "conversions": 6,
+    "sales": 199.47
+  },
+  {
+    "spend_id": "SPD0275",
+    "ad_id": "AD0014",
+    "date": "2026-04-22",
+    "spend": 48.77,
+    "impressions": 6962,
+    "clicks": 145,
+    "conversions": 19,
+    "sales": 530.3
+  },
+  {
+    "spend_id": "SPD0276",
+    "ad_id": "AD0009",
+    "date": "2026-04-28",
+    "spend": 10.32,
+    "impressions": 4960,
+    "clicks": 150,
+    "conversions": 19,
+    "sales": 1101.77
+  },
+  {
+    "spend_id": "SPD0277",
+    "ad_id": "AD0012",
+    "date": "2026-04-09",
+    "spend": 27.58,
+    "impressions": 7128,
+    "clicks": 237,
+    "conversions": 31,
+    "sales": 2141.73
+  },
+  {
+    "spend_id": "SPD0278",
+    "ad_id": "AD0007",
+    "date": "2026-05-07",
+    "spend": 48.94,
+    "impressions": 5010,
+    "clicks": 141,
+    "conversions": 7,
+    "sales": 118.33
+  },
+  {
+    "spend_id": "SPD0279",
+    "ad_id": "AD0015",
+    "date": "2026-05-02",
+    "spend": 18.56,
+    "impressions": 7816,
+    "clicks": 40,
+    "conversions": 3,
+    "sales": 163.74
+  },
+  {
+    "spend_id": "SPD0280",
+    "ad_id": "AD0008",
+    "date": "2026-06-11",
+    "spend": 38.77,
+    "impressions": 6793,
+    "clicks": 269,
+    "conversions": 26,
+    "sales": 759.17
+  },
+  {
+    "spend_id": "SPD0281",
+    "ad_id": "AD0009",
+    "date": "2026-05-24",
+    "spend": 12.57,
+    "impressions": 7155,
+    "clicks": 356,
+    "conversions": 39,
+    "sales": 2781.63
+  },
+  {
+    "spend_id": "SPD0282",
+    "ad_id": "AD0002",
+    "date": "2026-05-17",
+    "spend": 1.68,
+    "impressions": 5106,
+    "clicks": 98,
+    "conversions": 2,
+    "sales": 159.29
+  },
+  {
+    "spend_id": "SPD0283",
+    "ad_id": "AD0002",
+    "date": "2026-04-16",
+    "spend": 9.16,
+    "impressions": 4509,
+    "clicks": 103,
+    "conversions": 4,
+    "sales": 273.91
+  },
+  {
+    "spend_id": "SPD0284",
+    "ad_id": "AD0002",
+    "date": "2026-05-04",
+    "spend": 10.26,
+    "impressions": 2921,
+    "clicks": 135,
+    "conversions": 16,
+    "sales": 1028.83
+  },
+  {
+    "spend_id": "SPD0285",
+    "ad_id": "AD0019",
+    "date": "2026-06-26",
+    "spend": 35.0,
+    "impressions": 7420,
+    "clicks": 112,
+    "conversions": 12,
+    "sales": 887.45
+  },
+  {
+    "spend_id": "SPD0286",
+    "ad_id": "AD0019",
+    "date": "2026-05-22",
+    "spend": 13.85,
+    "impressions": 5758,
+    "clicks": 201,
+    "conversions": 29,
+    "sales": 444.02
+  },
+  {
+    "spend_id": "SPD0287",
+    "ad_id": "AD0018",
+    "date": "2026-06-28",
+    "spend": 3.64,
+    "impressions": 2356,
+    "clicks": 47,
+    "conversions": 7,
+    "sales": 155.02
+  },
+  {
+    "spend_id": "SPD0288",
+    "ad_id": "AD0002",
+    "date": "2026-04-06",
+    "spend": 7.07,
+    "impressions": 179,
+    "clicks": 3,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0289",
+    "ad_id": "AD0018",
+    "date": "2026-06-19",
+    "spend": 15.93,
+    "impressions": 5726,
+    "clicks": 87,
+    "conversions": 2,
+    "sales": 148.15
+  },
+  {
+    "spend_id": "SPD0290",
+    "ad_id": "AD0020",
+    "date": "2026-05-29",
+    "spend": 38.7,
+    "impressions": 3909,
+    "clicks": 164,
+    "conversions": 19,
+    "sales": 1051.24
+  },
+  {
+    "spend_id": "SPD0291",
+    "ad_id": "AD0011",
+    "date": "2026-06-07",
+    "spend": 4.39,
+    "impressions": 1747,
+    "clicks": 17,
+    "conversions": 0,
+    "sales": 0.0
+  },
+  {
+    "spend_id": "SPD0292",
+    "ad_id": "AD0001",
+    "date": "2026-05-27",
+    "spend": 49.69,
+    "impressions": 2833,
+    "clicks": 65,
+    "conversions": 2,
+    "sales": 89.89
+  },
+  {
+    "spend_id": "SPD0293",
+    "ad_id": "AD0009",
+    "date": "2026-06-12",
+    "spend": 27.79,
+    "impressions": 6330,
+    "clicks": 289,
+    "conversions": 36,
+    "sales": 1344.83
+  },
+  {
+    "spend_id": "SPD0294",
+    "ad_id": "AD0002",
+    "date": "2026-04-25",
+    "spend": 18.49,
+    "impressions": 3760,
+    "clicks": 108,
+    "conversions": 9,
+    "sales": 530.98
+  },
+  {
+    "spend_id": "SPD0295",
+    "ad_id": "AD0012",
+    "date": "2026-05-25",
+    "spend": 17.44,
+    "impressions": 1414,
+    "clicks": 23,
+    "conversions": 2,
+    "sales": 156.98
+  },
+  {
+    "spend_id": "SPD0296",
+    "ad_id": "AD0020",
+    "date": "2026-04-12",
+    "spend": 4.5,
+    "impressions": 3903,
+    "clicks": 76,
+    "conversions": 2,
+    "sales": 116.52
+  },
+  {
+    "spend_id": "SPD0297",
+    "ad_id": "AD0010",
+    "date": "2026-05-18",
+    "spend": 41.53,
+    "impressions": 5222,
+    "clicks": 203,
+    "conversions": 9,
+    "sales": 400.45
+  },
+  {
+    "spend_id": "SPD0298",
+    "ad_id": "AD0002",
+    "date": "2026-05-09",
+    "spend": 7.22,
+    "impressions": 3155,
+    "clicks": 92,
+    "conversions": 3,
+    "sales": 133.85
+  },
+  {
+    "spend_id": "SPD0299",
+    "ad_id": "AD0008",
+    "date": "2026-05-06",
+    "spend": 12.88,
+    "impressions": 1664,
+    "clicks": 83,
+    "conversions": 3,
+    "sales": 61.94
+  },
+  {
+    "spend_id": "SPD0300",
+    "ad_id": "AD0011",
+    "date": "2026-05-02",
+    "spend": 19.04,
+    "impressions": 7033,
+    "clicks": 262,
+    "conversions": 31,
+    "sales": 1970.53
+  }
+]

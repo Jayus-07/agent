@@ -1,0 +1,59 @@
+# tiny profile — CI 快速验证（< 5 秒完成）
+name: tiny
+description: "CI 快速验证 — 最小数据量，生成时间 < 5 秒"
+seed: 42
+
+entities:
+  brand:          { count: 3 }
+  category:       { count: 8, max_depth: 2 }
+  channel:        { count: 3, fixed: true }
+  warehouse:      { count: 3, fixed: true }
+  supplier:       { count: 5 }
+  product:        { count: 10 }
+  sku:            { count: 30 }
+  listing:        { count: 50 }
+  customer:       { count: 100 }
+  customer_address: { count: 150 }
+  order:          { count: 500 }
+  order_item:     { count: 1400 }
+  order_event:    { count: 2200 }
+  inventory_level: { count: 60 }    # 30 SKU × 2 仓（仅匹配的）
+  inventory_transaction: { count: 1500 }
+  inventory_health: { count: 60 }
+  knowledge_doc:  { count: 20 }
+  knowledge_chunk: { count: 40 }   # 20 篇文档 × ~2 chunks/doc（派生值，近似）
+  ad_account:     { count: 3 }
+  campaign:       { count: 5 }
+  ad_group:       { count: 10 }
+  ad:             { count: 20 }
+  spend_record:   { count: 300 }
+  performance_metric: { count: 200 }
+  freight_booking: { count: 10 }
+  shipment:       { count: 350 }
+  tracking_event: { count: 2100 }
+  return_authorization: { count: 40 }
+  report_definition: { count: 5 }
+  report_execution: { count: 50 }
+  review:         { count: 80 }
+
+distributions:
+  order:
+    status:
+      DELIVERED: 0.70
+      SHIPPED: 0.12
+      CANCELLED: 0.08
+      REFUNDED: 0.05
+      PICKING: 0.03
+      PAID: 0.02
+    seasonality:
+      monthly_factors: [0.8, 0.8, 0.9, 1.0, 1.0, 1.1, 1.1, 1.0, 1.1, 1.3, 1.8, 2.0]
+      weekend_boost: 1.25
+  sku:
+    price_distribution: "pareto"
+    price_range: [5, 200]
+    price_alpha: 1.5
+  inventory:
+    warehouse_allocation:
+      FBA_US: 0.50
+      FBA_EU: 0.30
+      DOMESTIC_SZ: 0.20

@@ -1,6 +1,6 @@
-# Agent Platform — 架构图
+# 系统架构
 
-> 所有图表使用 Mermaid 语法，GitHub / Gitee / VS Code 预览直接渲染。
+> 本文档描述系统整体架构、模块依赖、请求生命周期。需要修改任何模块时从这里开始。
 
 ## 1. 系统全景
 
@@ -14,6 +14,7 @@ graph TB
     subgraph 网关层
         FAST[FastAPI + Uvicorn<br/>端口 8000]
         CORS[CORS 中间件]
+        CONCURRENCY[并发控制中间件<br/>asyncio.Semaphore]
         HEALTH[/health]
         DOCS[/docs Swagger]
     end
@@ -23,302 +24,158 @@ graph TB
         SQL[POST /sql]
         RAG[POST /rag]
         REPORT[POST /report]
+        LLM[POST /llm/switch<br/>GET /llm/models]
+        OBS[/observability/*]
     end
 
     subgraph Agent层
         MAS[MultiAgentSystem<br/>multi_agent/graph.py]
         SQL_AG[SQLAgent<br/>sql_agent/]
-        RAG_PL[RAGPipeline<br/>retrieval/pipeline.py]
-        REP_GEN[ReportGenerator<br/>report_agent/]
+        RAG_AG[RAGPipeline<br/>retrieval/pipeline.py]
+        REP_AG[ReportGenerator<br/>report_agent/]
     end
 
-    subgraph 记忆系统
-        MEM_SVC[MemoryService<br/>memory/service.py]
-        L1[L1 ShortTermBuffer<br/>环形缓冲区]
-        L2[L2 SessionMemory<br/>PostgreSQL async]
-        L3[L3 LongTermMemory<br/>pgvector]
+    subgraph 记忆层
+        MEM_S[MemoryService<br/>memory/service.py]
+        MEM_M[MemoryManager<br/>memory/manager.py]
+        L1[ShortTermBuffer]
+        L2[SessionMemory]
+        L3[LongTermMemory]
     end
 
-    subgraph 数据层
-        PG[(PostgreSQL 18<br/>:5432)]
-        CHROMA[(ChromaDB<br/>向量检索)]
-        OLLAMA[Ollama<br/>qwen2.5:4b :11434]
-        DOCS_DISK[data/docs/<br/>文档文件]
+    subgraph 存储层
+        PG[(PostgreSQL 18<br/>+ pgvector)]
+        CHROMA[(ChromaDB<br/>向量库)]
+        OLLAMA[Ollama<br/>qwen2.5:3b]
     end
 
-    UI -->|SSE Stream| CHAT
-    API_直接 --> CHAT & SQL & RAG & REPORT
+    UI -->|SSE| FAST
+    API_直接 -->|HTTP| FAST
+    FAST --> CONCURRENCY
+    FAST --> CHAT & SQL & RAG & REPORT & LLM & OBS
     CHAT --> MAS
     SQL --> SQL_AG
-    RAG --> RAG_PL
-    REPORT --> REP_GEN
-
-    MAS --> MEM_SVC
+    RAG --> RAG_AG
+    REPORT --> REP_AG
+    MAS --> SQL_AG & RAG_AG & REP_AG
+    MAS --> MEM_M
     SQL_AG --> PG
-    RAG_PL --> CHROMA & DOCS_DISK
-    REP_GEN --> PG
-
-    MEM_SVC --> L1 & L2 & L3
+    RAG_AG --> CHROMA & OLLAMA
+    REP_AG --> SQL_AG & OLLAMA
+    MEM_M --> MEM_S
+    MEM_S --> L1 & L2 & L3
+    L1 -.-> MEM_S
     L2 --> PG
     L3 --> PG
-    MAS --> OLLAMA
-    SQL_AG --> OLLAMA
-    RAG_PL --> OLLAMA
 ```
 
 ## 2. 请求生命周期
 
-```mermaid
-sequenceDiagram
-    actor U as 用户
-    participant FE as Next.js :3000
-    participant API as FastAPI :8000
-    participant MAS as MultiAgentSystem
-    participant MM as MemoryManager
-    participant L2 as SessionMemory (PG)
-    participant L3 as LongTermMemory (pgvector)
-    participant LLM as Ollama :11434
-    participant WK as Workers
+### 2.1 普通对话 (POST /chat)
 
-    U->>FE: 输入问题
-    FE->>API: POST /chat/stream (SSE)
-    API->>MAS: ask(question, session_id)
-
-    Note over MAS,MM: ── 记忆加载 ──
-    MAS->>MM: start_session()
-    MM->>L2: load_messages() → 历史对话
-    MM->>L3: retrieve(question) → 长期记忆
-    MM-->>MAS: L1 缓冲区 (含历史 + 背景)
-
-    Note over MAS,LLM: ── Agent 执行 ──
-    MAS->>LLM: Planner: 任务拆解
-    MAS->>WK: Supervisor → Workers 并行
-    WK->>LLM: SQL / RAG / Report Worker
-    WK-->>MAS: 执行结果
-
-    Note over MAS,LLM: ── 记忆持久化 ──
-    MAS->>LLM: Reporter: 汇总答案
-    MAS->>MM: end_turn(question, answer)
-    MM->>L2: save_turn() → 持久化对话
-    MM->>L3: store() → 后台管线写入
-
-    MAS-->>API: final_answer
-    API-->>FE: SSE done event
-    FE-->>U: Markdown 渲染答案
+```
+HTTP Request → FastAPI (api/server.py)
+  → 并发控制中间件 (asyncio.Semaphore)
+  → 惰性初始化 Agent 单例 (api/deps.py)
+  → api/routes/chat.py:chat()
+    → MultiAgentSystem.ask()
+      → MemoryManager.start_session()    # L2→L1 恢复 + L3 长期记忆注入
+      → LangGraph (Planner→Supervisor→Workers→Reporter)
+      → MemoryManager.end_turn()         # L2 持久化 + 触发 L3 后台写入
+    → JSON 响应
 ```
 
-## 3. 记忆系统架构
+### 2.2 SSE 流式对话 (POST /chat/stream)
 
-```mermaid
-graph TB
-    subgraph 入口
-        MS[MemoryService<br/>统一入口]
-        MM[MemoryManager<br/>同步兼容层]
-    end
-
-    subgraph L1_层[L1 短期记忆]
-        STB[ShortTermBuffer<br/>环形缓冲区<br/>max 20 messages]
-    end
-
-    subgraph L2_层[L2 会话记忆]
-        SM[SessionMemory<br/>async PG]
-        SR[SessionRepository<br/>chat_sessions<br/>chat_messages]
-    end
-
-    subgraph L3_层[L3 长期记忆]
-        LM[LongTermMemory<br/>pgvector]
-        MR[MemoryRepository<br/>memory_records]
-    end
-
-    subgraph L3管线[L3 写入管线]
-        EXTRACT[LLM Fact Extract]
-        PII[PII Filter<br/>正则脱敏]
-        TRIGGER[WorthinessClassifier<br/>STORE / IGNORE]
-        SCORE[ImportanceScorer<br/>0.0 ~ 1.0]
-        DEDUP[Vector Dedup<br/>cosine similarity]
-        WRITE[pgvector INSERT]
-    end
-
-    subgraph L3检索[L3 检索]
-        HYBRID[HybridRetriever]
-        DECAY[MemoryDecayService<br/>定时衰减]
-    end
-
-    subgraph 存储
-        PG[(PostgreSQL 18)]
-    end
-
-    MS --> MM
-    MM --> STB & SM & LM
-
-    SM --> SR --> PG
-    LM --> MR --> PG
-    LM --> EXTRACT
-
-    EXTRACT --> PII --> TRIGGER --> SCORE --> DEDUP --> WRITE --> PG
-    SCORE -->|importance < 0.6| DROP[丢弃]
-    TRIGGER -->|IGNORE| DROP
-
-    LM --> HYBRID
-    HYBRID --> MR
-    DECAY --> MR
-
-    MS -.->|Agent 唯一入口<br/>禁止直接访问 repository| MR
+```
+HTTP Request → FastAPI
+  → api/routes/chat.py:chat_stream()
+    → MultiAgentSystem.stream_events()
+      → MemoryManager.start_session()
+      → LangGraph.stream() 产生事件
+        → Planner: meta 事件（node_labels 映射）
+        → Supervisor: status 事件
+        → Worker: log / status 事件
+        → Reporter: delta 事件（句子块）
+      → MemoryManager.end_turn()
+    → SSE chunked response
 ```
 
-## 4. Multi-Agent 工作流 (LangGraph)
+事件类型：`meta` / `status` / `log` / `delta` / `done` / `error`（详见 `web/src/lib/types.ts`）。
 
-```mermaid
-stateDiagram-v2
-    [*] --> Planner
-    Planner --> Supervisor: DAG 任务规划
+### 2.3 其他路由
 
-    Supervisor --> SQL_Worker: Send
-    Supervisor --> RAG_Worker: Send
-    Supervisor --> Report_Worker: Send
+| 路由 | 调用链 | 流式 |
+|---|---|---|
+| `POST /sql` | `SQLAgent.ask()` → `router/select_tables` → `generator/generate_sql` → `validator/validate` → `row_security/inject` → `executor/execute_sql` | 否 |
+| `POST /rag` | `RAGPipeline.ask()` → `QueryAnalyzer` → `BM25+vector` → `Reranker` → `Citation Filter` | 否 |
+| `POST /report` | `ReportGenerator.generate()` → `data_fetcher` → `template_engine` → `chart_generator` → `llm_polisher` (可选) | 否 |
+| `POST /llm/switch` | `LLMFactory.set_current()` → 重建 instance cache → `_LLMProxy` 自动切换 | 否 |
+| `GET /observability/*` | 读 `multi_agent/observability.py:trace_store` + `utils.resource_monitor` | 否 |
 
-    SQL_Worker --> Supervisor: 结果
-    RAG_Worker --> Supervisor: 结果
-    Report_Worker --> Supervisor: 结果
+## 3. 技术栈
 
-    Supervisor --> Supervisor: 循环调度
-    Supervisor --> Reporter: 全部完成
+| 层 | 技术 | 备注 |
+|---|---|---|
+| LLM | Ollama (qwen2.5:3b/4b) + DeepSeek (云端) | 通过 `llm_factory.py:llm`（`_LLMProxy`）统一访问 |
+| Embedding | BAAI/bge-small-zh-v1.5 (ModelScope) | 首次请求时懒加载 |
+| Reranker | BAAI/bge-reranker-base | CrossEncoder |
+| 向量库 (RAG) | ChromaDB | 路径 `data/chroma/` |
+| 向量库 (Memory) | PostgreSQL 18 + pgvector (ivfflat cosine) | `Vector(512)` |
+| 关键词检索 | rank-bm25 + jieba | BM25 索引内存 |
+| Multi-Agent | LangGraph (StateGraph + Send API 并行扇出) | `langgraph==0.4+` |
+| SQL 安全 | sqlglot 解析 + psycopg2 只读事务 | 行级安全参数化注入 |
+| 报告 | Jinja2 + matplotlib + LLM 润色 | 数字/事实硬校验锁定 |
+| 后端 | FastAPI + uvicorn + SQLAlchemy 2.0 Async | 并发控制中间件 |
+| 前端 | Next.js 14 + Tailwind CSS + Zustand + SSE streaming | 统一单页 + monitor 子页 |
+| 数据库 | PostgreSQL 18 (本地服务 `postgresql-x64-18`) | 端口 5432 |
+| 异步 | asyncio + asyncpg + 持久后台事件循环线程 | `MemoryManager` 桥接 |
+| MCP | @modelcontextprotocol/server-puppeteer + server-filesystem | 截图 / 文件操作 |
+| 测试 | pytest 9.0.3 | 33 个测试文件，~200+ 用例 |
 
-    Reporter --> [*]
+## 4. 模块依赖
 
-    note right of Planner
-        LLM 拆解复杂问题
-        输出 DAG 子任务
-    end note
-
-    note right of Supervisor
-        route_after_supervisor
-        返回 list[Send]
-        LangGraph 自动并行执行
-    end note
+```
+api/server.py
+  └─→ api/routes/{chat,sql,rag,report,llm,observability}
+       └─→ multi_agent/graph.py:MultiAgentSystem
+       │    └─→ multi_agent/{planner,supervisor,reporter,critique,degradation,alerts,tools,state,tool_registry,observability}
+       │         └─→ multi_agent/workers/{sql,rag,report}_worker → tools.py
+       │              └─→ {sql_agent, retrieval, report_agent}
+       │    └─→ memory/manager.py:memory_manager
+       │         └─→ memory/service.py:MemoryService
+       │              └─→ {L1, L2, L3}
+       └─→ sql_agent/sql_agent.py:SQLAgent
+       └─→ retrieval/pipeline.py:RAGPipeline
+       └─→ report_agent/report_generator.py:ReportGenerator
+       └─→ llm/llm_factory.py:llm（_LLMProxy）
+       └─→ utils/{logger,timeout,resource_monitor}
 ```
 
-## 5. 前端组件树
+**关键约束**：
+- Agent 层**禁止**直接访问 `memory/repository/` 或 `memory/models/`，统一通过 `MemoryService`
+- 所有 fetch 走 `lib/api.ts`（前端）
+- 所有 fetch 走 `utils/timeout.py` 的超时保护
+- 所有日志走 `utils/logger.py`
 
-```mermaid
-graph TB
-    subgraph Next.js
-        LAYOUT[layout.tsx<br/>RootLayout]
-        PAGE[page.tsx<br/>HomePage]
-        SIDEBAR[Sidebar<br/>会话列表]
-        CHAT_VIEW[ChatView<br/>主容器]
-    end
+## 5. 关键设计决策
 
-    subgraph 组件
-        EMPTY[EmptyState<br/>统一示例]
-        MSG_LIST[MessageList]
-        MSG_BUBBLE[MessageBubble<br/>用户/AI 气泡]
-        THINK[ThinkingPanel<br/>Worker 进度]
-        MD[MarkdownContent<br/>react-markdown]
-        INPUT[ChatInput<br/>通用输入框]
-        STATUS[StatusBar<br/>实时进度条]
-    end
+| 决策 | 理由 | 相关文件 |
+|---|---|---|
+| `MemoryService` 单一入口 | 防止 Agent 绕过规则直接 ORM 操作 | `memory/__init__.py` |
+| `LLMFactory` + `_LLMProxy` | 多 Provider 切换对业务代码零侵入 | `llm/llm_factory.py` |
+| `ToolRegistry` capability 抽象 | Worker 并行解耦，新增能力只改注册表 | `multi_agent/tool_registry.py` |
+| `row_security` 参数化 | 防止 user_id 硬编码到 SQL 文本 | `sql_agent/row_security.py` |
+| `executor` 显式 `BEGIN + SET TRANSACTION READ ONLY` | autocommit 模式下 `set_session(readonly=True)` 失效 | `sql_agent/executor.py` |
+| `state._degraded_steps` 用 `Annotated[set, operator.or_]` | 防止 set 被原地修改破坏 LangGraph state 不可变语义 | `multi_agent/state.py` |
+| `_merge_step_results` 自定义 reducer | 解决 LangGraph `INVALID_CONCURRENT_GRAPH_UPDATE` | `multi_agent/state.py` |
+| 并发控制中间件 | 笔记本/低配机器防 CPU 过载关机 | `api/server.py` |
+| 单页 + SSE | 简化前端，让后端 Multi-Agent 自动路由 | `web/src/app/page.tsx` |
+| Zustand 单 store | 简单场景不需要 RTK Query / Redux | `web/src/store/chat.ts` |
 
-    subgraph 数据层
-        STORE[Zustand Store<br/>chat.ts]
-        SSE_HOOK[useSSE<br/>SSE 流消费]
-        CHAT_HOOK[useChat<br/>发送消息]
-        API_CLIENT[api.ts<br/>HTTP + SSE]
-        SSE_PARSER[sse-parser.ts<br/>进度解析]
-        CONSTANTS[constants.ts<br/>Worker 图标]
-    end
+## 6. 性能与可观测
 
-    LAYOUT --> SIDEBAR & PAGE
-    PAGE --> CHAT_VIEW
-    CHAT_VIEW --> EMPTY & MSG_LIST & INPUT & STATUS
-
-    MSG_LIST --> MSG_BUBBLE
-    MSG_BUBBLE --> THINK & MD
-
-    INPUT --> CHAT_HOOK
-    CHAT_HOOK --> SSE_HOOK
-    SSE_HOOK --> API_CLIENT
-    SSE_HOOK --> STORE
-
-    MSG_BUBBLE --> STORE
-    MSG_BUBBLE --> SSE_PARSER
-    STATUS --> STORE
-    STATUS --> SSE_PARSER
-
-    THINK --> CONSTANTS
-    MSG_BUBBLE --> CONSTANTS
-    STATUS --> CONSTANTS
-```
-
-## 6. 数据库 Schema
-
-```mermaid
-erDiagram
-    chat_sessions {
-        serial id PK
-        varchar session_id UK
-        varchar user_id
-        text summary
-        timestamptz created_at
-        timestamptz updated_at
-    }
-
-    chat_messages {
-        serial id PK
-        varchar session_id FK
-        varchar role
-        text content
-        timestamptz created_at
-    }
-
-    memory_records {
-        uuid id PK
-        varchar user_id
-        varchar session_id
-        varchar memory_type
-        text content
-        vector embedding
-        float importance_score
-        float confidence_score
-        int access_count
-        timestamptz created_at
-        timestamptz last_access_at
-        timestamptz expire_at
-        boolean is_active
-        uuid superseded_by FK
-    }
-
-    chat_sessions ||--o{ chat_messages : "session_id"
-    memory_records ||--o{ memory_records : "superseded_by"
-```
-
-## 7. 项目目录总览
-
-```mermaid
-graph LR
-    subgraph 项目根
-        CONFIG[config.py]
-        ENV[.env]
-        API_DIR[api/]
-        LLM_DIR[llm/]
-        RET_DIR[retrieval/]
-        PRE_DIR[preprocessing/]
-        MA_DIR[multi_agent/]
-        SQL_DIR[sql_agent/]
-        REP_DIR[report_agent/]
-        MEM_DIR[memory/]
-        UTIL_DIR[utils/]
-        WEB_DIR[web/]
-        DATA_DIR[data/]
-    end
-
-    API_DIR --> MA_DIR & SQL_DIR & RET_DIR & REP_DIR
-    MA_DIR --> MEM_DIR & SQL_DIR & RET_DIR & REP_DIR
-    MEM_DIR --> CONFIG
-    RET_DIR --> CONFIG
-
-    style MEM_DIR fill:#4a9,stroke:#333,color:#fff
-    style MA_DIR fill:#49a,stroke:#333,color:#fff
-    style API_DIR fill:#94a,stroke:#333,color:#fff
-    style WEB_DIR fill:#a94,stroke:#333,color:#fff
-```
+- **L3 写入**：后台异步，不阻塞主请求（依赖 `MemoryService.end_turn`）
+- **事件流**：SSE 用 `(step_id, status)` 粒度去重，避免重复
+- **Monitor 页面**：`/monitor` 路由调用 `/observability/*` 端点，每 5s 轮询
+- **资源监控**：`utils/resource_monitor.py` 持续跟踪 CPU / 内存，超阈值时 `WARNING`

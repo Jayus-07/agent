@@ -1,0 +1,317 @@
+[
+  {
+    "ra_id": "RA0001",
+    "order_id": "ORD0003",
+    "customer_id": "CUST0031",
+    "reason": "NOT_AS_DESCRIBED",
+    "status": "APPROVED",
+    "requested_at": "2026-05-19T18:19:17.927221",
+    "refund_amount": 7.88
+  },
+  {
+    "ra_id": "RA0002",
+    "order_id": "ORD0006",
+    "customer_id": "CUST0079",
+    "reason": "NOT_AS_DESCRIBED",
+    "status": "RECEIVED",
+    "requested_at": "2026-06-19T18:19:17.927221",
+    "refund_amount": 9.86
+  },
+  {
+    "ra_id": "RA0003",
+    "order_id": "ORD0014",
+    "customer_id": "CUST0087",
+    "reason": "WRONG_SIZE",
+    "status": "INSPECTED",
+    "requested_at": "2026-06-01T18:19:17.927221",
+    "refund_amount": 13.03
+  },
+  {
+    "ra_id": "RA0004",
+    "order_id": "ORD0024",
+    "customer_id": "CUST0071",
+    "reason": "DEFECTIVE",
+    "status": "APPROVED",
+    "requested_at": "2026-06-17T18:19:17.927221",
+    "refund_amount": 6.52
+  },
+  {
+    "ra_id": "RA0005",
+    "order_id": "ORD0042",
+    "customer_id": "CUST0051",
+    "reason": "WRONG_SIZE",
+    "status": "REFUNDED",
+    "requested_at": "2026-06-06T18:19:17.927221",
+    "refund_amount": 11.83
+  },
+  {
+    "ra_id": "RA0006",
+    "order_id": "ORD0044",
+    "customer_id": "CUST0072",
+    "reason": "DEFECTIVE",
+    "status": "RECEIVED",
+    "requested_at": "2026-06-08T18:19:17.927221",
+    "refund_amount": 14.47
+  },
+  {
+    "ra_id": "RA0007",
+    "order_id": "ORD0045",
+    "customer_id": "CUST0079",
+    "reason": "NOT_AS_DESCRIBED",
+    "status": "INSPECTED",
+    "requested_at": "2026-06-11T18:19:17.927221",
+    "refund_amount": 7.95
+  },
+  {
+    "ra_id": "RA0008",
+    "order_id": "ORD0054",
+    "customer_id": "CUST0083",
+    "reason": "CHANGED_MIND",
+    "status": "REFUNDED",
+    "requested_at": "2026-05-07T18:19:17.927221",
+    "refund_amount": 14.25
+  },
+  {
+    "ra_id": "RA0009",
+    "order_id": "ORD0060",
+    "customer_id": "CUST0056",
+    "reason": "NOT_AS_DESCRIBED",
+    "status": "APPROVED",
+    "requested_at": "2026-05-09T18:19:17.927221",
+    "refund_amount": 16.58
+  },
+  {
+    "ra_id": "RA0010",
+    "order_id": "ORD0088",
+    "customer_id": "CUST0077",
+    "reason": "DAMAGED",
+    "status": "REFUNDED",
+    "requested_at": "2026-05-04T18:19:17.927221",
+    "refund_amount": 5.69
+  },
+  {
+    "ra_id": "RA0011",
+    "order_id": "ORD0092",
+    "customer_id": "CUST0037",
+    "reason": "DAMAGED",
+    "status": "RECEIVED",
+    "requested_at": "2026-05-24T18:19:17.927221",
+    "refund_amount": 5.71
+  },
+  {
+    "ra_id": "RA0012",
+    "order_id": "ORD0107",
+    "customer_id": "CUST0014",
+    "reason": "ARRIVED_LATE",
+    "status": "INSPECTED",
+    "requested_at": "2026-06-10T18:19:17.927221",
+    "refund_amount": 16.41
+  },
+  {
+    "ra_id": "RA0013",
+    "order_id": "ORD0110",
+    "customer_id": "CUST0010",
+    "reason": "DAMAGED",
+    "status": "REFUNDED",
+    "requested_at": "2026-06-20T18:19:17.927221",
+    "refund_amount": 7.9
+  },
+  {
+    "ra_id": "RA0014",
+    "order_id": "ORD0127",
+    "customer_id": "CUST0066",
+    "reason": "ARRIVED_LATE",
+    "status": "RECEIVED",
+    "requested_at": "2026-05-13T18:19:17.927221",
+    "refund_amount": 9.54
+  },
+  {
+    "ra_id": "RA0015",
+    "order_id": "ORD0132",
+    "customer_id": "CUST0085",
+    "reason": "WRONG_SIZE",
+    "status": "APPROVED",
+    "requested_at": "2026-05-28T18:19:17.927221",
+    "refund_amount": 6.94
+  },
+  {
+    "ra_id": "RA0016",
+    "order_id": "ORD0146",
+    "customer_id": "CUST0087",
+    "reason": "ARRIVED_LATE",
+    "status": "REFUNDED",
+    "requested_at": "2026-06-11T18:19:17.927221",
+    "refund_amount": 16.87
+  },
+  {
+    "ra_id": "RA0017",
+    "order_id": "ORD0153",
+    "customer_id": "CUST0080",
+    "reason": "CHANGED_MIND",
+    "status": "RECEIVED",
+    "requested_at": "2026-05-08T18:19:17.927221",
+    "refund_amount": 6.01
+  },
+  {
+    "ra_id": "RA0018",
+    "order_id": "ORD0180",
+    "customer_id": "CUST0050",
+    "reason": "CHANGED_MIND",
+    "status": "INSPECTED",
+    "requested_at": "2026-05-29T18:19:17.927221",
+    "refund_amount": 22.82
+  },
+  {
+    "ra_id": "RA0019",
+    "order_id": "ORD0185",
+    "customer_id": "CUST0010",
+    "reason": "CHANGED_MIND",
+    "status": "INSPECTED",
+    "requested_at": "2026-06-05T18:19:17.927221",
+    "refund_amount": 6.28
+  },
+  {
+    "ra_id": "RA0020",
+    "order_id": "ORD0205",
+    "customer_id": "CUST0009",
+    "reason": "DEFECTIVE",
+    "status": "RECEIVED",
+    "requested_at": "2026-06-03T18:19:17.927221",
+    "refund_amount": 16.9
+  },
+  {
+    "ra_id": "RA0021",
+    "order_id": "ORD0206",
+    "customer_id": "CUST0080",
+    "reason": "WRONG_SIZE",
+    "status": "RECEIVED",
+    "requested_at": "2026-06-12T18:19:17.927221",
+    "refund_amount": 18.2
+  },
+  {
+    "ra_id": "RA0022",
+    "order_id": "ORD0212",
+    "customer_id": "CUST0079",
+    "reason": "ARRIVED_LATE",
+    "status": "RECEIVED",
+    "requested_at": "2026-05-15T18:19:17.927221",
+    "refund_amount": 6.18
+  },
+  {
+    "ra_id": "RA0023",
+    "order_id": "ORD0218",
+    "customer_id": "CUST0099",
+    "reason": "DAMAGED",
+    "status": "APPROVED",
+    "requested_at": "2026-06-04T18:19:17.927221",
+    "refund_amount": 9.12
+  },
+  {
+    "ra_id": "RA0024",
+    "order_id": "ORD0232",
+    "customer_id": "CUST0041",
+    "reason": "DEFECTIVE",
+    "status": "REFUNDED",
+    "requested_at": "2026-05-04T18:19:17.927221",
+    "refund_amount": 37.95
+  },
+  {
+    "ra_id": "RA0025",
+    "order_id": "ORD0244",
+    "customer_id": "CUST0044",
+    "reason": "DAMAGED",
+    "status": "APPROVED",
+    "requested_at": "2026-05-25T18:19:17.927221",
+    "refund_amount": 14.25
+  },
+  {
+    "ra_id": "RA0026",
+    "order_id": "ORD0274",
+    "customer_id": "CUST0055",
+    "reason": "WRONG_SIZE",
+    "status": "RECEIVED",
+    "requested_at": "2026-05-15T18:19:17.927221",
+    "refund_amount": 7.21
+  },
+  {
+    "ra_id": "RA0027",
+    "order_id": "ORD0290",
+    "customer_id": "CUST0083",
+    "reason": "DAMAGED",
+    "status": "REFUNDED",
+    "requested_at": "2026-06-08T18:19:17.927221",
+    "refund_amount": 8.58
+  },
+  {
+    "ra_id": "RA0028",
+    "order_id": "ORD0321",
+    "customer_id": "CUST0054",
+    "reason": "NOT_AS_DESCRIBED",
+    "status": "RECEIVED",
+    "requested_at": "2026-05-03T18:19:17.927221",
+    "refund_amount": 5.67
+  },
+  {
+    "ra_id": "RA0029",
+    "order_id": "ORD0333",
+    "customer_id": "CUST0098",
+    "reason": "WRONG_SIZE",
+    "status": "INSPECTED",
+    "requested_at": "2026-06-04T18:19:17.927221",
+    "refund_amount": 14.98
+  },
+  {
+    "ra_id": "RA0030",
+    "order_id": "ORD0343",
+    "customer_id": "CUST0057",
+    "reason": "CHANGED_MIND",
+    "status": "INSPECTED",
+    "requested_at": "2026-06-05T18:19:17.927221",
+    "refund_amount": 14.45
+  },
+  {
+    "ra_id": "RA0031",
+    "order_id": "ORD0369",
+    "customer_id": "CUST0020",
+    "reason": "DAMAGED",
+    "status": "REFUNDED",
+    "requested_at": "2026-06-30T18:19:17.927221",
+    "refund_amount": 9.79
+  },
+  {
+    "ra_id": "RA0032",
+    "order_id": "ORD0415",
+    "customer_id": "CUST0092",
+    "reason": "DEFECTIVE",
+    "status": "REFUNDED",
+    "requested_at": "2026-06-11T18:19:17.927221",
+    "refund_amount": 43.98
+  },
+  {
+    "ra_id": "RA0033",
+    "order_id": "ORD0456",
+    "customer_id": "CUST0090",
+    "reason": "NOT_AS_DESCRIBED",
+    "status": "RECEIVED",
+    "requested_at": "2026-06-25T18:19:17.927221",
+    "refund_amount": 15.82
+  },
+  {
+    "ra_id": "RA0034",
+    "order_id": "ORD0484",
+    "customer_id": "CUST0098",
+    "reason": "CHANGED_MIND",
+    "status": "REFUNDED",
+    "requested_at": "2026-06-17T18:19:17.927221",
+    "refund_amount": 12.7
+  },
+  {
+    "ra_id": "RA0035",
+    "order_id": "ORD0486",
+    "customer_id": "CUST0028",
+    "reason": "ARRIVED_LATE",
+    "status": "INSPECTED",
+    "requested_at": "2026-06-23T18:19:17.927221",
+    "refund_amount": 17.76
+  }
+]

@@ -1,10 +1,13 @@
 """
-tool_registry.py — Tool Registry (capability → worker 映射)
+tool_registry.py — Capability 注册表
 
-Planner 只输出 capability，不指定具体 tool。
-Supervisor 通过此注册表找到对应 Worker 节点名。
+Capability 是 Planner 与 Skill 之间唯一的契约。
+此注册表定义:
+  - CAPABILITY_MAP:    capability → LangGraph 节点名（仅用于图路由）
+  - CAPABILITY_SCHEMA: capability → 描述/参数（用于 Planner prompt 生成）
 
-如需新增能力，只需在此文件中添加映射即可。
+Skill 自己持有 Tool，Tool 调用 Infrastructure。
+Planner → Capability → Skill → Tool → Infrastructure
 """
 
 from typing import Dict, List, Optional
@@ -13,65 +16,61 @@ from utils.logger import logger
 
 class ToolRegistry:
     """
-    能力注册表：capability → worker_node_name 映射。
+    Capability 注册表。
 
     用法:
         registry = ToolRegistry()
-        worker = registry.get_worker("query_database")   # → "sql_worker"
+        node = registry.get_node("sql.query")   # → "sql_skill"
+        caps = registry.get_available_capabilities()
     """
 
-    # capability → worker 节点名
+    # capability → LangGraph 节点名（仅用于图路由）
     CAPABILITY_MAP: Dict[str, str] = {
-        "query_database":   "sql_worker",
-        "search_knowledge": "rag_worker",
-        "generate_report":  "report_worker",
+        "sql.query":        "sql_skill",
+        "rag.search":       "rag_skill",
+        "report.generate":  "report_skill",
     }
 
-    # 每个 capability 的描述和参数 schema（用于 Planner prompt）
+    # capability → {description, params, 示例}（用于 Planner/Critique prompt）
     CAPABILITY_SCHEMA: Dict[str, dict] = {
-        "query_database": {
-            "description": "查询 PostgreSQL 数据库中的结构化数据，返回 Markdown 表格",
-            "params": {
-                "question": "自然语言查询问题（中文/英文）",
-            },
-            "示例": {
-                "question": "查询技术部所有项目的预算总额",
-            },
+        "sql.query": {
+            "description": "查询 PostgreSQL 跨境电商数据库，返回 Markdown 表格。覆盖商品/订单/库存/广告/物流/客户等 15 张表。",
+            "params": {"question": "自然语言查询问题（中文/英文）"},
+            "示例": {"question": "查询Amazon US渠道最近7天的销售额和订单数"},
         },
-        "search_knowledge": {
-            "description": "从知识库中检索文档、经验、最佳实践等非结构化内容",
-            "params": {
-                "question": "检索问题",
-            },
-            "示例": {
-                "question": "技术部门预算管理的最佳实践",
-            },
+        "rag.search": {
+            "description": "从跨境电商知识库中检索 SOP/规范/FAQ/Listing指南等非结构化内容",
+            "params": {"question": "检索问题"},
+            "示例": {"question": "Amazon FBA发货的标准操作流程SOP"},
         },
-        "generate_report": {
+        "report.generate": {
             "description": "生成结构化 Markdown 报告（含图表），基于数据库中的实时数据。必须有前序步骤提供数据后再调用。",
             "params": {
                 "report_type": (
                     "报告类型，可选值：\n"
-                    "  - budget_usage: 预算使用分析（项目预算金额、状态、周期、成员数）\n"
-                    "  - dept_summary: 部门概览（员工数/项目数/总预算）\n"
-                    "  - project_progress: 项目进度（项目状态/起止日期/成员）\n"
-                    "  - monthly_sales: 月度销售（部门预算+项目数对比）"
+                    "  - daily_sales: 销售日报\n"
+                    "  - product_performance: 商品动销分析\n"
+                    "  - inventory_health: 库存健康报告\n"
+                    "  - ad_performance: 广告效果分析\n"
+                    "  - order_fulfillment: 订单履约报告\n"
+                    "  - customer_analysis: 客户分析报告"
                 ),
-                "filters": "筛选条件字典，如 {'dept': '技术部'}",
+                "filters": "筛选条件字典，如 {'channel': 'Amazon'}",
             },
-            "示例": {
-                "report_type": "budget_usage",
-                "filters": {"dept": "技术部"},
-            },
+            "示例": {"report_type": "daily_sales", "filters": {"channel": "Amazon"}},
         },
     }
 
-    def get_worker(self, capability: str) -> Optional[str]:
-        """根据 capability 获取对应的 Worker 节点名称"""
-        worker = self.CAPABILITY_MAP.get(capability)
-        if not worker:
+    def get_node(self, capability: str) -> Optional[str]:
+        """根据 capability 获取对应的图节点名"""
+        node = self.CAPABILITY_MAP.get(capability)
+        if not node:
             logger.warning(f"[ToolRegistry] 未知 capability: {capability}")
-        return worker
+        return node
+
+    def get_worker(self, capability: str) -> Optional[str]:
+        """向后兼容别名（同 get_node）"""
+        return self.get_node(capability)
 
     def get_schema(self, capability: str) -> Optional[dict]:
         """获取 capability 的参数 schema"""
@@ -89,7 +88,7 @@ class ToolRegistry:
         return "\n".join(lines)
 
     def get_capabilities_schema_text(self) -> str:
-        """生成完整的 capability schema 文本（含描述、参数、示例），用于 Critique prompt"""
+        """生成完整的 capability schema 文本，用于 Critique prompt"""
         import json
         lines = []
         for cap_name in self.get_available_capabilities():

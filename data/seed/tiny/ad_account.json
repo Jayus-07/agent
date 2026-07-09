@@ -1,0 +1,23 @@
+[
+  {
+    "ad_account_id": "AA0001",
+    "channel": "AMAZON_ADS",
+    "account_id": "A33283483152",
+    "currency": "USD",
+    "status": "ACTIVE"
+  },
+  {
+    "ad_account_id": "AA0002",
+    "channel": "GOOGLE_ADS",
+    "account_id": "A30377107044",
+    "currency": "USD",
+    "status": "ACTIVE"
+  },
+  {
+    "ad_account_id": "AA0003",
+    "channel": "META_ADS",
+    "account_id": "A33297150666",
+    "currency": "USD",
+    "status": "ACTIVE"
+  }
+]

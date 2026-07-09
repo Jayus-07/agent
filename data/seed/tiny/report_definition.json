@@ -1,0 +1,42 @@
+[
+  {
+    "report_id": "RPT0001",
+    "name": "每日销售报表",
+    "description": "每日销售额、订单数、客单价汇总",
+    "category": "SALES",
+    "schedule_cron": "0 8 * * *",
+    "owner_id": "user_010"
+  },
+  {
+    "report_id": "RPT0002",
+    "name": "每周品类表现",
+    "description": "各品类销售额、环比增长率、退货率",
+    "category": "SALES",
+    "schedule_cron": "0 9 * * 1",
+    "owner_id": "user_011"
+  },
+  {
+    "report_id": "RPT0003",
+    "name": "库存预警日报",
+    "description": "低库存/滞销 SKU 预警清单",
+    "category": "INVENTORY",
+    "schedule_cron": "0 7 * * *",
+    "owner_id": "user_006"
+  },
+  {
+    "report_id": "RPT0004",
+    "name": "广告效果周报",
+    "description": "ACoS/TACoS/ROAS 按 Campaign 汇总",
+    "category": "AD",
+    "schedule_cron": "0 10 * * 1",
+    "owner_id": "user_002"
+  },
+  {
+    "report_id": "RPT0005",
+    "name": "月度利润核算",
+    "description": "渠道利润核算：收入 - 成本 - 平台费 - 广告费 - 物流费",
+    "category": "FINANCE",
+    "schedule_cron": "0 8 1 * *",
+    "owner_id": "user_011"
+  }
+]

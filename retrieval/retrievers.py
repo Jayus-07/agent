@@ -12,7 +12,7 @@ from collections import Counter
 
 from langchain_core.callbacks.manager import CallbackManagerForRetrieverRun
 
-from retrieval.hybrid import rrf_fusion_docs, hybrid_retrieve
+from retrieval.hybrid import hybrid_retrieve
 from preprocessing.entity import extract_person_names
 from preprocessing.keyword import extract_chunk_keywords
 from config import (
@@ -46,55 +46,6 @@ def _score_by_keyword_overlap(question: str, docs: list, fallback_k: int = 3) ->
 
     logger.info(f"关键词过滤: query_kw={query_kw}, 命中 {len(filtered)}/{len(docs)}")
     return filtered
-
-
-# =====================================================
-# Doc-Level Retriever
-# =====================================================
-
-class DocLevelRetriever(BaseRetriever):
-    """文档级检索器：人名倒排索引 → hybrid search → RRF → rerank"""
-
-    doc_db: object = Field(description="文档级 ChromaDB")
-    bm25: object = Field(description="BM25 检索器")
-    person_index: dict = Field(default_factory=dict, description="人名 → doc_ids 倒排索引")
-    k: int = 5
-
-    class Config:
-        arbitrary_types_allowed = True
-
-    def _get_relevant_documents(self, query: str, *, run_manager=None) -> List[Document]:
-        # 1. 人名过滤
-        person_names = extract_person_names(query)
-        docs = []
-
-        if person_names:
-            person_name = person_names[0] if isinstance(person_names, list) else person_names
-            matched_ids = self.person_index.get(person_name, [])
-            if matched_ids:
-                logger.info(f"DocLevelRetriever: 人名 '{person_name}' 命中 {len(matched_ids)} 个文档")
-                try:
-                    results = self.doc_db.get(
-                        where={"doc_id": {"$in": list(matched_ids)}}
-                    )
-                    for i, content in enumerate(results["documents"]):
-                        doc = Document(page_content=content, metadata=results["metadatas"][i])
-                        docs.append(doc)
-                except Exception as e:
-                    logger.error(f"人名过滤检索失败: {e}")
-
-        # 2. Hybrid search 回退
-        if not docs:
-            vector_docs = self.doc_db.similarity_search(query, k=3)
-            bm25_docs = self.bm25.invoke(query)
-
-            vector_docs = _score_by_keyword_overlap(query, vector_docs)
-            bm25_docs = _score_by_keyword_overlap(query, bm25_docs)
-
-            docs = rrf_fusion_docs(vector_docs, bm25_docs, k=self.k)
-            logger.info(f"DocLevelRetriever: hybrid 检索 → {len(docs)} 个融合结果")
-
-        return docs[: self.k]
 
 
 # =====================================================
@@ -189,17 +140,62 @@ class ChunkLevelRetriever(BaseRetriever):
                 metadata_filter=request_metadata_filter,
             )
             for d in res:
-                cid = d.metadata["chunk_id"]
+                cid = d.metadata.get("chunk_id") or f'{d.metadata.get("doc_id","?")}:{d.metadata.get("chunk_index",0)}'
                 if cid not in seen:
                     seen.add(cid)
                     all_docs.append(d)
 
+        # — 降级: Stage 2 无结果时回退到文档全文 —
         if not all_docs:
-            logger.warning(f"ChunkLevelRetriever: 未找到相关内容")
+            logger.warning(f"ChunkLevelRetriever: Stage 2 无结果，尝试回退到文档全文")
+            fallback_docs = self._fallback_to_doc_fulltext(query, doc_ids, request_metadata_filter)
+            if fallback_docs:
+                logger.info(f"ChunkLevelRetriever 降级: 回退到 {len(fallback_docs)} 篇文档全文")
+                return fallback_docs[: self.k]
+            logger.warning(f"ChunkLevelRetriever: 降级也无结果")
             return []
 
         logger.info(f"ChunkLevelRetriever Stage 2: 召回 {len(all_docs)} 个 chunks")
         return all_docs[: self.k]
+
+    def _fallback_to_doc_fulltext(self, query: str, doc_ids: list | None,
+                                   metadata_filter: dict) -> List[Document]:
+        """Stage 2 无结果时的降级：用 doc 全文替代 chunk。
+
+        1. 如果有已知 doc_ids → 直接拉取这些文档的全文
+        2. 否则做一次 doc 级检索 → 拉取全文
+        """
+        from langchain_core.documents import Document
+
+        if not doc_ids:
+            # 没有已知 doc_ids，做一次 doc 级搜索
+            try:
+                doc_results = self.doc_db.similarity_search(
+                    query, k=5,
+                    filter=metadata_filter if metadata_filter else None,
+                )
+                doc_ids = [
+                    d.metadata.get("doc_id") for d in doc_results
+                    if d.metadata.get("doc_id")
+                ]
+            except Exception:
+                doc_ids = []
+
+        if not doc_ids:
+            return []
+
+        # 拉取文档全文
+        try:
+            results = self.doc_db.get(where={"doc_id": {"$in": doc_ids[:5]}})
+            full_docs = []
+            for i, content in enumerate(results.get("documents", [])):
+                meta = results["metadatas"][i] if i < len(results.get("metadatas", [])) else {}
+                full_docs.append(Document(page_content=content, metadata=meta))
+            logger.info(f"ChunkLevelRetriever 降级: doc_ids={doc_ids[:5]} → 全文 {len(full_docs)} 篇")
+            return full_docs
+        except Exception as e:
+            logger.error(f"ChunkLevelRetriever 降级失败: {e}")
+            return []
 
 
 # =====================================================

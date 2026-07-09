@@ -50,7 +50,7 @@ from evaluation.metrics import (
 from evaluation.registry import register_runner, get_runner, list_registered
 
 # 报告
-from evaluation.report import print_summary, write_markdown_report, compare_reports
+from evaluation.report import print_summary, write_markdown_report, write_json_report, compare_reports
 
 # 调度
 from evaluation.runner import run_all, run_module, evaluate_planner_offline
@@ -74,7 +74,7 @@ __all__ = [
     # Registry
     "register_runner", "get_runner", "list_registered",
     # Report
-    "print_summary", "write_markdown_report", "compare_reports",
+    "print_summary", "write_markdown_report", "write_json_report", "compare_reports",
     # Runner
     "run_all", "run_module", "evaluate_planner_offline",
     # Dataset

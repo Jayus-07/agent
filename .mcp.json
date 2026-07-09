@@ -1,23 +1,29 @@
 {
-  "puppeteer": {
-    "type": "stdio",
-    "command": "node",
-    "args": [
-      "C:/Users/wh/AppData/Roaming/npm/node_modules/@modelcontextprotocol/server-puppeteer/dist/index.js"
-    ],
-    "env": {
-      "PUPPETEER_EXECUTABLE_PATH": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+  "mcpServers": {
+    "puppeteer": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "C:/Users/wh/AppData/Roaming/npm/node_modules/@modelcontextprotocol/server-puppeteer/dist/index.js"
+      ],
+      "env": {
+        "PUPPETEER_EXECUTABLE_PATH": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+      }
+    },
+    "filesystem": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "C:/Users/wh/AppData/Roaming/npm/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
+        "D:\\Program Files\\workplace\\agent",
+        "D:\\tmp",
+        "C:\\Users\\wh\\Downloads",
+        "C:\\Users\\wh\\Desktop"
+      ]
+    },
+    "code-review-graph": {
+      "type": "http",
+      "url": "http://localhost:5555/mcp"
     }
-  },
-  "filesystem": {
-    "type": "stdio",
-    "command": "node",
-    "args": [
-      "C:/Users/wh/AppData/Roaming/npm/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
-      "D:\\Program Files\\workplace\\agent",
-      "D:\\tmp",
-      "C:\\Users\\wh\\Downloads",
-      "C:\\Users\\wh\\Desktop"
-    ]
   }
 }

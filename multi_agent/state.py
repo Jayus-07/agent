@@ -3,7 +3,7 @@ state.py — AgentState 与 StepResult 类型定义
 
 统一图状态对象，所有节点通过读写此 state 协同工作。
 """
-
+import operator
 from typing import TypedDict, Literal, Any, Annotated
 from langgraph.graph.message import add_messages
 
@@ -57,3 +57,6 @@ class AgentState(TypedDict):
     _supervisor_loop_count: int                 # Supervisor 调度轮次计数
     _plan_critiqued: bool                       # 是否经过了 Plan Critique
     _plan_changed: bool                         # Critique 是否修改了计划
+    # 降级步骤集合：用 operator.or_ 作为 reducer（即 set union）
+    # 节点必须返回**新** set（用 | 运算），禁止原地 .add() 修改 — 否则 reducer 看不到变化
+    _degraded_steps: Annotated[set[str], operator.or_]

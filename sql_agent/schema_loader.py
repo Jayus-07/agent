@@ -40,10 +40,6 @@ class SchemaLoader:
     def get_all_table_names(self) -> List[str]:
         return list(self.allowed_tables)
 
-    def get_table_columns(self, table_name: str) -> Dict[str, str]:
-        t = self._config["tables"].get(table_name)
-        return t["columns"] if t else {}
-
     def get_table_description(self, table_name: str) -> str:
         t = self._config["tables"].get(table_name)
         return t.get("description", "") if t else ""
@@ -73,30 +69,11 @@ class SchemaLoader:
         return "\n\n".join(parts)
 
     # =================================================
-    # 安全检查
+    # 安全检查（行级安全）
     # =================================================
-
-    def is_table_allowed(self, table_name: str) -> bool:
-        return table_name.lower() in self.allowed_tables
-
-    def is_column_sensitive(self, column_ref: str) -> bool:
-        """column_ref 格式: table.column 或 column"""
-        return column_ref.lower() in self.sensitive_columns
-
-    def get_masked_columns(self) -> Dict[str, tuple]:
-        return dict(self.masked_columns)
 
     def get_row_security(self, table_name: str) -> dict:
         return self.row_security.get(table_name, {})
-
-    def is_banned_function(self, func_name: str) -> bool:
-        return func_name.upper() in self.banned_functions
-
-    def is_table_covered_by_row_security(self, table_name: str) -> bool:
-        return table_name.lower() in self.row_security
-
-    def get_rows_to_check(self) -> Set[str]:
-        return set(self.row_security.keys())
 
     # =================================================
     # 动态表注册（demo/测试用）

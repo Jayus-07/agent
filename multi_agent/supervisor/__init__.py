@@ -1,0 +1,10 @@
+"""supervisor — 调度 + 降级 + 告警"""
+from multi_agent.supervisor.scheduler import supervisor_node, route_after_supervisor
+from multi_agent.supervisor.degradation import execute_degradation, can_degrade, get_fallback_capability, DEGRADATION_CHAIN
+from multi_agent.supervisor.alerts import PlanAlert, ALERT_CODES, make_alert, log_degradation
+
+__all__ = [
+    "supervisor_node", "route_after_supervisor",
+    "execute_degradation", "can_degrade", "get_fallback_capability", "DEGRADATION_CHAIN",
+    "PlanAlert", "ALERT_CODES", "make_alert", "log_degradation",
+]

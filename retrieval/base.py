@@ -23,7 +23,7 @@ class CustomRetriever:
             debug: 是否打印调试信息
             doc_ids: 文档ID列表过滤
             metadata_filter: 额外的元数据过滤条件字典
-                例如: {"person_names": "吴浩", "doc_type": "resume"}
+                例如: {"person_names": "MeridiHome", "doc_type": "listing"}
         """
 
         filter_dict = {}

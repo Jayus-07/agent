@@ -1,0 +1,602 @@
+[
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0001",
+    "qty_on_hand": 270,
+    "qty_reserved": 35,
+    "qty_available": 235,
+    "qty_in_transit": 106,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0001",
+    "qty_on_hand": 573,
+    "qty_reserved": 57,
+    "qty_available": 516,
+    "qty_in_transit": 94,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0002",
+    "qty_on_hand": 90,
+    "qty_reserved": 13,
+    "qty_available": 77,
+    "qty_in_transit": 125,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0002",
+    "qty_on_hand": 327,
+    "qty_reserved": 39,
+    "qty_available": 288,
+    "qty_in_transit": 60,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0003",
+    "qty_on_hand": 139,
+    "qty_reserved": 33,
+    "qty_available": 106,
+    "qty_in_transit": 86,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0003",
+    "qty_on_hand": 172,
+    "qty_reserved": 30,
+    "qty_available": 142,
+    "qty_in_transit": 21,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0004",
+    "qty_on_hand": 44,
+    "qty_reserved": 10,
+    "qty_available": 34,
+    "qty_in_transit": 2,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0004",
+    "qty_on_hand": 153,
+    "qty_reserved": 22,
+    "qty_available": 131,
+    "qty_in_transit": 23,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0005",
+    "qty_on_hand": 763,
+    "qty_reserved": 148,
+    "qty_available": 615,
+    "qty_in_transit": 13,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0005",
+    "qty_on_hand": 56,
+    "qty_reserved": 0,
+    "qty_available": 56,
+    "qty_in_transit": 74,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0006",
+    "qty_on_hand": 444,
+    "qty_reserved": 91,
+    "qty_available": 353,
+    "qty_in_transit": 179,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0006",
+    "qty_on_hand": 332,
+    "qty_reserved": 8,
+    "qty_available": 324,
+    "qty_in_transit": 42,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0007",
+    "qty_on_hand": 179,
+    "qty_reserved": 2,
+    "qty_available": 177,
+    "qty_in_transit": 149,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0007",
+    "qty_on_hand": 182,
+    "qty_reserved": 33,
+    "qty_available": 149,
+    "qty_in_transit": 49,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0008",
+    "qty_on_hand": 267,
+    "qty_reserved": 31,
+    "qty_available": 236,
+    "qty_in_transit": 125,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0008",
+    "qty_on_hand": 79,
+    "qty_reserved": 6,
+    "qty_available": 73,
+    "qty_in_transit": 134,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0009",
+    "qty_on_hand": 147,
+    "qty_reserved": 12,
+    "qty_available": 135,
+    "qty_in_transit": 16,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0009",
+    "qty_on_hand": 380,
+    "qty_reserved": 29,
+    "qty_available": 351,
+    "qty_in_transit": 164,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0010",
+    "qty_on_hand": 665,
+    "qty_reserved": 19,
+    "qty_available": 646,
+    "qty_in_transit": 155,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0010",
+    "qty_on_hand": 241,
+    "qty_reserved": 2,
+    "qty_available": 239,
+    "qty_in_transit": 86,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0011",
+    "qty_on_hand": 224,
+    "qty_reserved": 31,
+    "qty_available": 193,
+    "qty_in_transit": 115,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0011",
+    "qty_on_hand": 446,
+    "qty_reserved": 40,
+    "qty_available": 406,
+    "qty_in_transit": 167,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0012",
+    "qty_on_hand": 692,
+    "qty_reserved": 86,
+    "qty_available": 606,
+    "qty_in_transit": 60,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0012",
+    "qty_on_hand": 900,
+    "qty_reserved": 83,
+    "qty_available": 817,
+    "qty_in_transit": 83,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0013",
+    "qty_on_hand": 111,
+    "qty_reserved": 4,
+    "qty_available": 107,
+    "qty_in_transit": 39,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0013",
+    "qty_on_hand": 29,
+    "qty_reserved": 5,
+    "qty_available": 24,
+    "qty_in_transit": 30,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0014",
+    "qty_on_hand": 60,
+    "qty_reserved": 8,
+    "qty_available": 52,
+    "qty_in_transit": 38,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0014",
+    "qty_on_hand": 178,
+    "qty_reserved": 41,
+    "qty_available": 137,
+    "qty_in_transit": 176,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0015",
+    "qty_on_hand": 273,
+    "qty_reserved": 58,
+    "qty_available": 215,
+    "qty_in_transit": 111,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0015",
+    "qty_on_hand": 131,
+    "qty_reserved": 25,
+    "qty_available": 106,
+    "qty_in_transit": 171,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0016",
+    "qty_on_hand": 511,
+    "qty_reserved": 46,
+    "qty_available": 465,
+    "qty_in_transit": 181,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0016",
+    "qty_on_hand": 286,
+    "qty_reserved": 56,
+    "qty_available": 230,
+    "qty_in_transit": 93,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0017",
+    "qty_on_hand": 125,
+    "qty_reserved": 12,
+    "qty_available": 113,
+    "qty_in_transit": 12,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0017",
+    "qty_on_hand": 114,
+    "qty_reserved": 27,
+    "qty_available": 87,
+    "qty_in_transit": 99,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0018",
+    "qty_on_hand": 243,
+    "qty_reserved": 33,
+    "qty_available": 210,
+    "qty_in_transit": 101,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0018",
+    "qty_on_hand": 678,
+    "qty_reserved": 65,
+    "qty_available": 613,
+    "qty_in_transit": 34,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0019",
+    "qty_on_hand": 399,
+    "qty_reserved": 115,
+    "qty_available": 284,
+    "qty_in_transit": 108,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0019",
+    "qty_on_hand": 323,
+    "qty_reserved": 88,
+    "qty_available": 235,
+    "qty_in_transit": 145,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0020",
+    "qty_on_hand": 735,
+    "qty_reserved": 1,
+    "qty_available": 734,
+    "qty_in_transit": 200,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0020",
+    "qty_on_hand": 257,
+    "qty_reserved": 32,
+    "qty_available": 225,
+    "qty_in_transit": 124,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0021",
+    "qty_on_hand": 986,
+    "qty_reserved": 43,
+    "qty_available": 943,
+    "qty_in_transit": 35,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0021",
+    "qty_on_hand": 201,
+    "qty_reserved": 29,
+    "qty_available": 172,
+    "qty_in_transit": 71,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0022",
+    "qty_on_hand": 233,
+    "qty_reserved": 29,
+    "qty_available": 204,
+    "qty_in_transit": 197,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0022",
+    "qty_on_hand": 74,
+    "qty_reserved": 15,
+    "qty_available": 59,
+    "qty_in_transit": 157,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0023",
+    "qty_on_hand": 209,
+    "qty_reserved": 6,
+    "qty_available": 203,
+    "qty_in_transit": 197,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0023",
+    "qty_on_hand": 919,
+    "qty_reserved": 55,
+    "qty_available": 864,
+    "qty_in_transit": 37,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0024",
+    "qty_on_hand": 320,
+    "qty_reserved": 82,
+    "qty_available": 238,
+    "qty_in_transit": 190,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0024",
+    "qty_on_hand": 235,
+    "qty_reserved": 27,
+    "qty_available": 208,
+    "qty_in_transit": 135,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0025",
+    "qty_on_hand": 472,
+    "qty_reserved": 86,
+    "qty_available": 386,
+    "qty_in_transit": 111,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0025",
+    "qty_on_hand": 850,
+    "qty_reserved": 204,
+    "qty_available": 646,
+    "qty_in_transit": 116,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0026",
+    "qty_on_hand": 545,
+    "qty_reserved": 47,
+    "qty_available": 498,
+    "qty_in_transit": 193,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0026",
+    "qty_on_hand": 106,
+    "qty_reserved": 10,
+    "qty_available": 96,
+    "qty_in_transit": 104,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0027",
+    "qty_on_hand": 479,
+    "qty_reserved": 113,
+    "qty_available": 366,
+    "qty_in_transit": 121,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0027",
+    "qty_on_hand": 849,
+    "qty_reserved": 236,
+    "qty_available": 613,
+    "qty_in_transit": 155,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0028",
+    "qty_on_hand": 236,
+    "qty_reserved": 22,
+    "qty_available": 214,
+    "qty_in_transit": 151,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0028",
+    "qty_on_hand": 174,
+    "qty_reserved": 15,
+    "qty_available": 159,
+    "qty_in_transit": 166,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0029",
+    "qty_on_hand": 177,
+    "qty_reserved": 12,
+    "qty_available": 165,
+    "qty_in_transit": 148,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0029",
+    "qty_on_hand": 174,
+    "qty_reserved": 0,
+    "qty_available": 174,
+    "qty_in_transit": 58,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0001",
+    "sku_id": "SKU0030",
+    "qty_on_hand": 47,
+    "qty_reserved": 11,
+    "qty_available": 36,
+    "qty_in_transit": 61,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  },
+  {
+    "warehouse_id": "WH0002",
+    "sku_id": "SKU0030",
+    "qty_on_hand": 76,
+    "qty_reserved": 1,
+    "qty_available": 75,
+    "qty_in_transit": 19,
+    "last_updated": "2026-07-02T18:19:17.776538",
+    "sync_source": "SEED"
+  }
+]

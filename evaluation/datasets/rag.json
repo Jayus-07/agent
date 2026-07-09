@@ -1,338 +1,338 @@
 {
   "module": "rag",
-  "version": "1.0",
-  "description": "RAG 检索评估数据集 — 验证向量检索+BM25+Reranker 的召回质量",
+  "version": "2.0",
+  "description": "RAG 检索评估数据集 — 跨境电商方向（Meridian Global Commerce），验证向量检索对种子知识文档的召回质量",
   "test_cases": [
     {
       "id": "R001",
-      "question": "冷藏肉类的保质期是多久？",
-      "kb_id": "policy",
+      "question": "Amazon Listing 标题的格式是什么？",
+      "kb_id": "AMAZON_SOP",
       "expected": {
-        "relevant_docs": ["policy/优品超市 - 《生鲜营运标准手册》V4.0（节选）.txt"],
-        "relevant_snippets": ["冷藏肉类到货后48小时"],
+        "relevant_docs": ["KD0001", "KD0003"],
+        "relevant_snippets": ["品牌", "核心词", "属性词"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "easy", "domain": "fresh_food"}
+      "metadata": {"difficulty": "easy", "domain": "amazon_sop"}
     },
     {
       "id": "R002",
-      "question": "叶菜类蔬菜当天没卖完怎么处理？",
-      "kb_id": "policy",
+      "question": "五点描述每条最多多少字符？",
+      "kb_id": "AMAZON_SOP",
       "expected": {
-        "relevant_docs": ["policy/优品超市 - 《生鲜营运标准手册》V4.0（节选）.txt"],
-        "relevant_snippets": ["22:00前报损"],
+        "relevant_docs": ["KD0001", "KD0003"],
+        "relevant_snippets": ["500"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "easy", "domain": "fresh_food"}
+      "metadata": {"difficulty": "easy", "domain": "amazon_sop"}
     },
     {
       "id": "R003",
-      "question": "海鲜活鲜死亡超过20分钟怎么处理？",
-      "kb_id": "policy",
+      "question": "A+ 内容需要什么前置条件才能使用？",
+      "kb_id": "AMAZON_SOP",
       "expected": {
-        "relevant_docs": ["policy/优品超市 - 《生鲜营运标准手册》V4.0（节选）.txt"],
-        "relevant_snippets": ["5折销售", "死亡减价品"],
+        "relevant_docs": ["KD0001", "KD0003"],
+        "relevant_snippets": ["品牌备案", "2.0"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "medium", "domain": "fresh_food"}
+      "metadata": {"difficulty": "easy", "domain": "amazon_sop"}
     },
     {
       "id": "R004",
-      "question": "熟食热柜存放超过多长时间需要销毁？",
-      "kb_id": "policy",
+      "question": "Amazon 后端关键词应该用什么符号分隔？",
+      "kb_id": "AMAZON_SOP",
       "expected": {
-        "relevant_docs": ["policy/优品超市 - 《生鲜营运标准手册》V4.0（节选）.txt"],
-        "relevant_snippets": ["热柜存放不超过4小时"],
+        "relevant_docs": ["KD0001", "KD0003"],
+        "relevant_snippets": ["空格", "不用逗号"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "medium", "domain": "fresh_food"}
+      "metadata": {"difficulty": "medium", "domain": "amazon_sop"}
     },
     {
       "id": "R005",
-      "question": "活鲜氧气含量最低要求是多少？",
-      "kb_id": "policy",
+      "question": "Listing 标题中禁止出现什么内容？",
+      "kb_id": "AMAZON_SOP",
       "expected": {
-        "relevant_docs": ["policy/优品超市 - 《生鲜营运标准手册》V4.0（节选）.txt"],
-        "relevant_snippets": ["O2≥6mg/L"],
+        "relevant_docs": ["KD0001", "KD0003"],
+        "relevant_snippets": ["价格", "促销", "夸大"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "hard", "domain": "fresh_food"}
+      "metadata": {"difficulty": "medium", "domain": "amazon_sop"}
     },
     {
       "id": "R006",
-      "question": "诚安e生保的一般医疗保险金年度限额是多少？",
-      "kb_id": "policy",
+      "question": "注册 Amazon 卖家账号需要准备哪些材料？",
+      "kb_id": "AMAZON_SOP",
       "expected": {
-        "relevant_docs": ["policy/诚安保险 - 《健康险产品条款汇编》（节选）.txt"],
-        "relevant_snippets": ["200万元"],
+        "relevant_docs": ["KD0006"],
+        "relevant_snippets": ["营业执照", "法人身份证", "双币信用卡"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "easy", "domain": "insurance"}
+      "metadata": {"difficulty": "easy", "domain": "amazon_sop"}
     },
     {
       "id": "R007",
-      "question": "诚安e生保的等待期多长？",
-      "kb_id": "policy",
+      "question": "Amazon 账号注册后审核需要多长时间？",
+      "kb_id": "AMAZON_SOP",
       "expected": {
-        "relevant_docs": ["policy/诚安保险 - 《健康险产品条款汇编》（节选）.txt"],
-        "relevant_snippets": ["90日"],
+        "relevant_docs": ["KD0006"],
+        "relevant_snippets": ["1-3 个工作日"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "easy", "domain": "insurance"}
+      "metadata": {"difficulty": "easy", "domain": "amazon_sop"}
     },
     {
       "id": "R008",
-      "question": "未用社保身份结算的赔付比例是多少？",
-      "kb_id": "policy",
+      "question": "W-8BEN 表格在哪个步骤填写？",
+      "kb_id": "AMAZON_SOP",
       "expected": {
-        "relevant_docs": ["policy/诚安保险 - 《健康险产品条款汇编》（节选）.txt"],
-        "relevant_snippets": ["60%"],
+        "relevant_docs": ["KD0006"],
+        "relevant_snippets": ["税务调查", "W-8BEN"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "medium", "domain": "insurance"}
+      "metadata": {"difficulty": "medium", "domain": "amazon_sop"}
     },
     {
       "id": "R009",
-      "question": "重大疾病保险金的年度限额和免赔额是多少？",
-      "kb_id": "policy",
+      "question": "欧洲站 KYC 审核需要提供哪些证明？",
+      "kb_id": "AMAZON_SOP",
       "expected": {
-        "relevant_docs": ["policy/诚安保险 - 《健康险产品条款汇编》（节选）.txt"],
-        "relevant_snippets": ["400万元", "0免赔"],
+        "relevant_docs": ["KD0006"],
+        "relevant_snippets": ["公司注册证明", "银行账户证明", "地址证明"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "medium", "domain": "insurance"}
+      "metadata": {"difficulty": "medium", "domain": "amazon_sop"}
     },
     {
       "id": "R010",
-      "question": "一般医疗保险金的免赔额是多少？",
-      "kb_id": "policy",
+      "question": "Amazon 账号注册被拒的常见原因有哪些？",
+      "kb_id": "AMAZON_SOP",
       "expected": {
-        "relevant_docs": ["policy/诚安保险 - 《健康险产品条款汇编》（节选）.txt"],
-        "relevant_snippets": ["1万元"],
+        "relevant_docs": ["KD0006"],
+        "relevant_snippets": ["营业执照模糊", "关联账号", "信用卡不匹配"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "easy", "domain": "insurance"}
+      "metadata": {"difficulty": "easy", "domain": "amazon_sop"}
     },
     {
       "id": "R011",
-      "question": "如何重置企业邮箱密码？",
-      "kb_id": "tech",
+      "question": "出差住宿费一线城市每晚能报销多少？",
+      "kb_id": "POLICY",
       "expected": {
-        "relevant_docs": ["tech/云创科技 - 《员工 IT 服务手册》V3.2（节选）.txt"],
-        "relevant_snippets": ["自助重置"],
+        "relevant_docs": ["KD0002"],
+        "relevant_snippets": ["500 元"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "easy", "domain": "it_service"}
+      "metadata": {"difficulty": "easy", "domain": "policy"}
     },
     {
       "id": "R012",
-      "question": "企业邮箱容量上限是多少？",
-      "kb_id": "tech",
+      "question": "出差餐补早中晚各多少？",
+      "kb_id": "POLICY",
       "expected": {
-        "relevant_docs": ["tech/云创科技 - 《员工 IT 服务手册》V3.2（节选）.txt"],
-        "relevant_snippets": ["50GB"],
+        "relevant_docs": ["KD0002"],
+        "relevant_snippets": ["30 元", "50 元", "60 元"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "easy", "domain": "it_service"}
+      "metadata": {"difficulty": "easy", "domain": "policy"}
     },
     {
       "id": "R013",
-      "question": "邮箱密码的复杂度要求是什么？",
-      "kb_id": "tech",
+      "question": "乘坐飞机出差什么情况下可以申请商务舱？",
+      "kb_id": "POLICY",
       "expected": {
-        "relevant_docs": ["tech/云创科技 - 《员工 IT 服务手册》V3.2（节选）.txt"],
-        "relevant_snippets": ["8位", "大写字母", "小写字母", "数字", "特殊符号"],
+        "relevant_docs": ["KD0002"],
+        "relevant_snippets": ["飞行 4h", "经济舱", "商务舱"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "medium", "domain": "it_service"}
+      "metadata": {"difficulty": "easy", "domain": "policy"}
     },
     {
       "id": "R014",
-      "question": "CNC设备E-102报警代码是什么故障？",
-      "kb_id": "tech",
+      "question": "报销单提交后审批流程是什么？",
+      "kb_id": "POLICY",
       "expected": {
-        "relevant_docs": ["tech/精工制造 -《CNC 设备故障处理手册》2024版（节选）.txt"],
-        "relevant_snippets": ["主轴过热"],
+        "relevant_docs": ["KD0002"],
+        "relevant_snippets": ["直属上级审批", "财务审核", "打款"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "easy", "domain": "cnc"}
+      "metadata": {"difficulty": "medium", "domain": "policy"}
     },
     {
       "id": "R015",
-      "question": "VMC-850L的E-102报警怎么排查？",
-      "kb_id": "tech",
+      "question": "FBA 外箱标签的尺寸规格是多少？",
+      "kb_id": "WAREHOUSE",
       "expected": {
-        "relevant_docs": ["tech/精工制造 -《CNC 设备故障处理手册》2024版（节选）.txt"],
-        "relevant_snippets": ["冷却液液位", "循环泵", "过滤网", "温度传感器"],
+        "relevant_docs": ["KD0004", "KD0009", "KD0014", "KD0015"],
+        "relevant_snippets": ["100×150mm", "30×50mm"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "medium", "domain": "cnc"}
+      "metadata": {"difficulty": "easy", "domain": "warehouse"}
     },
     {
       "id": "R016",
-      "question": "主轴冷却液多久更换一次？",
-      "kb_id": "tech",
+      "question": "发 FBA 单箱重量不能超过多少？超过了怎么办？",
+      "kb_id": "WAREHOUSE",
       "expected": {
-        "relevant_docs": ["tech/精工制造 -《CNC 设备故障处理手册》2024版（节选）.txt"],
-        "relevant_snippets": ["每运行200小时"],
+        "relevant_docs": ["KD0004", "KD0009", "KD0014", "KD0015"],
+        "relevant_snippets": ["23kg", "Team Lift"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "easy", "domain": "cnc"}
+      "metadata": {"difficulty": "easy", "domain": "warehouse"}
     },
     {
       "id": "R017",
-      "question": "员工请假流程怎么走？",
-      "kb_id": "hr",
+      "question": "液体产品发 FBA 需要满足什么测试标准？",
+      "kb_id": "WAREHOUSE",
       "expected": {
-        "relevant_docs": ["hr/hr.txt"],
-        "relevant_snippets": ["OA系统", "审批"],
+        "relevant_docs": ["KD0004", "KD0009", "KD0014", "KD0015"],
+        "relevant_snippets": ["ISTA 6", "密封袋", "吸水纸"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "easy", "domain": "hr"}
+      "metadata": {"difficulty": "medium", "domain": "warehouse"}
     },
     {
       "id": "R018",
-      "question": "每月允许迟到几次？有什么限制？",
-      "kb_id": "hr",
+      "question": "FBA 托盘尺寸和高度要求是什么？",
+      "kb_id": "WAREHOUSE",
       "expected": {
-        "relevant_docs": ["hr/hr.txt"],
-        "relevant_snippets": ["3次", "10分钟"],
+        "relevant_docs": ["KD0004", "KD0009", "KD0014", "KD0015"],
+        "relevant_snippets": ["1200×1000mm", "1800mm", "缠绕膜"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "easy", "domain": "hr"}
+      "metadata": {"difficulty": "medium", "domain": "warehouse"}
     },
     {
       "id": "R019",
-      "question": "连续旷工几天会被解除劳动合同？",
-      "kb_id": "hr",
+      "question": "FBA 标签用什么打印方式？禁止用什么？",
+      "kb_id": "WAREHOUSE",
       "expected": {
-        "relevant_docs": ["hr/hr.txt"],
-        "relevant_snippets": ["3天"],
+        "relevant_docs": ["KD0004", "KD0009", "KD0014", "KD0015"],
+        "relevant_snippets": ["热敏纸", "激光打印", "喷墨打印"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "easy", "domain": "hr"}
+      "metadata": {"difficulty": "medium", "domain": "warehouse"}
     },
     {
       "id": "R020",
-      "question": "季度绩效评分的等级有哪些？",
-      "kb_id": "hr",
+      "question": "FNSKU 标签应该覆盖原来的什么条码？",
+      "kb_id": "WAREHOUSE",
       "expected": {
-        "relevant_docs": ["hr/hr.txt"],
-        "relevant_snippets": ["A", "B", "C", "D"],
+        "relevant_docs": ["KD0004", "KD0009", "KD0014", "KD0015"],
+        "relevant_snippets": ["UPC", "EAN"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "easy", "domain": "hr"}
+      "metadata": {"difficulty": "easy", "domain": "warehouse"}
     },
     {
       "id": "R021",
-      "question": "财务报销超过多少元需要总监审批？",
-      "kb_id": "finance",
+      "question": "新员工入职培训 Day 1 包含什么内容？",
+      "kb_id": "TRAINING",
       "expected": {
-        "relevant_docs": ["finance/finance.txt"],
-        "relevant_snippets": ["5000元"],
+        "relevant_docs": ["KD0007", "KD0017"],
+        "relevant_snippets": ["公司简介", "品牌矩阵", "组织架构"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "easy", "domain": "finance"}
+      "metadata": {"difficulty": "easy", "domain": "training"}
     },
     {
       "id": "R022",
-      "question": "财务数据导出的安全规范是什么？",
-      "kb_id": "finance",
+      "question": "运营培训 Day 4-5 学习什么实操内容？",
+      "kb_id": "TRAINING",
       "expected": {
-        "relevant_docs": ["finance/finance.txt"],
-        "relevant_snippets": ["审批", "加密"],
+        "relevant_docs": ["KD0007", "KD0017"],
+        "relevant_snippets": ["Listing 创建", "标题", "五点", "A+"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "medium", "domain": "finance"}
+      "metadata": {"difficulty": "medium", "domain": "training"}
     },
     {
       "id": "R023",
-      "question": "产品A的活跃用户数变化趋势如何？",
-      "kb_id": "hr",
+      "question": "运营培训中有哪些竞品分析相关的内容和工具？",
+      "kb_id": "TRAINING",
       "expected": {
-        "relevant_docs": ["hr/product.txt"],
-        "relevant_snippets": ["下降15%"],
+        "relevant_docs": ["KD0007", "KD0017"],
+        "relevant_snippets": ["Keepa", "Helium 10", "Jungle Scout"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "medium", "domain": "product_ops"}
+      "metadata": {"difficulty": "easy", "domain": "training"}
     },
     {
       "id": "R024",
-      "question": "Q1销售同比增长了多少？哪个地区表现最差？",
-      "kb_id": "sales",
+      "question": "收纳盒使用什么材质？是否安全？",
+      "kb_id": "PRODUCT",
       "expected": {
-        "relevant_docs": ["sales/sales.txt"],
-        "relevant_snippets": ["12%", "华东地区"],
+        "relevant_docs": ["KD0013"],
+        "relevant_snippets": ["PP", "聚丙烯", "食品级"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "medium", "domain": "sales"}
+      "metadata": {"difficulty": "easy", "domain": "product"}
     },
     {
       "id": "R025",
-      "question": "获客成本上升了多少？续约率有什么变化？",
-      "kb_id": "sales",
+      "question": "M 号收纳盒的尺寸和容量是多少？",
+      "kb_id": "PRODUCT",
       "expected": {
-        "relevant_docs": ["sales/sales.txt"],
-        "relevant_snippets": ["18%", "82%", "74%"],
+        "relevant_docs": ["KD0013"],
+        "relevant_snippets": ["260×180×150", "5.0"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "medium", "domain": "sales"}
+      "metadata": {"difficulty": "easy", "domain": "product"}
     },
     {
       "id": "R026",
-      "question": "微服务架构中如何保证高并发评分的性能？",
-      "kb_id": "tech",
+      "question": "XL 号收纳盒的尺寸和容量是多少？",
+      "kb_id": "PRODUCT",
       "expected": {
-        "relevant_docs": ["tech/项目一：企业员工绩效反馈与匿名评分系统（升级版）.md"],
-        "relevant_snippets": ["Redis", "消息队列", "异步"],
+        "relevant_docs": ["KD0013"],
+        "relevant_snippets": ["16.0", "XL"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "hard", "domain": "project_architecture"}
+      "metadata": {"difficulty": "easy", "domain": "product"}
     },
     {
       "id": "R027",
-      "question": "为什么选择RocketMQ而不是Kafka？",
-      "kb_id": "tech",
+      "question": "退货可以在多少天内申请？",
+      "kb_id": "CUSTOMER_SERVICE",
       "expected": {
-        "relevant_docs": ["tech/项目一：企业员工绩效反馈与匿名评分系统（升级版）.md"],
-        "relevant_snippets": ["RocketMQ"],
+        "relevant_docs": ["KD0020"],
+        "relevant_snippets": ["30 天"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "hard", "domain": "project_architecture"}
+      "metadata": {"difficulty": "easy", "domain": "customer_service"}
     },
     {
       "id": "R028",
-      "question": "Kubernetes集群支付服务CPU使用率超85%时怎么处理？",
-      "kb_id": "default",
+      "question": "开封使用过的商品退货折旧费最高扣多少？",
+      "kb_id": "CUSTOMER_SERVICE",
       "expected": {
-        "relevant_docs": ["_default/操作文档/tech.txt"],
-        "relevant_snippets": ["扩容", "HPA"],
+        "relevant_docs": ["KD0020"],
+        "relevant_snippets": ["50%", "折旧费"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "medium", "domain": "devops"}
+      "metadata": {"difficulty": "medium", "domain": "customer_service"}
     },
     {
       "id": "R029",
-      "question": "金丝雀发布流程是怎样的？",
-      "kb_id": "default",
+      "question": "退货仓库检测需要多长时间？",
+      "kb_id": "CUSTOMER_SERVICE",
       "expected": {
-        "relevant_docs": ["_default/操作文档/tech.txt"],
-        "relevant_snippets": ["金丝雀"],
+        "relevant_docs": ["KD0020"],
+        "relevant_snippets": ["1-3 个工作日"],
         "min_relevant_chunks": 1
       },
-      "metadata": {"difficulty": "medium", "domain": "devops"}
+      "metadata": {"difficulty": "medium", "domain": "customer_service"}
     },
     {
       "id": "R030",
-      "question": "薪酬支付延迟了怎么处理？",
-      "kb_id": "hr",
+      "question": "Shopify 店铺如何设置运费模板？",
+      "kb_id": "AMAZON_SOP",
       "expected": {
-        "relevant_docs": ["hr/hr.txt"],
+        "relevant_docs": [],
         "relevant_snippets": [],
         "min_relevant_chunks": 0
       },
-      "metadata": {"difficulty": "edge_case", "domain": "hr",
-                   "note": "知识库中没有相关内容，期望检索不到相关chunk"}
+      "metadata": {"difficulty": "edge_case", "domain": "shopify",
+                   "note": "知识库中没有 Shopify 运费相关内容，期望检索不到相关 chunk"}
     }
   ]
 }

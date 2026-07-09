@@ -2,7 +2,9 @@
 tools.py — LangChain Tool 封装（零侵入接入已有子系统）
 
 将 sql_agent / retrieval / report_agent 包装为标准 Tool 对象。
-Worker 通过 Tool.invoke() 调用，不直接依赖子系统的内部实现。
+Skill 通过 Tool.invoke() 调用，不直接依赖子系统的内部实现。
+
+Skill → Tool → Infrastructure (RAG / SQL / Report)
 """
 
 from langchain_core.tools import tool

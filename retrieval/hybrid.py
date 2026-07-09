@@ -1,3 +1,10 @@
+def _fallback_id(doc) -> str:
+    """当 chunk_id 缺失时，用 doc_id + chunk_index 生成回退标识。"""
+    did = doc.metadata.get("doc_id", "?")
+    ci = doc.metadata.get("chunk_index", 0)
+    return f"{did}:{ci}"
+
+
 def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60, metadata_filter=None):
     """
     混合检索函数：结合向量检索和BM25检索，使用RRF算法融合排序
@@ -26,16 +33,16 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
     rank_map = {}
 
     for rank, doc in enumerate(vector_docs, start=1):
-        cid = doc.metadata["chunk_id"]
+        cid = doc.metadata.get("chunk_id") or _fallback_id(doc)
         rank_map[cid] = rank_map.get(cid, 0) + 1 / (rrf_k + rank)
 
     for rank, doc in enumerate(bm25_docs, start=1):
-        cid = doc.metadata["chunk_id"]
+        cid = doc.metadata.get("chunk_id") or _fallback_id(doc)
         rank_map[cid] = rank_map.get(cid, 0) + 1 / (rrf_k + rank)
 
     sorted_cids = sorted(rank_map.items(), key=lambda x: x[1], reverse=True)
 
-    doc_dict = {doc.metadata["chunk_id"]: doc for doc in vector_docs + bm25_docs}
+    doc_dict = {doc.metadata.get("chunk_id") or _fallback_id(doc): doc for doc in vector_docs + bm25_docs}
 
     merged = [doc_dict[cid] for cid, _ in sorted_cids[:k]]
 

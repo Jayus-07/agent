@@ -1,0 +1,32 @@
+[
+  {
+    "warehouse_id": "WH0001",
+    "code": "FBA_US",
+    "name": "Amazon FBA 美国仓",
+    "type": "FBA",
+    "country": "US",
+    "region": "US-East",
+    "address": "Amazon FBA ONT8, California",
+    "is_active": true
+  },
+  {
+    "warehouse_id": "WH0002",
+    "code": "FBA_EU",
+    "name": "Amazon FBA 欧洲仓",
+    "type": "FBA",
+    "country": "DE",
+    "region": "EU-Central",
+    "address": "Amazon FBA FRA3, Frankfurt",
+    "is_active": true
+  },
+  {
+    "warehouse_id": "WH0003",
+    "code": "FBA_JP",
+    "name": "Amazon FBA 日本仓",
+    "type": "FBA",
+    "country": "JP",
+    "region": "JP-East",
+    "address": "Amazon FBA NRT1, Chiba",
+    "is_active": true
+  }
+]

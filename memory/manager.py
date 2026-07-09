@@ -63,9 +63,5 @@ class MemoryManager:
     def end_turn(self, session_id: str, question: str, answer: str) -> None:
         return self._run(self._service.end_turn(session_id, question, answer))
 
-    def end_session(self, session_id: str) -> None:
-        if session_id in self._service._sessions:
-            del self._service._sessions[session_id]
-
 
 memory_manager = MemoryManager()

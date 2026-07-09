@@ -1,20 +1,3 @@
-"""
-workers/sql_worker.py — SQL Worker 节点
-
-调用 sql_query_tool 执行数据库查询。
-"""
-
-from multi_agent.tools import sql_query_tool
-from multi_agent.workers.base import execute_with_retry
-from utils.logger import logger
-
-
-async def sql_worker_node(state: dict) -> dict:
-    """
-    SQL Worker: 执行数据库查询。
-
-    从 state.current_step_id 定位当前步骤，
-    调用 sql_query_tool，结果写回 state.step_results。
-    """
-    logger.info(f"[SQL Worker] 开始执行 step={state.get('current_step_id')}")
-    return await execute_with_retry(state, sql_query_tool)
+"""向后兼容 re-export（新代码请用 multi_agent.skills.sql_skill）"""
+from multi_agent.skills.sql_skill import sql_skill_node as sql_worker_node
+__all__ = ["sql_worker_node"]

@@ -87,8 +87,51 @@ def _init_rag_pipeline():
         return None
 
 
+# 完整检索链路（模块级缓存，不含 MultiQuery/LLM）
+_full_retriever = None
+
+
+def _get_full_retriever(pipeline):
+    """构建完整检索链路: ChunkLevelRetriever → Adaptive → CrossEncoder 精排。
+
+    覆盖: Doc检索→关键词过滤→人名匹配→BM25+RRF混合→Adaptive补全→精排
+    不含: MultiQuery(需LLM) / HistoryAware(需LLM) / LLM生成答案
+    """
+    global _full_retriever
+    if _full_retriever is not None:
+        return _full_retriever
+
+    from retrieval.retrievers import AdaptiveRetriever
+    from retrieval.reranker import RerankCompressor
+    from langchain_classic.retrievers import ContextualCompressionRetriever
+    from config import HYBRID_SEARCH_K
+
+    # 修改 chunk_retriever_base 的 k 值用于评估
+    base = pipeline.lc_chain.chunk_retriever_base
+    base.k = HYBRID_SEARCH_K
+
+    # Adaptive: 文档分布分析 → 集中则补全全文
+    adaptive = AdaptiveRetriever(
+        base_retriever=base,
+        doc_db=pipeline.doc_db,
+    )
+
+    # Rerank: CrossEncoder 全局精排
+    full_retriever = ContextualCompressionRetriever(
+        base_compressor=RerankCompressor(),
+        base_retriever=adaptive,
+    )
+
+    _full_retriever = full_retriever
+    return _full_retriever
+
+
 def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
-    """RAG runner — ChromaDB 向量检索，无需 LLM。"""
+    """RAG runner — 完整检索链路（无 LLM）。
+
+    链路: Doc检索 → 关键词过滤 → 人名匹配 → BM25+RRF混合 → Adaptive补全 → CrossEncoder精排
+    不含 MultiQuery / HistoryAware / LLM 生成，needs_live=False 即可运行。
+    """
     if not cases:
         return []
 
@@ -103,6 +146,10 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             for c in cases
         ]
 
+    retriever = _get_full_retriever(pipeline)
+    # 获取底层检索器引用，用于采集管线各阶段数据
+    chunk_base = pipeline.lc_chain.chunk_retriever_base
+
     results: list[EvalResult] = []
     for case in cases:
         t0 = time.time()
@@ -110,20 +157,71 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             kb_id = case.metadata.get("kb_id", "default")
             question = case.question
 
+            # KB 隔离: 通过 contextvars 注入 metadata_filter
             if kb_id and kb_id != "*" and kb_id != "default":
-                retrieved_docs = pipeline.vectordb.similarity_search(
-                    question, k=10, filter={"kb_id": kb_id}
+                from retrieval.context import RequestContext, set_context
+                ctx = RequestContext(
+                    metadata_filter={"kb_id": kb_id},
+                    intent_label="",
+                    query=question,
                 )
+                set_context(ctx)
             else:
-                retrieved_docs = pipeline.vectordb.similarity_search(question, k=10)
+                from retrieval.context import RequestContext, set_context
+                set_context(RequestContext())
 
+            # === 采集 Doc 级检索结果（Stage 1）===
+            doc_filter = {"kb_id": kb_id} if (kb_id and kb_id != "*" and kb_id != "default") else {}
+            doc_results = pipeline.doc_db.similarity_search(question, k=5, filter=doc_filter) if doc_filter else pipeline.doc_db.similarity_search(question, k=5)
+            stage1_docs = []
+            for d in doc_results:
+                stage1_docs.append({
+                    "doc_id": d.metadata.get("doc_id", ""),
+                    "title": str(d.metadata.get("title", ""))[:60],
+                    "category": d.metadata.get("category_name", d.metadata.get("category", "")),
+                })
+
+            # === 完整检索链路 ===
+            retrieved_docs = retriever.invoke(question)
+
+            # === 组装详细检索轨迹 ===
             actual_doc_strs = []
             seen = set()
+            details = []
             for doc in retrieved_docs:
+                doc_id = doc.metadata.get("doc_id", "")
                 source = doc.metadata.get("source", "").replace("\\", "/")
-                if source not in seen:
-                    seen.add(source)
-                    actual_doc_strs.append(source)
+                identifier = doc_id if doc_id else source
+                if identifier not in seen:
+                    seen.add(identifier)
+                    actual_doc_strs.append(identifier)
+
+                details.append({
+                    "doc_id": doc_id,
+                    "title": str(doc.metadata.get("title", ""))[:80],
+                    "chunk_id": doc.metadata.get("chunk_id", ""),
+                    "rerank_score": doc.metadata.get("rerank_score"),
+                    "source": source,
+                    "snippet": doc.page_content[:200].replace("\n", " "),
+                })
+
+            # 检测自适应行为：chunks 集中在少数文档 vs 分散
+            from collections import Counter
+            doc_counter = Counter(d["doc_id"] for d in details if d["doc_id"])
+            total = len(details)
+            if total > 0:
+                clustered = [did for did, cnt in doc_counter.items() if cnt / total >= 0.3]
+                adaptive_info = f"集中({len(clustered)}个文档)" if len(clustered) <= 2 and clustered else f"分散({len(doc_counter)}个文档)"
+            else:
+                adaptive_info = "无结果"
+
+            pipeline_info = {
+                "stage1_docs": len(stage1_docs),
+                "stage1_top_docs": stage1_docs,
+                "stage2_chunks_recalled": total,
+                "after_rerank": total,  # = stage2 数量（rerank 在 invoke 内完成）
+                "adaptive": adaptive_info,
+            }
 
             expected_docs = set(case.expected.get("relevant_docs", []))
             expected_doc_strs = list(expected_docs)
@@ -141,7 +239,13 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 case_id=case.id, module="rag",
                 status="pass" if passed else "fail",
                 expected=case.expected,
-                actual={"retrieved_docs": actual_doc_strs[:10]},
+                actual={
+                    "question": question,
+                    "kb_id": kb_id,
+                    "retrieved_docs": actual_doc_strs[:10],
+                    "details": details,
+                    "pipeline": pipeline_info,
+                },
                 metrics={
                     "recall@5": round(r5, 4),
                     "recall@10": round(r10, 4),
@@ -153,7 +257,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
         except Exception as e:
             results.append(EvalResult(
                 case_id=case.id, module="rag", status="error",
-                expected=case.expected, actual={},
+                expected=case.expected, actual={"question": case.question, "kb_id": case.metadata.get("kb_id", "default")},
                 error_msg=str(e), duration_ms=int((time.time() - t0) * 1000),
             ))
 

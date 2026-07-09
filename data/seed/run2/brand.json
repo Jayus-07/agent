@@ -1,0 +1,23 @@
+[
+  {
+    "brand_id": "B0001",
+    "name": "ZenNest",
+    "trademark_no": "TM-2019-ZN002",
+    "owner": "Meridian Global",
+    "status": "ACTIVE"
+  },
+  {
+    "brand_id": "B0002",
+    "name": "MeridiHome",
+    "trademark_no": "TM-2020-MH001",
+    "owner": "Meridian Global",
+    "status": "ACTIVE"
+  },
+  {
+    "brand_id": "B0003",
+    "name": "SmartNest",
+    "trademark_no": "TM-2022-SN005",
+    "owner": "Meridian Global",
+    "status": "ACTIVE"
+  }
+]

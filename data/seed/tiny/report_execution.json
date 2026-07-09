@@ -1,0 +1,452 @@
+[
+  {
+    "execution_id": "EXEC0001",
+    "report_id": "RPT0005",
+    "status": "SUCCESS",
+    "started_at": "2026-06-05T08:19:17.943227",
+    "finished_at": "2026-06-05T08:19:18.943227",
+    "result_url": "/reports/RPT0005/result-0.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0002",
+    "report_id": "RPT0005",
+    "status": "FAILED",
+    "started_at": "2026-06-15T16:19:17.943227",
+    "finished_at": "2026-06-15T16:19:18.943227",
+    "result_url": null,
+    "error": "Timeout fetching data source"
+  },
+  {
+    "execution_id": "EXEC0003",
+    "report_id": "RPT0005",
+    "status": "SUCCESS",
+    "started_at": "2026-07-01T12:19:17.943227",
+    "finished_at": "2026-07-01T12:19:23.943227",
+    "result_url": "/reports/RPT0005/result-2.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0004",
+    "report_id": "RPT0003",
+    "status": "SUCCESS",
+    "started_at": "2026-07-02T04:19:17.943227",
+    "finished_at": "2026-07-02T04:19:31.943227",
+    "result_url": "/reports/RPT0003/result-3.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0005",
+    "report_id": "RPT0003",
+    "status": "FAILED",
+    "started_at": "2026-06-12T09:19:17.943227",
+    "finished_at": "2026-06-12T09:19:26.943227",
+    "result_url": null,
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0006",
+    "report_id": "RPT0004",
+    "status": "SUCCESS",
+    "started_at": "2026-06-03T04:19:17.943227",
+    "finished_at": "2026-06-03T04:19:37.943227",
+    "result_url": "/reports/RPT0004/result-5.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0007",
+    "report_id": "RPT0001",
+    "status": "SUCCESS",
+    "started_at": "2026-06-08T00:19:17.943227",
+    "finished_at": "2026-06-08T00:19:18.943227",
+    "result_url": "/reports/RPT0001/result-6.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0008",
+    "report_id": "RPT0001",
+    "status": "SUCCESS",
+    "started_at": "2026-06-05T16:19:17.943227",
+    "finished_at": "2026-06-05T16:19:34.943227",
+    "result_url": "/reports/RPT0001/result-7.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0009",
+    "report_id": "RPT0004",
+    "status": "SUCCESS",
+    "started_at": "2026-06-16T00:19:17.943227",
+    "finished_at": "2026-06-16T00:19:40.943227",
+    "result_url": "/reports/RPT0004/result-8.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0010",
+    "report_id": "RPT0002",
+    "status": "FAILED",
+    "started_at": "2026-07-01T05:19:17.943227",
+    "finished_at": "2026-07-01T05:19:21.943227",
+    "result_url": null,
+    "error": "Timeout fetching data source"
+  },
+  {
+    "execution_id": "EXEC0011",
+    "report_id": "RPT0003",
+    "status": "SUCCESS",
+    "started_at": "2026-06-14T08:19:17.943227",
+    "finished_at": "2026-06-14T08:19:43.943227",
+    "result_url": "/reports/RPT0003/result-10.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0012",
+    "report_id": "RPT0002",
+    "status": "FAILED",
+    "started_at": "2026-06-10T18:19:17.943227",
+    "finished_at": "2026-06-10T18:19:35.943227",
+    "result_url": null,
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0013",
+    "report_id": "RPT0005",
+    "status": "FAILED",
+    "started_at": "2026-06-13T20:19:17.943227",
+    "finished_at": "2026-06-13T20:19:41.943227",
+    "result_url": null,
+    "error": "Timeout fetching data source"
+  },
+  {
+    "execution_id": "EXEC0014",
+    "report_id": "RPT0005",
+    "status": "SUCCESS",
+    "started_at": "2026-06-06T03:19:17.943227",
+    "finished_at": "2026-06-06T03:19:44.943227",
+    "result_url": "/reports/RPT0005/result-13.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0015",
+    "report_id": "RPT0001",
+    "status": "SUCCESS",
+    "started_at": "2026-06-23T23:19:17.943227",
+    "finished_at": "2026-06-23T23:19:30.943227",
+    "result_url": "/reports/RPT0001/result-14.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0016",
+    "report_id": "RPT0004",
+    "status": "SUCCESS",
+    "started_at": "2026-06-05T03:19:17.943227",
+    "finished_at": "2026-06-05T03:19:22.943227",
+    "result_url": "/reports/RPT0004/result-15.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0017",
+    "report_id": "RPT0005",
+    "status": "SUCCESS",
+    "started_at": "2026-07-01T18:19:17.943227",
+    "finished_at": "2026-07-01T18:19:46.943227",
+    "result_url": "/reports/RPT0005/result-16.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0018",
+    "report_id": "RPT0001",
+    "status": "FAILED",
+    "started_at": "2026-06-24T11:19:17.943227",
+    "finished_at": "2026-06-24T11:19:35.943227",
+    "result_url": null,
+    "error": "Timeout fetching data source"
+  },
+  {
+    "execution_id": "EXEC0019",
+    "report_id": "RPT0003",
+    "status": "SUCCESS",
+    "started_at": "2026-06-12T04:19:17.943227",
+    "finished_at": "2026-06-12T04:19:44.943227",
+    "result_url": "/reports/RPT0003/result-18.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0020",
+    "report_id": "RPT0004",
+    "status": "SUCCESS",
+    "started_at": "2026-06-29T08:19:17.943227",
+    "finished_at": "2026-06-29T08:19:42.943227",
+    "result_url": "/reports/RPT0004/result-19.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0021",
+    "report_id": "RPT0002",
+    "status": "SUCCESS",
+    "started_at": "2026-06-11T00:19:17.943227",
+    "finished_at": "2026-06-11T00:19:18.943227",
+    "result_url": "/reports/RPT0002/result-20.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0022",
+    "report_id": "RPT0003",
+    "status": "SUCCESS",
+    "started_at": "2026-06-27T13:19:17.943227",
+    "finished_at": "2026-06-27T13:19:42.943227",
+    "result_url": "/reports/RPT0003/result-21.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0023",
+    "report_id": "RPT0005",
+    "status": "SUCCESS",
+    "started_at": "2026-06-07T17:19:17.943227",
+    "finished_at": "2026-06-07T17:19:43.943227",
+    "result_url": "/reports/RPT0005/result-22.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0024",
+    "report_id": "RPT0002",
+    "status": "SUCCESS",
+    "started_at": "2026-06-08T20:19:17.943227",
+    "finished_at": "2026-06-08T20:19:23.943227",
+    "result_url": "/reports/RPT0002/result-23.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0025",
+    "report_id": "RPT0003",
+    "status": "SUCCESS",
+    "started_at": "2026-06-29T14:19:17.943227",
+    "finished_at": "2026-06-29T14:19:36.943227",
+    "result_url": "/reports/RPT0003/result-24.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0026",
+    "report_id": "RPT0003",
+    "status": "SUCCESS",
+    "started_at": "2026-06-13T03:19:17.943227",
+    "finished_at": "2026-06-13T03:19:43.943227",
+    "result_url": "/reports/RPT0003/result-25.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0027",
+    "report_id": "RPT0003",
+    "status": "FAILED",
+    "started_at": "2026-06-22T19:19:17.943227",
+    "finished_at": "2026-06-22T19:19:27.943227",
+    "result_url": null,
+    "error": "Timeout fetching data source"
+  },
+  {
+    "execution_id": "EXEC0028",
+    "report_id": "RPT0002",
+    "status": "SUCCESS",
+    "started_at": "2026-06-07T15:19:17.943227",
+    "finished_at": "2026-06-07T15:19:29.943227",
+    "result_url": "/reports/RPT0002/result-27.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0029",
+    "report_id": "RPT0004",
+    "status": "SUCCESS",
+    "started_at": "2026-06-12T12:19:17.943227",
+    "finished_at": "2026-06-12T12:19:24.943227",
+    "result_url": "/reports/RPT0004/result-28.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0030",
+    "report_id": "RPT0005",
+    "status": "SUCCESS",
+    "started_at": "2026-06-18T14:19:17.943227",
+    "finished_at": "2026-06-18T14:19:41.943227",
+    "result_url": "/reports/RPT0005/result-29.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0031",
+    "report_id": "RPT0002",
+    "status": "FAILED",
+    "started_at": "2026-06-04T16:19:17.943227",
+    "finished_at": "2026-06-04T16:19:41.943227",
+    "result_url": null,
+    "error": "Timeout fetching data source"
+  },
+  {
+    "execution_id": "EXEC0032",
+    "report_id": "RPT0005",
+    "status": "FAILED",
+    "started_at": "2026-06-21T20:19:17.943227",
+    "finished_at": "2026-06-21T20:19:45.943227",
+    "result_url": null,
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0033",
+    "report_id": "RPT0005",
+    "status": "SUCCESS",
+    "started_at": "2026-06-15T02:19:17.943227",
+    "finished_at": "2026-06-15T02:19:44.943227",
+    "result_url": "/reports/RPT0005/result-32.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0034",
+    "report_id": "RPT0004",
+    "status": "SUCCESS",
+    "started_at": "2026-06-03T08:19:17.943227",
+    "finished_at": "2026-06-03T08:19:39.943227",
+    "result_url": "/reports/RPT0004/result-33.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0035",
+    "report_id": "RPT0005",
+    "status": "SUCCESS",
+    "started_at": "2026-06-25T15:19:17.943227",
+    "finished_at": "2026-06-25T15:19:29.943227",
+    "result_url": "/reports/RPT0005/result-34.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0036",
+    "report_id": "RPT0002",
+    "status": "SUCCESS",
+    "started_at": "2026-06-10T07:19:17.943227",
+    "finished_at": "2026-06-10T07:19:46.943227",
+    "result_url": "/reports/RPT0002/result-35.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0037",
+    "report_id": "RPT0005",
+    "status": "SUCCESS",
+    "started_at": "2026-07-02T16:19:17.943227",
+    "finished_at": "2026-07-02T16:19:42.943227",
+    "result_url": "/reports/RPT0005/result-36.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0038",
+    "report_id": "RPT0005",
+    "status": "SUCCESS",
+    "started_at": "2026-06-23T10:19:17.943227",
+    "finished_at": "2026-06-23T10:19:22.943227",
+    "result_url": "/reports/RPT0005/result-37.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0039",
+    "report_id": "RPT0003",
+    "status": "FAILED",
+    "started_at": "2026-06-23T19:19:17.943227",
+    "finished_at": "2026-06-23T19:19:19.943227",
+    "result_url": null,
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0040",
+    "report_id": "RPT0005",
+    "status": "SUCCESS",
+    "started_at": "2026-06-18T02:19:17.943227",
+    "finished_at": "2026-06-18T02:19:31.943227",
+    "result_url": "/reports/RPT0005/result-39.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0041",
+    "report_id": "RPT0004",
+    "status": "FAILED",
+    "started_at": "2026-06-12T01:19:17.943227",
+    "finished_at": "2026-06-12T01:19:47.943227",
+    "result_url": null,
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0042",
+    "report_id": "RPT0005",
+    "status": "FAILED",
+    "started_at": "2026-07-01T23:19:17.943227",
+    "finished_at": "2026-07-01T23:19:37.943227",
+    "result_url": null,
+    "error": "Timeout fetching data source"
+  },
+  {
+    "execution_id": "EXEC0043",
+    "report_id": "RPT0005",
+    "status": "SUCCESS",
+    "started_at": "2026-06-23T09:19:17.943227",
+    "finished_at": "2026-06-23T09:19:33.943227",
+    "result_url": "/reports/RPT0005/result-42.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0044",
+    "report_id": "RPT0003",
+    "status": "FAILED",
+    "started_at": "2026-06-08T05:19:17.943227",
+    "finished_at": "2026-06-08T05:19:28.943227",
+    "result_url": null,
+    "error": "Timeout fetching data source"
+  },
+  {
+    "execution_id": "EXEC0045",
+    "report_id": "RPT0001",
+    "status": "SUCCESS",
+    "started_at": "2026-06-22T21:19:17.943227",
+    "finished_at": "2026-06-22T21:19:29.943227",
+    "result_url": "/reports/RPT0001/result-44.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0046",
+    "report_id": "RPT0001",
+    "status": "SUCCESS",
+    "started_at": "2026-06-12T08:19:17.943227",
+    "finished_at": "2026-06-12T08:19:28.943227",
+    "result_url": "/reports/RPT0001/result-45.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0047",
+    "report_id": "RPT0003",
+    "status": "SUCCESS",
+    "started_at": "2026-06-07T03:19:17.943227",
+    "finished_at": "2026-06-07T03:19:38.943227",
+    "result_url": "/reports/RPT0003/result-46.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0048",
+    "report_id": "RPT0005",
+    "status": "FAILED",
+    "started_at": "2026-06-02T21:19:17.943227",
+    "finished_at": "2026-06-02T21:19:37.943227",
+    "result_url": null,
+    "error": "Timeout fetching data source"
+  },
+  {
+    "execution_id": "EXEC0049",
+    "report_id": "RPT0004",
+    "status": "SUCCESS",
+    "started_at": "2026-06-20T22:19:17.943227",
+    "finished_at": "2026-06-20T22:19:20.943227",
+    "result_url": "/reports/RPT0004/result-48.json",
+    "error": null
+  },
+  {
+    "execution_id": "EXEC0050",
+    "report_id": "RPT0003",
+    "status": "SUCCESS",
+    "started_at": "2026-06-10T06:19:17.943227",
+    "finished_at": "2026-06-10T06:19:30.943227",
+    "result_url": "/reports/RPT0003/result-49.json",
+    "error": null
+  }
+]

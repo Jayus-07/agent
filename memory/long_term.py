@@ -4,7 +4,6 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from llm.llm_factory import llm
 from config import EMBEDDING_MODEL_PATH, L3_DEDUP_COSINE_THRESHOLD, L3_SUPERSEDE_THRESHOLD
 from memory.pii_filter import scan_and_sanitize
-from memory.dedup import DedupDecision  # kept for type hint
 from utils.logger import logger
 from dataclasses import dataclass, field
 

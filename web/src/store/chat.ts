@@ -1,13 +1,11 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
-import type { Session, Message, ChatMode, SSEEvent, SSEStreamEvent } from '@/lib/types'
+import type { Session, Message, ChatMode, SSEStreamEvent } from '@/lib/types'
 
 interface ChatState {
   // — 数据 —
   sessions: Session[]
   currentId: string
-  /** @deprecated 使用 streamEvents 替代 */
-  thinking: SSEEvent[]
   /** SSE v2 流式事件累积 */
   streamEvents: SSEStreamEvent[]
   /** 当前宏观状态节点名（StatusBar 消费） */
@@ -31,10 +29,9 @@ interface ChatState {
   deleteSession: (id: string) => void
 
   // — 消息操作 (sessionId 可选，用于 SSE 流固定目标会话) —
-  addMessage: (role: 'user' | 'assistant', content: string, thinking?: SSEEvent[], sessionId?: string) => void
+  addMessage: (role: 'user' | 'assistant', content: string, sessionId?: string) => void
   addStreamEvent: (evt: SSEStreamEvent, sessionId?: string) => void
-  addThinkingEvent: (event: SSEEvent, sessionId?: string) => void
-  replaceLastAssistant: (content: string, thinking?: SSEEvent[], sessionId?: string, sources?: any[]) => void
+  replaceLastAssistant: (content: string, sessionId?: string, sources?: any[]) => void
 
   // — 状态 —
   setLoading: (v: boolean) => void
@@ -65,7 +62,6 @@ export const useChatStore = create<ChatState>((set, get) => {
   return {
     sessions: [initialSession],
     currentId: initialSession.id,
-    thinking: [],
     streamEvents: [],
     currentStatus: '',
     deltaText: '',
@@ -86,14 +82,13 @@ export const useChatStore = create<ChatState>((set, get) => {
       set((state) => ({
         sessions: [s, ...state.sessions],
         currentId: s.id,
-        thinking: [],
         error: null,
       }))
       return s.id
     },
 
     switchSession: (id) => {
-      set({ currentId: id, thinking: [], error: null })
+      set({ currentId: id, error: null })
     },
 
     renameSession: (id, title) => {
@@ -119,13 +114,12 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     // —— 消息 ——
-    addMessage: (role, content, thinking, sessionId) => {
+    addMessage: (role, content, sessionId) => {
       const msg: Message = {
         id: nanoid(),
         role,
         content,
         timestamp: Date.now(),
-        thinking,
       }
       set((state) => {
         const sid = targetId(state, sessionId)
@@ -141,31 +135,7 @@ export const useChatStore = create<ChatState>((set, get) => {
             updatedAt: Date.now(),
           }
         })
-        return { sessions, thinking: sessionId ? state.thinking : [] }
-      })
-    },
-
-    addThinkingEvent: (event, sessionId) => {
-      set((state) => {
-        const sid = targetId(state, sessionId)
-        // 实时更新最后一条 assistant 消息的 thinking 字段（流式进度实时可见）
-        const sessions = state.sessions.map((s) => {
-          if (s.id !== sid) return s
-          const msgs = [...s.messages]
-          const lastIdx = msgs.length - 1
-          if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
-            msgs[lastIdx] = {
-              ...msgs[lastIdx],
-              thinking: [...(msgs[lastIdx].thinking || []), event],
-            }
-          }
-          return { ...s, messages: msgs, updatedAt: Date.now() }
-        })
-        // 同时更新全局 thinking（兼容旧逻辑）
-        const thinking = sessionId && sessionId !== state.currentId
-          ? state.thinking
-          : [...state.thinking, event]
-        return { sessions, thinking }
+        return { sessions }
       })
     },
 
@@ -225,7 +195,7 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     resetStream: () => set({ streamEvents: [], currentStatus: '', deltaText: '', currentRequestId: null }),
 
-    replaceLastAssistant: (content, thinking, sessionId, sources) => {
+    replaceLastAssistant: (content, sessionId, sources) => {
       set((state) => ({
         sessions: state.sessions.map((s) => {
           const sid = targetId(state, sessionId)
@@ -236,7 +206,6 @@ export const useChatStore = create<ChatState>((set, get) => {
             msgs[lastIdx] = {
               ...msgs[lastIdx],
               content,
-              thinking,
               sources: sources || msgs[lastIdx].sources,
               timestamp: Date.now(),
             }

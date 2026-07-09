@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
+from retrieval.knowledge_store import ChromaKnowledgeStore
 
 from preprocessing.metadata import build_all_metadata_async
 from preprocessing.loader import load_documents_from_directory
@@ -20,6 +20,8 @@ from config import (
     CHROMA_PATH,
     DOC_DB_PATH,
     DOCS_DIRECTORY,
+    DOC_REGISTRY_PATH,
+    ENABLE_INCREMENTAL_INDEXING,
     OVERALL_REQUEST_TIMEOUT,
     ENABLE_RESOURCE_MONITOR,
 )
@@ -53,9 +55,21 @@ class RAGPipeline:
     def _init(self):
         self._load_and_chunk()
         self._build_doc_index()
-        self._build_metadata()
         self._init_embedding()
-        self._init_vector_dbs()
+
+        # 决定走增量还是全量重建
+        if ENABLE_INCREMENTAL_INDEXING:
+            used_incremental = self._init_vector_dbs_incremental()
+        else:
+            used_incremental = False
+
+        if not used_incremental:
+            # 全量重建路径: metadata → from_documents/from_texts
+            self._build_metadata()
+            self._init_vector_dbs_full()
+            # 全量重建后同步 registry，下次启动即可走增量
+            self._sync_registry_after_full_rebuild()
+
         self._init_retrievers()
         logger.info("RAG 管道初始化完成")
 
@@ -90,17 +104,18 @@ class RAGPipeline:
     def _init_embedding(self):
         self.embedding = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
 
-    def _init_vector_dbs(self):
+    def _init_vector_dbs_full(self):
+        """全量重建向量库（兜底/首次运行）。"""
         self.vectordb = self._load_or_create_db(
             CHROMA_PATH,
-            create_fn=lambda: Chroma.from_documents(
+            create_fn=lambda: ChromaKnowledgeStore.from_documents(
                 self.docs, embedding=self.embedding, persist_directory=CHROMA_PATH,
             ),
             db_type="chunk 级",
         )
         self.doc_db = self._load_or_create_db(
             DOC_DB_PATH,
-            create_fn=lambda: Chroma.from_texts(
+            create_fn=lambda: ChromaKnowledgeStore.from_texts(
                 texts=self.doc_level_texts,
                 embedding=self.embedding,
                 metadatas=self.doc_level_meta,
@@ -109,15 +124,123 @@ class RAGPipeline:
             db_type="文档级",
         )
 
+    def _init_vector_dbs_incremental(self) -> bool:
+        """增量索引向量库。成功返回 True，回退全量重建返回 False。"""
+        from retrieval.doc_registry import DocumentRegistry
+        from retrieval.indexer import IncrementalIndexer
+
+        logger.info("启用增量索引模式")
+
+        # 加载已有向量库
+        try:
+            self.vectordb = self._load_existing_db(CHROMA_PATH, "chunk 级")
+            self.doc_db = self._load_existing_db(DOC_DB_PATH, "文档级")
+        except Exception as e:
+            logger.warning(f"加载向量库失败: {e}，回退全量重建")
+            return False
+
+        # 初始化注册表
+        try:
+            registry = DocumentRegistry(DOC_REGISTRY_PATH)
+        except Exception as e:
+            logger.warning(f"注册表初始化失败: {e}，回退全量重建")
+            return False
+
+        # 执行增量同步
+        try:
+            indexer = IncrementalIndexer(
+                docs_dir=DOCS_DIRECTORY,
+                vectordb=self.vectordb,
+                doc_db=self.doc_db,
+                embedding=self.embedding,
+                registry=registry,
+            )
+            result = indexer.sync()
+            logger.info(f"增量索引: {result}")
+            return True
+        except Exception as e:
+            logger.warning(f"增量索引失败: {e}，回退全量重建")
+            # 销毁 registry 以便全量重建时重建
+            try:
+                registry.clear()
+            except Exception:
+                pass
+            return False
+
+    def _load_existing_db(self, db_path: str, db_type: str):
+        """加载已有向量库（不做版本检查，不创建）。"""
+        db = ChromaKnowledgeStore(
+            persist_directory=db_path, embedding_function=self.embedding,
+        )
+        logger.info(f"加载已有{db_type}向量库: {db_path}")
+        return db
+
     def _load_or_create_db(self, db_path, create_fn, db_type):
         if not self._check_db_version(db_path):
-            db = Chroma(persist_directory=db_path, embedding_function=self.embedding)
-            logger.info(f"加载现有{db_type}向量库: {db_path}")
-            return db
+            return self._load_existing_db(db_path, db_type)
         db = create_fn()
         logger.info(f"创建新{db_type}向量库: {db_path}")
         self._save_db_version(db_path)
         return db
+
+    def _sync_registry_after_full_rebuild(self):
+        """全量重建后将所有文档信息写入 registry，下次启动走增量。"""
+        from retrieval.doc_registry import DocumentRegistry
+        from retrieval.indexer import IncrementalIndexer
+
+        try:
+            registry = DocumentRegistry(DOC_REGISTRY_PATH)
+            registry.clear()
+        except Exception as e:
+            logger.warning(f"无法初始化 registry: {e}")
+            return
+
+        # 扫描所有文档
+        indexer = IncrementalIndexer(
+            docs_dir=DOCS_DIRECTORY,
+            vectordb=self.vectordb,
+            doc_db=self.doc_db,
+            embedding=self.embedding,
+            registry=registry,
+        )
+        disk_files = indexer._scan_disk()
+
+        for file_path, (file_hash, _, _) in disk_files.items():
+            kb_id = indexer._derive_kb_id(file_path)
+            doc_id = hashlib.md5(
+                os.path.basename(file_path).encode()
+            ).hexdigest()[:10]
+
+            # 从 chunk 级向量库查找该文件的所有 chunk ID
+            try:
+                chunk_data = self.vectordb.get(
+                    where={"file_path": file_path}
+                )
+                chunk_ids = chunk_data.get("ids", [])
+            except Exception:
+                chunk_ids = []
+
+            # 从 doc 级向量库查找 doc_db_id
+            doc_db_id = ""
+            try:
+                doc_data = self.doc_db.get(where={"doc_id": doc_id})
+                doc_ids = doc_data.get("ids", [])
+                doc_db_id = doc_ids[0] if doc_ids else ""
+            except Exception:
+                pass
+
+            registry.register(
+                file_path=file_path,
+                doc_id=doc_id,
+                file_hash=file_hash,
+                kb_id=kb_id,
+                chunk_ids=chunk_ids,
+                doc_db_id=doc_db_id,
+            )
+
+        logger.info(
+            f"Registry 同步完成: {registry.count()} 条记录"
+        )
 
     def _init_retrievers(self):
         self.chunk_retriever = CustomRetriever(self.vectordb)
@@ -208,7 +331,7 @@ class RAGPipeline:
     # =====================================================
 
     def search(self, question: str, session_id: str = "default", kb_id: str = "default") -> str:
-        """企业级检索入口：QueryAnalyzer → MetadataFilter → contextvars 透传 → 现有链。
+        """跨境电商检索入口：QueryAnalyzer → MetadataFilter → contextvars 透传 → 现有链。
 
         与 ask() 的区别：
           - ask() 直接调用链（向后兼容，无 filter）
@@ -278,9 +401,7 @@ class RAGPipeline:
             raise
 
     def ask(self, question: str, session_id: str = "default", kb_id: str = "default") -> str:
-        print("\n==============================")
-        print(f"问题: {question}  (kb={kb_id})")
-        print("==============================")
+        logger.info(f"问题: {question[:80]}  (kb={kb_id})")
 
         logger.info(f"收到问题: {question[:80]} (session={session_id}, kb={kb_id})")
 

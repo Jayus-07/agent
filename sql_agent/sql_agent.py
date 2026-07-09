@@ -6,7 +6,7 @@ sql_agent.py — SQL Agent 主编排器
 
 安全原则: 6 层硬校验，无一依赖 LLM 承诺。
 """
-from typing import Dict, Optional
+from typing import Optional
 
 from sql_agent.schema_loader import schema_loader
 from sql_agent.router import select_tables
@@ -15,11 +15,6 @@ from sql_agent.sql_validator import sql_validator, ValidationError
 from sql_agent.row_security import inject_row_filter, RowSecurityError
 from sql_agent.executor import execute_sql
 from utils.logger import logger
-
-
-class SQLAgentError(Exception):
-    """SQL Agent 一般错误"""
-    pass
 
 
 class SQLAgent:
@@ -79,9 +74,11 @@ class SQLAgent:
 
                 safe_sql, _, _ = sql_validator.validate(sql)
 
-                safe_sql = inject_row_filter(safe_sql, user_context)
+                # 行级安全：返回 (sql_with_placeholders, params_dict)
+                safe_sql, rs_params = inject_row_filter(safe_sql, user_context)
 
-                result = execute_sql(safe_sql, self.db_config)
+                # 参数化执行（user_id 等敏感值通过 params 通道，不进 SQL 文本）
+                result = execute_sql(safe_sql, self.db_config, params=rs_params)
                 return result
 
             except ValidationError as e:
@@ -106,17 +103,12 @@ class SQLAgent:
 
 
 # =================================================
-# 全局单例（应用启动时初始化）
+# 工厂（多 Agent/路由懒加载）
 # =================================================
 
-sql_agent: Optional[SQLAgent] = None
-
-
 def init_sql_agent(db_config: dict, max_retries: int = 1) -> SQLAgent:
-    """初始化全局 SQLAgent 实例"""
-    global sql_agent
-    sql_agent = SQLAgent(db_config=db_config, max_retries=max_retries)
+    """构造 SQLAgent 实例（multimodal 入口统一用 deps.get_sql_agent，工厂保留作 demo/工具调用）"""
     host = db_config.get("host", "?")
     dbname = db_config.get("dbname", "?")
     logger.info(f"SQLAgent 初始化完成: postgresql://{host}/{dbname}")
-    return sql_agent
+    return SQLAgent(db_config=db_config, max_retries=max_retries)

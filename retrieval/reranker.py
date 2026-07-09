@@ -25,7 +25,7 @@ def rerank(
         query,
         docs,
         top_k=3,
-        debug=1
+        debug=0
 ):
     """
     全局重排序函数
@@ -74,26 +74,14 @@ def rerank(
         doc.metadata["rerank_score"] = round(float(score), 4)
 
     if debug:
-
-        print("\n================ 全局重排序结果 ================\n")
-
+        logger.debug("全局重排序结果:")
         for i, (doc, score) in enumerate(scored_docs[:10]):
-
-            print(f"[{i+1}] 重排序得分 = {score:.4f}")
-
-            print(
-                f"来源文件: "
-                f"{doc.metadata.get('source_file')}"
+            logger.debug(
+                f"[{i+1}] score={score:.4f} "
+                f"source={doc.metadata.get('source_file')} "
+                f"chunk_id={doc.metadata.get('chunk_id')} "
+                f"content={doc.page_content[:50]}..."
             )
-
-            print(
-                f"文档块ID: "
-                f"{doc.metadata.get('chunk_id')}"
-            )
-
-            print(doc.page_content[:50])
-
-            print("-" * 60)
 
     logger.info(f"重排序完成: {len(docs)} -> {len(scored_docs[:top_k])} (threshold={RERANK_SCORE_THRESHOLD})")
     return scored_docs[:top_k]

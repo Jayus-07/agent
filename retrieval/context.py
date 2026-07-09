@@ -9,7 +9,7 @@ Usage:
     from retrieval.context import set_context, get_context
 
     # Gateway / Pipeline.search():
-    ctx = RequestContext(metadata_filter={"person_names": "吴浩"}, intent_label="entity_query")
+    ctx = RequestContext(metadata_filter={"person_names": "MeridiHome"}, intent_label="entity_query")
     set_context(ctx)
 
     # Inside ChunkLevelRetriever._get_relevant_documents():
