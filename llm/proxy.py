@@ -14,7 +14,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from config import (
     LLM_MODEL, LLM_TEMPERATURE, LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT,
 )
-from llm.factory import _factory as _factory_ref, get_llm_factory
+from llm.factory import get_llm_factory
 from utils.logger import logger
 
 
@@ -43,10 +43,10 @@ except Exception as e:
 def _resolve_active_llm() -> BaseChatModel:
     """返回当前生效的 LLM 实例：factory cache > module default。
 
-    这是 _LLMProxy 内部委派的核心。线程安全：仅读 _factory 内部状态，
-    切换由 LLMFactory.set_current 内部的 self._lock 保护。
+    这是 _LLMProxy 内部委派的核心。每次调用都实时获取工厂实例，
+    确保模型切换后立即生效。切换由 LLMFactory.set_current 内部的 self._lock 保护。
     """
-    factory = _factory_ref  # import 时的引用，可能为 None
+    factory = get_llm_factory()  # 实时获取，不缓存引用
     if factory is not None:
         cached = factory._instance_cache.get(factory._current_model)
         if cached is not None:

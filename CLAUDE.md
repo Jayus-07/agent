@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 基于 LangChain + LangGraph 的 RAG + Multi-Agent 智能问答与报告系统。FastAPI 提供 REST API，Next.js 前端通过 SSE 流式消费 Multi-Agent 工作流进度。PostgreSQL + pgvector 提供企业级记忆持久化。内置 CPU 保护机制（Ollama 线程限制 + API 并发控制），防止笔记本/低配机器过载关机。支持 Docker Compose 一键部署全栈。
 
-**核心子系统**：Multi-Agent 编排（Planner→Supervisor→Workers→Reporter）、RAG 知识库检索、SQL 安全 Agent、报告生成、企业级三段记忆。
+**核心子系统**：Multi-Agent 编排（Planner→Supervisor→Workers→Reporter）、RAG 知识库检索、SQL 安全 Agent、报告生成、企业级三段记忆、种子数据框架（9 领域跨境电商模拟数据）、评估框架、可观测性面板。
 
 ---
 
@@ -92,7 +92,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 错误处理：用具体异常类，不用 `except Exception: pass`（finally 清理除外）
 - 异步：`asyncio` + `asyncpg`；`MemoryManager` 是同步桥，禁止在 async 路径用 sync API
 - 配置：`config.py` 统一管理默认值，`.env` 覆盖敏感值
-- LLM 切换：`from llm.llm_factory import llm` 是 `_LLMProxy`，**所有调用方零修改**就能响应切换
+- LLM 切换：`from llm.llm_factory import llm` 是 `_LLMProxy`，**所有调用方零修改**就能响应切换。LLM 模块已拆分为 `providers/`（ollama/deepseek）+ `proxy.py` + `factory.py` + `models.py`
 
 ### TypeScript / React
 
@@ -122,15 +122,20 @@ agent/                         # 项目根
 │   └── routes/                # chat / sql / rag / report / llm / observability
 ├── config.py                  # 全局配置（环境变量 + 默认值）
 ├── llm/                       # LLM 工厂（多 Provider + 运行时切换）
-│   └── llm_factory.py         # _LLMProxy + LLMFactory
+│   ├── factory.py              # LLMFactory（创建 LLM 实例）
+│   ├── proxy.py                # _LLMProxy（零修改热切换）
+│   ├── models.py               # 模型定义与元数据
+│   └── providers/              # ollama / deepseek 实现
 ├── multi_agent/               # LangGraph 工作流
-│   ├── graph.py               # 编译图 + SSE 流
-│   ├── planner.py             # 任务规划（DAG）
-│   ├── supervisor.py          # 调度 + 降级
-│   ├── reporter.py            # 汇总 + Context Filter
-│   ├── state.py               # AgentState + reducers
-│   ├── tool_registry.py       # capability → worker 映射
-│   └── workers/               # sql_worker / rag_worker / report_worker
+│   ├── graph/                  # 图编译（builder / system）+ SSE 流
+│   ├── planner/                # 任务规划（planner / critique / prompt）
+│   ├── supervisor/             # 调度 + 降级 + 告警
+│   ├── reporter/               # 汇总 + Context Filter
+│   ├── skills/                 # 技能系统（rag / sql / report）
+│   ├── workers/                # sql_worker / rag_worker / report_worker
+│   ├── state.py                # AgentState + reducers
+│   ├── tool_registry.py        # capability → worker 映射
+│   └── observability.py        # 可观测性指标收集
 ├── sql_agent/                 # SQL 安全 Agent（6 层校验）
 │   ├── sql_agent.py           # 主编排
 │   ├── sql_validator.py       # 6 层校验
@@ -187,9 +192,10 @@ agent/                         # 项目根
 │   ├── keyword.py             # 关键词提取
 │   └── entity.py              # 人名提取
 ├── web/                       # Next.js 前端
-│   └── src/                   # 详见 docs/frontend.md
+│   └── src/                   # ChatView / Sidebar / MonitorDashboard / LLMSwitcher
 ├── tests/                     # pytest 测试
-├── utils/                     # 通用工具（logger / timeout / async_utils / resource_monitor）
+├── response/                  # 响应生成（Reporter 辅助）
+├── utils/                     # 通用工具（logger / monitoring / security）
 ├── docker/                    # Dockerfile / docker-compose 配置
 ├── docs/                      # 详细文档（架构 / 子系统说明）
 ├── start_all.bat              # Windows 一键启动（后端 + 前端）
@@ -229,8 +235,11 @@ cd web && npx next build                   # TypeScript 校验 + 静态生成
 # ==================== 冒烟测试 ====================
 # 验证 import 链路
 PYTHONPATH=".venv/lib/site-packages" ./.venv/Scripts/python.exe -c "
-import config, llm.llm_factory, multi_agent.graph, multi_agent.observability,
-       memory.service, retrieval.pipeline, sql_agent.sql_agent, report_agent.report_generator,
+import config, llm.llm_factory, llm.factory, llm.proxy, llm.models,
+       multi_agent.graph, multi_agent.observability,
+       memory.service, retrieval.pipeline, retrieval.knowledge_store, retrieval.doc_registry, retrieval.indexer,
+       sql_agent.sql_agent, report_agent.report_generator,
+       seed_data, seed_data.cli,
        api.server
 print('ok')
 "
@@ -262,8 +271,9 @@ asyncio.run(MemoryService().run_decay())
    - 新功能：在现有架构内（ToolRegistry / MemoryService / etc.）
    - 重构：**先问**，不要自作主张
 5. **执行** — 单次改动最小化，避免连带
-6. **验证** — 跑对应测试 + import 冒烟
-7. **汇报** — 改了什么 / 为什么 / 测试结果 / 影响范围
+6. **审查** — 代码改动后跑 `detect_changes_tool` + `get_affected_flows_tool` 检查风险
+7. **验证** — 跑对应测试 + import 冒烟
+8. **汇报** — 改了什么 / 为什么 / 测试结果 / 影响范围
 
 **禁止**：
 - ❌ 一次性改 5+ 个文件
@@ -330,7 +340,16 @@ asyncio.run(MemoryService().run_decay())
 
 `.mcp.json` 配置了：
 
+- **code-review-graph**：知识图谱代码审查（增量更新、变更检测、影响分析、测试覆盖）
 - **puppeteer**：浏览器自动化（截图 / 爬取）
 - **filesystem**：文件系统操作
 
-权限在 `.claude/settings.local.json` 配置（`mcp__puppeteer__*` / `mcp__filesystem__*`），需重启会话生效。
+### 代码审查流程
+
+每次代码修改后：
+
+1. PostToolUse hook 自动增量更新知识图谱
+2. Stop hook 检测最近 2h 内的 Python/TS 变更并提醒
+3. 运行 `detect_changes_tool` → `get_affected_flows_tool` → 按风险排序输出审查报告
+
+权限在 `.claude/settings.local.json` 配置，需 `/hooks` 刷新或重启会话生效。
