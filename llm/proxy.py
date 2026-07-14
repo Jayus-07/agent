@@ -54,20 +54,46 @@ def _resolve_active_llm() -> BaseChatModel:
     return _module_default_llm
 
 
-class _LLMProxy:
-    """代理对象：将方法/属性访问委派给当前生效的 LLM 实例。
+def _strip_think(text: str) -> str:
+    """剥离模型输出的 <think>...</think> 推理块"""
+    import re
+    text = re.sub(r'<think>[\s\S]*?</think>\s*', '', text)
+    text = re.sub(r'<think>[\s\S]*', '', text)
+    return text.strip()
 
-    设计目的：让 `from llm import llm` 在切换后仍生效。
-    调用方写法完全不变：`llm.invoke(...)` / `llm.stream(...)` / `llm.bind_tools(...)`。
-    每次访问属性都从 _resolve_active_llm() 拿最新模型。
-    """
+
+def _wrap_result(result):
+    """递归剥离 LLM 返回值中的 <think> 块，兼容 str / AIMessage / list / dict"""
+    if isinstance(result, str):
+        return _strip_think(result)
+    if hasattr(result, 'content') and isinstance(result.content, str):
+        result.content = _strip_think(result.content)
+    if isinstance(result, list):
+        return [_wrap_result(r) for r in result]
+    if isinstance(result, dict):
+        return {k: _wrap_result(v) for k, v in result.items()}
+    return result
+
+
+class _LLMProxy:
+    """代理对象：每次调用都实时委派给当前活跃 LLM，并全局剥离 <think> 块"""
+
     __slots__ = ()
+    _WRAP_METHODS = {'invoke', 'ainvoke', 'generate', 'agenerate', 'batch', 'stream', 'astream'}
 
     def __getattr__(self, name: str):
-        return getattr(_resolve_active_llm(), name)
+        target = _resolve_active_llm()
+        attr = getattr(target, name)
+        if name in self._WRAP_METHODS and callable(attr):
+            def wrapper(*args, **kwargs):
+                result = attr(*args, **kwargs)
+                return _wrap_result(result)
+            return wrapper
+        return attr
 
     def __call__(self, *args, **kwargs):
-        return _resolve_active_llm().invoke(*args, **kwargs)
+        result = _resolve_active_llm().invoke(*args, **kwargs)
+        return _wrap_result(result)
 
     def __repr__(self) -> str:
         try:
