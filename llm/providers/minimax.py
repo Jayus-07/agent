@@ -29,6 +29,7 @@ def build_minimax(model_name: str) -> object:
         request_timeout=LLM_REQUEST_TIMEOUT,
         api_key=MINIMAX_API_KEY,
         base_url=MINIMAX_API_BASE,
+        model_kwargs={"reasoning": {"effort": "none"}},  # 关闭 MiniMax M3 推理链
     )
 
 
