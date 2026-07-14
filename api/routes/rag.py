@@ -293,7 +293,7 @@ async def search_knowledge(req: SearchRequest):
         if not retriever:
             return {"query": query, "results": [], "error": "检索器未初始化"}
         import asyncio as _asyncio
-        docs = await _asyncio.to_thread(retriever.get_relevant_documents, query)
+        docs = await _asyncio.to_thread(retriever.retrieve, query)
         results = []
         for i, doc in enumerate(docs[:10]):
             results.append({
