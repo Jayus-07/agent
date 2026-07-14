@@ -334,3 +334,12 @@ CLEAN_REMOVE_PDF_FOOTERS = os.getenv("CLEAN_REMOVE_PDF_FOOTERS", "false").lower(
 CLEAN_URL_ACTION = os.getenv("CLEAN_URL_ACTION", "keep")           # keep | remove | placeholder
 CLEAN_EMAIL_ACTION = os.getenv("CLEAN_EMAIL_ACTION", "keep")       # keep | remove | placeholder
 
+# ====================================
+# 脏数据过滤配置（P0-2）
+# ====================================
+FILTER_MIN_CHUNK_LENGTH = int(os.getenv("FILTER_MIN_CHUNK_LENGTH", "10"))
+FILTER_MAX_SYMBOL_RATIO = float(os.getenv("FILTER_MAX_SYMBOL_RATIO", "0.8"))
+FILTER_MIN_CHINESE_RATIO = float(os.getenv("FILTER_MIN_CHINESE_RATIO", "0.3"))
+FILTER_SIMHASH_THRESHOLD = int(os.getenv("FILTER_SIMHASH_THRESHOLD", "3"))
+FILTER_ENABLE_PII_MASK = os.getenv("FILTER_ENABLE_PII_MASK", "false").lower() == "true"
+

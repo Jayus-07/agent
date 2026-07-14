@@ -256,6 +256,25 @@ class IncrementalIndexer:
             ch.metadata["source_file"] = os.path.basename(file_path)
             ch.metadata["file_path"] = file_path
 
+        # 2.5 脏数据过滤
+        from preprocessing.filter import ChunkFilter
+        chunk_filter = ChunkFilter()
+        filtered_chunks = []
+        filtered_count = 0
+        for chunk in chunks:
+            ok, reason = chunk_filter.should_keep(chunk.page_content, chunk.metadata)
+            if ok:
+                # 应用 PII 脱敏到 chunk 内容
+                if chunk.metadata.get("pii_masked"):
+                    chunk.page_content = ChunkFilter.apply_pii_mask(chunk.page_content)
+                filtered_chunks.append(chunk)
+            else:
+                filtered_count += 1
+                logger.debug(f"[Filter] 拒绝 chunk: {reason} (doc={file_path})")
+        if filtered_count > 0:
+            logger.info(f"[Filter] {file_path}: 过滤 {filtered_count}/{len(chunks)} 个 chunk")
+        chunks = filtered_chunks
+
         # 3. 写入 chunk 级向量库
         chunk_ids = []
         if chunks:
