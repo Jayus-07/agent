@@ -71,6 +71,7 @@ CITATION_SUPPORT_THRESHOLD = float(os.getenv("CITATION_SUPPORT_THRESHOLD", "0.4"
 # ====================================
 # 数据库路径
 # ====================================
+BM25_INDEX_DIR = os.getenv("BM25_INDEX_DIR", "data/bm25")
 CHROMA_PATH = os.getenv("CHROMA_PATH", "data/chroma")
 DOC_DB_PATH = os.getenv("DOC_DB_PATH", "data/doc_db")
 DOCS_DIRECTORY = os.getenv("DOCS_DIRECTORY", "data/docs")

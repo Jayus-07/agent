@@ -13,7 +13,6 @@ from retrieval.knowledge_store import ChromaKnowledgeStore
 from preprocessing.metadata import build_all_metadata_async
 from preprocessing.loader import load_documents_from_directory
 from retrieval.base import CustomRetriever
-from retrieval.bm25 import build_bm25_retriever
 from config import (
     EMBEDDING_MODEL_PATH,
     BM25_SEARCH_K,
@@ -244,7 +243,24 @@ class RAGPipeline:
 
     def _init_retrievers(self):
         self.chunk_retriever = CustomRetriever(self.vectordb)
-        self.bm25 = build_bm25_retriever(self.docs, k=BM25_SEARCH_K)
+
+        # BM25: 优先从磁盘加载持久化索引，避免每次启动重建
+        from retrieval.bm25_store import BM25Store
+
+        bm25_store = BM25Store()
+        self.bm25 = bm25_store.load(k=BM25_SEARCH_K)
+        if self.bm25 is None:
+            logger.info("[RAG] BM25 索引不存在，全量重建...")
+            self.bm25 = bm25_store.build(self.docs, k=BM25_SEARCH_K)
+        elif bm25_store.is_stale:
+            logger.info("[RAG] BM25 索引已过期（文档数为 0），重建...")
+            self.bm25 = bm25_store.build(self.docs, k=BM25_SEARCH_K)
+        else:
+            logger.info(
+                f"[RAG] BM25 索引从磁盘加载成功 "
+                f"({bm25_store.doc_count()} 文档)，跳过重建"
+            )
+
         self.person_index = self._build_person_index()
 
         from retrieval.chain import RAGChain
