@@ -11,6 +11,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from llm.llm_factory import get_llm_factory
+from llm.models import AVAILABLE_MODELS
 from utils.logger import logger
 
 router = APIRouter(prefix="/llm", tags=["llm"])
@@ -33,7 +34,7 @@ async def list_models():
     """列出所有可用 LLM 模型"""
     factory = get_llm_factory()
     return {
-        "models": factory.AVAILABLE_MODELS,
+        "models": AVAILABLE_MODELS,
         "current": factory.get_current_model_name(),
     }
 

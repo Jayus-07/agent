@@ -67,7 +67,7 @@ class _LLMProxy:
         return getattr(_resolve_active_llm(), name)
 
     def __call__(self, *args, **kwargs):
-        return _resolve_active_llm()(*args, **kwargs)
+        return _resolve_active_llm().invoke(*args, **kwargs)
 
     def __repr__(self) -> str:
         try:

@@ -22,8 +22,14 @@
       ]
     },
     "code-review-graph": {
-      "type": "http",
-      "url": "http://localhost:5555/mcp"
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "C:/Users/wh/AppData/Roaming/npm/node_modules/@reizhafajrian/code-review-graph/bin/cli.js",
+        "serve",
+        "--repo", "D:\\Program Files\\workplace\\agent",
+        "--auto-watch"
+      ]
     }
   }
 }

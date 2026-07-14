@@ -22,6 +22,11 @@ PROVIDERS = {
         "default_model": "deepseek-chat",
         "needs_api_key": True,
     },
+    "minimax": {
+        "class": None,  # OpenAI 兼容协议
+        "default_model": "minimax-m3",
+        "needs_api_key": True,
+    },
 }
 
 
@@ -50,5 +55,11 @@ AVAILABLE_MODELS = [
         "name": "deepseek-reasoner",
         "display": "DeepSeek Reasoner - 云端",
         "description": "DeepSeek-R1 推理模型，需要 API Key",
+    },
+    {
+        "provider": "minimax",
+        "name": "MiniMax-M3",
+        "display": "MiniMax M3 - 云端",
+        "description": "MiniMax-M3，OpenAI 兼容协议，需要 API Key",
     },
 ]

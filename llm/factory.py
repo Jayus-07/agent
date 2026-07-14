@@ -17,10 +17,11 @@ from typing import Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from config import LLM_MODEL, DEEPSEEK_API_KEY
+from config import LLM_MODEL, DEEPSEEK_API_KEY, MINIMAX_API_KEY
 from llm.models import AVAILABLE_MODELS
 from llm.providers.ollama import build_ollama, get_ollama_balance
 from llm.providers.deepseek import build_deepseek, get_deepseek_balance
+from llm.providers.minimax import build_minimax, get_minimax_balance
 from utils.logger import logger
 
 
@@ -66,6 +67,8 @@ class LLMFactory:
         # API Key 校验
         if provider == "deepseek" and not DEEPSEEK_API_KEY:
             return {"ok": False, "error": "DEEPSEEK_API_KEY 未配置，请在 .env 中设置"}
+        if provider == "minimax" and not MINIMAX_API_KEY:
+            return {"ok": False, "error": "MINIMAX_API_KEY 未配置，请在 .env 中设置"}
 
         # 预热实例化
         try:
@@ -101,6 +104,8 @@ class LLMFactory:
             return build_ollama(model_name)
         elif provider == "deepseek":
             return build_deepseek(model_name)
+        elif provider == "minimax":
+            return build_minimax(model_name)
         else:
             raise ValueError(f"未知 provider: {provider}")
 
@@ -111,6 +116,8 @@ class LLMFactory:
                 return m["provider"]
         if "deepseek" in model_name:
             return "deepseek"
+        if "minimax" in model_name.lower():
+            return "minimax"
         return "ollama"
 
     # ---------------------------------------------------
@@ -127,6 +134,8 @@ class LLMFactory:
 
         if provider == "deepseek":
             return get_deepseek_balance()
+        elif provider == "minimax":
+            return get_minimax_balance()
         elif provider == "ollama":
             return get_ollama_balance()
         else:

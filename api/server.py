@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from api.routes import chat, sql, rag, report, llm, observability
+from api.routes import chat, sql, rag, report, llm, observability, memory, data
 from utils.logger import logger
 
 # ── 并发控制：从环境变量读取最大并发请求数 ──────────
@@ -97,6 +97,10 @@ app.include_router(rag.router)
 app.include_router(report.router)
 app.include_router(llm.router)
 app.include_router(observability.router)
+app.include_router(memory.router)
+app.include_router(data.router)
+app.include_router(data.assets_router)
+app.include_router(data.pipeline_router)
 
 
 # ── 健康检查 ──────────────────────────────────────

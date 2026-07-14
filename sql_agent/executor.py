@@ -52,7 +52,7 @@ def execute_sql(
         # — 建立连接 — 关 autocommit，让 SET TRANSACTION READ ONLY 真正生效
         conn = psycopg2.connect(**db_config)
         conn.autocommit = False
-        conn.set_session(readonly=True, readonly_level="transaction")
+        conn.set_session(readonly=True)
 
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             # — 显式只读事务（autocommit=False 时才有效；这是 P0 修复点）—

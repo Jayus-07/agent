@@ -40,6 +40,9 @@ def select_tables(question: str) -> List[str]:
         logger.info(f"[Router] 表数量 ≤ 2，直接返回全部: {all_tables}")
         return all_tables
 
+    # 优先匹配用户显式提到的表名（如 "stg_inventory"）
+    explicit = [t for t in all_tables if t.lower() in question.lower()]
+
     table_list = "\n".join(
         f"  - {t}: {schema_loader.get_table_description(t)}"
         for t in all_tables
@@ -61,6 +64,9 @@ def select_tables(question: str) -> List[str]:
 
         if isinstance(selected, list):
             valid = [t for t in selected if t in all_tables]
+            # 保证用户显式提到的表一定被选中
+            for t in explicit:
+                if t not in valid: valid.append(t)
             if not valid:
                 logger.warning(f"[Router] LLM 返回无效表名: {selected}，回退全部")
                 return all_tables

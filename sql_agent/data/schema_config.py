@@ -241,6 +241,77 @@ SCHEMA_CONFIG: Dict[str, Any] = {
             },
             "description": "供应商表。注意列名是 suppliers.name 不是 supplier_name。",
         },
+
+        # ── DCC 采集数据 (staging 层) ──
+        "stg_products": {
+            "columns": {
+                "sku":         "SKU 编码 (VARCHAR, 主键)",
+                "名称":        "商品名称 (TEXT)",
+                "品类":        "品类 (VARCHAR, 电子产品/家居厨房/宠物用品/母婴/户外运动/配件)",
+                "品牌":        "品牌名称 (VARCHAR, TechGleam/EcoLiving/PetPal/BabyJoy/OutdoorPro)",
+                "售价":        "售价元 (FLOAT)",
+                "成本":        "成本元 (FLOAT)",
+                "平台":        "销售平台 (VARCHAR, Amazon/Shopify/eBay)",
+                "状态":        "状态 (VARCHAR, 在售/停售)",
+                "上架日期":    "上架日期 (VARCHAR)",
+            },
+            "description": "采集商品上架数据(staging层)。12条记录，6品类×5品牌，含售价成本毛利信息。",
+        },
+        "stg_orders": {
+            "columns": {
+                "订单号":      "订单编号 (VARCHAR, 主键)",
+                "sku":         "SKU 编码 (VARCHAR, FK→stg_products.sku)",
+                "数量":        "购买数量 (INTEGER)",
+                "单价":        "单价元 (FLOAT)",
+                "金额":        "订单金额元 (FLOAT)",
+                "渠道":        "销售渠道 (VARCHAR, Amazon/Shopify/eBay)",
+                "地区":        "客户地区 (VARCHAR, 美国/英国/德国/加拿大/日本)",
+                "状态":        "订单状态 (VARCHAR, 已签收/已发货/处理中/已退货/已取消)",
+                "下单日期":    "下单日期 (VARCHAR)",
+                "签收日期":    "签收日期 (VARCHAR, 可空)",
+            },
+            "description": "采集订单数据(staging层)。15笔订单，3渠道×5地区，可通过sku关联stg_products。",
+        },
+        "stg_shops": {
+            "columns": {
+                "店铺id":      "店铺ID (VARCHAR, 主键)",
+                "名称":        "店铺名称 (VARCHAR)",
+                "平台":        "所属平台 (VARCHAR, Amazon/Shopify/eBay)",
+                "地区":        "所在地区 (VARCHAR)",
+                "状态":        "运营状态 (VARCHAR, 正常/已暂停)",
+                "开店日期":    "开店日期 (VARCHAR)",
+                "商品数":      "商品数 (INTEGER)",
+                "评分":        "店铺评分 (FLOAT, 1-5)",
+            },
+            "description": "采集店铺数据(staging层)。8家店铺，Amazon×5/Shopify×2/eBay×1。",
+        },
+        "stg_inventory": {
+            "columns": {
+                "sku":         "SKU 编码 (VARCHAR, FK→stg_products.sku)",
+                "仓库":        "仓库代码 (VARCHAR, US-EWR/UK-LHR/DE-FRA/US-LAX)",
+                "库存量":      "当前库存 (INTEGER)",
+                "安全库存":    "安全库存阈值 (INTEGER)",
+                "预留量":      "已预留数量 (INTEGER)",
+                "最后补货":    "最后补货日期 (VARCHAR)",
+                "状态":        "库存状态 (VARCHAR, 充足/偏低/断货)",
+                "预警":        "是否预警 (BOOLEAN)",
+            },
+            "description": "采集库存数据(staging层)。12条记录4个仓库。库存量<安全库存则状态=偏低/断货。",
+        },
+        "stg_suppliers": {
+            "columns": {
+                "供应商id":    "供应商ID (VARCHAR, 主键)",
+                "名称":        "供应商名称 (VARCHAR)",
+                "品类":        "供应品类 (VARCHAR)",
+                "地区":        "所在地区 (VARCHAR, 中国/越南)",
+                "交期天数":    "交货天数 (INTEGER)",
+                "起订量":      "最小起订量 (INTEGER)",
+                "不良率":      "不良率% (FLOAT)",
+                "评分":        "综合评分 (FLOAT, 1-5)",
+                "状态":        "合作状态 (VARCHAR, 合作中/评估中)",
+            },
+            "description": "采集供应商数据(staging层)。10家供应商，不良率<2%为优质，>3%需质量审查。",
+        },
     },
 
     # ── 敏感列 ─────────────────────────────────────────
