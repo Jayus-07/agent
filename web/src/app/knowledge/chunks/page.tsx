@@ -4,23 +4,30 @@ import { Suspense, useState, useEffect } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { Search, Beaker } from 'lucide-react'
 import { knowledgeService } from '@/services/knowledge'
-import { KB_CHUNKS } from '@/services/mock/knowledge'
 
 interface ChunkItem { id: string; content: string; metadata: Record<string,unknown>; token_count: number }
 
 function ChunksContent() {
   const [search, setSearch] = useState('')
-  const [chunks, setChunks] = useState<any[]>(KB_CHUNKS)
+  const [chunks, setChunks] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
   const params = useSearchParams()
   const router = useRouter()
   const docId = params.get('docId')
 
   useEffect(() => {
     const id = docId || ''
-    if (!id) return
+    if (!id) { setChunks([]); return }
+    setLoading(true)
+    setError('')
     knowledgeService.getChunks(id)
-      .then(d => { if (d.chunks?.length) setChunks(d.chunks.map((c: ChunkItem) => ({ id: c.id, docId: id, content: c.content, tokenCount: c.token_count, metadata: c.metadata }))) })
-      .catch(() => {})
+      .then(d => {
+        if (d.chunks?.length) setChunks(d.chunks.map((c: ChunkItem) => ({ id: c.id, docId: id, content: c.content, tokenCount: c.token_count, metadata: c.metadata })))
+        else { setChunks([]); setError('无 Chunk 数据') }
+        setLoading(false)
+      })
+      .catch(e => { setError('获取 Chunks 失败: ' + String(e)); setLoading(false) })
   }, [docId])
 
   const filtered = (search ? chunks.filter((c: any) => (c.content||'').includes(search) || c.id.includes(search)) : docId ? chunks.filter((c: any) => c.docId === docId) : chunks)
@@ -37,6 +44,11 @@ function ChunksContent() {
           <Search size={14} className="text-text-muted" />
           <input placeholder="搜索 Chunk 内容..." value={search} onChange={e => setSearch(e.target.value)} className="bg-transparent outline-none text-xs text-text-primary flex-1" />
         </div>
+        {loading && <div className="text-center text-xs text-text-muted py-8 animate-pulse">加载中...</div>}
+        {error && <div className="text-center text-xs text-red-500 py-8">{error}</div>}
+        {!loading && !error && filtered.length === 0 && (
+          <div className="text-center text-xs text-text-muted py-8">{docId ? '该文档暂无 Chunk 数据' : '请从文档管理页选择文档查看 Chunks'}</div>
+        )}
         <div className="grid gap-3">
           {filtered.map(c => (
             <div key={c.id} className="bg-surface-base rounded-xl border border-border-subtle p-4 hover:shadow-card transition-shadow duration-200">

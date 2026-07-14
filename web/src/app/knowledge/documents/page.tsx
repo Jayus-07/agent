@@ -26,7 +26,7 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
 
 export default function DocumentsPage() {
   const router = useRouter()
-  const { documents, loading, total, page, pageSize, keyword, setKeyword, setPage, refresh } = useDocuments()
+  const { documents, loading, total, page, pageSize, keyword, setKeyword, setPage, error, refresh } = useDocuments()
   const [uploadOpen, setUploadOpen] = useState(false)
   const [reindexing, setReindexing] = useState<Set<string>>(new Set())
   const debounceRef = useRef<ReturnType<typeof setTimeout>>()
@@ -95,6 +95,7 @@ export default function DocumentsPage() {
 
         {/* Table */}
         {loading && <div className="bg-surface-base rounded-xl border border-border-subtle p-3 text-center text-xs text-text-muted animate-pulse mb-2">加载中...</div>}
+        {error && <div className="bg-surface-base rounded-xl border border-red-200 p-3 text-center text-xs text-red-500 mb-2">{error}</div>}
         <div className="bg-surface-base rounded-xl border border-border-subtle overflow-hidden">
           <table className="w-full text-xs">
             <thead><tr className="border-b border-border-subtle bg-surface-elevated text-text-muted">

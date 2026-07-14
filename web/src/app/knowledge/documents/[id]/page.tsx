@@ -20,7 +20,7 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
 export default function DocumentDetailPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
-  const { doc, loading, refresh } = useDocument(id)
+  const { doc, loading, error, refresh } = useDocument(id)
   const [reindexing, setReindexing] = useState(false)
 
   const handleReindex = async () => {
@@ -44,7 +44,9 @@ export default function DocumentDetailPage() {
   if (!doc) {
     return (
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto px-6 py-8 text-center text-sm text-text-muted">文档不存在</div>
+        <div className="max-w-3xl mx-auto px-6 py-8 text-center text-sm text-text-muted">
+          {error || '文档不存在'}
+        </div>
       </div>
     )
   }
