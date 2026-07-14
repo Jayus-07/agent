@@ -3,7 +3,6 @@ chunking.py — Document Type Aware Chunking Strategy Router
 
 Each strategy splits documents differently based on classified doc_type:
   manual/policy   → ManualPolicyChunkStrategy     (chapter/section boundaries)
-  resume          → ResumeChunkStrategy            (semantic field boundaries)
   project/report  → ProjectReportChunkStrategy     (header-first, size-capped)
   general         → GeneralChunkStrategy           (RecursiveCharacterTextSplitter fallback)
 """
@@ -61,26 +60,6 @@ def _find_sections(text: str) -> List[dict]:
         })
     return sections
 
-
-# ============================================================
-# Resume field patterns
-# ============================================================
-
-_RESUME_FIELD_PATTERN = re.compile(
-    r'(?:^|\n)\s*('
-    r'基本信息|个人信息|求职意向|求职目标'
-    r'|工作经历|工作经验|工作履历'
-    r'|项目经历|项目经验|项目背景'
-    r'|教育背景|学历信息|教育经历'
-    r'|技能特长|专业技能|技术能力'
-    r'|自我评价|个人评价'
-    r'|证书资质|资格证书'
-    r'|语言能力|外语水平'
-    r'|联系方式|联系信息'
-    r'|培训经历|获奖情况|荣誉奖项'
-    r')\s*\n',
-    re.MULTILINE,
-)
 
 
 # ============================================================
@@ -195,51 +174,6 @@ class ManualPolicyChunkStrategy(ChunkStrategy):
 
         return self._enrich_metadata(chunks, file_path)
 
-
-# ============================================================
-# ResumeChunkStrategy
-# ============================================================
-
-class ResumeChunkStrategy(ChunkStrategy):
-    """
-    For resumes. Splits by semantic fields (基本信息, 工作经历, 项目经历, 教育背景, etc.).
-    Each field = one chunk. No RecursiveCharacterTextSplitter.
-    """
-
-    def split(self, docs: List[Document], file_path: str) -> List[Document]:
-        full_text = "\n".join(d.page_content for d in docs)
-
-        # Find all field header positions
-        matches = list(_RESUME_FIELD_PATTERN.finditer(full_text))
-
-        if not matches:
-            # No recognized fields — treat entire document as one chunk
-            chunk = Document(
-                page_content=full_text,
-                metadata=docs[0].metadata.copy() if docs else {},
-            )
-            chunk.metadata["section_id"] = ""
-            chunk.metadata["section_title"] = ""
-            return self._enrich_metadata([chunk], file_path)
-
-        chunks = []
-        for i, m in enumerate(matches):
-            field_name = m.group(1).strip()
-            start = m.start()
-            end = matches[i + 1].start() if i + 1 < len(matches) else len(full_text)
-            content = full_text[start:end].strip()
-
-            if not content:
-                continue
-
-            base_meta = docs[0].metadata.copy() if docs else {}
-            base_meta["section_id"] = field_name
-            base_meta["section_title"] = field_name
-
-            chunk = Document(page_content=content, metadata=base_meta)
-            chunks.append(chunk)
-
-        return self._enrich_metadata(chunks, file_path)
 
 
 # ============================================================

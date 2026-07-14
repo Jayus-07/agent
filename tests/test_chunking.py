@@ -13,7 +13,6 @@ from langchain_core.documents import Document
 from preprocessing.chunking import (
     GeneralChunkStrategy,
     ManualPolicyChunkStrategy,
-    ResumeChunkStrategy,
     ProjectReportChunkStrategy,
     ChunkStrategyRouter,
     _find_sections,
@@ -195,59 +194,6 @@ class TestManualPolicyChunkStrategy:
 
 
 # ============================================================
-# ResumeChunkStrategy
-# ============================================================
-
-RESUME_TEXT = """基本信息
-姓名：张三
-职位：后端开发工程师
-
-工作经历
-2020-2023 某某科技 高级工程师
-负责微服务架构设计和开发
-
-项目经历
-项目一：支付系统重构
-使用 SpringBoot + MySQL 完成支付系统重构
-
-教育背景
-2016-2020 某某大学 计算机科学 本科
-
-技能特长
-Java, Python, SpringBoot, MySQL, Redis
-"""
-
-
-class TestResumeChunkStrategy:
-    """简历语义字段切分"""
-
-    def setup_method(self):
-        self.strategy = ResumeChunkStrategy()
-
-    def test_splits_by_fields(self):
-        chunks = self.strategy.split(_make_doc(RESUME_TEXT), "/tmp/resume.txt")
-        assert len(chunks) >= 3
-
-    def test_work_experience_in_own_chunk(self):
-        chunks = self.strategy.split(_make_doc(RESUME_TEXT), "/tmp/resume.txt")
-        work_chunks = [c for c in chunks if "工作经历" in c.page_content]
-        assert len(work_chunks) >= 1
-
-    def test_field_metadata(self):
-        chunks = self.strategy.split(_make_doc(RESUME_TEXT), "/tmp/resume.txt")
-        field_ids = [c.metadata.get("section_id") for c in chunks if c.metadata.get("section_id")]
-        assert "基本信息" in field_ids
-        assert "工作经历" in field_ids
-        assert "教育背景" in field_ids
-        assert "技能特长" in field_ids
-
-    def test_no_fields_fallback(self):
-        text = "姓名：李四\n电话：123456\n地址：北京"
-        chunks = self.strategy.split(_make_doc(text), "/tmp/t.txt")
-        assert len(chunks) == 1
-
-
-# ============================================================
 # ProjectReportChunkStrategy
 # ============================================================
 
@@ -345,12 +291,14 @@ class TestChunkStrategyRouter:
         assert "4.2.1" in ids
 
     def test_routes_resume_text(self):
-        """含"工作经历""教育背景"关键词 → resume"""
+        """含"工作经历""教育背景"关键词 → general fallback（resume 策略已删除）"""
         text = "基本信息\n工作经历\n2020-2023 工程师\n教育背景\n大学本科"
         chunks = self.router.route(_make_doc(text), "/tmp/resume_doc.txt")
-        assert len(chunks) >= 2
-        ids = [c.metadata.get("section_id") for c in chunks if c.metadata.get("section_id")]
-        assert "工作经历" in ids
+        # 走 GeneralChunkStrategy fallback，仍能正常分块
+        assert len(chunks) >= 1
+        for c in chunks:
+            assert "parent_doc_id" in c.metadata
+            assert "source_file" in c.metadata
 
     def test_routes_project_text(self):
         """含"项目""架构设计"关键词 → project"""
