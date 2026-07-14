@@ -16,7 +16,6 @@ from utils.logger import logger
 # =====================================================
 
 _sql_agent = None
-_rag_pipeline = None
 
 
 def _get_sql_agent():
@@ -29,12 +28,9 @@ def _get_sql_agent():
 
 
 def _get_rag_pipeline():
-    global _rag_pipeline
-    if _rag_pipeline is None:
-        from retrieval.pipeline import RAGPipeline
-        logger.info("[Tools] 正在初始化 RAG Pipeline...")
-        _rag_pipeline = RAGPipeline()
-    return _rag_pipeline
+    """获取 RAG Pipeline 单例（统一入口，避免双重初始化）"""
+    from api.deps import get_rag_pipeline
+    return get_rag_pipeline()
 
 
 # =====================================================
