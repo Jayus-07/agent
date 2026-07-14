@@ -232,6 +232,8 @@ class RAGChain:
         })
 
         answer = result["answer"]
+        # 剥离 <think>...</think> 推理块（MiniMax M3 / DeepSeek R1 等会输出）
+        answer = _strip_think_blocks(answer)
         context_docs = result.get("context", [])
 
         # Citation Filter: 用 CrossEncoder 验证每个 chunk 是否真正支撑答案
@@ -253,6 +255,16 @@ class RAGChain:
             self._memory.end_turn(session_id, question, answer)
 
         return answer
+
+
+def _strip_think_blocks(text: str) -> str:
+    """剥离 <think>...</think> 推理块（MiniMax M3 / DeepSeek R1 等会输出）"""
+    import re
+    # 去除 <think>...</think> 完整块（含换行）
+    cleaned = re.sub(r'<think>[\s\S]*?</think>\s*', '', text)
+    # 去除只有开头没有结尾的 <think>（异常截断）
+    cleaned = re.sub(r'<think>[\s\S]*', '', cleaned)
+    return cleaned.strip()
 
 
 def _verify_support(answer: str, docs: list, question: str = "") -> tuple:
