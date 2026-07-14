@@ -1,41 +1,46 @@
 'use client'
 
-import { MessageSquare } from 'lucide-react'
-
-const TITLE = 'Multi-Agent 智能助手'
-const DESC = 'AI 自动拆解复杂任务，并行调用 📊 SQL 查询、📚 知识库检索 和 📄 报告引擎'
+import { Sparkles } from 'lucide-react'
 
 const EXAMPLES = [
-  { icon: '📊', label: '数据查询', text: '技术部有多少人？' },
-  { icon: '📚', label: '知识检索', text: '微服务架构的最佳实践？' },
-  { icon: '📄', label: '生成报告', text: '分析技术部预算使用情况并生成报告' },
-  { icon: '🤖', label: '复杂分析', text: '对比各部门绩效，给出改进建议' },
+  { label: '数据查询', text: '技术部有多少人？' },
+  { label: '知识检索', text: '微服务架构的最佳实践？' },
+  { label: '生成报告', text: '分析技术部预算使用情况并生成报告' },
+  { label: '复杂分析', text: '对比各部门绩效，给出改进建议' },
 ]
 
-interface Props {
-  onExampleClick?: (question: string) => void
-}
+interface Props { onExampleClick?: (question: string) => void }
 
 export default function EmptyState({ onExampleClick }: Props) {
   return (
-    <div className="flex flex-col items-center justify-center h-full px-4 py-12">
-      <div className="w-14 h-14 rounded-2xl bg-[#2f2f2f] flex items-center justify-center text-[#b4b4b4] mb-5">
-        <MessageSquare size={28} />
+    <div className="flex flex-col items-center justify-center h-full px-6 py-16">
+      {/* Logo */}
+      <div className="w-16 h-16 rounded-2xl bg-accent/8 flex items-center justify-center mb-8">
+        <Sparkles size={30} className="text-accent" strokeWidth={1.5} />
       </div>
-      <h2 className="text-lg font-medium text-[#ececec] mb-1.5">{TITLE}</h2>
-      <p className="text-sm text-[#8e8e8e] mb-8 text-center max-w-sm">{DESC}</p>
 
-      <div className="grid gap-2 w-full max-w-md">
+      <h1 className="text-2xl font-semibold text-text-primary mb-3 tracking-tight">
+        有什么可以帮助你的？
+      </h1>
+      <p className="text-sm text-text-muted mb-10 text-center max-w-md leading-relaxed">
+        AI 自动拆解复杂任务，并行调用数据查询、知识检索和报告引擎
+      </p>
+
+      {/* 示例卡片 */}
+      <div className="grid gap-2.5 w-full max-w-lg">
         {EXAMPLES.map((ex) => (
           <button
             key={ex.text}
             onClick={() => onExampleClick?.(ex.text)}
-            className="text-left px-4 py-3 rounded-xl border border-[#3f3f3f] text-sm text-[#b4b4b4] hover:bg-[#2f2f2f] hover:text-[#ececec] hover:border-[#5f5f5f] transition-all"
+            className="group text-left px-5 py-3.5 rounded-xl bg-surface-base border border-border-subtle
+              text-sm text-text-secondary hover:text-text-primary hover:border-accent/30 hover:shadow-card
+              hover:-translate-y-px transition-all duration-200"
           >
-            <span className="mr-2">{ex.icon}</span>
-            <span className="text-[#8e8e8e] text-xs">{ex.label}</span>
+            <span className="inline-block text-accent text-xs font-medium mb-1 bg-accent/5 px-2 py-0.5 rounded-full">
+              {ex.label}
+            </span>
             <br />
-            <span>&ldquo;{ex.text}&rdquo;</span>
+            <span className="text-text-primary">&ldquo;{ex.text}&rdquo;</span>
           </button>
         ))}
       </div>

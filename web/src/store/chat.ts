@@ -27,6 +27,7 @@ interface ChatState {
   switchSession: (id: string) => void
   renameSession: (id: string, title: string) => void
   deleteSession: (id: string) => void
+  loadSessions: () => Promise<void>
 
   // — 消息操作 (sessionId 可选，用于 SSE 流固定目标会话) —
   addMessage: (role: 'user' | 'assistant', content: string, sessionId?: string) => void
@@ -213,6 +214,35 @@ export const useChatStore = create<ChatState>((set, get) => {
           return { ...s, messages: msgs, updatedAt: Date.now() }
         }),
       }))
+    },
+
+    // —— 从后端加载持久化会话 ——
+    loadSessions: async () => {
+      try {
+        const { listSessions } = await import('@/lib/api')
+        const remote = await listSessions()
+        if (remote.length === 0) return
+
+        const state = get()
+        const existingIds = new Set(state.sessions.map((s) => s.id))
+
+        const remoteSessions = remote
+          .filter((m) => !existingIds.has(m.session_id))
+          .map((m) => ({
+            id: m.session_id,
+            title: m.title,
+            mode: 'chat' as const,
+            messages: [] as Message[],
+            createdAt: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
+            updatedAt: m.updated_at ? new Date(m.updated_at).getTime() : Date.now(),
+          }))
+
+        if (remoteSessions.length > 0) {
+          set((state) => ({
+            sessions: [...remoteSessions, ...state.sessions.filter((s) => s.messages.length > 0)],
+          }))
+        }
+      } catch { /* 后端不可用时静默失败 */ }
     },
 
     // —— 状态 ——

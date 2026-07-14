@@ -143,3 +143,44 @@ export async function getLLMBalance(provider?: string): Promise<LLMBalance> {
   }
   return data
 }
+
+// ========================================
+// 会话记忆 API
+// ========================================
+
+export interface SessionMeta {
+  session_id: string; title: string; message_count: number
+  created_at: string | null; updated_at: string | null
+}
+
+export async function listSessions(): Promise<SessionMeta[]> {
+  const res = await fetch(`${API_BASE}/memory/sessions`)
+  if (!res.ok) return []
+  const data = await res.json()
+  return data.sessions || []
+}
+
+export async function getSessionMessages(sessionId: string): Promise<{ role: string; content: string }[]> {
+  const res = await fetch(`${API_BASE}/memory/sessions/${encodeURIComponent(sessionId)}`)
+  if (!res.ok) return []
+  const data = await res.json()
+  return data.messages || []
+}
+
+export async function deleteMemorySession(sessionId: string): Promise<boolean> {
+  const res = await fetch(`${API_BASE}/memory/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+  if (!res.ok) return false
+  const data = await res.json()
+  return data.ok === true
+}
+
+export async function renameMemorySession(sessionId: string, title: string): Promise<boolean> {
+  const res = await fetch(`${API_BASE}/memory/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  })
+  if (!res.ok) return false
+  const data = await res.json()
+  return data.ok === true
+}

@@ -1,129 +1,99 @@
 'use client'
 
-import { Plus, PanelLeftClose, PanelLeft, MessageSquare, Activity } from 'lucide-react'
-import { useRouter, usePathname } from 'next/navigation'
-import { useChatStore } from '@/store/chat'
-import { clsx } from 'clsx'
-import SessionList from './SessionList'
+import { Sparkles, PanelLeft, PanelLeftClose, LayoutDashboard, Download, Cog, Database, BookOpen, Brain, Activity } from 'lucide-react'
+import NavGroup from './layout/NavGroup'
 
-interface Props {
-  collapsed: boolean
-  onToggle: () => void
-}
+interface Props { collapsed: boolean; onToggle: () => void }
+
+const NAV = [
+  { icon: <LayoutDashboard size={18} />, label: '数据驾驶舱', path: '/' },
+  {
+    icon: <Download size={18} />, label: '数据接入中心',
+    items: [
+      { label: '本地文件上传', path: '/data-source' },
+      { label: '开源数据集', path: '/data-source/datasets' },
+      { label: '开放平台', path: '/data-source/platform' },
+      { label: '模拟数据生成', path: '/data-source/generator' },
+    ],
+  },
+  {
+    icon: <Cog size={18} />, label: '数据处理中心',
+    items: [
+      { label: '清洗任务', path: '/data-pipeline' },
+      { label: '执行历史', path: '/data-pipeline/history' },
+    ],
+  },
+  { icon: <Database size={18} />, label: '数据资产中心', path: '/data-assets' },
+  {
+    icon: <BookOpen size={18} />, label: 'RAG 知识库',
+    items: [
+      { label: '概览', path: '/knowledge' },
+      { label: '文档管理', path: '/knowledge/documents' },
+      { label: 'Chunk 查看', path: '/knowledge/chunks' },
+      { label: '检索测试', path: '/knowledge/playground' },
+      { label: '索引任务', path: '/knowledge/tasks' },
+    ],
+  },
+  {
+    icon: <Brain size={18} />, label: 'AI 分析中心',
+    items: [
+      { label: '智能问答', path: '/agent' },
+      { label: '分析任务', path: '/agent/tasks' },
+      { label: '历史报告', path: '/agent/reports' },
+    ],
+  },
+  {
+    icon: <Activity size={18} />, label: '可观测中心',
+    items: [
+      { label: 'Agent Trace', path: '/observability' },
+      { label: 'LLM 调用', path: '/observability/llm' },
+      { label: 'RAG 指标', path: '/observability/rag' },
+    ],
+  },
+]
 
 export default function Sidebar({ collapsed, onToggle }: Props) {
-  const newSession = useChatStore((s) => s.newSession)
-  const router = useRouter()
-  const pathname = usePathname()
-  const isChat = pathname === '/'
-  const isMonitor = pathname?.startsWith('/monitor') ?? false
-
   if (collapsed) {
     return (
-      <aside className="w-0 shrink-0 overflow-hidden md:w-12 md:flex md:flex-col md:items-center md:py-3 md:border-r md:border-[#3f3f3f] bg-[#171717]">
-        <button
-          onClick={onToggle}
-          className="p-1.5 rounded-md hover:bg-[#2f2f2f] transition-colors text-[#b4b4b4]"
-          aria-label="展开侧边栏"
-        >
+      <aside className="w-0 shrink-0 overflow-hidden md:w-14 md:flex md:flex-col md:items-center md:py-3 glass border-r border-black/5 gap-1">
+        <button onClick={onToggle} className="p-2 rounded-lg hover:bg-black/5 transition-colors text-text-secondary" aria-label="展开">
           <PanelLeft size={18} />
         </button>
-        <div className="mt-3 flex flex-col gap-1 w-full items-center">
-          <button
-            onClick={() => router.push('/')}
-            className={clsx(
-              'p-1.5 rounded-md transition-colors',
-              isChat ? 'bg-[#2f2f2f] text-[#ececec]' : 'text-[#b4b4b4] hover:bg-[#2f2f2f]'
-            )}
-            aria-label="对话"
-            title="对话"
-          >
-            <MessageSquare size={16} />
-          </button>
-          <button
-            onClick={() => router.push('/monitor')}
-            className={clsx(
-              'p-1.5 rounded-md transition-colors',
-              isMonitor ? 'bg-[#2f2f2f] text-[#ececec]' : 'text-[#b4b4b4] hover:bg-[#2f2f2f]'
-            )}
-            aria-label="可观测性"
-            title="可观测性"
-          >
-            <Activity size={16} />
-          </button>
-        </div>
+        {NAV.map(g => (
+          <NavGroup key={g.path || g.label} {...g} collapsed={true} />
+        ))}
       </aside>
     )
   }
 
   return (
-    <aside className="w-64 shrink-0 flex flex-col bg-[#171717] border-r border-[#3f3f3f]">
-      {/* 头部 */}
-      <div className="flex items-center justify-between px-3 py-3 border-b border-[#2f2f2f]">
-        <span className="text-sm font-semibold tracking-wide text-[#ececec]">Agent AI</span>
-        <div className="flex items-center gap-0.5">
-          <button
-            onClick={() => newSession()}
-            className="p-1.5 rounded-md hover:bg-[#2f2f2f] transition-colors text-[#b4b4b4]"
-            aria-label="新对话"
-            title="新对话"
-          >
-            <Plus size={16} />
-          </button>
-          <button
-            onClick={onToggle}
-            className="p-1.5 rounded-md hover:bg-[#2f2f2f] transition-colors text-[#b4b4b4]"
-            aria-label="收起侧边栏"
-            title="收起"
-          >
-            <PanelLeftClose size={16} />
-          </button>
+    <aside className="w-64 shrink-0 flex flex-col glass border-r border-black/5">
+      {/* 品牌 */}
+      <div className="flex items-center justify-between px-4 py-3.5">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center">
+            <Sparkles size={14} className="text-white" />
+          </div>
+          <span className="text-sm font-semibold text-text-primary tracking-tight">电商智能数据平台</span>
         </div>
+        <button onClick={onToggle} className="p-1.5 rounded-md hover:bg-black/5 transition-colors text-text-secondary" aria-label="收起">
+          <PanelLeftClose size={16} />
+        </button>
       </div>
 
-      {/* 视图切换 */}
-      <div className="px-2 py-2 border-b border-[#2f2f2f]">
-        <div className="flex bg-[#212121] rounded-lg p-0.5">
-          <button
-            onClick={() => router.push('/')}
-            className={clsx(
-              'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs rounded-md transition-colors',
-              isChat
-                ? 'bg-[#3a3a3a] text-[#ececec]'
-                : 'text-[#8e8e8e] hover:text-[#b4b4b4]'
-            )}
-          >
-            <MessageSquare size={13} />
-            对话
-          </button>
-          <button
-            onClick={() => router.push('/monitor')}
-            className={clsx(
-              'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs rounded-md transition-colors',
-              isMonitor
-                ? 'bg-[#3a3a3a] text-[#ececec]'
-                : 'text-[#8e8e8e] hover:text-[#b4b4b4]'
-            )}
-          >
-            <Activity size={13} />
-            可观测性
-          </button>
-        </div>
-      </div>
+      {/* 导航 */}
+      <nav className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+        {NAV.map(g => (
+          <NavGroup key={g.path || g.label} {...g} collapsed={false} />
+        ))}
+      </nav>
 
-      {/* Session list (仅对话视图显示) */}
-      {isChat && (
-        <div className="flex-1 overflow-y-auto px-2 py-2">
-          <p className="text-[11px] text-[#8e8e8e] px-2 mb-1.5 uppercase tracking-wide">历史会话</p>
-          <SessionList />
-        </div>
-      )}
-      {isMonitor && (
-        <div className="flex-1 px-3 py-4 text-xs text-[#8e8e8e]">
-          <p>实时监控多 Agent 工作流的执行状态、延迟分布、系统资源与告警。</p>
-          <p className="mt-2 text-[#6e6e6e]">数据每 5s 自动刷新</p>
-        </div>
-      )}
+      {/* 底部 */}
+      <div className="px-4 py-3 border-t border-black/5">
+        <p className="text-[10px] text-text-muted leading-relaxed">
+          Powered by LangGraph<br />Multi-Agent System
+        </p>
+      </div>
     </aside>
   )
 }
