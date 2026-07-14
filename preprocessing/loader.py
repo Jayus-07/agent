@@ -5,6 +5,7 @@ from langchain_community.document_loaders import (
 )
 
 from config import CHUNK_SIZE, CHUNK_OVERLAP, DEFAULT_KB_ID
+from preprocessing.cleaner import DocumentCleaner
 from utils.logger import logger
 
 
@@ -52,6 +53,14 @@ def load_documents_from_directory(directory_path: str, chunk_size=CHUNK_SIZE, ch
                         loader = loader_class(file_path)
 
                     docs = loader.load()
+
+                    # ── 文档清洗（P0-1）：在分块前清洗文本 ──
+                    cleaner = DocumentCleaner()
+                    source_type = "pdf" if ext == ".pdf" else "text"
+                    for doc in docs:
+                        result = cleaner.clean(doc.page_content, source_type=source_type)
+                        doc.page_content = result.text
+
                     chunks = split_documents(docs, file_path, chunk_size, chunk_overlap)
 
                     # KB 隔离：注入 kb_id 到每个 chunk metadata

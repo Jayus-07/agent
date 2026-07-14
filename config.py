@@ -322,3 +322,15 @@ DB_CONFIG = {
     "password": os.getenv("PGPASSWORD", "123456"),
 }
 
+# ====================================
+# 文档清洗配置（P0-1）
+# ====================================
+CLEAN_REMOVE_CONTROL_CHARS = os.getenv("CLEAN_REMOVE_CONTROL_CHARS", "false").lower() == "true"
+CLEAN_NORMALIZE_FULLWIDTH = os.getenv("CLEAN_NORMALIZE_FULLWIDTH", "false").lower() == "true"
+CLEAN_MERGE_BLANK_LINES = os.getenv("CLEAN_MERGE_BLANK_LINES", "false").lower() == "true"
+CLEAN_STRIP_HTML = os.getenv("CLEAN_STRIP_HTML", "false").lower() == "true"
+CLEAN_REMOVE_PDF_HEADERS = os.getenv("CLEAN_REMOVE_PDF_HEADERS", "false").lower() == "true"
+CLEAN_REMOVE_PDF_FOOTERS = os.getenv("CLEAN_REMOVE_PDF_FOOTERS", "false").lower() == "true"
+CLEAN_URL_ACTION = os.getenv("CLEAN_URL_ACTION", "keep")           # keep | remove | placeholder
+CLEAN_EMAIL_ACTION = os.getenv("CLEAN_EMAIL_ACTION", "keep")       # keep | remove | placeholder
+
