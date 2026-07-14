@@ -31,7 +31,6 @@ const NAV = [
       { label: '文档管理', path: '/knowledge/documents' },
       { label: 'Chunk 查看', path: '/knowledge/chunks' },
       { label: '检索测试', path: '/knowledge/playground' },
-      { label: '索引任务', path: '/knowledge/tasks' },
     ],
   },
   {
