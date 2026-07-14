@@ -51,17 +51,13 @@ async def list_documents(
     try:
         reg = _get_registry()
 
-        # 有搜索/过滤条件时使用 search()，否则用 list_active() 保持向后兼容
-        if keyword or type or status:
-            result = reg.search(
-                keyword=keyword, type_filter=type, status_filter=status or "active",
-                page=page, page_size=page_size,
-            )
-            docs = result["items"]
-            total = result["total"]
-        else:
-            docs = reg.list_active()
-            total = len(docs)
+        # 统一走 search() 保证分页一致（无过滤条件时等效于全量分页）
+        result = reg.search(
+            keyword=keyword, type_filter=type, status_filter=status or "active",
+            page=page, page_size=page_size,
+        )
+        docs = result["items"]
+        total = result["total"]
 
         embedding_model_name = os.path.basename(EMBEDDING_MODEL_PATH)
 
@@ -91,8 +87,8 @@ async def list_documents(
         return {
             "documents": [_format_doc(d) for d in docs],
             "total": total,
-            "page": page if (keyword or type or status) else 1,
-            "page_size": page_size if (keyword or type or status) else max(total, 1),
+            "page": result["page"],
+            "page_size": result["page_size"],
         }
     except Exception as e:
         logger.error(f"[RAG] documents 失败: {e}")
