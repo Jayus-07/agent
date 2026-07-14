@@ -66,7 +66,7 @@ class IncrementalIndexer:
        - UNCHANGED: 跳过
     """
 
-    SUPPORTED_EXTS = {".txt", ".md", ".pdf"}
+    SUPPORTED_EXTS = {".txt", ".md", ".pdf", ".docx"}
 
     def __init__(
         self,
@@ -225,6 +225,14 @@ class IncrementalIndexer:
             except Exception as e:
                 logger.error(f"PDF 加载失败 {file_path}: {e}")
                 return
+        elif ext == ".docx":
+            try:
+                from langchain_community.document_loaders import Docx2txtLoader
+                loader = Docx2txtLoader(file_path)
+                raw_docs = loader.load()
+            except Exception as e:
+                logger.error(f"DOCX 加载失败 {file_path}: {e}")
+                return
         else:
             loader = TextLoader(file_path, encoding="utf-8")
             raw_docs = loader.load()
@@ -323,6 +331,36 @@ class IncrementalIndexer:
             "doc_keywords": keywords,
             "person_names": ", ".join(person_names) if isinstance(person_names, list)
                            else str(person_names),
+        }
+
+    # ---- 公开重索引 ----
+
+    def reindex_file(self, file_path: str) -> dict:
+        """公开的单文件重索引 — 删除旧向量后重新加载/分块/Embedding/写入。
+
+        复用 _remove_document() + _index_file()，不重复实现索引逻辑。
+
+        Returns:
+            {"doc_id": str, "chunk_count": int, "file_hash": str, "status": str}
+        """
+        row = self.registry.get_by_path(file_path)
+        old_doc_id = row.get("doc_id", "") if row else ""
+
+        # 1. 删除旧向量
+        if old_doc_id:
+            self._remove_document(old_doc_id)
+            logger.info(f"[REINDEX] 已清理旧向量: {old_doc_id}")
+
+        # 2. 重新索引
+        self._index_file(file_path)
+
+        # 3. 获取更新后的信息
+        updated = self.registry.get_by_path(file_path) or {}
+        return {
+            "doc_id": updated.get("doc_id", ""),
+            "chunk_count": updated.get("chunk_count", 0),
+            "file_hash": updated.get("file_hash", ""),
+            "status": updated.get("status", "active"),
         }
 
     # ---- 删除 ----

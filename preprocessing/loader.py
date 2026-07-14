@@ -27,6 +27,7 @@ def load_documents_from_directory(directory_path: str, chunk_size=CHUNK_SIZE, ch
         ".txt": TextLoader,
         ".md": TextLoader,
         ".pdf": PyPDFLoader,
+        ".docx": None,  # 在下方特殊处理（需要 Docx2txtLoader）
     }
 
     for root, dirs, files in os.walk(directory_path):
@@ -44,6 +45,9 @@ def load_documents_from_directory(directory_path: str, chunk_size=CHUNK_SIZE, ch
 
                     if ext in [".md", ".txt"]:
                         loader = loader_class(file_path, encoding="utf-8")
+                    elif ext == ".docx":
+                        from langchain_community.document_loaders import Docx2txtLoader
+                        loader = Docx2txtLoader(file_path)
                     else:
                         loader = loader_class(file_path)
 

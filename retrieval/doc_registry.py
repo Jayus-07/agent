@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any
 
 
+# 文档状态枚举（完整生命周期）
+DOC_STATUSES = ("uploading", "parsing", "embedding", "active", "failed", "deleted")
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS doc_registry (
     file_path    TEXT PRIMARY KEY,
@@ -104,10 +107,73 @@ class DocumentRegistry:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def search(
+        self,
+        keyword: str = "",
+        type_filter: str = "",
+        status_filter: str = "",
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        """关键字搜索 + 分页 + 类型/状态过滤。
+
+        返回 {"items": [...], "total": int, "page": int, "page_size": int}
+        """
+        conditions: list[str] = []
+        params: list = []
+
+        if keyword.strip():
+            conditions.append("file_name LIKE ?")
+            params.append(f"%{keyword.strip()}%")
+
+        if type_filter.strip():
+            # 从 file_name 扩展名推断类型
+            conditions.append("file_name LIKE ?")
+            params.append(f"%.{type_filter.strip()}")
+
+        if status_filter.strip():
+            conditions.append("status = ?")
+            params.append(status_filter.strip())
+
+        where_clause = ""
+        if conditions:
+            where_clause = "WHERE " + " AND ".join(conditions)
+
+        with self._lock, self._conn() as conn:
+            # 总数
+            count_row = conn.execute(
+                f"SELECT COUNT(*) FROM doc_registry {where_clause}", params
+            ).fetchone()
+            total = count_row[0] if count_row else 0
+
+            # 分页
+            offset = max(0, (page - 1)) * page_size
+            rows = conn.execute(
+                f"SELECT * FROM doc_registry {where_clause} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                params + [page_size, offset],
+            ).fetchall()
+
+        return {
+            "items": [dict(r) for r in rows],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+
     def count(self) -> int:
         """总记录数。"""
         with self._lock, self._conn() as conn:
             return conn.execute("SELECT COUNT(*) FROM doc_registry").fetchone()[0]
+
+    def update_status(self, file_path: str, status: str):
+        """更新文档状态（用于索引进度追踪）。"""
+        if status not in DOC_STATUSES:
+            raise ValueError(f"无效状态: {status}，有效值: {DOC_STATUSES}")
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "UPDATE doc_registry SET status = ?, updated_at = datetime('now') WHERE file_path = ?",
+                (status, file_path),
+            )
 
     # ---- 写入 ----
 
