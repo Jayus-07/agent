@@ -86,5 +86,9 @@ evaluation/results/
 =0.2.0
 *技术报告.md
 report_agent/data/
+# Frontend build artifacts
+web/node_modules/
+web/.next/
+
 # Added by code-review-graph
 .code-review-graph/
