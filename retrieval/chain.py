@@ -24,9 +24,12 @@ from langchain_core.retrievers import BaseRetriever
 from llm.llm_factory import llm
 from retrieval.retrievers import ChunkLevelRetriever, AdaptiveRetriever
 from retrieval.reranker import RerankCompressor
-from config import ENABLE_HISTORY_AWARE_RETRIEVAL, CITATION_SUPPORT_THRESHOLD, RERANK_TIMEOUT
+from config import (
+    ENABLE_HISTORY_AWARE_RETRIEVAL,
+    ENABLE_MULTI_QUERY,
+    CITATION_SUPPORT_THRESHOLD,
+)
 from utils.logger import logger
-from utils.timeout import safe_call_with_timeout
 
 
 # =====================================================
@@ -188,11 +191,13 @@ class RAGChain:
 
         retriever = self.chunk_retriever_base
 
-        # MultiQuery: 用 LLM 生成多个角度查询 → **并发检索**，提升召回率
-        retriever = ParallelMultiQueryRetriever.from_llm(
-            retriever=retriever, llm=llm
-        )
-        retriever.max_workers = 3  # 在 from_llm 之后设置自定义属性
+        # MultiQuery: 用 LLM 生成多个角度查询 → 并发检索，提升召回率
+        # 关闭可省 1 次 LLM API 调用 (ENABLE_MULTI_QUERY=false)
+        if ENABLE_MULTI_QUERY:
+            retriever = ParallelMultiQueryRetriever.from_llm(
+                retriever=retriever, llm=llm
+            )
+            retriever.max_workers = 3
         logger.info("retriever: " + str(retriever))
 
         # Adaptive: 检查 MultiQuery 合并后的 chunk 文档分布，按需补全文档全文
@@ -268,41 +273,25 @@ def _strip_think_blocks(text: str) -> str:
 
 
 def _verify_support(answer: str, docs: list, question: str = "") -> tuple:
-    """
-    Citation Filter 核心：用 CrossEncoder 反向验证每个 chunk 是否真正支撑答案。
+    """Citation Filter: 复用 Rerank 阶段的 CrossEncoder 分数，避免重复推理。
 
-    阶段 1: 以问题为 query 对每个 chunk 打分，过滤不相关的 chunk
-    阶段 2: 以句子为单位验证是否被剩余 chunk 支撑，无支撑则标记 [推断]
+    阶段 1: 复用 rerank_score（RerankCompressor 已写入 doc.metadata），过滤低分 chunk
+    阶段 2: 句子级验证（默认关闭，ENABLE_CITATION_SENTENCE_CHECK=true 开启）
     返回: (cleaned_answer, verified_docs)
     """
-    from retrieval.reranker import reranker as _ce
-
     if not docs:
         return answer, []
 
-    # —— 阶段 1: 以问题为 query，对每个 chunk 打分（判断 chunk 是否与问题相关） ——
-    pairs = [(question or answer, doc.page_content[:800]) for doc in docs]
-    scores = safe_call_with_timeout(
-        _ce.predict,
-        timeout=RERANK_TIMEOUT,
-        default_value=None,
-        error_message="Citation 支撑验证超时",
-        sentences=pairs,
-    )
-
-    if scores is None:
-        logger.warning("[CitationFilter] 验证失败，回退到原始结果")
-        return answer, docs
-
-    # —— 阶段 2: 过滤 + 写入 support_score ——
+    # —— 阶段 1: 复用 Rerank 分数，不重新跑 CrossEncoder ——
     verified = []
-    for doc, score in zip(docs, scores):
+    for doc in docs:
+        score = doc.metadata.get("rerank_score", 0.5)  # 复用 Rerank 已算好的分数
         if float(score) > CITATION_SUPPORT_THRESHOLD:
             doc.metadata["support_score"] = round(float(score), 4)
             verified.append(doc)
 
     logger.info(
-        f"[CitationFilter] 支撑验证: {len(docs)} → {len(verified)} 个 chunk "
+        f"[CitationFilter] 支撑验证(复用Rerank分): {len(docs)} → {len(verified)} 个 chunk "
         f"(threshold={CITATION_SUPPORT_THRESHOLD})"
     )
 
@@ -310,73 +299,8 @@ def _verify_support(answer: str, docs: list, question: str = "") -> tuple:
         logger.warning("[CitationFilter] 所有 chunk 未通过验证，回退")
         return answer, docs
 
-    # —— 阶段 3: 句子级验证 ——
-    cleaned = _mark_unsupported_sentences(answer, verified)
-
-    return cleaned, verified
-
-
-def _mark_unsupported_sentences(answer: str, verified_docs: list) -> str:
-    """检查每个句子是否有 chunk 支撑，无支撑则标记 [推断]"""
-    import re
-    from collections import defaultdict
-    from retrieval.reranker import reranker as _ce
-
-    # 剥离已有参考文献部分（避免把来源列表当正文检查）
-    ref_marker = "\n\n---\n\n### 参考文献"
-    ref_start = answer.find(ref_marker)
-    body = answer[:ref_start] if ref_start != -1 else answer
-
-    # 分句
-    raw_sentences = re.split(r'(?<=[。！？])\s*', body)
-
-    # 过滤空句和纯格式行
-    sentences = []
-    for s in raw_sentences:
-        stripped = s.strip()
-        if not stripped or re.match(r'^[\s\[\]\d,，、\-—#*>\-|]+$', stripped):
-            sentences.append((s, True))  # skip verification
-        else:
-            sentences.append((s, False))
-
-    # 批量建所有 sentence×chunk 对，一次 CrossEncoder 调用
-    all_pairs = []
-    pair_index = []  # (sent_idx, doc_idx)
-    for i, (_, skip) in enumerate(sentences):
-        if skip:
-            continue
-        for j, doc in enumerate(verified_docs):
-            all_pairs.append((sentences[i][0].strip(), doc.page_content[:500]))
-            pair_index.append((i, j))
-
-    if not all_pairs:
-        return answer
-
-    all_scores = safe_call_with_timeout(
-        _ce.predict,
-        timeout=RERANK_TIMEOUT,
-        default_value=None,
-        error_message="句子验证超时",
-        sentences=all_pairs,
-    )
-
-    # 按句子聚合最高分
-    sent_max = defaultdict(float)
-    if all_scores is not None:
-        for (sent_idx, _), score in zip(pair_index, all_scores):
-            sent_max[sent_idx] = max(sent_max[sent_idx], float(score))
-
-    # 组装输出
-    result_parts = []
-    for i, (original, skip) in enumerate(sentences):
-        if skip:
-            result_parts.append(original)
-        elif sent_max.get(i, 0) < CITATION_SUPPORT_THRESHOLD:
-            result_parts.append(f"[推断] {original}")
-        else:
-            result_parts.append(original)
-
-    return "".join(result_parts)
+    # —— 阶段 2: 完成（企业做法：Prompt 强制 LLM 标注引用 [1][2]，不做事后猜）——
+    return answer, verified
 
 
 def _format_references(docs: list, answer: str = "") -> str:

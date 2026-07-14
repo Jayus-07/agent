@@ -67,6 +67,9 @@ RERANK_SCORE_THRESHOLD = float(os.getenv("RERANK_SCORE_THRESHOLD", "0.3"))
 # Citation Filter: chunk 支撑答案的最低 CrossEncoder 分数（高于检索的 rerank 阈值，更严格）
 CITATION_SUPPORT_THRESHOLD = float(os.getenv("CITATION_SUPPORT_THRESHOLD", "0.4"))
 
+# 性能开关：关闭可减少 LLM API 调用次数
+ENABLE_MULTI_QUERY = os.getenv("ENABLE_MULTI_QUERY", "true").lower() == "true"              # MultiQuery 查询扩展（关=省1次LLM调用）
+
 
 # ====================================
 # 数据库路径
