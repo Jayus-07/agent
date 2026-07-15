@@ -13,7 +13,7 @@ interface Trace {
   id: string;
   timestamp: string;
   session_id: string;
-  model: string;
+  model: { name: string; provider: string } | string;
   question: string;
   answer_preview: string;
   answer_len: number;
@@ -138,7 +138,7 @@ export default function AgentTracePage() {
                   <div className="flex justify-between">
                     <span className="text-text-muted">模型</span>
                     <span className={`px-1.5 py-0.5 rounded text-[10px] ${modelLabel(selected.model)}`}>
-                      {selected.model}
+                      {selected.model?.name || selected.model}
                     </span>
                   </div>
                   <div className="flex justify-between">
