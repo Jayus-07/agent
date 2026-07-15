@@ -18,11 +18,36 @@ class ToolRegistry:
     """
     Capability 注册表。
 
-    用法:
-        registry = ToolRegistry()
-        node = registry.get_node("sql.query")   # → "sql_skill"
-        caps = registry.get_available_capabilities()
+    注册一个 Skill 分两步（均在 Skill 包的 __init__.py 完成）:
+      1. CAPABILITY_MAP 声明 capability → 节点名
+      2. register_skill_node() 注册节点名 → 节点函数
+
+    builder.py 和 system.py 从 registry 自动发现 Skill，不硬编码节点名。
     """
+
+    def __init__(self):
+        self._skill_nodes: dict[str, object] = {}  # node_name → async node function
+
+    # =====================================================
+    # Skill 节点注册（Skill 包 import 时自注册）
+    # =====================================================
+
+    def register_skill_node(self, name: str, node_func):
+        """Skill 包加载时自行调用，注册节点名 → 节点函数"""
+        self._skill_nodes[name] = node_func
+        logger.info(f"[ToolRegistry] 注册 Skill: {name}")
+
+    def get_skill_nodes(self) -> dict:
+        """返回 {node_name: node_func}（builder.py 用于 add_node）"""
+        return dict(self._skill_nodes)
+
+    def get_skill_node_names(self) -> set:
+        """返回所有已注册的 Skill 节点名集合（system.py 用于事件分派）"""
+        return set(self._skill_nodes.keys())
+
+    # =====================================================
+    # Capability → 节点名 映射
+    # =====================================================
 
     # capability → LangGraph 节点名（仅用于图路由）
     CAPABILITY_MAP: Dict[str, str] = {

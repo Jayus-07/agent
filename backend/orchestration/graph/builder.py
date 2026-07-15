@@ -5,6 +5,9 @@ Graph 拓扑:
   START → Planner → Critique → Supervisor (node) → route_after_supervisor (routing)
     ├─ returns Send[] → Skills (并行) → supervisor (loop)
     └─ returns "reporter" → Reporter → END
+
+Skill 节点由 tool_registry 自动发现，不在此处硬编码。
+新增 Skill 只需创建包 + 注册，builder 无需修改。
 """
 
 import asyncio
@@ -15,11 +18,12 @@ from backend.orchestration.state import AgentState
 from backend.orchestration.planner.planner import planner_node
 from backend.orchestration.planner.critique import critique_node
 from backend.orchestration.supervisor.scheduler import supervisor_node, route_after_supervisor
-from backend.orchestration.skills.sql.skill import sql_skill_node
-from backend.orchestration.skills.rag.skill import rag_skill_node
-from backend.orchestration.skills.report.skill import report_skill_node
 from backend.orchestration.reporter.reporter import reporter_node
+from backend.orchestration.tool_registry import tool_registry
 from backend.shared.logger import logger
+
+# 触发 Skill 包自注册（必须在 build_graph() 之前 import）
+import backend.orchestration.skills  # noqa: F401
 
 
 # 节点名 → 用户可读的阶段标签
@@ -76,19 +80,25 @@ def _make_sync(async_fn):
 # =====================================================
 
 def build_graph():
-    """构建 Multi-Agent StateGraph"""
+    """构建 Multi-Agent StateGraph。
+
+    Skill 节点由 tool_registry 自动发现，不在此处硬编码节点名。
+    """
     wf = StateGraph(AgentState)
 
-    # — 节点 (skill 节点用 _make_sync 适配 async→sync) —
+    # ── 内置节点（永远不变）────────────────────────
     wf.add_node("planner", planner_node)
     wf.add_node("critique", critique_node)
     wf.add_node("supervisor", supervisor_node)
-    wf.add_node("sql_skill", _make_sync(sql_skill_node))
-    wf.add_node("rag_skill", _make_sync(rag_skill_node))
-    wf.add_node("report_skill", _make_sync(report_skill_node))
     wf.add_node("reporter", reporter_node)
 
-    # — 边 —
+    # ── Skill 节点（自动发现：谁注册了就加谁）───────
+    for name, func in tool_registry.get_skill_nodes().items():
+        wf.add_node(name, _make_sync(func))
+        wf.add_edge(name, "supervisor")  # 完成 → 回到 Supervisor
+        logger.info(f"[Graph] 自动注册 Skill 节点: {name}")
+
+    # ── 边 ────────────────────────────────────────
     wf.add_edge(START, "planner")
     wf.add_edge("planner", "critique")
 
@@ -98,22 +108,15 @@ def build_graph():
         {"supervisor": "supervisor", "reporter": "reporter"},
     )
 
-    # Skill 完成 → 回到 Supervisor 继续调度
-    wf.add_edge("sql_skill", "supervisor")
-    wf.add_edge("rag_skill", "supervisor")
-    wf.add_edge("report_skill", "supervisor")
-
-    # Supervisor → route_after_supervisor 路由函数:
+    # Supervisor → route_after_supervisor:
     #   返回 list[Send] → LangGraph 自行并行调度到对应 Skill
     #   返回 "reporter" → 进入 Reporter
-    wf.add_conditional_edges(
-        "supervisor",
-        route_after_supervisor,
-    )
+    wf.add_conditional_edges("supervisor", route_after_supervisor)
 
     wf.add_edge("reporter", END)
 
-    logger.info("[Graph] 图编译完成 (Planner -> Critique -> Supervisor <-> Skills -> Reporter)")
+    skill_count = len(tool_registry.get_skill_nodes())
+    logger.info(f"[Graph] 图编译完成 (内置4节点 + {skill_count} Skill = {4 + skill_count}节点)")
     return wf.compile()
 
 
@@ -121,14 +124,12 @@ def build_graph():
 # 辅助函数
 # =====================================================
 
-_SKILL_NODES = {"sql_skill", "rag_skill", "report_skill"}
-
-
 def _parse_event(event: dict) -> tuple:
     """从 LangGraph stream 事件中提取 (node_name, node_output)。"""
     if not isinstance(event, dict):
         return None, None
+    all_keys = set(_NODE_LABELS.keys()) | tool_registry.get_skill_node_names()
     for key, value in event.items():
-        if key in _NODE_LABELS or key in _SKILL_NODES:
+        if key in all_keys:
             return key, value
     return None, None
