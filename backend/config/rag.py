@@ -172,3 +172,14 @@ FILTER_MAX_SYMBOL_RATIO = float(os.getenv("FILTER_MAX_SYMBOL_RATIO", "0.8"))
 FILTER_MIN_CHINESE_RATIO = float(os.getenv("FILTER_MIN_CHINESE_RATIO", "0.3"))
 FILTER_SIMHASH_THRESHOLD = int(os.getenv("FILTER_SIMHASH_THRESHOLD", "3"))
 FILTER_ENABLE_PII_MASK = os.getenv("FILTER_ENABLE_PII_MASK", "false").lower() == "true"
+
+# ====================================
+# Faithfulness 检测（NLI 答案验证）
+# ====================================
+ENABLE_FAITHFULNESS = os.getenv("ENABLE_FAITHFULNESS", "false").lower() == "true"
+NLI_MODEL_PATH = os.getenv(
+    "NLI_MODEL_PATH",
+    "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"  # HuggingFace model name，自动走缓存
+)
+NLI_TOP_K_CHUNKS = int(os.getenv("NLI_TOP_K_CHUNKS", "2"))
+NLI_SCORE_THRESHOLD = float(os.getenv("NLI_SCORE_THRESHOLD", "0.5"))

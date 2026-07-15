@@ -122,6 +122,10 @@ from backend.config.rag import (
     FILTER_SIMHASH_THRESHOLD,
     FILTER_ENABLE_PII_MASK,
 )
+# Faithfulness (NLI answer verification)
+from backend.config.rag import (
+    ENABLE_FAITHFULNESS, NLI_MODEL_PATH, NLI_TOP_K_CHUNKS, NLI_SCORE_THRESHOLD,
+)
 
 __all__ = [
     # settings
@@ -164,4 +168,6 @@ __all__ = [
     "FILTER_MIN_CHUNK_LENGTH", "FILTER_MAX_SYMBOL_RATIO",
     "FILTER_MIN_CHINESE_RATIO", "FILTER_SIMHASH_THRESHOLD",
     "FILTER_ENABLE_PII_MASK",
+    # faithfulness
+    "ENABLE_FAITHFULNESS", "NLI_MODEL_PATH", "NLI_TOP_K_CHUNKS", "NLI_SCORE_THRESHOLD",
 ]

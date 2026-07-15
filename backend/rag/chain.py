@@ -195,7 +195,7 @@ class RAGChain:
     # =================================================
 
     def ask(self, question: str, session_id: str = "default") -> str:
-        """RAGChain 入口：4 段式 — 准备 → 执行 → 验证 → 收尾。
+        """RAGChain 入口：5 段式 — 准备 → 执行 → 验证 → [评估] → 收尾。
 
         拆解后行为完全兼容旧版；便于单测和耗时分析。
         """
@@ -210,6 +210,7 @@ class RAGChain:
             chat_history = self._prepare(question, session_id)
             result = self._execute(question, chat_history)
             answer = self._verify(result, question, session_id)
+            answer = self._evaluate(answer, result.get("context", []))  # 评估 + 剔除幻觉
             self._trace(trace, answer, t_total)
             return answer
         except Exception:
@@ -261,6 +262,42 @@ class RAGChain:
             self._memory.end_turn(session_id, question, answer)
 
         return answer
+
+    def _evaluate(self, answer: str, context_docs: list) -> str:
+        """评估阶段：Faithfulness 忠实性检测 + 自动剔除不可信句子。
+
+        默认关闭（ENABLE_FAITHFULNESS=false）。
+        开启后：检测 → 剔除 unsupported claim → 返回安全答案。
+        结果同时存入 self._last_faithfulness 供外部读取。
+        """
+        from backend.rag.tracer import trace_collector
+        self._last_faithfulness = None
+
+        try:
+            from backend.rag.guardrails import check_faithfulness
+            trace_collector._start("faithfulness")
+            self._last_faithfulness = check_faithfulness(answer, context_docs)
+            trace_collector._end("faithfulness", "Faithfulness",
+                                 metrics={
+                                     "score": self._last_faithfulness.score,
+                                     "claims": self._last_faithfulness.total_claims,
+                                     "supported": self._last_faithfulness.supported_claims,
+                                     "unsupported": self._last_faithfulness.unsupported_claims,
+                                 })
+
+            # 如果有不可信 claim，用清洗后的答案
+            if self._last_faithfulness.cleaned_answer and \
+               self._last_faithfulness.cleaned_answer != answer:
+                logger.warning(
+                    f"[RAGChain] 自动剔除 {self._last_faithfulness.unsupported_claims} 条不可信内容"
+                )
+                return self._last_faithfulness.cleaned_answer
+            return answer
+        except Exception as e:
+            logger.warning(f"[RAGChain] Faithfulness 检测跳过: {e}")
+            trace_collector._end("faithfulness", "Faithfulness", status="skipped",
+                                 metrics={"error": str(e)[:100]})
+            return answer
 
     def _trace(self, trace, answer: str, t_total: float):
         """收尾阶段：完成 Trace + 写 Memory end_turn。"""
