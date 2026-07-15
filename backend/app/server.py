@@ -10,8 +10,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.app.api.routes import chat, sql, rag, report, llm, observability, memory, data
+from backend.app.api.routes import chat, sql, rag, report, llm, observability, memory, data, mcp
 from backend.utils.logger import logger
+from backend.mcp.manager import manager as mcp_manager
+from backend.mcp.servers import register_all as register_mcp_servers
 
 # ── 并发控制：从环境变量读取最大并发请求数 ──────────
 _MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_REQUESTS", "1"))
@@ -101,6 +103,10 @@ app.include_router(memory.router)
 app.include_router(data.router)
 app.include_router(data.assets_router)
 app.include_router(data.pipeline_router)
+app.include_router(mcp.router)
+
+# ── 注册 MCP Server（在路由就绪后调用，避免启动顺序问题） ──
+register_mcp_servers()
 
 
 # ── 健康检查 ──────────────────────────────────────
