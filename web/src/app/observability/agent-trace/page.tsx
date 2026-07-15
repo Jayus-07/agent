@@ -31,7 +31,6 @@ export default function AgentTracePage() {
   const [traces, setTraces] = useState<Trace[]>([]);
   const [selected, setSelected] = useState<Trace | null>(null);
   const [loading, setLoading] = useState(true);
-  const [live, setLive] = useState(false);
 
   const fetchTraces = useCallback(async () => {
     try {
@@ -42,22 +41,7 @@ export default function AgentTracePage() {
     } catch {} finally { setLoading(false); }
   }, []);
 
-  // 初始加载 + SSE 实时订阅
-  useEffect(() => {
-    fetchTraces();
-
-    const es = new EventSource("/api/observability/rag-traces/stream");
-    es.onmessage = (e) => {
-      try {
-        const t = JSON.parse(e.data);
-        setLive(true);
-        setTraces((prev) => [t, ...prev.slice(0, 49)]);
-        setTimeout(() => setLive(false), 1000);
-      } catch {}
-    };
-    es.onerror = () => {};
-    return () => es.close();
-  }, [fetchTraces]);
+  useEffect(() => { fetchTraces(); }, [fetchTraces]);
 
   const formatMs = (ms: number) => {
     if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
@@ -73,13 +57,9 @@ export default function AgentTracePage() {
   return (
     <div className="h-full flex flex-col">
       <div className="px-6 py-4 border-b border-border-subtle">
-        <h1 className="text-lg font-semibold text-text-primary flex items-center gap-2">
-          Agent Trace
-          <span className={`w-2 h-2 rounded-full ${live ? "bg-green-500 animate-pulse" : "bg-gray-300"}`} />
-          <span className="text-[10px] font-normal text-text-muted">{live ? "实时" : "就绪"}</span>
-        </h1>
+        <h1 className="text-lg font-semibold text-text-primary">Agent Trace</h1>
         <p className="text-xs text-text-muted mt-1">
-          RAG 全链路耗时记录 — 自动实时更新
+          RAG 全链路耗时记录 — 每次查询的每一步
         </p>
         <button
           onClick={() => { fetchTraces(); }}
