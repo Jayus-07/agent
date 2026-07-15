@@ -13,7 +13,7 @@ llm_polisher.py — LLM 润色 + 事实锁定校验
 import re
 from typing import List, Set, Tuple
 
-from backend.infra.llm.llm_factory import llm
+from backend.infra.llm import llm
 from backend.shared.logger import logger
 
 # =====================================================

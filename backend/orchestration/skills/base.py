@@ -62,7 +62,7 @@ class BaseSkill(ABC):
 
         返回: {"step_results": {...}}
         """
-        from backend.orchestration.alerts import make_alert, log_degradation
+        from backend.orchestration.supervisor.alerts import make_alert, log_degradation
 
         step_id = state.get("current_step_id")
         if not step_id:

@@ -4,35 +4,42 @@
 
 跨境电商 RAG + Multi-Agent 平台（FastAPI + Next.js + LangGraph）
 
-架构: Planner → Supervisor → Skills(RAG/SQL/Report) → Reporter
-
 ---
 
 ## Architecture
 
-**分层（不允许越层调用）**：
+**两条调用路径，按任务复杂度分流**：
 
 ```
-API → Planner → Capability → Skill → Tool → Repository → Storage
+简单操作:  API → rag / sql / memory          （直连，无调度开销）
+复杂任务:  API → orchestration → planner → supervisor → skills → tools → rag/sql/business_report
+                                                            └─ reporter（汇总）→ 最终回答
 ```
 
-**职责划分**：
+**模块 → 架构角色映射**：
 
-| 角色 | 职责 | 不应做 |
+| 目录 | 角色 | 说明 |
 |---|---|---|
-| Pipeline | 编排流程、调度模块 | DB / Embedding / Prompt |
-| Manager | 资源调度 | 业务流程 |
-| Service | 业务逻辑 | 数据访问 |
-| Repository | 数据访问 | 业务逻辑 |
-| Factory | 对象创建 | 业务逻辑 |
-| Builder | 复杂对象组装 | 业务逻辑 |
+| `app/` | API 入口 | FastAPI: routes → deps → orchestration 或子系统 |
+| `orchestration/planner/` | Planner | 任务拆解为 DAG，只输出 capability 不调 tool |
+| `orchestration/supervisor/` | Supervisor | 调度、降级、告警 |
+| `orchestration/skills/` | Skill | 组合 Tool，统一接口（rag/sql/report） |
+| `orchestration/tools.py` | Tool | 封装子系统为 LangChain Tool |
+| `orchestration/reporter/` | Reporter | 汇总 step_results → LLM → Markdown |
+| `rag/` `sql/` `business_report/` `memory/` | 能力层 | 可独立调用，也可被 orchestration 调度 |
 
-**AI Agent 专项**：
-- Prompt 与代码分离，放 `prompts/` 目录
-- 模型调用统一经 `ModelManager` / `LLMProvider`
-- Tool 必须经统一接口；Skill 组合 Tool，Capability 对外暴露
-- Planner 只调度 Capability，不直接调 Tool
-- Tool 调用记录：Prompt / 模型 / Token / 耗时 / 错误
+**设计原则**：
+
+| 规则 | 说明 |
+|---|---|
+| **禁止 thin wrapper** | 每个模块必须有真实业务逻辑，禁止仅 re-export 的转发文件 |
+| **禁止 `misc.py` / `helper.py` / `common.py`** | 无语义文件名 |
+| **Prompt 与代码分离** | 放 `prompts/` 目录 |
+| **LLM 调用统一** | `from backend.infra.llm import llm`（代理，自动跟随切换） |
+| **Tool 统一接口** | `@tool` 装饰 → `tool_registry` 注册 → Skill 调用 |
+| **Planner 不直接调 Tool** | Planner 只输出 capability，由 Supervisor + ToolRegistry 解析 |
+| **Tool 调用记录** | Prompt / 模型 / Token / 耗时 / 错误 |
+| **禁止越层跳过编排** | 复杂多步任务必须经 orchestration，简单单步操作可直连子系统 |
 
 ---
 
@@ -40,12 +47,22 @@ API → Planner → Capability → Skill → Tool → Repository → Storage
 
 ```
 agent/
-├── frontend/         # Next.js
+├── frontend/              # Next.js
 ├── backend/
-│   ├── app/          # server.py / deps.py / api/routes/
-│   ├── rag/  agent/  llm/  sql/  report/  memory/
-│   ├── mcp/          # Phase 5: MCP 集成
-│   └── utils/
+│   ├── app/               # FastAPI: server.py / deps.py / api/routes/
+│   ├── config/            # 配置（按模块拆分）
+│   ├── infra/llm/         # LLM 基础设施（factory / providers / proxy）
+│   ├── orchestration/     # 编排：planner / supervisor / skills / reporter / graph
+│   ├── rag/               # RAG：indexing / retrieval / vectorstore / preprocessing
+│   ├── sql/               # SQL Agent
+│   ├── memory/            # 三层记忆（短期/会话/长期）
+│   ├── business_report/   # 业务报告生成（SQL/API → Jinja2 → LLM → Markdown）
+│   ├── data_collection/   # 数据采集与治理
+│   ├── evaluation/        # 评测框架
+│   ├── mcp/               # MCP 集成
+│   ├── prompts/           # Prompt 模板（与代码分离）
+│   ├── seed/              # 种子数据生成
+│   └── shared/            # 共享工具（logger / exceptions / monitoring）
 ├── docs/  start_all.bat  stop_all.bat  restart_all.bat  .env
 └── .venv/  data/  logs/  requirements.txt
 ```

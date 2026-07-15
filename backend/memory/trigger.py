@@ -1,6 +1,6 @@
 """MemoryWorthinessClassifier — rule-first, LLM fallback"""
 import re
-from backend.infra.llm.llm_factory import llm
+from backend.infra.llm import llm
 from backend.shared.logger import logger
 
 # Order matters — earlier patterns match first

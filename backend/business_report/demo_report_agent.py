@@ -186,7 +186,7 @@ def run_demo():
     tables = create_demo_schema()
 
     # ── 注册演示报告类型 ──
-    from backend.report.data_fetcher import register_report_type, REPORT_REGISTRY
+    from backend.business_report.data_fetcher import register_report_type, REPORT_REGISTRY
 
     # 用动态表名注册
     dept_sql = textwrap.dedent(f"""
@@ -246,7 +246,7 @@ def run_demo():
         ],
     })
 
-    from backend.report import ReportGenerator, generate_report
+    from backend.business_report import ReportGenerator, generate_report
 
     gen = ReportGenerator(output_dir="data/reports")
 
@@ -294,7 +294,7 @@ def run_demo():
     print("演示 4: 用户偏好学习")
     print("─" * 60)
 
-    from backend.report.preference import preference_store
+    from backend.business_report.preference import preference_store
 
     # 模拟用户第一次使用（使用 summary 模板）
     gen.generate("demo_dept_report", {"_template": "sales_detail.j2"},
@@ -321,7 +321,7 @@ def run_demo():
     print("演示 5: 数据快照")
     print("─" * 60)
 
-    from backend.report.snapshot import list_snapshots, load_latest_snapshot
+    from backend.business_report.snapshot import list_snapshots, load_latest_snapshot
 
     snaps = list_snapshots("demo_dept_report", limit=3)
     print(f"  快照列表 ({len(snaps)} 个):")

@@ -16,7 +16,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, Prom
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.runnables import RunnableLambda
 
-from backend.infra.llm.llm_factory import llm
+from backend.infra.llm import llm
 from backend.rag.retrieval.retrievers import ChunkLevelRetriever, AdaptiveRetriever
 from backend.rag.reranker import RerankCompressor
 from backend.config import (

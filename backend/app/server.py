@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.api.router import api_router
-from backend.app.core.exceptions import (
+from backend.app.exceptions import (
     http_exception_handler,
     global_exception_handler,
 )
@@ -55,7 +55,7 @@ register_mcp_servers()
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "api.server:app",
+        "app.server:app",
         host="0.0.0.0",
         port=8000,
         reload=False,

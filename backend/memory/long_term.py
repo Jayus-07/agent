@@ -1,7 +1,7 @@
 """L3 长期记忆 — pgvector only, async pipeline"""
 from datetime import datetime, timezone
 from langchain_huggingface import HuggingFaceEmbeddings
-from backend.infra.llm.llm_factory import llm
+from backend.infra.llm import llm
 from backend.config import EMBEDDING_MODEL_PATH, L3_DEDUP_COSINE_THRESHOLD, L3_SUPERSEDE_THRESHOLD
 from backend.memory.pii_filter import scan_and_sanitize
 from backend.shared.logger import logger

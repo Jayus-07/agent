@@ -12,10 +12,10 @@ critique.py — Plan Critique 节点
 
 import json
 
-from backend.infra.llm.llm_factory import llm
+from backend.infra.llm import llm
 from backend.orchestration.tool_registry import tool_registry
 from backend.orchestration.planner.planner import _extract_json, _normalize_plan
-from backend.orchestration.alerts import make_alert, log_degradation
+from backend.orchestration.supervisor.alerts import make_alert, log_degradation
 from backend.prompts.critique import PLAN_CRITIQUE_SYSTEM
 from backend.shared.logger import logger
 from backend.config import ENABLE_PLAN_CRITIQUE

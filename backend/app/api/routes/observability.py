@@ -162,7 +162,7 @@ async def get_resources():
 @router.get("/alerts")
 async def get_alerts(limit: int = Query(50, ge=1, le=500)):
     """读取降级/告警日志（degradation.jsonl 尾部 N 行）"""
-    from backend.orchestration.alerts import DEGRADATION_LOG_FILE
+    from backend.orchestration.supervisor.alerts import DEGRADATION_LOG_FILE
 
     alerts = []
     total = 0

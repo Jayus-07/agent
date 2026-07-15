@@ -15,9 +15,9 @@ from backend.orchestration.state import AgentState
 from backend.orchestration.planner.planner import planner_node
 from backend.orchestration.planner.critique import critique_node
 from backend.orchestration.supervisor.scheduler import supervisor_node, route_after_supervisor
-from backend.orchestration.skills.sql_skill import sql_skill_node
-from backend.orchestration.skills.rag_skill import rag_skill_node
-from backend.orchestration.skills.report_skill import report_skill_node
+from backend.orchestration.skills.sql.skill import sql_skill_node
+from backend.orchestration.skills.rag.skill import rag_skill_node
+from backend.orchestration.skills.report.skill import report_skill_node
 from backend.orchestration.reporter.reporter import reporter_node
 from backend.shared.logger import logger
 

@@ -1,15 +1,14 @@
 """
-multi_agent — 基于 LangGraph 的 Multi-Agent 工作流系统
+orchestration — 基于 LangGraph 的 Multi-Agent 工作流系统
 
 架构: Planner → Critique → Supervisor ⇄ Skills (SQL/RAG/Report) → Reporter
 
 目录结构:
   graph/       — LangGraph 图构建 + MultiAgentSystem 运行时
-  planner/     — 任务规划 + 计划审查 + Prompt 模板
+  planner/     — 任务规划 + 计划审查
   supervisor/  — 调度 + 降级 + 告警
   skills/      — Skill 节点（RAG/SQL/Report），每种业务能力一个 Skill
-  reporter/    — 结果汇总 → 委托 response/ 模块
-  workers/     — 向后兼容 re-export（已迁移到 skills/）
+  reporter/    — 最终回答生成 + Context Filter
 
 特性:
   - DAG 任务拆解与依赖解析

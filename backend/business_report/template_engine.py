@@ -276,7 +276,7 @@ class TemplateEngine:
           3. 内置默认模板
           4. 通用兜底模板
         """
-        from backend.report.data_fetcher import REPORT_REGISTRY
+        from backend.business_report.data_fetcher import REPORT_REGISTRY
 
         registry = REPORT_REGISTRY.get(report_type, {})
         available = registry.get("templates", [])
@@ -394,7 +394,7 @@ class TemplateEngine:
             and actual_template_name not in self._builtin_templates
         ):
             try:
-                from backend.report.data_fetcher import REPORT_REGISTRY
+                from backend.business_report.data_fetcher import REPORT_REGISTRY
                 reg = REPORT_REGISTRY.get(report_type, {})
                 for tpl in reg.get("templates", []):
                     if tpl in self._builtin_templates or tpl in self._template_cache:

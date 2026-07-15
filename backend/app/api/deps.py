@@ -1,6 +1,5 @@
 """依赖注入 — Agent 单例，惰性初始化，避免启动时加载所有模型"""
 import threading
-from typing import Optional
 
 from backend.shared.logger import logger
 
@@ -10,7 +9,6 @@ _multi_agent = None
 _sql_agent = None
 _rag_pipeline = None
 _rag_init_error = None
-_report_generator = None
 
 
 def get_multi_agent():
@@ -57,13 +55,3 @@ def get_rag_status() -> dict:
         "available": _rag_pipeline is not None,
         "error": _rag_init_error,
     }
-
-
-def get_report_generator():
-    global _report_generator
-    if _report_generator is None:
-        with _lock:
-            if _report_generator is None:
-                from backend.report import ReportGenerator
-                _report_generator = ReportGenerator(output_dir="data/reports")
-    return _report_generator

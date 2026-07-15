@@ -18,12 +18,12 @@ import time
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from backend.report.data_fetcher import (
+from backend.business_report.data_fetcher import (
     REPORT_REGISTRY, get_fetcher, SQLFetcher, APIFetcher,
 )
-from backend.report.template_engine import TemplateEngine
-from backend.report.snapshot import save_snapshot, cleanup_old_snapshots
-from backend.report.preference import preference_store
+from backend.business_report.template_engine import TemplateEngine
+from backend.business_report.snapshot import save_snapshot, cleanup_old_snapshots
+from backend.business_report.preference import preference_store
 from backend.shared.logger import logger
 
 # 图表和 LLM 润色模块惰性导入（可选依赖）
@@ -34,7 +34,7 @@ _llm_polisher = None
 def _get_chart_generator():
     global _chart_generator
     if _chart_generator is None:
-        from backend.report.chart_generator import chart_generator as cg
+        from backend.business_report.chart_generator import chart_generator as cg
         _chart_generator = cg
     return _chart_generator
 
@@ -42,7 +42,7 @@ def _get_chart_generator():
 def _get_llm_polisher():
     global _llm_polisher
     if _llm_polisher is None:
-        from backend.report.llm_polisher import llm_polisher as lp
+        from backend.business_report.llm_polisher import llm_polisher as lp
         _llm_polisher = lp
     return _llm_polisher
 

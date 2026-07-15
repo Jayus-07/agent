@@ -7,7 +7,7 @@ router.py — 表筛选 (Schema Routing)
 import json
 from typing import List
 
-from backend.infra.llm.llm_factory import llm
+from backend.infra.llm import llm
 from backend.sql.schema_loader import schema_loader
 from backend.shared.logger import logger
 

@@ -201,7 +201,7 @@ def destroy_demo_schema(tables: dict):
 # =====================================================
 
 def register_demo_reports(tables):
-    from backend.report.data_fetcher import register_report_type
+    from backend.business_report.data_fetcher import register_report_type
 
     dept_sql = textwrap.dedent(f"""
         SELECT

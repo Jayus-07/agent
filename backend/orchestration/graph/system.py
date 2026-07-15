@@ -66,10 +66,10 @@ class MultiAgentSystem:
     @staticmethod
     def _extract_sources(step_results: dict, final_answer: str) -> list[dict]:
         from backend.orchestration.reporter.reporter import _extract_sources_from_steps
-        from backend.orchestration.reporter.context_filter import _parse_sources_from_text
+        from backend.orchestration.reporter.context_filter import parse_sources_from_text
         sources = _extract_sources_from_steps(step_results)
         if not sources and final_answer:
-            sources = _parse_sources_from_text(final_answer)
+            sources = parse_sources_from_text(final_answer)
         return sources
 
     def stream_events(
@@ -258,11 +258,11 @@ class MultiAgentSystem:
 
             # ═══ event: done ═══
             from backend.orchestration.reporter.reporter import _extract_sources_from_steps
-            from backend.orchestration.reporter.context_filter import _parse_sources_from_text
+            from backend.orchestration.reporter.context_filter import parse_sources_from_text
             elapsed = time.time() - start_time
             sources = _extract_sources_from_steps(all_step_results)
             if not sources and final_answer:
-                sources = _parse_sources_from_text(final_answer)
+                sources = parse_sources_from_text(final_answer)
             yield {"event": "done", "data": {"elapsed": round(elapsed, 1), "sources": sources}}
 
         except Exception as e:
