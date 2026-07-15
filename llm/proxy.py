@@ -2,57 +2,96 @@
 proxy.py — _LLMProxy 代理对象 + 模块级 llm 单例
 
 核心设计:
-  - 模块加载时初始化默认 Ollama LLM (_module_default_llm)
+  - 懒加载：首次调用时才初始化 LLM，根据 LLM_MODEL 自动选择 Provider
   - `llm` 是 _LLMProxy 代理；每次 .invoke()/.stream() 都委派给当前活跃模型
   - LLMFactory.set_current("deepseek-chat") 后，所有 `llm.invoke(...)` 自动走新模型
-  - 12 个调用方 `from llm import llm` 无需修改
+  - 所有调用方 `from llm import llm` 无需修改
 """
+import threading
 
-from langchain_ollama import ChatOllama
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from config import (
-    LLM_MODEL, LLM_TEMPERATURE, LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT,
-)
+from config import LLM_MODEL
 from llm.factory import get_llm_factory
+from llm.models import AVAILABLE_MODELS, PROVIDERS
 from utils.logger import logger
 
 
 # =====================================================
-# 模块级默认 LLM（启动时初始化一次）
+# 懒加载默认 LLM
 # =====================================================
 
-logger.info(f"正在初始化默认 LLM: {LLM_MODEL}")
-try:
-    _module_default_llm = ChatOllama(
-        model=LLM_MODEL,
-        temperature=LLM_TEMPERATURE,
-        num_ctx=LLM_CONTEXT_LENGTH,
-        request_timeout=LLM_REQUEST_TIMEOUT,
-    )
-    logger.info(
-        f"LLM init OK: {LLM_MODEL} "
-        f"(temperature={LLM_TEMPERATURE}, context={LLM_CONTEXT_LENGTH}, "
-        f"timeout={LLM_REQUEST_TIMEOUT}s)"
-    )
-except Exception as e:
-    logger.error(f"LLM 初始化失败: {e}")
-    raise
+_default_llm = None
+_default_lock = threading.Lock()
+
+
+def _get_provider_for(model_name: str) -> str:
+    """根据模型名查找所属 provider"""
+    for m in AVAILABLE_MODELS:
+        if m["name"] == model_name:
+            return m["provider"]
+    return "ollama"  # 兜底
+
+
+def _build_default_llm():
+    """根据 LLM_MODEL 构建正确的 Provider 实例"""
+    global _default_llm
+    if _default_llm is not None:
+        return _default_llm
+
+    with _default_lock:
+        if _default_llm is not None:
+            return _default_llm
+
+        logger.info(f"正在初始化默认 LLM: {LLM_MODEL}")
+        provider = _get_provider_for(LLM_MODEL)
+
+        if provider == "ollama":
+            from langchain_ollama import ChatOllama
+            from config import LLM_TEMPERATURE, LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT
+            _default_llm = ChatOllama(
+                model=LLM_MODEL,
+                temperature=LLM_TEMPERATURE,
+                num_ctx=LLM_CONTEXT_LENGTH,
+                request_timeout=LLM_REQUEST_TIMEOUT,
+            )
+        elif provider == "deepseek":
+            from llm.providers.deepseek import build_deepseek
+            _default_llm = build_deepseek(LLM_MODEL)
+        elif provider == "minimax":
+            from llm.providers.minimax import build_minimax
+            _default_llm = build_minimax(LLM_MODEL)
+        else:
+            # 兜底：Ollama
+            from langchain_ollama import ChatOllama
+            from config import LLM_TEMPERATURE, LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT
+            _default_llm = ChatOllama(
+                model=LLM_MODEL,
+                temperature=LLM_TEMPERATURE,
+                num_ctx=LLM_CONTEXT_LENGTH,
+                request_timeout=LLM_REQUEST_TIMEOUT,
+            )
+
+        logger.info(f"LLM init OK: {LLM_MODEL} (provider={provider})")
+        return _default_llm
 
 
 def _resolve_active_llm() -> BaseChatModel:
-    """返回当前生效的 LLM 实例：factory cache > module default。
+    """返回当前生效的 LLM 实例：factory 缓存 > 懒加载默认。
 
-    这是 _LLMProxy 内部委派的核心。每次调用都实时获取工厂实例，
-    确保模型切换后立即生效。切换由 LLMFactory.set_current 内部的 self._lock 保护。
+    每次调用都实时获取工厂实例，确保模型切换后立即生效。
     """
-    factory = get_llm_factory()  # 实时获取，不缓存引用
+    factory = get_llm_factory()
     if factory is not None:
         cached = factory._instance_cache.get(factory._current_model)
         if cached is not None:
             return cached
-    return _module_default_llm
+    return _build_default_llm()
 
+
+# =====================================================
+# <think> 剥离（防御性，正规方案是 Provider 传 reasoning_split）
+# =====================================================
 
 def _strip_think(text: str) -> str:
     """剥离模型输出的 <think>...</think> 推理块"""
@@ -74,6 +113,10 @@ def _wrap_result(result):
         return {k: _wrap_result(v) for k, v in result.items()}
     return result
 
+
+# =====================================================
+# 代理对象
+# =====================================================
 
 class _LLMProxy:
     """代理对象：每次调用都实时委派给当前活跃 LLM，并全局剥离 <think> 块"""
@@ -106,25 +149,10 @@ class _LLMProxy:
         return self.__repr__()
 
 
-# 公开名：`llm` 现在是代理，调用方代码无需修改
+# 公开名
 llm = _LLMProxy()
 
 
 def get_llm() -> BaseChatModel:
-    """显式获取当前 LLM 实例（用于 evaluation/judge 等需要明确获取的代码路径）"""
+    """显式获取当前 LLM 实例"""
     return _resolve_active_llm()
-
-
-# =====================================================
-# 追加工厂单例的兜底引用
-# =====================================================
-# factory.py 中的 LLMFactory.get_current() 返回 None 时兜底到 _module_default_llm。
-# 在 proxy.py 加载完成后，给全局单例注入兜底引用。
-
-def _patch_factory_default():
-    """给工厂单例注入模块级默认 LLM 作为兜底"""
-    factory = get_llm_factory()
-    factory._module_default = _module_default_llm
-
-
-_patch_factory_default()
