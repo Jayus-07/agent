@@ -39,12 +39,6 @@ AVAILABLE_MODELS = [
         "description": "本地 Ollama，免费，无需 API Key",
     },
     {
-        "provider": "ollama",
-        "name": "qwen2.5:4b",
-        "display": "Qwen 2.5 (4B) - 本地",
-        "description": "本地 Ollama，免费",
-    },
-    {
         "provider": "deepseek",
         "name": "deepseek-chat",
         "display": "DeepSeek Chat - 云端",
@@ -61,11 +55,5 @@ AVAILABLE_MODELS = [
         "name": "MiniMax-M3",
         "display": "MiniMax M3 - 云端",
         "description": "MiniMax-M3，OpenAI 兼容协议，需要 API Key",
-    },
-    {
-        "provider": "minimax",
-        "name": "MiniMax-M2.7-highspeed",
-        "display": "MiniMax M2.7-highspeed - 快速",
-        "description": "MiniMax M2.7 极速版（100 TPS），无推理链，适合 RAG",
     },
 ]
