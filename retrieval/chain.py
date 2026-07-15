@@ -170,8 +170,7 @@ class RAGChain:
                 llm, retriever, CONTEXTUALIZE_PROMPT
             )
 
-        self.retriever = retriever
-        self.stuff_chain = stuff_chain
+        self.chain = create_retrieval_chain(retriever, stuff_chain)
 
     # =================================================
     # Step C: 公共入口
