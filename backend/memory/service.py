@@ -11,7 +11,7 @@ from backend.memory.retriever import HybridRetriever
 from backend.memory.decay import MemoryDecayService
 from backend.memory.pii_filter import scan_and_sanitize
 from langchain_core.messages import SystemMessage
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class MemoryService:

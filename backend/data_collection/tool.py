@@ -22,7 +22,7 @@ from backend.data_collection.cleaners.default_cleaner import DefaultCleaner
 from backend.data_collection.analyzers.stats_analyzer import StatsAnalyzer
 from backend.data_collection.writers.sqlalchemy_writer import SQLAlchemyWriter
 from backend.data_collection.pipeline import CollectionPipeline, CollectResult
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 def _build_pipeline(

@@ -9,7 +9,7 @@ data_collection/skill.py — DataCollectionSkill
 
 from backend.agent.skills.base import BaseSkill
 from backend.data_collection.tool import data_collection_tool
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class DataCollectionSkill(BaseSkill):

@@ -14,7 +14,7 @@ import re
 from typing import List, Set, Tuple
 
 from backend.llm.llm_factory import llm
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 # =====================================================
 # LLM Prompt

@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.app.api.routes import chat, sql, rag, report, llm, observability, memory, data
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 # ── 并发控制：从环境变量读取最大并发请求数 ──────────
 _MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_REQUESTS", "1"))

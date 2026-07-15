@@ -1,4 +1,4 @@
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class CustomRetriever:

@@ -2,7 +2,7 @@
 import threading
 from typing import Optional
 
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 # 惰性加载单例
 _lock = threading.Lock()

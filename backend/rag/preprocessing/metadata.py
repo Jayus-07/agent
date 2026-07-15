@@ -11,9 +11,9 @@ from backend.llm.llm_factory import llm
 from backend.rag.preprocessing.entity import extract_person_names
 
 from backend.rag.preprocessing.keyword import extract_doc_keywords, extract_chunk_keywords
-from backend.utils.async_utils import async_safe_call_with_timeout
+from backend.shared.async_utils import async_safe_call_with_timeout
 
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 # =====================================================

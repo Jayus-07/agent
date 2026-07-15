@@ -16,7 +16,7 @@ from datetime import datetime
 from jinja2 import Environment, BaseLoader, TemplateNotFound
 from jinja2.sandbox import SandboxedEnvironment
 
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 # =====================================================

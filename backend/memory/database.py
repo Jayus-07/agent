@@ -1,7 +1,7 @@
 """Async database engine + session factory — 惰性初始化"""
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from backend.config import DB_CONFIG, MEMORY_ASYNC_POOL_SIZE, MEMORY_ASYNC_MAX_OVERFLOW
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 DATABASE_URL = (
     f"postgresql+asyncpg://{DB_CONFIG['user']}:{DB_CONFIG['password']}"

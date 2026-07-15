@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from backend.llm.llm_factory import get_llm_factory
 from backend.llm.models import AVAILABLE_MODELS
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 router = APIRouter(prefix="/llm", tags=["llm"])
 

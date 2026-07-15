@@ -42,7 +42,7 @@ from backend.data_collection.analyzers.stats_analyzer import StatsAnalyzer
 from backend.data_collection.scheduler import Scheduler
 from backend.data_collection.visualizer import DataVisualizer
 from backend.data_collection.config import DC_DATABASE_URL
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 # ══════════════════════════════════════════════════════════

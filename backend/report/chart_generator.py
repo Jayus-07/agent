@@ -19,7 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 # =====================================================
 # 中文字体配置

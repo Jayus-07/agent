@@ -1,7 +1,7 @@
 """MemoryWorthinessClassifier — rule-first, LLM fallback"""
 import re
 from backend.llm.llm_factory import llm
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 # Order matters — earlier patterns match first
 _STORE_SIGNALS = [

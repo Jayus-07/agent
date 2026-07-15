@@ -11,7 +11,7 @@ degradation.py — Capability 降级链
 
 from backend.agent.tool_registry import tool_registry
 from backend.agent.supervisor.alerts import make_alert, log_degradation
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 MAX_DEGRADATION_PER_STEP = 1

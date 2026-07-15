@@ -6,7 +6,7 @@ Capability: report.generate — 数据 + Jinja2 模板 → Markdown 报告（含
 
 from backend.agent.tools import generate_report_tool
 from backend.agent.skills.base import BaseSkill
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class ReportSkill(BaseSkill):

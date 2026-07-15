@@ -27,8 +27,8 @@ from backend.config import (
     OVERALL_REQUEST_TIMEOUT,
     ENABLE_RESOURCE_MONITOR,
 )
-from backend.utils.logger import logger
-from backend.utils.resource_monitor import resource_monitor
+from backend.shared.logger import logger
+from backend.shared.monitoring.resource_monitor import resource_monitor
 
 os.environ['HF_HUB_OFFLINE'] = '1'
 os.environ['TRANSFORMERS_OFFLINE'] = '1'

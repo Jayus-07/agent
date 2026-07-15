@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.data_collection.fetchers.base import AbstractFetcher, RawData
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class StaticDataFetcher(AbstractFetcher):

@@ -14,7 +14,7 @@ from backend.sql.sql_generator import generate_sql
 from backend.sql.sql_validator import sql_validator, ValidationError
 from backend.sql.row_security import inject_row_filter, RowSecurityError
 from backend.sql.executor import execute_sql
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class SQLAgent:

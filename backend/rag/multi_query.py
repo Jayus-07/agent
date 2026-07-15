@@ -15,7 +15,7 @@ from backend.config import (
     MULTI_QUERY_TOP_K_PER, MULTI_QUERY_DEDUP,
     MULTI_QUERY_SIMILARITY, MULTI_QUERY_MIN_LENGTH,
 )
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 # 运行时模式（可通过 API POST /llm/multiquery 动态切换）
 _mq_mode: str = _DEFAULT_MODE

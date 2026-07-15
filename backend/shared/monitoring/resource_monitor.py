@@ -6,7 +6,7 @@ import os
 import time
 import psutil
 from typing import Dict, Optional
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class ResourceMonitor:

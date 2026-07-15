@@ -11,7 +11,7 @@ from backend.response.reporter import (
     _is_step_successful, _format_step_outputs, _fallback_summary,
 )
 from backend.prompts.reporter import REPORTER_SYSTEM
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 def reporter_node(state: dict) -> dict:

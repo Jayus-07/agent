@@ -6,7 +6,7 @@ from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline
 from backend.rag.doc_registry import DocumentRegistry
 from backend.config import DOC_REGISTRY_PATH, CHROMA_PATH, EMBEDDING_MODEL_PATH
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 router = APIRouter(prefix="/rag", tags=["知识库"])
 

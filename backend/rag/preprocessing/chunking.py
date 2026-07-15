@@ -22,7 +22,7 @@ from backend.config import (
     PROJECT_CHUNK_SIZE,
 )
 from backend.rag.preprocessing.metadata import classify_doc_type
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 # ============================================================

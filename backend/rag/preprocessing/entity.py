@@ -13,7 +13,7 @@ import re
 from typing import List
 
 from backend.config import KNOWN_PERSON_NAMES
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 # SKU 编码正则: 大写字母+数字+变体后缀 (如 MK202-RED-L, ZN105-BLK-M)
 _SKU_PATTERN = re.compile(r'\b([A-Z]{2,4}\d{2,4}(?:-[A-Z0-9]+)*)\b')

@@ -10,7 +10,7 @@ from typing import Any
 import pandas as pd
 
 from backend.data_collection.cleaners.base import AbstractCleaner, CleanedData
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 # 默认类型映射规则（中文字段名 → Python 类型）
 DEFAULT_TYPE_MAP = {

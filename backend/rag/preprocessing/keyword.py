@@ -13,7 +13,7 @@ from typing import List, Set
 import jieba.analyse
 
 from backend.config import DEFAULT_KEYWORDS, DOMAIN_RULES, SIGNAL_RULES, blacklist
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 # =====================================================
 # 预编译正则 — 单次扫描替代 O(n) 逐条循环

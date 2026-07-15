@@ -25,7 +25,7 @@ import matplotlib.ticker as ticker
 import numpy as np
 
 from backend.data_collection.pipeline import CollectResult
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 # ── 中文字体配置 ──
 def _setup_chinese_font():

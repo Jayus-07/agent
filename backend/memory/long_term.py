@@ -4,7 +4,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from backend.llm.llm_factory import llm
 from backend.config import EMBEDDING_MODEL_PATH, L3_DEDUP_COSINE_THRESHOLD, L3_SUPERSEDE_THRESHOLD
 from backend.memory.pii_filter import scan_and_sanitize
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 from dataclasses import dataclass, field
 
 _FACT_EXTRACTION_PROMPT = """从对话中提取值得长期记忆的关键信息。每条一行，严格使用竖线分隔: 类型|内容

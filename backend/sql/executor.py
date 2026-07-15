@@ -17,7 +17,7 @@ import psycopg2.extras
 from psycopg2 import OperationalError, ProgrammingError
 
 from backend.sql.schema_loader import schema_loader
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 # =================================================

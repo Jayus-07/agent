@@ -6,7 +6,7 @@ Capability: sql.query — 自然语言 → SQL → 数据库查询结果
 
 from backend.agent.tools import sql_query_tool
 from backend.agent.skills.base import BaseSkill
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class SQLSkill(BaseSkill):

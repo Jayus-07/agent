@@ -6,7 +6,7 @@ import json
 from fastapi import APIRouter, Query, HTTPException
 
 from backend.agent.observability import trace_store, GRAPH_TOPOLOGY, NODE_LABELS
-from backend.utils.resource_monitor import resource_monitor
+from backend.shared.monitoring.resource_monitor import resource_monitor
 from backend.rag.metrics import metrics_collector
 
 router = APIRouter(prefix="/observability", tags=["可观测性"])

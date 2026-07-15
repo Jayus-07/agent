@@ -4,7 +4,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 import backend.config
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 @dataclass

@@ -1,8 +1,8 @@
 from sentence_transformers import CrossEncoder
 from langchain_core.documents.compressor import BaseDocumentCompressor
 from backend.config import RERANKER_MODEL_PATH, RERANK_SCORE_THRESHOLD, RERANK_TIMEOUT, RERANK_TOP_K
-from backend.utils.logger import logger
-from backend.utils.timeout import safe_call_with_timeout
+from backend.shared.logger import logger
+from backend.shared.monitoring.timeout import safe_call_with_timeout
 
 # 本地加载交叉编码器模型（用于重排序）
 reranker = CrossEncoder(RERANKER_MODEL_PATH)

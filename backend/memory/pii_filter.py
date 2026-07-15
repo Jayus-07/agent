@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 
 from backend.config import L3_PII_FILTER_ENABLED
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 # =====================================================

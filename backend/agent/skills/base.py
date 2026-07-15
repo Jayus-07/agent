@@ -14,7 +14,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 DEFAULT_TIMEOUT = 60
 DEFAULT_MAX_RETRIES = 2

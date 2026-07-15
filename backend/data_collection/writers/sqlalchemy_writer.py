@@ -23,7 +23,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
 from backend.data_collection.writers.base import AbstractWriter, WriteResult
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class SQLAlchemyWriter(AbstractWriter):

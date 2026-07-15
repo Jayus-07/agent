@@ -8,7 +8,7 @@ MCP Manager — 管理 MCP Server 生命周期
 """
 from typing import Dict, List, Any
 
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class MCPServer:

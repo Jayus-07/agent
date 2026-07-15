@@ -17,7 +17,7 @@ import psycopg2
 import psycopg2.extras
 import requests
 
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 # =====================================================

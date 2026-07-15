@@ -22,7 +22,7 @@ from typing import Any
 from langchain_community.document_loaders import TextLoader
 from langchain_core.documents import Document
 
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 @dataclass

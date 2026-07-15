@@ -17,7 +17,7 @@ from backend.agent.tool_registry import tool_registry
 from backend.agent.planner.planner import _extract_json, _normalize_plan
 from backend.agent.alerts import make_alert, log_degradation
 from backend.prompts.critique import PLAN_CRITIQUE_SYSTEM
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 from backend.config import ENABLE_PLAN_CRITIQUE
 
 

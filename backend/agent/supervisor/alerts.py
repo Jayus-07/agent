@@ -10,7 +10,7 @@ import os
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 from typing import Literal
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 @dataclass

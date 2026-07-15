@@ -4,7 +4,7 @@
 """
 import signal
 from typing import Callable, Any
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class TimeoutError(Exception):

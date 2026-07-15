@@ -23,7 +23,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # 项目根加到 sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class KnowledgeDocImporter:

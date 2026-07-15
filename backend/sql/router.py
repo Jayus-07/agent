@@ -9,7 +9,7 @@ from typing import List
 
 from backend.llm.llm_factory import llm
 from backend.sql.schema_loader import schema_loader
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 ROUTER_PROMPT = """你是数据库表路由助手。给定用户问题和可用表列表，选出回答问题可能需要的表。
 

@@ -23,7 +23,7 @@ Phase 2:
 from typing import Any, Callable
 
 from backend.data_collection.pipeline import CollectResult
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class Scheduler:

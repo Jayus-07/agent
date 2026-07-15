@@ -22,7 +22,7 @@ from backend.llm.models import AVAILABLE_MODELS
 from backend.llm.providers.ollama import build_ollama, get_ollama_balance
 from backend.llm.providers.deepseek import build_deepseek, get_deepseek_balance
 from backend.llm.providers.minimax import build_minimax, get_minimax_balance
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class LLMFactory:

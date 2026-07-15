@@ -6,7 +6,7 @@ from langchain_community.document_loaders import (
 
 from backend.config import CHUNK_SIZE, CHUNK_OVERLAP, DEFAULT_KB_ID
 from backend.rag.preprocessing.cleaner import DocumentCleaner
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 def split_documents(docs, file_path, chunk_size=None, chunk_overlap=None):

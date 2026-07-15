@@ -29,7 +29,7 @@ from backend.data_collection.parsers.base import AbstractParser, ParsedData
 from backend.data_collection.cleaners.base import AbstractCleaner, CleanedData
 from backend.data_collection.analyzers.base import AbstractAnalyzer, AnalyzedData
 from backend.data_collection.writers.base import AbstractWriter, WriteResult
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 @dataclass

@@ -10,7 +10,7 @@ from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 
 from backend.mcp.manager import manager
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 router = APIRouter(prefix="/mcp", tags=["MCP"])
 

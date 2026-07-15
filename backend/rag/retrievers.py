@@ -20,7 +20,7 @@ from backend.config import (
     ADAPTIVE_CLUSTER_THRESHOLD,
     ADAPTIVE_MAX_CLUSTER_DOCS,
 )
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 # =====================================================

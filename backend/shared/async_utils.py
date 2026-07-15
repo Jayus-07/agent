@@ -3,7 +3,7 @@
 """
 import asyncio
 from typing import Callable, Any
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 async def async_safe_call_with_timeout(

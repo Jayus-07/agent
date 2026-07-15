@@ -16,7 +16,7 @@ import threading
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 # =====================================================

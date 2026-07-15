@@ -11,7 +11,7 @@ Planner → Capability → Skill → Tool → Infrastructure
 """
 
 from typing import Dict, List, Optional
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class ToolRegistry:

@@ -11,7 +11,7 @@ from typing import Any
 import requests
 
 from backend.data_collection.fetchers.base import AbstractFetcher, RawData
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class HttpFetcher(AbstractFetcher):

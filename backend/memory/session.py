@@ -2,7 +2,7 @@
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from backend.llm.llm_factory import llm
 from backend.config import SESSION_MAX_MESSAGES
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 _SUMMARY_PROMPT = """请用 2-3 句话总结以下对话的核心内容，保留关键实体、数字、决策和结论:
 

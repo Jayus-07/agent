@@ -10,7 +10,7 @@ from typing import Generator
 
 from backend.agent.graph.builder import build_graph, _parse_event
 from backend.agent.state import AgentState
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class MultiAgentSystem:

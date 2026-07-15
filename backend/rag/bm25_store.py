@@ -22,7 +22,7 @@ from langchain_core.documents import Document
 from backend.config import BM25_SEARCH_K
 
 from backend.config import BM25_INDEX_DIR
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class BM25Store:

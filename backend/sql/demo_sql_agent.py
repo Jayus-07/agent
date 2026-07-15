@@ -23,7 +23,7 @@ import psycopg2
 from backend.config import DB_CONFIG
 from dotenv import load_dotenv
 
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 load_dotenv()   # 必须在读取环境变量之前调用
 

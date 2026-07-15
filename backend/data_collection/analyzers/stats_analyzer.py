@@ -15,7 +15,7 @@ import pandas as pd
 
 from backend.data_collection.analyzers.base import AbstractAnalyzer, AnalyzedData
 from backend.data_collection.cleaners.base import CleanedData
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 # 默认数值字段列表（中文）
 DEFAULT_NUMERIC_FIELDS = [

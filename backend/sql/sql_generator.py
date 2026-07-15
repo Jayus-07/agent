@@ -5,7 +5,7 @@ sql_generator.py — 调用 LLM 生成 SQL
 """
 from backend.llm.llm_factory import llm
 from backend.sql.schema_loader import schema_loader
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 GENERATE_PROMPT = """你是 SQL 查询生成助手。根据用户问题和提供的表结构，生成一条 PostgreSQL 语法的 SELECT 语句。
 

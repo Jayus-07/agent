@@ -19,7 +19,7 @@ from sqlglot import exp
 from typing import Dict, Tuple
 
 from backend.sql.schema_loader import schema_loader
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class RowSecurityError(Exception):

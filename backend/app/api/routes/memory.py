@@ -12,7 +12,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from backend.memory.database import AsyncSessionLocal
 from backend.memory.repository.session_repo import SessionRepository
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 router = APIRouter(prefix="/memory", tags=["记忆"])
 

@@ -16,7 +16,7 @@ from sqlglot import exp
 from typing import Tuple, Optional, Set, Dict
 
 from backend.sql.schema_loader import schema_loader
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class ValidationError(Exception):

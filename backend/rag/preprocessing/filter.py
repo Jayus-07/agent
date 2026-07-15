@@ -3,7 +3,7 @@ import hashlib
 import re
 
 import backend.config
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class DuplicateDetector:

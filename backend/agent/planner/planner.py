@@ -17,7 +17,7 @@ from backend.llm.llm_factory import llm
 from backend.agent.tool_registry import tool_registry
 from backend.agent.alerts import make_alert, log_degradation
 from backend.prompts.planner import PLANNER_SYSTEM, is_knowledge_question
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 # =====================================================

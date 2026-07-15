@@ -4,7 +4,7 @@ import concurrent.futures
 import atexit
 from backend.memory.service import MemoryService
 from backend.memory.short_term import ShortTermBuffer
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class MemoryManager:

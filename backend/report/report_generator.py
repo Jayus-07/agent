@@ -24,7 +24,7 @@ from backend.report.data_fetcher import (
 from backend.report.template_engine import TemplateEngine
 from backend.report.snapshot import save_snapshot, cleanup_old_snapshots
 from backend.report.preference import preference_store
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 # 图表和 LLM 润色模块惰性导入（可选依赖）
 _chart_generator = None

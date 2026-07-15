@@ -10,7 +10,7 @@ from backend.config import (
     LLM_TEMPERATURE, LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT,
     DEEPSEEK_API_KEY, DEEPSEEK_API_BASE,
 )
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 def build_deepseek(model_name: str) -> object:

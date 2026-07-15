@@ -16,7 +16,7 @@ reporter.py — 最终 Markdown 回答生成
 """
 
 from backend.llm.llm_factory import llm
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 from backend.response.context_filter import filter_step_results
 from backend.prompts.reporter import REPORTER_SYSTEM
 

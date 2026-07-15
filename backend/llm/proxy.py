@@ -14,7 +14,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from backend.config import LLM_MODEL
 from backend.llm.factory import get_llm_factory
 from backend.llm.models import AVAILABLE_MODELS, PROVIDERS
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 # =====================================================

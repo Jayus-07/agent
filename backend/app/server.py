@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.app.api.routes import chat, sql, rag, report, llm, observability, memory, data, mcp
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 from backend.mcp.manager import manager as mcp_manager
 from backend.mcp.servers import register_all as register_mcp_servers
 

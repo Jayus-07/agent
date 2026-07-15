@@ -9,7 +9,7 @@ Skill → Tool → Infrastructure (RAG / SQL / Report)
 
 from langchain_core.tools import tool
 
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 # =====================================================
 # 懒加载单例（首次调用时初始化，避免启动时全部加载）

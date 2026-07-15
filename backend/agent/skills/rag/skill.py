@@ -6,7 +6,7 @@ Capability: rag.search — 用户问题 → 向量+BM25混合检索 → 带引�
 
 from backend.agent.tools import search_knowledge_tool
 from backend.agent.skills.base import BaseSkill
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class RAGSkill(BaseSkill):

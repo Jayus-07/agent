@@ -23,7 +23,7 @@ from backend.config import (
     ENABLE_HISTORY_AWARE_RETRIEVAL,
     CITATION_SUPPORT_THRESHOLD,
 )
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 # =====================================================

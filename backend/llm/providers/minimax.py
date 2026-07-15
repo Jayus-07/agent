@@ -10,7 +10,7 @@ from backend.config import (
     LLM_TEMPERATURE, LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT,
     MINIMAX_API_KEY, MINIMAX_API_BASE,
 )
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 def build_minimax(model_name: str) -> object:

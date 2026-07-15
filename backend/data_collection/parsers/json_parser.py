@@ -10,7 +10,7 @@ from typing import Any
 
 from backend.data_collection.parsers.base import AbstractParser, ParsedData
 from backend.data_collection.fetchers.base import RawData
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 class JsonParser(AbstractParser):

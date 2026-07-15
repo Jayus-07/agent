@@ -19,7 +19,7 @@ from backend.agent.skills.sql_skill import sql_skill_node
 from backend.agent.skills.rag_skill import rag_skill_node
 from backend.agent.skills.report_skill import report_skill_node
 from backend.agent.reporter.reporter import reporter_node
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 # 节点名 → 用户可读的阶段标签

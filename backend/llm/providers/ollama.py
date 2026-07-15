@@ -9,7 +9,7 @@ ollama.py — Ollama Provider（本地部署）
 from langchain_ollama import ChatOllama
 
 from backend.config import LLM_TEMPERATURE, LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT
-from backend.utils.logger import logger
+from backend.shared.logger import logger
 
 
 def build_ollama(model_name: str) -> ChatOllama:
