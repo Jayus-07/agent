@@ -53,15 +53,13 @@ def _score_by_keyword_overlap(question: str, docs: list, fallback_k: int = 3) ->
 # =====================================================
 
 class ChunkLevelRetriever(BaseRetriever):
-    """片段级检索器：两阶段检索（Doc → Chunk）+ multi-query + hybrid + rerank"""
+    """片段级检索器：Doc→Chunk 两阶段检索（MultiQuery 由外部 MultiQueryRetriever 处理）"""
 
     doc_db: object = Field(description="文档级 ChromaDB")
     vectordb: object = Field(description="片段级 ChromaDB")
     chunk_retriever: object = Field(description="CustomRetriever (vector)")
     bm25: object = Field(description="BM25 检索器")
     person_index: dict = Field(default_factory=dict, description="人名 → doc_ids 倒排索引")
-    need_global_search: bool = False
-    queries: List[str] = Field(default_factory=list, description="改写后的多查询")
     k: int = HYBRID_SEARCH_K
 
     class Config:
@@ -92,9 +90,7 @@ class ChunkLevelRetriever(BaseRetriever):
         person_names = extract_person_names(query)
         doc_ids = None
 
-        if self.need_global_search:
-            logger.info("ChunkLevelRetriever: 全局检索模式")
-        elif request_metadata_filter:
+        if request_metadata_filter:
             # MetadataFilter has already determined the scope — use it directly
             known_persons = request_metadata_filter.get("person_names")
             if known_persons:
@@ -131,11 +127,9 @@ class ChunkLevelRetriever(BaseRetriever):
                 logger.info(f"ChunkLevelRetriever Stage 1: 召回 {len(doc_ids)} 个相关文档")
 
         # — Stage 2: Chunk 级检索 —
-        queries = self.queries if self.queries else [query]
-
         all_docs = []
         seen = set()
-        for q in queries:
+        for q in [query]:
             res = hybrid_retrieve(
                 q, self.chunk_retriever, self.bm25,
                 k=self.k, doc_ids=doc_ids,
@@ -149,10 +143,10 @@ class ChunkLevelRetriever(BaseRetriever):
 
         # — 降级: Stage 2 无结果时回退到文档全文 —
         if not all_docs:
-            logger.warning(f"ChunkLevelRetriever: Stage 2 无结果，尝试回退到文档全文")
-            fallback_docs = self._fallback_to_doc_fulltext(query, doc_ids, request_metadata_filter)
+            logger.warning(f"ChunkLevelRetriever: Stage 2 无结果，尝试 Neighbor Expansion")
+            fallback_docs = self._neighbor_expansion(query, doc_ids, request_metadata_filter)
             if fallback_docs:
-                logger.info(f"ChunkLevelRetriever 降级: 回退到 {len(fallback_docs)} 篇文档全文")
+                logger.info(f"ChunkLevelRetriever: Neighbor Expansion → {len(fallback_docs)} chunks")
                 return fallback_docs[: self.k]
             logger.warning(f"ChunkLevelRetriever: 降级也无结果")
             return []
@@ -162,12 +156,12 @@ class ChunkLevelRetriever(BaseRetriever):
                              metrics={"retrieved_chunks": len(all_docs)})
         return all_docs[: self.k]
 
-    def _fallback_to_doc_fulltext(self, query: str, doc_ids: list | None,
-                                   metadata_filter: dict) -> List[Document]:
-        """Stage 2 无结果时的降级：用 doc 全文替代 chunk。
+    def _neighbor_expansion(self, query: str, doc_ids: list | None,
+                            metadata_filter: dict) -> List[Document]:
+        """Stage 2 无结果时的 Context Expansion：用 doc 级 Chunk 替代。
 
-        1. 如果有已知 doc_ids → 直接拉取这些文档的全文
-        2. 否则做一次 doc 级检索 → 拉取全文
+        1. 有已知 doc_ids → 直接拉取这些文档的所有 chunk
+        2. 否则 doc 级检索 → 拉取 chunk
         """
         from langchain_core.documents import Document
 
@@ -195,7 +189,7 @@ class ChunkLevelRetriever(BaseRetriever):
             for i, content in enumerate(results.get("documents", [])):
                 meta = results["metadatas"][i] if i < len(results.get("metadatas", [])) else {}
                 full_docs.append(Document(page_content=content, metadata=meta))
-            logger.info(f"ChunkLevelRetriever 降级: doc_ids={doc_ids[:5]} → 全文 {len(full_docs)} 篇")
+            logger.info(f"ChunkLevelRetriever: Neighbor Expansion doc_ids={doc_ids[:5]} → {len(full_docs)} chunks")
             return full_docs
         except Exception as e:
             logger.error(f"ChunkLevelRetriever 降级失败: {e}")
@@ -255,7 +249,7 @@ class AdaptiveRetriever(BaseRetriever):
                 # 全文文档放前面，chunks 补充在后
                 return full_docs + chunks
             except Exception as e:
-                logger.error(f"AdaptiveRetriever: 文档补全失败: {e}")
+                logger.error(f"AdaptiveRetriever: Context Expansion 失败: {e}")
 
         logger.info(f"AdaptiveRetriever: 分散分布 ({len(doc_counter)} docs) → 跳过 Expansion")
         return chunks
