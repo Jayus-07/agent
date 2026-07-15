@@ -1,6 +1,6 @@
 """Multi Query Retrieval — 自动触发 + LLM改写 + 质量过滤
 
-独立于现有 Retriever，可插拔。
+need_multi_query() 是唯一入口，所有 MultiQuery 判断必须经过此函数。
 """
 
 import re
@@ -31,7 +31,29 @@ def set_mq_mode(mode: str):
 
 
 # =====================================================
-# 复杂度检测
+# 唯一入口 — 所有 MultiQuery 判断必须走这里
+# =====================================================
+
+def need_multi_query(query: str) -> tuple[bool, str]:
+    """判断是否需要 MultiQuery。所有入口统一经过此函数。
+
+    mode=off     → 直接关闭
+    mode=always  → 直接开启
+    mode=on      → 兼容旧写法，同 always
+    mode=auto    → 调用 _is_complex 判断
+    """
+    mode = _mq_mode
+
+    if mode == "off":
+        return False, "off"
+    if mode in ("always", "on"):
+        return True, mode
+    # auto
+    return _is_complex(query)
+
+
+# =====================================================
+# 复杂度检测（仅 auto 模式使用）
 # =====================================================
 
 COMPLEX_PATTERNS = [
@@ -60,7 +82,7 @@ def _is_complex(query: str) -> tuple[bool, str]:
 
 
 # =====================================================
-# Query Rewrite
+# Query Rewrite: Parse → Normalize → Deduplicate → Limit
 # =====================================================
 
 QUERY_REWRITE_PROMPT = """将用户问题改写为 {count} 个语义等价但表达不同的检索查询。
@@ -77,6 +99,7 @@ QUERY_REWRITE_PROMPT = """将用户问题改写为 {count} 个语义等价但表
 
 
 def _rewrite(question: str) -> list[str]:
+    """LLM 改写 → Parse → Normalize → Dedup → Limit"""
     try:
         from retrieval.tracer import trace_collector
         trace_collector._start("query_rewrite")
@@ -86,47 +109,111 @@ def _rewrite(question: str) -> list[str]:
         prompt = QUERY_REWRITE_PROMPT.format(count=MULTI_QUERY_COUNT, question=question)
         result = llm.invoke([HumanMessage(content=prompt)])
         tokens = trace_collector._parse_tokens(result)
-        text = result.content if hasattr(result, "content") else str(result)
+        raw = result.content if hasattr(result, "content") else str(result)
 
-        lines = [re.sub(r"^\d+[\.\)、]\s*", "", l.strip())
-                 for l in text.strip().split("\n") if l.strip()]
+        # Step 1: Parse
+        lines = _parse(raw)
 
-        cleaned, seen = [question], {question}
-        for line in lines:
-            if line not in seen and len(cleaned) < MULTI_QUERY_COUNT:
-                seen.add(line)
-                cleaned.append(line)
+        # Step 2: Normalize
+        lines = _normalize(lines)
+
+        # Step 3: Deduplicate (含完全重复 + Jaccard)
+        lines = _dedup(lines, question)
+
+        # Step 4: Limit
+        lines = _limit(lines)
 
         trace_collector._end("query_rewrite", "LLM改写",
-                             metrics={**tokens, "variants": len(cleaned)})
-        logger.info(f"[MultiQuery] Rewrite: {question[:40]} → {len(cleaned)} 变体")
-        return cleaned
+                             metrics={**tokens, "variants": len(lines)})
+        logger.info(f"[MultiQuery] Rewrite: {question[:40]} → {len(lines)} 变体")
+        return lines
     except Exception as e:
         trace_collector._end("query_rewrite", "LLM改写", metrics={"variants": 0}, status="error")
         logger.warning(f"[MultiQuery] Rewrite 失败: {e}，回退")
         return [question]
 
 
-# =====================================================
-# Quality Filter
-# =====================================================
+# ── Parse ──────────────────────────────────────────
 
-def _filter(queries: list[str]) -> list[str]:
-    if not MULTI_QUERY_DEDUP or len(queries) <= 1:
-        return queries
-    result = [queries[0]]
-    orig_chars = set(queries[0])
-    for q in queries[1:]:
-        if len(q) < MULTI_QUERY_MIN_LENGTH:
-            logger.debug(f"[MultiQuery] 过短: {q}")
+_RE_NUMBERING = re.compile(r"^\d+[\.\)、]\s*")           # 1. 2) 3、
+_RE_BULLET = re.compile(r"^[-*•]\s*")                     # - * •
+_RE_CJK_NUM = re.compile(r"^[（(][一二三四五六七八九十]+[）)]\s*")  # （一）（二）
+
+def _parse(raw: str) -> list[str]:
+    """解析 LLM 返回内容为查询列表"""
+    lines = []
+    for line in raw.strip().split("\n"):
+        stripped = line.strip()
+        if not stripped:
             continue
-        qc = set(q)
-        jaccard = len(orig_chars & qc) / len(orig_chars | qc) if orig_chars | qc else 0
-        if jaccard > MULTI_QUERY_SIMILARITY:
-            logger.debug(f"[MultiQuery] 相似(Jaccard={jaccard:.2f}): {q}")
-            continue
-        result.append(q)
+        lines.append(stripped)
+    return lines
+
+
+# ── Normalize ──────────────────────────────────────
+
+def _normalize(lines: list[str]) -> list[str]:
+    """统一文本格式：去编号、去列表符号、去首尾空格、合并空格"""
+    result = []
+    for line in lines:
+        # 去掉中文编号 (一) (二)
+        line = _RE_CJK_NUM.sub("", line)
+        # 去掉数字编号 1. 2) 3、
+        line = _RE_NUMBERING.sub("", line)
+        # 去掉列表符号 - * •
+        line = _RE_BULLET.sub("", line)
+        # 合并连续空格
+        line = re.sub(r"\s+", " ", line)
+        # 去首尾空格
+        line = line.strip()
+        if line:
+            result.append(line)
     return result
+
+
+# ── Deduplicate ────────────────────────────────────
+
+def _dedup(lines: list[str], original: str = "") -> list[str]:
+    """去重：完全重复 + Jaccard 相似度"""
+    # 确保原始查询在第一位
+    result = [original] if original else []
+    seen = {original} if original else set()
+
+    for line in lines:
+        if not line:
+            continue
+        # 完全重复
+        if line in seen:
+            logger.debug(f"[MultiQuery] 完全重复: {line}")
+            continue
+        if not MULTI_QUERY_DEDUP:
+            seen.add(line)
+            result.append(line)
+            continue
+        # 最小长度
+        if len(line) < MULTI_QUERY_MIN_LENGTH:
+            logger.debug(f"[MultiQuery] 过短: {line}")
+            continue
+        # Jaccard 去重
+        if original:
+            o_set = set(original)
+            l_set = set(line)
+            union = o_set | l_set
+            if union:
+                jaccard = len(o_set & l_set) / len(union)
+                if jaccard > MULTI_QUERY_SIMILARITY:
+                    logger.debug(f"[MultiQuery] Jaccard重复({jaccard:.2f}): {line}")
+                    continue
+        seen.add(line)
+        result.append(line)
+    return result
+
+
+# ── Limit ──────────────────────────────────────────
+
+def _limit(lines: list[str]) -> list[str]:
+    """限制最终查询数量"""
+    return lines[:MULTI_QUERY_COUNT]
 
 
 # =====================================================
@@ -134,7 +221,7 @@ def _filter(queries: list[str]) -> list[str]:
 # =====================================================
 
 class MultiQueryRetriever(BaseRetriever):
-    """替换旧 ParallelMultiQueryRetriever，根据问题复杂度自动触发多查询。"""
+    """根据 need_multi_query() 判断是否启用多查询。"""
 
     base_retriever: Any = Field(description="底层 ChunkLevelRetriever")
 
@@ -148,16 +235,8 @@ class MultiQueryRetriever(BaseRetriever):
         self._last_variants = 1
         self._last_filtered = 1
 
-    def _should_use_multi(self, query: str) -> tuple[bool, str]:
-        mode = _mq_mode
-        if mode == "off":
-            return False, "off"
-        if mode == "on":
-            return True, "on"
-        return _is_complex(query)
-
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> list[Document]:
-        use, reason = self._should_use_multi(query)
+        use, reason = need_multi_query(query)
         self._last_triggered = use
         self._last_reason = reason
         self._last_variants = 1
@@ -167,7 +246,7 @@ class MultiQueryRetriever(BaseRetriever):
             logger.info(f"[MultiQuery] {reason}: {query[:30]}")
             return self.base_retriever.invoke(query)
 
-        queries = _filter(_rewrite(query))
+        queries = _rewrite(query)
         self._last_variants = len(queries)
         self._last_filtered = len(queries)
 

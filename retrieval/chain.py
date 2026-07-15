@@ -200,7 +200,7 @@ class RAGChain:
         # MultiQuery 步骤（chain 调用前，独立捕获）
         logger.info(f"[TRACE] ask() called: {question[:40]} (session={session_id})")
         trace_collector._start("mq_check")
-        mq = self._retriever_info()
+        mq = self._retriever_info()  # 读取 MultiQueryRetriever 状态（已在 _get_relevant_documents 中由 need_multi_query 更新）
         mode = "auto"
         try:
             from config import MULTI_QUERY_MODE as _m; mode = _m

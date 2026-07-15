@@ -10,8 +10,8 @@ const LABELS: Record<string, string> = {
 };
 
 const NEXT: Record<string, string> = {
-  auto: "on",
-  on: "off",
+  auto: "always",
+  always: "off",
   off: "auto",
 };
 

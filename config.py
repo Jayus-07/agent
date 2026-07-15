@@ -70,7 +70,7 @@ CITATION_SUPPORT_THRESHOLD = float(os.getenv("CITATION_SUPPORT_THRESHOLD", "0.4"
 # ====================================
 # MultiQuery 检索配置
 # ====================================
-# mode: "auto"(自动判断复杂问题) | "on"(强制开启) | "off"(关闭)
+# mode: "auto"(自动判断复杂问题) | "always"(强制开启) | "on"(同always,兼容) | "off"(关闭)
 MULTI_QUERY_MODE = os.getenv("MULTI_QUERY_MODE", "auto")                 # 自动触发模式
 MULTI_QUERY_COUNT = int(os.getenv("MULTI_QUERY_COUNT", "3"))             # 查询变体数
 MULTI_QUERY_TEMPERATURE = float(os.getenv("MULTI_QUERY_TEMPERATURE", "0.2"))  # Rewrite 温度
