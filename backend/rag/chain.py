@@ -16,7 +16,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, Prom
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.runnables import RunnableLambda
 
-from backend.llm.llm_factory import llm
+from backend.infra.llm.llm_factory import llm
 from backend.rag.retrieval.retrievers import ChunkLevelRetriever, AdaptiveRetriever
 from backend.rag.reranker import RerankCompressor
 from backend.config import (
@@ -145,7 +145,7 @@ class RAGChain:
             trace_collector._start("llm_generate")
             try:
                 r = _stuff.invoke(inp)
-                from backend.llm.proxy import _last_tokens
+                from backend.infra.llm.proxy import _last_tokens
                 trace_collector._end("llm_generate", "LLM生成", metrics=dict(_last_tokens))
                 return r
             except Exception:
@@ -257,7 +257,7 @@ class RAGChain:
         """收尾阶段：完成 Trace + 写 Memory end_turn。"""
         from backend.rag.tracer import trace_collector
         from backend.config import LLM_MODEL
-        from backend.llm.factory import get_llm_factory
+        from backend.infra.llm.factory import get_llm_factory
         import time as _time
 
         total_ms = int((_time.time()-t_total)*1000)

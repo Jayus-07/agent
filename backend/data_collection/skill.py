@@ -7,7 +7,7 @@ data_collection/skill.py — DataCollectionSkill
   - execute() 由 BaseSkill 提供（带重试/超时/告警）
 """
 
-from backend.agent.skills.base import BaseSkill
+from backend.orchestration.skills.base import BaseSkill
 from backend.data_collection.tool import data_collection_tool
 from backend.shared.logger import logger
 

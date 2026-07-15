@@ -103,7 +103,7 @@ def _rewrite(question: str) -> list[str]:
     try:
         from backend.rag.tracer import trace_collector
         trace_collector._start("query_rewrite")
-        from backend.llm.llm_factory import llm
+        from backend.infra.llm.llm_factory import llm
         from langchain_core.messages import HumanMessage
 
         prompt = QUERY_REWRITE_PROMPT.format(count=MULTI_QUERY_COUNT, question=question)

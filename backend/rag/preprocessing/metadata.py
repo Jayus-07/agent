@@ -7,7 +7,7 @@ from functools import lru_cache
 from typing import List, Set, Dict, Any, Optional, Literal, Tuple
 
 from backend.config import DOC_TYPE_RULES, TIME_PATTERNS, DOMAIN_RULES, SUMMARY_MAX_LENGTH, LLM_REQUEST_TIMEOUT
-from backend.llm.llm_factory import llm
+from backend.infra.llm.llm_factory import llm
 from backend.rag.preprocessing.entity import extract_person_names
 
 from backend.rag.preprocessing.keyword import extract_doc_keywords, extract_chunk_keywords

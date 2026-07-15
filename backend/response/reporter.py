@@ -15,7 +15,7 @@ reporter.py — 最终 Markdown 回答生成
 可以被 API route 直接调用，也可以被 multi_agent 的 reporter_node 包装后调用。
 """
 
-from backend.llm.llm_factory import llm
+from backend.infra.llm.llm_factory import llm
 from backend.shared.logger import logger
 from backend.response.context_filter import filter_step_results
 from backend.prompts.reporter import REPORTER_SYSTEM

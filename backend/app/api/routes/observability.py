@@ -5,7 +5,7 @@ import json
 
 from fastapi import APIRouter, Query, HTTPException
 
-from backend.agent.observability import trace_store, GRAPH_TOPOLOGY, NODE_LABELS
+from backend.orchestration.observability import trace_store, GRAPH_TOPOLOGY, NODE_LABELS
 from backend.shared.monitoring.resource_monitor import resource_monitor
 from backend.rag.metrics import metrics_collector
 
@@ -162,7 +162,7 @@ async def get_resources():
 @router.get("/alerts")
 async def get_alerts(limit: int = Query(50, ge=1, le=500)):
     """读取降级/告警日志（degradation.jsonl 尾部 N 行）"""
-    from backend.agent.alerts import DEGRADATION_LOG_FILE
+    from backend.orchestration.alerts import DEGRADATION_LOG_FILE
 
     alerts = []
     total = 0

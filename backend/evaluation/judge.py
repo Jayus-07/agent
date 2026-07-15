@@ -19,7 +19,7 @@ def set_llm_callable(fn: Callable[[str], str]) -> None:
             如果 LLM 返回对象，需要包装成提取 .content 的函数。
 
     Example:
-        >>> from backend.llm.llm_factory import get_llm
+        >>> from backend.infra.llm.llm_factory import get_llm
         >>> llm = get_llm()
         >>> def my_llm(prompt: str) -> str:
         ...     resp = llm.invoke(prompt)
@@ -37,7 +37,7 @@ def _get_llm_response(prompt: str) -> str:
         return _llm_callable(prompt)
     # fallback: 尝试导入项目默认 LLM
     try:
-        from backend.llm.llm_factory import get_llm
+        from backend.infra.llm.llm_factory import get_llm
         llm = get_llm()
         resp = llm.invoke(prompt)
         return resp.content if hasattr(resp, "content") else str(resp)

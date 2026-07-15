@@ -3,7 +3,7 @@ sql_generator.py — 调用 LLM 生成 SQL
 
 只接收有限表名的 schema 描述，生成纯 SELECT 语句。
 """
-from backend.llm.llm_factory import llm
+from backend.infra.llm.llm_factory import llm
 from backend.sql.schema_loader import schema_loader
 from backend.shared.logger import logger
 

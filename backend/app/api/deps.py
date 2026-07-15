@@ -18,7 +18,7 @@ def get_multi_agent():
     if _multi_agent is None:
         with _lock:
             if _multi_agent is None:
-                from backend.agent.graph import MultiAgentSystem
+                from backend.orchestration.graph import MultiAgentSystem
                 _multi_agent = MultiAgentSystem()
     return _multi_agent
 

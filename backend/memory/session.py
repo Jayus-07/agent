@@ -1,6 +1,6 @@
 """L2 会话记忆 — PostgreSQL async backend"""
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
-from backend.llm.llm_factory import llm
+from backend.infra.llm.llm_factory import llm
 from backend.config import SESSION_MAX_MESSAGES
 from backend.shared.logger import logger
 

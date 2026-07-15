@@ -10,8 +10,8 @@ api/routes/llm.py — LLM 切换 + 余额查询 API
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from backend.llm.llm_factory import get_llm_factory
-from backend.llm.models import AVAILABLE_MODELS
+from backend.infra.llm.llm_factory import get_llm_factory
+from backend.infra.llm.models import AVAILABLE_MODELS
 from backend.shared.logger import logger
 
 router = APIRouter(prefix="/llm", tags=["llm"])
