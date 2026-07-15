@@ -6,7 +6,7 @@ interface TraceStep {
   name: string;
   detail: string;
   hits: string;
-  elapsed_ms: number;
+  duration_ms: number;
 }
 
 interface Trace {
@@ -160,7 +160,7 @@ export default function AgentTracePage() {
                 <div className="space-y-1">
                   {selected.steps.map((step, i) => {
                     const pct = selected.total_ms > 0
-                      ? Math.round((step.elapsed_ms / selected.total_ms) * 100)
+                      ? Math.round((step.duration_ms / selected.total_ms) * 100)
                       : 0;
                     return (
                       <div
@@ -174,7 +174,7 @@ export default function AgentTracePage() {
                               {step.name}
                             </span>
                             <span className="text-[10px] text-text-muted">
-                              {formatMs(step.elapsed_ms)}
+                              {formatMs(step.duration_ms)}
                             </span>
                           </div>
                           <div className="text-[11px] text-text-muted truncate">

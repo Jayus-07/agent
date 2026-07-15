@@ -14,21 +14,22 @@ MAX_TRACES = 200
 class TraceStep:
     name: str
     detail: str = ""
-    hits: str = ""           # 兼容旧前端，逐步废弃
-    elapsed_ms: int = 0
-    metrics: dict = field(default_factory=dict)  # 结构化数据，新前端用
+    hits: str = ""              # 兼容旧前端，逐步废弃
+    duration_ms: int = 0        # 本步耗时
+    metrics: dict = field(default_factory=dict)
 
 
 @dataclass
 class TraceRecord:
     id: str
-    timestamp: str
+    timestamp: str     # ISO8601
     session_id: str
     model: str
     question: str
     answer_preview: str
     answer_len: int
     total_ms: int
+    duration_ms: int = 0   # = total_ms，保持 key 命名一致
     steps: List[TraceStep] = field(default_factory=list)
 
 
@@ -43,7 +44,7 @@ class TraceCollector:
     def start(self, question: str, session_id: str = "default") -> TraceRecord:
         trace = TraceRecord(
             id=uuid.uuid4().hex[:12],
-            timestamp=time.strftime("%Y-%m-%d %H:%M:%S"),
+            timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             session_id=session_id,
             model="?",
             question=question,
@@ -63,7 +64,7 @@ class TraceCollector:
         if name in self._timers:
             ms = int((time.time() - self._timers[name]) * 1000)
             if self._current_trace:
-                self.add_step(self._current_trace, name, detail, hits=hits, elapsed_ms=ms, metrics=metrics or {})
+                self.add_step(self._current_trace, name, detail, hits=hits, duration_ms=ms, metrics=metrics or {})
             del self._timers[name]
 
     @staticmethod
@@ -89,17 +90,18 @@ class TraceCollector:
         if name in self._timers:
             ms = int((time.time() - self._timers[name]) * 1000)
             if self._current_trace:
-                self.add_step(self._current_trace, name, detail, hits=hits, elapsed_ms=ms)
+                self.add_step(self._current_trace, name, detail, hits=hits, duration_ms=ms)
             del self._timers[name]
 
-    def add_step(self, record: TraceRecord, name: str, detail: str = "", hits: str = "", elapsed_ms: int = 0, metrics: dict = None):
-        record.steps.append(TraceStep(name=name, detail=detail, hits=hits, elapsed_ms=elapsed_ms, metrics=metrics or {}))
+    def add_step(self, record: TraceRecord, name: str, detail: str = "", hits: str = "", duration_ms: int = 0, metrics: dict = None):
+        record.steps.append(TraceStep(name=name, detail=detail, hits=hits, duration_ms=duration_ms, metrics=metrics or {}))
 
     def finish(self, record: TraceRecord, answer: str, total_ms: int, model: str):
         record.model = model
         record.answer_preview = answer[:80]
         record.answer_len = len(answer)
         record.total_ms = total_ms
+        record.duration_ms = total_ms
         self._records.appendleft(record)
 
     def list(self, limit: int = 50) -> list:

@@ -57,7 +57,14 @@ async def list_rag_traces(limit: int = Query(50, ge=1, le=200)):
                 "answer_preview": t.answer_preview,
                 "answer_len": t.answer_len,
                 "total_ms": t.total_ms,
-                "steps": [{"name": s.name, "detail": s.detail, "hits": s.hits, "elapsed_ms": s.elapsed_ms, "metrics": s.metrics} for s in t.steps],
+                "duration_ms": t.duration_ms,
+                "steps": [{
+                    "name": s.name,
+                    **({"detail": s.detail} if s.detail else {}),
+                    **({"hits": s.hits} if s.hits else {}),
+                    "duration_ms": s.duration_ms,
+                    **({"metrics": s.metrics} if s.metrics else {}),
+                } for s in t.steps],
             }
             for t in traces
         ]
@@ -74,8 +81,14 @@ async def get_rag_trace(trace_id: str):
     return {
         "id": t.id, "timestamp": t.timestamp, "session_id": t.session_id,
         "model": t.model, "question": t.question, "answer_preview": t.answer_preview,
-        "answer_len": t.answer_len, "total_ms": t.total_ms,
-        "steps": [{"name": s.name, "detail": s.detail, "hits": s.hits, "elapsed_ms": s.elapsed_ms, "metrics": s.metrics} for s in t.steps],
+        "answer_len": t.answer_len, "total_ms": t.total_ms, "duration_ms": t.duration_ms,
+        "steps": [{
+            "name": s.name,
+            **({"detail": s.detail} if s.detail else {}),
+            **({"hits": s.hits} if s.hits else {}),
+            "duration_ms": s.duration_ms,
+            **({"metrics": s.metrics} if s.metrics else {}),
+        } for s in t.steps],
     }
 
 
