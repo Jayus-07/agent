@@ -86,10 +86,8 @@ agent/
 
 ## Docs
 
-按需阅读（Path 全部对应 backend/ 重构后结构）：
-- docs/data-collection-center.md
-- docs/rag-full-pipeline.md
-- docs/phased-refactor-plan.md
+暂无独立文档。架构/模块说明请直接参考代码与 README。
+（项目演进中文档容易过时，代码即文档。）
 
 ---
 
