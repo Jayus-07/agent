@@ -19,6 +19,8 @@ from typing import List, Optional
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
 
+from config import BM25_SEARCH_K
+
 from config import BM25_INDEX_DIR
 from utils.logger import logger
 
@@ -43,17 +45,19 @@ class BM25Store:
     # ── 公共方法 ──────────────────────────────────────
 
     def build(
-        self, docs: List[Document], k: int = 20
+        self, docs: List[Document], k: int = None
     ) -> Optional[BM25Retriever]:
         """构建并持久化 BM25 索引。
 
         Args:
             docs: Document 对象列表
-            k: 检索返回数量，默认 20
+            k: 检索返回数量，默认取 config.BM25_SEARCH_K
 
         Returns:
             可直接使用的 BM25Retriever 实例；文档为空时返回 None
         """
+        if k is None:
+            k = BM25_SEARCH_K
         logger.info(f"[BM25Store] 构建索引，{len(docs)} 个文档...")
         t0 = time.time()
 
@@ -84,15 +88,17 @@ class BM25Store:
         )
         return retriever
 
-    def load(self, k: int = 20) -> Optional[BM25Retriever]:
+    def load(self, k: int = None) -> Optional[BM25Retriever]:
         """从磁盘加载 BM25 索引。
 
         Args:
-            k: 检索返回数量，默认 20
+            k: 检索返回数量，默认取 config.BM25_SEARCH_K
 
         Returns:
             BM25Retriever 实例，索引不存在或损坏时返回 None
         """
+        if k is None:
+            k = BM25_SEARCH_K
         if not self._corpus_path.exists() or not self._docs_path.exists():
             logger.info("[BM25Store] 索引文件不存在，需要重建")
             return None
