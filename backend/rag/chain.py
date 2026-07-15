@@ -214,7 +214,10 @@ class RAGChain:
             self._trace(trace, answer, t_total)
             return answer
         except Exception:
-            trace_collector.finish(trace, "[ERROR]", int((_time.time()-t_total)*1000))
+            try:
+                trace_collector.finish(trace, "[ERROR]", int((_time.time()-t_total)*1000), "", "")
+            except Exception:
+                pass
             raise
 
     def _prepare(self, question: str, session_id: str) -> list:
