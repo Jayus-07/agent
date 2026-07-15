@@ -197,23 +197,17 @@ class RAGChain:
         l1 = self._memory.start_session(session_id, question) if self._memory else None
         chat_history = list(l1.messages) if l1 else []
 
-        # MultiQuery 判断（调 need_multi_query() 获取当前查询的正确状态）
-        logger.info(f"[TRACE] ask() called: {question[:40]} (session={session_id})")
+        # chain.invoke（MultiQueryRetriever 内部通过 need_multi_query 做唯一决策）
+        result = self.chain.invoke({"input": question, "chat_history": chat_history})
+
+        # mq_check: 从 MultiQueryRetriever 读取实际决策结果（唯一入口）
         trace_collector._start("mq_check")
-        from retrieval.multi_query import need_multi_query as _need_mq, get_mq_mode
-        triggered, reason = _need_mq(question)
+        mq = getattr(self, '_mq_retriever', None)
+        triggered = mq._last_triggered if mq else False
+        from retrieval.multi_query import get_mq_mode
         trace_collector._end("mq_check", "MultiQuery",
                              metrics={"triggered": triggered, "mode": get_mq_mode()},
                              status="skipped" if not triggered else "success")
-
-        # chain.invoke
-        t_chain = _time.time()
-        result = self.chain.invoke({"input": question, "chat_history": chat_history})
-        chain_ms = int((_time.time()-t_chain)*1000)
-        # 如果 callback 没捕获到（某些 LLM/Rerank 不触发回调），补充兜底
-        if not trace.steps or trace.steps[-1].id in ("mq_check",):
-            trace_collector.add_step(trace, "检索+LLM", hit=f"{len(result.get('context',[]))}chk",
-                                     elapsed_ms=chain_ms)
 
         answer = result["answer"]
         answer = _strip_think_blocks(answer)
