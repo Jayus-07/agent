@@ -139,6 +139,10 @@ class MultiQueryRetriever(BaseRetriever):
 
     def __init__(self, base_retriever):
         super().__init__(base_retriever=base_retriever)
+        self._last_triggered = False
+        self._last_reason = ""
+        self._last_variants = 1
+        self._last_filtered = 1
 
     def _should_use_multi(self, query: str) -> tuple[bool, str]:
         mode = _mq_mode
@@ -150,11 +154,18 @@ class MultiQueryRetriever(BaseRetriever):
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> list[Document]:
         use, reason = self._should_use_multi(query)
+        self._last_triggered = use
+        self._last_reason = reason
+        self._last_variants = 1
+        self._last_filtered = 1
+
         if not use:
             logger.info(f"[MultiQuery] {reason}: {query[:30]}")
             return self.base_retriever.invoke(query)
 
         queries = _filter(_rewrite(query))
+        self._last_variants = len(queries)
+        self._last_filtered = len(queries)
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
         docs, seen = [], set()

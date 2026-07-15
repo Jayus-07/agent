@@ -149,6 +149,7 @@ class RAGChain:
         # MultiQuery: auto(自动判断复杂问题)/on(强制)/off(关闭)
         from retrieval.multi_query import MultiQueryRetriever
         retriever = MultiQueryRetriever(base_retriever=retriever)
+        self._mq_retriever = retriever  # 供 tracer 读取 MultiQuery 状态
         logger.info("retriever: " + str(retriever))
 
         # Adaptive: 检查 MultiQuery 合并后的 chunk 文档分布，按需补全文档全文
@@ -176,41 +177,78 @@ class RAGChain:
     # =================================================
 
     def ask(self, question: str, session_id: str = "default") -> str:
+        from retrieval.tracer import trace_collector
+        import time as _time
+
+        t_total = _time.time()
+        trace = trace_collector.start(question, session_id)
+
         logger.info(f"[RAGChain] 收到问题: {question[:60]}... (session={session_id})")
 
-        # L1/L2/L3: 加载会话上下文 (由 MemoryManager 统一管理)
+        # Memory
         l1 = self._memory.start_session(session_id, question) if self._memory else None
         chat_history = list(l1.messages) if l1 else []
 
-        result = self.chain.invoke({
-            "input": question,
-            "chat_history": chat_history,
-        })
+        # MultiQuery 判断
+        t_mq = _time.time()
+        mq_info = self._retriever_info()  # {triggered, reason, variants, filtered_count}
+        trace_collector.add_step(trace, "MultiQuery", mq_info.get("reason", "?"),
+                                 hits=f"{mq_info.get('filtered_count',1)}变体",
+                                 elapsed_ms=int((_time.time()-t_mq)*1000))
+
+        # chain.invoke (检索+Rerank+LLM生成)
+        t_chain = _time.time()
+        result = self.chain.invoke({"input": question, "chat_history": chat_history})
+        chain_ms = int((_time.time()-t_chain)*1000)
 
         answer = result["answer"]
-        # 剥离 <think>...</think> 推理块（MiniMax M3 / DeepSeek R1 等会输出）
         answer = _strip_think_blocks(answer)
         context_docs = result.get("context", [])
 
-        # Citation Filter: 用 CrossEncoder 验证每个 chunk 是否真正支撑答案
+        # 搜参指标
+        doc_count = len(set(d.metadata.get("source_file","") for d in context_docs))
+        chunk_count = len(context_docs)
+        trace_collector.add_step(trace, "检索+Rerank+LLM",
+                                 f"doc检索→{doc_count}篇→Rerank→生成",
+                                 hits=f"{chunk_count}chk",
+                                 elapsed_ms=chain_ms)
+
+        # Citation
+        t_cite = _time.time()
         if context_docs:
             answer, verified_docs = _verify_support(answer, context_docs, question)
         else:
             verified_docs = []
+        trace_collector.add_step(trace, "Citation", f"复用Rerank分",
+                                 hits=f"{len(verified_docs)}/{chunk_count}",
+                                 elapsed_ms=int((_time.time()-t_cite)*1000))
 
-        # 附加参考文献（仅显示文中引用 + 验证通过 的来源）
+        # References
         references = _format_references(verified_docs, answer)
         if references:
             answer = answer + references
-
-        # 提取结构化来源（供前端 SourceCard 展示）
         self._last_sources = _extract_sources(verified_docs, answer)
 
-        # L2/L3: 持久化本轮（MemoryManager 委托 MemoryService → PostgreSQL）
         if self._memory:
             self._memory.end_turn(session_id, question, answer)
 
+        # 完成 Trace
+        total_ms = int((_time.time()-t_total)*1000)
+        from config import LLM_MODEL
+        trace_collector.finish(trace, answer, total_ms, LLM_MODEL)
+
         return answer
+
+    def _retriever_info(self) -> dict:
+        """获取 MultiQuery retriever 的状态信息"""
+        try:
+            mq = getattr(self, '_mq_retriever', None)
+            if mq and hasattr(mq, '_last_reason'):
+                return {"triggered": mq._last_triggered, "reason": mq._last_reason,
+                        "variants": mq._last_variants, "filtered_count": mq._last_filtered}
+        except Exception:
+            pass
+        return {"triggered": False, "reason": "?", "variants": 1, "filtered_count": 1}
 
 
 def _strip_think_blocks(text: str) -> str:
