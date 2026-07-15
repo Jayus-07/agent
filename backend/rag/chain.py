@@ -267,8 +267,13 @@ class RAGChain:
         """评估阶段：Faithfulness 忠实性检测 + 自动剔除不可信句子。
 
         默认关闭（ENABLE_FAITHFULNESS=false）。
-        开启后：检测 → 剔除 unsupported claim → 返回安全答案。
+        开启后：检测 → 三级漏斗 → 返回安全答案。
         结果同时存入 self._last_faithfulness 供外部读取。
+
+        LangGraph 迁移点：
+          当 rewrite 触发频率 > 10% 或需要并行多源验证时，
+          将 check_faithfulness + rewrite_claim 拆为独立 LangGraph 节点，
+          _evaluate() 改为返回 FaithfulnessResult 而非直接改写 answer。
         """
         from backend.rag.tracer import trace_collector
         self._last_faithfulness = None
