@@ -101,10 +101,10 @@ def _strip_think(text: str) -> str:
     return text.strip()
 
 
-_last_tokens = ""
+_last_tokens = {}
 
 def _record_tokens(result):
-    """从 LLM 返回值提取 token 记录到全局变量，供 tracer 读取"""
+    """从 LLM 返回值提取 token，存为 dict 供 tracer 读取"""
     global _last_tokens
     try:
         tu = {}
@@ -116,9 +116,9 @@ def _record_tokens(result):
         c = tu.get("completion_tokens", 0)
         t = tu.get("total_tokens", p + c)
         if t:
-            _last_tokens = f"P{p}|C{c}|T{t}"
+            _last_tokens = {"prompt_tokens": p, "completion_tokens": c, "total_tokens": t}
     except Exception:
-        pass
+        _last_tokens = {}
 
 def _wrap_result(result):
     """递归剥离 LLM 返回值中的 <think> 块，兼容 str / AIMessage / list / dict"""

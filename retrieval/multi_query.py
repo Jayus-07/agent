@@ -79,13 +79,13 @@ QUERY_REWRITE_PROMPT = """将用户问题改写为 {count} 个语义等价但表
 def _rewrite(question: str) -> list[str]:
     try:
         from retrieval.tracer import trace_collector
-        trace_collector._start("LLM改写")
+        trace_collector._start("query_rewrite")
         from llm.llm_factory import llm
         from langchain_core.messages import HumanMessage
 
         prompt = QUERY_REWRITE_PROMPT.format(count=MULTI_QUERY_COUNT, question=question)
         result = llm.invoke([HumanMessage(content=prompt)])
-        llm_tokens = trace_collector._extract_tokens(result)
+        tokens = trace_collector._parse_tokens(result)
         text = result.content if hasattr(result, "content") else str(result)
 
         lines = [re.sub(r"^\d+[\.\)、]\s*", "", l.strip())
@@ -97,12 +97,12 @@ def _rewrite(question: str) -> list[str]:
                 seen.add(line)
                 cleaned.append(line)
 
-        trace_collector._end("LLM改写", hits=f"{len(cleaned)}变体",
-                             metrics={"variants": len(cleaned), "tokens": llm_tokens})
+        trace_collector._end("query_rewrite", "LLM改写",
+                             metrics={**tokens, "variants": len(cleaned)})
         logger.info(f"[MultiQuery] Rewrite: {question[:40]} → {len(cleaned)} 变体")
         return cleaned
     except Exception as e:
-        trace_collector._end("LLM改写", hits="失败", metrics={"variants": 0})
+        trace_collector._end("query_rewrite", "LLM改写", metrics={"variants": 0}, status="error")
         logger.warning(f"[MultiQuery] Rewrite 失败: {e}，回退")
         return [question]
 

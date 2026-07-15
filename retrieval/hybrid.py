@@ -7,7 +7,7 @@ def _fallback_id(doc) -> str:
 
 def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60, metadata_filter=None):
     from retrieval.tracer import trace_collector
-    trace_collector._start("混合检索")
+    trace_collector._start("hybrid_retrieval")
 
     vector_docs = vector_retriever.retrieve(query, k=k, doc_ids=doc_ids, metadata_filter=metadata_filter)
 
@@ -34,8 +34,10 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
 
     merged = [doc_dict[cid] for cid, _ in sorted_cids[:k]]
 
-    trace_collector._end("混合检索", hits=f"{len(merged)}merged",
-                         metrics={"vector": len(vector_docs), "bm25": len(bm25_docs), "merge": len(merged)})
+    trace_collector._end("hybrid_retrieval", "混合检索",
+                         metrics={"vector_hits": len(vector_docs),
+                                   "bm25_hits": len(bm25_docs),
+                                   "merged_hits": len(merged)})
     return merged
 
 

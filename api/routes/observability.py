@@ -52,18 +52,19 @@ async def list_rag_traces(limit: int = Query(50, ge=1, le=200)):
                 "id": t.id,
                 "timestamp": t.timestamp,
                 "session_id": t.session_id,
-                "model": t.model,
+                "model": {"name": t.model, "provider": t.provider},
                 "question": t.question,
                 "answer_preview": t.answer_preview,
                 "answer_len": t.answer_len,
-                "total_ms": t.total_ms,
                 "duration_ms": t.duration_ms,
+                "usage": t.usage,
                 "steps": [{
-                    "name": s.name,
-                    **({"detail": s.detail} if s.detail else {}),
-                    **({"hits": s.hits} if s.hits else {}),
+                    "id": s.id,
+                    "label": s.label,
                     "duration_ms": s.duration_ms,
-                    **({"metrics": s.metrics} if s.metrics else {}),
+                    "duration_ratio": s.duration_ratio,
+                    "status": s.status,
+                    "metrics": s.metrics,
                 } for s in t.steps],
             }
             for t in traces
@@ -80,14 +81,12 @@ async def get_rag_trace(trace_id: str):
         raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在")
     return {
         "id": t.id, "timestamp": t.timestamp, "session_id": t.session_id,
-        "model": t.model, "question": t.question, "answer_preview": t.answer_preview,
-        "answer_len": t.answer_len, "total_ms": t.total_ms, "duration_ms": t.duration_ms,
+        "model": {"name": t.model, "provider": t.provider},
+        "question": t.question, "answer_preview": t.answer_preview,
+        "answer_len": t.answer_len, "duration_ms": t.duration_ms, "usage": t.usage,
         "steps": [{
-            "name": s.name,
-            **({"detail": s.detail} if s.detail else {}),
-            **({"hits": s.hits} if s.hits else {}),
-            "duration_ms": s.duration_ms,
-            **({"metrics": s.metrics} if s.metrics else {}),
+            "id": s.id, "label": s.label, "duration_ms": s.duration_ms,
+            "duration_ratio": s.duration_ratio, "status": s.status, "metrics": s.metrics,
         } for s in t.steps],
     }
 

@@ -78,7 +78,7 @@ class ChunkLevelRetriever(BaseRetriever):
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> List[Document]:
         from retrieval.tracer import trace_collector
-        trace_collector._start("检索")
+        trace_collector._start("retrieval")
         # — Stage 1: Doc 级检索 —
         # Check for request-scoped metadata_filter (set by RAGPipeline.search() via contextvars)
         request_metadata_filter = {}
@@ -158,8 +158,8 @@ class ChunkLevelRetriever(BaseRetriever):
             return []
 
         logger.info(f"ChunkLevelRetriever Stage 2: 召回 {len(all_docs)} 个 chunks")
-        trace_collector._end("检索", hits=f"{len(all_docs)}chk",
-                             metrics={"chunks": len(all_docs)})
+        trace_collector._end("retrieval", "检索",
+                             metrics={"retrieved_chunks": len(all_docs)})
         return all_docs[: self.k]
 
     def _fallback_to_doc_fulltext(self, query: str, doc_ids: list | None,

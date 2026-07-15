@@ -146,11 +146,10 @@ class RAGChain:
             try:
                 r = _stuff.invoke(inp)
                 from llm.proxy import _last_tokens
-                trace_collector._end("LLM生成", hits=_last_tokens or "",
-                                     metrics={"tokens": _last_tokens or ""})
+                trace_collector._end("llm_generate", "LLM生成", metrics=dict(_last_tokens))
                 return r
             except Exception:
-                trace_collector._end("LLM生成", hits="fail")
+                trace_collector._end("llm_generate", "LLM生成", status="error")
                 raise
         stuff_chain = RunnableLambda(_index_docs) | RunnableLambda(_timed_stuff)
 
@@ -200,19 +199,18 @@ class RAGChain:
 
         # MultiQuery 步骤（chain 调用前，独立捕获）
         logger.info(f"[TRACE] ask() called: {question[:40]} (session={session_id})")
-        trace_collector._start("MultiQuery")
+        trace_collector._start("mq_check")
         mq = self._retriever_info()
         mode = "auto"
         try:
             from config import MULTI_QUERY_MODE as _m; mode = _m
         except: pass
-        mq_label = "触发" if mq.get("triggered") else "跳过"
-        mq_detail = f"{mq_label} (mode={mode}, {mq.get('reason','?')})"
-        mq_hits = f"{mq.get('variants',1)}变体→{mq.get('filtered_count',1)}有效"
-        trace_collector._end("MultiQuery", detail=mq_detail, hits=mq_hits,
+        trace_collector._end("mq_check", "MultiQuery",
                              metrics={"triggered": mq.get("triggered", False),
+                                       "mode": mode,
                                        "variants": mq.get("variants", 1),
-                                       "filtered": mq.get("filtered_count", 1)})
+                                       "filtered": mq.get("filtered_count", 1)},
+                             status="skipped" if not mq.get("triggered") else "success")
 
         # chain.invoke
         t_chain = _time.time()
@@ -233,8 +231,9 @@ class RAGChain:
             answer, verified_docs = _verify_support(answer, context_docs, question)
         else:
             verified_docs = []
-        trace_collector._end("Citation", hits=f"{len(verified_docs)}/{len(context_docs)}",
-                             metrics={"verified": len(verified_docs), "total": len(context_docs)})
+        trace_collector._end("citation", "Citation",
+                             metrics={"verified_citations": len(verified_docs),
+                                       "total_citations": len(context_docs)})
         references = _format_references(verified_docs, answer)
         if references:
             answer = answer + references
@@ -246,7 +245,11 @@ class RAGChain:
         # 完成 Trace
         total_ms = int((_time.time()-t_total)*1000)
         from config import LLM_MODEL
-        trace_collector.finish(trace, answer, total_ms, LLM_MODEL)
+        from llm.factory import get_llm_factory
+        provider = ""
+        try: provider = get_llm_factory()._get_provider(LLM_MODEL)
+        except: pass
+        trace_collector.finish(trace, answer, total_ms, LLM_MODEL, provider)
 
         return answer
 
