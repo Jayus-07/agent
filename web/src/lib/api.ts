@@ -144,6 +144,24 @@ export async function getLLMBalance(provider?: string): Promise<LLMBalance> {
   return data
 }
 
+/** GET /llm/multiquery — 获取 MultiQuery 模式 */
+export async function getMultiQueryMode(): Promise<{ mode: string }> {
+  const res = await fetch(`${API_BASE}/llm/multiquery`)
+  return res.json()
+}
+
+/** POST /llm/multiquery — 设置 MultiQuery 模式 */
+export async function setMultiQueryMode(mode: string): Promise<{ ok: boolean; mode: string }> {
+  const res = await fetch(`${API_BASE}/llm/multiquery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`)
+  return data
+}
+
 // ========================================
 // 会话记忆 API
 // ========================================

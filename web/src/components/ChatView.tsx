@@ -8,6 +8,7 @@ import ChatInput from './ChatInput'
 import EmptyState from './EmptyState'
 import StatusBar from './StatusBar'
 import LLMSwitcher from './LLMSwitcher'
+import MultiQueryToggle from './MultiQueryToggle'
 import ContextPanel from './chat/ContextPanel'
 import AgentTimeline from './chat/AgentTimeline'
 
@@ -54,8 +55,9 @@ export default function ChatView() {
         </div>
       )}
 
-      {/* Top bar: LLM switcher */}
-      <div className="shrink-0 px-5 py-2.5 flex items-center justify-end">
+      {/* Top bar: LLM switcher + MultiQuery toggle */}
+      <div className="shrink-0 px-5 py-2.5 flex items-center justify-end gap-2">
+        <MultiQueryToggle />
         <LLMSwitcher />
       </div>
 
