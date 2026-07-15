@@ -5,7 +5,7 @@ import Sidebar from '@/components/Sidebar'
 import './globals.css'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
 
   return (
     <html lang="zh-CN">

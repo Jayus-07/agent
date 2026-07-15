@@ -3,7 +3,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 
-import backend.config
+from backend import config
 from backend.shared.logger import logger
 
 
