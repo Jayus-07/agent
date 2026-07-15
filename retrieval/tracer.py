@@ -23,16 +23,20 @@ class TraceStep:
 @dataclass
 class TraceRecord:
     id: str
-    timestamp: str     # ISO8601
-    session_id: str
-    model: str
+    request_id: str = ""     # 关联日志/前端
+    timestamp: str = ""      # ISO8601
+    session_id: str = ""
+    model: str = ""
     provider: str = ""
     question: str = ""
     answer_preview: str = ""
     answer_len: int = 0
-    total_ms: int = 0
     duration_ms: int = 0
-    usage: dict = field(default_factory=dict)       # {prompt_tokens, completion_tokens, total_tokens}
+    total_ms: int = 0        # = duration_ms，兼容
+    usage: dict = field(default_factory=dict)
+    cost: dict = field(default_factory=dict)        # {currency, amount}
+    error: dict = field(default_factory=dict)       # {code, message}
+    metadata: dict = field(default_factory=dict)    # 预留扩展
     steps: List[TraceStep] = field(default_factory=list)
 
 
@@ -45,8 +49,10 @@ class TraceCollector:
         self._timers: dict[str, float] = {}
 
     def start(self, question: str, session_id: str = "default") -> TraceRecord:
+        rid = uuid.uuid4().hex[:12]
         trace = TraceRecord(
-            id=uuid.uuid4().hex[:12],
+            id=rid,
+            request_id=rid,
             timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             session_id=session_id,
             question=question,
