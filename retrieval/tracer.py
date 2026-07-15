@@ -65,6 +65,32 @@ class TraceCollector:
                 self.add_step(self._current_trace, name, detail, hits=hits, elapsed_ms=ms)
             del self._timers[name]
 
+    @staticmethod
+    def _extract_tokens(result) -> str:
+        """从 LLM 返回值提取 token 数：prompt/completion/total"""
+        try:
+            tu = {}
+            if hasattr(result, "response_metadata") and result.response_metadata:
+                tu = result.response_metadata.get("token_usage", {})
+            if not tu and hasattr(result, "usage_metadata") and result.usage_metadata:
+                tu = result.usage_metadata
+            if not tu and hasattr(result, "llm_output") and result.llm_output:
+                tu = result.llm_output.get("token_usage", {})
+            p = tu.get("prompt_tokens", tu.get("input_tokens", 0))
+            c = tu.get("completion_tokens", tu.get("output_tokens", 0))
+            t = tu.get("total_tokens", p + c)
+            if t:
+                return f"P{p}|C{c}|T{t}"
+        except Exception:
+            pass
+        return ""
+        """结束计时，添加步骤"""
+        if name in self._timers:
+            ms = int((time.time() - self._timers[name]) * 1000)
+            if self._current_trace:
+                self.add_step(self._current_trace, name, detail, hits=hits, elapsed_ms=ms)
+            del self._timers[name]
+
     def add_step(self, record: TraceRecord, name: str, detail: str = "", hits: str = "", elapsed_ms: int = 0):
         record.steps.append(TraceStep(name=name, detail=detail, hits=hits, elapsed_ms=elapsed_ms))
 

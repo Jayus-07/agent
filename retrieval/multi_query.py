@@ -85,6 +85,7 @@ def _rewrite(question: str) -> list[str]:
 
         prompt = QUERY_REWRITE_PROMPT.format(count=MULTI_QUERY_COUNT, question=question)
         result = llm.invoke([HumanMessage(content=prompt)])
+        llm_tokens = trace_collector._extract_tokens(result)
         text = result.content if hasattr(result, "content") else str(result)
 
         lines = [re.sub(r"^\d+[\.\)、]\s*", "", l.strip())
@@ -96,7 +97,7 @@ def _rewrite(question: str) -> list[str]:
                 seen.add(line)
                 cleaned.append(line)
 
-        trace_collector._end("LLM改写", hits=f"{len(cleaned)}变体")
+        trace_collector._end("LLM改写", hits=f"{len(cleaned)}变体 | {llm_tokens}")
         logger.info(f"[MultiQuery] Rewrite: {question[:40]} → {len(cleaned)} 变体")
         return cleaned
     except Exception as e:

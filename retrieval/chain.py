@@ -145,13 +145,7 @@ class RAGChain:
             trace_collector._start("LLM生成")
             try:
                 r = _stuff.invoke(inp)
-                # 尝试提取 token 数
-                tokens = ""
-                try:
-                    if hasattr(r, "response_metadata"):
-                        tu = r.response_metadata.get("token_usage", {})
-                        tokens = f"{tu.get('total_tokens','?')}t"
-                except: pass
+                tokens = trace_collector._extract_tokens(r)
                 trace_collector._end("LLM生成", hits=tokens)
                 return r
             except Exception:

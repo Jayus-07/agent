@@ -16,6 +16,7 @@ class RerankCompressor(BaseDocumentCompressor):
 
     def compress_documents(self, documents, query, **kwargs):
         from retrieval.tracer import trace_collector
+        from config import RERANK_SCORE_THRESHOLD
         trace_collector._start("Rerank")
         if not documents:
             trace_collector._end("Rerank", hits="0→0")
@@ -23,7 +24,7 @@ class RerankCompressor(BaseDocumentCompressor):
         in_count = len(documents)
         scored = rerank(query, list(documents), top_k=self.top_k)
         result = [doc for doc, _ in scored]
-        trace_collector._end("Rerank", hits=f"{in_count}→{len(result)}")
+        trace_collector._end("Rerank", hits=f"in{in_count}|out{len(result)}|th{RERANK_SCORE_THRESHOLD}")
         return result
 
 
