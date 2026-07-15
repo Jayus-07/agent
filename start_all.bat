@@ -48,14 +48,14 @@ echo.
 echo [2/3] 启动后端 FastAPI (端口 8000)...
 echo        浏览器打开: http://localhost:8000/docs
 
-start "Agent-Backend-8000" /D "%ROOT%" cmd /k ".venv\Scripts\python.exe -m api.server"
+start "Agent-Backend-8000" /D "%ROOT%\backend" cmd /k "..\.venv\Scripts\python.exe -m uvicorn app.server:app --port 8000"
 
 :: ---- 启动前端 ----
 echo.
 echo [3/3] 启动前端 Next.js (端口 3000)...
 echo        浏览器打开: http://localhost:3000
 
-start "Agent-Frontend-3000" /D "%ROOT%\web" cmd /k "npm run dev"
+start "Agent-Frontend-3000" /D "%ROOT%\frontend" cmd /k "npm run dev"
 
 :: ---- 完成 ----
 echo.
