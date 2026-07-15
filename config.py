@@ -279,6 +279,9 @@ RERANK_TIMEOUT = int(os.getenv("RERANK_TIMEOUT", "15"))
 # retrieval/pipeline.py 用作软超时告警阈值（elapsed > 0.8 * OVERALL_REQUEST_TIMEOUT 触发告警）
 OVERALL_REQUEST_TIMEOUT = int(os.getenv("OVERALL_REQUEST_TIMEOUT", "60"))
 
+# 记忆模块开关（默认关闭，PostgreSQL 事件循环待修复后开启）
+ENABLE_MEMORY = os.getenv("ENABLE_MEMORY", "false").lower() == "true"
+
 # =====================================================
 # Plan Critique 配置
 # =====================================================

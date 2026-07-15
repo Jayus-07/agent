@@ -21,6 +21,7 @@ from config import (
     DOCS_DIRECTORY,
     DOC_REGISTRY_PATH,
     ENABLE_INCREMENTAL_INDEXING,
+    ENABLE_MEMORY,
     OVERALL_REQUEST_TIMEOUT,
     ENABLE_RESOURCE_MONITOR,
 )
@@ -264,14 +265,18 @@ class RAGPipeline:
         self.person_index = self._build_person_index()
 
         from retrieval.chain import RAGChain
-        from memory import memory_manager
+        if ENABLE_MEMORY:
+            from memory import memory_manager
+            _mem = memory_manager
+        else:
+            _mem = None
         self.lc_chain = RAGChain(
             doc_db=self.doc_db,
             vectordb=self.vectordb,
             chunk_retriever=self.chunk_retriever,
             bm25=self.bm25,
             person_index=self.person_index,
-            memory_manager=memory_manager,
+            memory_manager=_mem,
         )
 
     # =====================================================
