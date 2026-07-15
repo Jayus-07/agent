@@ -217,7 +217,7 @@ class RAGChain:
         result = self.chain.invoke({"input": question, "chat_history": chat_history})
         chain_ms = int((_time.time()-t_chain)*1000)
         # 如果 callback 没捕获到（某些 LLM/Rerank 不触发回调），补充兜底
-        if not trace.steps or trace.steps[-1].name in ("MultiQuery",):
+        if not trace.steps or trace.steps[-1].id in ("mq_check",):
             trace_collector.add_step(trace, "检索+LLM", hit=f"{len(result.get('context',[]))}chk",
                                      elapsed_ms=chain_ms)
 
