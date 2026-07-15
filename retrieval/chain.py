@@ -242,12 +242,11 @@ class RAGChain:
         return answer
 
 def _strip_think_blocks(text: str) -> str:
-    """剥离 <think>...</think> 推理块（MiniMax M3 / DeepSeek R1 等会输出）"""
+    """剥离 <think>...</think> 推理块。未闭合标签保留后续内容，避免误删。"""
     import re
-    # 去除 <think>...</think> 完整块（含换行）
-    cleaned = re.sub(r'<think>[\s\S]*?</think>\s*', '', text)
-    # 去除只有开头没有结尾的 <think>（异常截断）
-    cleaned = re.sub(r'<think>[\s\S]*', '', cleaned)
+    cleaned = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL)
+    if '<think>' in cleaned and '</think>' not in cleaned:
+        cleaned = re.sub(r'<think>.*', '', cleaned, flags=re.DOTALL)
     return cleaned.strip()
 
 
@@ -275,8 +274,8 @@ def _verify_support(answer: str, docs: list, question: str = "") -> tuple:
     )
 
     if not verified:
-        logger.warning("[CitationFilter] 所有 chunk 未通过验证，回退")
-        return answer, docs
+        logger.warning("[CitationFilter] 所有 chunk 未通过验证，清空引用")
+        return answer, []
 
     # —— 阶段 2: 完成（企业做法：Prompt 强制 LLM 标注引用 [1][2]，不做事后猜）——
     return answer, verified
@@ -369,10 +368,11 @@ def _extract_sources(docs: list, answer: str = "") -> list[dict]:
             doc_type = doc.metadata.get("doc_type", "")
             score = doc.metadata.get("score", doc.metadata.get("rerank_score", doc.metadata.get("support_score")))
             seen[fname] = {
+                "index": idx,
                 "filename": fname,
                 "doc_type": doc_type,
                 "type_label": type_label_map.get(doc_type, doc_type),
                 "score": round(float(score), 2) if score is not None else None,
             }
 
-    return sorted(seen.values(), key=lambda s: s["filename"])
+    return sorted(seen.values(), key=lambda s: s.get("index", 0))
