@@ -8,12 +8,12 @@ import time
 from pathlib import Path
 
 from langchain_huggingface import HuggingFaceEmbeddings
-from backend.rag.knowledge_store import ChromaKnowledgeStore
+from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
 
 from backend.rag.preprocessing.metadata import build_all_metadata_async
 from backend.rag.preprocessing.loader import load_documents_from_directory
 from backend.rag.base import CustomRetriever
-from backend.rag.bm25_store import BM25Store
+from backend.rag.retrieval.bm25_store import BM25Store
 from backend.rag.chain import RAGChain
 from backend.config import (
     EMBEDDING_MODEL_PATH,
@@ -146,8 +146,8 @@ class RAGPipeline:
 
     def _init_vector_dbs_incremental(self) -> bool:
         """增量索引向量库。成功返回 True，回退全量重建返回 False。"""
-        from backend.rag.doc_registry import DocumentRegistry
-        from backend.rag.indexer import IncrementalIndexer
+        from backend.rag.indexing.doc_registry import DocumentRegistry
+        from backend.rag.indexing.indexer import IncrementalIndexer
 
         logger.info("启用增量索引模式")
 
@@ -205,8 +205,8 @@ class RAGPipeline:
 
     def _sync_registry_after_full_rebuild(self):
         """全量重建后将所有文档信息写入 registry，下次启动走增量。"""
-        from backend.rag.doc_registry import DocumentRegistry
-        from backend.rag.indexer import IncrementalIndexer
+        from backend.rag.indexing.doc_registry import DocumentRegistry
+        from backend.rag.indexing.indexer import IncrementalIndexer
 
         try:
             registry = DocumentRegistry(DOC_REGISTRY_PATH)

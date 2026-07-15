@@ -35,7 +35,7 @@ class MQSwitchRequest(BaseModel):
 
 @router.get("/multiquery")
 async def get_multiquery_mode():
-    from backend.rag.multi_query import get_mq_mode
+    from backend.rag.retrieval.multi_query import get_mq_mode
     return {"mode": get_mq_mode()}
 
 
@@ -44,7 +44,7 @@ async def set_multiquery_mode(req: MQSwitchRequest):
     if req.mode not in ("auto", "on", "always", "off"):
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="mode 必须为 auto/on/off")
-    from backend.rag.multi_query import set_mq_mode
+    from backend.rag.retrieval.multi_query import set_mq_mode
     set_mq_mode(req.mode)
     return {"ok": True, "mode": req.mode}
 

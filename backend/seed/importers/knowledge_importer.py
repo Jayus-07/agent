@@ -49,7 +49,7 @@ class KnowledgeDocImporter:
         chunk_size: int = 500,
         chunk_overlap: int = 50,
     ):
-        from backend.rag.knowledge_store import ChromaKnowledgeStore
+        from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
         from langchain_huggingface import HuggingFaceEmbeddings
         from backend.config import (
             EMBEDDING_MODEL_PATH, CHROMA_PATH, DOC_DB_PATH,
@@ -74,7 +74,7 @@ class KnowledgeDocImporter:
 
     def _connect_or_create(self, path: str, db_type: str):
         """连接到已有向量库，不存在则创建空库。"""
-        from backend.rag.knowledge_store import ChromaKnowledgeStore
+        from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
 
         if os.path.exists(path) and os.path.isdir(path):
             logger.info(f"连接已有 {db_type} 级向量库: {path}")

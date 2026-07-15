@@ -101,7 +101,7 @@ def _get_full_retriever(pipeline):
     if _full_retriever is not None:
         return _full_retriever
 
-    from backend.rag.retrievers import AdaptiveRetriever
+    from backend.rag.retrieval.retrievers import AdaptiveRetriever
     from backend.rag.reranker import RerankCompressor
     from langchain_classic.retrievers import ContextualCompressionRetriever
     from backend.config import HYBRID_SEARCH_K

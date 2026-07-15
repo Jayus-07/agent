@@ -17,7 +17,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.runnables import RunnableLambda
 
 from backend.llm.llm_factory import llm
-from backend.rag.retrievers import ChunkLevelRetriever, AdaptiveRetriever
+from backend.rag.retrieval.retrievers import ChunkLevelRetriever, AdaptiveRetriever
 from backend.rag.reranker import RerankCompressor
 from backend.config import (
     ENABLE_HISTORY_AWARE_RETRIEVAL,
@@ -156,7 +156,7 @@ class RAGChain:
         retriever = self.chunk_retriever_base
 
         # MultiQuery: auto(自动判断复杂问题)/on(强制)/off(关闭)
-        from backend.rag.multi_query import MultiQueryRetriever
+        from backend.rag.retrieval.multi_query import MultiQueryRetriever
         retriever = MultiQueryRetriever(base_retriever=retriever)
         self._mq_retriever = retriever  # 供 tracer 读取 MultiQuery 状态
         logger.info("retriever: " + str(retriever))
@@ -221,7 +221,7 @@ class RAGChain:
         trace_collector._start("mq_check")
         mq = getattr(self, '_mq_retriever', None)
         triggered = mq._last_triggered if mq else False
-        from backend.rag.multi_query import get_mq_mode
+        from backend.rag.retrieval.multi_query import get_mq_mode
         trace_collector._end("mq_check", "MultiQuery",
                              metrics={"triggered": triggered, "mode": get_mq_mode()},
                              status="skipped" if not triggered else "success")

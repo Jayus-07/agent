@@ -43,7 +43,7 @@ class RAGMCPServer(MCPServer):
             return {"answer": answer}
 
         if tool_name == "list_documents":
-            from backend.rag.doc_registry import DocumentRegistry
+            from backend.rag.indexing.doc_registry import DocumentRegistry
             from backend.config import DOC_REGISTRY_PATH
             registry = DocumentRegistry(DOC_REGISTRY_PATH)
             keyword = params.get("keyword", "")

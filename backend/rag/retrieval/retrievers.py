@@ -12,7 +12,7 @@ from collections import Counter
 
 from langchain_core.callbacks.manager import CallbackManagerForRetrieverRun
 
-from backend.rag.hybrid import hybrid_retrieve
+from backend.rag.retrieval.hybrid import hybrid_retrieve
 from backend.rag.preprocessing.entity import extract_person_names
 from backend.rag.preprocessing.keyword import extract_chunk_keywords
 from backend.config import (

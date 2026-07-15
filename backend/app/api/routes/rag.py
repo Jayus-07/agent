@@ -4,7 +4,7 @@ import os, uuid
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline
-from backend.rag.doc_registry import DocumentRegistry
+from backend.rag.indexing.doc_registry import DocumentRegistry
 from backend.config import DOC_REGISTRY_PATH, CHROMA_PATH, EMBEDDING_MODEL_PATH
 from backend.shared.logger import logger
 
@@ -143,8 +143,8 @@ async def get_document(doc_id: str):
 async def reindex_document(doc_id: str, force: bool = False):
     """单文件重新索引 — 删除旧向量后重新加载/分块/Embedding/写入"""
     from backend.config import DOCS_DIRECTORY
-    from backend.rag.indexer import IncrementalIndexer
-    from backend.rag.knowledge_store import ChromaKnowledgeStore
+    from backend.rag.indexing.indexer import IncrementalIndexer
+    from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
     from langchain_huggingface import HuggingFaceEmbeddings
 
     try:
@@ -178,9 +178,9 @@ async def reindex_document(doc_id: str, force: bool = False):
 async def upload_document(file: UploadFile = File(...)):
     """上传文档 → 保存到 data/docs/ → 触发增量索引"""
     from backend.config import DOCS_DIRECTORY
-    from backend.rag.indexer import IncrementalIndexer
-    from backend.rag.doc_registry import DocumentRegistry as DR
-    from backend.rag.knowledge_store import ChromaKnowledgeStore
+    from backend.rag.indexing.indexer import IncrementalIndexer
+    from backend.rag.indexing.doc_registry import DocumentRegistry as DR
+    from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
     from langchain_huggingface import HuggingFaceEmbeddings
 
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
@@ -223,7 +223,7 @@ async def delete_document(doc_id: str):
         reg.mark_deleted(doc["file_path"])
         # 清理 Chroma 中的向量
         try:
-            from backend.rag.knowledge_store import ChromaKnowledgeStore
+            from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
             from langchain_huggingface import HuggingFaceEmbeddings
             embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
             store = ChromaKnowledgeStore(persist_directory=CHROMA_PATH, embedding_function=embeddings)
@@ -252,7 +252,7 @@ async def get_chunks(doc_id: str):
         chunks = []
         try:
             from langchain_huggingface import HuggingFaceEmbeddings
-            from backend.rag.knowledge_store import ChromaKnowledgeStore
+            from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
             embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
             store = ChromaKnowledgeStore(persist_directory=CHROMA_PATH, embedding_function=embeddings)
             # 用公开 API get(where=...) 按 doc_id 获取所有 chunks
