@@ -59,8 +59,8 @@ GENERAL_CHUNK_OVERLAP = int(os.getenv("GENERAL_CHUNK_OVERLAP", "100"))
 # ====================================
 DEFAULT_KB_ID = os.getenv("DEFAULT_KB_ID", "default")
 
-BM25_SEARCH_K = int(os.getenv("BM25_SEARCH_K", "20"))
-HYBRID_SEARCH_K = int(os.getenv("HYBRID_SEARCH_K", "20"))
+BM25_SEARCH_K = int(os.getenv("BM25_SEARCH_K", "10"))
+HYBRID_SEARCH_K = int(os.getenv("HYBRID_SEARCH_K", "8"))
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "8"))
 RERANK_SCORE_THRESHOLD = float(os.getenv("RERANK_SCORE_THRESHOLD", "0.3"))
 
