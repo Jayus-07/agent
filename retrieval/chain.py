@@ -177,7 +177,7 @@ class RAGChain:
     # =================================================
 
     def ask(self, question: str, session_id: str = "default") -> str:
-        from retrieval.tracer import trace_collector, TraceCallback
+        from retrieval.tracer import trace_collector
         import time as _time
 
         t_total = _time.time()
@@ -189,7 +189,7 @@ class RAGChain:
         chat_history = list(l1.messages) if l1 else []
 
         # MultiQuery 步骤（chain 调用前，独立捕获）
-        t_mq = _time.time()
+        trace_collector._start("MultiQuery")
         mq = self._retriever_info()
         mode = "auto"
         try:
@@ -198,17 +198,11 @@ class RAGChain:
         mq_label = "触发" if mq.get("triggered") else "跳过"
         mq_detail = f"{mq_label} (mode={mode}, {mq.get('reason','?')})"
         mq_hits = f"{mq.get('variants',1)}变体→{mq.get('filtered_count',1)}有效"
-        trace_collector.add_step(trace, "MultiQuery", mq_detail,
-                                 hits=mq_hits,
-                                 elapsed_ms=int((_time.time()-t_mq)*1000))
+        trace_collector._end("MultiQuery", detail=mq_detail, hits=mq_hits)
 
-        # chain.invoke — 后台用 TraceCallback 自动捕获检索+LLM
-        callback = TraceCallback(trace)
+        # chain.invoke
         t_chain = _time.time()
-        result = self.chain.invoke(
-            {"input": question, "chat_history": chat_history},
-            config={"callbacks": [callback]},
-        )
+        result = self.chain.invoke({"input": question, "chat_history": chat_history})
         chain_ms = int((_time.time()-t_chain)*1000)
         # 如果 callback 没捕获到（某些 LLM/Rerank 不触发回调），补充兜底
         if not trace.steps or trace.steps[-1].name in ("MultiQuery",):
@@ -220,14 +214,12 @@ class RAGChain:
         context_docs = result.get("context", [])
 
         # Citation
-        t_cite = _time.time()
+        trace_collector._start("Citation")
         if context_docs:
             answer, verified_docs = _verify_support(answer, context_docs, question)
         else:
             verified_docs = []
-        trace_collector.add_step(trace, "Citation", f"复用Rerank分",
-                                 hits=f"{len(verified_docs)}/{len(context_docs)}",
-                                 elapsed_ms=int((_time.time()-t_cite)*1000))
+        trace_collector._end("Citation", hits=f"{len(verified_docs)}/{len(context_docs)}")
         references = _format_references(verified_docs, answer)
         if references:
             answer = answer + references

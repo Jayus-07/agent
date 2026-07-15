@@ -15,10 +15,16 @@ class RerankCompressor(BaseDocumentCompressor):
     top_k: int = RERANK_TOP_K
 
     def compress_documents(self, documents, query, **kwargs):
+        from retrieval.tracer import trace_collector
+        trace_collector._start("Rerank")
         if not documents:
+            trace_collector._end("Rerank", hits="0→0")
             return []
+        in_count = len(documents)
         scored = rerank(query, list(documents), top_k=self.top_k)
-        return [doc for doc, _ in scored]
+        result = [doc for doc, _ in scored]
+        trace_collector._end("Rerank", hits=f"{in_count}→{len(result)}")
+        return result
 
 
 def rerank(
