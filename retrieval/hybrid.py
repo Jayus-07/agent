@@ -9,9 +9,13 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
     from retrieval.tracer import trace_collector
     trace_collector._start("hybrid_retrieval")
 
-    vector_docs = vector_retriever.retrieve(query, k=k, doc_ids=doc_ids, metadata_filter=metadata_filter)
-
-    bm25_docs = bm25_retriever.invoke(query)
+    # 并行执行：Vector 和 BM25 互不依赖
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        vf = ex.submit(vector_retriever.retrieve, query, k=k, doc_ids=doc_ids, metadata_filter=metadata_filter)
+        bf = ex.submit(bm25_retriever.invoke, query)
+        vector_docs = vf.result()
+        bm25_docs = bf.result()
 
     if doc_ids:
         bm25_docs = [d for d in bm25_docs if d.metadata.get("doc_id") in doc_ids]

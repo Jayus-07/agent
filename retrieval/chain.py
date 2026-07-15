@@ -124,9 +124,9 @@ class RAGChain:
 
           ChunkLevelRetriever → MultiQuery → AdaptiveRetriever → Rerank → HistoryAware → RetrievalChain
 
-        AdaptiveRetriever 在 MultiQuery 合并结果后分析 chunk 的文档分布:
-          - 集中在 1-2 个文档 → 补全文档全文
-          - 分散在多个文档 → 只给 chunks
+        AdaptiveRetriever 在 MultiQuery 合并结果后分析文档分布:
+          - Cluster 检测 → Context Expansion（邻近 Chunk）
+          - 分散分布 → 跳过 Expansion
         """
         # Citation Filter: 注入文档序号 + 自定义文档格式，使 LLM 可内联引用 [1][2]
         def _index_docs(input_dict):

@@ -207,18 +207,18 @@ class ChunkLevelRetriever(BaseRetriever):
 # =====================================================
 
 class AdaptiveRetriever(BaseRetriever):
-    """两阶段自适应检索器：chunk 检索 → 分析文档分布 → 按需补全文档全文
+    """自适应检索器：chunk 检索 → Cluster 检测 → Context Expansion
 
-    Stage 1: 通过 base_retriever 做 chunk 级检索
-    Stage 2: 检查 top chunks 的 doc_id 分布
-            如果集中在 ≤ max_cluster_docs 个文档中 → 补全这些文档的全文
-            如果分散 → 只返回 chunks，避免上下文污染
+    Stage 1: base_retriever 做 chunk 级检索
+    Stage 2: 统计 doc_id 分布，检测命中是否集中在少数文档
+            如果集中在 ≤ max_cluster_docs 个文档 → Context Expansion（邻近 Chunk / 同级 Heading Chunk）
+            如果分散 → 仅用 chunks，避免上下文污染
     """
 
-    base_retriever: BaseRetriever = Field(description="chunk 级检索器（通常含 MultiQuery 包装）")
-    doc_db: object = Field(description="文档级 ChromaDB，用于按 doc_id 拉取全文")
+    base_retriever: BaseRetriever = Field(description="chunk 级检索器")
+    doc_db: object = Field(description="文档级 ChromaDB，用于 Context Expansion")
     cluster_threshold: float = Field(default=ADAPTIVE_CLUSTER_THRESHOLD, description="单文档占比阈值")
-    max_cluster_docs: int = Field(default=ADAPTIVE_MAX_CLUSTER_DOCS, description="触发补全的最大文档数")
+    max_cluster_docs: int = Field(default=ADAPTIVE_MAX_CLUSTER_DOCS, description="触发 Expansion 的最大文档数")
 
     class Config:
         arbitrary_types_allowed = True
@@ -245,7 +245,7 @@ class AdaptiveRetriever(BaseRetriever):
         ]
 
         if clustered and len(clustered) <= self.max_cluster_docs:
-            logger.info(f"AdaptiveRetriever: 分布集中 (docs={clustered}, {len(clustered)}/{len(doc_counter)}) → 补全文档全文")
+            logger.info(f"AdaptiveRetriever: Cluster 检测 (docs={clustered}, {len(clustered)}/{len(doc_counter)}) → Context Expansion")
             try:
                 results = self.doc_db.get(where={"doc_id": {"$in": clustered}})
                 full_docs = [
@@ -257,5 +257,5 @@ class AdaptiveRetriever(BaseRetriever):
             except Exception as e:
                 logger.error(f"AdaptiveRetriever: 文档补全失败: {e}")
 
-        logger.info(f"AdaptiveRetriever: 分布分散 ({len(doc_counter)} 个文档) → 仅用 chunks")
+        logger.info(f"AdaptiveRetriever: 分散分布 ({len(doc_counter)} docs) → 跳过 Expansion")
         return chunks
