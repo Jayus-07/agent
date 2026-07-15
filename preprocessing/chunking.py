@@ -30,34 +30,58 @@ from utils.logger import logger
 # ============================================================
 
 # Matches: "4.2.1 标题", "一、标题", "第X章 标题", "1) 标题", "1. 标题"
-_SECTION_PATTERN = re.compile(
+# Markdown 标题 (## xxx, ### xxx)
+_MD_HEADER = re.compile(r'^(#{1,3})\s+(.+)$', re.MULTILINE)
+
+# 中文编号标题 (一、xxx, 1. xxx, 第X章 xxx)
+_CN_SECTION = re.compile(
     r'(?:^|\n)\s*'
     r'('
-    r'\d+(?:\.\d+)*\s+'           # 4.2.1 style
-    r'|第[一二三四五六七八九十百千\d]+[章节条]\s+'  # 第X章/第X条
-    r'|[一二三四五六七八九十]+、\s*'               # 一、二、
-    r'|\d+[\)、.]\s*'                             # 1) 1. 1、
+    r'\d+(?:\.\d+)*\s+'                              # 4.2.1 style
+    r'|第[一二三四五六七八九十百千\d]+[章节条]\s+'   # 第X章/第X条
+    r'|[一二三四五六七八九十]+、\s*'                  # 一、二、
+    r'|\d+[\)、.]\s*'                                 # 1) 1. 1、
     r')'
-    r'([^\n]+)',                   # title: rest of line
+    r'([^\n]+)',
     re.MULTILINE,
 )
 
 
 def _find_sections(text: str) -> List[dict]:
-    """Find all section headers in text. Returns list of {start, end, id, title}."""
+    """Find all section headers — Markdown #/##/### + Chinese numbered headers."""
     sections = []
-    for m in _SECTION_PATTERN.finditer(text):
-        sid = (m.group(1) + m.group(2)).strip()
-        # Heuristic: if the match is very long (>80 chars), it's likely not a header
+
+    # 1) Markdown headers (priority: they often wrap Chinese numbers like "## 一、xxx")
+    for m in _MD_HEADER.finditer(text):
+        level = len(m.group(1))  # 1=h1, 2=h2, 3=h3
+        title = m.group(2).strip()
+        sid = title
         if len(sid) > 80:
             continue
         sections.append({
             "start": m.start(),
             "end": m.end(),
-            "id": m.group(1).strip().rstrip("、.。)"),
-            "title": m.group(2).strip(),
+            "id": title.rstrip("、.。)"),
+            "title": title,
             "full": sid,
+            "level": level,
         })
+
+    # 2) Chinese numbered headers (fallback for documents without markdown)
+    if not sections:
+        for m in _CN_SECTION.finditer(text):
+            sid = (m.group(1) + m.group(2)).strip()
+            if len(sid) > 80:
+                continue
+            sections.append({
+                "start": m.start(),
+                "end": m.end(),
+                "id": m.group(1).strip().rstrip("、.。)"),
+                "title": m.group(2).strip(),
+                "full": sid,
+                "level": 2,
+            })
+
     return sections
 
 
