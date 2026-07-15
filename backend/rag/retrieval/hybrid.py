@@ -7,7 +7,7 @@ def _fallback_id(doc) -> str:
 
 def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60, metadata_filter=None):
     from backend.rag.tracer import trace_collector
-    trace_collector._start("hybrid_retrieval")
+    trace_collector.start_step("hybrid_retrieval")
 
     # 并行执行：Vector 和 BM25 互不依赖
     from concurrent.futures import ThreadPoolExecutor
@@ -38,7 +38,7 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
 
     merged = [doc_dict[cid] for cid, _ in sorted_cids[:k]]
 
-    trace_collector._end("hybrid_retrieval", "混合检索",
+    trace_collector.end_step("hybrid_retrieval", "混合检索",
                          metrics={"vector_hits": len(vector_docs),
                                    "bm25_hits": len(bm25_docs),
                                    "merged_hits": len(merged)})

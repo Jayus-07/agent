@@ -151,14 +151,14 @@ class RAGChain:
         )
         def _timed_stuff(inp):
             from backend.rag.tracer import trace_collector
-            trace_collector._start("llm_generate")
+            trace_collector.start_step("llm_generate")
             try:
                 r = _stuff.invoke(inp)
                 from backend.infra.llm.proxy import _last_tokens
-                trace_collector._end("llm_generate", "LLM生成", metrics=dict(_last_tokens))
+                trace_collector.end_step("llm_generate", "LLM生成", metrics=dict(_last_tokens))
                 return r
             except Exception:
-                trace_collector._end("llm_generate", "LLM生成", status="error")
+                trace_collector.end_step("llm_generate", "LLM生成", status="error")
                 raise
         stuff_chain = RunnableLambda(_index_docs) | RunnableLambda(_timed_stuff)
 
@@ -231,11 +231,11 @@ class RAGChain:
         result = self.chain.invoke({"input": question, "chat_history": chat_history})
 
         # mq_check: 从 MultiQueryRetriever 读取实际决策结果（唯一入口）
-        trace_collector._start("mq_check")
+        trace_collector.start_step("mq_check")
         mq = getattr(self, '_mq_retriever', None)
         triggered = mq._last_triggered if mq else False
         from backend.rag.retrieval.multi_query import get_mq_mode
-        trace_collector._end("mq_check", "MultiQuery",
+        trace_collector.end_step("mq_check", "MultiQuery",
                              metrics={"triggered": triggered, "mode": get_mq_mode()},
                              status="skipped" if not triggered else "success")
         return result
@@ -248,12 +248,12 @@ class RAGChain:
         context_docs = result.get("context", [])
 
         # Citation
-        trace_collector._start("citation")
+        trace_collector.start_step("citation")
         if context_docs:
             answer, verified_docs = _verify_support(answer, context_docs, question)
         else:
             verified_docs = []
-        trace_collector._end("citation", "Citation",
+        trace_collector.end_step("citation", "Citation",
                              metrics={"verified_citations": len(verified_docs),
                                       "total_citations": len(context_docs)})
         references = _format_references(verified_docs, answer)
@@ -283,9 +283,9 @@ class RAGChain:
 
         try:
             from backend.rag.guardrails import check_faithfulness
-            trace_collector._start("faithfulness")
+            trace_collector.start_step("faithfulness")
             self._last_faithfulness = check_faithfulness(answer, context_docs)
-            trace_collector._end("faithfulness", "Faithfulness",
+            trace_collector.end_step("faithfulness", "Faithfulness",
                                  metrics={
                                      "score": self._last_faithfulness.score,
                                      "claims": self._last_faithfulness.total_claims,
@@ -303,7 +303,7 @@ class RAGChain:
             return answer
         except Exception as e:
             logger.warning(f"[RAGChain] Faithfulness 检测跳过: {e}")
-            trace_collector._end("faithfulness", "Faithfulness", status="skipped",
+            trace_collector.end_step("faithfulness", "Faithfulness", status="skipped",
                                  metrics={"error": str(e)[:100]})
             return answer
 

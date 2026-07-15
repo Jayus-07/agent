@@ -102,13 +102,13 @@ def _rewrite(question: str) -> list[str]:
     """LLM 改写 → Parse → Normalize → Dedup → Limit"""
     try:
         from backend.rag.tracer import trace_collector
-        trace_collector._start("query_rewrite")
+        trace_collector.start_step("query_rewrite")
         from backend.infra.llm import llm
         from langchain_core.messages import HumanMessage
 
         prompt = QUERY_REWRITE_PROMPT.format(count=MULTI_QUERY_COUNT, question=question)
         result = llm.invoke([HumanMessage(content=prompt)])
-        tokens = trace_collector._parse_tokens(result)
+        tokens = trace_collector.parse_tokens(result)
         raw = result.content if hasattr(result, "content") else str(result)
 
         # Step 1: Parse
@@ -123,12 +123,12 @@ def _rewrite(question: str) -> list[str]:
         # Step 4: Limit
         lines = _limit(lines)
 
-        trace_collector._end("query_rewrite", "LLM改写",
+        trace_collector.end_step("query_rewrite", "LLM改写",
                              metrics={**tokens, "variants": len(lines)})
         logger.info(f"[MultiQuery] Rewrite: {question[:40]} → {len(lines)} 变体")
         return lines
     except Exception as e:
-        trace_collector._end("query_rewrite", "LLM改写", metrics={"variants": 0}, status="error")
+        trace_collector.end_step("query_rewrite", "LLM改写", metrics={"variants": 0}, status="error")
         logger.warning(f"[MultiQuery] Rewrite 失败: {e}，回退")
         return [question]
 
@@ -244,6 +244,10 @@ class MultiQueryRetriever(BaseRetriever):
 
         if not use:
             logger.info(f"[MultiQuery] {reason}: {query[:30]}")
+            from backend.rag.tracer import trace_collector
+            trace_collector.start_step("query_rewrite")
+            trace_collector.end_step("query_rewrite", "LLM改写",
+                                     metrics={"variants": 0}, status="skipped")
             return self.base_retriever.invoke(query)
 
         queries = _rewrite(query)

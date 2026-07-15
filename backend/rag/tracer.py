@@ -1,6 +1,7 @@
-"""Pipeline Trace 收集 — 结构化接口，前端无需字符串解析"""
+"""Pipeline Trace 收集 — 线程安全，结构化接口，前端无需字符串解析"""
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 from collections import deque
@@ -23,8 +24,8 @@ class TraceStep:
 @dataclass
 class TraceRecord:
     id: str
-    request_id: str = ""     # 关联日志/前端
-    timestamp: str = ""      # ISO8601
+    request_id: str = ""
+    timestamp: str = ""
     session_id: str = ""
     model: str = ""
     provider: str = ""
@@ -32,23 +33,29 @@ class TraceRecord:
     answer_preview: str = ""
     answer_len: int = 0
     duration_ms: int = 0
-    total_ms: int = 0        # = duration_ms，兼容
+    total_ms: int = 0
     usage: dict = field(default_factory=dict)
-    cost: dict = field(default_factory=dict)        # {currency, amount}
-    error: dict = field(default_factory=dict)       # {code, message}
-    metadata: dict = field(default_factory=dict)    # 预留扩展
+    cost: dict = field(default_factory=dict)
+    error: dict = field(default_factory=dict)
+    metadata: dict = field(default_factory=dict)
     steps: List[TraceStep] = field(default_factory=list)
 
 
 class TraceCollector:
-    """线程安全的 Tracing 收集器"""
+    """线程安全的 Tracing 收集器。"""
 
     def __init__(self, max_size: int = MAX_TRACES):
+        self._lock = threading.Lock()
         self._records: deque[TraceRecord] = deque(maxlen=max_size)
         self._current_trace: TraceRecord | None = None
         self._timers: dict[str, float] = {}
 
+    # =====================================================
+    # 公共 API
+    # =====================================================
+
     def start(self, question: str, session_id: str = "default") -> TraceRecord:
+        """开始一次新的 trace。线程安全。"""
         rid = uuid.uuid4().hex[:12]
         trace = TraceRecord(
             id=rid,
@@ -57,47 +64,56 @@ class TraceCollector:
             session_id=session_id,
             question=question,
         )
-        self._current_trace = trace
+        with self._lock:
+            self._current_trace = trace
         return trace
 
-    def _start(self, step_id: str):
-        self._timers[step_id] = time.time()
+    def start_step(self, step_id: str):
+        """开始计时一个步骤。"""
+        with self._lock:
+            self._timers[step_id] = time.time()
 
-    def _end(self, step_id: str, label: str = "", metrics: dict = None, status: str = "success"):
-        if step_id in self._timers:
+    def end_step(self, step_id: str, label: str = "", metrics: dict = None,
+                 status: str = "success"):
+        """结束计时并记录步骤。"""
+        with self._lock:
+            if step_id not in self._timers:
+                return
             ms = int((time.time() - self._timers[step_id]) * 1000)
-            if self._current_trace:
-                self.add_step(self._current_trace, step_id, label, duration_ms=ms, metrics=metrics or {}, status=status)
+            trace = self._current_trace
             del self._timers[step_id]
 
-    def add_step(self, record: TraceRecord, step_id: str, label: str, duration_ms: int = 0, metrics: dict = None, status: str = "success"):
-        record.steps.append(TraceStep(id=step_id, label=label, duration_ms=duration_ms, metrics=metrics or {}, status=status))
+        if trace:
+            self.add_step(trace, step_id, label, duration_ms=ms,
+                          metrics=metrics or {}, status=status)
 
-    def finish(self, record: TraceRecord, answer: str, total_ms: int, model: str, provider: str = ""):
+    def add_step(self, record: TraceRecord, step_id: str, label: str,
+                 duration_ms: int = 0, metrics: dict = None, status: str = "success"):
+        record.steps.append(TraceStep(
+            id=step_id, label=label, duration_ms=duration_ms,
+            metrics=metrics or {}, status=status,
+        ))
+
+    def finish(self, record: TraceRecord, answer: str, total_ms: int,
+               model: str, provider: str = ""):
+        """完成 trace 并归档。"""
         record.model = model
         record.provider = provider
-        record.answer_preview = answer[:80]
+        record.answer_preview = answer[:200]
         record.answer_len = len(answer)
         record.total_ms = total_ms
         record.duration_ms = total_ms
-        # 计算 duration_ratio
-        if total_ms > 0:
-            for s in record.steps:
-                s.duration_ratio = round(s.duration_ms / total_ms, 3)
-        # 聚合 usage
-        pt = ct = tt = 0
-        for s in record.steps:
-            m = s.metrics
-            pt += m.get("prompt_tokens", 0)
-            ct += m.get("completion_tokens", 0)
-            tt += m.get("total_tokens", 0)
-        if tt:
-            record.usage = {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": tt}
-        self._records.appendleft(record)
+
+        self._compute_ratios(record, total_ms)
+        self._aggregate_usage(record)
+
+        with self._lock:
+            self._records.appendleft(record)
+            self._current_trace = None
 
     @staticmethod
-    def _parse_tokens(result) -> dict:
-        """从 LLM 返回值提取 token 计数字典"""
+    def parse_tokens(result) -> dict:
+        """从 LLM 返回值提取 token 计数字典。"""
         try:
             tu = {}
             if hasattr(result, "response_metadata") and result.response_metadata:
@@ -115,17 +131,45 @@ class TraceCollector:
             pass
         return {}
 
+    # =====================================================
+    # 查询 API
+    # =====================================================
+
     def list(self, limit: int = 50) -> list:
-        return list(self._records)[:limit]
+        with self._lock:
+            return list(self._records)[:limit]
 
     def get(self, trace_id: str):
-        for r in self._records:
-            if r.id == trace_id:
-                return r
+        with self._lock:
+            for r in self._records:
+                if r.id == trace_id:
+                    return r
         return None
 
     def clear(self):
-        self._records.clear()
+        with self._lock:
+            self._records.clear()
+
+    # =====================================================
+    # 内部
+    # =====================================================
+
+    @staticmethod
+    def _compute_ratios(record: TraceRecord, total_ms: int):
+        if total_ms > 0:
+            for s in record.steps:
+                s.duration_ratio = round(s.duration_ms / total_ms, 3)
+
+    @staticmethod
+    def _aggregate_usage(record: TraceRecord):
+        pt = ct = tt = 0
+        for s in record.steps:
+            m = s.metrics
+            pt += m.get("prompt_tokens", 0)
+            ct += m.get("completion_tokens", 0)
+            tt += m.get("total_tokens", 0)
+        if tt:
+            record.usage = {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": tt}
 
 
 trace_collector = TraceCollector()

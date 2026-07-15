@@ -17,15 +17,15 @@ class RerankCompressor(BaseDocumentCompressor):
     def compress_documents(self, documents, query, **kwargs):
         from backend.rag.tracer import trace_collector
         from backend.config import RERANK_SCORE_THRESHOLD
-        trace_collector._start("rerank")
+        trace_collector.start_step("rerank")
         if not documents:
-            trace_collector._end("rerank", "Rerank",
+            trace_collector.end_step("rerank", "Rerank",
                                  metrics={"input_docs": 0, "output_docs": 0, "threshold": RERANK_SCORE_THRESHOLD})
             return []
         in_count = len(documents)
         scored = rerank(query, list(documents), top_k=self.top_k)
         result = [doc for doc, _ in scored]
-        trace_collector._end("rerank", "Rerank",
+        trace_collector.end_step("rerank", "Rerank",
                              metrics={"input_docs": in_count, "output_docs": len(result), "threshold": RERANK_SCORE_THRESHOLD})
         return result
 
