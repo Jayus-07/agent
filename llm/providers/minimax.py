@@ -29,9 +29,8 @@ def build_minimax(model_name: str) -> object:
         request_timeout=LLM_REQUEST_TIMEOUT,
         api_key=MINIMAX_API_KEY,
         base_url=MINIMAX_API_BASE,
+        model_kwargs={"thinking": {"type": "disabled"}},  # 关闭 MiniMax-M3 强制思考
     )
-    # 注: MiniMax Chat Completions 不支持通过 extra_body/thinking 关闭推理，
-    # thinking 内容由 llm/proxy.py 的 _LLMProxy 全局剥离
 
 
 def get_minimax_balance() -> dict:
