@@ -170,48 +170,55 @@ class RAGChain:
                 llm, retriever, CONTEXTUALIZE_PROMPT
             )
 
-        self.chain = create_retrieval_chain(retriever, stuff_chain)
+        self.retriever = retriever
+        self.stuff_chain = stuff_chain
 
     # =================================================
     # Step C: 公共入口
     # =================================================
 
     def ask(self, question: str, session_id: str = "default") -> str:
-        from retrieval.tracer import trace_collector
+        from retrieval.tracer import trace_collector, TraceCallback
         import time as _time
 
         t_total = _time.time()
         trace = trace_collector.start(question, session_id)
-
         logger.info(f"[RAGChain] 收到问题: {question[:60]}... (session={session_id})")
 
         # Memory
         l1 = self._memory.start_session(session_id, question) if self._memory else None
         chat_history = list(l1.messages) if l1 else []
 
-        # MultiQuery 判断
+        # MultiQuery 步骤（chain 调用前，独立捕获）
         t_mq = _time.time()
-        mq_info = self._retriever_info()  # {triggered, reason, variants, filtered_count}
-        trace_collector.add_step(trace, "MultiQuery", mq_info.get("reason", "?"),
-                                 hits=f"{mq_info.get('filtered_count',1)}变体",
+        mq = self._retriever_info()
+        mode = "auto"
+        try:
+            from config import MULTI_QUERY_MODE as _m; mode = _m
+        except: pass
+        mq_label = "触发" if mq.get("triggered") else "跳过"
+        mq_detail = f"{mq_label} (mode={mode}, {mq.get('reason','?')})"
+        mq_hits = f"{mq.get('variants',1)}变体→{mq.get('filtered_count',1)}有效"
+        trace_collector.add_step(trace, "MultiQuery", mq_detail,
+                                 hits=mq_hits,
                                  elapsed_ms=int((_time.time()-t_mq)*1000))
 
-        # chain.invoke (检索+Rerank+LLM生成)
+        # chain.invoke — 后台用 TraceCallback 自动捕获检索+LLM
+        callback = TraceCallback(trace)
         t_chain = _time.time()
-        result = self.chain.invoke({"input": question, "chat_history": chat_history})
+        result = self.chain.invoke(
+            {"input": question, "chat_history": chat_history},
+            config={"callbacks": [callback]},
+        )
         chain_ms = int((_time.time()-t_chain)*1000)
+        # 如果 callback 没捕获到（某些 LLM/Rerank 不触发回调），补充兜底
+        if not trace.steps or trace.steps[-1].name in ("MultiQuery",):
+            trace_collector.add_step(trace, "检索+LLM", hit=f"{len(result.get('context',[]))}chk",
+                                     elapsed_ms=chain_ms)
 
         answer = result["answer"]
         answer = _strip_think_blocks(answer)
         context_docs = result.get("context", [])
-
-        # 搜参指标
-        doc_count = len(set(d.metadata.get("source_file","") for d in context_docs))
-        chunk_count = len(context_docs)
-        trace_collector.add_step(trace, "检索+Rerank+LLM",
-                                 f"doc检索→{doc_count}篇→Rerank→生成",
-                                 hits=f"{chunk_count}chk",
-                                 elapsed_ms=chain_ms)
 
         # Citation
         t_cite = _time.time()
@@ -220,10 +227,8 @@ class RAGChain:
         else:
             verified_docs = []
         trace_collector.add_step(trace, "Citation", f"复用Rerank分",
-                                 hits=f"{len(verified_docs)}/{chunk_count}",
+                                 hits=f"{len(verified_docs)}/{len(context_docs)}",
                                  elapsed_ms=int((_time.time()-t_cite)*1000))
-
-        # References
         references = _format_references(verified_docs, answer)
         if references:
             answer = answer + references
@@ -240,15 +245,14 @@ class RAGChain:
         return answer
 
     def _retriever_info(self) -> dict:
-        """获取 MultiQuery retriever 的状态信息"""
         try:
             mq = getattr(self, '_mq_retriever', None)
-            if mq and hasattr(mq, '_last_reason'):
+            if mq:
                 return {"triggered": mq._last_triggered, "reason": mq._last_reason,
                         "variants": mq._last_variants, "filtered_count": mq._last_filtered}
         except Exception:
             pass
-        return {"triggered": False, "reason": "?", "variants": 1, "filtered_count": 1}
+        return {"triggered": False, "reason": "简单查询", "variants": 1, "filtered_count": 1}
 
 
 def _strip_think_blocks(text: str) -> str:
