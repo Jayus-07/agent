@@ -197,20 +197,14 @@ class RAGChain:
         l1 = self._memory.start_session(session_id, question) if self._memory else None
         chat_history = list(l1.messages) if l1 else []
 
-        # MultiQuery 步骤（chain 调用前，独立捕获）
+        # MultiQuery 判断（调 need_multi_query() 获取当前查询的正确状态）
         logger.info(f"[TRACE] ask() called: {question[:40]} (session={session_id})")
         trace_collector._start("mq_check")
-        mq = self._retriever_info()  # 读取 MultiQueryRetriever 状态（已在 _get_relevant_documents 中由 need_multi_query 更新）
-        mode = "auto"
-        try:
-            from config import MULTI_QUERY_MODE as _m; mode = _m
-        except: pass
+        from retrieval.multi_query import need_multi_query as _need_mq, get_mq_mode
+        triggered, reason = _need_mq(question)
         trace_collector._end("mq_check", "MultiQuery",
-                             metrics={"triggered": mq.get("triggered", False),
-                                       "mode": mode,
-                                       "variants": mq.get("variants", 1),
-                                       "filtered": mq.get("filtered_count", 1)},
-                             status="skipped" if not mq.get("triggered") else "success")
+                             metrics={"triggered": triggered, "mode": get_mq_mode()},
+                             status="skipped" if not triggered else "success")
 
         # chain.invoke
         t_chain = _time.time()
