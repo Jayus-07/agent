@@ -78,13 +78,13 @@ QUERY_REWRITE_PROMPT = """将用户问题改写为 {count} 个语义等价但表
 
 def _rewrite(question: str) -> list[str]:
     try:
+        from retrieval.tracer import trace_collector
+        trace_collector._start("LLM改写")
         from llm.llm_factory import llm
         from langchain_core.messages import HumanMessage
 
         prompt = QUERY_REWRITE_PROMPT.format(count=MULTI_QUERY_COUNT, question=question)
         result = llm.invoke([HumanMessage(content=prompt)])
-        # Ollama ChatOllama 不支持 invoke 时传 temperature/max_tokens，
-        # 这些参数已在模型初始化时设置（config 中的 LLM_TEMPERATURE 等）
         text = result.content if hasattr(result, "content") else str(result)
 
         lines = [re.sub(r"^\d+[\.\)、]\s*", "", l.strip())
@@ -96,9 +96,11 @@ def _rewrite(question: str) -> list[str]:
                 seen.add(line)
                 cleaned.append(line)
 
+        trace_collector._end("LLM改写", hits=f"{len(cleaned)}变体")
         logger.info(f"[MultiQuery] Rewrite: {question[:40]} → {len(cleaned)} 变体")
         return cleaned
     except Exception as e:
+        trace_collector._end("LLM改写", hits="失败")
         logger.warning(f"[MultiQuery] Rewrite 失败: {e}，回退")
         return [question]
 

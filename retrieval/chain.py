@@ -135,14 +135,29 @@ class RAGChain:
                 doc.metadata["index"] = i
             return input_dict
 
-        stuff_chain = (
-            RunnableLambda(_index_docs)
-            | create_stuff_documents_chain(
-                llm, QA_PROMPT,
-                document_prompt=DOCUMENT_PROMPT,
-                document_separator="\n\n---\n\n",
-            )
+        _stuff = create_stuff_documents_chain(
+            llm, QA_PROMPT,
+            document_prompt=DOCUMENT_PROMPT,
+            document_separator="\n\n---\n\n",
         )
+        def _timed_stuff(inp):
+            from retrieval.tracer import trace_collector
+            trace_collector._start("LLM生成")
+            try:
+                r = _stuff.invoke(inp)
+                # 尝试提取 token 数
+                tokens = ""
+                try:
+                    if hasattr(r, "response_metadata"):
+                        tu = r.response_metadata.get("token_usage", {})
+                        tokens = f"{tu.get('total_tokens','?')}t"
+                except: pass
+                trace_collector._end("LLM生成", hits=tokens)
+                return r
+            except Exception:
+                trace_collector._end("LLM生成", hits="fail")
+                raise
+        stuff_chain = RunnableLambda(_index_docs) | RunnableLambda(_timed_stuff)
 
         retriever = self.chunk_retriever_base
 

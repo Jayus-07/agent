@@ -6,20 +6,8 @@ def _fallback_id(doc) -> str:
 
 
 def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60, metadata_filter=None):
-    """
-    混合检索函数：结合向量检索和BM25检索，使用RRF算法融合排序
-
-    参数:
-        query: 查询文本
-        vector_retriever: 向量检索器（语义检索）
-        bm25_retriever: BM25检索器（关键词检索）
-        k: 最终返回的文档数量，默认5
-        doc_ids: 可选的文档ID列表，用于限制检索范围
-        rrf_k: RRF算法的平滑参数，默认60（值越大，排名差异影响越小）
-
-    返回:
-        合并排序后的前k个文档列表
-    """
+    from retrieval.tracer import trace_collector
+    trace_collector._start("混合检索")
 
     vector_docs = vector_retriever.retrieve(query, k=k, doc_ids=doc_ids, metadata_filter=metadata_filter)
 
@@ -46,6 +34,7 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
 
     merged = [doc_dict[cid] for cid, _ in sorted_cids[:k]]
 
+    trace_collector._end("混合检索", hits=f"{len(merged)}merged")
     return merged
 
 
