@@ -1,6 +1,4 @@
 """RAG 管道 — 主入口"""
-import asyncio
-import concurrent.futures
 import os
 import hashlib
 import shutil
@@ -29,20 +27,10 @@ from backend.config import (
 )
 from backend.shared.logger import logger
 from backend.shared.monitoring.resource_monitor import resource_monitor
+from backend.shared.async_utils import run_async as _run_async
 
 os.environ['HF_HUB_OFFLINE'] = '1'
 os.environ['TRANSFORMERS_OFFLINE'] = '1'
-
-
-def _run_async(coro):
-    """安全地运行异步协程 — 兼容有/无事件循环两种场景"""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, coro).result()
 
 
 class RAGPipeline:
@@ -196,8 +184,9 @@ class RAGPipeline:
         return db
 
     def _load_or_create_db(self, db_path, create_fn, db_type):
-        if not self._check_db_version(db_path):
+        if not self._need_rebuild(db_path):
             return self._load_existing_db(db_path, db_type)
+        self._rebuild_db(db_path)
         db = create_fn()
         logger.info(f"创建新{db_type}向量库: {db_path}")
         self._save_db_version(db_path)
@@ -330,14 +319,6 @@ class RAGPipeline:
     def _rebuild_db(db_path: str) -> None:
         """副作用：删除旧库，由 _need_rebuild + create_fn 配套调用。"""
         shutil.rmtree(db_path, ignore_errors=True)
-
-    @staticmethod
-    def _check_db_version(db_path: str) -> bool:
-        """[已废弃] 兼容旧调用：内部拆为 _need_rebuild + _rebuild_db。"""
-        if not RAGPipeline._need_rebuild(db_path):
-            return False
-        RAGPipeline._rebuild_db(db_path)
-        return True
 
     @staticmethod
     def _save_db_version(db_path: str):

@@ -11,8 +11,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import concurrent.futures
 import hashlib
 import os
 from dataclasses import dataclass, field
@@ -23,6 +21,7 @@ from langchain_community.document_loaders import TextLoader
 from langchain_core.documents import Document
 
 from backend.shared.logger import logger
+from backend.shared.async_utils import run_async as _run_async
 
 
 @dataclass
@@ -40,17 +39,6 @@ class SyncResult:
     def __repr__(self) -> str:
         return (f"SyncResult(added={self.added}, modified={self.modified}, "
                 f"deleted={self.deleted}, skipped={self.skipped})")
-
-
-def _run_async(coro):
-    """安全运行异步协程。"""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, coro).result()
 
 
 class IncrementalIndexer:

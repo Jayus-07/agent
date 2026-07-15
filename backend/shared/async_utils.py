@@ -1,9 +1,21 @@
 """
-异步工具模块 - 异步调用包装器（带超时保护）
+异步工具模块 - 异步调用包装器（带超时保护）+ 安全运行异步协程
 """
 import asyncio
+import concurrent.futures
 from typing import Callable, Any
 from backend.shared.logger import logger
+
+
+def run_async(coro):
+    """安全运行异步协程 — 兼容有/无事件循环两种场景。"""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result()
 
 
 async def async_safe_call_with_timeout(

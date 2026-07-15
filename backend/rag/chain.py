@@ -1,8 +1,15 @@
 """
 LangChain LCEL 主 Chain
-= 历史感知检索 + 多查询 + 自适应检索 + 上下文压缩 + 三层记忆
 
-架构:
+流水线（外层先执行）:
+  ① HistoryAware   — Query Understanding: 对话历史改写指代/省略
+  ② MultiQuery     — Query Expansion:   关键词检测复杂度 → LLM 改写
+  ③ ChunkLevel     — Hybrid Retrieval:  向量 + BM25 混合检索
+  ④ Adaptive       — Document Expansion: 同文档相邻 Chunk 扩展
+  ⑤ Rerank         — CrossEncoder:      全局重排序 + 阈值过滤
+  ⑥ LLM Generate   — 带引用标注 [1][2]
+
+三层记忆:
   L1 短期: 当前调用的消息缓冲区
   L2 会话: PostgreSQL 持久化 (via SessionRepository)
   L3 长期: PostgreSQL + pgvector (via MemoryRepository)
@@ -119,14 +126,16 @@ class RAGChain:
     # =================================================
 
     def _build_chains(self):
-        """
-        构建完整的检索-生成链:
+        """构建完整的检索-生成链。
 
-          ChunkLevelRetriever → MultiQuery → AdaptiveRetriever → Rerank → HistoryAware → RetrievalChain
+        执行顺序（外层先执行）:
 
-        AdaptiveRetriever 在 MultiQuery 合并结果后分析文档分布:
-          - Cluster 检测 → Context Expansion（邻近 Chunk）
-          - 分散分布 → 跳过 Expansion
+          ① HistoryAware   — Query Understanding: 利用对话历史重写指代/省略
+          ② MultiQuery     — Query Expansion:   关键词检测复杂度 → LLM 多角度改写
+          ③ ChunkLevel     — Hybrid Retrieval:  向量 + BM25 混合检索
+          ④ Adaptive       — Document Expansion: 同文档相邻 Chunk 扩展
+          ⑤ Rerank         — CrossEncoder:      全局重排序 + 阈值过滤
+          ⑥ LLM Generate   — 带引用标注 [1][2] 的最终回答
         """
         # Citation Filter: 注入文档序号 + 自定义文档格式，使 LLM 可内联引用 [1][2]
         def _index_docs(input_dict):
@@ -153,27 +162,27 @@ class RAGChain:
                 raise
         stuff_chain = RunnableLambda(_index_docs) | RunnableLambda(_timed_stuff)
 
+        # ── ③ Hybrid Retrieval（最内层：实际搜索）─────────
         retriever = self.chunk_retriever_base
 
-        # MultiQuery: auto(自动判断复杂问题)/on(强制)/off(关闭)
-        from backend.rag.retrieval.multi_query import MultiQueryRetriever
-        retriever = MultiQueryRetriever(base_retriever=retriever)
-        self._mq_retriever = retriever  # 供 tracer 读取 MultiQuery 状态
-        logger.info("retriever: " + str(retriever))
-
-        # Adaptive: 检查 MultiQuery 合并后的 chunk 文档分布，按需补全文档全文
+        # ── ④ Adaptive: 同文档 Chunk 扩展 ──────────────
         retriever = AdaptiveRetriever(
             base_retriever=retriever,
             doc_db=self.doc_db,
         )
 
-        # Rerank: CrossEncoder 全局重排序
+        # ── ⑤ Rerank: CrossEncoder 全局重排序 ──────────
         retriever = ContextualCompressionRetriever(
             base_compressor=RerankCompressor(),
             base_retriever=retriever,
         )
 
-        # HistoryAware: 历史感知查询重写
+        # ── ② MultiQuery: 复杂度检测 → LLM 改写 ─────────
+        from backend.rag.retrieval.multi_query import MultiQueryRetriever
+        retriever = MultiQueryRetriever(base_retriever=retriever)
+        self._mq_retriever = retriever  # 供 tracer 读取 MultiQuery 状态
+
+        # ── ① HistoryAware: 对话历史改写（最外层，最先执行）─
         if ENABLE_HISTORY_AWARE_RETRIEVAL:
             retriever = create_history_aware_retriever(
                 llm, retriever, CONTEXTUALIZE_PROMPT
