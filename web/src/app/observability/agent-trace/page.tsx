@@ -59,9 +59,10 @@ export default function AgentTracePage() {
     return `${ms}ms`;
   };
 
-  const modelLabel = (m: string) => {
-    if (m.startsWith("deepseek")) return "bg-blue-100 text-blue-700";
-    if (m.startsWith("MiniMax")) return "bg-purple-100 text-purple-700";
+  const modelLabel = (m: any) => {
+    const name = typeof m === "string" ? m : m?.name || "";
+    if (name.startsWith("deepseek")) return "bg-blue-100 text-blue-700";
+    if (name.startsWith("MiniMax")) return "bg-purple-100 text-purple-700";
     return "bg-green-100 text-green-700";
   };
 
@@ -98,7 +99,7 @@ export default function AgentTracePage() {
               >
                 <div className="flex items-center justify-between mb-1">
                   <span className={`text-[10px] px-1.5 py-0.5 rounded ${modelLabel(t.model)}`}>
-                    {t.model}
+                    {t.model?.name || t.model}
                   </span>
                   <span className="text-[10px] text-text-muted">
                     {formatMs(t.total_ms)}
