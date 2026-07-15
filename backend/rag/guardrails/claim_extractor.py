@@ -87,36 +87,3 @@ def extract_claims(text: str) -> List[str]:
 
     logger.debug(f"[ClaimExtractor] {len(sentences)} 句 → {len(unique)} claims")
     return unique
-
-
-def extract_claims_with_llm(text: str) -> List[str]:
-    """LLM fallback: 用 LLM 提取事实断言（成本高，仅 rule-based 无结果时使用）。"""
-    if not text:
-        return []
-
-    try:
-        from backend.infra.llm import llm
-        from langchain_core.messages import HumanMessage
-
-        prompt = f"""从以下文本中提取所有可验证的事实声明。每行一条，只输出声明本身。
-
-规则：
-1. 只提取包含具体数字/日期/金额/规则/流程步骤的句子
-2. 不要提取标题、过渡句、建议
-3. 保持原句表达，不要改写
-
-文本：
-{text[:3000]}
-
-事实声明："""
-
-        result = llm.invoke([HumanMessage(content=prompt)])
-        content = result.content if hasattr(result, "content") else str(result)
-        lines = [l.strip() for l in content.strip().split("\n") if l.strip()]
-        # 去编号
-        lines = [re.sub(r'^\d+[\.\)、]\s*', '', l) for l in lines]
-        logger.info(f"[ClaimExtractor:LLM] 提取 {len(lines)} 条 claim")
-        return lines
-    except Exception as e:
-        logger.warning(f"[ClaimExtractor:LLM] fallback 失败: {e}")
-        return extract_claims(text)  # 回退到 rule-based

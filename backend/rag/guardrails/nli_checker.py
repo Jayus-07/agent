@@ -35,15 +35,6 @@ def _get_nli_model():
         return _nli_model
 
 
-def _cosine_similarity(a: list, b: list) -> float:
-    """简单余弦相似度（避免引入额外依赖）。"""
-    a_arr = np.array(a)
-    b_arr = np.array(b)
-    dot = np.dot(a_arr, b_arr)
-    norm = np.linalg.norm(a_arr) * np.linalg.norm(b_arr)
-    return float(dot / norm) if norm > 0 else 0.0
-
-
 def _select_top_chunks(claim: str, context_docs: list, top_k: int = NLI_TOP_K_CHUNKS) -> list:
     """为每个 claim 选最相关的 top-K 个 chunk（用简单的关键词重叠 + rerank_score）。
 
@@ -62,76 +53,6 @@ def _select_top_chunks(claim: str, context_docs: list, top_k: int = NLI_TOP_K_CH
         scored.append((doc, score))
     scored.sort(key=lambda x: x[1], reverse=True)
     return scored[:top_k]
-
-
-def check_claim(claim: str, context_docs: list) -> dict:
-    """验证单个 claim 是否被 context_docs 支撑。
-
-    Args:
-        claim: 一条事实声明
-        context_docs: RAG 检索到的文档列表（LangChain Document 对象）
-
-    Returns:
-        {
-            "claim": str,
-            "supported": bool,
-            "best_score": float,         # 0=contradiction, 1=neutral, 2=entailment
-            "best_chunk_preview": str,   # 最支撑的 chunk 前 200 字符
-            "label": "entailment"|"neutral"|"contradiction",
-        }
-    """
-    if not context_docs:
-        return {
-            "claim": claim,
-            "supported": False,
-            "best_score": 0.0,
-            "best_chunk_preview": "",
-            "label": "contradiction",
-        }
-
-    model = _get_nli_model()
-    top_chunks = _select_top_chunks(claim, context_docs)
-
-    best_score = 0.0
-    best_chunk = ""
-
-    for doc, _ in top_chunks:
-        chunk_text = doc.page_content if hasattr(doc, 'page_content') else str(doc)
-        preview = chunk_text[:800]
-
-        # NLI: (premise=chunk, hypothesis=claim)
-        try:
-            logits = model.predict([(preview, claim)])
-            # logits 是单个 float（CrossEncoder 输出），需要转换为概率
-            # mDeBERTa-v3-xnli 输出原始 logits，需要 softmax
-        except Exception as e:
-            logger.warning(f"[NLI] 推理失败: {e}")
-            continue
-
-        score = float(logits) if isinstance(logits, (int, float)) else float(logits[0])
-
-        if score > best_score:
-            best_score = score
-            best_chunk = preview
-
-    # 三分类判断
-    if best_score >= NLI_SCORE_THRESHOLD:
-        label = "entailment"
-        supported = True
-    elif best_score <= (1.0 - NLI_SCORE_THRESHOLD) / 2:
-        label = "contradiction"
-        supported = False
-    else:
-        label = "neutral"
-        supported = False
-
-    return {
-        "claim": claim,
-        "supported": supported,
-        "best_score": round(best_score, 4),
-        "best_chunk_preview": best_chunk[:200] if best_chunk else "",
-        "label": label,
-    }
 
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
@@ -182,7 +103,8 @@ def check_claims_batch(claims: List[str], context_docs: list) -> List[dict]:
         if not top_chunks:
             results.append({
                 "claim": claim, "supported": False, "best_score": 0.0,
-                "best_chunk_preview": "", "label": "contradiction",
+                "best_chunk_preview": "", "label": "contradiction_strong",
+                "action": "rewrite",
             })
             continue
 
@@ -200,7 +122,8 @@ def check_claims_batch(claims: List[str], context_docs: list) -> List[dict]:
             logger.warning(f"[NLI] 批量推理失败: {e}")
             results.append({
                 "claim": claim, "supported": False, "best_score": 0.0,
-                "best_chunk_preview": "", "label": "contradiction",
+                "best_chunk_preview": "", "label": "contradiction_strong",
+                "action": "rewrite",
             })
             continue
 

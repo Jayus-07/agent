@@ -47,8 +47,3 @@ def filter_claims(claims: List[str]) -> Tuple[List[str], List[str]]:
             skip.append(claim)
 
     return high_risk, skip
-
-
-def is_high_risk(claim: str) -> bool:
-    """判断单个 claim 是否为高风险。"""
-    return any(p.search(claim) for p in _HIGH_RISK_PATTERNS)

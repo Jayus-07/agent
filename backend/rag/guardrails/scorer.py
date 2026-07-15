@@ -8,6 +8,7 @@ scorer.py — Faithfulness 分数汇总 + 三级漏斗处理 + 统一入口
   < 0.2（强矛盾）      → rewrite（LLM 局部重写）
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -47,7 +48,6 @@ class FaithfulnessResult:
 
 def _match_line(claim: str, text: str) -> str | None:
     """在文本中模糊匹配 claim 对应的完整行。返回匹配到的原始行，或 None。"""
-    import re
     core = re.sub(r'[^一-鿿\d]', '', claim)[:20]
     for line in text.split('\n'):
         stripped = line.strip()
@@ -58,7 +58,6 @@ def _match_line(claim: str, text: str) -> str | None:
 
 def _sanitize_chunk(text: str) -> str:
     """清洗文档内容：移除可能被 LLM 解析为指令注入的标记。"""
-    import re
     text = re.sub(r'\[SYSTEM\].*?\[/SYSTEM\]', '[已过滤]', text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r'\[INST\].*?\[/INST\]', '[已过滤]', text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r'<\|.*?\|>', '', text)
@@ -149,7 +148,9 @@ def sanitize_answer(answer: str, claim_results: List[ClaimResult]) -> str:
 
         original_line = _match_line(cr.claim, cleaned)
         if not original_line:
-            logger.debug(f"[Faithfulness:sanitize] 无法定位: {cr.claim[:40]}")
+            # 无法在原文中定位 → 在末尾追加存疑警告
+            cleaned += f"\n\n> ⚠️*[存疑] 以下声明未被文档支撑：{cr.claim[:80]}*"
+            logger.warning(f"[Faithfulness:sanitize] 无法定位，追加警告: {cr.claim[:40]}")
             continue
 
         if cr.action == "mark":
