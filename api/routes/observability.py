@@ -76,26 +76,6 @@ async def list_rag_traces(limit: int = Query(50, ge=1, le=200)):
     }
 
 
-@router.get("/rag-traces/{trace_id}")
-async def get_rag_trace(trace_id: str):
-    """获取单条 RAG Trace 详情"""
-    from retrieval.tracer import trace_collector
-    t = trace_collector.get(trace_id)
-    if t is None:
-        raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在")
-    return {
-        "id": t.id, "request_id": t.request_id, "timestamp": t.timestamp, "session_id": t.session_id,
-        "model": {"name": t.model, "provider": t.provider},
-        "question": t.question, "answer_preview": t.answer_preview,
-        "answer_len": t.answer_len, "duration_ms": t.duration_ms,
-        "usage": t.usage, "cost": t.cost, "error": t.error, "metadata": t.metadata,
-        "steps": [{
-            "id": s.id, "label": s.label, "duration_ms": s.duration_ms,
-            "duration_ratio": s.duration_ratio, "status": s.status, "metrics": s.metrics,
-        } for s in t.steps],
-    }
-
-
 @router.get("/rag-traces/stream")
 async def stream_rag_traces():
     """SSE 实时推送新 Trace"""
@@ -125,6 +105,26 @@ async def stream_rag_traces():
             await asyncio.sleep(1)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.get("/rag-traces/{trace_id}")
+async def get_rag_trace(trace_id: str):
+    """获取单条 RAG Trace 详情"""
+    from retrieval.tracer import trace_collector
+    t = trace_collector.get(trace_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在")
+    return {
+        "id": t.id, "request_id": t.request_id, "timestamp": t.timestamp, "session_id": t.session_id,
+        "model": {"name": t.model, "provider": t.provider},
+        "question": t.question, "answer_preview": t.answer_preview,
+        "answer_len": t.answer_len, "duration_ms": t.duration_ms,
+        "usage": t.usage, "cost": t.cost, "error": t.error, "metadata": t.metadata,
+        "steps": [{
+            "id": s.id, "label": s.label, "duration_ms": s.duration_ms,
+            "duration_ratio": s.duration_ratio, "status": s.status, "metrics": s.metrics,
+        } for s in t.steps],
+    }
 
 
 # ═══════════════════════════════════════════════════
