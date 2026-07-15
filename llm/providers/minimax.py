@@ -29,7 +29,7 @@ def build_minimax(model_name: str) -> object:
         request_timeout=LLM_REQUEST_TIMEOUT,
         api_key=MINIMAX_API_KEY,
         base_url=MINIMAX_API_BASE,
-        model_kwargs={"thinking": {"type": "disabled"}},  # 关闭 thinking，直接输出答案
+        extra_body={"thinking": {"type": "disabled"}},  # MiniMax M3 关闭 thinking
     )
 
 
