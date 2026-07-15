@@ -1,29 +1,35 @@
-"""Per-step timing test"""
-import sys, time
+"""DeepSeek V4-Flash 真实API测试"""
+import sys, time, os
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 sys.path.insert(0, ".")
-
-from llm.factory import get_llm_factory
-get_llm_factory().set_current("MiniMax-M2.7-highspeed")
-
-print("=== 性能分步计时 ===")
-t0 = time.time()
+os.environ["LLM_REQUEST_TIMEOUT"] = "60"
 
 from api.deps import get_rag_pipeline
+
+QUESTIONS = ["退货流程是什么？", "商品上架需要什么条件？", "收到差评后应该怎么处理？"]
+DEADLINE = 60
+
+print("=" * 60)
+print("Pipeline 初始化...")
+t0 = time.time()
 p = get_rag_pipeline()
-print(f"Pipeline Init: {time.time()-t0:.1f}s")
+print(f"初始化: {time.time()-t0:.1f}s")
 
-# 预热 (加载模型到内存)
-t1 = time.time()
-p.ask("测试")
-print(f"预热查询: {time.time()-t1:.1f}s")
+def ask(q):
+    return p.ask(q)
 
-# 正式测试
-for i, q in enumerate([
-    "退货流程是什么？",
-    "商品上架需要什么条件？",
-    "收到差评后怎么处理？",
-], 1):
+for i, q in enumerate(QUESTIONS, 1):
     t = time.time()
-    r = p.ask(q)
-    e = time.time() - t
-    print(f"查询{i}: {e:.1f}s | {len(r)}字符")
+    try:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(ask, q)
+            r = fut.result(timeout=DEADLINE)
+        e = time.time() - t
+        ok = "[OK]" if len(r) > 50 else "[SHORT]"
+        print(f"  {ok} Q{i}: {e:.1f}s | {len(r)}字符 | {r[:80].replace(chr(10),' ')}")
+    except FutureTimeout:
+        print(f"  [DEAD] Q{i}: {DEADLINE}s超时")
+    except Exception as ex:
+        print(f"  [ERR] Q{i}: {time.time()-t:.1f}s | {str(ex)[:80]}")
+
+print("Done")

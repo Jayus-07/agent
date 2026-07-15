@@ -4,7 +4,7 @@ models.py — Provider 注册表 + 可用模型清单
 新增 Provider 只需:
   1. 在 PROVIDERS 注册
   2. 在 AVAILABLE_MODELS 添加模型条目
-  3. 在 providers/ 目录实现 _build() 和 _get_balance() 函数
+  3. 在 providers/ 目录实现 build_xxx() 和 get_xxx_balance() 函数
 """
 
 from langchain_ollama import ChatOllama
@@ -19,12 +19,12 @@ PROVIDERS = {
     },
     "deepseek": {
         "class": None,  # 懒加载（兼容 OpenAI 协议的 ChatOpenAI）
-        "default_model": "deepseek-chat",
+        "default_model": "deepseek-v4-flash",
         "needs_api_key": True,
     },
     "minimax": {
         "class": None,  # OpenAI 兼容协议
-        "default_model": "minimax-m3",
+        "default_model": "MiniMax-M3",
         "needs_api_key": True,
     },
 }
@@ -40,15 +40,9 @@ AVAILABLE_MODELS = [
     },
     {
         "provider": "deepseek",
-        "name": "deepseek-chat",
-        "display": "DeepSeek Chat - 云端",
-        "description": "DeepSeek-V3，需要 API Key（.env 中配置 DEEPSEEK_API_KEY）",
-    },
-    {
-        "provider": "deepseek",
-        "name": "deepseek-reasoner",
-        "display": "DeepSeek Reasoner - 云端",
-        "description": "DeepSeek-R1 推理模型，需要 API Key",
+        "name": "deepseek-v4-flash",
+        "display": "DeepSeek V4-Flash - 云端",
+        "description": "DeepSeek V4-Flash，高并发低延迟，需要 API Key",
     },
     {
         "provider": "minimax",
