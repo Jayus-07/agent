@@ -97,11 +97,12 @@ def _rewrite(question: str) -> list[str]:
                 seen.add(line)
                 cleaned.append(line)
 
-        trace_collector._end("LLM改写", hits=f"{len(cleaned)}变体 | {llm_tokens}")
+        trace_collector._end("LLM改写", hits=f"{len(cleaned)}变体",
+                             metrics={"variants": len(cleaned), "tokens": llm_tokens})
         logger.info(f"[MultiQuery] Rewrite: {question[:40]} → {len(cleaned)} 变体")
         return cleaned
     except Exception as e:
-        trace_collector._end("LLM改写", hits="失败")
+        trace_collector._end("LLM改写", hits="失败", metrics={"variants": 0})
         logger.warning(f"[MultiQuery] Rewrite 失败: {e}，回退")
         return [question]
 

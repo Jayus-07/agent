@@ -14,8 +14,9 @@ MAX_TRACES = 200
 class TraceStep:
     name: str
     detail: str = ""
-    hits: str = ""
+    hits: str = ""           # 兼容旧前端，逐步废弃
     elapsed_ms: int = 0
+    metrics: dict = field(default_factory=dict)  # 结构化数据，新前端用
 
 
 @dataclass
@@ -57,12 +58,12 @@ class TraceCollector:
         """开始计时（业务层埋点调用）"""
         self._timers[name] = time.time()
 
-    def _end(self, name: str, detail: str = "", hits: str = ""):
-        """结束计时，添加步骤"""
+    def _end(self, name: str, detail: str = "", hits: str = "", metrics: dict = None):
+        """结束计时，添加步骤。metrics 为结构化字段，前端无需字符串解析。"""
         if name in self._timers:
             ms = int((time.time() - self._timers[name]) * 1000)
             if self._current_trace:
-                self.add_step(self._current_trace, name, detail, hits=hits, elapsed_ms=ms)
+                self.add_step(self._current_trace, name, detail, hits=hits, elapsed_ms=ms, metrics=metrics or {})
             del self._timers[name]
 
     @staticmethod
@@ -91,8 +92,8 @@ class TraceCollector:
                 self.add_step(self._current_trace, name, detail, hits=hits, elapsed_ms=ms)
             del self._timers[name]
 
-    def add_step(self, record: TraceRecord, name: str, detail: str = "", hits: str = "", elapsed_ms: int = 0):
-        record.steps.append(TraceStep(name=name, detail=detail, hits=hits, elapsed_ms=elapsed_ms))
+    def add_step(self, record: TraceRecord, name: str, detail: str = "", hits: str = "", elapsed_ms: int = 0, metrics: dict = None):
+        record.steps.append(TraceStep(name=name, detail=detail, hits=hits, elapsed_ms=elapsed_ms, metrics=metrics or {}))
 
     def finish(self, record: TraceRecord, answer: str, total_ms: int, model: str):
         record.model = model

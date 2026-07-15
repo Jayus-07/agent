@@ -34,7 +34,8 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
 
     merged = [doc_dict[cid] for cid, _ in sorted_cids[:k]]
 
-    trace_collector._end("混合检索", hits=f"V{len(vector_docs)}|B{len(bm25_docs)}|M{len(merged)}")
+    trace_collector._end("混合检索", hits=f"{len(merged)}merged",
+                         metrics={"vector": len(vector_docs), "bm25": len(bm25_docs), "merge": len(merged)})
     return merged
 
 

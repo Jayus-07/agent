@@ -146,7 +146,8 @@ class RAGChain:
             try:
                 r = _stuff.invoke(inp)
                 from llm.proxy import _last_tokens
-                trace_collector._end("LLM生成", hits=_last_tokens or "")
+                trace_collector._end("LLM生成", hits=_last_tokens or "",
+                                     metrics={"tokens": _last_tokens or ""})
                 return r
             except Exception:
                 trace_collector._end("LLM生成", hits="fail")
@@ -198,6 +199,7 @@ class RAGChain:
         chat_history = list(l1.messages) if l1 else []
 
         # MultiQuery 步骤（chain 调用前，独立捕获）
+        logger.info(f"[TRACE] ask() called: {question[:40]} (session={session_id})")
         trace_collector._start("MultiQuery")
         mq = self._retriever_info()
         mode = "auto"
@@ -207,7 +209,10 @@ class RAGChain:
         mq_label = "触发" if mq.get("triggered") else "跳过"
         mq_detail = f"{mq_label} (mode={mode}, {mq.get('reason','?')})"
         mq_hits = f"{mq.get('variants',1)}变体→{mq.get('filtered_count',1)}有效"
-        trace_collector._end("MultiQuery", detail=mq_detail, hits=mq_hits)
+        trace_collector._end("MultiQuery", detail=mq_detail, hits=mq_hits,
+                             metrics={"triggered": mq.get("triggered", False),
+                                       "variants": mq.get("variants", 1),
+                                       "filtered": mq.get("filtered_count", 1)})
 
         # chain.invoke
         t_chain = _time.time()
@@ -228,7 +233,8 @@ class RAGChain:
             answer, verified_docs = _verify_support(answer, context_docs, question)
         else:
             verified_docs = []
-        trace_collector._end("Citation", hits=f"{len(verified_docs)}/{len(context_docs)}")
+        trace_collector._end("Citation", hits=f"{len(verified_docs)}/{len(context_docs)}",
+                             metrics={"verified": len(verified_docs), "total": len(context_docs)})
         references = _format_references(verified_docs, answer)
         if references:
             answer = answer + references

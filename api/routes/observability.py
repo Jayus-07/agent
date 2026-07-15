@@ -57,7 +57,7 @@ async def list_rag_traces(limit: int = Query(50, ge=1, le=200)):
                 "answer_preview": t.answer_preview,
                 "answer_len": t.answer_len,
                 "total_ms": t.total_ms,
-                "steps": [{"name": s.name, "detail": s.detail, "hits": s.hits, "elapsed_ms": s.elapsed_ms} for s in t.steps],
+                "steps": [{"name": s.name, "detail": s.detail, "hits": s.hits, "elapsed_ms": s.elapsed_ms, "metrics": s.metrics} for s in t.steps],
             }
             for t in traces
         ]
@@ -75,7 +75,7 @@ async def get_rag_trace(trace_id: str):
         "id": t.id, "timestamp": t.timestamp, "session_id": t.session_id,
         "model": t.model, "question": t.question, "answer_preview": t.answer_preview,
         "answer_len": t.answer_len, "total_ms": t.total_ms,
-        "steps": [{"name": s.name, "detail": s.detail, "hits": s.hits, "elapsed_ms": s.elapsed_ms} for s in t.steps],
+        "steps": [{"name": s.name, "detail": s.detail, "hits": s.hits, "elapsed_ms": s.elapsed_ms, "metrics": s.metrics} for s in t.steps],
     }
 
 

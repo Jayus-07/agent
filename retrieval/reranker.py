@@ -19,12 +19,13 @@ class RerankCompressor(BaseDocumentCompressor):
         from config import RERANK_SCORE_THRESHOLD
         trace_collector._start("Rerank")
         if not documents:
-            trace_collector._end("Rerank", hits="0→0")
+            trace_collector._end("Rerank", hits="0->0", metrics={"input": 0, "output": 0, "threshold": RERANK_SCORE_THRESHOLD})
             return []
         in_count = len(documents)
         scored = rerank(query, list(documents), top_k=self.top_k)
         result = [doc for doc, _ in scored]
-        trace_collector._end("Rerank", hits=f"in{in_count}|out{len(result)}|th{RERANK_SCORE_THRESHOLD}")
+        trace_collector._end("Rerank", hits=f"{in_count}->{len(result)}",
+                             metrics={"input": in_count, "output": len(result), "threshold": RERANK_SCORE_THRESHOLD})
         return result
 
 
