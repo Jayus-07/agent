@@ -3,29 +3,64 @@
 import { useEffect, useState, useCallback } from "react";
 
 interface TraceStep {
-  name: string;
-  detail: string;
-  hits: string;
-  duration_ms: number;
+  id: string; label: string; duration_ms: number; duration_ratio: number;
+  status: "success" | "skipped" | "error";
+  metrics: Record<string, number>;
 }
 
 interface Trace {
-  id: string;
-  timestamp: string;
-  session_id: string;
-  model: { name: string; provider: string } | string;
-  question: string;
-  answer_preview: string;
-  answer_len: number;
-  total_ms: number;
+  id: string; request_id: string; timestamp: string; session_id: string;
+  model: { name: string; provider: string };
+  question: string; answer_preview: string; answer_len: number;
+  duration_ms: number;
+  usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   steps: TraceStep[];
 }
 
-const STEP_ICON: Record<string, string> = {
-  "MultiQuery": "🔄",
-  "检索+Rerank+LLM": "🔍",
-  "Citation": "✅",
+// 步骤到图标的映射
+const ICONS: Record<string, string> = {
+  mq_check: "\u{1F504}", query_rewrite: "\u{270F}\u{FE0F}",
+  hybrid_retrieval: "\u{1F50D}", retrieval: "\u{1F4E5}",
+  rerank: "\u{1F4CA}", llm_generate: "\u{1F4AC}", citation: "\u{2705}",
 };
+
+// metrics 字段的中文名
+const METRIC_LABELS: Record<string, string> = {
+  vector_hits: "向量命中", bm25_hits: "BM25命中", merged_hits: "融合",
+  retrieved_chunks: "Chunk数",
+  input_docs: "输入", output_docs: "输出", threshold: "阈值",
+  prompt_tokens: "Prompt", completion_tokens: "Completion", total_tokens: "Total",
+  variants: "变体数", triggered: "触发", filtered: "过滤", mode: "模式",
+  verified_citations: "通过", total_citations: "总数",
+};
+
+function formatMs(ms: number) {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+}
+
+function statusColor(s: string) {
+  if (s === "success") return "text-green-600 bg-green-50";
+  if (s === "error") return "text-red-600 bg-red-50";
+  return "text-gray-400 bg-gray-50";
+}
+
+function statusLabel(s: string) {
+  if (s === "success") return "";
+  if (s === "error") return "失败";
+  return "跳过";
+}
+
+function modelBadge(m: Trace["model"]) {
+  const n = m?.name || "";
+  if (n.startsWith("deepseek")) return "bg-blue-100 text-blue-700";
+  if (n.startsWith("MiniMax")) return "bg-purple-100 text-purple-700";
+  return "bg-green-100 text-green-700";
+}
+
+function formatTokens(u: Trace["usage"]) {
+  if (!u?.total_tokens) return null;
+  return `P${u.prompt_tokens} | C${u.completion_tokens} | T${u.total_tokens}`;
+}
 
 export default function AgentTracePage() {
   const [traces, setTraces] = useState<Trace[]>([]);
@@ -41,44 +76,23 @@ export default function AgentTracePage() {
     } catch {} finally { setLoading(false); }
   }, []);
 
-  // 初始加载 + SSE 自动更新
   useEffect(() => {
     fetchTraces();
     const es = new EventSource("/api/observability/rag-traces/stream");
     es.onmessage = (e) => {
-      try {
-        const t = JSON.parse(e.data);
-        setTraces((prev) => [t, ...prev.slice(0, 49)]);
-      } catch {}
+      try { setTraces((prev) => [JSON.parse(e.data), ...prev.slice(0, 49)]); } catch {}
     };
     return () => es.close();
   }, [fetchTraces]);
 
-  const formatMs = (ms: number) => {
-    if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
-    return `${ms}ms`;
-  };
-
-  const modelLabel = (m: any) => {
-    const name = typeof m === "string" ? m : m?.name || "";
-    if (name.startsWith("deepseek")) return "bg-blue-100 text-blue-700";
-    if (name.startsWith("MiniMax")) return "bg-purple-100 text-purple-700";
-    return "bg-green-100 text-green-700";
-  };
-
   return (
     <div className="h-full flex flex-col">
-      <div className="px-6 py-4 border-b border-border-subtle">
-        <h1 className="text-lg font-semibold text-text-primary">Agent Trace</h1>
-        <p className="text-xs text-text-muted mt-1">
-          RAG 全链路耗时记录 — 每次查询的每一步
-        </p>
-        <button
-          onClick={() => { fetchTraces(); }}
-          className="mt-2 text-xs text-accent hover:underline"
-        >
-          刷新
-        </button>
+      <div className="px-6 py-4 border-b border-border-subtle flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-semibold text-text-primary">Agent Trace</h1>
+          <p className="text-xs text-text-muted mt-1">RAG 全链路耗时 — 每一步的详细指标</p>
+        </div>
+        <button onClick={fetchTraces} className="text-xs text-accent hover:underline">刷新</button>
       </div>
 
       <div className="flex-1 flex overflow-hidden">
@@ -93,24 +107,20 @@ export default function AgentTracePage() {
               <div
                 key={t.id}
                 onClick={() => setSelected(t)}
-                className={`px-4 py-3 border-b border-border-subtle cursor-pointer hover:bg-surface-hover transition-colors ${
+                className={`px-4 py-3 border-b border-border-subtle cursor-pointer hover:bg-surface-hover ${
                   selected?.id === t.id ? "bg-accent/5 border-l-2 border-l-accent" : ""
                 }`}
               >
                 <div className="flex items-center justify-between mb-1">
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${modelLabel(t.model)}`}>
-                    {t.model?.name || t.model}
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${modelBadge(t.model)}`}>
+                    {t.model?.name || "?"}
                   </span>
-                  <span className="text-[10px] text-text-muted">
-                    {formatMs(t.total_ms)}
-                  </span>
+                  <span className="text-[10px] text-text-muted">{formatMs(t.duration_ms)}</span>
                 </div>
-                <div className="text-xs text-text-primary font-medium truncate">
-                  {t.question}
-                </div>
-                <div className="text-[10px] text-text-muted mt-1 flex items-center justify-between">
+                <div className="text-xs text-text-primary font-medium truncate">{t.question}</div>
+                <div className="text-[10px] text-text-muted mt-1 flex justify-between">
                   <span>{t.session_id}</span>
-                  <span>{t.timestamp.slice(11, 19)}</span>
+                  <span>{t.timestamp?.slice(11, 19)}</span>
                 </div>
               </div>
             ))
@@ -123,88 +133,65 @@ export default function AgentTracePage() {
             <div className="text-xs text-text-muted">选择左侧一条记录查看详情</div>
           ) : (
             <div>
-              {/* 基本信息 */}
-              <div className="mb-6">
-                <h2 className="text-sm font-semibold text-text-primary mb-2">查询信息</h2>
+              {/* 查询信息 */}
+              <div className="mb-4">
                 <div className="bg-surface-base rounded-lg border border-border-subtle p-4 space-y-2 text-xs">
-                  <div className="flex justify-between">
-                    <span className="text-text-muted">时间</span>
-                    <span className="text-text-primary">{selected.timestamp}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-text-muted">用户/Session</span>
-                    <span className="text-text-primary">{selected.session_id}</span>
-                  </div>
+                  <div className="flex justify-between"><span className="text-text-muted">时间</span><span className="text-text-primary">{selected.timestamp}</span></div>
+                  <div className="flex justify-between"><span className="text-text-muted">用户</span><span className="text-text-primary">{selected.session_id}</span></div>
                   <div className="flex justify-between">
                     <span className="text-text-muted">模型</span>
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] ${modelLabel(selected.model)}`}>
-                      {selected.model?.name || selected.model}
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] ${modelBadge(selected.model)}`}>
+                      {selected.model?.name} ({selected.model?.provider})
                     </span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-text-muted">问题</span>
-                    <span className="text-text-primary text-right max-w-[60%]">{selected.question}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-text-muted">答案长度</span>
-                    <span className="text-text-primary">{selected.answer_len} 字符</span>
-                  </div>
-                  <div className="flex justify-between font-semibold">
+                  <div className="flex justify-between"><span className="text-text-muted">问题</span><span className="text-text-primary text-right max-w-[60%]">{selected.question}</span></div>
+                  {formatTokens(selected.usage) && (
+                    <div className="flex justify-between">
+                      <span className="text-text-muted">Token</span>
+                      <span className="text-primary font-mono text-[11px]">{formatTokens(selected.usage)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-semibold pt-1 border-t border-border-subtle">
                     <span className="text-text-muted">总耗时</span>
-                    <span className="text-accent">{formatMs(selected.total_ms)}</span>
+                    <span className="text-accent">{formatMs(selected.duration_ms)}</span>
                   </div>
                 </div>
               </div>
 
-              {/* 步骤详情 */}
-              <div>
-                <h2 className="text-sm font-semibold text-text-primary mb-2">
-                  执行步骤
-                </h2>
-                <div className="space-y-1">
-                  {selected.steps.map((step, i) => {
-                    const pct = selected.total_ms > 0
-                      ? Math.round((step.duration_ms / selected.total_ms) * 100)
-                      : 0;
-                    return (
-                      <div
-                        key={i}
-                        className="bg-surface-base rounded-lg border border-border-subtle p-3 flex items-center gap-3"
-                      >
-                        <span className="text-sm">{STEP_ICON[step.name] || "⏱️"}</span>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs font-medium text-text-primary">
-                              {step.name}
-                            </span>
-                            <span className="text-[10px] text-text-muted">
-                              {formatMs(step.duration_ms)}
-                            </span>
-                          </div>
-                          <div className="text-[11px] text-text-muted truncate">
-                            {step.detail}
-                          </div>
-                          <div className="flex items-center gap-2 mt-1">
-                            <div className="flex-1 h-1 bg-surface-elevated rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-accent rounded-full transition-all"
-                                style={{ width: `${Math.min(pct, 100)}%` }}
-                              />
-                            </div>
-                            <span className="text-[9px] text-text-muted w-8 text-right">
-                              {pct}%
-                            </span>
-                          </div>
-                          {step.hits && (
-                            <div className="text-[10px] text-accent mt-0.5">
-                              {step.hits}
-                            </div>
-                          )}
-                        </div>
+              {/* 步骤 */}
+              <h2 className="text-sm font-semibold text-text-primary mb-2">
+                执行步骤 ({selected.steps.length})
+              </h2>
+              <div className="space-y-1.5">
+                {selected.steps.map((step) => (
+                  <div key={step.id} className="bg-surface-base rounded-lg border border-border-subtle p-3">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span>{ICONS[step.id] || "⏱️"}</span>
+                      <span className="text-xs font-medium text-text-primary">{step.label}</span>
+                      <span className={`text-[9px] px-1 rounded ${statusColor(step.status)}`}>{statusLabel(step.status)}</span>
+                      <span className="flex-1" />
+                      <span className="text-[10px] text-text-muted">{formatMs(step.duration_ms)}</span>
+                      <span className="text-[9px] text-text-muted w-8 text-right">{Math.round(step.duration_ratio * 100)}%</span>
+                    </div>
+
+                    {/* 进度条 */}
+                    <div className="h-1 bg-surface-elevated rounded-full mb-1.5">
+                      <div className="h-full bg-accent rounded-full" style={{ width: `${Math.min(step.duration_ratio * 100, 100)}%` }} />
+                    </div>
+
+                    {/* Metrics */}
+                    {Object.keys(step.metrics).length > 0 && (
+                      <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                        {Object.entries(step.metrics).map(([k, v]) => (
+                          <span key={k} className="text-[10px] text-text-muted">
+                            <span>{METRIC_LABELS[k] || k}: </span>
+                            <span className="text-text-primary font-mono">{typeof v === "number" && k.includes("ratio") ? v.toFixed(2) : v}</span>
+                          </span>
+                        ))}
                       </div>
-                    );
-                  })}
-                </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           )}
