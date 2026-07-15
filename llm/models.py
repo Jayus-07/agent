@@ -64,8 +64,8 @@ AVAILABLE_MODELS = [
     },
     {
         "provider": "minimax",
-        "name": "MiniMax-M2.5-highspeed",
-        "display": "MiniMax M2.5-highspeed - 快速",
-        "description": "MiniMax M2.5 极速版（100 TPS），无推理链，适合 RAG",
+        "name": "MiniMax-M2.7-highspeed",
+        "display": "MiniMax M2.7-highspeed - 快速",
+        "description": "MiniMax M2.7 极速版（100 TPS），无推理链，适合 RAG",
     },
 ]

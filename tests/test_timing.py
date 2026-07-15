@@ -3,7 +3,7 @@ import sys, time
 sys.path.insert(0, ".")
 
 from llm.factory import get_llm_factory
-get_llm_factory().set_current("MiniMax-M2.5-highspeed")
+get_llm_factory().set_current("MiniMax-M2.7-highspeed")
 
 print("=== 性能分步计时 ===")
 t0 = time.time()
