@@ -11,6 +11,9 @@ import time
 from typing import List
 
 from langchain_core.documents import Document
+from langchain_core.retrievers import BaseRetriever
+from pydantic import Field
+from typing import Any
 
 from config import (
     MULTI_QUERY_MODE,
@@ -187,22 +190,27 @@ def filter_queries(queries: list[str]) -> list[str]:
 # LangChain Retriever Wrapper
 # =====================================================
 
-class MultiQueryRetriever:
-    """LangChain-compatible retriever wrapper.
+class MultiQueryRetriever(BaseRetriever):
+    """LangChain BaseRetriever wrapper — 替换旧 ParallelMultiQueryRetriever。
 
-    Replaces the old ParallelMultiQueryRetriever.
     在 _get_relevant_documents 中根据问题复杂度决定是否启用多查询。
     """
 
-    def __init__(self, base_retriever):
-        self.base_retriever = base_retriever
-        self.controller = MultiQueryController()
+    base_retriever: Any = Field(description="底层 ChunkLevelRetriever")
 
-    def invoke(self, query: str, **kwargs) -> list[Document]:
-        use_multi, reason = self.controller.should_use_multi_query(query)
+    class Config:
+        arbitrary_types_allowed = True
+
+    def __init__(self, base_retriever):
+        super().__init__(base_retriever=base_retriever)
+        self._controller = MultiQueryController()
+
+    def _get_relevant_documents(self, query: str, *, run_manager=None) -> list[Document]:
+        use_multi, reason = self._controller.should_use_multi_query(query)
 
         if not use_multi:
-            return self.base_retriever.invoke(query, **kwargs)
+            logger.info(f"[MultiQuery] 跳过 ({reason}): {query[:30]}")
+            return self.base_retriever.invoke(query)
 
         # Step 1: Rewrite
         queries = rewrite_queries(query)
