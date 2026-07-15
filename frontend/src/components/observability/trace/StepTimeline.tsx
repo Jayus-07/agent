@@ -54,9 +54,11 @@ function StepMetrics({ step }: { step: TraceStep }) {
 interface Props {
   steps: TraceStep[];
   totalMs: number;
+  onToggle?: (id: string) => void;
+  expanded?: Set<string>;
 }
 
-export default function StepTimeline({ steps, totalMs }: Props) {
+export default function StepTimeline({ steps, totalMs, onToggle, expanded }: Props) {
   const maxMs = Math.max(...steps.map((s) => s.duration_ms), 1);
 
   return (
@@ -104,9 +106,10 @@ export default function StepTimeline({ steps, totalMs }: Props) {
                 className={`h-full rounded-sm transition-all duration-300 ${stepColor(step.status, step.duration_ms)}`}
                 style={{ width: `${Math.min(ratio, 100)}%` }}
               />
-              {/* Percentage label on bar */}
-              {step.duration_ms > 0 && ratio > 8 && (
-                <span className="absolute inset-0 flex items-center px-2 text-[10px] text-white font-mono tabular-nums drop-shadow-sm">
+              {/* Percentage label */}
+              {step.duration_ms > 0 && (
+                <span className={`absolute inset-y-0 flex items-center text-[10px] font-mono tabular-nums ${ratio > 25 ? "text-white pl-2 drop-shadow-sm" : "text-slate-500"} `}
+                  style={{ left: ratio > 25 ? "0" : `calc(${Math.min(ratio, 100)}% + 6px)` }}>
                   {(step.duration_ratio * 100).toFixed(0)}%
                 </span>
               )}

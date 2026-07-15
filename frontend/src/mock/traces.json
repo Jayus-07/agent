@@ -123,5 +123,57 @@
       { "id": "citation", "label": "Citation", "duration_ms": 0, "duration_ratio": 0.0, "status": "success", "metrics": { "verified_citations": 2, "total_citations": 2 } },
       { "id": "faithfulness", "label": "Faithfulness", "duration_ms": 280, "duration_ratio": 0.041, "status": "success", "metrics": { "score": 0.88, "claims": 4, "supported": 3, "unsupported": 1 } }
     ]
+  },
+  {
+    "id": "a1b2c3retrievalmiss",
+    "request_id": "a1b2c3retrievalmiss",
+    "timestamp": "2026-07-16T02:45:00Z",
+    "session_id": "edge-case-1",
+    "status": "success",
+    "question": "苹果手机退款政策是什么样的？",
+    "answer_preview": "根据提供的资料，**未找到关于苹果手机退款政策**的相关信息。知识库中暂无手机类产品的退款政策文档，建议联系客服获取准确信息。",
+    "answer_len": 280,
+    "duration_ms": 2400,
+    "model": { "name": "deepseek-v4-flash", "provider": "deepseek" },
+    "usage": { "prompt_tokens": 150, "completion_tokens": 60, "total_tokens": 210 },
+    "cost": {},
+    "error": {},
+    "metadata": { "kb_id": "CUSTOMER_SERVICE" },
+    "steps": [
+      { "id": "query_rewrite", "label": "LLM改写", "duration_ms": 0, "duration_ratio": 0.0, "status": "skipped", "metrics": { "variants": 0 } },
+      { "id": "hybrid_retrieval", "label": "混合检索", "duration_ms": 220, "duration_ratio": 0.092, "status": "success", "metrics": { "vector_hits": 0, "bm25_hits": 0, "merged_hits": 0 } },
+      { "id": "retrieval", "label": "检索", "duration_ms": 221, "duration_ratio": 0.092, "status": "success", "metrics": { "retrieved_chunks": 0 } },
+      { "id": "rerank", "label": "Rerank", "duration_ms": 10, "duration_ratio": 0.004, "status": "skipped", "metrics": { "input_docs": 0, "output_docs": 0, "threshold": 0.3 } },
+      { "id": "llm_generate", "label": "LLM生成", "duration_ms": 1800, "duration_ratio": 0.75, "status": "success", "metrics": { "prompt_tokens": 150, "completion_tokens": 60, "total_tokens": 210 } },
+      { "id": "mq_check", "label": "MultiQuery", "duration_ms": 0, "duration_ratio": 0.0, "status": "skipped", "metrics": { "triggered": false, "mode": "auto" } },
+      { "id": "citation", "label": "Citation", "duration_ms": 0, "duration_ratio": 0.0, "status": "success", "metrics": { "verified_citations": 0, "total_citations": 0 } },
+      { "id": "faithfulness", "label": "Faithfulness", "duration_ms": 0, "duration_ratio": 0.0, "status": "skipped", "metrics": { "score": 1.0, "claims": 0, "supported": 0, "unsupported": 0 } }
+    ]
+  },
+  {
+    "id": "e7f8llmerror429",
+    "request_id": "e7f8llmerror429",
+    "timestamp": "2026-07-16T02:30:00Z",
+    "session_id": "edge-case-2",
+    "status": "error",
+    "question": "详细分析过去12个月的库存周转率和广告ROI变化趋势",
+    "answer_preview": "",
+    "answer_len": 0,
+    "duration_ms": 45000,
+    "model": { "name": "deepseek-v4-flash", "provider": "deepseek" },
+    "usage": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 },
+    "cost": {},
+    "error": { "code": "LLM_RATE_LIMIT", "message": "DeepSeek API returned 429 Too Many Requests after 3 retries. Last retry at 2026-07-16T02:30:45Z", "retry_count": 3, "error_node": "llm_generate" },
+    "metadata": { "kb_id": "AMAZON_SOP", "temperature": 0.1, "max_tokens": 4096 },
+    "steps": [
+      { "id": "query_rewrite", "label": "LLM改写", "duration_ms": 3200, "duration_ratio": 0.071, "status": "success", "metrics": { "variants": 3 } },
+      { "id": "hybrid_retrieval", "label": "混合检索", "duration_ms": 380, "duration_ratio": 0.008, "status": "success", "metrics": { "vector_hits": 6, "bm25_hits": 12, "merged_hits": 10 } },
+      { "id": "retrieval", "label": "检索", "duration_ms": 381, "duration_ratio": 0.008, "status": "success", "metrics": { "retrieved_chunks": 10 } },
+      { "id": "rerank", "label": "Rerank", "duration_ms": 2800, "duration_ratio": 0.062, "status": "success", "metrics": { "input_docs": 10, "output_docs": 6, "threshold": 0.3, "avg_score": 0.61, "min_score": 0.41 } },
+      { "id": "llm_generate", "label": "LLM生成", "duration_ms": 38000, "duration_ratio": 0.844, "status": "error", "metrics": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 } },
+      { "id": "mq_check", "label": "MultiQuery", "duration_ms": 0, "duration_ratio": 0.0, "status": "success", "metrics": { "triggered": true, "mode": "auto" } },
+      { "id": "citation", "label": "Citation", "duration_ms": 0, "duration_ratio": 0.0, "status": "skipped", "metrics": { "verified_citations": 0, "total_citations": 0 } },
+      { "id": "faithfulness", "label": "Faithfulness", "duration_ms": 0, "duration_ratio": 0.0, "status": "skipped", "metrics": { "score": 1.0, "claims": 0, "supported": 0, "unsupported": 0 } }
+    ]
   }
 ]
