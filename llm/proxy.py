@@ -101,6 +101,25 @@ def _strip_think(text: str) -> str:
     return text.strip()
 
 
+_last_tokens = ""
+
+def _record_tokens(result):
+    """从 LLM 返回值提取 token 记录到全局变量，供 tracer 读取"""
+    global _last_tokens
+    try:
+        tu = {}
+        if hasattr(result, "response_metadata") and result.response_metadata:
+            tu = result.response_metadata.get("token_usage", {})
+        if not tu and hasattr(result, "usage_metadata") and result.usage_metadata:
+            tu = result.usage_metadata
+        p = tu.get("prompt_tokens", 0)
+        c = tu.get("completion_tokens", 0)
+        t = tu.get("total_tokens", p + c)
+        if t:
+            _last_tokens = f"P{p}|C{c}|T{t}"
+    except Exception:
+        pass
+
 def _wrap_result(result):
     """递归剥离 LLM 返回值中的 <think> 块，兼容 str / AIMessage / list / dict"""
     if isinstance(result, str):
@@ -130,12 +149,14 @@ class _LLMProxy:
         if name in self._WRAP_METHODS and callable(attr):
             def wrapper(*args, **kwargs):
                 result = attr(*args, **kwargs)
+                _record_tokens(result)
                 return _wrap_result(result)
             return wrapper
         return attr
 
     def __call__(self, *args, **kwargs):
         result = _resolve_active_llm().invoke(*args, **kwargs)
+        _record_tokens(result)
         return _wrap_result(result)
 
     def __repr__(self) -> str:

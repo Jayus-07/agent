@@ -145,8 +145,8 @@ class RAGChain:
             trace_collector._start("LLM生成")
             try:
                 r = _stuff.invoke(inp)
-                tokens = trace_collector._extract_tokens(r)
-                trace_collector._end("LLM生成", hits=tokens)
+                from llm.proxy import _last_tokens
+                trace_collector._end("LLM生成", hits=_last_tokens or "")
                 return r
             except Exception:
                 trace_collector._end("LLM生成", hits="fail")
