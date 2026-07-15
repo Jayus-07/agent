@@ -79,8 +79,6 @@ MULTI_QUERY_TOP_K_PER = int(os.getenv("MULTI_QUERY_TOP_K_PER", "5"))         # �
 MULTI_QUERY_DEDUP = os.getenv("MULTI_QUERY_DEDUP", "true").lower() == "true"  # 去重开关
 MULTI_QUERY_SIMILARITY = float(os.getenv("MULTI_QUERY_SIMILARITY", "0.9"))    # Jaccard 相似阈值
 MULTI_QUERY_MIN_LENGTH = int(os.getenv("MULTI_QUERY_MIN_LENGTH", "3"))        # 最小查询长度
-# 兼容旧配置项
-ENABLE_MULTI_QUERY = MULTI_QUERY_MODE != "off"
 
 
 # ====================================

@@ -22,43 +22,35 @@ router = APIRouter(prefix="/llm", tags=["llm"])
 # =====================================================
 
 class SwitchRequest(BaseModel):
-    model: str  # 形如 "qwen2.5:3b" / "deepseek-chat"
-
-
-# =====================================================
-# 端点
-# =====================================================
-
-# MultiQuery 模式（全局变量，set_current 切换）
-_mq_mode = __import__("config").MULTI_QUERY_MODE
-
-
-@router.get("/multiquery")
-async def get_multiquery_mode():
-    """获取 MultiQuery 模式"""
-    return {"mode": _mq_mode}
+    model: str
 
 
 class MQSwitchRequest(BaseModel):
     mode: str  # "auto" | "on" | "off"
 
 
+# =====================================================
+# MultiQuery 模式
+# =====================================================
+
+@router.get("/multiquery")
+async def get_multiquery_mode():
+    from retrieval.multi_query import get_mq_mode
+    return {"mode": get_mq_mode()}
+
+
 @router.post("/multiquery")
 async def set_multiquery_mode(req: MQSwitchRequest):
-    """设置 MultiQuery 模式"""
-    global _mq_mode
     if req.mode not in ("auto", "on", "off"):
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="mode 必须为 auto/on/off")
-    _mq_mode = req.mode
-    # 动态修改 config 模块的变量
-    __import__("config").MULTI_QUERY_MODE = req.mode
+    from retrieval.multi_query import set_mq_mode
+    set_mq_mode(req.mode)
     return {"ok": True, "mode": req.mode}
 
 
 # =====================================================
 # 端点
-# =====================================================
 
 @router.get("/models")
 async def list_models():
