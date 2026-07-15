@@ -62,4 +62,10 @@ AVAILABLE_MODELS = [
         "display": "MiniMax M3 - 云端",
         "description": "MiniMax-M3，OpenAI 兼容协议，需要 API Key",
     },
+    {
+        "provider": "minimax",
+        "name": "MiniMax-M2.5-highspeed",
+        "display": "MiniMax M2.5-highspeed - 快速",
+        "description": "MiniMax M2.5 极速版（100 TPS），无推理链，适合 RAG",
+    },
 ]
