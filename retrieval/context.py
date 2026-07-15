@@ -45,6 +45,11 @@ def set_context(ctx: RequestContext) -> None:
     _request_ctx.set(ctx)
 
 
+def clear_context() -> None:
+    """重置请求上下文（防止跨请求污染）"""
+    _request_ctx.set(RequestContext(metadata_filter={}, intent_label="", query=""))
+
+
 def get_context() -> RequestContext:
     """Retrieve the current coroutine's request context. Never returns None."""
     return _request_ctx.get(RequestContext())

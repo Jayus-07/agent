@@ -67,8 +67,11 @@ class RAGPipeline:
             # 全量重建路径: metadata → from_documents/from_texts
             self._build_metadata()
             self._init_vector_dbs_full()
-            # 全量重建后同步 registry，下次启动即可走增量
-            self._sync_registry_after_full_rebuild()
+            # 全量重建后同步 registry（失败不影响查询服务）
+            try:
+                self._sync_registry_after_full_rebuild()
+            except Exception as e:
+                logger.error(f"同步 registry 失败（不影响当前查询）: {e}", exc_info=True)
 
         self._init_retrievers()
         logger.info("RAG 管道初始化完成")
@@ -160,11 +163,11 @@ class RAGPipeline:
             return True
         except Exception as e:
             logger.warning(f"增量索引失败: {e}，回退全量重建")
-            # 销毁 registry 以便全量重建时重建
-            try:
-                registry.clear()
-            except Exception:
-                pass
+            if 'registry' in locals():
+                try:
+                    registry.clear()
+                except Exception:
+                    pass
             return False
 
     def _load_existing_db(self, db_path: str, db_type: str):
@@ -291,6 +294,7 @@ class RAGPipeline:
             if fpath.is_file():
                 h.update(str(fpath).encode())
                 h.update(str(fpath.stat().st_size).encode())
+                h.update(str(fpath.stat().st_mtime).encode())  # mtime 防同大小替换
         return h.hexdigest()
 
     @staticmethod
@@ -357,7 +361,7 @@ class RAGPipeline:
         logger.info(f"收到问题: {question[:80]} (session={session_id}, kb={kb_id})")
 
         # KB 隔离：注入 kb_id 到 contextvars filter
-        # "default" / "*" = 不隔离，查询所有知识库
+        from retrieval.context import clear_context
         if kb_id and kb_id != "*" and kb_id != "default":
             from retrieval.context import RequestContext, set_context
             ctx = RequestContext(
@@ -367,16 +371,15 @@ class RAGPipeline:
             )
             set_context(ctx)
             logger.info(f"[RAG.ask] kb_id={kb_id} → metadata_filter 已注入")
-
-        if ENABLE_RESOURCE_MONITOR:
-            resource_monitor.increment_request()
-            if not resource_monitor.check_resources():
-                logger.warning("系统资源紧张，请求被拒绝")
-                return "系统资源紧张，请稍后重试"
-            resource_monitor.log_status()
-
-        start_time = time.time()
         try:
+            if ENABLE_RESOURCE_MONITOR:
+                resource_monitor.increment_request()
+                if not resource_monitor.check_resources():
+                    logger.warning("系统资源紧张，请求被拒绝")
+                    return "系统资源紧张，请稍后重试"
+                resource_monitor.log_status()
+
+            start_time = time.time()
             result = self.lc_chain.ask(question, session_id=session_id)
             elapsed = time.time() - start_time
             logger.info(f"请求完成，耗时: {elapsed:.2f}s")
@@ -387,3 +390,5 @@ class RAGPipeline:
             elapsed = time.time() - start_time
             logger.error(f"请求失败 (耗时: {elapsed:.2f}s): {e}", exc_info=True)
             raise
+        finally:
+            clear_context()
