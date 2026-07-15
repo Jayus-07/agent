@@ -64,8 +64,7 @@ export default function ChatView() {
       {/* Memory context panel */}
       <ContextPanel sessionId={currentId} />
 
-      {/* Agent Timeline — 仅流式传输时显示 */}
-      {isLoading && <AgentTimeline collapsed={!timelineOpen} onToggle={() => setTimelineOpen(v => !v)} />}
+      {/* Agent Timeline — 已关闭：对话页不显示思维链中间步骤 */}
 
       {/* Messages */}
       <div ref={contentRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">

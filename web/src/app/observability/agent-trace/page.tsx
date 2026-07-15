@@ -41,7 +41,18 @@ export default function AgentTracePage() {
     } catch {} finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { fetchTraces(); }, [fetchTraces]);
+  // 初始加载 + SSE 自动更新
+  useEffect(() => {
+    fetchTraces();
+    const es = new EventSource("/api/observability/rag-traces/stream");
+    es.onmessage = (e) => {
+      try {
+        const t = JSON.parse(e.data);
+        setTraces((prev) => [t, ...prev.slice(0, 49)]);
+      } catch {}
+    };
+    return () => es.close();
+  }, [fetchTraces]);
 
   const formatMs = (ms: number) => {
     if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
