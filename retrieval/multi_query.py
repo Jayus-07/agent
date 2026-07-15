@@ -12,7 +12,6 @@ from pydantic import Field
 
 from config import (
     MULTI_QUERY_MODE as _DEFAULT_MODE, MULTI_QUERY_COUNT,
-    MULTI_QUERY_TEMPERATURE, MULTI_QUERY_MAX_TOKENS,
     MULTI_QUERY_TOP_K_PER, MULTI_QUERY_DEDUP,
     MULTI_QUERY_SIMILARITY, MULTI_QUERY_MIN_LENGTH,
 )
@@ -83,11 +82,9 @@ def _rewrite(question: str) -> list[str]:
         from langchain_core.messages import HumanMessage
 
         prompt = QUERY_REWRITE_PROMPT.format(count=MULTI_QUERY_COUNT, question=question)
-        result = llm.invoke(
-            [HumanMessage(content=prompt)],
-            temperature=MULTI_QUERY_TEMPERATURE,
-            max_tokens=MULTI_QUERY_MAX_TOKENS,
-        )
+        result = llm.invoke([HumanMessage(content=prompt)])
+        # Ollama ChatOllama 不支持 invoke 时传 temperature/max_tokens，
+        # 这些参数已在模型初始化时设置（config 中的 LLM_TEMPERATURE 等）
         text = result.content if hasattr(result, "content") else str(result)
 
         lines = [re.sub(r"^\d+[\.\)、]\s*", "", l.strip())
