@@ -1,12 +1,11 @@
+"""planner.py — Planner 系统提示词 + 知识库关键词 + is_knowledge_question
+
+PLANNER_SYSTEM 是 Prompt 模板，{capabilities_schema} 由调用方在运行时填充。
+辅助函数 is_knowledge_question 是纯字符串匹配，零外部依赖。
+
+注：_format_capabilities_schema() 因依赖 tool_registry（避免循环导入），
+   仍保留在 backend/agent/planner/planner.py 中。
 """
-prompt.py — Planner 系统提示词 + 知识库关键词 + 辅助函数
-
-Planner 输出的 capability 是 Skill 注册表中定义的 Capability Key。
-"""
-
-import json
-
-from backend.agent.tool_registry import tool_registry
 
 
 PLANNER_SYSTEM = """你是任务规划专家。分析用户问题，将其拆解为可并行或串行的子任务。
@@ -151,21 +150,5 @@ _KNOWLEDGE_KEYWORDS = [
 
 
 def is_knowledge_question(question: str) -> bool:
-    """判断问题是否需要知识库检索"""
+    """判断问题是否需要知识库检索（纯字符串匹配，零外部依赖）"""
     return any(kw in question for kw in _KNOWLEDGE_KEYWORDS)
-
-
-def _format_capabilities_schema() -> str:
-    """格式化所有 capability 的 schema 为 Planner prompt 用"""
-    lines = []
-    for cap_name in tool_registry.get_available_capabilities():
-        schema = tool_registry.get_schema(cap_name)
-        if not schema:
-            continue
-        lines.append(f"### {cap_name}")
-        lines.append(f"描述: {schema['description']}")
-        lines.append(f"参数: {json.dumps(schema['params'], ensure_ascii=False)}")
-        if "示例" in schema:
-            lines.append(f"示例: {json.dumps(schema['示例'], ensure_ascii=False)}")
-        lines.append("")
-    return "\n".join(lines)

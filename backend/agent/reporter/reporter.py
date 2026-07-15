@@ -6,10 +6,11 @@ reporter.py — thin wrapper: reporter_node() → 委托 response.reporter
 """
 
 from backend.response.reporter import (
-    generate_final_answer, REPORTER_SYSTEM,
+    generate_final_answer,
     _extract_sources_from_steps, _extract_rag_references,
     _is_step_successful, _format_step_outputs, _fallback_summary,
 )
+from backend.prompts.reporter import REPORTER_SYSTEM
 from backend.utils.logger import logger
 
 

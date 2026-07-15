@@ -13,11 +13,12 @@ response — 最终回答生成层
   - 状态如何流转（那是 LangGraph 的事）
 """
 
-from backend.response.reporter import generate_final_answer, REPORTER_SYSTEM
+from backend.response.reporter import generate_final_answer
 from backend.response.context_filter import (
     filter_step_results, filter_by_bm25, check_reranker_available,
     parse_sources_from_text,
 )
+from backend.prompts.reporter import REPORTER_SYSTEM
 
 __all__ = [
     "generate_final_answer", "REPORTER_SYSTEM",

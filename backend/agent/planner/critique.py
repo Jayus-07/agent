@@ -16,33 +16,9 @@ from backend.llm.llm_factory import llm
 from backend.agent.tool_registry import tool_registry
 from backend.agent.planner.planner import _extract_json, _normalize_plan
 from backend.agent.alerts import make_alert, log_degradation
+from backend.prompts.critique import PLAN_CRITIQUE_SYSTEM
 from backend.utils.logger import logger
 from backend.config import ENABLE_PLAN_CRITIQUE
-
-
-PLAN_CRITIQUE_SYSTEM = """你是计划审查员（Plan Reviewer）。审查另一个 AI 生成的任务分解计划，修正错误。
-
-## 可用能力
-{capabilities_schema}
-
-## 审查规则
-1. **capability 匹配**：每个步骤的 capability 是否真正匹配问题意图？
-   - sql.query → 需要具体数据/统计/排名/数量的问题（如"销售额""排名""库存"）
-   - rag.search → 需要制度/规范/经验/方法/定义/流程的问题（如"流程""规定""怎么做"）
-   - report.generate → 需要生成格式化报告的问题
-2. **依赖合理性**：edges 中的依赖关系是否合理？无依赖的步骤应能并行。
-3. **步骤完整性**：是否遗漏了必要的步骤？
-4. **步骤冗余**：是否有对回答问题无帮助的冗余步骤？
-
-## 输出原则
-- **最小修改**：只修正明显有问题的部分，不重新设计整个计划
-- **信任原计划**：如果原计划基本合理，直接返回原 JSON，不要画蛇添足
-
-## 输出格式
-返回 JSON，格式与原计划完全相同：
-{{"nodes": {{...}}, "edges": {{...}}}}
-如果原计划无需修改，返回原始 JSON 即可。
-"""
 
 
 def critique_node(state: dict) -> dict:

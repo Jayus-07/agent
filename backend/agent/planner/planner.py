@@ -15,16 +15,34 @@ import json
 
 from backend.llm.llm_factory import llm
 from backend.agent.tool_registry import tool_registry
-from backend.agent.planner.prompt import (
-    PLANNER_SYSTEM, is_knowledge_question, _format_capabilities_schema,
-)
 from backend.agent.alerts import make_alert, log_degradation
+from backend.prompts.planner import PLANNER_SYSTEM, is_knowledge_question
 from backend.utils.logger import logger
 
 
 # =====================================================
 # Planner 节点
 # =====================================================
+
+def _format_capabilities_schema() -> str:
+    """格式化所有 capability 的 schema 为 Planner prompt 用。
+
+    注：依赖 tool_registry 保留在 planner.py 而非 prompts/planner.py
+    是为了避免循环导入（prompts 不能反向依赖 backend.agent）。
+    """
+    lines = []
+    for cap_name in tool_registry.get_available_capabilities():
+        schema = tool_registry.get_schema(cap_name)
+        if not schema:
+            continue
+        lines.append(f"### {cap_name}")
+        lines.append(f"描述: {schema['description']}")
+        lines.append(f"参数: {json.dumps(schema['params'], ensure_ascii=False)}")
+        if "示例" in schema:
+            lines.append(f"示例: {json.dumps(schema['示例'], ensure_ascii=False)}")
+        lines.append("")
+    return "\n".join(lines)
+
 
 def planner_node(state: dict) -> dict:
     """
