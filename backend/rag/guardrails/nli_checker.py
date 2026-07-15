@@ -146,15 +146,21 @@ def _entailment_prob(logits: np.ndarray) -> float:
     return float(probs[0])  # entailment 是第0类
 
 
-def _classify(entail_prob: float, threshold: float = NLI_SCORE_THRESHOLD) -> tuple:
-    """根据 entailment 概率判断支撑关系。"""
-    if entail_prob >= threshold:
-        return "entailment", True
-    # contradiction prob = 1 - entail_prob - neutral_prob
-    # 简化: entail_prob < 0.3 视为 contradiction
-    if entail_prob <= 0.3:
-        return "contradiction", False
-    return "neutral", False
+def _classify(entail_prob: float) -> tuple[str, str, bool]:
+    """三级漏斗：根据 entailment 概率返回 (label, action, supported)。
+
+    entail_prob > 0.5   → entailment           → pass（通过）
+    0.3 ~ 0.5           → neutral              → mark（存疑标记 [?]）
+    0.2 ~ 0.5（弱矛盾） → contradiction_weak    → cite（退化为文档引用）
+    < 0.2（强矛盾）      → contradiction_strong  → rewrite（LLM 局部重写）
+    """
+    if entail_prob > NLI_SCORE_THRESHOLD:
+        return "entailment", "pass", True
+    if entail_prob >= 0.3:
+        return "neutral", "mark", False
+    if entail_prob >= 0.2:
+        return "contradiction_weak", "cite", False
+    return "contradiction_strong", "rewrite", False
 
 
 def check_claims_batch(claims: List[str], context_docs: list) -> List[dict]:
@@ -165,7 +171,7 @@ def check_claims_batch(claims: List[str], context_docs: list) -> List[dict]:
     if not claims or not context_docs:
         return [{
             "claim": c, "supported": False, "best_score": 0.0,
-            "best_chunk_preview": "", "label": "contradiction",
+            "best_chunk_preview": "", "label": "contradiction_strong", "action": "rewrite",
         } for c in claims]
 
     model = _get_nli_model()
@@ -208,7 +214,7 @@ def check_claims_batch(claims: List[str], context_docs: list) -> List[dict]:
                 best_idx = i
 
         best_chunk = pairs[best_idx][0] if best_idx < len(pairs) else ""
-        label, supported = _classify(best_prob)
+        label, action, supported = _classify(best_prob)
 
         results.append({
             "claim": claim,
@@ -216,6 +222,7 @@ def check_claims_batch(claims: List[str], context_docs: list) -> List[dict]:
             "best_score": round(best_prob, 4),
             "best_chunk_preview": best_chunk[:200],
             "label": label,
+            "action": action,
         })
 
     return results
