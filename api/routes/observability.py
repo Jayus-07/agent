@@ -96,6 +96,37 @@ async def get_rag_trace(trace_id: str):
     }
 
 
+@router.get("/rag-traces/stream")
+async def stream_rag_traces():
+    """SSE 实时推送新 Trace"""
+    from fastapi.responses import StreamingResponse
+    import asyncio, json
+
+    async def event_stream():
+        from retrieval.tracer import trace_collector
+        last_id = ""
+        while True:
+            traces = trace_collector.list(1)
+            if traces and traces[0].id != last_id:
+                t = traces[0]
+                last_id = t.id
+                data = json.dumps({
+                    "id": t.id, "request_id": t.request_id,
+                    "timestamp": t.timestamp, "session_id": t.session_id,
+                    "model": {"name": t.model, "provider": t.provider},
+                    "question": t.question, "duration_ms": t.duration_ms,
+                    "usage": t.usage, "steps": [{
+                        "id": s.id, "label": s.label,
+                        "duration_ms": s.duration_ms, "duration_ratio": s.duration_ratio,
+                        "status": s.status, "metrics": s.metrics,
+                    } for s in t.steps],
+                }, ensure_ascii=False)
+                yield f"data: {data}\n\n"
+            await asyncio.sleep(1)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 # ═══════════════════════════════════════════════════
 # Metrics
 # ═══════════════════════════════════════════════════
