@@ -142,7 +142,7 @@ class RAGChain:
         )
         def _timed_stuff(inp):
             from retrieval.tracer import trace_collector
-            trace_collector._start("LLM生成")
+            trace_collector._start("llm_generate")
             try:
                 r = _stuff.invoke(inp)
                 from llm.proxy import _last_tokens
@@ -220,7 +220,7 @@ class RAGChain:
         context_docs = result.get("context", [])
 
         # Citation
-        trace_collector._start("Citation")
+        trace_collector._start("citation")
         if context_docs:
             answer, verified_docs = _verify_support(answer, context_docs, question)
         else:
@@ -246,17 +246,6 @@ class RAGChain:
         trace_collector.finish(trace, answer, total_ms, LLM_MODEL, provider)
 
         return answer
-
-    def _retriever_info(self) -> dict:
-        try:
-            mq = getattr(self, '_mq_retriever', None)
-            if mq:
-                return {"triggered": mq._last_triggered, "reason": mq._last_reason,
-                        "variants": mq._last_variants, "filtered_count": mq._last_filtered}
-        except Exception:
-            pass
-        return {"triggered": False, "reason": "简单查询", "variants": 1, "filtered_count": 1}
-
 
 def _strip_think_blocks(text: str) -> str:
     """剥离 <think>...</think> 推理块（MiniMax M3 / DeepSeek R1 等会输出）"""
