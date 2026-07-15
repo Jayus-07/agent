@@ -1,9 +1,9 @@
 """
-minimax.py — MiniMax Provider（云端，兼容 OpenAI 协议）
+minimax.py — MiniMax Provider（Anthropic Messages API，官方推荐）
 
 提供:
-  - build_minimax(): 构建 ChatOpenAI 实例（用 MiniMax API base）
-  - get_minimax_balance(): MiniMax 余额查询（返回固定值，MiniMax 不提供余额 API）
+  - build_minimax(): 构建 ChatAnthropic 实例（MiniMax Anthropic 兼容端点）
+  - get_minimax_balance(): MiniMax 余额查询
 """
 
 from config import (
@@ -14,22 +14,29 @@ from utils.logger import logger
 
 
 def build_minimax(model_name: str) -> object:
-    """构建 MiniMax 模型实例（通过 OpenAI 兼容协议）"""
+    """构建 MiniMax 模型实例（Anthropic Messages API，官方推荐路径）
+
+    MiniMax 文档推荐使用 Anthropic 兼容 API:
+      - 支持 thinking: {"type": "disabled"} 关闭强制思考
+      - 支持 interleaved thinking 高级特性
+      - Chat Completions 仅作为 OpenAI SDK 用户迁移备选
+    """
     try:
-        from langchain_openai import ChatOpenAI
+        from langchain_anthropic import ChatAnthropic
     except ImportError as e:
         raise ImportError(
-            "minimax provider 需要 langchain_openai 包，请 pip install langchain-openai"
+            "minimax provider 需要 langchain_anthropic 包，请 pip install langchain-anthropic"
         ) from e
 
-    return ChatOpenAI(
+    # MiniMax Anthropic 端点
+    return ChatAnthropic(
         model=model_name,
         temperature=LLM_TEMPERATURE,
         max_tokens=LLM_CONTEXT_LENGTH,
-        request_timeout=LLM_REQUEST_TIMEOUT,
-        api_key=MINIMAX_API_KEY,
-        base_url=MINIMAX_API_BASE,
-        model_kwargs={"thinking": {"type": "disabled"}},  # 关闭 MiniMax-M3 强制思考
+        timeout=LLM_REQUEST_TIMEOUT,
+        anthropic_api_key=MINIMAX_API_KEY,
+        anthropic_api_url="https://api.minimaxi.com/anthropic",
+        default_headers={"x-api-key": MINIMAX_API_KEY},
     )
 
 
