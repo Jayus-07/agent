@@ -8,67 +8,22 @@ LangChain LCEL 主 Chain
   L3 长期: PostgreSQL + pgvector (via MemoryRepository)
   MemoryManager 统一管理三层，chain 只持有引用。
 """
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List
-
 from langchain_classic.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
-from langchain_classic.retrievers.multi_query import MultiQueryRetriever
+# (MultiQuery 已迁移至 retrieval/multi_query.py)
 from langchain_classic.retrievers import ContextualCompressionRetriever
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.runnables import RunnableLambda
-from langchain_core.documents import Document
-from langchain_core.retrievers import BaseRetriever
 
 from llm.llm_factory import llm
 from retrieval.retrievers import ChunkLevelRetriever, AdaptiveRetriever
 from retrieval.reranker import RerankCompressor
 from config import (
     ENABLE_HISTORY_AWARE_RETRIEVAL,
-    ENABLE_MULTI_QUERY,
     CITATION_SUPPORT_THRESHOLD,
 )
 from utils.logger import logger
-
-
-# =====================================================
-# 并行 MultiQueryRetriever（替换 LangChain 默认串行版本）
-# =====================================================
-
-class ParallelMultiQueryRetriever(MultiQueryRetriever):
-    """
-    与 MultiQueryRetriever 相同，但多个查询变体的检索并发执行。
-    继承父类的 generate_queries，只覆盖 retrieve_documents 为并发版本。
-    """
-    max_workers: int = 3
-
-    def retrieve_documents(
-        self, queries: List[str], run_manager=None
-    ) -> List[Document]:
-        """并发检索所有查询变体，合并去重"""
-        all_docs: List[Document] = []
-
-        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(queries))) as executor:
-            futures = {
-                executor.submit(self._retrieve_single, q): q
-                for q in queries
-            }
-            for future in as_completed(futures):
-                try:
-                    docs = future.result()
-                    all_docs.extend(docs)
-                except Exception as e:
-                    logger.warning(f"[ParallelMultiQuery] 检索失败 '{futures[future][:50]}': {e}")
-
-        logger.info(f"[ParallelMultiQuery] {len(queries)} 查询 → {len(all_docs)} 文档 (并发={self.max_workers})")
-        # 使用父类的去重方法
-        return self.unique_union(all_docs)
-
-    def _retrieve_single(self, query: str) -> List[Document]:
-        """单个查询的检索（线程安全）"""
-        # LangChain BaseRetriever 的标准调用方式: invoke() → _get_relevant_documents()
-        return self.retriever.invoke(query)
 
 
 # =====================================================
@@ -191,13 +146,9 @@ class RAGChain:
 
         retriever = self.chunk_retriever_base
 
-        # MultiQuery: 用 LLM 生成多个角度查询 → 并发检索，提升召回率
-        # 关闭可省 1 次 LLM API 调用 (ENABLE_MULTI_QUERY=false)
-        if ENABLE_MULTI_QUERY:
-            retriever = ParallelMultiQueryRetriever.from_llm(
-                retriever=retriever, llm=llm
-            )
-            retriever.max_workers = 3
+        # MultiQuery: auto(自动判断复杂问题)/on(强制)/off(关闭)
+        from retrieval.multi_query import MultiQueryRetriever
+        retriever = MultiQueryRetriever(base_retriever=retriever)
         logger.info("retriever: " + str(retriever))
 
         # Adaptive: 检查 MultiQuery 合并后的 chunk 文档分布，按需补全文档全文

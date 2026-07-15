@@ -67,8 +67,20 @@ RERANK_SCORE_THRESHOLD = float(os.getenv("RERANK_SCORE_THRESHOLD", "0.3"))
 # Citation Filter: chunk 支撑答案的最低 CrossEncoder 分数（高于检索的 rerank 阈值，更严格）
 CITATION_SUPPORT_THRESHOLD = float(os.getenv("CITATION_SUPPORT_THRESHOLD", "0.4"))
 
-# 性能开关：关闭可减少 LLM API 调用次数
-ENABLE_MULTI_QUERY = os.getenv("ENABLE_MULTI_QUERY", "true").lower() == "true"              # MultiQuery 查询扩展（关=省1次LLM调用）
+# ====================================
+# MultiQuery 检索配置
+# ====================================
+# mode: "auto"(自动判断复杂问题) | "on"(强制开启) | "off"(关闭)
+MULTI_QUERY_MODE = os.getenv("MULTI_QUERY_MODE", "auto")                 # 自动触发模式
+MULTI_QUERY_COUNT = int(os.getenv("MULTI_QUERY_COUNT", "3"))             # 查询变体数
+MULTI_QUERY_TEMPERATURE = float(os.getenv("MULTI_QUERY_TEMPERATURE", "0.2"))  # Rewrite 温度
+MULTI_QUERY_MAX_TOKENS = int(os.getenv("MULTI_QUERY_MAX_TOKENS", "200"))      # Rewrite max_tokens
+MULTI_QUERY_TOP_K_PER = int(os.getenv("MULTI_QUERY_TOP_K_PER", "5"))         # 每变体检索数
+MULTI_QUERY_DEDUP = os.getenv("MULTI_QUERY_DEDUP", "true").lower() == "true"  # 去重开关
+MULTI_QUERY_SIMILARITY = float(os.getenv("MULTI_QUERY_SIMILARITY", "0.9"))    # Jaccard 相似阈值
+MULTI_QUERY_MIN_LENGTH = int(os.getenv("MULTI_QUERY_MIN_LENGTH", "3"))        # 最小查询长度
+# 兼容旧配置项
+ENABLE_MULTI_QUERY = MULTI_QUERY_MODE != "off"
 
 
 # ====================================
