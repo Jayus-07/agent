@@ -2,9 +2,9 @@
 
 import { useCallback, useRef } from 'react'
 import { useChatStore } from '@/store/chat'
-import { streamChat, abortChat } from '@/lib/api'
+import { streamChat, abortChat } from '@/lib/api/chat'
+import type { SSEStreamEvent } from '@/lib/api/chat'
 import { nanoid } from 'nanoid'
-import type { SSEStreamEvent } from '@/lib/types'
 
 export function useSSE() {
   const abortRef = useRef<AbortController | null>(null)
