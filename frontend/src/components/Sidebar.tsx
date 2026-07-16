@@ -44,6 +44,8 @@ const NAV = [
   {
     icon: <Activity size={18} />, label: '可观测中心',
     items: [
+      { label: '链路追踪', path: '/observability/traces' },
+      { label: '告警中心', path: '/observability/alerts' },
       { label: 'Agent Trace', path: '/observability/agent-trace' },
       { label: 'LLM 调用', path: '/observability/llm' },
       { label: 'RAG 指标', path: '/observability/rag' },

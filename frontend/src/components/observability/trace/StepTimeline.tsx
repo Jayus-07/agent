@@ -56,9 +56,10 @@ interface Props {
   totalMs: number;
   onToggle?: (id: string) => void;
   expanded?: Set<string>;
+  highlightStepId?: string | null;
 }
 
-export default function StepTimeline({ steps, totalMs, onToggle, expanded }: Props) {
+export default function StepTimeline({ steps, totalMs, onToggle, expanded, highlightStepId }: Props) {
   const maxMs = Math.max(...steps.map((s) => s.duration_ms), 1);
 
   return (
@@ -76,12 +77,17 @@ export default function StepTimeline({ steps, totalMs, onToggle, expanded }: Pro
         const ratio = Math.max(step.duration_ratio * 100, step.status === "skipped" ? 0 : 0.3);
         const isSlowest = step.duration_ms === maxMs && step.duration_ms > 0;
         const isRerankZero = step.id === "rerank" && Number(step.metrics?.output_docs ?? -1) === 0;
+        const isHighlight = highlightStepId === step.id;
 
         return (
           <div
+            id={`step-${step.id}`}
             key={step.id}
-            className={`group flex items-center gap-4 py-2.5 px-3 rounded-md transition-colors ${
-              isRerankZero
+            onClick={() => onToggle?.(step.id)}
+            className={`group flex items-center gap-4 py-2.5 px-3 rounded-md transition-colors cursor-pointer ${
+              isHighlight
+                ? "bg-violet-100 ring-2 ring-violet-400"
+                : isRerankZero
                 ? "bg-red-50 border border-red-100"
                 : isSlowest
                 ? "bg-amber-50/50"
