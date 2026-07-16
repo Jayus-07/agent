@@ -94,6 +94,7 @@ web/node_modules/
 web/.next/
 frontend/node_modules/
 frontend/.next/
+frontend/tsconfig.tsbuildinfo
 
 # Added by code-review-graph
 .code-review-graph/
