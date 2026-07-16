@@ -47,7 +47,7 @@
 
 ```
 agent/
-├── frontend/              # Next.js
+├── frontend/              # Next.js（详见下方"前端分层"）
 ├── backend/
 │   ├── app/               # FastAPI: server.py / deps.py / api/routes/
 │   ├── config/            # 配置（按模块拆分）
@@ -68,6 +68,22 @@ agent/
 ```
 
 **`backend/data` 是 Windows Junction → `../data`，后端必须从 `backend/` 目录启动。**
+
+**前端分层（`frontend/src/`）**：
+
+| 路径 | 角色 | 说明 |
+|---|---|---|
+| `app/` | Next.js 路由 | 按模块分：agent / observability / knowledge / data-source / data-pipeline |
+| `components/<模块>/` | 业务组件 | 每个模块独立目录（如 `observability/trace/`） |
+| `components/shared/` | 原子组件 | EmptyState / ErrorState / Skeleton / Toast — **禁止复制，每个页面必须用** |
+| `lib/fetcher.ts` | 底层 fetch | 统一 JSON、超时、`ApiError` |
+| `lib/sse-parser.ts` | SSE 解析器 | 纯函数 async generator，可独立测 |
+| `lib/api/<模块>.ts` | 业务 API | 按域拆：chat / llm / memory |
+| `lib/api.ts` | 兼容层 | **仅 re-export**，新代码禁止直接 import |
+| `hooks/` | React Hooks | SSE / 数据获取等可复用 hooks |
+| `store/` | Zustand | 全局状态（chat 等） |
+| `types/` | 类型 + 测试 | 按域拆的 TypeScript 类型 + `*.test.ts` 单测 |
+| `mock/` | 静态 mock | 未接 API 时的占位数据 |
 
 **禁止**：`misc.py` / `helper.py` / `common.py` / `utils2.py` 等无语义文件。
 
@@ -92,6 +108,7 @@ agent/
 
 **每次完成开发后输出**：
 - Development Summary（完成内容 / 影响模块 / 兼容性 / 风险）
+- Test Coverage（新增/修改的纯函数是否有 `*.test.ts` 覆盖，测试是否通过）
 - Code Review（评分 + P0/P1/P2 问题 + 修改建议）
 - Architecture Assessment（SOLID/DRY/KISS/YAGNI 符合度）
 
@@ -125,7 +142,12 @@ agent/
 - 日志含 Request ID / Session ID / 耗时 / 模块名；不用大量无意义 INFO
 
 **React**
-- API 统一 `lib/api.ts`、SSE 用 `useSSE`、全局状态用 Zustand
+- API 按域 import：`@/lib/api/chat` / `@/lib/api/llm` / `@/lib/api/memory`（**不直接 import `lib/api.ts`**）
+- 底层 fetch 用 `@/lib/fetcher` 的 `request<T>()`，禁止裸 `fetch`
+- SSE 用 `useSSE` hook + `@/lib/sse-parser`
+- 原子组件统一 `@/components/shared/{EmptyState,ErrorState,Skeleton,Toast}`，禁止各页面自造
+- Toast 通知用 `useToast()`（已内置 provider），**禁止 `alert()` / `confirm()`**
+- 全局状态用 Zustand，按域拆 store（避免单 store 臃肿）
 
 ---
 
@@ -148,6 +170,9 @@ agent/
 | 重启 | `restart_all.bat` |
 | 仅后端 | `cd backend && ..\.venv\Scripts\python.exe -m uvicorn app.server:app` |
 | 仅前端 | `cd frontend && npm run dev` |
+| 前端测试（单次） | `cd frontend && npm test` |
+| 前端测试（watch） | `cd frontend && npm run test:watch` |
+| 前端测试覆盖率 | `cd frontend && npm run test:coverage` |
 | API 文档 | http://localhost:8000/docs |
 | 前端 | http://localhost:3000 |
 | MCP 工具 | http://localhost:8000/mcp/tools |
@@ -156,7 +181,9 @@ agent/
 
 ## Docs
 
-暂无独立文档。架构/模块说明请直接参考代码与 README。
+- [前端可观测性数据需求](docs/observability/frontend-data-requirements.md) — 5 个页面 + TraceRecord/TraceStep/AlertItem/TraceStats 完整数据契约（前后端对齐用）
+
+暂无其他独立文档。架构/模块说明请直接参考代码与 README。
 （项目演进中文档容易过时，代码即文档。）
 
 ---
