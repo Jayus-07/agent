@@ -161,6 +161,33 @@ agent/
 
 ---
 
+## Hooks
+
+`scripts/check_code_changes.sh` — Stop hook：检测未提交的 .py/.ts/.tsx 变更，**30 分钟内仅提醒一次**。
+
+防止因文件 mtime 持续满足条件而无限触发。
+
+**个人安装**（写入 `.claude/settings.local.json`）：
+
+```json
+{
+  "hooks": {
+    "Stop": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "bash \"<repo>/scripts/check_code_changes.sh\"",
+        "timeout": 10
+      }]
+    }]
+  }
+}
+```
+
+脚本自动用 `git rev-parse --show-toplevel` 定位仓库根，无硬编码路径，跨机器/跨平台可用。
+
+---
+
 ## Commands
 
 | 操作 | 命令 |
