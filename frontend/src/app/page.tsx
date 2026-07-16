@@ -4,7 +4,7 @@ import { Database, BookOpen, Brain, TrendingUp, ArrowRight, ArrowUpRight, ArrowD
 import { useRouter } from 'next/navigation'
 import { DASHBOARD_KPIS, RECENT_ANALYSES, RECENT_UPLOADS, RECENT_REPORTS, AGENT_HEALTH, SYSTEM_EVENTS } from '@/services/mock/dashboard'
 
-const PIPELINE_STAGES = ['数据接入', '数据清洗', '数据资产', 'RAG 检索', 'AI 分析', '报告生成']
+const PIPELINE_STAGES = ['数据接入', '数据清洗', '数据资产', 'RAG 检索', 'AI任务', '报告生成']
 
 export default function DashboardPage() {
   const router = useRouter()
@@ -14,7 +14,7 @@ export default function DashboardPage() {
       <div className="max-w-6xl mx-auto px-6 py-8">
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-text-primary tracking-tight">电商智能数据平台</h1>
-          <p className="text-sm text-text-muted mt-1.5">数据接入 → 数据治理 → 数据资产 → AI 分析 → 智能报告，全链路闭环</p>
+          <p className="text-sm text-text-muted mt-1.5">数据接入 → 数据治理 → 数据资产 → AI任务 → 智能报告，全链路闭环</p>
         </div>
 
         {/* KPI Cards with trends */}

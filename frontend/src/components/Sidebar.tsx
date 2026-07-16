@@ -34,7 +34,7 @@ const NAV = [
     ],
   },
   {
-    icon: <Brain size={18} />, label: 'AI 分析中心',
+    icon: <Brain size={18} />, label: 'AI任务中心',
     items: [
       { label: '智能问答', path: '/agent' },
       { label: '分析任务', path: '/agent/tasks' },

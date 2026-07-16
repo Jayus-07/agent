@@ -21,7 +21,7 @@ export interface SystemEvent {
 export const DASHBOARD_KPIS: DashboardKpi[] = [
   { label: '数据资产', value: '7', trend: 40, trendLabel: '较上周', icon: '🗄', color: '#4E79A7' },
   { label: '知识文档', value: '68', trend: 12, trendLabel: '较上周', icon: '📚', color: '#F28E2B' },
-  { label: 'AI 分析', value: '50', trend: 25, trendLabel: '较上周', icon: '🤖', color: '#59A14F' },
+  { label: 'AI任务', value: '50', trend: 25, trendLabel: '较上周', icon: '🤖', color: '#59A14F' },
   { label: '系统可用', value: '99.7%', trend: 0.1, trendLabel: '30天', icon: '📈', color: '#B07AA1' },
 ]
 
