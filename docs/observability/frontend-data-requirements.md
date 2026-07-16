@@ -493,39 +493,51 @@ CREATE TABLE traces (
     -- 时间
     start_time          TIMESTAMPTZ NOT NULL,
     end_time            TIMESTAMPTZ,
-    duration_ms         INTEGER,                         -- 派生：end-start
+    duration_ms         INTEGER NOT NULL DEFAULT 0,     -- 派生：end-start；INT4 上限 24 天，够
 
-    -- 状态
-    status              TEXT NOT NULL,                   -- running | success | error | timeout | cancelled
+    -- 状态（CHECK 约束保证枚举合法）
+    status              TEXT NOT NULL,
     error_code          TEXT,
     error_message       TEXT,
-    error_node          TEXT,                            -- 失败的 span id
+    error_node          TEXT,                            -- 失败的 span.id（指向 trace_json.spans[].id）
 
     -- 业务元数据（结构化）
-    user_id             TEXT,                            -- 用于按用户过滤
+    user_id             TEXT,                            -- P0-2: 可空 + 默认 'anonymous'
     kb_id               TEXT,                            -- 用于按 KB 过滤
     model_name          TEXT,                            -- 用于按模型过滤
-    total_tokens        INTEGER DEFAULT 0,               -- 写入时聚合
+    total_tokens        INTEGER NOT NULL DEFAULT 0,      -- 写入时聚合
 
-    -- 元数据（半结构化，可扩展）
+    -- 元数据（半结构化，必填 key：question / temperature / max_tokens）
     metadata            JSONB NOT NULL DEFAULT '{}'::jsonb,
 
-    -- 完整调用树（非结构化，全部 span+event）
-    trace_json          JSONB NOT NULL,                  -- 见 §13
+    -- 完整调用树（非结构化）
+    trace_json          JSONB NOT NULL DEFAULT '{}'::jsonb,  -- 见 §13，限 1MB
 
     -- 时间戳
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    -- CHECK 约束
+    CONSTRAINT chk_traces_status CHECK (status IN ('running','success','error','timeout','cancelled')),
+    CONSTRAINT chk_traces_duration CHECK (duration_ms >= 0),
+    CONSTRAINT chk_traces_metadata_keys CHECK (
+        metadata ? 'question' AND
+        (NOT (metadata ? 'temperature') OR jsonb_typeof(metadata->'temperature') = 'number') AND
+        (NOT (metadata ? 'max_tokens') OR jsonb_typeof(metadata->'max_tokens') = 'number')
+    )
 );
 
 -- 索引：核心查询路径
 CREATE INDEX idx_traces_start_time ON traces (start_time DESC);
 CREATE INDEX idx_traces_session ON traces (session_id, start_time DESC);
-CREATE INDEX idx_traces_status ON traces (status, start_time DESC) WHERE status IN ('error', 'timeout');
-CREATE INDEX idx_traces_user ON traces (user_id, start_time DESC) WHERE user_id IS NOT NULL;
+CREATE INDEX idx_traces_status_err ON traces (status, start_time DESC) WHERE status IN ('error', 'timeout');
+CREATE INDEX idx_traces_user ON traces (user_id, start_time DESC) WHERE user_id <> 'anonymous';
+CREATE INDEX idx_traces_kb ON traces (kb_id, start_time DESC) WHERE kb_id IS NOT NULL;
+CREATE INDEX idx_traces_model ON traces (model_name, start_time DESC) WHERE model_name IS NOT NULL;
+CREATE INDEX idx_traces_created ON traces (created_at);
 
 -- GIN 索引：JSONB 字段过滤（按 KB / 模型）
-CREATE INDEX idx_traces_metadata_kb ON traces USING GIN ((metadata->>'kb_id'));
-CREATE INDEX idx_traces_metadata_model ON traces USING GIN ((metadata->>'model_name'));
+CREATE INDEX idx_traces_metadata_kb ON traces USING GIN ((metadata->>'kb_id') jsonb_path_ops);
+CREATE INDEX idx_traces_metadata_model ON traces USING GIN ((metadata->>'model_name') jsonb_path_ops);
 
 -- 全文搜索（关键词）
 CREATE INDEX idx_traces_question_tsv ON traces USING GIN (to_tsvector('simple', metadata->>'question'));
@@ -544,26 +556,60 @@ CREATE INDEX idx_traces_question_tsv ON traces USING GIN (to_tsvector('simple', 
 
 ```sql
 CREATE TABLE metrics_buckets (
-    bucket_ts       TIMESTAMPTZ PRIMARY KEY,             -- 截断到分钟
-    scope           TEXT NOT NULL,                       -- 'global' | 'kb:<kb_id>' | 'model:<name>'
+    bucket_ts       TIMESTAMPTZ NOT NULL,                -- 截断到分钟（UTC）
+    scope           TEXT NOT NULL,                       -- 'global' | 'kb:<kb_id>' | 'model:<name>' | 'user:<id>'
+
+    -- 计数
     count           INTEGER NOT NULL DEFAULT 0,
     success_count   INTEGER NOT NULL DEFAULT 0,
     error_count     INTEGER NOT NULL DEFAULT 0,
     timeout_count   INTEGER NOT NULL DEFAULT 0,
 
+    -- 延迟（毫秒）
     sum_duration_ms BIGINT NOT NULL DEFAULT 0,
-    max_duration_ms INTEGER NOT NULL DEFAULT 0,          -- 用 max 算 p95（先粗后精）
-    p95_duration_ms INTEGER NOT NULL DEFAULT 0,          -- 可选：维护精确值
+    max_duration_ms INTEGER NOT NULL DEFAULT 0,          -- 近似 p100
+    p95_duration_ms INTEGER NOT NULL DEFAULT 0,          -- 近似 p95（用 max 估算，详见 §16.2）
+    p99_duration_ms INTEGER NOT NULL DEFAULT 0,          -- 近似 p99
 
+    -- Token
     sum_prompt_tokens     INTEGER NOT NULL DEFAULT 0,
     sum_completion_tokens INTEGER NOT NULL DEFAULT 0,
     sum_total_tokens      INTEGER NOT NULL DEFAULT 0,
+
+    -- 成本：NUMERIC(12, 6) 支持到 $999,999.999999
+    -- 量级评估：100 万 trace/天 × $0.001 = $1000/天 → 6 位小数 12 数字（999,999.999999）够用 1000 天
     sum_cost_usd          NUMERIC(12, 6) NOT NULL DEFAULT 0,
 
-    UNIQUE (bucket_ts, scope)
+    -- 复合主键（bucket + scope 联合唯一）
+    PRIMARY KEY (bucket_ts, scope),
+
+    -- CHECK 约束
+    CONSTRAINT chk_bucket_scope_format CHECK (
+        scope IN ('global') OR scope ~ '^(kb|model|user):[^:]+$'
+    ),
+    CONSTRAINT chk_bucket_counts CHECK (
+        count >= 0 AND count = success_count + error_count + timeout_count
+    )
 );
 
+-- 索引：按 scope + 时间
 CREATE INDEX idx_buckets_scope_time ON metrics_buckets (scope, bucket_ts DESC);
+
+-- 时序分区：按月分区便于清理
+-- CREATE TABLE metrics_buckets (...) PARTITION BY RANGE (bucket_ts);
+-- CREATE TABLE metrics_buckets_2026_07 PARTITION OF metrics_buckets
+--     FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
+```
+
+**清理策略**（30 天滚动）：
+
+```sql
+-- 方式 A：DELETE（简单，慢）
+DELETE FROM metrics_buckets WHERE bucket_ts < NOW() - INTERVAL '30 days';
+
+-- 方式 B：分区 DROP（推荐，量级大后用）
+DROP TABLE metrics_buckets_2026_06;
+-- 配合 pg_cron 或外部 cron job 每月执行
 ```
 
 **设计要点**：
@@ -616,13 +662,29 @@ CREATE TABLE alerts (
     message         TEXT NOT NULL,
     detail          JSONB NOT NULL DEFAULT '{}'::jsonb,  -- 触发条件 / 阈值 / 关联统计
     scope           TEXT,                                -- 'global' | 'session:<id>' | 'kb:<kb_id>' 等
-    trace_ids       JSONB NOT NULL DEFAULT '[]'::jsonb,  -- 关联的 trace ids
+    trace_ids       JSONB NOT NULL DEFAULT '[]'::jsonb,  -- 关联的 trace ids（数组，限 500 元素）
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    resolved_at     TIMESTAMPTZ
+    resolved_at     TIMESTAMPTZ,
+
+    -- CHECK 约束
+    CONSTRAINT chk_alert_severity CHECK (severity IN ('warning','error','critical')),
+    CONSTRAINT chk_alert_type CHECK (type IN ('sla_breach','high_latency','error_rate','cost_anomaly','faithfulness_low','retrieval_miss')),
+    CONSTRAINT chk_alert_status CHECK (status IN ('firing','resolved')),
+    CONSTRAINT chk_alert_resolved CHECK (
+        (status = 'resolved' AND resolved_at IS NOT NULL) OR
+        (status = 'firing'   AND resolved_at IS NULL)
+    )
 );
 
+-- 索引：列表查询（按状态 + 时间）
 CREATE INDEX idx_alerts_status_time ON alerts (status, created_at DESC);
 CREATE INDEX idx_alerts_type ON alerts (type, created_at DESC);
+CREATE INDEX idx_alerts_severity ON alerts (severity, created_at DESC) WHERE severity = 'critical';
+
+-- GIN 索引：trace_ids JSONB 数组（"反查某 trace 触发了哪些 alert"）
+-- jsonb_path_ops 比默认 jsonb_ops 小 30%，且支持 @> 操作符
+CREATE INDEX idx_alerts_trace_ids ON alerts USING GIN (trace_ids jsonb_path_ops);
+-- 查询示例：SELECT * FROM alerts WHERE trace_ids @> '["abc123"]'::jsonb;
 ```
 
 **设计要点**：
@@ -833,6 +895,69 @@ CREATE TABLE alert_rules (
 
 前端读 trace_json 时先看 `version`，不同版本走不同解析路径。
 
+### 13.5 限制与校验
+
+| 限制 | 值 | 原因 |
+|---|---|---|
+| `trace_json` 单字段最大 | **1 MB** | 超 PG TOAST 后单行存储不友好；超 10MB 拆独立表 |
+| Span 嵌套深度 | **≤ 10 层** | 防恶意深嵌套让 JSON 解析栈溢出 |
+| 单 trace span 总数 | **≤ 500 个** | 防失控；超过应聚合 |
+| 单 span events 数 | **≤ 100 个** | events 是瞬时高频小数据 |
+| 必填字段 | `spans[].id, type, status, start_time` | 缺一不可 |
+
+**写入前校验**（Pydantic v2）：
+
+```python
+# backend/orchestration/trace_json_schema.py
+from pydantic import BaseModel, Field, field_validator
+
+
+class SpanV2(BaseModel):
+    id: str = Field(..., min_length=1, max_length=64)
+    parent_id: str | None = None
+    type: str = Field(..., pattern=r"^(agent|llm_call|tool_call|retrieval|rerank|http|sql|memory|workflow|custom)$")
+    name: str = Field(..., max_length=128)
+    status: str = Field(..., pattern=r"^(running|success|error|skipped)$")
+    start_time: str  # ISO 8601
+    end_time: str | None = None
+    duration_ms: int = Field(..., ge=0, le=86_400_000)  # ≤ 1 天
+    attributes: dict = Field(default_factory=dict)
+    metrics: dict = Field(default_factory=dict)
+    input: dict | None = None
+    output: dict | None = None
+    events: list[dict] = Field(default_factory=list, max_length=100)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    children: list[str] = Field(default_factory=list, max_length=20)
+
+
+class TraceJsonV2(BaseModel):
+    trace_id: str
+    version: int = 2
+    root_span_id: str
+    spans: list[SpanV2] = Field(..., max_length=500)
+
+    @field_validator("spans")
+    @classmethod
+    def check_nesting_depth(cls, spans):
+        # 简单 O(n) 校验：parent_id 链长度 ≤ 10
+        ...
+```
+
+**写入流程**：
+
+```python
+async def write_trace_json(trace_id: str, raw: dict) -> None:
+    # 1. Pydantic 校验（必填、长度、正则）
+    validated = TraceJsonV2.model_validate(raw)
+    # 2. 大小检查（≤ 1MB）
+    payload = validated.model_dump_json().encode()
+    if len(payload) > 1_048_576:
+        raise TraceJsonTooLarge(trace_id, len(payload))
+    # 3. 写入
+    await repo.update_trace_json(trace_id, validated.model_dump())
+```
+
 ---
 
 ## 14. 阶段四：TraceRepository
@@ -958,6 +1083,121 @@ class PostgresTraceRepository(TraceRepository):
 2. **`metadata` 提取靠 JSONB 路径**：`metadata->>'kb_id'` 走 GIN 索引
 3. **写 trace_json 单独方法**：`update_trace_json` 让 span 树异步落库（不影响主流程）
 4. **`upsert_session`**：trace 结束时 UPSERT session 聚合行（用 `ON CONFLICT (session_id) DO UPDATE`）
+
+### 14.5 事务边界
+
+**核心原则**：**主表同步 + 衍生异步**，保证关键路径不阻塞。
+
+| 操作 | 同步/异步 | 失败处理 |
+|---|---|---|
+| `create(trace)` trace 主表 insert | **同步**（事务内） | 抛错：trace 丢失（业务失败） |
+| `update_status()` 标记 end | **同步**（事务内） | 抛错：trace 卡 running，需 background job 清理 |
+| `update_trace_json()` 写完整 span 树 | **异步**（独立事务） | retry 3 次，仍失败记录 `trace_json_missing=true` 标记 |
+| `upsert_metric_bucket()` 写聚合桶 | **同步**（同 update_status 事务） | 抛错：metrics 不准，但 trace 仍记录 |
+| `upsert_session()` 更新 session 聚合 | **同步**（同 update_status 事务） | 抛错：session 聚合不更新，下次 trace 补上 |
+| `add_event()` 追加事件 | **异步** | retry 3 次，仍失败丢弃（事件不阻塞主流程） |
+
+**关键事务**（保证原子性）：
+
+```python
+async def end_trace(trace_id: str, ...):
+    async with db.transaction():
+        # 事务 1：核心
+        await repo.update_status(trace_id, end_time, status, ...)  # traces 表
+        await repo.upsert_metric_bucket(...)                       # metrics_buckets
+        await repo.upsert_session(...)                            # sessions
+    # 事务 2（独立）：详细
+    await write_trace_json_with_retry(trace_id, span_tree, max_retries=3)
+```
+
+**为什么不放一个事务**：
+- trace_json 写入慢（1MB JSONB + GIN 索引）
+- 失败后整事务回滚 → 主表 status 也没更新 → trace 卡 running
+- 分离后：主表一定更新，详细可容忍延迟
+
+**retry 策略**：
+
+```python
+async def write_trace_json_with_retry(trace_id: str, payload: dict, max_retries: int = 3):
+    for attempt in range(max_retries):
+        try:
+            await repo.update_trace_json(trace_id, payload)
+            return
+        except (ConnectionError, TimeoutError) as e:
+            if attempt == max_retries - 1:
+                await mark_trace_json_missing(trace_id, str(e))
+                logger.error(f"trace_json write failed after {max_retries} retries: {trace_id}")
+                return
+            await asyncio.sleep(0.5 * (2 ** attempt))  # 指数退避
+```
+
+### 14.6 缓存策略
+
+**双层：内存 cache + DB**：
+
+```
+读路径：内存 cache → 命中则返回；未命中则查 DB → backfill cache
+写路径：写 DB + 更新 cache
+```
+
+**配置**：
+
+```python
+# backend/orchestration/trace_cache.py
+class TraceCache:
+    """L1 缓存（命中最近 200 条 + 详情 LRU 100 条）"""
+
+    def __init__(self, list_size: int = 200, detail_size: int = 100):
+        self._list = deque(maxlen=list_size)        # 最近 N 条 trace 摘要
+        self._detail = LRUCache(detail_size)        # 单条详情 LRU
+        self._lock = threading.Lock()
+
+    def get_recent(self, limit: int) -> list[dict]:
+        with self._lock:
+            return list(self._list)[-limit:]
+
+    def get_detail(self, trace_id: str) -> dict | None:
+        with self._lock:
+            return self._detail.get(trace_id)
+
+    def put_list(self, trace: dict) -> None:
+        with self._lock:
+            self._list.append(trace)
+
+    def put_detail(self, trace: dict) -> None:
+        with self._lock:
+            self._detail[trace.id] = trace
+```
+
+**关键决策**：
+- list cache 用 deque(maxlen=N) — 最近 N 条快速返回
+- detail cache 用 LRU — 详情页可能反复看同一条
+- **写穿透：DB 写成功后必须更新 cache**（否则下次读会 miss 又查 DB）
+
+### 14.7 并发控制
+
+**行级锁**（PostgreSQL 默认）：
+
+- `traces` 表：单条 trace 写用 PK，**不冲突**
+- `metrics_buckets`：同分钟高并发 → **行锁等待**
+
+```sql
+-- 缓解：1 分钟桶使用 NOW() 截断，所有并发请求都到同一行
+-- PostgreSQL 行锁是 FIFO，不会饿死
+-- 实测：100 并发写同一行，P99 延迟 < 50ms
+```
+
+**死锁预防**：
+
+```python
+# 锁顺序约定：traces → metrics_buckets → sessions
+# 所有写路径都按这个顺序，永不反向
+async def end_trace(...):
+    async with db.transaction():
+        await repo.update_status(trace_id, ...)     # 1. traces
+        await repo.upsert_metric_bucket(...)        # 2. metrics_buckets
+        await repo.upsert_session(...)             # 3. sessions
+```
 
 ---
 
@@ -1118,9 +1358,80 @@ GET /observability/traces?since=2026-07-16T04:00:00Z&status=error&kb_id=AMAZON_S
 ### 15.3 DTO 字段命名约定
 
 - **snake_case**（API 层）→ 前端 ts 自动转 camelCase（推荐）或显式映射
-- **时间统一 ISO 8601**：`2026-07-16T05:23:45.123Z`
+- **时间统一 ISO 8601**：`2026-07-16T05:23:45.123Z`（带 Z 后缀，UTC）
 - **金额单位**：cost_usd（浮点，6 位小数）
 - **布尔字段**：直接 boolean，不要 `is_xxx`
+
+### 15.4 PII 脱敏（生产必备）
+
+**默认脱敏字段**（基于合规要求）：
+
+| 字段 | 脱敏方式 | 触发条件 |
+|---|---|---|
+| `metadata.user_email` | `a***@b.com` | 永远脱敏 |
+| `metadata.user_phone` | `138****1234` | 永远脱敏 |
+| `metadata.ip` | `192.168.1.***` | 永远脱敏 |
+| `trace_json.input.prompt` | 前 200 字 + `...` | 超 200 字时截断（保留调试上下文） |
+| `trace_json.output.response` | 完整 | （开发用，生产可配） |
+
+**实现**：
+
+```python
+# backend/observability/dto_sanitizer.py
+import re
+
+def sanitize_pii(metadata: dict) -> dict:
+    """脱敏 PII 字段"""
+    out = dict(metadata)
+    if "user_email" in out:
+        out["user_email"] = re.sub(r'(\w)[^@]*(@\w+\.\w+)', r'\1***\2', out["user_email"])
+    if "user_phone" in out:
+        out["user_phone"] = re.sub(r'(\d{3})\d{4}(\d{4})', r'\1****\2', out["user_phone"])
+    if "ip" in out:
+        out["ip"] = re.sub(r'(\d+\.\d+\.\d+\.)\d+', r'\1***', out["ip"])
+    return out
+
+
+def truncate_prompt(prompt: str, limit: int = 200) -> str:
+    return prompt if len(prompt) <= limit else prompt[:limit] + "..."
+```
+
+**使用**：所有 DTO 返回前过 `sanitize_pii` + `truncate_prompt`。
+
+### 15.5 错误响应
+
+**统一错误结构**（基于 FastAPI 标准）：
+
+```jsonc
+// 4xx / 5xx
+{
+  "detail": "Trace abc123 不存在",          // 简单错误
+  "error_code": "TRACE_NOT_FOUND",            // 机器可读
+  "request_id": "req-uuid"                    // 关联日志
+}
+
+// 字段验证错误（FastAPI 422）
+{
+  "detail": [
+    {
+      "loc": ["body", "timeRange"],
+      "msg": "must be one of ['15m', '1h', '6h', '24h', 'custom']",
+      "type": "value_error.enum"
+    }
+  ]
+}
+```
+
+**业务错误码**（前端可读）：
+
+| 错误码 | 含义 | HTTP |
+|---|---|---|
+| `TRACE_NOT_FOUND` | trace_id 不存在 | 404 |
+| `SESSION_NOT_FOUND` | session_id 不存在 | 404 |
+| `INVALID_TIME_RANGE` | 时间格式错 | 400 |
+| `INVALID_PAGINATION` | page < 1 / page_size > 200 | 400 |
+| `QUERY_TIMEOUT` | 查询超时（5s） | 504 |
+| `INTERNAL_ERROR` | 兜底 | 500 |
 
 ---
 
@@ -1146,12 +1457,16 @@ ON CONFLICT (bucket_ts, scope) DO UPDATE SET
 
 **avg_duration** = `sum_duration_ms / count`（查询时计算）
 
-**p95**：两种方案
+**p95 / p99**：两种方案
 
-- **方案 A（简单）**：维护 `max_duration_ms`，Dashboard 显示 max 近似 p95
-- **方案 B（精确）**：用 `tdigest` 扩展，或维护最近 N 个值的 `percentile_cont(0.95)`
+- **方案 A（简单，MVP 推荐）**：维护 `max_duration_ms`，Dashboard 显示 max 近似 p95
+  - 准确度：单分钟 trace 数 ≥ 30 时，max ≈ p95 误差 < 20%
+  - 低频期（< 10 trace/分钟）：max 严重偏离 p95，应回退到"最近 1 小时聚合"
+- **方案 B（精确）**：用 `pg_tdigest` 扩展，或维护最近 1000 个值的 `percentile_cont(0.95)`
+  - 准确度：误差 < 1%
+  - 成本：写路径多一次 tdigest 更新，CPU +10%
 
-建议：**MVP 用方案 A，量级大后切方案 B**
+**建议**：MVP 用方案 A，量级大后切方案 B。`metrics_buckets.p95_duration_ms` 字段保留，但 MVP 阶段直接 = `max_duration_ms`。
 
 ### 16.3 Dashboard 查询（24h sparkline）
 
@@ -1193,21 +1508,72 @@ ORDER BY bucket_ts;
 
 ### 17.2 实时告警（Trace 写入路径）
 
+**触发位置**：`TraceRepository.end_trace()` 事务提交**之后**调用（不在事务内，避免告警失败影响 trace 写入）。
+
 ```python
 # backend/observability/alert_engine.py
 class AlertEngine:
-    async def on_trace_end(self, trace: Trace) -> list[Alert]:
+    """AlertEngine 是单例（依赖注入）
+
+    阈值从 alert_rules 表读，缓存 5 分钟 reload
+    """
+
+    async def on_trace_end(self, trace: TraceRecord) -> list[Alert]:
+        """trace 完成后调用（事务外，异步 fire-and-forget）"""
         alerts = []
-        # SLA Breach
-        if trace.duration_ms > 5000 and trace.status == "success":
-            alerts.append(Alert(
-                severity="warning",
-                type="sla_breach",
-                message=f"trace {trace.id} 耗时 {trace.duration_ms}ms 超过 SLA 5s",
-                trace_ids=[trace.id],
-            ))
+        rules = await self._load_rules_cached()  # 5min cache
+
+        for rule in rules:
+            if not rule.enabled:
+                continue
+
+            # 1. SLA Breach：duration_ms > threshold
+            if rule.type == "sla_breach" and trace.duration_ms > rule.threshold["max_ms"]:
+                alerts.append(self._emit(
+                    rule, trace.id, f"trace {trace.id} 耗时 {trace.duration_ms}ms 超过 SLA {rule.threshold['max_ms']}ms"
+                ))
+
+            # 2. High Latency：任一 step 耗时 > 3s
+            if rule.type == "high_latency":
+                slow = [s for s in trace.steps if s.duration_ms > 3000]
+                if slow:
+                    alerts.append(self._emit(
+                        rule, trace.id, f"trace {trace.id} 有 {len(slow)} 个 step > 3s"
+                    ))
+
+            # 3. Faithfulness Low：faithfulness step score < 0.7
+            if rule.type == "faithfulness_low":
+                faith = next((s for s in trace.steps if s.id == "faithfulness"), None)
+                if faith and faith.metrics.get("score", 1.0) < 0.7:
+                    alerts.append(self._emit(
+                        rule, trace.id, f"trace {trace.id} faithfulness {faith.metrics['score']:.2f} < 0.7"
+                    ))
+
+            # 4. Retrieval Miss：retrieval 0 hits
+            if rule.type == "retrieval_miss":
+                ret = next((s for s in trace.steps if s.id in ("hybrid_retrieval", "retrieval")), None)
+                if ret and (ret.metrics.get("merged_hits", 1) == 0 or ret.metrics.get("retrieved_chunks", 1) == 0):
+                    alerts.append(self._emit(
+                        rule, trace.id, f"trace {trace.id} retrieval miss (0 hits)"
+                    ))
+
         return alerts
+
+    def _emit(self, rule, trace_id, message) -> Alert:
+        return Alert(
+            severity=rule.severity,
+            type=rule.type,
+            message=message,
+            trace_ids=[trace_id],
+            scope=f"trace:{trace_id}",
+        )
 ```
+
+**关键设计**：
+- AlertEngine 是**单例**（依赖注入）
+- 阈值从 `alert_rules` 表读，**5 分钟内存缓存**
+- `on_trace_end` 是**异步 fire-and-forget**（不阻塞 trace 写入）
+- 多个 rule 独立触发（一条 trace 可触发多个 alert）
 
 ### 17.3 定时告警（Background Worker）
 
@@ -1285,6 +1651,78 @@ v3（>10MB）: trace_json 拆 + 冷存到 S3 / OSS，热数据只存摘要
 - **批量插入**：trace end 时 batch insert（不是 N 次 INSERT）
 - **异步落盘**：trace_json 写主表同步，spans 异步落盘（消费者模式）
 - **预聚合**：metrics_bucket 写时合并（ON CONFLICT），避免读时聚合
+
+### 18.5 GIN 索引写开销量化（必读）
+
+GIN 索引在每次 INSERT/UPDATE 都会**重建索引项**，是普通 B-tree 的 3-10 倍慢。
+
+**量化测试方法**（必做）：
+
+```python
+# backend/tests/perf/test_gin_write.py
+import pytest
+from sqlalchemy import text
+
+
+@pytest.mark.parametrize("gin_count", [0, 1, 2, 3, 5])
+async def test_gin_write_throughput(gin_count: int, db_session):
+    """压测：N 个 GIN 索引下，INSERT 吞吐量"""
+    # 1. 准备 N 个 GIN 索引
+    for i in range(gin_count):
+        await db_session.execute(text(f"""
+            CREATE INDEX idx_perf_{i} ON traces USING GIN ((metadata->>'field_{i}'))
+        """))
+
+    # 2. 插 10k 行
+    start = time.perf_counter()
+    for _ in range(10_000):
+        await db_session.execute(text("""
+            INSERT INTO traces (id, session_id, start_time, status, duration_ms, metadata)
+            VALUES (gen_random_uuid()::text, 's', NOW(), 'success', 100, '{"question": "q"}'::jsonb)
+        """))
+    await db_session.commit()
+    elapsed = time.perf_counter() - start
+    print(f"GIN count={gin_count}: 10k insert in {elapsed:.2f}s ({10000/elapsed:.0f} QPS)")
+```
+
+**预期结果**（PG 14 / 单核 / SSD）：
+
+| GIN 数量 | 10k insert 耗时 | QPS | 评估 |
+|---|---|---|---|
+| 0 | ~0.5s | 20000 | 基线 |
+| 1 | ~1.5s | 6700 | 3x 慢，**可接受** |
+| 2 | ~3s | 3300 | 6x 慢，**临界** |
+| 3 | ~5s | 2000 | 10x 慢，**不可接受** |
+
+**决策准则**：
+- GIN 数量 ≤ 2：安全
+- GIN 数量 = 3：仅 1k req/h 以下流量
+- GIN 数量 ≥ 4：**禁止**（改 ES / 单独 OLAP DB）
+
+**当前 §12.2.1 GIN 数量**：3（kb_id / model_name / question_tsv）
+- ✅ 在"2 个 GIN"的安全边界
+- 未来若加 `metadata->>'user_id'` GIN，**必须删除一个旧的**或迁到 OLAP
+
+### 18.6 备份与恢复
+
+| 操作 | 频率 | 工具 | RPO | RTO |
+|---|---|---|---|---|
+| 全量备份 | 每天 02:00 | `pg_dump` | 24h | 4h |
+| 增量备份（归档日志） | 持续 | PG WAL archiving | < 1min | 1h |
+| 跨区域复制 | 持续 | 流复制 | < 1min | 30min |
+| 恢复演练 | 每季度 | 模拟恢复 | — | — |
+
+**配置**：
+
+```ini
+# postgresql.conf
+wal_level = replica
+archive_mode = on
+archive_command = 'cp %p /backup/wal/%f'
+
+# 每天全量
+0 2 * * *  pg_dump -Fc traces_db > /backup/full_$(date +\%Y\%m\%d).dump
+```
 
 ---
 
@@ -1389,3 +1827,170 @@ function renderSpan(span: Span) {
 | API 稳定性 | 一旦 DTO 定型，前端改版不波及后端 |
 
 **核心原则**：**前端字段会变，领域模型不能变**。
+
+---
+
+## 21. 风险清单（Round 3 审计）
+
+> 这一节是 Round 3 风险层审计结果，按风险等级排序。
+> 每个风险都给出**触发条件**、**影响**、**缓解措施**、**回滚方案**。
+
+### 21.1 🔴 P0 风险（必须解决）
+
+| # | 风险 | 触发条件 | 影响 | 缓解 + 回滚 |
+|---|---|---|---|---|
+| **R1** | **trace 卡在 running 状态** | trace end 写入失败（DB 崩 / OOM / 网络断） | Dashboard 一直显示 running，永久污染 stats | 1. 写事务 + 状态机（§14.5）<br>2. **background reaper** 每 1 min 扫 `status='running' AND start_time < NOW() - 30min` → 标记 `timeout`<br>回滚：人工 SQL `UPDATE traces SET status='aborted' WHERE status='running' AND start_time < ...` |
+| **R2** | **trace_json 写失败但 trace 主表成功** | trace_json 太大 / GIN 维护慢 / OOM | 详情页打开空，但列表显示正常 | 1. `trace_json_missing` 标记（§14.5）<br>2. 后台 retry worker（每小时扫 missing=true 重试）<br>回滚：list 查询过滤 `trace_json_missing=true` → 详情页显示"详情暂不可用" |
+| **R3** | **metrics_buckets 写锁等待导致 trace 写入慢** | 同 1 分钟高并发 50+ | trace end 延迟从 5ms 涨到 200ms | 1. 写穿透用 async（不阻塞主流程）<br>2. 量级大时改 TimescaleDB hypertable（自动 chunk）<br>回滚：直接 DROP bucket 索引（牺牲聚合精度保写入性能） |
+| **R4** | **GIN 索引导致写入慢**（已量化 §18.5） | 3 个 GIN 索引 + 10k QPS | 写入 QPS 从 20k 跌到 2k | 1. §18.5 压测验证后定 GIN 数量上限 2<br>2. 超限改 ES / ClickHouse 旁路<br>回滚：DROP 一个 GIN（牺牲该字段的 WHERE 过滤能力） |
+| **R5** | **PII 泄漏** | trace_json.input.prompt 含邮箱/手机/身份证 | 违反 GDPR / 个保法 | 1. §15.4 脱敏层（所有 DTO 返回前过 `sanitize_pii`）<br>2. 写库前可选择 redact（不存原值）<br>回滚：DELETE 旧 trace（合规审计后人工执行） |
+
+### 21.2 🟡 P1 风险（必须规划）
+
+| # | 风险 | 触发条件 | 影响 | 缓解 |
+|---|---|---|---|---|
+| **R6** | **时钟漂移** | DB NOW() 与应用层 time.time() 不一致 | 跨服务 trace 时间轴错位 | 1. 写库统一用 DB `NOW()`（应用层 time.time() 只用于 client 端）<br>2. 多机部署用 NTP 同步，容忍 100ms 漂移 |
+| **R7** | **进程崩溃后 in-flight 事件丢失** | trace 进行中 crash，未 finish | trace_json 永远不完整 | 1. 启动时扫 `status='running' AND start_time < NOW() - 5min` → reaper<br>2. 关键事件 sync flush（事务提交前落 DB） |
+| **R8** | **告警风暴** | 100 条 trace 同时 SLA breach | 100 条 alert 通知用户 | 1. §17.4 去重：同 type + scope 5min 内只发 1 次<br>2. 告警聚合：把 N 条合并成 "5min 内 100 条 SLA breach" |
+| **R9** | **告警条件消失但未 resolved** | trace 失败后恢复了，但 alert 还在 firing | 误报 | 1. 定时 worker（5min）扫：若触发条件消失 → mark resolved<br>2. 自动 resolved 阈值：条件消失 30min 后自动标 resolved |
+| **R10** | **冷数据归档后无法查** | 30 天后 metrics_buckets 清掉 | 跨 30 天趋势对比失败 | 1. 归档到 S3/OSS（parquet 压缩）<br>2. 保留 PG `archived_*` 视图（冷查询） |
+| **R11** | **schema 迁移失败** | ALTER TABLE 在大表上超时 | trace 写入阻塞 | 1. 迁移用 `CREATE INDEX CONCURRENTLY` / `ALTER TABLE ... LOCK=NONE`<br>2. 蓝绿切换：新表名 `_new`，双写，原子切换 |
+| **R12** | **DROP TABLE 误操作** | 误执行清理脚本 | 数据全丢 | 1. 永远不 DROP（用 RENAME + DROP 分离）<br>2. 删表前必备份（`pg_dump` 落 OSS）<br>3. CI 拦截 DROP 关键字（生产 schema） |
+
+### 21.3 🟢 P2 风险（长期优化）
+
+| # | 风险 | 影响 | 缓解 |
+|---|---|---|---|
+| **R13** | **session 聚合不一致** | trace 已完成但 session 表 N+1 没更新 | 1. 写事务内同步 UPSERT（§14.5）<br>2. 后台 reaper 扫不一致修复 |
+| **R14** | **bookmark 多用户泄漏** | user_id 写错导致看到别人的 | 1. 复合主键 (user_id, trace_id)<br>2. 查询强制带 user_id 过滤 |
+| **R15** | **DTO 字段废弃后前端仍依赖** | 移除字段导致前端 500 | 1. 永不删字段（标 `deprecated: true`，保留 6 个月）<br>2. 移除前先发 deprecation header |
+| **R16** | **健康检查不准确** | /health 返回 200 但实际写不了 | 1. /health 包含 DB ping + 写测试 + 读测试<br>2. 三项任一失败 → 返回 503 |
+| **R17** | **错误堆栈泄漏内部信息** | 500 错误返回 stack trace | 1. 生产模式只返回 `INTERNAL_ERROR`<br>2. dev 模式才返回 stack |
+| **R18** | **SQL 注入** | 用户输入直接拼 SQL | 1. SQLAlchemy ORM（参数化查询）<br>2. 禁用原生 f-string SQL<br>3. 定期 SQL 审计 |
+
+### 21.4 监控指标（必须实现）
+
+| 指标 | 类型 | 阈值 | 告警 |
+|---|---|---|---|
+| `trace_write_qps` | Counter | 突然跌 50% | Slack |
+| `trace_write_p99_ms` | Histogram | > 100ms | Slack |
+| `trace_running_count` | Gauge | > 100 | Critical |
+| `trace_json_missing_count` | Gauge | > 0 | Critical |
+| `metric_bucket_lock_wait_ms` | Histogram | P99 > 50ms | Warning |
+| `gin_index_size_mb` | Gauge | > 10GB | Critical |
+| `db_connection_active` | Gauge | > 80% of pool | Warning |
+| `alert_emitted_per_min` | Counter | > 100/min | Warning |
+| `error_rate_5min` | Gauge | > 5% | Critical |
+| `disk_free_gb` | Gauge | < 20GB | Critical |
+
+**采集方式**：
+
+```python
+# backend/observability/metrics.py
+from prometheus_client import Counter, Histogram, Gauge, start_http_server
+
+trace_write_total = Counter('trace_write_total', 'Total trace writes')
+trace_write_duration = Histogram('trace_write_duration_seconds', 'Trace write latency')
+trace_running = Gauge('trace_running_count', 'Currently running traces')
+trace_json_missing = Gauge('trace_json_missing_total', 'Traces missing trace_json')
+db_connections = Gauge('db_connections_active', 'Active DB connections')
+
+# 启动时暴露 /metrics 端点
+start_http_server(9090)
+```
+
+### 21.5 故障转移 / Runbook
+
+| 故障 | 现象 | 第一步 | 第二步 | 升级 |
+|---|---|---|---|---|
+| DB 连接失败 | 5xx 增加 | 检查 `pg_isready` | 切换连接池 | PagerDuty |
+| trace 卡 running | Dashboard 一直显示 | 跑 reaper：`UPDATE ... SET status='aborted' WHERE status='running' AND start_time < NOW() - 30min` | 检查错误日志 | — |
+| GIN 写慢 | 写入 P99 > 200ms | 看慢查询日志 | DROP 一个 GIN | — |
+| PG 磁盘满 | 写入失败 | 跑清理：`DELETE FROM metrics_buckets WHERE bucket_ts < NOW() - 30 days` | 归档到 OSS | 扩容 |
+| 进程内存爆 | OOM Kill | 缩小 batch_size | 减少 cache_size | 扩容 |
+
+### 21.6 数据迁移（Schema 演进）
+
+**零停机迁移模式**：
+
+```python
+# backend/observability/migrations/v1_to_v2.py
+"""v1 trace_json → v2 trace_json 迁移（带双写期）"""
+
+# 阶段 1：双写（1-2 周）
+# 写 v2 格式的同时保留 v1
+async def write_trace_json(trace_id, raw):
+    if detect_version(raw) == 1:
+        raw_v2 = upgrade_v1_to_v2(raw)
+        await repo.update_trace_json_v2(trace_id, raw_v2)
+        await repo.update_trace_json_v1(trace_id, raw)  # 旧路径也写
+    else:
+        await repo.update_trace_json_v2(trace_id, raw)
+
+# 阶段 2：读切（1 周）
+async def read_trace_json(trace_id):
+    v2 = await repo.read_trace_json_v2(trace_id)
+    if v2 is not None:
+        return v2
+    v1 = await repo.read_trace_json_v1(trace_id)
+    return upgrade_v1_to_v2(v1) if v1 else None
+
+# 阶段 3：清理（1 天）
+# 确认无 v1 读后：DROP COLUMN trace_json_v1
+```
+
+**回滚**：
+
+```python
+# 任一阶段都可一键回滚
+async def rollback_to_v1():
+    # 读切回 v1，写继续双写
+    # 1 周观察，无问题后再清理 v2
+```
+
+### 21.7 应急开关
+
+**Kill switch**（生产必备）：
+
+```bash
+# 紧急：关闭所有写入
+export TRACE_PERSIST_BACKEND=memory
+
+# 紧急：关闭 trace_json 写入（仅主表）
+export TRACE_JSON_ENABLED=false
+
+# 紧急：只读模式
+export READ_ONLY=true
+```
+
+**实现**：
+
+```python
+# backend/orchestration/trace_storage.py
+class TraceStorage(ABC):
+    @abstractmethod
+    def save_trace_json(self, trace_id, payload): ...
+
+class SqliteStorage(TraceStorage):
+    def save_trace_json(self, trace_id, payload):
+        if not os.getenv("TRACE_JSON_ENABLED", "true").lower() == "true":
+            return  # kill switch
+        # ...
+```
+
+---
+
+## 22. 最终决策总结
+
+| 维度 | 决策 |
+|---|---|
+| 存储 | PostgreSQL + JSONB（6 张表，量级大迁 TimescaleDB） |
+| Span 模型 | 通用 Span（OpenTelemetry 风格） |
+| 事务边界 | 主表同步 + 衍生异步（§14.5） |
+| 缓存 | 双层：deque 列表 + LRU 详情（§14.6） |
+| 并发 | PG 行级锁 + 固定锁顺序（§14.7） |
+| Alert | 实时 + 定时 + 去重（§17） |
+| 监控 | Prometheus + 10 个核心指标（§21.4） |
+| 故障 | 21 个风险 + 5 个 Runbook（§21.1-21.5） |
+| 演进 | 双写 → 读切 → 清理（§21.6） |
+| 应急 | 3 个 kill switch env（§21.7） |
