@@ -351,6 +351,22 @@ interface SLAInfo {
 | **Event** | Span 生命周期内的细粒度事件（start / progress / retry / error / warning） | 短生命周期（毫秒级） | ⚠️ Span 内嵌 JSONB（高频小数据） |
 | **Metrics** | 时序数值指标（duration / token / cost / queue depth） | 持续累积 | ✅ 时序桶（metrics_buckets） |
 | **Session** | 用户的一次会话（可包含多次 Trace） | 长期（可跨天） | ✅ 永久 |
+
+### 11.1.1 Session 的 user_id 决策
+
+**P0-2 决策（已定）**：`user_id` 字段**可空 + 默认值 `'anonymous'`**，等 auth 接入后升级。
+
+理由：
+- auth 是独立产品线（用户系统、SSO、权限），不应该阻塞可观测性建设
+- 当前所有 trace 都用默认 session_id（如 `prod-query-1`、`agent-flow-1`），没有真实 user_id
+- `user_id` 设为可空 → 老数据兼容，无需 backfill
+- 升级路径：auth 接入后，从 JWT 取 user_id 填充（**只是默认值变更，schema 不变**）
+
+| 阶段 | user_id 来源 | 行为 |
+|---|---|---|
+| **当前** | `'anonymous'`（硬编码默认） | 所有未登录用户归一组 |
+| auth 接入 | JWT claim `sub` | 真实用户 ID |
+| 升级时机 | **不需数据迁移**，只是默认值从常量改为变量 |  |
 | **Alert** | 异常事件的具化（聚合 / 阈值 / 异常检测） | 短期（产生 → 已读 / 已处理） | ✅ 永久（resolved 状态切换） |
 | **MetricsBucket** | 时序聚合桶（按分钟聚合 count / p95 / cost 等） | 滚动窗口 | ✅ 永久（保留期可调） |
 
@@ -562,8 +578,8 @@ CREATE INDEX idx_buckets_scope_time ON metrics_buckets (scope, bucket_ts DESC);
 ```sql
 CREATE TABLE sessions (
     session_id          TEXT PRIMARY KEY,
-    user_id             TEXT NOT NULL,
-    user_name           TEXT,
+    user_id             TEXT,                                  -- ⚠️ P0-2: 可空 + DEFAULT 'anonymous'
+    user_name           TEXT,                                  -- 当前为 NULL，auth 后从 user 表 JOIN
     started_at          TIMESTAMPTZ NOT NULL,
     last_trace_at       TIMESTAMPTZ NOT NULL,
     trace_count         INTEGER NOT NULL DEFAULT 0,
@@ -573,15 +589,21 @@ CREATE TABLE sessions (
     metadata            JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
+-- P0-2 决策：user_id 写入时默认值
+ALTER TABLE sessions ALTER COLUMN user_id SET DEFAULT 'anonymous';
+
+-- 索引：注意 user_id 可空，idx_sessions_user 仍有效（NULL 行会进索引）
 CREATE INDEX idx_sessions_user ON sessions (user_id, last_trace_at DESC);
 CREATE INDEX idx_sessions_started ON sessions (started_at DESC);
 ```
 
 **设计要点**：
 
+- **P0-2：user_id 可空 + 默认 'anonymous'** — auth 接入前不阻塞，升级时改默认值即可（schema 不变）
 - **冗余聚合字段**：避免列表查询 N+1（每个 session 都 count traces）
-- **写入路径**：trace end 时 UPSERT（ON CONFLICT UPDATE）
+- **写入路径**：trace end 时 UPSERT（`ON CONFLICT (session_id) DO UPDATE`），user_id 走默认值
 - **session 不存 trace 列表**：trace 表已有 `session_id` 索引，详情时按需 join
+- **升级路径**：auth 接入后，user_id 来源从常量改为 `JWT.sub`（schema / 索引 / 默认值都无需改）
 
 #### 12.2.4 `alerts`
 
