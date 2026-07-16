@@ -3,7 +3,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import mockTraces from "@/mock/traces.json";
+import { getTraceById, listAllTraces } from "@/lib/observability/source";
 import TraceOverviewCard from "@/components/observability/trace/TraceOverviewCard";
 import InputOutputPanel from "@/components/observability/trace/InputOutputPanel";
 import StepTimeline from "@/components/observability/trace/StepTimeline";
@@ -12,23 +12,27 @@ import FlameGraph from "@/components/observability/trace/FlameGraph";
 import LLMCallDetail from "@/components/observability/trace/LLMCallDetail";
 import CostPanel from "@/components/observability/trace/CostPanel";
 import HttpBreakdown from "@/components/observability/trace/HttpBreakdown";
+import SpanTypeSummary from "@/components/observability/trace/SpanTypeSummary";
+import SpanTypeFilter from "@/components/observability/trace/SpanTypeFilter";
+import GraphTopology from "@/components/observability/trace/GraphTopology";
 import { useToast } from "@/components/shared/Toast";
 import {
   statusBadge,
   formatTime,
   formatRelative,
   formatBoth,
-  stepColor,
+  spanColor,
   durationColor,
   TraceRecord,
+  Span,
+  safeNum,
 } from "@/types/trace";
 
-const typedTraces = mockTraces as unknown as TraceRecord[];
+// 注：safeNum 已统一在 @/types/trace.ts 导出。
 
-function safeNum(v: unknown, fallback = "--"): string {
-  if (v === undefined || v === null) return fallback;
-  const n = Number(v);
-  return isNaN(n) ? fallback : String(n);
+/** 辅助：从 spans 中查找指定 id 的 span */
+function findSpan(spans: Span[], id: string): Span | undefined {
+  return spans.find((s) => s.id === id);
 }
 
 export default function TraceDetailPage() {
@@ -36,16 +40,41 @@ export default function TraceDetailPage() {
   const router = useRouter();
   const [showJson, setShowJson] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+  const [jsonExpanded, setJsonExpanded] = useState<Set<string>>(new Set());
   const [highlightStepId, setHighlightStepId] = useState<string | null>(null);
-  const [httpStepId, setHttpStepId] = useState<string | null>(null);
+  const [activeSpanTypes, setActiveSpanTypes] = useState<Set<string>>(new Set());  // 空=全部
   const toast = useToast();
 
-  const trace = typedTraces.find((t) => t.id === id);
+  // 异步加载：详情页需要单条 trace + 父子链
+  const [trace, setTrace] = useState<TraceRecord | null>(null);
+  const [parent, setParent] = useState<TraceRecord | null>(null);
+  const [children, setChildren] = useState<TraceRecord[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const parent = useMemo(() => trace?.parent_id ? typedTraces.find((t) => t.id === trace.parent_id) : null, [trace]);
-  const children = useMemo(() => trace?.children_ids?.map((cid) => typedTraces.find((t) => t.id === cid)).filter(Boolean) as TraceRecord[] ?? [], [trace]);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      const t = await getTraceById(id);
+      if (cancelled) return;
+      setTrace(t);
+      // 父子链并行加载
+      const [p, cs] = await Promise.all([
+        t?.parent_id ? getTraceById(t.parent_id) : Promise.resolve(null),
+        t?.children_ids?.length
+          ? Promise.all(t.children_ids.map((cid) => getTraceById(cid)))
+          : Promise.resolve([]),
+      ]);
+      if (cancelled) return;
+      setParent(p);
+      setChildren(cs.filter(Boolean) as TraceRecord[]);
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
 
-  // P1-1: 跟踪所有活跃的 timer，组件卸载时统一清理
+  const spans = (trace?.spans || []) as Span[];
+
   const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   useEffect(() => {
     return () => {
@@ -53,6 +82,14 @@ export default function TraceDetailPage() {
       timersRef.current.clear();
     };
   }, []);
+
+  if (loading && !trace) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center text-sm text-slate-400">加载中…</div>
+      </div>
+    );
+  }
 
   if (!trace) {
     return (
@@ -69,26 +106,42 @@ export default function TraceDetailPage() {
   const err = trace.error as Record<string, unknown>;
   const stat = hasError || trace.status === "error" ? "error" : trace.status === "timeout" ? "timeout" : "success";
   const badge = statusBadge(stat);
-  const rerankStep = trace.steps.find((s) => s.id === "rerank");
-  const rerankZero = rerankStep && Number(rerankStep.metrics?.output_docs ?? -1) === 0;
-  const faithStep = trace.steps.find((s) => s.id === "faithfulness");
-  const mqStep = trace.steps.find((s) => s.id === "mq_check");
-  // P1-2: 类型守卫，防止 error_node 为对象时把对象当字符串传给 scrollToStep
+
+  // 业务 span 查找（按 type 或 id）
+  const rerankSpan = spans.find((s) => s.type === "rerank" || s.id === "rerank");
+  const rerankZero = rerankSpan && Number(rerankSpan.metrics?.output_docs ?? -1) === 0;
+  const faithSpan = spans.find((s) => s.id === "faithfulness" || s.name === "Faithfulness");
+  const mqSpan = spans.find((s) => s.id === "mq_check" || s.name === "MultiQuery");
   const errorStepId = typeof err.error_node === "string" ? err.error_node : null;
-  const toggleStep = (stepId: string) => {
+
+  // 只显示非根 span（用于 StepTimeline / FlameGraph）
+  const childSpans = spans.filter((s) => s.parent_id !== null);
+
+  // Span Type 过滤
+  const filteredSpans = activeSpanTypes.size === 0
+    ? childSpans
+    : childSpans.filter((s) => activeSpanTypes.has(s.type));
+
+  const scrollToType = (type: string) => {
+    // 激活该 type 的过滤，跳转到第一个匹配 span
+    setActiveSpanTypes(new Set([type]));
+    const first = childSpans.find((s) => s.type === type);
+    if (first) scrollToStep(first.id);
+  };
+
+  const toggleStep = (spanId: string) => {
     const next = new Set(expandedSteps);
-    next.has(stepId) ? next.delete(stepId) : next.add(stepId);
+    next.has(spanId) ? next.delete(spanId) : next.add(spanId);
     setExpandedSteps(next);
   };
 
-  const scrollToStep = (stepId: string) => {
-    setHighlightStepId(stepId);
-    // 清理上一次未完成的 timer（避免快速点击叠加）
+  const scrollToStep = (spanId: string) => {
+    setHighlightStepId(spanId);
     timersRef.current.forEach(clearTimeout);
     timersRef.current.clear();
 
     const t1 = setTimeout(() => {
-      const el = document.getElementById(`step-${stepId}`);
+      const el = document.getElementById(`step-${spanId}`);
       if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
       timersRef.current.delete(t1);
     }, 50);
@@ -133,6 +186,11 @@ export default function TraceDetailPage() {
             <button onClick={() => router.push("/observability/traces")} className="text-slate-400 hover:text-slate-600 text-sm">← 返回</button>
             <span className="font-mono text-slate-700 font-semibold">{trace.id.slice(0, 12)}</span>
             <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${badge.bg}`}>{badge.label}</span>
+            {trace.workflow_name && (
+              <span className="text-[10px] text-slate-400 bg-slate-100 rounded px-2 py-0.5 font-mono">
+                {trace.workflow_name}
+              </span>
+            )}
             {trace.sla?.breached && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700">
                 ⚠️ SLA 违反 ({trace.sla.threshold_ms}ms)
@@ -200,12 +258,38 @@ export default function TraceDetailPage() {
               <TraceOverviewCard trace={trace} />
             </section>
 
+            {/* ── LangGraph DAG（仅 Agent workflow） ── */}
+            {trace.graph && (
+              <section>
+                <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-3">🔗 LangGraph 图拓扑</h2>
+                <GraphTopology
+                  nodes={trace.graph.nodes}
+                  edges={trace.graph.edges}
+                  spans={spans}
+                  loopCount={trace.graph.loop_count}
+                  maxLoops={trace.graph.max_loops}
+                  degradationTriggered={trace.graph.degradation_triggered}
+                  onNodeClick={scrollToStep}
+                />
+              </section>
+            )}
+
+            {/* ── Span 耗时占比 ── */}
+            {childSpans.length > 0 && (
+              <section>
+                <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-3">📊 Span 耗时占比（按 Type）</h2>
+                <div className="bg-white border border-slate-200 rounded-xl p-4">
+                  <SpanTypeSummary spans={childSpans} totalMs={trace.duration_ms} onTypeClick={scrollToType} />
+                </div>
+              </section>
+            )}
+
             {/* ── 火焰图 ── */}
             <section>
               <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-3">🔥 耗时火焰图</h2>
               <div className="bg-white border border-slate-200 rounded-xl p-5">
                 <FlameGraph
-                  steps={trace.steps}
+                  steps={filteredSpans}
                   totalMs={trace.duration_ms}
                   onStepClick={scrollToStep}
                   highlightStepId={highlightStepId}
@@ -258,10 +342,10 @@ export default function TraceDetailPage() {
                 <span className="text-amber-500 text-lg mt-0.5">⚠️</span>
                 <div className="flex-1">
                   <p className="text-sm font-medium text-amber-800">Rerank 过滤掉全部文档</p>
-                  <p className="text-xs text-amber-600 mt-1">阈值 {String(rerankStep?.metrics?.threshold ?? "0.3")} 导致全部检索结果被过滤。回答可能基于模型固有参数知识，未引用实际数据库。</p>
+                  <p className="text-xs text-amber-600 mt-1">阈值 {String(rerankSpan?.metrics?.threshold ?? "0.3")} 导致全部检索结果被过滤。回答可能基于模型固有参数知识，未引用实际数据库。</p>
                 </div>
                 <button onClick={() => scrollToStep("rerank")} className="text-xs text-amber-700 hover:text-amber-900 underline shrink-0">
-                  跳到 Step →
+                  跳到 Span →
                 </button>
               </div>
             )}
@@ -272,20 +356,37 @@ export default function TraceDetailPage() {
               <InputOutputPanel question={trace.question} answer={trace.answer_preview} error={trace.error} />
             </section>
 
-            {/* ── Timeline ── */}
+            {/* ── Span Timeline ── */}
             <section>
-              <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-3">⏱ 步骤时间线（点击 step 展开 HTTP 拆分）</h2>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider">⏱ Span 时间线</h2>
+                <span className="text-[10px] text-slate-400">
+                  {filteredSpans.length}/{childSpans.length} span
+                  {activeSpanTypes.size > 0 && <button onClick={() => setActiveSpanTypes(new Set())} className="ml-2 text-violet-500 hover:text-violet-700">清除过滤</button>}
+                </span>
+              </div>
               <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
-                <StepTimeline steps={trace.steps} totalMs={trace.duration_ms} onToggle={toggleStep} expanded={expandedSteps} highlightStepId={highlightStepId} />
+                <SpanTypeFilter spans={childSpans} activeTypes={activeSpanTypes} onChange={setActiveSpanTypes} />
+                <div className="border-t border-slate-100 pt-3">
+                  <StepTimeline
+                    steps={filteredSpans}
+                    totalMs={trace.duration_ms}
+                    onToggle={toggleStep}
+                    expanded={expandedSteps}
+                    jsonExpanded={jsonExpanded}
+                    onJsonToggle={(id) => { const n=new Set(jsonExpanded); n.has(id)?n.delete(id):n.add(id); setJsonExpanded(n); }}
+                    highlightStepId={highlightStepId}
+                  />
+                </div>
 
                 {/* 展开后追加 HTTP 拆分 */}
                 {Array.from(expandedSteps).map((sid) => {
-                  const step = trace.steps.find((s) => s.id === sid);
-                  if (!step || !step.http_breakdown) return null;
+                  const span = findSpan(spans, sid);
+                  if (!span || !span.http_breakdown) return null;
                   return (
                     <div key={`http-${sid}`} className="border-t border-slate-100 pt-3">
-                      <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-2">📡 {step.label} · HTTP 耗时拆分</p>
-                      <HttpBreakdown step={step} />
+                      <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-2">📡 {span.name} · HTTP 耗时拆分</p>
+                      <HttpBreakdown step={span} />
                     </div>
                   );
                 })}
@@ -295,11 +396,11 @@ export default function TraceDetailPage() {
             {/* ── LLM 调用明细 ── */}
             <section>
               <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-3">🤖 LLM 调用明细</h2>
-              <LLMCallDetail steps={trace.steps} />
+              <LLMCallDetail steps={spans} />
             </section>
 
             {/* ── MultiQuery ── */}
-            {mqStep && mqStep.metrics?.triggered === true && (
+            {mqSpan && mqSpan.metrics?.triggered === true && (
               <section>
                 <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-3">🔀 MultiQuery 改写</h2>
                 <div className="bg-white border border-slate-200 rounded-xl p-4">
@@ -308,15 +409,15 @@ export default function TraceDetailPage() {
                     <span className="text-sm text-slate-700 font-mono">{trace.question}</span>
                   </div>
                   <div className="space-y-1.5 ml-4 border-l-2 border-violet-200 pl-4">
-                    {trace.steps.find(s => s.id === "query_rewrite")?.metrics?.variants ? (
-                      [...Array(Number(trace.steps.find(s => s.id === "query_rewrite")?.metrics?.variants ?? 0))].map((_, i) => (
+                    {findSpan(spans, "query_rewrite")?.metrics?.variants ? (
+                      [...Array(Number(findSpan(spans, "query_rewrite")?.metrics?.variants ?? 0))].map((_, i) => (
                         <div key={i} className="flex items-center gap-2">
                           <span className="text-[10px] text-violet-400">改写{i + 1}</span>
-                          <span className="text-xs text-slate-500 font-mono">FBA退货变体 #{i + 1}</span>
+                          <span className="text-xs text-slate-500 font-mono">变体 #{i + 1}</span>
                         </div>
                       ))
                     ) : (
-                      <p className="text-xs text-slate-400">改写已触发，变体详情需后端 step.output 字段支持</p>
+                      <p className="text-xs text-slate-400">改写已触发，变体详情需后端 span.output 字段支持</p>
                     )}
                   </div>
                 </div>
@@ -324,20 +425,20 @@ export default function TraceDetailPage() {
             )}
 
             {/* ── Faithfulness Detail ── */}
-            {faithStep && faithStep.metrics?.claims && Number(faithStep.metrics.claims) > 0 && (
+            {faithSpan && faithSpan.metrics?.claims && Number(faithSpan.metrics.claims) > 0 && (
               <section>
                 <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-3">✅ 忠实度检测</h2>
                 <div className="bg-white border border-slate-200 rounded-xl p-5">
                   <div className="grid grid-cols-4 gap-4 mb-4">
-                    <div className="text-center"><p className="text-2xl font-bold text-slate-800">{Number(faithStep.metrics.score ?? 1).toFixed(2)}</p><p className="text-[10px] text-slate-400 mt-1">忠实度评分</p></div>
-                    <div className="text-center"><p className="text-2xl font-bold text-slate-800">{safeNum(faithStep.metrics.claims)}</p><p className="text-[10px] text-slate-400 mt-1">Claims</p></div>
-                    <div className="text-center"><p className="text-2xl font-bold text-emerald-600">{safeNum(faithStep.metrics.supported)}</p><p className="text-[10px] text-slate-400 mt-1">已支撑</p></div>
-                    <div className="text-center"><p className="text-2xl font-bold text-red-500">{safeNum(faithStep.metrics.unsupported)}</p><p className="text-[10px] text-slate-400 mt-1">未支撑</p></div>
+                    <div className="text-center"><p className="text-2xl font-bold text-slate-800">{Number(faithSpan.metrics.score ?? 1).toFixed(2)}</p><p className="text-[10px] text-slate-400 mt-1">忠实度评分</p></div>
+                    <div className="text-center"><p className="text-2xl font-bold text-slate-800">{safeNum(faithSpan.metrics.claims)}</p><p className="text-[10px] text-slate-400 mt-1">Claims</p></div>
+                    <div className="text-center"><p className="text-2xl font-bold text-emerald-600">{safeNum(faithSpan.metrics.supported)}</p><p className="text-[10px] text-slate-400 mt-1">已支撑</p></div>
+                    <div className="text-center"><p className="text-2xl font-bold text-red-500">{safeNum(faithSpan.metrics.unsupported)}</p><p className="text-[10px] text-slate-400 mt-1">未支撑</p></div>
                   </div>
-                  {Number(faithStep.metrics.unsupported) > 0 && (
+                  {Number(faithSpan.metrics.unsupported) > 0 && (
                     <div className="border-t border-slate-100 pt-4 mt-2 space-y-2">
                       <p className="text-[10px] text-slate-400 uppercase tracking-wider">未支撑 Claim 示例</p>
-                      {[...Array(Math.min(Number(faithStep.metrics.unsupported), 2))].map((_, i) => (
+                      {[...Array(Math.min(Number(faithSpan.metrics.unsupported), 2))].map((_, i) => (
                         <div key={i} className="flex items-start gap-3 bg-red-50 border border-red-100 rounded-lg p-3">
                           <span className="text-red-400 text-xs mt-0.5">✗</span>
                           <div>
@@ -366,6 +467,8 @@ export default function TraceDetailPage() {
                     </Link>
                   </div>
                   <div><span className="text-slate-400 text-xs">KB</span><p className="text-slate-700 font-mono">{String(trace.metadata?.kb_id ?? "--")}</p></div>
+                  <div><span className="text-slate-400 text-xs">Workflow</span><p className="text-slate-700 font-mono">{trace.workflow_name ?? "--"}</p></div>
+                  <div><span className="text-slate-400 text-xs">Spans</span><p className="text-slate-700 font-mono">{spans.length}</p></div>
                   <div><span className="text-slate-400 text-xs">Temperature</span><p className="text-slate-700 font-mono">{String(trace.metadata?.temperature ?? "0.1")}</p></div>
                   <div><span className="text-slate-400 text-xs">Max Tokens</span><p className="text-slate-700 font-mono">{String(trace.metadata?.max_tokens ?? "4096")}</p></div>
                   <div><span className="text-slate-400 text-xs">Request ID</span><p className="text-slate-700 font-mono text-xs">{trace.request_id}</p></div>

@@ -18,9 +18,11 @@ import {
   filterByTimeRange,
   formatCost,
 } from "@/types/trace";
-import mockTraces from "@/mock/traces.json";
+import { listAllTraces } from "@/lib/observability/source";
 
-const typedTraces = mockTraces as unknown as TraceRecord[];
+// typedTraces 改为 client 端填充：模块顶层 import 22+ JSON 在 Next.js dev SSR 阶段
+// 会导致 typedTraces=[]（webpack transform 22 JSON 的时机问题）；改为 useState + useEffect 后，
+// SSR 输出 0 条、client hydrate 后真实数据进来再渲，避免整页空渲染。
 const PAGE_SIZES = [20, 50, 100];
 const BOOKMARK_KEY = "obs.bookmarks";
 const FILTER_KEY = "obs.traceFilter";
@@ -54,29 +56,37 @@ export default function TracesPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
-  const [filter, setFilter] = useState<TraceFilter>(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem(FILTER_KEY);
-      if (saved) try { return JSON.parse(saved); } catch {}
-    }
-    return { timeRange: "1h", status: "all", keyword: "", sortField: "", sortDir: "desc", page: 1, pageSize: 20 };
-  });
+  // ⚠️ localStorage 不能在 useState 初始化里读（SSR/CSR mismatch 会摧毁整个 root 的 client render）。
+  // 统一改为：初始 useState 给 SSR-safe 默认值，client mount 后 useEffect 一次性读 localStorage 覆盖。
+  const [filter, setFilter] = useState<TraceFilter>({ timeRange: "1h", status: "all", keyword: "", sortField: "", sortDir: "desc", page: 1, pageSize: 20 });
+  const [bookmarks, setBookmarks] = useState<Set<string>>(new Set());
+  const [columns, setColumns] = useState<ColKey[]>(DEFAULT_COLUMNS);
+  const [typedTraces, setTypedTraces] = useState<TraceRecord[]>([]);
+  const [mounted, setMounted] = useState(false);
 
-  const [bookmarks, setBookmarks] = useState<Set<string>>(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem(BOOKMARK_KEY);
-      if (saved) try { return new Set(JSON.parse(saved)); } catch {}
-    }
-    return new Set();
-  });
+  useEffect(() => {
+    try {
+      const savedFilter = localStorage.getItem(FILTER_KEY);
+      if (savedFilter) setFilter(JSON.parse(savedFilter));
+      const savedBookmarks = localStorage.getItem(BOOKMARK_KEY);
+      if (savedBookmarks) setBookmarks(new Set(JSON.parse(savedBookmarks)));
+      const savedCols = localStorage.getItem(COLUMNS_KEY);
+      if (savedCols) setColumns(JSON.parse(savedCols));
+    } catch {}
+    // 数据加载推迟到 mount 后：避免 SSR 阶段同步 IO（mock 时 import 22 JSON；
+    // API 时 fetch 也必须在 client 端）
+    listAllTraces().then((traces) => {
+      setTypedTraces(traces);
+      setMounted(true);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const [columns, setColumns] = useState<ColKey[]>(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem(COLUMNS_KEY);
-      if (saved) try { return JSON.parse(saved); } catch {}
-    }
-    return DEFAULT_COLUMNS;
-  });
+  // refresh 时重新拉数据源（mock 或 API，由 NEXT_PUBLIC_USE_MOCK 控制）
+  useEffect(() => {
+    if (!mounted) return;
+    listAllTraces().then(setTypedTraces);
+  }, [refreshTick, mounted]);
 
   const [showColumns, setShowColumns] = useState(false);
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
@@ -94,7 +104,9 @@ export default function TracesPage() {
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await new Promise((r) => setTimeout(r, 600)); // mock 异步
+    // 触发真实数据拉取（mock 也走异步路径，保持一致 UX）
+    const traces = await listAllTraces();
+    setTypedTraces(traces);
     setRefreshTick((t) => t + 1);
     setIsRefreshing(false);
   };
@@ -137,8 +149,7 @@ export default function TracesPage() {
     }
 
     return arr;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, sortField, sortDir, refreshTick]);
+  }, [typedTraces, filter, sortField, sortDir, refreshTick]);
 
   const total = filtered.length;
   const traces = useMemo(() => filtered.slice((page - 1) * pageSize, page * pageSize), [filtered, page, pageSize]);
@@ -153,7 +164,9 @@ export default function TracesPage() {
       error_count: inRange.filter(t => (t.error && Object.keys(t.error).length > 0) || t.status === "error").length,
       total_cost_usd: inRange.reduce((s, t) => s + (t.cost_usd ?? 0), 0),
     };
-  }, [filter.timeRange, refreshTick]);
+    // 注意：stats 只反映「时间窗内全部 trace」的聚合（不被 status/kb/model/keyword 影响），
+    // 与下方 header 的「共 N 条」(filtered) 是不同口径。
+  }, [typedTraces, filter.timeRange, refreshTick]);
 
   const totalPages = Math.ceil(total / pageSize);
 
@@ -328,8 +341,9 @@ export default function TracesPage() {
                   const stat = (t.error && Object.keys(t.error).length > 0) || t.status === "error" ? "error"
                     : t.status === "timeout" || t.duration_ms > 5000 ? "timeout" : "success";
                   const badge = statusBadge(stat);
-                  const maxStepMs = Math.max(...t.steps.map(s => s.duration_ms), 0);
-                  const topSteps = [...t.steps].sort((a, b) => b.duration_ms - a.duration_ms).slice(0, 3);
+                  const spans = t.spans || [];
+                  const maxStepMs = Math.max(...spans.map(s => s.duration_ms), 0);
+                  const topSteps = [...spans].sort((a, b) => b.duration_ms - a.duration_ms).slice(0, 3);
                   const isBookmarked = bookmarks.has(t.id);
                   const isCompared = compareIds.has(t.id);
                   const slaBreached = t.sla?.breached;
@@ -374,7 +388,7 @@ export default function TracesPage() {
                       )}
                       {has("duration") && (
                         <td className="py-3 px-4 text-right">
-                          <span className={`font-mono tabular-nums font-semibold ${durationColor(t.duration_ms)}`} title={topSteps.map(s => `${s.label}: ${s.duration_ms}ms`).join("\n")}>
+                          <span className={`font-mono tabular-nums font-semibold ${durationColor(t.duration_ms)}`} title={topSteps.map(s => `${s.name}: ${s.duration_ms}ms`).join("\n")}>
                             {t.duration_ms}ms
                           </span>
                         </td>

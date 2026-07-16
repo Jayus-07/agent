@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import mockTraces from "@/mock/traces.json";
+import { listAllTraces } from "@/lib/observability/source";
 import TraceBreadcrumb from "@/components/observability/trace/TraceBreadcrumb";
 import {
   TraceRecord,
@@ -14,15 +14,23 @@ import {
   statusBadge,
 } from "@/types/trace";
 
-const typedTraces = mockTraces as unknown as TraceRecord[];
-
+// Session 页只需要 summary 数据
 export default function SessionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const [typedTraces, setTypedTraces] = useState<TraceRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    listAllTraces().then((traces) => {
+      setTypedTraces(traces);
+      setLoading(false);
+    });
+  }, []);
 
   const sessionTraces = useMemo(
     () => typedTraces.filter((t) => t.session_id === id).sort((a, b) => a.timestamp.localeCompare(b.timestamp)),
-    [id]
+    [id, typedTraces]
   );
 
   const summary = useMemo(() => {
@@ -47,6 +55,14 @@ export default function SessionDetailPage() {
       startedAt: first.session?.started_at ?? first.timestamp,
     };
   }, [sessionTraces]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center text-sm text-slate-400">加载中…</div>
+      </div>
+    );
+  }
 
   if (!summary) {
     return (

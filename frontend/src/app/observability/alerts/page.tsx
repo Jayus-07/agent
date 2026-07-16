@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import mockTraces from "@/mock/traces.json";
+import { listAllTraces } from "@/lib/observability/source";
 import TraceBreadcrumb from "@/components/observability/trace/TraceBreadcrumb";
 import {
   TraceRecord,
@@ -11,15 +11,31 @@ import {
   formatBoth,
 } from "@/types/trace";
 
-const typedTraces = mockTraces as unknown as TraceRecord[];
-
 export default function AlertsPage() {
   const [resolved, setResolved] = useState<Set<string>>(new Set());
+  const [typedTraces, setTypedTraces] = useState<TraceRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // 告警页需要 spans（slow step / rerank zero 检测），异步加载所有 trace
+  useEffect(() => {
+    listAllTraces().then((traces) => {
+      setTypedTraces(traces);
+      setLoading(false);
+    });
+  }, []);
 
   // 从 trace 数据动态聚合告警
-  const alerts = useMemo(() => buildAlerts(typedTraces), []);
+  const alerts = useMemo(() => buildAlerts(typedTraces), [typedTraces]);
 
   const filtered = alerts.filter((a) => (resolved.has(a.id) ? false : true));
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center text-sm text-slate-400">加载中…</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -162,15 +178,16 @@ function buildAlerts(traces: TraceRecord[]): AlertItem[] {
     });
   }
 
-  // 4) 高耗时 step 异常
+  // 4) 高耗时 span 异常
   traces.forEach((t) => {
-    const slowStep = t.steps.find((s) => s.duration_ms > 3000 && s.status !== "skipped");
-    if (slowStep) {
+    const spans = t.spans || [];
+    const slowSpan = spans.find((s) => s.duration_ms > 3000 && s.status !== "skipped");
+    if (slowSpan) {
       alerts.push({
-        id: `slow-step-${t.id}-${slowStep.id}`,
-        severity: slowStep.duration_ms > 10000 ? "error" : "warning",
+        id: `slow-step-${t.id}-${slowSpan.id}`,
+        severity: slowSpan.duration_ms > 10000 ? "error" : "warning",
         type: "high_latency",
-        message: `[${t.id.slice(0, 8)}] ${slowStep.label} 耗时 ${slowStep.duration_ms}ms（>3s），可能影响整体响应`,
+        message: `[${t.id.slice(0, 8)}] ${slowSpan.name} 耗时 ${slowSpan.duration_ms}ms（>3s），可能影响整体响应`,
         trace_ids: [t.id],
         created_at: t.timestamp,
       });
@@ -179,7 +196,8 @@ function buildAlerts(traces: TraceRecord[]): AlertItem[] {
 
   // 5) Rerank 零结果
   const rerankZero = traces.filter((t) => {
-    const rs = t.steps.find((s) => s.id === "rerank");
+    const spans = t.spans || [];
+    const rs = spans.find((s) => s.id === "rerank" || s.type === "rerank");
     return rs && Number(rs.metrics?.output_docs ?? -1) === 0;
   });
   if (rerankZero.length > 0) {
