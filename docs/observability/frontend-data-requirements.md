@@ -1994,3 +1994,57 @@ class SqliteStorage(TraceStorage):
 | 故障 | 21 个风险 + 5 个 Runbook（§21.1-21.5） |
 | 演进 | 双写 → 读切 → 清理（§21.6） |
 | 应急 | 3 个 kill switch env（§21.7） |
+
+---
+
+## 23. 技术栈选型（为什么用 PostgreSQL）
+
+### 23.1 选型决策
+
+**直接使用 PostgreSQL**（不经过 SQLite 中间态）。
+
+### 23.2 为什么不用 SQLite
+
+| 维度 | SQLite | PostgreSQL |
+|---|---|---|
+| **JSONB** | ❌ 仅 JSON1 extension（无原生 JSONB） | ✅ 原生 JSONB + GIN 索引 |
+| **GIN 索引** | ❌ 不支持 | ✅ §18.5 量化性能 |
+| **TIMESTAMPTZ** | ❌ 无时区 | ✅ 原生支持 |
+| **CHECK 约束** | ⚠️ 部分 | ✅ 完整 |
+| **PARTITION BY RANGE** | ❌ 不支持 | ✅ §12.2.2 月分区清理 |
+| **NUMERIC 精度** | ⚠️ 弱 | ✅ §12.2.2 NUMERIC(12, 6) |
+| **WAL + 流复制** | ❌ 无 | ✅ §18.6 跨区域灾备 |
+| **运维成本** | ✅ 零 | ⚠️ 需 DB 实例 |
+
+### 23.3 为什么 PG 零负担
+
+CLAUDE.md 已确认：**PostgreSQL 18 已部署在项目里**（D:/Program Files/PostgreSQL/18/）。
+
+- ✅ 不用新装（项目已有）
+- ✅ 不用新启（已经在跑）
+- ✅ 不用新学（CLAUDE.md 标 PG 为项目数据栈）
+- ✅ 跨模块一致（RAG 等其他模块也在用）
+
+### 23.4 演进路径
+
+| 阶段 | 存储 | 工作量 |
+|---|---|---|
+| **现在** | **PG 18 单实例**（已有） | 立即 |
+| < 100万/天 | PG 18 + 主从 | 配置 |
+| 100万-1000万/天 | PG + TimescaleDB 扩展（不换引擎） | 1 周 |
+| > 1000万/天 | + ClickHouse 旁路（高频聚合查询分流） | 1 月 |
+
+**关键**：所有阶段 schema 兼容，**API 不变**。
+
+### 23.5 Schema 兼容性说明
+
+本文档 §12 schema 全部使用 **PostgreSQL 专属语法**：
+- `JSONB` / `GIN` / `jsonb_path_ops` → PG 必需
+- `TIMESTAMPTZ` / `NUMERIC(12, 6)` → PG 必需
+- `PARTITION BY RANGE` → PG 11+ 必需
+- `ON CONFLICT (col) DO UPDATE` → PG 9.5+ 必需
+- `gen_random_uuid()` → PG 13+ 必需（13 之前需 `uuid-ossp` 扩展）
+
+**最低 PG 版本**：13（推荐 14+，与项目 18 一致）。
+
+**若需切 SQLite**：需重写整个 schema（TEXT 存 JSON / 无 GIN / 无分区 / 简化为单文件），**不推荐**。
