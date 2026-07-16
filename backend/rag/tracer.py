@@ -55,7 +55,7 @@ class TraceCollector:
     # =====================================================
 
     def start(self, question: str, session_id: str = "default") -> TraceRecord:
-        """开始一次新的 trace。线程安全。"""
+        """开始一次新的 trace。线程安全。trace 立即入队（active 状态：duration_ms=0）"""
         rid = uuid.uuid4().hex[:12]
         trace = TraceRecord(
             id=rid,
@@ -66,6 +66,7 @@ class TraceCollector:
         )
         with self._lock:
             self._current_trace = trace
+            self._records.appendleft(trace)
         return trace
 
     def start_step(self, step_id: str):
@@ -96,7 +97,7 @@ class TraceCollector:
 
     def finish(self, record: TraceRecord, answer: str, total_ms: int,
                model: str, provider: str = ""):
-        """完成 trace 并归档。"""
+        """完成 trace（更新元数据，trace 已在 start 时入队）"""
         record.model = model
         record.provider = provider
         record.answer_preview = answer[:200]
@@ -108,7 +109,6 @@ class TraceCollector:
         self._aggregate_usage(record)
 
         with self._lock:
-            self._records.appendleft(record)
             self._current_trace = None
 
     @staticmethod
@@ -138,6 +138,60 @@ class TraceCollector:
     def list(self, limit: int = 50) -> list:
         with self._lock:
             return list(self._records)[:limit]
+
+    def list_active(self) -> list:
+        """获取活跃 trace（start 了但 finish 还没调）
+
+        判定：duration_ms == 0（finish 一定会设置 total_ms/duration_ms，
+        出错 answer 为空时也算"已完成"，否则误报为 active）
+        """
+        with self._lock:
+            return [r for r in self._records if r.duration_ms == 0]
+
+    def compute_metrics(self) -> dict:
+        """聚合指标：total / success_rate / p95 / error_count
+
+        替代已删除的 TraceStore.get_aggregated_metrics()
+        """
+        with self._lock:
+            all_records = list(self._records)
+
+        completed = [r for r in all_records if r.duration_ms > 0]
+        active = [r for r in all_records if r.duration_ms == 0]
+        n = len(completed)
+        if not n:
+            return {
+                "total_requests": len(all_records),
+                "completed": 0,
+                "active": len(active),
+                "success_rate": 0,
+                "avg_elapsed_sec": 0,
+                "p50_elapsed_sec": 0,
+                "p95_elapsed_sec": 0,
+                "p99_elapsed_sec": 0,
+            }
+
+        latencies_ms = sorted([r.duration_ms for r in completed])
+        # 失败判定：任一 step.status == 'error'（因为 trace.error 字段未填）
+        def _is_error(r):
+            return any(s.status == "error" for s in r.steps)
+
+        success_count = sum(1 for r in completed if not _is_error(r))
+        error_count = n - success_count
+
+        return {
+            "total_requests": len(all_records),
+            "completed": n,
+            "success": success_count,
+            "error": error_count,
+            "aborted": 0,
+            "success_rate": round(success_count / n, 3) if n > 0 else 0,
+            "active": len(active),
+            "avg_elapsed_sec": round(sum(latencies_ms) / n / 1000, 1) if n else 0,
+            "p50_elapsed_sec": round(latencies_ms[int(n * 0.50)] / 1000, 1) if n > 0 else 0,
+            "p95_elapsed_sec": round(latencies_ms[min(int(n * 0.95), n - 1)] / 1000, 1) if n > 0 else 0,
+            "p99_elapsed_sec": round(latencies_ms[min(int(n * 0.99), n - 1)] / 1000, 1) if n > 0 else 0,
+        }
 
     def get(self, trace_id: str):
         with self._lock:
