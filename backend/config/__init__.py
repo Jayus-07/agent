@@ -12,6 +12,15 @@
 
 向后兼容: backend.config.X 与旧路径一一对应。
 """
+import os
+
+# SMTP
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.qq.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
+
 # 通用 settings
 from backend.config.settings import (
     LOG_LEVEL,
@@ -170,4 +179,6 @@ __all__ = [
     "FILTER_ENABLE_PII_MASK",
     # faithfulness
     "ENABLE_FAITHFULNESS", "NLI_MODEL_PATH", "NLI_TOP_K_CHUNKS", "NLI_SCORE_THRESHOLD",
+    # email
+    "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM",
 ]

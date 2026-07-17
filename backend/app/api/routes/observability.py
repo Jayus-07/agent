@@ -12,46 +12,77 @@ from fastapi import APIRouter, Query, HTTPException
 from backend.orchestration.observability import GRAPH_TOPOLOGY, NODE_LABELS
 from backend.shared.monitoring.resource_monitor import resource_monitor
 from backend.rag.metrics import metrics_collector
-from backend.rag.tracer import trace_collector, TraceRecord, TraceStep
+from backend.rag.tracer import trace_collector, TraceRecord, Span
 
 router = APIRouter(prefix="/observability", tags=["可观测性"])
 
 
 # ═══════════════════════════════════════════════════
-# 适配器：TraceRecord → §15 TraceDTO
+# 适配器：TraceRecord + Span → 前端 TraceRecord DTO
 # ═══════════════════════════════════════════════════
 
-def _to_step_dto(s: TraceStep) -> dict:
-    return {
-        "id": s.id,
-        "label": s.label,
-        "duration_ms": s.duration_ms,
-        "duration_ratio": s.duration_ratio,
+def _to_span_dto(s: Span, all_spans: list[Span], total_ms: int) -> dict:
+    """Span → 前端 Span DTO。字段名映射：span_id→id, 派生 duration_ratio/children/llm_call。"""
+    d: dict = {
+        "id": s.span_id,
+        "type": s.type,
+        "name": s.name,
+        "parent_id": s.parent_id,
         "status": s.status,
+        "start_time": s.start_time,
+        "end_time": s.end_time,
+        "duration_ms": s.duration_ms,
+        "duration_ratio": s.duration_ms / total_ms if total_ms else 0,
         "metrics": s.metrics,
+        "children": [c.span_id for c in all_spans if c.parent_id == s.span_id],
+        "input": s.input,
+        "output": s.output,
+        "events": s.events,
+        "errors": s.errors,
     }
+    # type=llm_call 时派生 llm_call 子块（前端 LLMCallDetail / CostPanel 直接读）
+    if s.type == "llm_call":
+        d["llm_call"] = {
+            "model": s.metrics.get("model_name", ""),
+            "temperature": s.metrics.get("temperature", 0),
+            "prompt_tokens": s.metrics.get("prompt_tokens", 0),
+            "completion_tokens": s.metrics.get("completion_tokens", 0),
+            "cost_usd": s.metrics.get("cost_usd", 0),
+            "prompt_text": (s.input or {}).get("prompt", ""),
+            "response_text": (s.output or {}).get("response", ""),
+        }
+    return d
 
 
 def _to_trace_dto(t: TraceRecord) -> dict:
-    """统一 trace 序列化（list / detail / active 共用）"""
-    has_error = any(s.status == "error" for s in t.steps)
+    """TraceRecord → 前端 TraceRecord DTO。"""
+    total_ms = t.duration_ms
+    all_spans = t.spans
+    has_error = any(s.status == "error" for s in all_spans)
     return {
         "id": t.id,
-        "request_id": t.request_id,
         "timestamp": t.timestamp,
         "session_id": t.session_id,
-        "model": {"name": t.model, "provider": t.provider},
         "question": t.question,
         "answer_preview": t.answer_preview,
         "answer_len": t.answer_len,
         "duration_ms": t.duration_ms,
+        "model": {"name": t.model, "provider": t.provider},
         "usage": t.usage,
-        "cost": t.cost,
-        "cost_usd": sum(s.metrics.get("cost_usd", 0) for s in t.steps),  # 派生
+        "cost_usd": sum(s.metrics.get("cost_usd", 0) for s in all_spans),
         "error": t.error,
         "metadata": t.metadata,
         "status": "error" if has_error else ("running" if t.duration_ms == 0 else "success"),
-        "steps": [_to_step_dto(s) for s in t.steps],
+        "workflow_name": t.workflow_name,
+        "root_span_id": t.root_span_id,
+        "spans": [_to_span_dto(s, all_spans, total_ms) for s in all_spans],
+        "sla": {
+            "threshold_ms": t.sla_threshold_ms,
+            "breached": t.duration_ms > t.sla_threshold_ms,
+        },
+        "parent_id": t.parent_id,
+        "children_ids": t.children_ids,
+        "graph": t.graph,
     }
 
 

@@ -151,14 +151,14 @@ class RAGChain:
         )
         def _timed_stuff(inp):
             from backend.rag.tracer import trace_collector
-            trace_collector.start_step("llm_generate")
+            llm_span = trace_collector.start_span("llm_generate", name="LLM生成")
             try:
                 r = _stuff.invoke(inp)
                 from backend.infra.llm.proxy import _last_tokens
-                trace_collector.end_step("llm_generate", "LLM生成", metrics=dict(_last_tokens))
+                trace_collector.end_span(llm_span, metrics=dict(_last_tokens))
                 return r
             except Exception:
-                trace_collector.end_step("llm_generate", "LLM生成", status="error")
+                trace_collector.end_span(llm_span, status="error")
                 raise
         stuff_chain = RunnableLambda(_index_docs) | RunnableLambda(_timed_stuff)
 
@@ -195,15 +195,15 @@ class RAGChain:
     # =================================================
 
     def ask(self, question: str, session_id: str = "default") -> str:
-        """RAGChain 入口：5 段式 — 准备 → 执行 → 验证 → [评估] → 收尾。
-
-        拆解后行为完全兼容旧版；便于单测和耗时分析。
-        """
+        """RAGChain 入口：5 段式 — 准备 → 执行 → 验证 → [评估] → 收尾。"""
         from backend.rag.tracer import trace_collector
         import time as _time
 
         t_total = _time.time()
         trace = trace_collector.start(question, session_id)
+        trace_collector.start_span("root", parent_id=None,
+                                   name="RAG Agent", type="agent",
+                                   input={"question": question})
         logger.info(f"[RAGChain] 收到问题: {question[:60]}... (session={session_id})")
 
         try:
@@ -215,6 +215,8 @@ class RAGChain:
             return answer
         except Exception:
             try:
+                self._end_root_span(trace, status="error",
+                                    metrics={"error": "pipeline_failed"})
                 trace_collector.finish(trace, "[ERROR]", int((_time.time()-t_total)*1000), "", "")
             except Exception:
                 pass
@@ -231,11 +233,12 @@ class RAGChain:
         result = self.chain.invoke({"input": question, "chat_history": chat_history})
 
         # mq_check: 从 MultiQueryRetriever 读取实际决策结果（唯一入口）
-        trace_collector.start_step("mq_check")
+        mq_span = trace_collector.start_span(
+            "mq_check", name="MultiQuery")
         mq = getattr(self, '_mq_retriever', None)
         triggered = mq._last_triggered if mq else False
         from backend.rag.retrieval.multi_query import get_mq_mode
-        trace_collector.end_step("mq_check", "MultiQuery",
+        trace_collector.end_span(mq_span,
                              metrics={"triggered": triggered, "mode": get_mq_mode()},
                              status="skipped" if not triggered else "success")
         return result
@@ -248,12 +251,13 @@ class RAGChain:
         context_docs = result.get("context", [])
 
         # Citation
-        trace_collector.start_step("citation")
+        citation_span = trace_collector.start_span(
+            "citation", name="Citation")
         if context_docs:
             answer, verified_docs = _verify_support(answer, context_docs, question)
         else:
             verified_docs = []
-        trace_collector.end_step("citation", "Citation",
+        trace_collector.end_span(citation_span,
                              metrics={"verified_citations": len(verified_docs),
                                       "total_citations": len(context_docs)})
         references = _format_references(verified_docs, answer)
@@ -283,9 +287,10 @@ class RAGChain:
 
         try:
             from backend.rag.guardrails import check_faithfulness
-            trace_collector.start_step("faithfulness")
+            faith_span = trace_collector.start_span(
+                "faithfulness", name="Faithfulness")
             self._last_faithfulness = check_faithfulness(answer, context_docs)
-            trace_collector.end_step("faithfulness", "Faithfulness",
+            trace_collector.end_span(faith_span,
                                  metrics={
                                      "score": self._last_faithfulness.score,
                                      "claims": self._last_faithfulness.total_claims,
@@ -303,24 +308,38 @@ class RAGChain:
             return answer
         except Exception as e:
             logger.warning(f"[RAGChain] Faithfulness 检测跳过: {e}")
-            trace_collector.end_step("faithfulness", "Faithfulness", status="skipped",
+            trace_collector.end_span(faith_span, status="skipped",
                                  metrics={"error": str(e)[:100]})
             return answer
 
     def _trace(self, trace, answer: str, t_total: float):
-        """收尾阶段：完成 Trace + 写 Memory end_turn。"""
+        """收尾阶段：结束 root span + 完成 Trace。"""
         from backend.rag.tracer import trace_collector
         from backend.config import LLM_MODEL
         from backend.infra.llm.factory import get_llm_factory
         import time as _time
 
         total_ms = int((_time.time()-t_total)*1000)
+        self._end_root_span(trace,
+            output={"answer_preview": answer[:200], "answer_len": len(answer)},
+            metrics={"span_count": sum(1 for s in trace.spans if s.parent_id is not None)})
+
         provider = ""
         try:
             provider = get_llm_factory()._get_provider(LLM_MODEL)
         except Exception:
             pass
         trace_collector.finish(trace, answer, total_ms, LLM_MODEL, provider)
+
+    @staticmethod
+    def _end_root_span(trace, output: dict = None, metrics: dict = None,
+                       status: str = "success"):
+        """查找并结束 root span（parent_id=None 的那条）。"""
+        from backend.rag.tracer import trace_collector
+        for sp in trace.spans:
+            if sp.parent_id is None:
+                trace_collector.end_span(sp, output=output, metrics=metrics, status=status)
+                return
 
 def _strip_think_blocks(text: str) -> str:
     """剥离 <think>...</think> 推理块。未闭合标签保留后续内容，避免误删。"""
