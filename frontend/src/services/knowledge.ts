@@ -79,6 +79,8 @@ export const knowledgeService = {
     }
 
     // 订阅 SSE 获取真实进度
+    // P1.5 fix: 用单一 onmessage listener + 解析 data.stage 字段
+    // 避免 addEventListener 注册时机的 race condition（事件可能在注册前到达丢失）
     return new Promise((resolve) => {
       const eventSource = new EventSource(`${BASE}/upload/${data.upload_id}/stream`)
       let resolved = false
@@ -90,27 +92,25 @@ export const knowledgeService = {
         }
       }
 
-      // 各阶段事件：stage 名作为 event 名
-      const stages = ['uploading', 'parsing', 'chunking', 'embedding', 'writing', 'done', 'error']
-      stages.forEach((stage) => {
-        eventSource.addEventListener(stage, (e: MessageEvent) => {
-          let payload: any = {}
-          try {
-            payload = JSON.parse(e.data)
-          } catch {
-            payload = { message: e.data }
-          }
-          onProgress?.(stage, payload.message || '')
+      // 单一 onmessage：所有 SSE event 都触发，解析 data.stage 字段
+      eventSource.onmessage = (e: MessageEvent) => {
+        let payload: any = {}
+        try {
+          payload = JSON.parse(e.data)
+        } catch {
+          payload = { message: e.data }
+        }
+        const stage = payload.stage || 'unknown'
+        onProgress?.(stage, payload.message || '')
 
-          if (stage === 'done') {
-            cleanup()
-            resolve({ ok: true, doc: payload.doc })
-          } else if (stage === 'error') {
-            cleanup()
-            resolve({ ok: false, error: payload.message || '索引失败' })
-          }
-        })
-      })
+        if (stage === 'done') {
+          cleanup()
+          resolve({ ok: true, doc: payload.doc })
+        } else if (stage === 'error') {
+          cleanup()
+          resolve({ ok: false, error: payload.message || '索引失败' })
+        }
+      }
 
       // SSE 通用 error 事件
       eventSource.addEventListener('error', (e) => {
