@@ -150,12 +150,26 @@ class RAGChain:
             document_separator="\n\n---\n\n",
         )
         def _timed_stuff(inp):
-            from backend.rag.tracer import trace_collector
-            llm_span = trace_collector.start_span("llm_generate", name="LLM生成")
+            from backend.rag.tracer import trace_collector, SpanKind
+            llm_span = trace_collector.start_span(
+                "llm_generate", name="LLM生成",
+                kind=SpanKind.LLM.value,
+                input={"question": inp.get("input", "")[:1000]},
+            )
             try:
                 r = _stuff.invoke(inp)
-                from backend.infra.llm.proxy import _last_tokens
-                trace_collector.end_span(llm_span, metrics=dict(_last_tokens))
+                # 注入 token + finish_reason + cost_usd（从 proxy 模块级缓存读）
+                from backend.infra.llm.proxy import _last_call_meta
+                metrics = dict(_last_call_meta)  # {prompt_tokens, completion_tokens, total_tokens, finish_reason, cost_usd}
+                # 截断文本字段，避免大输出撑爆 trace
+                completion_text = ""
+                if hasattr(r, "content") and isinstance(r.content, str):
+                    completion_text = r.content[:1000]
+                elif hasattr(r, "content"):
+                    completion_text = str(r.content)[:1000]
+                if completion_text:
+                    metrics["completion_text"] = completion_text
+                trace_collector.end_span(llm_span, metrics=metrics)
                 return r
             except Exception:
                 trace_collector.end_span(llm_span, status="error")

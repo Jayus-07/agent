@@ -6,6 +6,7 @@ proxy.py — _LLMProxy 代理对象 + 模块级 llm 单例
   - `llm` 是 _LLMProxy 代理；每次 .invoke()/.stream() 都委派给当前活跃模型
   - LLMFactory.set_current("deepseek-chat") 后，所有 `llm.invoke(...)` 自动走新模型
   - 所有调用方 `from backend.infra.llm import llm` 无需修改
+  - 每次调用记录 token + finish_reason + cost_usd 到模块级 _last_call_meta（供 tracer 读取）
 """
 import threading
 
@@ -13,7 +14,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from backend.config import LLM_MODEL
 from backend.infra.llm.factory import get_llm_factory
-from backend.infra.llm.models import AVAILABLE_MODELS, PROVIDERS
+from backend.infra.llm.models import AVAILABLE_MODELS, PROVIDERS, compute_cost_usd
 from backend.shared.logger import logger
 
 
@@ -102,10 +103,15 @@ def _strip_think(text: str) -> str:
 
 
 _last_tokens = {}
+_last_call_meta = {}  # token + finish_reason + cost_usd（供 tracer 读取，Phase 4）
+
 
 def _record_tokens(result):
-    """从 LLM 返回值提取 token，存为 dict 供 tracer 读取"""
-    global _last_tokens
+    """从 LLM 返回值提取 token + finish_reason + cost，存为 dict 供 tracer 读取。
+
+    无 token_usage 时清空 _last_tokens 和 _last_call_meta。
+    """
+    global _last_tokens, _last_call_meta
     try:
         tu = {}
         if hasattr(result, "response_metadata") and result.response_metadata:
@@ -115,10 +121,30 @@ def _record_tokens(result):
         p = tu.get("prompt_tokens", 0)
         c = tu.get("completion_tokens", 0)
         t = tu.get("total_tokens", p + c)
-        if t:
-            _last_tokens = {"prompt_tokens": p, "completion_tokens": c, "total_tokens": t}
+        if not t:
+            _last_tokens = {}
+            _last_call_meta = {}
+            return
+        _last_tokens = {"prompt_tokens": p, "completion_tokens": c, "total_tokens": t}
+
+        # Phase 4: 提取 finish_reason + cost_usd
+        finish_reason = "unknown"
+        if hasattr(result, "response_metadata") and result.response_metadata:
+            finish_reason = result.response_metadata.get(
+                "finish_reason",
+                result.response_metadata.get("stop_reason", "unknown"),
+            )
+        cost = compute_cost_usd(LLM_MODEL, p, c)
+        _last_call_meta = {
+            "prompt_tokens": p,
+            "completion_tokens": c,
+            "total_tokens": t,
+            "finish_reason": finish_reason,
+            "cost_usd": cost,
+        }
     except Exception:
         _last_tokens = {}
+        _last_call_meta = {}
 
 def _wrap_result(result):
     """递归剥离 LLM 返回值中的 <think> 块，兼容 str / AIMessage / list / dict"""
