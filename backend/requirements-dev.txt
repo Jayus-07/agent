@@ -1,0 +1,9 @@
+# 开发依赖（测试 + 工具）
+# 安装：pip install -r backend/requirements-dev.txt
+
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+httpx>=0.27.0
+fakeredis>=2.23.0
+mongomock>=4.1.2
