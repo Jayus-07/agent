@@ -3,6 +3,12 @@
 文档级增量同步: 扫描磁盘 → SHA256 diff → 分类处理(新增/修改/删除/跳过)。
 保持现有 Retriever 和 RAG API 完全不变。
 
+Trace 集成（Phase 1）：
+  每个 _index_file() 启动一棵 indexer trace，6 个标准 span:
+    index_upload → index_parse → index_chunk → index_embed
+                  → index_vector_db → index_metadata
+  每文件一棵 span 树；嵌入失败的 chunk 单独 child span（默认聚合）。
+
 用法:
     indexer = IncrementalIndexer(docs_dir, vectordb, doc_db, embedding, registry)
     result = indexer.sync()
@@ -20,8 +26,12 @@ from typing import Any
 from langchain_community.document_loaders import TextLoader
 from langchain_core.documents import Document
 
+from backend.rag.tracer import trace_collector, WorkflowKind, SpanKind
 from backend.shared.logger import logger
 from backend.shared.async_utils import run_async as _run_async
+
+# 单 chunk 嵌入失败时的重试上限
+EMBED_RETRY_MAX = 3
 
 
 @dataclass
@@ -198,81 +208,215 @@ class IncrementalIndexer:
     # ---- 单文件索引 ----
 
     def _index_file(self, file_path: str):
-        """索引单篇文档: 加载 → 分块 → metadata → embed → 写入 Chroma。"""
+        """索引单篇文档: 加载 → 分块 → metadata → embed → 写入 Chroma。
+
+        Trace 树（每文件一棵）：
+          index_upload (root)
+          ├── index_parse
+          ├── index_chunk
+          ├── index_embed (聚合: 默认只记统计；失败 chunk 单独 child span)
+          ├── index_vector_db
+          └── index_metadata
+        """
         kb_id = self._derive_kb_id(file_path)
         doc_id = hashlib.md5(os.path.basename(file_path).encode()).hexdigest()[:10]
         file_hash = self._sha256(file_path)
+
+        # ── 启动 indexer trace ──
+        trace = trace_collector.start(
+            question=os.path.basename(file_path),
+            session_id="",
+            workflow_name="knowledge_index",
+            workflow_kind=WorkflowKind.KNOWLEDGE_INDEX.value,
+        )
+        trace.tags.update({"kb_id": kb_id, "doc_id": doc_id, "file_ext":
+                          os.path.splitext(file_path)[1].lower()})
+
+        # ── ① upload (root) ──
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError:
+            file_size = 0
+        upload_span = trace_collector.start_span(
+            "index_upload",
+            parent_id=None,
+            name=f"Index {os.path.basename(file_path)}",
+            type="workflow",
+            kind=SpanKind.INDEX_UPLOAD.value,
+            input={"file_path": file_path, "size_bytes": file_size},
+        )
+        try:
+            self._index_file_inner(file_path, kb_id, doc_id, file_hash)
+            trace_collector.end_span(upload_span,
+                metrics={"doc_id": doc_id, "kb_id": kb_id})
+            trace_collector.finish(trace, os.path.basename(file_path), 0, "", "")
+        except Exception as e:
+            trace_collector.end_span(upload_span, status="error",
+                metrics={"error": str(e)[:200]})
+            try:
+                trace_collector.finish(trace, "[ERROR]", 0, "", "")
+            except Exception:
+                pass
+            raise
+
+    def _index_file_inner(self, file_path: str, kb_id: str, doc_id: str, file_hash: str):
+        """_index_file 的实际工作，被 index_upload span 包裹。"""
         ext = os.path.splitext(file_path)[1].lower()
 
-        # 1. 加载文档
-        if ext == ".pdf":
-            try:
-                from langchain_community.document_loaders import PyPDFLoader
-                loader = PyPDFLoader(file_path)
+        # ── ② parse ──
+        parse_span = trace_collector.start_span(
+            "index_parse",
+            parent_id="index_upload",
+            name=f"Parse {os.path.basename(file_path)}",
+            type="parse",
+            kind=SpanKind.INDEX_PARSE.value,
+            input={"file_path": file_path, "ext": ext},
+        )
+        parse_failed = False
+        parse_error_msg = ""
+        try:
+            if ext == ".pdf":
+                try:
+                    from langchain_community.document_loaders import PyPDFLoader
+                    loader = PyPDFLoader(file_path)
+                    raw_docs = loader.load()
+                except Exception as e:
+                    logger.error(f"PDF 加载失败 {file_path}: {e}")
+                    parse_failed = True
+                    parse_error_msg = str(e)[:200]
+                    raw_docs = []
+            elif ext == ".docx":
+                try:
+                    from langchain_community.document_loaders import Docx2txtLoader
+                    loader = Docx2txtLoader(file_path)
+                    raw_docs = loader.load()
+                except Exception as e:
+                    logger.error(f"DOCX 加载失败 {file_path}: {e}")
+                    parse_failed = True
+                    parse_error_msg = str(e)[:200]
+                    raw_docs = []
+            else:
+                loader = TextLoader(file_path, encoding="utf-8")
                 raw_docs = loader.load()
-            except Exception as e:
-                logger.error(f"PDF 加载失败 {file_path}: {e}")
-                return
-        elif ext == ".docx":
-            try:
-                from langchain_community.document_loaders import Docx2txtLoader
-                loader = Docx2txtLoader(file_path)
-                raw_docs = loader.load()
-            except Exception as e:
-                logger.error(f"DOCX 加载失败 {file_path}: {e}")
-                return
-        else:
-            loader = TextLoader(file_path, encoding="utf-8")
-            raw_docs = loader.load()
 
-        if not raw_docs:
-            logger.warning(f"文件为空，跳过: {file_path}")
+            if parse_failed:
+                trace_collector.end_span(parse_span, status="error",
+                    metrics={"error": parse_error_msg})
+                raise RuntimeError(f"parse failed: {parse_error_msg}")
+
+            if not raw_docs:
+                logger.warning(f"文件为空，跳过: {file_path}")
+                trace_collector.end_span(parse_span,
+                    metrics={"doc_count": 0}, status="skipped")
+                return
+
+            for d in raw_docs:
+                d.metadata["kb_id"] = kb_id
+
+            trace_collector.end_span(parse_span,
+                metrics={"doc_count": len(raw_docs),
+                         "page_count": len(raw_docs)})
+        except RuntimeError:
+            # parse 失败已记录 + raise，让 _index_file wrapper 标 index_upload=error
+            raise
+        except Exception as e:
+            trace_collector.end_span(parse_span, status="error",
+                metrics={"error": str(e)[:200]})
+            raise
+
+        # ── ③ chunk ──
+        chunk_span = trace_collector.start_span(
+            "index_chunk",
+            parent_id="index_upload",
+            name=f"Chunk {os.path.basename(file_path)}",
+            type="chunk",
+            kind=SpanKind.INDEX_CHUNK.value,
+        )
+        try:
+            from backend.rag.preprocessing.loader import split_documents
+            chunks = split_documents(raw_docs, file_path)
+            for i, ch in enumerate(chunks):
+                ch.metadata["doc_id"] = doc_id
+                ch.metadata["chunk_index"] = i
+                ch.metadata["source_file"] = os.path.basename(file_path)
+                ch.metadata["file_path"] = file_path
+
+            from backend.rag.preprocessing.filter import ChunkFilter
+            chunk_filter = ChunkFilter()
+            filtered_chunks = []
+            filtered_count = 0
+            for chunk in chunks:
+                ok, reason = chunk_filter.should_keep(chunk.page_content, chunk.metadata)
+                if ok:
+                    if chunk.metadata.get("pii_masked"):
+                        chunk.page_content = ChunkFilter.apply_pii_mask(chunk.page_content)
+                    filtered_chunks.append(chunk)
+                else:
+                    filtered_count += 1
+                    logger.debug(f"[Filter] 拒绝 chunk: {reason} (doc={file_path})")
+            if filtered_count > 0:
+                logger.info(f"[Filter] {file_path}: 过滤 {filtered_count}/{len(chunks)} 个 chunk")
+            chunks = filtered_chunks
+
+            trace_collector.end_span(chunk_span,
+                metrics={"raw_chunks": len(chunks),
+                         "kept_chunks": len(filtered_chunks),
+                         "filtered_out": filtered_count})
+        except Exception as e:
+            trace_collector.end_span(chunk_span, status="error",
+                metrics={"error": str(e)[:200]})
+            raise
+
+        # ── ④ embed (聚合 — 默认只记统计；失败 chunk 单独 child span) ──
+        embed_span = trace_collector.start_span(
+            "index_embed",
+            parent_id="index_upload",
+            name=f"Embed {len(chunks)} chunks",
+            type="embedding",
+            kind=SpanKind.INDEX_EMBED.value,
+        )
+        embed_span.metrics["chunk_count"] = len(chunks)
+        chunk_ids = self._embed_with_retry(chunks, embed_span)
+        try:
+            trace_collector.end_span(embed_span,
+                metrics={"attempted": len(chunks),
+                         "succeeded": len(chunk_ids),
+                         "failed": len(chunks) - len(chunk_ids)})
+        except Exception as e:
+            trace_collector.end_span(embed_span, status="error",
+                metrics={"error": str(e)[:200]})
+            raise
+
+        # ── ⑤ vector_db ──
+        vdb_span = trace_collector.start_span(
+            "index_vector_db",
+            parent_id="index_upload",
+            name="Write to vector DB",
+            type="vector_db",
+            kind=SpanKind.INDEX_VECTOR_DB.value,
+        )
+        try:
+            if chunks:
+                chunk_ids = self.vectordb.add_documents(chunks) or []
+            else:
+                chunk_ids = []
+            trace_collector.end_span(vdb_span,
+                metrics={"written": len(chunk_ids),
+                         "table": getattr(self.vectordb, "_collection_name", "")})
+        except Exception as e:
+            logger.error(f"Chunk 写入失败: {e}")
+            trace_collector.end_span(vdb_span, status="error",
+                metrics={"error": str(e)[:200]})
             return
 
-        # 注入 kb_id
-        for d in raw_docs:
-            d.metadata["kb_id"] = kb_id
-
-        # 2. 分块
-        from backend.rag.preprocessing.loader import split_documents
-        chunks = split_documents(raw_docs, file_path)
-
-        # 注入 doc_id 到每个 chunk
-        for i, ch in enumerate(chunks):
-            ch.metadata["doc_id"] = doc_id
-            ch.metadata["chunk_index"] = i
-            ch.metadata["source_file"] = os.path.basename(file_path)
-            ch.metadata["file_path"] = file_path
-
-        # 2.5 脏数据过滤
-        from backend.rag.preprocessing.filter import ChunkFilter
-        chunk_filter = ChunkFilter()
-        filtered_chunks = []
-        filtered_count = 0
-        for chunk in chunks:
-            ok, reason = chunk_filter.should_keep(chunk.page_content, chunk.metadata)
-            if ok:
-                # 应用 PII 脱敏到 chunk 内容
-                if chunk.metadata.get("pii_masked"):
-                    chunk.page_content = ChunkFilter.apply_pii_mask(chunk.page_content)
-                filtered_chunks.append(chunk)
-            else:
-                filtered_count += 1
-                logger.debug(f"[Filter] 拒绝 chunk: {reason} (doc={file_path})")
-        if filtered_count > 0:
-            logger.info(f"[Filter] {file_path}: 过滤 {filtered_count}/{len(chunks)} 个 chunk")
-        chunks = filtered_chunks
-
-        # 3. 写入 chunk 级向量库
-        chunk_ids = []
-        if chunks:
-            try:
-                chunk_ids = self.vectordb.add_documents(chunks)
-            except Exception as e:
-                logger.error(f"Chunk 写入失败: {e}")
-                return
-
-        # 4. 构建 doc 级全文 + metadata
+        # ── ⑥ metadata ──
+        meta_span = trace_collector.start_span(
+            "index_metadata",
+            parent_id="index_upload",
+            name="Build metadata",
+            type="llm",
+            kind=SpanKind.INDEX_METADATA.value,
+        )
         full_text = "\n\n".join(d.page_content for d in raw_docs)
         doc_meta = {
             "doc_id": doc_id,
@@ -282,25 +426,27 @@ class IncrementalIndexer:
             "doc_type": "general",
             "person_names": "",
         }
-
-        # 异步构建元数据
         try:
             meta_result = _run_async(self._build_doc_metadata(full_text, doc_meta))
             doc_meta.update(meta_result)
         except Exception as e:
             logger.warning(f"元数据构建失败（使用默认值）: {e}")
 
-        # 5. 写入 doc 级向量库
-        doc_db_id = ""
         try:
-            ids = self.doc_db.add_texts(
-                texts=[full_text], metadatas=[doc_meta],
-            )
+            ids = self.doc_db.add_texts(texts=[full_text], metadatas=[doc_meta]) if full_text else []
             doc_db_id = ids[0] if ids else ""
+            trace_collector.end_span(meta_span,
+                metrics={"doc_type": doc_meta.get("doc_type", ""),
+                         "keywords_count": len(doc_meta.get("doc_keywords", [])) if isinstance(doc_meta.get("doc_keywords"), list) else 0,
+                         "person_count": len(doc_meta.get("person_names", "").split(",")) if doc_meta.get("person_names") else 0,
+                         "doc_db_id": doc_db_id})
         except Exception as e:
             logger.error(f"Doc 级写入失败: {e}")
+            trace_collector.end_span(meta_span, status="error",
+                metrics={"error": str(e)[:200]})
+            doc_db_id = ""
 
-        # 6. 注册到 registry
+        # ── 注册到 registry（始终执行） ──
         self.registry.register(
             file_path=file_path,
             doc_id=doc_id,
@@ -309,6 +455,42 @@ class IncrementalIndexer:
             chunk_ids=chunk_ids,
             doc_db_id=doc_db_id,
         )
+
+    def _embed_with_retry(self, chunks, parent_span) -> list[str]:
+        """逐 chunk 嵌入；失败单独 child span 记录，重试 EMBED_RETRY_MAX 次。
+
+        Returns: 成功嵌入的 chunk id 列表（失败的 chunk 不在此列）。
+        """
+        succeeded = []
+        for i, chunk in enumerate(chunks):
+            chunk_span = trace_collector.start_span(
+                f"embed_chunk_{i}",
+                parent_id="index_embed",
+                name=f"Embed chunk {i}",
+                type="embedding",
+                kind=SpanKind.INDEX_EMBED.value,
+                input={"chunk_index": i,
+                       "doc_id": chunk.metadata.get("doc_id", "")},
+            )
+            last_err = None
+            for attempt in range(EMBED_RETRY_MAX):
+                try:
+                    cid = self.embedding.embed_query(chunk.page_content)
+                    succeeded.append(cid)
+                    trace_collector.end_span(chunk_span,
+                        metrics={"attempt": attempt + 1, "chunk_id": cid})
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    chunk_span.retry_count += 1
+            else:
+                # 所有重试都失败
+                logger.error(f"[Embed] chunk {i} 嵌入失败 {EMBED_RETRY_MAX} 次: {last_err}")
+                trace_collector.end_span(chunk_span, status="error",
+                    metrics={"error": str(last_err)[:100] if last_err else "unknown",
+                             "retry_count": EMBED_RETRY_MAX})
+        return succeeded
 
     async def _build_doc_metadata(self, full_text: str, base_meta: dict) -> dict:
         """异步构建文档级元数据。"""

@@ -13,6 +13,7 @@ import uuid
 from collections import deque
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import List
 
 MAX_TRACES = 200
@@ -36,22 +37,55 @@ _TYPE_INFER: dict[str, str] = {
 }
 
 
+class WorkflowKind(str, Enum):
+    """Trace 用途分类 — 前端按 kind 路由渲染（RAG_QUERY 蓝色 / KNOWLEDGE_INDEX 绿色）。"""
+    RAG_QUERY = "rag_query"                # chain.py: RAG 检索问答
+    KNOWLEDGE_INDEX = "knowledge_index"    # indexer.py: 文档索引流水线
+    LG_WORKFLOW = "langgraph_workflow"     # Phase 3: LangGraph astream_events 自动埋点
+    OTHER = "other"
+
+
+class SpanKind(str, Enum):
+    """Span 节点类型枚举 — 强约束。type 字符串字段保留兼容历史数据。"""
+    # 通用
+    LLM = "llm"
+    AGENT = "agent"
+    TOOL = "tool"
+    RETRIEVAL = "retrieval"
+    RERANK = "rerank"
+    CITATION = "citation"
+    FAITHFULNESS = "faithfulness"
+
+    # Knowledge Index（Phase 1）
+    INDEX_UPLOAD = "index_upload"
+    INDEX_PARSE = "index_parse"
+    INDEX_CHUNK = "index_chunk"
+    INDEX_EMBED = "index_embed"
+    INDEX_VECTOR_DB = "index_vector_db"
+    INDEX_METADATA = "index_metadata"
+
+    # 工作流
+    WORKFLOW = "workflow"
+    ROUTER = "router"
+
+
 @dataclass
 class Span:
     """通用 Span — 树形结构。
 
-    type 用字符串而非枚举：新增类型不需要改后端 schema，
-    前端按 type 路由渲染（retrieval→文档数，llm_call→token，rerank→阈值）。
+    type 用字符串保留向后兼容；新增 SpanKind 枚举作为强约束。
     """
     span_id: str
     parent_id: str | None          # None = root span
     name: str                      # 人类可读名称
     type: str                      # llm_call | retrieval | rerank | agent | tool_call | workflow | ...
+    kind: str = SpanKind.TOOL.value  # SpanKind 枚举值（强约束）
     status: str = "success"        # success | error | skipped
     start_time: str = ""
     end_time: str = ""
     duration_ms: int = 0
     sequence: int = 0              # 同 parent 下的排序序号
+    retry_count: int = 0           # 重试次数
     metrics: dict = field(default_factory=dict)
     input: dict | None = None
     output: dict | None = None
@@ -79,10 +113,12 @@ class TraceRecord:
     spans: List[Span] = field(default_factory=list)
     root_span_id: str = ""
     workflow_name: str = ""
+    workflow_kind: str = WorkflowKind.OTHER.value  # WorkflowKind 枚举值
     sla_threshold_ms: int = 10000
     parent_id: str | None = None
     children_ids: List[str] = field(default_factory=list)
     graph: dict | None = None
+    tags: dict = field(default_factory=dict)  # 自由 tag（kb_id, user_id, doc_id 等）
 
 
 class TraceCollector:
@@ -107,9 +143,17 @@ class TraceCollector:
     # 统一 API
     # =====================================================
 
-    def start(self, question: str, session_id: str = "default",
-              workflow_name: str = "rag_agent") -> TraceRecord:
-        """开始一次新的 trace。线程/异步安全。"""
+    def start(self, question: str = "", session_id: str = "default",
+              workflow_name: str = "rag_agent",
+              workflow_kind: str = WorkflowKind.OTHER.value) -> TraceRecord:
+        """开始一次新的 trace。线程/异步安全。
+
+        Args:
+            question: 用户问题或任务标识（Knowledge Index 时可传文件名）
+            session_id: 会话 ID（Knowledge Index 时可为空）
+            workflow_name: 工作流名称
+            workflow_kind: WorkflowKind 枚举值（前端按 kind 路由渲染）
+        """
         rid = uuid.uuid4().hex[:12]
         trace = TraceRecord(
             id=rid,
@@ -118,6 +162,7 @@ class TraceCollector:
             session_id=session_id,
             question=question,
             workflow_name=workflow_name,
+            workflow_kind=workflow_kind,
         )
         with self._lock:
             self._records.appendleft(trace)
@@ -129,7 +174,9 @@ class TraceCollector:
         return trace
 
     def start_span(self, span_id: str, parent_id: str | None = None,
-                   name: str = "", type: str = "", input: dict = None) -> Span:
+                   name: str = "", type: str = "",
+                   kind: str = SpanKind.TOOL.value,
+                   input: dict = None) -> Span:
         """创建 Span 并开始计时。
 
         参数：
@@ -137,6 +184,7 @@ class TraceCollector:
           parent_id:  None=root span, 省略=自动取当前 trace 的 root_span_id
           name:       人类可读名称（省略用 span_id）
           type:       llm_call|retrieval|rerank|agent|tool_call|...（省略按 span_id 推断）
+          kind:       SpanKind 枚举值（强约束，默认 TOOL）
           input:      输入快照（可选）
         """
         # 优先 contextvar（async 隔离），fallback 实例字段（threadpool 共享）
@@ -158,6 +206,7 @@ class TraceCollector:
             parent_id=parent_id,
             name=name or span_id,
             type=type or _TYPE_INFER.get(span_id, "tool_call"),
+            kind=kind or SpanKind.TOOL.value,
             start_time=now,
             sequence=seq,
             input=input,

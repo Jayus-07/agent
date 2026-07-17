@@ -8,7 +8,8 @@
 2. TraceStore 读方法可由 TraceCollector 完全替代
 3. 减少未来持久化迁移工作量（1 套 store vs 2 套）
 
-保留：GRAPH_TOPOLOGY + NODE_LABELS（静态拓扑，独立有用）
+保留：GRAPH_TOPOLOGY + NODE_LABELS（LangGraph 多 Agent 拓扑，独立有用）
+新增：INDEXING_TOPOLOGY + INDEXING_LABELS（Knowledge Index 流水线拓扑，Phase 1）
 """
 
 
@@ -50,3 +51,50 @@ NODE_LABELS = {
     "report_worker": "报告生成",
     "reporter":      "结果汇总",
 }
+
+
+# =====================================================
+# Knowledge Index 流水线拓扑（Phase 1 — 与 indexer.py 的 6 个 span 对应）
+# =====================================================
+
+INDEXING_TOPOLOGY = {
+    "nodes": [
+        {"id": "index_upload",      "label": "上传",     "type": "io"},
+        {"id": "index_parse",       "label": "解析",     "type": "parse"},
+        {"id": "index_chunk",       "label": "分块",     "type": "chunk"},
+        {"id": "index_embed",       "label": "向量化",   "type": "embedding"},
+        {"id": "index_vector_db",   "label": "向量库",   "type": "vector_db"},
+        {"id": "index_metadata",    "label": "元数据",   "type": "llm"},
+    ],
+    "edges": [
+        {"id": "ie1", "source": "index_upload",    "target": "index_parse",     "label": ""},
+        {"id": "ie2", "source": "index_parse",     "target": "index_chunk",     "label": ""},
+        {"id": "ie3", "source": "index_chunk",     "target": "index_embed",     "label": ""},
+        {"id": "ie4", "source": "index_embed",     "target": "index_vector_db", "label": ""},
+        {"id": "ie5", "source": "index_vector_db", "target": "index_metadata",  "label": ""},
+    ],
+}
+
+INDEXING_LABELS = {
+    "index_upload":     "上传",
+    "index_parse":      "解析",
+    "index_chunk":      "分块",
+    "index_embed":      "向量化",
+    "index_vector_db":  "向量库",
+    "index_metadata":   "元数据",
+}
+
+
+# =====================================================
+# 全局拓扑注册表（前端通过 workflow_kind 路由到对应拓扑）
+# =====================================================
+
+TOPOLOGY_REGISTRY = {
+    "langgraph_workflow": GRAPH_TOPOLOGY,
+    "knowledge_index":   INDEXING_TOPOLOGY,
+}
+
+
+def get_topology(workflow_kind: str) -> dict:
+    """根据 workflow_kind 返回对应拓扑。前端渲染时按此路由。"""
+    return TOPOLOGY_REGISTRY.get(workflow_kind, GRAPH_TOPOLOGY)
