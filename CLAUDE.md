@@ -12,7 +12,6 @@
 * Frontend: Next.js 14 + TypeScript + Zustand
 * AI: DeepSeek / Qwen / Ollama
 * Observability: 自建 tracer（`backend/rag/tracer.py`）+ Span 树
-* 待集成：Langfuse、Prometheus exporter
 
 ## 调用路径
 
@@ -32,6 +31,23 @@
 - 裸 `fetch` → **例外**：SSE 流 / EventSource / FormData 上传
 - `except Exception: pass`（生产路径）
 - `os.getenv()` / `os.environ[]` → 统一 `from backend.config import settings`
+
+```python
+# ❌ Bad: thin wrapper（无业务逻辑）
+def get_user(id): return db.get_user(id)
+
+# ❌ Bad: 文件名无语义 / 配置硬读
+utils.py                  os.getenv("OPENAI_API_KEY")
+
+# ✅ Good: 加了 DTO 转换 = 真实逻辑
+def get_user(id): return db.get_user(id).to_dto()
+```
+
+## 优先级（P0/P1/P2）
+
+- **P0**：数据错误 / 安全漏洞 / 内存泄漏 / 生产崩溃 / Trace 丢失 → 立即修
+- **P1**：God Object / 长函数 / 重复代码 / 强耦合 → 建议修
+- **P2**：命名 / 注释 / 小型重构 → 不为 P2 改大量稳定代码
 
 ## Python 核心
 
