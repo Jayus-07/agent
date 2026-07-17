@@ -1,12 +1,21 @@
 """RAG 路由 — 知识库检索问答 + 文档管理"""
 import asyncio
-import os, uuid
+import os, uuid, json
+from asyncio import Queue
 from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline
 from backend.rag.indexing.doc_registry import DocumentRegistry
 from backend.config import DOC_REGISTRY_PATH, CHROMA_PATH, EMBEDDING_MODEL_PATH
 from backend.shared.logger import logger
+
+# ── Upload 进度队列（按 upload_id 索引） ───────────────────────
+# 内存 dict，30 分钟未活动自动清理
+_progress_queues: dict[str, Queue] = {}
+
+def _sse_encode(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 router = APIRouter(prefix="/rag", tags=["知识库"])
 
@@ -176,12 +185,13 @@ async def reindex_document(doc_id: str, force: bool = False):
 
 @router.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
-    """上传文档 → 保存到 data/docs/ → 触发增量索引"""
+    """上传文档 → 保存到 data/docs/ → 触发后台增量索引 → 返回 upload_id 用于 SSE 订阅
+
+    两阶段流程：
+      1. POST 立即保存文件 + 返回 upload_id（不等索引）
+      2. 前端 GET /upload/{upload_id}/stream 订阅 SSE，接收真实索引进度
+    """
     from backend.config import DOCS_DIRECTORY
-    from backend.rag.indexing.indexer import IncrementalIndexer
-    from backend.rag.indexing.doc_registry import DocumentRegistry as DR
-    from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
-    from langchain_huggingface import HuggingFaceEmbeddings
 
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
     if ext not in ("pdf", "md", "txt", "docx"):
@@ -195,21 +205,146 @@ async def upload_document(file: UploadFile = File(...)):
     with open(filepath, "wb") as f:
         f.write(content)
 
-    # 索引
+    # 创建 upload_id + 进度队列
+    upload_id = uuid.uuid4().hex[:12]
+    queue: Queue = Queue()
+    _progress_queues[upload_id] = queue
+
+    # 后台跑索引（不阻塞 HTTP 响应）
+    asyncio.create_task(_run_index_background(upload_id, filepath, file.filename))
+
+    return {"ok": True, "upload_id": upload_id, "filename": file.filename}
+
+
+async def _run_index_background(upload_id: str, filepath: str, filename: str):
+    """后台执行索引，向 queue 推送阶段事件。"""
+    from backend.config import DOCS_DIRECTORY
+    from backend.rag.indexing.indexer import IncrementalIndexer
+    from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
+    from langchain_huggingface import HuggingFaceEmbeddings
+
+    queue = _progress_queues.get(upload_id)
+    if queue is None:
+        return
+
+    async def emit(stage: str, message: str = "", **extra):
+        await queue.put({"stage": stage, "message": message, **extra})
+
     try:
+        await emit("uploading", f"文件 {filename} 已保存，开始索引")
+
+        # 同步索引（在线程池跑，不阻塞事件循环）
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _do_index_sync, upload_id, filepath, filename)
+    except Exception as e:
+        logger.error(f"[RAG] 后台索引失败: {e}")
+        await emit("error", str(e))
+        await queue.put(None)  # sentinel
+        return
+
+    # 发送 done 事件（含新文档信息）
+    try:
+        reg = _get_registry()
+        docs = reg.list_active()
+        new_doc = next((d for d in docs if d["file_name"] == filename), None)
+        await emit("done", "索引完成", doc=new_doc)
+    except Exception as e:
+        await emit("done", "索引完成（文档信息获取失败）")
+    finally:
+        await queue.put(None)  # sentinel → SSE 关闭
+
+
+def _do_index_sync(upload_id: str, filepath: str, filename: str):
+    """同步执行索引，通过 _progress_queues[upload_id] 推送阶段（从线程内调用）。"""
+    from backend.config import DOCS_DIRECTORY
+    from backend.rag.indexing.indexer import IncrementalIndexer
+    from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
+    from langchain_huggingface import HuggingFaceEmbeddings
+
+    queue = _progress_queues.get(upload_id)
+    if queue is None:
+        return
+
+    def sync_emit(stage: str, message: str = "", **extra):
+        """从同步线程调用：put_nowait + run_coroutine_threadsafe 把事件推到异步队列"""
+        evt = {"stage": stage, "message": message, **extra}
+        loop = asyncio.get_event_loop()
+        # schedule putting in the loop (thread-safe)
+        asyncio.run_coroutine_threadsafe(queue.put(evt), loop)
+
+    try:
+        sync_emit("parsing", f"开始解析 {filename}")
         embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
         store = ChromaKnowledgeStore(persist_directory=CHROMA_PATH, embedding_function=embeddings)
         reg = _get_registry()
-        indexer = IncrementalIndexer(docs_dir, store, store, embeddings, reg)
+
+        # 包装 indexer 以便在不同阶段 emit
+        indexer = _ProgressIndexingWrapper(
+            docs_dir=DOCS_DIRECTORY,
+            store=store,
+            embeddings=embeddings,
+            reg=reg,
+            emit=sync_emit,
+        )
         result = indexer.sync()
-        logger.info(f"[RAG] 上传索引完成: {file.filename} → {result}")
-        # 获取新文档 info
-        docs = reg.list_active()
-        new_doc = next((d for d in docs if d["file_name"] == file.filename), None)
-        return {"ok": True, "filename": file.filename, "added": result.added, "doc": new_doc}
+        logger.info(f"[RAG] 上传索引完成: {filename} → {result}")
     except Exception as e:
-        logger.error(f"[RAG] 索引失败: {e}")
-        return {"ok": False, "error": f"索引失败: {str(e)}"}
+        sync_emit("error", f"索引失败: {e}")
+        raise
+
+
+class _ProgressIndexingWrapper:
+    """包装 IncrementalIndexer，在 _index_file 各阶段 emit 事件。"""
+
+    def __init__(self, docs_dir, store, embeddings, reg, emit):
+        self._indexer = IncrementalIndexer(docs_dir, store, store, embeddings, reg)
+        self._emit = emit
+
+    def sync(self):
+        # 复用原 sync 逻辑（已有 _apply_delta → _index_file 调用）
+        # 在 _index_file 各阶段插入 emit
+        original_index_file = self._indexer._index_file
+
+        def indexed_with_progress(file_path: str):
+            self._emit("chunking", f"分块: {os.path.basename(file_path)}")
+            result = original_index_file(file_path)
+            return result
+
+        self._indexer._index_file = indexed_with_progress
+        try:
+            return self._indexer.sync()
+        finally:
+            self._indexer._index_file = original_index_file
+
+
+@router.get("/upload/{upload_id}/stream")
+async def stream_upload_progress(upload_id: str):
+    """SSE 订阅：实时推送上传 + 索引进度。
+
+    事件类型：
+      stage  → {stage: uploading|parsing|chunking|embedding|writing|done|error, message}
+      done   → 包含 doc 信息
+      error  → 索引失败
+    """
+    queue = _progress_queues.get(upload_id)
+    if queue is None:
+        async def not_found():
+            yield _sse_encode("error", {"message": f"upload_id {upload_id} 不存在或已过期"})
+        return StreamingResponse(not_found(), media_type="text/event-stream")
+
+    async def event_stream():
+        try:
+            while True:
+                evt = await queue.get()
+                if evt is None:
+                    break
+                stage = evt.pop("stage", "unknown")
+                yield _sse_encode(stage, evt)
+        finally:
+            # SSE 断开 → 清理队列（防内存泄漏）
+            _progress_queues.pop(upload_id, None)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.delete("/documents/{doc_id}")

@@ -19,20 +19,22 @@ export function useKnowledgeStats() {
   return data
 }
 
-// Hook — 文档列表（真实 API，支持搜索/分页）
+// Hook — 文档列表（真实 API，支持搜索/分页/筛选）
 export function useDocuments() {
   const [data, setData] = useState<KnowledgeDoc[]>([])
   const [loading, setLoading] = useState(true)
   const [total, setTotal] = useState(0)
   const [error, setError] = useState('')
   const [keyword, setKeyword_] = useState('')
+  const [status, setStatus_] = useState('')
+  const [type, setType_] = useState('')
   const [page, setPage] = useState(1)
   const pageSize = 20
 
   const refresh = useCallback(() => {
     setLoading(true)
     setError('')
-    knowledgeService.getDocuments({ keyword, page, page_size: pageSize })
+    knowledgeService.getDocuments({ keyword, status, type, page, page_size: pageSize })
       .then(d => {
         setData(d.documents)
         setTotal(d.total)
@@ -42,7 +44,7 @@ export function useDocuments() {
         setError('获取文档列表失败: ' + String(e))
         setLoading(false)
       })
-  }, [keyword, page])
+  }, [keyword, status, type, page])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -51,7 +53,17 @@ export function useDocuments() {
     setPage(1)
   }, [])
 
-  return { documents: data, loading, total, page, pageSize, keyword, setKeyword, setPage, error, refresh }
+  const setStatus = useCallback((s: string) => {
+    setStatus_(s)
+    setPage(1)
+  }, [])
+
+  const setType = useCallback((t: string) => {
+    setType_(t)
+    setPage(1)
+  }, [])
+
+  return { documents: data, loading, total, page, pageSize, keyword, setKeyword, status, setStatus, type, setType, setPage, error, refresh }
 }
 
 // Hook — 单个文档详情（独立 fetch）

@@ -26,22 +26,36 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
 
 export default function DocumentsPage() {
   const router = useRouter()
-  const { documents, loading, total, page, pageSize, keyword, setKeyword, setPage, error, refresh } = useDocuments()
+  const { documents, loading, total, page, pageSize, keyword, setKeyword, status, setStatus, type, setType, setPage, error, refresh } = useDocuments()
   const [uploadOpen, setUploadOpen] = useState(false)
   const [reindexing, setReindexing] = useState<Set<string>>(new Set())
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
+  // 受控搜索：本地 input 状态（立即响应）+ 防抖同步到 store（API 调用）
+  const [inputValue, setInputValue] = useState(keyword)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>()
 
-  // 防抖搜索
+  // 防抖搜索：本地 input 立即更新，API 请求 300ms 后发出
   const handleSearch = (value: string) => {
+    setInputValue(value)
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => setKeyword(value), 300)
+  }
+
+  // 清除按钮：立即清空本地 + 立即清空 store（不等防抖）
+  const handleClear = () => {
+    setInputValue('')
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    setKeyword('')
   }
 
   useEffect(() => {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [])
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async () => {
+    if (!deleteTarget) return
+    const { id } = deleteTarget
+    setDeleteTarget(null)
     await knowledgeService.deleteDocument(id)
     refresh()
   }
@@ -83,13 +97,39 @@ export default function DocumentsPage() {
             <input
               placeholder="搜索文档..."
               className="bg-transparent outline-none text-xs text-text-primary flex-1"
-              defaultValue={keyword}
+              value={inputValue}
               onChange={e => handleSearch(e.target.value)}
             />
-            {keyword && (
-              <button onClick={() => handleSearch('')} className="text-text-muted hover:text-text-primary text-[10px]">✕ 清除</button>
+            {inputValue && (
+              <button onClick={handleClear} className="text-text-muted hover:text-text-primary text-[10px]">✕ 清除</button>
             )}
           </div>
+          {/* 状态过滤 */}
+          <select
+            value={status}
+            onChange={e => setStatus(e.target.value)}
+            className="px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40 transition-colors"
+          >
+            <option value="">全部状态</option>
+            <option value="active">活跃</option>
+            <option value="uploading">上传中</option>
+            <option value="parsing">解析中</option>
+            <option value="embedding">向量化</option>
+            <option value="failed">失败</option>
+            <option value="deleted">已删除</option>
+          </select>
+          {/* 类型过滤 */}
+          <select
+            value={type}
+            onChange={e => setType(e.target.value)}
+            className="px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40 transition-colors"
+          >
+            <option value="">全部类型</option>
+            <option value="pdf">PDF</option>
+            <option value="md">Markdown</option>
+            <option value="txt">TXT</option>
+            <option value="docx">DOCX</option>
+          </select>
           <button onClick={() => setUploadOpen(true)} className="px-4 py-2 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors">+ 上传文档</button>
         </div>
 
@@ -122,7 +162,7 @@ export default function DocumentsPage() {
                       <button onClick={(e) => handleStopPropagation(e, () => handleReindex(d.id))} disabled={reindexing.has(d.id)} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors disabled:opacity-50" title="重新解析">
                         {reindexing.has(d.id) ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                       </button>
-                      <button onClick={(e) => handleStopPropagation(e, () => handleDelete(d.id))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-red-500 transition-colors" title="删除"><Trash2 size={13} /></button>
+                      <button onClick={(e) => handleStopPropagation(e, () => setDeleteTarget({ id: d.id, name: d.name }))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-red-500 transition-colors" title="删除"><Trash2 size={13} /></button>
                     </div>
                   </td>
                 </tr>
@@ -148,6 +188,23 @@ export default function DocumentsPage() {
       </div>
     </div>
     <UploadDialog open={uploadOpen} onClose={() => setUploadOpen(false)} onSuccess={refresh} />
+
+    {/* 删除确认对话框 */}
+    {deleteTarget && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" onClick={() => setDeleteTarget(null)}>
+        <div className="bg-surface-base rounded-2xl border border-border-subtle shadow-xl w-[400px] p-6" onClick={e => e.stopPropagation()}>
+          <h3 className="text-sm font-semibold text-text-primary mb-2">确认删除</h3>
+          <p className="text-xs text-text-muted mb-4">
+            确定要删除 <span className="text-text-primary font-medium">"{deleteTarget.name}"</span> 吗？
+            <br />该操作不可恢复，文档将从知识库中移除。
+          </p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors">取消</button>
+            <button onClick={handleDelete} className="px-4 py-2 text-xs rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors">删除</button>
+          </div>
+        </div>
+      </div>
+    )}
     </>
   )
 }

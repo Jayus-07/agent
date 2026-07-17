@@ -50,11 +50,79 @@ export const knowledgeService = {
     return res.json()
   },
 
-  async uploadDocument(file: File): Promise<{ ok: boolean; doc_id?: string; error?: string }> {
+  /**
+   * 上传文档（两阶段）：
+   * 1. POST /upload → 返回 { ok, upload_id, filename }
+   * 2. GET /upload/{upload_id}/stream (SSE) → 真实索引进度
+   *
+   * @param file 待上传文件
+   * @param onProgress 阶段回调：uploading | parsing | chunking | embedding | writing | done | error
+   * @returns Promise<{ ok, doc? }>
+   */
+  async uploadDocument(
+    file: File,
+    onProgress?: (stage: string, message: string) => void,
+  ): Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string }> {
     const fd = new FormData()
     fd.append('file', file)
     const res = await fetch(`${BASE}/upload`, { method: 'POST', body: fd })
-    return res.json()
+
+    // 检查响应是否 OK，避免 HTML 错误页面被当 JSON 解析
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new Error(`上传失败 (${res.status}): ${text.slice(0, 200)}`)
+    }
+
+    const data = await res.json()
+    if (!data.ok || !data.upload_id) {
+      return { ok: false, error: data.error || '上传失败' }
+    }
+
+    // 订阅 SSE 获取真实进度
+    return new Promise((resolve) => {
+      const eventSource = new EventSource(`${BASE}/upload/${data.upload_id}/stream`)
+      let resolved = false
+
+      const cleanup = () => {
+        if (!resolved) {
+          resolved = true
+          eventSource.close()
+        }
+      }
+
+      // 各阶段事件：stage 名作为 event 名
+      const stages = ['uploading', 'parsing', 'chunking', 'embedding', 'writing', 'done', 'error']
+      stages.forEach((stage) => {
+        eventSource.addEventListener(stage, (e: MessageEvent) => {
+          let payload: any = {}
+          try {
+            payload = JSON.parse(e.data)
+          } catch {
+            payload = { message: e.data }
+          }
+          onProgress?.(stage, payload.message || '')
+
+          if (stage === 'done') {
+            cleanup()
+            resolve({ ok: true, doc: payload.doc })
+          } else if (stage === 'error') {
+            cleanup()
+            resolve({ ok: false, error: payload.message || '索引失败' })
+          }
+        })
+      })
+
+      // SSE 通用 error 事件
+      eventSource.addEventListener('error', (e) => {
+        // readyState 0 = 连接中，1 = 已连接，2 = 已关闭
+        if ((e as any).readyState === 2 && !resolved) {
+          // 服务端关闭 → done/error 已发过，这里跳过
+          return
+        }
+        cleanup()
+        resolve({ ok: false, error: '进度连接中断' })
+      })
+    })
   },
 
   async deleteDocument(docId: string): Promise<{ ok: boolean }> {

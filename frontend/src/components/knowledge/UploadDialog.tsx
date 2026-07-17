@@ -6,12 +6,23 @@ import { knowledgeService } from '@/services/knowledge'
 
 interface Props { open: boolean; onClose: () => void; onSuccess: () => void }
 
-const STAGES = ['上传文件', '文本解析', 'Chunk 切分', 'Embedding', '写入向量库', '完成']
+// 阶段映射：后端 SSE event 名 → 显示文案 + UI 索引
+const STAGES = [
+  { key: 'uploading', label: '上传文件' },
+  { key: 'parsing',   label: '文本解析' },
+  { key: 'chunking',  label: 'Chunk 切分' },
+  { key: 'embedding', label: 'Embedding' },
+  { key: 'writing',   label: '写入向量库' },
+  { key: 'done',      label: '完成' },
+] as const
+
+type StageKey = typeof STAGES[number]['key']
 
 export default function UploadDialog({ open, onClose, onSuccess }: Props) {
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
-  const [stage, setStage] = useState(0)
+  const [currentStage, setCurrentStage] = useState<StageKey | null>(null)
+  const [stageMessage, setStageMessage] = useState('')
   const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -19,18 +30,26 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
 
   const handleUpload = async () => {
     if (!file) return
-    setUploading(true); setError(''); setStage(1)
-
-    // Simulate stage progression (backend processes synchronously for now)
-    const timer = setInterval(() => setStage(s => Math.min(s + 1, STAGES.length - 1)), 600)
+    setUploading(true); setError(''); setCurrentStage('uploading')
 
     try {
-      const res = await knowledgeService.uploadDocument(file)
-      clearInterval(timer)
-      if (res.ok) { setStage(STAGES.length - 1); setTimeout(() => { onSuccess(); onClose(); setFile(null); setStage(0) }, 800) }
-      else { setStage(0); setError(res.error || '上传失败') }
-    } catch { setStage(0); setError('网络错误') }
-    finally { setUploading(false) }
+      const res = await knowledgeService.uploadDocument(file, (stage, message) => {
+        setCurrentStage(stage as StageKey)
+        setStageMessage(message)
+      })
+      if (res.ok) {
+        // 后端发 'done' 时 setCurrentStage('done') 已调用
+        setTimeout(() => { onSuccess(); onClose(); setFile(null); setCurrentStage(null); setStageMessage('') }, 800)
+      } else {
+        setError(res.error || '上传失败')
+        setCurrentStage(null)
+      }
+    } catch (e) {
+      setError((e as Error).message || '网络错误')
+      setCurrentStage(null)
+    } finally {
+      setUploading(false)
+    }
   }
 
   return (
@@ -55,16 +74,25 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
           </div>
         )}
 
-        {uploading && (
+        {uploading && currentStage && (
           <div className="space-y-2 mb-4">
-            {STAGES.map((s, i) => (
-              <div key={s} className="flex items-center gap-2 text-xs">
-                {i < stage ? <CheckCircle2 size={13} className="text-green-500" />
-                  : i === stage ? <Loader2 size={13} className="text-accent animate-spin" />
-                  : <div className="w-[13px] h-[13px] rounded-full border border-border-subtle" />}
-                <span className={i <= stage ? 'text-text-primary' : 'text-text-muted'}>{s}</span>
-              </div>
-            ))}
+            {STAGES.map((s) => {
+              const currentIdx = STAGES.findIndex((x) => x.key === currentStage)
+              const thisIdx = STAGES.findIndex((x) => x.key === s.key)
+              const isDone = thisIdx < currentIdx || currentStage === 'done'
+              const isCurrent = thisIdx === currentIdx && currentStage !== 'done'
+              return (
+                <div key={s.key} className="flex items-center gap-2 text-xs">
+                  {isDone ? <CheckCircle2 size={13} className="text-green-500" />
+                    : isCurrent ? <Loader2 size={13} className="text-accent animate-spin" />
+                    : <div className="w-[13px] h-[13px] rounded-full border border-border-subtle" />}
+                  <span className={isDone || isCurrent ? 'text-text-primary' : 'text-text-muted'}>{s.label}</span>
+                  {isCurrent && stageMessage && (
+                    <span className="text-text-muted text-[10px] ml-1 truncate">— {stageMessage}</span>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
 
