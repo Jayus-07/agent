@@ -60,9 +60,11 @@ class BaseSkill(ABC):
     ) -> dict:
         """执行当前 Capability：从 state 提取 step → 调用 Tool → 写回结果。
 
+        每次 Tool 调用都会创建 Span（type=tool_call），重试记录为 span.events。
         返回: {"step_results": {...}}
         """
         from backend.orchestration.supervisor.alerts import make_alert, log_degradation
+        from backend.rag.tracer import trace_collector
 
         step_id = state.get("current_step_id")
         if not step_id:
@@ -85,6 +87,15 @@ class BaseSkill(ABC):
 
         params = dict(step_info.get("params", {}))
         params.pop("_previous_outputs", None)
+
+        # ── Tracing: 创建 tool_call span ──
+        cap = sr["capability"]
+        tool_span = trace_collector.start_span(
+            f"tool-{step_id}", parent_id=f"skill-{step_id}",
+            name=f"{self.name}:{cap}" if self.name else cap,
+            type="tool_call",
+            input={"params": params, "capability": cap},
+        )
 
         last_error = None
         for attempt in range(max_retries + 1):
@@ -113,15 +124,24 @@ class BaseSkill(ABC):
 
                 elapsed = sr["finished_at"] - sr.get("started_at", sr["finished_at"])
                 logger.info(f"[{self.name}] step={step_id} 成功 (耗时 {elapsed:.2f}s)")
+
+                # ── Tracing: 成功 ──
+                trace_collector.end_span(tool_span,
+                    output={"result": output},
+                    metrics={"elapsed_s": round(elapsed, 2), "retries": attempt})
                 break
 
             except asyncio.TimeoutError:
                 last_error = f"步骤执行超时（{timeout}s）"
                 logger.warning(f"[{self.name}] step={step_id} 超时")
+                trace_collector.add_event(tool_span, f"retry_{attempt+1}", "warn",
+                    f"超时重试 ({timeout}s)", {"attempt": attempt + 1})
 
             except Exception as e:
                 last_error = str(e)
                 logger.warning(f"[{self.name}] step={step_id} 失败: {e}")
+                trace_collector.add_event(tool_span, f"retry_{attempt+1}", "warn",
+                    f"执行失败: {last_error[:80]}", {"attempt": attempt + 1})
 
             if not _is_retryable(str(last_error)):
                 break
@@ -136,6 +156,10 @@ class BaseSkill(ABC):
             sr["error_type"] = "timeout" if "超时" in str(last_error) else "unknown"
             sr["finished_at"] = time.time()
             step_results[step_id] = dict(sr)
+
+            # ── Tracing: 最终失败 ──
+            trace_collector.end_span(tool_span, status="error",
+                metrics={"error": last_error, "retries": max_retries})
 
             code = "WORKER_TIMEOUT" if sr["error_type"] == "timeout" else "WORKER_RETRY_EXHAUST"
             alert = make_alert(code, {"step_id": step_id, "error": last_error})

@@ -55,6 +55,9 @@ class ToolRegistry:
         "rag.search":        "rag_skill",
         "report.generate":   "report_skill",
         "data.collect":      "data_collection_skill",
+        "data.export":       "data_export_skill",
+        "email.send":        "email_skill",
+        "web.search":        "web_search_skill",
     }
 
     # capability → {description, params, 示例}（用于 Planner/Critique prompt）
@@ -94,6 +97,32 @@ class ToolRegistry:
                 "dedup_keys": "去重键字段，逗号分隔（如 SKU,仓库）",
             },
             "示例": {"source": "static://datasets/products.json", "target_table": "stg_products", "fetcher_type": "static"},
+        },
+        "data.export": {
+            "description": "查询数据库并导出结果为 CSV 文件（UTF-8 BOM，Excel 可直接打开）。适用场景：导出报表、数据明细给业务团队。",
+            "params": {
+                "question": "自然语言查询问题（如 '上周各渠道销售额和订单数'）",
+                "filename": "导出文件名（可选，不含扩展名）",
+            },
+            "示例": {"question": "上周各渠道销售额和订单数", "filename": "weekly_sales"},
+        },
+        "email.send": {
+            "description": "通过 SMTP 发送邮件。必须在报告/数据生成完成后再调用（依赖前序步骤的输出）。",
+            "params": {
+                "to": "收件人邮箱，多个用逗号分隔",
+                "subject": "邮件主题",
+                "body": "邮件正文（支持 Markdown/HTML）",
+                "cc": "抄送邮箱（可选）",
+            },
+            "示例": {"to": "team@company.com", "subject": "运营周报", "body": "# 本周运营数据\n\n..."},
+        },
+        "web.search": {
+            "description": "搜索外部网页，补充知识库未覆盖的最新信息（市场动态、竞品信息、行业趋势等）。仅在内部知识库无法回答时使用。",
+            "params": {
+                "query": "搜索关键词",
+                "num_results": "返回结果数（默认5）",
+            },
+            "示例": {"query": "Amazon FBA fee changes 2026"},
         },
     }
 

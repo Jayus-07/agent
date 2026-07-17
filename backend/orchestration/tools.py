@@ -92,3 +92,164 @@ def generate_report_tool(report_type: str, filters: dict = None) -> str:
     filters = filters or {}
     logger.info(f"[Tool:generate_report] 类型={report_type}, 筛选={filters}")
     return run_report(report_type, filters, user_id="multi-agent", polish=False)
+
+
+@tool
+def export_csv_tool(question: str, filename: str = "") -> str:
+    """
+    查询数据库并导出结果为 CSV 文件（UTF-8 BOM，Excel 兼容打开）。
+    question: 自然语言查询问题（如 "上周各渠道销售额"）
+    filename: 导出文件名（不含扩展名），默认自动生成
+    返回: 导出文件路径和行数
+    """
+    import csv
+    from pathlib import Path
+    from datetime import datetime
+    from backend.config import STORAGE_DOCS_DIR
+
+    # 委托 SQL agent 生成并执行 SQL
+    agent = _get_sql_agent()
+    result = agent.ask(question, current_user_id=None)
+
+    # 从 SQL agent 结果中提取表格数据
+    rows, columns = _extract_table_from_markdown(result)
+    if not rows:
+        return f"[EXPORT FAILED] 查询无结果或无法解析: {question[:80]}"
+
+    if not filename:
+        filename = f"export_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    export_dir = Path(STORAGE_DOCS_DIR) / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    filepath = export_dir / f"{filename}.csv"
+
+    with open(str(filepath), "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(columns)
+        writer.writerows(rows)
+
+    logger.info(f"[Tool:export_csv] {len(rows)} 行 → {filepath}")
+    return f"已导出 {len(rows)} 行数据到 {filepath}"
+
+
+def _extract_table_from_markdown(text: str) -> tuple:
+    """从 Markdown 表格文本中提取 rows 和 columns。"""
+    import re
+    lines = text.strip().split("\n")
+    header = []
+    data = []
+    in_table = False
+    for line in lines:
+        line = line.strip()
+        if line.startswith("|") and line.endswith("|"):
+            cells = [c.strip() for c in line.split("|")[1:-1]]
+            if all(c.startswith("---") or c.startswith(":--") for c in cells if c):
+                continue  # 分隔行
+            if not in_table:
+                header = cells
+                in_table = True
+            else:
+                data.append(cells)
+        else:
+            if in_table and data:
+                break  # 表格结束
+    return data, header
+
+
+@tool
+def web_search_tool(query: str, num_results: int = 5) -> str:
+    """
+    搜索外部网页，补充知识库未覆盖的信息。
+    query: 搜索关键词
+    num_results: 返回结果数（默认 5）
+    返回: Markdown 格式的搜索结果摘要
+    """
+    import urllib.request, urllib.parse, json
+    from html.parser import HTMLParser
+
+    class TextExtractor(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.text = []
+            self.skip = False
+        def handle_starttag(self, tag, attrs):
+            if tag in ("script", "style"):
+                self.skip = True
+        def handle_endtag(self, tag):
+            if tag in ("script", "style"):
+                self.skip = False
+        def handle_data(self, data):
+            if not self.skip:
+                t = data.strip()
+                if t:
+                    self.text.append(t)
+
+    results = []
+    try:
+        # DuckDuckGo HTML search (no API key needed)
+        url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+
+        # 简单正则提取结果标题+摘要
+        import re
+        titles = re.findall(r'<a[^>]*class="result__a"[^>]*>(.*?)</a>', html, re.DOTALL)
+        snippets = re.findall(r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>', html, re.DOTALL)
+        links = re.findall(r'<a[^>]*class="result__url"[^>]*>(.*?)</a>', html, re.DOTALL)
+
+        for i in range(min(num_results, len(titles))):
+            title = re.sub(r'<[^>]+>', '', titles[i]).strip()
+            snippet = re.sub(r'<[^>]+>', '', snippets[i]).strip() if i < len(snippets) else ""
+            link = links[i].strip() if i < len(links) else ""
+            results.append(f"{i+1}. **{title}**\n   {snippet}\n   {link}")
+
+    except Exception as e:
+        logger.warning(f"[Tool:web_search] 搜索失败: {e}")
+        return f"[SEARCH FAILED] 无法搜索 '{query}': {e}"
+
+    if not results:
+        return f"[NO RESULTS] 未找到 '{query}' 的相关结果"
+
+    return "\n\n".join(results)
+
+
+@tool
+def send_email_tool(to: str, subject: str, body: str, cc: str = "") -> str:
+    """
+    发送邮件。
+    to: 收件人邮箱，多个用逗号分隔
+    subject: 邮件主题
+    body: 邮件正文（支持 Markdown）
+    cc: 抄送（可选）
+    """
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    from backend.config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM
+
+    if not SMTP_USER or not SMTP_PASSWORD:
+        return f"[EMAIL DISABLED] 未配置 SMTP。收件人: {to}, 主题: {subject}, 正文长度: {len(body)} 字符"
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["From"] = SMTP_FROM
+        msg["To"] = to
+        msg["Subject"] = subject
+        if cc:
+            msg["Cc"] = cc
+        msg.attach(MIMEText(body, "html" if body.startswith("<") else "plain", "utf-8"))
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            recipients = [a.strip() for a in to.split(",")]
+            if cc:
+                recipients += [a.strip() for a in cc.split(",")]
+            server.sendmail(SMTP_FROM, recipients, msg.as_string())
+
+        logger.info(f"[Tool:send_email] 已发送 → {to} ({subject})")
+        return f"邮件已发送: 收件人 {to}, 主题 '{subject}'"
+    except Exception as e:
+        logger.error(f"[Tool:send_email] 发送失败: {e}")
+        raise

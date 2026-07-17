@@ -21,6 +21,9 @@ from backend.orchestration.skills.registry import get_skill, list_skills
 from backend.orchestration.skills.sql.skill import SQLSkill, sql_skill_node
 from backend.orchestration.skills.rag.skill import RAGSkill, rag_skill_node
 from backend.orchestration.skills.report.skill import ReportSkill, report_skill_node
+from backend.orchestration.skills.email.skill import EmailSkill, email_skill_node
+from backend.orchestration.skills.data_export.skill import DataExportSkill, data_export_skill_node
+from backend.orchestration.skills.web_search.skill import WebSearchSkill, web_search_skill_node
 
 __all__ = [
     "BaseSkill", "execute_with_retry",
@@ -28,4 +31,7 @@ __all__ = [
     "SQLSkill", "sql_skill_node",
     "RAGSkill", "rag_skill_node",
     "ReportSkill", "report_skill_node",
+    "EmailSkill", "email_skill_node",
+    "DataExportSkill", "data_export_skill_node",
+    "WebSearchSkill", "web_search_skill_node",
 ]
