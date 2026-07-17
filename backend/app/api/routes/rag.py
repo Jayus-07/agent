@@ -258,7 +258,7 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str):
 
 def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyncio.AbstractEventLoop):
     """同步执行索引，通过 _progress_queues[upload_id] 推送阶段（从线程内调用）。"""
-    from backend.config import DOCS_DIRECTORY
+    from backend.config import DOCS_DIRECTORY  # noqa: F401  （用于 _ProgressIndexingWrapper）
     from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
     from langchain_huggingface import HuggingFaceEmbeddings
 
