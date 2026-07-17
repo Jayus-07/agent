@@ -93,10 +93,15 @@ agent/
 
 **修改前**：
 - Read 相关代码，不猜实现
+- 查 MCP `code-review-graph` 影响范围：
+  - 先 `detect_changes_tool`（看风险评分、受影响函数、test gap）
+  - 高风险（≥0.6）或跨模块改动时追加 `get_affected_flows` + `get_impact_radius`
+  - 新增文件后 `build_or_update_graph_tool`（增量或全量，让图谱跟上当前代码）
 - 最小修改、保持现有架构、不改 Public API
 
 **修改后**：
 - 跑真实测试
+- 再跑一次 `detect_changes_tool` 验证实际影响范围与预期一致
 - 汇报：改了什么 / 为什么 / 影响范围 / 测试结果
 
 **修改原则**（按优先级）：
@@ -208,10 +213,11 @@ agent/
 
 ## Docs
 
-- [前端可观测性数据需求](docs/observability/frontend-data-requirements.md) — 5 个页面 + TraceRecord/TraceStep/AlertItem/TraceStats 完整数据契约（前后端对齐用）
+- [前端可观测性 Mock 数据系统](docs/observability/mock-as-api-contract.md) — 27 条 Trace / 12 workflow / Span 模型 / mergeTrace 逻辑
+- [可观测性后端增强方案](docs/observability/backend-enhancement-plan.md) — 数据够用性分析 + 6 Phase 实施计划
+- [前端可观测性数据需求](docs/observability/frontend-data-requirements.md) — 5 页面 + TraceRecord/AlertItem 数据契约（旧 TraceStep 模型，部分过时）
 
-暂无其他独立文档。架构/模块说明请直接参考代码与 README。
-（项目演进中文档容易过时，代码即文档。）
+架构/模块说明请直接参考代码与 README。（项目演进中文档容易过时，代码即文档。）
 
 ---
 
