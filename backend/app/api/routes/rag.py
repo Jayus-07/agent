@@ -21,10 +21,11 @@ def _sse_encode(event: str, data: dict) -> str:
     故意省略 'event: <name>' 字段 — 让所有消息走 EventSource 默认 message event
     触发 onmessage listener，避免 addEventListener 注册时机 race condition。
 
-    后端兼容：data 中保留 stage 字段，前端可按 stage 路由。
+    故意用 ensure_ascii=True — StreamingResponse 默认 Content-Type 没 charset，
+    非 ASCII 字节可能被客户端按 latin-1 解码导致乱码。ensure_ascii=True 让 SSE 流
+    纯 ASCII（中文 → \\uXXXX），客户端 JSON.parse 自动还原为 unicode 字符串。
     """
-    # 把 stage 字段也放进 data（已由 emit() 完成）
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return f"data: {json.dumps(data, ensure_ascii=True)}\n\n"
 
 router = APIRouter(prefix="/rag", tags=["知识库"])
 
