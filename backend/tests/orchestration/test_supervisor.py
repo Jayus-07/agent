@@ -6,6 +6,7 @@ CLAUDE.md 核心约束：
 - Planner 只输出 capability DAG
 - 路由决策必须正确（依赖失败 → skip / capability 无效 → failed / 超过最大循环 → 强制终止）
 """
+import time
 import pytest
 from unittest.mock import patch, MagicMock
 from langgraph.types import Send
@@ -261,7 +262,7 @@ class TestSupervisorStateTransitions:
         state = {
             "plan": {"nodes": {"1": {"capability": "sql.query"}}, "edges": {}},
             "step_results": {
-                "1": {"status": "running", "started_at": 1000.0},
+                "1": {"status": "running", "started_at": time.time()},
             },
             "_supervisor_loop_count": 0,
             "_degraded_steps": set(),
@@ -271,6 +272,28 @@ class TestSupervisorStateTransitions:
         assert result["_ready_dispatch"] == []
         # 也不应该被标 failed
         assert result["step_results"]["1"]["status"] == "running"
+
+    @patch("backend.orchestration.supervisor.scheduler.execute_degradation")
+    @patch("backend.orchestration.supervisor.scheduler.tool_registry")
+    def test_running_step_stale_marked_failed(self, mock_reg, mock_degrade):
+        """running 步骤超过 RUNNING_STALE_TIMEOUT_SEC → 自动 failed（防死锁）"""
+        # mock execute_degradation 返回原 step_results，不被覆盖
+        def fake_degrade(nodes, edges, new_results, ready, degraded, q):
+            return new_results, ready, degraded
+        mock_degrade.side_effect = fake_degrade
+        stale_started = time.time() - 600  # 10 分钟前，远超 300s 阈值
+        state = {
+            "plan": {"nodes": {"1": {"capability": "sql.query"}}, "edges": {}},
+            "step_results": {
+                "1": {"status": "running", "started_at": stale_started},
+            },
+            "_supervisor_loop_count": 0,
+            "_degraded_steps": set(),
+        }
+        result = supervisor_node(state)
+        assert result["step_results"]["1"]["status"] == "failed"
+        assert result["step_results"]["1"]["error_type"] == "timeout"
+        assert result["_all_steps_done"] is True
 
     @patch("backend.orchestration.supervisor.scheduler.execute_degradation")
     @patch("backend.orchestration.supervisor.scheduler.tool_registry")

@@ -63,10 +63,10 @@ class TestStart:
 class TestStartSpan:
     def test_first_span_becomes_root(self):
         tc = TraceCollector()
-        tc.start("q")
+        t = tc.start("q")
         root = tc.start_span("root_id")
         assert root.parent_id is None
-        assert tc._current_trace.root_span_id == "root_id"
+        assert t.root_span_id == "root_id"
 
     def test_child_span_inherits_root_when_parent_omitted(self):
         """省略 parent_id → 自动取当前 root_span_id"""
@@ -133,12 +133,11 @@ class TestStartSpan:
 
     def test_sequence_increments(self):
         tc = TraceCollector()
-        tc.start("q")
+        t = tc.start("q")
         tc.start_span("root")     # seq=0
         tc.start_span("a")        # seq=1
         tc.start_span("b")        # seq=2
-        trace = tc._current_trace
-        assert [s.sequence for s in trace.spans] == [0, 1, 2]
+        assert [s.sequence for s in t.spans] == [0, 1, 2]
 
 
 class TestEndSpan:
@@ -344,7 +343,7 @@ class TestBoundaries:
     def test_concurrent_spans_no_loss(self):
         """100 个 span 并发写入 — 不丢一个"""
         tc = TraceCollector()
-        tc.start("q")
+        t = tc.start("q")
         tc.start_span("root")
 
         def worker(i):
@@ -356,11 +355,10 @@ class TestBoundaries:
         with ThreadPoolExecutor(max_workers=20) as pool:
             list(pool.map(worker, range(100)))
 
-        trace = tc._current_trace
         # 1 root + 100 children
-        assert len(trace.spans) == 101
+        assert len(t.spans) == 101
         # 所有 span 都应该已经 end
-        for s in trace.spans:
+        for s in t.spans:
             assert s.duration_ms >= 0
 
     def test_concurrent_starts_are_safe(self):

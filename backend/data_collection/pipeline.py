@@ -21,7 +21,7 @@ data_collection/pipeline.py — 数据采集主编排器
 
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from backend.data_collection.fetchers.base import AbstractFetcher, RawData
@@ -122,11 +122,14 @@ class CollectionPipeline:
         Args:
             source: 数据源标识
             table: 目标数据库表名
-            dedup_keys: 去重键字段列表
+            dedup_keys: 去重键字段列表（仅作用于 clean 阶段，注入到 clean_rules["dedup_keys"]）
             clean_rules: 清洗规则（传给 DefaultCleaner.clean）
             analysis_config: 分析配置（传给 StatsAnalyzer.analyze）
             write_mode: 写入模式
             fetcher_kwargs: 传给 fetcher.fetch() 的额外参数
+
+        注意：dedup_keys **不**会传给 fetcher 阶段——去重只发生在 clean 阶段。
+              如需 fetcher 阶段就过滤，应在 fetcher_kwargs 里自定义。
 
         Returns:
             CollectResult: 汇总所有阶段结果

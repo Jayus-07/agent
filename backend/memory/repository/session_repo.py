@@ -1,5 +1,5 @@
 """SessionRepository — async CRUD for chat_sessions + chat_messages"""
-from sqlalchemy import select, insert, update, func
+from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.memory.models.session import ChatSession, ChatMessage
 from datetime import datetime, timezone

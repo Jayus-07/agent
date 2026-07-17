@@ -16,15 +16,24 @@ report_generator.py — 报告生成主编排器
 import os
 import time
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Any, Optional
 
-from backend.business_report.data_fetcher import (
-    REPORT_REGISTRY, get_fetcher, SQLFetcher, APIFetcher,
-)
+from backend.business_report.data_fetcher import REPORT_REGISTRY, get_fetcher
 from backend.business_report.template_engine import TemplateEngine
 from backend.business_report.snapshot import save_snapshot, cleanup_old_snapshots
 from backend.business_report.preference import preference_store
 from backend.shared.logger import logger
+
+
+class ReportTypeNotFound(KeyError):
+    """报告类型未注册 — 工具调用失败信号，让 Agent 框架识别并触发 retry/escalate。"""
+    def __init__(self, report_type: str, available: list[str]):
+        self.report_type = report_type
+        self.available = available
+        super().__init__(
+            f"未知报告类型 '{report_type}'，可用类型: {', '.join(available)}"
+        )
+
 
 # 图表和 LLM 润色模块惰性导入（可选依赖）
 _chart_generator = None
@@ -114,8 +123,7 @@ class ReportGenerator:
         # ── 获取报告配置 ──
         report_config = REPORT_REGISTRY.get(report_type)
         if not report_config:
-            return (f"## 错误\n\n未知的报告类型: **{report_type}**\n\n"
-                    f"可用类型: {', '.join(REPORT_REGISTRY.keys())}")
+            raise ReportTypeNotFound(report_type, list(REPORT_REGISTRY.keys()))
 
         logger.info(f"[ReportGen] ====== 开始生成报告: {report_type} ======")
         logger.info(f"[ReportGen] 筛选: {filters}, 用户: {user_id}, 润色: {polish}")

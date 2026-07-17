@@ -20,6 +20,34 @@ from backend.shared.logger import logger
 
 
 MAX_SUPERVISOR_LOOPS = 10
+# running 状态的步骤超过此秒数视为卡死，自动标 failed
+RUNNING_STALE_TIMEOUT_SEC = 300
+
+
+def _fail_stale_running(step_results: dict, nodes: dict, now: float) -> dict:
+    """扫描所有 status==running 且 started_at 超时的步骤，标 failed。
+
+    防止 Skill 进程被 kill -9 后 supervisor 永久死等。
+    """
+    new_results = dict(step_results)
+    for sid, node_info in nodes.items():
+        sr = new_results.get(sid, {})
+        if sr.get("status") != "running":
+            continue
+        started_at = sr.get("started_at", 0)
+        if started_at and (now - started_at) > RUNNING_STALE_TIMEOUT_SEC:
+            new_results[sid] = {
+                **sr,
+                "status": "failed",
+                "error": f"running 步骤超时（>{RUNNING_STALE_TIMEOUT_SEC}s）",
+                "error_type": "timeout",
+                "finished_at": now,
+            }
+            logger.warning(
+                f"[Supervisor] step={sid} running 超时 "
+                f"(started_at={started_at:.0f}, now={now:.0f})，强制 failed"
+            )
+    return new_results
 
 
 def supervisor_node(state: dict) -> dict:
@@ -33,6 +61,7 @@ def supervisor_node(state: dict) -> dict:
     nodes = plan.get("nodes", {})
     edges = plan.get("edges", {})
     step_results = dict(state.get("step_results", {}))
+    degraded_steps = state.get("_degraded_steps", set())
 
     # 循环上限检查
     loop_count = state.get("_supervisor_loop_count", 0)
@@ -59,11 +88,12 @@ def supervisor_node(state: dict) -> dict:
                     "finished_at": 0,
                 }
 
-        alerts = state.get("alerts", [])
+        alerts = list(state.get("alerts", [])) + [alert]
         return {
             "_all_steps_done": True, "_ready_dispatch": [],
             "step_results": step_results, "_supervisor_loop_count": loop_count,
-            "alerts": alerts + [make_alert("SUPERVISOR_MAX_LOOP", {})],
+            "alerts": alerts,
+            "_degraded_steps": degraded_steps,
         }
 
     if not nodes:
@@ -71,11 +101,13 @@ def supervisor_node(state: dict) -> dict:
         return {
             "_all_steps_done": True, "_ready_dispatch": [],
             "step_results": step_results, "_supervisor_loop_count": loop_count,
+            "_degraded_steps": degraded_steps,
         }
 
-    new_results = dict(step_results)
+    # 先扫描并强制 fail 卡死的 running 步骤（防止死锁）
+    now = time.time()
+    new_results = _fail_stale_running(step_results, nodes, now)
     ready_dispatch = []
-    degraded_steps = state.get("_degraded_steps", set())
 
     for step_id, node_info in nodes.items():
         sr = new_results.get(step_id, {})
@@ -116,7 +148,7 @@ def supervisor_node(state: dict) -> dict:
                 new_results[step_id] = {
                     "step_id": step_id, "capability": capability,
                     "description": node_info.get("description", ""),
-                    "status": "running", "started_at": time.time(),
+                    "status": "running", "started_at": now,
                 }
                 ready_dispatch.append({"worker": skill_name, "step_id": step_id})
                 logger.info(f"[Supervisor] 就绪: step={step_id} cap={capability} → {skill_name}")

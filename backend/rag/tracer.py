@@ -11,10 +11,17 @@ import threading
 import time
 import uuid
 from collections import deque
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import List
 
 MAX_TRACES = 200
+
+# 异步安全：用 contextvars 隔离并发请求的 current_trace
+# threading.local 在 asyncio 单线程 event loop 下无法跨 await 隔离
+_current_trace_var: ContextVar[TraceRecord | None] = ContextVar(
+    "trace_current", default=None
+)
 
 # span_id → type 自动推断表（type 未传时使用）
 _TYPE_INFER: dict[str, str] = {
@@ -79,12 +86,20 @@ class TraceRecord:
 
 
 class TraceCollector:
-    """线程安全的 Tracing 收集器 — 统一 Span API。"""
+    """线程/异步安全的 Tracing 收集器 — 统一 Span API。
+
+    双轨 _current_trace：
+      - 实例字段 _thread_current：用于 sync threadpool（如 FastAPI sync handler），
+        ThreadPoolExecutor worker 内多线程共享同一 trace
+      - contextvar _current_trace_var：用于 asyncio，每个 task 独立持有自己的 trace
+    start_span 优先读 contextvar（async 更安全），fallback 到实例字段（threadpool 兼容）。
+    """
 
     def __init__(self, max_size: int = MAX_TRACES):
         self._lock = threading.Lock()
         self._records: deque[TraceRecord] = deque(maxlen=max_size)
-        self._current_trace: TraceRecord | None = None
+        self._active: set[str] = set()
+        self._thread_current: TraceRecord | None = None  # sync path
         self._timers: dict[str, float] = {}
         self._span_seq: int = 0
 
@@ -94,7 +109,7 @@ class TraceCollector:
 
     def start(self, question: str, session_id: str = "default",
               workflow_name: str = "rag_agent") -> TraceRecord:
-        """开始一次新的 trace。线程安全。"""
+        """开始一次新的 trace。线程/异步安全。"""
         rid = uuid.uuid4().hex[:12]
         trace = TraceRecord(
             id=rid,
@@ -105,9 +120,12 @@ class TraceCollector:
             workflow_name=workflow_name,
         )
         with self._lock:
-            self._current_trace = trace
             self._records.appendleft(trace)
+            self._active.add(rid)
             self._span_seq = 0
+            self._thread_current = trace
+        # 同步到 contextvar（async task 内可见）
+        _current_trace_var.set(trace)
         return trace
 
     def start_span(self, span_id: str, parent_id: str | None = None,
@@ -121,14 +139,16 @@ class TraceCollector:
           type:       llm_call|retrieval|rerank|agent|tool_call|...（省略按 span_id 推断）
           input:      输入快照（可选）
         """
+        # 优先 contextvar（async 隔离），fallback 实例字段（threadpool 共享）
+        trace = _current_trace_var.get() or self._thread_current
+        if trace is None:
+            raise RuntimeError("start_span() 必须在 start() 之后调用")
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # parent_id 未传 → 取当前 root_span_id（必须已有 root）
+        if parent_id is None and span_id != trace.root_span_id:
+            parent_id = trace.root_span_id or None
+
         with self._lock:
-            trace = self._current_trace
-            if trace is None:
-                raise RuntimeError("start_span() 必须在 start() 之后调用")
-            # parent_id 未传 → 取当前 root_span_id（必须已有 root）
-            if parent_id is None and span_id != trace.root_span_id:
-                parent_id = trace.root_span_id or None
             seq = self._span_seq
             self._span_seq += 1
             self._timers[span_id] = time.time()
@@ -142,11 +162,9 @@ class TraceCollector:
             sequence=seq,
             input=input,
         )
-        with self._lock:
-            if self._current_trace:
-                self._current_trace.spans.append(span)
-                if parent_id is None:
-                    self._current_trace.root_span_id = span_id
+        trace.spans.append(span)
+        if parent_id is None:
+            trace.root_span_id = span_id
         return span
 
     def end_span(self, span: Span, output: dict = None,
@@ -188,7 +206,11 @@ class TraceCollector:
         self._aggregate_usage(record)
 
         with self._lock:
-            self._current_trace = None
+            self._active.discard(record.id)
+            if self._thread_current is record:
+                self._thread_current = None
+        if _current_trace_var.get() is record:
+            _current_trace_var.set(None)
 
     # =====================================================
     # 查询 API
@@ -199,8 +221,9 @@ class TraceCollector:
             return list(self._records)[:limit]
 
     def list_active(self) -> list:
+        """返回正在进行中的 trace（基于 _active 集合，不再用 duration_ms==0 推断）。"""
         with self._lock:
-            return [r for r in self._records if r.duration_ms == 0]
+            return [r for r in self._records if r.id in self._active]
 
     def compute_metrics(self) -> dict:
         with self._lock:

@@ -21,7 +21,13 @@ class MemoryRepository:
         self, embedding: list[float], user_id: str, top_k: int = 20,
         memory_type: str | None = None,
     ) -> list[MemoryRecord]:
-        """pgvector cosine similarity + importance + recency joint scoring"""
+        """按 pgvector 余弦相似度降序返回 top_k 条记忆。
+
+        排序键：cosine similarity（降序）。
+        过滤条件：is_active AND user_id [AND memory_type]。
+        注意：本方法**仅**按相似度排序，不做 importance / recency 联合打分。
+        如需重排序（如结合 importance_score / last_access_at），由调用方拿到结果后自行处理。
+        """
         query = select(
             MemoryRecord,
             (1.0 - (MemoryRecord.embedding.cosine_distance(embedding))).label("similarity"),
