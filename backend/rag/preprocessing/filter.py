@@ -2,7 +2,7 @@
 import hashlib
 import re
 
-import backend.config
+from backend import config
 from backend.shared.logger import logger
 
 
