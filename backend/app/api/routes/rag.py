@@ -382,8 +382,9 @@ async def stream_upload_progress(upload_id: str):
                 evt = await queue.get()
                 if evt is None:
                     break
-                stage = evt.pop("stage", "unknown")
-                yield _sse_encode(stage, evt)
+                # 关键：保留 stage 字段在 data 中 — 前端 onmessage 解析 payload.stage
+                # _sse_encode 的 event 参数（stage）不再用作 SSE event name（无 event: 字段）
+                yield _sse_encode("message", evt)
         finally:
             # SSE 断开 → 清理队列（防内存泄漏）
             _progress_queues.pop(upload_id, None)
