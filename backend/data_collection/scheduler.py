@@ -65,17 +65,6 @@ class Scheduler:
         logger.info(f"[Scheduler] 注册任务: {name} (trigger={trigger})")
         return name
 
-    def run_now(self, name: str) -> CollectResult:
-        """立即执行指定任务（同步）"""
-        job = self._jobs.get(name)
-        if not job:
-            msg = f"任务不存在: {name}（已注册: {list(self._jobs.keys())}）"
-            logger.error(f"[Scheduler] {msg}")
-            raise KeyError(msg)
-
-        logger.info(f"[Scheduler] 执行: {name}")
-        return job["task"]()
-
     def run_all(self) -> dict[str, CollectResult]:
         """按注册顺序执行全部任务，返回 {name: CollectResult}"""
         results: dict[str, CollectResult] = {}
@@ -92,17 +81,6 @@ class Scheduler:
                     error=str(e),
                 )
         return results
-
-    def list_jobs(self) -> list[dict[str, Any]]:
-        """列出所有已注册任务"""
-        return [
-            {
-                "name": j["name"],
-                "trigger": j["trigger"],
-                "description": j["description"],
-            }
-            for j in self._jobs.values()
-        ]
 
     def remove(self, name: str) -> None:
         """移除已注册的任务"""

@@ -1,7 +1,7 @@
 """MemoryRepository — async CRUD + pgvector hybrid search for memory_records"""
 from uuid import uuid4
 from datetime import datetime, timezone
-from sqlalchemy import select, update, text, func
+from sqlalchemy import select, update, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.memory.models.memory import MemoryRecord
 
@@ -71,10 +71,6 @@ class MemoryRepository:
             .values(access_count=MemoryRecord.access_count + 1, last_access_at=datetime.now(timezone.utc))
         )
 
-    async def find_by_id(self, record_id: str) -> MemoryRecord | None:
-        result = await self._s.execute(select(MemoryRecord).where(MemoryRecord.id == record_id))
-        return result.scalar_one_or_none()
-
     async def update_fields(self, record_id: str, **fields) -> bool:
         result = await self._s.execute(
             update(MemoryRecord).where(MemoryRecord.id == record_id).values(**fields)
@@ -101,7 +97,3 @@ class MemoryRepository:
             .values(is_active=False)
         )
         return result.rowcount
-
-    async def count_active(self) -> int:
-        result = await self._s.execute(select(func.count()).where(MemoryRecord.is_active == True))
-        return result.scalar() or 0

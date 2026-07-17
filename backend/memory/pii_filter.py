@@ -117,11 +117,3 @@ def scan_and_sanitize(text: str) -> PiiScanResult:
     return result
 
 
-def has_pii(text: str) -> bool:
-    """快速检查文本是否包含 PII"""
-    if not L3_PII_FILTER_ENABLED:
-        return False
-    for _, pattern, _ in _PII_PATTERNS:
-        if pattern.search(text):
-            return True
-    return False

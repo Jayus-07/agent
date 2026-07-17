@@ -56,14 +56,3 @@ async def get_session():
         except Exception:
             await session.rollback()
             raise
-
-
-async def init_db():
-    """Create all tables (idempotent). Call once at startup."""
-    from backend.memory.models.session import Base as SessionBase
-    from backend.memory.models.memory import Base as MemoryBase
-    await _ensure_engine()
-    async with _engine.begin() as conn:
-        await conn.run_sync(SessionBase.metadata.create_all)
-        await conn.run_sync(MemoryBase.metadata.create_all)
-    logger.info("[Database] Schema verified")
