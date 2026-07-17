@@ -113,7 +113,7 @@ describe("knowledgeService.uploadDocument SSE consumer (P1.5 fix)", () => {
     es.emit("chunking",  { stage: "chunking",  message: "切分 5 chunks" });
     es.emit("embedding", { stage: "embedding", message: "Embedding 5/5" });
     es.emit("writing",   { stage: "writing",   message: "写入 5 向量" });
-    es.emit("done",      { stage: "done",      message: "索引完成", doc: { doc_id: "abc" } });
+    es.emit("done",      { stage: "done",      message: "索引完成", doc: { id: "abc" } });
 
     const result = await promise;
 
@@ -123,7 +123,7 @@ describe("knowledgeService.uploadDocument SSE consumer (P1.5 fix)", () => {
       "uploading", "parsing", "chunking", "embedding", "writing",
     ]);
     expect(result.ok).toBe(true);
-    expect(result.doc?.doc_id).toBe("abc");
+    expect((result.doc as any)?.id).toBe("abc");
     expect(es.closed).toBe(true); // SSE 已关闭
   });
 
@@ -136,7 +136,7 @@ describe("knowledgeService.uploadDocument SSE consumer (P1.5 fix)", () => {
     );
 
     const es = MockEventSource.instances[0];
-    es.emit("done", { stage: "done", message: "索引完成", doc: { doc_id: "abc" } });
+    es.emit("done", { stage: "done", message: "索引完成", doc: { id: "abc" } });
 
     const result = await promise;
     expect(result.ok).toBe(true);
@@ -170,7 +170,7 @@ describe("knowledgeService.uploadDocument SSE consumer (P1.5 fix)", () => {
     const es = MockEventSource.instances[0];
     // 模拟非 JSON 数据
     es.onmessage!({ data: "not-json" } as MessageEvent);
-    es.emit("done", { stage: "done", message: "ok", doc: { doc_id: "x" } });
+    es.emit("done", { stage: "done", message: "ok", doc: { id: "x" } });
 
     const result = await promise;
     // malformed 数据 → 仍走到下一个 event
@@ -184,7 +184,7 @@ describe("knowledgeService.uploadDocument SSE consumer (P1.5 fix)", () => {
     );
 
     const es = MockEventSource.instances[0];
-    es.emit("done", { stage: "done", message: "ok", doc: { doc_id: "x" } });
+    es.emit("done", { stage: "done", message: "ok", doc: { id: "x" } });
     await promise; // resolved with ok=true
 
     // 服务端关闭连接 → readyState=2 + error 事件
@@ -257,7 +257,7 @@ describe("P1.5 regression — listener race condition", () => {
     es.emit("chunking",  { stage: "chunking",  message: "" });
     es.emit("embedding", { stage: "embedding", message: "" });
     es.emit("writing",   { stage: "writing",   message: "" });
-    es.emit("done",      { stage: "done", message: "ok", doc: { doc_id: "x" } });
+    es.emit("done",      { stage: "done", message: "ok", doc: { id: "x" } });
 
     await promise;
 

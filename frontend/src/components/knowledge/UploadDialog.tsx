@@ -28,6 +28,17 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
 
   if (!open) return null
 
+  // 关闭弹窗时清空所有状态（否则重新打开时 error/currentStage 残留）
+  // 用 useEffect 监听 open 变化是更稳的方案，但这里用 onClose wrapper 简化
+  const handleClose = () => {
+    setFile(null)
+    setUploading(false)
+    setError('')
+    setCurrentStage(null)
+    setStageMessage('')
+    onClose()
+  }
+
   const handleUpload = async () => {
     if (!file) return
     setUploading(true); setError(''); setCurrentStage('uploading')
@@ -39,7 +50,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
       })
       if (res.ok) {
         // 后端发 'done' 时 setCurrentStage('done') 已调用
-        setTimeout(() => { onSuccess(); onClose(); setFile(null); setCurrentStage(null); setStageMessage('') }, 800)
+        setTimeout(() => { onSuccess(); handleClose() }, 800)
       } else {
         setError(res.error || '上传失败')
         setCurrentStage(null)
@@ -103,7 +114,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
         )}
 
         <div className="flex justify-end gap-2 mt-4">
-          <button onClick={onClose} className="px-4 py-2 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors">取消</button>
+          <button onClick={handleClose} className="px-4 py-2 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors">取消</button>
           <button onClick={handleUpload} disabled={!file || uploading}
             className="px-4 py-2 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover disabled:opacity-40 transition-colors">
             {uploading ? '上传中...' : '上传并索引'}

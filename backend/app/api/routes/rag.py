@@ -16,7 +16,15 @@ from backend.shared.logger import logger
 _progress_queues: dict[str, Queue] = {}
 
 def _sse_encode(event: str, data: dict) -> str:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    """SSE 编码：data 中已含 stage 字段，前端用单一 onmessage 解析。
+
+    故意省略 'event: <name>' 字段 — 让所有消息走 EventSource 默认 message event
+    触发 onmessage listener，避免 addEventListener 注册时机 race condition。
+
+    后端兼容：data 中保留 stage 字段，前端可按 stage 路由。
+    """
+    # 把 stage 字段也放进 data（已由 emit() 完成）
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 router = APIRouter(prefix="/rag", tags=["知识库"])
 
