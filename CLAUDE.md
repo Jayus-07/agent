@@ -104,6 +104,13 @@ agent/
 - 再跑一次 `detect_changes_tool` 验证实际影响范围与预期一致
 - 汇报：改了什么 / 为什么 / 影响范围 / 测试结果
 
+**人工验证（不可省略）**：
+- 每次功能验证（无论 Claude 用 curl/puppeteer/E2E 测得多彻底）**不算结束**
+- 必须由用户**手动在浏览器/前端操作一遍**才算完成
+- 验证流程：Claude 给出测试步骤清单 → 用户执行 → 用户确认通过/失败
+- 目的：避免只通过自动化路径（绕过 UI、跳过真实交互）导致的隐性 bug
+- 适用于：UI 交互、按钮点击、表单输入、上传流程、SSE 流等所有前端可触及的功能
+
 **修改原则**（按优先级）：
 1. 业务逻辑一致
 2. API 向后兼容
@@ -155,6 +162,95 @@ agent/
 - 全局状态用 Zustand，按域拆 store（避免单 store 臃肿）
 
 ---
+
+## Config Rules
+
+所有配置统一放 config/。
+
+禁止业务代码直接：
+
+os.getenv(...)
+os.environ[...]
+
+统一通过配置对象读取。
+
+禁止：
+
+- Magic String
+- Magic Number
+- 重复配置
+
+配置修改不得影响 Public API。
+
+## Workflow State Rules
+
+Workflow State 必须使用 TypedDict 或 Pydantic。
+
+Node：
+
+输入：
+WorkflowState
+
+输出：
+WorkflowState
+
+禁止：
+
+state["xxx"] = ...
+
+动态增加未知字段。
+
+State 修改必须可预测、可序列化。
+
+## DTO Rules
+
+API 与数据库模型解耦。
+
+禁止：
+
+API → ORM → JSON
+
+统一：
+
+ORM
+↓
+
+DTO(Pydantic)
+↓
+
+Response
+
+API Response 必须稳定，数据库结构允许演进。
+
+## Database Rules
+
+数据库访问统一：
+
+Repository
+↓
+
+Service
+↓
+
+API
+
+禁止：
+
+API
+
+↓
+
+SQLAlchemy Session
+
+↓
+
+SQL
+
+所有 SQL：
+
+- 参数化查询
+- 禁止字符串拼接
+- Repository 不包含业务逻辑
 
 ## Priority
 
