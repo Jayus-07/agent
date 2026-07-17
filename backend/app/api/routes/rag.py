@@ -273,48 +273,84 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
         asyncio.run_coroutine_threadsafe(queue.put(evt), main_loop)
 
     try:
-        sync_emit("parsing", f"开始解析 {filename}")
         embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
         store = ChromaKnowledgeStore(persist_directory=CHROMA_PATH, embedding_function=embeddings)
         reg = _get_registry()
 
-        # 包装 indexer 以便在不同阶段 emit
-        indexer = _ProgressIndexingWrapper(
+        # Phase 1.5: 用 _ProgressListener 订阅 TraceCollector 的 span end 事件
+        # 把 indexer 的 6 个标准 span 自动映射到前端 SSE 阶段
+        listener = _ProgressListener(sync_emit)
+        indexer = IncrementalIndexer(
             docs_dir=DOCS_DIRECTORY,
-            store=store,
-            embeddings=embeddings,
-            reg=reg,
-            emit=sync_emit,
+            vectordb=store,
+            doc_db=store,
+            embedding=embeddings,
+            registry=reg,
         )
-        result = indexer.sync()
+        try:
+            result = indexer.sync()
+        finally:
+            listener.unsub()
         logger.info(f"[RAG] 上传索引完成: {filename} → {result}")
     except Exception as e:
         sync_emit("error", f"索引失败: {e}")
         raise
 
 
-class _ProgressIndexingWrapper:
-    """包装 IncrementalIndexer，在 _index_file 各阶段 emit 事件。"""
+class _ProgressListener:
+    """订阅 TraceCollector 的 span end 事件，把 indexer 的 6 个标准 span
+    映射到前端 SSE 阶段 (parsing / chunking / embedding / writing)。
 
-    def __init__(self, docs_dir, store, embeddings, reg, emit):
-        self._indexer = IncrementalIndexer(docs_dir, store, store, embeddings, reg)
-        self._emit = emit
+    Phase 1.5: 替代原 _ProgressIndexingWrapper 的 monkey-patch，直接订阅
+    TraceCollector 事件，避免与 indexer 内部逻辑耦合。
+    """
 
-    def sync(self):
-        # 复用原 sync 逻辑（已有 _apply_delta → _index_file 调用）
-        # 在 _index_file 各阶段插入 emit
-        original_index_file = self._indexer._index_file
+    # span_id → SSE stage 映射（None 表示不单独 emit，由 done 事件统一）
+    SPAN_STAGE_MAP = {
+        "index_parse":     "parsing",
+        "index_chunk":     "chunking",
+        "index_embed":     "embedding",
+        "index_vector_db": "writing",
+        # index_upload → uploading（已在 _run_index_background emit）
+        # index_metadata → 不单独 emit，由 done 事件携带最终结果
+    }
 
-        def indexed_with_progress(file_path: str):
-            self._emit("chunking", f"分块: {os.path.basename(file_path)}")
-            result = original_index_file(file_path)
-            return result
+    def __init__(self, emit_fn):
+        from backend.rag.tracer import trace_collector
+        self._emit = emit_fn
+        self._unsub = trace_collector.subscribe(self._on_span_end)
 
-        self._indexer._index_file = indexed_with_progress
+    def _on_span_end(self, trace, span):
+        stage = self.SPAN_STAGE_MAP.get(span.span_id)
+        if not stage:
+            return
+        # 从 span.metrics 提取进度文案
+        msg = self._format_message(span)
         try:
-            return self._indexer.sync()
-        finally:
-            self._indexer._index_file = original_index_file
+            self._emit(stage, msg)
+        except Exception:
+            pass  # listener emit 失败不影响 indexer
+
+    @staticmethod
+    def _format_message(span) -> str:
+        """根据 span_id + metrics 构造前端可读进度文案。"""
+        m = span.metrics or {}
+        if span.span_id == "index_parse":
+            return f"已解析 {m.get('doc_count', 0)} 页"
+        if span.span_id == "index_chunk":
+            kept = m.get("kept_chunks", 0)
+            filtered = m.get("filtered_out", 0)
+            return f"切分 {kept} chunks" + (f"（过滤 {filtered}）" if filtered else "")
+        if span.span_id == "index_embed":
+            succ = m.get("succeeded", 0)
+            attempted = m.get("attempted", 0)
+            return f"Embedding {succ}/{attempted}" + ("（部分失败）" if succ < attempted else "")
+        if span.span_id == "index_vector_db":
+            return f"写入 {m.get('written', 0)} 向量"
+        return ""
+
+    def unsub(self):
+        self._unsub()
 
 
 @router.get("/upload/{upload_id}/stream")

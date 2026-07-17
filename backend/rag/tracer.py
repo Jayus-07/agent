@@ -138,6 +138,7 @@ class TraceCollector:
         self._thread_current: TraceRecord | None = None  # sync path
         self._timers: dict[str, float] = {}
         self._span_seq: int = 0
+        self._listeners: list = []  # span lifecycle subscribers (Phase 1.5)
 
     # =====================================================
     # 统一 API
@@ -230,6 +231,27 @@ class TraceCollector:
             span.metrics.update(metrics)
         if output is not None:
             span.output = output
+
+        # Phase 1.5: 通知 listener（用于 SSE 实时进度推送）
+        trace = _current_trace_var.get() or self._thread_current
+        if trace is not None and self._listeners:
+            for cb in list(self._listeners):
+                try:
+                    cb(trace, span)
+                except Exception:
+                    pass  # listener 异常不影响 tracer
+
+    def subscribe(self, callback) -> callable:
+        """订阅 span end 事件。返回 unsubscribe() 函数（Phase 1.5 — 用于 SSE 推送）。
+
+        callback 签名: (trace: TraceRecord, span: Span) -> None
+        """
+        self._listeners.append(callback)
+
+        def _unsub():
+            if callback in self._listeners:
+                self._listeners.remove(callback)
+        return _unsub
 
     def add_event(self, span: Span, name: str, level: str,
                   message: str, data: dict = None):
