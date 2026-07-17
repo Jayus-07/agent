@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline
 from backend.rag.indexing.doc_registry import DocumentRegistry
+from backend.rag.indexing.indexer import IncrementalIndexer
 from backend.config import DOC_REGISTRY_PATH, CHROMA_PATH, EMBEDDING_MODEL_PATH
 from backend.shared.logger import logger
 
@@ -235,7 +236,8 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str):
 
         # 同步索引（在线程池跑，不阻塞事件循环）
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _do_index_sync, upload_id, filepath, filename)
+        # 把 loop 引用传给同步函数，让 run_coroutine_threadsafe 能把事件投回主 loop
+        await loop.run_in_executor(None, _do_index_sync, upload_id, filepath, filename, loop)
     except Exception as e:
         logger.error(f"[RAG] 后台索引失败: {e}")
         await emit("error", str(e))
@@ -254,10 +256,9 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str):
         await queue.put(None)  # sentinel → SSE 关闭
 
 
-def _do_index_sync(upload_id: str, filepath: str, filename: str):
+def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyncio.AbstractEventLoop):
     """同步执行索引，通过 _progress_queues[upload_id] 推送阶段（从线程内调用）。"""
     from backend.config import DOCS_DIRECTORY
-    from backend.rag.indexing.indexer import IncrementalIndexer
     from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
     from langchain_huggingface import HuggingFaceEmbeddings
 
@@ -266,11 +267,10 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str):
         return
 
     def sync_emit(stage: str, message: str = "", **extra):
-        """从同步线程调用：put_nowait + run_coroutine_threadsafe 把事件推到异步队列"""
+        """从同步线程调用：run_coroutine_threadsafe 把事件投到主 async loop 的队列"""
         evt = {"stage": stage, "message": message, **extra}
-        loop = asyncio.get_event_loop()
-        # schedule putting in the loop (thread-safe)
-        asyncio.run_coroutine_threadsafe(queue.put(evt), loop)
+        # 主 loop 在另一个线程，必须用 run_coroutine_threadsafe（不能 asyncio.get_event_loop()）
+        asyncio.run_coroutine_threadsafe(queue.put(evt), main_loop)
 
     try:
         sync_emit("parsing", f"开始解析 {filename}")
