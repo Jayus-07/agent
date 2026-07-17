@@ -1,13 +1,13 @@
 "use client";
 
-import { TraceStep } from "@/types/trace";
+import { Span } from "@/types/trace";
 
 /**
  * HTTP 耗时拆分：DNS / Connect / TLS / TTFB / Body
  */
 
 interface Props {
-  step: TraceStep;
+  step: Span;  // 兼容旧名，接受 Span
 }
 
 export default function HttpBreakdown({ step }: Props) {

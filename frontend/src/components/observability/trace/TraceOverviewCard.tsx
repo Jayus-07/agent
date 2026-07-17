@@ -8,9 +8,10 @@ interface Props {
 
 export default function TraceOverviewCard({ trace }: Props) {
   const hasError = trace.error && Object.keys(trace.error).length > 0;
-  const llmCalls = trace.steps.filter((s) => s.id === "llm_generate").length;
-  const toolCalls = trace.steps.filter((s) =>
-    ["hybrid_retrieval", "rerank", "retrieval"].includes(s.id)
+  const spans = trace.spans || [];
+  const llmCalls = spans.filter((s) => s.type === "llm_call" || s.llm_call).length;
+  const toolCalls = spans.filter((s) =>
+    s.type === "retrieval" || s.type === "rerank" || s.type === "tool_call"
   ).length;
   const totalTokens = trace.usage?.total_tokens ?? 0;
 
@@ -31,6 +32,9 @@ export default function TraceOverviewCard({ trace }: Props) {
             </svg>
           </button>
         </div>
+        {trace.workflow_name && (
+          <p className="text-[10px] text-slate-400 mt-0.5 font-mono">{trace.workflow_name}</p>
+        )}
       </div>
 
       {/* Duration */}

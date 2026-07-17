@@ -1,9 +1,9 @@
 "use client";
 
-import { TraceStep, TraceRecord, formatCost } from "@/types/trace";
+import { Span, TraceRecord, formatCost } from "@/types/trace";
 
 /**
- * 成本侧栏：本次 trace 的总成本 + 按步骤拆解
+ * 成本侧栏：本次 trace 的总成本 + 按 span 拆解
  */
 
 interface Props {
@@ -12,11 +12,12 @@ interface Props {
 
 export default function CostPanel({ trace }: Props) {
   const totalUsd = trace.cost_usd ?? 0;
+  const spans = trace.spans || [];
 
-  // 按步骤聚合成本（只统计有 llm_call 的 step）
-  const perStep = trace.steps
+  // 按 span 聚合成本（只统计有 llm_call 的 span）
+  const perStep = spans
     .filter((s) => s.llm_call && s.llm_call.cost_usd > 0)
-    .map((s) => ({ label: s.label, ms: s.duration_ms, usd: s.llm_call!.cost_usd }))
+    .map((s) => ({ label: s.name, ms: s.duration_ms, usd: s.llm_call!.cost_usd }))
     .sort((a, b) => b.usd - a.usd);
 
   const maxUsd = Math.max(...perStep.map((x) => x.usd), 0.000001);

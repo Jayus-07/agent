@@ -11,6 +11,8 @@ import {
   statusDot,
   stepColor,
   severityStyle,
+  safeNum,
+  safeStr,
 } from "./trace";
 
 afterEach(() => {
@@ -257,5 +259,46 @@ describe("severityStyle", () => {
 
   it("warning → WARNING 琥珀", () => {
     expect(severityStyle("warning").label).toBe("WARNING");
+  });
+});
+
+describe("safeNum", () => {
+  it("undefined → fallback 默认 '--'", () => {
+    expect(safeNum(undefined)).toBe("--");
+  });
+
+  it("null → fallback", () => {
+    expect(safeNum(null)).toBe("--");
+  });
+
+  it("非数字字符串 → fallback", () => {
+    expect(safeNum("abc")).toBe("--");
+  });
+
+  it("0 是合法值 → '0' 而不是 fallback", () => {
+    expect(safeNum(0)).toBe("0");
+    expect(safeNum("0")).toBe("0");
+  });
+
+  it("数字字符串 → 转换后输出", () => {
+    expect(safeNum("123")).toBe("123");
+    expect(safeNum(3.14)).toBe("3.14");
+  });
+
+  it("自定义 fallback", () => {
+    expect(safeNum(null, "N/A")).toBe("N/A");
+  });
+});
+
+describe("safeStr", () => {
+  it("undefined / null / '' → fallback", () => {
+    expect(safeStr(undefined)).toBe("--");
+    expect(safeStr(null)).toBe("--");
+    expect(safeStr("")).toBe("--");
+  });
+
+  it("非空字符串原样返回", () => {
+    expect(safeStr("hello")).toBe("hello");
+    expect(safeStr(0)).toBe("0"); // 数字也转字符串
   });
 });

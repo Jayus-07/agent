@@ -1,21 +1,21 @@
 "use client";
 
 /**
- * 横向耗时条（更紧凑、可显示 step 耗时比例）
- * 区别于 StepTimeline：用于详情页头部作为「火焰图」总览
+ * 横向耗时条（火焰图总览）
+ * 区别于 StepTimeline：用于详情页头部展示 span 耗时比例
  */
 
-import { TraceStep, stepColor } from "@/types/trace";
+import { Span, spanColor } from "@/types/trace";
 
 interface Props {
-  steps: TraceStep[];
+  steps: Span[];  // 兼容旧名
   totalMs: number;
-  onStepClick?: (stepId: string) => void;
+  onStepClick?: (spanId: string) => void;
   highlightStepId?: string | null;
 }
 
 export default function FlameGraph({ steps, totalMs, onStepClick, highlightStepId }: Props) {
-  // 仅展示有耗时的 step
+  // 仅展示有耗时的 span
   const visible = steps.filter((s) => s.duration_ms > 0);
   const ratioTotal = visible.reduce((s, x) => s + x.duration_ms, 0) || 1;
 
@@ -31,13 +31,13 @@ export default function FlameGraph({ steps, totalMs, onStepClick, highlightStepI
             <button
               key={s.id}
               onClick={() => onStepClick?.(s.id)}
-              title={`${s.label}: ${s.duration_ms}ms (${((s.duration_ms / totalMs) * 100).toFixed(1)}%)`}
-              className={`relative h-full ${stepColor(s.status, s.duration_ms)} ${isHL ? "ring-2 ring-violet-400 z-10" : "hover:opacity-80"} transition-all`}
+              title={`${s.name}: ${s.duration_ms}ms (${((s.duration_ms / totalMs) * 100).toFixed(1)}%)`}
+              className={`relative h-full ${spanColor(s.status, s.duration_ms)} ${isHL ? "ring-2 ring-violet-400 z-10" : "hover:opacity-80"} transition-all`}
               style={{ width: `${w}%`, minWidth: "8px" }}
             >
               {w > 8 && (
                 <span className="absolute inset-0 flex items-center justify-center text-[10px] font-mono text-white drop-shadow-sm truncate px-1">
-                  {s.label}
+                  {s.name}
                 </span>
               )}
             </button>
