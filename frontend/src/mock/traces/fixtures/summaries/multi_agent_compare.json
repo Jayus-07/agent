@@ -1,0 +1,31 @@
+[
+  {
+    "trace_id": "agent-parent-001",
+    "workflow_name": "multi_agent_compare",
+    "status": "success",
+    "start_time": "2026-07-16T04:25:00Z",
+    "duration_ms": 18500,
+    "session_id": "agent-flow-1",
+    "user_id": "u-007",
+    "user_name": "Grace",
+    "question": "对比亚马逊和 Shopify 两个平台的费用结构",
+    "answer_preview": "[Agent 多步任务] 已完成",
+    "token_total": 1270,
+    "cost_usd": 0.00026,
+    "span_count": 4,
+    "model_name": "deepseek-v4-flash",
+    "kb_id": "ECOM_COMPARE",
+    "sla_threshold_ms": 30000,
+    "sla_breached": false,
+    "error_code": null,
+    "error_node": null,
+    "parent_id": null,
+    "children_ids": [
+      "agent-child-001-a",
+      "agent-child-001-b",
+      "agent-child-001-c",
+      "agent-child-001-d"
+    ],
+    "bookmarked": false
+  }
+]

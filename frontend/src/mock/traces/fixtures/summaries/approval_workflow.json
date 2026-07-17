@@ -1,0 +1,26 @@
+[
+  {
+    "trace_id": "approval-002",
+    "workflow_name": "approval_workflow",
+    "status": "success",
+    "start_time": "2026-07-16T05:20:00Z",
+    "duration_ms": 58000,
+    "session_id": "admin-approval",
+    "user_id": "u-admin",
+    "user_name": "Admin",
+    "question": "审批：供应商调价申请 #ADJ-2026-0450（上调 15%）",
+    "answer_preview": "【审批通过】经财务复核，原材料成本上涨确认真实，调价 15% 在合理范围内。触发条件：签署新价格协议 + 更新 ERP 系统。",
+    "token_total": 150,
+    "cost_usd": 0.00008,
+    "span_count": 6,
+    "model_name": "deepseek-v4-flash",
+    "kb_id": "",
+    "sla_threshold_ms": 120000,
+    "sla_breached": false,
+    "error_code": null,
+    "error_node": null,
+    "parent_id": null,
+    "children_ids": [],
+    "bookmarked": false
+  }
+]

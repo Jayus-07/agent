@@ -1,0 +1,173 @@
+{
+  "trace_id": "timeout-001",
+  "request": {
+    "question": "[定时] 全量商品数据同步（超时）"
+  },
+  "response": {
+    "answer": "同步超时：仅完成 60%（7,500/12,500 条），剩余数据已标记待下次重试。",
+    "answer_len": 42
+  },
+  "usage": {
+    "prompt_tokens": 80,
+    "completion_tokens": 40,
+    "total_tokens": 120,
+    "cost_usd": 0.00003,
+    "model_name": "deepseek-v4-flash",
+    "model_provider": "deepseek"
+  },
+  "error": {
+    "code": "WORKFLOW_TIMEOUT",
+    "message": "工作流超过 SLA 60s 上限，强制终止。已完成 7500/12500 条。",
+    "node": "to-sync",
+    "retry_count": 0
+  },
+  "root_span_id": "timeout-001-root",
+  "spans": [
+    {
+      "span_id": "timeout-001-root",
+      "parent_id": null,
+      "name": "数据同步 Pipeline",
+      "type": "workflow",
+      "status": "timeout",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:01:05Z",
+      "duration_ms": 65000,
+      "sequence": 0,
+      "attributes": {
+        "workflow.type": "data_sync"
+      },
+      "metrics": {
+        "span_count": 5,
+        "completed": 7500,
+        "total": 12500,
+        "completion_pct": 60,
+        "workflow.sla_ms": 60000
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "to-auth",
+      "parent_id": "timeout-001-root",
+      "name": "ERP API 鉴权",
+      "type": "http",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:00Z",
+      "duration_ms": 800,
+      "sequence": 1,
+      "attributes": {
+        "http.url": "https://erp.company.com/oauth/token",
+        "http.method": "POST"
+      },
+      "metrics": {
+        "status_code": 200
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "to-sync",
+      "parent_id": "timeout-001-root",
+      "name": "全量商品同步",
+      "type": "http",
+      "status": "timeout",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:01:01Z",
+      "duration_ms": 61000,
+      "sequence": 2,
+      "attributes": {
+        "http.url": "https://erp.company.com/api/v2/products?page=1&limit=500",
+        "http.method": "GET"
+      },
+      "metrics": {
+        "status_code": 200,
+        "pages_processed": 15,
+        "total_pages": 25,
+        "items_synced": 7500,
+        "items_total": 12500
+      },
+      "input": null,
+      "output": null,
+      "events": [
+        {
+          "ts": "2026-07-16T05:22:30Z",
+          "name": "sync_start",
+          "data": {
+            "total": 12500,
+            "batch_size": 500
+          }
+        },
+        {
+          "ts": "2026-07-16T05:23:00Z",
+          "name": "sync_progress",
+          "data": {
+            "completed": 2500,
+            "pct": 20
+          }
+        },
+        {
+          "ts": "2026-07-16T05:23:30Z",
+          "name": "sync_progress",
+          "data": {
+            "completed": 5000,
+            "pct": 40
+          }
+        },
+        {
+          "ts": "2026-07-16T05:24:00Z",
+          "name": "sync_progress",
+          "data": {
+            "completed": 7500,
+            "pct": 60
+          }
+        },
+        {
+          "ts": "2026-07-16T05:24:12Z",
+          "name": "timeout_triggered",
+          "data": {
+            "sla_ms": 60000,
+            "elapsed_ms": 61000
+          }
+        }
+      ],
+      "warnings": [],
+      "errors": [
+        "[TIMEOUT] 超过 SLA 60s，仅完成 60%"
+      ]
+    },
+    {
+      "span_id": "to-save",
+      "parent_id": "timeout-001-root",
+      "name": "部分结果写入",
+      "type": "database",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:03Z",
+      "duration_ms": 3200,
+      "sequence": 3,
+      "attributes": {
+        "db.engine": "postgresql",
+        "db.table": "products"
+      },
+      "metrics": {
+        "inserted": 7500,
+        "updated": 1200,
+        "partial": 1
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [
+        "仅写入已完成部分(60%)，剩余数据已入重试队列"
+      ],
+      "errors": []
+    }
+  ]
+}

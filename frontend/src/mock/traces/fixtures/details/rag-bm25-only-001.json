@@ -1,0 +1,119 @@
+{
+  "trace_id": "rag-bm25-only-001",
+  "request": {
+    "question": "物流时效标准",
+    "kb_id": "LOGISTICS"
+  },
+  "response": {
+    "answer": "...",
+    "answer_len": 200
+  },
+  "usage": {
+    "prompt_tokens": 120,
+    "completion_tokens": 50,
+    "total_tokens": 170,
+    "cost_usd": 0.000038,
+    "model_name": "deepseek-v4-flash",
+    "model_provider": "deepseek"
+  },
+  "error": null,
+  "root_span_id": "rag-bm25-only-001-root",
+  "spans": [
+    {
+      "span_id": "rag-bm25-only-001-root",
+      "parent_id": null,
+      "name": "RAG Agent",
+      "type": "agent",
+      "status": "success",
+      "start_time": "2026-07-16T01:15:00Z",
+      "end_time": "2026-07-16T01:15:01Z",
+      "duration_ms": 1200,
+      "sequence": 0,
+      "attributes": {
+        "agent.name": "rag_agent",
+        "session.id": "old-session-1"
+      },
+      "metrics": {
+        "total_tokens": 170,
+        "cost_usd": 0.000038,
+        "span_count": 3
+      },
+      "input": {
+        "question": "物流时效标准"
+      },
+      "output": {
+        "answer_preview": "...",
+        "answer_len": 200
+      },
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "hybrid_retrieval",
+      "parent_id": "rag-bm25-only-001-root",
+      "name": "混合检索",
+      "type": "retrieval",
+      "status": "success",
+      "start_time": "2026-07-16T01:15:00Z",
+      "end_time": "2026-07-16T01:15:00Z",
+      "duration_ms": 150,
+      "sequence": 1,
+      "attributes": {},
+      "metrics": {
+        "vector_hits": 0,
+        "bm25_hits": 5,
+        "merged_hits": 3
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "rerank",
+      "parent_id": "rag-bm25-only-001-root",
+      "name": "Rerank",
+      "type": "rerank",
+      "status": "success",
+      "start_time": "2026-07-16T01:15:00Z",
+      "end_time": "2026-07-16T01:15:00Z",
+      "duration_ms": 350,
+      "sequence": 2,
+      "attributes": {},
+      "metrics": {
+        "input_docs": 3,
+        "output_docs": 2,
+        "threshold": 0.3
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "llm_generate",
+      "parent_id": "rag-bm25-only-001-root",
+      "name": "LLM生成",
+      "type": "llm_call",
+      "status": "success",
+      "start_time": "2026-07-16T01:15:00Z",
+      "end_time": "2026-07-16T01:15:00Z",
+      "duration_ms": 700,
+      "sequence": 3,
+      "attributes": {},
+      "metrics": {
+        "prompt_tokens": 120,
+        "completion_tokens": 50,
+        "total_tokens": 170
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "trace_id": "sch-001",
+    "workflow_name": "scheduler",
+    "status": "success",
+    "start_time": "2026-07-16T05:05:00Z",
+    "duration_ms": 18500,
+    "session_id": "scheduler-daily",
+    "user_id": "system",
+    "user_name": "Scheduler",
+    "question": "[定时] 每日竞品价格采集 & 异常检测",
+    "answer_preview": "采集完成：1,250 SKU 已更新，3 条价格异常已推送 Slack。耗时 18.5s。",
+    "token_total": 150,
+    "cost_usd": 0.00002,
+    "span_count": 7,
+    "model_name": "deepseek-v4-flash",
+    "kb_id": "",
+    "sla_threshold_ms": 30000,
+    "sla_breached": false,
+    "error_code": null,
+    "error_node": null,
+    "parent_id": null,
+    "children_ids": [],
+    "bookmarked": false
+  }
+]

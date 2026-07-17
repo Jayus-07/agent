@@ -1,0 +1,145 @@
+{
+  "trace_id": "cache-001",
+  "request": {
+    "question": "FBA 退货标签有哪些规格要求？",
+    "kb_id": "AMAZON_SOP"
+  },
+  "response": {
+    "answer": "根据缓存结果，FBA退货标签规格：标准标签 4\"×6\"，热敏纸或激光打印，包含 FNSKU、条码、条件说明。",
+    "answer_len": 54
+  },
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "total_tokens": 150,
+    "cost_usd": 0.00003,
+    "model_name": "deepseek-v4-flash",
+    "model_provider": "deepseek"
+  },
+  "error": null,
+  "root_span_id": "cache-001-root",
+  "spans": [
+    {
+      "span_id": "cache-001-root",
+      "parent_id": null,
+      "name": "RAG Agent（缓存命中）",
+      "type": "agent",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:00Z",
+      "duration_ms": 150,
+      "sequence": 0,
+      "attributes": {
+        "agent.name": "rag_agent"
+      },
+      "metrics": {
+        "span_count": 3,
+        "cache_hit": 1,
+        "cost_saved_usd": 0.00005,
+        "cache.enabled": 1
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "cache-check",
+      "parent_id": "cache-001-root",
+      "name": "缓存查询",
+      "type": "tool_call",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:00Z",
+      "duration_ms": 20,
+      "sequence": 1,
+      "attributes": {
+        "cache_key": "emb:abc123",
+        "tool.name": "cache_lookup",
+        "cache.provider": "redis"
+      },
+      "metrics": {
+        "lookup_ms": 18,
+        "ttl_remaining_s": 3200
+      },
+      "input": null,
+      "output": null,
+      "events": [
+        {
+          "ts": "2026-07-16T05:14:00Z",
+          "name": "cache_lookup",
+          "data": {
+            "key": "emb:abc123",
+            "hit": true
+          }
+        }
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "cache-hit",
+      "parent_id": "cache-001-root",
+      "name": "缓存命中 → 直接返回",
+      "type": "cache",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:00Z",
+      "duration_ms": 100,
+      "sequence": 2,
+      "attributes": {
+        "cached_result_ts": "2026-07-16T04:00:00Z",
+        "cache.type": "semantic_cache"
+      },
+      "metrics": {
+        "cache_hit": 1,
+        "similarity_threshold": 0.95,
+        "cache.similarity": 0.97
+      },
+      "input": null,
+      "output": null,
+      "events": [
+        {
+          "ts": "2026-07-16T05:14:01Z",
+          "name": "cache_hit",
+          "data": {
+            "similarity": 0.97,
+            "cached_at": "2026-07-16T04:00:00Z"
+          }
+        },
+        {
+          "ts": "2026-07-16T05:14:01Z",
+          "name": "cost_updated",
+          "data": {
+            "saved_usd": 0.00005
+          }
+        }
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "cache-miss",
+      "parent_id": "cache-001-root",
+      "name": "混合检索",
+      "type": "retrieval",
+      "status": "skipped",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:00Z",
+      "duration_ms": 0,
+      "sequence": 3,
+      "attributes": {
+        "retrieval.method": "hybrid"
+      },
+      "metrics": {},
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [
+        "[CONDITION] 缓存命中，跳过检索"
+      ],
+      "errors": []
+    }
+  ]
+}

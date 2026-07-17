@@ -1,0 +1,115 @@
+{
+  "trace_id": "agent-parent-001",
+  "request": {
+    "question": "对比亚马逊和 Shopify 两个平台的费用结构",
+    "kb_id": "ECOM_COMPARE",
+    "temperature": 0.1,
+    "max_tokens": 4096
+  },
+  "response": {
+    "answer": "[Agent 多步任务] 已完成",
+    "answer_len": 1240
+  },
+  "usage": {
+    "prompt_tokens": 850,
+    "completion_tokens": 420,
+    "total_tokens": 1270,
+    "cost_usd": 0.00026,
+    "model_name": "deepseek-v4-flash",
+    "model_provider": "deepseek"
+  },
+  "error": null,
+  "root_span_id": "agent-parent-001-root",
+  "spans": [
+    {
+      "span_id": "agent-parent-001-root",
+      "parent_id": null,
+      "name": "Multi-Agent Compare",
+      "type": "workflow",
+      "status": "success",
+      "start_time": "2026-07-16T04:25:00Z",
+      "end_time": "2026-07-16T04:25:18Z",
+      "duration_ms": 18500,
+      "sequence": 0,
+      "attributes": {
+        "agent.name": "multi_agent_compare",
+        "session.id": "agent-flow-1"
+      },
+      "metrics": {
+        "total_tokens": 1270,
+        "cost_usd": 0.00026,
+        "span_count": 3
+      },
+      "input": {
+        "question": "对比亚马逊和 Shopify 两个平台的费用结构"
+      },
+      "output": {
+        "answer_preview": "[Agent 多步任务] 已完成",
+        "answer_len": 1240
+      },
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "planner",
+      "parent_id": "agent-parent-001-root",
+      "name": "Planner 拆解",
+      "type": "agent",
+      "status": "success",
+      "start_time": "2026-07-16T04:25:00Z",
+      "end_time": "2026-07-16T04:25:01Z",
+      "duration_ms": 1200,
+      "sequence": 1,
+      "attributes": {},
+      "metrics": {
+        "subtasks": 4
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "dispatch",
+      "parent_id": "agent-parent-001-root",
+      "name": "Supervisor 分发",
+      "type": "agent",
+      "status": "success",
+      "start_time": "2026-07-16T04:25:00Z",
+      "end_time": "2026-07-16T04:25:00Z",
+      "duration_ms": 50,
+      "sequence": 2,
+      "attributes": {},
+      "metrics": {
+        "skills_invoked": 4
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "aggregate",
+      "parent_id": "agent-parent-001-root",
+      "name": "Reporter 汇总",
+      "type": "agent",
+      "status": "success",
+      "start_time": "2026-07-16T04:25:00Z",
+      "end_time": "2026-07-16T04:25:02Z",
+      "duration_ms": 2100,
+      "sequence": 3,
+      "attributes": {},
+      "metrics": {
+        "merged_sources": 8
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    }
+  ]
+}

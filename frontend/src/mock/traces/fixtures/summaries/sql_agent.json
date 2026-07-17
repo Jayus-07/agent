@@ -1,0 +1,26 @@
+[
+  {
+    "trace_id": "retry-001",
+    "workflow_name": "sql_agent",
+    "status": "success",
+    "start_time": "2026-07-16T05:16:00Z",
+    "duration_ms": 18500,
+    "session_id": "analyst-session",
+    "user_id": "u-analyst",
+    "user_name": "User",
+    "question": "查询过去 7 天各品类的 GMV 和退货率",
+    "answer_preview": "查询成功（第 3 次重试后）。结果：电子产品 GMV $182K 退货率 3.2%，服装 $98K 退货率 6.1%，家居 $65K 退货率 4.8%。",
+    "token_total": 150,
+    "cost_usd": 0.00016,
+    "span_count": 7,
+    "model_name": "deepseek-v4-flash",
+    "kb_id": "",
+    "sla_threshold_ms": 20000,
+    "sla_breached": false,
+    "error_code": null,
+    "error_node": null,
+    "parent_id": null,
+    "children_ids": [],
+    "bookmarked": false
+  }
+]

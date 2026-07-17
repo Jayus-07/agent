@@ -1,0 +1,254 @@
+{
+  "trace_id": "f3e2d1c0b9a8",
+  "request": {
+    "question": "FBA单箱重量不能超过多少？超过了怎么办？",
+    "kb_id": "WAREHOUSE",
+    "temperature": 0.1,
+    "max_tokens": 4096
+  },
+  "response": {
+    "answer": "根据FBA发货要求，单箱重量不能超过23kg。如果超过23kg，需要在箱子上贴Team Lift标签，表示需要两人搬运。",
+    "answer_len": 380
+  },
+  "usage": {
+    "prompt_tokens": 180,
+    "completion_tokens": 85,
+    "total_tokens": 265,
+    "cost_usd": 0.000054,
+    "model_name": "deepseek-v4-flash",
+    "model_provider": "deepseek"
+  },
+  "error": {
+    "code": "SLOW_STEP_WARNING",
+    "message": "Rerank 步骤耗时 3200ms，超过正常范围",
+    "node": "rerank",
+    "retry_count": 0
+  },
+  "root_span_id": "f3e2d1c0b9a8-root",
+  "spans": [
+    {
+      "span_id": "f3e2d1c0b9a8-root",
+      "parent_id": null,
+      "name": "RAG Agent",
+      "type": "agent",
+      "status": "success",
+      "start_time": "2026-07-16T03:15:00Z",
+      "end_time": "2026-07-16T03:15:05Z",
+      "duration_ms": 5200,
+      "sequence": 0,
+      "attributes": {
+        "agent.name": "rag_agent",
+        "session.id": "prod-query-3"
+      },
+      "metrics": {
+        "total_tokens": 265,
+        "cost_usd": 0.000054,
+        "span_count": 8
+      },
+      "input": {
+        "question": "FBA单箱重量不能超过多少？超过了怎么办？"
+      },
+      "output": {
+        "answer_preview": "根据FBA发货要求，单箱重量不能超过23kg。如果超过23kg，需要在箱子上贴Team Lift标签，表示需要两人搬运。",
+        "answer_len": 380
+      },
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "query_rewrite",
+      "parent_id": "f3e2d1c0b9a8-root",
+      "name": "LLM改写",
+      "type": "llm_call",
+      "status": "skipped",
+      "start_time": "2026-07-16T03:15:00Z",
+      "end_time": "2026-07-16T03:15:00Z",
+      "duration_ms": 0,
+      "sequence": 1,
+      "attributes": {},
+      "metrics": {
+        "variants": 0
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "hybrid_retrieval",
+      "parent_id": "f3e2d1c0b9a8-root",
+      "name": "混合检索",
+      "type": "retrieval",
+      "status": "success",
+      "start_time": "2026-07-16T03:15:00Z",
+      "end_time": "2026-07-16T03:15:00Z",
+      "duration_ms": 250,
+      "sequence": 2,
+      "attributes": {
+        "http.method": "POST"
+      },
+      "metrics": {
+        "vector_hits": 5,
+        "bm25_hits": 15,
+        "merged_hits": 8,
+        "dns_ms": 5,
+        "connect_ms": 12,
+        "tls_ms": 18,
+        "ttfb_ms": 180,
+        "body_ms": 35
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "retrieval",
+      "parent_id": "f3e2d1c0b9a8-root",
+      "name": "检索",
+      "type": "retrieval",
+      "status": "success",
+      "start_time": "2026-07-16T03:15:00Z",
+      "end_time": "2026-07-16T03:15:00Z",
+      "duration_ms": 251,
+      "sequence": 3,
+      "attributes": {},
+      "metrics": {
+        "retrieved_chunks": 8
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "rerank",
+      "parent_id": "f3e2d1c0b9a8-root",
+      "name": "Rerank",
+      "type": "rerank",
+      "status": "success",
+      "start_time": "2026-07-16T03:15:00Z",
+      "end_time": "2026-07-16T03:15:03Z",
+      "duration_ms": 3200,
+      "sequence": 4,
+      "attributes": {
+        "http.method": "POST"
+      },
+      "metrics": {
+        "input_docs": 8,
+        "output_docs": 4,
+        "threshold": 0.3,
+        "dns_ms": 8,
+        "connect_ms": 20,
+        "tls_ms": 30,
+        "ttfb_ms": 3050,
+        "body_ms": 92
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "llm_generate",
+      "parent_id": "f3e2d1c0b9a8-root",
+      "name": "LLM生成",
+      "type": "llm_call",
+      "status": "success",
+      "start_time": "2026-07-16T03:15:00Z",
+      "end_time": "2026-07-16T03:15:01Z",
+      "duration_ms": 1500,
+      "sequence": 5,
+      "attributes": {
+        "llm.model": "deepseek-v4-flash",
+        "llm.temperature": "0.1"
+      },
+      "metrics": {
+        "prompt_tokens": 180,
+        "completion_tokens": 85,
+        "total_tokens": 265,
+        "llm.temperature": 0.1
+      },
+      "input": {
+        "prompt": "[User Question]\nFBA单箱重量不能超过多少？超过了怎么办？"
+      },
+      "output": {
+        "response": "根据FBA发货要求，单箱重量不能超过23kg..."
+      },
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "mq_check",
+      "parent_id": "f3e2d1c0b9a8-root",
+      "name": "MultiQuery",
+      "type": "tool_call",
+      "status": "skipped",
+      "start_time": "2026-07-16T03:15:00Z",
+      "end_time": "2026-07-16T03:15:00Z",
+      "duration_ms": 0,
+      "sequence": 6,
+      "attributes": {
+        "mode": "auto"
+      },
+      "metrics": {
+        "triggered": 0
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "citation",
+      "parent_id": "f3e2d1c0b9a8-root",
+      "name": "Citation",
+      "type": "tool_call",
+      "status": "success",
+      "start_time": "2026-07-16T03:15:00Z",
+      "end_time": "2026-07-16T03:15:00Z",
+      "duration_ms": 0,
+      "sequence": 7,
+      "attributes": {},
+      "metrics": {
+        "verified_citations": 2,
+        "total_citations": 4
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "faithfulness",
+      "parent_id": "f3e2d1c0b9a8-root",
+      "name": "Faithfulness",
+      "type": "tool_call",
+      "status": "skipped",
+      "start_time": "2026-07-16T03:15:00Z",
+      "end_time": "2026-07-16T03:15:00Z",
+      "duration_ms": 0,
+      "sequence": 8,
+      "attributes": {},
+      "metrics": {
+        "score": 1,
+        "claims": 0,
+        "supported": 0,
+        "unsupported": 0
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    }
+  ]
+}

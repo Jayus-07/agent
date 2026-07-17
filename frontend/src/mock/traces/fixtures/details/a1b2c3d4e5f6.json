@@ -1,0 +1,249 @@
+{
+  "trace_id": "a1b2c3d4e5f6",
+  "request": {
+    "question": "出差住宿费一线城市每晚能报销多少？",
+    "kb_id": "POLICY",
+    "temperature": 0.1,
+    "max_tokens": 4096
+  },
+  "response": {
+    "answer": "根据差旅报销制度，一线城市每晚住宿标准为500元。此标准适用于北京、上海、广州、深圳四个一线城市。超出部分需员工自行承担。",
+    "answer_len": 450
+  },
+  "usage": {
+    "prompt_tokens": 220,
+    "completion_tokens": 95,
+    "total_tokens": 315,
+    "cost_usd": 0.000062,
+    "model_name": "deepseek-v4-flash",
+    "model_provider": "deepseek"
+  },
+  "error": null,
+  "root_span_id": "a1b2c3d4e5f6-root",
+  "spans": [
+    {
+      "span_id": "a1b2c3d4e5f6-root",
+      "parent_id": null,
+      "name": "RAG Agent",
+      "type": "agent",
+      "status": "success",
+      "start_time": "2026-07-16T03:45:12Z",
+      "end_time": "2026-07-16T03:45:13Z",
+      "duration_ms": 1850,
+      "sequence": 0,
+      "attributes": {
+        "agent.name": "rag_agent",
+        "session.id": "prod-query-1"
+      },
+      "metrics": {
+        "total_tokens": 315,
+        "cost_usd": 0.000062,
+        "span_count": 8
+      },
+      "input": {
+        "question": "出差住宿费一线城市每晚能报销多少？"
+      },
+      "output": {
+        "answer_preview": "根据差旅报销制度，一线城市每晚住宿标准为500元。此标准适用于北京、上海、广州、深圳四个一线城市。超出部分需员工自行承担。",
+        "answer_len": 450
+      },
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "query_rewrite",
+      "parent_id": "a1b2c3d4e5f6-root",
+      "name": "LLM改写",
+      "type": "llm_call",
+      "status": "skipped",
+      "start_time": "2026-07-16T03:45:12Z",
+      "end_time": "2026-07-16T03:45:12Z",
+      "duration_ms": 0,
+      "sequence": 1,
+      "attributes": {},
+      "metrics": {
+        "variants": 0
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "hybrid_retrieval",
+      "parent_id": "a1b2c3d4e5f6-root",
+      "name": "混合检索",
+      "type": "retrieval",
+      "status": "success",
+      "start_time": "2026-07-16T03:45:12Z",
+      "end_time": "2026-07-16T03:45:12Z",
+      "duration_ms": 80,
+      "sequence": 2,
+      "attributes": {
+        "http.method": "POST"
+      },
+      "metrics": {
+        "vector_hits": 2,
+        "bm25_hits": 8,
+        "merged_hits": 3,
+        "dns_ms": 4,
+        "connect_ms": 10,
+        "tls_ms": 15,
+        "ttfb_ms": 38,
+        "body_ms": 13
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "retrieval",
+      "parent_id": "a1b2c3d4e5f6-root",
+      "name": "检索",
+      "type": "retrieval",
+      "status": "success",
+      "start_time": "2026-07-16T03:45:12Z",
+      "end_time": "2026-07-16T03:45:12Z",
+      "duration_ms": 81,
+      "sequence": 3,
+      "attributes": {},
+      "metrics": {
+        "retrieved_chunks": 3
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "rerank",
+      "parent_id": "a1b2c3d4e5f6-root",
+      "name": "Rerank",
+      "type": "rerank",
+      "status": "success",
+      "start_time": "2026-07-16T03:45:12Z",
+      "end_time": "2026-07-16T03:45:12Z",
+      "duration_ms": 420,
+      "sequence": 4,
+      "attributes": {
+        "http.method": "POST"
+      },
+      "metrics": {
+        "input_docs": 3,
+        "output_docs": 2,
+        "threshold": 0.3,
+        "dns_ms": 6,
+        "connect_ms": 15,
+        "tls_ms": 20,
+        "ttfb_ms": 350,
+        "body_ms": 29
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "llm_generate",
+      "parent_id": "a1b2c3d4e5f6-root",
+      "name": "LLM生成",
+      "type": "llm_call",
+      "status": "success",
+      "start_time": "2026-07-16T03:45:12Z",
+      "end_time": "2026-07-16T03:45:13Z",
+      "duration_ms": 1200,
+      "sequence": 5,
+      "attributes": {
+        "llm.model": "deepseek-v4-flash",
+        "llm.temperature": "0.1"
+      },
+      "metrics": {
+        "prompt_tokens": 220,
+        "completion_tokens": 95,
+        "total_tokens": 315,
+        "llm.temperature": 0.1
+      },
+      "input": {
+        "prompt": "[System]\n你是企业差旅政策助手...\n\n[Document 1]\n差旅报销制度.pdf\n\n[User Question]\n出差住宿费一线城市每晚能报销多少？"
+      },
+      "output": {
+        "response": "根据差旅报销制度，一线城市每晚住宿标准为500元..."
+      },
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "mq_check",
+      "parent_id": "a1b2c3d4e5f6-root",
+      "name": "MultiQuery",
+      "type": "tool_call",
+      "status": "skipped",
+      "start_time": "2026-07-16T03:45:12Z",
+      "end_time": "2026-07-16T03:45:12Z",
+      "duration_ms": 0,
+      "sequence": 6,
+      "attributes": {
+        "mode": "auto"
+      },
+      "metrics": {
+        "triggered": 0
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "citation",
+      "parent_id": "a1b2c3d4e5f6-root",
+      "name": "Citation",
+      "type": "tool_call",
+      "status": "success",
+      "start_time": "2026-07-16T03:45:12Z",
+      "end_time": "2026-07-16T03:45:12Z",
+      "duration_ms": 0,
+      "sequence": 7,
+      "attributes": {},
+      "metrics": {
+        "verified_citations": 2,
+        "total_citations": 2
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "faithfulness",
+      "parent_id": "a1b2c3d4e5f6-root",
+      "name": "Faithfulness",
+      "type": "tool_call",
+      "status": "success",
+      "start_time": "2026-07-16T03:45:12Z",
+      "end_time": "2026-07-16T03:45:12Z",
+      "duration_ms": 148,
+      "sequence": 8,
+      "attributes": {},
+      "metrics": {
+        "score": 0.92,
+        "claims": 3,
+        "supported": 3,
+        "unsupported": 0
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    }
+  ]
+}

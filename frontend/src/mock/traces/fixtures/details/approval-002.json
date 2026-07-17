@@ -1,0 +1,226 @@
+{
+  "trace_id": "approval-002",
+  "request": {
+    "question": "审批：供应商调价申请 #ADJ-2026-0450（上调 15%）"
+  },
+  "response": {
+    "answer": "【审批通过】经财务复核，原材料成本上涨确认真实，调价 15% 在合理范围内。触发条件：签署新价格协议 + 更新 ERP 系统。",
+    "answer_len": 63
+  },
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "total_tokens": 150,
+    "cost_usd": 0.00008,
+    "model_name": "deepseek-v4-flash",
+    "model_provider": "deepseek"
+  },
+  "error": null,
+  "root_span_id": "approval-002-root",
+  "spans": [
+    {
+      "span_id": "approval-002-root",
+      "parent_id": null,
+      "name": "审批工作流",
+      "type": "workflow",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:58Z",
+      "duration_ms": 58000,
+      "sequence": 0,
+      "attributes": {
+        "workflow.type": "approval",
+        "request.id": "ADJ-2026-0450"
+      },
+      "metrics": {
+        "span_count": 6,
+        "human_wait_ms": 42000
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "ap-validate",
+      "parent_id": "approval-002-root",
+      "name": "申请校验",
+      "type": "tool_call",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:00Z",
+      "duration_ms": 500,
+      "sequence": 1,
+      "attributes": {
+        "tool.name": "request_validator"
+      },
+      "metrics": {
+        "fields_ok": 10,
+        "missing": 0,
+        "supplier_exists": 1
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "ap-risk",
+      "parent_id": "approval-002-root",
+      "name": "风险评估 Agent",
+      "type": "agent",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:03Z",
+      "duration_ms": 3500,
+      "sequence": 2,
+      "attributes": {
+        "level": "medium",
+        "factors": "price_increase,single_source",
+        "agent.name": "risk_assessor"
+      },
+      "metrics": {
+        "risk_score": 55
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [
+        "⚠ 该供应商为单一来源，调价后无替代方案"
+      ],
+      "errors": []
+    },
+    {
+      "span_id": "ap-llm-review",
+      "parent_id": "approval-002-root",
+      "name": "LLM 合规审查",
+      "type": "llm_call",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:02Z",
+      "duration_ms": 2800,
+      "sequence": 3,
+      "attributes": {
+        "llm.model": "deepseek-v4-flash",
+        "llm.temperature": "0"
+      },
+      "metrics": {
+        "prompt_tokens": 250,
+        "completion_tokens": 130,
+        "total_tokens": 380,
+        "llm.temperature": 0
+      },
+      "input": {
+        "prompt": "审查调价申请 ADJ-2026-0450..."
+      },
+      "output": {
+        "response": "合规：调价原因合理，建议人工复核供应商资质"
+      },
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "ap-human",
+      "parent_id": "approval-002-root",
+      "name": "人工审批（CFO）",
+      "type": "human",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:48Z",
+      "duration_ms": 48000,
+      "sequence": 4,
+      "attributes": {
+        "decision": "approved",
+        "human.role": "cfo",
+        "human.assignee": "cfo@company.com"
+      },
+      "metrics": {
+        "wait_ms": 42000,
+        "review_ms": 6000,
+        "human.sla_hours": 24
+      },
+      "input": null,
+      "output": null,
+      "events": [
+        {
+          "ts": "2026-07-16T05:20:06Z",
+          "name": "human_waiting",
+          "data": {
+            "assigned_to": "cfo@company.com",
+            "priority": "normal"
+          }
+        },
+        {
+          "ts": "2026-07-16T05:20:30Z",
+          "name": "reminder_sent",
+          "data": {
+            "channel": "email",
+            "attempt": 1
+          }
+        },
+        {
+          "ts": "2026-07-16T05:21:30Z",
+          "name": "reminder_sent",
+          "data": {
+            "channel": "slack",
+            "attempt": 2
+          }
+        },
+        {
+          "ts": "2026-07-16T05:22:00Z",
+          "name": "human_approved",
+          "data": {
+            "reviewer": "cfo@company.com",
+            "decision": "approved",
+            "note": "原材料涨价属实，同意调价"
+          }
+        }
+      ],
+      "warnings": [
+        "人工审批等待超过 30 分钟，已发送催办提醒"
+      ],
+      "errors": []
+    },
+    {
+      "span_id": "ap-execute",
+      "parent_id": "approval-002-root",
+      "name": "审批执行",
+      "type": "tool_call",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:03Z",
+      "duration_ms": 3200,
+      "sequence": 5,
+      "attributes": {
+        "actions": "update_erp_price,notify_supplier,archive_request",
+        "tool.name": "approval_executor"
+      },
+      "metrics": {},
+      "input": null,
+      "output": null,
+      "events": [
+        {
+          "ts": "2026-07-16T05:22:06Z",
+          "name": "erp_updated",
+          "data": {
+            "table": "supplier_prices",
+            "rows": 1
+          }
+        },
+        {
+          "ts": "2026-07-16T05:22:12Z",
+          "name": "notification_sent",
+          "data": {
+            "to": "supplier@vendor.com",
+            "type": "price_approved"
+          }
+        }
+      ],
+      "warnings": [],
+      "errors": []
+    }
+  ]
+}

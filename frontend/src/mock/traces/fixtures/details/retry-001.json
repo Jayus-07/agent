@@ -1,0 +1,248 @@
+{
+  "trace_id": "retry-001",
+  "request": {
+    "question": "查询过去 7 天各品类的 GMV 和退货率"
+  },
+  "response": {
+    "answer": "查询成功（第 3 次重试后）。结果：电子产品 GMV $182K 退货率 3.2%，服装 $98K 退货率 6.1%，家居 $65K 退货率 4.8%。",
+    "answer_len": 76
+  },
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "total_tokens": 150,
+    "cost_usd": 0.00016,
+    "model_name": "deepseek-v4-flash",
+    "model_provider": "deepseek"
+  },
+  "error": null,
+  "root_span_id": "retry-001-root",
+  "spans": [
+    {
+      "span_id": "retry-001-root",
+      "parent_id": null,
+      "name": "SQL Agent",
+      "type": "agent",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:18Z",
+      "duration_ms": 18500,
+      "sequence": 0,
+      "attributes": {
+        "agent.name": "sql_agent"
+      },
+      "metrics": {
+        "span_count": 6,
+        "retries_total": 3
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "retry-gen",
+      "parent_id": "retry-001-root",
+      "name": "SQL 生成",
+      "type": "llm_call",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:00Z",
+      "duration_ms": 800,
+      "sequence": 1,
+      "attributes": {
+        "llm.model": "deepseek-v4-flash",
+        "llm.temperature": "0"
+      },
+      "metrics": {
+        "prompt_tokens": 200,
+        "completion_tokens": 100,
+        "total_tokens": 300,
+        "llm.temperature": 0
+      },
+      "input": {
+        "prompt": "生成查询GMV和退货率的SQL..."
+      },
+      "output": {
+        "response": "SELECT category, SUM(gmv), AVG(return_rate)..."
+      },
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "retry-attempt-1",
+      "parent_id": "retry-001-root",
+      "name": "SQL 执行 #1（超时）",
+      "type": "sql",
+      "status": "error",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:05Z",
+      "duration_ms": 5200,
+      "sequence": 2,
+      "attributes": {
+        "error_code": "STATEMENT_TIMEOUT",
+        "sql.engine": "postgresql",
+        "sql.statement": "SELECT ... FROM orders JOIN returns ..."
+      },
+      "metrics": {
+        "retry_count": 1,
+        "query_ms": 5150
+      },
+      "input": null,
+      "output": null,
+      "events": [
+        {
+          "ts": "2026-07-16T05:16:30Z",
+          "name": "sql_timeout",
+          "data": {
+            "elapsed_ms": 5150,
+            "threshold_ms": 5000
+          }
+        }
+      ],
+      "warnings": [],
+      "errors": [
+        "[RETRY #1] 查询超时 (5000ms)，pg_stat_activity 显示 seq_scan 锁等待"
+      ]
+    },
+    {
+      "span_id": "retry-attempt-2",
+      "parent_id": "retry-001-root",
+      "name": "SQL 执行 #2（锁冲突）",
+      "type": "sql",
+      "status": "error",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:03Z",
+      "duration_ms": 3200,
+      "sequence": 3,
+      "attributes": {
+        "error_code": "DEADLOCK_DETECTED",
+        "sql.engine": "postgresql",
+        "sql.statement": "SELECT /*+ INDEX(orders idx_created_at) */ ..."
+      },
+      "metrics": {
+        "retry_count": 2,
+        "query_ms": 3150
+      },
+      "input": null,
+      "output": null,
+      "events": [
+        {
+          "ts": "2026-07-16T05:16:42Z",
+          "name": "deadlock_detected",
+          "data": {
+            "conflicting_pid": 2841,
+            "table": "orders"
+          }
+        }
+      ],
+      "warnings": [],
+      "errors": [
+        "[RETRY #2] 死锁检测，与定时备份任务冲突"
+      ]
+    },
+    {
+      "span_id": "retry-attempt-3",
+      "parent_id": "retry-001-root",
+      "name": "SQL 执行 #3（重写查询）",
+      "type": "sql",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:02Z",
+      "duration_ms": 2800,
+      "sequence": 4,
+      "attributes": {
+        "sql.engine": "postgresql",
+        "sql.statement": "WITH recent AS (SELECT ...) SELECT ..."
+      },
+      "metrics": {
+        "retry_count": 3,
+        "query_ms": 2750,
+        "rows_returned": 15,
+        "scanned_bytes": 1048576,
+        "sql.optimized": 1
+      },
+      "input": null,
+      "output": null,
+      "events": [
+        {
+          "ts": "2026-07-16T05:16:54Z",
+          "name": "sql_rewritten",
+          "data": {
+            "reason": "avoid_lock",
+            "new_plan": "CTE + hash_join"
+          }
+        },
+        {
+          "ts": "2026-07-16T05:17:00Z",
+          "name": "sql_success",
+          "data": {
+            "rows": 15,
+            "ms": 2750
+          }
+        }
+      ],
+      "warnings": [
+        "查询已重写为 CTE 避免锁冲突，结果可能稍微滞后(≤1s)"
+      ],
+      "errors": []
+    },
+    {
+      "span_id": "retry-success",
+      "parent_id": "retry-001-root",
+      "name": "结果验证",
+      "type": "tool_call",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:00Z",
+      "duration_ms": 200,
+      "sequence": 5,
+      "attributes": {
+        "null_check": "passed",
+        "tool.name": "result_validator"
+      },
+      "metrics": {
+        "rows": 15,
+        "schema_match": 1
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "retry-summary",
+      "parent_id": "retry-001-root",
+      "name": "结果解读",
+      "type": "llm_call",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:02Z",
+      "duration_ms": 2200,
+      "sequence": 6,
+      "attributes": {
+        "llm.model": "deepseek-v4-flash",
+        "llm.temperature": "0.2"
+      },
+      "metrics": {
+        "prompt_tokens": 280,
+        "completion_tokens": 150,
+        "total_tokens": 430,
+        "cost_usd": 0.000086,
+        "llm.temperature": 0.2
+      },
+      "input": {
+        "prompt": "解读SQL查询结果..."
+      },
+      "output": {
+        "response": "电子产品 GMV $182K..."
+      },
+      "events": [],
+      "warnings": [],
+      "errors": []
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "trace_id": "stream-001",
+    "workflow_name": "content_generation",
+    "status": "success",
+    "start_time": "2026-07-16T05:30:00Z",
+    "duration_ms": 8200,
+    "session_id": "marketing-session",
+    "user_id": "u-marketing",
+    "user_name": "User",
+    "question": "为新品智能手表撰写英文产品描述和5条卖点",
+    "answer_preview": "✅ 产品描述已生成（328 词），含 5 条 Amazon-optimized bullet points。Flesch 可读性评分 72。SEO 关键词：smartwatch, fitness tracker, AMOLED display, 14-day battery。",
+    "token_total": 900,
+    "cost_usd": 0.00028,
+    "span_count": 5,
+    "model_name": "deepseek-v4-flash",
+    "kb_id": "",
+    "sla_threshold_ms": 15000,
+    "sla_breached": false,
+    "error_code": null,
+    "error_node": null,
+    "parent_id": null,
+    "children_ids": [],
+    "bookmarked": false
+  }
+]

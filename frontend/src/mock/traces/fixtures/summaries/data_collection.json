@@ -1,0 +1,26 @@
+[
+  {
+    "trace_id": "timeout-001",
+    "workflow_name": "data_collection",
+    "status": "timeout",
+    "start_time": "2026-07-16T05:22:00Z",
+    "duration_ms": 65000,
+    "session_id": "scheduler-daily",
+    "user_id": "system",
+    "user_name": "User",
+    "question": "[定时] 全量商品数据同步（超时）",
+    "answer_preview": "同步超时：仅完成 60%（7,500/12,500 条），剩余数据已标记待下次重试。",
+    "token_total": 120,
+    "cost_usd": 0.00003,
+    "span_count": 4,
+    "model_name": "deepseek-v4-flash",
+    "kb_id": "",
+    "sla_threshold_ms": 60000,
+    "sla_breached": true,
+    "error_code": "WORKFLOW_TIMEOUT",
+    "error_node": "to-sync",
+    "parent_id": null,
+    "children_ids": [],
+    "bookmarked": false
+  }
+]

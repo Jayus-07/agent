@@ -1,0 +1,259 @@
+{
+  "trace_id": "sch-001",
+  "request": {
+    "question": "[定时] 每日竞品价格采集 & 异常检测"
+  },
+  "response": {
+    "answer": "采集完成：1,250 SKU 已更新，3 条价格异常已推送 Slack。耗时 18.5s。",
+    "answer_len": 45
+  },
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "total_tokens": 150,
+    "cost_usd": 0.00002,
+    "model_name": "deepseek-v4-flash",
+    "model_provider": "deepseek"
+  },
+  "error": null,
+  "root_span_id": "sch-001-root",
+  "spans": [
+    {
+      "span_id": "sch-001-root",
+      "parent_id": null,
+      "name": "每日采集 Pipeline",
+      "type": "workflow",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:18Z",
+      "duration_ms": 18500,
+      "sequence": 0,
+      "attributes": {
+        "workflow.cron": "0 6 * * *",
+        "workflow.trigger": "scheduler"
+      },
+      "metrics": {
+        "span_count": 6,
+        "items": 1250,
+        "anomalies": 3
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "sch-auth",
+      "parent_id": "sch-001-root",
+      "name": "API 鉴权",
+      "type": "http",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:00Z",
+      "duration_ms": 420,
+      "sequence": 1,
+      "attributes": {
+        "http.method": "POST",
+        "http.url": "https://api.example.com/auth"
+      },
+      "metrics": {
+        "status_code": 200,
+        "token_ttl_s": 3600,
+        "dns_ms": 5,
+        "connect_ms": 15,
+        "tls_ms": 35,
+        "ttfb_ms": 320,
+        "body_ms": 45
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "sch-fetch",
+      "parent_id": "sch-001-root",
+      "name": "批量商品数据拉取",
+      "type": "http",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:12Z",
+      "duration_ms": 12000,
+      "sequence": 2,
+      "attributes": {
+        "http.method": "POST",
+        "http.url": "https://api.example.com/products/batch"
+      },
+      "metrics": {
+        "status_code": 200,
+        "pages": 25,
+        "items": 1250,
+        "batches": 25,
+        "dns_ms": 3,
+        "connect_ms": 8,
+        "tls_ms": 12,
+        "ttfb_ms": 11200,
+        "body_ms": 777
+      },
+      "input": null,
+      "output": null,
+      "events": [
+        {
+          "ts": "2026-07-16T05:05:30Z",
+          "name": "batch_start",
+          "data": {
+            "total_batches": 25
+          }
+        },
+        {
+          "ts": "2026-07-16T05:05:48Z",
+          "name": "batch_progress",
+          "data": {
+            "completed": 15,
+            "remaining": 10,
+            "rate": "5.2/s"
+          }
+        },
+        {
+          "ts": "2026-07-16T05:06:06Z",
+          "name": "batch_complete",
+          "data": {
+            "total": 1250,
+            "failed": 0
+          }
+        }
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "sch-parse",
+      "parent_id": "sch-001-root",
+      "name": "数据解析 & 清洗",
+      "type": "tool_call",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:01Z",
+      "duration_ms": 1800,
+      "sequence": 3,
+      "attributes": {
+        "tool.name": "etl_parser",
+        "tool.version": "v3.1"
+      },
+      "metrics": {
+        "parsed": 1250,
+        "deduplicated": 48,
+        "invalid": 2,
+        "format_errors": 0
+      },
+      "input": null,
+      "output": null,
+      "events": [
+        {
+          "ts": "2026-07-16T05:06:12Z",
+          "name": "parse_start",
+          "data": {
+            "format": "json"
+          }
+        },
+        {
+          "ts": "2026-07-16T05:06:24Z",
+          "name": "parse_done",
+          "data": {
+            "rows": 1250,
+            "schema": "product_price_v2"
+          }
+        }
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "sch-detect",
+      "parent_id": "sch-001-root",
+      "name": "异常检测引擎",
+      "type": "tool_call",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:02Z",
+      "duration_ms": 2500,
+      "sequence": 4,
+      "attributes": {
+        "tool.name": "anomaly_detector",
+        "tool.algorithm": "z_score"
+      },
+      "metrics": {
+        "scanned": 1250,
+        "anomalies": 3,
+        "threshold": 2.5,
+        "max_z_score": 4.8
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "sch-alert",
+      "parent_id": "sch-001-root",
+      "name": "Slack 告警推送",
+      "type": "tool_call",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:00Z",
+      "duration_ms": 800,
+      "sequence": 5,
+      "attributes": {
+        "tool.name": "slack_notifier",
+        "tool.channel": "#price-alerts"
+      },
+      "metrics": {
+        "messages_sent": 3,
+        "recipients": 5
+      },
+      "input": null,
+      "output": null,
+      "events": [
+        {
+          "ts": "2026-07-16T05:06:42Z",
+          "name": "slack_message_sent",
+          "data": {
+            "channel": "#price-alerts",
+            "ts": "2026-07-16T05:58:30Z"
+          }
+        }
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "sch-save",
+      "parent_id": "sch-001-root",
+      "name": "写入结果库",
+      "type": "database",
+      "status": "success",
+      "start_time": "2026-07-16T06:00:00Z",
+      "end_time": "2026-07-16T06:00:00Z",
+      "duration_ms": 980,
+      "sequence": 6,
+      "attributes": {
+        "table": "price_snapshots",
+        "db.engine": "postgresql",
+        "db.table": "price_snapshots"
+      },
+      "metrics": {
+        "inserted": 1250,
+        "updated": 320,
+        "write_ms": 950
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    }
+  ]
+}

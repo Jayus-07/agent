@@ -1,0 +1,266 @@
+{
+  "trace_id": "e7f8llmerror429",
+  "request": {
+    "question": "详细分析过去12个月的库存周转率和广告ROI变化趋势",
+    "kb_id": "AMAZON_SOP",
+    "temperature": 0.1,
+    "max_tokens": 4096
+  },
+  "response": {
+    "answer": "",
+    "answer_len": 0
+  },
+  "usage": {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0,
+    "cost_usd": 0,
+    "model_name": "deepseek-v4-flash",
+    "model_provider": "deepseek"
+  },
+  "error": {
+    "code": "LLM_RATE_LIMIT",
+    "message": "DeepSeek API returned 429 Too Many Requests after 3 retries. Last retry at 2026-07-16T02:30:45Z",
+    "node": "llm_generate",
+    "retry_count": 3
+  },
+  "root_span_id": "e7f8llmerror429-root",
+  "spans": [
+    {
+      "span_id": "e7f8llmerror429-root",
+      "parent_id": null,
+      "name": "RAG Agent",
+      "type": "agent",
+      "status": "error",
+      "start_time": "2026-07-16T02:30:00Z",
+      "end_time": "2026-07-16T02:30:45Z",
+      "duration_ms": 45000,
+      "sequence": 0,
+      "attributes": {
+        "agent.name": "rag_agent",
+        "session.id": "edge-case-2"
+      },
+      "metrics": {
+        "total_tokens": 0,
+        "cost_usd": 0,
+        "span_count": 8
+      },
+      "input": {
+        "question": "详细分析过去12个月的库存周转率和广告ROI变化趋势"
+      },
+      "output": {
+        "answer_preview": "",
+        "answer_len": 0
+      },
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "query_rewrite",
+      "parent_id": "e7f8llmerror429-root",
+      "name": "LLM改写",
+      "type": "llm_call",
+      "status": "success",
+      "start_time": "2026-07-16T02:30:00Z",
+      "end_time": "2026-07-16T02:30:03Z",
+      "duration_ms": 3200,
+      "sequence": 1,
+      "attributes": {
+        "llm.model": "deepseek-v4-flash",
+        "llm.temperature": "0.1"
+      },
+      "metrics": {
+        "variants": 3,
+        "llm.temperature": 0.1
+      },
+      "input": {
+        "prompt": "[User Question]\n详细分析过去12个月的库存周转率和广告ROI变化趋势"
+      },
+      "output": {
+        "response": "变体1: 库存周转率趋势\n变体2: 广告 ROI 分析\n变体3: 12个月销售数据"
+      },
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "hybrid_retrieval",
+      "parent_id": "e7f8llmerror429-root",
+      "name": "混合检索",
+      "type": "retrieval",
+      "status": "success",
+      "start_time": "2026-07-16T02:30:00Z",
+      "end_time": "2026-07-16T02:30:00Z",
+      "duration_ms": 380,
+      "sequence": 2,
+      "attributes": {
+        "http.method": "POST"
+      },
+      "metrics": {
+        "vector_hits": 6,
+        "bm25_hits": 12,
+        "merged_hits": 10,
+        "dns_ms": 5,
+        "connect_ms": 12,
+        "tls_ms": 18,
+        "ttfb_ms": 295,
+        "body_ms": 50
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "retrieval",
+      "parent_id": "e7f8llmerror429-root",
+      "name": "检索",
+      "type": "retrieval",
+      "status": "success",
+      "start_time": "2026-07-16T02:30:00Z",
+      "end_time": "2026-07-16T02:30:00Z",
+      "duration_ms": 381,
+      "sequence": 3,
+      "attributes": {},
+      "metrics": {
+        "retrieved_chunks": 10
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "rerank",
+      "parent_id": "e7f8llmerror429-root",
+      "name": "Rerank",
+      "type": "rerank",
+      "status": "success",
+      "start_time": "2026-07-16T02:30:00Z",
+      "end_time": "2026-07-16T02:30:02Z",
+      "duration_ms": 2800,
+      "sequence": 4,
+      "attributes": {
+        "http.method": "POST"
+      },
+      "metrics": {
+        "input_docs": 10,
+        "output_docs": 6,
+        "threshold": 0.3,
+        "avg_score": 0.61,
+        "min_score": 0.41,
+        "dns_ms": 8,
+        "connect_ms": 20,
+        "tls_ms": 30,
+        "ttfb_ms": 2650,
+        "body_ms": 92
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "llm_generate",
+      "parent_id": "e7f8llmerror429-root",
+      "name": "LLM生成",
+      "type": "llm_call",
+      "status": "error",
+      "start_time": "2026-07-16T02:30:00Z",
+      "end_time": "2026-07-16T02:30:38Z",
+      "duration_ms": 38000,
+      "sequence": 5,
+      "attributes": {
+        "llm.model": "deepseek-v4-flash",
+        "llm.temperature": "0.1"
+      },
+      "metrics": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "llm.temperature": 0.1
+      },
+      "input": {
+        "prompt": "[User Question]\n详细分析过去12个月的库存周转率和广告ROI变化趋势"
+      },
+      "output": {
+        "response": "[ERROR] 429 Too Many Requests after 3 retries"
+      },
+      "events": [],
+      "warnings": [],
+      "errors": [
+        "LLM生成 执行失败"
+      ]
+    },
+    {
+      "span_id": "mq_check",
+      "parent_id": "e7f8llmerror429-root",
+      "name": "MultiQuery",
+      "type": "tool_call",
+      "status": "success",
+      "start_time": "2026-07-16T02:30:00Z",
+      "end_time": "2026-07-16T02:30:00Z",
+      "duration_ms": 0,
+      "sequence": 6,
+      "attributes": {
+        "mode": "auto"
+      },
+      "metrics": {
+        "triggered": 1
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "citation",
+      "parent_id": "e7f8llmerror429-root",
+      "name": "Citation",
+      "type": "tool_call",
+      "status": "skipped",
+      "start_time": "2026-07-16T02:30:00Z",
+      "end_time": "2026-07-16T02:30:00Z",
+      "duration_ms": 0,
+      "sequence": 7,
+      "attributes": {},
+      "metrics": {
+        "verified_citations": 0,
+        "total_citations": 0
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "span_id": "faithfulness",
+      "parent_id": "e7f8llmerror429-root",
+      "name": "Faithfulness",
+      "type": "tool_call",
+      "status": "skipped",
+      "start_time": "2026-07-16T02:30:00Z",
+      "end_time": "2026-07-16T02:30:00Z",
+      "duration_ms": 0,
+      "sequence": 8,
+      "attributes": {},
+      "metrics": {
+        "score": 1,
+        "claims": 0,
+        "supported": 0,
+        "unsupported": 0
+      },
+      "input": null,
+      "output": null,
+      "events": [],
+      "warnings": [],
+      "errors": []
+    }
+  ]
+}
