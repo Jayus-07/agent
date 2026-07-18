@@ -29,6 +29,7 @@ const NAV = [
     items: [
       { label: '概览', path: '/knowledge' },
       { label: '文档管理', path: '/knowledge/documents' },
+      { label: '文档操作', path: '/knowledge/operations' },
       { label: 'Chunk 查看', path: '/knowledge/chunks' },
       { label: '检索测试', path: '/knowledge/playground' },
     ],

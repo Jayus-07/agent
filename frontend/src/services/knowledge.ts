@@ -25,6 +25,30 @@ export interface DocumentListResult {
   page_size: number
 }
 
+/** 文档操作类型 */
+export type OperationType = 'upload' | 'reindex' | 'delete'
+
+/** 文档操作审计日志条目 */
+export interface OperationLog {
+  id: number
+  doc_id: string
+  doc_name: string
+  operation: OperationType
+  user_id: string              // 当前默认 'anonymous'（auth 未接入）
+  source: string               // "IP | User-Agent"
+  trace_id: string | null      // upload/reindex 关联，delete 为空；trace 内存有限可能过期
+  result: 'success' | 'failed'
+  detail: string | Record<string, unknown> | null
+  created_at: string
+}
+
+export interface OperationListResult {
+  items: OperationLog[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export const knowledgeService = {
   async getStats(): Promise<KnowledgeStats> {
     const res = await fetch(`${BASE}/stats`)
@@ -204,6 +228,19 @@ export const knowledgeService = {
 
   async getChunks(docId: string): Promise<{ doc_id: string; chunks: Array<{ id: string; content: string; metadata: Record<string, unknown>; token_count: number }>; total: number }> {
     const res = await fetch(`${BASE}/documents/${docId}/chunks`)
+    return res.json()
+  },
+
+  async getOperations(params?: {
+    page?: number; page_size?: number; operation?: string; doc_id?: string
+  }): Promise<OperationListResult> {
+    const qs = new URLSearchParams()
+    if (params) {
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== '') qs.set(k, String(v))
+      })
+    }
+    const res = await fetch(`${BASE}/operations?${qs}`)
     return res.json()
   },
 }

@@ -250,6 +250,7 @@ class IncrementalIndexer:
             trace_collector.end_span(upload_span,
                 metrics={"doc_id": doc_id, "kb_id": kb_id})
             trace_collector.finish(trace, os.path.basename(file_path), 0, "", "")
+            return trace.id
         except Exception as e:
             trace_collector.end_span(upload_span, status="error",
                 metrics={"error": str(e)[:200]})
@@ -540,8 +541,8 @@ class IncrementalIndexer:
             self._remove_document(old_doc_id)
             logger.info(f"[REINDEX] 已清理旧向量: {old_doc_id}")
 
-        # 2. 重新索引
-        self._index_file(file_path)
+        # 2. 重新索引（_index_file 返回 trace_id，供操作日志关联链路追踪）
+        trace_id = self._index_file(file_path)
 
         # 3. 获取更新后的信息
         updated = self.registry.get_by_path(file_path) or {}
@@ -550,6 +551,7 @@ class IncrementalIndexer:
             "chunk_count": updated.get("chunk_count", 0),
             "file_hash": updated.get("file_hash", ""),
             "status": updated.get("status", "active"),
+            "trace_id": trace_id or "",
         }
 
     # ---- 删除 ----

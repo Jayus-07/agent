@@ -14,6 +14,7 @@ CHROMA_PATH = os.getenv("CHROMA_PATH", "data/chroma")
 DOC_DB_PATH = os.getenv("DOC_DB_PATH", "data/doc_db")
 DOCS_DIRECTORY = os.getenv("DOCS_DIRECTORY", "data/docs")
 DOC_REGISTRY_PATH = os.getenv("DOC_REGISTRY_PATH", "data/doc_registry.db")
+DOC_OPERATION_LOG_PATH = os.getenv("DOC_OPERATION_LOG_PATH", "data/doc_operation_log.db")
 ENABLE_INCREMENTAL_INDEXING = os.getenv("ENABLE_INCREMENTAL_INDEXING", "true").lower() == "true"
 
 # Memory — Enterprise PostgreSQL

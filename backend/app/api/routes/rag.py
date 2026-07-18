@@ -2,13 +2,14 @@
 import asyncio
 import os, uuid, json
 from asyncio import Queue
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline
 from backend.rag.indexing.doc_registry import DocumentRegistry
 from backend.rag.indexing.indexer import IncrementalIndexer
-from backend.config import DOC_REGISTRY_PATH, CHROMA_PATH, EMBEDDING_MODEL_PATH
+from backend.rag.indexing.operation_log import DocumentOperationLogger
+from backend.config import DOC_REGISTRY_PATH, DOC_OPERATION_LOG_PATH, CHROMA_PATH, EMBEDDING_MODEL_PATH
 from backend.shared.logger import logger
 
 # ── Upload 进度队列（按 upload_id 索引） ───────────────────────
@@ -36,6 +37,37 @@ def _get_registry() -> DocumentRegistry:
     if _registry is None:
         _registry = DocumentRegistry(DOC_REGISTRY_PATH)
     return _registry
+
+
+_op_logger: DocumentOperationLogger | None = None
+
+
+def _get_op_logger() -> DocumentOperationLogger:
+    global _op_logger
+    if _op_logger is None:
+        _op_logger = DocumentOperationLogger(DOC_OPERATION_LOG_PATH)
+    return _op_logger
+
+
+def _extract_source(request: Request) -> str:
+    """提取操作来源：IP | User-Agent（auth 接入后可加 user_id）。"""
+    client_host = request.client.host if request.client else "unknown"
+    ua = request.headers.get("user-agent", "")
+    return f"{client_host} | {ua}"
+
+
+def _safe_log_op(
+    doc_id: str, doc_name: str, operation: str, source: str,
+    trace_id: str | None = None, result: str = "success", detail: dict | None = None,
+) -> None:
+    """记录操作日志，失败不影响主流程（审计日志写挂不能阻断业务）。"""
+    try:
+        _get_op_logger().log(
+            doc_id=doc_id, doc_name=doc_name, operation=operation, source=source,
+            trace_id=trace_id, result=result, detail=detail,
+        )
+    except Exception as e:
+        logger.warning(f"[RAG] 记录操作日志失败 ({operation}): {e}")
 
 
 @router.get("/stats")
@@ -114,6 +146,23 @@ async def list_documents(
         return {"documents": [], "total": 0, "error": str(e)}
 
 
+@router.get("/operations")
+async def list_operations(
+    page: int = 1,
+    page_size: int = 20,
+    operation: str = "",
+    doc_id: str = "",
+):
+    """文档操作审计日志 — 谁上传/重索引/删除了哪个文档，含 trace_id 关联链路追踪"""
+    try:
+        return _get_op_logger().list(
+            page=page, page_size=page_size, operation=operation, doc_id=doc_id,
+        )
+    except Exception as e:
+        logger.error(f"[RAG] operations 失败: {e}")
+        return {"items": [], "total": 0, "error": str(e)}
+
+
 @router.get("/documents/{doc_id}")
 async def get_document(doc_id: str):
     """文档详情 — 含 chunk 配置、embedding 模型等完整信息"""
@@ -159,15 +208,18 @@ async def get_document(doc_id: str):
 
 
 @router.post("/documents/{doc_id}/reindex")
-async def reindex_document(doc_id: str, force: bool = False):
+async def reindex_document(doc_id: str, request: Request, force: bool = False):
     """单文件重新索引 — 删除旧向量后重新加载/分块/Embedding/写入"""
     from backend.config import DOCS_DIRECTORY
+    source = _extract_source(request)
+    doc_name = ""
 
     try:
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
         if not doc:
             return {"ok": False, "error": "文档不存在"}
+        doc_name = doc.get("file_name", "")
 
         file_path = doc.get("file_path", "")
         if not file_path or not os.path.isfile(file_path):
@@ -181,17 +233,23 @@ async def reindex_document(doc_id: str, force: bool = False):
 
         # 执行重索引
         result = indexer.reindex_file(file_path)
+        _safe_log_op(doc_id, doc_name, "reindex", source,
+                     trace_id=result.get("trace_id") or None, result="success",
+                     detail={"chunk_count": result.get("chunk_count", 0),
+                             "file_hash": result.get("file_hash", "")})
 
         # 获取更新后的文档信息
         updated_doc = reg.get_by_doc_id(doc_id)
         return {"ok": True, "doc_id": doc_id, "chunk_count": result.get("chunk_count", 0), "hash": result.get("file_hash", ""), "doc": updated_doc}
     except Exception as e:
         logger.error(f"[RAG] reindex 失败: {e}")
+        _safe_log_op(doc_id, doc_name, "reindex", source, trace_id=None, result="failed",
+                     detail={"error": str(e)[:200]})
         return {"ok": False, "error": str(e)}
 
 
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(request: Request, file: UploadFile = File(...)):
     """上传文档 → 保存到 data/docs/ → 触发后台增量索引 → 返回 upload_id 用于 SSE 订阅
 
     两阶段流程：
@@ -229,19 +287,15 @@ async def upload_document(file: UploadFile = File(...)):
     queue._created_at = now  # type: ignore[attr-defined]
     _progress_queues[upload_id] = queue
 
-    # 后台跑索引（不阻塞 HTTP 响应）
-    asyncio.create_task(_run_index_background(upload_id, filepath, file.filename))
+    # 后台跑索引（不阻塞 HTTP 响应）；source 透传给后台线程记录操作日志
+    source = _extract_source(request)
+    asyncio.create_task(_run_index_background(upload_id, filepath, file.filename, source))
 
     return {"ok": True, "upload_id": upload_id, "filename": file.filename}
 
 
-async def _run_index_background(upload_id: str, filepath: str, filename: str):
-    """后台执行索引，向 queue 推送阶段事件。"""
-    from backend.config import DOCS_DIRECTORY
-    from backend.rag.indexing.indexer import IncrementalIndexer
-    from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
-    from langchain_huggingface import HuggingFaceEmbeddings
-
+async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = ""):
+    """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志（关联 trace_id）。"""
     queue = _progress_queues.get(upload_id)
     if queue is None:
         return
@@ -249,31 +303,45 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str):
     async def emit(stage: str, message: str = "", **extra):
         await queue.put({"stage": stage, "message": message, **extra})
 
+    result = None
     try:
         await emit("uploading", f"文件 {filename} 已保存，开始索引")
 
-        # 同步索引（在线程池跑，不阻塞事件循环）
+        # 同步索引（在线程池跑，不阻塞事件循环）；返回含 trace_id
         loop = asyncio.get_running_loop()
-        # 把 loop 引用传给同步函数，让 run_coroutine_threadsafe 能把事件投回主 loop
-        await loop.run_in_executor(None, _do_index_sync, upload_id, filepath, filename, loop)
+        result = await loop.run_in_executor(None, _do_index_sync, upload_id, filepath, filename, loop)
     except Exception as e:
         logger.error(f"[RAG] 后台索引失败: {e}")
         await emit("error", str(e))
         await queue.put(None)  # sentinel
+        _safe_log_op("", filename, "upload", source, trace_id=None, result="failed",
+                     detail={"error": str(e)[:200]})
         return
 
-    # 发送 done 事件（含新文档信息）
+    # 发送 done 事件（含新文档信息）— 按 path 直接拿刚索引的文档
+    new_doc = None
     try:
         reg = _get_registry()
-        docs = reg.list_active()
-        new_doc = next((d for d in docs if d["file_name"] == filename), None)
+        new_doc = reg.get_by_path(filepath)
         await emit("done", "索引完成", doc=new_doc)
     except Exception as e:
         await emit("done", "索引完成（文档信息获取失败）")
     finally:
         await queue.put(None)  # sentinel → SSE 关闭
-        # 注意：不在此 pop queue — 索引快时 SSE 可能还没连上消费，立即 pop 会导致
-        # "upload_id 不存在或已过期"。清理交给 SSE stream 的 finally（消费者断开）+ upload 入口 TTL 兜底
+        # 不在此 pop queue — 索引快时 SSE 可能还没连上消费，立即 pop 会"过期"。
+        # 清理交给 SSE stream 的 finally（消费者断开）+ upload 入口 TTL 兜底
+
+    # 记录上传操作日志（trace_id 关联链路追踪；duplicate 时 trace_id 为空）
+    _safe_log_op(
+        (new_doc or {}).get("doc_id", ""), filename, "upload", source,
+        trace_id=(result or {}).get("trace_id") or None,
+        result="success",
+        detail={
+            "chunk_count": (result or {}).get("chunk_count", 0),
+            "file_hash": (result or {}).get("file_hash", ""),
+            "duplicate": bool((result or {}).get("duplicate")),
+        },
+    )
 
 
 def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyncio.AbstractEventLoop):
@@ -311,7 +379,7 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
                 logger.info(f"[RAG] 文件未变化，跳过索引: {filename}")
                 sync_emit("duplicate", "文件已存在，未重复索引",
                           doc={**existing, "duplicate": True})
-                return
+                return {"trace_id": "", "duplicate": True}
 
         # 复用 pipeline 单例（embedding 已在启动时加载，避免每次上传重新加载模型→卡 uploading 阶段）
         pipeline = get_rag_pipeline()
@@ -329,6 +397,7 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
         finally:
             listener.unsub()
         logger.info(f"[RAG] 上传索引完成: {filename} → {result}")
+        return result
     except Exception as e:
         sync_emit("error", f"索引失败: {e}")
         raise
@@ -422,14 +491,16 @@ async def stream_upload_progress(upload_id: str):
 
 
 @router.delete("/documents/{doc_id}")
-async def delete_document(doc_id: str):
+async def delete_document(doc_id: str, request: Request):
     """删除文档 — 软删 registry + 清理两处向量 + 删原文件（防 sync 复活）"""
+    source = _extract_source(request)
+    doc_name = ""
     try:
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
         if not doc:
             return {"ok": False, "error": "文档不存在"}
-
+        doc_name = doc.get("file_name", "")
         file_path = doc.get("file_path", "")
 
         # ① 软删 registry（列表过滤靠 status='deleted'）
@@ -456,9 +527,13 @@ async def delete_document(doc_id: str):
                 logger.warning(f"[RAG] 删除原文件失败 ({file_path}): {e}")
 
         logger.info(f"[RAG] 已删除文档: {doc_id}")
+        _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, result="success",
+                     detail={"file_path": file_path})
         return {"ok": True, "doc_id": doc_id}
     except Exception as e:
         logger.error(f"[RAG] 删除文档失败: {e}")
+        _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, result="failed",
+                     detail={"error": str(e)[:200]})
         return {"ok": False, "error": str(e)}
 
 
