@@ -62,7 +62,7 @@ export const knowledgeService = {
   async uploadDocument(
     file: File,
     onProgress?: (stage: string, message: string) => void,
-  ): Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string }> {
+  ): Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean }> {
     const fd = new FormData()
     fd.append('file', file)
     const res = await fetch(`${BASE}/upload`, { method: 'POST', body: fd })
@@ -81,7 +81,7 @@ export const knowledgeService = {
     // 订阅 SSE 获取真实进度
     // P1.5 fix: 用单一 onmessage listener + 解析 data.stage 字段
     // 避免 addEventListener 注册时机的 race condition（事件可能在注册前到达丢失）
-    return new Promise((resolve) => {
+    return new Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean }>((resolve) => {
       const eventSource = new EventSource(`${BASE}/upload/${data.upload_id}/stream`)
       let resolved = false
 
@@ -129,7 +129,7 @@ export const knowledgeService = {
     })
   },
 
-  async deleteDocument(docId: string): Promise<{ ok: boolean }> {
+  async deleteDocument(docId: string): Promise<{ ok: boolean; error?: string }> {
     const res = await fetch(`${BASE}/documents/${docId}`, { method: 'DELETE' })
     return res.json()
   },
@@ -138,6 +138,68 @@ export const knowledgeService = {
     const qs = force ? '?force=true' : ''
     const res = await fetch(`${BASE}/documents/${docId}/reindex${qs}`, { method: 'POST' })
     return res.json()
+  },
+
+  /**
+   * 批量删除（串行）— 逐个调 DELETE，聚合结果。
+   * 不并发：后端每次走 Chroma delete + 文件删除，并发无收益且增加 DB 争用。
+   */
+  async batchDelete(docIds: string[]): Promise<{ ok: number; failed: { id: string; error: string }[] }> {
+    const failed: { id: string; error: string }[] = []
+    let ok = 0
+    for (const id of docIds) {
+      try {
+        const r = await this.deleteDocument(id)
+        if (r.ok) ok++
+        else failed.push({ id, error: r.error || '删除失败' })
+      } catch (e) {
+        failed.push({ id, error: (e as Error).message })
+      }
+    }
+    return { ok, failed }
+  },
+
+  /**
+   * 批量重索引（串行）— 逐个调 reindex，聚合结果。
+   * 不并发：后端走本地 embedding 模型，并发会 OOM/变慢。
+   */
+  async batchReindex(docIds: string[]): Promise<{ ok: number; failed: { id: string; error: string }[] }> {
+    const failed: { id: string; error: string }[] = []
+    let ok = 0
+    for (const id of docIds) {
+      try {
+        const r = await this.reindexDocument(id)
+        if (r.ok) ok++
+        else failed.push({ id, error: r.error || '重索引失败' })
+      } catch (e) {
+        failed.push({ id, error: (e as Error).message })
+      }
+    }
+    return { ok, failed }
+  },
+
+  /**
+   * 批量上传（串行）— 逐个文件走 uploadDocument 两阶段 SSE，每文件独立进度回调。
+   * 不并发：embedding 模型串行复用，并发压垮本地推理。
+   */
+  async uploadDocuments(
+    files: File[],
+    onPerFileProgress?: (file: File, stage: string, message: string) => void,
+  ): Promise<{ ok: number; failed: { name: string; error: string }[] }> {
+    const failed: { name: string; error: string }[] = []
+    let ok = 0
+    for (const file of files) {
+      try {
+        const r = await this.uploadDocument(file, (stage, message) =>
+          onPerFileProgress?.(file, stage, message),
+        )
+        if (r.ok) ok++
+        else failed.push({ name: file.name, error: r.error || '上传失败' })
+      } catch (e) {
+        failed.push({ name: file.name, error: (e as Error).message })
+      }
+    }
+    return { ok, failed }
   },
 
   async getChunks(docId: string): Promise<{ doc_id: string; chunks: Array<{ id: string; content: string; metadata: Record<string, unknown>; token_count: number }>; total: number }> {

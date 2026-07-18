@@ -162,9 +162,6 @@ async def get_document(doc_id: str):
 async def reindex_document(doc_id: str, force: bool = False):
     """单文件重新索引 — 删除旧向量后重新加载/分块/Embedding/写入"""
     from backend.config import DOCS_DIRECTORY
-    from backend.rag.indexing.indexer import IncrementalIndexer
-    from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
-    from langchain_huggingface import HuggingFaceEmbeddings
 
     try:
         reg = _get_registry()
@@ -176,11 +173,11 @@ async def reindex_document(doc_id: str, force: bool = False):
         if not file_path or not os.path.isfile(file_path):
             return {"ok": False, "error": f"文件不存在: {file_path}"}
 
-        # 初始化向量库和索引器
-        embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
-        vectordb = ChromaKnowledgeStore(persist_directory=CHROMA_PATH, embedding_function=embeddings)
-        doc_db = ChromaKnowledgeStore(persist_directory=os.path.join(os.path.dirname(CHROMA_PATH), "doc_db"), embedding_function=embeddings)
-        indexer = IncrementalIndexer(DOCS_DIRECTORY, vectordb, doc_db, embeddings, reg)
+        # 复用 pipeline 单例的 store/embedding（不再每次 new 加载模型；doc_db 路径与 upload 一致）
+        pipeline = get_rag_pipeline()
+        indexer = IncrementalIndexer(
+            DOCS_DIRECTORY, pipeline.vectordb, pipeline.doc_db, pipeline.embedding, reg,
+        )
 
         # 执行重索引
         result = indexer.reindex_file(file_path)
@@ -218,8 +215,18 @@ async def upload_document(file: UploadFile = File(...)):
         f.write(content)
 
     # 创建 upload_id + 进度队列
+    import time
+    now = time.time()
+    # D: TTL 兜底——清理 >30min 未消费的 queue（防索引任务挂死导致泄漏）
+    expired = [uid for uid, q in _progress_queues.items()
+               if getattr(q, "_created_at", 0) < now - 1800]
+    for uid in expired:
+        _progress_queues.pop(uid, None)
+        logger.warning(f"[RAG] 清理过期 upload 队列: {uid}")
+
     upload_id = uuid.uuid4().hex[:12]
     queue: Queue = Queue()
+    queue._created_at = now  # type: ignore[attr-defined]
     _progress_queues[upload_id] = queue
 
     # 后台跑索引（不阻塞 HTTP 响应）
@@ -265,13 +272,20 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str):
         await emit("done", "索引完成（文档信息获取失败）")
     finally:
         await queue.put(None)  # sentinel → SSE 关闭
+        # 注意：不在此 pop queue — 索引快时 SSE 可能还没连上消费，立即 pop 会导致
+        # "upload_id 不存在或已过期"。清理交给 SSE stream 的 finally（消费者断开）+ upload 入口 TTL 兜底
 
 
 def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyncio.AbstractEventLoop):
-    """同步执行索引，通过 _progress_queues[upload_id] 推送阶段（从线程内调用）。"""
-    from backend.config import DOCS_DIRECTORY  # noqa: F401  （用于 _ProgressIndexingWrapper）
-    from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
-    from langchain_huggingface import HuggingFaceEmbeddings
+    """同步执行索引，通过 _progress_queues[upload_id] 推送阶段（从线程内调用）。
+
+    P1 改造：
+      - 不再调 indexer.sync()（全盘扫描，会把已软删但原文件还在的文档判为 ADDED 重新索引→删除复活）。
+        改用 reindex_file() 单文件索引。duplicate 检测保留（reindex_file 不做 hash 比对）。
+      - 复用 pipeline 已加载的 embedding/vectordb/doc_db，避免每次上传重新加载 bge 模型。
+      - doc_db 用 pipeline.doc_db（DOC_DB_PATH），修复原误用同一个 store 导致 doc 全文写进 chunk 库。
+    """
+    from backend.config import DOCS_DIRECTORY  # noqa: F401
     import hashlib
 
     queue = _progress_queues.get(upload_id)
@@ -285,35 +299,33 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
         asyncio.run_coroutine_threadsafe(queue.put(evt), main_loop)
 
     try:
-        # P1.5+ 优化：检测文件是否已索引（SHA256 一致）→ 跳过 emit 完整 4 个 stage
-        # 避免用户上传重复文档时进度条"一闪而过"（之前只看到 uploading + done）
         reg = _get_registry()
+
+        # duplicate 检测：文件已索引且 SHA256 未变 → 跳过索引，emit duplicate stage
+        # （reindex_file 不做 hash 比对，会直接重灌，所以这里必须先拦）
         existing = reg.get_by_path(filepath)
         if existing and existing.get("status") == "active":
             with open(filepath, "rb") as f:
                 file_hash = hashlib.sha256(f.read()).hexdigest()
             if existing.get("file_hash") == file_hash:
                 logger.info(f"[RAG] 文件未变化，跳过索引: {filename}")
-                # emit 特殊 stage 'duplicate'，前端会显示"已存在"提示
                 sync_emit("duplicate", "文件已存在，未重复索引",
                           doc={**existing, "duplicate": True})
                 return
 
-        embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
-        store = ChromaKnowledgeStore(persist_directory=CHROMA_PATH, embedding_function=embeddings)
-
-        # Phase 1.5: 用 _ProgressListener 订阅 TraceCollector 的 span end 事件
-        # 把 indexer 的 6 个标准 span 自动映射到前端 SSE 阶段
+        # 复用 pipeline 单例（embedding 已在启动时加载，避免每次上传重新加载模型→卡 uploading 阶段）
+        pipeline = get_rag_pipeline()
         listener = _ProgressListener(sync_emit)
         indexer = IncrementalIndexer(
             docs_dir=DOCS_DIRECTORY,
-            vectordb=store,
-            doc_db=store,
-            embedding=embeddings,
+            vectordb=pipeline.vectordb,   # CHROMA_PATH（chunk 级）
+            doc_db=pipeline.doc_db,        # DOC_DB_PATH（doc 级，修复原 doc_db=store 误用）
+            embedding=pipeline.embedding,
             registry=reg,
         )
         try:
-            result = indexer.sync()
+            # 单文件索引（不再 sync 全盘扫描 → 不会复活已删文档 + 上传变快）
+            result = indexer.reindex_file(filepath)
         finally:
             listener.unsub()
         logger.info(f"[RAG] 上传索引完成: {filename} → {result}")
@@ -411,25 +423,42 @@ async def stream_upload_progress(upload_id: str):
 
 @router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str):
-    """删除文档（软删除 + 清理向量）"""
+    """删除文档 — 软删 registry + 清理两处向量 + 删原文件（防 sync 复活）"""
     try:
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
         if not doc:
             return {"ok": False, "error": "文档不存在"}
-        reg.mark_deleted(doc["file_path"])
-        # 清理 Chroma 中的向量
+
+        file_path = doc.get("file_path", "")
+
+        # ① 软删 registry（列表过滤靠 status='deleted'）
+        reg.mark_deleted(file_path)
+
+        # ② 清理两处向量（原代码只删了 CHROMA_PATH，漏了 doc_db）
+        pipeline = get_rag_pipeline()
         try:
-            from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
-            from langchain_huggingface import HuggingFaceEmbeddings
-            embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
-            store = ChromaKnowledgeStore(persist_directory=CHROMA_PATH, embedding_function=embeddings)
-            store.delete(where={"doc_id": doc_id})
-        except Exception:
-            pass
+            pipeline.vectordb.delete(where={"doc_id": doc_id})
+        except Exception as e:
+            logger.warning(f"[RAG] 删除 chunk 向量失败 (doc_id={doc_id}): {e}")
+        try:
+            pipeline.doc_db.delete(where={"doc_id": doc_id})
+        except Exception as e:
+            logger.warning(f"[RAG] 删除 doc 向量失败 (doc_id={doc_id}): {e}")
+
+        # ③ 删原文件（关键：不删的话任何触发 sync 的操作会把它当 ADDED 重新索引→复活）
+        if file_path:
+            try:
+                os.remove(file_path)
+            except FileNotFoundError:
+                pass  # 文件已不在，正常
+            except OSError as e:
+                logger.warning(f"[RAG] 删除原文件失败 ({file_path}): {e}")
+
         logger.info(f"[RAG] 已删除文档: {doc_id}")
         return {"ok": True, "doc_id": doc_id}
     except Exception as e:
+        logger.error(f"[RAG] 删除文档失败: {e}")
         return {"ok": False, "error": str(e)}
 
 
@@ -445,13 +474,10 @@ async def get_chunks(doc_id: str):
         import json as _json
         chunk_ids = _json.loads(chunk_ids_str) if isinstance(chunk_ids_str, str) else chunk_ids_str
 
-        # 从 ChromaDB 查询 chunk 实际内容（使用公开 API）
+        # 从 ChromaDB 查询 chunk 实际内容（复用 pipeline store，不再 new embeddings）
         chunks = []
         try:
-            from langchain_huggingface import HuggingFaceEmbeddings
-            from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
-            embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
-            store = ChromaKnowledgeStore(persist_directory=CHROMA_PATH, embedding_function=embeddings)
+            store = get_rag_pipeline().vectordb
             # 用公开 API get(where=...) 按 doc_id 获取所有 chunks
             results = store.get(where={"doc_id": doc_id})
             if results and results.get("ids"):

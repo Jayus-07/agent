@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { FileText, Search, Trash2, RefreshCw, Grid3X3, Loader2, ChevronLeft, ChevronRight } from 'lucide-react'
+import { FileText, Search, Trash2, RefreshCw, Grid3X3, Loader2, ChevronLeft, ChevronRight, CheckSquare, Square, X } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useDocuments } from '@/hooks/useKnowledge'
 import { knowledgeService } from '@/services/knowledge'
@@ -30,6 +30,11 @@ export default function DocumentsPage() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [reindexing, setReindexing] = useState<Set<string>>(new Set())
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
+  // 批量操作
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [batchReindexing, setBatchReindexing] = useState(false)
+  const [batchDeleting, setBatchDeleting] = useState(false)
+  const [batchDeleteTarget, setBatchDeleteTarget] = useState<number | null>(null)
   // 受控搜索：本地 input 状态（立即响应）+ 防抖同步到 store（API 调用）
   const [inputValue, setInputValue] = useState(keyword)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>()
@@ -52,6 +57,11 @@ export default function DocumentsPage() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [])
 
+  // 翻页/搜索/过滤变化时清空选择（选中集只对当前页有意义）
+  useEffect(() => {
+    clearSelection()
+  }, [page, keyword, status, type])
+
   const handleDelete = async () => {
     if (!deleteTarget) return
     const { id } = deleteTarget
@@ -71,6 +81,57 @@ export default function DocumentsPage() {
         next.delete(id)
         return next
       })
+    }
+  }
+
+  // ── 批量操作 ──
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    setSelectedIds(prev => {
+      const pageIds = documents.map(d => d.id)
+      const allSelected = pageIds.length > 0 && pageIds.every(id => prev.has(id))
+      const next = new Set(prev)
+      if (allSelected) {
+        pageIds.forEach(id => next.delete(id))
+      } else {
+        pageIds.forEach(id => next.add(id))
+      }
+      return next
+    })
+  }
+
+  const clearSelection = () => setSelectedIds(new Set())
+
+  const handleBatchDelete = async () => {
+    const ids = Array.from(selectedIds)
+    setBatchDeleteTarget(null)
+    setBatchDeleting(true)
+    try {
+      await knowledgeService.batchDelete(ids)
+      clearSelection()
+      refresh()
+    } finally {
+      setBatchDeleting(false)
+    }
+  }
+
+  const handleBatchReindex = async () => {
+    const ids = Array.from(selectedIds)
+    setBatchReindexing(true)
+    try {
+      await knowledgeService.batchReindex(ids)
+      clearSelection()
+      refresh()
+    } finally {
+      setBatchReindexing(false)
     }
   }
 
@@ -133,18 +194,50 @@ export default function DocumentsPage() {
           <button onClick={() => setUploadOpen(true)} className="px-4 py-2 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors">+ 上传文档</button>
         </div>
 
+        {/* 批量操作条（选中 >0 时显示） */}
+        {selectedIds.size > 0 && (
+          <div className="flex items-center gap-3 mb-3 px-3 py-2 bg-accent/5 border border-accent/20 rounded-lg text-xs">
+            <span className="text-text-primary font-medium">已选 {selectedIds.size} 项</span>
+            <button onClick={() => setBatchDeleteTarget(selectedIds.size)} disabled={batchDeleting || batchReindexing}
+              className="flex items-center gap-1 px-3 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-40 transition-colors">
+              {batchDeleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+              批量删除
+            </button>
+            <button onClick={handleBatchReindex} disabled={batchDeleting || batchReindexing}
+              className="flex items-center gap-1 px-3 py-1 rounded border border-border-subtle text-text-secondary hover:bg-surface-hover disabled:opacity-40 transition-colors">
+              {batchReindexing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              批量重索引
+            </button>
+            <button onClick={clearSelection} className="ml-auto text-text-muted hover:text-text-primary flex items-center gap-1">
+              <X size={12} /> 取消选择
+            </button>
+          </div>
+        )}
+
         {/* Table */}
         {loading && <div className="bg-surface-base rounded-xl border border-border-subtle p-3 text-center text-xs text-text-muted animate-pulse mb-2">加载中...</div>}
         {error && <div className="bg-surface-base rounded-xl border border-red-200 p-3 text-center text-xs text-red-500 mb-2">{error}</div>}
         <div className="bg-surface-base rounded-xl border border-border-subtle overflow-hidden">
           <table className="w-full text-xs">
             <thead><tr className="border-b border-border-subtle bg-surface-elevated text-text-muted">
+              <th className="text-left px-4 py-2.5 w-8">
+                {documents.length > 0 && (
+                  <button onClick={toggleSelectAll} className="text-text-muted hover:text-accent">
+                    {documents.every(d => selectedIds.has(d.id)) ? <CheckSquare size={14} /> : <Square size={14} />}
+                  </button>
+                )}
+              </th>
               {['文件名', '类型', '大小', 'Chunks', '状态', '索引时间', '操作'].map(h => <th key={h} className="text-left px-4 py-2.5 font-medium">{h}</th>)}
             </tr></thead>
             <tbody>
               {documents.map(d => (
                 <tr key={d.id} className="border-b border-border-subtle hover:bg-surface-hover transition-colors cursor-pointer"
                   onClick={() => router.push(`/knowledge/documents/${d.id}`)}>
+                  <td className="px-4 py-2.5">
+                    <button onClick={(e) => handleStopPropagation(e, () => toggleSelect(d.id))} className="text-text-muted hover:text-accent">
+                      {selectedIds.has(d.id) ? <CheckSquare size={14} className="text-accent" /> : <Square size={14} />}
+                    </button>
+                  </td>
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-2">
                       <FileText size={14} className="text-text-muted" />
@@ -168,7 +261,7 @@ export default function DocumentsPage() {
                 </tr>
               ))}
               {!loading && documents.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-text-muted">暂无文档</td></tr>
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-text-muted">暂无文档</td></tr>
               )}
             </tbody>
           </table>
@@ -201,6 +294,23 @@ export default function DocumentsPage() {
           <div className="flex justify-end gap-2">
             <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors">取消</button>
             <button onClick={handleDelete} className="px-4 py-2 text-xs rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors">删除</button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* 批量删除确认 */}
+    {batchDeleteTarget !== null && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" onClick={() => setBatchDeleteTarget(null)}>
+        <div className="bg-surface-base rounded-2xl border border-border-subtle shadow-xl w-[400px] p-6" onClick={e => e.stopPropagation()}>
+          <h3 className="text-sm font-semibold text-text-primary mb-2">批量删除确认</h3>
+          <p className="text-xs text-text-muted mb-4">
+            确定要删除选中的 <span className="text-text-primary font-medium">{batchDeleteTarget}</span> 个文档吗？
+            <br />该操作不可恢复，将同时删除原文件与向量数据。
+          </p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setBatchDeleteTarget(null)} className="px-4 py-2 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors">取消</button>
+            <button onClick={handleBatchDelete} className="px-4 py-2 text-xs rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors">删除 {batchDeleteTarget} 项</button>
           </div>
         </div>
       </div>
