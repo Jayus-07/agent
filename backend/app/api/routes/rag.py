@@ -210,7 +210,9 @@ async def upload_document(file: UploadFile = File(...)):
     # 保存文件
     docs_dir = DOCS_DIRECTORY
     os.makedirs(docs_dir, exist_ok=True)
-    filepath = os.path.join(docs_dir, file.filename)
+    # P1.5+ 修复：normalize path，避免 os.path.join 混合分隔符导致 registry 查询不匹配
+    # db 里存的 path 是纯 '\\'，query 必须用同样的格式
+    filepath = os.path.normpath(os.path.join(docs_dir, file.filename))
     content = await file.read()
     with open(filepath, "wb") as f:
         f.write(content)
@@ -270,6 +272,7 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
     from backend.config import DOCS_DIRECTORY  # noqa: F401  （用于 _ProgressIndexingWrapper）
     from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
     from langchain_huggingface import HuggingFaceEmbeddings
+    import hashlib
 
     queue = _progress_queues.get(upload_id)
     if queue is None:
@@ -282,9 +285,22 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
         asyncio.run_coroutine_threadsafe(queue.put(evt), main_loop)
 
     try:
+        # P1.5+ 优化：检测文件是否已索引（SHA256 一致）→ 跳过 emit 完整 4 个 stage
+        # 避免用户上传重复文档时进度条"一闪而过"（之前只看到 uploading + done）
+        reg = _get_registry()
+        existing = reg.get_by_path(filepath)
+        if existing and existing.get("status") == "active":
+            with open(filepath, "rb") as f:
+                file_hash = hashlib.sha256(f.read()).hexdigest()
+            if existing.get("file_hash") == file_hash:
+                logger.info(f"[RAG] 文件未变化，跳过索引: {filename}")
+                # emit 特殊 stage 'duplicate'，前端会显示"已存在"提示
+                sync_emit("duplicate", "文件已存在，未重复索引",
+                          doc={**existing, "duplicate": True})
+                return
+
         embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
         store = ChromaKnowledgeStore(persist_directory=CHROMA_PATH, embedding_function=embeddings)
-        reg = _get_registry()
 
         # Phase 1.5: 用 _ProgressListener 订阅 TraceCollector 的 span end 事件
         # 把 indexer 的 6 个标准 span 自动映射到前端 SSE 阶段

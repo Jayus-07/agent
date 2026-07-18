@@ -106,6 +106,10 @@ export const knowledgeService = {
         if (stage === 'done') {
           cleanup()
           resolve({ ok: true, doc: payload.doc })
+        } else if (stage === 'duplicate') {
+          // P1.5+：文档未变化（SHA256 一致）→ 跳过索引，但前端仍展示已索引的 doc 信息
+          cleanup()
+          resolve({ ok: true, doc: payload.doc, duplicate: true })
         } else if (stage === 'error') {
           cleanup()
           resolve({ ok: false, error: payload.message || '索引失败' })

@@ -49,8 +49,16 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
         setStageMessage(message)
       })
       if (res.ok) {
-        // 后端发 'done' 时 setCurrentStage('done') 已调用
-        setTimeout(() => { onSuccess(); handleClose() }, 800)
+        if ((res as any).duplicate) {
+          // P1.5+：文档 SHA256 未变 → 跳过完整索引，但已有 doc 信息
+          // 直接关闭弹窗（不显示完整 6 阶段，因为根本没跑）
+          setCurrentStage('done')
+          setStageMessage('文档已存在，未重复索引')
+          setTimeout(() => { onSuccess(); handleClose() }, 1200)
+        } else {
+          // 后端发 'done' 时 setCurrentStage('done') 已调用
+          setTimeout(() => { onSuccess(); handleClose() }, 800)
+        }
       } else {
         setError(res.error || '上传失败')
         setCurrentStage(null)
