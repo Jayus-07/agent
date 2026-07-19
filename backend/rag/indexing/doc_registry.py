@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS doc_registry (
     doc_type     TEXT DEFAULT 'general',
     confidence   REAL DEFAULT 0,
     llm_used     INTEGER DEFAULT 0,
+    quality_score REAL DEFAULT 0,
+    quality_issues TEXT DEFAULT '',
+    embedding_model TEXT DEFAULT '',
     status       TEXT DEFAULT 'active',
     last_indexed TEXT,
     created_at   TEXT DEFAULT (datetime('now')),
@@ -66,7 +69,10 @@ class DocumentRegistry:
             # 兼容旧表：追加 metadata 列
             for col, col_def in [("doc_type", "TEXT DEFAULT 'general'"),
                                   ("confidence", "REAL DEFAULT 0"),
-                                  ("llm_used", "INTEGER DEFAULT 0")]:
+                                  ("llm_used", "INTEGER DEFAULT 0"),
+                                  ("quality_score", "REAL DEFAULT 0"),
+                                  ("quality_issues", "TEXT DEFAULT ''"),
+                                  ("embedding_model", "TEXT DEFAULT ''")]:
                 try:
                     conn.execute(f"SELECT {col} FROM doc_registry LIMIT 1")
                 except sqlite3.OperationalError:
@@ -124,28 +130,54 @@ class DocumentRegistry:
         keyword: str = "",
         type_filter: str = "",
         status_filter: str = "",
+        doc_type: str = "",
+        confidence_min: float = 0,
+        llm_used: bool | None = None,
+        quality_min: float = 0,
+        sort_by: str = "updated_at",
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
-        """关键字搜索 + 分页 + 类型/状态过滤。
+        """关键字搜索 + 元数据过滤 + 分页。
 
-        返回 {"items": [...], "total": int, "page": int, "page_size": int}
+        Returns {"items": [...], "total": int, "page": int, "page_size": int}
         """
         conditions: list[str] = []
         params: list = []
 
         if keyword.strip():
-            conditions.append("file_name LIKE ?")
-            params.append(f"%{keyword.strip()}%")
+            conditions.append("(file_name LIKE ? OR doc_type LIKE ?)")
+            kw = f"%{keyword.strip()}%"
+            params.extend([kw, kw])
 
         if type_filter.strip():
-            # 从 file_name 扩展名推断类型
             conditions.append("file_name LIKE ?")
             params.append(f"%.{type_filter.strip()}")
 
         if status_filter.strip():
             conditions.append("status = ?")
             params.append(status_filter.strip())
+
+        if doc_type.strip():
+            types = [t.strip() for t in doc_type.split(",") if t.strip()]
+            if types:
+                placeholders = ",".join(["?"] * len(types))
+                conditions.append(f"doc_type IN ({placeholders})")
+                params.extend(types)
+
+        if confidence_min > 0:
+            conditions.append("confidence >= ?")
+            params.append(confidence_min)
+
+        if llm_used is not None:
+            conditions.append("llm_used = ?")
+            params.append(1 if llm_used else 0)
+
+        if quality_min > 0:
+            conditions.append("quality_score >= ?")
+            params.append(quality_min)
+
+        sort_col = "updated_at" if sort_by not in ("confidence", "quality_score", "created_at", "updated_at") else sort_by
 
         where_clause = ""
         if conditions:
@@ -161,7 +193,7 @@ class DocumentRegistry:
             # 分页
             offset = max(0, (page - 1)) * page_size
             rows = conn.execute(
-                f"SELECT * FROM doc_registry {where_clause} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                f"SELECT * FROM doc_registry {where_clause} ORDER BY {sort_col} DESC LIMIT ? OFFSET ?",
                 params + [page_size, offset],
             ).fetchall()
 
@@ -211,19 +243,24 @@ class DocumentRegistry:
         doc_type = meta.get("doc_type", "general")
         confidence = meta.get("confidence", 0)
         llm_used = 1 if meta.get("llm_used") else 0
+        quality_score = meta.get("quality_score", 0)
+        quality_issues = meta.get("quality_issues", "")
+        embedding_model = meta.get("embedding_model", "")
 
         with self._lock, self._conn() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO doc_registry
                    (file_path, file_name, kb_id, doc_id, file_hash, file_size, file_mtime,
                     chunk_count, chunk_ids, doc_db_id, doc_type, confidence, llm_used,
+                    quality_score, quality_issues, embedding_model,
                     status, last_indexed, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))""",
                 (
                     file_path, file_name, kb_id, doc_id, file_hash,
                     fsize, fmtime,
                     len(chunk_ids), json.dumps(chunk_ids), doc_db_id,
                     doc_type, confidence, llm_used,
+                    quality_score, quality_issues, embedding_model,
                 ),
             )
 

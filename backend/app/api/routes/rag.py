@@ -96,16 +96,22 @@ async def list_documents(
     keyword: str = "",
     type: str = "",
     status: str = "",
+    doc_type: str = "",
+    confidence_min: float = 0,
+    llm_used: bool | None = None,
+    quality_min: float = 0,
+    sort_by: str = "updated_at",
     page: int = 1,
     page_size: int = 20,
 ):
-    """文档列表 — 支持搜索、分页、类型/状态过滤"""
+    """文档列表 — 支持搜索、分页、元数据过滤"""
     try:
         reg = _get_registry()
 
-        # 统一走 search() 保证分页一致（无过滤条件时等效于全量分页）
         result = reg.search(
             keyword=keyword, type_filter=type, status_filter=status or "active",
+            doc_type=doc_type, confidence_min=confidence_min,
+            llm_used=llm_used, quality_min=quality_min, sort_by=sort_by,
             page=page, page_size=page_size,
         )
         docs = result["items"]

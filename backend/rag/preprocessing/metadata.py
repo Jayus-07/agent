@@ -40,6 +40,33 @@ def classify_doc_type(text: str, filename: str = "", file_path: str = "") -> str
     return result
 
 
+def assess_quality(text: str) -> dict:
+    """质量门禁：检查文档基本质量。
+
+    Returns: {"score": float 0-1, "passed": bool, "issues": [str]}
+    """
+    issues: list[str] = []
+    score = 1.0
+
+    # 文档过短
+    if len(text.strip()) < 50:
+        issues.append("文档过短(<50字符)")
+        score = 0.0
+    else:
+        # 噪音比：非中英文文字占比
+        alpha_chars = sum(1 for c in text if c.isalpha() or '一' <= c <= '鿿')
+        noise_ratio = 1 - alpha_chars / max(len(text), 1)
+        if noise_ratio > 0.7:
+            issues.append(f"噪音过高({noise_ratio:.0%})")
+            score = max(score - 0.5, 0.1)
+        elif noise_ratio > 0.5:
+            issues.append(f"噪音偏高({noise_ratio:.0%})")
+            score = max(score - 0.3, 0.3)
+
+    passed = score >= 0.3
+    return {"score": round(score, 2), "passed": passed, "issues": issues}
+
+
 def classify_with_confidence(text: str, filename: str = "", file_path: str = "") -> tuple[str, float]:
     """V2 加权计分分类 + 路径上下文 + confidence 计算。
 
@@ -272,6 +299,72 @@ def detect_business_domain(text: str, min_score: int = 2) -> str:
 # =====================================================
 # 文档摘要（改进：智能截断、保留语义）
 # =====================================================
+
+def enrich_metadata_llm(text: str, doc_type: str) -> dict:
+    """合并关键词+摘要+实体为一次 LLM 调用（省 2 次 API 往返）。
+
+    Returns: {"keywords": [...], "summary": "...", "entities": [...], "tokens": {...}}
+    失败返回空 dict，调用方降级到独立调用。
+    """
+    from backend.config.rag import DOC_LLM_MODEL
+    from backend.config import LLM_MODEL
+    import json as _json
+
+    safe_text = text[:4000]
+    prompt = f"""你是电商 RAG 元数据提取器。分析以下文档，输出 JSON：
+
+{{"summary": "1-2句中文摘要（≤150字），保留关键术语和数字",
+ "keywords": ["核心术语1", "核心术语2", ...]（≤10个，优先提取商品/条款/品牌/指标名）,
+ "entities": [{{"name":"GDPR","type":"regulation"}}, ...]（≤5个，type取regulation/person/platform/brand）}}
+
+文档：
+{safe_text}
+
+JSON:"""
+
+    try:
+        if DOC_LLM_MODEL:
+            from langchain_ollama import ChatOllama
+            llm = ChatOllama(model=DOC_LLM_MODEL, temperature=0.0, num_ctx=4096, request_timeout=60)
+            result = llm.invoke(prompt)
+            model_used = DOC_LLM_MODEL
+            tokens = {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0, "model": model_used}
+        else:
+            from backend.infra.llm import llm
+            from backend.infra.llm.proxy import _last_call_meta
+            for k in list(_last_call_meta.keys()):
+                _last_call_meta.pop(k, None)
+            result = llm.invoke(prompt)
+            model_used = LLM_MODEL
+            tokens = {
+                "prompt_tokens": _last_call_meta.get("prompt_tokens", 0),
+                "completion_tokens": _last_call_meta.get("completion_tokens", 0),
+                "cost_usd": _last_call_meta.get("cost_usd", 0),
+                "model": model_used,
+            }
+
+        content = result.content.strip() if hasattr(result, "content") else str(result).strip()
+        match = re.search(r'\{.*\}', content, re.DOTALL)
+        if match:
+            data = _json.loads(match.group())
+            keywords = data.get("keywords", [])
+            if isinstance(keywords, list):
+                keywords = [str(k).strip() for k in keywords if str(k).strip() and len(str(k).strip()) > 1][:10]
+            summary = _smart_truncate(str(data.get("summary", "")), 150)
+            entities = data.get("entities", [])
+            if not isinstance(entities, list):
+                entities = []
+            logger.info(f"[Enrich LLM] {model_used} → {len(keywords)}kw + {len(summary)}字摘要 + {len(entities)}实体")
+            return {"keywords": keywords, "summary": summary, "entities": entities, "tokens": tokens}
+        else:
+            # JSON 解析失败，尝试拆分行
+            lines = [l.strip() for l in content.split("\n") if l.strip() and len(l.strip()) > 1]
+            kws = [l for l in lines if not l.startswith("{")][:10]
+            return {"keywords": kws, "summary": content[:150], "entities": [], "tokens": tokens}
+    except Exception as e:
+        logger.warning(f"[Enrich LLM] 失败: {e}")
+        return {}
+
 
 def _smart_truncate(text: str, max_length: int) -> str:
     """智能截断文本，尽量在句号、换行处截断，避免切断单词或乱码。"""

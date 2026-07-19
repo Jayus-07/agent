@@ -670,6 +670,9 @@ class IncrementalIndexer:
                 "doc_type": doc_meta.get("doc_type", "general"),
                 "confidence": doc_meta.get("confidence", 0),
                 "llm_used": doc_meta.get("llm_used", False),
+                "quality_score": doc_meta.get("quality_score", 0),
+                "quality_issues": doc_meta.get("quality_issues", ""),
+                "embedding_model": doc_meta.get("embedding_model", ""),
             },
         )
 
@@ -714,13 +717,20 @@ class IncrementalIndexer:
                 extract_time_refs, detect_business_domain,
             )
             from backend.rag.preprocessing.keyword import extract_doc_keywords_typed
-            from backend.rag.preprocessing.entity import extract_person_names
+            from backend.rag.preprocessing.entity import extract_entities, extract_person_names
         except ImportError:
             return {}
 
         try:
             fname = base_meta.get("source_file", "")
             fpath = base_meta.get("file_path", "")
+
+            # 质量门禁（P1）
+            from backend.rag.preprocessing.metadata import assess_quality
+            quality = assess_quality(full_text)
+            if not quality["passed"]:
+                logger.warning(f"[Quality] 文档未通过质量门禁: {quality['issues']}")
+
             doc_type, confidence = classify_with_confidence(full_text, filename=fname, file_path=fpath)
             time_refs = extract_time_refs(full_text)
             domain = detect_business_domain(full_text)
@@ -731,6 +741,7 @@ class IncrementalIndexer:
             kw_result = extract_doc_keywords_typed(full_text, doc_type=doc_type,
                                                     confidence=confidence, complexity=complexity)
             person_names = extract_person_names(full_text)
+            entities_nested = extract_entities(full_text)  # P1: 结构化实体
         except Exception:
             return {"doc_type": "general"}
 
@@ -771,14 +782,53 @@ product_spec(商品规格), sop(操作流程), listing(商品上架), general(�
         # LLM 决策信息
         llm_decision = kw_result.llm_decision if hasattr(kw_result, 'llm_decision') else {}
 
-        # ⑧ 文档摘要（LLM）—— 所有文档都生成
+        # ⑧ 文档摘要 + 关键词合并 （P1: 1 次调用替代 2 次）
         summary = ""
-        try:
-            from backend.rag.preprocessing.metadata import build_llm_summary
-            summary, _ = _run_async(build_llm_summary(full_text[:3000]))
-            summary = summary or ""
-        except Exception as e:
-            logger.warning(f"[Summary] 生成失败: {e}")
+        need_llm_keywords = bool(kws_llm_objs)  # 已决是否调 LLM 关键词
+        need_llm_summary = len(full_text) >= 2000  # <2KB 提取式，不调 LLM
+
+        if need_llm_keywords and need_llm_summary:
+            # 合并调用：一次 LLM 出 keywords + summary + entities
+            from backend.rag.preprocessing.metadata import enrich_metadata_llm
+            enriched = _run_async(enrich_metadata_llm(full_text[:4000], doc_type))
+            if enriched:
+                # 用合并结果替换单独调用的关键词和摘要
+                merged_kws = enriched.get("keywords", [])
+                merged_summary = enriched.get("summary", "")
+                merged_entities = enriched.get("entities", [])
+                merged_tokens = enriched.get("tokens", {})
+                if merged_kws:
+                    kws_llm_objs = [{"word": w, "source": "llm"} for w in merged_kws]
+                    kws_all_words = [k["word"] for k in kws_rule_objs + kws_llm_objs]
+                    kw_result.llm_tokens = merged_tokens
+                if merged_summary:
+                    summary = merged_summary
+                if merged_entities and not person_names:
+                    person_names = [e.get("name", "") for e in merged_entities if e.get("name")]
+                logger.info(f"[Enrich Merged] 合并调用成功: {len(merged_kws)}kw + summary")
+            else:
+                # 合并失败，降级到独立调用
+                logger.warning("[Enrich Merged] 合并失败，降级")
+                need_llm_keywords = False  # 关键词已有（虽然是旧的），只补摘要
+                try:
+                    from backend.rag.preprocessing.metadata import build_llm_summary
+                    summary, _ = _run_async(build_llm_summary(full_text[:3000]))
+                    summary = summary or ""
+                except Exception:
+                    pass
+
+        if not summary and need_llm_summary:
+            # 仅需摘要（关键词已由规则/独立LLM处理）
+            try:
+                from backend.rag.preprocessing.metadata import build_llm_summary
+                summary, _ = _run_async(build_llm_summary(full_text[:3000]))
+                summary = summary or ""
+            except Exception as e:
+                logger.warning(f"[Summary] 生成失败: {e}")
+        elif not summary and not need_llm_summary:
+            # <2KB 提取式摘要
+            sentences = full_text[:2000].split("。")
+            summary = "。".join(s[:150] for s in sentences[:2] if s.strip()) + ("。" if len(sentences) > 1 else "")
 
         # ⑨ 章节提取（纯正则，零成本，所有文档都做）
         sections = []
@@ -803,8 +853,13 @@ product_spec(商品规格), sop(操作流程), listing(商品上架), general(�
             "llm_decision": llm_decision,
             "person_names": ", ".join(person_names) if isinstance(person_names, list)
                            else str(person_names),
+            "entities": entities_nested,   # P1: 结构化实体 {person, org, regulation, ...}
             "summary": summary,
             "sections": list(sections),
+            "quality_score": quality.get("score", 0),
+            "quality_issues": ", ".join(quality.get("issues", [])),
+            "embedding_model": os.path.basename(getattr(self.embedding, "model_name", "") or
+                                                 str(getattr(self.embedding, "model", ""))) or "",
         }
 
     # ---- 公开重索引 ----
