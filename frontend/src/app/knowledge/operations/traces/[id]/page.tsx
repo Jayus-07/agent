@@ -50,7 +50,7 @@ const DOC_TYPE_CN: Record<string, string> = {
 interface ChunkDetail {
   chunk_index: number;
   content: string;
-  token_count: number;
+  char_count: number;
   keywords: string;
 }
 
@@ -581,7 +581,7 @@ export default function DocTracePage() {
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="text-[10px] font-medium text-slate-400">Chunk #{ch.chunk_index}</span>
                       <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                        <span>{ch.token_count} tokens</span>
+                        <span>{ch.char_count.toLocaleString()} 字</span>
                         {ch.keywords && (
                           <span className="text-violet-400 truncate max-w-[200px]">🏷 {ch.keywords}</span>
                         )}

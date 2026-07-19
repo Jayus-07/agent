@@ -608,7 +608,7 @@ async def get_chunk_detail(doc_id: str):
                 {
                     "chunk_index": r["chunk_index"],
                     "content": r["content"],
-                    "token_count": r["token_count"],
+                    "char_count": r["token_count"],
                     "keywords": r["keywords"],
                 }
                 for r in rows

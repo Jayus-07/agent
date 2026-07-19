@@ -57,7 +57,7 @@ class ChunkStore:
             conn = self._conn()
             rows = [
                 (doc_id, c.get("chunk_index", i), c.get("content", ""),
-                 len((c.get("content", "") or "").encode()),
+                 len(c.get("content", "") or ""),
                  c.get("keywords", ""))
                 for i, c in enumerate(chunks)
             ]

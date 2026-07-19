@@ -248,7 +248,7 @@ export const knowledgeService = {
   },
 
   /** 获取文档完整 Chunk 文本（从 SQLite chunk_store，供 Trace 详情页查看） */
-  async getChunkDetail(docId: string): Promise<{ doc_id: string; chunks: Array<{ chunk_index: number; content: string; token_count: number; keywords: string }>; total: number }> {
+  async getChunkDetail(docId: string): Promise<{ doc_id: string; chunks: Array<{ chunk_index: number; content: string; char_count: number; keywords: string }>; total: number }> {
     const res = await fetch(`${BASE}/chunks/${docId}/detail`)
     return res.json()
   },
