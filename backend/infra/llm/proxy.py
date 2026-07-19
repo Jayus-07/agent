@@ -118,8 +118,9 @@ def _record_tokens(result):
             tu = result.response_metadata.get("token_usage", {})
         if not tu and hasattr(result, "usage_metadata") and result.usage_metadata:
             tu = result.usage_metadata
-        p = tu.get("prompt_tokens", 0)
-        c = tu.get("completion_tokens", 0)
+        # ChatAnthropic 用 input_tokens/output_tokens，ChatOpenAI 用 prompt_tokens/completion_tokens
+        p = tu.get("prompt_tokens", tu.get("input_tokens", 0))
+        c = tu.get("completion_tokens", tu.get("output_tokens", 0))
         t = tu.get("total_tokens", p + c)
         if not t:
             _last_tokens = {}
@@ -127,7 +128,6 @@ def _record_tokens(result):
             return
         _last_tokens = {"prompt_tokens": p, "completion_tokens": c, "total_tokens": t}
 
-        # Phase 4: 提取 finish_reason + cost_usd
         finish_reason = "unknown"
         if hasattr(result, "response_metadata") and result.response_metadata:
             finish_reason = result.response_metadata.get(
