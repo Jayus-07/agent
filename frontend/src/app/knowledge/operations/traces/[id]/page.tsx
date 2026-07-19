@@ -307,30 +307,6 @@ export default function DocTracePage() {
                         ))}
                       </div>
                     )}
-                    {total > 3 && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); toggleTypeExpand(type); }}
-                        className="ml-9 text-xs text-accent hover:text-accent-hover"
-                      >
-                        {expanded ? "收起" : `查看全部 ${total} 个 Chunks 预览`} →
-                      </button>
-                    )}
-                    {expanded && (
-                      <div className="ml-9 mt-2 space-y-1 max-h-60 overflow-y-auto">
-                        {spans.map((s, i) => {
-                          const so = (s.output || {}) as Record<string, unknown>;
-                          const pa = (so["preview"] as string[]) || [];
-                          const chunkText = pa[0] || "";
-                          return (
-                            <div key={s.id || i} className="flex items-start gap-2 text-xs text-slate-500 bg-slate-50 rounded px-2 py-1">
-                              <span className="text-slate-300 shrink-0 mt-0.5">#{i + 1}</span>
-                              <span className="truncate">{chunkText || (s.metrics ? `attempt: ${s.metrics.attempt}` : "")}</span>
-                              <span className="font-mono text-slate-400 shrink-0">{s.duration_ms}ms</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
                   </div>
                 );
               }
