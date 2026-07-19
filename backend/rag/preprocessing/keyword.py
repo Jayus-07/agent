@@ -369,6 +369,16 @@ def extract_doc_keywords_typed(text: str, doc_type: str = "general",
         result.llm_tokens = tokens
         result.llm_decision = {"llm_used": True, "llm_score": llm_score,
                                "llm_reason": "; ".join(reasons)}
+    elif len(rule_words) < 3:
+        # 兜底：规则关键词太少（<3个），强制调 LLM 确保有基本关键词
+        logger.info(f"[Keyword Fallback] 规则仅{len(rule_words)}个关键词，强制LLM")
+        llm_kws, tokens = extract_doc_keywords_llm(text, top_k=top_k)
+        result.llm_keywords = llm_kws
+        result.llm_tokens = tokens
+        result.llm_strategy = "llm_fallback"
+        reasons.append(f"fallback:rule_sparse({len(rule_words)})")
+        result.llm_decision = {"llm_used": True, "llm_score": llm_score,
+                               "llm_reason": "; ".join(reasons)}
     else:
         result.llm_decision = {"llm_used": False, "llm_score": llm_score,
                                "llm_reason": f"score={llm_score}<{LLM_SCORE_THRESHOLD}"}

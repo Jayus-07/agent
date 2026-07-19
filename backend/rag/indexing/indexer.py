@@ -742,17 +742,16 @@ class IncrementalIndexer:
         # LLM 决策信息
         llm_decision = kw_result.llm_decision if hasattr(kw_result, 'llm_decision') else {}
 
-        # ⑧ 文档摘要（LLM）—— 对 high-value 文档生成
+        # ⑧ 文档摘要（LLM）—— 所有文档都生成
         summary = ""
-        if doc_type in _CHUNK_LLM_TYPES:
-            try:
-                from backend.rag.preprocessing.metadata import build_llm_summary
-                summary, _ = _run_async(build_llm_summary(full_text[:3000]))
-                summary = summary or ""
-            except Exception as e:
-                logger.warning(f"[Summary] 生成失败: {e}")
+        try:
+            from backend.rag.preprocessing.metadata import build_llm_summary
+            summary, _ = _run_async(build_llm_summary(full_text[:3000]))
+            summary = summary or ""
+        except Exception as e:
+            logger.warning(f"[Summary] 生成失败: {e}")
 
-        # ⑨ 章节提取（纯正则，零成本）
+        # ⑨ 章节提取（纯正则，零成本，所有文档都做）
         sections = []
         try:
             from backend.rag.preprocessing.metadata import extract_sections
