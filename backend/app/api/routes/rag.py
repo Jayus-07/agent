@@ -537,7 +537,14 @@ async def delete_document(doc_id: str, request: Request):
         except Exception as e:
             logger.warning(f"[RAG] 删除 doc 向量失败 (doc_id={doc_id}): {e}")
 
-        # ③ 删原文件（关键：不删的话任何触发 sync 的操作会把它当 ADDED 重新索引→复活）
+        # ③ 清理 chunk_store（文档删了但 chunk 文本还在 SQLite 里 → 孤儿数据）
+        try:
+            from backend.rag.indexing.chunk_store import get_chunk_store
+            get_chunk_store().delete_by_doc_id(doc_id)
+        except Exception as e:
+            logger.warning(f"[RAG] 清理 chunk_store 失败 (doc_id={doc_id}): {e}")
+
+        # ④ 删原文件（关键：不删的话任何触发 sync 的操作会把它当 ADDED 重新索引→复活）
         if file_path:
             try:
                 os.remove(file_path)

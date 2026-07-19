@@ -770,7 +770,7 @@ class IncrementalIndexer:
     # ---- 删除 ----
 
     def _remove_document(self, doc_id: str):
-        """从两个向量库中删除文档的所有数据。"""
+        """从向量库 + chunk_store 中删除文档的所有数据。"""
         if not doc_id:
             return
         try:
@@ -781,6 +781,11 @@ class IncrementalIndexer:
             self.doc_db.delete(where={"doc_id": doc_id})
         except Exception as e:
             logger.warning(f"删除 doc 向量失败 (doc_id={doc_id}): {e}")
+        try:
+            from backend.rag.indexing.chunk_store import get_chunk_store
+            get_chunk_store().delete_by_doc_id(doc_id)
+        except Exception as e:
+            logger.warning(f"删除 chunk_store 失败 (doc_id={doc_id}): {e}")
 
     # ---- KB ID 推导 ----
 
