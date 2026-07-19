@@ -118,6 +118,52 @@ def extract_rule_keywords(text: str, top_k: int = 10, doc_type: str = "general")
 extract_doc_keywords_rule = extract_rule_keywords
 
 
+def extract_chunk_keywords_qwen(text: str, top_k: int = 5) -> tuple:
+    """Chunk 级 LLM 关键词提取 — 使用本地 Qwen2.5:3b（Ollama），免费无消耗。
+
+    仅对 LLM_FORCED_TYPES 文档的 chunk 调用，返回 (keyword_list, model_name)。
+    失败时返回空列表，不影响索引流程。
+    """
+    try:
+        from langchain_ollama import ChatOllama
+        from backend.config import LLM_TEMPERATURE
+        import json as _json
+
+        safe_text = text[:1500]
+        prompt = f"""从以下文档片段提取 {top_k} 个以内的关键词（电商/企业场景）。
+要求：只提取文档中出现的核心术语、品类、品牌、条款、指标名
+禁止：停用词、通用动词
+输出：纯 JSON 数组，不要任何说明
+
+片段：
+{safe_text}
+
+输出："""
+
+        llm = ChatOllama(
+            model="qwen2.5:3b",
+            temperature=0.0,
+            num_ctx=2048,
+            request_timeout=30,
+        )
+        result = llm.invoke(prompt)
+        content = result.content.strip() if hasattr(result, "content") else str(result).strip()
+
+        match = re.search(r"\[.*?\]", content, re.DOTALL)
+        if match:
+            kws = _json.loads(match.group())
+            keywords = [str(k).strip() for k in kws if str(k).strip() and len(str(k).strip()) > 1][:top_k]
+        else:
+            keywords = [w.strip() for w in content.replace('"', "").replace("'", "").split(",") if w.strip()][:top_k]
+
+        logger.debug(f"[Qwen Chunk] 提取 {len(keywords)} 个关键词: {keywords}")
+        return keywords, "qwen2.5:3b"
+
+    except Exception as e:
+        logger.warning(f"[Qwen Chunk] 提取失败（非致命）: {e}")
+        return [], "qwen2.5:3b"
+
+
 def extract_doc_keywords_llm(text: str, top_k: int = 10) -> tuple:
     """LLM 关键词提取 — 返回 (keyword_dicts, token_dict)。
 

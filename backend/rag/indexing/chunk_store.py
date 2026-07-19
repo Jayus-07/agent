@@ -15,13 +15,15 @@ from backend.shared.logger import logger
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS chunk_store (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    doc_id       TEXT NOT NULL,           -- 关联 doc_id
-    chunk_index  INTEGER NOT NULL DEFAULT 0,
-    content      TEXT NOT NULL DEFAULT '',
-    token_count  INTEGER NOT NULL DEFAULT 0,
-    keywords     TEXT NOT NULL DEFAULT '', -- 逗号分隔 chunk 级关键词
-    created_at   TEXT DEFAULT (datetime('now'))
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id        TEXT NOT NULL,
+    chunk_index   INTEGER NOT NULL DEFAULT 0,
+    content       TEXT NOT NULL DEFAULT '',
+    token_count   INTEGER NOT NULL DEFAULT 0,
+    keywords      TEXT NOT NULL DEFAULT '',  -- 规则提取 chunk 关键词
+    llm_keywords  TEXT NOT NULL DEFAULT '',  -- Qwen LLM 提取 chunk 关键词（高价值文档）
+    llm_model     TEXT NOT NULL DEFAULT '',  -- 提取使用的 LLM 模型名
+    created_at    TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_cs_doc_id ON chunk_store(doc_id);
 """
@@ -44,13 +46,22 @@ class ChunkStore:
         os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
         conn = self._conn()
         conn.executescript(SCHEMA_SQL)
+        # 兼容旧表迁移
+        try:
+            conn.execute("SELECT llm_keywords FROM chunk_store LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute("ALTER TABLE chunk_store ADD COLUMN llm_keywords TEXT NOT NULL DEFAULT ''")
+        try:
+            conn.execute("SELECT llm_model FROM chunk_store LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute("ALTER TABLE chunk_store ADD COLUMN llm_model TEXT NOT NULL DEFAULT ''")
         conn.commit()
         conn.close()
 
     # ── 写入 ──
 
     def insert_batch(self, doc_id: str, chunks: list[dict]) -> int:
-        """批量写入 chunk 文本。chunks: [{chunk_index, content, keywords?}]。返回写入条数。"""
+        """批量写入 chunk 文本。chunks: [{chunk_index, content, keywords?, llm_keywords?, llm_model?}]。"""
         if not chunks:
             return 0
         with self._lock:
@@ -58,11 +69,13 @@ class ChunkStore:
             rows = [
                 (doc_id, c.get("chunk_index", i), c.get("content", ""),
                  len(c.get("content", "") or ""),
-                 c.get("keywords", ""))
+                 c.get("keywords", ""),
+                 c.get("llm_keywords", ""),
+                 c.get("llm_model", ""))
                 for i, c in enumerate(chunks)
             ]
             conn.executemany(
-                "INSERT INTO chunk_store (doc_id, chunk_index, content, token_count, keywords) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO chunk_store (doc_id, chunk_index, content, token_count, keywords, llm_keywords, llm_model) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
             conn.commit()
@@ -87,7 +100,7 @@ class ChunkStore:
         """按 doc_id 查询所有 chunk，按 chunk_index 排序。"""
         conn = self._conn()
         rows = conn.execute(
-            "SELECT chunk_index, content, token_count, keywords, created_at FROM chunk_store WHERE doc_id = ? ORDER BY chunk_index",
+            "SELECT chunk_index, content, token_count, keywords, llm_keywords, llm_model, created_at FROM chunk_store WHERE doc_id = ? ORDER BY chunk_index",
             (doc_id,),
         ).fetchall()
         conn.close()

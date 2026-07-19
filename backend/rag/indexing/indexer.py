@@ -474,14 +474,38 @@ class IncrementalIndexer:
         # 注入 chunk metadata — 分层：
         #   - doc_type / person_names → 继承文档级（用于 filter）
         #   - chunk_keywords → 该 chunk 自己的规则关键词（不污染其他 chunk）
+        #   - chunk_llm_keywords → Qwen 提取（仅 LLM_FORCED_TYPES 文档）
         from backend.rag.preprocessing.keyword import extract_rule_keywords as _chunk_kw
+        from backend.rag.preprocessing.keyword import LLM_FORCED_TYPES as _CHUNK_LLM_TYPES
         doc_type_val = doc_meta.get("doc_type", "general")
         person_val = doc_meta.get("person_names", "")
+        use_chunk_llm = doc_type_val in _CHUNK_LLM_TYPES
+        chunk_llm_model = ""
+        chunk_llm_count = 0
+
+        if use_chunk_llm:
+            from backend.rag.preprocessing.keyword import extract_chunk_keywords_qwen
+            logger.info(f"[Chunk] 高价值文档({doc_type_val})，启用 Qwen chunk 关键词提取")
+
         for ch in chunks:
             ch.metadata["doc_type"] = doc_type_val
             ch.metadata["person_names"] = person_val
             chunk_kws = _chunk_kw(ch.page_content, doc_type=doc_type_val)
             ch.metadata["chunk_keywords"] = ", ".join(chunk_kws) if chunk_kws else ""
+
+            # Qwen chunk 关键词（仅高价值文档）
+            if use_chunk_llm:
+                qwen_kws, qwen_model = extract_chunk_keywords_qwen(ch.page_content)
+                if qwen_kws:
+                    ch.metadata["chunk_llm_keywords"] = ", ".join(qwen_kws)
+                    ch.metadata["chunk_llm_model"] = qwen_model
+                    chunk_llm_model = qwen_model
+                    chunk_llm_count += 1
+
+        # 记录到 trace（index_metadata span 的 metrics 里）
+        if use_chunk_llm:
+            chunk_llm_model = chunk_llm_model or "qwen2.5:3b"
+            logger.info(f"[Chunk] Qwen 完成：{chunk_llm_count}/{len(chunks)} chunks 成功，模型={chunk_llm_model}")
 
         # ── 写入 chunk 文本到 SQLite（供 trace 详情页查看完整 chunk 内容）──
         try:
@@ -490,7 +514,9 @@ class IncrementalIndexer:
             cs.delete_by_doc_id(doc_id)  # reindex 时先清旧数据
             cs.insert_batch(doc_id, [
                 {"chunk_index": i, "content": ch.page_content,
-                 "keywords": ch.metadata.get("chunk_keywords", "")}
+                 "keywords": ch.metadata.get("chunk_keywords", ""),
+                 "llm_keywords": ch.metadata.get("chunk_llm_keywords", ""),
+                 "llm_model": ch.metadata.get("chunk_llm_model", "")}
                 for i, ch in enumerate(chunks)
             ])
         except Exception as e:
@@ -533,6 +559,9 @@ class IncrementalIndexer:
             metrics["llm_prompt_tokens"] = llm_tokens.get("prompt_tokens", 0)
             metrics["llm_completion_tokens"] = llm_tokens.get("completion_tokens", 0)
             metrics["llm_cost_usd"] = llm_tokens.get("cost_usd", 0)
+        if chunk_llm_count > 0:
+            metrics["chunk_llm_count"] = chunk_llm_count
+            metrics["chunk_llm_model"] = chunk_llm_model
         if not doc_db_id:
             metrics["doc_db_write"] = "failed"
 

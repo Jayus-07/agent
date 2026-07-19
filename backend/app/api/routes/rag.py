@@ -610,6 +610,8 @@ async def get_chunk_detail(doc_id: str):
                     "content": r["content"],
                     "char_count": r["token_count"],
                     "keywords": r["keywords"],
+                    "llm_keywords": r.get("llm_keywords", ""),
+                    "llm_model": r.get("llm_model", ""),
                 }
                 for r in rows
             ],

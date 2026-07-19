@@ -52,6 +52,8 @@ interface ChunkDetail {
   content: string;
   char_count: number;
   keywords: string;
+  llm_keywords?: string;
+  llm_model?: string;
 }
 
 export default function DocTracePage() {
@@ -587,6 +589,15 @@ export default function DocTracePage() {
                         )}
                       </div>
                     </div>
+                    {ch.llm_keywords && (
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[10px] text-amber-500">🔮 Qwen</span>
+                        <span className="text-[10px] text-amber-600 truncate">{ch.llm_keywords}</span>
+                        {ch.llm_model && (
+                          <span className="text-[9px] text-slate-300 ml-auto">模型: {ch.llm_model}</span>
+                        )}
+                      </div>
+                    )}
                     <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap break-words">
                       {ch.content}
                     </p>
