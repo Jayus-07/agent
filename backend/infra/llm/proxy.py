@@ -123,10 +123,11 @@ def _record_tokens(result):
         c = tu.get("completion_tokens", tu.get("output_tokens", 0))
         t = tu.get("total_tokens", p + c)
         if not t:
-            _last_tokens = {}
-            _last_call_meta = {}
+            _last_tokens.clear()
+            _last_call_meta.clear()
             return
-        _last_tokens = {"prompt_tokens": p, "completion_tokens": c, "total_tokens": t}
+        _last_tokens.clear()
+        _last_tokens.update({"prompt_tokens": p, "completion_tokens": c, "total_tokens": t})
 
         finish_reason = "unknown"
         if hasattr(result, "response_metadata") and result.response_metadata:
@@ -135,16 +136,17 @@ def _record_tokens(result):
                 result.response_metadata.get("stop_reason", "unknown"),
             )
         cost = compute_cost_usd(LLM_MODEL, p, c)
-        _last_call_meta = {
+        _last_call_meta.clear()
+        _last_call_meta.update({
             "prompt_tokens": p,
             "completion_tokens": c,
             "total_tokens": t,
             "finish_reason": finish_reason,
             "cost_usd": cost,
-        }
+        })
     except Exception:
-        _last_tokens = {}
-        _last_call_meta = {}
+        _last_tokens.clear()
+        _last_call_meta.clear()
 
 def _wrap_result(result):
     """递归剥离 LLM 返回值中的 <think> 块，兼容 str / AIMessage / list / dict"""
