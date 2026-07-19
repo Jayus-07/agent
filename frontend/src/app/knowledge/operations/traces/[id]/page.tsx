@@ -584,9 +584,6 @@ export default function DocTracePage() {
                       <span className="text-[10px] font-medium text-slate-400">Chunk #{ch.chunk_index}</span>
                       <div className="flex items-center gap-2 text-[10px] text-slate-400">
                         <span>{ch.char_count.toLocaleString()} 字</span>
-                        {ch.keywords && (
-                          <span className="text-violet-400 truncate max-w-[200px]">🏷 {ch.keywords}</span>
-                        )}
                       </div>
                     </div>
                     {ch.llm_keywords && (
@@ -596,6 +593,12 @@ export default function DocTracePage() {
                         {ch.llm_model && (
                           <span className="text-[9px] text-slate-300 ml-auto">模型: {ch.llm_model}</span>
                         )}
+                      </div>
+                    )}
+                    {ch.keywords && (
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[10px] text-slate-400">📋 规则</span>
+                        <span className="text-[10px] text-slate-500 truncate">{ch.keywords}</span>
                       </div>
                     )}
                     <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap break-words">

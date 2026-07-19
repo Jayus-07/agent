@@ -96,12 +96,22 @@ def extract_chunk_keywords_cached(text: str, top_k: int = 6, doc_type: str = "ge
     except Exception as e:
         logger.debug(f"jieba关键词提取异常: {e}")
 
-    # 黑名单过滤 + 单字过滤
-    result = [
-        k for k in keywords
-        if k not in blacklist and len(k) > 1
-    ]
+    # 黑名单过滤 + 单字过滤 + 数字/Markdown 过滤
+    def _is_junk(kw: str) -> bool:
+        kw_stripped = kw.strip()
+        if len(kw_stripped) <= 1:
+            return True
+        if kw_stripped in blacklist:
+            return True
+        if kw_stripped.isdigit():
+            return True
+        if re.match(r'^#+$', kw_stripped):          # 纯 Markdown 标题标记
+            return True
+        if re.match(r'^[\d\s.,;:!?，。；：！？、""''（）()]+$', kw_stripped):  # 纯数字+标点
+            return True
+        return False
 
+    result = [k for k in keywords if not _is_junk(k)]
     return result[:top_k]
 
 
