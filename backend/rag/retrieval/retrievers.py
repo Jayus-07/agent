@@ -34,7 +34,7 @@ def _score_by_keyword_overlap(question: str, docs: list, fallback_k: int = 3) ->
 
     scored = []
     for doc in docs:
-        doc_kw = set(doc.metadata.get("keywords", []))
+        doc_kw = set(doc.metadata.get("chunk_keywords", "").split(", "))
         overlap = len(query_kw & doc_kw)
         scored.append((doc, overlap))
 
@@ -125,6 +125,13 @@ class ChunkLevelRetriever(BaseRetriever):
 
             if doc_ids:
                 logger.info(f"ChunkLevelRetriever Stage 1: 召回 {len(doc_ids)} 个相关文档")
+
+        # ── Doc Filter event ──
+        trace_collector.add_event(span, "doc_filter", "info",
+            f"Stage1: metadata={request_metadata_filter}, persons={person_names}, → {len(doc_ids or [])} docs",
+            data={"metadata_filter": request_metadata_filter,
+                  "person_names": person_names,
+                  "output_doc_count": len(doc_ids or [])})
 
         # — Stage 2: Chunk 级检索 —
         all_docs = []

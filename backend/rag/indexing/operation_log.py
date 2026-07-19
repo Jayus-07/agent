@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS doc_operation_log (
     user_id     TEXT DEFAULT 'anonymous',
     source      TEXT,
     trace_id    TEXT,
+    batch_id    TEXT,
     result      TEXT DEFAULT 'success',
     detail      TEXT,
     created_at  TEXT DEFAULT (datetime('now'))
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS doc_operation_log (
 CREATE INDEX IF NOT EXISTS idx_op_created ON doc_operation_log(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_op_doc ON doc_operation_log(doc_id);
 CREATE INDEX IF NOT EXISTS idx_op_operation ON doc_operation_log(operation);
+CREATE INDEX IF NOT EXISTS idx_op_batch ON doc_operation_log(batch_id);
 """
 
 
@@ -55,8 +57,16 @@ class DocumentOperationLogger:
 
     def _init_db(self) -> None:
         os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
-        with self._conn() as conn:
-            conn.executescript(SCHEMA_SQL)
+        conn = self._conn()
+        conn.executescript(SCHEMA_SQL)
+        conn.commit()
+        # 兼容旧表：batch_id 列不存在则追加
+        try:
+            conn.execute("SELECT batch_id FROM doc_operation_log LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute("ALTER TABLE doc_operation_log ADD COLUMN batch_id TEXT")
+            conn.commit()
+        conn.close()
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
@@ -73,6 +83,7 @@ class DocumentOperationLogger:
         user_id: str = "anonymous",
         source: str = "",
         trace_id: str | None = None,
+        batch_id: str | None = None,
         result: str = "success",
         detail: dict | None = None,
     ) -> None:
@@ -83,9 +94,9 @@ class DocumentOperationLogger:
         with self._lock, self._conn() as conn:
             conn.execute(
                 """INSERT INTO doc_operation_log
-                   (doc_id, doc_name, operation, user_id, source, trace_id, result, detail)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (doc_id, doc_name, operation, user_id, source, trace_id, result, detail_str),
+                   (doc_id, doc_name, operation, user_id, source, trace_id, batch_id, result, detail)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (doc_id, doc_name, operation, user_id, source, trace_id, batch_id, result, detail_str),
             )
 
     # ---- 查询 ----
@@ -96,8 +107,9 @@ class DocumentOperationLogger:
         page_size: int = 20,
         operation: str = "",
         doc_id: str = "",
+        batch_id: str = "",
     ) -> dict[str, Any]:
-        """分页查询操作日志，支持按操作类型 / doc_id 过滤。
+        """分页查询操作日志，支持按操作类型 / doc_id / batch_id 过滤。
 
         Returns: {"items": [...], "total": int, "page": int, "page_size": int}
         """
@@ -109,6 +121,9 @@ class DocumentOperationLogger:
         if doc_id.strip():
             conditions.append("doc_id = ?")
             params.append(doc_id.strip())
+        if batch_id.strip():
+            conditions.append("batch_id = ?")
+            params.append(batch_id.strip())
 
         where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 

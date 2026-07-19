@@ -65,13 +65,15 @@ export interface TraceDetail {
 // ── Event ────────────────────────────────────────────
 
 export interface SpanEvent {
-  ts: string;
+  ts?: string;
+  timestamp?: string;  // 后端字段名
   name: string;
   /** 人类可读描述（Timeline 渲染用） */
   message?: string;
   /** 事件级别 */
   level?: "debug" | "info" | "warn" | "error";
-  data: Record<string, unknown>;
+  data?: Record<string, unknown>;     // 前端别名
+  attributes?: Record<string, unknown>; // 后端字段名
 }
 
 // ── Span（通用执行节点） ─────────────────────────────
@@ -156,6 +158,8 @@ export interface TraceRecord {
     started_at: string;
     trace_count: number;
   };
+  /** 自由标签（kb_id, doc_id, file_ext 等，文档索引 trace 用） */
+  tags?: Record<string, string>;
   /** LangGraph 图拓扑（agent workflow 才有） */
   graph?: {
     nodes: { id: string; label: string }[];

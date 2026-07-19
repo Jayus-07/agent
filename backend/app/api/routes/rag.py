@@ -58,13 +58,14 @@ def _extract_source(request: Request) -> str:
 
 def _safe_log_op(
     doc_id: str, doc_name: str, operation: str, source: str,
-    trace_id: str | None = None, result: str = "success", detail: dict | None = None,
+    trace_id: str | None = None, batch_id: str | None = None,
+    result: str = "success", detail: dict | None = None,
 ) -> None:
     """记录操作日志，失败不影响主流程（审计日志写挂不能阻断业务）。"""
     try:
         _get_op_logger().log(
             doc_id=doc_id, doc_name=doc_name, operation=operation, source=source,
-            trace_id=trace_id, result=result, detail=detail,
+            trace_id=trace_id, batch_id=batch_id, result=result, detail=detail,
         )
     except Exception as e:
         logger.warning(f"[RAG] 记录操作日志失败 ({operation}): {e}")
@@ -152,11 +153,12 @@ async def list_operations(
     page_size: int = 20,
     operation: str = "",
     doc_id: str = "",
+    batch_id: str = "",
 ):
-    """文档操作审计日志 — 谁上传/重索引/删除了哪个文档，含 trace_id 关联链路追踪"""
+    """文档操作审计日志 — 谁上传/重索引/删除了哪个文档，含 trace_id + batch_id 关联"""
     try:
         return _get_op_logger().list(
-            page=page, page_size=page_size, operation=operation, doc_id=doc_id,
+            page=page, page_size=page_size, operation=operation, doc_id=doc_id, batch_id=batch_id,
         )
     except Exception as e:
         logger.error(f"[RAG] operations 失败: {e}")
@@ -233,13 +235,17 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
 
         # 执行重索引
         result = indexer.reindex_file(file_path)
+
+        # 获取更新后的文档信息（含 metadata 字段）
+        updated_doc = reg.get_by_doc_id(doc_id) or {}
         _safe_log_op(doc_id, doc_name, "reindex", source,
                      trace_id=result.get("trace_id") or None, result="success",
                      detail={"chunk_count": result.get("chunk_count", 0),
-                             "file_hash": result.get("file_hash", "")})
+                             "file_hash": result.get("file_hash", ""),
+                             "doc_type": updated_doc.get("doc_type", "general"),
+                             "llm_used": bool(updated_doc.get("llm_used", False)),
+                             "confidence": updated_doc.get("confidence", 0)})
 
-        # 获取更新后的文档信息
-        updated_doc = reg.get_by_doc_id(doc_id)
         return {"ok": True, "doc_id": doc_id, "chunk_count": result.get("chunk_count", 0), "hash": result.get("file_hash", ""), "doc": updated_doc}
     except Exception as e:
         logger.error(f"[RAG] reindex 失败: {e}")
@@ -289,13 +295,17 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
 
     # 后台跑索引（不阻塞 HTTP 响应）；source 透传给后台线程记录操作日志
     source = _extract_source(request)
-    asyncio.create_task(_run_index_background(upload_id, filepath, file.filename, source))
+    # 前端多文件上传时携带 batch_id，同一批次共享一个 ID
+    batch_id = (request.form() if hasattr(request, 'form') else None)
+    # batch_id 从 FormData 解析，简化处理：用 header 透传
+    batch_id = request.headers.get("X-Batch-Id") or None
+    asyncio.create_task(_run_index_background(upload_id, filepath, file.filename, source, batch_id))
 
     return {"ok": True, "upload_id": upload_id, "filename": file.filename}
 
 
-async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = ""):
-    """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志（关联 trace_id）。"""
+async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None):
+    """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志（关联 trace_id + batch_id）。"""
     queue = _progress_queues.get(upload_id)
     if queue is None:
         return
@@ -314,8 +324,8 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
         logger.error(f"[RAG] 后台索引失败: {e}")
         await emit("error", str(e))
         await queue.put(None)  # sentinel
-        _safe_log_op("", filename, "upload", source, trace_id=None, result="failed",
-                     detail={"error": str(e)[:200]})
+        _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
+                     result="failed", detail={"error": str(e)[:200]})
         return
 
     # 发送 done 事件（含新文档信息）— 按 path 直接拿刚索引的文档
@@ -323,7 +333,8 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
     try:
         reg = _get_registry()
         new_doc = reg.get_by_path(filepath)
-        await emit("done", "索引完成", doc=new_doc)
+        await emit("done", "索引完成", doc=new_doc,
+                  trace_id=(result or {}).get("trace_id") or "")
     except Exception as e:
         await emit("done", "索引完成（文档信息获取失败）")
     finally:
@@ -335,11 +346,16 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
     _safe_log_op(
         (new_doc or {}).get("doc_id", ""), filename, "upload", source,
         trace_id=(result or {}).get("trace_id") or None,
+        batch_id=batch_id,
         result="success",
         detail={
             "chunk_count": (result or {}).get("chunk_count", 0),
             "file_hash": (result or {}).get("file_hash", ""),
             "duplicate": bool((result or {}).get("duplicate")),
+            # ── metadata 追溯字段（从 registry 读取，trace 过期后仍可查）──
+            "doc_type": (new_doc or {}).get("doc_type", "general"),
+            "llm_used": bool((new_doc or {}).get("llm_used", False)),
+            "confidence": (new_doc or {}).get("confidence", 0),
         },
     )
 
@@ -378,10 +394,12 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
             if existing.get("file_hash") == file_hash:
                 logger.info(f"[RAG] 文件未变化，跳过索引: {filename}")
                 sync_emit("duplicate", "文件已存在，未重复索引",
-                          doc={**existing, "duplicate": True})
+                          doc={**existing, "duplicate": True}, trace_id="")
                 return {"trace_id": "", "duplicate": True}
 
-        # 复用 pipeline 单例（embedding 已在启动时加载，避免每次上传重新加载模型→卡 uploading 阶段）
+        # 复用 pipeline 单例（首次调用需加载模型 + 扫描文档，约 10-15 秒）
+        # 启动时会后台预热，通常已就绪；若未就绪这里会阻塞等待
+        sync_emit("uploading", "正在准备索引管道...")
         pipeline = get_rag_pipeline()
         listener = _ProgressListener(sync_emit)
         indexer = IncrementalIndexer(
@@ -574,6 +592,31 @@ async def get_chunks(doc_id: str):
         return {"doc_id": doc_id, "chunks": [], "total": 0, "error": str(e)}
 
 
+@router.get("/chunks/{doc_id}/detail")
+async def get_chunk_detail(doc_id: str):
+    """获取文档的完整 Chunk 文本（从 SQLite chunk_store，非 ChromaDB）。
+    供 Trace 详情页查看每条 chunk 的完整内容、token 数、关键词。"""
+    try:
+        from backend.rag.indexing.chunk_store import get_chunk_store
+        cs = get_chunk_store()
+        rows = cs.get_by_doc_id(doc_id)
+        return {
+            "doc_id": doc_id,
+            "chunks": [
+                {
+                    "chunk_index": r["chunk_index"],
+                    "content": r["content"],
+                    "token_count": r["token_count"],
+                    "keywords": r["keywords"],
+                }
+                for r in rows
+            ],
+            "total": len(rows),
+        }
+    except Exception as e:
+        return {"doc_id": doc_id, "chunks": [], "total": 0, "error": str(e)}
+
+
 from pydantic import BaseModel
 class SearchRequest(BaseModel):
     query: str = ""
@@ -606,7 +649,7 @@ async def search_knowledge(req: SearchRequest):
         return {"query": query, "results": [], "error": str(e)}
 
 
-# ── 问答（已有） ──
+# ── 问答（已有）──
 
 @router.post("", responses={500: {"model": ErrorResponse}, 503: {"model": ErrorResponse}})
 async def rag_ask(req: RAGAskRequest):

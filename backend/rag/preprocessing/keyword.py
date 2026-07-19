@@ -1,28 +1,55 @@
-"""关键词提取 — 基于规则 + 领域词 + jieba
+"""关键词提取 — 规则 + jieba + LLM（按文档类型分流）
 
-历史遗留说明:
-  - 旧版有 `llm_extract_keywords*`（LLM 补全路径）已在 2026-07-02 清理：
-    1. 仅在 `len(keywords) < 3` 时触发，规则+jieba 路径通常已返回 6 个关键词
-    2. 无测试覆盖，0 生产路径命中
-    3. 删除以减少 LLM 依赖 + 代码维护面
+电商场景分流策略:
+  - faq / product_spec → 规则优先，< 3 个命中补 LLM
+  - policy / compliance / legal → 强制 LLM，规则作补充
+  - general / 其他 → 规则 + LLM 双线，标注来源
+
+关键词规则: 动态管理 → 从 keyword_store 热加载（60s TTL），替代 config 写死。
 """
 import re
+from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import List, Set
+from typing import List, Set, Dict
 
 import jieba.analyse
 
-from backend.config import DEFAULT_KEYWORDS, DOMAIN_RULES, SIGNAL_RULES, blacklist
+from backend.config import DOMAIN_RULES, blacklist
 from backend.shared.logger import logger
 
-# =====================================================
-# 预编译正则 — 单次扫描替代 O(n) 逐条循环
-# =====================================================
-_re_keywords = re.compile(
-    '|'.join(re.escape(kw) for kw in DEFAULT_KEYWORDS),
-    re.IGNORECASE
-)
+# LLM Decision Router 评分阈值
+LLM_SCORE_THRESHOLD = 50      # >= 50 → 调 LLM
+LLM_FORCED_TYPES = {
+    "policy", "compliance", "legal",           # 原有高风险
+    "security", "financial",                   # 企业安全/财务
+    "customer_data", "contract_template",       # 客户数据/合同模板
+}
+LLM_FALLBACK_TYPES = {"faq", "product_spec", "listing", "sop"}
 
+
+@dataclass
+class KeywordResult:
+    """关键词提取结果，区分来源"""
+    rule_keywords: List[dict] = field(default_factory=list)   # [{"word": "...", "source": "rule"}, ...]
+    llm_keywords: List[dict] = field(default_factory=list)    # [{"word": "...", "source": "llm"}, ...]
+    llm_tokens: Dict[str, int] = field(default_factory=dict)  # {"prompt_tokens": N, "completion_tokens": M}
+    llm_strategy: str = ""                                     # "rule_first" | "llm_force" | "dual_merge"
+    llm_decision: dict = field(default_factory=dict)           # {"llm_used": bool, "llm_score": int, "llm_reason": str}
+
+    def all_keywords(self) -> List[str]:
+        """合并去重，只返回词条字符串列表（兼容旧调用方）"""
+        seen = set()
+        result = []
+        for kw in self.rule_keywords + self.llm_keywords:
+            w = kw["word"]
+            if w not in seen:
+                seen.add(w)
+                result.append(w)
+        return result
+
+# =====================================================
+# 预编译正则 — 领域词列表变化少，编译一次复用
+# =====================================================
 _re_domain_kw = re.compile(
     '|'.join(re.escape(kw) for rules in DOMAIN_RULES.values() for kw in rules),
     re.IGNORECASE
@@ -30,19 +57,35 @@ _re_domain_kw = re.compile(
 
 
 @lru_cache(maxsize=512)
-def extract_chunk_keywords_cached(text: str, top_k: int = 6) -> List[str]:
-    """提取 chunk 级别关键词（带缓存，预编译正则加速）"""
+def extract_chunk_keywords_cached(text: str, top_k: int = 6, doc_type: str = "general") -> List[str]:
+    """提取 chunk 级别关键词（带缓存，动态词库，按 doc_type 过滤）"""
     keywords: Set[str] = set()
     text_lower = text.lower()
 
-    # 1. 规则词匹配（编译正则单次扫描）
-    keywords.update(_re_keywords.findall(text_lower))
+    # 从动态存储加载关键词（60s 缓存，支持热更新）
+    try:
+        from backend.rag.preprocessing.keyword_store import get_keyword_store
+        store = get_keyword_store()
+        keywords_for_type = store.get_keywords_for_doc_type(doc_type)
+        active = store.get_active()
+        signal_rules = active.get("signal_rules", {})
+    except Exception:
+        keywords_for_type = []
+        signal_rules = {}
+
+    # 1. 动态关键词匹配（只匹配该文档类型的词 + 通用词）
+    if keywords_for_type:
+        _re_dynamic = re.compile(
+            "|".join(re.escape(kw) for kw in keywords_for_type if len(kw) > 1),
+            re.IGNORECASE,
+        )
+        keywords.update(_re_dynamic.findall(text_lower))
 
     # 2. 领域词匹配
     keywords.update(_re_domain_kw.findall(text_lower))
 
-    # 3. 信号词检测（配置驱动，可适配不同业务领域）
-    for signal_name, signal_kws in SIGNAL_RULES.items():
+    # 3. 信号词检测（动态加载）
+    for signal_name, signal_kws in signal_rules.items():
         if any(kw.lower() in text_lower for kw in signal_kws):
             keywords.add(signal_name)
 
@@ -67,10 +110,163 @@ def extract_chunk_keywords(text: str, top_k: int = 6) -> List[str]:
     return extract_chunk_keywords_cached(text, top_k)
 
 
-def extract_doc_keywords(text: str, top_k: int = 10) -> List[str]:
-    """提取文档级别关键词（复用 chunk 逻辑）
+def extract_rule_keywords(text: str, top_k: int = 10, doc_type: str = "general") -> List[str]:
+    """纯规则关键词（不调 LLM）— 正则 + jieba + 电商词库"""
+    return extract_chunk_keywords_cached(text, top_k=top_k, doc_type=doc_type)
 
-    历史: 旧版会调 LLM 补全，但 LLM 路径仅在 `len(keywords) < 3` 触发，
-    实际几乎不会命中。LLM 路径已删除。
+# 向后兼容别名
+extract_doc_keywords_rule = extract_rule_keywords
+
+
+def extract_doc_keywords_llm(text: str, top_k: int = 10) -> tuple:
+    """LLM 关键词提取 — 返回 (keyword_dicts, token_dict)。
+
+    keyword_dicts: [{"word": "...", "source": "llm"}, ...]
+    token_dict: {"prompt_tokens": N, "completion_tokens": M}
+    失败时返回空列表 + 空 token。
     """
-    return extract_chunk_keywords(text, top_k=top_k)
+    from backend.infra.llm import llm
+    safe_text = text.encode("utf-8", errors="ignore")[:6000].decode("utf-8", errors="ignore")
+    prompt = f"""你是跨境电商 RAG 系统的关键词提取助手。
+
+从以下文档中提取 {top_k} 个以内的高质量检索关键词，用于电商场景的语义搜索。
+
+要求:
+- 关键词必须是文档中出现的核心术语、品类、品牌、属性、政策条款
+- 优先提取: 商品类目、品牌名、合规条款、费用项、时效要求
+- 禁止提取: 停用词、通用动词（"需要""包括""进行"等）
+- 输出格式: 纯 JSON 数组，不要额外说明
+
+文档:
+{safe_text}
+
+输出:"""
+    try:
+        # 清理旧 token 记录
+        from backend.infra.llm.proxy import _last_call_meta
+        for k in list(_last_call_meta.keys()):
+            _last_call_meta.pop(k, None)
+
+        result = llm.invoke(prompt)
+        content = result.content.strip() if hasattr(result, "content") else str(result).strip()
+
+        # 提取 JSON 数组
+        import json
+        match = re.search(r'\[.*?\]', content, re.DOTALL)
+        if match:
+            keywords = json.loads(match.group())
+            if isinstance(keywords, list):
+                kws = [str(k).strip() for k in keywords if str(k).strip() and len(str(k).strip()) > 1]
+            else:
+                kws = []
+        else:
+            kws = [w.strip() for w in content.replace('"', '').replace("'", "").split(",") if w.strip()]
+
+        # 读取 token
+        tokens = {
+            "prompt_tokens": _last_call_meta.get("prompt_tokens", 0),
+            "completion_tokens": _last_call_meta.get("completion_tokens", 0),
+        }
+        kw_dicts = [{"word": w, "source": "llm"} for w in kws[:top_k]]
+        logger.info(f"[LLM Keywords] 提取 {len(kw_dicts)} 个, tokens: {tokens}")
+        return kw_dicts, tokens
+
+    except Exception as e:
+        logger.warning(f"[LLM Keywords] 失败，回退规则: {e}")
+        return [], {}
+
+
+def extract_doc_keywords(text: str, top_k: int = 10) -> KeywordResult:
+    """文档级关键词提取 — 按 doc_type 自动分流（兼容旧调用方）。
+
+    需调用方自行传入 doc_type → 使用 extract_doc_keywords_typed()
+    """
+    return extract_doc_keywords_typed(text, doc_type="general", top_k=top_k)
+
+
+def _compute_llm_score(doc_type: str, confidence: float, complexity: dict) -> tuple[int, list[str]]:
+    """LLM Decision Router V2 — 企业级评分模型。
+
+    评分维度:
+      ① 文档价值 (high_value)   → +40
+      ② 风险信号 (risk_hits)    → +10~20  (↓ 从 15~30 下调)
+      ③ 分类置信 (low_conf)     → +20
+      ④ 文档长度 (long)         → +15
+      ⑤ 结构复杂度 (complex)    → +15
+      ultra_long (>50k token)   → 不加分, 标记 section_summary_needed
+      阈值: 50
+    """
+    score = 0
+    reasons: list[str] = []
+    tok = complexity.get("token_estimate", 0)
+
+    # ① 文档价值（高价值类型强制 LLM）
+    if doc_type in LLM_FORCED_TYPES:
+        score += 40; reasons.append(f"high_value:{doc_type}(+40)")
+
+    # ② 风险关键词命中: 只作为风险信号，不直接代表文档复杂度
+    risk_hits = complexity.get("risk_keyword_hits", 0)
+    if risk_hits >= 3:
+        score += 20; reasons.append(f"risk_hits:{risk_hits}(+20)")
+    elif risk_hits >= 1:
+        score += 10; reasons.append(f"risk_hits:{risk_hits}(+10)")
+
+    # ③ 分类不确定 — 兜底
+    if confidence < 0.7:
+        score += 20; reasons.append(f"low_conf:{confidence}(+20)")
+
+    # ④ 文档长度
+    if tok > 50000:
+        reasons.append(f"ultra_long:{tok}tok")
+        complexity["section_summary_needed"] = True   # 供后续章节级摘要
+    elif tok > 10000:
+        score += 15; reasons.append(f"long:{tok}tok(+15)")
+
+    # ⑤ 结构复杂度
+    struct = complexity.get("structure_score", 0)
+    if struct >= 20:
+        score += 15; reasons.append(f"complex_struct:{struct}(+15)")
+
+    return score, reasons
+
+
+def extract_doc_keywords_typed(text: str, doc_type: str = "general",
+                                confidence: float = 0.5, complexity: dict | None = None,
+                                top_k: int = 10) -> KeywordResult:
+    """关键词提取 + LLM Decision Router 评分决策。"""
+    if complexity is None:
+        complexity = {}
+    result = KeywordResult()
+
+    rule_words = extract_rule_keywords(text, top_k=top_k, doc_type=doc_type)
+    result.rule_keywords = [{"word": w, "source": "rule"} for w in rule_words]
+
+    llm_score, reasons = _compute_llm_score(doc_type, confidence, complexity)
+    # 强制类型始终调 LLM
+    if doc_type in LLM_FORCED_TYPES:
+        result.llm_strategy = "llm_force"
+        should_use_llm = True
+        reasons.append("forced:high_risk")
+    elif doc_type in LLM_FALLBACK_TYPES:
+        result.llm_strategy = "rule_first"
+        should_use_llm = llm_score >= LLM_SCORE_THRESHOLD
+    else:
+        result.llm_strategy = "dual_merge"
+        should_use_llm = llm_score >= LLM_SCORE_THRESHOLD
+
+    if should_use_llm:
+        llm_kws, tokens = extract_doc_keywords_llm(text, top_k=top_k)
+        result.llm_keywords = llm_kws
+        result.llm_tokens = tokens
+        result.llm_decision = {"llm_used": True, "llm_score": llm_score,
+                               "llm_reason": "; ".join(reasons)}
+    else:
+        result.llm_decision = {"llm_used": False, "llm_score": llm_score,
+                               "llm_reason": f"score={llm_score}<{LLM_SCORE_THRESHOLD}"}
+
+    return result
+
+# 向后兼容：extract_doc_keywords 现在返回 KeywordResult
+def extract_doc_keywords(text: str, top_k: int = 10) -> KeywordResult:
+    """向后兼容别名 — 默认 general 类型，规则 + LLM 双线"""
+    return extract_doc_keywords_typed(text, doc_type="general", top_k=top_k)

@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS doc_registry (
     chunk_count  INTEGER DEFAULT 0,
     chunk_ids    TEXT DEFAULT '[]',
     doc_db_id    TEXT,
+    doc_type     TEXT DEFAULT 'general',
+    confidence   REAL DEFAULT 0,
+    llm_used     INTEGER DEFAULT 0,
     status       TEXT DEFAULT 'active',
     last_indexed TEXT,
     created_at   TEXT DEFAULT (datetime('now')),
@@ -56,10 +59,19 @@ class DocumentRegistry:
         self._init_db()
 
     def _init_db(self):
-        """建表（幂等）。"""
+        """建表（幂等）+ 兼容旧表列迁移。"""
         os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
         with self._conn() as conn:
             conn.executescript(SCHEMA_SQL)
+            # 兼容旧表：追加 metadata 列
+            for col, col_def in [("doc_type", "TEXT DEFAULT 'general'"),
+                                  ("confidence", "REAL DEFAULT 0"),
+                                  ("llm_used", "INTEGER DEFAULT 0")]:
+                try:
+                    conn.execute(f"SELECT {col} FROM doc_registry LIMIT 1")
+                except sqlite3.OperationalError:
+                    conn.execute(f"ALTER TABLE doc_registry ADD COLUMN {col} {col_def}")
+                    conn.commit()
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
@@ -187,7 +199,7 @@ class DocumentRegistry:
         doc_db_id: str,
         metadata: dict | None = None,
     ):
-        """注册新文档。"""
+        """注册新文档。metadata 可选: {doc_type, confidence, llm_used}。"""
         file_name = os.path.basename(file_path)
         try:
             stat = os.stat(file_path)
@@ -195,16 +207,23 @@ class DocumentRegistry:
         except OSError:
             fsize, fmtime = 0, 0.0
 
+        meta = metadata or {}
+        doc_type = meta.get("doc_type", "general")
+        confidence = meta.get("confidence", 0)
+        llm_used = 1 if meta.get("llm_used") else 0
+
         with self._lock, self._conn() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO doc_registry
                    (file_path, file_name, kb_id, doc_id, file_hash, file_size, file_mtime,
-                    chunk_count, chunk_ids, doc_db_id, status, last_indexed, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))""",
+                    chunk_count, chunk_ids, doc_db_id, doc_type, confidence, llm_used,
+                    status, last_indexed, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))""",
                 (
                     file_path, file_name, kb_id, doc_id, file_hash,
                     fsize, fmtime,
                     len(chunk_ids), json.dumps(chunk_ids), doc_db_id,
+                    doc_type, confidence, llm_used,
                 ),
             )
 

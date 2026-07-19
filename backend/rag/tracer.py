@@ -58,7 +58,10 @@ class SpanKind(str, Enum):
 
     # Knowledge Index（Phase 1）
     INDEX_UPLOAD = "index_upload"
+    INDEX_LOAD = "index_load"
     INDEX_PARSE = "index_parse"
+    INDEX_CLEAN = "index_clean"
+    INDEX_DEDUP = "index_dedup"
     INDEX_CHUNK = "index_chunk"
     INDEX_EMBED = "index_embed"
     INDEX_VECTOR_DB = "index_vector_db"

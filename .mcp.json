@@ -1,5 +1,24 @@
 {
   "mcpServers": {
+    "sqlite": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "C:/Users/wh/AppData/Roaming/npm/node_modules/mcp-server-sqlite/dist/cli.js",
+        "--db",
+        "D:\\Program Files\\workplace\\agent\\data\\keyword_rules.db"
+      ]
+    },
+    "postgres": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://postgres:123456@localhost:5432/demo"]
+    },
+    "sequential-thinking": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
     "puppeteer": {
       "type": "stdio",
       "command": "node",

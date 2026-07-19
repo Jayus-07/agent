@@ -242,20 +242,81 @@ class RAGChain:
         return list(l1.messages) if l1 else []
 
     def _execute(self, question: str, chat_history: list) -> dict:
-        """执行阶段：chain.invoke + MultiQuery 决策 trace。"""
+        """执行阶段：chain.invoke + MultiQuery 决策 trace + Retrieval Debug。"""
         from backend.rag.tracer import trace_collector
+        import time as _time
+
+        # ── retrieval span（包裹整个检索过程，挂 debug event）──
+        ret_span = trace_collector.start_span(
+            "retrieval", parent_id="root",
+            name="Hybrid Retrieval", type="retrieval",
+            kind="retrieval",
+            input={"question": question[:500]},
+        )
+        t_ret_start = _time.time()
+
         result = self.chain.invoke({"input": question, "chat_history": chat_history})
 
-        # mq_check: 从 MultiQueryRetriever 读取实际决策结果（唯一入口）
-        mq_span = trace_collector.start_span(
-            "mq_check", name="MultiQuery")
+        # ── 采集检索中间结果 ──
+        context_docs = result.get("context", [])
+        self._record_retrieval_events(ret_span, context_docs)
+        trace_collector.end_span(ret_span,
+            metrics={"duration_ms": int((_time.time() - t_ret_start) * 1000),
+                     "total_docs": len(context_docs)})
+
+        # mq_check
+        mq_span = trace_collector.start_span("mq_check", name="MultiQuery")
         mq = getattr(self, '_mq_retriever', None)
         triggered = mq._last_triggered if mq else False
         from backend.rag.retrieval.multi_query import get_mq_mode
         trace_collector.end_span(mq_span,
-                             metrics={"triggered": triggered, "mode": get_mq_mode()},
-                             status="skipped" if not triggered else "success")
+            metrics={"triggered": triggered, "mode": get_mq_mode()},
+            status="skipped" if not triggered else "success")
         return result
+
+    def _record_retrieval_events(self, ret_span, context_docs: list) -> None:
+        """采集检索各阶段的中间结果，写入 ret_span.events。"""
+        from backend.rag.tracer import trace_collector
+
+        # ── Event 1: Query Analyzer ──
+        try:
+            from backend.rag.retrieval.query_analyzer import QueryAnalyzer
+            qa = QueryAnalyzer()
+            pq = qa.analyze(ret_span.input.get("question", ""))
+            trace_collector.add_event(ret_span, "query_analyzer", "info",
+                f"intent={pq.intent}, doc_types={pq.doc_types}",
+                data={"intent": pq.intent, "doc_types": pq.doc_types,
+                      "metadata_filter": pq.to_metadata_filter()})
+        except Exception:
+            pass
+
+        # ── Event 2: Rerank 结果 ──
+        rerank_scores = []
+        for doc in context_docs[:10]:
+            score = doc.metadata.get("rerank_score")
+            if score is not None:
+                rerank_scores.append({
+                    "chunk_id": doc.metadata.get("chunk_id", ""),
+                    "score": round(score, 4),
+                    "snippet": doc.page_content[:120],
+                    "source": doc.metadata.get("source_file", ""),
+                    "doc_type": doc.metadata.get("doc_type", ""),
+                })
+        if rerank_scores:
+            trace_collector.add_event(ret_span, "rerank", "info",
+                f"top {len(rerank_scores)} scored chunks",
+                data={"scored": rerank_scores})
+
+        # ── Event 3: Final Context ──
+        trace_collector.add_event(ret_span, "final_context", "info",
+            f"{len(context_docs)} chunks → LLM",
+            data={"chunks": [{
+                "chunk_id": d.metadata.get("chunk_id", ""),
+                "source": d.metadata.get("source_file", ""),
+                "doc_type": d.metadata.get("doc_type", ""),
+                "keywords": d.metadata.get("chunk_keywords", ""),
+                "snippet": d.page_content[:100],
+            } for d in context_docs[:8]]})
 
     def _verify(self, result: dict, question: str, session_id: str = "default") -> str:
         """验证阶段：剥离 think 块 + Citation 校验 + 格式化引用。"""

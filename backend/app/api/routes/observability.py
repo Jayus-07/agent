@@ -83,6 +83,7 @@ def _to_trace_dto(t: TraceRecord) -> dict:
         "parent_id": t.parent_id,
         "children_ids": t.children_ids,
         "graph": t.graph,
+        "tags": t.tags,  # 含 doc_id / kb_id / file_ext 等（文档索引 trace 用）
     }
 
 

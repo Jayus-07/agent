@@ -6,7 +6,8 @@ from collections import Counter
 from functools import lru_cache
 from typing import List, Set, Dict, Any, Optional, Literal, Tuple
 
-from backend.config import DOC_TYPE_RULES, TIME_PATTERNS, DOMAIN_RULES, SUMMARY_MAX_LENGTH, LLM_REQUEST_TIMEOUT
+from backend.config.rag import DOC_TYPE_RULES, FILENAME_TYPE_HINTS, FOLDER_TYPE_HINTS, TIME_PATTERNS, DOMAIN_RULES, SUMMARY_MAX_LENGTH
+from backend.config.llm import LLM_REQUEST_TIMEOUT
 from backend.infra.llm import llm
 from backend.rag.preprocessing.entity import extract_person_names
 
@@ -17,17 +18,144 @@ from backend.shared.logger import logger
 
 
 # =====================================================
-# 文档类型分类（改进：使用正则、优先级顺序）
+# 文档类型分类（V2 加权计分 + 文件名辅助 + LLM 胶着仲裁）
 # =====================================================
 
-def classify_doc_type(text: str) -> str:
-    """分类文档类型，优先级按 DOC_TYPE_RULES 字典顺序"""
-    text_lower = text.lower()
-    for doc_type, patterns in DOC_TYPE_RULES.items():
-        for pattern in patterns:
-            if re.search(pattern, text_lower):
-                return doc_type
-    return "general"
+# legal/compliance/policy 得分差 < 此阈值时触发 LLM 仲裁
+_ARBITRATION_THRESHOLD = 5
+
+# LLM 仲裁提示词 — 轻量，只选类型不生成内容
+_ARBITRATION_PROMPT = """你是电商文档分类专家。以下文档的类型有歧义，请从候选类型中选择最匹配的一个。
+
+候选类型（三选一）: {candidates}
+文档内容（前 1000 字）:
+{text}
+
+只输出一个类型名，不要额外解释:"""
+
+
+def classify_doc_type(text: str, filename: str = "", file_path: str = "") -> str:
+    """V2 加权计分分类 + 路径上下文 + LLM 胶着仲裁（兼容旧调用方）。"""
+    result, _ = classify_with_confidence(text, filename, file_path)
+    return result
+
+
+def classify_with_confidence(text: str, filename: str = "", file_path: str = "") -> tuple[str, float]:
+    """V2 加权计分分类 + 路径上下文 + confidence 计算。
+
+    Returns: (doc_type, confidence) — confidence ∈ [0, 1]
+    """
+    text_lower = text[:6000].lower()
+
+    # ── 加权计分 ──
+    scores: dict[str, int] = {}
+    for doc_type, rules in DOC_TYPE_RULES.items():
+        score = 0
+        for pattern, weight in rules:
+            matches = len(re.findall(pattern, text_lower))
+            if matches > 0:
+                score += weight * matches
+        if score > 0:
+            scores[doc_type] = score
+
+    # ── 文件名辅助 ──
+    if filename:
+        fname_no_ext = os.path.splitext(filename)[0]
+        for hint, hint_type in FILENAME_TYPE_HINTS.items():
+            if hint.lower() in fname_no_ext.lower():
+                scores[hint_type] = scores.get(hint_type, 0) + 30
+                logger.debug(f"[Classify] 文件名命中: {hint} → {hint_type} +30")
+
+    # ── 文件夹路径辅助（强信号，直接 +0.3 confidence）──
+    folder_bonus: str | None = None
+    if file_path:
+        path_lower = os.path.dirname(file_path).lower().replace("\\", "/")
+        for hint, hint_type in FOLDER_TYPE_HINTS.items():
+            if hint.lower() in path_lower.split("/"):
+                scores[hint_type] = scores.get(hint_type, 0) + 40
+                folder_bonus = hint_type
+                logger.debug(f"[Classify] 文件夹命中: {hint} → {hint_type} +40 (path={path_lower})")
+                break  # 一个文件夹只匹配第一个命中
+
+    if not scores:
+        return "general", 0.0
+
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    top_type, top_score = sorted_scores[0]
+
+    # confidence = top_score / (top_score + second_score)，单类时 = 1.0
+    # 文件夹命中 → 额外 +0.3
+    second_score = sorted_scores[1][1] if len(sorted_scores) >= 2 else 0
+    confidence = top_score / (top_score + second_score) if (top_score + second_score) > 0 else 1.0
+    if folder_bonus and top_type == folder_bonus:
+        confidence = min(confidence + 0.3, 1.0)
+    confidence = round(min(confidence, 1.0), 2)
+
+    # ── 胶着仲裁 ──
+    arbitration_candidates = {"legal", "compliance", "policy"}
+    top3 = sorted_scores[:3]
+    top3_types = {t for t, _ in top3}
+    close_set = top3_types & arbitration_candidates
+    if len(close_set) >= 2:
+        scores_in_set = [(t, s) for t, s in top3 if t in close_set]
+        diff = scores_in_set[0][1] - scores_in_set[1][1] if len(scores_in_set) >= 2 else 999
+        if diff < _ARBITRATION_THRESHOLD:
+            candidates = ", ".join(t for t, _ in scores_in_set[:3])
+            logger.info(f"[Classify] 胶着仲裁: {scores_in_set[:3]}, diff={diff} < {_ARBITRATION_THRESHOLD}")
+            try:
+                from backend.infra.llm import llm
+                result = llm.invoke(_ARBITRATION_PROMPT.format(candidates=candidates, text=text[:1000]))
+                result_text = result.content.strip() if hasattr(result, "content") else str(result).strip()
+                for t in close_set:
+                    if t in result_text:
+                        logger.info(f"[Classify] LLM 仲裁结果: {t}")
+                        return t, 0.95
+                logger.warning(f"[Classify] LLM 仲裁返回未知结果: {result_text[:100]}")
+            except Exception as e:
+                logger.warning(f"[Classify] LLM 仲裁失败，使用最高分: {e}")
+
+    logger.debug(f"[Classify] {filename} → {top_type} (score={top_score}, confidence={confidence})")
+    return top_type, confidence
+
+
+def analyze_complexity(text: str, keyword_count: int, confidence: float) -> dict:
+    """文档复杂度 + 风险分析 — 用于 LLM Router 决策。
+
+    Returns:
+        {"token_estimate": int, "structure_score": int, "risk_keyword_hits": int,
+         "keyword_coverage": str, "classification_clear": bool}
+    """
+    chars = len(text)
+    token_estimate = int(chars * 0.8)
+
+    # 结构复杂度
+    structure_score = 0
+    headings = len(re.findall(r'^#{1,6}\s+', text, re.MULTILINE))
+    if headings > 10:       structure_score += 20
+    elif headings > 3:      structure_score += 10
+    table_rows = len(re.findall(r'^\|.+\|', text, re.MULTILINE))
+    if table_rows > 5:      structure_score += 15
+    legal_refs = len(re.findall(r'第[一二三四五六七八九十百]+条|第\d+条|§\s*\d+', text))
+    if legal_refs > 0:      structure_score += 15
+
+    # 风险关键词命中
+    _RISK_PATTERNS = re.compile(
+        r'合同|GDPR|隐私|审计|监管|处罚|罚款|合规|诉讼|知识产权|保密',
+    )
+    risk_keyword_hits = len(_RISK_PATTERNS.findall(text[:3000]))
+
+    # 关键词覆盖度
+    if keyword_count >= 8:      kw_cov = "rich"
+    elif keyword_count >= 3:     kw_cov = "moderate"
+    else:                        kw_cov = "sparse"
+
+    return {
+        "token_estimate": token_estimate,
+        "structure_score": min(structure_score, 50),
+        "risk_keyword_hits": risk_keyword_hits,
+        "keyword_coverage": kw_cov,
+        "classification_clear": confidence >= 0.7,
+    }
 
 # =====================================================
 # 章节提取（改进：支持更多标题格式）

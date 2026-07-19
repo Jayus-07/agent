@@ -1,30 +1,42 @@
-# 测试要求
+# Testing
 
-## 后端
+## Backend
 
-至少覆盖：
-- 正常路径
-- 异常路径
-- 边界条件
-- 降级路径
+- 使用 pytest
+- 新增功能必须覆盖：
+  - Happy Path
+  - Error Path
+  - Edge Case
+  - Fallback（如适用）
 
-## 前端
+## Frontend
 
-至少覆盖：
-- 渲染
-- 用户交互
-- 状态变化
-- API 错误
+- 使用 Vitest + @testing-library
+- 新增功能必须覆盖：
+  - Render
+  - User Interaction
+  - State Changes
+  - API Error
 
-## 工具
+## Test Review Checklist
 
-- 后端：pytest
-- 前端：vitest + @testing-library
+Review 测试时必须检查：
 
-## 手动验证
+- DRY：重复 Fixture / Helper 必须抽取
+- Mock：MagicMock 使用 spec 或 autospec
+- Assertion：避免依赖 message 文本，优先断言状态、数据和结构
+- Async：禁止依赖 queue.empty()，优先使用 sentinel 或 await queue.get()
+- Trace：验证 Trace、Span、Metadata（适用时）
+- Reliability：补充 Retry、Timeout、Cancel、Resource Cleanup 等关键场景（适用时）
 
-Claude 自动化测过的功能**不算完成**。
+## Manual Verification
 
-必须由用户手动在浏览器操作一遍才算通过。
+Claude 自动测试通过 ≠ 功能完成。
 
-详见 CLAUDE.md §15.1。
+以下情况必须人工验证：
+
+- 所有 UI 修改
+- 页面交互
+- SSE / Streaming
+- 浏览器兼容行为
+- 影响用户体验的功能

@@ -221,11 +221,12 @@ class QueryAnalyzer:
         except Exception:
             pass
 
-        # ── Doc type ──
+        # ── Doc type（兼容 V2 (pattern, weight) 元组格式）──
         try:
             from backend.config import DOC_TYPE_RULES
-            for dtype, patterns in DOC_TYPE_RULES.items():
-                for pat in patterns:
+            for dtype, rules in DOC_TYPE_RULES.items():
+                for rule in rules:
+                    pat = rule[0] if isinstance(rule, (tuple, list)) else rule
                     if re.search(pat, query):
                         pq.doc_types.append(dtype)
                         break

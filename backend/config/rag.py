@@ -121,14 +121,53 @@ SIGNAL_RULES: Dict[str, List[str]] = {
     "平台渠道": ["amazon", "shopify", "tiktok", "ebay", "walmart", "账号", "店铺"],
 }
 
-DOC_TYPE_RULES: Dict[str, List[str]] = {
-    "listing": [r"(?<!\w)Listing(?!\w)", r"五点描述", r"A\+内容", r"关键词策略", r"标题公式", r"主图规范"],
-    "sop": [r"(?<!\w)SOP(?!\w)", r"标准操作", r"操作流程", r"标准作业", r"作业指导"],
-    "ad_policy": [r"广告政策", r"投放规则", r"Amazon Ads", r"竞价策略", r"广告规范"],
-    "faq": [r"(?<!\w)FAQ(?!\w)", r"常见问题", r"退货政策", r"物流时效", r"售后流程"],
-    "product_spec": [r"产品规格", r"材质说明", r"使用手册", r"保养指南", r"故障排查"],
-    "training": [r"培训", r"新人手册", r"上岗", r"考核"],
-    "policy": [r"制度", r"规范", r"审批", r"规定", r"管理条例"],
+# 文档类型分类规则（V2 加权计分）
+# 格式: {doc_type: [(pattern, weight), ...]}
+# weight: 正则命中一次加 N 分；文件名辅助加权在外层 classify_doc_type() 处理
+DOC_TYPE_RULES: Dict[str, List[tuple]] = {
+    "listing": [(r"(?<!\w)Listing(?!\w)", 10), (r"五点描述", 10), (r"A\+内容", 8), (r"关键词策略", 5), (r"标题公式", 5), (r"主图规范", 5)],
+    "sop": [(r"(?<!\w)SOP(?!\w)", 10), (r"标准操作", 8), (r"操作流程", 8), (r"标准作业", 8), (r"作业指导", 5)],
+    "ad_policy": [(r"广告政策", 10), (r"投放规则", 8), (r"Amazon Ads", 10), (r"竞价策略", 8), (r"广告规范", 5)],
+    "faq": [(r"(?<!\w)FAQ(?!\w)", 10), (r"常见问题", 10), (r"退货政策", 5), (r"物流时效", 5), (r"售后流程", 5)],
+    "product_spec": [(r"产品规格", 10), (r"材质说明", 8), (r"使用手册", 8), (r"保养指南", 8), (r"故障排查", 5)],
+    "training": [(r"培训", 10), (r"新人手册", 5), (r"上岗", 5), (r"考核", 5)],
+    "policy": [(r"制度", 8), (r"规范", 5), (r"审批", 5), (r"规定", 5), (r"管理条例", 10)],
+    "compliance": [(r"合规", 10), (r"法规", 10), (r"监管", 10), (r"GDPR", 10), (r"CCPA", 10), (r"数据保护", 8), (r"个人信息", 8), (r"隐私政策", 10)],
+    "legal": [(r"合同", 10), (r"条款", 10), (r"违约责任", 10), (r"赔偿", 8), (r"知识产权", 10), (r"保密协议", 10), (r"法律", 8)],
+    "security": [(r"安全", 10), (r"权限", 8), (r"访问控制", 8), (r"加密", 8), (r"漏洞", 8), (r"认证", 8)],
+    "financial": [(r"财务", 10), (r"报销", 8), (r"预算", 8), (r"发票", 8), (r"付款审批", 8), (r"账", 8)],
+    "customer_data": [(r"客户数据", 10), (r"个人信息", 10), (r"用户隐私", 10), (r"数据收集", 8), (r"用户画像", 8)],
+    "contract_template": [(r"合同模板", 10), (r"协议模板", 10), (r"标准条款", 8), (r"模板", 5)],
+}
+
+# 文件名 → 文档类型强特征映射（优先级高于内容计分）
+FILENAME_TYPE_HINTS: Dict[str, str] = {
+    "政策": "policy", "制度": "policy", "规范": "policy", "管理办法": "policy",
+    "合规": "compliance", "法规": "compliance", "监管": "compliance", "隐私": "compliance",
+    "合同": "legal", "条款": "legal", "协议": "legal", "NDA": "legal", "保密": "legal",
+    "FAQ": "faq", "常见问题": "faq", "问答": "faq",
+    "规格": "product_spec", "参数": "product_spec", "说明书": "product_spec",
+    "SOP": "sop", "操作手册": "sop", "流程": "sop",
+    "Listing": "listing", "广告": "ad_policy",
+    "安全": "security", "权限": "security", "加密": "security",
+    "财务": "financial", "报销": "financial", "发票": "financial",
+    "客户数据": "customer_data", "用户隐私": "customer_data",
+    "合同模板": "contract_template", "协议模板": "contract_template",
+}
+
+# 文件夹路径 → 文档类型强特征映射（命中直接 +0.3 confidence）
+FOLDER_TYPE_HINTS: Dict[str, str] = {
+    "legal": "legal", "contracts": "legal", "合同": "legal",
+    "compliance": "compliance", "法规": "compliance", "regulatory": "compliance",
+    "policy": "policy", "policies": "policy", "制度": "policy",
+    "hr": "policy", "finance": "policy",
+    "faq": "faq", "help": "faq", "常见问题": "faq",
+    "products": "product_spec", "specs": "product_spec", "规格": "product_spec",
+    "sop": "sop", "operations": "sop", "流程": "sop",
+    "security": "security", "安全": "security", "infosec": "security",
+    "finance": "financial", "财务": "financial", "报销": "financial",
+    "customers": "customer_data", "customer_data": "customer_data",
+    "templates": "contract_template", "模板": "contract_template",
 }
 
 DOMAIN_RULES: Dict[str, Dict[str, int]] = {

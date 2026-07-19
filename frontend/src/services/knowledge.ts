@@ -37,6 +37,7 @@ export interface OperationLog {
   user_id: string              // 当前默认 'anonymous'（auth 未接入）
   source: string               // "IP | User-Agent"
   trace_id: string | null      // upload/reindex 关联，delete 为空；trace 内存有限可能过期
+  batch_id: string | null      // 批量上传批次号，同批次文件共享
   result: 'success' | 'failed'
   detail: string | Record<string, unknown> | null
   created_at: string
@@ -86,10 +87,13 @@ export const knowledgeService = {
   async uploadDocument(
     file: File,
     onProgress?: (stage: string, message: string) => void,
-  ): Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean }> {
+    batchId?: string,
+  ): Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean; trace_id?: string }> {
     const fd = new FormData()
     fd.append('file', file)
-    const res = await fetch(`${BASE}/upload`, { method: 'POST', body: fd })
+    const headers: Record<string, string> = {}
+    if (batchId) headers['X-Batch-Id'] = batchId
+    const res = await fetch(`${BASE}/upload`, { method: 'POST', body: fd, headers })
 
     // 检查响应是否 OK，避免 HTML 错误页面被当 JSON 解析
     if (!res.ok) {
@@ -105,7 +109,7 @@ export const knowledgeService = {
     // 订阅 SSE 获取真实进度
     // P1.5 fix: 用单一 onmessage listener + 解析 data.stage 字段
     // 避免 addEventListener 注册时机的 race condition（事件可能在注册前到达丢失）
-    return new Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean }>((resolve) => {
+    return new Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean; trace_id?: string }>((resolve) => {
       const eventSource = new EventSource(`${BASE}/upload/${data.upload_id}/stream`)
       let resolved = false
 
@@ -129,11 +133,10 @@ export const knowledgeService = {
 
         if (stage === 'done') {
           cleanup()
-          resolve({ ok: true, doc: payload.doc })
+          resolve({ ok: true, doc: payload.doc, trace_id: payload.trace_id || '' })
         } else if (stage === 'duplicate') {
-          // P1.5+：文档未变化（SHA256 一致）→ 跳过索引，但前端仍展示已索引的 doc 信息
           cleanup()
-          resolve({ ok: true, doc: payload.doc, duplicate: true })
+          resolve({ ok: true, doc: payload.doc, duplicate: true, trace_id: payload.trace_id || '' })
         } else if (stage === 'error') {
           cleanup()
           resolve({ ok: false, error: payload.message || '索引失败' })
@@ -209,13 +212,17 @@ export const knowledgeService = {
   async uploadDocuments(
     files: File[],
     onPerFileProgress?: (file: File, stage: string, message: string) => void,
+    batchId?: string,
   ): Promise<{ ok: number; failed: { name: string; error: string }[] }> {
+    const id = batchId || crypto.randomUUID()
     const failed: { name: string; error: string }[] = []
     let ok = 0
     for (const file of files) {
       try {
-        const r = await this.uploadDocument(file, (stage, message) =>
-          onPerFileProgress?.(file, stage, message),
+        const r = await this.uploadDocument(
+          file,
+          (stage, message) => onPerFileProgress?.(file, stage, message),
+          id,
         )
         if (r.ok) ok++
         else failed.push({ name: file.name, error: r.error || '上传失败' })
@@ -228,6 +235,12 @@ export const knowledgeService = {
 
   async getChunks(docId: string): Promise<{ doc_id: string; chunks: Array<{ id: string; content: string; metadata: Record<string, unknown>; token_count: number }>; total: number }> {
     const res = await fetch(`${BASE}/documents/${docId}/chunks`)
+    return res.json()
+  },
+
+  /** 获取文档完整 Chunk 文本（从 SQLite chunk_store，供 Trace 详情页查看） */
+  async getChunkDetail(docId: string): Promise<{ doc_id: string; chunks: Array<{ chunk_index: number; content: string; token_count: number; keywords: string }>; total: number }> {
+    const res = await fetch(`${BASE}/chunks/${docId}/detail`)
     return res.json()
   },
 

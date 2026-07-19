@@ -50,6 +50,24 @@ register_mcp_servers()
 
 
 # ═══════════════════════════════════════════════════
+# 启动时后台初始化 RAG Pipeline（避免首次上传等 13 秒）
+# ═══════════════════════════════════════════════════
+@app.on_event("startup")
+async def eager_init_rag_pipeline():
+    """后台线程预热 RAG pipeline，不阻塞服务启动。"""
+    import threading
+    def _warmup():
+        try:
+            from backend.app.api.deps import get_rag_pipeline
+            logger.info("[Startup] 后台预热 RAG 管道...")
+            get_rag_pipeline()
+            logger.info("[Startup] RAG 管道预热完成")
+        except Exception as e:
+            logger.warning(f"[Startup] RAG 管道预热失败（首次请求会重试）: {e}")
+    threading.Thread(target=_warmup, daemon=True, name="rag-warmup").start()
+
+
+# ═══════════════════════════════════════════════════
 # 启动
 # ═══════════════════════════════════════════════════
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useRef } from 'react'
+import { flushSync } from 'react-dom'
+import { useRouter } from 'next/navigation'
 import { Upload, Loader2, CheckCircle2, XCircle, FileText, AlertCircle } from 'lucide-react'
 import { knowledgeService } from '@/services/knowledge'
 
@@ -27,6 +29,7 @@ interface CompletedFile {
 }
 
 export default function UploadDialog({ open, onClose, onSuccess }: Props) {
+  const router = useRouter()
   const [files, setFiles] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
   const [currentStage, setCurrentStage] = useState<StageKey | null>(null)
@@ -57,6 +60,8 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
     setCurrentIdx(0)
 
     let okCount = 0
+    // 多文件上传生成批次号，后端写入操作日志关联同一批次
+    const batchId = files.length > 1 ? crypto.randomUUID() : undefined
     // 串行上传：一次一个，本地 embedding 模型不并发
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
@@ -65,12 +70,21 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
       setStageMessage('')
       try {
         const res = await knowledgeService.uploadDocument(file, (stage, message) => {
-          setCurrentStage(stage as StageKey)
-          setStageMessage(message)
-        })
+          flushSync(() => {
+            setCurrentStage(stage as StageKey)
+            setStageMessage(message)
+          })
+        }, batchId)
         if (res.ok) {
           okCount++
-          setCompleted(prev => [...prev, { name: file.name, ok: true, duplicate: (res as any).duplicate }])
+          setCompleted(prev => [...prev, { name: file.name, ok: true, duplicate: res.duplicate }])
+          // 单文件上传成功后自动跳转到 trace 详情
+          if (!isMulti && res.trace_id) {
+            setTimeout(() => {
+              handleClose()
+              router.push(`/knowledge/operations/traces/${res.trace_id}`)
+            }, 600)
+          }
         } else {
           setCompleted(prev => [...prev, { name: file.name, ok: false, error: res.error || '上传失败' }])
         }

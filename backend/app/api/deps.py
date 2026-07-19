@@ -34,18 +34,19 @@ def get_sql_agent():
 
 def get_rag_pipeline():
     global _rag_pipeline, _rag_init_error
-    if _rag_pipeline is None and _rag_init_error is None:
+    if _rag_pipeline is None:
         with _lock:
-            if _rag_pipeline is None and _rag_init_error is None:
+            if _rag_pipeline is None:
                 try:
                     from backend.rag.pipeline import RAGPipeline
                     _rag_pipeline = RAGPipeline()
+                    _rag_init_error = None  # 成功后清掉旧错误
                     logger.info("[API] RAG 管道初始化成功")
                 except Exception as e:
                     _rag_init_error = str(e)
-                    logger.error(f"[API] RAG 管道初始化失败: {e}")
-    if _rag_init_error is not None:
-        raise RuntimeError(f"RAG 服务不可用: {_rag_init_error}")
+                    logger.error(f"[API] RAG 管道初始化失败（下次请求重试）: {e}")
+    if _rag_init_error is not None and _rag_pipeline is None:
+        raise RuntimeError(f"RAG 服务不可用（重试中）: {_rag_init_error}")
     return _rag_pipeline
 
 

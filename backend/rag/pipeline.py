@@ -378,17 +378,33 @@ class RAGPipeline:
             self._cleanup()
 
     def _prepare_context(self, kb_id: str, question: str):
-        """KB 隔离：注入 kb_id 到 contextvars filter。"""
-        if not kb_id or kb_id in ("*", "default"):
-            return
+        """注入 kb_id + QueryAnalyzer 的 doc_type 到 contextvars metadata_filter。"""
         from backend.rag.context import RequestContext, set_context
+        from backend.rag.retrieval.query_analyzer import QueryAnalyzer
+
+        mf: dict = {}
+        if kb_id and kb_id not in ("*", "default"):
+            mf["kb_id"] = kb_id
+
+        # 从查询中提取 doc_type 过滤条件
+        try:
+            qa = QueryAnalyzer()
+            pq = qa.analyze(question)
+            qf = pq.to_metadata_filter()
+            mf.update({k: v for k, v in qf.items() if v})
+        except Exception:
+            pass
+
+        if not mf:
+            return
+
         ctx = RequestContext(
-            metadata_filter={"kb_id": kb_id},
-            intent_label="",
+            metadata_filter=mf,
+            intent_label=pq.intent if 'pq' in dir() else "",
             query=question,
         )
         set_context(ctx)
-        logger.info(f"[RAG.ask] kb_id={kb_id} → metadata_filter 已注入")
+        logger.info(f"[RAG.ask] metadata_filter={mf}")
 
     def _check_resources(self) -> bool:
         """资源监控。返回 True=可继续，False=拒绝。"""

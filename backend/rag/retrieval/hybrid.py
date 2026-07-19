@@ -38,6 +38,30 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
 
     merged = [doc_dict[cid] for cid, _ in sorted_cids[:k]]
 
+    # ── Retrieval Debug event ──
+    trace_collector.add_event(span, "rrf_fusion", "info",
+        f"Vector:{len(vector_docs)} + BM25:{len(bm25_docs)} → RRF:{len(merged)}",
+        data={
+            "vector_top3": [{"chunk_id": d.metadata.get("chunk_id", ""),
+                             "score": round(rank_map.get(d.metadata.get("chunk_id") or _fallback_id(d), 0), 4),
+                             "snippet": d.page_content[:120],
+                             "source": d.metadata.get("source_file", ""),
+                             "doc_type": d.metadata.get("doc_type", "")}
+                            for d in vector_docs[:3]],
+            "bm25_top3":  [{"chunk_id": d.metadata.get("chunk_id", ""),
+                            "snippet": d.page_content[:120],
+                            "source": d.metadata.get("source_file", ""),
+                            "doc_type": d.metadata.get("doc_type", "")}
+                           for d in bm25_docs[:3]],
+            "fused_top5": [{"chunk_id": d.metadata.get("chunk_id", ""),
+                            "rrf_score": round(rank_map.get(d.metadata.get("chunk_id") or _fallback_id(d), 0), 4),
+                            "snippet": d.page_content[:120],
+                            "source": d.metadata.get("source_file", ""),
+                            "doc_type": d.metadata.get("doc_type", ""),
+                            "keywords": d.metadata.get("chunk_keywords", "")}
+                           for d in merged[:5]],
+        })
+
     trace_collector.end_span(span,
                          metrics={"vector_hits": len(vector_docs),
                                    "bm25_hits": len(bm25_docs),

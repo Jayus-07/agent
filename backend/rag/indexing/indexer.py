@@ -18,6 +18,7 @@ Trace 集成（Phase 1）：
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +28,7 @@ from langchain_community.document_loaders import TextLoader
 from langchain_core.documents import Document
 
 from backend.rag.tracer import trace_collector, WorkflowKind, SpanKind
+from backend.rag.preprocessing.cleaner import DocumentCleaner
 from backend.shared.logger import logger
 from backend.shared.async_utils import run_async as _run_async
 
@@ -208,15 +210,18 @@ class IncrementalIndexer:
     # ---- 单文件索引 ----
 
     def _index_file(self, file_path: str):
-        """索引单篇文档: 加载 → 分块 → metadata → embed → 写入 Chroma。
+        """索引单篇文档: 加载 → 解析 → 清洗 → 去重 → 分块 → 元数据 → embed → 写入。
 
         Trace 树（每文件一棵）：
           index_upload (root)
+          ├── index_load
           ├── index_parse
+          ├── index_clean
+          ├── index_dedup
           ├── index_chunk
-          ├── index_embed (聚合: 默认只记统计；失败 chunk 单独 child span)
-          ├── index_vector_db
-          └── index_metadata
+          ├── index_metadata（LLM 标注 → 注入 chunk → 再 embed）
+          ├── index_embed（成功静默，失败单独 child span）
+          └── index_vector_db（chunks 带完整 metadata 写入）
         """
         kb_id = self._derive_kb_id(file_path)
         doc_id = hashlib.md5(os.path.basename(file_path).encode()).hexdigest()[:10]
@@ -249,22 +254,43 @@ class IncrementalIndexer:
             self._index_file_inner(file_path, kb_id, doc_id, file_hash)
             trace_collector.end_span(upload_span,
                 metrics={"doc_id": doc_id, "kb_id": kb_id})
-            trace_collector.finish(trace, os.path.basename(file_path), 0, "", "")
+            trace_collector.finish(trace, os.path.basename(file_path),
+                                   upload_span.duration_ms, "", "")
             return trace.id
         except Exception as e:
             trace_collector.end_span(upload_span, status="error",
                 metrics={"error": str(e)[:200]})
             try:
-                trace_collector.finish(trace, "[ERROR]", 0, "", "")
+                trace_collector.finish(trace, "[ERROR]", upload_span.duration_ms, "", "")
             except Exception:
                 pass
             raise
 
     def _index_file_inner(self, file_path: str, kb_id: str, doc_id: str, file_hash: str):
-        """_index_file 的实际工作，被 index_upload span 包裹。"""
+        """_index_file 的实际工作，被 index_upload span 包裹。
+
+        新流程: load → parse → clean → dedup → chunk → metadata → embed → vector_db
+        （metadata 移到 embed 之前，标注注入 chunk 后再进向量库）
+        """
         ext = os.path.splitext(file_path)[1].lower()
 
-        # ── ② parse ──
+        # ── ① load（文件读取/元数据收集）──
+        load_span = trace_collector.start_span(
+            "index_load",
+            parent_id="index_upload",
+            name=f"Load {os.path.basename(file_path)}",
+            type="load",
+            kind=SpanKind.INDEX_LOAD.value,
+            input={"file_path": file_path, "ext": ext},
+        )
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError:
+            file_size = 0
+        trace_collector.end_span(load_span,
+            metrics={"file_size": file_size, "ext": ext})
+
+        # ── ② parse（格式解析：PDF/DOCX/TXT → Documents）──
         parse_span = trace_collector.start_span(
             "index_parse",
             parent_id="index_upload",
@@ -325,7 +351,59 @@ class IncrementalIndexer:
                 metrics={"error": str(e)[:200]})
             raise
 
-        # ── ③ chunk ──
+        # ── ②.5 clean（文本清洗：控制字符/全角半角/HTML/PDF页眉页脚等）──
+        clean_span = trace_collector.start_span(
+            "index_clean",
+            parent_id="index_upload",
+            name=f"Clean {os.path.basename(file_path)}",
+            type="clean",
+            kind=SpanKind.INDEX_CLEAN.value,
+            input={"doc_count": len(raw_docs)},
+        )
+        try:
+            ext = os.path.splitext(file_path)[1].lower()
+            source_type = "pdf" if ext == ".pdf" else "text"
+            cleaner = DocumentCleaner()
+            clean_changes: list[str] = []
+            total_chars_before = 0
+            total_chars_after = 0
+            for d in raw_docs:
+                total_chars_before += len(d.page_content)
+                result = cleaner.clean(d.page_content, source_type=source_type)
+                d.page_content = result.text
+                total_chars_after += len(result.text)
+                clean_changes.extend(result.changes)
+            trace_collector.end_span(clean_span,
+                metrics={"docs_cleaned": len(raw_docs),
+                         "chars_before": total_chars_before,
+                         "chars_after": total_chars_after,
+                         "operations": ", ".join(clean_changes) if clean_changes else "none"},
+            )
+        except Exception as e:
+            trace_collector.end_span(clean_span, status="error",
+                metrics={"error": str(e)[:200]})
+            # 清洗失败不阻塞后续流程，使用原始文本继续
+            logger.warning(f"[Clean] 清洗失败，继续使用原始文本: {e}")
+
+        # ── ④ dedup（SHA256 缓存检查）──
+        dedup_span = trace_collector.start_span(
+            "index_dedup",
+            parent_id="index_upload",
+            name=f"Check {os.path.basename(file_path)}",
+            type="dedup",
+            kind=SpanKind.INDEX_DEDUP.value,
+            input={"file_hash": file_hash},
+        )
+        dup_check = self.registry.get_by_path(file_path)
+        if dup_check and dup_check.get("file_hash") == file_hash and dup_check.get("status") == "active":
+            trace_collector.end_span(dedup_span,
+                metrics={"cached": True, "existing_doc_id": dup_check.get("doc_id", "")})
+            logger.info(f"[Dedup] 文件未变更，跳过索引: {file_path}")
+            return
+        trace_collector.end_span(dedup_span,
+            metrics={"cached": False})
+
+        # ── ⑤ chunk（文本分块 + 质量过滤）──
         chunk_span = trace_collector.start_span(
             "index_chunk",
             parent_id="index_upload",
@@ -362,13 +440,128 @@ class IncrementalIndexer:
             trace_collector.end_span(chunk_span,
                 metrics={"raw_chunks": len(chunks),
                          "kept_chunks": len(filtered_chunks),
-                         "filtered_out": filtered_count})
+                         "filtered_out": filtered_count},
+                output={"preview": [c.page_content[:100] for c in filtered_chunks[:3]],
+                        "total": len(filtered_chunks)})
         except Exception as e:
             trace_collector.end_span(chunk_span, status="error",
                 metrics={"error": str(e)[:200]})
             raise
 
-        # ── ④ embed (聚合 — 默认只记统计；失败 chunk 单独 child span) ──
+        # ── ⑥ metadata（LLM 元数据生成 — 移到 embed 之前，注入 chunk 再进向量库）──
+        meta_span = trace_collector.start_span(
+            "index_metadata",
+            parent_id="index_upload",
+            name="Build metadata",
+            type="llm",
+            kind=SpanKind.INDEX_METADATA.value,
+        )
+        full_text = "\n\n".join(d.page_content for d in raw_docs)
+        doc_meta = {
+            "doc_id": doc_id,
+            "source_file": os.path.basename(file_path),
+            "file_path": file_path,
+            "kb_id": kb_id,
+            "doc_type": "general",
+            "person_names": "",
+        }
+        try:
+            meta_result = _run_async(self._build_doc_metadata(full_text, doc_meta))
+            doc_meta.update(meta_result)
+        except Exception as e:
+            logger.warning(f"元数据构建失败（使用默认值）: {e}")
+
+        # 注入 chunk metadata — 分层：
+        #   - doc_type / person_names → 继承文档级（用于 filter）
+        #   - chunk_keywords → 该 chunk 自己的规则关键词（不污染其他 chunk）
+        from backend.rag.preprocessing.keyword import extract_rule_keywords as _chunk_kw
+        doc_type_val = doc_meta.get("doc_type", "general")
+        person_val = doc_meta.get("person_names", "")
+        for ch in chunks:
+            ch.metadata["doc_type"] = doc_type_val
+            ch.metadata["person_names"] = person_val
+            chunk_kws = _chunk_kw(ch.page_content, doc_type=doc_type_val)
+            ch.metadata["chunk_keywords"] = ", ".join(chunk_kws) if chunk_kws else ""
+
+        # ── 写入 chunk 文本到 SQLite（供 trace 详情页查看完整 chunk 内容）──
+        try:
+            from backend.rag.indexing.chunk_store import get_chunk_store
+            cs = get_chunk_store()
+            cs.delete_by_doc_id(doc_id)  # reindex 时先清旧数据
+            cs.insert_batch(doc_id, [
+                {"chunk_index": i, "content": ch.page_content,
+                 "keywords": ch.metadata.get("chunk_keywords", "")}
+                for i, ch in enumerate(chunks)
+            ])
+        except Exception as e:
+            logger.warning(f"Chunk 文本写入失败（非致命）: {e}")
+
+        # ── 构建 metadata output（独立于 doc_db 写入，确保 trace 中始终可见）──
+        kws_all = doc_meta.get("doc_keywords", [])
+        kws_rule = doc_meta.get("keywords_rule", [])
+        kws_llm = doc_meta.get("keywords_llm", [])
+        llm_tokens = doc_meta.get("llm_tokens", {})
+        llm_used = doc_meta.get("llm_used", False)
+        # 展平复杂对象（ChromaDB 不支持嵌套 dict）
+        complexity_val = doc_meta.get("complexity", {})
+        time_refs_val = doc_meta.get("time_refs", [])
+        # 写入 doc_db 前做深拷贝并展平嵌套字段（ChromaDB 不支持 dict/list metadata）
+        doc_db_meta = {}
+        for k, v in doc_meta.items():
+            if isinstance(v, (dict, list)):
+                doc_db_meta[k] = json.dumps(v, ensure_ascii=False) if v else ""
+            else:
+                doc_db_meta[k] = v
+
+        doc_db_id = ""
+        try:
+            ids = self.doc_db.add_texts(texts=[full_text], metadatas=[doc_db_meta]) if full_text else []
+            doc_db_id = ids[0] if ids else ""
+        except Exception as e:
+            logger.warning(f"Doc 级写入失败（非致命）: {e}")
+            # 不阻塞 — trace span 仍会包含完整 output
+
+        metrics = {
+            "doc_type": doc_meta.get("doc_type", ""),
+            "keywords_rule": len(kws_rule) if isinstance(kws_rule, list) else 0,
+            "keywords_llm": len(kws_llm) if isinstance(kws_llm, list) else 0,
+            "keywords_total": len(kws_all) if isinstance(kws_all, list) else 0,
+            "person_count": len(doc_meta.get("person_names", "").split(",")) if doc_meta.get("person_names") else 0,
+            "doc_db_id": doc_db_id,
+        }
+        if llm_used:
+            metrics["llm_prompt_tokens"] = llm_tokens.get("prompt_tokens", 0)
+            metrics["llm_completion_tokens"] = llm_tokens.get("completion_tokens", 0)
+        if not doc_db_id:
+            metrics["doc_db_write"] = "failed"
+
+        # 始终输出完整 metadata（无论 doc_db 写入是否成功）
+        trace_collector.end_span(meta_span, metrics=metrics,
+            status="success" if doc_db_id else "skipped",
+            output={
+                "rule_metadata": {
+                    "doc_type": doc_meta.get("doc_type", ""),
+                    "confidence": doc_meta.get("confidence", 0),
+                    "business_domain": doc_meta.get("business_domain", ""),
+                    "person_names": doc_meta.get("person_names", ""),
+                    "complexity": complexity_val,
+                    "time_refs": time_refs_val,
+                    "keywords_rule": kws_rule if isinstance(kws_rule, list) else [],
+                },
+                "llm_metadata": {
+                    "llm_used": llm_used,
+                    "llm_strategy": doc_meta.get("llm_strategy", ""),
+                    "llm_decision": doc_meta.get("llm_decision", {}),
+                    "llm_tokens": llm_tokens,
+                    "keywords_llm": kws_llm if isinstance(kws_llm, list) else [],
+                },
+                "keywords_all": kws_all if isinstance(kws_all, list) else [],
+                "doc_type": doc_meta.get("doc_type", ""),
+                "business_domain": doc_meta.get("business_domain", ""),
+                "person_names": doc_meta.get("person_names", ""),
+            })
+
+        # ── ⑦ embed（聚合；chunks 已带完整 metadata）──
         embed_span = trace_collector.start_span(
             "index_embed",
             parent_id="index_upload",
@@ -410,44 +603,7 @@ class IncrementalIndexer:
                 metrics={"error": str(e)[:200]})
             return
 
-        # ── ⑥ metadata ──
-        meta_span = trace_collector.start_span(
-            "index_metadata",
-            parent_id="index_upload",
-            name="Build metadata",
-            type="llm",
-            kind=SpanKind.INDEX_METADATA.value,
-        )
-        full_text = "\n\n".join(d.page_content for d in raw_docs)
-        doc_meta = {
-            "doc_id": doc_id,
-            "source_file": os.path.basename(file_path),
-            "file_path": file_path,
-            "kb_id": kb_id,
-            "doc_type": "general",
-            "person_names": "",
-        }
-        try:
-            meta_result = _run_async(self._build_doc_metadata(full_text, doc_meta))
-            doc_meta.update(meta_result)
-        except Exception as e:
-            logger.warning(f"元数据构建失败（使用默认值）: {e}")
-
-        try:
-            ids = self.doc_db.add_texts(texts=[full_text], metadatas=[doc_meta]) if full_text else []
-            doc_db_id = ids[0] if ids else ""
-            trace_collector.end_span(meta_span,
-                metrics={"doc_type": doc_meta.get("doc_type", ""),
-                         "keywords_count": len(doc_meta.get("doc_keywords", [])) if isinstance(doc_meta.get("doc_keywords"), list) else 0,
-                         "person_count": len(doc_meta.get("person_names", "").split(",")) if doc_meta.get("person_names") else 0,
-                         "doc_db_id": doc_db_id})
-        except Exception as e:
-            logger.error(f"Doc 级写入失败: {e}")
-            trace_collector.end_span(meta_span, status="error",
-                metrics={"error": str(e)[:200]})
-            doc_db_id = ""
-
-        # ── 注册到 registry（始终执行） ──
+        # ── ⑨ registry（始终执行，含 metadata 用于操作日志追溯）──
         self.registry.register(
             file_path=file_path,
             doc_id=doc_id,
@@ -455,70 +611,95 @@ class IncrementalIndexer:
             kb_id=kb_id,
             chunk_ids=chunk_ids,
             doc_db_id=doc_db_id,
+            metadata={
+                "doc_type": doc_meta.get("doc_type", "general"),
+                "confidence": doc_meta.get("confidence", 0),
+                "llm_used": doc_meta.get("llm_used", False),
+            },
         )
 
     def _embed_with_retry(self, chunks, parent_span) -> list[str]:
-        """逐 chunk 嵌入；失败单独 child span 记录，重试 EMBED_RETRY_MAX 次。
+        """逐 chunk 嵌入；成功静默，失败单独 child span 记录，重试 EMBED_RETRY_MAX 次。
 
         Returns: 成功嵌入的 chunk id 列表（失败的 chunk 不在此列）。
         """
         succeeded = []
         for i, chunk in enumerate(chunks):
-            chunk_span = trace_collector.start_span(
-                f"embed_chunk_{i}",
-                parent_id="index_embed",
-                name=f"Embed chunk {i}",
-                type="embedding",
-                kind=SpanKind.INDEX_EMBED.value,
-                input={"chunk_index": i,
-                       "doc_id": chunk.metadata.get("doc_id", "")},
-            )
             last_err = None
             for attempt in range(EMBED_RETRY_MAX):
                 try:
                     cid = self.embedding.embed_query(chunk.page_content)
                     succeeded.append(cid)
-                    trace_collector.end_span(chunk_span,
-                        metrics={"attempt": attempt + 1, "chunk_id": cid})
                     last_err = None
                     break
                 except Exception as e:
                     last_err = e
-                    chunk_span.retry_count += 1
             else:
-                # 所有重试都失败
+                # 所有重试都失败 → 创建 child span 记录失败
                 logger.error(f"[Embed] chunk {i} 嵌入失败 {EMBED_RETRY_MAX} 次: {last_err}")
+                chunk_span = trace_collector.start_span(
+                    f"embed_chunk_{i}",
+                    parent_id="index_embed",
+                    name=f"Embed chunk {i} FAILED",
+                    type="embedding",
+                    kind=SpanKind.INDEX_EMBED.value,
+                    input={"chunk_index": i,
+                           "doc_id": chunk.metadata.get("doc_id", "")},
+                )
                 trace_collector.end_span(chunk_span, status="error",
                     metrics={"error": str(last_err)[:100] if last_err else "unknown",
                              "retry_count": EMBED_RETRY_MAX})
         return succeeded
 
     async def _build_doc_metadata(self, full_text: str, base_meta: dict) -> dict:
-        """异步构建文档级元数据。"""
+        """异步构建文档级元数据 — LLM Decision Router 评分决策。"""
         try:
             from backend.rag.preprocessing.metadata import (
-                classify_doc_type, extract_time_refs,
-                detect_business_domain,
+                classify_with_confidence, analyze_complexity,
+                extract_time_refs, detect_business_domain,
             )
-            from backend.rag.preprocessing.keyword import extract_doc_keywords
+            from backend.rag.preprocessing.keyword import extract_doc_keywords_typed
             from backend.rag.preprocessing.entity import extract_person_names
         except ImportError:
             return {}
 
         try:
-            doc_type = classify_doc_type(full_text)
+            fname = base_meta.get("source_file", "")
+            fpath = base_meta.get("file_path", "")
+            doc_type, confidence = classify_with_confidence(full_text, filename=fname, file_path=fpath)
             time_refs = extract_time_refs(full_text)
             domain = detect_business_domain(full_text)
-            keywords = extract_doc_keywords(full_text)
+            # 先跑规则关键词获取数量，用于复杂度分析
+            from backend.rag.preprocessing.keyword import extract_rule_keywords
+            rule_kws_preview = extract_rule_keywords(full_text, doc_type=doc_type)
+            complexity = analyze_complexity(full_text, len(rule_kws_preview), confidence)
+            kw_result = extract_doc_keywords_typed(full_text, doc_type=doc_type,
+                                                    confidence=confidence, complexity=complexity)
             person_names = extract_person_names(full_text)
         except Exception:
             return {"doc_type": "general"}
 
+        # 合并关键词（兼容旧字段，新字段已是对象数组）
+        kws_rule_objs = kw_result.rule_keywords  # [{"word": ..., "source": "rule"}, ...]
+        kws_llm_objs = kw_result.llm_keywords    # [{"word": ..., "source": "llm"}, ...]
+        kws_all_words = [k["word"] for k in kws_rule_objs + kws_llm_objs]
+
+        # LLM 决策信息
+        llm_decision = kw_result.llm_decision if hasattr(kw_result, 'llm_decision') else {}
+
         return {
             "doc_type": doc_type,
+            "confidence": confidence,
             "business_domain": domain,
             "time_refs": time_refs,
-            "doc_keywords": keywords,
+            "complexity": complexity,
+            "doc_keywords": kws_all_words,
+            "keywords_rule": kws_rule_objs,
+            "keywords_llm": kws_llm_objs,
+            "llm_tokens": kw_result.llm_tokens,
+            "llm_used": bool(kws_llm_objs),
+            "llm_strategy": kw_result.llm_strategy,
+            "llm_decision": llm_decision,
             "person_names": ", ".join(person_names) if isinstance(person_names, list)
                            else str(person_names),
         }
