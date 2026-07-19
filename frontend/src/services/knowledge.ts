@@ -172,11 +172,15 @@ export const knowledgeService = {
    * 不并发：后端每次走 Chroma delete + 文件删除，并发无收益且增加 DB 争用。
    */
   async batchDelete(docIds: string[]): Promise<{ ok: number; failed: { id: string; error: string }[] }> {
+    const batchId = docIds.length > 1 ? crypto.randomUUID() : undefined
     const failed: { id: string; error: string }[] = []
     let ok = 0
+    const headers: Record<string, string> = {}
+    if (batchId) headers['X-Batch-Id'] = batchId
     for (const id of docIds) {
       try {
-        const r = await this.deleteDocument(id)
+        const res = await fetch(`${BASE}/documents/${id}`, { method: 'DELETE', headers })
+        const r = await res.json()
         if (r.ok) ok++
         else failed.push({ id, error: r.error || '删除失败' })
       } catch (e) {
@@ -191,11 +195,16 @@ export const knowledgeService = {
    * 不并发：后端走本地 embedding 模型，并发会 OOM/变慢。
    */
   async batchReindex(docIds: string[]): Promise<{ ok: number; failed: { id: string; error: string }[] }> {
+    const batchId = docIds.length > 1 ? crypto.randomUUID() : undefined
     const failed: { id: string; error: string }[] = []
     let ok = 0
+    const headers: Record<string, string> = {}
+    if (batchId) headers['X-Batch-Id'] = batchId
     for (const id of docIds) {
       try {
-        const r = await this.reindexDocument(id)
+        const qs = ''
+        const res = await fetch(`${BASE}/documents/${id}/reindex${qs}`, { method: 'POST', headers })
+        const r = await res.json()
         if (r.ok) ok++
         else failed.push({ id, error: r.error || '重索引失败' })
       } catch (e) {

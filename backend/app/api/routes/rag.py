@@ -214,6 +214,7 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
     """单文件重新索引 — 删除旧向量后重新加载/分块/Embedding/写入"""
     from backend.config import DOCS_DIRECTORY
     source = _extract_source(request)
+    batch_id = request.headers.get("X-Batch-Id") or None
     doc_name = ""
 
     try:
@@ -239,8 +240,8 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
         # 获取更新后的文档信息（含 metadata 字段）
         updated_doc = reg.get_by_doc_id(doc_id) or {}
         _safe_log_op(doc_id, doc_name, "reindex", source,
-                     trace_id=result.get("trace_id") or None, result="success",
-                     detail={"chunk_count": result.get("chunk_count", 0),
+                     trace_id=result.get("trace_id") or None, batch_id=batch_id,
+                     result="success", detail={"chunk_count": result.get("chunk_count", 0),
                              "file_hash": result.get("file_hash", ""),
                              "doc_type": updated_doc.get("doc_type", "general"),
                              "llm_used": bool(updated_doc.get("llm_used", False)),
@@ -249,8 +250,8 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
         return {"ok": True, "doc_id": doc_id, "chunk_count": result.get("chunk_count", 0), "hash": result.get("file_hash", ""), "doc": updated_doc}
     except Exception as e:
         logger.error(f"[RAG] reindex 失败: {e}")
-        _safe_log_op(doc_id, doc_name, "reindex", source, trace_id=None, result="failed",
-                     detail={"error": str(e)[:200]})
+        _safe_log_op(doc_id, doc_name, "reindex", source, trace_id=None, batch_id=batch_id,
+                     result="failed", detail={"error": str(e)[:200]})
         return {"ok": False, "error": str(e)}
 
 
@@ -512,6 +513,7 @@ async def stream_upload_progress(upload_id: str):
 async def delete_document(doc_id: str, request: Request):
     """删除文档 — 软删 registry + 清理两处向量 + 删原文件（防 sync 复活）"""
     source = _extract_source(request)
+    batch_id = request.headers.get("X-Batch-Id") or None
     doc_name = ""
     try:
         reg = _get_registry()
@@ -545,13 +547,13 @@ async def delete_document(doc_id: str, request: Request):
                 logger.warning(f"[RAG] 删除原文件失败 ({file_path}): {e}")
 
         logger.info(f"[RAG] 已删除文档: {doc_id}")
-        _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, result="success",
-                     detail={"file_path": file_path})
+        _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, batch_id=batch_id,
+                     result="success", detail={"file_path": file_path})
         return {"ok": True, "doc_id": doc_id}
     except Exception as e:
         logger.error(f"[RAG] 删除文档失败: {e}")
-        _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, result="failed",
-                     detail={"error": str(e)[:200]})
+        _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, batch_id=batch_id,
+                     result="failed", detail={"error": str(e)[:200]})
         return {"ok": False, "error": str(e)}
 
 
