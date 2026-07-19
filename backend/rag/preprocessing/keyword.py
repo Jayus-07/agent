@@ -221,8 +221,7 @@ def _extract_doc_keywords_ollama(text: str, top_k: int, model: str) -> tuple:
         else:
             kws = [w.strip() for w in content.replace('"','').replace("'","").split(",") if w.strip()][:top_k]
         kw_dicts = [{"word": w, "source": "llm"} for w in kws]
-        # 本地模型 token 不可计量
-        tokens = {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0}
+        tokens = {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0, "model": model}
         logger.info(f"[DocLLM Ollama] {model} 提取 {len(kw_dicts)} 个关键词")
         return kw_dicts, tokens
     except Exception as e:
@@ -269,14 +268,16 @@ def _extract_doc_keywords_proxy(text: str, top_k: int) -> tuple:
         else:
             kws = [w.strip() for w in content.replace('"', '').replace("'", "").split(",") if w.strip()]
 
-        # 读取 token + 花费
+        # 读取 token + 花费 + 模型名
+        from backend.config import LLM_MODEL
         tokens = {
             "prompt_tokens": _last_call_meta.get("prompt_tokens", 0),
             "completion_tokens": _last_call_meta.get("completion_tokens", 0),
             "cost_usd": _last_call_meta.get("cost_usd", 0),
+            "model": LLM_MODEL,
         }
         kw_dicts = [{"word": w, "source": "llm"} for w in kws[:top_k]]
-        logger.info(f"[LLM Keywords] 提取 {len(kw_dicts)} 个, tokens: {tokens}")
+        logger.info(f"[LLM Keywords] {LLM_MODEL} 提取 {len(kw_dicts)} 个, tokens: {tokens}")
         return kw_dicts, tokens
 
     except Exception as e:

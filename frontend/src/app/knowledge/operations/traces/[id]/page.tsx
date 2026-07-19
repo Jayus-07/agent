@@ -387,9 +387,14 @@ export default function DocTracePage() {
                                       {" · "}${costUsd!.toFixed(6)} <span className="text-[9px] cursor-help">ⓘ</span>
                                     </span>
                                   )}
+                                  {llmTokens["model"] && (
+                                    <span className="text-[10px] text-slate-300 ml-0.5">· {String(llmTokens["model"])}</span>
+                                  )}
                                 </span>
                               ) : (
-                                <span className="text-[10px] text-slate-300">（未计量）</span>
+                                <span className="text-[10px] text-slate-300">
+                                  （未计量{llmTokens["model"] ? ` · ${String(llmTokens["model"])}` : ""}）
+                                </span>
                               )}
                             </div>
                             <div className="flex flex-wrap gap-1">
