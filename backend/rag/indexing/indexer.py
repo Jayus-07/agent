@@ -235,7 +235,9 @@ class IncrementalIndexer:
             workflow_kind=WorkflowKind.KNOWLEDGE_INDEX.value,
         )
         trace.tags.update({"kb_id": kb_id, "doc_id": doc_id, "file_ext":
-                          os.path.splitext(file_path)[1].lower()})
+                          os.path.splitext(file_path)[1].lower(),
+                          "embedding_model": os.path.basename(getattr(self.embedding, "model_name", "")) or
+                                             os.path.basename(str(getattr(self.embedding, "model", ""))) or "—"})
 
         # ── ① upload (root) ──
         try:

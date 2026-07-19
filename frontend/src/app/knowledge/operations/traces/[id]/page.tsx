@@ -489,11 +489,13 @@ export default function DocTracePage() {
                 const attempted = s.metrics?.attempted as number || 0;
                 const succeeded = s.metrics?.succeeded as number || 0;
                 const failed = s.metrics?.failed as number || 0;
+                const embModel = trace?.tags?.embedding_model || "";
                 return (
                   <div key={type} className={`px-5 py-4 ${hasError ? "bg-red-50/30" : ""}`}>
                     <div className="flex items-center gap-4">
                       <span className="text-xs w-5">{statusIcon}</span>
                       <span className="text-sm font-medium text-slate-700">{info.label}</span>
+                      {embModel && <span className="text-[10px] text-slate-300">模型: {embModel}</span>}
                       <span className="font-mono text-xs text-slate-500">{totalMs}ms</span>
                       <span className="text-xs text-slate-400">
                         成功 <span className="font-mono text-green-600">{succeeded}</span>
