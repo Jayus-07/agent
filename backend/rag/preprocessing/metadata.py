@@ -122,38 +122,42 @@ def analyze_complexity(text: str, keyword_count: int, confidence: float) -> dict
     """文档复杂度 + 风险分析 — 用于 LLM Router 决策。
 
     Returns:
-        {"token_estimate": int, "structure_score": int, "risk_keyword_hits": int,
-         "keyword_coverage": str, "classification_clear": bool}
+        {headings_count, table_rows, legal_refs, legal_refs_list,
+         risk_keyword_hits, risk_keywords, keyword_count, structure_score,
+         classification_clear}
     """
     chars = len(text)
-    token_estimate = int(chars * 0.8)
 
-    # 结构复杂度
-    structure_score = 0
+    # 结构特征
     headings = len(re.findall(r'^#{1,6}\s+', text, re.MULTILINE))
+    table_rows = len(re.findall(r'^\|.+\|', text, re.MULTILINE))
+    legal_refs_raw = re.findall(r'(第[一二三四五六七八九十百\d]+条|§\s*\d+)', text)
+    legal_refs = len(legal_refs_raw)
+
+    # 结构评分（内部 Router 使用）
+    structure_score = 0
     if headings > 10:       structure_score += 20
     elif headings > 3:      structure_score += 10
-    table_rows = len(re.findall(r'^\|.+\|', text, re.MULTILINE))
     if table_rows > 5:      structure_score += 15
-    legal_refs = len(re.findall(r'第[一二三四五六七八九十百]+条|第\d+条|§\s*\d+', text))
     if legal_refs > 0:      structure_score += 15
 
-    # 风险关键词命中
+    # 风险关键词
     _RISK_PATTERNS = re.compile(
         r'合同|GDPR|隐私|审计|监管|处罚|罚款|合规|诉讼|知识产权|保密',
     )
-    risk_keyword_hits = len(_RISK_PATTERNS.findall(text[:3000]))
-
-    # 关键词覆盖度
-    if keyword_count >= 8:      kw_cov = "rich"
-    elif keyword_count >= 3:     kw_cov = "moderate"
-    else:                        kw_cov = "sparse"
+    risk_matches: list[str] = _RISK_PATTERNS.findall(text[:3000])
+    risk_keyword_hits = len(risk_matches)
+    risk_keywords: list[str] = sorted(set(m.lower().capitalize() for m in risk_matches))
 
     return {
-        "token_estimate": token_estimate,
-        "structure_score": min(structure_score, 50),
+        "headings_count": headings,
+        "table_rows": table_rows,
+        "legal_refs": legal_refs,
+        "legal_refs_list": list(set(legal_refs_raw))[:10],
         "risk_keyword_hits": risk_keyword_hits,
-        "keyword_coverage": kw_cov,
+        "risk_keywords": risk_keywords,
+        "keyword_count": keyword_count,
+        "structure_score": min(structure_score, 50),
         "classification_clear": confidence >= 0.7,
     }
 

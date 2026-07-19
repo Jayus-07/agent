@@ -32,11 +32,19 @@ function normalizeKeywords(arr: unknown): {word: string; source: string}[] {
   return arr as {word: string; source: string}[];
 }
 
-/** LLM 策略映射 */
-const STRATEGY_LABELS: Record<string, string> = {
-  rule_first:  "规则优先",
-  llm_force:   "LLM 强制",
-  dual_merge:  "双线合并",
+/** LLM 策略 → 中文标签 */
+const STRATEGY_LABEL = (strategy: string, llmUsed: boolean, hasRule: boolean): string => {
+  if (!llmUsed && hasRule) return "规则";
+  if (llmUsed && hasRule) return "LLM/规则";
+  if (llmUsed && !hasRule) return "LLM";
+  return "";
+};
+
+/** doc_type → 中文 */
+const DOC_TYPE_CN: Record<string, string> = {
+  compliance: "合规文档", policy: "制度文档", legal: "法律文档",
+  financial: "财务文档", faq: "常见问题", product_spec: "商品规格",
+  listing: "商品上架", sop: "操作流程", general: "通用文档",
 };
 
 interface ChunkDetail {
@@ -54,6 +62,7 @@ export default function DocTracePage() {
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
 
   // ③ Chunk 详情面板
+  const [techOpen, setTechOpen] = useState(false);
   const [chunkPanelOpen, setChunkPanelOpen] = useState(false);
   const [chunkDetailData, setChunkDetailData] = useState<ChunkDetail[]>([]);
   const [chunkDetailLoading, setChunkDetailLoading] = useState(false);
@@ -328,12 +337,11 @@ export default function DocTracePage() {
 
               // ── ④ llm / metadata: 默认折叠，点击展开 ──
               if (type === "llm") {
-                const out: Record<string, unknown> = (spans[0]?.output || {}) as Record<string, unknown>;
+                const out = (spans[0]?.output || {}) as Record<string, unknown>;
                 const ruleMeta = (out["rule_metadata"] || out) as Record<string, unknown>;
                 const llmMeta = (out["llm_metadata"] || out) as Record<string, unknown>;
                 const kwsRule = normalizeKeywords(ruleMeta["keywords_rule"]);
                 const kwsLlmRaw = normalizeKeywords(llmMeta["keywords_llm"]);
-                // ⑥ 去重：LLM 关键词中剔除已在规则中出现的（大小写不敏感），统一首字母大写
                 const ruleWordLower = new Set(kwsRule.map(k => k.word.toLowerCase()));
                 const kwsLlm = kwsLlmRaw
                   .map(k => ({ word: k.word.charAt(0).toUpperCase() + k.word.slice(1).toLowerCase(), source: k.source }))
@@ -345,130 +353,145 @@ export default function DocTracePage() {
                 const llmScore = llmDecision["llm_score"] as number || 0;
                 const llmReason = (llmDecision["llm_reason"] as string) || "";
                 const docType = (ruleMeta["doc_type"] as string) || (spans[0]?.metrics?.doc_type as string) || "";
-                const domain = (ruleMeta["business_domain"] as string) || (out["business_domain"] as string) || "";
                 const persons = (ruleMeta["person_names"] as string) || (out["person_names"] as string) || "";
                 const confidence = (ruleMeta["confidence"] as number) || 0;
                 const complexity = (ruleMeta["complexity"] as Record<string, unknown>) || {};
                 const timeRefs = (ruleMeta["time_refs"] as string[]) || [];
+                const hasRule = kwsRule.length > 0;
+                const strategyLabel = STRATEGY_LABEL(llmStrategy, llmUsed, hasRule);
+                const headingsCnt = complexity["headings_count"] as number || 0;
+                const tableRows = complexity["table_rows"] as number || 0;
+                const legalRefs = complexity["legal_refs"] as number || 0;
+                const legalRefsList = (complexity["legal_refs_list"] as string[]) || [];
+                const riskHits = complexity["risk_keyword_hits"] as number || 0;
+                const riskWords = (complexity["risk_keywords"] as string[]) || [];
+                const kwCount = complexity["keyword_count"] as number || (kwsRule.length + kwsLlm.length);
+                const hasTech = !!llmReason || headingsCnt > 0 || riskHits > 0 || (timeRefs && timeRefs.length > 0) || (persons && persons !== "");
+                const tokenOk = llmUsed && typeof llmTokens["prompt_tokens"] === "number" && (llmTokens["prompt_tokens"] > 0 || (llmTokens["completion_tokens"] ?? 0) > 0);
+                const costUsd = llmTokens["cost_usd"] as number | undefined;
+                const costOk = typeof costUsd === "number" && costUsd > 0;
 
                 return (
                   <div key={type} className="px-5 py-3 cursor-pointer hover:bg-violet-50/50 transition-colors"
                     onClick={() => toggleTypeExpand(type)}>
-                    {/* ── 标题行（始终可见）── */}
+                    {/* ── 标题行 ── */}
                     <div className="flex items-center gap-4 flex-wrap">
                       <span className="text-xs w-5">{statusIcon}</span>
                       <span className="text-sm font-medium text-slate-700">{info.label}</span>
                       <span className="font-mono text-xs text-slate-500">{totalMs}ms</span>
-                      {llmUsed && (
-                        <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-200 text-violet-700">
-                          🔮 LLM
+                      {strategyLabel && (
+                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${llmUsed ? "bg-violet-200 text-violet-700" : "bg-slate-100 text-slate-600"}`}>
+                          {strategyLabel}
                         </span>
                       )}
-                      {llmStrategy && (
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                          llmStrategy === "llm_force" ? "bg-purple-100 text-purple-700" :
-                          llmStrategy === "dual_merge" ? "bg-indigo-100 text-indigo-700" :
-                          "bg-slate-100 text-slate-600"
-                        }`}>
-                          {STRATEGY_LABELS[llmStrategy] || llmStrategy}
-                        </span>
-                      )}
-                      {confidence > 0 && (
+                      {docType && (
                         <span className="text-[10px] text-slate-400">
-                          规则置信度 <span className="font-mono text-slate-500">{(confidence * 100).toFixed(0)}%</span>
+                          分类: {DOC_TYPE_CN[docType] || docType}
+                          {confidence > 0 && <span className="font-mono text-slate-500 ml-0.5">（匹配度 {(confidence * 100).toFixed(0)}%）</span>}
                         </span>
                       )}
                       <span className="ml-auto text-[10px] text-slate-300">{expanded ? "▲ 收起" : "▼ 展开"}</span>
                     </div>
-                    {/* ── 详情区（仅展开时渲染）── */}
+                    {/* ── 展开区 ── */}
                     {expanded && (
-                      <div className="mt-3 ml-9 space-y-2" onClick={(e) => e.stopPropagation()}>
-                        {llmReason && (
-                          <div className="text-[11px] text-slate-500 bg-violet-50/50 rounded px-2 py-1 leading-relaxed">
-                            💡 {llmReason}
-                            {llmScore > 0 && <span className="text-slate-400 ml-1">（LLM 价值评分 {llmScore}）</span>}
-                          </div>
-                        )}
-                        {llmUsed && typeof llmTokens["prompt_tokens"] === "number" && (llmTokens["prompt_tokens"] > 0 || (llmTokens["completion_tokens"] ?? 0) > 0) && (
-                          <div className="flex items-center gap-3 text-[10px] text-slate-400">
-                            <span>Token: </span>
-                            <span className="font-mono">入 {llmTokens["prompt_tokens"]}</span>
-                            <span className="font-mono">出 {llmTokens["completion_tokens"] ?? 0}</span>
-                            {typeof llmTokens["cost_usd"] === "number" && llmTokens["cost_usd"] > 0 && (
-                              <span className="text-emerald-500">${llmTokens["cost_usd"].toFixed(6)}</span>
-                            )}
-                          </div>
-                        )}
-                        <div className="flex flex-wrap gap-1.5">
-                          {docType && (
-                            <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-700">
-                              📄 {docType}
-                            </span>
-                          )}
-                          {domain && (
-                            <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-700">
-                              🏭 {domain}
-                            </span>
-                          )}
-                          {persons && persons !== "" && persons.split(",").filter(Boolean).map((p) => (
-                            <span key={p.trim()} className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
-                              🏷️ {p.trim()}
-                            </span>
-                          ))}
-                        </div>
-                        {complexity && Object.keys(complexity).length > 0 && (
-                          <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-                            <span className="text-slate-400 mr-0.5">📊</span>
-                            {(complexity["keyword_coverage"] as string) && (
-                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">
-                                覆盖度 {complexity["keyword_coverage"] as string}
-                              </span>
-                            )}
-                            {complexity["structure_score"] !== undefined && (
-                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
-                                🏗️ 结构 {(complexity["structure_score"] as number)}
-                              </span>
-                            )}
-                            {complexity["risk_keyword_hits"] !== undefined && (
-                              <span className={`px-1.5 py-0.5 rounded font-medium ${
-                                (complexity["risk_keyword_hits"] as number) > 0 ? "bg-red-50 text-red-600" : "bg-slate-100 text-slate-500"
-                              }`}>
-                                ⚠️ 风险命中 {(complexity["risk_keyword_hits"] as number)}
-                              </span>
-                            )}
-                            {complexity["token_estimate"] !== undefined && (
-                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 font-mono">
-                                ~{(complexity["token_estimate"] as number)} tokens
-                              </span>
-                            )}
-                          </div>
-                        )}
-                        {timeRefs && timeRefs.length > 0 && (
-                          <div className="flex flex-wrap gap-1 items-center">
-                            <span className="text-[10px] text-slate-400">🕐</span>
-                            {timeRefs.map((t, i) => (
-                              <span key={i} className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-500 font-mono">{t}</span>
-                            ))}
-                          </div>
-                        )}
-                        {kwsLlm.length > 0 && (
+                      <div className="mt-3 ml-9 space-y-2.5" onClick={(e) => e.stopPropagation()}>
+                        {/* LLM 关键词 + Token */}
+                        {llmUsed && kwsLlm.length > 0 && (
                           <div>
-                            <span className="text-[10px] text-violet-400 mr-1">🔮 LLM 提取</span>
-                            <div className="flex flex-wrap gap-1 mt-1">
+                            <div className="flex items-center gap-2 mb-1.5">
+                              <span className="text-[10px] text-violet-500 font-medium">🔮 LLM 提取（文档级）</span>
+                              {tokenOk ? (
+                                <span className="text-[10px] text-slate-400">
+                                  入 <span className="font-mono text-slate-500">{llmTokens["prompt_tokens"]}</span>
+                                  {" · "}出 <span className="font-mono text-slate-500">{llmTokens["completion_tokens"] ?? 0}</span>
+                                  {costOk && (
+                                    <span className="text-emerald-500 ml-0.5" title="基于模型定价表估算，非实际账单">
+                                      {" · "}${costUsd!.toFixed(6)} <span className="text-[9px] cursor-help">ⓘ</span>
+                                    </span>
+                                  )}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-slate-300">（未计量）</span>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap gap-1">
                               {kwsLlm.map((kw) => (
                                 <span key={kw.word} className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-violet-100 text-violet-700 ring-1 ring-violet-200">{kw.word}</span>
                               ))}
                             </div>
                           </div>
                         )}
-                        {kwsRule.length > 0 && (
+                        {/* 规则关键词 */}
+                        {hasRule && (
                           <div>
-                            <span className="text-[10px] text-slate-400 mr-1">📋 规则提取</span>
+                            <span className="text-[10px] text-slate-400">📋 规则提取（文档级）</span>
                             <div className="flex flex-wrap gap-1 mt-1">
                               {kwsRule.map((kw, i) => (
                                 <span key={i} className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600">{kw.word}</span>
                               ))}
                             </div>
+                          </div>
+                        )}
+                        {/* 🔧 技术详情（可折叠） */}
+                        {hasTech && (
+                          <div className="border-t border-slate-100 pt-2">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setTechOpen(!techOpen); }}
+                              className="text-[10px] text-slate-400 hover:text-slate-600"
+                            >
+                              🔧 技术详情 {techOpen ? "▾ 收起" : "▸ 展开"}
+                            </button>
+                            {techOpen && (
+                              <div className="mt-2 space-y-1.5 text-[10px] text-slate-500">
+                                {/* 决策原因 */}
+                                {llmReason && (
+                                  <div className="bg-slate-50 rounded px-2 py-1.5 leading-relaxed space-y-0.5">
+                                    <span className="font-medium text-slate-600">💡 决策原因</span>
+                                    {llmReason.split(";").map((s) => s.trim()).filter(Boolean).map((p: string) => {
+                                      let cn = p
+                                        .replace(/high_value:(\w+)/, (_, t: string) => `${DOC_TYPE_CN[t] || t}，高价值`)
+                                        .replace(/risk_hits:(\d+)/, (_, n: string) => `命中 ${n} 个风险词`)
+                                        .replace(/low_conf:([\d.]+)/, (_, n: string) => `分类匹配度较低（${(parseFloat(n)*100).toFixed(0)}%）`)
+                                        .replace(/complex_struct:(\d+)/, (_, n: string) => `文档结构复杂（${n} 分）`)
+                                        .replace(/forced:high_risk/, "高风险类强制走 LLM");
+                                      // 提取评分
+                                      const m = cn.match(/\((\+\d+)\)/);
+                                      return <div key={p}>· {cn} {m ? m[0] : ""}</div>;
+                                    })}
+                                    {llmScore > 0 && <div>综合评分 {llmScore}（≥50 触发 LLM）</div>}
+                                  </div>
+                                )}
+                                {/* 文档结构 */}
+                                {(headingsCnt > 0 || kwCount > 0 || riskHits > 0) && (
+                                  <div className="bg-slate-50 rounded px-2 py-1.5">
+                                    <span className="font-medium text-slate-600">📊 文档结构</span>
+                                    <span>：{headingsCnt} 个标题</span>
+                                    {tableRows > 0 && <span> · {tableRows} 行表格</span>}
+                                    {legalRefs > 0 && <span> · {legalRefs} 处法规引用{legalRefsList.length > 0 && `（${legalRefsList.slice(0,5).join("、")}）`}</span>}
+                                    {kwCount > 0 && <span> · 匹配规则关键词 {kwCount} 个</span>}
+                                    {riskHits > 0 && (
+                                      <span className="text-red-500">
+                                        {" · "}风险词 {riskHits} 个{riskWords.length > 0 && `（${riskWords.join("、")}）`}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                                {/* 时间引用 */}
+                                {timeRefs && timeRefs.length > 0 && (
+                                  <div className="bg-slate-50 rounded px-2 py-1.5">
+                                    <span className="font-medium text-slate-600">🕐 时间引用</span>
+                                    <span className="ml-1">{timeRefs.join("、")}</span>
+                                  </div>
+                                )}
+                                {/* 实体 */}
+                                {persons && persons !== "" && (
+                                  <div className="bg-slate-50 rounded px-2 py-1.5">
+                                    <span className="font-medium text-slate-600">🏷️ 实体</span>
+                                    <span className="ml-1">{persons}</span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
