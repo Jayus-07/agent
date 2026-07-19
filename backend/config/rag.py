@@ -16,6 +16,9 @@ load_dotenv()
 # 使用本地 Ollama 模型做 chunk 级关键词提取（仅 LLM_FORCED_TYPES 文档）
 CHUNK_LLM_MODEL = os.getenv("CHUNK_LLM_MODEL", "qwen2.5:3b")
 
+# 文档级关键词 LLM 模型 — 设了用本地 Ollama（免费），不设走 _LLMProxy（当前 DeepSeek）
+DOC_LLM_MODEL = os.getenv("DOC_LLM_MODEL", "")
+
 # ====================================
 # Chunk 配置
 # ====================================

@@ -183,10 +183,55 @@ def extract_chunk_keywords_qwen(text: str, top_k: int = 5) -> tuple:
 def extract_doc_keywords_llm(text: str, top_k: int = 10) -> tuple:
     """LLM 关键词提取 — 返回 (keyword_dicts, token_dict)。
 
-    keyword_dicts: [{"word": "...", "source": "llm"}, ...]
-    token_dict: {"prompt_tokens": N, "completion_tokens": M}
-    失败时返回空列表 + 空 token。
+    路由逻辑：DOC_LLM_MODEL 有值 → 本地 Ollama；否则 → _LLMProxy（DeepSeek/当前模型）。
     """
+    from backend.config.rag import DOC_LLM_MODEL
+
+    if DOC_LLM_MODEL:
+        return _extract_doc_keywords_ollama(text, top_k, DOC_LLM_MODEL)
+    return _extract_doc_keywords_proxy(text, top_k)
+
+
+def _extract_doc_keywords_ollama(text: str, top_k: int, model: str) -> tuple:
+    """本地 Ollama 提取文档级关键词（免费，zero cost）。"""
+    import json as _json
+    from langchain_ollama import ChatOllama
+
+    safe_text = text[:6000]
+    prompt = f"""你是跨境电商 RAG 系统的关键词提取助手。
+
+从以下文档中提取 {top_k} 个以内的高质量检索关键词，用于电商场景的语义搜索。
+
+要求:
+- 关键词必须是文档中出现的核心术语、品类、品牌、属性、政策条款
+- 输出格式: 纯 JSON 数组，不要额外说明
+
+文档:
+{safe_text}
+
+输出:"""
+    try:
+        llm = ChatOllama(model=model, temperature=0.0, num_ctx=4096, request_timeout=60)
+        result = llm.invoke(prompt)
+        content = result.content.strip() if hasattr(result, "content") else str(result).strip()
+        match = re.search(r'\[.*?\]', content, re.DOTALL)
+        if match:
+            kws = _json.loads(match.group())
+            kws = [str(k).strip() for k in kws if str(k).strip() and len(str(k).strip()) > 1][:top_k]
+        else:
+            kws = [w.strip() for w in content.replace('"','').replace("'","").split(",") if w.strip()][:top_k]
+        kw_dicts = [{"word": w, "source": "llm"} for w in kws]
+        # 本地模型 token 不可计量
+        tokens = {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0}
+        logger.info(f"[DocLLM Ollama] {model} 提取 {len(kw_dicts)} 个关键词")
+        return kw_dicts, tokens
+    except Exception as e:
+        logger.warning(f"[DocLLM Ollama] 失败: {e}")
+        return [], {}
+
+
+def _extract_doc_keywords_proxy(text: str, top_k: int) -> tuple:
+    """通过 _LLMProxy 提取文档级关键词（Cloud API，含 token 计量）。"""
     from backend.infra.llm import llm
     safe_text = text.encode("utf-8", errors="ignore")[:6000].decode("utf-8", errors="ignore")
     prompt = f"""你是跨境电商 RAG 系统的关键词提取助手。
