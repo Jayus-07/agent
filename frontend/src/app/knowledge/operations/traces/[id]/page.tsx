@@ -394,6 +394,9 @@ export default function DocTracePage() {
                             <span>Token: </span>
                             <span className="font-mono">入 {llmTokens["prompt_tokens"]}</span>
                             <span className="font-mono">出 {llmTokens["completion_tokens"] ?? 0}</span>
+                            {typeof llmTokens["cost_usd"] === "number" && llmTokens["cost_usd"] > 0 && (
+                              <span className="text-emerald-500">${llmTokens["cost_usd"].toFixed(6)}</span>
+                            )}
                           </div>
                         )}
                         <div className="flex flex-wrap gap-1.5">

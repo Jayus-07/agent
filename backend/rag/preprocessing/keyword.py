@@ -162,10 +162,11 @@ def extract_doc_keywords_llm(text: str, top_k: int = 10) -> tuple:
         else:
             kws = [w.strip() for w in content.replace('"', '').replace("'", "").split(",") if w.strip()]
 
-        # 读取 token
+        # 读取 token + 花费
         tokens = {
             "prompt_tokens": _last_call_meta.get("prompt_tokens", 0),
             "completion_tokens": _last_call_meta.get("completion_tokens", 0),
+            "cost_usd": _last_call_meta.get("cost_usd", 0),
         }
         kw_dicts = [{"word": w, "source": "llm"} for w in kws[:top_k]]
         logger.info(f"[LLM Keywords] 提取 {len(kw_dicts)} 个, tokens: {tokens}")

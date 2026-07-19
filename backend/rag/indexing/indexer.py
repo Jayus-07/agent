@@ -532,6 +532,7 @@ class IncrementalIndexer:
         if llm_used:
             metrics["llm_prompt_tokens"] = llm_tokens.get("prompt_tokens", 0)
             metrics["llm_completion_tokens"] = llm_tokens.get("completion_tokens", 0)
+            metrics["llm_cost_usd"] = llm_tokens.get("cost_usd", 0)
         if not doc_db_id:
             metrics["doc_db_write"] = "failed"
 
