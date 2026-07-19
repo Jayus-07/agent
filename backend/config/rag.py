@@ -11,6 +11,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ====================================
+# Chunk 级 LLM 关键词配置
+# ====================================
+# 使用本地 Ollama 模型做 chunk 级关键词提取（仅 LLM_FORCED_TYPES 文档）
+CHUNK_LLM_MODEL = os.getenv("CHUNK_LLM_MODEL", "qwen2.5:3b")
+
+# ====================================
 # Chunk 配置
 # ====================================
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))

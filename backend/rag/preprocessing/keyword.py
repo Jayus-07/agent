@@ -135,6 +135,12 @@ def extract_chunk_keywords_qwen(text: str, top_k: int = 5) -> tuple:
     失败时返回空列表，不影响索引流程。
     """
     try:
+        from backend.config.rag import CHUNK_LLM_MODEL
+    except ImportError:
+        CHUNK_LLM_MODEL = "qwen2.5:3b"  # type: ignore[assignment]
+    model_name: str = CHUNK_LLM_MODEL
+
+    try:
         from langchain_ollama import ChatOllama
         from backend.config import LLM_TEMPERATURE
         import json as _json
@@ -151,7 +157,7 @@ def extract_chunk_keywords_qwen(text: str, top_k: int = 5) -> tuple:
 输出："""
 
         llm = ChatOllama(
-            model="qwen2.5:3b",
+            model=model_name,
             temperature=0.0,
             num_ctx=2048,
             request_timeout=30,
@@ -166,12 +172,12 @@ def extract_chunk_keywords_qwen(text: str, top_k: int = 5) -> tuple:
         else:
             keywords = [w.strip() for w in content.replace('"', "").replace("'", "").split(",") if w.strip()][:top_k]
 
-        logger.debug(f"[Qwen Chunk] 提取 {len(keywords)} 个关键词: {keywords}")
-        return keywords, "qwen2.5:3b"
+        logger.debug(f"[ChunkLLM] {model_name} 提取 {len(keywords)} 个关键词: {keywords}")
+        return keywords, model_name
 
     except Exception as e:
-        logger.warning(f"[Qwen Chunk] 提取失败（非致命）: {e}")
-        return [], "qwen2.5:3b"
+        logger.warning(f"[ChunkLLM] 提取失败（非致命）: {e}")
+        return [], model_name
 
 
 def extract_doc_keywords_llm(text: str, top_k: int = 10) -> tuple:
