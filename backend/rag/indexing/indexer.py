@@ -495,17 +495,24 @@ class IncrementalIndexer:
                 section_positions.append((idx, sec_title))
         section_positions.sort(key=lambda x: x[0])
 
+        # Qwen chunk 批量调用（P2: N次→1次）
+        qwen_kws_per_chunk: list[list[str]] = [[] for _ in chunks]
         if use_chunk_llm:
-            from backend.rag.preprocessing.keyword import extract_chunk_keywords_qwen
-            logger.info(f"[Chunk] 高价值文档({doc_type_val})，启用 Qwen chunk 关键词提取")
+            from backend.rag.preprocessing.keyword import extract_chunk_keywords_qwen_batch
+            logger.info(f"[Chunk] 高价值文档({doc_type_val})，启用 Qwen chunk 批量提取（{len(chunks)} chunks）")
+            qwen_kws_per_chunk, chunk_llm_model = extract_chunk_keywords_qwen_batch(
+                [ch.page_content for ch in chunks]
+            )
+            chunk_llm_count = sum(1 for kws in qwen_kws_per_chunk if kws)
+            chunk_llm_model = chunk_llm_model or "qwen2.5:3b"
 
-        for ch in chunks:
+        for i, ch in enumerate(chunks):
             ch.metadata["doc_type"] = doc_type_val
             ch.metadata["person_names"] = person_val
             chunk_kws = _chunk_kw(ch.page_content, doc_type=doc_type_val)
             ch.metadata["chunk_keywords"] = ", ".join(chunk_kws) if chunk_kws else ""
 
-            # 章节归属：找到 chunk 内容之前的最后一个 section
+            # 章节归属
             if section_positions:
                 chunk_start = full_text.find(ch.page_content[:80])
                 section_title = ""
@@ -515,14 +522,10 @@ class IncrementalIndexer:
                 if section_title:
                     ch.metadata["section_title"] = section_title
 
-            # Qwen chunk 关键词（仅高价值文档）
-            if use_chunk_llm:
-                qwen_kws, qwen_model = extract_chunk_keywords_qwen(ch.page_content)
-                if qwen_kws:
-                    ch.metadata["chunk_llm_keywords"] = ", ".join(qwen_kws)
-                    ch.metadata["chunk_llm_model"] = qwen_model
-                    chunk_llm_model = qwen_model
-                    chunk_llm_count += 1
+            # Qwen 关键词（从批量结果取）
+            if use_chunk_llm and i < len(qwen_kws_per_chunk) and qwen_kws_per_chunk[i]:
+                ch.metadata["chunk_llm_keywords"] = ", ".join(qwen_kws_per_chunk[i])
+                ch.metadata["chunk_llm_model"] = chunk_llm_model
 
         # 记录到 trace（index_metadata span 的 metrics 里）
         if use_chunk_llm:
@@ -673,6 +676,8 @@ class IncrementalIndexer:
                 "quality_score": doc_meta.get("quality_score", 0),
                 "quality_issues": doc_meta.get("quality_issues", ""),
                 "embedding_model": doc_meta.get("embedding_model", ""),
+                "minhash_sig": doc_meta.get("minhash_sig", ""),
+                "near_dup_id": doc_meta.get("near_dup_id", ""),
             },
         )
 
@@ -732,6 +737,27 @@ class IncrementalIndexer:
                 logger.warning(f"[Quality] 文档未通过质量门禁: {quality['issues']}")
 
             doc_type, confidence = classify_with_confidence(full_text, filename=fname, file_path=fpath)
+
+            # P2-1: MinHash 语义去重 — 检查同类型文档的近似内容
+            from backend.rag.preprocessing.metadata import compute_minhash, minhash_similarity, _SIMILARITY_THRESHOLD
+            minhash_sig = compute_minhash(full_text)
+            existing_same_type = self.registry.list_by_doc_type(doc_type)
+            near_dup_id = ""
+            for existing in existing_same_type:
+                if existing.get("doc_id") == base_meta.get("doc_id", ""):
+                    continue
+                existing_sig = existing.get("minhash_sig", "")
+                if existing_sig:
+                    try:
+                        existing_sig = json.loads(existing_sig) if isinstance(existing_sig, str) else existing_sig
+                        sim = minhash_similarity(minhash_sig, existing_sig)
+                        if sim > _SIMILARITY_THRESHOLD:
+                            near_dup_id = existing.get("doc_id", "")
+                            logger.warning(f"[MinHash] 检测到近似文档: sim={sim:.2f}, existing={near_dup_id}")
+                            break
+                    except Exception:
+                        pass
+
             time_refs = extract_time_refs(full_text)
             domain = detect_business_domain(full_text)
             # 先跑规则关键词获取数量，用于复杂度分析
@@ -860,6 +886,8 @@ product_spec(商品规格), sop(操作流程), listing(商品上架), general(�
             "quality_issues": ", ".join(quality.get("issues", [])),
             "embedding_model": os.path.basename(getattr(self.embedding, "model_name", "") or
                                                  str(getattr(self.embedding, "model", ""))) or "",
+            "minhash_sig": json.dumps(minhash_sig),
+            "near_dup_id": near_dup_id,
         }
 
     # ---- 公开重索引 ----

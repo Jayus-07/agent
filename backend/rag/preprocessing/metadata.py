@@ -67,6 +67,43 @@ def assess_quality(text: str) -> dict:
     return {"score": round(score, 2), "passed": passed, "issues": issues}
 
 
+def compute_minhash(text: str, n_gram: int = 3, n_hashes: int = 128) -> list[int]:
+    """MinHash 签名 — 用于近似文档去重（无需 LLM）。
+
+    返回 128 个最小 hash 值作为文档指纹。Jaccard 相似度 ≈ 签名匹配比例。
+    """
+    import hashlib
+    # 提取 n-gram token（中文按字级 3-gram）
+    tokens: set[str] = set()
+    clean = re.sub(r'\s+', '', text)[:5000]  # 取前 5000 字，去空格
+    for i in range(len(clean) - n_gram + 1):
+        tokens.add(clean[i:i + n_gram])
+
+    if not tokens:
+        return [0] * n_hashes
+
+    # 对每个 hash 函数，取所有 token 的最小 hash
+    signature: list[int] = []
+    for seed in range(n_hashes):
+        min_val = 2**64
+        for t in tokens:
+            h = int(hashlib.md5(f"{seed}:{t}".encode()).hexdigest()[:16], 16)
+            min_val = min(min_val, h)
+        signature.append(min_val)
+    return signature
+
+
+def minhash_similarity(sig1: list[int], sig2: list[int]) -> float:
+    """两个 MinHash 签名的 Jaccard 相似度估计。"""
+    if len(sig1) != len(sig2) or not sig1:
+        return 0.0
+    matches = sum(1 for a, b in zip(sig1, sig2) if a == b)
+    return matches / len(sig1)
+
+
+_SIMILARITY_THRESHOLD = 0.85  # 相似度 > 85% 视为近重复
+
+
 def classify_with_confidence(text: str, filename: str = "", file_path: str = "") -> tuple[str, float]:
     """V2 加权计分分类 + 路径上下文 + confidence 计算。
 

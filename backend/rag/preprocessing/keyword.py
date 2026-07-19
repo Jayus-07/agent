@@ -128,6 +128,54 @@ def extract_rule_keywords(text: str, top_k: int = 10, doc_type: str = "general")
 extract_doc_keywords_rule = extract_rule_keywords
 
 
+def extract_chunk_keywords_qwen_batch(chunks: list[str], top_k: int = 5) -> tuple:
+    """批量 Chunk LLM 关键词提取 — 一次 prompt 处理多个 chunk（省 N-1 次调用）。
+
+    Returns: ([[kw1, kw2, ...], ...], model_name)
+    """
+    from backend.config.rag import CHUNK_LLM_MODEL
+    import json as _json
+    from langchain_ollama import ChatOllama
+
+    model_name = CHUNK_LLM_MODEL
+    chunk_texts = [f"<chunk id={i}>{t[:800]}</chunk>" for i, t in enumerate(chunks)]
+    all_chunks = "\n".join(chunk_texts)
+
+    prompt = f"""对以下 {len(chunks)} 个文档片段分别提取 {top_k} 个以内的关键词。
+输出 JSON 数组的数组：[[chunk0的关键词], [chunk1的关键词], ...]
+只输出 JSON，不要解释。
+
+{all_chunks}
+
+JSON:"""
+
+    try:
+        llm = ChatOllama(model=model_name, temperature=0.0, num_ctx=4096, request_timeout=60)
+        result = llm.invoke(prompt)
+        content = result.content.strip() if hasattr(result, "content") else str(result).strip()
+
+        match = re.search(r'\[\[.*\]\]', content, re.DOTALL)
+        if match:
+            data = _json.loads(match.group())
+            if isinstance(data, list):
+                keywords_per_chunk = []
+                for items in data:
+                    if isinstance(items, list):
+                        kws = [str(k).strip() for k in items if str(k).strip() and len(str(k).strip()) > 1][:top_k]
+                    else:
+                        kws = []
+                    keywords_per_chunk.append(kws)
+                # 补齐长度
+                while len(keywords_per_chunk) < len(chunks):
+                    keywords_per_chunk.append([])
+                logger.info(f"[ChunkLLM Batch] {model_name} → {len(chunks)} chunks, 总计 {sum(len(k) for k in keywords_per_chunk)} 关键词")
+                return keywords_per_chunk, model_name
+        return [[] for _ in chunks], model_name
+    except Exception as e:
+        logger.warning(f"[ChunkLLM Batch] 失败: {e}")
+        return [[] for _ in chunks], model_name
+
+
 def extract_chunk_keywords_qwen(text: str, top_k: int = 5) -> tuple:
     """Chunk 级 LLM 关键词提取 — 使用本地 Qwen2.5:3b（Ollama），免费无消耗。
 

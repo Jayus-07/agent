@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS doc_registry (
     quality_score REAL DEFAULT 0,
     quality_issues TEXT DEFAULT '',
     embedding_model TEXT DEFAULT '',
+    minhash_sig  TEXT DEFAULT '',
+    near_dup_id  TEXT DEFAULT '',
     status       TEXT DEFAULT 'active',
     last_indexed TEXT,
     created_at   TEXT DEFAULT (datetime('now')),
@@ -72,7 +74,9 @@ class DocumentRegistry:
                                   ("llm_used", "INTEGER DEFAULT 0"),
                                   ("quality_score", "REAL DEFAULT 0"),
                                   ("quality_issues", "TEXT DEFAULT ''"),
-                                  ("embedding_model", "TEXT DEFAULT ''")]:
+                                  ("embedding_model", "TEXT DEFAULT ''"),
+                                  ("minhash_sig", "TEXT DEFAULT ''"),
+                                  ("near_dup_id", "TEXT DEFAULT ''")]:
                 try:
                     conn.execute(f"SELECT {col} FROM doc_registry LIMIT 1")
                 except sqlite3.OperationalError:
@@ -113,6 +117,15 @@ class DocumentRegistry:
         with self._lock, self._conn() as conn:
             rows = conn.execute(
                 "SELECT * FROM doc_registry WHERE status = 'active'"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_by_doc_type(self, doc_type: str, limit: int = 50) -> list[dict]:
+        """按文档类型查询（供 MinHash 去重）。"""
+        with self._lock, self._conn() as conn:
+            rows = conn.execute(
+                "SELECT doc_id, minhash_sig FROM doc_registry WHERE doc_type = ? AND status = 'active' LIMIT ?",
+                (doc_type, limit),
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -246,21 +259,24 @@ class DocumentRegistry:
         quality_score = meta.get("quality_score", 0)
         quality_issues = meta.get("quality_issues", "")
         embedding_model = meta.get("embedding_model", "")
+        minhash_sig = meta.get("minhash_sig", "")
+        near_dup_id = meta.get("near_dup_id", "")
 
         with self._lock, self._conn() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO doc_registry
                    (file_path, file_name, kb_id, doc_id, file_hash, file_size, file_mtime,
                     chunk_count, chunk_ids, doc_db_id, doc_type, confidence, llm_used,
-                    quality_score, quality_issues, embedding_model,
+                    quality_score, quality_issues, embedding_model, minhash_sig, near_dup_id,
                     status, last_indexed, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))""",
                 (
                     file_path, file_name, kb_id, doc_id, file_hash,
                     fsize, fmtime,
                     len(chunk_ids), json.dumps(chunk_ids), doc_db_id,
                     doc_type, confidence, llm_used,
                     quality_score, quality_issues, embedding_model,
+                    minhash_sig, near_dup_id,
                 ),
             )
 
