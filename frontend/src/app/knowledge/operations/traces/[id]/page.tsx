@@ -495,7 +495,6 @@ export default function DocTracePage() {
                     <div className="flex items-center gap-4">
                       <span className="text-xs w-5">{statusIcon}</span>
                       <span className="text-sm font-medium text-slate-700">{info.label}</span>
-                      {embModel && <span className="text-[10px] text-slate-300">模型: {embModel}</span>}
                       <span className="font-mono text-xs text-slate-500">{totalMs}ms</span>
                       <span className="text-xs text-slate-400">
                         成功 <span className="font-mono text-green-600">{succeeded}</span>
@@ -504,6 +503,7 @@ export default function DocTracePage() {
                         )}
                         <span className="ml-1">/ 共 <span className="font-mono text-slate-500">{attempted}</span></span>
                       </span>
+                      {embModel && <span className="ml-auto text-[10px] text-slate-300">模型: {embModel}</span>}
                     </div>
                   </div>
                 );
