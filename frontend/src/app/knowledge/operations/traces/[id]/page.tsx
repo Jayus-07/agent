@@ -332,7 +332,12 @@ export default function DocTracePage() {
                 const ruleMeta = (out["rule_metadata"] || out) as Record<string, unknown>;
                 const llmMeta = (out["llm_metadata"] || out) as Record<string, unknown>;
                 const kwsRule = normalizeKeywords(ruleMeta["keywords_rule"]);
-                const kwsLlm = normalizeKeywords(llmMeta["keywords_llm"]);
+                const kwsLlmRaw = normalizeKeywords(llmMeta["keywords_llm"]);
+                // ⑥ 去重：LLM 关键词中剔除已在规则中出现的（大小写不敏感），统一首字母大写
+                const ruleWordLower = new Set(kwsRule.map(k => k.word.toLowerCase()));
+                const kwsLlm = kwsLlmRaw
+                  .map(k => ({ word: k.word.charAt(0).toUpperCase() + k.word.slice(1).toLowerCase(), source: k.source }))
+                  .filter(k => !ruleWordLower.has(k.word.toLowerCase()));
                 const llmUsed = (llmMeta["llm_used"] as boolean) || false;
                 const llmTokens = (llmMeta["llm_tokens"] as Record<string, number>) || {};
                 const llmStrategy = (llmMeta["llm_strategy"] as string) || "";
@@ -370,7 +375,7 @@ export default function DocTracePage() {
                       )}
                       {confidence > 0 && (
                         <span className="text-[10px] text-slate-400">
-                          置信度 <span className="font-mono text-slate-500">{(confidence * 100).toFixed(0)}%</span>
+                          规则置信度 <span className="font-mono text-slate-500">{(confidence * 100).toFixed(0)}%</span>
                         </span>
                       )}
                       <span className="ml-auto text-[10px] text-slate-300">{expanded ? "▲ 收起" : "▼ 展开"}</span>
@@ -381,10 +386,10 @@ export default function DocTracePage() {
                         {llmReason && (
                           <div className="text-[11px] text-slate-500 bg-violet-50/50 rounded px-2 py-1 leading-relaxed">
                             💡 {llmReason}
-                            {llmScore > 0 && <span className="text-slate-400 ml-1">（评分 {llmScore}）</span>}
+                            {llmScore > 0 && <span className="text-slate-400 ml-1">（LLM 价值评分 {llmScore}）</span>}
                           </div>
                         )}
-                        {llmUsed && typeof llmTokens["prompt_tokens"] === "number" && (
+                        {llmUsed && typeof llmTokens["prompt_tokens"] === "number" && (llmTokens["prompt_tokens"] > 0 || (llmTokens["completion_tokens"] ?? 0) > 0) && (
                           <div className="flex items-center gap-3 text-[10px] text-slate-400">
                             <span>Token: </span>
                             <span className="font-mono">入 {llmTokens["prompt_tokens"]}</span>
@@ -404,26 +409,34 @@ export default function DocTracePage() {
                           )}
                           {persons && persons !== "" && persons.split(",").filter(Boolean).map((p) => (
                             <span key={p.trim()} className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
-                              👤 {p.trim()}
+                              🏷️ {p.trim()}
                             </span>
                           ))}
                         </div>
                         {complexity && Object.keys(complexity).length > 0 && (
-                          <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-400">
-                            <span>复杂度:</span>
+                          <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                            <span className="text-slate-400 mr-0.5">📊</span>
                             {(complexity["keyword_coverage"] as string) && (
-                              <span className="font-medium text-slate-500">覆盖度 {complexity["keyword_coverage"] as string}</span>
+                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">
+                                覆盖度 {complexity["keyword_coverage"] as string}
+                              </span>
                             )}
                             {complexity["structure_score"] !== undefined && (
-                              <span className="font-mono">结构 {(complexity["structure_score"] as number)}</span>
+                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                                🏗️ 结构 {(complexity["structure_score"] as number)}
+                              </span>
                             )}
                             {complexity["risk_keyword_hits"] !== undefined && (
-                              <span className={complexity["risk_keyword_hits"] as number > 0 ? "text-red-500" : ""}>
-                                风险命中 {complexity["risk_keyword_hits"] as number}
+                              <span className={`px-1.5 py-0.5 rounded font-medium ${
+                                (complexity["risk_keyword_hits"] as number) > 0 ? "bg-red-50 text-red-600" : "bg-slate-100 text-slate-500"
+                              }`}>
+                                ⚠️ 风险命中 {(complexity["risk_keyword_hits"] as number)}
                               </span>
                             )}
                             {complexity["token_estimate"] !== undefined && (
-                              <span className="font-mono text-slate-400">~{complexity["token_estimate"] as number} tokens</span>
+                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 font-mono">
+                                ~{(complexity["token_estimate"] as number)} tokens
+                              </span>
                             )}
                           </div>
                         )}
