@@ -734,6 +734,35 @@ class IncrementalIndexer:
         except Exception:
             return {"doc_type": "general"}
 
+        # 低置信 LLM 复验：正则全挂时补一次 LLM 确认分类
+        if confidence < 0.3 and doc_type == "general":
+            try:
+                from backend.config.rag import DOC_LLM_MODEL
+                doc_type_prompt = f"""请判断以下文档的类型，从以下类型中选择一个最匹配的：
+compliance(合规), legal(法律), financial(财务), policy(制度), faq(常见问题),
+product_spec(商品规格), sop(操作流程), listing(商品上架), general(通用)
+
+只输出类型名，不要解释。
+
+文档开头：
+{full_text[:1500]}"""
+                if DOC_LLM_MODEL:
+                    from langchain_ollama import ChatOllama
+                    llm_l = ChatOllama(model=DOC_LLM_MODEL, temperature=0.0, num_ctx=2048, request_timeout=20)
+                    llm_type = llm_l.invoke(doc_type_prompt).content.strip()
+                else:
+                    from backend.infra.llm import llm
+                    llm_type = llm.invoke(doc_type_prompt).content.strip()
+                # 验证返回值
+                valid_types = {"compliance", "legal", "financial", "policy", "faq",
+                               "product_spec", "sop", "listing", "general"}
+                if llm_type and llm_type.lower() in valid_types:
+                    doc_type = llm_type.lower()
+                    confidence = 0.7  # LLM 确认过的给予基础置信
+                    logger.info(f"[Classify] LLM 复验: {doc_type}")
+            except Exception as e:
+                logger.warning(f"[Classify] LLM 复验失败: {e}")
+
         # 合并关键词（兼容旧字段，新字段已是对象数组）
         kws_rule_objs = kw_result.rule_keywords  # [{"word": ..., "source": "rule"}, ...]
         kws_llm_objs = kw_result.llm_keywords    # [{"word": ..., "source": "llm"}, ...]

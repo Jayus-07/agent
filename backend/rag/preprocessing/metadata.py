@@ -66,6 +66,28 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "")
                 scores[hint_type] = scores.get(hint_type, 0) + 30
                 logger.debug(f"[Classify] 文件名命中: {hint} → {hint_type} +30")
 
+    # ── 标题关键词辅助 ──
+    # 扫描文档前几行的标题，提取强信号词
+    heading_lines = re.findall(r'^#{1,3}\s+(.+)$', text[:3000], re.MULTILINE)
+    heading_lines += re.findall(r'^(?:第[一二三四五六七八九十\d]+章|第[一二三四五六七八九十\d]+节)\s*(.*)$', text[:3000], re.MULTILINE)
+    _TITLE_TYPE_HINTS: dict[str, str] = {
+        "合规": "compliance", "GDPR": "compliance", "数据保护": "compliance",
+        "制度": "policy", "管理": "policy", "规范": "policy",
+        "财务": "financial", "预算": "financial", "报销": "financial",
+        "合同": "legal", "法律": "legal", "保密": "legal",
+        "FAQ": "faq", "常见问题": "faq",
+        "商品": "product_spec", "规格": "product_spec", "SKU": "product_spec",
+        "SOP": "sop", "流程": "sop", "操作": "sop",
+    }
+    for h in heading_lines:
+        h_lower = h.lower()
+        for hint, hint_type in _TITLE_TYPE_HINTS.items():
+            if hint.lower() in h_lower:
+                scores[hint_type] = scores.get(hint_type, 0) + 20
+                logger.debug(f"[Classify] 标题命中: {hint} → {hint_type} +20")
+                if hint_type not in scores:
+                    scores[hint_type] = 20
+
     # ── 文件夹路径辅助（强信号，直接 +0.3 confidence）──
     folder_bonus: str | None = None
     if file_path:
@@ -274,10 +296,18 @@ def _smart_truncate(text: str, max_length: int) -> str:
 @lru_cache(maxsize=32)
 async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = SUMMARY_MAX_LENGTH) -> tuple:
     """使用LLM生成摘要 — DOC_LLM_MODEL 有值走本地 Ollama，否则走 _LLMProxy。
+    <2KB 文档直接提取前两段当摘要，不调 LLM。
 
     Returns: (summary, [person_names])
     """
     from backend.config.rag import DOC_LLM_MODEL
+
+    # <2KB 文档：提取式摘要，不调 LLM
+    if len(text) < 2000:
+        sentences = re.split(r'[。!?\n]', text)
+        extractive = '。'.join(s[:200] for s in sentences[:3] if s.strip())
+        extractive = _smart_truncate(extractive, max_length)
+        return extractive, []
 
     safe_text = text.encode('utf-8', errors='ignore')[:4000].decode('utf-8', errors='ignore')
     prompt = f"""请用 1-2 句话概括以下文档的核心内容。保留关键术语、数字、条款编号。
