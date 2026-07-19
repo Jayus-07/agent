@@ -192,7 +192,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                     {c.ok ? <CheckCircle2 size={12} className="text-green-500 shrink-0" />
                       : <XCircle size={12} className="text-red-500 shrink-0" />}
                     <span className={`truncate flex-1 ${c.ok ? 'text-text-secondary' : 'text-red-500'}`}>{c.name}</span>
-                    {c.duplicate && <span className="text-[10px] text-amber-500">已存在</span>}
+                    {c.duplicate && <span className="text-[10px] text-amber-500">已存在（内容未变更，跳过索引）</span>}
                     {c.error && <span className="text-[10px] text-red-400 truncate max-w-[120px]">{c.error}</span>}
                   </div>
                 ))}
