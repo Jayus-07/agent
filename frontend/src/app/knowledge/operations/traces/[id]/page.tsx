@@ -54,6 +54,7 @@ interface ChunkDetail {
   keywords: string;
   llm_keywords?: string;
   llm_model?: string;
+  section_title?: string;
 }
 
 export default function DocTracePage() {
@@ -373,6 +374,12 @@ export default function DocTracePage() {
                     {/* ── 展开区 ── */}
                     {expanded && (
                       <div className="mt-3 ml-9 space-y-2.5" onClick={(e) => e.stopPropagation()}>
+                        {/* 文档摘要 */}
+                        {(ruleMeta["summary"] as string) && (
+                          <div className="text-[11px] text-slate-600 bg-blue-50/50 rounded px-2 py-1.5 leading-relaxed">
+                            📝 {ruleMeta["summary"] as string}
+                          </div>
+                        )}
                         {/* LLM 关键词 + Token */}
                         {llmUsed && kwsLlm.length > 0 && (
                           <div>
@@ -588,7 +595,10 @@ export default function DocTracePage() {
                 {!chunkDetailLoading && chunkDetailData.map((ch, i) => (
                   <div key={i} className="bg-slate-50 rounded-lg p-3 border border-slate-100">
                     <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[10px] font-medium text-slate-400">Chunk #{ch.chunk_index}</span>
+                      <span className="text-[10px] font-medium text-slate-400">
+                        Chunk #{ch.chunk_index}
+                        {ch.section_title && <span className="text-slate-300 ml-1">· {ch.section_title}</span>}
+                      </span>
                       <div className="flex items-center gap-2 text-[10px] text-slate-400">
                         <span>{ch.char_count.toLocaleString()} 字</span>
                       </div>

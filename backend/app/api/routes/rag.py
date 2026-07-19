@@ -619,6 +619,7 @@ async def get_chunk_detail(doc_id: str):
                     "keywords": r["keywords"],
                     "llm_keywords": r.get("llm_keywords", ""),
                     "llm_model": r.get("llm_model", ""),
+                    "section_title": r.get("section_title", ""),
                 }
                 for r in rows
             ],

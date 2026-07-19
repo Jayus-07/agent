@@ -273,30 +273,35 @@ def _smart_truncate(text: str, max_length: int) -> str:
 
 @lru_cache(maxsize=32)
 async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = SUMMARY_MAX_LENGTH) -> tuple:
-    """使用LLM生成摘要和人名（带缓存、超时保护和并发控制）"""
+    """使用LLM生成摘要 — DOC_LLM_MODEL 有值走本地 Ollama，否则走 _LLMProxy。
+
+    Returns: (summary, [person_names])
+    """
+    from backend.config.rag import DOC_LLM_MODEL
+
     safe_text = text.encode('utf-8', errors='ignore')[:4000].decode('utf-8', errors='ignore')
-    prompt = f"""
-你是跨境电商RAG系统的文档压缩与检索增强助手。
-
-你的任务是：
-1. 将文档压缩为"可用于语义检索"的高信息密度摘要
-2. 提取文档中出现的所有真实人名
-
-⚠️ 重要要求：
-- 摘要必须用于搜索匹配（不是阅读总结）
-- 摘要必须保留关键名词、技术词、业务词
-- 人名只能提取文本中明确出现的，禁止猜测/编造
-- 如果没有人名，返回空列表
-
-请严格按以下 JSON 格式输出：
-{{
-  "summary": "摘要内容（{max_length}字以内）",
-  "person_names": ["人名1", "人名2"]
-}}
+    prompt = f"""请用 1-2 句话概括以下文档的核心内容。保留关键术语、数字、条款编号。
 
 文档：
 {safe_text}
-"""
+
+摘要（≤{max_length}字）："""
+
+    if DOC_LLM_MODEL:
+        # 本地 Ollama —— 同步调用（indexer 线程内）
+        try:
+            from langchain_ollama import ChatOllama
+            llm_local = ChatOllama(model=DOC_LLM_MODEL, temperature=0.0, num_ctx=4096, request_timeout=30)
+            response = llm_local.invoke(prompt)
+            summary = response.content.strip() if hasattr(response, "content") else str(response).strip()
+            summary = _smart_truncate(summary, max_length)
+            logger.info(f"[Summary Ollama] {DOC_LLM_MODEL} → {len(summary)}字")
+            return summary, []
+        except Exception as e:
+            logger.warning(f"[Summary Ollama] 失败: {e}")
+            return "", []
+
+    # Cloud API —— 异步调用
     try:
         response = await async_safe_call_with_timeout(
             llm.invoke,
@@ -310,23 +315,10 @@ async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = 
             logger.warning("⚠️ LLM摘要生成超时，使用降级摘要")
             raise TimeoutError("LLM超时")
 
-        import json
-        try:
-            result = json.loads(response.content.strip())
-            summary = result.get('summary', '')
-            person_names = result.get('person_names', [])
-
-            summary = _smart_truncate(summary, max_length)
-
-            logger.info(f"✅ LLM同时生成摘要({len(summary)}字)和人名({len(person_names)}个): {person_names}")
-
-            return summary, person_names
-
-        except json.JSONDecodeError as e:
-            logger.warning(f"JSON解析失败: {e}，尝试从文本提取")
-            content = response.content.strip()
-            summary = _smart_truncate(content, max_length)
-            return summary, []
+        summary = response.content.strip() if hasattr(response, "content") else str(response).strip()
+        summary = _smart_truncate(summary, max_length)
+        logger.info(f"[Summary API] → {len(summary)}字")
+        return summary, []
 
     except Exception as e:
         logger.error(f"LLM摘要生成失败: {e}, 使用降级摘要")

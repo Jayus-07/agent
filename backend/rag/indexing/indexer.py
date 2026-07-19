@@ -477,6 +477,7 @@ class IncrementalIndexer:
         #   - doc_type / person_names → 继承文档级（用于 filter）
         #   - chunk_keywords → 该 chunk 自己的规则关键词（不污染其他 chunk）
         #   - chunk_llm_keywords → Qwen 提取（仅 LLM_FORCED_TYPES 文档）
+        #   - section_title → chunk 所属章节（从前面的 section 标题推导）
         from backend.rag.preprocessing.keyword import extract_rule_keywords as _chunk_kw
         from backend.rag.preprocessing.keyword import LLM_FORCED_TYPES as _CHUNK_LLM_TYPES
         doc_type_val = doc_meta.get("doc_type", "general")
@@ -484,6 +485,15 @@ class IncrementalIndexer:
         use_chunk_llm = doc_type_val in _CHUNK_LLM_TYPES
         chunk_llm_model = ""
         chunk_llm_count = 0
+
+        # 章节映射：找出每个 section 标题在全文中的位置
+        doc_sections = doc_meta.get("sections", []) or []
+        section_positions: list[tuple[int, str]] = []
+        for sec_title in doc_sections:
+            idx = full_text.find(sec_title)
+            if idx >= 0:
+                section_positions.append((idx, sec_title))
+        section_positions.sort(key=lambda x: x[0])
 
         if use_chunk_llm:
             from backend.rag.preprocessing.keyword import extract_chunk_keywords_qwen
@@ -494,6 +504,16 @@ class IncrementalIndexer:
             ch.metadata["person_names"] = person_val
             chunk_kws = _chunk_kw(ch.page_content, doc_type=doc_type_val)
             ch.metadata["chunk_keywords"] = ", ".join(chunk_kws) if chunk_kws else ""
+
+            # 章节归属：找到 chunk 内容之前的最后一个 section
+            if section_positions:
+                chunk_start = full_text.find(ch.page_content[:80])
+                section_title = ""
+                for pos, title in section_positions:
+                    if pos <= chunk_start >= 0:
+                        section_title = title
+                if section_title:
+                    ch.metadata["section_title"] = section_title
 
             # Qwen chunk 关键词（仅高价值文档）
             if use_chunk_llm:
@@ -518,7 +538,8 @@ class IncrementalIndexer:
                 {"chunk_index": i, "content": ch.page_content,
                  "keywords": ch.metadata.get("chunk_keywords", ""),
                  "llm_keywords": ch.metadata.get("chunk_llm_keywords", ""),
-                 "llm_model": ch.metadata.get("chunk_llm_model", "")}
+                 "llm_model": ch.metadata.get("chunk_llm_model", ""),
+                 "section_title": ch.metadata.get("section_title", "")}
                 for i, ch in enumerate(chunks)
             ])
         except Exception as e:
@@ -579,6 +600,8 @@ class IncrementalIndexer:
                     "complexity": complexity_val,
                     "time_refs": time_refs_val,
                     "keywords_rule": kws_rule if isinstance(kws_rule, list) else [],
+                    "summary": doc_meta.get("summary", ""),
+                    "sections": doc_meta.get("sections", []),
                 },
                 "llm_metadata": {
                     "llm_used": llm_used,
@@ -719,6 +742,24 @@ class IncrementalIndexer:
         # LLM 决策信息
         llm_decision = kw_result.llm_decision if hasattr(kw_result, 'llm_decision') else {}
 
+        # ⑧ 文档摘要（LLM）—— 对 high-value 文档生成
+        summary = ""
+        if doc_type in _CHUNK_LLM_TYPES:
+            try:
+                from backend.rag.preprocessing.metadata import build_llm_summary
+                summary, _ = _run_async(build_llm_summary(full_text[:3000]))
+                summary = summary or ""
+            except Exception as e:
+                logger.warning(f"[Summary] 生成失败: {e}")
+
+        # ⑨ 章节提取（纯正则，零成本）
+        sections = []
+        try:
+            from backend.rag.preprocessing.metadata import extract_sections
+            sections = extract_sections(full_text, max_sections=15)
+        except Exception:
+            pass
+
         return {
             "doc_type": doc_type,
             "confidence": confidence,
@@ -734,6 +775,8 @@ class IncrementalIndexer:
             "llm_decision": llm_decision,
             "person_names": ", ".join(person_names) if isinstance(person_names, list)
                            else str(person_names),
+            "summary": summary,
+            "sections": list(sections),
         }
 
     # ---- 公开重索引 ----
