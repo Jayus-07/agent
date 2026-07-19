@@ -234,14 +234,14 @@ export default function DocTracePage() {
                 return (
                   <div key={type} className={`px-5 py-4 ${hasError ? "bg-red-50/30" : ""}`}>
                     <div className="flex items-center gap-4 mb-2">
-                      <span className="text-xs w-5">{statusIcon}</span>
-                      <span className="text-sm font-medium text-slate-700">{info.label}</span>
-                      <span className="font-mono text-xs text-slate-500">{totalMs}ms</span>
+                      <span className="text-xs w-5 shrink-0">{statusIcon}</span>
+                      <span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span>
+                      <span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span>
                       {operations && operations !== "none" && (
-                        <span className="text-xs text-slate-400 truncate max-w-[300px]">{operations}</span>
+                        <span className="text-xs text-slate-400 truncate">{operations}</span>
                       )}
                       {isNoop && !hasError && (
-                        <span className="text-[10px] text-slate-300">（文本已规范，无需清洗）</span>
+                        <span className="text-[10px] text-slate-300 shrink-0">（文本已规范，无需清洗）</span>
                       )}
                     </div>
                     <div className="ml-9 space-y-1 text-xs">
@@ -278,9 +278,9 @@ export default function DocTracePage() {
                 return (
                   <div key={type} className="px-5 py-4">
                     <div className="flex items-center gap-4 mb-2">
-                      <span className="text-xs w-5">{statusIcon}</span>
-                      <span className="text-sm font-medium text-slate-700">{info.label}</span>
-                      <span className="font-mono text-xs text-slate-500">{totalMs}ms</span>
+                      <span className="text-xs w-5 shrink-0">{statusIcon}</span>
+                      <span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span>
+                      <span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span>
                       <span className="text-xs text-slate-400">
                         切分 <span className="font-mono text-slate-600">{total}</span> 块
                         {rawChunks > 0 && (
@@ -354,9 +354,9 @@ export default function DocTracePage() {
                     onClick={() => toggleTypeExpand(type)}>
                     {/* ── 标题行 ── */}
                     <div className="flex items-center gap-4 flex-wrap">
-                      <span className="text-xs w-5">{statusIcon}</span>
-                      <span className="text-sm font-medium text-slate-700">{info.label}</span>
-                      <span className="font-mono text-xs text-slate-500">{totalMs}ms</span>
+                      <span className="text-xs w-5 shrink-0">{statusIcon}</span>
+                      <span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span>
+                      <span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span>
                       {strategyLabel && (
                         <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${llmUsed ? "bg-violet-200 text-violet-700" : "bg-slate-100 text-slate-600"}`}>
                           {strategyLabel}
@@ -493,9 +493,9 @@ export default function DocTracePage() {
                 return (
                   <div key={type} className={`px-5 py-4 ${hasError ? "bg-red-50/30" : ""}`}>
                     <div className="flex items-center gap-4">
-                      <span className="text-xs w-5">{statusIcon}</span>
-                      <span className="text-sm font-medium text-slate-700">{info.label}</span>
-                      <span className="font-mono text-xs text-slate-500">{totalMs}ms</span>
+                      <span className="text-xs w-5 shrink-0">{statusIcon}</span>
+                      <span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span>
+                      <span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span>
                       <span className="text-xs text-slate-400">
                         成功 <span className="font-mono text-green-600">{succeeded}</span>
                         {failed > 0 && (
@@ -503,7 +503,7 @@ export default function DocTracePage() {
                         )}
                         <span className="ml-1">/ 共 <span className="font-mono text-slate-500">{attempted}</span></span>
                       </span>
-                      {embModel && <span className="ml-auto text-[10px] text-slate-300">模型: {embModel}</span>}
+                      {embModel && <span className="ml-auto text-[10px] text-slate-300 shrink-0">模型: {embModel}</span>}
                     </div>
                   </div>
                 );
@@ -517,9 +517,9 @@ export default function DocTracePage() {
                 return (
                   <div key={type} className="px-5 py-4">
                     <div className="flex items-center gap-4">
-                      <span className="text-xs w-5">{statusIcon}</span>
-                      <span className="text-sm font-medium text-slate-700">{info.label}</span>
-                      <span className="font-mono text-xs text-slate-500">{totalMs}ms</span>
+                      <span className="text-xs w-5 shrink-0">{statusIcon}</span>
+                      <span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span>
+                      <span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span>
                       {cached ? (
                         <span className="text-xs text-amber-600">
                           ⚡ 命中缓存（SHA256 一致，跳过索引）→ doc {existingDocId}
@@ -536,9 +536,9 @@ export default function DocTracePage() {
                   className={`flex items-center gap-4 px-5 py-2.5 text-sm ${isMulti ? "cursor-pointer hover:bg-slate-50" : ""}`}
                   onClick={() => isMulti && toggleTypeExpand(type)}
                 >
-                  <span className="text-xs w-5">{statusIcon}</span>
-                  <span className="w-24 text-slate-500">{info.label}</span>
-                  <span className={`font-mono text-xs w-16 text-right ${hasError ? "text-red-500" : "text-slate-400"}`}>
+                  <span className="text-xs w-5 shrink-0">{statusIcon}</span>
+                  <span className="w-24 text-slate-500 shrink-0">{info.label}</span>
+                  <span className={`font-mono text-xs w-16 text-right shrink-0 ${hasError ? "text-red-500" : "text-slate-400"}`}>
                     {totalMs}ms
                   </span>
                   <span className="text-xs text-slate-300 flex-1 truncate">
