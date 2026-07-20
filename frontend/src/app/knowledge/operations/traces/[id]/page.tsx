@@ -374,41 +374,43 @@ export default function DocTracePage() {
                     {/* ── 展开区 ── */}
                     {expanded && (
                       <div className="mt-3 ml-9 space-y-2.5" onClick={(e) => e.stopPropagation()}>
-                        {/* 文档摘要 */}
-                        {(ruleMeta["summary"] as string) && (
-                          <div className="text-[11px] text-slate-600 bg-blue-50/50 rounded px-2 py-1.5 leading-relaxed">
-                            📝 {ruleMeta["summary"] as string}
-                          </div>
-                        )}
-                        {/* LLM 关键词 + Token */}
-                        {llmUsed && kwsLlm.length > 0 && (
-                          <div>
-                            <div className="flex items-center gap-2 mb-1.5">
-                              <span className="text-[10px] text-violet-500 font-medium">🔮 LLM 提取（文档级）</span>
-                              {tokenOk ? (
-                                <span className="text-[10px] text-slate-400">
-                                  入 <span className="font-mono text-slate-500">{llmTokens["prompt_tokens"]}</span>
-                                  {" · "}出 <span className="font-mono text-slate-500">{llmTokens["completion_tokens"] ?? 0}</span>
-                                  {costOk && (
-                                    <span className="text-emerald-500 ml-0.5" title="基于模型定价表估算，非实际账单">
-                                      {" · "}${costUsd!.toFixed(6)} <span className="text-[9px] cursor-help">ⓘ</span>
+                        {/* 摘要 + LLM 提取(文档级) - 合并卡 */}
+                        {((ruleMeta["summary"] as string) || (llmUsed && kwsLlm.length > 0)) && (
+                          <div className="border border-violet-200 rounded p-2 bg-violet-50/30 space-y-2">
+                            {/* 摘要 */}
+                            {(ruleMeta["summary"] as string) && (
+                              <div>
+                                <span className="text-[10px] text-blue-600 font-medium">📝 摘要 (LLM 真摘要, 完整 150 字内)</span>
+                                <div className="text-[11px] text-slate-700 mt-0.5 leading-relaxed whitespace-pre-wrap">
+                                  {ruleMeta["summary"] as string}
+                                </div>
+                              </div>
+                            )}
+                            {/* LLM 提取关键词 + Token */}
+                            {llmUsed && kwsLlm.length > 0 && (
+                              <div>
+                                <div className="flex items-center gap-2 mb-1.5">
+                                  <span className="text-[10px] text-violet-600 font-medium">🔮 LLM 提取关键词 (文档级)</span>
+                                  {tokenOk ? (
+                                    <span className="text-[10px] text-slate-400">
+                                      · {String(llmTokens["model"] || "")} · 入 <span className="font-mono text-slate-500">{llmTokens["prompt_tokens"]}</span> / 出 <span className="font-mono text-slate-500">{llmTokens["completion_tokens"] ?? 0}</span>
+                                      {costOk && (
+                                        <span className="text-emerald-500 ml-0.5" title="基于模型定价表估算,非实际账单">
+                                          {" · "}${costUsd!.toFixed(6)} <span className="text-[9px] cursor-help">ⓘ</span>
+                                        </span>
+                                      )}
                                     </span>
+                                  ) : (
+                                    <span className="text-[10px] text-slate-300">（未计量{llmTokens["model"] ? ` · ${String(llmTokens["model"])}` : ""}）</span>
                                   )}
-                                  {llmTokens["model"] && (
-                                    <span className="text-[10px] text-slate-300 ml-0.5">· {String(llmTokens["model"])}</span>
-                                  )}
-                                </span>
-                              ) : (
-                                <span className="text-[10px] text-slate-300">
-                                  （未计量{llmTokens["model"] ? ` · ${String(llmTokens["model"])}` : ""}）
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap gap-1">
-                              {kwsLlm.map((kw) => (
-                                <span key={kw.word} className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-violet-100 text-violet-700 ring-1 ring-violet-200">{kw.word}</span>
-                              ))}
-                            </div>
+                                </div>
+                                <div className="flex flex-wrap gap-1">
+                                  {kwsLlm.map((kw) => (
+                                    <span key={kw.word} className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-violet-100 text-violet-700 ring-1 ring-violet-200">{kw.word}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )}
                         {/* 规则关键词 */}
@@ -423,6 +425,20 @@ export default function DocTracePage() {
                           </div>
                         )}
                         {/* 🔧 技术详情（可折叠） */}
+                        {/* 后端元数据 (doc 完整) - 新卡,不折叠 */}
+                        <div className="border-t border-slate-100 pt-2 space-y-1.5 text-[10px] text-slate-600">
+                          <span className="font-medium text-slate-700">📄 后端元数据 (doc 完整)</span>
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 mt-1">
+                            <div>chunk_count: {spans[0]?.metrics?.chunk_count as number || 0}</div>
+                            <div>embedding_model: {(trace as any)?.tags?.embedding_model || "(无)"}</div>
+                            <div>doc_type: {docType || "(无)"}</div>
+                            <div>confidence: {confidence ? (confidence * 100).toFixed(0) + "%" : "(无)"}</div>
+                            <div>quality_score: {(ruleMeta["quality_score"] as number)?.toFixed(2) || "(无)"}</div>
+                            <div>business_domain: {(ruleMeta["business_domain"] as string) || "(未分类)"}</div>
+                            <div>time_refs: {timeRefs?.join(", ") || "(无)"}</div>
+                            <div>complexity: {JSON.stringify(complexity) || "(无)"}</div>
+                          </div>
+                        </div>
                         {hasTech && (
                           <div className="border-t border-slate-100 pt-2">
                             <button
