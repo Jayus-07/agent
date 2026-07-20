@@ -67,6 +67,15 @@ class SpanKind(str, Enum):
     INDEX_VECTOR_DB = "index_vector_db"
     INDEX_METADATA = "index_metadata"
 
+    # P0-1: Metadata 子 Span 拆分 (7 个子阶段)
+    INDEX_CLASSIFY = "index_classify"          # 分类 (classify_with_confidence)
+    INDEX_QUALITY_CHECK = "index_quality"     # 质量检查 (assess_quality)
+    INDEX_DEDUP_MINHASH = "index_dedup_minhash"  # MinHash 去重
+    INDEX_KEYWORD_RULE = "index_keyword_rule"  # 规则关键词
+    INDEX_LLM_DECIDE = "index_llm_decide"      # LLM 决策 (是否调 LLM)
+    INDEX_LLM_GENERATE = "index_llm_generate"  # LLM 生成 (keywords/summary/entities)
+    INDEX_SECTION = "index_section"            # 章节提取
+
     # 工作流
     WORKFLOW = "workflow"
     ROUTER = "router"

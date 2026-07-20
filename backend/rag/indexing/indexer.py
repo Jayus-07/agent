@@ -468,7 +468,7 @@ class IncrementalIndexer:
             "person_names": "",
         }
         try:
-            meta_result = _run_async(self._build_doc_metadata(full_text, doc_meta))
+            meta_result = _run_async(self._build_doc_metadata(full_text, doc_meta, parent_span_id=meta_span.span_id))
             doc_meta.update(meta_result)
         except Exception as e:
             logger.warning(f"元数据构建失败（使用默认值）: {e}")
@@ -720,7 +720,7 @@ class IncrementalIndexer:
                              "retry_count": EMBED_RETRY_MAX})
         return succeeded
 
-    async def _build_doc_metadata(self, full_text: str, base_meta: dict) -> dict:
+    async def _build_doc_metadata(self, full_text: str, base_meta: dict, parent_span_id: str = "") -> dict:
         """异步构建文档级元数据 — LLM Decision Router 评分决策。"""
         try:
             from backend.rag.preprocessing.metadata import (
@@ -738,15 +738,39 @@ class IncrementalIndexer:
 
             # 质量门禁（P1）
             from backend.rag.preprocessing.metadata import assess_quality
+            if parent_span_id:
+                quality_span = trace_collector.start_span(
+                    'quality', parent_id=parent_span_id, name="Quality check",
+                    type="llm", kind=SpanKind.INDEX_QUALITY_CHECK.value,
+                )
             quality = assess_quality(full_text)
+            if parent_span_id:
+                trace_collector.end_span(quality_span, metrics={"score": quality.get("score", 0), "issues": quality.get("issues", [])})
+
             if not quality["passed"]:
                 logger.warning(f"[Quality] 文档未通过质量门禁: {quality['issues']}")
 
+            if parent_span_id:
+                classify_span = trace_collector.start_span(
+                    'classify', parent_id=parent_span_id, name="Classify",
+                    type="llm", kind=SpanKind.INDEX_CLASSIFY.value,
+                )
             doc_type, confidence = classify_with_confidence(full_text, filename=fname, file_path=fpath)
+            if parent_span_id:
+                trace_collector.end_span(classify_span, metrics={"doc_type": doc_type, "confidence": round(confidence, 3)})
+
 
             # P2-1: MinHash 语义去重 — 检查同类型文档的近似内容
             from backend.rag.preprocessing.metadata import compute_minhash, minhash_similarity, _SIMILARITY_THRESHOLD
+            if parent_span_id:
+                dedup_minhash_span = trace_collector.start_span(
+                    'dedup_minhash', parent_id=parent_span_id, name="MinHash dedup",
+                    type="llm", kind=SpanKind.INDEX_DEDUP_MINHASH.value,
+                )
             minhash_sig = compute_minhash(full_text)
+            if parent_span_id:
+                trace_collector.end_span(dedup_minhash_span, metrics={"near_dup_id": "(see below)"})
+
             existing_same_type = self.registry.list_by_doc_type(doc_type)
             near_dup_id = ""
             for existing in existing_same_type:
@@ -764,7 +788,15 @@ class IncrementalIndexer:
                     except Exception:
                         pass
 
+            if parent_span_id:
+                rule_extract_span = trace_collector.start_span(
+                    'rule_extract', parent_id=parent_span_id, name="Rule extract",
+                    type="llm", kind=SpanKind.INDEX_KEYWORD_RULE.value,
+                )
             time_refs = extract_time_refs(full_text)
+            if parent_span_id:
+                trace_collector.end_span(rule_extract_span, metrics={"time_refs_count": len(time_refs or []), "domain": "(computed below)"})
+
             domain = detect_business_domain(full_text)
             # 先跑规则关键词获取数量，用于复杂度分析
             from backend.rag.preprocessing.keyword import extract_rule_keywords
@@ -824,7 +856,15 @@ product_spec(商品规格), sop(操作流程), listing(商品上架), general(�
         if need_llm_keywords and need_llm_summary:
             # 合并调用：一次 LLM 出 keywords + summary + entities
             from backend.rag.preprocessing.metadata import enrich_metadata_llm
+            if parent_span_id:
+                llm_generate_span = trace_collector.start_span(
+                    'llm_generate', parent_id=parent_span_id, name="LLM generate",
+                    type="llm", kind=SpanKind.INDEX_LLM_GENERATE.value,
+                )
             enriched = _run_async(enrich_metadata_llm(full_text[:4000], doc_type))
+            if parent_span_id:
+                trace_collector.end_span(llm_generate_span, metrics={"keywords": len(enriched.get("keywords", [])), "summary_len": len(enriched.get("summary", "")), "entities": len(enriched.get("entities", []))})
+
             if enriched:
                 # 用合并结果替换单独调用的关键词和摘要
                 merged_kws = enriched.get("keywords", [])
@@ -870,7 +910,15 @@ product_spec(商品规格), sop(操作流程), listing(商品上架), general(�
         sections = []
         try:
             from backend.rag.preprocessing.metadata import extract_sections
+            if parent_span_id:
+                section_span = trace_collector.start_span(
+                    'section', parent_id=parent_span_id, name="Section extract",
+                    type="llm", kind=SpanKind.INDEX_SECTION.value,
+                )
             sections = extract_sections(full_text, max_sections=15)
+            if parent_span_id:
+                trace_collector.end_span(section_span, metrics={"sections_count": len(sections or [])})
+
         except Exception:
             pass
 
