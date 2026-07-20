@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import Link from 'next/link'
 import { ChevronLeft, ChevronRight, RefreshCw, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
 import { useToast } from '@/components/shared/Toast'
@@ -180,8 +180,8 @@ export default function OperationsPage() {
                 if (item.kind === "batch") {
                   const batch = item
                   return (
-                    <>
-                      <tr key={batch.batch_id} className="border-b border-border-subtle bg-surface-elevated/50 hover:bg-surface-hover transition-colors cursor-pointer"
+                    <Fragment key={batch.batch_id}>
+                      <tr className="border-b border-border-subtle bg-surface-elevated/50 hover:bg-surface-hover transition-colors cursor-pointer"
                         onClick={() => toggleBatch(batch.batch_id)}>
                         <td className="px-4 py-2.5 text-text-muted">{new Date(batch.latestTime).toLocaleString('zh-CN')}</td>
                         <td className="px-4 py-2.5 text-text-primary flex items-center gap-1.5">
@@ -229,7 +229,7 @@ export default function OperationsPage() {
                           </td>
                         </tr>
                       ))}
-                    </>
+                    </Fragment>
                   )
                 } else {
                   const op = item.log
