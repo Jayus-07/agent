@@ -864,7 +864,7 @@ product_spec(商品规格), sop(操作流程), listing(商品上架), general(�
         elif not summary and not need_llm_summary:
             # <2KB 抽取式摘要: 复用 metadata 里的 _extract_first_sentences (剥 markdown + 按句切分)
             from backend.rag.preprocessing.metadata import _extract_first_sentences
-            summary = _extract_first_sentences(full_text, 2) or ""
+            summary = _extract_first_sentences(full_text, 3) or ""
 
         # ⑨ 章节提取（纯正则，零成本，所有文档都做）
         sections = []
