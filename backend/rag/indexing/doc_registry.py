@@ -261,6 +261,12 @@ class DocumentRegistry:
         embedding_model = meta.get("embedding_model", "")
         minhash_sig = meta.get("minhash_sig", "")
         near_dup_id = meta.get("near_dup_id", "")
+        # Bug2 fix: 补 5 个文档级元数据字段
+        summary = meta.get("summary", "")
+        keywords = meta.get("keywords", "")
+        time_refs = meta.get("time_refs", "")
+        business_domain = meta.get("business_domain", "")
+        complexity = meta.get("complexity", "")
 
         with self._lock, self._conn() as conn:
             conn.execute(
@@ -268,8 +274,9 @@ class DocumentRegistry:
                    (file_path, file_name, kb_id, doc_id, file_hash, file_size, file_mtime,
                     chunk_count, chunk_ids, doc_db_id, doc_type, confidence, llm_used,
                     quality_score, quality_issues, embedding_model, minhash_sig, near_dup_id,
+                    summary, keywords, time_refs, business_domain, complexity,
                     status, last_indexed, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))""",
                 (
                     file_path, file_name, kb_id, doc_id, file_hash,
                     fsize, fmtime,
@@ -277,6 +284,7 @@ class DocumentRegistry:
                     doc_type, confidence, llm_used,
                     quality_score, quality_issues, embedding_model,
                     minhash_sig, near_dup_id,
+                    summary, keywords, time_refs, business_domain, complexity,
                 ),
             )
 

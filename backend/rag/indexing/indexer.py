@@ -678,6 +678,12 @@ class IncrementalIndexer:
                 "embedding_model": doc_meta.get("embedding_model", ""),
                 "minhash_sig": doc_meta.get("minhash_sig", ""),
                 "near_dup_id": doc_meta.get("near_dup_id", ""),
+                # Bug2 fix: 补 5 个文档级元数据(原代码漏,SQLite 始终为 NULL)
+                "summary": doc_meta.get("summary", ""),
+                "keywords": json.dumps(doc_meta.get("keywords") or [], ensure_ascii=False),
+                "time_refs": json.dumps(doc_meta.get("time_refs") or [], ensure_ascii=False),
+                "business_domain": doc_meta.get("business_domain", ""),
+                "complexity": json.dumps(doc_meta.get("complexity") or {}, ensure_ascii=False),
             },
         )
 
@@ -906,6 +912,10 @@ product_spec(商品规格), sop(操作流程), listing(商品上架), general(�
         # 1. 删除旧向量
         if old_doc_id:
             self._remove_document(old_doc_id)
+            
+            # Bug1 fix: _remove_document 只删向量/chunk_store,不动 registry;
+            # 这里标记 status='deleted' 来解除 _index_file 的 dedup 短路,让 force reindex 真正重跑
+            self.registry.mark_deleted(file_path)
             logger.info(f"[REINDEX] 已清理旧向量: {old_doc_id}")
 
         # 2. 重新索引（_index_file 返回 trace_id，供操作日志关联链路追踪）
