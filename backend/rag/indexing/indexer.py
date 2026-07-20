@@ -774,7 +774,9 @@ class IncrementalIndexer:
                                                     confidence=confidence, complexity=complexity)
             person_names = extract_person_names(full_text)
             entities_nested = extract_entities(full_text)  # P1: 结构化实体
-        except Exception:
+        except Exception as e:
+            # P0-1 fix: 之前静默 return general,导致 keywords/person_names/entities 全为 0 但 trace 报 success
+            logger.warning(f"[Metadata] 6步预处理失败(extract_rule_keywords/analyze_complexity/extract_doc_keywords_typed/extract_person_names/extract_entities),fallback general: {e}")
             return {"doc_type": "general"}
 
         # 低置信 LLM 复验：正则全挂时补一次 LLM 确认分类
@@ -846,7 +848,9 @@ product_spec(商品规格), sop(操作流程), listing(商品上架), general(�
                     from backend.rag.preprocessing.metadata import build_llm_summary
                     summary, _ = _run_async(build_llm_summary(full_text[:3000]))
                     summary = summary or ""
-                except Exception:
+                except Exception as e:
+                    # P0-1 fix: LLM 摘要失败被 pass,trace 不显形
+                    logger.warning(f"[Summary] LLM build_llm_summary 失败: {e}")
                     pass
 
         if not summary and need_llm_summary:

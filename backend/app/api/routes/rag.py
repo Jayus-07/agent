@@ -280,7 +280,15 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
     os.makedirs(docs_dir, exist_ok=True)
     # P1.5+ 修复：normalize path，避免 os.path.join 混合分隔符导致 registry 查询不匹配
     # db 里存的 path 是纯 '\\'，query 必须用同样的格式
-    filepath = os.path.normpath(os.path.join(docs_dir, file.filename))
+    # P0-5 fix: 之前直接用 file.filename,用户可上传 "../../../etc/passwd.md" 写到 docs_dir 之外
+    safe_name = os.path.basename(file.filename or "")
+    if not safe_name or safe_name.startswith("."):
+        return {"ok": False, "error": "无效文件名"}
+    abs_docs_dir = os.path.abspath(docs_dir)
+    filepath = os.path.normpath(os.path.join(abs_docs_dir, safe_name))
+    # 二次校验:必须仍在 docs_dir 内,挡住 symlink/边界 case
+    if not (filepath == abs_docs_dir or filepath.startswith(abs_docs_dir + os.sep)):
+        return {"ok": False, "error": "非法文件路径"}
     content = await file.read()
     with open(filepath, "wb") as f:
         f.write(content)
