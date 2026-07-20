@@ -183,7 +183,7 @@ export default function OperationsPage() {
                     <Fragment key={batch.batch_id}>
                       <tr className="border-b border-border-subtle bg-surface-elevated/50 hover:bg-surface-hover transition-colors cursor-pointer"
                         onClick={() => toggleBatch(batch.batch_id)}>
-                        <td className="px-4 py-2.5 text-text-muted">{new Date(batch.latestTime).toLocaleString('zh-CN')}</td>
+                        <td className="px-4 py-2.5 text-text-muted">{new Date((batch.latestTime + '').replace(' ', 'T') + 'Z').toLocaleString('zh-CN', { hour12: false })}</td>
                         <td className="px-4 py-2.5 text-text-primary flex items-center gap-1.5">
                           {expandedBatches.has(batch.batch_id) ? <ChevronUp size={12} className="text-text-muted" /> : <ChevronDown size={12} className="text-text-muted" />}
                           <span className="font-medium">批量上传 · {batch.firstFile} 等 {batch.logs.length} 个文件</span>
@@ -202,7 +202,7 @@ export default function OperationsPage() {
                       </tr>
                       {expandedBatches.has(batch.batch_id) && batch.logs.map(op => (
                         <tr key={op.id} className="border-b border-border-subtle bg-violet-50/30 hover:bg-surface-hover transition-colors">
-                          <td className="px-4 py-2.5 text-text-muted pl-8">{new Date(op.created_at).toLocaleString('zh-CN')}</td>
+                          <td className="px-4 py-2.5 text-text-muted pl-8">{new Date((op.created_at + '').replace(' ', 'T') + 'Z').toLocaleString('zh-CN', { hour12: false })}</td>
                           <td className="px-4 py-2.5 text-text-primary truncate max-w-[200px] pl-8" title={op.doc_name}>└ {op.doc_name}</td>
                           <td className="px-4 py-2.5">
                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${OPERATION_CONFIG[op.operation].className}`}>
@@ -235,7 +235,7 @@ export default function OperationsPage() {
                   const op = item.log
                   return (
                     <tr key={op.id} className="border-b border-border-subtle hover:bg-surface-hover transition-colors">
-                      <td className="px-4 py-2.5 text-text-muted">{new Date(op.created_at).toLocaleString('zh-CN')}</td>
+                      <td className="px-4 py-2.5 text-text-muted">{new Date((op.created_at + '').replace(' ', 'T') + 'Z').toLocaleString('zh-CN', { hour12: false })}</td>
                       <td className="px-4 py-2.5 text-text-primary truncate max-w-[200px]" title={op.doc_name}>{op.doc_name}</td>
                       <td className="px-4 py-2.5">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${OPERATION_CONFIG[op.operation].className}`}>

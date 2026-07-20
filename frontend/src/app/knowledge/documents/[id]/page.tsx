@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { ArrowLeft, FileText, Grid3X3, Clock, Hash, Database, RefreshCw, Loader2, Layers, Cpu } from 'lucide-react'
+import { ArrowLeft, FileText, Grid3X3, Clock, Hash, Database, RefreshCw, Loader2, Layers, Cpu , Sparkles } from 'lucide-react'
 import { useDocument } from '@/hooks/useKnowledge'
 import { knowledgeService } from '@/services/knowledge'
 
@@ -93,6 +93,37 @@ export default function DocumentDetailPage() {
           <MetaCard icon={Hash} label="索引版本" value={doc.index_version ? `v${doc.index_version}` : '—'} />
         </div>
 
+        {/* AI 元数据 - 5 新字段展示 (P0-1/Bug2 修复后端到端可见) */}
+        <div className="bg-surface-base rounded-xl border border-border-subtle p-4 mb-8">
+          <div className="flex items-center gap-1.5 mb-3">
+            <Sparkles size={12} className="text-accent" />
+            <h2 className="text-xs font-semibold text-text-primary">AI 提取的元数据</h2>
+          </div>
+          <div className="space-y-2.5 text-xs">
+            <div>
+              <span className="text-text-muted text-[10px]">摘要</span>
+              <p className="text-text-primary mt-0.5 leading-relaxed whitespace-pre-wrap">{(doc as any).summary || <span className="text-text-muted">未生成</span>}</p>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div>
+                <span className="text-text-muted text-[10px]">业务域</span>
+                <div className="text-text-primary mt-0.5">{(doc as any).business_domain || <span className="text-text-muted">未分类</span>}</div>
+              </div>
+              <div>
+                <span className="text-text-muted text-[10px]">时间引用</span>
+                <div className="text-text-primary mt-0.5 truncate">{(doc as any).time_refs || <span className="text-text-muted">无</span>}</div>
+              </div>
+              <div>
+                <span className="text-text-muted text-[10px]">复杂度</span>
+                <div className="text-text-primary mt-0.5 truncate">{(doc as any).complexity || <span className="text-text-muted">未计算</span>}</div>
+              </div>
+              <div>
+                <span className="text-text-muted text-[10px]">关键词</span>
+                <div className="text-text-primary mt-0.5 truncate">{(doc as any).keywords || <span className="text-text-muted">无</span>}</div>
+              </div>
+            </div>
+          </div>
+        </div>
         {/* 详情面板 */}
         <div className="bg-surface-base rounded-xl border border-border-subtle p-4 mb-8">
           <div className="grid grid-cols-2 gap-3 text-xs">
