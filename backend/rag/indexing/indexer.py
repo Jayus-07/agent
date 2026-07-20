@@ -862,9 +862,9 @@ product_spec(商品规格), sop(操作流程), listing(商品上架), general(�
             except Exception as e:
                 logger.warning(f"[Summary] 生成失败: {e}")
         elif not summary and not need_llm_summary:
-            # <2KB 提取式摘要
-            sentences = full_text[:2000].split("。")
-            summary = "。".join(s[:150] for s in sentences[:2] if s.strip()) + ("。" if len(sentences) > 1 else "")
+            # <2KB 抽取式摘要: 复用 metadata 里的 _extract_first_sentences (剥 markdown + 按句切分)
+            from backend.rag.preprocessing.metadata import _extract_first_sentences
+            summary = _extract_first_sentences(full_text, 2) or ""
 
         # ⑨ 章节提取（纯正则，零成本，所有文档都做）
         sections = []

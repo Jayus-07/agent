@@ -348,16 +348,21 @@ def enrich_metadata_llm(text: str, doc_type: str) -> dict:
     import json as _json
 
     safe_text = text[:4000]
-    prompt = f"""你是电商 RAG 元数据提取器。分析以下文档，输出 JSON：
+    prompt = f"""你是专业 RAG 元数据提取专家。从文档提取 1 个 JSON 对象,严禁任何额外内容。
 
-{{"summary": "1-2句中文摘要（≤150字），保留关键术语和数字",
- "keywords": ["核心术语1", "核心术语2", ...]（≤10个，优先提取商品/条款/品牌/指标名）,
- "entities": [{{"name":"GDPR","type":"regulation"}}, ...]（≤5个，type取regulation/person/platform/brand）}}
+严格规则:
+- summary 必须是 1-2 句中文摘要(<=150字),纯自然语言,严禁用 markdown 标题符号/列表/换行/星号
+- keywords 是 10 个以内的关键词数组
+- entities 是 5 个以内的实体数组(每项含 name 和 type 字段,type 取 regulation/person/platform/brand)
+- 严禁在 JSON 外加解释、严禁使用 markdown 围栏、严禁重复文档原文当摘要
 
-文档：
+JSON Schema:
+{{"summary": "<1-2 句中文摘要>", "keywords": ["<词 1>", ...], "entities": [{{"name":"<名称>","type":"<类型>"}}, ...]}}
+
+文档:
 {safe_text}
 
-JSON:"""
+只返回这个 JSON,无其他文字:"""
 
     try:
         if DOC_LLM_MODEL:
@@ -388,6 +393,10 @@ JSON:"""
             if isinstance(keywords, list):
                 keywords = [str(k).strip() for k in keywords if str(k).strip() and len(str(k).strip()) > 1][:10]
             summary = _smart_truncate(str(data.get("summary", "")), 150)
+            # P0 fix: 如果 LLM 把原文填进 summary (含 markdown 标题/加粗), fallback 到抽取式
+            if summary and (summary.startswith("#") or "**" in summary):
+                logger.warning("[Enrich LLM] summary 疑似原文 fallback, 改用抽取式")
+                summary = _extract_first_sentences(safe_text, 2)
             entities = data.get("entities", [])
             if not isinstance(entities, list):
                 entities = []
@@ -397,10 +406,46 @@ JSON:"""
             # JSON 解析失败，尝试拆分行
             lines = [l.strip() for l in content.split("\n") if l.strip() and len(l.strip()) > 1]
             kws = [l for l in lines if not l.startswith("{")][:10]
-            return {"keywords": kws, "summary": content[:150], "entities": [], "tokens": tokens}
+            return {"keywords": kws, "summary": _extract_first_sentences(content, 2), "entities": [], "tokens": tokens}
     except Exception as e:
         logger.warning(f"[Enrich LLM] 失败: {e}")
         return {}
+
+
+def _extract_first_sentences(text: str, n: int = 2) -> str:
+    """抽取式摘要: 优先剥 markdown 标记再按句切分, 取前 n 句.
+
+    P0 fix: LLM 偶尔不遵守 prompt 把原文填进 summary, 退而求其次用抽取式.
+    输入可能是 LLM 输出(JSON 格式) 或原文, 需先剥 markdown.
+    """
+    if not text:
+        return ""
+    import re as _re
+    # 0. 如果是 JSON, 优先 extract summary 字段 (LLM 真正的输出)
+    t = text.strip()
+    if t.startswith("{") and t.endswith("}"):
+        try:
+            import json as _json
+            data = _json.loads(t)
+            if isinstance(data, dict) and isinstance(data.get("summary"), str):
+                inner = data["summary"].strip()
+                if inner and len(inner) > 4:
+                    text = inner
+        except Exception:
+            pass
+    # 1. 剥 markdown 标记
+    text = _re.sub(r"^#{1,6}\s+", "", text, flags=_re.MULTILINE)  # 标题 # ## ###
+    text = _re.sub(r"\*\*([^*]+)\*\*", r"", text)  # 加粗
+    text = _re.sub(r"^\s*[-*+]\s+", "", text, flags=_re.MULTILINE)  # 列表
+    # 2. 按中英文句号/问号/感叹号/空白切分
+    parts = _re.split(r"[。！？!?.\s]+", text)
+    parts = [p.strip() for p in parts if p and len(p.strip()) > 4][:n]
+    if not parts:
+        return text[:150].strip()
+    summary = "。".join(parts)
+    if not summary.endswith("。"):
+        summary += "。"
+    return summary[:200]
 
 
 def _smart_truncate(text: str, max_length: int) -> str:
