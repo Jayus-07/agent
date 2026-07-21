@@ -16,6 +16,19 @@ load_dotenv()
 # 使用本地 Ollama 模型做 chunk 级关键词提取（仅 LLM_FORCED_TYPES 文档）
 CHUNK_LLM_MODEL = os.getenv("CHUNK_LLM_MODEL", "qwen2.5:3b")
 
+# ====================================
+# 文件上传限制 (P0-1 流式上传)
+# ====================================
+# 单文件最大 50MB,企业可调到 100MB;超过 1GB 应改用对象存储
+RAG_MAX_FILE_SIZE = int(os.getenv("RAG_MAX_FILE_SIZE", "50"))  # 单位 MB
+# 临时文件目录 (atomic rename 前存这里, Docker 容器内安全)
+RAG_TMP_DIR = os.getenv("RAG_TMP_DIR", "data/rag/tmp")
+# 流式读块大小 (1MB 平衡内存和 syscall 次数)
+RAG_UPLOAD_CHUNK_SIZE = int(os.getenv("RAG_UPLOAD_CHUNK_SIZE", str(1024 * 1024)))
+# SSE 进度推送间隔: 每 5MB 或 500ms 触发一次
+RAG_UPLOAD_EMIT_BYTES = int(os.getenv("RAG_UPLOAD_EMIT_BYTES", str(5 * 1024 * 1024)))
+RAG_UPLOAD_EMIT_MS = int(os.getenv("RAG_UPLOAD_EMIT_MS", "500"))
+
 # 文档级关键词 LLM 模型 — 设了用本地 Ollama（免费），不设走 _LLMProxy（当前 DeepSeek）
 DOC_LLM_MODEL = os.getenv("DOC_LLM_MODEL", "")
 

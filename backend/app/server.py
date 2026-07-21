@@ -15,6 +15,7 @@ from backend.app.exceptions import (
 )
 from backend.app.middleware.concurrency import concurrency_limit_middleware
 from backend.shared.logger import logger
+from backend.config.rag import RAG_MAX_FILE_SIZE
 from backend.mcp.servers import register_all as register_mcp_servers
 
 app = FastAPI(
@@ -27,6 +28,22 @@ app = FastAPI(
 
 # ── 中间件 ──────────────────────────────────────
 app.middleware("http")(concurrency_limit_middleware)
+
+
+@app.middleware("http")
+async def upload_size_limit_middleware(request, call_next):
+    """P0-1: 在 endpoint 之前检查 Content-Length, 超过限制直接 413 拒绝.
+    避免 FastAPI 等客户端发完整 body 才在 endpoint 拒 (耗带宽/磁盘).
+    """
+    if request.method == "POST" and "/rag/upload" in str(request.url.path):
+        cl = request.headers.get("content-length")
+        if cl and cl.isdigit() and int(cl) > RAG_MAX_FILE_SIZE * 1024 * 1024:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                {"ok": False, "error": f"file too large (max {RAG_MAX_FILE_SIZE}MB, Content-Length={cl})"},
+                status_code=413,
+            )
+    return await call_next(request)
 
 # ── CORS ────────────────────────────────────────
 app.add_middleware(

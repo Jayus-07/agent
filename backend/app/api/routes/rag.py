@@ -263,60 +263,126 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
 
 @router.post("/upload")
 async def upload_document(request: Request, file: UploadFile = File(...)):
-    """上传文档 → 保存到 data/docs/ → 触发后台增量索引 → 返回 upload_id 用于 SSE 订阅
-
-    两阶段流程：
-      1. POST 立即保存文件 + 返回 upload_id（不等索引）
-      2. 前端 GET /upload/{upload_id}/stream 订阅 SSE，接收真实索引进度
-    """
-    from backend.config import DOCS_DIRECTORY
+    """P0-1 流式上传: 临时文件 + atomic rename + 双保险大小限制 + SSE 进度"""
+    from backend.config.rag import (
+        RAG_MAX_FILE_SIZE, RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE,
+        RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS,
+    )
 
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
     if ext not in ("pdf", "md", "txt", "docx"):
-        return {"ok": False, "error": f"不支持的文件格式: .{ext}"}
+        return {"ok": False, "error": f"ext not allowed: .{ext}"}
 
-    # 保存文件
-    docs_dir = DOCS_DIRECTORY
-    os.makedirs(docs_dir, exist_ok=True)
-    # P1.5+ 修复：normalize path，避免 os.path.join 混合分隔符导致 registry 查询不匹配
-    # db 里存的 path 是纯 '\\'，query 必须用同样的格式
-    # P0-5 fix: 之前直接用 file.filename,用户可上传 "../../../etc/passwd.md" 写到 docs_dir 之外
+    max_size = RAG_MAX_FILE_SIZE * 1024 * 1024
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > max_size:
+        return {"ok": False, "error": f"file too large (max {RAG_MAX_FILE_SIZE}MB)"}
+
+    try:
+        # sync_upload_impl 现在是 async def, 不需要 threadpool 包装
+        # (file.read() 是 async, 必须在 async context 调, 同步 I/O 也用 sync open/write)
+        result = await sync_upload_impl(
+            file, request, max_size,
+            RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE, RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS,
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"upload failed: {type(e).__name__}: {e}"}
+    if not result.get("ok"):
+        return result
+
+    asyncio.create_task(_run_index_background(
+        result["upload_id"], result["filepath"], result["filename"],
+        result["source"], result["batch_id"]
+    ))
+    return {"ok": True, "upload_id": result["upload_id"], "filename": result["filename"]}
+
+
+
+
+async def sync_upload_impl(
+    file, request, max_size, tmp_dir, chunk_size, emit_bytes, emit_ms,
+) -> dict:
+    """P0-1 流式上传 (async def, 直接在 upload_document 事件循环里跑).
+    file.read() 是 async method, 必须 await. 写文件是 sync (open + write).
+    """
+    import time
+    from backend.config.database import DOCS_DIRECTORY as _DOCS_DIRECTORY
+    _g = globals()
+    _progress_queues = _g["_progress_queues"]
+    _extract_source = _g["_extract_source"]
+
     safe_name = os.path.basename(file.filename or "")
     if not safe_name or safe_name.startswith("."):
-        return {"ok": False, "error": "无效文件名"}
-    abs_docs_dir = os.path.abspath(docs_dir)
-    filepath = os.path.normpath(os.path.join(abs_docs_dir, safe_name))
-    # 二次校验:必须仍在 docs_dir 内,挡住 symlink/边界 case
-    if not (filepath == abs_docs_dir or filepath.startswith(abs_docs_dir + os.sep)):
-        return {"ok": False, "error": "非法文件路径"}
-    content = await file.read()
-    with open(filepath, "wb") as f:
-        f.write(content)
+        return {"ok": False, "error": "invalid filename"}
+    abs_docs_dir = os.path.abspath(_DOCS_DIRECTORY)
+    final_path = os.path.normpath(os.path.join(abs_docs_dir, safe_name))
+    if not (final_path == abs_docs_dir or final_path.startswith(abs_docs_dir + os.sep)):
+        return {"ok": False, "error": "invalid path"}
 
-    # 创建 upload_id + 进度队列
-    import time
+    ext = safe_name.rsplit(".", 1)[-1].lower()
+    upload_id = uuid.uuid4().hex[:12]
+    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_path = f"{tmp_dir}/{upload_id}.{ext}"
+
     now = time.time()
-    # D: TTL 兜底——清理 >30min 未消费的 queue（防索引任务挂死导致泄漏）
     expired = [uid for uid, q in _progress_queues.items()
                if getattr(q, "_created_at", 0) < now - 1800]
     for uid in expired:
         _progress_queues.pop(uid, None)
-        logger.warning(f"[RAG] 清理过期 upload 队列: {uid}")
 
-    upload_id = uuid.uuid4().hex[:12]
     queue: Queue = Queue()
-    queue._created_at = now  # type: ignore[attr-defined]
+    queue._created_at = now
     _progress_queues[upload_id] = queue
 
-    # 后台跑索引（不阻塞 HTTP 响应）；source 透传给后台线程记录操作日志
-    source = _extract_source(request)
-    # 前端多文件上传时携带 batch_id，同一批次共享一个 ID
-    batch_id = (request.form() if hasattr(request, 'form') else None)
-    # batch_id 从 FormData 解析，简化处理：用 header 透传
-    batch_id = request.headers.get("X-Batch-Id") or None
-    asyncio.create_task(_run_index_background(upload_id, filepath, file.filename, source, batch_id))
+    # 进度推送: 在 async context 直接 queue.put_nowait (因为是 asyncio.Queue, 跨 coroutine 同一 loop OK)
+    def _safe_put(evt):
+        queue.put_nowait(evt)
 
-    return {"ok": True, "upload_id": upload_id, "filename": file.filename}
+    try:
+        total = 0
+        last_emit_bytes = 0
+        last_emit_time = time.time()
+        cl_str = request.headers.get("content-length", "0")
+        cl_int = int(cl_str) if cl_str.isdigit() else None
+
+        with open(tmp_path, "wb") as f:
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_size:
+                    return {"ok": False, "error": f"file too large (max {max_size//1024//1024}MB, uploaded {total} bytes)"}
+                f.write(chunk)
+
+                now_emit = time.time()
+                if total - last_emit_bytes >= emit_bytes or (now_emit - last_emit_time) * 1000 >= emit_ms:
+                    progress = int(total * 100 / max(cl_int or total, 1))
+                    _safe_put({
+                        "stage": "uploading",
+                        "progress": min(progress, 99),
+                        "bytes": total,
+                    })
+                    last_emit_bytes = total
+                    last_emit_time = now_emit
+
+        os.replace(tmp_path, final_path)
+        _safe_put({"stage": "uploading", "progress": 100, "bytes": total})
+
+        return {
+            "ok": True,
+            "upload_id": upload_id,
+            "filepath": final_path,
+            "filename": safe_name,
+            "size": total,
+            "source": _extract_source(request),
+            "batch_id": request.headers.get("X-Batch-Id") or None,
+        }
+    except Exception as e:
+        if os.path.exists(tmp_path):
+            try: os.unlink(tmp_path)
+            except: pass
+        return {"ok": False, "error": f"upload failed: {type(e).__name__}: {e}"}
 
 
 async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None):
