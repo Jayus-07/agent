@@ -145,17 +145,26 @@ async def list_documents(
         # 批量查询每个文档的最新操作日志
         doc_ids = [d["doc_id"] for d in docs]
         last_ops: dict[str, dict] = {}
+        last_traces: dict[str, str] = {}
         if doc_ids:
             import sqlite3
             placeholders = ",".join(["?"] * len(doc_ids))
             op_conn = sqlite3.connect(DOC_OPERATION_LOG_PATH)
             op_conn.row_factory = sqlite3.Row
             rows = op_conn.execute(
-                f"SELECT doc_id, operation, created_at, trace_id FROM doc_operation_log "
+                f"SELECT doc_id, operation, created_at, trace_id, result FROM doc_operation_log "
                 f"WHERE id IN (SELECT MAX(id) FROM doc_operation_log WHERE doc_id IN ({placeholders}) GROUP BY doc_id)",
                 doc_ids,
             ).fetchall()
             last_ops = {r["doc_id"]: dict(r) for r in rows}
+            trace_rows = op_conn.execute(
+                f"SELECT doc_id, trace_id FROM doc_operation_log "
+                f"WHERE trace_id IS NOT NULL AND trace_id != '' AND doc_id IN ({placeholders}) "
+                f"AND id IN (SELECT MAX(id) FROM doc_operation_log "
+                f"WHERE trace_id IS NOT NULL AND trace_id != '' AND doc_id IN ({placeholders}) GROUP BY doc_id)",
+                [*doc_ids, *doc_ids],
+            ).fetchall()
+            last_traces = {r["doc_id"]: r["trace_id"] for r in trace_rows}
             op_conn.close()
 
         embedding_model_name = os.path.basename(EMBEDDING_MODEL_PATH)
@@ -185,7 +194,8 @@ async def list_documents(
                 "business_domain": d.get("business_domain", ""),
                 "last_operation": last_ops.get(d["doc_id"], {}).get("operation", ""),
                 "last_operation_at": last_ops.get(d["doc_id"], {}).get("created_at", ""),
-                "last_trace_id": last_ops.get(d["doc_id"], {}).get("trace_id") or "",
+                "last_trace_id": last_traces.get(d["doc_id"], ""),
+                "last_operation_result": last_ops.get(d["doc_id"], {}).get("result", ""),
                 "metadata_fingerprint": d.get("metadata_fingerprint", ""),
                 "doc_version": d.get("doc_version", 1),
                 "kb_id": d.get("kb_id", "policy_general"),
@@ -347,6 +357,7 @@ async def upload_document(request: Request, file: UploadFile = File(...),
         result = await sync_upload_impl(
             file, request, max_size,
             RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE, RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS,
+            kb_id=kb_id, department=department,
         )
     except Exception as e:
         return {"ok": False, "error": f"upload failed: {type(e).__name__}: {e}"}
@@ -364,6 +375,7 @@ async def upload_document(request: Request, file: UploadFile = File(...),
 
 async def sync_upload_impl(
     file, request, max_size, tmp_dir, chunk_size, emit_bytes, emit_ms,
+    kb_id: str = "policy_general", department: str = "general",
 ) -> dict:
     """P0-1 流式上传 (async def, 直接在 upload_document 事件循环里跑).
     file.read() 是 async method, 必须 await. 写文件是 sync (open + write).
@@ -390,8 +402,12 @@ async def sync_upload_impl(
     if not safe_name or safe_name.startswith("."):
         return {"ok": False, "error": "invalid filename"}
     abs_docs_dir = os.path.abspath(_DOCS_DIRECTORY)
-    final_path = os.path.normpath(os.path.join(abs_docs_dir, safe_name))
-    if not (final_path == abs_docs_dir or final_path.startswith(abs_docs_dir + os.sep)):
+    final_dir = os.path.abspath(os.path.join(abs_docs_dir, kb_id, department))
+    final_path = os.path.normpath(os.path.join(final_dir, safe_name))
+    try:
+        if os.path.commonpath([abs_docs_dir, final_path]) != abs_docs_dir:
+            return {"ok": False, "error": "invalid path"}
+    except ValueError:
         return {"ok": False, "error": "invalid path"}
 
     ext = safe_name.rsplit(".", 1)[-1].lower()
@@ -441,6 +457,7 @@ async def sync_upload_impl(
                     last_emit_bytes = total
                     last_emit_time = now_emit
 
+        os.makedirs(final_dir, exist_ok=True)
         os.replace(tmp_path, final_path)
         _safe_put({"stage": "uploading", "progress": 100, "bytes": total})
 
@@ -455,15 +472,30 @@ async def sync_upload_impl(
         }
     except Exception as e:
         if os.path.exists(tmp_path):
-            try: os.unlink(tmp_path)
-            except: pass
+            try:
+                os.unlink(tmp_path)
+            except OSError as cleanup_error:
+                logger.warning(f"[RAG] 临时文件清理失败: {cleanup_error}")
         return {"ok": False, "error": f"upload failed: {type(e).__name__}: {e}"}
 
 
+async def _cleanup_failed_upload(filepath: str) -> None:
+    """索引失败后删除已落盘文件，避免孤儿文档被后续扫描重新索引。"""
+    if not filepath:
+        return
+    try:
+        if os.path.isfile(filepath):
+            os.remove(filepath)
+            logger.info(f"[RAG] 已清理索引失败文件: {filepath}")
+    except OSError as exc:
+        logger.warning(f"[RAG] 索引失败文件清理失败 {filepath}: {exc}")
+
+
 async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general"):
-    """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志（关联 trace_id + batch_id）。"""
+    """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志。"""
     queue = _progress_queues.get(upload_id)
     if queue is None:
+        await _cleanup_failed_upload(filepath)
         return
 
     async def emit(stage: str, message: str = "", **extra):
@@ -479,39 +511,49 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
         result = await loop.run_in_executor(None, _do_index_sync, upload_id, filepath, filename, loop, kb_id, department)
     except Exception as e:
         logger.error(f"[RAG] 后台索引失败: {e}")
+        await _cleanup_failed_upload(filepath)
         await emit("error", str(e))
-        await queue.put(None)  # sentinel
+        await queue.put(None)
         _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
                      result="failed", duration_ms=int((time.time() - _upload_t0) * 1000),
                      detail={"error": str(e)[:200]})
         return
 
-    # 发送 done 事件（含新文档信息）— 按 path 直接拿刚索引的文档
+    terminal = (result or {}).get("terminal", "done")
+    if terminal == "duplicate":
+        duplicate_doc = (result or {}).get("doc") or {}
+        await emit("duplicate", "文件已存在，未重复索引", doc=duplicate_doc, trace_id="")
+        await queue.put(None)
+        _safe_log_op(
+            duplicate_doc.get("doc_id", ""), filename, "upload", source,
+            trace_id="", batch_id=batch_id, result="duplicate",
+            duration_ms=int((time.time() - _upload_t0) * 1000),
+            detail={"duplicate": True, "chunk_count": duplicate_doc.get("chunk_count", 0)},
+        )
+        return
+
+    # 成功终态：按 path 直接拿刚索引的文档
     new_doc = None
     try:
         reg = _get_registry()
         new_doc = reg.get_by_path(filepath)
         await emit("done", "索引完成", doc=new_doc,
-                  trace_id=(result or {}).get("trace_id") or "")
+                   trace_id=(result or {}).get("trace_id") or "")
     except Exception as e:
         await emit("done", "索引完成（文档信息获取失败）")
+        logger.warning(f"[RAG] 获取入库文档信息失败: {e}")
     finally:
-        await queue.put(None)  # sentinel → SSE 关闭
-        # 不在此 pop queue — 索引快时 SSE 可能还没连上消费，立即 pop 会"过期"。
-        # 清理交给 SSE stream 的 finally（消费者断开）+ upload 入口 TTL 兜底
+        await queue.put(None)
 
-    # 记录上传操作日志（trace_id 关联链路追踪；duplicate 时 trace_id 为空）
     _safe_log_op(
         (new_doc or {}).get("doc_id", ""), filename, "upload", source,
         trace_id=(result or {}).get("trace_id") or None,
-        batch_id=batch_id,
-        result="success",
+        batch_id=batch_id, result="success",
         duration_ms=int((time.time() - _upload_t0) * 1000),
         detail={
             "chunk_count": (result or {}).get("chunk_count", 0),
             "file_hash": (result or {}).get("file_hash", ""),
-            "duplicate": bool((result or {}).get("duplicate")),
-            # ── metadata 追溯字段（从 registry 读取，trace 过期后仍可查）──
+            "duplicate": False,
             "doc_type": (new_doc or {}).get("doc_type", "general"),
             "llm_used": bool((new_doc or {}).get("llm_used", False)),
             "confidence": (new_doc or {}).get("confidence", 0),
@@ -552,9 +594,7 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
                 file_hash = hashlib.sha256(f.read()).hexdigest()
             if existing.get("file_hash") == file_hash:
                 logger.info(f"[RAG] 文件未变化，跳过索引: {filename}")
-                sync_emit("duplicate", "文件已存在，未重复索引",
-                          doc={**existing, "duplicate": True}, trace_id="")
-                return {"trace_id": "", "duplicate": True}
+                return {"trace_id": "", "duplicate": True, "terminal": "duplicate", "doc": {**existing, "duplicate": True}}
             else:
                 logger.info(f"[RAG] 文件已变化，重新索引: {filename} (old={existing.get('file_hash','')[:12]} new={file_hash[:12]})")
         elif existing:
@@ -587,7 +627,6 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
         logger.info(f"[RAG] 上传索引完成: {filename} → {result}")
         return result
     except Exception as e:
-        sync_emit("error", f"索引失败: {e}")
         raise
 
 

@@ -244,8 +244,8 @@ class IncrementalIndexer:
           └── index_vector_db（chunks 带完整 metadata 写入）
         """
         kb_id = self.kb_id if self.kb_id != "default" else self._derive_kb_id(file_path)
-        doc_id = hashlib.md5(os.path.basename(file_path).encode()).hexdigest()[:10]
         file_hash = self._sha256(file_path)
+        doc_id = self._derive_doc_id(file_path, file_hash, kb_id)
 
         # ── 启动 indexer trace ──
         trace = trace_collector.start(
@@ -591,7 +591,8 @@ class IncrementalIndexer:
                 for i, ch in enumerate(chunks)
             ])
         except Exception as e:
-            logger.warning(f"Chunk 文本写入失败（非致命）: {e}")
+            logger.error(f"Chunk 文本写入失败: {e}")
+            raise
 
         # ── 构建 metadata output（独立于 doc_db 写入，确保 trace 中始终可见）──
         kws_all = doc_meta.get("doc_keywords", [])
@@ -615,8 +616,13 @@ class IncrementalIndexer:
             ids = self.doc_db.add_texts(texts=[full_text], metadatas=[doc_db_meta]) if full_text else []
             doc_db_id = ids[0] if ids else ""
         except Exception as e:
-            logger.warning(f"Doc 级写入失败（非致命）: {e}")
-            # 不阻塞 — trace span 仍会包含完整 output
+            logger.error(f"Doc 级写入失败: {e}")
+            try:
+                from backend.rag.indexing.chunk_store import get_chunk_store
+                get_chunk_store().delete_by_doc_id(doc_id)
+            except Exception as cleanup_error:
+                logger.warning(f"Doc 级失败后清理 chunk_store 失败: {cleanup_error}")
+            raise
 
         metrics = {
             "doc_type": doc_meta.get("doc_type", ""),
@@ -705,37 +711,41 @@ class IncrementalIndexer:
             logger.error(f"Chunk 写入失败: {e}")
             trace_collector.end_span(vdb_span, status="error",
                 metrics={"error": str(e)[:200]})
-            return
+            self._remove_document(doc_id)
+            raise
 
         # ── ⑨ registry（始终执行，含 metadata 用于操作日志追溯）──
-        self.registry.register(
-            file_path=file_path,
-            doc_id=doc_id,
-            file_hash=file_hash,
-            kb_id=kb_id,
-            chunk_ids=chunk_ids,
-            doc_db_id=doc_db_id,
-            metadata={
-                "doc_type": doc_meta.get("doc_type", "general"),
-                "confidence": doc_meta.get("confidence", 0),
-                "llm_used": doc_meta.get("llm_used", False),
-                "quality_score": doc_meta.get("quality_score", 0),
-                "quality_issues": doc_meta.get("quality_issues", ""),
-                "embedding_model": doc_meta.get("embedding_model", ""),
-                "minhash_sig": doc_meta.get("minhash_sig", ""),
-                "near_dup_id": doc_meta.get("near_dup_id", ""),
-                # Bug2 fix: 补 5 个文档级元数据(原代码漏,SQLite 始终为 NULL)
-                "summary": doc_meta.get("summary", ""),
-                "keywords": json.dumps(doc_meta.get("keywords") or [], ensure_ascii=False),
-                "time_refs": json.dumps(doc_meta.get("time_refs") or [], ensure_ascii=False),
-                "business_domain": doc_meta.get("business_domain", ""),
-                "complexity": json.dumps(doc_meta.get("complexity") or {}, ensure_ascii=False),
-                "metadata_fingerprint": doc_meta.get("metadata_fingerprint", ""),
-                "doc_version": doc_meta.get("doc_version", 1),
-                "kb_version": doc_meta.get("kb_version", "v1"),
-                "department": doc_meta.get("department", ""),
-            },
-        )
+        try:
+            self.registry.register(
+                file_path=file_path,
+                doc_id=doc_id,
+                file_hash=file_hash,
+                kb_id=kb_id,
+                chunk_ids=chunk_ids,
+                doc_db_id=doc_db_id,
+                metadata={
+                    "doc_type": doc_meta.get("doc_type", "general"),
+                    "confidence": doc_meta.get("confidence", 0),
+                    "llm_used": doc_meta.get("llm_used", False),
+                    "quality_score": doc_meta.get("quality_score", 0),
+                    "quality_issues": doc_meta.get("quality_issues", ""),
+                    "embedding_model": doc_meta.get("embedding_model", ""),
+                    "minhash_sig": doc_meta.get("minhash_sig", ""),
+                    "near_dup_id": doc_meta.get("near_dup_id", ""),
+                    "summary": doc_meta.get("summary", ""),
+                    "keywords": json.dumps(doc_meta.get("keywords") or [], ensure_ascii=False),
+                    "time_refs": json.dumps(doc_meta.get("time_refs") or [], ensure_ascii=False),
+                    "business_domain": doc_meta.get("business_domain", ""),
+                    "complexity": json.dumps(doc_meta.get("complexity") or {}, ensure_ascii=False),
+                    "metadata_fingerprint": doc_meta.get("metadata_fingerprint", ""),
+                    "doc_version": doc_meta.get("doc_version", 1),
+                    "kb_version": doc_meta.get("kb_version", "v1"),
+                    "department": doc_meta.get("department", ""),
+                },
+            )
+        except Exception:
+            self._remove_document(doc_id)
+            raise
 
     def _embed_with_retry(self, chunks, parent_span) -> list[str]:
         """逐 chunk 嵌入；成功静默，失败单独 child span 记录，重试 EMBED_RETRY_MAX 次。
@@ -1101,6 +1111,22 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
             get_chunk_store().delete_by_doc_id(doc_id)
         except Exception as e:
             logger.warning(f"删除 chunk_store 失败 (doc_id={doc_id}): {e}")
+
+    def _derive_doc_id(self, file_path: str, file_hash: str, kb_id: str) -> str:
+        """生成稳定且按知识库隔离的文档 ID。
+
+        已注册的旧路径优先复用原 ID，避免升级后历史 Trace、删除链接失效。
+        新文档使用知识库、部门和规范化相对路径生成，不受文件内容变化影响。
+        """
+        try:
+            existing = self.registry.get_by_path(file_path)
+        except (AttributeError, OSError, RuntimeError):
+            existing = None
+        if isinstance(existing, dict) and existing.get("doc_id"):
+            return str(existing["doc_id"])
+        rel_path = os.path.relpath(file_path, self.docs_dir).replace("\\", "/")
+        identity = f"{kb_id}|{self.department}|{rel_path}"
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
 
     # ---- KB ID 推导 ----
 
