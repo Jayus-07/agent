@@ -26,6 +26,9 @@ transformers==5.8.0
 rank-bm25==0.2.2
 jieba>=0.42
 
+# 网页抓取（LLM 友好）
+crawl4ai>=0.9.0
+
 # 文档加载器
 pypdf==6.11.0
 unstructured==0.18.3  # Markdown 和 PDF 高级解析

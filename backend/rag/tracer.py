@@ -75,10 +75,12 @@ class SpanKind(str, Enum):
     INDEX_LLM_DECIDE = "index_llm_decide"      # LLM 决策 (是否调 LLM)
     INDEX_LLM_GENERATE = "index_llm_generate"  # LLM 生成 (keywords/summary/entities)
     INDEX_SECTION = "index_section"            # 章节提取
+    INDEX_DOMAIN_CLASSIFY = "index_domain_classify"  # 业务域分类
 
     # 工作流
     WORKFLOW = "workflow"
     ROUTER = "router"
+    KB_ROUTING = "kb_routing"
 
 
 @dataclass
@@ -278,7 +280,7 @@ class TraceCollector:
 
     def finish(self, record: TraceRecord, answer: str, total_ms: int,
                model: str, provider: str = ""):
-        """完成 trace。"""
+        """完成 trace 并持久化到 SQLite。"""
         record.model = model
         record.provider = provider
         record.answer_preview = answer[:200]
@@ -294,6 +296,13 @@ class TraceCollector:
                 self._thread_current = None
         if _current_trace_var.get() is record:
             _current_trace_var.set(None)
+
+        # 持久化到 SQLite（重启不丢失）
+        try:
+            from backend.rag.trace_store import get_trace_store
+            get_trace_store().save(record)
+        except Exception:
+            pass  # 持久化失败不阻塞主流程
 
     # =====================================================
     # 查询 API

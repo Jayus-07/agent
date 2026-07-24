@@ -19,7 +19,8 @@ AI: DeepSeek / Qwen / Ollama · 自建 tracer（`backend/rag/tracer.py`）
 - Tool 必须无状态 + 可测 + 完整 Trace
 
 ## 禁止
-
+- 想的方案不和企业做法作对比
+- 任务开始前不和我聊细节
 - thin wrapper（仅 re-export）→ 例外：`lib/api.ts` 兼容层、DTO 转换
 - 文件名 `misc.py` / `helper.py` / `common.py` / `utils2.py`
 - 裸 `fetch` → 例外：SSE 流 / EventSource / FormData 上传
@@ -53,6 +54,10 @@ scope: rag / frontend / observability / chat / memory / knowledge ...
 
 ## 修改流程
 
+0. **目标驱动**：任务 → 可验证目标 → 每步有检查点。模糊目标（"改好它"、"优化一下"）禁止动手。
+   - "加验证" → 先写测试，再让测试过
+   - "修 bug" → 先复现，再修，确认测试绿
+   - "重构" → 改前改后测试全绿
 1. 读相关代码 → MCP `code-review-graph` 查影响范围（`detect_changes_tool` + `get_affected_flows`）
 2. 改完跑 `npx tsc --noEmit` + `npm test` + Python `py_compile`
 3. 人工验证：浏览器操作一遍才算通过

@@ -128,6 +128,32 @@ def extract_rule_keywords(text: str, top_k: int = 10, doc_type: str = "general")
 extract_doc_keywords_rule = extract_rule_keywords
 
 
+# Ollama 可用性缓存：避免每次索引都重试连接
+_ollama_cache: dict[str, bool] = {}
+
+def _ollama_available(model_name: str) -> bool:
+    """检查 Ollama 服务是否可用 + 模型是否已拉取。结果缓存 5 分钟。"""
+    import time, requests
+    now = time.time()
+    cached = _ollama_cache.get('_ts', 0)
+    if now - cached < 300 and model_name in _ollama_cache:
+        return _ollama_cache[model_name]
+    try:
+        r = requests.get("http://localhost:11434/api/tags", timeout=2)
+        if r.status_code == 200:
+            models = [m.get("name", "") for m in r.json().get("models", [])]
+            available = any(model_name in m or model_name.split(':')[0] in m for m in models)
+        else:
+            available = False
+    except Exception:
+        available = False
+    _ollama_cache['_ts'] = now
+    _ollama_cache[model_name] = available
+    if not available:
+        logger.info(f"[ChunkLLM] Ollama 不可用或模型 {model_name} 未找到，chunk LLM 关键词禁用")
+    return available
+
+
 def extract_chunk_keywords_qwen_batch(chunks: list[str], top_k: int = 5) -> tuple:
     """批量 Chunk LLM 关键词提取 — 一次 prompt 处理多个 chunk（省 N-1 次调用）。
 
@@ -135,9 +161,15 @@ def extract_chunk_keywords_qwen_batch(chunks: list[str], top_k: int = 5) -> tupl
     """
     from backend.config.rag import CHUNK_LLM_MODEL
     import json as _json
-    from langchain_ollama import ChatOllama
 
     model_name = CHUNK_LLM_MODEL
+
+    # 健康检查：Ollama 不可用则直接跳过，不浪费超时时间
+    if not _ollama_available(model_name):
+        logger.info(f'[ChunkLLM] Ollama 不可用，跳过 {len(chunks)} chunks 的 LLM 关键词提取')
+        return [[] for _ in chunks], model_name
+
+    from langchain_ollama import ChatOllama
     chunk_texts = [f"<chunk id={i}>{t[:800]}</chunk>" for i, t in enumerate(chunks)]
     all_chunks = "\n".join(chunk_texts)
 
@@ -154,22 +186,39 @@ JSON:"""
         result = llm.invoke(prompt)
         content = result.content.strip() if hasattr(result, "content") else str(result).strip()
 
-        match = re.search(r'\[\[.*\]\]', content, re.DOTALL)
-        if match:
-            data = _json.loads(match.group())
-            if isinstance(data, list):
-                keywords_per_chunk = []
-                for items in data:
-                    if isinstance(items, list):
-                        kws = [str(k).strip() for k in items if str(k).strip() and len(str(k).strip()) > 1][:top_k]
-                    else:
-                        kws = []
-                    keywords_per_chunk.append(kws)
-                # 补齐长度
-                while len(keywords_per_chunk) < len(chunks):
-                    keywords_per_chunk.append([])
-                logger.info(f"[ChunkLLM Batch] {model_name} → {len(chunks)} chunks, 总计 {sum(len(k) for k in keywords_per_chunk)} 关键词")
-                return keywords_per_chunk, model_name
+        # 清洗 markdown 围栏
+        content = re.sub(r'^\s*$', '', content, flags=re.MULTILINE)
+        content = content.strip()
+
+        # 尝试多种 JSON 格式
+        parsed = None
+        for pattern in [r'\[\[.*\]\]', r'\[.*\]']:
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                try:
+                    parsed = _json.loads(match.group())
+                    break
+                except Exception:
+                    continue
+
+        if parsed and isinstance(parsed, list):
+            keywords_per_chunk = []
+            for items in parsed:
+                if isinstance(items, list):
+                    kws = [str(k).strip() for k in items if str(k).strip() and len(str(k).strip()) > 1][:top_k]
+                else:
+                    kws = []
+                keywords_per_chunk.append(kws)
+            while len(keywords_per_chunk) < len(chunks):
+                keywords_per_chunk.append([])
+            total = sum(len(k) for k in keywords_per_chunk)
+            if total > 0:
+                logger.info(f"[ChunkLLM Batch] {model_name} → {len(chunks)} chunks, 总计 {total} 关键词")
+            else:
+                logger.warning(f"[ChunkLLM Batch] 解析成功但无有效关键词，raw: {content[:200]}")
+            return keywords_per_chunk, model_name
+
+        logger.warning(f"[ChunkLLM Batch] JSON 解析失败，raw: {content[:200]}")
         return [[] for _ in chunks], model_name
     except Exception as e:
         logger.warning(f"[ChunkLLM Batch] 失败: {e}")

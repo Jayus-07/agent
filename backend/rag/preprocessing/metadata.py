@@ -41,30 +41,70 @@ def classify_doc_type(text: str, filename: str = "", file_path: str = "") -> str
 
 
 def assess_quality(text: str) -> dict:
-    """质量门禁：检查文档基本质量。
+    """质量门禁：多维度文档质量评分。
 
-    Returns: {"score": float 0-1, "passed": bool, "issues": [str]}
+    Returns: {score: int 0-100, status: pass/warn/reject, dimensions: dict, issues: [str]}
     """
     issues: list[str] = []
-    score = 1.0
+    chars = len(text.strip())
 
-    # 文档过短
-    if len(text.strip()) < 50:
+    # 文本完整度（0-40）
+    if chars < 50:
+        completeness = 0
         issues.append("文档过短(<50字符)")
-        score = 0.0
+    elif chars < 100:
+        completeness = 10
+        issues.append("文档偏短(<100字符)")
+    elif chars < 500:
+        completeness = 25
+    elif chars < 1000:
+        completeness = 35
     else:
-        # 噪音比：非中英文文字占比
-        alpha_chars = sum(1 for c in text if c.isalpha() or '一' <= c <= '鿿')
-        noise_ratio = 1 - alpha_chars / max(len(text), 1)
-        if noise_ratio > 0.7:
-            issues.append(f"噪音过高({noise_ratio:.0%})")
-            score = max(score - 0.5, 0.1)
-        elif noise_ratio > 0.5:
-            issues.append(f"噪音偏高({noise_ratio:.0%})")
-            score = max(score - 0.3, 0.3)
+        completeness = 40
 
-    passed = score >= 0.3
-    return {"score": round(score, 2), "passed": passed, "issues": issues}
+    # 结构完整度（0-30）
+    has_heading = bool(re.search(r'^#{1,6}\s+', text, re.MULTILINE))
+    has_chapter = bool(re.search(r'(第[一二三四五六七八九十\d]+章|[一二三四五六七八九十]+、)', text))
+    has_paragraph = chars > 200
+    structure = (10 if has_heading else 0) + (10 if has_chapter else 0) + (10 if has_paragraph else 0)
+    if structure == 0:
+        issues.append("无标题/章节结构")
+
+    # 噪音比例（0-20，越低越好）
+    alpha_chars = sum(1 for c in text if c.isalpha() or '一' <= c <= '鿿')
+    noise_ratio = 1 - alpha_chars / max(chars, 1)
+    if noise_ratio < 0.1:       noise_score = 20
+    elif noise_ratio < 0.3:     noise_score = 15
+    elif noise_ratio < 0.5:     noise_score = 10
+    elif noise_ratio < 0.7:     noise_score = 5
+    else:
+        noise_score = 0
+        issues.append(f"噪音过高({noise_ratio:.0%})")
+
+    # 重复检测（简易，0-10）
+    lines = [l.strip() for l in text.split('\n') if l.strip()]
+    dup_ratio = 1 - len(set(lines)) / max(len(lines), 1) if lines else 0
+    if dup_ratio < 0.1:      unique_score = 10
+    elif dup_ratio < 0.3:    unique_score = 5
+    else:
+        unique_score = 0
+        issues.append("内容重复率偏高")
+
+    total = completeness + structure + noise_score + unique_score
+    status = "reject" if total < 40 else ("warn" if total < 60 else "pass")
+    passed = total >= 40
+
+    return {
+        "score": total,
+        "passed": passed,
+        "status": status,
+        "issues": issues,
+        "dimensions": {
+            "completeness": completeness, "structure": structure,
+            "noise": noise_score, "uniqueness": unique_score,
+            "total": total,
+        },
+    }
 
 
 def compute_minhash(text: str, n_gram: int = 3, n_hashes: int = 128) -> list[int]:
@@ -104,11 +144,14 @@ def minhash_similarity(sig1: list[int], sig2: list[int]) -> float:
 _SIMILARITY_THRESHOLD = 0.85  # 相似度 > 85% 视为近重复
 
 
-def classify_with_confidence(text: str, filename: str = "", file_path: str = "") -> tuple[str, float]:
+def classify_with_confidence(text: str, filename: str = "", file_path: str = "", return_detail: bool = False):
     """V2 加权计分分类 + 路径上下文 + confidence 计算。
 
-    Returns: (doc_type, confidence) — confidence ∈ [0, 1]
+    Returns: (doc_type, confidence) 或 (doc_type, confidence, detail_dict)
     """
+    detail: dict = {"scores": {}, "filename_hits": [], "title_hits": [], "folder_hit": None, "llm_fallback": False} if return_detail else {}
+    if return_detail:
+        detail["keyword_hits"] = []  # [{type, keyword, weight}, ...]
     text_lower = text[:6000].lower()
 
     # ── 加权计分 ──
@@ -116,11 +159,17 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "")
     for doc_type, rules in DOC_TYPE_RULES.items():
         score = 0
         for pattern, weight in rules:
-            matches = len(re.findall(pattern, text_lower))
-            if matches > 0:
-                score += weight * matches
+            found = re.findall(pattern, text_lower)
+            if found:
+                score += weight * len(found)
+                if return_detail:
+                    for kw in found:
+                        kw_str = kw if isinstance(kw, str) else str(kw[0] if isinstance(kw, tuple) else kw)
+                        detail["keyword_hits"].append({"type": doc_type, "keyword": kw_str, "weight": weight})
         if score > 0:
             scores[doc_type] = score
+            if return_detail:
+                detail["scores"][doc_type] = score
 
     # ── 文件名辅助 ──
     if filename:
@@ -128,6 +177,9 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "")
         for hint, hint_type in FILENAME_TYPE_HINTS.items():
             if hint.lower() in fname_no_ext.lower():
                 scores[hint_type] = scores.get(hint_type, 0) + 30
+                if return_detail:
+                    detail["filename_hits"].append(f"{hint} → {hint_type} +30")
+                    detail["keyword_hits"].append({"type": hint_type, "keyword": hint, "weight": 30, "source": "filename"})
                 logger.debug(f"[Classify] 文件名命中: {hint} → {hint_type} +30")
 
     # ── 标题关键词辅助 ──
@@ -148,6 +200,9 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "")
         for hint, hint_type in _TITLE_TYPE_HINTS.items():
             if hint.lower() in h_lower:
                 scores[hint_type] = scores.get(hint_type, 0) + 20
+                if return_detail:
+                    detail["title_hits"].append(f"{hint} → {hint_type} +20")
+                    detail["keyword_hits"].append({"type": hint_type, "keyword": hint, "weight": 20, "source": "title"})
                 logger.debug(f"[Classify] 标题命中: {hint} → {hint_type} +20")
                 if hint_type not in scores:
                     scores[hint_type] = 20
@@ -160,11 +215,17 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "")
             if hint.lower() in path_lower.split("/"):
                 scores[hint_type] = scores.get(hint_type, 0) + 40
                 folder_bonus = hint_type
+                if return_detail:
+                    detail["folder_hit"] = f"{hint} → {hint_type} +40"
                 logger.debug(f"[Classify] 文件夹命中: {hint} → {hint_type} +40 (path={path_lower})")
                 break  # 一个文件夹只匹配第一个命中
 
     if not scores:
         return "general", 0.0
+
+    # 同步 detail["scores"] 到最终 scores（标题/文件名可能后续改了 scores）
+    if return_detail:
+        detail["scores"] = dict(scores)
 
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     top_type, top_score = sorted_scores[0]
@@ -201,6 +262,8 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "")
                 logger.warning(f"[Classify] LLM 仲裁失败，使用最高分: {e}")
 
     logger.debug(f"[Classify] {filename} → {top_type} (score={top_score}, confidence={confidence})")
+    if return_detail:
+        return top_type, confidence, detail
     return top_type, confidence
 
 
@@ -235,6 +298,15 @@ def analyze_complexity(text: str, keyword_count: int, confidence: float) -> dict
     risk_keyword_hits = len(risk_matches)
     risk_keywords: list[str] = sorted(set(m.lower().capitalize() for m in risk_matches))
 
+    # LLM 决策维度计分（总分 100）
+    dim_headings = 10 if headings > 5 else (5 if headings > 2 else 0)
+    dim_tables = 5 if table_rows > 0 else 0
+    dim_legal = 15 if legal_refs > 0 else 0
+    dim_risk = min(risk_keyword_hits * 15, 30)  # 每个风险词 15，上限 30
+    dim_length = 10 if chars > 2000 else (5 if chars > 500 else 0)
+    dim_conf = 0 if confidence < 0.3 else 10  # 分类不确定时 +0
+    complexity_score = dim_headings + dim_tables + dim_legal + dim_risk + dim_length + dim_conf
+
     return {
         "headings_count": headings,
         "table_rows": table_rows,
@@ -245,6 +317,12 @@ def analyze_complexity(text: str, keyword_count: int, confidence: float) -> dict
         "keyword_count": keyword_count,
         "structure_score": min(structure_score, 50),
         "classification_clear": confidence >= 0.7,
+        "complexity_score": min(complexity_score, 100),
+        "dimensions": {
+            "headings": dim_headings, "tables": dim_tables, "legal": dim_legal,
+            "risk": dim_risk, "length": dim_length, "confidence": dim_conf,
+            "total": min(complexity_score, 100),
+        },
     }
 
 # =====================================================
@@ -315,22 +393,34 @@ def extract_time_refs(text: str) -> List[str]:
 # 业务领域识别（改进：带权重、最低得分阈值）
 # =====================================================
 
-def detect_business_domain(text: str, min_score: int = 2) -> str:
+def detect_business_domain(text: str, min_score: int = 2, return_detail: bool = False):
     """识别业务领域，返回得分最高的领域，若最高分低于阈值则返回"general" """
     scores: Dict[str, int] = Counter()
+    detail: dict = {"scores": {}, "hits": []} if return_detail else {}
     text_lower = text.lower()
     for domain, kw_weights in DOMAIN_RULES.items():
         domain_score = 0
+        matched = []
         for kw, weight in kw_weights.items():
             if kw.lower() in text_lower:
                 domain_score += weight
+                if return_detail:
+                    matched.append(f"{kw}+{weight}")
         if domain_score > 0:
             scores[domain] = domain_score
+            if return_detail and matched:
+                detail["scores"][domain] = domain_score
+                detail["hits"].extend(matched)
 
     if not scores:
+        if return_detail:
+            return "general", detail
         return "general"
     best_domain, best_score = max(scores.items(), key=lambda x: x[1])
-    return best_domain if best_score >= min_score else "general"
+    result = best_domain if best_score >= min_score else "general"
+    if return_detail:
+        return result, detail
+    return result
 
 
 # =====================================================
@@ -347,17 +437,18 @@ def enrich_metadata_llm(text: str, doc_type: str) -> dict:
     from backend.config import LLM_MODEL
     import json as _json
 
-    safe_text = text[:4000]
+    safe_text = text
     prompt = f"""你是专业 RAG 元数据提取专家。从文档提取 1 个 JSON 对象,严禁任何额外内容。
 
 严格规则:
-- summary 必须是 1-2 句中文摘要(<=150字),纯自然语言,严禁用 markdown 标题符号/列表/换行/星号
+- summary 必须是 1-3 句中文摘要,严格控制在 200 个汉字以内(超出部分将被系统强制截断,视为不合格输出)
+  纯自然语言,严禁用 markdown 标题符号/列表/换行/星号
 - keywords 是 10 个以内的关键词数组
 - entities 是 5 个以内的实体数组(每项含 name 和 type 字段,type 取 regulation/person/platform/brand)
 - 严禁在 JSON 外加解释、严禁使用 markdown 围栏、严禁重复文档原文当摘要
 
 JSON Schema:
-{{"summary": "<1-2 句中文摘要>", "keywords": ["<词 1>", ...], "entities": [{{"name":"<名称>","type":"<类型>"}}, ...]}}
+{{"summary": "<1-3 句中文摘要,<=200字>", "keywords": ["<词 1>", ...], "entities": [{{"name":"<名称>","type":"<类型>"}}, ...]}}
 
 文档:
 {safe_text}
@@ -392,7 +483,7 @@ JSON Schema:
             keywords = data.get("keywords", [])
             if isinstance(keywords, list):
                 keywords = [str(k).strip() for k in keywords if str(k).strip() and len(str(k).strip()) > 1][:10]
-            summary = _smart_truncate(str(data.get("summary", "")), 150)
+            summary = _smart_truncate(str(data.get("summary", "")), 200)
             # P0 fix: 如果 LLM 把原文填进 summary (含 markdown 标题/加粗), fallback 到抽取式
             if summary and (summary.startswith("#") or "**" in summary):
                 logger.warning("[Enrich LLM] summary 疑似原文 fallback, 改用抽取式")
@@ -574,13 +665,14 @@ async def build_metadata(text: str, fname: str, doc_id: str, chunk_id: str, is_f
         metadata["time_refs"] = time_refs
 
     if not is_full_document:
-        keywords = extract_chunk_keywords(text)
+        kw_list = extract_chunk_keywords(text)  # List[str]
     else:
-        keywords = extract_doc_keywords(text)
-        logger.debug(f"Doc关键词 ({len(keywords)}个): {keywords[:5]}..., 文档id: {doc_id}")
+        kw_result = extract_doc_keywords(text)   # KeywordResult 对象
+        kw_list = kw_result.all_keywords()
+        logger.debug(f"Doc关键词 ({len(kw_list)}个): {kw_list[:5]}..., 文档id: {doc_id}")
 
-    if keywords:
-        metadata["keywords"] = keywords
+    if kw_list:
+        metadata["keywords"] = kw_list
 
     sections = extract_sections(text)
     if sections:

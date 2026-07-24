@@ -39,6 +39,7 @@ CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
 
 # 文档类型感知分块
+POLICY_MAX_CHUNK_SIZE = int(os.getenv("POLICY_MAX_CHUNK_SIZE", "2000"))
 PROJECT_CHUNK_SIZE = int(os.getenv("PROJECT_CHUNK_SIZE", "1500"))
 GENERAL_CHUNK_SIZE = int(os.getenv("GENERAL_CHUNK_SIZE", "1000"))
 GENERAL_CHUNK_OVERLAP = int(os.getenv("GENERAL_CHUNK_OVERLAP", "100"))
@@ -148,16 +149,16 @@ SIGNAL_RULES: Dict[str, List[str]] = {
 # weight: 正则命中一次加 N 分；文件名辅助加权在外层 classify_doc_type() 处理
 DOC_TYPE_RULES: Dict[str, List[tuple]] = {
     "listing": [(r"(?<!\w)Listing(?!\w)", 10), (r"五点描述", 10), (r"A\+内容", 8), (r"关键词策略", 5), (r"标题公式", 5), (r"主图规范", 5)],
-    "sop": [(r"(?<!\w)SOP(?!\w)", 10), (r"标准操作", 8), (r"操作流程", 8), (r"标准作业", 8), (r"作业指导", 5)],
+    "sop": [(r"(?<!\w)SOP(?!\w)", 10), (r"标准操作", 8), (r"操作流程", 8), (r"标准作业", 8), (r"作业指导书", 8), (r"作业指导", 5)],
     "ad_policy": [(r"广告政策", 10), (r"投放规则", 8), (r"Amazon Ads", 10), (r"竞价策略", 8), (r"广告规范", 5)],
     "faq": [(r"(?<!\w)FAQ(?!\w)", 10), (r"常见问题", 10), (r"退货政策", 5), (r"物流时效", 5), (r"售后流程", 5)],
     "product_spec": [(r"产品规格", 10), (r"材质说明", 8), (r"使用手册", 8), (r"保养指南", 8), (r"故障排查", 5)],
     "training": [(r"培训", 10), (r"新人手册", 5), (r"上岗", 5), (r"考核", 5)],
-    "policy": [(r"制度", 8), (r"规范", 5), (r"审批", 5), (r"规定", 5), (r"管理条例", 10)],
+    "policy": [(r"制度", 5), (r"规范", 3), (r"审批", 5), (r"规定", 5), (r"管理条例", 10)],
     "compliance": [(r"合规", 10), (r"法规", 10), (r"监管", 10), (r"GDPR", 10), (r"CCPA", 10), (r"数据保护", 8), (r"个人信息", 8), (r"隐私政策", 10)],
     "legal": [(r"合同", 10), (r"条款", 10), (r"违约责任", 10), (r"赔偿", 8), (r"知识产权", 10), (r"保密协议", 10), (r"法律", 8)],
     "security": [(r"安全", 10), (r"权限", 8), (r"访问控制", 8), (r"加密", 8), (r"漏洞", 8), (r"认证", 8)],
-    "financial": [(r"财务", 10), (r"报销", 8), (r"预算", 8), (r"发票", 8), (r"付款审批", 8), (r"账", 8)],
+    "financial": [(r"财务", 10), (r"报销", 8), (r"预算", 8), (r"发票", 8), (r"付款审批", 8), (r"账[务户簿单目]|对账|坏账", 6)],
     "customer_data": [(r"客户数据", 10), (r"个人信息", 10), (r"用户隐私", 10), (r"数据收集", 8), (r"用户画像", 8)],
     "contract_template": [(r"合同模板", 10), (r"协议模板", 10), (r"标准条款", 8), (r"模板", 5)],
 }
@@ -194,14 +195,14 @@ FOLDER_TYPE_HINTS: Dict[str, str] = {
 
 DOMAIN_RULES: Dict[str, Dict[str, int]] = {
     "product": {"SKU": 3, "SPU": 3, "Listing": 3, "上架": 2, "下架": 2, "变体": 2, "品类": 2, "类目": 2, "品牌": 2, "条码": 2},
-    "order": {"订单": 3, "发货": 3, "签收": 2, "取消": 2, "退款": 2, "退货": 2, "拆单": 2, "履约": 2, "包裹": 1},
+    "order": {"订单": 3, "发货": 3, "签收": 2, "取消": 2, "退款": 2, "退货": 2, "拆单": 2, "履约": 2, "包裹": 1, "售后": 2},
     "inventory": {"库存": 3, "FBA": 3, "海外仓": 2, "调拨": 2, "在途": 2, "安全库存": 2, "滞销": 2, "周转": 2, "盘点": 2},
     "logistics": {"头程": 3, "尾程": 3, "清关": 3, "追踪号": 2, "时效": 2, "运费": 2, "承运商": 2, "HS编码": 2, "报关": 2},
     "advertising": {"ACoS": 3, "ROAS": 3, "CPC": 3, "Campaign": 2, "广告": 2, "竞价": 2, "投放": 2, "曝光": 1, "点击": 1, "转化": 1},
-    "customer": {"退货": 2, "差评": 3, "投诉": 3, "Review": 2, "Feedback": 2, "售后": 2, "索赔": 3, "保修": 2, "复购": 2},
-    "supplier": {"供应商": 2, "PO": 2, "交期": 3, "验货": 2, "对账": 2, "采购": 2, "比价": 2, "工厂": 2},
+    "customer": {"退货": 2, "差评": 3, "投诉": 3, "Review": 2, "Feedback": 2, "索赔": 3, "保修": 2, "复购": 2},
+    "supplier": {"供应商": 2, "供货商": 2, "PO": 2, "交期": 3, "验货": 2, "对账": 2, "采购": 2, "比价": 2, "工厂": 2, "评估": 2, "准入": 2, "资质": 2, "考核": 2},
     "analytics": {"日报": 3, "周报": 3, "月报": 3, "毛利率": 3, "净利润": 3, "ROI": 2, "客单价": 2, "转化率": 2, "同比": 2, "环比": 2},
-    "knowledge": {"SOP": 3, "FAQ": 3, "培训": 2, "政策": 2, "规范": 2, "制度": 2, "流程": 1, "操作手册": 2},
+    "data": {"数据治理": 3, "数据质量": 3, "数据标准": 3, "数据管理": 3, "数据规范": 3, "数据安全": 2, "元数据": 3, "主数据": 3, "数据采集": 2, "数据仓库": 2, "ETL": 3, "数据血缘": 2, "数据目录": 2},
 }
 
 blacklist = {"系统", "进行", "问题", "公司", "我们", "已经", "可以", "这个", "那个"}
@@ -244,3 +245,29 @@ NLI_MODEL_PATH = os.getenv(
 )
 NLI_TOP_K_CHUNKS = int(os.getenv("NLI_TOP_K_CHUNKS", "2"))
 NLI_SCORE_THRESHOLD = float(os.getenv("NLI_SCORE_THRESHOLD", "0.5"))
+
+# ====================================
+# Metadata 规则指纹 — 改任何规则文件自动变化
+# ====================================
+import hashlib as _hashlib
+
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../agent/backend/
+_METADATA_RULE_FILES = [
+    os.path.join(_BACKEND_DIR, "config", "rag.py"),
+    os.path.join(_BACKEND_DIR, "rag", "preprocessing", "keyword.py"),
+    os.path.join(_BACKEND_DIR, "rag", "preprocessing", "metadata.py"),
+    os.path.join(_BACKEND_DIR, "rag", "indexing", "indexer.py"),
+]
+
+def compute_metadata_fingerprint() -> str:
+    """SHA256 前 12 位：hash 4 个规则源文件，改任何一行自动变化。"""
+    h = _hashlib.sha256()
+    for fp in _METADATA_RULE_FILES:
+        try:
+            with open(fp, "rb") as f:
+                h.update(f.read())
+        except FileNotFoundError:
+            pass
+    return h.hexdigest()[:12]
+
+METADATA_SCHEMA_FINGERPRINT = compute_metadata_fingerprint()

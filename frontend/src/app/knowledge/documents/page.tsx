@@ -6,8 +6,34 @@ import { useRouter } from 'next/navigation'
 import { useDocuments } from '@/hooks/useKnowledge'
 import { knowledgeService } from '@/services/knowledge'
 import UploadDialog from '@/components/knowledge/UploadDialog'
+import { useToast } from '@/components/shared/Toast'
 
-const TYPE_ICONS: Record<string, string> = { pdf: '📄', md: '📝', docx: '📃', txt: '📋', unknown: '📎' }
+// 中文标签映射
+const KB_LABELS: Record<string, string> = {
+  biz_inventory: '库存业务', biz_order: '订单业务', biz_product: '商品业务',
+  policy_hr: '人事制度', policy_finance: '财务制度', policy_general: '企业公共',
+}
+const DEPT_LABELS: Record<string, string> = {
+  warehouse: '仓储部', supply_chain: '供应链部', order_dept: '订单部', customer: '客服部',
+  product_dept: '商品部', hr: '人事部', finance: '财务部', admin: '行政部', general: '通用',
+}
+const DOC_TYPE_CN: Record<string, string> = {
+  compliance: '合规', policy: '制度', legal: '法律', financial: '财务',
+  faq: 'FAQ', product_spec: '商品规格', sop: '操作流程', listing: '上架', general: '通用',
+}
+const DOMAIN_CN: Record<string, string> = {
+  product: '商品', order: '订单', inventory: '库存', logistics: '物流',
+  customer: '客户', supplier: '供应商', marketing: '营销', advertising: '广告',
+  analytics: '数据分析', data: '数据治理', general: '通用',
+}
+
+/** 格式化文档时间：年-月-日 时:分:秒 */
+function fmtDocTime(t?: string): string {
+  if (!t) return '-'
+  const d = new Date((t + '').replace(' ', 'T') + (t.includes('Z') ? '' : 'Z'))
+  if (isNaN(d.getTime())) return t.slice(0, 19)
+  return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+}
 
 // 统一状态徽章映射
 const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
@@ -26,7 +52,8 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
 
 export default function DocumentsPage() {
   const router = useRouter()
-  const { documents, loading, total, page, pageSize, keyword, setKeyword, status, setStatus, type, setType, setPage, error, refresh } = useDocuments()
+  const toast = useToast()
+  const { documents, loading, total, page, pageSize, keyword, setKeyword, status, setStatus, type, setType, kbId, setKbId, dept, setDept, setPage, error, refresh } = useDocuments()
   const [uploadOpen, setUploadOpen] = useState(false)
   const [reindexing, setReindexing] = useState<Set<string>>(new Set())
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
@@ -60,7 +87,7 @@ export default function DocumentsPage() {
   // 翻页/搜索/过滤变化时清空选择（选中集只对当前页有意义）
   useEffect(() => {
     clearSelection()
-  }, [page, keyword, status, type])
+  }, [page, keyword, status, type, kbId, dept])
 
   const handleDelete = async () => {
     if (!deleteTarget) return
@@ -111,11 +138,19 @@ export default function DocumentsPage() {
   const clearSelection = () => setSelectedIds(new Set())
 
   const handleBatchDelete = async () => {
-    const ids = Array.from(selectedIds)
+    const docs = documents.filter(d => selectedIds.has(d.id)).map(d => ({ id: d.id, name: d.name }))
     setBatchDeleteTarget(null)
     setBatchDeleting(true)
     try {
-      await knowledgeService.batchDelete(ids)
+      const result = await knowledgeService.batchDelete(docs)
+      if (result.failed.length > 0) {
+        toast.error(`${result.ok} 篇已删除，${result.failed.length} 篇失败：${result.failed.map(f => `${f.name}(${f.error})`).join('；')}`)
+      } else if (result.warnings.length > 0) {
+        const wText = result.warnings.map(w => `${w.name}: ${w.warnings.join(', ')}`).join('；')
+        toast.warning(`已删除 ${result.ok} 篇（部分清理异常：${wText}）`)
+      } else {
+        toast.success(`已删除 ${result.ok} 篇文档`)
+      }
       clearSelection()
       refresh()
     } finally {
@@ -191,6 +226,31 @@ export default function DocumentsPage() {
             <option value="txt">TXT</option>
             <option value="docx">DOCX</option>
           </select>
+          {/* KB 过滤 */}
+          <select value={kbId} onChange={e => setKbId(e.target.value)}
+            className="px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40 transition-colors">
+            <option value="">全部知识库</option>
+            <option value="biz_inventory">库存业务</option>
+            <option value="biz_order">订单业务</option>
+            <option value="biz_product">商品业务</option>
+            <option value="policy_hr">人事制度</option>
+            <option value="policy_finance">财务制度</option>
+            <option value="policy_general">企业公共</option>
+          </select>
+          {/* 部门过滤 */}
+          <select value={dept} onChange={e => setDept(e.target.value)}
+            className="px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40 transition-colors">
+            <option value="">全部部门</option>
+            <option value="warehouse">仓储部</option>
+            <option value="supply_chain">供应链部</option>
+            <option value="order_dept">订单部</option>
+            <option value="customer">客服部</option>
+            <option value="product_dept">商品部</option>
+            <option value="hr">人事部</option>
+            <option value="finance">财务部</option>
+            <option value="admin">行政部</option>
+            <option value="general">通用</option>
+          </select>
           <button onClick={() => setUploadOpen(true)} className="px-4 py-2 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors">+ 上传文档</button>
         </div>
 
@@ -227,12 +287,12 @@ export default function DocumentsPage() {
                   </button>
                 )}
               </th>
-              {['文件名', '类型', '大小', 'Chunks', '状态', '索引时间', '操作'].map(h => <th key={h} className="text-left px-4 py-2.5 font-medium">{h}</th>)}
+              {['文件名', '知识库', '部门', '业务域', '文档类型', '状态', '更新时间', '操作'].map(h => <th key={h} className="text-left px-4 py-2.5 font-medium">{h}</th>)}
             </tr></thead>
             <tbody>
               {documents.map(d => (
                 <tr key={d.id} className="border-b border-border-subtle hover:bg-surface-hover transition-colors cursor-pointer"
-                  onClick={() => router.push(`/knowledge/documents/${d.id}`)}>
+                  onClick={() => router.push(d.last_trace_id ? `/knowledge/operations/traces/${d.last_trace_id}` : `/knowledge/documents/${d.id}`)}>
                   <td className="px-4 py-2.5">
                     <button onClick={(e) => handleStopPropagation(e, () => toggleSelect(d.id))} className="text-text-muted hover:text-accent">
                       {selectedIds.has(d.id) ? <CheckSquare size={14} className="text-accent" /> : <Square size={14} />}
@@ -244,11 +304,14 @@ export default function DocumentsPage() {
                       <span className="text-text-primary hover:text-accent transition-colors truncate max-w-[240px]">{d.name}</span>
                     </div>
                   </td>
-                  <td className="px-4 py-2.5 text-text-muted">{TYPE_ICONS[d.type] || TYPE_ICONS.unknown} {d.type.toUpperCase()}</td>
-                  <td className="px-4 py-2.5 text-text-muted">{d.size < 1024 ? d.size + ' B' : (d.size / 1024).toFixed(1) + ' KB'}</td>
-                  <td className="px-4 py-2.5 text-text-muted">{d.chunk_count ?? d.chunks ?? 0}</td>
+                  <td className="px-4 py-2.5 text-text-muted text-[10px]">{KB_LABELS[d.kb_id] || (d.kb_id !== 'default' ? d.kb_id : '-')}</td>
+                  <td className="px-4 py-2.5 text-text-muted text-[10px]">{DEPT_LABELS[d.department || ''] || d.department || '-'}</td>
+                  <td className="px-4 py-2.5 text-text-muted text-[10px]">{DOMAIN_CN[d.business_domain || ''] || d.business_domain || '-'}</td>
+                  <td className="px-4 py-2.5 text-text-muted">{DOC_TYPE_CN[d.doc_type || ''] || d.doc_type || '-'}</td>
                   <td className="px-4 py-2.5"><StatusBadge status={d.status} /></td>
-                  <td className="px-4 py-2.5 text-text-muted">{(d.last_indexed || d.created_at || '').slice(0, 10)}</td>
+                  <td className="px-4 py-2.5 text-text-muted text-[10px]">
+                    {d.last_operation_at ? `${fmtDocTime(d.last_operation_at)} ${d.last_operation === 'upload' ? '上传' : d.last_operation === 'reindex' ? '重建' : d.last_operation === 'delete' ? '删除' : d.last_operation}` : '-'}
+                  </td>
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-1">
                       <button onClick={(e) => handleStopPropagation(e, () => router.push(`/knowledge/chunks?docId=${d.id}`))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看Chunks"><Grid3X3 size={13} /></button>
@@ -261,7 +324,7 @@ export default function DocumentsPage() {
                 </tr>
               ))}
               {!loading && documents.length === 0 && (
-                <tr><td colSpan={8} className="px-4 py-8 text-center text-text-muted">暂无文档</td></tr>
+                <tr><td colSpan={9} className="px-4 py-8 text-center text-text-muted">暂无文档</td></tr>
               )}
             </tbody>
           </table>

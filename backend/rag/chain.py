@@ -75,9 +75,13 @@ QA_PROMPT = ChatPromptTemplate.from_messages([
     ("human", "{input}"),
 ])
 
-# 单文档格式化：用序号标注每个文档
+# 单文档格式化：含元数据标签（非空字段才显示，不浪费 token）
 DOCUMENT_PROMPT = PromptTemplate.from_template(
-    "[文档{index}] 来源: {source_file}\n{page_content}"
+    "[文档{index}] 来源: {source_file}"
+    "{doc_type_label}"
+    "{business_domain_label}"
+    "{summary_label}"
+    "\n{page_content}"
 )
 
 
@@ -142,6 +146,13 @@ class RAGChain:
             docs = input_dict.get("context", [])
             for i, doc in enumerate(docs, 1):
                 doc.metadata["index"] = i
+                # 注入元数据标签（非空才显示，不浪费 token）
+                dt = doc.metadata.get("doc_type", "")
+                doc.metadata["doc_type_label"] = f"\n类型: {dt}" if dt and dt != "general" else ""
+                bd = doc.metadata.get("business_domain", "")
+                doc.metadata["business_domain_label"] = f"\n领域: {bd}" if bd else ""
+                summary = doc.metadata.get("summary", "")
+                doc.metadata["summary_label"] = f"\n摘要: {summary[:120]}" if summary else ""
             return input_dict
 
         _stuff = create_stuff_documents_chain(

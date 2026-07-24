@@ -49,6 +49,8 @@ data/doc_db/
 data/doc_versions.json  # 文档版本索引（自动生成）
 *.db
 *.sqlite3
+*.db-shm
+*.db-wal
 
 # Refactor: backend/data 是 junction 符号链接到 ../data，索引数据不应入仓
 backend/data/

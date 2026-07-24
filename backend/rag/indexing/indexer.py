@@ -29,11 +29,25 @@ from langchain_core.documents import Document
 
 from backend.rag.tracer import trace_collector, WorkflowKind, SpanKind
 from backend.rag.preprocessing.cleaner import DocumentCleaner
+from backend.rag.preprocessing.metadata import classify_doc_type
 from backend.shared.logger import logger
 from backend.shared.async_utils import run_async as _run_async
 
 # 单 chunk 嵌入失败时的重试上限
 EMBED_RETRY_MAX = 3
+
+# 摘要采样：按文档长度自适应，保证头尾关键信息不丢
+def _sample_for_summary(text: str) -> str:
+    n = len(text)
+    if n <= 2000:
+        return text           # 短文档全文
+    if n <= 8000:
+        cut = int(n * 0.6)
+        return text[:cut] + "\n...(中略)...\n" + text[-int(n * 0.4):]  # 头60%+尾40%
+    MAX_SAFE = 50000
+    if n > MAX_SAFE:
+        return text[:20000] + "\n...(中间大量细则略)...\n" + text[-20000:]  # 极端超长安全绳
+    return text               # 8KB~50KB 全文（DeepSeek 1M context 完全够）
 
 
 @dataclass
@@ -71,16 +85,20 @@ class IncrementalIndexer:
     def __init__(
         self,
         docs_dir: str,
-        vectordb: Any,        # KnowledgeStore (chunk 级)
-        doc_db: Any,          # KnowledgeStore (doc 级)
-        embedding: Any,       # HuggingFaceEmbeddings
-        registry: Any,        # DocumentRegistry
+        vectordb: Any,
+        doc_db: Any,
+        embedding: Any,
+        registry: Any,
+        kb_id: str = "policy_general",
+        department: str = "general",
     ):
-        self.docs_dir = Path(docs_dir)
+        self.docs_dir = Path(docs_dir).resolve()
         self.vectordb = vectordb
         self.doc_db = doc_db
         self.embedding = embedding
         self.registry = registry
+        self.kb_id = kb_id
+        self.department = department
 
     # ---- 主入口 ----
 
@@ -93,11 +111,13 @@ class IncrementalIndexer:
         disk_files = self._scan_disk()
         registry_rows = self.registry.list_all()
 
-        # 只考虑 active 且路径在磁盘上的（排除已标记 deleted 的）
-        active_registry = {
-            p: r for p, r in registry_rows.items()
-            if r.get("status") == "active"
-        }
+        # 只考虑 active 的条目（排除已标记 deleted 的）
+        # 归一化路径为绝对路径：旧数据可能有相对路径，与 disk_files 的绝对路径不匹配
+        active_registry = {}
+        for p, r in registry_rows.items():
+            if r.get("status") == "active":
+                norm_path = os.path.abspath(p)
+                active_registry[norm_path] = r
 
         delta = self._compute_delta(disk_files, active_registry)
         self._apply_delta(delta, disk_files, active_registry)
@@ -223,7 +243,7 @@ class IncrementalIndexer:
           ├── index_embed（成功静默，失败单独 child span）
           └── index_vector_db（chunks 带完整 metadata 写入）
         """
-        kb_id = self._derive_kb_id(file_path)
+        kb_id = self.kb_id if self.kb_id != "default" else self._derive_kb_id(file_path)
         doc_id = hashlib.md5(os.path.basename(file_path).encode()).hexdigest()[:10]
         file_hash = self._sha256(file_path)
 
@@ -415,7 +435,16 @@ class IncrementalIndexer:
         )
         try:
             from backend.rag.preprocessing.loader import split_documents
+            from backend.rag.preprocessing.chunking import ChunkStrategyRouter, GeneralChunkStrategy
+            from backend.config import GENERAL_CHUNK_SIZE, GENERAL_CHUNK_OVERLAP, PROJECT_CHUNK_SIZE
             chunks = split_documents(raw_docs, file_path)
+            # 提取实际策略名和参数
+            router = ChunkStrategyRouter()
+            doc_type_for_chunk = classify_doc_type("\n".join(d.page_content for d in raw_docs).lower())
+            strategy = router._strategies.get(doc_type_for_chunk, router._fallback)
+            strategy_name = strategy.__class__.__name__
+            chunk_size = getattr(strategy, '_chunk_size', None) or GENERAL_CHUNK_SIZE
+            chunk_overlap = getattr(strategy, '_chunk_overlap', None) or GENERAL_CHUNK_OVERLAP
             for i, ch in enumerate(chunks):
                 ch.metadata["doc_id"] = doc_id
                 ch.metadata["chunk_index"] = i
@@ -442,9 +471,14 @@ class IncrementalIndexer:
             trace_collector.end_span(chunk_span,
                 metrics={"raw_chunks": len(chunks),
                          "kept_chunks": len(filtered_chunks),
-                         "filtered_out": filtered_count},
+                         "filtered_out": filtered_count,
+                         "chunk_size": chunk_size,
+                         "chunk_overlap": chunk_overlap},
                 output={"preview": [c.page_content[:100] for c in filtered_chunks[:3]],
-                        "total": len(filtered_chunks)})
+                        "total": len(filtered_chunks),
+                        "strategy": strategy_name,
+                        "chunk_size": chunk_size,
+                        "chunk_overlap": chunk_overlap})
         except Exception as e:
             trace_collector.end_span(chunk_span, status="error",
                 metrics={"error": str(e)[:200]})
@@ -463,7 +497,8 @@ class IncrementalIndexer:
             "doc_id": doc_id,
             "source_file": os.path.basename(file_path),
             "file_path": file_path,
-            "kb_id": kb_id,
+            "kb_id": self.kb_id,
+            "department": self.department,
             "doc_type": "general",
             "person_names": "",
         }
@@ -495,9 +530,10 @@ class IncrementalIndexer:
                 section_positions.append((idx, sec_title))
         section_positions.sort(key=lambda x: x[0])
 
-        # Qwen chunk 批量调用（P2: N次→1次）
+        # Qwen chunk 批量调用 — 已关闭（文档级 DeepSeek 关键词已覆盖，省去本地推理耗时）
         qwen_kws_per_chunk: list[list[str]] = [[] for _ in chunks]
-        if use_chunk_llm:
+        use_chunk_llm = False  # 关闭 Qwen chunk 级关键词，统一用文档级关键词
+        if use_chunk_llm:  # 保留代码，后续按需开启
             from backend.rag.preprocessing.keyword import extract_chunk_keywords_qwen_batch
             logger.info(f"[Chunk] 高价值文档({doc_type_val})，启用 Qwen chunk 批量提取（{len(chunks)} chunks）")
             qwen_kws_per_chunk, chunk_llm_model = extract_chunk_keywords_qwen_batch(
@@ -506,9 +542,15 @@ class IncrementalIndexer:
             chunk_llm_count = sum(1 for kws in qwen_kws_per_chunk if kws)
             chunk_llm_model = chunk_llm_model or "qwen2.5:3b"
 
+        kb_id_val = doc_meta.get("kb_id", self.kb_id)
+        domain_val = doc_meta.get("business_domain", "") or "general"
+
         for i, ch in enumerate(chunks):
             ch.metadata["doc_type"] = doc_type_val
             ch.metadata["person_names"] = person_val
+            ch.metadata["kb_id"] = kb_id_val
+            ch.metadata["business_domain"] = domain_val
+            ch.metadata["department"] = self.department
             chunk_kws = _chunk_kw(ch.page_content, doc_type=doc_type_val)
             ch.metadata["chunk_keywords"] = ", ".join(chunk_kws) if chunk_kws else ""
 
@@ -542,7 +584,10 @@ class IncrementalIndexer:
                  "keywords": ch.metadata.get("chunk_keywords", ""),
                  "llm_keywords": ch.metadata.get("chunk_llm_keywords", ""),
                  "llm_model": ch.metadata.get("chunk_llm_model", ""),
-                 "section_title": ch.metadata.get("section_title", "")}
+                 "section_title": ch.metadata.get("section_title", ""),
+                 "doc_type": doc_type_val,
+                 "kb_id": kb_id_val,
+                 "department": self.department}
                 for i, ch in enumerate(chunks)
             ])
         except Exception as e:
@@ -599,6 +644,7 @@ class IncrementalIndexer:
                     "doc_type": doc_meta.get("doc_type", ""),
                     "confidence": doc_meta.get("confidence", 0),
                     "business_domain": doc_meta.get("business_domain", ""),
+                    "domain_classify": doc_meta.get("domain_detail", {}),
                     "person_names": doc_meta.get("person_names", ""),
                     "complexity": complexity_val,
                     "time_refs": time_refs_val,
@@ -684,6 +730,10 @@ class IncrementalIndexer:
                 "time_refs": json.dumps(doc_meta.get("time_refs") or [], ensure_ascii=False),
                 "business_domain": doc_meta.get("business_domain", ""),
                 "complexity": json.dumps(doc_meta.get("complexity") or {}, ensure_ascii=False),
+                "metadata_fingerprint": doc_meta.get("metadata_fingerprint", ""),
+                "doc_version": doc_meta.get("doc_version", 1),
+                "kb_version": doc_meta.get("kb_version", "v1"),
+                "department": doc_meta.get("department", ""),
             },
         )
 
@@ -700,6 +750,22 @@ class IncrementalIndexer:
                     cid = self.embedding.embed_query(chunk.page_content)
                     succeeded.append(cid)
                     last_err = None
+                    if attempt > 0:
+                        chunk_span = trace_collector.start_span(
+                            f"embed_chunk_{i}",
+                            parent_id="index_embed",
+                            name=f"Embed chunk {i} retried",
+                            type="embedding",
+                            kind=SpanKind.INDEX_EMBED.value,
+                            input={"chunk_index": i,
+                                   "doc_id": chunk.metadata.get("doc_id", "")},
+                        )
+                        chunk_span.retry_count = attempt
+                        trace_collector.end_span(
+                            chunk_span,
+                            metrics={"attempt": attempt + 1,
+                                     "retry_count": attempt},
+                        )
                     break
                 except Exception as e:
                     last_err = e
@@ -715,10 +781,12 @@ class IncrementalIndexer:
                     input={"chunk_index": i,
                            "doc_id": chunk.metadata.get("doc_id", "")},
                 )
+                chunk_span.retry_count = EMBED_RETRY_MAX
                 trace_collector.end_span(chunk_span, status="error",
                     metrics={"error": str(last_err)[:100] if last_err else "unknown",
                              "retry_count": EMBED_RETRY_MAX})
         return succeeded
+
 
     async def _build_doc_metadata(self, full_text: str, base_meta: dict, parent_span_id: str = "") -> dict:
         """异步构建文档级元数据 — LLM Decision Router 评分决策。"""
@@ -727,6 +795,7 @@ class IncrementalIndexer:
                 classify_with_confidence, analyze_complexity,
                 extract_time_refs, detect_business_domain,
             )
+            from backend.config.rag import METADATA_SCHEMA_FINGERPRINT as _metadata_fp
             from backend.rag.preprocessing.keyword import extract_doc_keywords_typed
             from backend.rag.preprocessing.entity import extract_entities, extract_person_names
         except ImportError:
@@ -735,6 +804,8 @@ class IncrementalIndexer:
         try:
             fname = base_meta.get("source_file", "")
             fpath = base_meta.get("file_path", "")
+            cls_detail: dict | None = None
+            domain_detail: dict | None = None
 
             # 质量门禁（P1）
             from backend.rag.preprocessing.metadata import assess_quality
@@ -745,7 +816,9 @@ class IncrementalIndexer:
                 )
             quality = assess_quality(full_text)
             if parent_span_id:
-                trace_collector.end_span(quality_span, metrics={"score": quality.get("score", 0), "issues": quality.get("issues", [])})
+                trace_collector.end_span(quality_span,
+                    metrics={"score": quality.get("score", 0), "status": quality.get("status", "?"), "issues": quality.get("issues", [])},
+                    output=quality.get("dimensions", {}))
 
             if not quality["passed"]:
                 logger.warning(f"[Quality] 文档未通过质量门禁: {quality['issues']}")
@@ -755,9 +828,10 @@ class IncrementalIndexer:
                     'classify', parent_id=parent_span_id, name="Classify",
                     type="llm", kind=SpanKind.INDEX_CLASSIFY.value,
                 )
-            doc_type, confidence = classify_with_confidence(full_text, filename=fname, file_path=fpath)
+            doc_type, confidence, cls_detail = classify_with_confidence(full_text, filename=fname, file_path=fpath, return_detail=True)
             if parent_span_id:
-                trace_collector.end_span(classify_span, metrics={"doc_type": doc_type, "confidence": round(confidence, 3)})
+                trace_collector.end_span(classify_span, metrics={"doc_type": doc_type, "confidence": round(confidence, 3)},
+                    output=locals().get("cls_detail", {}))
 
 
             # P2-1: MinHash 语义去重 — 检查同类型文档的近似内容
@@ -797,48 +871,56 @@ class IncrementalIndexer:
             if parent_span_id:
                 trace_collector.end_span(rule_extract_span, metrics={"time_refs_count": len(time_refs or []), "domain": "(computed below)"})
 
-            domain = detect_business_domain(full_text)
-            # 先跑规则关键词获取数量，用于复杂度分析
+            if parent_span_id:
+                domain_span = trace_collector.start_span(
+                    'domain_classify', parent_id=parent_span_id, name="Domain classify",
+                    type="llm", kind=SpanKind.INDEX_DOMAIN_CLASSIFY.value,
+                )
+            domain, domain_detail = detect_business_domain(full_text, return_detail=True)
+            if parent_span_id:
+                trace_collector.end_span(domain_span, metrics={"domain": domain},
+                    output=domain_detail or {})
+            # 低置信 LLM 复验（前置：必须在关键词/复杂度之前确定最终 doc_type）
+            if confidence < 0.3 and doc_type == "general":
+                try:
+                    from backend.config.rag import DOC_LLM_MODEL
+                    doc_type_prompt = f"""请判断以下文档的类型，从以下 14 种类型中选择一个最匹配的：
+policy(制度), sop(操作流程), ad_policy(广告政策), compliance(合规), legal(法律),
+contract_template(合同模板), security(安全), financial(财务), customer_data(客户数据),
+product_spec(商品规格), listing(商品上架), faq(常见问题), training(培训), general(通用)
+
+只输出类型名，不要解释。
+
+文档开头：
+{full_text[:1500]}"""
+                    if DOC_LLM_MODEL:
+                        from langchain_ollama import ChatOllama
+                        llm_l = ChatOllama(model=DOC_LLM_MODEL, temperature=0.0, num_ctx=2048, request_timeout=20)
+                        llm_type = llm_l.invoke(doc_type_prompt).content.strip()
+                    else:
+                        from backend.infra.llm import llm
+                        llm_type = llm.invoke(doc_type_prompt).content.strip()
+                    valid_types = {"policy", "sop", "ad_policy", "compliance", "legal",
+                                   "contract_template", "security", "financial", "customer_data",
+                                   "product_spec", "listing", "faq", "training", "general"}
+                    if llm_type and llm_type.lower() in valid_types:
+                        doc_type = llm_type.lower()
+                        confidence = 0.7
+                        logger.info(f"[Classify] LLM 复验: {doc_type}")
+                except Exception as e:
+                    logger.warning(f"[Classify] LLM 复验失败: {e}")
+
+            # 规则关键词 + 复杂度 + LLM关键词（在最终 doc_type 确定之后）
             from backend.rag.preprocessing.keyword import extract_rule_keywords
             rule_kws_preview = extract_rule_keywords(full_text, doc_type=doc_type)
             complexity = analyze_complexity(full_text, len(rule_kws_preview), confidence)
             kw_result = extract_doc_keywords_typed(full_text, doc_type=doc_type,
                                                     confidence=confidence, complexity=complexity)
             person_names = extract_person_names(full_text)
-            entities_nested = extract_entities(full_text)  # P1: 结构化实体
+            entities_nested = extract_entities(full_text)
         except Exception as e:
-            # P0-1 fix: 之前静默 return general,导致 keywords/person_names/entities 全为 0 但 trace 报 success
-            logger.warning(f"[Metadata] 6步预处理失败(extract_rule_keywords/analyze_complexity/extract_doc_keywords_typed/extract_person_names/extract_entities),fallback general: {e}")
+            logger.warning(f"[Metadata] 6步预处理失败,fallback general: {e}")
             return {"doc_type": "general"}
-
-        # 低置信 LLM 复验：正则全挂时补一次 LLM 确认分类
-        if confidence < 0.3 and doc_type == "general":
-            try:
-                from backend.config.rag import DOC_LLM_MODEL
-                doc_type_prompt = f"""请判断以下文档的类型，从以下类型中选择一个最匹配的：
-compliance(合规), legal(法律), financial(财务), policy(制度), faq(常见问题),
-product_spec(商品规格), sop(操作流程), listing(商品上架), general(通用)
-
-只输出类型名，不要解释。
-
-文档开头：
-{full_text[:1500]}"""
-                if DOC_LLM_MODEL:
-                    from langchain_ollama import ChatOllama
-                    llm_l = ChatOllama(model=DOC_LLM_MODEL, temperature=0.0, num_ctx=2048, request_timeout=20)
-                    llm_type = llm_l.invoke(doc_type_prompt).content.strip()
-                else:
-                    from backend.infra.llm import llm
-                    llm_type = llm.invoke(doc_type_prompt).content.strip()
-                # 验证返回值
-                valid_types = {"compliance", "legal", "financial", "policy", "faq",
-                               "product_spec", "sop", "listing", "general"}
-                if llm_type and llm_type.lower() in valid_types:
-                    doc_type = llm_type.lower()
-                    confidence = 0.7  # LLM 确认过的给予基础置信
-                    logger.info(f"[Classify] LLM 复验: {doc_type}")
-            except Exception as e:
-                logger.warning(f"[Classify] LLM 复验失败: {e}")
 
         # 合并关键词（兼容旧字段，新字段已是对象数组）
         kws_rule_objs = kw_result.rule_keywords  # [{"word": ..., "source": "rule"}, ...]
@@ -848,25 +930,34 @@ product_spec(商品规格), sop(操作流程), listing(商品上架), general(�
         # LLM 决策信息
         llm_decision = kw_result.llm_decision if hasattr(kw_result, 'llm_decision') else {}
 
-        # ⑧ 文档摘要 + 关键词合并 （P1: 1 次调用替代 2 次）
+        # ⑧ 文档摘要 + 关键词合并（自适应采样）
         summary = ""
-        need_llm_keywords = bool(kws_llm_objs)  # 已决是否调 LLM 关键词
-        need_llm_summary = len(full_text) >= 2000  # <2KB 提取式，不调 LLM
+        need_llm_keywords = bool(kws_llm_objs)
+        need_llm_summary = len(full_text) >= 1000  # <1KB 全文当摘要，不调 LLM
 
-        if need_llm_keywords and need_llm_summary:
-            # 合并调用：一次 LLM 出 keywords + summary + entities
+        llm_generate_span = None
+        if parent_span_id:
+            llm_generate_span = trace_collector.start_span(
+                "llm_generate", parent_id=parent_span_id, name="LLM generate (keywords+summary+entities)",
+                type="llm", kind=SpanKind.INDEX_LLM_GENERATE.value,
+            )
+
+        if need_llm_keywords:
+            # 合并调用：既然要调 LLM 取关键词，顺便带摘要（一次调用，不多花 token）
             from backend.rag.preprocessing.metadata import enrich_metadata_llm
-            if parent_span_id:
-                llm_generate_span = trace_collector.start_span(
-                    'llm_generate', parent_id=parent_span_id, name="LLM generate",
-                    type="llm", kind=SpanKind.INDEX_LLM_GENERATE.value,
-                )
-            enriched = _run_async(enrich_metadata_llm(full_text[:4000], doc_type))
-            if parent_span_id:
-                trace_collector.end_span(llm_generate_span, metrics={"keywords": len(enriched.get("keywords", [])), "summary_len": len(enriched.get("summary", "")), "entities": len(enriched.get("entities", []))})
+            sample = _sample_for_summary(full_text)
+            enriched = enrich_metadata_llm(sample, doc_type)
+            if llm_generate_span:
+                trace_collector.end_span(llm_generate_span, status="success",
+                    metrics={
+                        "strategy": "full_llm", "doc_size": len(full_text),
+                        "need_llm_summary": True, "threshold_bytes": 2048,
+                        "keywords": len(enriched.get("keywords", [])),
+                        "summary_len": len(enriched.get("summary", "")),
+                        "entities": len(enriched.get("entities", [])),
+                    })
 
             if enriched:
-                # 用合并结果替换单独调用的关键词和摘要
                 merged_kws = enriched.get("keywords", [])
                 merged_summary = enriched.get("summary", "")
                 merged_entities = enriched.get("entities", [])
@@ -881,28 +972,21 @@ product_spec(商品规格), sop(操作流程), listing(商品上架), general(�
                     person_names = [e.get("name", "") for e in merged_entities if e.get("name")]
                 logger.info(f"[Enrich Merged] 合并调用成功: {len(merged_kws)}kw + summary")
             else:
-                # 合并失败，降级到独立调用
-                logger.warning("[Enrich Merged] 合并失败，降级")
-                need_llm_keywords = False  # 关键词已有（虽然是旧的），只补摘要
-                try:
-                    from backend.rag.preprocessing.metadata import build_llm_summary
-                    summary, _ = _run_async(build_llm_summary(full_text[:3000]))
-                    summary = summary or ""
-                except Exception as e:
-                    # P0-1 fix: LLM 摘要失败被 pass,trace 不显形
-                    logger.warning(f"[Summary] LLM build_llm_summary 失败: {e}")
-                    pass
+                # 合并失败，不同步重试（避免雪崩延迟），摘要留空
+                logger.warning("[Enrich Merged] 合并失败，摘要留空（后续 reindex 可补）")
+        else:
+            if llm_generate_span:
+                trace_collector.end_span(llm_generate_span, status="skipped",
+                    metrics={
+                        "strategy": "skipped",
+                        "reason": "doc < 2048 bytes, use full text as summary",
+                        "doc_size": len(full_text), "threshold_bytes": 2048,
+                    })
 
-        if not summary and need_llm_summary:
-            # 仅需摘要（关键词已由规则/独立LLM处理）
-            try:
-                from backend.rag.preprocessing.metadata import build_llm_summary
-                summary, _ = _run_async(build_llm_summary(full_text[:3000]))
-                summary = summary or ""
-            except Exception as e:
-                logger.warning(f"[Summary] 生成失败: {e}")
-        elif not summary and not need_llm_summary:
-            # <2KB 抽取式摘要: 复用 metadata 里的 _extract_first_sentences (剥 markdown + 按句切分)
+        # 兜底：<1KB 全文当摘要 / 没生成出来的剥 markdown 取前几句
+        if not summary and len(full_text) <= 1000:
+            summary = full_text.strip()
+        elif not summary:
             from backend.rag.preprocessing.metadata import _extract_first_sentences
             summary = _extract_first_sentences(full_text, 3) or ""
 
@@ -926,6 +1010,7 @@ product_spec(商品规格), sop(操作流程), listing(商品上架), general(�
             "doc_type": doc_type,
             "confidence": confidence,
             "business_domain": domain,
+            "domain_detail": domain_detail,
             "time_refs": time_refs,
             "complexity": complexity,
             "doc_keywords": kws_all_words,
@@ -946,6 +1031,10 @@ product_spec(商品规格), sop(操作流程), listing(商品上架), general(�
                                                  str(getattr(self.embedding, "model", ""))) or "",
             "minhash_sig": json.dumps(minhash_sig),
             "near_dup_id": near_dup_id,
+            "metadata_fingerprint": _metadata_fp,
+            "doc_version": 1,
+            "kb_version": "v1",
+            "department": self.department,
         }
 
     # ---- 公开重索引 ----
@@ -965,13 +1054,23 @@ product_spec(商品规格), sop(操作流程), listing(商品上架), general(�
         if old_doc_id:
             self._remove_document(old_doc_id)
             
-            # Bug1 fix: _remove_document 只删向量/chunk_store,不动 registry;
-            # 这里标记 status='deleted' 来解除 _index_file 的 dedup 短路,让 force reindex 真正重跑
-            self.registry.mark_deleted(file_path)
-            logger.info(f"[REINDEX] 已清理旧向量: {old_doc_id}")
+            # 按 doc_id 软删所有行（修复重复路径导致的残余 active 行）
+            deleted = self.registry.mark_deleted_by_doc_id(old_doc_id)
+            logger.info(f"[REINDEX] 已清理旧数据: doc_id={old_doc_id}, rows={deleted}")
+
+        old_version = row.get("doc_version", 1) if row else 1
 
         # 2. 重新索引（_index_file 返回 trace_id，供操作日志关联链路追踪）
         trace_id = self._index_file(file_path)
+
+        # 2.5 bump doc_version（重索引 +1）
+        if old_doc_id:
+            with self.registry._lock, self.registry._conn() as conn:
+                conn.execute(
+                    "UPDATE doc_registry SET doc_version = ? WHERE doc_id = ?",
+                    (old_version + 1, old_doc_id),
+                )
+                conn.commit()
 
         # 3. 获取更新后的信息
         updated = self.registry.get_by_path(file_path) or {}

@@ -28,17 +28,18 @@ OPERATIONS = ("upload", "reindex", "delete")
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS doc_operation_log (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    doc_id      TEXT NOT NULL,
-    doc_name    TEXT NOT NULL,
-    operation   TEXT NOT NULL,
-    user_id     TEXT DEFAULT 'anonymous',
-    source      TEXT,
-    trace_id    TEXT,
-    batch_id    TEXT,
-    result      TEXT DEFAULT 'success',
-    detail      TEXT,
-    created_at  TEXT DEFAULT (datetime('now'))
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id       TEXT NOT NULL,
+    doc_name     TEXT NOT NULL,
+    operation    TEXT NOT NULL,
+    user_id      TEXT DEFAULT 'anonymous',
+    source       TEXT,
+    trace_id     TEXT,
+    batch_id     TEXT,
+    result       TEXT DEFAULT 'success',
+    detail       TEXT,
+    duration_ms  INTEGER DEFAULT 0,
+    created_at   TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_op_created ON doc_operation_log(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_op_doc ON doc_operation_log(doc_id);
@@ -60,12 +61,6 @@ class DocumentOperationLogger:
         conn = self._conn()
         conn.executescript(SCHEMA_SQL)
         conn.commit()
-        # 兼容旧表：batch_id 列不存在则追加
-        try:
-            conn.execute("SELECT batch_id FROM doc_operation_log LIMIT 1")
-        except sqlite3.OperationalError:
-            conn.execute("ALTER TABLE doc_operation_log ADD COLUMN batch_id TEXT")
-            conn.commit()
         conn.close()
 
     def _conn(self) -> sqlite3.Connection:
@@ -86,6 +81,7 @@ class DocumentOperationLogger:
         batch_id: str | None = None,
         result: str = "success",
         detail: dict | None = None,
+        duration_ms: int = 0,
     ) -> None:
         """记录一条操作日志。"""
         if operation not in OPERATIONS:
@@ -94,9 +90,9 @@ class DocumentOperationLogger:
         with self._lock, self._conn() as conn:
             conn.execute(
                 """INSERT INTO doc_operation_log
-                   (doc_id, doc_name, operation, user_id, source, trace_id, batch_id, result, detail)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (doc_id, doc_name, operation, user_id, source, trace_id, batch_id, result, detail_str),
+                   (doc_id, doc_name, operation, user_id, source, trace_id, batch_id, result, detail, duration_ms)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (doc_id, doc_name, operation, user_id, source, trace_id, batch_id, result, detail_str, duration_ms),
             )
 
     # ---- 查询 ----

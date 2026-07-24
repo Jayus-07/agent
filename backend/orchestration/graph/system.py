@@ -417,6 +417,8 @@ class MultiAgentSystem:
             return
 
         l1 = self._memory.start_session(session_id, question)
+        from backend.orchestration.tools import set_session_id
+        set_session_id(session_id)
         start_time = time.time()
         initial_state = self._make_initial_state(question, session_id, kb_id, l1.messages)
 

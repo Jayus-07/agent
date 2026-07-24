@@ -13,6 +13,7 @@ from backend.orchestration.observability import GRAPH_TOPOLOGY, NODE_LABELS
 from backend.shared.monitoring.resource_monitor import resource_monitor
 from backend.rag.metrics import metrics_collector
 from backend.rag.tracer import trace_collector, TraceRecord, Span
+from backend.rag.trace_store import get_trace_store
 
 router = APIRouter(prefix="/observability", tags=["可观测性"])
 
@@ -107,10 +108,14 @@ async def list_active_traces():
 
 @router.get("/traces/{trace_id}")
 async def get_trace(trace_id: str):
-    """获取单条 trace 完整详情"""
+    """获取单条 trace 完整详情（内存优先，SQLite 兜底）"""
     t = trace_collector.get(trace_id)
     if t is None:
-        raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在")
+        # 内存未命中 → 从 SQLite 读取（重启后仍可用）
+        data = get_trace_store().get(trace_id)
+        if data is None:
+            raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在或已过期")
+        return data  # 已是 DTO 格式（JSON dict）
     return _to_trace_dto(t)
 
 
@@ -147,10 +152,13 @@ async def stream_rag_traces():
 
 @router.get("/rag-traces/{trace_id}")
 async def get_rag_trace(trace_id: str):
-    """获取单条 RAG Trace 详情"""
+    """获取单条 RAG Trace 详情（内存优先，SQLite 兜底）"""
     t = trace_collector.get(trace_id)
     if t is None:
-        raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在")
+        data = get_trace_store().get(trace_id)
+        if data is None:
+            raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在或已过期")
+        return data
     return _to_trace_dto(t)
 
 

@@ -81,6 +81,13 @@ async def eager_init_rag_pipeline():
             logger.info("[Startup] RAG 管道预热完成")
         except Exception as e:
             logger.warning(f"[Startup] RAG 管道预热失败（首次请求会重试）: {e}")
+        # 预热 jieba 分词词典（首次加载 ~1s）
+        try:
+            import jieba
+            jieba.initialize()
+            logger.info("[Startup] jieba 词典预热完成")
+        except Exception:
+            pass
     threading.Thread(target=_warmup, daemon=True, name="rag-warmup").start()
 
 

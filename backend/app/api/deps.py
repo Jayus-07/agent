@@ -52,7 +52,24 @@ def get_rag_pipeline():
 
 def get_rag_status() -> dict:
     """返回 RAG 模块状态（供 health check 使用）"""
-    return {
-        "available": _rag_pipeline is not None,
-        "error": _rag_init_error,
-    }
+    if _rag_pipeline is not None:
+        return {"ready": True, "status": "ready"}
+    if _rag_init_error is not None:
+        return {"ready": False, "status": "error", "error": _rag_init_error}
+    return {"ready": False, "status": "initializing", "message": "模型加载中，请稍后重试"}
+
+
+def require_rag_ready():
+    """检查 RAG 是否就绪，未就绪则抛出 HTTPException 503。"""
+    status = get_rag_status()
+    if not status["ready"]:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "SERVICE_NOT_READY",
+                "status": status["status"],
+                "message": status.get("message") or status.get("error", "未知错误"),
+                "retry_after": 15,
+            },
+        )

@@ -7,7 +7,20 @@ Skill 通过 Tool.invoke() 调用，不直接依赖子系统的内部实现。
 Skill → Tool → Infrastructure (RAG / SQL / Report)
 """
 
+from contextvars import ContextVar
+
 from langchain_core.tools import tool
+
+# 当前会话 ID，由 LangGraph workflow 在每次请求时设置
+_current_session_id: ContextVar[str] = ContextVar("session_id", default="multi-agent-default")
+
+
+def set_session_id(sid: str):
+    _current_session_id.set(sid)
+
+
+def _get_session_id() -> str:
+    return _current_session_id.get()
 
 from backend.shared.logger import logger
 
@@ -58,7 +71,9 @@ def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
     """
     logger.info(f"[Tool:search_knowledge] 检索: {question[:80]}... (kb={kb_id})")
     pipeline = _get_rag_pipeline()
-    return pipeline.ask(question, session_id="multi-agent-default", kb_id=kb_id)
+    # 尝试从 LangGraph state 取 session_id，fallback 到默认值
+    sid = _get_session_id() if callable(_get_session_id) else "multi-agent-default"
+    return pipeline.ask(question, session_id=sid, kb_id=kb_id)
 
 
 # =====================================================
@@ -212,6 +227,49 @@ def web_search_tool(query: str, num_results: int = 5) -> str:
         return f"[NO RESULTS] 未找到 '{query}' 的相关结果"
 
     return "\n\n".join(results)
+
+
+@tool
+def web_crawl_tool(url: str, mode: str = "markdown") -> str:
+    """
+    抓取指定网页的正文内容，返回干净的 Markdown 格式文本。
+    适用场景：竞品页面分析、行业资讯摘要、平台政策原文获取。
+    建议先通过 web.search 发现目标链接，再用本 tool 抓取正文。
+
+    url: 要抓取的网页地址（完整 URL，如 https://www.amazon.com/dp/B0EXAMPLE）
+    mode: "markdown" (默认，干净 Markdown) | "raw" (原始 HTML)
+    返回: Markdown 格式的网页正文
+    """
+    import asyncio
+    from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+    from backend.shared.logger import logger
+
+    async def _crawl(url: str, mode: str) -> str:
+        config = CrawlerRunConfig(
+            page_timeout=30_000,
+            magic=True,            # 反机器人检测
+            override_navigator=True,
+        )
+        async with AsyncWebCrawler() as crawler:
+            result = await crawler.arun(url, config=config)
+            if result is None:
+                return f"[CRAWL FAILED] 无法抓取 '{url}'：无响应"
+            if result.error_message:
+                return f"[CRAWL FAILED] 抓取 '{url}' 出错: {result.error_message}"
+            content = result.markdown if mode == "markdown" else result.html
+            if not content or len(str(content).strip()) == 0:
+                return f"[EMPTY] 网页 '{url}' 无有效正文内容"
+            text = str(content)
+            if len(text) > 8000:
+                text = text[:8000] + f"\n\n... (内容已截断，原文共 {len(text)} 字符)"
+            logger.info(f"[Tool:web_crawl] 成功抓取 {url} ({len(text)} 字符, mode={mode})")
+            return text
+
+    try:
+        return asyncio.run(_crawl(url, mode))
+    except Exception as e:
+        logger.warning(f"[Tool:web_crawl] 抓取失败: {e}")
+        return f"[CRAWL FAILED] 无法抓取 '{url}': {e}"
 
 
 @tool

@@ -58,6 +58,7 @@ class ToolRegistry:
         "data.export":       "data_export_skill",
         "email.send":        "email_skill",
         "web.search":        "web_search_skill",
+        "web.crawl":         "web_crawl_skill",
     }
 
     # capability → {description, params, 示例}（用于 Planner/Critique prompt）
@@ -123,6 +124,14 @@ class ToolRegistry:
                 "num_results": "返回结果数（默认5）",
             },
             "示例": {"query": "Amazon FBA fee changes 2026"},
+        },
+        "web.crawl": {
+            "description": "抓取指定网页的正文内容，输出干净 Markdown。用于获取竞品页面详情、行业资讯全文、平台政策原文。建议先通过 web.search 发现目标链接后再调用本能力。",
+            "params": {
+                "url": "目标网页 URL（完整地址）",
+                "mode": "markdown（默认，干净正文）| raw（原始 HTML）",
+            },
+            "示例": {"url": "https://www.amazon.com/dp/B0EXAMPLE", "mode": "markdown"},
         },
     }
 

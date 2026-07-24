@@ -84,8 +84,18 @@ function setupFetchMock() {
   }) as any;
 }
 
+async function getEventSource(): Promise<MockEventSource> {
+  await vi.waitFor(() => expect(MockEventSource.instances[0]).toBeDefined());
+  return MockEventSource.instances[0];
+}
+
 beforeEach(() => {
   MockEventSource.instances = [];
+  mockFetchResponse = {
+    ok: true,
+    status: 200,
+    body: { ok: true, upload_id: "test_upload_001", filename: "doc.txt" },
+  };
   setupFetchMock();
   (globalThis as any).EventSource = MockEventSource;
 });
@@ -104,7 +114,7 @@ describe("knowledgeService.uploadDocument SSE consumer (P1.5 fix)", () => {
       (stage, message) => progressCalls.push([stage, message]),
     );
 
-    const es = MockEventSource.instances[0];
+    const es = await getEventSource();
     expect(es).toBeDefined();
 
     // 模拟 server 立即推完全部事件（不等 listener 注册 —— P1.5 bug 触发条件）
@@ -117,10 +127,10 @@ describe("knowledgeService.uploadDocument SSE consumer (P1.5 fix)", () => {
 
     const result = await promise;
 
-    // 关键：所有 5 个 stage 都应被转发（uploading 在 addEventListener 之前的修复）
+    // 所有阶段（包括完成事件）都应按顺序转发
     const stages = progressCalls.map(([s]) => s);
     expect(stages).toEqual([
-      "uploading", "parsing", "chunking", "embedding", "writing",
+      "uploading", "parsing", "chunking", "embedding", "writing", "done",
     ]);
     expect(result.ok).toBe(true);
     expect((result.doc as any)?.id).toBe("abc");
@@ -135,7 +145,7 @@ describe("knowledgeService.uploadDocument SSE consumer (P1.5 fix)", () => {
       (stage) => progressCalls.push(stage),
     );
 
-    const es = MockEventSource.instances[0];
+    const es = await getEventSource();
     es.emit("done", { stage: "done", message: "索引完成", doc: { id: "abc" } });
 
     const result = await promise;
@@ -150,7 +160,7 @@ describe("knowledgeService.uploadDocument SSE consumer (P1.5 fix)", () => {
       () => {},
     );
 
-    const es = MockEventSource.instances[0];
+    const es = await getEventSource();
     es.emit("error", { stage: "error", message: "pypdf 包未安装" });
 
     const result = await promise;
@@ -167,7 +177,7 @@ describe("knowledgeService.uploadDocument SSE consumer (P1.5 fix)", () => {
       (stage) => progressCalls.push(stage),
     );
 
-    const es = MockEventSource.instances[0];
+    const es = await getEventSource();
     // 模拟非 JSON 数据
     es.onmessage!({ data: "not-json" } as MessageEvent);
     es.emit("done", { stage: "done", message: "ok", doc: { id: "x" } });
@@ -183,7 +193,7 @@ describe("knowledgeService.uploadDocument SSE consumer (P1.5 fix)", () => {
       () => {},
     );
 
-    const es = MockEventSource.instances[0];
+    const es = await getEventSource();
     es.emit("done", { stage: "done", message: "ok", doc: { id: "x" } });
     await promise; // resolved with ok=true
 
@@ -201,7 +211,7 @@ describe("knowledgeService.uploadDocument SSE consumer (P1.5 fix)", () => {
       () => {},
     );
 
-    const es = MockEventSource.instances[0];
+    const es = await getEventSource();
     // 连接意外中断（非 done/error 引起）
     es.readyState = 2;
     es.emitError();
@@ -250,7 +260,7 @@ describe("P1.5 regression — listener race condition", () => {
       (stage) => captured.push(stage),
     );
 
-    const es = MockEventSource.instances[0];
+    const es = await getEventSource();
     // 模拟极端时序：onmessage 已注册但前几个 stage 在 microtask 队列里
     es.emit("uploading", { stage: "uploading", message: "" });
     es.emit("parsing",   { stage: "parsing",   message: "" });

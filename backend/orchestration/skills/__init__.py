@@ -24,6 +24,7 @@ from backend.orchestration.skills.report.skill import ReportSkill, report_skill_
 from backend.orchestration.skills.email.skill import EmailSkill, email_skill_node
 from backend.orchestration.skills.data_export.skill import DataExportSkill, data_export_skill_node
 from backend.orchestration.skills.web_search.skill import WebSearchSkill, web_search_skill_node
+from backend.orchestration.skills.web_crawl.skill import WebCrawlSkill, web_crawl_skill_node
 
 __all__ = [
     "BaseSkill", "execute_with_retry",
@@ -34,4 +35,5 @@ __all__ = [
     "EmailSkill", "email_skill_node",
     "DataExportSkill", "data_export_skill_node",
     "WebSearchSkill", "web_search_skill_node",
+    "WebCrawlSkill", "web_crawl_skill_node",
 ]

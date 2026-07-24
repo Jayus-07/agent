@@ -48,7 +48,7 @@ class ParsedQuery:
         if self.doc_types:
             f["doc_type"] = self.doc_types[0] if len(self.doc_types) == 1 else self.doc_types
         if self.domains:
-            f["domain"] = self.domains[0]
+            f["business_domain"] = self.domains[0]  # 与 chunk metadata 字段名对齐
         if self.time_range_start:
             f["time_start"] = self.time_range_start
             f["time_end"] = self.time_range_end

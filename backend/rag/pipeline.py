@@ -102,12 +102,18 @@ class RAGPipeline:
 
     def _build_metadata(self):
         logger.info("开始异步批量构建元数据...")
-        doc_level_texts, doc_level_meta = _run_async(
-            build_all_metadata_async(self.docs, self.doc_map)
-        )
-        self.doc_level_texts = doc_level_texts
-        self.doc_level_meta = doc_level_meta
-        logger.info(f"元数据构建完成: {len(doc_level_texts)} 个文档级, {len(self.docs)} 个 chunk 级")
+        try:
+            doc_level_texts, doc_level_meta = _run_async(
+                build_all_metadata_async(self.docs, self.doc_map)
+            )
+            self.doc_level_texts = doc_level_texts
+            self.doc_level_meta = doc_level_meta
+            logger.info(f"元数据构建完成: {len(doc_level_texts)} 个文档级, {len(self.docs)} 个 chunk 级")
+        except Exception as e:
+            logger.error(f"元数据构建失败: {e}（可能为 KeywordResult 类型兼容问题，提取关键词时降级处理）")
+            # 降级：不阻塞启动
+            self.doc_level_texts = []
+            self.doc_level_meta = []
 
     def _init_embedding(self):
         self.embedding = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
@@ -167,7 +173,7 @@ class RAGPipeline:
             logger.info(f"增量索引: {result}")
             return True
         except Exception as e:
-            logger.warning(f"增量索引失败: {e}，回退全量重建")
+            logger.warning(f"增量索引失败（{type(e).__name__}: {e}），将回退全量重建；如为 NameError 请检查 indexer 变量作用域")
             if 'registry' in locals():
                 try:
                     registry.clear()
@@ -378,15 +384,30 @@ class RAGPipeline:
             self._cleanup()
 
     def _prepare_context(self, kb_id: str, question: str):
-        """注入 kb_id + QueryAnalyzer 的 doc_type 到 contextvars metadata_filter。"""
+        """注入 kb_id + QueryAnalyzer metadata → contextvars metadata_filter。"""
         from backend.rag.context import RequestContext, set_context
         from backend.rag.retrieval.query_analyzer import QueryAnalyzer
+        from backend.rag.routing.kb_router import KBRouter
+        from backend.rag.retrieval.kb_filter import build_kb_filter
 
         mf: dict = {}
+
+        # KB Router → 候选 KB 列表 → $or filter
+        try:
+            router = KBRouter()
+            kb_result = router.route(question)
+            candidate_ids = [c["kb_id"] for c in kb_result.get("candidates", [])]
+            kb_filter = build_kb_filter(candidate_ids)
+            if kb_filter:
+                mf.update(kb_filter)
+        except Exception:
+            pass
+
+        # 兼容旧 kb_id 参数（显式指定时覆盖 Router）
         if kb_id and kb_id not in ("*", "default"):
             mf["kb_id"] = kb_id
 
-        # 从查询中提取 doc_type 过滤条件
+        # QueryAnalyzer → doc_type / business_domain 过滤
         try:
             qa = QueryAnalyzer()
             pq = qa.analyze(question)

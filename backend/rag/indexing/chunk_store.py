@@ -19,14 +19,24 @@ CREATE TABLE IF NOT EXISTS chunk_store (
     doc_id        TEXT NOT NULL,
     chunk_index   INTEGER NOT NULL DEFAULT 0,
     content       TEXT NOT NULL DEFAULT '',
-    token_count   INTEGER NOT NULL DEFAULT 0,
+    char_count    INTEGER NOT NULL DEFAULT 0,
     keywords      TEXT NOT NULL DEFAULT '',  -- 规则提取 chunk 关键词
     llm_keywords  TEXT NOT NULL DEFAULT '',  -- Qwen LLM 提取 chunk 关键词（高价值文档）
     llm_model     TEXT NOT NULL DEFAULT '',  -- 提取使用的 LLM 模型名
     section_title TEXT NOT NULL DEFAULT '',  -- chunk 所属章节标题
+    doc_type      TEXT NOT NULL DEFAULT '',  -- 文档类型（继承自文档级元数据）
+    kb_id         TEXT NOT NULL DEFAULT '',  -- 知识库 ID（继承自文档级元数据）
+    department    TEXT NOT NULL DEFAULT '',  -- 部门（继承自文档级元数据）
     created_at    TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_cs_doc_id ON chunk_store(doc_id);
+"""
+
+# 兼容旧库的增量迁移（v1 → v2：新增 doc_type, kb_id, department 列）
+MIGRATION_SQL = """
+ALTER TABLE chunk_store ADD COLUMN doc_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE chunk_store ADD COLUMN kb_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE chunk_store ADD COLUMN department TEXT NOT NULL DEFAULT '';
 """
 
 
@@ -47,26 +57,18 @@ class ChunkStore:
         os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
         conn = self._conn()
         conn.executescript(SCHEMA_SQL)
-        # 兼容旧表迁移
+        # 兼容旧库增量迁移（忽略列已存在的错误）
         try:
-            conn.execute("SELECT llm_keywords FROM chunk_store LIMIT 1")
+            conn.executescript(MIGRATION_SQL)
         except sqlite3.OperationalError:
-            conn.execute("ALTER TABLE chunk_store ADD COLUMN llm_keywords TEXT NOT NULL DEFAULT ''")
-        try:
-            conn.execute("SELECT llm_model FROM chunk_store LIMIT 1")
-        except sqlite3.OperationalError:
-            conn.execute("ALTER TABLE chunk_store ADD COLUMN llm_model TEXT NOT NULL DEFAULT ''")
-        try:
-            conn.execute("SELECT section_title FROM chunk_store LIMIT 1")
-        except sqlite3.OperationalError:
-            conn.execute("ALTER TABLE chunk_store ADD COLUMN section_title TEXT NOT NULL DEFAULT ''")
+            pass  # 列已存在，跳过
         conn.commit()
         conn.close()
 
     # ── 写入 ──
 
     def insert_batch(self, doc_id: str, chunks: list[dict]) -> int:
-        """批量写入 chunk 文本。chunks: [{chunk_index, content, keywords?, llm_keywords?, llm_model?}]。"""
+        """批量写入 chunk 文本。chunks: [{chunk_index, content, keywords?, llm_keywords?, llm_model?, section_title?, doc_type?, kb_id?, department?}]。"""
         if not chunks:
             return 0
         with self._lock:
@@ -77,11 +79,14 @@ class ChunkStore:
                  c.get("keywords", ""),
                  c.get("llm_keywords", ""),
                  c.get("llm_model", ""),
-                 c.get("section_title", ""))
+                 c.get("section_title", ""),
+                 c.get("doc_type", ""),
+                 c.get("kb_id", ""),
+                 c.get("department", ""))
                 for i, c in enumerate(chunks)
             ]
             conn.executemany(
-                "INSERT INTO chunk_store (doc_id, chunk_index, content, token_count, keywords, llm_keywords, llm_model, section_title) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO chunk_store (doc_id, chunk_index, content, char_count, keywords, llm_keywords, llm_model, section_title, doc_type, kb_id, department) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
             conn.commit()
@@ -106,7 +111,7 @@ class ChunkStore:
         """按 doc_id 查询所有 chunk，按 chunk_index 排序。"""
         conn = self._conn()
         rows = conn.execute(
-            "SELECT chunk_index, content, token_count, keywords, llm_keywords, llm_model, section_title, created_at FROM chunk_store WHERE doc_id = ? ORDER BY chunk_index",
+            "SELECT chunk_index, content, char_count, keywords, llm_keywords, llm_model, section_title, doc_type, kb_id, department, created_at FROM chunk_store WHERE doc_id = ? ORDER BY chunk_index",
             (doc_id,),
         ).fetchall()
         conn.close()

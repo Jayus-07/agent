@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Sidebar from '@/components/Sidebar'
+import { ToastProvider } from '@/components/shared/Toast'
 import './globals.css'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -15,7 +16,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="h-full flex bg-surface-root">
         <Sidebar collapsed={!sidebarOpen} onToggle={() => setSidebarOpen((v) => !v)} />
-        <main className="flex-1 flex flex-col min-w-0">{children}</main>
+        <main className="flex-1 flex flex-col min-w-0"><ToastProvider>{children}</ToastProvider></main>
       </body>
     </html>
   )

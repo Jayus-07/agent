@@ -41,20 +41,21 @@ export default function OperationsPage() {
     }
 
     // 拆分：同批次 ≥2 条才折叠，单条的合并回独立行
-    const batches: { batch_id: string; logs: OperationLog[]; okCount: number; failCount: number; latestTime: string; firstFile: string }[] = []
+    const BATCH_LABELS: Record<string, string> = { upload: '批量上传', delete: '批量删除', reindex: '批量重索引' }
+    const batches: { batch_id: string; logs: OperationLog[]; okCount: number; failCount: number; latestTime: string; firstFile: string; opLabel: string }[] = []
     Array.from(batchMap.entries()).forEach(([bid, logs]) => {
       if (logs.length >= 2) {
         const okCount = logs.filter((l: OperationLog) => l.result === 'success').length
         const failCount = logs.filter((l: OperationLog) => l.result === 'failed').length
         const latestTime = logs.reduce((max: string, l: OperationLog) => l.created_at > max ? l.created_at : max, '')
         const firstFile = logs[0]?.doc_name || ''
-        batches.push({ batch_id: bid, logs, okCount, failCount, latestTime, firstFile })
+        batches.push({ batch_id: bid, logs, okCount, failCount, latestTime, firstFile, opLabel: BATCH_LABELS[logs[0]?.operation] || '批量操作' })
       } else {
         singles.push(...logs)
       }
     })
     // 批次和单条混在一起按时间倒序
-    const all: ({ kind: "batch"; batch_id: string; logs: OperationLog[]; okCount: number; failCount: number; latestTime: string; firstFile: string } | { kind: "single"; log: OperationLog })[] = [
+    const all: ({ kind: "batch"; batch_id: string; logs: OperationLog[]; okCount: number; failCount: number; latestTime: string; firstFile: string; opLabel: string } | { kind: "single"; log: OperationLog })[] = [
       ...batches.map(b => ({ kind: "batch" as const, ...b })),
       ...singles.map(log => ({ kind: "single" as const, log })),
     ]
@@ -92,6 +93,29 @@ export default function OperationsPage() {
 
   const totalPages = Math.ceil(total / pageSize)
 
+  /** 格式化耗时 */
+  const formatDuration = (ms: number) => {
+    if (!ms || ms <= 0) return '-'
+    if (ms < 1000) return `${ms}ms`
+    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+    return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`
+  }
+
+  /** 格式化来源：提取可读信息 */
+  const formatSource = (source: string) => {
+    if (!source) return '-'
+    // "127.0.0.1 | curl/8.19.0" → 取 IP + 客户端
+    const parts = source.split(' | ')
+    if (parts.length >= 2) {
+      const ip = parts[0]
+      const ua = parts.slice(1).join(' | ')
+      // 常见 UA 简化
+      const client = ua.includes('curl') ? 'API' : ua.includes('Mozilla') ? 'Web' : ua.slice(0, 20)
+      return `${ip} · ${client}`
+    }
+    return source.slice(0, 30)
+  }
+
   /** 解析 detail 字段为对象（兼容 JSON 字符串 / 已解析对象） */
   const parseDetail = (detail: OperationLog['detail']): Record<string, unknown> | null => {
     if (!detail) return null
@@ -106,6 +130,11 @@ export default function OperationsPage() {
     if (!obj) return null
     if (obj.error) return { text: `错误: ${obj.error}`, type: 'error' as const }
     if (obj.duplicate) return { text: '已存在，跳过索引', type: 'duplicate' as const }
+    // 删除操作：只含 file_path，提取文件名展示
+    if (obj.file_path && Object.keys(obj).length <= 2) {
+      const fname = (obj.file_path as string).split(/[\\/]/).pop() || ''
+      return { text: `已删除: ${fname}`, type: 'normal' as const, doc_type: '', llm_used: false, confidence: undefined }
+    }
     const parts: string[] = []
     if (obj.chunk_count !== undefined) parts.push(`Chunks: ${obj.chunk_count}`)
     return {
@@ -173,58 +202,63 @@ export default function OperationsPage() {
         <div className="bg-surface-base rounded-xl border border-border-subtle overflow-hidden">
           <table className="w-full text-xs">
             <thead><tr className="border-b border-border-subtle bg-surface-elevated text-text-muted">
-              {['时间', '文档名', '操作', '操作人', '结果', '详情', '链路'].map(h => <th key={h} className="text-left px-4 py-2.5 font-medium">{h}</th>)}
+              {['时间', '文档名', '操作', '操作者', '来源', '结果', '耗时', '详情', 'Trace ID', '链路'].map(h => <th key={h} className="text-left px-3 py-2.5 font-medium text-[10px]">{h}</th>)}
             </tr></thead>
             <tbody>
               {groupedItems.all.map(item => {
                 if (item.kind === "batch") {
                   const batch = item
+                  const batchTotalMs = batch.logs.reduce((sum, l) => sum + (l.duration_ms || 0), 0)
                   return (
                     <Fragment key={batch.batch_id}>
                       <tr className="border-b border-border-subtle bg-surface-elevated/50 hover:bg-surface-hover transition-colors cursor-pointer"
                         onClick={() => toggleBatch(batch.batch_id)}>
-                        <td className="px-4 py-2.5 text-text-muted">{new Date((batch.latestTime + '').replace(' ', 'T') + 'Z').toLocaleString('zh-CN', { hour12: false })}</td>
-                        <td className="px-4 py-2.5 text-text-primary flex items-center gap-1.5">
+                        <td className="px-3 py-2.5 text-text-muted text-[10px]">{new Date((batch.latestTime + '').replace(' ', 'T') + 'Z').toLocaleString('zh-CN', { hour12: false })}</td>
+                        <td className="px-3 py-2.5 text-text-primary flex items-center gap-1.5">
                           {expandedBatches.has(batch.batch_id) ? <ChevronUp size={12} className="text-text-muted" /> : <ChevronDown size={12} className="text-text-muted" />}
-                          <span className="font-medium">批量上传 · {batch.firstFile} 等 {batch.logs.length} 个文件</span>
+                          <span className="font-medium truncate max-w-[180px]">{batch.opLabel} · {batch.firstFile} 等 {batch.logs.length} 个文件</span>
                         </td>
-                        <td className="px-4 py-2.5">
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-600">批次</span>
-                        </td>
-                        <td className="px-4 py-2.5 text-text-muted">anonymous</td>
-                        <td className="px-4 py-2.5">
+                        <td className="px-3 py-2.5"><span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-600">批次</span></td>
+                        <td className="px-3 py-2.5 text-text-muted text-[10px]">{batch.logs[0]?.user_id || '-'}</td>
+                        <td className="px-3 py-2.5 text-text-muted text-[10px]">{formatSource(batch.logs[0]?.source || '')}</td>
+                        <td className="px-3 py-2.5">
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${batch.failCount > 0 ? 'bg-amber-50 text-amber-600' : 'bg-green-50 text-green-600'}`}>
                             ✓ {batch.okCount}{batch.failCount > 0 ? ` ✗ ${batch.failCount}` : ''}
                           </span>
                         </td>
-                        <td className="px-4 py-2.5 text-text-muted">{batch.logs.length} 条记录</td>
-                        <td className="px-4 py-2.5 text-text-muted text-[10px]">点击展开</td>
+                        <td className="px-3 py-2.5 text-text-muted text-[10px] tabular-nums">{formatDuration(batchTotalMs)}</td>
+                        <td className="px-3 py-2.5 text-text-muted text-[10px]">{batch.logs.length} 条记录</td>
+                        <td className="px-3 py-2.5 text-text-muted text-[10px]">-</td>
+                        <td className="px-3 py-2.5 text-text-muted text-[10px]">点击展开</td>
                       </tr>
                       {expandedBatches.has(batch.batch_id) && batch.logs.map(op => (
                         <tr key={op.id} className="border-b border-border-subtle bg-violet-50/30 hover:bg-surface-hover transition-colors">
-                          <td className="px-4 py-2.5 text-text-muted pl-8">{new Date((op.created_at + '').replace(' ', 'T') + 'Z').toLocaleString('zh-CN', { hour12: false })}</td>
-                          <td className="px-4 py-2.5 text-text-primary truncate max-w-[200px] pl-8" title={op.doc_name}>└ {op.doc_name}</td>
-                          <td className="px-4 py-2.5">
+                          <td className="px-3 py-2.5 text-text-muted text-[10px] pl-6">{new Date((op.created_at + '').replace(' ', 'T') + 'Z').toLocaleString('zh-CN', { hour12: false })}</td>
+                          <td className="px-3 py-2.5 text-text-primary truncate max-w-[180px] pl-6" title={op.doc_name}>└ {op.doc_name}</td>
+                          <td className="px-3 py-2.5">
                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${OPERATION_CONFIG[op.operation].className}`}>
                               {OPERATION_CONFIG[op.operation].label}
                             </span>
                           </td>
-                          <td className="px-4 py-2.5 text-text-muted">{op.user_id}</td>
-                          <td className="px-4 py-2.5">
+                          <td className="px-3 py-2.5 text-text-muted text-[10px]">{op.user_id}</td>
+                          <td className="px-3 py-2.5 text-text-muted text-[10px]">{formatSource(op.source)}</td>
+                          <td className="px-3 py-2.5">
                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${op.result === 'success' ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>
                               {op.result === 'success' ? '成功' : '失败'}
                             </span>
                           </td>
-                          <td className="px-4 py-2.5 max-w-[200px]">{renderDetailCell(op.detail)}</td>
-                          <td className="px-4 py-2.5">
+                          <td className="px-3 py-2.5 text-text-muted text-[10px] tabular-nums">{formatDuration(op.duration_ms)}</td>
+                          <td className="px-3 py-2.5 max-w-[160px]">{renderDetailCell(op.detail)}</td>
+                          <td className="px-3 py-2.5 text-[10px] font-mono text-text-muted">{op.trace_id ? op.trace_id.slice(0, 12) : '-'}</td>
+                          <td className="px-3 py-2.5">
                             {op.trace_id ? (
                               <Link href={`/knowledge/operations/traces/${op.trace_id}`} className="text-accent hover:text-accent-hover hover:underline text-[10px]">
-                                查看链路
+                                查看Trace
                               </Link>
                             ) : parseDetail(op.detail)?.duplicate ? (
                               <span className="text-text-muted text-[10px]">已跳过</span>
                             ) : (
-                              <span className="text-text-muted text-[10px]">无链路</span>
+                              <span className="text-text-muted text-[10px]">-</span>
                             )}
                           </td>
                         </tr>
@@ -235,29 +269,30 @@ export default function OperationsPage() {
                   const op = item.log
                   return (
                     <tr key={op.id} className="border-b border-border-subtle hover:bg-surface-hover transition-colors">
-                      <td className="px-4 py-2.5 text-text-muted">{new Date((op.created_at + '').replace(' ', 'T') + 'Z').toLocaleString('zh-CN', { hour12: false })}</td>
-                      <td className="px-4 py-2.5 text-text-primary truncate max-w-[200px]" title={op.doc_name}>{op.doc_name}</td>
-                      <td className="px-4 py-2.5">
+                      <td className="px-3 py-2.5 text-text-muted text-[10px]">{new Date((op.created_at + '').replace(' ', 'T') + 'Z').toLocaleString('zh-CN', { hour12: false })}</td>
+                      <td className="px-3 py-2.5 text-text-primary truncate max-w-[160px]" title={op.doc_name}>{op.doc_name}</td>
+                      <td className="px-3 py-2.5">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${OPERATION_CONFIG[op.operation].className}`}>
                           {OPERATION_CONFIG[op.operation].label}
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 text-text-muted">{op.user_id}</td>
-                      <td className="px-4 py-2.5">
+                      <td className="px-3 py-2.5 text-text-muted text-[10px]">{op.user_id}</td>
+                      <td className="px-3 py-2.5 text-text-muted text-[10px]">{formatSource(op.source)}</td>
+                      <td className="px-3 py-2.5">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${op.result === 'success' ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>
                           {op.result === 'success' ? '成功' : '失败'}
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 max-w-[200px]">{renderDetailCell(op.detail)}</td>
-                      <td className="px-4 py-2.5">
+                      <td className="px-3 py-2.5 text-text-muted text-[10px] tabular-nums">{formatDuration(op.duration_ms)}</td>
+                      <td className="px-3 py-2.5 max-w-[160px]">{renderDetailCell(op.detail)}</td>
+                      <td className="px-3 py-2.5 text-[10px] font-mono text-text-muted">{op.trace_id ? op.trace_id.slice(0, 12) : '-'}</td>
+                      <td className="px-3 py-2.5">
                         {op.trace_id ? (
                           <Link href={`/knowledge/operations/traces/${op.trace_id}`} className="text-accent hover:text-accent-hover hover:underline text-[10px]">
-                            查看链路
+                            查看Trace
                           </Link>
-                        ) : parseDetail(op.detail)?.duplicate ? (
-                          <span className="text-text-muted text-[10px]">已跳过</span>
                         ) : (
-                          <span className="text-text-muted text-[10px]">无链路</span>
+                          <span className="text-text-muted text-[10px]">-</span>
                         )}
                       </td>
                     </tr>
@@ -265,7 +300,7 @@ export default function OperationsPage() {
                 }
               })}
               {!loading && groupedItems.all.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-text-muted">暂无操作记录</td></tr>
+                <tr><td colSpan={10} className="px-4 py-8 text-center text-text-muted">暂无操作记录</td></tr>
               )}
             </tbody>
           </table>
