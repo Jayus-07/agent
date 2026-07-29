@@ -1055,7 +1055,7 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
         复用 _remove_document() + _index_file()，不重复实现索引逻辑。
 
         Returns:
-            {"doc_id": str, "chunk_count": int, "file_hash": str, "status": str}
+            {"doc_id": str, "chunk_count": int, "file_hash": str, "status": str, "stage_elapsed": dict}
         """
         row = self.registry.get_by_path(file_path)
         old_doc_id = row.get("doc_id", "") if row else ""
@@ -1063,7 +1063,7 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
         # 1. 删除旧向量
         if old_doc_id:
             self._remove_document(old_doc_id)
-            
+
             # 按 doc_id 软删所有行（修复重复路径导致的残余 active 行）
             deleted = self.registry.mark_deleted_by_doc_id(old_doc_id)
             logger.info(f"[REINDEX] 已清理旧数据: doc_id={old_doc_id}, rows={deleted}")
@@ -1084,12 +1084,24 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
 
         # 3. 获取更新后的信息
         updated = self.registry.get_by_path(file_path) or {}
+        # 3.5 汇总每阶段真实耗时（取自本次 trace 的 span），供前端展示
+        stage_elapsed: dict[str, int] = {}
+        try:
+            from backend.rag.tracer import trace_collector as _tc
+            if trace_id:
+                tr = next((t for t in _tc.list(50) if t.id == trace_id), None)
+                if tr:
+                    for sp in tr.spans:
+                        stage_elapsed[sp.span_id] = int(sp.duration_ms or 0)
+        except Exception:
+            pass
         return {
             "doc_id": updated.get("doc_id", ""),
             "chunk_count": updated.get("chunk_count", 0),
             "file_hash": updated.get("file_hash", ""),
             "status": updated.get("status", "active"),
             "trace_id": trace_id or "",
+            "stage_elapsed": stage_elapsed,
         }
 
     # ---- 删除 ----

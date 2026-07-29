@@ -520,9 +520,13 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
         return
 
     terminal = (result or {}).get("terminal", "done")
+    # span_id → 前端 stage 键的统一映射（终态阶段耗时使用同一规则）
+    _SPAN_STAGE_KEY = _ProgressListener.SPAN_STAGE_KEY
     if terminal == "duplicate":
         duplicate_doc = (result or {}).get("doc") or {}
-        await emit("duplicate", "文件已存在，未重复索引", doc=duplicate_doc, trace_id="")
+        stage_elapsed = (result or {}).get("stage_elapsed") or {"uploading": 0}
+        await emit("duplicate", "文件已存在，未重复索引",
+                   doc=duplicate_doc, trace_id="", stage_elapsed=stage_elapsed)
         await queue.put(None)
         _safe_log_op(
             duplicate_doc.get("doc_id", ""), filename, "upload", source,
@@ -537,8 +541,21 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
     try:
         reg = _get_registry()
         new_doc = reg.get_by_path(filepath)
+        # 终态携带完整阶段耗时（来自后端 span duration_ms），覆盖前端累加
+        raw_elapsed = (result or {}).get("stage_elapsed") or {}
+        # span_id 转为前端 stage 键（如 index_chunk → chunking）
+        stage_elapsed: dict[str, int] = {}
+        for sid, ms in raw_elapsed.items():
+            stage_key = _SPAN_STAGE_KEY.get(sid, sid)
+            stage_elapsed[stage_key] = int(ms)
+        # uploading 在前端用 SSE 间隔法累加；终态用总耗时减去其他阶段得到
+        total_ms = int((time.time() - _upload_t0) * 1000)
+        if "uploading" not in stage_elapsed:
+            others = sum(v for k, v in stage_elapsed.items() if k != "uploading")
+            stage_elapsed["uploading"] = max(total_ms - others, 0)
         await emit("done", "索引完成", doc=new_doc,
-                   trace_id=(result or {}).get("trace_id") or "")
+                   trace_id=(result or {}).get("trace_id") or "",
+                   stage_elapsed=stage_elapsed)
     except Exception as e:
         await emit("done", "索引完成（文档信息获取失败）")
         logger.warning(f"[RAG] 获取入库文档信息失败: {e}")
@@ -577,6 +594,9 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
     if queue is None:
         return
 
+    # 同步索引开始时刻：用于 SSE uploading 阶段真实耗时；duplicate 也带上
+    _upload_t0_sync = time.time()
+
     def sync_emit(stage: str, message: str = "", **extra):
         """从同步线程调用：run_coroutine_threadsafe 把事件投到主 async loop 的队列"""
         evt = {"stage": stage, "message": message, **extra}
@@ -589,12 +609,23 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
         # duplicate 检测：文件已索引且 SHA256 未变 → 跳过索引，emit duplicate stage
         # （reindex_file 不做 hash 比对，会直接重灌，所以这里必须先拦）
         existing = reg.get_by_path(filepath)
+        # 文件大小用于 uploading 阶段的真实耗时（duplicate 也附带便于前端展示）
+        try:
+            _file_size = os.path.getsize(filepath)
+        except OSError:
+            _file_size = 0
         if existing and existing.get("status") == "active":
             with open(filepath, "rb") as f:
                 file_hash = hashlib.sha256(f.read()).hexdigest()
             if existing.get("file_hash") == file_hash:
                 logger.info(f"[RAG] 文件未变化，跳过索引: {filename}")
-                return {"trace_id": "", "duplicate": True, "terminal": "duplicate", "doc": {**existing, "duplicate": True}}
+                return {
+                    "trace_id": "",
+                    "duplicate": True,
+                    "terminal": "duplicate",
+                    "doc": {**existing, "duplicate": True},
+                    "stage_elapsed": {"uploading": int((time.time() - _upload_t0_sync) * 1000)},
+                }
             else:
                 logger.info(f"[RAG] 文件已变化，重新索引: {filename} (old={existing.get('file_hash','')[:12]} new={file_hash[:12]})")
         elif existing:
@@ -631,21 +662,30 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
 
 
 class _ProgressListener:
-    """订阅 TraceCollector 的 span end 事件，把 indexer 的 6 个标准 span
-    映射到前端 SSE 阶段 (parsing / chunking / embedding / writing)。
+    """订阅 TraceCollector 的 span end 事件，把 indexer 的 9 个标准 span
+    映射到前端 SSE 阶段 (loading/parsing/cleaning/dedup/chunking/metadata/embedding/writing)。
 
     Phase 1.5: 替代原 _ProgressIndexingWrapper 的 monkey-patch，直接订阅
     TraceCollector 事件，避免与 indexer 内部逻辑耦合。
     """
 
-    # span_id → SSE stage 映射（None 表示不单独 emit，由 done 事件统一）
+    # span_id → SSE stage 映射；前端用 9 阶段展示，元数据也单独 emit
     SPAN_STAGE_MAP = {
+        "index_load":      "loading",
         "index_parse":     "parsing",
+        "index_clean":     "cleaning",
+        "index_dedup":     "dedup",
         "index_chunk":     "chunking",
+        "index_metadata":  "metadata",
         "index_embed":     "embedding",
         "index_vector_db": "writing",
         # index_upload → uploading（已在 _run_index_background emit）
-        # index_metadata → 不单独 emit，由 done 事件携带最终结果
+    }
+
+    # span_id → 前端阶段名（终态 stage_elapsed 的键）
+    SPAN_STAGE_KEY = {
+        **SPAN_STAGE_MAP,
+        "index_upload": "uploading",
     }
 
     def __init__(self, emit_fn):
@@ -660,7 +700,7 @@ class _ProgressListener:
         # 从 span.metrics 提取进度文案
         msg = self._format_message(span)
         try:
-            self._emit(stage, msg)
+            self._emit(stage, msg, duration_ms=int(span.duration_ms or 0))
         except Exception:
             pass  # listener emit 失败不影响 indexer
 
@@ -668,12 +708,20 @@ class _ProgressListener:
     def _format_message(span) -> str:
         """根据 span_id + metrics 构造前端可读进度文案。"""
         m = span.metrics or {}
+        if span.span_id == "index_load":
+            return f"加载 {m.get('file_size', 0)} 字节"
         if span.span_id == "index_parse":
             return f"已解析 {m.get('doc_count', 0)} 页"
+        if span.span_id == "index_clean":
+            return f"清洗 {m.get('docs_cleaned', 0)} 篇"
+        if span.span_id == "index_dedup":
+            return "命中缓存" if m.get('cached') else "新建索引"
         if span.span_id == "index_chunk":
             kept = m.get("kept_chunks", 0)
             filtered = m.get("filtered_out", 0)
             return f"切分 {kept} chunks" + (f"（过滤 {filtered}）" if filtered else "")
+        if span.span_id == "index_metadata":
+            return f"元数据抽取 {m.get('doc_type', '')}"
         if span.span_id == "index_embed":
             succ = m.get("succeeded", 0)
             attempted = m.get("attempted", 0)

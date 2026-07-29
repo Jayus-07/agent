@@ -137,6 +137,66 @@ describe("knowledgeService.uploadDocument SSE consumer (P1.5 fix)", () => {
     expect(es.closed).toBe(true); // SSE 已关闭
   });
 
+  it("forwards duration_ms from stage events to onProgress", async () => {
+    const collected: Array<[string, number | undefined]> = [];
+    const promise = knowledgeService.uploadDocument(
+      new File(["x"], "doc.txt"),
+      (stage, _msg, durationMs) => collected.push([stage, durationMs]),
+    );
+
+    const es = await getEventSource();
+    es.emit("uploading", { stage: "uploading", message: "", duration_ms: 1500 });
+    es.emit("parsing",   { stage: "parsing",   message: "已解析 1 页", duration_ms: 18 });
+    es.emit("chunking",  { stage: "chunking",  message: "切分 5 chunks", duration_ms: 25 });
+    es.emit("embedding", { stage: "embedding", message: "Embedding 5/5", duration_ms: 320 });
+    es.emit("writing",   { stage: "writing",   message: "写入 5 向量", duration_ms: 42 });
+    es.emit("done",      { stage: "done",      message: "索引完成", doc: { id: "x" } });
+
+    await promise;
+
+    expect(collected).toEqual([
+      ["uploading", 1500],
+      ["parsing", 18],
+      ["chunking", 25],
+      ["embedding", 320],
+      ["writing", 42],
+      ["done", undefined],
+    ]);
+  });
+
+  it("resolves stage_elapsed on done terminal event", async () => {
+    const promise = knowledgeService.uploadDocument(new File(["x"], "doc.txt"));
+    const es = await getEventSource();
+    es.emit("done", {
+      stage: "done",
+      message: "索引完成",
+      doc: { id: "x" },
+      trace_id: "abc",
+      stage_elapsed: { uploading: 10000, parsing: 12, chunking: 25, embedding: 80, writing: 42, metadata: 7000 },
+    });
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    expect(result.stage_elapsed).toEqual({
+      uploading: 10000, parsing: 12, chunking: 25, embedding: 80, writing: 42, metadata: 7000,
+    });
+  });
+
+  it("resolves stage_elapsed on duplicate terminal event", async () => {
+    const promise = knowledgeService.uploadDocument(new File(["x"], "doc.txt"));
+    const es = await getEventSource();
+    es.emit("duplicate", {
+      stage: "duplicate",
+      message: "文件已存在",
+      doc: { id: "x", duplicate: true },
+      trace_id: "",
+      stage_elapsed: { uploading: 1234 },
+    });
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    expect(result.duplicate).toBe(true);
+    expect(result.stage_elapsed).toEqual({ uploading: 1234 });
+  });
+
   it("handles done arriving first (early completion)", async () => {
     const progressCalls: string[] = [];
 

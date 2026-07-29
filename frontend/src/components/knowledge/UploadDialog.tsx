@@ -1,17 +1,20 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { flushSync } from 'react-dom'
-import { Upload, Loader2, CheckCircle2, XCircle, FileText, AlertCircle } from 'lucide-react'
+import { Upload, Loader2, CheckCircle2, XCircle, FileText, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
 import { knowledgeService } from '@/services/knowledge'
 
 interface Props { open: boolean; onClose: () => void; onSuccess: () => void }
 
-// 阶段映射：后端 SSE stage → 显示文案 + UI 索引
+// 阶段映射：后端 SSE stage → 显示文案 + UI 索引（9 阶段，覆盖后端 span 树）
 const STAGES = [
   { key: 'uploading', label: '上传文件' },
+  { key: 'loading',   label: '文件加载' },
   { key: 'parsing',   label: '文本解析' },
+  { key: 'cleaning',  label: '文本清洗' },
+  { key: 'dedup',     label: '去重检查' },
   { key: 'chunking',  label: 'Chunk 切分' },
+  { key: 'metadata',  label: '元数据抽取' },
   { key: 'embedding', label: 'Embedding' },
   { key: 'writing',   label: '写入向量库' },
   { key: 'done',      label: '完成' },
@@ -21,38 +24,37 @@ type StageKey = typeof STAGES[number]['key']
 
 /** 格式化耗时：<1ms 显示小数，<1s 显示 ms，>=1s 显示 x.xs */
 function fmtMs(ms: number): string {
-  if (ms < 1) return `${(ms * 1000).toFixed(0)}μs`
+  if (!Number.isFinite(ms) || ms < 0) return '0μs'
+  if (ms < 0.001) return `${Math.round(ms * 1_000_000)}ns`
+  if (ms < 1) return `${(ms * 1000).toFixed(1)}μs`
   if (ms < 1000) return `${ms.toFixed(0)}ms`
   return `${(ms / 1000).toFixed(1)}s`
 }
 
-// 单文件上传结果（用于已完成列表）
-interface CompletedFile {
+/** 单文件处理报告 */
+interface FileReport {
   name: string
-  ok: boolean
-  duplicate?: boolean
+  status: 'running' | 'success' | 'duplicate' | 'failed'
   error?: string
-  stageElapsed?: Record<string, number>  // 每阶段耗时(ms)
+  /** 阶段耗时（成功/duplicate 时填充） */
+  stageElapsed?: Record<string, number>
+  /** 当前阶段（运行中） */
+  currentStage?: StageKey | null
+  /** 当前阶段附带消息 */
+  stageMessage?: string
+  /** 展开详情 */
+  expanded?: boolean
 }
 
 export default function UploadDialog({ open, onClose, onSuccess }: Props) {
   const [files, setFiles] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
-  const [currentStage, setCurrentStage] = useState<StageKey | null>(null)
-  const [stageMessage, setStageMessage] = useState('')
-  const [currentIdx, setCurrentIdx] = useState(0)
-  const [completed, setCompleted] = useState<CompletedFile[]>([])
+  const [reports, setReports] = useState<FileReport[]>([])
   const [error, setError] = useState('')
-  // 阶段耗时追踪：每个阶段完成时的相对时间（ms）
-  const [stageElapsed, setStageElapsed] = useState<Record<string, number>>({})
-  const stageStartRef = useRef<Record<string, number>>({})
-  const uploadStartRef = useRef<number>(0)
-  const fileElapsedRef = useRef<Record<string, number>>({})
+  const [aggregatedExpanded, setAggregatedExpanded] = useState(true)
   const fileRef = useRef<HTMLInputElement>(null)
-  // 轮询 RAG 就绪状态
   const [ragReady, setRagReady] = useState<boolean | null>(null)
   const healthTimerRef = useRef<ReturnType<typeof setInterval>>()
-  // KB + 部门选择
   const [selectedKbId, setSelectedKbId] = useState('policy_general')
   const [selectedDept, setSelectedDept] = useState('general')
   const [kbList, setKbList] = useState<{ id: string; name: string; depts: { id: string; label: string }[] }[]>([])
@@ -88,7 +90,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
         }
       } catch { /* 后端未启动，继续轮询 */ }
     }
-    check() // 立即查一次
+    check()
     healthTimerRef.current = setInterval(check, 2000)
     return () => {
       cancelled = true
@@ -102,97 +104,127 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
     setFiles([])
     setUploading(false)
     setError('')
-    setCurrentStage(null)
-    setStageMessage('')
-    setCurrentIdx(0)
-    setCompleted([])
-    setStageElapsed({})
-    stageStartRef.current = {}
-    uploadStartRef.current = 0
+    setReports([])
+    setAggregatedExpanded(true)
     onClose()
+  }
+
+  const toggleExpanded = (idx: number) => {
+    setReports(prev => prev.map((r, i) => i === idx ? { ...r, expanded: !r.expanded } : r))
+  }
+
+  const updateReport = (idx: number, patch: Partial<FileReport>) => {
+    setReports(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r))
   }
 
   const handleUpload = async () => {
     if (!files.length) return
     setUploading(true)
     setError('')
-    setCompleted([])
-    setCurrentIdx(0)
-    setStageElapsed({})
+    setReports(files.map(f => ({ name: f.name, status: 'running', expanded: false })))
 
     let okCount = 0
-    // 多文件上传生成批次号，后端写入操作日志关联同一批次
     const batchId = files.length > 1 ? crypto.randomUUID() : undefined
-    // 串行上传：一次一个，本地 embedding 模型不并发
+
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
-      // 每文件独立计时
-      stageStartRef.current = {}
-      uploadStartRef.current = performance.now()
-      fileElapsedRef.current = {}
-      setCurrentIdx(i)
-      setCurrentStage('uploading')
-      setStageMessage('')
+      const fileStart = performance.now()
+      const stageTimes: Record<string, number> = {}
+
       try {
-        const res = await knowledgeService.uploadDocument(file, (stage, message) => {
-          const now = performance.now()
-          // duplicate: 后端检测到相同文件，跳过索引
+        const res = await knowledgeService.uploadDocument(file, (stage, message, durationMs, stageElapsed) => {
+          // duplicate 推进时附带 stage_elapsed，由终态分支使用
           if (stage === 'duplicate') {
-            fileElapsedRef.current = { uploading: now - uploadStartRef.current }
+            stageTimes.uploading = performance.now() - fileStart
             return
           }
-          if (!stageStartRef.current[stage]) stageStartRef.current[stage] = now
-          flushSync(() => {
-            setCurrentStage(stage as StageKey)
-            setStageMessage(message)
+          const now = performance.now()
+          stageTimes[stage] = now
+          updateReport(i, {
+            currentStage: stage as StageKey,
+            stageMessage: message,
           })
-          // 最后一个阶段：计算每阶段增量耗时，存到 ref（批量上传时每文件独立保留）
-          if (stage === 'done') {
-            const elapsed: Record<string, number> = {}
-            let prev = uploadStartRef.current
-            for (const s of STAGES) {
-              const t = stageStartRef.current[s.key]
-              if (t && prev) {
-                elapsed[s.key] = t - prev
-                prev = t
-              }
-            }
-            fileElapsedRef.current = elapsed
-            setStageElapsed(elapsed)
-          }
         }, batchId, selectedKbId, selectedDept)
-        if (res.ok) {
+
+        if (res.duplicate) {
+          // 终态 stage_elapsed（后端传）优先；前端兜底仍按 SSE 间隔法
+          const serverElapsed = res.stage_elapsed
+          const elapsed: Record<string, number> = {
+            uploading: stageTimes.uploading ?? (performance.now() - fileStart),
+            ...(serverElapsed || {}),
+          }
+          updateReport(i, { status: 'duplicate', stageElapsed: elapsed, currentStage: null, stageMessage: '' })
           okCount++
-          setCompleted(prev => [...prev, { name: file.name, ok: true, duplicate: res.duplicate, stageElapsed: { ...fileElapsedRef.current } }])
+        } else if (res.ok) {
+          // 优先使用后端提供的 stage_elapsed；缺失阶段用 SSE 间隔法兜底
+          const serverElapsed = res.stage_elapsed
+          const elapsed: Record<string, number> = {}
+          let prev = fileStart
+          for (const s of STAGES) {
+            const t = stageTimes[s.key]
+            if (t !== undefined) {
+              elapsed[s.key] = t - prev
+              prev = t
+            }
+          }
+          // 用后端值覆盖前端累加（前端累加只能保留 uploading）
+          const finalElapsed: Record<string, number> = { uploading: elapsed.uploading ?? 0 }
+          if (serverElapsed) {
+            for (const [k, v] of Object.entries(serverElapsed)) {
+              finalElapsed[k] = v
+            }
+          } else {
+            // 无后端数据时回退到前端 SSE 间隔法
+            Object.assign(finalElapsed, elapsed)
+          }
+          updateReport(i, { status: 'success', stageElapsed: finalElapsed, currentStage: null, stageMessage: '' })
+          okCount++
         } else {
-          setCompleted(prev => [...prev, { name: file.name, ok: false, error: res.error || '上传失败' }])
+          updateReport(i, { status: 'failed', error: res.error || '上传失败', currentStage: null, stageMessage: '' })
         }
       } catch (e) {
-        setCompleted(prev => [...prev, { name: file.name, ok: false, error: (e as Error).message || '网络错误' }])
+        updateReport(i, { status: 'failed', error: (e as Error).message || '网络错误', currentStage: null, stageMessage: '' })
       }
     }
 
-    // 不在 finally 里 setUploading(false) — 那会让进度条瞬间消失（原 bug）
-    // 改为：上传完成后保持进度条显示，根据结果决定关窗时机
     setUploading(false)
-    setCurrentStage('done')
-
     if (okCount > 0) onSuccess()
   }
 
   const isMulti = files.length > 1
-  const okCount = completed.filter(c => c.ok).length
-  const failCount = completed.filter(c => !c.ok).length
+  const okCount = reports.filter(r => r.status === 'success' || r.status === 'duplicate').length
+  const failCount = reports.filter(r => r.status === 'failed').length
+  const completedCount = reports.filter(r => r.status !== 'running').length
+  const showReports = uploading || completedCount > 0
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm">
       <div className="bg-surface-base rounded-2xl border border-border-subtle shadow-xl w-[480px] p-6" onClick={e => e.stopPropagation()}>
-        <h3 className="text-sm font-semibold text-text-primary mb-4">
-          上传文档{isMulti ? `（${files.length} 个文件）` : ''}
-        </h3>
+        {/* 标题：始终展示，并在多文件/有进度时显示聚合信息 */}
+        <div className="mb-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-text-primary">
+              上传文档{isMulti ? `（${files.length} 个文件）` : ''}
+            </h3>
+            {isMulti && showReports && (
+              <div className="text-xs text-text-muted flex items-center gap-2">
+                <span>进度 {completedCount} / {files.length}</span>
+                <span className="text-green-600">✓ {okCount}</span>
+                {failCount > 0 && <span className="text-red-500">⚠ {failCount}</span>}
+              </div>
+            )}
+          </div>
+          {/* 失败数（用户要求：只显示成功/失败统计，不展开失败详情） */}
+          {!uploading && failCount > 0 && (
+            <div className="mt-2 text-xs text-red-500 flex items-center gap-2">
+              <AlertCircle size={12} />
+              <span>{failCount} 个文件失败，未显示详情</span>
+            </div>
+          )}
+        </div>
 
         {/* 文件选择区（非上传中显示） */}
-        {!uploading && currentStage !== 'done' && (
+        {!uploading && completedCount === 0 && (
           <div className="space-y-3 mb-4">
             {/* KB + 部门选择 */}
             <div className="flex gap-2">
@@ -243,74 +275,72 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
           </div>
         )}
 
-        {/* 上传进度（上传中或刚完成） */}
-        {(uploading || currentStage === 'done') && files.length > 0 && (
-          <div className="space-y-3 mb-4">
-            {/* 多文件时显示计数 */}
+        {/* 文件条目列表（上传中或完成后展示） */}
+        {showReports && (
+          <div className="space-y-2 mb-4">
+            {/* 多文件时可整体折叠/展开 */}
             {isMulti && (
-              <div className="text-xs text-text-muted flex items-center justify-between">
-                <span>进度 {Math.min(currentIdx + (uploading ? 1 : okCount + failCount), files.length)} / {files.length}</span>
-                <span className="text-green-600">✓ {okCount}{failCount > 0 && <span className="text-red-500">  ✗ {failCount}</span>}</span>
-              </div>
+              <button
+                onClick={() => setAggregatedExpanded(!aggregatedExpanded)}
+                className="flex items-center gap-1 text-xs text-text-muted hover:text-text-primary"
+              >
+                {aggregatedExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                <span>{aggregatedExpanded ? '收起详情' : '展开详情'}</span>
+              </button>
             )}
-
-            {/* 上传中：6 阶段实时进度 */}
-            {uploading && (
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-2 text-xs text-text-primary">
-                  <FileText size={13} className="text-accent shrink-0" />
-                  <span className="truncate">{files[currentIdx]?.name}</span>
-                </div>
-                {STAGES.map((s) => {
-                  const currentIdxStage = STAGES.findIndex(x => x.key === currentStage)
-                  const thisIdx = STAGES.findIndex(x => x.key === s.key)
-                  const isDone = thisIdx < currentIdxStage
-                  const isCurrent = thisIdx === currentIdxStage
+            {(isMulti ? aggregatedExpanded : true) && (
+              <div className={`space-y-2 ${isMulti ? 'max-h-64 overflow-y-auto' : ''}`}>
+                {reports.map((r, idx) => {
+                  const isRunning = r.status === 'running'
+                  const totalMs = r.stageElapsed ? Object.values(r.stageElapsed).reduce((a, b) => a + b, 0) : 0
+                  const showExpanded = r.expanded && (r.status === 'success')
+                  const currentStageIdx = r.currentStage ? STAGES.findIndex(x => x.key === r.currentStage) : -1
                   return (
-                    <div key={s.key} className="flex items-center gap-2 text-xs pl-5">
-                      {isDone ? <CheckCircle2 size={12} className="text-green-500" />
-                        : isCurrent ? <Loader2 size={12} className="text-accent animate-spin" />
-                        : <div className="w-[12px] h-[12px] rounded-full border border-border-subtle" />}
-                      <span className={isDone || isCurrent ? 'text-text-primary' : 'text-text-muted'}>{s.label}</span>
-                      {isCurrent && stageMessage && (
-                        <span className="text-text-muted text-[10px] ml-1 truncate">— {stageMessage}</span>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-
-            {/* 完成后：每文件独立展示处理报告 */}
-            {!uploading && currentStage === 'done' && completed.length > 0 && (
-              <div className={`space-y-3 ${isMulti ? 'max-h-56 overflow-y-auto' : ''}`}>
-                {completed.map((c, i) => {
-                  const totalMs = c.stageElapsed ? Object.values(c.stageElapsed).reduce((a, b) => a + b, 0) : 0
-                  return (
-                    <div key={i} className="space-y-1.5">
-                      {/* 文件名 + 总耗时/状态 */}
-                      <div className="flex items-center gap-2 text-xs">
-                        {c.duplicate ? <CheckCircle2 size={13} className="text-amber-500 shrink-0" />
-                          : c.ok ? <CheckCircle2 size={13} className="text-green-500 shrink-0" />
-                          : <XCircle size={13} className="text-red-500 shrink-0" />}
-                        <FileText size={13} className="text-accent shrink-0" />
-                        <span className={`truncate font-medium ${c.duplicate ? 'text-text-muted' : 'text-text-primary'}`}>{c.name}</span>
-                        {c.duplicate ? <span className="text-[10px] text-amber-500 shrink-0 ml-auto">已存在，跳过</span>
-                          : c.ok && <span className="text-text-muted text-[10px] tabular-nums shrink-0 ml-auto">{totalMs > 0 ? fmtMs(totalMs) : '<1ms'}</span>}
-                        {c.error && <span className="text-[10px] text-red-400 truncate max-w-[120px] shrink-0 ml-auto">{c.error}</span>}
+                    <div key={idx} className={`rounded-lg px-3 py-2 ${r.status === 'failed' ? 'bg-red-50/50 border border-red-200' : 'bg-surface-elevated'}`}>
+                      {/* 文件名 + 状态 + 总耗时 */}
+                      <div
+                        className={`flex items-center gap-2 text-xs ${r.status === 'success' ? 'cursor-pointer' : ''}`}
+                        onClick={() => r.status === 'success' && toggleExpanded(idx)}
+                      >
+                        {r.status === 'duplicate' ? <CheckCircle2 size={13} className="text-amber-500 shrink-0" />
+                          : r.status === 'success' ? (showExpanded ? <ChevronDown size={13} className="text-text-muted shrink-0" /> : <ChevronRight size={13} className="text-text-muted shrink-0" />)
+                          : r.status === 'failed' ? <XCircle size={13} className="text-red-500 shrink-0" />
+                          : <Loader2 size={13} className="text-accent animate-spin shrink-0" />}
+                        <FileText size={13} className={`shrink-0 ${r.status === 'failed' ? 'text-red-400' : 'text-accent'}`} />
+                        <span className={`truncate font-medium flex-1 ${r.status === 'failed' ? 'text-red-700' : r.status === 'duplicate' ? 'text-text-muted' : 'text-text-primary'}`}>{r.name}</span>
+                        {r.status === 'duplicate' ? <span className="text-[10px] text-amber-500 shrink-0">已存在，跳过</span>
+                          : r.status === 'failed' ? <span className="text-[10px] text-red-400 shrink-0">失败</span>
+                          : r.status === 'running' && r.currentStage ? <span className="text-[10px] text-accent shrink-0">{r.currentStage}…</span>
+                          : r.status === 'success' && <span className="text-text-muted text-[10px] tabular-nums shrink-0">{totalMs > 0 ? fmtMs(totalMs) : '0μs'}</span>}
                       </div>
-                      {/* 6 阶段耗时子行 */}
-                      {c.ok && !c.duplicate && c.stageElapsed && Object.keys(c.stageElapsed).length > 1 && (
-                        <div className="space-y-0.5 ml-8">
-                          {STAGES.filter(s => c.stageElapsed![s.key] !== undefined).map((s) => {
-                            const ms = c.stageElapsed![s.key]
+                      {/* 运行中阶段明细 */}
+                      {isRunning && (
+                        <div className="space-y-0.5 ml-6 mt-1.5">
+                          {STAGES.map((s) => {
+                            const thisIdx = STAGES.findIndex(x => x.key === s.key)
+                            const isDone = thisIdx < currentStageIdx
+                            const isCurrent = thisIdx === currentStageIdx
+                            return (
+                              <div key={s.key} className="flex items-center gap-2 text-xs">
+                                {isDone ? <CheckCircle2 size={10} className="text-green-500 shrink-0" />
+                                  : isCurrent ? <Loader2 size={10} className="text-accent animate-spin shrink-0" />
+                                  : <div className="w-[10px] h-[10px] rounded-full border border-border-subtle shrink-0" />}
+                                <span className={isDone || isCurrent ? 'text-text-primary' : 'text-text-muted'}>{s.label}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                      {/* 完成后展开：阶段耗时 */}
+                      {showExpanded && r.stageElapsed && Object.keys(r.stageElapsed).length > 1 && (
+                        <div className="space-y-0.5 ml-6 mt-1.5">
+                          {STAGES.filter(s => r.stageElapsed![s.key] !== undefined).map((s) => {
+                            const ms = r.stageElapsed![s.key]
                             return (
                               <div key={s.key} className="flex items-center gap-2 text-xs">
                                 <CheckCircle2 size={10} className="text-green-400 shrink-0" />
                                 <span className="text-text-secondary text-[10px]">{s.label}</span>
-                                {ms !== undefined && (
-                                  <span className="text-text-muted text-[10px] ml-auto tabular-nums">{fmtMs(ms)}</span>
-                                )}
+                                <span className="text-text-muted text-[10px] ml-auto tabular-nums">{fmtMs(ms)}</span>
                               </div>
                             )
                           })}
@@ -321,19 +351,11 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                 })}
               </div>
             )}
-
-            {/* 完成汇总 */}
-            {!uploading && currentStage === 'done' && (
-              <div className="text-xs text-text-secondary flex items-center gap-2">
-                <CheckCircle2 size={14} className="text-green-500" />
-                成功 {okCount} 篇{failCount > 0 && `，失败 ${failCount} 篇`}
-              </div>
-            )}
           </div>
         )}
 
         <div className="flex justify-end gap-2 mt-4">
-          {currentStage === 'done' ? (
+          {completedCount > 0 && !uploading ? (
             <button onClick={handleClose} className="px-4 py-2 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors">关闭</button>
           ) : (
             <>

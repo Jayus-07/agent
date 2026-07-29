@@ -99,11 +99,11 @@ export const knowledgeService = {
    */
   async uploadDocument(
     file: File,
-    onProgress?: (stage: string, message: string) => void,
+    onProgress?: (stage: string, message: string, durationMs?: number, stageElapsed?: Record<string, number>) => void,
     batchId?: string,
     kbId?: string,
     department?: string,
-  ): Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean; trace_id?: string }> {
+  ): Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean; trace_id?: string; stage_elapsed?: Record<string, number> }> {
     const fd = new FormData()
     fd.append('file', file)
     if (kbId) fd.append('kb_id', kbId)
@@ -136,7 +136,7 @@ export const knowledgeService = {
     // 订阅 SSE 获取真实进度
     // P1.5 fix: 用单一 onmessage listener + 解析 data.stage 字段
     // 避免 addEventListener 注册时机的 race condition（事件可能在注册前到达丢失）
-    return new Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean; trace_id?: string }>((resolve) => {
+    return new Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean; trace_id?: string; stage_elapsed?: Record<string, number> }>((resolve) => {
       const eventSource = new EventSource(`${BASE}/upload/${data.upload_id}/stream`)
       let resolved = false
 
@@ -156,14 +156,19 @@ export const knowledgeService = {
           payload = { message: e.data }
         }
         const stage = payload.stage || 'unknown'
-        onProgress?.(stage, payload.message || '')
+        // duration_ms 来自后端 span；stage_elapsed 仅终态（done/duplicate）携带
+        const durationMs = typeof payload.duration_ms === 'number' ? payload.duration_ms : undefined
+        const stageElapsed = payload.stage_elapsed && typeof payload.stage_elapsed === 'object'
+          ? payload.stage_elapsed as Record<string, number>
+          : undefined
+        onProgress?.(stage, payload.message || '', durationMs, stageElapsed)
 
         if (stage === 'done') {
           cleanup()
-          resolve({ ok: true, doc: payload.doc, trace_id: payload.trace_id || '' })
+          resolve({ ok: true, doc: payload.doc, trace_id: payload.trace_id || '', stage_elapsed: stageElapsed })
         } else if (stage === 'duplicate') {
           cleanup()
-          resolve({ ok: true, doc: payload.doc, duplicate: true, trace_id: payload.trace_id || '' })
+          resolve({ ok: true, doc: payload.doc, duplicate: true, trace_id: payload.trace_id || '', stage_elapsed: stageElapsed })
         } else if (stage === 'error') {
           cleanup()
           resolve({ ok: false, error: payload.message || '索引失败' })
