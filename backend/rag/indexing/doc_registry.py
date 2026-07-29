@@ -86,10 +86,18 @@ class DocumentRegistry:
     # ---- 查询 ----
 
     def get_by_path(self, file_path: str) -> dict | None:
-        """按文件路径查询。返回 None 表示未注册。"""
+        """按文件路径查询。返回 None 表示未注册。
+
+        P1 fix: 同时匹配 raw path 和 realpath（解析符号链接）。
+        历史脏数据可能用 backend/data 前缀或 project-root/data 前缀，
+        两者指向同一物理目录。统一用 OR 查询兼容。
+        """
+        import os as _os
+        normalized = _os.path.realpath(file_path) if file_path else file_path
         with self._lock, self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM doc_registry WHERE file_path = ?", (file_path,)
+                "SELECT * FROM doc_registry WHERE file_path IN (?, ?) ORDER BY updated_at DESC LIMIT 1",
+                (file_path, normalized),
             ).fetchone()
         return dict(row) if row else None
 

@@ -402,9 +402,13 @@ async def sync_upload_impl(
                 continue
     if not safe_name or safe_name.startswith("."):
         return {"ok": False, "error": "invalid filename"}
-    abs_docs_dir = os.path.abspath(_DOCS_DIRECTORY)
+    # P1 fix: 用 realpath 解析 backend/data junction 符号链接
+    # 避免同一物理文件被存为两条不同 file_path 记录（SQLite 主键冲突 → 重复 doc_id）
+    abs_docs_dir = os.path.realpath(_DOCS_DIRECTORY)
     final_dir = os.path.abspath(os.path.join(abs_docs_dir, kb_id, department))
     final_path = os.path.normpath(os.path.join(final_dir, safe_name))
+    # 末尾再 realpath 一次（防御 abspath 残留符号链接组件）
+    final_path = os.path.realpath(final_path)
     try:
         if os.path.commonpath([abs_docs_dir, final_path]) != abs_docs_dir:
             return {"ok": False, "error": "invalid path"}
@@ -913,6 +917,7 @@ async def get_chunk_detail(doc_id: str):
                     "doc_type": r.get("doc_type", ""),
                     "kb_id": r.get("kb_id", ""),
                     "department": r.get("department", ""),
+                    "simulated_questions": r.get("simulated_questions", []),
                 }
                 for r in rows
             ],
