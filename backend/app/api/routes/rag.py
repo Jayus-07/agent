@@ -366,7 +366,8 @@ async def upload_document(request: Request, file: UploadFile = File(...),
 
     asyncio.create_task(_run_index_background(
         result["upload_id"], result["filepath"], result["filename"],
-        result["source"], result["batch_id"], kb_id=kb_id, department=department
+        result["source"], result["batch_id"], kb_id=kb_id, department=department,
+        upload_elapsed_ms=result.get("upload_elapsed_ms"),
     ))
     return {"ok": True, "upload_id": result["upload_id"], "filename": result["filename"]}
 
@@ -414,6 +415,10 @@ async def sync_upload_impl(
     upload_id = uuid.uuid4().hex[:12]
     os.makedirs(tmp_dir, exist_ok=True)
     tmp_path = f"{tmp_dir}/{upload_id}.{ext}"
+
+    # 真实 HTTP 上传耗时（POST body 接收 + 写临时文件 + atomic rename）
+    # 让前端"上传文件"阶段显示准确值，而非被减法逻辑吞掉为 0
+    _upload_t0_sync = time.time()
 
     now = time.time()
     expired = [uid for uid, q in _progress_queues.items()
@@ -469,6 +474,7 @@ async def sync_upload_impl(
             "size": total,
             "source": _extract_source(request),
             "batch_id": request.headers.get("X-Batch-Id") or None,
+            "upload_elapsed_ms": int((time.time() - _upload_t0_sync) * 1000),
         }
     except Exception as e:
         if os.path.exists(tmp_path):
@@ -491,8 +497,13 @@ async def _cleanup_failed_upload(filepath: str) -> None:
         logger.warning(f"[RAG] 索引失败文件清理失败 {filepath}: {exc}")
 
 
-async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general"):
-    """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志。"""
+async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general", upload_elapsed_ms: int | None = None):
+    """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志。
+
+    upload_elapsed_ms: sync_upload_impl 实测的 HTTP 上传耗时（POST + 写文件 + atomic rename）。
+    终态用此值填 stage_elapsed["uploading"]，避免被减法逻辑吞掉为 0。
+    total_ms 改为 upload_elapsed_ms + 后台索引耗时（端到端总耗时）。
+    """
     queue = _progress_queues.get(upload_id)
     if queue is None:
         await _cleanup_failed_upload(filepath)
@@ -515,7 +526,7 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
         await emit("error", str(e))
         await queue.put(None)
         _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
-                     result="failed", duration_ms=int((time.time() - _upload_t0) * 1000),
+                     result="failed", duration_ms=int((time.time() - _upload_t0) * 1000) + (upload_elapsed_ms or 0),
                      detail={"error": str(e)[:200]})
         return
 
@@ -524,14 +535,18 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
     _SPAN_STAGE_KEY = _ProgressListener.SPAN_STAGE_KEY
     if terminal == "duplicate":
         duplicate_doc = (result or {}).get("doc") or {}
-        stage_elapsed = (result or {}).get("stage_elapsed") or {"uploading": 0}
+        stage_elapsed = (result or {}).get("stage_elapsed") or {}
+        # 用真实上传耗时覆盖（duplicate 跳过索引，后端算的 uploading 没意义）
+        if upload_elapsed_ms is not None:
+            stage_elapsed["uploading"] = upload_elapsed_ms
+        total_ms = (upload_elapsed_ms or 0) + int((time.time() - _upload_t0) * 1000)
         await emit("duplicate", "文件已存在，未重复索引",
-                   doc=duplicate_doc, trace_id="", stage_elapsed=stage_elapsed)
+                   doc=duplicate_doc, trace_id="", stage_elapsed=stage_elapsed, total_ms=total_ms)
         await queue.put(None)
         _safe_log_op(
             duplicate_doc.get("doc_id", ""), filename, "upload", source,
             trace_id="", batch_id=batch_id, result="duplicate",
-            duration_ms=int((time.time() - _upload_t0) * 1000),
+            duration_ms=total_ms,
             detail={"duplicate": True, "chunk_count": duplicate_doc.get("chunk_count", 0)},
         )
         return
@@ -548,14 +563,18 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
         for sid, ms in raw_elapsed.items():
             stage_key = _SPAN_STAGE_KEY.get(sid, sid)
             stage_elapsed[stage_key] = int(ms)
-        # uploading 在前端用 SSE 间隔法累加；终态用总耗时减去其他阶段得到
-        total_ms = int((time.time() - _upload_t0) * 1000)
-        if "uploading" not in stage_elapsed:
+        # 优先用 sync_upload_impl 实测的上传耗时；缺失时回退到减法逻辑（向后兼容）
+        index_elapsed_ms = int((time.time() - _upload_t0) * 1000)
+        total_ms = index_elapsed_ms + (upload_elapsed_ms or 0)
+        if upload_elapsed_ms is not None:
+            stage_elapsed["uploading"] = upload_elapsed_ms
+        elif "uploading" not in stage_elapsed:
             others = sum(v for k, v in stage_elapsed.items() if k != "uploading")
             stage_elapsed["uploading"] = max(total_ms - others, 0)
         await emit("done", "索引完成", doc=new_doc,
                    trace_id=(result or {}).get("trace_id") or "",
-                   stage_elapsed=stage_elapsed)
+                   stage_elapsed=stage_elapsed,
+                   total_ms=total_ms)
     except Exception as e:
         await emit("done", "索引完成（文档信息获取失败）")
         logger.warning(f"[RAG] 获取入库文档信息失败: {e}")
@@ -679,14 +698,14 @@ class _ProgressListener:
         "index_metadata":  "metadata",
         "index_embed":     "embedding",
         "index_vector_db": "writing",
-        # index_upload → uploading（已在 _run_index_background emit）
+        # 不再映射 index_upload → uploading：
+        # index_upload 是 root span，duration_ms ≈ 整个索引流程。
+        # 若映射，前端 uploading 字段会被误显示为总耗时。
+        # uploading 由 _run_index_background 的 total_ms - others 自动计算。
     }
 
     # span_id → 前端阶段名（终态 stage_elapsed 的键）
-    SPAN_STAGE_KEY = {
-        **SPAN_STAGE_MAP,
-        "index_upload": "uploading",
-    }
+    SPAN_STAGE_KEY = SPAN_STAGE_MAP
 
     def __init__(self, emit_fn):
         from backend.rag.tracer import trace_collector

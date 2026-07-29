@@ -22,11 +22,10 @@ const STAGES = [
 
 type StageKey = typeof STAGES[number]['key']
 
-/** 格式化耗时：<1ms 显示小数，<1s 显示 ms，>=1s 显示 x.xs */
+/** 格式化耗时：<1ms 显示 "<1ms"，<1s 显示 ms，>=1s 显示 x.xs */
 function fmtMs(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return '0μs'
-  if (ms < 0.001) return `${Math.round(ms * 1_000_000)}ns`
-  if (ms < 1) return `${(ms * 1000).toFixed(1)}μs`
+  if (!Number.isFinite(ms) || ms < 0) return '<1ms'
+  if (ms < 1) return '<1ms'
   if (ms < 1000) return `${ms.toFixed(0)}ms`
   return `${(ms / 1000).toFixed(1)}s`
 }
@@ -38,6 +37,8 @@ interface FileReport {
   error?: string
   /** 阶段耗时（成功/duplicate 时填充） */
   stageElapsed?: Record<string, number>
+  /** 后端真实总耗时（覆盖 stageElapsed 之和，避免幽灵时间） */
+  totalMs?: number
   /** 当前阶段（运行中） */
   currentStage?: StageKey | null
   /** 当前阶段附带消息 */
@@ -153,7 +154,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
             uploading: stageTimes.uploading ?? (performance.now() - fileStart),
             ...(serverElapsed || {}),
           }
-          updateReport(i, { status: 'duplicate', stageElapsed: elapsed, currentStage: null, stageMessage: '' })
+          updateReport(i, { status: 'duplicate', stageElapsed: elapsed, totalMs: res.total_ms, currentStage: null, stageMessage: '' })
           okCount++
         } else if (res.ok) {
           // 优先使用后端提供的 stage_elapsed；缺失阶段用 SSE 间隔法兜底
@@ -177,7 +178,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
             // 无后端数据时回退到前端 SSE 间隔法
             Object.assign(finalElapsed, elapsed)
           }
-          updateReport(i, { status: 'success', stageElapsed: finalElapsed, currentStage: null, stageMessage: '' })
+          updateReport(i, { status: 'success', stageElapsed: finalElapsed, totalMs: res.total_ms, currentStage: null, stageMessage: '' })
           okCount++
         } else {
           updateReport(i, { status: 'failed', error: res.error || '上传失败', currentStage: null, stageMessage: '' })
@@ -292,7 +293,8 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
               <div className={`space-y-2 ${isMulti ? 'max-h-64 overflow-y-auto' : ''}`}>
                 {reports.map((r, idx) => {
                   const isRunning = r.status === 'running'
-                  const totalMs = r.stageElapsed ? Object.values(r.stageElapsed).reduce((a, b) => a + b, 0) : 0
+                  // 总耗时优先用后端真实值（覆盖 stageElapsed 之和，避免幽灵时间）
+                  const totalMs = r.totalMs ?? (r.stageElapsed ? Object.values(r.stageElapsed).reduce((a, b) => a + b, 0) : 0)
                   const showExpanded = r.expanded && (r.status === 'success')
                   const currentStageIdx = r.currentStage ? STAGES.findIndex(x => x.key === r.currentStage) : -1
                   return (
@@ -311,7 +313,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                         {r.status === 'duplicate' ? <span className="text-[10px] text-amber-500 shrink-0">已存在，跳过</span>
                           : r.status === 'failed' ? <span className="text-[10px] text-red-400 shrink-0">失败</span>
                           : r.status === 'running' && r.currentStage ? <span className="text-[10px] text-accent shrink-0">{r.currentStage}…</span>
-                          : r.status === 'success' && <span className="text-text-muted text-[10px] tabular-nums shrink-0">{totalMs > 0 ? fmtMs(totalMs) : '0μs'}</span>}
+                          : r.status === 'success' && <span className="text-text-muted text-[10px] tabular-nums shrink-0">{totalMs > 0 ? fmtMs(totalMs) : '<1ms'}</span>}
                       </div>
                       {/* 运行中阶段明细 */}
                       {isRunning && (

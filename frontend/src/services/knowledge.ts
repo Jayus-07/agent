@@ -103,7 +103,7 @@ export const knowledgeService = {
     batchId?: string,
     kbId?: string,
     department?: string,
-  ): Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean; trace_id?: string; stage_elapsed?: Record<string, number> }> {
+  ): Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean; trace_id?: string; stage_elapsed?: Record<string, number>; total_ms?: number }> {
     const fd = new FormData()
     fd.append('file', file)
     if (kbId) fd.append('kb_id', kbId)
@@ -136,7 +136,7 @@ export const knowledgeService = {
     // 订阅 SSE 获取真实进度
     // P1.5 fix: 用单一 onmessage listener + 解析 data.stage 字段
     // 避免 addEventListener 注册时机的 race condition（事件可能在注册前到达丢失）
-    return new Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean; trace_id?: string; stage_elapsed?: Record<string, number> }>((resolve) => {
+    return new Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean; trace_id?: string; stage_elapsed?: Record<string, number>; total_ms?: number }>((resolve) => {
       const eventSource = new EventSource(`${BASE}/upload/${data.upload_id}/stream`)
       let resolved = false
 
@@ -161,14 +161,15 @@ export const knowledgeService = {
         const stageElapsed = payload.stage_elapsed && typeof payload.stage_elapsed === 'object'
           ? payload.stage_elapsed as Record<string, number>
           : undefined
+        const totalMs = typeof payload.total_ms === 'number' ? payload.total_ms : undefined
         onProgress?.(stage, payload.message || '', durationMs, stageElapsed)
 
         if (stage === 'done') {
           cleanup()
-          resolve({ ok: true, doc: payload.doc, trace_id: payload.trace_id || '', stage_elapsed: stageElapsed })
+          resolve({ ok: true, doc: payload.doc, trace_id: payload.trace_id || '', stage_elapsed: stageElapsed, total_ms: totalMs })
         } else if (stage === 'duplicate') {
           cleanup()
-          resolve({ ok: true, doc: payload.doc, duplicate: true, trace_id: payload.trace_id || '', stage_elapsed: stageElapsed })
+          resolve({ ok: true, doc: payload.doc, duplicate: true, trace_id: payload.trace_id || '', stage_elapsed: stageElapsed, total_ms: totalMs })
         } else if (stage === 'error') {
           cleanup()
           resolve({ ok: false, error: payload.message || '索引失败' })
