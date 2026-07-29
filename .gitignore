@@ -92,6 +92,7 @@ evaluation/results/
 *技术报告.md
 report_agent/data/
 # Frontend build artifacts
+node_modules/
 web/node_modules/
 web/.next/
 frontend/node_modules/
