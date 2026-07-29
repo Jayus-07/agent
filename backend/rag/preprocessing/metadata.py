@@ -427,10 +427,32 @@ def detect_business_domain(text: str, min_score: int = 2, return_detail: bool = 
 # 文档摘要（改进：智能截断、保留语义）
 # =====================================================
 
-def enrich_metadata_llm(text: str, doc_type: str) -> dict:
-    """合并关键词+摘要+实体为一次 LLM 调用（省 2 次 API 往返）。
+def _fallback_questions(chunk_text: str) -> list[str]:
+    """LLM 未生成问题或长度不符时的兜底 — 给 1 个无害占位问句。
 
-    Returns: {"keywords": [...], "summary": "...", "entities": [...], "tokens": {...}}
+    设计原则：fallback 必须"无害"（不引入噪声）而非"有用"。
+    宁可让该 chunk 召回率低，也不要因为错误问题把不相关问句召回来。
+    """
+    import re as _re
+    # 取 chunk 首句（按 。？！；\\n 切）
+    first_sentence = _re.split(r'[。！？；\n]', chunk_text.strip(), maxsplit=1)[0].strip()
+    if not first_sentence:
+        return []
+    # 通用兜底：只问"这段内容讲什么"，不含 chunk 特有信息（避免引入噪声）
+    return ["这段内容讲什么？"]
+
+
+def enrich_metadata_llm(text: str, doc_type: str, chunks_text: list[str] | None = None) -> dict:
+    """合并关键词+摘要+实体(+ 模拟问题)为一次 LLM 调用（省 N 次 API 往返）。
+
+    Args:
+        text: 文档全文（或摘要采样）
+        doc_type: 文档类型
+        chunks_text: chunk 文本列表（提供时同时生成每 chunk 的模拟问题；为 None 时不生成）
+
+    Returns:
+        {"keywords": [...], "summary": "...", "entities": [...], "tokens": {...},
+         "questions_by_chunk": [[q1, q2, q3], ...]}  # 长度 == len(chunks_text)
     失败返回空 dict，调用方降级到独立调用。
     """
     from backend.config.rag import DOC_LLM_MODEL
@@ -438,6 +460,24 @@ def enrich_metadata_llm(text: str, doc_type: str) -> dict:
     import json as _json
 
     safe_text = text
+
+    # chunks_text 提供时，附加编号预览到 prompt，让 LLM 按 chunk 编号生成问题
+    chunks_block = ""
+    questions_field = ""
+    extra_schema = ""
+    if chunks_text:
+        chunks_block = "\n\n文档已切分为以下 chunks（编号从 0 开始）:\n"
+        for idx, ct in enumerate(chunks_text):
+            preview = ct[:300].replace("\n", " ")
+            chunks_block += f"\n[Chunk #{idx}]\n{preview}...\n"
+        questions_field = (
+            f"- simulated_questions 是数组,长度必须等于 chunks 数量({len(chunks_text)})。"
+            f"每个元素是该 chunk 的 2-3 个模拟用户提问(必须严格基于该 chunk 内容,口语化疑问句,"
+            f"只问'是什么/怎么样/标准是什么/如何定义')"
+        )
+        # 移出 f-string 表达式（Python 3.10 不允许 f-string 内反斜杠）
+        extra_schema = ', "simulated_questions": [["<问题 1>", "<问题 2>"], ...]'
+
     prompt = f"""你是专业 RAG 元数据提取专家。从文档提取 1 个 JSON 对象,严禁任何额外内容。
 
 严格规则:
@@ -445,13 +485,15 @@ def enrich_metadata_llm(text: str, doc_type: str) -> dict:
   纯自然语言,严禁用 markdown 标题符号/列表/换行/星号
 - keywords 是 10 个以内的关键词数组
 - entities 是 5 个以内的实体数组(每项含 name 和 type 字段,type 取 regulation/person/platform/brand)
+{questions_field}
 - 严禁在 JSON 外加解释、严禁使用 markdown 围栏、严禁重复文档原文当摘要
 
 JSON Schema:
-{{"summary": "<1-3 句中文摘要,<=200字>", "keywords": ["<词 1>", ...], "entities": [{{"name":"<名称>","type":"<类型>"}}, ...]}}
+{{"summary": "<1-3 句中文摘要,<=200字>", "keywords": ["<词 1>", ...], "entities": [{{"name":"<名称>","type":"<类型>"}}, ...]{extra_schema}}}
 
 文档:
 {safe_text}
+{chunks_block}
 
 只返回这个 JSON,无其他文字:"""
 
@@ -491,13 +533,50 @@ JSON Schema:
             entities = data.get("entities", [])
             if not isinstance(entities, list):
                 entities = []
-            logger.info(f"[Enrich LLM] {model_used} → {len(keywords)}kw + {len(summary)}字摘要 + {len(entities)}实体")
-            return {"keywords": keywords, "summary": summary, "entities": entities, "tokens": tokens}
+
+            # 解析 simulated_questions + 严格 fallback
+            questions_by_chunk: list[list[str]] = []
+            if chunks_text:
+                raw_q = data.get("simulated_questions", [])
+                expected_len = len(chunks_text)
+                if isinstance(raw_q, list) and len(raw_q) == expected_len:
+                    for i, qs in enumerate(raw_q):
+                        if isinstance(qs, list):
+                            # 取前 3 个非空问题，过滤过短（< 4 字）
+                            cleaned = [str(q).strip() for q in qs
+                                       if str(q).strip() and len(str(q).strip()) >= 4][:3]
+                            questions_by_chunk.append(cleaned if cleaned else _fallback_questions(chunks_text[i]))
+                        else:
+                            questions_by_chunk.append(_fallback_questions(chunks_text[i]))
+                else:
+                    logger.warning(
+                        f"[Enrich LLM] simulated_questions 缺失或长度不符 "
+                        f"({len(raw_q) if isinstance(raw_q, list) else 0}/{expected_len}), 全部 fallback"
+                    )
+                    questions_by_chunk = [_fallback_questions(ct) for ct in chunks_text]
+
+            logger.info(
+                f"[Enrich LLM] {model_used} → {len(keywords)}kw + {len(summary)}字摘要 + "
+                f"{len(entities)}实体 + {len(questions_by_chunk)}chunks问题"
+            )
+            return {
+                "keywords": keywords,
+                "summary": summary,
+                "entities": entities,
+                "tokens": tokens,
+                "questions_by_chunk": questions_by_chunk,
+            }
         else:
             # JSON 解析失败，尝试拆分行
             lines = [l.strip() for l in content.split("\n") if l.strip() and len(l.strip()) > 1]
             kws = [l for l in lines if not l.startswith("{")][:10]
-            return {"keywords": kws, "summary": _extract_first_sentences(content, 2), "entities": [], "tokens": tokens}
+            return {
+                "keywords": kws,
+                "summary": _extract_first_sentences(content, 2),
+                "entities": [],
+                "tokens": tokens,
+                "questions_by_chunk": [_fallback_questions(ct) for ct in chunks_text] if chunks_text else [],
+            }
     except Exception as e:
         logger.warning(f"[Enrich LLM] 失败: {e}")
         return {}
