@@ -68,15 +68,17 @@ def get_step_config(fn: Callable) -> StepConfig | None:
 def collect_step_methods(cls: type) -> dict[str, tuple[Callable, StepConfig]]:
     """扫描类，收集所有带 @step 装饰的方法
 
+    关键：使用 cls.__dict__ 而非 getattr(cls, ...) — 避免拿到 bound method
+    （self 已绑定），确保 Executor 调用时 ctx 是第一个参数。
+
     Returns:
         {method_name: (callable, StepConfig)}
     """
     steps: dict[str, tuple[Callable, StepConfig]] = {}
-    for attr_name in dir(cls):
+    for attr_name, attr in cls.__dict__.items():
         if attr_name.startswith("_"):
             continue
-        attr = getattr(cls, attr_name, None)
-        if attr is None or not callable(attr):
+        if not callable(attr):
             continue
         config = get_step_config(attr)
         if config is not None:
