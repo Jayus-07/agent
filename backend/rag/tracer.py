@@ -10,7 +10,6 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from collections import deque
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
@@ -147,8 +146,6 @@ class TraceCollector:
 
     def __init__(self, max_size: int = MAX_TRACES):
         self._lock = threading.Lock()
-        self._records: deque[TraceRecord] = deque(maxlen=max_size)
-        self._active: set[str] = set()
         self._thread_current: TraceRecord | None = None  # sync path
         self._timers: dict[str, float] = {}
         self._span_seq: int = 0
@@ -180,8 +177,6 @@ class TraceCollector:
             workflow_kind=workflow_kind,
         )
         with self._lock:
-            self._records.appendleft(trace)
-            self._active.add(rid)
             self._span_seq = 0
             self._thread_current = trace
         # 同步到 contextvar（async task 内可见）
@@ -291,7 +286,6 @@ class TraceCollector:
         self._aggregate_usage(record)
 
         with self._lock:
-            self._active.discard(record.id)
             if self._thread_current is record:
                 self._thread_current = None
         if _current_trace_var.get() is record:
@@ -305,63 +299,65 @@ class TraceCollector:
             pass  # 持久化失败不阻塞主流程
 
     # =====================================================
-    # 查询 API
+    # 查询 API（直读 SQLite trace_store）
     # =====================================================
 
-    def list(self, limit: int = 50) -> list:
-        with self._lock:
-            return list(self._records)[:limit]
+    def list(self, limit: int = 50) -> list[dict]:
+        """最近 N 条 trace（从 SQLite 读取 dict，不含 spans 详情）。"""
+        try:
+            from backend.rag.trace_store import get_trace_store
+            return get_trace_store().list(limit)
+        except Exception:
+            return []
 
-    def list_active(self) -> list:
-        """返回正在进行中的 trace（基于 _active 集合，不再用 duration_ms==0 推断）。"""
-        with self._lock:
-            return [r for r in self._records if r.id in self._active]
+    def list_active(self) -> list[dict]:
+        """正在进行中的 trace：检查 contextvar + thread_local。
+        返回简易 dict 列表（不包含 spans）。"""
+        active = []
+        trace = _current_trace_var.get() or self._thread_current
+        if trace is not None:
+            active.append({
+                "id": trace.id,
+                "question": trace.question,
+                "workflow_name": trace.workflow_name,
+                "duration_ms": trace.duration_ms,
+                "status": "running",
+            })
+        return active
 
     def compute_metrics(self) -> dict:
-        with self._lock:
-            all_records = list(self._records)
-
-        completed = [r for r in all_records if r.duration_ms > 0]
-        active = [r for r in all_records if r.duration_ms == 0]
+        """从 SQLite 聚合统计（简化版，不含延迟分位数）。"""
+        try:
+            from backend.rag.trace_store import get_trace_store
+            stored = get_trace_store().list(200)
+        except Exception:
+            stored = []
+        active = len(self.list_active())
+        total = len(stored) + active
+        completed = [r for r in stored if r.get("duration_ms", 0) > 0]
         n = len(completed)
-        if not n:
-            return {
-                "total_requests": len(all_records),
-                "completed": 0, "active": len(active),
-                "success_rate": 0, "avg_elapsed_sec": 0,
-                "p50_elapsed_sec": 0, "p95_elapsed_sec": 0, "p99_elapsed_sec": 0,
-            }
-
-        latencies_ms = sorted([r.duration_ms for r in completed])
-
-        def _is_error(r):
-            return any(s.status == "error" for s in r.spans)
-
-        success_count = sum(1 for r in completed if not _is_error(r))
         return {
-            "total_requests": len(all_records),
+            "total_requests": total,
             "completed": n,
-            "success": success_count,
-            "error": n - success_count,
+            "success": sum(1 for r in completed if r.get("status") == "success"),
+            "error": sum(1 for r in completed if r.get("status") == "error"),
             "aborted": 0,
-            "active": len(active),
-            "success_rate": round(success_count / n, 3) if n > 0 else 0,
-            "avg_elapsed_sec": round(sum(latencies_ms) / n / 1000, 1) if n else 0,
-            "p50_elapsed_sec": round(latencies_ms[int(n * 0.50)] / 1000, 1) if n > 0 else 0,
-            "p95_elapsed_sec": round(latencies_ms[min(int(n * 0.95), n - 1)] / 1000, 1) if n > 0 else 0,
-            "p99_elapsed_sec": round(latencies_ms[min(int(n * 0.99), n - 1)] / 1000, 1) if n > 0 else 0,
+            "active": active,
+            "success_rate": round(sum(1 for r in completed if r.get("status") == "success") / n, 3) if n else 0,
+            "avg_elapsed_sec": 0, "p50_elapsed_sec": 0, "p95_elapsed_sec": 0, "p99_elapsed_sec": 0,
         }
 
     def get(self, trace_id: str):
-        with self._lock:
-            for r in self._records:
-                if r.id == trace_id:
-                    return r
-        return None
+        """获取单条 trace（SQLite）。返回 dict 或 None。"""
+        try:
+            from backend.rag.trace_store import get_trace_store
+            return get_trace_store().get(trace_id)
+        except Exception:
+            return None
 
     def clear(self):
-        with self._lock:
-            self._records.clear()
+        """已无内存数据，此方法保留兼容不做操作。"""
+        pass
 
     # =====================================================
     # 内部
