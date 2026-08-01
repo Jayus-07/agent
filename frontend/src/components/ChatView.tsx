@@ -69,12 +69,6 @@ export default function ChatView() {
         </div>
       )}
 
-      {/* Top bar: LLM switcher + MultiQuery toggle */}
-      <div className="shrink-0 px-5 py-2.5 flex items-center justify-end gap-2">
-        <MultiQueryToggle />
-        <LLMSwitcher />
-      </div>
-
       {/* Memory context panel */}
       <ContextPanel sessionId={currentId} />
 
@@ -104,6 +98,13 @@ export default function ChatView() {
           </button>
         </div>
       )}
+
+      {/* LLM 切换 + 多查询按钮 — 输入框上方 */}
+      <div className="shrink-0 px-5 pb-1.5 flex items-center gap-2">
+        <MultiQueryToggle />
+        <div className="flex-1" />
+        <LLMSwitcher />
+      </div>
 
       <ChatInput onSend={send} isLoading={isLoading} />
     </div>
