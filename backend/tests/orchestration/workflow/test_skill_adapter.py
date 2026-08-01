@@ -70,17 +70,26 @@ class TestSkillCalls:
     """call_sql / call_rag / call_report / call_email"""
 
     def test_call_sql_passes_params(self):
-        """call_sql 把 params 传给 call_skill"""
+        """call_sql 的 query 模式走 execute_sql_tool 直连 PG"""
+        async def run():
+            fake_tool = MagicMock()
+            fake_tool.ainvoke = AsyncMock(return_value='{"rows": [], "total": 0}')
+            with mp("backend.orchestration.tools.execute_sql_tool", fake_tool):
+                result = await call_sql({"query": "SELECT 1"})
+                assert fake_tool.ainvoke.called
+                assert result == {"rows": [], "total": 0}
+        asyncio.run(run())
+
+    def test_call_sql_question_mode(self):
+        """call_sql 的 question 模式走 NL→SQL Agent（call_skill）"""
         async def run():
             with mp(
                 "backend.orchestration.workflow.skill_adapter.call_skill",
-                AsyncMock(return_value={"rows": []}),
+                AsyncMock(return_value={"rows": [{"x": 1}]}),
             ) as mock:
-                result = await call_sql({"query": "SELECT 1"})
+                result = await call_sql({"question": "今天销售额"})
                 assert mock.called
-                call_args = mock.call_args
-                assert call_args.args == ("sql", "sql.query", {"query": "SELECT 1"})
-                assert result == {"rows": []}
+                assert result == {"rows": [{"x": 1}]}
         asyncio.run(run())
 
     def test_call_rag_passes_params(self):
@@ -112,7 +121,8 @@ class TestSkillCalls:
                 AsyncMock(return_value={"sent": True}),
             ) as mock:
                 result = await call_email({"to": ["a@b.c"]})
-                assert mock.call_args.args == ("email", "email.send", {"to": ["a@b.c"]})
+                # list 类型 to 会被转为 ; 分隔字符串
+                assert mock.call_args.args == ("email", "email.send", {"to": "a@b.c"})
                 assert result == {"sent": True}
         asyncio.run(run())
 
