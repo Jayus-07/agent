@@ -259,6 +259,7 @@ export const SPAN_TYPES = [
   "sql",
   "memory",
   "workflow",
+  "workflow_step",
   "custom",
 ] as const;
 export type SpanType = (typeof SPAN_TYPES)[number];
@@ -274,6 +275,7 @@ export const SPAN_TYPE_LABELS: Record<string, string> = {
   sql: "SQL 查询",
   memory: "记忆",
   workflow: "工作流",
+  workflow_step: "工作流步骤",
   custom: "自定义",
 };
 
@@ -336,7 +338,8 @@ export function spanTypeColor(type: string): string {
     case "http":      return "bg-blue-500";
     case "sql":       return "bg-orange-500";
     case "memory":    return "bg-pink-500";
-    case "workflow":  return "bg-teal-500";
+    case "workflow":       return "bg-teal-500";
+    case "workflow_step":  return "bg-teal-400";
     default:          return "bg-slate-400";
   }
 }
