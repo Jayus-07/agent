@@ -131,6 +131,7 @@ export default function LLMSwitcher() {
     <div className="relative" ref={popoverRef}>
       {/* 触发器：胶囊形 + Google 风格 */}
       <button
+        type="button"
         onClick={() => setOpen(!open)}
         disabled={loading || switching}
         className={`
@@ -190,8 +191,9 @@ export default function LLMSwitcher() {
               const isCurrent = m.name === current
               return (
                 <button
+                  type="button"
                   key={m.name}
-                  onClick={() => handleSwitch(m.name)}
+                  onClick={(e) => { e.preventDefault(); handleSwitch(m.name) }}
                   disabled={switching}
                   className={`
                     w-full px-3 py-2 text-left flex items-start gap-2.5

@@ -41,6 +41,7 @@ export default function MultiQueryToggle() {
 
   return (
     <button
+      type="button"
       onClick={toggle}
       disabled={loading}
       className={`text-[11px] px-2 py-1 rounded-full border transition-colors ${

@@ -43,6 +43,7 @@ export default function ChatInput({ onSend, isLoading }: Props) {
               placeholder-text-muted max-h-[160px] disabled:opacity-40 leading-relaxed"
           />
           <button
+            type="button"
             onClick={handleSend}
             disabled={!input.trim() || isLoading}
             className="shrink-0 w-8 h-8 rounded-xl bg-accent text-white flex items-center justify-center

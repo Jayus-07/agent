@@ -90,7 +90,7 @@ export default function ChatView() {
       {/* Stop button */}
       {isLoading && (
         <div className="shrink-0 flex justify-center pb-2">
-          <button onClick={stopStream}
+          <button type="button" onClick={stopStream}
             className="flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-accent/5 border border-accent/20
               text-accent text-xs hover:bg-accent/10 transition-all duration-200">
             <span className="inline-block w-1.5 h-1.5 rounded-sm bg-accent animate-pulse" />
