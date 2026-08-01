@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { Sparkles, ChevronDown, Check, Loader2 } from 'lucide-react'
+import { Sparkles, ChevronDown, Check, Loader2, AlertCircle, X } from 'lucide-react'
 import {
   listLLMModels,
   getCurrentLLM,
@@ -237,6 +237,19 @@ export default function LLMSwitcher() {
               )
             })}
           </div>
+        </div>
+      )}
+
+      {/* 错误提示 */}
+      {error && (
+        <div className="absolute right-0 top-full mt-1.5 w-[260px] z-50
+          bg-red-50 border border-red-200 rounded-lg px-3 py-2
+          flex items-start gap-2 text-xs text-red-700 shadow-sm">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span className="flex-1">{error}</span>
+          <button type="button" onClick={() => setError('')} className="shrink-0 text-red-400 hover:text-red-600">
+            <X className="w-3 h-3" />
+          </button>
         </div>
       )}
     </div>
