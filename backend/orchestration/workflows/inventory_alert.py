@@ -74,7 +74,7 @@ class InventoryAlert:
         result = await call_sql({
             "query": (
                 "SELECT product_id, date, SUM(qty) as qty "
-                "FROM sales WHERE date > date('now', '-30 days') "
+                "FROM sales WHERE date > CURRENT_DATE - INTERVAL '30 days' "
                 "GROUP BY product_id, date"
             ),
         })

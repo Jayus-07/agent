@@ -47,7 +47,7 @@ class DailyReport:
         logger.info("[DailyReport] Step fetch_sales 开始")
         result = await call_sql({
             "query": "SELECT product_id, SUM(qty) as total_qty, SUM(amount) as total_amount "
-                     "FROM sales WHERE date = today GROUP BY product_id"
+                     "FROM sales WHERE date = CURRENT_DATE GROUP BY product_id"
         })
         return {"sales": result.get("rows", result)}
 
@@ -67,7 +67,7 @@ class DailyReport:
         logger.info("[DailyReport] Step fetch_promotions 开始")
         result = await call_sql({
             "query": "SELECT promotion_id, product_id, discount, started_at, ended_at "
-                     "FROM promotions WHERE ended_at > today"
+                     "FROM promotions WHERE ended_at > CURRENT_DATE"
         })
         return {"promotions": result.get("rows", result)}
 
