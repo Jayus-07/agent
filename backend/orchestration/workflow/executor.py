@@ -78,10 +78,24 @@ class WorkflowExecutor:
             logger.error(f"[WorkflowExecutor] {workflow_name} DAG 失败: {e}")
             return ctx
 
-        # 4. 尝试获取 trace root span（如果 tracer 已启动）
+        # 4. 初始化 trace（如果 tracer 已启动则复用，否则启动一个新的）
         trace_root_span = None
         try:
-            from backend.rag.tracer import trace_collector
+            from backend.rag.tracer import trace_collector, _current_trace_var
+
+            # 检查是否已有活跃 trace（如 RAG 调用链中的 workflow step）
+            existing = _current_trace_var.get() or trace_collector._thread_current
+            if existing is None:
+                # 启动一个新的 workflow trace
+                existing = trace_collector.start(
+                    question=f"[Workflow] {workflow_name}",
+                    session_id=ctx.run_id,
+                    workflow_name=workflow_name,
+                )
+                ctx.trace_id = existing.id
+            else:
+                ctx.trace_id = existing.id
+
             meta = self.registry.get_meta(workflow_name)
             trace_root_span = trace_collector.start_span(
                 f"workflow_run.{workflow_name}",
@@ -89,16 +103,8 @@ class WorkflowExecutor:
                 name=f"Workflow: {meta.description or workflow_name}",
                 type="workflow",
             )
-            ctx.trace_id = getattr(trace_root_span, "trace_id", None) or getattr(
-                trace_root_span, "_trace_id", None
-            )
-            # 不同 tracer 实现字段名不同，尝试常见字段
-            if not ctx.trace_id:
-                ctx.trace_id = str(trace_root_span.trace.id) if hasattr(
-                    trace_root_span, "trace"
-                ) and hasattr(trace_root_span.trace, "id") else None
         except Exception as e:
-            logger.debug(f"[WorkflowExecutor] trace root span 创建失败（可忽略）: {e}")
+            logger.debug(f"[WorkflowExecutor] trace 初始化失败（可忽略）: {e}")
 
         logger.info(
             f"[WorkflowExecutor] 开始 workflow: {workflow_name} "
