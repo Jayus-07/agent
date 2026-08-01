@@ -92,6 +92,34 @@ async def eager_init_rag_pipeline():
 
 
 # ═══════════════════════════════════════════════════
+# 启动时注册 Workflow + 定时任务
+# ═══════════════════════════════════════════════════
+@app.on_event("startup")
+async def register_workflows_and_schedules():
+    """注册所有 workflow + 启动定时调度器"""
+    try:
+        from backend.orchestration.workflow.registry import get_workflow_registry
+        from backend.orchestration.workflow.scheduler import get_workflow_scheduler
+        from backend.orchestration.workflows.daily_report import DailyReport
+        from backend.orchestration.workflows.inventory_alert import InventoryAlert
+
+        reg = get_workflow_registry()
+        if reg.get("daily_report") is None:
+            reg.register(DailyReport)
+        if reg.get("inventory_alert") is None:
+            reg.register(InventoryAlert)
+
+        sched = get_workflow_scheduler()
+        sched.register_daily("daily_report", hour=9, minute=0)
+        sched.register_daily("inventory_alert", hour=8, minute=0)
+        sched.start()
+
+        logger.info("[Startup] Workflow 定时任务注册完成")
+    except Exception as e:
+        logger.warning(f"[Startup] 定时任务注册失败（非致命）: {e}")
+
+
+# ═══════════════════════════════════════════════════
 # 启动
 # ═══════════════════════════════════════════════════
 if __name__ == "__main__":

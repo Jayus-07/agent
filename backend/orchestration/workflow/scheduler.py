@@ -92,8 +92,65 @@ class WorkflowScheduler:
         logger.info(f"[WorkflowScheduler] 注册周期: {workflow_name} 每 {seconds}s")
 
     def list_jobs(self) -> list[dict[str, Any]]:
-        """列出已注册的定时任务"""
-        return list(self._jobs.values())
+        """列出已注册的定时任务（含下次执行时间）"""
+        result = []
+        for job_id, info in self._jobs.items():
+            job = {"id": job_id, **info}
+            if self._aps is not None:
+                aps_job = self._aps.get_job(job_id)
+                if aps_job is not None:
+                    job["next_run_time"] = (
+                        aps_job.next_run_time.isoformat()
+                        if aps_job.next_run_time else None
+                    )
+            result.append(job)
+        return result
+
+    def reschedule_daily(self, workflow_name: str, hour: int, minute: int):
+        """修改已有 daily 定时任务的时间并立即生效"""
+        if not APSCHEDULER_AVAILABLE:
+            raise RuntimeError("APScheduler 未安装")
+        self._ensure_aps()
+        job_id = f"{workflow_name}_daily_{hour:02d}{minute:02d}"
+        # 找旧 job_id 并删除
+        for old_id in list(self._jobs.keys()):
+            if old_id.startswith(f"{workflow_name}_daily_"):
+                if self._aps.get_job(old_id):
+                    self._aps.remove_job(old_id)
+                self._jobs.pop(old_id, None)
+                logger.info(f"[WorkflowScheduler] 移除旧定时: {old_id}")
+        # 注册新时间
+        self._aps.add_job(
+            self._run_async,
+            CronTrigger(hour=hour, minute=minute),
+            id=job_id,
+            args=[workflow_name],
+            replace_existing=True,
+        )
+        self._jobs[job_id] = {
+            "workflow": workflow_name,
+            "trigger": f"daily {hour:02d}:{minute:02d}",
+        }
+        logger.info(
+            f"[WorkflowScheduler] 重新调度: {workflow_name} → "
+            f"每天 {hour:02d}:{minute:02d}"
+        )
+        return job_id
+
+    def get_job(self, workflow_name: str) -> dict[str, Any] | None:
+        """按 workflow 名查找 job"""
+        for job_id, info in self._jobs.items():
+            if info.get("workflow") == workflow_name:
+                job = {"id": job_id, **info}
+                if self._aps is not None:
+                    aps_job = self._aps.get_job(job_id)
+                    if aps_job is not None:
+                        job["next_run_time"] = (
+                            aps_job.next_run_time.isoformat()
+                            if aps_job.next_run_time else None
+                        )
+                return job
+        return None
 
     def start(self):
         """启动 APScheduler"""

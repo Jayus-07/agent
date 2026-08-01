@@ -19,6 +19,7 @@ from backend.app.api.routes import (
     inventory_alerts,
     demo,
     reports,
+    schedules,
 )
 from backend.app.api.routes.health import router as health_router
 from backend.app.api.routes.keyword_routes import router as keyword_router
@@ -42,6 +43,7 @@ api_router.include_router(workflows.router)
 api_router.include_router(inventory_alerts.router)
 api_router.include_router(demo.router)
 api_router.include_router(reports.router)
+api_router.include_router(schedules.router)
 
 # ── 系统路由 ──────────────────────────────────
 api_router.include_router(health_router)
