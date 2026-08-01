@@ -130,32 +130,58 @@ class DailyReport:
         depends_on=["generate_report"],
         timeout_sec=60,
         retry=2,
-        on_error="abort",  # 邮件失败应该让 workflow 失败（不能假装成功）
+        on_error="abort",
     )
     async def send_email(self, ctx):
-        """Step 7: 发邮件给运营 + CEO（Email Skill）"""
+        """Step 7: 发邮件 + 写 daily_reports 表"""
         logger.info("[DailyReport] Step send_email 开始")
-        report = ctx.outputs.get("generate_report", {}).get("report", {})
-        # report 可能是 string（call_report 返回 {"content": "..."}）或 dict
-        if isinstance(report, str):
-            body = report
-        elif isinstance(report, dict):
+        report_output = ctx.outputs.get("generate_report", {}).get("report", {})
+        if isinstance(report_output, str):
+            body = report_output
+        elif isinstance(report_output, dict):
             body = (
-                f"## 销售摘要\n{report.get('sales_summary', '')}\n\n"
-                f"## 库存预警\n{report.get('inventory_alerts', '')}\n\n"
-                f"## Agent 分析\n{report.get('agent_analysis', '')}\n"
+                f"## 销售摘要\n{report_output.get('sales_summary', '')}\n\n"
+                f"## 库存预警\n{report_output.get('inventory_alerts', '')}\n\n"
+                f"## Agent 分析\n{report_output.get('agent_analysis', '')}\n"
             )
         else:
-            body = str(report)
+            body = str(report_output)
 
         from datetime import date
         today = date.today().isoformat()
+
+        # 提取 KPI 摘要（从上游 step output）
+        sales = ctx.outputs.get("fetch_sales", {}).get("sales", [])
+        inventory = ctx.outputs.get("fetch_inventory", {}).get("inventory", [])
+        alerting = [i for i in inventory if isinstance(i, dict) and i.get("current_qty", 999) < i.get("min_qty", 0)]
+
+        kpi_summary = {
+            "total_products": len(inventory),
+            "alert_count": len(alerting),
+            "sales_records": len(sales),
+            "report_date": today,
+        }
+
+        # 写 daily_reports 表
+        from backend.seed.demo.runner import get_daily_report_store
+        report_store = get_daily_report_store()
+        report_store.save({
+            "id": ctx.run_id,
+            "report_date": today,
+            "report_content": f"# 经营日报 {today}\n\n{body}",
+            "kpi_summary": kpi_summary,
+            "trace_id": ctx.trace_id or "",
+            "status": "success",
+        })
+        logger.info(f"[DailyReport] 日报已写入 daily_reports: {ctx.run_id}")
+
+        # 发邮件
         result = await call_email({
             "to": ["ops@demo.local", "ceo@demo.local"],
             "subject": f"[经营日报] {today}",
             "body": f"# 经营日报 {today}\n\n{body}",
         })
-        return {"email": result}
+        return {"email": result, "report_id": ctx.run_id}
 
 
 __all__ = ["DailyReport"]
