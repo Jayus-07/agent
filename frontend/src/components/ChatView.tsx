@@ -99,10 +99,9 @@ export default function ChatView() {
         </div>
       )}
 
-      {/* LLM 切换 + 多查询按钮 — 输入框上方 */}
-      <div className="shrink-0 px-5 pb-1.5 flex items-center gap-2">
+      {/* LLM 切换 + 多查询按钮 — 输入框正上方靠右 */}
+      <div className="shrink-0 px-5 flex items-center justify-end gap-2">
         <MultiQueryToggle />
-        <div className="flex-1" />
         <LLMSwitcher />
       </div>
 
