@@ -27,6 +27,7 @@ interface ChatState {
   switchSession: (id: string) => void
   renameSession: (id: string, title: string) => void
   deleteSession: (id: string) => void
+  loadHistory: (sessionId: string) => Promise<void>
   loadSessions: () => Promise<void>
 
   // — 消息操作 (sessionId 可选，用于 SSE 流固定目标会话) —
@@ -214,6 +215,31 @@ export const useChatStore = create<ChatState>((set, get) => {
           return { ...s, messages: msgs, updatedAt: Date.now() }
         }),
       }))
+    },
+
+    // —— 从后端加载持久化会话历史消息 ——
+    loadHistory: async (sessionId: string) => {
+      try {
+        const { getSessionMessages } = await import('@/lib/api/memory')
+        const msgs = await getSessionMessages(sessionId)
+        if (!msgs || msgs.length === 0) return
+
+        set((state) => ({
+          sessions: state.sessions.map((s) =>
+            s.id === sessionId
+              ? {
+                  ...s,
+                  messages: msgs.map((m: any) => ({
+                    id: nanoid(),
+                    role: m.role,
+                    content: m.content,
+                    timestamp: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
+                  })),
+                }
+              : s,
+          ),
+        }))
+      } catch { /* 静默失败 */ }
     },
 
     // —— 从后端加载持久化会话 ——

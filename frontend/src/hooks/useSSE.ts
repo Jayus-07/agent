@@ -6,6 +6,25 @@ import { streamChat, abortChat } from '@/lib/api/chat'
 import type { SSEStreamEvent } from '@/lib/api/chat'
 import { nanoid } from 'nanoid'
 
+/** 持久化当前会话消息到后端 PG */
+async function persistSession(sessionId: string, question: string, answer: string) {
+  try {
+    await fetch('/api/chat/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        messages: [
+          { role: 'user', content: question },
+          { role: 'assistant', content: answer },
+        ],
+      }),
+    })
+  } catch {
+    // 保存失败不影响用户体验
+  }
+}
+
 export function useSSE() {
   const abortRef = useRef<AbortController | null>(null)
   const requestIdRef = useRef<string>('')
@@ -53,7 +72,7 @@ export function useSSE() {
           return
         }
 
-        // done 事件 → 将累积的 delta 文本 + sources 写入最终消息
+        // done 事件 → 将累积的 delta 文本 + sources 写入最终消息，并持久化到 PG
         if (evt.event === 'done') {
           const finalState = useChatStore.getState()
           replaceLastAssistant(
@@ -61,6 +80,8 @@ export function useSSE() {
             sessionId,
             evt.data.sources,
           )
+          // 持久化消息到后端 PG
+          persistSession(sessionId, question, finalState.deltaText || '(空回答)')
         }
       }
     } catch (err: any) {

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useChatStore } from '@/store/chat'
 import { useSendMessage } from '@/hooks/useChat'
 import MessageList from './MessageList'
@@ -38,9 +39,22 @@ export default function ChatView() {
     }
   }, [])
 
+  const searchParams = useSearchParams()
+  const loadHistory = useChatStore((s) => s.loadHistory)
+  const switchSession = useChatStore((s) => s.switchSession)
+
   useEffect(() => {
     if (!userScrolling) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, messages[messages.length - 1]?.content, userScrolling])
+
+  // 加载历史会话
+  useEffect(() => {
+    const sessionParam = searchParams.get('session')
+    if (sessionParam) {
+      switchSession(sessionParam)
+      loadHistory(sessionParam)
+    }
+  }, [searchParams])
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
