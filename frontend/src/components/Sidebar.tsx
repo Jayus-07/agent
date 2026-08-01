@@ -1,6 +1,6 @@
 'use client'
 
-import { Sparkles, PanelLeft, PanelLeftClose, LayoutDashboard, Download, Cog, Database, BookOpen, Brain, Activity } from 'lucide-react'
+import { Sparkles, PanelLeft, PanelLeftClose, LayoutDashboard, Download, Cog, Database, BookOpen, Brain, Activity, FileText, AlertTriangle } from 'lucide-react'
 import NavGroup from './layout/NavGroup'
 
 interface Props { collapsed: boolean; onToggle: () => void }
@@ -42,6 +42,12 @@ const NAV = [
       { label: '分析任务', path: '/agent/tasks' },
       { label: '历史报告', path: '/agent/reports' },
     ],
+  },
+  {
+    icon: <FileText size={18} />, label: '报告中心', path: '/reports',
+  },
+  {
+    icon: <AlertTriangle size={18} />, label: '告警中心', path: '/alerts',
   },
   {
     icon: <Activity size={18} />, label: '可观测中心',
