@@ -88,15 +88,59 @@ def _to_trace_dto(t: TraceRecord) -> dict:
     }
 
 
+def _stored_dict_to_dto(d: dict) -> dict:
+    """SQLite 存储的 trace dict → 前端兼容的 DTO（spans 已移除，仅列表摘要）"""
+    return {
+        "id": d.get("id", ""),
+        "timestamp": d.get("timestamp", ""),
+        "session_id": d.get("session_id", ""),
+        "question": d.get("question", ""),
+        "answer_preview": d.get("answer_preview", ""),
+        "answer_len": d.get("answer_len", 0),
+        "duration_ms": d.get("duration_ms", 0),
+        "model": d.get("model", {}),
+        "usage": d.get("usage", {}),
+        "cost_usd": d.get("cost_usd", 0),
+        "error": d.get("error", {}),
+        "metadata": d.get("metadata", {}),
+        "status": d.get("status", "success"),
+        "workflow_name": d.get("workflow_name", ""),
+        "root_span_id": d.get("root_span_id", ""),
+        "spans": [],
+        "sla": {"threshold_ms": 10000, "breached": False},
+        "parent_id": None,
+        "children_ids": [],
+        "graph": None,
+        "tags": d.get("tags", {}),
+    }
+
+
 # ═══════════════════════════════════════════════════
 # Traces
 # ═══════════════════════════════════════════════════
 
 @router.get("/traces")
 async def list_traces(limit: int = Query(20, ge=1, le=200)):
-    """最近 N 条 trace 摘要（统一数据源：TraceCollector）"""
+    """最近 N 条 trace 摘要（内存 + SQLite 兜底）"""
     traces = trace_collector.list(limit)
-    return {"traces": [_to_trace_dto(t) for t in traces]}
+    seen = {t.id for t in traces}
+
+    # 内存不足 → SQLite 补全（重启后内存为空，trace 仍在 SQLite 中）
+    if len(traces) < limit:
+        try:
+            from backend.rag.trace_store import get_trace_store
+            stored = get_trace_store().list(limit)
+            for d in stored:
+                if d.get("id") not in seen:
+                    # SQLite 存的是 dict（spans 已移除），直接传前端兼容格式
+                    traces.append(_stored_dict_to_dto(d))
+                    seen.add(d["id"])
+                    if len(traces) >= limit:
+                        break
+        except Exception:
+            pass
+
+    return {"traces": [_to_trace_dto(t) if isinstance(t, TraceRecord) else t for t in traces[:limit]]}
 
 
 @router.get("/traces/active")
