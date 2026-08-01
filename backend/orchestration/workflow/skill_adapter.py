@@ -117,6 +117,9 @@ async def call_report(params: dict) -> dict:
 async def call_email(params: dict) -> dict:
     """调 Email Skill
 
-    params: {"to": [...], "subject": "...", "body": "..."}
+    params: {"to": [...] 或 "a@b.com", "subject": "...", "body": "..."}
+    自动将 list 类型 to 转为 ; 分隔字符串（send_email_tool 期望 str）
     """
+    if isinstance(params.get("to"), list):
+        params = {**params, "to": "; ".join(params["to"])}
     return await call_skill("email", "email.send", params)
