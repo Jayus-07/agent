@@ -41,7 +41,7 @@ from backend.shared.logger import logger
 class DailyReport:
     """每日经营日报 — 6 个 Step，4 个并行层"""
 
-    @step()
+    @step(name="拉取销售数据")
     async def fetch_sales(self, ctx):
         """Step 1: 拉今日销售数据（SQL）"""
         logger.info("[DailyReport] Step fetch_sales 开始")
@@ -51,7 +51,7 @@ class DailyReport:
         })
         return {"sales": result.get("rows", result)}
 
-    @step()
+    @step(name="拉取库存数据")
     async def fetch_inventory(self, ctx):
         """Step 2: 拉当前库存（SQL）— 与 fetch_sales 并行"""
         logger.info("[DailyReport] Step fetch_inventory 开始")
@@ -61,7 +61,7 @@ class DailyReport:
         })
         return {"inventory": result.get("rows", result)}
 
-    @step()
+    @step(name="拉取活动数据")
     async def fetch_promotions(self, ctx):
         """Step 3: 拉近期活动（SQL）— 与 fetch_sales/fetch_inventory 并行"""
         logger.info("[DailyReport] Step fetch_promotions 开始")
@@ -75,6 +75,7 @@ class DailyReport:
         depends_on=["fetch_sales", "fetch_inventory", "fetch_promotions"],
         timeout_sec=30,
         on_error="skip",
+        name="RAG 查询日报模板",
     )
     async def rag_query_template(self, ctx):
         """Step 4: 查日报模板（RAG）"""
@@ -90,6 +91,7 @@ class DailyReport:
         depends_on=["fetch_sales", "fetch_inventory", "fetch_promotions", "rag_query_template"],
         timeout_sec=60,
         on_error="skip",
+        name="Agent 异常分析",
     )
     async def agent_analyze(self, ctx):
         """Step 5: Business Agent 分析异常（InventoryAnalyzer）
@@ -110,6 +112,7 @@ class DailyReport:
     @step(
         depends_on=["agent_analyze"],
         timeout_sec=60,
+        name="生成报告",
     )
     async def generate_report(self, ctx):
         """Step 6: 生成报告（Report Skill）"""
@@ -131,6 +134,7 @@ class DailyReport:
         timeout_sec=60,
         retry=2,
         on_error="abort",
+        name="发送邮件",
     )
     async def send_email(self, ctx):
         """Step 7: 发邮件 + 写 daily_reports 表"""

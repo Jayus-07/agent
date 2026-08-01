@@ -54,7 +54,7 @@ from backend.shared.logger import logger
 class InventoryAlert:
     """库存预警 Workflow（8 Step）"""
 
-    @step()
+    @step(name="扫描库存")
     async def scan_inventory(self, ctx):
         """Step 1: 扫所有商品当前库存（SQL）"""
         logger.info("[InventoryAlert] Step scan_inventory 开始")
@@ -67,7 +67,7 @@ class InventoryAlert:
         items = result.get("rows", result)
         return {"inventory_items": items}
 
-    @step()
+    @step(name="拉取销售历史")
     async def fetch_sales_history(self, ctx):
         """Step 2: 查近 30 天销售历史（SQL，与 scan_inventory 并行）"""
         logger.info("[InventoryAlert] Step fetch_sales_history 开始")
@@ -91,6 +91,7 @@ class InventoryAlert:
     @step(
         depends_on=["scan_inventory", "fetch_sales_history"],
         timeout_sec=30,
+        name="计算库存健康度",
     )
     async def calculate_inventory_health(self, ctx):
         """Step 3: 批量评估库存状态（动态：min_qty + days_of_stock）"""
@@ -133,6 +134,7 @@ class InventoryAlert:
     @step(
         depends_on=["calculate_inventory_health"],
         timeout_sec=30,
+        name="评估阈值规则",
     )
     async def evaluate_thresholds(self, ctx):
         """Step 4: 对每个 alerting 商品跑状态机决策
@@ -176,6 +178,7 @@ class InventoryAlert:
     @step(
         depends_on=["evaluate_thresholds"],
         timeout_sec=30,
+        name="告警状态机决策",
     )
     async def alert_state_machine(self, ctx):
         """Step 5: 状态机执行：apply decision → 更新 case / 写 event
@@ -267,6 +270,7 @@ class InventoryAlert:
     @step(
         depends_on=["alert_state_machine"],
         timeout_sec=30,
+        name="记录告警事件",
     )
     async def create_event(self, ctx):
         """Step 6a: 聚合已写入的 event（并行占位 step，与 load_notification_policies 并行）"""
@@ -278,6 +282,7 @@ class InventoryAlert:
     @step(
         depends_on=["alert_state_machine"],
         timeout_sec=10,
+        name="加载通知策略",
     )
     async def load_notification_policies(self, ctx):
         """Step 6b: 查所有 policy（供 send_alert_email 用）
@@ -294,6 +299,7 @@ class InventoryAlert:
         timeout_sec=60,
         retry=2,
         on_error="abort",  # 邮件失败应该让 workflow 失败（不能假装成功）
+        name="发送告警邮件",
     )
     async def send_alert_email(self, ctx):
         """Step 7: 对每个需通知的决策调 email skill"""

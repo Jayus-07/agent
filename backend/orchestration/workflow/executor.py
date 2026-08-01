@@ -187,10 +187,11 @@ class WorkflowExecutor:
         step_span = None
         try:
             from backend.rag.tracer import trace_collector
+            display = config.display_name or step_name
             step_span = trace_collector.start_span(
                 f"workflow_step.{step_name}",
                 parent_id=parent_span,
-                name=step_name,
+                name=display,
                 type="workflow_step",
             )
         except Exception:

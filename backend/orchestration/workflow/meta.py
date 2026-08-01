@@ -51,6 +51,8 @@ class StepConfig:
     timeout_sec: int = 60
     # Runtime：失败处理策略 — abort / skip / agent_degrade
     on_error: str = "abort"
+    # UI：Trace 详情页展示用中文名（省略用方法名）
+    display_name: str = ""
 
 
 # Type alias: workflow class 上的 meta 属性类型

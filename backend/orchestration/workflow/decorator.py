@@ -80,6 +80,7 @@ def step(
     retry: int = 0,
     timeout_sec: int = 60,
     on_error: str = "abort",
+    name: str = "",
 ) -> Callable[[Callable], Callable]:
     """方法装饰器：声明 Step 的配置
 
@@ -116,6 +117,7 @@ def step(
         retry=retry,
         timeout_sec=timeout_sec,
         on_error=on_error,
+        display_name=name,
     )
 
     def decorator(fn: Callable) -> Callable:
