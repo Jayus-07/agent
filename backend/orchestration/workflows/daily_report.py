@@ -135,18 +135,24 @@ class DailyReport:
         """Step 7: 发邮件给运营 + CEO（Email Skill）"""
         logger.info("[DailyReport] Step send_email 开始")
         report = ctx.outputs.get("generate_report", {}).get("report", {})
-        # 演示时收件人改为 mock 邮箱
+        # report 可能是 string（call_report 返回 {"content": "..."}）或 dict
+        if isinstance(report, str):
+            body = report
+        elif isinstance(report, dict):
+            body = (
+                f"## 销售摘要\n{report.get('sales_summary', '')}\n\n"
+                f"## 库存预警\n{report.get('inventory_alerts', '')}\n\n"
+                f"## Agent 分析\n{report.get('agent_analysis', '')}\n"
+            )
+        else:
+            body = str(report)
+
         from datetime import date
         today = date.today().isoformat()
         result = await call_email({
             "to": ["ops@demo.local", "ceo@demo.local"],
             "subject": f"[经营日报] {today}",
-            "body": (
-                f"# 经营日报 {today}\n\n"
-                f"## 销售摘要\n{report.get('sales_summary', '')}\n\n"
-                f"## 库存预警\n{report.get('inventory_alerts', '')}\n\n"
-                f"## Agent 分析\n{report.get('agent_analysis', '')}\n"
-            ),
+            "body": f"# 经营日报 {today}\n\n{body}",
         })
         return {"email": result}
 

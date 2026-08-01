@@ -18,6 +18,7 @@
    d. on_error 处理：abort / skip / agent_degrade
    e. 子 span end
 6. ctx 标 success / failed / partial
+7. 自动调 persistence.save()（模块顶部 import，便于测试 monkeypatch）
 """
 from __future__ import annotations
 
@@ -30,6 +31,8 @@ from backend.orchestration.workflow.meta import StepConfig
 from backend.orchestration.workflow.context import WorkflowContext
 from backend.orchestration.workflow.dag import DAG
 from backend.orchestration.workflow.registry import WorkflowRegistry, get_workflow_registry
+from backend.orchestration.workflow.persistence import get_workflow_run_store
+from backend.rag.tracer import trace_collector
 from backend.shared.logger import logger
 
 
@@ -147,7 +150,6 @@ class WorkflowExecutor:
 
         # 持久化（Phase 1 Commit 8：自动落库）
         try:
-            from backend.orchestration.workflow.persistence import get_workflow_run_store
             get_workflow_run_store().save(ctx)
         except Exception as e:
             logger.warning(f"[WorkflowExecutor] 持久化失败（不影响 workflow 结果）: {e}")
