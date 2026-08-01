@@ -80,20 +80,24 @@ async def delete_threshold(
 @router.get("/cases")
 async def list_cases(
     status: str = "",
+    level: str = "",
+    page: int = 1,
+    page_size: int = 20,
     store: InventoryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    """列出所有 alert case（可按 status 过滤）"""
-    if status == "open":
-        cases = store.list_open_cases()
-    else:
-        # 全列：直接查所有 status
-        from backend.orchestration.inventory.store import InventoryStore as _S
-        with store._lock, store._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM inventory_alert_cases ORDER BY id DESC"
-            ).fetchall()
-        cases = [dict(r) for r in rows]
-    return {"cases": cases, "total": len(cases)}
+    """列出所有 alert case（可按 status + level 过滤）"""
+    cases, total = store.list_all_cases(
+        status=status, level=level, page=page, page_size=page_size
+    )
+    return {"cases": cases, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/stats")
+async def get_alert_stats(
+    store: InventoryStore = Depends(get_store),
+) -> dict[str, Any]:
+    """告警统计（按级别分组）"""
+    return {"stats": store.get_stats()}
 
 
 @router.get("/cases/{case_id}")
@@ -143,6 +147,47 @@ async def manual_resolve_case(
     })
 
     return {"resolved": True, "case_id": case_id, "resolution_type": "MANUAL_RESOLVED"}
+
+
+@router.patch("/cases/{case_id}")
+async def update_case_status(
+    case_id: int,
+    body: dict = Body(...),
+    store: InventoryStore = Depends(get_store),
+) -> dict[str, Any]:
+    """更新 case 状态（acknowledged / resolved / closed）"""
+    case = store.get_case(case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="case not found")
+
+    new_status = body.get("status")
+    resolution_type = body.get("resolution_type")
+    valid_statuses = {"acknowledged", "resolved", "closed"}
+
+    if new_status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid status: {new_status}, must be one of {valid_statuses}"
+        )
+
+    if new_status == "resolved" and not resolution_type:
+        resolution_type = "MANUAL_RESOLVED"
+
+    store.update_case_status(case_id, new_status, resolution_type=resolution_type)
+
+    # 记录事件
+    store.insert_event({
+        "case_id": case_id,
+        "event_type": new_status,
+        "from_state": case.get("current_state"),
+        "to_state": case.get("current_state"),
+        "qty": None,
+        "stock_days": None,
+        "reason": [f"状态更新为 {new_status}"],
+        "notified": False,
+    })
+
+    return {"updated": True, "case_id": case_id, "status": new_status}
 
 
 # ─────────────────────────────────────────────────────────────

@@ -276,6 +276,79 @@ class InventoryStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def list_all_cases(
+        self,
+        status: str = "",
+        level: str = "",
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict], int]:
+        """列出所有 case（带过滤 + 分页）
+
+        Returns:
+            (cases, total)
+        """
+        offset = (page - 1) * page_size
+        where_clauses: list[str] = []
+        params: list[Any] = []
+
+        if status:
+            if status == "active":
+                where_clauses.append("status IN ('open', 'acknowledged')")
+            elif status == "history":
+                where_clauses.append("status IN ('resolved', 'closed')")
+            else:
+                where_clauses.append("status = ?")
+                params.append(status)
+        if level:
+            where_clauses.append("current_level = ?")
+            params.append(level)
+
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        order_sql = (
+            "ORDER BY CASE current_level "
+            "WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, "
+            "last_detected_at DESC"
+        )
+
+        with self._lock, self._conn() as conn:
+            count_row = conn.execute(
+                f"SELECT COUNT(*) FROM inventory_alert_cases {where_sql}",
+                params,
+            ).fetchone()
+            total = count_row[0] if count_row else 0
+
+            rows = conn.execute(
+                f"SELECT * FROM inventory_alert_cases {where_sql} "
+                f"{order_sql} LIMIT ? OFFSET ?",
+                params + [page_size, offset],
+            ).fetchall()
+
+        return [dict(r) for r in rows], total
+
+    def get_stats(self) -> dict[str, int]:
+        """告警统计：按 level 分组计数"""
+        with self._lock, self._conn() as conn:
+            rows = conn.execute(
+                """SELECT current_level, COUNT(*) as cnt
+                   FROM inventory_alert_cases
+                   WHERE status IN ('open', 'acknowledged')
+                   GROUP BY current_level"""
+            ).fetchall()
+        stats: dict[str, int] = {"critical": 0, "warning": 0, "info": 0, "resolved": 0}
+        for r in rows:
+            level: str = r[0] or "info"
+            if level in stats:
+                stats[level] = r[1]
+        # resolved 计数
+        with self._lock, self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM inventory_alert_cases "
+                "WHERE status IN ('resolved', 'closed')"
+            ).fetchone()
+        stats["resolved"] = row[0] if row else 0
+        return stats
+
     def update_case_status(
         self,
         case_id: int,
