@@ -355,7 +355,7 @@ class MultiAgentSystem:
         for r in range(1, loop_count + 1):  # loop_count >= 1
             round_span = Span(
                 span_id=f"supervisor-round-{r}", parent_id="root",
-                name=f"Supervisor Round {r}", type="workflow",
+                name=f"调度轮次 {r}", type="workflow",
                 status="success",
                 metrics={"round": r},
             )
