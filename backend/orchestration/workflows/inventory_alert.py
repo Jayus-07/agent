@@ -147,16 +147,18 @@ class InventoryAlert:
         store = get_inventory_store()
         now = datetime.now()
 
+        # 批量加载现有 case + 最后事件（一次连接搞定，避免 N+1）
+        alerting = [a for a in assessments_dicts if a["state"] != "normal"]
+        product_ids = [a["product_id"] for a in alerting]
+        cases_map = store.get_cases_by_products(product_ids)
+        case_ids = [c["id"] for c in cases_map.values() if c.get("id")]
+        events_map = store.get_last_events_by_cases(case_ids)
+
         decisions = []
-        for a_dict in assessments_dicts:
-            if a_dict["state"] == "normal":
-                continue
+        for a_dict in alerting:
             pid = a_dict["product_id"]
-            # 加载现有 case
-            current_case = store.get_case_by_product(pid)
-            last_event = None
-            if current_case:
-                last_event = store.get_last_event(current_case["id"])
+            current_case = cases_map.get(pid)
+            last_event = events_map.get(current_case["id"]) if current_case else None
 
             # 状态机决策
             decision = decide(

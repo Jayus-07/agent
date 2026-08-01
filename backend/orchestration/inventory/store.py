@@ -250,6 +250,45 @@ class InventoryStore:
             conn.commit()
             return case_id
 
+    def get_cases_by_products(self, product_ids: list[str]) -> dict[str, dict]:
+        """批量查 case（一次 SQL 连接）"""
+        if not product_ids:
+            return {}
+        placeholders = ",".join("?" for _ in product_ids)
+        with self._lock, self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM inventory_alert_cases WHERE product_id IN ({placeholders})",
+                product_ids,
+            ).fetchall()
+        return {r["product_id"]: dict(r) for r in rows}
+
+    def get_last_events_by_cases(self, case_ids: list[int]) -> dict[int, dict]:
+        """批量查每个 case 的最后一条事件"""
+        if not case_ids:
+            return {}
+        placeholders = ",".join("?" for _ in case_ids)
+        with self._lock, self._conn() as conn:
+            # 子查询取每个 case 最大的 created_at，再 JOIN 回去拿完整行
+            rows = conn.execute(
+                f"""SELECT e.* FROM inventory_alert_events e
+                    INNER JOIN (
+                        SELECT case_id, MAX(created_at) as max_created
+                        FROM inventory_alert_events
+                        WHERE case_id IN ({placeholders})
+                        GROUP BY case_id
+                    ) latest ON e.case_id = latest.case_id AND e.created_at = latest.max_created""",
+                case_ids,
+            ).fetchall()
+        result = {}
+        for r in rows:
+            d = dict(r)
+            try:
+                d["reason"] = _json.loads(d.get("reason") or "[]")
+            except Exception:
+                d["reason"] = []
+            result[d["case_id"]] = d
+        return result
+
     def get_case_by_product(self, product_id: str) -> dict | None:
         """按 product_id 查 case"""
         with self._lock, self._conn() as conn:
