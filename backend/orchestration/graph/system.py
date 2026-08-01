@@ -50,7 +50,7 @@ class MultiAgentSystem:
         t_total = time.time()
         trace = trace_collector.start(question, session_id, workflow_name="agent")
         trace_collector.start_span("root", parent_id=None,
-                                   name="Multi-Agent Pipeline", type="workflow",
+                                   name="多 Agent 协作管线", type="workflow",
                                    input={"question": question, "kb_id": kb_id})
 
         try:
@@ -425,7 +425,7 @@ class MultiAgentSystem:
         # ── Tracing ──
         trace = trace_collector.start(question, session_id, workflow_name="agent")
         trace_collector.start_span("root", parent_id=None,
-                                   name="Multi-Agent Pipeline", type="workflow",
+                                   name="多 Agent 协作管线", type="workflow",
                                    input={"question": question, "kb_id": kb_id})
 
         final_answer = ""

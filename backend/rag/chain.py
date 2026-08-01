@@ -227,7 +227,7 @@ class RAGChain:
         t_total = _time.time()
         trace = trace_collector.start(question, session_id)
         trace_collector.start_span("root", parent_id=None,
-                                   name="RAG Agent", type="agent",
+                                   name="RAG 智能问答", type="agent",
                                    input={"question": question})
         logger.info(f"[RAGChain] 收到问题: {question[:60]}... (session={session_id})")
 
@@ -260,7 +260,7 @@ class RAGChain:
         # ── retrieval span（包裹整个检索过程，挂 debug event）──
         ret_span = trace_collector.start_span(
             "retrieval", parent_id="root",
-            name="Hybrid Retrieval", type="retrieval",
+            name="混合检索", type="retrieval",
             kind="retrieval",
             input={"question": question[:500]},
         )
@@ -276,7 +276,7 @@ class RAGChain:
                      "total_docs": len(context_docs)})
 
         # mq_check
-        mq_span = trace_collector.start_span("mq_check", name="MultiQuery")
+        mq_span = trace_collector.start_span("mq_check", name="多查询扩展")
         mq = getattr(self, '_mq_retriever', None)
         triggered = mq._last_triggered if mq else False
         from backend.rag.retrieval.multi_query import get_mq_mode
@@ -338,7 +338,7 @@ class RAGChain:
 
         # Citation
         citation_span = trace_collector.start_span(
-            "citation", name="Citation")
+            "citation", name="引文校验")
         if context_docs:
             answer, verified_docs = _verify_support(answer, context_docs, question)
         else:
@@ -374,7 +374,7 @@ class RAGChain:
         try:
             from backend.rag.guardrails import check_faithfulness
             faith_span = trace_collector.start_span(
-                "faithfulness", name="Faithfulness")
+                "faithfulness", name="忠实度验证")
             self._last_faithfulness = check_faithfulness(answer, context_docs)
             trace_collector.end_span(faith_span,
                                  metrics={
