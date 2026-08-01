@@ -138,6 +138,88 @@ def import_thresholds_and_policies(inv_db: str) -> dict[str, Any]:
 # CLI
 # ─────────────────────────────────────────────────────────────
 
+# PostgreSQL schema（与 workflow SQL step 查询对齐）
+PG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS inventory (
+    product_id      TEXT PRIMARY KEY,
+    product_name    TEXT NOT NULL,
+    category        TEXT,
+    supplier_grade  TEXT,
+    current_qty     INTEGER DEFAULT 0,
+    min_qty         INTEGER DEFAULT 10
+);
+
+CREATE TABLE IF NOT EXISTS sales (
+    id              SERIAL PRIMARY KEY,
+    date            DATE NOT NULL,
+    product_id      TEXT NOT NULL,
+    qty             INTEGER NOT NULL,
+    amount          NUMERIC DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_sales_product_date ON sales(product_id, date);
+CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(date);
+"""
+
+
+def import_to_postgres(verbose: bool = True) -> dict[str, Any]:
+    """导入商品 + 销售到 PostgreSQL"""
+    try:
+        import psycopg2
+        from backend.config import DB_CONFIG
+    except ImportError:
+        logger.warning("[seed] psycopg2 未安装，跳过 PG 导入")
+        return {"pg_products": 0, "pg_sales": 0, "skipped": True}
+
+    conn = psycopg2.connect(**DB_CONFIG)
+    try:
+        conn.set_session(autocommit=True)
+        cur = conn.cursor()
+
+        # 建表
+        cur.execute(PG_SCHEMA)
+
+        # 清空 + 重插 inventory
+        cur.execute("DELETE FROM sales")
+        cur.execute("DELETE FROM inventory")
+
+        # 从 THRESHOLDS 提取 min_qty 映射
+        min_qty_map: dict[str, int] = {}
+        for t in THRESHOLDS:
+            if t.get("rule_type") == "sku" and t.get("product_id"):
+                min_qty_map[t["product_id"]] = t.get("min_qty", 10)
+
+        for p in PRODUCTS:
+            cur.execute(
+                """INSERT INTO inventory
+                   (product_id, product_name, category, supplier_grade, current_qty, min_qty)
+                   VALUES (%s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (product_id) DO UPDATE SET
+                   current_qty = EXCLUDED.current_qty,
+                   min_qty = EXCLUDED.min_qty""",
+                (
+                    p["product_id"], p["product_name"], p["category"],
+                    p["supplier_grade"], p["current_qty"],
+                    min_qty_map.get(p["product_id"], 20),
+                ),
+            )
+
+        # 导入销售
+        sales = generate_sales_history()
+        for s in sales:
+            cur.execute(
+                "INSERT INTO sales (date, product_id, qty) VALUES (%s, %s, %s)",
+                (s["date"], s["product_id"], s["qty"]),
+            )
+
+        count = cur.rowcount if hasattr(cur, 'rowcount') else len(sales)
+        cur.close()
+        result = {"pg_products": len(PRODUCTS), "pg_sales": count}
+        if verbose:
+            logger.info(f"[3/3] PG 导入: {result}")
+        return result
+    finally:
+        conn.close()
+
 def run_seed(verbose: bool = True) -> dict[str, Any]:
     """导入所有 demo 数据"""
     paths = get_db_paths()
@@ -151,24 +233,28 @@ def run_seed(verbose: bool = True) -> dict[str, Any]:
         logger.info(f"通知策略: {len(POLICIES)}")
         logger.info(f"演示场景: {len(DEMO_SCENARIOS)}")
 
-    # 1. 商品 + 销售
+    # 1. 商品 + 销售 (SQLite)
     result1 = import_products_and_sales(paths["sales"])
     if verbose:
-        logger.info(f"[1/2] 商品 + 销售: {result1}")
+        logger.info(f"[1/3] SQLite 商品 + 销售: {result1}")
 
-    # 2. 阈值 + 通知
+    # 2. 阈值 + 通知 (SQLite)
     result2 = import_thresholds_and_policies(paths["inventory"])
     if verbose:
-        logger.info(f"[2/2] 阈值 + 通知: {result2}")
+        logger.info(f"[2/3] 阈值 + 通知: {result2}")
+
+    # 3. PG 导入（workflow SQL step 用）
+    result3 = import_to_postgres(verbose=verbose)
 
     if verbose:
         logger.info("=" * 60)
         logger.info("导入完成")
         logger.info(f"  - data/demo_sales.db")
         logger.info(f"  - data/inventory_alerts.db")
+        logger.info(f"  - PostgreSQL (inventory + sales)")
         logger.info("=" * 60)
 
-    return {**result1, **result2}
+    return {**result1, **result2, **result3}
 
 
 if __name__ == "__main__":
