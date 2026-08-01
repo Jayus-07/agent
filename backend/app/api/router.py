@@ -16,6 +16,7 @@ from backend.app.api.routes import (
     data,
     mcp,
     workflows,
+    inventory_alerts,
 )
 from backend.app.api.routes.health import router as health_router
 from backend.app.api.routes.keyword_routes import router as keyword_router
@@ -36,6 +37,7 @@ api_router.include_router(data.assets_router)
 api_router.include_router(data.pipeline_router)
 api_router.include_router(mcp.router)
 api_router.include_router(workflows.router)
+api_router.include_router(inventory_alerts.router)
 
 # ── 系统路由 ──────────────────────────────────
 api_router.include_router(health_router)
