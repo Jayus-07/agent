@@ -157,3 +157,80 @@ def get_daily_report_store() -> DailyReportStore:
     if _store is None:
         _store = DailyReportStore()
     return _store
+
+
+# ─────────────────────────────────────────────────────────────
+# DemoRunner
+# ─────────────────────────────────────────────────────────────
+
+
+class DemoRunner:
+    """编排 Demo 场景（seed / trigger / agent prompt）"""
+
+    def seed_data(self) -> dict[str, Any]:
+        """导入所有 demo 数据"""
+        from backend.seed.demo.run import run_seed
+        return run_seed(verbose=True)
+
+    async def run_daily_report(self, inputs: dict | None = None) -> dict[str, Any]:
+        """触发 daily_report workflow"""
+        from backend.orchestration.workflow.scheduler import get_workflow_scheduler
+        scheduler = get_workflow_scheduler()
+        ctx = await scheduler.run_now("daily_report", inputs or {})
+        return {
+            "scenario": "daily_report",
+            "run_id": ctx.run_id,
+            "status": ctx.status,
+            "trace_id": ctx.trace_id or "",
+            "outputs_keys": list(ctx.outputs.keys()),
+            "duration_ms": ctx.duration_ms,
+            "error": ctx.error,
+        }
+
+    async def run_inventory_alert(self, inputs: dict | None = None) -> dict[str, Any]:
+        """触发 inventory_alert workflow"""
+        from backend.orchestration.workflow.scheduler import get_workflow_scheduler
+        scheduler = get_workflow_scheduler()
+        ctx = await scheduler.run_now("inventory_alert", inputs or {})
+        return {
+            "scenario": "inventory_alert",
+            "run_id": ctx.run_id,
+            "status": ctx.status,
+            "trace_id": ctx.trace_id or "",
+            "outputs_keys": list(ctx.outputs.keys()),
+            "duration_ms": ctx.duration_ms,
+            "error": ctx.error,
+        }
+
+    async def run_scenario(self, scenario_id: str) -> dict[str, Any]:
+        """分发到具体场景"""
+        scenario_map = {
+            "daily_report": self.run_daily_report,
+            "inventory_alert": self.run_inventory_alert,
+        }
+        if scenario_id in scenario_map:
+            return await scenario_map[scenario_id]()
+
+        # Agent 场景：返回 /agent 跳转链接
+        agent_scenarios = {
+            "sales_anomaly": "上周为什么华为 Mate 60 销量跌了？",
+            "product_optimization": "帮我看看哪些商品标题不行，怎么改？",
+        }
+        if scenario_id in agent_scenarios:
+            return {
+                "scenario": scenario_id,
+                "mode": "agent",
+                "prompt": agent_scenarios[scenario_id],
+                "agent_url": f"/agent?prompt={agent_scenarios[scenario_id]}",
+            }
+        raise ValueError(f"未知场景: {scenario_id}")
+
+
+_demo_runner: DemoRunner | None = None
+
+
+def get_demo_runner() -> DemoRunner:
+    global _demo_runner
+    if _demo_runner is None:
+        _demo_runner = DemoRunner()
+    return _demo_runner
