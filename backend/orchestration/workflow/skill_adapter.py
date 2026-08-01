@@ -85,8 +85,16 @@ async def call_skill(skill_name: str, capability: str, params: dict) -> dict:
 async def call_sql(params: dict) -> dict:
     """调 SQL Skill
 
-    params: {"query": "SELECT ..."} 或包含 question 等
+    两种模式：
+    - params 含 "query" 键 → 直接执行原始 SQL（Workflow step 确定性查询）
+    - params 含 "question" 键 → 走 NL→SQL Agent（自然语言查询）
     """
+    if "query" in params:
+        # 直接执行 raw SQL（绕过 Agent，避免 NL→SQL 开销和误差）
+        import json as _json  # noqa: F811
+        from backend.orchestration.tools import execute_sql_tool
+        result_str = await execute_sql_tool.ainvoke({"query": params["query"]})
+        return _json.loads(result_str)
     return await call_skill("sql", "sql.query", params)
 
 
