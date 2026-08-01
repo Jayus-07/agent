@@ -8,6 +8,8 @@ import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import EmptyState from './EmptyState'
 import StatusBar from './StatusBar'
+import LLMSwitcher from './LLMSwitcher'
+import MultiQueryToggle from './MultiQueryToggle'
 import ContextPanel from './chat/ContextPanel'
 import AgentTimeline from './chat/AgentTimeline'
 
@@ -96,6 +98,12 @@ export default function ChatView() {
           </button>
         </div>
       )}
+
+      {/* 工具栏 — 输入框正上方，同宽靠右 */}
+      <div className="shrink-0 max-w-[720px] mx-auto w-full px-4 pb-1 flex items-center justify-end gap-2">
+        <MultiQueryToggle />
+        <LLMSwitcher />
+      </div>
 
       <ChatInput onSend={send} isLoading={isLoading} />
     </div>

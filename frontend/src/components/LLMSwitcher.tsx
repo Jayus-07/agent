@@ -169,13 +169,13 @@ export default function LLMSwitcher() {
         />
       </button>
 
-      {/* 下拉面板 */}
+      {/* 下拉面板 — 向上弹出 */}
       {open && (
         <div
           className="
-            absolute right-0 mt-2 w-[360px] z-50
+            absolute right-0 bottom-full mb-2 w-[360px] z-50
             bg-white border border-[#dadce0] rounded-2xl
-            shadow-[0_4px_8px_3px_rgba(60,64,67,0.15),0_1px_3px_rgba(60,64,67,0.08)]
+            shadow-[0_-4px_8px_3px_rgba(60,64,67,0.15),0_-1px_3px_rgba(60,64,67,0.08)]
             overflow-hidden
           "
         >
