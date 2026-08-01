@@ -170,6 +170,29 @@ def import_to_postgres(verbose: bool = True) -> dict[str, Any]:
         logger.warning("[seed] psycopg2 未安装，跳过 PG 导入")
         return {"pg_products": 0, "pg_sales": 0, "skipped": True}
 
+    # 注册 inventory + sales 到 SQL Agent 白名单（否则 workflow SQL step 被拦截）
+    try:
+        from backend.sql.schema_loader import schema_loader
+        schema_loader.register_table("inventory", {
+            "product_id":      "商品ID (TEXT PRIMARY KEY)",
+            "product_name":    "商品名称 (TEXT)",
+            "category":        "品类 (TEXT)",
+            "supplier_grade":  "供应商等级 (TEXT)",
+            "current_qty":     "当前库存 (INTEGER)",
+            "min_qty":         "最小库存阈值 (INTEGER)",
+        }, "Demo 库存表")
+        schema_loader.register_table("sales", {
+            "id":          "记录ID (SERIAL PRIMARY KEY)",
+            "date":        "销售日期 (DATE)",
+            "product_id":  "商品ID (TEXT)",
+            "qty":         "销售数量 (INTEGER)",
+            "amount":      "销售额 (NUMERIC)",
+        }, "Demo 销售表")
+        if verbose:
+            logger.info("[seed] inventory + sales 已注册到 SQL Agent 白名单")
+    except Exception as e:
+        logger.warning(f"[seed] 注册 SQL Agent 白名单失败: {e}")
+
     conn = psycopg2.connect(**DB_CONFIG)
     try:
         conn.set_session(autocommit=True)
