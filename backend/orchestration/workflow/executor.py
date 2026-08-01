@@ -80,21 +80,22 @@ class WorkflowExecutor:
 
         # 4. 初始化 trace（如果 tracer 已启动则复用，否则启动一个新的）
         trace_root_span = None
+        trace_record = None  # 保存引用，用于 finish() 持久化
         try:
             from backend.rag.tracer import trace_collector, _current_trace_var
 
             # 检查是否已有活跃 trace（如 RAG 调用链中的 workflow step）
-            existing = _current_trace_var.get() or trace_collector._thread_current
-            if existing is None:
+            trace_record = _current_trace_var.get() or trace_collector._thread_current
+            if trace_record is None:
                 # 启动一个新的 workflow trace
-                existing = trace_collector.start(
+                trace_record = trace_collector.start(
                     question=f"[Workflow] {workflow_name}",
                     session_id=ctx.run_id,
                     workflow_name=workflow_name,
                 )
-                ctx.trace_id = existing.id
+                ctx.trace_id = trace_record.id
             else:
-                ctx.trace_id = existing.id
+                ctx.trace_id = trace_record.id
 
             meta = self.registry.get_meta(workflow_name)
             trace_root_span = trace_collector.start_span(
@@ -133,7 +134,7 @@ class WorkflowExecutor:
                 f"[WorkflowExecutor] {workflow_name} 失败: {e}"
             )
 
-        # 6. 关闭 root span
+        # 6. 关闭 root span + 持久化 trace 到 SQLite
         try:
             if trace_root_span is not None:
                 from backend.rag.tracer import trace_collector
@@ -146,6 +147,15 @@ class WorkflowExecutor:
                         "skip_count": len(ctx.skip_steps),
                     },
                 )
+                # finish() 将 trace 持久化到 trace_store（SQLite，重启不丢失）
+                if trace_record is not None:
+                    trace_collector.finish(
+                        trace_record,
+                        answer=f"Workflow {workflow_name}: {ctx.status} ({len(ctx.outputs)} steps)",
+                        total_ms=ctx.duration_ms or 0,
+                        model="workflow",
+                        provider="executor",
+                    )
         except Exception:
             pass
 
