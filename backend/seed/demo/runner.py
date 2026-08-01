@@ -58,6 +58,14 @@ class DailyReportStore:
 
     def save(self, report: dict[str, Any]) -> str:
         """保存日报，返回 report id"""
+        # 安全转换：确保所有参数是 SQLite 兼容类型
+        def _str(v: Any) -> str:
+            if v is None:
+                return ""
+            if isinstance(v, str):
+                return v
+            return str(v)
+
         with self._lock, self._conn() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO daily_reports
@@ -65,14 +73,14 @@ class DailyReportStore:
                     report_content, trace_id, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    report["id"],
-                    report["report_date"],
-                    report.get("report_type", "daily_report"),
-                    report.get("status", "success"),
+                    _str(report.get("id", "")),
+                    _str(report.get("report_date", "")),
+                    _str(report.get("report_type", "daily_report")),
+                    _str(report.get("status", "success")),
                     _json.dumps(report.get("kpi_summary", {}), ensure_ascii=False),
-                    report["report_content"],
-                    report.get("trace_id", ""),
-                    report.get("created_at", datetime.now().isoformat()),
+                    _str(report.get("report_content", "")),
+                    _str(report.get("trace_id", "")),
+                    _str(report.get("created_at", datetime.now().isoformat())),
                 ),
             )
             conn.commit()
