@@ -116,6 +116,7 @@ def patched_trace_collector(monkeypatch, fresh_tracer):
     """
     fake_span = MagicMock(name="Span")
     fake_span.span_id = "fake"
+    fake_span.trace_id = "fake_trace_001"
     fake_span.metrics = {}
 
     collector = MagicMock()
