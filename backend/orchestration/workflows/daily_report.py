@@ -36,6 +36,7 @@ from backend.shared.logger import logger
         "把今天的日报发给我",
     ],
     default_kbs=["analytics"],
+    category="report",
 )
 class DailyReport:
     """每日经营日报 — 6 个 Step，4 个并行层"""

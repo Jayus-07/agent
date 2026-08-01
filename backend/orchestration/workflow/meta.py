@@ -30,6 +30,9 @@ class WorkflowMeta:
     # 默认 RAG 检索的 kb_ids（workflow 内 RAG 检索时默认范围）
     # 例：["analytics", "operations"]
     default_kbs: list[str] = field(default_factory=list)
+    # 业务类别：用于前端自动分组
+    # "report" → 报告中心 / "alert" → 告警中心 / "" → 通用（chat）
+    category: str = ""
 
 
 @dataclass

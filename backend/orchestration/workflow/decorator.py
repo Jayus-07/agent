@@ -40,6 +40,7 @@ def workflow(
     actions: list[str] | None = None,
     examples: list[str] | None = None,
     default_kbs: list[str] | None = None,
+    category: str = "",
 ) -> Callable[[type], type]:
     """类装饰器：声明 Workflow 的元数据
 
@@ -65,6 +66,7 @@ def workflow(
             actions=list(actions or []),
             examples=list(examples or []),
             default_kbs=list(default_kbs or []),
+            category=category,
         )
         setattr(cls, WORKFLOW_META_ATTR, meta)
         # 不修改类本身，只附加属性
