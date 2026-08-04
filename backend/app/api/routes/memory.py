@@ -7,14 +7,24 @@ api/routes/memory.py — 会话记忆 API
   GET    /memory/sessions/{id}/context — 获取 Agent 工作上下文
   DELETE /memory/sessions/{id}         — 删除会话
   PATCH  /memory/sessions/{id}         — 重命名会话
+
+PR-2.x: 业务逻辑已迁移至 MemoryService，路由仅做参数提取和委托。
 """
 from fastapi import APIRouter
 from pydantic import BaseModel
-from backend.memory.database import AsyncSessionLocal
-from backend.memory.repository.session_repo import SessionRepository
-from backend.shared.logger import logger
 
 router = APIRouter(prefix="/memory", tags=["记忆"])
+
+# 惰性初始化 MemoryService 单例（避免启动时加载 DB 连接池）
+_memory_service = None
+
+
+def _get_service():
+    global _memory_service
+    if _memory_service is None:
+        from backend.memory.service import MemoryService
+        _memory_service = MemoryService()
+    return _memory_service
 
 
 class RenameRequest(BaseModel):
@@ -24,91 +34,28 @@ class RenameRequest(BaseModel):
 @router.get("/sessions")
 async def list_sessions(user_id: str = "default"):
     """列出用户的所有持久化会话"""
-    async with AsyncSessionLocal() as db_session:
-        try:
-            repo = SessionRepository(db_session)
-            sessions = await repo.list_all(user_id=user_id)
-            await db_session.commit()
-            return {"sessions": sessions, "total": len(sessions)}
-        except Exception as e:
-            await db_session.rollback()
-            logger.error(f"[Memory API] list_sessions 失败: {e}")
-            return {"sessions": [], "total": 0, "error": str(e)}
+    return await _get_service().list_sessions(user_id=user_id)
 
 
 @router.get("/sessions/{session_id}")
 async def get_session(session_id: str):
     """获取指定会话的消息列表"""
-    async with AsyncSessionLocal() as db_session:
-        try:
-            repo = SessionRepository(db_session)
-            msgs = await repo.load_messages(session_id)
-            await db_session.commit()
-            return {
-                "session_id": session_id,
-                "messages": [
-                    {"role": m.role, "content": m.content, "created_at": m.created_at.isoformat()}
-                    for m in msgs
-                ],
-            }
-        except Exception as e:
-            await db_session.rollback()
-            logger.error(f"[Memory API] get_session 失败: {e}")
-            return {"session_id": session_id, "messages": [], "error": str(e)}
+    return await _get_service().get_session_messages(session_id)
 
 
 @router.get("/sessions/{session_id}/context")
 async def get_session_context(session_id: str):
     """获取会话的 Agent 工作上下文（SQL结果/RAG文档/报告摘要）"""
-    async with AsyncSessionLocal() as db_session:
-        try:
-            repo = SessionRepository(db_session)
-            ctx = await repo.get_context(session_id)
-            await db_session.commit()
-            if ctx:
-                import json as _json
-                try:
-                    return {"session_id": session_id, "context": _json.loads(ctx)}
-                except (_json.JSONDecodeError, TypeError, ValueError) as e:
-                    logger.debug("会话上下文 JSON 解析失败，回退为 raw: %s", e)
-                    return {"session_id": session_id, "context": {"raw": ctx}}
-            return {"session_id": session_id, "context": None}
-        except Exception as e:
-            await db_session.rollback()
-            return {"session_id": session_id, "context": None, "error": str(e)}
+    return await _get_service().get_session_context(session_id)
 
 
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     """删除会话及其所有消息"""
-    async with AsyncSessionLocal() as db_session:
-        try:
-            repo = SessionRepository(db_session)
-            ok = await repo.delete(session_id)
-            await db_session.commit()
-            if ok:
-                logger.info(f"[Memory API] 已删除会话: {session_id}")
-                return {"ok": True, "session_id": session_id}
-            return {"ok": False, "error": "会话不存在"}
-        except Exception as e:
-            await db_session.rollback()
-            logger.error(f"[Memory API] delete_session 失败: {e}")
-            return {"ok": False, "error": str(e)}
+    return await _get_service().delete_session(session_id)
 
 
 @router.patch("/sessions/{session_id}")
 async def rename_session(session_id: str, req: RenameRequest):
     """重命名会话标题"""
-    async with AsyncSessionLocal() as db_session:
-        try:
-            repo = SessionRepository(db_session)
-            ok = await repo.rename(session_id, req.title)
-            await db_session.commit()
-            if ok:
-                logger.info(f"[Memory API] 已重命名: {session_id} → {req.title}")
-                return {"ok": True, "session_id": session_id, "title": req.title}
-            return {"ok": False, "error": "会话不存在"}
-        except Exception as e:
-            await db_session.rollback()
-            logger.error(f"[Memory API] rename_session 失败: {e}")
-            return {"ok": False, "error": str(e)}
+    return await _get_service().rename_session(session_id, req.title)

@@ -20,7 +20,6 @@ from fastapi.responses import StreamingResponse
 
 from backend.app.api.schemas import ChatRequest, ChatResponse, AbortRequest, ErrorResponse
 from backend.app.api.deps import get_multi_agent
-from backend.shared.logger import logger
 
 router = APIRouter(prefix="/chat", tags=["对话"])
 
@@ -177,26 +176,11 @@ async def save_messages(req: dict):
 
     body: { session_id, messages: [{ role, content }, ...] }
     """
-    from backend.memory.repository.session_repo import SessionRepository
-    from backend.memory.database import AsyncSessionLocal
-
-    session_id = req.get("session_id", "")
-    messages = req.get("messages", [])
-    if not session_id or not messages:
-        return {"saved": 0}
-
-    saved = 0
-    try:
-        async with AsyncSessionLocal() as db:
-            repo = SessionRepository(db)
-            await repo.get_or_create(session_id)
-            for m in messages:
-                await repo.save_message(session_id, m.get("role", "user"), m.get("content", ""))
-                saved += 1
-            await db.commit()
-    except Exception as e:
-        logger.warning(f"[Chat] 保存消息失败: {e}")
-    return {"saved": saved}
+    from backend.memory.service import MemoryService
+    return await MemoryService().save_messages(
+        session_id=req.get("session_id", ""),
+        messages=req.get("messages", []),
+    )
 
 
 # ═══════════════════════════════════════════════════

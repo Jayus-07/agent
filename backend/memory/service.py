@@ -1,4 +1,6 @@
 """MemoryService — 统一记忆服务入口"""
+import asyncio
+
 from backend.memory.database import get_session, AsyncSessionLocal
 from backend.memory.repository.session_repo import SessionRepository
 from backend.memory.repository.memory_repo import MemoryRepository
@@ -174,6 +176,23 @@ class MemoryService:
     async def archive(self, record_id: str) -> bool:
         return await self.update(record_id, is_active=False)
 
+    async def save_messages(self, session_id: str, messages: list[dict], user_id: str = "default") -> dict:
+        """批量保存会话消息（供 chat API 调用）。"""
+        if not session_id or not messages:
+            return {"saved": 0}
+        saved = 0
+        try:
+            async with AsyncSessionLocal() as db:
+                repo = SessionRepository(db)
+                await repo.get_or_create(session_id, user_id)
+                for m in messages:
+                    await repo.save_message(session_id, m.get("role", "user"), m.get("content", ""))
+                    saved += 1
+                await db.commit()
+        except Exception as e:
+            logger.error(f"[MemoryService] save_messages 失败: {e}")
+        return {"saved": saved}
+
     async def run_decay(self) -> dict:
         async with AsyncSessionLocal() as db_session:
             mrepo = MemoryRepository(db_session)
@@ -181,3 +200,90 @@ class MemoryService:
             result = await decay.run()
             await db_session.commit()
             return result
+
+    # ============================================================
+    # Session CRUD（供 API 路由使用）
+    # ============================================================
+
+    async def list_sessions(self, user_id: str = "default") -> dict:
+        """列出用户所有会话。"""
+        async with AsyncSessionLocal() as db_session:
+            try:
+                repo = SessionRepository(db_session)
+                sessions = await repo.list_all(user_id=user_id)
+                await db_session.commit()
+                return {"sessions": sessions, "total": len(sessions)}
+            except Exception as e:
+                await db_session.rollback()
+                logger.error(f"[MemoryService] list_sessions 失败: {e}")
+                return {"sessions": [], "total": 0, "error": str(e)}
+
+    async def get_session_messages(self, session_id: str) -> dict:
+        """获取会话消息列表。"""
+        async with AsyncSessionLocal() as db_session:
+            try:
+                repo = SessionRepository(db_session)
+                msgs = await repo.load_messages(session_id)
+                await db_session.commit()
+                return {
+                    "session_id": session_id,
+                    "messages": [
+                        {"role": m.role, "content": m.content, "created_at": m.created_at.isoformat()}
+                        for m in msgs
+                    ],
+                }
+            except Exception as e:
+                await db_session.rollback()
+                logger.error(f"[MemoryService] get_session_messages 失败: {e}")
+                return {"session_id": session_id, "messages": [], "error": str(e)}
+
+    async def get_session_context(self, session_id: str) -> dict:
+        """获取会话 Agent 工作上下文。"""
+        async with AsyncSessionLocal() as db_session:
+            try:
+                repo = SessionRepository(db_session)
+                ctx = await repo.get_context(session_id)
+                await db_session.commit()
+                if ctx:
+                    import json as _json
+                    try:
+                        return {"session_id": session_id, "context": _json.loads(ctx)}
+                    except (_json.JSONDecodeError, TypeError, ValueError) as e:
+                        logger.debug("会话上下文 JSON 解析失败，回退为 raw: %s", e)
+                        return {"session_id": session_id, "context": {"raw": ctx}}
+                return {"session_id": session_id, "context": None}
+            except Exception as e:
+                await db_session.rollback()
+                return {"session_id": session_id, "context": None, "error": str(e)}
+
+    async def delete_session(self, session_id: str) -> dict:
+        """删除会话及消息。"""
+        async with AsyncSessionLocal() as db_session:
+            try:
+                repo = SessionRepository(db_session)
+                ok = await repo.delete(session_id)
+                await db_session.commit()
+                if ok:
+                    logger.info(f"[MemoryService] 已删除会话: {session_id}")
+                    return {"ok": True, "session_id": session_id}
+                return {"ok": False, "error": "会话不存在"}
+            except Exception as e:
+                await db_session.rollback()
+                logger.error(f"[MemoryService] delete_session 失败: {e}")
+                return {"ok": False, "error": str(e)}
+
+    async def rename_session(self, session_id: str, title: str) -> dict:
+        """重命名会话。"""
+        async with AsyncSessionLocal() as db_session:
+            try:
+                repo = SessionRepository(db_session)
+                ok = await repo.rename(session_id, title)
+                await db_session.commit()
+                if ok:
+                    logger.info(f"[MemoryService] 已重命名: {session_id} → {title}")
+                    return {"ok": True, "session_id": session_id, "title": title}
+                return {"ok": False, "error": "会话不存在"}
+            except Exception as e:
+                await db_session.rollback()
+                logger.error(f"[MemoryService] rename_session 失败: {e}")
+                return {"ok": False, "error": str(e)}
