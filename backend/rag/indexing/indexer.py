@@ -31,7 +31,7 @@ from backend.rag.preprocessing.cleaner import DocumentCleaner
 from backend.rag.preprocessing.metadata import classify_doc_type
 from backend.rag.indexing.models import SyncResult, Delta
 from backend.shared.logger import logger
-from backend.shared.async_utils import run_async as _run_async
+from backend.infra.async_utils import run_async as _run_async
 
 # 单 chunk 嵌入失败时的重试上限
 EMBED_RETRY_MAX = 3

@@ -64,7 +64,7 @@ def filter_step_results(step_results: dict, question: str) -> dict:
     try:
         from backend.rag.reranker import reranker as _ce
         from backend.config import RERANK_TIMEOUT
-        from backend.shared.monitoring.timeout import safe_call_with_timeout
+        from backend.infra.timeout import safe_call_with_timeout
 
         pairs = [(question, text) for text in rag_texts]
         scores = safe_call_with_timeout(

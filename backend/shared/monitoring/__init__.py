@@ -1,5 +1,3 @@
-"""monitoring — 超时保护 + 系统资源监控"""
-from backend.shared.monitoring.timeout import safe_call_with_timeout, TimeoutError
-from backend.observability.resource import ResourceMonitor, resource_monitor
-
-__all__ = ["safe_call_with_timeout", "TimeoutError", "ResourceMonitor", "resource_monitor"]
+"""向后兼容 shim — 超时保护已迁至 infra/timeout.py，资源监控已迁至 observability/resource.py。"""
+from backend.infra.timeout import safe_call_with_timeout, TimeoutError  # noqa: F401
+from backend.observability.resource import ResourceMonitor, resource_monitor  # noqa: F401

@@ -15,7 +15,7 @@ from backend.rag.preprocessing.keyword import extract_doc_keywords, extract_chun
 from backend.rag.preprocessing.llm_enrichment import (
     enrich_metadata_llm, _extract_first_sentences, _smart_truncate,
 )
-from backend.shared.async_utils import async_safe_call_with_timeout
+from backend.infra.async_utils import async_safe_call_with_timeout
 
 from backend.shared.logger import logger
 

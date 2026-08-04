@@ -27,7 +27,7 @@ from backend.config import (
 )
 from backend.shared.logger import logger
 from backend.observability.resource import resource_monitor
-from backend.shared.async_utils import run_async as _run_async
+from backend.infra.async_utils import run_async as _run_async
 
 os.environ['HF_HUB_OFFLINE'] = '1'
 os.environ['TRANSFORMERS_OFFLINE'] = '1'
