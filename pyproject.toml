@@ -1,0 +1,117 @@
+[project]
+name = "agent-platform"
+version = "2.1.0"
+description = "电商 RAG + Multi-Agent 平台 — LangGraph + MCP"
+requires-python = ">=3.10"
+readme = "README.md"
+license = {text = "MIT"}
+
+# ── 显式依赖分层（防止循环 import + 明确模块边界）──
+#
+# 分层规则（CLAUDE.md）:
+#   API → Router → Planner → Supervisor → Skill → Tool → MCP Client → MCP Server
+#
+# 对应包依赖:
+#   app/ ────────┐
+#   agents/ ─────┤
+#   orchestration/┤
+#   skills/ ─────┤── 全部可以 import
+#   tools/ ──────┤    shared/ + config/
+#   rag/ ────────┤    infra/ + observability/
+#   memory/ ─────┤
+#   mcp_servers/─┘
+#
+# 防循环: 单向依赖，低层不 import 高层
+
+dependencies = [
+    # ═══════════════════════════════════════════
+    # Web 层
+    # ═══════════════════════════════════════════
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "python-multipart>=0.0.9",
+
+    # ═══════════════════════════════════════════
+    # LLM 层
+    # ═══════════════════════════════════════════
+    "langchain>=0.3",
+    "langchain-core>=0.3",
+    "langchain-community>=0.3",
+    "langchain-openai>=0.2",
+    "langchain-ollama>=0.2",
+    "langchain-huggingface>=0.1",
+    "langgraph>=0.2",
+
+    # ═══════════════════════════════════════════
+    # 存储层
+    # ═══════════════════════════════════════════
+    "chromadb>=0.5",
+    "psycopg2-binary>=2.9",
+    "sqlalchemy>=2.0",
+
+    # ═══════════════════════════════════════════
+    # 数据处理
+    # ═══════════════════════════════════════════
+    "pandas>=2.0",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0",
+
+    # ═══════════════════════════════════════════
+    # NLP + AI
+    # ═══════════════════════════════════════════
+    "jieba>=0.42",
+    "sentence-transformers>=3.0",
+
+    # ═══════════════════════════════════════════
+    # 可观测
+    # ═══════════════════════════════════════════
+    "prometheus-client>=0.20",
+    "psutil>=5.9",
+
+    # ═══════════════════════════════════════════
+    # 工具
+    # ═══════════════════════════════════════════
+    "crawl4ai>=0.4",
+    "modelscope>=1.0",
+]
+
+[project.optional-dependencies]
+# 开发依赖
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "pytest-mock>=3.12",
+]
+
+# Postgres 完整版（psycopg2 编译可能需要 pg_config）
+postgres = [
+    "psycopg2>=2.9",
+]
+
+# 文档
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]
+asyncio_mode = "auto"
+addopts = "-v --tb=short"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["backend", "mcp_servers"]
+
+# ── 严格依赖边界检查 ──
+# 用 `pip install -e .[dev] && ruff check` 验证
+# 用 `python -c "import backend"` 验证无循环 import
