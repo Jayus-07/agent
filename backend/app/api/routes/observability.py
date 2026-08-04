@@ -224,6 +224,17 @@ async def get_resources():
 
 
 # ═══════════════════════════════════════════════════
+# Circuit Breakers（R2 熔断器状态）
+# ═══════════════════════════════════════════════════
+
+@router.get("/breakers")
+async def get_breakers():
+    """返回所有熔断器当前状态（CLOSED/OPEN/HALF_OPEN）"""
+    from backend.infra.circuit_breaker import get_all_breakers
+    return {"breakers": [cb.stats() for cb in get_all_breakers().values()]}
+
+
+# ═══════════════════════════════════════════════════
 # Alerts
 # ═══════════════════════════════════════════════════
 

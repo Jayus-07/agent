@@ -193,22 +193,24 @@ class _LLMProxy:
         attr = getattr(target, name)
         if name in self._WRAP_METHODS and callable(attr):
             def wrapper(*args, **kwargs):
-                # PR-0.4: LLM 限流（仅日志，不实际拒答，PR-2.4 才接 429）
+                # 限流 + 熔断
                 from backend.infra.llm.rate_limiter import get_rate_limiter
+                from backend.infra.circuit_breaker import llm_circuit_breaker
                 user_id = kwargs.get("user_id") or _thread_local_user_id()
                 get_rate_limiter().acquire(user_id=user_id)
-                result = attr(*args, **kwargs)
+                result = llm_circuit_breaker.call(attr, *args, **kwargs)
                 _record_tokens(result)
                 return _wrap_result(result)
             return wrapper
         return attr
 
     def __call__(self, *args, **kwargs):
-        # PR-0.4: LLM 限流
+        # 限流 + 熔断
         from backend.infra.llm.rate_limiter import get_rate_limiter
+        from backend.infra.circuit_breaker import llm_circuit_breaker
         user_id = kwargs.get("user_id") or _thread_local_user_id()
         get_rate_limiter().acquire(user_id=user_id)
-        result = _resolve_active_llm().invoke(*args, **kwargs)
+        result = llm_circuit_breaker.call(_resolve_active_llm().invoke, *args, **kwargs)
         _record_tokens(result)
         return _wrap_result(result)
 
