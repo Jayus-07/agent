@@ -12,14 +12,15 @@
 - **ADR-0003 · 目录分层重构提案**（Proposed）
   路径：`docs/architecture/adr/0003-directory-layering.md`
   范围：~215 处 import 路径改动，4 个子 PR，8 天工作量
-  状态：等 PR-1.4 完成才实施（避免与 RAGChain 拆解双重冲击）
+  状态：PR-1.4 已完成，可开始实施（4 个子 PR，8 天工作量）
 
-- **ADR-0002 · 拆解 RAGChain god class**（Partially Accepted）
+- **ADR-0002 · 拆解 RAGChain god class**（✅ Accepted — 2026-08-04）
   路径：`docs/architecture/adr/0002-ragchain-decomposition.md`
   - PR-1.1: 抽 `EvidenceGateController`（✅ 2026-08-04）
-  - PR-1.2: 抽 `SelfCorrectionStrategy`（待）
-  - PR-1.3: 抽 `CitationFormatter`（待）
-  - PR-1.4: `RAGChain` 瘦身为 orchestrator（待）
+  - PR-1.2: 抽 `SelfCorrectionStrategy`（✅ 2026-08-04）
+  - PR-1.3: 抽 `CitationFormatter`（✅ 2026-08-04）
+  - PR-1.4: `RAGChain` 瘦身为 orchestrator — 接线 3 策略对象（✅ 2026-08-04）
+  结果：886 行 → 695 行（-191），删除 4 个模块级函数 + 3 个方法 + 5 个字段
 
 - **ADR-0001 · 合并 Skill 双注册表**（Accepted，已合并）
   路径：`docs/architecture/adr/0001-merge-dual-registry.md`
