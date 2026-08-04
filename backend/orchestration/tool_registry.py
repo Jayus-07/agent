@@ -67,7 +67,7 @@ class ToolRegistry:
 
         所有 Skill 已在 registry 模块级注册（PR-2.x 消除外部惰性加载）。
         """
-        from backend.orchestration.skills.registry import _registry as skills
+        from backend.skills.registry import _registry as skills
         return skills
 
     # =====================================================

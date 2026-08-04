@@ -48,14 +48,14 @@ async def call_skill(skill_name: str, capability: str, params: dict) -> dict:
     Returns:
         dict: Skill 输出
     """
-    from backend.orchestration.skills.base import BaseSkill
-    from backend.orchestration.skills.sql.skill import SQLSkill
-    from backend.orchestration.skills.rag.skill import RAGSkill
-    from backend.orchestration.skills.report.skill import ReportSkill
-    from backend.orchestration.skills.email.skill import EmailSkill
-    from backend.orchestration.skills.data_export.skill import DataExportSkill
-    from backend.orchestration.skills.web_search.skill import WebSearchSkill
-    from backend.orchestration.skills.web_crawl.skill import WebCrawlSkill
+    from backend.skills.base import BaseSkill
+    from backend.skills.sql.skill import SQLSkill
+    from backend.skills.rag.skill import RAGSkill
+    from backend.skills.report.skill import ReportSkill
+    from backend.skills.email.skill import EmailSkill
+    from backend.skills.data_export.skill import DataExportSkill
+    from backend.skills.web_search.skill import WebSearchSkill
+    from backend.skills.web_crawl.skill import WebCrawlSkill
 
     skill_map: dict[str, type] = {
         "sql": SQLSkill,

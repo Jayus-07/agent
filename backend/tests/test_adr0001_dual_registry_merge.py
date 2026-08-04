@@ -7,7 +7,7 @@ test_adr0001_dual_registry_merge.py — ADR-0001 验证
 import pytest
 
 # 触发 Skill 包注册
-from backend.orchestration.skills import (  # noqa: F401
+from backend.skills import (  # noqa: F401
     sql, rag, report, email, data_export, web_search, web_crawl,
 )
 from backend.orchestration.tool_registry import tool_registry
@@ -18,7 +18,7 @@ class TestADRDualRegistryMerge:
 
     def test_all_skills_have_required_metadata(self):
         """每个 Skill 必须声明 description 和 examples（__init_subclass__ 校验）"""
-        from backend.orchestration.skills.registry import _registry
+        from backend.skills.registry import _registry
 
         for cap, skill in _registry.items():
             assert skill.description, f"{skill.name} 缺少 description"
@@ -111,7 +111,7 @@ class TestNewSkillWorkflow:
 
     def test_base_skill_rejects_missing_metadata(self):
         """缺 description 时，子类加载直接报错（编译期防御）"""
-        from backend.orchestration.skills.base import BaseSkill
+        from backend.skills.base import BaseSkill
 
         with pytest.raises(TypeError, match="description"):
             class BadSkill(BaseSkill):
@@ -124,7 +124,7 @@ class TestNewSkillWorkflow:
 
     def test_base_skill_rejects_missing_examples(self):
         """缺 examples 时报错"""
-        from backend.orchestration.skills.base import BaseSkill
+        from backend.skills.base import BaseSkill
 
         with pytest.raises(TypeError, match="examples"):
             class BadSkill(BaseSkill):

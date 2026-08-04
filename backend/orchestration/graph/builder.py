@@ -23,7 +23,7 @@ from backend.orchestration.tool_registry import tool_registry
 from backend.shared.logger import logger
 
 # 触发 Skill 包自注册（必须在 build_graph() 之前 import）
-import backend.orchestration.skills  # noqa: F401
+import backend.skills  # noqa: F401
 
 
 # 节点名 → 用户可读的阶段标签
