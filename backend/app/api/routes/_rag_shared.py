@@ -82,3 +82,11 @@ class SearchRequest(BaseModel):
     query: str = ""
 
 
+# `import *` 不导出 _ 前缀名，需要显式声明（供 rag_documents/rag_upload/rag_search 使用）
+__all__ = [
+    "_progress_queues", "_sse_encode",
+    "_get_registry", "_get_op_logger", "_extract_source", "_safe_log_op",
+    "SearchRequest",
+]
+
+
