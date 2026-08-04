@@ -30,6 +30,11 @@ RERANK_TIMEOUT = int(os.getenv("RERANK_TIMEOUT", "15"))
 # 异步并发控制
 LLM_MAX_CONCURRENCY = int(os.getenv("LLM_MAX_CONCURRENCY", "4"))
 
+# LLM 限流（PR-0.4 P0 限流 — 仅日志，不实际 429）
+# 100 QPS 全局、1000 burst（允许短时尖峰）
+LLM_RATE_LIMIT_QPS = float(os.getenv("LLM_RATE_LIMIT_QPS", "100"))
+LLM_RATE_LIMIT_BURST = float(os.getenv("LLM_RATE_LIMIT_BURST", "1000"))
+
 # DeepSeek 配置（用于多 LLM provider 切换）
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")

@@ -25,6 +25,23 @@ from backend.shared.logger import logger
 _default_llm = None
 _default_lock = threading.Lock()
 
+# PR-0.4: 当前请求的 user_id（限流用）— 调用方可通过 set_current_user_id() 设置
+_user_lock = threading.Lock()
+_current_user_id: str | None = None
+
+
+def set_current_user_id(user_id: str | None) -> None:
+    """设置当前线程/请求的 user_id（限流用）。FastAPI 路由层在每次请求开始时调用。"""
+    global _current_user_id
+    with _user_lock:
+        _current_user_id = user_id
+
+
+def _thread_local_user_id() -> str | None:
+    """读取当前 user_id（限流用）。"""
+    with _user_lock:
+        return _current_user_id
+
 
 def _get_provider_for(model_name: str) -> str:
     """根据模型名查找所属 provider"""
@@ -176,6 +193,10 @@ class _LLMProxy:
         attr = getattr(target, name)
         if name in self._WRAP_METHODS and callable(attr):
             def wrapper(*args, **kwargs):
+                # PR-0.4: LLM 限流（仅日志，不实际拒答，PR-2.4 才接 429）
+                from backend.infra.llm.rate_limiter import get_rate_limiter
+                user_id = kwargs.get("user_id") or _thread_local_user_id()
+                get_rate_limiter().acquire(user_id=user_id)
                 result = attr(*args, **kwargs)
                 _record_tokens(result)
                 return _wrap_result(result)
@@ -183,6 +204,10 @@ class _LLMProxy:
         return attr
 
     def __call__(self, *args, **kwargs):
+        # PR-0.4: LLM 限流
+        from backend.infra.llm.rate_limiter import get_rate_limiter
+        user_id = kwargs.get("user_id") or _thread_local_user_id()
+        get_rate_limiter().acquire(user_id=user_id)
         result = _resolve_active_llm().invoke(*args, **kwargs)
         _record_tokens(result)
         return _wrap_result(result)
