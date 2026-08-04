@@ -4,8 +4,10 @@
 
 ```bash
 cd backend
-..\.venv\Scripts\python.exe -m uvicorn app.server:app --reload
+..\.venv\Scripts\python.exe -m uvicorn app.server:app --reload --host 127.0.0.1 --port 8000
 ```
+
+> **注意：** `--reload` 只监听已存在文件的修改。新增 Python 文件/路由后必须手动重启，否则 404。
 
 ## 前端启动
 

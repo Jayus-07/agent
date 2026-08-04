@@ -48,7 +48,7 @@ class ParsedQuery:
         if self.doc_types:
             f["doc_type"] = self.doc_types[0] if len(self.doc_types) == 1 else self.doc_types
         if self.domains:
-            f["domain"] = self.domains[0]
+            f["business_domain"] = self.domains[0]  # 与 chunk metadata 字段名对齐
         if self.time_range_start:
             f["time_start"] = self.time_range_start
             f["time_end"] = self.time_range_end
@@ -221,11 +221,12 @@ class QueryAnalyzer:
         except Exception:
             pass
 
-        # ── Doc type ──
+        # ── Doc type（兼容 V2 (pattern, weight) 元组格式）──
         try:
             from backend.config import DOC_TYPE_RULES
-            for dtype, patterns in DOC_TYPE_RULES.items():
-                for pat in patterns:
+            for dtype, rules in DOC_TYPE_RULES.items():
+                for rule in rules:
+                    pat = rule[0] if isinstance(rule, (tuple, list)) else rule
                     if re.search(pat, query):
                         pq.doc_types.append(dtype)
                         break

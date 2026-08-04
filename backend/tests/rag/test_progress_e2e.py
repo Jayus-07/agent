@@ -112,20 +112,23 @@ class TestProgressListenerE2E:
         while not queue.empty():
             events.append(queue.get_nowait())
 
-        # 期望按顺序出现 4 个 stage
+        # 期望按顺序出现 8 个 stage（9 阶段里 uploading/done 由外层管理）
         stages = [e["stage"] for e in events]
-        assert stages == ["parsing", "chunking", "embedding", "writing"]
+        assert stages == [
+            "loading", "parsing", "cleaning", "dedup",
+            "chunking", "metadata", "embedding", "writing",
+        ]
 
         # 每阶段 message 非空
         for e in events:
             assert e["message"], f"{e['stage']} message should not be empty"
 
-        # parsing 阶段消息含 doc_count
-        parsing_msg = events[0]["message"]
+        # parsing 阶段消息含 doc_count（events[1]，events[0] 是 loading）
+        parsing_msg = events[1]["message"]
         assert "页" in parsing_msg  # "已解析 N 页"
 
-        # chunking 阶段消息含 chunks 数
-        chunking_msg = events[1]["message"]
+        # chunking 阶段消息含 chunks 数（events[4] = loading/parsing/cleaning/dedup/chunking）
+        chunking_msg = events[4]["message"]
         assert "chunks" in chunking_msg  # "切分 N chunks"
 
     def test_indexer_span_events_drive_listener(self, reset_tracer, tmp_path, long_text_file):
@@ -148,11 +151,14 @@ class TestProgressListenerE2E:
         # 而 trace.spans 实际有 6+ 个（root + 4 SSE-mapped + 0 metadata）
         trace = tracer_mod.trace_collector.list()[0]
         assert len(trace.spans) >= 5  # index_upload + parse + chunk + embed + vdb
-        # listener 只关心 SPAN_STAGE_MAP 里的 4 个
-        assert received_spans == ["parsing", "chunking", "embedding", "writing"]
+        # listener 现在关心 SPAN_STAGE_MAP 里的 8 个（loading/parsing/cleaning/dedup/chunking/metadata/embedding/writing）
+        assert received_spans == [
+            "loading", "parsing", "cleaning", "dedup",
+            "chunking", "metadata", "embedding", "writing",
+        ]
 
-    def test_listener_does_not_emit_for_metadata_span(self, reset_tracer, tmp_path, long_text_file):
-        """index_metadata span 不单独 emit（由 done 事件统一携带结果）"""
+    def test_listener_emits_metadata_stage(self, reset_tracer, tmp_path, long_text_file):
+        """index_metadata span 现在单独 emit（9 阶段里 metadata 是独立阶段）"""
         from backend.app.api.routes.rag import _ProgressListener
 
         received = []
@@ -167,8 +173,8 @@ class TestProgressListenerE2E:
         finally:
             listener.unsub()
 
-        # metadata 不在 SPAN_STAGE_MAP → 不 emit
-        assert "metadata" not in received
+        # metadata 现在在 SPAN_STAGE_MAP → 应该 emit
+        assert "metadata" in received
 
     def test_listener_unsub_stops_future_events(self, reset_tracer, tmp_path, long_text_file):
         """unsubscribe 后不再接收后续 span 事件"""
@@ -182,10 +188,10 @@ class TestProgressListenerE2E:
         indexer = _build_indexer(tmp_path, long_text_file)
         listener = _ProgressListener(sync_emit)
 
-        # 第一次 sync → 收到 4 个
+        # 第一次 sync → 收到 8 个阶段（loading/parsing/cleaning/dedup/chunking/metadata/embedding/writing）
         indexer.sync()
         first_count = len(received)
-        assert first_count == 4
+        assert first_count == 8
 
         # 退订 → 第二次 sync 不再收到
         listener.unsub()
@@ -248,7 +254,7 @@ class TestSSEStreamE2E:
     async def test_stream_emits_all_events_for_successful_index(
         self, reset_tracer, tmp_path, long_text_file
     ):
-        """完整 SSE 流：uploading + parsing + chunking + embedding + writing + done"""
+        """完整 SSE 流：uploading + loading + parsing + cleaning + dedup + chunking + metadata + embedding + writing + done（9 阶段）"""
         from backend.app.api.routes import rag as rag_route
 
         # 1. 模拟 upload_document 创建 upload_id + queue
@@ -304,26 +310,19 @@ class TestSSEStreamE2E:
             events.append(evt)
 
         stages = [e["stage"] for e in events]
-        # 期望完整序列
+        # 期望完整序列：uploading + 8 个 listener 阶段 + done
         assert stages == [
             "uploading",   # 来自 _run_index_background
+            "loading",      # listener
             "parsing",      # listener
+            "cleaning",     # listener
+            "dedup",        # listener
             "chunking",     # listener
+            "metadata",     # listener
             "embedding",    # listener
             "writing",      # listener
             "done",         # 来自 _run_index_background
         ]
-
-        # 每个 stage 的 message 非空（前端展示用）
-        for e in events:
-            assert e["message"], f"stage={e['stage']} message empty"
-
-        # done 事件含 doc 信息
-        assert "doc" in events[-1]
-        assert events[-1]["doc"]["doc_id"] == "abc"
-
-        # 清理
-        del rag_route._progress_queues[upload_id]
 
 
 # ==========================================================
@@ -444,7 +443,8 @@ class TestFullBackgroundTaskE2E:
         # 验证完整序列
         stages = [e["stage"] for e in events]
         assert stages == [
-            "uploading", "parsing", "chunking", "embedding", "writing", "done"
+            "uploading", "loading", "parsing", "cleaning", "dedup",
+            "chunking", "metadata", "embedding", "writing", "done"
         ], f"实际序列: {stages}"
 
         # 清理

@@ -6,7 +6,7 @@ import ChatView from '@/components/ChatView'
 import HistorySidebar from '@/components/chat/HistorySidebar'
 
 export default function AgentChatPage() {
-  const [showHistory, setShowHistory] = useState(false)
+  const [showHistory, setShowHistory] = useState(true)
 
   return (
     <div className="flex-1 flex min-h-0">

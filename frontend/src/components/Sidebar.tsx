@@ -1,6 +1,6 @@
 'use client'
 
-import { Sparkles, PanelLeft, PanelLeftClose, LayoutDashboard, Download, Cog, Database, BookOpen, Brain, Activity } from 'lucide-react'
+import { Sparkles, PanelLeft, PanelLeftClose, LayoutDashboard, Download, Cog, Database, BookOpen, Brain, Activity, FileText, AlertTriangle, Clock } from 'lucide-react'
 import NavGroup from './layout/NavGroup'
 
 interface Props { collapsed: boolean; onToggle: () => void }
@@ -29,8 +29,7 @@ const NAV = [
     items: [
       { label: '概览', path: '/knowledge' },
       { label: '文档管理', path: '/knowledge/documents' },
-      { label: 'Chunk 查看', path: '/knowledge/chunks' },
-      { label: '检索测试', path: '/knowledge/playground' },
+      { label: '文档操作', path: '/knowledge/operations' },
     ],
   },
   {
@@ -42,14 +41,16 @@ const NAV = [
     ],
   },
   {
-    icon: <Activity size={18} />, label: '可观测中心',
-    items: [
-      { label: '链路追踪', path: '/observability/traces' },
-      { label: '告警中心', path: '/observability/alerts' },
-      { label: 'Agent Trace', path: '/observability/agent-trace' },
-      { label: 'LLM 调用', path: '/observability/llm' },
-      { label: 'RAG 指标', path: '/observability/rag' },
-    ],
+    icon: <FileText size={18} />, label: '报告中心', path: '/reports',
+  },
+  {
+    icon: <AlertTriangle size={18} />, label: '告警中心', path: '/alerts',
+  },
+  {
+    icon: <Clock size={18} />, label: '定时任务', path: '/schedules',
+  },
+  {
+    icon: <Activity size={18} />, label: '链路追踪', path: '/observability/traces',
   },
 ]
 

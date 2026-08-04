@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useChatStore } from '@/store/chat'
 import { useSendMessage } from '@/hooks/useChat'
 import MessageList from './MessageList'
@@ -38,9 +39,22 @@ export default function ChatView() {
     }
   }, [])
 
+  const searchParams = useSearchParams()
+  const loadHistory = useChatStore((s) => s.loadHistory)
+  const switchSession = useChatStore((s) => s.switchSession)
+
   useEffect(() => {
     if (!userScrolling) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, messages[messages.length - 1]?.content, userScrolling])
+
+  // 加载历史会话
+  useEffect(() => {
+    const sessionParam = searchParams.get('session')
+    if (sessionParam) {
+      switchSession(sessionParam)
+      loadHistory(sessionParam)
+    }
+  }, [searchParams])
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -54,12 +68,6 @@ export default function ChatView() {
           </button>
         </div>
       )}
-
-      {/* Top bar: LLM switcher + MultiQuery toggle */}
-      <div className="shrink-0 px-5 py-2.5 flex items-center justify-end gap-2">
-        <MultiQueryToggle />
-        <LLMSwitcher />
-      </div>
 
       {/* Memory context panel */}
       <ContextPanel sessionId={currentId} />
@@ -82,7 +90,7 @@ export default function ChatView() {
       {/* Stop button */}
       {isLoading && (
         <div className="shrink-0 flex justify-center pb-2">
-          <button onClick={stopStream}
+          <button type="button" onClick={stopStream}
             className="flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-accent/5 border border-accent/20
               text-accent text-xs hover:bg-accent/10 transition-all duration-200">
             <span className="inline-block w-1.5 h-1.5 rounded-sm bg-accent animate-pulse" />
@@ -90,6 +98,12 @@ export default function ChatView() {
           </button>
         </div>
       )}
+
+      {/* 工具栏 — 输入框正上方，同宽靠右 */}
+      <div className="shrink-0 max-w-[720px] mx-auto w-full px-4 pb-1 flex items-center justify-end gap-2">
+        <MultiQueryToggle />
+        <LLMSwitcher />
+      </div>
 
       <ChatInput onSend={send} isLoading={isLoading} />
     </div>

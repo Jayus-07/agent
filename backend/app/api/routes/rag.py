@@ -1,14 +1,16 @@
 """RAG 路由 — 知识库检索问答 + 文档管理"""
 import asyncio
-import os, uuid, json
+import os, uuid, json, time
 from asyncio import Queue
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
-from backend.app.api.deps import get_rag_pipeline
+from backend.app.api.deps import get_rag_pipeline, require_rag_ready, get_rag_status
 from backend.rag.indexing.doc_registry import DocumentRegistry
 from backend.rag.indexing.indexer import IncrementalIndexer
-from backend.config import DOC_REGISTRY_PATH, CHROMA_PATH, EMBEDDING_MODEL_PATH
+from backend.rag.indexing.operation_log import DocumentOperationLogger
+from backend.config import DOC_REGISTRY_PATH, DOC_OPERATION_LOG_PATH, CHROMA_PATH, EMBEDDING_MODEL_PATH
+from backend.config.rag import METADATA_SCHEMA_FINGERPRINT
 from backend.shared.logger import logger
 
 # ── Upload 进度队列（按 upload_id 索引） ───────────────────────
@@ -38,6 +40,59 @@ def _get_registry() -> DocumentRegistry:
     return _registry
 
 
+_op_logger: DocumentOperationLogger | None = None
+
+
+def _get_op_logger() -> DocumentOperationLogger:
+    global _op_logger
+    if _op_logger is None:
+        _op_logger = DocumentOperationLogger(DOC_OPERATION_LOG_PATH)
+    return _op_logger
+
+
+def _extract_source(request: Request) -> str:
+    """提取操作来源：IP | User-Agent（auth 接入后可加 user_id）。"""
+    client_host = request.client.host if request.client else "unknown"
+    ua = request.headers.get("user-agent", "")
+    return f"{client_host} | {ua}"
+
+
+def _safe_log_op(
+    doc_id: str, doc_name: str, operation: str, source: str,
+    trace_id: str | None = None, batch_id: str | None = None,
+    result: str = "success", detail: dict | None = None,
+    duration_ms: int = 0,
+) -> None:
+    """记录操作日志，失败不影响主流程（审计日志写挂不能阻断业务）。"""
+    try:
+        _get_op_logger().log(
+            doc_id=doc_id, doc_name=doc_name, operation=operation, source=source,
+            trace_id=trace_id, batch_id=batch_id, result=result, detail=detail,
+            duration_ms=duration_ms,
+        )
+    except Exception as e:
+        logger.warning(f"[RAG] 记录操作日志失败 ({operation}): {e}")
+
+
+@router.get("/health")
+async def rag_health():
+    """RAG 管道就绪检查 — 前端上传前轮询此端点。"""
+    return get_rag_status()
+
+@router.get("/knowledge-bases")
+async def list_knowledge_bases():
+    """返回知识库列表（含文档计数）。"""
+    from backend.config.knowledge_base import get_kb_list
+    kbs = get_kb_list()
+    try:
+        reg = _get_registry()
+        for kb in kbs:
+            kb["doc_count"] = reg.count_by_kb_id(kb["id"])
+    except Exception:
+        for kb in kbs:
+            kb["doc_count"] = 0
+    return {"knowledge_bases": kbs}
+
 @router.get("/stats")
 async def get_stats():
     """知识库统计"""
@@ -63,20 +118,54 @@ async def list_documents(
     keyword: str = "",
     type: str = "",
     status: str = "",
+    doc_type: str = "",
+    kb_id: str = "",
+    department: str = "",
+    confidence_min: float = 0,
+    llm_used: bool | None = None,
+    quality_min: float = 0,
+    sort_by: str = "updated_at",
     page: int = 1,
     page_size: int = 20,
 ):
-    """文档列表 — 支持搜索、分页、类型/状态过滤"""
+    """文档列表 — 支持搜索、分页、元数据过滤"""
     try:
         reg = _get_registry()
 
-        # 统一走 search() 保证分页一致（无过滤条件时等效于全量分页）
         result = reg.search(
             keyword=keyword, type_filter=type, status_filter=status or "active",
+            doc_type=doc_type, kb_id=kb_id, department=department,
+            confidence_min=confidence_min,
+            llm_used=llm_used, quality_min=quality_min, sort_by=sort_by,
             page=page, page_size=page_size,
         )
         docs = result["items"]
         total = result["total"]
+
+        # 批量查询每个文档的最新操作日志
+        doc_ids = [d["doc_id"] for d in docs]
+        last_ops: dict[str, dict] = {}
+        last_traces: dict[str, str] = {}
+        if doc_ids:
+            import sqlite3
+            placeholders = ",".join(["?"] * len(doc_ids))
+            op_conn = sqlite3.connect(DOC_OPERATION_LOG_PATH)
+            op_conn.row_factory = sqlite3.Row
+            rows = op_conn.execute(
+                f"SELECT doc_id, operation, created_at, trace_id, result FROM doc_operation_log "
+                f"WHERE id IN (SELECT MAX(id) FROM doc_operation_log WHERE doc_id IN ({placeholders}) GROUP BY doc_id)",
+                doc_ids,
+            ).fetchall()
+            last_ops = {r["doc_id"]: dict(r) for r in rows}
+            trace_rows = op_conn.execute(
+                f"SELECT doc_id, trace_id FROM doc_operation_log "
+                f"WHERE trace_id IS NOT NULL AND trace_id != '' AND doc_id IN ({placeholders}) "
+                f"AND id IN (SELECT MAX(id) FROM doc_operation_log "
+                f"WHERE trace_id IS NOT NULL AND trace_id != '' AND doc_id IN ({placeholders}) GROUP BY doc_id)",
+                [*doc_ids, *doc_ids],
+            ).fetchall()
+            last_traces = {r["doc_id"]: r["trace_id"] for r in trace_rows}
+            op_conn.close()
 
         embedding_model_name = os.path.basename(EMBEDDING_MODEL_PATH)
 
@@ -101,6 +190,17 @@ async def list_documents(
                 "updated_at": d.get("updated_at"),
                 "parse_time_ms": None,   # 预留，后续接入
                 "index_time_ms": None,   # 预留，后续接入
+                "doc_type": d.get("doc_type", ""),
+                "business_domain": d.get("business_domain", ""),
+                "last_operation": last_ops.get(d["doc_id"], {}).get("operation", ""),
+                "last_operation_at": last_ops.get(d["doc_id"], {}).get("created_at", ""),
+                "last_trace_id": last_traces.get(d["doc_id"], ""),
+                "last_operation_result": last_ops.get(d["doc_id"], {}).get("result", ""),
+                "metadata_fingerprint": d.get("metadata_fingerprint", ""),
+                "doc_version": d.get("doc_version", 1),
+                "kb_id": d.get("kb_id", "policy_general"),
+                "department": d.get("department", ""),
+                "kb_version": d.get("kb_version", "v1"),
             }
 
         return {
@@ -108,10 +208,29 @@ async def list_documents(
             "total": total,
             "page": result["page"],
             "page_size": result["page_size"],
+            "current_fingerprint": METADATA_SCHEMA_FINGERPRINT,
         }
     except Exception as e:
         logger.error(f"[RAG] documents 失败: {e}")
         return {"documents": [], "total": 0, "error": str(e)}
+
+
+@router.get("/operations")
+async def list_operations(
+    page: int = 1,
+    page_size: int = 20,
+    operation: str = "",
+    doc_id: str = "",
+    batch_id: str = "",
+):
+    """文档操作审计日志 — 谁上传/重索引/删除了哪个文档，含 trace_id + batch_id 关联"""
+    try:
+        return _get_op_logger().list(
+            page=page, page_size=page_size, operation=operation, doc_id=doc_id, batch_id=batch_id,
+        )
+    except Exception as e:
+        logger.error(f"[RAG] operations 失败: {e}")
+        return {"items": [], "total": 0, "error": str(e)}
 
 
 @router.get("/documents/{doc_id}")
@@ -159,124 +278,347 @@ async def get_document(doc_id: str):
 
 
 @router.post("/documents/{doc_id}/reindex")
-async def reindex_document(doc_id: str, force: bool = False):
+async def reindex_document(doc_id: str, request: Request, force: bool = False):
     """单文件重新索引 — 删除旧向量后重新加载/分块/Embedding/写入"""
+    require_rag_ready()
     from backend.config import DOCS_DIRECTORY
-    from backend.rag.indexing.indexer import IncrementalIndexer
-    from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
-    from langchain_huggingface import HuggingFaceEmbeddings
+    source = _extract_source(request)
+    batch_id = request.headers.get("X-Batch-Id") or None
+    doc_name = ""
 
     try:
+        _t0 = time.time()
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
         if not doc:
             return {"ok": False, "error": "文档不存在"}
+        doc_name = doc.get("file_name", "")
 
         file_path = doc.get("file_path", "")
         if not file_path or not os.path.isfile(file_path):
             return {"ok": False, "error": f"文件不存在: {file_path}"}
 
-        # 初始化向量库和索引器
-        embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
-        vectordb = ChromaKnowledgeStore(persist_directory=CHROMA_PATH, embedding_function=embeddings)
-        doc_db = ChromaKnowledgeStore(persist_directory=os.path.join(os.path.dirname(CHROMA_PATH), "doc_db"), embedding_function=embeddings)
-        indexer = IncrementalIndexer(DOCS_DIRECTORY, vectordb, doc_db, embeddings, reg)
+        # 复用 pipeline 单例的 store/embedding（不再每次 new 加载模型；doc_db 路径与 upload 一致）
+        pipeline = get_rag_pipeline()
+        indexer = IncrementalIndexer(
+            DOCS_DIRECTORY, pipeline.vectordb, pipeline.doc_db, pipeline.embedding, reg,
+        )
 
         # 执行重索引
         result = indexer.reindex_file(file_path)
+        elapsed_ms = int((time.time() - _t0) * 1000)
 
-        # 获取更新后的文档信息
-        updated_doc = reg.get_by_doc_id(doc_id)
+        # 获取更新后的文档信息（含 metadata 字段）
+        updated_doc = reg.get_by_doc_id(doc_id) or {}
+        _safe_log_op(doc_id, doc_name, "reindex", source,
+                     trace_id=result.get("trace_id") or None, batch_id=batch_id,
+                     result="success", duration_ms=elapsed_ms,
+                     detail={"chunk_count": result.get("chunk_count", 0),
+                             "file_hash": result.get("file_hash", ""),
+                             "doc_type": updated_doc.get("doc_type", "general"),
+                             "llm_used": bool(updated_doc.get("llm_used", False)),
+                             "confidence": updated_doc.get("confidence", 0)})
+
         return {"ok": True, "doc_id": doc_id, "chunk_count": result.get("chunk_count", 0), "hash": result.get("file_hash", ""), "doc": updated_doc}
     except Exception as e:
         logger.error(f"[RAG] reindex 失败: {e}")
+        _safe_log_op(doc_id, doc_name, "reindex", source, trace_id=None, batch_id=batch_id,
+                     result="failed", duration_ms=int((time.time() - _t0) * 1000) if '_t0' in dir() else 0,
+                     detail={"error": str(e)[:200]})
         return {"ok": False, "error": str(e)}
 
 
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...)):
-    """上传文档 → 保存到 data/docs/ → 触发后台增量索引 → 返回 upload_id 用于 SSE 订阅
-
-    两阶段流程：
-      1. POST 立即保存文件 + 返回 upload_id（不等索引）
-      2. 前端 GET /upload/{upload_id}/stream 订阅 SSE，接收真实索引进度
-    """
-    from backend.config import DOCS_DIRECTORY
+async def upload_document(request: Request, file: UploadFile = File(...),
+                          kb_id: str = Form("policy_general"),
+                          department: str = Form("general")):
+    """P0-1 流式上传: 临时文件 + atomic rename + 双保险大小限制 + SSE 进度"""
+    require_rag_ready()
+    from backend.config.knowledge_base import validate_kb_dept
+    if not validate_kb_dept(kb_id, department):
+        return {"ok": False, "error": f"知识库 '{kb_id}' 不允许选择部门 '{department}'"}
+    from backend.config.rag import (
+        RAG_MAX_FILE_SIZE, RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE,
+        RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS,
+    )
 
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
     if ext not in ("pdf", "md", "txt", "docx"):
-        return {"ok": False, "error": f"不支持的文件格式: .{ext}"}
+        return {"ok": False, "error": f"ext not allowed: .{ext}"}
 
-    # 保存文件
-    docs_dir = DOCS_DIRECTORY
-    os.makedirs(docs_dir, exist_ok=True)
-    # P1.5+ 修复：normalize path，避免 os.path.join 混合分隔符导致 registry 查询不匹配
-    # db 里存的 path 是纯 '\\'，query 必须用同样的格式
-    filepath = os.path.normpath(os.path.join(docs_dir, file.filename))
-    content = await file.read()
-    with open(filepath, "wb") as f:
-        f.write(content)
+    max_size = RAG_MAX_FILE_SIZE * 1024 * 1024
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > max_size:
+        return {"ok": False, "error": f"file too large (max {RAG_MAX_FILE_SIZE}MB)"}
 
-    # 创建 upload_id + 进度队列
+    try:
+        # sync_upload_impl 现在是 async def, 不需要 threadpool 包装
+        # (file.read() 是 async, 必须在 async context 调, 同步 I/O 也用 sync open/write)
+        result = await sync_upload_impl(
+            file, request, max_size,
+            RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE, RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS,
+            kb_id=kb_id, department=department,
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"upload failed: {type(e).__name__}: {e}"}
+    if not result.get("ok"):
+        return result
+
+    asyncio.create_task(_run_index_background(
+        result["upload_id"], result["filepath"], result["filename"],
+        result["source"], result["batch_id"], kb_id=kb_id, department=department,
+        upload_elapsed_ms=result.get("upload_elapsed_ms"),
+    ))
+    return {"ok": True, "upload_id": result["upload_id"], "filename": result["filename"]}
+
+
+
+
+async def sync_upload_impl(
+    file, request, max_size, tmp_dir, chunk_size, emit_bytes, emit_ms,
+    kb_id: str = "policy_general", department: str = "general",
+) -> dict:
+    """P0-1 流式上传 (async def, 直接在 upload_document 事件循环里跑).
+    file.read() 是 async method, 必须 await. 写文件是 sync (open + write).
+    """
+    import time
+    from backend.config.database import DOCS_DIRECTORY as _DOCS_DIRECTORY
+    _g = globals()
+    _progress_queues = _g["_progress_queues"]
+    _extract_source = _g["_extract_source"]
+
+    safe_name = os.path.basename(file.filename or "")
+    # 修复中文文件名乱码：尝试多种编码回编解码
+    if safe_name:
+        for enc in ('latin-1', 'cp1252', 'iso-8859-1'):
+            try:
+                raw = safe_name.encode(enc)
+                candidate = raw.decode('utf-8')
+                # 成功解码且包含中文字符 → 采纳
+                if any('一' <= c <= '鿿' for c in candidate):
+                    safe_name = candidate
+                    break
+            except (UnicodeDecodeError, UnicodeEncodeError):
+                continue
+    if not safe_name or safe_name.startswith("."):
+        return {"ok": False, "error": "invalid filename"}
+    # P1 fix: 用 realpath 解析 backend/data junction 符号链接
+    # 避免同一物理文件被存为两条不同 file_path 记录（SQLite 主键冲突 → 重复 doc_id）
+    abs_docs_dir = os.path.realpath(_DOCS_DIRECTORY)
+    final_dir = os.path.abspath(os.path.join(abs_docs_dir, kb_id, department))
+    final_path = os.path.normpath(os.path.join(final_dir, safe_name))
+    # 末尾再 realpath 一次（防御 abspath 残留符号链接组件）
+    final_path = os.path.realpath(final_path)
+    try:
+        if os.path.commonpath([abs_docs_dir, final_path]) != abs_docs_dir:
+            return {"ok": False, "error": "invalid path"}
+    except ValueError:
+        return {"ok": False, "error": "invalid path"}
+
+    ext = safe_name.rsplit(".", 1)[-1].lower()
     upload_id = uuid.uuid4().hex[:12]
+    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_path = f"{tmp_dir}/{upload_id}.{ext}"
+
+    # 真实 HTTP 上传耗时（POST body 接收 + 写临时文件 + atomic rename）
+    # 让前端"上传文件"阶段显示准确值，而非被减法逻辑吞掉为 0
+    _upload_t0_sync = time.time()
+
+    now = time.time()
+    expired = [uid for uid, q in _progress_queues.items()
+               if getattr(q, "_created_at", 0) < now - 1800]
+    for uid in expired:
+        _progress_queues.pop(uid, None)
+
     queue: Queue = Queue()
+    queue._created_at = now
     _progress_queues[upload_id] = queue
 
-    # 后台跑索引（不阻塞 HTTP 响应）
-    asyncio.create_task(_run_index_background(upload_id, filepath, file.filename))
+    # 进度推送: 在 async context 直接 queue.put_nowait (因为是 asyncio.Queue, 跨 coroutine 同一 loop OK)
+    def _safe_put(evt):
+        queue.put_nowait(evt)
 
-    return {"ok": True, "upload_id": upload_id, "filename": file.filename}
+    try:
+        total = 0
+        last_emit_bytes = 0
+        last_emit_time = time.time()
+        cl_str = request.headers.get("content-length", "0")
+        cl_int = int(cl_str) if cl_str.isdigit() else None
+
+        with open(tmp_path, "wb") as f:
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_size:
+                    return {"ok": False, "error": f"file too large (max {max_size//1024//1024}MB, uploaded {total} bytes)"}
+                f.write(chunk)
+
+                now_emit = time.time()
+                if total - last_emit_bytes >= emit_bytes or (now_emit - last_emit_time) * 1000 >= emit_ms:
+                    progress = int(total * 100 / max(cl_int or total, 1))
+                    _safe_put({
+                        "stage": "uploading",
+                        "progress": min(progress, 99),
+                        "bytes": total,
+                    })
+                    last_emit_bytes = total
+                    last_emit_time = now_emit
+
+        os.makedirs(final_dir, exist_ok=True)
+        os.replace(tmp_path, final_path)
+        _safe_put({"stage": "uploading", "progress": 100, "bytes": total})
+
+        return {
+            "ok": True,
+            "upload_id": upload_id,
+            "filepath": final_path,
+            "filename": safe_name,
+            "size": total,
+            "source": _extract_source(request),
+            "batch_id": request.headers.get("X-Batch-Id") or None,
+            "upload_elapsed_ms": int((time.time() - _upload_t0_sync) * 1000),
+        }
+    except Exception as e:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError as cleanup_error:
+                logger.warning(f"[RAG] 临时文件清理失败: {cleanup_error}")
+        return {"ok": False, "error": f"upload failed: {type(e).__name__}: {e}"}
 
 
-async def _run_index_background(upload_id: str, filepath: str, filename: str):
-    """后台执行索引，向 queue 推送阶段事件。"""
-    from backend.config import DOCS_DIRECTORY
-    from backend.rag.indexing.indexer import IncrementalIndexer
-    from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
-    from langchain_huggingface import HuggingFaceEmbeddings
+async def _cleanup_failed_upload(filepath: str) -> None:
+    """索引失败后删除已落盘文件，避免孤儿文档被后续扫描重新索引。"""
+    if not filepath:
+        return
+    try:
+        if os.path.isfile(filepath):
+            os.remove(filepath)
+            logger.info(f"[RAG] 已清理索引失败文件: {filepath}")
+    except OSError as exc:
+        logger.warning(f"[RAG] 索引失败文件清理失败 {filepath}: {exc}")
 
+
+async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general", upload_elapsed_ms: int | None = None):
+    """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志。
+
+    upload_elapsed_ms: sync_upload_impl 实测的 HTTP 上传耗时（POST + 写文件 + atomic rename）。
+    终态用此值填 stage_elapsed["uploading"]，避免被减法逻辑吞掉为 0。
+    total_ms 改为 upload_elapsed_ms + 后台索引耗时（端到端总耗时）。
+    """
     queue = _progress_queues.get(upload_id)
     if queue is None:
+        await _cleanup_failed_upload(filepath)
         return
 
     async def emit(stage: str, message: str = "", **extra):
         await queue.put({"stage": stage, "message": message, **extra})
 
+    _upload_t0 = time.time()
+    result = None
     try:
         await emit("uploading", f"文件 {filename} 已保存，开始索引")
 
-        # 同步索引（在线程池跑，不阻塞事件循环）
+        # 同步索引（在线程池跑，不阻塞事件循环）；返回含 trace_id
         loop = asyncio.get_running_loop()
-        # 把 loop 引用传给同步函数，让 run_coroutine_threadsafe 能把事件投回主 loop
-        await loop.run_in_executor(None, _do_index_sync, upload_id, filepath, filename, loop)
+        result = await loop.run_in_executor(None, _do_index_sync, upload_id, filepath, filename, loop, kb_id, department)
     except Exception as e:
         logger.error(f"[RAG] 后台索引失败: {e}")
+        await _cleanup_failed_upload(filepath)
         await emit("error", str(e))
-        await queue.put(None)  # sentinel
+        await queue.put(None)
+        _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
+                     result="failed", duration_ms=int((time.time() - _upload_t0) * 1000) + (upload_elapsed_ms or 0),
+                     detail={"error": str(e)[:200]})
         return
 
-    # 发送 done 事件（含新文档信息）
+    terminal = (result or {}).get("terminal", "done")
+    # span_id → 前端 stage 键的统一映射（终态阶段耗时使用同一规则）
+    _SPAN_STAGE_KEY = _ProgressListener.SPAN_STAGE_KEY
+    if terminal == "duplicate":
+        duplicate_doc = (result or {}).get("doc") or {}
+        stage_elapsed = (result or {}).get("stage_elapsed") or {}
+        # 用真实上传耗时覆盖（duplicate 跳过索引，后端算的 uploading 没意义）
+        if upload_elapsed_ms is not None:
+            stage_elapsed["uploading"] = upload_elapsed_ms
+        total_ms = (upload_elapsed_ms or 0) + int((time.time() - _upload_t0) * 1000)
+        await emit("duplicate", "文件已存在，未重复索引",
+                   doc=duplicate_doc, trace_id="", stage_elapsed=stage_elapsed, total_ms=total_ms)
+        await queue.put(None)
+        _safe_log_op(
+            duplicate_doc.get("doc_id", ""), filename, "upload", source,
+            trace_id="", batch_id=batch_id, result="duplicate",
+            duration_ms=total_ms,
+            detail={"duplicate": True, "chunk_count": duplicate_doc.get("chunk_count", 0)},
+        )
+        return
+
+    # 成功终态：按 path 直接拿刚索引的文档
+    new_doc = None
     try:
         reg = _get_registry()
-        docs = reg.list_active()
-        new_doc = next((d for d in docs if d["file_name"] == filename), None)
-        await emit("done", "索引完成", doc=new_doc)
+        new_doc = reg.get_by_path(filepath)
+        # 终态携带完整阶段耗时（来自后端 span duration_ms），覆盖前端累加
+        raw_elapsed = (result or {}).get("stage_elapsed") or {}
+        # span_id 转为前端 stage 键（如 index_chunk → chunking）
+        stage_elapsed: dict[str, int] = {}
+        for sid, ms in raw_elapsed.items():
+            stage_key = _SPAN_STAGE_KEY.get(sid, sid)
+            stage_elapsed[stage_key] = int(ms)
+        # 优先用 sync_upload_impl 实测的上传耗时；缺失时回退到减法逻辑（向后兼容）
+        index_elapsed_ms = int((time.time() - _upload_t0) * 1000)
+        total_ms = index_elapsed_ms + (upload_elapsed_ms or 0)
+        if upload_elapsed_ms is not None:
+            stage_elapsed["uploading"] = upload_elapsed_ms
+        elif "uploading" not in stage_elapsed:
+            others = sum(v for k, v in stage_elapsed.items() if k != "uploading")
+            stage_elapsed["uploading"] = max(total_ms - others, 0)
+        await emit("done", "索引完成", doc=new_doc,
+                   trace_id=(result or {}).get("trace_id") or "",
+                   stage_elapsed=stage_elapsed,
+                   total_ms=total_ms)
     except Exception as e:
         await emit("done", "索引完成（文档信息获取失败）")
+        logger.warning(f"[RAG] 获取入库文档信息失败: {e}")
     finally:
-        await queue.put(None)  # sentinel → SSE 关闭
+        await queue.put(None)
+
+    _safe_log_op(
+        (new_doc or {}).get("doc_id", ""), filename, "upload", source,
+        trace_id=(result or {}).get("trace_id") or None,
+        batch_id=batch_id, result="success",
+        duration_ms=int((time.time() - _upload_t0) * 1000),
+        detail={
+            "chunk_count": (result or {}).get("chunk_count", 0),
+            "file_hash": (result or {}).get("file_hash", ""),
+            "duplicate": False,
+            "doc_type": (new_doc or {}).get("doc_type", "general"),
+            "llm_used": bool((new_doc or {}).get("llm_used", False)),
+            "confidence": (new_doc or {}).get("confidence", 0),
+        },
+    )
 
 
-def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyncio.AbstractEventLoop):
-    """同步执行索引，通过 _progress_queues[upload_id] 推送阶段（从线程内调用）。"""
-    from backend.config import DOCS_DIRECTORY  # noqa: F401  （用于 _ProgressIndexingWrapper）
-    from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
-    from langchain_huggingface import HuggingFaceEmbeddings
+def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyncio.AbstractEventLoop, kb_id: str = "policy_general", department: str = "general"):
+    """同步执行索引，通过 _progress_queues[upload_id] 推送阶段（从线程内调用）。
+
+    P1 改造：
+      - 不再调 indexer.sync()（全盘扫描，会把已软删但原文件还在的文档判为 ADDED 重新索引→删除复活）。
+        改用 reindex_file() 单文件索引。duplicate 检测保留（reindex_file 不做 hash 比对）。
+      - 复用 pipeline 已加载的 embedding/vectordb/doc_db，避免每次上传重新加载 bge 模型。
+      - doc_db 用 pipeline.doc_db（DOC_DB_PATH），修复原误用同一个 store 导致 doc 全文写进 chunk 库。
+    """
+    from backend.config import DOCS_DIRECTORY  # noqa: F401
     import hashlib
 
     queue = _progress_queues.get(upload_id)
     if queue is None:
         return
+
+    # 同步索引开始时刻：用于 SSE uploading 阶段真实耗时；duplicate 也带上
+    _upload_t0_sync = time.time()
 
     def sync_emit(stage: str, message: str = "", **extra):
         """从同步线程调用：run_coroutine_threadsafe 把事件投到主 async loop 的队列"""
@@ -285,60 +627,89 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
         asyncio.run_coroutine_threadsafe(queue.put(evt), main_loop)
 
     try:
-        # P1.5+ 优化：检测文件是否已索引（SHA256 一致）→ 跳过 emit 完整 4 个 stage
-        # 避免用户上传重复文档时进度条"一闪而过"（之前只看到 uploading + done）
         reg = _get_registry()
+
+        # duplicate 检测：文件已索引且 SHA256 未变 → 跳过索引，emit duplicate stage
+        # （reindex_file 不做 hash 比对，会直接重灌，所以这里必须先拦）
         existing = reg.get_by_path(filepath)
+        # 文件大小用于 uploading 阶段的真实耗时（duplicate 也附带便于前端展示）
+        try:
+            _file_size = os.path.getsize(filepath)
+        except OSError:
+            _file_size = 0
         if existing and existing.get("status") == "active":
             with open(filepath, "rb") as f:
                 file_hash = hashlib.sha256(f.read()).hexdigest()
             if existing.get("file_hash") == file_hash:
                 logger.info(f"[RAG] 文件未变化，跳过索引: {filename}")
-                # emit 特殊 stage 'duplicate'，前端会显示"已存在"提示
-                sync_emit("duplicate", "文件已存在，未重复索引",
-                          doc={**existing, "duplicate": True})
-                return
+                return {
+                    "trace_id": "",
+                    "duplicate": True,
+                    "terminal": "duplicate",
+                    "doc": {**existing, "duplicate": True},
+                    "stage_elapsed": {"uploading": int((time.time() - _upload_t0_sync) * 1000)},
+                }
+            else:
+                logger.info(f"[RAG] 文件已变化，重新索引: {filename} (old={existing.get('file_hash','')[:12]} new={file_hash[:12]})")
+        elif existing:
+            logger.info(f"[RAG] 文件状态非 active ({existing.get('status')})，重新索引: {filename}")
+        else:
+            logger.info(f"[RAG] 新文件，首次索引: {filename} (path={filepath})")
 
-        embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
-        store = ChromaKnowledgeStore(persist_directory=CHROMA_PATH, embedding_function=embeddings)
-
-        # Phase 1.5: 用 _ProgressListener 订阅 TraceCollector 的 span end 事件
-        # 把 indexer 的 6 个标准 span 自动映射到前端 SSE 阶段
+        # 复用 pipeline 单例（启动时预热，此处通常毫秒级返回；若预热未完成会阻塞等待）
+        sync_emit("uploading", "正在初始化索引管道（首次 ~15s）...")
+        _pipe_t0 = time.time()
+        pipeline = get_rag_pipeline()
+        _pipe_elapsed = int((time.time() - _pipe_t0) * 1000)
+        if _pipe_elapsed > 3000:
+            logger.info(f"[RAG] 管道初始化耗时 {_pipe_elapsed}ms（可能预热未完成）")
         listener = _ProgressListener(sync_emit)
         indexer = IncrementalIndexer(
             docs_dir=DOCS_DIRECTORY,
-            vectordb=store,
-            doc_db=store,
-            embedding=embeddings,
+            vectordb=pipeline.vectordb,
+            doc_db=pipeline.doc_db,
+            embedding=pipeline.embedding,
             registry=reg,
+            kb_id=kb_id,
+            department=department,
         )
         try:
-            result = indexer.sync()
+            # 单文件索引（不再 sync 全盘扫描 → 不会复活已删文档 + 上传变快）
+            result = indexer.reindex_file(filepath)
         finally:
             listener.unsub()
         logger.info(f"[RAG] 上传索引完成: {filename} → {result}")
+        return result
     except Exception as e:
-        sync_emit("error", f"索引失败: {e}")
         raise
 
 
 class _ProgressListener:
-    """订阅 TraceCollector 的 span end 事件，把 indexer 的 6 个标准 span
-    映射到前端 SSE 阶段 (parsing / chunking / embedding / writing)。
+    """订阅 TraceCollector 的 span end 事件，把 indexer 的 9 个标准 span
+    映射到前端 SSE 阶段 (loading/parsing/cleaning/dedup/chunking/metadata/embedding/writing)。
 
     Phase 1.5: 替代原 _ProgressIndexingWrapper 的 monkey-patch，直接订阅
     TraceCollector 事件，避免与 indexer 内部逻辑耦合。
     """
 
-    # span_id → SSE stage 映射（None 表示不单独 emit，由 done 事件统一）
+    # span_id → SSE stage 映射；前端用 9 阶段展示，元数据也单独 emit
     SPAN_STAGE_MAP = {
+        "index_load":      "loading",
         "index_parse":     "parsing",
+        "index_clean":     "cleaning",
+        "index_dedup":     "dedup",
         "index_chunk":     "chunking",
+        "index_metadata":  "metadata",
         "index_embed":     "embedding",
         "index_vector_db": "writing",
-        # index_upload → uploading（已在 _run_index_background emit）
-        # index_metadata → 不单独 emit，由 done 事件携带最终结果
+        # 不再映射 index_upload → uploading：
+        # index_upload 是 root span，duration_ms ≈ 整个索引流程。
+        # 若映射，前端 uploading 字段会被误显示为总耗时。
+        # uploading 由 _run_index_background 的 total_ms - others 自动计算。
     }
+
+    # span_id → 前端阶段名（终态 stage_elapsed 的键）
+    SPAN_STAGE_KEY = SPAN_STAGE_MAP
 
     def __init__(self, emit_fn):
         from backend.rag.tracer import trace_collector
@@ -352,7 +723,7 @@ class _ProgressListener:
         # 从 span.metrics 提取进度文案
         msg = self._format_message(span)
         try:
-            self._emit(stage, msg)
+            self._emit(stage, msg, duration_ms=int(span.duration_ms or 0))
         except Exception:
             pass  # listener emit 失败不影响 indexer
 
@@ -360,12 +731,20 @@ class _ProgressListener:
     def _format_message(span) -> str:
         """根据 span_id + metrics 构造前端可读进度文案。"""
         m = span.metrics or {}
+        if span.span_id == "index_load":
+            return f"加载 {m.get('file_size', 0)} 字节"
         if span.span_id == "index_parse":
             return f"已解析 {m.get('doc_count', 0)} 页"
+        if span.span_id == "index_clean":
+            return f"清洗 {m.get('docs_cleaned', 0)} 篇"
+        if span.span_id == "index_dedup":
+            return "命中缓存" if m.get('cached') else "新建索引"
         if span.span_id == "index_chunk":
             kept = m.get("kept_chunks", 0)
             filtered = m.get("filtered_out", 0)
             return f"切分 {kept} chunks" + (f"（过滤 {filtered}）" if filtered else "")
+        if span.span_id == "index_metadata":
+            return f"元数据抽取 {m.get('doc_type', '')}"
         if span.span_id == "index_embed":
             succ = m.get("succeeded", 0)
             attempted = m.get("attempted", 0)
@@ -410,26 +789,72 @@ async def stream_upload_progress(upload_id: str):
 
 
 @router.delete("/documents/{doc_id}")
-async def delete_document(doc_id: str):
-    """删除文档（软删除 + 清理向量）"""
+async def delete_document(doc_id: str, request: Request):
+    """删除文档 — 软删 registry + 清理两处向量 + 删原文件（防 sync 复活）"""
+    source = _extract_source(request)
+    batch_id = request.headers.get("X-Batch-Id") or None
+    doc_name = ""
+    _delete_t0 = time.time()
     try:
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
         if not doc:
             return {"ok": False, "error": "文档不存在"}
-        reg.mark_deleted(doc["file_path"])
-        # 清理 Chroma 中的向量
+        doc_name = doc.get("file_name", "")
+        file_path = doc.get("file_path", "")
+
+        # ① 软删 registry — 按 doc_id 删所有行（修复绝对/相对路径重复行漏删）
+        deleted_rows = reg.mark_deleted_by_doc_id(doc_id)
+        logger.info(f"[RAG] 软删 doc_id={doc_id}: {deleted_rows} 行")
+        warnings: list[str] = []
+        if deleted_rows == 0:
+            warnings.append("registry 中无活跃记录（可能已被删除）")
+
+        # ② 清理两处向量
+        pipeline = get_rag_pipeline()
         try:
-            from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
-            from langchain_huggingface import HuggingFaceEmbeddings
-            embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
-            store = ChromaKnowledgeStore(persist_directory=CHROMA_PATH, embedding_function=embeddings)
-            store.delete(where={"doc_id": doc_id})
-        except Exception:
-            pass
-        logger.info(f"[RAG] 已删除文档: {doc_id}")
-        return {"ok": True, "doc_id": doc_id}
+            pipeline.vectordb.delete(where={"doc_id": doc_id})
+        except Exception as e:
+            msg = f"向量库(chunks)清理失败: {e}"
+            logger.warning(f"[RAG] {msg}")
+            warnings.append(msg)
+        try:
+            pipeline.doc_db.delete(where={"doc_id": doc_id})
+        except Exception as e:
+            msg = f"向量库(doc)清理失败: {e}"
+            logger.warning(f"[RAG] {msg}")
+            warnings.append(msg)
+
+        # ③ 清理 chunk_store
+        try:
+            from backend.rag.indexing.chunk_store import get_chunk_store
+            get_chunk_store().delete_by_doc_id(doc_id)
+        except Exception as e:
+            msg = f"chunk_store 清理失败: {e}"
+            logger.warning(f"[RAG] {msg}")
+            warnings.append(msg)
+
+        # ④ 删原文件
+        if file_path:
+            try:
+                os.remove(file_path)
+            except FileNotFoundError:
+                pass  # 文件已不在，正常
+            except OSError as e:
+                msg = f"原文件删除失败: {e}"
+                logger.warning(f"[RAG] {msg}")
+                warnings.append(msg)
+
+        logger.info(f"[RAG] 已删除文档: {doc_id}" + (f"（{len(warnings)} 个警告）" if warnings else ""))
+        _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, batch_id=batch_id,
+                     result="success", duration_ms=int((time.time() - _delete_t0) * 1000),
+                     detail={"file_path": file_path, "deleted_rows": deleted_rows, "warnings": warnings or None})
+        return {"ok": True, "doc_id": doc_id, "warnings": warnings or None}
     except Exception as e:
+        logger.error(f"[RAG] 删除文档失败: {e}")
+        _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, batch_id=batch_id,
+                     result="failed", duration_ms=int((time.time() - _delete_t0) * 1000),
+                     detail={"error": str(e)[:200]})
         return {"ok": False, "error": str(e)}
 
 
@@ -445,13 +870,10 @@ async def get_chunks(doc_id: str):
         import json as _json
         chunk_ids = _json.loads(chunk_ids_str) if isinstance(chunk_ids_str, str) else chunk_ids_str
 
-        # 从 ChromaDB 查询 chunk 实际内容（使用公开 API）
+        # 从 ChromaDB 查询 chunk 实际内容（复用 pipeline store，不再 new embeddings）
         chunks = []
         try:
-            from langchain_huggingface import HuggingFaceEmbeddings
-            from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
-            embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
-            store = ChromaKnowledgeStore(persist_directory=CHROMA_PATH, embedding_function=embeddings)
+            store = get_rag_pipeline().vectordb
             # 用公开 API get(where=...) 按 doc_id 获取所有 chunks
             results = store.get(where={"doc_id": doc_id})
             if results and results.get("ids"):
@@ -469,6 +891,38 @@ async def get_chunks(doc_id: str):
             chunks = [{"id": cid, "content": "", "metadata": {}, "token_count": 0} for cid in chunk_ids]
 
         return {"doc_id": doc_id, "chunks": chunks, "total": len(chunks)}
+    except Exception as e:
+        return {"doc_id": doc_id, "chunks": [], "total": 0, "error": str(e)}
+
+
+@router.get("/chunks/{doc_id}/detail")
+async def get_chunk_detail(doc_id: str):
+    """获取文档的完整 Chunk 文本（从 SQLite chunk_store，非 ChromaDB）。
+    供 Trace 详情页查看每条 chunk 的完整内容、token 数、关键词。"""
+    try:
+        from backend.rag.indexing.chunk_store import get_chunk_store
+        cs = get_chunk_store()
+        rows = cs.get_by_doc_id(doc_id)
+        return {
+            "doc_id": doc_id,
+            "chunks": [
+                {
+                    "chunk_index": r["chunk_index"],
+                    "content": r["content"],
+                    "char_count": r["char_count"],
+                    "keywords": r["keywords"],
+                    "llm_keywords": r.get("llm_keywords", ""),
+                    "llm_model": r.get("llm_model", ""),
+                    "section_title": r.get("section_title", ""),
+                    "doc_type": r.get("doc_type", ""),
+                    "kb_id": r.get("kb_id", ""),
+                    "department": r.get("department", ""),
+                    "simulated_questions": r.get("simulated_questions", []),
+                }
+                for r in rows
+            ],
+            "total": len(rows),
+        }
     except Exception as e:
         return {"doc_id": doc_id, "chunks": [], "total": 0, "error": str(e)}
 
@@ -505,7 +959,7 @@ async def search_knowledge(req: SearchRequest):
         return {"query": query, "results": [], "error": str(e)}
 
 
-# ── 问答（已有） ──
+# ── 问答（已有）──
 
 @router.post("", responses={500: {"model": ErrorResponse}, 503: {"model": ErrorResponse}})
 async def rag_ask(req: RAGAskRequest):

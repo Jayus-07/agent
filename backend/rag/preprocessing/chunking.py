@@ -17,6 +17,7 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
 
 from backend.config import (
+    POLICY_MAX_CHUNK_SIZE,
     GENERAL_CHUNK_SIZE,
     GENERAL_CHUNK_OVERLAP,
     PROJECT_CHUNK_SIZE,
@@ -161,16 +162,17 @@ class GeneralChunkStrategy(ChunkStrategy):
 class ManualPolicyChunkStrategy(ChunkStrategy):
     """
     For manuals and policy documents.
-    Splits by section headers (4.2.1, 一、, 第X章, etc.).
-    Guarantees clause integrity — NO secondary RecursiveCharacterTextSplitter.
+    Splits by section headers. Long sections (> max_section_chars) get sub-chunked.
     """
+
+    def __init__(self, max_section_chars: int = POLICY_MAX_CHUNK_SIZE):
+        self._max_section_chars = max_section_chars
 
     def split(self, docs: List[Document], file_path: str) -> List[Document]:
         full_text = "\n".join(d.page_content for d in docs)
         sections = _find_sections(full_text)
 
         if not sections:
-            # No section headers found — treat whole document as one chunk
             chunk = Document(
                 page_content=full_text,
                 metadata=docs[0].metadata.copy() if docs else {},
@@ -181,23 +183,69 @@ class ManualPolicyChunkStrategy(ChunkStrategy):
 
         chunks = []
         for i, sec in enumerate(sections):
-            # Content: from this section's end to the next section's start (or EOF)
             start = sec["end"]
             end = sections[i + 1]["start"] if i + 1 < len(sections) else len(full_text)
             content = full_text[start:end].strip()
-
             if not content:
                 continue
 
             base_meta = docs[0].metadata.copy() if docs else {}
             base_meta["section_id"] = sec["id"]
             base_meta["section_title"] = sec["title"]
+            section_text = f"{sec['full']}\n{content}"
 
-            chunk = Document(page_content=f"{sec['full']}\n{content}", metadata=base_meta)
-            chunks.append(chunk)
+            # 标题优先 + 长度兜底：超长章节 RecursiveCharacterTextSplitter 子分块
+            if len(section_text) > self._max_section_chars:
+                splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=self._max_section_chars, chunk_overlap=100,
+                    length_function=len, separators=_SEPARATORS,
+                )
+                for sub in splitter.split_text(section_text):
+                    chunks.append(Document(page_content=sub, metadata=dict(base_meta)))
+            else:
+                chunks.append(Document(page_content=section_text, metadata=base_meta))
 
         return self._enrich_metadata(chunks, file_path)
 
+
+
+# ============================================================
+# QAChunkStrategy (FAQ)
+# ============================================================
+
+class QAChunkStrategy(ChunkStrategy):
+    """For FAQ documents. Splits by Q:/问:/【问】boundaries; falls back to A:/答: as chunk boundaries."""
+
+    _QA_PATTERN = re.compile(r'(?:^|\n)(?:Q[：:]|问[：:]|【问】)', re.MULTILINE | re.IGNORECASE)
+    _FALLBACK_PATTERN = re.compile(r'(?:^|\n)(?:A[：:]|答[：:]|【答】)', re.MULTILINE | re.IGNORECASE)
+
+    def split(self, docs: List[Document], file_path: str) -> List[Document]:
+        full_text = "\n".join(d.page_content for d in docs)
+        matches = list(self._QA_PATTERN.finditer(full_text))
+
+        # Q: 没命中 → 回退到 A:/答: 边界
+        if not matches:
+            matches = list(self._FALLBACK_PATTERN.finditer(full_text))
+
+        if not matches:
+            chunk = Document(page_content=full_text, metadata=docs[0].metadata.copy() if docs else {})
+            return self._enrich_metadata([chunk], file_path)
+
+        chunks = []
+        base_meta = docs[0].metadata.copy() if docs else {}
+        for i, m in enumerate(matches):
+            start = m.start()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(full_text)
+            content = full_text[start:end].strip()
+            if content:
+                meta = dict(base_meta)
+                # 提取第一行作为标题
+                first_line = content.split('\n')[0][:80]
+                meta["section_title"] = first_line
+                meta["section_id"] = first_line
+                chunks.append(Document(page_content=content, metadata=meta))
+
+        return self._enrich_metadata(chunks, file_path)
 
 
 # ============================================================
@@ -323,6 +371,160 @@ class ProjectReportChunkStrategy(ChunkStrategy):
 
 
 # ============================================================
+# ManualChunkStrategy（操作手册）
+# ============================================================
+
+# 步骤编号: "步骤1"/"Step 1"/"1."/"①"/"1)" 等
+_STEP_PATTERN = re.compile(
+    r'(?:^|\n)\s*'
+    r'('
+    r'步骤\s*\d+'               # 步骤1
+    r'|Step\s*\d+'              # Step 1
+    r'|[①②③④⑤⑥⑦⑧⑨⑩]'         # ①
+    r'|\d+[.)、]\s*'           # 1. 1) 1、
+    r')'
+    r'\s*([^\n]+)?',
+    re.MULTILINE,
+)
+
+_MANUAL_CHUNK_MAX = 3000  # 超长步骤才子分块
+
+
+class ManualChunkStrategy(ChunkStrategy):
+    """操作手册专用：按步骤边界切分，不跨步骤切分。"""
+
+    def split(self, docs: List[Document], file_path: str) -> List[Document]:
+        full_text = "\n".join(d.page_content for d in docs)
+        base_meta = docs[0].metadata.copy() if docs else {}
+
+        steps = list(_STEP_PATTERN.finditer(full_text))
+
+        if not steps:
+            # 无步骤编号 → 回退到章节检测
+            sections = _find_sections(full_text)
+            if sections:
+                chunks = []
+                for i, sec in enumerate(sections):
+                    start = sec["end"]
+                    end = sections[i + 1]["start"] if i + 1 < len(sections) else len(full_text)
+                    content = full_text[start:end].strip()
+                    if not content:
+                        continue
+                    meta = dict(base_meta)
+                    meta["section_title"] = sec["title"]
+                    meta["section_id"] = sec["id"]
+                    chunks.append(Document(page_content=f"{sec['full']}\n{content}", metadata=meta))
+                return self._enrich_metadata(chunks, file_path)
+            # 完全无结构 → 单 chunk
+            chunk = Document(page_content=full_text, metadata=base_meta)
+            return self._enrich_metadata([chunk], file_path)
+
+        chunks = []
+        for i, m in enumerate(steps):
+            start = m.start()
+            end = steps[i + 1].start() if i + 1 < len(steps) else len(full_text)
+            content = full_text[start:end].strip()
+            if not content:
+                continue
+            step_title = (m.group(1) + (m.group(2) or "")).strip()[:80]
+            meta = dict(base_meta)
+            meta["section_title"] = step_title
+            meta["section_id"] = step_title
+
+            # 超长步骤子分块（保留步骤标题）
+            if len(content) > _MANUAL_CHUNK_MAX:
+                splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=_MANUAL_CHUNK_MAX, chunk_overlap=100,
+                    length_function=len, separators=_SEPARATORS,
+                )
+                for sub in splitter.split_text(content):
+                    chunks.append(Document(page_content=sub, metadata=dict(meta)))
+            else:
+                chunks.append(Document(page_content=content, metadata=meta))
+
+        return self._enrich_metadata(chunks, file_path)
+
+
+# ============================================================
+# ContractChunkStrategy（合同）
+# ============================================================
+
+# 条款边界: "第X条"/"Article X"/"§ X"
+_ARTICLE_PATTERN = re.compile(
+    r'(?:^|\n)\s*'
+    r'('
+    r'第[一二三四五六七八九十百千\d]+条'   # 第五条
+    r'|Article\s+\d+'                     # Article 5
+    r'|§\s*\d+'                           # § 5
+    r')'
+    r'\s*([^\n]*)',
+    re.MULTILINE,
+)
+
+_CONTRACT_MERGE_MAX = 2000  # 短条款合并上限
+
+
+class ContractChunkStrategy(ChunkStrategy):
+    """合同专用：严格按条款边界切分，禁止跨条款切割。"""
+
+    def split(self, docs: List[Document], file_path: str) -> List[Document]:
+        full_text = "\n".join(d.page_content for d in docs)
+        base_meta = docs[0].metadata.copy() if docs else {}
+
+        articles = list(_ARTICLE_PATTERN.finditer(full_text))
+
+        if not articles:
+            # 无条款结构 → 回退到章节检测
+            sections = _find_sections(full_text)
+            if sections:
+                chunks = []
+                for i, sec in enumerate(sections):
+                    start = sec["end"]
+                    end = sections[i + 1]["start"] if i + 1 < len(sections) else len(full_text)
+                    content = full_text[start:end].strip()
+                    if not content:
+                        continue
+                    meta = dict(base_meta)
+                    meta["section_title"] = sec["title"]
+                    meta["section_id"] = sec["id"]
+                    chunks.append(Document(page_content=f"{sec['full']}\n{content}", metadata=meta))
+                return self._enrich_metadata(chunks, file_path)
+            chunk = Document(page_content=full_text, metadata=base_meta)
+            return self._enrich_metadata([chunk], file_path)
+
+        # 按条款切分，短条款合并
+        raw_chunks = []
+        for i, m in enumerate(articles):
+            start = m.start()
+            end = articles[i + 1].start() if i + 1 < len(articles) else len(full_text)
+            content = full_text[start:end].strip()
+            if not content:
+                continue
+            article_title = (m.group(1) + " " + (m.group(2) or "")).strip()[:80]
+            meta = dict(base_meta)
+            meta["section_title"] = article_title
+            meta["section_id"] = m.group(1).strip()
+            raw_chunks.append({"content": content, "meta": meta})
+
+        # 合并短条款（禁止子分块，但允许短条款合并到同一 chunk）
+        chunks = []
+        buffer_text = ""
+        buffer_meta = None
+        for rc in raw_chunks:
+            if buffer_text and len(buffer_text) + len(rc["content"]) <= _CONTRACT_MERGE_MAX:
+                buffer_text += "\n" + rc["content"]
+            else:
+                if buffer_text:
+                    chunks.append(Document(page_content=buffer_text, metadata=buffer_meta or base_meta))
+                buffer_text = rc["content"]
+                buffer_meta = rc["meta"]
+        if buffer_text:
+            chunks.append(Document(page_content=buffer_text, metadata=buffer_meta or base_meta))
+
+        return self._enrich_metadata(chunks, file_path)
+
+
+# ============================================================
 # ChunkStrategyRouter
 # ============================================================
 
@@ -331,16 +533,25 @@ class ChunkStrategyRouter:
 
     def __init__(self, fallback_chunk_size: int = None, fallback_chunk_overlap: int = None):
         self._strategies = {
-            # 按章节切分（保持章节完整性）
-            "manual": ManualPolicyChunkStrategy(),
+            # 按章节切分（制度/规范/合规/安全等结构化文档）
             "policy": ManualPolicyChunkStrategy(),
-            "sop": ManualPolicyChunkStrategy(),
-            "ad_policy": ManualPolicyChunkStrategy(),
-            "product_spec": ManualPolicyChunkStrategy(),
-            # 综合文档用通用切分
+            "compliance": ManualPolicyChunkStrategy(),
+            "security": ManualPolicyChunkStrategy(),
+            "financial": ManualPolicyChunkStrategy(),
+            "customer_data": ManualPolicyChunkStrategy(),
+            # 操作手册专用（保留步骤完整性）
+            "sop": ManualChunkStrategy(),
+            "training": ManualChunkStrategy(),
+            # 合同专用（条款必须完整，禁止子分块）
+            "legal": ContractChunkStrategy(),
+            "contract_template": ContractChunkStrategy(),
+            # Markdown 结构化文档（保留 header 元数据）
+            "product_spec": ProjectReportChunkStrategy(),
             "listing": ProjectReportChunkStrategy(),
-            "faq": ProjectReportChunkStrategy(),
-            "training": ProjectReportChunkStrategy(),
+            # FAQ 专用：按 Q&A 边界
+            "faq": QAChunkStrategy(),
+            # 广告政策 → 兜底通用
+            "ad_policy": GeneralChunkStrategy(),
         }
         self._fallback = GeneralChunkStrategy(
             chunk_size=fallback_chunk_size,

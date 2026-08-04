@@ -15,8 +15,14 @@ from backend.app.api.routes import (
     memory,
     data,
     mcp,
+    workflows,
+    inventory_alerts,
+    demo,
+    reports,
+    schedules,
 )
 from backend.app.api.routes.health import router as health_router
+from backend.app.api.routes.keyword_routes import router as keyword_router
 
 api_router = APIRouter()
 
@@ -24,6 +30,7 @@ api_router = APIRouter()
 api_router.include_router(chat.router)
 api_router.include_router(sql.router)
 api_router.include_router(rag.router)
+api_router.include_router(keyword_router)
 api_router.include_router(report.router)
 api_router.include_router(llm.router)
 api_router.include_router(observability.router)
@@ -32,6 +39,11 @@ api_router.include_router(data.router)
 api_router.include_router(data.assets_router)
 api_router.include_router(data.pipeline_router)
 api_router.include_router(mcp.router)
+api_router.include_router(workflows.router)
+api_router.include_router(inventory_alerts.router)
+api_router.include_router(demo.router)
+api_router.include_router(reports.router)
+api_router.include_router(schedules.router)
 
 # ── 系统路由 ──────────────────────────────────
 api_router.include_router(health_router)

@@ -40,6 +40,10 @@ docker/init-db.sql
 docker-compose.yml
 .dockerignore
 
+# Windows 本地编译文件（无法在 Linux 容器运行）
+*.pyd
+*.dll
+
 # Misc
 .claude/
 .env

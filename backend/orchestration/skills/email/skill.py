@@ -13,6 +13,14 @@ class EmailSkill(BaseSkill):
 
     name = "email"
     capabilities = ["email.send"]
+    description = "通过 SMTP 发送邮件。必须在报告/数据生成完成后再调用（依赖前序步骤的输出）。"
+    params_schema = {
+        "to": "收件人邮箱，多个用逗号分隔",
+        "subject": "邮件主题",
+        "body": "邮件正文（支持 Markdown/HTML）",
+        "cc": "抄送邮箱（可选）",
+    }
+    examples = [{"to": "team@company.com", "subject": "运营周报", "body": "# 本周运营数据\n\n..."}]
 
     @property
     def _tool_fn(self):

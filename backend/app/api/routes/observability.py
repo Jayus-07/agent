@@ -13,6 +13,7 @@ from backend.orchestration.observability import GRAPH_TOPOLOGY, NODE_LABELS
 from backend.shared.monitoring.resource_monitor import resource_monitor
 from backend.rag.metrics import metrics_collector
 from backend.rag.tracer import trace_collector, TraceRecord, Span
+from backend.rag.trace_store import get_trace_store
 
 router = APIRouter(prefix="/observability", tags=["可观测性"])
 
@@ -21,68 +22,103 @@ router = APIRouter(prefix="/observability", tags=["可观测性"])
 # 适配器：TraceRecord + Span → 前端 TraceRecord DTO
 # ═══════════════════════════════════════════════════
 
-def _to_span_dto(s: Span, all_spans: list[Span], total_ms: int) -> dict:
-    """Span → 前端 Span DTO。字段名映射：span_id→id, 派生 duration_ratio/children/llm_call。"""
-    d: dict = {
-        "id": s.span_id,
-        "type": s.type,
-        "name": s.name,
-        "parent_id": s.parent_id,
-        "status": s.status,
-        "start_time": s.start_time,
-        "end_time": s.end_time,
-        "duration_ms": s.duration_ms,
-        "duration_ratio": s.duration_ms / total_ms if total_ms else 0,
-        "metrics": s.metrics,
-        "children": [c.span_id for c in all_spans if c.parent_id == s.span_id],
-        "input": s.input,
-        "output": s.output,
-        "events": s.events,
-        "errors": s.errors,
+def _to_span_dto(s, all_spans: list, total_ms: int) -> dict:
+    """Span / dict → 前端 Span DTO。兼容 TraceRecord Span 和 SQLite dict。"""
+    get = lambda k, d=None: s.get(k, d) if isinstance(s, dict) else getattr(s, k, d)
+    span_id = get("span_id", "")
+    dto: dict = {
+        "id": span_id,
+        "type": get("type", ""),
+        "name": get("name", ""),
+        "parent_id": get("parent_id"),
+        "status": get("status", "success"),
+        "start_time": get("start_time", ""),
+        "end_time": get("end_time", ""),
+        "duration_ms": get("duration_ms", 0),
+        "duration_ratio": get("duration_ms", 0) / total_ms if total_ms else 0,
+        "metrics": get("metrics", {}),
+        "children": [
+            (c.get("span_id") if isinstance(c, dict) else c.span_id)
+            for c in all_spans
+            if (c.get("parent_id") if isinstance(c, dict) else c.parent_id) == span_id
+        ],
+        "input": get("input"),
+        "output": get("output"),
+        "events": get("events", []),
+        "errors": get("errors", []),
     }
-    # type=llm_call 时派生 llm_call 子块（前端 LLMCallDetail / CostPanel 直接读）
-    if s.type == "llm_call":
-        d["llm_call"] = {
-            "model": s.metrics.get("model_name", ""),
-            "temperature": s.metrics.get("temperature", 0),
-            "prompt_tokens": s.metrics.get("prompt_tokens", 0),
-            "completion_tokens": s.metrics.get("completion_tokens", 0),
-            "cost_usd": s.metrics.get("cost_usd", 0),
-            "prompt_text": (s.input or {}).get("prompt", ""),
-            "response_text": (s.output or {}).get("response", ""),
+    if get("type", "") == "llm_call":
+        m = get("metrics", {})
+        inp = get("input") or {}
+        out = get("output") or {}
+        dto["llm_call"] = {
+            "model": m.get("model_name", "") if isinstance(m, dict) else "",
+            "temperature": m.get("temperature", 0) if isinstance(m, dict) else 0,
+            "prompt_tokens": m.get("prompt_tokens", 0) if isinstance(m, dict) else 0,
+            "completion_tokens": m.get("completion_tokens", 0) if isinstance(m, dict) else 0,
+            "cost_usd": m.get("cost_usd", 0) if isinstance(m, dict) else 0,
+            "prompt_text": (inp.get("prompt", "") if isinstance(inp, dict) else ""),
+            "response_text": (out.get("response", "") if isinstance(out, dict) else ""),
         }
-    return d
+    return dto
 
 
-def _to_trace_dto(t: TraceRecord) -> dict:
-    """TraceRecord → 前端 TraceRecord DTO。"""
-    total_ms = t.duration_ms
-    all_spans = t.spans
-    has_error = any(s.status == "error" for s in all_spans)
+def _to_trace_dto(t) -> dict:
+    """TraceRecord / dict → 前端 TraceRecord DTO。"""
+    # 兼容 dict（SQLite 存储格式）和 TraceRecord
+    get = lambda k, d=None: t.get(k, d) if isinstance(t, dict) else getattr(t, k, d)
+    total_ms = get("duration_ms", 0)
+    all_spans = get("spans", [])
+    has_error = any((s.get("status") if isinstance(s, dict) else s.status) == "error" for s in all_spans)
     return {
-        "id": t.id,
-        "timestamp": t.timestamp,
-        "session_id": t.session_id,
-        "question": t.question,
-        "answer_preview": t.answer_preview,
-        "answer_len": t.answer_len,
-        "duration_ms": t.duration_ms,
-        "model": {"name": t.model, "provider": t.provider},
-        "usage": t.usage,
-        "cost_usd": sum(s.metrics.get("cost_usd", 0) for s in all_spans),
-        "error": t.error,
-        "metadata": t.metadata,
-        "status": "error" if has_error else ("running" if t.duration_ms == 0 else "success"),
-        "workflow_name": t.workflow_name,
-        "root_span_id": t.root_span_id,
+        "id": get("id", ""),
+        "timestamp": get("timestamp", ""),
+        "session_id": get("session_id", ""),
+        "question": get("question", ""),
+        "answer_preview": get("answer_preview", ""),
+        "answer_len": get("answer_len", 0),
+        "duration_ms": total_ms,
+        "model": get("model", {}) if isinstance(get("model", {}), dict) else {"name": get("model", ""), "provider": get("provider", "")},
+        "usage": get("usage", {}),
+        "cost_usd": get("cost_usd", 0),
+        "error": get("error", {}),
+        "metadata": get("metadata", {}),
+        "status": "error" if has_error else ("running" if total_ms == 0 else "success"),
+        "workflow_name": get("workflow_name", ""),
+        "root_span_id": get("root_span_id", ""),
         "spans": [_to_span_dto(s, all_spans, total_ms) for s in all_spans],
-        "sla": {
-            "threshold_ms": t.sla_threshold_ms,
-            "breached": t.duration_ms > t.sla_threshold_ms,
-        },
-        "parent_id": t.parent_id,
-        "children_ids": t.children_ids,
-        "graph": t.graph,
+        "sla": {"threshold_ms": 10000, "breached": total_ms > 10000},
+        "parent_id": get("parent_id"),
+        "children_ids": get("children_ids", []),
+        "graph": get("graph"),
+        "tags": get("tags", {}),
+    }
+
+
+def _stored_dict_to_dto(d: dict) -> dict:
+    """SQLite 存储的 trace dict → 前端兼容的 DTO（spans 已移除，仅列表摘要）"""
+    return {
+        "id": d.get("id", ""),
+        "timestamp": d.get("timestamp", ""),
+        "session_id": d.get("session_id", ""),
+        "question": d.get("question", ""),
+        "answer_preview": d.get("answer_preview", ""),
+        "answer_len": d.get("answer_len", 0),
+        "duration_ms": d.get("duration_ms", 0),
+        "model": d.get("model", {}),
+        "usage": d.get("usage", {}),
+        "cost_usd": d.get("cost_usd", 0),
+        "error": d.get("error", {}),
+        "metadata": d.get("metadata", {}),
+        "status": d.get("status", "success"),
+        "workflow_name": d.get("workflow_name", ""),
+        "root_span_id": d.get("root_span_id", ""),
+        "spans": [],
+        "sla": {"threshold_ms": 10000, "breached": False},
+        "parent_id": None,
+        "children_ids": [],
+        "graph": None,
+        "tags": d.get("tags", {}),
     }
 
 
@@ -92,25 +128,26 @@ def _to_trace_dto(t: TraceRecord) -> dict:
 
 @router.get("/traces")
 async def list_traces(limit: int = Query(20, ge=1, le=200)):
-    """最近 N 条 trace 摘要（统一数据源：TraceCollector）"""
-    traces = trace_collector.list(limit)
-    return {"traces": [_to_trace_dto(t) for t in traces]}
+    """最近 N 条 trace 摘要（直接从 SQLite 读取）"""
+    stored = trace_collector.list(limit)
+    traces = [_stored_dict_to_dto(d) for d in stored]
+    return {"traces": traces}
 
 
 @router.get("/traces/active")
 async def list_active_traces():
-    """当前活跃的 trace（answer_preview 为空 = 还没 finish）"""
+    """当前活跃的 trace（contextvar / thread_local 中）"""
     active = trace_collector.list_active()
-    return {"traces": [_to_trace_dto(t) for t in active]}
+    return {"traces": [_stored_dict_to_dto(t) for t in active]}
 
 
 @router.get("/traces/{trace_id}")
 async def get_trace(trace_id: str):
-    """获取单条 trace 完整详情"""
-    t = trace_collector.get(trace_id)
-    if t is None:
-        raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在")
-    return _to_trace_dto(t)
+    """获取单条 trace 完整详情（直接从 SQLite 读取）"""
+    data = trace_collector.get(trace_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在或已过期")
+    return data  # SQLite 返回的 dict 已是 DTO 兼容格式
 
 
 # ═══════════════════════════════════════════════════
@@ -146,10 +183,13 @@ async def stream_rag_traces():
 
 @router.get("/rag-traces/{trace_id}")
 async def get_rag_trace(trace_id: str):
-    """获取单条 RAG Trace 详情"""
+    """获取单条 RAG Trace 详情（内存优先，SQLite 兜底）"""
     t = trace_collector.get(trace_id)
     if t is None:
-        raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在")
+        data = get_trace_store().get(trace_id)
+        if data is None:
+            raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在或已过期")
+        return data
     return _to_trace_dto(t)
 
 

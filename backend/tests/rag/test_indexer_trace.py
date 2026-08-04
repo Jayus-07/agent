@@ -105,7 +105,7 @@ class TestHappyPath:
         assert trace.workflow_kind == WorkflowKind.KNOWLEDGE_INDEX.value
         assert trace.workflow_name == "knowledge_index"
         assert trace.tags["doc_id"]  # 非空
-        assert trace.tags["kb_id"] == "default"  # 在 tmp_path 根目录下，kb_id=default
+        assert trace.tags["kb_id"] == "policy_general"  # 默认知识库
 
         root = _find_span(trace, "index_upload")
         assert root.kind == SpanKind.INDEX_UPLOAD.value

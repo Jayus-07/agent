@@ -65,13 +65,15 @@ export interface TraceDetail {
 // ── Event ────────────────────────────────────────────
 
 export interface SpanEvent {
-  ts: string;
+  ts?: string;
+  timestamp?: string;  // 后端字段名
   name: string;
   /** 人类可读描述（Timeline 渲染用） */
   message?: string;
   /** 事件级别 */
   level?: "debug" | "info" | "warn" | "error";
-  data: Record<string, unknown>;
+  data?: Record<string, unknown>;     // 前端别名
+  attributes?: Record<string, unknown>; // 后端字段名
 }
 
 // ── Span（通用执行节点） ─────────────────────────────
@@ -156,6 +158,8 @@ export interface TraceRecord {
     started_at: string;
     trace_count: number;
   };
+  /** 自由标签（kb_id, doc_id, file_ext 等，文档索引 trace 用） */
+  tags?: Record<string, string>;
   /** LangGraph 图拓扑（agent workflow 才有） */
   graph?: {
     nodes: { id: string; label: string }[];
@@ -255,6 +259,7 @@ export const SPAN_TYPES = [
   "sql",
   "memory",
   "workflow",
+  "workflow_step",
   "custom",
 ] as const;
 export type SpanType = (typeof SPAN_TYPES)[number];
@@ -270,6 +275,7 @@ export const SPAN_TYPE_LABELS: Record<string, string> = {
   sql: "SQL 查询",
   memory: "记忆",
   workflow: "工作流",
+  workflow_step: "工作流步骤",
   custom: "自定义",
 };
 
@@ -332,7 +338,8 @@ export function spanTypeColor(type: string): string {
     case "http":      return "bg-blue-500";
     case "sql":       return "bg-orange-500";
     case "memory":    return "bg-pink-500";
-    case "workflow":  return "bg-teal-500";
+    case "workflow":       return "bg-teal-500";
+    case "workflow_step":  return "bg-teal-400";
     default:          return "bg-slate-400";
   }
 }

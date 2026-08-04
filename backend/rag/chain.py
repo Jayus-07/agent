@@ -58,26 +58,37 @@ CONTEXTUALIZE_PROMPT = ChatPromptTemplate.from_messages([
 # =====================================================
 
 # 用于最终生成答案，结合检索到的文档和对话历史
+# P1 改造：Markdown 正文 + 末尾 <!--META--> 注释（与 Citation 兼容，避 JSON 与 Faithfulness 冲突）
+# 详见 docs/architecture/rag-evidence-gate.md §0.4 表
 QA_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """你是跨境电商知识库助手。你**只能**根据下方提供的资料回答问题，**严禁**使用资料之外的知识。
 
-要求：
-1. **每个事实/数据必须标注来源编号**，格式如 [1]、[2]、[3]
-   - 正确示例：「根据公司规定，报销需在每月5日前提交 [1]」
-   - 错误示例：「一般来说报销需要5天处理」 ← 没有引用，违规
-2. **绝对禁止编造或使用外部知识**。资料中没有的信息，明确说"资料未提及"并给出已有相关内容
-3. 输出详实，用分点或分段说明，尽量展开资料中的具体细节
-4. 资料中的数字、日期、名称等具体信息必须准确引用
+回答格式（严格遵守，否则会被系统判为格式错误而拒答）:
+1. 正文用 Markdown，分点或分段均可
+2. 每个事实/数据必须标注来源编号 [1]、[2]、[3]
+   - 正确：「根据公司规定，报销需在每月5日前提交 [1]」
+   - 错误：「一般来说报销需要5天处理」 ← 没有引用，违规
+3. 资料中查不到信息时：在正文里写「资料未提及」或「当前知识库暂无相关内容」，**不要编造**
+4. 在正文最后，另起一行，输出 HTML 注释包裹的 JSON（**必须放在末尾**）:
+   - 可以回答 → `<!--META{{"can_answer": true, "citations": [1, 2], "confidence": 0.85}}-->`
+   - 不能回答 → `<!--META{{"can_answer": false, "reason": "no_evidence", "confidence": 0.1}}-->`
+   reason 取值: `no_evidence`（无相关内容）、`low_relevance`（相关性不够）、
+                `insufficient`（证据不足）、`out_of_scope`（超出业务范围）
+5. 严禁编造；资料中的数字/日期/名称必须与原文一致
 
-资料：
+资料:
 {context}"""),
     MessagesPlaceholder("chat_history"),
     ("human", "{input}"),
 ])
 
-# 单文档格式化：用序号标注每个文档
+# 单文档格式化：含元数据标签（非空字段才显示，不浪费 token）
 DOCUMENT_PROMPT = PromptTemplate.from_template(
-    "[文档{index}] 来源: {source_file}\n{page_content}"
+    "[文档{index}] 来源: {source_file}"
+    "{doc_type_label}"
+    "{business_domain_label}"
+    "{summary_label}"
+    "\n{page_content}"
 )
 
 
@@ -103,6 +114,14 @@ class RAGChain:
         self.bm25 = bm25
         self.person_index = person_index or {}
         self._memory = memory_manager
+        # Evidence Gate — 诊断态字段（§D4 修复）
+        self._last_intent: str = "summary_query"
+        self._risk_level: str = "low"
+        self._last_query_analysis = None
+        self._last_query: str = ""
+        self._last_meta: dict = {}  # P1: META 注释解析结果
+        self._self_correction_retry_count: int = 0  # P1: self-correction 重试计数
+        self._self_correction_pending = None  # P1: 触发 self-correction 时存暂态
 
         self._build_retrievers()
         self._build_chains()
@@ -142,6 +161,13 @@ class RAGChain:
             docs = input_dict.get("context", [])
             for i, doc in enumerate(docs, 1):
                 doc.metadata["index"] = i
+                # 注入元数据标签（非空才显示，不浪费 token）
+                dt = doc.metadata.get("doc_type", "")
+                doc.metadata["doc_type_label"] = f"\n类型: {dt}" if dt and dt != "general" else ""
+                bd = doc.metadata.get("business_domain", "")
+                doc.metadata["business_domain_label"] = f"\n领域: {bd}" if bd else ""
+                summary = doc.metadata.get("summary", "")
+                doc.metadata["summary_label"] = f"\n摘要: {summary[:120]}" if summary else ""
             return input_dict
 
         _stuff = create_stuff_documents_chain(
@@ -209,32 +235,200 @@ class RAGChain:
     # =================================================
 
     def ask(self, question: str, session_id: str = "default") -> str:
-        """RAGChain 入口：5 段式 — 准备 → 执行 → 验证 → [评估] → 收尾。"""
-        from backend.rag.tracer import trace_collector
-        import time as _time
-
-        t_total = _time.time()
-        trace = trace_collector.start(question, session_id)
-        trace_collector.start_span("root", parent_id=None,
-                                   name="RAG Agent", type="agent",
-                                   input={"question": question})
-        logger.info(f"[RAGChain] 收到问题: {question[:60]}... (session={session_id})")
-
+        """RAGChain 入口：线性 3 段 — prepare → execute → respond。"""
+        trace, t_total = self._start(question, session_id)
         try:
             chat_history = self._prepare(question, session_id)
             result = self._execute(question, chat_history)
-            answer = self._verify(result, question, session_id)
-            answer = self._evaluate(answer, result.get("context", []))  # 评估 + 剔除幻觉
-            self._trace(trace, answer, t_total)
-            return answer
+            return self._respond(result, trace, question, session_id, t_total)
         except Exception:
+            self._finish_error(trace, t_total)
+            raise
+
+    def _start(self, question: str, session_id: str):
+        """开启 Trace + root span。"""
+        from backend.rag.tracer import trace_collector
+        import time as _time
+        trace = trace_collector.start(question, session_id)
+        trace_collector.start_span("root", parent_id=None,
+                                   name="RAG 智能问答", type="agent",
+                                   input={"question": question})
+        logger.info(f"[RAGChain] 收到问题: {question[:60]}... (session={session_id})")
+        return trace, _time.time()
+
+    def _respond(self, result, trace, question, session_id, t_total) -> str:
+        """统一决策：Gate 1+2(注入) → verify+evaluate → Gate 3 LLM 自报 → Self-Correction。
+
+        返回 answer 或 rejection msg。
+        """
+        # Gate 1+2: retrieval/rerank 已在 _execute 注入 decision
+        decision = result.get("__evidence_gate_decision__")
+        if decision is not None and not decision.passed:
+            return self._reject(decision, decision.layer or "retrieval",
+                                trace, t_total)
+
+        # Citation + Faithfulness
+        answer = self._verify(result, question, session_id)
+        answer = self._evaluate(answer, result.get("context", []))
+
+        # Gate 3: LLM 自报拒答 (META can_answer=False)
+        meta = self._last_meta or {}
+        if not meta.get("can_answer", True):
+            return self._handle_llm_reject(meta, trace, question, session_id, t_total)
+
+        self._finish(trace, answer, t_total)
+        return answer
+
+    def _handle_llm_reject(self, meta, trace, question, session_id, t_total) -> str:
+        """LLM 自报拒答 → self-correction 或直接拒答。"""
+        decision = self._build_decision_from_meta(meta)
+
+        if self._can_self_correct():
+            retried = self._try_self_correct(decision, trace, question, session_id, t_total)
+            if retried is not None:
+                self._finish(trace, retried, t_total)
+                return retried
+
+        # self-correction 关闭 / 失败 / 重试用尽 → 拒答
+        attempted = self._self_correction_retry_count > 0
+        return self._reject(decision, "generation", trace, t_total,
+                            self_correction_attempted=attempted)
+
+    def _build_decision_from_meta(self, meta: dict):
+        """LLM META → GateDecision。"""
+        from backend.rag.evidence_gate import GateDecision, RejectReason
+        raw_reason = (meta.get("reason") or "no_evidence").lower()
+        try:
+            reason = RejectReason(raw_reason)
+        except ValueError:
+            reason = RejectReason.NO_EVIDENCE
+        confidence = float(meta.get("confidence", 0.0))
+        return GateDecision(
+            passed=False, reason=reason, layer="generation", score=confidence,
+            diagnostics={"meta_confidence": confidence,
+                         "meta_citations": meta.get("citations", []),
+                         "threshold": {"meta_min_confidence": 0.5}},
+        )
+
+    def _can_self_correct(self) -> bool:
+        from backend.config import SELF_CORRECTION_ENABLED, SELF_CORRECTION_MAX_RETRIES
+        return (SELF_CORRECTION_ENABLED
+                and self._self_correction_retry_count < SELF_CORRECTION_MAX_RETRIES)
+
+    def _reject(self, decision, layer: str, trace, t_total: float,
+                self_correction_attempted: bool = False) -> str:
+        """统一拒答：构造 RejectInfo + 写 trace + finish trace + 返回 msg。"""
+        from backend.rag.evidence_gate import build_rejection_response
+        msg, info = build_rejection_response(decision, layer,
+                                             self_correction_attempted=self_correction_attempted)
+        try:
+            trace.metadata["rejection"] = info.to_dict()
+        except Exception:
+            pass
+        metrics = {"rejected": True, "reason": info.reason, "gate_layer": layer}
+        if self_correction_attempted:
+            metrics["self_correction"] = "attempted"
+        self._end_root_span(trace,
+            output={"answer_preview": msg[:200], "answer_len": len(msg)},
+            metrics=metrics)
+        self._finish(trace, msg, t_total)
+        logger.info(f"[RAGChain] 拒答 layer={layer} reason={info.reason}")
+        return msg
+
+    def _finish(self, trace, answer: str, t_total: float):
+        """统一 trace 收尾。"""
+        from backend.rag.tracer import trace_collector
+        from backend.config.llm import LLM_MODEL
+        from backend.infra.llm.factory import get_llm_factory
+        import time as _time
+        total_ms = int((_time.time() - t_total) * 1000)
+        self._end_root_span(trace,
+            output={"answer_preview": answer[:200], "answer_len": len(answer)},
+            metrics={"span_count": sum(1 for s in trace.spans if s.parent_id is not None)})
+        provider = ""
+        try:
+            provider = get_llm_factory()._get_provider(LLM_MODEL)
+        except Exception:
+            pass
+        trace_collector.finish(trace, answer, total_ms, LLM_MODEL, provider)
+
+    def _finish_error(self, trace, t_total: float):
+        """异常路径收尾。"""
+        from backend.rag.tracer import trace_collector
+        import time as _time
+        try:
+            self._end_root_span(trace, status="error",
+                                metrics={"error": "pipeline_failed"})
+            trace_collector.finish(trace, "[ERROR]",
+                                   int((_time.time() - t_total) * 1000), "", "")
+        except Exception:
+            pass
+
+    def _try_self_correct(self, original_decision, trace, question, session_id, t_total):
+        """Self-Correction：改写 query 重试。
+
+        Returns:
+            None    → 改写失败 / 仍拒答 (让 _handle_llm_reject 走兜底)
+            str     → 新答案 (成功) 或 重试后的拒答 msg
+        """
+        self._self_correction_retry_count += 1
+        reason_str = (original_decision.reason.value
+                      if original_decision.reason else "no_evidence")
+        new_query = self._rewrite_query(question, reason_str)
+        if new_query is None:
+            return None
+
+        try:
+            history = self._prepare(new_query, session_id)
+            result = self._execute(new_query, history)
+
+            # 仍拒答 (Gate 1+2) → 走 _handle_llm_reject 兜底
+            decision = result.get("__evidence_gate_decision__")
+            if decision is not None and not decision.passed:
+                return None
+
+            answer = self._verify(result, new_query, session_id)
+            answer = self._evaluate(answer, result.get("context", []))
+            meta = self._last_meta or {}
+            if not meta.get("can_answer", True):
+                # LLM 二次拒答 → 走 _handle_llm_reject 兜底
+                return None
+            logger.info(f"[RAGChain] Self-Correction 救活: question={question[:60]}")
+            return answer
+        except Exception as e:
+            logger.warning(f"[Self-Correction] 重试失败: {e}")
+            return None
+
+    def _rewrite_query(self, question: str, reason: str):
+        """LLM 改写 query，返回 None 表示改写失败。"""
+        from backend.rag.tracer import trace_collector, SpanKind
+        from backend.infra.llm import llm
+        from langchain_core.messages import HumanMessage
+
+        rewrite_span = trace_collector.start_span(
+            "self_correction_rewrite", name="Self-Correction Rewrite",
+            kind=SpanKind.SELF_CORRECTION.value,
+        )
+        try:
+            prompt = (
+                f"原问题被拒答（原因：{reason}）。请改写使能从知识库命中，"
+                f"给 3 个更有效的检索 query，每行一个，不要编号：\n"
+                f"原问题: {question}\n改写结果:"
+            )
+            result = llm.invoke([HumanMessage(content=prompt)])
+            raw = result.content if hasattr(result, "content") else str(result)
+            rewrites = [ln.strip() for ln in raw.strip().split("\n") if ln.strip()]
+            new_query = rewrites[0] if rewrites else question
+            trace_collector.end_span(rewrite_span,
+                metrics={"rewrites": len(rewrites), "selected": new_query[:60]})
+            return new_query
+        except Exception as e:
+            logger.warning(f"[Self-Correction] 改写失败: {e}")
             try:
-                self._end_root_span(trace, status="error",
-                                    metrics={"error": "pipeline_failed"})
-                trace_collector.finish(trace, "[ERROR]", int((_time.time()-t_total)*1000), "", "")
+                trace_collector.end_span(rewrite_span, status="error")
             except Exception:
                 pass
-            raise
+            return None
 
     def _prepare(self, question: str, session_id: str) -> list:
         """准备阶段：Memory 启动会话，返回 chat_history。"""
@@ -242,34 +436,235 @@ class RAGChain:
         return list(l1.messages) if l1 else []
 
     def _execute(self, question: str, chat_history: list) -> dict:
-        """执行阶段：chain.invoke + MultiQuery 决策 trace。"""
-        from backend.rag.tracer import trace_collector
+        """执行阶段：chain.invoke + MultiQuery 决策 trace + Retrieval Debug。
+
+        Evidence Gate 在 _execute 末尾跑：
+          - 读取 hybrid.py 已注入的 retrieval Gate decision
+          - 跑 Rerank Gate (基于 context 上的 rerank_score)
+        拒答时把 GateDecision 写到 result["__evidence_gate_decision__"]，
+        上层 ask() 据此短路 verify/evaluate。
+
+        Returns:
+            dict 含 "context" / "answer" / "__evidence_gate_decision__" / 可选 "__rejected"
+        """
+        from backend.rag.tracer import trace_collector, SpanKind
+        import time as _time
+
+        # ── 记录 query 上下文（§D4 修复） ──
+        self._last_query = question
+        try:
+            from backend.rag.retrieval.query_analyzer import QueryAnalyzer
+            self._last_query_analysis = QueryAnalyzer().analyze(question)
+            self._last_intent = self._last_query_analysis.intent or "summary_query"
+        except Exception:
+            self._last_query_analysis = None
+            self._last_intent = "summary_query"
+
+        # ── retrieval span（包裹整个检索过程，挂 debug event）──
+        ret_span = trace_collector.start_span(
+            "retrieval", parent_id="root",
+            name="混合检索", type="retrieval",
+            kind="retrieval",
+            input={"question": question[:500]},
+        )
+        t_ret_start = _time.time()
+
         result = self.chain.invoke({"input": question, "chat_history": chat_history})
 
-        # mq_check: 从 MultiQueryRetriever 读取实际决策结果（唯一入口）
-        mq_span = trace_collector.start_span(
-            "mq_check", name="MultiQuery")
+        # ── 采集检索中间结果 ──
+        context_docs = result.get("context", [])
+        self._record_retrieval_events(ret_span, context_docs)
+        trace_collector.end_span(ret_span,
+            metrics={"duration_ms": int((_time.time() - t_ret_start) * 1000),
+                     "total_docs": len(context_docs)})
+
+        # mq_check
+        mq_span = trace_collector.start_span("mq_check", name="多查询扩展")
         mq = getattr(self, '_mq_retriever', None)
         triggered = mq._last_triggered if mq else False
         from backend.rag.retrieval.multi_query import get_mq_mode
         trace_collector.end_span(mq_span,
-                             metrics={"triggered": triggered, "mode": get_mq_mode()},
-                             status="skipped" if not triggered else "success")
+            metrics={"triggered": triggered, "mode": get_mq_mode()},
+            status="skipped" if not triggered else "success")
+
+        # ── Evidence Gate 决策链 ────────────────────────────────
+        result["__evidence_gate_decision__"] = self._run_evidence_gates(
+            question, context_docs
+        )
         return result
 
-    def _verify(self, result: dict, question: str, session_id: str = "default") -> str:
-        """验证阶段：剥离 think 块 + Citation 校验 + 格式化引用。"""
+    def _run_evidence_gates(self, question: str, context_docs: list):
+        """两层 Gate（Retrieval + Rerank）的合并判定。
+
+        行为契约：
+          - 任一 Gate passed=False → 返回该 GateDecision
+          - 都通过 → 返回最后一个 passed=True 的 GateDecision
+          - 总开关关闭 / 任何异常 → 返回 passed=True (透传)
+        """
+        from backend.rag.evidence_gate import (
+            evidence_gate_retrieval, evidence_gate_rerank,
+            is_evidence_gate_enabled, gate_retrieval_passthrough,
+        )
+        from backend.rag.tracer import trace_collector, SpanKind
+        from backend.rag.guardrails import check_faithfulness  # noqa: F401
+
+        if not is_evidence_gate_enabled():
+            return gate_retrieval_passthrough()
+
+        # ── Gate 1: Retrieval（hybrid.py 注入的 decision 作为快路径）──
+        gate_span = trace_collector.start_span(
+            "evidence_gate_retrieval", name="Evidence Gate - Retrieval",
+            kind=SpanKind.RETRIEVAL_GATE.value,
+        )
+
+        # 优先复用 hybrid.py 注入的 decision
+        injected = (context_docs[0].metadata.get("__evidence_gate_decision__")
+                    if context_docs else None)
+        if injected is not None:
+            # 序列化 → 反序列化为 GateDecision-like
+            from backend.rag.evidence_gate import GateDecision, RejectReason
+            try:
+                ret_decision = GateDecision(
+                    passed=bool(injected.get("gate_passed")),
+                    reason=(RejectReason(injected["gate_reason"])
+                            if injected.get("gate_reason") else None),
+                    layer="retrieval",
+                    score=float(injected.get("gate_score", 0.0)),
+                    diagnostics={k: v for k, v in injected.items()
+                                 if k not in ("gate_passed", "gate_layer",
+                                              "gate_score", "gate_reason")},
+                )
+            except Exception:
+                ret_decision = gate_retrieval_passthrough()
+        else:
+            # 没注入（空召回或 fallback 路径）→ 自己跑一次
+            try:
+                from backend.config import VEC_MIN_SCORE, DOC_TYPE_COVERAGE_REQUIRED
+                ret_decision = evidence_gate_retrieval(
+                    context_docs,
+                    query_analysis=self._last_query_analysis,
+                    vec_min_score=VEC_MIN_SCORE,
+                    require_doc_type_coverage=DOC_TYPE_COVERAGE_REQUIRED,
+                )
+            except Exception:
+                ret_decision = gate_retrieval_passthrough()
+
+        trace_collector.end_span(gate_span, metrics=ret_decision.to_metrics(),
+                                 status="success" if ret_decision.passed else "rejected")
+
+        if not ret_decision.passed:
+            return ret_decision
+
+        # ── Gate 2: Rerank（基于 context 上的 rerank_score）──
+        from backend.rag.evidence_gate import risk_level_from_intent_and_doctype
+        try:
+            self._risk_level = risk_level_from_intent_and_doctype(
+                self._last_intent,
+                getattr(self._last_query_analysis, "doc_types", []) or [],
+            )
+        except Exception:
+            self._risk_level = "low"
+
+        rerank_span = trace_collector.start_span(
+            "evidence_gate_rerank", name="Evidence Gate - Rerank",
+            kind=SpanKind.RERANK_GATE.value,
+        )
+        try:
+            from backend.config import (
+                RERANK_MIN_TOP1, RERANK_MIN_AVG, RERANK_MIN_GAP,
+                RERANK_HIGH_RISK_MIN_TOP1,
+            )
+            rerank_decision = evidence_gate_rerank(
+                context_docs,
+                intent=self._last_intent,
+                risk_level=self._risk_level,
+                min_top1=RERANK_MIN_TOP1,
+                min_avg=RERANK_MIN_AVG,
+                min_gap=RERANK_MIN_GAP,
+                high_risk_min_top1=RERANK_HIGH_RISK_MIN_TOP1,
+            )
+        except Exception:
+            rerank_decision = gate_retrieval_passthrough()
+
+        trace_collector.end_span(rerank_span,
+                                 metrics=rerank_decision.to_metrics(),
+                                 status="success" if rerank_decision.passed else "rejected")
+
+        return rerank_decision
+
+    def _record_retrieval_events(self, ret_span, context_docs: list) -> None:
+        """采集检索各阶段的中间结果，写入 ret_span.events。"""
         from backend.rag.tracer import trace_collector
 
-        answer = _strip_think_blocks(result["answer"])
+        # ── Event 1: Query Analyzer ──
+        try:
+            from backend.rag.retrieval.query_analyzer import QueryAnalyzer
+            qa = QueryAnalyzer()
+            pq = qa.analyze(ret_span.input.get("question", ""))
+            trace_collector.add_event(ret_span, "query_analyzer", "info",
+                f"intent={pq.intent}, doc_types={pq.doc_types}",
+                data={"intent": pq.intent, "doc_types": pq.doc_types,
+                      "metadata_filter": pq.to_metadata_filter()})
+        except Exception:
+            pass
+
+        # ── Event 2: Rerank 结果 ──
+        rerank_scores = []
+        for doc in context_docs[:10]:
+            score = doc.metadata.get("rerank_score")
+            if score is not None:
+                rerank_scores.append({
+                    "chunk_id": doc.metadata.get("chunk_id", ""),
+                    "score": round(score, 4),
+                    "snippet": doc.page_content[:120],
+                    "source": doc.metadata.get("source_file", ""),
+                    "doc_type": doc.metadata.get("doc_type", ""),
+                })
+        if rerank_scores:
+            trace_collector.add_event(ret_span, "rerank", "info",
+                f"top {len(rerank_scores)} scored chunks",
+                data={"scored": rerank_scores})
+
+        # ── Event 3: Final Context ──
+        trace_collector.add_event(ret_span, "final_context", "info",
+            f"{len(context_docs)} chunks → LLM",
+            data={"chunks": [{
+                "chunk_id": d.metadata.get("chunk_id", ""),
+                "source": d.metadata.get("source_file", ""),
+                "doc_type": d.metadata.get("doc_type", ""),
+                "keywords": d.metadata.get("chunk_keywords", ""),
+                "snippet": d.page_content[:100],
+            } for d in context_docs[:8]]})
+
+    def _verify(self, result: dict, question: str, session_id: str = "default") -> str:
+        """验证阶段：剥离 think 块 + META 注释解析 + Citation 校验 + 格式化引用。
+
+        P1 改造：
+          - 解析 LLM 末尾 <!--META--> 注释，剥离出纯 Markdown
+          - META 信息存到 self._last_meta，让 ask() 后续判定拒答/放行
+        """
+        from backend.rag.tracer import trace_collector
+        from backend.rag.evidence_gate import parse_meta_comment, RejectReason
+
+        raw_answer = _strip_think_blocks(result["answer"])
         context_docs = result.get("context", [])
 
-        # Citation
+        # ── P1: 解析 META 注释 ──
+        meta_span = trace_collector.start_span("meta_parse", name="META 注释解析")
+        cleaned_answer, meta = parse_meta_comment(raw_answer)
+        self._last_meta = meta
+        trace_collector.end_span(meta_span,
+                                 metrics={"can_answer": meta.get("can_answer"),
+                                          "citations_count": len(meta.get("citations", [])) if meta else 0,
+                                          "confidence": meta.get("confidence")})
+
+        # ── Citation 校验（基于已剥离 META 的 cleaned_answer）──
         citation_span = trace_collector.start_span(
-            "citation", name="Citation")
+            "citation", name="引文校验")
         if context_docs:
-            answer, verified_docs = _verify_support(answer, context_docs, question)
+            answer, verified_docs = _verify_support(cleaned_answer, context_docs, question)
         else:
+            answer = cleaned_answer
             verified_docs = []
         trace_collector.end_span(citation_span,
                              metrics={"verified_citations": len(verified_docs),
@@ -302,7 +697,7 @@ class RAGChain:
         try:
             from backend.rag.guardrails import check_faithfulness
             faith_span = trace_collector.start_span(
-                "faithfulness", name="Faithfulness")
+                "faithfulness", name="忠实度验证")
             self._last_faithfulness = check_faithfulness(answer, context_docs)
             trace_collector.end_span(faith_span,
                                  metrics={

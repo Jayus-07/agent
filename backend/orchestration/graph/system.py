@@ -50,7 +50,7 @@ class MultiAgentSystem:
         t_total = time.time()
         trace = trace_collector.start(question, session_id, workflow_name="agent")
         trace_collector.start_span("root", parent_id=None,
-                                   name="Multi-Agent Pipeline", type="workflow",
+                                   name="多 Agent 协作管线", type="workflow",
                                    input={"question": question, "kb_id": kb_id})
 
         try:
@@ -355,7 +355,7 @@ class MultiAgentSystem:
         for r in range(1, loop_count + 1):  # loop_count >= 1
             round_span = Span(
                 span_id=f"supervisor-round-{r}", parent_id="root",
-                name=f"Supervisor Round {r}", type="workflow",
+                name=f"调度轮次 {r}", type="workflow",
                 status="success",
                 metrics={"round": r},
             )
@@ -417,13 +417,15 @@ class MultiAgentSystem:
             return
 
         l1 = self._memory.start_session(session_id, question)
+        from backend.orchestration.tools import set_session_id
+        set_session_id(session_id)
         start_time = time.time()
         initial_state = self._make_initial_state(question, session_id, kb_id, l1.messages)
 
         # ── Tracing ──
         trace = trace_collector.start(question, session_id, workflow_name="agent")
         trace_collector.start_span("root", parent_id=None,
-                                   name="Multi-Agent Pipeline", type="workflow",
+                                   name="多 Agent 协作管线", type="workflow",
                                    input={"question": question, "kb_id": kb_id})
 
         final_answer = ""

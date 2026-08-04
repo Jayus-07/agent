@@ -25,26 +25,30 @@ export function useDocuments() {
   const [loading, setLoading] = useState(true)
   const [total, setTotal] = useState(0)
   const [error, setError] = useState('')
+  const [currentFingerprint, setCurrentFingerprint] = useState('')
   const [keyword, setKeyword_] = useState('')
   const [status, setStatus_] = useState('')
   const [type, setType_] = useState('')
+  const [kbId, setKbId_] = useState('')
+  const [dept, setDept_] = useState('')
   const [page, setPage] = useState(1)
   const pageSize = 20
 
   const refresh = useCallback(() => {
     setLoading(true)
     setError('')
-    knowledgeService.getDocuments({ keyword, status, type, page, page_size: pageSize })
+    knowledgeService.getDocuments({ keyword, status, type, kb_id: kbId, department: dept, page, page_size: pageSize })
       .then(d => {
         setData(d.documents)
         setTotal(d.total)
+        setCurrentFingerprint(d.current_fingerprint || '')
         setLoading(false)
       })
       .catch(e => {
         setError('获取文档列表失败: ' + String(e))
         setLoading(false)
       })
-  }, [keyword, status, type, page])
+  }, [keyword, status, type, kbId, dept, page])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -63,7 +67,17 @@ export function useDocuments() {
     setPage(1)
   }, [])
 
-  return { documents: data, loading, total, page, pageSize, keyword, setKeyword, status, setStatus, type, setType, setPage, error, refresh }
+  const setKbId = useCallback((k: string) => {
+    setKbId_(k)
+    setPage(1)
+  }, [])
+
+  const setDept = useCallback((d: string) => {
+    setDept_(d)
+    setPage(1)
+  }, [])
+
+  return { documents: data, loading, total, page, pageSize, keyword, setKeyword, status, setStatus, type, setType, kbId, setKbId, dept, setDept, setPage, error, refresh, currentFingerprint }
 }
 
 // Hook — 单个文档详情（独立 fetch）

@@ -14,6 +14,9 @@ class SQLSkill(BaseSkill):
 
     name = "sql"
     capabilities = ["sql.query"]
+    description = "查询 PostgreSQL 跨境电商数据库，返回 Markdown 表格。覆盖商品/订单/库存/广告/物流/客户等 15 张表。"
+    params_schema = {"question": "自然语言查询问题（中文/英文）"}
+    examples = [{"question": "查询Amazon US渠道最近7天的销售额和订单数"}]
 
     @property
     def _tool_fn(self):

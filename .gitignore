@@ -49,6 +49,8 @@ data/doc_db/
 data/doc_versions.json  # 文档版本索引（自动生成）
 *.db
 *.sqlite3
+*.db-shm
+*.db-wal
 
 # Refactor: backend/data 是 junction 符号链接到 ../data，索引数据不应入仓
 backend/data/
@@ -90,6 +92,7 @@ evaluation/results/
 *技术报告.md
 report_agent/data/
 # Frontend build artifacts
+node_modules/
 web/node_modules/
 web/.next/
 frontend/node_modules/
@@ -98,3 +101,4 @@ frontend/tsconfig.tsbuildinfo
 
 # Added by code-review-graph
 .code-review-graph/
+data/rag/tmp/

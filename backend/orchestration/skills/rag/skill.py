@@ -14,6 +14,9 @@ class RAGSkill(BaseSkill):
 
     name = "rag"
     capabilities = ["rag.search"]
+    description = "从跨境电商知识库中检索 SOP/规范/FAQ/Listing指南等非结构化内容"
+    params_schema = {"question": "检索问题"}
+    examples = [{"question": "Amazon FBA发货的标准操作流程SOP"}]
 
     @property
     def _tool_fn(self):

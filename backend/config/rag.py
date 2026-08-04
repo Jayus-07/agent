@@ -11,12 +11,35 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ====================================
+# Chunk 级 LLM 关键词配置
+# ====================================
+# 使用本地 Ollama 模型做 chunk 级关键词提取（仅 LLM_FORCED_TYPES 文档）
+CHUNK_LLM_MODEL = os.getenv("CHUNK_LLM_MODEL", "qwen2.5:3b")
+
+# ====================================
+# 文件上传限制 (P0-1 流式上传)
+# ====================================
+# 单文件最大 50MB,企业可调到 100MB;超过 1GB 应改用对象存储
+RAG_MAX_FILE_SIZE = int(os.getenv("RAG_MAX_FILE_SIZE", "50"))  # 单位 MB
+# 临时文件目录 (atomic rename 前存这里, Docker 容器内安全)
+RAG_TMP_DIR = os.getenv("RAG_TMP_DIR", "data/rag/tmp")
+# 流式读块大小 (1MB 平衡内存和 syscall 次数)
+RAG_UPLOAD_CHUNK_SIZE = int(os.getenv("RAG_UPLOAD_CHUNK_SIZE", str(1024 * 1024)))
+# SSE 进度推送间隔: 每 5MB 或 500ms 触发一次
+RAG_UPLOAD_EMIT_BYTES = int(os.getenv("RAG_UPLOAD_EMIT_BYTES", str(5 * 1024 * 1024)))
+RAG_UPLOAD_EMIT_MS = int(os.getenv("RAG_UPLOAD_EMIT_MS", "500"))
+
+# 文档级关键词 LLM 模型 — 设了用本地 Ollama（免费），不设走 _LLMProxy（当前 DeepSeek）
+DOC_LLM_MODEL = os.getenv("DOC_LLM_MODEL", "")
+
+# ====================================
 # Chunk 配置
 # ====================================
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
 
 # 文档类型感知分块
+POLICY_MAX_CHUNK_SIZE = int(os.getenv("POLICY_MAX_CHUNK_SIZE", "2000"))
 PROJECT_CHUNK_SIZE = int(os.getenv("PROJECT_CHUNK_SIZE", "1500"))
 GENERAL_CHUNK_SIZE = int(os.getenv("GENERAL_CHUNK_SIZE", "1000"))
 GENERAL_CHUNK_OVERLAP = int(os.getenv("GENERAL_CHUNK_OVERLAP", "100"))
@@ -121,26 +144,65 @@ SIGNAL_RULES: Dict[str, List[str]] = {
     "平台渠道": ["amazon", "shopify", "tiktok", "ebay", "walmart", "账号", "店铺"],
 }
 
-DOC_TYPE_RULES: Dict[str, List[str]] = {
-    "listing": [r"(?<!\w)Listing(?!\w)", r"五点描述", r"A\+内容", r"关键词策略", r"标题公式", r"主图规范"],
-    "sop": [r"(?<!\w)SOP(?!\w)", r"标准操作", r"操作流程", r"标准作业", r"作业指导"],
-    "ad_policy": [r"广告政策", r"投放规则", r"Amazon Ads", r"竞价策略", r"广告规范"],
-    "faq": [r"(?<!\w)FAQ(?!\w)", r"常见问题", r"退货政策", r"物流时效", r"售后流程"],
-    "product_spec": [r"产品规格", r"材质说明", r"使用手册", r"保养指南", r"故障排查"],
-    "training": [r"培训", r"新人手册", r"上岗", r"考核"],
-    "policy": [r"制度", r"规范", r"审批", r"规定", r"管理条例"],
+# 文档类型分类规则（V2 加权计分）
+# 格式: {doc_type: [(pattern, weight), ...]}
+# weight: 正则命中一次加 N 分；文件名辅助加权在外层 classify_doc_type() 处理
+DOC_TYPE_RULES: Dict[str, List[tuple]] = {
+    "listing": [(r"(?<!\w)Listing(?!\w)", 10), (r"五点描述", 10), (r"A\+内容", 8), (r"关键词策略", 5), (r"标题公式", 5), (r"主图规范", 5)],
+    "sop": [(r"(?<!\w)SOP(?!\w)", 10), (r"标准操作", 8), (r"操作流程", 8), (r"标准作业", 8), (r"作业指导书", 8), (r"作业指导", 5)],
+    "ad_policy": [(r"广告政策", 10), (r"投放规则", 8), (r"Amazon Ads", 10), (r"竞价策略", 8), (r"广告规范", 5)],
+    "faq": [(r"(?<!\w)FAQ(?!\w)", 10), (r"常见问题", 10), (r"退货政策", 5), (r"物流时效", 5), (r"售后流程", 5)],
+    "product_spec": [(r"产品规格", 10), (r"材质说明", 8), (r"使用手册", 8), (r"保养指南", 8), (r"故障排查", 5)],
+    "training": [(r"培训", 10), (r"新人手册", 5), (r"上岗", 5), (r"考核", 5)],
+    "policy": [(r"制度", 5), (r"规范", 3), (r"审批", 5), (r"规定", 5), (r"管理条例", 10)],
+    "compliance": [(r"合规", 10), (r"法规", 10), (r"监管", 10), (r"GDPR", 10), (r"CCPA", 10), (r"数据保护", 8), (r"个人信息", 8), (r"隐私政策", 10)],
+    "legal": [(r"合同", 10), (r"条款", 10), (r"违约责任", 10), (r"赔偿", 8), (r"知识产权", 10), (r"保密协议", 10), (r"法律", 8)],
+    "security": [(r"安全", 10), (r"权限", 8), (r"访问控制", 8), (r"加密", 8), (r"漏洞", 8), (r"认证", 8)],
+    "financial": [(r"财务", 10), (r"报销", 8), (r"预算", 8), (r"发票", 8), (r"付款审批", 8), (r"账[务户簿单目]|对账|坏账", 6)],
+    "customer_data": [(r"客户数据", 10), (r"个人信息", 10), (r"用户隐私", 10), (r"数据收集", 8), (r"用户画像", 8)],
+    "contract_template": [(r"合同模板", 10), (r"协议模板", 10), (r"标准条款", 8), (r"模板", 5)],
+}
+
+# 文件名 → 文档类型强特征映射（优先级高于内容计分）
+FILENAME_TYPE_HINTS: Dict[str, str] = {
+    "政策": "policy", "制度": "policy", "规范": "policy", "管理办法": "policy",
+    "合规": "compliance", "法规": "compliance", "监管": "compliance", "隐私": "compliance",
+    "合同": "legal", "条款": "legal", "协议": "legal", "NDA": "legal", "保密": "legal",
+    "FAQ": "faq", "常见问题": "faq", "问答": "faq",
+    "规格": "product_spec", "参数": "product_spec", "说明书": "product_spec",
+    "SOP": "sop", "操作手册": "sop", "流程": "sop",
+    "Listing": "listing", "广告": "ad_policy",
+    "安全": "security", "权限": "security", "加密": "security",
+    "财务": "financial", "报销": "financial", "发票": "financial",
+    "客户数据": "customer_data", "用户隐私": "customer_data",
+    "合同模板": "contract_template", "协议模板": "contract_template",
+}
+
+# 文件夹路径 → 文档类型强特征映射（命中直接 +0.3 confidence）
+FOLDER_TYPE_HINTS: Dict[str, str] = {
+    "legal": "legal", "contracts": "legal", "合同": "legal",
+    "compliance": "compliance", "法规": "compliance", "regulatory": "compliance",
+    "policy": "policy", "policies": "policy", "制度": "policy",
+    "hr": "policy", "finance": "policy",
+    "faq": "faq", "help": "faq", "常见问题": "faq",
+    "products": "product_spec", "specs": "product_spec", "规格": "product_spec",
+    "sop": "sop", "operations": "sop", "流程": "sop",
+    "security": "security", "安全": "security", "infosec": "security",
+    "finance": "financial", "财务": "financial", "报销": "financial",
+    "customers": "customer_data", "customer_data": "customer_data",
+    "templates": "contract_template", "模板": "contract_template",
 }
 
 DOMAIN_RULES: Dict[str, Dict[str, int]] = {
     "product": {"SKU": 3, "SPU": 3, "Listing": 3, "上架": 2, "下架": 2, "变体": 2, "品类": 2, "类目": 2, "品牌": 2, "条码": 2},
-    "order": {"订单": 3, "发货": 3, "签收": 2, "取消": 2, "退款": 2, "退货": 2, "拆单": 2, "履约": 2, "包裹": 1},
+    "order": {"订单": 3, "发货": 3, "签收": 2, "取消": 2, "退款": 2, "退货": 2, "拆单": 2, "履约": 2, "包裹": 1, "售后": 2},
     "inventory": {"库存": 3, "FBA": 3, "海外仓": 2, "调拨": 2, "在途": 2, "安全库存": 2, "滞销": 2, "周转": 2, "盘点": 2},
     "logistics": {"头程": 3, "尾程": 3, "清关": 3, "追踪号": 2, "时效": 2, "运费": 2, "承运商": 2, "HS编码": 2, "报关": 2},
     "advertising": {"ACoS": 3, "ROAS": 3, "CPC": 3, "Campaign": 2, "广告": 2, "竞价": 2, "投放": 2, "曝光": 1, "点击": 1, "转化": 1},
-    "customer": {"退货": 2, "差评": 3, "投诉": 3, "Review": 2, "Feedback": 2, "售后": 2, "索赔": 3, "保修": 2, "复购": 2},
-    "supplier": {"供应商": 2, "PO": 2, "交期": 3, "验货": 2, "对账": 2, "采购": 2, "比价": 2, "工厂": 2},
+    "customer": {"退货": 2, "差评": 3, "投诉": 3, "Review": 2, "Feedback": 2, "索赔": 3, "保修": 2, "复购": 2},
+    "supplier": {"供应商": 2, "供货商": 2, "PO": 2, "交期": 3, "验货": 2, "对账": 2, "采购": 2, "比价": 2, "工厂": 2, "评估": 2, "准入": 2, "资质": 2, "考核": 2},
     "analytics": {"日报": 3, "周报": 3, "月报": 3, "毛利率": 3, "净利润": 3, "ROI": 2, "客单价": 2, "转化率": 2, "同比": 2, "环比": 2},
-    "knowledge": {"SOP": 3, "FAQ": 3, "培训": 2, "政策": 2, "规范": 2, "制度": 2, "流程": 1, "操作手册": 2},
+    "data": {"数据治理": 3, "数据质量": 3, "数据标准": 3, "数据管理": 3, "数据规范": 3, "数据安全": 2, "元数据": 3, "主数据": 3, "数据采集": 2, "数据仓库": 2, "ETL": 3, "数据血缘": 2, "数据目录": 2},
 }
 
 blacklist = {"系统", "进行", "问题", "公司", "我们", "已经", "可以", "这个", "那个"}
@@ -176,10 +238,73 @@ FILTER_ENABLE_PII_MASK = os.getenv("FILTER_ENABLE_PII_MASK", "false").lower() ==
 # ====================================
 # Faithfulness 检测（NLI 答案验证）
 # ====================================
-ENABLE_FAITHFULNESS = os.getenv("ENABLE_FAITHFULNESS", "false").lower() == "true"
+# 默认 True（对齐企业生产实践，§0.2 对标：Vertex AI / AWS Bedrock / RAGAS），
+# 关闭用 ENABLE_FAITHFULNESS=false
+ENABLE_FAITHFULNESS = os.getenv("ENABLE_FAITHFULNESS", "true").lower() == "true"
 NLI_MODEL_PATH = os.getenv(
     "NLI_MODEL_PATH",
     "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"  # HuggingFace model name，自动走缓存
 )
 NLI_TOP_K_CHUNKS = int(os.getenv("NLI_TOP_K_CHUNKS", "2"))
 NLI_SCORE_THRESHOLD = float(os.getenv("NLI_SCORE_THRESHOLD", "0.5"))
+
+# ====================================
+# Evidence Gate — RAG 主动拒答
+# 设计与 RAGFlow / Vertex AI / LangGraph CRAG 对齐
+# 详见 docs/architecture/rag-evidence-gate.md
+# ====================================
+
+# 总开关：false 时全部 Gate 旁路（与 Faithfulness 默认 true 独立）
+EVIDENCE_GATE_ENABLED = os.getenv("EVIDENCE_GATE_ENABLED", "true").lower() == "true"
+
+# --- Retrieval Gate（对齐 RAGFlow 默认 0.2） ---
+VEC_MIN_SCORE = float(os.getenv("VEC_MIN_SCORE", "0.2"))
+# 是否要求召回 doc_type 覆盖 QueryAnalyzer 推导的 doc_types
+DOC_TYPE_COVERAGE_REQUIRED = os.getenv("DOC_TYPE_COVERAGE_REQUIRED", "true").lower() == "true"
+
+# --- Rerank Gate（多维，与 RAGFlow 单阈值不同，更严格但有上限控制） ---
+RERANK_MIN_TOP1 = float(os.getenv("RERANK_MIN_TOP1", "0.35"))
+RERANK_MIN_AVG = float(os.getenv("RERANK_MIN_AVG", "0.25"))
+RERANK_MIN_GAP = float(os.getenv("RERANK_MIN_GAP", "0.05"))
+# 高风险问题额外要求 top1 提高到 0.55
+RERANK_HIGH_RISK_MIN_TOP1 = float(os.getenv("RERANK_HIGH_RISK_MIN_TOP1", "0.55"))
+
+# --- Evaluation Gate（Faithfulness 拒答门槛） ---
+# 整体 Faithfulness 分数低于此阈值触发 HALLUCINATION_REJECT
+FAITHFULNESS_REJECT_SCORE = float(os.getenv("FAITHFULNESS_REJECT_SCORE", "0.5"))
+# 高风险问题更高门槛
+HIGH_RISK_REJECT_SCORE = float(os.getenv("HIGH_RISK_REJECT_SCORE", "0.7"))
+
+# --- Self-Correction：拒答后 query rewrite 重试 ---
+SELF_CORRECTION_ENABLED = os.getenv("SELF_CORRECTION_ENABLED", "true").lower() == "true"
+SELF_CORRECTION_MAX_RETRIES = int(os.getenv("SELF_CORRECTION_MAX_RETRIES", "1"))
+
+# --- KB 反向驱动（cron 任务触发） ---
+KNOWLEDGE_GAP_MIN_OCCURRENCES = int(os.getenv("KNOWLEDGE_GAP_MIN_OCCURRENCES", "3"))
+KNOWLEDGE_GAP_WINDOW_HOURS = int(os.getenv("KNOWLEDGE_GAP_WINDOW_HOURS", "24"))
+
+# ====================================
+# Metadata 规则指纹 — 改任何规则文件自动变化
+# ====================================
+import hashlib as _hashlib
+
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../agent/backend/
+_METADATA_RULE_FILES = [
+    os.path.join(_BACKEND_DIR, "config", "rag.py"),
+    os.path.join(_BACKEND_DIR, "rag", "preprocessing", "keyword.py"),
+    os.path.join(_BACKEND_DIR, "rag", "preprocessing", "metadata.py"),
+    os.path.join(_BACKEND_DIR, "rag", "indexing", "indexer.py"),
+]
+
+def compute_metadata_fingerprint() -> str:
+    """SHA256 前 12 位：hash 4 个规则源文件，改任何一行自动变化。"""
+    h = _hashlib.sha256()
+    for fp in _METADATA_RULE_FILES:
+        try:
+            with open(fp, "rb") as f:
+                h.update(f.read())
+        except FileNotFoundError:
+            pass
+    return h.hexdigest()[:12]
+
+METADATA_SCHEMA_FINGERPRINT = compute_metadata_fingerprint()
