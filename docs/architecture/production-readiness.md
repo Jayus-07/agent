@@ -36,7 +36,7 @@
 | # | 行动项 | 验收标准 | 工作量 | 状态 |
 |---|--------|---------|--------|------|
 | O1 | 引入 `prometheus_client` + `/metrics` 端点 | Grafana 能拉到 4 类黄金指标 | 中 | [x] PR-0.3 ✅ 4 metric 已暴露（缺 Grafana 仪表盘） |
-| O2 | 结构化日志（JSON，含 `trace_id`/`session_id`/`capability`） | 一条请求可串起所有日志 | 小 | [ ] 待办 |
+| O2 | 结构化日志（JSON，含 `trace_id`/`session_id`/`capability`） | 一条请求可串起所有日志 | 小 | [x] PR-2.x ✅ shared/logger.py 新增 _JsonFormatter + set_log_context/clear_log_context |
 | O3 | OpenTelemetry 集成（替换自建 Tracer） | Trace 可导出到 Jaeger / Tempo | 大 | [ ] 待办（路线图阶段 2）|
 | O4 | 关键 SLI 定义文档化（见下表） | 每个 SLI 有采集点 + 告警阈值 | 小 | [x] ✅ §1.3 已定义（缺告警规则实现）|
 
@@ -74,8 +74,8 @@
 
 | # | 行动项 | 验收标准 | 工作量 | 状态 |
 |---|--------|---------|--------|------|
-| R1 | LLM 限流（按用户/全局 QPS + Token Rate） | 突发流量可被削峰 | 中 | [ ] PR-0.4（仅日志）→ PR-2.4（接 429）|
-| R2 | 下游熔断（DeepSeek / PG / Chroma） | 失败 N 次自动断开 | 中 | [ ] 待办 |
+| R1 | LLM 限流（按用户/全局 QPS + Token Rate） | 突发流量可被削峰 | 中 | [x] PR-2.4 ✅ TokenBucket → HTTP 429 + Retry-After |
+| R2 | 下游熔断（DeepSeek / PG / Chroma） | 失败 N 次自动断开 | 中 | [x] PR-2.x ✅ infra/circuit_breaker.py（CLOSED→OPEN→HALF_OPEN） |
 | R3 | 隔离舱（Bulkhead）：LLM / DB 独立线程池 | 一方阻塞不拖垮另一方 | 中 | [ ] 待办 |
 | R4 | 全局超时链路（ContextVar 串联） | 子调用继承根超时 | 小 |
 | R5 | 优雅停机（uvicorn SIGTERM → 等待 in-flight） | 重启 0 丢请求 | 中 |
@@ -131,7 +131,7 @@
 
 | # | 行动项 | 验收标准 | 工作量 |
 |---|--------|---------|--------|
-| D1 | Dockerfile + docker-compose | 一键启动完整栈 | 中 |
+| D1 | Dockerfile + docker-compose | 一键启动完整栈 | 中 | [x] PR-2.x ✅ app + postgres(pgvector) + ollama(可选) |
 | D2 | 深度健康检查（DB / LLM / Chroma 全部 ping） | 任一依赖异常 → 503 | 小 |
 | D3 | 配置分层（dev/staging/prod） | 切换环境不改代码 | 中 |
 | D4 | 启动探针（readiness）vs 存活探针（liveness） | K8s 能正确滚动 | 小 |
