@@ -14,6 +14,12 @@
 """
 import os
 
+# 并发控制
+MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "1"))
+
+# 报告
+REPORT_SNAPSHOT_DAYS = int(os.getenv("REPORT_SNAPSHOT_DAYS", "30"))
+
 # SMTP
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.qq.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))

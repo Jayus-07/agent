@@ -28,5 +28,5 @@ DB_CONFIG = {
     "port":     int(os.getenv("PGPORT", "5432")),
     "dbname":   os.getenv("PGDATABASE", "demo"),
     "user":     os.getenv("PGUSER", "postgres"),
-    "password": os.getenv("PGPASSWORD", "123456"),
+    "password": os.getenv("PGPASSWORD", ""),
 }

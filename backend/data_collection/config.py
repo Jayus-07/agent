@@ -22,7 +22,7 @@ DC_MOCK_API_PORT = int(os.getenv("DC_MOCK_API_PORT", "8001"))
 # ── 数据库 ──
 DC_DATABASE_URL = os.getenv(
     "DC_DATABASE_URL",
-    "postgresql://postgres:123456@localhost:5432/demo",
+    "postgresql://postgres@localhost:5432/demo",  # 密码从环境变量 PGPASSWORD 注入
 )
 DC_BATCH_SIZE = int(os.getenv("DC_BATCH_SIZE", "500"))
 

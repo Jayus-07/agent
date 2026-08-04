@@ -44,8 +44,8 @@ def _get_snapshot_dir() -> str:
     return base
 
 
-# 快照保留天数
-SNAPSHOT_RETENTION_DAYS = int(os.getenv("REPORT_SNAPSHOT_DAYS", "30"))
+# 快照保留天数（从 config 读取）
+from backend.config import REPORT_SNAPSHOT_DAYS as SNAPSHOT_RETENTION_DAYS  # noqa: E402
 
 
 # =====================================================

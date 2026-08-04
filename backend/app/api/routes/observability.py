@@ -9,6 +9,8 @@ import json
 
 from fastapi import APIRouter, Query, HTTPException
 
+from backend.shared.logger import logger
+
 from backend.orchestration.observability import GRAPH_TOPOLOGY, NODE_LABELS
 from backend.shared.monitoring.resource_monitor import resource_monitor
 from backend.rag.metrics import metrics_collector
@@ -245,7 +247,7 @@ async def get_alerts(limit: int = Query(50, ge=1, le=500)):
                     except json.JSONDecodeError:
                         pass
     except Exception:
-        pass
+        logger.warning("读取告警文件失败", exc_info=True)
 
     return {
         "alerts": list(reversed(alerts)),

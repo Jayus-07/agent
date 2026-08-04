@@ -96,10 +96,8 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
                 decision = gate_retrieval_passthrough()
             merged[0].metadata["__evidence_gate_decision__"] = decision.to_metrics()
         except Exception as e:
-            import logging as _lg
-            _lg.getLogger(__name__).warning(
-                f"[hybrid_retrieve] evidence_gate 评估异常: {e}"
-            )
+            from backend.shared.logger import logger
+            logger.warning(f"[hybrid_retrieve] evidence_gate 评估异常: {e}")
 
     return merged
 

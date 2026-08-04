@@ -69,7 +69,8 @@ async def get_session_context(session_id: str):
                 import json as _json
                 try:
                     return {"session_id": session_id, "context": _json.loads(ctx)}
-                except Exception:
+                except (_json.JSONDecodeError, TypeError, ValueError) as e:
+                    logger.debug("会话上下文 JSON 解析失败，回退为 raw: %s", e)
                     return {"session_id": session_id, "context": {"raw": ctx}}
             return {"session_id": session_id, "context": None}
         except Exception as e:

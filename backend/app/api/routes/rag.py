@@ -89,6 +89,7 @@ async def list_knowledge_bases():
         for kb in kbs:
             kb["doc_count"] = reg.count_by_kb_id(kb["id"])
     except Exception:
+        logger.warning("统计知识库文档数失败，回退为 0", exc_info=True)
         for kb in kbs:
             kb["doc_count"] = 0
     return {"knowledge_bases": kbs}
@@ -725,7 +726,7 @@ class _ProgressListener:
         try:
             self._emit(stage, msg, duration_ms=int(span.duration_ms or 0))
         except Exception:
-            pass  # listener emit 失败不影响 indexer
+            logger.debug("ProgressListener emit 失败", exc_info=True)
 
     @staticmethod
     def _format_message(span) -> str:

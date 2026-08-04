@@ -117,13 +117,20 @@ async def generate_data(types: list[str] = ["products"], count: int = 1000):
     try:
         import pandas as pd
         from backend.data_collection.config import DC_DATABASE_URL
-        from sqlalchemy import create_engine
+        from sqlalchemy import create_engine, text
 
         engine = create_engine(DC_DATABASE_URL)
+        # 白名单校验表名，防止 SQL 注入
+        valid_tables = {"products", "orders", "customers", "inventory",
+                        "advertising", "logistics", "reports"}
         result = {}
         for t in types:
+            if t not in valid_tables:
+                result[t] = {"rows": 0, "columns": [], "error": f"非法表名: {t}", "from": "db"}
+                continue
             try:
-                df = pd.read_sql(f"SELECT * FROM stg_{t} LIMIT {count}", engine)
+                df = pd.read_sql(text(f"SELECT * FROM stg_{t} LIMIT :count"),
+                                 engine, params={"count": int(count)})
                 result[t] = {"rows": len(df), "columns": list(df.columns), "preview": df.head(5).to_dict(orient="records")}
             except Exception as e:
                 result[t] = {"rows": 0, "columns": [], "error": str(e), "from": "db"}
@@ -133,7 +140,7 @@ async def generate_data(types: list[str] = ["products"], count: int = 1000):
         if has_data:
             return {"ok": True, "generated": result, "source": "postgresql", "task_id": uuid.uuid4().hex[:8]}
     except Exception:
-        pass  # 数据库不可用 → 回退
+        logger.warning("数据库不可用，回退到本地数据集", exc_info=True)
 
     # ── 路径 2: 回退到 Data Collection Center 本地数据集 ──
     try:
@@ -184,6 +191,7 @@ async def list_assets():
         from sqlalchemy import create_engine
 
         engine = create_engine(DC_DATABASE_URL)
+        # 表名硬编码且已加 stg_ 前缀，无 SQL 注入风险
         tables = ["stg_products", "stg_orders", "stg_shops", "stg_inventory", "stg_suppliers"]
         assets = []
         for t in tables:
@@ -198,7 +206,7 @@ async def list_assets():
                     "quality": 100, "status": "就绪"
                 })
             except Exception:
-                pass
+                logger.debug("读取表 %s schema 失败，跳过", t, exc_info=True)
         engine.dispose()
         return {"assets": assets, "total": len(assets)}
     except Exception as e:
@@ -319,7 +327,7 @@ def _build_dcc_pipeline(enable_write: bool = False):
             from backend.data_collection.config import DC_DATABASE_URL
             writer = SQLAlchemyWriter(DC_DATABASE_URL)
         except Exception:
-            pass
+            logger.warning("SQLAlchemyWriter 初始化失败，writer 降级为 None", exc_info=True)
 
     from backend.data_collection.pipeline import CollectionPipeline
     return CollectionPipeline(

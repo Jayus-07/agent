@@ -96,7 +96,7 @@ async def eager_init_rag_pipeline():
             jieba.initialize()
             logger.info("[Startup] jieba 词典预热完成")
         except Exception:
-            pass
+            logger.warning("[Startup] jieba 预热失败，分词可能较慢", exc_info=True)
     threading.Thread(target=_warmup, daemon=True, name="rag-warmup").start()
 
 
