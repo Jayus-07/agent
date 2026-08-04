@@ -238,7 +238,7 @@ class TestSSEStreamE2E:
         self, fresh_collector, tmp_path, long_text_file
     ):
         """完整 SSE 流：uploading + loading + parsing + cleaning + dedup + chunking + metadata + embedding + writing + done（9 阶段）"""
-        from backend.app.api.routes import rag as rag_route
+        from backend.app.api.routes import _rag_shared as rag_route
 
         # 1. 模拟 upload_document 创建 upload_id + queue
         upload_id = "test_upload_e2e_001"
@@ -325,7 +325,7 @@ class TestFullBackgroundTaskE2E:
         self, fresh_collector, tmp_path, long_text_file
     ):
         """完整异步路径：主 loop → executor → run_coroutine_threadsafe → queue → SSE."""
-        from backend.app.api.routes import rag as rag_route
+        from backend.app.api.routes import _rag_shared as rag_route
         from backend.rag.progress_listener import ProgressListener
 
         upload_id = "e2e_real_executor_001"
