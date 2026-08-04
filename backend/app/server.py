@@ -14,6 +14,7 @@ from backend.app.exceptions import (
     global_exception_handler,
 )
 from backend.app.middleware.concurrency import concurrency_limit_middleware
+from backend.app.api.middleware.metrics import render_metrics
 from backend.shared.logger import logger
 from backend.config.rag import RAG_MAX_FILE_SIZE
 from backend.mcp.servers import register_all as register_mcp_servers
@@ -61,6 +62,14 @@ app.add_exception_handler(Exception, global_exception_handler)
 
 # ── 注册所有路由（聚合在 api/router.py） ──────────────
 app.include_router(api_router)
+
+# ── Prometheus /metrics 端点（PR-0.3）────────────────
+@app.get("/metrics", include_in_schema=False)
+async def metrics_endpoint():
+    """Prometheus 拉取端点 — 不受 auth / CORS 限制（K8s scrape）。"""
+    from fastapi.responses import Response
+    body, content_type = render_metrics()
+    return Response(content=body, media_type=content_type)
 
 # ── 注册 MCP Server ─────────────────────────────────
 register_mcp_servers()

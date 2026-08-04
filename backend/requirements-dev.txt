@@ -1,6 +1,10 @@
-# 开发依赖（测试 + 工具）
+# 开发依赖（测试 + 工具 + 运行时）
 # 安装：pip install -r backend/requirements-dev.txt
 
+# 运行时依赖
+prometheus-client==0.20.0       # P0: Prometheus 指标 (PR-0.3)
+
+# 测试
 pytest==9.1.1
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
