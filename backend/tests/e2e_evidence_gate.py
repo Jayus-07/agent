@@ -56,9 +56,9 @@ def make_rag_chain_mock():
     chain.bm25 = None
     chain.person_index = {}
     chain._memory = None
-    chain._last_intent = "summary_query"
-    chain._risk_level = "low"
-    chain._last_query_analysis = None
+    chain.gate.set_intent("summary_query")
+    chain.gate.set_risk_level("low")
+    chain.gate.set_query_analysis(None)
     chain._last_query = ""
     # _run_evidence_gates 内部要用
     chain._mq_retriever = MagicMock()
@@ -101,7 +101,7 @@ def scenario_insufficient(chain):
             "doc_type": "general", "source_file": "test.md",
         }),
     ]
-    chain._last_query_analysis = None
+    chain.gate.set_query_analysis(None)
     decision = chain._run_evidence_gates("低分问题", docs)
 
     assert not decision.passed, f"期望拒答却过了：{decision}"
@@ -134,7 +134,7 @@ def scenario_pass(chain):
             "doc_type": "policy", "source_file": "compliance.md",
         }),
     ]
-    chain._last_query_analysis = None
+    chain.gate.set_query_analysis(None)
     decision = chain._run_evidence_gates("GDPR 合规要求", docs)
 
     assert decision.passed, f"期望通过却拒了：{decision}"

@@ -52,6 +52,9 @@ class TestQAPromptShape:
 def _stub_chain():
     """构造 RAGChain（mock，不起真实 chain）以测 _verify 等方法。"""
     from backend.rag.chain import RAGChain
+    from backend.rag.citation import CitationFormatter
+    from backend.rag.evidence_gate import EvidenceGateController
+    from backend.rag.evidence_gate.self_correction import SelfCorrectionStrategy
     chain = RAGChain.__new__(RAGChain)
     chain.doc_db = None
     chain.vectordb = None
@@ -62,6 +65,11 @@ def _stub_chain():
     chain._last_meta = {}
     chain._last_faithfulness = None
     chain._last_sources = []
+    chain._last_query = ""
+    # PR-1.4: 策略对象（绕过 __init__，需手动初始化）
+    chain.gate = EvidenceGateController()
+    chain.corrector = SelfCorrectionStrategy()
+    chain.formatter = CitationFormatter()
     return chain
 
 
@@ -139,8 +147,7 @@ class TestFinalizeLlmRejection:
         trace_collector.start_span("root", parent_id=None, name="test", type="agent")
 
         # P1.3 字段
-        chain2._self_correction_retry_count = 0
-        chain2._self_correction_pending = None
+        chain2.corrector.reset()
 
         import time as _time
         meta = {"can_answer": False, "reason": "no_evidence", "confidence": 0.05}
@@ -152,7 +159,7 @@ class TestFinalizeLlmRejection:
             _cfg_mod.SELF_CORRECTION_ENABLED = False
             try:
                 # 新 API: _build_decision_from_meta + _reject
-                decision = chain2._build_decision_from_meta(meta)
+                decision = chain2.gate.build_decision_from_meta(meta)
                 msg = chain2._reject(decision, "generation", trace, _time.time())
                 info = trace.metadata.get("rejection") or {}
             finally:
@@ -176,8 +183,7 @@ class TestFinalizeLlmRejection:
         from backend.rag.tracer import trace_collector
         trace = trace_collector.start("test-lr", session_id="t1")
         trace_collector.start_span("root", parent_id=None, name="test", type="agent")
-        chain._self_correction_retry_count = 0
-        chain._self_correction_pending = None
+        chain.corrector.reset()
 
         import time as _time
         meta = {"can_answer": False, "reason": "low_relevance", "confidence": 0.2}
@@ -186,7 +192,7 @@ class TestFinalizeLlmRejection:
         _cfg_mod.SELF_CORRECTION_ENABLED = False
         try:
             # 新 API
-            decision = chain._build_decision_from_meta(meta)
+            decision = chain.gate.build_decision_from_meta(meta)
             chain._reject(decision, "generation", trace, _time.time())
             info = trace.metadata.get("rejection") or {}
             assert info.get("reason") == "low_relevance"
@@ -200,8 +206,7 @@ class TestFinalizeLlmRejection:
         from backend.rag.tracer import trace_collector
         trace = trace_collector.start("test-ur", session_id="t1")
         trace_collector.start_span("root", parent_id=None, name="test", type="agent")
-        chain._self_correction_retry_count = 0
-        chain._self_correction_pending = None
+        chain.corrector.reset()
 
         import time as _time
         meta = {"can_answer": False, "reason": "i_dont_know_dude", "confidence": 0.0}
@@ -210,7 +215,7 @@ class TestFinalizeLlmRejection:
         _cfg_mod.SELF_CORRECTION_ENABLED = False
         try:
             # 新 API
-            decision = chain._build_decision_from_meta(meta)
+            decision = chain.gate.build_decision_from_meta(meta)
             chain._reject(decision, "generation", trace, _time.time())
             info = trace.metadata.get("rejection") or {}
             assert info.get("reason") == "no_evidence"  # fallback

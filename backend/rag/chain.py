@@ -26,10 +26,10 @@ from langchain_core.runnables import RunnableLambda
 from backend.infra.llm import llm
 from backend.rag.retrieval.retrievers import ChunkLevelRetriever, AdaptiveRetriever
 from backend.rag.reranker import RerankCompressor
-from backend.config import (
-    ENABLE_HISTORY_AWARE_RETRIEVAL,
-    CITATION_SUPPORT_THRESHOLD,
-)
+from backend.rag.citation import CitationFormatter
+from backend.rag.evidence_gate import EvidenceGateController
+from backend.rag.evidence_gate.self_correction import SelfCorrectionStrategy
+from backend.config import ENABLE_HISTORY_AWARE_RETRIEVAL
 from backend.shared.logger import logger
 
 
@@ -114,14 +114,13 @@ class RAGChain:
         self.bm25 = bm25
         self.person_index = person_index or {}
         self._memory = memory_manager
-        # Evidence Gate — 诊断态字段（§D4 修复）
-        self._last_intent: str = "summary_query"
-        self._risk_level: str = "low"
-        self._last_query_analysis = None
+        # ── PR-1.4: 3 个策略对象（替代原来的 mutable 字段）──
+        self.gate = EvidenceGateController()
+        self.corrector = SelfCorrectionStrategy()
+        self.formatter = CitationFormatter()
+        # ── RAGChain 自有状态（PR-1.4 保留）──
         self._last_query: str = ""
         self._last_meta: dict = {}  # P1: META 注释解析结果
-        self._self_correction_retry_count: int = 0  # P1: self-correction 重试计数
-        self._self_correction_pending = None  # P1: 触发 self-correction 时存暂态
 
         self._build_retrievers()
         self._build_chains()
@@ -281,39 +280,18 @@ class RAGChain:
 
     def _handle_llm_reject(self, meta, trace, question, session_id, t_total) -> str:
         """LLM 自报拒答 → self-correction 或直接拒答。"""
-        decision = self._build_decision_from_meta(meta)
+        decision = self.gate.build_decision_from_meta(meta)
 
-        if self._can_self_correct():
+        if self.corrector.can_retry():
             retried = self._try_self_correct(decision, trace, question, session_id, t_total)
             if retried is not None:
                 self._finish(trace, retried, t_total)
                 return retried
 
         # self-correction 关闭 / 失败 / 重试用尽 → 拒答
-        attempted = self._self_correction_retry_count > 0
+        attempted = self.corrector.retry_count > 0
         return self._reject(decision, "generation", trace, t_total,
                             self_correction_attempted=attempted)
-
-    def _build_decision_from_meta(self, meta: dict):
-        """LLM META → GateDecision。"""
-        from backend.rag.evidence_gate import GateDecision, RejectReason
-        raw_reason = (meta.get("reason") or "no_evidence").lower()
-        try:
-            reason = RejectReason(raw_reason)
-        except ValueError:
-            reason = RejectReason.NO_EVIDENCE
-        confidence = float(meta.get("confidence", 0.0))
-        return GateDecision(
-            passed=False, reason=reason, layer="generation", score=confidence,
-            diagnostics={"meta_confidence": confidence,
-                         "meta_citations": meta.get("citations", []),
-                         "threshold": {"meta_min_confidence": 0.5}},
-        )
-
-    def _can_self_correct(self) -> bool:
-        from backend.config import SELF_CORRECTION_ENABLED, SELF_CORRECTION_MAX_RETRIES
-        return (SELF_CORRECTION_ENABLED
-                and self._self_correction_retry_count < SELF_CORRECTION_MAX_RETRIES)
 
     def _reject(self, decision, layer: str, trace, t_total: float,
                 self_correction_attempted: bool = False) -> str:
@@ -371,10 +349,10 @@ class RAGChain:
             None    → 改写失败 / 仍拒答 (让 _handle_llm_reject 走兜底)
             str     → 新答案 (成功) 或 重试后的拒答 msg
         """
-        self._self_correction_retry_count += 1
+        self.corrector.record_attempt(success=False)
         reason_str = (original_decision.reason.value
                       if original_decision.reason else "no_evidence")
-        new_query = self._rewrite_query(question, reason_str)
+        new_query = self.corrector.try_rewrite(question, reason_str)
         if new_query is None:
             return None
 
@@ -397,37 +375,6 @@ class RAGChain:
             return answer
         except Exception as e:
             logger.warning(f"[Self-Correction] 重试失败: {e}")
-            return None
-
-    def _rewrite_query(self, question: str, reason: str):
-        """LLM 改写 query，返回 None 表示改写失败。"""
-        from backend.rag.tracer import trace_collector, SpanKind
-        from backend.infra.llm import llm
-        from langchain_core.messages import HumanMessage
-
-        rewrite_span = trace_collector.start_span(
-            "self_correction_rewrite", name="Self-Correction Rewrite",
-            kind=SpanKind.SELF_CORRECTION.value,
-        )
-        try:
-            prompt = (
-                f"原问题被拒答（原因：{reason}）。请改写使能从知识库命中，"
-                f"给 3 个更有效的检索 query，每行一个，不要编号：\n"
-                f"原问题: {question}\n改写结果:"
-            )
-            result = llm.invoke([HumanMessage(content=prompt)])
-            raw = result.content if hasattr(result, "content") else str(result)
-            rewrites = [ln.strip() for ln in raw.strip().split("\n") if ln.strip()]
-            new_query = rewrites[0] if rewrites else question
-            trace_collector.end_span(rewrite_span,
-                metrics={"rewrites": len(rewrites), "selected": new_query[:60]})
-            return new_query
-        except Exception as e:
-            logger.warning(f"[Self-Correction] 改写失败: {e}")
-            try:
-                trace_collector.end_span(rewrite_span, status="error")
-            except Exception:
-                pass
             return None
 
     def _prepare(self, question: str, session_id: str) -> list:
@@ -454,11 +401,9 @@ class RAGChain:
         self._last_query = question
         try:
             from backend.rag.retrieval.query_analyzer import QueryAnalyzer
-            self._last_query_analysis = QueryAnalyzer().analyze(question)
-            self._last_intent = self._last_query_analysis.intent or "summary_query"
+            self.gate.set_query_analysis(QueryAnalyzer().analyze(question))
         except Exception:
-            self._last_query_analysis = None
-            self._last_intent = "summary_query"
+            self.gate.set_query_analysis(None)
 
         # ── retrieval span（包裹整个检索过程，挂 debug event）──
         ret_span = trace_collector.start_span(
@@ -542,7 +487,7 @@ class RAGChain:
                 from backend.config import VEC_MIN_SCORE, DOC_TYPE_COVERAGE_REQUIRED
                 ret_decision = evidence_gate_retrieval(
                     context_docs,
-                    query_analysis=self._last_query_analysis,
+                    query_analysis=self.gate.query_analysis,
                     vec_min_score=VEC_MIN_SCORE,
                     require_doc_type_coverage=DOC_TYPE_COVERAGE_REQUIRED,
                 )
@@ -558,12 +503,12 @@ class RAGChain:
         # ── Gate 2: Rerank（基于 context 上的 rerank_score）──
         from backend.rag.evidence_gate import risk_level_from_intent_and_doctype
         try:
-            self._risk_level = risk_level_from_intent_and_doctype(
-                self._last_intent,
-                getattr(self._last_query_analysis, "doc_types", []) or [],
-            )
+            self.gate.set_risk_level(risk_level_from_intent_and_doctype(
+                self.gate.intent,
+                getattr(self.gate.query_analysis, "doc_types", []) or [],
+            ))
         except Exception:
-            self._risk_level = "low"
+            self.gate.set_risk_level("low")
 
         rerank_span = trace_collector.start_span(
             "evidence_gate_rerank", name="Evidence Gate - Rerank",
@@ -576,8 +521,8 @@ class RAGChain:
             )
             rerank_decision = evidence_gate_rerank(
                 context_docs,
-                intent=self._last_intent,
-                risk_level=self._risk_level,
+                intent=self.gate.intent,
+                risk_level=self.gate.risk_level,
                 min_top1=RERANK_MIN_TOP1,
                 min_avg=RERANK_MIN_AVG,
                 min_gap=RERANK_MIN_GAP,
@@ -646,7 +591,7 @@ class RAGChain:
         from backend.rag.tracer import trace_collector
         from backend.rag.evidence_gate import parse_meta_comment, RejectReason
 
-        raw_answer = _strip_think_blocks(result["answer"])
+        raw_answer = self.formatter.strip_think(result["answer"])
         context_docs = result.get("context", [])
 
         # ── P1: 解析 META 注释 ──
@@ -662,17 +607,17 @@ class RAGChain:
         citation_span = trace_collector.start_span(
             "citation", name="引文校验")
         if context_docs:
-            answer, verified_docs = _verify_support(cleaned_answer, context_docs, question)
+            answer, verified_docs = self.formatter.verify_support(cleaned_answer, context_docs, question)
         else:
             answer = cleaned_answer
             verified_docs = []
         trace_collector.end_span(citation_span,
                              metrics={"verified_citations": len(verified_docs),
                                       "total_citations": len(context_docs)})
-        references = _format_references(verified_docs, answer)
+        references = self.formatter.format_references(verified_docs, answer)
         if references:
             answer = answer + references
-        self._last_sources = _extract_sources(verified_docs, answer)
+        self._last_sources = self.formatter.extract_sources(verified_docs, answer)
 
         if self._memory:
             self._memory.end_turn(session_id, question, answer)
@@ -749,139 +694,3 @@ class RAGChain:
             if sp.parent_id is None:
                 trace_collector.end_span(sp, output=output, metrics=metrics, status=status)
                 return
-
-def _strip_think_blocks(text: str) -> str:
-    """剥离 <think>...</think> 推理块。未闭合标签保留后续内容，避免误删。"""
-    import re
-    cleaned = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL)
-    if '<think>' in cleaned and '</think>' not in cleaned:
-        cleaned = re.sub(r'<think>.*', '', cleaned, flags=re.DOTALL)
-    return cleaned.strip()
-
-
-def _verify_support(answer: str, docs: list, question: str = "") -> tuple:
-    """Citation Filter: 复用 Rerank 阶段的 CrossEncoder 分数，避免重复推理。
-
-    阶段 1: 复用 rerank_score（RerankCompressor 已写入 doc.metadata），过滤低分 chunk
-    阶段 2: 句子级验证（默认关闭，ENABLE_CITATION_SENTENCE_CHECK=true 开启）
-    返回: (cleaned_answer, verified_docs)
-    """
-    if not docs:
-        return answer, []
-
-    # —— 阶段 1: 复用 Rerank 分数，不重新跑 CrossEncoder ——
-    verified = []
-    for doc in docs:
-        score = doc.metadata.get("rerank_score", 0.5)  # 复用 Rerank 已算好的分数
-        if float(score) > CITATION_SUPPORT_THRESHOLD:
-            doc.metadata["support_score"] = round(float(score), 4)
-            verified.append(doc)
-
-    logger.info(
-        f"[CitationFilter] 支撑验证(复用Rerank分): {len(docs)} → {len(verified)} 个 chunk "
-        f"(threshold={CITATION_SUPPORT_THRESHOLD})"
-    )
-
-    if not verified:
-        logger.warning("[CitationFilter] 所有 chunk 未通过验证，清空引用")
-        return answer, []
-
-    # —— 阶段 2: 完成（企业做法：Prompt 强制 LLM 标注引用 [1][2]，不做事后猜）——
-    return answer, verified
-
-
-def _format_references(docs: list, answer: str = "") -> str:
-    """生成参考文献列表。
-
-    - 优先显示文中 [1][2] 实际引用到的来源
-    - 兜底：如果 LLM 未生成引用标注，展示所有通过验证的文档
-    """
-    if not docs:
-        return ""
-
-    # 从回答中提取所有引用编号 [1] [2] ...
-    import re
-    cited = set()
-    for m in re.finditer(r"\[(\d+)\]", answer):
-        cited.add(int(m.group(1)))
-
-    seen = {}
-    for doc in docs:
-        idx = doc.metadata.get("index")
-        fname = doc.metadata.get("source_file", doc.metadata.get("source", ""))
-        if not fname or idx is None:
-            continue
-        # 有引用标注时仅保留文中实际引用的来源
-        if cited and idx not in cited:
-            continue
-        # 无引用标注（兜底）：展示所有 verified docs
-        if fname not in seen:
-            seen[fname] = (idx, doc.metadata)
-
-    if not seen:
-        return ""
-
-    # 按 index 排序，与文中标注 [1][2] 顺序一致
-    items = sorted(seen.values(), key=lambda x: x[0])
-
-    lines = ["", "---", "", "### 参考文献", ""]
-    for idx, meta in items:
-        doc_type = meta.get("doc_type", "")
-        score = meta.get("score", meta.get("rerank_score", None))
-        type_label = {
-            "listing": "Listing", "sop": "SOP", "ad_policy": "广告政策",
-            "faq": "FAQ", "product_spec": "产品规格", "training": "培训",
-            "policy": "制度规范", "report": "报告", "manual": "操作手册",
-        }.get(doc_type, doc_type)
-        fname = meta.get("source_file", meta.get("source", ""))
-        parts = [f"{idx}. **{fname}**"]
-        if type_label:
-            parts.append(f" ({type_label})")
-        if score is not None:
-            parts.append(f" — 相关度: {score:.2f}")
-        lines.append("".join(parts))
-
-    return "\n".join(lines)
-
-
-def _extract_sources(docs: list, answer: str = "") -> list[dict]:
-    """从 verified docs 中提取结构化来源信息（供前端 SourceCard 展示）。
-
-    - 优先通过文中 [1][2] 引用标注精确匹配
-    - 兜底：如果 LLM 未生成引用标注，返回所有通过验证的文档
-    """
-    if not docs:
-        return []
-
-    import re
-    cited = set()
-    for m in re.finditer(r"\[(\d+)\]", answer):
-        cited.add(int(m.group(1)))
-
-    type_label_map = {
-        "listing": "Listing", "sop": "SOP", "ad_policy": "广告政策",
-        "faq": "FAQ", "product_spec": "产品规格", "training": "培训",
-        "policy": "制度规范", "report": "报告", "manual": "操作手册",
-    }
-
-    seen = {}
-    for doc in docs:
-        idx = doc.metadata.get("index")
-        fname = doc.metadata.get("source_file", doc.metadata.get("source", ""))
-        if not fname or idx is None:
-            continue
-        # 有引用标注时仅保留文中实际引用的来源；无引用时兜底展示全部
-        if cited and idx not in cited:
-            continue
-        if fname not in seen:
-            doc_type = doc.metadata.get("doc_type", "")
-            score = doc.metadata.get("score", doc.metadata.get("rerank_score", doc.metadata.get("support_score")))
-            seen[fname] = {
-                "index": idx,
-                "filename": fname,
-                "doc_type": doc_type,
-                "type_label": type_label_map.get(doc_type, doc_type),
-                "score": round(float(score), 2) if score is not None else None,
-            }
-
-    return sorted(seen.values(), key=lambda s: s.get("index", 0))
