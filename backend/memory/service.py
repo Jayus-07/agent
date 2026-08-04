@@ -21,9 +21,19 @@ class MemoryService:
 
     def __init__(self):
         self._sessions: dict[str, SessionMemory] = {}
-        self._trigger = MemoryWorthinessClassifier()
-        self._importance = ImportanceScorer()
+        self._trigger = None  # lazy init with LLM model
+        self._importance = None  # lazy init
         self._decay_service = None  # lazy init with repo
+
+    def _get_trigger(self):
+        if self._trigger is None:
+            self._trigger = MemoryWorthinessClassifier()
+        return self._trigger
+
+    def _get_importance(self):
+        if self._importance is None:
+            self._importance = ImportanceScorer()
+        return self._importance
 
     # ============================================================
     # Session lifecycle
@@ -139,11 +149,11 @@ class MemoryService:
                 for fact in facts:
                     # 2. PII already applied in extract_facts
                     # 3. Classify
-                    if self._trigger.classify(fact.content, fact.fact_type) == "IGNORE":
+                    if self._get_trigger().classify(fact.content, fact.fact_type) == "IGNORE":
                         continue
                     # 4. Score
-                    fact.importance_score = self._importance.score(fact.fact_type, fact.content)
-                    if not self._importance.should_store(fact.importance_score):
+                    fact.importance_score = self._get_importance().score(fact.fact_type, fact.content)
+                    if not self._get_importance().should_store(fact.importance_score):
                         continue
                     # 5. Dedup + Write
                     ok = await l3.store_single(fact, user_id, session_id)
