@@ -13,7 +13,7 @@ from backend.app.exceptions import (
     http_exception_handler,
     global_exception_handler,
 )
-from backend.app.middleware.concurrency import concurrency_limit_middleware
+from backend.app.api.middleware.concurrency import concurrency_limit_middleware
 from backend.app.api.middleware.metrics import render_metrics
 from backend.shared.logger import logger
 from backend.config.rag import RAG_MAX_FILE_SIZE
