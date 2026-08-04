@@ -4,13 +4,14 @@ import { useState, useEffect, useMemo, Fragment } from 'react'
 import Link from 'next/link'
 import { ChevronLeft, ChevronRight, RefreshCw, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
 import { useToast } from '@/components/shared/Toast'
-import { knowledgeService, OperationLog, OperationType } from '@/services/knowledge'
+import { knowledgeService, OperationLog } from '@/services/knowledge'
 
 /** 操作徽章配置 */
-const OPERATION_CONFIG: Record<OperationType, { label: string; className: string }> = {
+const OPERATION_CONFIG: Record<string, { label: string; className: string }> = {
   upload:  { label: '上传',   className: 'bg-green-50 text-green-600' },
   reindex: { label: '重索引', className: 'bg-blue-50 text-blue-600' },
   delete:  { label: '删除',   className: 'bg-red-50 text-red-600' },
+  '':      { label: '未知',   className: 'bg-gray-50 text-gray-600' },
 }
 
 export default function OperationsPage() {

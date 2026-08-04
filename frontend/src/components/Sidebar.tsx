@@ -1,6 +1,6 @@
 'use client'
 
-import { Sparkles, PanelLeft, PanelLeftClose, LayoutDashboard, Download, Cog, Database, BookOpen, Brain, Activity, FileText, AlertTriangle, Clock } from 'lucide-react'
+import { Sparkles, PanelLeft, PanelLeftClose, LayoutDashboard, BookOpen, Brain, Activity, FileText, AlertTriangle, Clock } from 'lucide-react'
 import NavGroup from './layout/NavGroup'
 
 interface Props { collapsed: boolean; onToggle: () => void }
@@ -8,36 +8,18 @@ interface Props { collapsed: boolean; onToggle: () => void }
 const NAV = [
   { icon: <LayoutDashboard size={18} />, label: '数据驾驶舱', path: '/' },
   {
-    icon: <Download size={18} />, label: '数据接入中心',
-    items: [
-      { label: '本地文件上传', path: '/data-source' },
-      { label: '开源数据集', path: '/data-source/datasets' },
-      { label: '开放平台', path: '/data-source/platform' },
-      { label: '模拟数据生成', path: '/data-source/generator' },
-    ],
-  },
-  {
-    icon: <Cog size={18} />, label: '数据处理中心',
-    items: [
-      { label: '清洗任务', path: '/data-pipeline' },
-      { label: '执行历史', path: '/data-pipeline/history' },
-    ],
-  },
-  { icon: <Database size={18} />, label: '数据资产中心', path: '/data-assets' },
-  {
     icon: <BookOpen size={18} />, label: 'RAG 知识库',
     items: [
       { label: '概览', path: '/knowledge' },
       { label: '文档管理', path: '/knowledge/documents' },
-      { label: '文档操作', path: '/knowledge/operations' },
+      { label: '文档操作日志', path: '/knowledge/operations' },
     ],
   },
   {
-    icon: <Brain size={18} />, label: 'AI任务中心',
+    icon: <Brain size={18} />, label: 'AI 对话',
     items: [
       { label: '智能问答', path: '/agent' },
       { label: '分析任务', path: '/agent/tasks' },
-      { label: '历史报告', path: '/agent/reports' },
     ],
   },
   {
