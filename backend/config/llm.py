@@ -11,11 +11,11 @@ load_dotenv()
 # 模型路径
 EMBEDDING_MODEL_PATH = os.getenv(
     "EMBEDDING_MODEL_PATH",
-    "C:/Users/wh/.cache/modelscope/hub/models/BAAI/bge-small-zh-v1___5"
+    "BAAI/bge-small-zh-v1.5"  # HuggingFace model name，自动走缓存
 )
 RERANKER_MODEL_PATH = os.getenv(
     "RERANKER_MODEL_PATH",
-    "C:/Users/wh/.cache/modelscope/hub/models/BAAI/bge-reranker-base"
+    "BAAI/bge-reranker-base"  # HuggingFace model name，自动走缓存
 )
 
 # 模型参数

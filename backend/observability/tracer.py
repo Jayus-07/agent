@@ -190,8 +190,10 @@ class TraceCollector:
         with self._lock:
             self._span_seq = 0
             self._thread_current = trace
-        # 同步到 contextvar（async task 内可见）
         _current_trace_var.set(trace)
+        # O2: 自动注入 trace_id/session_id 到日志
+        from backend.shared.logger import set_log_context
+        set_log_context(trace_id=rid, session_id=session_id)
         return trace
 
     def start_span(self, span_id: str, parent_id: str | None = None,
@@ -310,6 +312,10 @@ class TraceCollector:
             get_trace_store().save(record)
         except Exception:
             pass  # 持久化失败不阻塞主流程
+
+        # O2: 清除日志上下文
+        from backend.shared.logger import clear_log_context
+        clear_log_context()
 
     # =====================================================
     # 查询 API（直读 SQLite trace_store）
