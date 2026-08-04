@@ -106,7 +106,7 @@ class SelfCorrectionStrategy:
           - 失败时 logger.warning + 写 trace span status=error，返回 None
           - 成功时返回 rewrites[0]（第一个改写结果）
         """
-        from backend.rag.tracer import trace_collector, SpanKind
+        from backend.observability.tracer import trace_collector, SpanKind
         from backend.infra.llm import llm
         from langchain_core.messages import HumanMessage
 

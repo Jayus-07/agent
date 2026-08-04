@@ -68,7 +68,7 @@ def make_rag_chain_mock():
 
 def scenario_no_evidence(chain):
     """场景 A: 完全空召回 → NO_EVIDENCE"""
-    from backend.rag import tracer as tracer_mod
+    from backend.observability import tracer as tracer_mod
     tracer_mod.trace_collector.start("test-no-evidence", session_id="e2e-test")
 
     context_docs = []  # 全空
@@ -87,7 +87,7 @@ def scenario_no_evidence(chain):
 
 def scenario_insufficient(chain):
     """场景 B: 召回但 Rerank 多维不达标 → INSUFFICIENT"""
-    from backend.rag import tracer as tracer_mod
+    from backend.observability import tracer as tracer_mod
     tracer_mod.trace_collector.start("test-insufficient", session_id="e2e-test")
 
     # 模拟：所有 chunk rerank_score 都在阈值附近但不达标
@@ -117,7 +117,7 @@ def scenario_insufficient(chain):
 
 def scenario_pass(chain):
     """场景 C: 高质量命中 → 通过"""
-    from backend.rag import tracer as tracer_mod
+    from backend.observability import tracer as tracer_mod
     tracer_mod.trace_collector.start("test-pass", session_id="e2e-test")
 
     docs = [

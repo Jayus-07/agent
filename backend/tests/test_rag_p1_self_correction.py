@@ -76,7 +76,7 @@ def _stub_chain():
 class TestVerifyMetaParse:
     def _start_trace(self):
         """起一个 trace 让 _verify 内部 start_span 不报错。"""
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         trace_collector.start("test-meta", session_id="t1")
         # 起 root span 满足后续 start_span(parent_id=None) 约束
         try:
@@ -142,7 +142,7 @@ class TestFinalizeLlmRejection:
         # 构造 mock trace
         chain2 = chain
         # 用真实的 trace_collector 起一个 trace
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         trace = trace_collector.start("test-finalize", session_id="t1")
         trace_collector.start_span("root", parent_id=None, name="test", type="agent")
 
@@ -180,7 +180,7 @@ class TestFinalizeLlmRejection:
     def test_translates_low_relevance_reason(self):
         chain = _stub_chain()
         chain._last_query = "weak query"
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         trace = trace_collector.start("test-lr", session_id="t1")
         trace_collector.start_span("root", parent_id=None, name="test", type="agent")
         chain.corrector.reset()
@@ -203,7 +203,7 @@ class TestFinalizeLlmRejection:
         """LLM 自报不认识的 reason → 服务端翻译为 NO_EVIDENCE"""
         chain = _stub_chain()
         chain._last_query = "?"
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         trace = trace_collector.start("test-ur", session_id="t1")
         trace_collector.start_span("root", parent_id=None, name="test", type="agent")
         chain.corrector.reset()

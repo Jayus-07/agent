@@ -88,8 +88,8 @@ class BaseSkill(ABC):
         每次 Tool 调用都会创建 Span（type=tool_call），重试记录为 span.events。
         返回: {"step_results": {...}}
         """
-        from backend.orchestration.supervisor.alerts import make_alert, log_degradation
-        from backend.rag.tracer import trace_collector
+        from backend.observability.alerts import make_alert, log_degradation
+        from backend.observability.tracer import trace_collector
 
         step_id = state.get("current_step_id")
         if not step_id:

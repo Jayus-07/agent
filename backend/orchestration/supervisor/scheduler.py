@@ -15,7 +15,7 @@ from langgraph.types import Send
 
 from backend.orchestration.tool_registry import tool_registry
 from backend.orchestration.supervisor.degradation import execute_degradation
-from backend.orchestration.supervisor.alerts import make_alert, log_degradation
+from backend.observability.alerts import make_alert, log_degradation
 from backend.shared.logger import logger
 
 

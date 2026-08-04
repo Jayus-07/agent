@@ -29,7 +29,7 @@ class ProgressListener:
     SPAN_STAGE_KEY = SPAN_STAGE_MAP
 
     def __init__(self, emit_fn):
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         self._emit = emit_fn
         self._unsub = trace_collector.subscribe(self._on_span_end)
 

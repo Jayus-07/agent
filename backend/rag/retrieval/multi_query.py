@@ -101,7 +101,7 @@ QUERY_REWRITE_PROMPT = """将用户问题改写为 {count} 个语义等价但表
 def _rewrite(question: str) -> list[str]:
     """LLM 改写 → Parse → Normalize → Dedup → Limit"""
     try:
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         span = trace_collector.start_span("query_rewrite", name="LLM改写")
         from backend.infra.llm import llm
         from langchain_core.messages import HumanMessage
@@ -244,7 +244,7 @@ class MultiQueryRetriever(BaseRetriever):
 
         if not use:
             logger.info(f"[MultiQuery] {reason}: {query[:30]}")
-            from backend.rag.tracer import trace_collector
+            from backend.observability.tracer import trace_collector
             span = trace_collector.start_span("query_rewrite", name="LLM改写")
             trace_collector.end_span(span,
                                      metrics={"variants": 0}, status="skipped")

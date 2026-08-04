@@ -46,7 +46,7 @@ class MultiAgentSystem:
         initial_state = self._make_initial_state(question, session_id, kb_id, l1.messages)
 
         # ── Tracing: start + root span ──
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         t_total = time.time()
         trace = trace_collector.start(question, session_id, workflow_name="agent")
         trace_collector.start_span("root", parent_id=None,
@@ -324,7 +324,7 @@ class MultiAgentSystem:
           - Reporter → span(type=agent, kind=graph_node)
           - LangGraph 拓扑 → trace.graph
         """
-        from backend.rag.tracer import Span
+        from backend.observability.tracer import Span
 
         plan = state.get("plan", {})
         nodes = plan.get("nodes", {})
@@ -410,7 +410,7 @@ class MultiAgentSystem:
         stop_event=None,
     ) -> Generator[dict, None, None]:
         """SSE 流式处理。同步产出 trace + span 树。"""
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
 
         if not question or not question.strip():
             yield {"event": "error", "data": {"message": "请输入有效问题", "ts": time.time()}}
@@ -493,7 +493,7 @@ class MultiAgentSystem:
 def _end_root(trace, output: dict = None, metrics: dict = None,
               status: str = "success"):
     """查找并结束 root span。"""
-    from backend.rag.tracer import trace_collector
+    from backend.observability.tracer import trace_collector
     for sp in trace.spans:
         if sp.parent_id is None:
             trace_collector.end_span(sp, output=output, metrics=metrics, status=status)

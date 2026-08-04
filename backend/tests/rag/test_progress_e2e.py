@@ -15,8 +15,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from backend.rag.indexing.indexer import IncrementalIndexer
-from backend.rag.tracer import trace_collector, TraceCollector, WorkflowKind
-from backend.rag import tracer as tracer_mod
+from backend.observability.tracer import trace_collector, TraceCollector, WorkflowKind
+from backend.observability import tracer as tracer_mod
 from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401
 
 

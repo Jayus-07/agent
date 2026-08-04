@@ -15,7 +15,7 @@ class RerankCompressor(BaseDocumentCompressor):
     top_k: int = RERANK_TOP_K
 
     def compress_documents(self, documents, query, **kwargs):
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         from backend.config import RERANK_SCORE_THRESHOLD
         span = trace_collector.start_span("rerank", name="Rerank")
         if not documents:

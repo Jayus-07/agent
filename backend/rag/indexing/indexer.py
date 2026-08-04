@@ -26,7 +26,7 @@ from typing import Any
 from langchain_community.document_loaders import TextLoader
 from langchain_core.documents import Document
 
-from backend.rag.tracer import trace_collector, WorkflowKind, SpanKind
+from backend.observability.tracer import trace_collector, WorkflowKind, SpanKind
 from backend.rag.preprocessing.cleaner import DocumentCleaner
 from backend.rag.preprocessing.metadata import classify_doc_type
 from backend.rag.indexing.models import SyncResult, Delta
@@ -1096,7 +1096,7 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
         # 3.5 汇总每阶段真实耗时（取自本次 trace 的 span），供前端展示
         stage_elapsed: dict[str, int] = {}
         try:
-            from backend.rag.tracer import trace_collector as _tc
+            from backend.observability.tracer import trace_collector as _tc
             if trace_id:
                 tr = next((t for t in _tc.list(50) if t.id == trace_id), None)
                 if tr:

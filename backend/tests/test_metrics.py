@@ -9,7 +9,7 @@
 from fastapi.testclient import TestClient
 
 from backend.app.server import app
-from backend.app.api.middleware.metrics import (
+from backend.observability.metrics import (
     chat_request_total,
     chat_request_duration_seconds,
     llm_tokens_total,

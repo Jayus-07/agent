@@ -110,7 +110,7 @@ def filter_step_results(step_results: dict, question: str) -> dict:
 def filter_by_bm25(step_results: dict, question: str) -> dict:
     """BM25 关键词匹配过滤（CrossEncoder 不可用时的降级方案）"""
     # 延迟导入避免循环引用
-    from backend.orchestration.supervisor.alerts import make_alert, log_degradation
+    from backend.observability.alerts import make_alert, log_degradation
 
     alert = make_alert("RERANKER_UNAVAILABLE", {"question": question[:80]})
     log_degradation(alert)

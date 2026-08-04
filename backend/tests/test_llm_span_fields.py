@@ -12,7 +12,7 @@ import pytest
 
 from backend.infra.llm.models import get_model_pricing, compute_cost_usd
 from backend.infra.llm import proxy as proxy_mod
-from backend.rag import tracer as tracer_mod
+from backend.observability import tracer as tracer_mod
 from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401
 
 
@@ -154,7 +154,7 @@ class TestTimedStuffInjection:
     """直接测 _timed_stuff 的 metrics 注入逻辑"""
 
     def test_timed_stuff_injects_completion_text_and_finish_reason(self, monkeypatch):
-        from backend.rag.tracer import trace_collector, SpanKind
+        from backend.observability.tracer import trace_collector, SpanKind
 
         # 模拟 _stuff.invoke 返回一个带 .content 的对象
         class FakeResult:
@@ -207,7 +207,7 @@ class TestTimedStuffInjection:
         assert span.input["question"] == "用户的问题"
 
     def test_completion_text_truncated_at_1000_chars(self):
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
 
         long_text = "x" * 5000
 
@@ -234,7 +234,7 @@ class TestTimedStuffInjection:
 
     def test_finish_reason_length_signals_truncation(self):
         """finish_reason=length 是 truncation 信号 → 触发 warning 排查"""
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
 
         proxy_mod._last_call_meta = {
             "prompt_tokens": 100, "completion_tokens": 1000,

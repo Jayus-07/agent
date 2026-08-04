@@ -11,11 +11,11 @@ from fastapi import APIRouter, Query, HTTPException
 
 from backend.shared.logger import logger
 
-from backend.orchestration.observability import GRAPH_TOPOLOGY, NODE_LABELS
-from backend.shared.monitoring.resource_monitor import resource_monitor
+from backend.observability.topology import GRAPH_TOPOLOGY, NODE_LABELS
+from backend.observability.resource import resource_monitor
 from backend.rag.metrics import metrics_collector
-from backend.rag.tracer import trace_collector, TraceRecord, Span
-from backend.rag.trace_store import get_trace_store
+from backend.observability.tracer import trace_collector, TraceRecord, Span
+from backend.observability.trace_store import get_trace_store
 
 router = APIRouter(prefix="/observability", tags=["可观测性"])
 
@@ -230,7 +230,7 @@ async def get_resources():
 @router.get("/alerts")
 async def get_alerts(limit: int = Query(50, ge=1, le=500)):
     """读取降级/告警日志（degradation.jsonl 尾部 N 行）"""
-    from backend.orchestration.supervisor.alerts import DEGRADATION_LOG_FILE
+    from backend.observability.alerts import DEGRADATION_LOG_FILE
 
     alerts = []
     total = 0

@@ -26,7 +26,7 @@ from backend.config import (
     ENABLE_RESOURCE_MONITOR,
 )
 from backend.shared.logger import logger
-from backend.shared.monitoring.resource_monitor import resource_monitor
+from backend.observability.resource import resource_monitor
 from backend.shared.async_utils import run_async as _run_async
 
 os.environ['HF_HUB_OFFLINE'] = '1'

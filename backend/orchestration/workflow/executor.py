@@ -32,7 +32,7 @@ from backend.orchestration.workflow.context import WorkflowContext
 from backend.orchestration.workflow.dag import DAG
 from backend.orchestration.workflow.registry import WorkflowRegistry, get_workflow_registry
 from backend.orchestration.workflow.persistence import get_workflow_run_store
-from backend.rag.tracer import trace_collector
+from backend.observability.tracer import trace_collector
 from backend.shared.logger import logger
 
 
@@ -82,7 +82,7 @@ class WorkflowExecutor:
         trace_root_span = None
         trace_record = None  # 保存引用，用于 finish() 持久化
         try:
-            from backend.rag.tracer import trace_collector, _current_trace_var
+            from backend.observability.tracer import trace_collector, _current_trace_var
 
             # 检查是否已有活跃 trace（如 RAG 调用链中的 workflow step）
             trace_record = _current_trace_var.get() or trace_collector._thread_current
@@ -137,7 +137,7 @@ class WorkflowExecutor:
         # 6. 关闭 root span + 持久化 trace 到 SQLite
         try:
             if trace_root_span is not None:
-                from backend.rag.tracer import trace_collector
+                from backend.observability.tracer import trace_collector
                 trace_collector.end_span(
                     trace_root_span,
                     status="success" if ctx.status in ("success", "partial") else "error",
@@ -186,7 +186,7 @@ class WorkflowExecutor:
         # trace 子 span
         step_span = None
         try:
-            from backend.rag.tracer import trace_collector
+            from backend.observability.tracer import trace_collector
             display = config.display_name or step_name
             step_span = trace_collector.start_span(
                 f"workflow_step.{step_name}",
@@ -220,7 +220,7 @@ class WorkflowExecutor:
                 ctx.outputs[step_name] = result
                 if step_span is not None:
                     try:
-                        from backend.rag.tracer import trace_collector
+                        from backend.observability.tracer import trace_collector
                         trace_collector.end_span(
                             step_span,
                             status="success",
@@ -261,7 +261,7 @@ class WorkflowExecutor:
 
         if step_span is not None:
             try:
-                from backend.rag.tracer import trace_collector
+                from backend.observability.tracer import trace_collector
                 trace_collector.end_span(
                     step_span,
                     status="error",

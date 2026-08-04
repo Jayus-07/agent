@@ -75,7 +75,7 @@ class ChunkLevelRetriever(BaseRetriever):
         ]))
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> List[Document]:
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         span = trace_collector.start_span("retrieval", name="检索")
         # — Stage 1: Doc 级检索 —
         # Check for request-scoped metadata_filter (set by RAGPipeline.search() via contextvars)

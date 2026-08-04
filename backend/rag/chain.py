@@ -175,7 +175,7 @@ class RAGChain:
             document_separator="\n\n---\n\n",
         )
         def _timed_stuff(inp):
-            from backend.rag.tracer import trace_collector, SpanKind
+            from backend.observability.tracer import trace_collector, SpanKind
             llm_span = trace_collector.start_span(
                 "llm_generate", name="LLM生成",
                 kind=SpanKind.LLM.value,
@@ -246,7 +246,7 @@ class RAGChain:
 
     def _start(self, question: str, session_id: str):
         """开启 Trace + root span。"""
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         import time as _time
         trace = trace_collector.start(question, session_id)
         trace_collector.start_span("root", parent_id=None,
@@ -315,7 +315,7 @@ class RAGChain:
 
     def _finish(self, trace, answer: str, t_total: float):
         """统一 trace 收尾。"""
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         from backend.config.llm import LLM_MODEL
         from backend.infra.llm.factory import get_llm_factory
         import time as _time
@@ -332,7 +332,7 @@ class RAGChain:
 
     def _finish_error(self, trace, t_total: float):
         """异常路径收尾。"""
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         import time as _time
         try:
             self._end_root_span(trace, status="error",
@@ -394,7 +394,7 @@ class RAGChain:
         Returns:
             dict 含 "context" / "answer" / "__evidence_gate_decision__" / 可选 "__rejected"
         """
-        from backend.rag.tracer import trace_collector, SpanKind
+        from backend.observability.tracer import trace_collector, SpanKind
         import time as _time
 
         # ── 记录 query 上下文（§D4 修复） ──
@@ -450,7 +450,7 @@ class RAGChain:
             evidence_gate_retrieval, evidence_gate_rerank,
             is_evidence_gate_enabled, gate_retrieval_passthrough,
         )
-        from backend.rag.tracer import trace_collector, SpanKind
+        from backend.observability.tracer import trace_collector, SpanKind
         from backend.rag.guardrails import check_faithfulness  # noqa: F401
 
         if not is_evidence_gate_enabled():
@@ -539,7 +539,7 @@ class RAGChain:
 
     def _record_retrieval_events(self, ret_span, context_docs: list) -> None:
         """采集检索各阶段的中间结果，写入 ret_span.events。"""
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
 
         # ── Event 1: Query Analyzer ──
         try:
@@ -588,7 +588,7 @@ class RAGChain:
           - 解析 LLM 末尾 <!--META--> 注释，剥离出纯 Markdown
           - META 信息存到 self._last_meta，让 ask() 后续判定拒答/放行
         """
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         from backend.rag.evidence_gate import parse_meta_comment, RejectReason
 
         raw_answer = self.formatter.strip_think(result["answer"])
@@ -636,7 +636,7 @@ class RAGChain:
           将 check_faithfulness + rewrite_claim 拆为独立 LangGraph 节点，
           _evaluate() 改为返回 FaithfulnessResult 而非直接改写 answer。
         """
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         self._last_faithfulness = None
 
         try:
@@ -668,7 +668,7 @@ class RAGChain:
 
     def _trace(self, trace, answer: str, t_total: float):
         """收尾阶段：结束 root span + 完成 Trace。"""
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         from backend.config import LLM_MODEL
         from backend.infra.llm.factory import get_llm_factory
         import time as _time
@@ -689,7 +689,7 @@ class RAGChain:
     def _end_root_span(trace, output: dict = None, metrics: dict = None,
                        status: str = "success"):
         """查找并结束 root span（parent_id=None 的那条）。"""
-        from backend.rag.tracer import trace_collector
+        from backend.observability.tracer import trace_collector
         for sp in trace.spans:
             if sp.parent_id is None:
                 trace_collector.end_span(sp, output=output, metrics=metrics, status=status)

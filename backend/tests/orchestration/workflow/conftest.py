@@ -87,8 +87,8 @@ def fresh_tracer():
 
     关键：恢复时把所有字段都还原，否则测试间串扰
     """
-    from backend.rag import tracer as t
-    from backend.rag.tracer import _current_trace_var
+    from backend.observability import tracer as t
+    from backend.observability.tracer import _current_trace_var
 
     saved = {
         k: getattr(t.trace_collector, k)
@@ -124,10 +124,10 @@ def patched_trace_collector(monkeypatch, fresh_tracer):
     collector.end_span = MagicMock()
     collector.subscribe = MagicMock(return_value=lambda: None)
 
-    # executor 内部用 from backend.rag.tracer import trace_collector
+    # executor 内部用 from backend.observability.tracer import trace_collector
     # patch source 模块路径
     monkeypatch.setattr(
-        "backend.rag.tracer.trace_collector",
+        "backend.observability.tracer.trace_collector",
         collector,
     )
     return collector

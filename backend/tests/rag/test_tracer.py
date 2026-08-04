@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from backend.rag.tracer import (
+from backend.observability.tracer import (
     MAX_TRACES,
     Span,
     TraceCollector,
@@ -531,6 +531,6 @@ class TestConstants:
         assert MAX_TRACES == 200
 
     def test_module_all_exports(self):
-        from backend.rag import tracer
+        from backend.observability import tracer
         for name in ["TraceCollector", "TraceRecord", "Span", "trace_collector", "MAX_TRACES"]:
             assert name in tracer.__all__

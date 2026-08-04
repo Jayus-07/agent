@@ -5,7 +5,7 @@
     等模块级属性。2d627d7 重构后，trace 数据直接写 SQLite（重启不丢），这些内存属性
     大多已移除或语义变化。本 fixture 用临时 SQLite + 替换全局单例的方式兼容新架构。
 
-关键陷阱：业务模块用 `from backend.rag.tracer import trace_collector` 是模块级绑定，
+关键陷阱：业务模块用 `from backend.observability.tracer import trace_collector` 是模块级绑定，
 monkeypatch 替换 `tracer_mod.trace_collector` 不会自动更新其他模块的本地引用。
 本 fixture 自动 patch 所有已知 import `trace_collector` 的模块（见 _REBIND_MODULES）。
 
@@ -21,7 +21,7 @@ from __future__ import annotations
 import pytest
 
 
-# 所有 `from backend.rag.tracer import trace_collector` 的业务模块。
+# 所有 `from backend.observability.tracer import trace_collector` 的业务模块。
 # 加新业务模块时必须同步更新这里，否则测试用 fresh_collector 但业务模块仍用旧实例。
 _REBIND_MODULES = (
     "backend.rag.indexing.indexer",
@@ -41,14 +41,14 @@ def fresh_collector(tmp_path, monkeypatch):
     3. 同步 patch 所有业务模块的 trace_collector 引用
     4. 重置 contextvar 防止上一个测试的 _current_trace_var 残留
     """
-    from backend.rag import trace_store as ts_mod
-    from backend.rag import tracer as tracer_mod
+    from backend.observability import trace_store as ts_mod
+    from backend.observability import tracer as tracer_mod
 
     # 1. 临时 SQLite DB
     temp_db = tmp_path / "trace_test.db"
     store = ts_mod.TraceStore(str(temp_db))
     monkeypatch.setattr(ts_mod, "_trace_store", store)
-    # trace_collector 内部 `from backend.rag.trace_store import get_trace_store`
+    # trace_collector 内部 `from backend.observability.trace_store import get_trace_store`
     # 每次都从 ts_mod 模块读 _trace_store，所以 monkeypatch 有效
 
     # 2. 替换全局 collector 单例（避免上一个测试的 listener / 状态泄漏）

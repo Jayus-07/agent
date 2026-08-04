@@ -8,8 +8,8 @@ Phase 1.5: end_span 时通知所有 listeners（用于 SSE 实时进度推送）
 
 import pytest
 
-from backend.rag.tracer import trace_collector, TraceCollector
-from backend.rag import tracer as tracer_mod
+from backend.observability.tracer import trace_collector, TraceCollector
+from backend.observability import tracer as tracer_mod
 from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401  (re-export for backwards compat)
 
 
@@ -167,7 +167,7 @@ class TestProgressMessageFormat:
 
     def test_parse_message_includes_doc_count(self):
         from backend.rag.progress_listener import ProgressListener
-        from backend.rag.tracer import Span
+        from backend.observability.tracer import Span
 
         s = Span(span_id="index_parse", parent_id="index_upload", name="Parse",
                  type="parse", kind="index_parse")
@@ -178,7 +178,7 @@ class TestProgressMessageFormat:
 
     def test_chunk_message_includes_kept_and_filtered(self):
         from backend.rag.progress_listener import ProgressListener
-        from backend.rag.tracer import Span
+        from backend.observability.tracer import Span
 
         s = Span(span_id="index_chunk", parent_id="index_upload", name="Chunk",
                  type="chunk", kind="index_chunk")
@@ -190,7 +190,7 @@ class TestProgressMessageFormat:
 
     def test_chunk_message_without_filtered(self):
         from backend.rag.progress_listener import ProgressListener
-        from backend.rag.tracer import Span
+        from backend.observability.tracer import Span
 
         s = Span(span_id="index_chunk", parent_id="index_upload", name="Chunk",
                  type="chunk", kind="index_chunk")
@@ -201,7 +201,7 @@ class TestProgressMessageFormat:
 
     def test_embed_message_partial_failure(self):
         from backend.rag.progress_listener import ProgressListener
-        from backend.rag.tracer import Span
+        from backend.observability.tracer import Span
 
         s = Span(span_id="index_embed", parent_id="index_upload", name="Embed",
                  type="embedding", kind="index_embed")
@@ -212,7 +212,7 @@ class TestProgressMessageFormat:
 
     def test_embed_message_all_success(self):
         from backend.rag.progress_listener import ProgressListener
-        from backend.rag.tracer import Span
+        from backend.observability.tracer import Span
 
         s = Span(span_id="index_embed", parent_id="index_upload", name="Embed",
                  type="embedding", kind="index_embed")
@@ -223,7 +223,7 @@ class TestProgressMessageFormat:
 
     def test_vector_db_message_includes_written_count(self):
         from backend.rag.progress_listener import ProgressListener
-        from backend.rag.tracer import Span
+        from backend.observability.tracer import Span
 
         s = Span(span_id="index_vector_db", parent_id="index_upload", name="VDB",
                  type="vector_db", kind="index_vector_db")

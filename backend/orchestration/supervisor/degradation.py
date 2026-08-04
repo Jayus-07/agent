@@ -10,7 +10,7 @@ degradation.py — Capability 降级链
 """
 
 from backend.orchestration.tool_registry import tool_registry
-from backend.orchestration.supervisor.alerts import make_alert, log_degradation
+from backend.observability.alerts import make_alert, log_degradation
 from backend.shared.logger import logger
 
 

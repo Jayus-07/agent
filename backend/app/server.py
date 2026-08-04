@@ -14,7 +14,7 @@ from backend.app.exceptions import (
     global_exception_handler,
 )
 from backend.app.api.middleware.concurrency import concurrency_limit_middleware
-from backend.app.api.middleware.metrics import render_metrics
+from backend.observability.metrics import render_metrics
 from backend.shared.logger import logger
 from backend.config.rag import RAG_MAX_FILE_SIZE
 from backend.mcp.servers import register_all as register_mcp_servers

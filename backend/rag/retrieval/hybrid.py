@@ -6,7 +6,7 @@ def _fallback_id(doc) -> str:
 
 
 def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60, metadata_filter=None):
-    from backend.rag.tracer import trace_collector
+    from backend.observability.tracer import trace_collector
     span = trace_collector.start_span("hybrid_retrieval", name="混合检索")
 
     # 并行执行：Vector 和 BM25 互不依赖

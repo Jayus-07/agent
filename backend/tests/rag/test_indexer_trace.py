@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from backend.rag.indexing.indexer import IncrementalIndexer
-from backend.rag.tracer import (
+from backend.observability.tracer import (
     trace_collector,
     TraceCollector,
     WorkflowKind,
@@ -177,7 +177,7 @@ class TestSpanMetrics:
 class TestFailurePaths:
     def test_parse_failure_marks_span_error(self, tmp_path, fresh_collector):
         """PDF 加载失败 → index_parse 标 error，但 index_upload 也应标 error"""
-        import backend.rag.tracer as tracer_mod
+        import backend.observability.tracer as tracer_mod
         tracer_mod.trace_collector = fresh_collector
 
         # 构造 .pdf 扩展名但内容损坏
@@ -207,7 +207,7 @@ class TestFailurePaths:
 
     def test_embed_all_retries_fail_marks_chunk_span_error(self, tmp_path, fresh_collector):
         """嵌入服务一直失败 → embed_chunk_i 子 span 标 error + retry_count=3"""
-        import backend.rag.tracer as tracer_mod
+        import backend.observability.tracer as tracer_mod
         tracer_mod.trace_collector = fresh_collector
 
         f = tmp_path / "doc.txt"
@@ -253,7 +253,7 @@ class TestFailurePaths:
 
     def test_embed_succeeds_after_retry(self, tmp_path, fresh_collector):
         """第 2 次重试成功 → retry_count=1, status=success"""
-        import backend.rag.tracer as tracer_mod
+        import backend.observability.tracer as tracer_mod
         tracer_mod.trace_collector = fresh_collector
 
         f = tmp_path / "doc.txt"

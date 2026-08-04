@@ -15,7 +15,7 @@ import json
 
 from backend.infra.llm import llm
 from backend.orchestration.tool_registry import tool_registry
-from backend.orchestration.supervisor.alerts import make_alert, log_degradation
+from backend.observability.alerts import make_alert, log_degradation
 from backend.prompts.planner import PLANNER_SYSTEM, is_knowledge_question
 from backend.shared.logger import logger
 
