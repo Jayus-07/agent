@@ -120,6 +120,22 @@ class LLMRateLimiter:
             "per_user_qps": self._per_user_qps,
         }
 
+    def retry_after_seconds(self, user_id: str | None = None) -> float:
+        """估算下次可获取令牌的等待时间（秒）。"""
+        now = time.monotonic()
+        # global bucket
+        g_elapsed = now - self._global.last_refill
+        g_tokens = min(self._global.capacity, self._global.tokens + g_elapsed * self._global.refill_rate)
+        g_wait = 0.0 if g_tokens >= 1.0 else (1.0 - g_tokens) / self._global.refill_rate
+        if user_id is None:
+            return max(g_wait, 0.5)
+        # per-user bucket
+        ub = self._get_user_bucket(user_id)
+        u_elapsed = now - ub.last_refill
+        u_tokens = min(ub.capacity, ub.tokens + u_elapsed * ub.refill_rate)
+        u_wait = 0.0 if u_tokens >= 1.0 else (1.0 - u_tokens) / ub.refill_rate
+        return max(g_wait, u_wait, 0.5)
+
 
 # 模块级单例
 _limiter: LLMRateLimiter | None = None
@@ -131,3 +147,27 @@ def get_rate_limiter() -> LLMRateLimiter:
     if _limiter is None:
         _limiter = LLMRateLimiter()
     return _limiter
+
+
+async def require_rate_limit(request, user_id: str | None = None) -> None:
+    """FastAPI 依赖：检查限流，超限时抛出 HTTPException 429。
+
+    用法:
+        @router.post("/chat")
+        async def chat(req: ChatRequest, _rate=Depends(require_rate_limit)):
+            ...
+    """
+    limiter = get_rate_limiter()
+    uid = user_id or (request.client.host if request.client else "unknown")
+    if not limiter.acquire(uid):
+        retry = int(limiter.retry_after_seconds(uid)) + 1
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "RATE_LIMITED",
+                "message": "请求过于频繁，请稍后重试",
+                "retry_after_seconds": retry,
+            },
+            headers={"Retry-After": str(retry)},
+        )

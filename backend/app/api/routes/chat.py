@@ -15,11 +15,12 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from backend.app.api.schemas import ChatRequest, ChatResponse, AbortRequest, ErrorResponse
 from backend.app.api.deps import get_multi_agent
+from backend.infra.llm.rate_limiter import require_rate_limit
 
 router = APIRouter(prefix="/chat", tags=["对话"])
 
@@ -54,7 +55,8 @@ def _sse_encode(event: dict) -> str:
 # POST /chat — 同步对话（非流式，兼容旧版）
 # ═══════════════════════════════════════════════════
 @router.post("", response_model=ChatResponse, responses={500: {"model": ErrorResponse}})
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, request: Request,
+               _rate=Depends(require_rate_limit)):
     """提交自然语言问题，Multi-Agent 自动拆解+执行+汇总"""
     agent = get_multi_agent()
     kb_id = req.kb_id or "default"
@@ -70,7 +72,8 @@ async def chat(req: ChatRequest):
 # POST /chat/stream — SSE 流式对话 (v2)
 # ═══════════════════════════════════════════════════
 @router.post("/stream", responses={500: {"model": ErrorResponse}})
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, request: Request,
+                       _rate=Depends(require_rate_limit)):
     """
     SSE 流式对话 v2：4 种事件分流推送。
 
