@@ -1,0 +1,71 @@
+# Agent Platform — 一键启动全家桶
+#
+#   docker compose up -d          # 启动全部服务
+#   docker compose logs -f app    # 查看应用日志
+#   docker compose down           # 停止
+#
+version: "3.8"
+
+services:
+  # ── 应用服务 ──
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # LLM
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+      # PostgreSQL
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGDATABASE=demo
+      - PGUSER=postgres
+      - PGPASSWORD=${PGPASSWORD:-postgres}
+      # 模型
+      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
+      - RERANKER_MODEL_PATH=${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
+      # 日志
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+    volumes:
+      - app_data:/app/data
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── PostgreSQL + pgvector ──
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      - POSTGRES_DB=demo
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${PGPASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d demo"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Ollama（可选，本地模型）──
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["local-llm"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  app_data:
+  pg_data:
+  hf_cache:
+  ollama_data:
