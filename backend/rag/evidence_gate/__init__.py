@@ -446,3 +446,6 @@ __all__ = [
 
 # PR-1.1: 新增 controller（必须在 evidence_gate 内容之后 import，避免 future 冲突）
 from backend.rag.evidence_gate.controller import EvidenceGateController  # noqa: F401,E402
+
+# PR-1.2: 新增 self_correction strategy
+from backend.rag.evidence_gate.self_correction import SelfCorrectionStrategy  # noqa: F401,E402
