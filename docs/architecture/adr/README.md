@@ -8,6 +8,8 @@
 | # | 标题 | 状态 | 日期 |
 |---|------|------|------|
 | [0001](0001-merge-dual-registry.md) | 合并 Skill 双注册表 | Accepted | 2026-08-03 |
+| [0002](0002-ragchain-decomposition.md) | 拆解 RAGChain god class | Partially Accepted (PR-1.1 ✅) | 2026-08-04 |
+| [0003](0003-directory-layering.md) | 目录分层重构（对齐 8 层架构） | Proposed | 2026-08-04 |
 
 ## ADR 模板
 
