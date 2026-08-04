@@ -102,4 +102,5 @@ frontend/tsconfig.tsbuildinfo
 
 # Added by code-review-graph
 .code-review-graph/
+data/bm25/
 data/rag/tmp/
