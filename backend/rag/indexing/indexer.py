@@ -20,7 +20,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +29,7 @@ from langchain_core.documents import Document
 from backend.rag.tracer import trace_collector, WorkflowKind, SpanKind
 from backend.rag.preprocessing.cleaner import DocumentCleaner
 from backend.rag.preprocessing.metadata import classify_doc_type
+from backend.rag.indexing.models import SyncResult, Delta
 from backend.shared.logger import logger
 from backend.shared.async_utils import run_async as _run_async
 
@@ -48,23 +48,6 @@ def _sample_for_summary(text: str) -> str:
     if n > MAX_SAFE:
         return text[:20000] + "\n...(中间大量细则略)...\n" + text[-20000:]  # 极端超长安全绳
     return text               # 8KB~50KB 全文（DeepSeek 1M context 完全够）
-
-
-@dataclass
-class SyncResult:
-    """增量同步结果。"""
-    added: int = 0
-    modified: int = 0
-    deleted: int = 0
-    skipped: int = 0
-
-    @property
-    def total_changed(self) -> int:
-        return self.added + self.modified + self.deleted
-
-    def __repr__(self) -> str:
-        return (f"SyncResult(added={self.added}, modified={self.modified}, "
-                f"deleted={self.deleted}, skipped={self.skipped})")
 
 
 class IncrementalIndexer:
@@ -1180,10 +1163,4 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
         return "default"
 
 
-@dataclass
-class Delta:
-    """增量 diff 结果。"""
-    added: list[str] = field(default_factory=list)
-    modified: list[str] = field(default_factory=list)
-    deleted: list[str] = field(default_factory=list)
-    unchanged: list[str] = field(default_factory=list)
+# Delta 已迁至 models.py
