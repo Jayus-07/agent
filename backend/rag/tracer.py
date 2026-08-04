@@ -33,6 +33,11 @@ _TYPE_INFER: dict[str, str] = {
     "mq_check": "tool_call",
     "citation": "tool_call",
     "faithfulness": "tool_call",
+    # Evidence Gate (P0) — 对齐方案 §0 / §3
+    "evidence_gate_retrieval": "retrieval_gate",
+    "evidence_gate_rerank": "rerank_gate",
+    "evidence_gate_evaluation": "faithfulness_gate",
+    "self_correction_rewrite": "llm_call",
 }
 
 
@@ -54,6 +59,12 @@ class SpanKind(str, Enum):
     RERANK = "rerank"
     CITATION = "citation"
     FAITHFULNESS = "faithfulness"
+
+    # Evidence Gate（对齐方案 §0 / §3；type 字符串小写与 _TYPE_INFER 对齐）
+    RETRIEVAL_GATE = "retrieval_gate"
+    RERANK_GATE = "rerank_gate"
+    FAITHFULNESS_GATE = "faithfulness_gate"
+    SELF_CORRECTION = "self_correction"
 
     # Knowledge Index（Phase 1）
     INDEX_UPLOAD = "index_upload"

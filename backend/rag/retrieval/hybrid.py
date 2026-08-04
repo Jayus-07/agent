@@ -66,6 +66,41 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
                          metrics={"vector_hits": len(vector_docs),
                                    "bm25_hits": len(bm25_docs),
                                    "merged_hits": len(merged)})
+
+    # ── Evidence Gate: Retrieval 阶段拒答判定 ────────────────
+    # 接入 docs[0].metadata 让下游 chain.py 能读取；
+    # 若 docs 为空，下游 chain.py 直接再调一次 gate 处理 NO_EVIDENCE。
+    if merged:
+        try:
+            from backend.rag.evidence_gate import (
+                evidence_gate_retrieval, is_evidence_gate_enabled,
+                gate_retrieval_passthrough,
+            )
+            if is_evidence_gate_enabled():
+                from backend.rag.retrieval.query_analyzer import QueryAnalyzer
+                qa_result = None
+                try:
+                    qa_result = QueryAnalyzer().analyze(query)
+                except Exception:
+                    pass
+                from backend.config import (
+                    VEC_MIN_SCORE, DOC_TYPE_COVERAGE_REQUIRED,
+                )
+                decision = evidence_gate_retrieval(
+                    merged,
+                    query_analysis=qa_result,
+                    vec_min_score=VEC_MIN_SCORE,
+                    require_doc_type_coverage=DOC_TYPE_COVERAGE_REQUIRED,
+                )
+            else:
+                decision = gate_retrieval_passthrough()
+            merged[0].metadata["__evidence_gate_decision__"] = decision.to_metrics()
+        except Exception as e:
+            import logging as _lg
+            _lg.getLogger(__name__).warning(
+                f"[hybrid_retrieve] evidence_gate 评估异常: {e}"
+            )
+
     return merged
 
 

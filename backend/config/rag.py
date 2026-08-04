@@ -238,13 +238,50 @@ FILTER_ENABLE_PII_MASK = os.getenv("FILTER_ENABLE_PII_MASK", "false").lower() ==
 # ====================================
 # Faithfulness 检测（NLI 答案验证）
 # ====================================
-ENABLE_FAITHFULNESS = os.getenv("ENABLE_FAITHFULNESS", "false").lower() == "true"
+# 默认 True（对齐企业生产实践，§0.2 对标：Vertex AI / AWS Bedrock / RAGAS），
+# 关闭用 ENABLE_FAITHFULNESS=false
+ENABLE_FAITHFULNESS = os.getenv("ENABLE_FAITHFULNESS", "true").lower() == "true"
 NLI_MODEL_PATH = os.getenv(
     "NLI_MODEL_PATH",
     "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"  # HuggingFace model name，自动走缓存
 )
 NLI_TOP_K_CHUNKS = int(os.getenv("NLI_TOP_K_CHUNKS", "2"))
 NLI_SCORE_THRESHOLD = float(os.getenv("NLI_SCORE_THRESHOLD", "0.5"))
+
+# ====================================
+# Evidence Gate — RAG 主动拒答
+# 设计与 RAGFlow / Vertex AI / LangGraph CRAG 对齐
+# 详见 docs/architecture/rag-evidence-gate.md
+# ====================================
+
+# 总开关：false 时全部 Gate 旁路（与 Faithfulness 默认 true 独立）
+EVIDENCE_GATE_ENABLED = os.getenv("EVIDENCE_GATE_ENABLED", "true").lower() == "true"
+
+# --- Retrieval Gate（对齐 RAGFlow 默认 0.2） ---
+VEC_MIN_SCORE = float(os.getenv("VEC_MIN_SCORE", "0.2"))
+# 是否要求召回 doc_type 覆盖 QueryAnalyzer 推导的 doc_types
+DOC_TYPE_COVERAGE_REQUIRED = os.getenv("DOC_TYPE_COVERAGE_REQUIRED", "true").lower() == "true"
+
+# --- Rerank Gate（多维，与 RAGFlow 单阈值不同，更严格但有上限控制） ---
+RERANK_MIN_TOP1 = float(os.getenv("RERANK_MIN_TOP1", "0.35"))
+RERANK_MIN_AVG = float(os.getenv("RERANK_MIN_AVG", "0.25"))
+RERANK_MIN_GAP = float(os.getenv("RERANK_MIN_GAP", "0.05"))
+# 高风险问题额外要求 top1 提高到 0.55
+RERANK_HIGH_RISK_MIN_TOP1 = float(os.getenv("RERANK_HIGH_RISK_MIN_TOP1", "0.55"))
+
+# --- Evaluation Gate（Faithfulness 拒答门槛） ---
+# 整体 Faithfulness 分数低于此阈值触发 HALLUCINATION_REJECT
+FAITHFULNESS_REJECT_SCORE = float(os.getenv("FAITHFULNESS_REJECT_SCORE", "0.5"))
+# 高风险问题更高门槛
+HIGH_RISK_REJECT_SCORE = float(os.getenv("HIGH_RISK_REJECT_SCORE", "0.7"))
+
+# --- Self-Correction：拒答后 query rewrite 重试 ---
+SELF_CORRECTION_ENABLED = os.getenv("SELF_CORRECTION_ENABLED", "true").lower() == "true"
+SELF_CORRECTION_MAX_RETRIES = int(os.getenv("SELF_CORRECTION_MAX_RETRIES", "1"))
+
+# --- KB 反向驱动（cron 任务触发） ---
+KNOWLEDGE_GAP_MIN_OCCURRENCES = int(os.getenv("KNOWLEDGE_GAP_MIN_OCCURRENCES", "3"))
+KNOWLEDGE_GAP_WINDOW_HOURS = int(os.getenv("KNOWLEDGE_GAP_WINDOW_HOURS", "24"))
 
 # ====================================
 # Metadata 规则指纹 — 改任何规则文件自动变化

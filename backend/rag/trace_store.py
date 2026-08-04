@@ -125,6 +125,42 @@ class TraceStore:
             logger.warning(f"[TraceStore] list 失败: {e}")
             return []
 
+    def list_since(self, cutoff_iso: str, *, only_rejected: bool = False,
+                   limit: int = 1000) -> list[dict]:
+        """列出 created_at >= cutoff 的 trace (Evidence Gate 反向驱动用)。
+
+        cutoff_iso 格式: "2026-08-03 12:00:00" (local time, 与 _save 写入格式一致)
+
+        Args:
+            only_rejected: True 时只返回 metadata.rejection.rejected==True 的 trace
+        """
+        try:
+            with self._lock, self._conn() as conn:
+                # 先按 created_at 粗筛 1000，再 in-Python 滤 only_rejected
+                rows = conn.execute(
+                    "SELECT data, created_at FROM trace_store "
+                    "WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
+                    (cutoff_iso, max(limit, 5000)),
+                ).fetchall()
+            result = []
+            for (data_str, _ts) in rows:
+                try:
+                    d = json.loads(data_str)
+                except Exception:
+                    continue
+                if only_rejected:
+                    rej = (d.get("metadata") or {}).get("rejection") or {}
+                    if not rej.get("rejected"):
+                        continue
+                d.pop("spans", None)
+                result.append(d)
+                if len(result) >= limit:
+                    break
+            return result
+        except Exception as e:
+            logger.warning(f"[TraceStore] list_since 失败: {e}")
+            return []
+
 
 # 模块级单例
 _trace_store: TraceStore | None = None

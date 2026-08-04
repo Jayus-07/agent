@@ -1,85 +1,179 @@
 # CLAUDE.md
 
-> 自我约束：本文件 ≤ 80 行。详细规范见 `docs/`。
+> 项目级约束，详细设计见 docs/
 
-## 项目
+## Project
 
-电商 RAG + Multi-Agent 平台（FastAPI + Next.js 14 + LangGraph）
-AI: DeepSeek / Qwen / Ollama · 自建 tracer（`backend/rag/tracer.py`）
+电商 RAG + Multi-Agent 平台
 
-## 调用路径
+Stack:
+- Backend: FastAPI + LangGraph
+- Frontend: Next.js 14 + React
+- AI: DeepSeek / Qwen / Ollama
+- Trace: backend/rag/tracer.py
 
-- **简单**：API → rag / sql / memory
-- **复杂**：API → orchestration → planner → supervisor → skills → tools → subsystem → reporter
+## Architecture
 
-## 核心约束
+调用链：
 
-- Planner 只输出 capability DAG，禁止调 Tool / Skill / DB
-- Skill 不直接 HTTP，通过 Tool
-- Tool 必须无状态 + 可测 + 完整 Trace
+简单请求:
+API → Skill → Tool / RAG / SQL / Memory
 
-## 禁止
-- 想的方案不和企业做法作对比
-- 任务开始前不和我聊细节
-- thin wrapper（仅 re-export）→ 例外：`lib/api.ts` 兼容层、DTO 转换
-- 文件名 `misc.py` / `helper.py` / `common.py` / `utils2.py`
-- 裸 `fetch` → 例外：SSE 流 / EventSource / FormData 上传
-- `except Exception: pass`（生产路径）→ 必须加注释说明原因，否则 P1
-- `os.getenv()` / `os.environ[]` → config 模块内部可用，业务代码统一 `from backend.config import settings`
+复杂任务:
+API → Planner → Supervisor → Skill → Tool → Subsystem → Reporter
 
-## 语言约定
+核心约束：
 
-- **Python**：snake_case + 类型注解 + logger（不用 print）+ 具体异常 + 参数化 SQL
-- **React**：`"use client"` 仅在 useState / useEffect / 浏览器 API / SSE / WebSocket；API 按域 import `@/lib/api/<domain>`；Toast 用 `useToast()` 禁 `alert()`/`confirm()`
-- **Mock**：结构需对应真实 API 返回类型，Mock 数据统一放 `src/mock/` 或 `src/services/mock/`；通过 `NEXT_PUBLIC_USE_MOCK` 开关切换
+- Planner:
+  - 只负责任务拆解
+  - 输出 Capability DAG
+  - 禁止调用 Tool / Skill / DB
 
-## 优先级
+- Supervisor:
+  - Capability 调度
+  - 状态管理
+  - 并发控制
 
-- **P0**（立即修）：数据错误 / 安全漏洞 / 内存泄漏 / 生产崩溃 / Trace 丢失
-- **P1**（建议修）：God Object / 长函数 / 重复代码 / 强耦合
-- **P2**（不改大量稳定代码）：命名 / 注释 / 小型重构
+- Skill:
+  - 业务能力封装
+  - 不直接访问外部系统
 
-## Commit
+- Tool:
+  - 无状态
+  - 可测试
+  - 必须 Trace
 
-```text
-type(scope): 中文 subject
-```
-type: feat / fix / refactor / docs / test / perf / chore
-scope: rag / frontend / observability / chat / memory / knowledge ...
 
-## 分支
+## Design Principle
 
-- `master` 稳定主分支 · `feat/*` / `fix/*` 从 master 开，本地 squash → master
-- 不直接在 master 改（hotfix 除外）
+- 优先生产级方案
+- 设计需考虑：
+  - 可维护性
+  - 可观测性
+  - 故障恢复
+  - 扩展能力
 
-## 修改流程
+允许：
+- 重构架构
+- 删除低价值代码
+- 优先简单有效实现
 
-0. **目标驱动**：任务 → 可验证目标 → 每步有检查点。模糊目标（"改好它"、"优化一下"）禁止动手。
-   - "加验证" → 先写测试，再让测试过
-   - "修 bug" → 先复现，再修，确认测试绿
-   - "重构" → 改前改后测试全绿
-1. 读相关代码 → MCP `code-review-graph` 查影响范围（`detect_changes_tool` + `get_affected_flows`）
-2. 改完跑 `npx tsc --noEmit` + `npm test` + Python `py_compile`
-3. 人工验证：浏览器操作一遍才算通过
-4. **踩坑即记**：遇到非显而易见的错误/坑/限制（编译不报但运行时报、路径/目录依赖、超时/缓存策略），写入 `memory/` 并更新 MEMORY.md 索引
 
-### 何时重启
+## Code Rules
 
-- 改 `backend/**/*.py` → 重启 uvicorn：**必须 `cd backend` 后跑** `..\.venv\Scripts\python.exe -m uvicorn app.server:app --host 127.0.0.1 --port 8000 --reload`（在项目根跑会报 `No module named 'app'`）
-- 改 `frontend/.env.local` → 删 `.next` 重启 Next.js
-- 改 `frontend/**/*.tsx` → 热更新，无需重启
-- 一键重启：双击 `restart_all.bat`
+### Backend
 
-## MCP 工具（code-review-graph）
+- Python:
+  - snake_case
+  - 类型注解
+  - logger 替代 print
+  - 使用具体异常
+  - SQL 参数化
 
-核心流程：`detect_changes_tool` → `get_affected_flows`（风险 ≥0.7 必查）→ 按需 `get_impact_radius` / `query_graph` / `semantic_search_nodes`
-改完跑 `build_or_update_graph_tool` 增量更新图。
+禁止：
+- 业务代码直接 os.getenv
+- except Exception: pass
 
-## 规范索引
 
-| 主题 | 位置 |
-|------|------|
-| 模块职责 / DTO / DB / State / Prompt | `docs/architecture/` |
-| 测试 / 重构 / 优先级 / 输出格式 | `docs/development/` |
-| 启动命令 | `docs/operations/commands.md` |
-| Trace 模型 / 可观测性 / Mock | `docs/observability/` |
+### Frontend
+
+- Next.js 14 + React
+- 保持现有目录结构
+- API 按 domain 分层
+- 禁止 alert / confirm
+- Mock 必须匹配 DTO
+
+
+## File Rules
+
+禁止：
+
+文件:
+- misc.py
+- helper.py
+- common.py
+- utils2.py
+
+禁止 thin wrapper
+
+例外:
+- API compatibility layer
+- DTO converter
+
+
+## Priority
+
+修改优先级：
+
+P0:
+- 数据错误
+- 安全问题
+- 崩溃
+- Trace 丢失
+- 内存泄漏
+
+
+P1:
+- 架构问题
+- 强耦合
+- 重复代码
+- 长函数
+
+
+P2:
+- 命名
+- 注释
+- 小重构
+
+
+## Change Flow
+
+修改前：
+
+1. 明确目标
+2. 阅读代码
+3. 分析影响范围
+4. 修改
+5. 测试
+
+
+规则：
+
+Bug:
+- 先复现
+
+Refactor:
+- 修改前后测试通过
+
+Feature:
+- 优先补测试
+
+
+## Validation
+
+Backend:
+- py_compile
+- 相关测试
+
+
+Frontend:
+- npx tsc --noEmit
+- npm test
+
+
+## Docs
+
+架构:
+docs/architecture/
+
+开发:
+docs/development/
+
+运维:
+docs/operations/
+
+可观测:
+docs/observability/
+
+经验:
+memory/
