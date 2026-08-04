@@ -457,3 +457,29 @@ class RAGPipeline:
         """清理 contextvars（无论成功失败都执行）。"""
         from backend.rag.context import clear_context
         clear_context()
+
+
+# 线程安全单例（供 FastAPI deps + MCP server 共用）
+import threading as _threading
+_pipeline_lock = _threading.Lock()
+_pipeline_singleton: RAGPipeline | None = None
+_pipeline_init_error: str | None = None
+
+
+def get_rag_pipeline() -> RAGPipeline:
+    """惰性初始化 RAGPipeline 单例（线程安全）。"""
+    global _pipeline_singleton, _pipeline_init_error
+    if _pipeline_singleton is None:
+        with _pipeline_lock:
+            if _pipeline_singleton is None:
+                try:
+                    _pipeline_singleton = RAGPipeline()
+                    _pipeline_init_error = None
+                    logger.info("[pipeline] RAGPipeline 单例初始化成功")
+                except Exception as e:
+                    _pipeline_init_error = str(e)
+                    logger.error(f"[pipeline] RAGPipeline 初始化失败: {e}")
+    if _pipeline_init_error is not None and _pipeline_singleton is None:
+        raise RuntimeError(f"RAG 服务不可用（重试中）: {_pipeline_init_error}")
+    return _pipeline_singleton
+

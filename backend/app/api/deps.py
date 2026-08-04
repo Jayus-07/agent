@@ -1,14 +1,16 @@
-"""依赖注入 — Agent 单例，惰性初始化，避免启动时加载所有模型"""
+"""依赖注入 — Agent 单例（惰性初始化，PR-2.x 工厂下沉到源模块）。
+
+工厂函数已迁移到源模块（sql/sql_agent.py + rag/pipeline.py），
+本模块封装惰性 import + 状态查询，避免启动时强制加载所有依赖。
+"""
 import threading
 
 from backend.shared.logger import logger
 
-# 惰性加载单例
 _lock = threading.Lock()
 _multi_agent = None
-_sql_agent = None
-_rag_pipeline = None
 _rag_init_error = None
+_rag_pipeline_ref = None
 
 
 def get_multi_agent():
@@ -22,37 +24,32 @@ def get_multi_agent():
 
 
 def get_sql_agent():
-    global _sql_agent
-    if _sql_agent is None:
-        with _lock:
-            if _sql_agent is None:
-                from backend.sql.sql_agent import SQLAgent
-                from backend.config import DB_CONFIG
-                _sql_agent = SQLAgent(db_config=DB_CONFIG, max_retries=2)
-    return _sql_agent
+    """惰性导入 SQLAgent 单例（避免启动时加载 sqlglot 等重依赖）。"""
+    from backend.sql.sql_agent import get_sql_agent as _get
+    return _get()
 
 
 def get_rag_pipeline():
-    global _rag_pipeline, _rag_init_error
-    if _rag_pipeline is None:
-        with _lock:
-            if _rag_pipeline is None:
-                try:
-                    from backend.rag.pipeline import RAGPipeline
-                    _rag_pipeline = RAGPipeline()
-                    _rag_init_error = None  # 成功后清掉旧错误
-                    logger.info("[API] RAG 管道初始化成功")
-                except Exception as e:
-                    _rag_init_error = str(e)
-                    logger.error(f"[API] RAG 管道初始化失败（下次请求重试）: {e}")
-    if _rag_init_error is not None and _rag_pipeline is None:
-        raise RuntimeError(f"RAG 服务不可用（重试中）: {_rag_init_error}")
-    return _rag_pipeline
+    """惰性导入 RAGPipeline 单例（避免启动时加载 HuggingFace 模型）。"""
+    from backend.rag.pipeline import get_rag_pipeline as _get
+    return _get()
+
+
+def _ensure_pipeline_ref():
+    global _rag_pipeline_ref, _rag_init_error
+    if _rag_pipeline_ref is not None:
+        return
+    try:
+        _rag_pipeline_ref = get_rag_pipeline()
+        _rag_init_error = None
+    except Exception as e:
+        _rag_init_error = str(e)
 
 
 def get_rag_status() -> dict:
     """返回 RAG 模块状态（供 health check 使用）"""
-    if _rag_pipeline is not None:
+    _ensure_pipeline_ref()
+    if _rag_pipeline_ref is not None:
         return {"ready": True, "status": "ready"}
     if _rag_init_error is not None:
         return {"ready": False, "status": "error", "error": _rag_init_error}

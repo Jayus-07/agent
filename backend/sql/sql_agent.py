@@ -107,8 +107,25 @@ class SQLAgent:
 # =================================================
 
 def init_sql_agent(db_config: dict, max_retries: int = 1) -> SQLAgent:
-    """构造 SQLAgent 实例（multimodal 入口统一用 deps.get_sql_agent，工厂保留作 demo/工具调用）"""
+    """构造 SQLAgent 实例。"""
     host = db_config.get("host", "?")
     dbname = db_config.get("dbname", "?")
     logger.info(f"SQLAgent 初始化完成: postgresql://{host}/{dbname}")
     return SQLAgent(db_config=db_config, max_retries=max_retries)
+
+
+# 线程安全单例（供 FastAPI deps + MCP server 共用）
+import threading as _threading
+_sql_agent_lock = _threading.Lock()
+_sql_agent_singleton: SQLAgent | None = None
+
+
+def get_sql_agent() -> SQLAgent:
+    """惰性初始化 SQLAgent 单例（线程安全）。"""
+    global _sql_agent_singleton
+    if _sql_agent_singleton is None:
+        with _sql_agent_lock:
+            if _sql_agent_singleton is None:
+                from backend.config import DB_CONFIG
+                _sql_agent_singleton = init_sql_agent(DB_CONFIG, max_retries=2)
+    return _sql_agent_singleton

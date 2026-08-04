@@ -1,6 +1,6 @@
 """SQL MCP Server — 自然语言查询数据库"""
 from backend.mcp.manager import MCPServer
-from backend.app.api.deps import get_sql_agent
+from backend.sql.sql_agent import get_sql_agent
 
 
 class SQLMCPServer(MCPServer):
