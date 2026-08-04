@@ -15,10 +15,10 @@ import asyncio
 from langgraph.graph import StateGraph, START, END
 
 from backend.orchestration.state import AgentState
-from backend.orchestration.planner.planner import planner_node
-from backend.orchestration.planner.critique import critique_node
+from backend.agents.planner.planner import planner_node
+from backend.agents.planner.critique import critique_node
 from backend.orchestration.supervisor.scheduler import supervisor_node, route_after_supervisor
-from backend.orchestration.reporter.reporter import reporter_node
+from backend.agents.reporter.reporter import reporter_node
 from backend.orchestration.tool_registry import tool_registry
 from backend.shared.logger import logger
 

@@ -214,8 +214,8 @@ class MultiAgentSystem:
     @staticmethod
     def _make_done_event(final_answer: str, all_step_results: dict, start_time: float) -> dict:
         """构建 done 事件，附带耗时 + 引用来源。"""
-        from backend.orchestration.reporter.reporter import _extract_sources_from_steps
-        from backend.orchestration.reporter.context_filter import parse_sources_from_text
+        from backend.agents.reporter.reporter import _extract_sources_from_steps
+        from backend.agents.reporter.context_filter import parse_sources_from_text
         elapsed = time.time() - start_time
         sources = _extract_sources_from_steps(all_step_results)
         if not sources and final_answer:
@@ -244,8 +244,8 @@ class MultiAgentSystem:
 
     @staticmethod
     def _extract_sources(step_results: dict, final_answer: str) -> list[dict]:
-        from backend.orchestration.reporter.reporter import _extract_sources_from_steps
-        from backend.orchestration.reporter.context_filter import parse_sources_from_text
+        from backend.agents.reporter.reporter import _extract_sources_from_steps
+        from backend.agents.reporter.context_filter import parse_sources_from_text
         sources = _extract_sources_from_steps(step_results)
         if not sources and final_answer:
             sources = parse_sources_from_text(final_answer)

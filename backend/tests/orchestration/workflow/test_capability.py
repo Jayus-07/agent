@@ -15,12 +15,12 @@ from unittest.mock import AsyncMock, MagicMock, patch as mp
 
 import pytest
 
-from backend.orchestration.capability.base import (
+from backend.agents.capability.base import (
     BaseAgentSkill,
     BaseCapability,
     is_capability,
 )
-from backend.orchestration.capability.inventory_analyzer import InventoryAnalyzer
+from backend.agents.capability.inventory_analyzer import InventoryAnalyzer
 
 
 # ─────────────────────────────────────────────────────────────

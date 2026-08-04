@@ -21,7 +21,7 @@ from backend.orchestration.workflow.skill_adapter import (
     call_report,
     call_email,
 )
-from backend.orchestration.capability.inventory_analyzer import InventoryAnalyzer
+from backend.agents.capability.inventory_analyzer import InventoryAnalyzer
 from backend.shared.logger import logger
 
 

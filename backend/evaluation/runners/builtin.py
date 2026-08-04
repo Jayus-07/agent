@@ -23,7 +23,7 @@ def _run_planner(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     """Planner runner — 调用 multi_agent.planner.planner_node。"""
     results: list[EvalResult] = []
     try:
-        from backend.orchestration.planner import planner_node
+        from backend.agents.planner import planner_node
 
         for case in cases:
             t0 = time.time()

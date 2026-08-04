@@ -1,11 +1,2 @@
-"""planner — 任务规划（拆解用户问题为 DAG 执行计划）"""
-from backend.orchestration.planner.planner import (
-    planner_node, _format_capabilities_schema,
-)
-from backend.orchestration.planner.critique import critique_node
-from backend.prompts.planner import PLANNER_SYSTEM, is_knowledge_question
-
-__all__ = [
-    "planner_node", "critique_node",
-    "PLANNER_SYSTEM", "is_knowledge_question", "_format_capabilities_schema",
-]
+"""向后兼容 re-export — 已迁至 backend/agents.planner。"""
+from backend.agents.planner import *  # noqa: F401,F403
