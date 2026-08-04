@@ -1,5 +1,5 @@
 """RAG MCP Server — 知识库检索能力"""
-from backend.mcp.manager import MCPServer
+from mcp_servers.manager import MCPServer
 from backend.rag.pipeline import get_rag_pipeline
 
 

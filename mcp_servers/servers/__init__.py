@@ -2,9 +2,9 @@
 
 注册入口在 backend.app.server 启动时调用 register_all()。
 """
-from backend.mcp.servers.rag import RAGMCPServer
-from backend.mcp.servers.sql import SQLMCPServer
-from backend.mcp.manager import manager
+from mcp_servers.servers.rag import RAGMCPServer
+from mcp_servers.servers.sql import SQLMCPServer
+from mcp_servers.manager import manager
 
 
 def register_all():

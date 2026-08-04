@@ -17,7 +17,7 @@ from backend.app.api.middleware.concurrency import concurrency_limit_middleware
 from backend.observability.metrics import render_metrics
 from backend.shared.logger import logger
 from backend.config.rag import RAG_MAX_FILE_SIZE
-from backend.mcp.servers import register_all as register_mcp_servers
+from mcp_servers.servers import register_all as register_mcp_servers
 
 app = FastAPI(
     title="Agent Platform API",
