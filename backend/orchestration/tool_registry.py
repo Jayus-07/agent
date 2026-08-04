@@ -65,14 +65,8 @@ class ToolRegistry:
     def _get_skill_registry(self) -> dict[str, "BaseSkill"]:
         """延迟读取 Skill 注册表（避免循环导入）
 
-        注：调 list_capabilities() 而非直接 _registry，确保外部 Skill
-        （如 DataCollectionSkill）惰性加载完成。
+        所有 Skill 已在 registry 模块级注册（PR-2.x 消除外部惰性加载）。
         """
-        from backend.orchestration.skills.registry import list_capabilities
-        # list_capabilities 返回 {cap: skill.name}，但我们需要 cap → BaseSkill
-        # 直接走 _registry（list_capabilities 内部已触发惰性加载）
-        from backend.orchestration.skills.registry import _register_external_skills
-        _register_external_skills()
         from backend.orchestration.skills.registry import _registry as skills
         return skills
 

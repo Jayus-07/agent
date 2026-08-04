@@ -18,9 +18,6 @@ class TestADRDualRegistryMerge:
 
     def test_all_skills_have_required_metadata(self):
         """每个 Skill 必须声明 description 和 examples（__init_subclass__ 校验）"""
-        # 触发惰性加载
-        from backend.orchestration.skills.registry import _register_external_skills
-        _register_external_skills()
         from backend.orchestration.skills.registry import _registry
 
         for cap, skill in _registry.items():
