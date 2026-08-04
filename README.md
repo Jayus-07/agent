@@ -1,6 +1,6 @@
 # Agent Platform
 
-跨境电商 RAG + Multi-Agent 智能平台 — 让 AI 检索企业知识库、自动拆解任务、协同 SQL 查询与报告生成。
+电商 RAG + Multi-Agent 智能平台 — 让 AI 检索企业知识库、自动拆解任务、协同 SQL 查询与报告生成。
 
 ---
 

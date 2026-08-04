@@ -69,6 +69,7 @@ Thumbs.db
 # pytest
 .pytest_cache/
 .coverage
+coverage.json
 htmlcov/
 
 # mypy
