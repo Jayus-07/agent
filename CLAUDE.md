@@ -14,13 +14,36 @@ Stack:
 
 ## Architecture
 
-调用链：
-
 简单请求:
-API → Skill → Tool / RAG / SQL / Memory
+
+API
+ ↓
+Router
+ ↓
+Skill
+ ↓
+Tool / RAG / SQL / Memory
+
 
 复杂任务:
-API → Planner → Supervisor → Skill → Tool → Subsystem → Reporter
+
+API
+ ↓
+Router / Agent Runtime
+ ↓
+Planner
+ ↓
+Supervisor
+ ↓
+Skill
+ ↓
+Tool
+ ↓
+MCP Client
+ ↓
+MCP Server
+ ↓
+External Resource
 
 核心约束：
 
@@ -46,12 +69,22 @@ API → Planner → Supervisor → Skill → Tool → Subsystem → Reporter
 
 ## Design Principle
 
-- 优先生产级方案
-- 设计需考虑：
-  - 可维护性
-  - 可观测性
-  - 故障恢复
-  - 扩展能力
+优先生产级方案。
+
+代码设计必须满足：
+
+- 可理解：结构清晰，职责明确，人可以快速接手
+- 可测试：核心逻辑可独立验证，避免强依赖外部系统
+- 可观测：关键流程有日志、Trace、指标，问题可定位
+- 可维护：低耦合，修改成本可控
+- 可扩展：支持新增能力，不破坏已有流程
+- 可控制：关键流程、数据、权限由代码约束，不依赖 AI 自由决策
+- 可靠性：面对异常、变化、失败场景仍能稳定运行
+
+禁止只追求：
+- 当前 Demo 跑通
+- 单次输入有效
+- 临时堆叠代码
 
 允许：
 - 重构架构
