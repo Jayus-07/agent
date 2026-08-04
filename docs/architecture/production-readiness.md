@@ -28,17 +28,17 @@
 - **Trace**：自建 `backend/rag/tracer.py`（Span 模型 + 内存 + 落库），详见 `docs/observability/trace-model.md`
 - **告警**：`backend/orchestration/supervisor/alerts.py`（代码内 alert，未对接外部系统）
 - **日志**：`backend/rag_system.log`（文本格式，无 trace_id 串联）
-- **指标**：❌ 无（靠日志手工 grep）
+- **指标**：✅ `backend/app/api/middleware/metrics.py`（PR-0.3）— 4 metric + `/metrics` 端点
 - **健康检查**：`GET /health`（极简版，只确认进程存活）
 
 ### 1.2 缺口 & 行动项
 
-| # | 行动项 | 验收标准 | 工作量 |
-|---|--------|---------|--------|
-| O1 | 引入 `prometheus_client` + `/metrics` 端点 | Grafana 能拉到 4 类黄金指标 | 中 |
-| O2 | 结构化日志（JSON，含 `trace_id`/`session_id`/`capability`） | 一条请求可串起所有日志 | 小 |
-| O3 | OpenTelemetry 集成（替换自建 Tracer） | Trace 可导出到 Jaeger / Tempo | 大 |
-| O4 | 关键 SLI 定义文档化（见下表） | 每个 SLI 有采集点 + 告警阈值 | 小 |
+| # | 行动项 | 验收标准 | 工作量 | 状态 |
+|---|--------|---------|--------|------|
+| O1 | 引入 `prometheus_client` + `/metrics` 端点 | Grafana 能拉到 4 类黄金指标 | 中 | [x] PR-0.3 ✅ 4 metric 已暴露（缺 Grafana 仪表盘） |
+| O2 | 结构化日志（JSON，含 `trace_id`/`session_id`/`capability`） | 一条请求可串起所有日志 | 小 | [ ] 待办 |
+| O3 | OpenTelemetry 集成（替换自建 Tracer） | Trace 可导出到 Jaeger / Tempo | 大 | [ ] 待办（路线图阶段 2）|
+| O4 | 关键 SLI 定义文档化（见下表） | 每个 SLI 有采集点 + 告警阈值 | 小 | [x] ✅ §1.3 已定义（缺告警规则实现）|
 
 ### 1.3 SLI 定义（首批 P0 指标）
 
@@ -53,10 +53,10 @@
 | `workflow_run_duration_seconds{workflow}` | Histogram | Scheduler | P99 > 300s |
 
 ### 1.4 验收清单
-- [ ] `curl /metrics` 返回 Prometheus 格式
-- [ ] Grafana 仪表盘覆盖 7 个 SLI
-- [ ] 错误日志 100% 含 `trace_id`
-- [ ] 至少 3 个 SLO 告警规则上线
+- [x] `curl /metrics` 返回 Prometheus 格式（PR-0.3 ✅ 7/7 测试通过）
+- [ ] Grafana 仪表盘覆盖 7 个 SLI（待办）
+- [ ] 错误日志 100% 含 `trace_id`（待办，路线图 O2）
+- [ ] 至少 3 个 SLO 告警规则上线（待办，路线图 O4 告警规则实现）
 
 ---
 
@@ -66,17 +66,17 @@
 - **重试**：`BaseSkill.execute` 自带 2 次重试 + 指数退避（`skills/base.py`）
 - **超时**：60s 软超时（`OVERALL_REQUEST_TIMEOUT`）
 - **降级**：`supervisor/degradation.py`（步骤失败时降级到替代步骤）
-- **限流**：❌ 无
+- **限流**：⚠️ `backend/infra/llm/rate_limiter.py`（PR-0.4）— TokenBucket 已实现，**仅日志未返 429**（PR-2.4 接 HTTP 429）
 - **熔断**：❌ 无
 - **隔离**：✅ LangGraph 节点级隔离（Skill 失败不影响 Supervisor）
 
 ### 2.2 缺口 & 行动项
 
-| # | 行动项 | 验收标准 | 工作量 |
-|---|--------|---------|--------|
-| R1 | LLM 限流（按用户/全局 QPS + Token Rate） | 突发流量可被削峰 | 中 |
-| R2 | 下游熔断（DeepSeek / PG / Chroma） | 失败 N 次自动断开 | 中 |
-| R3 | 隔离舱（Bulkhead）：LLM / DB 独立线程池 | 一方阻塞不拖垮另一方 | 中 |
+| # | 行动项 | 验收标准 | 工作量 | 状态 |
+|---|--------|---------|--------|------|
+| R1 | LLM 限流（按用户/全局 QPS + Token Rate） | 突发流量可被削峰 | 中 | [ ] PR-0.4（仅日志）→ PR-2.4（接 429）|
+| R2 | 下游熔断（DeepSeek / PG / Chroma） | 失败 N 次自动断开 | 中 | [ ] 待办 |
+| R3 | 隔离舱（Bulkhead）：LLM / DB 独立线程池 | 一方阻塞不拖垮另一方 | 中 | [ ] 待办 |
 | R4 | 全局超时链路（ContextVar 串联） | 子调用继承根超时 | 小 |
 | R5 | 优雅停机（uvicorn SIGTERM → 等待 in-flight） | 重启 0 丢请求 | 中 |
 
