@@ -143,3 +143,30 @@ class DocumentOperationLogger:
             "page": page,
             "page_size": page_size,
         }
+
+    def get_last_ops_batch(self, doc_ids: list[str]) -> tuple[dict[str, dict], dict[str, str]]:
+        """批量查询每个文档的最新操作日志 + trace_id。
+
+        Returns:
+            (last_ops: {doc_id: {operation, created_at, trace_id, result}},
+             last_traces: {doc_id: trace_id})
+        """
+        if not doc_ids:
+            return {}, {}
+        placeholders = ",".join(["?"] * len(doc_ids))
+        with self._lock, self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT doc_id, operation, created_at, trace_id, result FROM doc_operation_log "
+                f"WHERE id IN (SELECT MAX(id) FROM doc_operation_log WHERE doc_id IN ({placeholders}) GROUP BY doc_id)",
+                doc_ids,
+            ).fetchall()
+            last_ops = {r["doc_id"]: dict(r) for r in rows}
+            trace_rows = conn.execute(
+                f"SELECT doc_id, trace_id FROM doc_operation_log "
+                f"WHERE trace_id IS NOT NULL AND trace_id != '' AND doc_id IN ({placeholders}) "
+                f"AND id IN (SELECT MAX(id) FROM doc_operation_log "
+                f"WHERE trace_id IS NOT NULL AND trace_id != '' AND doc_id IN ({placeholders}) GROUP BY doc_id)",
+                [*doc_ids, *doc_ids],
+            ).fetchall()
+            last_traces = {r["doc_id"]: r["trace_id"] for r in trace_rows}
+        return last_ops, last_traces

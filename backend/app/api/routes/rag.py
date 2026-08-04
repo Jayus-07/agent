@@ -144,30 +144,9 @@ async def list_documents(
         docs = result["items"]
         total = result["total"]
 
-        # 批量查询每个文档的最新操作日志
+        # 批量查询每个文档的最新操作日志（委托给 DocumentOperationLogger）
         doc_ids = [d["doc_id"] for d in docs]
-        last_ops: dict[str, dict] = {}
-        last_traces: dict[str, str] = {}
-        if doc_ids:
-            import sqlite3
-            placeholders = ",".join(["?"] * len(doc_ids))
-            op_conn = sqlite3.connect(DOC_OPERATION_LOG_PATH)
-            op_conn.row_factory = sqlite3.Row
-            rows = op_conn.execute(
-                f"SELECT doc_id, operation, created_at, trace_id, result FROM doc_operation_log "
-                f"WHERE id IN (SELECT MAX(id) FROM doc_operation_log WHERE doc_id IN ({placeholders}) GROUP BY doc_id)",
-                doc_ids,
-            ).fetchall()
-            last_ops = {r["doc_id"]: dict(r) for r in rows}
-            trace_rows = op_conn.execute(
-                f"SELECT doc_id, trace_id FROM doc_operation_log "
-                f"WHERE trace_id IS NOT NULL AND trace_id != '' AND doc_id IN ({placeholders}) "
-                f"AND id IN (SELECT MAX(id) FROM doc_operation_log "
-                f"WHERE trace_id IS NOT NULL AND trace_id != '' AND doc_id IN ({placeholders}) GROUP BY doc_id)",
-                [*doc_ids, *doc_ids],
-            ).fetchall()
-            last_traces = {r["doc_id"]: r["trace_id"] for r in trace_rows}
-            op_conn.close()
+        last_ops, last_traces = _get_op_logger().get_last_ops_batch(doc_ids)
 
         embedding_model_name = os.path.basename(EMBEDDING_MODEL_PATH)
 
