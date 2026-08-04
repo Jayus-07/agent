@@ -17,6 +17,14 @@ class DataCollectionSkill(BaseSkill):
 
     name = "data_collection"
     capabilities = ["data.collect"]
+    description = "从外部数据源采集电商业务数据（商品/订单/店铺/库存/供应商），经 Pandas 清洗分析后写入数据库。支持本地文件和 HTTP API 两种数据源。"
+    params_schema = {
+        "source": "数据源标识: static://datasets/products.json 或 http://localhost:8001/mock/products",
+        "target_table": "目标数据库表名（默认 stg_products）",
+        "fetcher_type": "static | http",
+        "dedup_keys": "去重键字段，逗号分隔（如 SKU,仓库）",
+    }
+    examples = [{"source": "static://datasets/products.json", "target_table": "stg_products", "fetcher_type": "static"}]
 
     @property
     def _tool_fn(self):

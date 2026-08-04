@@ -36,14 +36,39 @@ class BaseSkill(ABC):
     """Skill 抽象基类。每个 Skill 封装一组 Capability。
 
     子类需声明:
-      - capabilities: ClassVar[list[str]]  — 如 ["sql.query", "sql.analyze"]
-      - _tool_fn: property → LangChain Tool
+      - capabilities:    ClassVar[list[str]]  — 如 ["sql.query", "sql.analyze"]
+      - description:     str                   — Planner prompt 用（必填）
+      - params_schema:   dict                  — 参数说明（必填）
+      - examples:        list[dict]            — Planner 用的示例（至少 1 个）
+      - _tool_fn:        property → LangChain Tool
 
     Capability 是 Planner 与 Skill 之间唯一的契约。
     """
 
     name: str = ""
     capabilities: ClassVar[list[str]] = []
+    description: str = ""
+    params_schema: ClassVar[dict] = {}
+    examples: ClassVar[list[dict]] = []
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # 内部兼容类（_CompatSkill）跳过校验
+        if cls.__name__.startswith("_"):
+            return
+        # 必填校验：避免漏写 description 导致 Planner 拿不到能力描述
+        if not getattr(cls, "description", ""):
+            raise TypeError(
+                f"{cls.__name__} 必须声明 description（Planner prompt 需要）"
+            )
+        if not getattr(cls, "capabilities", []):
+            raise TypeError(
+                f"{cls.__name__} 必须声明 capabilities（至少 1 个）"
+            )
+        if not getattr(cls, "examples", []):
+            raise TypeError(
+                f"{cls.__name__} 必须声明 examples（至少 1 个，Planner 参考）"
+            )
 
     @property
     @abstractmethod

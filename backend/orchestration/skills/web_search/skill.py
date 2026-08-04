@@ -7,6 +7,12 @@ from backend.shared.logger import logger
 class WebSearchSkill(BaseSkill):
     name = "web_search"
     capabilities = ["web.search"]
+    description = "搜索外部网页，补充知识库未覆盖的最新信息（市场动态、竞品信息、行业趋势等）。仅在内部知识库无法回答时使用。"
+    params_schema = {
+        "query": "搜索关键词",
+        "num_results": "返回结果数（默认5）",
+    }
+    examples = [{"query": "Amazon FBA fee changes 2026"}]
 
     @property
     def _tool_fn(self):
