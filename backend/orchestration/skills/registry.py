@@ -34,7 +34,7 @@ def _register_external_skills():
     """惰性加载外部模块 Skill（避免循环导入）"""
     if not hasattr(_register_external_skills, "_done"):
         try:
-            from backend.data_collection.skill import DataCollectionSkill, data_collection_skill_node
+            from backend.orchestration.skills.data_collection.skill import DataCollectionSkill, data_collection_skill_node
             from backend.orchestration.tool_registry import tool_registry
             _instances.append(DataCollectionSkill())
             for _cap in DataCollectionSkill.capabilities:
