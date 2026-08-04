@@ -9,6 +9,7 @@ from backend.app.api.deps import get_rag_pipeline, require_rag_ready, get_rag_st
 from backend.rag.indexing.doc_registry import DocumentRegistry
 from backend.rag.indexing.indexer import IncrementalIndexer
 from backend.rag.indexing.operation_log import DocumentOperationLogger
+from backend.rag.progress_listener import ProgressListener
 from backend.config import DOC_REGISTRY_PATH, DOC_OPERATION_LOG_PATH, CHROMA_PATH, EMBEDDING_MODEL_PATH
 from backend.config.rag import METADATA_SCHEMA_FINGERPRINT
 from backend.shared.logger import logger
@@ -537,7 +538,7 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
 
     terminal = (result or {}).get("terminal", "done")
     # span_id → 前端 stage 键的统一映射（终态阶段耗时使用同一规则）
-    _SPAN_STAGE_KEY = _ProgressListener.SPAN_STAGE_KEY
+    _SPAN_STAGE_KEY = ProgressListener.SPAN_STAGE_KEY
     if terminal == "duplicate":
         duplicate_doc = (result or {}).get("doc") or {}
         stage_elapsed = (result or {}).get("stage_elapsed") or {}
@@ -664,7 +665,7 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
         _pipe_elapsed = int((time.time() - _pipe_t0) * 1000)
         if _pipe_elapsed > 3000:
             logger.info(f"[RAG] 管道初始化耗时 {_pipe_elapsed}ms（可能预热未完成）")
-        listener = _ProgressListener(sync_emit)
+        listener = ProgressListener(sync_emit)
         indexer = IncrementalIndexer(
             docs_dir=DOCS_DIRECTORY,
             vectordb=pipeline.vectordb,
@@ -685,77 +686,6 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
         raise
 
 
-class _ProgressListener:
-    """订阅 TraceCollector 的 span end 事件，把 indexer 的 9 个标准 span
-    映射到前端 SSE 阶段 (loading/parsing/cleaning/dedup/chunking/metadata/embedding/writing)。
-
-    Phase 1.5: 替代原 _ProgressIndexingWrapper 的 monkey-patch，直接订阅
-    TraceCollector 事件，避免与 indexer 内部逻辑耦合。
-    """
-
-    # span_id → SSE stage 映射；前端用 9 阶段展示，元数据也单独 emit
-    SPAN_STAGE_MAP = {
-        "index_load":      "loading",
-        "index_parse":     "parsing",
-        "index_clean":     "cleaning",
-        "index_dedup":     "dedup",
-        "index_chunk":     "chunking",
-        "index_metadata":  "metadata",
-        "index_embed":     "embedding",
-        "index_vector_db": "writing",
-        # 不再映射 index_upload → uploading：
-        # index_upload 是 root span，duration_ms ≈ 整个索引流程。
-        # 若映射，前端 uploading 字段会被误显示为总耗时。
-        # uploading 由 _run_index_background 的 total_ms - others 自动计算。
-    }
-
-    # span_id → 前端阶段名（终态 stage_elapsed 的键）
-    SPAN_STAGE_KEY = SPAN_STAGE_MAP
-
-    def __init__(self, emit_fn):
-        from backend.rag.tracer import trace_collector
-        self._emit = emit_fn
-        self._unsub = trace_collector.subscribe(self._on_span_end)
-
-    def _on_span_end(self, trace, span):
-        stage = self.SPAN_STAGE_MAP.get(span.span_id)
-        if not stage:
-            return
-        # 从 span.metrics 提取进度文案
-        msg = self._format_message(span)
-        try:
-            self._emit(stage, msg, duration_ms=int(span.duration_ms or 0))
-        except Exception:
-            logger.debug("ProgressListener emit 失败", exc_info=True)
-
-    @staticmethod
-    def _format_message(span) -> str:
-        """根据 span_id + metrics 构造前端可读进度文案。"""
-        m = span.metrics or {}
-        if span.span_id == "index_load":
-            return f"加载 {m.get('file_size', 0)} 字节"
-        if span.span_id == "index_parse":
-            return f"已解析 {m.get('doc_count', 0)} 页"
-        if span.span_id == "index_clean":
-            return f"清洗 {m.get('docs_cleaned', 0)} 篇"
-        if span.span_id == "index_dedup":
-            return "命中缓存" if m.get('cached') else "新建索引"
-        if span.span_id == "index_chunk":
-            kept = m.get("kept_chunks", 0)
-            filtered = m.get("filtered_out", 0)
-            return f"切分 {kept} chunks" + (f"（过滤 {filtered}）" if filtered else "")
-        if span.span_id == "index_metadata":
-            return f"元数据抽取 {m.get('doc_type', '')}"
-        if span.span_id == "index_embed":
-            succ = m.get("succeeded", 0)
-            attempted = m.get("attempted", 0)
-            return f"Embedding {succ}/{attempted}" + ("（部分失败）" if succ < attempted else "")
-        if span.span_id == "index_vector_db":
-            return f"写入 {m.get('written', 0)} 向量"
-        return ""
-
-    def unsub(self):
-        self._unsub()
 
 
 @router.get("/upload/{upload_id}/stream")

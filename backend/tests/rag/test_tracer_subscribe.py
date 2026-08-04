@@ -159,75 +159,75 @@ def test_listener_works_alongside_existing_tracer_features(fresh_collector):
 
 
 # ==========================================================
-# Phase 1.5 集成：span → SSE stage 映射逻辑（_ProgressListener._format_message）
+# Phase 1.5 集成：span → SSE stage 映射逻辑（ProgressListener._format_message）
 # ==========================================================
 
 class TestProgressMessageFormat:
-    """直接验证 _ProgressListener._format_message 输出格式"""
+    """直接验证 ProgressListener._format_message 输出格式"""
 
     def test_parse_message_includes_doc_count(self):
-        from backend.app.api.routes.rag import _ProgressListener
+        from backend.rag.progress_listener import ProgressListener
         from backend.rag.tracer import Span
 
         s = Span(span_id="index_parse", parent_id="index_upload", name="Parse",
                  type="parse", kind="index_parse")
         s.metrics = {"doc_count": 42}
-        msg = _ProgressListener._format_message(s)
+        msg = ProgressListener._format_message(s)
         assert "42" in msg
         assert "页" in msg
 
     def test_chunk_message_includes_kept_and_filtered(self):
-        from backend.app.api.routes.rag import _ProgressListener
+        from backend.rag.progress_listener import ProgressListener
         from backend.rag.tracer import Span
 
         s = Span(span_id="index_chunk", parent_id="index_upload", name="Chunk",
                  type="chunk", kind="index_chunk")
         s.metrics = {"kept_chunks": 100, "filtered_out": 5}
-        msg = _ProgressListener._format_message(s)
+        msg = ProgressListener._format_message(s)
         assert "100" in msg
         assert "5" in msg
         assert "过滤" in msg
 
     def test_chunk_message_without_filtered(self):
-        from backend.app.api.routes.rag import _ProgressListener
+        from backend.rag.progress_listener import ProgressListener
         from backend.rag.tracer import Span
 
         s = Span(span_id="index_chunk", parent_id="index_upload", name="Chunk",
                  type="chunk", kind="index_chunk")
         s.metrics = {"kept_chunks": 50, "filtered_out": 0}
-        msg = _ProgressListener._format_message(s)
+        msg = ProgressListener._format_message(s)
         assert "50" in msg
         assert "过滤" not in msg  # 0 个过滤时不显示
 
     def test_embed_message_partial_failure(self):
-        from backend.app.api.routes.rag import _ProgressListener
+        from backend.rag.progress_listener import ProgressListener
         from backend.rag.tracer import Span
 
         s = Span(span_id="index_embed", parent_id="index_upload", name="Embed",
                  type="embedding", kind="index_embed")
         s.metrics = {"succeeded": 8, "attempted": 10}
-        msg = _ProgressListener._format_message(s)
+        msg = ProgressListener._format_message(s)
         assert "8/10" in msg
         assert "部分失败" in msg
 
     def test_embed_message_all_success(self):
-        from backend.app.api.routes.rag import _ProgressListener
+        from backend.rag.progress_listener import ProgressListener
         from backend.rag.tracer import Span
 
         s = Span(span_id="index_embed", parent_id="index_upload", name="Embed",
                  type="embedding", kind="index_embed")
         s.metrics = {"succeeded": 10, "attempted": 10}
-        msg = _ProgressListener._format_message(s)
+        msg = ProgressListener._format_message(s)
         assert "10/10" in msg
         assert "部分失败" not in msg
 
     def test_vector_db_message_includes_written_count(self):
-        from backend.app.api.routes.rag import _ProgressListener
+        from backend.rag.progress_listener import ProgressListener
         from backend.rag.tracer import Span
 
         s = Span(span_id="index_vector_db", parent_id="index_upload", name="VDB",
                  type="vector_db", kind="index_vector_db")
         s.metrics = {"written": 100}
-        msg = _ProgressListener._format_message(s)
+        msg = ProgressListener._format_message(s)
         assert "100" in msg
         assert "向量" in msg

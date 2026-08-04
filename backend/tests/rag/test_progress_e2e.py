@@ -1,4 +1,4 @@
-"""P1.5 E2E — Indexer + _ProgressListener + asyncio.Queue 完整链路
+"""P1.5 E2E — Indexer + ProgressListener + asyncio.Queue 完整链路
 
 模拟 '前端上传文档 → 后端 SSE 推送 6 阶段进度' 的完整流程。
 不依赖 server / SSE 端点，直接验证核心逻辑：
@@ -67,15 +67,15 @@ def _build_indexer(tmp_path, file_path):
 
 
 # ==========================================================
-# E2E: indexer.sync() → _ProgressListener → asyncio.Queue
+# E2E: indexer.sync() → ProgressListener → asyncio.Queue
 # ==========================================================
 
 class TestProgressListenerE2E:
-    """验证 indexer 的 6 个标准 span 通过 _ProgressListener 自动 emit 到 SSE queue。"""
+    """验证 indexer 的 6 个标准 span 通过 ProgressListener 自动 emit 到 SSE queue。"""
 
     def test_happy_path_emits_4_sse_stages(self, fresh_collector, tmp_path, long_text_file):
         """成功索引 → 推送 parsing/chunking/embedding/writing 4 个 SSE stage。"""
-        from backend.app.api.routes.rag import _ProgressListener
+        from backend.rag.progress_listener import ProgressListener
 
         queue: asyncio.Queue = asyncio.Queue()
 
@@ -84,7 +84,7 @@ class TestProgressListenerE2E:
             queue.put_nowait({"stage": stage, "message": message, **extra})
 
         indexer = _build_indexer(tmp_path, long_text_file)
-        listener = _ProgressListener(sync_emit)
+        listener = ProgressListener(sync_emit)
         try:
             indexer.sync()
         finally:
@@ -116,7 +116,7 @@ class TestProgressListenerE2E:
 
     def test_indexer_span_events_drive_listener(self, fresh_collector, tmp_path, long_text_file):
         """直接验证 span end 事件触发 listener（端到端）"""
-        from backend.app.api.routes.rag import _ProgressListener
+        from backend.rag.progress_listener import ProgressListener
 
         received_spans = []
 
@@ -124,7 +124,7 @@ class TestProgressListenerE2E:
             received_spans.append(stage)
 
         indexer = _build_indexer(tmp_path, long_text_file)
-        listener = _ProgressListener(sync_emit)
+        listener = ProgressListener(sync_emit)
         try:
             indexer.sync()
         finally:
@@ -142,7 +142,7 @@ class TestProgressListenerE2E:
 
     def test_listener_emits_metadata_stage(self, fresh_collector, tmp_path, long_text_file):
         """index_metadata span 现在单独 emit（9 阶段里 metadata 是独立阶段）"""
-        from backend.app.api.routes.rag import _ProgressListener
+        from backend.rag.progress_listener import ProgressListener
 
         received = []
 
@@ -150,7 +150,7 @@ class TestProgressListenerE2E:
             received.append(stage)
 
         indexer = _build_indexer(tmp_path, long_text_file)
-        listener = _ProgressListener(sync_emit)
+        listener = ProgressListener(sync_emit)
         try:
             indexer.sync()
         finally:
@@ -161,7 +161,7 @@ class TestProgressListenerE2E:
 
     def test_listener_unsub_stops_future_events(self, fresh_collector, tmp_path, long_text_file):
         """unsubscribe 后不再接收后续 span 事件"""
-        from backend.app.api.routes.rag import _ProgressListener
+        from backend.rag.progress_listener import ProgressListener
 
         received = []
 
@@ -169,7 +169,7 @@ class TestProgressListenerE2E:
             received.append(stage)
 
         indexer = _build_indexer(tmp_path, long_text_file)
-        listener = _ProgressListener(sync_emit)
+        listener = ProgressListener(sync_emit)
 
         # 第一次 sync → 收到 8 个阶段（loading/parsing/cleaning/dedup/chunking/metadata/embedding/writing）
         indexer.sync()
@@ -183,13 +183,13 @@ class TestProgressListenerE2E:
 
     def test_emit_failure_does_not_break_indexer(self, fresh_collector, tmp_path, long_text_file):
         """emit 函数异常不能影响 indexer.sync() 正常完成"""
-        from backend.app.api.routes.rag import _ProgressListener
+        from backend.rag.progress_listener import ProgressListener
 
         def bad_emit(stage: str, message: str = "", **extra):
             raise RuntimeError("emit boom")
 
         indexer = _build_indexer(tmp_path, long_text_file)
-        listener = _ProgressListener(bad_emit)
+        listener = ProgressListener(bad_emit)
         try:
             # sync() 应正常完成（不抛异常）
             result = indexer.sync()
@@ -200,11 +200,11 @@ class TestProgressListenerE2E:
         assert result.added == 1
 
     def test_parse_failure_propagates_to_error_stage(self, fresh_collector, tmp_path):
-        """parse 失败 → SSE error 事件（虽然 _ProgressListener 不直接发 error，由 _run_index_background 发）"""
+        """parse 失败 → SSE error 事件（虽然 ProgressListener 不直接发 error，由 _run_index_background 发）"""
         # 这个测试验证 _run_index_background 的 emit('error') 路径
-        # 实际上 _ProgressListener 不会发 error——error 由外层 asyncio.create_task 捕获
+        # 实际上 ProgressListener 不会发 error——error 由外层 asyncio.create_task 捕获
         # 这里只验证 listener 不会把 parse failure 变成 silent drop
-        from backend.app.api.routes.rag import _ProgressListener
+        from backend.rag.progress_listener import ProgressListener
 
         received = []
         def sync_emit(stage, message="", **extra):
@@ -214,7 +214,7 @@ class TestProgressListenerE2E:
         bad_pdf.write_bytes(b"not a real pdf")
 
         indexer = _build_indexer(tmp_path, str(bad_pdf))
-        listener = _ProgressListener(sync_emit)
+        listener = ProgressListener(sync_emit)
         try:
             with pytest.raises(RuntimeError, match="parse failed"):
                 indexer.sync()
@@ -222,7 +222,7 @@ class TestProgressListenerE2E:
             listener.unsub()
 
         # parsing 失败 → listener 收到 'parsing' 然后 trace 报 error（不影响 listener）
-        # _ProgressListener 只在 span end 时调用，parse span end 时 status=error → 也 emit parsing
+        # ProgressListener 只在 span end 时调用，parse span end 时 status=error → 也 emit parsing
         assert "parsing" in received
 
 
@@ -248,9 +248,9 @@ class TestSSEStreamE2E:
         # 2. 模拟 _run_index_background emit uploading
         await queue.put({"stage": "uploading", "message": "文件已保存"})
 
-        # 3. 同步跑 indexer（_ProgressListener 会推到 queue）
+        # 3. 同步跑 indexer（ProgressListener 会推到 queue）
         import asyncio as _asyncio
-        from backend.app.api.routes.rag import _ProgressListener
+        from backend.rag.progress_listener import ProgressListener
         from backend.rag.indexing.indexer import IncrementalIndexer
         from unittest.mock import MagicMock
 
@@ -271,7 +271,7 @@ class TestSSEStreamE2E:
         def sync_emit(stage, message="", **extra):
             queue.put_nowait({"stage": stage, "message": message, **extra})
 
-        listener = _ProgressListener(sync_emit)
+        listener = ProgressListener(sync_emit)
         try:
             # run_in_executor 模拟（直接同步调用即可）
             indexer.sync()
@@ -326,7 +326,7 @@ class TestFullBackgroundTaskE2E:
     ):
         """完整异步路径：主 loop → executor → run_coroutine_threadsafe → queue → SSE."""
         from backend.app.api.routes import rag as rag_route
-        from backend.app.api.routes.rag import _ProgressListener
+        from backend.rag.progress_listener import ProgressListener
 
         upload_id = "e2e_real_executor_001"
         queue: asyncio.Queue = asyncio.Queue()
@@ -374,7 +374,7 @@ class TestFullBackgroundTaskE2E:
                         registry = MagicMock()
                         registry.list_all.return_value = {}
 
-                        listener = _ProgressListener(sync_emit)
+                        listener = ProgressListener(sync_emit)
                         indexer = IncrementalIndexer(
                             docs_dir=str(tmp_path), vectordb=vectordb, doc_db=doc_db,
                             embedding=embedding, registry=registry,
