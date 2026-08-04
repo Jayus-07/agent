@@ -1,4 +1,10 @@
-"""Evidence Gate — RAG 主动拒答决策模块
+"""evidence_gate 包 — PR-1.1 起扩展为子包。
+
+原 rag/evidence_gate.py 内容已迁入本 __init__.py（保持向后兼容）：
+  from backend.rag.evidence_gate import GateDecision, RejectReason  # 兼容
+  from backend.rag.evidence_gate.controller import EvidenceGateController  # 新（PR-1.1）
+
+Evidence Gate — RAG 主动拒答决策模块
 
 设计对标:
   - RAGFlow (cosine ≥ 0.2 单阈值)
@@ -436,3 +442,7 @@ __all__ = [
     "HIGH_RISK_DOC_TYPES",
     "INTENT_RISK_LEVEL",
 ]
+
+
+# PR-1.1: 新增 controller（必须在 evidence_gate 内容之后 import，避免 future 冲突）
+from backend.rag.evidence_gate.controller import EvidenceGateController  # noqa: F401,E402
