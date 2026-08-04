@@ -3,6 +3,8 @@
 覆盖 Knowledge Index Trace 6 个标准 span:
   index_upload → index_parse → index_chunk → index_embed → index_vector_db → index_metadata
 + failure paths (parse fail / embed retry 全失败)
+
+2d627d7 重构后使用公共 fresh_collector fixture（见 tests/fixtures/sqlite_tracer.py）。
 """
 
 import hashlib
@@ -18,38 +20,7 @@ from backend.rag.tracer import (
     WorkflowKind,
     SpanKind,
 )
-
-
-# ==========================================================
-# Fixtures
-# ==========================================================
-
-@pytest.fixture
-def fresh_collector():
-    """重置全局 trace_collector 的状态（deque + _active + 字段）。
-
-    indexer.py 用 `from ... import trace_collector` 绑定模块级对象，无法替换；
-    改为每个测试前后清空全局单例的 records，避免污染。
-    """
-    from backend.rag import tracer as tracer_mod
-
-    saved_records = list(tracer_mod.trace_collector._records)
-    saved_active = set(tracer_mod.trace_collector._active)
-    saved_timers = dict(tracer_mod.trace_collector._timers)
-    saved_thread_current = tracer_mod.trace_collector._thread_current
-    saved_span_seq = tracer_mod.trace_collector._span_seq
-
-    tracer_mod.trace_collector.clear()
-
-    yield tracer_mod.trace_collector
-
-    # restore
-    tracer_mod.trace_collector._records.clear()
-    tracer_mod.trace_collector._records.extend(saved_records)
-    tracer_mod.trace_collector._active = saved_active
-    tracer_mod.trace_collector._timers = saved_timers
-    tracer_mod.trace_collector._thread_current = saved_thread_current
-    tracer_mod.trace_collector._span_seq = saved_span_seq
+from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401  (公共 fixture)
 
 
 @pytest.fixture
@@ -100,7 +71,7 @@ def _find_span(trace, span_id):
 class TestHappyPath:
     def test_root_span_kind_is_workflow_index_upload(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
 
         assert trace.workflow_kind == WorkflowKind.KNOWLEDGE_INDEX.value
         assert trace.workflow_name == "knowledge_index"
@@ -114,7 +85,7 @@ class TestHappyPath:
 
     def test_all_six_spans_present(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
 
         expected = {"index_upload", "index_parse", "index_chunk",
                     "index_embed", "index_vector_db", "index_metadata"}
@@ -123,7 +94,7 @@ class TestHappyPath:
 
     def test_all_spans_have_correct_kind(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
 
         kind_map = {
             "index_upload": SpanKind.INDEX_UPLOAD.value,
@@ -139,7 +110,7 @@ class TestHappyPath:
 
     def test_child_spans_parent_is_upload(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
 
         for sid in ("index_parse", "index_chunk", "index_embed",
                     "index_vector_db", "index_metadata"):
@@ -148,13 +119,13 @@ class TestHappyPath:
 
     def test_all_spans_status_success(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
         for s in trace.spans:
             assert s.status == "success", f"{s.span_id} status={s.status}"
 
     def test_all_spans_have_duration(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
         for s in trace.spans:
             assert s.duration_ms >= 0, f"{s.span_id} duration not recorded"
 
@@ -166,13 +137,13 @@ class TestHappyPath:
 class TestSpanMetrics:
     def test_parse_metrics_records_doc_count(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
         parse = _find_span(trace, "index_parse")
         assert parse.metrics["doc_count"] >= 1
 
     def test_chunk_metrics_records_kept_and_filtered(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
         chunk = _find_span(trace, "index_chunk")
         assert "kept_chunks" in chunk.metrics
         assert "filtered_out" in chunk.metrics
@@ -180,7 +151,7 @@ class TestSpanMetrics:
 
     def test_embed_metrics_records_succeeded_count(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
         embed = _find_span(trace, "index_embed")
         assert "attempted" in embed.metrics
         assert "succeeded" in embed.metrics
@@ -188,13 +159,13 @@ class TestSpanMetrics:
 
     def test_vector_db_metrics_records_written(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
         vdb = _find_span(trace, "index_vector_db")
         assert vdb.metrics["written"] == 3  # mock 返回 ["c1", "c2", "c3"]
 
     def test_metadata_metrics_records_doc_type(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
         meta = _find_span(trace, "index_metadata")
         assert "doc_type" in meta.metrics
 
@@ -226,7 +197,7 @@ class TestFailurePaths:
         with pytest.raises(RuntimeError, match="parse failed"):
             indexer._index_file(str(bad_pdf))
 
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
         parse_span = _find_span(trace, "index_parse")
         assert parse_span.status == "error"
         assert "error" in parse_span.metrics
@@ -265,7 +236,7 @@ class TestFailurePaths:
         )
         indexer._index_file(str(f))
 
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
         # embed span 仍创建，但 succeeded=0, failed=N
         embed = _find_span(trace, "index_embed")
         assert embed.metrics["succeeded"] == 0
@@ -311,7 +282,7 @@ class TestFailurePaths:
         )
         indexer._index_file(str(f))
 
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
         chunk_span = _find_span(trace, "embed_chunk_0")
         assert chunk_span.status == "success"
         assert chunk_span.metrics["attempt"] == 2
@@ -324,13 +295,13 @@ class TestFailurePaths:
 class TestWorkflowRouting:
     def test_indexer_trace_kind_is_knowledge_index(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
         assert trace.workflow_kind == "knowledge_index"
         assert trace.workflow_kind != "rag_query"  # 与 RAG 区分
 
     def test_indexer_trace_tags_carry_doc_metadata(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
-        trace = fresh_collector.list()[0]
+        trace = fresh_collector.list(1, include_spans=True)[0]
         assert trace.tags["kb_id"]  # 非空
         assert trace.tags["doc_id"]  # 非空
         assert trace.tags["file_ext"] == ".txt"

@@ -1,33 +1,16 @@
 """P1.5 — TraceCollector.subscribe() 事件订阅测试
 
 Phase 1.5: end_span 时通知所有 listeners（用于 SSE 实时进度推送）。
+
+2d627d7 重构后使用公共 fresh_collector fixture（见 tests/fixtures/sqlite_tracer.py），
+避免直接操作已移除的 _records / _active 等模块级属性。
 """
 
 import pytest
 
 from backend.rag.tracer import trace_collector, TraceCollector
 from backend.rag import tracer as tracer_mod
-
-
-@pytest.fixture
-def fresh_collector():
-    """清空全局单例状态"""
-    saved = list(tracer_mod.trace_collector._records)
-    saved_active = set(tracer_mod.trace_collector._active)
-    saved_timers = dict(tracer_mod.trace_collector._timers)
-    saved_thread_current = tracer_mod.trace_collector._thread_current
-    saved_listeners = list(tracer_mod.trace_collector._listeners)
-    saved_span_seq = tracer_mod.trace_collector._span_seq
-    tracer_mod.trace_collector.clear()
-    tracer_mod.trace_collector._listeners = []
-    yield tracer_mod.trace_collector
-    tracer_mod.trace_collector._records.clear()
-    tracer_mod.trace_collector._records.extend(saved)
-    tracer_mod.trace_collector._active = saved_active
-    tracer_mod.trace_collector._timers = saved_timers
-    tracer_mod.trace_collector._thread_current = saved_thread_current
-    tracer_mod.trace_collector._listeners = saved_listeners
-    tracer_mod.trace_collector._span_seq = saved_span_seq
+from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401  (re-export for backwards compat)
 
 
 def test_subscribe_fires_on_span_end(fresh_collector):
@@ -52,13 +35,14 @@ def test_subscribe_fires_multiple_spans(fresh_collector):
         events.append(span.span_id)
 
     fresh_collector.subscribe(cb)
-    fresh_collector.start("t")
+    # 2d627d7: 保留 start() 返回的 trace，直接读 trace.spans
+    # 旧版通过 list()[0].spans 读内存；新版 list() 只读 SQLite (需 finish())
+    trace = fresh_collector.start("t")
     fresh_collector.start_span("a")
     fresh_collector.start_span("b")
     fresh_collector.start_span("c")
     # end_span 触发 listener（最后一个 c 还未 end）
-    spans = fresh_collector.list()[0].spans
-    for sp in spans:
+    for sp in trace.spans:
         fresh_collector.end_span(sp)
     # 但 listener 触发顺序按 end_span 调用顺序
     assert "a" in events
@@ -165,11 +149,11 @@ def test_listener_works_alongside_existing_tracer_features(fresh_collector):
     fresh_collector.end_span(s)
 
     # 已有 API 仍工作
+    # 2d627d7: list() 只在 finish() 后从 SQLite 读取；先 finish 再 list
+    fresh_collector.finish(trace, "answer", 100, "m")
     records = fresh_collector.list()
     assert len(records) == 1
-    assert records[0].session_id == "s1"
-    # finish() 后 record.duration_ms > 0 → completed=1
-    fresh_collector.finish(trace, "answer", 100, "m")
+    assert records[0]["session_id"] == "s1"  # list() 返回 dict 而非 dataclass
     metrics = fresh_collector.compute_metrics()
     assert metrics["completed"] == 1
 

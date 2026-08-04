@@ -293,6 +293,8 @@ class TraceCollector:
         record.answer_len = len(answer)
         record.total_ms = total_ms
         record.duration_ms = total_ms
+        # 2d627d7: 顶层 status 由 spans 聚合（用于 compute_metrics 过滤）
+        record.status = "error" if any(s.status == "error" for s in record.spans) else "success"
 
         self._aggregate_usage(record)
 
@@ -313,13 +315,41 @@ class TraceCollector:
     # 查询 API（直读 SQLite trace_store）
     # =====================================================
 
-    def list(self, limit: int = 50) -> list[dict]:
-        """最近 N 条 trace（从 SQLite 读取 dict，不含 spans 详情）。"""
+    def list(self, limit: int = 50, include_spans: bool = False) -> list[TraceRecord | dict]:
+        """最近 N 条 trace。
+
+        Args:
+            limit: 最多返回条数
+            include_spans: True 时返回 TraceRecord 对象（spans 是 Span 列表），
+                          用于测试断言。False 时返回 dict 列表（不含 spans 详情），
+                          用于 API 列表渲染。
+        """
         try:
             from backend.rag.trace_store import get_trace_store
-            return get_trace_store().list(limit)
+            store = get_trace_store()
+            rows = store.list(limit)
+            if not include_spans:
+                return rows
+            # include_spans=True：重建 TraceRecord 对象，spans 转回 Span
+            records = []
+            for r in rows:
+                rid = r.get("id") or r.get("trace_id")
+                if not rid:
+                    continue
+                full = store.get(rid) or r
+                records.append(self._dict_to_record(full))
+            return records
         except Exception:
             return []
+
+    def _dict_to_record(self, d: dict) -> TraceRecord:
+        """dict（含 spans 列表 of dict）→ TraceRecord（spans 是 Span 对象）。"""
+        d = dict(d)  # copy
+        spans_raw = d.pop("spans", []) or []
+        d.pop("trace_id", None)  # TraceRecord 字段是 id
+        rec = TraceRecord(**{k: v for k, v in d.items() if k in TraceRecord.__dataclass_fields__})
+        rec.spans = [Span(**{k: v for k, v in s.items() if k in Span.__dataclass_fields__}) for s in spans_raw]
+        return rec
 
     def list_active(self) -> list[dict]:
         """正在进行中的 trace：检查 contextvar + thread_local。
@@ -335,6 +365,15 @@ class TraceCollector:
                 "status": "running",
             })
         return active
+
+    def current(self) -> TraceRecord | None:
+        """返回当前进行中的 trace（完整对象，含 spans）。
+
+        业务代码无需调用；用于测试断言 in-flight trace 的 spans 状态。
+        区别于 list()：list() 只从 SQLite 读已 finish() 的（不返回 spans），
+        current() 读 contextvar 里的 in-flight trace（含 spans）。
+        """
+        return _current_trace_var.get() or self._thread_current
 
     def compute_metrics(self) -> dict:
         """从 SQLite 聚合统计（简化版，不含延迟分位数）。"""
@@ -369,6 +408,21 @@ class TraceCollector:
     def clear(self):
         """已无内存数据，此方法保留兼容不做操作。"""
         pass
+
+    def clear_for_test(self):
+        """测试辅助：重置全部内部状态。
+
+        2d627d7 重构后 trace 持久化在 SQLite，内存中只剩 _thread_current / _timers /
+        _span_seq / _listeners / contextvar。测试前后调用此方法确保隔离。
+
+        注意：不会清空 SQLite 数据（如果用了临时 DB，tmp_path 会自动清理）。
+        """
+        with self._lock:
+            self._thread_current = None
+            self._timers.clear()
+            self._span_seq = 0
+            self._listeners.clear()
+        _current_trace_var.set(None)
 
     # =====================================================
     # 内部

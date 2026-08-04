@@ -4,6 +4,8 @@
 - models.py: pricing 表 + compute_cost_usd 正确性
 - proxy.py: _record_tokens 提取 token + finish_reason + cost_usd
 - chain.py: _timed_stuff 注入 prompt_text + completion_text 到 metrics
+
+2d627d7 重构后 tracer 内部属性已简化，使用公共 fresh_collector fixture 隔离测试。
 """
 
 import pytest
@@ -11,6 +13,7 @@ import pytest
 from backend.infra.llm.models import get_model_pricing, compute_cost_usd
 from backend.infra.llm import proxy as proxy_mod
 from backend.rag import tracer as tracer_mod
+from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401
 
 
 # ==========================================================
@@ -30,20 +33,11 @@ def reset_proxy_state():
 
 
 @pytest.fixture(autouse=True)
-def reset_tracer():
-    saved_records = list(tracer_mod.trace_collector._records)
-    saved_active = set(tracer_mod.trace_collector._active)
-    saved_timers = dict(tracer_mod.trace_collector._timers)
-    saved_thread_current = tracer_mod.trace_collector._thread_current
-    saved_span_seq = tracer_mod.trace_collector._span_seq
-    tracer_mod.trace_collector.clear()
+def reset_tracer(fresh_collector):
+    """autouse: 每个测试前 fresh_collector fixture 已重置 tracer 状态。"""
+    fresh_collector.clear_for_test()
     yield
-    tracer_mod.trace_collector._records.clear()
-    tracer_mod.trace_collector._records.extend(saved_records)
-    tracer_mod.trace_collector._active = saved_active
-    tracer_mod.trace_collector._timers = saved_timers
-    tracer_mod.trace_collector._thread_current = saved_thread_current
-    tracer_mod.trace_collector._span_seq = saved_span_seq
+    fresh_collector.clear_for_test()
 
 
 # ==========================================================
@@ -200,8 +194,9 @@ class TestTimedStuffInjection:
         trace = trace_collector.start("test-question", workflow_kind="rag_query")
         _timed_stuff({"input": "用户的问题", "chat_history": []})
 
-        trace_obj = trace_collector.list()[0]
-        span = next(s for s in trace_obj.spans if s.span_id == "llm_generate")
+        # 2d627d7: 直接读 start() 返回的 trace.spans（内存中）
+        # 旧版通过 list()[0].spans 读；新版 list() 只读 SQLite (需 finish())
+        span = next(s for s in trace.spans if s.span_id == "llm_generate")
 
         assert span.kind == SpanKind.LLM.value
         assert span.metrics["prompt_tokens"] == 100
@@ -232,7 +227,8 @@ class TestTimedStuffInjection:
         metrics["completion_text"] = completion_text
         trace_collector.end_span(llm_span, metrics=metrics)
 
-        span = trace_collector.list()[0].spans[0]
+        # 2d627d7: 直接读 trace.spans（内存中），不依赖 finish()+SQLite
+        span = trace.spans[0]
         assert len(span.metrics["completion_text"]) == 1000
         assert span.metrics["completion_text"] == "x" * 1000
 
@@ -250,6 +246,7 @@ class TestTimedStuffInjection:
         llm_span = trace_collector.start_span("llm_generate")
         trace_collector.end_span(llm_span, metrics=dict(proxy_mod._last_call_meta))
 
-        span = trace_collector.list()[0].spans[0]
+        # 2d627d7: 直接读 trace.spans（内存中）
+        span = trace.spans[0]
         assert span.metrics["finish_reason"] == "length"
         # 注意：truncation 应该触发 retry 或 fallback（业务侧实现）

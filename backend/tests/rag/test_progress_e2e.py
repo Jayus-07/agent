@@ -3,6 +3,8 @@
 模拟 '前端上传文档 → 后端 SSE 推送 6 阶段进度' 的完整流程。
 不依赖 server / SSE 端点，直接验证核心逻辑：
   indexer.sync() → TraceCollector.end_span → listener → asyncio.Queue
+
+2d627d7 重构后使用公共 fresh_collector fixture（见 tests/fixtures/sqlite_tracer.py）。
 """
 
 import asyncio
@@ -15,31 +17,12 @@ import pytest
 from backend.rag.indexing.indexer import IncrementalIndexer
 from backend.rag.tracer import trace_collector, TraceCollector, WorkflowKind
 from backend.rag import tracer as tracer_mod
+from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401
 
 
 # ==========================================================
 # Fixtures
 # ==========================================================
-
-@pytest.fixture
-def reset_tracer():
-    """清空全局 tracer 状态"""
-    saved = list(tracer_mod.trace_collector._records)
-    saved_active = set(tracer_mod.trace_collector._active)
-    saved_timers = dict(tracer_mod.trace_collector._timers)
-    saved_thread_current = tracer_mod.trace_collector._thread_current
-    saved_listeners = list(tracer_mod.trace_collector._listeners)
-    saved_span_seq = tracer_mod.trace_collector._span_seq
-    tracer_mod.trace_collector.clear()
-    tracer_mod.trace_collector._listeners = []
-    yield
-    tracer_mod.trace_collector._records.clear()
-    tracer_mod.trace_collector._records.extend(saved)
-    tracer_mod.trace_collector._active = saved_active
-    tracer_mod.trace_collector._timers = saved_timers
-    tracer_mod.trace_collector._thread_current = saved_thread_current
-    tracer_mod.trace_collector._listeners = saved_listeners
-    tracer_mod.trace_collector._span_seq = saved_span_seq
 
 
 @pytest.fixture
@@ -90,7 +73,7 @@ def _build_indexer(tmp_path, file_path):
 class TestProgressListenerE2E:
     """验证 indexer 的 6 个标准 span 通过 _ProgressListener 自动 emit 到 SSE queue。"""
 
-    def test_happy_path_emits_4_sse_stages(self, reset_tracer, tmp_path, long_text_file):
+    def test_happy_path_emits_4_sse_stages(self, fresh_collector, tmp_path, long_text_file):
         """成功索引 → 推送 parsing/chunking/embedding/writing 4 个 SSE stage。"""
         from backend.app.api.routes.rag import _ProgressListener
 
@@ -131,7 +114,7 @@ class TestProgressListenerE2E:
         chunking_msg = events[4]["message"]
         assert "chunks" in chunking_msg  # "切分 N chunks"
 
-    def test_indexer_span_events_drive_listener(self, reset_tracer, tmp_path, long_text_file):
+    def test_indexer_span_events_drive_listener(self, fresh_collector, tmp_path, long_text_file):
         """直接验证 span end 事件触发 listener（端到端）"""
         from backend.app.api.routes.rag import _ProgressListener
 
@@ -149,7 +132,7 @@ class TestProgressListenerE2E:
 
         # listener 接收了 4 个 SSE stage
         # 而 trace.spans 实际有 6+ 个（root + 4 SSE-mapped + 0 metadata）
-        trace = tracer_mod.trace_collector.list()[0]
+        trace = tracer_mod.trace_collector.list(1, include_spans=True)[0]
         assert len(trace.spans) >= 5  # index_upload + parse + chunk + embed + vdb
         # listener 现在关心 SPAN_STAGE_MAP 里的 8 个（loading/parsing/cleaning/dedup/chunking/metadata/embedding/writing）
         assert received_spans == [
@@ -157,7 +140,7 @@ class TestProgressListenerE2E:
             "chunking", "metadata", "embedding", "writing",
         ]
 
-    def test_listener_emits_metadata_stage(self, reset_tracer, tmp_path, long_text_file):
+    def test_listener_emits_metadata_stage(self, fresh_collector, tmp_path, long_text_file):
         """index_metadata span 现在单独 emit（9 阶段里 metadata 是独立阶段）"""
         from backend.app.api.routes.rag import _ProgressListener
 
@@ -176,7 +159,7 @@ class TestProgressListenerE2E:
         # metadata 现在在 SPAN_STAGE_MAP → 应该 emit
         assert "metadata" in received
 
-    def test_listener_unsub_stops_future_events(self, reset_tracer, tmp_path, long_text_file):
+    def test_listener_unsub_stops_future_events(self, fresh_collector, tmp_path, long_text_file):
         """unsubscribe 后不再接收后续 span 事件"""
         from backend.app.api.routes.rag import _ProgressListener
 
@@ -198,7 +181,7 @@ class TestProgressListenerE2E:
         indexer.sync()
         assert len(received) == first_count  # 没有增加
 
-    def test_emit_failure_does_not_break_indexer(self, reset_tracer, tmp_path, long_text_file):
+    def test_emit_failure_does_not_break_indexer(self, fresh_collector, tmp_path, long_text_file):
         """emit 函数异常不能影响 indexer.sync() 正常完成"""
         from backend.app.api.routes.rag import _ProgressListener
 
@@ -216,7 +199,7 @@ class TestProgressListenerE2E:
         # sync 返回 SyncResult（added=1，因为是新文件）
         assert result.added == 1
 
-    def test_parse_failure_propagates_to_error_stage(self, reset_tracer, tmp_path):
+    def test_parse_failure_propagates_to_error_stage(self, fresh_collector, tmp_path):
         """parse 失败 → SSE error 事件（虽然 _ProgressListener 不直接发 error，由 _run_index_background 发）"""
         # 这个测试验证 _run_index_background 的 emit('error') 路径
         # 实际上 _ProgressListener 不会发 error——error 由外层 asyncio.create_task 捕获
@@ -252,7 +235,7 @@ class TestSSEStreamE2E:
 
     @pytest.mark.asyncio
     async def test_stream_emits_all_events_for_successful_index(
-        self, reset_tracer, tmp_path, long_text_file
+        self, fresh_collector, tmp_path, long_text_file
     ):
         """完整 SSE 流：uploading + loading + parsing + cleaning + dedup + chunking + metadata + embedding + writing + done（9 阶段）"""
         from backend.app.api.routes import rag as rag_route
@@ -339,7 +322,7 @@ class TestFullBackgroundTaskE2E:
 
     @pytest.mark.asyncio
     async def test_background_task_with_real_executor_emits_all_events(
-        self, reset_tracer, tmp_path, long_text_file
+        self, fresh_collector, tmp_path, long_text_file
     ):
         """完整异步路径：主 loop → executor → run_coroutine_threadsafe → queue → SSE."""
         from backend.app.api.routes import rag as rag_route
