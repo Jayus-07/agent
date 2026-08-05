@@ -16,6 +16,9 @@ interface ChatState {
   nodeLabels: Record<string, string>
   isLoading: boolean
   error: string | null
+  /** 历史消息/会话列表加载失败信息。与 error 分开：error 属于当前对话轮次，
+   *  混用会让"历史加载失败"显示在聊天区，误导用户以为本次提问出错 */
+  historyError: string | null
   /** 当前请求的 request_id（用于中止） */
   currentRequestId: string | null
 
@@ -38,6 +41,7 @@ interface ChatState {
   // — 状态 —
   setLoading: (v: boolean) => void
   setError: (e: string | null) => void
+  setHistoryError: (e: string | null) => void
   setCurrentRequestId: (id: string | null) => void
   resetStream: () => void
 }
@@ -70,6 +74,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     nodeLabels: {},
     isLoading: false,
     error: null,
+    historyError: null,
     currentRequestId: null,
 
     // —— 计算属性 ——
@@ -222,6 +227,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       try {
         const { getSessionMessages } = await import('@/lib/api/memory')
         const msgs = await getSessionMessages(sessionId)
+        set({ historyError: null })
         if (!msgs || msgs.length === 0) return
 
         set((state) => ({
@@ -239,7 +245,10 @@ export const useChatStore = create<ChatState>((set, get) => {
               : s,
           ),
         }))
-      } catch { /* 静默失败 */ }
+      } catch (e) {
+        // 不再静默：记忆库故障必须留下痕迹，否则历史消息凭空消失且无从排查
+        set({ historyError: e instanceof Error ? e.message : '加载历史消息失败' })
+      }
     },
 
     // —— 从后端加载持久化会话 ——
@@ -268,11 +277,15 @@ export const useChatStore = create<ChatState>((set, get) => {
             sessions: [...remoteSessions, ...state.sessions.filter((s) => s.messages.length > 0)],
           }))
         }
-      } catch { /* 后端不可用时静默失败 */ }
+        set({ historyError: null })
+      } catch (e) {
+        set({ historyError: e instanceof Error ? e.message : '加载会话列表失败' })
+      }
     },
 
     // —— 状态 ——
     setLoading: (v) => set({ isLoading: v }),
     setError: (e) => set({ error: e }),
+    setHistoryError: (e) => set({ historyError: e }),
   }
 })

@@ -24,17 +24,26 @@ export default function AlertsPage() {
   const [stats, setStats] = useState<AlertStats>({ critical: 0, warning: 0, info: 0, resolved: 0 })
   const [alerts, setAlerts] = useState<AlertCase[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<'active' | 'history'>('active')
 
   async function loadData() {
     setLoading(true)
-    const [statsRes, alertsRes] = await Promise.all([
-      alertService.getStats(),
-      alertService.getAlerts({ status: tab === 'active' ? 'active' : 'history' }),
-    ])
-    setStats(statsRes.stats)
-    setAlerts(alertsRes.cases || [])
-    setLoading(false)
+    setError(null)
+    try {
+      const [statsRes, alertsRes] = await Promise.all([
+        alertService.getStats(),
+        alertService.getAlerts({ status: tab }),
+      ])
+      setStats(statsRes.stats)
+      setAlerts(alertsRes.cases)
+    } catch (e) {
+      // 区分"无告警"和"接口失败"：后者必须让用户看见，否则空列表会被误读为一切正常
+      setError(e instanceof Error ? e.message : '加载告警失败')
+      setAlerts([])
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => { loadData() }, [tab])
@@ -91,7 +100,10 @@ export default function AlertsPage() {
         {/* Alert List */}
         <div className="space-y-2">
           {loading && <p className="text-xs text-text-muted py-4">加载中...</p>}
-          {!loading && alerts.length === 0 && (
+          {!loading && error && (
+            <p className="text-xs text-red-500 py-4">加载失败：{error}</p>
+          )}
+          {!loading && !error && alerts.length === 0 && (
             <p className="text-xs text-text-muted py-4">
               {tab === 'active' ? '当前无活跃告警 ✅' : '暂无历史告警'}
             </p>

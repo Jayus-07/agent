@@ -5,7 +5,16 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
 from backend.app.api.deps import get_rag_pipeline, require_rag_ready
 from backend.config.rag import RAG_MAX_FILE_SIZE, RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE, RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS
-from backend.app.api.routes._rag_shared import *
+from backend.rag.indexing.indexer import IncrementalIndexer
+from backend.rag.progress_listener import ProgressListener
+# 显式导入替代 import *（详见 rag_documents.py 同处注释）
+from backend.app.api.routes._rag_shared import (
+    _extract_source,
+    _get_registry,
+    _progress_queues,
+    _safe_log_op,
+    _sse_encode,
+)
 from backend.shared.logger import logger
 
 router = APIRouter()
@@ -66,9 +75,9 @@ async def sync_upload_impl(
     """
     import time
     from backend.config.database import DOCS_DIRECTORY as _DOCS_DIRECTORY
-    _g = globals()
-    _progress_queues = _g["_progress_queues"]
-    _extract_source = _g["_extract_source"]
+
+    # _progress_queues / _extract_source 现为模块级显式导入，直接引用即可
+    # （原先经 globals() 取值是为了绕开 import * 的名字丢失问题）
 
     safe_name = os.path.basename(file.filename or "")
     # 修复中文文件名乱码：尝试多种编码回编解码

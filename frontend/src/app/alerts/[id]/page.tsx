@@ -22,6 +22,7 @@ export default function AlertDetailPage() {
   const [detail, setDetail] = useState<AlertDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [acting, setActing] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   useEffect(() => {
     alertService.getAlert(Number(id)).then(d => {
@@ -32,6 +33,7 @@ export default function AlertDetailPage() {
 
   async function handleAction(action: string) {
     setActing(true)
+    setActionError(null)
     try {
       if (action === 'acknowledged') {
         await alertService.patchAlert(Number(id), { status: 'acknowledged' })
@@ -44,7 +46,8 @@ export default function AlertDetailPage() {
       const d = await alertService.getAlert(Number(id))
       setDetail(d)
     } catch (e) {
-      console.error('Action failed:', e)
+      // 状态流转失败必须可见，否则用户会以为已生效
+      setActionError(e instanceof Error ? e.message : '操作失败')
     } finally {
       setActing(false)
     }
@@ -185,6 +188,10 @@ export default function AlertDetailPage() {
               ) : c.status === 'closed' ? (
                 <p className="text-xs text-text-muted">🚫 已关闭</p>
               ) : null}
+
+              {actionError && (
+                <p className="text-xs text-red-500 mt-3">操作失败：{actionError}</p>
+              )}
             </div>
 
             {/* Trace link */}

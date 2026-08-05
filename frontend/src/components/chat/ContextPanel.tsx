@@ -12,9 +12,20 @@ export default function ContextPanel({ sessionId }: { sessionId: string }) {
 
   useEffect(() => {
     if (!sessionId) return
+    let cancelled = false
+    // 辅助信息条：失败时不占用界面提示（对话本身不受影响），
+    // 但要校验 res.ok，避免把 4xx/5xx 的错误响应体当成上下文数据
     fetch(`/api/memory/sessions/${encodeURIComponent(sessionId)}/context`)
-      .then(r => r.json())
-      .then(d => { if (d.context) setCtx(d.context) })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then(d => { if (!cancelled && d.context) setCtx(d.context) })
+      .catch((e: unknown) => {
+        console.warn('[ContextPanel] 上下文加载失败:', e)
+        if (!cancelled) setCtx(null)
+      })
+    return () => { cancelled = true }
   }, [sessionId])
 
   if (!ctx) return null

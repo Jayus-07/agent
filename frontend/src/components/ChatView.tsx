@@ -17,6 +17,8 @@ export default function ChatView() {
   const messages = useChatStore((s) => s.currentMessages())
   const isLoading = useChatStore((s) => s.isLoading)
   const error = useChatStore((s) => s.error)
+  const historyError = useChatStore((s) => s.historyError)
+  const setHistoryError = useChatStore((s) => s.setHistoryError)
   const setError = useChatStore((s) => s.setError)
   const currentId = useChatStore((s) => s.currentId)
   const [timelineOpen, setTimelineOpen] = useState(true)
@@ -64,6 +66,17 @@ export default function ChatView() {
           <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />
           <span className="text-sm text-red-700 flex-1">{error}</span>
           <button onClick={() => setError(null)} className="text-xs text-red-400 hover:text-red-600 shrink-0 transition-colors">
+            关闭
+          </button>
+        </div>
+      )}
+
+      {/* 历史加载失败：非致命（对话仍可用），用琥珀色与上面的对话错误区分 */}
+      {historyError && (
+        <div className="shrink-0 mx-5 mt-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center gap-2.5 animate-fade-in">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+          <span className="text-sm text-amber-800 flex-1">历史记录加载失败：{historyError}</span>
+          <button onClick={() => setHistoryError(null)} className="text-xs text-amber-500 hover:text-amber-700 shrink-0 transition-colors">
             关闭
           </button>
         </div>

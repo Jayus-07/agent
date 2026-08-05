@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.shared.logger import logger
+from backend.memory.database import MemoryDatabaseUnavailable
 
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
@@ -18,6 +19,22 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": exc.__class__.__name__, "detail": exc.detail},
+    )
+
+
+async def memory_db_unavailable_handler(request: Request, exc: MemoryDatabaseUnavailable):
+    """记忆库配置缺失/不可用 → 503（而非 500 兜底）。
+
+    完整信息（host/dbname/user）只写日志，不进 HTTP 响应体，避免泄露基础设施细节；
+    响应里给出可操作指引，让调用方一眼看出是配置问题而不是"没有数据"。
+    """
+    logger.error(f"[MemoryDB] {request.method} {request.url.path} → {exc}")
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "MemoryDatabaseUnavailable",
+            "detail": "记忆库不可用：PostgreSQL 连接配置缺失或无效，请检查 .env 中的 PG* 配置（详见服务端日志）",
+        },
     )
 
 

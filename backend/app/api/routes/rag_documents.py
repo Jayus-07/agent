@@ -3,7 +3,21 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, D
 from fastapi.responses import StreamingResponse
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline, require_rag_ready, get_rag_status
-from backend.app.api.routes._rag_shared import *
+import os
+import time
+
+from backend.config import CHROMA_PATH, EMBEDDING_MODEL_PATH
+from backend.config.rag import METADATA_SCHEMA_FINGERPRINT
+from backend.rag.indexing.indexer import IncrementalIndexer
+from backend.shared.logger import logger
+# 显式导入替代 import *：_rag_shared 声明了 __all__，星号导入会静默丢掉
+# os/time/logger 等名字，连 except 分支里的 logger 也变成 NameError（兜底失效直接 500）
+from backend.app.api.routes._rag_shared import (
+    _extract_source,
+    _get_op_logger,
+    _get_registry,
+    _safe_log_op,
+)
 
 router = APIRouter()
 

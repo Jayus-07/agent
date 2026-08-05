@@ -3,7 +3,11 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, D
 from fastapi.responses import StreamingResponse
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline, require_rag_ready, get_rag_status
-from backend.app.api.routes._rag_shared import *
+import asyncio
+
+from backend.shared.logger import logger
+# 显式导入替代 import *（详见 rag_documents.py 同处注释）
+from backend.app.api.routes._rag_shared import SearchRequest, _get_registry
 
 router = APIRouter()
 

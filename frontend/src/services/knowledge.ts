@@ -10,25 +10,15 @@ const BASE = '/api/rag'
 
 export const knowledgeService: any = {
   getStats: () => api(`${BASE}/stats`),
-  listDocs: (params: any = {}) => api(`${BASE}/documents?${new URLSearchParams(params)}`),
-  getDoc: (id: string) => api(`${BASE}/documents/${id}`),
   getDocuments: (params: any = {}) => api(`${BASE}/documents?${new URLSearchParams(params)}`),
   getDocument: (id: string) => api(`${BASE}/documents/${id}`),
-  listOperations: (params: any = {}) => api(`${BASE}/operations?${new URLSearchParams(params)}`),
   getOperations: (params: any = {}) => api(`${BASE}/operations?${new URLSearchParams(params)}`),
-  reindex: (id: string) => fetch(`${BASE}/documents/${id}/reindex`, { method: 'POST' }),
   reindexDocument: (id: string) => fetch(`${BASE}/documents/${id}/reindex`, { method: 'POST' }),
-  deleteDoc: (id: string) => fetch(`${BASE}/documents/${id}`, { method: 'DELETE' }),
   deleteDocument: (id: string) => fetch(`${BASE}/documents/${id}`, { method: 'DELETE' }),
   batchDelete: (ids: string[]) => Promise.all(ids.map((id: string) => fetch(`${BASE}/documents/${id}`, { method: 'DELETE' }))),
   batchReindex: (ids: string[]) => Promise.all(ids.map((id: string) => fetch(`${BASE}/documents/${id}/reindex`, { method: 'POST' }))),
-  getOperationTrace: (traceId: string) => api(`/api/observability/traces/${traceId}`),
   getChunkDetail: (chunkId: string) => api(`${BASE}/chunks/${chunkId}/detail`),
   uploadDocument: (file: File, onProgress?: any) => {
-    const fd = new FormData(); fd.append('file', file)
-    return fetch(`${BASE}/upload`, { method: 'POST', body: fd }).then(r => r.json())
-  },
-  uploadFile: (file: File, onProgress?: any) => {
     const fd = new FormData(); fd.append('file', file)
     return fetch(`${BASE}/upload`, { method: 'POST', body: fd }).then(r => r.json())
   },

@@ -21,18 +21,24 @@ export default function ReportsPage() {
   const [reports, setReports] = useState<DailyReportSummary[]>([])
   const [latestKpi, setLatestKpi] = useState<DailyReportSummary['kpi_summary'] | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     async function load() {
-      const [listRes, latestRes] = await Promise.all([
-        reportService.getReports({ type: 'daily_report' }),
-        reportService.getLatestReport('daily_report'),
-      ])
-      setReports(listRes.reports || [])
-      if (latestRes.report) {
-        setLatestKpi(latestRes.report.kpi_summary)
+      try {
+        const [listRes, latestRes] = await Promise.all([
+          reportService.getReports({ type: 'daily_report' }),
+          reportService.getLatestReport('daily_report'),
+        ])
+        setReports(listRes.reports || [])
+        setLatestKpi(latestRes.report?.kpi_summary ?? null)
+        setError(null)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : '加载报告失败')
+        setReports([])
+      } finally {
+        setLoading(false)
       }
-      setLoading(false)
     }
     load()
   }, [])
@@ -86,7 +92,10 @@ export default function ReportsPage() {
         {/* Report List */}
         <div className="space-y-2">
           {loading && <p className="text-xs text-text-muted py-4">加载中...</p>}
-          {!loading && reports.length === 0 && (
+          {!loading && error && (
+            <p className="text-xs text-red-500 py-4">加载失败：{error}</p>
+          )}
+          {!loading && !error && reports.length === 0 && (
             <p className="text-xs text-text-muted py-4">暂无报告，请先运行日报 Workflow</p>
           )}
           {reports.map(r => {

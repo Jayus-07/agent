@@ -12,6 +12,7 @@ from backend.app.api.router import api_router
 from backend.app.exceptions import (
     http_exception_handler,
     global_exception_handler,
+    memory_db_unavailable_handler,
 )
 from backend.app.api.middleware.concurrency import concurrency_limit_middleware
 from backend.observability.metrics import render_metrics
@@ -57,7 +58,10 @@ app.add_middleware(
 
 # ── 全局异常处理 ──────────────────────────────────
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from backend.memory.database import MemoryDatabaseUnavailable
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+# 比 Exception 兜底更具体：Starlette 按 MRO 查找，配置缺失会命中这个而非 500
+app.add_exception_handler(MemoryDatabaseUnavailable, memory_db_unavailable_handler)
 app.add_exception_handler(Exception, global_exception_handler)
 
 # ── 注册所有路由（聚合在 api/router.py） ──────────────

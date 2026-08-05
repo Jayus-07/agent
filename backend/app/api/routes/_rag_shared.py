@@ -82,7 +82,10 @@ class SearchRequest(BaseModel):
     query: str = ""
 
 
-# `import *` 不导出 _ 前缀名，需要显式声明（供 rag_documents/rag_upload/rag_search 使用）
+# 本模块的公开工具集合。注意：调用方必须用显式 from ... import xxx，
+# 禁止 from ._rag_shared import * —— __all__ 会让星号导入只带走这几个名字，
+# 静默丢掉 os/time/logger/EMBEDDING_MODEL_PATH 等，且 except 里的 logger
+# 也一并丢失，导致异常兜底本身抛 NameError（历史故障：/rag/documents 500）
 __all__ = [
     "_progress_queues", "_sse_encode",
     "_get_registry", "_get_op_logger", "_extract_source", "_safe_log_op",

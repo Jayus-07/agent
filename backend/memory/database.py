@@ -12,10 +12,43 @@ _engine = None
 _sessionmaker = None
 
 
+class MemoryDatabaseUnavailable(RuntimeError):
+    """记忆库不可用（配置缺失或连接失败）。
+
+    单独定义类型是为了让路由层能把它映射成 503 而非 500，
+    并与业务异常区分开。
+    """
+
+
+def _validate_config() -> None:
+    """启用前校验必填连接参数，缺失时给出可操作的报错。
+
+    动机：PGPASSWORD 缺省为空字符串时，asyncpg 报的是
+    "connection was closed in the middle of operation"，
+    完全看不出是配置问题（真因只能去翻 PostgreSQL 服务端日志）。
+    """
+    missing = [
+        key
+        for key, env in (("password", "PGPASSWORD"), ("user", "PGUSER"), ("dbname", "PGDATABASE"))
+        if not DB_CONFIG.get(key)
+    ]
+    if missing:
+        envs = ", ".join(
+            env for key, env in (("password", "PGPASSWORD"), ("user", "PGUSER"), ("dbname", "PGDATABASE"))
+            if key in missing
+        )
+        raise MemoryDatabaseUnavailable(
+            f"PostgreSQL 连接配置缺失: {envs}（请在项目根目录 .env 中配置）。"
+            f"当前 host={DB_CONFIG.get('host')} port={DB_CONFIG.get('port')} "
+            f"dbname={DB_CONFIG.get('dbname') or '<空>'} user={DB_CONFIG.get('user') or '<空>'}"
+        )
+
+
 async def _ensure_engine():
     """确保 engine 在当前 event loop 上初始化"""
     global _engine, _sessionmaker
     if _engine is None:
+        _validate_config()
         _engine = create_async_engine(
             DATABASE_URL,
             pool_size=MEMORY_ASYNC_POOL_SIZE,

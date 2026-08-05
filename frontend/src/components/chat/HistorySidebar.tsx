@@ -3,20 +3,27 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useChatStore } from '@/store/chat'
+import { listSessions, type SessionMeta } from '@/lib/api/memory'
 import { PanelRightClose, Brain, MessageSquare } from 'lucide-react'
-
-interface SessionMeta {
-  session_id: string; title: string; message_count: number
-  context_summary?: string; updated_at?: string
-}
 
 export default function HistorySidebar({ onClose }: { onClose: () => void }) {
   const [sessions, setSessions] = useState<SessionMeta[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const currentId = useChatStore((s) => s.currentId)
   const router = useRouter()
 
   useEffect(() => {
-    fetch('/api/memory/sessions').then(r => r.json()).then(d => setSessions(d.sessions || []))
+    let cancelled = false
+    // 必须区分"没有历史"和"记忆库挂了"：后者曾被降级成空列表显示为
+    // "暂无分析记录"，导致 PostgreSQL 认证失败被完全掩盖
+    listSessions()
+      .then((data) => { if (!cancelled) { setSessions(data); setError(null) } })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : '加载历史失败')
+      })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [])
 
   const handleSelect = (sid: string) => {
@@ -38,7 +45,14 @@ export default function HistorySidebar({ onClose }: { onClose: () => void }) {
 
       {/* List */}
       <div className="flex-1 overflow-y-auto px-3 pb-3">
-        {sessions.length === 0 ? (
+        {loading ? (
+          <p className="text-xs text-text-muted px-2 py-6 text-center">加载中...</p>
+        ) : error ? (
+          <p className="text-xs text-red-500 px-2 py-6 text-center break-words">
+            历史加载失败
+            <span className="block mt-1 text-[10px] text-text-muted">{error}</span>
+          </p>
+        ) : sessions.length === 0 ? (
           <p className="text-xs text-text-muted px-2 py-6 text-center">暂无分析记录</p>
         ) : (
           <div className="space-y-0.5">
