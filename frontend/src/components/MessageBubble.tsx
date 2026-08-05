@@ -91,8 +91,8 @@ export default function MessageBubble({ message }: { message: Message }) {
             )}
             {!isCurrentStreaming && displayContent && (
               <>
-                {displayContent.includes('SELECT') && <SqlViz />}
-                {displayContent.length > 200 && <TokenInfo />}
+                <SqlViz streamEvents={message.streamEvents} />
+                <TokenInfo streamEvents={message.streamEvents} />
                 <MessageActions content={displayContent} isUser={false} isLast={false}
                   onRegenerate={() => {/* TODO */}} />
               </>
