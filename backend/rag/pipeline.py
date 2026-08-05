@@ -5,7 +5,7 @@ import shutil
 import time
 from pathlib import Path
 
-from langchain_huggingface import HuggingFaceEmbeddings
+from backend.rag.embedding_singleton import get_embedding
 from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
 
 from backend.rag.preprocessing.metadata import build_all_metadata_async
@@ -116,7 +116,7 @@ class RAGPipeline:
             self.doc_level_meta = []
 
     def _init_embedding(self):
-        self.embedding = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
+        self.embedding = get_embedding()  # 全局单例，避免重复加载 400MB 模型
 
     def _init_vector_dbs_full(self):
         """全量重建向量库（兜底/首次运行）。"""

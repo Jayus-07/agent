@@ -38,6 +38,18 @@ async def upload_document(request: Request, file: UploadFile = File(...),
     if ext not in ("pdf", "md", "txt", "docx"):
         return {"ok": False, "error": f"ext not allowed: .{ext}"}
 
+    # MIME type 二次校验，防止扩展名伪装（如 .md 文件实际是二进制）
+    _ALLOWED_MIME = {
+        "pdf":  {"application/pdf"},
+        "md":   {"text/markdown", "text/plain", "application/octet-stream"},
+        "txt":  {"text/plain", "application/octet-stream"},
+        "docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                  "application/octet-stream"},
+    }
+    content_type = (file.content_type or "").lower().split(";")[0].strip()
+    if content_type and content_type not in _ALLOWED_MIME.get(ext, set()):
+        return {"ok": False, "error": f"MIME type not allowed for .{ext}: {content_type}"}
+
     max_size = RAG_MAX_FILE_SIZE * 1024 * 1024
     cl = request.headers.get("content-length")
     if cl and cl.isdigit() and int(cl) > max_size:

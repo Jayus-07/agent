@@ -50,14 +50,14 @@ class KnowledgeDocImporter:
         chunk_overlap: int = 50,
     ):
         from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
-        from langchain_huggingface import HuggingFaceEmbeddings
+        from backend.rag.embedding_singleton import get_embedding
         from backend.config import (
-            EMBEDDING_MODEL_PATH, CHROMA_PATH, DOC_DB_PATH,
+            CHROMA_PATH, DOC_DB_PATH,
         )
 
         self.chroma_path = chroma_path or CHROMA_PATH
         self.doc_db_path = doc_db_path or DOC_DB_PATH
-        self.embedding = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
+        self.embedding = get_embedding()  # 全局单例
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,

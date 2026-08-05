@@ -1,15 +1,13 @@
-"""LLM 限流 — Token Bucket 算法 — PR-0.4。
-
-P0 缺口之一（见 docs/architecture/production-readiness.md §2.1 R1）：
-- 按用户（user_id 或 session_id）+ 全局双层限流
-- 默认 100 QPS / 用户，1000 QPS / 全局
-- 仅 logger.warning 不实际 429（保守起步，PR-2.4 才接 HTTP）
+"""LLM 限流 — Token Bucket 算法。
 
 设计：
+- 按用户（user_id 或 session_id）+ 全局双层限流
+- 默认 100 QPS / 用户，1000 QPS / 全局
+- require_rate_limit 作为 FastAPI 依赖注入，超限时抛出 HTTP 429
 - 双层 token bucket：global（整个服务）+ per-user（每个 user）
 - acquire() 返回 True 表示通过，False 表示被限流
-- 线程安全（asyncio.Lock）
 """
+
 from __future__ import annotations
 
 import asyncio

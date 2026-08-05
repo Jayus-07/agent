@@ -74,12 +74,17 @@ class BM25Store:
 
         retriever = BM25Retriever.from_documents(docs, k=k)
 
-        # 持久化 CountVectorizer（已拟合）
+        # 持久化 CountVectorizer（已拟合）+ SHA256 校验
+        corpus_data = pickle.dumps(retriever.vectorizer)
         with open(self._corpus_path, "wb") as f:
-            pickle.dump(retriever.vectorizer, f)
-        # 持久化原始 Document 列表
+            f.write(corpus_data)
+        self._write_checksum(self._corpus_path, corpus_data)
+
+        # 持久化原始 Document 列表 + SHA256 校验
+        docs_data = pickle.dumps(docs)
         with open(self._docs_path, "wb") as f:
-            pickle.dump(docs, f)
+            f.write(docs_data)
+        self._write_checksum(self._docs_path, docs_data)
 
         elapsed = time.time() - t0
         self._write_meta(len(docs), elapsed)
@@ -104,10 +109,10 @@ class BM25Store:
             return None
 
         try:
-            with open(self._corpus_path, "rb") as f:
-                vectorizer = pickle.load(f)
-            with open(self._docs_path, "rb") as f:
-                docs = pickle.load(f)
+            vectorizer = self._safe_load_pickle(self._corpus_path)
+            docs = self._safe_load_pickle(self._docs_path)
+            if vectorizer is None or docs is None:
+                return None
 
             # 直接构造 BM25Retriever，跳过 from_documents 的拟合步骤
             retriever = BM25Retriever(
@@ -143,8 +148,8 @@ class BM25Store:
         all_docs: List[Document] = []
         if self._docs_path.exists():
             try:
-                with open(self._docs_path, "rb") as f:
-                    all_docs = pickle.load(f)
+                loaded = self._safe_load_pickle(self._docs_path)
+                all_docs = loaded if loaded is not None else []
             except Exception:
                 logger.warning("[BM25Store] 读取已有文档失败，将全量重建")
                 all_docs = []
@@ -173,8 +178,8 @@ class BM25Store:
             return None
 
         try:
-            with open(self._docs_path, "rb") as f:
-                all_docs: List[Document] = pickle.load(f)
+            loaded = self._safe_load_pickle(self._docs_path)
+            all_docs = loaded if loaded is not None else []
         except Exception:
             logger.warning("[BM25Store] 读取已有文档失败，跳过删除")
             return None
@@ -227,3 +232,42 @@ class BM25Store:
                 return json.load(f)
         except Exception:
             return {}
+
+    def _checksum_path(self, data_path: Path) -> Path:
+        """返回 SHA256 校验文件路径。"""
+        return Path(str(data_path) + ".sha256")
+
+    def _write_checksum(self, data_path: Path, data: bytes) -> None:
+        """写入 SHA256 校验文件。"""
+        import hashlib
+        digest = hashlib.sha256(data).hexdigest()
+        chk_path = self._checksum_path(data_path)
+        with open(chk_path, "w", encoding="utf-8") as f:
+            f.write(digest)
+
+    def _safe_load_pickle(self, data_path: Path) -> Any | None:
+        """安全反序列化 pickle 文件：先校验 SHA256 签名再 unpickle。
+
+        防止缓存目录被篡改时的任意代码执行。
+        校验失败返回 None，调用方需处理重建逻辑。
+        """
+        import hashlib
+        chk_path = self._checksum_path(data_path)
+
+        # 读数据
+        with open(data_path, "rb") as f:
+            data = f.read()
+
+        # 校验 SHA256（校验文件不存在时容忍，兼容旧索引）
+        if chk_path.exists():
+            with open(chk_path, "r", encoding="utf-8") as f:
+                expected = f.read().strip()
+            actual = hashlib.sha256(data).hexdigest()
+            if actual != expected:
+                logger.warning(
+                    "[BM25Store] SHA256 校验失败: %s (expected %s, got %s)",
+                    data_path.name, expected[:16], actual[:16]
+                )
+                return None
+
+        return pickle.loads(data)

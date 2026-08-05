@@ -26,7 +26,7 @@ from backend.observability.metrics import chat_request_total, chat_request_durat
 router = APIRouter(prefix="/chat", tags=["对话"])
 
 # ── 全局线程池 + 活跃中止标志 ────────────────────
-_executor = ThreadPoolExecutor(max_workers=2)
+_executor = ThreadPoolExecutor(max_workers=4)
 _active_stops: dict[str, threading.Event] = {}
 
 
@@ -105,7 +105,7 @@ async def chat_stream(req: ChatRequest, request: Request,
     _active_stops[key] = stop_event
 
     # —— 线程安全队列（容量 100，防止内存暴涨） ——
-    q: queue.Queue = queue.Queue(maxsize=100)
+    q: queue.Queue = queue.Queue(maxsize=256)
 
     def _record_stream_metrics(last_event: dict | None):
         """根据最后一个事件状态记录 Prometheus 指标。"""

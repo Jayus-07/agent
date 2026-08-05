@@ -1,8 +1,8 @@
 """L3 长期记忆 — pgvector only, async pipeline"""
 from datetime import datetime, timezone
-from langchain_huggingface import HuggingFaceEmbeddings
+from backend.rag.embedding_singleton import get_embedding
 from backend.infra.llm import llm
-from backend.config import EMBEDDING_MODEL_PATH, L3_DEDUP_COSINE_THRESHOLD, L3_SUPERSEDE_THRESHOLD
+from backend.config import L3_DEDUP_COSINE_THRESHOLD, L3_SUPERSEDE_THRESHOLD
 from backend.memory.pii_filter import scan_and_sanitize
 from backend.shared.logger import logger
 from dataclasses import dataclass, field
@@ -45,7 +45,7 @@ class LongTermMemory:
     @property
     def embedding(self):
         if self._embedding_model is None:
-            self._embedding_model = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
+            self._embedding_model = get_embedding()  # 全局单例，避免重复加载
         return self._embedding_model
 
     # ── Fact extraction (LLM) ──
