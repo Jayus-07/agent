@@ -130,8 +130,10 @@ def _stored_dict_to_dto(d: dict) -> dict:
 
 @router.get("/traces")
 async def list_traces(limit: int = Query(20, ge=1, le=200)):
-    """最近 N 条 trace 摘要（直接从 SQLite 读取）"""
-    stored = trace_collector.list(limit)
+    """最近 N 条 trace 摘要（内存 + SQLite 合并去重）"""
+    store = get_trace_store()
+    # trace_collector.list() 已从 SQLite 读取，内部做了去重
+    stored = store.list(limit)
     traces = [_stored_dict_to_dto(d) for d in stored]
     return {"traces": traces}
 
@@ -145,11 +147,15 @@ async def list_active_traces():
 
 @router.get("/traces/{trace_id}")
 async def get_trace(trace_id: str):
-    """获取单条 trace 完整详情（直接从 SQLite 读取）"""
+    """获取单条 trace 完整详情（内存优先 + SQLite 兜底）"""
+    # 优先查内存（最新 trace），fallback 到 SQLite（重启后仍可查）
     data = trace_collector.get(trace_id)
     if data is None:
+        store = get_trace_store()
+        data = store.get(trace_id)
+    if data is None:
         raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在或已过期")
-    return data  # SQLite 返回的 dict 已是 DTO 兼容格式
+    return _to_trace_dto(data)  # 统一转为前端 DTO 格式
 
 
 # ═══════════════════════════════════════════════════
