@@ -144,9 +144,9 @@ export default function DocumentsPage() {
     try {
       const result = await knowledgeService.batchDelete(docs)
       if (result.failed.length > 0) {
-        toast.error(`${result.ok} 篇已删除，${result.failed.length} 篇失败：${result.failed.map(f => `${f.name}(${f.error})`).join('；')}`)
+        toast.error(`${result.ok} 篇已删除，${result.failed.length} 篇失败：${result.failed.map((f: { name: string; error: string }) => `${f.name}(${f.error})`).join('；')}`)
       } else if (result.warnings.length > 0) {
-        const wText = result.warnings.map(w => `${w.name}: ${w.warnings.join(', ')}`).join('；')
+        const wText = result.warnings.map((w: { name: string; warnings: string[] }) => `${w.name}: ${w.warnings.join(', ')}`).join('；')
         toast.warning(`已删除 ${result.ok} 篇（部分清理异常：${wText}）`)
       } else {
         toast.success(`已删除 ${result.ok} 篇文档`)

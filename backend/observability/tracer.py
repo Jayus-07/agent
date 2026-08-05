@@ -261,7 +261,7 @@ class TraceCollector:
                 try:
                     cb(trace, span)
                 except Exception:
-                    pass  # listener 异常不影响 tracer
+                    logger.debug("trace listener 回调异常", exc_info=True)
 
     def subscribe(self, callback) -> callable:
         """订阅 span end 事件。返回 unsubscribe() 函数（Phase 1.5 — 用于 SSE 推送）。
@@ -311,8 +311,7 @@ class TraceCollector:
             from backend.observability.trace_store import get_trace_store
             get_trace_store().save(record)
         except Exception:
-            pass  # 持久化失败不阻塞主流程
-
+            logger.warning("trace 持久化失败", exc_info=True)  # 不阻塞主流程
         # O2: 清除日志上下文
         from backend.shared.logger import clear_log_context
         clear_log_context()
@@ -346,6 +345,7 @@ class TraceCollector:
                 records.append(self._dict_to_record(full))
             return records
         except Exception:
+            logger.warning("trace 列表查询失败", exc_info=True)
             return []
 
     def _dict_to_record(self, d: dict) -> TraceRecord:
@@ -387,6 +387,7 @@ class TraceCollector:
             from backend.observability.trace_store import get_trace_store
             stored = get_trace_store().list(200)
         except Exception:
+            logger.warning("trace 持久化存储查询失败", exc_info=True)
             stored = []
         active = len(self.list_active())
         total = len(stored) + active
@@ -409,6 +410,7 @@ class TraceCollector:
             from backend.observability.trace_store import get_trace_store
             return get_trace_store().get(trace_id)
         except Exception:
+            logger.debug("trace 详情查询失败: %s", trace_id, exc_info=True)
             return None
 
     def clear(self):
@@ -451,7 +453,7 @@ class TraceCollector:
             if t:
                 return {"prompt_tokens": p, "completion_tokens": c, "total_tokens": t}
         except Exception:
-            pass
+            logger.debug("token 用量解析失败", exc_info=True)
         return {}
 
     @staticmethod

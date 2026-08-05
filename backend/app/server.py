@@ -15,9 +15,11 @@ from backend.app.exceptions import (
     memory_db_unavailable_handler,
 )
 from backend.app.api.middleware.concurrency import concurrency_limit_middleware
+from backend.app.api.middleware.auth import api_key_middleware
 from backend.observability.metrics import render_metrics
 from backend.shared.logger import logger
 from backend.config.rag import RAG_MAX_FILE_SIZE
+from backend.config import CORS_ORIGINS
 from mcp_servers.servers import register_all as register_mcp_servers
 
 app = FastAPI(
@@ -28,10 +30,11 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# ── 中间件 ──────────────────────────────────────
-app.middleware("http")(concurrency_limit_middleware)
+# ── 中间件（按执行顺序：auth → size limit → concurrency）────────────────
+# 1. 认证：未认证请求尽早 401，不消耗下游资源
+app.middleware("http")(api_key_middleware)
 
-
+# 2. 上传大小限制：在请求体接收前拦截超大文件
 @app.middleware("http")
 async def upload_size_limit_middleware(request, call_next):
     """P0-1: 在 endpoint 之前检查 Content-Length, 超过限制直接 413 拒绝.
@@ -47,10 +50,16 @@ async def upload_size_limit_middleware(request, call_next):
             )
     return await call_next(request)
 
+# 3. 并发控制：最后，只限流已认证的合法请求
+app.middleware("http")(concurrency_limit_middleware)
+
 # ── CORS ────────────────────────────────────────
+# 生产环境通过 CORS_ORIGINS 环境变量配置（逗号分隔多个域名）
+# 默认 http://localhost:3000（开发环境前端地址）
+_origins = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

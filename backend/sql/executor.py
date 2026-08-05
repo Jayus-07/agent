@@ -105,11 +105,11 @@ def execute_sql(
             try:
                 conn.rollback()
             except Exception:
-                pass
+                logger.warning("SQL 连接 rollback 失败（可能已关闭）", exc_info=True)
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.warning("SQL 连接 close 失败（可能泄漏）", exc_info=True)
 
 
 # =================================================

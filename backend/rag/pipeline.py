@@ -178,7 +178,7 @@ class RAGPipeline:
                 try:
                     registry.clear()
                 except Exception:
-                    pass
+                    logger.warning("registry 清理失败", exc_info=True)
             return False
 
     def _load_existing_db(self, db_path: str, db_type: str):
@@ -233,6 +233,7 @@ class RAGPipeline:
                 )
                 chunk_ids = chunk_data.get("ids", [])
             except Exception:
+                logger.warning("ChromaDB chunk 数据读取失败", exc_info=True)
                 chunk_ids = []
 
             # 从 doc 级向量库查找 doc_db_id
@@ -242,7 +243,7 @@ class RAGPipeline:
                 doc_ids = doc_data.get("ids", [])
                 doc_db_id = doc_ids[0] if doc_ids else ""
             except Exception:
-                pass
+                logger.warning("doc_db 元数据读取失败", exc_info=True)
 
             registry.register(
                 file_path=file_path,
@@ -401,7 +402,7 @@ class RAGPipeline:
             if kb_filter:
                 mf.update(kb_filter)
         except Exception:
-            pass
+            logger.debug("kb_filter 合并失败", exc_info=True)
 
         # 兼容旧 kb_id 参数（显式指定时覆盖 Router）
         if kb_id and kb_id not in ("*", "default"):
@@ -414,7 +415,7 @@ class RAGPipeline:
             qf = pq.to_metadata_filter()
             mf.update({k: v for k, v in qf.items() if v})
         except Exception:
-            pass
+            logger.debug("query_filter 合并失败", exc_info=True)
 
         if not mf:
             return

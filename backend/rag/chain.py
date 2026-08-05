@@ -302,7 +302,7 @@ class RAGChain:
         try:
             trace.metadata["rejection"] = info.to_dict()
         except Exception:
-            pass
+            logger.debug("trace metadata rejection 写入失败", exc_info=True)
         metrics = {"rejected": True, "reason": info.reason, "gate_layer": layer}
         if self_correction_attempted:
             metrics["self_correction"] = "attempted"
@@ -327,7 +327,7 @@ class RAGChain:
         try:
             provider = get_llm_factory()._get_provider(LLM_MODEL)
         except Exception:
-            pass
+            logger.debug("LLM provider 检测失败", exc_info=True)
         trace_collector.finish(trace, answer, total_ms, LLM_MODEL, provider)
 
     def _finish_error(self, trace, t_total: float):
@@ -551,7 +551,7 @@ class RAGChain:
                 data={"intent": pq.intent, "doc_types": pq.doc_types,
                       "metadata_filter": pq.to_metadata_filter()})
         except Exception:
-            pass
+            logger.debug("query_analysis span 记录失败", exc_info=True)
 
         # ── Event 2: Rerank 结果 ──
         rerank_scores = []
@@ -682,7 +682,7 @@ class RAGChain:
         try:
             provider = get_llm_factory()._get_provider(LLM_MODEL)
         except Exception:
-            pass
+            logger.debug("LLM provider 检测失败", exc_info=True)
         trace_collector.finish(trace, answer, total_ms, LLM_MODEL, provider)
 
     @staticmethod

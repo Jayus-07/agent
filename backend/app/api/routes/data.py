@@ -9,7 +9,7 @@ api/routes/data.py — 数据接入 + 处理 + 资产 API
   GET  /pipeline/history    — 执行历史
   GET  /assets              — 数据资产列表
 """
-import os, csv, json, io, uuid, time
+import os, csv, json, io, uuid, time, threading
 from fastapi import APIRouter, UploadFile, File, Form
 from backend.shared.logger import logger
 
@@ -17,6 +17,29 @@ router = APIRouter(prefix="/data", tags=["数据"])
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# 数据采集数据库连接池（单例，避免每次请求重新创建 Engine）
+_dc_engine = None
+_dc_engine_lock = threading.Lock()
+
+
+def _get_dc_engine():
+    """获取数据采集数据库 Engine（线程安全单例，带连接池）。"""
+    global _dc_engine
+    if _dc_engine is None:
+        with _dc_engine_lock:
+            if _dc_engine is None:
+                from backend.data_collection.config import DC_DATABASE_URL
+                from sqlalchemy import create_engine
+                _dc_engine = create_engine(
+                    DC_DATABASE_URL,
+                    pool_size=5,
+                    max_overflow=10,
+                    pool_pre_ping=True,
+                    pool_recycle=3600,
+                )
+                logger.info("[Data] DC 数据库 Engine 初始化完成")
+    return _dc_engine
 
 
 @router.post("/upload")
@@ -116,10 +139,9 @@ async def generate_data(types: list[str] = ["products"], count: int = 1000):
     # ── 路径 1: 从 PostgreSQL 读取 ──
     try:
         import pandas as pd
-        from backend.data_collection.config import DC_DATABASE_URL
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import text
 
-        engine = create_engine(DC_DATABASE_URL)
+        engine = _get_dc_engine()
         # 白名单校验表名，防止 SQL 注入
         valid_tables = {"products", "orders", "customers", "inventory",
                         "advertising", "logistics", "reports"}
@@ -134,7 +156,7 @@ async def generate_data(types: list[str] = ["products"], count: int = 1000):
                 result[t] = {"rows": len(df), "columns": list(df.columns), "preview": df.head(5).to_dict(orient="records")}
             except Exception as e:
                 result[t] = {"rows": 0, "columns": [], "error": str(e), "from": "db"}
-        engine.dispose()
+        # engine 现在是模块级单例，不再每次请求 dispose
 
         has_data = any(v.get("rows", 0) > 0 for v in result.values())
         if has_data:
@@ -187,10 +209,9 @@ async def list_assets():
     """从 PostgreSQL stg_* 表查询数据资产"""
     try:
         import pandas as pd
-        from backend.data_collection.config import DC_DATABASE_URL
-        from sqlalchemy import create_engine
+        from sqlalchemy import text
 
-        engine = create_engine(DC_DATABASE_URL)
+        engine = _get_dc_engine()
         # 表名硬编码且已加 stg_ 前缀，无 SQL 注入风险
         tables = ["stg_products", "stg_orders", "stg_shops", "stg_inventory", "stg_suppliers"]
         assets = []
@@ -207,7 +228,7 @@ async def list_assets():
                 })
             except Exception:
                 logger.debug("读取表 %s schema 失败，跳过", t, exc_info=True)
-        engine.dispose()
+        # engine 现在是模块级单例，不再每次请求 dispose
         return {"assets": assets, "total": len(assets)}
     except Exception as e:
         return {"assets": [], "total": 0, "error": str(e)}

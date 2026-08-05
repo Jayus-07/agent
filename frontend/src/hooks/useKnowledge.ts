@@ -6,14 +6,14 @@ import { knowledgeService, type KnowledgeStats, type KnowledgeDoc } from '@/serv
 // Hook — 知识库统计（真实 API，无 Mock 回退）
 export function useKnowledgeStats() {
   const [data, setData] = useState<KnowledgeStats & { loading: boolean; error: string }>({
-    kb_count: 0, doc_count: 0, chunk_count: 0, embedding_model: '', vector_db: '',
+    kb_count: 0, doc_count: 0, chunk_count: 0, total_chunks: 0, embedding_model: '', vector_db: '',
     loading: true, error: '',
   })
 
   useEffect(() => {
     knowledgeService.getStats()
-      .then(d => setData({ ...d, loading: false, error: '' }))
-      .catch(e => setData(prev => ({ ...prev, loading: false, error: '获取统计失败: ' + String(e) })))
+      .then((d: KnowledgeStats) => setData({ ...d, loading: false, error: '' }))
+      .catch((e: Error) => setData(prev => ({ ...prev, loading: false, error: '获取统计失败: ' + String(e) })))
   }, [])
 
   return data
@@ -38,13 +38,13 @@ export function useDocuments() {
     setLoading(true)
     setError('')
     knowledgeService.getDocuments({ keyword, status, type, kb_id: kbId, department: dept, page, page_size: pageSize })
-      .then(d => {
-        setData(d.documents)
+      .then((d: { documents: KnowledgeDoc[]; total: number; current_fingerprint?: string }) => {
+        setData(d.documents ?? [])
         setTotal(d.total)
         setCurrentFingerprint(d.current_fingerprint || '')
         setLoading(false)
       })
-      .catch(e => {
+      .catch((e: Error) => {
         setError('获取文档列表失败: ' + String(e))
         setLoading(false)
       })
@@ -90,12 +90,12 @@ export function useDocument(docId: string) {
     setLoading(true)
     setError('')
     knowledgeService.getDocument(docId)
-      .then(d => {
+      .then((d: { ok: boolean; doc?: KnowledgeDoc; error?: string }) => {
         if (d.ok && d.doc) { setDoc(d.doc); setError('') }
         else { setDoc(null); setError(d.error || '文档不存在') }
         setLoading(false)
       })
-      .catch(e => {
+      .catch((e: Error) => {
         setError('获取文档详情失败: ' + String(e))
         setLoading(false)
       })

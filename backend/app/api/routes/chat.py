@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from backend.app.api.schemas import ChatRequest, ChatResponse, AbortRequest, ErrorResponse
 from backend.app.api.deps import get_multi_agent
 from backend.infra.llm.rate_limiter import require_rate_limit
+from backend.observability.metrics import chat_request_total, chat_request_duration_seconds
 
 router = APIRouter(prefix="/chat", tags=["对话"])
 
@@ -58,14 +59,22 @@ def _sse_encode(event: dict) -> str:
 async def chat(req: ChatRequest, request: Request,
                _rate=Depends(require_rate_limit)):
     """提交自然语言问题，Multi-Agent 自动拆解+执行+汇总"""
+    t0 = time.monotonic()
     agent = get_multi_agent()
     kb_id = req.kb_id or "default"
-    answer = await asyncio.to_thread(agent.ask, req.question, req.session_id, kb_id=kb_id)
-    return ChatResponse(
-        answer=answer,
-        session_id=req.session_id,
-        sources=getattr(agent, "_last_sources", []),
-    )
+    try:
+        answer = await asyncio.to_thread(agent.ask, req.question, req.session_id, kb_id=kb_id)
+        chat_request_total.labels(status="ok").inc()
+        return ChatResponse(
+            answer=answer,
+            session_id=req.session_id,
+            sources=getattr(agent, "_last_sources", []),
+        )
+    except Exception:
+        chat_request_total.labels(status="error").inc()
+        raise
+    finally:
+        chat_request_duration_seconds.observe(time.monotonic() - t0)
 
 
 # ═══════════════════════════════════════════════════
@@ -85,6 +94,7 @@ async def chat_stream(req: ChatRequest, request: Request,
       event: done   — 结束信号
       event: error  — 错误/中止
     """
+    t0 = time.monotonic()
     agent = get_multi_agent()
     kb_id = req.kb_id or "default"
     request_id = req.request_id or "default"
@@ -96,6 +106,14 @@ async def chat_stream(req: ChatRequest, request: Request,
 
     # —— 线程安全队列（容量 100，防止内存暴涨） ——
     q: queue.Queue = queue.Queue(maxsize=100)
+
+    def _record_stream_metrics(last_event: dict | None):
+        """根据最后一个事件状态记录 Prometheus 指标。"""
+        if last_event and last_event.get("event") == "error":
+            chat_request_total.labels(status="error").inc()
+        else:
+            chat_request_total.labels(status="ok").inc()
+        chat_request_duration_seconds.observe(time.monotonic() - t0)
 
     def producer():
         """在 executor 线程中运行 LangGraph，事件逐个入队"""
@@ -155,9 +173,11 @@ async def chat_stream(req: ChatRequest, request: Request,
         except GeneratorExit:
             # 前端主动断开连接 → 触发中断
             stop_event.set()
+            chat_request_total.labels(status="aborted").inc()
         finally:
             # 内存安全：强制清理中止标志
             _active_stops.pop(key, None)
+            chat_request_duration_seconds.observe(time.monotonic() - t0)
 
     return StreamingResponse(
         event_generator(),

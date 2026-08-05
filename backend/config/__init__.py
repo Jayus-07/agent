@@ -17,6 +17,10 @@ import os
 # 并发控制
 MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "5"))
 
+# 安全
+API_KEY = os.getenv("API_KEY", "")
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+
 # 报告
 REPORT_SNAPSHOT_DAYS = int(os.getenv("REPORT_SNAPSHOT_DAYS", "30"))
 

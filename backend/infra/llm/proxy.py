@@ -146,6 +146,17 @@ def _record_tokens(result):
         _last_tokens.clear()
         _last_tokens.update({"prompt_tokens": p, "completion_tokens": c, "total_tokens": t})
 
+        # Prometheus 指标：LLM token 用量
+        try:
+            from backend.observability.metrics import llm_tokens_total
+            model = result.response_metadata.get("model_name", "") if hasattr(result, "response_metadata") and result.response_metadata else ""
+            if model and p:
+                llm_tokens_total.labels(model=model, direction="prompt").inc(p)
+            if model and c:
+                llm_tokens_total.labels(model=model, direction="completion").inc(c)
+        except Exception:
+            pass  # 指标记录失败不影响核心链路
+
         finish_reason = "unknown"
         if hasattr(result, "response_metadata") and result.response_metadata:
             finish_reason = result.response_metadata.get(

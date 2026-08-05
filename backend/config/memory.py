@@ -8,8 +8,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 记忆模块开关（默认关闭，PostgreSQL 事件循环待修复后开启）
-ENABLE_MEMORY = os.getenv("ENABLE_MEMORY", "false").lower() == "true"
+# 记忆模块开关（默认开启；设置 ENABLE_MEMORY=false 关闭）
+# PostgreSQL 不可用时自动降级为内存模式，不影响核心功能
+ENABLE_MEMORY = os.getenv("ENABLE_MEMORY", "true").lower() == "true"
 
 # 历史感知检索
 ENABLE_HISTORY_AWARE_RETRIEVAL = os.getenv("ENABLE_HISTORY_AWARE_RETRIEVAL", "true").lower() == "true"

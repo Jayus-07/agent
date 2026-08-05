@@ -133,7 +133,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
       const stageTimes: Record<string, number> = {}
 
       try {
-        const res = await knowledgeService.uploadDocument(file, (stage, message, durationMs, stageElapsed) => {
+        const res = await knowledgeService.uploadDocument(file, (stage: string, message: string, durationMs?: number, stageElapsed?: Record<string, number>) => {
           // duplicate 推进时附带 stage_elapsed，由终态分支使用
           if (stage === 'duplicate') {
             stageTimes.uploading = performance.now() - fileStart
@@ -171,7 +171,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
           // 用后端值覆盖前端累加（前端累加只能保留 uploading）
           const finalElapsed: Record<string, number> = { uploading: elapsed.uploading ?? 0 }
           if (serverElapsed) {
-            for (const [k, v] of Object.entries(serverElapsed)) {
+            for (const [k, v] of Object.entries(serverElapsed) as [string, number][]) {
               finalElapsed[k] = v
             }
           } else {

@@ -54,6 +54,7 @@ async def _ensure_engine():
             pool_size=MEMORY_ASYNC_POOL_SIZE,
             max_overflow=MEMORY_ASYNC_MAX_OVERFLOW,
             pool_pre_ping=True,
+            pool_recycle=3600,  # 1 小时回收连接，防止 LB/防火墙断开空闲连接
             echo=False,
         )
         _sessionmaker = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
