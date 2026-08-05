@@ -543,8 +543,10 @@ class IncrementalIndexer:
             ch.metadata["department"] = self.department
             chunk_kws = _chunk_kw(ch.page_content, doc_type=doc_type_val)
             ch.metadata["chunk_keywords"] = ", ".join(chunk_kws) if chunk_kws else ""
-            # 模拟问题（按 chunk 索引对齐；缺失则空列表）
-            ch.metadata["simulated_questions"] = questions_by_chunk[i] if i < len(questions_by_chunk) else []
+            # 模拟问题（按 chunk 索引对齐；空列表不写入 metadata，避免 ChromaDB 非空列表校验报错）
+            _sq = questions_by_chunk[i] if i < len(questions_by_chunk) else []
+            if _sq:
+                ch.metadata["simulated_questions"] = _sq
 
             # 章节归属
             if section_positions:

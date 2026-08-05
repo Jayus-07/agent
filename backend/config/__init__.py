@@ -15,7 +15,7 @@
 import os
 
 # 并发控制
-MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "1"))
+MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "5"))
 
 # 报告
 REPORT_SNAPSHOT_DAYS = int(os.getenv("REPORT_SNAPSHOT_DAYS", "30"))
