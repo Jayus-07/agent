@@ -14,6 +14,8 @@ import asyncio
 import time
 from dataclasses import dataclass
 
+from fastapi import Request
+
 from backend.shared.logger import logger
 from backend.config.llm import LLM_RATE_LIMIT_QPS, LLM_RATE_LIMIT_BURST
 
@@ -147,7 +149,7 @@ def get_rate_limiter() -> LLMRateLimiter:
     return _limiter
 
 
-async def require_rate_limit(request, user_id: str | None = None) -> None:
+async def require_rate_limit(request: Request, user_id: str | None = None) -> None:
     """FastAPI 依赖：检查限流，超限时抛出 HTTPException 429。
 
     用法:

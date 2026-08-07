@@ -59,6 +59,10 @@ DEFAULT_KB_ID = os.getenv("DEFAULT_KB_ID", "default")
 BM25_SEARCH_K = int(os.getenv("BM25_SEARCH_K", "10"))
 HYBRID_SEARCH_K = int(os.getenv("HYBRID_SEARCH_K", "8"))
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "8"))
+# Rerank 阈值（sigmoid 归一化后）：CrossEncoder 输出的 logit 经 sigmoid 映射到 0-1。
+# 0.3 对应 logit ≈ -0.85，可召回弱相关文档。
+# 调高 → 更严格（噪音少，召回少）；调低 → 更宽松（召回多，噪音多）。
+# 经验值范围：0.2（宽松）~ 0.5（严格）。
 RERANK_SCORE_THRESHOLD = float(os.getenv("RERANK_SCORE_THRESHOLD", "0.3"))
 
 # Citation Filter: chunk 支撑答案的最低 CrossEncoder 分数

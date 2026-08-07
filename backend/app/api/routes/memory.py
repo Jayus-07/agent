@@ -52,9 +52,17 @@ class RenameRequest(BaseModel):
 
 
 @router.get("/sessions")
-async def list_sessions(user_id: str = "default"):
-    """列出用户的所有持久化会话"""
-    return _raise_for_error(await _get_service().list_sessions(user_id=user_id))
+async def list_sessions(user_id: str = "default",
+                        limit: int = 50, before: str | None = None):
+    """列出用户的所有持久化会话（支持游标分页）。
+
+    Query:
+      limit: 单次返回上限（默认 50，最大 200）
+      before: ISO timestamp 游标；只返回 updated_at < before 的会话
+    """
+    return _raise_for_error(
+        await _get_service().list_sessions(user_id=user_id, limit=limit, before=before)
+    )
 
 
 @router.get("/sessions/{session_id}")

@@ -165,7 +165,7 @@ def import_to_postgres(verbose: bool = True) -> dict[str, Any]:
     """导入商品 + 销售到 PostgreSQL"""
     try:
         import psycopg2
-        from backend.config import DB_CONFIG
+        from backend.config import BUSINESS_DB_CONFIG
     except ImportError:
         logger.warning("[seed] psycopg2 未安装，跳过 PG 导入")
         return {"pg_products": 0, "pg_sales": 0, "skipped": True}
@@ -193,7 +193,7 @@ def import_to_postgres(verbose: bool = True) -> dict[str, Any]:
     except Exception as e:
         logger.warning(f"[seed] 注册 SQL Agent 白名单失败: {e}")
 
-    conn = psycopg2.connect(**DB_CONFIG)
+    conn = psycopg2.connect(**BUSINESS_DB_CONFIG)
     try:
         conn.set_session(autocommit=True)
         cur = conn.cursor()

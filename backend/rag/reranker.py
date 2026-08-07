@@ -3,6 +3,21 @@ from langchain_core.documents.compressor import BaseDocumentCompressor
 from backend.config import RERANKER_MODEL_PATH, RERANK_SCORE_THRESHOLD, RERANK_TIMEOUT, RERANK_TOP_K
 from backend.shared.logger import logger
 from backend.infra.timeout import safe_call_with_timeout
+import math
+
+
+def _sigmoid(x: float) -> float:
+    """数值稳定的 sigmoid，把 CrossEncoder 输出的 logit 归一化到 0-1。
+
+    BGE-reranker-base 的 predict() 输出范围通常是 [-10, +10]（logit），
+    直接拿 logit 与 0.3 比较 → 大多数 chunk 的 score < 0.3，全被过滤。
+    必须 sigmoid 归一化后再比较。
+    """
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    e = math.exp(x)
+    return e / (1.0 + e)
+
 
 # 本地加载交叉编码器模型（用于重排序）
 reranker = CrossEncoder(RERANKER_MODEL_PATH)
@@ -72,10 +87,12 @@ def rerank(
         reverse=True
     )
 
+    # ⚠️ CrossEncoder.predict() 输出是 logit（未归一化，常见范围 -10~+10），
+    # 必须 sigmoid 归一化到 0-1 再与 threshold 比较，否则绝大多数 chunk 被过滤。
     scored_docs = [
-        (doc, score)
+        (doc, _sigmoid(float(score)))
         for doc, score in scored_docs
-        if score > RERANK_SCORE_THRESHOLD
+        if _sigmoid(float(score)) > RERANK_SCORE_THRESHOLD
     ]
 
     # 将重排序分数写入 metadata，供来源展示使用

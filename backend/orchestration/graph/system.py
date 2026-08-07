@@ -35,7 +35,33 @@ class MultiAgentSystem:
         self._memory = memory_manager
         self._skill_nodes = tool_registry.get_skill_node_names()
         self._last_sources: list[dict] = []
-        logger.info("[MultiAgent] 就绪")
+
+        # P1 性能优化：后台预热 SQLAgent + RAG，首次请求不再冷启动
+        import threading
+        threading.Thread(target=self._prewarm, daemon=True, name="prewarm").start()
+
+    def _prewarm(self) -> None:
+        """后台预热：SQLAgent 连接池 + RAG 管道初始化。
+
+        非阻塞——init 立即返回，预热在后台线程进行。
+        首次请求如果预热未完成，SQLSkill/BusinessAnalysisSkill 会惰性等待。
+        """
+        t0 = time.time()
+        try:
+            from backend.sql.sql_agent import get_sql_agent
+            _ = get_sql_agent()
+            logger.info(f"[MultiAgent] SQLAgent 预热完成 ({(time.time()-t0)*1000:.0f}ms)")
+        except Exception as e:
+            logger.warning(f"[MultiAgent] SQLAgent 预热失败（非致命）: {e}")
+
+        t0 = time.time()
+        try:
+            from backend.app.api.deps import get_rag_pipeline
+            _ = get_rag_pipeline()
+            logger.info(f"[MultiAgent] RAG 预热完成 ({(time.time()-t0)*1000:.0f}ms)")
+        except Exception as e:
+            logger.warning(f"[MultiAgent] RAG 预热失败（非致命）: {e}")
+        logger.info("[MultiAgent] 预热完毕，就绪")
 
     # =====================================================
     # 同步入口
@@ -49,7 +75,7 @@ class MultiAgentSystem:
         logger.info(f"[MultiAgent] 收到问题: {question[:80]}... (session={session_id}, kb={kb_id})")
 
         l1 = self._memory.start_session(session_id, question)
-        initial_state = self._make_initial_state(question, session_id, kb_id, l1.messages)
+        initial_state = make_initial_state(question, session_id, kb_id, l1.messages)
 
         # ── Tracing: start + root span ──
         from backend.observability.tracer import trace_collector
@@ -66,7 +92,7 @@ class MultiAgentSystem:
                 answer = self._fallback_summary(final_state)
 
             step_results = final_state.get("step_results", {})
-            self._last_sources = self._extract_sources(step_results, answer)
+            self._last_sources = extract_sources_from_results(step_results, answer)
 
             # ── Tracing: 从 final_state 重建 span 树 ──
             self._trace_from_state(trace, final_state)
@@ -230,7 +256,7 @@ class MultiAgentSystem:
         from backend.orchestration.tools import set_session_id
         set_session_id(session_id)
         start_time = time.time()
-        initial_state = self._make_initial_state(question, session_id, kb_id, l1.messages)
+        initial_state = make_initial_state(question, session_id, kb_id, l1.messages)
 
         # ── Tracing ──
         trace = trace_collector.start(question, session_id, workflow_name="agent")
@@ -240,6 +266,8 @@ class MultiAgentSystem:
 
         final_answer = ""
         all_step_results = {}
+        current_plan = dict(initial_state.get("plan", {}))
+        plan_changed = False
 
         try:
             for event in self._graph.stream(initial_state):
@@ -261,19 +289,26 @@ class MultiAgentSystem:
                     all_step_results.update(node_output.get("step_results", {}))
                 elif node_name == "reporter":
                     final_answer = node_output.get("final_answer", "")
+                elif node_name in ("planner", "critique"):
+                    # 捕获 plan 用于 trace 重建
+                    if node_output.get("plan"):
+                        current_plan = node_output["plan"]
+                    if node_output.get("_plan_changed"):
+                        plan_changed = True
 
-            yield from self._emit_delta_events(final_answer, stop_event)
+            yield from emit_delta_events(final_answer, stop_event)
             if stop_event is not None and stop_event.is_set():
                 yield {"event": "error", "data": {"message": "用户中止", "ts": time.time()}}
                 return
 
-            # ── Tracing: 重建 span 树 ──
+            # ── Tracing: 重建 span 树（仅在未被中止时执行；stop 后直接退出，
+            #    既避免错误地把半截内容持久化为最终答案，也避开不必要的 trace 重建）──
             state_for_trace = {
-                "plan": initial_state.get("plan", {}),
+                "plan": current_plan,           # 从 Planner/Critique 捕获，非初始空 plan
                 "step_results": all_step_results,
                 "_supervisor_loop_count": _count_rounds_from_results(all_step_results),
                 "_degraded_steps": set(),
-                "_plan_changed": False,
+                "_plan_changed": plan_changed,
                 "final_answer": final_answer,
             }
             self._trace_from_state(trace, state_for_trace)
@@ -281,7 +316,7 @@ class MultiAgentSystem:
             trace_collector.finish(trace, final_answer,
                                    int((time.time() - start_time) * 1000), "", "")
 
-            yield self._make_done_event(final_answer, all_step_results, start_time)
+            yield make_done_event(final_answer, all_step_results, start_time)
 
         except Exception as e:
             logger.error(f"[MultiAgent] 流式执行失败: {e}")
@@ -350,13 +385,19 @@ def _build_graph_snapshot(state: dict, loop_count: int,
 
 
 def _sla_for_plan(plan_nodes: dict) -> int:
-    """根据计划复杂度估算 SLA 阈值（ms）。"""
+    """根据计划复杂度估算 SLA 阈值（ms）。
+
+    每步预留 LLM 调用 + DB 查询时间:
+      - 1 步 (纯 RAG): 30s
+      - 2 步 (SQL+分析): 60s
+      - 3+ 步 (复杂编排): 90s
+    """
     n = len(plan_nodes)
     if n <= 1:
-        return 5000
-    if n <= 3:
-        return 10000
-    return 15000
+        return 30000
+    if n <= 2:
+        return 60000
+    return 90000
 
 
 def _count_rounds_from_results(step_results: dict) -> int:

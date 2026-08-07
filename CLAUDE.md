@@ -1,6 +1,7 @@
 # CLAUDE.md
 
-> 项目级约束，详细设计见 docs/
+> 项目级约束与架构知识，随代码一起演进。
+> 个人偏好（语言/环境路径/工具）见全局 ~/.claude/CLAUDE.md
 
 ## Project
 
@@ -9,204 +10,109 @@
 Stack:
 - Backend: FastAPI + LangGraph
 - Frontend: Next.js 14 + React
-- AI: DeepSeek / Qwen / Ollama
-- Trace: backend/rag/tracer.py
+- AI: DeepSeek（langchain-openai 兼容接口）
+- DB: PostgreSQL agent_business（业务仓库）+ agent_memory（元数据库）
 
 ## Architecture
 
-简单请求:
+```
+API → Router → Planner → Critique → Supervisor → Skills → Reporter
+                                                  ↓
+                                              Tool / RAG / SQL / Memory
+```
 
-API
- ↓
-Router
- ↓
-Skill
- ↓
-Tool / RAG / SQL / Memory
+### 节点职责
 
+- **Planner**: 只负责任务拆解 → 输出 Capability DAG（nodes + edges），禁止调用 Tool/Skill/DB
+- **Critique**: 审查修正计划
+- **Supervisor**: 按 edges 依赖顺序调度，通过 Send[] 并行派发，自动注入 previous_outputs
+- **Skill**: 业务能力封装，不直接访问外部系统
+- **Reporter**: 汇总 step_results → Markdown
+- **Tool**: 无状态、可测试
 
-复杂任务:
+### Capability DAG
 
-API
- ↓
-Router / Agent Runtime
- ↓
-Planner
- ↓
-Supervisor
- ↓
-Skill
- ↓
-Tool
- ↓
-MCP Client
- ↓
-MCP Server
- ↓
-External Resource
+```json
+{
+  "nodes": {
+    "1": {"step_id": "1", "capability": "sql.query", "params": {"question": "..."}},
+    "2": {"step_id": "2", "capability": "business.analyze", "params": {}}
+  },
+  "edges": {"2": ["1"]}
+}
+```
 
-核心约束：
+### 已注册 Capability（10 个）
 
-- Planner:
-  - 只负责任务拆解
-  - 输出 Capability DAG
-  - 禁止调用 Tool / Skill / DB
+| capability | Skill | 节点名 |
+|---|---|---|
+| sql.query | SQLSkill | sql_skill |
+| business.analyze | BusinessAnalysisSkill | business_analysis_skill |
+| rag.search | RAGSkill | rag_skill |
+| report.generate | ReportSkill | report_skill |
+| email.send | EmailSkill | email_skill |
+| data.export | DataExportSkill | data_export_skill |
+| web.search | WebSearchSkill | web_search_skill |
+| web.crawl | WebCrawlSkill | web_crawl_skill |
+| data.collect | DataCollectionSkill | data_collection_skill |
 
-- Supervisor:
-  - Capability 调度
-  - 状态管理
-  - 并发控制
+新增 Skill: 创建 `skills/<name>/skill.py` → `skills/registry.py` 注册 → 自动发现。
 
-- Skill:
-  - 业务能力封装
-  - 不直接访问外部系统
+### SQL 子系统
 
-- Tool:
-  - 无状态
-  - 可测试
-  - 必须 Trace
+```
+SQLSkill → SQLAgent → Router → Generator → Validator(6层) → RowSecurity → Executor(连接池) → PostgreSQL
+```
 
+6 层安全: ①SELECT 类型校验 ②表名白名单 ③敏感列拒绝 ④禁止函数黑名单 ⑤LIMIT 强制 ⑥agent_readonly 只读角色
+
+数据协议:
+- **SQLResult** (Pydantic): sql/tables/columns/rows/row_count/execution_time — Skill 层输出
+- **BusinessInsight** (Pydantic): summary/risks/suggestions/confidence — BusinessAnalyzer 输出
+
+步骤间数据传递: Supervisor 在 Send 中注入 `previous_outputs`（前置步骤的 output 自动传给后置步骤）。
+
+### 数据库
+
+7 schema × 19 表: product / order / inventory / customer / crawler / finance / ai
+连接池: ThreadedConnectionPool（min=2, max=10）
+只读账号: agent_readonly（scram-sha-256 认证）
+Migration: `sql/migrations/001~005`
 
 ## Design Principle
 
-优先生产级方案。
+必须满足: 可理解、可测试、可观测、可维护、可扩展、可控制、可靠性
+禁止: Demo 跑通式开发、临时堆叠、except Exception: pass
 
-代码设计必须满足：
+### Priority
 
-- 可理解：结构清晰，职责明确，人可以快速接手
-- 可测试：核心逻辑可独立验证，避免强依赖外部系统
-- 可观测：关键流程有日志、Trace、指标，问题可定位
-- 可维护：低耦合，修改成本可控
-- 可扩展：支持新增能力，不破坏已有流程
-- 可控制：关键流程、数据、权限由代码约束，不依赖 AI 自由决策
-- 可靠性：面对异常、变化、失败场景仍能稳定运行
+P0: 数据错误、安全问题、崩溃、Trace 丢失
+P1: 架构问题、强耦合、重复代码
+P2: 命名、注释
 
-禁止只追求：
-- 当前 Demo 跑通
-- 单次输入有效
-- 临时堆叠代码
+### 数据库生产标准
 
-允许：
-- 重构架构
-- 删除低价值代码
-- 优先简单有效实现
-
+P0: 只读角色 + scram-sha-256 + 连接池 + connect_timeout/keepalives
+P1: 外键完整 + CHECK 约束 + 高频列索引
 
 ## Code Rules
 
-### Backend
-
-- Python:
-  - snake_case
-  - 类型注解
-  - logger 替代 print
-  - 使用具体异常
-  - SQL 参数化
-
-禁止：
-- 业务代码直接 os.getenv
-- except Exception: pass
-
-
-### Frontend
-
-- Next.js 14 + React
-- 保持现有目录结构
-- API 按 domain 分层
-- 禁止 alert / confirm
-- Mock 必须匹配 DTO
-
-
-## File Rules
-
-禁止：
-
-文件:
-- misc.py
-- helper.py
-- common.py
-- utils2.py
-
-禁止 thin wrapper
-
-例外:
-- API compatibility layer
-- DTO converter
-
-
-## Priority
-
-修改优先级：
-
-P0:
-- 数据错误
-- 安全问题
-- 崩溃
-- Trace 丢失
-- 内存泄漏
-
-
-P1:
-- 架构问题
-- 强耦合
-- 重复代码
-- 长函数
-
-
-P2:
-- 命名
-- 注释
-- 小重构
-
+- Python: snake_case、类型注解、logger 替代 print、具体异常、SQL 参数化
+- 禁止: 业务代码直接 os.getenv、文件名 misc/helper/common/utils2
+- Tool 必须独立可测试
 
 ## Change Flow
 
-修改前：
-
-1. 明确目标
-2. 阅读代码
-3. 分析影响范围
-4. 修改
-5. 测试
-
-
-规则：
-
-Bug:
-- 先复现
-
-Refactor:
-- 修改前后测试通过
-
-Feature:
-- 优先补测试
-
+明确目标 → 阅读代码 → 分析影响 → 修改 → 测试
+Bug 先复现、Refactor 测试通过、Feature 优先补测试
 
 ## Validation
 
-Backend:
-- py_compile
-- 相关测试
-
-
-Frontend:
-- npx tsc --noEmit
-- npm test
-
+Backend: `py_compile` + `pytest tests/sql/ -v`
+Frontend: `npx tsc --noEmit` + `npm test`
+E2E: `cd backend && python e2e_demo.py`
 
 ## Docs
 
-架构:
-docs/architecture/
-
-开发:
-docs/development/
-
-运维:
-docs/operations/
-
-可观测:
-docs/observability/
-
-经验:
-memory/
+设计文档: `docs/superpowers/specs/`
+记忆: `memory/`（项目级，CLAUDE.md 为索引）

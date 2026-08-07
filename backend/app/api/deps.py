@@ -70,3 +70,17 @@ def require_rag_ready():
                 "retry_after": 15,
             },
         )
+
+
+def warmup_multi_agent() -> bool:
+    """启动期预热 MultiAgent 运行时：构造 LangGraph、tool_registry、memory_manager。
+
+    目的：首次 chat 请求不再触发 5-15s 的图编译与依赖链加载。
+    返回 True 表示成功，False 表示失败（启动期失败不阻塞服务运行，首请求时会再尝试）。
+    """
+    try:
+        get_multi_agent()
+        return True
+    except Exception as e:
+        logger.warning(f"[Warmup] MultiAgent 预热失败（首请求会重试）: {e}")
+        return False

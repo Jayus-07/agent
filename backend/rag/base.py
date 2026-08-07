@@ -33,7 +33,12 @@ class CustomRetriever:
 
         if metadata_filter:
             for key, value in metadata_filter.items():
-                if isinstance(value, list):
+                # ChromaDB 逻辑运算符（$and/$or/$not）的值已经是 where 表达式，
+                # 不应再包 $in，否则产生无效语法：
+                #   $or → {"$in": [{...}]}  # ❌
+                if key.startswith("$"):
+                    filter_dict[key] = value
+                elif isinstance(value, list):
                     filter_dict[key] = {"$in": value}
                 else:
                     filter_dict[key] = value

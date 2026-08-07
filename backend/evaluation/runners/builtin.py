@@ -15,6 +15,7 @@ from backend.evaluation.registry import register_runner
 from backend.evaluation.runner import evaluate_planner_offline
 from backend.evaluation.metrics import recall_at_k, mrr, ndcg_at_k, result_set_match
 from backend.evaluation.judge import judge_answer
+from backend.shared.logger import logger
 
 
 # ==================== Planner ====================
@@ -150,11 +151,36 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     # 获取底层检索器引用，用于采集管线各阶段数据
     chunk_base = pipeline.lc_chain.chunk_retriever_base
 
+    # === KB 软约束：探测实际 doc_db 里有哪些 KB ===
+    # 如果 golden set 标注的 KB 不在 doc_db 中，自动 fallback 到 default，
+    # 避免 0 命中导致整个评估全军覆没，但同时记录 warning 让维护者知道。
+    available_kbs = set()
+    try:
+        peek = pipeline.doc_db.get(where=None)
+        for md in (peek.get("metadatas") or []):
+            kid = md.get("kb_id")
+            if kid:
+                available_kbs.add(kid)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[RAG eval] 探测 doc_db KB 列表失败: {e}")
+
     results: list[EvalResult] = []
     for case in cases:
         t0 = time.time()
         try:
             kb_id = case.metadata.get("kb_id", "default")
+            # KB 软 fallback：如果标注的 KB 在 doc_db 中不存在，退化为 default
+            if (
+                kb_id
+                and kb_id not in ("*", "default")
+                and available_kbs
+                and kb_id not in available_kbs
+            ):
+                logger.warning(
+                    f"[RAG eval] {case.id} 标注 KB='{kb_id}' 不在 doc_db 中 "
+                    f"(available={sorted(available_kbs)}), fallback to default"
+                )
+                kb_id = "default"
             question = case.question
 
             # KB 隔离: 通过 contextvars 注入 metadata_filter
@@ -182,7 +208,22 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 })
 
             # === 完整检索链路 ===
-            retrieved_docs = retriever.invoke(question)
+            # reranker/evidence_gate 等内部组件会调 trace_collector.start_span()，
+            # 必须先 start() 否则报 "start_span() 必须在 start() 之后调用"。
+            # 这里用 try/finally 保证 trace 一定被 end_span，避免污染下次评测。
+            from backend.observability.tracer import trace_collector
+            trace = trace_collector.start(
+                question=question,
+                session_id=f"eval-{case.id}",
+                workflow_name="rag_eval",
+            )
+            try:
+                retrieved_docs = retriever.invoke(question)
+            finally:
+                try:
+                    trace_collector.end_span(trace)
+                except Exception:
+                    logger.debug("trace end failed for %s", case.id, exc_info=True)
 
             # === 组装详细检索轨迹 ===
             actual_doc_strs = []
@@ -273,13 +314,13 @@ def _run_sql(cases: list[TestCase], **kwargs) -> list[EvalResult]:
 
     results: list[EvalResult] = []
     try:
-        from backend.config import DB_CONFIG
+        from backend.config import BUSINESS_DB_CONFIG
 
         for case in cases:
             t0 = time.time()
             try:
                 from backend.sql.sql_agent import SQLAgent
-                agent = SQLAgent(db_config=DB_CONFIG)
+                agent = SQLAgent(db_config=BUSINESS_DB_CONFIG)
                 outcome = agent.ask(case.question)
 
                 expected_security = case.expected.get("security_checks", [])

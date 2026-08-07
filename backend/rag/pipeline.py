@@ -20,7 +20,7 @@ from backend.config import (
     DOC_DB_PATH,
     DOCS_DIRECTORY,
     DOC_REGISTRY_PATH,
-    ENABLE_INCREMENTAL_INDEXING,
+    ENABLE_INCREMENTAL_INDEX,
     ENABLE_MEMORY,
     OVERALL_REQUEST_TIMEOUT,
     ENABLE_RESOURCE_MONITOR,
@@ -62,7 +62,7 @@ class RAGPipeline:
         """阶段 2：构建向量库（增量优先，回退全量重建）。"""
         used_incremental = (
             self._init_vector_dbs_incremental()
-            if ENABLE_INCREMENTAL_INDEXING
+            if ENABLE_INCREMENTAL_INDEX
             else False
         )
         if used_incremental:
@@ -453,6 +453,52 @@ class RAGPipeline:
             elapsed = time.time() - start_time
             logger.error(f"请求失败 (耗时: {elapsed:.2f}s): {e}", exc_info=True)
             raise
+
+    def retrieve_knowledge(self, question: str, kb_id: str = "default", top_k: int = 3) -> str:
+        """轻量检索：只检索不生成回答，供 BusinessAnalyzer 等下游使用。
+
+        与 ask() 的区别:
+          - ask(): 完整链路 BM25→向量→rerank→LLM→evidence gate（~30-120s）
+          - retrieve_knowledge(): 只 BM25→向量→rerank，返回原始文本（~3-5s）
+
+        用于需要用 RAG 内容做后续分析的场景（非直接回答用户）。
+        """
+        import time as _time
+        t0 = _time.monotonic()
+
+        self._prepare_context(kb_id, question)
+        try:
+            # 直接从 retrievers 获取相关 chunks（不经过 LLM）
+            chunks = []
+            # BM25 检索
+            try:
+                bm25_results = self.bm25.search(question, k=top_k)
+                for doc in bm25_results:
+                    chunks.append(doc.page_content if hasattr(doc, 'page_content') else str(doc))
+            except Exception:
+                pass
+
+            # 向量检索
+            try:
+                vec_results = self.chunk_retriever.get_relevant_documents(question)
+                for doc in vec_results[:top_k]:
+                    content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
+                    if content not in chunks:
+                        chunks.append(content)
+            except Exception:
+                pass
+
+            elapsed = _time.monotonic() - t0
+            logger.info(
+                f"[RAG.retrieve] {len(chunks)} chunks, "
+                f"{elapsed:.1f}s (skip LLM generation)"
+            )
+
+            if not chunks:
+                return ""
+            return "\n\n---\n\n".join(chunks[:top_k])
+        finally:
+            self._cleanup()
 
     def _cleanup(self):
         """清理 contextvars（无论成功失败都执行）。"""

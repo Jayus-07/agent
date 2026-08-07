@@ -1,0 +1,122 @@
+-- =====================================================
+-- 003_agent_memory_seed.sql — agent_memory 库模拟数据
+--
+-- 假设 002_agent_memory_schema.sql 已先跑过。
+-- 全部用 ON CONFLICT DO NOTHING 重跑幂等。
+--
+-- 内容：
+--   - ai.agent_tasks        3 条示例任务（含 failed 演示状态）
+--   - ai.agent_trace        4 条节点 trace
+--   - public.chat_sessions  2 条会话
+--   - public.chat_messages  6 条消息（user/assistant 配对）
+--   - public.memory_records 3 条长期记忆（uuid 显式给值，避免依赖 pgcrypto 扩展）
+-- =====================================================
+
+-- ═══ ai.agent_tasks ═══
+INSERT INTO ai.agent_tasks (id, session_id, user_query, task_type, status, created_at) VALUES
+    (1, 'session-demo-1',
+     '最近一个月内价格最高的商品信息',
+     'sql.query', 'success',
+     NOW() - INTERVAL '2 days'),
+    (2, 'session-demo-1',
+     '高退款率商品 TOP10',
+     'sql.query', 'success',
+     NOW() - INTERVAL '1 day'),
+    (3, 'session-demo-2',
+     '本周会员复购率',
+     'sql.aggregate', 'failed',
+     NOW() - INTERVAL '6 hours')
+ON CONFLICT (id) DO NOTHING;
+
+SELECT setval(pg_get_serial_sequence('ai.agent_tasks', 'id'),
+              GREATEST(COALESCE((SELECT MAX(id) FROM ai.agent_tasks), 1), 3));
+
+-- ═══ ai.agent_trace ═══
+INSERT INTO ai.agent_trace (id, task_id, node, input, output, duration, created_at) VALUES
+    (1, 1, 'planner',
+     '{"question":"最近一个月内价格最高的商品信息"}'::jsonb,
+     '{"nodes":[{"step_id":"1","capability":"sql.query"}]}'::jsonb,
+     0.42, NOW() - INTERVAL '2 days'),
+    (2, 1, 'sql_skill',
+     '{"step_id":"1","question":"..."}'::jsonb,
+     '{"row_count":5,"is_empty":false}'::jsonb,
+     0.86, NOW() - INTERVAL '2 days'),
+    (3, 2, 'planner',
+     '{"question":"高退款率商品 TOP10"}'::jsonb,
+     '{"nodes":[{"step_id":"1","capability":"sql.query","sub":"refunds"}]}'::jsonb,
+     0.51, NOW() - INTERVAL '1 day'),
+    (4, 2, 'sql_skill',
+     '{"step_id":"1"}'::jsonb,
+     '{"row_count":2}'::jsonb,
+     0.72, NOW() - INTERVAL '1 day')
+ON CONFLICT (id) DO NOTHING;
+
+SELECT setval(pg_get_serial_sequence('ai.agent_trace', 'id'),
+              GREATEST(COALESCE((SELECT MAX(id) FROM ai.agent_trace), 1), 4));
+
+-- ═══ public.chat_sessions ═══
+-- 字段：id (serial PK), session_id (unique), user_id, summary, context_summary, created_at, updated_at
+INSERT INTO public.chat_sessions (session_id, user_id, summary, context_summary,
+                                   created_at, updated_at)
+VALUES
+    ('session-demo-1', 'default',
+     '最近一个月内价格最高的商品信息',
+     '{"sql_results":5,"rag_docs":0,"turns":1,"sql_status":"success"}',
+     NOW() - INTERVAL '2 days', NOW() - INTERVAL '2 days'),
+    ('session-demo-2', 'default',
+     '本周会员复购率分析',
+     '{"sql_results":null,"turns":2,"sql_status":"in_progress"}',
+     NOW() - INTERVAL '6 hours', NOW() - INTERVAL '1 hour')
+ON CONFLICT (session_id) DO NOTHING;
+
+-- ═══ public.chat_messages ═══
+-- 字段：id (serial PK), session_id, role, content, created_at
+INSERT INTO public.chat_messages (session_id, role, content, created_at) VALUES
+    ('session-demo-1', 'user',
+     '查询最近一个月内价格最高的商品信息',
+     NOW() - INTERVAL '2 days'),
+    ('session-demo-1', 'assistant',
+     E'| product_name | sale_price | brand |\n| --- | --- | --- |\n| 羊毛外套 | 599.00 | Warmth |\n| 丝绸连衣裙 | 599.00 | SilkLine |\n| 珍珠项链 | 199.00 | PearlCo |\n| 针织毛衣 | 299.00 | Warmth |\n| 银戒指 | 99.00 | SilverArt |',
+     NOW() - INTERVAL '2 days' + INTERVAL '5 seconds'),
+    ('session-demo-2', 'user',
+     '本周会员复购率分析',
+     NOW() - INTERVAL '6 hours'),
+    ('session-demo-2', 'assistant',
+     '正在统计本周下单客户与历史下单客户的交集...',
+     NOW() - INTERVAL '6 hours' + INTERVAL '3 seconds'),
+    ('session-demo-2', 'user',
+     '看看是否有遗漏的用户',
+     NOW() - INTERVAL '1 hour'),
+    ('session-demo-2', 'assistant',
+     '已重新跑：本周复购用户 12 人，新购用户 28 人，流失预警 5 人。',
+     NOW() - INTERVAL '1 hour' + INTERVAL '4 seconds');
+
+SELECT setval(pg_get_serial_sequence('public.chat_messages', 'id'),
+              GREATEST(COALESCE((SELECT MAX(id) FROM public.chat_messages), 1), 6));
+
+-- ═══ public.memory_records ═══
+-- 字段：id (uuid PK, NOT NULL default True? 视 SQL)，user_id, session_id, memory_type, content,
+--       embedding (USER-DEFINED/vector, nullable),
+--       importance_score, confidence_score, access_count, created_at, last_access_at, expire_at,
+--       is_active, superseded_by
+INSERT INTO public.memory_records
+    (id, user_id, session_id, memory_type, content,
+     importance_score, confidence_score, access_count,
+     created_at, last_access_at, is_active)
+VALUES
+    ('11111111-1111-1111-1111-111111111111'::uuid,
+     'default', 'session-demo-1', 'preference',
+     '用户关注价格段 100-600 的中高客单商品，对羊毛/丝绸类目有偏好',
+     0.72, 0.85, 3,
+     NOW() - INTERVAL '2 days', NOW() - INTERVAL '6 hours', true),
+    ('22222222-2222-2222-2222-222222222222'::uuid,
+     'default', 'session-demo-2', 'fact',
+     '最近一周会员活动集中在周三 / 周日',
+     0.81, 0.93, 7,
+     NOW() - INTERVAL '5 days', NOW() - INTERVAL '1 hour', true),
+    ('33333333-3333-3333-3333-333333333333'::uuid,
+     'default', 'session-demo-2', 'tool_result',
+     'SQL 查询示例：top 5 by sale_price DESC, where status=active',
+     0.55, 1.0, 1,
+     NOW() - INTERVAL '2 days', NOW() - INTERVAL '2 days', true)
+ON CONFLICT (id) DO NOTHING;

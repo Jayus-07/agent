@@ -85,8 +85,8 @@ class ReportGenerator:
             output_dir:       报告输出目录，不为空时自动将最终 Markdown 写入文件
                              文件命名: {report_type}_{timestamp}.md
         """
-        from backend.config import DB_CONFIG
-        self.db_config = db_config or dict(DB_CONFIG)
+        from backend.config import BUSINESS_DB_CONFIG
+        self.db_config = db_config or dict(BUSINESS_DB_CONFIG)
         self.snapshot_enabled = snapshot_enabled
         self.output_dir = output_dir
         self.template_engine = TemplateEngine(template_dir)

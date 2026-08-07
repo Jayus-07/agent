@@ -147,54 +147,64 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     // — SSE v2: 按事件类型分流更新 —
+    //  设计：
+    //   - delta 文本不再回写 message.content（P0-4：避免每条 token 触发所有 bubble 重渲染）；
+    //     流式文本只写入 store.deltaText，由 StreamingBubble 单独订阅。
+    //   - done/error 终态事件清空 message.streamEvents 和 store.streamEvents（P0-5：
+    //     防止长会话累积撑爆内存；OOM 风险）。
+    //   - 通用事件（status/log/delta）按 200 上限环形追加；超长后丢弃最老。
     addStreamEvent: (evt, sessionId) => {
       set((state) => {
         const sid = targetId(state, sessionId)
-        const events = sessionId && sessionId !== state.currentId
-          ? state.streamEvents
-          : [...state.streamEvents, evt]
+        const isCurrentSession = !sessionId || sessionId === state.currentId
+
+        const MAX_STREAM_EVENTS = 200
+        let storeEvents = state.streamEvents
+        if (isCurrentSession) {
+          if (evt.event === 'meta' || evt.event === 'done') {
+            // meta 是握手事件，不入流；done 清空队列（流结束 = 全部渲染完）
+            if (evt.event === 'done') storeEvents = []
+          } else {
+            storeEvents = storeEvents.length >= MAX_STREAM_EVENTS
+              ? [...storeEvents.slice(storeEvents.length - MAX_STREAM_EVENTS + 1), evt]
+              : [...storeEvents, evt]
+          }
+        }
 
         let deltaText = state.deltaText
         let currentStatus = state.currentStatus
-        const nodeLabels = state.nodeLabels
+        let nodeLabels = state.nodeLabels
+        const isTerminal = evt.event === 'done' || evt.event === 'error'
 
-        switch (evt.event) {
-          case 'meta':
-            // 握手：接收 node_labels 映射表
-            return {
-              streamEvents: events,
-              nodeLabels: evt.data.node_labels,
-            }
-
-          case 'status':
-            // 状态切换：只存 node 名，前端自行映射
-            currentStatus = evt.data.node
-            break
-
-          case 'delta':
-            // 流式内容：累积 delta 文本
-            deltaText = state.deltaText + evt.data.content
-            break
-
-          // log / done / error 仅追加到 streamEvents 数组
+        if (evt.event === 'meta') {
+          nodeLabels = evt.data.node_labels
+        } else if (evt.event === 'status') {
+          currentStatus = evt.data.node
+        } else if (evt.event === 'delta') {
+          deltaText = state.deltaText + evt.data.content
         }
 
         // 实时更新最后一条 assistant 消息的 streamEvents
+        // - 终态：清空该字段（释放内存）
+        // - 其他事件：环形追加（200 上限）
         const sessions = state.sessions.map((s) => {
           if (s.id !== sid) return s
-          const msgs = [...s.messages]
-          const lastIdx = msgs.length - 1
-          if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
-            msgs[lastIdx] = {
-              ...msgs[lastIdx],
-              streamEvents: [...(msgs[lastIdx].streamEvents || []), evt],
-              content: evt.event === 'delta' ? msgs[lastIdx].content + evt.data.content : msgs[lastIdx].content,
+          const msgs = s.messages.map((m, idx) => {
+            if (idx !== s.messages.length - 1 || m.role !== 'assistant') return m
+            if (isTerminal) {
+              if (!m.streamEvents || m.streamEvents.length === 0) return m
+              return { ...m, streamEvents: [] }
             }
-          }
+            const cur = m.streamEvents || []
+            const next = cur.length >= MAX_STREAM_EVENTS
+              ? [...cur.slice(cur.length - MAX_STREAM_EVENTS + 1), evt]
+              : [...cur, evt]
+            return { ...m, streamEvents: next }
+          })
           return { ...s, messages: msgs, updatedAt: Date.now() }
         })
 
-        return { sessions, streamEvents: events, deltaText, currentStatus }
+        return { sessions, streamEvents: storeEvents, deltaText, currentStatus, nodeLabels }
       })
     },
 

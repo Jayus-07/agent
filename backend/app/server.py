@@ -114,6 +114,24 @@ async def eager_init_rag_pipeline():
 
 
 # ═══════════════════════════════════════════════════
+# 启动时后台预热 MultiAgent（避免首请求 5-15s 图编译）
+# ═══════════════════════════════════════════════════
+@app.on_event("startup")
+async def eager_init_multi_agent():
+    """后台异步预热 MultiAgent 运行时。失败不阻塞服务。"""
+    import threading
+    def _warmup():
+        try:
+            from backend.app.api.deps import warmup_multi_agent
+            logger.info("[Startup] 后台预热 MultiAgent 运行时...")
+            if warmup_multi_agent():
+                logger.info("[Startup] MultiAgent 预热完成")
+        except Exception as e:
+            logger.warning(f"[Startup] MultiAgent 预热异常（首请求会重试）: {e}")
+    threading.Thread(target=_warmup, daemon=True, name="agent-warmup").start()
+
+
+# ═══════════════════════════════════════════════════
 # 启动时注册 Workflow + 定时任务
 # ═══════════════════════════════════════════════════
 @app.on_event("startup")

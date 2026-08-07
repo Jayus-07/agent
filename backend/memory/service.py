@@ -215,14 +215,29 @@ class MemoryService:
     # Session CRUD（供 API 路由使用）
     # ============================================================
 
-    async def list_sessions(self, user_id: str = "default") -> dict:
-        """列出用户所有会话。"""
+    async def list_sessions(self, user_id: str = "default",
+                            limit: int = 50, before: str | None = None) -> dict:
+        """列出用户所有会话（支持分页）。
+
+        Args:
+            limit: 单次返回上限（50 / 100 / 200 等）
+            before: 游标分页 — 仅返回 updated_at < before 的会话
+        """
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
-                sessions = await repo.list_all(user_id=user_id)
+                sessions = await repo.list_all(user_id=user_id, limit=limit, before=before)
+                # 第一页（无 cursor）时返回 total；分页时 total 不变（cost）
+                # 前端可据此判断 hasMore = (已显示 < total)
+                total: int | None = None
+                if before is None:
+                    total = await repo.count_sessions(user_id=user_id)
                 await db_session.commit()
-                return {"sessions": sessions, "total": len(sessions)}
+                return {
+                    "sessions": sessions,
+                    "total": total if total is not None else len(sessions),
+                    "has_more": total is not None and len(sessions) < (total or 0),
+                }
             except Exception as e:
                 await db_session.rollback()
                 logger.error(f"[MemoryService] list_sessions 失败: {e}")

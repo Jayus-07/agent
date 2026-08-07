@@ -1,0 +1,125 @@
+{
+  "_comment": "RAG 评测 v2 — golden set adapted to actual doc_db (policy_general KB, 2 docs)。覆盖文档：1) 客服综合业务规范 2) 跨境电商平台合规规范。",
+  "test_cases": [
+    {
+      "id": "V2-R001",
+      "question": "客户要求退货，客服应该如何处理？",
+      "module": "rag",
+      "kb_id": "policy_general",
+      "expected": {
+        "relevant_docs": ["62a44c7dd7cfc933"],
+        "relevant_snippets": ["24小时内", "退货原因", "全额退款"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "after_sales"}
+    },
+    {
+      "id": "V2-R002",
+      "question": "什么是七天无理由退货？",
+      "module": "rag",
+      "kb_id": "policy_general",
+      "expected": {
+        "relevant_docs": ["62a44c7dd7cfc933"],
+        "relevant_snippets": ["七天", "无理由", "退货"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "after_sales"}
+    },
+    {
+      "id": "V2-R003",
+      "question": "商品质量问题退货流程是什么？",
+      "module": "rag",
+      "kb_id": "policy_general",
+      "expected": {
+        "relevant_docs": ["62a44c7dd7cfc933"],
+        "relevant_snippets": ["质量问题", "全额退款", "退货原因"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "after_sales"}
+    },
+    {
+      "id": "V2-R004",
+      "question": "Amazon 平台账号安全规范有哪些？",
+      "module": "rag",
+      "kb_id": "policy_general",
+      "expected": {
+        "relevant_docs": ["d5fdcafa0b404f61"],
+        "relevant_snippets": ["账号安全", "固定IP", "账号关联"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "compliance"}
+    },
+    {
+      "id": "V2-R005",
+      "question": "跨境电商如何避免账号关联？",
+      "module": "rag",
+      "kb_id": "policy_general",
+      "expected": {
+        "relevant_docs": ["d5fdcafa0b404f61"],
+        "relevant_snippets": ["账号关联", "IP", "Cookie"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "hard", "domain": "compliance"}
+    },
+    {
+      "id": "V2-R006",
+      "question": "客服处理客户投诉的第一步是什么？",
+      "module": "rag",
+      "kb_id": "policy_general",
+      "expected": {
+        "relevant_docs": ["62a44c7dd7cfc933"],
+        "relevant_snippets": ["24小时内", "联系", "核实"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "after_sales"}
+    },
+    {
+      "id": "V2-R007",
+      "question": "客户因不喜欢要求退货，应该怎么处理？",
+      "module": "rag",
+      "kb_id": "policy_general",
+      "expected": {
+        "relevant_docs": ["62a44c7dd7cfc933"],
+        "relevant_snippets": ["不喜欢", "无理由"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "after_sales"}
+    },
+    {
+      "id": "V2-R008",
+      "question": "Amazon 平台一公司可以开几个账号？",
+      "module": "rag",
+      "kb_id": "policy_general",
+      "expected": {
+        "relevant_docs": ["d5fdcafa0b404f61"],
+        "relevant_snippets": ["一公司", "账号"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "medium", "domain": "compliance"}
+    },
+    {
+      "id": "V2-R009",
+      "question": "退货审核时间是多久？",
+      "module": "rag",
+      "kb_id": "policy_general",
+      "expected": {
+        "relevant_docs": ["62a44c7dd7cfc933"],
+        "relevant_snippets": ["24小时"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "after_sales"}
+    },
+    {
+      "id": "V2-R010",
+      "question": "跨境电商合规要求是什么？",
+      "module": "rag",
+      "kb_id": "policy_general",
+      "expected": {
+        "relevant_docs": ["d5fdcafa0b404f61"],
+        "relevant_snippets": ["合规", "规范"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {"difficulty": "easy", "domain": "compliance"}
+    }
+  ]
+}

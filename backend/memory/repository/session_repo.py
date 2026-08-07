@@ -53,9 +53,17 @@ class SessionRepository:
         count = await self.message_count(session_id)
         return count >= max_messages
 
-    async def list_all(self, user_id: str = "default", limit: int = 50) -> list[dict]:
-        """列出用户的所有会话（id + 标题 + 消息数 + 时间）"""
+    async def list_all(self, user_id: str = "default", limit: int = 50,
+                       before: str | None = None) -> list[dict]:
+        """列出用户的所有会话（id + 标题 + 消息数 + 时间）。
+
+        Args:
+            limit: 最多返回 N 条（默认 50，硬上限 200）
+            before: 游标分页 ISO timestamp，仅返回 updated_at < before 的会话；
+                    用于下拉刷新"加载更早"。
+        """
         from sqlalchemy import desc
+        limit = max(1, min(limit, 200))
         q = (
             select(
                 ChatSession.session_id,
@@ -72,6 +80,14 @@ class SessionRepository:
             .order_by(desc(ChatSession.updated_at))
             .limit(limit)
         )
+        if before:
+            try:
+                from datetime import datetime as _dt
+                cursor = _dt.fromisoformat(before.replace("Z", "+00:00"))
+                q = q.where(ChatSession.updated_at < cursor)
+            except (ValueError, AttributeError):
+                # 非法 cursor 静默忽略 → 退化为第一页
+                pass
         result = await self._s.execute(q)
         rows = result.all()
         return [
@@ -85,6 +101,13 @@ class SessionRepository:
             }
             for row in rows
         ]
+
+    async def count_sessions(self, user_id: str = "default") -> int:
+        """统计用户会话总数，配合 list_all 用于 hasMore 判断"""
+        result = await self._s.execute(
+            select(func.count()).select_from(ChatSession).where(ChatSession.user_id == user_id)
+        )
+        return int(result.scalar() or 0)
 
     async def delete(self, session_id: str) -> bool:
         """删除会话（级联删除 messages）"""

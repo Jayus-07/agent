@@ -31,6 +31,7 @@ class SQLValidator:
 
     def __init__(self):
         self.allowed_tables = schema_loader.allowed_tables
+        self.allowed_schemas = schema_loader.allowed_schemas
         self.sensitive_columns = schema_loader.sensitive_columns
         self.banned_functions = schema_loader.banned_functions
         self.max_limit = schema_loader.max_limit
@@ -80,22 +81,60 @@ class SQLValidator:
     # =================================================
 
     def _extract_table_names(self, parsed: list) -> Set[str]:
-        """从 AST 中提取所有被引用的表名"""
+        """从 AST 中提取所有被引用的表名（schema-qualified）。
+
+        兼容两种形式：
+          1) `product.products` —— db='product', name='products' → 拼成 `product.products`
+          2) `products` —— 仅 name，无 db → 视为缺省域
+
+        返回集合元素是 schema_loader.allowed_tables 用的 key（schema-qualified 或裸名）。
+        """
         tables = set()
         stmt = parsed[0]
         for table in stmt.find_all(exp.Table):
             name = table.name.lower()
-            tables.add(name)
+            db = (table.db or "").lower() if hasattr(table, "db") else ""
+            if db:
+                qname = f"{db}.{name}"
+            else:
+                # 裸名：若是 schema-qualified key（包含点）就保留原样
+                qname = name
+            tables.add(qname)
         return tables
 
     def _check_table_allowlist(self, table_names: Set[str]) -> None:
-        """检查所有表名是否在白名单中"""
-        for tname in table_names:
-            if tname not in self.allowed_tables:
-                raise ValidationError(
-                    f"禁止访问表 '{tname}'，白名单: {sorted(self.allowed_tables)}",
-                    layer=2,
-                )
+        """检查所有表名是否在白名单中。
+
+        三种合法输入：
+          1. `schema.table` 全限定名 — 直接命中 self.allowed_tables
+          2. 裸 `table` 名（无 schema） — 必须命中某个 schema 下的表，否则拒
+          3. `schema` 同时须在 self.allowed_schemas 中（防止 schema 不存在被绕过）
+        """
+        for qname in table_names:
+            schema_name, table_name = schema_loader.split_qualified(qname)
+
+            # 形式 1：schema-qualified 全限定
+            if qname in self.allowed_tables:
+                if schema_name and schema_name not in self.allowed_schemas:
+                    raise ValidationError(
+                        f"禁止访问 schema '{schema_name}'，白名单: {sorted(self.allowed_schemas)}",
+                        layer=2,
+                    )
+                continue
+
+            # 形式 2：裸表名（无 schema）— 尝试在所有 schema 中查找
+            if not schema_name:
+                matched = [
+                    q for q in self.allowed_tables
+                    if q.split(".", 1)[-1] == qname
+                ]
+                if matched:
+                    continue
+
+            raise ValidationError(
+                f"禁止访问表 '{qname}'，白名单: {sorted(self.allowed_tables)}",
+                layer=2,
+            )
 
     # =================================================
     # Layer 3: 列级安全 — 敏感列直接拒绝

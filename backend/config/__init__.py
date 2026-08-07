@@ -1,18 +1,18 @@
 """config — 配置管理（按模块拆分）
 
-按 CLAUDE.md '按模块拆分，禁止一个 config.py 管所有' 拆为:
-  - settings.py    通用配置（超时、日志等级）
-  - database.py    数据路径 + PostgreSQL 连接
-  - llm.py         LLM 配置（模型、API Key、超时）
-  - rag.py         RAG 检索配置（chunks、citation、multi_query）
-  - memory.py      记忆系统配置（L1/L2/L3）
-  - logging.py     日志配置（log 等级 + 文件）
-  - storage.py     存储路径（chroma/bm25/docs 等）
-  - mcp.py         MCP 配置（当前为空，保留扩展点）
-
-向后兼容: backend.config.X 与旧路径一一对应。
+.env 加载策略: 从项目根目录 agent/.env 加载（无论 CWD 在哪）。
+子模块（database/llm/rag/...）中的 load_dotenv() 会被根 .env 的
+值覆盖（override=False），因此只需根 .env 一份配置。
 """
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# 计算项目根目录: config/__init__.py → backend/config/ → backend/ → agent/
+_ROOT = Path(__file__).resolve().parent.parent.parent
+_ENV_PATH = _ROOT / ".env"
+if _ENV_PATH.exists():
+    load_dotenv(_ENV_PATH)
 
 # 并发控制
 MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "5"))
@@ -45,8 +45,15 @@ from backend.config.database import (
     DOCS_DIRECTORY,
     DOC_REGISTRY_PATH,
     DOC_OPERATION_LOG_PATH,
-    ENABLE_INCREMENTAL_INDEXING,
+    ENABLE_INCREMENTAL_INDEX,
     DB_CONFIG,
+    MEMORY_DB_CONFIG,
+    BUSINESS_DB_CONFIG,
+    BUSINESS_DB_READONLY_CONFIG,
+    DB_POOL_MIN_CONN,
+    DB_POOL_MAX_CONN,
+    DB_CONNECT_TIMEOUT,
+    DB_KEEPALIVES_IDLE,
 )
 # LLM
 from backend.config.llm import (
@@ -172,7 +179,8 @@ __all__ = [
     "LOG_LEVEL", "LOG_FILE", "OVERALL_REQUEST_TIMEOUT",
     # database
     "BM25_INDEX_DIR", "CHROMA_PATH", "DOC_DB_PATH", "DOCS_DIRECTORY",
-    "DOC_REGISTRY_PATH", "DOC_OPERATION_LOG_PATH", "ENABLE_INCREMENTAL_INDEXING", "DB_CONFIG",
+    "DOC_REGISTRY_PATH", "DOC_OPERATION_LOG_PATH", "ENABLE_INCREMENTAL_INDEX", "DB_CONFIG", "MEMORY_DB_CONFIG", "BUSINESS_DB_CONFIG",
+    "BUSINESS_DB_READONLY_CONFIG", "DB_POOL_MIN_CONN", "DB_POOL_MAX_CONN", "DB_CONNECT_TIMEOUT", "DB_KEEPALIVES_IDLE",
     # llm
     "LLM_MODEL", "LLM_TEMPERATURE", "LLM_CONTEXT_LENGTH", "LLM_MAX_CONCURRENCY",
     "LLM_REQUEST_TIMEOUT", "DEEPSEEK_API_KEY", "DEEPSEEK_API_BASE",

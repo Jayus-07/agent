@@ -57,7 +57,8 @@ class _FakeService:
     def __init__(self, payload: dict):
         self._payload = payload
 
-    async def list_sessions(self, user_id: str = "default") -> dict:
+    # 注：路由会传 limit/before（P1-12 加的分页参数）；fake 接收可变参数忽略
+    async def list_sessions(self, user_id: str = "default", **_: object) -> dict:
         return self._payload
 
     async def delete_session(self, session_id: str) -> dict:
@@ -106,7 +107,7 @@ def test_memory_db_unavailable_is_handled_as_503(client_factory):
     """配置缺失异常应命中专用 handler → 503，而不是落到 500 兜底"""
 
     class _BrokenService:
-        async def list_sessions(self, user_id: str = "default") -> dict:
+        async def list_sessions(self, user_id: str = "default", **_: object) -> dict:
             raise MemoryDatabaseUnavailable("PostgreSQL 连接配置缺失: PGPASSWORD")
 
     client = client_factory(_BrokenService())

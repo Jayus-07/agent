@@ -1,5 +1,5 @@
 """
-planner.py — Planner 节点
+planner.py — Planner 节点（P2 性能优化：LRU 缓存）
 
 职责:
   - 理解用户问题
@@ -9,15 +9,66 @@ planner.py — Planner 节点
 
 Planner 只输出 capability，不指定具体 tool。
 Tool 选择由 Supervisor + ToolRegistry 完成。
+
+缓存策略（P2 perf）:
+  - 相同问题 + 相同 capability 集合 → 5min TTL 缓存
+  - LRU 淘汰，最多 64 条
+  - 不同 kb_id 视为不同请求（不同知识库可能有不同 plan）
 """
 
+import hashlib
 import json
+import threading
+import time
 
 from backend.infra.llm import llm
 from backend.orchestration.tool_registry import tool_registry
 from backend.observability.alerts import make_alert, log_degradation
 from backend.prompts.planner import PLANNER_SYSTEM, is_knowledge_question
 from backend.shared.logger import logger
+
+# ── P2 性能优化：Planner 缓存 ──
+_PLAN_CACHE: dict[str, tuple[float, dict]] = {}
+_cache_lock = threading.Lock()
+_CACHE_TTL = 300  # 5 分钟
+_CACHE_MAX = 64
+
+
+def _cache_key(question: str, kb_id: str) -> str:
+    """缓存键：问题 + KB ID 的 hash。"""
+    caps = tuple(sorted(tool_registry.get_available_capabilities()))
+    raw = f"{question}|{kb_id}|{caps}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+def _cache_get(question: str, kb_id: str) -> dict | None:
+    key = _cache_key(question, kb_id)
+    _cache_lock.acquire()
+    try:
+        now = time.time()
+        expired = [k for k, v in _PLAN_CACHE.items() if now - v[0] > _CACHE_TTL]
+        for k in expired:
+            del _PLAN_CACHE[k]
+        if key in _PLAN_CACHE:
+            ts, plan = _PLAN_CACHE[key]
+            if now - ts <= _CACHE_TTL:
+                return plan
+            del _PLAN_CACHE[key]
+    finally:
+        _cache_lock.release()
+    return None
+
+
+def _cache_set(question: str, kb_id: str, plan: dict) -> None:
+    key = _cache_key(question, kb_id)
+    _cache_lock.acquire()
+    try:
+        if len(_PLAN_CACHE) >= _CACHE_MAX:
+            oldest = min(_PLAN_CACHE.items(), key=lambda x: x[1][0])
+            del _PLAN_CACHE[oldest[0]]
+        _PLAN_CACHE[key] = (time.time(), plan)
+    finally:
+        _cache_lock.release()
 
 
 # =====================================================
@@ -61,6 +112,12 @@ def planner_node(state: dict) -> dict:
         logger.warning("[Planner] 空问题，返回空 plan")
         return {"plan": {"nodes": {}, "edges": {}}}
 
+    # ── P2 性能优化：缓存命中 → 跳过 LLM ──
+    cached = _cache_get(question, kb_id)
+    if cached is not None:
+        logger.info(f"[Planner] 缓存命中 → {len(cached.get('nodes',{}))} 节点")
+        return {"plan": cached}
+
     capabilities_schema = _format_capabilities_schema()
     cap_example = tool_registry.get_available_capabilities()[0]
 
@@ -94,6 +151,9 @@ def planner_node(state: dict) -> dict:
         node_count = len(plan.get("nodes", {}))
         edge_count = len(plan.get("edges", {}))
         logger.info(f"[Planner] 计划生成: {node_count} 个节点, {edge_count} 条依赖")
+
+        # P2 perf: 写入缓存
+        _cache_set(question, kb_id, plan)
 
         # 兜底：空计划 → 自动添加 search_knowledge 步骤
         if not plan.get("nodes"):

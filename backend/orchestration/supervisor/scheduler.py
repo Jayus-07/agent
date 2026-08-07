@@ -227,13 +227,25 @@ def route_after_supervisor(state: dict) -> str | list:
         sends = []
         for item in ready:
             degraded = frozenset(state.get("_degraded_steps", set()) or set())
+            plan = state.get("plan", {})
+            edges = plan.get("edges", {})
+            step_results = state.get("step_results", {})
+
+            # 注入前置步骤的输出，支持 Capability 间数据传递
+            # 例如 business.analyze 依赖 sql.query → 从 step_results["1"].output 取 SQLResult
+            previous_outputs = {
+                dep_id: step_results.get(dep_id, {}).get("output")
+                for dep_id in edges.get(item["step_id"], [])
+            }
+
             sends.append(
                 Send(item["worker"], {
                     "question": state.get("question", ""),
                     "kb_id": state.get("kb_id", "default"),
-                    "plan": state.get("plan", {}),
-                    "step_results": state.get("step_results", {}),
+                    "plan": plan,
+                    "step_results": step_results,
                     "current_step_id": item["step_id"],
+                    "previous_outputs": previous_outputs,
                     "messages": state.get("messages", []),
                     "final_answer": state.get("final_answer", ""),
                     "alerts": state.get("alerts", []),

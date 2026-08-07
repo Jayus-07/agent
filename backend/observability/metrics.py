@@ -26,7 +26,7 @@ from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_
 chat_request_total = Counter(
     "chat_request_total",
     "Total chat API requests by final status",
-    labelnames=("status",),  # ok | error | rejected
+    labelnames=("status",),  # ok | error | rejected | aborted
 )
 
 chat_request_duration_seconds = Histogram(
@@ -47,6 +47,19 @@ skill_failure_total = Counter(
     labelnames=("skill", "error_type"),
 )
 
+# ── 流式事件可观测性（P0-1：SSE 队列 backpressure 丢弃计数）──
+chat_stream_event_dropped_total = Counter(
+    "chat_stream_event_dropped_total",
+    "SSE 流式事件被 backpressure / 异常 丢弃的次数",
+    labelnames=("reason",),  # queue_full | producer_error
+)
+
+chat_stream_event_produced_total = Counter(
+    "chat_stream_event_produced_total",
+    "SSE 流式事件由 LangGraph 产出的总数（按事件类型）",
+    labelnames=("event",),  # status | delta | log | done | error | meta
+)
+
 
 def render_metrics() -> tuple[bytes, str]:
     """生成 Prometheus 文本格式输出。
@@ -62,5 +75,7 @@ __all__ = [
     "chat_request_duration_seconds",
     "llm_tokens_total",
     "skill_failure_total",
+    "chat_stream_event_dropped_total",
+    "chat_stream_event_produced_total",
     "render_metrics",
 ]

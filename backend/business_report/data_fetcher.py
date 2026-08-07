@@ -262,8 +262,8 @@ class SQLFetcher(DataFetcher):
     """从 PostgreSQL 获取数据"""
 
     def __init__(self, db_config: dict = None):
-        from backend.config import DB_CONFIG
-        self.db_config = db_config or dict(DB_CONFIG)
+        from backend.config import BUSINESS_DB_CONFIG
+        self.db_config = db_config or dict(BUSINESS_DB_CONFIG)
 
     def fetch(self, config: dict, filters: dict = None) -> Dict[str, Any]:
         """

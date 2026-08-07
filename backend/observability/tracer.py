@@ -209,11 +209,32 @@ class TraceCollector:
           type:       llm_call|retrieval|rerank|agent|tool_call|...（省略按 span_id 推断）
           kind:       SpanKind 枚举值（强约束，默认 TOOL）
           input:      输入快照（可选）
+
+        Returns:
+            Span 对象。如果当前没有 active trace（contextvar + thread field 都为空），
+            返回一个 noop Span（不抛 RuntimeError），让业务代码继续运行。
+            这样 LangGraph 在不同 thread 调用时即使 trace 未传播也不会崩溃。
         """
         # 优先 contextvar（async 隔离），fallback 实例字段（threadpool 共享）
         trace = _current_trace_var.get() or self._thread_current
         if trace is None:
-            raise RuntimeError("start_span() 必须在 start() 之后调用")
+            # 软失败：返回 noop Span，避免业务阻塞
+            # Why: LangGraph Send + RAG chain 在不同 thread 调用时，
+            # trace 上下文可能丢失，硬抛错会让前端 SSE 流永远卡住。
+            from backend.shared.logger import logger
+            logger.debug(
+                f"[Tracer] start_span('{span_id}') 但无 active trace — 返回 noop span"
+            )
+            return Span(
+                span_id=span_id,
+                parent_id=parent_id,
+                name=name or span_id,
+                type=type or _TYPE_INFER.get(span_id, "tool_call"),
+                kind=kind or SpanKind.TOOL.value,
+                start_time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                sequence=-1,
+                input=input,
+            )
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         # parent_id 未传 → 取当前 root_span_id（必须已有 root）
         if parent_id is None and span_id != trace.root_span_id:

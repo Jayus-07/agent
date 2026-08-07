@@ -62,14 +62,25 @@ def generate_final_answer(
         if _is_step_successful(sr)
     }
     if not all_success:
-        failed_info = []
+        failed_descs = []
         for sid, sr in step_results.items():
-            err = sr.get("error", "") or str(sr.get("output", ""))[:60]
             desc = sr.get("description", sid)
-            failed_info.append(f"- {desc}: {err}" if err else f"- {desc}")
-        detail = "\n".join(failed_info) if failed_info else "所有步骤均未产生有效结果"
+            err = sr.get("error", "")
+            if err and _is_technical_error(err):
+                # 技术错误不暴露给用户，只记日志
+                logger.error(f"[Reporter] step={sid} 技术错误: {err[:200]}")
+                failed_descs.append(f"- {desc}: 服务暂时不可用")
+            elif err:
+                failed_descs.append(f"- {desc}: {err[:100]}")
+            else:
+                failed_descs.append(f"- {desc}: 未找到相关信息")
         logger.info(f"[Reporter] 无有效输出，返回降级提示")
-        return f"## 抱歉\n\n未能找到与「{question[:60]}」相关的信息。\n\n{detail}\n\n建议换个关键词或查阅其他资料。"
+        return (
+            f"## 抱歉\n\n"
+            f"未能找到与「{question[:60]}」相关的信息。\n\n"
+            + "\n".join(failed_descs) +
+            f"\n\n建议换个关键词或查阅其他资料。"
+        )
 
     # Context Filter
     if context_filter:
@@ -107,6 +118,31 @@ def generate_final_answer(
 
     logger.info(f"[Reporter] 汇总 {len(step_results)} 个步骤结果...")
 
+    # ── P2 性能优化：结构化渲染（0ms 模板）+ LLM 一句话总结（~2s）──
+    structured = _render_structured_sections(step_results)
+    if structured:
+        try:
+            # LLM 只写一句话执行摘要（<50 tokens）
+            data_summary = _build_data_summary(step_results)
+            resp = llm.invoke(
+                f"""根据以下数据一句话总结业务状况（不超过50字）:
+
+{data_summary}
+
+直接输出总结，不要格式:"""
+            )
+            summary = resp.content.strip()
+            final = f"## {summary}\n\n{structured}"
+            if rag_references:
+                final = final + rag_references
+            logger.info(f"[Reporter] 结构化报告: {len(final)} 字符")
+            return final
+        except Exception as e:
+            logger.warning(f"[Reporter] LLM 一句话总结失败，降级: {e}")
+            final = f"## 数据分析报告\n\n{structured}"
+            return final
+
+    # ── 非结构化数据：走完整 LLM 路径（与旧行为一致）──
     try:
         resp = llm.invoke([
             ("system", REPORTER_SYSTEM),
@@ -128,6 +164,17 @@ def generate_final_answer(
 # =====================================================
 # 辅助函数
 # =====================================================
+
+def _is_technical_error(error: str) -> bool:
+    """判断错误是否为技术性错误（不应暴露给用户）。"""
+    tech_patterns = [
+        "Expected where value", "ChromaDB", "chromadb",
+        "psycopg2", "connection", "timeout",
+        "SQLSTATE", "syntax error", "Traceback",
+        "ModuleNotFoundError", "ImportError",
+    ]
+    return any(p.lower() in error.lower() for p in tech_patterns)
+
 
 def _is_step_successful(result: dict) -> bool:
     """检查步骤是否真正成功（结构化判断）"""
@@ -235,6 +282,122 @@ def _format_step_outputs(step_results: dict[str, dict], strip_references: bool =
         else:
             parts.append(f"{header}\n状态: ⏳ {status}\n")
     return "\n".join(parts) if parts else ""
+
+
+def _render_structured_sections(step_results: dict) -> str:
+    """对结构化数据（SQLResult dict + BusinessInsight dict）进行模板渲染。
+
+    返回 Markdown 字符串，或 ""（数据非结构化时回退到 LLM 路径）。
+    """
+    sections = []
+    for step_id, sr in sorted(step_results.items()):
+        if sr.get("status") != "success":
+            continue
+        output = sr.get("output")
+        if not isinstance(output, dict):
+            continue
+
+        capability = sr.get("capability", "")
+        description = sr.get("description", step_id)
+
+        # SQLResult → 表格
+        if "columns" in output and "rows" in output and capability == "sql.query":
+            columns = output.get("columns", [])
+            rows = output.get("rows", [])
+            if columns and rows:
+                section = _render_table_section(description, columns, rows)
+                sections.append(section)
+
+        # BusinessInsight → 风险+建议
+        elif "summary" in output and "risks" in output:
+            section = _render_insight_section(description, output)
+            sections.append(section)
+
+    # 只有同时有表格和洞察时才走结构化路径
+    if len(sections) >= 2:
+        return "\n\n---\n\n".join(sections)
+    return ""
+
+
+def _render_table_section(description: str, columns: list[str], rows: list[dict]) -> str:
+    """渲染 SQL 结果为 Markdown 表格。"""
+    # 表头
+    header = "| " + " | ".join(str(c) for c in columns) + " |"
+    sep = "|" + "|".join(":---:" for _ in columns) + "|"
+
+    # 数据行（最多 20 行）
+    display_rows = rows[:20]
+    data_lines = []
+    for row in display_rows:
+        vals = [str(row.get(c, "")) for c in columns]
+        data_lines.append("| " + " | ".join(vals) + " |")
+
+    lines = [
+        f"### {description}",
+        "",
+        header,
+        sep,
+    ] + data_lines
+
+    if len(rows) > 20:
+        lines.append(f"\n*(共 {len(rows)} 行，仅显示前 20 行)*")
+
+    return "\n".join(lines)
+
+
+def _render_insight_section(description: str, output: dict) -> str:
+    """渲染 BusinessInsight 为风险+建议列表。"""
+    lines = [f"### {description}", ""]
+
+    summary = output.get("summary", "")
+    if summary:
+        lines.append(f"> {summary}")
+        lines.append("")
+
+    risks = output.get("risks", [])
+    if risks:
+        lines.append("**风险:**")
+        for r in risks:
+            lines.append(f"- ⚠️ {r}")
+        lines.append("")
+
+    suggestions = output.get("suggestions", [])
+    if suggestions:
+        lines.append("**建议:**")
+        for s in suggestions:
+            lines.append(f"- 💡 {s}")
+        lines.append("")
+
+    confidence = output.get("confidence", None)
+    if confidence is not None:
+        bar = "█" * max(1, int(confidence * 10))
+        lines.append(f"*置信度: {bar} {confidence:.0%}*")
+
+    return "\n".join(lines)
+
+
+def _build_data_summary(step_results: dict) -> str:
+    """从结构化结果构建一句话数据摘要（供 LLM 总结用）。"""
+    parts = []
+    for sr in step_results.values():
+        if sr.get("status") != "success":
+            continue
+        output = sr.get("output")
+        if not isinstance(output, dict):
+            continue
+
+        row_count = output.get("row_count", 0)
+        tables = output.get("tables", [])
+
+        if "risks" in output:
+            parts.append(f"风险: {len(output.get('risks',[]))}个")
+        if "summary" in output and output["summary"]:
+            parts.append(output["summary"][:80])
+        if row_count:
+            tables_str = ", ".join(tables[:3]) if tables else "数据"
+            parts.append(f"查询{tables_str}返回{row_count}行")
+
+    return "; ".join(parts) if parts else "无摘要"
 
 
 def _fallback_summary(question: str, step_results: dict, error: str) -> str:
