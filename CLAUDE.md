@@ -42,7 +42,7 @@ API → Router → Planner → Critique → Supervisor → Skills → Reporter
 }
 ```
 
-### 已注册 Capability（10 个）
+### 已注册 Capability（9 个）
 
 | capability | Skill | 节点名 |
 |---|---|---|
@@ -74,7 +74,7 @@ SQLSkill → SQLAgent → Router → Generator → Validator(6层) → RowSecuri
 
 ### 数据库
 
-7 schema × 19 表: product / order / inventory / customer / crawler / finance / ai
+7 schema × 18 表: product / order / inventory / customer / crawler / finance / ai
 连接池: ThreadedConnectionPool（min=2, max=10）
 只读账号: agent_readonly（scram-sha-256 认证）
 Migration: `sql/migrations/001~005`
@@ -114,5 +114,5 @@ E2E: `cd backend && python e2e_demo.py`
 
 ## Docs
 
-设计文档: `docs/superpowers/specs/`
-记忆: `memory/`（项目级，CLAUDE.md 为索引）
+设计文档: `docs/README.md`（7 个顶层文档 + 7 个关键深读）
+记忆: 用户级 `~/.claude/projects/<project>/memory/MEMORY.md`（按项目分类的会话记忆）
