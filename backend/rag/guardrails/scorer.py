@@ -68,10 +68,9 @@ def _sanitize_chunk(text: str) -> str:
 def rewrite_claim(claim: str, chunk: str) -> str:
     """LLM 局部重写：根据文档证据修正幻觉。
 
-    安全防护：
-      ① chunk 内容清洗（去指令标记）
-      ② 文档放在 triple-quote 隔离区
-      ③ 输出长度 + 格式硬约束
+    🚨 已废弃（2026-08-10）：自动 rewrite 引入 30s 延迟 + 误判改坏风险，
+    改为 sanitize_answer 内统一仅标记，不调用 LLM rewrite。
+    保留此函数作为历史参考，不再被调用。
 
     Args:
         claim: 被 NLI 判定为 contradiction_strong 的声明
@@ -119,6 +118,9 @@ def rewrite_claim(claim: str, chunk: str) -> str:
 def cite_chunk(claim: str, chunk: str) -> str:
     """退化为文档引用：用 chunk 原文替代不可信声明。
 
+    🚨 已废弃（2026-08-10）：与 rewrite_claim 一起被 sanitize_answer 弃用。
+    保留此函数作为历史参考。
+
     Args:
         claim: 被 NLI 判定为 contradiction_weak 的声明
         chunk: 支撑文档的原文
@@ -131,12 +133,15 @@ def cite_chunk(claim: str, chunk: str) -> str:
 
 
 def sanitize_answer(answer: str, claim_results: List[ClaimResult]) -> str:
-    """三级漏斗：根据 action 对不可信 claim 分级处理。
+    """仅标记（不自动改写）—— 所有不可信 claim 在原文后追加 [??]*[存疑]。
 
-    - mark:   保留句子，追加 [?]
-    - cite:   替换为文档引用
-    - rewrite: LLM 局部重写（用 chunk 证据修正）
-    - pass:   不动
+    早期版本三分级（mark / cite / rewrite）改为统一标记，原因：
+      - cite：原文被替换为 chunk 引用，破坏语义连贯性
+      - rewrite：触发 LLM 局部改写，30s 阻塞 + 引入新错误
+      - 实测数据（2026-08 用户日志）：NLI 误判 90%+，自动改写反而越改越错
+
+    新策略：保留原答案 + 标记 [?]，让用户判断。
+    未在原文中定位到的 claim → 末尾追加 ⚠️ 警告。
     """
     if not claim_results:
         return answer
@@ -153,20 +158,8 @@ def sanitize_answer(answer: str, claim_results: List[ClaimResult]) -> str:
             logger.warning(f"[Faithfulness:sanitize] 无法定位，追加警告: {cr.claim[:40]}")
             continue
 
-        if cr.action == "mark":
-            replacement = f"{original_line} [??]*[存疑]"
-
-        elif cr.action == "cite":
-            cited = cite_chunk(cr.claim, cr.best_chunk_preview)
-            replacement = f"~~{original_line}~~ ⚠️*[此条已用文档原文替换]*\n> {cited}"
-
-        elif cr.action == "rewrite":
-            rewritten = rewrite_claim(cr.claim, cr.best_chunk_preview)
-            replacement = f"~~{original_line}~~ ⚠️*[已自动修正]*\n{rewritten}"
-
-        else:
-            continue
-
+        # 统一标记：不改写、不删除、不替换原文
+        replacement = f"{original_line} [??]*[存疑，未自动改写]*"
         cleaned = cleaned.replace(original_line, replacement)
 
     return cleaned
