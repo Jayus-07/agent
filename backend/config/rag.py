@@ -131,6 +131,10 @@ NLI_MODEL_PATH = os.getenv(
 )
 NLI_TOP_K_CHUNKS = int(os.getenv("NLI_TOP_K_CHUNKS", "2"))
 NLI_SCORE_THRESHOLD = float(os.getenv("NLI_SCORE_THRESHOLD", "0.5"))
+# NLI 推理超时（秒）：触发后跳过 Faithfulness，避免 60s+ 阻塞
+NLI_TIMEOUT = int(os.getenv("NLI_TIMEOUT", "30"))
+# Faithfulness 跳过阈值：unsupported 比例超过此值时跳过 rewrite（可能为 NLI 误判）
+FAITHFULNESS_SKIP_THRESHOLD = float(os.getenv("FAITHFULNESS_SKIP_THRESHOLD", "0.5"))
 
 # ====================================
 # Evidence Gate — RAG 主动拒答

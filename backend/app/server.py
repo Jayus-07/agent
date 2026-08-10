@@ -132,6 +132,27 @@ async def eager_init_multi_agent():
 
 
 # ═══════════════════════════════════════════════════
+# 启动时后台预热 NLI 模型（避免首请求 5-10s Faithfulness 延迟）
+# ═══════════════════════════════════════════════════
+@app.on_event("startup")
+async def eager_init_nli_model():
+    """后台预热 NLI 校验模型（~500MB），首请求 Faithfulness 校验无延迟。
+
+    失败不阻塞启动，懒加载兜底（首次调用时仍会触发加载）。
+    """
+    import threading
+    def _warmup():
+        try:
+            from backend.rag.guardrails.nli_checker import _get_nli_model
+            logger.info("[Startup] 后台预热 NLI 模型...")
+            _get_nli_model()
+            logger.info("[Startup] NLI 模型预热完成")
+        except Exception as e:
+            logger.warning(f"[Startup] NLI 模型预热失败（首请求会重试）: {e}")
+    threading.Thread(target=_warmup, daemon=True, name="nli-warmup").start()
+
+
+# ═══════════════════════════════════════════════════
 # 启动时注册 Workflow + 定时任务
 # ═══════════════════════════════════════════════════
 @app.on_event("startup")

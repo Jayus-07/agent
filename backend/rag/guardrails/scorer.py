@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from backend.config import ENABLE_FAITHFULNESS
+from backend.config import ENABLE_FAITHFULNESS, FAITHFULNESS_SKIP_THRESHOLD
 from backend.rag.guardrails.claim_extractor import extract_claims
 from backend.rag.guardrails.risk_filter import filter_claims
 from backend.rag.guardrails.nli_checker import check_claims_batch
@@ -244,9 +244,24 @@ def check_faithfulness(
 
     score = supported / len(nli_results) if nli_results else 1.0
 
+    # P2: 50% 阈值保护 — NLI 误判保护
+    # 当 unsupported 比例超过阈值（默认 50%）时，跳过 rewrite，保留原答案
+    # 避免 NLI 模型在中文弱场景下大量误判后，LLM 反复改写引入更多错误
+    unsupported_ratio = unsupported / len(nli_results) if nli_results else 0.0
+    skip_rewrite = unsupported_ratio > FAITHFULNESS_SKIP_THRESHOLD
+    if skip_rewrite:
+        logger.warning(
+            f"[Faithfulness] {unsupported}/{len(nli_results)} 不可信 "
+            f"({unsupported_ratio:.0%} > {FAITHFULNESS_SKIP_THRESHOLD:.0%})，"
+            f"可能为 NLI 模型误判，跳过 rewrite 保留原答案"
+        )
+
     # 5. 三级漏斗修复
     problem_claims = [cr for cr in claim_results if cr.action != "pass"]
-    cleaned = sanitize_answer(answer, problem_claims) if problem_claims else answer
+    if problem_claims and not skip_rewrite:
+        cleaned = sanitize_answer(answer, problem_claims)
+    else:
+        cleaned = answer
 
     result = FaithfulnessResult(
         score=round(score, 4),

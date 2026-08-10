@@ -172,6 +172,7 @@ from backend.config.rag import (
 # Faithfulness (NLI answer verification)
 from backend.config.rag import (
     ENABLE_FAITHFULNESS, NLI_MODEL_PATH, NLI_TOP_K_CHUNKS, NLI_SCORE_THRESHOLD,
+    NLI_TIMEOUT, FAITHFULNESS_SKIP_THRESHOLD,
 )
 
 __all__ = [
@@ -218,6 +219,7 @@ __all__ = [
     "FILTER_ENABLE_PII_MASK",
     # faithfulness
     "ENABLE_FAITHFULNESS", "NLI_MODEL_PATH", "NLI_TOP_K_CHUNKS", "NLI_SCORE_THRESHOLD",
+    "NLI_TIMEOUT", "FAITHFULNESS_SKIP_THRESHOLD",
     # email
     "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM",
 ]
