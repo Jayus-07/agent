@@ -70,6 +70,8 @@ def extract_claims(text: str) -> List[str]:
         # 去掉 markdown 格式干扰
         clean = re.sub(r'\*\*|__|~~|`', '', s)
         clean = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', clean)  # [text](url)
+        # 去掉 citation 标记 [1][2][3]（NLI 模型对 [1] 极为敏感，见 nli_checker 诊断）
+        clean = re.sub(r'\s*\[\d+(?:,\d+)*\]', '', clean)
         # 去掉编号前缀
         clean = _STRIP_NUMBERING.sub('', clean).strip()
 

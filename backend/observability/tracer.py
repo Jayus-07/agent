@@ -29,6 +29,7 @@ _TYPE_INFER: dict[str, str] = {
     "query_rewrite": "llm_call",
     "hybrid_retrieval": "retrieval",
     "retrieval": "retrieval",
+    "chunk_retrieval": "retrieval",
     "rerank": "rerank",
     "mq_check": "tool_call",
     "citation": "tool_call",

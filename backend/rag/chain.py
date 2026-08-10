@@ -636,14 +636,21 @@ class RAGChain:
           将 check_faithfulness + rewrite_claim 拆为独立 LangGraph 节点，
           _evaluate() 改为返回 FaithfulnessResult 而非直接改写 answer。
         """
+        import re
         from backend.observability.tracer import trace_collector
         self._last_faithfulness = None
 
         try:
             from backend.rag.guardrails import check_faithfulness
+
+            # 剥离 reference section（避免元数据行被误提取为 claim）
+            ref_match = re.search(r'\n---\n\s*\n###\s*参考文献\s*\n', answer)
+            answer_body = answer[:ref_match.start()] if ref_match else answer
+            ref_section = answer[ref_match.start():] if ref_match else ""
+
             faith_span = trace_collector.start_span(
                 "faithfulness", name="忠实度验证")
-            self._last_faithfulness = check_faithfulness(answer, context_docs)
+            self._last_faithfulness = check_faithfulness(answer_body, context_docs)
             trace_collector.end_span(faith_span,
                                  metrics={
                                      "score": self._last_faithfulness.score,
@@ -652,13 +659,13 @@ class RAGChain:
                                      "unsupported": self._last_faithfulness.unsupported_claims,
                                  })
 
-            # 如果有不可信 claim，用清洗后的答案
+            # 如果有不可信 claim，用清洗后的答案（保留原 reference section）
             if self._last_faithfulness.cleaned_answer and \
-               self._last_faithfulness.cleaned_answer != answer:
+               self._last_faithfulness.cleaned_answer != answer_body:
                 logger.warning(
                     f"[RAGChain] 自动剔除 {self._last_faithfulness.unsupported_claims} 条不可信内容"
                 )
-                return self._last_faithfulness.cleaned_answer
+                return self._last_faithfulness.cleaned_answer + ref_section
             return answer
         except Exception as e:
             logger.warning(f"[RAGChain] Faithfulness 检测跳过: {e}")
