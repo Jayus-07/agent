@@ -101,11 +101,15 @@ def _classify(entail_prob: float) -> tuple[str, str, bool]:
     return "contradiction_strong", "rewrite", False
 
 
-def _fallback_supported(claims: List[str]) -> List[dict]:
-    """超时 / 失败时的 fallback：所有 claim 视为 supported（跳过 Faithfulness）。"""
+def _fallback_supported(claims: List[str], reason: str = "unknown") -> List[dict]:
+    """超时 / 失败时的 fallback：所有 claim 视为 supported（跳过 Faithfulness）。
+
+    2026-08-11：加 reason 字段，让上层知道这是 fallback（不是真实校验）。
+    """
     return [{
         "claim": c, "supported": True, "best_score": 1.0,
         "best_chunk_preview": "", "label": "entailment", "action": "pass",
+        "fallback_reason": reason,  # nli_timeout / nli_error / etc
     } for c in claims]
 
 
@@ -162,7 +166,13 @@ def check_claims_batch(claims: List[str], context_docs: list) -> List[dict]:
     )
     if raw is None:
         logger.warning(f"[NLI] 推理超时（{NLI_TIMEOUT}s），跳过 Faithfulness")
-        return _fallback_supported(claims)
+        # 2026-08-11：埋点 NLI 超时（运营指标）
+        try:
+            from backend.observability.metrics import nli_timeout_total
+            nli_timeout_total.inc()
+        except Exception:
+            pass
+        return _fallback_supported(claims, reason="nli_timeout")
 
     if not isinstance(raw, np.ndarray):
         raw = np.array(raw)

@@ -80,6 +80,16 @@ feedback_total = Counter(
     labelnames=("vote",),  # positive | negative
 )
 
+# NLI 监控（2026-08-11）：超时次数 + 当前未覆盖率
+nli_timeout_total = Counter(
+    "nli_timeout_total",
+    "NLI 推理超时次数（触发 fallback）",
+)
+nli_coverage_rate = Gauge(
+    "nli_coverage_rate",
+    "NLI 有效校验率（0-1，1 = 无超时）",
+)
+
 # 实时 rate（Gauge 缓存最新计算值）
 rag_hit_rate = Gauge(
     "rag_hit_rate",
@@ -196,6 +206,8 @@ __all__ = [
     # 运营指标
     "rag_query_total",
     "feedback_total",
+    "nli_timeout_total",
+    "nli_coverage_rate",
     "rag_hit_rate",
     "rag_reject_rate",
     "doc_metadata_coverage",

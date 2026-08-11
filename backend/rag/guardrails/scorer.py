@@ -219,6 +219,7 @@ def check_faithfulness(
     claim_results = []
     supported = 0
     unsupported = 0
+    fallback_count = 0  # 2026-08-11：NLI fallback 计数
 
     for r in nli_results:
         cr = ClaimResult(
@@ -234,8 +235,23 @@ def check_faithfulness(
             supported += 1
         else:
             unsupported += 1
+        # 2026-08-11：检测 NLI fallback（避免静默成功）
+        if r.get("fallback_reason"):
+            fallback_count += 1
 
     score = supported / len(nli_results) if nli_results else 1.0
+
+    # 2026-08-11：NLI fallback 警告 + 指标
+    if fallback_count > 0:
+        logger.warning(
+            f"[Faithfulness] ⚠️ NLI 全部 fallback：{fallback_count}/{len(nli_results)} claims 未实际校验"
+        )
+        try:
+            from backend.observability.metrics import nli_coverage_rate
+            coverage = (len(nli_results) - fallback_count) / len(nli_results) if nli_results else 1.0
+            nli_coverage_rate.set(coverage)
+        except Exception:
+            pass
 
     # P2: 50% 阈值保护 — NLI 误判保护
     # 当 unsupported 比例超过阈值（默认 50%）时，跳过 rewrite，保留原答案
