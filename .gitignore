@@ -46,6 +46,7 @@ logs/
 # Database
 data/chroma/
 data/doc_db/
+data/router_index/   # Router 路由索引（自动重建）
 data/doc_versions.json  # 文档版本索引（自动生成）
 *.db
 *.sqlite3

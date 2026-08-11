@@ -27,7 +27,7 @@ from .types import (
     ALL_CAPABILITIES,
     WORKFLOW_NAMES,
 )
-from .router import Router
+from .router import Router, get_router
 from .rule_router import RuleRouter
 from .vector_router import VectorRouter
 from .llm_router import LLMRouter
@@ -39,6 +39,7 @@ __all__ = [
     "ALL_CAPABILITIES",
     "WORKFLOW_NAMES",
     "Router",
+    "get_router",
     "RuleRouter",
     "VectorRouter",
     "LLMRouter",
