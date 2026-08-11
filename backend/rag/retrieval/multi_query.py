@@ -64,14 +64,30 @@ COMPLEX_PATTERNS = [
     "关系", "影响", "作用", "意义", "方法",
 ]
 
+# 业务关键词（2026-08-11 P2 多路融合）：自动触发 MultiQuery 改写
+# 解决"差评怎么处理"等业务查询不会触发改写的问题
+BUSINESS_KEYWORDS = [
+    "差评", "投诉", "退款", "退货", "换货", "售后", "客服",
+    "合规", "审核", "罚款", "违规", "处罚",
+    "上架", "下架", "Listing", "关键词", "广告", "投放",
+    "缺货", "断货", "调拨", "滞销", "库存", "FBA",
+    "毛利", "利润", "成本", "客单价", "转化率",
+    "Listing", "SKU", "SPU",
+]
+
 SIMPLE_PREFIXES = ("什么是", "多少", "几点", "几号", "谁", "哪个", "哪里")
 
 
 def _is_complex(query: str) -> tuple[bool, str]:
+    """判断 query 是否需要 MultiQuery 改写（2026-08-11 加业务关键词触发）。"""
     q = query.strip()
     for pat in COMPLEX_PATTERNS:
         if pat in q:
-            return True, f"关键词: {pat}"
+            return True, f"复杂度关键词: {pat}"
+    # 业务关键词：差评/退款/合规等业务查询自动触发改写
+    for kw in BUSINESS_KEYWORDS:
+        if kw in q:
+            return True, f"业务关键词: {kw}"
     if q.startswith(SIMPLE_PREFIXES):
         return False, "简单事实问句"
     if len(q) < 5:
@@ -89,7 +105,7 @@ QUERY_REWRITE_PROMPT = """将用户问题改写为 {count} 个语义等价但表
 
 规则：
 1. 保留原始查询作为第 1 个
-2. 不改变原意，不扩展问题
+2. 不改变原意，但可扩展同义词和跨域表述（如"差评"→"差评/投诉/售后"）
 3. 不回答问题，不解释
 4. 只输出查询文本，每行一个，不要编号
 
