@@ -15,6 +15,7 @@ import asyncio
 from langgraph.graph import StateGraph, START, END
 
 from backend.orchestration.state import AgentState
+from backend.orchestration.graph.router_node import router_node, route_selector
 from backend.agents.planner.planner import planner_node
 from backend.agents.planner.critique import critique_node
 from backend.orchestration.supervisor.scheduler import supervisor_node, route_after_supervisor
@@ -87,6 +88,7 @@ def build_graph():
     wf = StateGraph(AgentState)
 
     # ── 内置节点（永远不变）────────────────────────
+    wf.add_node("router", router_node)  # 2026-08-11：3 层 fallback Router
     wf.add_node("planner", planner_node)
     wf.add_node("critique", critique_node)
     wf.add_node("supervisor", supervisor_node)
@@ -99,7 +101,13 @@ def build_graph():
         logger.info(f"[Graph] 自动注册 Skill 节点: {name}")
 
     # ── 边 ────────────────────────────────────────
-    wf.add_edge(START, "planner")
+    # 2026-08-11：Router 在入口（替代 START → planner 直连）
+    wf.add_edge(START, "router")
+    wf.add_conditional_edges(
+        "router",
+        route_selector,
+        {"planner": "planner"},
+    )
     wf.add_edge("planner", "critique")
 
     wf.add_conditional_edges(
@@ -116,7 +124,7 @@ def build_graph():
     wf.add_edge("reporter", END)
 
     skill_count = len(tool_registry.get_skill_nodes())
-    logger.info(f"[Graph] 图编译完成 (内置4节点 + {skill_count} Skill = {4 + skill_count}节点)")
+    logger.info(f"[Graph] 图编译完成 (内置5节点+Router + {skill_count} Skill = {5 + skill_count}节点)")
     return wf.compile()
 
 
