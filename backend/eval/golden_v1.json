@@ -1,0 +1,47 @@
+[
+  {
+    "id": "q001",
+    "query": "退款审核时间是多少？",
+    "expected_docs": ["售后流程.md"],
+    "expected_min_top1_score": 0.5,
+    "expected_domains": ["customer", "order"],
+    "category": "order_query",
+    "notes": "差评/退款跨域：测试 business_domain fallback"
+  },
+  {
+    "id": "q002",
+    "query": "差评怎么处理？",
+    "expected_docs": ["售后流程.md", "平台合规规范.md"],
+    "expected_min_top1_score": 0.3,
+    "expected_domains": ["customer"],
+    "category": "customer_query",
+    "notes": "纯 customer 域：售后流程应被命中"
+  },
+  {
+    "id": "q003",
+    "query": "平台合规规范有哪些？",
+    "expected_docs": ["平台合规规范.md"],
+    "expected_min_top1_score": 0.7,
+    "expected_domains": ["product"],
+    "category": "policy_query",
+    "notes": "严格 metadata 命中"
+  },
+  {
+    "id": "q004",
+    "query": "如何优化 Listing？",
+    "expected_docs": [],
+    "expected_min_top1_score": 0.0,
+    "expected_domains": ["product"],
+    "category": "product_query",
+    "notes": "期望拒答：知识库无 Listing 优化文档"
+  },
+  {
+    "id": "q005",
+    "query": "跨境电商差评处理的操作规范和流程",
+    "expected_docs": ["售后流程.md"],
+    "expected_min_top1_score": 0.4,
+    "expected_domains": ["customer", "order"],
+    "category": "customer_query",
+    "notes": "MultiQuery 改写场景：差评 → 售后服务"
+  }
+]
