@@ -316,6 +316,20 @@ async def register_workflows_and_schedules():
         sched = get_workflow_scheduler()
         sched.register_daily("daily_report", hour=9, minute=0)
         sched.register_daily("inventory_alert", hour=8, minute=0)
+
+        # 2026-08-11 P1 Golden Dataset 周自动评测（每周日 2:00 跑）
+        def _run_weekly_eval():
+            try:
+                from backend.eval import run_golden_eval
+                summary = run_golden_eval()
+                logger.info(
+                    f"[WeeklyEval] 完成: hit={summary['hit_rate']:.1%} "
+                    f"pass={summary['pass_rate']:.1%} rej={summary['reject_rate']:.1%}"
+                )
+            except Exception as e:
+                logger.error(f"[WeeklyEval] 失败: {e}")
+        sched.register_cron("weekly_eval", _run_weekly_eval, "0 2 * * 0")
+
         sched.start()
 
         logger.info("[Startup] Workflow 定时任务注册完成")

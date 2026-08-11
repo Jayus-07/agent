@@ -91,6 +91,36 @@ class WorkflowScheduler:
         }
         logger.info(f"[WorkflowScheduler] 注册周期: {workflow_name} 每 {seconds}s")
 
+    def register_cron(self, job_id: str, func: Callable, cron_expr: str, run_now: bool = False) -> None:
+        """通用 cron 任务（不限于 workflow，2026-08-11）。
+
+        Args:
+            job_id: APScheduler job 唯一 ID
+            func: 任意可调用对象（同步或 async）
+            cron_expr: 5 段 cron 表达式（分 时 日 月 周）
+            run_now: 是否启动时立即跑一次（调试用）
+        """
+        if not APSCHEDULER_AVAILABLE:
+            raise RuntimeError("APScheduler 未安装")
+        self._ensure_aps()
+        self._aps.add_job(
+            func,
+            CronTrigger.from_crontab(cron_expr),
+            id=job_id,
+            replace_existing=True,
+        )
+        self._jobs[job_id] = {
+            "workflow": job_id,
+            "trigger": f"cron '{cron_expr}'",
+        }
+        logger.info(f"[WorkflowScheduler] 注册 cron: {job_id} '{cron_expr}'")
+        if run_now:
+            try:
+                func()
+                logger.info(f"[WorkflowScheduler] {job_id} 已立即跑一次")
+            except Exception as e:
+                logger.warning(f"[WorkflowScheduler] {job_id} 立即跑失败: {e}")
+
     def list_jobs(self) -> list[dict[str, Any]]:
         """列出已注册的定时任务（含下次执行时间）"""
         result = []
@@ -99,10 +129,19 @@ class WorkflowScheduler:
             if self._aps is not None:
                 aps_job = self._aps.get_job(job_id)
                 if aps_job is not None:
-                    job["next_run_time"] = (
-                        aps_job.next_run_time.isoformat()
-                        if aps_job.next_run_time else None
-                    )
+                    # APScheduler 4.x 用 _get_run_times()，3.x 用 next_run_time
+                    try:
+                        next_run = aps_job.next_run_time
+                    except AttributeError:
+                        next_run = None
+                    if next_run is None:
+                        # 尝试 4.x API
+                        try:
+                            run_times = aps_job._get_run_times()
+                            next_run = run_times[0] if run_times else None
+                        except Exception:
+                            next_run = None
+                    job["next_run_time"] = next_run.isoformat() if next_run else None
             result.append(job)
         return result
 
