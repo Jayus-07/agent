@@ -13,6 +13,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from backend.shared.logger import logger
+
 
 # 文档状态枚举（完整生命周期，2026-08-11 加 pending_review）
 DOC_STATUSES = ("uploading", "parsing", "embedding", "pending_review", "active", "failed", "deleted")
@@ -400,3 +402,55 @@ class DocumentRegistry:
         """清空注册表（用于全量重建兜底）。"""
         with self._lock, self._conn() as conn:
             conn.execute("DELETE FROM doc_registry")
+
+    # ── 文档生命周期（2026-08-11 P2）──
+    def ensure_expire_at_column(self) -> None:
+        """兼容老数据库：若 expire_at 字段缺失则 ALTER TABLE 添加。"""
+        with self._lock, self._conn() as conn:
+            cols = [row[1] for row in conn.execute("PRAGMA table_info(doc_registry)").fetchall()]
+            if "expire_at" not in cols:
+                conn.execute("ALTER TABLE doc_registry ADD COLUMN expire_at TEXT")
+                conn.commit()
+                logger.info("[DocRegistry] 已添加 expire_at 字段")
+
+    def set_expire_at(self, doc_id: str, expire_at: str) -> int:
+        """设置文档过期时间（ISO 8601 格式，2026-08-11）。"""
+        with self._lock, self._conn() as conn:
+            cur = conn.execute(
+                """UPDATE doc_registry
+                   SET expire_at = ?, updated_at = datetime('now')
+                   WHERE doc_id = ? AND status = 'active'""",
+                (expire_at, doc_id),
+            )
+            conn.commit()
+            return cur.rowcount
+
+    def list_expired(self, now: str | None = None) -> list[dict]:
+        """列出已过期文档（expire_at <= now AND status='active'，2026-08-11）。"""
+        from datetime import datetime
+        now = now or datetime.now().isoformat()[:10]
+        with self._lock, self._conn() as conn:
+            rows = conn.execute(
+                """SELECT * FROM doc_registry
+                   WHERE status = 'active' AND expire_at IS NOT NULL AND expire_at <= ?""",
+                (now,),
+            ).fetchall()
+            columns = [d[0] for d in conn.execute("SELECT * FROM doc_registry LIMIT 1").description]
+            return [dict(zip(columns, row)) for row in rows]
+
+    def archive_expired(self, now: str | None = None) -> int:
+        """将过期文档标记为 deleted（软删除，2026-08-11）。"""
+        expired = self.list_expired(now=now)
+        if not expired:
+            return 0
+        doc_ids = list({d["doc_id"] for d in expired})
+        with self._lock, self._conn() as conn:
+            for doc_id in doc_ids:
+                conn.execute(
+                    """UPDATE doc_registry
+                       SET status = 'deleted', updated_at = datetime('now')
+                       WHERE doc_id = ? AND status = 'active'""",
+                    (doc_id,),
+                )
+            conn.commit()
+        return len(doc_ids)

@@ -170,6 +170,28 @@ async def eager_init_ops_metrics():
 
 
 # ═══════════════════════════════════════════════════
+# 启动时扫描过期文档（2026-08-11 P2 文档生命周期）
+# ═══════════════════════════════════════════════════
+@app.on_event("startup")
+async def eager_init_lifecycle_scan():
+    """启动期扫描过期文档 → 自动归档（2026-08-11 P2）。"""
+    import threading
+    def _scan():
+        try:
+            from backend.rag.indexing.doc_registry import DocumentRegistry
+            reg = DocumentRegistry()
+            reg.ensure_expire_at_column()  # 兼容老数据库
+            archived = reg.archive_expired()
+            if archived > 0:
+                logger.info(f"[Startup] 文档生命周期扫描：归档 {archived} 个过期文档")
+            else:
+                logger.info("[Startup] 文档生命周期扫描：无过期文档")
+        except Exception as e:
+            logger.warning(f"[Startup] 文档生命周期扫描失败: {e}")
+    threading.Thread(target=_scan, daemon=True, name="lifecycle-scan").start()
+
+
+# ═══════════════════════════════════════════════════
 # /ops 运营指标看板（HTML 自建，2026-08-11）
 # ═══════════════════════════════════════════════════
 _OPS_DASHBOARD_HTML = """<!DOCTYPE html>
