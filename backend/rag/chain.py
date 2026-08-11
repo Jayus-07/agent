@@ -263,8 +263,10 @@ class RAGChain:
         # Gate 1+2: retrieval/rerank 已在 _execute 注入 decision
         decision = result.get("__evidence_gate_decision__")
         if decision is not None and not decision.passed:
-            return self._reject(decision, decision.layer or "retrieval",
+            answer = self._reject(decision, decision.layer or "retrieval",
                                 trace, t_total)
+            self._record_rag_metric("rejected")
+            return answer
 
         # Citation + Faithfulness
         answer = self._verify(result, question, session_id)
@@ -273,10 +275,26 @@ class RAGChain:
         # Gate 3: LLM 自报拒答 (META can_answer=False)
         meta = self._last_meta or {}
         if not meta.get("can_answer", True):
-            return self._handle_llm_reject(meta, trace, question, session_id, t_total)
+            answer = self._handle_llm_reject(meta, trace, question, session_id, t_total)
+            self._record_rag_metric("rejected")
+            return answer
+
+        # 2026-08-11：NLI 推理超时 fallback 视为"有输出"（避免与拒答混淆）
+        if self._last_faithfulness and self._last_faithfulness.score >= 0.99:
+            self._record_rag_metric("fallback")
+        else:
+            self._record_rag_metric("hit")
 
         self._finish(trace, answer, t_total)
         return answer
+
+    def _record_rag_metric(self, status: str) -> None:
+        """埋点 RAG 查询结果到运营指标（2026-08-11）。"""
+        try:
+            from backend.observability.metrics import record_rag_status
+            record_rag_status(status)
+        except Exception:
+            pass  # 埋点失败不影响主流程
 
     def _handle_llm_reject(self, meta, trace, question, session_id, t_total) -> str:
         """LLM 自报拒答 → self-correction 或直接拒答。"""
