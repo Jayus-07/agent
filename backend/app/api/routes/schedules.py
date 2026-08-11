@@ -77,3 +77,49 @@ async def update_schedule(
 
     updated = sched.get_job(workflow_name)
     return {"updated": True, "job_id": job_id, "schedule": updated}
+
+
+@router.post("/{workflow_name}/run")
+async def run_schedule_now(workflow_name: str) -> dict:
+    """立即运行指定定时任务（2026-08-11）。
+
+    - workflow 类型：调 scheduler.run_now
+    - weekly_eval：直接调评测脚本
+    """
+    sched = get_workflow_scheduler()
+    job = sched.get_job(workflow_name)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"schedule {workflow_name} not found")
+
+    # 区分任务类型
+    if workflow_name == "weekly_eval":
+        try:
+            from backend.eval import run_golden_eval
+            summary = run_golden_eval()
+            logger.info(
+                f"[Schedules API] weekly_eval 手动触发完成: "
+                f"hit={summary['hit_rate']:.1%} pass={summary['pass_rate']:.1%}"
+            )
+            return {
+                "ok": True,
+                "schedule": workflow_name,
+                "triggered_at": "now",
+                "summary": {
+                    "total": summary["total"],
+                    "hit_rate": summary["hit_rate"],
+                    "pass_rate": summary["pass_rate"],
+                    "reject_rate": summary["reject_rate"],
+                },
+            }
+        except Exception as e:
+            logger.error(f"[Schedules API] weekly_eval 手动触发失败: {e}")
+            return {"ok": False, "error": str(e)}
+
+    # workflow 类型
+    try:
+        job_id = await sched.run_now(workflow_name)
+        logger.info(f"[Schedules API] {workflow_name} 手动触发完成: {job_id}")
+        return {"ok": True, "schedule": workflow_name, "triggered_at": "now", "job_id": job_id}
+    except Exception as e:
+        logger.error(f"[Schedules API] {workflow_name} 手动触发失败: {e}")
+        return {"ok": False, "error": str(e)}

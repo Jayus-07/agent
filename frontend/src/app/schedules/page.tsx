@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Clock, RefreshCw, Check, X } from 'lucide-react'
+import { Clock, RefreshCw, Check, X, Play } from 'lucide-react'
 import { clsx } from 'clsx'
 
 interface Schedule {
@@ -19,11 +19,13 @@ export default function SchedulesPage() {
   const [editHour, setEditHour] = useState(9)
   const [editMinute, setEditMinute] = useState(0)
   const [saving, setSaving] = useState(false)
+  const [running, setRunning] = useState<string | null>(null)
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const WORKFLOW_LABELS: Record<string, string> = {
     daily_report: '经营日报',
     inventory_alert: '库存预警',
+    weekly_eval: 'Golden 评测',
   }
 
   async function loadSchedules() {
@@ -68,6 +70,34 @@ export default function SchedulesPage() {
       setMsg({ type: 'error', text: (e as Error).message })
     } finally {
       setSaving(false)
+    }
+  }
+
+  // 立即运行（2026-08-11）
+  async function runNow(workflow: string) {
+    if (!confirm(`确认立即运行 ${workflow}？`)) return
+    setRunning(workflow)
+    setMsg(null)
+    try {
+      const res = await fetch(`/api/schedules/${workflow}/run`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || data.detail || '运行失败')
+      }
+      // weekly_eval 特殊：返回 summary
+      if (workflow === 'weekly_eval' && data.summary) {
+        const s = data.summary
+        setMsg({
+          type: 'success',
+          text: `评测完成: hit=${(s.hit_rate * 100).toFixed(1)}% pass=${(s.pass_rate * 100).toFixed(1)}% rej=${(s.reject_rate * 100).toFixed(1)}%`,
+        })
+      } else {
+        setMsg({ type: 'success', text: `${workflow} 已启动（job_id: ${data.job_id || '—'}）` })
+      }
+    } catch (e) {
+      setMsg({ type: 'error', text: (e as Error).message })
+    } finally {
+      setRunning(null)
     }
   }
 
@@ -159,6 +189,15 @@ export default function SchedulesPage() {
                             下次: {new Date(s.next_run_time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
                           </span>
                         )}
+                        <button
+                          onClick={() => runNow(s.workflow)}
+                          disabled={running === s.workflow}
+                          className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 disabled:opacity-50"
+                          title="立即运行"
+                        >
+                          <Play size={10} />
+                          {running === s.workflow ? '运行中' : '立即运行'}
+                        </button>
                         <button
                           onClick={() => startEdit(s)}
                           className="text-xs text-accent hover:underline"
