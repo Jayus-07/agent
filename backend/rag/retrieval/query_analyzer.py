@@ -48,7 +48,12 @@ class ParsedQuery:
         if self.doc_types:
             f["doc_type"] = self.doc_types[0] if len(self.doc_types) == 1 else self.doc_types
         if self.domains:
-            f["business_domain"] = self.domains[0]  # 与 chunk metadata 字段名对齐
+            # 多 domain 兼容（2026-08-10）：用 $in 而非取第一个，避免误判
+            # 例："差评怎么处理" → customer + order（兼容售后流程的 order 标注）
+            if len(self.domains) == 1:
+                f["business_domain"] = self.domains[0]
+            else:
+                f["business_domain"] = {"$in": self.domains}
         if self.time_range_start:
             f["time_start"] = self.time_range_start
             f["time_end"] = self.time_range_end
@@ -216,8 +221,14 @@ class QueryAnalyzer:
                         score += weight
                 if score > 0:
                     domain_scores[domain] = score
+
+            # 2026-08-10 改进：保留 top N domains（阈值 = top_score * 0.6），
+            # 而不是只取 1 个。解决"差评怎么处理"只推 customer 而遗漏 order 域售后流程的问题。
             if domain_scores:
-                pq.domains = [max(domain_scores, key=lambda k: domain_scores[k])]
+                sorted_domains = sorted(domain_scores.items(), key=lambda x: x[1], reverse=True)
+                top_score = sorted_domains[0][1]
+                threshold = top_score * 0.6
+                pq.domains = [d for d, s in sorted_domains if s >= threshold][:3]
         except Exception:
             pass
 

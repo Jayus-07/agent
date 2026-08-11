@@ -397,7 +397,15 @@ def extract_time_refs(text: str) -> List[str]:
 # =====================================================
 
 def detect_business_domain(text: str, min_score: int = 2, return_detail: bool = False):
-    """识别业务领域，返回得分最高的领域，若最高分低于阈值则返回"general" """
+    """识别业务领域，返回 (primary, [alternatives])。
+
+    Returns:
+        (primary, alternatives) tuple
+        - primary: 得分最高的 domain
+        - alternatives: 备选 domains（> top_score * 0.3）
+
+    2026-08-10 改进：返回多候选，避免单一标注导致跨域问题（如售后流程被标 order 而漏查 customer）。
+    """
     scores: Dict[str, int] = Counter()
     detail: dict = {"scores": {}, "hits": []} if return_detail else {}
     text_lower = text.lower()
@@ -417,13 +425,23 @@ def detect_business_domain(text: str, min_score: int = 2, return_detail: bool = 
 
     if not scores:
         if return_detail:
-            return "general", detail
-        return "general"
-    best_domain, best_score = max(scores.items(), key=lambda x: x[1])
-    result = best_domain if best_score >= min_score else "general"
+            return "general", [], detail
+        return "general", []
+
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    primary, top_score = sorted_scores[0]
+
+    if top_score < min_score:
+        if return_detail:
+            return "general", [], detail
+        return "general", []
+
+    # 备选 domains（> 0.3 * top_score）
+    alternatives = [d for d, s in sorted_scores[1:] if s >= top_score * 0.3]
+
     if return_detail:
-        return result, detail
-    return result
+        return primary, alternatives, detail
+    return primary, alternatives
 
 
 # =====================================================
@@ -523,13 +541,17 @@ async def build_metadata(text: str, fname: str, doc_id: str, chunk_id: str, is_f
 
     doc_type = classify_doc_type(text_lower)
 
+    # 2026-08-10 多候选业务域：同时存主分类 + 备选（> 0.3 * top_score）
+    primary_domain, alt_domains = detect_business_domain(text_lower)
     metadata = {
         "doc_id": doc_id,
         "chunk_id": chunk_id,
         "source_file": fname,
         "doc_type": doc_type,
-        "business_domain": detect_business_domain(text_lower),
+        "business_domain": primary_domain,
     }
+    if alt_domains:
+        metadata["business_domain_alt"] = alt_domains
 
     time_refs = extract_time_refs(text)
     if time_refs:

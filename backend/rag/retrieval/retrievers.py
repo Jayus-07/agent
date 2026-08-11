@@ -133,6 +133,19 @@ class ChunkLevelRetriever(BaseRetriever):
                   "person_names": person_names,
                   "output_doc_count": len(doc_ids or [])})
 
+        # 🟢 2026-08-10 新增：Stage 1 0 匹配 fallback
+        # 解决 metadata_filter 推 business_domain 不准时丢文档的问题
+        # （如问"差评怎么处理" → customer，但售后流程文档标 order）
+        if request_metadata_filter and not doc_ids:
+            fallback_filter = {k: v for k, v in request_metadata_filter.items() if k != "business_domain"}
+            if fallback_filter != request_metadata_filter:
+                logger.info(
+                    f"ChunkLevelRetriever: metadata_filter {request_metadata_filter} 0 匹配, "
+                    f"回退到放宽 business_domain 的检索"
+                )
+                request_metadata_filter = fallback_filter
+                doc_ids = None  # 让 Stage 2 走完整向量检索
+
         # — Stage 2: Chunk 级检索 —
         all_docs = []
         seen = set()
