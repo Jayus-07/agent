@@ -141,6 +141,87 @@ async def list_operations(
         return {"items": [], "total": 0, "error": str(e)}
 
 
+@router.get("/pending")
+async def list_pending_docs(page: int = 1, page_size: int = 20):
+    """列出待审核文档（status=pending_review，2026-08-11 P0 审核 Dashboard）。"""
+    try:
+        reg = _get_registry()
+        result = reg.list_pending_review(page=page, page_size=page_size)
+        # 格式化（与 list_documents 一致）
+        for d in result["items"]:
+            d["id"] = d.get("doc_id")
+            d["name"] = d.get("file_name")
+        return result
+    except Exception as e:
+        logger.error(f"[RAG] pending 列表失败: {e}")
+        return {"items": [], "total": 0, "error": str(e)}
+
+
+@router.post("/pending/{doc_id}/approve")
+async def approve_pending_doc(doc_id: str, request: Request):
+    """批准 pending 文档 → status='active'（2026-08-11）。"""
+    source = _extract_source(request)
+    try:
+        reg = _get_registry()
+        doc = reg.get_by_doc_id(doc_id)
+        if not doc:
+            return {"ok": False, "error": "文档不存在"}
+        if doc.get("status") != "pending_review":
+            return {"ok": False, "error": f"文档状态为 {doc.get('status')}，不是 pending_review"}
+
+        updated = reg.update_status_by_doc_id(doc_id, "active")
+        if updated == 0:
+            return {"ok": False, "error": "状态更新失败（可能并发）"}
+
+        _safe_log_op(
+            doc_id, doc.get("file_name", ""), "approve", source,
+            trace_id=None, batch_id=None,
+            result="success", duration_ms=0,
+            detail={"from": "pending_review", "to": "active"},
+        )
+
+        # 触发 metadata_coverage 重算
+        try:
+            from backend.observability.metrics import update_metadata_coverage
+            update_metadata_coverage()
+        except Exception:
+            pass
+
+        return {"ok": True, "doc_id": doc_id, "new_status": "active"}
+    except Exception as e:
+        logger.error(f"[RAG] approve 失败: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/pending/{doc_id}/reject")
+async def reject_pending_doc(doc_id: str, request: Request):
+    """拒绝 pending 文档 → status='deleted'（2026-08-11）。"""
+    source = _extract_source(request)
+    try:
+        reg = _get_registry()
+        doc = reg.get_by_doc_id(doc_id)
+        if not doc:
+            return {"ok": False, "error": "文档不存在"}
+        if doc.get("status") != "pending_review":
+            return {"ok": False, "error": f"文档状态为 {doc.get('status')}，不是 pending_review"}
+
+        updated = reg.update_status_by_doc_id(doc_id, "deleted")
+        if updated == 0:
+            return {"ok": False, "error": "状态更新失败（可能并发）"}
+
+        _safe_log_op(
+            doc_id, doc.get("file_name", ""), "reject", source,
+            trace_id=None, batch_id=None,
+            result="success", duration_ms=0,
+            detail={"from": "pending_review", "to": "deleted"},
+        )
+
+        return {"ok": True, "doc_id": doc_id, "new_status": "deleted"}
+    except Exception as e:
+        logger.error(f"[RAG] reject 失败: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 @router.get("/documents/{doc_id}")
 async def get_document(doc_id: str):
     """文档详情 — 含 chunk 配置、embedding 模型等完整信息"""

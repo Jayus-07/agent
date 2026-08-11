@@ -26,6 +26,18 @@ export const knowledgeService: any = {
   getDocument: (id: string) =>
     fetch(`${BASE}/documents/${id}`).then(r => r.json()).catch(() => ({})),
 
+  // P0 审核 Dashboard（2026-08-11）
+  getPendingDocs: (params: { page?: number; page_size?: number } = {}) =>
+    fetch(`${BASE}/pending?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [], total: 0 })),
+
+  approvePendingDoc: (doc_id: string) =>
+    fetch(`${BASE}/pending/${doc_id}/approve`, { method: 'POST' })
+      .then(r => r.json()).catch(() => ({ ok: false })),
+
+  rejectPendingDoc: (doc_id: string) =>
+    fetch(`${BASE}/pending/${doc_id}/reject`, { method: 'POST' })
+      .then(r => r.json()).catch(() => ({ ok: false })),
+
   /**
    * 上传文档（两阶段）：
    * 1. POST /upload → 返回 { ok, upload_id, filename }

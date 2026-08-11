@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Any
 
 
-# 文档状态枚举（完整生命周期）
-DOC_STATUSES = ("uploading", "parsing", "embedding", "active", "failed", "deleted")
+# 文档状态枚举（完整生命周期，2026-08-11 加 pending_review）
+DOC_STATUSES = ("uploading", "parsing", "embedding", "pending_review", "active", "failed", "deleted")
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS doc_registry (
@@ -361,6 +361,40 @@ class DocumentRegistry:
                 (doc_id,),
             )
             return cur.rowcount
+
+    def update_status_by_doc_id(self, doc_id: str, new_status: str) -> int:
+        """按 doc_id 更新状态（用于审核 dashboard，2026-08-11）。
+
+        Returns: 实际更新的行数。0 表示 doc_id 不存在或状态不允许。
+        """
+        if new_status not in DOC_STATUSES:
+            raise ValueError(f"无效状态: {new_status}，有效值: {DOC_STATUSES}")
+        with self._lock, self._conn() as conn:
+            cur = conn.execute(
+                """UPDATE doc_registry
+                   SET status = ?, updated_at = datetime('now')
+                   WHERE doc_id = ? AND status IN ('pending_review', 'active')""",
+                (new_status, doc_id),
+            )
+            return cur.rowcount
+
+    def list_pending_review(self, page: int = 1, page_size: int = 20) -> dict:
+        """列出待审核文档（status='pending_review'，按 confidence 升序）。"""
+        offset = (page - 1) * page_size
+        with self._lock, self._conn() as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM doc_registry WHERE status = 'pending_review'"
+            ).fetchone()[0]
+            rows = conn.execute(
+                """SELECT * FROM doc_registry
+                   WHERE status = 'pending_review'
+                   ORDER BY confidence ASC, updated_at DESC
+                   LIMIT ? OFFSET ?""",
+                (page_size, offset),
+            ).fetchall()
+            columns = [d[0] for d in conn.execute("SELECT * FROM doc_registry LIMIT 1").description]
+            items = [dict(zip(columns, row)) for row in rows]
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
 
     def clear(self):
         """清空注册表（用于全量重建兜底）。"""
