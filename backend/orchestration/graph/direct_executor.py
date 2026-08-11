@@ -105,17 +105,60 @@ def skill_executor_node(state: dict) -> dict:
 def workflow_executor_node(state: dict) -> dict:
     """workflow mode: 调已注册的 workflow（daily_report / inventory_alert）。
 
-    V1: 占位（暂未完整实现），先 mark as running。
+    2026-08-11 V2: 真正调 WorkflowScheduler.run_now() 跑 workflow
     """
+    import asyncio
+    from backend.orchestration.workflow.scheduler import get_workflow_scheduler
+
     decision = state.get("route_decision") or {}
     wf_name = decision.get("workflow_name") if isinstance(decision, dict) else None
 
-    logger.info(f"[WorkflowExecutor] workflow={wf_name}（V1 占位，后续实现）")
+    if not wf_name:
+        logger.warning("[WorkflowExecutor] 无 workflow_name，降级到 plan")
+        return {
+            **state,
+            "route_mode": "plan",
+            "executor_error": "no_workflow_name",
+        }
 
-    # V1: 给出占位 answer，让 reporter 知道是 workflow 模式
-    return {
-        **state,
-        "final_answer": f"[Workflow 占位] {wf_name} 暂未完整实现，V2 将调 workflow_runner",
-        "executor_mode": "workflow",
-        "executor_workflow": wf_name,
-    }
+    logger.info(f"[WorkflowExecutor] 运行 workflow: {wf_name}")
+
+    try:
+        scheduler = get_workflow_scheduler()
+        # run_now 是 async
+        ctx = asyncio.run(scheduler.run_now(wf_name, inputs={
+            "question": state.get("question", ""),
+            "session_id": state.get("session_id", ""),
+        }))
+
+        # 构造 final_answer：汇总所有 step outputs
+        answer_parts = [f"## 工作流 {wf_name} 执行结果\n"]
+        if ctx.status == "failed":
+            answer_parts.append(f"❌ 失败: {ctx.error or '未知错误'}\n")
+        else:
+            for step_name, output in ctx.outputs.items():
+                if output:
+                    answer_parts.append(f"### {step_name}\n{str(output)[:500]}\n")
+        answer_parts.append(f"\n---\n*状态: {ctx.status} | run_id: {ctx.run_id}*")
+
+        return {
+            **state,
+            "final_answer": "\n".join(answer_parts),
+            "workflow_result": {
+                "status": ctx.status,
+                "run_id": ctx.run_id,
+                "outputs": {k: str(v)[:200] for k, v in ctx.outputs.items()},
+                "error": ctx.error,
+            },
+            "executor_mode": "workflow",
+            "executor_workflow": wf_name,
+        }
+    except Exception as e:
+        logger.error(f"[WorkflowExecutor] {wf_name} 失败: {e}")
+        return {
+            **state,
+            "final_answer": f"## 工作流 {wf_name} 失败\n\n{str(e)}",
+            "executor_error": f"workflow_failed:{wf_name}:{e}",
+            "executor_mode": "workflow",
+            "executor_workflow": wf_name,
+        }
