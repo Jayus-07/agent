@@ -135,6 +135,8 @@ NLI_SCORE_THRESHOLD = float(os.getenv("NLI_SCORE_THRESHOLD", "0.5"))
 NLI_TIMEOUT = int(os.getenv("NLI_TIMEOUT", "30"))
 # Faithfulness 跳过阈值：unsupported 比例超过此值时跳过 rewrite（可能为 NLI 误判）
 FAITHFULNESS_SKIP_THRESHOLD = float(os.getenv("FAITHFULNESS_SKIP_THRESHOLD", "0.5"))
+# 2026-08-11：LLM-as-Judge 开关（Qwen 整体评估替代 mDeBERTa 拆 claim）
+NLI_USE_LLM = os.getenv("NLI_USE_LLM", "false").lower() == "true"
 
 # ====================================
 # Evidence Gate — RAG 主动拒答

@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from backend.config import ENABLE_FAITHFULNESS, FAITHFULNESS_SKIP_THRESHOLD
+from backend.config import ENABLE_FAITHFULNESS, FAITHFULNESS_SKIP_THRESHOLD, NLI_USE_LLM
 from backend.rag.guardrails.claim_extractor import extract_claims
 from backend.rag.guardrails.risk_filter import filter_claims
 from backend.rag.guardrails.nli_checker import check_claims_batch
@@ -214,9 +214,8 @@ def check_faithfulness(
         )
 
     # 3. NLI 验证（2026-08-11：支持 LLM-as-Judge 整体评估，2026-08-12）
-    import os
-    use_llm_judge = os.getenv("NLI_USE_LLM", "false").lower() == "true"
-    if use_llm_judge:
+    # 注意：NLI_USE_LLM 从 backend.config 导入（确保 load_dotenv 已触发）
+    if NLI_USE_LLM:
         # 路径 A: LLM-as-Judge（整体评估，1 次调用，5-10s）
         verdict = evaluate_with_llm(answer_body, context_docs)
         if verdict.fallback:
