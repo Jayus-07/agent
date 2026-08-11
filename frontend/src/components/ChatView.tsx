@@ -118,7 +118,7 @@ export default function ChatView() {
         {messages.length === 0 ? (
           <EmptyState onExampleClick={send} />
         ) : (
-          <MessageList messages={messages} isLoading={isLoading} />
+          <MessageList messages={messages} isLoading={isLoading} sessionId={currentId} />
         )}
         <div ref={bottomRef} />
       </div>

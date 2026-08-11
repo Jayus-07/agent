@@ -2,13 +2,20 @@
 
 import { useState, useCallback } from 'react'
 import { Copy, Check, RefreshCw, ThumbsUp, ThumbsDown, Pencil, Send } from 'lucide-react'
+import { feedbackService } from '@/services/feedback'
 
 interface Props {
   content: string; isUser: boolean; isLast: boolean
+  sessionId?: string
+  msgId?: string
+  question?: string
   onRegenerate?: () => void; onEdit?: (text: string) => void; onResend?: (text: string) => void
 }
 
-export default function MessageActions({ content, isUser, isLast, onRegenerate, onEdit, onResend }: Props) {
+export default function MessageActions({
+  content, isUser, isLast, sessionId, msgId, question,
+  onRegenerate, onEdit, onResend,
+}: Props) {
   const [copied, setCopied] = useState(false)
   const [liked, setLiked] = useState<'up' | 'down' | null>(null)
   const [editing, setEditing] = useState(false)
@@ -19,10 +26,30 @@ export default function MessageActions({ content, isUser, isLast, onRegenerate, 
     setCopied(true); setTimeout(() => setCopied(false), 2000)
   }, [content])
 
+  const handleFeedback = useCallback(async (vote: 'positive' | 'negative') => {
+    // 切换：再次点击取消
+    if (liked === (vote === 'positive' ? 'up' : 'down')) {
+      setLiked(null)
+      return
+    }
+    setLiked(vote === 'positive' ? 'up' : 'down')
+    try {
+      await feedbackService.send({
+        session_id: sessionId || 'unknown',
+        vote,
+        msg_id: msgId || '',
+        question: question || '',
+        answer_preview: content.slice(0, 200),
+      })
+    } catch (e) {
+      console.error('feedback failed', e)
+    }
+  }, [liked, sessionId, msgId, question, content])
+
   if (editing) {
     return (
       <div className="flex items-start gap-2 mt-1">
-        <textarea value={editText} onChange={e => setEditText(e.target.value)}
+        <textarea value={editText} onChange={e => setEditText(e.targetText)}
           className="flex-1 bg-surface-base border border-border-subtle rounded-lg px-3 py-1.5 text-xs text-text-primary resize-none outline-none focus:border-accent/40"
           rows={2} />
         <button onClick={() => { onEdit?.(editText); setEditing(false) }}
@@ -51,9 +78,9 @@ export default function MessageActions({ content, isUser, isLast, onRegenerate, 
         <>
           <ActionBtn icon={<RefreshCw size={12} />} label="重新生成" onClick={() => onRegenerate?.()} />
           <ActionBtn icon={<ThumbsUp size={12} className={liked === 'up' ? 'text-green-500' : ''} />}
-            label="有用" onClick={() => setLiked(liked === 'up' ? null : 'up')} />
+            label="有用" onClick={() => handleFeedback('positive')} />
           <ActionBtn icon={<ThumbsDown size={12} className={liked === 'down' ? 'text-red-500' : ''} />}
-            label="无用" onClick={() => setLiked(liked === 'down' ? null : 'down')} />
+            label="无用" onClick={() => handleFeedback('negative')} />
         </>
       )}
     </div>

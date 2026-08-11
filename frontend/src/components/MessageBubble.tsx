@@ -89,9 +89,11 @@ function StreamingBubble({ message: _message }: { message: Message }) {
 interface MessageBubbleProps {
   message: Message
   isLast: boolean
+  sessionId?: string
+  question?: string
 }
 
-function MessageBubbleImpl({ message, isLast }: MessageBubbleProps) {
+function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   // 只订阅 isLoading —— 单字段、引用稳定；其余流式字段由 StreamingBubble 单独订阅
   const isLoading = useChatStore((s) => s.isLoading)
@@ -116,6 +118,8 @@ function MessageBubbleImpl({ message, isLast }: MessageBubbleProps) {
               content={message.content || ''}
               isUser
               isLast={isLast}
+              sessionId={sessionId}
+              msgId={message.id}
               onEdit={() => {/* TODO: wire to store */}}
               onResend={() => {/* TODO: wire to store */}}
             />
@@ -150,6 +154,9 @@ function MessageBubbleImpl({ message, isLast }: MessageBubbleProps) {
                   content={message.content}
                   isUser={false}
                   isLast={isLast}
+                  sessionId={sessionId}
+                  msgId={message.id}
+                  question={question}
                   onRegenerate={() => {/* TODO: wire to store */}}
                 />
               </>
