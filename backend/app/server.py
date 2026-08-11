@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse  # 2026-08-11 /ops 看板路由需要
 
 from backend.app.api.router import api_router
 from backend.app.exceptions import (
