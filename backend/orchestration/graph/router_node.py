@@ -51,21 +51,8 @@ def router_node(state: dict) -> dict:
             "route_mode": "plan",
         }
 
-    # V1: workflow mode 也走 plan 路径（后续接 workflow_name）
+    # V2: workflow / direct 不再降级到 plan
     mode = decision.execution_mode
-    if mode == ExecutionMode.WORKFLOW:
-        # 暂未实现 workflow 节点 → 走 plan 路径但保留 workflow_name hint
-        logger.info(
-            f"[RouterNode] workflow={decision.workflow_name} "
-            f"暂未实现，降级到 plan 路径"
-        )
-        return {
-            **state,
-            "route_decision": decision.model_dump(),
-            "route_mode": "plan",
-            "route_workflow_hint": decision.workflow_name,
-        }
-
     return {
         **state,
         "route_decision": decision.model_dump(),
@@ -74,9 +61,11 @@ def router_node(state: dict) -> dict:
 
 
 def route_selector(state: dict) -> str:
-    """Router 节点后的条件路由：选择下一步节点。"""
+    """Router 节点后的条件路由：选择下一步节点（V2: 3 路分流）。"""
     mode = state.get("route_mode", "plan")
-    if mode == "plan":
-        return "planner"
-    # V1: direct / workflow 都先到 planner
+    if mode == "direct":
+        return "skill_executor"
+    if mode == "workflow":
+        return "workflow_executor"
+    # 默认 plan
     return "planner"
