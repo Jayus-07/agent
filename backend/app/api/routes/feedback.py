@@ -13,7 +13,7 @@ init_db()
 
 class FeedbackRequest(BaseModel):
     session_id: str = Field(..., min_length=1)
-    vote: str = Field(..., regex="^(positive|negative)$")
+    vote: str = Field(..., pattern="^(positive|negative)$")
     msg_id: str = ""
     question: str = ""
     answer_preview: str = ""
