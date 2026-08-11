@@ -40,6 +40,8 @@ class Router:
           2. Embedding (0.03s)
           3. LLM (3-5s)
         """
+        from backend.observability.metrics import record_router_decision
+
         t0 = time.time()
         # 1. Rule Router（强信号）
         result = self.rule.route(query)
@@ -47,6 +49,7 @@ class Router:
             logger.info(
                 f"[Router] Rule 命中: {result.reason} (latency={int((time.time()-t0)*1000)}ms)"
             )
+            record_router_decision(result.execution_mode.value, "rule", result.confidence)
             return result
 
         # 2. Embedding Router（语义匹配）
@@ -55,6 +58,7 @@ class Router:
             logger.info(
                 f"[Router] Embedding 命中: {result.reason} (latency={int((time.time()-t0)*1000)}ms)"
             )
+            record_router_decision(result.execution_mode.value, "embedding", result.confidence)
             return result
 
         # 3. LLM Router（兜底）
@@ -62,6 +66,7 @@ class Router:
         logger.info(
             f"[Router] LLM 兜底: {result.reason} (latency={int((time.time()-t0)*1000)}ms)"
         )
+        record_router_decision(result.execution_mode.value, "llm", result.confidence)
         return result
 
     async def aroute(self, query: str) -> RouteDecision:

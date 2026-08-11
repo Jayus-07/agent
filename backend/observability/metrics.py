@@ -90,6 +90,23 @@ nli_coverage_rate = Gauge(
     "NLI 有效校验率（0-1，1 = 无超时）",
 )
 
+# Router 监控（2026-08-11）：3 层 Router 决策可观测
+router_decision_total = Counter(
+    "router_decision_total",
+    "Router 决策总数（按 mode 统计）",
+    labelnames=("mode",),  # direct | plan | workflow
+)
+router_layer_total = Counter(
+    "router_layer_total",
+    "Router 哪一层命中（rule / embedding / llm）",
+    labelnames=("layer",),
+)
+router_confidence = Histogram(
+    "router_confidence",
+    "Router 决策置信度分布（0-1）",
+    buckets=(0.3, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 1.0),
+)
+
 # 实时 rate（Gauge 缓存最新计算值）
 rag_hit_rate = Gauge(
     "rag_hit_rate",
@@ -187,6 +204,22 @@ def update_metadata_coverage() -> None:
         pass
 
 
+def record_router_decision(mode: str, layer: str, confidence: float) -> None:
+    """埋点 Router 决策（2026-08-11）。
+
+    Args:
+        mode: execution_mode（direct / plan / workflow）
+        layer: 哪一层命中（rule / embedding / llm）
+        confidence: 决策置信度 0-1
+    """
+    try:
+        router_decision_total.labels(mode=mode).inc()
+        router_layer_total.labels(layer=layer).inc()
+        router_confidence.observe(confidence)
+    except Exception:
+        pass
+
+
 def render_metrics() -> tuple[bytes, str]:
     """生成 Prometheus 文本格式输出。
 
@@ -212,8 +245,13 @@ __all__ = [
     "rag_reject_rate",
     "doc_metadata_coverage",
     "feedback_positive_rate",
+    # Router 指标
+    "router_decision_total",
+    "router_layer_total",
+    "router_confidence",
     "record_rag_status",
     "record_feedback",
     "update_metadata_coverage",
+    "record_router_decision",
     "render_metrics",
 ]

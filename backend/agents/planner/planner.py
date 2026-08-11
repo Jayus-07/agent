@@ -104,6 +104,9 @@ def planner_node(state: dict) -> dict:
             "nodes": {"1": {...}, "2": {...}},
             "edges": {"3": ["1", "2"]}
         }
+
+    2026-08-11: 接收 Router candidates hint（state.route_decision.candidates）
+    作为 hint 注入 prompt，让 LLM 倾向使用这些 capability。
     """
     question = state.get("question", "")
     kb_id = state.get("kb_id", "default")
@@ -111,6 +114,16 @@ def planner_node(state: dict) -> dict:
     if not question:
         logger.warning("[Planner] 空问题，返回空 plan")
         return {"plan": {"nodes": {}, "edges": {}}}
+
+    # ── 2026-08-11: Router candidates hint ──
+    router_decision = state.get("route_decision") or {}
+    router_candidates = router_decision.get("candidates", []) if isinstance(router_decision, dict) else []
+    router_hint_text = ""
+    if router_candidates:
+        caps_text = ", ".join(
+            f"{c['name']}({c['score']:.2f})" for c in router_candidates
+        )
+        router_hint_text = f"\n\n【Router 建议】以下能力可能相关（仅供参考，可扩展）：{caps_text}"
 
     # ── P2 性能优化：缓存命中 → 跳过 LLM ──
     cached = _cache_get(question, kb_id)
@@ -125,7 +138,7 @@ def planner_node(state: dict) -> dict:
         capabilities_schema=capabilities_schema,
         cap_example=cap_example,
     )
-    user_msg = f"用户问题: {question}\n\n请输出 JSON:"
+    user_msg = f"用户问题: {question}{router_hint_text}\n\n请输出 JSON:"
 
     logger.info(f"[Planner] 分析问题: {question[:80]}...")
 
