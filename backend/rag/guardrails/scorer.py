@@ -16,6 +16,7 @@ from backend.config import ENABLE_FAITHFULNESS, FAITHFULNESS_SKIP_THRESHOLD
 from backend.rag.guardrails.claim_extractor import extract_claims
 from backend.rag.guardrails.risk_filter import filter_claims
 from backend.rag.guardrails.nli_checker import check_claims_batch
+from backend.rag.guardrails.nli_llm import evaluate_with_llm  # 2026-08-11 LLM-as-Judge
 from backend.shared.logger import logger
 
 
@@ -212,46 +213,86 @@ def check_faithfulness(
             supported_claims=0, unsupported_claims=0, claims=[], enabled=True,
         )
 
-    # 3. NLI 验证
-    nli_results = check_claims_batch(high_risk, context_docs)
-
-    # 4. 汇总 + 三级分级
-    claim_results = []
-    supported = 0
-    unsupported = 0
-    fallback_count = 0  # 2026-08-11：NLI fallback 计数
-
-    for r in nli_results:
-        cr = ClaimResult(
-            claim=r["claim"],
-            supported=r["supported"],
-            label=r["label"],
-            action=r.get("action", "pass"),
-            best_score=r["best_score"],
-            best_chunk_preview=r["best_chunk_preview"],
+    # 3. NLI 验证（2026-08-11：支持 LLM-as-Judge 整体评估，2026-08-12）
+    import os
+    use_llm_judge = os.getenv("NLI_USE_LLM", "false").lower() == "true"
+    if use_llm_judge:
+        # 路径 A: LLM-as-Judge（整体评估，1 次调用，5-10s）
+        verdict = evaluate_with_llm(answer_body, context_docs)
+        if verdict.fallback:
+            # 失败 fallback
+            try:
+                from backend.observability.metrics import nli_timeout_total
+                nli_timeout_total.inc()
+            except Exception:
+                pass
+            return FaithfulnessResult(
+                score=verdict.score, total_claims=len(claims), high_risk_claims=len(high_risk),
+                supported_claims=len(high_risk), unsupported_claims=0,
+                claims=[], enabled=True,
+            )
+        # 把 verdict 转成 claim_results 格式（统一下游）
+        nli_results = [
+            {
+                "claim": c, "supported": False, "best_score": 0.0,
+                "best_chunk_preview": "", "label": "contradiction_strong", "action": "rewrite",
+            }
+            for c in verdict.unsupported_claims
+        ] if verdict.unsupported_claims else [
+            {
+                "claim": "[整体可信]", "supported": True, "best_score": verdict.score,
+                "best_chunk_preview": "", "label": "entailment", "action": "pass",
+                "fallback_reason": "",  # LLM 真实校验
+            }
+        ]
+        logger.info(
+            f"[Faithfulness] LLM-Judge: score={verdict.score:.2f} "
+            f"unsupported={len(verdict.unsupported_claims)} reason={verdict.reason[:50]}"
         )
-        claim_results.append(cr)
-        if cr.supported:
-            supported += 1
-        else:
-            unsupported += 1
-        # 2026-08-11：检测 NLI fallback（避免静默成功）
-        if r.get("fallback_reason"):
-            fallback_count += 1
+        claim_results = []
+        supported = sum(1 for _ in nli_results if _["supported"])
+        unsupported = sum(1 for _ in nli_results if not _["supported"])
+    else:
+        # 路径 B: mDeBERTa 拆 claim（旧逻辑，30s+）
+        nli_results = check_claims_batch(high_risk, context_docs)
+
+        # 4. 汇总 + 三级分级
+        claim_results = []
+        supported = 0
+        unsupported = 0
+        fallback_count = 0  # 2026-08-11：NLI fallback 计数
+
+        for r in nli_results:
+            cr = ClaimResult(
+                claim=r["claim"],
+                supported=r["supported"],
+                label=r["label"],
+                action=r.get("action", "pass"),
+                best_score=r["best_score"],
+                best_chunk_preview=r["best_chunk_preview"],
+            )
+            claim_results.append(cr)
+            if cr.supported:
+                supported += 1
+            else:
+                unsupported += 1
+            # 2026-08-11：检测 NLI fallback（避免静默成功）
+            if r.get("fallback_reason"):
+                fallback_count += 1
+
+        # 2026-08-11：NLI fallback 警告 + 指标
+        if fallback_count > 0:
+            logger.warning(
+                f"[Faithfulness] ⚠️ NLI 全部 fallback：{fallback_count}/{len(nli_results)} claims 未实际校验"
+            )
+            try:
+                from backend.observability.metrics import nli_coverage_rate
+                coverage = (len(nli_results) - fallback_count) / len(nli_results) if nli_results else 1.0
+                nli_coverage_rate.set(coverage)
+            except Exception:
+                pass
 
     score = supported / len(nli_results) if nli_results else 1.0
-
-    # 2026-08-11：NLI fallback 警告 + 指标
-    if fallback_count > 0:
-        logger.warning(
-            f"[Faithfulness] ⚠️ NLI 全部 fallback：{fallback_count}/{len(nli_results)} claims 未实际校验"
-        )
-        try:
-            from backend.observability.metrics import nli_coverage_rate
-            coverage = (len(nli_results) - fallback_count) / len(nli_results) if nli_results else 1.0
-            nli_coverage_rate.set(coverage)
-        except Exception:
-            pass
 
     # P2: 50% 阈值保护 — NLI 误判保护
     # 当 unsupported 比例超过阈值（默认 50%）时，跳过 rewrite，保留原答案
