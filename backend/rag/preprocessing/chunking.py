@@ -155,3 +155,39 @@ class QAChunkStrategy:
             }))
             counter += 1
         return _enrich(chunks, file_path)
+
+
+STRUCTURE_STRATEGIES = {
+    "policy": StructureChunkStrategy,
+    "compliance": StructureChunkStrategy,
+    "security": StructureChunkStrategy,
+    "financial": StructureChunkStrategy,
+    "customer_data": StructureChunkStrategy,
+    "product_spec": StructureChunkStrategy,
+    "listing": StructureChunkStrategy,
+    "sop": StepChunkStrategy,
+    "training": StepChunkStrategy,
+    "legal": StructureChunkStrategy,      # 合同条款级结构 Phase 2 细化
+    "contract_template": StructureChunkStrategy,
+    "faq": QAChunkStrategy,
+    "ad_policy": RecursiveChunkStrategy,
+}
+
+
+class ChunkStrategyRouter:
+    """双轴路由：文档类型 × 结构完整度 → 策略。优先级 Structure > LLM > Semantic > Recursive。"""
+
+    def route(self, doc_type: str, report: StructureReport):
+        from backend.config import ENABLE_LLM_CHUNKING, ENABLE_SEMANTIC_CHUNKING
+
+        if report.is_complete:
+            cls = STRUCTURE_STRATEGIES.get(doc_type, RecursiveChunkStrategy)
+            return cls()
+
+        # Phase 2：LLM 高价值特殊处理、Semantic 高级处理（默认关闭，暂不触发）
+        if report.is_high_value_and_chaotic and ENABLE_LLM_CHUNKING:
+            logger.info("[Router] 高价值混乱文档 → LLM Assisted（Phase 2）")
+        if report.topic_shift_detected and ENABLE_SEMANTIC_CHUNKING:
+            logger.info("[Router] 主题变化 → Semantic（Phase 2）")
+
+        return RecursiveChunkStrategy()
