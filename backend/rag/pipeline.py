@@ -39,6 +39,7 @@ class RAGPipeline:
         self.doc_db = None
         self.chunk_retriever = None
         self.bm25 = None
+        self.bm25_store = None  # BM25Store 引用，供运行时删除/重建索引
         self._person_to_doc_cache = {}
         self._init()
 
@@ -263,6 +264,7 @@ class RAGPipeline:
 
         # BM25: 优先从磁盘加载持久化索引，避免每次启动重建
         bm25_store = BM25Store()
+        self.bm25_store = bm25_store  # 保留 store 引用，供删除/重索引时更新
         self.bm25 = bm25_store.load(k=BM25_SEARCH_K)
         if self.bm25 is None:
             logger.info("[RAG] BM25 索引不存在，全量重建...")
@@ -291,6 +293,22 @@ class RAGPipeline:
             person_index=self.person_index,
             memory_manager=_mem,
         )
+
+    def remove_documents_from_bm25(self, doc_ids: list[str]) -> None:
+        """运行时删除文档后，从 BM25 索引移除对应 chunk 并全量重建。
+
+        BM25 的 IDF 依赖全量文档统计，删除必须全量重建以保持准确。
+        只更新内存中的 self.bm25 与磁盘持久化索引，不动 Chroma 向量。
+        """
+        if not doc_ids or self.bm25_store is None:
+            return
+        try:
+            new_retriever = self.bm25_store.remove_documents(doc_ids, k=BM25_SEARCH_K)
+            if new_retriever is not None:
+                self.bm25 = new_retriever
+            logger.info(f"[RAG] BM25 已移除文档 {doc_ids}")
+        except Exception as e:
+            logger.warning(f"[RAG] BM25 移除文档失败 ({doc_ids}): {e}")
 
     # =====================================================
     # 版本校验

@@ -209,14 +209,23 @@ async def reject_pending_doc(doc_id: str, request: Request):
         if updated == 0:
             return {"ok": False, "error": "状态更新失败（可能并发）"}
 
+        # 级联清理（与 delete 一致，避免 rejected 文档残留孤儿向量/索引）
+        warnings: list[str] = []
+        try:
+            pipeline = get_rag_pipeline()
+            _purge_doc_vectors(doc_id, doc.get("file_path", ""), pipeline, warnings)
+        except Exception as e:
+            logger.warning(f"[RAG] reject 级联清理异常: {e}")
+            warnings.append(f"级联清理异常: {e}")
+
         _safe_log_op(
             doc_id, doc.get("file_name", ""), "reject", source,
             trace_id=None, batch_id=None,
             result="success", duration_ms=0,
-            detail={"from": "pending_review", "to": "deleted"},
+            detail={"from": "pending_review", "to": "deleted", "warnings": warnings or None},
         )
 
-        return {"ok": True, "doc_id": doc_id, "new_status": "deleted"}
+        return {"ok": True, "doc_id": doc_id, "new_status": "deleted", "warnings": warnings or None}
     except Exception as e:
         logger.error(f"[RAG] reject 失败: {e}")
         return {"ok": False, "error": str(e)}
@@ -317,6 +326,37 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
         return {"ok": False, "error": str(e)}
 
 
+def _purge_doc_vectors(doc_id: str, file_path: str, pipeline, warnings: list[str]) -> None:
+    """级联删除一个 Doc 的全部向量/索引/文件（Chroma 两库 + chunk_store + BM25 + 原文件）。
+
+    不负责 registry 状态变更——由调用方决定 mark_deleted 还是 update_status。
+    """
+    try:
+        pipeline.vectordb.delete(where={"doc_id": doc_id})
+    except Exception as e:
+        warnings.append(f"向量库(chunks)清理失败: {e}")
+    try:
+        pipeline.doc_db.delete(where={"doc_id": doc_id})
+    except Exception as e:
+        warnings.append(f"向量库(doc)清理失败: {e}")
+    try:
+        from backend.rag.indexing.chunk_store import get_chunk_store
+        get_chunk_store().delete_by_doc_id(doc_id)
+    except Exception as e:
+        warnings.append(f"chunk_store 清理失败: {e}")
+    try:
+        pipeline.remove_documents_from_bm25([doc_id])
+    except Exception as e:
+        warnings.append(f"BM25 清理失败: {e}")
+    if file_path:
+        try:
+            os.remove(file_path)
+        except FileNotFoundError:
+            pass  # 文件已不在，正常
+        except OSError as e:
+            warnings.append(f"原文件删除失败: {e}")
+
+
 @router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str, request: Request):
     """删除文档 — 软删 registry + 清理两处向量 + 删原文件（防 sync 复活）"""
@@ -339,40 +379,9 @@ async def delete_document(doc_id: str, request: Request):
         if deleted_rows == 0:
             warnings.append("registry 中无活跃记录（可能已被删除）")
 
-        # ② 清理两处向量
+        # ②③④⑤ 级联清理向量/索引/文件（含 BM25）
         pipeline = get_rag_pipeline()
-        try:
-            pipeline.vectordb.delete(where={"doc_id": doc_id})
-        except Exception as e:
-            msg = f"向量库(chunks)清理失败: {e}"
-            logger.warning(f"[RAG] {msg}")
-            warnings.append(msg)
-        try:
-            pipeline.doc_db.delete(where={"doc_id": doc_id})
-        except Exception as e:
-            msg = f"向量库(doc)清理失败: {e}"
-            logger.warning(f"[RAG] {msg}")
-            warnings.append(msg)
-
-        # ③ 清理 chunk_store
-        try:
-            from backend.rag.indexing.chunk_store import get_chunk_store
-            get_chunk_store().delete_by_doc_id(doc_id)
-        except Exception as e:
-            msg = f"chunk_store 清理失败: {e}"
-            logger.warning(f"[RAG] {msg}")
-            warnings.append(msg)
-
-        # ④ 删原文件
-        if file_path:
-            try:
-                os.remove(file_path)
-            except FileNotFoundError:
-                pass  # 文件已不在，正常
-            except OSError as e:
-                msg = f"原文件删除失败: {e}"
-                logger.warning(f"[RAG] {msg}")
-                warnings.append(msg)
+        _purge_doc_vectors(doc_id, file_path, pipeline, warnings)
 
         logger.info(f"[RAG] 已删除文档: {doc_id}" + (f"（{len(warnings)} 个警告）" if warnings else ""))
         _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, batch_id=batch_id,
