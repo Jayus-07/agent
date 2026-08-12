@@ -1,15 +1,17 @@
 """
-verify_router.py — Router 端到端验收脚本（2026-08-11）
+verify_router.py - Router 端到端验收脚本（2026-08-11）
 
 用法:
-    python scripts/verify_router.py
+    D:/Python/python.exe -X utf8 scripts/verify_router.py
 
-5 层验证:
-  1. Rule Router（强信号 + 弱信号 + 无信号）
-  2. Vector Router（启动 + 索引 + 检索）
-  3. LLM Router（fallback + JSON 解析）
-  4. Graph 编译（含 router 节点）
-  5. Metrics 暴露（router_decision / router_layer / router_confidence）
+7 层验证:
+  1. Rule Router    (强信号 + 弱信号 + 无信号)
+  2. Vector Router  (启动 + 索引 + 检索)
+  3. LLM Router     (fallback + JSON 解析)
+  4. Router 主流程  (3 层 fallback)
+  5. Graph 编译     (LangGraph 集成)
+  6. Metrics 暴露   (Prom 指标)
+  7. V2 Executors   (skill_executor + workflow_executor)
 """
 import sys
 import time
@@ -46,7 +48,6 @@ def verify_rule_router():
 
     rr = RuleRouter()
     tests = [
-        # (query, expected_mode, expected_confidence_min, desc)
         ("每天跑日报", "workflow", 0.9, "workflow 强信号"),
         ("生成日报", "workflow", 0.9, "workflow 关键词"),
         ("自动检查库存", "workflow", 0.9, "workflow 关键词"),
@@ -87,7 +88,6 @@ def verify_vector_router():
             count = vr._collection._collection.count()
             check("路由索引加载", count > 0, f"{count} 条 example")
 
-            # 测试检索
             t0 = time.time()
             d = vr.route("哪些商品需要补货")
             query_time = time.time() - t0
@@ -113,7 +113,6 @@ def verify_llm_router():
 
         lr = LLMRouter(timeout=20)
 
-        # 测试 fallback
         d = lr._fallback("test query", reason="test")
         check(
             "fallback 返回 RouteDecision",
@@ -124,7 +123,6 @@ def verify_llm_router():
             len(d.candidates) > 0 and d.candidates[0].name in ALL_CAPABILITIES,
         )
 
-        # 测试 _extract_json（模块级函数）
         from backend.orchestration.router.llm_router import _extract_json
         test_cases = [
             ('{"score": 0.8, "candidates": [{"name": "sql.query", "score": 0.8}]}', True),
@@ -153,7 +151,6 @@ def verify_router_main():
         r = get_router()
         check("Router 单例获取", r is not None)
 
-        # Rule 强信号
         t0 = time.time()
         d1 = r.route("每天跑日报")
         t1 = time.time() - t0
@@ -163,18 +160,15 @@ def verify_router_main():
             f"{t1*1000:.1f}ms",
         )
 
-        # SQL 强信号
         d2 = r.route("最近 30 天销量统计")
         check(
             "Rule 路径（最近销量）",
             d2.execution_mode == ExecutionMode.DIRECT and "sql.query" in [c.name for c in d2.candidates],
         )
 
-        # 弱信号（走 LLM）
         t0 = time.time()
         d3 = r.route("差评处理流程")
         t3 = time.time() - t0
-        # LLM 可能输出 plan（多步） 或 direct（单 capability 如 RAG）
         llm_works = (
             d3.execution_mode in (ExecutionMode.PLAN, ExecutionMode.DIRECT)
             and d3.confidence >= 0.3
@@ -213,13 +207,11 @@ def verify_metrics():
             render_metrics, router_decision_total, router_layer_total, router_confidence,
         )
 
-        # 跑 3 次路由
         from backend.orchestration.router import get_router
         r = get_router()
         for q in ["每天跑日报", "最近销量", "差评"]:
             r.route(q)
 
-        # 渲染 /metrics
         body, _ = render_metrics()
         body_str = body.decode() if isinstance(body, bytes) else body
 
@@ -232,11 +224,69 @@ def verify_metrics():
 
 
 # =============================================================
+# Layer 7: V2 Executors（direct / workflow）
+# =============================================================
+def verify_v2_executors():
+    section("Layer 7: V2 Executors（skill_executor / workflow_executor）")
+    try:
+        from backend.orchestration.graph.router_node import route_selector, router_node
+        from backend.orchestration.graph.direct_executor import skill_executor_node, workflow_executor_node
+        from backend.orchestration.workflow.registry import get_workflow_registry
+        from backend.orchestration.workflows.daily_report import DailyReport
+
+        # 1. route_selector 三路分流
+        check("route_selector plan", route_selector({"route_mode": "plan"}) == "planner")
+        check("route_selector direct", route_selector({"route_mode": "direct"}) == "skill_executor")
+        check("route_selector workflow", route_selector({"route_mode": "workflow"}) == "workflow_executor")
+
+        # 2. router_node 不再降级 direct/workflow 到 plan
+        from backend.orchestration.router.types import ExecutionMode
+        decision_plan = {
+            "execution_mode": ExecutionMode.PLAN,
+            "candidates": [{"name": "sql.query", "score": 0.85}],
+            "confidence": 0.85,
+        }
+        s1 = router_node({"question": "test", "route_decision": decision_plan})
+        check("router_node plan 模式 → route_mode=plan", s1.get("route_mode") == "plan")
+
+        # 3. skill_executor_node 写 final_answer + step_results
+        decision_direct = {
+            "execution_mode": ExecutionMode.DIRECT,
+            "candidates": [{"name": "rag.search", "score": 0.9}],
+            "confidence": 0.9,
+        }
+        s2 = skill_executor_node({"question": "test", "route_decision": decision_direct, "kb_id": "default"})
+        check("skill_executor 写 step_results", "step_results" in s2)
+        check("skill_executor 写 final_answer 或 executor_error",
+              "final_answer" in s2 or "executor_error" in s2)
+
+        # 4. workflow_executor_node 调真实 workflow
+        reg = get_workflow_registry()
+        if reg.get("daily_report") is None:
+            reg.register(DailyReport)
+        decision_workflow = {
+            "execution_mode": ExecutionMode.WORKFLOW,
+            "workflow_name": "daily_report",
+            "candidates": [],
+            "confidence": 0.95,
+        }
+        s3 = workflow_executor_node({
+            "question": "test",
+            "session_id": "verify",
+            "route_decision": decision_workflow,
+        })
+        check("workflow_executor 写 final_answer", "final_answer" in s3)
+        check("workflow_executor executor_mode=workflow", s3.get("executor_mode") == "workflow")
+    except Exception as e:
+        check("V2 Executors 整体", False, str(e))
+
+
+# =============================================================
 # 主流程
 # =============================================================
 def main():
     print("=" * 60)
-    print("Router 验收脚本（5 层）")
+    print("Router 验收脚本（7 层）")
     print("=" * 60)
 
     verify_rule_router()
@@ -245,11 +295,11 @@ def main():
     verify_router_main()
     verify_graph()
     verify_metrics()
+    verify_v2_executors()
 
-    # 总结
     total = passed + failed
     print("\n" + "=" * 60)
-    print(f"结果: {passed}/{total} 通过" + (f" ({failed} 失败)" if failed else " ✓"))
+    print(f"结果: {passed}/{total} 通过" + (f" ({failed} 失败)" if failed else ""))
     print("=" * 60)
 
     return 0 if failed == 0 else 1
