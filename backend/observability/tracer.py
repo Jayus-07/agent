@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List
 
+from backend.shared.logger import logger
+
 MAX_TRACES = 200
 
 # 异步安全：用 contextvars 隔离并发请求的 current_trace
