@@ -172,9 +172,86 @@ class ChunkLevelRetriever(BaseRetriever):
             return []
 
         logger.info(f"ChunkLevelRetriever Stage 2: 召回 {len(all_docs)} 个 chunks")
+
+        # ── Adaptive Retrieval: 质量不足时自动扩大 K ──
+        all_docs = self._adaptive_expand(query, all_docs, doc_ids,
+                                         request_metadata_filter, seen)
+
         trace_collector.end_span(span,
                              metrics={"retrieved_chunks": len(all_docs)})
         return all_docs[: self.k]
+
+    def _adaptive_expand(self, query: str, docs: list, doc_ids: list | None,
+                         metadata_filter: dict, seen: set) -> list:
+        """自适应 K 扩展：相似度不足或有效 chunk 太少时自动扩大检索范围。"""
+        try:
+            from backend.config import (
+                ADAPTIVE_RETRIEVAL_ENABLED, ADAPTIVE_MIN_SCORE,
+                ADAPTIVE_MIN_CHUNKS, ADAPTIVE_K_STEPS,
+            )
+        except ImportError:
+            return docs
+
+        if not ADAPTIVE_RETRIEVAL_ENABLED or not docs:
+            return docs
+
+        # 用向量相似度（非 rerank 分数）判断质量
+        scores = []
+        for d in docs:
+            s = d.metadata.get("similarity") or d.metadata.get("score", 0)
+            try:
+                scores.append(float(s))
+            except (TypeError, ValueError):
+                scores.append(0.0)
+
+        max_score = max(scores) if scores else 0.0
+        effective = sum(1 for s in scores if s > 0.3)
+
+        if max_score >= ADAPTIVE_MIN_SCORE and effective >= ADAPTIVE_MIN_CHUNKS:
+            return docs  # 质量够，不需要扩展
+
+        # 逐级扩展 K 直到满足阈值或用尽步长
+        for step_k in ADAPTIVE_K_STEPS:
+            if step_k <= self.k:
+                continue
+            logger.info(
+                f"[Adaptive] 质量不足 (max_score={max_score:.3f} < {ADAPTIVE_MIN_SCORE}, "
+                f"effective={effective} < {ADAPTIVE_MIN_CHUNKS}) → 扩展 k={self.k}→{step_k}"
+            )
+            extra = hybrid_retrieve(
+                query, self.chunk_retriever, self.bm25,
+                k=step_k, doc_ids=doc_ids,
+                metadata_filter=metadata_filter,
+            )
+            new_count = 0
+            for d in extra:
+                cid = d.metadata.get("chunk_id") or f'{d.metadata.get("doc_id","?")}:{d.metadata.get("chunk_index",0)}'
+                if cid not in seen:
+                    seen.add(cid)
+                    docs.append(d)
+                    new_count += 1
+
+            if new_count == 0:
+                continue  # 没新文档，试下一步
+
+            # 重新评估质量
+            scores = []
+            for d in docs:
+                s = d.metadata.get("similarity") or d.metadata.get("score", 0)
+                try:
+                    scores.append(float(s))
+                except (TypeError, ValueError):
+                    scores.append(0.0)
+            max_score = max(scores) if scores else 0.0
+            effective = sum(1 for s in scores if s > 0.3)
+            if max_score >= ADAPTIVE_MIN_SCORE and effective >= ADAPTIVE_MIN_CHUNKS:
+                logger.info(f"[Adaptive] 扩展后达标: k={step_k}, docs={len(docs)}, max_score={max_score:.3f}")
+                self.k = step_k  # 记住扩展后的 K
+                break
+        else:
+            logger.info(f"[Adaptive] 扩展用尽，最终 docs={len(docs)}, max_score={max_score:.3f}")
+
+        return docs
 
     def _neighbor_expansion(self, query: str, doc_ids: list | None,
                             metadata_filter: dict) -> List[Document]:
