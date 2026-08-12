@@ -1,6 +1,7 @@
 """切分流水线编排 — Parser → Cleaner → Analyzer → Router → Strategy。"""
 from __future__ import annotations
 
+import os
 from typing import List
 
 from langchain_core.documents import Document
@@ -13,9 +14,15 @@ from backend.rag.preprocessing.chunking import ChunkStrategyRouter
 from backend.rag.preprocessing.ast import walk
 from backend.shared.logger import logger
 
+_SUPPORTED_EXTS = {".md", ".markdown", ".txt"}
+
 
 def parse_and_chunk(file_path: str, doc_type_hint: str = "") -> List[Document]:
     """单文件完整切分流水线。返回 leaf + parent 双粒度 chunk。"""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext not in _SUPPORTED_EXTS:
+        logger.warning(f"[ChunkPipeline] 暂不支持 {ext}（Phase 2），跳过: {file_path}")
+        return []
     raw_ast = parse_file(file_path)
 
     # 结构安全清洗：清洗每个节点文本，保留结构
