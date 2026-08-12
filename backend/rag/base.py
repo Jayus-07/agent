@@ -78,6 +78,9 @@ class CustomRetriever:
                     f"content={doc.page_content[:50]}..."
                 )
 
-        docs = [doc for doc, score in docs_with_scores]
+        docs = []
+        for doc, score in docs_with_scores:
+            doc.metadata["similarity"] = round(score, 4)  # 保留向量相似度，供自适应检索用
+            docs.append(doc)
 
         return docs
