@@ -17,6 +17,7 @@ from langgraph.graph import StateGraph, START, END
 from backend.orchestration.state import AgentState
 from backend.orchestration.graph.router_node import router_node, route_selector
 from backend.orchestration.graph.direct_executor import skill_executor_node, workflow_executor_node
+from backend.observability.trace_middleware import trace_middleware
 from backend.agents.planner.planner import planner_node
 from backend.agents.planner.critique import critique_node
 from backend.orchestration.supervisor.scheduler import supervisor_node, route_after_supervisor
@@ -88,18 +89,20 @@ def build_graph():
     """
     wf = StateGraph(AgentState)
 
-    # ── 内置节点（永远不变）────────────────────────
-    wf.add_node("router", router_node)  # 2026-08-11：3 层 fallback Router
-    wf.add_node("skill_executor", skill_executor_node)  # V2: direct mode
-    wf.add_node("workflow_executor", workflow_executor_node)  # V2: workflow mode
-    wf.add_node("planner", planner_node)
-    wf.add_node("critique", critique_node)
-    wf.add_node("supervisor", supervisor_node)
-    wf.add_node("reporter", reporter_node)
+    # ── 内置节点（永远不变，TraceMiddleware 自动记录 Span）──
+    wf.add_node("router", trace_middleware.wrap_sync_node("router", router_node))
+    wf.add_node("skill_executor", trace_middleware.wrap_sync_node("skill_executor", skill_executor_node))
+    wf.add_node("workflow_executor", trace_middleware.wrap_sync_node("workflow_executor", workflow_executor_node))
+    wf.add_node("planner", trace_middleware.wrap_sync_node("planner", planner_node))
+    wf.add_node("critique", trace_middleware.wrap_sync_node("critique", critique_node))
+    wf.add_node("supervisor", trace_middleware.wrap_sync_node("supervisor", supervisor_node))
+    wf.add_node("reporter", trace_middleware.wrap_sync_node("reporter", reporter_node))
 
-    # ── Skill 节点（自动发现：谁注册了就加谁）───────
+    # ── Skill 节点（自动发现 + TraceMiddleware 自动记录 Span）──
     for name, func in tool_registry.get_skill_nodes().items():
-        wf.add_node(name, _make_sync(func))
+        sync_func = _make_sync(func)
+        traced_func = trace_middleware.wrap_sync_node(name, sync_func)
+        wf.add_node(name, traced_func)
         wf.add_edge(name, "supervisor")  # 完成 → 回到 Supervisor
         logger.info(f"[Graph] 自动注册 Skill 节点: {name}")
 
