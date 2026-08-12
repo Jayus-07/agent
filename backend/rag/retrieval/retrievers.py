@@ -186,7 +186,7 @@ class ChunkLevelRetriever(BaseRetriever):
         """自适应 K 扩展：相似度不足或有效 chunk 太少时自动扩大检索范围。"""
         try:
             from backend.config import (
-                ADAPTIVE_RETRIEVAL_ENABLED, ADAPTIVE_MIN_SCORE,
+                ADAPTIVE_RETRIEVAL_ENABLED,
                 ADAPTIVE_MIN_CHUNKS, ADAPTIVE_K_STEPS,
             )
         except ImportError:
@@ -204,19 +204,23 @@ class ChunkLevelRetriever(BaseRetriever):
             except (TypeError, ValueError):
                 scores.append(0.0)
 
-        max_score = max(scores) if scores else 0.0
-        effective = sum(1 for s in scores if s > 0.3)
+        # 用 chunk 数量和文档来源多样性判断质量
+        unique_docs = len(set(d.metadata.get("doc_id", "") for d in docs if d.metadata.get("doc_id")))
+        effective = sum(1 for d in docs if len(d.page_content.strip()) > 20)
 
-        if max_score >= ADAPTIVE_MIN_SCORE and effective >= ADAPTIVE_MIN_CHUNKS:
-            return docs  # 质量够，不需要扩展
+        if unique_docs >= ADAPTIVE_MIN_CHUNKS or effective >= ADAPTIVE_MIN_CHUNKS * 2:
+            return docs  # 已覆盖足够多文档/chunk
+
+        logger.info(
+            f"[Adaptive] 覆盖面不足 (unique_docs={unique_docs} < {ADAPTIVE_MIN_CHUNKS}, "
+            f"effective={effective}) → 扩展检索"
 
         # 逐级扩展 K 直到满足阈值或用尽步长
         for step_k in ADAPTIVE_K_STEPS:
             if step_k <= self.k:
                 continue
             logger.info(
-                f"[Adaptive] 质量不足 (max_score={max_score:.3f} < {ADAPTIVE_MIN_SCORE}, "
-                f"effective={effective} < {ADAPTIVE_MIN_CHUNKS}) → 扩展 k={self.k}→{step_k}"
+                f"[Adaptive] 覆盖面不足 → 扩展 k={self.k}→{step_k}"
             )
             extra = hybrid_retrieve(
                 query, self.chunk_retriever, self.bm25,
@@ -234,22 +238,15 @@ class ChunkLevelRetriever(BaseRetriever):
             if new_count == 0:
                 continue  # 没新文档，试下一步
 
-            # 重新评估质量
-            scores = []
-            for d in docs:
-                s = d.metadata.get("rrf_score") or d.metadata.get("similarity") or 0
-                try:
-                    scores.append(float(s))
-                except (TypeError, ValueError):
-                    scores.append(0.0)
-            max_score = max(scores) if scores else 0.0
-            effective = sum(1 for s in scores if s > 0.3)
-            if max_score >= ADAPTIVE_MIN_SCORE and effective >= ADAPTIVE_MIN_CHUNKS:
-                logger.info(f"[Adaptive] 扩展后达标: k={step_k}, docs={len(docs)}, max_score={max_score:.3f}")
-                self.k = step_k  # 记住扩展后的 K
+            # 重新评估：文档来源数是否足够
+            unique_docs = len(set(d.metadata.get("doc_id", "") for d in docs if d.metadata.get("doc_id")))
+            effective = sum(1 for d in docs if len(d.page_content.strip()) > 20)
+            if unique_docs >= ADAPTIVE_MIN_CHUNKS or effective >= ADAPTIVE_MIN_CHUNKS * 2:
+                logger.info(f"[Adaptive] 扩展后达标: k={step_k}, docs={len(docs)}, unique={unique_docs}")
+                self.k = step_k
                 break
         else:
-            logger.info(f"[Adaptive] 扩展用尽，最终 docs={len(docs)}, max_score={max_score:.3f}")
+            logger.info(f"[Adaptive] 扩展用尽，最终 docs={len(docs)}")
 
         return docs
 

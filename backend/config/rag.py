@@ -86,10 +86,9 @@ MULTI_QUERY_MIN_LENGTH = int(os.getenv("MULTI_QUERY_MIN_LENGTH", "3"))
 # ====================================
 ADAPTIVE_CLUSTER_THRESHOLD = float(os.getenv("ADAPTIVE_CLUSTER_THRESHOLD", "0.3"))
 ADAPTIVE_MAX_CLUSTER_DOCS = int(os.getenv("ADAPTIVE_MAX_CLUSTER_DOCS", "2"))
-# 自适应 K 扩展：检索质量不足时自动扩大 Top-K
+# 自适应 K 扩展：覆盖面不足时自动扩大 Top-K
 ADAPTIVE_RETRIEVAL_ENABLED = os.getenv("ADAPTIVE_RETRIEVAL_ENABLED", "true").lower() == "true"
-ADAPTIVE_MIN_SCORE = float(os.getenv("ADAPTIVE_MIN_SCORE", "0.4"))      # 最高相似度低于此触发扩展
-ADAPTIVE_MIN_CHUNKS = int(os.getenv("ADAPTIVE_MIN_CHUNKS", "3"))         # 有效 chunk 数低于此触发扩展
+ADAPTIVE_MIN_CHUNKS = int(os.getenv("ADAPTIVE_MIN_CHUNKS", "1"))         # 覆盖文档数/有效 chunk 低于此触发扩展
 ADAPTIVE_K_STEPS = [int(x) for x in os.getenv("ADAPTIVE_K_STEPS", "8,12,16").split(",")]  # 扩展步长
 
 # 摘要长度限制
