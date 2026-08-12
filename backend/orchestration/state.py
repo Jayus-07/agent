@@ -52,6 +52,12 @@ class AgentState(TypedDict):
     current_step_id: str | None                 # 当前正在执行的 step（Worker 用）
     messages: Annotated[list, add_messages]     # ReAct 对话历史
     final_answer: str                           # Reporter 产物
+    route_decision: dict                         # Router 决策（execution_mode + candidates + workflow_name）
+    route_mode: str                              # Router 决策的模式字符串（direct/plan/workflow）
+    executor_error: str | None                   # V2 executor 错误信息
+    executor_mode: str | None                    # V2 executor 模式（direct/workflow）
+    executor_workflow: str | None                # V2 executor 实际执行的 workflow 名
+    workflow_result: dict | None                 # V2 workflow executor 结果快照
     # ⭐ 新增：可观测性 + 流程控制字段
     alerts: list[dict]                          # PlanAlert 列表（SSE 流展示）
     _supervisor_loop_count: int                 # Supervisor 调度轮次计数
