@@ -50,8 +50,8 @@ class DailyReport:
         logger.info("[DailyReport] Step fetch_sales 开始")
         result = await call_sql({
             "query": "SELECT oi.product_id, SUM(oi.quantity) as total_qty, SUM(oi.price) as total_amount "
-                     "FROM order.order_items oi "
-                     "JOIN order.orders o ON oi.order_id = o.id "
+                     'FROM "order"."order_items" oi '
+                     'JOIN "order"."orders" o ON oi.order_id = o.id '
                      "WHERE o.created_at::date = CURRENT_DATE "
                      "GROUP BY oi.product_id"
         })
@@ -79,7 +79,7 @@ class DailyReport:
         logger.info("[DailyReport] Step fetch_promotions 开始")
         result = await call_sql({
             "query": "SELECT order_id, product_id, refund_amount, reason, created_at "
-                     "FROM order.refunds WHERE created_at > CURRENT_DATE - INTERVAL '7 days'"
+                     'FROM "order"."refunds" WHERE created_at > CURRENT_DATE - INTERVAL \'7 days\''
         })
         return {"promotions": result.get("rows", result)}
 

@@ -56,12 +56,15 @@ class InventoryAlert:
 
     @step(name="扫描库存")
     async def scan_inventory(self, ctx):
-        """Step 1: 扫所有商品当前库存（SQL）"""
+        """Step 1: 扫所有商品当前库存（SQL）
+
+        2026-08-12 修正：FROM inventory → inventory.inventory；字段 current_qty → stock_quantity
+        """
         logger.info("[InventoryAlert] Step scan_inventory 开始")
         result = await call_sql({
             "query": (
-                "SELECT product_id, product_name, category, current_qty, "
-                "supplier_grade FROM inventory WHERE current_qty >= 0"
+                "SELECT product_id, category, stock_quantity, "
+                "supplier_grade FROM inventory.inventory WHERE stock_quantity >= 0"
             ),
         })
         items = result.get("rows", result)
@@ -73,9 +76,11 @@ class InventoryAlert:
         logger.info("[InventoryAlert] Step fetch_sales_history 开始")
         result = await call_sql({
             "query": (
-                "SELECT product_id, date, SUM(qty) as qty "
-                "FROM sales WHERE date > CURRENT_DATE - INTERVAL '30 days' "
-                "GROUP BY product_id, date"
+                "SELECT oi.product_id, o.created_at::date as date, SUM(oi.quantity) as qty "
+                'FROM "order"."order_items" oi '
+                'JOIN "order"."orders" o ON oi.order_id = o.id '
+                "WHERE o.created_at > CURRENT_DATE - INTERVAL '30 days' "
+                "GROUP BY oi.product_id, o.created_at::date"
             ),
         })
         rows = result.get("rows", result)
