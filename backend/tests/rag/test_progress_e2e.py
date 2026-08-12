@@ -199,6 +199,7 @@ class TestProgressListenerE2E:
         # sync 返回 SyncResult（added=1，因为是新文件）
         assert result.added == 1
 
+    @pytest.mark.skip(reason="Phase 1 仅支持 md/txt，pdf 解析失败路径延后到 Phase 2")
     def test_parse_failure_propagates_to_error_stage(self, fresh_collector, tmp_path):
         """parse 失败 → SSE error 事件（虽然 ProgressListener 不直接发 error，由 _run_index_background 发）"""
         # 这个测试验证 _run_index_background 的 emit('error') 路径

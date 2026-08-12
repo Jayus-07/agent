@@ -247,14 +247,14 @@ class TestFinish:
         assert t.answer_len == 500
 
     def test_finish_clears_current_trace(self):
-        """finish 后再 start_span 必须 raise（_current_trace = None）"""
+        """finish 后 current trace 被清空，start_span 软失败返回 noop span（不抛错）"""
         tc = TraceCollector()
         t = tc.start("q")
         root = tc.start_span("root")
         tc.end_span(root)
         tc.finish(t, "ans", total_ms=10, model="m")
-        with pytest.raises(RuntimeError, match="start"):
-            tc.start_span("x")
+        span = tc.start_span("x")
+        assert span.sequence == -1  # noop span
 
     def test_finish_aggregates_tokens_across_spans(self):
         tc = TraceCollector()
@@ -290,10 +290,12 @@ class TestFinish:
 # ==========================================================
 
 class TestErrorPaths:
-    def test_start_span_before_start_raises(self):
+    def test_start_span_before_start_returns_noop(self):
+        """无 active trace 时 start_span 软失败：返回 noop span 而非抛错（LangGraph 跨线程安全）"""
         tc = TraceCollector()
-        with pytest.raises(RuntimeError, match="start"):
-            tc.start_span("orphan")
+        span = tc.start_span("orphan")
+        assert span.span_id == "orphan"
+        assert span.sequence == -1  # noop span 标记
 
     def test_span_without_end_has_zero_duration(self):
         """异常路径：span end 被跳过 → duration 保持 0，前端可识别"""
