@@ -89,8 +89,8 @@ QA_PROMPT = ChatPromptTemplate.from_messages([
 ```
 
 正文末尾必须输出：
-- 可回答 → `<!--META{"can_answer":true,"citations":["E1","E2"],"confidence":0.85}-->`
-- 不可回答 → `<!--META{"can_answer":false,"reason":"no_evidence","confidence":0.1}-->`
+- 可回答 → `<!--META{{"can_answer":true,"citations":["E1","E2"],"confidence":0.85}}-->`
+- 不可回答 → `<!--META{{"can_answer":false,"reason":"no_evidence","confidence":0.1}}-->`
 
 reason 取值：no_evidence / low_relevance / insufficient / out_of_scope
 

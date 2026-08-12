@@ -216,7 +216,7 @@ def check_faithfulness(
     # 注意：NLI_USE_LLM 从 backend.config 导入（确保 load_dotenv 已触发）
     if NLI_USE_LLM:
         # 路径 A: LLM-as-Judge（整体评估，1 次调用，5-10s）
-        verdict = evaluate_with_llm(answer_body, context_docs)
+        verdict = evaluate_with_llm(answer, context_docs)
         if verdict.fallback:
             # 失败 fallback
             try:
