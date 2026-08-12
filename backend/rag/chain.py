@@ -63,6 +63,11 @@ CONTEXTUALIZE_PROMPT = ChatPromptTemplate.from_messages([
 QA_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """你是跨境电商知识库助手。你**只能**根据下方提供的资料回答问题，**严禁**使用资料之外的知识。
 
+注意：资料可能来自多个不同的检索查询，每条资料末尾的 [查询: xxx] 标注了它的来源查询。
+- 优先使用与用户问题最直接相关的查询结果作为主要证据
+- 其他查询的结果仅供参考，**不要把不同查询的事实拼接在一起编造答案**
+- 如果某个数字/时效只出现在与问题不直接相关的查询结果中，不要将其作为答案
+
 回答格式（严格遵守，否则会被系统判为格式错误而拒答）:
 1. 正文用 Markdown，分点或分段均可
 2. 每个事实/数据必须标注来源编号 [1]、[2]、[3]
@@ -84,7 +89,7 @@ QA_PROMPT = ChatPromptTemplate.from_messages([
 
 # 单文档格式化：含元数据标签（非空字段才显示，不浪费 token）
 DOCUMENT_PROMPT = PromptTemplate.from_template(
-    "[文档{index}] 来源: {source_file}"
+    "[文档{index}]{source_query_label} 来源: {source_file}"
     "{doc_type_label}"
     "{business_domain_label}"
     "{summary_label}"
@@ -161,6 +166,8 @@ class RAGChain:
             for i, doc in enumerate(docs, 1):
                 doc.metadata["index"] = i
                 # 注入元数据标签（非空才显示，不浪费 token）
+                sq = doc.metadata.get("source_query", "")
+                doc.metadata["source_query_label"] = f" [查询: {sq}]" if sq else ""
                 dt = doc.metadata.get("doc_type", "")
                 doc.metadata["doc_type_label"] = f"\n类型: {dt}" if dt and dt != "general" else ""
                 bd = doc.metadata.get("business_domain", "")

@@ -272,18 +272,29 @@ class MultiQueryRetriever(BaseRetriever):
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
         docs, seen = [], set()
+        # 按 query 分组检索，每个 doc 标记来源查询
+        evidence_groups: dict[str, list] = {}
         with ThreadPoolExecutor(max_workers=min(3, len(queries))) as ex:
-            for future in as_completed(
-                {ex.submit(self.base_retriever.invoke, q): q for q in queries}
-            ):
+            future_to_q = {ex.submit(self.base_retriever.invoke, q): q for q in queries}
+            for future in as_completed(future_to_q):
+                q = future_to_q[future]
                 try:
+                    q_docs = []
                     for d in future.result():
                         cid = d.metadata.get("chunk_id", d.metadata.get("doc_id", "?"))
                         if cid not in seen:
                             seen.add(cid)
+                            d.metadata["source_query"] = q  # 标记来源查询
+                            q_docs.append(d)
                             docs.append(d)
+                    evidence_groups[q] = q_docs
                 except Exception as e:
                     logger.warning(f"[MultiQuery] 检索失败: {e}")
+                    evidence_groups[q] = []
+
+        # 注入 evidence_groups 到首个 doc，供 prompt 模板使用
+        if docs:
+            docs[0].metadata["_evidence_groups"] = evidence_groups
 
         logger.info(
             f"[MultiQuery] {reason}: {query[:30]} → "
