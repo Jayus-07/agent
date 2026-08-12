@@ -63,8 +63,8 @@ class InventoryAlert:
         logger.info("[InventoryAlert] Step scan_inventory 开始")
         result = await call_sql({
             "query": (
-                "SELECT product_id, category, stock_quantity, "
-                "supplier_grade FROM inventory.inventory WHERE stock_quantity >= 0"
+                "SELECT product_id, warehouse_id, stock_quantity, safety_stock "
+                "FROM inventory.inventory WHERE stock_quantity >= 0"
             ),
         })
         items = result.get("rows", result)
@@ -122,7 +122,7 @@ class InventoryAlert:
             items=[
                 {
                     "product_id": i["product_id"],
-                    "current_qty": i["current_qty"],
+                    "current_qty": i["stock_quantity"],
                     "category": i.get("category"),
                 }
                 for i in items
