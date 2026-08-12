@@ -51,6 +51,14 @@ PROJECT_CHUNK_SIZE = int(os.getenv("PROJECT_CHUNK_SIZE", "1500"))
 GENERAL_CHUNK_SIZE = int(os.getenv("GENERAL_CHUNK_SIZE", "1000"))
 GENERAL_CHUNK_OVERLAP = int(os.getenv("GENERAL_CHUNK_OVERLAP", "100"))
 
+# 切分重构（token 计数 + 语义/LLM 切分开关）
+LEAF_CHUNK_TOKENS = int(os.getenv("LEAF_CHUNK_TOKENS", "500"))
+PARENT_CHUNK_TOKENS = int(os.getenv("PARENT_CHUNK_TOKENS", "2000"))
+STRUCTURE_COMPLETE_THRESHOLD = float(os.getenv("STRUCTURE_COMPLETE_THRESHOLD", "0.7"))
+ENABLE_SEMANTIC_CHUNKING = os.getenv("ENABLE_SEMANTIC_CHUNKING", "false").lower() == "true"
+ENABLE_LLM_CHUNKING = os.getenv("ENABLE_LLM_CHUNKING", "false").lower() == "true"
+LLM_CHUNK_MIN_CHARS = int(os.getenv("LLM_CHUNK_MIN_CHARS", "2000"))
+
 # ====================================
 # Knowledge Base 隔离配置
 # ====================================
