@@ -276,7 +276,7 @@ class RAGPipeline:
                 f"({bm25_store.doc_count()} 文档)，跳过重建"
             )
 
-        self.person_index = self._build_person_index()
+        self.person_index = {}  # 懒加载：首次人名查询时构建
 
         if ENABLE_MEMORY:
             from backend.memory import memory_manager
