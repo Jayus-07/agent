@@ -1,1 +1,12 @@
-[{"word": "供应商管理", "source": "rule"}, {"word": "CSV", "source": "rule"}, {"word": "数据采集", "source": "rule"}, {"word": "失败", "source": "rule"}, {"word": "格式", "source": "rule"}, {"word": "库存", "source": "rule"}, {"word": "调用", "source": "rule"}, {"word": "广告投放", "source": "rule"}, {"word": "po", "source": "rule"}, {"word": "数据", "source": "rule"}]: 25}}
+orm_input)
+
+        if input_mask is None:
+            output_states = output
+        else:
+            if input_mask.dim() != layer_norm_input.dim():
+                if input_mask.dim() == 4:
+                    input_mask = input_mask.squeeze(1).squeeze(1)
+                input_mask = input_mask.unsqueeze(2)
+
+            input_mask = input_mask.to(output.dtype)
+            output_states = output

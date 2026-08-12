@@ -285,7 +285,8 @@ class MultiAgentSystem:
                 yield {"event": "status", "data": {"node": node_name, "ts": time.time()}}
                 yield from self._stream_node_events(node_name, node_output)
 
-                if node_name in self._skill_nodes or node_name == "supervisor":
+                if node_name in self._skill_nodes or node_name == "supervisor" \
+                        or node_name in ("workflow_executor", "skill_executor"):
                     all_step_results.update(node_output.get("step_results", {}))
                 elif node_name == "reporter":
                     final_answer = node_output.get("final_answer", "")

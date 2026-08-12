@@ -168,9 +168,20 @@ def workflow_executor_node(state: dict) -> dict:
         }
     except Exception as e:
         logger.error(f"[WorkflowExecutor] {wf_name} 失败: {e}")
+        error_msg = f"## 工作流 {wf_name} 失败\n\n{str(e)}"
         return {
             **state,
-            "final_answer": f"## 工作流 {wf_name} 失败\n\n{str(e)}",
+            "final_answer": error_msg,
+            "step_results": {
+                f"workflow_{wf_name}": {
+                    "step_id": f"workflow_{wf_name}",
+                    "capability": "workflow",
+                    "description": f"工作流 {wf_name} 执行",
+                    "status": "failed",
+                    "output": error_msg,
+                    "error": str(e),
+                }
+            },
             "executor_error": f"workflow_failed:{wf_name}:{e}",
             "executor_mode": "workflow",
             "executor_workflow": wf_name,
