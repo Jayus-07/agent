@@ -539,7 +539,7 @@ def test_structured_doc_high_completeness():
 def test_unstructured_doc_low_completeness():
     _, report = StructureAnalyzer().analyze(UNSTRUCTURED)
     assert report.is_complete is False
-    assert report.deficit_signal == "long_narrative"
+    assert report.deficit_signal == "no_heading"
 
 
 def test_empty_doc_zero_completeness():
@@ -603,10 +603,12 @@ class StructureAnalyzer:
         leaves = [n for n in walk(ast.root) if n.type in LEAF_TYPES]
         if not leaves:
             return 0.0
+        sections = [n for n in walk(ast.root) if n.type == "section" and n.level > 0]
+        if not sections:
+            return 0.1   # 无任何章节结构 → 结构性极低，交由递归兜底
         coverage = sum(len(n.text) for n in leaves) / total
         oversized = sum(1 for n in leaves if count_tokens(n.text) > PARENT_CHUNK_TOKENS)
         size_fitness = 1.0 - oversized / len(leaves)
-        sections = [n for n in walk(ast.root) if n.type == "section" and n.level > 0]
         has_hierarchy = 1.0 if len(sections) >= 2 else 0.0
         return round(0.5 * min(coverage, 1.0) + 0.3 * size_fitness + 0.2 * has_hierarchy, 4)
 
