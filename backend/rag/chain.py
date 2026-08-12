@@ -68,10 +68,10 @@ QA_PROMPT = ChatPromptTemplate.from_messages([
 2. 每个事实/数据必须标注来源编号 [1]、[2]、[3]
    - 正确：「根据公司规定，报销需在每月5日前提交 [1]」
    - 错误：「一般来说报销需要5天处理」 ← 没有引用，违规
-3. 资料中查不到信息时：在正文里写「资料未提及」或「当前知识库暂无相关内容」，**不要编造**
+3. 资料中有相关信息但不够直接时，可以基于上下文合理推断并标注引用；仅在**完全无关**时写「资料未提及」
 4. 在正文最后，另起一行，输出 HTML 注释包裹的 JSON（**必须放在末尾**）:
-   - 可以回答 → `<!--META{{"can_answer": true, "citations": [1, 2], "confidence": 0.85}}-->`
-   - 不能回答 → `<!--META{{"can_answer": false, "reason": "no_evidence", "confidence": 0.1}}-->`
+   - 可以回答（含推断） → `<!--META{{"can_answer": true, "citations": [1, 2], "confidence": 0.7}}-->`
+   - 完全无法回答 → `<!--META{{"can_answer": false, "reason": "no_evidence", "confidence": 0.0}}-->`
    reason 取值: `no_evidence`（无相关内容）、`low_relevance`（相关性不够）、
                 `insufficient`（证据不足）、`out_of_scope`（超出业务范围）
 5. 严禁编造；资料中的数字/日期/名称必须与原文一致
