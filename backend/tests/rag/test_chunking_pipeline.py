@@ -27,3 +27,14 @@ def test_pipeline_unstructured_falls_back(tmp_path):
     chunks = parse_and_chunk(str(t))
     assert chunks
     assert all(c.metadata.get("chunk_tokens", 0) > 0 for c in chunks)
+
+
+def test_numbered_txt_paragraphs_not_lost(tmp_path):
+    """编号 TXT 路由到 Structure 后段落不得被丢弃（TxtParser 段落需嵌套进 section）。"""
+    t = tmp_path / "c.txt"
+    t.write_text("一、退货流程\n提交申请。\n\n二、审核\n客服审核。\n", encoding="utf-8")
+    chunks = parse_and_chunk(str(t))
+    assert chunks
+    all_text = "\n".join(c.page_content for c in chunks)
+    assert "提交申请。" in all_text
+    assert "客服审核。" in all_text

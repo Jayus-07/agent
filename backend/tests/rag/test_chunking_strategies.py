@@ -91,6 +91,13 @@ def test_sibling_sections_with_same_title_have_unique_chunk_ids():
     assert len(ids) == len(set(ids))
 
 
+def test_parent_chunk_includes_section_title():
+    """parent chunk 的 page_content 必须包含 section 自身标题（如「退货流程」）。"""
+    chunks = StructureChunkStrategy().split(AST, "a.md")
+    parents = [c for c in chunks if c.metadata["granularity"] == "parent"]
+    assert any("退货流程" in c.page_content for c in parents)
+
+
 def test_recursive_strategy_splits_long_leaf():
     long_text = "这是一个没有结构的长段落。" * 200
     ast = DocumentAST(

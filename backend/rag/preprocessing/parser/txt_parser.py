@@ -15,18 +15,20 @@ class TxtParser(BaseDocumentParser):
             raw = f.read()
 
         root = DocumentNode(type="section", text="", level=0)
+        current: DocumentNode = root
         buf: list[str] = []
 
         def _flush():
             if buf:
-                root.children.append(DocumentNode(type="paragraph", text="\n".join(buf)))
+                current.children.append(DocumentNode(type="paragraph", text="\n".join(buf)))
                 buf.clear()
 
         for line in raw.split("\n"):
             m = _NUM_HEADING_RE.match(line.strip())
             if m and len(line.strip()) <= 60:
                 _flush()
-                root.children.append(DocumentNode(type="section", text=m.group(1).strip(), level=1))
+                current = DocumentNode(type="section", text=m.group(1).strip(), level=1)
+                root.children.append(current)
                 continue
             if not line.strip():
                 _flush()

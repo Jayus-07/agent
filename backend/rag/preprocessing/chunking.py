@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import hashlib
 import os
-from typing import List
+from typing import TYPE_CHECKING, List
 
 from langchain_core.documents import Document
+
+if TYPE_CHECKING:
+    from backend.rag.preprocessing.structure_analyzer import StructureReport
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from backend.config import LEAF_CHUNK_TOKENS, PARENT_CHUNK_TOKENS
@@ -95,7 +98,7 @@ class StructureChunkStrategy:
 
     @staticmethod
     def _section_text(section: DocumentNode) -> str:
-        parts = [n.text for n in walk(section) if n is not section and n.text]
+        parts = [section.text] + [n.text for n in walk(section) if n is not section and n.text]
         return "\n".join(parts)
 
 
@@ -169,7 +172,7 @@ STRUCTURE_STRATEGIES = {
     "training": StepChunkStrategy,
     "legal": StructureChunkStrategy,      # 合同条款级结构 Phase 2 细化
     "contract_template": StructureChunkStrategy,
-    "faq": QAChunkStrategy,
+    "faq": StructureChunkStrategy,   # Q/A 节点识别留 Phase 2
     "ad_policy": RecursiveChunkStrategy,
 }
 
