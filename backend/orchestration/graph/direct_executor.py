@@ -65,30 +65,40 @@ def skill_executor_node(state: dict) -> dict:
             "executor_error": f"skill_not_found:{node_name}",
         }
 
-    # 构造 step（供 reporter 读取）
+    # 构造 step（供 reporter 读取 + BaseSkill 需要 plan.nodes[step_id]）
     step_id = "direct_1"
     step = {
         "step_id": step_id,
         "capability": cap_name,
         "description": f"直接执行 {cap_name}",
         "status": "running",
-        "params": state.get("kb_id", "default"),  # 透传
+        "params": {"question": state.get("question", "")},
     }
     state["step_results"] = {step_id: step}
+    # BaseSkill.execute() 要求 state 中有 current_step_id 和 plan.nodes[step_id]
+    state["current_step_id"] = step_id
+    state["plan"] = {
+        "nodes": {step_id: {"capability": cap_name, "description": step["description"], "params": step["params"]}},
+        "edges": {},
+    }
 
     # 调 skill（skill 是 async，用 asyncio.run）
     try:
         skill_func = skill_nodes[node_name]
         result = asyncio.run(skill_func({
+            **state,
             "step_id": step_id,
             "question": state.get("question", ""),
             "capability": cap_name,
-            "params": state.get("kb_id", "default"),
+            "params": step["params"],
             "step_results": state.get("step_results", {}),
         }))
         step["status"] = "success"
-        step["output"] = result
-        logger.info(f"[SkillExecutor] {cap_name} 完成: {len(str(result))} chars")
+        # skill 返回 {"step_results": {step_id: {..., "output": ...}}}
+        skill_output = result.get("step_results", {}).get(step_id, {})
+        step["output"] = skill_output.get("output", str(result))
+        step["status"] = skill_output.get("status", "success")
+        logger.info(f"[SkillExecutor] {cap_name} 完成: {len(str(step['output']))} chars")
     except Exception as e:
         step["status"] = "failed"
         step["error"] = str(e)
