@@ -53,19 +53,27 @@ class Router:
         )
         final_layer = "llm"  # 默认 LLM 兜底
 
-        # 1. Rule Router（强信号）
+        # 1. Rule Router（1ms，关键词匹配）
         result = self.rule.route(query)
-        rule_conf = result.confidence if result else 0.0
-        rule_matched = result is not None and result.confidence >= 0.8
-        trace_collector.add_event(
-            span, "rule_check", "info",
-            f"Rule 层: matched={rule_matched} confidence={rule_conf:.2f}",
-            {"layer": "rule", "matched": rule_matched, "confidence": rule_conf},
-        )
-        if rule_matched:
+        if result is None:
+            # 无任何匹配 → 直接跳到下一层
+            trace_collector.add_event(
+                span, "rule_miss", "info",
+                "Rule 层: 无匹配",
+                {"layer": "rule", "verdict": "miss", "confidence": 0},
+            )
+        elif result.confidence >= 0.8:
+            # 强信号 → Rule 拍板
             final_layer = "rule"
+            trace_collector.add_event(
+                span, "rule_decide", "info",
+                f"Rule 决定: {result.reason} (confidence={result.confidence:.2f})",
+                {"layer": "rule", "verdict": "decide", "confidence": result.confidence,
+                 "candidate": result.candidates[0].name if result.candidates else "",
+                 "reason": result.reason or ""},
+            )
             logger.info(
-                f"[Router] Rule 命中: {result.reason} (latency={int((time.time()-t0)*1000)}ms)"
+                f"[Router] Rule 决定: {result.reason} (latency={int((time.time()-t0)*1000)}ms)"
             )
             record_router_decision(result.execution_mode.value, "rule", result.confidence)
             trace_collector.end_span(
@@ -76,22 +84,28 @@ class Router:
                 status="success",
             )
             return result
+        else:
+            # 弱信号 → 给 hint，交给下层
+            trace_collector.add_event(
+                span, "rule_hint", "info",
+                f"Rule 提示: {result.reason} (confidence={result.confidence:.2f} < 0.8)",
+                {"layer": "rule", "verdict": "hint", "confidence": result.confidence,
+                 "candidate": result.candidates[0].name if result.candidates else "",
+                 "reason": result.reason or ""},
+            )
 
-        # 2. Embedding Router（语义匹配）
+        # 2. Embedding Router（~30ms，语义匹配）
         result = self.vector.route(query)
-        vec_conf = result.confidence if result else 0.0
-        vec_matched = result is not None and result.confidence >= 0.85
-        vec_top = result.candidates[0].name if (result and result.candidates) else ""
-        trace_collector.add_event(
-            span, "vector_check", "info",
-            f"Embedding 层: matched={vec_matched} confidence={vec_conf:.2f} top={vec_top}",
-            {"layer": "vector", "matched": vec_matched, "confidence": vec_conf,
-             "top_capability": vec_top},
-        )
-        if vec_matched:
+        if result is not None and result.confidence >= 0.85:
             final_layer = "embedding"
+            trace_collector.add_event(
+                span, "vector_decide", "info",
+                f"Vector 决定: {result.reason} (confidence={result.confidence:.2f})",
+                {"layer": "vector", "verdict": "decide", "confidence": result.confidence,
+                 "candidate": result.candidates[0].name if result.candidates else ""},
+            )
             logger.info(
-                f"[Router] Embedding 命中: {result.reason} (latency={int((time.time()-t0)*1000)}ms)"
+                f"[Router] Vector 决定: {result.reason} (latency={int((time.time()-t0)*1000)}ms)"
             )
             record_router_decision(result.execution_mode.value, "embedding", result.confidence)
             trace_collector.end_span(
@@ -102,18 +116,36 @@ class Router:
                 status="success",
             )
             return result
+        else:
+            vec_conf = result.confidence if result else 0.0
+            vec_top = result.candidates[0].name if (result and result.candidates) else ""
+            if result is None:
+                trace_collector.add_event(
+                    span, "vector_miss", "info",
+                    "Vector 层: 无匹配",
+                    {"layer": "vector", "verdict": "miss", "confidence": vec_conf},
+                )
+            else:
+                trace_collector.add_event(
+                    span, "vector_hint", "info",
+                    f"Vector 提示: top={vec_top} (confidence={vec_conf:.2f} < 0.85)",
+                    {"layer": "vector", "verdict": "hint", "confidence": vec_conf,
+                     "candidate": vec_top},
+                )
 
-        # 3. LLM Router（兜底）
+        # 3. LLM Router（~3-5s，真正理解 → 兜底拍板）
         result = self.llm.route(query)
+        final_layer = "llm"
         llm_conf = result.confidence if result else 0.0
         trace_collector.add_event(
-            span, "llm_check", "info",
-            f"LLM 兜底: confidence={llm_conf:.2f} reason={result.reason}",
-            {"layer": "llm", "matched": True, "confidence": llm_conf,
+            span, "llm_decide", "info",
+            f"LLM 决定: {result.reason} (confidence={llm_conf:.2f})",
+            {"layer": "llm", "verdict": "decide", "confidence": llm_conf,
+             "candidate": result.candidates[0].name if result.candidates else "",
              "reason": result.reason or ""},
         )
         logger.info(
-            f"[Router] LLM 兜底: {result.reason} (latency={int((time.time()-t0)*1000)}ms)"
+            f"[Router] LLM 决定: {result.reason} (latency={int((time.time()-t0)*1000)}ms)"
         )
         record_router_decision(result.execution_mode.value, "llm", result.confidence)
         trace_collector.end_span(
