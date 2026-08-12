@@ -141,9 +141,22 @@ def workflow_executor_node(state: dict) -> dict:
                     answer_parts.append(f"### {step_name}\n{str(output)[:500]}\n")
         answer_parts.append(f"\n---\n*状态: {ctx.status} | run_id: {ctx.run_id}*")
 
+        final_answer = "\n".join(answer_parts)
+        # 设 step_results 防 reporter 覆盖 final_answer（workflow executor 不走 planner 管线）
+        step_results = {
+            f"workflow_{wf_name}": {
+                "step_id": f"workflow_{wf_name}",
+                "capability": "workflow",
+                "description": f"工作流 {wf_name} 执行",
+                "status": ctx.status,
+                "output": final_answer,
+                "row_count": len(ctx.outputs),
+            }
+        }
         return {
             **state,
-            "final_answer": "\n".join(answer_parts),
+            "final_answer": final_answer,
+            "step_results": step_results,
             "workflow_result": {
                 "status": ctx.status,
                 "run_id": ctx.run_id,

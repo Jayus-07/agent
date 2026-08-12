@@ -184,8 +184,12 @@ def _is_step_successful(result: dict) -> bool:
         return False
     if result.get("error_type"):
         return False
+    # workflow executor 直接产出最终答案，始终视为成功
+    if result.get("capability") == "workflow":
+        return True
     output = str(result.get("output", ""))
-    if len(output.strip()) <= 20:
+    # 降门槛：5 字符即可（原 20 字符过于严格，RAG 短摘要被误杀）
+    if len(output.strip()) <= 5:
         return False
     return True
 

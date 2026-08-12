@@ -29,15 +29,18 @@ from backend.shared.logger import logger
 import backend.skills  # noqa: F401
 
 
-# 节点名 → 用户可读的阶段标签
+# 节点名 → 用户可读的阶段标签（与 trace_middleware.py 对齐）
 _NODE_LABELS = {
-    "planner":       "任务规划",
-    "critique":      "计划审查",
-    "supervisor":    "调度决策",
-    "sql_skill":     "数据库查询",
-    "rag_skill":     "知识库检索",
-    "report_skill":  "报告生成",
-    "reporter":      "结果汇总",
+    "router":             "路由决策",
+    "skill_executor":     "直接执行",
+    "workflow_executor":  "工作流执行",
+    "planner":            "任务规划",
+    "critique":           "计划审查",
+    "supervisor":         "调度决策",
+    "sql_skill":          "数据库查询",
+    "rag_skill":          "知识库检索",
+    "report_skill":       "报告生成",
+    "reporter":           "结果汇总",
 }
 
 
