@@ -28,7 +28,6 @@ from langchain_core.documents import Document
 
 from backend.observability.tracer import trace_collector, WorkflowKind, SpanKind
 from backend.rag.preprocessing.cleaner import DocumentCleaner
-from backend.rag.preprocessing.metadata import classify_doc_type
 from backend.rag.indexing.models import SyncResult, Delta
 from backend.shared.logger import logger
 from backend.infra.async_utils import run_async as _run_async
@@ -417,17 +416,12 @@ class IncrementalIndexer:
             kind=SpanKind.INDEX_CHUNK.value,
         )
         try:
-            from backend.rag.preprocessing.loader import split_documents
-            from backend.rag.preprocessing.chunking import ChunkStrategyRouter, GeneralChunkStrategy
-            from backend.config import GENERAL_CHUNK_SIZE, GENERAL_CHUNK_OVERLAP, PROJECT_CHUNK_SIZE
-            chunks = split_documents(raw_docs, file_path)
-            # 提取实际策略名和参数
-            router = ChunkStrategyRouter()
-            doc_type_for_chunk = classify_doc_type("\n".join(d.page_content for d in raw_docs).lower())
-            strategy = router._strategies.get(doc_type_for_chunk, router._fallback)
-            strategy_name = strategy.__class__.__name__
-            chunk_size = getattr(strategy, '_chunk_size', None) or GENERAL_CHUNK_SIZE
-            chunk_overlap = getattr(strategy, '_chunk_overlap', None) or GENERAL_CHUNK_OVERLAP
+            from backend.rag.preprocessing.pipeline import parse_and_chunk
+            from backend.config import LEAF_CHUNK_TOKENS
+            chunks = parse_and_chunk(file_path)
+            strategy_name = "pipeline"   # 具体策略名由 pipeline 日志输出
+            chunk_size = LEAF_CHUNK_TOKENS
+            chunk_overlap = 50
             for i, ch in enumerate(chunks):
                 ch.metadata["doc_id"] = doc_id
                 ch.metadata["chunk_index"] = i

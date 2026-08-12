@@ -48,7 +48,8 @@ class StructureAnalyzer:
         sections = [n for n in walk(ast.root) if n.type == "section" and n.level > 0]
         if not sections:
             return 0.1   # 无任何章节结构 → 结构性极低，交由递归兜底
-        coverage = sum(len(n.text) for n in leaves) / total
+        covered = sum(len(n.text) for n in leaves) + sum(len(n.text) for n in sections)
+        coverage = covered / total
         oversized = sum(1 for n in leaves if count_tokens(n.text) > PARENT_CHUNK_TOKENS)
         size_fitness = 1.0 - oversized / len(leaves)
         sections = [n for n in walk(ast.root) if n.type == "section" and n.level > 0]
