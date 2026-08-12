@@ -606,7 +606,10 @@ class StructureAnalyzer:
         sections = [n for n in walk(ast.root) if n.type == "section" and n.level > 0]
         if not sections:
             return 0.1   # 无任何章节结构 → 结构性极低，交由递归兜底
-        coverage = sum(len(n.text) for n in leaves) / total
+        # coverage：所有结构化节点（section 标题 + leaf 正文）覆盖的字符 / 总字符。
+        # 标题也计入分子，否则短文档+多标题会被低估（标题计入分母却不计入分子）。
+        covered = sum(len(n.text) for n in leaves) + sum(len(n.text) for n in sections)
+        coverage = covered / total
         oversized = sum(1 for n in leaves if count_tokens(n.text) > PARENT_CHUNK_TOKENS)
         size_fitness = 1.0 - oversized / len(leaves)
         has_hierarchy = 1.0 if len(sections) >= 2 else 0.0
