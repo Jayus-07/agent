@@ -43,31 +43,43 @@ class DailyReport:
 
     @step(name="拉取销售数据")
     async def fetch_sales(self, ctx):
-        """Step 1: 拉今日销售数据（SQL）"""
+        """Step 1: 拉今日销售数据（SQL）
+
+        2026-08-12 修正：原 FROM sales 表不存在，改为 order.order_items JOIN order.orders
+        """
         logger.info("[DailyReport] Step fetch_sales 开始")
         result = await call_sql({
-            "query": "SELECT product_id, SUM(qty) as total_qty, SUM(amount) as total_amount "
-                     "FROM sales WHERE date = CURRENT_DATE GROUP BY product_id"
+            "query": "SELECT oi.product_id, SUM(oi.quantity) as total_qty, SUM(oi.price) as total_amount "
+                     "FROM order.order_items oi "
+                     "JOIN order.orders o ON oi.order_id = o.id "
+                     "WHERE o.created_at::date = CURRENT_DATE "
+                     "GROUP BY oi.product_id"
         })
         return {"sales": result.get("rows", result)}
 
     @step(name="拉取库存数据")
     async def fetch_inventory(self, ctx):
-        """Step 2: 拉当前库存（SQL）— 与 fetch_sales 并行"""
+        """Step 2: 拉当前库存（SQL）— 与 fetch_sales 并行
+
+        2026-08-12 修正：字段名 current_qty → stock_quantity
+        """
         logger.info("[DailyReport] Step fetch_inventory 开始")
         result = await call_sql({
-            "query": "SELECT product_id, product_name, current_qty, min_qty "
-                     "FROM inventory WHERE current_qty > 0"
+            "query": "SELECT product_id, warehouse_id, stock_quantity, safety_stock "
+                     "FROM inventory.inventory WHERE stock_quantity > 0"
         })
         return {"inventory": result.get("rows", result)}
 
     @step(name="拉取活动数据")
     async def fetch_promotions(self, ctx):
-        """Step 3: 拉近期活动（SQL）— 与 fetch_sales/fetch_inventory 并行"""
+        """Step 3: 拉近期退款（SQL）— 与 fetch_sales/fetch_inventory 并行
+
+        2026-08-12 修正：原 FROM promotions 表不存在，改为 order.refunds（退款作为"活动"指标）
+        """
         logger.info("[DailyReport] Step fetch_promotions 开始")
         result = await call_sql({
-            "query": "SELECT promotion_id, product_id, discount, started_at, ended_at "
-                     "FROM promotions WHERE ended_at > CURRENT_DATE"
+            "query": "SELECT order_id, product_id, refund_amount, reason, created_at "
+                     "FROM order.refunds WHERE created_at > CURRENT_DATE - INTERVAL '7 days'"
         })
         return {"promotions": result.get("rows", result)}
 
