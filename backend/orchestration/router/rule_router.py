@@ -54,6 +54,7 @@ _RAG_KEYWORDS = [
     r"制度", r"规定", r"规范", r"政策", r"流程", r"标准",
     r"时效", r"SLA", r"多久", r"如何", r"怎么",
     r"是什么", r"什么叫", r"定义",
+    r"审核", r"退款", r"退货", r"换货", r"售后",  # 业务流程类
 ]
 
 
@@ -89,7 +90,27 @@ class RuleRouter:
                 reason="匹配 workflow 强关键词",
             )
 
-        # 2. SQL 强信号（直接给候选 + 分数，不强制 mode）
+        # 2. 业务 SOP 关键字（审核/退款/流程等 — 优先于 SQL，因为"退款审核时间"是知识问题不是数据查询）
+        rag_hits = sum(1 for k in _RAG_KEYWORDS if re.search(k, query_lower))
+        if rag_hits >= 2:
+            return RouteDecision(
+                execution_mode=ExecutionMode.DIRECT,
+                candidates=[CapabilityScore(name="rag.search", score=0.6)],
+                confidence=0.6,
+                reason=f"匹配 RAG 关键词 {rag_hits} 个（弱信号，交给下层确认）",
+            )
+        # 单个 RAG 命中 + 无 SQL 命中 → 给 hint
+        if rag_hits == 1:
+            sql_hits_rag = sum(1 for k in _SQL_KEYWORDS if re.search(k, query_lower))
+            if sql_hits_rag == 0:
+                return RouteDecision(
+                    execution_mode=ExecutionMode.DIRECT,
+                    candidates=[CapabilityScore(name="rag.search", score=0.55)],
+                    confidence=0.55,
+                    reason=f"匹配 RAG 关键词 {rag_hits} 个（弱信号）",
+                )
+
+        # 3. SQL 强信号（直接给候选 + 分数，不强制 mode）
         sql_hits = sum(1 for k in _SQL_KEYWORDS if re.search(k, query_lower))
         if sql_hits >= 1:
             return RouteDecision(
@@ -97,18 +118,6 @@ class RuleRouter:
                 candidates=[CapabilityScore(name="sql.query", score=0.85 + 0.05 * min(sql_hits, 3))],
                 confidence=0.85,
                 reason=f"匹配 SQL 关键词 {sql_hits} 个",
-            )
-
-        # 3. 业务 SOP 弱信号（不返回，交给 embedding router）
-        # rag_keywords 太多见（"怎么"/"什么"），不能强制 RAG
-        rag_hits = sum(1 for k in _RAG_KEYWORDS if re.search(k, query_lower))
-        if rag_hits >= 2:
-            # 多个 SOP 关键词命中 → 给 hint，但 confidence 低
-            return RouteDecision(
-                execution_mode=ExecutionMode.DIRECT,
-                candidates=[CapabilityScore(name="rag.search", score=0.6)],
-                confidence=0.6,
-                reason=f"匹配 RAG 关键词 {rag_hits} 个（弱信号，交给下层确认）",
             )
 
         # 无信号 → 交给下层（embedding / LLM）

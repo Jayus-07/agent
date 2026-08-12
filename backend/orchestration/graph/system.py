@@ -288,8 +288,14 @@ class MultiAgentSystem:
                 if node_name in self._skill_nodes or node_name == "supervisor" \
                         or node_name in ("workflow_executor", "skill_executor"):
                     all_step_results.update(node_output.get("step_results", {}))
+                    # direct/workflow executor 自己就是最终产出者
+                    executor_answer = node_output.get("final_answer", "")
+                    if executor_answer:
+                        final_answer = executor_answer
                 elif node_name == "reporter":
-                    final_answer = node_output.get("final_answer", "")
+                    # reporter 只在 plan 模式下才是最终答案；direct/workflow 已经由 executor 产出
+                    if not final_answer:
+                        final_answer = node_output.get("final_answer", "")
                 elif node_name in ("planner", "critique"):
                     # 捕获 plan 用于 trace 重建
                     if node_output.get("plan"):
