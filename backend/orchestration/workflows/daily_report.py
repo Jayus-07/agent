@@ -127,11 +127,16 @@ class DailyReport:
         name="生成报告",
     )
     async def generate_report(self, ctx):
-        """Step 6: 生成报告（Report Skill）"""
+        """Step 6: 生成报告（Report Skill）
+
+        2026-08-12 修正：
+        - 模板字段名 template → report_type
+        - report_type 必须是已注册类型: daily_sales（不是 daily_report）
+        """
         logger.info("[DailyReport] Step generate_report 开始")
         result = await call_report({
-            "template": "daily_report",
-            "data": {
+            "report_type": "daily_sales",
+            "filters": {
                 "sales": ctx.outputs.get("fetch_sales", {}).get("sales", []),
                 "inventory": ctx.outputs.get("fetch_inventory", {}).get("inventory", []),
                 "promotions": ctx.outputs.get("fetch_promotions", {}).get("promotions", []),
