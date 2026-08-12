@@ -294,8 +294,23 @@ class RAGChain:
             self._record_rag_metric("rejected")
             return answer
 
-        # Citation + Faithfulness
+        # Citation + ClaimVerifier + Faithfulness
         answer = self._verify(result, question, session_id)
+
+        # ── 程序化 Claim Verifier（确定性事实校验，LLM Judge 不能覆盖）──
+        answer = self._verify_claims(answer, result.get("context", []))
+        if answer is None:
+            # 数字/时效编造 → 零容忍，直接拒答
+            from backend.rag.evidence_gate import GateDecision, RejectReason
+            decision = GateDecision(
+                passed=False, reason=RejectReason.HALLUCINATION,
+                layer="claim_verify", score=0.0,
+                diagnostics={"reason": "numeric_fact_not_supported"},
+            )
+            answer = self._reject(decision, "claim_verify", trace, t_total)
+            self._record_rag_metric("rejected")
+            return answer
+
         answer = self._evaluate(answer, result.get("context", []))
 
         # Gate 3: LLM 自报拒答 (META can_answer=False)
@@ -667,6 +682,39 @@ class RAGChain:
             self._memory.end_turn(session_id, question, answer)
 
         return answer
+
+    def _verify_claims(self, answer: str, context_docs: list) -> str | None:
+        """程序化 Claim 校验（非 LLM）。
+
+        确定性事实（数字+单位/日期/金额/时效）与引用 chunk 原文比对。
+        任一 claim 校验失败 → 返回 None（调用方拒答），LLM Judge 不能覆盖。
+
+        Returns:
+            answer（通过时原样返回）或 None（编造事实被拦截）。
+        """
+        from backend.observability.tracer import trace_collector
+        from backend.rag.evidence_gate.claim_verifier import verify_answer
+
+        claim_span = trace_collector.start_span(
+            "claim_verify", name="Claim 原文校验")
+        try:
+            verifier = verify_answer(answer, context_docs)
+            trace_collector.end_span(claim_span,
+                metrics={"passed": verifier.passed,
+                         "failed_claims": len(verifier.failed_claims),
+                         "reason": verifier.reason})
+            if not verifier.passed:
+                logger.warning(
+                    f"[RAGChain] ClaimVerifier 拦截编造事实: {verifier.detail[:200]}"
+                )
+                return None
+            return answer
+        except Exception as e:
+            # 校验器异常不阻塞主流程（软失败），交给 LLM Judge 兜底
+            logger.warning(f"[RAGChain] ClaimVerifier 异常跳过: {e}")
+            trace_collector.end_span(claim_span, status="skipped",
+                                     metrics={"error": str(e)[:100]})
+            return answer
 
     def _evaluate(self, answer: str, context_docs: list) -> str:
         """评估阶段：Faithfulness 忠实性检测 + 自动剔除不可信句子。
