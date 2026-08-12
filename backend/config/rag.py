@@ -29,7 +29,9 @@ CHUNK_LLM_MODEL = os.getenv("CHUNK_LLM_MODEL", "qwen2.5:3b")
 # 单文件最大 50MB,企业可调到 100MB;超过 1GB 应改用对象存储
 RAG_MAX_FILE_SIZE = int(os.getenv("RAG_MAX_FILE_SIZE", "50"))  # 单位 MB
 # 临时文件目录 (atomic rename 前存这里, Docker 容器内安全)
-RAG_TMP_DIR = os.getenv("RAG_TMP_DIR", "data/rag/tmp")
+# 用 RAG_DATA_DIR 派生绝对路径，消除相对路径的 CWD 依赖
+from backend.config.database import RAG_DATA_DIR
+RAG_TMP_DIR = os.getenv("RAG_TMP_DIR", os.path.join(RAG_DATA_DIR, "rag", "tmp"))
 # 流式读块大小 (1MB 平衡内存和 syscall 次数)
 RAG_UPLOAD_CHUNK_SIZE = int(os.getenv("RAG_UPLOAD_CHUNK_SIZE", str(1024 * 1024)))
 # SSE 进度推送间隔: 每 5MB 或 500ms 触发一次

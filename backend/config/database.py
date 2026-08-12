@@ -18,14 +18,18 @@ load_dotenv()
 _CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
 _BACKEND_DIR = os.path.dirname(_CONFIG_DIR)  # agent/backend/
 
-# RAG 索引路径
-BM25_INDEX_DIR = os.getenv("BM25_INDEX_DIR", os.path.join(_BACKEND_DIR, "data", "bm25"))
-CHROMA_PATH = os.getenv("CHROMA_PATH", os.path.join(_BACKEND_DIR, "data", "chroma"))
-DOC_DB_PATH = os.getenv("DOC_DB_PATH", os.path.join(_BACKEND_DIR, "data", "doc_db"))
+# RAG 数据根目录（所有 RAG 索引/文档路径统一由此派生，避免各模块硬编码相对路径）
+RAG_DATA_DIR = os.getenv("RAG_DATA_DIR", os.path.join(_BACKEND_DIR, "data"))
 
-DOCS_DIRECTORY = os.getenv("DOCS_DIRECTORY", os.path.join(_BACKEND_DIR, "data", "docs"))
-DOC_REGISTRY_PATH = os.getenv("DOC_REGISTRY_PATH", os.path.join(_BACKEND_DIR, "data", "doc_registry.db"))
-DOC_OPERATION_LOG_PATH = os.getenv("DOC_OPERATION_LOG_PATH", os.path.join(_BACKEND_DIR, "data", "doc_operation_log.db"))
+# RAG 索引路径
+BM25_INDEX_DIR = os.getenv("BM25_INDEX_DIR", os.path.join(RAG_DATA_DIR, "bm25"))
+CHROMA_PATH = os.getenv("CHROMA_PATH", os.path.join(RAG_DATA_DIR, "chroma"))
+DOC_DB_PATH = os.getenv("DOC_DB_PATH", os.path.join(RAG_DATA_DIR, "doc_db"))
+
+DOCS_DIRECTORY = os.getenv("DOCS_DIRECTORY", os.path.join(RAG_DATA_DIR, "docs"))
+DOC_REGISTRY_PATH = os.getenv("DOC_REGISTRY_PATH", os.path.join(RAG_DATA_DIR, "doc_registry.db"))
+DOC_OPERATION_LOG_PATH = os.getenv("DOC_OPERATION_LOG_PATH", os.path.join(RAG_DATA_DIR, "doc_operation_log.db"))
+CHUNK_STORE_PATH = os.getenv("CHUNK_STORE_PATH", os.path.join(RAG_DATA_DIR, "chunk_store.db"))
 ENABLE_INCREMENTAL_INDEX = os.getenv("ENABLE_INCREMENTAL_INDEX", "true").lower() == "true"
 
 

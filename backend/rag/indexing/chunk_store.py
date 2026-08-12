@@ -12,6 +12,7 @@ import threading
 from typing import Any
 
 from backend.shared.logger import logger
+from backend.config.database import CHUNK_STORE_PATH
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS chunk_store (
@@ -49,7 +50,7 @@ ALTER TABLE chunk_store ADD COLUMN simulated_questions TEXT NOT NULL DEFAULT '[]
 class ChunkStore:
     """Chunk 文本 SQLite 存储 — 线程安全，按 doc_id 批量读写。"""
 
-    def __init__(self, db_path: str = "data/chunk_store.db"):
+    def __init__(self, db_path: str = CHUNK_STORE_PATH):
         self._db_path = db_path
         self._lock = threading.Lock()
         self._init_db()
@@ -152,7 +153,7 @@ class ChunkStore:
 _store: ChunkStore | None = None
 
 
-def get_chunk_store(db_path: str = "data/chunk_store.db") -> ChunkStore:
+def get_chunk_store(db_path: str = CHUNK_STORE_PATH) -> ChunkStore:
     global _store
     if _store is None:
         _store = ChunkStore(db_path)
