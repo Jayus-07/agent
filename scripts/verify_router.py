@@ -282,11 +282,66 @@ def verify_v2_executors():
 
 
 # =============================================================
+# Layer 8: Workflow 端到端（daily_report / inventory_alert）
+# =============================================================
+def verify_workflows():
+    section("Layer 8: Workflow 端到端（daily_report / inventory_alert）")
+    try:
+        import asyncio
+        from backend.orchestration.workflow.registry import get_workflow_registry
+        from backend.orchestration.workflow.scheduler import get_workflow_scheduler
+        from backend.orchestration.workflows.daily_report import DailyReport
+        from backend.orchestration.workflows.inventory_alert import InventoryAlert
+
+        reg = get_workflow_registry()
+        if reg.get("daily_report") is None:
+            reg.register(DailyReport)
+        if reg.get("inventory_alert") is None:
+            reg.register(InventoryAlert)
+
+        sched = get_workflow_scheduler()
+
+        # 1. daily_report 端到端
+        ctx_dr = asyncio.run(sched.run_now("daily_report", inputs={"question": "test"}))
+        check("daily_report 端到端 status=success",
+              ctx_dr.status == "success", f"got={ctx_dr.status}")
+        check("daily_report outputs >= 5", len(ctx_dr.outputs) >= 5,
+              f"{len(ctx_dr.outputs)} outputs")
+
+        # 2. inventory_alert 端到端
+        ctx_ia = asyncio.run(sched.run_now("inventory_alert", inputs={"question": "test"}))
+        check("inventory_alert 端到端 status=success",
+              ctx_ia.status == "success", f"got={ctx_ia.status}")
+        check("inventory_alert outputs >= 5", len(ctx_ia.outputs) >= 5,
+              f"{len(ctx_ia.outputs)} outputs")
+
+        # 3. workflow_executor_node 接收 daily_report 决策
+        from backend.orchestration.graph.direct_executor import workflow_executor_node
+        from backend.orchestration.router.types import ExecutionMode
+        decision = {
+            "execution_mode": ExecutionMode.WORKFLOW,
+            "workflow_name": "daily_report",
+            "candidates": [],
+            "confidence": 0.95,
+        }
+        out = workflow_executor_node({
+            "question": "test",
+            "session_id": "verify",
+            "route_decision": decision,
+        })
+        check("workflow_executor_node 写 final_answer", "final_answer" in out)
+        check("workflow_executor_node executor_mode=workflow",
+              out.get("executor_mode") == "workflow")
+    except Exception as e:
+        check("Workflow 端到端", False, str(e))
+
+
+# =============================================================
 # 主流程
 # =============================================================
 def main():
     print("=" * 60)
-    print("Router 验收脚本（7 层）")
+    print("Router 验收脚本（8 层）")
     print("=" * 60)
 
     verify_rule_router()
@@ -296,6 +351,7 @@ def main():
     verify_graph()
     verify_metrics()
     verify_v2_executors()
+    verify_workflows()
 
     total = passed + failed
     print("\n" + "=" * 60)
