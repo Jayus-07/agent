@@ -61,25 +61,38 @@ CONTEXTUALIZE_PROMPT = ChatPromptTemplate.from_messages([
 # P1 改造：Markdown 正文 + 末尾 <!--META--> 注释（与 Citation 兼容，避 JSON 与 Faithfulness 冲突）
 # 详见 docs/architecture/rag-evidence-gate.md §0.4 表
 QA_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """你是跨境电商知识库助手。你**只能**根据下方提供的资料回答问题，**严禁**使用资料之外的知识。
+    ("system", """你是电商企业知识库助手。你只能依据「资料」中明确提供的信息回答问题。
 
-注意：资料可能来自多个不同的检索查询，每条资料末尾的 [查询: xxx] 标注了它的来源查询。
-- 优先使用与用户问题最直接相关的查询结果作为主要证据
-- 其他查询的结果仅供参考，**不要把不同查询的事实拼接在一起编造答案**
-- 如果某个数字/时效只出现在与问题不直接相关的查询结果中，不要将其作为答案
+## 核心规则
 
-回答格式（严格遵守，否则会被系统判为格式错误而拒答）:
-1. 正文用 Markdown，分点或分段均可
-2. 每个事实/数据必须标注来源编号 [1]、[2]、[3]
-   - 正确：「根据公司规定，报销需在每月5日前提交 [1]」
-   - 错误：「一般来说报销需要5天处理」 ← 没有引用，违规
-3. 资料中查不到信息时：在正文里写「资料未提及」或「当前知识库暂无相关内容」，**不要编造**
-4. 在正文最后，另起一行，输出 HTML 注释包裹的 JSON（**必须放在末尾**）:
-   - 可以回答 → `<!--META{{"can_answer": true, "citations": [1, 2], "confidence": 0.85}}-->`
-   - 不能回答 → `<!--META{{"can_answer": false, "reason": "no_evidence", "confidence": 0.1}}-->`
-   reason 取值: `no_evidence`（无相关内容）、`low_relevance`（相关性不够）、
-                `insufficient`（证据不足）、`out_of_scope`（超出业务范围）
-5. 严禁编造；资料中的数字/日期/名称必须与原文一致
+1. **单证据原则**：每个事实、数字、日期、时效、条件，必须能由一个 Evidence 独立支持。禁止拼接多个 Evidence 推导原文不存在的新事实。
+
+2. **证据边界**：每条 Evidence 标注了 [Query]、[文档]、[章节]。不同 Query、不同章节的信息属于不同上下文，**禁止跨边界拼接**。
+
+3. **数字/时效零容忍**：所有数字、日期、百分比、SLA 必须与原文逐字一致。禁止修改、换算、推断。禁止将一条 Evidence 中的数字套用到另一条 Evidence。
+
+4. **信息不足时**：明确写「资料未提及」。禁止猜测、常识补充、相似流程推断。
+
+## 回答格式
+
+正文用 Markdown。每个事实必须带 Evidence 引用 [En]（如 [E1]、[E2]）。
+
+资料充分时示例：
+```
+客服需要审核退货原因和凭证真实性。[E1]
+差评处理要求48小时内给出具体解决方案。[E2]
+```
+
+信息不足时：
+```
+资料未提及。
+```
+
+正文末尾必须输出：
+- 可回答 → `<!--META{"can_answer":true,"citations":["E1","E2"],"confidence":0.85}-->`
+- 不可回答 → `<!--META{"can_answer":false,"reason":"no_evidence","confidence":0.1}-->`
+
+reason 取值：no_evidence / low_relevance / insufficient / out_of_scope
 
 资料:
 {context}"""),
@@ -89,11 +102,14 @@ QA_PROMPT = ChatPromptTemplate.from_messages([
 
 # 单文档格式化：含元数据标签（非空字段才显示，不浪费 token）
 DOCUMENT_PROMPT = PromptTemplate.from_template(
-    "[文档{index}]{source_query_label} 来源: {source_file}"
-    "{doc_type_label}"
-    "{business_domain_label}"
-    "{summary_label}"
-    "\n{page_content}"
+    "[Evidence E{index}]\n"
+    "{query_label}"
+    "{doc_label}"
+    "{section_label}"
+    "{chunk_label}"
+    "{type_label}"
+    "{domain_label}"
+    "{page_content}"
 )
 
 
@@ -165,15 +181,18 @@ class RAGChain:
             docs = input_dict.get("context", [])
             for i, doc in enumerate(docs, 1):
                 doc.metadata["index"] = i
-                # 注入元数据标签（非空才显示，不浪费 token）
+                # ── Evidence 边界字段（非空才显示，不浪费 token）──
                 sq = doc.metadata.get("source_query", "")
-                doc.metadata["source_query_label"] = f" [查询: {sq}]" if sq else ""
+                doc.metadata["query_label"] = f"[Query: {sq}]\n" if sq else ""
+                doc.metadata["doc_label"] = f"[文档: {doc.metadata.get('source_file', '')}]\n"
+                section = doc.metadata.get("section_title", "")
+                doc.metadata["section_label"] = f"[章节: {section}]\n" if section else ""
+                cid = doc.metadata.get("chunk_id", "")
+                doc.metadata["chunk_label"] = f"[Chunk: {cid}]\n" if cid else ""
                 dt = doc.metadata.get("doc_type", "")
-                doc.metadata["doc_type_label"] = f"\n类型: {dt}" if dt and dt != "general" else ""
+                doc.metadata["type_label"] = f"[类型: {dt}]\n" if dt and dt != "general" else ""
                 bd = doc.metadata.get("business_domain", "")
-                doc.metadata["business_domain_label"] = f"\n领域: {bd}" if bd else ""
-                summary = doc.metadata.get("summary", "")
-                doc.metadata["summary_label"] = f"\n摘要: {summary[:120]}" if summary else ""
+                doc.metadata["domain_label"] = f"[业务域: {bd}]\n" if bd and bd != "general" else ""
             return input_dict
 
         _stuff = create_stuff_documents_chain(
