@@ -90,34 +90,40 @@ class RuleRouter:
                 reason="匹配 workflow 强关键词",
             )
 
-        # 2. 业务 SOP 关键字（审核/退款/流程等 — 优先于 SQL，因为"退款审核时间"是知识问题不是数据查询）
+        # 2. 业务 SOP 关键字（审核/退款/流程等 — 弱信号，给 Vector/LLM 做 hint）
         rag_hits = sum(1 for k in _RAG_KEYWORDS if re.search(k, query_lower))
-        if rag_hits >= 2:
+        if rag_hits >= 3:
             return RouteDecision(
                 execution_mode=ExecutionMode.DIRECT,
-                candidates=[CapabilityScore(name="rag.search", score=0.6)],
-                confidence=0.6,
-                reason=f"匹配 RAG 关键词 {rag_hits} 个（弱信号，交给下层确认）",
-            )
-        # 单个 RAG 命中 + 无 SQL 命中 → 给 hint
-        if rag_hits == 1:
-            sql_hits_rag = sum(1 for k in _SQL_KEYWORDS if re.search(k, query_lower))
-            if sql_hits_rag == 0:
-                return RouteDecision(
-                    execution_mode=ExecutionMode.DIRECT,
-                    candidates=[CapabilityScore(name="rag.search", score=0.55)],
-                    confidence=0.55,
-                    reason=f"匹配 RAG 关键词 {rag_hits} 个（弱信号）",
-                )
-
-        # 3. SQL 强信号（直接给候选 + 分数，不强制 mode）
-        sql_hits = sum(1 for k in _SQL_KEYWORDS if re.search(k, query_lower))
-        if sql_hits >= 1:
-            return RouteDecision(
-                execution_mode=ExecutionMode.DIRECT,
-                candidates=[CapabilityScore(name="sql.query", score=0.85 + 0.05 * min(sql_hits, 3))],
+                candidates=[CapabilityScore(name="rag.search", score=0.85)],
                 confidence=0.85,
-                reason=f"匹配 SQL 关键词 {sql_hits} 个",
+                reason=f"匹配 RAG 关键词 {rag_hits} 个（强信号）",
+            )
+        if rag_hits >= 1:
+            # 1-2 个 RAG 命中 → 低置信度，交给 Vector/LLM 最终决定
+            return RouteDecision(
+                execution_mode=ExecutionMode.DIRECT,
+                candidates=[CapabilityScore(name="rag.search", score=0.55 + 0.05 * rag_hits)],
+                confidence=0.70,  # < 0.8 → fallback 到 Vector
+                reason=f"匹配 RAG 关键词 {rag_hits} 个（弱信号）",
+            )
+
+        # 3. SQL 关键字（同样：信号越强置信越高）
+        sql_hits = sum(1 for k in _SQL_KEYWORDS if re.search(k, query_lower))
+        if sql_hits >= 3:
+            return RouteDecision(
+                execution_mode=ExecutionMode.DIRECT,
+                candidates=[CapabilityScore(name="sql.query", score=0.90)],
+                confidence=0.90,
+                reason=f"匹配 SQL 关键词 {sql_hits} 个（强信号）",
+            )
+        if sql_hits >= 1:
+            # 1-2 个 SQL 命中 → 低置信，交给 Vector/LLM
+            return RouteDecision(
+                execution_mode=ExecutionMode.DIRECT,
+                candidates=[CapabilityScore(name="sql.query", score=0.75 + 0.05 * sql_hits)],
+                confidence=0.75,  # < 0.8 → fallback 到 Vector
+                reason=f"匹配 SQL 关键词 {sql_hits} 个（弱信号）",
             )
 
         # 无信号 → 交给下层（embedding / LLM）
