@@ -15,8 +15,7 @@ from typing import List, Optional
 from backend.config import ENABLE_FAITHFULNESS, FAITHFULNESS_SKIP_THRESHOLD, NLI_USE_LLM
 from backend.rag.guardrails.claim_extractor import extract_claims
 from backend.rag.guardrails.risk_filter import filter_claims
-from backend.rag.guardrails.nli_checker import check_claims_batch
-from backend.rag.guardrails.nli_llm import evaluate_with_llm  # 2026-08-11 LLM-as-Judge
+from backend.rag.guardrails.nli_llm import evaluate_with_llm  # 2026-08-11 LLM-as-Judge（替代 mDeBERTa）
 from backend.shared.logger import logger
 
 
@@ -251,45 +250,7 @@ def check_faithfulness(
         claim_results = []
         supported = sum(1 for _ in nli_results if _["supported"])
         unsupported = sum(1 for _ in nli_results if not _["supported"])
-    else:
-        # 路径 B: mDeBERTa 拆 claim（旧逻辑，30s+）
-        nli_results = check_claims_batch(high_risk, context_docs)
-
-        # 4. 汇总 + 三级分级
-        claim_results = []
-        supported = 0
-        unsupported = 0
-        fallback_count = 0  # 2026-08-11：NLI fallback 计数
-
-        for r in nli_results:
-            cr = ClaimResult(
-                claim=r["claim"],
-                supported=r["supported"],
-                label=r["label"],
-                action=r.get("action", "pass"),
-                best_score=r["best_score"],
-                best_chunk_preview=r["best_chunk_preview"],
-            )
-            claim_results.append(cr)
-            if cr.supported:
-                supported += 1
-            else:
-                unsupported += 1
-            # 2026-08-11：检测 NLI fallback（避免静默成功）
-            if r.get("fallback_reason"):
-                fallback_count += 1
-
-        # 2026-08-11：NLI fallback 警告 + 指标
-        if fallback_count > 0:
-            logger.warning(
-                f"[Faithfulness] ⚠️ NLI 全部 fallback：{fallback_count}/{len(nli_results)} claims 未实际校验"
-            )
-            try:
-                from backend.observability.metrics import nli_coverage_rate
-                coverage = (len(nli_results) - fallback_count) / len(nli_results) if nli_results else 1.0
-                nli_coverage_rate.set(coverage)
-            except Exception:
-                pass
+    # LLM-as-Judge 已是唯一路径（2026-08-12：mDeBERTa 路径已移除）
 
     score = supported / len(nli_results) if nli_results else 1.0
 

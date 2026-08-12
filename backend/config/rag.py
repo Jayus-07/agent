@@ -125,18 +125,10 @@ FILTER_ENABLE_PII_MASK = os.getenv("FILTER_ENABLE_PII_MASK", "false").lower() ==
 # 默认 True（对齐企业生产实践，§0.2 对标：Vertex AI / AWS Bedrock / RAGAS），
 # 关闭用 ENABLE_FAITHFULNESS=false
 ENABLE_FAITHFULNESS = os.getenv("ENABLE_FAITHFULNESS", "true").lower() == "true"
-NLI_MODEL_PATH = os.getenv(
-    "NLI_MODEL_PATH",
-    "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"  # HuggingFace model name，自动走缓存
-)
-NLI_TOP_K_CHUNKS = int(os.getenv("NLI_TOP_K_CHUNKS", "2"))
-NLI_SCORE_THRESHOLD = float(os.getenv("NLI_SCORE_THRESHOLD", "0.5"))
-# NLI 推理超时（秒）：触发后跳过 Faithfulness，避免 60s+ 阻塞
-NLI_TIMEOUT = int(os.getenv("NLI_TIMEOUT", "30"))
-# Faithfulness 跳过阈值：unsupported 比例超过此值时跳过 rewrite（可能为 NLI 误判）
+# Faithfulness 跳过阈值：unsupported 比例超过此值时跳过 rewrite
 FAITHFULNESS_SKIP_THRESHOLD = float(os.getenv("FAITHFULNESS_SKIP_THRESHOLD", "0.5"))
-# 2026-08-11：LLM-as-Judge 开关（Qwen 整体评估替代 mDeBERTa 拆 claim）
-NLI_USE_LLM = os.getenv("NLI_USE_LLM", "false").lower() == "true"
+# 2026-08-11：LLM-as-Judge 开关（Qwen 整体评估，2026-08-12 起为唯一路径）
+NLI_USE_LLM = os.getenv("NLI_USE_LLM", "true").lower() == "true"
 
 # ====================================
 # Evidence Gate — RAG 主动拒答
