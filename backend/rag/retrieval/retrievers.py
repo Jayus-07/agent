@@ -214,6 +214,7 @@ class ChunkLevelRetriever(BaseRetriever):
         logger.info(
             f"[Adaptive] 覆盖面不足 (unique_docs={unique_docs} < {ADAPTIVE_MIN_CHUNKS}, "
             f"effective={effective}) → 扩展检索"
+        )
 
         # 逐级扩展 K 直到满足阈值或用尽步长
         for step_k in ADAPTIVE_K_STEPS:
