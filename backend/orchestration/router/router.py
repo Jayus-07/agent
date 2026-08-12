@@ -22,6 +22,7 @@ from backend.orchestration.router.rule_router import RuleRouter
 from backend.orchestration.router.vector_router import VectorRouter
 from backend.orchestration.router.llm_router import LLMRouter
 from backend.observability import trace_collector
+from backend.observability.tracer import SpanKind
 from backend.shared.logger import logger
 
 
@@ -47,7 +48,7 @@ class Router:
 
         # ── Trace Span: 路由决策 ──
         span = trace_collector.start_span(
-            "router", name="路由决策", kind="router",
+            "router", name="路由决策", kind=SpanKind.ROUTER.value,
             input={"query": query},
         )
         final_layer = "llm"  # 默认 LLM 兜底
@@ -104,7 +105,6 @@ class Router:
 
         # 3. LLM Router（兜底）
         result = self.llm.route(query)
-        final_layer = "llm"
         llm_conf = result.confidence if result else 0.0
         trace_collector.add_event(
             span, "llm_check", "info",
