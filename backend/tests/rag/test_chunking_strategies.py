@@ -74,6 +74,23 @@ def test_all_strategies_emit_metadata_protocol():
                     assert key in c.metadata, f"{strategy.__class__.__name__} leaf 缺 {key}"
 
 
+def test_sibling_sections_with_same_title_have_unique_chunk_ids():
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="section", text="常见问题", level=1, children=[
+                DocumentNode(type="paragraph", text="问题A。"),
+            ]),
+            DocumentNode(type="section", text="常见问题", level=1, children=[
+                DocumentNode(type="paragraph", text="问题B。"),
+            ]),
+        ]),
+        raw_text="",
+    )
+    chunks = StructureChunkStrategy().split(ast, "a.md")
+    ids = [c.metadata["chunk_id"] for c in chunks]
+    assert len(ids) == len(set(ids))
+
+
 def test_recursive_strategy_splits_long_leaf():
     long_text = "这是一个没有结构的长段落。" * 200
     ast = DocumentAST(
