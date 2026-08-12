@@ -420,6 +420,23 @@ class ManualChunkStrategy(ChunkStrategy):
             return self._enrich_metadata([chunk], file_path)
 
         chunks = []
+        # ── 修复：保留第一个步骤编号之前的内容（章节引言/无步骤章节，如"退款处理规范"）──
+        preamble = full_text[: steps[0].start()].strip()
+        if preamble:
+            pre_meta = dict(base_meta)
+            pre_meta["section_title"] = "文档引言"
+            pre_meta["section_id"] = "preamble"
+            # 超长引言子分块
+            if len(preamble) > _MANUAL_CHUNK_MAX:
+                splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=_MANUAL_CHUNK_MAX, chunk_overlap=100,
+                    length_function=len, separators=_SEPARATORS,
+                )
+                for sub in splitter.split_text(preamble):
+                    chunks.append(Document(page_content=sub, metadata=dict(pre_meta)))
+            else:
+                chunks.append(Document(page_content=preamble, metadata=pre_meta))
+
         for i, m in enumerate(steps):
             start = m.start()
             end = steps[i + 1].start() if i + 1 < len(steps) else len(full_text)
