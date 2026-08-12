@@ -36,7 +36,11 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
 
     doc_dict = {doc.metadata.get("chunk_id") or _fallback_id(doc): doc for doc in vector_docs + bm25_docs}
 
-    merged = [doc_dict[cid] for cid, _ in sorted_cids[:k]]
+    merged = []
+    for cid, rrf_score in sorted_cids[:k]:
+        doc = doc_dict[cid]
+        doc.metadata["rrf_score"] = round(rrf_score, 4)  # 保留 RRF 分数
+        merged.append(doc)
 
     # ── Retrieval Debug event ──
     trace_collector.add_event(span, "rrf_fusion", "info",

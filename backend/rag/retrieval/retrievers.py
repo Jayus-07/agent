@@ -195,10 +195,10 @@ class ChunkLevelRetriever(BaseRetriever):
         if not ADAPTIVE_RETRIEVAL_ENABLED or not docs:
             return docs
 
-        # 用向量相似度（非 rerank 分数）判断质量
+        # 用 RRF/向量相似度（优先级: rrf_score > similarity > 0）
         scores = []
         for d in docs:
-            s = d.metadata.get("similarity") or d.metadata.get("score", 0)
+            s = d.metadata.get("rrf_score") or d.metadata.get("similarity") or 0
             try:
                 scores.append(float(s))
             except (TypeError, ValueError):
@@ -237,7 +237,7 @@ class ChunkLevelRetriever(BaseRetriever):
             # 重新评估质量
             scores = []
             for d in docs:
-                s = d.metadata.get("similarity") or d.metadata.get("score", 0)
+                s = d.metadata.get("rrf_score") or d.metadata.get("similarity") or 0
                 try:
                     scores.append(float(s))
                 except (TypeError, ValueError):

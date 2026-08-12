@@ -41,12 +41,15 @@ def risk_level_from_intent_and_doctype(intent: str, doc_types: list[str]) -> str
 # =====================================================
 
 def _safe_top_score(docs: list) -> float:
-    """从 docs metadata 里提取 top1 相似度 (优先级: rerank_score > rrf_score > 0)。"""
+    """从 docs metadata 里提取 top1 相似度 (优先级: rerank_score > rrf_score > similarity > 0)。"""
     if not docs:
         return 0.0
     candidates = []
     for d in docs:
-        s = d.metadata.get("rerank_score") or d.metadata.get("rrf_score") or 0.0
+        s = (d.metadata.get("rerank_score")
+             or d.metadata.get("rrf_score")
+             or d.metadata.get("similarity")
+             or 0.0)
         try:
             candidates.append(float(s))
         except (TypeError, ValueError):
