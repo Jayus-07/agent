@@ -52,7 +52,7 @@ class StructureChunkStrategy:
             sec_text = self._section_text(sec)
             parent_meta = {
                 "granularity": "parent",
-                "chunk_id": _chunk_id(sec.text, 0),
+                "chunk_id": _chunk_id(":".join(path), "parent"),
                 "section_path": path,
                 "section_title": sec.text,
                 "section_level": sec.level,
@@ -60,10 +60,10 @@ class StructureChunkStrategy:
             }
             parent_id = parent_meta["chunk_id"]
             chunks.append(_make_doc(sec_text, dict(parent_meta)))
-            for leaf in self._leaves(sec):
+            for i, leaf in enumerate(self._leaves(sec)):
                 chunks.append(_make_doc(leaf.text, {
                     "granularity": "leaf",
-                    "chunk_id": _chunk_id(f"{sec.text}:{leaf.text}", 0),
+                    "chunk_id": _chunk_id(":".join(path), f"leaf:{i}"),
                     "parent_chunk_id": parent_id,
                     "section_path": path,
                     "section_title": sec.text,
@@ -85,8 +85,9 @@ class StructureChunkStrategy:
 
     @staticmethod
     def _leaves(section: DocumentNode):
-        for n in walk(section):
-            if n is not section and n.type in LEAF_TYPES:
+        # 只产出直接子叶，避免嵌套层级下叶子在每个祖先 section 重复产出
+        for n in section.children:
+            if n.type in LEAF_TYPES:
                 yield n
 
     @staticmethod
@@ -105,16 +106,19 @@ class RecursiveChunkStrategy:
         )
         chunks: List[Document] = []
         for n in walk(ast.root):
-            if n.type in LEAF_TYPES and count_tokens(n.text) > LEAF_CHUNK_TOKENS:
-                for sub in splitter.split_text(n.text):
-                    chunks.append(_make_doc(sub, {
-                        "granularity": "leaf",
-                        "chunk_tokens": count_tokens(sub),
-                    }))
-            elif n.type in LEAF_TYPES:
-                chunks.append(_make_doc(n.text, {
+            if n.type not in LEAF_TYPES:
+                continue
+            texts = (splitter.split_text(n.text)
+                     if count_tokens(n.text) > LEAF_CHUNK_TOKENS else [n.text])
+            for i, sub in enumerate(texts):
+                chunks.append(_make_doc(sub, {
                     "granularity": "leaf",
-                    "chunk_tokens": count_tokens(n.text),
+                    "chunk_id": _chunk_id(n.text[:50], str(i)),
+                    "parent_chunk_id": "",
+                    "section_path": [],
+                    "section_title": "",
+                    "section_level": 0,
+                    "chunk_tokens": count_tokens(sub),
                 }))
         return _enrich(chunks, file_path)
 
@@ -131,11 +135,15 @@ class QAChunkStrategy:
 
     def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
         chunks: List[Document] = []
-        for n in walk(ast.root):
-            if n.type in ("qa_question", "qa_answer"):
-                chunks.append(_make_doc(n.text, {
-                    "granularity": "leaf",
-                    "section_title": n.text[:40],
-                    "chunk_tokens": count_tokens(n.text),
-                }))
+        for i, n in enumerate([n for n in walk(ast.root)
+                               if n.type in ("qa_question", "qa_answer")]):
+            chunks.append(_make_doc(n.text, {
+                "granularity": "leaf",
+                "chunk_id": _chunk_id(n.text[:50], str(i)),
+                "parent_chunk_id": "",
+                "section_path": [],
+                "section_title": n.text[:40],
+                "section_level": 0,
+                "chunk_tokens": count_tokens(n.text),
+            }))
         return _enrich(chunks, file_path)
