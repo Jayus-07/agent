@@ -169,6 +169,7 @@ class RAGPipeline:
                 doc_db=self.doc_db,
                 embedding=self.embedding,
                 registry=registry,
+                kb_id="default",  # 触发 _derive_kb_id 按第一级子目录派生，实现 kb 隔离
             )
             result = indexer.sync()
             logger.info(f"增量索引: {result}")
@@ -218,6 +219,7 @@ class RAGPipeline:
             doc_db=self.doc_db,
             embedding=self.embedding,
             registry=registry,
+            kb_id="default",  # 触发 _derive_kb_id 按第一级子目录派生，实现 kb 隔离
         )
         disk_files = indexer._scan_disk()
 

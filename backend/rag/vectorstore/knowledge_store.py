@@ -11,9 +11,30 @@
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, ClassVar, Protocol
+
+
+def _sanitize_metadata(meta: dict) -> dict:
+    """清洗 metadata 使其兼容 ChromaDB。
+
+    ChromaDB 约束：metadata 值只能是标量（str/int/float/bool），
+    list 必须非空，dict 和 None 都不允许。这里把非标量值转 JSON 字符串，
+    空 list 和 None 转空字符串，标量值原样保留。
+    """
+    cleaned: dict = {}
+    for k, v in meta.items():
+        if isinstance(v, dict):
+            cleaned[k] = json.dumps(v, ensure_ascii=False)
+        elif isinstance(v, list):
+            cleaned[k] = json.dumps(v, ensure_ascii=False) if v else ""
+        elif v is None:
+            cleaned[k] = ""
+        else:
+            cleaned[k] = v
+    return cleaned
 
 
 # ======================= 抽象接口 =======================
@@ -131,6 +152,9 @@ class ChromaKnowledgeStore(KnowledgeStore):
         """从 Document 列表创建 chunk 级向量库。"""
         from langchain_chroma import Chroma
 
+        for doc in documents:
+            if hasattr(doc, "metadata") and isinstance(doc.metadata, dict):
+                doc.metadata = _sanitize_metadata(doc.metadata)
         instance = cls.__new__(cls)
         instance.persist_directory = str(persist_directory)
         instance.embedding_function = embedding
@@ -184,7 +208,10 @@ class ChromaKnowledgeStore(KnowledgeStore):
     # ---- 写入方法 ----
 
     def add_documents(self, documents: list[Any]) -> list[str]:
-        """增量添加 Document 到已有 ChromaDB。"""
+        """增量添加 Document 到已有 ChromaDB（清洗非标量 metadata）。"""
+        for doc in documents:
+            if hasattr(doc, "metadata") and isinstance(doc.metadata, dict):
+                doc.metadata = _sanitize_metadata(doc.metadata)
         return self._chroma.add_documents(documents)
 
     def add_texts(
