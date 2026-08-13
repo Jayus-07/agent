@@ -153,6 +153,41 @@ class StructureChunkStrategy:
         return "\n".join(parts)
 
 
+class FixedSizeChunkStrategy:
+    """固定长度切分：直接按 token 上限硬切 + overlap，不查分隔符。
+
+    适用「普通文本、兜底」——无结构文本，无需递归查找分隔符。
+    与 RecursiveChunkStrategy 的区别：递归优先在分隔符处切（保持句子完整），
+    固定长度直接按 token 切（可能切在句子中间），更快更简单。
+    """
+
+    def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
+        # separators=[""] → 不查分隔符，直接按 chunk_size 字符级硬切
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=50,
+            length_function=count_tokens, separators=[""],
+        )
+        chunks: List[Document] = []
+        counter = 0
+        for n in walk(ast.root):
+            if n.type not in LEAF_TYPES:
+                continue
+            texts = (splitter.split_text(n.text)
+                     if count_tokens(n.text) > LEAF_CHUNK_TOKENS else [n.text])
+            for sub in texts:
+                chunks.append(_make_doc(sub, {
+                    "granularity": "leaf",
+                    "chunk_id": _chunk_id(file_path, str(counter)),
+                    "parent_chunk_id": "",
+                    "section_path": [],
+                    "section_title": "",
+                    "section_level": 0,
+                    "chunk_tokens": count_tokens(sub),
+                }))
+                counter += 1
+        return _enrich(chunks, file_path)
+
+
 class RecursiveChunkStrategy:
     """递归切分兜底：把叶子文本按 token 上限递归切分（不做结构检测）。"""
 
@@ -337,7 +372,7 @@ STRUCTURE_STRATEGIES = {
     "legal": StructureChunkStrategy,      # 合同条款级结构 Phase 2 细化
     "contract_template": StructureChunkStrategy,
     "faq": QAChunkStrategy,
-    "ad_policy": RecursiveChunkStrategy,
+    "ad_policy": FixedSizeChunkStrategy,
 }
 
 
