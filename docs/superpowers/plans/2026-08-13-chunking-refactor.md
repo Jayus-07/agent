@@ -28,7 +28,7 @@
 **Interfaces:**
 - Produces: `DocumentNode`（dataclass：`type/text/level/children/rows/source_range`）、`DocumentAST`（dataclass：`root/source_file/raw_text`）、`walk(node)`、`iter_sections(ast)`。后续所有 task 消费这些类型。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 # backend/tests/rag/test_ast.py
@@ -65,12 +65,12 @@ def test_node_defaults():
     assert n.level == 0 and n.children == [] and n.rows is None
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd backend && python -m pytest tests/rag/test_ast.py -v`
 Expected: FAIL（`ModuleNotFoundError: backend.rag.preprocessing.ast`）
 
-- [ ] **Step 3: 实现 ast.py**
+- [x] **Step 3: 实现 ast.py**
 
 ```python
 """统一 Document AST — 切分流水线的中间表示。
@@ -131,12 +131,12 @@ def iter_sections(ast: DocumentAST) -> Iterator[tuple[DocumentNode, list[str]]]:
     yield from _dfs(ast.root, [])
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cd backend && python -m pytest tests/rag/test_ast.py -v`
 Expected: PASS（3 passed）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/rag/preprocessing/ast.py backend/tests/rag/test_ast.py
@@ -157,7 +157,7 @@ git commit -m "feat(chunking): DocumentNode/DocumentAST 数据模型"
 - Produces: `count_tokens(text: str) -> int`。Task 5 的 chunk_tokens 字段依赖它。
 - Consumes: `backend.config` 的 `STRUCTURE_COMPLETE_THRESHOLD`（Task 4 用）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 # backend/tests/rag/test_token_counter.py
@@ -178,12 +178,12 @@ def test_english_counts_less_than_chars():
     assert 0 < count_tokens(text) < len(text)
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd backend && python -m pytest tests/rag/test_token_counter.py -v`
 Expected: FAIL（`ModuleNotFoundError`）
 
-- [ ] **Step 3: 实现 token_counter.py + 配置项**
+- [x] **Step 3: 实现 token_counter.py + 配置项**
 
 ```python
 """token 计数 — 用 tiktoken 真实 tokenizer，替代 len 字符数。"""
@@ -242,12 +242,12 @@ ENABLE_SEMANTIC_CHUNKING, ENABLE_LLM_CHUNKING, LLM_CHUNK_MIN_CHARS,
 
 并同步加进 `__init__.py` 顶部的 import 块和文件末尾的 `__all__`（若存在）。参考现有 `GENERAL_CHUNK_SIZE` 的两处写法。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cd backend && python -m pytest tests/rag/test_token_counter.py -v`
 Expected: PASS（3 passed）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/rag/preprocessing/token_counter.py backend/config/rag.py backend/config/__init__.py backend/tests/rag/test_token_counter.py
@@ -269,7 +269,7 @@ git commit -m "feat(chunking): token 计数 + 切分配置项"
 **Interfaces:**
 - Produces: `parse_file(file_path: str) -> DocumentAST`（dispatcher）、`MarkdownParser().parse(file_path)`、`TxtParser().parse(file_path)`。Task 7 的流水线调用 `parse_file`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 # backend/tests/rag/test_parser.py
@@ -315,12 +315,12 @@ def test_excel_parser_not_implemented(tmp_path):
         ExcelParser().parse(str(tmp_path / "c.xlsx"))
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd backend && python -m pytest tests/rag/test_parser.py -v`
 Expected: FAIL（`ModuleNotFoundError: backend.rag.preprocessing.parser`）
 
-- [ ] **Step 3: 实现 parser 层**
+- [x] **Step 3: 实现 parser 层**
 
 `base.py`：
 
@@ -479,12 +479,12 @@ def parse_file(file_path: str) -> DocumentAST:
     return parser_cls().parse(file_path)
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cd backend && python -m pytest tests/rag/test_parser.py -v`
 Expected: PASS（3 passed）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/rag/preprocessing/parser/ backend/tests/rag/test_parser.py
@@ -503,7 +503,7 @@ git commit -m "feat(chunking): Parser 层 Markdown/TXT → Raw AST"
 - Produces: `StructureReport`（字段：`ast/completeness/deficit_signal/topic_shift_detected/is_high_value_and_chaotic`，property `is_complete`）、`StructureAnalyzer().analyze(raw_ast) -> tuple[DocumentAST, StructureReport]`。Task 6 的 Router 消费 `StructureReport`。
 - Consumes: `walk`、`count_tokens`、`STRUCTURE_COMPLETE_THRESHOLD`、`LEAF_TYPES`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 # backend/tests/rag/test_structure_analyzer.py
@@ -548,12 +548,12 @@ def test_empty_doc_zero_completeness():
     assert report.completeness == 0.0
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd backend && python -m pytest tests/rag/test_structure_analyzer.py -v`
 Expected: FAIL（`ModuleNotFoundError: backend.rag.preprocessing.structure_analyzer`）
 
-- [ ] **Step 3: 实现 structure_analyzer.py**
+- [x] **Step 3: 实现 structure_analyzer.py**
 
 ```python
 """StructureAnalyzer — Raw AST → Normalized AST + StructureReport。
@@ -624,12 +624,12 @@ class StructureAnalyzer:
         return "long_narrative"
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cd backend && python -m pytest tests/rag/test_structure_analyzer.py -v`
 Expected: PASS（3 passed）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/rag/preprocessing/structure_analyzer.py backend/tests/rag/test_structure_analyzer.py
@@ -648,7 +648,7 @@ git commit -m "feat(chunking): StructureAnalyzer 结构完整度评分"
 - Produces: `StructureChunkStrategy`、`StepChunkStrategy`、`QAChunkStrategy`、`RecursiveChunkStrategy`，每个实现 `split(ast: DocumentAST, file_path: str) -> list[Document]`；返回的 Document 携带统一 metadata（`granularity`/`parent_chunk_id`/`section_path`/`section_title`/`section_level`/`chunk_tokens`）。
 - Consumes: `DocumentAST`、`walk`、`iter_sections`、`count_tokens`、`LEAF_CHUNK_TOKENS`、`PARENT_CHUNK_TOKENS`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 # backend/tests/rag/test_chunking_strategies.py
@@ -737,12 +737,12 @@ def test_recursive_strategy_splits_long_leaf():
     assert len(chunks) > 1
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd backend && python -m pytest tests/rag/test_chunking_strategies.py -v`
 Expected: FAIL（`ImportError: cannot import name 'StructureChunkStrategy'`）
 
-- [ ] **Step 3: 实现策略层（重写 chunking.py 的 Strategy 部分）**
+- [x] **Step 3: 实现策略层（重写 chunking.py 的 Strategy 部分）**
 
 删除原有 `_find_sections` / `_STEP_PATTERN` / `_ARTICLE_PATTERN` / `_QA_PATTERN` / `GeneralChunkStrategy` / `ManualPolicyChunkStrategy` / `ProjectReportChunkStrategy` / `ManualChunkStrategy` / `ContractChunkStrategy` / `QAChunkStrategy`（旧版），替换为下面四个策略。**保留文件顶部的 import 与日志风格**，其余旧类在 Task 6 完成后一并清理。
 
@@ -900,12 +900,12 @@ class QAChunkStrategy:
 
 > 说明：本 Step 会删除旧策略类，`backend/rag/indexing/indexer.py` 若引用旧类名（`GeneralChunkStrategy` 等）会暂时报错——这是预期，Task 7 会改成新流水线。Task 5 只要求 `test_chunking_strategies.py` 通过。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cd backend && python -m pytest tests/rag/test_chunking_strategies.py -v`
 Expected: PASS（3 passed）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/rag/preprocessing/chunking.py backend/tests/rag/test_chunking_strategies.py
@@ -924,7 +924,7 @@ git commit -m "feat(chunking): Strategy 消费 AST + 双粒度 Parent-Child"
 - Produces: `ChunkStrategyRouter().route(doc_type: str, report: StructureReport) -> object`（返回 Strategy 实例）。
 - Consumes: `StructureReport`、`STRUCTURE_STRATEGIES` 映射、`ENABLE_LLM_CHUNKING`、`ENABLE_SEMANTIC_CHUNKING`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 # backend/tests/rag/test_chunking_router.py
@@ -954,12 +954,12 @@ def test_low_completeness_falls_back_to_recursive():
     assert isinstance(r.route("general", _report(0.1)), RecursiveChunkStrategy)
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd backend && python -m pytest tests/rag/test_chunking_router.py -v`
 Expected: FAIL（`ChunkStrategyRouter` 旧接口无 `route(doc_type, report)` 签名，报 TypeError/AttributeError）
 
-- [ ] **Step 3: 实现 Router（替换旧 `ChunkStrategyRouter`）**
+- [x] **Step 3: 实现 Router（替换旧 `ChunkStrategyRouter`）**
 
 在 `chunking.py` 末尾追加（删除旧 `ChunkStrategyRouter` 类）：
 
@@ -1000,12 +1000,12 @@ class ChunkStrategyRouter:
         return RecursiveChunkStrategy()
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cd backend && python -m pytest tests/rag/test_chunking_router.py -v`
 Expected: PASS（2 passed）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/rag/preprocessing/chunking.py backend/tests/rag/test_chunking_router.py
@@ -1025,7 +1025,7 @@ git commit -m "feat(chunking): ChunkStrategyRouter 双轴路由"
 - Produces: `parse_and_chunk(file_path: str, doc_type_hint: str = "") -> list[Document]`（Parser → Cleaner → Analyzer → Router → Strategy）。
 - Consumes: `parse_file`、`StructureAnalyzer`、`ChunkStrategyRouter`、`classify_doc_type`、`DocumentCleaner`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 # backend/tests/rag/test_chunking_pipeline.py
@@ -1059,12 +1059,12 @@ def test_pipeline_unstructured_falls_back(tmp_path):
     assert all(c.metadata.get("chunk_tokens", 0) > 0 for c in chunks)
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd backend && python -m pytest tests/rag/test_chunking_pipeline.py -v`
 Expected: FAIL（`ModuleNotFoundError: backend.rag.preprocessing.pipeline`）
 
-- [ ] **Step 3: 实现 pipeline.py**
+- [x] **Step 3: 实现 pipeline.py**
 
 ```python
 """切分流水线编排 — Parser → Cleaner → Analyzer → Router → Strategy。"""
@@ -1105,12 +1105,12 @@ def parse_and_chunk(file_path: str, doc_type_hint: str = "") -> List[Document]:
     return strategy.split(normalized_ast, file_path)
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cd backend && python -m pytest tests/rag/test_chunking_pipeline.py -v`
 Expected: PASS（2 passed）
 
-- [ ] **Step 5: 修改 indexer.py 接入新流水线**
+- [x] **Step 5: 修改 indexer.py 接入新流水线**
 
 在 `backend/rag/indexing/indexer.py` 的 `_index_file_inner` chunk 段（原 `split_documents` 调用处）替换为：
 
@@ -1124,11 +1124,11 @@ Expected: PASS（2 passed）
 
 并确认：`doc_id` / `chunk_index` / `source_file` / `file_path` 的注入与 ChunkFilter 段（原 431-452 行）保持不变，仍在新 chunk 上执行。
 
-- [ ] **Step 6: 触发重索引**
+- [x] **Step 6: 触发重索引**
 
 bump 版本触发全量重建：删除 `CHROMA_PATH` 和 `DOC_DB_PATH` 下的 `.version` 文件（或直接删库目录），重启后端让 `_need_rebuild` 判定重建。同时验证 `pytest tests/rag/` 全量不回归。
 
-- [ ] **Step 7: 回归 + 提交**
+- [x] **Step 7: 回归 + 提交**
 
 Run: `cd backend && python -m pytest tests/rag/ -v`
 Expected: 全部 PASS，且 `test_indexer_trace.py` / `test_keyword_dedup.py` 等既有测试不回归。
@@ -1145,3 +1145,61 @@ git commit -m "feat(chunking): 流水线编排 + indexer 接入新切分"
 - **Spec 覆盖**：Phase 1 全部交付物（Parser / Raw AST / DocumentCleaner / Structure Analyzer / 双轴 Router / Structure+QA+Recursive / Parent+Leaf / section_path / token counting / ChunkFilter 复用 / 重索引）均有对应 Task。Semantic / LLM Assisted / PyMuPDF / python-docx / Excel 属 Phase 2/3，本计划不实现（Router 留了开关分支，Excel 留了占位类）。
 - **类型一致性**：`DocumentNode`/`DocumentAST`/`StructureReport`/`count_tokens`/`parse_file`/`split(ast, file_path)`/`route(doc_type, report)` 在各 Task 定义与引用一致。
 - **占位检查**：无 TBD/TODO；异常处理均记录日志或有意义降级，无 `except Exception: pass`。
+
+---
+
+## 完成记录
+
+> 状态：✅ **Phase 1 全部实现 + 测试通过**（2026-08-13）
+
+### Commit 映射（feat/chunking-refactor 分支）
+
+| # | Task | Commit | 说明 |
+|---|---|---|---|
+| 计划 | — | `2234f63` | 计划文档 |
+| Task 1 | 数据模型 | `854f362` | `ast.py` + `test_ast.py` |
+| Task 2 | token 计数 | `2c65faf` | `token_counter.py` + 配置项 |
+| Task 3 | Parser 层 | `707e96c` | `parser/` (4 文件) |
+| Task 4 | StructureAnalyzer | `89fe463` | `structure_analyzer.py` |
+| Task 5 | 双粒度策略 | `f3914d2` | `chunking.py` 重构 |
+| — | 补 metadata 协议 | `34281d4` | plan 修正 |
+| — | chunk_id 唯一化 | `f2aad27` | 修复兄弟 section 碰撞 |
+| Task 6 | 双轴路由 | `a21a278` | `ChunkStrategyRouter` |
+| Task 7 | 流水线编排 | `3e8fa87` | `pipeline.py` + indexer 接入 |
+| — | 扫描格式收窄 | `695388f` | indexer 扩展名 guard |
+| — | 最终修复波 | `fc89a2b` | TxtParser 嵌套/faq/parent 标题 |
+| — | 修复波（plan） | `5195936` `936e02f` `d740f61` | 三次 plan 修正 |
+| — | 级联删除补 BM25 | `415d733` | `rag_documents.py` |
+| — | 路径统一 | `2c48d38` | `RAG_DATA_DIR` 根 |
+| — | 全量加载崩溃 | `ce4c78a` | loader 注入 doc_id |
+
+### 测试结果
+
+```
+tests/rag/  共 124 用例：
+  - 核心单元（ast/token/parser/analyzer/router/strategies/loader）：22 passed
+  - 集成（cascade/chunking_pipeline/tracer/indexer_trace/subscribe/progress_e2e）：100 passed, 2 skipped
+  - 合计：122 passed / 2 skipped / 0 failed
+  - 耗时：~120s（两批 pytest）
+```
+
+跳过用例（预期内）：
+- `test_tracer.py::test_deque_maxlen_caps_records`
+- `test_progress_e2e.py::test_parse_failure_propagates_to_error_stage`（Phase 1 延后）
+
+### 改动统计（相对本地 master `2234f63`）
+
+```
+ 31 files changed, 1107 insertions(+), 733 deletions(-)
+```
+
+- 新增模块（6 个）：`ast.py` `token_counter.py` `parser/` (4 文件) `structure_analyzer.py` `pipeline.py` `chunk_store.py`
+- 核心重构：`chunking.py` 从 +753 → -589/+173（净减 416 行）
+- 新增测试：7 个测试文件
+
+### 下一步
+
+- **Phase 2（已完成 P0/P1）**：[Phase 2 Spec](../specs/2026-08-13-chunking-refactor-phase2-design.md)
+- **Phase 2 Plan**：[Phase 2 Plan](../plans/2026-08-13-chunking-refactor-phase2.md)
+- P2/P3 待办：LLM Assisted / Semantic / PDF 标题启发式 / Step / Excel / legal 细化
+- 分支合并策略（本地 master 落后 origin/master 275 commit，需要先 rebase/merge）
