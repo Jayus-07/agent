@@ -172,7 +172,7 @@ STRUCTURE_STRATEGIES = {
     "training": StepChunkStrategy,
     "legal": StructureChunkStrategy,      # 合同条款级结构 Phase 2 细化
     "contract_template": StructureChunkStrategy,
-    "faq": StructureChunkStrategy,   # Q/A 节点识别留 Phase 2
+    "faq": QAChunkStrategy,
     "ad_policy": RecursiveChunkStrategy,
 }
 
