@@ -17,8 +17,18 @@ def _report(completeness: float):
 def test_structure_complete_routes_by_doc_type():
     r = ChunkStrategyRouter()
     assert isinstance(r.route("policy", _report(0.9)), StructureChunkStrategy)
-    # Phase 2 修复：FAQ 文档走 QAChunkStrategy（_qa_patterns.py 识别 Q/A 节点）
-    assert isinstance(r.route("faq", _report(0.9)), QAChunkStrategy)
+    # Phase 2 修复：FAQ 文档走 QAChunkStrategy（前提：AST 真有 qa 节点）
+    faq_report = StructureReport(
+        ast=DocumentAST(
+            root=DocumentNode(type="section", text="", level=0, children=[
+                DocumentNode(type="qa_question", text="怎么退货？"),
+                DocumentNode(type="qa_answer", text="提交申请。"),
+            ]),
+            raw_text="怎么退货？\n提交申请。",
+        ),
+        completeness=1.0,
+    )
+    assert isinstance(r.route("faq", faq_report), QAChunkStrategy)
 
 
 def test_low_completeness_falls_back_to_recursive():

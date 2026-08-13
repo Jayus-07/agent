@@ -8,8 +8,8 @@
 """
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
 from backend.rag.preprocessing.chunking import (
-    ChunkStrategyRouter, QAChunkStrategy, StepChunkStrategy,
-    StructureChunkStrategy,
+    ChunkStrategyRouter, QAChunkStrategy, RecursiveChunkStrategy,
+    StepChunkStrategy, StructureChunkStrategy,
 )
 from backend.rag.preprocessing.structure_analyzer import StructureReport
 
@@ -22,9 +22,22 @@ def _report(completeness: float):
 
 
 def test_faq_routes_to_qa_strategy():
-    """Phase 2 修复：faq 走 QAChunkStrategy（不再走 StructureChunkStrategy）。"""
-    r = ChunkStrategyRouter()
-    strategy = r.route("faq", _report(0.9))
+    """faq + AST 有 qa 节点 → QAChunkStrategy（缺陷 A 修复的核心断言）。
+
+    前置：AST 必须真有 qa_* 节点（真实 FAQ 经 parser 产出），
+    用空 AST 的 report 无法命中 QAChunkStrategy（见缺陷 D fallback）。
+    """
+    from backend.rag.preprocessing.structure_analyzer import StructureAnalyzer
+
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="qa_question", text="怎么退货？"),
+            DocumentNode(type="qa_answer", text="提交申请。"),
+        ]),
+        raw_text="怎么退货？\n提交申请。",
+    )
+    _, report = StructureAnalyzer().analyze(ast)
+    strategy = ChunkStrategyRouter().route("faq", report)
     assert isinstance(strategy, QAChunkStrategy)
 
 
@@ -87,3 +100,25 @@ def test_faq_real_ast_routes_to_qa_strategy():
     assert report.is_complete is True
     strategy = ChunkStrategyRouter().route("faq", report)
     assert isinstance(strategy, QAChunkStrategy)
+
+
+def test_faq_without_qa_nodes_falls_back_to_recursive():
+    """缺陷 D：classify 判 faq 但 AST 无 qa 节点 → fallback Recursive，不产 0 chunk。
+
+    根因：classify_doc_type（文件名/关键词）与 parser 的 QA 识别（looks_like_qa_doc）
+    是两套独立逻辑，可能不一致。当 doc_type="faq" 但 AST 无 qa_* 节点时，
+    路由到 QAChunkStrategy 会产 0 chunk（数据丢失），应 fallback 递归切分。
+    """
+    from backend.rag.preprocessing.structure_analyzer import StructureAnalyzer
+
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="section", text="订单问题", level=1, children=[
+                DocumentNode(type="paragraph", text="普通段落内容。"),
+            ]),
+        ]),
+        raw_text="订单问题\n普通段落内容。",
+    )
+    _, report = StructureAnalyzer().analyze(ast)
+    strategy = ChunkStrategyRouter().route("faq", report)
+    assert isinstance(strategy, RecursiveChunkStrategy)

@@ -132,3 +132,32 @@ def test_txt_parser_qa_doc(tmp_path):
         n for n in ast.root.children if n.type in ("qa_question", "qa_answer")
     ]
     assert len(qa_nodes) == 4
+
+
+# ─── 真实格式（标签加粗、正文不加粗）───
+
+def test_extract_qa_bold_no_closing_asterisks():
+    """真实 FAQ 格式：**Q:** 问题（只有 Q/A 标签加粗，正文不闭合 **）。
+
+    缺陷 C 根因：旧正则要求问题正文也闭合 **（**Q: 问题**），
+    无法匹配真实文档的「标签加粗、正文不加粗」写法，导致 01_FAQ.md 产 0 chunk。
+    """
+    text = "**Q:** 下单后可以修改收货地址吗？\n**A:** 订单在待发货状态前可修改。\n"
+    pairs = extract_qa_pairs(text)
+    assert len(pairs) == 1
+    q, a, ptype = pairs[0]
+    assert q == "下单后可以修改收货地址吗？"
+    assert a == "订单在待发货状态前可修改。"
+    assert ptype == "qa_bold"
+
+
+def test_extract_qa_bold_multiple_no_closing():
+    """真实 FAQ 格式多对。"""
+    text = (
+        "**Q:** 问题一？\n**A:** 答案一。\n\n"
+        "**Q:** 问题二？\n**A:** 答案二。\n"
+    )
+    pairs = extract_qa_pairs(text)
+    assert len(pairs) == 2
+    assert pairs[0] == ("问题一？", "答案一。", "qa_bold")
+    assert pairs[1] == ("问题二？", "答案二。", "qa_bold")

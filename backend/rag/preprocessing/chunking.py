@@ -185,6 +185,18 @@ class ChunkStrategyRouter:
 
         if report.is_complete:
             cls = STRUCTURE_STRATEGIES.get(doc_type, RecursiveChunkStrategy)
+            # faq 文档：只有 AST 里真有 qa_* 节点才走 QAChunkStrategy。
+            # classify_doc_type（文件名/关键词）与 parser 的 QA 识别是两套独立
+            # 逻辑，可能不一致——文件名含「FAQ」但内容无 Q/A 结构时，QAChunkStrategy
+            # 会产 0 chunk 导致数据丢失，这里 fallback 递归切分兜底。
+            if doc_type == "faq":
+                has_qa = any(
+                    n.type in ("qa_question", "qa_answer")
+                    for n in walk(report.ast.root)
+                )
+                if not has_qa:
+                    logger.info("[Router] faq 但 AST 无 qa 节点 → Recursive 兜底")
+                    return RecursiveChunkStrategy()
             return cls()
 
         # Phase 2：LLM 高价值特殊处理、Semantic 高级处理（默认关闭，暂不触发）
