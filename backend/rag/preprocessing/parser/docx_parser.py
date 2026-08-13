@@ -101,9 +101,12 @@ class DocxParser(BaseDocumentParser):
                 )
                 skipped_tables.append(tbl_idx)
                 continue
-            table_node = DocumentNode(type="table", text="", rows=rows)
+            # 表格内容同时写入 text 字段：否则 StructureChunkStrategy 用 text 切分
+            # 会产出空 leaf chunk（ChunkFilter 拒绝），表格数据入库后彻底丢失
+            table_text = "\n".join(", ".join(r) for r in rows)
+            table_node = DocumentNode(type="table", text=table_text, rows=rows)
             section_stack[-1].children.append(table_node)
-            raw_lines.append("\n".join(", ".join(r) for r in rows))
+            raw_lines.append(table_text)
 
         # 可观测：汇总报告
         if skipped_tables:

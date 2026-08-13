@@ -93,3 +93,14 @@ def test_docx_parser_heading_level_pop_logic(tmp_path):
         for c in outer1.children
     )
     assert inner3_in_outer1
+
+
+def test_docx_parser_table_text_preserved(sample_docx):
+    """表格内容应进入 table 节点的 text，供 chunk 保留（避免空 chunk 丢失表格数据）。"""
+    ast = DocxParser().parse(sample_docx)
+    tables = [n for n in walk(ast.root) if n.type == "table"]
+    assert len(tables) == 1
+    # table.text 非空，且包含单元格内容
+    table_text = tables[0].text
+    assert "列1" in table_text
+    assert "数据2" in table_text

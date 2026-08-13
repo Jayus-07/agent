@@ -45,6 +45,10 @@ class StructureAnalyzer:
         leaves = [n for n in walk(ast.root) if n.type in LEAF_TYPES]
         if not leaves:
             return 0.0
+        # Q/A 文档：qa_question/qa_answer 本身就是结构信号（无需 section 层级），
+        # 视为完整结构，让 Router 命中 STRUCTURE_STRATEGIES["faq"] = QAChunkStrategy
+        if any(n.type in ("qa_question", "qa_answer") for n in leaves):
+            return 1.0
         sections = [n for n in walk(ast.root) if n.type == "section" and n.level > 0]
         if not sections:
             return 0.1   # 无任何章节结构 → 结构性极低，交由递归兜底

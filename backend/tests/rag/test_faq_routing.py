@@ -64,3 +64,26 @@ def test_qa_strategy_chunks_have_required_metadata():
     assert all("chunk_id" in c.metadata for c in chunks)
     assert all("file_path" in c.metadata for c in chunks)
     assert chunks[0].metadata["file_path"] == "/abs/path/faq.md"
+
+
+def test_faq_real_ast_routes_to_qa_strategy():
+    """真实 FAQ AST（无 section，只有 qa 节点）→ 完整链路应走 QAChunkStrategy。
+
+    缺陷 A 根因回归：旧实现下真实 FAQ 的 completeness=0.1，Router 走 Recursive
+    兜底，本测试用真实 AST 路径（经 StructureAnalyzer）而非人工 completeness=0.9。
+    """
+    from backend.rag.preprocessing.structure_analyzer import StructureAnalyzer
+
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="qa_question", text="怎么退货？"),
+            DocumentNode(type="qa_answer", text="提交申请。"),
+            DocumentNode(type="qa_question", text="运费谁付？"),
+            DocumentNode(type="qa_answer", text="商家承担。"),
+        ]),
+        raw_text="怎么退货？\n提交申请。\n运费谁付？\n商家承担。",
+    )
+    _, report = StructureAnalyzer().analyze(ast)
+    assert report.is_complete is True
+    strategy = ChunkStrategyRouter().route("faq", report)
+    assert isinstance(strategy, QAChunkStrategy)

@@ -37,3 +37,21 @@ def test_empty_doc_zero_completeness():
     empty = DocumentAST(root=DocumentNode(type="section", text="", level=0), raw_text="")
     _, report = StructureAnalyzer().analyze(empty)
     assert report.completeness == 0.0
+
+
+def test_qa_doc_high_completeness():
+    """Q/A 文档（qa_question/qa_answer 节点，无 section 层级）应视为结构完整。
+
+    缺陷 A 根因：真实 FAQ 文档无 section → completeness 曾恒为 0.1，
+    导致 Router 走 RecursiveChunkStrategy 兜底，永不命中 QAChunkStrategy。
+    """
+    qa = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="qa_question", text="怎么退货？"),
+            DocumentNode(type="qa_answer", text="提交申请。"),
+        ]),
+        raw_text="怎么退货？\n提交申请。",
+    )
+    _, report = StructureAnalyzer().analyze(qa)
+    assert report.is_complete is True
+    assert report.completeness == 1.0
