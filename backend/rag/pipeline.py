@@ -11,7 +11,7 @@ from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
 from backend.rag.preprocessing.metadata import build_all_metadata_async
 from backend.rag.preprocessing.loader import load_documents_from_directory
 from backend.rag.base import CustomRetriever
-from backend.rag.retrieval.bm25_store import BM25Store
+from backend.rag.retrieval.bm25_store import BM25Store, source_files_out_of_sync
 from backend.rag.chain import RAGChain
 from backend.config import (
     EMBEDDING_MODEL_PATH,
@@ -273,6 +273,9 @@ class RAGPipeline:
             self.bm25 = bm25_store.build(self.docs, k=BM25_SEARCH_K)
         elif bm25_store.is_stale:
             logger.info("[RAG] BM25 索引已过期（文档数为 0），重建...")
+            self.bm25 = bm25_store.build(self.docs, k=BM25_SEARCH_K)
+        elif source_files_out_of_sync(self.bm25.docs, self.docs):
+            logger.info("[RAG] BM25 索引与文档目录不一致（残留/缺失），重建...")
             self.bm25 = bm25_store.build(self.docs, k=BM25_SEARCH_K)
         else:
             logger.info(

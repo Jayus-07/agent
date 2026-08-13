@@ -25,6 +25,17 @@ from backend.config import BM25_INDEX_DIR
 from backend.shared.logger import logger
 
 
+def source_files_out_of_sync(indexed_docs: list, current_docs: list) -> bool:
+    """判断 BM25 索引文档集合与当前文档集合是否一致。
+
+    is_stale 只检查 doc_count==0，检测不到「文档已删除但索引残留」。
+    这里比较 source_file 集合，索引有残留（已删文档）或缺失（新文档）都判为需重建。
+    """
+    indexed = {d.metadata.get("source_file", "") for d in indexed_docs}
+    current = {d.metadata.get("source_file", "") for d in current_docs}
+    return indexed != current
+
+
 class BM25Store:
     """磁盘持久化 BM25 索引。
 
