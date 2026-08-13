@@ -28,8 +28,8 @@ def load_documents_from_directory(directory_path: str, chunk_size=None, chunk_ov
         for file in files:
             file_path = os.path.join(root, file)
             ext = os.path.splitext(file)[1].lower()
-            if ext not in (".md", ".txt"):
-                continue  # Phase 1 仅支持 md/txt；pdf/docx 延后 Phase 2
+            if ext not in (".md", ".txt", ".pdf", ".docx"):
+                continue
 
             try:
                 chunks = parse_and_chunk(file_path)
