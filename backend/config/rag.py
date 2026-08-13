@@ -61,6 +61,12 @@ ENABLE_SEMANTIC_CHUNKING = os.getenv("ENABLE_SEMANTIC_CHUNKING", "false").lower(
 ENABLE_LLM_CHUNKING = os.getenv("ENABLE_LLM_CHUNKING", "false").lower() == "true"
 LLM_CHUNK_MIN_CHARS = int(os.getenv("LLM_CHUNK_MIN_CHARS", "2000"))
 
+# Semantic 语义切分（Phase 3）：仅对「无结构长文档」启用，避免短文档过度调用 embedding
+# 文档 token 数超过此阈值才走语义切分，否则递归切分足够
+SEMANTIC_CHUNK_MIN_TOKENS = int(os.getenv("SEMANTIC_CHUNK_MIN_TOKENS", "500"))
+# 相邻句子余弦相似度低于此阈值视为主题边界（语义断层）
+SEMANTIC_SIMILARITY_THRESHOLD = float(os.getenv("SEMANTIC_SIMILARITY_THRESHOLD", "0.45"))
+
 # ====================================
 # Knowledge Base 隔离配置
 # ====================================

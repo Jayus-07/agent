@@ -6,7 +6,9 @@ Strategy 只负责「既然知道结构，怎么切」，不再重新检测标�
 from __future__ import annotations
 
 import hashlib
+import math
 import os
+import re
 from typing import TYPE_CHECKING, List
 
 from langchain_core.documents import Document
@@ -44,6 +46,46 @@ def _enrich(chunks: List[Document], file_path: str) -> List[Document]:
 
 def _make_doc(text: str, meta: dict) -> Document:
     return Document(page_content=text, metadata=meta)
+
+
+# ── Semantic 语义切分辅助函数 ──────────────────────────
+
+_SENTENCE_SPLIT_RE = re.compile(r"[。！？；]+")
+
+
+def _split_sentences(text: str) -> list[str]:
+    """按中文句子边界切分，过滤空句。
+
+    PDF 提取的文本常含硬换行（非语义边界），先统一为空格，
+    避免误切「接口」「流程」这类被换行拆开的词。
+    """
+    normalized = text.replace("\r", " ").replace("\n", " ")
+    return [p.strip() for p in _SENTENCE_SPLIT_RE.split(normalized) if p.strip()]
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """余弦相似度，零向量返回 0.0。"""
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _detect_boundaries(
+    sentences: list[str], vecs: list[list[float]], threshold: float,
+) -> list[bool]:
+    """检测语义边界：相邻句子相似度骤降处标记为新 chunk 起点。
+
+    Returns:
+        starts: starts[i]=True 表示 sentences[i] 是新 chunk 的起点（starts[0] 恒 True）。
+    """
+    starts = [True] + [False] * (len(sentences) - 1)
+    for i in range(1, len(sentences)):
+        if _cosine_similarity(vecs[i - 1], vecs[i]) < threshold:
+            starts[i] = True
+    return starts
 
 
 class StructureChunkStrategy:
@@ -160,6 +202,85 @@ class QAChunkStrategy:
         return _enrich(chunks, file_path)
 
 
+class SemanticChunkStrategy:
+    """语义切分：基于 embedding 相似度检测主题边界。
+
+    适用于无结构长文档——RecursiveChunkStrategy 按固定 token 硬切 + overlap
+    会把完整信息单元切碎、稀释。本策略在相邻句子的语义相似度骤降处切分，
+    保持 chunk 语义连贯。
+
+    可靠性：embedding 调用失败时降级 RecursiveChunkStrategy，不静默吞异常。
+    """
+
+    def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
+        from backend.rag.embedding_singleton import get_embedding
+        return self._split_with_embedding(ast, file_path, get_embedding())
+
+    def _split_with_embedding(
+        self, ast: DocumentAST, file_path: str, embedding,
+    ) -> List[Document]:
+        from backend.config import SEMANTIC_SIMILARITY_THRESHOLD
+
+        chunks: List[Document] = []
+        counter = 0
+        for n in walk(ast.root):
+            if n.type not in LEAF_TYPES:
+                continue
+            sentences = _split_sentences(n.text)
+            if len(sentences) <= 1:
+                chunks.append(_make_doc(
+                    n.text, self._leaf_meta(file_path, counter, n.text),
+                ))
+                counter += 1
+                continue
+            try:
+                vecs = embedding.embed_documents(sentences)
+            except Exception as e:
+                logger.warning(
+                    f"[SemanticChunk] embedding 失败({type(e).__name__})，"
+                    f"降级递归切分: {e}"
+                )
+                return RecursiveChunkStrategy().split(ast, file_path)
+            starts = _detect_boundaries(sentences, vecs, SEMANTIC_SIMILARITY_THRESHOLD)
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=50,
+                length_function=count_tokens, separators=_SEPARATORS,
+            )
+            for i, start in enumerate(starts):
+                if not start:
+                    continue
+                end = next(
+                    (j for j in range(i + 1, len(sentences)) if starts[j]),
+                    len(sentences),
+                )
+                text = "。".join(sentences[i:end])
+                # 超长 chunk（无边界可切时）兜底递归切分，避免超大 chunk
+                if count_tokens(text) > LEAF_CHUNK_TOKENS:
+                    for sub in splitter.split_text(text):
+                        chunks.append(_make_doc(sub, self._leaf_meta(file_path, counter, sub)))
+                        counter += 1
+                else:
+                    chunks.append(_make_doc(text, self._leaf_meta(file_path, counter, text)))
+                    counter += 1
+
+        logger.info(
+            f"[SemanticChunk] {file_path} 语义切分产出 {len(chunks)} 个 chunk"
+        )
+        return _enrich(chunks, file_path)
+
+    @staticmethod
+    def _leaf_meta(file_path: str, index: int, text: str) -> dict:
+        return {
+            "granularity": "leaf",
+            "chunk_id": _chunk_id(file_path, str(index)),
+            "parent_chunk_id": "",
+            "section_path": [],
+            "section_title": "",
+            "section_level": 0,
+            "chunk_tokens": count_tokens(text),
+        }
+
+
 STRUCTURE_STRATEGIES = {
     "policy": StructureChunkStrategy,
     "compliance": StructureChunkStrategy,
@@ -181,7 +302,9 @@ class ChunkStrategyRouter:
     """双轴路由：文档类型 × 结构完整度 → 策略。优先级 Structure > LLM > Semantic > Recursive。"""
 
     def route(self, doc_type: str, report: StructureReport):
-        from backend.config import ENABLE_LLM_CHUNKING, ENABLE_SEMANTIC_CHUNKING
+        from backend.config import (
+            ENABLE_LLM_CHUNKING, ENABLE_SEMANTIC_CHUNKING, SEMANTIC_CHUNK_MIN_TOKENS,
+        )
 
         if report.is_complete:
             cls = STRUCTURE_STRATEGIES.get(doc_type, RecursiveChunkStrategy)
@@ -199,10 +322,13 @@ class ChunkStrategyRouter:
                     return RecursiveChunkStrategy()
             return cls()
 
-        # Phase 2：LLM 高价值特殊处理、Semantic 高级处理（默认关闭，暂不触发）
+        # Phase 3：Semantic 语义切分（无结构长文档，基于 embedding 主题边界）
+        if ENABLE_SEMANTIC_CHUNKING and count_tokens(report.ast.raw_text) >= SEMANTIC_CHUNK_MIN_TOKENS:
+            logger.info("[Router] 无结构长文档 → Semantic 语义切分")
+            return SemanticChunkStrategy()
+
+        # Phase 2：LLM 高价值特殊处理（默认关闭，暂不触发）
         if report.is_high_value_and_chaotic and ENABLE_LLM_CHUNKING:
             logger.info("[Router] 高价值混乱文档 → LLM Assisted（Phase 2）")
-        if report.topic_shift_detected and ENABLE_SEMANTIC_CHUNKING:
-            logger.info("[Router] 主题变化 → Semantic（Phase 2）")
 
         return RecursiveChunkStrategy()
