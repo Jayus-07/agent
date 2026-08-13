@@ -5,6 +5,20 @@ def _fallback_id(doc) -> str:
     return f"{did}:{ci}"
 
 
+def _filter_by_metadata(docs: list, metadata_filter: dict | None) -> list:
+    """按简单 kv 条件过滤文档（metadata_filter 为 {"kb_id": ...} 等简单 dict）。
+
+    BM25 检索不接受 filter 参数，需在结果返回后手动过滤，
+    否则不同知识库的残留文档会混入检索结果、挤占 RRF 位置。
+    """
+    if not metadata_filter:
+        return list(docs)
+    return [
+        d for d in docs
+        if all(d.metadata.get(k) == v for k, v in metadata_filter.items())
+    ]
+
+
 def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60, metadata_filter=None):
     from backend.observability.tracer import trace_collector
     span = trace_collector.start_span("hybrid_retrieval", name="混合检索")
@@ -19,6 +33,10 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
 
     if doc_ids:
         bm25_docs = [d for d in bm25_docs if d.metadata.get("doc_id") in doc_ids]
+
+    # BM25 检索不接受 filter 参数，结果返回后手动按 metadata_filter 过滤，
+    # 否则不同知识库的残留文档会混入、挤占 RRF 位置
+    bm25_docs = _filter_by_metadata(bm25_docs, metadata_filter)
 
     bm25_docs = bm25_docs[:k*2]
 
