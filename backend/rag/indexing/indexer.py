@@ -23,7 +23,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-from langchain_community.document_loaders import TextLoader
 from langchain_core.documents import Document
 
 from backend.observability.tracer import trace_collector, WorkflowKind, SpanKind
@@ -294,7 +293,7 @@ class IncrementalIndexer:
         trace_collector.end_span(load_span,
             metrics={"file_size": file_size, "ext": ext})
 
-        # ── ② parse（格式解析：PDF/DOCX/TXT → Documents）──
+        # ── ② parse（统一走新流水线 parse_and_chunk）──
         parse_span = trace_collector.start_span(
             "index_parse",
             parent_id="index_upload",
@@ -303,57 +302,35 @@ class IncrementalIndexer:
             kind=SpanKind.INDEX_PARSE.value,
             input={"file_path": file_path, "ext": ext},
         )
-        parse_failed = False
-        parse_error_msg = ""
+        chunks: list = []
         try:
-            if ext == ".pdf":
-                try:
-                    from langchain_community.document_loaders import PyPDFLoader
-                    loader = PyPDFLoader(file_path)
-                    raw_docs = loader.load()
-                except Exception as e:
-                    logger.error(f"PDF 加载失败 {file_path}: {e}")
-                    parse_failed = True
-                    parse_error_msg = str(e)[:200]
-                    raw_docs = []
-            elif ext == ".docx":
-                try:
-                    from langchain_community.document_loaders import Docx2txtLoader
-                    loader = Docx2txtLoader(file_path)
-                    raw_docs = loader.load()
-                except Exception as e:
-                    logger.error(f"DOCX 加载失败 {file_path}: {e}")
-                    parse_failed = True
-                    parse_error_msg = str(e)[:200]
-                    raw_docs = []
-            else:
-                loader = TextLoader(file_path, encoding="utf-8")
-                raw_docs = loader.load()
-
-            if parse_failed:
+            from backend.rag.preprocessing.pipeline import parse_and_chunk
+            chunks = parse_and_chunk(file_path)
+            if not chunks:
+                # 空 chunks → 视为 parse 失败（破坏文件 / 不支持格式），
+                # 标 error 并抛 RuntimeError，让 _index_file wrapper 标 index_upload=error
+                error_msg = f"empty_or_unsupported (ext={ext})"
                 trace_collector.end_span(parse_span, status="error",
-                    metrics={"error": parse_error_msg})
-                raise RuntimeError(f"parse failed: {parse_error_msg}")
-
-            if not raw_docs:
-                logger.warning(f"文件为空，跳过: {file_path}")
-                trace_collector.end_span(parse_span,
-                    metrics={"doc_count": 0}, status="skipped")
-                return
-
-            for d in raw_docs:
-                d.metadata["kb_id"] = kb_id
-
+                    metrics={"error": error_msg,
+                             "doc_count": 0, "page_count": 0,
+                             "loader": "pipeline", "ext": ext})
+                logger.warning(
+                    f"[indexer] 文件解析为空或不支持: {file_path} (ext={ext})"
+                )
+                raise RuntimeError(f"parse failed: {error_msg}")
+            for ch in chunks:
+                ch.metadata["kb_id"] = kb_id
+            # 共享给后续 clean / chunk / metadata 段使用，避免重复调用 parse_and_chunk
+            self._current_chunks = chunks
             trace_collector.end_span(parse_span,
-                metrics={"doc_count": len(raw_docs),
-                         "page_count": len(raw_docs)})
-        except RuntimeError:
-            # parse 失败已记录 + raise，让 _index_file wrapper 标 index_upload=error
-            raise
+                metrics={"doc_count": len(chunks),
+                         "page_count": len(chunks),
+                         "loader": "pipeline", "ext": ext})
         except Exception as e:
+            error_msg = str(e)[:200]
             trace_collector.end_span(parse_span, status="error",
-                metrics={"error": str(e)[:200]})
-            raise
+                metrics={"error": error_msg, "loader": "pipeline"})
+            raise RuntimeError(f"parse failed: {error_msg}") from e
 
         # ── ②.5 clean（文本清洗：控制字符/全角半角/HTML/PDF页眉页脚等）──
         clean_span = trace_collector.start_span(
@@ -362,7 +339,7 @@ class IncrementalIndexer:
             name=f"Clean {os.path.basename(file_path)}",
             type="clean",
             kind=SpanKind.INDEX_CLEAN.value,
-            input={"doc_count": len(raw_docs)},
+            input={"doc_count": len(chunks)},
         )
         try:
             ext = os.path.splitext(file_path)[1].lower()
@@ -371,14 +348,14 @@ class IncrementalIndexer:
             clean_changes: list[str] = []
             total_chars_before = 0
             total_chars_after = 0
-            for d in raw_docs:
-                total_chars_before += len(d.page_content)
-                result = cleaner.clean(d.page_content, source_type=source_type)
-                d.page_content = result.text
+            for ch in chunks:
+                total_chars_before += len(ch.page_content)
+                result = cleaner.clean(ch.page_content, source_type=source_type)
+                ch.page_content = result.text
                 total_chars_after += len(result.text)
                 clean_changes.extend(result.changes)
             trace_collector.end_span(clean_span,
-                metrics={"docs_cleaned": len(raw_docs),
+                metrics={"docs_cleaned": len(chunks),
                          "chars_before": total_chars_before,
                          "chars_after": total_chars_after,
                          "operations": ", ".join(clean_changes) if clean_changes else "none"},
@@ -416,9 +393,9 @@ class IncrementalIndexer:
             kind=SpanKind.INDEX_CHUNK.value,
         )
         try:
-            from backend.rag.preprocessing.pipeline import parse_and_chunk
             from backend.config import LEAF_CHUNK_TOKENS
-            chunks = parse_and_chunk(file_path)
+            # 复用 parse 段的 chunks，避免重复调用 parse_and_chunk
+            chunks = getattr(self, "_current_chunks", None) or []
             strategy_name = "pipeline"   # 具体策略名由 pipeline 日志输出
             chunk_size = LEAF_CHUNK_TOKENS
             chunk_overlap = 50
@@ -469,7 +446,7 @@ class IncrementalIndexer:
             type="llm",
             kind=SpanKind.INDEX_METADATA.value,
         )
-        full_text = "\n\n".join(d.page_content for d in raw_docs)
+        full_text = "\n\n".join(ch.page_content for ch in chunks)
         doc_meta = {
             "doc_id": doc_id,
             "source_file": os.path.basename(file_path),
