@@ -124,3 +124,24 @@ def test_docx_parser_qa_doc(tmp_path):
     assert qa_nodes[0].type == "qa_question"
     assert "破损" in qa_nodes[0].text
     assert qa_nodes[1].type == "qa_answer"
+
+
+def test_docx_parser_cn_numbered_heading(tmp_path):
+    """中文编号标题（一、二、三、）识别为 section（Normal 段落但属章节标题）。"""
+    p = tmp_path / "cn_heading.docx"
+    d = docx.Document()
+    d.add_paragraph("一、供应商准入")
+    d.add_paragraph("1. 提交资质")
+    d.add_paragraph("二、采购下单")
+    d.add_paragraph("采购申请流程")
+    d.save(str(p))
+
+    ast = DocxParser().parse(str(p))
+    sections = [
+        n.text for n in walk(ast.root) if n.type == "section" and n.level > 0
+    ]
+    assert "一、供应商准入" in sections
+    assert "二、采购下单" in sections
+    # 段落挂在对应 section 下
+    s1 = next(n for n in walk(ast.root) if n.text == "一、供应商准入")
+    assert any("提交资质" in c.text for c in s1.children)

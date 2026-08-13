@@ -23,6 +23,8 @@ from backend.shared.logger import logger
 
 _HEADING_RE = re.compile(r"^Heading\s+(\d+)$", re.IGNORECASE)
 _LIST_RE = re.compile(r"List\s+\w+", re.IGNORECASE)
+# 中文编号章节标题（一、二、三、）——Normal 段落但属于章节标题
+_CN_HEADING_RE = re.compile(r"^[一二三四五六七八九十]+、")
 
 
 def _find_parent_section(
@@ -92,6 +94,15 @@ class DocxParser(BaseDocumentParser):
                 level = int(heading_match.group(1))
                 section = DocumentNode(type="section", text=text, level=level)
                 parent = _find_parent_section(section_stack, level)
+                parent.children.append(section)
+                section_stack.append(section)
+                raw_lines.append(text)
+                continue
+
+            # 中文编号标题（一、二、三、）——Normal 段落但属于章节标题
+            if _CN_HEADING_RE.match(text) and not _LIST_RE.search(style_name):
+                section = DocumentNode(type="section", text=text, level=1)
+                parent = _find_parent_section(section_stack, 1)
                 parent.children.append(section)
                 section_stack.append(section)
                 raw_lines.append(text)

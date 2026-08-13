@@ -241,31 +241,55 @@ class RecursiveChunkStrategy:
 
 
 class StepChunkStrategy:
-    """步骤切分（SOP/培训）：按中文编号章节标题（一、二、三、）切分。
+    """步骤切分（SOP/培训）：按章节切分，每个章节一个语义单元。
 
-    章节标题作为 chunk 边界，章节下的步骤/说明文本合并成一个 chunk，
-    保证「一个章节一个语义单元」，替代 Recursive 的逐段硬切。
+    章节标题（一、二、三、）由 DocxParser 识别为 section 节点；
+    本策略按 section 切分，章节标题 + 内容合并成一个 chunk。
+    无 section 结构（flat 旧数据）时，回退按「一、二、三」文本切分。
     """
 
     def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
+        sections = [
+            n for n in walk(ast.root)
+            if n.type == "section" and n.level > 0
+        ]
+        if sections:
+            return self._split_by_sections(sections, file_path)
+        return self._split_by_text(ast, file_path)
+
+    def _split_by_sections(
+        self, sections: list[DocumentNode], file_path: str,
+    ) -> List[Document]:
+        chunks: List[Document] = []
+        for i, sec in enumerate(sections):
+            chunks.append(_make_leaf_chunk(
+                [self._section_text(sec)], file_path, i,
+            ))
+        return _enrich(chunks, file_path)
+
+    def _split_by_text(self, ast: DocumentAST, file_path: str) -> List[Document]:
+        """无 section 结构（flat）→ 按「一、二、三」文本切分。"""
         chunks: List[Document] = []
         counter = 0
         current: list[str] = []
-
         for n in walk(ast.root):
             if n.type not in LEAF_TYPES:
                 continue
             if _is_section_heading(n.text) and current:
-                # 新章节 → flush 之前的 chunk
                 chunks.append(_make_leaf_chunk(current, file_path, counter))
                 counter += 1
                 current = []
             current.append(n.text)
-
         if current:
             chunks.append(_make_leaf_chunk(current, file_path, counter))
-
         return _enrich(chunks, file_path)
+
+    @staticmethod
+    def _section_text(section: DocumentNode) -> str:
+        parts = [section.text] + [
+            n.text for n in walk(section) if n is not section and n.text
+        ]
+        return "\n".join(parts)
 
 
 class LegalChunkStrategy:
