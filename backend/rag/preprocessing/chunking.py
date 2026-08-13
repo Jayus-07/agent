@@ -97,6 +97,29 @@ def _is_section_heading(text: str) -> bool:
     return bool(_SECTION_HEADING_RE.match(text.strip()))
 
 
+# 法律条款编号（第 N 条），用于 legal 文档的条款级切分
+_LEGAL_CLAUSE_RE = re.compile(r"^第[一二三四五六七八九十百\d]+条")
+
+
+def _is_legal_clause(text: str) -> bool:
+    """判断文本是否法律条款编号（第一条 / 第2条 / 第十二条）。"""
+    return bool(_LEGAL_CLAUSE_RE.match(text.strip()))
+
+
+def _make_leaf_chunk(texts: list[str], file_path: str, index: int) -> Document:
+    """合并文本列表成一个 leaf chunk（Step/Legal 等按编号切分的策略共用）。"""
+    text = "\n".join(texts)
+    return _make_doc(text, {
+        "granularity": "leaf",
+        "chunk_id": _chunk_id(file_path, str(index)),
+        "parent_chunk_id": "",
+        "section_path": [],
+        "section_title": "",
+        "section_level": 0,
+        "chunk_tokens": count_tokens(text),
+    })
+
+
 class StructureChunkStrategy:
     """结构化切分：每个 section → parent，section 内叶子 → leaf。"""
 
@@ -234,28 +257,43 @@ class StepChunkStrategy:
                 continue
             if _is_section_heading(n.text) and current:
                 # 新章节 → flush 之前的 chunk
-                chunks.append(self._chunk(current, file_path, counter))
+                chunks.append(_make_leaf_chunk(current, file_path, counter))
                 counter += 1
                 current = []
             current.append(n.text)
 
         if current:
-            chunks.append(self._chunk(current, file_path, counter))
+            chunks.append(_make_leaf_chunk(current, file_path, counter))
 
         return _enrich(chunks, file_path)
 
-    @staticmethod
-    def _chunk(texts: list[str], file_path: str, index: int) -> Document:
-        text = "\n".join(texts)
-        return _make_doc(text, {
-            "granularity": "leaf",
-            "chunk_id": _chunk_id(file_path, str(index)),
-            "parent_chunk_id": "",
-            "section_path": [],
-            "section_title": "",
-            "section_level": 0,
-            "chunk_tokens": count_tokens(text),
-        })
+
+class LegalChunkStrategy:
+    """合同条款切分（legal/contract_template）：按「第 N 条」条款编号切分。
+
+    条款编号作为 chunk 边界，条款内容合并成一个 chunk，
+    保证「一个条款一个语义单元」。
+    """
+
+    def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
+        chunks: List[Document] = []
+        counter = 0
+        current: list[str] = []
+
+        for n in walk(ast.root):
+            if n.type not in LEAF_TYPES:
+                continue
+            if _is_legal_clause(n.text) and current:
+                # 新条款 → flush 之前的 chunk
+                chunks.append(_make_leaf_chunk(current, file_path, counter))
+                counter += 1
+                current = []
+            current.append(n.text)
+
+        if current:
+            chunks.append(_make_leaf_chunk(current, file_path, counter))
+
+        return _enrich(chunks, file_path)
 
 
 class QAChunkStrategy:
@@ -369,8 +407,8 @@ STRUCTURE_STRATEGIES = {
     "listing": StructureChunkStrategy,
     "sop": StepChunkStrategy,
     "training": StepChunkStrategy,
-    "legal": StructureChunkStrategy,      # 合同条款级结构 Phase 2 细化
-    "contract_template": StructureChunkStrategy,
+    "legal": LegalChunkStrategy,
+    "contract_template": LegalChunkStrategy,
     "faq": QAChunkStrategy,
     "ad_policy": FixedSizeChunkStrategy,
 }
