@@ -37,11 +37,18 @@ _QA_NUMBERED_RE = re.compile(
     re.MULTILINE | re.DOTALL,
 )
 
+# 模式 4: Q：问题 \n A：答案（全角/半角冒号，无加粗无编号，DOCX FAQ 常见）
+_QA_COLON_RE = re.compile(
+    r"(?m)^Q[:：]\s*(.+?)\n+A[:：]\s*(.+?)(?=\n+Q[:：]|\Z)",
+    re.DOTALL,
+)
+
 _PATTERNS: list[tuple[str, re.Pattern, int, int]] = [
     # (pattern_type, regex, question_group_idx, answer_group_idx)
     ("qa_bold", _QA_BOLD_RE, 1, 2),
     ("qa_heading", _QA_HEADING_RE, 1, 2),
     ("qa_numbered", _QA_NUMBERED_RE, 2, 3),  # g1=Q 数字（跳过）, g2=问题, g3=答案
+    ("qa_colon", _QA_COLON_RE, 1, 2),
 ]
 
 

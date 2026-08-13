@@ -104,3 +104,23 @@ def test_docx_parser_table_text_preserved(sample_docx):
     table_text = tables[0].text
     assert "列1" in table_text
     assert "数据2" in table_text
+
+
+def test_docx_parser_qa_doc(tmp_path):
+    """DOCX FAQ（Q：/A： 格式）应识别为 QA 文档，产 qa_question/qa_answer 节点。"""
+    p = tmp_path / "faq.docx"
+    d = docx.Document()
+    d.add_paragraph("Q：签收后发现商品破损怎么办？")
+    d.add_paragraph("A：请在签收后 48 小时内拍照留证。")
+    d.add_paragraph("Q：换货的流程是怎样的？")
+    d.add_paragraph("A：提交换货申请。")
+    d.save(str(p))
+
+    ast = DocxParser().parse(str(p))
+    qa_nodes = [
+        n for n in ast.root.children if n.type in ("qa_question", "qa_answer")
+    ]
+    assert len(qa_nodes) == 4  # 2 问题 + 2 答案
+    assert qa_nodes[0].type == "qa_question"
+    assert "破损" in qa_nodes[0].text
+    assert qa_nodes[1].type == "qa_answer"

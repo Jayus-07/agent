@@ -15,6 +15,9 @@ import re
 import docx
 
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
+from backend.rag.preprocessing.parser._qa_patterns import (
+    extract_qa_pairs, looks_like_qa_doc,
+)
 from backend.rag.preprocessing.parser.base import BaseDocumentParser
 from backend.shared.logger import logger
 
@@ -57,6 +60,24 @@ class DocxParser(BaseDocumentParser):
             raise
 
         root = DocumentNode(type="section", text="", level=0)
+
+        # QA 识别：拼接段落文本，判断是否 FAQ 文档（Q：/A： 等格式）。
+        # 命中则整篇按 Q/A 切（产 qa_question/qa_answer 节点），不走普通段落分类，
+        # 与 MarkdownParser 的 FAQ 路径保持一致。
+        full_text = "\n".join(
+            p.text.strip() for p in d.paragraphs if p.text.strip()
+        )
+        if looks_like_qa_doc(full_text):
+            pairs = extract_qa_pairs(full_text)
+            for q, a, _ptype in pairs:
+                root.children.append(DocumentNode(type="qa_question", text=q))
+                root.children.append(DocumentNode(type="qa_answer", text=a))
+            logger.info(
+                f"[DocxParser] {file_path} 识别为 FAQ 文档，"
+                f"产出 {len(pairs)} 个 Q/A 对"
+            )
+            return DocumentAST(root=root, source_file=file_path, raw_text=full_text)
+
         section_stack: list[DocumentNode] = [root]
         raw_lines: list[str] = []
         skipped_tables: list[int] = []

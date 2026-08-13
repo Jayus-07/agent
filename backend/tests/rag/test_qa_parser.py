@@ -161,3 +161,15 @@ def test_extract_qa_bold_multiple_no_closing():
     assert len(pairs) == 2
     assert pairs[0] == ("问题一？", "答案一。", "qa_bold")
     assert pairs[1] == ("问题二？", "答案二。", "qa_bold")
+
+
+def test_extract_qa_colon_pattern():
+    """Q：/A： 全角冒号格式（DOCX FAQ 常见，无加粗无编号）。"""
+    text = (
+        "Q：签收后发现商品破损怎么办？\nA：请在签收后 48 小时内拍照留证。\n\n"
+        "Q：换货的流程是怎样的？\nA：提交换货申请。\n"
+    )
+    pairs = extract_qa_pairs(text)
+    assert len(pairs) == 2
+    assert pairs[0] == ("签收后发现商品破损怎么办？", "请在签收后 48 小时内拍照留证。", "qa_colon")
+    assert pairs[1] == ("换货的流程是怎样的？", "提交换货申请。", "qa_colon")
