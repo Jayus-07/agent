@@ -28,7 +28,7 @@ def load_documents_from_directory(directory_path: str, chunk_size=None, chunk_ov
         for file in files:
             file_path = os.path.join(root, file)
             ext = os.path.splitext(file)[1].lower()
-            if ext not in (".md", ".txt", ".pdf", ".docx"):
+            if ext not in (".md", ".txt", ".pdf", ".docx", ".xlsx"):
                 continue
 
             try:

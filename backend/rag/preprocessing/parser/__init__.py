@@ -5,6 +5,7 @@ import os
 
 from backend.rag.preprocessing.ast import DocumentAST
 from backend.rag.preprocessing.parser.docx_parser import DocxParser
+from backend.rag.preprocessing.parser.excel_parser import ExcelParser
 from backend.rag.preprocessing.parser.markdown_parser import MarkdownParser
 from backend.rag.preprocessing.parser.pdf_parser import PdfParser
 from backend.rag.preprocessing.parser.txt_parser import TxtParser
@@ -15,6 +16,7 @@ _PARSERS = {
     ".txt": TxtParser,
     ".pdf": PdfParser,
     ".docx": DocxParser,
+    ".xlsx": ExcelParser,
 }
 
 

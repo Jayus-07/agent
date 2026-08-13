@@ -61,7 +61,7 @@ class IncrementalIndexer:
        - UNCHANGED: 跳过
     """
 
-    SUPPORTED_EXTS = {".md", ".txt", ".pdf", ".docx"}
+    SUPPORTED_EXTS = {".md", ".txt", ".pdf", ".docx", ".xlsx"}
 
     def __init__(
         self,

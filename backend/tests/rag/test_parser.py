@@ -32,10 +32,3 @@ def test_parse_file_dispatch_by_extension(tmp_path):
     ast = parse_file(str(t))
     titles = [n.text for n in walk(ast.root) if n.type == "section" and n.level > 0]
     assert titles == ["退货流程", "审核"]
-
-
-def test_excel_parser_not_implemented(tmp_path):
-    from backend.rag.preprocessing.parser.excel_parser import ExcelParser
-    import pytest
-    with pytest.raises(NotImplementedError):
-        ExcelParser().parse(str(tmp_path / "c.xlsx"))

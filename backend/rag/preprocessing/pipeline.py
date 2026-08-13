@@ -14,7 +14,7 @@ from backend.rag.preprocessing.chunking import ChunkStrategyRouter
 from backend.rag.preprocessing.ast import walk
 from backend.shared.logger import logger
 
-_SUPPORTED_EXTS = {".md", ".markdown", ".txt", ".pdf", ".docx"}
+_SUPPORTED_EXTS = {".md", ".markdown", ".txt", ".pdf", ".docx", ".xlsx"}
 
 
 def parse_and_chunk(file_path: str, doc_type_hint: str = "") -> List[Document]:
