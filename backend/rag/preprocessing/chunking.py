@@ -88,6 +88,15 @@ def _detect_boundaries(
     return starts
 
 
+# 中文编号章节标题（一、二、三、），用于 SOP 文档的步骤切分
+_SECTION_HEADING_RE = re.compile(r"^[一二三四五六七八九十]+、")
+
+
+def _is_section_heading(text: str) -> bool:
+    """判断文本是否中文编号章节标题（一、二、三、）。"""
+    return bool(_SECTION_HEADING_RE.match(text.strip()))
+
+
 class StructureChunkStrategy:
     """结构化切分：每个 section → parent，section 内叶子 → leaf。"""
 
@@ -174,10 +183,44 @@ class RecursiveChunkStrategy:
 
 
 class StepChunkStrategy:
-    """步骤切分（sop/training）：Phase 1 先复用结构切分，步骤级优化 Phase 2。"""
+    """步骤切分（SOP/培训）：按中文编号章节标题（一、二、三、）切分。
+
+    章节标题作为 chunk 边界，章节下的步骤/说明文本合并成一个 chunk，
+    保证「一个章节一个语义单元」，替代 Recursive 的逐段硬切。
+    """
 
     def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
-        return StructureChunkStrategy().split(ast, file_path)
+        chunks: List[Document] = []
+        counter = 0
+        current: list[str] = []
+
+        for n in walk(ast.root):
+            if n.type not in LEAF_TYPES:
+                continue
+            if _is_section_heading(n.text) and current:
+                # 新章节 → flush 之前的 chunk
+                chunks.append(self._chunk(current, file_path, counter))
+                counter += 1
+                current = []
+            current.append(n.text)
+
+        if current:
+            chunks.append(self._chunk(current, file_path, counter))
+
+        return _enrich(chunks, file_path)
+
+    @staticmethod
+    def _chunk(texts: list[str], file_path: str, index: int) -> Document:
+        text = "\n".join(texts)
+        return _make_doc(text, {
+            "granularity": "leaf",
+            "chunk_id": _chunk_id(file_path, str(index)),
+            "parent_chunk_id": "",
+            "section_path": [],
+            "section_title": "",
+            "section_level": 0,
+            "chunk_tokens": count_tokens(text),
+        })
 
 
 class QAChunkStrategy:
