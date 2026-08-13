@@ -69,3 +69,18 @@ def test_pipeline_indexer_passes_derive_kb_id():
         "RAGPipeline 实例化 indexer 未传 kb_id='default'，"
         "所有文档会被标成默认 policy_general，kb 隔离失效"
     )
+
+
+def test_index_file_inner_uses_kb_id_param_not_self():
+    """_index_file_inner 的 doc_meta 必须用 kb_id 参数，而非 self.kb_id。
+
+    缺陷 H 根因：doc_meta["kb_id"] 用了 self.kb_id（默认 "default"），
+    覆盖了 _index_file 派生的 kb_id，导致所有文档 kb_id 变成 "default"。
+    """
+    source = inspect.getsource(IncrementalIndexer._index_file_inner)
+    assert '"kb_id": kb_id' in source, (
+        "_index_file_inner 的 doc_meta 未用 kb_id 参数，kb 隔离会失效"
+    )
+    assert '"kb_id": self.kb_id' not in source, (
+        "_index_file_inner 仍用 self.kb_id，覆盖了派生值"
+    )

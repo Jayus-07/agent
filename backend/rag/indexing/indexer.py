@@ -451,7 +451,7 @@ class IncrementalIndexer:
             "doc_id": doc_id,
             "source_file": os.path.basename(file_path),
             "file_path": file_path,
-            "kb_id": self.kb_id,
+            "kb_id": kb_id,  # 用派生的 kb_id 参数，而非 self.kb_id（否则 kb 隔离失效）
             "department": self.department,
             "doc_type": "general",
             "person_names": "",
