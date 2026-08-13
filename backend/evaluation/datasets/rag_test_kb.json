@@ -1,0 +1,44 @@
+{
+  "_comment": "RAG 检索评测 — rag_test_kb（10 个真实文档）。验证 chunk 层修复后检索召回质量。relevant_docs 为 doc_id（sha256(kb|dept|rel_path)[:16]）。",
+  "test_cases": [
+    {"id": "RT-001", "question": "下单后可以修改收货地址吗？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["40f477fefca2f7ee"], "relevant_snippets": ["收货地址", "待发货"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "order"}},
+    {"id": "RT-002", "question": "如何查看订单的物流信息？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["40f477fefca2f7ee"], "relevant_snippets": ["物流", "追踪号"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "order"}},
+    {"id": "RT-003", "question": "订单支付失败但银行卡已经扣款了怎么办？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["40f477fefca2f7ee"], "relevant_snippets": ["支付", "原路退回"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "payment"}},
+
+    {"id": "RT-004", "question": "签收后发现商品破损怎么办？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["48040a8a8b29a44e"], "relevant_snippets": ["破损", "48小时"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "after_sales"}},
+    {"id": "RT-005", "question": "换货的完整流程是怎样的？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["48040a8a8b29a44e"], "relevant_snippets": ["换货", "仓库验收"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "after_sales"}},
+    {"id": "RT-006", "question": "如何申请商品保修？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["48040a8a8b29a44e"], "relevant_snippets": ["保修", "序列号"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "after_sales"}},
+
+    {"id": "RT-007", "question": "库存按状态分为哪几类？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["e6b3848b592f8e8d"], "relevant_snippets": ["可用库存", "锁定库存"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "inventory"}},
+    {"id": "RT-008", "question": "安全库存的计算公式是什么？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["e6b3848b592f8e8d"], "relevant_snippets": ["安全库存", "日均销量"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "inventory"}},
+    {"id": "RT-009", "question": "盘点分为哪几类？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["e6b3848b592f8e8d"], "relevant_snippets": ["盘点", "循环盘点"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "inventory"}},
+
+    {"id": "RT-010", "question": "供应商准入需要提交哪些资质？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["d3f043993156fc0a"], "relevant_snippets": ["营业执照", "质检报告"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "procurement"}},
+    {"id": "RT-011", "question": "采购审批权限是怎么划分的？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["d3f043993156fc0a"], "relevant_snippets": ["审批权限", "采购主管"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "procurement"}},
+    {"id": "RT-012", "question": "到货验货的流程是什么？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["d3f043993156fc0a"], "relevant_snippets": ["AQL", "抽样"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "procurement"}},
+
+    {"id": "RT-013", "question": "这款电水壶的额定功率和容量是多少？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["73749703ef9197df"], "relevant_snippets": ["额定功率", "1.5L"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "product_spec"}},
+    {"id": "RT-014", "question": "电水壶出现异味应该怎么处理？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["73749703ef9197df"], "relevant_snippets": ["异味", "故障排查"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "product_spec"}},
+    {"id": "RT-015", "question": "电水壶的保养方法有哪些？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["73749703ef9197df"], "relevant_snippets": ["除垢", "保养"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "product_spec"}},
+
+    {"id": "RT-016", "question": "七天无理由退货需要满足什么条件？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["2d28d00ec78d4fb9"], "relevant_snippets": ["七天", "无理由"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "return_policy"}},
+    {"id": "RT-017", "question": "商品质量问题退货，运费由谁承担？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["2d28d00ec78d4fb9"], "relevant_snippets": ["质量问题", "运费"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "return_policy"}},
+    {"id": "RT-018", "question": "退款金额是怎么计算的？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["2d28d00ec78d4fb9"], "relevant_snippets": ["退款金额", "优惠券"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "return_policy"}},
+
+    {"id": "RT-019", "question": "头程物流有哪几种方式？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["1794546c148f9874"], "relevant_snippets": ["空运", "海运"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "logistics"}},
+    {"id": "RT-020", "question": "清关申报需要哪些要素？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["1794546c148f9874"], "relevant_snippets": ["HS编码", "申报"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "logistics"}},
+    {"id": "RT-021", "question": "物流丢件应该怎么处理？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["1794546c148f9874"], "relevant_snippets": ["丢件", "48小时"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "logistics"}},
+
+    {"id": "RT-022", "question": "差旅住宿的报销标准是多少？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["d811cc8a86996ec9"], "relevant_snippets": ["住宿", "500"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "expense"}},
+    {"id": "RT-023", "question": "报销的审批流程是什么？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["d811cc8a86996ec9"], "relevant_snippets": ["报销流程", "审批"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "expense"}},
+    {"id": "RT-024", "question": "报销款什么时候打款？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["d811cc8a86996ec9"], "relevant_snippets": ["打款", "每周五"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "expense"}},
+
+    {"id": "RT-025", "question": "系统的总体架构是什么？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["615fd677b5389887"], "relevant_snippets": ["分层架构", "API"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "tech_manual"}},
+    {"id": "RT-026", "question": "Planner 节点的职责是什么？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["615fd677b5389887"], "relevant_snippets": ["Planner", "DAG"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "tech_manual"}},
+    {"id": "RT-027", "question": "数据库有哪些 schema 和表？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["615fd677b5389887"], "relevant_snippets": ["schema", "表"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "hard", "domain": "tech_manual"}},
+
+    {"id": "RT-028", "question": "库存盘点差异率超标应该怎么整改？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["1dd29516e5a5e3cc"], "relevant_snippets": ["盘点", "整改"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "hard", "domain": "mixed"}},
+    {"id": "RT-029", "question": "供应商交期拖延导致的问题怎么处理？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["1dd29516e5a5e3cc"], "relevant_snippets": ["供应商", "交期"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "hard", "domain": "mixed"}},
+    {"id": "RT-030", "question": "系统监控需要重点关注哪些指标？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["1dd29516e5a5e3cc"], "relevant_snippets": ["P95", "召回率"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "hard", "domain": "mixed"}}
+  ]
+}
