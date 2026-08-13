@@ -48,6 +48,50 @@ def _score_by_keyword_overlap(question: str, docs: list, fallback_k: int = 3) ->
     return filtered
 
 
+def attach_parent_context(docs: List[Document], parent_lookup) -> List[Document]:
+    """Parent-Child 上下文增强：检索命中的 leaf，拉取对应 parent 提供完整上下文。
+
+    小 chunk（leaf）精确检索、大 chunk（parent）提供完整上下文。检索命中的
+    leaf 带 parent_chunk_id，这里把不在结果中的 parent 拉进来，避免 LLM 只
+    看到碎片化的 leaf。
+
+    Args:
+        docs: 检索返回的 chunk（leaf + parent 混合）
+        parent_lookup: Callable[[list[str]], list[Document]]，按 chunk_id 列表返回 parent
+
+    Returns:
+        原 docs + 拉取到的 parent（按 chunk_id 去重）
+
+    降级：parent_lookup 抛异常时返回原 docs，不丢检索结果。
+    """
+    if not docs:
+        return list(docs)
+
+    seen = {d.metadata.get("chunk_id") for d in docs}
+    parent_ids = {
+        d.metadata.get("parent_chunk_id")
+        for d in docs
+        if d.metadata.get("granularity") == "leaf"
+        and d.metadata.get("parent_chunk_id")
+        and d.metadata.get("parent_chunk_id") not in seen
+    }
+    if not parent_ids:
+        return list(docs)
+
+    try:
+        parents = parent_lookup(list(parent_ids))
+    except Exception as e:
+        logger.warning(
+            f"[Parent-Child] 拉取 parent 失败({type(e).__name__})，降级返回原结果: {e}"
+        )
+        return list(docs)
+
+    added = [p for p in parents if p.metadata.get("chunk_id") not in seen]
+    if added:
+        logger.info(f"[Parent-Child] 拉取 {len(added)} 个 parent 上下文")
+    return list(docs) + added
+
+
 # =====================================================
 # Chunk-Level Retriever
 # =====================================================
@@ -177,9 +221,26 @@ class ChunkLevelRetriever(BaseRetriever):
         all_docs = self._adaptive_expand(query, all_docs, doc_ids,
                                          request_metadata_filter, seen)
 
+        # ── Parent-Child 上下文增强：检索命中的 leaf，拉取对应 parent ──
+        all_docs = attach_parent_context(all_docs, self._lookup_parents)
+
         trace_collector.end_span(span,
                              metrics={"retrieved_chunks": len(all_docs)})
         return all_docs[: self.k]
+
+    def _lookup_parents(self, chunk_ids: List[str]) -> List[Document]:
+        """按 chunk_id 列表从向量库查 parent chunk（Parent-Child 上下文）。"""
+        data = self.vectordb.get(where={"chunk_id": {"$in": chunk_ids}})
+        ids = data.get("ids") or []
+        documents = data.get("documents") or []
+        metadatas = data.get("metadatas") or []
+        result: List[Document] = []
+        for i in range(len(ids)):
+            result.append(Document(
+                page_content=documents[i] if i < len(documents) else "",
+                metadata=metadatas[i] if i < len(metadatas) else {},
+            ))
+        return result
 
     def _adaptive_expand(self, query: str, docs: list, doc_ids: list | None,
                          metadata_filter: dict, seen: set) -> list:
