@@ -1202,4 +1202,4 @@ tests/rag/  共 124 用例：
 - **Phase 2（已完成 P0/P1）**：[Phase 2 Spec](../specs/2026-08-13-chunking-refactor-phase2-design.md)
 - **Phase 2 Plan**：[Phase 2 Plan](../plans/2026-08-13-chunking-refactor-phase2.md)
 - P2/P3 待办：LLM Assisted / Semantic / PDF 标题启发式 / Step / Excel / legal 细化
-- 分支合并策略（本地 master 落后 origin/master 275 commit，需要先 rebase/merge）
+- 分支同步（本地 master 领先 origin/master 304 commit，纯 fast-forward 无分叉，待 push —— 2026-08-13 审计确认）

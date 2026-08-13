@@ -1,6 +1,40 @@
 # Chunking 切分重构 Phase 2 实现计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+## 执行状态：✅ 已完成（P0 + P1）
+
+> 2026-08-13 | 全部 9 个 Task 完成，P2/P3 按 Spec §3 明确延期。
+
+**测试结果**：`cd backend && python -m pytest tests/rag/ -v` → **156 passed, 2 skipped**（0 failed）。
+
+**E2E 验证**（[test_e2e_pdf_docx_index.py](../../../backend/tests/rag/test_e2e_pdf_docx_index.py)）：
+- **PDF E2E** ✅：真实 2 页 PDF → `parse_and_chunk` 产非空 chunks，所有 chunk 含 `page_content`
+- **DOCX E2E** ✅：真实 DOCX（Heading + Table）→ 产 chunks 含 `leaf` 粒度（StructureChunkStrategy 路由）
+- **metadata 协议** ✅：chunk 含 `chunk_id` / `granularity` / `chunk_tokens`
+
+**实际 commit 对照**：
+
+| Task | 内容 | Commit |
+|---|---|---|
+| 1 | 依赖安装与验证 | `aace716` chore(deps): Phase 2 PDF/DOCX 解析依赖（PyMuPDF + python-docx） |
+| 2 | PdfParser（PyMuPDF → Raw AST） | `d184d27` feat(chunking): PdfParser — 带单页容错 + 跳过页汇总 |
+| 3 | DocxParser（python-docx → Raw AST） | `08b7529` feat(chunking): DocxParser — Heading + Table + 容错汇总 |
+| 4 | parser 注册 + pipeline 白名单 | `7e7df7a` feat(chunking): 注册 PdfParser/DocxParser + pipeline 扩展 .pdf/.docx |
+| 5 | Q/A 节点识别（三模式） | `c51b004` feat(chunking): Q/A 节点识别 — 三模式独立产出 + MD/TXT 接入 |
+| 6 | faq 路由修复 | `71837e2` fix(chunking): faq 路由修复 — StructureChunkStrategy → QAChunkStrategy |
+| 7 | loader 白名单同步 | `0423ee8` feat(chunking): loader 扩展名白名单同步 .pdf/.docx |
+| 8 | indexer 统一流水线 | `dc8bdb9` refactor(rag): indexer 统一走新流水线 — 删 raw_docs 反向构造 + trace 字段保留 |
+| 9 | 集成回归 + 文档更新 | `2870d45` + `8e7de91` docs(chunking): Phase 1 下一步 + Phase 2 Spec/Plan |
+
+**已完成范围**：
+- P0：PDF/DOCX 接入新流水线（PdfParser / DocxParser → Raw AST → 统一 Router → Strategy → ChunkFilter → Indexer）
+- P1：faq 路由修复（`STRUCTURE_STRATEGIES["faq"]` = `QAChunkStrategy`）+ QA 节点识别（bold/heading/numbered 三模式）+ loader 白名单同步 `.pdf`/`.docx`
+
+**P2/P3 延期范围**（Spec §3 非目标）：
+- ❌ LLMAssistedChunking / SemanticChunking（`topic_shift_detected` / `is_high_value_and_chaotic` 实际计算）
+- ❌ PDF 标题启发式评分（HEADING_THRESHOLD）
+- ❌ StepChunkStrategy 真实现（步骤编号识别）
+- ❌ Excel Parser
+- ❌ `legal` 合同条款级切分细化
 
 **Goal:** 修复 Phase 1 留下的 PDF/DOCX 静默失败缺陷 + faq 路由错误缺陷，让 PDF/DOCX/FAQ 文档能正常入库并正确切分。
 
@@ -28,7 +62,7 @@
 - Modify: `backend/requirements.txt`（追加 PyMuPDF + python-docx）
 - Verify: 本地 `.venv` 安装成功 + 简单 import 测试
 
-- [ ] **Step 1: 更新 requirements.txt**
+- [x] **Step 1: 更新 requirements.txt**
 
 在 `backend/requirements.txt` 末尾追加（与 PDF/DOCX 相关分组）：
 
@@ -38,7 +72,7 @@ PyMuPDF>=1.23
 python-docx>=1.0
 ```
 
-- [ ] **Step 2: 安装依赖**
+- [x] **Step 2: 安装依赖**
 
 Run:
 ```bash
@@ -47,7 +81,7 @@ cd "d:/Program Files/workplace/agent"
 ```
 Expected: 两条 `Successfully installed PyMuPDF-x.x.x python-docx-x.x.x`。
 
-- [ ] **Step 3: 验证基本 import**
+- [x] **Step 3: 验证基本 import**
 
 Run:
 ```bash
@@ -61,7 +95,7 @@ print('python-docx:', docx.__version__)
 ```
 Expected: 输出两个版本号，无 ImportError。
 
-- [ ] **Step 4: 验证 PDF/DOCX 构造样本能解析**
+- [x] **Step 4: 验证 PDF/DOCX 构造样本能解析**
 
 （**不**依赖真实样本 —— 使用 `tmp_path` 构造。）
 
@@ -99,7 +133,7 @@ print("OK")
 
 Expected: 输出 `OK`，无 PyMuPDFError 或 docx.opc.exceptions.PackageNotFoundError。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd "d:/Program Files/workplace/agent"
@@ -124,7 +158,7 @@ git commit -m "chore(deps): Phase 2 PDF/DOCX 解析依赖（PyMuPDF + python-doc
 - Consumes: `PyMuPDF`（fitz）从外部 import，本文件顶部 `import fitz`
 - Phase 2 简化策略：不识别标题（Phase 3 接 HEADING_THRESHOLD）；段落合并；表格识别
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 # backend/tests/rag/test_pdf_parser.py
@@ -218,12 +252,12 @@ def test_pdf_parser_reports_skipped_pages(tmp_path, caplog):
     assert any("skipped" in rec.message.lower() or "跳过" in rec.message for rec in caplog.records)
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd backend && python -m pytest tests/rag/test_pdf_parser.py -v`
 Expected: FAIL（`ModuleNotFoundError: backend.rag.preprocessing.parser.pdf_parser`）
 
-- [ ] **Step 3: 实现 pdf_parser.py**
+- [x] **Step 3: 实现 pdf_parser.py**
 
 ```python
 """PdfParser — PyMuPDF 解析 PDF → Raw AST。
@@ -331,12 +365,12 @@ class PdfParser(BaseDocumentParser):
             out.append("\n".join(current_lines))
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cd backend && python -m pytest tests/rag/test_pdf_parser.py -v`
 Expected: PASS（4 passed）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/rag/preprocessing/parser/pdf_parser.py backend/tests/rag/test_pdf_parser.py
@@ -356,7 +390,7 @@ git commit -m "feat(chunking): PdfParser — PyMuPDF → Raw AST（带单页容�
 - Consumes: `python-docx`（docx）从外部 import，本文件顶部 `import docx`
 - 段落分类：style.name 为 `Heading 1/2/3` → section，其余 → paragraph / list
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 # backend/tests/rag/test_docx_parser.py
@@ -433,12 +467,12 @@ def test_docx_parser_heading_level_pop_logic(tmp_path):
     assert ("内层 3", 3) in sections
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd backend && python -m pytest tests/rag/test_docx_parser.py -v`
 Expected: FAIL（`ModuleNotFoundError: backend.rag.preprocessing.parser.docx_parser`）
 
-- [ ] **Step 3: 实现 docx_parser.py**
+- [x] **Step 3: 实现 docx_parser.py**
 
 ```python
 """DocxParser — python-docx 解析 Word → Raw AST。
@@ -560,12 +594,12 @@ class DocxParser(BaseDocumentParser):
         return DocumentAST(root=root, source_file=file_path, raw_text=raw_text)
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cd backend && python -m pytest tests/rag/test_docx_parser.py -v`
 Expected: PASS（4 passed）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/rag/preprocessing/parser/docx_parser.py backend/tests/rag/test_docx_parser.py
@@ -585,7 +619,7 @@ git commit -m "feat(chunking): DocxParser — python-docx → Raw AST（Heading 
 - `_PARSERS` 注册 `.pdf` → `PdfParser`、`.docx` → `DocxParser`
 - `_SUPPORTED_EXTS` 扩展支持 `.pdf`、`.docx`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 # backend/tests/rag/test_pipeline_ext.py
@@ -617,12 +651,12 @@ def test_parse_and_chunk_unsupported_ext_returns_empty(tmp_path, caplog):
     assert any("暂不支持" in rec.message or "skip" in rec.message.lower() for rec in caplog.records)
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd backend && python -m pytest tests/rag/test_pipeline_ext.py -v`
 Expected: FAIL（`.pdf`/`.docx` 不在 `_PARSERS` 和 `_SUPPORTED_EXTS`）
 
-- [ ] **Step 3: 修改 parser/__init__.py**
+- [x] **Step 3: 修改 parser/__init__.py**
 
 ```diff
  # backend/rag/preprocessing/parser/__init__.py
@@ -653,7 +687,7 @@ Expected: FAIL（`.pdf`/`.docx` 不在 `_PARSERS` 和 `_SUPPORTED_EXTS`）
      return parser_cls().parse(file_path)
 ```
 
-- [ ] **Step 4: 修改 pipeline.py**
+- [x] **Step 4: 修改 pipeline.py**
 
 ```diff
  # backend/rag/preprocessing/pipeline.py
@@ -661,12 +695,12 @@ Expected: FAIL（`.pdf`/`.docx` 不在 `_PARSERS` 和 `_SUPPORTED_EXTS`）
 +_SUPPORTED_EXTS = {".md", ".markdown", ".txt", ".pdf", ".docx"}
 ```
 
-- [ ] **Step 5: 运行测试确认通过**
+- [x] **Step 5: 运行测试确认通过**
 
 Run: `cd backend && python -m pytest tests/rag/test_pipeline_ext.py -v`
 Expected: PASS（3 passed）
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add backend/rag/preprocessing/parser/__init__.py backend/rag/preprocessing/pipeline.py backend/tests/rag/test_pipeline_ext.py
@@ -690,7 +724,7 @@ git commit -m "feat(chunking): 注册 PdfParser/DocxParser + pipeline 扩展 .pd
   - `qa_heading`：`### 问题 / ### 答案`
   - `qa_numbered`：`Q1. ... A1. ...`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 # backend/tests/rag/test_qa_parser.py
@@ -805,12 +839,12 @@ def test_txt_parser_qa_doc(tmp_path):
     assert len(qa_nodes) == 4
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd backend && python -m pytest tests/rag/test_qa_parser.py -v`
 Expected: FAIL（`_qa_patterns` 模块不存在 / MarkdownParser 不识别 Q/A）
 
-- [ ] **Step 3: 实现 _qa_patterns.py**
+- [x] **Step 3: 实现 _qa_patterns.py**
 
 ```python
 """_qa_patterns.py — FAQ 文档 Q/A 节点识别（MD/TXT 共用）。
@@ -889,7 +923,7 @@ def dominant_pattern(text: str) -> str:
     return max(counts, key=counts.get)  # type: ignore[arg-type]
 ```
 
-- [ ] **Step 4: 修改 markdown_parser.py 接入 Q/A 识别**
+- [x] **Step 4: 修改 markdown_parser.py 接入 Q/A 识别**
 
 ```python
 # backend/rag/preprocessing/parser/markdown_parser.py
@@ -927,16 +961,16 @@ class MarkdownParser(BaseDocumentParser):
         ...  # 保留原有代码不变
 ```
 
-- [ ] **Step 5: 修改 txt_parser.py 接入 Q/A 识别**
+- [x] **Step 5: 修改 txt_parser.py 接入 Q/A 识别**
 
 类似 MarkdownParser，在 TxtParser.parse() 开头先 `looks_like_qa_doc(raw)` 判断，命中走 FAQ 路径；否则走原有编号 heading 路径。
 
-- [ ] **Step 6: 运行测试确认通过**
+- [x] **Step 6: 运行测试确认通过**
 
 Run: `cd backend && python -m pytest tests/rag/test_qa_parser.py -v`
 Expected: PASS（8 passed）
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add backend/rag/preprocessing/parser/_qa_patterns.py \
@@ -954,7 +988,7 @@ git commit -m "feat(chunking): Q/A 节点识别 — 三模式独立产出 + MD/T
 - Modify: `backend/rag/preprocessing/chunking.py`（`STRUCTURE_STRATEGIES["faq"]`）
 - Test: `backend/tests/rag/test_faq_routing.py`（新增）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 # backend/tests/rag/test_faq_routing.py
@@ -1016,12 +1050,12 @@ def test_qa_strategy_chunks_have_doc_id():
     assert chunks[0].metadata["file_path"] == "/abs/path/faq.md"
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd backend && python -m pytest tests/rag/test_faq_routing.py -v`
 Expected: `test_faq_routes_to_qa_strategy` FAIL（当前返回 StructureChunkStrategy）
 
-- [ ] **Step 3: 修改 chunking.py**
+- [x] **Step 3: 修改 chunking.py**
 
 ```diff
  STRUCTURE_STRATEGIES = {
@@ -1032,12 +1066,12 @@ Expected: `test_faq_routes_to_qa_strategy` FAIL（当前返回 StructureChunkStr
  }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cd backend && python -m pytest tests/rag/test_faq_routing.py -v`
 Expected: PASS（4 passed）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/rag/preprocessing/chunking.py backend/tests/rag/test_faq_routing.py
@@ -1052,7 +1086,7 @@ git commit -m "fix(chunking): faq 路由修复 — StructureChunkStrategy → QA
 - Modify: `backend/rag/preprocessing/loader.py`
 - Test: `backend/tests/rag/test_loader_ext.py`（新增）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 # backend/tests/rag/test_loader_ext.py
@@ -1097,12 +1131,12 @@ def test_loader_pdf_docx_in_whitelist_no_crash(tmp_path):
     assert isinstance(docs, list)
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd backend && python -m pytest tests/rag/test_loader_ext.py -v`
 Expected: `test_loader_pdf_docx_in_whitelist_no_crash` FAIL（当前白名单不含 `.pdf`/`.docx`）
 
-- [ ] **Step 3: 修改 loader.py**
+- [x] **Step 3: 修改 loader.py**
 
 ```diff
  # backend/rag/preprocessing/loader.py
@@ -1112,12 +1146,12 @@ Expected: `test_loader_pdf_docx_in_whitelist_no_crash` FAIL（当前白名单不
 +    continue
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cd backend && python -m pytest tests/rag/test_loader_ext.py -v`
 Expected: PASS（3 passed）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add backend/rag/preprocessing/loader.py backend/tests/rag/test_loader_ext.py
@@ -1151,7 +1185,7 @@ git commit -m "feat(chunking): loader 扩展名白名单同步 .pdf/.docx"
 7. 保留 doc_count / page_count trace 字段（向后兼容，page_count 来自 chunks 长度）
 8. 整个 `_index_file_inner` 函数签名和 trace span 结构不变
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 # backend/tests/rag/test_indexer_pipeline_unified.py
@@ -1182,12 +1216,12 @@ def test_indexer_no_raw_docs_reconstruction():
     assert "for ch in parsed_chunks" not in source or "raw_docs" not in source
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd backend && python -m pytest tests/rag/test_indexer_pipeline_unified.py -v`
 Expected: FAIL（当前 indexer 仍有 PyPDFLoader / TextLoader / raw_docs）
 
-- [ ] **Step 3: 重构 indexer.py**
+- [x] **Step 3: 重构 indexer.py**
 
 主要 diff（详细 patch 见实际编辑）：
 
@@ -1295,17 +1329,17 @@ Expected: FAIL（当前 indexer 仍有 PyPDFLoader / TextLoader / raw_docs）
 
 具体 patch 实施时按实际行号调整；原则：**删除 raw_docs 概念，clean / metadata 段直接对 chunks 操作**。
 
-- [ ] **Step 4: 运行新测试确认通过**
+- [x] **Step 4: 运行新测试确认通过**
 
 Run: `cd backend && python -m pytest tests/rag/test_indexer_pipeline_unified.py -v`
 Expected: PASS（3 passed）
 
-- [ ] **Step 5: 回归 indexer_trace 测试**
+- [x] **Step 5: 回归 indexer_trace 测试**
 
 Run: `cd backend && python -m pytest tests/rag/test_indexer_trace.py -v`
 Expected: PASS（既有 9-span 测试不回归）
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add backend/rag/indexing/indexer.py backend/tests/rag/test_indexer_pipeline_unified.py
@@ -1318,12 +1352,12 @@ git commit -m "refactor(rag): indexer 统一走新流水线 — 删 raw_docs 反
 
 **目标：** 验证 P0 + P1 全部生效，更新 Phase 1 计划文档的「下一步」section。
 
-- [ ] **Step 1: 全量回归测试**
+- [x] **Step 1: 全量回归测试**
 
 Run: `cd backend && python -m pytest tests/rag/ -v`
 Expected: 122 + 新增（约 25 用例）= ~147 全绿，0 failed。
 
-- [ ] **Step 2: 验证 indexer 真实 PDF/DOCX 索引流程（E2E 单测）**
+- [x] **Step 2: 验证 indexer 真实 PDF/DOCX 索引流程（E2E 单测）**
 
 ```python
 # backend/tests/rag/test_e2e_pdf_docx_index.py
@@ -1386,12 +1420,12 @@ def test_docx_e2e_pipeline(real_docx):
 Run: `cd backend && python -m pytest tests/rag/test_e2e_pdf_docx_index.py -v`
 Expected: PASS（2 passed）
 
-- [ ] **Step 3: 全量再回归一次**
+- [x] **Step 3: 全量再回归一次**
 
 Run: `cd backend && python -m pytest tests/rag/ -v`
 Expected: ~149 用例全绿。
 
-- [ ] **Step 4: 更新 Phase 1 计划文档「下一步」**
+- [x] **Step 4: 更新 Phase 1 计划文档「下一步」**
 
 修改 [2026-08-13-chunking-refactor.md](../plans/2026-08-13-chunking-refactor.md) 末尾的「下一步」section：
 
@@ -1406,7 +1440,7 @@ Expected: ~149 用例全绿。
 +- 分支合并策略（本地 master 落后 origin/master 275 commit，需要先 rebase/merge）
 ```
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add docs/superpowers/plans/2026-08-13-chunking-refactor.md backend/tests/rag/test_e2e_pdf_docx_index.py
