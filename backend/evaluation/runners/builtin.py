@@ -200,12 +200,22 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             doc_filter = {"kb_id": kb_id} if (kb_id and kb_id != "*" and kb_id != "default") else {}
             doc_results = pipeline.doc_db.similarity_search(question, k=5, filter=doc_filter) if doc_filter else pipeline.doc_db.similarity_search(question, k=5)
             stage1_docs = []
+            stage1_doc_ids = []
             for d in doc_results:
+                doc_id = d.metadata.get("doc_id", "")
                 stage1_docs.append({
-                    "doc_id": d.metadata.get("doc_id", ""),
+                    "doc_id": doc_id,
                     "title": str(d.metadata.get("title", ""))[:60],
                     "category": d.metadata.get("category_name", d.metadata.get("category", "")),
                 })
+                if doc_id:
+                    stage1_doc_ids.append(doc_id)
+            # 观测 ChunkLevelRetriever 内部是否触发 fallback：
+            # 若 request_metadata_filter 非空但 stage1_doc_ids 为空，
+            # 说明 ChunkLevelRetriever 走的是 "0 匹配 → 放宽 business_domain" fallback。
+            stage1_fallback_suspected = bool(
+                doc_filter and not stage1_doc_ids
+            )
 
             # === 完整检索链路 ===
             # reranker/evidence_gate 等内部组件会调 trace_collector.start_span()，
@@ -259,6 +269,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             pipeline_info = {
                 "stage1_docs": len(stage1_docs),
                 "stage1_top_docs": stage1_docs,
+                "stage1_fallback_suspected": stage1_fallback_suspected,
                 "stage2_chunks_recalled": total,
                 "after_rerank": total,  # = stage2 数量（rerank 在 invoke 内完成）
                 "adaptive": adaptive_info,
@@ -266,15 +277,30 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
 
             expected_docs = set(case.expected.get("relevant_docs", []))
             expected_doc_strs = list(expected_docs)
+            expected_chunks = set(case.expected.get("relevant_chunks", []) or [])
+            min_expected = case.expected.get("min_relevant_chunks", 1)
 
+            # doc-level metrics — 始终计算（用于跨 case 对比）
             r5 = recall_at_k(actual_doc_strs, expected_doc_strs, k=5)
             r10 = recall_at_k(actual_doc_strs, expected_doc_strs, k=10)
             mrr_val = mrr(actual_doc_strs, expected_doc_strs)
             ndcg_val = ndcg_at_k(actual_doc_strs, expected_doc_strs, k=10)
 
-            min_expected = case.expected.get("min_relevant_chunks", 1)
-            has_any_relevant = len(set(actual_doc_strs) & expected_docs) > 0
-            passed = has_any_relevant if min_expected > 0 else not has_any_relevant
+            # chunk-level metrics — 仅当 case 提供 relevant_chunks 时计算
+            # 用 details 里的 chunk_id 与 expected_chunks 做集合运算
+            actual_chunk_ids = {d["chunk_id"] for d in details if d.get("chunk_id")}
+            if expected_chunks:
+                matched_chunks = actual_chunk_ids & expected_chunks
+                chunk_recall = len(matched_chunks) / len(expected_chunks)
+                chunk_hit = len(matched_chunks) >= min_expected
+            else:
+                # fallback 到 doc 级命中（兼容未填 relevant_chunks 的旧 case）
+                chunk_recall = 1.0 if (set(actual_doc_strs) & expected_docs) else 0.0
+                chunk_hit = (set(actual_doc_strs) & expected_docs) if min_expected > 0 \
+                    else not (set(actual_doc_strs) & expected_docs)
+
+            # pass 判定：以 chunk 级（更严格）为准，缺失时退化到 doc 级
+            passed = chunk_hit
 
             results.append(EvalResult(
                 case_id=case.id, module="rag",
@@ -292,6 +318,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     "recall@10": round(r10, 4),
                     "mrr": round(mrr_val, 4),
                     "ndcg@10": round(ndcg_val, 4),
+                    "chunk_recall": round(chunk_recall, 4),
                 },
                 duration_ms=int((time.time() - t0) * 1000),
             ))
