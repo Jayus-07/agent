@@ -1,5 +1,6 @@
 {
-  "_comment": "RAG 检索评测 — rag_test_kb（10 个真实文档）。验证 chunk 层修复后检索召回质量。relevant_docs 为 doc_id（sha256(kb|dept|rel_path)[:16]）。",
+  "version": "1.0",
+  "_comment": "RAG 检索评测 v1 — rag_test_kb（11 个真实文档）。relevant_docs 为 doc_id（sha256(kb|dept|rel_path)[:16]）。schema 预留字段：relevant_chunks（chunk 级召回，parent-child 验证）、expected_answer（生成层 Faithfulness/Answer Relevance 接入）、doc_type（文档类型过滤）。",
   "test_cases": [
     {"id": "RT-001", "question": "下单后可以修改收货地址吗？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["40f477fefca2f7ee"], "relevant_snippets": ["收货地址", "待发货"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "order"}},
     {"id": "RT-002", "question": "如何查看订单的物流信息？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["40f477fefca2f7ee"], "relevant_snippets": ["物流", "追踪号"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "order"}},
@@ -39,6 +40,16 @@
 
     {"id": "RT-028", "question": "库存盘点差异率超标应该怎么整改？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["1dd29516e5a5e3cc"], "relevant_snippets": ["盘点", "整改"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "hard", "domain": "mixed"}},
     {"id": "RT-029", "question": "供应商交期拖延导致的问题怎么处理？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["1dd29516e5a5e3cc"], "relevant_snippets": ["供应商", "交期"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "hard", "domain": "mixed"}},
-    {"id": "RT-030", "question": "系统监控需要重点关注哪些指标？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["1dd29516e5a5e3cc"], "relevant_snippets": ["P95", "召回率"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "hard", "domain": "mixed"}}
+    {"id": "RT-030", "question": "系统监控需要重点关注哪些指标？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["1dd29516e5a5e3cc"], "relevant_snippets": ["P95", "召回率"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "hard", "domain": "mixed"}},
+
+    {"id": "RT-031", "question": "采购合同违约金的赔付标准是什么？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["cd16277f418d9306"], "relevant_snippets": ["违约金", "10%"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "easy", "domain": "legal", "doc_type": "legal"}},
+    {"id": "RT-032", "question": "采购合同的保密义务期限是多久？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["cd16277f418d9306"], "relevant_snippets": ["保密", "2年"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "legal", "doc_type": "legal"}},
+    {"id": "RT-033", "question": "交货后甲方如何验收？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["cd16277f418d9306"], "relevant_snippets": ["验收", "AQL"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "legal", "doc_type": "legal"}},
+
+    {"id": "RT-034", "question": "安全库存的计算公式是什么？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["e6b3848b592f8e8d"], "relevant_chunks": [], "relevant_snippets": ["安全库存", "日均销量"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "inventory", "doc_type": "policy"}},
+    {"id": "RT-035", "question": "盘点差异率超过多少需要追责？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["e6b3848b592f8e8d"], "relevant_chunks": [], "relevant_snippets": ["差异率", "0.5%"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "inventory", "doc_type": "policy"}},
+
+    {"id": "RT-036", "question": "数据库连接池的最小和最大连接数是多少？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["615fd677b5389887"], "relevant_snippets": ["连接池", "min"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "hard", "domain": "tech_manual", "doc_type": "security"}},
+    {"id": "RT-037", "question": "系统遵循的设计原则有哪些？", "module": "rag", "kb_id": "rag_test_kb", "expected": {"relevant_docs": ["615fd677b5389887"], "relevant_snippets": ["七原则", "可理解"], "min_relevant_chunks": 1}, "metadata": {"difficulty": "medium", "domain": "tech_manual", "doc_type": "security"}}
   ]
 }

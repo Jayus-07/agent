@@ -1,0 +1,3973 @@
+{
+  "timestamp": "2026-08-14T01:05:54.136342",
+  "module": "rag",
+  "mode": "offline",
+  "smoke": false,
+  "total_score": null,
+  "summaries": [
+    {
+      "module": "rag",
+      "total": 37,
+      "passed": 37,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "pass_rate": 1.0,
+      "metrics": {
+        "ndcg@10": 0.98,
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 0.973
+      }
+    }
+  ],
+  "results": [
+    {
+      "case_id": "RT-001",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "40f477fefca2f7ee"
+        ],
+        "relevant_snippets": [
+          "收货地址",
+          "待发货"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "下单后可以修改收货地址吗？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "40f477fefca2f7ee",
+          "d4589bb3324324ec"
+        ],
+        "details": [
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "dae2b993f3dd",
+            "rerank_score": 0.7311,
+            "source": "",
+            "snippet": "下单后可以修改收货地址吗？"
+          },
+          {
+            "doc_id": "d4589bb3324324ec",
+            "title": "",
+            "chunk_id": "d319d64284f9",
+            "rerank_score": 0.7311,
+            "source": "",
+            "snippet": "下单后可以修改收货地址吗？"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.7308,
+            "source": "",
+            "snippet": "下单后可以修改收货地址吗？  订单在「待发货」状态前可自行修改收货地址；若已发货，请联系在线客服申请拦截改址，是否成功以承运商反馈为准。  如何查看订单物流信息？  登录后进入「我的订单」，点击对应订单的「查看物流」，可看到揽收、运输、派送、签收全节点的追踪轨迹与追踪号。  订单支付失败但银行卡已扣款怎么办？  此类情况多为支付渠道超时，款项一般会在 1-3 个工作日内原路退回。若超过 3 个工作"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "051cea69cdbe",
+            "rerank_score": 0.7307,
+            "source": "",
+            "snippet": "订单在「待发货」状态前可自行修改收货地址；若已发货，请联系在线客服申请拦截改址，是否成功以承运商反馈为准。"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "605bf02b4f80",
+            "rerank_score": 0.5878,
+            "source": "",
+            "snippet": "若多个订单收货地址一致且均未发货，可在「我的订单」勾选后选择「合并发货」；已发货订单无法合并。  ## 二、物流配送"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "2d28d00ec78d4fb9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 5141,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-002",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "40f477fefca2f7ee"
+        ],
+        "relevant_snippets": [
+          "物流",
+          "追踪号"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "如何查看订单的物流信息？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "40f477fefca2f7ee"
+        ],
+        "details": [
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "00f1e3765c8e",
+            "rerank_score": 0.7311,
+            "source": "",
+            "snippet": "如何查看订单物流信息？"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "b89514c790c3",
+            "rerank_score": 0.7305,
+            "source": "",
+            "snippet": "登录后进入「我的订单」，点击对应订单的「查看物流」，可看到揽收、运输、派送、签收全节点的追踪轨迹与追踪号。"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.7305,
+            "source": "",
+            "snippet": "下单后可以修改收货地址吗？  订单在「待发货」状态前可自行修改收货地址；若已发货，请联系在线客服申请拦截改址，是否成功以承运商反馈为准。  如何查看订单物流信息？  登录后进入「我的订单」，点击对应订单的「查看物流」，可看到揽收、运输、派送、签收全节点的追踪轨迹与追踪号。  订单支付失败但银行卡已扣款怎么办？  此类情况多为支付渠道超时，款项一般会在 1-3 个工作日内原路退回。若超过 3 个工作"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "94066720fb38",
+            "rerank_score": 0.5076,
+            "source": "",
+            "snippet": "揽收后物流更新通常有 12-24 小时延迟。若超过 48 小时无任何更新，请提供订单号联系客服，我们会向承运商发起催查。"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "605bf02b4f80",
+            "rerank_score": 0.5051,
+            "source": "",
+            "snippet": "若多个订单收货地址一致且均未发货，可在「我的订单」勾选后选择「合并发货」；已发货订单无法合并。  ## 二、物流配送"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 3962,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-003",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "40f477fefca2f7ee"
+        ],
+        "relevant_snippets": [
+          "支付",
+          "原路退回"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "订单支付失败但银行卡已经扣款了怎么办？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "40f477fefca2f7ee",
+          "48040a8a8b29a44e"
+        ],
+        "details": [
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "5b88521241cb",
+            "rerank_score": 0.7311,
+            "source": "",
+            "snippet": "订单支付失败但银行卡已扣款怎么办？"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.7306,
+            "source": "",
+            "snippet": "下单后可以修改收货地址吗？  订单在「待发货」状态前可自行修改收货地址；若已发货，请联系在线客服申请拦截改址，是否成功以承运商反馈为准。  如何查看订单物流信息？  登录后进入「我的订单」，点击对应订单的「查看物流」，可看到揽收、运输、派送、签收全节点的追踪轨迹与追踪号。  订单支付失败但银行卡已扣款怎么办？  此类情况多为支付渠道超时，款项一般会在 1-3 个工作日内原路退回。若超过 3 个工作"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "547230f5ba94",
+            "rerank_score": 0.6726,
+            "source": "",
+            "snippet": "此类情况多为支付渠道超时，款项一般会在 1-3 个工作日内原路退回。若超过 3 个工作日未退回，请提供支付凭证联系客服核查。"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "83ea829cde7c",
+            "rerank_score": 0.5738,
+            "source": "",
+            "snippet": "支持微信支付、支付宝、银联及主流信用卡。企业采购可选择对公转账，到账后系统自动核销。"
+          },
+          {
+            "doc_id": "48040a8a8b29a44e",
+            "title": "",
+            "chunk_id": "6e05a3509c00",
+            "rerank_score": 0.5409,
+            "source": "",
+            "snippet": "签收后发现商品破损怎么办？"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d811cc8a86996ec9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "2d28d00ec78d4fb9",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 3928,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-004",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "48040a8a8b29a44e"
+        ],
+        "relevant_snippets": [
+          "破损",
+          "48小时"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "签收后发现商品破损怎么办？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "48040a8a8b29a44e",
+          "10e36e153b04d27f",
+          "40f477fefca2f7ee",
+          "2d28d00ec78d4fb9"
+        ],
+        "details": [
+          {
+            "doc_id": "48040a8a8b29a44e",
+            "title": "",
+            "chunk_id": "6e05a3509c00",
+            "rerank_score": 0.7311,
+            "source": "",
+            "snippet": "签收后发现商品破损怎么办？"
+          },
+          {
+            "doc_id": "10e36e153b04d27f",
+            "title": "",
+            "chunk_id": "f48308d48c3b",
+            "rerank_score": 0.7311,
+            "source": "",
+            "snippet": "签收后发现商品破损怎么办？"
+          },
+          {
+            "doc_id": "48040a8a8b29a44e",
+            "title": "",
+            "chunk_id": "2c3fa8c0bd3d",
+            "rerank_score": 0.7305,
+            "source": "",
+            "snippet": "请在签收后 48 小时内拍摄外包装、面单及商品破损照片，联系客服上传凭证。经核实后按「破损补发」或「全额退款」处理，运费由平台承担。"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "39ab8a947aee",
+            "rerank_score": 0.7235,
+            "source": "",
+            "snippet": "收到的商品有质量问题怎么办？"
+          },
+          {
+            "doc_id": "2d28d00ec78d4fb9",
+            "title": "",
+            "chunk_id": "c54828a68003",
+            "rerank_score": 0.6629,
+            "source": "",
+            "snippet": "五、拒收与拒签 包裹外包装明显破损的，买家可当场拒签并备注原因，系统将自动发起退款流程。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "2d28d00ec78d4fb9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2101,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-005",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "48040a8a8b29a44e"
+        ],
+        "relevant_snippets": [
+          "换货",
+          "仓库验收"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "换货的完整流程是怎样的？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "48040a8a8b29a44e",
+          "d3f043993156fc0a",
+          "1dd29516e5a5e3cc",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "48040a8a8b29a44e",
+            "title": "",
+            "chunk_id": "f6df66668e32",
+            "rerank_score": 0.731,
+            "source": "",
+            "snippet": "换货的流程是怎样的？"
+          },
+          {
+            "doc_id": "48040a8a8b29a44e",
+            "title": "",
+            "chunk_id": "35cc1ce1d39f",
+            "rerank_score": 0.7074,
+            "source": "",
+            "snippet": "提交换货申请 → 客服审核 → 寄回商品 → 仓库验收 → 重新发货。全程约 5-7 个工作日。 二、退款时效 退款方式与到账时间如下： 三、保修服务"
+          },
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "28c62545e3f3",
+            "rerank_score": 0.6475,
+            "source": "",
+            "snippet": "三、到货验货 1. 仓库按 PO 核对数量与规格。 2. 质检员按 AQL 抽样标准检验。 3. 不合格批次按合同约定退货或换货。 4. 合格批次办理入库，系统同步库存。"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "64a8a325aefa",
+            "rerank_score": 0.6172,
+            "source": "",
+            "snippet": "资质、初审、验厂、试单，试单质检过了才进合格名录。 对账付款：每月五号前供应商提交对账单，采购部核对后转财务，按合同账期月结三十六十天付款。库存分 类五种：可用、在途、锁定、残次、滞销，滞销连续九十天无动销。 仓库反馈库存不准，盘点差异率到百分之一多，超过制度要求，经理让仓储物流部限期整改，重点抓盘点流 程和台账记录，责任到人。采购供应商交期老是拖延导致断货，销售很被动，要采购部重新梳理供应商准入"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.5234,
+            "source": "",
+            "snippet": "合同编号：CON-PUR-2026-001  第一条 合同双方 甲方（采购方）：某电子商务有限公司 乙方（供应方）：某科技有限公司  第二条 标的物 乙方按本合同向甲方供应智能恒温电水壶，规格型号 SE-3000，数量 10000 台。  第三条 交货与验收 乙方应于收到订单后 30 日内完成交货。甲方在收货后 7 日内按 AQL 抽样标准验收，验收不合格批次乙方应在 5 日内补发或更换。  第四"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2197,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-006",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "48040a8a8b29a44e"
+        ],
+        "relevant_snippets": [
+          "保修",
+          "序列号"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "如何申请商品保修？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "48040a8a8b29a44e",
+          "40f477fefca2f7ee",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "48040a8a8b29a44e",
+            "title": "",
+            "chunk_id": "35cc1ce1d39f",
+            "rerank_score": 0.7139,
+            "source": "",
+            "snippet": "提交换货申请 → 客服审核 → 寄回商品 → 仓库验收 → 重新发货。全程约 5-7 个工作日。 二、退款时效 退款方式与到账时间如下： 三、保修服务"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "4ca30d978760",
+            "rerank_score": 0.7059,
+            "source": "",
+            "snippet": "电子类商品自签收之日起提供一年整机保修，核心部件两年。可在商品页「售后保障」或联系客服凭订单号查询。"
+          },
+          {
+            "doc_id": "48040a8a8b29a44e",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.6413,
+            "source": "",
+            "snippet": "签收后发现商品破损怎么办？  请在签收后 48 小时内拍摄外包装、面单及商品破损照片，联系客服上传凭证。经核实后按「破损补发」或「全额退款」处理，运费由平台承担。  换货的流程是怎样的？  提交换货申请 → 客服审核 → 寄回商品 → 仓库验收 → 重新发货。全程约 5-7 个工作日。 二、退款时效 退款方式与到账时间如下： 三、保修服务  凭订单号或商品序列号联系客服，说明故障现象。客服会判断是"
+          },
+          {
+            "doc_id": "48040a8a8b29a44e",
+            "title": "",
+            "chunk_id": "ce8364e495c0",
+            "rerank_score": 0.6051,
+            "source": "",
+            "snippet": "凭订单号或商品序列号联系客服，说明故障现象。客服会判断是否需寄修；保修期内非人为损坏免费维修，人为损坏按成本价收费。 四、售后服务渠道"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.509,
+            "source": "",
+            "snippet": "合同编号：CON-PUR-2026-001  第一条 合同双方 甲方（采购方）：某电子商务有限公司 乙方（供应方）：某科技有限公司  第二条 标的物 乙方按本合同向甲方供应智能恒温电水壶，规格型号 SE-3000，数量 10000 台。  第三条 交货与验收 乙方应于收到订单后 30 日内完成交货。甲方在收货后 7 日内按 AQL 抽样标准验收，验收不合格批次乙方应在 5 日内补发或更换。  第四"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "2d28d00ec78d4fb9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2319,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-007",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "e6b3848b592f8e8d"
+        ],
+        "relevant_snippets": [
+          "可用库存",
+          "锁定库存"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "库存按状态分为哪几类？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "e6b3848b592f8e8d",
+          "1dd29516e5a5e3cc",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "e6b3848b592f8e8d",
+            "title": "",
+            "chunk_id": "6227aea596d8",
+            "rerank_score": 0.7309,
+            "source": "",
+            "snippet": "第二章 库存分类 第四条 库存按状态分为：可用库存、在途库存、锁定库存、残次库存、滞销库存五类。 第五条 可用库存指已完成质检可正常销售的库存；在途库存指已发货未入仓的库存；锁定库存指已下单待 出库的库存。 第六条 滞销库存定义为连续 90 天无动销的 SKU，由数据部门每月输出清单。"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "51bd3c6423da",
+            "rerank_score": 0.6543,
+            "source": "",
+            "snippet": "减少重排候选开缓存，数据库高频列加索引，编排用并行调度。 安全规范：接口鉴权限流防注入，敏感字段脱敏，操作留痕审计，数据采集最小化。系统七原则：可理解可 测试可观测可维护可扩展可控制可靠，禁止 Demo 式堆叠。 采购供应商准入四步：交资质、初审、验厂、试单，试单质检过了才进合格名录。对账付款：每月五号前供 应商提交对账单，采购部核对后转财务，按合同账期月结三十六十天付款。 库存分类五种：可用、在"
+          },
+          {
+            "doc_id": "e6b3848b592f8e8d",
+            "title": "",
+            "chunk_id": "4483af76f77a",
+            "rerank_score": 0.6201,
+            "source": "",
+            "snippet": "第三章 安全库存管理 第七条 安全库存 = 日均销量 × 补货周期 × 安全系数（默认 1.5）。 第八条 当可用库存低于安全库存时，系统自动生成补货建议单，采购部 48 小时内确认。 第九条 畅销品安全系数可上调至 2.0，季节品按历史同期销量动态调整。 库存类型 判定标准 管理动作 可用库存 质检合格可售 正常出库 滞销库存 90 天无动销 促销或清退 残次库存 质检不合格 退货或销毁"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "0c9cc8e72289",
+            "rerank_score": 0.6025,
+            "source": "",
+            "snippet": "机制，检索分重排分忠实度任一低于阈值就拒答，别强行生成。 多查询检索对复杂问题自动生成多个子查询并行查，合并去重后返回，模式有 auto always off。监控重点：接 口 P95 延迟、RAG 召回率、向量库大小、连接池使用率、LLM token 消耗。 备份策略：PostgreSQL 每日全量加 WAL 归档，向量库和 SQLite 每周快照，异地保留 90 天。性能调优：检索 减少重排候"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "98fbd8bc27ea",
+            "rerank_score": 0.5001,
+            "source": "",
+            "snippet": "第四条 价款与结算 本合同总价款为人民币 500 万元。甲方在验收合格后 30 日内支付 90%，剩余 10% 作为质保金，质保期满后支付。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "e6b3848b592f8e8d",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "615fd677b5389887",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2551,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-008",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "e6b3848b592f8e8d"
+        ],
+        "relevant_snippets": [
+          "安全库存",
+          "日均销量"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "安全库存的计算公式是什么？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "e6b3848b592f8e8d",
+          "1dd29516e5a5e3cc",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "e6b3848b592f8e8d",
+            "title": "",
+            "chunk_id": "4483af76f77a",
+            "rerank_score": 0.7254,
+            "source": "",
+            "snippet": "第三章 安全库存管理 第七条 安全库存 = 日均销量 × 补货周期 × 安全系数（默认 1.5）。 第八条 当可用库存低于安全库存时，系统自动生成补货建议单，采购部 48 小时内确认。 第九条 畅销品安全系数可上调至 2.0，季节品按历史同期销量动态调整。 库存类型 判定标准 管理动作 可用库存 质检合格可售 正常出库 滞销库存 90 天无动销 促销或清退 残次库存 质检不合格 退货或销毁"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "bef75ef72310",
+            "rerank_score": 0.7012,
+            "source": "",
+            "snippet": "类。库存滞销定义是连续 90 天无动销，安全库存是日均销量乘补货周期乘安全系数，安全系数默认一点五， 畅销品可以到二。 报销标准：一线城市住宿 500 一晚其他城市 350，餐补一天 80 不用发票，招待费单次不超过 2000 还要附明细 ，发票抬头公司全称。退货政策：七天无理由退货要商品完好不影响二次销售，无理由退货运费买家承担， 质量问题平台承担运费并全额退款，退款一到三个工作日原路退回。 采"
+          },
+          {
+            "doc_id": "e6b3848b592f8e8d",
+            "title": "",
+            "chunk_id": "bbd50afc09d9",
+            "rerank_score": 0.5046,
+            "source": "",
+            "snippet": "第一章 总则 第一条 为规范库存管理，保障账实相符、降低呆滞损耗、提升资金周转效率，特制定本制度。 第二条 本制度适用于公司自有仓、FBA 仓及第三方海外仓的全部库存管理活动。 第三条 库存管理遵循「先进先出、账实一致、定期盘点、责任到人」十六字原则。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "98fbd8bc27ea",
+            "rerank_score": 0.5025,
+            "source": "",
+            "snippet": "第四条 价款与结算 本合同总价款为人民币 500 万元。甲方在验收合格后 30 日内支付 90%，剩余 10% 作为质保金，质保期满后支付。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.5006,
+            "source": "",
+            "snippet": "合同编号：CON-PUR-2026-001  第一条 合同双方 甲方（采购方）：某电子商务有限公司 乙方（供应方）：某科技有限公司  第二条 标的物 乙方按本合同向甲方供应智能恒温电水壶，规格型号 SE-3000，数量 10000 台。  第三条 交货与验收 乙方应于收到订单后 30 日内完成交货。甲方在收货后 7 日内按 AQL 抽样标准验收，验收不合格批次乙方应在 5 日内补发或更换。  第四"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "e6b3848b592f8e8d",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "615fd677b5389887",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2540,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-009",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "e6b3848b592f8e8d"
+        ],
+        "relevant_snippets": [
+          "盘点",
+          "循环盘点"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "盘点分为哪几类？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "e6b3848b592f8e8d",
+          "615fd677b5389887",
+          "1dd29516e5a5e3cc",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "e6b3848b592f8e8d",
+            "title": "",
+            "chunk_id": "bf6b26057b68",
+            "rerank_score": 0.7306,
+            "source": "",
+            "snippet": "第四章 盘点管理 第十条 盘点分为日常抽盘、月度循环盘点、年度全面盘点三类。 第十一条 盘点差异率 =（盘盈盘亏绝对值之和 / 账面库存）× 100%，差异率超过 0.5% 需复盘并追责。 第十二条 盘点结果须在 3 个工作日内完成账务调整，并出具盘点报告。"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "7a0663f4e032",
+            "rerank_score": 0.5267,
+            "source": "",
+            "snippet": "先做结构分析，再按文档类型路由：政策、合规、安全、财务、产品规格、Listing、法律走结构切分；FAQ 走问答对切分；SOP、培训走步骤切分；其余递归切分兜底。"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "fa34f715da6b",
+            "rerank_score": 0.5172,
+            "source": "",
+            "snippet": "理要附比价单，十万以上总经理要三家比价加预算。 事项 负责人 期限 库存盘点整改 仓储部 本周 供应商考核 采购部 两周 退款时效优化 客服部 一周 报销催收 财务部 月底 这是一段故意写得很长而且没有换行没有标题的段落用来测试递归切分策略是否能够把它按照 token 上限合 理地切开内容本身没有太强的逻辑结构就是一段很长的流水账从头说到尾涉及库存采购物流商品售后财务报 销客服等多个不相关的主题混"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "f7b70e3af606",
+            "rerank_score": 0.5016,
+            "source": "",
+            "snippet": "去重分块元数据向量化写库注册表，每个阶段有埋点。 证据门是主动拒答机制，检索分重排分忠实度任一低于阈值就拒答，别强行生成。多查询检索对复杂问题自 动生成多个子查询并行查，合并去重后返回，模式有 auto always off。 监控重点：接口 P95 延迟、RAG 召回率、向量库大小、连接池使用率、LLM token 消耗。备份策略： PostgreSQL 每日全量加 WAL 归档，向量库和 SQ"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "2309d704d135",
+            "rerank_score": 0.5,
+            "source": "",
+            "snippet": "第六条 保密条款 双方对履行本合同过程中知悉的对方商业秘密负有保密义务，保密期限为合同终止后 2 年。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "615fd677b5389887",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e6b3848b592f8e8d",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2114,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-010",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "d3f043993156fc0a"
+        ],
+        "relevant_snippets": [
+          "营业执照",
+          "质检报告"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "供应商准入需要提交哪些资质？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "d3f043993156fc0a",
+          "1dd29516e5a5e3cc"
+        ],
+        "details": [
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "4e09107d0e40",
+            "rerank_score": 0.7307,
+            "source": "",
+            "snippet": "一、供应商准入 1. 供应商提交资质：营业执照、品牌授权、质检报告。 2. 采购部初审资质，3 个工作日内完成。 3. 现场验厂或视频验厂，评估产能与质量体系。 4. 小批量试单，质检通过后进入合格供应商名录。"
+          },
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.7251,
+            "source": "",
+            "snippet": "一、供应商准入 1. 供应商提交资质：营业执照、品牌授权、质检报告。 2. 采购部初审资质，3 个工作日内完成。 3. 现场验厂或视频验厂，评估产能与质量体系。 4. 小批量试单，质检通过后进入合格供应商名录。  二、采购下单 采购申请 → 比价 → 审批 → 下发采购订单（PO）→ 供应商确认交期。 采购审批权限：  三、到货验货 1. 仓库按 PO 核对数量与规格。 2. 质检员按 AQL 抽"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "8babb1ec5f4e",
+            "rerank_score": 0.7204,
+            "source": "",
+            "snippet": "测试可观测可维护可扩展可控制可靠，禁止 Demo 式堆叠。 采购供应商准入四步：交资质、初审、验厂、试单，试单质检过了才进合格名录。对账付款：每月五号前供 应商提交对账单，采购部核对后转财务，按合同账期月结三十六十天付款。 库存分类五种：可用、在途、锁定、残次、滞销，滞销连续九十天无动销。仓库反馈库存不准，盘点差异率 到百分之一多，超过制度要求，经理让仓储物流部限期整改，重点抓盘点流程和台账记录，"
+          },
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "24c83c55dfa1",
+            "rerank_score": 0.5766,
+            "source": "",
+            "snippet": "四、对账付款 每月 5 日前供应商提交对账单，采购部核对后转财务。财务按合同账期（月结 30/60/90 天）付款。 采购金额，审批人，备注 ≤ 1 万元，采购主管，系统自动审批 1-10 万元，采购经理，需附比价单 > 10 万元，总经理，需附三家比价 + 预算"
+          },
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "0fb574379ee2",
+            "rerank_score": 0.509,
+            "source": "",
+            "snippet": "二、采购下单 采购申请 → 比价 → 审批 → 下发采购订单（PO）→ 供应商确认交期。 采购审批权限："
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "615fd677b5389887",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2612,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-011",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "d3f043993156fc0a"
+        ],
+        "relevant_snippets": [
+          "审批权限",
+          "采购主管"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "采购审批权限是怎么划分的？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "d3f043993156fc0a",
+          "1dd29516e5a5e3cc"
+        ],
+        "details": [
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "0fb574379ee2",
+            "rerank_score": 0.7266,
+            "source": "",
+            "snippet": "二、采购下单 采购申请 → 比价 → 审批 → 下发采购订单（PO）→ 供应商确认交期。 采购审批权限："
+          },
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.7031,
+            "source": "",
+            "snippet": "一、供应商准入 1. 供应商提交资质：营业执照、品牌授权、质检报告。 2. 采购部初审资质，3 个工作日内完成。 3. 现场验厂或视频验厂，评估产能与质量体系。 4. 小批量试单，质检通过后进入合格供应商名录。  二、采购下单 采购申请 → 比价 → 审批 → 下发采购订单（PO）→ 供应商确认交期。 采购审批权限：  三、到货验货 1. 仓库按 PO 核对数量与规格。 2. 质检员按 AQL 抽"
+          },
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "24c83c55dfa1",
+            "rerank_score": 0.6447,
+            "source": "",
+            "snippet": "四、对账付款 每月 5 日前供应商提交对账单，采购部核对后转财务。财务按合同账期（月结 30/60/90 天）付款。 采购金额，审批人，备注 ≤ 1 万元，采购主管，系统自动审批 1-10 万元，采购经理，需附比价单 > 10 万元，总经理，需附三家比价 + 预算"
+          },
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "4e09107d0e40",
+            "rerank_score": 0.6018,
+            "source": "",
+            "snippet": "一、供应商准入 1. 供应商提交资质：营业执照、品牌授权、质检报告。 2. 采购部初审资质，3 个工作日内完成。 3. 现场验厂或视频验厂，评估产能与质量体系。 4. 小批量试单，质检通过后进入合格供应商名录。"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "8babb1ec5f4e",
+            "rerank_score": 0.5172,
+            "source": "",
+            "snippet": "测试可观测可维护可扩展可控制可靠，禁止 Demo 式堆叠。 采购供应商准入四步：交资质、初审、验厂、试单，试单质检过了才进合格名录。对账付款：每月五号前供 应商提交对账单，采购部核对后转财务，按合同账期月结三十六十天付款。 库存分类五种：可用、在途、锁定、残次、滞销，滞销连续九十天无动销。仓库反馈库存不准，盘点差异率 到百分之一多，超过制度要求，经理让仓储物流部限期整改，重点抓盘点流程和台账记录，"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "2d28d00ec78d4fb9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2601,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-012",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "d3f043993156fc0a"
+        ],
+        "relevant_snippets": [
+          "AQL",
+          "抽样"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "到货验货的流程是什么？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "d3f043993156fc0a",
+          "48040a8a8b29a44e",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "28c62545e3f3",
+            "rerank_score": 0.7306,
+            "source": "",
+            "snippet": "三、到货验货 1. 仓库按 PO 核对数量与规格。 2. 质检员按 AQL 抽样标准检验。 3. 不合格批次按合同约定退货或换货。 4. 合格批次办理入库，系统同步库存。"
+          },
+          {
+            "doc_id": "48040a8a8b29a44e",
+            "title": "",
+            "chunk_id": "f6df66668e32",
+            "rerank_score": 0.7287,
+            "source": "",
+            "snippet": "换货的流程是怎样的？"
+          },
+          {
+            "doc_id": "48040a8a8b29a44e",
+            "title": "",
+            "chunk_id": "35cc1ce1d39f",
+            "rerank_score": 0.646,
+            "source": "",
+            "snippet": "提交换货申请 → 客服审核 → 寄回商品 → 仓库验收 → 重新发货。全程约 5-7 个工作日。 二、退款时效 退款方式与到账时间如下： 三、保修服务"
+          },
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "4e09107d0e40",
+            "rerank_score": 0.6363,
+            "source": "",
+            "snippet": "一、供应商准入 1. 供应商提交资质：营业执照、品牌授权、质检报告。 2. 采购部初审资质，3 个工作日内完成。 3. 现场验厂或视频验厂，评估产能与质量体系。 4. 小批量试单，质检通过后进入合格供应商名录。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.5048,
+            "source": "",
+            "snippet": "合同编号：CON-PUR-2026-001  第一条 合同双方 甲方（采购方）：某电子商务有限公司 乙方（供应方）：某科技有限公司  第二条 标的物 乙方按本合同向甲方供应智能恒温电水壶，规格型号 SE-3000，数量 10000 台。  第三条 交货与验收 乙方应于收到订单后 30 日内完成交货。甲方在收货后 7 日内按 AQL 抽样标准验收，验收不合格批次乙方应在 5 日内补发或更换。  第四"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2128,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-013",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "73749703ef9197df"
+        ],
+        "relevant_snippets": [
+          "额定功率",
+          "1.5L"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "这款电水壶的额定功率和容量是多少？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "73749703ef9197df",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "73749703ef9197df",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.7151,
+            "source": "",
+            "snippet": "商品规格说明书 适用 SKU 族：SE-3000 系列智能恒温电水壶  一、产品概述 本产品为家用智能恒温电水壶，支持 40-100℃ 分段控温、12 小时保温，采用 304 食品级不锈钢内胆。  参数项 规格值 备注 额定功率 1800W 额定电压 220V 容量 1.5L 建议加水量 1.2L 内胆材质 304 不锈钢 食品级 控温范围 40-100℃ 5℃ 一档 整机尺寸 210×150×2"
+          },
+          {
+            "doc_id": "73749703ef9197df",
+            "title": "",
+            "chunk_id": "719512c5ea6d",
+            "rerank_score": 0.7066,
+            "source": "",
+            "snippet": "参数项 规格值 备注 额定功率 1800W 额定电压 220V 容量 1.5L 建议加水量 1.2L 内胆材质 304 不锈钢 食品级 控温范围 40-100℃ 5℃ 一档 整机尺寸 210×150×240mm 不含底座 净重 1.15kg 含底座 1.35kg"
+          },
+          {
+            "doc_id": "73749703ef9197df",
+            "title": "",
+            "chunk_id": "6430ce747d8e",
+            "rerank_score": 0.5302,
+            "source": "",
+            "snippet": "一、产品概述 本产品为家用智能恒温电水壶，支持 40-100℃ 分段控温、12 小时保温，采用 304 食品级不锈钢内胆。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.5101,
+            "source": "",
+            "snippet": "合同编号：CON-PUR-2026-001  第一条 合同双方 甲方（采购方）：某电子商务有限公司 乙方（供应方）：某科技有限公司  第二条 标的物 乙方按本合同向甲方供应智能恒温电水壶，规格型号 SE-3000，数量 10000 台。  第三条 交货与验收 乙方应于收到订单后 30 日内完成交货。甲方在收货后 7 日内按 AQL 抽样标准验收，验收不合格批次乙方应在 5 日内补发或更换。  第四"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "c699ff268cd9",
+            "rerank_score": 0.5086,
+            "source": "",
+            "snippet": "第二条 标的物 乙方按本合同向甲方供应智能恒温电水壶，规格型号 SE-3000，数量 10000 台。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "73749703ef9197df",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2966,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-014",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "73749703ef9197df"
+        ],
+        "relevant_snippets": [
+          "异味",
+          "故障排查"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "电水壶出现异味应该怎么处理？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "73749703ef9197df",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "73749703ef9197df",
+            "title": "",
+            "chunk_id": "5ef436b288af",
+            "rerank_score": 0.6997,
+            "source": "",
+            "snippet": "故障现象 可能原因 处理方法 不加热 底座未插紧 重新插拔并检查电源 有异味 新机保护层 沸水煮 2-3 次 保温失效 未选择保温模式 长按保温键 3 秒 指示灯不亮 电源故障 联系售后检测"
+          },
+          {
+            "doc_id": "73749703ef9197df",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.6865,
+            "source": "",
+            "snippet": "商品规格说明书 适用 SKU 族：SE-3000 系列智能恒温电水壶  一、产品概述 本产品为家用智能恒温电水壶，支持 40-100℃ 分段控温、12 小时保温，采用 304 食品级不锈钢内胆。  参数项 规格值 备注 额定功率 1800W 额定电压 220V 容量 1.5L 建议加水量 1.2L 内胆材质 304 不锈钢 食品级 控温范围 40-100℃ 5℃ 一档 整机尺寸 210×150×2"
+          },
+          {
+            "doc_id": "73749703ef9197df",
+            "title": "",
+            "chunk_id": "2b209eb9ad86",
+            "rerank_score": 0.6465,
+            "source": "",
+            "snippet": "四、保养指南 1. 定期用柠檬酸或白醋除垢，每月一次。 2. 清洗时禁止整机浸入水中，底座严禁进水。 3. 长期不用时清空壶内水分，存放于干燥通风处。"
+          },
+          {
+            "doc_id": "73749703ef9197df",
+            "title": "",
+            "chunk_id": "a2bcdb4b3178",
+            "rerank_score": 0.5524,
+            "source": "",
+            "snippet": "三、使用说明 1. 首次使用前用清水冲洗内胆并煮沸一次后倒掉。 2. 加水量不得超过最高水位线，防止溢出。 3. 按下电源键选择目标温度，加热完成后自动进入保温。 4. 倒水时请握住手柄，避免触碰壶体高温部位。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.5079,
+            "source": "",
+            "snippet": "合同编号：CON-PUR-2026-001  第一条 合同双方 甲方（采购方）：某电子商务有限公司 乙方（供应方）：某科技有限公司  第二条 标的物 乙方按本合同向甲方供应智能恒温电水壶，规格型号 SE-3000，数量 10000 台。  第三条 交货与验收 乙方应于收到订单后 30 日内完成交货。甲方在收货后 7 日内按 AQL 抽样标准验收，验收不合格批次乙方应在 5 日内补发或更换。  第四"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "73749703ef9197df",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2970,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-015",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "73749703ef9197df"
+        ],
+        "relevant_snippets": [
+          "除垢",
+          "保养"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "电水壶的保养方法有哪些？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "73749703ef9197df",
+          "1dd29516e5a5e3cc"
+        ],
+        "details": [
+          {
+            "doc_id": "73749703ef9197df",
+            "title": "",
+            "chunk_id": "2b209eb9ad86",
+            "rerank_score": 0.7297,
+            "source": "",
+            "snippet": "四、保养指南 1. 定期用柠檬酸或白醋除垢，每月一次。 2. 清洗时禁止整机浸入水中，底座严禁进水。 3. 长期不用时清空壶内水分，存放于干燥通风处。"
+          },
+          {
+            "doc_id": "73749703ef9197df",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.717,
+            "source": "",
+            "snippet": "商品规格说明书 适用 SKU 族：SE-3000 系列智能恒温电水壶  一、产品概述 本产品为家用智能恒温电水壶，支持 40-100℃ 分段控温、12 小时保温，采用 304 食品级不锈钢内胆。  参数项 规格值 备注 额定功率 1800W 额定电压 220V 容量 1.5L 建议加水量 1.2L 内胆材质 304 不锈钢 食品级 控温范围 40-100℃ 5℃ 一档 整机尺寸 210×150×2"
+          },
+          {
+            "doc_id": "73749703ef9197df",
+            "title": "",
+            "chunk_id": "a2bcdb4b3178",
+            "rerank_score": 0.7036,
+            "source": "",
+            "snippet": "三、使用说明 1. 首次使用前用清水冲洗内胆并煮沸一次后倒掉。 2. 加水量不得超过最高水位线，防止溢出。 3. 按下电源键选择目标温度，加热完成后自动进入保温。 4. 倒水时请握住手柄，避免触碰壶体高温部位。"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "e23d76029e1e",
+            "rerank_score": 0.6608,
+            "source": "",
+            "snippet": "商品规格要统一，几款电水壶容量功率标识对不上，页面和实物不一致容易引发投诉和退货，要重新核对。 知识库文档有点乱，检索经常返回不相关内容，建议技术组把文档分类和分块策略再优化，尤其 FAQ 和政策 类。 库存滞销定义是连续 90 天无动销，安全库存是日均销量乘补货周期乘安全系数，安全系数默认一点五，畅销 品可以到二。报销标准：一线城市住宿 500 一晚其他城市 350，餐补一天 80 不用发票，招"
+          },
+          {
+            "doc_id": "73749703ef9197df",
+            "title": "",
+            "chunk_id": "6430ce747d8e",
+            "rerank_score": 0.6299,
+            "source": "",
+            "snippet": "一、产品概述 本产品为家用智能恒温电水壶，支持 40-100℃ 分段控温、12 小时保温，采用 304 食品级不锈钢内胆。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "73749703ef9197df",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2906,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-016",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "2d28d00ec78d4fb9"
+        ],
+        "relevant_snippets": [
+          "七天",
+          "无理由"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "七天无理由退货需要满足什么条件？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "2d28d00ec78d4fb9",
+          "40f477fefca2f7ee",
+          "1dd29516e5a5e3cc",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "2d28d00ec78d4fb9",
+            "title": "",
+            "chunk_id": "89e4b40657ba",
+            "rerank_score": 0.7306,
+            "source": "",
+            "snippet": "二、七天无理由退货 1. 自签收之日起 7 天内可申请无理由退货，商品须完好、未使用、不影响二次销售。 2. 无理由退货的运费由买家承担，平台补贴首重运费（每月 1 次）。 3. 以下商品不支持无理由退货：贴身衣物、食品、定制类、拆封后影响二次销售的耗材。"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "7e6754daa300",
+            "rerank_score": 0.7305,
+            "source": "",
+            "snippet": "符合「七天无理由退货」的商品，在签收后 7 天内、商品完好不影响二次销售的前提下可申请退货，运费规则见退货政策。"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "caf7c5dd33c7",
+            "rerank_score": 0.7301,
+            "source": "",
+            "snippet": "和承运商谈赔偿条款。 商品规格要统一，几款电水壶容量功率标识对不上，页面和实物不一致容易引发投诉和退货，要重新核对。 知识库文档有点乱，检索经常返回不相关内容，建议技术组把文档分类和分块策略再优化，尤其 FAQ 和政策 类。 库存滞销定义是连续 90 天无动销，安全库存是日均销量乘补货周期乘安全系数，安全系数默认一点五，畅销 品可以到二。报销标准：一线城市住宿 500 一晚其他城市 350，餐补一"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "9ac5933dac68",
+            "rerank_score": 0.7232,
+            "source": "",
+            "snippet": "商品不满意可以无理由退货吗？"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "3001be71ca18",
+            "rerank_score": 0.5096,
+            "source": "",
+            "snippet": "第七条 争议解决 因本合同引起的争议，双方应协商解决；协商不成的，提交甲方所在地人民法院诉讼解决。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "2d28d00ec78d4fb9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e6b3848b592f8e8d",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2174,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-017",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "2d28d00ec78d4fb9"
+        ],
+        "relevant_snippets": [
+          "质量问题",
+          "运费"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "商品质量问题退货，运费由谁承担？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "2d28d00ec78d4fb9",
+          "40f477fefca2f7ee",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "2d28d00ec78d4fb9",
+            "title": "",
+            "chunk_id": "6fe827dc9ed7",
+            "rerank_score": 0.7308,
+            "source": "",
+            "snippet": "三、质量问题退货 1. 签收后 48 小时内发现质量问题的，运费由平台承担，支持全额退款或换货。 2. 需提供商品照片、视频或检测报告作为凭证。 3. 超过 48 小时但在保修期内的质量问题，按保修政策处理。"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "48b8b92274ef",
+            "rerank_score": 0.7271,
+            "source": "",
+            "snippet": "请在签收后 48 小时内拍照/录视频留证并联系客服，经核实属质量问题的，我们承担退换货运费并支持全额退款。"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "39ab8a947aee",
+            "rerank_score": 0.7137,
+            "source": "",
+            "snippet": "收到的商品有质量问题怎么办？"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "9ac5933dac68",
+            "rerank_score": 0.6752,
+            "source": "",
+            "snippet": "商品不满意可以无理由退货吗？"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "51c824a0e169",
+            "rerank_score": 0.5557,
+            "source": "",
+            "snippet": "第五条 违约责任 任何一方违约，应向守约方支付合同总价 10% 的违约金。因乙方交付不合格产品给甲方造成损失的，乙方应承担赔偿责任。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "2d28d00ec78d4fb9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 4015,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-018",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "2d28d00ec78d4fb9"
+        ],
+        "relevant_snippets": [
+          "退款金额",
+          "优惠券"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "退款金额是怎么计算的？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "2d28d00ec78d4fb9",
+          "cd16277f418d9306",
+          "40f477fefca2f7ee"
+        ],
+        "details": [
+          {
+            "doc_id": "2d28d00ec78d4fb9",
+            "title": "",
+            "chunk_id": "be211de02995",
+            "rerank_score": 0.7214,
+            "source": "",
+            "snippet": "四、退款规则 1. 退款金额 = 实付金额 - 已使用优惠券抵扣部分按比例扣除。 2. 仓库签收并验收通过后，1-3 个工作日内原路退回。 3. 使用平台余额支付的部分即时退回余额账户。 退货类型 运费承担 退款时效 无理由退货 买家承担 验收后 1-3 日 质量问题 平台承担 验收后 1-3 日 发错货 平台承担 签收即退"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "98fbd8bc27ea",
+            "rerank_score": 0.5079,
+            "source": "",
+            "snippet": "第四条 价款与结算 本合同总价款为人民币 500 万元。甲方在验收合格后 30 日内支付 90%，剩余 10% 作为质保金，质保期满后支付。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "51c824a0e169",
+            "rerank_score": 0.5073,
+            "source": "",
+            "snippet": "第五条 违约责任 任何一方违约，应向守约方支付合同总价 10% 的违约金。因乙方交付不合格产品给甲方造成损失的，乙方应承担赔偿责任。"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "547230f5ba94",
+            "rerank_score": 0.504,
+            "source": "",
+            "snippet": "此类情况多为支付渠道超时，款项一般会在 1-3 个工作日内原路退回。若超过 3 个工作日未退回，请提供支付凭证联系客服核查。"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "02fd4c6807ff",
+            "rerank_score": 0.5031,
+            "source": "",
+            "snippet": "仓库签收退货商品并验收通过后，退款在 1-3 个工作日内原路退回；使用优惠券抵扣的部分按比例退回。  ## 五、账户与售后"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "2d28d00ec78d4fb9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d811cc8a86996ec9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 3869,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-019",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "1794546c148f9874"
+        ],
+        "relevant_snippets": [
+          "空运",
+          "海运"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "头程物流有哪几种方式？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "1794546c148f9874",
+          "1dd29516e5a5e3cc",
+          "48040a8a8b29a44e",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "1794546c148f9874",
+            "title": "",
+            "chunk_id": "0fbc4fd8387a",
+            "rerank_score": 0.7306,
+            "source": "",
+            "snippet": "1. 选择头程方式：空运（3-5 天）/ 海运（25-40 天）/ 铁路（15-20 天）。"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "c529a709b884",
+            "rerank_score": 0.7093,
+            "source": "",
+            "snippet": "物流头程海运时效不稳定，旺季爆仓清关慢，货物压在目的港；尾程丢件破损偶发，要和承运商谈赔偿条款。 商品规格要统一，几款电水壶容量功率标识对不上，页面和实物不一致容易引发投诉和退货，要重新核对。 知识库文档有点乱，检索经常返回不相关内容，建议技术组把文档分类和分块策略再优化，尤其 FAQ 和政策 类。库存滞销定义是连续 90 天无动销，安全库存是日均销量乘补货周期乘安全系数，安全系数默认一点五， 畅"
+          },
+          {
+            "doc_id": "1794546c148f9874",
+            "title": "",
+            "chunk_id": "9e1f81136c2d",
+            "rerank_score": 0.6353,
+            "source": "",
+            "snippet": "物流标准操作流程（SOP）"
+          },
+          {
+            "doc_id": "48040a8a8b29a44e",
+            "title": "",
+            "chunk_id": "f6df66668e32",
+            "rerank_score": 0.5274,
+            "source": "",
+            "snippet": "换货的流程是怎样的？"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.5011,
+            "source": "",
+            "snippet": "合同编号：CON-PUR-2026-001  第一条 合同双方 甲方（采购方）：某电子商务有限公司 乙方（供应方）：某科技有限公司  第二条 标的物 乙方按本合同向甲方供应智能恒温电水壶，规格型号 SE-3000，数量 10000 台。  第三条 交货与验收 乙方应于收到订单后 30 日内完成交货。甲方在收货后 7 日内按 AQL 抽样标准验收，验收不合格批次乙方应在 5 日内补发或更换。  第四"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "615fd677b5389887",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2340,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-020",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "1794546c148f9874"
+        ],
+        "relevant_snippets": [
+          "HS编码",
+          "申报"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "清关申报需要哪些要素？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "1794546c148f9874",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "1794546c148f9874",
+            "title": "",
+            "chunk_id": "73359bac81df",
+            "rerank_score": 0.7301,
+            "source": "",
+            "snippet": "申报要素：品名、数量、单价、币种、原产地、HS 编码、申报价值。虚报或低报将被海关扣关，责任由发件方承担。"
+          },
+          {
+            "doc_id": "1794546c148f9874",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.72,
+            "source": "",
+            "snippet": "物流标准操作流程（SOP）  文件编号：SOP-LOG-003；版本：V3.0；覆盖头程、尾程、清关、异常处理。  1. 选择头程方式：空运（3-5 天）/ 海运（25-40 天）/ 铁路（15-20 天）。  2. 生成装箱单与商业发票，申报 HS 编码。  3. 委托货代订舱，跟踪离港与到港节点。  4. 目的港清关后入海外仓。  海外仓出库后交由当地承运商（USPS/UPS/DPD 等）派送"
+          },
+          {
+            "doc_id": "1794546c148f9874",
+            "title": "",
+            "chunk_id": "614e91c33e11",
+            "rerank_score": 0.5473,
+            "source": "",
+            "snippet": "异常类型，处理时效，责任人 丢件, 48 小时内核查，物流客服 破损, 24 小时内补发，仓库主管 清关异常, 2 个工作日内补充材料，关务专员"
+          },
+          {
+            "doc_id": "1794546c148f9874",
+            "title": "",
+            "chunk_id": "3bc77dce64ee",
+            "rerank_score": 0.5106,
+            "source": "",
+            "snippet": "4. 目的港清关后入海外仓。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "2309d704d135",
+            "rerank_score": 0.5028,
+            "source": "",
+            "snippet": "第六条 保密条款 双方对履行本合同过程中知悉的对方商业秘密负有保密义务，保密期限为合同终止后 2 年。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d811cc8a86996ec9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2478,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-021",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "1794546c148f9874"
+        ],
+        "relevant_snippets": [
+          "丢件",
+          "48小时"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "物流丢件应该怎么处理？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "1dd29516e5a5e3cc",
+          "1794546c148f9874",
+          "48040a8a8b29a44e",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "c529a709b884",
+            "rerank_score": 0.7262,
+            "source": "",
+            "snippet": "物流头程海运时效不稳定，旺季爆仓清关慢，货物压在目的港；尾程丢件破损偶发，要和承运商谈赔偿条款。 商品规格要统一，几款电水壶容量功率标识对不上，页面和实物不一致容易引发投诉和退货，要重新核对。 知识库文档有点乱，检索经常返回不相关内容，建议技术组把文档分类和分块策略再优化，尤其 FAQ 和政策 类。库存滞销定义是连续 90 天无动销，安全库存是日均销量乘补货周期乘安全系数，安全系数默认一点五， 畅"
+          },
+          {
+            "doc_id": "1794546c148f9874",
+            "title": "",
+            "chunk_id": "614e91c33e11",
+            "rerank_score": 0.719,
+            "source": "",
+            "snippet": "异常类型，处理时效，责任人 丢件, 48 小时内核查，物流客服 破损, 24 小时内补发，仓库主管 清关异常, 2 个工作日内补充材料，关务专员"
+          },
+          {
+            "doc_id": "48040a8a8b29a44e",
+            "title": "",
+            "chunk_id": "6e05a3509c00",
+            "rerank_score": 0.6709,
+            "source": "",
+            "snippet": "签收后发现商品破损怎么办？"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "51c824a0e169",
+            "rerank_score": 0.5681,
+            "source": "",
+            "snippet": "第五条 违约责任 任何一方违约，应向守约方支付合同总价 10% 的违约金。因乙方交付不合格产品给甲方造成损失的，乙方应承担赔偿责任。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.5501,
+            "source": "",
+            "snippet": "合同编号：CON-PUR-2026-001  第一条 合同双方 甲方（采购方）：某电子商务有限公司 乙方（供应方）：某科技有限公司  第二条 标的物 乙方按本合同向甲方供应智能恒温电水壶，规格型号 SE-3000，数量 10000 台。  第三条 交货与验收 乙方应于收到订单后 30 日内完成交货。甲方在收货后 7 日内按 AQL 抽样标准验收，验收不合格批次乙方应在 5 日内补发或更换。  第四"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "2d28d00ec78d4fb9",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 0.5,
+        "ndcg@10": 0.6309
+      },
+      "duration_ms": 2381,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-022",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "d811cc8a86996ec9"
+        ],
+        "relevant_snippets": [
+          "住宿",
+          "500"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "差旅住宿的报销标准是多少？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "d811cc8a86996ec9",
+          "1dd29516e5a5e3cc",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "d811cc8a86996ec9",
+            "title": "",
+            "chunk_id": "5b66d92faa40",
+            "rerank_score": 0.7305,
+            "source": "",
+            "snippet": "第二章 报销范围与标准 第三条 差旅住宿标准：一线城市 500 元/晚，其他城市 350 元/晚，超出部分自理。 第四条 差旅餐补：按出差天数 80 元/天定额补贴，无需发票。 第五条 业务招待费：按实际发生报销，单次不得超过 2000 元且须附明细。 费用类型 标准 凭证要求 住宿费 一线 500/晚 住宿发票 餐补 80 元/天 无需发票 交通费 实报实销 行程单或票据 招待费 ≤2000/次"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "62c665d98d49",
+            "rerank_score": 0.72,
+            "source": "",
+            "snippet": "商品规格要统一，几款电水壶容量功率标识对不上，页面和实物不一致容易引发投诉和退货，要重新核对。 知识库文档有点乱，检索经常返回不相关内容，建议技术组把文档分类和分块策略再优化，尤其 FAQ 和政策 类。 库存滞销定义是连续 90 天无动销，安全库存是日均销量乘补货周期乘安全系数，安全系数默认一点五，畅销 品可以到二。报销标准：一线城市住宿 500 一晚其他城市 350，餐补一天 80 不用发票，招"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "88d1590ff2a9",
+            "rerank_score": 0.7161,
+            "source": "",
+            "snippet": "品可以到二。报销标准：一线城市住宿 500 一晚其他城市 350，餐补一天 80 不用发票，招待费单次不超过 2000 还要附明细，发票抬头公司全称。 退货政策：七天无理由退货要商品完好不影响二次销售，无理由退货运费买家承担，质量问题平台承担运费 并全额退款，退款一到三个工作日原路退回。采购审批权限：一万以内采购主管自动审批，一到十万采购经 理要附比价单，十万以上总经理要三家比价加预算。 物流异常"
+          },
+          {
+            "doc_id": "d811cc8a86996ec9",
+            "title": "",
+            "chunk_id": "b9c7fe5e78c4",
+            "rerank_score": 0.6027,
+            "source": "",
+            "snippet": "第一章 总则 第一条 为规范公司费用报销行为，加强财务管控，依据国家财税法规制定本制度。 第二条 本制度适用于全体员工因公发生的差旅费、招待费、交通费、通讯费、培训费等。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "51c824a0e169",
+            "rerank_score": 0.502,
+            "source": "",
+            "snippet": "第五条 违约责任 任何一方违约，应向守约方支付合同总价 10% 的违约金。因乙方交付不合格产品给甲方造成损失的，乙方应承担赔偿责任。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "d811cc8a86996ec9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "2d28d00ec78d4fb9",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2471,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-023",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "d811cc8a86996ec9"
+        ],
+        "relevant_snippets": [
+          "报销流程",
+          "审批"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "报销的审批流程是什么？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "d811cc8a86996ec9",
+          "d3f043993156fc0a",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "d811cc8a86996ec9",
+            "title": "",
+            "chunk_id": "f60445e18346",
+            "rerank_score": 0.7268,
+            "source": "",
+            "snippet": "第三章 报销流程 第六条 报销流程：员工提交 → 直属主管审批 → 财务审核 → 出纳付款。 第七条 报销须在费用发生后 30 天内提交，逾期需说明原因并经部门负责人特批。 第八条 发票要求：增值税专用发票或普通发票，抬头须为「XX 电子商务有限公司」。"
+          },
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "0fb574379ee2",
+            "rerank_score": 0.7149,
+            "source": "",
+            "snippet": "二、采购下单 采购申请 → 比价 → 审批 → 下发采购订单（PO）→ 供应商确认交期。 采购审批权限："
+          },
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "4e09107d0e40",
+            "rerank_score": 0.6655,
+            "source": "",
+            "snippet": "一、供应商准入 1. 供应商提交资质：营业执照、品牌授权、质检报告。 2. 采购部初审资质，3 个工作日内完成。 3. 现场验厂或视频验厂，评估产能与质量体系。 4. 小批量试单，质检通过后进入合格供应商名录。"
+          },
+          {
+            "doc_id": "d811cc8a86996ec9",
+            "title": "",
+            "chunk_id": "2a4bac4d23f8",
+            "rerank_score": 0.6041,
+            "source": "",
+            "snippet": "第四章 付款方式 第九条 报销款统一于每周五打款至员工工资卡，紧急情况可申请加急。 第十条 单笔报销超过 1 万元的，须财务总监加签。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.5105,
+            "source": "",
+            "snippet": "合同编号：CON-PUR-2026-001  第一条 合同双方 甲方（采购方）：某电子商务有限公司 乙方（供应方）：某科技有限公司  第二条 标的物 乙方按本合同向甲方供应智能恒温电水壶，规格型号 SE-3000，数量 10000 台。  第三条 交货与验收 乙方应于收到订单后 30 日内完成交货。甲方在收货后 7 日内按 AQL 抽样标准验收，验收不合格批次乙方应在 5 日内补发或更换。  第四"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d811cc8a86996ec9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2103,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-024",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "d811cc8a86996ec9"
+        ],
+        "relevant_snippets": [
+          "打款",
+          "每周五"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "报销款什么时候打款？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "d811cc8a86996ec9",
+          "40f477fefca2f7ee",
+          "d3f043993156fc0a",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "d811cc8a86996ec9",
+            "title": "",
+            "chunk_id": "2a4bac4d23f8",
+            "rerank_score": 0.7212,
+            "source": "",
+            "snippet": "第四章 付款方式 第九条 报销款统一于每周五打款至员工工资卡，紧急情况可申请加急。 第十条 单笔报销超过 1 万元的，须财务总监加签。"
+          },
+          {
+            "doc_id": "d811cc8a86996ec9",
+            "title": "",
+            "chunk_id": "f60445e18346",
+            "rerank_score": 0.6687,
+            "source": "",
+            "snippet": "第三章 报销流程 第六条 报销流程：员工提交 → 直属主管审批 → 财务审核 → 出纳付款。 第七条 报销须在费用发生后 30 天内提交，逾期需说明原因并经部门负责人特批。 第八条 发票要求：增值税专用发票或普通发票，抬头须为「XX 电子商务有限公司」。"
+          },
+          {
+            "doc_id": "40f477fefca2f7ee",
+            "title": "",
+            "chunk_id": "763a38352e37",
+            "rerank_score": 0.5467,
+            "source": "",
+            "snippet": "退货后多久能收到退款？"
+          },
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "24c83c55dfa1",
+            "rerank_score": 0.5128,
+            "source": "",
+            "snippet": "四、对账付款 每月 5 日前供应商提交对账单，采购部核对后转财务。财务按合同账期（月结 30/60/90 天）付款。 采购金额，审批人，备注 ≤ 1 万元，采购主管，系统自动审批 1-10 万元，采购经理，需附比价单 > 10 万元，总经理，需附三家比价 + 预算"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "98fbd8bc27ea",
+            "rerank_score": 0.502,
+            "source": "",
+            "snippet": "第四条 价款与结算 本合同总价款为人民币 500 万元。甲方在验收合格后 30 日内支付 90%，剩余 10% 作为质保金，质保期满后支付。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "d811cc8a86996ec9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2136,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-025",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "615fd677b5389887"
+        ],
+        "relevant_snippets": [
+          "分层架构",
+          "API"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "系统的总体架构是什么？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "615fd677b5389887"
+        ],
+        "details": [
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "755a642986c4",
+            "rerank_score": 0.7269,
+            "source": "",
+            "snippet": "第 2 章 架构设计 2.1 总体架构 系统自上而下分为接入层、编排层、能力层与数据层。接入层负责鉴权、限流与请求转发；编排层完成从问 题理解到任务执行的完整链路；能力层封装可复用的业务技能；数据层承载业务数据、向量数据与元数据。"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.6277,
+            "source": "",
+            "snippet": "电商 RAG 智能平台技术手册 版本 V4.2  面向后端研发、运维与算法工程师  全文 17 章  第 1 章 系统概述 本平台是面向电商场景的企业级检索增强生成（RAG）与多智能体协作系统。后端基于 FastAPI 与 LangGraph ，前端基于 Next.js 14 与 React，AI 侧通过 langchain-openai 兼容接口接入 DeepSeek 大模型，数据层使用 Pos"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "99d9b7394f0c",
+            "rerank_score": 0.5135,
+            "source": "",
+            "snippet": "第 1 章 系统概述 本平台是面向电商场景的企业级检索增强生成（RAG）与多智能体协作系统。后端基于 FastAPI 与 LangGraph ，前端基于 Next.js 14 与 React，AI 侧通过 langchain-openai 兼容接口接入 DeepSeek 大模型，数据层使用 PostgreSQL 双库：业务仓库 agent_business 与元数据库 agent_memory。 "
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "c4ab39de180b",
+            "rerank_score": 0.5003,
+            "source": "",
+            "snippet": "11.78 模块 78 设计说明 数据一致性由事务保证，跨模块的最终一致通过补偿机制处理。权限校验在模块入口统一完成，业务逻辑不 再重复判断。配置项统一从环境变量读取，禁止业务代码直接 os.getenv，保证配置集中管理。重试策略与超 时控制统一封装，避免因外部抖动导致任务无限等待。"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "d754cc2806bc",
+            "rerank_score": 0.5,
+            "source": "",
+            "snippet": "第 7 章 多智能体编排 7.1 节点职责 Planner 只负责任务拆解；Critique 审查修正；Supervisor 按依赖调度；Skill 封装能力；Reporter 汇总报告。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "615fd677b5389887",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e6b3848b592f8e8d",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 4589,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-026",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "615fd677b5389887"
+        ],
+        "relevant_snippets": [
+          "Planner",
+          "DAG"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "Planner 节点的职责是什么？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "0f96fb0709f607ef",
+          "615fd677b5389887"
+        ],
+        "details": [
+          {
+            "doc_id": "0f96fb0709f607ef",
+            "title": "",
+            "chunk_id": "96533ee53ade",
+            "rerank_score": 0.731,
+            "source": "",
+            "snippet": "7.1 节点职责 Planner 只负责任务拆解；Critique 审查修正；Supervisor 按依赖调度；Skill 封装能力；Reporter 汇总报告。"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "d754cc2806bc",
+            "rerank_score": 0.731,
+            "source": "",
+            "snippet": "第 7 章 多智能体编排 7.1 节点职责 Planner 只负责任务拆解；Critique 审查修正；Supervisor 按依赖调度；Skill 封装能力；Reporter 汇总报告。"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.5665,
+            "source": "",
+            "snippet": "电商 RAG 智能平台技术手册 版本 V4.2  面向后端研发、运维与算法工程师  全文 17 章  第 1 章 系统概述 本平台是面向电商场景的企业级检索增强生成（RAG）与多智能体协作系统。后端基于 FastAPI 与 LangGraph ，前端基于 Next.js 14 与 React，AI 侧通过 langchain-openai 兼容接口接入 DeepSeek 大模型，数据层使用 Pos"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "50b3601f822b",
+            "rerank_score": 0.5135,
+            "source": "",
+            "snippet": "2.2 编排链路 一次典型请求的流转路径为：API 入口接收用户提问，Router 路由到 Planner；Planner 将问题拆解为能力 DAG ；Critique 对计划审查修正；Supervisor 按依赖顺序调度各技能节点；Reporter 汇总各步骤结果输出 Markdown 报告。"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "b2a2cb4b6500",
+            "rerank_score": 0.5006,
+            "source": "",
+            "snippet": "2.3 能力 DAG 能力 DAG 由节点（nodes）与边（edges）组成。节点描述每一步调用的能力与参数，边描述步骤间的依赖关 系。Supervisor 依据边做拓扑排序，无依赖的步骤通过 Send 机制并行派发，并自动注入 previous_outputs 供后 置步骤读取。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "615fd677b5389887",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d811cc8a86996ec9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e6b3848b592f8e8d",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 0.5,
+        "ndcg@10": 0.6309
+      },
+      "duration_ms": 4286,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-027",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "615fd677b5389887"
+        ],
+        "relevant_snippets": [
+          "schema",
+          "表"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "数据库有哪些 schema 和表？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "615fd677b5389887",
+          "0f96fb0709f607ef",
+          "1dd29516e5a5e3cc"
+        ],
+        "details": [
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "5c053b5a515c",
+            "rerank_score": 0.7255,
+            "source": "",
+            "snippet": "第 4 章 数据库设计 4.1 Schema 划分 业务库按业务域划分为 7 个 schema 共 18 张表，覆盖 product、order、inventory、customer、crawler、finance、 ai 七个领域，每个 schema 对应独立业务边界。"
+          },
+          {
+            "doc_id": "0f96fb0709f607ef",
+            "title": "",
+            "chunk_id": "19e835fc312d",
+            "rerank_score": 0.6868,
+            "source": "",
+            "snippet": "4.1 Schema 划分 业务库按业务域划分为 7 个 schema 共 18 张表，覆盖 product、order、inventory、customer、crawler、finance、 ai 七个领域，每个 schema 对应独立业务边界。"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "44daad4e6b15",
+            "rerank_score": 0.5963,
+            "source": "",
+            "snippet": "第 15 章 数据库表结构参考 本章列出 18 张核心表的用途与关键字段。 表名 用途 关键字段 商品 id、名称、品牌、类目、上下架状 product.products 商品主表 态 product.skus SKU 表 SKU 编码、规格、价格、库存引用 product.categories 类目表 类目层级、父子关系、排序"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "c94a1af335f3",
+            "rerank_score": 0.5674,
+            "source": "",
+            "snippet": "只读账号 agent_readonly 用 scram 认证，SQL 六层安全校验，连接池 min 二 max 十。 向量库预热要十到十五秒，_rag_init_error 可以重试，别一看到报错就慌。文档入库九个阶段：加载解析清洗 去重分块元数据向量化写库注册表，每个阶段有埋点。 证据门是主动拒答机制，检索分重排分忠实度任一低于阈值就拒答，别强行生成。多查询检索对复杂问题自 动生成多个子查询并行"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "46b677fb4530",
+            "rerank_score": 0.5603,
+            "source": "",
+            "snippet": "数据库只读账号 agent_readonly 用 scram 认证，SQL 六层安全校验，连接池 min 二 max 十。向量库预热要十到 十五秒，_rag_init_error 可以重试，别一看到报错就慌。 文档入库九个阶段：加载解析清洗去重分块元数据向量化写库注册表，每个阶段有埋点。证据门是主动拒答 机制，检索分重排分忠实度任一低于阈值就拒答，别强行生成。 多查询检索对复杂问题自动生成多个子查"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "615fd677b5389887",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e6b3848b592f8e8d",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2682,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-028",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "1dd29516e5a5e3cc"
+        ],
+        "relevant_snippets": [
+          "盘点",
+          "整改"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "库存盘点差异率超标应该怎么整改？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "1dd29516e5a5e3cc",
+          "e6b3848b592f8e8d"
+        ],
+        "details": [
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "ff797ae1e7c0",
+            "rerank_score": 0.7243,
+            "source": "",
+            "snippet": "内部资料汇编 仓库反馈库存不准，盘点差异率到百分之一多，超过制度要求，经理让仓储物流部限期整改，重点抓盘点流 程和台账记录，责任到人。采购供应商交期老是拖延导致断货，销售很被动，要采购部重新梳理供应商准入 和考核，比价和交期承诺要写进合同。 客服售后工单积压，退货退款处理慢，买家投诉退款慢，客服主管说人手不够想招人，财务又催报销及时提 交别拖到月底扎堆。物流头程海运时效不稳定，旺季爆仓清关慢，货物"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "51bd3c6423da",
+            "rerank_score": 0.7225,
+            "source": "",
+            "snippet": "减少重排候选开缓存，数据库高频列加索引，编排用并行调度。 安全规范：接口鉴权限流防注入，敏感字段脱敏，操作留痕审计，数据采集最小化。系统七原则：可理解可 测试可观测可维护可扩展可控制可靠，禁止 Demo 式堆叠。 采购供应商准入四步：交资质、初审、验厂、试单，试单质检过了才进合格名录。对账付款：每月五号前供 应商提交对账单，采购部核对后转财务，按合同账期月结三十六十天付款。 库存分类五种：可用、在"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "5f3f3f172a28",
+            "rerank_score": 0.7221,
+            "source": "",
+            "snippet": "性能调优：检索减少重排候选开缓存，数据库高频列加索引，编排用并行调度。安全规范：接口鉴权限流防 注入，敏感字段脱敏，操作留痕审计，数据采集最小化。 系统七原则：可理解可测试可观测可维护可扩展可控制可靠，禁止 Demo 式堆叠。采购供应商准入四步：交 资质、初审、验厂、试单，试单质检过了才进合格名录。 对账付款：每月五号前供应商提交对账单，采购部核对后转财务，按合同账期月结三十六十天付款。库存分 类"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.722,
+            "source": "",
+            "snippet": "内部资料汇编 仓库反馈库存不准，盘点差异率到百分之一多，超过制度要求，经理让仓储物流部限期整改，重点抓盘点流 程和台账记录，责任到人。采购供应商交期老是拖延导致断货，销售很被动，要采购部重新梳理供应商准入 和考核，比价和交期承诺要写进合同。 客服售后工单积压，退货退款处理慢，买家投诉退款慢，客服主管说人手不够想招人，财务又催报销及时提 交别拖到月底扎堆。物流头程海运时效不稳定，旺季爆仓清关慢，货物"
+          },
+          {
+            "doc_id": "e6b3848b592f8e8d",
+            "title": "",
+            "chunk_id": "bf6b26057b68",
+            "rerank_score": 0.7114,
+            "source": "",
+            "snippet": "第四章 盘点管理 第十条 盘点分为日常抽盘、月度循环盘点、年度全面盘点三类。 第十一条 盘点差异率 =（盘盈盘亏绝对值之和 / 账面库存）× 100%，差异率超过 0.5% 需复盘并追责。 第十二条 盘点结果须在 3 个工作日内完成账务调整，并出具盘点报告。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "e6b3848b592f8e8d",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 4150,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-029",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "1dd29516e5a5e3cc"
+        ],
+        "relevant_snippets": [
+          "供应商",
+          "交期"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "供应商交期拖延导致的问题怎么处理？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "1dd29516e5a5e3cc"
+        ],
+        "details": [
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "7138aa388366",
+            "rerank_score": 0.7303,
+            "source": "",
+            "snippet": "应商提交对账单，采购部核对后转财务，按合同账期月结三十六十天付款。 库存分类五种：可用、在途、锁定、残次、滞销，滞销连续九十天无动销。仓库反馈库存不准，盘点差异率 到百分之一多，超过制度要求，经理让仓储物流部限期整改，重点抓盘点流程和台账记录，责任到人。 采购供应商交期老是拖延导致断货，销售很被动，要采购部重新梳理供应商准入和考核，比价和交期承诺要 写进合同。客服售后工单积压，退货退款处理慢，买家"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "e288b824114d",
+            "rerank_score": 0.7302,
+            "source": "",
+            "snippet": "采购供应商交期老是拖延导致断货，销售很被动，要采购部重新梳理供应商准入和考核，比价和交期承诺要 写进合同。客服售后工单积压，退货退款处理慢，买家投诉退款慢，客服主管说人手不够想招人，财务又催 报销及时提交别拖到月底扎堆。 物流头程海运时效不稳定，旺季爆仓清关慢，货物压在目的港；尾程丢件破损偶发，要和承运商谈赔偿条款。 商品规格要统一，几款电水壶容量功率标识对不上，页面和实物不一致容易引发投诉和退货"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "b3db9c8b4450",
+            "rerank_score": 0.7296,
+            "source": "",
+            "snippet": "注入，敏感字段脱敏，操作留痕审计，数据采集最小化。 系统七原则：可理解可测试可观测可维护可扩展可控制可靠，禁止 Demo 式堆叠。采购供应商准入四步：交 资质、初审、验厂、试单，试单质检过了才进合格名录。 对账付款：每月五号前供应商提交对账单，采购部核对后转财务，按合同账期月结三十六十天付款。库存分 类五种：可用、在途、锁定、残次、滞销，滞销连续九十天无动销。 仓库反馈库存不准，盘点差异率到百分之"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "6e118e18e5a2",
+            "rerank_score": 0.7295,
+            "source": "",
+            "snippet": "应商提交对账单，采购部核对后转财务，按合同账期月结三十六十天付款。 库存分类五种：可用、在途、锁定、残次、滞销，滞销连续九十天无动销。仓库反馈库存不准，盘点差异率 到百分之一多，超过制度要求，经理让仓储物流部限期整改，重点抓盘点流程和台账记录，责任到人。 采购供应商交期老是拖延导致断货，销售很被动，要采购部重新梳理供应商准入和考核，比价和交期承诺要 写进合同。客服售后工单积压，退货退款处理慢，买家"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.7291,
+            "source": "",
+            "snippet": "内部资料汇编 仓库反馈库存不准，盘点差异率到百分之一多，超过制度要求，经理让仓储物流部限期整改，重点抓盘点流 程和台账记录，责任到人。采购供应商交期老是拖延导致断货，销售很被动，要采购部重新梳理供应商准入 和考核，比价和交期承诺要写进合同。 客服售后工单积压，退货退款处理慢，买家投诉退款慢，客服主管说人手不够想招人，财务又催报销及时提 交别拖到月底扎堆。物流头程海运时效不稳定，旺季爆仓清关慢，货物"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "2d28d00ec78d4fb9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 4236,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-030",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "1dd29516e5a5e3cc"
+        ],
+        "relevant_snippets": [
+          "P95",
+          "召回率"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "系统监控需要重点关注哪些指标？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "1dd29516e5a5e3cc",
+          "615fd677b5389887",
+          "e6b3848b592f8e8d",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "f7b70e3af606",
+            "rerank_score": 0.5858,
+            "source": "",
+            "snippet": "去重分块元数据向量化写库注册表，每个阶段有埋点。 证据门是主动拒答机制，检索分重排分忠实度任一低于阈值就拒答，别强行生成。多查询检索对复杂问题自 动生成多个子查询并行查，合并去重后返回，模式有 auto always off。 监控重点：接口 P95 延迟、RAG 召回率、向量库大小、连接池使用率、LLM token 消耗。备份策略： PostgreSQL 每日全量加 WAL 归档，向量库和 SQ"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "039158f621af",
+            "rerank_score": 0.5071,
+            "source": "",
+            "snippet": "第 16 章 运维操作手册 1. 发布前在预发环境完整回归，确认无回归后灰度发布。 2. 数据库变更先备份，迁移脚本在低峰期执行。 3. 向量库全量重建前记录当前 .version，便于回滚。 4. 扩容前评估瓶颈在 CPU、内存、连接池还是磁盘。 5. 告警触发后 15 分钟内响应，先止损再定位根因。 6. 日志与指标统一接入监控平台，避免信息孤岛。 7. 每周检查磁盘与备份完整性，做一次恢复演"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "6912cf0b8f7c",
+            "rerank_score": 0.5003,
+            "source": "",
+            "snippet": "11.38 模块 38 设计说明 数据一致性由事务保证，跨模块的最终一致通过补偿机制处理。权限校验在模块入口统一完成，业务逻辑不 再重复判断。配置项统一从环境变量读取，禁止业务代码直接 os.getenv，保证配置集中管理。重试策略与超 时控制统一封装，避免因外部抖动导致任务无限等待。"
+          },
+          {
+            "doc_id": "e6b3848b592f8e8d",
+            "title": "",
+            "chunk_id": "bf6b26057b68",
+            "rerank_score": 0.5002,
+            "source": "",
+            "snippet": "第四章 盘点管理 第十条 盘点分为日常抽盘、月度循环盘点、年度全面盘点三类。 第十一条 盘点差异率 =（盘盈盘亏绝对值之和 / 账面库存）× 100%，差异率超过 0.5% 需复盘并追责。 第十二条 盘点结果须在 3 个工作日内完成账务调整，并出具盘点报告。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "2309d704d135",
+            "rerank_score": 0.5,
+            "source": "",
+            "snippet": "第六条 保密条款 双方对履行本合同过程中知悉的对方商业秘密负有保密义务，保密期限为合同终止后 2 年。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "615fd677b5389887",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e6b3848b592f8e8d",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "73749703ef9197df",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2338,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-031",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "cd16277f418d9306"
+        ],
+        "relevant_snippets": [
+          "违约金",
+          "10%"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "采购合同违约金的赔付标准是什么？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "cd16277f418d9306",
+          "d3f043993156fc0a"
+        ],
+        "details": [
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "94f84e6f5a0d",
+            "rerank_score": 0.7258,
+            "source": "",
+            "snippet": "第五条 违约责任 任何一方违约，应向守约方支付合同总价 10% 的违约金。因乙方交付不合格产品给甲方造成损失的，乙方应承担赔偿责任。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "51c824a0e169",
+            "rerank_score": 0.7258,
+            "source": "",
+            "snippet": "第五条 违约责任 任何一方违约，应向守约方支付合同总价 10% 的违约金。因乙方交付不合格产品给甲方造成损失的，乙方应承担赔偿责任。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.6752,
+            "source": "",
+            "snippet": "合同编号：CON-PUR-2026-001  第一条 合同双方 甲方（采购方）：某电子商务有限公司 乙方（供应方）：某科技有限公司  第二条 标的物 乙方按本合同向甲方供应智能恒温电水壶，规格型号 SE-3000，数量 10000 台。  第三条 交货与验收 乙方应于收到订单后 30 日内完成交货。甲方在收货后 7 日内按 AQL 抽样标准验收，验收不合格批次乙方应在 5 日内补发或更换。  第四"
+          },
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "24c83c55dfa1",
+            "rerank_score": 0.6241,
+            "source": "",
+            "snippet": "四、对账付款 每月 5 日前供应商提交对账单，采购部核对后转财务。财务按合同账期（月结 30/60/90 天）付款。 采购金额，审批人，备注 ≤ 1 万元，采购主管，系统自动审批 1-10 万元，采购经理，需附比价单 > 10 万元，总经理，需附三家比价 + 预算"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "98fbd8bc27ea",
+            "rerank_score": 0.5656,
+            "source": "",
+            "snippet": "第四条 价款与结算 本合同总价款为人民币 500 万元。甲方在验收合格后 30 日内支付 90%，剩余 10% 作为质保金，质保期满后支付。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d811cc8a86996ec9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2280,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-032",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "cd16277f418d9306"
+        ],
+        "relevant_snippets": [
+          "保密",
+          "2年"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "采购合同的保密义务期限是多久？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "cd16277f418d9306",
+          "1dd29516e5a5e3cc"
+        ],
+        "details": [
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "c46387f7a535",
+            "rerank_score": 0.7306,
+            "source": "",
+            "snippet": "第六条 保密条款 双方对履行本合同过程中知悉的对方商业秘密负有保密义务，保密期限为合同终止后 2 年。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "2309d704d135",
+            "rerank_score": 0.7306,
+            "source": "",
+            "snippet": "第六条 保密条款 双方对履行本合同过程中知悉的对方商业秘密负有保密义务，保密期限为合同终止后 2 年。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.7152,
+            "source": "",
+            "snippet": "合同编号：CON-PUR-2026-001  第一条 合同双方 甲方（采购方）：某电子商务有限公司 乙方（供应方）：某科技有限公司  第二条 标的物 乙方按本合同向甲方供应智能恒温电水壶，规格型号 SE-3000，数量 10000 台。  第三条 交货与验收 乙方应于收到订单后 30 日内完成交货。甲方在收货后 7 日内按 AQL 抽样标准验收，验收不合格批次乙方应在 5 日内补发或更换。  第四"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "7138aa388366",
+            "rerank_score": 0.5472,
+            "source": "",
+            "snippet": "应商提交对账单，采购部核对后转财务，按合同账期月结三十六十天付款。 库存分类五种：可用、在途、锁定、残次、滞销，滞销连续九十天无动销。仓库反馈库存不准，盘点差异率 到百分之一多，超过制度要求，经理让仓储物流部限期整改，重点抓盘点流程和台账记录，责任到人。 采购供应商交期老是拖延导致断货，销售很被动，要采购部重新梳理供应商准入和考核，比价和交期承诺要 写进合同。客服售后工单积压，退货退款处理慢，买家"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "98fbd8bc27ea",
+            "rerank_score": 0.523,
+            "source": "",
+            "snippet": "第四条 价款与结算 本合同总价款为人民币 500 万元。甲方在验收合格后 30 日内支付 90%，剩余 10% 作为质保金，质保期满后支付。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e6b3848b592f8e8d",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d811cc8a86996ec9",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2298,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-033",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "cd16277f418d9306"
+        ],
+        "relevant_snippets": [
+          "验收",
+          "AQL"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "交货后甲方如何验收？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "cd16277f418d9306",
+          "d3f043993156fc0a"
+        ],
+        "details": [
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "c086036d30d2",
+            "rerank_score": 0.7295,
+            "source": "",
+            "snippet": "第三条 交货与验收 乙方应于收到订单后 30 日内完成交货。甲方在收货后 7 日内按 AQL 抽样标准验收，验收不合格批次乙方应在 5 日内补发或更换。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.6941,
+            "source": "",
+            "snippet": "合同编号：CON-PUR-2026-001  第一条 合同双方 甲方（采购方）：某电子商务有限公司 乙方（供应方）：某科技有限公司  第二条 标的物 乙方按本合同向甲方供应智能恒温电水壶，规格型号 SE-3000，数量 10000 台。  第三条 交货与验收 乙方应于收到订单后 30 日内完成交货。甲方在收货后 7 日内按 AQL 抽样标准验收，验收不合格批次乙方应在 5 日内补发或更换。  第四"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "79afabbb3de2",
+            "rerank_score": 0.5665,
+            "source": "",
+            "snippet": "第四条 价款与结算 本合同总价款为人民币 500 万元。甲方在验收合格后 30 日内支付 90%，剩余 10% 作为质保金，质保期满后支付。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "98fbd8bc27ea",
+            "rerank_score": 0.5665,
+            "source": "",
+            "snippet": "第四条 价款与结算 本合同总价款为人民币 500 万元。甲方在验收合格后 30 日内支付 90%，剩余 10% 作为质保金，质保期满后支付。"
+          },
+          {
+            "doc_id": "d3f043993156fc0a",
+            "title": "",
+            "chunk_id": "28c62545e3f3",
+            "rerank_score": 0.5166,
+            "source": "",
+            "snippet": "三、到货验货 1. 仓库按 PO 核对数量与规格。 2. 质检员按 AQL 抽样标准检验。 3. 不合格批次按合同约定退货或换货。 4. 合格批次办理入库，系统同步库存。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "48040a8a8b29a44e",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1794546c148f9874",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2293,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-034",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "e6b3848b592f8e8d"
+        ],
+        "relevant_chunks": [],
+        "relevant_snippets": [
+          "安全库存",
+          "日均销量"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "安全库存的计算公式是什么？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "e6b3848b592f8e8d",
+          "1dd29516e5a5e3cc",
+          "cd16277f418d9306"
+        ],
+        "details": [
+          {
+            "doc_id": "e6b3848b592f8e8d",
+            "title": "",
+            "chunk_id": "4483af76f77a",
+            "rerank_score": 0.7254,
+            "source": "",
+            "snippet": "第三章 安全库存管理 第七条 安全库存 = 日均销量 × 补货周期 × 安全系数（默认 1.5）。 第八条 当可用库存低于安全库存时，系统自动生成补货建议单，采购部 48 小时内确认。 第九条 畅销品安全系数可上调至 2.0，季节品按历史同期销量动态调整。 库存类型 判定标准 管理动作 可用库存 质检合格可售 正常出库 滞销库存 90 天无动销 促销或清退 残次库存 质检不合格 退货或销毁"
+          },
+          {
+            "doc_id": "1dd29516e5a5e3cc",
+            "title": "",
+            "chunk_id": "bef75ef72310",
+            "rerank_score": 0.7012,
+            "source": "",
+            "snippet": "类。库存滞销定义是连续 90 天无动销，安全库存是日均销量乘补货周期乘安全系数，安全系数默认一点五， 畅销品可以到二。 报销标准：一线城市住宿 500 一晚其他城市 350，餐补一天 80 不用发票，招待费单次不超过 2000 还要附明细 ，发票抬头公司全称。退货政策：七天无理由退货要商品完好不影响二次销售，无理由退货运费买家承担， 质量问题平台承担运费并全额退款，退款一到三个工作日原路退回。 采"
+          },
+          {
+            "doc_id": "e6b3848b592f8e8d",
+            "title": "",
+            "chunk_id": "bbd50afc09d9",
+            "rerank_score": 0.5046,
+            "source": "",
+            "snippet": "第一章 总则 第一条 为规范库存管理，保障账实相符、降低呆滞损耗、提升资金周转效率，特制定本制度。 第二条 本制度适用于公司自有仓、FBA 仓及第三方海外仓的全部库存管理活动。 第三条 库存管理遵循「先进先出、账实一致、定期盘点、责任到人」十六字原则。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "98fbd8bc27ea",
+            "rerank_score": 0.5025,
+            "source": "",
+            "snippet": "第四条 价款与结算 本合同总价款为人民币 500 万元。甲方在验收合格后 30 日内支付 90%，剩余 10% 作为质保金，质保期满后支付。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.5006,
+            "source": "",
+            "snippet": "合同编号：CON-PUR-2026-001  第一条 合同双方 甲方（采购方）：某电子商务有限公司 乙方（供应方）：某科技有限公司  第二条 标的物 乙方按本合同向甲方供应智能恒温电水壶，规格型号 SE-3000，数量 10000 台。  第三条 交货与验收 乙方应于收到订单后 30 日内完成交货。甲方在收货后 7 日内按 AQL 抽样标准验收，验收不合格批次乙方应在 5 日内补发或更换。  第四"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "e6b3848b592f8e8d",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "615fd677b5389887",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2706,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-035",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "e6b3848b592f8e8d"
+        ],
+        "relevant_chunks": [],
+        "relevant_snippets": [
+          "差异率",
+          "0.5%"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "盘点差异率超过多少需要追责？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "e6b3848b592f8e8d",
+          "cd16277f418d9306",
+          "615fd677b5389887"
+        ],
+        "details": [
+          {
+            "doc_id": "e6b3848b592f8e8d",
+            "title": "",
+            "chunk_id": "bf6b26057b68",
+            "rerank_score": 0.7304,
+            "source": "",
+            "snippet": "第四章 盘点管理 第十条 盘点分为日常抽盘、月度循环盘点、年度全面盘点三类。 第十一条 盘点差异率 =（盘盈盘亏绝对值之和 / 账面库存）× 100%，差异率超过 0.5% 需复盘并追责。 第十二条 盘点结果须在 3 个工作日内完成账务调整，并出具盘点报告。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "94f84e6f5a0d",
+            "rerank_score": 0.5018,
+            "source": "",
+            "snippet": "第五条 违约责任 任何一方违约，应向守约方支付合同总价 10% 的违约金。因乙方交付不合格产品给甲方造成损失的，乙方应承担赔偿责任。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "51c824a0e169",
+            "rerank_score": 0.5018,
+            "source": "",
+            "snippet": "第五条 违约责任 任何一方违约，应向守约方支付合同总价 10% 的违约金。因乙方交付不合格产品给甲方造成损失的，乙方应承担赔偿责任。"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "cc260a4f5a86",
+            "rerank_score": 0.5004,
+            "source": "",
+            "snippet": "6.3 证据门 检索得分、重排得分、忠实度分数任一低于阈值时拒绝作答而非强行生成，从源头抑制幻觉。"
+          },
+          {
+            "doc_id": "cd16277f418d9306",
+            "title": "",
+            "chunk_id": "3001be71ca18",
+            "rerank_score": 0.5001,
+            "source": "",
+            "snippet": "第七条 争议解决 因本合同引起的争议，双方应协商解决；协商不成的，提交甲方所在地人民法院诉讼解决。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "d811cc8a86996ec9",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "40f477fefca2f7ee",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e6b3848b592f8e8d",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 2307,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-036",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "615fd677b5389887"
+        ],
+        "relevant_snippets": [
+          "连接池",
+          "min"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "数据库连接池的最小和最大连接数是多少？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "615fd677b5389887"
+        ],
+        "details": [
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "0be83f675edc",
+            "rerank_score": 0.7299,
+            "source": "",
+            "snippet": "DB_MIN_CONN = 2：连接池下限 DB_MAX_CONN = 10：连接池上限"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "8d8124ad98b7",
+            "rerank_score": 0.6624,
+            "source": "",
+            "snippet": "14.9 连接池耗尽 排查方法：查配置、泄漏、keepalive。"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "a00a9db8901b",
+            "rerank_score": 0.5255,
+            "source": "",
+            "snippet": "11.29 模块 29 设计说明 对第三方服务的调用结果做严格校验，防止脏数据进入下游。模块对外暴露的接口采用 Pydantic 数据协议约 束输入输出，保证类型安全与可测试性。对数据库的访问统一经过连接池与只读账号，业务层不得直接持有 连接。代码命名遵循 snake_case 与语义化原则，提高可读性。"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "47565f0ea350",
+            "rerank_score": 0.5207,
+            "source": "",
+            "snippet": "11.89 模块 89 设计说明 对第三方服务的调用结果做严格校验，防止脏数据进入下游。模块对外暴露的接口采用 Pydantic 数据协议约 束输入输出，保证类型安全与可测试性。对数据库的访问统一经过连接池与只读账号，业务层不得直接持有 连接。代码命名遵循 snake_case 与语义化原则，提高可读性。"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.5001,
+            "source": "",
+            "snippet": "电商 RAG 智能平台技术手册 版本 V4.2  面向后端研发、运维与算法工程师  全文 17 章  第 1 章 系统概述 本平台是面向电商场景的企业级检索增强生成（RAG）与多智能体协作系统。后端基于 FastAPI 与 LangGraph ，前端基于 Next.js 14 与 React，AI 侧通过 langchain-openai 兼容接口接入 DeepSeek 大模型，数据层使用 Pos"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "615fd677b5389887",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e6b3848b592f8e8d",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 4182,
+      "error_msg": null
+    },
+    {
+      "case_id": "RT-037",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "615fd677b5389887"
+        ],
+        "relevant_snippets": [
+          "七原则",
+          "可理解"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "系统遵循的设计原则有哪些？",
+        "kb_id": "rag_test_kb",
+        "retrieved_docs": [
+          "615fd677b5389887",
+          "e6b3848b592f8e8d"
+        ],
+        "details": [
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "7ca4d8b580ad",
+            "rerank_score": 0.6984,
+            "source": "",
+            "snippet": "2.4 设计原则落地 可观测性由统一 TraceCollector 保证，每个任务与每个索引文件一棵 trace 树；可测试性要求 Tool 层无状态、 可独立测试；可控制性体现为证据门、忠实度检测与只读数据库通道。"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "",
+            "rerank_score": 0.6495,
+            "source": "",
+            "snippet": "电商 RAG 智能平台技术手册 版本 V4.2  面向后端研发、运维与算法工程师  全文 17 章  第 1 章 系统概述 本平台是面向电商场景的企业级检索增强生成（RAG）与多智能体协作系统。后端基于 FastAPI 与 LangGraph ，前端基于 Next.js 14 与 React，AI 侧通过 langchain-openai 兼容接口接入 DeepSeek 大模型，数据层使用 Pos"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "375e45fd7a8c",
+            "rerank_score": 0.6413,
+            "source": "",
+            "snippet": "第 11 章 模块设计说明 本章按模块逐一说明设计要点。各模块共同遵循七大设计原则，以下仅列每个模块的关键约束。"
+          },
+          {
+            "doc_id": "615fd677b5389887",
+            "title": "",
+            "chunk_id": "1b60f88d4063",
+            "rerank_score": 0.6352,
+            "source": "",
+            "snippet": "11.1 模块 1 设计说明 该模块遵循单一职责原则，只承担一项核心能力，避免职责扩散导致难以维护。日志统一使用 logger 输出结 构化信息，禁止使用 print 输出运行信息。性能敏感路径避免循环内的重复计算，尽量复用缓存结果。数据一 致性由事务保证，跨模块的最终一致通过补偿机制处理。"
+          },
+          {
+            "doc_id": "e6b3848b592f8e8d",
+            "title": "",
+            "chunk_id": "bbd50afc09d9",
+            "rerank_score": 0.52,
+            "source": "",
+            "snippet": "第一章 总则 第一条 为规范库存管理，保障账实相符、降低呆滞损耗、提升资金周转效率，特制定本制度。 第二条 本制度适用于公司自有仓、FBA 仓及第三方海外仓的全部库存管理活动。 第三条 库存管理遵循「先进先出、账实一致、定期盘点、责任到人」十六字原则。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "615fd677b5389887",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e6b3848b592f8e8d",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "d3f043993156fc0a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "cd16277f418d9306",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "1dd29516e5a5e3cc",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "duration_ms": 4247,
+      "error_msg": null
+    }
+  ]
+}

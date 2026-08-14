@@ -9,7 +9,13 @@ import importlib
 import sys
 from pathlib import Path
 from backend.evaluation.runner import run_all
-from backend.evaluation.report import print_summary, write_markdown_report, compare_reports
+from backend.evaluation.report import (
+    print_summary,
+    write_markdown_report,
+    write_json_report,
+    compare_reports,
+    flag_regressions,
+)
 
 # Windows console encoding fix: force UTF-8 to avoid UnicodeEncodeError on CJK + emoji
 if sys.platform == "win32":
@@ -17,7 +23,7 @@ if sys.platform == "win32":
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
-_DEFAULT_RUNNER_CONFIG = "evaluation.runners_config"
+_DEFAULT_RUNNER_CONFIG = "backend.evaluation.runners_config"
 
 
 def _bootstrap_runners(config_module: str | None = None):
@@ -74,6 +80,10 @@ def main():
         "--runner-config", type=str, default=None, metavar="MODULE",
         help="自定义 runner 注册模块 (e.g. myproject.eval_runners)",
     )
+    parser.add_argument(
+        "--dataset", type=str, default=None, metavar="FILE",
+        help="自定义评测集文件名（如 rag_test_kb.json），用 rag runner 跑该评测集",
+    )
 
     args = parser.parse_args()
 
@@ -90,12 +100,15 @@ def main():
         live=live,
         smoke=args.smoke,
         judge=args.judge,
+        dataset_file=args.dataset,
     )
 
     print_summary(report)
 
     output_dir = Path(args.output) if args.output else RESULTS_DIR / report.timestamp.replace(":", "-")
     write_markdown_report(report, output_dir)
+    # 持久化 JSON 全量报告（含每条 case 检索轨迹），供 baseline 对比
+    write_json_report(report, output_dir)
 
     if args.verbose:
         print("\n--- Detailed Results ---")
@@ -106,38 +119,67 @@ def main():
                 print(f"     error: {r.error_msg}")
 
     if args.compare:
-        _do_compare(args.compare, report, RESULTS_DIR)
+        _do_compare(args.compare, report, RESULTS_DIR, current_dir=output_dir)
 
     # 返回适当退出码
     has_failures = any(r.status in ("fail", "error") for r in report.results)
     sys.exit(1 if has_failures and not args.smoke else 0)
 
 
-def _do_compare(compare_id: str, current: "EvalReport", results_dir: Path):
-    """加载历史报告并对比。"""
-    from backend.evaluation.models import EvalReport
+def _do_compare(compare_id: str, current: "EvalReport", results_dir: Path, current_dir: Path | None = None):
+    """加载最近的历史 JSON 报告，反序列化为 EvalReport 后对比指标 + 标记下降。"""
+    import json
+    from backend.evaluation.models import EvalReport as _EvalReport
 
-    if compare_id == "latest":
-        # 找最近的结果目录
-        dirs = sorted(results_dir.glob("*"), key=lambda p: p.name, reverse=True)
-        if not dirs:
-            print("No previous results to compare.")
-            return
-        prev_dir = dirs[0]
-    else:
-        prev_dir = results_dir / compare_id
-
-    # 尝试加载先前的 summary
-    summary_files = list(prev_dir.glob("summary*.md"))
-    if not summary_files:
-        print(f"No summary found in {prev_dir}")
+    # 找最近的 JSON 报告（write_json_report 存档的，递归查找）
+    json_files = sorted(
+        results_dir.rglob("eval-*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    # 排除当前这次的结果目录（对比「上一次 baseline」，而非自己）
+    if current_dir is not None:
+        json_files = [
+            p for p in json_files
+            if p.parent != current_dir and current_dir not in p.parents
+        ]
+    if not json_files:
+        print("\nNo previous JSON report to compare.")
         return
 
-    # 简化：重新构造基础报告用于对比
-    print(f"\nComparing with: {prev_dir.name}")
-    print(f"Current total_score: {current.total_score}")
-    # 对比需要完整的历史 EvalReport，这里仅展示简单对比
-    # 完整实现需要序列化 EvalReport 到 JSON 并反序列化
+    prev_file = json_files[0]
+    with open(prev_file, encoding="utf-8") as f:
+        prev_dict = json.load(f)
+    base = _EvalReport.model_validate(prev_dict)
+
+    print(f"\n=== Baseline Compare: {prev_file.name} ===")
+
+    # 逐模块打印对比（输出格式与历史一致，便于人工 review）
+    base_by_mod = {s.module: s for s in base.summaries}
+    for cur_s in current.summaries:
+        prev_s = base_by_mod.get(cur_s.module)
+        if prev_s is None:
+            continue
+        pass_delta = cur_s.pass_rate - prev_s.pass_rate
+        pass_flag = "  ⚠️ 下降" if pass_delta < -0.05 else ""
+        print(f"\n[{cur_s.module.upper()}]  pass_rate: {prev_s.pass_rate:.1%} → "
+              f"{cur_s.pass_rate:.1%} ({pass_delta:+.1%}){pass_flag}")
+        for key, cur_val in cur_s.metrics.items():
+            base_val = prev_s.metrics.get(key)
+            if base_val is None:
+                continue
+            delta = cur_val - base_val
+            flag = "  ⚠️ 下降" if delta < -0.05 else ""
+            print(f"  {key}: {base_val:.4f} → {cur_val:.4f} ({delta:+.4f}){flag}")
+
+    # 统一回归判断走 flag_regressions（消除重复实现，单一阈值源）
+    warnings = flag_regressions(base=base, current=current)
+    if warnings:
+        print(f"\n⚠️  共 {len(warnings)} 项指标下降超过 5%")
+        for w in warnings:
+            print(f"  {w}")
+    else:
+        print("\n✅ 无指标显著下降")
 
 
 if __name__ == "__main__":

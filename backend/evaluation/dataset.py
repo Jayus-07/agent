@@ -34,9 +34,30 @@ def _load_from_path(file_path: Path, default_module: str = "rag") -> list[TestCa
     Args:
         file_path: JSON 测试集文件路径
         default_module: 当 JSON 中无 module 字段时的默认值
+
+    Dataset v1 schema（version 字段 + expected/metadata 预留字段）：
+        {
+          "version": "1.0",
+          "test_cases": [{
+            "id": "RT-001",
+            "question": "...",
+            "module": "rag",
+            "kb_id": "rag_test_kb",
+            "expected": {
+              "relevant_docs": [...],        # 检索层：应召回的 doc_id
+              "relevant_chunks": [...],      # 预留：应召回的 chunk_id（更细粒度）
+              "expected_answer": "...",      # 预留：生成层 Faithfulness/Answer Relevance
+              "min_relevant_chunks": 1
+            },
+            "metadata": {"difficulty": "easy", "domain": "...", "doc_type": "..."}
+          }]
+        }
     """
     with open(file_path, "r", encoding="utf-8") as f:
         data = json.load(f)
+
+    # 评测集版本化：记录 version，供报告追溯
+    dataset_version = data.get("version", "1.0")
 
     cases = []
     for item in data["test_cases"]:
@@ -46,6 +67,8 @@ def _load_from_path(file_path: Path, default_module: str = "rag") -> list[TestCa
         # 保留 JSON 中的其他字段（如 kb_id）放入 metadata
         extra = {k: v for k, v in item.items() if k not in ("id", "question", "module")}
         metadata.update(extra)
+        # 版本化：每个 case 记录评测集版本
+        metadata["dataset_version"] = dataset_version
 
         cases.append(TestCase(
             id=item["id"],

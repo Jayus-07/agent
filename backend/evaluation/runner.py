@@ -156,6 +156,7 @@ def run_all(
     live: bool = False,
     smoke: bool = False,
     judge: bool = False,
+    dataset_file: str | None = None,
 ) -> EvalReport:
     """主入口：运行一个或多个模块的评估，返回 EvalReport。
 
@@ -164,11 +165,28 @@ def run_all(
         live: 是否启用真实 LLM 调用
         smoke: 快速冒烟（每模块取前 5 条）
         judge: 是否启用 LLM-as-Judge（传递给 E2E runner）
+        dataset_file: 自定义评测集文件名（如 "rag_test_kb.json"），
+                      指定时用 rag runner 跑该评测集，忽略 module
 
     Returns:
         EvalReport: 包含所有模块的汇总和详细结果
     """
-    from backend.evaluation.dataset import load_dataset
+    from backend.evaluation.dataset import load_dataset, load_dataset_file
+
+    if dataset_file:
+        # 自定义评测集文件 → 用 rag runner 跑（dataset_file 覆盖 module）
+        cases = load_dataset_file(dataset_file, default_module="rag")
+        if smoke:
+            cases = cases[:5]
+        results = run_module("rag", cases, live=live, judge=judge)
+        return EvalReport(
+            module="rag",
+            mode="live" if live else "offline",
+            smoke=smoke,
+            summaries=[_build_summary(results, "rag")],
+            results=list(results),
+            total_score=None,
+        )
 
     module_kinds: list[ModuleKind] = (
         ["planner", "rag", "sql", "e2e"] if module == "all" else [module]  # type: ignore

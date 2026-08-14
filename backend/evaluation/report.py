@@ -145,3 +145,42 @@ def compare_reports(report_a: EvalReport, report_b: EvalReport) -> str:
     result = "\n".join(lines)
     print(result)
     return result
+
+
+def flag_regressions(
+    base: EvalReport, current: EvalReport, threshold: float = 0.05,
+) -> list[str]:
+    """标记指标下降：当前报告 vs 基线报告，降幅超阈值返回告警列表。
+
+    Args:
+        base: 基线报告（历史）
+        current: 当前报告
+        threshold: 降幅阈值（默认 0.05，即 5%）
+
+    Returns:
+        告警字符串列表（空列表表示无显著下降）
+    """
+    warnings: list[str] = []
+    for cb in current.summaries:
+        bb = next((s for s in base.summaries if s.module == cb.module), None)
+        if bb is None:
+            continue
+        # 对比每个指标
+        for key, cur_val in cb.metrics.items():
+            base_val = bb.metrics.get(key)
+            if base_val is None:
+                continue
+            delta = cur_val - base_val
+            if delta < -threshold:
+                warnings.append(
+                    f"⚠️  {cb.module}.{key}: {base_val:.4f} → {cur_val:.4f} "
+                    f"(↓{abs(delta):.4f})"
+                )
+        # 对比 pass_rate
+        delta = cb.pass_rate - bb.pass_rate
+        if delta < -threshold:
+            warnings.append(
+                f"⚠️  {cb.module}.pass_rate: {bb.pass_rate:.1%} → "
+                f"{cb.pass_rate:.1%} (↓{abs(delta):.1%})"
+            )
+    return warnings
