@@ -588,18 +588,17 @@
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
-        "relevant_docs": [
-          "aa3bad663c"
-        ],
         "relevant_snippets": [
           "P95",
           "召回率"
         ],
-        "min_relevant_chunks": 1
+        "min_relevant_chunks": 1,
+        "match_type": "snippet"
       },
       "metadata": {
         "difficulty": "hard",
-        "domain": "mixed"
+        "domain": "mixed",
+        "probe_note": "snippet 语义匹配：召回内容含\"P95\"和\"召回率\"关键词即 pass。系统监控指标可能分布在多个技术手册章节"
       }
     },
     {

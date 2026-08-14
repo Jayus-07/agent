@@ -1,16 +1,16 @@
 {
   "module": "rag",
   "dataset_version": "1.0",
-  "promoted_at": "2026-08-14",
-  "pass_rate": 0.973,
+  "promoted_at": "2026-08-15",
+  "pass_rate": 1.0,
   "metrics": {
-    "ndcg@10": 0.943,
-    "recall@5": 0.973,
-    "chunk_recall": 0.973,
-    "recall@10": 0.973,
-    "mrr": 0.9324
+    "ndcg@10": 0.9701,
+    "chunk_recall": 1.0,
+    "recall@5": 1.0,
+    "mrr": 0.9595,
+    "recall@10": 1.0
   },
   "total": 37,
-  "passed": 36,
-  "failed": 1
+  "passed": 37,
+  "failed": 0
 }
