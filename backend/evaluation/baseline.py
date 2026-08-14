@@ -139,18 +139,16 @@ def diff(
             )
             continue
 
-        # 1. pass_rate 检查
+        # 1. pass_rate 检查（pass_rate 降幅 > threshold 即视为 critical error，
+        #   因为 pass_rate 是综合质量的最直接信号）
         delta = summary.pass_rate - base["pass_rate"]
         if delta < -threshold:
-            severity = "error" if delta < -0.10 else "warning"
-            msg = (
-                f"{'❌' if severity == 'error' else '⚠️ '} "
-                f"{summary.module}.pass_rate: {base['pass_rate']:.2%} → "
+            errors.append(
+                f"❌ {summary.module}.pass_rate: {base['pass_rate']:.2%} → "
                 f"{summary.pass_rate:.2%} (↓{abs(delta):.2%})"
             )
-            (errors if severity == "error" else warnings).append(msg)
 
-        # 2. 逐指标检查
+        # 2. 逐指标检查（warning: >threshold；error: >2*threshold 或 critical_metrics 配置）
         crit = critical_metrics.get(summary.module, {})
         for key, cur_val in summary.metrics.items():
             base_val = base["metrics"].get(key)

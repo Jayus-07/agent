@@ -88,8 +88,8 @@ data/long_term_memory/
 
 # Evaluation output
 evaluation/results/
-data/eval_runs/      # V1.0 每次评估的运行时产物（每次跑都覆盖）
-data/baselines/      # V1.0 baseline JSON（按模块分别 git tag，不入仓）
+data/eval_runs/      # V1.0 每次评估的运行时产物（每次跑都覆盖，不入仓）
+# data/baselines/   # V1.0 baseline JSON 入仓（与发布 tag 绑定，可追溯）
 
 # Misc auto-generated
 =0.2.0

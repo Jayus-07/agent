@@ -110,6 +110,15 @@ def main():
     # 持久化 JSON 全量报告（含每条 case 检索轨迹），供 baseline 对比
     write_json_report(report, output_dir)
 
+    # V1.0: 持久化到 data/eval_runs/ + 写 PostgreSQL 聚合
+    #   - run_dir 包含 report.json + per_case/{id}.json + meta.json（git_sha 等）
+    #   - 失败不阻断：CLI 主流程已成功，持久化失败仅 warn
+    try:
+        from backend.evaluation.storage import persist_report
+        persist_report(report)
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️  V1.0 persist_report failed: {e}")
+
     if args.verbose:
         print("\n--- Detailed Results ---")
         for r in report.results:

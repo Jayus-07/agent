@@ -114,6 +114,25 @@ def _build_summary(results: list[EvalResult], module: ModuleKind) -> ModuleSumma
     )
 
 
+_runners_registered = False
+
+
+def _ensure_runners_registered() -> None:
+    """V1.0: 确保 runner 已注册。
+
+    CLI 通过 --runner-config 显式导入注册；run_all() 自动调用此函数，
+    尝试导入默认 runners_config（backend.evaluation.runners_config）。
+    """
+    global _runners_registered
+    if _runners_registered:
+        return
+    try:
+        import backend.evaluation.runners_config  # noqa: F401
+        _runners_registered = True
+    except ImportError:
+        pass  # 纯净框架允许 skip
+
+
 # ==================== 通用调度器 ====================
 
 def run_module(
@@ -171,6 +190,9 @@ def run_all(
     Returns:
         EvalReport: 包含所有模块的汇总和详细结果
     """
+    # V1.0: 自动触发 runner 注册（CLI 通过 _bootstrap_runners 注册，
+    # 但直接 import 调 run_all() 时不会，缺少这一步会全部走 skip）
+    _ensure_runners_registered()
     from backend.evaluation.dataset import load_dataset, load_dataset_file
 
     if dataset_file:
