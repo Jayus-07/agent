@@ -44,6 +44,9 @@ from backend.evaluation.models import (
 from backend.evaluation.metrics import (
     recall_at_k, mrr, ndcg_at_k, jaccard_similarity,
     exact_match, result_set_match,
+    # V1.0 新增
+    chunk_recall_at_k, p95_latency, reject_accuracy,
+    stability_variance, aggregate_metrics,
 )
 
 # 注册表
@@ -64,6 +67,15 @@ from backend.evaluation.judge import (
     set_llm_callable, JUDGE_SYSTEM_PROMPT,
 )
 
+# V1.0 重构新增
+from backend.evaluation.storage import (
+    persist_report, load_report, list_runs,
+    get_git_sha, get_dataset_version, make_run_id,
+)
+from backend.evaluation.baseline import (
+    promote, load as load_baseline, diff, check_regression,
+)
+
 __all__ = [
     # Models
     "TestCase", "EvalResult", "EvalReport", "ModuleSummary",
@@ -71,6 +83,8 @@ __all__ = [
     # Metrics
     "recall_at_k", "mrr", "ndcg_at_k", "jaccard_similarity",
     "exact_match", "result_set_match",
+    "chunk_recall_at_k", "p95_latency", "reject_accuracy",
+    "stability_variance", "aggregate_metrics",
     # Registry
     "register_runner", "get_runner", "list_registered",
     # Report
@@ -82,4 +96,9 @@ __all__ = [
     # Judge
     "JudgeResult", "judge_answer", "build_judge_prompt",
     "set_llm_callable", "JUDGE_SYSTEM_PROMPT",
+    # Storage (V1.0)
+    "persist_report", "load_report", "list_runs",
+    "get_git_sha", "get_dataset_version", "make_run_id",
+    # Baseline (V1.0)
+    "promote", "load_baseline", "diff", "check_regression",
 ]

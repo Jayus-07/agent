@@ -120,6 +120,92 @@
         "min_relevant_chunks": 1
       },
       "metadata": {"difficulty": "easy", "domain": "compliance"}
+    },
+    {
+      "id": "V2-R011",
+      "question": "退款审核时间是多少？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": ["售后流程.md", "平台合规规范.md"],
+        "relevant_snippets": ["审核", "时间"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "customer_service",
+        "source": "from_golden_v1",
+        "scenario": "after_sales",
+        "notes": "差评/退款跨域：测试 business_domain fallback"
+      }
+    },
+    {
+      "id": "V2-R012",
+      "question": "差评怎么处理？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": ["售后流程.md", "平台合规规范.md"],
+        "relevant_snippets": ["差评", "处理"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "customer_service",
+        "source": "from_golden_v1",
+        "scenario": "after_sales",
+        "notes": "纯 customer 域：售后流程应被命中"
+      }
+    },
+    {
+      "id": "V2-R013",
+      "question": "平台合规规范有哪些？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": ["平台合规规范.md"],
+        "relevant_snippets": ["合规", "规范"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "compliance",
+        "source": "from_golden_v1",
+        "scenario": "policy_query",
+        "notes": "严格 metadata 命中"
+      }
+    },
+    {
+      "id": "V2-R014",
+      "question": "如何优化 Listing？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "min_relevant_chunks": 0,
+        "expect_reject": true
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "product",
+        "source": "from_golden_v1",
+        "scenario": "out_of_scope",
+        "notes": "期望拒答：知识库无 Listing 优化文档"
+      }
+    },
+    {
+      "id": "V2-R015",
+      "question": "跨境电商差评处理的操作规范和流程",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": ["售后流程.md"],
+        "relevant_snippets": ["差评", "处理"],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "customer_service",
+        "source": "from_golden_v1",
+        "scenario": "after_sales",
+        "notes": "MultiQuery 改写场景：差评 → 售后服务"
+      }
     }
   ]
 }

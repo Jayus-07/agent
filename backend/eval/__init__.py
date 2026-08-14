@@ -1,18 +1,30 @@
 """
-eval 框架 — RAG 评测（2026-08-11 P1 Golden Dataset）
+⚠️  DEPRECATED — 已废弃（V1.0 重构 2026-08-14）
 
-使用:
-    python -m scripts.weekly_eval
+5 个 Golden Dataset 用例已迁移到 `backend/evaluation/datasets/rag_v2.json`（V2-R011 ~ V2-R015）。
+请使用统一框架:
+
+    # 新接口
+    cd backend && python -m evaluation --module rag --live
     # 或
-    from backend.eval import run_golden_eval
-    run_golden_eval("eval/golden_v1.json")
+    from backend.evaluation import run_all
+    report = run_all(module="rag", live=True)
+
+此文件保留 1 个 release 周期（2026-09-14 移除），仅做兼容 redirect。
+历史 SQLite 数据迁移到 PostgreSQL `eval_history` 表。
 """
 import json
 import os
 import sqlite3
 import time
+import warnings
 from pathlib import Path
 from typing import Any
+
+warnings.warn(
+    "backend.eval is deprecated, use backend.evaluation instead",
+    DeprecationWarning, stacklevel=2,
+)
 
 GOLDEN_DIR = Path(__file__).parent
 DEFAULT_DATASET = GOLDEN_DIR / "golden_v1.json"
