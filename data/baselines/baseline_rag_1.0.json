@@ -4,10 +4,10 @@
   "promoted_at": "2026-08-14",
   "pass_rate": 0.9459,
   "metrics": {
-    "recall@10": 0.9459,
-    "mrr": 0.9189,
     "chunk_recall": 0.9459,
     "ndcg@10": 0.926,
+    "mrr": 0.9189,
+    "recall@10": 0.9459,
     "recall@5": 0.9459
   },
   "total": 37,

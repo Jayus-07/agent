@@ -147,7 +147,7 @@ def persist_report(report: EvalReport) -> Path:
         encoding="utf-8",
     )
 
-    print(f"[storage] report persisted to: {run_dir}")
+    print(f"[storage] 报告已持久化到: {run_dir}")
     return run_dir
 
 

@@ -51,6 +51,7 @@ def promote(report: EvalReport, *, git_tag: bool = True) -> list[Path]:
         写入的 baseline 文件路径列表
     """
     from backend.evaluation.storage import get_dataset_version
+    from backend.evaluation.report import MODULE_LABELS
 
     BASELINE_ROOT.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
@@ -74,7 +75,8 @@ def promote(report: EvalReport, *, git_tag: bool = True) -> list[Path]:
             encoding="utf-8",
         )
         written.append(path)
-        print(f"[baseline] promoted: {path}")
+        mod_zh = MODULE_LABELS.get(summary.module, summary.module)
+        print(f"[baseline] {mod_zh} 已提升: {path}")
 
         # Git tag（仅当在 git 仓库中）
         if git_tag:
@@ -91,9 +93,9 @@ def _try_git_tag(module: str, version: str, date: str) -> None:
             ["git", "tag", tag_name],
             check=True, capture_output=True, text=True,
         )
-        print(f"[baseline] git tag created: {tag_name}")
+        print(f"[baseline] git tag 已创建: {tag_name}")
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        print(f"[baseline] git tag skipped: {e}")
+        print(f"[baseline] git tag 跳过: {e}")
 
 
 def load(module: str, dataset_version: str) -> dict[str, Any] | None:
@@ -129,22 +131,27 @@ def diff(
     errors: list[str] = []
     critical_metrics = critical_metrics or {}
 
+    # V1.0: 中文化标签
+    from backend.evaluation.report import METRIC_LABELS, MODULE_LABELS
+
     for summary in report.summaries:
         version = get_dataset_version(summary.module)
         base = load(summary.module, version)
         if base is None:
+            mod_zh = MODULE_LABELS.get(summary.module, summary.module)
             warnings.append(
-                f"�️  {summary.module}: no baseline (dataset_version={version}), "
-                f"skip regression check"
+                f"⚠️  {mod_zh}: 无 baseline（dataset_version={version}），跳过回归检查"
             )
             continue
+
+        mod_zh = MODULE_LABELS.get(summary.module, summary.module)
 
         # 1. pass_rate 检查（pass_rate 降幅 > threshold 即视为 critical error，
         #   因为 pass_rate 是综合质量的最直接信号）
         delta = summary.pass_rate - base["pass_rate"]
         if delta < -threshold:
             errors.append(
-                f"❌ {summary.module}.pass_rate: {base['pass_rate']:.2%} → "
+                f"❌ {mod_zh}.通过率: {base['pass_rate']:.2%} → "
                 f"{summary.pass_rate:.2%} (↓{abs(delta):.2%})"
             )
 
@@ -158,9 +165,10 @@ def diff(
             crit_threshold = crit.get(key, threshold)
             if delta < -crit_threshold:
                 severity = "error" if delta < -2 * crit_threshold else "warning"
+                label = METRIC_LABELS.get(key, key)
                 msg = (
                     f"{'❌' if severity == 'error' else '⚠️ '} "
-                    f"{summary.module}.{key}: {base_val:.4f} → "
+                    f"{mod_zh}.{label}: {base_val:.4f} → "
                     f"{cur_val:.4f} (↓{abs(delta):.4f})"
                 )
                 (errors if severity == "error" else warnings).append(msg)
@@ -182,23 +190,23 @@ def check_regression(
     warnings, errors = diff(report, threshold=threshold, critical_metrics=critical_metrics)
 
     print(f"\n{'='*60}")
-    print(f"  Baseline Regression Check (threshold={threshold:.0%})")
+    print(f"  基线回归检查 (阈值={threshold:.0%})")
     print(f"{'='*60}")
 
     if warnings:
-        print(f"\n⚠️  Warnings ({len(warnings)}):")
+        print(f"\n⚠️  警告 ({len(warnings)} 项):")
         for w in warnings:
             print(f"  {w}")
 
     if errors:
-        print(f"\n❌ Errors ({len(errors)}) — CI will fail:")
+        print(f"\n❌ 错误 ({len(errors)} 项) — CI 将失败:")
         for e in errors:
             print(f"  {e}")
         print(f"{'='*60}\n")
         return 2
 
     if not warnings:
-        print("\n✅ No regression detected — all metrics within threshold.")
+        print("\n✅ 未检测到回归 — 所有指标在阈值范围内。")
     print(f"{'='*60}\n")
     return 0
 

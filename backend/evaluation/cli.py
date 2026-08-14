@@ -2,8 +2,9 @@
 
 可移植性：此文件零项目依赖。通过 --runner-config 或默认导入 runners_config
 来注册项目特定的 runner。复制到新项目后无需修改此文件。
-"""
 
+V1.0: 中文化 verbose 输出 + compare 输出。
+"""
 import argparse
 import importlib
 import sys
@@ -38,8 +39,8 @@ def _bootstrap_runners(config_module: str | None = None):
         importlib.import_module(module_name)
     except ImportError:
         if config_module:
-            print(f"⚠️  Runner config module not found: {config_module}")
-            print("   No runners registered. All modules will return 'skip'.")
+            print(f"⚠️  未找到 Runner 配置模块: {config_module}")
+            print("   没有注册任何 runner，所有模块将返回 'skip'。")
 
 
 def main():
@@ -50,7 +51,7 @@ def main():
     parser.add_argument(
         "module", nargs="?", default="all",
         choices=["all", "planner", "rag", "sql", "e2e"],
-        help="评估模块 (default: all)",
+        help="评估模块 (默认: all)",
     )
     parser.add_argument(
         "--smoke", action="store_true",
@@ -78,7 +79,7 @@ def main():
     )
     parser.add_argument(
         "--runner-config", type=str, default=None, metavar="MODULE",
-        help="自定义 runner 注册模块 (e.g. myproject.eval_runners)",
+        help="自定义 runner 注册模块 (例如 myproject.eval_runners)",
     )
     parser.add_argument(
         "--dataset", type=str, default=None, metavar="FILE",
@@ -93,7 +94,7 @@ def main():
     live = args.live or args.judge
 
     if not live:
-        print("⚠️  离线模式（--no-live），Planner/SQL/E2E 将跳过。使用 --live 获取真实评估。")
+        print("⚠️  离线模式（未启用 --live），Planner/SQL/E2E 将跳过。使用 --live 获取真实评估。")
 
     report = run_all(
         module=args.module,
@@ -117,15 +118,10 @@ def main():
         from backend.evaluation.storage import persist_report
         persist_report(report)
     except Exception as e:  # noqa: BLE001
-        print(f"⚠️  V1.0 persist_report failed: {e}")
+        print(f"⚠️  V1.0 persist_report 失败: {e}")
 
     if args.verbose:
-        print("\n--- Detailed Results ---")
-        for r in report.results:
-            icon = {"pass": "✓", "fail": "✗", "error": "⚠", "skip": "○"}.get(r.status, "?")
-            print(f"  {icon} {r.case_id} [{r.status}] {r.metrics}")
-            if r.error_msg:
-                print(f"     error: {r.error_msg}")
+        _print_verbose(report)
 
     if args.compare:
         _do_compare(args.compare, report, RESULTS_DIR, current_dir=output_dir)
@@ -135,10 +131,24 @@ def main():
     sys.exit(1 if has_failures and not args.smoke else 0)
 
 
-def _do_compare(compare_id: str, current: "EvalReport", results_dir: Path, current_dir: Path | None = None):
-    """加载最近的历史 JSON 报告，反序列化为 EvalReport 后对比指标 + 标记下降。"""
+def _print_verbose(report) -> None:
+    """verbose 模式：逐 case 输出（中文标签）。"""
+    from backend.evaluation.report import METRIC_LABELS, STATUS_LABELS, STATUS_ICONS
+    print("\n--- 详细结果 ---")
+    for r in report.results:
+        icon = STATUS_ICONS.get(r.status, "?")
+        status_zh = STATUS_LABELS.get(r.status, r.status)
+        zh_metrics = {METRIC_LABELS.get(k, k): v for k, v in r.metrics.items()}
+        print(f"  {icon} {r.case_id} [{status_zh}] {zh_metrics}")
+        if r.error_msg:
+            print(f"     错误: {r.error_msg}")
+
+
+def _do_compare(compare_id: str, current, results_dir: Path, current_dir: Path | None = None):
+    """加载最近的历史 JSON 报告，反序列化为 EvalReport 后对比指标 + 标记下降（中文）。"""
     import json
     from backend.evaluation.models import EvalReport as _EvalReport
+    from backend.evaluation.report import METRIC_LABELS, MODULE_LABELS
 
     # 找最近的 JSON 报告（write_json_report 存档的，递归查找）
     json_files = sorted(
@@ -153,7 +163,7 @@ def _do_compare(compare_id: str, current: "EvalReport", results_dir: Path, curre
             if p.parent != current_dir and current_dir not in p.parents
         ]
     if not json_files:
-        print("\nNo previous JSON report to compare.")
+        print("\n未找到可对比的历史 JSON 报告。")
         return
 
     prev_file = json_files[0]
@@ -161,25 +171,27 @@ def _do_compare(compare_id: str, current: "EvalReport", results_dir: Path, curre
         prev_dict = json.load(f)
     base = _EvalReport.model_validate(prev_dict)
 
-    print(f"\n=== Baseline Compare: {prev_file.name} ===")
+    print(f"\n=== 基线对比: {prev_file.name} ===")
 
-    # 逐模块打印对比（输出格式与历史一致，便于人工 review）
+    # 逐模块打印对比（中文）
     base_by_mod = {s.module: s for s in base.summaries}
     for cur_s in current.summaries:
         prev_s = base_by_mod.get(cur_s.module)
         if prev_s is None:
             continue
+        mod_zh = MODULE_LABELS.get(cur_s.module, cur_s.module)
         pass_delta = cur_s.pass_rate - prev_s.pass_rate
         pass_flag = "  ⚠️ 下降" if pass_delta < -0.05 else ""
-        print(f"\n[{cur_s.module.upper()}]  pass_rate: {prev_s.pass_rate:.1%} → "
+        print(f"\n[{mod_zh}]  通过率: {prev_s.pass_rate:.1%} → "
               f"{cur_s.pass_rate:.1%} ({pass_delta:+.1%}){pass_flag}")
         for key, cur_val in cur_s.metrics.items():
             base_val = prev_s.metrics.get(key)
             if base_val is None:
                 continue
             delta = cur_val - base_val
+            label = METRIC_LABELS.get(key, key)
             flag = "  ⚠️ 下降" if delta < -0.05 else ""
-            print(f"  {key}: {base_val:.4f} → {cur_val:.4f} ({delta:+.4f}){flag}")
+            print(f"  {label}: {base_val:.4f} → {cur_val:.4f} ({delta:+.4f}){flag}")
 
     # 统一回归判断走 flag_regressions（消除重复实现，单一阈值源）
     warnings = flag_regressions(base=base, current=current)
