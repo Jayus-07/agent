@@ -41,7 +41,9 @@ class ExcelParser(BaseDocumentParser):
                     continue
 
                 section = DocumentNode(type="section", text=sheet_name, level=1)
-                table_text = "\n".join(", ".join(r) for r in rows)
+                # V1.1: 用 NL + CSV 双格式，让 CrossEncoder rerank 能识别表格语义
+                from backend.rag.preprocessing.parser._table_nl import make_table_chunk_text
+                table_text = make_table_chunk_text(rows, section_title=sheet_name)
                 table_node = DocumentNode(type="table", text=table_text, rows=rows)
                 section.children.append(table_node)
                 root.children.append(section)

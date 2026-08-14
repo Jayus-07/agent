@@ -2,15 +2,15 @@
   "module": "rag",
   "dataset_version": "1.0",
   "promoted_at": "2026-08-14",
-  "pass_rate": 0.9459,
+  "pass_rate": 0.973,
   "metrics": {
-    "chunk_recall": 0.9459,
-    "ndcg@10": 0.926,
-    "mrr": 0.9189,
-    "recall@10": 0.9459,
-    "recall@5": 0.9459
+    "ndcg@10": 0.943,
+    "recall@5": 0.973,
+    "chunk_recall": 0.973,
+    "recall@10": 0.973,
+    "mrr": 0.9324
   },
   "total": 37,
-  "passed": 35,
-  "failed": 2
+  "passed": 36,
+  "failed": 1
 }

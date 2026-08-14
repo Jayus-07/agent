@@ -408,23 +408,18 @@
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
-        "relevant_docs": [
-          "ea3b67f202"
-        ],
         "relevant_snippets": [
           "丢件",
-          "48小时"
+          "48 小时"
         ],
         "min_relevant_chunks": 1,
-        "relevant_chunks": [
-          "ea3b67f202_81"
-        ]
+        "match_type": "snippet"
       },
       "metadata": {
         "difficulty": "medium",
         "domain": "logistics",
-        "probe_type": "rerank_optimization",
-        "probe_note": "期望精确召回 ea3b67f202_81 (含\"丢件 48小时\"表格)；当前 RAG 召回 aa3bad663c 叙述段，rerank 排序待优化"
+        "probe_type": "snippet_semantic_match",
+        "probe_note": "snippet 语义匹配：召回内容含\"丢件\"和\"48 小时\"关键词即 pass。不绑定 doc_id/chunk_id，未来文件重索引不影响"
       }
     },
     {

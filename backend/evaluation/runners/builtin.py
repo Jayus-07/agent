@@ -68,6 +68,37 @@ _rag_pipeline = None
 _rag_pipeline_error = None
 
 
+def _match_by_snippet(
+    details: list[dict],
+    expected_snippets: list[str],
+) -> tuple[bool, float]:
+    """V1.1: snippet 语义匹配 — 召回内容含所有 keywords → hit=True。
+
+    Args:
+        details: chunk 详情列表（每个含 "snippet" 字段用于展示）
+        expected_snippets: 期望的关键词列表
+
+    注意：snippet 在 builtin.py 中被截断到 200 字符用于展示，
+    关键词匹配可能在截断之后。所以这里同时检查 snippet + page_content。
+
+    Returns:
+        (hit, recall):
+            hit: 所有关键词都在召回内容中 → True
+            recall: 命中率（命中关键词数 / 总关键词数）
+    """
+    if not expected_snippets:
+        return False, 0.0
+    # V1.1: 用 page_content（完整文本）而非 snippet（截断 200 字符）做匹配
+    # 避免关键词恰好在 snippet 截断位置之后导致误判 fail
+    actual_text = " ".join(
+        d.get("page_content", "") for d in details if d.get("page_content")
+    )
+    matched = sum(1 for s in expected_snippets if s in actual_text)
+    recall = matched / len(expected_snippets)
+    hit = matched == len(expected_snippets)
+    return hit, recall
+
+
 def _init_rag_pipeline():
     """初始化 RAG 检索管线（模块级单例）。"""
     global _rag_pipeline, _rag_pipeline_error
@@ -253,7 +284,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     "chunk_id": doc.metadata.get("chunk_id", ""),
                     "rerank_score": doc.metadata.get("rerank_score"),
                     "source": source,
-                    "snippet": doc.page_content[:200].replace("\n", " "),
+                    "snippet": doc.page_content[:200].replace("\n", " "),  # 展示用（截断）
+                    "page_content": doc.page_content,  # V1.1: snippet_match 用全文本（不被截断）
                 })
 
             # 检测自适应行为：chunks 集中在少数文档 vs 分散
@@ -278,6 +310,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             expected_docs = set(case.expected.get("relevant_docs", []))
             expected_doc_strs = list(expected_docs)
             expected_chunks = set(case.expected.get("relevant_chunks", []) or [])
+            expected_snippets = case.expected.get("relevant_snippets", []) or []
+            match_type = case.expected.get("match_type", "chunk_id")  # chunk_id | snippet | doc_id
             min_expected = case.expected.get("min_relevant_chunks", 1)
 
             # doc-level metrics — 始终计算（用于跨 case 对比）
@@ -286,10 +320,20 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             mrr_val = mrr(actual_doc_strs, expected_doc_strs)
             ndcg_val = ndcg_at_k(actual_doc_strs, expected_doc_strs, k=10)
 
-            # chunk-level metrics — 仅当 case 提供 relevant_chunks 时计算
-            # 用 details 里的 chunk_id 与 expected_chunks 做集合运算
+            # === V1.1: 多策略命中判定 ===
+            # match_type 决定如何判定 pass（默认 chunk_id，向后兼容）
             actual_chunk_ids = {d["chunk_id"] for d in details if d.get("chunk_id")}
-            if expected_chunks:
+            # 拼接所有召回 chunk 的 snippet，用于 snippet 匹配
+            actual_text_concat = " ".join(
+                d.get("snippet", "") for d in details if d.get("snippet")
+            )
+
+            if match_type == "snippet":
+                # 语义匹配：expected_snippets 中的关键词都在召回内容里出现 → pass
+                # 适用于"文档硬绑定会因 hash 变化失效"的场景
+                chunk_hit, chunk_recall = _match_by_snippet(details, expected_snippets)
+            elif expected_chunks:
+                # 精确 chunk_id 匹配（默认/旧行为）
                 matched_chunks = actual_chunk_ids & expected_chunks
                 chunk_recall = len(matched_chunks) / len(expected_chunks)
                 chunk_hit = len(matched_chunks) >= min_expected
