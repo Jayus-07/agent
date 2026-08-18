@@ -218,3 +218,66 @@ ls data/rag_eval/  # 应该有 report.json
 - `RAG_DESIGN.md §6` — Faithfulness 设计（已 2026-08-15 更新）
 
 **更新日期**: 2026-08-15
+
+---
+
+## 9. 变更日志（2026-08-18）
+
+### 9.1 报告增强：trace 过程数据完整呈现
+
+旧 Markdown 只输出"指标表 + 失败/错误详情"，看不出"为什么 pass / 为什么排序靠后"。
+
+新格式在 `## 过程详情（每条用例）` 章节展开：
+
+| 子节 | 内容 |
+|---|---|
+| 标题 + 元信息 | 问题 / KB / 指标 / 总耗时 / 错误 |
+| Pipeline 概览 | Stage1 召回数 / Stage2 chunk 数 / fallback 警告 / Adaptive 决策 |
+| Trace Span 树 | 每条 span 的 type / status / duration_ms / metrics 摘要 |
+| Span 详情 | 关键 span（retrieval / rerank / evidence_gate）的 input/output + events 流 |
+| 召回证据 Top-5 | doc_id / chunk_id / rerank_score / snippet |
+| 期望 vs 实际 | 期望文档、实际召回、命中 ✅ / 未命中 ❌ 判定 |
+
+**为什么重要**：发现"召回对了但排序差" / "rerank 分数异常" / "KB 触发 fallback" 这类隐性故障，无需跑全量重做。
+
+### 9.2 Qwen 接入通道
+
+`backend/config/llm.py` 已注册 `qwen2.5:3b`（Ollama 本地）。配置入口：
+
+```bash
+# .env 设置 OLLAMA_BASE_URL（默认 http://localhost:11434）
+# 切换模型
+curl -X POST http://localhost:8000/llm/switch -d '{"model":"qwen2.5:3b"}'
+```
+
+**注意**：评测主调用链（Planner/Generator/Judge）默认仍走 DeepSeek（`LLM_MODEL=deepseek-v4-flash`），Qwen 接入通道备用。
+
+### 9.3 RAG 上传链路加固
+
+| 修复 | 内容 |
+|---|---|
+| **P0-1** | 清理 `tmpnl*_测评上传入库_*.md` GBK 乱码残留（已通过 `backend/scripts/cleanup_tmpnl_residuals.py` 永久清理） |
+| **P0-2** | MIME 白名单收紧：客户端显式 `application/octet-stream` 必须拒绝（防扩展名伪装） |
+| **P1-2** | 同文件并发上传加跨平台文件锁（Windows msvcrt / POSIX fcntl），避免同 doc_id 写两次到向量库 |
+| **P1-3** | SSE 队列内存泄漏修复：`_run_index_background` 完成时主动 `pop`，即使客户端没订阅 SSE 也能清理 |
+| **P1-4** | `ChunkingEmptyError` 新异常：扫描件 PDF / 纯图片 / 结构损坏 → SSE 推 error + 保留源文件供排查 |
+| **P2-2 / P2-3** | `reindex_file` 不再反查 SQLite + 不再访问 `registry._lock/_conn()` 私有字段，改用 `bump_doc_version()` 公开方法 |
+| **P1-5** | BM25 增量同步已实现（`bm25_store.add_documents`）— 之前的 review 误判为缺失 |
+
+### 9.4 数据集变更
+
+`backend/evaluation/datasets/rag.json` → `rag.v1.deprecated.json`（重命名 + 加 `_DEPRECATED` 标记）。原因是 `KD0001` 等虚拟 doc_id 与实际 doc_db UUID 协议不匹配。
+
+当前默认加载顺序：`rag_v2.json`（policy_general KB 真实文档）优先 → 缺则回退 `rag.json`（已失效）。
+
+### 9.5 日志编码修复
+
+`backend/shared/logger.py`：
+
+- console handler 强制 UTF-8（无论 `sys.stdout` 编码是什么），修复 Windows GBK 环境下中文乱码 + 静默丢失
+- `ObservableLogger` 子类化替代 monkey-patch（不污染全局 `logging`）
+- `handleError` 可观测：出错时把 record + traceback 写到 stderr，而不是默认吞掉
+
+### 9.6 清理脚本
+
+新增 `backend/scripts/cleanup_tmpnl_residuals.py`：幂等删除 GBK 残留 + ChromaDB + chunk_store + registry。

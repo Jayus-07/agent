@@ -68,6 +68,10 @@ _rag_pipeline = None
 _rag_pipeline_error = None
 
 
+# safe_jsonable 已迁到 backend.shared.jsonable,这里保留别名供向后兼容
+from backend.shared.jsonable import safe_jsonable as _safe_jsonable  # noqa: F401
+
+
 def _match_by_snippet(
     details: list[dict],
     expected_snippets: list[str],
@@ -266,6 +270,30 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 except Exception:
                     logger.debug("trace end failed for %s", case.id, exc_info=True)
 
+            # === 捕获 trace spans 作为过程证据 ===
+            # RAG 链路在 invoke() 期间由 AdaptiveRetriever / RerankCompressor 等
+            # 内部组件自动埋 span（retrieval / rerank / evidence_gate_*）。
+            # 这里把每个 span 的 name/type/duration_ms/metrics/input/output
+            # 序列化进 actual.trace，供 Markdown 报告完整展开。
+            trace_spans = []
+            for sp in (trace.spans or []):
+                trace_spans.append({
+                    "span_id": sp.span_id,
+                    "parent_id": sp.parent_id,
+                    "name": sp.name,
+                    "type": sp.type,
+                    "kind": sp.kind,
+                    "status": sp.status,
+                    "duration_ms": sp.duration_ms,
+                    "sequence": sp.sequence,
+                    "metrics": dict(sp.metrics or {}),
+                    "input": _safe_jsonable(sp.input),
+                    "output": _safe_jsonable(sp.output),
+                    "events": list(sp.events or []),
+                    "errors": list(sp.errors or []),
+                })
+            total_trace_ms = sum(s["duration_ms"] for s in trace_spans)
+
             # === 组装详细检索轨迹 ===
             actual_doc_strs = []
             seen = set()
@@ -356,6 +384,13 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     "retrieved_docs": actual_doc_strs[:10],
                     "details": details,
                     "pipeline": pipeline_info,
+                    # 过程证据：本次用例在 RAG 链路中产生的全部 span
+                    "trace": {
+                        "trace_id": trace.id,
+                        "total_spans": len(trace_spans),
+                        "total_trace_ms": total_trace_ms,
+                        "spans": trace_spans,
+                    },
                 },
                 metrics={
                     "recall@5": round(r5, 4),

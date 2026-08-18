@@ -1,5 +1,5 @@
 """RAG 上传路由 — PR-2.x 从 rag.py 抽出。"""
-import asyncio, os, uuid, time
+import asyncio, os, sys, uuid, time
 from asyncio import Queue
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
@@ -20,6 +20,138 @@ from backend.shared.logger import logger
 router = APIRouter()
 
 
+# ============ 文件锁（P1-2 防止同文件并发 race condition）============
+# 背景:_do_index_sync 在线程池跑,duplicate 检测和 reindex 流程不是原子的。
+# 两个并发请求同时上传同一文件可能都通过 duplicate 检测,然后都走到 _index_file,
+# 导致同 doc_id 被写两次到向量库（rerank 阶段被同 chunk 命中两次,稀释 mrr）。
+#
+# 修法:Windows 用 msvcrt.locking,Linux/macOS 用 fcntl.flock。
+# 用非阻塞锁 — 第二个请求立即抛 FileLockedByOtherError,而不是阻塞等待。
+# 阻塞等待会让前端 SSE 超时,而且浪费资源。
+class FileLockedByOtherError(Exception):
+    """同文件正在被另一个请求处理,当前请求拒绝（避免双写向量库）。"""
+
+
+def acquire_index_lock(filepath: str) -> int:
+    """对 filepath 加非阻塞排他锁(用 .lockfile 原子创建方案)。
+
+    Args:
+        filepath: 文件绝对路径。
+
+    Returns:
+        文件描述符 fd(指向 .lock 文件)。调用方负责 release_index_lock(fd, filepath)。
+        实际为兼容性返回 fd,但调用方必须同时传 filepath 给 release。
+
+    Raises:
+        FileLockedByOtherError: 文件已被另一个请求加锁。
+
+    设计:
+      - 用 sidecar `.lock` 文件 + O_CREAT | O_EXCL 实现原子互斥
+      - 跨平台、纯标准库,无需 pywin32/fcntl
+      - 跨进程安全(O_EXCL 是 atomic on most filesystems)
+      - 跨线程安全(同一进程内 fd 唯一)
+    """
+    lock_path = filepath + ".lock"
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        payload = f"{os.getpid()}\n{time.time()}\n".encode()
+        try:
+            os.write(fd, payload)
+        except OSError:
+            pass  # 写入失败不影响锁本身
+        return fd
+    except FileExistsError as e:
+        holder_pid = None
+        try:
+            with open(lock_path, "r", encoding="utf-8", errors="replace") as f:
+                holder_pid = f.readline().strip() or None
+        except OSError:
+            pass
+        raise FileLockedByOtherError(
+            f"文件 {filepath} 正在被另一个上传请求处理（holder_pid={holder_pid}）"
+        ) from e
+
+
+def release_index_lock(fd: int, filepath: str = "") -> None:
+    """释放 acquire_index_lock 获取的锁 + 关闭 fd。
+
+    设计:fd 指向 .lock 文件,关闭 fd 后 unlink .lock 文件(用 filepath 推导)。
+    安全:
+      - 重复 release / fd=-1 / filepath 空 都不抛异常
+      - unlink 失败 swallow(可能在另一进程已被删)
+    """
+    if fd < 0:
+        return
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    if filepath:
+        lock_path = filepath + ".lock"
+        try:
+            os.unlink(lock_path)
+        except OSError:
+            pass
+
+
+# ============ MIME 白名单（P0-2 收紧）============
+# 设计要点：
+#   1. octet-stream 仅作为 content_type 为空时的兜底（curl 命令行场景）；
+#      客户端显式声明 octet-stream 必须拒绝，防止 "MD 文件实际是二进制" 这类
+#      GBK 编码写入问题再次出现（P0-1 根因）。
+#   2. PDF 不接受 octet-stream（PDF 是二进制格式，octet-stream 兜底没意义）。
+#   3. 模块级常量，方便纯函数 import 测试。
+ALLOWED_MIME_TYPES: dict[str, set[str]] = {
+    "pdf":  {"application/pdf"},
+    "md":   {"text/markdown", "text/plain", "application/octet-stream"},
+    "txt":  {"text/plain", "application/octet-stream"},
+    "docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+             "application/octet-stream"},
+}
+
+SUPPORTED_EXTS: frozenset[str] = frozenset(ALLOWED_MIME_TYPES.keys())
+
+
+def _validate_mime(ext: str, content_type: str | None) -> tuple[bool, str]:
+    """校验 MIME 与扩展名一致性（纯函数）。
+
+    Args:
+        ext: 文件扩展名（小写，无点），如 "md" / "pdf"。
+        content_type: HTTP 声明的 Content-Type（含 charset 后缀也 OK），可能为 None/""。
+
+    Returns:
+        (ok, error_msg) — ok=True 时 error_msg 为空字符串。
+
+    规则:
+      - ext 不在 SUPPORTED_EXTS → 拒（unsupported ext）
+      - content_type 为 None / "" → 通过（走 magic 校验兜底）
+      - 显式 content_type（去 charset 后）必须在 ALLOWED_MIME_TYPES[ext] 内
+        显式声明 application/octet-stream 必须拒绝（P0-2 收紧）
+    """
+    if ext not in SUPPORTED_EXTS:
+        return False, f"unsupported ext: .{ext}"
+    if not content_type or not content_type.strip():
+        # content_type 为空（curl 命令行等场景）→ 走 magic 校验兜底
+        return True, ""
+    # strip charset 参数（如 "text/plain; charset=utf-8" → "text/plain"）
+    ctype = content_type.split(";", 1)[0].strip().lower()
+    if not ctype:
+        return True, ""
+    # P0-2 收紧：客户端显式声明 application/octet-stream 必须拒绝。
+    # 原因：octet-stream 兜底仅在 content_type 为空时生效（curl/某些 SDK 默认场景），
+    # 一旦客户端声明了 octet-stream，多半是扩展名伪装（如 MD 实际是二进制），
+    # 必须走 magic 校验后端兜底，而不是 MIME 层面放行。
+    # 历史教训：P0-1 GBK 乱码文件就是通过 octet-stream 蒙混进 doc_db 的。
+    if ctype == "application/octet-stream":
+        return False, (
+            f"explicit application/octet-stream not allowed for .{ext}; "
+            f"客户端必须声明具体 MIME（如 text/markdown / application/pdf）"
+        )
+    if ctype not in ALLOWED_MIME_TYPES[ext]:
+        return False, f"MIME type not allowed for .{ext}: {ctype}"
+    return True, ""
+
+
 @router.post("/upload")
 async def upload_document(request: Request, file: UploadFile = File(...),
                           kb_id: str = Form("policy_general"),
@@ -35,20 +167,9 @@ async def upload_document(request: Request, file: UploadFile = File(...),
     )
 
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
-    if ext not in ("pdf", "md", "txt", "docx"):
-        return {"ok": False, "error": f"ext not allowed: .{ext}"}
-
-    # MIME type 二次校验，防止扩展名伪装（如 .md 文件实际是二进制）
-    _ALLOWED_MIME = {
-        "pdf":  {"application/pdf"},
-        "md":   {"text/markdown", "text/plain", "application/octet-stream"},
-        "txt":  {"text/plain", "application/octet-stream"},
-        "docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                  "application/octet-stream"},
-    }
-    content_type = (file.content_type or "").lower().split(";")[0].strip()
-    if content_type and content_type not in _ALLOWED_MIME.get(ext, set()):
-        return {"ok": False, "error": f"MIME type not allowed for .{ext}: {content_type}"}
+    ok, err = _validate_mime(ext, file.content_type)
+    if not ok:
+        return {"ok": False, "error": err}
 
     max_size = RAG_MAX_FILE_SIZE * 1024 * 1024
     cl = request.headers.get("content-length")
@@ -72,6 +193,7 @@ async def upload_document(request: Request, file: UploadFile = File(...),
         result["upload_id"], result["filepath"], result["filename"],
         result["source"], result["batch_id"], kb_id=kb_id, department=department,
         upload_elapsed_ms=result.get("upload_elapsed_ms"),
+        was_overwrite=result.get("was_overwrite", False),  # P0-X
     ))
     return {"ok": True, "upload_id": result["upload_id"], "filename": result["filename"]}
 
@@ -118,6 +240,11 @@ async def sync_upload_impl(
             return {"ok": False, "error": "invalid path"}
     except ValueError:
         return {"ok": False, "error": "invalid path"}
+
+    # P0-X: 检测是否覆盖已存在的同名文件 — 决定 cleanup 策略
+    # 覆盖场景下 _cleanup_failed_upload 必须保留源文件,
+    # 因为 atomic rename 已经覆盖,删除会丢用户原文件。
+    was_overwrite = os.path.isfile(final_path)
 
     ext = safe_name.rsplit(".", 1)[-1].lower()
     upload_id = uuid.uuid4().hex[:12]
@@ -203,6 +330,7 @@ async def sync_upload_impl(
             "source": _extract_source(request),
             "batch_id": request.headers.get("X-Batch-Id") or None,
             "upload_elapsed_ms": int((time.time() - _upload_t0_sync) * 1000),
+            "was_overwrite": was_overwrite,  # P0-X: 传给 _run_index_background 决定 cleanup 策略
         }
     except Exception as e:
         if os.path.exists(tmp_path):
@@ -213,9 +341,44 @@ async def sync_upload_impl(
         return {"ok": False, "error": f"upload failed: {type(e).__name__}: {e}"}
 
 
-async def _cleanup_failed_upload(filepath: str) -> None:
-    """索引失败后删除已落盘文件，避免孤儿文档被后续扫描重新索引。"""
+async def _finalize_upload_queue(upload_id: str) -> None:
+    """P1-3：向队列放 None 哨兵（让 SSE 流结束）+ 主动从 _progress_queues 弹出。
+
+    三处分支（失败 / duplicate / 成功）的统一收尾。
+    之前的实现只在 SSE 断连时 pop（line 608）,如果客户端没订阅 SSE,队列残留,
+    后台索引完成后 queue 里堆积的事件 + queue 字典条目都泄漏。
+    现在后台任务自己负责清理,双重 pop 幂等安全。
+    """
+    queue = _progress_queues.get(upload_id)
+    if queue is not None:
+        try:
+            await queue.put(None)
+        except Exception as put_err:
+            logger.warning(f"[RAG] queue.put(None) 失败 ({upload_id}): {put_err}")
+    # 主动 pop — 如果 SSE 已经断连并 pop 过,这里 pop 返回 None,无副作用
+    _progress_queues.pop(upload_id, None)
+
+
+async def _cleanup_failed_upload(filepath: str, was_overwrite: bool = False) -> None:
+    """索引失败后删除已落盘文件，避免孤儿文档被后续扫描重新索引。
+
+    Args:
+        filepath: 上传后落盘的目标路径。
+        was_overwrite: True 表示这次上传是覆盖现有同名文件,P0-X:不删原文件
+            (因为原文件可能正是用户宝贵的生产数据,且已被 atomic rename 覆盖,
+            删除会让用户失去旧版本)。False(新上传副本)才安全删除。
+
+    P0-X 修复:
+      旧实现无条件 os.remove(filepath),当用户上传同名文件覆盖源文件时,
+      sync 失败会物理删除源文件,造成不可逆数据丢失。
+    """
     if not filepath:
+        return
+    if was_overwrite:
+        logger.warning(
+            f"[RAG] 跳过清理: {filepath} 是覆盖场景,源文件不删 "
+            f"(索引失败但保留文件供排查/重试)"
+        )
         return
     try:
         if os.path.isfile(filepath):
@@ -225,16 +388,18 @@ async def _cleanup_failed_upload(filepath: str) -> None:
         logger.warning(f"[RAG] 索引失败文件清理失败 {filepath}: {exc}")
 
 
-async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general", upload_elapsed_ms: int | None = None):
+async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general", upload_elapsed_ms: int | None = None, was_overwrite: bool = False):
     """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志。
 
     upload_elapsed_ms: sync_upload_impl 实测的 HTTP 上传耗时（POST + 写文件 + atomic rename）。
     终态用此值填 stage_elapsed["uploading"]，避免被减法逻辑吞掉为 0。
     total_ms 改为 upload_elapsed_ms + 后台索引耗时（端到端总耗时）。
+
+    was_overwrite: P0-X 上传是否覆盖了已有同名文件。True 时 cleanup 不能删源文件。
     """
     queue = _progress_queues.get(upload_id)
     if queue is None:
-        await _cleanup_failed_upload(filepath)
+        await _cleanup_failed_upload(filepath, was_overwrite=was_overwrite)
         return
 
     async def emit(stage: str, message: str = "", **extra):
@@ -250,12 +415,22 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
         result = await loop.run_in_executor(None, _do_index_sync, upload_id, filepath, filename, loop, kb_id, department)
     except Exception as e:
         logger.error(f"[RAG] 后台索引失败: {e}")
-        await _cleanup_failed_upload(filepath)
-        await emit("error", str(e))
-        await queue.put(None)
-        _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
-                     result="failed", duration_ms=int((time.time() - _upload_t0) * 1000) + (upload_elapsed_ms or 0),
-                     detail={"error": str(e)[:200]})
+        # P1-4:ChunkingEmptyError 是业务失败(扫描件/结构损坏),保留源文件供排查;
+        #      其它异常按孤儿文件处理逻辑清理
+        from backend.rag.indexing.indexer import ChunkingEmptyError
+        if isinstance(e, ChunkingEmptyError):
+            await emit("error", f"索引失败:{e}（源文件已保留,请检查文档内容或解析器兼容性）",
+                       error_type="chunking_empty", recoverable=True)
+            _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
+                         result="failed", duration_ms=int((time.time() - _upload_t0) * 1000) + (upload_elapsed_ms or 0),
+                         detail={"error": str(e)[:200], "error_type": "chunking_empty"})
+        else:
+            await _cleanup_failed_upload(filepath, was_overwrite=was_overwrite)
+            await emit("error", str(e))
+            _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
+                         result="failed", duration_ms=int((time.time() - _upload_t0) * 1000) + (upload_elapsed_ms or 0),
+                         detail={"error": str(e)[:200]})
+        await _finalize_upload_queue(upload_id)
         return
 
     terminal = (result or {}).get("terminal", "done")
@@ -270,7 +445,7 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
         total_ms = (upload_elapsed_ms or 0) + int((time.time() - _upload_t0) * 1000)
         await emit("duplicate", "文件已存在，未重复索引",
                    doc=duplicate_doc, trace_id="", stage_elapsed=stage_elapsed, total_ms=total_ms)
-        await queue.put(None)
+        await _finalize_upload_queue(upload_id)
         _safe_log_op(
             duplicate_doc.get("doc_id", ""), filename, "upload", source,
             trace_id="", batch_id=batch_id, result="duplicate",
@@ -307,7 +482,7 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
         await emit("done", "索引完成（文档信息获取失败）")
         logger.warning(f"[RAG] 获取入库文档信息失败: {e}")
     finally:
-        await queue.put(None)
+        await _finalize_upload_queue(upload_id)
 
     _safe_log_op(
         (new_doc or {}).get("doc_id", ""), filename, "upload", source,
@@ -350,63 +525,68 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
         # 主 loop 在另一个线程，必须用 run_coroutine_threadsafe（不能 asyncio.get_event_loop()）
         asyncio.run_coroutine_threadsafe(queue.put(evt), main_loop)
 
+    # P1-2:同文件并发上传加文件锁,避免 race condition
+    # 两个并发请求可能都通过下面的 duplicate 检测,然后都走到 _index_file,
+    # 导致同 doc_id 写两次到向量库。这里在入口加非阻塞锁,
+    # 第二个请求立即抛 FileLockedByOtherError(不让它阻塞 SSE)。
+    index_lock_fd = acquire_index_lock(filepath)
     try:
-        reg = _get_registry()
-
-        # duplicate 检测：文件已索引且 SHA256 未变 → 跳过索引，emit duplicate stage
-        # （reindex_file 不做 hash 比对，会直接重灌，所以这里必须先拦）
-        existing = reg.get_by_path(filepath)
-        # 文件大小用于 uploading 阶段的真实耗时（duplicate 也附带便于前端展示）
+        # === 原 _do_index_locked_body 内容内联到这里 ——
+        # 必须在本函数作用域内,否则 line 604 的 DOCS_DIRECTORY 找不到
         try:
-            _file_size = os.path.getsize(filepath)
-        except OSError:
-            _file_size = 0
-        if existing and existing.get("status") == "active":
-            with open(filepath, "rb") as f:
-                file_hash = hashlib.sha256(f.read()).hexdigest()
-            if existing.get("file_hash") == file_hash:
-                logger.info(f"[RAG] 文件未变化，跳过索引: {filename}")
-                return {
-                    "trace_id": "",
-                    "duplicate": True,
-                    "terminal": "duplicate",
-                    "doc": {**existing, "duplicate": True},
-                    "stage_elapsed": {"uploading": int((time.time() - _upload_t0_sync) * 1000)},
-                }
+            reg = _get_registry()
+
+            existing = reg.get_by_path(filepath)
+            try:
+                _file_size = os.path.getsize(filepath)
+            except OSError:
+                _file_size = 0
+            if existing and existing.get("status") == "active":
+                with open(filepath, "rb") as f:
+                    file_hash = hashlib.sha256(f.read()).hexdigest()
+                if existing.get("file_hash") == file_hash:
+                    logger.info(f"[RAG] 文件未变化，跳过索引: {filename}")
+                    return {
+                        "trace_id": "",
+                        "duplicate": True,
+                        "terminal": "duplicate",
+                        "doc": {**existing, "duplicate": True},
+                        "stage_elapsed": {"uploading": int((time.time() - _upload_t0_sync) * 1000)},
+                    }
+                else:
+                    logger.info(f"[RAG] 文件已变化，重新索引: {filename} (old={existing.get('file_hash','')[:12]} new={file_hash[:12]})")
+            elif existing:
+                logger.info(f"[RAG] 文件状态非 active ({existing.get('status')})，重新索引: {filename}")
             else:
-                logger.info(f"[RAG] 文件已变化，重新索引: {filename} (old={existing.get('file_hash','')[:12]} new={file_hash[:12]})")
-        elif existing:
-            logger.info(f"[RAG] 文件状态非 active ({existing.get('status')})，重新索引: {filename}")
-        else:
-            logger.info(f"[RAG] 新文件，首次索引: {filename} (path={filepath})")
+                logger.info(f"[RAG] 新文件，首次索引: {filename} (path={filepath})")
 
-        # 复用 pipeline 单例（启动时预热，此处通常毫秒级返回；若预热未完成会阻塞等待）
-        sync_emit("uploading", "正在初始化索引管道（首次 ~15s）...")
-        _pipe_t0 = time.time()
-        pipeline = get_rag_pipeline()
-        _pipe_elapsed = int((time.time() - _pipe_t0) * 1000)
-        if _pipe_elapsed > 3000:
-            logger.info(f"[RAG] 管道初始化耗时 {_pipe_elapsed}ms（可能预热未完成）")
-        listener = ProgressListener(sync_emit)
-        indexer = IncrementalIndexer(
-            docs_dir=DOCS_DIRECTORY,
-            vectordb=pipeline.vectordb,
-            doc_db=pipeline.doc_db,
-            embedding=pipeline.embedding,
-            registry=reg,
-            kb_id=kb_id,
-            department=department,
-            bm25_store=pipeline.bm25_store,  # P0-1: 上传后立即同步 BM25
-        )
-        try:
-            # 单文件索引（不再 sync 全盘扫描 → 不会复活已删文档 + 上传变快）
-            result = indexer.reindex_file(filepath)
-        finally:
-            listener.unsub()
-        logger.info(f"[RAG] 上传索引完成: {filename} → {result}")
-        return result
-    except Exception as e:
-        raise
+            sync_emit("uploading", "正在初始化索引管道（首次 ~15s）...")
+            _pipe_t0 = time.time()
+            pipeline = get_rag_pipeline()
+            _pipe_elapsed = int((time.time() - _pipe_t0) * 1000)
+            if _pipe_elapsed > 3000:
+                logger.info(f"[RAG] 管道初始化耗时 {_pipe_elapsed}ms（可能预热未完成）")
+            listener = ProgressListener(sync_emit)
+            indexer = IncrementalIndexer(
+                docs_dir=DOCS_DIRECTORY,
+                vectordb=pipeline.vectordb,
+                doc_db=pipeline.doc_db,
+                embedding=pipeline.embedding,
+                registry=reg,
+                kb_id=kb_id,
+                department=department,
+                bm25_store=pipeline.bm25_store,  # P0-1: 上传后立即同步 BM25
+            )
+            try:
+                result = indexer.reindex_file(filepath)
+            finally:
+                listener.unsub()
+            logger.info(f"[RAG] 上传索引完成: {filename} → {result}")
+            return result
+        except Exception as e:
+            raise
+    finally:
+        release_index_lock(index_lock_fd, filepath)
 
 
 

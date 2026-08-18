@@ -146,15 +146,30 @@ class ChunkFilter:
             return False, "too_short"
 
         # 3. 纯符号比率（非字母/数字/中文 = 符号）
-        symbol_count = sum(1 for c in stripped if not c.isalnum() and not '一' <= c <= '鿿')
+        # P1:把 Unicode replacement char (��) 和私用区码点视为字母,
+        # 因为 PDF parser 解码失败时会用 �� 占位,这是正常的解码异常,
+        # 不应该被当 symbol 拒绝整篇文档。
+        def _is_meaningful_char(c: str) -> bool:
+            if c.isalnum() or '一' <= c <= '鿿':
+                return True
+            if c == '\ufffd':  # replacement char
+                return True
+            return False
+
+        symbol_count = sum(1 for c in stripped if not _is_meaningful_char(c))
         if len(stripped) > 0 and symbol_count / len(stripped) > self.max_symbol_ratio:
             metadata["filter_status"] = "filtered"
             metadata["filter_reason"] = "all_symbols"
             return False, "all_symbols"
 
         # 4. 中文占比（中文知识库场景）
-        chinese_count = sum(1 for c in stripped if '一' <= c <= '鿿')
-        total_alpha = sum(1 for c in stripped if c.isalpha() or '一' <= c <= '鿿')
+        # P1:把 �� (replacement char) 也算中文 — PDF parser 解码失败时
+        # 用 �� 占位,本应是中文字符。低 chinese_ratio 不应误杀。
+        def _is_chinese_or_replacement(c: str) -> bool:
+            return '一' <= c <= '鿿' or c == '\ufffd'
+
+        chinese_count = sum(1 for c in stripped if _is_chinese_or_replacement(c))
+        total_alpha = sum(1 for c in stripped if _is_meaningful_char(c))
         if total_alpha > 0 and chinese_count / total_alpha < self.min_chinese_ratio:
             metadata["filter_status"] = "filtered"
             metadata["filter_reason"] = "low_chinese_ratio"

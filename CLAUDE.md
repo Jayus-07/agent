@@ -116,3 +116,12 @@ E2E: `cd backend && python e2e_demo.py`
 
 设计文档: `docs/README.md`（7 个顶层文档 + 7 个关键深读）
 记忆: 用户级 `~/.claude/projects/<project>/memory/MEMORY.md`（按项目分类的会话记忆）
+
+
+```bash
+# 一键启动
+start_all.bat
+# 一键关闭
+stop_all.bat
+# 一键重启 
+restart_all.bat

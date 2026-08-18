@@ -413,6 +413,34 @@ class DocumentRegistry:
                 conn.commit()
                 logger.info("[DocRegistry] 已添加 expire_at 字段")
 
+    def bump_doc_version(self, doc_id: str, delta: int = 1) -> int:
+        """公开方法：增加 doc_version（替代 reindex_file 直接访问私有 _lock/_conn）。
+
+        P2-3:不再让 reindex_file 绕过封装直接写 SQL。
+        - 成功:返回 bump 后的新版本号
+        - doc_id 不存在或状态非 active:返回 -1
+        """
+        if not doc_id:
+            return -1
+        with self._lock, self._conn() as conn:
+            # 当前值(原子读)
+            cur_row = conn.execute(
+                "SELECT doc_version FROM doc_registry WHERE doc_id = ? AND status = 'active'",
+                (doc_id,),
+            ).fetchone()
+            if cur_row is None:
+                return -1
+            cur_version = cur_row["doc_version"]
+            new_version = cur_version + delta
+            conn.execute(
+                """UPDATE doc_registry
+                   SET doc_version = ?, updated_at = datetime('now')
+                   WHERE doc_id = ? AND status = 'active'""",
+                (new_version, doc_id),
+            )
+            conn.commit()
+            return new_version
+
     def set_expire_at(self, doc_id: str, expire_at: str) -> int:
         """设置文档过期时间（ISO 8601 格式，2026-08-11）。"""
         with self._lock, self._conn() as conn:

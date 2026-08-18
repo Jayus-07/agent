@@ -147,6 +147,174 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
         lines.append("✅ 全部用例通过，无失败/错误详情。")
 
     lines.append("")
+    # === 过程证据：每条用例的 trace 树 + 召回证据 ===
+    # RAG 模块额外展开 span 树，便于定位"召回对了但排序差" / "rerank 分数异常"等
+    lines.append("## 过程详情（每条用例）")
+    lines.append("")
+    lines.append(
+        "> 每条用例展开 RAG 链路中实际产生的 span（含耗时、metrics、输入/输出摘要），"
+        "以及召回的文档 chunk 与 rerank 分数。"
+    )
+    lines.append("")
+    for r in report.results:
+        status_zh = STATUS_LABELS.get(r.status, r.status)
+        icon = STATUS_ICONS.get(r.status, "?")
+        lines.append(f"### {icon} {r.case_id} — {status_zh}")
+        lines.append("")
+        lines.append(f"- **问题**: {r.actual.get('question', '')}")
+        kb_id = r.actual.get("kb_id") or ""
+        if kb_id:
+            lines.append(f"- **KB**: `{kb_id}`")
+        if r.metrics:
+            metrics_zh = ", ".join(
+                f"{METRIC_LABELS.get(k, k)}={v}" for k, v in r.metrics.items()
+            )
+            lines.append(f"- **指标**: {metrics_zh}")
+        if r.duration_ms:
+            lines.append(f"- **总耗时**: {r.duration_ms} ms")
+        if r.error_msg:
+            lines.append(f"- **错误**: `{r.error_msg}`")
+        lines.append("")
+
+        # Pipeline 概览
+        pipeline = r.actual.get("pipeline") or {}
+        if pipeline:
+            lines.append("**Pipeline 概览**")
+            lines.append("")
+            lines.append("| 阶段 | 值 |")
+            lines.append("|------|----|")
+            lines.append(f"| Stage1 召回数 | {pipeline.get('stage1_docs', '?')} |")
+            fallback = pipeline.get("stage1_fallback_suspected")
+            if fallback:
+                lines.append("| Stage1 fallback | ⚠️ 已触发（KB filter 无结果） |")
+            lines.append(f"| Stage2 chunk 数 | {pipeline.get('stage2_chunks_recalled', '?')} |")
+            lines.append(f"| Adaptive 决策 | {pipeline.get('adaptive', '?')} |")
+            lines.append("")
+
+        # Trace span 树
+        trace = r.actual.get("trace") or {}
+        spans = trace.get("spans") or []
+        if spans:
+            lines.append("**Trace Span 树**")
+            lines.append("")
+            lines.append(
+                f"_trace_id=`{trace.get('trace_id', '?')}` · "
+                f"共 {trace.get('total_spans', len(spans))} 个 span · "
+                f"合计耗时 {trace.get('total_trace_ms', '?')} ms_"
+            )
+            lines.append("")
+            lines.append("| Span | 类型 | 状态 | 耗时(ms) | Metrics 摘要 |")
+            lines.append("|------|------|------|----------|-------------|")
+            for sp in spans:
+                name = sp.get("name") or sp.get("span_id")
+                sp_type = sp.get("type", "")
+                sp_status = sp.get("status", "")
+                sp_ms = sp.get("duration_ms", 0)
+                # 把 dict metrics 压成一行 key=val, key=val
+                m = sp.get("metrics") or {}
+                m_str = ", ".join(f"{k}={v}" for k, v in m.items()) if m else "—"
+                if len(m_str) > 80:
+                    m_str = m_str[:80] + "…"
+                lines.append(f"| `{name}` | {sp_type} | {sp_status} | {sp_ms} | {m_str} |")
+            lines.append("")
+
+            # 选取关键 span（retrieval / rerank / evidence_gate）的 input/output 摘要
+            key_types = {"retrieval", "rerank", "retrieval_gate", "rerank_gate"}
+            key_spans = [s for s in spans if s.get("type") in key_types]
+            for sp in key_spans[:6]:  # 限 6 个，避免报告过长
+                lines.append(f"**Span `{sp.get('name')}` ({sp.get('type')})**")
+                lines.append("")
+                has_any = False
+                if sp.get("input"):
+                    has_any = True
+                    inp = sp["input"]
+                    if isinstance(inp, dict):
+                        inp_brief = {
+                            k: (v if not isinstance(v, str) or len(v) < 200 else v[:200] + "…")
+                            for k, v in inp.items()
+                        }
+                        lines.append("- 输入:")
+                        lines.append("")
+                        lines.append("```json")
+                        lines.append(json.dumps(inp_brief, ensure_ascii=False, indent=2))
+                        lines.append("```")
+                if sp.get("output"):
+                    has_any = True
+                    out = sp["output"]
+                    if isinstance(out, dict):
+                        out_brief = {
+                            k: (v if not isinstance(v, str) or len(v) < 300 else v[:300] + "…")
+                            for k, v in out.items()
+                        }
+                        lines.append("- 输出:")
+                        lines.append("")
+                        lines.append("```json")
+                        lines.append(json.dumps(out_brief, ensure_ascii=False, indent=2))
+                        lines.append("```")
+                events = sp.get("events") or []
+                if events:
+                    has_any = True
+                    lines.append(f"- 事件 ({len(events)} 条):")
+                    lines.append("")
+                    for ev in events[:5]:
+                        ev_name = ev.get("name", "?")
+                        ev_level = ev.get("level", "")
+                        ev_msg = ev.get("message", "")
+                        if len(ev_msg) > 300:
+                            ev_msg = ev_msg[:300] + "…"
+                        lines.append(f"  - `{ev_name}` ({ev_level}): {ev_msg}")
+                    if len(events) > 5:
+                        lines.append(f"  - …另有 {len(events) - 5} 条事件")
+                errors = sp.get("errors") or []
+                if errors:
+                    has_any = True
+                    lines.append(f"- ❗ 错误:")
+                    lines.append("")
+                    lines.append("```json")
+                    lines.append(json.dumps(errors, ensure_ascii=False, indent=2)[:1000])
+                    lines.append("```")
+                if not has_any:
+                    lines.append("_（该 span 未记录 input/output/events，仅有 metrics）_")
+                lines.append("")
+            if len(key_spans) > 6:
+                lines.append(f"_…另有 {len(key_spans) - 6} 个关键 span，已在 JSON 报告中保留全量数据_")
+                lines.append("")
+
+        # 召回证据：top-5 chunk + rerank 分数
+        details = r.actual.get("details") or []
+        if details:
+            lines.append("**召回证据（Top 5）**")
+            lines.append("")
+            lines.append("| # | doc_id | chunk_id | rerank_score | snippet |")
+            lines.append("|---|--------|----------|--------------|---------|")
+            for i, d in enumerate(details[:5], 1):
+                doc_id = d.get("doc_id") or "—"
+                chunk_id = d.get("chunk_id") or "—"
+                rs = d.get("rerank_score")
+                rs_str = f"{rs:.4f}" if isinstance(rs, (int, float)) else "—"
+                snippet = (d.get("snippet") or "").replace("|", "\\|").replace("\n", " ")
+                if len(snippet) > 120:
+                    snippet = snippet[:120] + "…"
+                lines.append(f"| {i} | `{doc_id}` | `{chunk_id}` | {rs_str} | {snippet} |")
+            lines.append("")
+
+        # 期望 vs 实际
+        expected = r.expected or {}
+        expected_docs = expected.get("relevant_docs") or []
+        retrieved_docs = r.actual.get("retrieved_docs") or []
+        if expected_docs or retrieved_docs:
+            lines.append("**期望 vs 实际**")
+            lines.append("")
+            lines.append(f"- 期望文档: `{expected_docs}`")
+            lines.append(f"- 实际召回: `{retrieved_docs[:10]}`")
+            hit = [d for d in retrieved_docs if d in expected_docs]
+            if hit:
+                lines.append(f"- ✅ 命中: `{hit}`")
+            elif expected_docs:
+                lines.append(f"- ❌ 未命中")
+            lines.append("")
+
+    lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
     print(f"Markdown 报告已保存到: {path}")
     return path

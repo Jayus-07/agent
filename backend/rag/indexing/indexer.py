@@ -35,6 +35,22 @@ from backend.infra.async_utils import run_async as _run_async
 # 单 chunk 嵌入失败时的重试上限
 EMBED_RETRY_MAX = 3
 
+
+class ChunkingEmptyError(Exception):
+    """文档解析/切片成功但最终未产出任何有效 chunk（chunk_count=0）。
+
+    用于 P1-4：阻止"假装索引成功但实际 doc_db 为空"的隐性失败模式。
+    - 触发场景：扫描件 PDF / 纯图片 / 结构解析失败 / embedding 全失败
+    - 调用方（_run_index_background）应：
+        1. emit SSE error 事件（前端能看到）
+        2. 不删源文件（保护已有数据，便于排查）
+        3. 留痕到 operation_log（result=failed）
+
+    设计：继承 Exception 而非 RuntimeError，避免被 observability 框架的
+    `except RuntimeError` 通用 catch 误处理（如 trace 上报中的 swallow 逻辑）。
+    """
+
+
 # 摘要采样：按文档长度自适应，保证头尾关键信息不丢
 def _sample_for_summary(text: str) -> str:
     n = len(text)
@@ -259,12 +275,20 @@ class IncrementalIndexer:
             input={"file_path": file_path, "size_bytes": file_size},
         )
         try:
-            self._index_file_inner(file_path, kb_id, doc_id, file_hash)
+            inner_result = self._index_file_inner(file_path, kb_id, doc_id, file_hash)
             trace_collector.end_span(upload_span,
                 metrics={"doc_id": doc_id, "kb_id": kb_id})
             trace_collector.finish(trace, os.path.basename(file_path),
                                    upload_span.duration_ms, "", "")
-            return trace.id
+            # P2-2:返回 dict 含 trace_id + chunk_count + doc_db_id,
+            # 让 reindex_file 直接消费,不再反查 registry
+            return {
+                "trace_id": trace.id,
+                "chunk_count": inner_result.get("chunk_count", 0),
+                "doc_db_id": inner_result.get("doc_db_id", ""),
+                "file_hash": inner_result.get("file_hash", file_hash),
+                "status": "active",
+            }
         except Exception as e:
             trace_collector.end_span(upload_span, status="error",
                 metrics={"error": str(e)[:200]})
@@ -277,11 +301,18 @@ class IncrementalIndexer:
                 )
             raise
 
-    def _index_file_inner(self, file_path: str, kb_id: str, doc_id: str, file_hash: str):
+    def _index_file_inner(self, file_path: str, kb_id: str, doc_id: str, file_hash: str) -> dict:
         """_index_file 的实际工作，被 index_upload span 包裹。
 
         新流程: load → parse → clean → dedup → chunk → metadata → embed → vector_db
         （metadata 移到 embed 之前，标注注入 chunk 后再进向量库）
+
+        Returns:
+            dict 含 chunk_count / doc_db_id / file_hash，供 _index_file 包装返回给调用方。
+            P2-2：消除 reindex_file 反查 registry 的需要。
+
+        Raises:
+            ChunkingEmptyError: 解析或 chunking 产出 0 chunk（P1-4）
         """
         ext = os.path.splitext(file_path)[1].lower()
 
@@ -315,17 +346,20 @@ class IncrementalIndexer:
             from backend.rag.preprocessing.pipeline import parse_and_chunk
             chunks = parse_and_chunk(file_path)
             if not chunks:
-                # 空 chunks → 视为 parse 失败（破坏文件 / 不支持格式），
-                # 标 error 并抛 RuntimeError，让 _index_file wrapper 标 index_upload=error
-                error_msg = f"empty_or_unsupported (ext={ext})"
+                # 空 chunks → 视为"无可索引内容"。
+                # 改用 ChunkingEmptyError(P1-4)而非 RuntimeError,让调用方能区分：
+                #   - ChunkingEmptyError = 业务失败(内容不支持/扫描件/结构损坏)
+                #   - RuntimeError       = 程序 bug
+                error_msg = (
+                    f"{os.path.basename(file_path)} produced 0 chunks "
+                    f"(ext={ext}, parser=parse_and_chunk)"
+                )
                 trace_collector.end_span(parse_span, status="error",
-                    metrics={"error": error_msg,
+                    metrics={"error": error_msg[:200],
                              "doc_count": 0, "page_count": 0,
                              "loader": "pipeline", "ext": ext})
-                logger.warning(
-                    f"[indexer] 文件解析为空或不支持: {file_path} (ext={ext})"
-                )
-                raise RuntimeError(f"parse failed: {error_msg}")
+                logger.warning(f"[indexer] {error_msg}")
+                raise ChunkingEmptyError(error_msg)
             for ch in chunks:
                 ch.metadata["kb_id"] = kb_id
             # 共享给后续 clean / chunk / metadata 段使用，避免重复调用 parse_and_chunk
@@ -335,6 +369,10 @@ class IncrementalIndexer:
                          "page_count": len(chunks),
                          "loader": "pipeline", "ext": ext})
         except Exception as e:
+            # P1-4:ChunkingEmptyError 是业务失败信号,直接透传给调用方做差异化处理,
+            # 不被包装成 RuntimeError(避免 observability 误捕 + 丢失语义)
+            if isinstance(e, ChunkingEmptyError):
+                raise
             error_msg = str(e)[:200]
             trace_collector.end_span(parse_span, status="error",
                 metrics={"error": error_msg, "loader": "pipeline"})
@@ -701,6 +739,17 @@ class IncrementalIndexer:
                 logger.error(f"[BM25] 同步失败 (doc_id={doc_id}): {e}")
 
         # ── ⑨ registry（始终执行，含 metadata 用于操作日志追溯）──
+        # P1-4：阻止 chunk_count=0 的"假成功"入库。
+        # 若直接 register 空 chunk_ids，前端 SSE 会推 done，但 doc_db 实际为空，
+        # 后续 retrieve 永远召不回该文档（隐性故障）。这里 raise 让 _run_index_background
+        # 走 error 分支并 emit SSE error。
+        if not chunk_ids:
+            error_msg = (
+                f"{os.path.basename(file_path)} produced 0 chunks "
+                f"(ext={ext}, parsed={len(getattr(self, '_current_chunks', []))})"
+            )
+            logger.warning(f"[indexer] {error_msg} — 索引失败,不上传空 doc")
+            raise ChunkingEmptyError(error_msg)
         try:
             self.registry.register(
                 file_path=file_path,
@@ -732,6 +781,13 @@ class IncrementalIndexer:
         except Exception:
             self._remove_document(doc_id)
             raise
+
+        # P2-2:返回 dict 给 _index_file wrapper,消除 reindex_file 反查 registry 的需要
+        return {
+            "chunk_count": len(chunk_ids),
+            "doc_db_id": doc_db_id,
+            "file_hash": file_hash,
+        }
 
     def _embed_with_retry(self, chunks, parent_span) -> list[str]:
         """逐 chunk 嵌入；成功静默，失败单独 child span 记录，重试 EMBED_RETRY_MAX 次。
@@ -884,7 +940,10 @@ class IncrementalIndexer:
                     'domain_classify', parent_id=parent_span_id, name="Domain classify",
                     type="llm", kind=SpanKind.INDEX_DOMAIN_CLASSIFY.value,
                 )
-            domain, domain_detail = detect_business_domain(full_text, return_detail=True)
+            domain_result = detect_business_domain(full_text, return_detail=True)
+            # P1: domain_result 返回 3 元组 (primary, alternatives, detail) 当 return_detail=True
+            domain, _alternatives, domain_detail = domain_result
+            domain_detail = domain_detail or {}
             if parent_span_id:
                 trace_collector.end_span(domain_span, metrics={"domain": domain},
                     output=domain_detail or {})
@@ -1056,7 +1115,11 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
     def reindex_file(self, file_path: str) -> dict:
         """公开的单文件重索引 — 删除旧向量后重新加载/分块/Embedding/写入。
 
-        复用 _remove_document() + _index_file()，不重复实现索引逻辑。
+        复用 _remove_document() + _index_file(),不重复实现索引逻辑。
+
+        P2-2 + P2-3 整改:
+          - 不再额外 get_by_path() 反查 chunk_count(P2-2):从 _index_file() 返回 dict 取
+          - 不再访问 registry._lock / _conn()(P2-3):改用 bump_doc_version 公开方法
 
         Returns:
             {"doc_id": str, "chunk_count": int, "file_hash": str, "status": str, "stage_elapsed": dict}
@@ -1072,23 +1135,19 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
             deleted = self.registry.mark_deleted_by_doc_id(old_doc_id)
             logger.info(f"[REINDEX] 已清理旧数据: doc_id={old_doc_id}, rows={deleted}")
 
-        old_version = row.get("doc_version", 1) if row else 1
+        # 2. 重新索引（_index_file 返回完整 dict，含 trace_id/chunk_count/doc_db_id）
+        index_result = self._index_file(file_path)
+        trace_id = index_result.get("trace_id", "")
+        new_chunk_count = index_result.get("chunk_count", 0)
+        new_doc_db_id = index_result.get("doc_db_id", "")
+        new_file_hash = index_result.get("file_hash", "")
 
-        # 2. 重新索引（_index_file 返回 trace_id，供操作日志关联链路追踪）
-        trace_id = self._index_file(file_path)
-
-        # 2.5 bump doc_version（重索引 +1）
+        # 2.5 bump doc_version（重索引 +1）— P2-3 用公开方法替代私有 cursor 访问
+        new_version = 0
         if old_doc_id:
-            with self.registry._lock, self.registry._conn() as conn:
-                conn.execute(
-                    "UPDATE doc_registry SET doc_version = ? WHERE doc_id = ?",
-                    (old_version + 1, old_doc_id),
-                )
-                conn.commit()
+            new_version = self.registry.bump_doc_version(old_doc_id, delta=1)
 
-        # 3. 获取更新后的信息
-        updated = self.registry.get_by_path(file_path) or {}
-        # 3.5 汇总每阶段真实耗时（取自本次 trace 的 span），供前端展示
+        # 3. 汇总每阶段真实耗时（取自本次 trace 的 span），供前端展示
         stage_elapsed: dict[str, int] = {}
         try:
             from backend.observability.tracer import trace_collector as _tc
@@ -1101,10 +1160,12 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
             # 阶段耗时汇总失败 → 返回空 dict（软降级），留痕；不影响索引结果
             logger.debug(f"[Indexer] 阶段耗时汇总失败: {e}", exc_info=True)
         return {
-            "doc_id": updated.get("doc_id", ""),
-            "chunk_count": updated.get("chunk_count", 0),
-            "file_hash": updated.get("file_hash", ""),
-            "status": updated.get("status", "active"),
+            "doc_id": old_doc_id,  # 重索引不改变 doc_id（同一物理文件）
+            "chunk_count": new_chunk_count,
+            "doc_db_id": new_doc_db_id,
+            "file_hash": new_file_hash,
+            "doc_version": new_version,
+            "status": "active",
             "trace_id": trace_id or "",
             "stage_elapsed": stage_elapsed,
         }

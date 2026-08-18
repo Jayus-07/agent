@@ -5,6 +5,7 @@ ollama.py — Ollama Provider（本地部署）
   - build_ollama(): 构建 ChatOllama 实例
   - get_ollama_balance(): 返回本地免费状态
 """
+import os
 
 from langchain_ollama import ChatOllama
 
@@ -13,9 +14,15 @@ from backend.shared.logger import logger
 
 
 def build_ollama(model_name: str) -> ChatOllama:
-    """构建 Ollama 模型实例"""
+    """构建 Ollama 模型实例。
+
+    base_url 优先从环境变量 OLLAMA_BASE_URL 读取，未设置则走 langchain 默认
+    http://localhost:11434，方便本地或远程 Ollama 部署切换。
+    """
+    base_url = os.getenv("OLLAMA_BASE_URL") or None
     return ChatOllama(
         model=model_name,
+        base_url=base_url,
         temperature=LLM_TEMPERATURE,
         num_ctx=LLM_CONTEXT_LENGTH,
         request_timeout=LLM_REQUEST_TIMEOUT,
