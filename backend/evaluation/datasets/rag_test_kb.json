@@ -749,6 +749,133 @@
         "domain": "tech_manual",
         "doc_type": "security"
       }
+    },
+    {
+      "id": "RT-038",
+      "question": "跨境电商发到欧盟需要什么认证？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [
+          "fd2910f986"
+        ],
+        "relevant_snippets": [
+          "CE 认证",
+          "HS"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "compliance",
+        "probe_type": "ultra_short_doc",
+        "probe_note": "16_一句话FAQ.md 全文<50 字，验证 chunker 极短文档边界（chunk_count 可能=1）"
+      }
+    },
+    {
+      "id": "RT-039",
+      "question": "跨境电商退货流程是怎样的？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [
+          "a709fe1cf1"
+        ],
+        "relevant_snippets": [
+          "七天",
+          "无理由"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "return_policy",
+        "probe_type": "title_distraction",
+        "probe_note": "24_关键词干扰文档.md 标题含'退货流程'但内容是营销活动；期望召回真实退货政策(06_)而非此干扰文档"
+      }
+    },
+    {
+      "id": "RT-040",
+      "question": "Apple Watch 包装盒有什么标签要求？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [
+          "7fae54d9ff"
+        ],
+        "relevant_snippets": [
+          "序列号",
+          "IP6X"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "product_spec",
+        "probe_type": "word_disambiguation",
+        "probe_note": "25_同形异义词.md 第一篇(电子产品 Apple)，期望召回电子产品章节而非水果章节"
+      }
+    },
+    {
+      "id": "RT-041",
+      "question": "苹果水果入库糖度要求是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [
+          "7fae54d9ff"
+        ],
+        "relevant_snippets": [
+          "糖度",
+          "13"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "inventory",
+        "probe_type": "word_disambiguation",
+        "probe_note": "25_同形异义词.md 第二篇(水果 Apple)，期望召回水果章节（同文档不同 chunk）"
+      }
+    },
+    {
+      "id": "RT-042",
+      "question": "海运拼箱的运费单价是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [
+          "ba8721e79b"
+        ],
+        "relevant_snippets": [
+          "海运拼箱",
+          "8.00"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "logistics",
+        "probe_type": "numeric_sensitivity",
+        "probe_note": "26_数字近似陷阱.md 三档运费都是'8 元'但写法不同(8 / 8.00 / ¥8)；期望召回海运拼箱段('8.00 元')而非空运/专线"
+      }
+    },
+    {
+      "id": "RT-043",
+      "question": "你们公司 CEO 的薪酬是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "min_relevant_chunks": 0
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "probe_type": "negative_no_answer",
+        "probe_note": "知识库无此信息；期望返回空召回或低置信度（验证不幻觉）。若评测框架不支持空 relevant_docs 列表判定，可改用 min_relevant_chunks: 0 + 任意召回得分<阈值"
+      }
     }
   ]
 }
