@@ -222,8 +222,9 @@ def check_faithfulness(
             try:
                 from backend.observability.metrics import nli_timeout_total
                 nli_timeout_total.inc()
-            except Exception:
-                pass
+            except Exception as e:
+                # 指标埋点失败不影响评估结果（软降级），留痕
+                logger.debug(f"[Faithfulness] NLI fallback 埋点失败: {e}", exc_info=True)
             return FaithfulnessResult(
                 score=verdict.score, total_claims=len(claims), high_risk_claims=len(high_risk),
                 supported_claims=len(high_risk), unsupported_claims=0,

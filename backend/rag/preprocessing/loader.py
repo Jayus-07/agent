@@ -34,10 +34,11 @@ def load_documents_from_directory(directory_path: str, chunk_size=None, chunk_ov
             try:
                 chunks = parse_and_chunk(file_path)
                 rel_path = os.path.relpath(file_path, directory_path).replace("\\", "/")
-                # 与 indexer._derive_doc_id 同源：sha256(kb_id|department|rel_path)[:16]
-                doc_id = hashlib.sha256(
-                    f"{kb_id}|general|{rel_path}".encode("utf-8")
-                ).hexdigest()[:16]
+                # 与 indexer._derive_doc_id 同源：统一 md5(basename)[:10] 协议（P0-2 根治），
+                # 避免 BM25 与 registry/Chroma 的 doc_id 分裂导致删除后残留
+                doc_id = hashlib.md5(
+                    os.path.basename(file).encode("utf-8")
+                ).hexdigest()[:10]
                 for c in chunks:
                     c.metadata["kb_id"] = kb_id
                     c.metadata["doc_id"] = doc_id

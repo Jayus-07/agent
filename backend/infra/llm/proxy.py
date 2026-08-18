@@ -8,6 +8,7 @@ proxy.py — _LLMProxy 代理对象 + 模块级 llm 单例
   - 所有调用方 `from backend.infra.llm import llm` 无需修改
   - 每次调用记录 token + finish_reason + cost_usd 到模块级 _last_call_meta（供 tracer 读取）
 """
+import inspect
 import threading
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -119,16 +120,28 @@ def _strip_think(text: str) -> str:
     return text.strip()
 
 
-_last_tokens = {}
-_last_call_meta = {}  # token + finish_reason + cost_usd（供 tracer 读取，Phase 4）
+# =====================================================
+# 最近一次 LLM 调用元数据（token / finish_reason / cost）
+# =====================================================
+# P1 并发隔离：模块级 dict 会被并发请求互相覆盖（A 的 token 被 B 覆盖，
+# tracer 读到 B 的）。改用 ContextVar 按调用上下文隔离；
+# 读写必须整体 set()/get()（不可变替换），禁止对 .get() 返回的 dict
+# 做 clear()/update()（会改到共享对象）。
+import contextvars as _contextvars
+
+_last_tokens_var: _contextvars.ContextVar = _contextvars.ContextVar(
+    "llm_last_tokens", default={},
+)
+_last_call_meta_var: _contextvars.ContextVar = _contextvars.ContextVar(
+    "llm_last_call_meta", default={},
+)
 
 
 def _record_tokens(result):
     """从 LLM 返回值提取 token + finish_reason + cost，存为 dict 供 tracer 读取。
 
-    无 token_usage 时清空 _last_tokens 和 _last_call_meta。
+    无 token_usage 时清空 _last_tokens_var 和 _last_call_meta_var。
     """
-    global _last_tokens, _last_call_meta
     try:
         tu = {}
         if hasattr(result, "response_metadata") and result.response_metadata:
@@ -140,11 +153,12 @@ def _record_tokens(result):
         c = tu.get("completion_tokens", tu.get("output_tokens", 0))
         t = tu.get("total_tokens", p + c)
         if not t:
-            _last_tokens.clear()
-            _last_call_meta.clear()
+            _last_tokens_var.set({})
+            _last_call_meta_var.set({})
             return
-        _last_tokens.clear()
-        _last_tokens.update({"prompt_tokens": p, "completion_tokens": c, "total_tokens": t})
+        _last_tokens_var.set({
+            "prompt_tokens": p, "completion_tokens": c, "total_tokens": t,
+        })
 
         # Prometheus 指标：LLM token 用量
         try:
@@ -164,8 +178,7 @@ def _record_tokens(result):
                 result.response_metadata.get("stop_reason", "unknown"),
             )
         cost = compute_cost_usd(LLM_MODEL, p, c)
-        _last_call_meta.clear()
-        _last_call_meta.update({
+        _last_call_meta_var.set({
             "prompt_tokens": p,
             "completion_tokens": c,
             "total_tokens": t,
@@ -173,8 +186,8 @@ def _record_tokens(result):
             "cost_usd": cost,
         })
     except Exception:
-        _last_tokens.clear()
-        _last_call_meta.clear()
+        _last_tokens_var.set({})
+        _last_call_meta_var.set({})
 
 def _wrap_result(result):
     """递归剥离 LLM 返回值中的 <think> 块，兼容 str / AIMessage / list / dict"""
@@ -203,6 +216,23 @@ class _LLMProxy:
         target = _resolve_active_llm()
         attr = getattr(target, name)
         if name in self._WRAP_METHODS and callable(attr):
+            # async generator（astream）：保持透传，不包 token 记录
+            # （逐 chunk 流式 token 语义本次不覆盖；await async_gen 会抛 TypeError）
+            if inspect.isasyncgenfunction(attr):
+                return attr
+            # async 方法（ainvoke/agenerate）：coroutine 必须先 await 才能取结果，
+            # 否则 _record_tokens 作用在未执行的 coroutine 上会把 token 清空（既有 bug）。
+            if inspect.iscoroutinefunction(attr):
+                async def async_wrapper(*args, **kwargs):
+                    # 限流（同步 acquire）+ 熔断（async）
+                    from backend.infra.llm.rate_limiter import get_rate_limiter
+                    from backend.infra.circuit_breaker import llm_circuit_breaker
+                    user_id = kwargs.get("user_id") or _thread_local_user_id()
+                    get_rate_limiter().acquire(user_id=user_id)
+                    result = await llm_circuit_breaker.acall(attr, *args, **kwargs)
+                    _record_tokens(result)
+                    return _wrap_result(result)
+                return async_wrapper
             def wrapper(*args, **kwargs):
                 # 限流 + 熔断
                 from backend.infra.llm.rate_limiter import get_rate_limiter

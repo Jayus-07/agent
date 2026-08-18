@@ -173,12 +173,18 @@ class BM25Store:
         return self.build(all_docs, k=k)
 
     def remove_documents(
-        self, doc_ids: List[str], k: int = 20
+        self, doc_ids: List[str], k: int = 20, file_paths: Optional[List[str]] = None
     ) -> Optional[BM25Retriever]:
-        """按 doc_id 删除文档后全量重建索引。
+        """按 doc_id 或 file_path（含 source_file 文件名）删除文档后全量重建索引。
+
+        doc_id 与 file_path 双键过滤（P0-2）：历史上 loader 与 indexer 的 doc_id 协议
+        不一致（loader=sha256[:16] vs registry=md5[:10]），仅按 doc_id 过滤会导致
+        删除后 BM25 残留。BM25 的 chunk metadata 始终含 file_path/source_file，
+        以文件名为第二键可绕开协议分裂，保证删除真正命中。
 
         Args:
             doc_ids: 要删除的 doc_id 列表
+            file_paths: 要删除的完整文件路径列表（取其 basename 与 metadata.source_file 匹配）
             k: 检索返回数量
 
         Returns:
@@ -195,10 +201,21 @@ class BM25Store:
             logger.warning("[BM25Store] 读取已有文档失败，跳过删除")
             return None
 
-        remaining = [
-            d for d in all_docs
-            if d.metadata.get("doc_id") not in doc_ids
-        ]
+        doc_id_set = set(doc_ids or [])
+        file_basenames = {os.path.basename(fp) for fp in (file_paths or [])}
+
+        def _match(doc) -> bool:
+            meta = doc.metadata or {}
+            if meta.get("doc_id") in doc_id_set:
+                return True
+            if file_basenames:
+                src = meta.get("source_file", "")
+                fp = meta.get("file_path", "")
+                if os.path.basename(src) in file_basenames or os.path.basename(fp) in file_basenames:
+                    return True
+            return False
+
+        remaining = [d for d in all_docs if not _match(d)]
 
         removed = len(all_docs) - len(remaining)
         if removed > 0:

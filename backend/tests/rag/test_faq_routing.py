@@ -53,7 +53,11 @@ def test_other_types_unchanged():
 
 
 def test_qa_strategy_handles_qa_nodes():
-    """QAChunkStrategy 切 qa_question/qa_answer 节点产 leaf。"""
+    """QAChunkStrategy 将 qa_question/qa_answer 对合并为一个 chunk（P1-6）。
+
+    原实现 Q/A 各自独立成 chunk（问答分离）；修复后 Q+A 合并为
+    "Q：...\nA：..." 单一 chunk，保证 FAQ 条目语义完整。
+    """
     ast = DocumentAST(
         root=DocumentNode(type="section", text="", level=0, children=[
             DocumentNode(type="qa_question", text="怎么退货？"),
@@ -61,8 +65,21 @@ def test_qa_strategy_handles_qa_nodes():
         ]),
     )
     chunks = QAChunkStrategy().split(ast, "faq.md")
-    assert len(chunks) == 2
+    assert len(chunks) == 1
+    assert chunks[0].page_content == "Q：怎么退货？\nA：提交申请。"
     assert all(c.metadata["granularity"] == "leaf" for c in chunks)
+
+
+def test_qa_strategy_handles_orphan_answer():
+    """孤立的 qa_answer（无配对 question）也保留为 chunk，不丢内容（P1-6）。"""
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="qa_answer", text="只有答案。"),
+        ]),
+    )
+    chunks = QAChunkStrategy().split(ast, "faq.md")
+    assert len(chunks) == 1
+    assert "只有答案" in chunks[0].page_content
 
 
 def test_qa_strategy_chunks_have_required_metadata():

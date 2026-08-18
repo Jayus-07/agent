@@ -20,7 +20,7 @@ import time
 import threading
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, TypeVar
+from typing import Awaitable, Callable, TypeVar
 
 from backend.shared.logger import logger
 
@@ -82,6 +82,25 @@ class CircuitBreaker:
         self._check_state()
         try:
             result = fn(*args, **kwargs)
+            self._on_success()
+            return result
+        except Exception as e:
+            self._on_failure(e)
+            raise
+
+    async def acall(self, fn: Callable[..., Awaitable[T]], *args, **kwargs) -> T:
+        """受熔断保护的异步调用（对称于 call，供 _LLMProxy async wrapper 使用）。
+
+        与 call 共享同一状态机（_check_state/_on_success/_on_failure），
+        确保 async 调用与 sync 调用计入同一个熔断统计。
+
+        Raises:
+            CircuitBreakerOpen: 熔断器开路
+            原异常: fn 执行失败时透传
+        """
+        self._check_state()
+        try:
+            result = await fn(*args, **kwargs)
             self._on_success()
             return result
         except Exception as e:

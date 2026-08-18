@@ -65,25 +65,27 @@ JUDGE_PROMPT = """你是一个 RAG 质量评估专家。
 
 def _extract_json(text: str) -> dict | None:
     """从 LLM 输出中提取 JSON（容忍 markdown 包裹 / 前缀文字）。"""
-    # 尝试直接 parse
+    # 解析策略链：直接 parse → fenced json → 首个 json 块。
+    # 前序策略失败是常态（LLM 输出常带 markdown 包裹），属合法 fallback，
+    # 仅捕获具体解析异常并继续下一策略；全部失败由调用方记录并降级。
     try:
         return json.loads(text)
-    except Exception:
-        pass
+    except (json.JSONDecodeError, ValueError):
+        pass  # 非纯 JSON 输出，尝试下一策略
     # 尝试找 ```json ... ``` 块
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if m:
         try:
             return json.loads(m.group(1))
-        except Exception:
-            pass
+        except (json.JSONDecodeError, ValueError):
+            pass  # 该块仍非合法 JSON，尝试下一策略
     # 尝试找第一个 { ... } 块
     m = re.search(r"\{[\s\S]*\}", text)
     if m:
         try:
             return json.loads(m.group(0))
-        except Exception:
-            pass
+        except (json.JSONDecodeError, ValueError):
+            pass  # 该块仍非合法 JSON，返回 None（调用方降级）
     return None
 
 
@@ -138,8 +140,9 @@ def evaluate_with_llm(answer: str, context_docs: list) -> LLMVerdict:
         try:
             from backend.observability.metrics import nli_timeout_total
             nli_timeout_total.inc()
-        except Exception:
-            pass
+        except Exception as e:
+            # 指标埋点失败不影响评估结果（软降级），留痕
+            logger.debug(f"[NLI-LLM] 超时埋点失败: {e}", exc_info=True)
         return LLMVerdict(
             score=1.0, reason="timeout", fallback=True, fallback_reason="nli_timeout"
         )
@@ -154,8 +157,9 @@ def evaluate_with_llm(answer: str, context_docs: list) -> LLMVerdict:
         try:
             from backend.observability.metrics import nli_timeout_total
             nli_timeout_total.inc()
-        except Exception:
-            pass
+        except Exception as e:
+            # 指标埋点失败不影响评估结果（软降级），留痕
+            logger.debug(f"[NLI-LLM] 解析失败埋点异常: {e}", exc_info=True)
         return LLMVerdict(
             score=1.0, reason="parse_failed", fallback=True,
             fallback_reason="nli_parse_failed", raw_output=content[:500]

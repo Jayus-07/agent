@@ -86,15 +86,15 @@ JSON Schema:
             tokens = {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0, "model": model_used}
         else:
             from backend.infra.llm import llm
-            from backend.infra.llm.proxy import _last_call_meta
-            for k in list(_last_call_meta.keys()):
-                _last_call_meta.pop(k, None)
+            from backend.infra.llm.proxy import _last_call_meta_var
+            _last_call_meta_var.set({})  # 清理旧记录（ContextVar 不可变替换）
             result = llm.invoke(prompt)
             model_used = LLM_MODEL
+            _meta = _last_call_meta_var.get()
             tokens = {
-                "prompt_tokens": _last_call_meta.get("prompt_tokens", 0),
-                "completion_tokens": _last_call_meta.get("completion_tokens", 0),
-                "cost_usd": _last_call_meta.get("cost_usd", 0),
+                "prompt_tokens": _meta.get("prompt_tokens", 0),
+                "completion_tokens": _meta.get("completion_tokens", 0),
+                "cost_usd": _meta.get("cost_usd", 0),
                 "model": model_used,
             }
 
@@ -172,7 +172,8 @@ def _extract_first_sentences(text: str, n: int = 2) -> str:
                 inner = data["summary"].strip()
                 if inner and len(inner) > 4:
                     text = inner
-        except Exception:
+        except (_json.JSONDecodeError, ValueError):
+            # 不是合法 JSON 摘要包裹 → 按纯文本继续抽取（策略链 fallback），无需日志
             pass
     text = _re.sub(r"^#{1,6}\s+", "", text, flags=_re.MULTILINE)
     text = _re.sub(r"\*\*([^*]+)\*\*", r"\1", text)

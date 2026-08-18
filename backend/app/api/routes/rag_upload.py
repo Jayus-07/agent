@@ -171,6 +171,26 @@ async def sync_upload_impl(
                     last_emit_time = now_emit
 
         os.makedirs(final_dir, exist_ok=True)
+        # P1-8: 入口校验 — 空文件与损坏文件（魔数）直接拒绝，避免后台索引阶段才失败
+        if total == 0:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            return {"ok": False, "error": "file is empty"}
+        with open(tmp_path, "rb") as _f:
+            head = _f.read(8)
+        _magic_ok = True
+        if ext == "pdf" and not head.startswith(b"%PDF-"):
+            _magic_ok = False
+        elif ext == "docx" and not head.startswith(b"PK\x03\x04"):
+            _magic_ok = False
+        if not _magic_ok:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            return {"ok": False, "error": f"file is corrupted or not a valid .{ext} file (magic check failed)"}
         os.replace(tmp_path, final_path)
         _safe_put({"stage": "uploading", "progress": 100, "bytes": total})
 
@@ -376,6 +396,7 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
             registry=reg,
             kb_id=kb_id,
             department=department,
+            bm25_store=pipeline.bm25_store,  # P0-1: 上传后立即同步 BM25
         )
         try:
             # 单文件索引（不再 sync 全盘扫描 → 不会复活已删文档 + 上传变快）

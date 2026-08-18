@@ -20,16 +20,48 @@ def _filter_by_metadata(docs: list, metadata_filter: dict | None) -> list:
 
 
 def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60, metadata_filter=None):
-    from backend.observability.tracer import trace_collector
-    span = trace_collector.start_span("hybrid_retrieval", name="混合检索")
+    """混合检索：Vector + BM25 并行 → RRF 融合。
+
+    可靠性契约：
+      - 单侧失败 → 降级仅用另一侧，span metrics 标记 fallback_side / fallback_reason
+      - 两侧都失败 → 抛异常（真系统失败），不伪装成『没有资料』的空召回
+    """
+    from backend.observability.tracer import trace_collector, SpanName
+    from backend.shared.logger import logger
+    span = trace_collector.start_span("hybrid_retrieval", name=SpanName.RETRIEVAL)
 
     # 并行执行：Vector 和 BM25 互不依赖
     from concurrent.futures import ThreadPoolExecutor
+    failures: dict[str, BaseException] = {}
     with ThreadPoolExecutor(max_workers=2) as ex:
         vf = ex.submit(vector_retriever.retrieve, query, k=k, doc_ids=doc_ids, metadata_filter=metadata_filter)
         bf = ex.submit(bm25_retriever.invoke, query)
-        vector_docs = vf.result()
-        bm25_docs = bf.result()
+        try:
+            vector_docs = vf.result()
+        except Exception as e:
+            # 单侧失败 → 降级仅用另一侧（软降级），留痕；两侧都失败才上抛
+            logger.warning(
+                f"[hybrid_retrieve] Vector 检索失败，降级仅用 BM25: {e}",
+                exc_info=True,
+            )
+            failures["vector"] = e
+            vector_docs = []
+        try:
+            bm25_docs = bf.result()
+        except Exception as e:
+            logger.warning(
+                f"[hybrid_retrieve] BM25 检索失败，降级仅用 Vector: {e}",
+                exc_info=True,
+            )
+            failures["bm25"] = e
+            bm25_docs = []
+
+    if len(failures) == 2:
+        # 两侧都失败 = 真系统失败，向上抛（不伪装成『没有资料』的空召回）
+        raise RuntimeError(
+            f"Vector 与 BM25 检索均失败: "
+            f"vector={failures['vector']}, bm25={failures['bm25']}"
+        ) from failures["vector"]
 
     if doc_ids:
         bm25_docs = [d for d in bm25_docs if d.metadata.get("doc_id") in doc_ids]
@@ -84,10 +116,16 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
                            for d in merged[:5]],
         })
 
-    trace_collector.end_span(span,
-                         metrics={"vector_hits": len(vector_docs),
-                                   "bm25_hits": len(bm25_docs),
-                                   "merged_hits": len(merged)})
+    metrics = {"vector_hits": len(vector_docs),
+               "bm25_hits": len(bm25_docs),
+               "merged_hits": len(merged)}
+    if failures:
+        # 单侧降级可观测：span metrics 标记 fallback 侧与原因（供 trace/前端定位）
+        metrics["fallback_side"] = ",".join(failures.keys())
+        metrics["fallback_reason"] = "; ".join(
+            f"{k}: {str(v)[:100]}" for k, v in failures.items()
+        )
+    trace_collector.end_span(span, metrics=metrics)
 
     # ── Evidence Gate: Retrieval 阶段拒答判定 ────────────────
     # 接入 docs[0].metadata 让下游 chain.py 能读取；
@@ -103,8 +141,10 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
                 qa_result = None
                 try:
                     qa_result = QueryAnalyzer().analyze(query)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 查询分析失败 → Gate 走无 query_analysis 兜底（软降级），留痕
+                    from backend.shared.logger import logger as _logger
+                    _logger.debug(f"[hybrid_retrieve] QueryAnalyzer 分析失败: {e}", exc_info=True)
                 from backend.config import (
                     VEC_MIN_SCORE, DOC_TYPE_COVERAGE_REQUIRED,
                 )

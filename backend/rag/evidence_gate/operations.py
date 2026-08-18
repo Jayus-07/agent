@@ -128,6 +128,8 @@ def evidence_gate_rerank(
     *,
     intent: str = "summary_query",
     risk_level: str = "low",
+    # 阈值兜底值（与 config/rag.py 的 RERANK_MIN_* 默认一致）：
+    # 调用方（chain.py）总是显式传入配置值，这里仅为向后兼容的签名默认。
     min_top1: float = 0.35,
     min_avg: float = 0.25,
     min_gap: float = 0.05,

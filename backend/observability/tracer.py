@@ -96,6 +96,20 @@ class SpanKind(str, Enum):
     KB_ROUTING = "kb_routing"
 
 
+class SpanName:
+    """RAG 链路统一 span 显示名（P1 整改：同一阶段唯一标准名称）。
+
+    前端 UI、trace 存储、评测模块共用这一套映射；
+    代码中不允许同一阶段同时出现中英文两个名称。
+    """
+    RETRIEVAL = "检索"            # 向量+BM25 混合检索（hybrid/chunk/retrieval 层）
+    MULTI_QUERY = "多查询扩展"      # MultiQuery 复杂度检测与 LLM 改写
+    META_PARSE = "META 解析"       # LLM 输出 <!--META--> 注释解析
+    CITATION = "引文校验"          # Citation 支持度校验
+    CLAIM_VERIFY = "事实校验"      # 程序化 Claim（数字/时效）原文比对
+    EVALUATE = "忠实度评估"        # Faithfulness 忠实性评估
+
+
 @dataclass
 class Span:
     """通用 Span — 树形结构。

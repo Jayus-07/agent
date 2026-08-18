@@ -345,10 +345,9 @@ def _extract_doc_keywords_proxy(text: str, top_k: int) -> tuple:
 
 输出:"""
     try:
-        # 清理旧 token 记录
-        from backend.infra.llm.proxy import _last_call_meta
-        for k in list(_last_call_meta.keys()):
-            _last_call_meta.pop(k, None)
+        # 清理旧 token 记录（ContextVar 不可变替换）
+        from backend.infra.llm.proxy import _last_call_meta_var
+        _last_call_meta_var.set({})
 
         result = llm.invoke(prompt)
         content = result.content.strip() if hasattr(result, "content") else str(result).strip()
@@ -367,10 +366,11 @@ def _extract_doc_keywords_proxy(text: str, top_k: int) -> tuple:
 
         # 读取 token + 花费 + 模型名
         from backend.config import LLM_MODEL
+        _meta = _last_call_meta_var.get()
         tokens = {
-            "prompt_tokens": _last_call_meta.get("prompt_tokens", 0),
-            "completion_tokens": _last_call_meta.get("completion_tokens", 0),
-            "cost_usd": _last_call_meta.get("cost_usd", 0),
+            "prompt_tokens": _meta.get("prompt_tokens", 0),
+            "completion_tokens": _meta.get("completion_tokens", 0),
+            "cost_usd": _meta.get("cost_usd", 0),
             "model": LLM_MODEL,
         }
         kw_dicts = [{"word": w, "source": "llm"} for w in kws[:top_k]]

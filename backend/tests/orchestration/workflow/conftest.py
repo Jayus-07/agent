@@ -260,7 +260,9 @@ def patched_llm(monkeypatch):
     fake_llm.ainvoke = AsyncMock(return_value=FakeResponse())
 
     monkeypatch.setattr("backend.infra.llm.llm", fake_llm)
-    monkeypatch.setattr("backend.infra.llm.proxy._last_call_meta", {})
+    # 清空 proxy token ContextVar（并发隔离后为请求上下文状态）
+    from backend.infra.llm import proxy as _proxy
+    _proxy._last_call_meta_var.set({})
     return fake_llm
 
 

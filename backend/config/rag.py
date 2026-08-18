@@ -66,6 +66,12 @@ LLM_CHUNK_MIN_CHARS = int(os.getenv("LLM_CHUNK_MIN_CHARS", "2000"))
 SEMANTIC_CHUNK_MIN_TOKENS = int(os.getenv("SEMANTIC_CHUNK_MIN_TOKENS", "500"))
 # 相邻句子余弦相似度低于此阈值视为主题边界（语义断层）
 SEMANTIC_SIMILARITY_THRESHOLD = float(os.getenv("SEMANTIC_SIMILARITY_THRESHOLD", "0.45"))
+# 语义切分句子级 embedding 加固：分批大小 + 每批重试次数（对齐 indexer EMBED_RETRY_MAX 模式）
+SEMANTIC_EMBED_BATCH_SIZE = int(os.getenv("SEMANTIC_EMBED_BATCH_SIZE", "32"))
+SEMANTIC_EMBED_RETRY = int(os.getenv("SEMANTIC_EMBED_RETRY", "3"))
+# 单文档 chunk 数量上限（生产防护）：异常超长/解析失控文档超限时截断 + 告警，
+# 防止无界产出撑爆 embedding/向量库
+MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "5000"))
 
 # ====================================
 # Knowledge Base 隔离配置
@@ -115,7 +121,8 @@ SUMMARY_MAX_LENGTH = 250
 # Plan Critique + Resource Monitor
 # ====================================
 ENABLE_PLAN_CRITIQUE = True    # 启用 Plan Critique 自我纠错
-RERANKER_THRESHOLD = 0.35      # Context Filter 最低相关度阈值
+# Context Filter 最低相关度阈值（agents/reporter/context_filter.py 使用）
+RERANKER_THRESHOLD = float(os.getenv("RERANKER_THRESHOLD", "0.35"))
 ENABLE_RESOURCE_MONITOR = os.getenv("ENABLE_RESOURCE_MONITOR", "true").lower() == "true"
 
 # ====================================

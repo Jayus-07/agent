@@ -28,6 +28,7 @@ from langchain_core.documents import Document
 from backend.observability.tracer import trace_collector, WorkflowKind, SpanKind
 from backend.rag.preprocessing.cleaner import DocumentCleaner
 from backend.rag.indexing.models import SyncResult, Delta
+from backend.config.rag import BM25_SEARCH_K
 from backend.shared.logger import logger
 from backend.infra.async_utils import run_async as _run_async
 
@@ -72,6 +73,7 @@ class IncrementalIndexer:
         registry: Any,
         kb_id: str = "policy_general",
         department: str = "general",
+        bm25_store: Any = None,
     ):
         self.docs_dir = Path(docs_dir).resolve()
         self.vectordb = vectordb
@@ -80,6 +82,9 @@ class IncrementalIndexer:
         self.registry = registry
         self.kb_id = kb_id
         self.department = department
+        # 上传/重索引后立即同步 BM25（避免"上传成功但 BM25 未更新"）。
+        # 启动期 sync 时 bm25_store 尚未构建（pipeline 先增量索引后建 BM25），传入 None 即跳过。
+        self.bm25_store = bm25_store
 
     # ---- 主入口 ----
 
@@ -265,8 +270,11 @@ class IncrementalIndexer:
                 metrics={"error": str(e)[:200]})
             try:
                 trace_collector.finish(trace, "[ERROR]", upload_span.duration_ms, "", "")
-            except Exception:
-                pass
+            except Exception as cleanup_e:
+                # 已在异常处理路径：trace 收尾失败只记录，不再覆盖原始异常
+                logger.error(
+                    "[Indexer] 异常路径 trace 收尾失败: %s", cleanup_e, exc_info=True,
+                )
             raise
 
     def _index_file_inner(self, file_path: str, kb_id: str, doc_id: str, file_hash: str):
@@ -680,6 +688,18 @@ class IncrementalIndexer:
             self._remove_document(doc_id)
             raise
 
+        # ── ⑤.5 BM25 同步（P0-1：上传/重索引后立即同步，避免"上传成功但 BM25 未更新"）──
+        # 仅在显式传入 bm25_store 时执行（上传/重索引路径）；pipeline 启动 sync 不传（BM25 随后全量重建）。
+        # 注意：chunk metadata 需含 doc_id/source_file 等字段（BM25 删除/去重依赖），_enrich 与上方注入已提供。
+        if self.bm25_store is not None and chunks:
+            try:
+                self.bm25_store.add_documents(chunks, k=BM25_SEARCH_K)
+                logger.info(
+                    f"[BM25] 文档已同步 {len(chunks)} chunks: {os.path.basename(file_path)}"
+                )
+            except Exception as e:
+                logger.error(f"[BM25] 同步失败 (doc_id={doc_id}): {e}")
+
         # ── ⑨ registry（始终执行，含 metadata 用于操作日志追溯）──
         try:
             self.registry.register(
@@ -846,8 +866,9 @@ class IncrementalIndexer:
                             near_dup_id = existing.get("doc_id", "")
                             logger.warning(f"[MinHash] 检测到近似文档: sim={sim:.2f}, existing={near_dup_id}")
                             break
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # 单个已有文档签名损坏/格式异常 → 跳过该文档继续比对（软降级），留痕
+                        logger.debug(f"[MinHash] 单文档签名比对失败，跳过: {e}", exc_info=True)
 
             if parent_span_id:
                 rule_extract_span = trace_collector.start_span(
@@ -994,8 +1015,9 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
             if parent_span_id:
                 trace_collector.end_span(section_span, metrics={"sections_count": len(sections or [])})
 
-        except Exception:
-            pass
+        except Exception as e:
+            # 章节提取失败 → 跳过 sections 元数据（软降级），留痕
+            logger.debug(f"[Indexer] 章节提取失败，跳过: {e}", exc_info=True)
 
         return {
             "doc_type": doc_type,
@@ -1075,8 +1097,9 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
                 if tr:
                     for sp in tr.spans:
                         stage_elapsed[sp.span_id] = int(sp.duration_ms or 0)
-        except Exception:
-            pass
+        except Exception as e:
+            # 阶段耗时汇总失败 → 返回空 dict（软降级），留痕；不影响索引结果
+            logger.debug(f"[Indexer] 阶段耗时汇总失败: {e}", exc_info=True)
         return {
             "doc_id": updated.get("doc_id", ""),
             "chunk_count": updated.get("chunk_count", 0),
@@ -1110,17 +1133,23 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
         """生成稳定且按知识库隔离的文档 ID。
 
         已注册的旧路径优先复用原 ID，避免升级后历史 Trace、删除链接失效。
-        新文档使用知识库、部门和规范化相对路径生成，不受文件内容变化影响。
+        新文档统一使用 md5(basename)[:10] 协议（P0-2 根治）：
+          - 与 registry 全量重建路径（_sync_registry_after_full_rebuild）、
+            loader 注入、评测集 relevant_docs（md5(basename)[:10]）三方一致；
+          - 原 sha256(kb|dept|rel)[:16] 与其余三方分裂，导致删除后 BM25 残留。
+        注意：md5(basename) 跨目录同文件名会共享 doc_id（当前部署可接受，
+        同文件名跨 KB/部门场景少；如需严格隔离可再叠加 kb 前缀派生）。
         """
         try:
             existing = self.registry.get_by_path(file_path)
         except (AttributeError, OSError, RuntimeError):
             existing = None
-        if isinstance(existing, dict) and existing.get("doc_id"):
+        # 仅复用 active 记录：deleted 记录复用会残留旧 doc_id（如清理后重传
+        # 会沿用旧 sha256[:16]），导致与 md5[:10] 协议分裂
+        if isinstance(existing, dict) and existing.get("doc_id") \
+                and existing.get("status", "active") == "active":
             return str(existing["doc_id"])
-        rel_path = os.path.relpath(file_path, self.docs_dir).replace("\\", "/")
-        identity = f"{kb_id}|{self.department}|{rel_path}"
-        return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+        return hashlib.md5(os.path.basename(file_path).encode()).hexdigest()[:10]
 
     # ---- KB ID 推导 ----
 

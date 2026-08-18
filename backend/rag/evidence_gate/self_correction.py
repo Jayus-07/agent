@@ -131,8 +131,12 @@ class SelfCorrectionStrategy:
             logger.warning(f"[Self-Correction] 改写失败: {e}")
             try:
                 trace_collector.end_span(rewrite_span, status="error")
-            except Exception:
-                pass
+            except Exception as cleanup_e:
+                # 已在异常处理路径：span 收尾失败只记录，不再覆盖原始异常
+                logger.error(
+                    "[Self-Correction] rewrite span 收尾失败: %s", cleanup_e,
+                    exc_info=True,
+                )
             return None
 
 

@@ -1,6 +1,8 @@
 """token 计数 — 用 tiktoken 真实 tokenizer，替代 len 字符数。"""
 from __future__ import annotations
 
+import functools
+
 import tiktoken
 
 from backend.shared.logger import logger
@@ -15,6 +17,11 @@ def _get_encoder():
     return _enc
 
 
+# 生产加固：同一文本在切分链路中会被反复计数（splitter.length_function、
+# leaf_meta、section 分组等），每次 tiktoken encode 开销不小。
+# lru_cache 缓存结果（线程安全，自带锁），大文档重复计数命中缓存。
+# maxsize 限制缓存内存；文本本身仍参与 hash（O(n)），远快于 encode。
+@functools.lru_cache(maxsize=4096)
 def count_tokens(text: str) -> int:
     """返回文本 token 数（cl100k_base，DeepSeek 近似）。"""
     if not text:

@@ -21,6 +21,7 @@ KNOWLEDGE_BASES: Dict[str, dict] = {
     "policy_hr":      {"name": "人事制度知识库", "domain": "hr",         "owner_depts": ["hr"]},
     "policy_finance": {"name": "财务制度知识库", "domain": "finance",    "owner_depts": ["finance"]},
     "policy_general": {"name": "企业公共制度知识库", "domain": "general", "owner_depts": ["all"]},
+    "rag_test_kb":    {"name": "RAG 评测知识库", "domain": "general", "owner_depts": ["all"]},
 }
 
 # 默认知识库（上传未选时回退）

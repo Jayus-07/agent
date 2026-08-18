@@ -53,6 +53,7 @@ def test_purge_doc_vectors_calls_all_cleanup(tmp_path):
     p.vectordb.delete.assert_called_once_with(where={"doc_id": "doc1"})
     p.doc_db.delete.assert_called_once_with(where={"doc_id": "doc1"})
     mock_cs.return_value.delete_by_doc_id.assert_called_once_with("doc1")
-    p.remove_documents_from_bm25.assert_called_once_with(["doc1"])
+    # P0-2: 删除时传入 file_path 作为 BM25 第二过滤键（doc_id 协议分裂时按文件名兜底命中）
+    p.remove_documents_from_bm25.assert_called_once_with(["doc1"], file_paths=[str(f)])
     assert not f.exists()  # 原文件已删
     assert warnings == []

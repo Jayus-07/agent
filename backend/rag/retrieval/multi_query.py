@@ -15,6 +15,7 @@ from backend.config import (
     MULTI_QUERY_TOP_K_PER, MULTI_QUERY_DEDUP,
     MULTI_QUERY_SIMILARITY, MULTI_QUERY_MIN_LENGTH,
 )
+from backend.rag.context import get_context
 from backend.shared.logger import logger
 
 # 运行时模式（可通过 API POST /llm/multiquery 动态切换）
@@ -246,10 +247,20 @@ class MultiQueryRetriever(BaseRetriever):
 
     def __init__(self, base_retriever):
         super().__init__(base_retriever=base_retriever)
+        # 触发状态随 RequestContext 隔离（并发下同一 retriever 实例
+        # 被多请求共享，实例字段会串扰 trace 报告）
         self._last_triggered = False
         self._last_reason = ""
         self._last_variants = 1
         self._last_filtered = 1
+
+    @property
+    def _last_triggered(self) -> bool:
+        return get_context().mq_triggered
+
+    @_last_triggered.setter
+    def _last_triggered(self, value: bool) -> None:
+        get_context().mq_triggered = value
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> list[Document]:
         use, reason = need_multi_query(query)

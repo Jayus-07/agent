@@ -239,6 +239,34 @@ class RAGPipeline:
                 logger.warning("ChromaDB chunk 数据读取失败", exc_info=True)
                 chunk_ids = []
 
+            # P1-10: 全量重建路径补写 chunk_store（消除"registry 有记录但 chunk_store 0 条"
+            # 的不一致——此前全量重建只注册 chunk_ids，不写 chunk 文本，导致
+            # GET /documents/{id}/chunks 返回空）
+            try:
+                from backend.rag.indexing.chunk_store import get_chunk_store
+                from backend.config import DOC_REGISTRY_PATH  # noqa: F401
+                chunk_docs = chunk_data.get("documents") or []
+                chunk_metas = chunk_data.get("metadatas") or [{}] * len(chunk_docs)
+                cs = get_chunk_store()
+                cs.delete_by_doc_id(doc_id)  # 幂等：先清旧数据
+                cs.insert_batch(doc_id, [
+                    {
+                        "chunk_index": i,
+                        "content": (chunk_docs[i] or "") if i < len(chunk_docs) else "",
+                        "keywords": (chunk_metas[i].get("chunk_keywords", "") if i < len(chunk_metas) else ""),
+                        "llm_keywords": "",
+                        "llm_model": "",
+                        "section_title": (chunk_metas[i].get("section_title", "") if i < len(chunk_metas) else ""),
+                        "doc_type": (chunk_metas[i].get("doc_type", "general") if i < len(chunk_metas) else "general"),
+                        "kb_id": kb_id,
+                        "department": "general",
+                        "simulated_questions": (chunk_metas[i].get("simulated_questions", []) if i < len(chunk_metas) else []),
+                    }
+                    for i in range(len(chunk_ids))
+                ])
+            except Exception as e:
+                logger.warning(f"[Pipeline] 全量重建写 chunk_store 失败 (doc_id={doc_id}): {e}")
+
             # 从 doc 级向量库查找 doc_db_id
             doc_db_id = ""
             try:
@@ -299,19 +327,22 @@ class RAGPipeline:
             memory_manager=_mem,
         )
 
-    def remove_documents_from_bm25(self, doc_ids: list[str]) -> None:
+    def remove_documents_from_bm25(self, doc_ids: list[str], file_paths: list[str] | None = None) -> None:
         """运行时删除文档后，从 BM25 索引移除对应 chunk 并全量重建。
 
         BM25 的 IDF 依赖全量文档统计，删除必须全量重建以保持准确。
         只更新内存中的 self.bm25 与磁盘持久化索引，不动 Chroma 向量。
+        file_paths 作为第二过滤键（P0-2：doc_id 协议分裂时按文件名兜底命中）。
         """
         if not doc_ids or self.bm25_store is None:
             return
         try:
-            new_retriever = self.bm25_store.remove_documents(doc_ids, k=BM25_SEARCH_K)
+            new_retriever = self.bm25_store.remove_documents(
+                doc_ids, k=BM25_SEARCH_K, file_paths=file_paths,
+            )
             if new_retriever is not None:
                 self.bm25 = new_retriever
-            logger.info(f"[RAG] BM25 已移除文档 {doc_ids}")
+            logger.info(f"[RAG] BM25 已移除文档 {doc_ids} (file_paths={file_paths})")
         except Exception as e:
             logger.warning(f"[RAG] BM25 移除文档失败 ({doc_ids}): {e}")
 
@@ -498,8 +529,9 @@ class RAGPipeline:
                 bm25_results = self.bm25.search(question, k=top_k)
                 for doc in bm25_results:
                     chunks.append(doc.page_content if hasattr(doc, 'page_content') else str(doc))
-            except Exception:
-                pass
+            except Exception as e:
+                # BM25 失败 → 降级只用向量检索（软降级），留痕；全部失败时 chunks 为空返回 ""
+                logger.warning(f"[RAG.retrieve] BM25 检索失败，跳过: {e}", exc_info=True)
 
             # 向量检索
             try:
@@ -508,8 +540,9 @@ class RAGPipeline:
                     content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
                     if content not in chunks:
                         chunks.append(content)
-            except Exception:
-                pass
+            except Exception as e:
+                # 向量检索失败 → 保留 BM25 结果（软降级），留痕
+                logger.warning(f"[RAG.retrieve] 向量检索失败，跳过: {e}", exc_info=True)
 
             elapsed = _time.monotonic() - t0
             logger.info(

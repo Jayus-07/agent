@@ -119,11 +119,10 @@ class BaseAgentSkill(BaseCapability):
         这样保证 token 统计 / trace / 限流 / 模型切换统一管理。
         """
         from backend.infra.llm import llm
-        from backend.infra.llm.proxy import _last_call_meta
+        from backend.infra.llm.proxy import _last_call_meta_var
 
-        # 清空上次 meta，准备记录本次调用
-        for k in list(_last_call_meta.keys()):
-            _last_call_meta.pop(k, None)
+        # 清空上次 meta，准备记录本次调用（ContextVar 不可变替换）
+        _last_call_meta_var.set({})
 
         # 构造 messages（OpenAI 格式）
         messages: list[dict[str, str]] = []
@@ -139,10 +138,11 @@ class BaseAgentSkill(BaseCapability):
                 else str(response)
             )
             # 记录 token 用量（由 proxy 自动捕获）
+            _meta = _last_call_meta_var.get()
             meta = {
-                "prompt_tokens": _last_call_meta.get("prompt_tokens", 0),
-                "completion_tokens": _last_call_meta.get("completion_tokens", 0),
-                "model": _last_call_meta.get("model", ""),
+                "prompt_tokens": _meta.get("prompt_tokens", 0),
+                "completion_tokens": _meta.get("completion_tokens", 0),
+                "model": _meta.get("model", ""),
             }
             logger.debug(
                 f"[{self.name}] LLM 调用完成: {meta['prompt_tokens']}+"

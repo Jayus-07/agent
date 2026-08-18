@@ -30,6 +30,7 @@ from backend.rag.citation import CitationFormatter
 from backend.rag.evidence_gate import EvidenceGateController
 from backend.rag.evidence_gate.self_correction import SelfCorrectionStrategy
 from backend.config import ENABLE_HISTORY_AWARE_RETRIEVAL
+from backend.rag.context import get_context, set_context
 from backend.shared.logger import logger
 
 
@@ -139,13 +140,42 @@ class RAGChain:
         self.gate = EvidenceGateController()
         self.corrector = SelfCorrectionStrategy()
         self.formatter = CitationFormatter()
-        # ── RAGChain 自有状态（PR-1.4 保留）──
-        self._last_query: str = ""
-        self._last_meta: dict = {}  # P1: META 注释解析结果
+        # ── RAGChain 自有状态 ──
+        # 决策中间态（_last_meta/_last_faithfulness/_last_query）已迁移到
+        # RequestContext（P1 并发隔离），见类底部 property；
+        # _last_sources 是跨线程输出通道（rag_search 在 to_thread 返回后
+        # 于主线程 getattr 读取），必须保留为实例字段。
+        self._last_sources: list = []
 
         self._build_retrievers()
         self._build_chains()
         logger.info("LangChain RAG Chain 初始化完成")
+
+    # ── 决策中间态：随 RequestContext 隔离（contextvars），防单例并发串扰 ──
+    # 保留 _last_* 属性名仅为兼容既有测试/外部读取，实际存储于请求上下文。
+    @property
+    def _last_meta(self) -> dict:
+        return get_context().meta
+
+    @_last_meta.setter
+    def _last_meta(self, value: dict) -> None:
+        get_context().meta = value
+
+    @property
+    def _last_faithfulness(self):
+        return get_context().faithfulness
+
+    @_last_faithfulness.setter
+    def _last_faithfulness(self, value) -> None:
+        get_context().faithfulness = value
+
+    @property
+    def _last_query(self) -> str:
+        return get_context().query
+
+    @_last_query.setter
+    def _last_query(self, value: str) -> None:
+        get_context().query = value
 
     # =================================================
     # Step A: 构建 BaseRetriever 实例
@@ -209,9 +239,10 @@ class RAGChain:
             )
             try:
                 r = _stuff.invoke(inp)
-                # 注入 token + finish_reason + cost_usd（从 proxy 模块级缓存读）
-                from backend.infra.llm.proxy import _last_call_meta
-                metrics = dict(_last_call_meta)  # {prompt_tokens, completion_tokens, total_tokens, finish_reason, cost_usd}
+                # 注入 token + finish_reason + cost_usd（从 proxy ContextVar 读，
+                # 与 _record_tokens 同上下文，保证并发下各请求读到自己的 token）
+                from backend.infra.llm.proxy import _last_call_meta_var
+                metrics = dict(_last_call_meta_var.get())
                 # 截断文本字段，避免大输出撑爆 trace
                 completion_text = ""
                 if hasattr(r, "content") and isinstance(r.content, str):
@@ -260,9 +291,23 @@ class RAGChain:
     # =================================================
 
     def ask(self, question: str, session_id: str = "default") -> str:
-        """RAGChain 入口：线性 3 段 — prepare → execute → respond。"""
+        """RAGChain 入口：线性 3 段 — prepare → execute → respond。
+
+        每次调用先初始化请求级中间态（P1 并发隔离）：
+          - 决策状态（_last_meta/_last_faithfulness/mq_triggered）随 RequestContext
+            隔离：RAGChain 是进程级单例，实例字段会被并发请求互相覆盖；
+          - gate/corrector 每请求新建实例：复用实例会让 intent/risk_level/
+            retry_count 在并发请求间串扰（retry_count 还会跨请求累积）。
+        """
         trace, t_total = self._start(question, session_id)
         try:
+            ctx = get_context()
+            ctx.meta = {}
+            ctx.faithfulness = None
+            ctx.mq_triggered = False
+            set_context(ctx)
+            self.gate = EvidenceGateController()
+            self.corrector = SelfCorrectionStrategy()
             chat_history = self._prepare(question, session_id)
             result = self._execute(question, chat_history)
             return self._respond(result, trace, question, session_id, t_total)
@@ -313,6 +358,33 @@ class RAGChain:
 
         answer = self._evaluate(answer, result.get("context", []))
 
+        # ── Evaluation Gate: Faithfulness 低分拒答（程序化门槛，LLM 自报不能覆盖）──
+        # 修复：is_groundedness_acceptable 此前只定义未被调用，
+        # FAITHFULNESS_REJECT_SCORE / HIGH_RISK_REJECT_SCORE 一直未生效。
+        # 阈值从 config 传入（保持配置单一来源，函数签名的默认值仅作兜底）。
+        if self._last_faithfulness is not None:
+            from backend.rag.evidence_gate import (
+                is_groundedness_acceptable, GateDecision, RejectReason,
+            )
+            from backend.config import (
+                FAITHFULNESS_REJECT_SCORE, HIGH_RISK_REJECT_SCORE,
+            )
+            acceptable, _ = is_groundedness_acceptable(
+                self._last_faithfulness.score,
+                risk_level=self.gate.risk_level,
+                low_threshold=FAITHFULNESS_REJECT_SCORE,
+                high_threshold=HIGH_RISK_REJECT_SCORE,
+            )
+            if not acceptable:
+                decision = GateDecision(
+                    passed=False, reason=RejectReason.HALLUCINATION,
+                    layer="evaluation", score=self._last_faithfulness.score,
+                    diagnostics={"reason": "faithfulness_below_threshold"},
+                )
+                answer = self._reject(decision, "evaluation", trace, t_total)
+                self._record_rag_metric("rejected")
+                return answer
+
         # Gate 3: LLM 自报拒答 (META can_answer=False)
         meta = self._last_meta or {}
         if not meta.get("can_answer", True):
@@ -334,11 +406,18 @@ class RAGChain:
         try:
             from backend.observability.metrics import record_rag_status
             record_rag_status(status)
-        except Exception:
-            pass  # 埋点失败不影响主流程
+        except Exception as e:
+            # 埋点失败不影响主流程（可观测降级），但必须留痕，不能静默吞掉
+            logger.debug(f"[RAGChain] 指标埋点失败: {e}", exc_info=True)
 
     def _handle_llm_reject(self, meta, trace, question, session_id, t_total) -> str:
-        """LLM 自报拒答 → self-correction 或直接拒答。"""
+        """Gate 3（LLM 自报拒答）的统一处理。
+
+        先尝试 self-correction（改写 query 重试）——目的是把『资料确实没有』
+        和『检索没找对』区分开；重试仍失败或已用尽重试次数时，走统一拒答，
+        保证不生成无依据答案。self-correction 不能无限循环，
+        循环次数受 SelfCorrectionStrategy.retry_count 上限约束。
+        """
         decision = self.gate.build_decision_from_meta(meta)
 
         if self.corrector.can_retry():
@@ -354,7 +433,13 @@ class RAGChain:
 
     def _reject(self, decision, layer: str, trace, t_total: float,
                 self_correction_attempted: bool = False) -> str:
-        """统一拒答：构造 RejectInfo + 写 trace + finish trace + 返回 msg。"""
+        """统一拒答路径。
+
+        所有 Gate 拒答（retrieval/rerank/claim_verify/generation）都走这里：
+        构造 RejectInfo → 写 trace（rejection metadata + root span 状态）→
+        完成 trace → 返回拒答消息。集中在一处是为了让拒答行为（消息格式、
+        trace 埋点、指标）保持一致，而不是散落在各 Gate 分支。
+        """
         from backend.rag.evidence_gate import build_rejection_response
         msg, info = build_rejection_response(decision, layer,
                                              self_correction_attempted=self_correction_attempted)
@@ -390,7 +475,12 @@ class RAGChain:
         trace_collector.finish(trace, answer, total_ms, LLM_MODEL, provider)
 
     def _finish_error(self, trace, t_total: float):
-        """异常路径收尾。"""
+        """异常路径收尾。
+
+        主流程异常时把 root span 标为 error 并完成 trace，
+        保证 Trace 不因异常而丢失（P0）。此函数自身在异常处理路径中，
+        收尾再失败时不覆盖原始异常，仅记录日志。
+        """
         from backend.observability.tracer import trace_collector
         import time as _time
         try:
@@ -398,8 +488,9 @@ class RAGChain:
                                 metrics={"error": "pipeline_failed"})
             trace_collector.finish(trace, "[ERROR]",
                                    int((_time.time() - t_total) * 1000), "", "")
-        except Exception:
-            pass
+        except Exception as e:
+            # 已在异常处理路径：收尾失败只记录，不再覆盖原始异常
+            logger.error("[RAGChain] error cleanup failed: %s", e, exc_info=True)
 
     def _try_self_correct(self, original_decision, trace, question, session_id, t_total):
         """Self-Correction：改写 query 重试。
@@ -425,6 +516,12 @@ class RAGChain:
                 return None
 
             answer = self._verify(result, new_query, session_id)
+            # 二次生成同样必须过程序化 Claim 校验（数字/时效零容忍），
+            # 否则 self-correction 会成为绕过 ClaimVerifier 的旁路。
+            answer = self._verify_claims(answer, result.get("context", []))
+            if answer is None:
+                # 二次生成仍编造确定性事实 → 放弃，走 _handle_llm_reject 兜底拒答
+                return None
             answer = self._evaluate(answer, result.get("context", []))
             meta = self._last_meta or {}
             if not meta.get("can_answer", True):
@@ -444,9 +541,11 @@ class RAGChain:
     def _execute(self, question: str, chat_history: list) -> dict:
         """执行阶段：chain.invoke + MultiQuery 决策 trace + Retrieval Debug。
 
-        Evidence Gate 在 _execute 末尾跑：
-          - 读取 hybrid.py 已注入的 retrieval Gate decision
-          - 跑 Rerank Gate (基于 context 上的 rerank_score)
+        Evidence Gate 在 _execute 末尾统一编排（唯一执行点）：
+          - Gate 1: 优先读取 hybrid.py 已注入的 retrieval decision（快路径，
+            避免 Retriever 层与 Chain 层重复计算同一 Gate）；仅当空召回或
+            未注入（fallback 路径）时在此补跑一次，处理 NO_EVIDENCE。
+          - Gate 2: 基于 context 上的 rerank_score 跑 Rerank Gate。
         拒答时把 GateDecision 写到 result["__evidence_gate_decision__"]，
         上层 ask() 据此短路 verify/evaluate。
 
@@ -461,13 +560,16 @@ class RAGChain:
         try:
             from backend.rag.retrieval.query_analyzer import QueryAnalyzer
             self.gate.set_query_analysis(QueryAnalyzer().analyze(question))
-        except Exception:
+        except Exception as e:
+            # 查询分析失败不阻塞主链路（软降级），但需留痕以便定位
+            logger.debug(f"[RAGChain] QueryAnalyzer 分析失败: {e}", exc_info=True)
             self.gate.set_query_analysis(None)
 
         # ── retrieval span（包裹整个检索过程，挂 debug event）──
+        from backend.observability.tracer import SpanName as _SpanName
         ret_span = trace_collector.start_span(
             "retrieval", parent_id="root",
-            name="混合检索", type="retrieval",
+            name=_SpanName.RETRIEVAL, type="retrieval",
             kind="retrieval",
             input={"question": question[:500]},
         )
@@ -483,7 +585,7 @@ class RAGChain:
                      "total_docs": len(context_docs)})
 
         # mq_check
-        mq_span = trace_collector.start_span("mq_check", name="多查询扩展")
+        mq_span = trace_collector.start_span("mq_check", name=_SpanName.MULTI_QUERY)
         mq = getattr(self, '_mq_retriever', None)
         triggered = mq._last_triggered if mq else False
         from backend.rag.retrieval.multi_query import get_mq_mode
@@ -538,7 +640,9 @@ class RAGChain:
                                  if k not in ("gate_passed", "gate_layer",
                                               "gate_score", "gate_reason")},
                 )
-            except Exception:
+            except Exception as e:
+                # 注入的 decision 反序列化失败 → 透传放行（软降级），留痕以便 trace 定位
+                logger.warning(f"[RAGChain] Gate 1 decision 反序列化失败，透传放行: {e}")
                 ret_decision = gate_retrieval_passthrough()
         else:
             # 没注入（空召回或 fallback 路径）→ 自己跑一次
@@ -550,7 +654,9 @@ class RAGChain:
                     vec_min_score=VEC_MIN_SCORE,
                     require_doc_type_coverage=DOC_TYPE_COVERAGE_REQUIRED,
                 )
-            except Exception:
+            except Exception as e:
+                # Gate 评估异常 → 透传放行（软降级），留痕；不放行拒答会误伤正常检索
+                logger.warning(f"[RAGChain] Gate 1 评估异常，透传放行: {e}", exc_info=True)
                 ret_decision = gate_retrieval_passthrough()
 
         trace_collector.end_span(gate_span, metrics=ret_decision.to_metrics(),
@@ -566,7 +672,9 @@ class RAGChain:
                 self.gate.intent,
                 getattr(self.gate.query_analysis, "doc_types", []) or [],
             ))
-        except Exception:
+        except Exception as e:
+            # 风险等级推导失败 → 保守按低风险处理（软降级），留痕
+            logger.debug(f"[RAGChain] 风险等级推导失败，按 low 处理: {e}", exc_info=True)
             self.gate.set_risk_level("low")
 
         rerank_span = trace_collector.start_span(
@@ -587,7 +695,9 @@ class RAGChain:
                 min_gap=RERANK_MIN_GAP,
                 high_risk_min_top1=RERANK_HIGH_RISK_MIN_TOP1,
             )
-        except Exception:
+        except Exception as e:
+            # Gate 2 评估异常 → 透传放行（软降级），留痕；不放行会误伤正常检索
+            logger.warning(f"[RAGChain] Gate 2 评估异常，透传放行: {e}", exc_info=True)
             rerank_decision = gate_retrieval_passthrough()
 
         trace_collector.end_span(rerank_span,
@@ -654,7 +764,8 @@ class RAGChain:
         context_docs = result.get("context", [])
 
         # ── P1: 解析 META 注释 ──
-        meta_span = trace_collector.start_span("meta_parse", name="META 注释解析")
+        from backend.observability.tracer import SpanName as _SpanName
+        meta_span = trace_collector.start_span("meta_parse", name=_SpanName.META_PARSE)
         cleaned_answer, meta = parse_meta_comment(raw_answer)
         self._last_meta = meta
         trace_collector.end_span(meta_span,
@@ -664,7 +775,7 @@ class RAGChain:
 
         # ── Citation 校验（基于已剥离 META 的 cleaned_answer）──
         citation_span = trace_collector.start_span(
-            "citation", name="引文校验")
+            "citation", name=_SpanName.CITATION)
         if context_docs:
             answer, verified_docs = self.formatter.verify_support(cleaned_answer, context_docs, question)
         else:
@@ -693,10 +804,11 @@ class RAGChain:
             answer（通过时原样返回）或 None（编造事实被拦截）。
         """
         from backend.observability.tracer import trace_collector
+        from backend.observability.tracer import SpanName as _SpanName
         from backend.rag.evidence_gate.claim_verifier import verify_answer
 
         claim_span = trace_collector.start_span(
-            "claim_verify", name="Claim 原文校验")
+            "claim_verify", name=_SpanName.CLAIM_VERIFY)
         try:
             verifier = verify_answer(answer, context_docs)
             trace_collector.end_span(claim_span,
@@ -730,6 +842,7 @@ class RAGChain:
         """
         import re
         from backend.observability.tracer import trace_collector
+        from backend.observability.tracer import SpanName as _SpanName
         self._last_faithfulness = None
 
         try:
@@ -741,7 +854,7 @@ class RAGChain:
             ref_section = answer[ref_match.start():] if ref_match else ""
 
             faith_span = trace_collector.start_span(
-                "faithfulness", name="忠实度验证")
+                "faithfulness", name=_SpanName.EVALUATE)
             self._last_faithfulness = check_faithfulness(answer_body, context_docs)
             trace_collector.end_span(faith_span,
                                  metrics={

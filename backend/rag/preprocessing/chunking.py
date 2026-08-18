@@ -25,12 +25,37 @@ from backend.shared.logger import logger
 _SEPARATORS = ["\n\n", "\n", "。", "！", "？", ".", "!", "?", " ", ""]
 
 
-def _chunk_id(doc_id: str, index: str) -> str:
-    return hashlib.md5(f"{doc_id}:{index}".encode()).hexdigest()[:12]
+def _chunk_id(doc_id: str, anchor: str, text: str) -> str:
+    """内容派生 chunk_id（生产加固）。
+
+    原实现 md5(doc_id:遍历index) 依赖遍历序——文档局部微变会让后续
+    chunk 的 index 整体偏移、chunk_id 全部漂移，增量重索引后无法追踪
+    单个 chunk 的生命周期。现改为 doc_id + anchor（section 路径/粒度）
+    + 内容哈希派生：
+      - 同一文档相同内容重复切分 → 相同 chunk_id（幂等重索引）
+      - 文档局部微变 → 未受影响 chunk 的 id 保持稳定
+    anchor 提供上下文区分（parent/leaf + section 路径），
+    内容哈希保证内容绑定。格式保持 md5 前 12 位 hex 不变。
+    """
+    text_hash = hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
+    return hashlib.md5(
+        f"{doc_id}:{anchor}:{text_hash}".encode("utf-8")
+    ).hexdigest()[:12]
 
 
 def _enrich(chunks: List[Document], file_path: str) -> List[Document]:
-    """统一 metadata：parent_doc_id / chunk_index / source_file / file_path。"""
+    """统一 metadata：parent_doc_id / chunk_index / source_file / file_path。
+
+    生产防护：chunk 数量超过 MAX_CHUNKS_PER_DOC 时截断 + 告警，
+    防止解析失控的异常文档无界产出撑爆 embedding/向量库。
+    """
+    from backend.config import MAX_CHUNKS_PER_DOC
+    if len(chunks) > MAX_CHUNKS_PER_DOC:
+        logger.warning(
+            f"[Chunking] {file_path} 产出 {len(chunks)} chunks 超过上限 "
+            f"{MAX_CHUNKS_PER_DOC}，截断保留前 {MAX_CHUNKS_PER_DOC} 个"
+        )
+        chunks = chunks[:MAX_CHUNKS_PER_DOC]
     parent_doc_id = hashlib.md5(file_path.encode()).hexdigest()[:10]
     source_file = os.path.basename(file_path)
     for i, c in enumerate(chunks):
@@ -92,6 +117,14 @@ def _detect_boundaries(
 _SECTION_HEADING_RE = re.compile(r"^[一二三四五六七八九十]+、")
 
 
+def _doc_title(ast: DocumentAST) -> str:
+    """取文档首个一级标题（H1）作为兜底 section_title（P1-9：文档头部无章节号时用）。"""
+    for n in walk(ast.root):
+        if n.type == "section" and n.level == 1 and n.text.strip():
+            return n.text.strip()
+    return ""
+
+
 def _is_section_heading(text: str) -> bool:
     """判断文本是否中文编号章节标题（一、二、三、）。"""
     return bool(_SECTION_HEADING_RE.match(text.strip()))
@@ -106,51 +139,144 @@ def _is_legal_clause(text: str) -> bool:
     return bool(_LEGAL_CLAUSE_RE.match(text.strip()))
 
 
-def _make_leaf_chunk(texts: list[str], file_path: str, index: int) -> Document:
-    """合并文本列表成一个 leaf chunk（Step/Legal 等按编号切分的策略共用）。"""
+def _make_leaf_chunk(texts: list[str], file_path: str,
+                     section_title: str = "", section_level: int = 0,
+                     section_path: list | None = None) -> Document:
+    """合并文本列表成一个 leaf chunk（Step/Legal 等按编号切分的策略共用）。
+
+    chunk_id 由合并内容派生（幂等）：同内容重复切分产出相同 id。
+    P1-9: 支持注入 section_title/section_level/section_path（Step/Legal 策略
+    此前产出空标题，检索上下文弱）。
+    """
     text = "\n".join(texts)
     return _make_doc(text, {
         "granularity": "leaf",
-        "chunk_id": _chunk_id(file_path, str(index)),
+        "chunk_id": _chunk_id(file_path, "leaf", text),
         "parent_chunk_id": "",
-        "section_path": [],
-        "section_title": "",
-        "section_level": 0,
+        "section_path": list(section_path or []),
+        "section_title": section_title,
+        "section_level": section_level,
         "chunk_tokens": count_tokens(text),
     })
 
 
 class StructureChunkStrategy:
-    """结构化切分：每个 section → parent，section 内叶子 → leaf。"""
+    """结构化切分：每个 section → parent，section 内叶子 → leaf。
+
+    生产加固（超长保护）：嵌套 section 的顶层 parent 用 _section_text
+    全量 walk 拼接，可远超 PARENT_CHUNK_TOKENS，单个超大 parent 会构造
+    超长 embedding 输入。section 文本超限时，叶子按 token 预算分组，
+    每组产一个 parent（标题 + 组内叶子），leaf 关联其所属组。
+    """
 
     def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
         chunks: List[Document] = []
-        counter = 0
         for sec, path in self._sections(ast):
+            leaves = list(self._leaves(sec))
+            section_anchor = ".".join(path)
             sec_text = self._section_text(sec)
-            parent_meta = {
-                "granularity": "parent",
-                "chunk_id": _chunk_id(file_path, str(counter)),
+            if count_tokens(sec_text) <= PARENT_CHUNK_TOKENS:
+                # 常规：一个 section → 一个 parent（全貌）+ 直接子叶
+                parent_id = _chunk_id(
+                    file_path, f"parent:{section_anchor}", sec_text,
+                )
+                self._emit_parent(chunks, file_path, sec, path, sec_text, parent_id)
+                for leaf in leaves:
+                    self._emit_leaf(
+                        chunks, file_path, sec, path, leaf,
+                        _chunk_id(file_path, f"leaf:{section_anchor}", leaf.text),
+                        parent_id,
+                    )
+            else:
+                # 超长 section：叶子按 PARENT_CHUNK_TOKENS 预算分组
+                groups = self._group_leaves_by_tokens(leaves, PARENT_CHUNK_TOKENS)
+                for gi, group in enumerate(groups):
+                    group_text = "\n".join([sec.text] + [l.text for l in group])
+                    parent_id = _chunk_id(
+                        file_path, f"parent:{section_anchor}:{gi}", group_text,
+                    )
+                    self._emit_parent(
+                        chunks, file_path, sec, path, group_text, parent_id,
+                    )
+                    for leaf in group:
+                        self._emit_leaf(
+                            chunks, file_path, sec, path, leaf,
+                            _chunk_id(
+                                file_path,
+                                f"leaf:{section_anchor}:{gi}", leaf.text,
+                            ),
+                            parent_id,
+                        )
+        return _enrich(chunks, file_path)
+
+    @staticmethod
+    def _emit_parent(chunks: list, file_path: str, sec, path, text: str,
+                     parent_id: str) -> None:
+        """append 一个 parent chunk（粒度/元数据统一）。"""
+        chunks.append(_make_doc(text, {
+            "granularity": "parent",
+            "chunk_id": parent_id,
+            "section_path": path,
+            "section_title": sec.text,
+            "section_level": sec.level,
+            "chunk_tokens": count_tokens(text),
+        }))
+
+    @staticmethod
+    def _emit_leaf(chunks: list, file_path: str, sec, path, leaf,
+                   leaf_id: str, parent_id: str) -> None:
+        """append 一个 leaf chunk，parent_chunk_id 关联所属 parent。
+
+        P1-7: 超长 leaf（> LEAF_CHUNK_TOKENS）用 RecursiveCharacterTextSplitter
+        二次切分，保证单个 leaf 不超 token 预算（否则超大段落 leaf 会撑爆
+        embedding 输入并稀释检索精度）。
+        """
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        from backend.config import LEAF_CHUNK_TOKENS
+        leaf_text = leaf.text
+        if count_tokens(leaf_text) > LEAF_CHUNK_TOKENS:
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=50,
+                length_function=count_tokens, separators=_SEPARATORS,
+            )
+            subs = splitter.split_text(leaf_text)
+        else:
+            subs = [leaf_text]
+        for si, sub in enumerate(subs):
+            sub_id = _chunk_id(
+                file_path, f"leaf:{'.'.join(path)}:{leaf_id}", sub,
+            ) if len(subs) > 1 else leaf_id
+            chunks.append(_make_doc(sub, {
+                "granularity": "leaf",
+                "chunk_id": sub_id,
+                "parent_chunk_id": parent_id,
                 "section_path": path,
                 "section_title": sec.text,
                 "section_level": sec.level,
-                "chunk_tokens": count_tokens(sec_text),
-            }
-            counter += 1
-            parent_id = parent_meta["chunk_id"]
-            chunks.append(_make_doc(sec_text, dict(parent_meta)))
-            for leaf in self._leaves(sec):
-                chunks.append(_make_doc(leaf.text, {
-                    "granularity": "leaf",
-                    "chunk_id": _chunk_id(file_path, str(counter)),
-                    "parent_chunk_id": parent_id,
-                    "section_path": path,
-                    "section_title": sec.text,
-                    "section_level": sec.level,
-                    "chunk_tokens": count_tokens(leaf.text),
-                }))
-                counter += 1
-        return _enrich(chunks, file_path)
+                "chunk_tokens": count_tokens(sub),
+            }))
+
+    @staticmethod
+    def _group_leaves_by_tokens(leaves, budget: int) -> list[list]:
+        """叶子按累计 token 预算分组（保持顺序），每组 ≤ budget。
+
+        单个叶子本身超过 budget（罕见，正常 leaf ≤ LEAF_CHUNK_TOKENS）
+        会强制单独成组，保证不丢内容。
+        """
+        groups: list[list] = []
+        cur: list = []
+        cur_tokens = 0
+        for leaf in leaves:
+            t = count_tokens(leaf.text)
+            if cur and cur_tokens + t > budget:
+                groups.append(cur)
+                cur = []
+                cur_tokens = 0
+            cur.append(leaf)
+            cur_tokens += t
+        if cur:
+            groups.append(cur)
+        return groups
 
     @staticmethod
     def _sections(ast: DocumentAST):
@@ -191,7 +317,6 @@ class FixedSizeChunkStrategy:
             length_function=count_tokens, separators=[""],
         )
         chunks: List[Document] = []
-        counter = 0
         for n in walk(ast.root):
             if n.type not in LEAF_TYPES:
                 continue
@@ -200,14 +325,13 @@ class FixedSizeChunkStrategy:
             for sub in texts:
                 chunks.append(_make_doc(sub, {
                     "granularity": "leaf",
-                    "chunk_id": _chunk_id(file_path, str(counter)),
+                    "chunk_id": _chunk_id(file_path, "leaf", sub),
                     "parent_chunk_id": "",
                     "section_path": [],
                     "section_title": "",
                     "section_level": 0,
                     "chunk_tokens": count_tokens(sub),
                 }))
-                counter += 1
         return _enrich(chunks, file_path)
 
 
@@ -220,7 +344,6 @@ class RecursiveChunkStrategy:
             length_function=count_tokens, separators=_SEPARATORS,
         )
         chunks: List[Document] = []
-        counter = 0
         for n in walk(ast.root):
             if n.type not in LEAF_TYPES:
                 continue
@@ -229,14 +352,13 @@ class RecursiveChunkStrategy:
             for sub in texts:
                 chunks.append(_make_doc(sub, {
                     "granularity": "leaf",
-                    "chunk_id": _chunk_id(file_path, str(counter)),
+                    "chunk_id": _chunk_id(file_path, "leaf", sub),
                     "parent_chunk_id": "",
                     "section_path": [],
                     "section_title": "",
                     "section_level": 0,
                     "chunk_tokens": count_tokens(sub),
                 }))
-                counter += 1
         return _enrich(chunks, file_path)
 
 
@@ -261,27 +383,40 @@ class StepChunkStrategy:
         self, sections: list[DocumentNode], file_path: str,
     ) -> List[Document]:
         chunks: List[Document] = []
-        for i, sec in enumerate(sections):
+        for sec in sections:
+            # P1-9: 章节标题继承到 chunk（section_title/section_level/section_path）
             chunks.append(_make_leaf_chunk(
-                [self._section_text(sec)], file_path, i,
+                [self._section_text(sec)], file_path,
+                section_title=sec.text, section_level=sec.level,
+                section_path=[sec.text],
             ))
         return _enrich(chunks, file_path)
 
     def _split_by_text(self, ast: DocumentAST, file_path: str) -> List[Document]:
         """无 section 结构（flat）→ 按「一、二、三」文本切分。"""
         chunks: List[Document] = []
-        counter = 0
         current: list[str] = []
+        current_title = ""
+        fallback_title = _doc_title(ast)
         for n in walk(ast.root):
             if n.type not in LEAF_TYPES:
                 continue
             if _is_section_heading(n.text) and current:
-                chunks.append(_make_leaf_chunk(current, file_path, counter))
-                counter += 1
+                chunks.append(_make_leaf_chunk(
+                    current, file_path,
+                    section_title=current_title or fallback_title, section_level=1,
+                    section_path=[current_title or fallback_title] if (current_title or fallback_title) else [],
+                ))
                 current = []
+            if _is_section_heading(n.text):
+                current_title = n.text
             current.append(n.text)
         if current:
-            chunks.append(_make_leaf_chunk(current, file_path, counter))
+            chunks.append(_make_leaf_chunk(
+                current, file_path,
+                section_title=current_title or fallback_title, section_level=1,
+                section_path=[current_title or fallback_title] if (current_title or fallback_title) else [],
+            ))
         return _enrich(chunks, file_path)
 
     @staticmethod
@@ -301,44 +436,83 @@ class LegalChunkStrategy:
 
     def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
         chunks: List[Document] = []
-        counter = 0
         current: list[str] = []
+        current_clause = ""
+        fallback_title = _doc_title(ast)
 
         for n in walk(ast.root):
             if n.type not in LEAF_TYPES:
                 continue
             if _is_legal_clause(n.text) and current:
-                # 新条款 → flush 之前的 chunk
-                chunks.append(_make_leaf_chunk(current, file_path, counter))
-                counter += 1
+                # 新条款 → flush 之前的 chunk（P1-9: 条款编号作为 section_title）
+                chunks.append(_make_leaf_chunk(
+                    current, file_path,
+                    section_title=current_clause or fallback_title, section_level=1,
+                    section_path=[current_clause or fallback_title] if (current_clause or fallback_title) else [],
+                ))
                 current = []
+            if _is_legal_clause(n.text):
+                current_clause = n.text
             current.append(n.text)
 
         if current:
-            chunks.append(_make_leaf_chunk(current, file_path, counter))
+            chunks.append(_make_leaf_chunk(
+                current, file_path,
+                section_title=current_clause or fallback_title, section_level=1,
+                section_path=[current_clause or fallback_title] if (current_clause or fallback_title) else [],
+            ))
 
         return _enrich(chunks, file_path)
 
 
 class QAChunkStrategy:
-    """FAQ 切分：每个 qa_question/qa_answer 对 → 一个 chunk。"""
+    """FAQ 切分：每个 qa_question/qa_answer 对 → 一个 chunk。
+
+    P1-6: 原实现将 question 与 answer 各自独立成 chunk，导致问答分离
+    （检索命中问题 chunk 时答案缺失）。现合并为"Q：...\nA：..."单一 chunk，
+    保证一个 FAQ 条目完整表达语义。
+    """
 
     def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
         chunks: List[Document] = []
-        counter = 0
-        for n in walk(ast.root):
-            if n.type not in ("qa_question", "qa_answer"):
-                continue
-            chunks.append(_make_doc(n.text, {
-                "granularity": "leaf",
-                "chunk_id": _chunk_id(file_path, str(counter)),
-                "parent_chunk_id": "",
-                "section_path": [],
-                "section_title": n.text[:40],
-                "section_level": 0,
-                "chunk_tokens": count_tokens(n.text),
-            }))
-            counter += 1
+        nodes = [
+            n for n in walk(ast.root)
+            if n.type in ("qa_question", "qa_answer")
+        ]
+        i = 0
+        while i < len(nodes):
+            n = nodes[i]
+            if n.type == "qa_question":
+                q_text = n.text
+                a_text = ""
+                # 合并紧跟的 qa_answer（parser 按 Q、A 顺序产出节点）
+                if i + 1 < len(nodes) and nodes[i + 1].type == "qa_answer":
+                    a_text = nodes[i + 1].text
+                    i += 2
+                else:
+                    i += 1
+                text = f"Q：{q_text}\nA：{a_text}" if a_text else q_text
+                chunks.append(_make_doc(text, {
+                    "granularity": "leaf",
+                    "chunk_id": _chunk_id(file_path, "leaf", text),
+                    "parent_chunk_id": "",
+                    "section_path": [],
+                    "section_title": q_text[:40],
+                    "section_level": 0,
+                    "chunk_tokens": count_tokens(text),
+                }))
+            else:
+                # 孤立的 qa_answer（无配对问题）也保留，不丢内容
+                chunks.append(_make_doc(n.text, {
+                    "granularity": "leaf",
+                    "chunk_id": _chunk_id(file_path, "leaf", n.text),
+                    "parent_chunk_id": "",
+                    "section_path": [],
+                    "section_title": n.text[:40],
+                    "section_level": 0,
+                    "chunk_tokens": count_tokens(n.text),
+                }))
+                i += 1
         return _enrich(chunks, file_path)
 
 
@@ -356,30 +530,66 @@ class SemanticChunkStrategy:
         from backend.rag.embedding_singleton import get_embedding
         return self._split_with_embedding(ast, file_path, get_embedding())
 
+    @staticmethod
+    def _embed_sentences_batched(
+        sentences: list[str], embedding,
+    ) -> list[list[float]] | None:
+        """分批 embedding + 每批重试；全部批次失败返回 None（调用方降级）。
+
+        生产加固：整篇句子一次性 embed_documents 会构造超大输入，
+        且任一失败即整体降级丢失已算批次。分批后单批失败可重试
+        （对齐 indexer 主路径 _embed_with_retry 的 EMBED_RETRY_MAX 模式），
+        批次之间相互独立，避免可用句子的向量被一次失败拖垮。
+        """
+        from backend.config import SEMANTIC_EMBED_BATCH_SIZE, SEMANTIC_EMBED_RETRY
+        vecs: list[list[float]] = []
+        for i in range(0, len(sentences), SEMANTIC_EMBED_BATCH_SIZE):
+            batch = sentences[i:i + SEMANTIC_EMBED_BATCH_SIZE]
+            batch_no = i // SEMANTIC_EMBED_BATCH_SIZE
+            for attempt in range(SEMANTIC_EMBED_RETRY):
+                try:
+                    vecs.extend(embedding.embed_documents(batch))
+                    break
+                except Exception as e:
+                    if attempt == SEMANTIC_EMBED_RETRY - 1:
+                        logger.warning(
+                            f"[SemanticChunk] 句子批次 {batch_no} 嵌入失败 "
+                            f"{SEMANTIC_EMBED_RETRY} 次({type(e).__name__})，"
+                            f"整体降级递归切分: {e}"
+                        )
+                        return None
+                    logger.debug(
+                        f"[SemanticChunk] 句子批次 {batch_no} 重试 "
+                        f"{attempt + 1}/{SEMANTIC_EMBED_RETRY}: {e}"
+                    )
+        return vecs
+
     def _split_with_embedding(
         self, ast: DocumentAST, file_path: str, embedding,
     ) -> List[Document]:
         from backend.config import SEMANTIC_SIMILARITY_THRESHOLD
 
         chunks: List[Document] = []
-        counter = 0
         for n in walk(ast.root):
             if n.type not in LEAF_TYPES:
                 continue
             sentences = _split_sentences(n.text)
             if len(sentences) <= 1:
                 chunks.append(_make_doc(
-                    n.text, self._leaf_meta(file_path, counter, n.text),
+                    n.text, self._leaf_meta(file_path, n.text),
                 ))
-                counter += 1
                 continue
             try:
-                vecs = embedding.embed_documents(sentences)
+                vecs = self._embed_sentences_batched(sentences, embedding)
             except Exception as e:
+                # 外层防御：批处理逻辑自身异常也降级，不静默吞掉
                 logger.warning(
-                    f"[SemanticChunk] embedding 失败({type(e).__name__})，"
+                    f"[SemanticChunk] embedding 调用异常({type(e).__name__})，"
                     f"降级递归切分: {e}"
                 )
+                return RecursiveChunkStrategy().split(ast, file_path)
+            if vecs is None:
+                # 全部分批失败 → 降级递归切分（可观测：上面已 warning）
                 return RecursiveChunkStrategy().split(ast, file_path)
             starts = _detect_boundaries(sentences, vecs, SEMANTIC_SIMILARITY_THRESHOLD)
             splitter = RecursiveCharacterTextSplitter(
@@ -397,11 +607,9 @@ class SemanticChunkStrategy:
                 # 超长 chunk（无边界可切时）兜底递归切分，避免超大 chunk
                 if count_tokens(text) > LEAF_CHUNK_TOKENS:
                     for sub in splitter.split_text(text):
-                        chunks.append(_make_doc(sub, self._leaf_meta(file_path, counter, sub)))
-                        counter += 1
+                        chunks.append(_make_doc(sub, self._leaf_meta(file_path, sub)))
                 else:
-                    chunks.append(_make_doc(text, self._leaf_meta(file_path, counter, text)))
-                    counter += 1
+                    chunks.append(_make_doc(text, self._leaf_meta(file_path, text)))
 
         logger.info(
             f"[SemanticChunk] {file_path} 语义切分产出 {len(chunks)} 个 chunk"
@@ -409,10 +617,10 @@ class SemanticChunkStrategy:
         return _enrich(chunks, file_path)
 
     @staticmethod
-    def _leaf_meta(file_path: str, index: int, text: str) -> dict:
+    def _leaf_meta(file_path: str, text: str) -> dict:
         return {
             "granularity": "leaf",
-            "chunk_id": _chunk_id(file_path, str(index)),
+            "chunk_id": _chunk_id(file_path, "leaf", text),
             "parent_chunk_id": "",
             "section_path": [],
             "section_title": "",

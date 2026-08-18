@@ -13,6 +13,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from backend.shared.logger import logger
+
 
 @dataclass
 class ParsedQuery:
@@ -171,15 +173,16 @@ class QueryAnalyzer:
             pq.persons = extract_person_names(query)
             if isinstance(pq.persons, str):
                 pq.persons = [pq.persons]
-        except Exception:
-            pass
+        except Exception as e:
+            # 单信号提取失败 → 跳过该信号继续分析（软降级），留痕
+            logger.debug(f"[QueryAnalyzer] 实体提取失败: {e}", exc_info=True)
 
         # ── SKU codes ──
         try:
             from backend.rag.preprocessing.entity import extract_sku_codes
             pq.sku_codes = extract_sku_codes(query)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[QueryAnalyzer] SKU 提取失败: {e}", exc_info=True)
 
         # ── Platforms ──
         pq.organizations = _extract_platforms(query)
@@ -194,8 +197,8 @@ class QueryAnalyzer:
                     if kw.lower() in ql:
                         techs.append(kw)
             pq.technologies = techs
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[QueryAnalyzer] 领域信号提取失败: {e}", exc_info=True)
 
         # ── Time ──
         try:
@@ -206,8 +209,8 @@ class QueryAnalyzer:
                     pq.time_expressions.extend(matches)
             if pq.time_expressions:
                 pq.time_range_start, pq.time_range_end = _resolve_time_range(pq.time_expressions)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[QueryAnalyzer] 时间解析失败: {e}", exc_info=True)
 
         # ── Domain ──
         try:
@@ -229,8 +232,8 @@ class QueryAnalyzer:
                 top_score = sorted_domains[0][1]
                 threshold = top_score * 0.6
                 pq.domains = [d for d, s in sorted_domains if s >= threshold][:3]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[QueryAnalyzer] 领域分类失败: {e}", exc_info=True)
 
         # ── Doc type（兼容 V2 (pattern, weight) 元组格式）──
         try:
@@ -241,8 +244,8 @@ class QueryAnalyzer:
                     if re.search(pat, query):
                         pq.doc_types.append(dtype)
                         break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[QueryAnalyzer] 文档类型识别失败: {e}", exc_info=True)
 
         # ── Intent ──
         pq.intent = classify_intent(query)

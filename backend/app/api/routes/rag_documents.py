@@ -300,6 +300,7 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
         pipeline = get_rag_pipeline()
         indexer = IncrementalIndexer(
             DOCS_DIRECTORY, pipeline.vectordb, pipeline.doc_db, pipeline.embedding, reg,
+            bm25_store=pipeline.bm25_store,  # P0-1: 重索引后立即同步 BM25
         )
 
         # 执行重索引
@@ -345,7 +346,8 @@ def _purge_doc_vectors(doc_id: str, file_path: str, pipeline, warnings: list[str
     except Exception as e:
         warnings.append(f"chunk_store 清理失败: {e}")
     try:
-        pipeline.remove_documents_from_bm25([doc_id])
+        # P0-2: 传入 file_path 作为 BM25 删除的第二过滤键（doc_id 协议分裂时按文件名兜底命中）
+        pipeline.remove_documents_from_bm25([doc_id], file_paths=[file_path])
     except Exception as e:
         warnings.append(f"BM25 清理失败: {e}")
     if file_path:
