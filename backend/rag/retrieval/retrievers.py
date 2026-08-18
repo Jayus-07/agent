@@ -119,8 +119,8 @@ class ChunkLevelRetriever(BaseRetriever):
         ]))
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> List[Document]:
-        from backend.observability.tracer import trace_collector
-        span = trace_collector.start_span("chunk_retrieval", name="检索")
+        from backend.observability.tracer import trace_collector, SpanName
+        span = trace_collector.start_span("chunk_retrieval", name=SpanName.RETRIEVAL)
         # — Stage 1: Doc 级检索 —
         # Check for request-scoped metadata_filter (set by RAGPipeline.search() via contextvars)
         request_metadata_filter = {}
@@ -128,11 +128,17 @@ class ChunkLevelRetriever(BaseRetriever):
             from backend.rag.context import get_context
             ctx = get_context()
             request_metadata_filter = ctx.metadata_filter
-        except Exception:
-            pass
+        except Exception as e:
+            # request 上下文缺失 → 按无 filter 全量检索（软降级），留痕
+            logger.debug(f"[ChunkLevelRetriever] 读取 request context 失败: {e}", exc_info=True)
 
         person_names = extract_person_names(query)
         doc_ids = None
+        # 🟢 V1.5 埋点：Stage 1 路径选择，4 个候选
+        # person_name: 人名索引命中；doc_similarity: 退化到 doc 级向量检索；
+        # keyword_filter: 退化到关键词过滤；domain_fallback: 0 匹配业务域回退。
+        stage1_path = None
+        stage1_fallback_count = 0  # 累计退化次数（>=1 即认为走了 fallback）
 
         if request_metadata_filter:
             # MetadataFilter has already determined the scope — use it directly
@@ -144,13 +150,16 @@ class ChunkLevelRetriever(BaseRetriever):
                 matched_ids = self.person_index.get(p, [])
                 if matched_ids:
                     doc_ids = matched_ids
+                    stage1_path = "person_name"
                 else:
                     doc_ids = []
+                    stage1_path = "person_name_miss"
             else:
                 doc_ids = []  # No person filter — fall through to standard doc filter
+                stage1_path = "metadata_filter_no_person"
             logger.info(
                 f"ChunkLevelRetriever Stage 1: metadata_filter={request_metadata_filter} "
-                f"→ doc_ids={len(doc_ids)} matched"
+                f"→ doc_ids={len(doc_ids)} matched, path={stage1_path}"
             )
         else:
             if person_names:
@@ -158,24 +167,34 @@ class ChunkLevelRetriever(BaseRetriever):
                 matched_ids = self.person_index.get(person_name, [])
                 if matched_ids:
                     doc_ids = matched_ids
+                    stage1_path = "person_name"
                     logger.info(f"ChunkLevelRetriever: 人名匹配到 {len(doc_ids)} 个文档")
                 else:
                     doc_results = self.doc_db.similarity_search(query, k=5)
+                    stage1_fallback_count += 1
                     doc_ids = self._filter_docs_by_keywords(query, doc_results)
+                    stage1_path = "doc_similarity" if doc_results else "keyword_filter"
             else:
                 doc_results = self.doc_db.similarity_search(query, k=5)
+                stage1_fallback_count += 1
                 if doc_results:
                     doc_ids = self._filter_docs_by_keywords(query, doc_results)
+                    stage1_path = "doc_similarity"
+                else:
+                    doc_ids = self._filter_docs_by_keywords(query, doc_results)
+                    stage1_path = "keyword_filter"
 
             if doc_ids:
-                logger.info(f"ChunkLevelRetriever Stage 1: 召回 {len(doc_ids)} 个相关文档")
+                logger.info(f"ChunkLevelRetriever Stage 1: 召回 {len(doc_ids)} 个相关文档, path={stage1_path}")
 
         # ── Doc Filter event ──
         trace_collector.add_event(span, "doc_filter", "info",
-            f"Stage1: metadata={request_metadata_filter}, persons={person_names}, → {len(doc_ids or [])} docs",
+            f"Stage1: metadata={request_metadata_filter}, persons={person_names}, → {len(doc_ids or [])} docs, path={stage1_path}",
             data={"metadata_filter": request_metadata_filter,
                   "person_names": person_names,
-                  "output_doc_count": len(doc_ids or [])})
+                  "output_doc_count": len(doc_ids or []),
+                  "stage1_path": stage1_path,
+                  "stage1_fallback_count": stage1_fallback_count})
 
         # 🟢 2026-08-10 新增：Stage 1 0 匹配 fallback
         # 解决 metadata_filter 推 business_domain 不准时丢文档的问题
@@ -189,6 +208,8 @@ class ChunkLevelRetriever(BaseRetriever):
                 )
                 request_metadata_filter = fallback_filter
                 doc_ids = None  # 让 Stage 2 走完整向量检索
+                stage1_path = "domain_fallback"
+                stage1_fallback_count += 1
 
         # — Stage 2: Chunk 级检索 —
         all_docs = []
@@ -225,7 +246,9 @@ class ChunkLevelRetriever(BaseRetriever):
         all_docs = attach_parent_context(all_docs, self._lookup_parents)
 
         trace_collector.end_span(span,
-                             metrics={"retrieved_chunks": len(all_docs)})
+                             metrics={"retrieved_chunks": len(all_docs),
+                                      "stage1_path": stage1_path,
+                                      "stage1_fallback_count": stage1_fallback_count})
         return all_docs[: self.k]
 
     def _lookup_parents(self, chunk_ids: List[str]) -> List[Document]:
@@ -332,7 +355,12 @@ class ChunkLevelRetriever(BaseRetriever):
                     d.metadata.get("doc_id") for d in doc_results
                     if d.metadata.get("doc_id")
                 ]
-            except Exception:
+            except Exception as e:
+                # doc 级检索失败 → 视为无已知文档（软降级），留痕；后续会返回空结果走 NO_EVIDENCE 拒答
+                logger.warning(
+                    f"[ChunkLevelRetriever] Neighbor Expansion doc 检索失败: {e}",
+                    exc_info=True,
+                )
                 doc_ids = []
 
         if not doc_ids:
