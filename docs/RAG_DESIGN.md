@@ -521,37 +521,110 @@ def _reject(self, decision, layer, trace, t_total, self_correction_attempted=Fal
 
 ## 6. Faithfulness 校验
 
-### 6.1 检测流程
+> **演进历史**：
+> - 早期版本：用 mDeBERTa-v3-base-mnli-xnli 做逐 claim NLI 比对
+> - 2026-08-11：切换到 **Qwen LLM-as-Judge** 整体评估（替代 mDeBERTa）
+> - 2026-08-12：**移除 mDeBERTa 路径**，LLM-as-Judge 成为唯一引擎
+> - 2026-08-10：sanitize_answer 改为仅标记 `[??]*`（废弃自动 rewrite/cite）
+
+### 6.1 检测流程（LLM-as-Judge）
 
 ```python
 def check_faithfulness(answer: str, context_docs: list) -> FaithfulnessResult:
-    # 1. claim_extractor.ClaimExtractor 拆 answer → N 个 claim
-    claims = claim_extractor.extract(answer)
+    # 1. 拆 claim（规则 + 启发，仍是 claim_extractor.extract）
+    claims = extract_claims(answer)
+    if not claims:
+        return FaithfulnessResult(enabled=True)
 
-    # 2. NLI 比对每个 claim vs top_k chunks
-    for claim in claims:
-        scores = nli_checker.predict(claim, top_k_chunks)  # mDeBERTa-v3-base-mnli-xnli
-        if max(scores) < NLI_SCORE_THRESHOLD:  # 0.5
-            cleaned_answer = remove_claim(answer, claim)
+    # 2. 风险过滤（filter_claims：跳过无意义的 claim）
+    high_risk, skip_claims = filter_claims(claims)
+
+    # 3. LLM-as-Judge 整体评估（核心）
+    #    1 次 LLM 调用，5-10s 完成，输出 score + unsupported_claims + reason
+    verdict = evaluate_with_llm(answer, context_docs)
+
+    # 4. Fallback 保护：LLM 推理失败 → 视为全部支持（不阻塞）
+    if verdict.fallback:
+        logger.warning(f"[Faithfulness] LLM 推理失败: {verdict.fallback_reason}")
+        # 计入 nli_timeout_total 指标
+        return FaithfulnessResult(
+            score=verdict.score, total_claims=len(claims),
+            high_risk_claims=len(high_risk), claims=[],
+            enabled=True,
+        )
+
+    # 5. 50% 阈值保护（防误判）：
+    #    当 unsupported 比例超过 50%，跳过 sanitize，保留原答案
+    unsupported_ratio = len(verdict.unsupported_claims) / max(len(high_risk), 1)
+    skip_rewrite = unsupported_ratio > FAITHFULNESS_SKIP_THRESHOLD  # 0.5
+
+    # 6. 三级漏斗处理（已简化为仅标记）
+    if not skip_rewrite and verdict.unsupported_claims:
+        cleaned = sanitize_answer(answer, ...)  # 仅追加 [??]*[存疑，未自动改写]*
+    else:
+        cleaned = answer
 
     return FaithfulnessResult(
-        score=avg_scores,
-        cleaned_answer=cleaned_answer,
-        supported_claims=...,
-        unsupported_claims=...,
+        score=verdict.score,
+        total_claims=len(claims),
+        high_risk_claims=len(high_risk),
+        supported_claims=len(high_risk) - len(verdict.unsupported_claims),
+        unsupported_claims=verdict.unsupported_claims,
+        cleaned_answer=cleaned,
+        enabled=True,
     )
 ```
 
-### 6.2 配置
+### 6.2 LLM-as-Judge Prompt（`nli_llm.py:JUDGE_PROMPT`）
 
-```python
-ENABLE_FAITHFULNESS = True           # 总开关
-NLI_MODEL_PATH = "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
-NLI_TOP_K_CHUNKS = 2                 # 比对 top-k 块
-NLI_SCORE_THRESHOLD = 0.5            # 拒答门槛
+```
+你是一个 RAG 质量评估专家。
+
+判断"LLM 回答"是否完全由"文档"支撑。
+
+规则:
+1. 逐句核对：回答中每个事实/数字/政策是否都能在文档中找到对应支撑
+2. 文档没有提到但回答里有 → 视为 unsupported claim
+3. 回答比文档保守（少说）→ 不算 unsupported
+4. 整体评分 (0-1): 1.0=完全支撑, 0.5=部分支持, 0.0=完全不支持
+
+【文档】
+{context}
+
+【LLM 回答】
+{answer}
+
+请输出 JSON（只输出 JSON，不要其他文字）:
+{
+  "score": 0.0 到 1.0,
+  "reason": "一句话说明判断依据",
+  "unsupported_claims": ["未被支撑的句子1", "未被支撑的句子2"]
+}
 ```
 
-### 6.3 集成位置
+### 6.3 配置
+
+```python
+ENABLE_FAITHFULNESS = True            # 总开关
+NLI_USE_LLM = True                    # LLM-as-Judge 启用（mDeBERTa 路径已移除）
+FAITHFULNESS_SKIP_THRESHOLD = 0.5     # unsupported 占比 > 50% 时跳过 sanitize
+NLI_LLM_TIMEOUT = 30                  # 推理超时（秒）
+NLI_LLM_MAX_CONTEXT_CHARS = 3000      # 喂给 Judge 的字符数上限
+NLI_LLM_TEMPERATURE = 0.0             # 评估需要确定性
+```
+
+### 6.4 为何放弃 mDeBERTa 改用 LLM
+
+| 维度 | mDeBERTa-v3 | Qwen LLM-as-Judge |
+|------|------------|-------------------|
+| 调用次数 | 5-10 次/答案（每 claim 一次） | 1 次/答案 |
+| 总耗时 | 30s+ | 5-10s |
+| 中文能力 | 弱（英文 SOTA，中文需 fine-tune） | 强（原生中文） |
+| 可解释性 | label（entailment/neutral/contradiction） | reason（自然语言） |
+| 维护成本 | 需独立服务部署 | 复用 LLM 基础设施 |
+| 误判率（实测） | 高（90%+ 误判，2026-08 用户日志） | 待长期验证 |
+
+### 6.5 集成位置
 
 `_evaluate()` 在 `_verify()`（META + Citation）之后执行：
 
@@ -559,11 +632,23 @@ NLI_SCORE_THRESHOLD = 0.5            # 拒答门槛
 def _evaluate(self, answer: str, context_docs: list) -> str:
     result = check_faithfulness(answer, context_docs)
     if result.cleaned_answer != answer:
-        return result.cleaned_answer + ref_section  # 剔除不可信 claim
+        return result.cleaned_answer + ref_section
     return answer
 ```
 
-**注意**：NLI 默认开启（对齐 Vertex AI / AWS Bedrock / RAGAS），关闭用 `ENABLE_FAITHFULNESS=false`。
+**Fallback 行为**：LLM 推理失败时（超时/JSON 解析失败），`score=1.0` 视为全部支持，**不阻塞答案生成**。
+
+### 6.6 评测指标（V2.0）
+
+| 指标 | 含义 | 目标值 |
+|------|------|--------|
+| `judge_score_mae` | Judge score vs 人工标注的 MAE | < 0.15 |
+| `judge_unsupported_f1` | 不可信 claim 识别 F1 | ≥ 0.70 |
+| `judge_fallback_rate` | JSON 解析失败 / 超时率 | < 5% |
+| `judge_latency_p95_ms` | 推理 P95 延迟 | < 10000ms |
+| `judge_consistency` | 同一 (answer, context) 多次评分方差 | < 0.10 |
+
+详见 [评测方案 §Faithfulness NLI](../rag_eval/README.md)。
 
 ---
 
