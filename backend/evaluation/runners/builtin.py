@@ -255,20 +255,27 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             # === 完整检索链路 ===
             # reranker/evidence_gate 等内部组件会调 trace_collector.start_span()，
             # 必须先 start() 否则报 "start_span() 必须在 start() 之后调用"。
-            # 这里用 try/finally 保证 trace 一定被 end_span，避免污染下次评测。
-            from backend.observability.tracer import trace_collector
+            # 这里用 try/finally 保证 trace 一定被收尾，避免污染下次评测。
+            from backend.observability.tracer import trace_collector, SpanKind
             trace = trace_collector.start(
                 question=question,
                 session_id=f"eval-{case.id}",
                 workflow_name="rag_eval",
             )
+            # 手动创建 root span 让 end_span() 有正确参数传入
+            root_span = trace_collector.start_span(
+                "rag_eval_root", parent_id=None,
+                name=f"RAG eval {case.id}",
+                type="workflow", kind=SpanKind.RETRIEVAL.value,
+                input={"question": question, "kb_id": kb_id},
+            )
             try:
                 retrieved_docs = retriever.invoke(question)
             finally:
                 try:
-                    trace_collector.end_span(trace)
+                    trace_collector.end_span(root_span)
                 except Exception:
-                    logger.debug("trace end failed for %s", case.id, exc_info=True)
+                    logger.debug("trace root_span end failed for %s", case.id, exc_info=True)
 
             # === 捕获 trace spans 作为过程证据 ===
             # RAG 链路在 invoke() 期间由 AdaptiveRetriever / RerankCompressor 等
