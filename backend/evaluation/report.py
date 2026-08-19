@@ -21,6 +21,8 @@ METRIC_LABELS: dict[str, str] = {
     "chunk_recall": "Chunk 级召回率",
     "chunk_recall@5": "Chunk 级召回率@5",
     "chunk_recall@10": "Chunk 级召回率@10",
+    "top1_accuracy": "Top-1 准确率",
+    "reject_accuracy": "拒答准确率",
     "routing_accuracy": "路由准确率",
     "syntax_valid": "语法合法率",
     "result_match": "结果集匹配率",
@@ -147,13 +149,13 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
         lines.append("✅ 全部用例通过，无失败/错误详情。")
 
     lines.append("")
-    # === 过程证据：每条用例的 trace 树 + 召回证据 ===
-    # RAG 模块额外展开 span 树，便于定位"召回对了但排序差" / "rerank 分数异常"等
+    # === v2: 3 段式报告 — 过程细节 / 结果 / 是否拒答 ===
     lines.append("## 过程详情（每条用例）")
     lines.append("")
     lines.append(
-        "> 每条用例展开 RAG 链路中实际产生的 span（含耗时、metrics、输入/输出摘要），"
-        "以及召回的文档 chunk 与 rerank 分数。"
+        "> 每条用例按 **1.过程细节 → 2.结果 → 3.是否拒答** 三段式展开。"
+        "拒答判定基于 runner 启发式 confidence（rerank_score 阈值 + gap），"
+        "非 EvidenceGate 真值（EvidenceGate 仅在 chain.py 端到端链路生效）。"
     )
     lines.append("")
     for r in report.results:
@@ -161,41 +163,45 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
         icon = STATUS_ICONS.get(r.status, "?")
         lines.append(f"### {icon} {r.case_id} — {status_zh}")
         lines.append("")
-        lines.append(f"- **问题**: {r.actual.get('question', '')}")
+        lines.append(f"**问题**: {r.actual.get('question', '')}")
         kb_id = r.actual.get("kb_id") or ""
         if kb_id:
-            lines.append(f"- **KB**: `{kb_id}`")
+            lines.append(f"**KB**: `{kb_id}`")
         if r.metrics:
             metrics_zh = ", ".join(
                 f"{METRIC_LABELS.get(k, k)}={v}" for k, v in r.metrics.items()
             )
-            lines.append(f"- **指标**: {metrics_zh}")
+            lines.append(f"**指标**: {metrics_zh}")
         if r.duration_ms:
-            lines.append(f"- **总耗时**: {r.duration_ms} ms")
+            lines.append(f"**总耗时**: {r.duration_ms} ms")
         if r.error_msg:
-            lines.append(f"- **错误**: `{r.error_msg}`")
+            lines.append(f"**错误**: `{r.error_msg}`")
         lines.append("")
 
-        # Pipeline 概览
+        # ─────────────────────────────────────────────
+        # 段 1: 过程细节（pipeline 概览 + span 树 + Top-5 chunk）
+        # ─────────────────────────────────────────────
+        lines.append("#### 1. 过程细节")
+        lines.append("")
         pipeline = r.actual.get("pipeline") or {}
         if pipeline:
-            lines.append("**Pipeline 概览**")
+            lines.append("**Pipeline 概览**:")
             lines.append("")
             lines.append("| 阶段 | 值 |")
             lines.append("|------|----|")
             lines.append(f"| Stage1 召回数 | {pipeline.get('stage1_docs', '?')} |")
             fallback = pipeline.get("stage1_fallback_suspected")
             if fallback:
-                lines.append("| Stage1 fallback | ⚠️ 已触发（KB filter 无结果） |")
+                lines.append("| Stage1 fallback | ⚠️ 已触发 |")
             lines.append(f"| Stage2 chunk 数 | {pipeline.get('stage2_chunks_recalled', '?')} |")
             lines.append(f"| Adaptive 决策 | {pipeline.get('adaptive', '?')} |")
             lines.append("")
 
-        # Trace span 树
+        # 关键 span 树
         trace = r.actual.get("trace") or {}
         spans = trace.get("spans") or []
         if spans:
-            lines.append("**Trace Span 树**")
+            lines.append("**关键 Span 树**:")
             lines.append("")
             lines.append(
                 f"_trace_id=`{trace.get('trace_id', '?')}` · "
@@ -210,7 +216,6 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
                 sp_type = sp.get("type", "")
                 sp_status = sp.get("status", "")
                 sp_ms = sp.get("duration_ms", 0)
-                # 把 dict metrics 压成一行 key=val, key=val
                 m = sp.get("metrics") or {}
                 m_str = ", ".join(f"{k}={v}" for k, v in m.items()) if m else "—"
                 if len(m_str) > 80:
@@ -218,72 +223,10 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
                 lines.append(f"| `{name}` | {sp_type} | {sp_status} | {sp_ms} | {m_str} |")
             lines.append("")
 
-            # 选取关键 span（retrieval / rerank / evidence_gate）的 input/output 摘要
-            key_types = {"retrieval", "rerank", "retrieval_gate", "rerank_gate"}
-            key_spans = [s for s in spans if s.get("type") in key_types]
-            for sp in key_spans[:6]:  # 限 6 个，避免报告过长
-                lines.append(f"**Span `{sp.get('name')}` ({sp.get('type')})**")
-                lines.append("")
-                has_any = False
-                if sp.get("input"):
-                    has_any = True
-                    inp = sp["input"]
-                    if isinstance(inp, dict):
-                        inp_brief = {
-                            k: (v if not isinstance(v, str) or len(v) < 200 else v[:200] + "…")
-                            for k, v in inp.items()
-                        }
-                        lines.append("- 输入:")
-                        lines.append("")
-                        lines.append("```json")
-                        lines.append(json.dumps(inp_brief, ensure_ascii=False, indent=2))
-                        lines.append("```")
-                if sp.get("output"):
-                    has_any = True
-                    out = sp["output"]
-                    if isinstance(out, dict):
-                        out_brief = {
-                            k: (v if not isinstance(v, str) or len(v) < 300 else v[:300] + "…")
-                            for k, v in out.items()
-                        }
-                        lines.append("- 输出:")
-                        lines.append("")
-                        lines.append("```json")
-                        lines.append(json.dumps(out_brief, ensure_ascii=False, indent=2))
-                        lines.append("```")
-                events = sp.get("events") or []
-                if events:
-                    has_any = True
-                    lines.append(f"- 事件 ({len(events)} 条):")
-                    lines.append("")
-                    for ev in events[:5]:
-                        ev_name = ev.get("name", "?")
-                        ev_level = ev.get("level", "")
-                        ev_msg = ev.get("message", "")
-                        if len(ev_msg) > 300:
-                            ev_msg = ev_msg[:300] + "…"
-                        lines.append(f"  - `{ev_name}` ({ev_level}): {ev_msg}")
-                    if len(events) > 5:
-                        lines.append(f"  - …另有 {len(events) - 5} 条事件")
-                errors = sp.get("errors") or []
-                if errors:
-                    has_any = True
-                    lines.append(f"- ❗ 错误:")
-                    lines.append("")
-                    lines.append("```json")
-                    lines.append(json.dumps(errors, ensure_ascii=False, indent=2)[:1000])
-                    lines.append("```")
-                if not has_any:
-                    lines.append("_（该 span 未记录 input/output/events，仅有 metrics）_")
-                lines.append("")
-            if len(key_spans) > 6:
-                lines.append(f"_…另有 {len(key_spans) - 6} 个关键 span，已在 JSON 报告中保留全量数据_")
-                lines.append("")
-
-        # 召回证据：top-5 chunk + rerank 分数
+        # 召回证据 Top-5
         details = r.actual.get("details") or []
         if details:
-            lines.append("**召回证据（Top 5）**")
+            lines.append("**召回证据 Top-5**:")
             lines.append("")
             lines.append("| # | doc_id | chunk_id | rerank_score | snippet |")
             lines.append("|---|--------|----------|--------------|---------|")
@@ -298,21 +241,74 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
                 lines.append(f"| {i} | `{doc_id}` | `{chunk_id}` | {rs_str} | {snippet} |")
             lines.append("")
 
-        # 期望 vs 实际
+        # ─────────────────────────────────────────────
+        # 段 2: 结果（期望 vs 实际 + Top-1 命中）
+        # ─────────────────────────────────────────────
+        lines.append("#### 2. 结果")
+        lines.append("")
         expected = r.expected or {}
         expected_docs = expected.get("relevant_docs") or []
         retrieved_docs = r.actual.get("retrieved_docs") or []
-        if expected_docs or retrieved_docs:
-            lines.append("**期望 vs 实际**")
-            lines.append("")
+        expected_snippets = expected.get("relevant_snippets") or []
+        should_reject = expected.get("should_reject", False)
+
+        if should_reject:
+            lines.append(f"- **类型**: 负样本（应拒答）")
+            lines.append(f"- **期望文档**: `[]`（无答案）")
+            lines.append(f"- **实际召回**: `{retrieved_docs[:5] or '[]'}`")
+            if not retrieved_docs:
+                lines.append(f"- ✅ **结果**: 召回为空，上层直接拒答（理想路径）")
+            else:
+                # 召回非空时，看 reject_accuracy 判断 runner 启发式 confidence 是否触发拒答
+                rej_metric = (r.metrics or {}).get("reject_accuracy")
+                if rej_metric == 1.0:
+                    lines.append(f"- ✅ **结果**: 召回非空但 confidence=low/none，触发 EvidenceGate 拒答")
+                else:
+                    lines.append(f"- ❌ **结果**: 召回非空且 confidence=high/medium，未拒答（应拒却没拒）")
+        elif expected_docs:
+            top1 = retrieved_docs[0] if retrieved_docs else "—"
+            top1_hit = top1 in expected_docs if retrieved_docs else False
+            hit_all = [d for d in retrieved_docs if d in expected_docs]
+            lines.append(f"- **期望文档**: `{expected_docs}`")
+            lines.append(f"- **期望 snippets**: `{expected_snippets}`")
+            lines.append(f"- **Top-1**: `{top1}`  {'✅ 命中' if top1_hit else '❌ 未命中'}")
+            lines.append(f"- **实际召回 Top-5**: `{retrieved_docs[:5]}`")
+            if hit_all:
+                lines.append(f"- ✅ **整体命中**: `{hit_all}`")
+            else:
+                lines.append(f"- ❌ **未命中任何期望文档**")
+        else:
             lines.append(f"- 期望文档: `{expected_docs}`")
-            lines.append(f"- 实际召回: `{retrieved_docs[:10]}`")
-            hit = [d for d in retrieved_docs if d in expected_docs]
-            if hit:
-                lines.append(f"- ✅ 命中: `{hit}`")
-            elif expected_docs:
-                lines.append(f"- ❌ 未命中")
-            lines.append("")
+            lines.append(f"- 实际召回: `{retrieved_docs[:5]}`")
+        lines.append("")
+
+        # ─────────────────────────────────────────────
+        # 段 3: 是否拒答（confidence + reject_gate + Top-1 score）
+        # ─────────────────────────────────────────────
+        lines.append("#### 3. 是否拒答")
+        lines.append("")
+        rejection = r.actual.get("rejection") or {}
+        confidence = rejection.get("confidence", "?")
+        reject_gate = rejection.get("reject_gate")
+        reject_reason = rejection.get("reject_reason")
+        top1_rs = rejection.get("top1_rerank_score")
+
+        confidence_icon = {
+            "high": "🟢", "medium": "🟡", "low": "🟠", "none": "🔴"
+        }.get(confidence, "❔")
+        lines.append(f"- **状态**: {confidence_icon} **{confidence}**")
+        if top1_rs is not None:
+            lines.append(f"- **Top-1 rerank_score**: `{top1_rs:.4f}`")
+        if reject_gate:
+            lines.append(f"- **拒答 gate**: `{reject_gate}`")
+        if reject_reason:
+            lines.append(f"- **拒答原因**: `{reject_reason}`")
+        if should_reject:
+            rej_metric = (r.metrics or {}).get("reject_accuracy")
+            if rej_metric is not None:
+                judge = "✅ 正确拒答" if rej_metric == 1.0 else "❌ 应该拒答却没拒"
+                lines.append(f"- **拒答判定**: {judge} (reject_accuracy={rej_metric})")
+        lines.append("")
 
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")

@@ -871,13 +871,140 @@
       "expected": {
         "relevant_docs": [],
         "relevant_snippets": [],
-        "min_relevant_chunks": 0
+        "min_relevant_chunks": 0,
+        "should_reject": true
       },
       "metadata": {
         "difficulty": "hard",
         "domain": "negative",
         "probe_type": "negative_no_answer",
-        "probe_note": "知识库无此信息；期望返回空召回或低置信度（验证不幻觉）。若评测框架不支持空 relevant_docs 列表判定，可改用 min_relevant_chunks: 0 + 任意召回得分<阈值"
+        "probe_note": "知识库无此信息；期望系统拒答（v2 改造后由 reject_accuracy 指标判定）"
+      }
+    },
+    {
+      "id": "RT-044",
+      "question": "公司 2027 年的营收预测是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "min_relevant_chunks": 0,
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "probe_type": "future_prediction",
+        "probe_note": "未来财务数据，KB 不含，期望拒答"
+      }
+    },
+    {
+      "id": "RT-045",
+      "question": "你们办公室的具体街道地址在哪？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "min_relevant_chunks": 0,
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "negative",
+        "probe_type": "physical_info",
+        "probe_note": "物理地址 KB 不含，期望拒答"
+      }
+    },
+    {
+      "id": "RT-046",
+      "question": "贵公司的 React 版本是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "min_relevant_chunks": 0,
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "negative",
+        "probe_type": "internal_tech_stack",
+        "probe_note": "内部技术栈细节，KB 不含（技术手册是业务架构非前端栈），期望拒答"
+      }
+    },
+    {
+      "id": "RT-047",
+      "question": "介绍一下苹果公司的创始人乔布斯？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "min_relevant_chunks": 0,
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "negative",
+        "probe_type": "cross_domain",
+        "probe_note": "外部公司人物传记（虽含 'Apple' 字样但语义跨域），期望拒答"
+      }
+    },
+    {
+      "id": "RT-048",
+      "question": "下单时订单号怎么填？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "min_relevant_chunks": 0,
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "negative",
+        "probe_type": "ambiguous_query",
+        "probe_note": "模糊 query 无明确业务实体，期望拒答"
+      }
+    },
+    {
+      "id": "RT-049",
+      "question": "贵公司有什么样的企业文化？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "min_relevant_chunks": 0,
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "probe_type": "soft_info",
+        "probe_note": "软性企业文化信息，KB 是业务流程不含此类，期望拒答"
+      }
+    },
+    {
+      "id": "RT-050",
+      "question": "请问你们的仓库主管是谁？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "min_relevant_chunks": 0,
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "negative",
+        "probe_type": "personal_info",
+        "probe_note": "人员个人信息，KB 不含（人名匹配可能误命中），期望拒答"
       }
     }
   ]

@@ -348,6 +348,52 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             mrr_val = mrr(actual_doc_strs, expected_doc_strs)
             ndcg_val = ndcg_at_k(actual_doc_strs, expected_doc_strs, k=10)
 
+            # === v2: Top-1 准确率 + confidence 判定 ===
+            # EvidenceGate 完整逻辑在 chain.py（含 LLM 评估），
+            # 本 runner 是离线检索链路不调 LLM，用 rerank_score 阈值近似判 confidence。
+            top1_accuracy = 0.0
+            if expected_docs and actual_doc_strs:
+                if actual_doc_strs[0] in expected_docs:
+                    top1_accuracy = 1.0
+            elif not expected_docs and not actual_doc_strs:
+                # 负样本 + 无召回 → Top-1 也算正确（拒答）
+                top1_accuracy = 1.0
+
+            # confidence 启发式：基于 rerank_score 阈值 + gap
+            if not details:
+                confidence = "none"
+                reject_gate = "retrieval"
+                reject_reason = "no_evidence"
+            else:
+                top1_score = details[0].get("rerank_score") or 0.0
+                top2_score = details[1].get("rerank_score") or 0.0 if len(details) > 1 else 0.0
+                score_gap = top1_score - top2_score
+                if top1_score < 0.5:
+                    confidence = "none"
+                    reject_gate = "retrieval"
+                    reject_reason = "low_relevance"
+                elif top1_score < 0.6:
+                    confidence = "low"
+                    reject_gate = None
+                    reject_reason = None
+                elif score_gap < 0.15:
+                    confidence = "medium"
+                    reject_gate = None
+                    reject_reason = None
+                else:
+                    confidence = "high"
+                    reject_gate = None
+                    reject_reason = None
+
+            # === reject_accuracy：仅 negative case 计入 ===
+            should_reject = case.expected.get("should_reject", False)
+            if should_reject:
+                # 期望拒答时，confidence in {none, low} 算拒答成功
+                reject_accuracy = 1.0 if confidence in ("none", "low") else 0.0
+            else:
+                # 正样本不输出此指标（避免污染 ModuleSummary 平均值）
+                reject_accuracy = None
+
             # === V1.1: 多策略命中判定 ===
             # match_type 决定如何判定 pass（默认 chunk_id，向后兼容）
             actual_chunk_ids = {d["chunk_id"] for d in details if d.get("chunk_id")}
@@ -384,6 +430,13 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     "retrieved_docs": actual_doc_strs[:10],
                     "details": details,
                     "pipeline": pipeline_info,
+                    # v2: 拒答过程证据（启发式 confidence，非 EvidenceGate 真值）
+                    "rejection": {
+                        "confidence": confidence,
+                        "reject_gate": reject_gate,
+                        "reject_reason": reject_reason,
+                        "top1_rerank_score": details[0].get("rerank_score") if details else None,
+                    },
                     # 过程证据：本次用例在 RAG 链路中产生的全部 span
                     "trace": {
                         "trace_id": trace.id,
@@ -398,6 +451,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     "mrr": round(mrr_val, 4),
                     "ndcg@10": round(ndcg_val, 4),
                     "chunk_recall": round(chunk_recall, 4),
+                    "top1_accuracy": round(top1_accuracy, 4),
+                    **({"reject_accuracy": round(reject_accuracy, 4)} if reject_accuracy is not None else {}),
                 },
                 duration_ms=int((time.time() - t0) * 1000),
             ))
