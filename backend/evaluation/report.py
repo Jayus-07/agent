@@ -439,6 +439,282 @@ def write_json_report(report: EvalReport, output_dir: Path) -> Path:
     return path
 
 
+def write_html_report(report: EvalReport, output_dir: Path) -> Path:
+    """生成 HTML Dashboard 报告（自包含 CSS/JS，浏览器直接打开）。
+
+    V2.0 设计：
+    - 顶部 4 个大数字卡片（通过率 / Top-1 / 拒答 / MRR）
+    - 失败 case 按根因分类（一眼看出问题在哪）
+    - per-case 详情用 <details> 折叠（避免长报告滚动）
+    - 颜色编码（pass=绿 / fail=红 / reject=黄）
+    """
+    import html as _html
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = output_dir / f"eval-{report.module}-{ts}.html"
+    module_zh = MODULE_LABELS.get(report.module, report.module)
+
+    # === 核心指标计算 ===
+    rag_summary = next((s for s in report.summaries if s.module == "rag"), None)
+    metrics_dict = rag_summary.metrics if rag_summary else {}
+
+    def _card(icon, label, value, status, hint=""):
+        """单张大数字卡片。"""
+        return f"""
+        <div class="card card-{status}">
+          <div class="card-icon">{icon}</div>
+          <div class="card-label">{_html.escape(label)}</div>
+          <div class="card-value">{value}</div>
+          <div class="card-hint">{_html.escape(hint)}</div>
+        </div>"""
+
+    # 计算各指标 + 状态
+    pr = rag_summary.pass_rate if rag_summary else 0
+    top1 = metrics_dict.get("top1_accuracy")
+    rej = metrics_dict.get("reject_accuracy")
+    mrr = metrics_dict.get("mrr")
+
+    def _status_icon(v, th_h=0.85, th_m=0.65):
+        if v is None:
+            return "none", "—"
+        if v >= th_h:
+            return "ok", "✅"
+        if v >= th_m:
+            return "warn", "⚠️"
+        return "fail", "❌"
+
+    pr_st, pr_icon = _status_icon(pr, 0.9, 0.7)
+    top1_st, top1_icon = _status_icon(top1, 0.85, 0.65) if top1 is not None else ("none", "—")
+    rej_st, rej_icon = _status_icon(rej, 0.85, 0.65) if rej is not None else ("none", "—")
+    mrr_st, mrr_icon = _status_icon(mrr, 0.8, 0.5) if mrr is not None else ("none", "—")
+
+    cards_html = (
+        _card("📋", "通过率", f"{pr:.1%} ({rag_summary.passed}/{rag_summary.total})" if rag_summary else "—", pr_st, "recall@5") +
+        _card("🎯", "Top-1 准确率", f"{top1:.1%}" if top1 is not None else "—", top1_st, "用户看到的第1条") +
+        _card("🚫", "拒答准确率", f"{rej:.1%}" if rej is not None else "—", rej_st, "negative case") +
+        _card("📈", "MRR", f"{mrr:.1%}" if mrr is not None else "—", mrr_st, "排序质量")
+    )
+
+    # === 失败 case 分类 ===
+    fail_results = [r for r in report.results if r.status == "fail"]
+    error_results = [r for r in report.results if r.status == "error"]
+
+    def _classify_failure(r):
+        exp = r.expected or {}
+        if r.status == "error":
+            return "执行错误"
+        retrieved = r.actual.get("retrieved_docs", []) or []
+        if not retrieved:
+            return "空召回"
+        exp_docs = exp.get("relevant_docs", []) or []
+        if exp_docs and retrieved[0] not in exp_docs:
+            return "Top-1 错"
+        return "其他"
+
+    from collections import Counter
+    fail_groups = Counter(_classify_failure(r) for r in fail_results)
+    error_count = len(error_results)
+
+    if fail_results or error_results:
+        group_rows = ""
+        for cat in ["Top-1 错", "空召回", "执行错误", "其他"]:
+            n = fail_groups.get(cat, 0)
+            if n:
+                group_rows += f'<tr><td>{cat}</td><td>{n}</td></tr>'
+
+        fail_rows = ""
+        for r in fail_results + error_results:
+            exp_docs = (r.expected or {}).get("relevant_docs", [])
+            rd = r.actual.get("retrieved_docs", []) or []
+            exp_str = exp_docs[0] if exp_docs else "—"
+            top1 = rd[0] if rd else ("⚠️ " + (r.error_msg[:30] if r.error_msg else "error") if r.status == "error" else "empty")
+            cat = "执行错误" if r.status == "error" else _classify_failure(r)
+            cls = "fail" if r.status == "fail" else "error"
+            fail_rows += f'<tr class="{cls}"><td><b>{_html.escape(r.case_id)}</b></td><td><code>{_html.escape(exp_str)}</code></td><td><code>{_html.escape(top1)}</code></td><td>{_html.escape(cat)}</td></tr>'
+
+        failure_section = f"""
+        <h2>⚠️ 失败 case ({len(fail_results)} 失败 + {error_count} 错误)</h2>
+        <h3>失败分类汇总</h3>
+        <table class="stats">
+          <tr><th>类型</th><th>数量</th></tr>
+          {group_rows}
+        </table>
+        <h3>失败 case 明细</h3>
+        <table class="cases">
+          <tr><th>Case</th><th>期望 doc</th><th>Top-1 召回</th><th>分类</th></tr>
+          {fail_rows}
+        </table>"""
+    else:
+        failure_section = '<h2>✅ 全部用例通过，无失败</h2>'
+
+    # === per-case 详情折叠面板 ===
+    details_html = ""
+    for r in report.results:
+        status_class = r.status
+        status_zh = STATUS_LABELS.get(r.status, r.status)
+        status_icon = STATUS_ICONS.get(r.status, "?")
+        question = r.actual.get("question", "")
+        kb_id = r.actual.get("kb_id", "")
+        metrics_str = ", ".join(
+            f"{METRIC_LABELS.get(k, k)}={v}" for k, v in (r.metrics or {}).items()
+        )
+
+        # 1. 过程细节
+        pipeline = r.actual.get("pipeline") or {}
+        rejection = r.actual.get("rejection") or {}
+        confidence = rejection.get("confidence", "?")
+        conf_icon = {"high": "🟢", "medium": "🟡", "low": "🟠", "none": "🔴"}.get(confidence, "❔")
+
+        # Top-5 召回证据
+        details = r.actual.get("details", []) or []
+        details_rows = ""
+        for i, d in enumerate(details[:5], 1):
+            doc_id = _html.escape(str(d.get("doc_id", "—")))
+            chunk_id = _html.escape(str(d.get("chunk_id", "")))[:25]
+            rs = d.get("rerank_score")
+            rs_str = f"{rs:.4f}" if isinstance(rs, (int, float)) else "—"
+            snippet = _html.escape(str(d.get("snippet", "")).replace("|", "\\|")[:120])
+            details_rows += f'<tr><td>{i}</td><td><code>{doc_id}</code></td><td>{rs_str}</td><td>{snippet}</td></tr>'
+
+        # 2. 结果
+        exp = r.expected or {}
+        expected_docs = exp.get("relevant_docs", []) or []
+        retrieved_docs = r.actual.get("retrieved_docs", []) or []
+        should_reject = exp.get("should_reject", False)
+
+        if should_reject:
+            result_block = f"""
+            <p><b>类型</b>: 负样本（应拒答）</p>
+            <p><b>期望文档</b>: <code>[]</code></p>
+            <p><b>实际召回</b>: <code>{_html.escape(str(retrieved_docs[:5]))}</code></p>"""
+        elif expected_docs:
+            top1 = retrieved_docs[0] if retrieved_docs else "—"
+            top1_hit = top1 in expected_docs if retrieved_docs else False
+            top1_icon = "✅" if top1_hit else "❌"
+            result_block = f"""
+            <p><b>期望文档</b>: <code>{_html.escape(str(expected_docs))}</code></p>
+            <p><b>Top-1</b>: <code>{_html.escape(top1)}</code> {top1_icon}</p>
+            <p><b>实际召回 Top-5</b>: <code>{_html.escape(str(retrieved_docs[:5]))}</code></p>"""
+        else:
+            result_block = f'<p><b>期望</b>: <code>{_html.escape(str(expected_docs))}</code> · <b>召回</b>: <code>{_html.escape(str(retrieved_docs[:5]))}</code></p>'
+
+        # 3. 拒答
+        top1_rs = rejection.get("top1_rerank_score")
+        rej_gate = rejection.get("reject_gate")
+        rej_reason = rejection.get("reject_reason")
+        rej_metric = (r.metrics or {}).get("reject_accuracy")
+        reject_block = f"""
+            <p><b>状态</b>: {conf_icon} <b>{confidence}</b></p>"""
+        if top1_rs is not None:
+            reject_block += f'<p><b>Top-1 rerank_score</b>: <code>{top1_rs:.4f}</code></p>'
+        if rej_gate:
+            reject_block += f'<p><b>拒答 gate</b>: <code>{_html.escape(rej_gate)}</code></p>'
+        if rej_reason:
+            reject_block += f'<p><b>拒答原因</b>: <code>{_html.escape(rej_reason)}</code></p>'
+        if should_reject and rej_metric is not None:
+            judge = "✅ 正确拒答" if rej_metric == 1.0 else "❌ 应该拒答却没拒"
+            reject_block += f'<p><b>拒答判定</b>: {judge} (reject_accuracy={rej_metric})</p>'
+
+        details_html += f"""
+<details class="case case-{status_class}">
+  <summary>{status_icon} <b>{_html.escape(r.case_id)}</b> — {status_zh} ({_html.escape(question[:40])})</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>{_html.escape(kb_id)}</code> · <b>耗时</b>: {r.duration_ms}ms</p>
+    <p><b>指标</b>: {_html.escape(metrics_str)}</p>
+    {f'<p><b>错误</b>: <code>{_html.escape(r.error_msg)}</code></p>' if r.error_msg else ''}
+    <h4>1. 过程细节</h4>
+    {f'<p>Stage1={pipeline.get("stage1_docs","?")} / Stage2={pipeline.get("stage2_chunks_recalled","?")} / Adaptive={pipeline.get("adaptive","?")}</p>' if pipeline else ''}
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      {details_rows}
+    </table>
+    <h4>2. 结果</h4>
+    {result_block}
+    <h4>3. 是否拒答</h4>
+    {reject_block}
+  </div>
+</details>"""
+
+    # === HTML 主框架 ===
+    mode_zh = "实时" if report.mode == "live" else "离线"
+    css = """
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           margin: 0; background: #f5f6fa; color: #2d3142; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+              color: white; padding: 32px; border-radius: 12px; margin-bottom: 24px;
+              box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    .header h1 { margin: 0 0 8px; font-size: 28px; }
+    .header .meta { opacity: 0.9; font-size: 14px; }
+    .dashboard { display: grid; grid-template-columns: repeat(4, 1fr);
+                 gap: 16px; margin-bottom: 24px; }
+    .card { background: white; padding: 20px; border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06); text-align: center; }
+    .card-icon { font-size: 32px; margin-bottom: 8px; }
+    .card-label { font-size: 13px; color: #6c757d; margin-bottom: 8px; }
+    .card-value { font-size: 28px; font-weight: bold; margin-bottom: 4px; }
+    .card-hint { font-size: 11px; color: #adb5bd; }
+    .card-ok { border-top: 4px solid #10b9810; }
+    .card-warn { border-top: 4px solid #f59e0b; }
+    .card-fail { border-top: 4px solid #ef4444; }
+    .card-none { border-top: 4px solid #cbd5e1; }
+    h2 { color: #2d3142; border-bottom: 2px solid #667eea; padding-bottom: 8px; margin-top: 32px; }
+    h3 { color: #4a5568; margin-top: 20px; }
+    table { border-collapse: collapse; width: 100%; background: white;
+           box-shadow: 0 1px 3px rgba(0,0,0,0.05); border-radius: 6px; overflow: hidden; }
+    th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid #e9ecef; }
+    th { background: #f8f9fa; font-weight: 600; color: #495057; font-size: 13px; }
+    tr.fail { background: #fef2f2; }
+    tr.fail:hover { background: #fee2e2; }
+    tr.error { background: #fff3cd; }
+    tr.error:hover { background: #ffe69c; }
+    code { background: #f1f3f5; padding: 2px 6px; border-radius: 3px;
+           font-family: 'Menlo', monospace; font-size: 12px; }
+    details.case { background: white; border-radius: 8px; margin-bottom: 8px;
+                   box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    details.case[open] { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    details.case summary { padding: 14px 18px; cursor: pointer;
+                           font-size: 14px; user-select: none; }
+    details.case summary:hover { background: #f8f9fa; }
+    details.case summary b { color: #2d3142; }
+    details.case-pass summary { border-left: 4px solid #10b9810; }
+    details.case-fail summary { border-left: 4px solid #ef4444; background: #fef2f2; }
+    details.case-error summary { border-left: 4px solid #f59e0b; background: #fff3cd; }
+    .case-body { padding: 0 18px 18px; font-size: 13px; line-height: 1.7; }
+    .case-body h4 { color: #667eea; margin-top: 16px; }
+    table.retrieve { font-size: 12px; }
+    table.retrieve th { background: #e0e7ff; }
+    """
+
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>评测报告 — {_html.escape(module_zh)}</title>
+<style>{css}</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>📊 RAG 评测报告</h1>
+    <div class="meta">{_html.escape(module_zh)} · {mode_zh} · {_html.escape(report.timestamp)}</div>
+  </div>
+  <div class="dashboard">
+    {cards_html}
+  </div>
+  {failure_section}
+  <h2>📂 per-case 详情（{len(report.results)} 条）</h2>
+  {details_html}
+</div>
+</body>
+</html>"""
+
+    path.write_text(html, encoding="utf-8")
+    print(f"HTML 报告已保存到: {path}")
+    return path
+
+
 def compare_reports(report_a: EvalReport, report_b: EvalReport) -> str:
     """比较两次报告，返回差异描述字符串（中文）。"""
     lines = ["## 报告对比", ""]

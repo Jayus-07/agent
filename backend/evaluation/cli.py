@@ -108,6 +108,9 @@ def main():
 
     output_dir = Path(args.output) if args.output else RESULTS_DIR / report.timestamp.replace(":", "-")
     write_markdown_report(report, output_dir)
+    # V2.0: HTML Dashboard 报告（自包含 CSS，浏览器直接打开）
+    from backend.evaluation.report import write_html_report
+    write_html_report(report, output_dir)
     # 持久化 JSON 全量报告（含每条 case 检索轨迹），供 baseline 对比
     write_json_report(report, output_dir)
 
