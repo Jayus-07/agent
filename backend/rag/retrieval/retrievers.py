@@ -155,8 +155,16 @@ class ChunkLevelRetriever(BaseRetriever):
                     doc_ids = []
                     stage1_path = "person_name_miss"
             else:
-                doc_ids = []  # No person filter — fall through to standard doc filter
-                stage1_path = "metadata_filter_no_person"
+                # 即使有 metadata_filter（如 kb_id）也要做 doc 级检索计算 doc_ids，
+                # 否则 Stage2 hybrid_retrieve doc_ids=[] 不限 doc，rerank 输入被 KB 内噪声稀释
+                # 导致高相关 doc 被挤掉（fix 2026-08-19 — RAG eval 基线从 72% 恢复）
+                if request_metadata_filter:
+                    doc_results = self.doc_db.similarity_search(query, k=5, filter=request_metadata_filter)
+                else:
+                    doc_results = self.doc_db.similarity_search(query, k=5)
+                stage1_fallback_count += 1
+                doc_ids = self._filter_docs_by_keywords(query, doc_results)
+                stage1_path = "metadata_filter_with_doc_similarity"
             logger.info(
                 f"ChunkLevelRetriever Stage 1: metadata_filter={request_metadata_filter} "
                 f"→ doc_ids={len(doc_ids)} matched, path={stage1_path}"
