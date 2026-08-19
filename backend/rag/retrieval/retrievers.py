@@ -220,13 +220,18 @@ class ChunkLevelRetriever(BaseRetriever):
                 stage1_fallback_count += 1
 
         # — Stage 2: Chunk 级检索 —
+        # 2026-08-20: 同义词扩展 — 对 query 做同义词扩展，提升口语化 query 召回
+        from backend.rag.preprocessing.synonyms import expand_query
+        queries_to_search = expand_query(query)
+
         all_docs = []
         seen = set()
-        for q in [query]:
+        for q in queries_to_search:
             res = hybrid_retrieve(
                 q, self.chunk_retriever, self.bm25,
                 k=self.k, doc_ids=doc_ids,
                 metadata_filter=request_metadata_filter,
+                expanded_queries=queries_to_search,  # 传全部扩展 query 给 vector_retriever
             )
             for d in res:
                 cid = d.metadata.get("chunk_id") or f'{d.metadata.get("doc_id","?")}:{d.metadata.get("chunk_index",0)}'

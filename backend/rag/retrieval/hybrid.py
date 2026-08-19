@@ -19,8 +19,13 @@ def _filter_by_metadata(docs: list, metadata_filter: dict | None) -> list:
     ]
 
 
-def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60, metadata_filter=None):
+def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60, metadata_filter=None,
+                    expanded_queries: list[str] | None = None):
     """混合检索：Vector + BM25 并行 → RRF 融合。
+
+    2026-08-20: 加 expanded_queries 参数 — 同义词扩展检索。
+    vector_retriever.retrieve 时传入扩展 query 列表，CustomRetriever 内部
+    对每个 query 各调一次 similarity_search 并 RRF 融合。
 
     可靠性契约：
       - 单侧失败 → 降级仅用另一侧，span metrics 标记 fallback_side / fallback_reason
@@ -34,7 +39,8 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
     from concurrent.futures import ThreadPoolExecutor
     failures: dict[str, BaseException] = {}
     with ThreadPoolExecutor(max_workers=2) as ex:
-        vf = ex.submit(vector_retriever.retrieve, query, k=k, doc_ids=doc_ids, metadata_filter=metadata_filter)
+        vf = ex.submit(vector_retriever.retrieve, query, k=k, doc_ids=doc_ids,
+                        metadata_filter=metadata_filter, expanded_queries=expanded_queries)
         bf = ex.submit(bm25_retriever.invoke, query)
         try:
             vector_docs = vf.result()
