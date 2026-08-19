@@ -117,6 +117,41 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
         lines.append(f"## 综合得分: {report.total_score:.2%}")
         lines.append("")
 
+    # === Dashboard 摘要块（v2 增强：可视化大字号指标，首屏可见） ===
+    # 位置：头部信息之后、模块详情之前。一眼能看到核心数字。
+    lines.append("## 📊 核心指标 Dashboard")
+    lines.append("")
+    lines.append("| 指标 | 数值 | 含义 | 状态 |")
+    lines.append("|------|------|------|------|")
+    rag_summary = next((s for s in report.summaries if s.module == "rag"), None)
+    if rag_summary:
+        m = rag_summary.metrics or {}
+        pr = rag_summary.pass_rate
+        pr_icon = "✅" if pr >= 0.9 else "⚠️" if pr >= 0.7 else "❌"
+        lines.append(f"| 通过率 | **{pr:.1%}** ({rag_summary.passed}/{rag_summary.total}) | 召回含期望 doc | {pr_icon} |")
+        top1 = m.get("top1_accuracy")
+        if top1 is not None:
+            top1_icon = "✅" if top1 >= 0.85 else "⚠️" if top1 >= 0.65 else "❌"
+            lines.append(f"| **Top-1 准确率** | **{top1:.1%}** | 用户看到的第1条是不是对的 | {top1_icon} |")
+        rej = m.get("reject_accuracy")
+        if rej is not None:
+            rej_icon = "✅" if rej >= 0.85 else "⚠️" if rej >= 0.65 else "❌"
+            lines.append(f"| **拒答准确率** | **{rej:.1%}** | negative case 拒答正确率 | {rej_icon} |")
+        mrr = m.get("mrr")
+        if mrr is not None:
+            lines.append(f"| MRR | {mrr:.1%} | 第1命中位置倒数平均 | {'✅' if mrr >= 0.8 else '⚠️'} |")
+        ndcg = m.get("ndcg@10")
+        if ndcg is not None:
+            lines.append(f"| NDCG@10 | {ndcg:.1%} | 排序质量 | {'✅' if ndcg >= 0.8 else '⚠️'} |")
+        recall5 = m.get("recall@5")
+        if recall5 is not None:
+            lines.append(f"| recall@5 | {recall5:.1%} | Top-5 召回覆盖率 | {'✅' if recall5 >= 0.9 else '⚠️'} |")
+    lines.append("")
+    lines.append("> 状态阈值：✅ ≥85%（生产）/ ⚠️ 65~85%（公测）/ ❌ <65%（内测）")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
     for s in report.summaries:
         mod_zh = MODULE_LABELS.get(s.module, s.module)
         lines.append(f"### {mod_zh}")
@@ -134,21 +169,64 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
             lines.append(f"| {label} | {v} |")
         lines.append("")
 
-    # 失败/错误详情
+    # 失败/错误详情（v2 增强：按错误类型分组 + 表格）
     lines.append("## 失败与错误详情")
     lines.append("")
-    has_detail = False
-    for r in report.results:
-        if r.status in ("fail", "error"):
-            status_zh = STATUS_LABELS.get(r.status, r.status)
-            icon = STATUS_ICONS.get(r.status, "?")
-            detail = r.error_msg or "指标: " + str(r.metrics)
-            lines.append(f"- {icon} **{r.case_id}** [{status_zh}] — {detail}")
-            has_detail = True
-    if not has_detail:
-        lines.append("✅ 全部用例通过，无失败/错误详情。")
+    fail_results = [r for r in report.results if r.status == "fail"]
+    error_results = [r for r in report.results if r.status == "error"]
+    if fail_results or error_results:
+        # 按错误类型分组（chunk_id 错 / empty / snippet 不匹配 / 等）
+        def _classify_failure(r):
+            """按 expected 字段分类失败原因。"""
+            exp = r.expected or {}
+            if r.status == "error":
+                return "执行错误"
+            retrieved = r.actual.get("retrieved_docs", []) or []
+            if not retrieved:
+                return "空召回"
+            exp_docs = exp.get("relevant_docs", []) or []
+            if exp_docs and retrieved[0] not in exp_docs:
+                return "Top-1 错"
+            return "其他"
 
-    lines.append("")
+        from collections import Counter
+        fail_groups = Counter(_classify_failure(r) for r in fail_results)
+        lines.append("**失败分类汇总**（按根因）：")
+        lines.append("")
+        lines.append("| 类型 | 数量 | 占比 |")
+        lines.append("|------|------|------|")
+        total_fails = max(len(fail_results), 1)
+        for cat in ["Top-1 错", "空召回", "执行错误", "其他"]:
+            n = fail_groups.get(cat, 0)
+            if n:
+                pct = n / total_fails * 100
+                lines.append(f"| {cat} | {n} | {pct:.0f}% |")
+        lines.append("")
+
+        # 失败 case 表格（一眼能扫）
+        lines.append('**失败 case 明细**（点击下方【过程详情】章节展开）：')
+        lines.append("")
+        lines.append("| Case | 期望 doc | Top-1 召回 | 分类 |")
+        lines.append("|------|----------|------------|------|")
+        for r in fail_results + error_results:
+            exp_docs = (r.expected or {}).get("relevant_docs", [])
+            rd = r.actual.get("retrieved_docs", []) or []
+            exp_str = exp_docs[0] if exp_docs else "—"
+            top1 = rd[0] if rd else "empty"
+            if r.status == "error":
+                cat = "执行错误"
+                top1 = f"⚠️ {r.error_msg[:30] if r.error_msg else 'error'}"
+            else:
+                cat = _classify_failure(r)
+            lines.append(f"| **{r.case_id}** | `{exp_str}` | `{top1}` | {cat} |")
+        lines.append("")
+    else:
+        lines.append("✅ 全部用例通过，无失败/错误详情。")
+        lines.append("")
+
+    # === Dashboard 已在头部渲染，此处跳过（避免重复） ===
+
+    # === v2: 3 段式报告 — 过程细节 / 结果 / 是否拒答 ===
     # === v2: 3 段式报告 — 过程细节 / 结果 / 是否拒答 ===
     lines.append("## 过程详情（每条用例）")
     lines.append("")
