@@ -69,17 +69,17 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "e4b6374ca7"
+          "ea3b67f202"
         ],
         "relevant_snippets": [
-          "破损",
-          "48小时"
+          "破损"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "after_sales"
+        "domain": "after_sales",
+        "fix_note": "2026-08-19: golden truth 修正。破损相关流程在 07_物流SOP（含破损率/丢件率），02_售后FAQ 不含'48小时'/'破损'具体表述"
       }
     },
     {
@@ -112,14 +112,14 @@
           "e4b6374ca7"
         ],
         "relevant_snippets": [
-          "保修",
-          "序列号"
+          "保修"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "medium",
-        "domain": "after_sales"
+        "domain": "after_sales",
+        "fix_note": "2026-08-19: 02_售后FAQ 含'保修'但不含'序列号'，去掉片段关键词"
       }
     },
     {
@@ -549,7 +549,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "aa3bad663c"
+          "570819cca5"
         ],
         "relevant_snippets": [
           "盘点",
@@ -559,7 +559,8 @@
       },
       "metadata": {
         "difficulty": "hard",
-        "domain": "mixed"
+        "domain": "mixed",
+        "fix_note": "2026-08-19: golden truth 修正。盘点/整改在 03_库存管理制度（含盘点/差异率/整改），不在 10_结构混乱的长文档"
       }
     },
     {
@@ -569,7 +570,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "aa3bad663c"
+          "044f7fd36e"
         ],
         "relevant_snippets": [
           "供应商",
@@ -579,7 +580,8 @@
       },
       "metadata": {
         "difficulty": "hard",
-        "domain": "mixed"
+        "domain": "mixed",
+        "fix_note": "2026-08-19: golden truth 修正。供应商/交期在 04_采购流程（合同含价格/质量/交期/违约责任），不在 10_结构混乱的长文档"
       }
     },
     {
@@ -589,8 +591,8 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_snippets": [
-          "P95",
-          "召回率"
+          "P99",
+          "可用性"
         ],
         "min_relevant_chunks": 1,
         "match_type": "snippet"
@@ -598,7 +600,8 @@
       "metadata": {
         "difficulty": "hard",
         "domain": "mixed",
-        "probe_note": "snippet 语义匹配：召回内容含\"P95\"和\"召回率\"关键词即 pass。系统监控指标可能分布在多个技术手册章节"
+        "probe_note": "snippet 语义匹配：召回内容含\"P99\"和\"可用性\"关键词即 pass。技术手册实际用 P99/可用性≥99.9%/错误率（不是 P95/召回率）",
+        "fix_note": "2026-08-19: 关键词按文档实际内容修正（P99/可用性）"
       }
     },
     {
