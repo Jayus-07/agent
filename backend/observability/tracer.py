@@ -175,9 +175,13 @@ class TraceCollector:
     def __init__(self, max_size: int = MAX_TRACES):
         self._lock = threading.Lock()
         self._thread_current: TraceRecord | None = None  # sync path
-        self._timers: dict[str, float] = {}
         self._span_seq: int = 0
         self._listeners: list = []  # span lifecycle subscribers (Phase 1.5)
+        # 嵌套 trace 恢复栈：子 trace id → 父 trace。
+        # 场景：agent 图内嵌 RAGChain.ask() 会开自己的 trace，
+        # finish() 后必须把外层 agent trace 恢复为 current，
+        # 否则后续 span 全部落入 noop（浏览器实测发现）。
+        self._parents: dict[str, TraceRecord] = {}
 
     # =====================================================
     # 统一 API
@@ -195,6 +199,9 @@ class TraceCollector:
             workflow_kind: WorkflowKind 枚举值（前端按 kind 路由渲染）
         """
         rid = uuid.uuid4().hex[:12]
+        # 嵌套检测：已有 active trace 时建立父子链（而非覆盖后丢失外层上下文）。
+        # 典型场景：MultiAgent 图内执行 rag_skill → RAGChain.ask() 自带 trace。
+        prev = _current_trace_var.get() or self._thread_current
         trace = TraceRecord(
             id=rid,
             request_id=rid,
@@ -203,10 +210,15 @@ class TraceCollector:
             question=question,
             workflow_name=workflow_name,
             workflow_kind=workflow_kind,
+            parent_id=prev.id if prev else None,
         )
+        if prev is not None:
+            prev.children_ids.append(rid)
         with self._lock:
             self._span_seq = 0
             self._thread_current = trace
+            if prev is not None:
+                self._parents[rid] = prev
         _current_trace_var.set(trace)
         # O2: 自动注入 trace_id/session_id 到日志
         from backend.shared.logger import set_log_context
@@ -260,7 +272,6 @@ class TraceCollector:
         with self._lock:
             seq = self._span_seq
             self._span_seq += 1
-            self._timers[span_id] = time.time()
 
         span = Span(
             span_id=span_id,
@@ -272,6 +283,10 @@ class TraceCollector:
             sequence=seq,
             input=input,
         )
+        # 计时器直接绑在 Span 对象上（不再用 span_id 做 dict key）——
+        # 同名 span_id（如中间件与 router 内部都叫 "router"）不会再互相覆盖，
+        # 导致一方 duration 归零。noop span 同样带 t0，end_span 不会崩。
+        span._t0 = time.time()
         trace.spans.append(span)
         if parent_id is None:
             trace.root_span_id = span_id
@@ -280,10 +295,10 @@ class TraceCollector:
     def end_span(self, span: Span, output: dict = None,
                  metrics: dict = None, status: str = "success"):
         """结束 Span：记录 end_time、计算 duration_ms、填充 metrics/output。"""
-        with self._lock:
-            if span.span_id in self._timers:
-                span.duration_ms = int((time.time() - self._timers[span.span_id]) * 1000)
-                del self._timers[span.span_id]
+        t0 = getattr(span, "_t0", None)
+        if t0 is not None:
+            span.duration_ms = int((time.time() - t0) * 1000)
+            span._t0 = None
 
         span.end_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         span.status = status
@@ -338,11 +353,14 @@ class TraceCollector:
 
         self._aggregate_usage(record)
 
+        # 嵌套恢复：子 trace 结束 → 把父 trace 还原为 current，
+        # 外层流程后续 span 才不会落入 noop。
         with self._lock:
+            parent = self._parents.pop(record.id, None)
             if self._thread_current is record:
-                self._thread_current = None
+                self._thread_current = parent
         if _current_trace_var.get() is record:
-            _current_trace_var.set(None)
+            _current_trace_var.set(parent)
 
         # 持久化到 SQLite（重启不丢失）
         try:
@@ -458,16 +476,16 @@ class TraceCollector:
     def clear_for_test(self):
         """测试辅助：重置全部内部状态。
 
-        2d627d7 重构后 trace 持久化在 SQLite，内存中只剩 _thread_current / _timers /
-        _span_seq / _listeners / contextvar。测试前后调用此方法确保隔离。
+        2d627d7 重构后 trace 持久化在 SQLite，内存中只剩 _thread_current /
+        _span_seq / _listeners / _parents / contextvar。测试前后调用此方法确保隔离。
 
         注意：不会清空 SQLite 数据（如果用了临时 DB，tmp_path 会自动清理）。
         """
         with self._lock:
             self._thread_current = None
-            self._timers.clear()
             self._span_seq = 0
             self._listeners.clear()
+            self._parents.clear()
         _current_trace_var.set(None)
 
     # =====================================================

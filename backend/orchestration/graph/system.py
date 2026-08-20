@@ -169,26 +169,51 @@ class MultiAgentSystem:
         degraded_steps = state.get("_degraded_steps", set())
         plan_changed = state.get("_plan_changed", False)
 
-        # ── Planner ──
-        planner_span = Span(
-            span_id="planner", parent_id="root",
-            name="Planner 拆解", type="agent",
-            status="success",
-            metrics={"subtasks": len(nodes)},
-        )
-        trace.spans.append(planner_span)
+        # 合成兜底策略（2026-08-21 浏览器实测整改）：
+        # 中间件 span 命名为 {node_name} 或 {node_name}:{step_id}，只有节点真正
+        # 执行过才会产生 span。因此「存在中间件 span」即执行证据：
+        #   - 已有精确时长 span → 不再重复合成；
+        #   - 无 span → 节点未执行（如 direct 模式跳过 planner/critique/supervisor）
+        #     → 不合成 0ms 占位噪声 span。
+        existing_ids = {s.span_id for s in trace.spans}
+
+        def _has_node_span(node: str) -> bool:
+            return any(sid == node or sid.startswith(f"{node}:") for sid in existing_ids)
+
+        def _has_middleware_span(step_id: str) -> bool:
+            # 中间件 skill span 命名：{node_name}:{step_id}
+            return any(sid.endswith(f":{step_id}") for sid in existing_ids)
+
+        # ── Planner（仅在执行过且中间件 span 缺失时补）──
+        if nodes and not _has_node_span("planner"):
+            planner_span = Span(
+                span_id="planner", parent_id="root",
+                name="Planner 拆解", type="agent",
+                status="success",
+                metrics={"subtasks": len(nodes)},
+            )
+            trace.spans.append(planner_span)
 
         # ── Critique ──
-        crit_span = Span(
-            span_id="critique", parent_id="root",
-            name="计划审查", type="agent",
-            status="success",
-            metrics={"plan_changed": plan_changed},
-        )
-        trace.spans.append(crit_span)
+        if state.get("_plan_critiqued") and not _has_node_span("critique"):
+            crit_span = Span(
+                span_id="critique", parent_id="root",
+                name="计划审查", type="agent",
+                status="success",
+                metrics={"plan_changed": plan_changed},
+            )
+            trace.spans.append(crit_span)
 
-        # ── Supervisor Rounds ──
-        for r in range(1, loop_count + 1):  # loop_count >= 1
+        # ── Supervisor Rounds（direct/workflow 模式无调度轮次）──
+        # 执行证据：plan 内的 step 才有 supervisor 派发（direct 模式的
+        # direct_* step 由 skill_executor 直接执行，plan.nodes 为空 → 0 轮）。
+        executed_rounds = sum(
+            1 for sid, sr in step_results.items()
+            if sid in nodes and sr.get("status", "pending") not in ("pending", "running")
+        )
+        for r in range(1, min(loop_count, executed_rounds) + 1):
+            if _has_node_span("supervisor"):
+                break
             round_span = Span(
                 span_id=f"supervisor-round-{r}", parent_id="root",
                 name=f"调度轮次 {r}", type="workflow",
@@ -204,29 +229,36 @@ class MultiAgentSystem:
             desc = sr.get("description", step_id)
             if status in ("pending", "running"):
                 continue  # 未执行的不生成 span
+            if _has_middleware_span(step_id):
+                continue  # 中间件已记录真实时长 span，不重复合成
 
+            # error 兜底：失败步骤无错误详情时给出可读信息，
+            # 避免前端看到 metrics.error='' 的空 error span。
+            err = sr.get("error", "") or (
+                f"步骤执行失败（状态={status}）" if status not in ("success", "skipped") else "")
             skill_span = Span(
                 span_id=f"skill-{step_id}", parent_id="root",
                 name=desc, type="agent",
                 status=status if status in ("success", "error", "skipped") else "error",
                 metrics={
                     "capability": cap,
-                    "error": sr.get("error", ""),
+                    "error": err,
                     "retry_count": sr.get("retries", 0),
                 },
             )
             trace.spans.append(skill_span)
 
-        # ── Reporter ──
+        # ── Reporter（执行过但中间件 span 缺失才补）──
         final_answer = state.get("final_answer", "")
-        reporter_span = Span(
-            span_id="reporter", parent_id="root",
-            name="Reporter 汇总", type="agent",
-            status="success" if final_answer else "error",
-            metrics={"answer_len": len(final_answer)},
-            output={"answer_preview": final_answer[:200]} if final_answer else None,
-        )
-        trace.spans.append(reporter_span)
+        if final_answer and not _has_node_span("reporter"):
+            reporter_span = Span(
+                span_id="reporter", parent_id="root",
+                name="Reporter 汇总", type="agent",
+                status="success" if final_answer else "error",
+                metrics={"answer_len": len(final_answer)},
+                output={"answer_preview": final_answer[:200]} if final_answer else None,
+            )
+            trace.spans.append(reporter_span)
 
         # ── Graph 拓扑 ──
         trace.graph = _build_graph_snapshot(state, loop_count, degraded_steps)

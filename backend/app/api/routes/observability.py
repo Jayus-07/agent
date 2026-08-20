@@ -70,6 +70,9 @@ def _to_trace_dto(t) -> dict:
     # 兼容 dict（SQLite 存储格式）和 TraceRecord
     get = lambda k, d=None: t.get(k, d) if isinstance(t, dict) else getattr(t, k, d)
     total_ms = get("duration_ms", 0)
+    # SLA 用 trace 自身阈值（agent 链路按计划复杂度 30-90s，RAG 链路 30s）；
+    # 此前硬编码 10s 导致几乎所有请求都被前端标记 TIMEOUT（浏览器实测发现）。
+    sla_ms = get("sla_threshold_ms", 10000) or 10000
     all_spans = get("spans", [])
     has_error = any((s.get("status") if isinstance(s, dict) else s.status) == "error" for s in all_spans)
     return {
@@ -89,7 +92,7 @@ def _to_trace_dto(t) -> dict:
         "workflow_name": get("workflow_name", ""),
         "root_span_id": get("root_span_id", ""),
         "spans": [_to_span_dto(s, all_spans, total_ms) for s in all_spans],
-        "sla": {"threshold_ms": 10000, "breached": total_ms > 10000},
+        "sla": {"threshold_ms": sla_ms, "breached": total_ms > 0 and total_ms > sla_ms},
         "parent_id": get("parent_id"),
         "children_ids": get("children_ids", []),
         "graph": get("graph"),
@@ -99,6 +102,8 @@ def _to_trace_dto(t) -> dict:
 
 def _stored_dict_to_dto(d: dict) -> dict:
     """SQLite 存储的 trace dict → 前端兼容的 DTO（spans 已移除，仅列表摘要）"""
+    duration = d.get("duration_ms", 0)
+    sla_ms = d.get("sla_threshold_ms", 10000) or 10000
     return {
         "id": d.get("id", ""),
         "timestamp": d.get("timestamp", ""),
@@ -116,9 +121,9 @@ def _stored_dict_to_dto(d: dict) -> dict:
         "workflow_name": d.get("workflow_name", ""),
         "root_span_id": d.get("root_span_id", ""),
         "spans": [],
-        "sla": {"threshold_ms": 10000, "breached": False},
-        "parent_id": None,
-        "children_ids": [],
+        "sla": {"threshold_ms": sla_ms, "breached": duration > 0 and duration > sla_ms},
+        "parent_id": d.get("parent_id"),
+        "children_ids": d.get("children_ids", []),
         "graph": None,
         "tags": d.get("tags", {}),
     }

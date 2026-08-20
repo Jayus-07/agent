@@ -24,6 +24,20 @@ from backend.observability.tracer import (
 from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401
 
 
+@pytest.fixture(autouse=True)
+def _reset_contextvar():
+    """每条用例前清掉模块级 contextvar 残留。
+
+    嵌套 trace 语义下，`start()` 会把已存在的 current trace 当作父 trace，
+    若上一条用例 start 后未 finish，泄漏的 trace 会被误认为父级，导致
+    finish 后 current 不清空。生产环境 start/finish 成对，无此问题。
+    """
+    from backend.observability.tracer import _current_trace_var
+    _current_trace_var.set(None)
+    yield
+    _current_trace_var.set(None)
+
+
 # ==========================================================
 # 1. 正常路径 — start / start_span / end_span / add_event / finish
 # ==========================================================

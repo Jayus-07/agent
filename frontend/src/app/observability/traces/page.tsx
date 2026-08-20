@@ -119,7 +119,9 @@ export default function TracesPage() {
         const hasError = t.error && Object.keys(t.error).length > 0;
         if (filter.status === "error") return hasError || t.status === "error";
         if (filter.status === "success") return !hasError && t.status !== "error";
-        if (filter.status === "timeout") return t.duration_ms > 5000 || t.status === "timeout";
+        // 超时判定用后端下发的 SLA breached（按链路类型 30-90s），
+        // 不再用 duration>5000ms 硬阈值（会把正常慢请求误标 TIMEOUT）
+        if (filter.status === "timeout") return t.sla?.breached || t.status === "timeout";
         if (filter.status === "cancelled") return t.status === "cancelled";
         return true;
       });
@@ -339,7 +341,7 @@ export default function TracesPage() {
               <tbody className="divide-y divide-slate-100">
                 {traces.map((t) => {
                   const stat = (t.error && Object.keys(t.error).length > 0) || t.status === "error" ? "error"
-                    : t.status === "timeout" || t.duration_ms > 5000 ? "timeout" : "success";
+                    : t.status === "timeout" || t.sla?.breached ? "timeout" : "success";
                   const badge = statusBadge(stat);
                   const spans = t.spans || [];
                   const maxStepMs = Math.max(...spans.map(s => s.duration_ms), 0);

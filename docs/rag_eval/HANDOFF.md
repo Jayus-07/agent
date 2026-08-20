@@ -449,8 +449,32 @@ python -m backend.evaluation rag --dataset rag_test_kb.json
 - **踩坑**：测试首入口导入 `backend.agents` 会触发循环导入（planner→tool_registry→graph），
   需先 `import backend.orchestration.graph`。
 - **遗留观察**：router 重复 span、error span 丢错误信息、前端 TIMEOUT 语义/
-  会话恢复失效/窄视口布局 — 均记录于报告 §10.5/10.6，需单独立项。
+  会话恢复失效/窄视口布局 — 已全部修复，见 §12.8。
 - 全量 **1007 passed, 3 skipped**（基线 961）。
+
+### 12.8 2026-08-21 Trace 链路 + 前端 UI 全部整改（§10.5/10.6 收尾）
+
+详见 `docs/upload-test-audit-report.md` §11。要点：
+
+- **根因新发现：嵌套 trace 劫持**——“同问题双 trace”真因不是前端重复提交，
+  而是 `RAGChain.ask()` 在 agent 图内再调 `trace_collector.start()` 劫持外层
+  contextvar。修复：`start()` 建父子链、`finish()` 从 `_parents` 栈恢复父 trace。
+- **同名 span 计时碰撞**：`_timers` dict 按 span_id 覆盖 → 计时器 `_t0` 改绑
+  Span 对象；序列化过滤 `_` 前缀属性。
+- **重复/空 span**：router 去中间件双重包装；`_trace_from_state` 改为
+  “有执行证据才合成”（前缀匹配去重 + direct 模式不合成未执行节点占位）。
+- **SLA 语义**：DTO 用 trace 自身阈值（agent 30/60/90s、RAG 30s），
+  前端改用 `sla.breached` 判定，不再硬编码 5s/10s。
+- **前端**：loadHistory 远程会话新建实体（会话恢复）、终态清 currentStatus
+  （StatusBar 残留）、窄视口 `hidden md:flex/block`（宽度 0）、顺手修
+  MessageActions `e.targetText` TS bug。
+- **测试**：新增 `test_trace_fixes.py` 13 例 + `chat.test.ts` 8 例；
+  后端 995+24 passed，前端 tsc 零错 + vitest 90 passed。
+- **实测复检**：direct 模式 trace 只剩 5 条真实 span（root/router/skill_executor/
+  tool-direct_1/reporter:direct_1），零 0ms 占位、零重复；嵌套 RAG trace
+  父子链完整；会话恢复/窄视口/状态标签均 PASS。
+- **踩坑**：嵌套语义下测试间 contextvar 泄漏会互相污染，tracer 测试需
+  autouse fixture 清 `_current_trace_var`。
 
 ---
 

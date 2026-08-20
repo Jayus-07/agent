@@ -92,7 +92,7 @@ def fresh_tracer():
 
     saved = {
         k: getattr(t.trace_collector, k)
-        for k in ("_timers", "_thread_current", "_span_seq", "_listeners")
+        for k in ("_thread_current", "_span_seq", "_listeners", "_parents")
     }
     saved_var = _current_trace_var.get()
     t.trace_collector.clear()

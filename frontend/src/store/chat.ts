@@ -182,6 +182,10 @@ export const useChatStore = create<ChatState>((set, get) => {
           currentStatus = evt.data.node
         } else if (evt.event === 'delta') {
           deltaText = state.deltaText + evt.data.content
+        } else if (isTerminal) {
+          // 终态清空状态节点：否则 error/中断路径（无 done 事件）下
+          // StatusBar 会残留最后一个阶段标签（如“✍️ 生成回复”）
+          currentStatus = ''
         }
 
         // 实时更新最后一条 assistant 消息的 streamEvents
@@ -240,21 +244,43 @@ export const useChatStore = create<ChatState>((set, get) => {
         set({ historyError: null })
         if (!msgs || msgs.length === 0) return
 
-        set((state) => ({
-          sessions: state.sessions.map((s) =>
-            s.id === sessionId
-              ? {
-                  ...s,
-                  messages: msgs.map((m: any) => ({
-                    id: nanoid(),
-                    role: m.role,
-                    content: m.content,
-                    timestamp: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
-                  })),
-                }
-              : s,
-          ),
+        const restored: Message[] = msgs.map((m: any) => ({
+          id: nanoid(),
+          role: m.role,
+          content: m.content,
+          timestamp: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
         }))
+
+        set((state) => {
+          const exists = state.sessions.some((s) => s.id === sessionId)
+          if (exists) {
+            return {
+              sessions: state.sessions.map((s) =>
+                s.id === sessionId ? { ...s, messages: restored } : s,
+              ),
+            }
+          }
+          // 远程会话不在本地 store（侧边栏用自己的缓存渲染，不入 store）——
+          // 不存在则新建会话实体，否则消息永远挂不上去（会话恢复失效的根因）。
+          const firstUser = restored.find((m) => m.role === 'user')
+          const title = firstUser
+            ? firstUser.content.slice(0, 30) + (firstUser.content.length > 30 ? '...' : '')
+            : '历史会话'
+          return {
+            sessions: [
+              {
+                id: sessionId,
+                title,
+                mode: 'chat' as const,
+                messages: restored,
+                createdAt: restored[0]?.timestamp ?? Date.now(),
+                updatedAt: Date.now(),
+              },
+              ...state.sessions,
+            ],
+            currentId: sessionId,
+          }
+        })
       } catch (e) {
         // 不再静默：记忆库故障必须留下痕迹，否则历史消息凭空消失且无从排查
         set({ historyError: e instanceof Error ? e.message : '加载历史消息失败' })

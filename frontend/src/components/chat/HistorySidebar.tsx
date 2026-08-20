@@ -46,7 +46,7 @@ export default function HistorySidebar({ onClose }: { onClose: () => void }) {
   const errorMsg = loadError
 
   return (
-    <aside className="w-64 shrink-0 flex flex-col glass border-l border-black/5">
+    <aside className="hidden md:flex w-64 shrink-0 flex-col glass border-l border-black/5">
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2 text-xs font-semibold text-text-primary">
           <Brain size={14} className="text-accent" />

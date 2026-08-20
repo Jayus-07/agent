@@ -49,7 +49,7 @@ export default function MessageActions({
   if (editing) {
     return (
       <div className="flex items-start gap-2 mt-1">
-        <textarea value={editText} onChange={e => setEditText(e.targetText)}
+        <textarea value={editText} onChange={e => setEditText(e.target.value)}
           className="flex-1 bg-surface-base border border-border-subtle rounded-lg px-3 py-1.5 text-xs text-text-primary resize-none outline-none focus:border-accent/40"
           rows={2} />
         <button onClick={() => { onEdit?.(editText); setEditing(false) }}

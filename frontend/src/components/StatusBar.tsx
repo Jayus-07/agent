@@ -8,7 +8,9 @@ export default function StatusBar() {
   const isLoading = useChatStore((s) => s.isLoading)
   const isDone = useChatStore((s) => s.streamEvents.some((e) => e.event === 'done'))
 
-  if (!isLoading && (isDone || !currentStatus)) return null
+  // 非加载中一律隐藏：网络异常 catch 路径没有终态事件，
+  // currentStatus 可能残留旧值，仅靠 store 清理不保险
+  if (!isLoading || isDone) return null
 
   const label = nodeLabels[currentStatus] || currentStatus || '思考中'
 

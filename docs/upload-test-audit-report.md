@@ -295,7 +295,7 @@ python -m py_compile backend/app/api/routes/rag_upload.py → OK
 
 `tracer.py` 本体已有 3 个专项测试（538+233+307 行）覆盖充分，未改动。
 
-### 10.5 Trace 异常观察（记录，未修复 — 需单独立项）
+### 10.5 Trace 异常观察（✅ 已在 §11 全部修复）
 
 - 同一节点重复 span：router 出现两条（一条 0ms 带 elapsed_ms 指标、一条真实时长），疑双处埋点；
 - error span 丢错误信息：`skill-direct_1` status=error 但 `metrics.error=''`；
@@ -304,7 +304,7 @@ python -m py_compile backend/app/api/routes/rag_upload.py → OK
   trace 自身 status=success，语义易混淆；
 - 同一问题产生两条 trace（32s+25s），疑前端重复提交。
 
-### 10.6 前端 UI 问题（移交前端任务）
+### 10.6 前端 UI 问题（✅ 已在 §11 全部修复）
 
 历史会话恢复失效（?session= 后内容不加载）、流结束后"✍️ 生成回复"标签残留、
 窄视口（479px）输入框宽度被压为 0。
@@ -320,3 +320,62 @@ python -m py_compile backend/app/api/routes/rag_upload.py → OK
 ```
 
 基线 961 → 1007（新增 46 例），零回归。
+
+## 11. Trace 链路 + 前端 UI 整改（2026-08-21，§10.5/10.6 收尾）
+
+### 11.1 根因分析（重要发现）
+
+“同问题双 trace”真因**不是前端重复提交**，而是**嵌套 trace 劫持**：
+`RAGChain.ask()` 内部无条件调 `trace_collector.start()`，当 rag_skill 在
+MultiAgent 图内执行时劫持外层 agent trace 的 contextvar → 连锁导致
+双 trace、外层 span 丢失落 noop、span 错位。另有 span_id 同名 timer
+碰撞（`_timers` 以 span_id 为 dict key，中间件与 router 内部同名 span
+互相覆盖致一方 duration 归零）。
+
+### 11.2 后端修复
+
+| 问题 | 修复 | 文件 |
+|---|---|---|
+| 嵌套 trace 劫持 | `start()` 建父子链（parent_id/children_ids），`finish()` 从 `_parents` 栈恢复父 trace 为 current | `observability/tracer.py` |
+| 同名 span 计时碰撞 | 删除 `_timers` dict，计时器 `_t0` 绑在 Span 对象上；序列化过滤 `_` 前缀属性 | `tracer.py` + `trace_store.py` |
+| router 重复 span | router 节点去中间件包装（route() 内部已自建完整 span） | `graph/builder.py` |
+| 空占位 span | `_trace_from_state` 改为“有执行证据才合成”：中间件 span 前缀匹配去重；direct 模式未执行的 planner/critique/supervisor 不再合成 0ms 噪声 | `graph/system.py` |
+| error span 丢信息 | 失败步骤无错误详情时兜底文案 `步骤执行失败（状态=xxx）` | `graph/system.py` |
+| SLA/TIMEOUT 语义 | DTO 用 trace 自身 `sla_threshold_ms`（旧数据回落 10s）；agent 链路按步数 30/60/90s、RAG 链路 30s；前端改用 `sla.breached` 判定 | `observability.py` + `chain.py` + traces 页 |
+
+### 11.3 前端修复
+
+| 问题 | 修复 | 文件 |
+|---|---|---|
+| 会话恢复失效 | `loadHistory` 对不在 store 的远程会话新建会话实体（标题取首条用户消息截断） | `store/chat.ts` |
+| StatusBar 残留 | 终态事件（done/error）清空 `currentStatus`；组件 `!isLoading` 兜底隐藏 | `chat.ts` + `StatusBar.tsx` |
+| 窄视口宽度 0 | HistorySidebar `hidden md:flex`、toggle 按钮 `hidden md:block` | `HistorySidebar.tsx` + `agent/page.tsx` |
+| 消息编辑无效（顺手修） | `e.targetText` → `e.target.value` | `MessageActions.tsx` |
+
+### 11.4 验证
+
+```text
+# 后端（backend/tests + 根 tests/）
+995 passed + 24 passed, 3 skipped（含新增 test_trace_fixes.py 13 例）
+
+# 前端
+npx tsc --noEmit 零错误；vitest 90 passed（含新增 chat.test.ts 8 例）
+```
+
+**浏览器实测**（全部 PASS）：
+- 状态标签回复完成后全部清除；
+- 26.6s 请求不再误标 TIMEOUT（SLA 30s 合规）；
+- router span 仅 1 条且 duration>0；嵌套 RAG trace 父子链接完整；
+- 刷新后点击历史会话正确加载消息；
+- 479px 视口输入框宽度正常、侧边栏正确隐藏。
+
+**API 级复检**（占位噪声整改后 direct 模式 trace）：
+`root / router(1ms) / skill_executor / tool-direct_1 / reporter:direct_1`
+共 5 条 span——零 0ms 占位、零重复 span_id、children_ids 指向嵌套 RAG trace。
+
+### 11.5 遗留观察（非本轮范围）
+
+- 本地 qwen2.5:3b（DeepSeek 402 欠费切回）对知识库问答触发忠实度拒答，
+  属内容质量问题而非代码回归；
+- 单机小模型 RAG 链路耗时 ~57s，SLA 30s 下真实 breached（语义正确，
+  如觉标签刺眼可调高 RAG 阈值或换快模型）。

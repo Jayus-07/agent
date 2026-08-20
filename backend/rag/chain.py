@@ -320,6 +320,9 @@ class RAGChain:
         from backend.observability.tracer import trace_collector
         import time as _time
         trace = trace_collector.start(question, session_id)
+        # RAG 单步问答 SLA：30s（与 agent 链路 _sla_for_plan 单步阈值对齐）。
+        # 默认 10s 会让绝大多数正常请求被前端误标 TIMEOUT。
+        trace.sla_threshold_ms = 30000
         trace_collector.start_span("root", parent_id=None,
                                    name="RAG 智能问答", type="agent",
                                    input={"question": question})

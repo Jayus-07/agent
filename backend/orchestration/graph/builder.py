@@ -93,7 +93,10 @@ def build_graph():
     wf = StateGraph(AgentState)
 
     # ── 内置节点（永远不变，TraceMiddleware 自动记录 Span）──
-    wf.add_node("router", trace_middleware.wrap_sync_node("router", router_node))
+    # 注意：router 不用中间件包装 —— MultiTierRouter.route() 内部已自建
+    # 完整 span（含 rule/vector/llm 三层事件与 metrics）。双重包装会产生
+    # 同名重复 span（浏览器实测发现的 0ms+真实时长两条“路由决策”）。
+    wf.add_node("router", router_node)
     wf.add_node("skill_executor", trace_middleware.wrap_sync_node("skill_executor", skill_executor_node))
     wf.add_node("workflow_executor", trace_middleware.wrap_sync_node("workflow_executor", workflow_executor_node))
     wf.add_node("planner", trace_middleware.wrap_sync_node("planner", planner_node))

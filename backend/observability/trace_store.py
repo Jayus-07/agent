@@ -25,13 +25,17 @@ _MAX_ROWS = 5000  # 最多保留条数
 
 
 def _serialize_trace(trace: Any) -> dict:
-    """TraceRecord → JSON 可序列化的 dict。"""
+    """TraceRecord → JSON 可序列化的 dict。跳过 _ 前缀内部属性
+    （如 Span._t0 计时器，非数据字段，序列化会带出噪音）。"""
     if hasattr(trace, "__dict__"):
         d = {}
         for k, v in trace.__dict__.items():
             if k.startswith("_"):
                 continue
-            if isinstance(v, list):
+            if isinstance(v, dict):
+                d[k] = {dk: dv for dk, dv in v.items()
+                        if not (isinstance(dk, str) and dk.startswith("_"))}
+            elif isinstance(v, list):
                 d[k] = [_serialize_trace(x) if hasattr(x, "__dict__") else x for x in v]
             elif hasattr(v, "__dict__"):
                 d[k] = _serialize_trace(v)
