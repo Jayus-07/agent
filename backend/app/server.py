@@ -114,6 +114,28 @@ async def eager_init_rag_pipeline():
     threading.Thread(target=_warmup, daemon=True, name="rag-warmup").start()
 
 
+# ═══════════════════════════════════════════════
+# 启动时清理上传残留（P1 稳定性:崩溃残留的 stale 锁/孤儿 tmp）
+# ═══════════════════════════════════════════════
+@app.on_event("startup")
+async def cleanup_upload_artifacts():
+    """回收上次进程崩溃残留的超龄 .lock 与孤儿 tmp 文件。
+
+    不清理的后果:.lock 残留使同名文件永久无法上传,tmp 残留泄漏磁盘。
+    只删超龄文件(默认 30 分钟),不误伤刚启动就并发进来的请求。
+    """
+    import threading
+    def _clean():
+        try:
+            from backend.app.api.routes.rag_upload import cleanup_stale_upload_artifacts
+            from backend.config.database import DOCS_DIRECTORY
+            from backend.config.rag import RAG_TMP_DIR
+            cleanup_stale_upload_artifacts(DOCS_DIRECTORY, RAG_TMP_DIR)
+        except Exception as e:
+            logger.warning(f"[RAG] 启动清理上传残留失败: {e}")
+    threading.Thread(target=_clean, daemon=True, name="upload-artifact-cleanup").start()
+
+
 # ═══════════════════════════════════════════════════
 # 启动时后台预热 MultiAgent（避免首请求 5-15s 图编译）
 # ═══════════════════════════════════════════════════
@@ -299,14 +321,19 @@ async def register_workflows_and_schedules():
         sched.register_daily("inventory_alert", hour=8, minute=0)
 
         # 2026-08-11 P1 Golden Dataset 周自动评测（每周日 2:00 跑）
+        # 2026-08-21 P1-2: 迁移到 backend.evaluation（54 条 v1.3 离线检索评测，替代旧 backend.eval 的 5 条 golden）
         def _run_weekly_eval():
             try:
-                from backend.eval import run_golden_eval
-                summary = run_golden_eval()
-                logger.info(
-                    f"[WeeklyEval] 完成: hit={summary['hit_rate']:.1%} "
-                    f"pass={summary['pass_rate']:.1%} rej={summary['reject_rate']:.1%}"
-                )
+                from backend.evaluation.weekly import run_weekly_rag_eval
+                summary = run_weekly_rag_eval()
+                if summary.get("ok"):
+                    logger.info(
+                        f"[WeeklyEval] 完成: pass={summary['pass_rate']:.1%} "
+                        f"top1={summary['top1_accuracy']:.1%} rej={summary['reject_accuracy']:.1%} "
+                        f"({summary['passed']}/{summary['total']})"
+                    )
+                else:
+                    logger.error(f"[WeeklyEval] 无结果: {summary.get('error')}")
             except Exception as e:
                 logger.error(f"[WeeklyEval] 失败: {e}")
         sched.register_cron("weekly_eval", _run_weekly_eval, "0 2 * * 0")

@@ -120,6 +120,15 @@ class CircuitBreaker:
                 if self._stats.last_failure_time else None,
             }
 
+    def reset(self) -> None:
+        """强制复位到 CLOSED 并清零失败计数（对标 pybreaker/resilience4j）。
+
+        用途：运维手动恢复、测试隔离。生产调用方不要用 reset 掩盖真实故障。
+        """
+        with self._lock:
+            self._state = State.CLOSED
+            self._stats = _Stats(last_state_change=time.monotonic())
+
     # ── 状态机 ──
 
     def _check_state(self) -> None:

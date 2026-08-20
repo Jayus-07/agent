@@ -68,9 +68,19 @@ class TestADRDualRegistryMerge:
         assert tool_registry.get_schema("unknown.cap") is None
 
     def test_get_available_capabilities_returns_all(self):
-        """get_available_capabilities() 返回全部 8 个"""
+        """get_available_capabilities() 返回全部能力。
+
+        不硬编码总数（多 agent 项目新增 Skill 是常态）——
+        改为断言已知能力集合完整包含，防漏注册；
+        数量断言与已知集合对齐，意外丢能力仍会失败。
+        """
         caps = tool_registry.get_available_capabilities()
-        assert len(caps) == 8
+        expected_core = {
+            "sql.query", "rag.search", "report.generate", "email.send",
+            "data.export", "web.search", "web.crawl", "business.analyze",
+        }
+        assert expected_core.issubset(set(caps)), f"缺能力: {expected_core - set(caps)}"
+        assert len(caps) >= len(expected_core)
         # 包含 data.collect（外部 Skill，懒加载）
         assert "data.collect" in caps
 

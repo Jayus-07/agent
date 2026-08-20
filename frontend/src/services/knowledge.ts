@@ -63,7 +63,21 @@ export const knowledgeService: any = {
     const headers: Record<string, string> = {}
     if (batchId) headers['X-Batch-Id'] = batchId
 
-    return fetch(`${BASE}/upload`, { method: 'POST', body: fd, headers })
+    // P1: ServerBusy(并发槽满 503)退避重试 — 后端 concurrency 中间件非阻塞拒接,
+    // 旧实现直接把 503 当失败报给用户;批量上传场景极易触发。非 ServerBusy 的 503
+    // (如服务未就绪)不重试,由下方友好提示接管。
+    const postWithBusyRetry = async (): Promise<Response> => {
+      let res = await fetch(`${BASE}/upload`, { method: 'POST', body: fd, headers })
+      for (let attempt = 1; attempt <= 2 && res.status === 503; attempt++) {
+        const text = await res.clone().text().catch(() => '')
+        if (!text.includes('ServerBusy')) break
+        await new Promise(r => setTimeout(r, 1500 * attempt))
+        res = await fetch(`${BASE}/upload`, { method: 'POST', body: fd, headers })
+      }
+      return res
+    }
+
+    return postWithBusyRetry()
       .then(async (res) => {
         // 503: 管道初始化中 → 友好提示
         if (res.status === 503) {
@@ -89,10 +103,22 @@ export const knowledgeService: any = {
         return new Promise((resolve) => {
           const eventSource = new EventSource(`${BASE}/upload/${data.upload_id}/stream`)
           let resolved = false
+          // P1 看门狗:后台任务异常死亡时服务端永不发终态事件,旧实现 Promise 永久挂起,
+          // UI 卡在"索引中"。超过上限直接判失败,用户可去文档列表确认/重试。
+          const WATCHDOG_MS = 10 * 60 * 1000
+          let watchdog: ReturnType<typeof setTimeout> | undefined
 
           const cleanup = () => {
+            if (watchdog) clearTimeout(watchdog)
             if (!resolved) { resolved = true; eventSource.close() }
           }
+
+          watchdog = setTimeout(() => {
+            if (resolved) return
+            resolved = true
+            eventSource.close()
+            resolve({ ok: false, error: '索引超时（10 分钟），请在文档列表确认状态或稍后重试' })
+          }, WATCHDOG_MS)
 
           eventSource.onmessage = (e: MessageEvent) => {
             let payload: any = {}

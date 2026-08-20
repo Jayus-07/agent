@@ -231,8 +231,13 @@ class IncrementalIndexer:
 
     # ---- 单文件索引 ----
 
-    def _index_file(self, file_path: str):
+    def _index_file(self, file_path: str, file_hash: str | None = None):
         """索引单篇文档: 加载 → 解析 → 清洗 → 去重 → 分块 → 元数据 → embed → 写入。
+
+        Args:
+            file_path: 文档路径。
+            file_hash: 调用方已算好的 SHA256(如上传路由 duplicate 检测时算过)。
+                传入可避免对大文件重复全盘读取;缺省时内部计算。
 
         Trace 树（每文件一棵）：
           index_upload (root)
@@ -246,7 +251,7 @@ class IncrementalIndexer:
           └── index_vector_db（chunks 带完整 metadata 写入）
         """
         kb_id = self.kb_id if self.kb_id != "default" else self._derive_kb_id(file_path)
-        file_hash = self._sha256(file_path)
+        file_hash = file_hash or self._sha256(file_path)
         doc_id = self._derive_doc_id(file_path, file_hash, kb_id)
 
         # ── 启动 indexer trace ──
@@ -284,6 +289,7 @@ class IncrementalIndexer:
             # 让 reindex_file 直接消费,不再反查 registry
             return {
                 "trace_id": trace.id,
+                "doc_id": doc_id,  # 本次派生的真实 doc_id(新文件也有值)
                 "chunk_count": inner_result.get("chunk_count", 0),
                 "doc_db_id": inner_result.get("doc_db_id", ""),
                 "file_hash": inner_result.get("file_hash", file_hash),
@@ -1112,10 +1118,14 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
 
     # ---- 公开重索引 ----
 
-    def reindex_file(self, file_path: str) -> dict:
+    def reindex_file(self, file_path: str, file_hash: str | None = None) -> dict:
         """公开的单文件重索引 — 删除旧向量后重新加载/分块/Embedding/写入。
 
         复用 _remove_document() + _index_file(),不重复实现索引逻辑。
+
+        Args:
+            file_path: 待重索引文件。
+            file_hash: 调用方已算好的 SHA256,透传给 _index_file 避免重复全盘读取。
 
         P2-2 + P2-3 整改:
           - 不再额外 get_by_path() 反查 chunk_count(P2-2):从 _index_file() 返回 dict 取
@@ -1136,7 +1146,7 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
             logger.info(f"[REINDEX] 已清理旧数据: doc_id={old_doc_id}, rows={deleted}")
 
         # 2. 重新索引（_index_file 返回完整 dict，含 trace_id/chunk_count/doc_db_id）
-        index_result = self._index_file(file_path)
+        index_result = self._index_file(file_path, file_hash=file_hash)
         trace_id = index_result.get("trace_id", "")
         new_chunk_count = index_result.get("chunk_count", 0)
         new_doc_db_id = index_result.get("doc_db_id", "")
@@ -1160,7 +1170,9 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
             # 阶段耗时汇总失败 → 返回空 dict（软降级），留痕；不影响索引结果
             logger.debug(f"[Indexer] 阶段耗时汇总失败: {e}", exc_info=True)
         return {
-            "doc_id": old_doc_id,  # 重索引不改变 doc_id（同一物理文件）
+            # 优先用 _index_file 派生的真实 doc_id;旧实现返回 old_doc_id,
+            # 新文件首次索引时为空串,导致操作日志/返回值丢失 doc_id
+            "doc_id": index_result.get("doc_id") or old_doc_id,
             "chunk_count": new_chunk_count,
             "doc_db_id": new_doc_db_id,
             "file_hash": new_file_hash,

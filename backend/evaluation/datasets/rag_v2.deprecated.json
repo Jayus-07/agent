@@ -1,4 +1,5 @@
 {
+  "_DEPRECATED": "2026-08-20 弃用。原因：① 指向的 policy_general KB 文档（客服综合业务规范/跨境电商平台合规规范）已不在 doc_db 中，全部用例会触发 KB fallback 到 default，评测结果无意义；② doc_id 协议混用（16 位 hex 与文件名并存），与现行 md5(basename)[:10] 协议不兼容；③ V2-R011~015 缺 kb_id 字段，且用 expect_reject 而非 runner 识别的 should_reject。请改用 rag_test_kb.json。",
   "_comment": "RAG 评测 v2 — golden set adapted to actual doc_db (policy_general KB, 2 docs)。覆盖文档：1) 客服综合业务规范 2) 跨境电商平台合规规范。",
   "test_cases": [
     {

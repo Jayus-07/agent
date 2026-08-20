@@ -6,6 +6,7 @@ prometheus-client==0.20.0       # P0: Prometheus 指标 (PR-0.3)
 PyMuPDF>=1.23                   # Phase 2: PDF 解析（仅在 parser/pdf_parser.py import）
 python-docx>=1.0                # Phase 2: DOCX 解析（仅在 parser/docx_parser.py import）
 openpyxl>=3.1                   # Phase 3: Excel 解析（仅在 parser/excel_parser.py import）
+jieba>=0.42                     # P1-1: 评测拒答校准的查询实体提取（runners/builtin.py）
 
 # 测试
 pytest==9.1.1

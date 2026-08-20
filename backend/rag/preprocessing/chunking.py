@@ -160,6 +160,34 @@ def _make_leaf_chunk(texts: list[str], file_path: str,
     })
 
 
+def _merge_small_texts(texts: list[str], budget: int) -> list[str]:
+    """相邻小文本按 token 预算贪心合并（碎片化修复）。
+
+    背景：无结构文档的 AST 小叶子若逐一成 chunk，会产出大量
+    平均 20〜90 字符的碎片，稀释 embedding 区分度。合并规则：
+      - 累计不超 budget 就继续并入下一段；超了先 flush 再重新累计
+      - 自身已超 budget 的单段不参与合并（由调用方二次切分）
+    """
+    merged: list[str] = []
+    buf: list[str] = []
+    buf_tokens = 0
+    for t in texts:
+        if count_tokens(t) > budget:
+            if buf:
+                merged.append("\n".join(buf))
+                buf, buf_tokens = [], 0
+            merged.append(t)
+            continue
+        if buf and buf_tokens + count_tokens(t) > budget:
+            merged.append("\n".join(buf))
+            buf, buf_tokens = [], 0
+        buf.append(t)
+        buf_tokens += count_tokens(t)
+    if buf:
+        merged.append("\n".join(buf))
+    return merged
+
+
 class StructureChunkStrategy:
     """结构化切分：每个 section → parent，section 内叶子 → leaf。
 
@@ -316,12 +344,12 @@ class FixedSizeChunkStrategy:
             chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=50,
             length_function=count_tokens, separators=[""],
         )
+        leaf_texts = [n.text for n in walk(ast.root) if n.type in LEAF_TYPES]
         chunks: List[Document] = []
-        for n in walk(ast.root):
-            if n.type not in LEAF_TYPES:
-                continue
-            texts = (splitter.split_text(n.text)
-                     if count_tokens(n.text) > LEAF_CHUNK_TOKENS else [n.text])
+        # 碎片化修复：小叶子先按 token 预算合并，再对超预算段硬切
+        for text in _merge_small_texts(leaf_texts, LEAF_CHUNK_TOKENS):
+            texts = (splitter.split_text(text)
+                     if count_tokens(text) > LEAF_CHUNK_TOKENS else [text])
             for sub in texts:
                 chunks.append(_make_doc(sub, {
                     "granularity": "leaf",
@@ -343,12 +371,12 @@ class RecursiveChunkStrategy:
             chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=50,
             length_function=count_tokens, separators=_SEPARATORS,
         )
+        leaf_texts = [n.text for n in walk(ast.root) if n.type in LEAF_TYPES]
         chunks: List[Document] = []
-        for n in walk(ast.root):
-            if n.type not in LEAF_TYPES:
-                continue
-            texts = (splitter.split_text(n.text)
-                     if count_tokens(n.text) > LEAF_CHUNK_TOKENS else [n.text])
+        # 碎片化修复：小叶子先按 token 预算合并，再对超预算段递归切分
+        for text in _merge_small_texts(leaf_texts, LEAF_CHUNK_TOKENS):
+            texts = (splitter.split_text(text)
+                     if count_tokens(text) > LEAF_CHUNK_TOKENS else [text])
             for sub in texts:
                 chunks.append(_make_doc(sub, {
                     "granularity": "leaf",
@@ -435,6 +463,26 @@ class LegalChunkStrategy:
     """
 
     def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
+        # 无条款降级：内容找不到「第 N 条」边界时，旧实现会把全文合成
+        # 单一巨型 chunk（误分类为 legal 的流程/制度文档尤其受害）。
+        # 有章节结构 → Structure 切分；否则 Recursive 兜底，不静默堆大 chunk。
+        has_clause = any(
+            n.type in LEAF_TYPES and _is_legal_clause(n.text)
+            for n in walk(ast.root)
+        )
+        if not has_clause:
+            has_sections = any(
+                n.type == "section" and n.level > 0
+                for n in walk(ast.root)
+            )
+            logger.info(
+                "[LegalChunk] 无「第 N 条」条款编号 → "
+                + ("Structure 结构切分降级" if has_sections else "Recursive 兜底")
+            )
+            if has_sections:
+                return StructureChunkStrategy().split(ast, file_path)
+            return RecursiveChunkStrategy().split(ast, file_path)
+
         chunks: List[Document] = []
         current: list[str] = []
         current_clause = ""

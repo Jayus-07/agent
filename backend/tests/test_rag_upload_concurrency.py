@@ -22,6 +22,7 @@ from backend.app.api.routes.rag_upload import (
     release_index_lock,
     FileLockedByOtherError,
 )
+from backend.app.api.routes import rag_upload
 
 
 # ============ 文件锁纯函数测试 ============
@@ -98,6 +99,66 @@ class TestFileLocking:
                 os.chmod(f, 0o644)
             except OSError:
                 pass
+
+
+# ============ Stale lock TTL 自愈（P1 改进）============
+
+class TestStaleLockRecovery:
+    """进程崩溃残留的 .lock 超过 TTL 必须可被接管,否则同名文件永久无法上传。"""
+
+    @staticmethod
+    def _write_lock(filepath: str, ts: float, pid: str = "99999"):
+        with open(filepath + ".lock", "w", encoding="utf-8") as fh:
+            fh.write(f"{pid}\n{ts}\n")
+
+    def test_stale_lock_beyond_ttl_is_stolen(self, tmp_path):
+        """锁时间戳超过 TTL → acquire 应接管成功,不抛 FileLockedByOtherError。"""
+        f = tmp_path / "stale.txt"
+        f.write_bytes(b"data")
+        old_ts = time.time() - (rag_upload.LOCK_STALE_SECONDS + 60)
+        self._write_lock(str(f), old_ts)
+
+        fd = acquire_index_lock(str(f))
+        try:
+            assert fd > 0
+        finally:
+            release_index_lock(fd, str(f))
+
+    def test_fresh_lock_still_rejected(self, tmp_path):
+        """TTL 内的锁仍视为有效持有 → 拒绝(不能误抢正在进行的索引)。"""
+        f = tmp_path / "fresh.txt"
+        f.write_bytes(b"data")
+        self._write_lock(str(f), time.time())
+
+        with pytest.raises(FileLockedByOtherError):
+            acquire_index_lock(str(f))
+
+    def test_unparseable_fresh_lock_rejected(self, tmp_path):
+        """锁内容不可解析但 mtime 新鲜 → 保守拒绝(不误删未知持有者的锁)。"""
+        f = tmp_path / "garbage.txt"
+        f.write_bytes(b"data")
+        with open(str(f) + ".lock", "w", encoding="utf-8") as fh:
+            fh.write("not-a-timestamp\n")
+
+        with pytest.raises(FileLockedByOtherError):
+            acquire_index_lock(str(f))
+
+    def test_unparseable_ancient_lock_falls_back_to_mtime(self, tmp_path):
+        """锁内容不可解析且 mtime 超 TTL → 按 mtime 判定过期并接管。"""
+        import os as _os
+        f = tmp_path / "ancient.txt"
+        f.write_bytes(b"data")
+        lock_path = str(f) + ".lock"
+        with open(lock_path, "w", encoding="utf-8") as fh:
+            fh.write("garbage\n")
+        ancient = time.time() - (rag_upload.LOCK_STALE_SECONDS + 120)
+        _os.utime(lock_path, (ancient, ancient))
+
+        fd = acquire_index_lock(str(f))
+        try:
+            assert fd > 0
+        finally:
+            release_index_lock(fd, str(f))
 
 
 # ============ _do_index_sync 集成测试 ============

@@ -82,9 +82,16 @@ def _cmd_exists(cmd: str) -> bool:
 
 
 def get_dataset_version(module: str) -> str:
-    """从数据集 JSON 顶部读取 version 字段。"""
+    """从数据集 JSON 顶部读取 version 字段。
+
+    V1.3 修复：查找顺序与 dataset.load_dataset 保持一致（含 {module}_test_kb.json），
+    此前只找 {module}_v2.json / {module}.json 导致 rag 永远 fallback 到 "1.0"，
+    baseline 对比永远命中旧版 baseline_rag_1.0.json。
+    """
     from backend.evaluation.dataset import DATASET_DIR
-    for fname in (f"{module}_v2.json", f"{module}.json"):
+    for fname in (f"{module}_v2.json", f"{module}_test_kb.json", f"{module}.json"):
+        if ".deprecated." in fname:
+            continue
         path = DATASET_DIR / fname
         if path.exists():
             try:

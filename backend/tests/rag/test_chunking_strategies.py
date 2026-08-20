@@ -1,7 +1,9 @@
 # backend/tests/rag/test_chunking_strategies.py
+from backend.config import LEAF_CHUNK_TOKENS
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
 from backend.rag.preprocessing.chunking import (
     StructureChunkStrategy, RecursiveChunkStrategy, QAChunkStrategy,
+    FixedSizeChunkStrategy,
 )
 
 AST = DocumentAST(
@@ -191,3 +193,43 @@ def test_max_chunks_per_doc_truncates(monkeypatch):
     result = chunking_mod._enrich(many, "d.md")
     assert len(result) == 3  # 截断到上限
     assert all("chunk_index" in c.metadata for c in result)
+
+
+# =====================================================
+# 碎片化修复：相邻小叶子按 token 预算合并（Recursive / FixedSize）
+# 背景：实测 25_同形异义词.md 388 字 → 14 个 chunk（平均 20 字符），
+# 原因是每个 AST 小叶子各自成 chunk，从不合并。
+# =====================================================
+
+def _flat_leaves_ast(texts: list) -> DocumentAST:
+    """构造 N 个平铺段落叶子的 AST（无章节结构）。"""
+    return DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="paragraph", text=t) for t in texts
+        ]),
+        raw_text="\n".join(texts),
+    )
+
+
+def test_recursive_merges_tiny_leaves_by_token_budget():
+    """14 个小叶子必须按 token 预算合并，不再一叶子一碎片 chunk。"""
+    leaves = [f"第{i}段短内容。" for i in range(14)]
+    chunks = RecursiveChunkStrategy().split(_flat_leaves_ast(leaves), "x.md")
+
+    assert len(chunks) < len(leaves) // 2, f"碎片化未修复: {len(chunks)} chunks"
+    joined = "\n".join(c.page_content for c in chunks)
+    for t in leaves:  # 不丢内容
+        assert t in joined
+    for c in chunks:  # 合并后不超 token 预算
+        assert c.metadata["chunk_tokens"] <= LEAF_CHUNK_TOKENS
+
+
+def test_fixed_size_merges_tiny_leaves_by_token_budget():
+    """FixedSize 同样合并小叶子（ad_policy 等无结构短文档也受影响）。"""
+    leaves = [f"第{i}段短内容。" for i in range(14)]
+    chunks = FixedSizeChunkStrategy().split(_flat_leaves_ast(leaves), "x.md")
+
+    assert len(chunks) < len(leaves) // 2, f"碎片化未修复: {len(chunks)} chunks"
+    joined = "\n".join(c.page_content for c in chunks)
+    for t in leaves:
+        assert t in joined

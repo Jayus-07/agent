@@ -107,7 +107,7 @@ class TestReindexFilePropagatesChunkingEmptyError:
         )
 
         # Mock 掉 _index_file 让它 raise(模拟 chunk_count=0 的实际场景)
-        def fake_index_file(_path):
+        def fake_index_file(_path, file_hash=None):
             raise ChunkingEmptyError(f"{target.name}: produced 0 chunks")
         indexer._index_file = fake_index_file
 
@@ -128,7 +128,7 @@ class TestReindexFilePropagatesChunkingEmptyError:
             registry=MagicMock(),
         )
 
-        def fake_index_file(_path):
+        def fake_index_file(_path, file_hash=None):
             raise ChunkingEmptyError("zero chunks")
         indexer._index_file = fake_index_file
 

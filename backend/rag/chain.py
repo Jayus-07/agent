@@ -665,6 +665,35 @@ class RAGChain:
         if not ret_decision.passed:
             return ret_decision
 
+        # ── Gate 1.5: 查询实体覆盖校验（P2，2026-08-21）──
+        # 主题相近但无答案：问题核心实体（含同义词闭包）不在 rerank 后 top-3
+        # 召回文本中 → 改判拒答。在 chain 层用原始 question 判定（hybrid 层
+        # 拿到的是同义词变体 query，不适用）；异常不干预原判（软降级）。
+        if context_docs:
+            try:
+                from backend.config import GATE_ENTITY_CHECK_ENABLED
+                if GATE_ENTITY_CHECK_ENABLED:
+                    from backend.rag.evidence_gate import (
+                        find_missing_entities, GateDecision, RejectReason,
+                    )
+                    missing = find_missing_entities(question, context_docs)
+                    if missing:
+                        ret_decision = GateDecision(
+                            passed=False, reason=RejectReason.NO_EVIDENCE,
+                            layer="retrieval", score=ret_decision.score,
+                            diagnostics={**(ret_decision.diagnostics or {}),
+                                         "entity_check": "fail",
+                                         "missing_entities": missing[:5]},
+                        )
+                        logger.info(
+                            f"[RAGChain] 实体覆盖校验拒答: missing={missing[:5]}"
+                        )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[RAGChain] 实体覆盖校验异常，忽略: {e}")
+
+        if not ret_decision.passed:
+            return ret_decision
+
         # ── Gate 2: Rerank（基于 context 上的 rerank_score）──
         from backend.rag.evidence_gate import risk_level_from_intent_and_doctype
         try:

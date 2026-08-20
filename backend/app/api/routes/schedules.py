@@ -93,12 +93,15 @@ async def run_schedule_now(workflow_name: str) -> dict:
 
     # 区分任务类型
     if workflow_name == "weekly_eval":
+        # 2026-08-21 P1-2: 迁移到 backend.evaluation（旧 backend.eval 已删除）
         try:
-            from backend.eval import run_golden_eval
-            summary = run_golden_eval()
+            from backend.evaluation.weekly import run_weekly_rag_eval
+            summary = run_weekly_rag_eval()
+            if not summary.get("ok"):
+                return {"ok": False, "error": summary.get("error", "no summary")}
             logger.info(
                 f"[Schedules API] weekly_eval 手动触发完成: "
-                f"hit={summary['hit_rate']:.1%} pass={summary['pass_rate']:.1%}"
+                f"pass={summary['pass_rate']:.1%} top1={summary['top1_accuracy']:.1%}"
             )
             return {
                 "ok": True,
@@ -106,9 +109,10 @@ async def run_schedule_now(workflow_name: str) -> dict:
                 "triggered_at": "now",
                 "summary": {
                     "total": summary["total"],
-                    "hit_rate": summary["hit_rate"],
+                    "passed": summary["passed"],
                     "pass_rate": summary["pass_rate"],
-                    "reject_rate": summary["reject_rate"],
+                    "top1_accuracy": summary["top1_accuracy"],
+                    "reject_accuracy": summary["reject_accuracy"],
                 },
             }
         except Exception as e:

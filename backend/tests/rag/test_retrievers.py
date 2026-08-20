@@ -23,7 +23,9 @@ class TestHybridFallback:
         from backend.observability.tracer import trace_collector
         from backend.rag.retrieval.hybrid import hybrid_retrieve
 
-        def boom(q, k=5, doc_ids=None, metadata_filter=None):
+        # mock 签名须与 CustomRetriever.retrieve 对齐:
+        # 2026-08-20 hybrid_retrieve 新增 expanded_queries 透传,缺参会 TypeError
+        def boom(q, k=5, doc_ids=None, metadata_filter=None, expanded_queries=None):
             raise RuntimeError("vector db down")
         v = SimpleNamespace(retrieve=boom)
         b = SimpleNamespace(invoke=lambda q: [
@@ -52,7 +54,7 @@ class TestHybridFallback:
         """两侧都失败 → 异常向上传播（真系统失败，不伪装成『没有资料』）。"""
         from backend.rag.retrieval.hybrid import hybrid_retrieve
 
-        def boom_v(q, k=5, doc_ids=None, metadata_filter=None):
+        def boom_v(q, k=5, doc_ids=None, metadata_filter=None, expanded_queries=None):
             raise RuntimeError("vector db down")
         def boom_b(q):
             raise RuntimeError("bm25 db down")
@@ -64,7 +66,7 @@ class TestHybridFallback:
     def test_vector_only_when_bm25_empty(self):
         """BM25 无结果 → 保留 Vector 结果（Hybrid 融合不丢一侧）。"""
         from backend.rag.retrieval.hybrid import hybrid_retrieve
-        v = SimpleNamespace(retrieve=lambda q, k=5, doc_ids=None, metadata_filter=None: [
+        v = SimpleNamespace(retrieve=lambda q, k=5, doc_ids=None, metadata_filter=None, expanded_queries=None: [
             Document(page_content="v1", metadata={"chunk_id": "v1", "doc_id": "d1"}),
         ])
         b = SimpleNamespace(invoke=lambda q: [])
@@ -75,7 +77,7 @@ class TestHybridFallback:
     def test_bm25_only_when_vector_empty(self):
         """Vector 无结果 → 保留 BM25 结果。"""
         from backend.rag.retrieval.hybrid import hybrid_retrieve
-        v = SimpleNamespace(retrieve=lambda q, k=5, doc_ids=None, metadata_filter=None: [])
+        v = SimpleNamespace(retrieve=lambda q, k=5, doc_ids=None, metadata_filter=None, expanded_queries=None: [])
         b = SimpleNamespace(invoke=lambda q: [
             Document(page_content="b1", metadata={"chunk_id": "b1", "doc_id": "d1"}),
         ])
@@ -86,7 +88,7 @@ class TestHybridFallback:
     def test_both_empty_returns_empty(self):
         """两侧都无结果 → 返回空列表（由上层 Gate 处理 NO_EVIDENCE 拒答）。"""
         from backend.rag.retrieval.hybrid import hybrid_retrieve
-        v = SimpleNamespace(retrieve=lambda q, k=5, doc_ids=None, metadata_filter=None: [])
+        v = SimpleNamespace(retrieve=lambda q, k=5, doc_ids=None, metadata_filter=None, expanded_queries=None: [])
         b = SimpleNamespace(invoke=lambda q: [])
         merged = hybrid_retrieve("q", v, b, k=5)
         assert merged == []
@@ -120,7 +122,7 @@ class TestChunkLevelFallback:
             },
         )
         chunk_retriever = SimpleNamespace(
-            retrieve=lambda q, k=5, doc_ids=None, metadata_filter=None: [],
+            retrieve=lambda q, k=5, doc_ids=None, metadata_filter=None, expanded_queries=None: [],
         )
         bm25 = SimpleNamespace(invoke=lambda q: [])
         r = _make_retriever(doc_db, chunk_retriever, bm25)

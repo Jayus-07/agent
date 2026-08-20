@@ -151,6 +151,15 @@ def setup_logger(name: str = "rag_system", level: str = None) -> logging.Logger:
     logger: logging.Logger = ObservableLogger(name)
     logger.setLevel(level)
 
+    # 登记到全局 manager:不走 getLogger 的实例对 pytest caplog 等
+    # 依赖 logging.Logger.manager 的工具不可见(日志抓不到),补登记修复。
+    # 同名不同 level 的实例会覆盖登记,不影响各自 handler 输出。
+    logging.Logger.manager.loggerDict[name] = logger
+    # 直接实例化的 Logger parent 为 None,传播链断裂 → record 传不到 root,
+    # caplog/全局 handler 抓不到日志。本项目 logger 都是顶级名(rag_system),
+    # 直接挂 root 作父(_fixupParents 会遭遇旧 placeholder 报错,不可用)。
+    logger.parent = logging.root
+
     if LOG_FORMAT == "json":
         formatter = _JsonFormatter()
     else:

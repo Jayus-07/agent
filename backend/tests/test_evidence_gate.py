@@ -292,7 +292,35 @@ class TestRejectReasonEnum:
 # ====================================
 
 class TestConfigDefaults:
-    """§0 章节对标：默认值必须与 RAGFlow / Vertex / AWS 一致或更严"""
+    """§0 章节对标：默认值必须与 RAGFlow / Vertex / AWS 一致或更严
+
+    注意：这类断言验证的是 config/rag.py 的**代码默认值**（行业对标契约），
+    而非运行时生效值 — 本地 .env 可能为调参覆盖（如 RERANK_MIN_TOP1=0.25）。
+    用 _code_default() 临时移除环境变量后 reload 读真实默认值，
+    reload 时 load_dotenv() 会自动恢复 .env 覆盖，不留副作用。
+    """
+
+    @staticmethod
+    def _code_default(env_key: str, attr: str):
+        """读 config/rag.py 中 attr 的无环境变量覆盖时的默认值。
+
+        注意 reload 时模块体的 load_dotenv() 会把已 pop 的 key 从 .env
+        重新读回，所以同步 patch 掉 dotenv.load_dotenv。
+        """
+        import importlib
+        import os as _os
+        from unittest import mock
+        import dotenv
+        import backend.config.rag as rag_cfg
+        saved = _os.environ.pop(env_key, None)
+        try:
+            with mock.patch.object(dotenv, "load_dotenv", lambda *a, **k: False):
+                importlib.reload(rag_cfg)
+                return getattr(rag_cfg, attr)
+        finally:
+            if saved is not None:
+                _os.environ[env_key] = saved
+            importlib.reload(rag_cfg)  # 恢复运行时值（load_dotenv 重新加载 .env）
 
     def test_faithfulness_default_true(self):
         """§0.2 行业默认开"""
@@ -303,13 +331,14 @@ class TestConfigDefaults:
         assert VEC_MIN_SCORE == 0.2
 
     def test_doc_type_coverage_default_true(self):
-        """企业主流开"""
-        assert DOC_TYPE_COVERAGE_REQUIRED is True
+        """企业主流开（代码默认值；本地 .env 可能为调参关掉，不影响对标契约）"""
+        assert self._code_default("DOC_TYPE_COVERAGE_REQUIRED", "DOC_TYPE_COVERAGE_REQUIRED") is True
 
     def test_rerank_top1_threshold_reasonable(self):
-        """与现有 RERANK_SCORE_THRESHOLD=0.3 相比应有上限控制（不放过低）"""
-        assert RERANK_MIN_TOP1 >= 0.3
-        assert RERANK_MIN_TOP1 <= 0.5
+        """与现有 RERANK_SCORE_THRESHOLD=0.3 相比应有上限控制（不放过低）— 验证代码默认值"""
+        top1 = self._code_default("RERANK_MIN_TOP1", "RERANK_MIN_TOP1")
+        assert top1 >= 0.3
+        assert top1 <= 0.5
 
     def test_high_risk_stricter_than_low(self):
         assert RERANK_HIGH_RISK_MIN_TOP1 > RERANK_MIN_TOP1
@@ -338,3 +367,64 @@ class TestBypass:
         d = gate_retrieval_passthrough()
         assert d.passed is True
         assert d.diagnostics.get("gate_bypassed") is True
+
+
+# =====================================================
+# 10. 查询实体覆盖校验（P2，2026-08-21）
+# =====================================================
+
+class TestEntityCoverage:
+    """主题相近但无答案 → 拒答；存在判定用同义词闭包避免误伤 paraphrase"""
+
+    @staticmethod
+    def _docs(*texts):
+        return [Document(page_content=t, metadata={}) for t in texts]
+
+    def test_hard_negative_entity_missing(self):
+        """KB 谈保修但没有“笔记本电脑” → 判缺失"""
+        from backend.rag.evidence_gate import find_missing_entities
+        docs = self._docs("商品保修期多久？电子产品一般 1 年。")
+        missing = find_missing_entities("笔记本电脑的保修期是多久？", docs)
+        assert any("笔记本" in m for m in missing)
+
+    def test_positive_entities_covered(self):
+        """正样本：实体全部见于召回文本 → 无缺失"""
+        from backend.rag.evidence_gate import find_missing_entities
+        docs = self._docs("退货政策：签收后 7 天内可申请退货，运费由买家承担。")
+        missing = find_missing_entities("退货政策是怎样的？", docs)
+        assert missing == []
+
+    def test_synonym_closure_prevents_false_reject(self):
+        """paraphrase 保护：query 用“退款”，文档只有“退货” → 同义词闭包判存在"""
+        from backend.rag.evidence_gate import find_missing_entities
+        docs = self._docs("退货流程：提交申请后 3 个工作日内审核。")
+        missing = find_missing_entities("退款申请提交后多久审核？", docs)
+        assert "退款" not in missing
+
+    def test_gate_rejects_on_entity_absent(self):
+        """evidence_gate_retrieval 启用实体校验时返回 NO_EVIDENCE"""
+        docs = self._docs("商品保修期多久？电子产品一般 1 年。")
+        for d in docs:
+            d.metadata["rerank_score"] = 0.7  # 分数在正样本主区间，纯阈值分不开
+        decision = evidence_gate_retrieval(
+            docs, vec_min_score=0.2,
+            query="笔记本电脑的保修期是多久？", entity_check=True,
+        )
+        assert decision.passed is False
+        assert decision.reason == RejectReason.NO_EVIDENCE
+        assert decision.diagnostics.get("entity_check") == "fail"
+
+    def test_gate_skips_entity_check_by_default(self):
+        """不传 query/entity_check 时行为不变（向后兼容）"""
+        docs = self._docs("商品保修期多久？电子产品一般 1 年。")
+        for d in docs:
+            d.metadata["rerank_score"] = 0.7
+        decision = evidence_gate_retrieval(docs, vec_min_score=0.2)
+        assert decision.passed is True
+
+    def test_config_default_enabled(self):
+        """代码默认开启（与离线验证结论一致）"""
+        default = TestConfigDefaults._code_default(
+            "GATE_ENTITY_CHECK_ENABLED", "GATE_ENTITY_CHECK_ENABLED"
+        )
+        assert default is True

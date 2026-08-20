@@ -3,10 +3,11 @@
 P0-2:收紧 MIME 白名单。
 
 设计目标:
-- _ALLOWED_MIME 必须是模块级常量,方便纯 import 测试
+- ALLOWED_MIME_TYPES 必须是模块级常量,方便纯 import 测试
 - _validate_mime(ext, content_type) → (ok, error_msg) 是纯函数,无副作用
-- 收紧点:content_type 为空 / None 时才接受 application/octet-stream 兜底;
-         客户端声明了具体 MIME 时必须严格匹配
+- 收紧点:content_type 为空 / None 时由空值分支提前放行(落盘后靠魔数兜底);
+         客户端显式声明 application/octet-stream 必须拒绝;
+         白名单表不登记永不可达的 octet-stream 条目
 """
 import pytest
 
@@ -22,12 +23,14 @@ class TestAllowedMimeStructure:
         # 必须包含 4 个扩展名
         assert set(ALLOWED_MIME_TYPES.keys()) == {"pdf", "md", "txt", "docx"}
 
-    def test_octet_stream_listed_for_curl_fallback(self):
-        # curl 命令行上传 content_type 为空时,只能通过 magic 校验兜底
-        # 因此 octet-stream 必须保留为"无 content_type 时的兜底"
-        # (测试在 TestOctetStreamRestriction 详细验证)
-        for ext in ("md", "txt", "docx"):
-            assert "application/octet-stream" in ALLOWED_MIME_TYPES[ext]
+    def test_octet_stream_not_in_whitelist_dicts(self):
+        # 白名单表只登记"显式声明时允许的具体 MIME"。
+        # octet-stream 的兜底由 _validate_mime 空 content_type 提前返回分支实现，
+        # 显式声明 octet-stream 则被前置拒绝 — 表内不应出现永不可达的条目（防误导）。
+        for ext, mimes in ALLOWED_MIME_TYPES.items():
+            assert "application/octet-stream" not in mimes, (
+                f"{ext} 白名单不应包含 octet-stream（该分支永不可达，见模块注释）"
+            )
 
     def test_pdf_does_not_accept_octet_stream(self):
         # PDF 是二进制格式,客户端如果声明了 octet-stream 应该拒绝

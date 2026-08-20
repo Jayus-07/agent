@@ -57,12 +57,111 @@ def _safe_top_score(docs: list) -> float:
     return max(candidates) if candidates else 0.0
 
 
+# =====================================================
+# 查询实体覆盖校验（P2，2026-08-21）
+#
+# 背景：hard negative（KB 含相关主题但无答案）的 rerank 分数落在正样本
+# 主区间，纯分数阈值分不开；问题核心实体若不在召回内容中 → “主题相近
+# 但无答案” → 拒答。离线评测已验证（拒答 75%→100%，正样本零误伤）。
+#
+# 生产链路与离线 runner 的差异：生产无法区分“该问题是否应拒答”，而
+# paraphrase 问题的答案可能以同义词形式存在（同义词扩展召回的 chunk
+# 用的是书面语），因此“存在”判定采用同义词闭包：实体本身或其任一同义词
+# 出现即算存在，避免误伤改写提问。
+# =====================================================
+
+# 疑问词/代词/泛称不构成实体（与离线 runner 的 _QUERY_STOPWORDS 同源）
+_QUERY_STOPWORDS = {
+    "什么", "怎么", "怎样", "如何", "哪些", "哪个", "多久", "多少", "为什么",
+    "请问", "你们", "我们", "贵公司", "公司", "需要", "应该", "可以", "是否",
+    "有没有", "是什么", "进行", "相关", "具体", "一般", "规定", "要求",
+    "时候", "目前", "现在", "支持", "采用", "包括", "属于", "关于", "一样",
+}
+
+# 生产链路额外泛称（双字高频词，几乎任何召回都难逐字覆盖，作实体必误拒）
+_GATE_EXTRA_STOPWORDS = {
+    "问题", "情况", "东西", "事情", "内容", "方式", "时间", "日期",
+    "金额", "费用标准", "流程制度", "策略", "办法", "细则", "说明",
+}
+
+
+def _extract_gate_entities(query: str) -> list[str]:
+    """jieba 分词提取查询候选实体（长度≥2、去停用词/纯数字）。"""
+    import jieba
+    return [
+        w for w in jieba.cut(query)
+        if len(w) >= 2 and w not in _QUERY_STOPWORDS
+        and w not in _GATE_EXTRA_STOPWORDS and not w.isdigit()
+    ]
+
+
+def _entity_variants(term: str) -> set[str]:
+    """实体的同义词闭包：自身 + SYNONYMS 正向/反向映射。
+
+    反向映射保证 query 用“退货”、文档用“退款”时也能判存在
+    （两者互为同义词组）。
+    """
+    synonyms = _SYNONYMS_VIEW()
+    variants = {term}
+    variants.update(synonyms.get(term, []))
+    for key, syns in synonyms.items():
+        if term in syns:
+            variants.add(key)
+    return variants
+
+
+def _SYNONYMS_VIEW() -> dict:
+    """延迟读取 SYNONYMS（避免模块导入期依赖预处理包）。"""
+    from backend.rag.preprocessing.synonyms import SYNONYMS
+    return SYNONYMS
+
+
+def find_missing_entities(query: str, docs: list, top_n: int = 3) -> list[str]:
+    """返回未见于 top_n 召回文本的“强实体”列表（空列表 = 不触发拒答）。
+
+    存在判定用同义词闭包 + 去空白归一化（与离线 runner 口径一致）。
+    拒答仅在存在“强实体”缺失时触发：强实体 = 含 CJK 且（长度≥3 或
+    同义词词典收录）的词。双字泛称（问题/策略/流程…）与纯 ASCII 词
+    不构成强实体，避免误拒；真实 hard negative 的核心实体（笔记本电脑/
+    出口退税/预付款…）均长度≥3，不受影响。
+    异常（如 jieba 缺失）时返回空列表 → 不干预原判（软降级）。
+    """
+    try:
+        entities = _extract_gate_entities(query)
+        if not entities:
+            return []
+        text = "".join(
+            (getattr(d, "page_content", "") or "") for d in docs[:top_n]
+        )
+        text = "".join(text.split())
+        missing = []
+        for ent in entities:
+            variants = _entity_variants(ent)
+            covered = any("".join(v.split()) in text for v in variants)
+            if covered:
+                continue
+            # 强实体规则：含 CJK 且（长度≥3 或词典收录）才触发拒答
+            synonyms = _SYNONYMS_VIEW()
+            is_dict_term = bool(synonyms.get(ent)) or any(
+                ent in syns for syns in synonyms.values()
+            )
+            has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in ent)
+            if has_cjk and (len(ent) >= 3 or is_dict_term):
+                missing.append(ent)
+        return missing
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[evidence_gate] 实体覆盖校验异常，跳过: {e}")
+        return []
+
+
 def evidence_gate_retrieval(
     docs: list,
     query_analysis=None,
     *,
     vec_min_score: float = 0.0,
     require_doc_type_coverage: bool = False,
+    query: str | None = None,
+    entity_check: bool = False,
     layer: str = "retrieval",
 ) -> GateDecision:
     """Retrieval Gate: 决定 docs 是否足够支撑回答。
@@ -72,6 +171,8 @@ def evidence_gate_retrieval(
         query_analysis: ParsedQuery (含 doc_types 字段)，None 则跳过 doc_type 覆盖
         vec_min_score: top1 最低相似度阈值 (从 config 注入，默认 0.2 对齐 RAGFlow)
         require_doc_type_coverage: 是否要求召回 doc_type 覆盖 QueryAnalyzer 推导的 doc_types
+        query: 原始提问（P2 实体覆盖校验需要；None 则跳过）
+        entity_check: 是否启用实体覆盖校验（GATE_ENTITY_CHECK_ENABLED 注入）
         layer: span label (默认 retrieval)
 
     Returns:
@@ -97,7 +198,19 @@ def evidence_gate_retrieval(
                                           for d in docs[:3]]},
         )
 
-    # --- 3. doc_type 覆盖检查 → DOC_TYPE_MISMATCH ---
+    # --- 3. 查询实体覆盖校验 → NO_EVIDENCE（P2：主题相近但无答案） ---
+    if entity_check and query:
+        missing = find_missing_entities(query, docs)
+        if missing:
+            return GateDecision(
+                passed=False, reason=RejectReason.NO_EVIDENCE, layer=layer,
+                score=top_score,
+                diagnostics={"doc_count": len(docs), "top_score": round(top_score, 4),
+                             "entity_check": "fail",
+                             "missing_entities": missing[:5]},
+            )
+
+    # --- 4. doc_type 覆盖检查 → DOC_TYPE_MISMATCH ---
     if require_doc_type_coverage and query_analysis is not None:
         expected = set(getattr(query_analysis, "doc_types", []) or [])
         if expected:
@@ -323,6 +436,7 @@ __all__ = [
     "risk_level_from_intent_and_doctype",
     "evidence_gate_retrieval",
     "evidence_gate_rerank",
+    "find_missing_entities",
     "is_groundedness_acceptable",
     "parse_meta_comment",
     "build_rejection_response",

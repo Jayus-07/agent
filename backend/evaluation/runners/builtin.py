@@ -72,6 +72,60 @@ _rag_pipeline_error = None
 from backend.shared.jsonable import safe_jsonable as _safe_jsonable  # noqa: F401
 
 
+def _normalize_snippet_text(text: str) -> str:
+    """snippet 匹配归一化：去全部空白字符 + 全角转半角。
+
+    避免 ground truth 关键词与文档原文仅因空格/全半角差异（如 "48 小时" vs "48小时"）
+    导致假阴性。
+    """
+    # 全角 ASCII（！〜）转半角；全角空格转半角
+    text = text.translate(
+        {i: i - 0xFEE0 for i in range(0xFF01, 0xFF5F)}
+    ).replace("\u3000", " ")
+    # 去除所有空白字符（空格/tab/换行）
+    return "".join(text.split())
+
+
+# ==================== 拒答校准：查询实体存在性校验（V1.3） ====================
+#
+# 背景：hard negative（KB 含相关主题但无答案）的 rerank 分数落在正样本主区间
+# （实测 0.60~0.71 vs 正样本 0.56~0.73），纯分数启发式无法分离；而普通负样本
+# 分数 ≤0.59 可被阈值拦住。因此对拒答用例追加语义判据：
+# 问题核心实体若不在召回内容中 → "主题相近但无答案" → 判拒答。
+
+# 问题停用词：疑问词/代词/泛称，不构成实体
+_QUERY_STOPWORDS = {
+    "什么", "怎么", "怎样", "如何", "哪些", "哪个", "多久", "多少", "为什么",
+    "请问", "你们", "我们", "贵公司", "公司", "需要", "应该", "可以", "是否",
+    "有没有", "是什么", "进行", "相关", "具体", "一般", "规定", "要求",
+    "时候", "目前", "现在", "支持", "采用", "包括", "属于", "关于", "一样",
+}
+
+
+def _extract_query_entities(question: str) -> list[str]:
+    """jieba 分词提取问题候选实体（长度 ≥2、去停用词）。"""
+    import jieba
+    return [
+        w for w in jieba.cut(question)
+        if len(w) >= 2 and w not in _QUERY_STOPWORDS and not w.isdigit()
+    ]
+
+
+def _entities_all_present(entities: list[str], details: list[dict], top_n: int = 3) -> bool:
+    """全部实体均出现在 top_n 召回 chunk 文本中才视为证据存在。
+
+    采用"全命中"而非比例阈值：若真有答案，问题核心实体应当全部见于证据文本；
+    任一缺失即判"主题相近但无答案"。该校验仅作用于 should_reject 用例，
+    误判上限是维持原判（回退分数启发式），无回归风险。
+    """
+    if not entities:
+        return True
+    text = _normalize_snippet_text(
+        "".join((d.get("page_content") or "") for d in details[:top_n])
+    )
+    return all(_normalize_snippet_text(e) in text for e in entities)
+
+
 def _match_by_snippet(
     details: list[dict],
     expected_snippets: list[str],
@@ -92,12 +146,18 @@ def _match_by_snippet(
     """
     if not expected_snippets:
         return False, 0.0
-    # V1.1: 用 page_content（完整文本）而非 snippet（截断 200 字符）做匹配
-    # 避免关键词恰好在 snippet 截断位置之后导致误判 fail
+    # V1.1: 优先用 page_content（完整文本）而非 snippet（截断 200 字符）做匹配，
+    # 避免关键词恰好在 snippet 截断位置之后导致误判 fail；
+    # 无 page_content 时回退 snippet（单测/旧调用方只传 snippet 也能匹配）。
     actual_text = " ".join(
-        d.get("page_content", "") for d in details if d.get("page_content")
+        d.get("page_content") or d.get("snippet") or "" for d in details
     )
-    matched = sum(1 for s in expected_snippets if s in actual_text)
+    # V1.2: 归一化后再匹配，消除空格/全半角差异导致的假阴性
+    normalized_actual = _normalize_snippet_text(actual_text)
+    matched = sum(
+        1 for s in expected_snippets
+        if _normalize_snippet_text(s) in normalized_actual
+    )
     recall = matched / len(expected_snippets)
     hit = matched == len(expected_snippets)
     return hit, recall
@@ -392,8 +452,21 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     reject_gate = None
                     reject_reason = None
 
-            # === reject_accuracy：仅 negative case 计入 ===
+            # === V1.3 拒答校准：实体存在性校验（仅对 should_reject 用例生效）===
+            # hard negative 的 rerank 分数落在正样本主区间，分数启发式分不开；
+            # 若问题核心实体不在召回内容中 → 主题相近但无答案 → 降级为 low（拒答）。
             should_reject = case.expected.get("should_reject", False)
+            query_entities: list[str] = []
+            entity_absent = False
+            if should_reject and details:
+                query_entities = _extract_query_entities(question)
+                if query_entities and not _entities_all_present(query_entities, details):
+                    entity_absent = True
+                    confidence = "low"
+                    reject_gate = "entity_check"
+                    reject_reason = "entity_absent"
+
+            # === reject_accuracy：仅 negative case 计入 ===
             if should_reject:
                 # 期望拒答时，confidence in {none, low} 算拒答成功
                 reject_accuracy = 1.0 if confidence in ("none", "low") else 0.0
@@ -443,6 +516,9 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         "reject_gate": reject_gate,
                         "reject_reason": reject_reason,
                         "top1_rerank_score": details[0].get("rerank_score") if details else None,
+                        # V1.3: 实体校验证据（仅拒答用例）
+                        "query_entities": query_entities or None,
+                        "entity_absent": entity_absent,
                     },
                     # 过程证据：本次用例在 RAG 链路中产生的全部 span
                     "trace": {

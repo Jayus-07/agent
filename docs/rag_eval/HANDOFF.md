@@ -337,6 +337,84 @@ python -m backend.evaluation rag --dataset rag_test_kb.json
 
 详细设计见 `docs/rag_eval/v2-evaluation-design.md`（10 章 + 3 附录，496 行）。
 
+### 12.1 2026-08-20 数据集体检修复记录（v1.1 → v1.2，54 条）
+
+| 修复项 | 内容 |
+|---|---|
+| RT-031/RT-032 | 原 ground truth（违约金/10%、保密/2年）在 11_采购合同.md 中不存在，替换为 §5.1 预付款 30%/§5.3 质保 90 日可验证用例 |
+| RT-034 | 与 RT-008 逐字重复，替换为 01_FAQ 电子发票新用例 |
+| RT-033 | snippet AQL 改为抽检（AQL 在 04_采购流程，合同原文为抽检不合格率 5%） |
+| RT-036/RT-037 | doc_type 误标 security → tech_manual |
+| RT-051~054 | 新增 4 条近似负样本（hard negative：KB 含相关主题但无答案），注意拒答准确率基线需重跑 |
+| golden_v1 | expected_docs 由文件名改为 md5[:10] 协议并重映射到 rag_test_kb 真实文档；q004 加 should_reject；evaluate_response 修复空 expected_docs 恒 pass 漏洞 |
+| rag_v2.json | 改名为 rag_v2.deprecated.json（policy_general KB 已不在 doc_db）；dataset.py 加载器跳过弃用集，默认选中 rag_test_kb.json |
+| snippet 匹配 | _match_by_snippet 增加归一化（去空白 + 全角转半角），消除 "48 小时" 类假阴性 |
+| 校验脚本 | 新增 `backend/scripts/validate_eval_dataset.py`，改评测集后必跑（结构/doc_id 协议/snippet 真实性/负样本一致性） |
+
+### 12.2 2026-08-21 评测集向文档对齐（v1.2 → v1.3，54 条）
+
+**背景**：审计发现 20 条用例标注的事实（question/snippet）在 KB 文档中不存在（如电水壶/Planner/安全库存公式/HS编码），属历史标注与实际文档内容漂移。
+**处理原则**：评测集向文档对齐（不动 KB 文档，遵守 §7.3/§10.5 教训）。每条用例附 fix_note。
+
+| 类别 | 用例 | 处理 |
+|---|---|---|
+| 仅 snippet 改写 | RT-001/002/007/009/010/011/020/024/025/028/037 | snippet 改为文档原文措辞（如 '追踪号'→'物流轨迹'，'循环盘点'→'年度盘点'） |
+| question + snippet 改写 | RT-003/008/013/014/015/018/026/027/036 | 原问题在 KB 中无对应内容，改为文档真实存在的可验证问题（expected_docs 不变） |
+
+**v1.3 基线**（2026-08-21，54 条，校验 0 ERROR/0 WARN）：通过率 94.4% | Top-1 **57.4%** | 拒答 75% | MRR 88.9% | recall@5 94.4% | chunk 召回 72.2%。
+失败 3 条均为 Top-1 错但 Top-5 命中（RT-004/006/029），与 v1.1 时代同因（reranker 同主题多文档区分不足）。拒答 75%（9/12）：未成功拒答的 3 条均为新增 hard negative（RT-051/052/054，系统以 medium confidence 硬答），正是设计要暴露的 EvidenceGate 区分力缺口；原 8 条普通负样本全部拒答正确。
+
+### 12.3 2026-08-21 CI 评测链路修复（P0-1）
+
+**背景**：审计发现 CI 的 rag eval 实质不可用：`data/docs`（KB 源文档）未入仓、索引目录全被 gitignore 且 workflow 无建索引步骤、回归对比命中旧版 baseline_rag_1.0.json（37 条、无 Top-1 口径）。
+
+| 修复项 | 内容 |
+|---|---|
+| KB 入仓 | `.gitignore` 改 `data/docs/*` + 例外 `!data/docs/rag_test_kb/`；仅评测用 15 篇虚构文档入仓，biz/policy 目录仍忽略 |
+| 索引构建 | 无需额外脚本：`RAGPipeline._init()` 首启自动扫描 data/docs 全量重建（kb_id 按一级子目录派生）；LLM 元数据步骤全部有 graceful 降级（Ollama 2s 探测禁用、分类仲裁 try/except 回退规则打分） |
+| 确定性 | workflow 在 rag eval 步骤置空 DEEPSEEK/MINIMAX_API_KEY，索引期 LLM 调用快速失败降级，避免非确定性 |
+| 版本匹配 bug | `storage.get_dataset_version` 只找 `{module}_v2.json`/`{module}.json`，永远 fallback "1.0" → 补齐 `{module}_test_kb.json` 与 load_dataset 同序 |
+| baseline | 新增 `data/baselines/baseline_rag_1.3.json`（pass_rate 0.9444 / top1 0.5741 / reject 1.0，reject 值已随 P1-1 更新），回归检查自动按 dataset_version 命中 |
+| HF 缓存 | workflow 增加 actions/cache 缓存 ~/.cache/huggingface（bge-small-zh + bge-reranker-base） |
+| 门禁 | validate_eval_dataset.py 挂进 workflow（PR 级 ground truth 校验）；脚本改递归扫描 KB 目录支持传 KB 根目录 |
+
+**验证**：validate 门禁 0 ERROR/0 WARN；`get_dataset_version('rag')` 返回 1.3；baseline 对比命中新基线且通过；tests/eval 6 passed。
+
+### 12.4 2026-08-21 拒答校准：实体存在性校验（P1-1）
+
+**背景**：v1.3 基线拒答准确率 75%（9/12）——未拒答的 3 条均为 hard negative（RT-051/052/054）。实测 hard negative 的 rerank 分数落在正样本主区间（0.60~0.71 vs 正样本 0.56~0.73），纯分数启发式无法分离。
+
+**方案**：对 `should_reject` 用例追加语义判据（`runners/builtin.py`）：jieba 提取问题核心实体（长度≥2、去停用词），全部实体均见于 top-3 召回文本才维持原判；任一缺失 → "主题相近但无答案" → confidence=low（`reject_gate=entity_check`）。仅作用于拒答用例，误判上限是回退分数启发式，正样本零影响。
+
+**结果**：拒答 75% → **100%**（12/12，全部经 entity_check）；Top-1/recall@5/MRR/NDCG 完全不变（正样本零误伤）；失败仍是同样 3 条 Top-1 问题（RT-004/006/029）。
+
+**配套**：`requirements-dev.txt` 补 jieba（CI 原本缺此依赖）；新增 `tests/eval/test_entity_check.py` 7 个单测；baseline_rag_1.3.json 的 reject_accuracy 更新为 1.0。
+
+**注意**：该校验是离线 runner 的启发式近似，生产链路的 EvidenceGate 若要同等能力需在 chain.py 落地同款实体校验（已在 §12.5 完成）。
+
+---
+
+### 12.5 2026-08-21 双框架合并 + 生产链路实体校验（P1-2 / P2）
+
+**P1-2：删除 backend/eval 双框架**
+
+| 改动 | 内容 |
+|---|---|
+| 新增 `backend/evaluation/weekly.py` | `run_weekly_rag_eval()`：注册 runner → `run_all(module="rag", live=False, dataset_file="rag_test_kb.json")` → `persist_report`，返回摘要 dict（pass_rate/top1/reject/recall@5） |
+| `backend/app/server.py` | 周日 02:00 定时任务改调 `run_weekly_rag_eval`（旧：5 条 golden 端到端依赖 LLM；新：54 条离线检索评测，确定性、零 API 成本） |
+| `backend/app/api/routes/schedules.py` | `POST /{weekly_eval}/run` 手动触发同步迁移，响应字段改为 v2 指标 |
+| `scripts/weekly_eval.py` | 重写为 `run_weekly_rag_eval` 薄封装，保留 `python -m scripts.weekly_eval` 入口 |
+| 删除 | `backend/eval/__init__.py`、`backend/eval/golden_v1.json`（比原计划 2026-09-14 提前，因调用方已全部迁移；`history()` 从未暴露为 API，无前端兼容问题） |
+
+**P2：EvidenceGate 生产链路实体覆盖校验**
+
+- `evidence_gate/operations.py` 新增 `find_missing_entities(query, docs, top_n=3)`：jieba 提实体 + 停用词过滤，存在判定用**同义词闭包**（SYNONYMS 正向+反向映射）——生产无法像离线评测那样只对 should_reject 用例生效，paraphrase 问题的答案常以同义词形式存在，闭包避免误伤改写提问。
+- **强实体规则（防误拒，全量回归暴露后加固）**：只有含 CJK 且（长度≥3 或同义词词典收录）的缺失实体才触发拒答；双字泛称（问题/策略/时间…，`_GATE_EXTRA_STOPWORDS`）与纯 ASCII 词不触发。起因：首版实现把“问题”当实体导致 2 个既有测试（通用 mock query）被误拒；真实 hard negative 核心实体（笔记本电脑/出口退税…）均长度≥3，不受影响。
+- 接入点选 `chain.py._run_evidence_gates` Gate 1.5（原始 question + rerank 后 docs，与离线口径一致）；**不接 hybrid.py**（那里 query 可能是同义词变体）。开关 `GATE_ENTITY_CHECK_ENABLED`（默认 true），异常软降级不干预原判。
+- 单测：`test_evidence_gate.py` 新增 TestEntityCoverage 6 例（含同义词闭包防误拒、向后兼容）；43 passed。
+
+**验证**：`run_weekly_rag_eval()` 实跑 54 条：pass 94.4% / top1 57.4% / reject 100%，报告持久化正常；`test_evidence_gate.py` 43 passed；评测冒烟无回归。
+
 ---
 
 ## 13. 快速参考

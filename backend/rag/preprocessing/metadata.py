@@ -30,7 +30,7 @@ _ARBITRATION_THRESHOLD = 5
 # LLM 仲裁提示词 — 轻量，只选类型不生成内容
 _ARBITRATION_PROMPT = """你是电商文档分类专家。以下文档的类型有歧义，请从候选类型中选择最匹配的一个。
 
-候选类型（三选一）: {candidates}
+候选类型: {candidates}
 文档内容（前 1000 字）:
 {text}
 
@@ -226,6 +226,18 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
     if not scores:
         return "general", 0.0
 
+    # ── legal 强特征：「第 N 条」条款编号 ──
+    # 仅凭「合同/条款/违约」等关键词容易把含合同字样的流程/制度文档误判为
+    # legal（实测 04_采购流程.docx）；真正法律文本必有「第 N 条」条款结构。
+    # 无条款编号 → 折半降权；有条款编号 → 加分确认。
+    if scores.get("legal"):
+        clause_hits = len(re.findall(r"第[一二三四五六七八九十百\d]+条", text[:6000]))
+        if clause_hits == 0:
+            scores["legal"] = max(scores["legal"] // 2, 1)
+            logger.debug("[Classify] legal 无「第 N 条」条款编号，得分折半")
+        else:
+            scores["legal"] += min(clause_hits * 5, 20)
+
     # 同步 detail["scores"] 到最终 scores（标题/文件名可能后续改了 scores）
     if return_detail:
         detail["scores"] = dict(scores)
@@ -242,27 +254,45 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
     confidence = round(min(confidence, 1.0), 2)
 
     # ── 胶着仲裁 ──
+    # 触发条件（满足其一）：
+    #   a) top1 本身是仲裁候选（legal/compliance/policy）且仅以微弱优势领先
+    #      次名（含 sop/financial 等非候选）→ 存在误判风险，仲裁。
+    #      盲点修复：旧实现只看 top3 内的候选互比，非候选挤进前 3 时
+    #      close_set 只剩一个 → 分差再小也不仲裁（实测 04_采购流程.docx）。
+    #   b) 多个仲裁候选相互胶着（保留旧行为）。
     arbitration_candidates = {"legal", "compliance", "policy"}
-    top3 = sorted_scores[:3]
-    top3_types = {t for t, _ in top3}
-    close_set = top3_types & arbitration_candidates
-    if len(close_set) >= 2:
-        scores_in_set = [(t, s) for t, s in top3 if t in close_set]
-        diff = scores_in_set[0][1] - scores_in_set[1][1] if len(scores_in_set) >= 2 else 999
-        if diff < _ARBITRATION_THRESHOLD:
-            candidates = ", ".join(t for t, _ in scores_in_set[:3])
-            logger.info(f"[Classify] 胶着仲裁: {scores_in_set[:3]}, diff={diff} < {_ARBITRATION_THRESHOLD}")
-            try:
-                from backend.infra.llm import llm
-                result = llm.invoke(_ARBITRATION_PROMPT.format(candidates=candidates, text=text[:1000]))
-                result_text = result.content.strip() if hasattr(result, "content") else str(result).strip()
-                for t in close_set:
-                    if t in result_text:
-                        logger.info(f"[Classify] LLM 仲裁结果: {t}")
-                        return t, 0.95
-                logger.warning(f"[Classify] LLM 仲裁返回未知结果: {result_text[:100]}")
-            except Exception as e:
-                logger.warning(f"[Classify] LLM 仲裁失败，使用最高分: {e}")
+    top4 = sorted_scores[:4]
+    close_set = {t for t, _ in top4} & arbitration_candidates
+    scores_in_set = [(t, s) for t, s in top4 if t in close_set]
+    inner_diff = (scores_in_set[0][1] - scores_in_set[1][1]
+                  if len(scores_in_set) >= 2 else 999)
+    candidate_narrow_lead = (
+        top_type in arbitration_candidates
+        and (top_score - second_score) <= _ARBITRATION_THRESHOLD
+    )
+    if (candidate_narrow_lead or (len(close_set) >= 2 and inner_diff < _ARBITRATION_THRESHOLD)):
+        # 候选含 top4 全部类型（含 sop/financial 等非仲裁类次名，盲点修复）
+        candidates = ", ".join(t for t, _ in top4)
+        logger.info(f"[Classify] 胶着仲裁: top4={top4}, inner_diff={inner_diff}")
+        try:
+            # 用模块级 llm（不在函数内重复 import，避免遮蔽测试 monkeypatch）
+            result = llm.invoke(_ARBITRATION_PROMPT.format(
+                candidates=candidates, text=text[:1000],
+            ))
+            result_text = result.content.strip() if hasattr(result, "content") else str(result).strip()
+            # sop/financial 等仲裁候选外的次名也可被 LLM 选中（盲点修复）；
+            # 精确词边界匹配，避免子串误匹配（如回答含 training 误中 sop）
+            all_top4_types = {t for t, _ in top4}
+            for t in all_top4_types:
+                if re.search(rf"(?<![a-z_]){re.escape(t)}(?![a-z_])", result_text):
+                    logger.info(f"[Classify] LLM 仲裁结果: {t}")
+                    if return_detail:
+                        detail["llm_fallback"] = True
+                        return t, 0.95, detail
+                    return t, 0.95
+            logger.warning(f"[Classify] LLM 仲裁返回未知结果: {result_text[:100]}")
+        except Exception as e:
+            logger.warning(f"[Classify] LLM 仲裁失败，使用最高分: {e}")
 
     logger.debug(f"[Classify] {filename} → {top_type} (score={top_score}, confidence={confidence})")
     if return_detail:

@@ -8,20 +8,39 @@ DATASET_DIR = Path(__file__).resolve().parent / "datasets"
 
 
 def load_dataset(module: ModuleKind) -> list[TestCase]:
-    """加载指定模块的测试集 JSON 文件，返回 TestCase 列表。
+    """加载指定模块的默认测试集 JSON 文件，返回 TestCase 列表。
 
-    支持版本化文件名: 先尝试 {module}_v2.json，再退回 {module}.json。
+    查找顺序（跳过 *.deprecated.json，避免弃用集静默生效）：
+      1. {module}_v2.json
+      2. {module}_test_kb.json（RAG 主力评测集）
+      3. {module}.json
     也可以用 load_dataset_file() 显式指定文件。
     """
-    # 优先尝试 v2 版本
-    v2_path = DATASET_DIR / f"{module}_v2.json"
-    if v2_path.exists():
-        return _load_from_path(v2_path, default_module=module)
-    return load_dataset_file(f"{module}.json", default_module=module)
+    candidates = [
+        f"{module}_v2.json",
+        f"{module}_test_kb.json",
+        f"{module}.json",
+    ]
+    for filename in candidates:
+        path = DATASET_DIR / filename
+        if path.exists() and ".deprecated." not in filename:
+            return _load_from_path(path, default_module=module)
+    available = sorted(
+        p.name for p in DATASET_DIR.glob("*.json")
+        if ".deprecated." not in p.name and p.name != "__init__.py"
+    )
+    raise FileNotFoundError(
+        f"模块 '{module}' 无默认可用的测试集（已尝试: {candidates}）。"
+        f"当前可用评测集: {available}，可用 --dataset 显式指定。"
+    )
 
 
 def load_dataset_file(filename: str, default_module: str = "rag") -> list[TestCase]:
     """加载指定文件名的测试集（相对于 datasets/ 目录）。"""
+    if ".deprecated." in filename:
+        raise FileNotFoundError(
+            f"评测集 '{filename}' 已弃用，拒绝加载。请改用现行评测集（如 rag_test_kb.json）。"
+        )
     file_path = DATASET_DIR / filename
     if not file_path.exists():
         raise FileNotFoundError(f"测试集文件不存在: {file_path}")

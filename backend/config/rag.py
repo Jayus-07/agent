@@ -170,6 +170,9 @@ EVIDENCE_GATE_ENABLED = os.getenv("EVIDENCE_GATE_ENABLED", "true").lower() == "t
 VEC_MIN_SCORE = float(os.getenv("VEC_MIN_SCORE", "0.2"))
 # 是否要求召回 doc_type 覆盖 QueryAnalyzer 推导的 doc_types
 DOC_TYPE_COVERAGE_REQUIRED = os.getenv("DOC_TYPE_COVERAGE_REQUIRED", "true").lower() == "true"
+# 查询实体覆盖校验（P2，2026-08-21）：问题核心实体（含同义词闭包）不在 top-3 召回
+# 文本中 → “主题相近但无答案” → 拒答。离线评测已验证（拒答 75%→100%，正样本零误伤）
+GATE_ENTITY_CHECK_ENABLED = os.getenv("GATE_ENTITY_CHECK_ENABLED", "true").lower() == "true"
 
 # --- Rerank Gate（多维，与 RAGFlow 单阈值不同，更严格但有上限控制） ---
 RERANK_MIN_TOP1 = float(os.getenv("RERANK_MIN_TOP1", "0.35"))

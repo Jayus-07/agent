@@ -1,6 +1,6 @@
 {
-  "version": "1.1",
-  "_comment": "RAG 检索评测 v1.1 — rag_test_kb（11 个真实文档）。relevant_docs = md5(basename)[:10]，由 rag pipeline metadata.build_all_metadata_async 写入；评测时 retrieve 出来的 doc_id 与之做集合相等判定。schema 预留字段：relevant_chunks（chunk 级召回，parent-child 验证）、expected_answer（生成层 Faithfulness/Answer Relevance 接入）、doc_type（文档类型过滤）。v1.0→v1.1 修复：原 doc_id 协议 sha256[:16] 与入库实际 md5[:10] 不匹配，全 37 条改为 md5(basename)[:10] 协议。",
+  "version": "1.3",
+  "_comment": "RAG 检索评测 v1.3 — rag_test_kb（15 个真实文档）。relevant_docs = md5(basename)[:10]，由 rag pipeline metadata.build_all_metadata_async 写入；评测时 retrieve 出来的 doc_id 与之做集合相等判定。schema 预留字段：relevant_chunks（chunk 级召回，parent-child 验证）、expected_answer（生成层 Faithfulness/Answer Relevance 接入）、doc_type（文档类型过滤）。v1.2→v1.3 修复：20 条用例的 question/snippet 与 KB 文档实际内容脱节（标注的事实在文档中不存在），全部改写为文档原文可验证的用例；不动 KB 文档（HANDOFF §7.3 教训）。v1.1→v1.2 修复：RT-031/RT-032 ground truth 在 KB 中不存在（11_采购合同.md 无违约金/保密条款）改为可验证用例；RT-034 与 RT-008 完全重复，替换为新用例；RT-036/RT-037 doc_type 误标 security 改为 tech_manual。v1.0→v1.1 修复：原 doc_id 协议 sha256[:16] 与入库实际 md5[:10] 不匹配，全 37 条改为 md5(basename)[:10] 协议。",
   "test_cases": [
     {
       "id": "RT-001",
@@ -12,14 +12,15 @@
           "8bcf00f8b8"
         ],
         "relevant_snippets": [
-          "收货地址",
+          "修改地址",
           "待发货"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "order"
+        "domain": "order",
+        "fix_note": "2026-08-21: snippet 对齐文档原文（01_FAQ '订单可以修改地址吗'/'地址写错了能改吗'，无'收货地址'措辞）"
       }
     },
     {
@@ -32,19 +33,20 @@
           "8bcf00f8b8"
         ],
         "relevant_snippets": [
-          "物流",
-          "追踪号"
+          "物流轨迹",
+          "签收"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "order"
+        "domain": "order",
+        "fix_note": "2026-08-21: snippet 对齐文档原文（01_FAQ '如何查询物流轨迹'，无'追踪号'措辞）"
       }
     },
     {
       "id": "RT-003",
-      "question": "订单支付失败但银行卡已经扣款了怎么办？",
+      "question": "平台支持哪些支付方式？",
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
@@ -52,14 +54,15 @@
           "8bcf00f8b8"
         ],
         "relevant_snippets": [
-          "支付",
-          "原路退回"
+          "支付方式",
+          "支付宝"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
-        "difficulty": "medium",
-        "domain": "payment"
+        "difficulty": "easy",
+        "domain": "payment",
+        "fix_note": "2026-08-21: 原问题（支付失败扣款）在 01_FAQ 中无对应内容，改为文档真实存在的支付方式问题"
       }
     },
     {
@@ -132,19 +135,20 @@
           "570819cca5"
         ],
         "relevant_snippets": [
-          "可用库存",
-          "锁定库存"
+          "库存",
+          "五类"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "inventory"
+        "domain": "inventory",
+        "fix_note": "2026-08-21: snippet 对齐文档原文（03_库存管理制度 '库存按状态分五类'，无'可用/锁定库存'措辞）"
       }
     },
     {
       "id": "RT-008",
-      "question": "安全库存的计算公式是什么？",
+      "question": "滞销库存的处理方案是什么？",
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
@@ -152,14 +156,15 @@
           "570819cca5"
         ],
         "relevant_snippets": [
-          "安全库存",
-          "日均销量"
+          "滞销",
+          "90"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "medium",
-        "domain": "inventory"
+        "domain": "inventory",
+        "fix_note": "2026-08-21: 原问题（安全库存公式）在 03_库存管理制度 中不存在，改为文档真实存在的滞销处理问题（90 天无动销转滞销池）"
       }
     },
     {
@@ -173,13 +178,14 @@
         ],
         "relevant_snippets": [
           "盘点",
-          "循环盘点"
+          "年度盘点"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "inventory"
+        "domain": "inventory",
+        "fix_note": "2026-08-21: snippet 对齐文档原文（03_库存管理制度 只有月度/年度盘点，无'循环盘点'）"
       }
     },
     {
@@ -192,14 +198,15 @@
           "044f7fd36e"
         ],
         "relevant_snippets": [
-          "营业执照",
-          "质检报告"
+          "资质初审",
+          "样品验证"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "procurement"
+        "domain": "procurement",
+        "fix_note": "2026-08-21: snippet 对齐文档原文（04_采购流程 新供应商三环节，无'营业执照/质检报告'措辞）"
       }
     },
     {
@@ -212,14 +219,15 @@
           "044f7fd36e"
         ],
         "relevant_snippets": [
-          "审批权限",
-          "采购主管"
+          "部门负责人",
+          "总监"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "medium",
-        "domain": "procurement"
+        "domain": "procurement",
+        "fix_note": "2026-08-21: snippet 对齐文档原文（04_采购流程 按金额分级审批，无'审批权限/采购主管'措辞）"
       }
     },
     {
@@ -244,7 +252,7 @@
     },
     {
       "id": "RT-013",
-      "question": "这款电水壶的额定功率和容量是多少？",
+      "question": "商品包装的缓冲材料厚度要求是多少？",
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
@@ -252,19 +260,20 @@
           "83b7b646c6"
         ],
         "relevant_snippets": [
-          "额定功率",
-          "1.5L"
+          "缓冲材料",
+          "2cm"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "product_spec"
+        "domain": "product_spec",
+        "fix_note": "2026-08-21: 原问题（电水壶额定功率/容量）在 05_商品规格说明 中不存在（仅 SKU 表格与包装/合规），改为文档真实存在的包装规范问题"
       }
     },
     {
       "id": "RT-014",
-      "question": "电水壶出现异味应该怎么处理？",
+      "question": "危险品（D 类电池）出口需要提供哪些测试报告？",
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
@@ -272,19 +281,20 @@
           "83b7b646c6"
         ],
         "relevant_snippets": [
-          "异味",
-          "故障排查"
+          "MSDS",
+          "UN38.3"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "medium",
-        "domain": "product_spec"
+        "domain": "product_spec",
+        "fix_note": "2026-08-21: 原问题（电水壶异味处理）在 05_商品规格说明 中不存在，改为文档真实存在的危险品合规问题"
       }
     },
     {
       "id": "RT-015",
-      "question": "电水壶的保养方法有哪些？",
+      "question": "跨境商品需要满足哪些合规认证？",
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
@@ -292,14 +302,15 @@
           "83b7b646c6"
         ],
         "relevant_snippets": [
-          "除垢",
-          "保养"
+          "CE",
+          "FCC"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "product_spec"
+        "domain": "product_spec",
+        "fix_note": "2026-08-21: 原问题（电水壶保养/除垢）在 05_商品规格说明 中不存在，改为文档真实存在的合规认证问题"
       }
     },
     {
@@ -344,7 +355,7 @@
     },
     {
       "id": "RT-018",
-      "question": "退款金额是怎么计算的？",
+      "question": "退货验收合格后多久能收到退款？",
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
@@ -352,14 +363,15 @@
           "a709fe1cf1"
         ],
         "relevant_snippets": [
-          "退款金额",
-          "优惠券"
+          "原路退回",
+          "工作日"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "medium",
-        "domain": "return_policy"
+        "domain": "return_policy",
+        "fix_note": "2026-08-21: 原问题（退款金额计算/优惠券）在 06_退货政策 中不存在，改为文档真实存在的退款时效问题（1-3 个工作日原路退回）"
       }
     },
     {
@@ -392,14 +404,15 @@
           "ea3b67f202"
         ],
         "relevant_snippets": [
-          "HS编码",
-          "申报"
+          "商业发票",
+          "装箱单"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "medium",
-        "domain": "logistics"
+        "domain": "logistics",
+        "fix_note": "2026-08-21: snippet 对齐文档原文（07_物流SOP 清关申报耍商业发票/装箱单，无'HS编码'）"
       }
     },
     {
@@ -472,14 +485,15 @@
           "7920f94bb3"
         ],
         "relevant_snippets": [
-          "打款",
-          "每周五"
+          "付款",
+          "工作日"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "expense"
+        "domain": "expense",
+        "fix_note": "2026-08-21: snippet 对齐文档原文（08_员工报销制度 '财务审核后 5 个工作日内付款'，无'每周五'）"
       }
     },
     {
@@ -492,19 +506,20 @@
           "caee1e7892"
         ],
         "relevant_snippets": [
-          "分层架构",
-          "API"
+          "架构总览",
+          "主流架构"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "tech_manual"
+        "domain": "tech_manual",
+        "fix_note": "2026-08-21: snippet 对齐文档原文（09_技术手册 章节模板内容，无'分层架构/API'）"
       }
     },
     {
       "id": "RT-026",
-      "question": "Planner 节点的职责是什么？",
+      "question": "技术手册要求的关键性能指标有哪些？",
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
@@ -512,19 +527,20 @@
           "caee1e7892"
         ],
         "relevant_snippets": [
-          "Planner",
-          "DAG"
+          "可用性",
+          "P99"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "medium",
-        "domain": "tech_manual"
+        "domain": "tech_manual",
+        "fix_note": "2026-08-21: 原问题（Planner/DAG）在 09_技术手册 中不存在（全文为章节模板内容），改为文档真实存在的性能指标问题"
       }
     },
     {
       "id": "RT-027",
-      "question": "数据库有哪些 schema 和表？",
+      "question": "技术手册中数据库设计章节讲了什么？",
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
@@ -532,19 +548,20 @@
           "caee1e7892"
         ],
         "relevant_snippets": [
-          "schema",
-          "表"
+          "数据库设计",
+          "设计原则"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "hard",
-        "domain": "tech_manual"
+        "domain": "tech_manual",
+        "fix_note": "2026-08-21: 原问题（schema/表清单）在 09_技术手册 中不存在，改为针对第 18 章数据库设计的定位问题"
       }
     },
     {
       "id": "RT-028",
-      "question": "库存盘点差异率超标应该怎么整改？",
+      "question": "库存盘点的差异率要求是多少？",
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
@@ -553,14 +570,14 @@
         ],
         "relevant_snippets": [
           "盘点",
-          "整改"
+          "差异率"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "hard",
         "domain": "mixed",
-        "fix_note": "2026-08-19: golden truth 修正。盘点/整改在 03_库存管理制度（含盘点/差异率/整改），不在 10_结构混乱的长文档"
+        "fix_note": "2026-08-21: 原问题问'整改'但文档只有差异率上限（月度≤1%/年度≤0.5%），改为差异率要求问题。历史：2026-08-19 golden truth 修正，盘点/差异率在 03_库存管理制度，不在 10_结构混乱的长文档"
       }
     },
     {
@@ -606,7 +623,7 @@
     },
     {
       "id": "RT-031",
-      "question": "采购合同违约金的赔付标准是什么？",
+      "question": "采购合同签订后需要支付多少预付款？",
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
@@ -614,20 +631,21 @@
           "6ca78d7b4b"
         ],
         "relevant_snippets": [
-          "违约金",
-          "10%"
+          "预付款",
+          "30%"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "easy",
         "domain": "legal",
-        "doc_type": "legal"
+        "doc_type": "legal",
+        "fix_note": "2026-08-20: 原问题『违约金赔付标准』的 ground truth 在 11_采购合同.md 中不存在（§六违约责任仅约定赔偿实际损失，无违约金/10%表述），替换为 §5.1『支付 30% 预付款』可验证用例"
       }
     },
     {
       "id": "RT-032",
-      "question": "采购合同的保密义务期限是多久？",
+      "question": "采购合同的质保期是多久？",
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
@@ -635,15 +653,16 @@
           "6ca78d7b4b"
         ],
         "relevant_snippets": [
-          "保密",
-          "2年"
+          "质保",
+          "90 日"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "medium",
         "domain": "legal",
-        "doc_type": "legal"
+        "doc_type": "legal",
+        "fix_note": "2026-08-20: 原问题『保密义务期限』的 ground truth 在 11_采购合同.md 中不存在（无任何保密条款），替换为 §5.3『质保期满(交付后 90 日)』可验证用例"
       }
     },
     {
@@ -657,36 +676,36 @@
         ],
         "relevant_snippets": [
           "验收",
-          "AQL"
+          "抽检"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "medium",
         "domain": "legal",
-        "doc_type": "legal"
+        "doc_type": "legal",
+        "fix_note": "2026-08-20: snippet 由 AQL 改为抽检（AQL 在 04_采购流程，11_采购合同 §4.2 为『抽检不合格率超过 5%』）"
       }
     },
     {
       "id": "RT-034",
-      "question": "安全库存的计算公式是什么？",
+      "question": "电子发票开具后多久能收到？",
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "570819cca5"
+          "8bcf00f8b8"
         ],
-        "relevant_chunks": [],
         "relevant_snippets": [
-          "安全库存",
-          "日均销量"
+          "电子发票",
+          "3 个工作日"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
-        "difficulty": "medium",
-        "domain": "inventory",
-        "doc_type": "policy"
+        "difficulty": "easy",
+        "domain": "order",
+        "fix_note": "2026-08-20: 原用例与 RT-008 完全重复（同一问题『安全库存的计算公式是什么？』），替换为 01_FAQ.md『发票如何开具? 电子发票 3 个工作日内发至预留邮箱』可验证新用例"
       }
     },
     {
@@ -713,7 +732,7 @@
     },
     {
       "id": "RT-036",
-      "question": "数据库连接池的最小和最大连接数是多少？",
+      "question": "技术手册要求系统可用性达到多少？",
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
@@ -721,15 +740,16 @@
           "caee1e7892"
         ],
         "relevant_snippets": [
-          "连接池",
-          "min"
+          "可用性",
+          "99.9%"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
-        "difficulty": "hard",
+        "difficulty": "medium",
         "domain": "tech_manual",
-        "doc_type": "security"
+        "doc_type": "tech_manual",
+        "fix_note": "2026-08-21: 原问题（连接池 min/max）在 09_技术手册 中不存在，改为文档真实存在的可用性指标问题。历史：2026-08-20 doc_type 由 security 改为 tech_manual"
       }
     },
     {
@@ -742,15 +762,16 @@
           "caee1e7892"
         ],
         "relevant_snippets": [
-          "七原则",
-          "可理解"
+          "设计原则",
+          "实现要点"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "medium",
         "domain": "tech_manual",
-        "doc_type": "security"
+        "doc_type": "tech_manual",
+        "fix_note": "2026-08-21: snippet 对齐文档原文（各章节模板句'设计原则与实现要点'，无'七原则/可理解'）。历史：2026-08-20 doc_type 由 security 改为 tech_manual"
       }
     },
     {
@@ -1005,6 +1026,78 @@
         "domain": "negative",
         "probe_type": "personal_info",
         "probe_note": "人员个人信息，KB 不含（人名匹配可能误命中），期望拒答"
+      }
+    },
+    {
+      "id": "RT-051",
+      "question": "笔记本电脑的保修期是多久？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "min_relevant_chunks": 0,
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "probe_type": "hard_negative_near_miss",
+        "probe_note": "近似负样本：KB 含保修内容（01_FAQ 电子产品保修/02_售后FAQ）但仅限电水壶与泛称电子产品，无笔记本电脑具体政策；期望系统不被『保修』关键词带偏而硬答"
+      }
+    },
+    {
+      "id": "RT-052",
+      "question": "出口退税的申报流程是怎样的？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "min_relevant_chunks": 0,
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "probe_type": "hard_negative_near_miss",
+        "probe_note": "近似负样本：KB 含清关申报要素（07_物流SOP，含 HS编码/申报）但不含出口退税流程；期望系统区分『清关』与『退税』，不被报关类内容带偏"
+      }
+    },
+    {
+      "id": "RT-053",
+      "question": "员工年假天数是怎么规定的？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "min_relevant_chunks": 0,
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "probe_type": "hard_negative_near_miss",
+        "probe_note": "近似负样本：KB 含员工差旅制度（08_）但不含年假规定；期望系统区分『差旅报销』与『年假』，不被员工制度类内容带偏"
+      }
+    },
+    {
+      "id": "RT-054",
+      "question": "数据库的备份策略是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "min_relevant_chunks": 0,
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "probe_type": "hard_negative_near_miss",
+        "probe_note": "近似负样本：技术手册（09_）含数据库 schema/连接池参数但不含备份策略；期望系统不被『数据库』关键词带偏而硬答"
       }
     }
   ]

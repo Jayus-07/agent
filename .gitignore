@@ -46,8 +46,10 @@ logs/
 # Database
 data/chroma/
 data/doc_db/
-data/router_index/   # Router 路由索引（自动重建）
-data/doc_versions.json  # 文档版本索引（自动生成）
+# Router 路由索引（自动重建）
+data/router_index/
+# 文档版本索引（自动生成）
+data/doc_versions.json
 *.db
 *.sqlite3
 *.db-shm
@@ -80,7 +82,9 @@ htmlcov/
 data/reports/
 data/report_snapshots/
 data/report_preferences.json
-data/docs/
+data/docs/*
+# 例外：评测用 KB 文档入仓（内容虚构，CI 评测依赖）
+!data/docs/rag_test_kb/
 data/long_term_memory/
 
 # Claude Code local config
@@ -88,10 +92,18 @@ data/long_term_memory/
 
 # Evaluation output
 evaluation/results/
-data/eval_runs/      # V1.0 每次评估的运行时产物（每次跑都覆盖，不入仓）
+# 每次评测运行的报告快照，不入仓
+backend/evaluation/results/
+# V1.0 每次评估的运行时产物（每次跑都覆盖，不入仓）
+data/eval_runs/
 # data/baselines/   # V1.0 baseline JSON 入仓（与发布 tag 绑定，可追溯）
 
 # Misc auto-generated
+# reasonix 任务运行时产物与本地权限缓存
+.reasonix/
+reasonix.toml
+# Qoder repowiki 等 IDE 生成物
+.qoder/
 =0.2.0
 *技术报告.md
 report_agent/data/
