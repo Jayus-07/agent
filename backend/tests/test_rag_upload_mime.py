@@ -20,8 +20,20 @@ class TestAllowedMimeStructure:
     """白名单表结构必须覆盖所有支持的扩展名,且 octet-stream 仅作兜底。"""
 
     def test_all_supported_exts_have_entry(self):
-        # 必须包含 4 个扩展名
-        assert set(ALLOWED_MIME_TYPES.keys()) == {"pdf", "md", "txt", "docx"}
+        # F6: 白名单从解析器注册表派生，必须覆盖全部 6 个已注册扩展名
+        assert set(ALLOWED_MIME_TYPES.keys()) == {
+            "pdf", "md", "markdown", "txt", "docx", "xlsx"}
+
+    def test_derived_from_parsable_exts(self):
+        """F6: ALLOWED_MIME_TYPES 必须与 PARSABLE_EXTS 一一对应（单一来源，防漂移）。"""
+        from backend.rag.preprocessing.parser import PARSABLE_EXTS
+        assert {f".{ext}" for ext in ALLOWED_MIME_TYPES} == set(PARSABLE_EXTS)
+
+    def test_markdown_and_xlsx_have_proper_mime(self):
+        # F6 新开放的两个扩展名必须登记正确的 MIME
+        assert "text/markdown" in ALLOWED_MIME_TYPES["markdown"]
+        assert "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" \
+            in ALLOWED_MIME_TYPES["xlsx"]
 
     def test_octet_stream_not_in_whitelist_dicts(self):
         # 白名单表只登记"显式声明时允许的具体 MIME"。
@@ -51,6 +63,9 @@ class TestValidateMime:
         ("md", "text/plain"),  # MD 接受纯文本
         ("txt", "text/plain"),
         ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        ("markdown", "text/markdown"),
+        ("markdown", "text/plain"),  # .markdown 与 .md 同策略
+        ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
     ])
     def test_accepts_valid_mime(self, ext, ctype):
         ok, err = _validate_mime(ext, ctype)
@@ -66,6 +81,8 @@ class TestValidateMime:
         ("txt", "application/pdf", "TXT 扩展 + PDF MIME"),
         ("pdf", "image/png", "PDF 扩展 + 图片 MIME"),
         ("md", "application/zip", "MD 扩展 + 压缩包 MIME"),
+        ("xlsx", "text/plain", "XLSX 扩展 + text/plain"),
+        ("markdown", "application/pdf", "MARKDOWN 扩展 + PDF MIME"),
     ])
     def test_rejects_mime_ext_mismatch(self, ext, ctype, bad_why):
         ok, err = _validate_mime(ext, ctype)
@@ -105,7 +122,7 @@ class TestValidateMime:
         assert ok is True
 
     def test_unsupported_ext_returns_error(self):
-        """不支持的扩展名(不在 4 个白名单中)应该被拒。"""
+        """不支持的扩展名(不在派生白名单中)应该被拒。"""
         ok, err = _validate_mime("exe", "application/octet-stream")
         assert ok is False
         assert "unsupported ext" in err or "ext" in err.lower()

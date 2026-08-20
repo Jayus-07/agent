@@ -417,6 +417,23 @@ python -m backend.evaluation rag --dataset rag_test_kb.json
 
 ---
 
+### 12.6 2026-08-21 上传→入库链路遗留项全部收尾
+
+审查报告 §3.2/§6 遗留项全部落地，详见 `docs/upload-test-audit-report.md` §9。要点：
+
+- **F6 白名单单一来源**：`PARSABLE_EXTS`（parser 注册表派生），上传新开放 `.markdown`/`.xlsx`；
+  下游 pipeline/indexer/loader/路由全部派生，防名单漂移。
+- **F7 惰性导入 + CI `HF_HUB_OFFLINE=1`**：路由启动不再背 langchain/openpyxl 重导入。
+- **F9/F10/F11**：TOCTOU 收缩、预检 16KB multipart 余量（流式计数仍强制精确上限）、
+  进度队列 30min TTL + server 启动后台 GC 循环（5min/轮，异常不退出）。
+- **P2 embedding 批量化**：`EMBED_BATCH_SIZE=32`，批调 `embed_documents`；批耗尽重试降级逐条隔离失败点，
+  无批量接口的实现自动回退逐条。
+- **SSE 心跳**：复查确认已存在（15s `: keepalive`），无代码改动。
+- **测试**：新增 42 例（含新建 `tests/rag/test_embed_batching.py`）；全量 **961 passed, 3 skipped**（基线 919）。
+- **遗留**：P3（文档删除/重索引专项审查）属新一轮任务，需单独立项。
+
+---
+
 ## 13. 快速参考
 
 ```bash

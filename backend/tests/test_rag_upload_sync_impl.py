@@ -455,6 +455,65 @@ class TestCleanupStaleArtifacts:
         assert counts["tmp_removed"] == 1
 
 
+# ============ 6.5 进度队列 TTL 清理（F11） ============
+
+class TestProgressQueueGC:
+    """过期 SSE 进度队列必须被定期清理（F11），新鲜队列绝不误删。"""
+
+    def test_cleanup_removes_expired_keeps_fresh(self, monkeypatch):
+        fake_queues: dict = {}
+
+        def _mk(age: float):
+            q = asyncio.Queue()
+            q._created_at = time.time() - age
+            return q
+
+        fake_queues["expired_uid"] = _mk(rag_upload.PROGRESS_QUEUE_TTL_SECONDS + 60)
+        fake_queues["fresh_uid"] = _mk(10)
+        monkeypatch.setattr(rag_upload, "_progress_queues", fake_queues)
+
+        removed = rag_upload.cleanup_expired_progress_queues()
+        assert removed == 1
+        assert "expired_uid" not in fake_queues, "超 TTL 队列必须被清理"
+        assert "fresh_uid" in fake_queues, "新鲜队列不能误删"
+
+    def test_cleanup_without_created_at_treated_as_expired(self, monkeypatch):
+        """无 _created_at 的队列（异常残留）按过期处理。"""
+        fake_queues = {"orphan_uid": asyncio.Queue()}  # getattr 默认 0 → 必过期
+        monkeypatch.setattr(rag_upload, "_progress_queues", fake_queues)
+        assert rag_upload.cleanup_expired_progress_queues() == 1
+        assert not fake_queues
+
+    def test_cleanup_empty_registry_is_noop(self, monkeypatch):
+        monkeypatch.setattr(rag_upload, "_progress_queues", {})
+        assert rag_upload.cleanup_expired_progress_queues() == 0
+
+    def test_gc_loop_tolerates_exception_and_keeps_running(self, monkeypatch):
+        """单轮 GC 异常只告警，绝不能终止循环（挂掉比队列滞留更糟）。"""
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("boom")
+            return 0
+
+        monkeypatch.setattr(rag_upload, "cleanup_expired_progress_queues", flaky)
+
+        async def run():
+            task = asyncio.create_task(
+                rag_upload.progress_queue_gc_loop(interval_seconds=0.01))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(run())
+        assert calls["n"] >= 2, "首轮异常后循环必须继续执行"
+
+
 # ============ 7. HTTP 端点级(FastAPI TestClient) ============
 
 @pytest.fixture
@@ -540,6 +599,8 @@ class TestUploadEndpoint:
         tc, captured = client
         import backend.config.rag as rag_cfg
         monkeypatch.setattr(rag_cfg, "RAG_MAX_FILE_SIZE", 0)  # max_size=0 → 任何长度都超
+        # F10: 预检带 multipart 余量；本测试要触发预检直拒，需把余量归零
+        monkeypatch.setattr(rag_upload, "_MULTIPART_OVERHEAD", 0)
         resp = tc.post("/upload",
                        files={"file": ("big.md", b"data", "text/markdown")},
                        data={"kb_id": "policy_general", "department": "general"})
@@ -547,6 +608,22 @@ class TestUploadEndpoint:
         assert body["ok"] is False
         assert "too large" in body["error"]
         assert "called" not in captured
+
+    def test_content_length_margin_allows_boundary_file(self, client, monkeypatch):
+        """F10: 预检余量放行贴上限的小请求，不误拒 multipart 封装开销。
+
+        RAG_MAX_FILE_SIZE=0 但实际负载很小（cl < 16KB 余量）→ 预检放行，
+        进入流式实现（精确上限由流式字节计数强制，此处 fake 实现直接成功）。
+        """
+        tc, captured = client
+        import backend.config.rag as rag_cfg
+        monkeypatch.setattr(rag_cfg, "RAG_MAX_FILE_SIZE", 0)
+        # 保持默认 _MULTIPART_OVERHEAD（16KB），小文件 multipart cl 远低于余量
+        resp = tc.post("/upload",
+                       files={"file": ("ok.md", b"# hi", "text/markdown")},
+                       data={"kb_id": "policy_general", "department": "general"})
+        assert resp.json()["ok"] is True
+        assert captured.get("called") is True, "预检余量内应进入流式实现"
 
     def test_rag_not_ready_returns_503(self, client, monkeypatch):
         tc, _ = client

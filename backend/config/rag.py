@@ -69,6 +69,9 @@ SEMANTIC_SIMILARITY_THRESHOLD = float(os.getenv("SEMANTIC_SIMILARITY_THRESHOLD",
 # 语义切分句子级 embedding 加固：分批大小 + 每批重试次数（对齐 indexer EMBED_RETRY_MAX 模式）
 SEMANTIC_EMBED_BATCH_SIZE = int(os.getenv("SEMANTIC_EMBED_BATCH_SIZE", "32"))
 SEMANTIC_EMBED_RETRY = int(os.getenv("SEMANTIC_EMBED_RETRY", "3"))
+# 索引主路径 embedding 批量化（P2）：embed_documents 批调用走本地模型矩阵运算，
+# 比逐条 embed_query 快数倍；批失败降级逐条以隔离失败点
+EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "32"))
 # 单文档 chunk 数量上限（生产防护）：异常超长/解析失控文档超限时截断 + 告警，
 # 防止无界产出撑爆 embedding/向量库
 MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "5000"))

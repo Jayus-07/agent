@@ -55,6 +55,9 @@ jobs:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       EVAL_TRIGGER: ci:${{ github.event_name }}
       GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+      # F7: HF 离线模式 — CI 无模型下载需求，禁止 transformers 联网探测
+      # （避免冷启动 ~50s 的网络探测耗时）
+      HF_HUB_OFFLINE: "1"
 
     steps:
       - name: Checkout code

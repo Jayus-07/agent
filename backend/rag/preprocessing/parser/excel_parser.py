@@ -5,8 +5,6 @@ text=序列化文本，供 chunk 保留内容，避免空 chunk 丢数据）。
 """
 from __future__ import annotations
 
-import openpyxl
-
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
 from backend.rag.preprocessing.parser.base import BaseDocumentParser
 from backend.shared.logger import logger
@@ -14,6 +12,10 @@ from backend.shared.logger import logger
 
 class ExcelParser(BaseDocumentParser):
     def parse(self, file_path: str) -> DocumentAST:
+        # F7: openpyxl 惰性导入 — 顶层 import 会拖垮整个 parser 包导入链
+        # （路由模块冷启动/未装 openpyxl 时收集失败）
+        import openpyxl
+
         try:
             wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
         except Exception as e:

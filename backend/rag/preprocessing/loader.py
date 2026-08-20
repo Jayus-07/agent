@@ -17,6 +17,9 @@ def load_documents_from_directory(directory_path: str, chunk_size=None, chunk_ov
     注意：department 与 indexer 默认一致（"general"），多部门场景需抽公共派生函数。
     """
     from backend.rag.preprocessing.pipeline import parse_and_chunk
+    # F6: 扩展名白名单从解析器注册表派生（单一来源）；惰性导入保持
+    # loader 顶层轻量（parser 包含 fitz/docx 等重依赖）
+    from backend.rag.preprocessing.parser import PARSABLE_EXTS
 
     all_documents = []
 
@@ -28,7 +31,7 @@ def load_documents_from_directory(directory_path: str, chunk_size=None, chunk_ov
         for file in files:
             file_path = os.path.join(root, file)
             ext = os.path.splitext(file)[1].lower()
-            if ext not in (".md", ".txt", ".pdf", ".docx", ".xlsx"):
+            if ext not in PARSABLE_EXTS:
                 continue
 
             try:

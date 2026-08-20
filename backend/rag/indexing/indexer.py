@@ -27,8 +27,9 @@ from langchain_core.documents import Document
 
 from backend.observability.tracer import trace_collector, WorkflowKind, SpanKind
 from backend.rag.preprocessing.cleaner import DocumentCleaner
+from backend.rag.preprocessing.parser import PARSABLE_EXTS
 from backend.rag.indexing.models import SyncResult, Delta
-from backend.config.rag import BM25_SEARCH_K
+from backend.config.rag import BM25_SEARCH_K, EMBED_BATCH_SIZE
 from backend.shared.logger import logger
 from backend.infra.async_utils import run_async as _run_async
 
@@ -78,7 +79,9 @@ class IncrementalIndexer:
        - UNCHANGED: 跳过
     """
 
-    SUPPORTED_EXTS = {".md", ".txt", ".pdf", ".docx", ".xlsx"}
+    # F6: 从解析器注册表派生（单一来源）；旧硬编码名单缺 .markdown，
+    # 导致磁盘扫描路径与解析能力不一致
+    SUPPORTED_EXTS = set(PARSABLE_EXTS)
 
     def __init__(
         self,
@@ -795,65 +798,116 @@ class IncrementalIndexer:
             "file_hash": file_hash,
         }
 
-    def _embed_with_retry(self, chunks, parent_span) -> list[str]:
-        """逐 chunk 嵌入；成功静默，失败单独 child span 记录，重试 EMBED_RETRY_MAX 次。
+    @staticmethod
+    def _embed_text_for(chunk) -> str:
+        """构造 embedding 文本：模拟问题前缀（Document Expansion）+ 正文。"""
+        questions = chunk.metadata.get("simulated_questions", [])
+        if questions:
+            return "【相关问题】" + " | ".join(questions) + "\n\n" + chunk.page_content
+        return chunk.page_content
 
-        Returns: 成功嵌入的 chunk id 列表（失败的 chunk 不在此列）。
+    def _embed_single_with_retry(self, i: int, chunk, embed_text: str):
+        """逐条 embedding（含重试 + 失败/重试 span），成功返回向量，失败返回 None。
+
+        供批量化降级路径与不支持 embed_documents 的 embedding 实现复用，
+        保留旧版"逐 chunk 失败 span"语义。
+        """
+        last_err = None
+        for attempt in range(EMBED_RETRY_MAX):
+            try:
+                vec = self.embedding.embed_query(embed_text)
+                if attempt > 0:
+                    chunk_span = trace_collector.start_span(
+                        f"embed_chunk_{i}",
+                        parent_id="index_embed",
+                        name=f"Embed chunk {i} retried",
+                        type="embedding",
+                        kind=SpanKind.INDEX_EMBED.value,
+                        input={"chunk_index": i,
+                               "doc_id": chunk.metadata.get("doc_id", "")},
+                    )
+                    chunk_span.retry_count = attempt
+                    trace_collector.end_span(
+                        chunk_span,
+                        metrics={"attempt": attempt + 1,
+                                 "retry_count": attempt},
+                    )
+                return vec
+            except Exception as e:
+                last_err = e
+        # 所有重试都失败 → 创建 child span 记录失败
+        logger.error(f"[Embed] chunk {i} 嵌入失败 {EMBED_RETRY_MAX} 次: {last_err}")
+        chunk_span = trace_collector.start_span(
+            f"embed_chunk_{i}",
+            parent_id="index_embed",
+            name=f"Embed chunk {i} FAILED",
+            type="embedding",
+            kind=SpanKind.INDEX_EMBED.value,
+            input={"chunk_index": i,
+                   "doc_id": chunk.metadata.get("doc_id", "")},
+        )
+        chunk_span.retry_count = EMBED_RETRY_MAX
+        trace_collector.end_span(chunk_span, status="error",
+            metrics={"error": str(last_err)[:100] if last_err else "unknown",
+                     "retry_count": EMBED_RETRY_MAX})
+        return None
+
+    def _embed_with_retry(self, chunks, parent_span) -> list:
+        """批量嵌入（P2 批量化）；成功静默，失败单独 child span 记录。
+
+        - 每批 EMBED_BATCH_SIZE 条调 embed_documents：本地模型批推理走矩阵
+          运算，比逐条 embed_query 快数倍（对齐 chunking._embed_sentences_batched 模式）
+        - 每批重试 EMBED_RETRY_MAX 次；耗尽重试的批降级逐条 embed_query，
+          隔离失败点，保留逐 chunk 失败 span 语义
+        - embedding 实现无 embed_documents → 直接逐条路径
+
+        Returns: 成功嵌入的向量列表（失败的 chunk 不在此列）。
 
         P1: 每个 chunk 在 embedding 前拼接"模拟问题前缀"（Document Expansion），
         召回率 +10-15%（口语化提问 ↔ 书面文档的语义鸿沟）。
         """
-        succeeded = []
-        for i, chunk in enumerate(chunks):
-            # 拼接问题前缀（提升召回率）
-            questions = chunk.metadata.get("simulated_questions", [])
-            if questions:
-                prefix = "【相关问题】" + " | ".join(questions) + "\n\n"
-                embed_text = prefix + chunk.page_content
-            else:
-                embed_text = chunk.page_content
+        if not chunks:
+            return []
+        texts = [self._embed_text_for(c) for c in chunks]
+        succeeded: list = []
 
+        batch_embed = getattr(self.embedding, "embed_documents", None)
+        if not callable(batch_embed):
+            for i, chunk in enumerate(chunks):
+                vec = self._embed_single_with_retry(i, chunk, texts[i])
+                if vec is not None:
+                    succeeded.append(vec)
+            return succeeded
+
+        for start in range(0, len(chunks), EMBED_BATCH_SIZE):
+            batch_chunks = chunks[start:start + EMBED_BATCH_SIZE]
+            batch_texts = texts[start:start + EMBED_BATCH_SIZE]
             last_err = None
-            for attempt in range(EMBED_RETRY_MAX):
+            batch_ok = False
+            for _attempt in range(EMBED_RETRY_MAX):
                 try:
-                    cid = self.embedding.embed_query(embed_text)
-                    succeeded.append(cid)
-                    last_err = None
-                    if attempt > 0:
-                        chunk_span = trace_collector.start_span(
-                            f"embed_chunk_{i}",
-                            parent_id="index_embed",
-                            name=f"Embed chunk {i} retried",
-                            type="embedding",
-                            kind=SpanKind.INDEX_EMBED.value,
-                            input={"chunk_index": i,
-                                   "doc_id": chunk.metadata.get("doc_id", "")},
+                    vecs = batch_embed(batch_texts)
+                    if not isinstance(vecs, (list, tuple)) or len(vecs) != len(batch_texts):
+                        raise ValueError(
+                            f"embed_documents 返回非法: type={type(vecs).__name__}, "
+                            f"期望 {len(batch_texts)} 条向量"
                         )
-                        chunk_span.retry_count = attempt
-                        trace_collector.end_span(
-                            chunk_span,
-                            metrics={"attempt": attempt + 1,
-                                     "retry_count": attempt},
-                        )
+                    succeeded.extend(vecs)
+                    batch_ok = True
                     break
                 except Exception as e:
                     last_err = e
-            else:
-                # 所有重试都失败 → 创建 child span 记录失败
-                logger.error(f"[Embed] chunk {i} 嵌入失败 {EMBED_RETRY_MAX} 次: {last_err}")
-                chunk_span = trace_collector.start_span(
-                    f"embed_chunk_{i}",
-                    parent_id="index_embed",
-                    name=f"Embed chunk {i} FAILED",
-                    type="embedding",
-                    kind=SpanKind.INDEX_EMBED.value,
-                    input={"chunk_index": i,
-                           "doc_id": chunk.metadata.get("doc_id", "")},
-                )
-                chunk_span.retry_count = EMBED_RETRY_MAX
-                trace_collector.end_span(chunk_span, status="error",
-                    metrics={"error": str(last_err)[:100] if last_err else "unknown",
-                             "retry_count": EMBED_RETRY_MAX})
+            if batch_ok:
+                continue
+            # 整批耗尽重试 → 降级逐条，隔离单点失败（旧语义保留）
+            logger.warning(
+                f"[Embed] 批次 {start // EMBED_BATCH_SIZE}（{len(batch_texts)} chunks）"
+                f"重试 {EMBED_RETRY_MAX} 次全失败 ({last_err})，降级逐条"
+            )
+            for j, chunk in enumerate(batch_chunks):
+                vec = self._embed_single_with_retry(start + j, chunk, batch_texts[j])
+                if vec is not None:
+                    succeeded.append(vec)
         return succeeded
 
 

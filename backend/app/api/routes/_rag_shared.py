@@ -7,10 +7,10 @@ from fastapi.responses import StreamingResponse
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline, require_rag_ready, get_rag_status
 from backend.rag.indexing.doc_registry import DocumentRegistry
-from backend.rag.indexing.indexer import IncrementalIndexer
+# F7: 移除未使用的重依赖顶层导入（IncrementalIndexer/ProgressListener 导入链
+# 含 langchain/tracer，拖慢所有 RAG 路由模块冷启动；各调用方按需自行导入）
 from backend.rag.indexing.operation_log import DocumentOperationLogger
-from backend.rag.progress_listener import ProgressListener
-from backend.config import DOC_REGISTRY_PATH, DOC_OPERATION_LOG_PATH, CHROMA_PATH, EMBEDDING_MODEL_PATH
+from backend.config import DOC_REGISTRY_PATH, DOC_OPERATION_LOG_PATH
 from backend.config.rag import METADATA_SCHEMA_FINGERPRINT
 from backend.shared.logger import logger
 
@@ -84,8 +84,8 @@ class SearchRequest(BaseModel):
 
 # 本模块的公开工具集合。注意：调用方必须用显式 from ... import xxx，
 # 禁止 from ._rag_shared import * —— __all__ 会让星号导入只带走这几个名字，
-# 静默丢掉 os/time/logger/EMBEDDING_MODEL_PATH 等，且 except 里的 logger
-# 也一并丢失，导致异常兜底本身抛 NameError（历史故障：/rag/documents 500）
+# 静默丢掉 os/time/logger 等，且 except 里的 logger 也一并丢失，
+# 导致异常兜底本身抛 NameError（历史故障：/rag/documents 500）
 __all__ = [
     "_progress_queues", "_sse_encode",
     "_get_registry", "_get_op_logger", "_extract_source", "_safe_log_op",

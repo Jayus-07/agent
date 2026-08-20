@@ -212,3 +212,45 @@ python -m py_compile backend/app/api/routes/rag_upload.py → OK
 # 全量套件(含新增 e2e)
 887 passed, 3 skipped in 60.07s
 ```
+
+---
+
+## 9. 遗留项收尾（2026-08-21）
+
+§3.2/§6 列出的优化项全部落地，代码 + 测试同步补齐。
+
+### 9.1 改动清单
+
+| 项 | 内容 | 落点 |
+|---|---|---|
+| F6 | 扩展名白名单单一来源：`PARSABLE_EXTS = frozenset(_PARSERS.keys())`，pipeline/indexer/loader/上传路由全部派生；上传新开放 `.markdown`、`.xlsx`（魔数校验同步扩展：docx/xlsx 检 `PK`、文本类检 NUL 字节） | `parser/__init__.py`、`pipeline.py`、`indexer.py`、`loader.py`、`rag_upload.py` |
+| F7 | 惰性导入：路由层 `IncrementalIndexer` 移入函数体；openpyxl 移入 `ExcelParser.parse()`；`_rag_shared` 清理未使用重导入。CI 补 `HF_HUB_OFFLINE: "1"` 免冷启动联网探测 | `rag_upload.py`、`excel_parser.py`、`_rag_shared.py`、`.github/workflows/rag_eval.yml` |
+| F9 | TOCTOU 收缩：`was_overwrite` 检测移到紧贴 backup+replace 前（原在函数入口） | `rag_upload.py` |
+| F10 | Content-Length 预检加 16KB multipart 余量（`_MULTIPART_OVERHEAD`），贴上限文件不误拒；精确上限仍由流式字节计数强制（双保险） | `rag_upload.py` |
+| F11 | 进度队列 TTL（30min）抽为 `cleanup_expired_progress_queues()`；server 启动时 create_task 后台 GC 循环（每 5 分钟，单轮异常不退出） | `rag_upload.py`、`server.py` |
+| P2 | embedding 批量化：`EMBED_BATCH_SIZE=32`（env 可配），批调 `embed_documents`（本地模型矩阵运算）；每批重试 3 次，耗尽降级逐条 `embed_query` 隔离失败点，保留逐 chunk 失败 span 语义；无 `embed_documents` 的实现自动回退逐条 | `indexer.py`、`config/rag.py` |
+| P2 | SSE 心跳：复查确认已实现于 `stream_upload_progress`（15s 超时发 `: keepalive` 注释帧），本轮补状态记录，无代码改动 | `rag_upload.py`（既有） |
+
+### 9.2 新增/更新测试
+
+| 测试文件 | 内容 |
+|---|---|
+| `test_rag_upload_mime.py` | 白名单断言扩为 6 扩展名；新增 `PARSABLE_EXTS` 派生一致性、markdown/xlsx MIME 登记、新扩展名正/反例参数化 |
+| `test_rag_upload_sync_impl.py` | 预检直检测试归零余量适配 F10；新增余量放行边界测试；新增 `TestProgressQueueGC`（4 例：过期清理/无时间戳残留/空注册表/GC 循环容错） |
+| `tests/rag/test_embed_batching.py`（新建） | 批路径切分、模拟问题前缀、空输入、批耗尽降级逐条、单点失败隔离、无 `embed_documents` 回退（7 例） |
+
+### 9.3 验证
+
+```text
+# 定向（mime + sync_impl + embed_batching）
+77 passed in 37.32s
+
+# 全量套件
+961 passed, 3 skipped in 401.44s
+```
+
+基线 919 → 961（新增 42 例），零回归。
+
+### 9.4 后续（非收尾，需单独立项）
+
+- P3：文档删除/重索引链路新一轮专项审查（删除时的孤儿向量/BM25/registry 残留等）。

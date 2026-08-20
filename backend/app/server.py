@@ -136,6 +136,17 @@ async def cleanup_upload_artifacts():
     threading.Thread(target=_clean, daemon=True, name="upload-artifact-cleanup").start()
 
 
+# ═══════════════════════════════════════════════
+# F11: 进度队列定时清理（无上传流量时过期队列不再永久滞留）
+# ═══════════════════════════════════════════════
+@app.on_event("startup")
+async def start_progress_queue_gc():
+    """后台周期清理过期 SSE 进度队列（默认每 5 分钟一轮）。"""
+    import asyncio
+    from backend.app.api.routes.rag_upload import progress_queue_gc_loop
+    asyncio.create_task(progress_queue_gc_loop(), name="progress-queue-gc")
+
+
 # ═══════════════════════════════════════════════════
 # 启动时后台预热 MultiAgent（避免首请求 5-15s 图编译）
 # ═══════════════════════════════════════════════════

@@ -5,7 +5,8 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
 from backend.app.api.deps import get_rag_pipeline, require_rag_ready
 from backend.config.rag import RAG_MAX_FILE_SIZE, RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE, RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS
-from backend.rag.indexing.indexer import IncrementalIndexer
+# F7: IncrementalIndexer 不在模块顶层导入（导入链含 langchain/tracer 等重依赖），
+# 改为 _do_index_sync 内惰性导入，路由模块冷启动不再被拖慢。
 from backend.rag.progress_listener import ProgressListener
 # 显式导入替代 import *（详见 rag_documents.py 同处注释）
 from backend.app.api.routes._rag_shared import (
@@ -202,22 +203,74 @@ def cleanup_stale_upload_artifacts(docs_dir: str, tmp_dir: str,
     return counts
 
 
-# ============ MIME 白名单（P0-2 收紧）============
+# ============ F11: 进度队列过期清理 ============
+# 背景:旧实现的过期清理仅在新上传时触发（sync_upload_impl 内联），
+# 无上传流量时过期队列永久滞留。现抽为独立函数，除上传入口复用外，
+# 由 server 启动的后台定时任务周期性驱动。
+def cleanup_expired_progress_queues() -> int:
+    """清理超过 PROGRESS_QUEUE_TTL_SECONDS 的进度队列，返回清理条数。
+
+    安全:队列残留只发生在客户端从未订阅 SSE 且后台任务已结束的极端场景；
+    超 30 分钟的队列不可能仍有活跃消费者（后台索引远超此时长）。
+    """
+    now = time.time()
+    expired = [uid for uid, q in _progress_queues.items()
+               if getattr(q, "_created_at", 0) < now - PROGRESS_QUEUE_TTL_SECONDS]
+    for uid in expired:
+        _progress_queues.pop(uid, None)
+    if expired:
+        logger.info(f"[RAG] 清理过期进度队列 {len(expired)} 个")
+    return len(expired)
+
+
+async def progress_queue_gc_loop(interval_seconds: float = 300) -> None:
+    """后台定时清理过期进度队列（F11），由 server 启动时 create_task。
+
+    异常不退出循环 — GC 任务自身挂掉比队列滞留更糟，单轮失败只告警。
+    """
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            cleanup_expired_progress_queues()
+        except Exception as e:
+            logger.warning(f"[RAG] 进度队列定时清理异常: {e}")
+
+
+# ============ MIME 白名单（P0-2 收紧 / F6 单一来源）============
 # 设计要点：
-#   1. content_type 为空时（curl 命令行场景）由 _validate_mime 空值分支提前放行，
+#   1. 支持的扩展名从解析器注册表 PARSABLE_EXTS 派生（F6 单一来源），
+#      与解析层永远一致；新增解析器自动对上传开放，无需同步多处名单。
+#   2. content_type 为空时（curl 命令行场景）由 _validate_mime 空值分支提前放行，
 #      落盘后靠魔数校验兜底；白名单表只登记"显式声明时允许的具体 MIME"。
 #      历史教训：曾在表里列 octet-stream 作兜底，但该条目永不可达
 #      （空 content_type 提前返回、显式 octet-stream 前置拒绝），已清理防误导。
-#   2. PDF 不接受 octet-stream（PDF 是二进制格式，octet-stream 兜底没意义）。
-#   3. 模块级常量，方便纯函数 import 测试。
+#   3. PDF 不接受 octet-stream（PDF 是二进制格式，octet-stream 兜底没意义）。
+#   4. 模块级常量，方便纯函数 import 测试。
+from backend.rag.preprocessing.parser import PARSABLE_EXTS
+
+_MIME_BY_EXT: dict[str, set[str]] = {
+    "pdf":      {"application/pdf"},
+    "md":       {"text/markdown", "text/plain"},
+    "markdown": {"text/markdown", "text/plain"},
+    "txt":      {"text/plain"},
+    "docx":     {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+    "xlsx":     {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+}
+
 ALLOWED_MIME_TYPES: dict[str, set[str]] = {
-    "pdf":  {"application/pdf"},
-    "md":   {"text/markdown", "text/plain"},
-    "txt":  {"text/plain"},
-    "docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+    ext: mimes for ext, mimes in _MIME_BY_EXT.items()
+    if f".{ext}" in PARSABLE_EXTS
 }
 
 SUPPORTED_EXTS: frozenset[str] = frozenset(ALLOWED_MIME_TYPES.keys())
+
+# F10: Content-Length 预检余量 — multipart 封装（boundary + 头字段）比裸文件大
+# 几百字节到几 KB，贴上限的文件会被误拒；预检放宽一个余量，
+# 精确上限仍由 sync_upload_impl 流式字节计数强制执行（双保险不放松）。
+_MULTIPART_OVERHEAD = 16 * 1024
+
+# F11: 进度队列过期阈值（与 sync_upload_impl 内联清理同口径）
+PROGRESS_QUEUE_TTL_SECONDS = 1800
 
 
 def _validate_mime(ext: str, content_type: str | None) -> tuple[bool, str]:
@@ -281,7 +334,8 @@ async def upload_document(request: Request, file: UploadFile = File(...),
 
     max_size = RAG_MAX_FILE_SIZE * 1024 * 1024
     cl = request.headers.get("content-length")
-    if cl and cl.isdigit() and int(cl) > max_size:
+    # F10: 预检带 multipart 余量，贴上限文件不误拒；超限仍由流式计数拦截
+    if cl and cl.isdigit() and int(cl) > max_size + _MULTIPART_OVERHEAD:
         return {"ok": False, "error": f"file too large (max {RAG_MAX_FILE_SIZE}MB)"}
 
     try:
@@ -348,10 +402,9 @@ async def sync_upload_impl(
     except ValueError:
         return {"ok": False, "error": "invalid path"}
 
-    # P0-X: 检测是否覆盖已存在的同名文件 — 决定 cleanup 策略
-    # 覆盖场景下 _cleanup_failed_upload 必须保留源文件,
-    # 因为 atomic rename 已经覆盖,删除会丢用户原文件。
-    was_overwrite = os.path.isfile(final_path)
+    # F9: was_overwrite 检测移到 os.replace 前一刻（原在函数入口，与 replace
+    # 隔了整段上传+校验流程，TOCTOU 窗口内并发同名上传可基于陈旧状态决策
+    # cleanup 策略）。贴近 replace 后窗口缩到备份+replace 两条语句。
 
     ext = safe_name.rsplit(".", 1)[-1].lower()
     upload_id = uuid.uuid4().hex[:12]
@@ -362,14 +415,11 @@ async def sync_upload_impl(
     # 让前端"上传文件"阶段显示准确值，而非被减法逻辑吞掉为 0
     _upload_t0_sync = time.time()
 
-    now = time.time()
-    expired = [uid for uid, q in _progress_queues.items()
-               if getattr(q, "_created_at", 0) < now - 1800]
-    for uid in expired:
-        _progress_queues.pop(uid, None)
+    # F11: 过期队列清理抽为独立函数（定时 GC 复用同一逻辑）
+    cleanup_expired_progress_queues()
 
     queue: Queue = Queue()
-    queue._created_at = now
+    queue._created_at = time.time()
     _progress_queues[upload_id] = queue
 
     # 进度推送: 在 async context 直接 queue.put_nowait (因为是 asyncio.Queue, 跨 coroutine 同一 loop OK)
@@ -425,9 +475,10 @@ async def sync_upload_impl(
         _magic_ok = True
         if ext == "pdf" and not head.startswith(b"%PDF-"):
             _magic_ok = False
-        elif ext == "docx" and not head.startswith(b"PK\x03\x04"):
+        elif ext in ("docx", "xlsx") and not head.startswith(b"PK\x03\x04"):
+            # F6: xlsx 同为 OOXML zip 容器，魔数与 docx 一致
             _magic_ok = False
-        elif ext in ("md", "txt") and b"\x00" in head:
+        elif ext in ("md", "markdown", "txt") and b"\x00" in head:
             # P2: 文本格式无魔数可查,用 NUL 字节探测拒绝二进制伪装。
             # 历史教训:P0-1 二进制/乱码文件曾直接进入 doc_db。
             _magic_ok = False
@@ -437,6 +488,9 @@ async def sync_upload_impl(
             except OSError:
                 pass
             return {"ok": False, "error": f"file is corrupted or not a valid .{ext} file (magic check failed)"}
+        # F9: 覆盖检测紧贴 replace — P0-X: 覆盖场景下 _cleanup_failed_upload
+        # 必须保留源文件（atomic rename 已覆盖，删除会丢用户原文件）。
+        was_overwrite = os.path.isfile(final_path)
         # P2: 覆盖场景先把旧版本备份到 .bak — 索引成功由后台任务清理,
         # 索引失败时旧内容仍可人工恢复(旧实现 os.replace 后旧版本不可逆丢失)。
         if was_overwrite:
@@ -715,6 +769,8 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
         if _pipe_elapsed > 3000:
             logger.info(f"[RAG] 管道初始化耗时 {_pipe_elapsed}ms（可能预热未完成）")
         listener = ProgressListener(sync_emit)
+        # F7: 惰性导入（模块顶层已移除该重依赖导入）
+        from backend.rag.indexing.indexer import IncrementalIndexer
         indexer = IncrementalIndexer(
             docs_dir=DOCS_DIRECTORY,
             vectordb=pipeline.vectordb,

@@ -8,13 +8,14 @@ from langchain_core.documents import Document
 
 from backend.rag.preprocessing.cleaner import DocumentCleaner
 from backend.rag.preprocessing.metadata import classify_doc_type
-from backend.rag.preprocessing.parser import parse_file
+from backend.rag.preprocessing.parser import parse_file, PARSABLE_EXTS
 from backend.rag.preprocessing.structure_analyzer import StructureAnalyzer
 from backend.rag.preprocessing.chunking import ChunkStrategyRouter
 from backend.rag.preprocessing.ast import walk
 from backend.shared.logger import logger
 
-_SUPPORTED_EXTS = {".md", ".markdown", ".txt", ".pdf", ".docx", ".xlsx"}
+# F6: 从解析器注册表派生（单一来源），不再硬编码
+_SUPPORTED_EXTS = set(PARSABLE_EXTS)
 
 
 def parse_and_chunk(file_path: str, doc_type_hint: str = "") -> List[Document]:
