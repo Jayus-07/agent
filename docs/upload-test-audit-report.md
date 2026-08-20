@@ -254,3 +254,69 @@ python -m py_compile backend/app/api/routes/rag_upload.py → OK
 ### 9.4 后续（非收尾，需单独立项）
 
 - P3：文档删除/重索引链路新一轮专项审查（删除时的孤儿向量/BM25/registry 残留等）。
+
+---
+
+## 10. 浏览器实测 + Trace 链路分析（2026-08-21）
+
+### 10.1 实测方式
+
+本地启动后端（uvicorn :8000）+ 前端（Next.js :3000），浏览器实测 4 问
+（退货流程/库存盘点/出口退税税率/火星移民 hard negative），并回读
+`trace_store.db` 中的真实 span 树交叉分析。
+
+### 10.2 结论：效果主因是 LLM 环境，非代码回归
+
+- 检索接口 `/rag/search` 命中正常（退货流程 top chunks 精准）；
+- 但 `.env` 因 DeepSeek API 402（余额不足）已切到本地 Ollama `qwen2.5:3b`，
+  弱模型的 META 判定不可靠：trace 显示 evidence_gate_retrieval **top_score=0.714、
+  doc_count=10** 仍被 LLM 判 `can_answer=false, reason=no_evidence`；
+  另一问生成后被 faithfulness 层判 hallucination 拒答。
+- 路由也受弱模型影响：知识库问题（出口退税）被 router 派给 `sql.query`
+  而非 `rag.search`（confidence 0.7）。
+- **恢复云端 LLM（余额充值）后预期可复离线评测水平（pass 94% / reject 100%）。**
+
+### 10.3 实测发现并已修复的代码 bug（G8）
+
+**Reporter 降级文案泄漏内部执行细节**：全步骤失败时降级提示直接拼接
+`direct_executor` 生成的内部描述（实测回答中出现
+"- 直接执行 sql.query: 未找到相关信息"）。
+修复（`agents/reporter/reporter.py`）：新增 `_user_step_label`，降级文案只用
+用户可读标签（数据库查询/知识库检索/…）；技术错误 → "服务暂时不可用"，
+业务错误原文只进日志。配套新增 `test_reporter_degraded.py`（26 例，reporter 此前零覆盖）。
+
+### 10.4 trace 模块补测（此前缺口）
+
+| 文件 | 覆盖 |
+|---|---|
+| `test_trace_store.py`（新建 11 例） | save/get/list 往返、spans 剥离、重复幂等、`list_since`+`only_rejected`、`_MAX_ROWS` 驱逐、单例 |
+| `test_trace_middleware.py`（新建 7 例） | 无 trace 直通、sync/async 节点成功/异常 span、输出摘要截断 |
+| SSE 心跳（`test_rag_upload_sync_impl.py` +2 例） | 超时常量抽为 `SSE_KEEPALIVE_TIMEOUT_SECONDS`（生产 15s），测试 patch 毫秒级验证 keepalive 帧 + 断连后队列清理 |
+
+`tracer.py` 本体已有 3 个专项测试（538+233+307 行）覆盖充分，未改动。
+
+### 10.5 Trace 异常观察（记录，未修复 — 需单独立项）
+
+- 同一节点重复 span：router 出现两条（一条 0ms 带 elapsed_ms 指标、一条真实时长），疑双处埋点；
+- error span 丢错误信息：`skill-direct_1` status=error 但 `metrics.error=''`；
+- planner/critique/reporter 出现 sequence=0、duration=0ms 的空 span；
+- 前端 TIMEOUT 标签实为 `total_ms > sla_threshold_ms(10s)` 的 SLA 标记，
+  trace 自身 status=success，语义易混淆；
+- 同一问题产生两条 trace（32s+25s），疑前端重复提交。
+
+### 10.6 前端 UI 问题（移交前端任务）
+
+历史会话恢复失效（?session= 后内容不加载）、流结束后"✍️ 生成回复"标签残留、
+窄视口（479px）输入框宽度被压为 0。
+
+### 10.7 验证
+
+```text
+# 本轮新增定向（trace_store 11 + trace_middleware 7 + reporter 26 + SSE 心跳 2）
+全部通过
+
+# 全量套件（含 reporter 修复 + 心跳常量抽取 + 全部新测试）
+1007 passed, 3 skipped in 401.51s
+```
+
+基线 961 → 1007（新增 46 例），零回归。

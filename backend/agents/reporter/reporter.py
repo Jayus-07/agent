@@ -39,6 +39,22 @@ def reporter_node(state: dict) -> dict:
 # 核心生成函数
 # =====================================================
 
+# capability → 用户可读标签（与 trace_middleware 标签体系对齐）。
+# 降级提示是面向用户的文案，绝不能泄漏内部步骤描述
+# （如 direct_executor 生成的 "直接执行 sql.query"，浏览器实测发现）。
+_CAP_USER_LABELS = {
+    "sql.query": "数据库查询",
+    "rag.search": "知识库检索",
+    "report": "报告生成",
+    "business_analysis": "业务分析",
+    "workflow": "工作流",
+}
+
+
+def _user_step_label(sr: dict) -> str:
+    """step → 用户可读标签；未知 capability 统一为泛称，不泄漏内部命名。"""
+    return _CAP_USER_LABELS.get(sr.get("capability", ""), "信息查询")
+
 def generate_final_answer(
     question: str,
     step_results: dict,
@@ -64,16 +80,18 @@ def generate_final_answer(
     if not all_success:
         failed_descs = []
         for sid, sr in step_results.items():
-            desc = sr.get("description", sid)
+            label = _user_step_label(sr)
             err = sr.get("error", "")
             if err and _is_technical_error(err):
                 # 技术错误不暴露给用户，只记日志
                 logger.error(f"[Reporter] step={sid} 技术错误: {err[:200]}")
-                failed_descs.append(f"- {desc}: 服务暂时不可用")
+                failed_descs.append(f"- {label}: 服务暂时不可用")
             elif err:
-                failed_descs.append(f"- {desc}: {err[:100]}")
+                # 业务错误保留提示，但只记日志原始错误（可能含内部细节）
+                logger.warning(f"[Reporter] step={sid} 执行失败: {err[:200]}")
+                failed_descs.append(f"- {label}: 未找到相关信息")
             else:
-                failed_descs.append(f"- {desc}: 未找到相关信息")
+                failed_descs.append(f"- {label}: 未找到相关信息")
         logger.info(f"[Reporter] 无有效输出，返回降级提示")
         return (
             f"## 抱歉\n\n"
@@ -434,6 +452,8 @@ __all__ = [
     "_extract_sources_from_steps",
     "_extract_rag_references",
     "_is_step_successful",
+    "_is_technical_error",
+    "_user_step_label",
     "_format_step_outputs",
     "_fallback_summary",
 ]

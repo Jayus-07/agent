@@ -272,6 +272,10 @@ _MULTIPART_OVERHEAD = 16 * 1024
 # F11: 进度队列过期阈值（与 sync_upload_impl 内联清理同口径）
 PROGRESS_QUEUE_TTL_SECONDS = 1800
 
+# P2: SSE 心跳间隔（秒）— 无事件期间发 ": keepalive" 注释帧防代理断连。
+# 抽为常量便于测试 patch（生产值 15s，测试中可缩到毫秒级）。
+SSE_KEEPALIVE_TIMEOUT_SECONDS = 15.0
+
 
 def _validate_mime(ext: str, content_type: str | None) -> tuple[bool, str]:
     """校验 MIME 与扩展名一致性（纯函数）。
@@ -812,7 +816,8 @@ async def stream_upload_progress(upload_id: str):
         try:
             while True:
                 try:
-                    evt = await asyncio.wait_for(queue.get(), timeout=15)
+                    evt = await asyncio.wait_for(
+                        queue.get(), timeout=SSE_KEEPALIVE_TIMEOUT_SECONDS)
                 except asyncio.TimeoutError:
                     # P2 心跳:大文件索引期间可能数分钟无事件,
                     # 无心跳的 SSE 长连接容易被代理/网关断开

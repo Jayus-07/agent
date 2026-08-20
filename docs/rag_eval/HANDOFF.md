@@ -434,6 +434,26 @@ python -m backend.evaluation rag --dataset rag_test_kb.json
 
 ---
 
+### 12.7 2026-08-21 浏览器实测 + trace 模块补测 + Reporter 防泄漏修复
+
+详见 `docs/upload-test-audit-report.md` §10。要点：
+
+- **实测效果主因是 LLM 环境**：DeepSeek API 402 后 `.env` 切到本地 Ollama
+  qwen2.5:3b，弱模型 META 判定不可靠（trace 显示 top_score=0.714/doc_count=10
+  仍判 no_evidence；另有 hallucination 误拒）；检索层本身命中正常。
+  恢复云端 LLM 后预期可复离线评测水平。
+- **修复 G8 Reporter 泄漏**：降级文案不再拼内部步骤描述（"直接执行 sql.query"），
+  改用 `_user_step_label` 用户可读标签；`test_reporter_degraded.py` 26 例。
+- **trace 补测**：`test_trace_store.py` 11 例 + `test_trace_middleware.py` 7 例（此前零覆盖）；
+  SSE 心跳超时常量抽为 `SSE_KEEPALIVE_TIMEOUT_SECONDS` 并补 2 例测试。
+- **踩坑**：测试首入口导入 `backend.agents` 会触发循环导入（planner→tool_registry→graph），
+  需先 `import backend.orchestration.graph`。
+- **遗留观察**：router 重复 span、error span 丢错误信息、前端 TIMEOUT 语义/
+  会话恢复失效/窄视口布局 — 均记录于报告 §10.5/10.6，需单独立项。
+- 全量 **1007 passed, 3 skipped**（基线 961）。
+
+---
+
 ## 13. 快速参考
 
 ```bash

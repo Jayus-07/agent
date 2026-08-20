@@ -655,3 +655,55 @@ class TestUploadStreamEndpoint:
         payload = json.loads(data_lines[0][len("data: "):])
         assert "nonexistent" in payload["message"]
         assert "不存在或已过期" in payload["message"]
+
+    def test_keepalive_heartbeat_emitted_when_idle(self, client, monkeypatch):
+        """P2 心跳：队列长时间无事件时，SSE 必须周期性发 ': keepalive' 注释帧，
+        否则大文件索引期间（数分钟无事件）连接会被代理/网关断开。"""
+        import threading
+        from backend.app.api.routes import rag_upload as ru
+
+        # 心跳间隔缩到毫秒级，避免测试等真实 15s
+        monkeypatch.setattr(ru, "SSE_KEEPALIVE_TIMEOUT_SECONDS", 0.05)
+
+        queue = asyncio.Queue()
+        queue._created_at = time.time()
+        monkeypatch.setattr(ru, "_progress_queues", {"uid_keepalive": queue})
+
+        tc, _ = client
+        chunks: list = []
+
+        def finalize():
+            # 等至少一轮心跳发出后推 None 终止流
+            time.sleep(0.3)
+            queue.put_nowait(None)
+
+        t = threading.Thread(target=finalize, daemon=True)
+        t.start()
+        with tc.stream("GET", "/upload/uid_keepalive/stream") as resp:
+            for chunk in resp.iter_text():
+                chunks.append(chunk)
+        t.join(timeout=5)
+
+        text = "".join(chunks)
+        assert ": keepalive" in text, f"无事件期间应发心跳注释帧，实际: {text!r}"
+        # SSE 断开后队列被清理（防内存泄漏）
+        assert "uid_keepalive" not in ru._progress_queues
+
+    def test_events_forwarded_then_stream_ends(self, client, monkeypatch):
+        """正常事件路径：队列事件透传为 data 帧，None 哨兵终止流。"""
+        import json
+        from backend.app.api.routes import rag_upload as ru
+
+        monkeypatch.setattr(ru, "SSE_KEEPALIVE_TIMEOUT_SECONDS", 5.0)
+        queue = asyncio.Queue()
+        queue._created_at = time.time()
+        queue.put_nowait({"stage": "uploading", "message": "ok"})
+        queue.put_nowait(None)
+        monkeypatch.setattr(ru, "_progress_queues", {"uid_ev": queue})
+
+        tc, _ = client
+        resp = tc.get("/upload/uid_ev/stream")
+        data_lines = [l for l in resp.text.splitlines() if l.startswith("data: ")]
+        assert len(data_lines) == 1
+        payload = json.loads(data_lines[0][len("data: "):])
+        assert payload["stage"] == "uploading"
