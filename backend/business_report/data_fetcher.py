@@ -29,32 +29,41 @@ from backend.shared.logger import logger
 #   templates: 可选模板列表（第一个为默认）
 #   charts:    自动图表配置 [{"type": "bar"|"pie"|"line", "x": ..., "y": ..., "title": ...}]
 
+# fix f15：原 SQL 基于理想 schema（orders/channels/skus/campaigns…）编写，
+# 与真实业务库（agent_business）不匹配 → "关系 orders 不存在"，日报生成
+# 3 次重试全败。以下 SQL 全部对齐真实 schema：order.*/inventory.*/product.*/
+# customer.*/finance.*/crawler.*（schema-qualified，列名保留模板期望的中文别名，
+# 模板引擎缺列时自动降级 fallback 表格，不会报错）。
+
 REPORT_REGISTRY: Dict[str, Dict[str, Any]] = {
     # ═══════ 销售日报 ═══════
     "daily_sales": {
         "name": "销售日报",
         "source": {
             "type": "sql",
+            # 窗口基于最新订单时间滚动（而非 CURRENT_DATE）：
+            # demo 数据时间戳固定，固定窗口必空；生产环境效果等同近7日。
             "sql": """
+                WITH bounds AS (
+                    SELECT MAX(created_at) AS latest FROM "order"."orders"
+                )
                 SELECT
-                    DATE(o.placed_at) AS 日期,
-                    c.code AS 渠道,
-                    COUNT(DISTINCT o.order_id) AS 订单数,
-                    SUM(o.order_total) AS 销售额,
+                    DATE(o.created_at) AS 日期,
+                    '线上' AS 渠道,
+                    COUNT(DISTINCT o.id) AS 订单数,
+                    SUM(o.total_amount) AS 销售额,
                     COUNT(DISTINCT o.customer_id) AS 下单客户数,
-                    ROUND(AVG(o.order_total), 2) AS 客单价
-                FROM orders o
-                LEFT JOIN channels c ON c.channel_id = o.channel_id
-                WHERE o.placed_at >= CURRENT_DATE - INTERVAL '7 days'
-                  AND o.status NOT IN ('cancelled')
-                GROUP BY DATE(o.placed_at), c.code
-                ORDER BY DATE(o.placed_at) DESC, 销售额 DESC
+                    ROUND(AVG(o.total_amount), 2) AS 客单价
+                FROM "order"."orders" o, bounds b
+                WHERE o.created_at >= b.latest - INTERVAL '7 days'
+                  AND COALESCE(o.status, '') <> 'cancelled'
+                GROUP BY DATE(o.created_at)
+                ORDER BY DATE(o.created_at) DESC
             """,
         },
         "templates": ["daily_sales.j2"],
         "charts": [
             {"type": "line", "x": "日期", "y": "销售额", "title": "近7日销售额趋势"},
-            {"type": "bar", "x": "渠道", "y": "订单数", "title": "各渠道订单数对比"},
         ],
     },
     # ═══════ 商品动销分析 ═══════
@@ -64,25 +73,19 @@ REPORT_REGISTRY: Dict[str, Dict[str, Any]] = {
             "type": "sql",
             "sql": """
                 SELECT
-                    p.name AS 产品名称,
-                    b.name AS 品牌,
+                    p.product_name AS 产品名称,
+                    p.brand AS 品牌,
                     COUNT(DISTINCT oi.order_id) AS 销售订单数,
                     SUM(oi.quantity) AS 销售数量,
-                    SUM(oi.line_total) AS 销售额,
-                    ROUND(AVG(s.cost_price * oi.quantity), 2) AS 成本合计,
-                    ROUND(SUM(oi.line_total) - SUM(s.cost_price * oi.quantity), 2) AS 毛利,
+                    SUM(oi.price) AS 销售额,
+                    ROUND(SUM(oi.price - oi.cost * oi.quantity), 2) AS 毛利,
                     ROUND(
-                        (SUM(oi.line_total) - SUM(s.cost_price * oi.quantity))
-                        / NULLIF(SUM(oi.line_total), 0) * 100, 1
+                        SUM(oi.price - oi.cost * oi.quantity)
+                        / NULLIF(SUM(oi.price), 0) * 100, 1
                     ) AS 毛利率
-                FROM order_items oi
-                JOIN skus s ON s.sku_id = oi.sku_id
-                JOIN products p ON p.product_id = s.product_id
-                LEFT JOIN brands b ON b.brand_id = p.brand_id
-                JOIN orders o ON o.order_id = oi.order_id
-                WHERE o.placed_at >= CURRENT_DATE - INTERVAL '30 days'
-                  AND o.status NOT IN ('cancelled', 'refunded')
-                GROUP BY p.name, b.name
+                FROM "order"."order_items" oi
+                JOIN product.products p ON p.id = oi.product_id
+                GROUP BY p.product_name, p.brand
                 ORDER BY 销售额 DESC
                 LIMIT 50
             """,
@@ -101,65 +104,54 @@ REPORT_REGISTRY: Dict[str, Dict[str, Any]] = {
             "sql": """
                 SELECT
                     w.name AS 仓库,
-                    w.type AS 仓库类型,
-                    p.name AS 产品名称,
-                    s.sku_id AS SKU编码,
-                    il.qty_on_hand AS 现有库存,
-                    il.qty_reserved AS 已预留,
-                    il.qty_in_transit AS 在途库存,
-                    (il.qty_on_hand - il.qty_reserved) AS 可用库存,
+                    p.product_name AS 产品名称,
+                    p.sku AS SKU编码,
+                    i.stock_quantity AS 现有库存,
+                    i.safety_stock AS 安全库存,
                     CASE
-                        WHEN (il.qty_on_hand - il.qty_reserved) <= 0 THEN '缺货'
-                        WHEN (il.qty_on_hand - il.qty_reserved) < 10 THEN '低库存'
-                        WHEN (il.qty_on_hand - il.qty_reserved) > 100 THEN '积压'
+                        WHEN i.stock_quantity <= 0 THEN '缺货'
+                        WHEN i.stock_quantity < i.safety_stock THEN '低库存'
+                        WHEN i.stock_quantity > i.safety_stock * 3 THEN '积压'
                         ELSE '正常'
                     END AS 库存状态
-                FROM inventory_levels il
-                JOIN skus s ON s.sku_id = il.sku_id
-                JOIN products p ON p.product_id = s.product_id
-                JOIN warehouses w ON w.warehouse_id = il.warehouse_id
-                WHERE w.is_active = TRUE
-                ORDER BY 可用库存 ASC
+                FROM inventory.inventory i
+                JOIN inventory.warehouses w ON w.id = i.warehouse_id
+                JOIN product.products p ON p.id = i.product_id
+                ORDER BY 现有库存 ASC
                 LIMIT 100
             """,
         },
         "templates": ["inventory_health.j2"],
         "charts": [
             {"type": "pie", "x": "库存状态", "y": None, "title": "库存状态分布"},
-            {"type": "bar", "x": "仓库", "y": "可用库存", "title": "各仓库可用库存"},
+            {"type": "bar", "x": "仓库", "y": "现有库存", "title": "各仓库库存量"},
         ],
     },
-    # ═══════ 广告效果分析 ═══════
+    # ═══════ 竞品价格监控（demo 库无广告投放数据，改用 crawler 域） ═══════
     "ad_performance": {
-        "name": "广告效果分析报告",
+        "name": "竞品价格监控报告",
         "source": {
             "type": "sql",
             "sql": """
                 SELECT
-                    c.channel AS 广告平台,
-                    c.name AS 活动名称,
-                    c.type AS 活动类型,
-                    c.status AS 状态,
-                    SUM(sr.spend) AS 总花费,
-                    SUM(sr.impressions) AS 总展示,
-                    SUM(sr.clicks) AS 总点击,
-                    SUM(sr.conversions) AS 总转化,
-                    SUM(sr.sales) AS 广告销售额,
-                    ROUND(SUM(sr.clicks)::NUMERIC / NULLIF(SUM(sr.impressions), 0) * 100, 2) AS CTR,
-                    ROUND(SUM(sr.spend)::NUMERIC / NULLIF(SUM(sr.clicks), 0), 2) AS CPC,
-                    ROUND(SUM(sr.spend)::NUMERIC / NULLIF(SUM(sr.sales), 0) * 100, 2) AS ACoS,
-                    ROUND(SUM(sr.sales)::NUMERIC / NULLIF(SUM(sr.spend), 0), 2) AS ROAS
-                FROM campaigns c
-                JOIN spend_records sr ON sr.campaign_id = c.campaign_id
-                WHERE sr.date >= CURRENT_DATE - INTERVAL '30 days'
-                GROUP BY c.channel, c.name, c.type, c.status
-                ORDER BY 总花费 DESC
+                    cp.platform AS 平台,
+                    cp.brand AS 品牌,
+                    cp.product_name AS 商品名称,
+                    cp.category AS 品类,
+                    MIN(price.price) AS 最低价,
+                    ROUND(AVG(price.price), 2) AS 均价,
+                    MAX(price.crawl_time) AS 最近抓取时间
+                FROM crawler.competitor_products cp
+                JOIN crawler.competitor_price price ON price.product_id = cp.id
+                WHERE price.crawl_time >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+                GROUP BY cp.platform, cp.brand, cp.product_name, cp.category
+                ORDER BY 均价 DESC
+                LIMIT 50
             """,
         },
         "templates": ["ad_performance.j2"],
         "charts": [
-            {"type": "bar", "x": "活动名称", "y": "ROAS", "title": "各活动 ROAS 对比"},
-            {"type": "bar", "x": "活动名称", "y": "ACoS", "title": "各活动 ACoS 对比"},
+            {"type": "bar", "x": "商品名称", "y": "均价", "title": "竞品均价对比"},
         ],
     },
     # ═══════ 订单履约报告 ═══════
@@ -169,32 +161,25 @@ REPORT_REGISTRY: Dict[str, Dict[str, Any]] = {
             "type": "sql",
             "sql": """
                 SELECT
-                    c.code AS 渠道,
+                    '线上' AS 渠道,
                     o.status AS 订单状态,
-                    COUNT(*) AS 订单数,
-                    SUM(o.order_total) AS 金额合计,
-                    ROUND(AVG(
-                        EXTRACT(EPOCH FROM (o.shipped_at - o.placed_at)) / 3600
-                    ), 1) AS 平均发货耗时小时,
-                    ROUND(AVG(
-                        EXTRACT(EPOCH FROM (o.delivered_at - o.placed_at)) / 3600
-                    ), 1) AS 平均签收耗时小时,
-                    COUNT(CASE WHEN o.status = 'refunded' THEN 1 END) AS 退款订单数,
+                    COUNT(DISTINCT o.id) AS 订单数,
+                    SUM(o.total_amount) AS 金额合计,
+                    COUNT(DISTINCT r.order_id) AS 退款订单数,
                     ROUND(
-                        COUNT(CASE WHEN o.status = 'refunded' THEN 1 END)::NUMERIC
-                        / NULLIF(COUNT(*), 0) * 100, 2
+                        COUNT(DISTINCT r.order_id)::NUMERIC
+                        / NULLIF(COUNT(DISTINCT o.id), 0) * 100, 2
                     ) AS 退款率
-                FROM orders o
-                LEFT JOIN channels c ON c.channel_id = o.channel_id
-                WHERE o.placed_at >= CURRENT_DATE - INTERVAL '30 days'
-                GROUP BY c.code, o.status
-                ORDER BY c.code, 订单数 DESC
+                FROM "order"."orders" o
+                LEFT JOIN "order"."refunds" r ON r.order_id = o.id
+                WHERE o.created_at >= CURRENT_DATE - INTERVAL '30 days'
+                GROUP BY o.status
+                ORDER BY 订单数 DESC
             """,
         },
         "templates": ["order_fulfillment.j2"],
         "charts": [
             {"type": "pie", "x": "订单状态", "y": "订单数", "title": "订单状态分布"},
-            {"type": "bar", "x": "渠道", "y": "平均签收耗时小时", "title": "各渠道平均签收耗时"},
         ],
     },
     # ═══════ 客户分析 ═══════
@@ -204,27 +189,19 @@ REPORT_REGISTRY: Dict[str, Dict[str, Any]] = {
             "type": "sql",
             "sql": """
                 SELECT
-                    cus.country AS 国家,
-                    cus.segment AS 客户分层,
-                    COUNT(DISTINCT cus.customer_id) AS 客户数,
-                    ROUND(AVG(cus.lifetime_value), 2) AS 平均LTV,
-                    ROUND(AVG(cus.order_count), 1) AS 平均订单数,
-                    COUNT(CASE WHEN cus.last_order_at >= CURRENT_DATE - INTERVAL '30 days'
-                          THEN 1 END) AS 近30天活跃,
-                    ROUND(
-                        COUNT(CASE WHEN cus.last_order_at >= CURRENT_DATE - INTERVAL '30 days'
-                          THEN 1 END)::NUMERIC / NULLIF(COUNT(*), 0) * 100, 2
-                    ) AS 活跃率,
-                    SUM(cus.order_count) AS 累计订单总数
-                FROM customers cus
-                GROUP BY cus.country, cus.segment
+                    cus.level AS 客户分层,
+                    cus.gender AS 性别,
+                    COUNT(*) AS 客户数,
+                    COUNT(CASE WHEN cus.register_time >= CURRENT_DATE - INTERVAL '30 days'
+                          THEN 1 END) AS 近30天新增
+                FROM customer.customers cus
+                GROUP BY cus.level, cus.gender
                 ORDER BY 客户数 DESC
             """,
         },
         "templates": ["customer_analysis.j2"],
         "charts": [
             {"type": "pie", "x": "客户分层", "y": "客户数", "title": "客户分层占比"},
-            {"type": "bar", "x": "国家", "y": "平均LTV", "title": "各国平均 LTV"},
         ],
     },
 }

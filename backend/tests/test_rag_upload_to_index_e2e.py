@@ -389,9 +389,13 @@ class TestUploadToIndexChain:
         assert success_ops
         assert all(op["doc_id"] for op in success_ops)
 
-        # 队列已 finalize:None 哨兵在尾部 + _progress_queues 清理
-        assert events[-1] is None  # 哨兵收尾,SSE 流可正常结束
-        assert res["upload_id"] not in route_env.queues
+        # 队列已 finalize:None 哨兵在尾部,SSE 流可正常结束
+        assert events[-1] is None  # 哨兵收尾
+        # f2b 后语义:_finalize_upload_queue 不主动 pop（保留终态事件给晚到的
+        # SSE 订阅者）,回收靠 SSE 断连 pop + TTL GC —— 此处队列条目必须仍在
+        assert res["upload_id"] in route_env.queues
+        # 模拟 SSE 消费者断连回收（event_stream finally 行为）
+        route_env.queues.pop(res["upload_id"], None)
 
     def test_same_content_second_upload_is_duplicate(self, route_env):
         """内容未变化的二次上传 → duplicate 短路,向量库不再写入。"""
@@ -410,7 +414,8 @@ class TestUploadToIndexChain:
         assert len(route_env.bm25.batches) == 1
         # 操作日志记录 duplicate
         assert any(op["result"] == "duplicate" for op in route_env.op_logs)
-        assert res2["upload_id"] not in route_env.queues
+        # f2b 后语义:finalize 不主动 pop,duplicate 终态事件同样保留给晚到订阅者
+        assert res2["upload_id"] in route_env.queues
 
     def test_changed_content_reindexes_and_updates_hash(self, route_env):
         """同名文件内容变化 → 重新索引,registry hash 更新为新内容。"""

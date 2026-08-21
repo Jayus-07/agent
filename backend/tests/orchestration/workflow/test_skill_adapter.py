@@ -98,9 +98,32 @@ class TestSkillCalls:
                 "backend.orchestration.workflow.skill_adapter.call_skill",
                 AsyncMock(return_value={"answer": "模板"}),
             ) as mock:
-                result = await call_rag({"query": "X", "kb_id": "ops"})
-                assert mock.call_args.args == ("rag", "rag.search", {"query": "X", "kb_id": "ops"})
+                result = await call_rag({"question": "X", "kb_id": "ops"})
+                assert mock.call_args.args == ("rag", "rag.search", {"question": "X", "kb_id": "ops"})
                 assert result == {"answer": "模板"}
+        asyncio.run(run())
+
+    def test_call_rag_converts_query_to_question(self):
+        """fix f10：旧调用方传 query 时兼容转为 question（RAGSkill 契约）。"""
+        async def run():
+            with mp(
+                "backend.orchestration.workflow.skill_adapter.call_skill",
+                AsyncMock(return_value={"answer": "模板"}),
+            ) as mock:
+                await call_rag({"query": "X", "kb_id": "ops"})
+                assert mock.call_args.args == ("rag", "rag.search", {"question": "X", "kb_id": "ops"})
+        asyncio.run(run())
+
+    def test_call_rag_normalizes_str_output(self):
+        """fix f14：RAGSkill output 为纯文本 str 时，归一为 {"answer": ...}，
+        调用方 .get() 不再报 'str' object has no attribute 'get'。"""
+        async def run():
+            with mp(
+                "backend.orchestration.workflow.skill_adapter.call_skill",
+                AsyncMock(return_value="纯文本答案"),
+            ):
+                result = await call_rag({"question": "X"})
+                assert result == {"answer": "纯文本答案"}
         asyncio.run(run())
 
     def test_call_report_passes_params(self):
@@ -112,6 +135,18 @@ class TestSkillCalls:
                 result = await call_report({"template": "daily"})
                 assert mock.call_args.args == ("report", "report.generate", {"template": "daily"})
                 assert result == {"content": "报告"}
+        asyncio.run(run())
+
+    def test_call_report_normalizes_str_output(self):
+        """fix f16b：generate_report_tool 返回纯 Markdown str 时，归一为
+        {"content": ...}，调用方 .get() 不再报 'str' object has no attribute 'get'。"""
+        async def run():
+            with mp(
+                "backend.orchestration.workflow.skill_adapter.call_skill",
+                AsyncMock(return_value="# 经营日报\n..."),
+            ):
+                result = await call_report({"report_type": "daily_sales"})
+                assert result == {"content": "# 经营日报\n..."}
         asyncio.run(run())
 
     def test_call_email_passes_params(self):

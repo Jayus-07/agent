@@ -168,6 +168,9 @@ class MultiAgentSystem:
         loop_count = state.get("_supervisor_loop_count", 0)
         degraded_steps = state.get("_degraded_steps", set())
         plan_changed = state.get("_plan_changed", False)
+        # fix f9：direct/workflow 模式未走 planner/critique/supervisor，
+        # 不合成这些节点的占位 span（旧实现会产出 0ms planner 噪声 span）。
+        route_mode = state.get("route_mode") or "plan"
 
         # 合成兜底策略（2026-08-21 浏览器实测整改）：
         # 中间件 span 命名为 {node_name} 或 {node_name}:{step_id}，只有节点真正
@@ -184,8 +187,8 @@ class MultiAgentSystem:
             # 中间件 skill span 命名：{node_name}:{step_id}
             return any(sid.endswith(f":{step_id}") for sid in existing_ids)
 
-        # ── Planner（仅在执行过且中间件 span 缺失时补）──
-        if nodes and not _has_node_span("planner"):
+        # ── Planner（仅在 plan 模式执行过且中间件 span 缺失时补）──
+        if route_mode == "plan" and nodes and not _has_node_span("planner"):
             planner_span = Span(
                 span_id="planner", parent_id="root",
                 name="Planner 拆解", type="agent",
@@ -195,7 +198,7 @@ class MultiAgentSystem:
             trace.spans.append(planner_span)
 
         # ── Critique ──
-        if state.get("_plan_critiqued") and not _has_node_span("critique"):
+        if route_mode == "plan" and state.get("_plan_critiqued") and not _has_node_span("critique"):
             crit_span = Span(
                 span_id="critique", parent_id="root",
                 name="计划审查", type="agent",
@@ -210,7 +213,7 @@ class MultiAgentSystem:
         executed_rounds = sum(
             1 for sid, sr in step_results.items()
             if sid in nodes and sr.get("status", "pending") not in ("pending", "running")
-        )
+        ) if route_mode == "plan" else 0
         for r in range(1, min(loop_count, executed_rounds) + 1):
             if _has_node_span("supervisor"):
                 break
@@ -300,6 +303,7 @@ class MultiAgentSystem:
         all_step_results = {}
         current_plan = dict(initial_state.get("plan", {}))
         plan_changed = False
+        route_mode = "plan"  # fix f8：捕获 Router 决策，trace 拓扑按模式构建
 
         try:
             for event in self._graph.stream(initial_state):
@@ -328,6 +332,10 @@ class MultiAgentSystem:
                     # reporter 只在 plan 模式下才是最终答案；direct/workflow 已经由 executor 产出
                     if not final_answer:
                         final_answer = node_output.get("final_answer", "")
+                elif node_name == "router":
+                    # fix f8：捕获路由模式供 trace 拓扑快照使用
+                    if node_output.get("route_mode"):
+                        route_mode = node_output["route_mode"]
                 elif node_name in ("planner", "critique"):
                     # 捕获 plan 用于 trace 重建
                     if node_output.get("plan"):
@@ -349,6 +357,7 @@ class MultiAgentSystem:
                 "_degraded_steps": set(),
                 "_plan_changed": plan_changed,
                 "final_answer": final_answer,
+                "route_mode": route_mode,  # fix f8
             }
             self._trace_from_state(trace, state_for_trace)
             _end_root(trace, metrics={"span_count": len(trace.spans) - 1})
@@ -386,12 +395,41 @@ def _end_root(trace, output: dict = None, metrics: dict = None,
 
 def _build_graph_snapshot(state: dict, loop_count: int,
                           degraded_steps: set) -> dict:
-    """从执行状态构建 LangGraph 拓扑快照。"""
+    """从执行状态构建 LangGraph 拓扑快照（按实际路由模式区分）。
+
+    fix f8：旧实现固定输出 planner→critique→supervisor 拓扑，
+    direct/workflow 模式实际未走这些节点，前端展示的拓扑与真实执行
+    路径不符。现按 route_mode 分支构建。
+    """
+    route_mode = state.get("route_mode") or "plan"
+
+    # ── direct / workflow 模式：Router → Executor → Reporter ──
+    if route_mode in ("direct", "workflow"):
+        executor_id = "skill_executor" if route_mode == "direct" else "workflow_executor"
+        executor_label = "直接执行" if route_mode == "direct" else "工作流执行"
+        graph_nodes = [
+            {"id": "router", "label": "路由决策"},
+            {"id": executor_id, "label": executor_label},
+            {"id": "reporter", "label": "Reporter 汇总"},
+        ]
+        graph_edges = [
+            {"source": "router", "target": executor_id, "label": route_mode},
+            {"source": executor_id, "target": "reporter", "label": "完成"},
+        ]
+        return {
+            "nodes": graph_nodes,
+            "edges": graph_edges,
+            "max_loops": MAX_SUPERVISOR_LOOPS,
+            "loop_count": loop_count,
+            "degradation_triggered": len(degraded_steps) > 0 if degraded_steps else False,
+        }
+
+    # ── plan 模式：Router → Planner → Critique → Supervisor → Skills → Reporter ──
     plan = state.get("plan", {})
     plan_nodes = plan.get("nodes", {})
 
-    # 静态节点（始终运行）
     graph_nodes = [
+        {"id": "router", "label": "路由决策"},
         {"id": "planner", "label": "Planner 拆解"},
         {"id": "critique", "label": "计划审查"},
         {"id": "supervisor", "label": "Supervisor 调度"},
@@ -404,8 +442,8 @@ def _build_graph_snapshot(state: dict, loop_count: int,
         })
     graph_nodes.append({"id": "reporter", "label": "Reporter 汇总"})
 
-    # 边（简化：planner→critique→supervisor→skills→supervisor→reporter）
     graph_edges = [
+        {"source": "router", "target": "planner", "label": "plan"},
         {"source": "planner", "target": "critique"},
         {"source": "critique", "target": "supervisor"},
     ]

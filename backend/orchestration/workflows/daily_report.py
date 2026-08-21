@@ -48,11 +48,13 @@ class DailyReport:
         2026-08-12 修正：原 FROM sales 表不存在，改为 order.order_items JOIN order.orders
         """
         logger.info("[DailyReport] Step fetch_sales 开始")
+        # 2026-08-21 fix f15 配套：窗口基于最新订单日期滚动（demo 数据时间戳
+        # 固定，CURRENT_DATE 窗口必空）；生产环境效果等同当日。
         result = await call_sql({
             "query": "SELECT oi.product_id, SUM(oi.quantity) as total_qty, SUM(oi.price) as total_amount "
                      'FROM "order"."order_items" oi '
                      'JOIN "order"."orders" o ON oi.order_id = o.id '
-                     "WHERE o.created_at::date = CURRENT_DATE "
+                     "WHERE o.created_at::date = (SELECT MAX(created_at)::date FROM \"order\".\"orders\") "
                      "GROUP BY oi.product_id"
         })
         return {"sales": result.get("rows", result)}
@@ -77,15 +79,18 @@ class DailyReport:
         2026-08-12 修正：原 FROM promotions 表不存在，改为 order.refunds（退款作为"活动"指标）
         """
         logger.info("[DailyReport] Step fetch_promotions 开始")
+        # 2026-08-21 fix f15 配套：同 fetch_sales，窗口基于最新退款时间滚动。
         result = await call_sql({
             "query": "SELECT order_id, product_id, refund_amount, reason, created_at "
-                     'FROM "order"."refunds" WHERE created_at > CURRENT_DATE - INTERVAL \'7 days\''
+                     'FROM "order"."refunds" '
+                     "WHERE created_at > (SELECT MAX(created_at) FROM \"order\".\"refunds\") - INTERVAL '7 days'"
         })
         return {"promotions": result.get("rows", result)}
 
     @step(
         depends_on=["fetch_sales", "fetch_inventory", "fetch_promotions"],
-        timeout_sec=30,
+        # fix f16b：本地小模型下 RAG 检索实测 ~44s，30s 必被掐；放宽余量。
+        timeout_sec=90,
         on_error="skip",
         name="RAG 查询日报模板",
     )
@@ -93,7 +98,7 @@ class DailyReport:
         """Step 4: 查日报模板（RAG）"""
         logger.info("[DailyReport] Step rag_query_template 开始")
         result = await call_rag({
-            "query": "日报模板 章节结构 异常判断标准",
+            "question": "日报模板 章节结构 异常判断标准",
             "kb_id": "analytics",
             "top_k": 3,
         })

@@ -17,6 +17,23 @@ from pathlib import Path
 from typing import Any, ClassVar, Protocol
 
 
+def normalize_where(f: dict | None) -> dict | None:
+    """归一化 filter 使其符合 ChromaDB where 语法。
+
+    Chroma 约束：where 顶层只能有一个键；多个条件必须包在单一算子内。
+    形如 {"kb_id": ..., "doc_type": ...} 的 flat 多键 dict 会抛
+    ValueError: Expected where to have exactly one operator（fix f6，
+    /rag/ask 500）。
+
+    规则:
+      - None / 空 dict / 单键 → 原样返回
+      - 多键（含 $or 与普通键混排）→ 每键拆为单条件，$and 包裹
+    """
+    if not f or len(f) <= 1:
+        return f
+    return {"$and": [{k: v} for k, v in f.items()]}
+
+
 def _sanitize_metadata(meta: dict) -> dict:
     """清洗 metadata 使其兼容 ChromaDB。
 
@@ -190,19 +207,19 @@ class ChromaKnowledgeStore(KnowledgeStore):
         self, query: str, k: int = 5, filter: dict | None = None,
     ) -> list[tuple[Any, float]]:
         return self._chroma.similarity_search_with_score(
-            query=query, k=k, filter=filter,
+            query=query, k=k, filter=normalize_where(filter),
         )
 
     def similarity_search(
         self, query: str, k: int = 5, filter: dict | None = None,
     ) -> list[Any]:
         return self._chroma.similarity_search(
-            query=query, k=k, filter=filter,
+            query=query, k=k, filter=normalize_where(filter),
         )
 
     def get(self, where: dict | None = None) -> dict:
         if where is not None:
-            return self._chroma.get(where=where)
+            return self._chroma.get(where=normalize_where(where))
         return self._chroma.get()
 
     # ---- 写入方法 ----
@@ -235,7 +252,7 @@ class ChromaKnowledgeStore(KnowledgeStore):
             self._chroma._collection.delete(ids=ids)
             return len(ids)
         if where is not None:
-            self._chroma._collection.delete(where=where)
+            self._chroma._collection.delete(where=normalize_where(where))
             return 0  # Chroma 不返回精确计数
         return 0
 

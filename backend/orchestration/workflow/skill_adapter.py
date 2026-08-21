@@ -101,17 +101,38 @@ async def call_sql(params: dict) -> dict:
 async def call_rag(params: dict) -> dict:
     """调 RAG Skill
 
-    params: {"query": "...", "kb_id": "analytics", "top_k": 5}
+    params: {"question": "...", "kb_id": "analytics", "top_k": 5}
+
+    fix f10：RAGSkill 参数契约是 question；旧调用方传 query 导致
+    pydantic 校验失败（question Field required），重试 3 次后步骤失败。
+    此处做 query → question 兼容转换。
+
+    fix f14：RAGSkill 的 output 是纯文本答案（str），调用方若直接
+    .get() 会报 'str' object has no attribute 'get'；在适配层边界
+    归一为 {"answer": ...} dict。
     """
-    return await call_skill("rag", "rag.search", params)
+    if "question" not in params and "query" in params:
+        params = {"question": params["query"],
+                  **{k: v for k, v in params.items() if k != "query"}}
+    output = await call_skill("rag", "rag.search", params)
+    if not isinstance(output, dict):
+        output = {"answer": output}
+    return output
 
 
 async def call_report(params: dict) -> dict:
     """调 Report Skill
 
-    params: {"template": "daily_report", "data": {...}}
+    params: {"report_type": "daily_sales", "filters": {...}}
+
+    fix f16b：ReportSkill（generate_report_tool）的 output 是纯 Markdown
+    str，调用方若直接 .get() 会报 'str' object has no attribute 'get'；
+    在适配层边界归一为 {"content": ...} dict（与 f14 同类边界归一）。
     """
-    return await call_skill("report", "report.generate", params)
+    output = await call_skill("report", "report.generate", params)
+    if not isinstance(output, dict):
+        output = {"content": output}
+    return output
 
 
 async def call_email(params: dict) -> dict:
