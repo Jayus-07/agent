@@ -37,7 +37,8 @@ async def search_knowledge(req: SearchRequest):
     if not query.strip():
         return {"query": query, "results": [], "error": "请输入检索词"}
     try:
-        pipeline = get_rag_pipeline()
+        # 事件循环线程不得直接等 pipeline 初始化锁 —— 移到工作线程
+        pipeline = await asyncio.to_thread(get_rag_pipeline)
         # 使用 chunk_retriever（CustomRetriever → ChromaDB 语义检索）
         retriever = getattr(pipeline, 'chunk_retriever', None)
         if not retriever:
@@ -64,7 +65,7 @@ async def search_knowledge(req: SearchRequest):
 async def rag_ask(req: RAGAskRequest):
     """知识库检索 + 大模型生成回答"""
     try:
-        pipeline = get_rag_pipeline()
+        pipeline = await asyncio.to_thread(get_rag_pipeline)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     kb_id = req.kb_id or "default"

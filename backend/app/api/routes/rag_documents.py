@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, D
 from fastapi.responses import StreamingResponse
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline, require_rag_ready, get_rag_status
+import asyncio
 import os
 import time
 
@@ -212,7 +213,7 @@ async def reject_pending_doc(doc_id: str, request: Request):
         # 级联清理（与 delete 一致，避免 rejected 文档残留孤儿向量/索引）
         warnings: list[str] = []
         try:
-            pipeline = get_rag_pipeline()
+            pipeline = await asyncio.to_thread(get_rag_pipeline)
             _purge_doc_vectors(doc_id, doc.get("file_path", ""), pipeline, warnings)
         except Exception as e:
             logger.warning(f"[RAG] reject 级联清理异常: {e}")
@@ -297,7 +298,7 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
             return {"ok": False, "error": f"文件不存在: {file_path}"}
 
         # 复用 pipeline 单例的 store/embedding（不再每次 new 加载模型；doc_db 路径与 upload 一致）
-        pipeline = get_rag_pipeline()
+        pipeline = await asyncio.to_thread(get_rag_pipeline)
         indexer = IncrementalIndexer(
             DOCS_DIRECTORY, pipeline.vectordb, pipeline.doc_db, pipeline.embedding, reg,
             bm25_store=pipeline.bm25_store,  # P0-1: 重索引后立即同步 BM25
@@ -382,7 +383,7 @@ async def delete_document(doc_id: str, request: Request):
             warnings.append("registry 中无活跃记录（可能已被删除）")
 
         # ②③④⑤ 级联清理向量/索引/文件（含 BM25）
-        pipeline = get_rag_pipeline()
+        pipeline = await asyncio.to_thread(get_rag_pipeline)
         _purge_doc_vectors(doc_id, file_path, pipeline, warnings)
 
         logger.info(f"[RAG] 已删除文档: {doc_id}" + (f"（{len(warnings)} 个警告）" if warnings else ""))
@@ -413,7 +414,7 @@ async def get_chunks(doc_id: str):
         # 从 ChromaDB 查询 chunk 实际内容（复用 pipeline store，不再 new embeddings）
         chunks = []
         try:
-            store = get_rag_pipeline().vectordb
+            store = (await asyncio.to_thread(get_rag_pipeline)).vectordb
             # 用公开 API get(where=...) 按 doc_id 获取所有 chunks
             results = store.get(where={"doc_id": doc_id})
             if results and results.get("ids"):

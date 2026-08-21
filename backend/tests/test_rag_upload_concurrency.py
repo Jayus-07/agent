@@ -50,7 +50,12 @@ class TestFileLocking:
         try:
             with pytest.raises(FileLockedByOtherError) as exc_info:
                 acquire_index_lock(str(f))
-            assert str(f) in str(exc_info.value) or "locked" in str(exc_info.value).lower()
+            msg = str(exc_info.value)
+            assert f.name in msg or "locked" in msg.lower()
+            # 信息防泄漏：报错只含文件名，不能带服务器绝对路径/持锁 pid
+            # （该文案会原样展示在前端与操作审计 detail 里）
+            assert str(f) not in msg
+            assert "holder_pid" not in msg
         finally:
             release_index_lock(fd1, str(f))
 

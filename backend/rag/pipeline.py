@@ -447,20 +447,23 @@ class RAGPipeline:
 
         mf: dict = {}
 
-        # KB Router → 候选 KB 列表 → $or filter
-        try:
-            router = KBRouter()
-            kb_result = router.route(question)
-            candidate_ids = [c["kb_id"] for c in kb_result.get("candidates", [])]
-            kb_filter = build_kb_filter(candidate_ids)
-            if kb_filter:
-                mf.update(kb_filter)
-        except Exception:
-            logger.debug("kb_filter 合并失败", exc_info=True)
-
-        # 兼容旧 kb_id 参数（显式指定时覆盖 Router）
-        if kb_id and kb_id not in ("*", "default"):
+        # 显式 kb_id 优先级最高：指定后跳过 Router 关键词推断。
+        # 否则推断出的 {"$or": [{"kb_id": ...}]} 会与 mf["kb_id"] 在 Chroma
+        # 顶层形成隐式 AND —— 两条件互斥，召回必为空 → 全量拒答。
+        explicit_kb = bool(kb_id and kb_id not in ("*", "default"))
+        if explicit_kb:
             mf["kb_id"] = kb_id
+        else:
+            # KB Router → 候选 KB 列表 → $or filter
+            try:
+                router = KBRouter()
+                kb_result = router.route(question)
+                candidate_ids = [c["kb_id"] for c in kb_result.get("candidates", [])]
+                kb_filter = build_kb_filter(candidate_ids)
+                if kb_filter:
+                    mf.update(kb_filter)
+            except Exception:
+                logger.debug("kb_filter 合并失败", exc_info=True)
 
         # QueryAnalyzer → doc_type / business_domain 过滤
         try:
@@ -567,14 +570,22 @@ import threading as _threading
 _pipeline_lock = _threading.Lock()
 _pipeline_singleton: RAGPipeline | None = None
 _pipeline_init_error: str | None = None
+_pipeline_initializing: bool = False
 
 
 def get_rag_pipeline() -> RAGPipeline:
-    """惰性初始化 RAGPipeline 单例（线程安全）。"""
-    global _pipeline_singleton, _pipeline_init_error
+    """惰性初始化 RAGPipeline 单例（线程安全，可能阻塞数十分钟）。
+
+    RAGPipeline() 构造含全量增量同步，期间持 _pipeline_lock。
+    【禁止】在事件循环线程直接调用 —— async 端点必须用
+    `await asyncio.to_thread(get_rag_pipeline)`，状态检查用非阻塞的
+    get_rag_pipeline_state()。
+    """
+    global _pipeline_singleton, _pipeline_init_error, _pipeline_initializing
     if _pipeline_singleton is None:
         with _pipeline_lock:
             if _pipeline_singleton is None:
+                _pipeline_initializing = True
                 try:
                     _pipeline_singleton = RAGPipeline()
                     _pipeline_init_error = None
@@ -582,7 +593,23 @@ def get_rag_pipeline() -> RAGPipeline:
                 except Exception as e:
                     _pipeline_init_error = str(e)
                     logger.error(f"[pipeline] RAGPipeline 初始化失败: {e}")
+                finally:
+                    _pipeline_initializing = False
     if _pipeline_init_error is not None and _pipeline_singleton is None:
         raise RuntimeError(f"RAG 服务不可用（重试中）: {_pipeline_init_error}")
     return _pipeline_singleton
+
+
+def get_rag_pipeline_state() -> dict:
+    """非阻塞状态查询 —— 不触碰 _pipeline_lock，可在事件循环线程安全调用。
+
+    返回 {"state": "ready"|"initializing"|"error"|"not_started", ...}
+    """
+    if _pipeline_singleton is not None:
+        return {"state": "ready"}
+    if _pipeline_initializing:
+        return {"state": "initializing", "message": "RAG 管道初始化中（含索引同步），请稍后重试"}
+    if _pipeline_init_error is not None:
+        return {"state": "error", "error": _pipeline_init_error}
+    return {"state": "not_started"}
 

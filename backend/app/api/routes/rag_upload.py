@@ -115,8 +115,11 @@ def acquire_index_lock(filepath: str) -> int:
             holder_pid = f.readline().strip() or None
     except OSError:
         pass
+    # 细节（服务器绝对路径/持锁 pid）只进服务端日志：异常信息会原样展示在
+    # 前端与操作审计 detail 里，不应泄漏服务器文件系统结构与进程号
+    logger.warning(f"[RAG] 锁竞争拒绝: {filepath} (holder_pid={holder_pid})")
     raise FileLockedByOtherError(
-        f"文件 {filepath} 正在被另一个上传请求处理（holder_pid={holder_pid}）"
+        f"文件 {os.path.basename(filepath)} 正在被另一个上传请求处理，请稍后重试"
     )
 
 
@@ -530,12 +533,16 @@ async def sync_upload_impl(
 
 
 async def _finalize_upload_queue(upload_id: str) -> None:
-    """P1-3：向队列放 None 哨兵（让 SSE 流结束）+ 主动从 _progress_queues 弹出。
+    """P1-3：向队列放 None 哨兵（让 SSE 流结束）。
 
     三处分支（失败 / duplicate / 成功）的统一收尾。
-    之前的实现只在 SSE 断连时 pop（line 608）,如果客户端没订阅 SSE,队列残留,
-    后台索引完成后 queue 里堆积的事件 + queue 字典条目都泄漏。
-    现在后台任务自己负责清理,双重 pop 幂等安全。
+    注意：这里【不】主动 pop 队列 —— 后台索引可能先于客户端订阅 SSE 完成
+    （小文件场景），若提前 pop，晚到的订阅者会收到“upload_id 不存在或已过期”
+    而丢失全部终态事件（done/error/duplicate）。保留队列 + None 哨兵后，
+    晚到的订阅者仍可完整消费事件流；队列回收交给两条既有路径：
+      1. SSE event_stream 断连时 pop（finally 块）；
+      2. cleanup_expired_progress_queues 定时 GC（PROGRESS_QUEUE_TTL_SECONDS）
+         兜底客户端从未订阅的残留。
     """
     queue = _progress_queues.get(upload_id)
     if queue is not None:
@@ -543,8 +550,6 @@ async def _finalize_upload_queue(upload_id: str) -> None:
             await queue.put(None)
         except Exception as put_err:
             logger.warning(f"[RAG] queue.put(None) 失败 ({upload_id}): {put_err}")
-    # 主动 pop — 如果 SSE 已经断连并 pop 过,这里 pop 返回 None,无副作用
-    _progress_queues.pop(upload_id, None)
 
 
 async def _cleanup_failed_upload(filepath: str, was_overwrite: bool = False) -> None:

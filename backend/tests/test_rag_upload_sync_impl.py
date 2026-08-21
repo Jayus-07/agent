@@ -707,3 +707,32 @@ class TestUploadStreamEndpoint:
         assert len(data_lines) == 1
         payload = json.loads(data_lines[0][len("data: "):])
         assert payload["stage"] == "uploading"
+
+    def test_late_subscriber_still_gets_terminal_events(self, client, monkeypatch):
+        """竞态回归：后台索引先于客户端订阅 SSE 完成（小文件场景）时，
+        _finalize_upload_queue 不能提前 pop 队列，晚到的订阅者仍能完整
+        消费事件流（含终态 done），而不是报“不存在或已过期”。"""
+        import json
+        from backend.app.api.routes import rag_upload as ru
+
+        monkeypatch.setattr(ru, "SSE_KEEPALIVE_TIMEOUT_SECONDS", 5.0)
+        queue = asyncio.Queue()
+        queue._created_at = time.time()
+        queue.put_nowait({"stage": "uploading", "message": "开始"})
+        queue.put_nowait({"stage": "done", "message": "完成"})
+        queues = {"uid_late": queue}
+        monkeypatch.setattr(ru, "_progress_queues", queues)
+
+        # 后台任务先结束：放 None 哨兵（不再主动 pop）
+        asyncio.run(ru._finalize_upload_queue("uid_late"))
+        assert "uid_late" in queues, "finalize 不应提前 pop 队列"
+
+        # 晚到的客户端订阅，应拿到全部事件而非“已过期”错误
+        tc, _ = client
+        resp = tc.get("/upload/uid_late/stream")
+        data_lines = [l for l in resp.text.splitlines() if l.startswith("data: ")]
+        assert len(data_lines) == 2, f"应拿到 2 条事件，实际: {resp.text!r}"
+        stages = [json.loads(l[len("data: "):])["stage"] for l in data_lines]
+        assert stages == ["uploading", "done"]
+        # SSE 断连后队列被回收（event_stream finally）
+        assert "uid_late" not in queues

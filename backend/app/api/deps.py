@@ -9,8 +9,6 @@ from backend.shared.logger import logger
 
 _lock = threading.Lock()
 _multi_agent = None
-_rag_init_error = None
-_rag_pipeline_ref = None
 
 
 def get_multi_agent():
@@ -35,25 +33,42 @@ def get_rag_pipeline():
     return _get()
 
 
-def _ensure_pipeline_ref():
-    global _rag_pipeline_ref, _rag_init_error
-    if _rag_pipeline_ref is not None:
+def _kick_pipeline_init() -> None:
+    """在后台线程触发 pipeline 初始化（幂等：已有初始化在进行则不重复启动）。
+
+    用于 not_started 状态下的首次访问兼容：保证即使启动预热未覆盖，
+    初始化也会被触发，且绝不阻塞当前（事件循环）线程。
+    """
+    from backend.rag import pipeline as _p
+    if _p._pipeline_singleton is not None or _p._pipeline_initializing:
         return
-    try:
-        _rag_pipeline_ref = get_rag_pipeline()
-        _rag_init_error = None
-    except Exception as e:
-        _rag_init_error = str(e)
+    def _bg_init():
+        try:
+            _p.get_rag_pipeline()
+        except Exception as e:
+            logger.warning(f"[deps] 后台 pipeline 初始化失败: {e}")
+    threading.Thread(target=_bg_init, name="rag-pipeline-init", daemon=True).start()
 
 
 def get_rag_status() -> dict:
-    """返回 RAG 模块状态（供 health check 使用）"""
-    _ensure_pipeline_ref()
-    if _rag_pipeline_ref is not None:
+    """返回 RAG 模块状态（供 health check 使用）。
+
+    【非阻塞】：只读状态标志，不等 _pipeline_lock —— RAGPipeline 构造含
+    全量同步（数十分钟），若在事件循环线程同步等待会冻结整个 API。
+    """
+    from backend.rag.pipeline import get_rag_pipeline_state
+    state = get_rag_pipeline_state()
+    if state["state"] == "ready":
         return {"ready": True, "status": "ready"}
-    if _rag_init_error is not None:
-        return {"ready": False, "status": "error", "error": _rag_init_error}
-    return {"ready": False, "status": "initializing", "message": "模型加载中，请稍后重试"}
+    if state["state"] == "error":
+        return {"ready": False, "status": "error", "error": state["error"]}
+    if state["state"] == "not_started":
+        _kick_pipeline_init()
+    return {
+        "ready": False,
+        "status": "initializing",
+        "message": state.get("message", "模型加载中，请稍后重试"),
+    }
 
 
 def require_rag_ready():

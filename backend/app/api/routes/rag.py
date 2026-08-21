@@ -8,6 +8,7 @@
 """
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+import asyncio
 
 from backend.app.api.routes.rag_search import router as search_router
 from backend.app.api.routes.rag_documents import router as documents_router
@@ -31,6 +32,7 @@ router.include_router(upload_router)
 @router.post("", responses={500: {"model": ErrorResponse}, 503: {"model": ErrorResponse}})
 async def rag_ask(req: RAGAskRequest):
     require_rag_ready()
-    pipeline = get_rag_pipeline()
-    answer = pipeline.ask(req.query, session_id=req.session_id or "rag-api")
+    # 初始化锁等待与 LLM 问答都是长耗时同步操作，全部移入工作线程
+    pipeline = await asyncio.to_thread(get_rag_pipeline)
+    answer = await asyncio.to_thread(pipeline.ask, req.query, session_id=req.session_id or "rag-api")
     return {"query": req.query, "answer": answer, "session_id": req.session_id}
