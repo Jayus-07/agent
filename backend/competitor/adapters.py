@@ -67,9 +67,45 @@ _NAV_NOISE_PHRASES = [
 # 键盘快捷键行（如 "shift + alt + K"），不应被当作标题
 _SHORTCUT_LINE_RE = re.compile(r"^(?:shift|ctrl|alt|cmd|command|tab|esc|enter)[\s+\/a-z0-9\-]*$", re.IGNORECASE)
 
+# 账号昵称行（纯 ASCII 无空格，如 tb50348234 / jd_user01），不是商品标题
+_ACCOUNT_LINE_RE = re.compile(r"^[a-z0-9][a-z0-9_\-.]*$", re.IGNORECASE)
+
+# taobao/tmall 销量锚点：标题通常位于“已售 xxx”行上方数行内
+_SOLD_ANCHOR_RE = re.compile(r"^已售\s*[0-9]")
+# 标题候选区内的促销文案行（非标题）
+_TITLE_NOISE_KEYWORDS = ("促销", "优惠", "满减", "折扣", "券", "限时", "秒杀", "补贴")
+
+
+def _guess_title_taobao(markdown: str) -> str:
+    """taobao/tmall 专用：以“已售”行为锚点，取其上方第一条有效文本行作为标题。
+
+    淘宝详情页正文前部是导航/搜索词噪声，通用“首行启发式”会误选；
+    标题稳定出现在“已售 xxx”行紧邻上方。
+    """
+    lines = [ln.strip() for ln in markdown.splitlines()]
+    for i, line in enumerate(lines):
+        if not _SOLD_ANCHOR_RE.match(line):
+            continue
+        for back in reversed(lines[max(0, i - 8):i]):
+            cleaned = re.sub(r'[*_`]', '', back).strip()
+            if not (8 <= len(cleaned) <= 200):
+                continue
+            if re.match(r"^[¥￥$0-9\s.,]+$", cleaned):
+                continue
+            if _ACCOUNT_LINE_RE.match(cleaned):
+                continue
+            if any(k in cleaned for k in _TITLE_NOISE_KEYWORDS):
+                continue
+            return cleaned
+    return ""
+
 
 def _guess_title(markdown: str, platform: str) -> str:
     """取正文第一行较长的文本作为标题（跳过导航/帮助文本）"""
+    if platform in ("taobao", "tmall"):
+        anchored = _guess_title_taobao(markdown)
+        if anchored:
+            return anchored
     for line in markdown.splitlines()[:50]:
         line = line.strip().lstrip("# ").strip()
         # 剥离列表标记（* - •）
@@ -78,6 +114,9 @@ def _guess_title(markdown: str, platform: str) -> str:
         line = re.sub(r'[*_`]', '', line).strip()
         # 跳过纯链接/图片行和列表项链接
         if line.startswith("![") or line.startswith("[") or line.startswith("* [") or line.startswith("- ["):
+            continue
+        # 跳过账号昵称行（淘宝登录后页面首行是用户名）
+        if _ACCOUNT_LINE_RE.match(line):
             continue
         if 8 <= len(line) <= 200 and not re.match(r"^[¥￥$0-9\s.,]+$", line):
             lower = line.lower()
@@ -158,6 +197,8 @@ _REVIEW_PATTERNS: list[tuple[str, bool]] = [
     (r"([0-9，,+.]{1,12})\s*(万)?\s*\+?\s*(?:人|条)?\s*(?:评价|评论)", True),
     (r"([0-9，,+.]{1,12})\s*,?\s*(ratings?|reviews)\b", False),
     (r"累计(?:评价|评论)\s*([0-9，,+.]{1,12})\s*(万)?\s*\+?", True),
+    (r"(?:用户)?(?:评价|评论)[·\s]*([0-9，,+.]{1,12})\s*(万)?\s*\+?", True),  # 淘宝: 用户评价·100+
+    (r"已售\s*([0-9，,+.]{1,12})\s*(万)?\s*\+?", True),  # 淘宝: 已售 100+ / 已售2万+
 ]
 
 
