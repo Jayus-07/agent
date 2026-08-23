@@ -54,3 +54,16 @@ class TestComputeTrends:
         t = compute_trends(s, days=0)
         assert t["items"] == []
         assert t["price_quantiles"] == []
+
+    def test_price_quantile_interpolation(self, tmp_path):
+        s = CompetitorStore(db_path=str(tmp_path / "quant.db"))
+        for i, price in enumerate((100.0, 200.0, 300.0, 400.0)):
+            s.save_snapshot({"url": f"https://q{i}.com", "platform": "taobao",
+                             "title": f"Q{i}", "price": price, "review_count": 10,
+                             "in_stock": 1, "highlights": "",
+                             "crawled_at": "2026-08-10T10:00:00"})
+        t = compute_trends(s, days=0)
+        q = next(x for x in t["price_quantiles"] if x["date"] == "2026-08-10")
+        assert q["p25"] == pytest.approx(175.0)
+        assert q["p50"] == pytest.approx(250.0)
+        assert q["p75"] == pytest.approx(325.0)

@@ -29,9 +29,7 @@ def compute_trends(
     now = datetime.fromisoformat(now_iso) if now_iso else datetime.now()
 
     # 全量读快照（watchlist 规模下内存聚合足够；量大后迁移 SQL 窗口函数）
-    with store._connect() as conn:
-        rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM competitor_snapshots ORDER BY crawled_at").fetchall()]
+    rows = store.list_snapshots()
 
     if days > 0:
         cutoff = (now - timedelta(days=days)).isoformat()
@@ -61,7 +59,15 @@ def compute_trends(
     review_growth = []
     watch_names = {w["url"]: w["name"] for w in store.list_watch(enabled_only=False)}
     for url, snaps in by_url.items():
-        pts = [s for s in snaps if s.get("review_count") is not None and s.get("crawled_at")]
+        pts = []
+        for s in snaps:
+            if s.get("review_count") is None or not s.get("crawled_at"):
+                continue
+            try:
+                datetime.fromisoformat(s["crawled_at"])
+            except ValueError:
+                continue  # 时间戳不可解析则跳过该数据点
+            pts.append(s)
         if len(pts) < 2:
             continue
         old, new = pts[-2], pts[-1]
@@ -112,7 +118,7 @@ def compute_trends(
 def _quantile(sorted_vals: list[float], q: float) -> float:
     """简单线性插值分位数（sorted_vals 非空）"""
     if len(sorted_vals) == 1:
-        return sorted_vals[0]
+        return round(sorted_vals[0], 2)
     idx = q * (len(sorted_vals) - 1)
     lo, hi = int(idx), min(int(idx) + 1, len(sorted_vals) - 1)
     frac = idx - lo

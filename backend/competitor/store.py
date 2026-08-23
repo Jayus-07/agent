@@ -180,6 +180,14 @@ class CompetitorStore:
             row = conn.execute(sql, params).fetchone()
             return dict(row) if row else None
 
+    def list_snapshots(self) -> list[dict]:
+        """全部快照（按 crawled_at 升序，仅趋势聚合所需列，不含 raw_excerpt 大字段）"""
+        cols = ("id, url, platform, title, price, rating, review_count, "
+                "highlights, in_stock, crawled_at")
+        with self._connect() as conn:
+            return [dict(r) for r in conn.execute(
+                f"SELECT {cols} FROM competitor_snapshots ORDER BY crawled_at").fetchall()]
+
     def history(self, url: str, limit: int = 10) -> list[dict[str, Any]]:
         """历史快照（新→旧），支撑价格趋势"""
         with self._connect() as conn:
