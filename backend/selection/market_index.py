@@ -6,13 +6,13 @@ embedding 复用 backend.rag.embedding_singleton 全局 BGE 实例，保证向�
 
 每条快照 → 一条文档（id = snap-{snapshot_id}，保留时序）。
 """
+import os
 from typing import Any, Optional
 
 from backend.shared.logger import logger
 
 _COLLECTION = "competitor_market"
 
-import os
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PROJECT_ROOT = os.path.dirname(_BACKEND_DIR)
 MARKET_PERSIST_DIR = os.getenv(
@@ -26,9 +26,10 @@ def build_doc(snap: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     band = ""
     if price is not None:
         band = "low" if price < 100 else ("mid" if price < 500 else "high")
+    price_str = f"{price}{snap.get('currency') or 'CNY'}" if price is not None else "未知"
     text = (
         f"{snap.get('title') or ''}｜平台:{snap.get('platform') or 'generic'}"
-        f"｜价格:{price}{snap.get('currency') or 'CNY'}"
+        f"｜价格:{price_str}"
         f"｜卖点:{snap.get('highlights') or ''}"
         f"｜促销:{snap.get('promo_text') or ''}"
     )

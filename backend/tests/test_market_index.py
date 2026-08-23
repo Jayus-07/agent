@@ -1,7 +1,5 @@
 """market_index 单测 — mock Chroma，验证文档格式与检索封装"""
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from backend.selection.market_index import MarketIndex, build_doc
 

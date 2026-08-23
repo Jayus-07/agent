@@ -182,10 +182,13 @@ def analyze_url(url: str, name: str = "", use_llm: bool = True) -> str:
 
     # 3b. 市场语义索引（失败不影响主流程）
     if snap_id is not None:
-        from backend.selection.market_index import index_snapshot_safe
-        saved = store.latest_snapshot(url)
-        if saved:
-            index_snapshot_safe(saved)
+        try:
+            from backend.selection.market_index import index_snapshot_safe
+            saved = store.latest_snapshot(url)
+            if saved:
+                index_snapshot_safe(saved)
+        except Exception as e:
+            logger.warning(f"[Competitor:pipeline] 市场索引钩子失败（忽略）: {e}")
 
     # 4. 与上次快照对比
     if snap_id is not None:

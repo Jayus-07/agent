@@ -1,7 +1,4 @@
 """SelectionStore 单测 — 评分缓存与权重配置"""
-import os
-import tempfile
-
 import pytest
 
 from backend.selection.store import SelectionStore, DEFAULT_WEIGHTS

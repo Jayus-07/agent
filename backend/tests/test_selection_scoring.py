@@ -2,7 +2,6 @@
 import pytest
 
 from backend.selection.scoring import (
-    DEFAULT_WEIGHTS,
     score_product,
     split_keywords,
 )
