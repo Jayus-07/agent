@@ -66,6 +66,7 @@ def _build_item(url: str, pool_latest: list[dict], weights: dict,
         "currency": latest.get("currency") or "CNY",
         "rating": latest.get("rating"),
         "review_count": latest.get("review_count"),
+        "highlights": latest.get("highlights") or "",
         "score": score,
         "llm_reason": "",
         "llm_risks": "",
@@ -75,6 +76,19 @@ def _build_item(url: str, pool_latest: list[dict], weights: dict,
     if use_llm:
         item.update(generate_reason(item))
     return item
+
+
+def _norm_num(tok: str) -> str:
+    """数值 token 归一：去千分位逗号、去尾零（129.0 == 129 == 129.00）
+
+    含非纯数字字符的 token（%/¥/日期/时间等形态）原样保留。
+    """
+    t = tok.replace(",", "")
+    if not t.lstrip("-").replace(".", "").isdigit():
+        return tok
+    if "." in t:
+        t = t.rstrip("0").rstrip(".")
+    return t or "0"
 
 
 def generate_reason(payload: dict[str, Any]) -> dict[str, str]:
@@ -88,8 +102,9 @@ def generate_reason(payload: dict[str, Any]) -> dict[str, str]:
         f"潜力分 {score.get('total')}（口碑 {score.get('breakdown', {}).get('reputation')} / "
         f"热度 {score.get('breakdown', {}).get('heat')} / "
         f"价格 {score.get('breakdown', {}).get('price')}），"
-        f"现价 {payload.get('latest_price')}{payload.get('currency', 'CNY')}，"
-        f"评分 {payload.get('rating')}，评价数 {payload.get('review_count')}。"
+        f"现价 {payload.get('latest_price')} {payload.get('currency', 'CNY')}，"
+        f"评分 {payload.get('rating') if payload.get('rating') is not None else '-'}，"
+        f"评价数 {payload.get('review_count') if payload.get('review_count') is not None else '-'}。"
     )
     notes = score.get("notes") or []
     fallback_risks = (
@@ -99,20 +114,21 @@ def generate_reason(payload: dict[str, Any]) -> dict[str, str]:
 
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
+        human_content = (
+            f"商品: {payload.get('title')}\n"
+            f"平台: {payload.get('platform')}\n"
+            f"现价: {payload.get('latest_price')} {payload.get('currency')}\n"
+            f"评分: {payload.get('rating')} 评价数: {payload.get('review_count')}\n"
+            f"卖点: {payload.get('highlights', '')}\n"
+            f"潜力分: {score.get('total')} 分维度: {score.get('breakdown')}\n"
+            f"数据缺口标注: {notes}"
+        )
         messages = [
             SystemMessage(content=(
                 "你是电商选品分析师。根据给定数据写 1-2 句推荐理由。"
                 "严格规则：只允许使用给定数据中出现的数字，禁止编造、推算或改写任何数字。"
             )),
-            HumanMessage(content=(
-                f"商品: {payload.get('title')}\n"
-                f"平台: {payload.get('platform')}\n"
-                f"现价: {payload.get('latest_price')} {payload.get('currency')}\n"
-                f"评分: {payload.get('rating')} 评价数: {payload.get('review_count')}\n"
-                f"卖点: {payload.get('highlights', '')}\n"
-                f"潜力分: {score.get('total')} 分维度: {score.get('breakdown')}\n"
-                f"数据缺口标注: {notes}"
-            )),
+            HumanMessage(content=human_content),
         ]
         resp = llm.invoke(messages)
         text = resp.content.strip()
@@ -124,15 +140,17 @@ def generate_reason(payload: dict[str, Any]) -> dict[str, str]:
     # 事实锁定校验：输出中出现的每个数字必须可在输入数据中溯源（禁止编造）。
     # 注意与 llm_polisher 方向相反：润色要求保留全部事实，理由生成只写 1-2 句，
     # 因此校验"输出 ⊆ 输入"而非"输入 ⊆ 输出"。
+    # 白名单 = source_facts（分数/价格/评分等）+ human_content（title/highlights/platform），
+    # 与 HumanMessage 实际给出的字段保持一致。
     source_facts = (
         f"潜力分 {score.get('total')} 现价 {payload.get('latest_price')} "
         f"评分 {payload.get('rating')} 评价数 {payload.get('review_count')} "
         f"分维度 {score.get('breakdown')}"
     )
-    allowed = _extract_numerical_tokens(source_facts)
+    allowed = _extract_numerical_tokens(source_facts + " " + human_content)
+    allowed_norm = {_norm_num(t) for t in allowed}
     present = _extract_numerical_tokens(text)
-    fabricated = {t for t in present if t not in allowed
-                  and t.replace(",", "") not in allowed}
+    fabricated = {t for t in present if _norm_num(t) not in allowed_norm}
     if fabricated:
         logger.warning(f"[Recommender] LLM 输出含编造数字 {fabricated}，回退模板")
         return {"llm_reason": fallback_reason, "llm_risks": fallback_risks}
@@ -150,11 +168,15 @@ def recommend(limit: int = 10, platform: Optional[str] = None,
         snap = next((s for s in pool_latest if s.get("url") == url), None)
         if platform and (snap or {}).get("platform") != platform:
             continue
-        item = _build_item(url, pool_latest, weights, use_llm=use_llm)
+        # LLM 理由后置：先过滤/排序/截断，仅对最终 top-N 调用 LLM（避免全量放大）
+        item = _build_item(url, pool_latest, weights, use_llm=False)
         if item and item["score"]["total"] >= min_score:
             items.append(item)
     items.sort(key=lambda x: x["score"]["total"], reverse=True)
     items = items[:limit]
+    if use_llm:
+        for it in items:
+            it.update(generate_reason(it))
     return {
         "items": items,
         "total": len(items),
@@ -211,7 +233,10 @@ def compare(urls: list[str]) -> dict[str, Any]:
 
 
 def generate_report(category: str = "", days: int = 30) -> str:
-    """选品 Markdown 报告（同步返回，与 /competitor/scan 行为一致）"""
+    """选品 Markdown 报告（同步返回，与 /competitor/scan 行为一致）
+
+    category 为预留参数（当前版本不做品类过滤，Phase 2 榜单采集后启用）。
+    """
     from backend.selection.trends import compute_trends
 
     rec = recommend(limit=10, use_llm=False)

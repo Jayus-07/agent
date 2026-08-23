@@ -120,7 +120,11 @@ class SelectionStore:
         return weights
 
     def set_weights(self, weights: dict[str, float]) -> None:
-        """更新权重（仅接受已知 key，忽略未知 key）"""
+        """更新权重（仅接受已知 key，忽略未知 key）
+
+        权重变更后评分语义即变，因此同时清空评分缓存（selection_scores），
+        避免旧权重算出的分数继续被命中。
+        """
         now = datetime.now().isoformat(timespec="seconds")
         with self._lock, self._connect() as conn:
             for key, value in weights.items():
@@ -133,6 +137,7 @@ class SelectionStore:
                             value=excluded.value, updated_at=excluded.updated_at""",
                     (key, float(value), now),
                 )
+            conn.execute("DELETE FROM selection_scores")
         logger.info(f"[SelectionStore] 权重更新: {weights}")
 
 

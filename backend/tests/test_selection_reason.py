@@ -54,3 +54,15 @@ class TestGenerateReason:
             result = generate_reason(payload)
         # note 经 _NOTE_LABELS 映射为中文标签
         assert "部分字段缺失" in result["llm_risks"]
+
+    def test_title_numbers_allowed(self):
+        # title/highlights 中的数字也在 HumanMessage 中给出，引用不算编造
+        payload = {**_PAYLOAD,
+                   "title": "iPhone 15 手机",
+                   "highlights": "24小时续航"}
+        fake = MagicMock()
+        fake.content = "iPhone 15 主打 24小时续航，潜力分 82.5，值得入手。"
+        with patch("backend.selection.recommender.llm") as mock_llm:
+            mock_llm.invoke.return_value = fake
+            result = generate_reason(payload)
+        assert result["llm_reason"] == fake.content

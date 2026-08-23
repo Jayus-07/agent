@@ -45,3 +45,8 @@ class TestWeights:
         assert w["heat"] == 0.5
         # 未覆盖的 key 保留默认值
         assert w["stability"] == DEFAULT_WEIGHTS["stability"]
+
+    def test_set_weights_clears_score_cache(self, store):
+        store.save_score("https://a.com", {"total": 60.0, "breakdown": {}, "notes": []}, 1)
+        store.set_weights({"reputation": 0.5})
+        assert store.get_score("https://a.com") is None
