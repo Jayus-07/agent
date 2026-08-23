@@ -83,8 +83,8 @@ export const selectionService = {
   getRecommendations: (params?: { platform?: string; limit?: number; min_score?: number }) => {
     const qs = new URLSearchParams()
     if (params?.platform) qs.set('platform', params.platform)
-    if (params?.limit) qs.set('limit', String(params.limit))
-    if (params?.min_score) qs.set('min_score', String(params.min_score))
+    if (params?.limit != null) qs.set('limit', String(params.limit))
+    if (params?.min_score != null) qs.set('min_score', String(params.min_score))
     const suffix = qs.toString() ? `?${qs}` : ''
     return request<{ items: RecommendationItem[]; total: number; generated_at: string }>(
       `${BASE}/recommendations${suffix}`,
