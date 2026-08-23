@@ -17,9 +17,15 @@ from backend.shared.logger import logger
 
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PROJECT_ROOT = os.path.dirname(_BACKEND_DIR)
-SELECTION_DB_PATH = os.getenv(
-    "SELECTION_DB_PATH", os.path.join(_PROJECT_ROOT, "data", "selection.db")
-)
+_DEFAULT_DB_PATH = os.path.join(_PROJECT_ROOT, "data", "selection.db")
+
+
+def _resolve_db_path() -> str:
+    """惰性读取环境变量（测试可通过 monkeypatch.setenv 隔离）"""
+    return os.getenv("SELECTION_DB_PATH", _DEFAULT_DB_PATH)
+
+
+SELECTION_DB_PATH = _resolve_db_path()
 
 # 与 spec §5.1 一致的默认权重
 DEFAULT_WEIGHTS: dict[str, float] = {
@@ -49,13 +55,13 @@ CREATE TABLE IF NOT EXISTS selection_weights (
 class SelectionStore:
     """线程安全的选品引擎存储"""
 
-    def __init__(self, db_path: str = SELECTION_DB_PATH):
-        self._db_path = db_path
+    def __init__(self, db_path: Optional[str] = None):
+        self._db_path = db_path or _resolve_db_path()
         self._lock = threading.Lock()
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
-        logger.info(f"[SelectionStore] 初始化: {db_path}")
+        logger.info(f"[SelectionStore] 初始化: {self._db_path}")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)

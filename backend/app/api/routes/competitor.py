@@ -5,6 +5,7 @@
 路由前缀: /competitor（经 next.config.js rewrite 由 /api/competitor 代理）
 """
 from datetime import datetime, timedelta
+from typing import Optional
 from urllib.parse import unquote
 
 from fastapi import APIRouter, HTTPException, Query
@@ -423,7 +424,7 @@ def anti_ban_resume():
 @router.get("/recommendations")
 def competitor_recommendations(
     limit: int = Query(10, ge=1, le=50),
-    platform: str = Query(None, description="平台过滤"),
+    platform: Optional[str] = Query(None, description="平台过滤"),
     min_score: float = Query(0.0, ge=0.0, le=100.0),
 ):
     """推荐列表别名端点（直接调选品引擎，与 /selection/recommendations 等价）"""

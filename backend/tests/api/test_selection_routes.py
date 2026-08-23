@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.app.api.routes.selection import router
+from backend.selection.store import reset_selection_store
 
 _REC_PAYLOAD = {
     "items": [{
@@ -70,7 +71,41 @@ class TestOthers:
         resp = _client().put("/selection/weights", json={"weights": {"foo": 0.5}})
         assert resp.status_code == 422
 
-    def test_weights_get(self):
-        resp = _client().get("/selection/weights")
+    def test_weights_put_rejects_empty_dict(self):
+        resp = _client().put("/selection/weights", json={"weights": {}})
+        assert resp.status_code == 422
+
+    def test_weights_get(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SELECTION_DB_PATH", str(tmp_path / "w.db"))
+        reset_selection_store()
+        try:
+            resp = _client().get("/selection/weights")
+            assert resp.status_code == 200
+            weights = resp.json()["weights"]
+            assert weights == {
+                "reputation": 0.25,
+                "heat": 0.25,
+                "price": 0.20,
+                "differentiation": 0.15,
+                "stability": 0.15,
+            }
+        finally:
+            reset_selection_store()
+
+
+class TestAliasEndpoint:
+    def test_competitor_recommendations_passthrough(self):
+        # 别名端点函数内懒 import，patch 目标为源模块
+        from backend.app.api.routes.competitor import router as competitor_router
+
+        app = FastAPI()
+        app.include_router(competitor_router)
+        client = TestClient(app)
+        with patch("backend.selection.recommender.recommend",
+                   return_value=_REC_PAYLOAD) as mock_rec:
+            resp = client.get("/competitor/recommendations?platform=taobao")
         assert resp.status_code == 200
-        assert "reputation" in resp.json()["weights"]
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["items"][0]["url"] == "https://a.com"
+        mock_rec.assert_called_once_with(limit=10, platform="taobao", min_score=0.0)

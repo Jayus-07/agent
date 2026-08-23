@@ -26,7 +26,7 @@ class ScoreRequest(BaseModel):
 
 
 class WeightsRequest(BaseModel):
-    weights: dict[str, float] = Field(..., description="权重字典，key 必须属于五维度")
+    weights: dict[str, float] = Field(..., min_length=1, description="权重字典，key 必须属于五维度")
 
 
 @router.get("/recommendations")
