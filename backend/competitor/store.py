@@ -188,6 +188,14 @@ class CompetitorStore:
             return [dict(r) for r in conn.execute(
                 f"SELECT {cols} FROM competitor_snapshots ORDER BY crawled_at").fetchall()]
 
+    def all_snapshots_full(self) -> list[dict]:
+        """全部快照全字段（排除 raw_excerpt 大字段），供市场索引回填"""
+        cols = ("id, url, platform, title, price, original_price, currency, promo_text, "
+                "rating, review_count, in_stock, highlights, crawled_at")
+        with self._connect() as conn:
+            return [dict(r) for r in conn.execute(
+                f"SELECT {cols} FROM competitor_snapshots ORDER BY id").fetchall()]
+
     def history(self, url: str, limit: int = 10) -> list[dict[str, Any]]:
         """历史快照（新→旧），支撑价格趋势"""
         with self._connect() as conn:

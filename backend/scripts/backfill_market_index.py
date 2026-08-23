@@ -16,7 +16,7 @@ def main() -> None:
     args = parser.parse_args()
 
     store = get_store()
-    rows = store.list_snapshots()
+    rows = store.all_snapshots_full()
 
     index = get_market_index()
     written = 0
