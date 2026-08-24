@@ -9,6 +9,7 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from backend.competitor.store import get_store
 from backend.orchestration.workflow.executor import WorkflowExecutor
 from backend.selection_decision.store import get_selection_decision_store
 from backend.shared.logger import logger
@@ -41,12 +42,13 @@ class TaskRequest(BaseModel):
 
 
 async def _run_task(task_id: str, inputs: dict) -> None:
-    """后台执行 workflow；异常/失败时把任务标记为 failed"""
+    """后台执行 workflow；非 success 结果都兜底回写（不永久滞留 running）"""
     try:
         ctx = await WorkflowExecutor().run("selection_decision", inputs=inputs)
-        if ctx.status == "failed":
+        # partial 当前不可达（executor 只产出 success/failed），但兜底覆盖非 success 全集
+        if ctx.status != "success":
             get_selection_decision_store().update_result(
-                task_id, status="failed", error=ctx.error or "workflow 执行失败")
+                task_id, status=ctx.status, error=ctx.error or "workflow 执行失败")
     except Exception as e:
         logger.error(f"[SelectionDecision:api] 任务 {task_id} 执行异常: {e}")
         get_selection_decision_store().update_result(
@@ -56,6 +58,12 @@ async def _run_task(task_id: str, inputs: dict) -> None:
 @router.post("/tasks")
 async def create_task(req: TaskRequest):
     """提交选品决策任务（异步执行）"""
+    # watchlist 预校验（同步轻量：只查启用条目数，不查快照）：
+    # 空则直接 400，避免创建注定失败的异步任务；有候选但无快照仍走异步失败路径。
+    if not get_store().list_watch(enabled_only=True):
+        raise HTTPException(
+            status_code=400,
+            detail="watchlist 为空：请先在竞品监控添加并启用候选商品 URL")
     store = get_selection_decision_store()
     inputs = {
         "category": req.category,

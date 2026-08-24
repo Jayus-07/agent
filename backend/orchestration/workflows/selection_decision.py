@@ -52,7 +52,7 @@ def _llm_json(messages) -> Any:
 
 @workflow(
     name="selection_decision",
-    description="选品决策 Go/No-Go — 市场评估/差异化/财务测算/AI评审团四层流水线",
+    description="选品决策 Go/No-Go — 市场评估/差异化/财务测算/AI评审团五层流水线",
     objects=["选品", "决策", "入场", "品类"],
     actions=["评估", "分析", "决策"],
     examples=["评估蓝牙耳机品类值不值得做", "帮我做一次选品决策"],

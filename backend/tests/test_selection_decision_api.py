@@ -21,6 +21,11 @@ def client(monkeypatch, tmp_path):
     store = SelectionDecisionStore(db_path=str(tmp_path / "api.db"))
     monkeypatch.setattr(sd_routes, "get_selection_decision_store", lambda: store)
 
+    class _FakeCompetitorStore:
+        def list_watch(self, enabled_only=True):
+            return [{"url": "https://example.com/item1"}]  # 非空 → 预校验通过
+    monkeypatch.setattr(sd_routes, "get_store", lambda: _FakeCompetitorStore())
+
     async def no_run(task_id, inputs):
         pass
     monkeypatch.setattr(sd_routes, "_run_task", no_run)
@@ -55,6 +60,29 @@ def test_detail_404(client):
     assert client.get("/selection-decision/tasks/no-such").status_code == 404
 
 
+def test_post_task_400_when_watchlist_empty(monkeypatch, tmp_path):
+    """watchlist 预校验：无启用条目 → 400，不创建任务行"""
+    from backend.selection_decision.store import SelectionDecisionStore
+    store = SelectionDecisionStore(db_path=str(tmp_path / "wl.db"))
+    monkeypatch.setattr(sd_routes, "get_selection_decision_store", lambda: store)
+
+    class _FakeCompetitorStore:
+        def list_watch(self, enabled_only=True):
+            return []
+    monkeypatch.setattr(sd_routes, "get_store", lambda: _FakeCompetitorStore())
+
+    async def no_run(task_id, inputs):
+        pass
+    monkeypatch.setattr(sd_routes, "_run_task", no_run)
+
+    app = FastAPI()
+    app.include_router(sd_routes.router)
+    resp = TestClient(app).post("/selection-decision/tasks", json=VALID_PAYLOAD)
+    assert resp.status_code == 400
+    assert "watchlist" in resp.json()["detail"]
+    assert store.list() == []  # 未创建任务行
+
+
 def test_run_task_marks_failed_when_workflow_fails(monkeypatch, tmp_path):
     """workflow 返回 failed → store 行标记 failed + error"""
     from backend.selection_decision.store import SelectionDecisionStore
@@ -75,6 +103,28 @@ def test_run_task_marks_failed_when_workflow_fails(monkeypatch, tmp_path):
     row = store.get(task_id)
     assert row["status"] == "failed"
     assert "watchlist" in row["error"]
+
+
+def test_run_task_writes_back_non_success_status(monkeypatch, tmp_path):
+    """非 success 状态（如 partial）也兜底回写，不永久滞留 running"""
+    from backend.selection_decision.store import SelectionDecisionStore
+    store = SelectionDecisionStore(db_path=str(tmp_path / "rt3.db"))
+    monkeypatch.setattr(sd_routes, "get_selection_decision_store", lambda: store)
+
+    class _FakeCtx:
+        status = "partial"
+        error = "部分 step 失败"
+
+    class _FakeExecutor:
+        async def run(self, name, inputs=None):
+            return _FakeCtx()
+
+    monkeypatch.setattr(sd_routes, "WorkflowExecutor", lambda: _FakeExecutor())
+    task_id = store.create({"category": "x"})
+    asyncio.run(sd_routes._run_task(task_id, {"task_id": task_id}))
+    row = store.get(task_id)
+    assert row["status"] == "partial"
+    assert "部分 step 失败" in row["error"]
 
 
 def test_run_task_marks_failed_on_exception(monkeypatch, tmp_path):

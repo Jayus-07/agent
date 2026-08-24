@@ -31,7 +31,7 @@ export interface SelectionTask {
   id: string
   status: string        // running / success / failed / partial
   verdict: string | null
-  trace_id: string
+  trace_id: string | null
   error: string | null
   created_at: string
   finished_at: string | null

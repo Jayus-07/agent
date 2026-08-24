@@ -1,4 +1,7 @@
 """selection_decision store 测试（tmp_path 隔离）"""
+import sqlite3
+from datetime import datetime, timedelta
+
 import pytest
 
 from backend.selection_decision.store import SelectionDecisionStore
@@ -51,3 +54,24 @@ def test_ensure_task_keeps_existing_row(store):
     tid = store.create({"a": 1})
     store.ensure_task(tid, {"b": 2})
     assert store.get(tid)["inputs"] == {"a": 1}
+
+
+def test_mark_stale_running_failed(store):
+    """超龄 running 行（服务重启中断）标记 failed，新 running 行不动"""
+    stale_id = store.create({"n": "stale"})
+    fresh_id = store.create({"n": "fresh"})
+    # 把 stale 行的 created_at 改成 10 分钟前（ISO 字符串可直接字典序比较）
+    old = (datetime.now() - timedelta(minutes=10)).isoformat(timespec="seconds")
+    with sqlite3.connect(store._db_path) as conn:
+        conn.execute("UPDATE selection_tasks SET created_at = ? WHERE id = ?",
+                     (old, stale_id))
+        conn.commit()
+
+    n = store.mark_stale_running_failed(300)
+    assert n == 1
+    stale = store.get(stale_id)
+    assert stale["status"] == "failed"
+    assert "服务重启" in stale["error"]
+    assert stale["finished_at"] is not None
+    fresh = store.get(fresh_id)
+    assert fresh["status"] == "running"

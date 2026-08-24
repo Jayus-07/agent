@@ -10,7 +10,7 @@ import os
 import sqlite3
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from backend.shared.logger import logger
@@ -88,6 +88,26 @@ class SelectionDecisionStore:
                  datetime.now().isoformat(timespec="seconds")),
             )
             conn.commit()
+
+    def mark_stale_running_failed(self, older_than_sec: int = 300) -> int:
+        """把超龄的 running 行标记为 failed（服务重启导致任务中断），返回处理行数。
+
+        created_at 为 ISO 字符串，可直接字典序比较。
+        """
+        cutoff = (datetime.now() - timedelta(seconds=older_than_sec)).isoformat(
+            timespec="seconds")
+        with self._lock, self._conn() as conn:
+            cur = conn.execute(
+                """UPDATE selection_tasks
+                   SET status = 'failed', error = '服务重启，任务中断',
+                       finished_at = ?
+                   WHERE status = 'running' AND created_at <= ?""",
+                (datetime.now().isoformat(timespec="seconds"), cutoff),
+            )
+            conn.commit()
+        if cur.rowcount:
+            logger.info(f"[SelectionDecision:store] 标记 {cur.rowcount} 个 stale running 任务为 failed")
+        return cur.rowcount
 
     def list(self, page: int = 1, page_size: int = 20) -> list[dict[str, Any]]:
         """分页列出任务（不含 report_md 大字段），按创建时间倒序。"""

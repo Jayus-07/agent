@@ -136,6 +136,26 @@ async def cleanup_upload_artifacts():
     threading.Thread(target=_clean, daemon=True, name="upload-artifact-cleanup").start()
 
 
+# ═══════════════════════════════════════════════════
+# 启动时清理选品决策遗留 stale running 任务（进程重启/崩溃导致中断）
+# ═══════════════════════════════════════════════════
+@app.on_event("startup")
+async def cleanup_stale_selection_tasks():
+    """把上次进程遗留的超龄 running 任务标记为 failed。
+
+    不清理的后果：任务行永久停留 running，前端轮询永不结束。
+    只处理超龄行（默认 5 分钟），不误伤其它实例正在执行的任务。
+    """
+    import threading
+    def _clean():
+        try:
+            from backend.selection_decision.store import get_selection_decision_store
+            get_selection_decision_store().mark_stale_running_failed()
+        except Exception as e:
+            logger.warning(f"[SelectionDecision] 启动清理 stale running 任务失败: {e}")
+    threading.Thread(target=_clean, daemon=True, name="selection-stale-cleanup").start()
+
+
 # ═══════════════════════════════════════════════
 # F11: 进度队列定时清理（无上传流量时过期队列不再永久滞留）
 # ═══════════════════════════════════════════════
