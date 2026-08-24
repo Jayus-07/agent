@@ -81,17 +81,13 @@ class SelectionDecisionStore:
     def ensure_task(self, task_id: str, inputs: dict[str, Any] | None = None) -> None:
         """确保指定 task_id 存在（不存在则按该 id 插入 running 行），供直跑场景补建"""
         with self._lock, self._conn() as conn:
-            row = conn.execute(
-                "SELECT id FROM selection_tasks WHERE id = ?", (task_id,)
-            ).fetchone()
-            if row is None:
-                conn.execute(
-                    """INSERT INTO selection_tasks
-                       (id, inputs_json, status, created_at) VALUES (?, ?, 'running', ?)""",
-                    (task_id, _json.dumps(inputs or {}, ensure_ascii=False, default=str),
-                     datetime.now().isoformat(timespec="seconds")),
-                )
-                conn.commit()
+            conn.execute(
+                """INSERT OR IGNORE INTO selection_tasks
+                   (id, inputs_json, status, created_at) VALUES (?, ?, 'running', ?)""",
+                (task_id, _json.dumps(inputs or {}, ensure_ascii=False, default=str),
+                 datetime.now().isoformat(timespec="seconds")),
+            )
+            conn.commit()
 
     def list(self, page: int = 1, page_size: int = 20) -> list[dict[str, Any]]:
         """分页列出任务（不含 report_md 大字段），按创建时间倒序。"""

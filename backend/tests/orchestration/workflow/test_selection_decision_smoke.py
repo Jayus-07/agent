@@ -23,20 +23,27 @@ class _FakeResp:
 
 
 def _fake_llm_invoke(messages):
-    """统一桩：按 System Prompt 特征分流三种响应"""
+    """统一桩：按 System Prompt 特征分流三种响应
+
+    顺序注意：必须先判「专长领域」（评审团角色 prompt 恒含），再判「差异化/切入点」。
+    若先判「差异化」，评审团第 6 角色「品类战略师」focus 含「差异化空间」，
+    panel_size≥6 时会被误路由为差异化分析响应。
+    """
     text = " ".join(str(getattr(m, "content", m)) for m in messages)
+    if "专长领域" in text:  # 评审团角色 prompt（恒含，优先判断）
+        return _FakeResp(json.dumps(
+            {"score": 80, "verdict": "go", "reason": "测试通过"}, ensure_ascii=False))
     if "差异化" in text or "切入点" in text:
         return _FakeResp(json.dumps({
             "verdict": "go", "gaps": ["续航虚标"], "reason": "痛点集中"},
             ensure_ascii=False))
-    if "专长领域" in text:  # 评审团角色 prompt
-        return _FakeResp(json.dumps(
-            {"score": 80, "verdict": "go", "reason": "测试通过"}, ensure_ascii=False))
     return _FakeResp(json.dumps(["续航虚标", "佩戴不适"], ensure_ascii=False))
 
 
 @pytest.fixture
-def patched_env(monkeypatch, tmp_path):
+def patched_env(monkeypatch, tmp_path, patched_persistence, patched_trace_collector):
+    # patched_persistence / patched_trace_collector 来自 conftest：
+    # 把 workflow_runs.db 与 trace 切到 tmp/mock，避免冒烟测试污染生产 DB
     import backend.orchestration.workflows.selection_decision as wf_mod
     import backend.selection_decision.panel as panel_mod
 
@@ -96,7 +103,7 @@ def test_market_no_go_short_circuits(patched_env, monkeypatch):
     ctx = asyncio.run(WorkflowExecutor(registry=reg).run(
         "selection_decision", inputs={"category": "x", "task_id": "t-short",
                                        "finance": {"sell_price": 1, "unit_cost": 1}}))
-    assert ctx.status in ("success", "partial")
+    assert ctx.status == "success"  # run_if_skips 不计 partial，必为 success
     assert "differentiation" in ctx.skip_steps
     assert "finance_model" in ctx.skip_steps
     assert "review_panel" in ctx.skip_steps

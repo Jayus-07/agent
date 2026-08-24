@@ -26,6 +26,10 @@ from backend.selection_decision.report import build_report
 from backend.selection_decision.store import get_selection_decision_store
 from backend.shared.logger import logger
 
+# ── 门控阈值常量（market_assess 规则门控）──────────────
+MIN_CANDIDATES = 3       # 市场门控：候选竞品数下限
+MIN_TOTAL_REVIEWS = 100  # 市场门控：评价总量下限
+
 # ── run_if 谓词（Decision 分支，spec §4.3）──────────────
 
 
@@ -55,7 +59,11 @@ def _llm_json(messages) -> Any:
     category="selection",
 )
 class SelectionDecision:
-    """选品决策 Workflow — 8 个 step，5 层 DAG"""
+    """选品决策 Workflow — 8 个 step，5 层 DAG
+
+    失败语义：competitor_data 无候选、finance 参数非法等输入性错误走 abort（fail-fast，
+    不产出 No-Go 报告）；只有上游 gate 判定 no_go/fail 才走 run_if 短路并产出 No-Go 报告。
+    """
 
     # ── Layer 0 感知层 ──────────────────────────
     @step(name="竞品数据采集", timeout_sec=120)
@@ -73,6 +81,8 @@ class SelectionDecision:
                     "highlights": snap.get("highlights") or "",
                 })
         if not candidates:
+            # 输入性错误 → 默认 on_error="abort" fail-fast（不产出 No-Go 报告，
+            # 用户应先修复 watchlist；Task 7 API 层会预校验）
             raise ValueError("watchlist 为空或无快照，请先在竞品监控添加商品 URL")
         return {"candidates": candidates, "count": len(candidates)}
 
@@ -94,8 +104,9 @@ class SelectionDecision:
             "total_reviews": total_reviews,
             "top3_review_share": top3_share,
         }
-        # 规则门控：候选≥3 且评价总量≥100 → 视为存在需求（代理判断）
-        verdict = "go" if len(cands) >= 3 and total_reviews >= 100 else "no_go"
+        # 规则门控：候选≥MIN_CANDIDATES 且评价总量≥MIN_TOTAL_REVIEWS → 视为存在需求（代理判断）
+        verdict = "go" if (len(cands) >= MIN_CANDIDATES
+                           and total_reviews >= MIN_TOTAL_REVIEWS) else "no_go"
         return {
             "verdict": verdict,
             "metrics": metrics,
@@ -117,9 +128,12 @@ class SelectionDecision:
         return {"profiles": profiles}
 
     @step(depends_on=["competitor_data"], name="痛点推断",
-          timeout_sec=180, on_error="skip")
+          timeout_sec=180)
     async def review_pain(self, ctx):
-        """Phase 1 降级：无评论数据，LLM 基于卖点/评分推断痛点（spec R3 ②）"""
+        """Phase 1 降级：无评论数据，LLM 基于卖点/评分推断痛点（spec R3 ②）
+
+        内部 catch-all fallback 已吞掉一切异常并返回降级结果，无需 on_error="skip"。
+        """
         from langchain_core.messages import HumanMessage, SystemMessage
         cands = ctx.outputs["competitor_data"]["candidates"]
         material = "\n".join(
@@ -135,11 +149,8 @@ class SelectionDecision:
                 HumanMessage(content=material),
             ])
             pains = [str(x) for x in data][:5]
-        except (json.JSONDecodeError, TypeError, ValueError) as e:
-            logger.warning(f"[SelectionDecision] 痛点推断解析失败: {e}")
-            return fallback
         except Exception as e:
-            logger.warning(f"[SelectionDecision] 痛点推断调用失败: {e}")
+            logger.warning(f"[SelectionDecision] 痛点推断失败，降级为空痛点: {e}")
             return fallback
         return {"pain_points": pains, "source": "inferred",
                 "note": "非评论实证，基于卖点/评分的 LLM 推断（Phase 1 降级）"}
@@ -182,7 +193,11 @@ class SelectionDecision:
     @step(depends_on=["differentiation"], name="财务测算",
           timeout_sec=60, run_if=_diff_go)
     async def finance_model(self, ctx):
-        """Decision2：规则测算 + 内部有界优化循环（≤3 轮）"""
+        """Decision2：规则测算 + 内部有界优化循环（≤3 轮）
+
+        参数非法时 run_finance 抛 ValueError → 默认 on_error="abort" fail-fast
+        （输入性错误 ≠ 决策 No-Go；Task 7 API 层会预校验参数）。
+        """
         params = ctx.inputs.get("finance") or {}
         return run_finance(params)
 

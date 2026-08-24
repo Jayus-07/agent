@@ -123,6 +123,15 @@ def patched_trace_collector(monkeypatch, fresh_tracer):
     collector.start_span = MagicMock(return_value=fake_span)
     collector.end_span = MagicMock()
     collector.subscribe = MagicMock(return_value=lambda: None)
+    # executor 会调 trace_collector.start() 并用 trace_record.id 赋给 ctx.trace_id；
+    # 若返回裸 MagicMock，下游 sqlite 绑定会报 unsupported type，故返回带字符串 id 的桩
+    fake_record = MagicMock()
+    fake_record.id = "fake_trace_001"
+    collector.start = MagicMock(return_value=fake_record)
+    collector.finish = MagicMock()
+    # executor 先查 _current_trace_var 再查 _thread_current；裸 MagicMock 属性为 truthy
+    # 会绕过 start()，须置 None 让其走新建 trace 分支
+    collector._thread_current = None
 
     # executor 内部用 from backend.observability.tracer import trace_collector
     # patch source 模块路径
