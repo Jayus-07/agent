@@ -30,7 +30,7 @@ PERSONAS: list[dict[str, str]] = [
 _VOTE_SYSTEM = (
     "你是{role}，专长领域：{focus}。基于给定的选品决策材料独立评审，"
     "不受他人意见影响。只回复一个 JSON 对象，不要任何其他文字："
-    '"score": 0到100的整数, "verdict": "go"或"no_go", "reason": "50字以内理由"'
+    '{{"score": 0到100的整数, "verdict": "go"或"no_go", "reason": "50字以内理由"}}'
 )
 
 
