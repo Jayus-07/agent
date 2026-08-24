@@ -15,6 +15,9 @@ from backend.shared.logger import logger
 
 router = APIRouter(prefix="/selection-decision", tags=["选品决策"])
 
+# 后台任务强引用集合（事件循环只持弱引用，防 GC 回收，bpo-88831）
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
 
 class FinanceParams(BaseModel):
     sell_price: float = Field(..., gt=0, description="预期售价")
@@ -23,6 +26,7 @@ class FinanceParams(BaseModel):
     shipping_cost: float = Field(0.0, ge=0)
     marketing_cost: float = Field(0.0, ge=0)
     monthly_fixed_cost: float = Field(0.0, ge=0)
+    # 有意比 finance._validate 的 [0,1] 收紧：100% 利润率门槛无实际意义
     min_margin_rate: float = Field(0.25, ge=0, lt=1)
     initial_inventory: int = Field(100, gt=0)
     buffer_rate: float = Field(0.15, ge=0, le=1)
@@ -31,7 +35,7 @@ class FinanceParams(BaseModel):
 class TaskRequest(BaseModel):
     category: str = Field(..., min_length=1, max_length=64, description="品类关键词")
     platforms: list[str] = Field(
-        default_factory=lambda: ["jd", "taobao", "amazon"])
+        default_factory=lambda: ["jd", "taobao", "amazon"], min_length=1)
     finance: FinanceParams
     panel_size: int = Field(7, ge=1, le=7, description="评审团人数")
 
@@ -61,7 +65,9 @@ async def create_task(req: TaskRequest):
     }
     task_id = store.create(inputs)
     inputs["task_id"] = task_id
-    asyncio.create_task(_run_task(task_id, inputs))
+    task = asyncio.create_task(_run_task(task_id, inputs))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
     logger.info(f"[SelectionDecision:api] 任务已提交: {task_id} ({req.category})")
     return {"task_id": task_id, "status": "running"}
 

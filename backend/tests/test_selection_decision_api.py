@@ -1,4 +1,6 @@
 """selection_decision API 测试（不真实跑 workflow：_run_task 打桩）"""
+import asyncio
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -51,3 +53,43 @@ def test_list_and_detail(client):
 
 def test_detail_404(client):
     assert client.get("/selection-decision/tasks/no-such").status_code == 404
+
+
+def test_run_task_marks_failed_when_workflow_fails(monkeypatch, tmp_path):
+    """workflow 返回 failed → store 行标记 failed + error"""
+    from backend.selection_decision.store import SelectionDecisionStore
+    store = SelectionDecisionStore(db_path=str(tmp_path / "rt.db"))
+    monkeypatch.setattr(sd_routes, "get_selection_decision_store", lambda: store)
+
+    class _FakeCtx:
+        status = "failed"
+        error = "watchlist 为空"
+
+    class _FakeExecutor:
+        async def run(self, name, inputs=None):
+            return _FakeCtx()
+
+    monkeypatch.setattr(sd_routes, "WorkflowExecutor", lambda: _FakeExecutor())
+    task_id = store.create({"category": "x"})
+    asyncio.run(sd_routes._run_task(task_id, {"task_id": task_id}))
+    row = store.get(task_id)
+    assert row["status"] == "failed"
+    assert "watchlist" in row["error"]
+
+
+def test_run_task_marks_failed_on_exception(monkeypatch, tmp_path):
+    """executor 抛异常 → store 行标记 failed + 异常信息"""
+    from backend.selection_decision.store import SelectionDecisionStore
+    store = SelectionDecisionStore(db_path=str(tmp_path / "rt2.db"))
+    monkeypatch.setattr(sd_routes, "get_selection_decision_store", lambda: store)
+
+    class _BoomExecutor:
+        async def run(self, name, inputs=None):
+            raise RuntimeError("executor 崩溃")
+
+    monkeypatch.setattr(sd_routes, "WorkflowExecutor", lambda: _BoomExecutor())
+    task_id = store.create({"category": "x"})
+    asyncio.run(sd_routes._run_task(task_id, {"task_id": task_id}))
+    row = store.get(task_id)
+    assert row["status"] == "failed"
+    assert "executor 崩溃" in row["error"]
