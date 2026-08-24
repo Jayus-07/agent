@@ -38,7 +38,7 @@ def test_run_panel_all_go_passes(mock_llm):
     assert result["avg_score"] == pytest.approx(80)
 
 
-def test_run_panel_majority_no_go_fails(mock_llm, monkeypatch):
+def test_run_panel_majority_no_go_fails(monkeypatch):
     """多数投 no_go → fail"""
     votes = iter([{"score": 40, "verdict": "no_go", "reason": "x"}] * 4
                  + [{"score": 80, "verdict": "go", "reason": "y"}] * 3)
@@ -49,7 +49,7 @@ def test_run_panel_majority_no_go_fails(mock_llm, monkeypatch):
     assert result["verdict"] == "fail"
 
 
-def test_run_panel_llm_error_counts_as_no_go(mock_llm, monkeypatch):
+def test_run_panel_llm_error_counts_as_no_go(monkeypatch):
     """单个评审 LLM 失败 → 该票记 no_go/0 分，不让整体崩溃"""
     calls = {"n": 0}
     def invoke(messages):
@@ -61,8 +61,20 @@ def test_run_panel_llm_error_counts_as_no_go(mock_llm, monkeypatch):
     monkeypatch.setattr(panel_mod, "llm", type("L", (), {"invoke": staticmethod(invoke)}))
     result = asyncio.run(run_panel(SUMMARY, size=3))
     assert result["size"] == 3
-    assert result["votes"][0]["verdict"] == "no_go"
-    assert result["votes"][0]["error"]
+    errors = [v for v in result["votes"] if v["error"]]
+    assert len(errors) == 1
+    assert errors[0]["verdict"] == "no_go"
+    assert errors[0]["score"] == 0
+
+
+def test_vote_score_clamped(monkeypatch):
+    """LLM 返回越界 score（如 300）应被钳制到 [0, 100]"""
+    def invoke(messages):
+        return _FakeResp(json.dumps(
+            {"score": 300, "verdict": "go", "reason": "x"}, ensure_ascii=False))
+    monkeypatch.setattr(panel_mod, "llm", type("L", (), {"invoke": staticmethod(invoke)}))
+    result = asyncio.run(run_panel(SUMMARY, size=1))
+    assert result["votes"][0]["score"] == 100
 
 
 def test_aggregate_votes_rules():

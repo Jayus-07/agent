@@ -16,6 +16,7 @@ from backend.infra.llm import llm
 from backend.shared.logger import logger
 
 PASS_AVG_SCORE = 60
+REASON_MAX_LEN = 200
 
 PERSONAS: list[dict[str, str]] = [
     {"role": "风控官", "focus": "平台风控、封号风险、资金安全"},
@@ -45,15 +46,15 @@ def _single_review(persona: dict[str, str], summary: dict[str, Any]) -> dict[str
             HumanMessage(content=json.dumps(summary, ensure_ascii=False, default=str)),
         ])
         data = json.loads(resp.content.strip().strip("`").removeprefix("json").strip())
-        vote["score"] = int(data["score"])
+        vote["score"] = max(0, min(100, int(data["score"])))
         vote["verdict"] = "go" if data["verdict"] == "go" else "no_go"
-        vote["reason"] = str(data.get("reason", ""))[:200]
+        vote["reason"] = str(data.get("reason", ""))[:REASON_MAX_LEN]
     except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
         logger.warning(f"[Panel] {persona['role']} 评审解析失败，记 no_go: {e}")
         vote.update(reason="评审输出解析失败", error=True)
     except Exception as e:
         logger.warning(f"[Panel] {persona['role']} 评审调用失败，记 no_go: {e}")
-        vote.update(reason=f"评审调用失败: {e}", error=True)
+        vote.update(reason="评审调用失败", error=True)
     return vote
 
 
