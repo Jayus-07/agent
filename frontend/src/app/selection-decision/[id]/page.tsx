@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
-import ReactMarkdown from 'react-markdown'
+import MarkdownContent from '@/components/MarkdownContent'
 import { selectionDecisionApi, SelectionTaskDetail } from '@/services/selectionDecision'
 
 export default function SelectionDecisionReportPage() {
@@ -16,11 +16,15 @@ export default function SelectionDecisionReportPage() {
       try {
         const t = await selectionDecisionApi.get(params.id)
         setTask(t)
+        setError('')
         if (t.status === 'running' && !timer) {
           timer = setInterval(load, 3000)  // 运行中轮询
+        } else if (t.status !== 'running' && timer) {
+          clearInterval(timer)
+          timer = null
         }
       } catch (e) {
-        setError(`加载失败: ${e}`)
+        setError(`加载失败: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
     load()
@@ -37,9 +41,7 @@ export default function SelectionDecisionReportPage() {
       {task.status === 'failed' ? (
         <div className="text-red-600">任务失败：{task.error || '未知错误'}</div>
       ) : (
-        <div className="prose prose-sm max-w-none">
-          <ReactMarkdown>{task.report_md || '无报告内容'}</ReactMarkdown>
-        </div>
+        <MarkdownContent content={task.report_md || '无报告内容'} />
       )}
     </div>
   )

@@ -32,7 +32,7 @@ export default function SelectionDecisionPage() {
       const res = await selectionDecisionApi.list()
       setTasks(res.tasks)
     } catch (e) {
-      setMessage(`加载任务列表失败: ${e}`)
+      setMessage(`加载任务列表失败: ${e instanceof Error ? e.message : String(e)}`)
     }
   }, [])
 
@@ -47,19 +47,27 @@ export default function SelectionDecisionPage() {
 
   const submit = async () => {
     if (!category.trim()) { setMessage('请填写品类关键词'); return }
+    if (platforms.length === 0) { setMessage('请至少选择一个平台'); return }
+    const sell = Number(sellPrice)
+    const cost = Number(unitCost)
+    if (!Number.isFinite(sell) || sell <= 0 || !Number.isFinite(cost) || cost < 0) {
+      setMessage('请填写合法的售价（>0）与成本（≥0）')
+      return
+    }
     const payload: TaskPayload = {
       category: category.trim(),
       platforms,
-      finance: { sell_price: Number(sellPrice), unit_cost: Number(unitCost) },
+      finance: { sell_price: sell, unit_cost: cost },
       panel_size: panelSize,
     }
     setSubmitting(true)
     try {
       const res = await selectionDecisionApi.submit(payload)
       setMessage(`任务已提交（${res.task_id}），后台执行中…`)
+      setCategory('')
       loadTasks()
     } catch (e) {
-      setMessage(`提交失败: ${e}`)
+      setMessage(`提交失败: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setSubmitting(false)
     }
