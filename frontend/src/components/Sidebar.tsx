@@ -1,6 +1,6 @@
 'use client'
 
-import { Sparkles, PanelLeft, PanelLeftClose, LayoutDashboard, BookOpen, Brain, Activity, FileText, AlertTriangle, Clock, TrendingUp } from 'lucide-react'
+import { Sparkles, PanelLeft, PanelLeftClose, LayoutDashboard, BookOpen, Brain, Activity, FileText, AlertTriangle, Clock, TrendingUp, ClipboardCheck } from 'lucide-react'
 import NavGroup from './layout/NavGroup'
 
 interface Props { collapsed: boolean; onToggle: () => void }
@@ -32,6 +32,9 @@ const NAV = [
   },
   {
     icon: <Sparkles size={18} />, label: '智能选品', path: '/selection',
+  },
+  {
+    icon: <ClipboardCheck size={18} />, label: '选品决策', path: '/selection-decision',
   },
   {
     icon: <Clock size={18} />, label: '定时任务', path: '/schedules',
