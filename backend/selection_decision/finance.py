@@ -37,6 +37,12 @@ def _validate(params: dict[str, Any]) -> None:
         raise ValueError("platform_fee_rate 必须在 [0, 1) 区间")
     if params.get("initial_inventory", 0) <= 0:
         raise ValueError("initial_inventory 必须 > 0")
+    for field in ("shipping_cost", "marketing_cost", "monthly_fixed_cost"):
+        if params.get(field, 0) < 0:
+            raise ValueError(f"{field} 不能为负")
+    for field in ("buffer_rate", "min_margin_rate"):
+        if not 0 <= params.get(field, 0) <= 1:
+            raise ValueError(f"{field} 必须在 [0, 1] 区间")
 
 
 def compute_model(params: dict[str, Any]) -> dict[str, Any]:
@@ -66,6 +72,7 @@ def compute_model(params: dict[str, Any]) -> dict[str, Any]:
 
 def run_finance(params: dict[str, Any], max_rounds: int = MAX_ROUNDS) -> dict[str, Any]:
     """有界优化循环：不达标 → 提价/降本建议 → 重算（≤max_rounds 轮）"""
+    max_rounds = max(1, max_rounds)
     current = dict(params)
     rounds: list[dict[str, Any]] = []
     suggestions: list[str] = []

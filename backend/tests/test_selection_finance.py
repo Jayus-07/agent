@@ -61,3 +61,29 @@ def test_validation_rejects_bad_params():
         run_finance({**BASE_PARAMS, "sell_price": 0})
     with pytest.raises(ValueError):
         run_finance({**BASE_PARAMS, "unit_cost": -1})
+
+
+def test_validation_rejects_negative_costs():
+    for field in ("marketing_cost", "shipping_cost", "monthly_fixed_cost"):
+        params = {**BASE_PARAMS, field: -50 if field == "marketing_cost" else -1}
+        with pytest.raises(ValueError):
+            compute_model(params)
+    with pytest.raises(ValueError):
+        compute_model({**BASE_PARAMS, "monthly_fixed_cost": -100})
+
+
+def test_validation_rejects_bad_rates():
+    for params in (
+        {**BASE_PARAMS, "buffer_rate": -0.1},
+        {**BASE_PARAMS, "buffer_rate": 1.5},
+        {**BASE_PARAMS, "min_margin_rate": 2.0},
+    ):
+        with pytest.raises(ValueError):
+            compute_model(params)
+
+
+def test_run_finance_max_rounds_floor():
+    """max_rounds=0 不应抛 IndexError，兜底为至少 1 轮且 verdict 正常"""
+    result = run_finance(BASE_PARAMS, max_rounds=0)
+    assert result["verdict"] == "pass"
+    assert len(result["rounds"]) >= 1
