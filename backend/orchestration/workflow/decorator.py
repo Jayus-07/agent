@@ -81,6 +81,7 @@ def step(
     timeout_sec: int = 60,
     on_error: str = "abort",
     name: str = "",
+    run_if: Callable | None = None,
 ) -> Callable[[Callable], Callable]:
     """方法装饰器：声明 Step 的配置
 
@@ -111,6 +112,8 @@ def step(
         raise ValueError(f"retry must be >= 0, got {retry}")
     if timeout_sec <= 0:
         raise ValueError(f"timeout_sec must be > 0, got {timeout_sec}")
+    if run_if is not None and not callable(run_if):
+        raise ValueError(f"run_if must be callable or None, got {run_if!r}")
 
     config = StepConfig(
         depends_on=list(depends_on or []),
@@ -118,6 +121,7 @@ def step(
         timeout_sec=timeout_sec,
         on_error=on_error,
         display_name=name,
+        run_if=run_if,
     )
 
     def decorator(fn: Callable) -> Callable:

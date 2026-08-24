@@ -190,12 +190,36 @@ class WorkflowExecutor:
             display = config.display_name or step_name
             step_span = trace_collector.start_span(
                 f"workflow_step.{step_name}",
-                parent_id=parent_span,
+                parent_id=parent_span.span_id if parent_span is not None else None,
                 name=display,
                 type="workflow_step",
             )
         except Exception:
             pass
+
+        # run_if 条件跳过：上游输出不满足谓词 → 记录 skipped 输出并收尾 span
+        if config.run_if is not None:
+            try:
+                should_run = bool(config.run_if(ctx.outputs))
+            except Exception as e:
+                logger.warning(
+                    f"[WorkflowExecutor] step {step_name} run_if 求值失败，按跳过处理: {e}"
+                )
+                should_run = False
+            if not should_run:
+                ctx.skip_steps.add(step_name)
+                ctx.outputs[step_name] = {"skipped": True, "reason": "run_if 条件不满足"}
+                if step_span is not None:
+                    try:
+                        from backend.observability.tracer import trace_collector
+                        trace_collector.end_span(
+                            step_span, status="skipped",
+                            metrics={"reason": "run_if_false"},
+                        )
+                    except Exception:
+                        logger.debug("[P1-10] step span 跳过收尾失败", exc_info=True)
+                logger.info(f"[WorkflowExecutor] step {step_name} 被 run_if 跳过")
+                return
 
         # 实例化 workflow class，让 method 拿到 self
         # （这样 step 方法可以是普通 method，写法自然：async def step_a(self, ctx)）
@@ -227,7 +251,7 @@ class WorkflowExecutor:
                             metrics={"attempt": attempt + 1},
                         )
                     except Exception:
-                        pass
+                        logger.debug("[P1-10] step span 收尾失败", exc_info=True)
                 logger.debug(
                     f"[WorkflowExecutor] step {step_name} 成功 "
                     f"(attempt={attempt + 1})"
@@ -268,7 +292,7 @@ class WorkflowExecutor:
                     metrics={"error": error_msg[:200]},
                 )
             except Exception:
-                pass
+                logger.debug("[P1-10] step span 错误收尾失败", exc_info=True)
 
         # on_error 分支
         if config.on_error == "skip":

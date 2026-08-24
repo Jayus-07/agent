@@ -53,6 +53,9 @@ class StepConfig:
     on_error: str = "abort"
     # UI：Trace 详情页展示用中文名（省略用方法名）
     display_name: str = ""
+    # DAG：条件执行谓词 — 调度前对 ctx.outputs 求值；返回 False 则跳过本 step。
+    # 签名: (outputs: dict[str, Any]) -> bool。None = 无条件（默认，行为不变）
+    run_if: Callable[[dict[str, Any]], bool] | None = None
 
 
 # Type alias: workflow class 上的 meta 属性类型
