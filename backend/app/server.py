@@ -320,12 +320,15 @@ async def register_workflows_and_schedules():
         from backend.orchestration.workflow.scheduler import get_workflow_scheduler
         from backend.orchestration.workflows.daily_report import DailyReport
         from backend.orchestration.workflows.inventory_alert import InventoryAlert
+        from backend.orchestration.workflows.selection_decision import SelectionDecision
 
         reg = get_workflow_registry()
         if reg.get("daily_report") is None:
             reg.register(DailyReport)
         if reg.get("inventory_alert") is None:
             reg.register(InventoryAlert)
+        if reg.get("selection_decision") is None:
+            reg.register(SelectionDecision)
 
         sched = get_workflow_scheduler()
         sched.register_daily("daily_report", hour=9, minute=0)
