@@ -41,6 +41,13 @@ def test_run_if_false_skips_step_and_records_output():
     assert "run_if" in ctx.outputs["on_no"]["reason"]
 
 
+def test_conditional_skip_keeps_success_status():
+    """run_if 条件跳过不产生 partial 状态（条件分支是正常路径）"""
+    ctx = _run({"gate": "go"})  # on_no 被 run_if 跳过
+    assert "on_no" in ctx.skip_steps
+    assert ctx.status == "success"
+
+
 def test_run_if_exception_treated_as_skip():
     """run_if 谓词自身抛异常时按跳过处理，不让 workflow 崩溃"""
     @workflow(name="t_run_if_err", description="谓词异常测试")

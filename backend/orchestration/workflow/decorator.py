@@ -95,6 +95,8 @@ def step(
             - "abort"（默认）：整个 Workflow 报错
             - "skip"：跳过本 step，继续后续
             - "agent_degrade"：调 LLM 智能兜底（TODO: Phase 5）
+        run_if: 条件执行谓词，签名 (outputs: dict) -> bool；对 ctx.outputs 求值，
+            返回 False 则跳过本 step（记录 skipped 输出与 trace）。None = 无条件执行
 
     Example:
         @step()  # 独立节点

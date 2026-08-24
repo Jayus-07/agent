@@ -122,8 +122,8 @@ class WorkflowExecutor:
                     self._run_step(name, steps, ctx, trace_root_span)
                     for name in layer
                 ])
-            # 全部 step 成功
-            if ctx.skip_steps:
+            # 全部 step 成功（run_if 条件跳过不算 partial，只有错误跳过才算）
+            if ctx.skip_steps - ctx.run_if_skips:
                 ctx.mark_partial()
             else:
                 ctx.mark_success()
@@ -195,7 +195,7 @@ class WorkflowExecutor:
                 type="workflow_step",
             )
         except Exception:
-            pass
+            logger.debug("[WorkflowExecutor] step span 创建失败（忽略）", exc_info=True)
 
         # run_if 条件跳过：上游输出不满足谓词 → 记录 skipped 输出并收尾 span
         if config.run_if is not None:
@@ -208,6 +208,7 @@ class WorkflowExecutor:
                 should_run = False
             if not should_run:
                 ctx.skip_steps.add(step_name)
+                ctx.run_if_skips.add(step_name)
                 ctx.outputs[step_name] = {"skipped": True, "reason": "run_if 条件不满足"}
                 if step_span is not None:
                     try:

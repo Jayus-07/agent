@@ -26,6 +26,7 @@ class WorkflowContext:
     - status: 运行状态
     - error: 失败信息
     - skip_steps: 跳过的 Step 集合（on_error="skip"）
+    - run_if_skips: run_if 条件跳过集合，不参与 partial 判定
     """
     workflow_name: str
     run_id: str
@@ -37,6 +38,7 @@ class WorkflowContext:
     status: str = "running"  # running / success / failed / partial
     error: str | None = None
     skip_steps: set[str] = field(default_factory=set)
+    run_if_skips: set[str] = field(default_factory=set)
 
     @property
     def duration_ms(self) -> int | None:
