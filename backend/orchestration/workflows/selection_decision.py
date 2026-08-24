@@ -46,21 +46,6 @@ def _llm_json(messages) -> Any:
     return json.loads(resp.content.strip().strip("`").removeprefix("json").strip())
 
 
-def _ensure_task_row(store, task_id: str, inputs: dict[str, Any]) -> None:
-    """确保任务行存在（直跑/测试场景未经 API create 时补建 running 记录）"""
-    if store.get(task_id) is not None:
-        return
-    from datetime import datetime
-    with store._lock, store._conn() as conn:
-        conn.execute(
-            """INSERT INTO selection_tasks (id, inputs_json, status, created_at)
-               VALUES (?, ?, 'running', ?)""",
-            (task_id, json.dumps(inputs, ensure_ascii=False, default=str),
-             datetime.now().isoformat(timespec="seconds")),
-        )
-        conn.commit()
-
-
 @workflow(
     name="selection_decision",
     description="选品决策 Go/No-Go — 市场评估/差异化/财务测算/AI评审团四层流水线",
@@ -233,7 +218,8 @@ class SelectionDecision:
         task_id = ctx.inputs.get("task_id")
         if task_id:
             sd_store = get_selection_decision_store()
-            _ensure_task_row(sd_store, task_id, ctx.inputs)
+            # 直跑/测试场景无 API 预建行：用公共接口补建后回写
+            sd_store.ensure_task(task_id, {"category": ctx.inputs.get("category")})
             sd_store.update_result(
                 task_id, status="success", verdict=verdict,
                 report_md=report_md, trace_id=ctx.trace_id or "")

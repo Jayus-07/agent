@@ -38,3 +38,16 @@ def test_list_orders_by_created_desc(store):
 
 def test_get_missing_returns_none(store):
     assert store.get("no-such-id") is None
+
+
+def test_ensure_task_creates_missing_row(store):
+    store.ensure_task("t-x")
+    row = store.get("t-x")
+    assert row is not None
+    assert row["status"] == "running"
+
+
+def test_ensure_task_keeps_existing_row(store):
+    tid = store.create({"a": 1})
+    store.ensure_task(tid, {"b": 2})
+    assert store.get(tid)["inputs"] == {"a": 1}
