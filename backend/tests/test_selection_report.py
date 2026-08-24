@@ -44,3 +44,46 @@ def test_skipped_steps_handled():
     md = build_report({"category": "x", "platforms": []}, outputs,
                       verdict="no_go", failed_gates=["差异化分析"])
     assert "未执行" in md
+    assert "run_if 条件不满足" in md  # M2：渲染真实 reason
+
+
+def test_malformed_none_fields_not_crash():
+    """I1：metrics/final_model/rounds 显式 None 时不崩溃"""
+    outputs = dict(OUTPUTS)
+    outputs["market_assess"] = {"verdict": "go", "metrics": None}
+    outputs["finance_model"] = {"verdict": "fail", "final_model": None,
+                                "rounds": None}
+    md = build_report({"category": "x", "platforms": []}, outputs,
+                      verdict="no_go", failed_gates=["finance"])
+    assert "市场评估" in md and "财务测算" in md
+
+
+def test_failed_gates_key_mapping():
+    """failed_gates 传 step key，经 GATE_LABELS 映射为中文"""
+    md = build_report({"category": "x", "platforms": []}, OUTPUTS,
+                      verdict="no_go", failed_gates=["finance", "panel"])
+    assert "财务测算" in md and "评审团" in md
+
+
+def test_missing_output_key_renders_not_executed():
+    """M3：outputs 中键整体缺失时章节渲染「未执行」而非空白"""
+    outputs = dict(OUTPUTS)
+    del outputs["market_assess"]
+    md = build_report({"category": "x", "platforms": []}, outputs,
+                      verdict="no_go", failed_gates=["market"])
+    assert "未执行" in md
+
+
+def test_panel_none_stats_render_dash():
+    """M4：评审团统计字段显式 None 时渲染 '-'，go_count=0 是合法值需保留"""
+    outputs = dict(OUTPUTS)
+    outputs["review_panel"] = {"verdict": "fail", "go_count": None,
+                               "size": None, "avg_score": None, "votes": []}
+    md = build_report({"category": "x", "platforms": []}, outputs,
+                      verdict="no_go", failed_gates=["panel"])
+    assert "None/None" not in md and "均分 None" not in md
+    outputs["review_panel"] = {"verdict": "fail", "go_count": 0, "size": 7,
+                               "avg_score": 40.0, "votes": []}
+    md = build_report({"category": "x", "platforms": []}, outputs,
+                      verdict="no_go", failed_gates=["panel"])
+    assert "0/7" in md
