@@ -1,0 +1,58 @@
+# Unit Tests CI — 2026-08-21 P0-3
+# 运行全量单测（backend/tests + tests），覆盖率门禁见 pytest.ini --cov-fail-under。
+name: Unit Tests
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      # 测试环境显式豁免 API 认证（app.server 级测试不携带 X-API-Key；
+      # fail-closed 中间件见 backend/app/api/middleware/auth.py）
+      ALLOW_UNAUTHENTICATED: "true"
+      # 避免 sentence-transformers/HF 在 CI 中下载模型或打印告警
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+
+      - name: Install locked dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-lock.txt
+
+      - name: Verify no real secrets in tracked env samples
+        run: |
+          # P0-1 防回归：.env.example 不得包含疑似真实密码（change-me/占位符除外）
+          if grep -rniE "(PGPASSWORD|PASSWORD|API_KEY|SECRET)=" backend/.env.example .env.example 2>/dev/null \
+             | grep -viE "change-me|your_password_here|^.*API_KEY=\s*$"; then
+            echo "::error::检测到 .env.example 中疑似真实凭据，请使用占位符"
+            exit 1
+          fi
+
+      - name: Run tests with coverage
+        run: pytest -p no:cacheprovider --no-header -q
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: htmlcov/
+          retention-days: 14

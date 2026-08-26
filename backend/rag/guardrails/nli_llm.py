@@ -64,29 +64,14 @@ JUDGE_PROMPT = """你是一个 RAG 质量评估专家。
 
 
 def _extract_json(text: str) -> dict | None:
-    """从 LLM 输出中提取 JSON（容忍 markdown 包裹 / 前缀文字）。"""
-    # 解析策略链：直接 parse → fenced json → 首个 json 块。
-    # 前序策略失败是常态（LLM 输出常带 markdown 包裹），属合法 fallback，
-    # 仅捕获具体解析异常并继续下一策略；全部失败由调用方记录并降级。
-    try:
-        return json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        pass  # 非纯 JSON 输出，尝试下一策略
-    # 尝试找 ```json ... ``` 块
-    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except (json.JSONDecodeError, ValueError):
-            pass  # 该块仍非合法 JSON，尝试下一策略
-    # 尝试找第一个 { ... } 块
-    m = re.search(r"\{[\s\S]*\}", text)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except (json.JSONDecodeError, ValueError):
-            pass  # 该块仍非合法 JSON，返回 None（调用方降级）
-    return None
+    """从 LLM 输出中提取 JSON（P1-14：统一到 shared/json_extractor）。
+
+    前序策略失败是常态（LLM 输出常带 markdown 包裹），属合法 fallback；
+    全失败返回 None，由调用方记录并降级。
+    """
+    from backend.shared.json_extractor import extract_json
+
+    return extract_json(text)
 
 
 def _build_context(context_docs: list) -> str:

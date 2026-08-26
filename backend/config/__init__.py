@@ -19,7 +19,19 @@ MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "5"))
 
 # 安全
 API_KEY = os.getenv("API_KEY", "")
+# 显式豁免认证（仅限本地开发调试；生产环境禁止开启）
+ALLOW_UNAUTHENTICATED = os.getenv("ALLOW_UNAUTHENTICATED", "false").strip().lower() in ("1", "true", "yes")
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+
+# SQL 数据安全（P1-11）
+# 信任网关注入的用户身份头：仅当反向代理/网关已完成认证并注入该头时开启。
+# 开启后 /sql 路由从该头推导 current_user_id（行级安全参数），忽略请求体中的同名
+# 字段（客户端不可伪造）；关闭时 user_id 恒为 None。
+TRUST_USER_HEADER = os.getenv("TRUST_USER_HEADER", "false").strip().lower() in ("1", "true", "yes")
+USER_ID_HEADER = os.getenv("USER_ID_HEADER", "X-User-Id")
+# 行级安全总开关：默认关闭（Demo 查询不携带用户上下文，严格模式会全部拒绝）。
+# 生产开启后，schema_config.row_security 中配置的表将强制按用户隔离。
+SQL_ROW_SECURITY_ENABLED = os.getenv("SQL_ROW_SECURITY_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 
 # 报告
 REPORT_SNAPSHOT_DAYS = int(os.getenv("REPORT_SNAPSHOT_DAYS", "30"))
@@ -176,6 +188,15 @@ from backend.config.rag import (
     FILTER_MIN_CHINESE_RATIO,
     FILTER_SIMHASH_THRESHOLD,
     FILTER_ENABLE_PII_MASK,
+    # Financial tables
+    FINANCIAL_TABLE_ROWS_PER_CHUNK,
+    FINANCIAL_MAX_CHUNKS_PER_DOC,
+    FINANCIAL_PII_MASK_FORCE,
+    FINANCIAL_SQL_BYPASS_ENABLED,
+    FINANCIAL_METRIC_PATTERNS,
+    FINANCIAL_NUMERIC_CONDITION_RE,
+    FINANCIAL_NUMERIC_CONDITION_RE_LTE,
+    FINANCIAL_PII_PATTERNS,
 )
 # Faithfulness (NLI answer verification)
 from backend.config.rag import (
@@ -185,6 +206,8 @@ from backend.config.rag import (
 __all__ = [
     # settings
     "LOG_LEVEL", "LOG_FILE", "OVERALL_REQUEST_TIMEOUT",
+    # sql 数据安全
+    "TRUST_USER_HEADER", "USER_ID_HEADER", "SQL_ROW_SECURITY_ENABLED",
     # database
     "RAG_DATA_DIR", "CHUNK_STORE_PATH",
     "BM25_INDEX_DIR", "CHROMA_PATH", "DOC_DB_PATH", "DOCS_DIRECTORY",
@@ -234,6 +257,15 @@ __all__ = [
     "FILTER_MIN_CHUNK_LENGTH", "FILTER_MAX_SYMBOL_RATIO",
     "FILTER_MIN_CHINESE_RATIO", "FILTER_SIMHASH_THRESHOLD",
     "FILTER_ENABLE_PII_MASK",
+    # financial tables
+    "FINANCIAL_TABLE_ROWS_PER_CHUNK",
+    "FINANCIAL_MAX_CHUNKS_PER_DOC",
+    "FINANCIAL_PII_MASK_FORCE",
+    "FINANCIAL_SQL_BYPASS_ENABLED",
+    "FINANCIAL_METRIC_PATTERNS",
+    "FINANCIAL_NUMERIC_CONDITION_RE",
+    "FINANCIAL_NUMERIC_CONDITION_RE_LTE",
+    "FINANCIAL_PII_PATTERNS",
     # faithfulness
     "ENABLE_FAITHFULNESS", "FAITHFULNESS_SKIP_THRESHOLD", "NLI_USE_LLM",
     # email

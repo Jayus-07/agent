@@ -84,6 +84,12 @@ _PII_PATTERNS = [
     (re.compile(r'(?<!\d)(\d{16,19})(?!\d)'), 'bank_card'),
 ]
 
+# 财务专用 PII 脱敏正则（从 domain_data 导入，兑底本地定义）
+try:
+    from backend.rag.preprocessing.domain_data import FINANCIAL_PII_PATTERNS
+except ImportError:
+    FINANCIAL_PII_PATTERNS = []
+
 
 def _mask_pii(text: str) -> tuple[str, list[str]]:
     """PII 脱敏。返回 (脱敏后文本, 操作列表)"""
@@ -97,6 +103,28 @@ def _mask_pii(text: str) -> tuple[str, list[str]]:
                 text = pattern.sub(lambda m: m.group(1)[:6] + '********' + m.group(1)[-4:], text)
             elif pii_type == 'bank_card':
                 text = pattern.sub(lambda m: m.group(1)[:4] + '********' + m.group(1)[-4:], text)
+            masked_types.append(pii_type)
+    return text, masked_types
+
+
+def _mask_financial_pii(text: str) -> tuple[str, list[str]]:
+    """财务专用 PII 脱敏。
+
+    脱敏财务报表中常见的敏感信息：
+      - 银行卡号（16-19位数字）→ 前4后4
+      - 统一社会信用代码（18位字母数字）→ 前6后4
+      - 身份证号（18位）→ 前6后4
+      - 纳税人识别号（15-20位）→ 前6后4
+    """
+    masked_types = []
+    for pattern, pii_type in FINANCIAL_PII_PATTERNS:
+        matches = pattern.findall(text)
+        if matches:
+            if pii_type == 'bank_card':
+                text = pattern.sub(lambda m: m.group(1)[:4] + '********' + m.group(1)[-4:], text)
+            elif pii_type in ('tax_id', 'tax_number', 'id_card'):
+                # 统一社会信用代码/纳税号：前6后4
+                text = pattern.sub(lambda m: m.group(1)[:6] + '********' + m.group(1)[-4:], text)
             masked_types.append(pii_type)
     return text, masked_types
 
@@ -119,6 +147,7 @@ class ChunkFilter:
         self.min_chinese_ratio = config.FILTER_MIN_CHINESE_RATIO
         self.simhash_threshold = config.FILTER_SIMHASH_THRESHOLD
         self.enable_pii = config.FILTER_ENABLE_PII_MASK
+        self.financial_pii_force = getattr(config, 'FINANCIAL_PII_MASK_FORCE', True)
         self._dup_detector = DuplicateDetector(threshold=self.simhash_threshold)
 
     def should_keep(self, text: str, metadata: dict) -> tuple[bool, str]:
@@ -182,10 +211,22 @@ class ChunkFilter:
             return False, "duplicate"
 
         # 6. PII 脱敏（不拒绝内容，仅修改文本）
-        if self.enable_pii:
+        # 财务文档强制 PII 脱敏：覆写全局开关，始终对 financial doc_type 执行
+        doc_type = metadata.get("doc_type", "")
+        is_financial = (doc_type == "financial") or (
+            metadata.get("chunk_type", "").startswith("table_")
+        )
+        should_mask = self.enable_pii or (is_financial and self.financial_pii_force)
+        if should_mask:
             new_text, masked_types = _mask_pii(stripped)
+            if is_financial and self.financial_pii_force:
+                # 财务文档额外执行财务专用 PII 脱敏
+                new_text, fin_masked = _mask_financial_pii(new_text)
+                masked_types.extend(fin_masked)
             if masked_types:
                 metadata["pii_masked"] = masked_types
+                # 脱敏后文本写回 chunk（调用方需更新 page_content）
+                metadata["_masked_text"] = new_text
 
         metadata["filter_status"] = "clean"
         metadata["filter_reason"] = ""
@@ -199,4 +240,14 @@ class ChunkFilter:
     def apply_pii_mask(text: str) -> str:
         """对文本应用 PII 脱敏，返回脱敏后的文本。"""
         masked_text, _ = _mask_pii(text)
+        return masked_text
+
+    @staticmethod
+    def apply_financial_pii_mask(text: str) -> str:
+        """对文本应用财务专用 PII 脱敏，返回脱敏后的文本。
+
+        用于财务文档的强制脱敏，包含银行账号/税号/社会信用代码等。
+        """
+        masked_text, _ = _mask_pii(text)
+        masked_text, _ = _mask_financial_pii(masked_text)
         return masked_text

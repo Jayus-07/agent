@@ -309,26 +309,32 @@ class TemplateEngine:
     # 渲染
     # ---------------------------------------------------
 
-    # 模板名 → 必需列名集合（render 入口校验，缺列则降级到 fallback）
-    # 列名匹配为"包含任一即可"（OR 语义），兼容中英文别名
-    _REQUIRED_COLUMNS: Dict[str, set] = {
-        "daily_sales.j2":          {"日期", "date", "渠道", "channel", "订单数", "order_count",
-                                     "销售额", "sales_amount", "下单客户数", "customer_count", "客单价", "avg_order_value"},
-        "product_performance.j2":   {"产品名称", "product_name", "品牌", "brand",
-                                     "销售订单数", "order_count", "销售数量", "qty_sold",
-                                     "销售额", "sales_amount", "毛利", "gross_profit", "毛利率", "gross_margin"},
-        "inventory_health.j2":      {"仓库", "warehouse", "产品名称", "product_name",
-                                     "SKU编码", "sku_code", "现有库存", "qty_on_hand",
-                                     "可用库存", "qty_available", "库存状态", "inventory_status"},
-        "ad_performance.j2":        {"广告平台", "ad_channel", "活动名称", "campaign_name",
-                                     "总花费", "total_spend", "ACoS", "ROAS",
-                                     "CTR", "CPC", "总转化", "conversions"},
-        "order_fulfillment.j2":     {"渠道", "channel", "订单状态", "order_status",
-                                     "订单数", "order_count", "金额合计", "total_amount",
-                                     "退款率", "refund_rate"},
-        "customer_analysis.j2":     {"国家", "country", "客户分层", "segment",
-                                     "客户数", "customer_count", "平均LTV", "avg_ltv",
-                                     "活跃率", "active_rate"},
+    # 模板名 → 必需列别名组（render 入口校验，缺列则降级到 fallback）
+    # 每组是中英文别名集合，组间 AND、组内 OR。
+    # fix f22：旧实现存成扁平 set 再按 list(set) 顺序每两个切一组，
+    # 而 set 迭代顺序受字符串哈希随机化影响 —— 英中别名可能被
+    # 随机拆散（如 customer_count 与 avg_order_value 同组），导致
+    # 日报列明明齐全却间歇性误判缺列降级（MiniMax 切换复测暴露）。
+    _REQUIRED_COLUMNS: Dict[str, list] = {
+        "daily_sales.j2":          [{"日期", "date"}, {"渠道", "channel"}, {"订单数", "order_count"},
+                                     {"销售额", "sales_amount"}, {"下单客户数", "customer_count"},
+                                     {"客单价", "avg_order_value"}],
+        "product_performance.j2":   [{"产品名称", "product_name"}, {"品牌", "brand"},
+                                     {"销售订单数", "order_count"}, {"销售数量", "qty_sold"},
+                                     {"销售额", "sales_amount"}, {"毛利", "gross_profit"},
+                                     {"毛利率", "gross_margin"}],
+        "inventory_health.j2":      [{"仓库", "warehouse"}, {"产品名称", "product_name"},
+                                     {"SKU编码", "sku_code"}, {"现有库存", "qty_on_hand"},
+                                     {"可用库存", "qty_available"}, {"库存状态", "inventory_status"}],
+        "ad_performance.j2":        [{"广告平台", "ad_channel"}, {"活动名称", "campaign_name"},
+                                     {"总花费", "total_spend"}, {"ACoS", "ROAS"},
+                                     {"CTR", "CPC"}, {"总转化", "conversions"}],
+        "order_fulfillment.j2":     [{"渠道", "channel"}, {"订单状态", "order_status"},
+                                     {"订单数", "order_count"}, {"金额合计", "total_amount"},
+                                     {"退款率", "refund_rate"}],
+        "customer_analysis.j2":     [{"国家", "country"}, {"客户分层", "segment"},
+                                     {"客户数", "customer_count"}, {"平均LTV", "avg_ltv"},
+                                     {"活跃率", "active_rate"}],
     }
 
     def _check_required_columns(
@@ -349,12 +355,9 @@ class TemplateEngine:
 
         available = set(data[0].keys())
 
-        # 把必需列按"组"切分：相邻的英中别名视为同一组（如 dept_name / 部门）
-        # 简化：每两个为一组 [英文, 中文]
-        groups = []
-        cols = list(required)
-        for i in range(0, len(cols), 2):
-            groups.append(set(cols[i:i+2]))
+        # fix f22：别名组已在 _REQUIRED_COLUMNS 中显式定义（组间 AND、
+        # 组内 OR），不再依赖 set 迭代顺序做两两切分。
+        groups = [set(g) for g in required]
 
         missing = set()
         for group in groups:
@@ -401,7 +404,7 @@ class TemplateEngine:
                         actual_template_name = tpl
                         break
             except Exception:
-                pass
+                logger.debug("[P1-10] 模板回退探测失败", exc_info=True)
 
         # 列名校验：缺列时降级到 fallback_render
         data = result.get("data", [])

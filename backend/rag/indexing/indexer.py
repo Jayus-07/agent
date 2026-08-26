@@ -1190,14 +1190,34 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
         """
         row = self.registry.get_by_path(file_path)
         old_doc_id = row.get("doc_id", "") if row else ""
+        old_doc_type = row.get("doc_type", "") if row else ""
 
-        # 1. 删除旧向量
+        # 1. 处理旧数据：财务文档走版本快照，其他类型直接删除
         if old_doc_id:
-            self._remove_document(old_doc_id)
+            if self._should_use_version_snapshot(old_doc_type, file_path):
+                # 版本快照：旧 chunk 标记 is_latest=False，保留历史版本向量
+                try:
+                    updated = self.vectordb.update_metadata_where(
+                        where={"doc_id": old_doc_id},
+                        metadata_update={"is_latest": False},
+                    )
+                    logger.info(
+                        f"[REINDEX] 版本快照: doc_id={old_doc_id}, "
+                        f"标记 {updated} 个旧版 chunk is_latest=False"
+                    )
+                except Exception as e:
+                    # 快照失败 → 兑底删除旧数据，不影响新索引
+                    logger.warning(
+                        f"[REINDEX] 版本快照失败，兑底删除旧数据: {e}"
+                    )
+                    self._remove_document(old_doc_id)
+                    self.registry.mark_deleted_by_doc_id(old_doc_id)
+            else:
+                self._remove_document(old_doc_id)
 
-            # 按 doc_id 软删所有行（修复重复路径导致的残余 active 行）
-            deleted = self.registry.mark_deleted_by_doc_id(old_doc_id)
-            logger.info(f"[REINDEX] 已清理旧数据: doc_id={old_doc_id}, rows={deleted}")
+                # 按 doc_id 软删所有行（修复重复路径导致的残余 active 行）
+                deleted = self.registry.mark_deleted_by_doc_id(old_doc_id)
+                logger.info(f"[REINDEX] 已清理旧数据: doc_id={old_doc_id}, rows={deleted}")
 
         # 2. 重新索引（_index_file 返回完整 dict，含 trace_id/chunk_count/doc_db_id）
         index_result = self._index_file(file_path, file_hash=file_hash)
@@ -1235,6 +1255,26 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
             "trace_id": trace_id or "",
             "stage_elapsed": stage_elapsed,
         }
+
+    @staticmethod
+    def _should_use_version_snapshot(doc_type: str, file_path: str) -> bool:
+        """判断是否应使用版本快照模式（保留旧版本向量）。
+
+        条件：
+          1. doc_type == 'financial'（仅财务报表走版本快照）
+          2. 文件名含报告期模式（如 2026-Q3 / 2025年第一季度）
+             —— 无报告期的文件不具时间维度，快照无意义
+        """
+        if doc_type != "financial":
+            return False
+        try:
+            from backend.rag.preprocessing.financial_normalizer import (
+                extract_reporting_period,
+            )
+            reporting_period, _ = extract_reporting_period(file_path)
+            return bool(reporting_period)
+        except Exception:
+            return False
 
     # ---- 删除 ----
 

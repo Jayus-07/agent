@@ -90,6 +90,33 @@ nli_coverage_rate = Gauge(
     "NLI 有效校验率（0-1，1 = 无超时）",
 )
 
+# ── 降级/韧性告警（P1-8）──
+degradation_alerts_total = Counter(
+    "degradation_alerts_total",
+    "降级/韧性链告警总数（按告警代码与级别）",
+    labelnames=("code", "level"),  # code: LLM_CIRCUIT_OPEN / WORKER_TIMEOUT / ...
+)
+
+# 熔断器状态（0=closed 1=half_open 2=open）— 熔断开路告警数据源
+circuit_breaker_state = Gauge(
+    "circuit_breaker_state",
+    "熔断器状态（0=closed, 1=half_open, 2=open）",
+    labelnames=("name",),
+)
+
+
+def publish_breaker_states() -> None:
+    """把全部熔断器状态刷到 Prometheus Gauge（周期调用或 /metrics 请求时调用）。"""
+    try:
+        from backend.infra.circuit_breaker import get_all_breakers, State
+        for name, breaker in get_all_breakers().items():
+            value = {"closed": 0, "half_open": 1, "open": 2}.get(breaker.state.value, 0)
+            circuit_breaker_state.labels(name=name).set(value)
+    except Exception:
+        pass  # 指标采集失败不影响业务
+
+
+
 # Router 监控（2026-08-11）：3 层 Router 决策可观测
 router_decision_total = Counter(
     "router_decision_total",

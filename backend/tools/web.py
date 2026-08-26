@@ -95,33 +95,22 @@ def web_crawl_tool(url: str, mode: str = "markdown") -> str:
     mode: "markdown" (默认，干净 Markdown) | "raw" (原始 HTML)
     返回: Markdown 格式的网页正文
     """
-    import asyncio
-    from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+    from backend.tools.crawler_runtime import crawl
     from backend.shared.logger import logger
 
-    async def _crawl(url: str, mode: str) -> str:
-        config = CrawlerRunConfig(
-            page_timeout=30_000,
-            magic=True,            # 反机器人检测
-            override_navigator=True,
-        )
-        async with AsyncWebCrawler() as crawler:
-            result = await crawler.arun(url, config=config)
-            if result is None:
-                return f"[CRAWL FAILED] 无法抓取 '{url}'：无响应"
-            if result.error_message:
-                return f"[CRAWL FAILED] 抓取 '{url}' 出错: {result.error_message}"
-            content = result.markdown if mode == "markdown" else result.html
-            if not content or len(str(content).strip()) == 0:
-                return f"[EMPTY] 网页 '{url}' 无有效正文内容"
-            text = str(content)
-            if len(text) > 8000:
-                text = text[:8000] + f"\n\n... (内容已截断，原文共 {len(text)} 字符)"
-            logger.info(f"[Tool:web_crawl] 成功抓取 {url} ({len(text)} 字符, mode={mode})")
-            return text
-
     try:
-        return asyncio.run(_crawl(url, mode))
+        result = crawl(url, mode=mode, timeout=60.0)
+        if not result["ok"]:
+            logger.warning(f"[Tool:web_crawl] 抓取失败: {result['error']}")
+            return f"[CRAWL FAILED] 无法抓取 '{url}': {result['error']}"
+        text = result["content"]
+        # 50000 字符上限: 电商商品页（亚马逊等）正文通常 50-300KB，
+        # 前段是导航/面包屑，商品数据（价格/评价/规格）在中后段。
+        # 8000 字符截断会导致 pipeline 无法提取到价格等关键字段。
+        if len(text) > 50000:
+            text = text[:50000] + f"\n\n... (内容已截断，原文共 {len(text)} 字符)"
+        logger.info(f"[Tool:web_crawl] 成功抓取 {url} ({len(text)} 字符, mode={mode})")
+        return text
     except Exception as e:
         logger.warning(f"[Tool:web_crawl] 抓取失败: {e}")
         return f"[CRAWL FAILED] 无法抓取 '{url}': {e}"

@@ -85,3 +85,52 @@ def get_deepseek_balance() -> dict:
     except Exception as e:
         logger.error(f"[DeepSeek] 余额查询失败: {e}")
         return {"ok": False, "error": f"请求失败: {e}"}
+
+
+async def get_deepseek_balance_async() -> dict:
+    """get_deepseek_balance 的异步版（P1-16）。
+
+    原同步版用 requests，在 async 路由（/llm/balance）里直接调用会阻塞
+    事件循环最长 10s。本版本用 httpx.AsyncClient，语义与返回结构完全一致。
+    """
+    if not DEEPSEEK_API_KEY:
+        return {"ok": False, "error": "DEEPSEEK_API_KEY 未配置"}
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{DEEPSEEK_API_BASE.rstrip('/')}/user/balance",
+                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+            )
+        if resp.status_code != 200:
+            return {
+                "ok": False,
+                "error": f"DeepSeek API 返回 {resp.status_code}: {resp.text[:200]}",
+            }
+
+        body = resp.json()
+        if not body.get("is_available", True):
+            return {"ok": False, "error": "DeepSeek 账户余额不足", "raw": body}
+
+        balance_infos = body.get("balance_infos") or []
+        if balance_infos:
+            first = balance_infos[0]
+            return {
+                "ok": True,
+                "provider": "deepseek",
+                "balance": first.get("total_balance", "0.00"),
+                "currency": first.get("currency", "CNY"),
+                "raw": body,
+            }
+        return {
+            "ok": True,
+            "provider": "deepseek",
+            "balance": body.get("balance_available", "0.00"),
+            "currency": "CNY",
+            "raw": body,
+        }
+
+    except Exception as e:
+        logger.error(f"[DeepSeek] 余额查询失败(async): {e}")
+        return {"ok": False, "error": f"请求失败: {e}"}

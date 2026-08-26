@@ -146,6 +146,81 @@ class TestChunkLevelFallback:
         assert result[0].metadata["chunk_id"] == "l1"
 
 
+class TestKbIdFallback:
+    """fix f17：KBRouter 推断 kb_id 失配（路由到无文档的 KB）时，
+    Stage 1 0 命中必须放宽 kb_id 重试，不得全量拒答。"""
+
+    def test_wrong_kb_id_relaxed_to_cross_kb(self):
+        """filter={kb_id: policy_finance, doc_type: financial} 但文档在
+        rag_test_kb → 放宽 kb_id 后 Stage 2 用剩余条件召回到结果。"""
+        from backend.rag.context import RequestContext, set_context, clear_context
+
+        set_context(RequestContext(
+            metadata_filter={"kb_id": "policy_finance", "doc_type": "financial"},
+            query="员工出差报销需要提交哪些材料？",
+        ))
+        try:
+            seen_filters = []
+
+            def fake_retrieve(q, k=5, doc_ids=None, metadata_filter=None,
+                              expanded_queries=None):
+                seen_filters.append(metadata_filter)
+                # 模拟：带 kb_id=policy_finance 时无命中，放宽后有命中
+                if metadata_filter and metadata_filter.get("kb_id"):
+                    return []
+                return [Document(page_content="c1", metadata={
+                    "chunk_id": "d1c1", "doc_id": "d1", "kb_id": "rag_test_kb",
+                })]
+
+            doc_db = SimpleNamespace(
+                similarity_search=lambda q, k=5, filter=None: [],  # Stage 1 0 命中
+            )
+            chunk_retriever = SimpleNamespace(retrieve=fake_retrieve)
+            bm25 = SimpleNamespace(invoke=lambda q: [])
+            r = _make_retriever(doc_db, chunk_retriever, bm25)
+            r.k = 5
+
+            docs = r._get_relevant_documents("员工出差报销需要提交哪些材料？")
+            assert len(docs) == 1, "放宽 kb_id 后应召回到跨 KB 结果"
+            assert docs[0].metadata["chunk_id"] == "d1c1"
+            # Stage 2 实际用的 filter 不得再含 kb_id/$or，但保留 doc_type 收窄
+            assert seen_filters, "Stage 2 未执行"
+            last = seen_filters[-1] or {}
+            assert "kb_id" not in last and "$or" not in last
+            assert last.get("doc_type") == "financial"
+        finally:
+            clear_context()
+
+    def test_or_scope_filter_also_relaxed(self):
+        """$or 形式的多 KB 候选同样在 0 命中时被放宽。"""
+        from backend.rag.context import RequestContext, set_context, clear_context
+
+        set_context(RequestContext(
+            metadata_filter={"$or": [{"kb_id": "policy_finance"},
+                                     {"kb_id": "policy_general"}]},
+        ))
+        try:
+            doc_db = SimpleNamespace(
+                similarity_search=lambda q, k=5, filter=None: [],
+            )
+            hit = Document(page_content="c1", metadata={
+                "chunk_id": "d1c1", "doc_id": "d1",
+            })
+            chunk_retriever = SimpleNamespace(
+                retrieve=lambda q, k=5, doc_ids=None, metadata_filter=None,
+                expanded_queries=None: [] if (metadata_filter and "$or" in metadata_filter)
+                else [hit],
+            )
+            bm25 = SimpleNamespace(invoke=lambda q: [])
+            r = _make_retriever(doc_db, chunk_retriever, bm25)
+            r.k = 5
+
+            docs = r._get_relevant_documents("报销流程")
+            assert len(docs) == 1
+        finally:
+            clear_context()
+
+
 # =====================================================
 # AdaptiveRetriever Context Expansion
 # =====================================================

@@ -59,13 +59,31 @@ def inject_row_filter(
         raise RowSecurityError("只支持 SELECT 注入行级条件")
 
     # — 收集 SQL 中引用的表及其别名 —
+    # P1-11 修复：row_security 的键是 schema 限定名（如 order.orders），
+    # 而 sqlglot 的 table.name 只是裸表名（orders）——旧实现用裸名查配置，
+    # 导致开启行级安全后过滤器永远不会注入（静默失效）。现在同时尝试
+    # 限定名与裸表名两种键进行匹配。
     real_to_alias: Dict[str, str] = {}
     referenced_tables = set()
     for table in stmt.find_all(exp.Table):
         real_name = table.name.lower()
-        referenced_tables.add(real_name)
+        db_name = (table.db or "").lower()
+        qualified = f"{db_name}.{real_name}" if db_name else real_name
         alias = table.alias_or_name.lower()
-        real_to_alias[real_name] = alias
+        matched_key = None
+        for candidate in (qualified, real_name):
+            if schema_loader.get_row_security(candidate):
+                matched_key = candidate
+                break
+        if matched_key is None:
+            # 裸表名反向匹配限定名配置键（如 orders → order.orders）
+            for key in schema_loader.row_security:
+                if key.endswith(f".{real_name}"):
+                    matched_key = key
+                    break
+        if matched_key is not None:
+            referenced_tables.add(matched_key)
+            real_to_alias[matched_key] = alias
 
     # — 找出哪些引用表是受保护的 —
     protected_tables = [

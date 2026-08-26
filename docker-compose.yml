@@ -4,6 +4,12 @@
 #   docker compose logs -f app    # 查看应用日志
 #   docker compose down           # 停止
 #
+# P1-12 生产化改动：
+#   - PostgreSQL 不再对外暴露端口（仅容器网络内可达）；
+#     如需本地调试，取消下方 postgres.ports 注释（仅绑 127.0.0.1）
+#   - 应用业务库查询走 agent_readonly 只读账号（数据库层只读防线）
+#   - 首次启动由 docker/init-dbs.sh 自动建库 + 建角色（幂等）
+#   - PGPASSWORD / PG_READONLY_PASSWORD 必填（fail-fast，无默认弱密码）
 version: "3.8"
 
 services:
@@ -17,20 +23,26 @@ services:
       - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
-      # PostgreSQL
+      # PostgreSQL — 记忆库（读写，服务账号）
       - PGHOST=postgres
       - PGPORT=5432
-      - PGDATABASE=demo
+      - PGDATABASE=agent_memory
       - PGUSER=postgres
-      - PGPASSWORD=${PGPASSWORD:-postgres}
+      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+      # PostgreSQL — 业务库（只读账号，数据库层强制只读）
+      - BUSINESS_PGDATABASE=agent_business
+      - PG_READONLY_USER=agent_readonly
+      - PG_READONLY_PASSWORD=${PG_READONLY_PASSWORD:?PG_READONLY_PASSWORD is required}
       # 模型
       - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
       - RERANKER_MODEL_PATH=${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
       # 日志
       - LOG_FORMAT=${LOG_FORMAT:-json}
+      # 认证（fail-closed：未配置 API_KEY 时业务端点拒绝服务）
+      - API_KEY=${API_KEY:-}
     volumes:
       - app_data:/app/data
-      - hf_cache:/root/.cache/huggingface
+      - app_cache:/app/.cache
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,15 +52,19 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      - POSTGRES_DB=demo
+      - POSTGRES_DB=agent_memory
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=${PGPASSWORD:-postgres}
-    ports:
-      - "5432:5432"
+      - POSTGRES_PASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+    # 不对外暴露端口（默认）。本地调试时取消注释：
+    # ports:
+    #   - "127.0.0.1:5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
+      # 首次初始化：建业务库 + schema + 种子 + 只读角色（仅空卷时执行）
+      - ./docker/init-dbs.sh:/docker-entrypoint-initdb.d/10-init-dbs.sh:ro
+      - ./backend/sql/migrations:/docker-migrations:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d demo"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agent_memory"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -66,6 +82,6 @@ services:
 
 volumes:
   app_data:
+  app_cache:
   pg_data:
-  hf_cache:
   ollama_data:

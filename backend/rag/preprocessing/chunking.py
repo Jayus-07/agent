@@ -677,11 +677,198 @@ class SemanticChunkStrategy:
         }
 
 
+class FinancialTableChunkStrategy:
+    """财务表格专用切分：表级摘要(parent) + 行级 kv(leaf) 双层索引。
+
+    替代 StructureChunkStrategy 对 financial 文档的处理。原策略把整张表
+    当作一个 leaf chunk，表格超过 LEAF_CHUNK_TOKENS 时被
+    RecursiveCharacterTextSplitter 按字符硬切，会把一行财务数据从中间切断。
+
+    本策略按行自然边界拆分：
+      - Layer 1: 表级摘要(parent) — NL 描述表名/行列数/列名，供语义检索
+      - Layer 2: 行级 kv(leaf) — 每行一个 chunk，kv 格式供精确数值检索
+    行级 chunk 通过 parent_chunk_id 关联表级摘要，metadata 含
+    numeric_values（规范化数值）支持按数值范围过滤。
+
+    非表格 leaf（段落等）走 StructureChunkStrategy 逻辑。
+    """
+
+    def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
+        from backend.config import FINANCIAL_TABLE_ROWS_PER_CHUNK
+
+        chunks: List[Document] = []
+        for sec, path in self._sections(ast):
+            leaves = list(self._leaves(sec))
+            section_anchor = ".".join(path)
+            has_table = any(n.type == "table" and n.rows for n in leaves)
+
+            if not has_table:
+                # 无表格 → 走原 StructureChunkStrategy 逻辑
+                sec_text = StructureChunkStrategy._section_text(sec)
+                if count_tokens(sec_text) <= PARENT_CHUNK_TOKENS:
+                    parent_id = _chunk_id(file_path, f"parent:{section_anchor}", sec_text)
+                    StructureChunkStrategy._emit_parent(chunks, file_path, sec, path, sec_text, parent_id)
+                    for leaf in leaves:
+                        StructureChunkStrategy._emit_leaf(chunks, file_path, sec, path, leaf,
+                            _chunk_id(file_path, f"leaf:{section_anchor}", leaf.text), parent_id)
+                else:
+                    groups = StructureChunkStrategy._group_leaves_by_tokens(leaves, PARENT_CHUNK_TOKENS)
+                    for gi, group in enumerate(groups):
+                        group_text = "\n".join([sec.text] + [leaf.text for leaf in group])
+                        parent_id = _chunk_id(file_path, f"parent:{section_anchor}:{gi}", group_text)
+                        StructureChunkStrategy._emit_parent(chunks, file_path, sec, path, group_text, parent_id)
+                        for leaf in group:
+                            StructureChunkStrategy._emit_leaf(chunks, file_path, sec, path, leaf,
+                                _chunk_id(file_path, f"leaf:{section_anchor}:{gi}", leaf.text), parent_id)
+                continue
+
+            # 有表格 → 财务表格专用切分
+            chunks.extend(self._split_with_tables(
+                sec, path, file_path, FINANCIAL_TABLE_ROWS_PER_CHUNK,
+            ))
+        return _enrich(chunks, file_path)
+
+    def _split_with_tables(
+        self, sec, path: list, file_path: str, rows_per_chunk: int,
+    ) -> List[Document]:
+        """处理含表格的 section：表格走双层切分，非表格走原逻辑。"""
+        from backend.rag.preprocessing.financial_normalizer import (
+            extract_numeric_cells,
+            extract_reporting_period,
+        )
+        from backend.rag.preprocessing.parser._table_nl import (
+            normalize_table_rows, build_table_summary, row_to_kv,
+        )
+
+        chunks: List[Document] = []
+        section_anchor = ".".join(path)
+
+        # 提取报告期用于版本快照（financial 文档保留历史版本向量）
+        reporting_period, fiscal_year = extract_reporting_period(
+            file_path, sec.text,
+        )
+
+        for leaf in self._leaves(sec):
+            if leaf.type == "table" and leaf.rows:
+                # ── 表格双层切分 ──
+                rows = leaf.rows
+                flat_header, data_rows = normalize_table_rows(rows)
+                if not flat_header or not data_rows:
+                    # 表头规范化失败 → 整表作一个 chunk 兑底
+                    chunks.append(_make_doc(leaf.text, {
+                        "granularity": "leaf",
+                        "chunk_id": _chunk_id(file_path, f"leaf:{section_anchor}", leaf.text),
+                        "parent_chunk_id": "",
+                        "section_path": path,
+                        "section_title": sec.text,
+                        "section_level": sec.level,
+                        "chunk_type": "table_fallback",
+                        "chunk_tokens": count_tokens(leaf.text),
+                    }))
+                    continue
+
+                # Layer 1: 表级摘要(parent)
+                summary = build_table_summary(rows, section_title=sec.text)
+                parent_id = _chunk_id(
+                    file_path, f"table_parent:{section_anchor}", summary,
+                )
+                parent_meta = {
+                    "granularity": "parent",
+                    "chunk_id": parent_id,
+                    "table_id": parent_id,
+                    "section_path": path,
+                    "section_title": sec.text,
+                    "section_level": sec.level,
+                    "chunk_type": "table_summary",
+                    "row_count": len(data_rows),
+                    "col_count": len(flat_header),
+                    "chunk_tokens": count_tokens(summary),
+                }
+                if reporting_period:
+                    parent_meta["reporting_period"] = reporting_period
+                    parent_meta["fiscal_year"] = fiscal_year
+                    parent_meta["is_latest"] = True
+                chunks.append(_make_doc(summary, parent_meta))
+
+                # Layer 2: 行级 kv chunks(leaf) — 按行自然边界，不硬切
+                for ri, row in enumerate(data_rows):
+                    kv_text = row_to_kv(flat_header, row, sec.text)
+                    if not kv_text.strip():
+                        continue
+                    leaf_id = _chunk_id(
+                        file_path, f"table_row:{section_anchor}:{ri}", kv_text,
+                    )
+                    # 提取数值单元格到 metadata，支持按数值范围检索
+                    numeric_vals = extract_numeric_cells(flat_header, row)
+                    meta = {
+                        "granularity": "leaf",
+                        "chunk_id": leaf_id,
+                        "parent_chunk_id": parent_id,
+                        "table_id": parent_id,
+                        "section_path": path,
+                        "section_title": sec.text,
+                        "section_level": sec.level,
+                        "chunk_type": "table_row",
+                        "row_index": ri,
+                        "chunk_tokens": count_tokens(kv_text),
+                    }
+                    if numeric_vals:
+                        meta["numeric_values"] = numeric_vals
+                    if reporting_period:
+                        meta["reporting_period"] = reporting_period
+                        meta["fiscal_year"] = fiscal_year
+                        meta["is_latest"] = True
+                    chunks.append(_make_doc(kv_text, meta))
+            else:
+                # ── 非表格 leaf：走原 StructureChunkStrategy 逻辑 ──
+                leaf_text = leaf.text
+                if count_tokens(leaf_text) > LEAF_CHUNK_TOKENS:
+                    splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=50,
+                        length_function=count_tokens, separators=_SEPARATORS,
+                    )
+                    subs = splitter.split_text(leaf_text)
+                else:
+                    subs = [leaf_text]
+                parent_id = _chunk_id(file_path, f"parent:{section_anchor}", sec.text)
+                for si, sub in enumerate(subs):
+                    sub_id = (_chunk_id(file_path, f"leaf:{section_anchor}:{si}", sub)
+                              if len(subs) > 1
+                              else _chunk_id(file_path, f"leaf:{section_anchor}", sub))
+                    chunks.append(_make_doc(sub, {
+                        "granularity": "leaf",
+                        "chunk_id": sub_id,
+                        "parent_chunk_id": parent_id,
+                        "section_path": path,
+                        "section_title": sec.text,
+                        "section_level": sec.level,
+                        "chunk_tokens": count_tokens(sub),
+                    }))
+        return chunks
+
+    @staticmethod
+    def _sections(ast: DocumentAST):
+        def _dfs(node: DocumentNode, path: list):
+            for child in node.children:
+                if child.type == "section":
+                    yield child, path + [child.text]
+                    yield from _dfs(child, path + [child.text])
+                else:
+                    yield from _dfs(child, path)
+        yield from _dfs(ast.root, [])
+
+    @staticmethod
+    def _leaves(section: DocumentNode):
+        for n in section.children:
+            if n.type in LEAF_TYPES:
+                yield n
+
+
 STRUCTURE_STRATEGIES = {
     "policy": StructureChunkStrategy,
     "compliance": StructureChunkStrategy,
     "security": StructureChunkStrategy,
-    "financial": StructureChunkStrategy,
+    "financial": FinancialTableChunkStrategy,
     "customer_data": StructureChunkStrategy,
     "product_spec": StructureChunkStrategy,
     "listing": StructureChunkStrategy,

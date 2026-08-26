@@ -26,7 +26,11 @@ class AbortRequest(BaseModel):
 
 class SQLAskRequest(BaseModel):
     question: str = Field(..., description="自然语言数据查询", min_length=1, max_length=2000)
-    current_user_id: Optional[int] = Field(None, description="当前用户ID（用于行级安全过滤）")
+    # P1-11: 已废弃 — 该字段可被客户端伪造，服务端不再采用。
+    # 行级安全的用户上下文改由可信网关头（X-User-Id，需 TRUST_USER_HEADER=true）推导。
+    current_user_id: Optional[int] = Field(
+        None, description="[已废弃] 用户身份由服务端从可信头推导，此字段被忽略", deprecated=True
+    )
 
 
 # ── RAG 检索 ─────────────────────────────────────

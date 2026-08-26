@@ -253,7 +253,15 @@ def check_faithfulness(
         unsupported = sum(1 for _ in nli_results if not _["supported"])
     # LLM-as-Judge 已是唯一路径（2026-08-12：mDeBERTa 路径已移除）
 
-    score = supported / len(nli_results) if nli_results else 1.0
+    # fix f18：LLM-Judge 路径直接用 verdict.score（判官对整体支撑度的
+    # 0-1 评估）。旧逻辑 supported/len(nli_results) 在 nli_results 仅由
+    # unsupported_claims 构成时恒为 0 —— 判官给 0.95 但列了 1 条
+    # unsupported 也会被算成 0.00 触发 hallucination 误拒答
+    # （MiniMax 切换后实测暴露；qwen 时代 unsupported 常为空未触发）。
+    if NLI_USE_LLM:
+        score = verdict.score
+    else:
+        score = supported / len(nli_results) if nli_results else 1.0
 
     # P2: 50% 阈值保护 — NLI 误判保护
     # 当 unsupported 比例超过阈值（默认 50%）时，跳过 rewrite，保留原答案

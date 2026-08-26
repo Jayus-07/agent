@@ -26,6 +26,20 @@ export async function listAllTraces(): Promise<TraceRecord[]> {
   }
 }
 
+/** 列出 Agent 问答链路追踪（workflow_name === "agent"）
+ *  供 /observability/traces 页面使用，只展示 /agent 智能问答产生的 trace，
+ *  排除文档上传/重索引等操作日志 trace。 */
+export async function listAgentTraces(): Promise<TraceRecord[]> {
+  if (!isClient()) return [];
+  try {
+    const all = await realApi.listTraces(200);
+    return all.filter((t) => t.workflow_name === "agent");
+  } catch (e) {
+    console.warn("[observability] listAgentTraces failed:", (e as Error).message);
+    return [];
+  }
+}
+
 /** 当前活跃 trace（实时监控面板用 — 暂未接入） */
 export async function listActiveTraces(): Promise<TraceRecord[]> {
   if (!isClient()) return [];

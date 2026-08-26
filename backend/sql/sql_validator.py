@@ -26,6 +26,18 @@ class ValidationError(Exception):
         super().__init__(message)
 
 
+# PostgreSQL 保留字（子集）—— 作为 schema/table 名时必须加引号。
+# fix f19：LLM 可能生成未加引号的 `order.order_items`，sqlglot 能解析但
+# 重序列化后 PG 报语法错误（实测 MiniMax 切换后暴露）。白名单校验
+# 基于 AST 名称不受引号影响，这里在输出前统一补引号即安全兜底。
+_PG_RESERVED_IDENTIFIERS = {
+    "order", "group", "user", "table", "select", "where", "from", "to",
+    "default", "check", "primary", "limit", "offset", "case", "when",
+    "then", "else", "end", "and", "or", "not", "null", "grant",
+    "references", "collate", "foreign", "index", "with",
+}
+
+
 class SQLValidator:
     """SQL 安全校验器"""
 
@@ -79,6 +91,47 @@ class SQLValidator:
     # =================================================
     # Layer 2: 表名白名单
     # =================================================
+
+    def _quote_reserved_identifiers(self, parsed: list) -> None:
+        """fix f19：给保留字 schema/table 名补双引号（就地修改 AST）。
+
+        与项目手写 SQL 约定一致（daily_report/data_fetcher 均用
+        `"order"."orders"`）；引号不影响白名单校验（基于 AST 名称）。
+        """
+        stmt = parsed[0]
+        for table in stmt.find_all(exp.Table):
+            for part in ("catalog", "db", "this"):
+                ident = table.args.get(part)
+                if ident is not None and isinstance(ident, exp.Identifier):
+                    if ident.name.lower() in _PG_RESERVED_IDENTIFIERS and not ident.args.get("quoted"):
+                        ident.set("quoted", True)
+
+    def _check_alias_defined(self, parsed: list) -> None:
+        """fix f21：列引用的表别名/表名必须在 FROM/JOIN 中已定义。
+
+        LLM 可能生成引用了未 JOIN 表的别名（如用 `oi.order_id` 却未
+        JOIN order_items AS oi），PG 报「对于表 oi，丢失 FROM 子句」；
+        而 syntax_error 不可重试会直接兜底（MiniMax 切换后实测暴露）。
+        在 validator 层拦截 → ValidationError → 走既有重试链路带错误
+        反馈重新生成，不依赖 LLM 承诺，符合 6 层硬校验设计。
+        """
+        stmt = parsed[0]
+        defined = set()
+        for table in stmt.find_all(exp.Table):
+            defined.add((table.alias or table.name).lower())
+        for sq in stmt.find_all(exp.Subquery):
+            if sq.alias:
+                defined.add(sq.alias.lower())
+        for cte in stmt.find_all(exp.CTE):
+            if cte.alias:
+                defined.add(cte.alias.lower())
+        for col in stmt.find_all(exp.Column):
+            if col.table and col.table.lower() not in defined:
+                raise ValidationError(
+                    f"列 '{col.table}.{col.name}' 引用的表别名 '{col.table}' "
+                    f"未在 FROM/JOIN 中定义（已定义: {sorted(defined)}）",
+                    layer=2,
+                )
 
     def _extract_table_names(self, parsed: list) -> Set[str]:
         """从 AST 中提取所有被引用的表名（schema-qualified）。
@@ -236,9 +289,15 @@ class SQLValidator:
         # — Layer 1: 类型校验 —
         self._check_statement_type(parsed)
 
+        # — fix f19: 保留字标识符补引号（在白名单校验前，不影响 AST 名称）—
+        self._quote_reserved_identifiers(parsed)
+
         # — Layer 2: 表名白名单 —
         table_names = self._extract_table_names(parsed)
         self._check_table_allowlist(table_names)
+
+        # — fix f21: 列别名引用必须有 FROM/JOIN 定义 —
+        self._check_alias_defined(parsed)
 
         # — Layer 3: 敏感列拒绝 —
         self._check_sensitive_columns(parsed, table_names)

@@ -82,11 +82,31 @@ app.include_router(api_router)
 async def metrics_endpoint():
     """Prometheus 拉取端点 — 不受 auth / CORS 限制（K8s scrape）。"""
     from fastapi.responses import Response
+    # P1-8: 抓取时刷新熔断器状态 Gauge（LLMCircuitBreakerOpen 告警数据源）
+    try:
+        from backend.observability.metrics import publish_breaker_states
+        publish_breaker_states()
+    except Exception:
+        pass
     body, content_type = render_metrics()
     return Response(content=body, media_type=content_type)
 
 # ── 注册 MCP Server ─────────────────────────────────
 register_mcp_servers()
+
+
+# ═══════════════════════════════════════════════════
+# 启动配置校验（P1-14：pydantic Settings fail-fast）
+# ═══════════════════════════════════════════════════
+@app.on_event("startup")
+async def validate_settings():
+    """环境变量集中校验：fatal 错误抛出 → 服务拒绝启动（fail-fast）。
+
+    校验失败时 FastAPI 会中断 startup，uvicorn 退出，
+    避免带着坏配置对外提供半残服务。
+    """
+    from backend.config.startup import validate_startup_settings
+    validate_startup_settings()
 
 
 # ═══════════════════════════════════════════════════

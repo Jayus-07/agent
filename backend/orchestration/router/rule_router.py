@@ -40,6 +40,15 @@ _WORKFLOW_PATTERNS = {
 }
 
 
+# ── 竞品分析强信号（竞品/比价/商品链接 → competitor.analyze）──
+# 注: 需在 SQL 段之前判断，否则"竞品价格多少"会被 SQL 关键词（"价格"不在
+# SQL 列表但"多少"在）抢走路由
+_COMPETITOR_KEYWORDS = [
+    r"竞品", r"竞对", r"比价", r"价格监控", r"价格历史", r"降价", r"涨价",
+    r"item\.jd\.com", r"detail\.tmall\.com", r"item\.taobao\.com", r"amazon\.",
+    r"巡检", r"监控列表",
+]
+
 # ── SQL 强信号（多少/统计/最近 → 查数据）──
 _SQL_KEYWORDS = [
     r"多少", r"几个", r"统计", r"数量", r"金额", r"总和",
@@ -88,6 +97,25 @@ class RuleRouter:
                 confidence=0.85,
                 workflow_name="daily_report",
                 reason="匹配 workflow 强关键词",
+            )
+
+        # 1.5 竞品分析强信号（含商品链接 URL 或 明确竞品关键词 → competitor.analyze）
+        comp_hits = sum(1 for k in _COMPETITOR_KEYWORDS if re.search(k, query_lower))
+        has_url = bool(re.search(r"https?://", query_lower))
+        if comp_hits >= 2 or (comp_hits >= 1 and has_url):
+            return RouteDecision(
+                execution_mode=ExecutionMode.DIRECT,
+                candidates=[CapabilityScore(name="competitor.analyze", score=0.90)],
+                confidence=0.90,
+                reason=f"匹配竞品分析关键词 {comp_hits} 个（强信号）",
+            )
+        if comp_hits == 1:
+            # 单个弱信号 → 低置信，交给 Vector/LLM 最终决定
+            return RouteDecision(
+                execution_mode=ExecutionMode.DIRECT,
+                candidates=[CapabilityScore(name="competitor.analyze", score=0.65)],
+                confidence=0.72,  # < 0.8 → fallback 到 Vector
+                reason="匹配竞品分析关键词 1 个（弱信号）",
             )
 
         # 2. 业务 SOP 关键字（审核/退款/流程等 — 弱信号，给 Vector/LLM 做 hint）

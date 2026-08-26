@@ -19,6 +19,7 @@ from backend.skills.web_search.skill import WebSearchSkill
 from backend.skills.web_crawl.skill import WebCrawlSkill
 from backend.skills.data_collection.skill import DataCollectionSkill, data_collection_skill_node
 from backend.skills.business_analysis.skill import BusinessAnalysisSkill, business_analysis_skill_node
+from backend.skills.competitor_analysis.skill import CompetitorAnalysisSkill
 
 # 全局实例（PR-2.x: DataCollection 已从外部惰性加载升级为内置注册）
 _instances: list = [
@@ -31,6 +32,7 @@ _instances: list = [
     WebCrawlSkill(),
     DataCollectionSkill(),
     BusinessAnalysisSkill(),
+    CompetitorAnalysisSkill(),
 ]
 
 # capability → Skill 实例

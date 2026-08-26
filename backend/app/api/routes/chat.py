@@ -19,6 +19,13 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from backend.shared.logger import logger
+from backend.config.settings import (
+    CHAT_SSE_MAX_WORKERS,
+    CHAT_SSE_QUEUE_MAXSIZE,
+    CHAT_SSE_GET_TIMEOUT,
+)
+
 from backend.app.api.schemas import ChatRequest, ChatResponse, AbortRequest, ErrorResponse
 from backend.app.api.deps import get_multi_agent
 from backend.infra.llm.rate_limiter import require_rate_limit
@@ -33,8 +40,8 @@ router = APIRouter(prefix="/chat", tags=["对话"])
 
 # ── 全局线程池（按 CPU 自适应，预留 1 核给 event loop） ──
 # SSE 流的 worker 数 = SSE 并发上限；同时第 N+1 路会排队等待有空闲 worker。
-# 阈值可通过 CHAT_SSE_MAX_WORKERS 覆盖。
-_SSE_MAX_WORKERS = int(os.getenv("CHAT_SSE_MAX_WORKERS", "0")) or max(4, (os.cpu_count() or 4) * 2)
+# 阈值可通过 CHAT_SSE_MAX_WORKERS 覆盖（P1-14：配置收敛到 config/settings.py）。
+_SSE_MAX_WORKERS = CHAT_SSE_MAX_WORKERS
 _executor = ThreadPoolExecutor(
     max_workers=_SSE_MAX_WORKERS,
     thread_name_prefix="chat-sse",
@@ -42,9 +49,9 @@ _executor = ThreadPoolExecutor(
 # 用户停止信号字典（aborted 路径在 chat_abort 中按 key 触发）
 _active_stops: dict[str, threading.Event] = {}
 # 容量 1024 → 在 100Hz 输出下可撑 ~10s；超出时 backpressure（增量记 metric + set stop）
-_SSE_QUEUE_MAXSIZE = int(os.getenv("CHAT_SSE_QUEUE_MAXSIZE", "1024"))
+_SSE_QUEUE_MAXSIZE = CHAT_SSE_QUEUE_MAXSIZE
 # consumer 阻塞拉取超时（秒）→ CPU 占用从 100Hz 轮询降到 ~0.5Hz
-_SSE_GET_TIMEOUT = float(os.getenv("CHAT_SSE_GET_TIMEOUT", "0.5"))
+_SSE_GET_TIMEOUT = CHAT_SSE_GET_TIMEOUT
 
 
 def _request_key(session_id: str, request_id: str) -> str:
@@ -154,7 +161,7 @@ async def chat_stream(
                 try:
                     chat_stream_event_produced_total.labels(event=evt_name).inc()
                 except Exception:
-                    pass
+                    logger.debug("[P1-10] produced_total 指标上报失败", exc_info=True)
                 try:
                     q.put(evt, timeout=0.05)
                 except queue.Full:
@@ -195,7 +202,7 @@ async def chat_stream(
             try:
                 chat_request_total.labels(status=status).inc()
             except Exception:
-                pass
+                logger.debug("[P1-10] request_total 指标上报失败", exc_info=True)
 
         try:
             yield meta_event

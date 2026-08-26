@@ -69,7 +69,7 @@ class MemoryManager:
                 future = asyncio.run_coroutine_threadsafe(_close(), self._loop)
                 future.result(timeout=3)
         except Exception:
-            pass
+            logger.debug("[P1-10] async engine 关闭失败（进程退出路径）", exc_info=True)
         self._executor.shutdown(wait=False)
 
     def start_session(self, session_id: str, question: str) -> ShortTermBuffer:

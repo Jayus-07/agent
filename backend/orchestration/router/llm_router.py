@@ -49,24 +49,13 @@ LLM_ROUTER_PROMPT = """你是企业 Agent 路由。
 
 
 def _extract_json(text: str) -> dict | None:
-    """从 LLM 输出中提取 JSON。"""
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    m = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text)
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except Exception:
-            pass
-    m = re.search(r"\{[\s\S]*\}", text)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except Exception:
-            pass
-    return None
+    """从 LLM 输出中提取 JSON（P1-14：统一到 shared/json_extractor）。
+
+    宽松语义：全失败返回 None（调用方走 _fallback）。
+    """
+    from backend.shared.json_extractor import extract_json
+
+    return extract_json(text)
 
 
 class LLMRouter:

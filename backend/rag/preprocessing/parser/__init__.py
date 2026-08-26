@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 
 from backend.rag.preprocessing.ast import DocumentAST
+from backend.rag.preprocessing.parser.csv_parser import CsvParser
 from backend.rag.preprocessing.parser.docx_parser import DocxParser
 from backend.rag.preprocessing.parser.excel_parser import ExcelParser
 from backend.rag.preprocessing.parser.markdown_parser import MarkdownParser
@@ -17,6 +18,7 @@ _PARSERS = {
     ".pdf": PdfParser,
     ".docx": DocxParser,
     ".xlsx": ExcelParser,
+    ".csv": CsvParser,
 }
 
 # F6: 单一来源常量 — 已注册解析器的扩展名集合。

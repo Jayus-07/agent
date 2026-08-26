@@ -48,6 +48,7 @@ dependencies = [
     "chromadb>=0.5",
     "psycopg2-binary>=2.9",
     "sqlalchemy>=2.0",
+    "alembic>=1.13",
 
     # ═══════════════════════════════════════════
     # 数据处理
@@ -63,6 +64,11 @@ dependencies = [
     "sentence-transformers>=3.0",
 
     # ═══════════════════════════════════════════
+    # DashScope API (阿里云 LLM)
+    # ═══════════════════════════════════════════
+    "dashscope>=1.14.0",  # 阿里云 DashScope SDK for Rerank/Embedding
+
+    # ═══════════════════════════════════════════
     # 可观测
     # ═══════════════════════════════════════════
     "prometheus-client>=0.20",
@@ -73,6 +79,7 @@ dependencies = [
     # ═══════════════════════════════════════════
     "crawl4ai>=0.4",
     "modelscope>=1.0",
+    "requests>=2.28.0",  # 用于 DashScope API 调用
 ]
 
 [project.optional-dependencies]
@@ -96,7 +103,8 @@ docs = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["backend/tests"]
+# 注意：pytest.ini 优先生效；此处保持同步（2026-08-21 P0-3/P0-5）
+testpaths = ["backend/tests", "tests"]
 pythonpath = ["backend"]
 asyncio_mode = "auto"
 addopts = "-v --tb=short"

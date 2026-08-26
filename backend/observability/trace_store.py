@@ -123,7 +123,7 @@ class TraceStore:
                     d.pop("spans", None)
                     result.append(d)
                 except Exception:
-                    pass
+                    logger.debug("[P1-10] trace 行 JSON 解析失败（跳过脏数据）", exc_info=True)
             return result
         except Exception as e:
             logger.warning(f"[TraceStore] list 失败: {e}")

@@ -13,6 +13,10 @@ from backend.rag.preprocessing.domain_data import (  # noqa: F401
     KNOWN_PERSON_NAMES, TIME_PATTERNS, DEFAULT_KEYWORDS, SIGNAL_RULES,
     DOC_TYPE_RULES, FILENAME_TYPE_HINTS, FOLDER_TYPE_HINTS, DOMAIN_RULES,
     STOPWORDS,
+    FINANCIAL_METRIC_PATTERNS,
+    FINANCIAL_NUMERIC_CONDITION_RE,
+    FINANCIAL_NUMERIC_CONDITION_RE_LTE,
+    FINANCIAL_PII_PATTERNS,
 )
 # 向后兼容别名
 blacklist = STOPWORDS  # noqa: F811
@@ -199,6 +203,18 @@ KNOWLEDGE_GAP_MIN_OCCURRENCES = int(os.getenv("KNOWLEDGE_GAP_MIN_OCCURRENCES", "
 KNOWLEDGE_GAP_WINDOW_HOURS = int(os.getenv("KNOWLEDGE_GAP_WINDOW_HOURS", "24"))
 
 # ====================================
+# 财务表格专用配置
+# ====================================
+# 财务表格行级切分：每批最多多少行 chunk（防止超大表撑爆 embedding）
+FINANCIAL_TABLE_ROWS_PER_CHUNK = int(os.getenv("FINANCIAL_TABLE_ROWS_PER_CHUNK", "20"))
+# 财务文档 chunk 数量上限（覆盖 MAX_CHUNKS_PER_DOC，因行级切分会产更多 chunk）
+FINANCIAL_MAX_CHUNKS_PER_DOC = int(os.getenv("FINANCIAL_MAX_CHUNKS_PER_DOC", "10000"))
+# 财务文档强制 PII 脱敏（覆写全局 FILTER_ENABLE_PII_MASK）
+FINANCIAL_PII_MASK_FORCE = os.getenv("FINANCIAL_PII_MASK_FORCE", "true").lower() == "true"
+# 财务 SQL 旁路检索开关：查询含财务指标 + 数值条件时走 SQL 精确检索
+FINANCIAL_SQL_BYPASS_ENABLED = os.getenv("FINANCIAL_SQL_BYPASS_ENABLED", "true").lower() == "true"
+
+# ====================================
 # Metadata 规则指纹 — 改任何规则文件自动变化
 # ====================================
 import hashlib as _hashlib
@@ -209,6 +225,7 @@ _METADATA_RULE_FILES = [
     os.path.join(_BACKEND_DIR, "rag", "preprocessing", "keyword.py"),
     os.path.join(_BACKEND_DIR, "rag", "preprocessing", "metadata.py"),
     os.path.join(_BACKEND_DIR, "rag", "preprocessing", "domain_data.py"),
+    os.path.join(_BACKEND_DIR, "rag", "preprocessing", "financial_normalizer.py"),
     os.path.join(_BACKEND_DIR, "rag", "indexing", "indexer.py"),
 ]
 

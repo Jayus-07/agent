@@ -297,7 +297,7 @@ class SQLFetcher(DataFetcher):
                 try:
                     conn.close()
                 except Exception:
-                    pass
+                    logger.debug("[P1-10] 连接关闭失败", exc_info=True)
 
 
 # =====================================================

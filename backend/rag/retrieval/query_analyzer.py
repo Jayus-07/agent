@@ -40,6 +40,11 @@ class ParsedQuery:
     # Intent (rule-based, ~0ms) — 跨境电商场景
     intent: str = "summary_query"
 
+    # Financial metrics (财务指标提取)
+    financial_metrics: list[str] = field(default_factory=list)  # 识别到的财务指标 key
+    numeric_conditions: list[dict] = field(default_factory=list)  # 数值条件 [{metric, op, value, unit}]
+    reporting_period: str = ""  # 报告期（如 "2026-Q3"），从查询中提取或时间表达式推导
+
     def to_metadata_filter(self) -> dict:
         """Convert parsed entities into a ChromaDB-compatible filter dict."""
         f: dict = {}
@@ -59,6 +64,12 @@ class ParsedQuery:
         if self.time_range_start:
             f["time_start"] = self.time_range_start
             f["time_end"] = self.time_range_end
+        # 财务文档版本快照：有明确报告期 → 按 reporting_period 过滤；
+        # 无明确报告期但有财务指标 → 只查最新版本（is_latest=True）
+        if self.reporting_period:
+            f["reporting_period"] = self.reporting_period
+        elif self.financial_metrics:
+            f["is_latest"] = True
         return f
 
 
@@ -250,4 +261,193 @@ class QueryAnalyzer:
         # ── Intent ──
         pq.intent = classify_intent(query)
 
+        # ── Financial metrics ──
+        try:
+            pq.financial_metrics = _extract_financial_metrics(query)
+            pq.numeric_conditions = _extract_numeric_conditions(query)
+        except Exception as e:
+            logger.debug(f"[QueryAnalyzer] 财务指标提取失败: {e}", exc_info=True)
+
+        # ── Reporting period（财务文档版本快照过滤） ──
+        try:
+            pq.reporting_period = _extract_reporting_period_from_query(
+                query, pq.time_expressions,
+            )
+        except Exception as e:
+            logger.debug(f"[QueryAnalyzer] 报告期提取失败: {e}", exc_info=True)
+
         return pq
+
+
+# ────────────────────────────────────────────────
+# Financial metric extraction
+# ────────────────────────────────────────────────
+
+def _extract_financial_metrics(query: str) -> list[str]:
+    """从查询中提取财务指标 key（revenue/net_profit/gross_margin 等）。
+
+    复用 domain_data.FINANCIAL_METRIC_PATTERNS 正则匹配。
+    """
+    try:
+        from backend.config import FINANCIAL_METRIC_PATTERNS
+    except ImportError:
+        return []
+    metrics: list[str] = []
+    for pattern, metric_key in FINANCIAL_METRIC_PATTERNS:
+        if re.search(pattern, query, re.IGNORECASE):
+            if metric_key not in metrics:
+                metrics.append(metric_key)
+    return metrics
+
+
+def _extract_numeric_conditions(query: str) -> list[dict]:
+    """从查询中提取数值比较条件。
+
+    匹配 "毛利率超过30%"、"净利润低于100万" 等表达，
+    返回 [{metric_text, op, value, unit}]。
+
+    op 值：'gte'(≥) 或 'lte'(≤)
+    unit 值：'percent' / '万' / '亿' / ''
+    """
+    try:
+        from backend.config import (
+            FINANCIAL_NUMERIC_CONDITION_RE,
+            FINANCIAL_NUMERIC_CONDITION_RE_LTE,
+        )
+    except ImportError:
+        return []
+
+    conditions: list[dict] = []
+
+    # ≥ 条件
+    for m in FINANCIAL_NUMERIC_CONDITION_RE.finditer(query):
+        metric_text = m.group(1).strip()
+        value_str = m.group(3)
+        unit = m.group(4) or ""
+        value = _parse_cond_value(value_str, unit)
+        if value is not None:
+            conditions.append({
+                "metric_text": metric_text,
+                "op": "gte",
+                "value": value,
+                "unit": "percent" if unit == "%" else unit,
+            })
+
+    # ≤ 条件
+    for m in FINANCIAL_NUMERIC_CONDITION_RE_LTE.finditer(query):
+        metric_text = m.group(1).strip()
+        value_str = m.group(3)
+        unit = m.group(4) or ""
+        value = _parse_cond_value(value_str, unit)
+        if value is not None:
+            conditions.append({
+                "metric_text": metric_text,
+                "op": "lte",
+                "value": value,
+                "unit": "percent" if unit == "%" else unit,
+            })
+
+    return conditions
+
+
+def _parse_cond_value(value_str: str, unit: str):
+    """将条件值字符串解析为 float，考虑单位。"""
+    from decimal import Decimal, InvalidOperation
+    try:
+        d = Decimal(value_str)
+        if unit == "%":
+            d = d / Decimal("100")
+        elif unit == "万":
+            d = d * Decimal("10000")
+        elif unit == "亿":
+            d = d * Decimal("100000000")
+        elif unit == "百万":
+            d = d * Decimal("1000000")
+        elif unit == "千万":
+            d = d * Decimal("10000000")
+        return float(d)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+# ────────────────────────────────────────────────
+# Reporting period extraction（版本快照过滤）
+# ────────────────────────────────────────────────
+
+# 查询中的报告期模式
+_QUERY_QUARTER_RE = re.compile(r"(20\d{2})?[-_]?Q([1-4])", re.IGNORECASE)
+_QUERY_CN_QUARTER_RE = re.compile(r"(20\d{2})?年第([一二三四])季度")
+_QUERY_YEAR_MONTH_RE = re.compile(r"(20\d{2})年(\d{1,2})月")
+_QUERY_YEAR_RE = re.compile(r"(20\d{2})年度?")
+
+_QUERY_CN_QUARTER_MAP = {"一": "1", "二": "2", "三": "3", "四": "4"}
+
+
+def _current_quarter() -> tuple[str, str]:
+    """返回当前年份和季度。"""
+    now = datetime.now()
+    year = str(now.year)
+    q = (now.month - 1) // 3 + 1
+    return year, f"Q{q}"
+
+
+def _extract_reporting_period_from_query(
+    query: str, time_expressions: list[str],
+) -> str:
+    """从查询文本中提取报告期，用于版本快照过滤。
+
+    优先级：
+      1. 明确的季度/月份/年份模式（2026-Q3 / 第三季度 / 2026年7月）
+      2. 相对时间表达式（上季度 / 本季度 / 去年）
+
+    返回 reporting_period 字符串（如 "2026-Q3" / "2026-07" / "2025"），
+    无法提取时返回空串。
+    """
+    # 1. 明确季度模式：2026-Q3 / Q3
+    m = _QUERY_QUARTER_RE.search(query)
+    if m:
+        year = m.group(1) if m.group(1) else _current_quarter()[0]
+        quarter = m.group(2)
+        return f"{year}-Q{quarter}"
+
+    # 2. 中文季度：第三季度
+    m = _QUERY_CN_QUARTER_RE.search(query)
+    if m:
+        year = m.group(1) if m.group(1) else _current_quarter()[0]
+        quarter = _QUERY_CN_QUARTER_MAP.get(m.group(2), m.group(2))
+        return f"{year}-Q{quarter}"
+
+    # 3. 年月模式：2026年7月
+    m = _QUERY_YEAR_MONTH_RE.search(query)
+    if m:
+        year = m.group(1)
+        month = m.group(2).zfill(2)
+        return f"{year}-{month}"
+
+    # 4. 年度模式：2026年度
+    m = _QUERY_YEAR_RE.search(query)
+    if m:
+        return m.group(1)
+
+    # 5. 相对时间表达式 → 推导报告期
+    year, quarter = _current_quarter()
+    for expr in time_expressions:
+        if expr == "上季度":
+            q_num = int(quarter[1:])
+            if q_num == 1:
+                prev_year = str(int(year) - 1)
+                return f"{prev_year}-Q4"
+            return f"{year}-Q{q_num - 1}"
+        if expr == "本季度" or expr == "本季度":
+            return f"{year}-{quarter}"
+        if expr == "去年":
+            prev_year = str(int(year) - 1)
+            return prev_year
+        if expr == "今年":
+            return year
+        # 2024年 → 直接用年份
+        ym = re.search(r"(20\d{2})年", expr)
+        if ym:
+            return ym.group(1)
+
+    return ""

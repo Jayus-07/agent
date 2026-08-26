@@ -10,6 +10,7 @@ schema_loader.py — 多业务域 schema 加载器
 """
 from typing import Dict, List, Set, Any
 
+from backend.config import SQL_ROW_SECURITY_ENABLED
 from backend.sql.data.schema_config import SCHEMA_CONFIG
 
 
@@ -34,7 +35,13 @@ class SchemaLoader:
         # — 敏感列 / 脱敏列 / 行级安全 / 黑名单 / 限制 —
         self.sensitive_columns: Set[str] = set(self._config["sensitive_columns"])
         self.masked_columns: Dict[str, tuple] = self._config["masked_columns"]
-        self.row_security: Dict[str, dict] = self._config["row_security"]
+        # 行级安全受 SQL_ROW_SECURITY_ENABLED 总开关控制（P1-11）：
+        # 默认关闭（Demo 查询无用户上下文，严格模式会全部拒绝）；
+        # 生产开启后 schema_config.row_security 配置的表强制按用户隔离。
+        if SQL_ROW_SECURITY_ENABLED:
+            self.row_security: Dict[str, dict] = dict(self._config["row_security"])
+        else:
+            self.row_security: Dict[str, dict] = {}
         self.banned_functions: Set[str] = {
             f.upper() for f in self._config["banned_functions"]
         }

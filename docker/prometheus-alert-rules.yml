@@ -1,0 +1,88 @@
+# prometheus-alert-rules.yml — Prometheus 告警规则（P1-8）
+#
+# 用法：
+#   1. Prometheus scrape 配置（prometheus.yml）中抓取应用 /metrics 端点
+#   2. rule_files 引入本文件
+#   3. alertmanager.yml 中配置接收端（webhook / 企微 / 邮件）
+#
+# 告警级别约定：
+#   critical — 服务不可用，需要立即处理（page）
+#   warning  — 降级运行，工作时间处理（ticket）
+groups:
+  - name: agent-platform-sli
+    rules:
+      # ── 可用性 ──────────────────────────────
+      - alert: ChatErrorRateHigh
+        expr: |
+          sum(rate(chat_request_total{status="error"}[5m]))
+            / clamp_min(sum(rate(chat_request_total[5m])), 0.001) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Chat API 错误率超过 5%"
+          description: "近 5 分钟错误率 {{ $value | humanizePercentage }}，检查后端日志与 LLM 状态"
+
+      - alert: ChatLatencyP95High
+        expr: |
+          histogram_quantile(0.95, sum(rate(chat_request_duration_seconds_bucket[10m])) by (le)) > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Chat P95 延迟超过 30s"
+          description: "检查 RAG 检索耗时与 LLM 响应时间"
+
+      # ── LLM 韧性链（P1-7/P1-8 新增）────────────
+      - alert: LLMCircuitBreakerOpen
+        expr: circuit_breaker_state{name="deepseek"} == 2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LLM 熔断器处于开路状态"
+          description: "上游 LLM 持续故障，服务已进入 fallback/降级话术模式，检查 provider 可用性与 API 余额"
+
+      - alert: LLMDegradedAnswerSpike
+        expr: increase(degradation_alerts_total{code="LLM_DEGRADED_ANSWER"}[10m]) > 3
+        labels:
+          severity: critical
+        annotations:
+          summary: "LLM 降级拒答 10 分钟内超过 3 次"
+          description: "主模型与备用模型均不可用，用户收到的是固定拒答话术"
+
+      # ── 降级链 / 技能失败 ─────────────────────
+      - alert: WorkerRetryExhausted
+        expr: increase(degradation_alerts_total{code="WORKER_RETRY_EXHAUST"}[15m]) > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker 重试耗尽 15 分钟内超过 5 次"
+          description: "检查对应 skill 的下游依赖（数据库 / 外部 API）"
+
+      - alert: SkillFailureSpike
+        expr: increase(skill_failure_total[15m]) > 10
+        labels:
+          severity: warning
+        annotations:
+          summary: "技能失败 15 分钟内超过 10 次"
+          description: "按 skill 标签定位：{{ $labels.skill }} / {{ $labels.error_type }}"
+
+      # ── RAG 质量 ────────────────────────────
+      - alert: RagRejectRateHigh
+        expr: rag_reject_rate > 0.3
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAG 拒答率超过 30%"
+          description: "Evidence Gate 大量拦截，检查知识库覆盖度"
+
+      - alert: RagHitRateLow
+        expr: 0 < rag_hit_rate < 0.7
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAG 命中率低于 70%"
+          description: "检查向量库健康度与检索参数"

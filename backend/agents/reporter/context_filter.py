@@ -14,10 +14,10 @@ from backend.shared.logger import logger
 
 
 def check_reranker_available() -> bool:
-    """检查 CrossEncoder 是否可用"""
+    """检查 CrossEncoder 是否可用（支持新架构）"""
     try:
-        from backend.rag.reranker import reranker as _ce
-        return _ce is not None
+        from backend.rag.reranker import LocalModelLoader
+        return LocalModelLoader.is_loaded()
     except Exception:
         return False
 
@@ -62,20 +62,19 @@ def filter_step_results(step_results: dict, question: str) -> dict:
         return step_results
 
     try:
-        from backend.rag.reranker import reranker as _ce
+        from backend.rag.reranker import get_reranker_backend
         from backend.config import RERANK_TIMEOUT
-        from backend.infra.timeout import safe_call_with_timeout
 
-        pairs = [(question, text) for text in rag_texts]
-        scores = safe_call_with_timeout(
-            _ce.predict, timeout=RERANK_TIMEOUT, default_value=None,
-            error_message="Context Filter 超时", sentences=pairs,
-        )
+        # 获取后端实例并执行重排序
+        backend = get_reranker_backend()
+        texts = rag_texts  # 直接使用文本列表
+        scored = backend.rank(question, texts, top_k=len(texts))
+        scores = [score for _, score in scored]  # 提取分数
     except Exception as e:
-        logger.warning(f"[ContextFilter] CrossEncoder 调用失败: {e}，降级为 BM25")
+        logger.warning(f"[ContextFilter] CrossEncoder 调用失败：{e}，降级为 BM25")
         return filter_by_bm25(step_results, question)
-
-    if scores is None:
+    
+    if not scores or len(scores) != len(rag_ids):
         logger.warning("[ContextFilter] 验证返回 None，降级为 BM25")
         return filter_by_bm25(step_results, question)
 

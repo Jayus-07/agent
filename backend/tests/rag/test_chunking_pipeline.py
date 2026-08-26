@@ -1,4 +1,9 @@
 # backend/tests/rag/test_chunking_pipeline.py
+from types import SimpleNamespace
+
+import pytest
+
+from backend.rag.preprocessing import metadata as _meta
 from backend.rag.preprocessing.pipeline import parse_and_chunk
 
 MD = """# 售后制度
@@ -10,7 +15,21 @@ MD = """# 售后制度
 """
 
 
-def test_pipeline_end_to_end(tmp_path):
+@pytest.fixture
+def deterministic_classify(monkeypatch):
+    """fix f20：隔离 LLM 仲裁，避免单测依赖真实模型的非确定分类。
+
+    售后制度 样本 policy(25)/sop(20) 胶着会触发仲裁：qwen 判 policy
+    （Structure 策略，leaf+parent 双层），MiniMax 判 sop（Step 策略，
+    仅 leaf）—— 两者语义都合理，单测必须锁定分类才可稳定断言。
+    """
+    monkeypatch.setattr(
+        _meta, "llm",
+        SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="policy")),
+    )
+
+
+def test_pipeline_end_to_end(tmp_path, deterministic_classify):
     p = tmp_path / "a.md"
     p.write_text(MD, encoding="utf-8")
     chunks = parse_and_chunk(str(p))

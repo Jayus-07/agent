@@ -135,6 +135,19 @@ class KnowledgeStore(ABC):
         """删除向量。ids 精确删，where 条件删（如 {"doc_id": "abc"}）。返回删除数量。"""
         ...
 
+    @abstractmethod
+    def update_metadata_where(
+        self, where: dict, metadata_update: dict,
+    ) -> int:
+        """条件更新 metadata：匹配 where 的所有 chunk，更新指定 metadata 字段。
+
+        用于版本快照：财务文档重索引时，旧版 chunk 标记 is_latest=False
+        而非删除，保留历史版本向量供时间序列查询。
+
+        Returns: 更新的记录数（部分实现可能返回 0 表示成功但无计数）。
+        """
+        ...
+
 
 # ======================= Chroma 实现 =======================
 
@@ -256,4 +269,27 @@ class ChromaKnowledgeStore(KnowledgeStore):
             return 0  # Chroma 不返回精确计数
         return 0
 
+    def update_metadata_where(
+        self, where: dict, metadata_update: dict,
+    ) -> int:
+        """条件更新 metadata：匹配 where 的所有 chunk 更新 metadata 字段。
 
+        ChromaDB update API：先 get 匹配 ID，再逐批 update metadata。
+        用于版本快照：财务文档重索引时旧版 chunk 标记 is_latest=False。
+        """
+        normalized_where = normalize_where(where)
+        cleaned_meta = _sanitize_metadata(metadata_update)
+        try:
+            result = self._chroma._collection.get(where=normalized_where)
+            ids = result.get("ids", []) or []
+            if not ids:
+                return 0
+            metadatas = [cleaned_meta] * len(ids)
+            self._chroma._collection.update(
+                ids=ids, metadatas=metadatas,
+            )
+            return len(ids)
+        except Exception as e:
+            from backend.shared.logger import logger
+            logger.warning(f"[ChromaKnowledgeStore] update_metadata_where 失败: {e}")
+            return 0

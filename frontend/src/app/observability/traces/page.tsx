@@ -18,7 +18,7 @@ import {
   filterByTimeRange,
   formatCost,
 } from "@/types/trace";
-import { listAllTraces } from "@/lib/observability/source";
+import { listAgentTraces } from "@/lib/observability/source";
 
 // typedTraces 改为 client 端填充：模块顶层 import 22+ JSON 在 Next.js dev SSR 阶段
 // 会导致 typedTraces=[]（webpack transform 22 JSON 的时机问题）；改为 useState + useEffect 后，
@@ -75,7 +75,7 @@ export default function TracesPage() {
     } catch {}
     // 数据加载推迟到 mount 后：避免 SSR 阶段同步 IO（mock 时 import 22 JSON；
     // API 时 fetch 也必须在 client 端）
-    listAllTraces().then((traces) => {
+    listAgentTraces().then((traces) => {
       setTypedTraces(traces);
       setMounted(true);
     });
@@ -85,7 +85,7 @@ export default function TracesPage() {
   // refresh 时重新拉数据源（mock 或 API，由 NEXT_PUBLIC_USE_MOCK 控制）
   useEffect(() => {
     if (!mounted) return;
-    listAllTraces().then(setTypedTraces);
+    listAgentTraces().then(setTypedTraces);
   }, [refreshTick, mounted]);
 
   const [showColumns, setShowColumns] = useState(false);
@@ -105,7 +105,7 @@ export default function TracesPage() {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     // 触发真实数据拉取（mock 也走异步路径，保持一致 UX）
-    const traces = await listAllTraces();
+    const traces = await listAgentTraces();
     setTypedTraces(traces);
     setRefreshTick((t) => t + 1);
     setIsRefreshing(false);

@@ -246,25 +246,31 @@ SCHEMA_CONFIG: Dict[str, Any] = {
     },
 
     # ── 敏感列 ─────────────────────────────────────────
-    # 注：客户姓名/手机/邮箱等隐私字段未来加入时进这里
-    # 当前 Demo 规模暂未启用，保留路径
+    # 敏感列：对 LLM 完全隐藏（不出现在表结构描述中），且 SELECT 引用直接拒绝。
+    # 注意：当前 customer.customers 表无 phone/email 列，故为空；
+    # 接入真实用户画像数据（手机/邮箱/身份证）时加入这里。
     "sensitive_columns": [
         # "customer.customers.phone",
         # "customer.customers.email",
     ],
 
-    # ── 脱敏列 ─────────────────────────────────────────
-    # 当前空 — schema 演示阶段不引入脱敏；接生产时按业务域填充
-    "masked_columns": {},
+    # ── 脱敏列（P1-11 已启用）─────────────────────────
+    # 值格式: {列名: (保留前缀长度, 保留后缀长度)}
+    # 查询仍可返回该列，但结果打码：客户姓名 → "张***"
+    "masked_columns": {
+        "customer.customers.name": (1, 0),
+    },
 
-    # ── 行级安全 ───────────────────────────────────────
-    # Demo 阶段所有表对运营账号开放；按需收紧
+    # ── 行级安全（P1-11 已配置，默认由 SQL_ROW_SECURITY_ENABLED 控制）──
+    # 生产部署设置 SQL_ROW_SECURITY_ENABLED=true 启用；
+    # 启用后查询 order.orders 将强制注入 customer_id = current_user_id
+    # （参数化，值来自服务端推导的可信用户头 X-User-Id，客户端不可伪造），
+    # 缺少用户上下文时按严格模式直接拒绝（RowSecurityError）。
     "row_security": {
-        # 示例：客户数据按账号隔离
-        # "order.orders": {
-        #     "column": "customer_id",
-        #     "param":  "current_customer_id",
-        # },
+        "order.orders": {
+            "column": "customer_id",
+            "param":  "current_user_id",
+        },
     },
 
     # ── 查询限制 ────────────────────────────────────────

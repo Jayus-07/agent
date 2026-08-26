@@ -11,6 +11,7 @@ Skill → Tool → Infrastructure (RAG / SQL / Report)
   - web.py:              web_search_tool, web_crawl_tool
   - email.py:            send_email_tool
   - data_collection.py:  data_collection_tool
+  - competitor.py:        competitor_analyze_tool
   - session.py:          set_session_id, _get_session_id (contextvar 工具)
 """
 from backend.tools.session import set_session_id, _get_session_id, _current_session_id  # noqa: F401
@@ -21,3 +22,4 @@ from backend.tools.export import export_csv_tool  # noqa: F401
 from backend.tools.web import web_search_tool, web_crawl_tool  # noqa: F401
 from backend.tools.email import send_email_tool  # noqa: F401
 from backend.tools.data_collection import data_collection_tool  # noqa: F401
+from backend.tools.competitor import competitor_analyze_tool  # noqa: F401

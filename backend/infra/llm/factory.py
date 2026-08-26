@@ -141,6 +141,22 @@ class LLMFactory:
         else:
             return {"ok": False, "error": f"不支持的 provider: {provider}"}
 
+    async def get_balance_async(self, provider: str = None) -> dict:
+        """get_balance 的异步版（P1-16）— 供 async 路由调用，不阻塞事件循环。
+
+        DeepSeek 走 httpx 原生异步；其余 provider 尚无异步实现，
+        丢线程池执行（to_thread）避免阻塞 event loop。
+        """
+        if provider is None:
+            provider = self._get_provider(self._current_model)
+
+        if provider == "deepseek":
+            from backend.infra.llm.providers.deepseek import get_deepseek_balance_async
+            return await get_deepseek_balance_async()
+
+        import asyncio
+        return await asyncio.to_thread(self.get_balance, provider)
+
 
 # 全局单例
 _factory: Optional[LLMFactory] = None

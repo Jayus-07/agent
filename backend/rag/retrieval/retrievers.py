@@ -218,6 +218,25 @@ class ChunkLevelRetriever(BaseRetriever):
                 doc_ids = None  # 让 Stage 2 走完整向量检索
                 stage1_path = "domain_fallback"
                 stage1_fallback_count += 1
+            else:
+                # fix f17：business_domain 不在 filter 中仍 0 命中 —— 元凶多半是
+                # kb_id 推断失配（KBRouter 关键词规则把问题路由到无文档的 KB，
+                # 如"报销"→policy_finance，但文档实际在 rag_test_kb）。
+                # 与 business_domain 放宽同理：宁跨 KB 召回，不全量拒答；
+                # 保留 doc_type 等语义收窄条件。
+                fallback_filter = {
+                    k: v for k, v in request_metadata_filter.items()
+                    if k not in ("kb_id", "$or")
+                }
+                if fallback_filter != request_metadata_filter:
+                    logger.info(
+                        f"ChunkLevelRetriever: metadata_filter {request_metadata_filter} 0 匹配, "
+                        f"回退到放宽 kb_id 的检索"
+                    )
+                    request_metadata_filter = fallback_filter
+                    doc_ids = None
+                    stage1_path = "kb_fallback"
+                    stage1_fallback_count += 1
 
         # — Stage 2: Chunk 级检索 —
         # 2026-08-20: 同义词扩展 — 对 query 做同义词扩展，提升口语化 query 召回

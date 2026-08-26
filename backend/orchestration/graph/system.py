@@ -110,7 +110,7 @@ class MultiAgentSystem:
                 trace_collector.finish(trace, "[ERROR]",
                                        int((time.time() - t_total) * 1000), "", "")
             except Exception:
-                pass
+                logger.debug("[P1-10] 错误路径 trace 收尾失败", exc_info=True)
             self._memory.end_turn(session_id, question, f"[错误] {e}")
             return f"## 系统错误\n\n处理问题失败: {e}\n\n请稍后重试。"
 
@@ -374,7 +374,7 @@ class MultiAgentSystem:
                 trace_collector.finish(trace, final_answer or "",
                                        int((time.time() - start_time) * 1000), "", "")
             except Exception:
-                pass
+                logger.debug("[P1-10] 错误路径 trace 收尾失败", exc_info=True)
         finally:
             self._memory.end_turn(session_id, question, final_answer or "")
 

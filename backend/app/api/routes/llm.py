@@ -101,7 +101,8 @@ async def get_balance(provider: str = None):
     503: {"ok": false, "error": "API Key 未配置" / "请求失败"}
     """
     factory = get_llm_factory()
-    result = factory.get_balance(provider)
+    # P1-16: 异步查询余额，不再阻塞事件循环（原同步 requests 最长挂 10s）
+    result = await factory.get_balance_async(provider)
     if not result.get("ok"):
         from fastapi import HTTPException
         raise HTTPException(status_code=503, detail=result)

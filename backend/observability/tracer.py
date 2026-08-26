@@ -250,11 +250,10 @@ class TraceCollector:
             # 软失败：返回 noop Span，避免业务阻塞
             # Why: LangGraph Send + RAG chain 在不同 thread 调用时，
             # trace 上下文可能丢失，硬抛错会让前端 SSE 流永远卡住。
-            from backend.shared.logger import logger
             logger.debug(
                 f"[Tracer] start_span('{span_id}') 但无 active trace — 返回 noop span"
             )
-            return Span(
+            noop = Span(
                 span_id=span_id,
                 parent_id=parent_id,
                 name=name or span_id,
@@ -263,11 +262,33 @@ class TraceCollector:
                 start_time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 sequence=-1,
                 input=input,
+                status="skipped",
             )
+            # P1-9: noop span 同样带 _t0（对齐下方注释），end_span 可正确计算
+            # duration 而非恒为 0；标记 _noop 供调用方/测试识别丢弃的埋点。
+            noop._t0 = time.time()
+            noop._noop = True
+            return noop
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         # parent_id 未传 → 取当前 root_span_id（必须已有 root）
         if parent_id is None and span_id != trace.root_span_id:
             parent_id = trace.root_span_id or None
+        # P1-9: parent_id 指向不存在的 span（如 skill 在 graph 之外执行时
+        # 父 span 尚未创建），或误传了 Span 对象（不可哈希）→ 回退到 root，
+        # 避免孤儿 span 导致 trace 树断裂
+        if parent_id is not None and parent_id != trace.root_span_id:
+            if not isinstance(parent_id, str):
+                logger.debug(
+                    f"[Tracer] start_span('{span_id}') parent_id 非字符串"
+                    f"（{parent_id.__class__.__name__}），回退到 root span"
+                )
+                parent_id = trace.root_span_id or None
+            elif parent_id not in {s.span_id for s in trace.spans}:
+                logger.debug(
+                    f"[Tracer] start_span('{span_id}') parent '{parent_id}' "
+                    f"不存在，回退到 root span"
+                )
+                parent_id = trace.root_span_id or None
 
         with self._lock:
             seq = self._span_seq

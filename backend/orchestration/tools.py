@@ -15,4 +15,5 @@ from backend.tools import (  # noqa: F401
     web_search_tool, web_crawl_tool,
     send_email_tool,
     data_collection_tool,
+    competitor_analyze_tool,
 )

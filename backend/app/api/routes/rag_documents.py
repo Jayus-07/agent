@@ -186,7 +186,7 @@ async def approve_pending_doc(doc_id: str, request: Request):
             from backend.observability.metrics import update_metadata_coverage
             update_metadata_coverage()
         except Exception:
-            pass
+            logger.debug("[P1-10] metadata_coverage 重算失败", exc_info=True)
 
         return {"ok": True, "doc_id": doc_id, "new_status": "active"}
     except Exception as e:

@@ -114,7 +114,7 @@ FOLDER_TYPE_HINTS: Dict[str, str] = {
     "legal": "legal", "contracts": "legal", "合同": "legal",
     "compliance": "compliance", "法规": "compliance", "regulatory": "compliance",
     "policy": "policy", "policies": "policy", "制度": "policy",
-    "hr": "policy", "finance": "policy",
+    "hr": "policy",
     "faq": "faq", "help": "faq", "常见问题": "faq",
     "products": "product_spec", "specs": "product_spec", "规格": "product_spec",
     "sop": "sop", "operations": "sop", "流程": "sop",
@@ -134,4 +134,56 @@ DOMAIN_RULES: Dict[str, Dict[str, int]] = {
     "supplier": {"供应商": 2, "供货商": 2, "PO": 2, "交期": 3, "验货": 2, "对账": 2, "采购": 2, "比价": 2, "工厂": 2, "评估": 2, "准入": 2, "资质": 2, "考核": 2},
     "analytics": {"日报": 3, "周报": 3, "月报": 3, "毛利率": 3, "净利润": 3, "ROI": 2, "客单价": 2, "转化率": 2, "同比": 2, "环比": 2},
     "data": {"数据治理": 3, "数据质量": 3, "数据标准": 3, "数据管理": 3, "数据规范": 3, "数据安全": 2, "元数据": 3, "主数据": 3, "数据采集": 2, "数据仓库": 2, "ETL": 3, "数据血缘": 2, "数据目录": 2},
+    "financial": {"营收": 3, "收入": 2, "利润": 3, "毛利": 3, "成本": 2, "费用": 2, "资产": 3, "负债": 3, "现金流": 3, "预算": 2, "报销": 2, "发票": 2, "对账": 2, "坏账": 3},
 }
+
+# ====================================
+# 财务指标识别模式（用于 QueryAnalyzer 提取财务指标）
+# ====================================
+FINANCIAL_METRIC_PATTERNS: List[tuple] = [
+    (r"营业收入|营收|revenue|总收入", "revenue"),
+    (r"净利润|净亏损|net.?profit|net.?loss", "net_profit"),
+    (r"毛利率|gross.?margin|gross.?profit.?ratio", "gross_margin"),
+    (r"净利率|净收益率|net.?margin", "net_margin"),
+    (r"资产负债率|debt.?ratio|asset.?liability.?ratio", "debt_ratio"),
+    (r"现金流|cash.?flow|经营性现金流|operating.?cash.?flow", "cash_flow"),
+    (r"\bROE\b|净资产收益率", "roe"),
+    (r"\bROI\b|投资回报率", "roi"),
+    (r"\bROA\b|总资产收益率", "roa"),
+    (r"\bEBITDA\b|息税折旧摊销前利润", "ebitda"),
+    (r"营业收入成本|营业成本|operating.?cost", "operating_cost"),
+    (r"销售费用|管理费用|财务费用|期间费用", "operating_expense"),
+    (r"总资产|净资产|total.?assets|net.?assets", "total_assets"),
+    (r"总负债|total.?liabilities", "total_liabilities"),
+    (r"存货周转率|inventory.?turnover", "inventory_turnover"),
+    (r"应收账款周转|receivable.?turnover", "receivable_turnover"),
+    (r"流动比率|current.?ratio", "current_ratio"),
+    (r"速动比率|quick.?ratio", "quick_ratio"),
+]
+
+# 财务数值比较条件模式（用于 QueryAnalyzer 提取数值条件）
+# 匹配“毛利率超过/大于/高于 30%”等表达
+FINANCIAL_NUMERIC_CONDITION_RE = re.compile(
+    r"([\u4e00-\u9fff\w]+?)\s*"
+    r"(超过|大于|高于|不低于|至少|≥|>|超过|不低于以上)\s*"
+    r"(\d+\.?\d*)\s*(%|万|亿|百万|千万)?"
+)
+FINANCIAL_NUMERIC_CONDITION_RE_LTE = re.compile(
+    r"([\u4e00-\u9fff\w]+?)\s*"
+    r"(低于|小于|不超过|最多|至多|≤|<|以下)\s*"
+    r"(\d+\.?\d*)\s*(%|万|亿|百万|千万)?"
+)
+
+# ====================================
+# 财务专用 PII 脱敏规则
+# ====================================
+FINANCIAL_PII_PATTERNS: List[tuple] = [
+    # 銀行卡号（16-19位数字）
+    (re.compile(r"(?<!\d)(\d{16,19})(?!\d)"), "bank_card"),
+    # 统一社会信用代码（18位字母数字混合）
+    (re.compile(r"(?<![A-Za-z0-9])([0-9A-HJ-NPQRTUWXY]{18})(?![A-Za-z0-9])"), "tax_id"),
+    # 身份证号（18位，末位可能为X）
+    (re.compile(r"(?<!\d)(\d{17}[\dXx])(?!\d)"), "id_card"),
+    # 纳税人识别号（15-20位字母数字）
+    (re.compile(r"(?<![A-Za-z0-9])([A-Za-z0-9]{15,20})(?![A-Za-z0-9])"), "tax_number"),
+]

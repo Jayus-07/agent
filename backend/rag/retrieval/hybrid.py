@@ -27,13 +27,29 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
     vector_retriever.retrieve 时传入扩展 query 列表，CustomRetriever 内部
     对每个 query 各调一次 similarity_search 并 RRF 融合。
 
+    2026-08-21: 加财务 SQL 旁路检索 — 查询含财务指标 + 数值条件时，
+    并行走 SQL 精确检索已入库的结构化财务数据，结果注入 RRF 融合。
+
     可靠性契约：
       - 单侧失败 → 降级仅用另一侧，span metrics 标记 fallback_side / fallback_reason
       - 两侧都失败 → 抛异常（真系统失败），不伪装成『没有资料』的空召回
     """
-    from backend.observability.tracer import trace_collector, SpanName
+    from backend.observability.tracer import SpanName, trace_collector
     from backend.shared.logger import logger
     span = trace_collector.start_span("hybrid_retrieval", name=SpanName.RETRIEVAL)
+
+    # 财务 SQL 旁路检索：查询含财务指标 + 数值条件时并行执行
+    sql_docs: list = []
+    sql_bypass_used = False
+    try:
+        from backend.config import FINANCIAL_SQL_BYPASS_ENABLED
+        if FINANCIAL_SQL_BYPASS_ENABLED:
+            sql_docs = _financial_sql_bypass(query)
+            if sql_docs:
+                sql_bypass_used = True
+                logger.info(f"[hybrid_retrieve] SQL 旁路检索命中 {len(sql_docs)} 条结构化数据")
+    except Exception as e:
+        logger.warning(f"[hybrid_retrieve] SQL 旁路检索失败，降级纯 RAG: {e}")
 
     # 并行执行：Vector 和 BM25 互不依赖
     from concurrent.futures import ThreadPoolExecutor
@@ -88,9 +104,14 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
         cid = doc.metadata.get("chunk_id") or _fallback_id(doc)
         rank_map[cid] = rank_map.get(cid, 0) + 1 / (rrf_k + rank)
 
+    # SQL 旁路检索结果参与 RRF 融合（精确匹配，给高权重）
+    for rank, doc in enumerate(sql_docs, start=1):
+        cid = doc.metadata.get("chunk_id") or _fallback_id(doc)
+        rank_map[cid] = rank_map.get(cid, 0) + 1 / (rrf_k + rank)
+
     sorted_cids = sorted(rank_map.items(), key=lambda x: x[1], reverse=True)
 
-    doc_dict = {doc.metadata.get("chunk_id") or _fallback_id(doc): doc for doc in vector_docs + bm25_docs}
+    doc_dict = {doc.metadata.get("chunk_id") or _fallback_id(doc): doc for doc in vector_docs + bm25_docs + sql_docs}
 
     merged = []
     for cid, rrf_score in sorted_cids[:k]:
@@ -125,6 +146,8 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
     metrics = {"vector_hits": len(vector_docs),
                "bm25_hits": len(bm25_docs),
                "merged_hits": len(merged)}
+    if sql_bypass_used:
+        metrics["sql_bypass_hits"] = len(sql_docs)
     if failures:
         # 单侧降级可观测：span metrics 标记 fallback 侧与原因（供 trace/前端定位）
         metrics["fallback_side"] = ",".join(failures.keys())
@@ -139,8 +162,9 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
     if merged:
         try:
             from backend.rag.evidence_gate import (
-                evidence_gate_retrieval, is_evidence_gate_enabled,
+                evidence_gate_retrieval,
                 gate_retrieval_passthrough,
+                is_evidence_gate_enabled,
             )
             if is_evidence_gate_enabled():
                 from backend.rag.retrieval.query_analyzer import QueryAnalyzer
@@ -152,7 +176,8 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
                     from backend.shared.logger import logger as _logger
                     _logger.debug(f"[hybrid_retrieve] QueryAnalyzer 分析失败: {e}", exc_info=True)
                 from backend.config import (
-                    VEC_MIN_SCORE, DOC_TYPE_COVERAGE_REQUIRED,
+                    DOC_TYPE_COVERAGE_REQUIRED,
+                    VEC_MIN_SCORE,
                 )
                 decision = evidence_gate_retrieval(
                     merged,
@@ -200,3 +225,149 @@ def rrf_fusion_docs(vector_docs, bm25_docs, k=5, rrf_k=60):
     doc_dict = {doc.metadata["doc_id"]: doc for doc in bm25_docs + vector_docs}
 
     return [doc_dict[doc_id] for doc_id in sorted_ids[:k]]
+
+
+# ── 财务 SQL 旁路检索 ──────────────────────────────────
+
+
+def _financial_sql_bypass(query: str) -> list:
+    """财务 SQL 旁路检索：查询含财务指标 + 数值条件时，走 SQL 精确检索。
+
+    流程：
+      1. QueryAnalyzer 分析查询 → 提取 financial_metrics + numeric_conditions
+      2. 仅当同时有指标和数值条件时才触发（避免对纯文本查询误走 SQL）
+      3. 构造安全 SELECT SQL，查询已入库的结构化财务数据表
+      4. SQL 结果转为 Document 对象，注入 RRF 融合
+
+    失败软降级：SQL 执行失败返回空列表，不影响 Vector+BM25 检索。
+    """
+    from backend.shared.logger import logger
+
+    try:
+        from backend.rag.retrieval.query_analyzer import QueryAnalyzer
+    except ImportError:
+        return []
+
+    parsed = QueryAnalyzer().analyze(query)
+    # 仅当同时有财务指标和数值条件时才触发
+    if not parsed.financial_metrics or not parsed.numeric_conditions:
+        return []
+
+    # 构造 SQL 查询
+    sql = _build_financial_sql(parsed)
+    if not sql:
+        return []
+
+    logger.info(f"[SQL_Bypass] 查询: {query[:80]}, SQL: {sql[:120]}")
+
+    try:
+        from backend.sql.sql_validator import sql_validator
+        safe_sql, _, _ = sql_validator.validate(sql)
+        from backend.sql.executor import execute_sql_struct
+        from backend.sql.schema_loader import schema_loader
+        result = execute_sql_struct(safe_sql, timeout=schema_loader.query_timeout)
+        if result.status not in ("success", "no_data"):
+            logger.warning(f"[SQL_Bypass] SQL 执行失败: {result.status} - {result.error}")
+            return []
+        return _sql_results_to_documents(result, parsed)
+    except Exception as e:
+        logger.warning(f"[SQL_Bypass] SQL 旁路检索失败: {e}")
+        return []
+
+
+def _build_financial_sql(parsed) -> str:
+    """根据解析结果构造安全 SELECT SQL。
+
+    策略：查询已入库的财务数据表，按 numeric_conditions 过滤。
+    使用指标文本做 ILIKE 匹配列值，避免硬编码列名。
+    表名由 schema_loader 动态发现，兑底用 stg_financial_data。
+    """
+    # 为每个 numeric_condition 构造 WHERE 子句
+    where_clauses: list[str] = []
+    for cond in parsed.numeric_conditions:
+        metric = cond.get("metric_text", "")
+        value = cond.get("value", 0)
+        if not metric or not isinstance(value, (int, float)):
+            continue
+        # 指标文本可能在任意列中，用 ILIKE 跨列匹配
+        # 简化：在已知财务表中按指标名做列值匹配
+        where_clauses.append(
+            f"EXISTS (SELECT 1 FROM unnest(string_to_array(::text, ',')) AS col_val "
+            f"WHERE col_val ILIKE '%{metric}%')"
+        )
+        where_clauses.append(f"{value} IS NOT NULL")
+        break  # 只用第一个条件，避免多条件冲突
+
+    if not where_clauses:
+        return ""
+
+    # 动态查找含财务指标的表名，兑底用 stg_financial_data
+    table_name = "stg_financial_data"
+    try:
+        from backend.sql.schema_loader import schema_loader
+        known_tables = getattr(schema_loader, "tables", []) or []
+        for t in known_tables:
+            tname = str(getattr(t, "table_name", "")) or str(t)
+            if "financial" in tname.lower() or "finance" in tname.lower():
+                table_name = tname
+                break
+    except Exception:
+        logger.debug("[P1-10] 财务表探测失败（降级默认表名）", exc_info=True)
+
+    conditions = " AND ".join(where_clauses)
+    sql = f"SELECT * FROM {table_name} WHERE {conditions} LIMIT 20"
+    return sql
+
+
+def _sql_results_to_documents(result, parsed) -> list:
+    """将 SQL 查询结果转为 Document 列表。
+
+    每行结果转成一个 Document，page_content 为 kv 格式文本，
+    metadata 含 numeric_values 和来源标记。
+    """
+    import hashlib
+
+    from langchain_core.documents import Document
+
+    docs: list = []
+    columns = result.columns or []
+    rows = result.rows or []
+
+    for ri, row in enumerate(rows):
+        # 构建 kv 文本
+        kv_parts: list[str] = ["[SQL财务数据]"]
+        numeric_vals: dict[str, str] = {}
+        for ci, col in enumerate(columns):
+            if ci >= len(row):
+                continue
+            val = str(row[ci]) if row[ci] is not None else ""
+            col_name = str(col).strip()
+            if not col_name or not val:
+                continue
+            kv_parts.append(f"{col_name} {val}")
+            # 尝试提取数值
+            try:
+                from backend.rag.preprocessing.financial_normalizer import normalize_financial_value
+                norm = normalize_financial_value(val)
+                if norm.is_numeric and norm.normalized is not None:
+                    numeric_vals[col_name] = norm.normalized
+            except Exception:
+                logger.debug("[P1-10] 财务数值规范化失败", exc_info=True)
+
+        text = "\n".join(kv_parts)
+        chunk_id = hashlib.md5(f"sql:{ri}:{text[:100]}".encode()).hexdigest()[:12]
+        meta = {
+            "chunk_id": chunk_id,
+            "doc_id": f"sql_bypass:{chunk_id}",
+            "granularity": "leaf",
+            "source_file": "sql_bypass",
+            "chunk_type": "sql_result",
+            "row_index": ri,
+            "financial_metrics": parsed.financial_metrics,
+            "chunk_tokens": 0,  # 由下游填充
+        }
+        if numeric_vals:
+            meta["numeric_values"] = numeric_vals
+        docs.append(Document(page_content=text, metadata=meta))
+
+    return docs

@@ -342,7 +342,11 @@ def _mask_value(value: Any, column_key: str) -> Any:
     if len(value) <= prefix_len + suffix_len + 1:
         return "*" * min(len(value), 5)
 
-    masked = value[:prefix_len] + "***" + value[-suffix_len:]
+    # P1-11 修复：suffix_len=0 时 value[-0:] 会返回整个字符串，
+    # 导致脱敏结果泄露原文（"张***张三丰"），必须显式跳过后缀拼接
+    masked = value[:prefix_len] + "***"
+    if suffix_len > 0:
+        masked += value[-suffix_len:]
     return masked
 
 

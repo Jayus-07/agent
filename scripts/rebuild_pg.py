@@ -1,11 +1,13 @@
-"""rebuild_pg.py — 一键重建 PostgreSQL 两库（删 + 建 + 表 + 模拟数据 + 回归）
+"""rebuild_pg.py — 一键重建 PostgreSQL 两库（删 + 建 + 迁移 + 回归）
 
-不依赖 psql 客户端 — 用 psycopg2 直接连 PG。
-其它脚本（rebuild_pg.sh）只是 wrapper。
+P1-13 起 schema 版本管理迁移到 alembic（backend/sql/alembic/）：
+  - Step 4/5 不再手动跑 SQL，改为 `alembic upgrade head`（business/memory 双线）
+  - 原 002/003 dump 再生成步骤已删除（schema 演进改走 alembic revision）
+  - 日常增量变更：alembic -c alembic.ini -n business revision -m "描述"
 
 用法：
-  python scripts/rebuild_pg.py                  # 完整重建（DROP + CREATE + migration + dump + 回归）
-  python scripts/rebuild_pg.py --keep-data      # 不 DROP，只跑 migration（修复用，幂等）
+  python scripts/rebuild_pg.py                  # 完整重建（DROP + CREATE + alembic + 回归）
+  python scripts/rebuild_pg.py --keep-data      # 不 DROP，只跑 alembic upgrade（修复用，幂等）
   python scripts/rebuild_pg.py --skip-regress  # 跳过 pytest
 """
 import argparse
@@ -28,8 +30,6 @@ ROOT = dict(
     user=os.getenv('PGUSER', 'postgres'),
     password=os.getenv('PGPASSWORD', ''),
 )
-
-MIGRATIONS_DIR = os.path.join(BACKEND_ROOT, 'sql', 'migrations')
 
 RED = '\033[0;31m'
 GREEN = '\033[0;32m'
@@ -100,40 +100,27 @@ def step3_create_databases():
     conn.close()
 
 
-def step4_memory_migration():
-    """agent_memory：跑 002 schema + 003 seed。
+def _alembic(section: str):
+    """执行 alembic upgrade head（P1-13：替代手动跑 SQL 迁移）。
 
-    002 是 export_schema_sql.py 从真实库 dump 的产物（含 IDENTITY），下次 rebuild
-    会自动用同一个文件。所以首次重建要求 002 已经可用——直接重跑它：
+    section: 'business' | 'memory'（对应 alembic.ini 的两个 section）
     """
-    conn = _connect('agent_memory'); conn.autocommit = True
-    cur = conn.cursor()
-    for fname in ('002_agent_memory_schema.sql', '003_agent_memory_seed.sql'):
-        path = os.path.join(MIGRATIONS_DIR, fname)
-        cur.execute(open(path, encoding='utf-8').read())
-        print(f'  应用 {fname}')
-    conn.close()
+    cmd = [sys.executable, '-m', 'alembic', '-c', 'alembic.ini',
+           '-n', section, 'upgrade', 'head']
+    r = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True)
+    print(r.stdout.strip())
+    if r.returncode != 0:
+        fail(f'alembic -n {section} upgrade head failed:\n{r.stderr}')
+
+
+def step4_memory_migration():
+    """agent_memory：alembic -n memory upgrade head（基线 0001 = 002 schema + 003 seed）。"""
+    _alembic('memory')
 
 
 def step5_business_migration():
-    """agent_business：001 schema + seed，剥离 ai。"""
-    conn = _connect('agent_business'); conn.autocommit = True
-    cur = conn.cursor()
-    cur.execute(open(os.path.join(MIGRATIONS_DIR, '001_business_warehouse.sql'),
-                    encoding='utf-8').read())
-    cur.execute('DROP SCHEMA IF EXISTS ai CASCADE')
-    print('  应用 001_business_warehouse.sql + DROP ai')
-    conn.close()
-
-
-def step6_regenerate_dump():
-    """重跑 export_schema_sql.py → 002/003 与真实库对齐。"""
-    script = os.path.join(os.path.dirname(__file__), 'export_schema_sql.py')
-    r = subprocess.run([sys.executable, script], cwd=PROJECT_ROOT,
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        fail(f'export_schema_sql.py failed:\n{r.stderr}')
-    print(r.stdout.strip())
+    """agent_business：alembic -n business upgrade head（基线 0001 = 001 + 005 加固）。"""
+    _alembic('business')
 
 
 def step7_regression():
@@ -195,14 +182,11 @@ def main():
         step('Step 3: CREATE DATABASE')
         step3_create_databases(); ok()
 
-    step('Step 4: agent_memory — inline schema + seed')
+    step('Step 4: agent_memory — alembic upgrade head')
     step4_memory_migration(); ok()
 
-    step('Step 5: agent_business — schema + seed + DROP ai')
+    step('Step 5: agent_business — alembic upgrade head')
     step5_business_migration(); ok()
-
-    step('Step 6: 重导 002/003 schema dump（基于真实库 — 含 IDENTITY）')
-    step6_regenerate_dump(); ok()
 
     if not args.skip_regress:
         step('Step 7: 后端回归 pytest')

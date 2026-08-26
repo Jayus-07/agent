@@ -177,6 +177,94 @@ class TestGuessTitle:
         assert result["price"] == 76.0
         assert result["review_count"] == 100
 
+    def test_jd_anchor_on_price_line(self):
+        # jd: 以“¥价格”行为锚点向上找标题；标题与缩略图粘连需剥图片语法，
+        # 尾部“收藏”按钮文案需剔除；面包屑/店铺噪声不应被误选
+        md = (
+            "  * [](https://www.jd.com)京东首页\n"
+            "  * [jd_182501ory](https://home.jd.com/)\n"
+            "[洗发水](https://list.jd.com/list.html)\n"
+            "蔓迪洗护京东自营旗舰店\n"
+            "进店逛逛，享更多优惠\n"
+            "![4](https://img12.360buyimg.com/a.png)![19](https://img11.360buyimg.com/b.png)蔓迪防脱固发洗发水200g乌诺地尔收藏\n"
+            "¥115到手价\n"
+            "¥118\n"
+            "累计评价 5万+\n"
+        )
+        assert _guess_title(md, "jd") == "蔓迪防脱固发洗发水200g乌诺地尔"
+
+    def test_jd_skips_promo_line_above_price(self):
+        # 价格行上方紧邻促销文案时应继续向上找真正的标题
+        md = (
+            "某品牌防脱洗发水二百克装家庭实惠装\n"
+            "进店逛逛，享更多优惠\n"
+            "¥99\n"
+        )
+        assert _guess_title(md, "jd") == "某品牌防脱洗发水二百克装家庭实惠装"
+
+    def test_amazon_anchor_on_rating_line(self):
+        # amazon: 以 out of 5 stars 行为锚点向上找 h1 标题；
+        # 导航/快捷键/链接行应被跳过
+        md = (
+            "## Skip to\n"
+            "  * [ Main content ](https://www.amazon.com/x#skippedLink)\n"
+            "##  Keyboard shortcuts\n"
+            "shift + alt + Z\n"
+            "To move between items, use your keyboard's up or down arrows.\n"
+            "[Visit the MOUTHWATCHERS Store](https://www.amazon.com/stores/x)\n"
+            "#  MOUTHWATCHERS Dr Plotkas Soft Bristle Flossing Toothbrush Manual Soft Toothbrush for Adults, Variety 4 Pack\n"
+            "[ 4.7  _4.7 out of 5 stars_ ](javascript:void\\(0\\))\n"
+            "$15.99\n"
+        )
+        title = _guess_title(md, "amazon")
+        assert title.startswith("MOUTHWATCHERS Dr Plotkas")
+
+    def test_amazon_anchor_on_global_ratings(self):
+        # 以 "7,158 global ratings" 行为锚点同样能定位标题（无 # 标记时退而求其次）
+        md = (
+            "Keyboard shortcuts\n"
+            "Plotkas Mouthwatchers Antimicrobial Soft Bristle Toothbrush Family Pack\n"
+            "7,158 global ratings\n"
+            "## Customer reviews\n"
+        )
+        assert _guess_title(md, "amazon") == "Plotkas Mouthwatchers Antimicrobial Soft Bristle Toothbrush Family Pack"
+
+    def test_jd_rule_extraction_integration(self):
+        # 真实京东详情页正文（精简版）：标题/价格/划线价/评价数均应命中
+        md = (
+            "  * [](https://www.jd.com)京东首页\n"
+            "蔓迪洗护京东自营旗舰店\n"
+            "![4](https://img12.360buyimg.com/a.png)蔓迪【央妈推荐】王耀庆同款蔓迪防脱固发洗发水200g乌诺地尔收藏\n"
+            "¥115到手价\n"
+            "¥118\n"
+            "累计评价 5万+\n"
+            "限时立减3\n"
+        )
+        result = extract_by_rules("jd", md)
+        assert result["title"] == "蔓迪【央妈推荐】王耀庆同款蔓迪防脱固发洗发水200g乌诺地尔"
+        assert result["price"] == 115.0
+        assert result["original_price"] == 118.0
+        assert result["review_count"] == 50000
+
+    def test_amazon_rule_extraction_integration(self):
+        # 真实亚马逊详情页正文（精简版）：标题/价格/评分/评价数/销量均应命中
+        md = (
+            "## Skip to\n"
+            "shift + alt + Z\n"
+            "Select the department you want to search in All Departments Under $10 Video Games\n"
+            "#  MOUTHWATCHERS Dr Plotkas Soft Bristle Flossing Toothbrush Manual Soft Toothbrush for Adults, Variety 4 Pack\n"
+            "[ 4.7  _4.7 out of 5 stars_ ](javascript:void\\(0\\))\n"
+            "10K+ bought in past month\n"
+            "$15.99  $15.99\n"
+            "7,158 global ratings\n"
+        )
+        result = extract_by_rules("amazon", md)
+        assert result["title"].startswith("MOUTHWATCHERS Dr Plotkas")
+        assert result["price"] == 15.99
+        assert result["currency"] == "USD"
+        assert result["rating"] == 4.7
+        assert result["review_count"] == 7158
+
 
 # ── _extract_promo ───────────────────────────────────────────────────────
 
@@ -237,6 +325,26 @@ class TestExtractReviewCount:
 
     def test_taobao_sold_with_wan(self):
         assert _extract_review_count("已售 2万+") == 20000
+
+    def test_jd_buyer_review_paren_format(self):
+        # 京东: 买家评价(5万+)
+        assert _extract_review_count("买家评价(5万+)") == 50000
+
+    def test_jd_cumulative_review_wan_format(self):
+        # 京东: 累计评价 5万+
+        assert _extract_review_count("累计评价 5万+") == 50000
+
+    def test_jd_wan_people_review_format(self):
+        # 京东老版: 200万+人评价
+        assert _extract_review_count("200万+人评价") == 2000000
+
+    def test_amazon_global_ratings_format(self):
+        # 亚马逊: 7,158 global ratings
+        assert _extract_review_count("7,158 global ratings") == 7158
+
+    def test_amazon_bought_in_past_month(self):
+        # 亚马逊销量: 10K+ bought in past month
+        assert _extract_review_count("10K+ bought in past month") == 10000
 
 
 # ── _extract_rating / _extract_highlights ──────────────────────
