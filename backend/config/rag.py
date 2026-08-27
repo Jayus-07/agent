@@ -111,6 +111,14 @@ ADAPTIVE_VEC_THRESHOLDS = {
     "general": VEC_MIN_SCORE_DEFAULT,
 }
 
+# ⭐ Phase 3 Improvement #1: Risk-level Faithfulness rejection thresholds
+FAITHFULNESS_REJECT_SCORE_HIGH_RISK = float(os.getenv("FAITHFULNESS_REJECT_SCORE_HIGH_RISK", "0.7"))
+FAITHFULNESS_REJECT_SCORE_MED_RISK = float(os.getenv("FAITHFULNESS_REJECT_SCORE_MED_RISK", "0.5"))
+FAITHFULNESS_REJECT_SCORE_LOW_RISK = float(os.getenv("FAITHFULNESS_REJECT_SCORE_LOW_RISK", "0.3"))
+
+# Default threshold (backward compatible with existing config)
+FAITHFULNESS_REJECT_SCORE = FAITHFULNESS_REJECT_SCORE_MED_RISK
+
 # Citation Filter: chunk 支撑答案的最低 CrossEncoder 分数
 CITATION_SUPPORT_THRESHOLD = float(os.getenv("CITATION_SUPPORT_THRESHOLD", "0.4"))
 

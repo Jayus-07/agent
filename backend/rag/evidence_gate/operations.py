@@ -328,8 +328,8 @@ def evidence_gate_rerank(
 def is_groundedness_acceptable(
     faithfulness_score: float,
     *,
-    risk_level: str = "low",
-    low_threshold: float = 0.5,
+    risk_level: str = "medium",
+    low_threshold: float = 0.3,
     high_threshold: float = 0.7,
 ) -> tuple[bool, Optional[RejectReason]]:
     """Faithfulness 分数是否可接受。
@@ -339,7 +339,14 @@ def is_groundedness_acceptable(
         passed=True  → 不拒答
         passed=False → reason=HALLUCINATION
     """
-    threshold = high_threshold if risk_level == "high" else low_threshold
+    # Three-level thresholds: low(0.3) < medium(0.5) < high(0.7)
+    threshold_map = {
+        "high": high_threshold,     # 0.7 for FAQ/财务
+        "medium": 0.5,              # Default policy/general
+        "low": low_threshold,       # 0.3 for casual chat
+    }
+    threshold = threshold_map.get(risk_level, 0.5)  # Default to medium
+    
     if faithfulness_score < threshold:
         return False, RejectReason.HALLUCINATION
     return True, None
