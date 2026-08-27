@@ -121,16 +121,20 @@ class KeywordRuleStore:
         ).fetchall()
         conn.close()
 
-        # 按 doc_type 分组
+        # 按 doc_type 分组（词串 + 带权重）
         by_doc_type: dict[str, list[str]] = {}
+        by_doc_type_w: dict[str, list[tuple[str, int]]] = {}
         all_keywords: list[str] = []
         signal_rules: dict[str, list[str]] = {}
         for r in rows:
             kw = r["keyword"]
             dt = r["doc_type"]
+            w = r["weight"]
             if dt not in by_doc_type:
                 by_doc_type[dt] = []
+                by_doc_type_w[dt] = []
             by_doc_type[dt].append(kw)
+            by_doc_type_w[dt].append((kw, w))
             all_keywords.append(kw)
             cat = r["category"]
             if cat:
@@ -141,10 +145,21 @@ class KeywordRuleStore:
         self._cache = {
             "keywords": all_keywords,
             "by_doc_type": by_doc_type,
+            "by_doc_type_w": by_doc_type_w,
             "signal_rules": signal_rules,
         }
         self._cache_ts = time.time()
         return self._cache
+
+    def get_rules_by_doc_type(self) -> dict[str, list[tuple[str, int]]]:
+        """返回 {doc_type: [(keyword, weight), ...]}，60s 缓存。
+
+        与 get_keywords_for_doc_type 不同：这里保留每条词的权重，
+        供分类器 classify_with_confidence 按权重累加到类型得分。
+        'general' 桶的通用词不返回（分类按类型归因，通用词不偏向任何类型）。
+        """
+        active = self.get_active()
+        return active.get("by_doc_type_w", {})
 
     def get_active(self) -> dict:
         """返回 {"keywords": [...], "by_doc_type": {...}, "signal_rules": {...}}，60s 缓存"""

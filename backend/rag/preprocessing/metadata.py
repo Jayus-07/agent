@@ -228,6 +228,33 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
             if return_detail:
                 detail["scores"][doc_type] = score
 
+    # ── 动态词库（keyword_rules.db）合并 ──
+    # 让线上可维护的 doc_type 关键词也参与分类计分（原分类器只用静态 DOC_TYPE_RULES）。
+    # 「动态词库接进分类器」的核心：用户在管理页增删的词，上传分类时立即生效（60s 热加载）。
+    try:
+        from backend.rag.preprocessing.keyword_store import get_keyword_store
+        _dyn_rules = get_keyword_store().get_rules_by_doc_type()
+        for _dt, _kw_w in _dyn_rules.items():
+            if _dt == "general":
+                continue  # 通用词不偏向任何类型
+            for _kw, _w in _kw_w:
+                if len(_kw) < 2:
+                    continue
+                # 短英文词加词边界，避免子串误命中（与静态规则一致）
+                if _kw.isascii() and len(_kw) <= 4:
+                    _pat = re.compile(rf"(?<![\w]){re.escape(_kw)}(?![\w])", re.IGNORECASE)
+                else:
+                    _pat = re.compile(re.escape(_kw), re.IGNORECASE)
+                _found = _pat.findall(text_lower)
+                if _found:
+                    scores[_dt] = scores.get(_dt, 0) + _w * len(_found)
+                    if return_detail:
+                        detail["keyword_hits"].append(
+                            {"type": _dt, "keyword": _kw, "weight": _w, "source": "dynamic_store"}
+                        )
+    except Exception as _e:
+        logger.debug(f"[Classify] 动态词库合并失败，仅用静态规则: {_e}")
+
     # ── 文件名辅助 ──
     if filename:
         fname_no_ext = os.path.splitext(filename)[0]

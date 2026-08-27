@@ -1,4 +1,6 @@
 """test_classify.py — classify_doc_type 大写关键词匹配（lowercase 文本）。"""
+import pytest
+
 from backend.rag.preprocessing.metadata import classify_doc_type
 
 
@@ -97,3 +99,73 @@ def test_high_confidence_not_arbitrated(monkeypatch):
 
     assert "prompt" not in invoked, "高置信分类不应触发 LLM 仲裁"
     assert result == "financial"
+
+
+# =====================================================
+# 边界样本回归（2026-08-27 实测固化）：多类型关键词交叉竞争时，
+# 静态 + 动态词库计分应保持正确裁决。后续改词 / 调权重 / 改仲裁
+# 逻辑，跑本组即可发现回归。
+# =====================================================
+
+BOUNDARY_SAMPLES = [
+    ("sop夹policy词", "标准操作流程：员工按规范提交采购申请，部门审批后方可执行。", "sop"),
+    ("产品说明夹培训", "产品参数与规格参数表详见附录。使用前请完成上岗培训与考核。", "product_spec"),
+    ("安全夹个人信息", "访问控制策略要求加密存储，个人信息字段必须脱敏，防止数据泄露。", "security"),
+    ("制度夹合同词", "员工管理制度规定：对外签订合同须走法务审批流程并留存备份。", "policy"),
+    ("财务夹审计", "本季度报销与预算执行情况已提交财务审计。", "financial"),
+    ("泛词只有规范", "本规范规定了相关规范的管理规范要求。", "policy"),
+]
+
+
+@pytest.mark.parametrize(
+    "name,text,expected",
+    BOUNDARY_SAMPLES,
+    ids=[s[0] for s in BOUNDARY_SAMPLES],
+)
+def test_boundary_cross_type_samples(name, text, expected):
+    """边界交叉样本：类型 A 文档夹带类型 B 关键词时不得误判。"""
+    assert classify_doc_type(text) == expected, f"[{name}] 期望 {expected}"
+
+
+# =====================================================
+# 英文文档覆盖：DOC_TYPE_RULES 英文 pattern 全小写（分类器匹配
+# text_lower，静态规则大小写敏感），纯英文文档不得漏判为 general。
+# =====================================================
+
+ENGLISH_SAMPLES = [
+    ("security", "This document defines the password policy, encryption standards "
+                 "and access control procedures for all production systems."),
+    ("compliance", "We comply with GDPR, CCPA and SOC 2 requirements. Data protection "
+                   "and privacy policy apply to all processing activities."),
+    ("financial", "Quarterly budget review: revenue increased while expenses decreased. "
+                  "Invoice reimbursement requires manager approval and the balance sheet is attached."),
+    ("legal", "This agreement contains terms and conditions including liability, "
+              "indemnity and confidentiality clauses for both parties."),
+    ("faq", "Frequently asked questions about return policy, shipping and refunds from our customers."),
+    ("product_spec", "Datasheet and technical specification for model X200: user manual, "
+                     "maintenance guide and parameters table included."),
+]
+
+
+@pytest.mark.parametrize(
+    "expected,text",
+    ENGLISH_SAMPLES,
+    ids=[f"en_{s[0]}" for s in ENGLISH_SAMPLES],
+)
+def test_english_documents_classified(expected, text):
+    """纯英文文档：英文 pattern 生效，分类正确且不是 general。"""
+    assert classify_doc_type(text) == expected
+
+
+def test_product_spec_training_margin_avoids_arbitration():
+    """成本优化回归：产品文档夹带「培训/考核」字样时，product_spec 必须以
+    超过仲裁阈值（5 分）的分差领先 training，避免每次上传都触发一次
+    LLM 仲裁调用。静态规则单独成立（无动态词库环境下也须通过）。
+    """
+    from backend.rag.preprocessing.metadata import classify_with_confidence
+
+    text = "产品参数与规格参数表详见附录。使用前请完成上岗培训与考核。"
+    _, _, detail = classify_with_confidence(text, return_detail=True)
+    scores = detail["scores"]
+    margin = scores["product_spec"] - scores.get("training", 0)
+    assert margin > 5, f"product_spec 对 training 领先不足（分差 {margin}），会触发 LLM 仲裁"
