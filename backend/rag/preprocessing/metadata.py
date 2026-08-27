@@ -24,8 +24,14 @@ from backend.shared.logger import logger
 # 文档类型分类（V2 加权计分 + 文件名辅助 + LLM 胶着仲裁）
 # =====================================================
 
-# legal/compliance/policy 得分差 < 此阈值时触发 LLM 仲裁
+# legal/compliance/policy/financial 得分差 < 此阈值时触发 LLM 仲裁
+# P3: financial 加入仲裁候选集（电商场景财务/售后经常混淆）
 _ARBITRATION_THRESHOLD = 5
+_ARBITRATION_CANDIDATES = {"legal", "compliance", "policy", "financial", "faq"}  # P3: 扩展仲裁类型
+
+# P2-1: MinHash 缓存 —— 内存中建立 doc_type → signatures 快速索引
+_minhash_cache: Dict[str, List[Tuple[str, list[int]]]] = {}  # doc_type → [(file_hash, signature), ...]
+_MINHASH_CACHE_MAX_SIZE = 1024  # 最大保留类型数，自动 LRUCache
 
 # LLM 仲裁提示词 — 轻量，只选类型不生成内容
 _ARBITRATION_PROMPT = """你是电商文档分类专家。以下文档的类型有歧义，请从候选类型中选择最匹配的一个。
@@ -114,6 +120,7 @@ def compute_minhash(text: str, n_gram: int = 3, n_hashes: int = 128) -> list[int
     """MinHash 签名 — 用于近似文档去重（无需 LLM）。
 
     返回 128 个最小 hash 值作为文档指纹。Jaccard 相似度 ≈ 签名匹配比例。
+    P2-1: 增加文件级缓存键支持（由调用方传入 file_hash）
     """
     import hashlib
     # 提取 n-gram token（中文按字级 3-gram）
@@ -145,6 +152,53 @@ def minhash_similarity(sig1: list[int], sig2: list[int]) -> float:
 
 
 _SIMILARITY_THRESHOLD = 0.85  # 相似度 > 85% 视为近重复
+
+# =====================================================
+# P2-1: MinHash 缓存管理 —— 内存索引加速
+# =====================================================
+
+def _add_minhash_to_cache(doc_type: str, file_hash: str, signature: list[int]):
+    """将新文档的 MinHash 签名加入类型缓存。
+    
+    Args:
+        doc_type: 文档类型（如 financial, faq, legal...）
+        file_hash: 文件 SHA256 哈希值
+        signature: MinHash 签名列表（128 个整数）
+    """
+    if doc_type not in _minhash_cache:
+        _minhash_cache[doc_type] = []
+    
+    cache_list = _minhash_cache[doc_type]
+    cache_list.append((file_hash, signature))
+    
+    # 容量控制：如果超过上限，LRU 淘汰最久未用的
+    if len(cache_list) > _MINHASH_CACHE_MAX_SIZE:
+        # 保留前 80% 的新数据，淘汰后 20%
+        _minhash_cache[doc_type] = cache_list[-int(_MINHASH_CACHE_MAX_SIZE * 0.8):]
+
+
+def _query_minhash_from_cache(doc_type: str, query_sig: list[int]) -> List[Tuple[str, float]]:
+    """在缓存中查找同类型文档的相似度。
+    
+    Returns:
+        [(file_hash, similarity), ...] 按相似度降序排列
+    """
+    if doc_type not in _minhash_cache:
+        return []
+    
+    results = []
+    for cached_hash, cached_sig in _minhash_cache[doc_type]:
+        sim = minhash_similarity(query_sig, cached_sig)
+        if sim > 0.3:  # 只返回有相关性的结果
+            results.append((cached_hash, sim))
+    
+    return sorted(results, key=lambda x: x[1], reverse=True)
+
+
+def _clear_minhash_cache():
+    """清空所有 MinHash 缓存（用于测试或重置）。"""
+    global _minhash_cache
+    _minhash_cache = {}
 
 
 def classify_with_confidence(text: str, filename: str = "", file_path: str = "", return_detail: bool = False):
@@ -255,25 +309,24 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
 
     # ── 胶着仲裁 ──
     # 触发条件（满足其一）：
-    #   a) top1 本身是仲裁候选（legal/compliance/policy）且仅以微弱优势领先
+    #   a) top1 本身是仲裁候选（legal/compliance/policy/financial/faa）且仅以微弱优势领先
     #      次名（含 sop/financial 等非候选）→ 存在误判风险，仲裁。
     #      盲点修复：旧实现只看 top3 内的候选互比，非候选挤进前 3 时
     #      close_set 只剩一个 → 分差再小也不仲裁（实测 04_采购流程.docx）。
     #   b) 多个仲裁候选相互胶着（保留旧行为）。
-    arbitration_candidates = {"legal", "compliance", "policy"}
     top4 = sorted_scores[:4]
-    close_set = {t for t, _ in top4} & arbitration_candidates
+    close_set = {t for t, _ in top4} & _ARBITRATION_CANDIDATES
     scores_in_set = [(t, s) for t, s in top4 if t in close_set]
     inner_diff = (scores_in_set[0][1] - scores_in_set[1][1]
                   if len(scores_in_set) >= 2 else 999)
     candidate_narrow_lead = (
-        top_type in arbitration_candidates
+        top_type in _ARBITRATION_CANDIDATES
         and (top_score - second_score) <= _ARBITRATION_THRESHOLD
     )
     if (candidate_narrow_lead or (len(close_set) >= 2 and inner_diff < _ARBITRATION_THRESHOLD)):
         # 候选含 top4 全部类型（含 sop/financial 等非仲裁类次名，盲点修复）
         candidates = ", ".join(t for t, _ in top4)
-        logger.info(f"[Classify] 胶着仲裁: top4={top4}, inner_diff={inner_diff}")
+        logger.info(f"[Classify] 胶着仲裁：top4={top4}, inner_diff={inner_diff}")
         try:
             # 用模块级 llm（不在函数内重复 import，避免遮蔽测试 monkeypatch）
             result = llm.invoke(_ARBITRATION_PROMPT.format(
@@ -285,12 +338,12 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
             all_top4_types = {t for t, _ in top4}
             for t in all_top4_types:
                 if re.search(rf"(?<![a-z_]){re.escape(t)}(?![a-z_])", result_text):
-                    logger.info(f"[Classify] LLM 仲裁结果: {t}")
+                    logger.info(f"[Classify] LLM 仲裁结果：{t}")
                     if return_detail:
                         detail["llm_fallback"] = True
                         return t, 0.95, detail
                     return t, 0.95
-            logger.warning(f"[Classify] LLM 仲裁返回未知结果: {result_text[:100]}")
+            logger.warning(f"[Classify] LLM 仲裁返回未知结果：{result_text[:100]}")
         except Exception as e:
             logger.warning(f"[Classify] LLM 仲裁失败，使用最高分: {e}")
 

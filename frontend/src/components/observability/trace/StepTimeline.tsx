@@ -69,6 +69,21 @@ function SpanJsonPanel({ span }: { span: Span }) {
   );
 }
 
+// -------- 判断是否应该自动展开（用于大耗时 span） --------
+
+function shouldAutoExpand(span: Span): boolean {
+  // 元数据生成的 7 个子阶段应该默认展开
+  const metadataSpans = ['classify', 'quality', 'dedup_minhash', 'rule_extract', 'domain_classify', 'llm_generate', 'index_embed'];
+  if (metadataSpans.some(id => span.id.includes(id) || span.name.toLowerCase().includes('元数据'))) {
+    return true;
+  }
+  // 耗时 > 1s 的 span 建议展开
+  if (span.duration_ms > 1000) {
+    return true;
+  }
+  return false;
+}
+
 // -------- main --------
 
 interface Props {
@@ -79,9 +94,10 @@ interface Props {
   jsonExpanded?: Set<string>;
   onJsonToggle?: (id: string) => void;
   highlightStepId?: string | null;
+  autoExpandLarge?: boolean;  // 是否自动展开大耗时 span
 }
 
-export default function StepTimeline({ steps, totalMs, onToggle, expanded, jsonExpanded, onJsonToggle, highlightStepId }: Props) {
+export default function StepTimeline({ steps, totalMs, onToggle, expanded, jsonExpanded, onJsonToggle, highlightStepId, autoExpandLarge }: Props) {
   const maxMs = Math.max(...steps.map((s) => s.duration_ms), 1);
 
   // 判断 kind 是否属于 LangGraph 特殊节点
@@ -121,6 +137,9 @@ export default function StepTimeline({ steps, totalMs, onToggle, expanded, jsonE
         const isJsonOpen = jsonExpanded?.has(span.id);
         const depth = depthMap.get(span.id) || 0;
         const attrs = (span as any).attributes || {};
+        
+        // 判断是否应该展开（用户手动 + 自动）
+        const shouldExpand = expanded?.has(span.id) || (autoExpandLarge && shouldAutoExpand(span));
 
         // ── Route 行（极简） ──
         if (isRoute(span)) {

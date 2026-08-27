@@ -94,6 +94,23 @@ RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "8"))
 # 经验值范围：0.2（宽松）~ 0.5（严格）。
 RERANK_SCORE_THRESHOLD = float(os.getenv("RERANK_SCORE_THRESHOLD", "0.3"))
 
+# ⭐ NEW: Adaptive Thresholds (Phase 1)
+VEC_MIN_SCORE_DEFAULT = float(os.getenv("VEC_MIN_SCORE_DEFAULT", "0.25"))
+ADAPTIVE_THRESHOLD_ENABLED = os.getenv("ADAPTIVE_THRESHOLD_ENABLED", "true").lower() == "true"
+CONFIDENCE_AGGREGATOR_ENABLED = os.getenv("CONFIDENCE_AGGREGATOR_ENABLED", "true").lower() == "true"
+FAQ_VEC_THRESHOLD = float(os.getenv("FAQ_VEC_THRESHOLD", "0.35"))
+POLICY_VEC_THRESHOLD = float(os.getenv("POLICY_VEC_THRESHOLD", "0.30"))
+FINANCIAL_QUERY_THRESHOLD = float(os.getenv("FINANCIAL_QUERY_THRESHOLD", "0.45"))
+
+# Doc-type specific thresholds matrix
+ADAPTIVE_VEC_THRESHOLDS = {
+    "faq": FAQ_VEC_THRESHOLD,
+    "policy": POLICY_VEC_THRESHOLD,
+    "financial": FINANCIAL_QUERY_THRESHOLD,
+    "legal": 0.32,
+    "general": VEC_MIN_SCORE_DEFAULT,
+}
+
 # Citation Filter: chunk 支撑答案的最低 CrossEncoder 分数
 CITATION_SUPPORT_THRESHOLD = float(os.getenv("CITATION_SUPPORT_THRESHOLD", "0.4"))
 
