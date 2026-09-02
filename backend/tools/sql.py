@@ -76,19 +76,16 @@ def sql_query_tool(question: str) -> str:
     输入自然语言问题，返回 Markdown 格式的查询结果表格。
     适用场景：数据统计、排行、筛选、聚合、对比分析。
     """
-    logger.info(f"[Tool:sql_query] 问题: {question[:80]}...")
+    logger.info(f"[Tool:sql_query] 问题：{question[:80]}...")
     agent = _get_sql_agent()
     return agent.ask(question, current_user_id=None)
 
 
-@tool
-def sql_query_tool(question: str) -> str:
-    """
-    查询 PostgreSQL 数据库中的结构化数据。
-    输入自然语言问题，返回 Markdown 格式的查询结果表格。
-    适用场景：数据统计、排行、筛选、聚合、对比分析。
-    """
-    logger.info(f"[Tool:sql_query] 问题: {question[:80]}...")
-    agent = _get_sql_agent()
-    return agent.ask(question, current_user_id=None)
+# ==================== Tool Registry 自动注册 ====================
+# 本模块导出两个 Tool，启动时自动注册到全局 Registry
+from backend.tools.tool_registry import tool_registry
+
+# 显式注册当前模块的所有 Tool
+tool_registry.register(execute_sql_tool, __file__)
+tool_registry.register(sql_query_tool, __file__)
 

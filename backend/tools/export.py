@@ -39,3 +39,8 @@ def export_csv_tool(question: str, filename: str = "") -> str:
     logger.info(f"[Tool:export_csv] {len(rows)} 行 → {filepath}")
     return f"已导出 {len(rows)} 行数据到 {filepath}"
 
+
+# ==================== Tool Registry 自动注册 ====================
+from backend.tools.tool_registry import tool_registry
+tool_registry.register(export_csv_tool, __file__)
+

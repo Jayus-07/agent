@@ -1,0 +1,56 @@
+# Codecov Configuration
+# See: https://docs.codecov.com/docs/codecov-yaml
+
+version: '1'
+
+# Flag settings - allow multiple test suites to report separately
+flags:
+  unittests:
+    carryforward: true
+  backend:
+    carryforward: true
+  tools:
+    carryforward: true
+
+# Coverage configuration
+coverage:
+  # Regex for ignoring certain files/directories from coverage calculation
+  ignore:
+    - "**/__pycache__/**"
+    - "**/*.egg-info/**"
+    - "backend/tests/**"
+    - "scripts/**"
+    - "backend/config/*.py"
+  
+  # Status checks configuration
+  status:
+    project:
+      default:
+        target: auto  # Compare against parent commit
+        threshold: 5%  # Allow up to 5% decrease
+        base: auto    # Use current branch as base
+    patch:
+      default:
+        target: 80%   # Each PR should have at least 80% coverage
+        threshold: 10%
+    changes: false  # Don't fail on uncovered new code
+
+# Comment settings
+comment:
+  layout: "header, reach, diff, components"
+  behavior: default  # Update existing comment if found
+  require_changes: false  # Always post comment
+  require_base: no         # No base required
+  require_head: yes        # Head (PR) required
+
+# Identifiers for tracking different test suites
+parsers:
+  python:
+    precision: 2
+
+# Upload configuration
+upload:
+  max_size: 10240  # 10MB
+  flags_as_tags: true
+  github_checks:
+    annotations: false

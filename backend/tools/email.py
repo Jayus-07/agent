@@ -39,5 +39,10 @@ def send_email_tool(to: str, subject: str, body: str, cc: str = "") -> str:
         logger.info(f"[Tool:send_email] 已发送 → {to} ({subject})")
         return f"邮件已发送: 收件人 {to}, 主题 '{subject}'"
     except Exception as e:
-        logger.error(f"[Tool:send_email] 发送失败: {e}")
+        logger.error(f"[Tool:send_email] 发送失败：{e}")
         raise
+
+
+# ==================== Tool Registry 自动注册 ====================
+from backend.tools.tool_registry import tool_registry
+tool_registry.register(send_email_tool, __file__)

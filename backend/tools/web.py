@@ -112,6 +112,12 @@ def web_crawl_tool(url: str, mode: str = "markdown") -> str:
         logger.info(f"[Tool:web_crawl] 成功抓取 {url} ({len(text)} 字符, mode={mode})")
         return text
     except Exception as e:
-        logger.warning(f"[Tool:web_crawl] 抓取失败: {e}")
+        logger.warning(f"[Tool:web_crawl] 抓取失败：{e}")
         return f"[CRAWL FAILED] 无法抓取 '{url}': {e}"
+
+
+# ==================== Tool Registry 自动注册 ====================
+from backend.tools.tool_registry import tool_registry
+tool_registry.register(web_search_tool, __file__)
+tool_registry.register(web_crawl_tool, __file__)
 

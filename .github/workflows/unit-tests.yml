@@ -47,12 +47,23 @@ jobs:
           fi
 
       - name: Run tests with coverage
-        run: pytest -p no:cacheprovider --no-header -q
+        run: |
+          pytest -p no:cacheprovider --no-header -q \
+            --cov=backend \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:htmlcov \
+            --cov-report=term-missing \
+            --cov-fail-under=55
 
-      - name: Upload coverage report
+      - name: Upload coverage report to Codecov
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: codecov/codecov-action@v4
         with:
-          name: coverage-report
-          path: htmlcov/
-          retention-days: 14
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+          files: ./coverage.xml
+          flags: unittests,backend
+          name: full-coverage-report
+          yml: ./codecov.yml
+          # Optional: Only upload for main branch pushes
+          verbose: true

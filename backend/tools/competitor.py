@@ -110,5 +110,10 @@ def competitor_analyze_tool(action: str = "analyze", url: str = "",
         return f"未知 action: {action}（支持 analyze / watch / history / add / remove / toggle / list）"
 
     except Exception as e:
-        logger.warning(f"[Tool:competitor] 失败: {e}")
-        return f"[COMPETITOR FAILED] 竞品分析失败: {e}"
+        logger.warning(f"[Tool:competitor] 失败：{e}")
+        return f"[COMPETITOR FAILED] 竞品分析失败：{e}"
+
+
+# ==================== Tool Registry 自动注册 ====================
+from backend.tools.tool_registry import tool_registry
+tool_registry.register(competitor_analyze_tool, __file__)

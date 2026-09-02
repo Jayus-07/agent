@@ -16,8 +16,13 @@ def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
     输入检索问题和知识库ID，返回基于相关文档生成的回答。
     适用场景：概念解释、经验查询、流程规范、技术方案参考。
     """
-    logger.info(f"[Tool:search_knowledge] 检索: {question[:80]}... (kb={kb_id})")
+    logger.info(f"[Tool:search_knowledge] 检索：{question[:80]}... (kb={kb_id})")
     pipeline = _get_rag_pipeline()
     from backend.tools.session import _get_session_id
     sid = _get_session_id()
     return pipeline.ask(question, session_id=sid, kb_id=kb_id)
+
+
+# ==================== Tool Registry 自动注册 ====================
+from backend.tools.tool_registry import tool_registry
+tool_registry.register(search_knowledge_tool, __file__)

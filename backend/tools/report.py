@@ -33,3 +33,8 @@ def generate_report_tool(report_type: str, filters: dict = None) -> str:
     logger.info(f"[Tool:generate_report] 类型={report_type}, 筛选={filters}")
     return run_report(report_type, filters, user_id="multi-agent", polish=False)
 
+
+# ==================== Tool Registry 自动注册 ====================
+from backend.tools.tool_registry import tool_registry
+tool_registry.register(generate_report_tool, __file__)
+

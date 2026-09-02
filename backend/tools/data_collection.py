@@ -132,3 +132,8 @@ def _format_result(result: CollectResult) -> str:
                            f"({info['缺失率']:.1%}), {info['策略']}")
 
     return "\n".join(lines)
+
+
+# ==================== Tool Registry 自动注册 ====================
+from backend.tools.tool_registry import tool_registry
+tool_registry.register(data_collection_tool, __file__)
