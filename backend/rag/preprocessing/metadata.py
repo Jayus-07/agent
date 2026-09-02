@@ -18,6 +18,8 @@ from backend.rag.preprocessing.llm_enrichment import (
 from backend.infra.async_utils import async_safe_call_with_timeout
 
 from backend.shared.logger import logger
+from backend.config.database import DOCS_DIRECTORY
+from backend.rag.indexing.doc_id import derive_doc_id_from_path
 
 
 # =====================================================
@@ -720,7 +722,9 @@ async def build_all_metadata_async(docs, doc_map):
     chunk_tasks = []
     for i, d in enumerate(docs):
         fname = os.path.basename(d.metadata["file_path"])
-        doc_id = hashlib.md5(fname.encode()).hexdigest()[:10]
+        # 命名空间化 doc_id（kb_id|department|basename），与 indexer._derive_doc_id 一致，
+        # 消除跨目录同名文件共享 doc_id 的隐患（评测集 relevant_docs 协议同步）。
+        doc_id = derive_doc_id_from_path(d.metadata["file_path"], DOCS_DIRECTORY)
 
         task = build_metadata(
             text=d.page_content,

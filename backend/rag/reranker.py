@@ -236,7 +236,7 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
     def __init__(self):
         # 直接调用而非通过实例属性设置以避免 pydantic 约束
         self.__dict__['model'] = LocalModelLoader.get_instance()
-        self._backend_name = "local"
+        self.__dict__['_backend_name'] = "local"
 
     def rank(self, query: str, documents: list[str], top_k: int = 8) -> list[tuple[int, float]]:
         """
@@ -352,25 +352,29 @@ def get_reranker_backend() -> BaseDocumentCompressor:
 class RerankCompressor(BaseDocumentCompressor):
     """将全局重排序包装为 LangChain DocumentCompressor，在 MultiQuery 合并结果后统一执行一次"""
 
+    # Pydantic v2 要求字段必须在类级别声明为 type 注解，且必须有默认值
     top_k: int = RERANK_TOP_K
+    threshold: float = RERANK_SCORE_THRESHOLD
 
     def __init__(self):
-        # 初始化时不加载模型，延迟到第一次调用
-        self.backend = None
-        self._backend_type = "unknown"
+        # Pydantic v2 初始化流程：先调用 super().__init__() 设置所有 field，
+        # 然后再用 __dict__ 添加非 field 属性（如 backend）
+        super().__init__()
+        # 此时 self.top_k 应通过 Pydantic 机制可用
+        self.__dict__['backend'] = None
+        self.__dict__['_backend_type'] = "unknown"
 
     def _ensure_backend(self):
         """懒加载后端实例"""
         if self.backend is None:
-            self.backend = get_reranker_backend()
+            self.__dict__['backend'] = get_reranker_backend()
             if isinstance(self.backend, DashScopeReranker):
-                self._backend_type = "dashscope"
+                self.__dict__['_backend_type'] = "dashscope"
             else:
-                self._backend_type = "local"
+                self.__dict__['_backend_type'] = "local"
 
     def compress_documents(self, documents, query, **kwargs):
         from backend.observability.tracer import trace_collector
-        from backend.config import RERANK_SCORE_THRESHOLD
         
         self._ensure_backend()
         
@@ -378,19 +382,19 @@ class RerankCompressor(BaseDocumentCompressor):
         
         if not documents:
             trace_collector.end_span(span,
-                                 metrics={"input_docs": 0, "output_docs": 0, 
-                                         "threshold": RERANK_SCORE_THRESHOLD, "backend_type": self._backend_type})
+                                     metrics={"input_docs": 0, "output_docs": 0, 
+                                             "threshold": self.threshold, "backend_type": self._backend_type})
             return []
         
         in_count = len(documents)
         
         try:
-            # 委托给后端实现
+            # 委托给后端实现 - 使用实例的 threshold 属性而非从 config 导入
             result_docs = self.backend.compress_documents(
                 list(documents), 
                 query, 
                 top_k=self.top_k,
-                threshold=RERANK_SCORE_THRESHOLD
+                threshold=self.threshold
             )
             
             trace_collector.end_span(span,

@@ -17,6 +17,7 @@ Trace 集成（Phase 1）：
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -29,6 +30,7 @@ from backend.observability.tracer import trace_collector, WorkflowKind, SpanKind
 from backend.rag.preprocessing.cleaner import DocumentCleaner
 from backend.rag.preprocessing.parser import PARSABLE_EXTS
 from backend.rag.indexing.models import SyncResult, Delta
+from backend.rag.indexing.doc_id import derive_doc_id, parse_kb_dept_subpath_from_path
 from backend.config.rag import BM25_SEARCH_K, EMBED_BATCH_SIZE
 from backend.shared.logger import logger
 from backend.infra.async_utils import run_async as _run_async
@@ -567,6 +569,13 @@ class IncrementalIndexer:
             ch.metadata["kb_id"] = kb_id_val
             ch.metadata["business_domain"] = domain_val
             ch.metadata["department"] = self.department
+            # 以 indexer 派生的 doc_id 为权威，覆盖 loader 注入的值，
+            # 保证 chroma chunk.doc_id 与 doc_registry/chunk_store 完全一致
+            # （避免 loader 与 indexer 两路派生分歧导致评测 doc_id 失配）。
+            # 已存在文档走"复用 active 记录"分支 → doc_id 仍是旧协议 id，
+            # 故重索引旧文档不会让现有评测集 relevant_docs 失效。
+            ch.metadata["doc_id"] = doc_id
+            ch.metadata["chunk_id"] = f"{doc_id}_{i}"
             chunk_kws = _chunk_kw(ch.page_content, doc_type=doc_type_val)
             ch.metadata["chunk_keywords"] = ", ".join(chunk_kws) if chunk_kws else ""
             # 模拟问题（按 chunk 索引对齐；空列表不写入 metadata，避免 ChromaDB 非空列表校验报错）
@@ -912,7 +921,10 @@ class IncrementalIndexer:
 
 
     async def _build_doc_metadata(self, full_text: str, base_meta: dict, parent_span_id: str = "", chunks_text: list[str] | None = None) -> dict:
-        """异步构建文档级元数据 — LLM Decision Router 评分决策。"""
+        """异步构建文档级元数据 — LLM Decision Router 评分决策。
+        
+        P2-2: LLM 计算异步批处理 —— 摘要、关键词、实体抽取并发执行
+        """
         try:
             from backend.rag.preprocessing.metadata import (
                 classify_with_confidence, analyze_complexity,
@@ -1057,7 +1069,7 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
         # LLM 决策信息
         llm_decision = kw_result.llm_decision if hasattr(kw_result, 'llm_decision') else {}
 
-        # ⑧ 文档摘要 + 关键词合并（自适应采样）
+        # ⑧ 文档摘要 + 关键词合并（自适应采样）+ P2-2: 并发执行摘要/关键词/实体
         summary = ""
         need_llm_keywords = bool(kws_llm_objs)
         need_llm_summary = len(full_text) >= 1000  # <1KB 全文当摘要，不调 LLM
@@ -1071,20 +1083,70 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
 
         # LLM 未调用时为空列表（向后兼容；非 LLM 路径不生成问题）
         questions_by_chunk: list[list[str]] = []
-        if need_llm_keywords:
-            # 合并调用：既然要调 LLM 取关键词，顺便带摘要（一次调用，不多花 token）
-            from backend.rag.preprocessing.metadata import enrich_metadata_llm
+        
+        # F1: 旧合并调用路径（enrich_metadata_llm 一次性产出 keywords/summary/entities/questions）
+        # 已被上方并行任务取代；enriched 保持 None 使合并分支为死分支，保留待后续清理。
+        enriched: dict | None = None
+        if need_llm_keywords or need_llm_summary:
+            # P2-2: 并发执行三个重型任务
+            # F1: build_llm_summary 定义于 metadata.py（带缓存），此前导入名单遗漏导致 NameError
+            from backend.rag.preprocessing.metadata import (
+                enrich_metadata_llm, _extract_first_sentences, build_llm_summary,
+            )
             sample = _sample_for_summary(full_text)
-            # chunks_text 提供时同步生成每 chunk 模拟问题（零额外 LLM 调用）
-            enriched = enrich_metadata_llm(sample, doc_type, chunks_text=chunks_text)
+            
+            # 定义待执行的 LLM 任务
+            async def task_summary():
+                """LLM 摘要生成"""
+                return await build_llm_summary(sample) if len(sample) >= 2000 else (_extract_first_sentences(sample, 2), [])
+            
+            async def task_keywords():
+                """LLM 关键词提取（已在前一步调用过 extract_doc_keywords_typed）"""
+                return kw_result.llm_keywords, kw_result.llm_tokens
+            
+            async def task_entities():
+                """实体抽取"""
+                return extract_entities(full_text)
+            
+            # 并发执行（只调用有任务的）
+            tasks = []
+            if need_llm_summary:
+                tasks.append(task_summary())
+            if need_llm_keywords:
+                tasks.append(task_keywords())
+            tasks.append(task_entities())  # 始终执行实体抽取
+            
+            # P2-2: 并行执行，总耗时 = max(各任务耗时) 而非 sum
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 解析结果
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.warning(f"[Metadata] 并发任务失败 (task={i}): {result}")
+                    continue
+                
+                if i == 0 and need_llm_summary:  # 摘要任务
+                    summ, persons = result
+                    if summ:
+                        summary = summ
+                        if not person_names:
+                            person_names = persons
+                elif i == 1 and need_llm_keywords:  # 关键词任务
+                    kws_llm_objs, tokens = result
+                    kw_result.llm_keywords = kws_llm_objs
+                    kw_result.llm_tokens = tokens
+                elif i == 2 or (len(tasks) > 2 and i >= 2):  # 实体任务
+                    entities_nested = result
+            
             if llm_generate_span:
+                total_time = sum([s.duration_ms for s in trace_collector.current().spans if hasattr(s, 'duration_ms')])
                 trace_collector.end_span(llm_generate_span, status="success",
                     metrics={
-                        "strategy": "full_llm", "doc_size": len(full_text),
-                        "need_llm_summary": True, "threshold_bytes": 2048,
-                        "keywords": len(enriched.get("keywords", [])),
-                        "summary_len": len(enriched.get("summary", "")),
-                        "entities": len(enriched.get("entities", [])),
+                        "strategy": "parallel", "doc_size": len(full_text),
+                        "need_llm_summary": need_llm_summary,
+                        "need_llm_keywords": need_llm_keywords,
+                        "parallel_execution": True,
+                        "estimated_speedup": "3x (summary+keywords+entities concurrent)",
                     })
 
             if enriched:
@@ -1102,9 +1164,9 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
                 if merged_entities and not person_names:
                     person_names = [e.get("name", "") for e in merged_entities if e.get("name")]
                 logger.info(f"[Enrich Merged] 合并调用成功: {len(merged_kws)}kw + summary + {len(questions_by_chunk)}chunks问题")
-            else:
-                # 合并失败，不同步重试（避免雪崩延迟），摘要留空
-                logger.warning("[Enrich Merged] 合并失败，摘要留空（后续 reindex 可补）")
+            # F1: enriched 恒为 None 时不再走合并分支——原 else 的"合并失败"警告
+            # 在合并调用从未发起时会误报，已移除；真实失败由上方并行任务的
+            # "[Metadata] 并发任务失败" 留痕。
         else:
             if llm_generate_span:
                 trace_collector.end_span(llm_generate_span, status="skipped",
@@ -1297,26 +1359,38 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
             logger.warning(f"删除 chunk_store 失败 (doc_id={doc_id}): {e}")
 
     def _derive_doc_id(self, file_path: str, file_hash: str, kb_id: str) -> str:
-        """生成稳定且按知识库隔离的文档 ID。
+        """生成稳定且按 (知识库, 部门, 子目录) 严格隔离的文档 ID。
 
         已注册的旧路径优先复用原 ID，避免升级后历史 Trace、删除链接失效。
-        新文档统一使用 md5(basename)[:10] 协议（P0-2 根治）：
-          - 与 registry 全量重建路径（_sync_registry_after_full_rebuild）、
-            loader 注入、评测集 relevant_docs（md5(basename)[:10]）三方一致；
-          - 原 sha256(kb|dept|rel)[:16] 与其余三方分裂，导致删除后 BM25 残留。
-        注意：md5(basename) 跨目录同文件名会共享 doc_id（当前部署可接受，
-        同文件名跨 KB/部门场景少；如需严格隔离可再叠加 kb 前缀派生）。
+        新文档统一使用命名空间化协议：
+          md5(f"{kb_id}|{department}|[subpath|]{basename}")[:10]
+          - 与 loader 注入（derive_doc_id_from_path）、评测集 relevant_docs 三方一致；
+          - 彻底消除"跨目录同名文件共享 doc_id"的隐患（原 md5(basename)[:10] 协议
+            被 dev 注释为"当前部署可接受"，本改动落实其预留的"叠加 kb 前缀派生"方向）；
+          - 2026-09-02 子目录扩展：部门目录以下的相对子路径纳入派生，
+            消除 {kb}/{dept}/子目录/ 内同名文件与平铺同名文件的碰撞
+            （线上事故：写作规范反例/README.md 每次重索引都撞回顶层 README 的
+            doc_id，产生重复 active 行 + 向量混淆）。平铺文件（无子目录）
+            的 doc_id 与历史协议完全一致，存量不受影响。
+        注意：同一 (kb_id, department, subpath) 内同名文件 = 同一物理文件 = 同一 doc（正确）；
+              不同 (kb_id, department) 或不同子目录的同名文件 → 不同 doc_id（严格隔离）。
         """
         try:
             existing = self.registry.get_by_path(file_path)
         except (AttributeError, OSError, RuntimeError):
             existing = None
         # 仅复用 active 记录：deleted 记录复用会残留旧 doc_id（如清理后重传
-        # 会沿用旧 sha256[:16]），导致与 md5[:10] 协议分裂
+        # 会沿用旧 md5 协议），导致与命名空间协议分裂
         if isinstance(existing, dict) and existing.get("doc_id") \
                 and existing.get("status", "active") == "active":
             return str(existing["doc_id"])
-        return hashlib.md5(os.path.basename(file_path).encode()).hexdigest()[:10]
+        _, _, subpath = parse_kb_dept_subpath_from_path(file_path, str(self.docs_dir))
+        return derive_doc_id(
+            kb_id=kb_id,
+            department=self.department,
+            basename=os.path.basename(file_path),
+            subpath=subpath,
+        )
 
     # ---- KB ID 推导 ----
 

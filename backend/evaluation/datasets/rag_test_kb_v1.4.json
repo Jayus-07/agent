@@ -1,5 +1,5 @@
 {
-  "version": "1.3",
+  "version": "1.4",
   "_comment": "RAG 检索评测 v1.3 — rag_test_kb（15 个真实文档）。relevant_docs = md5(basename)[:10]，由 rag pipeline metadata.build_all_metadata_async 写入；评测时 retrieve 出来的 doc_id 与之做集合相等判定。schema 预留字段：relevant_chunks（chunk 级召回，parent-child 验证）、expected_answer（生成层 Faithfulness/Answer Relevance 接入）、doc_type（文档类型过滤）。v1.2→v1.3 修复：20 条用例的 question/snippet 与 KB 文档实际内容脱节（标注的事实在文档中不存在），全部改写为文档原文可验证的用例；不动 KB 文档（HANDOFF §7.3 教训）。v1.1→v1.2 修复：RT-031/RT-032 ground truth 在 KB 中不存在（11_采购合同.md 无违约金/保密条款）改为可验证用例；RT-034 与 RT-008 完全重复，替换为新用例；RT-036/RT-037 doc_type 误标 security 改为 tech_manual。v1.0→v1.1 修复：原 doc_id 协议 sha256[:16] 与入库实际 md5[:10] 不匹配，全 37 条改为 md5(basename)[:10] 协议。",
   "test_cases": [
     {
@@ -20,7 +20,9 @@
       "metadata": {
         "difficulty": "easy",
         "domain": "order",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（01_FAQ '订单可以修改地址吗'/'地址写错了能改吗'，无'收货地址'措辞）"
+        "fix_note": "2026-08-21: snippet 对齐文档原文（01_FAQ '订单可以修改地址吗'/'地址写错了能改吗'，无'收货地址'措辞）",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -41,7 +43,9 @@
       "metadata": {
         "difficulty": "easy",
         "domain": "order",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（01_FAQ '如何查询物流轨迹'，无'追踪号'措辞）"
+        "fix_note": "2026-08-21: snippet 对齐文档原文（01_FAQ '如何查询物流轨迹'，无'追踪号'措辞）",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -62,7 +66,9 @@
       "metadata": {
         "difficulty": "easy",
         "domain": "payment",
-        "fix_note": "2026-08-21: 原问题（支付失败扣款）在 01_FAQ 中无对应内容，改为文档真实存在的支付方式问题"
+        "fix_note": "2026-08-21: 原问题（支付失败扣款）在 01_FAQ 中无对应内容，改为文档真实存在的支付方式问题",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -82,7 +88,9 @@
       "metadata": {
         "difficulty": "easy",
         "domain": "after_sales",
-        "fix_note": "2026-08-19: golden truth 修正。破损相关流程在 07_物流SOP（含破损率/丢件率），02_售后FAQ 不含'48小时'/'破损'具体表述"
+        "fix_note": "2026-08-19: golden truth 修正。破损相关流程在 07_物流SOP（含破损率/丢件率），02_售后FAQ 不含'48小时'/'破损'具体表述",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -102,7 +110,9 @@
       },
       "metadata": {
         "difficulty": "medium",
-        "domain": "after_sales"
+        "domain": "after_sales",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -122,7 +132,9 @@
       "metadata": {
         "difficulty": "medium",
         "domain": "after_sales",
-        "fix_note": "2026-08-19: 02_售后FAQ 含'保修'但不含'序列号'，去掉片段关键词"
+        "fix_note": "2026-08-19: 02_售后FAQ 含'保修'但不含'序列号'，去掉片段关键词",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -143,7 +155,9 @@
       "metadata": {
         "difficulty": "easy",
         "domain": "inventory",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（03_库存管理制度 '库存按状态分五类'，无'可用/锁定库存'措辞）"
+        "fix_note": "2026-08-21: snippet 对齐文档原文（03_库存管理制度 '库存按状态分五类'，无'可用/锁定库存'措辞）",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -164,7 +178,9 @@
       "metadata": {
         "difficulty": "medium",
         "domain": "inventory",
-        "fix_note": "2026-08-21: 原问题（安全库存公式）在 03_库存管理制度 中不存在，改为文档真实存在的滞销处理问题（90 天无动销转滞销池）"
+        "fix_note": "2026-08-21: 原问题（安全库存公式）在 03_库存管理制度 中不存在，改为文档真实存在的滞销处理问题（90 天无动销转滞销池）",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -185,7 +201,9 @@
       "metadata": {
         "difficulty": "easy",
         "domain": "inventory",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（03_库存管理制度 只有月度/年度盘点，无'循环盘点'）"
+        "fix_note": "2026-08-21: snippet 对齐文档原文（03_库存管理制度 只有月度/年度盘点，无'循环盘点'）",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -206,7 +224,9 @@
       "metadata": {
         "difficulty": "easy",
         "domain": "procurement",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（04_采购流程 新供应商三环节，无'营业执照/质检报告'措辞）"
+        "fix_note": "2026-08-21: snippet 对齐文档原文（04_采购流程 新供应商三环节，无'营业执照/质检报告'措辞）",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -227,7 +247,9 @@
       "metadata": {
         "difficulty": "medium",
         "domain": "procurement",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（04_采购流程 按金额分级审批，无'审批权限/采购主管'措辞）"
+        "fix_note": "2026-08-21: snippet 对齐文档原文（04_采购流程 按金额分级审批，无'审批权限/采购主管'措辞）",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -247,7 +269,9 @@
       },
       "metadata": {
         "difficulty": "medium",
-        "domain": "procurement"
+        "domain": "procurement",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -268,7 +292,9 @@
       "metadata": {
         "difficulty": "easy",
         "domain": "product_spec",
-        "fix_note": "2026-08-21: 原问题（电水壶额定功率/容量）在 05_商品规格说明 中不存在（仅 SKU 表格与包装/合规），改为文档真实存在的包装规范问题"
+        "fix_note": "2026-08-21: 原问题（电水壶额定功率/容量）在 05_商品规格说明 中不存在（仅 SKU 表格与包装/合规），改为文档真实存在的包装规范问题",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -289,7 +315,9 @@
       "metadata": {
         "difficulty": "medium",
         "domain": "product_spec",
-        "fix_note": "2026-08-21: 原问题（电水壶异味处理）在 05_商品规格说明 中不存在，改为文档真实存在的危险品合规问题"
+        "fix_note": "2026-08-21: 原问题（电水壶异味处理）在 05_商品规格说明 中不存在，改为文档真实存在的危险品合规问题",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -310,7 +338,9 @@
       "metadata": {
         "difficulty": "easy",
         "domain": "product_spec",
-        "fix_note": "2026-08-21: 原问题（电水壶保养/除垢）在 05_商品规格说明 中不存在，改为文档真实存在的合规认证问题"
+        "fix_note": "2026-08-21: 原问题（电水壶保养/除垢）在 05_商品规格说明 中不存在，改为文档真实存在的合规认证问题",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -330,7 +360,9 @@
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "return_policy"
+        "domain": "return_policy",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -350,7 +382,9 @@
       },
       "metadata": {
         "difficulty": "medium",
-        "domain": "return_policy"
+        "domain": "return_policy",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -371,7 +405,9 @@
       "metadata": {
         "difficulty": "medium",
         "domain": "return_policy",
-        "fix_note": "2026-08-21: 原问题（退款金额计算/优惠券）在 06_退货政策 中不存在，改为文档真实存在的退款时效问题（1-3 个工作日原路退回）"
+        "fix_note": "2026-08-21: 原问题（退款金额计算/优惠券）在 06_退货政策 中不存在，改为文档真实存在的退款时效问题（1-3 个工作日原路退回）",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -391,7 +427,9 @@
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "logistics"
+        "domain": "logistics",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -412,7 +450,9 @@
       "metadata": {
         "difficulty": "medium",
         "domain": "logistics",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（07_物流SOP 清关申报耍商业发票/装箱单，无'HS编码'）"
+        "fix_note": "2026-08-21: snippet 对齐文档原文（07_物流SOP 清关申报耍商业发票/装箱单，无'HS编码'）",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -453,7 +493,9 @@
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "expense"
+        "domain": "expense",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -473,7 +515,9 @@
       },
       "metadata": {
         "difficulty": "medium",
-        "domain": "expense"
+        "domain": "expense",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -494,7 +538,9 @@
       "metadata": {
         "difficulty": "easy",
         "domain": "expense",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（08_员工报销制度 '财务审核后 5 个工作日内付款'，无'每周五'）"
+        "fix_note": "2026-08-21: snippet 对齐文档原文（08_员工报销制度 '财务审核后 5 个工作日内付款'，无'每周五'）",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -515,7 +561,9 @@
       "metadata": {
         "difficulty": "easy",
         "domain": "tech_manual",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（09_技术手册 章节模板内容，无'分层架构/API'）"
+        "fix_note": "2026-08-21: snippet 对齐文档原文（09_技术手册 章节模板内容，无'分层架构/API'）",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -536,7 +584,9 @@
       "metadata": {
         "difficulty": "medium",
         "domain": "tech_manual",
-        "fix_note": "2026-08-21: 原问题（Planner/DAG）在 09_技术手册 中不存在（全文为章节模板内容），改为文档真实存在的性能指标问题"
+        "fix_note": "2026-08-21: 原问题（Planner/DAG）在 09_技术手册 中不存在（全文为章节模板内容），改为文档真实存在的性能指标问题",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -557,7 +607,9 @@
       "metadata": {
         "difficulty": "hard",
         "domain": "tech_manual",
-        "fix_note": "2026-08-21: 原问题（schema/表清单）在 09_技术手册 中不存在，改为针对第 18 章数据库设计的定位问题"
+        "fix_note": "2026-08-21: 原问题（schema/表清单）在 09_技术手册 中不存在，改为针对第 18 章数据库设计的定位问题",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -578,7 +630,9 @@
       "metadata": {
         "difficulty": "hard",
         "domain": "mixed",
-        "fix_note": "2026-08-21: 原问题问'整改'但文档只有差异率上限（月度≤1%/年度≤0.5%），改为差异率要求问题。历史：2026-08-19 golden truth 修正，盘点/差异率在 03_库存管理制度，不在 10_结构混乱的长文档"
+        "fix_note": "2026-08-21: 原问题问'整改'但文档只有差异率上限（月度≤1%/年度≤0.5%），改为差异率要求问题。历史：2026-08-19 golden truth 修正，盘点/差异率在 03_库存管理制度，不在 10_结构混乱的长文档",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -599,7 +653,9 @@
       "metadata": {
         "difficulty": "hard",
         "domain": "mixed",
-        "fix_note": "2026-08-19: golden truth 修正。供应商/交期在 04_采购流程（合同含价格/质量/交期/违约责任），不在 10_结构混乱的长文档"
+        "fix_note": "2026-08-19: golden truth 修正。供应商/交期在 04_采购流程（合同含价格/质量/交期/违约责任），不在 10_结构混乱的长文档",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -619,8 +675,9 @@
       "metadata": {
         "difficulty": "hard",
         "domain": "mixed",
-        "probe_note": "snippet 语义匹配：召回内容含\"P99\"和\"可用性\"关键词即 pass。技术手册实际用 P99/可用性≥99.9%/错误率（不是 P95/召回率）",
-        "fix_note": "2026-08-19: 关键词按文档实际内容修正（P99/可用性）"
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type",
+        "fix_note": "2026-08-19: 关键词按文档实际内容修正（P99/可用性）",
+        "probe_type": "domain_recall"
       }
     },
     {
@@ -642,7 +699,9 @@
         "difficulty": "easy",
         "domain": "legal",
         "doc_type": "legal",
-        "fix_note": "2026-08-20: 原问题『违约金赔付标准』的 ground truth 在 11_采购合同.md 中不存在（§六违约责任仅约定赔偿实际损失，无违约金/10%表述），替换为 §5.1『支付 30% 预付款』可验证用例"
+        "fix_note": "2026-08-20: 原问题『违约金赔付标准』的 ground truth 在 11_采购合同.md 中不存在（§六违约责任仅约定赔偿实际损失，无违约金/10%表述），替换为 §5.1『支付 30% 预付款』可验证用例",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -664,7 +723,9 @@
         "difficulty": "medium",
         "domain": "legal",
         "doc_type": "legal",
-        "fix_note": "2026-08-20: 原问题『保密义务期限』的 ground truth 在 11_采购合同.md 中不存在（无任何保密条款），替换为 §5.3『质保期满(交付后 90 日)』可验证用例"
+        "fix_note": "2026-08-20: 原问题『保密义务期限』的 ground truth 在 11_采购合同.md 中不存在（无任何保密条款），替换为 §5.3『质保期满(交付后 90 日)』可验证用例",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -686,7 +747,9 @@
         "difficulty": "medium",
         "domain": "legal",
         "doc_type": "legal",
-        "fix_note": "2026-08-20: snippet 由 AQL 改为抽检（AQL 在 04_采购流程，11_采购合同 §4.2 为『抽检不合格率超过 5%』）"
+        "fix_note": "2026-08-20: snippet 由 AQL 改为抽检（AQL 在 04_采购流程，11_采购合同 §4.2 为『抽检不合格率超过 5%』）",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -707,7 +770,9 @@
       "metadata": {
         "difficulty": "easy",
         "domain": "order",
-        "fix_note": "2026-08-20: 原用例与 RT-008 完全重复（同一问题『安全库存的计算公式是什么？』），替换为 01_FAQ.md『发票如何开具? 电子发票 3 个工作日内发至预留邮箱』可验证新用例"
+        "fix_note": "2026-08-20: 原用例与 RT-008 完全重复（同一问题『安全库存的计算公式是什么？』），替换为 01_FAQ.md『发票如何开具? 电子发票 3 个工作日内发至预留邮箱』可验证新用例",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -729,7 +794,9 @@
       "metadata": {
         "difficulty": "medium",
         "domain": "inventory",
-        "doc_type": "policy"
+        "doc_type": "policy",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -751,7 +818,9 @@
         "difficulty": "medium",
         "domain": "tech_manual",
         "doc_type": "tech_manual",
-        "fix_note": "2026-08-21: 原问题（连接池 min/max）在 09_技术手册 中不存在，改为文档真实存在的可用性指标问题。历史：2026-08-20 doc_type 由 security 改为 tech_manual"
+        "fix_note": "2026-08-21: 原问题（连接池 min/max）在 09_技术手册 中不存在，改为文档真实存在的可用性指标问题。历史：2026-08-20 doc_type 由 security 改为 tech_manual",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -773,7 +842,9 @@
         "difficulty": "medium",
         "domain": "tech_manual",
         "doc_type": "tech_manual",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（各章节模板句'设计原则与实现要点'，无'七原则/可理解'）。历史：2026-08-20 doc_type 由 security 改为 tech_manual"
+        "fix_note": "2026-08-21: snippet 对齐文档原文（各章节模板句'设计原则与实现要点'，无'七原则/可理解'）。历史：2026-08-20 doc_type 由 security 改为 tech_manual",
+        "probe_type": "domain_recall",
+        "probe_note": "2026-08-26: 标准领域 QA 统一归类，原缺失 probe_type"
       }
     },
     {
@@ -1103,126 +1174,98 @@
       }
     },
     {
-      "id": "DEPT-001",
-      "question": "年假怎么申请？请假流程是什么？",
+      "id": "RT-CHUNK-001",
+      "question": "采购合同签订后需要支付多少预付款？",
       "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "be99388a67",
-          "79028b7792"
+          "14aa8a1c7a"
         ],
-        "allowed_departments": [
-          "hr"
+        "relevant_chunks": [
+          "f53fdc1112e5",
+          "84f2ea334e23"
         ],
-        "forbidden_departments": [
-          "finance"
-        ],
-        "min_relevant_chunks": 1
+        "min_relevant_chunks": 1,
+        "match_type": "chunk_id"
       },
       "metadata": {
-        "kb_id": "policy_general",
-        "department": "hr",
         "difficulty": "easy",
-        "domain": "hr",
-        "isolation_test": true,
-        "fix_note": "部门隔离正向：policy_general/hr 内召回 hr 文档，不得出现 finance"
+        "domain": "legal",
+        "probe_type": "chunk_level_recall",
+        "probe_note": "2026-08-26: 基于真实文档 chunk_id 生成",
+        "source_file": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_test_kb\\general\\11_采购合同.md"
       }
     },
     {
-      "id": "DEPT-002",
-      "question": "报销流程怎么走？预算审批权限是怎样的？",
+      "id": "RT-CHUNK-002",
+      "question": "申请退款后多久能完成审核？",
       "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "04a34059af",
-          "8d38891a89"
+          "3e30e0df16"
         ],
-        "allowed_departments": [
-          "finance"
+        "relevant_chunks": [
+          "5eaebb1c3f51"
         ],
-        "forbidden_departments": [
-          "hr"
-        ],
-        "min_relevant_chunks": 1
+        "min_relevant_chunks": 1,
+        "match_type": "chunk_id"
       },
       "metadata": {
-        "kb_id": "policy_general",
-        "department": "finance",
         "difficulty": "easy",
-        "domain": "finance",
-        "isolation_test": true,
-        "fix_note": "部门隔离正向：policy_general/finance 内召回 finance 文档，不得出现 hr"
+        "domain": "after_sales",
+        "probe_type": "chunk_level_recall",
+        "probe_note": "2026-08-26: 基于真实文档 chunk_id 生成",
+        "source_file": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_test_kb\\general\\01_FAQ.md"
       }
     },
     {
-      "id": "DEPT-003",
-      "question": "公司报销标准是多少？发票有什么要求？",
+      "id": "RT-CHUNK-003",
+      "question": "供应商绩效季度考核包含哪些指标？",
       "module": "rag",
-      "expected": {
-        "relevant_docs": [],
-        "allowed_departments": [
-          "hr"
-        ],
-        "forbidden_departments": [
-          "finance"
-        ],
-        "min_relevant_chunks": 0
-      },
-      "metadata": {
-        "kb_id": "policy_general",
-        "department": "hr",
-        "difficulty": "hard",
-        "domain": "hr",
-        "isolation_test": true,
-        "fix_note": "跨部门泄漏守卫：hr 视角问 finance 话题，检索不得泄漏 finance 文档"
-      }
-    },
-    {
-      "id": "DEPT-004",
-      "question": "工资什么时候发？个税怎么算？",
-      "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "79028b7792"
+          "e87b88ae72"
         ],
-        "allowed_departments": [
-          "hr"
+        "relevant_chunks": [
+          "c551b2fd1d50",
+          "da036650e7f2"
         ],
-        "forbidden_departments": [
-          "finance"
-        ],
-        "min_relevant_chunks": 1
+        "min_relevant_chunks": 1,
+        "match_type": "chunk_id"
       },
       "metadata": {
-        "kb_id": "policy_general",
-        "department": "hr",
-        "difficulty": "easy",
-        "domain": "hr",
-        "isolation_test": true,
-        "fix_note": "部门隔离正向：薪酬类 hr 文档召回，finance 不串"
+        "difficulty": "medium",
+        "domain": "procurement",
+        "probe_type": "chunk_level_recall",
+        "probe_note": "2026-08-26: 基于真实文档 chunk_id 生成",
+        "source_file": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_test_kb\\general\\12_供应商管理规范.md"
       }
     },
     {
-      "id": "DEPT-005",
-      "question": "年假和调休怎么算？",
+      "id": "RT-CHUNK-004",
+      "question": "用户注销账户后个人信息保留多久？",
       "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
-        "relevant_docs": [],
-        "allowed_departments": [
-          "finance"
+        "relevant_docs": [
+          "9b708f17b6"
         ],
-        "forbidden_departments": [
-          "hr"
+        "relevant_chunks": [
+          "f510b104e114",
+          "b96ff178b9fa"
         ],
-        "min_relevant_chunks": 0
+        "min_relevant_chunks": 1,
+        "match_type": "chunk_id"
       },
       "metadata": {
-        "kb_id": "policy_general",
-        "department": "finance",
-        "difficulty": "hard",
-        "domain": "finance",
-        "isolation_test": true,
-        "fix_note": "跨部门泄漏守卫：finance 视角问 hr 话题，检索不得泄漏 hr 文档"
+        "difficulty": "easy",
+        "domain": "compliance",
+        "probe_type": "chunk_level_recall",
+        "probe_note": "2026-08-26: 基于真实文档 chunk_id 生成",
+        "source_file": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_test_kb\\general\\17_数据安全与隐私政策.md"
       }
     }
   ]

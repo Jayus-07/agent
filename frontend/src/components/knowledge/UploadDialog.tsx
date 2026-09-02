@@ -248,7 +248,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
             )}
             <div className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${ragReady === false ? 'border-amber-200 bg-amber-50/30 cursor-not-allowed' : 'border-border-subtle cursor-pointer'}`}>
               <input type="file" ref={fileRef} multiple
-                accept=".pdf,.md,.txt,.docx" className="hidden"
+                accept=".pdf,.md,.txt,.docx,.xlsx,.markdown" className="hidden"
                 disabled={ragReady === false}
                 onChange={e => { const fs = Array.from(e.target.files || []); if (fs.length) setFiles(fs) }} />
               <div onClick={() => { if (ragReady !== false) fileRef.current?.click() }}>

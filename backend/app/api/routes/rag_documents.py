@@ -293,14 +293,28 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
             return {"ok": False, "error": "文档不存在"}
         doc_name = doc.get("file_name", "")
 
+        # F2 加固：doc_id 存在多条 active 行 = 历史重索引 bug 留下的重复数据
+        # （同 doc_id 双路径、归属不一）。此时无法判断哪行是正确归属，直接拒绝，
+        # 避免重索引作用在错误文件上并继续扩散损坏。
+        if reg.count_active_by_doc_id(doc_id) > 1:
+            return {"ok": False,
+                    "error": "数据异常：该 doc_id 存在多条活跃记录（历史重索引损坏），请先清理重复数据后再重索引"}
+
         file_path = doc.get("file_path", "")
         if not file_path or not os.path.isfile(file_path):
             return {"ok": False, "error": f"文件不存在: {file_path}"}
 
         # 复用 pipeline 单例的 store/embedding（不再每次 new 加载模型；doc_db 路径与 upload 一致）
         pipeline = await asyncio.to_thread(get_rag_pipeline)
+        # F2: 从 registry 回读归属传入 indexer，避免重索引把 kb_id/department
+        # 覆盖成默认值（与 upload 路径行为对齐）。kb_id 传 "default" 才能触发
+        # indexer._derive_kb_id() 的路径反推兜底；department 缺失时退 "general"。
+        reg_kb = doc.get("kb_id") or ""
+        reg_dept = doc.get("department") or ""
         indexer = IncrementalIndexer(
             DOCS_DIRECTORY, pipeline.vectordb, pipeline.doc_db, pipeline.embedding, reg,
+            kb_id=reg_kb or "default",
+            department=reg_dept or "general",
             bm25_store=pipeline.bm25_store,  # P0-1: 重索引后立即同步 BM25
         )
 

@@ -104,12 +104,30 @@ class DocumentRegistry:
         return dict(row) if row else None
 
     def get_by_doc_id(self, doc_id: str) -> dict | None:
-        """按文档 ID 查询。"""
+        """按文档 ID 查询。
+
+        F2 加固：历史重索引 bug 会让同一 doc_id 出现多行（不同 file_path、
+        归属不一）。原实现 fetchone() 无排序，命中哪行取决于 rowid 顺序，
+        曾导致 reindex 读取到损坏行后把文件复制到默认归属目录。
+        现固定优先级：active 行优先，其次按 updated_at 最新。
+        """
         with self._lock, self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM doc_registry WHERE doc_id = ?", (doc_id,)
+                "SELECT * FROM doc_registry WHERE doc_id = ? "
+                "ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, "
+                "updated_at DESC LIMIT 1",
+                (doc_id,),
             ).fetchone()
         return dict(row) if row else None
+
+    def count_active_by_doc_id(self, doc_id: str) -> int:
+        """统计某 doc_id 的活跃行数（>1 说明存在重复数据，调用方应拒绝操作）。"""
+        with self._lock, self._conn() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM doc_registry "
+                "WHERE doc_id = ? AND status = 'active'",
+                (doc_id,),
+            ).fetchone()[0]
 
     def list_all(self) -> dict[str, dict]:
         """返回所有注册记录 {file_path: row}。"""

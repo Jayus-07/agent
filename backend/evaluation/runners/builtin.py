@@ -264,6 +264,9 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
         t0 = time.time()
         try:
             kb_id = case.metadata.get("kb_id", "default")
+            # 部门隔离: 仅当用例显式标注 department 时才注入（向后兼容，
+            # 旧用例不携带 department → 检索行为不变）。
+            department = case.metadata.get("department") or ""
             # KB 软 fallback：如果标注的 KB 在 doc_db 中不存在，退化为 default
             if (
                 kb_id
@@ -278,11 +281,14 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 kb_id = "default"
             question = case.question
 
-            # KB 隔离: 通过 contextvars 注入 metadata_filter
+            # KB + 部门 隔离: 通过 contextvars 注入 metadata_filter（多 key = Chroma AND）
             if kb_id and kb_id != "*" and kb_id != "default":
                 from backend.rag.context import RequestContext, set_context
+                mf = {"kb_id": kb_id}
+                if department:
+                    mf["department"] = department
                 ctx = RequestContext(
-                    metadata_filter={"kb_id": kb_id},
+                    metadata_filter=mf,
                     intent_label="",
                     query=question,
                 )
@@ -292,7 +298,11 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 set_context(RequestContext())
 
             # === 采集 Doc 级检索结果（Stage 1）===
-            doc_filter = {"kb_id": kb_id} if (kb_id and kb_id != "*" and kb_id != "default") else {}
+            doc_filter = {}
+            if kb_id and kb_id != "*" and kb_id != "default":
+                doc_filter["kb_id"] = kb_id
+            if department:
+                doc_filter["department"] = department
             doc_results = pipeline.doc_db.similarity_search(question, k=5, filter=doc_filter) if doc_filter else pipeline.doc_db.similarity_search(question, k=5)
             stage1_docs = []
             stage1_doc_ids = []
@@ -377,6 +387,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     "doc_id": doc_id,
                     "title": str(doc.metadata.get("title", ""))[:80],
                     "chunk_id": doc.metadata.get("chunk_id", ""),
+                    "department": doc.metadata.get("department", ""),
                     "rerank_score": doc.metadata.get("rerank_score"),
                     "source": source,
                     "snippet": doc.page_content[:200].replace("\n", " "),  # 展示用（截断）
@@ -497,8 +508,21 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 chunk_hit = (set(actual_doc_strs) & expected_docs) if min_expected > 0 \
                     else not (set(actual_doc_strs) & expected_docs)
 
-            # pass 判定：以 chunk 级（更严格）为准，缺失时退化到 doc 级
-            passed = chunk_hit
+            # === 部门隔离泄漏判定 ===
+            # 若用例标注 forbidden_departments / allowed_departments，则检索召回的
+            # chunk 不得出现 forbidden 部门、且必须全部落在 allowed 部门内。
+            # 这是"跨部门/跨 KB 隔离"的核心断言：即便检索层漏过一例，也算 fail。
+            retrieved_depts = {d.get("department", "") for d in details if d.get("department")}
+            forbidden_depts = case.expected.get("forbidden_departments") or []
+            allowed_depts = case.expected.get("allowed_departments") or []
+            dept_leak = False
+            if forbidden_depts:
+                dept_leak = bool(retrieved_depts & set(forbidden_depts))
+            if allowed_depts:
+                dept_leak = dept_leak or bool(retrieved_depts - set(allowed_depts))
+
+            # pass 判定：chunk 级命中 + 无部门泄漏
+            passed = chunk_hit and not dept_leak
 
             results.append(EvalResult(
                 case_id=case.id, module="rag",
@@ -507,7 +531,10 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 actual={
                     "question": question,
                     "kb_id": kb_id,
+                    "department": department,
                     "retrieved_docs": actual_doc_strs[:10],
+                    "retrieved_departments": sorted(retrieved_depts),
+                    "dept_leak": dept_leak,
                     "details": details,
                     "pipeline": pipeline_info,
                     # v2: 拒答过程证据（启发式 confidence，非 EvidenceGate 真值）
@@ -535,6 +562,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     "ndcg@10": round(ndcg_val, 4),
                     "chunk_recall": round(chunk_recall, 4),
                     "top1_accuracy": round(top1_accuracy, 4),
+                    "dept_leak": int(dept_leak),
                     **({"reject_accuracy": round(reject_accuracy, 4)} if reject_accuracy is not None else {}),
                 },
                 duration_ms=int((time.time() - t0) * 1000),

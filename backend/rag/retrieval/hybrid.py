@@ -1,3 +1,5 @@
+from backend.shared.logger import logger
+
 def _fallback_id(doc) -> str:
     """当 chunk_id 缺失时，用 doc_id + chunk_index 生成回退标识。"""
     did = doc.metadata.get("doc_id", "?")
@@ -21,21 +23,46 @@ def _filter_by_metadata(docs: list, metadata_filter: dict | None) -> list:
 
 def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60, metadata_filter=None,
                     expanded_queries: list[str] | None = None):
-    """混合检索：Vector + BM25 并行 → RRF 融合。
+    """增强版混合检索 - 自动启用三路召回（Rule + Dense + Sparse）
 
-    2026-08-20: 加 expanded_queries 参数 — 同义词扩展检索。
-    vector_retriever.retrieve 时传入扩展 query 列表，CustomRetriever 内部
-    对每个 query 各调一次 similarity_search 并 RRF 融合。
-
-    2026-08-21: 加财务 SQL 旁路检索 — 查询含财务指标 + 数值条件时，
-    并行走 SQL 精确检索已入库的结构化财务数据，结果注入 RRF 融合。
-
-    可靠性契约：
-      - 单侧失败 → 降级仅用另一侧，span metrics 标记 fallback_side / fallback_reason
-      - 两侧都失败 → 抛异常（真系统失败），不伪装成『没有资料』的空召回
+    P2 优化集成点：
+      - 从 enhanced_hybrid_retrieval 导入核心逻辑
+      - 当 ADAPTIVE_THRESHOLD_ENABLED=true 时启用动态阈值
+      - Rule-based retriever 仅对 FAQ/条款类查询激活
     """
+    from backend.config.rag import ADAPTIVE_THRESHOLD_ENABLED, CONFIDENCE_AGGREGATOR_ENABLED
+    
+    # 尝试启用增强检索（如果配置开启且依赖可用）
+    if ADAPTIVE_THRESHOLD_ENABLED and CONFIDENCE_AGGREGATOR_ENABLED:
+        try:
+            logger.info(f"[hybrid_retrieve] Using ENHANCED multi-path retrieval for query='{query[:50]}...'")
+            from backend.rag.retrieval.enhanced_hybrid_retrieval import (
+                enhanced_hybrid_retrieve as enhanced_retrieve,
+                ConfidenceAggregator,
+            )
+            
+            confidence_aggregator = ConfidenceAggregator() if CONFIDENCE_AGGREGATOR_ENABLED else None
+            docs, meta = enhanced_retrieve(
+                query, vector_retriever, bm25_retriever,
+                k=k, doc_ids=doc_ids, rrf_k=rrf_k, metadata_filter=metadata_filter,
+                expanded_queries=expanded_queries,
+                confidence_aggregator=confidence_aggregator,
+            )
+            
+            # 将 confidence 信息注入 metadata 供下游使用
+            for i, doc in enumerate(docs[:3]):
+                doc.metadata[f"enhanced_confidence_{i}"] = meta.get("confidence_score", 0)
+            
+            return docs
+            
+        except ImportError as e:
+            logger.warning(f"[hybrid_retrieve] Enhanced retrieval import failed ({e}), fallback to original")
+        except Exception as e:
+            logger.warning(f"[hybrid_retrieve] Enhanced retrieval error ({e}), falling back to original")
+    
+    # Fallback: 原始 hybrid 逻辑
+    logger.info(f"[hybrid_retrieve] Using ORIGINAL retrieval (adaptive disabled or fallback)")
     from backend.observability.tracer import SpanName, trace_collector
-    from backend.shared.logger import logger
     span = trace_collector.start_span("hybrid_retrieval", name=SpanName.RETRIEVAL)
 
     # 财务 SQL 旁路检索：查询含财务指标 + 数值条件时并行执行
@@ -189,7 +216,6 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
                 decision = gate_retrieval_passthrough()
             merged[0].metadata["__evidence_gate_decision__"] = decision.to_metrics()
         except Exception as e:
-            from backend.shared.logger import logger
             logger.warning(f"[hybrid_retrieve] evidence_gate 评估异常: {e}")
 
     return merged
