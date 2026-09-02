@@ -1,4 +1,22 @@
-# Python
+# ============================================
+# Agent AI Platform - Comprehensive .gitignore
+# ============================================
+# Purpose: Exclude unnecessary files to keep repository clean
+#          and under GitHub's size limits
+# 
+# This covers:
+# - Build artifacts & compiled code
+# - Database files (SQLite, Chroma, etc.)  
+# - Log files & temporary data
+# - Cache directories
+# - IDE/Editor configurations
+# - Environment secrets
+# - Test artifacts & coverage reports
+# ============================================
+
+# ============================================
+# PYTHON BUILD ARTIFACTS
+# ============================================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -10,8 +28,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-/lib/
-/lib64/
+lib/
+lib64/
 parts/
 sdist/
 var/
@@ -19,103 +37,342 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Virtual Environment
+# ============================================
+# PYTEST & COVERAGE
+# ============================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*coverage
 .venv/
 venv/
 ENV/
-env/
+pyenv.cfg
 
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-rag_system.log
-logs/
-
-# Database
-data/chroma/
-data/doc_db/
-# Router 路由索引（自动重建）
-data/router_index/
-# 文档版本索引（自动生成）
-data/doc_versions.json
+# ============================================
+# DATABASE FILES (CRITICAL - EXCLUDE THESE!)
+# ============================================
 *.db
+*.sqlite
 *.sqlite3
-*.db-shm
-*.db-wal
-
-# Refactor: backend/data 是 junction 符号链接到 ../data，索引数据不应入仓
-backend/data/
-
-# Models
-/models/
-.cache/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# pytest
-.pytest_cache/
-.coverage
-coverage.json
-htmlcov/
-
-# mypy
-.mypy_cache/
-
-# Project output (generated reports & snapshots)
-data/reports/
-data/report_snapshots/
-data/report_preferences.json
-data/docs/*
-# 例外：评测用 KB 文档入仓（内容虚构，CI 评测依赖）
-!data/docs/rag_test_kb/
+*.sqlite-journal
+*.db-journal
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+backend/data/*.db
+backend/data/*.sqlite
+trace_store.db
+chroma.sqlite3
+doc_registry.db
+daily_reports.db
+demo_sales.db
+feedback.db
+inventory_alerts.db
+keyword_rules.db
+selection.db
+selection_decision.db
+doc_operation_log.db
+eval_history.db
+workflow_runs.db
+chunk_store.db
+competitor.db
+database.db
+report_preferences.json
+doc_registry.sqlite3
+data/chroma_market/
+data/router_index/
+data/eval_runs/
+data/bm25/
+data/doc_db/
 data/long_term_memory/
 
-# Claude Code local config
-.claude/
+# ============================================
+# CHROMA VECTOR DATABASE CACHES
+# ============================================
+chroma_db/
+data/chroma/
+backend/rag/chroma_*
 
-# Evaluation output
-evaluation/results/
-# 每次评测运行的报告快照，不入仓
-backend/evaluation/results/
-# V1.0 每次评估的运行时产物（每次跑都覆盖，不入仓）
-data/eval_runs/
-# data/baselines/   # V1.0 baseline JSON 入仓（与发布 tag 绑定，可追溯）
+# ============================================
+# LOG FILES
+# ============================================
+*.log
+logs/
+backend/logs/
+frontend/logs/
+*.log.*
+rag_system.log
+application.log
+error.log
+debug.log
+access.log
+nginx-error.log
+npm-debug.log
+yarn-error.log
+lerna-debug.log
+package-lock.log
+frontend/logs/
 
-# Misc auto-generated
-# reasonix 任务运行时产物与本地权限缓存
-.reasonix/
-reasonix.toml
-# Qoder repowiki 等 IDE 生成物
-.qoder/
-=0.2.0
-*技术报告.md
-report_agent/data/
-# Frontend build artifacts
+# ============================================
+# BACKUP & TEMPORARY FILES  
+# ============================================
+*.bak
+*.backup
+*.tmp
+*.temp
+*.swp
+*.swo
+*.swn
+*~
+.backup.2026*
+*.bak-*
+.bak-*
+autosave*
+*.pid
+.lock
+*.pidfile
+*.lockfile
+
+# ============================================
+# ENVIRONMENT VARIABLES & SECRETS
+# ============================================
+.env
+.env.local
+.env.production
+.env.development
+.env.test
+*.env.example
+.env.*.local
+*.key
+*.pem
+*.crt
+secrets.json
+credentials.json
+aws_credentials.json
+service-account.json
+google-service-account.json
+api_keys.txt
+tokens.txt
+
+# ============================================
+# FRONTEND & NODE.JS
+# ============================================
 node_modules/
-web/node_modules/
-web/.next/
-frontend/node_modules/
-frontend/.next/
-frontend/tsconfig.tsbuildinfo
+.next/
+.out/
+dist/
+dist-build/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+lerna-debug.log*
+.npm
+.npmrc
+.npm-global
+.yarn/
+.pnpm-store/
+.npm-cache/
+.yarn/cache/
 
-# Added by code-review-graph
-.code-review-graph/
-data/bm25/
-data/rag/tmp/
+# TypeScript build artifacts
+.tsbuildinfo
+next-env.d.ts
+
+# Next.js specific
+out/
+.cache/
+next.config.js.bak
+
+# ============================================
+# IDE & EDITOR SETTINGS
+# ============================================
+.idea/
+.vscode/
+.vs
+.settings/
+.project
+.classpath
+.metadata
+*.iml
+*.iws
+*.ipr
+.DS_Store
+Thumbs.db
+desktop.ini
+.svn/
+.bzr/
+.hg/
+
+# ============================================
+# DOCKER
+# ============================================
+.docker/
+.dockerignore
+docker-compose.override.yml
+docker-compose.prod.yml
+docker-compose.dev.yml
+
+# ============================================
+# JUPYTER NOTEBOOKS
+# ============================================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ============================================
+# TESTING & QUALITY TOOLS
+# ============================================
+.jest/
+.eslintcache
+.eslintrc.js
+.tsconfig.tsbuildinfo
+.mypy_cache/
+.pyright/
+.pyre/
+.ruff_cache/
+
+# ============================================
+# CI/CD AND BUILD ARTIFACTS
+# ============================================
+.github/workflows/*.yml.lock
+*.lock.yaml
+ci-cache/
+artifact-bundles/
+coverage-artifacts/
+test-results/
+build-artifacts/
+
+# ============================================
+# ASSETS & MEDIA FILES
+# ============================================
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.exe
+*.dmg
+*.iso
+# Except for README assets that need to be displayed
+!/README.md
+!/docs/**/*.png
+
+# ============================================
+# PYTHON SPECIFIC CACHE
+# ============================================
+.pip-cache/
+pip-log.txt
+wheelhouse/
+.cache/pip/
+
+# ============================================
+# DATA FILES (if not meant for version control)
+# ============================================
+data/uploads/
+data/test_docs/
+data/baselines/
+data/eval/
+data/report_snapshots/
+docs/**/*.pdf
+docs/**/*.docx
+docs/**/*.pptx
+docs/**/*.xls*
+
+# ============================================
+# PYTHON ENVIRONMENTS
+# ============================================
+.conda/
+conda-meta/
+.conda-prefix/
+miniconda.sh
+anaconda.sh
+
+# ============================================
+# ML/AI FRAMEWORKS
+# ============================================
+*.pth
+*.pt
+*.h5
+*.onnx
+*.pb
+*.params
+*.joblib
+*.pickle
+*.pkl
+checkpoints/
+model_weights/
+trained_models/
+saved_models/
+train_logs/
+
+# ============================================
+# GITHUB ACTIONS
+# ============================================
+actions-runner/
+runner/
+token/
+
+# ============================================
+# LOCAL CONFIGURATION
+# ============================================
+.local/
+.user.ini
+.htpasswd
+.cshrc
+.rhosts
+.resolv.conf
+wp-config.php
+secret.phar
+
+# ============================================
+# PROJECT SPECIFIC DIRECTORIES
+# ============================================
+backend/app/api/deps/__init__.pyc
+frontend/src/app/agents/chat/
+frontend/htmlcov/
+scripts/__pycache__/
+
+# ============================================
+# RESTART & LAUNCH FILES
+# ============================================
+restart_all.bat
+stop_all.bat
+start_all.bat
+activate_python.bat
+*.pid
+run/*
+agent.pid
+backend.pid
+frontend.pid
+
+# ============================================
+# FINAL CHECK
+# ============================================
+# Files that SHOULD be tracked but often aren't
+# Add these to your project if needed:
+# *.sql (database schema)
+# *.yaml / *.yml (configuration)
+# Dockerfile (container setup)
+# docker-compose.yml (container orchestration)
+# requirements*.txt (Python dependencies)
+# pyproject.toml (Python config)
