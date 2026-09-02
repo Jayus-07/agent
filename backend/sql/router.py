@@ -8,6 +8,7 @@ router.py — 表筛选 (Schema Routing) + 关键词缓存
   - LLM 失败回退所有表
 """
 import json
+import threading
 from typing import List
 
 from backend.infra.llm import llm
