@@ -17,11 +17,12 @@ from typing import Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from backend.config import LLM_MODEL, DEEPSEEK_API_KEY, MINIMAX_API_KEY
+from backend.config import LLM_MODEL, DEEPSEEK_API_KEY, MINIMAX_API_KEY, QWEN_API_KEY
 from backend.infra.llm.models import AVAILABLE_MODELS
 from backend.infra.llm.providers.ollama import build_ollama, get_ollama_balance
 from backend.infra.llm.providers.deepseek import build_deepseek, get_deepseek_balance
 from backend.infra.llm.providers.minimax import build_minimax, get_minimax_balance
+from backend.infra.llm.providers.qwen import build_qwen, get_qwen_balance
 from backend.shared.logger import logger
 
 
@@ -69,6 +70,8 @@ class LLMFactory:
             return {"ok": False, "error": "DEEPSEEK_API_KEY 未配置，请在 .env 中设置"}
         if provider == "minimax" and not MINIMAX_API_KEY:
             return {"ok": False, "error": "MINIMAX_API_KEY 未配置，请在 .env 中设置"}
+        if provider == "qwen" and not QWEN_API_KEY:
+            return {"ok": False, "error": "QWEN_API_KEY 未配置，请在 .env 中设置"}
 
         # 预热实例化
         try:
@@ -106,6 +109,8 @@ class LLMFactory:
             return build_deepseek(model_name)
         elif provider == "minimax":
             return build_minimax(model_name)
+        elif provider == "qwen":
+            return build_qwen(model_name)
         else:
             raise ValueError(f"未知 provider: {provider}")
 
@@ -118,6 +123,9 @@ class LLMFactory:
             return "deepseek"
         if "minimax" in model_name.lower():
             return "minimax"
+        if "qwen" in model_name.lower() and ":" not in model_name:
+            # 带冒号标签（如 qwen2.5:3b）是本地 Ollama 模型，此处只匹配在线 Qwen
+            return "qwen"
         return "ollama"
 
     # ---------------------------------------------------
@@ -136,6 +144,8 @@ class LLMFactory:
             return get_deepseek_balance()
         elif provider == "minimax":
             return get_minimax_balance()
+        elif provider == "qwen":
+            return get_qwen_balance()
         elif provider == "ollama":
             return get_ollama_balance()
         else:

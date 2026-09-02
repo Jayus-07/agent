@@ -38,6 +38,7 @@ class RAGPipeline:
         self.vectordb = None
         self.doc_db = None
         self.chunk_retriever = None
+        self._seen_sessions: set[str] = set()
         self.bm25 = None
         self.bm25_store = None  # BM25Store 引用，供运行时删除/重建索引
         self._person_to_doc_cache = {}
@@ -428,13 +429,29 @@ class RAGPipeline:
         """提问入口：3 段式 — 准备 → 执行 → 清理。
 
         拆解后便于单测和异常定位；行为完全兼容旧版。
+        Phase 4: 首轮问答命中缓存时跳过 LLM 生成（~4.8s），多轮对话不走缓存。
         """
         logger.info(f"收到问题: {question[:80]} (session={session_id}, kb={kb_id})")
         self._prepare_context(kb_id, question)
         try:
             if not self._check_resources():
                 return "系统资源紧张，请稍后重试"
-            return self._execute_chain(question, session_id)
+
+            is_first_turn = session_id not in self._seen_sessions
+
+            if is_first_turn:
+                cached = self._check_answer_cache(question, kb_id)
+                if cached is not None:
+                    self._seen_sessions.add(session_id)
+                    return cached
+
+            answer = self._execute_chain(question, session_id)
+            self._seen_sessions.add(session_id)
+
+            if is_first_turn and answer and not self._is_rejection(answer):
+                self._write_answer_cache(question, kb_id, answer)
+
+            return answer
         finally:
             self._cleanup()
 
@@ -510,6 +527,48 @@ class RAGPipeline:
             elapsed = time.time() - start_time
             logger.error(f"请求失败 (耗时: {elapsed:.2f}s): {e}", exc_info=True)
             raise
+
+    def _check_answer_cache(self, question: str, kb_id: str) -> str | None:
+        """首轮问答缓存查询。命中返回缓存答案，未命中返回 None。"""
+        try:
+            from backend.rag.answer_cache import get_answer_cache
+            from backend.rag.context import get_context
+            from backend.config.llm import LLM_MODEL
+            ctx = get_context()
+            cached = get_answer_cache().get(
+                question, kb_id, ctx.metadata_filter, LLM_MODEL,
+            )
+            if cached is not None:
+                logger.info(f"[RAG.ask] 缓存命中: {question[:60]}")
+            return cached
+        except Exception as e:
+            logger.debug(f"[RAG.ask] 缓存查询失败（非致命）: {e}")
+            return None
+
+    def _write_answer_cache(self, question: str, kb_id: str, answer: str) -> None:
+        """首轮问答成功后写入缓存。失败不影响主流程。"""
+        try:
+            from backend.rag.answer_cache import get_answer_cache
+            from backend.rag.context import get_context
+            from backend.config.llm import LLM_MODEL
+            ctx = get_context()
+            get_answer_cache().put(
+                question, kb_id, ctx.metadata_filter, LLM_MODEL, answer,
+            )
+        except Exception as e:
+            logger.debug(f"[RAG.ask] 缓存写入失败（非致命）: {e}")
+
+    @staticmethod
+    def _is_rejection(answer: str) -> bool:
+        """判断答案是否为拒答（拒答不缓存 — 文档更新后可能可以回答）。"""
+        rejection_markers = (
+            "知识库中未找到",
+            "无法找到",
+            "没有足够的信息",
+            "无法回答",
+            "资料不足",
+        )
+        return any(marker in answer for marker in rejection_markers)
 
     def retrieve_knowledge(self, question: str, kb_id: str = "default", top_k: int = 3) -> str:
         """轻量检索：只检索不生成回答，供 BusinessAnalyzer 等下游使用。

@@ -148,6 +148,18 @@ class BaseAgentSkill(BaseCapability):
                 f"[{self.name}] LLM 调用完成: {meta['prompt_tokens']}+"
                 f"{meta['completion_tokens']} tokens"
             )
+            if meta["prompt_tokens"] or meta["completion_tokens"]:
+                try:
+                    from backend.observability.tracer import trace_collector
+                    trace = trace_collector._thread_current
+                    if trace and trace.spans:
+                        trace.spans[-1].metrics.update({
+                            "prompt_tokens": meta["prompt_tokens"],
+                            "completion_tokens": meta["completion_tokens"],
+                            "total_tokens": meta["prompt_tokens"] + meta["completion_tokens"],
+                        })
+                except Exception:
+                    pass
             return content if isinstance(content, str) else str(content)
         except Exception as e:
             logger.error(f"[{self.name}] LLM 调用失败: {e}")

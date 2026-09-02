@@ -23,13 +23,16 @@ from backend.orchestration.router.vector_router import VectorRouter
 from backend.orchestration.router.llm_router import LLMRouter
 from backend.observability import trace_collector
 from backend.observability.tracer import SpanKind
+from backend.infra.cache import get_cache
 from backend.shared.logger import logger
+
+_router_cache = get_cache("router", ttl=300)
 
 
 class Router:
     """3 层 fallback Router。"""
 
-    def __init__(self, llm_timeout: int = 20):
+    def __init__(self, llm_timeout: int = 12):
         self.rule = RuleRouter()
         self.vector = VectorRouter()
         self.llm = LLMRouter(timeout=llm_timeout)
@@ -52,6 +55,25 @@ class Router:
             input={"query": query},
         )
         final_layer = "llm"  # 默认 LLM 兜底
+
+        # ── 缓存命中：跳过全部 3 层路由 ──
+        _cached_data = _router_cache.get_json(query.strip().lower())
+        cached = RouteDecision(**_cached_data) if _cached_data is not None else None
+        if cached is not None:
+            trace_collector.add_event(
+                span, "cache_hit", "info",
+                f"路由缓存命中: {cached.candidates[0].name if cached.candidates else '?'}",
+                {"layer": "cache", "mode": cached.execution_mode.value},
+            )
+            trace_collector.end_span(
+                span,
+                output=cached.model_dump(),
+                metrics={"layer": "cache", "confidence": cached.confidence,
+                         "mode": cached.execution_mode.value},
+                status="success",
+            )
+            logger.info(f"[Router] 缓存命中: query={query[:40]}... (latency={int((time.time()-t0)*1000)}ms)")
+            return cached
 
         # 1. Rule Router（1ms，关键词匹配）
         result = self.rule.route(query)
@@ -83,6 +105,7 @@ class Router:
                          "mode": result.execution_mode.value},
                 status="success",
             )
+            _router_cache.set_json(query.strip().lower(), result.model_dump())
             return result
         else:
             # 弱信号 → 给 hint，交给下层
@@ -96,7 +119,9 @@ class Router:
 
         # 2. Embedding Router（~30ms，语义匹配）
         result = self.vector.route(query)
-        if result is not None and result.confidence >= 0.85:
+        vec_conf = result.confidence if result else 0.0
+        vec_has_candidates = bool(result and result.candidates)
+        if result is not None and vec_conf >= 0.85:
             final_layer = "embedding"
             trace_collector.add_event(
                 span, "vector_decide", "info",
@@ -115,11 +140,33 @@ class Router:
                          "mode": result.execution_mode.value},
                 status="success",
             )
+            _router_cache.set_json(query.strip().lower(), result.model_dump())
+            return result
+        elif vec_has_candidates and vec_conf >= 0.6:
+            final_layer = "embedding"
+            trace_collector.add_event(
+                span, "vector_accept_moderate", "info",
+                f"Vector 中置信度采纳: {result.reason} (confidence={vec_conf:.2f}, 跳过LLM)",
+                {"layer": "embedding", "verdict": "accept_moderate", "confidence": vec_conf,
+                 "candidate": result.candidates[0].name if result.candidates else ""},
+            )
+            logger.info(
+                f"[Router] Vector 中置信度采纳: top={result.candidates[0].name} "
+                f"(confidence={vec_conf:.2f}, latency={int((time.time()-t0)*1000)}ms)"
+            )
+            record_router_decision(result.execution_mode.value, "embedding", result.confidence)
+            trace_collector.end_span(
+                span,
+                output=result.model_dump(),
+                metrics={"layer": final_layer, "confidence": result.confidence,
+                         "mode": result.execution_mode.value},
+                status="success",
+            )
+            _router_cache.set_json(query.strip().lower(), result.model_dump())
             return result
         else:
-            vec_conf = result.confidence if result else 0.0
             vec_top = result.candidates[0].name if (result and result.candidates) else ""
-            if result is None:
+            if not vec_has_candidates:
                 trace_collector.add_event(
                     span, "vector_miss", "info",
                     "Vector 层: 无匹配",
@@ -128,7 +175,7 @@ class Router:
             else:
                 trace_collector.add_event(
                     span, "vector_hint", "info",
-                    f"Vector 提示: top={vec_top} (confidence={vec_conf:.2f} < 0.85)",
+                    f"Vector 提示: top={vec_top} (confidence={vec_conf:.2f} < 0.6, 需LLM)",
                     {"layer": "vector", "verdict": "hint", "confidence": vec_conf,
                      "candidate": vec_top},
                 )
@@ -155,6 +202,7 @@ class Router:
                      "mode": result.execution_mode.value},
             status="success",
         )
+        _router_cache.set_json(query.strip().lower(), result.model_dump())
         return result
 
     async def aroute(self, query: str) -> RouteDecision:

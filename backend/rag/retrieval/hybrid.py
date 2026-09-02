@@ -1,5 +1,12 @@
 from backend.shared.logger import logger
 
+import threading
+
+# 增强检索递归护栏：enhanced 路径内部空召回时会回调原始 hybrid_retrieve，
+# 若此时再次进入增强分支会无限递归。按线程隔离，防止并发串扰。
+_enhanced_inflight = threading.local()
+
+
 def _fallback_id(doc) -> str:
     """当 chunk_id 缺失时，用 doc_id + chunk_index 生成回退标识。"""
     did = doc.metadata.get("doc_id", "?")
@@ -21,6 +28,52 @@ def _filter_by_metadata(docs: list, metadata_filter: dict | None) -> list:
     ]
 
 
+def _evaluate_retrieval_gate(merged: list, query: str):
+    """Retrieval 阶段 Gate 评估，返回 GateDecision（总开关关闭时透传判定）。
+
+    量纲修正（2026-09-03 事故修复）：注入时点文档通常只携带 rrf_score
+    （RRF 量纲，上限 ≈0.033），与 VEC_MIN_SCORE（余弦相似度量纲，默认 0.2）
+    不可比 —— 若文档无 rerank_score/similarity 等语义分数，跳过分数阈值
+    检查，交由带真实分数的下游 chain 层 Gate 判定，避免必拒。
+    """
+    from backend.rag.evidence_gate import (
+        evidence_gate_retrieval,
+        gate_retrieval_passthrough,
+        is_evidence_gate_enabled,
+    )
+
+    if not is_evidence_gate_enabled():
+        return gate_retrieval_passthrough()
+
+    qa_result = None
+    try:
+        from backend.rag.context import get_context
+        qa_result = get_context().query_analysis
+    except Exception:
+        pass
+    if qa_result is None:
+        try:
+            from backend.rag.retrieval.query_analyzer import QueryAnalyzer
+            qa_result = QueryAnalyzer().analyze(query)
+        except Exception as e:
+            # 查询分析失败 → Gate 走无 query_analysis 兜底（软降级），留痕
+            logger.debug(f"[hybrid_retrieve] QueryAnalyzer 分析失败: {e}", exc_info=True)
+
+    from backend.config import DOC_TYPE_COVERAGE_REQUIRED, VEC_MIN_SCORE
+
+    has_semantic_score = any(
+        d.metadata.get("rerank_score") is not None
+        or d.metadata.get("similarity") is not None
+        for d in merged
+    )
+    return evidence_gate_retrieval(
+        merged,
+        query_analysis=qa_result,
+        vec_min_score=VEC_MIN_SCORE if has_semantic_score else 0.0,
+        require_doc_type_coverage=DOC_TYPE_COVERAGE_REQUIRED,
+    )
+
+
 def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60, metadata_filter=None,
                     expanded_queries: list[str] | None = None):
     """增强版混合检索 - 自动启用三路召回（Rule + Dense + Sparse）
@@ -32,8 +85,9 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
     """
     from backend.config.rag import ADAPTIVE_THRESHOLD_ENABLED, CONFIDENCE_AGGREGATOR_ENABLED
     
-    # 尝试启用增强检索（如果配置开启且依赖可用）
-    if ADAPTIVE_THRESHOLD_ENABLED and CONFIDENCE_AGGREGATOR_ENABLED:
+    # 尝试启用增强检索（如果配置开启且依赖可用；已在增强路径内则不再进入）
+    if (ADAPTIVE_THRESHOLD_ENABLED and CONFIDENCE_AGGREGATOR_ENABLED
+            and not getattr(_enhanced_inflight, "active", False)):
         try:
             logger.info(f"[hybrid_retrieve] Using ENHANCED multi-path retrieval for query='{query[:50]}...'")
             from backend.rag.retrieval.enhanced_hybrid_retrieval import (
@@ -42,12 +96,16 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
             )
             
             confidence_aggregator = ConfidenceAggregator() if CONFIDENCE_AGGREGATOR_ENABLED else None
-            docs, meta = enhanced_retrieve(
-                query, vector_retriever, bm25_retriever,
-                k=k, doc_ids=doc_ids, rrf_k=rrf_k, metadata_filter=metadata_filter,
-                expanded_queries=expanded_queries,
-                confidence_aggregator=confidence_aggregator,
-            )
+            _enhanced_inflight.active = True
+            try:
+                docs, meta = enhanced_retrieve(
+                    query, vector_retriever, bm25_retriever,
+                    k=k, doc_ids=doc_ids, rrf_k=rrf_k, metadata_filter=metadata_filter,
+                    expanded_queries=expanded_queries,
+                    confidence_aggregator=confidence_aggregator,
+                )
+            finally:
+                _enhanced_inflight.active = False
             
             # 将 confidence 信息注入 metadata 供下游使用
             for i, doc in enumerate(docs[:3]):
@@ -63,7 +121,7 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
     # Fallback: 原始 hybrid 逻辑
     logger.info(f"[hybrid_retrieve] Using ORIGINAL retrieval (adaptive disabled or fallback)")
     from backend.observability.tracer import SpanName, trace_collector
-    span = trace_collector.start_span("hybrid_retrieval", name=SpanName.RETRIEVAL)
+    span = trace_collector.start_span("hybrid_retrieval", name=SpanName.HYBRID_RETRIEVAL, parent_id=None)
 
     # 财务 SQL 旁路检索：查询含财务指标 + 数值条件时并行执行
     sql_docs: list = []
@@ -78,32 +136,32 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
     except Exception as e:
         logger.warning(f"[hybrid_retrieve] SQL 旁路检索失败，降级纯 RAG: {e}")
 
-    # 并行执行：Vector 和 BM25 互不依赖
-    from concurrent.futures import ThreadPoolExecutor
+    # 并行执行：Vector 和 BM25 互不依赖（共享线程池）
+    from backend.infra.thread_pools import retrieval_pool_inner
+    ex = retrieval_pool_inner()
     failures: dict[str, BaseException] = {}
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        vf = ex.submit(vector_retriever.retrieve, query, k=k, doc_ids=doc_ids,
-                        metadata_filter=metadata_filter, expanded_queries=expanded_queries)
-        bf = ex.submit(bm25_retriever.invoke, query)
-        try:
-            vector_docs = vf.result()
-        except Exception as e:
-            # 单侧失败 → 降级仅用另一侧（软降级），留痕；两侧都失败才上抛
-            logger.warning(
-                f"[hybrid_retrieve] Vector 检索失败，降级仅用 BM25: {e}",
-                exc_info=True,
-            )
-            failures["vector"] = e
-            vector_docs = []
-        try:
-            bm25_docs = bf.result()
-        except Exception as e:
-            logger.warning(
-                f"[hybrid_retrieve] BM25 检索失败，降级仅用 Vector: {e}",
-                exc_info=True,
-            )
-            failures["bm25"] = e
-            bm25_docs = []
+    vf = ex.submit(vector_retriever.retrieve, query, k=k, doc_ids=doc_ids,
+                    metadata_filter=metadata_filter, expanded_queries=expanded_queries)
+    bf = ex.submit(bm25_retriever.invoke, query)
+    try:
+        vector_docs = vf.result()
+    except Exception as e:
+        # 单侧失败 → 降级仅用另一侧（软降级），留痕；两侧都失败才上抛
+        logger.warning(
+            f"[hybrid_retrieve] Vector 检索失败，降级仅用 BM25: {e}",
+            exc_info=True,
+        )
+        failures["vector"] = e
+        vector_docs = []
+    try:
+        bm25_docs = bf.result()
+    except Exception as e:
+        logger.warning(
+            f"[hybrid_retrieve] BM25 检索失败，降级仅用 Vector: {e}",
+            exc_info=True,
+        )
+        failures["bm25"] = e
+        bm25_docs = []
 
     if len(failures) == 2:
         # 两侧都失败 = 真系统失败，向上抛（不伪装成『没有资料』的空召回）
@@ -188,69 +246,12 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
     # 若 docs 为空，下游 chain.py 直接再调一次 gate 处理 NO_EVIDENCE。
     if merged:
         try:
-            from backend.rag.evidence_gate import (
-                evidence_gate_retrieval,
-                gate_retrieval_passthrough,
-                is_evidence_gate_enabled,
-            )
-            if is_evidence_gate_enabled():
-                from backend.rag.retrieval.query_analyzer import QueryAnalyzer
-                qa_result = None
-                try:
-                    qa_result = QueryAnalyzer().analyze(query)
-                except Exception as e:
-                    # 查询分析失败 → Gate 走无 query_analysis 兜底（软降级），留痕
-                    from backend.shared.logger import logger as _logger
-                    _logger.debug(f"[hybrid_retrieve] QueryAnalyzer 分析失败: {e}", exc_info=True)
-                from backend.config import (
-                    DOC_TYPE_COVERAGE_REQUIRED,
-                    VEC_MIN_SCORE,
-                )
-                decision = evidence_gate_retrieval(
-                    merged,
-                    query_analysis=qa_result,
-                    vec_min_score=VEC_MIN_SCORE,
-                    require_doc_type_coverage=DOC_TYPE_COVERAGE_REQUIRED,
-                )
-            else:
-                decision = gate_retrieval_passthrough()
+            decision = _evaluate_retrieval_gate(merged, query)
             merged[0].metadata["__evidence_gate_decision__"] = decision.to_metrics()
         except Exception as e:
             logger.warning(f"[hybrid_retrieve] evidence_gate 评估异常: {e}")
 
     return merged
-
-
-def rrf_fusion_docs(vector_docs, bm25_docs, k=5, rrf_k=60):
-    """
-    使用RRF算法融合向量检索和BM25检索结果
-
-    参数:
-        vector_docs: 向量检索结果列表
-        bm25_docs: BM25检索结果列表
-        k: 返回文档数量
-        rrf_k: RRF平滑参数
-
-    返回:
-        融合排序后的文档列表
-    """
-    if not vector_docs and not bm25_docs:
-        return []
-
-    rank_map = {}
-
-    for rank, doc in enumerate(vector_docs, 1):
-        doc_id = doc.metadata["doc_id"]
-        rank_map[doc_id] = rank_map.get(doc_id, 0) + 1 / (rrf_k + rank)
-
-    for rank, doc in enumerate(bm25_docs, 1):
-        doc_id = doc.metadata["doc_id"]
-        rank_map[doc_id] = rank_map.get(doc_id, 0) + 1 / (rrf_k + rank)
-
-    sorted_ids = sorted(rank_map, key=lambda x: rank_map[x], reverse=True)
-    doc_dict = {doc.metadata["doc_id"]: doc for doc in bm25_docs + vector_docs}
-
-    return [doc_dict[doc_id] for doc_id in sorted_ids[:k]]
 
 
 # ── 财务 SQL 旁路检索 ──────────────────────────────────

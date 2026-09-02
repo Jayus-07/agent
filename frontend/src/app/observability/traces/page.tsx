@@ -1,24 +1,18 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import TraceFilterBar from "@/components/observability/trace/TraceFilter";
 import StatsBar from "@/components/observability/trace/StatsBar";
 import TraceBreadcrumb from "@/components/observability/trace/TraceBreadcrumb";
+import TraceRow, { ColKey } from "@/components/observability/trace/TraceRow";
 import { useToast } from "@/components/shared/Toast";
 import {
   TraceFilter,
   TraceRecord,
-  statusBadge,
-  durationColor,
-  durationBg,
-  formatTime,
-  formatRelative,
-  truncate,
   filterByTimeRange,
-  formatCost,
 } from "@/types/trace";
-import { listAgentTraces } from "@/lib/observability/source";
+import { listAgentTraces, getAgentTraceStats, AgentTraceStats } from "@/lib/observability/source";
 
 // typedTraces 改为 client 端填充：模块顶层 import 22+ JSON 在 Next.js dev SSR 阶段
 // 会导致 typedTraces=[]（webpack transform 22 JSON 的时机问题）；改为 useState + useEffect 后，
@@ -28,7 +22,8 @@ const BOOKMARK_KEY = "obs.bookmarks";
 const FILTER_KEY = "obs.traceFilter";
 const COLUMNS_KEY = "obs.traceColumns";
 
-type ColKey = "status" | "id" | "question" | "duration" | "tokens" | "cost" | "session" | "kb" | "time" | "actions";
+// 前端时间窗 → 后端 stats 接口的 hours 参数（"custom" 按 24h 处理）
+const RANGE_HOURS: Record<string, number> = { "15m": 0.25, "1h": 1, "6h": 6, "24h": 24, custom: 24 };
 
 const DEFAULT_COLUMNS: ColKey[] = ["status", "id", "question", "duration", "tokens", "cost", "session", "time", "actions"];
 
@@ -48,7 +43,6 @@ const ALL_COLUMNS: { key: ColKey; label: string }[] = [
 export default function TracesPage() {
   const router = useRouter();
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [refreshTick, setRefreshTick] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const [sortField, setSortField] = useState<"duration_ms" | "timestamp" | "cost_usd" | "">("");
@@ -82,11 +76,8 @@ export default function TracesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // refresh 时重新拉数据源（mock 或 API，由 NEXT_PUBLIC_USE_MOCK 控制）
-  useEffect(() => {
-    if (!mounted) return;
-    listAgentTraces().then(setTypedTraces);
-  }, [refreshTick, mounted]);
+  // 注意：不再有 [refreshTick, mounted] 的重复拉取 effect ——
+  // 初始挂载上方已拉一次，手动刷新由 handleRefresh 直接拉，避免双重请求。
 
   const [showColumns, setShowColumns] = useState(false);
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
@@ -105,10 +96,12 @@ export default function TracesPage() {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     // 触发真实数据拉取（mock 也走异步路径，保持一致 UX）
-    const traces = await listAgentTraces();
-    setTypedTraces(traces);
-    setRefreshTick((t) => t + 1);
-    setIsRefreshing(false);
+    try {
+      const traces = await listAgentTraces();
+      setTypedTraces(traces);
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   const filtered = useMemo(() => {
@@ -151,12 +144,21 @@ export default function TracesPage() {
     }
 
     return arr;
-  }, [typedTraces, filter, sortField, sortDir, refreshTick]);
+  }, [typedTraces, filter, sortField, sortDir]);
 
   const total = filtered.length;
   const traces = useMemo(() => filtered.slice((page - 1) * pageSize, page * pageSize), [filtered, page, pageSize]);
 
+  // stats 下沉后端（/traces/stats）：不再客户端遍历 200 条；
+  // 接口失败（返回 null）时降级为本地计算，口径不变。
+  const [serverStats, setServerStats] = useState<AgentTraceStats | null>(null);
+  useEffect(() => {
+    if (!mounted) return;
+    getAgentTraceStats(RANGE_HOURS[filter.timeRange] ?? 24).then(setServerStats);
+  }, [mounted, filter.timeRange, typedTraces]);
+
   const stats = useMemo(() => {
+    if (serverStats) return serverStats;
     const inRange = filterByTimeRange(typedTraces, filter.timeRange);
     return {
       total_24h: inRange.length,
@@ -166,9 +168,9 @@ export default function TracesPage() {
       error_count: inRange.filter(t => (t.error && Object.keys(t.error).length > 0) || t.status === "error").length,
       total_cost_usd: inRange.reduce((s, t) => s + (t.cost_usd ?? 0), 0),
     };
-    // 注意：stats 只反映「时间窗内全部 trace」的聚合（不被 status/kb/model/keyword 影响），
+    // 注意：本地降级口径只反映「时间窗内全部 trace」的聚合（不被 status/kb/model/keyword 影响），
     // 与下方 header 的「共 N 条」(filtered) 是不同口径。
-  }, [typedTraces, filter.timeRange, refreshTick]);
+  }, [serverStats, typedTraces, filter.timeRange]);
 
   const totalPages = Math.ceil(total / pageSize);
 
@@ -181,27 +183,41 @@ export default function TracesPage() {
     }
   };
 
-  const toggleBookmark = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const next = new Set(bookmarks);
-    next.has(id) ? next.delete(id) : next.add(id);
-    setBookmarks(next);
-  };
+  // 稳定回调（TraceRow memo 的前提）：引用稳定后，无关状态变化不再触发整表重渲。
+  // stopPropagation 已移入 TraceRow 内部。
+  const handleNavigate = useCallback((target: string) => {
+    router.push(target.startsWith("/") ? target : `/observability/traces/${target}`);
+  }, [router]);
 
-  const toggleCompare = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const next = new Set(compareIds);
-    if (next.has(id)) {
-      next.delete(id);
-    } else {
+  const handleCopy = useCallback((id: string) => {
+    navigator.clipboard.writeText(id);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 1500);
+  }, []);
+
+  const toggleBookmark = useCallback((id: string) => {
+    setBookmarks((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleCompare = useCallback((id: string) => {
+    setCompareIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+        return next;
+      }
       if (next.size >= 4) {
         toast.warning("最多对比 4 个 trace");
-        return;
+        return prev;
       }
       next.add(id);
-    }
-    setCompareIds(next);
-  };
+      return next;
+    });
+  }, [toast]);
 
   const goCompare = () => {
     if (compareIds.size < 2) return;
@@ -339,124 +355,20 @@ export default function TracesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {traces.map((t) => {
-                  const stat = (t.error && Object.keys(t.error).length > 0) || t.status === "error" ? "error"
-                    : t.status === "timeout" || t.sla?.breached ? "timeout" : "success";
-                  const badge = statusBadge(stat);
-                  const spans = t.spans || [];
-                  const maxStepMs = Math.max(...spans.map(s => s.duration_ms), 0);
-                  const topSteps = [...spans].sort((a, b) => b.duration_ms - a.duration_ms).slice(0, 3);
-                  const isBookmarked = bookmarks.has(t.id);
-                  const isCompared = compareIds.has(t.id);
-                  const slaBreached = t.sla?.breached;
-
-                  return (
-                    <tr
-                      key={t.id}
-                      onClick={() => router.push(`/observability/traces/${t.id}`)}
-                      className={`group cursor-pointer transition-colors hover:bg-slate-50 ${durationBg(t.duration_ms)} ${isCompared ? "ring-1 ring-violet-300 ring-inset" : ""}`}
-                    >
-                      {has("status") && (
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-1">
-                            <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${badge.bg}`}>{badge.label}</span>
-                            {slaBreached && <span className="text-[9px] text-red-500" title="SLA 违反">SLA</span>}
-                          </div>
-                        </td>
-                      )}
-                      {has("id") && (
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-xs text-slate-600">{t.id.slice(0, 8)}...</span>
-                            {isBookmarked && <span className="text-amber-400 text-xs">★</span>}
-                            <button onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(t.id); setCopiedId(t.id); setTimeout(() => setCopiedId(null), 1500); }} className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-slate-600 transition-opacity" title="复制">
-                              {copiedId === t.id ? <span className="text-[10px] text-emerald-500">已复制</span> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" /></svg>}
-                            </button>
-                          </div>
-                        </td>
-                      )}
-                      {has("question") && (
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-2">
-                            {t.parent_id && (
-                              <span className="text-[9px] text-violet-500 bg-violet-50 rounded px-1" title={`子任务 · 父 ${t.parent_id.slice(0, 8)}`}>↳ 子</span>
-                            )}
-                            {t.children_ids && t.children_ids.length > 0 && (
-                              <span className="text-[9px] text-blue-500 bg-blue-50 rounded px-1" title={`${t.children_ids.length} 个子任务`}>↑ 父</span>
-                            )}
-                            <span className="text-slate-700 line-clamp-1" title={t.question}>{truncate(t.question, 50)}</span>
-                          </div>
-                        </td>
-                      )}
-                      {has("duration") && (
-                        <td className="py-3 px-4 text-right">
-                          <span className={`font-mono tabular-nums font-semibold ${durationColor(t.duration_ms)}`} title={topSteps.map(s => `${s.name}: ${s.duration_ms}ms`).join("\n")}>
-                            {t.duration_ms}ms
-                          </span>
-                        </td>
-                      )}
-                      {has("tokens") && (
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-1 text-xs font-mono tabular-nums">
-                            <span className="text-slate-400">{t.usage?.prompt_tokens ?? 0}</span>
-                            <span className="text-slate-300">/</span>
-                            <span className="text-slate-600 font-medium">{t.usage?.completion_tokens ?? 0}</span>
-                          </div>
-                        </td>
-                      )}
-                      {has("cost") && (
-                        <td className="py-3 px-4 text-right">
-                          <span className="font-mono tabular-nums text-xs text-emerald-600">{formatCost(t.cost_usd)}</span>
-                        </td>
-                      )}
-                      {has("session") && (
-                        <td className="py-3 px-4">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); router.push(`/observability/sessions/${t.session_id}`); }}
-                            className="text-xs font-mono text-slate-500 hover:text-violet-600 bg-slate-100 hover:bg-violet-50 rounded px-1.5 py-0.5 transition-colors"
-                          >
-                            {t.session_id.slice(0, 16)}
-                          </button>
-                        </td>
-                      )}
-                      {has("kb") && (
-                        <td className="py-3 px-4">
-                          <span className="text-[10px] text-slate-500 bg-slate-100 rounded px-1.5 py-0.5 font-mono">
-                            {String(t.metadata?.kb_id ?? "--")}
-                          </span>
-                        </td>
-                      )}
-                      {has("time") && (
-                        <td className="py-3 px-4">
-                          <div className="text-[10px] text-slate-500" title={formatTime(t.timestamp)}>
-                            <div>{formatRelative(t.timestamp)}</div>
-                            <div className="font-mono text-slate-400">{formatTime(t.timestamp)}</div>
-                          </div>
-                        </td>
-                      )}
-                      {has("actions") && (
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              onClick={(e) => toggleBookmark(t.id, e)}
-                              className={`text-sm ${isBookmarked ? "text-amber-400" : "text-slate-300 hover:text-amber-400"}`}
-                              title={isBookmarked ? "取消收藏" : "收藏"}
-                            >
-                              {isBookmarked ? "★" : "☆"}
-                            </button>
-                            <button
-                              onClick={(e) => toggleCompare(t.id, e)}
-                              className={`text-xs px-1.5 py-0.5 rounded ${isCompared ? "bg-violet-100 text-violet-700" : "text-slate-400 hover:text-violet-600"}`}
-                              title="加入对比"
-                            >
-                              ⚖
-                            </button>
-                          </div>
-                        </td>
-                      )}
-                    </tr>
-                  );
-                })}
+                {traces.map((t) => (
+                  <TraceRow
+                    key={t.id}
+                    t={t}
+                    columns={columns}
+                    isBookmarked={bookmarks.has(t.id)}
+                    isCompared={compareIds.has(t.id)}
+                    isCopied={copiedId === t.id}
+                    onNavigate={handleNavigate}
+                    onCopy={handleCopy}
+                    onToggleBookmark={toggleBookmark}
+                    onToggleCompare={toggleCompare}
+                  />
+                ))}
                 {traces.length === 0 && (
                   <tr>
                     <td colSpan={columns.length} className="py-12 text-center text-sm text-slate-400">

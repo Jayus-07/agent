@@ -92,7 +92,9 @@ class MemoryService:
                     l2 = self._sessions.get(session_id)
                     if l2:
                         l2._repo = srepo
-                        await l2.summarize()
+                        summary = await l2.summarize()
+                        # 摘要必须落库，否则下次会话列表/历史读取时 summary 永远为空
+                        await srepo.update_summary(session_id, summary)
 
                 await db_session.commit()
             except Exception as e:
@@ -134,22 +136,30 @@ class MemoryService:
     # ============================================================
 
     async def store(self, question: str, answer: str, session_id: str, user_id: str = "default") -> None:
-        """后台管线: extract → PII → classify → score → dedup → write"""
+        """后台管线: extract → PII → classify → score → dedup → write
+
+        注意：本协程运行在 MemoryManager 的后台 event loop 上，
+        LLM 同步调用（提取/分类）必须放到线程池，否则会阻塞整个 loop，
+        导致同期其他记忆操作（会话持久化等）超时降级。
+        """
         async with AsyncSessionLocal() as db_session:
             try:
                 mrepo = MemoryRepository(db_session)
                 l3 = LongTermMemory(mrepo)
 
-                # 1. Extract
-                facts = l3.extract_facts(question, answer)
+                # 1. Extract（LLM 同步调用 → 线程池）
+                facts = await asyncio.to_thread(l3.extract_facts, question, answer)
                 if not facts:
                     return
 
                 stored = 0
                 for fact in facts:
                     # 2. PII already applied in extract_facts
-                    # 3. Classify
-                    if self._get_trigger().classify(fact.content, fact.fact_type) == "IGNORE":
+                    # 3. Classify（可能触发 LLM 同步调用 → 线程池）
+                    verdict = await asyncio.to_thread(
+                        self._get_trigger().classify, fact.content, fact.fact_type
+                    )
+                    if verdict == "IGNORE":
                         continue
                     # 4. Score
                     fact.importance_score = self._get_importance().score(fact.fact_type, fact.content)

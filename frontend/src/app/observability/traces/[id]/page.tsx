@@ -115,8 +115,8 @@ export default function TraceDetailPage() {
   const mqSpan = spans.find((s) => s.id === "mq_check" || s.name === "MultiQuery");
   const errorStepId = typeof err.error_node === "string" ? err.error_node : null;
 
-  // 只显示非根 span（用于 StepTimeline / FlameGraph）
-  const childSpans = spans.filter((s) => s.parent_id !== null);
+  // 所有 span（StepTimeline 内部按 parent_id 构建树）
+  const childSpans = spans;
 
   // Span Type 过滤
   const filteredSpans = activeSpanTypes.size === 0
@@ -282,7 +282,7 @@ export default function TraceDetailPage() {
                   <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider">📊 Span 耗时分布 (嵌套层级)</h2>
                   <label className="flex items-center gap-2 text-[11px] text-slate-500 cursor-pointer">
                     <input type="checkbox" checked={autoExpandLarge} onChange={e => setAutoExpandLarge(e.target.checked)} className="rounded" />
-                    <span>自动展开 >1s 的步骤</span>
+                    <span>自动展开 &gt;1s 的步骤</span>
                   </label>
                 </div>
                 <div className="bg-white border border-slate-200 rounded-xl p-4">

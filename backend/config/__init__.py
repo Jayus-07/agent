@@ -1,8 +1,8 @@
 """config — 配置管理（按模块拆分）
 
-.env 加载策略: 从项目根目录 agent/.env 加载（无论 CWD 在哪）。
-子模块（database/llm/rag/...）中的 load_dotenv() 会被根 .env 的
-值覆盖（override=False），因此只需根 .env 一份配置。
+.env 加载策略: 优先项目根目录 agent/.env，其次 backend/.env（无论 CWD 在哪）。
+子模块（database/llm/rag/...）中的 load_dotenv() 不会被后加载的 .env 值
+覆盖（override=False），因此只需一份配置。
 """
 import os
 from pathlib import Path
@@ -10,9 +10,13 @@ from dotenv import load_dotenv
 
 # 计算项目根目录: config/__init__.py → backend/config/ → backend/ → agent/
 _ROOT = Path(__file__).resolve().parent.parent.parent
-_ENV_PATH = _ROOT / ".env"
-if _ENV_PATH.exists():
-    load_dotenv(_ENV_PATH)
+_BACKEND_DIR = _ROOT / "backend"
+# 必须在下方读取任何 os.getenv 之前加载（否则 API_KEY/ALLOW_UNAUTHENTICATED 等
+# 会拿到未填充的空值，导致 auth 中间件误判 fail-closed）。override=False：
+# 先加载的根 .env 优先，子模块的 load_dotenv() 不会覆盖。
+for _env_path in (_ROOT / ".env", _BACKEND_DIR / ".env"):
+    if _env_path.exists():
+        load_dotenv(_env_path)
 
 # 并发控制
 MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "5"))
@@ -80,6 +84,8 @@ from backend.config.llm import (
     DEEPSEEK_API_BASE,
     MINIMAX_API_KEY,
     MINIMAX_API_BASE,
+    QWEN_API_KEY,
+    QWEN_API_BASE,
     EMBEDDING_MODEL_PATH,
     RERANKER_MODEL_PATH,
     RERANK_TIMEOUT,
@@ -202,6 +208,28 @@ from backend.config.rag import (
 from backend.config.rag import (
     ENABLE_FAITHFULNESS, FAITHFULNESS_SKIP_THRESHOLD, NLI_USE_LLM,
 )
+# Input Guard（输入侧安全门禁）
+from backend.config import guard  # noqa: F401 — 模块形式暴露（backend.config.guard.XXX）
+# Customer Service（客服子系统）
+from backend.config.customer_service import (
+    CS_ENABLED,
+    CS_CONFIRMATION_TTL_SECONDS,
+    CS_HANDOFF_TIMEOUT_SECONDS,
+    CS_MAX_CONFIRMATION_RETRIES,
+    CS_HIGH_RISK_ACTIONS,
+    CS_CRITICAL_ACTIONS,
+    CS_KNOWLEDGE_BASES,
+    COMPLAINT_PATTERNS,
+    CS_DOMAIN_KEYWORDS,
+)
+# Redis
+from backend.config.redis import (
+    REDIS_ENABLED,
+    REDIS_URL,
+    REDIS_KEY_PREFIX,
+    REDIS_MAX_CONNECTIONS,
+    REDIS_SOCKET_TIMEOUT,
+)
 
 __all__ = [
     # settings
@@ -216,7 +244,8 @@ __all__ = [
     # llm
     "LLM_MODEL", "LLM_TEMPERATURE", "LLM_CONTEXT_LENGTH", "LLM_MAX_CONCURRENCY",
     "LLM_REQUEST_TIMEOUT", "DEEPSEEK_API_KEY", "DEEPSEEK_API_BASE",
-    "MINIMAX_API_KEY", "MINIMAX_API_BASE", "EMBEDDING_MODEL_PATH",
+    "MINIMAX_API_KEY", "MINIMAX_API_BASE", "QWEN_API_KEY", "QWEN_API_BASE",
+    "EMBEDDING_MODEL_PATH",
     "RERANKER_MODEL_PATH", "RERANK_TIMEOUT",
     # rag
     "CHUNK_SIZE", "CHUNK_OVERLAP", "PROJECT_CHUNK_SIZE",
@@ -270,4 +299,11 @@ __all__ = [
     "ENABLE_FAITHFULNESS", "FAITHFULNESS_SKIP_THRESHOLD", "NLI_USE_LLM",
     # email
     "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM",
+    # customer service
+    "CS_ENABLED", "CS_CONFIRMATION_TTL_SECONDS", "CS_HANDOFF_TIMEOUT_SECONDS",
+    "CS_MAX_CONFIRMATION_RETRIES", "CS_HIGH_RISK_ACTIONS", "CS_CRITICAL_ACTIONS",
+    "CS_KNOWLEDGE_BASES", "COMPLAINT_PATTERNS", "CS_DOMAIN_KEYWORDS",
+    # redis
+    "REDIS_ENABLED", "REDIS_URL", "REDIS_KEY_PREFIX",
+    "REDIS_MAX_CONNECTIONS", "REDIS_SOCKET_TIMEOUT",
 ]

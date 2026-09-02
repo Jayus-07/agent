@@ -13,6 +13,7 @@ V1 实现:
 from __future__ import annotations
 
 import asyncio
+import time
 
 from backend.orchestration.router import get_router
 from backend.orchestration.router.types import ExecutionMode
@@ -35,7 +36,23 @@ def router_node(state: dict) -> dict:
         }
 
     try:
-        router = get_router()
+        # P0-4: get_router() 懒加载（router 索引/向量资源首次初始化）曾贡献
+        # 数秒无埋点黑洞；单独成 span 使其在瀑布图中可见（埋点软失败）。
+        try:
+            from backend.observability.tracer import trace_collector
+            init_span = trace_collector.start_span(
+                "router_init", name="Router 初始化", type="tool_call",
+                input={"query_len": len(query)})
+            t_init = time.time()
+            try:
+                router = get_router()
+            finally:
+                trace_collector.end_span(
+                    init_span,
+                    metrics={"init_ms": int((time.time() - t_init) * 1000)})
+        except Exception:
+            logger.debug("[RouterNode] router_init span 记录失败", exc_info=True)
+            router = get_router()
         # 同步调用（router 主流程是同步的）
         decision = router.route(query)
         logger.info(

@@ -307,6 +307,8 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
                 break  # 一个文件夹只匹配第一个命中
 
     if not scores:
+        if return_detail:
+            return "general", 0.0, detail
         return "general", 0.0
 
     # ── legal 强特征：「第 N 条」条款编号 ──

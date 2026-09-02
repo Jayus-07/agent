@@ -105,18 +105,34 @@ export default function StepTimeline({ steps, totalMs, onToggle, expanded, jsonE
   const isRoute = (s: Span) => (s as any).kind === "graph_route";
   const isFallback = (s: Span) => (s as any).kind === "graph_fallback";
 
-  // 计算嵌套深度（子 span 渲染时用）
-  const depthMap = new Map<string, number>();
+  // ── 构建树结构并按 DFS 序排列 ──
+  const spanById = new Map<string, Span>();
+  for (const s of steps) spanById.set(s.id, s);
+
+  const childrenOf = new Map<string, Span[]>();
+  const hasParent = new Set<string>();
   for (const s of steps) {
-    let d = 0;
-    let cur: Span | undefined = s;
-    while (cur && cur.parent_id) {
-      cur = steps.find((x) => x.id === cur!.parent_id || (x as any).span_id === cur!.parent_id);
-      if (cur) d++;
-      else break;
+    const pid = s.parent_id;
+    if (pid && spanById.has(pid)) {
+      hasParent.add(s.id);
+      if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+      childrenOf.get(pid)!.push(s);
     }
-    depthMap.set(s.id, d);
   }
+  for (const [, kids] of childrenOf) kids.sort((a, b) => a.start_time.localeCompare(b.start_time));
+
+  const roots = steps.filter((s) => !hasParent.has(s.id));
+  roots.sort((a, b) => a.start_time.localeCompare(b.start_time));
+
+  const ordered: { span: Span; depth: number; isLast: boolean }[] = [];
+
+  function dfs(node: Span, depth: number, isLast: boolean) {
+    ordered.push({ span: node, depth, isLast });
+    const kids = childrenOf.get(node.id) || [];
+    kids.forEach((kid, i) => dfs(kid, depth + 1, i === kids.length - 1));
+  }
+
+  roots.forEach((r, i) => dfs(r, 0, i === roots.length - 1));
 
   return (
     <div className="space-y-1">
@@ -129,13 +145,12 @@ export default function StepTimeline({ steps, totalMs, onToggle, expanded, jsonE
         <span className="w-10 shrink-0"></span>
       </div>
 
-      {steps.map((span) => {
+      {ordered.map(({ span, depth, isLast }) => {
         const ratio = Math.max(span.duration_ratio * 100, span.status === "skipped" ? 0 : 0.3);
         const isSlowest = span.duration_ms === maxMs && span.duration_ms > 0;
         const isRerankZero = span.type === "rerank" && Number(span.metrics?.output_docs ?? -1) === 0;
         const isHighlight = highlightStepId === span.id;
         const isJsonOpen = jsonExpanded?.has(span.id);
-        const depth = depthMap.get(span.id) || 0;
         const attrs = (span as any).attributes || {};
         
         // 判断是否应该展开（用户手动 + 自动）
@@ -208,7 +223,7 @@ export default function StepTimeline({ steps, totalMs, onToggle, expanded, jsonE
             >
               {/* Label + indent indicator */}
               <div className="w-28 shrink-0 flex items-center gap-2">
-                {depth > 0 && <span className="text-[9px] text-slate-300">{depth === 1 ? "└" : "├"}</span>}
+                {depth > 0 && <span className="text-[9px] text-slate-300">{isLast ? "└" : "├"}</span>}
                 <span className={`inline-block w-1.5 h-1.5 rounded-full ${
                   span.status === "skipped" ? "bg-slate-300" : span.status === "error" ? "bg-red-400" : "bg-violet-500"
                 }`} />

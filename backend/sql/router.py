@@ -8,11 +8,10 @@ router.py — 表筛选 (Schema Routing) + 关键词缓存
   - LLM 失败回退所有表
 """
 import json
-import time
-import threading
 from typing import List
 
 from backend.infra.llm import llm
+from backend.infra.cache import get_cache
 from backend.sql.schema_loader import schema_loader
 from backend.shared.logger import logger
 
@@ -31,16 +30,11 @@ ROUTER_PROMPT = """你是数据库表路由助手。给定用户问题和可用�
 
 请输出 JSON 数组，不要添加任何解释。"""
 
-# ── P2 性能优化：关键词快路径 + LRU 缓存 ──
+# ── P2 性能优化：关键词快路径 + 统一缓存 ──
 
 # 表名关键词 → 表全限定名映射（业务语义 → schema.table）
 _KEYWORD_TABLE_MAP: dict[str, list[str]] = {}
 _map_lock = threading.Lock()
-
-_QUERY_CACHE: dict[str, tuple[float, list[str]]] = {}
-_cache_lock = threading.Lock()
-_CACHE_TTL = 300  # 5 分钟
-_CACHE_MAX = 128
 
 
 def _build_keyword_map() -> None:
@@ -92,39 +86,7 @@ def _keyword_match(question: str) -> list[str]:
     return list(matched)
 
 
-def _cache_get(question: str) -> list[str] | None:
-    """缓存查询（LRU + TTL）。"""
-    _cache_lock.acquire()
-    try:
-        # 清理过期条目
-        now = time.time()
-        expired = [k for k, v in _QUERY_CACHE.items() if now - v[0] > _CACHE_TTL]
-        for k in expired:
-            del _QUERY_CACHE[k]
-
-        # 精确匹配
-        if question in _QUERY_CACHE:
-            ts, result = _QUERY_CACHE[question]
-            if now - ts <= _CACHE_TTL:
-                logger.info(f"[Router] 缓存命中: {result}")
-                return result
-            del _QUERY_CACHE[question]
-    finally:
-        _cache_lock.release()
-    return None
-
-
-def _cache_set(question: str, result: list[str]) -> None:
-    """写入缓存。"""
-    _cache_lock.acquire()
-    try:
-        # LRU eviction
-        if len(_QUERY_CACHE) >= _CACHE_MAX:
-            oldest = min(_QUERY_CACHE.items(), key=lambda x: x[1][0])
-            del _QUERY_CACHE[oldest[0]]
-        _QUERY_CACHE[question] = (time.time(), result)
-    finally:
-        _cache_lock.release()
+_sql_router_cache = get_cache("sql_router", ttl=300)
 
 
 def select_tables(question: str) -> List[str]:
@@ -141,7 +103,7 @@ def select_tables(question: str) -> List[str]:
         return all_tables
 
     # 1. 缓存优先
-    cached = _cache_get(question)
+    cached = _sql_router_cache.get_json(question)
     if cached is not None:
         return cached
 
@@ -157,7 +119,7 @@ def select_tables(question: str) -> List[str]:
         logger.info(
             f"[Router] 关键词快路径: 问题 '{question[:50]}...' → {fast_match}"
         )
-        _cache_set(question, fast_match)
+        _sql_router_cache.set_json(question, fast_match)
         return fast_match
 
     # 如果关键词匹配了过多表（泛词），不走快路径，交给 LLM 精确选表
@@ -193,7 +155,7 @@ def select_tables(question: str) -> List[str]:
                 logger.warning(f"[Router] LLM 返回无效表名: {selected}，回退全部")
                 return all_tables
             logger.info(f"[Router] 用户问题 '{question[:40]}...' → 选中表: {valid}")
-            _cache_set(question, valid)
+            _sql_router_cache.set_json(question, valid)
             return valid
 
     except json.JSONDecodeError as e:
@@ -201,5 +163,5 @@ def select_tables(question: str) -> List[str]:
     except Exception as e:
         logger.error(f"[Router] LLM 调用失败: {e}，回退全部")
 
-    _cache_set(question, all_tables)
+    _sql_router_cache.set_json(question, all_tables)
     return all_tables

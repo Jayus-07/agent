@@ -22,6 +22,7 @@ from backend.orchestration.graph.events import (
 )
 
 from backend.orchestration.tool_registry import tool_registry
+from backend.security.input_guard import GuardAction, get_input_guard
 from backend.shared.logger import logger
 
 
@@ -61,29 +62,63 @@ class MultiAgentSystem:
             logger.info(f"[MultiAgent] RAG 预热完成 ({(time.time()-t0)*1000:.0f}ms)")
         except Exception as e:
             logger.warning(f"[MultiAgent] RAG 预热失败（非致命）: {e}")
+
+        t0 = time.time()
+        try:
+            from backend.orchestration.router.router import get_router
+            _ = get_router()
+            logger.info(f"[MultiAgent] Router 预热完成 ({(time.time()-t0)*1000:.0f}ms)")
+        except Exception as e:
+            logger.warning(f"[MultiAgent] Router 预热失败（非致命）: {e}")
+
         logger.info("[MultiAgent] 预热完毕，就绪")
 
     # =====================================================
     # 同步入口
     # =====================================================
 
-    def ask(self, question: str, session_id: str = "default", kb_id: str = "default") -> str:
+    def ask(self, question: str, session_id: str = "default", kb_id: str = "default",
+            user_id: str = "default") -> str:
         """处理用户问题，返回最终 Markdown 回答。"""
-        if not question or not question.strip():
-            return "## 提示\n\n请输入有效问题。"
+        logger.info(f"[MultiAgent] 收到问题: {(question or '')[:80]}... (session={session_id}, kb={kb_id}, user={user_id})")
 
-        logger.info(f"[MultiAgent] 收到问题: {question[:80]}... (session={session_id}, kb={kb_id})")
+        # ── Input Guard：输入侧门禁（Router/Planner 之前；拦截即短路不进图）──
+        guard_result = get_input_guard().guard(question or "", session_id=session_id)
+        if guard_result.action in (GuardAction.BLOCK, GuardAction.CLARIFY):
+            self._finish_guard_trace(session_id, guard_result)
+            return guard_result.message or "## 提示\n\n无法处理该问题。"
 
-        l1 = self._memory.start_session(session_id, question)
-        initial_state = make_initial_state(question, session_id, kb_id, l1.messages)
-
-        # ── Tracing: start + root span ──
-        from backend.observability.tracer import trace_collector
+        # ── Tracing: start + root span（提前到会话加载之前，使 memory/kb
+        #    加载耗时纳入 trace 归因，不再成为无埋点黑洞）──
+        from backend.observability.tracer import trace_collector, SpanKind
         t_total = time.time()
         trace = trace_collector.start(question, session_id, workflow_name="agent")
         trace_collector.start_span("root", parent_id=None,
                                    name="多 Agent 协作管线", type="workflow",
                                    input={"question": question, "kb_id": kb_id})
+        self._add_guard_span(guard_result)
+
+        # P0-4: 会话/记忆加载埋点 —— 旧实现在 trace 之外执行，
+        # 实测贡献过 9 秒不可归因耗时。
+        load_span = trace_collector.start_span(
+            "session_load", name="会话/记忆加载", type="workflow",
+            kind=SpanKind.KB_ROUTING.value,
+            input={"session_id": session_id})
+        try:
+            l1 = self._memory.start_session(session_id, question, user_id=user_id)
+            initial_state = make_initial_state(
+                question, session_id, kb_id, l1.messages,
+                guard_result=guard_result.model_dump(mode="json"),
+            )
+        except Exception as e:
+            trace_collector.end_span(load_span, status="error",
+                                     metrics={"error": str(e)[:100]})
+            _end_root(trace, status="error", metrics={"error": "session_load_failed"})
+            trace_collector.finish(trace, "[ERROR]",
+                                   int((time.time() - t_total) * 1000), "", "")
+            raise
+        trace_collector.end_span(
+            load_span, metrics={"history_messages": len(l1.messages)})
 
         try:
             final_state = self._graph.invoke(initial_state)
@@ -101,7 +136,7 @@ class MultiAgentSystem:
             _end_root(trace, metrics={"span_count": len(trace.spans) - 1})
             trace_collector.finish(trace, answer, total_ms, "", "")
 
-            self._memory.end_turn(session_id, question, answer)
+            self._memory.end_turn(session_id, question, answer, user_id=user_id)
             return answer
         except Exception as e:
             logger.error(f"[MultiAgent] 执行失败: {e}")
@@ -111,7 +146,7 @@ class MultiAgentSystem:
                                        int((time.time() - t_total) * 1000), "", "")
             except Exception:
                 logger.debug("[P1-10] 错误路径 trace 收尾失败", exc_info=True)
-            self._memory.end_turn(session_id, question, f"[错误] {e}")
+            self._memory.end_turn(session_id, question, f"[错误] {e}", user_id=user_id)
             return f"## 系统错误\n\n处理问题失败: {e}\n\n请稍后重试。"
 
     # =====================================================
@@ -193,7 +228,7 @@ class MultiAgentSystem:
                 span_id="planner", parent_id="root",
                 name="Planner 拆解", type="agent",
                 status="success",
-                metrics={"subtasks": len(nodes)},
+                metrics={"subtasks": len(nodes), "synthesized": True},
             )
             trace.spans.append(planner_span)
 
@@ -203,7 +238,7 @@ class MultiAgentSystem:
                 span_id="critique", parent_id="root",
                 name="计划审查", type="agent",
                 status="success",
-                metrics={"plan_changed": plan_changed},
+                metrics={"plan_changed": plan_changed, "synthesized": True},
             )
             trace.spans.append(crit_span)
 
@@ -221,7 +256,7 @@ class MultiAgentSystem:
                 span_id=f"supervisor-round-{r}", parent_id="root",
                 name=f"调度轮次 {r}", type="workflow",
                 status="success",
-                metrics={"round": r},
+                metrics={"round": r, "synthesized": True},
             )
             trace.spans.append(round_span)
 
@@ -247,6 +282,7 @@ class MultiAgentSystem:
                     "capability": cap,
                     "error": err,
                     "retry_count": sr.get("retries", 0),
+                    "synthesized": True,
                 },
             )
             trace.spans.append(skill_span)
@@ -258,7 +294,7 @@ class MultiAgentSystem:
                 span_id="reporter", parent_id="root",
                 name="Reporter 汇总", type="agent",
                 status="success" if final_answer else "error",
-                metrics={"answer_len": len(final_answer)},
+                metrics={"answer_len": len(final_answer), "synthesized": True},
                 output={"answer_preview": final_answer[:200]} if final_answer else None,
             )
             trace.spans.append(reporter_span)
@@ -279,25 +315,54 @@ class MultiAgentSystem:
         session_id: str = "default",
         kb_id: str = "default",
         stop_event=None,
+        user_id: str = "default",
     ) -> Generator[dict, None, None]:
         """SSE 流式处理。同步产出 trace + span 树。"""
         from backend.observability.tracer import trace_collector
 
-        if not question or not question.strip():
-            yield {"event": "error", "data": {"message": "请输入有效问题", "ts": time.time()}}
+        start_time = time.time()
+
+        # ── Input Guard：输入侧门禁（Router/Planner 之前；拦截即短路不进图）──
+        guard_result = get_input_guard().guard(question or "", session_id=session_id)
+        if guard_result.action in (GuardAction.BLOCK, GuardAction.CLARIFY):
+            self._finish_guard_trace(session_id, guard_result)
+            yield {"event": "status", "data": {"node": "input_guard", "ts": time.time()}}
+            message = guard_result.message or "## 提示\n\n无法处理该问题。"
+            yield from emit_delta_events(message, stop_event)
+            yield make_done_event(message, {}, start_time)
             return
 
-        l1 = self._memory.start_session(session_id, question)
-        from backend.orchestration.tools import set_session_id
-        set_session_id(session_id)
-        start_time = time.time()
-        initial_state = make_initial_state(question, session_id, kb_id, l1.messages)
-
-        # ── Tracing ──
+        # ── Tracing（提前到会话加载之前，使 memory/kb 加载耗时可归因）──
         trace = trace_collector.start(question, session_id, workflow_name="agent")
         trace_collector.start_span("root", parent_id=None,
                                    name="多 Agent 协作管线", type="workflow",
                                    input={"question": question, "kb_id": kb_id})
+        self._add_guard_span(guard_result)
+
+        # P0-4: 会话/记忆加载埋点（与同步 ask() 路径对齐）
+        from backend.observability.tracer import SpanKind
+        load_span = trace_collector.start_span(
+            "session_load", name="会话/记忆加载", type="workflow",
+            kind=SpanKind.KB_ROUTING.value,
+            input={"session_id": session_id})
+        try:
+            l1 = self._memory.start_session(session_id, question, user_id=user_id)
+            from backend.orchestration.tools import set_session_id
+            set_session_id(session_id)
+            initial_state = make_initial_state(
+                question, session_id, kb_id, l1.messages,
+                guard_result=guard_result.model_dump(mode="json"),
+            )
+        except Exception as e:
+            trace_collector.end_span(load_span, status="error",
+                                     metrics={"error": str(e)[:100]})
+            yield {"event": "error", "data": {"message": f"会话加载失败: {e}", "ts": time.time()}}
+            _end_root(trace, status="error", metrics={"error": "session_load_failed"})
+            trace_collector.finish(trace, "",
+                                   int((time.time() - start_time) * 1000), "", "")
+            return
+        trace_collector.end_span(
+            load_span, metrics={"history_messages": len(l1.messages)})
 
         final_answer = ""
         all_step_results = {}
@@ -376,7 +441,73 @@ class MultiAgentSystem:
             except Exception:
                 logger.debug("[P1-10] 错误路径 trace 收尾失败", exc_info=True)
         finally:
-            self._memory.end_turn(session_id, question, final_answer or "")
+            self._memory.end_turn(session_id, question, final_answer or "", user_id=user_id)
+
+    # =====================================================
+    # Input Guard 辅助（短路 trace / span）
+    # =====================================================
+
+    def _add_guard_span(self, guard_result) -> None:
+        """把 Input Guard 判定记录为 span（挂在 root 下，埋点失败不影响主流程）。"""
+        try:
+            from backend.observability.tracer import trace_collector
+            span = trace_collector.start_span(
+                "input_guard", name="Input Guard", type="workflow",
+                input={"query_len": len(guard_result.normalized_query)},
+            )
+            trace_collector.end_span(
+                span,
+                output={
+                    "action": guard_result.action.value,
+                    "category": guard_result.category.value,
+                    "risk_level": guard_result.risk_level.value,
+                    "confidence": guard_result.confidence,
+                    "reason": guard_result.reason,
+                },
+                metrics={
+                    "layer": guard_result.layer,
+                    "llm_consulted": guard_result.llm_consulted,
+                    "needs_permission": guard_result.needs_permission,
+                    "domain": guard_result.domain or "",
+                    "policy_version": guard_result.policy_version,
+                },
+                status="success",
+            )
+        except Exception:
+            logger.debug("[MultiAgent] Guard span 记录失败", exc_info=True)
+
+    def _finish_guard_trace(self, session_id: str, guard_result) -> None:
+        """为被 Guard 拦截的请求产出一条最小 trace（留 rejected 证据）。
+
+        安全约束：trace 的 question 不落拦截请求原文（可能是恶意/敏感内容），
+        用类别占位符替代；原文取证信息在 Guard 审计日志（sha256 摘要）中。
+        """
+        try:
+            from backend.observability.tracer import trace_collector
+            trace = trace_collector.start(
+                f"[guard-rejected:{guard_result.category.value}]",
+                session_id, workflow_name="agent",
+            )
+            span = trace_collector.start_span(
+                "input_guard", parent_id=None,
+                name="Input Guard 拦截", type="workflow",
+            )
+            trace_collector.end_span(
+                span,
+                output={
+                    "action": guard_result.action.value,
+                    "category": guard_result.category.value,
+                    "risk_level": guard_result.risk_level.value,
+                    "confidence": guard_result.confidence,
+                },
+                metrics={"policy_version": guard_result.policy_version},
+                status="success",
+            )
+            trace_collector.finish(
+                trace, guard_result.message or "", 0, "", "",
+            )
+        except Exception:
+            logger.debug("[MultiAgent] Guard 拦截 trace 记录失败", exc_info=True)
 
 
 # =====================================================

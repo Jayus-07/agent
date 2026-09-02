@@ -136,9 +136,7 @@ class RAGChain:
         self.bm25 = bm25
         self.person_index = person_index or {}
         self._memory = memory_manager
-        # ── PR-1.4: 3 个策略对象（替代原来的 mutable 字段）──
-        self.gate = EvidenceGateController()
-        self.corrector = SelfCorrectionStrategy()
+        # ── PR-1.4: 策略对象（formatter 保留为实例字段；gate/corrector 迁移到 RequestContext）──
         self.formatter = CitationFormatter()
         # ── RAGChain 自有状态 ──
         # 决策中间态（_last_meta/_last_faithfulness/_last_query）已迁移到
@@ -177,6 +175,28 @@ class RAGChain:
     def _last_query(self, value: str) -> None:
         get_context().query = value
 
+    @property
+    def gate(self):
+        ctx = get_context()
+        if ctx.gate is None:
+            ctx.gate = EvidenceGateController()
+        return ctx.gate
+
+    @gate.setter
+    def gate(self, value) -> None:
+        get_context().gate = value
+
+    @property
+    def corrector(self):
+        ctx = get_context()
+        if ctx.corrector is None:
+            ctx.corrector = SelfCorrectionStrategy()
+        return ctx.corrector
+
+    @corrector.setter
+    def corrector(self, value) -> None:
+        get_context().corrector = value
+
     # =================================================
     # Step A: 构建 BaseRetriever 实例
     # =================================================
@@ -200,10 +220,10 @@ class RAGChain:
         执行顺序（外层先执行）:
 
           ① HistoryAware   — Query Understanding: 利用对话历史重写指代/省略
-          ② MultiQuery     — Query Expansion:   关键词检测复杂度 → LLM 多角度改写
-          ③ ChunkLevel     — Hybrid Retrieval:  向量 + BM25 混合检索
+          ② Rerank         — CrossEncoder:      全局重排序 + 阈值过滤（只在合并结果上执行一次）
+          ③ MultiQuery     — Query Expansion:   关键词检测复杂度 → LLM 多角度改写
           ④ Adaptive       — Document Expansion: 同文档相邻 Chunk 扩展
-          ⑤ Rerank         — CrossEncoder:      全局重排序 + 阈值过滤
+          ⑤ ChunkLevel     — Hybrid Retrieval:  向量 + BM25 混合检索
           ⑥ LLM Generate   — 带引用标注 [1][2] 的最终回答
         """
         # Citation Filter: 注入文档序号 + 自定义文档格式，使 LLM 可内联引用 [1][2]
@@ -232,6 +252,11 @@ class RAGChain:
         )
         def _timed_stuff(inp):
             from backend.observability.tracer import trace_collector, SpanKind
+            # ── 空检索短路：0 docs 时跳过 LLM（~4.8s），Gate 会拒答 ──
+            context_docs = inp.get("context", [])
+            if not context_docs:
+                logger.info("[RAGChain] 空检索短路，跳过 LLM Generate")
+                return AIMessage(content="知识库暂无相关资料。")
             llm_span = trace_collector.start_span(
                 "llm_generate", name="LLM生成",
                 kind=SpanKind.LLM.value,
@@ -243,6 +268,22 @@ class RAGChain:
                 # 与 _record_tokens 同上下文，保证并发下各请求读到自己的 token）
                 from backend.infra.llm.proxy import _last_call_meta_var
                 metrics = dict(_last_call_meta_var.get())
+                # P0-3: ContextVar 为空（跨线程丢失 / provider 未返回）时，
+                # 兜底从 response_metadata 提取；仍缺失则显式留痕，
+                # 让 token 采集失败可观测而非静默归零。
+                if not (metrics.get("total_tokens") or metrics.get("prompt_tokens")
+                        or metrics.get("completion_tokens")):
+                    tu = trace_collector.parse_tokens(r)
+                    if tu:
+                        metrics.update(tu)
+                        metrics["token_source"] = "response_metadata"
+                    else:
+                        metrics["token_source"] = "unavailable"
+                        try:
+                            from backend.observability.metrics import llm_usage_missing_total
+                            llm_usage_missing_total.inc()
+                        except Exception:
+                            pass
                 # 截断文本字段，避免大输出撑爆 trace
                 completion_text = ""
                 if hasattr(r, "content") and isinstance(r.content, str):
@@ -258,7 +299,7 @@ class RAGChain:
                 raise
         stuff_chain = RunnableLambda(_index_docs) | RunnableLambda(_timed_stuff)
 
-        # ── ③ Hybrid Retrieval（最内层：实际搜索）─────────
+        # ── ⑤ Hybrid Retrieval（最内层：实际搜索）─────────
         retriever = self.chunk_retriever_base
 
         # ── ④ Adaptive: 同文档 Chunk 扩展 ──────────────
@@ -267,18 +308,23 @@ class RAGChain:
             doc_db=self.doc_db,
         )
 
-        # ── ⑤ Rerank: CrossEncoder 全局重排序 ──────────
-        retriever = ContextualCompressionRetriever(
-            base_compressor=RerankCompressor(),
-            base_retriever=retriever,
-        )
-
-        # ── ② MultiQuery: 复杂度检测 → LLM 改写 ─────────
+        # ── ③ MultiQuery: 复杂度检测 → LLM 改写 ─────────
         from backend.rag.retrieval.multi_query import MultiQueryRetriever
         retriever = MultiQueryRetriever(base_retriever=retriever)
         self._mq_retriever = retriever  # 供 tracer 读取 MultiQuery 状态
 
+        # ── ② Rerank: CrossEncoder 全局重排序（包在 MultiQuery 外层）──
+        # 变体先各自检索合并去重，重排只在合并结果上执行一次；
+        # 避免每个改写变体各自触发一次重排（2026-09-03 事故性能问题）
+        retriever = ContextualCompressionRetriever(
+            base_compressor=RerankCompressor(),
+            base_retriever=retriever,
+        )
+        self._rerank_wrapper = retriever  # Rerank 包装层（供测试/诊断断言装配顺序）
+
         # ── ① HistoryAware: 对话历史改写（最外层，最先执行）─
+        # 双链策略：standalone 链跳过 HistoryAware LLM 调用，首轮对话省 ~1-2s
+        self.chain_standalone = create_retrieval_chain(retriever, stuff_chain)
         if ENABLE_HISTORY_AWARE_RETRIEVAL:
             retriever = create_history_aware_retriever(
                 llm, retriever, CONTEXTUALIZE_PROMPT
@@ -305,9 +351,9 @@ class RAGChain:
             ctx.meta = {}
             ctx.faithfulness = None
             ctx.mq_triggered = False
+            ctx.gate = EvidenceGateController()
+            ctx.corrector = SelfCorrectionStrategy()
             set_context(ctx)
-            self.gate = EvidenceGateController()
-            self.corrector = SelfCorrectionStrategy()
             chat_history = self._prepare(question, session_id)
             result = self._execute(question, chat_history)
             return self._respond(result, trace, question, session_id, t_total)
@@ -316,17 +362,31 @@ class RAGChain:
             raise
 
     def _start(self, question: str, session_id: str):
-        """开启 Trace + root span。"""
-        from backend.observability.tracer import trace_collector
+        """开启 Trace + root span。
+
+        嵌入模式：若已在父 trace（如 agent）内调用，不创建独立子 trace，
+        而是在父 trace 中创建 "rag_skill" span 作为作用域根，所有 RAG span
+        自动嵌套其下。前端无需跳转子 trace 即可看到完整 RAG 链路。
+        """
+        from backend.observability.tracer import trace_collector, _scope_root_var
         import time as _time
-        trace = trace_collector.start(question, session_id)
-        # RAG 单步问答 SLA：30s（与 agent 链路 _sla_for_plan 单步阈值对齐）。
-        # 默认 10s 会让绝大多数正常请求被前端误标 TIMEOUT。
-        trace.sla_threshold_ms = 30000
-        trace_collector.start_span("root", parent_id=None,
-                                   name="RAG 智能问答", type="agent",
-                                   input={"question": question})
-        logger.info(f"[RAGChain] 收到问题: {question[:60]}... (session={session_id})")
+        prev = trace_collector.current()
+        if prev is not None:
+            trace = prev
+            trace._rag_embedded = True
+            rag_span = trace_collector.start_span(
+                "rag_skill", name="RAG 智能问答", type="agent",
+                kind="skill", input={"question": question})
+            _scope_root_var.set("rag_skill")
+            logger.info(f"[RAGChain] 嵌入模式（父 trace={prev.id[:8]}）: {question[:60]}...")
+        else:
+            trace = trace_collector.start(question, session_id)
+            trace._rag_embedded = False
+            trace.sla_threshold_ms = 30000
+            trace_collector.start_span("root", parent_id=None,
+                                       name="RAG 智能问答", type="agent",
+                                       input={"question": question})
+            logger.info(f"[RAGChain] 收到问题: {question[:60]}... (session={session_id})")
         return trace, _time.time()
 
     def _respond(self, result, trace, question, session_id, t_total) -> str:
@@ -450,7 +510,9 @@ class RAGChain:
             trace.metadata["rejection"] = info.to_dict()
         except Exception:
             logger.debug("trace metadata rejection 写入失败", exc_info=True)
-        metrics = {"rejected": True, "reason": info.reason, "gate_layer": layer}
+        # P1-8: 拒答详情单一事实源 = metadata.rejection（上方已写），
+        # root span 只留布尔索引位，不再三处冗余 reason/gate_layer。
+        metrics = {"rejected": True}
         if self_correction_attempted:
             metrics["self_correction"] = "attempted"
         self._end_root_span(trace,
@@ -462,7 +524,7 @@ class RAGChain:
 
     def _finish(self, trace, answer: str, t_total: float):
         """统一 trace 收尾。"""
-        from backend.observability.tracer import trace_collector
+        from backend.observability.tracer import trace_collector, _scope_root_var
         from backend.config.llm import LLM_MODEL
         from backend.infra.llm.factory import get_llm_factory
         import time as _time
@@ -470,6 +532,10 @@ class RAGChain:
         self._end_root_span(trace,
             output={"answer_preview": answer[:200], "answer_len": len(answer)},
             metrics={"span_count": sum(1 for s in trace.spans if s.parent_id is not None)})
+        # 嵌入模式：清理 scope root，不 finish trace（属于父 trace）
+        if getattr(trace, '_rag_embedded', False):
+            _scope_root_var.set(None)
+            return
         provider = ""
         try:
             provider = get_llm_factory()._get_provider(LLM_MODEL)
@@ -484,15 +550,17 @@ class RAGChain:
         保证 Trace 不因异常而丢失（P0）。此函数自身在异常处理路径中，
         收尾再失败时不覆盖原始异常，仅记录日志。
         """
-        from backend.observability.tracer import trace_collector
+        from backend.observability.tracer import trace_collector, _scope_root_var
         import time as _time
         try:
             self._end_root_span(trace, status="error",
                                 metrics={"error": "pipeline_failed"})
+            if getattr(trace, '_rag_embedded', False):
+                _scope_root_var.set(None)
+                return
             trace_collector.finish(trace, "[ERROR]",
                                    int((_time.time() - t_total) * 1000), "", "")
         except Exception as e:
-            # 已在异常处理路径：收尾失败只记录，不再覆盖原始异常
             logger.error("[RAGChain] error cleanup failed: %s", e, exc_info=True)
 
     def _try_self_correct(self, original_decision, trace, question, session_id, t_total):
@@ -562,7 +630,10 @@ class RAGChain:
         self._last_query = question
         try:
             from backend.rag.retrieval.query_analyzer import QueryAnalyzer
-            self.gate.set_query_analysis(QueryAnalyzer().analyze(question))
+            from backend.rag.context import get_context
+            qa_result = QueryAnalyzer().analyze(question)
+            get_context().query_analysis = qa_result
+            self.gate.set_query_analysis(qa_result)
         except Exception as e:
             # 查询分析失败不阻塞主链路（软降级），但需留痕以便定位
             logger.debug(f"[RAGChain] QueryAnalyzer 分析失败: {e}", exc_info=True)
@@ -571,14 +642,16 @@ class RAGChain:
         # ── retrieval span（包裹整个检索过程，挂 debug event）──
         from backend.observability.tracer import SpanName as _SpanName
         ret_span = trace_collector.start_span(
-            "retrieval", parent_id="root",
+            "retrieval",
             name=_SpanName.RETRIEVAL, type="retrieval",
             kind="retrieval",
             input={"question": question[:500]},
         )
         t_ret_start = _time.time()
 
-        result = self.chain.invoke({"input": question, "chat_history": chat_history})
+        # ── 双链选择：无历史时跳过 HistoryAware LLM 调用 ──
+        active_chain = self.chain_standalone if not chat_history else self.chain
+        result = active_chain.invoke({"input": question, "chat_history": chat_history})
 
         # ── 采集检索中间结果 ──
         context_docs = result.get("context", [])
@@ -615,7 +688,6 @@ class RAGChain:
             is_evidence_gate_enabled, gate_retrieval_passthrough,
         )
         from backend.observability.tracer import trace_collector, SpanKind
-        from backend.rag.guardrails import check_faithfulness  # noqa: F401
 
         if not is_evidence_gate_enabled():
             return gate_retrieval_passthrough()
@@ -744,13 +816,13 @@ class RAGChain:
 
         # ── Event 1: Query Analyzer ──
         try:
-            from backend.rag.retrieval.query_analyzer import QueryAnalyzer
-            qa = QueryAnalyzer()
-            pq = qa.analyze(ret_span.input.get("question", ""))
-            trace_collector.add_event(ret_span, "query_analyzer", "info",
-                f"intent={pq.intent}, doc_types={pq.doc_types}",
-                data={"intent": pq.intent, "doc_types": pq.doc_types,
-                      "metadata_filter": pq.to_metadata_filter()})
+            from backend.rag.context import get_context
+            pq = get_context().query_analysis
+            if pq is not None:
+                trace_collector.add_event(ret_span, "query_analyzer", "info",
+                    f"intent={pq.intent}, doc_types={pq.doc_types}",
+                    data={"intent": pq.intent, "doc_types": pq.doc_types,
+                          "metadata_filter": pq.to_metadata_filter()})
         except Exception:
             logger.debug("query_analysis span 记录失败", exc_info=True)
 
@@ -910,30 +982,20 @@ class RAGChain:
                                  metrics={"error": str(e)[:100]})
             return answer
 
-    def _trace(self, trace, answer: str, t_total: float):
-        """收尾阶段：结束 root span + 完成 Trace。"""
-        from backend.observability.tracer import trace_collector
-        from backend.config import LLM_MODEL
-        from backend.infra.llm.factory import get_llm_factory
-        import time as _time
-
-        total_ms = int((_time.time()-t_total)*1000)
-        self._end_root_span(trace,
-            output={"answer_preview": answer[:200], "answer_len": len(answer)},
-            metrics={"span_count": sum(1 for s in trace.spans if s.parent_id is not None)})
-
-        provider = ""
-        try:
-            provider = get_llm_factory()._get_provider(LLM_MODEL)
-        except Exception:
-            logger.debug("LLM provider 检测失败", exc_info=True)
-        trace_collector.finish(trace, answer, total_ms, LLM_MODEL, provider)
-
     @staticmethod
     def _end_root_span(trace, output: dict = None, metrics: dict = None,
                        status: str = "success"):
-        """查找并结束 root span（parent_id=None 的那条）。"""
+        """查找并结束 root span（parent_id=None 的那条）。
+
+        嵌入模式：结束 "rag_skill" span（而非父 trace 的 root）。
+        """
         from backend.observability.tracer import trace_collector
+        if getattr(trace, '_rag_embedded', False):
+            for sp in trace.spans:
+                if sp.span_id == "rag_skill":
+                    trace_collector.end_span(sp, output=output, metrics=metrics, status=status)
+                    return
+            return
         for sp in trace.spans:
             if sp.parent_id is None:
                 trace_collector.end_span(sp, output=output, metrics=metrics, status=status)

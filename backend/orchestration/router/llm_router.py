@@ -9,10 +9,6 @@
 """
 from __future__ import annotations
 
-import json
-import re
-from typing import List
-
 from backend.orchestration.router.types import (
     CapabilityScore,
     ExecutionMode,
@@ -22,30 +18,10 @@ from backend.orchestration.router.types import (
 )
 
 
-LLM_ROUTER_PROMPT = """你是企业 Agent 路由。
-
-【可用能力】
-- sql.query: 业务数据查询
-- rag.search: 企业知识库查询（制度/流程/SOP）
-- business.analyze: 业务分析（找原因/给建议）
-- report.generate: 报告生成
-- email.send: 邮件发送
-- data.export: 数据导出
-- web.search / web.crawl: 联网搜索/抓取
-- data.collect: 数据采集
-- daily_report / inventory_alert: 已注册工作流
-
-【用户问题】
-{query}
-
-判断需要哪些能力（按重要性排序），输出 JSON（只输出 JSON）:
-{{
-  "execution_mode": "direct" | "plan" | "workflow",
-  "candidates": [{{"name": "能力", "score": 0-1}}, ...],
-  "reason": "一句话判断依据",
-  "workflow_name": "（如 workflow 模式）"
-}}
-"""
+LLM_ROUTER_PROMPT = """路由能力选择，输出JSON。
+能力: sql.query|rag.search|business.analyze|report.generate|email.send|data.export|web.search|data.collect|daily_report|inventory_alert
+问题: {query}
+输出: {{"execution_mode":"direct|plan|workflow","candidates":[{{"name":"能力","score":0-1}}],"reason":"一句话"}}"""
 
 
 def _extract_json(text: str) -> dict | None:
@@ -61,7 +37,7 @@ def _extract_json(text: str) -> dict | None:
 class LLMRouter:
     """LLM Router：用 qwen2.5:3b 做最后兜底。"""
 
-    def __init__(self, timeout: int = 20):
+    def __init__(self, timeout: int = 12):
         self.timeout = timeout
 
     def route(self, query: str) -> RouteDecision:
@@ -70,7 +46,7 @@ class LLMRouter:
         from backend.infra.llm import llm
         from backend.shared.logger import logger
 
-        prompt = LLM_ROUTER_PROMPT.format(query=query[:500])
+        prompt = LLM_ROUTER_PROMPT.format(query=query[:200])
 
         try:
             raw = safe_call_with_timeout(

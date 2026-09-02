@@ -101,6 +101,8 @@ def _stub_chain():
     chain.gate = EvidenceGateController()
     chain.corrector = SelfCorrectionStrategy()
     chain.formatter = CitationFormatter()
+    chain.chain = None
+    chain.chain_standalone = None
     return chain
 
 
@@ -116,6 +118,7 @@ class TestPerRequestStrategyInstances:
             "input": inp, "context": _gate_ok_docs(),
             "answer": "答案。<!--META{\"can_answer\":true,\"citations\":[],\"confidence\":0.9}-->",
         })
+        chain.chain_standalone = chain.chain
         monkeypatch.setattr(chain, "_evaluate", lambda answer, ctx: answer)
 
         trace = trace_collector.start("iso-strategy", session_id="t1")
@@ -153,6 +156,7 @@ class TestConcurrentAskIsolation:
                     "answer": (f"答案。<!--META{{\"can_answer\":true,"
                                f"\"citations\":[],\"confidence\":{conf}}}-->")}
         chain.chain = SimpleNamespace(invoke=fake_invoke)
+        chain.chain_standalone = chain.chain
         monkeypatch.setattr(chain, "_evaluate", lambda answer, ctx: answer)
 
         def worker(conf, q):

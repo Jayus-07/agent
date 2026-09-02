@@ -12,18 +12,31 @@ _DIMENSIONS = [
 class ImportanceScorer:
     THRESHOLD = 0.6
 
+    # 类型保底分：能被 LLM 提取为 user_fact/preference/decision 的内容本身就有记忆价值。
+    # 旧实现中内容未命中任何关键词时落入兜底 0.2，导致绝大多数偏好/身份事实
+    # 低于 0.6 阈值被丢弃（长期记忆几乎存不进东西）。
+    _TYPE_BASE = {
+        "user_fact": 0.7,
+        "preference": 0.65,
+        "decision": 0.65,
+        "knowledge": 0.4,
+    }
+
     def score(self, memory_type: str, content: str) -> float:
-        for pattern, weight, _dim in _DIMENSIONS:
+        weight = 0.2
+        for pattern, w, _dim in _DIMENSIONS:
             if re.search(pattern, content):
-                # Apply type bonus
-                type_bonus = {
-                    "user_fact": 0.1,
-                    "preference": 0.05,
-                    "decision": 0.08,
-                    "knowledge": 0.0,
-                }.get(memory_type, 0.0)
-                return min(weight + type_bonus, 1.0)
-        return 0.2
+                weight = w
+                break
+        # Apply type bonus
+        type_bonus = {
+            "user_fact": 0.1,
+            "preference": 0.05,
+            "decision": 0.08,
+            "knowledge": 0.0,
+        }.get(memory_type, 0.0)
+        base = self._TYPE_BASE.get(memory_type, 0.2)
+        return min(max(weight, base) + type_bonus, 1.0)
 
     def should_store(self, score: float) -> bool:
         return score >= self.THRESHOLD

@@ -17,7 +17,7 @@ Skill → Tool → Infrastructure (RAG / SQL / Report)
 Tool Registry:
 - tool_registry.py:    注册中心与重复定义检测 (P0 防护)
 """
-from backend.tools.session import set_session_id, _get_session_id  # noqa: F401
+from backend.tools.session import set_session_id, _get_session_id, _current_session_id  # noqa: F401
 from backend.tools.sql import execute_sql_tool, sql_query_tool  # noqa: F401
 from backend.tools.rag import search_knowledge_tool  # noqa: F401
 from backend.tools.report import generate_report_tool, run_report  # noqa: F401
@@ -33,6 +33,7 @@ from backend.tools.competitor import competitor_analyze_tool  # noqa: F401
 __all__ = [
     'set_session_id',
     '_get_session_id',
+    '_current_session_id',
     'execute_sql_tool',
     'sql_query_tool',
     'search_knowledge_tool',

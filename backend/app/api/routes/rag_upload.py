@@ -258,6 +258,9 @@ _MIME_BY_EXT: dict[str, set[str]] = {
     "txt":      {"text/plain"},
     "docx":     {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
     "xlsx":     {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+    # csv 解析器注册后同步补齐（F6 单一来源派生，避免漂移）；
+    # 浏览器/客户端常以 text/plain 声明，一并放行。
+    "csv":      {"text/csv", "text/plain"},
 }
 
 ALLOWED_MIME_TYPES: dict[str, set[str]] = {
@@ -581,6 +584,27 @@ async def _cleanup_failed_upload(filepath: str, was_overwrite: bool = False) -> 
         logger.warning(f"[RAG] 索引失败文件清理失败 {filepath}: {exc}")
 
 
+def _write_progress_redis(upload_id: str, stage: str, message: str = "", **extra) -> None:
+    """Phase 5: 将上传进度镜像写入 Redis Hash（跨实例可查）。失败不影响主流程。"""
+    try:
+        from backend.infra.redis.client import get_redis
+        r = get_redis()
+        if r is None:
+            return
+        from backend.config.redis import REDIS_KEY_PREFIX
+        key = f"{REDIS_KEY_PREFIX}upload:{upload_id}"
+        import json as _json
+        r.hset(key, mapping={
+            "stage": stage,
+            "message": message,
+            "updated_at": str(time.time()),
+            "detail": _json.dumps(extra, ensure_ascii=False, default=str) if extra else "{}",
+        })
+        r.expire(key, 600)
+    except Exception:
+        pass
+
+
 async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general", upload_elapsed_ms: int | None = None, was_overwrite: bool = False):
     """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志。
 
@@ -597,6 +621,7 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
 
     async def emit(stage: str, message: str = "", **extra):
         await queue.put({"stage": stage, "message": message, **extra})
+        _write_progress_redis(upload_id, stage, message, **extra)
 
     _upload_t0 = time.time()
     result = None
@@ -673,6 +698,12 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
                    stage_elapsed=stage_elapsed,
                    total_ms=total_ms)
         _remove_bak(filepath)  # 新版本已确认入库,清理覆盖备份
+        # Phase 4: 文档变更后失效该 KB 的答案缓存（避免返回过时答案）
+        try:
+            from backend.rag.answer_cache import get_answer_cache
+            get_answer_cache().invalidate_kb(kb_id)
+        except Exception as cache_err:
+            logger.debug(f"[RAG] 答案缓存失效失败（非致命）: {cache_err}")
     except Exception as e:
         await emit("done", "索引完成（文档信息获取失败）")
         logger.warning(f"[RAG] 获取入库文档信息失败: {e}")
@@ -731,6 +762,7 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
 
     def sync_emit(stage: str, message: str = "", **extra):
         """从同步线程调用：run_coroutine_threadsafe 把事件投到主 async loop 的队列"""
+        _write_progress_redis(upload_id, stage, message, **extra)
         if queue is None:
             return  # 无订阅者 → 只跳进度推送,不影响索引
         evt = {"stage": stage, "message": message, **extra}

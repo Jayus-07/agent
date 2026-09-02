@@ -35,6 +35,9 @@ LLM_MAX_CONCURRENCY = int(os.getenv("LLM_MAX_CONCURRENCY", "4"))
 LLM_RATE_LIMIT_QPS = float(os.getenv("LLM_RATE_LIMIT_QPS", "100"))
 LLM_RATE_LIMIT_BURST = float(os.getenv("LLM_RATE_LIMIT_BURST", "1000"))
 
+# 限流执行模式：off=仅日志（默认）| wait=阻塞等待 | reject=抛异常拒绝
+LLM_RATE_LIMIT_ENFORCE = os.getenv("LLM_RATE_LIMIT_ENFORCE", "off").strip().lower()
+
 # DeepSeek 配置（用于多 LLM provider 切换）
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
@@ -42,6 +45,13 @@ DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1"
 # MiniMax 配置（OpenAI 兼容协议）
 MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
 MINIMAX_API_BASE = os.getenv("MINIMAX_API_BASE", "https://api.minimax.chat/v1")
+
+# Qwen 在线配置（阿里云百炼 DashScope OpenAI 兼容端点）
+# 注意：与 Reranker 用的 DASHSCOPE_API_KEY 独立，问答模型单独用 QWEN_API_KEY
+QWEN_API_KEY = os.getenv("QWEN_API_KEY", "")
+QWEN_API_BASE = os.getenv(
+    "QWEN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+)
 
 # ── P1-7: LLM 韧性（重试 + 熔断 fallback）────────────────────
 # 瞬时错误（超时/连接/限流）的显式重试次数（0 = 不重试）

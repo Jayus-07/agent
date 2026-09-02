@@ -3,7 +3,6 @@
 替换原有的 hybrid.py::hybrid_retrieve 函数
 """
 
-from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Optional
 import logging
 
@@ -23,20 +22,37 @@ def enhanced_hybrid_retrieve(
     confidence_aggregator=None,
 ) -> Tuple[List, dict]:
     """
-    增强版混合检索 - 三路召回 + 置信度评估
+    增强版混合检索 - 三路召回 + 置信度评估（带 span 生命周期保障）
     
     Returns:
         (docs, {confidence_score, retrieval_strategy, metrics})
     """
-    
-    from backend.observability.tracer import SpanName, trace_collector
+    from backend.observability.tracer import trace_collector, SpanName
+
+    span = trace_collector.start_span("enhanced_hybrid_retrieval", name=SpanName.ENHANCED_RETRIEVAL, parent_id=None)
+    try:
+        return _enhanced_hybrid_retrieve_impl(
+            span, query, vector_retriever, bm25_retriever, rule_retriever,
+            k, doc_ids, rrf_k, metadata_filter, expanded_queries,
+            confidence_aggregator)
+    except Exception:
+        # P0-2: 旧实现异常路径漏调 end_span，trace 中出现 end_time='' 的
+        # 假 success span；这里统一强制收尾并标 error。
+        trace_collector.end_span(span, metrics={"status": "error_path"}, status="error")
+        raise
+
+
+def _enhanced_hybrid_retrieve_impl(
+    span, query, vector_retriever, bm25_retriever, rule_retriever,
+    k, doc_ids, rrf_k, metadata_filter, expanded_queries,
+    confidence_aggregator,
+) -> Tuple[List, dict]:
+    """三路召回主体。span 由外层创建，本函数负责在各出口正常收尾。"""
+    from backend.observability.tracer import trace_collector
     from backend.config.rag import (
-        VEC_MIN_SCORE, 
-        MULTI_QUERY_ENABLED,
+        VEC_MIN_SCORE,
         ADAPTIVE_VEC_THRESHOLDS,
     )
-    
-    span = trace_collector.start_span("enhanced_hybrid_retrieval", name=SpanName.RETRIEVAL)
     
     # Step 1: 查询复杂度分析 → 动态调整参数
     complexity = assess_query_complexity(query)
@@ -57,26 +73,27 @@ def enhanced_hybrid_retrieve(
         "fallback_used": False,
     }
     
-    # Step 2: 三路并行召回
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        
-        # Path A: Rule-Based (仅当启用时)
-        if rule_retriever:
-            rule_future = executor.submit(rule_retriever.retrieve, query, k=int(effective_k * 0.3))
-            metrics["rule_available"] = True
-        else:
-            rule_future = None
-            metrics["rule_available"] = False
-        
-        # Path B: Dense Vector Search
-        dense_future = executor.submit(vector_retriever.retrieve, query, k=effective_k, doc_ids=doc_ids,
-                                        metadata_filter=metadata_filter, expanded_queries=expanded_queries)
-        metrics["dense_available"] = True
-        
-        # Path C: Sparse Search (BM25+TF-IDF)  
-        sparse_future = executor.submit(bm25_retriever.invoke, query) if bm25_retriever else None
-        if sparse_future:
-            metrics["sparse_available"] = True
+    # Step 2: 三路并行召回（共享线程池，避免每次检索创建/销毁）
+    from backend.infra.thread_pools import retrieval_pool_outer
+    executor = retrieval_pool_outer()
+
+    # Path A: Rule-Based (仅当启用时)
+    if rule_retriever:
+        rule_future = executor.submit(rule_retriever.retrieve, query, k=int(effective_k * 0.3))
+        metrics["rule_available"] = True
+    else:
+        rule_future = None
+        metrics["rule_available"] = False
+
+    # Path B: Dense Vector Search
+    dense_future = executor.submit(vector_retriever.retrieve, query, k=effective_k, doc_ids=doc_ids,
+                                    metadata_filter=metadata_filter, expanded_queries=expanded_queries)
+    metrics["dense_available"] = True
+
+    # Path C: Sparse Search (BM25+TF-IDF)
+    sparse_future = executor.submit(bm25_retriever.invoke, query) if bm25_retriever else None
+    if sparse_future:
+        metrics["sparse_available"] = True
     
     # Step 3: 收集结果
     try:
@@ -147,39 +164,45 @@ def enhanced_hybrid_retrieve(
 
 def _ultimate_rrf_fusion(docs_from_all_paths: List, rrf_k: int, top_k: int) -> List:
     """
-    三路召回的统一 RRF 融合
-    权重分配：Rule-based > Dense > Sparse
+    三路召回的统一 RRF 融合（按 chunk_id 去重）
+    权重分配：Rule-based > Dense > Sparse；
+    无 chunk_type 标记的真实召回按 Dense 同权重 1.0 处理，
+    不得静默丢弃（历史缺陷：只认标记导致融合结果恒为空）。
     """
-    
-    rank_map = {}
-    docs_by_id = {}
-    
-    # Rule-based 完美匹配 → 最高权重 (x2)
-    for doc in docs_from_all_paths[:3]:  # 假设前 3 个是 rule_based
-        if doc.metadata.get("chunk_type") == "rule_match":
-            cid = doc.metadata.get("chunk_id")
-            rank_map[cid] = rank_map.get(cid, 0) + 2.0 / (rrf_k + 1)
+    _WEIGHTS = {
+        "rule_match": 2.0,
+        "dense_embedding": 1.0,
+        "bm25": 0.8,
+        "tfidf": 0.8,
+    }
+
+    rank_map: dict = {}
+    docs_by_id: dict = {}
+    groups: dict = {}
+
+    for doc in docs_from_all_paths:
+        cid = doc.metadata.get("chunk_id")
+        if not cid:
+            continue
+        if cid not in docs_by_id:
             docs_by_id[cid] = doc
-    
-    # Dense retrieval → 中等权重
-    for i, doc in enumerate(docs_from_all_paths):
-        if doc.metadata.get("chunk_type") == "dense_embedding":
-            cid = doc.metadata.get("chunk_id")
-            rank = list(rank_map.keys()).count(cid) + 1
-            rank_map[cid] = rank_map.get(cid, 0) + 1.0 / (rrf_k + rank)
-            docs_by_id[cid] = doc
-    
-    # Sparse retrieval → 基础权重
-    for i, doc in enumerate(docs_from_all_paths):
-        if doc.metadata.get("chunk_type") in ["bm25", "tfidf"]:
-            cid = doc.metadata.get("chunk_id")
-            rank = list(rank_map.keys()).count(cid) + 1
-            rank_map[cid] = rank_map.get(cid, 0) + 0.8 / (rrf_k + rank)
-            docs_by_id[cid] = doc
-    
+        weight = _WEIGHTS.get(doc.metadata.get("chunk_type", ""), 1.0)
+        groups.setdefault(weight, []).append(cid)
+
+    # 同一权重组内按出现次序取 rank，重复出现的同一路只计一次（去重）
+    for weight, cids in groups.items():
+        seen = set()
+        rank = 0
+        for cid in cids:
+            if cid in seen:
+                continue
+            seen.add(cid)
+            rank += 1
+            rank_map[cid] = rank_map.get(cid, 0.0) + weight / (rrf_k + rank)
+
     # 排序取 Top-K
     sorted_cids = sorted(rank_map.items(), key=lambda x: x[1], reverse=True)
-    
+
     return [docs_by_id[cid] for cid, _ in sorted_cids[:top_k]]
 
 

@@ -100,8 +100,8 @@ def generate_final_answer(
             f"\n\n建议换个关键词或查阅其他资料。"
         )
 
-    # Context Filter
-    if context_filter:
+    # Context Filter — 仅多步骤时启用（单步骤无交叉过滤意义，省掉 CrossEncoder ~1-2s）
+    if context_filter and len(step_results) > 1:
         step_results = filter_step_results(step_results, question)
 
     # —— 快速路径：RAG 有结果且其他步骤无实质输出时，直接透传 ——
@@ -123,6 +123,13 @@ def generate_final_answer(
         if rag_output:
             logger.info("[Reporter] RAG 有实质输出且其他步骤无，直接透传")
             return rag_output
+
+    # —— 快速路径：单步骤有实质输出时直接透传（省掉 LLM 总结 ~2s）——
+    if len(all_success) == 1:
+        sole_output = str(list(all_success.values())[0].get("output", ""))
+        if len(sole_output) > 5:
+            logger.info("[Reporter] 单步骤有实质输出，直接透传（跳过 LLM 总结）")
+            return sole_output
 
     # 提取参考文献
     rag_references = _extract_rag_references(step_results)

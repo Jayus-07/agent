@@ -40,11 +40,16 @@ services:
       - LOG_FORMAT=${LOG_FORMAT:-json}
       # 认证（fail-closed：未配置 API_KEY 时业务端点拒绝服务）
       - API_KEY=${API_KEY:-}
+      # Redis
+      - REDIS_ENABLED=${REDIS_ENABLED:-true}
+      - REDIS_URL=redis://redis:6379/0
     volumes:
       - app_data:/app/data
       - app_cache:/app/.cache
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
@@ -80,8 +85,24 @@ services:
       - ollama_data:/root/.ollama
     restart: unless-stopped
 
+  # ── Redis（缓存/限流/异步队列）──
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   app_data:
   app_cache:
   pg_data:
   ollama_data:
+  redis_data:

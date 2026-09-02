@@ -61,35 +61,19 @@ def data_collection_tool(
         enable_write=enable_write,
     )
 
-    # 清洗规则
-    clean_rules: dict[str, Any] = {}
-    if dedup_keys:
-        clean_rules["dedup_keys"] = [k.strip() for k in dedup_keys.split(",")]
+    # 去重键 → clean 阶段规则
+    dedup_key_list = [k.strip() for k in dedup_keys.split(",") if k.strip()] if dedup_keys else None
 
-    # 分析配置
+    # 分析维度 → analysis_config
     analysis_config: dict[str, Any] | None = None
-    if groupby_keys:
-        gk = [k.strip() for k in groupby_keys.split(",")]
-        # 推断数据集名称用于默认分组键
-        ds_name = ""
-        for ds in ("products", "orders", "shops", "inventory", "suppliers"):
-            if ds in source:
-                ds_name = ds
-                break
-        analysis_config = {
-            "groupby_keys": gk,
-            "dataset_name": ds_name,
-        }
-    elif "products" in source:
-        analysis_config = {"groupby_keys": "auto", "dataset_name": "products"}
-    elif "orders" in source:
-        analysis_config = {"groupby_keys": "auto", "dataset_name": "orders"}
+    if enable_analysis and groupby_keys:
+        analysis_config = {"groupby_keys": [k.strip() for k in groupby_keys.split(",") if k.strip()]}
 
     # 执行
     result = pipeline.run(
         source=source,
         table=target_table,
-        clean_rules=clean_rules,
+        dedup_keys=dedup_key_list,
         analysis_config=analysis_config,
         write_mode=write_mode,
     )
@@ -132,6 +116,55 @@ def _format_result(result: CollectResult) -> str:
                            f"({info['缺失率']:.1%}), {info['策略']}")
 
     return "\n".join(lines)
+
+
+def _build_pipeline(
+    fetcher_type: str = "static",
+    enable_analysis: bool = True,
+    enable_write: bool = False,
+):
+    """
+    构建数据采集 Pipeline
+    
+    Args:
+        fetcher_type: "static" | "http"
+        enable_analysis: 是否启用统计分析
+        enable_write: 是否启用数据库写入
+        
+    Returns:
+        CollectionPipeline 实例
+    """
+    # 选择 Fetcher
+    if fetcher_type == "http":
+        from backend.data_collection.fetchers.http_fetcher import HttpFetcher
+        fetcher = HttpFetcher()
+    else:  # default to static
+        from backend.data_collection.fetchers.static_fetcher import StaticDataFetcher
+        fetcher = StaticDataFetcher()
+    
+    # 构建其他组件
+    from backend.data_collection.parsers.json_parser import JsonParser
+    from backend.data_collection.cleaners.default_cleaner import DefaultCleaner
+    
+    components = {
+        "fetcher": fetcher,
+        "parser": JsonParser(),
+        "cleaner": DefaultCleaner(),
+    }
+    
+    # 可选：Analyzer
+    if enable_analysis:
+        from backend.data_collection.analyzers.stats_analyzer import StatsAnalyzer
+        components["analyzer"] = StatsAnalyzer()
+    
+    # 可选：Writer
+    if enable_write:
+        from backend.data_collection.writers.sqlalchemy_writer import SQLAlchemyWriter
+        from backend.data_collection.config import DC_DATABASE_URL
+        components["writer"] = SQLAlchemyWriter(DC_DATABASE_URL)
+    
+    from backend.data_collection.pipeline import CollectionPipeline
+    return CollectionPipeline(**components)
 
 
 # ==================== Tool Registry 自动注册 ====================

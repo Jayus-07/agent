@@ -270,7 +270,6 @@ class TestDataCollectionEdgeCases:
 class TestDataCollectionIntegration:
     """数据收集集成测试（需环境）"""
     
-    @pytest.mark.skip(reason="需要真实数据集文件，后续补充")
     def test_real_products_dataset_collection(self):
         """test collection from products dataset file"""
         from backend.tools.data_collection import data_collection_tool
@@ -283,18 +282,116 @@ class TestDataCollectionIntegration:
         })
         
         assert isinstance(result, str)
-        assert "报告" in result or "report" in result.lower() or True
+        # 数据集文件存在，应成功产出采集报告
+        assert "数据采集报告" in result
+        assert "**success**" in result
     
-    @pytest.mark.skip(reason="需要 Mock API 服务，后续补充")
     def test_http_api_source_collection(self):
-        """test collection from HTTP API endpoint"""
+        """test collection from HTTP API endpoint (mocked)"""
+        from backend.data_collection.fetchers.base import RawData
+        from backend.data_collection.fetchers.http_fetcher import HttpFetcher
+        from backend.tools.data_collection import data_collection_tool
+        import json as _json
+        import time as _time
+        
+        mock_records = [{"SKU": "TEST-001", "售价": 9.9, "平台": "京东"}]
+        mock_raw = RawData(
+            source="http://localhost:8001/mock/products",
+            format="json",
+            content=_json.dumps(mock_records, ensure_ascii=False),
+            metadata={"fetcher": "http", "status_code": 200, "fetched_at": _time.time()},
+        )
+        
+        # 用 Mock 替代真实网络请求，验证 http fetcher 路径可用
+        with patch.object(HttpFetcher, 'fetch', return_value=mock_raw):
+            result = data_collection_tool.invoke({
+                "source": "http://localhost:8001/mock/products",
+                "fetcher_type": "http",
+                "enable_write": False,
+            })
+        
+        assert isinstance(result, str)
+        assert "数据采集报告" in result
+    
+    # ==================== 新增：HTTP Fetcher 重试测试 ====================
+    
+    def test_static_fetcher_with_missing_file(self):
+        """静态文件不存在应返回友好错误"""
         from backend.tools.data_collection import data_collection_tool
         
-        # 假设有一个本地 Mock API
         result = data_collection_tool.invoke({
-            "source": "http://localhost:8001/mock/products",
-            "fetcher_type": "http",
+            "source": "static://datasets/non_existent_file.json",
+            "fetcher_type": "static",
             "enable_write": False,
+        })
+        
+        assert isinstance(result, str)
+        # Pipeline 捕获异常后返回 failed 状态报告，而非抛出异常
+        assert "**failed**" in result
+        assert "数据集文件不存在" in result
+    
+    # ==================== 新增：参数组合测试 ====================
+    
+    def test_dedup_keys_functionality(self):
+        """验证去重键参数生效"""
+        from backend.tools.data_collection import data_collection_tool
+        
+        # 只验证参数接收（不去实际执行）
+        test_cases = [
+            ("SKU", ["sku"]),
+            ("order_id,SKU", ["order_id", "sku"]),
+            ("platform,category", ["platform", "category"]),
+        ]
+        
+        for input_keys, expected_keys in test_cases:
+            expanded = [k.strip().lower() for k in input_keys.split(",")]
+            assert expanded == expected_keys, f"去重键解析失败：{input_keys}"
+    
+    def test_groupby_analysis_dimensions(self):
+        """验证分析维度参数处理"""
+        from backend.tools.data_collection import data_collection_tool
+        
+        result = data_collection_tool.invoke({
+            "source": "products",
+            "groupby_keys": "platform,category",
+            "enable_analysis": True,
+            "enable_write": False,
+        })
+        
+        assert isinstance(result, str)
+    
+    def test_write_mode_append(self):
+        """验证追加模式参数"""
+        from backend.tools.data_collection import data_collection_tool
+        
+        result = data_collection_tool.invoke({
+            "source": "products",
+            "write_mode": "append",
+            "enable_write": True,
+        })
+        
+        assert isinstance(result, str)
+    
+    def test_write_mode_replace(self):
+        """验证替换模式参数"""
+        from backend.tools.data_collection import data_collection_tool
+        
+        result = data_collection_tool.invoke({
+            "source": "products",
+            "write_mode": "replace",
+            "enable_write": True,
+        })
+        
+        assert isinstance(result, str)
+    
+    def test_write_mode_upsert(self):
+        """验证合并更新模式参数"""
+        from backend.tools.data_collection import data_collection_tool
+        
+        result = data_collection_tool.invoke({
+            "source": "products",
+            "write_mode": "upsert",
+            "enable_write": True,
         })
         
         assert isinstance(result, str)

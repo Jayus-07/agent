@@ -183,6 +183,12 @@ class TestCookieSuspect:
 
 
 class TestRobotsCompliance:
+    @pytest.fixture(autouse=True)
+    def _clear_robots_override(self, monkeypatch):
+        """根 .env 可能带 ROBOTS_OVERRIDE=warn_only（用户运维开关），
+        测试拦截行为前必须隔离该环境噪声；test_warn_only_override 自行 setenv 不受影响。"""
+        monkeypatch.delenv("ROBOTS_OVERRIDE", raising=False)
+
     def _seed_cache(self, store, domain, text):
         cache = {domain: {"fetched_at": time.time(), "text": text}}
         store.set_config("anti_ban:robots", json.dumps(cache))

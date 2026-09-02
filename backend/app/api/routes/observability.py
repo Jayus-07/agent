@@ -1,7 +1,7 @@
 """可观测性 REST API — traces / metrics / resources / alerts / graph
 
-数据源统一在 `backend.rag.tracer.trace_collector`（之前是双 store，
-已删除 `orchestration.TraceStore` 死代码）。
+数据源统一在 `backend.rag.tracer.trace_collector`：
+Langfuse 主存储（读路径优先），SQLite TraceStore 保留作为降级兜底。
 """
 
 import os
@@ -75,6 +75,9 @@ def _to_trace_dto(t) -> dict:
     sla_ms = get("sla_threshold_ms", 10000) or 10000
     all_spans = get("spans", [])
     has_error = any((s.get("status") if isinstance(s, dict) else s.status) == "error" for s in all_spans)
+    stored_status = get("status", "")
+    if not stored_status:
+        stored_status = "error" if has_error else ("running" if total_ms == 0 else "success")
     return {
         "id": get("id", ""),
         "timestamp": get("timestamp", ""),
@@ -88,7 +91,7 @@ def _to_trace_dto(t) -> dict:
         "cost_usd": get("cost_usd", 0),
         "error": get("error", {}),
         "metadata": get("metadata", {}),
-        "status": "error" if has_error else ("running" if total_ms == 0 else "success"),
+        "status": stored_status,
         "workflow_name": get("workflow_name", ""),
         "root_span_id": get("root_span_id", ""),
         "spans": [_to_span_dto(s, all_spans, total_ms) for s in all_spans],
@@ -134,13 +137,74 @@ def _stored_dict_to_dto(d: dict) -> dict:
 # ═══════════════════════════════════════════════════
 
 @router.get("/traces")
-async def list_traces(limit: int = Query(20, ge=1, le=200)):
-    """最近 N 条 trace 摘要（内存 + SQLite 合并去重）"""
-    store = get_trace_store()
-    # trace_collector.list() 已从 SQLite 读取，内部做了去重
-    stored = store.list(limit)
-    traces = [_stored_dict_to_dto(d) for d in stored]
+async def list_traces(limit: int = Query(20, ge=1, le=200),
+                      workflow_name: str | None = Query(None)):
+    """最近 N 条 trace 摘要（Langfuse 主查询，SQLite 降级）。
+
+    workflow_name 服务端过滤：前端不再拉 200 条本地 filter。
+    """
+    stored = trace_collector.list(limit)
+    if workflow_name:
+        stored = [d for d in stored
+                  if (d.get("workflow_name") if isinstance(d, dict)
+                      else getattr(d, "workflow_name", "")) == workflow_name]
+    traces = [_stored_dict_to_dto(d) if isinstance(d, dict) else _to_trace_dto(d)
+              for d in stored]
     return {"traces": traces}
+
+
+@router.get("/traces/stats")
+async def trace_stats(hours: float = Query(24, gt=0, le=24 * 30),
+                      workflow_name: str | None = Query(None)):
+    """时间窗内聚合统计（前端 StatsBar 下沉，不再客户端遍历 200 条）。
+
+    数据源：P0 analytics 结构化层优先（含新写入数据），否则 SQLite 详情库摘要。
+    口径与前端原实现一致：成功率/均值/P95 只统计已完成（duration>0）的 trace。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    def _ts_ok(ts: str) -> bool:
+        try:
+            dt = datetime.fromisoformat((ts or "").replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt >= cutoff
+        except Exception:
+            return False
+
+    rows: list[dict] = []
+    try:
+        from backend.observability.analytics_store import get_analytics_store
+        store = get_analytics_store()
+        if store.enabled and store.count() > 0:
+            rows = store.list(500, workflow_name=workflow_name)
+    except Exception:
+        logger.debug("stats: analytics 层不可用，降级 SQLite", exc_info=True)
+    if not rows:
+        rows = [r for r in trace_collector.list(200) if isinstance(r, dict)]
+        if workflow_name:
+            rows = [r for r in rows if r.get("workflow_name") == workflow_name]
+
+    rows = [r for r in rows if _ts_ok(r.get("timestamp", ""))]
+    completed = [r for r in rows if (r.get("duration_ms", 0) or 0) > 0]
+    n = len(completed)
+
+    def _is_err(r: dict) -> bool:
+        return r.get("status") == "error" or bool(r.get("error"))
+
+    durations = sorted((r.get("duration_ms", 0) for r in completed), reverse=True)
+    p95 = durations[int(n * 0.05)] if n else 0
+    err_count = sum(1 for r in rows if _is_err(r))
+    return {
+        "total_24h": len(rows),
+        "success_rate": round((n - sum(1 for r in completed if _is_err(r))) / n, 3) if n else 0,
+        "avg_duration_ms": round(sum(r.get("duration_ms", 0) for r in completed) / n) if n else 0,
+        "p95_duration_ms": p95,
+        "error_count": err_count,
+        "total_cost_usd": round(sum(r.get("cost_usd", 0) or 0 for r in rows), 6),
+    }
 
 
 @router.get("/traces/active")
@@ -152,8 +216,9 @@ async def list_active_traces():
 
 @router.get("/traces/{trace_id}")
 async def get_trace(trace_id: str):
-    """获取单条 trace 完整详情（内存优先 + SQLite 兜底）"""
-    # 优先查内存（最新 trace），fallback 到 SQLite（重启后仍可查）
+    """获取单条 trace 完整详情（Langfuse 优先，SQLite 兜底）"""
+    # trace_collector.get() 内部已做 Langfuse → SQLite 两级回退；
+    # 再保留一层 store 直读兜底（极端情况下 collector 异常）
     data = trace_collector.get(trace_id)
     if data is None:
         store = get_trace_store()
@@ -171,7 +236,8 @@ async def get_trace(trace_id: str):
 async def list_rag_traces(limit: int = Query(50, ge=1, le=200)):
     """最近 N 条 RAG Trace（与 /traces 共享数据源，仅保留向后兼容）"""
     traces = trace_collector.list(limit)
-    return {"traces": [_to_trace_dto(t) for t in traces]}
+    return {"traces": [_stored_dict_to_dto(t) if isinstance(t, dict) else _to_trace_dto(t)
+                       for t in traces]}
 
 
 @router.get("/rag-traces/stream")
@@ -184,10 +250,14 @@ async def stream_rag_traces():
         last_id = ""
         while True:
             traces = trace_collector.list(1)
-            if traces and traces[0].id != last_id:
-                t = traces[0]
-                last_id = t.id
-                data = json.dumps(_to_trace_dto(t), ensure_ascii=False)
+            tid = traces[0].get("id") if traces and isinstance(traces[0], dict) \
+                else (traces[0].id if traces else "")
+            if traces and tid and tid != last_id:
+                last_id = tid
+                data = json.dumps(
+                    _stored_dict_to_dto(traces[0]) if isinstance(traces[0], dict)
+                    else _to_trace_dto(traces[0]),
+                    ensure_ascii=False)
                 yield f"data: {data}\n\n"
             await asyncio.sleep(1)
 
@@ -196,7 +266,7 @@ async def stream_rag_traces():
 
 @router.get("/rag-traces/{trace_id}")
 async def get_rag_trace(trace_id: str):
-    """获取单条 RAG Trace 详情（内存优先，SQLite 兜底）"""
+    """获取单条 RAG Trace 详情（Langfuse 优先，SQLite 兜底）"""
     t = trace_collector.get(trace_id)
     if t is None:
         data = get_trace_store().get(trace_id)

@@ -130,6 +130,15 @@ class SessionRepository:
         )
         return result.rowcount > 0
 
+    async def update_summary(self, session_id: str, summary: str) -> bool:
+        """持久化 L2 自动摘要（消息数超阈后的压缩结果）"""
+        result = await self._s.execute(
+            update(ChatSession)
+            .where(ChatSession.session_id == session_id)
+            .values(summary=summary, updated_at=datetime.now(timezone.utc))
+        )
+        return result.rowcount > 0
+
     async def update_context(self, session_id: str, context: str) -> bool:
         """更新 Agent 工作上下文（JSON: sql_results/rag_docs/report/turns）"""
         result = await self._s.execute(

@@ -168,7 +168,7 @@ class DashScopeReranker(BaseDocumentCompressor):
             return []
 
         try:
-            texts = [doc.page_content for doc in documents]
+            texts = [doc.page_content[:2000] for doc in documents]
             ranked_results = self.rank(query, texts, top_k=kwargs.get("top_k", RERANK_TOP_K))
 
             # 应用阈值过滤并限制数量
@@ -256,8 +256,7 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
         )
 
         if scores is None:
-            # Fallback: 返回所有文档索引，分数为 0.5
-            return [(i, 0.5) for i in range(min(len(documents), top_k))]
+            return None
 
         # 配对并排序
         indexed_scores = list(enumerate(scores))
@@ -280,8 +279,18 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
             trace_collector.end_span(span, metrics={"input_docs": 0, "output_docs": 0, "backend_type": "local"})
             return []
 
-        texts = [doc.page_content for doc in documents]
+        texts = [doc.page_content[:2000] for doc in documents]
         scored_indexed = self.rank(query, texts, top_k=kwargs.get("top_k", RERANK_TOP_K))
+
+        if scored_indexed is None:
+            # 超时/失败：透传原文档，标记为不可靠供下游 Gate 决策
+            for doc in documents:
+                doc.metadata["rerank_unreliable"] = True
+            trace_collector.end_span(
+                span,
+                metrics={"input_docs": len(documents), "output_docs": len(documents),
+                         "backend_type": "local", "fallback": "timeout_passthrough"})
+            return list(documents)
 
         # 创建索引映射
         doc_idx_map = {idx: doc for idx, _ in scored_indexed}
@@ -332,6 +341,11 @@ def get_reranker_backend() -> BaseDocumentCompressor:
     api_key = os.getenv("DASHSCOPE_API_KEY")
 
     if backend_type == "dashscope" and api_key:
+        if not DASHSCOPE_AVAILABLE:
+            # SDK 缺失时降级本地模型而非抛异常：构造失败会让上层降级路径
+            # 接管，避免整个重排环节不可用（2026-09-03 事故根因之一）
+            logger.warning("缺少 dashscope SDK，降级到本地 CrossEncoder 模型")
+            return LocalCrossEncoderBackend()
         logger.info("使用 DashScope API 进行重排序")
         return DashScopeReranker(api_key=api_key)
     else:
@@ -365,140 +379,77 @@ class RerankCompressor(BaseDocumentCompressor):
         self.__dict__['_backend_type'] = "unknown"
 
     def _ensure_backend(self):
-        """懒加载后端实例"""
+        """懒加载后端实例（线程安全）"""
         if self.backend is None:
-            self.__dict__['backend'] = get_reranker_backend()
-            if isinstance(self.backend, DashScopeReranker):
-                self.__dict__['_backend_type'] = "dashscope"
-            else:
-                self.__dict__['_backend_type'] = "local"
+            import threading
+            if not hasattr(self, '_ensure_lock'):
+                self.__dict__['_ensure_lock'] = threading.Lock()
+            with self._ensure_lock:
+                if self.backend is None:
+                    self.__dict__['backend'] = get_reranker_backend()
+                    if isinstance(self.backend, DashScopeReranker):
+                        self.__dict__['_backend_type'] = "dashscope"
+                    else:
+                        self.__dict__['_backend_type'] = "local"
 
     def compress_documents(self, documents, query, **kwargs):
         from backend.observability.tracer import trace_collector
-        
-        self._ensure_backend()
-        
+
+        # 后端懒加载提前到 span 之前，确保 span name 正确
+        try:
+            self._ensure_backend()
+        except Exception:
+            pass  # 下方 try 块会再次尝试并捕获完整异常
+
         span = trace_collector.start_span("rerank", name=self._backend_type.capitalize())
-        
+
         if not documents:
             trace_collector.end_span(span,
-                                     metrics={"input_docs": 0, "output_docs": 0, 
+                                     metrics={"input_docs": 0, "output_docs": 0,
                                              "threshold": self.threshold, "backend_type": self._backend_type})
             return []
-        
+
+        # 小文档集合跳过 rerank API 调用（≤2 篇排序无意义）
+        if len(documents) <= 2:
+            for doc in documents:
+                doc.metadata.setdefault("rerank_score", 1.0)
+            trace_collector.end_span(span,
+                                     metrics={"input_docs": len(documents), "output_docs": len(documents),
+                                             "backend_type": self._backend_type, "skipped": "small_n"})
+            return list(documents)
+
         in_count = len(documents)
-        
+
         try:
+            self._ensure_backend()
+
             # 委托给后端实现 - 使用实例的 threshold 属性而非从 config 导入
             result_docs = self.backend.compress_documents(
-                list(documents), 
-                query, 
+                list(documents),
+                query,
                 top_k=self.top_k,
                 threshold=self.threshold
             )
-            
+
             trace_collector.end_span(span,
-                                 metrics={"input_docs": in_count, 
-                                         "output_docs": len(result_docs), 
+                                 metrics={"input_docs": in_count,
+                                         "output_docs": len(result_docs),
                                          "threshold": RERANK_SCORE_THRESHOLD,
                                          "backend_type": self._backend_type})
             return result_docs
-            
+
         except Exception as e:
             trace_collector.end_span(span,
-                                   metrics={"input_docs": in_count, 
-                                           "output_docs": 0, 
+                                   metrics={"input_docs": in_count,
+                                           "output_docs": min(in_count, self.top_k),
                                            "threshold": RERANK_SCORE_THRESHOLD,
                                            "backend_type": self._backend_type,
+                                           "fallback": "passthrough",
                                            "error": str(e)[:100]},
                                    status="error")
-            logger.error(f"RerankCompressorscompress_documents失败：{e}")
-            # 降级：返回空列表或原始文档
-            return []
+            logger.error(f"RerankCompressor 重排失败，降级透传原文档：{e}")
+            # 降级契约：重排是增强组件，失败不得减少召回数量 —— 透传原文档，
+            # 由下游 Evidence Gate 基于其他信号判定，而非静默清空触发误拒答
+            return list(documents)[: self.top_k]
 
 
-def rerank(
-        query,
-        docs,
-        top_k=3,
-        debug=0
-):
-    """
-    全局重排序函数（向后兼容）
-
-    参数:
-        query: 用户查询字符串
-        docs: 待重排的文档列表 (每个元素应包含 page_content 和 metadata 属性)
-        top_k: 最终返回的文档数量，默认为 3
-        debug: 是否打印调试信息，默认为 False
-
-    返回:
-        重排后得分最高的 top_k 个文档，每个元素为 (doc, score) 元组
-    """
-    if not docs:
-        return []
-
-    # 使用工厂函数获取后端实例
-    backend = get_reranker_backend()
-    primary_backend_type = type(backend).__name__
-    
-    # 转换为文本列表
-    texts = [doc.page_content for doc in docs]
-    
-    # 尝试使用首选后端，如果失败则降级
-    result_docs = None
-    used_fallback = False
-    error_reason = None
-    
-    try:
-        ranked_results = backend.rank(query, texts, top_k=top_k)
-        
-        # 应用阈值过滤并构建结果
-        threshold = RERANK_SCORE_THRESHOLD
-        result_docs = [
-            (docs[idx], score)
-            for idx, score in ranked_results
-            if score > threshold
-        ][:top_k]
-
-    except Exception as e:
-        error_reason = str(e)[:100]
-        logger.warning(f"Primary backend ({primary_backend_type}) failed: {error_reason}")
-        
-        # 尝试降级到本地模型
-        if isinstance(backend, DashScopeReranker):
-            logger.info("Falling back to local CrossEncoder model...")
-            fallback_backend = LocalCrossEncoderBackend()
-            try:
-                ranked_results = fallback_backend.rank(query, texts, top_k=top_k)
-                threshold = RERANK_SCORE_THRESHOLD
-                result_docs = [
-                    (docs[idx], score)
-                    for idx, score in ranked_results
-                    if score > threshold
-                ][:top_k]
-                used_fallback = True
-            except Exception as fallback_error:
-                logger.error(f"Fallback to local model also failed: {fallback_error}")
-                raise
-        else:
-            raise
-
-    # 将重排序分数写入 metadata，供来源展示使用
-    for doc, score in result_docs:
-        doc.metadata["rerank_score"] = round(float(score), 4)
-
-    if debug:
-        logger.debug("Global rerank results:")
-        for i, (doc, score) in enumerate(result_docs[:10]):
-            logger.debug(
-                f"[{i+1}] score={score:.4f} "
-                f"source={doc.metadata.get('source_file')} "
-                f"chunk_id={doc.metadata.get('chunk_id')} "
-                f"content={doc.page_content[:50]}..."
-            )
-
-    backend_name = "DashScope API" if isinstance(backend, DashScopeReranker) else "Local Model"
-    status = " (with fallback)" if used_fallback else ""
-    logger.info(f"Re-rank complete ({backend_name}{status}): {len(docs)} -> {len(result_docs)} (threshold={RERANK_SCORE_THRESHOLD})")
-    return result_docs

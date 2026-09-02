@@ -18,57 +18,23 @@ Tool 选择由 Supervisor + ToolRegistry 完成。
 
 import hashlib
 import json
-import threading
-import time
 
 from backend.infra.llm import llm
+from backend.infra.cache import get_cache
 from backend.orchestration.tool_registry import tool_registry
 from backend.observability.alerts import make_alert, log_degradation
 from backend.prompts.planner import PLANNER_SYSTEM, is_knowledge_question
 from backend.shared.logger import logger
 
-# ── P2 性能优化：Planner 缓存 ──
-_PLAN_CACHE: dict[str, tuple[float, dict]] = {}
-_cache_lock = threading.Lock()
-_CACHE_TTL = 300  # 5 分钟
-_CACHE_MAX = 64
-
 
 def _cache_key(question: str, kb_id: str) -> str:
-    """缓存键：问题 + KB ID 的 hash。"""
+    """缓存键：问题 + KB ID + capability 集合的 hash。"""
     caps = tuple(sorted(tool_registry.get_available_capabilities()))
     raw = f"{question}|{kb_id}|{caps}"
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
-def _cache_get(question: str, kb_id: str) -> dict | None:
-    key = _cache_key(question, kb_id)
-    _cache_lock.acquire()
-    try:
-        now = time.time()
-        expired = [k for k, v in _PLAN_CACHE.items() if now - v[0] > _CACHE_TTL]
-        for k in expired:
-            del _PLAN_CACHE[k]
-        if key in _PLAN_CACHE:
-            ts, plan = _PLAN_CACHE[key]
-            if now - ts <= _CACHE_TTL:
-                return plan
-            del _PLAN_CACHE[key]
-    finally:
-        _cache_lock.release()
-    return None
-
-
-def _cache_set(question: str, kb_id: str, plan: dict) -> None:
-    key = _cache_key(question, kb_id)
-    _cache_lock.acquire()
-    try:
-        if len(_PLAN_CACHE) >= _CACHE_MAX:
-            oldest = min(_PLAN_CACHE.items(), key=lambda x: x[1][0])
-            del _PLAN_CACHE[oldest[0]]
-        _PLAN_CACHE[key] = (time.time(), plan)
-    finally:
-        _cache_lock.release()
+_planner_cache = get_cache("planner", ttl=300)
 
 
 # =====================================================
@@ -126,7 +92,7 @@ def planner_node(state: dict) -> dict:
         router_hint_text = f"\n\n【Router 建议】以下能力可能相关（仅供参考，可扩展）：{caps_text}"
 
     # ── P2 性能优化：缓存命中 → 跳过 LLM ──
-    cached = _cache_get(question, kb_id)
+    cached = _planner_cache.get_json(_cache_key(question, kb_id))
     if cached is not None:
         logger.info(f"[Planner] 缓存命中 → {len(cached.get('nodes',{}))} 节点")
         return {"plan": cached}
@@ -166,7 +132,7 @@ def planner_node(state: dict) -> dict:
         logger.info(f"[Planner] 计划生成: {node_count} 个节点, {edge_count} 条依赖")
 
         # P2 perf: 写入缓存
-        _cache_set(question, kb_id, plan)
+        _planner_cache.set_json(_cache_key(question, kb_id), plan)
 
         # 兜底：空计划 → 自动添加 search_knowledge 步骤
         if not plan.get("nodes"):

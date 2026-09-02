@@ -1,0 +1,36 @@
+# 可观测性分析库 — 独立 PostgreSQL（P0 地基）
+#
+# 用途：为自研 Trace 模块提供结构化分析层（trace_summary 双写目标），
+#       后续承载 Sessions 聚合 / Cost 聚合 / Prompts / 评测数据集。
+#
+# 设计约束：
+#   - 与主业务栈（docker-compose.yml）、Langfuse 栈（docker-compose.langfuse.yml）完全隔离
+#   - 宿主机端口 5433（5432 被本机原生 PostgreSQL 18 占用）
+#   - 专用卷，不影响任何其他数据
+#
+# 启动：docker compose -f docker-compose.observability.yml up -d
+# 停止：docker compose -f docker-compose.observability.yml down
+
+name: observability
+
+services:
+  obs-postgres:
+    image: postgres:17-alpine
+    container_name: obs-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${OBS_PG_DB:-observability}
+      POSTGRES_USER: ${OBS_PG_USER:-obs_admin}
+      POSTGRES_PASSWORD: ${OBS_PG_PASSWORD:-obs-local-2026}
+    ports:
+      - "5433:5432"
+    volumes:
+      - obs_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${OBS_PG_USER:-obs_admin} -d ${OBS_PG_DB:-observability}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  obs_pg_data:

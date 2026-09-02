@@ -963,7 +963,14 @@ class IncrementalIndexer:
                     'classify', parent_id=parent_span_id, name="Classify",
                     type="llm", kind=SpanKind.INDEX_CLASSIFY.value,
                 )
-            doc_type, confidence, cls_detail = classify_with_confidence(full_text, filename=fname, file_path=fpath, return_detail=True)
+            try:
+                doc_type, confidence, cls_detail = classify_with_confidence(full_text, filename=fname, file_path=fpath, return_detail=True)
+            except Exception:
+                # 异常时也要关闭 span，避免 classify 泄漏（P0-2）
+                if parent_span_id:
+                    trace_collector.end_span(classify_span,
+                        metrics={"error": "classify_failed"}, status="error")
+                raise
             if parent_span_id:
                 trace_collector.end_span(classify_span, metrics={"doc_type": doc_type, "confidence": round(confidence, 3)},
                     output=locals().get("cls_detail", {}))

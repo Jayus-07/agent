@@ -90,6 +90,20 @@ nli_coverage_rate = Gauge(
     "NLI 有效校验率（0-1，1 = 无超时）",
 )
 
+# ── Input Guard 可观测性（输入侧门禁）──
+input_guard_total = Counter(
+    "input_guard_total",
+    "Input Guard 判定总数（按动作与分类）",
+    labelnames=("action", "category"),  # allow|clarify|block|degrade × 分类
+)
+
+input_guard_duration_seconds = Histogram(
+    "input_guard_duration_seconds",
+    "Input Guard 判定耗时（秒，按决策来源层）",
+    labelnames=("layer",),  # rule | llm | fallback
+    buckets=(0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 15.0),
+)
+
 # ── 降级/韧性告警（P1-8）──
 degradation_alerts_total = Counter(
     "degradation_alerts_total",
@@ -102,6 +116,31 @@ circuit_breaker_state = Gauge(
     "circuit_breaker_state",
     "熔断器状态（0=closed, 1=half_open, 2=open）",
     labelnames=("name",),
+)
+
+# ── Trace 数据质量指标（2026-09-03 观测数据记录优化）──
+trace_finish_total = Counter(
+    "trace_finish_total",
+    "完成的 trace 总数（按顶层状态，含 rejected）",
+    labelnames=("status",),  # success | error | rejected
+)
+trace_rejection_total = Counter(
+    "trace_rejection_total",
+    "Evidence Gate 拒答 trace 数（按拒答层）",
+    labelnames=("layer",),  # retrieval | rerank | evaluation | claim_verify | ...
+)
+trace_span_leak_total = Counter(
+    "trace_span_leak_total",
+    "未关闭即被强制收尾的 span 数（埋点泄漏）",
+)
+trace_uncovered_ratio = Histogram(
+    "trace_uncovered_ratio",
+    "trace 总耗时中无 span 归因的比例（0-1，高值 = 埋点黑洞）",
+    buckets=(0.0, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0),
+)
+llm_usage_missing_total = Counter(
+    "llm_usage_missing_total",
+    "LLM 调用后 token 用量采集失败的次数",
 )
 
 
@@ -247,6 +286,27 @@ def record_router_decision(mode: str, layer: str, confidence: float) -> None:
         pass
 
 
+def record_trace_finish(status: str, rejection_layer: str,
+                        leaked_spans: int, uncovered_ratio: float) -> None:
+    """埋点一条完成的 trace（2026-09-03）。
+
+    Args:
+        status: 顶层聚合状态（success / error / rejected）
+        rejection_layer: 拒答层（仅 rejected 时非空）
+        leaked_spans: 被强制收尾的未关闭 span 数
+        uncovered_ratio: 无 span 归因耗时占比 0-1
+    """
+    try:
+        trace_finish_total.labels(status=status).inc()
+        if status == "rejected":
+            trace_rejection_total.labels(layer=rejection_layer or "unknown").inc()
+        if leaked_spans > 0:
+            trace_span_leak_total.inc(leaked_spans)
+        trace_uncovered_ratio.observe(max(0.0, min(1.0, uncovered_ratio)))
+    except Exception:
+        pass
+
+
 def render_metrics() -> tuple[bytes, str]:
     """生成 Prometheus 文本格式输出。
 
@@ -280,5 +340,12 @@ __all__ = [
     "record_feedback",
     "update_metadata_coverage",
     "record_router_decision",
+    "record_trace_finish",
+    # Trace 数据质量指标（2026-09-03）
+    "trace_finish_total",
+    "trace_rejection_total",
+    "trace_span_leak_total",
+    "trace_uncovered_ratio",
+    "llm_usage_missing_total",
     "render_metrics",
 ]

@@ -125,6 +125,14 @@ async def chat_stream(
     agent = get_multi_agent()
     kb_id = req.kb_id or "default"
     request_id = req.request_id or "default"
+
+    # user_id 解析：请求体优先，信任网关注头次之
+    from backend.config import TRUST_USER_HEADER, USER_ID_HEADER
+    user_id = req.user_id or "default"
+    if user_id == "default" and TRUST_USER_HEADER:
+        header_uid = r.headers.get(USER_ID_HEADER)
+        if header_uid:
+            user_id = header_uid
     key = _request_key(req.session_id, request_id)
 
     # —— 队列与中止标志延后到生成器内部，确保只在真正进入流式后注册 _active_stops；
@@ -153,6 +161,7 @@ async def chat_stream(
                 req.session_id,
                 kb_id=kb_id,
                 stop_event=stop_event,
+                user_id=user_id,
             ):
                 if stop_event.is_set():
                     break

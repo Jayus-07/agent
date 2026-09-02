@@ -67,6 +67,8 @@ def _stub_chain():
     chain._last_faithfulness = None
     chain._last_sources = []
     chain._last_query = ""
+    chain.chain = None
+    chain.chain_standalone = None
     chain.gate = EvidenceGateController()
     chain.corrector = SelfCorrectionStrategy()
     chain.formatter = CitationFormatter()
@@ -106,6 +108,7 @@ class TestNormalQA:
             return {"input": inp, "context": docs,
                     "answer": _qa_answer("退货窗口为 30 天。")}
         chain.chain = SimpleNamespace(invoke=fake_invoke)
+        chain.chain_standalone = chain.chain
 
         # 避免真实 NLI/LLM 评估：仅关闭 Faithfulness 的 LLM 调用
         monkeypatch.setattr(chain, "_evaluate", lambda answer, ctx: answer)
@@ -130,6 +133,7 @@ class TestEmptyRecallReject:
         chain.chain = SimpleNamespace(invoke=lambda inp: {
             "input": inp, "context": [], "answer": "不应被输出的内容",
         })
+        chain.chain_standalone = chain.chain
 
         def boom(*a, **kw):
             raise AssertionError("Gate 拒答后不应进入 verify 生成路径")
@@ -154,6 +158,7 @@ class TestGateRejection:
         chain.chain = SimpleNamespace(invoke=lambda inp: {
             "input": inp, "context": docs, "answer": "低相关度的幻觉答案",
         })
+        chain.chain_standalone = chain.chain
 
         def boom(*a, **kw):
             raise AssertionError("Gate 拒答后不应进入 verify 生成路径")
@@ -268,6 +273,7 @@ class TestTraceSpans:
             "input": inp, "context": docs,
             "answer": _qa_answer("退货窗口为 30 天。"),
         })
+        chain.chain_standalone = chain.chain
 
         # Faithfulness：替换 LLM 评估为确定性结果（避免真实 NLI 调用）
         def fake_check(answer, context_docs):
@@ -285,6 +291,10 @@ class TestTraceSpans:
         chain.ask("退货窗口是多久？", session_id="t1")
 
         names = {sp.name for sp in trace.spans}
+        # P1-8: 未触发的 mq_check 以 skipped 结束时会被折叠进 root 的
+        # skipped_stages（信息无损），仍视为"已产生"。
+        root = next(sp for sp in trace.spans if sp.parent_id is None)
+        names |= {st["name"] for st in root.metrics.get("skipped_stages", [])}
         expected = [
             SpanName.RETRIEVAL, SpanName.MULTI_QUERY, SpanName.META_PARSE,
             SpanName.CITATION, SpanName.CLAIM_VERIFY, SpanName.EVALUATE,
@@ -359,6 +369,7 @@ class TestEvaluationGate:
             "input": inp, "context": docs,
             "answer": _qa_answer("退货窗口为 30 天。"),
         })
+        chain.chain_standalone = chain.chain
 
         def fake_check(answer, context_docs):
             return FaithfulnessResult(
@@ -397,6 +408,7 @@ class TestEvaluationGate:
             "input": inp, "context": docs,
             "answer": _qa_answer("退货窗口为 30 天。"),
         })
+        chain.chain_standalone = chain.chain
         monkeypatch.setattr(chain, "_evaluate", lambda answer, ctx: answer)
         trace, t0 = _start_trace("eval-gate-none")
         monkeypatch.setattr(chain, "_start", lambda q, sid: (trace, t0))
@@ -450,6 +462,7 @@ class TestCorrectorResetPerRequest:
             "input": inp, "context": docs,
             "answer": _qa_answer("退货窗口为 30 天。"),
         })
+        chain.chain_standalone = chain.chain
         monkeypatch.setattr(chain, "_evaluate", lambda answer, ctx: answer)
         # 模拟上一请求留下的脏状态
         chain.corrector.record_attempt(success=False)

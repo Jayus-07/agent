@@ -154,13 +154,13 @@ async def start_qr_login(platform: str) -> dict[str, Any]:
         "expires_in": 120,
       }
     """
-    from playwright.async_api import async_playwright
-
     config = _PLATFORM_CONFIG.get(platform)
     if not config:
         raise ValueError(
             f"不支持的平台: {platform}，当前支持: {SUPPORTED_PLATFORMS}"
         )
+
+    from playwright.async_api import async_playwright
 
     # 清理过期会话 + 同平台旧会话
     await _cleanup_old_sessions()

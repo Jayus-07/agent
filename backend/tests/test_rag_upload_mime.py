@@ -20,9 +20,9 @@ class TestAllowedMimeStructure:
     """白名单表结构必须覆盖所有支持的扩展名,且 octet-stream 仅作兜底。"""
 
     def test_all_supported_exts_have_entry(self):
-        # F6: 白名单从解析器注册表派生，必须覆盖全部 6 个已注册扩展名
+        # F6: 白名单从解析器注册表派生，必须覆盖全部 7 个已注册扩展名（含 csv）
         assert set(ALLOWED_MIME_TYPES.keys()) == {
-            "pdf", "md", "markdown", "txt", "docx", "xlsx"}
+            "pdf", "md", "markdown", "txt", "docx", "xlsx", "csv"}
 
     def test_derived_from_parsable_exts(self):
         """F6: ALLOWED_MIME_TYPES 必须与 PARSABLE_EXTS 一一对应（单一来源，防漂移）。"""
@@ -34,6 +34,10 @@ class TestAllowedMimeStructure:
         assert "text/markdown" in ALLOWED_MIME_TYPES["markdown"]
         assert "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" \
             in ALLOWED_MIME_TYPES["xlsx"]
+
+    def test_csv_has_proper_mime(self):
+        # csv 解析器注册后上传白名单同步开放，且登记 text/csv
+        assert "text/csv" in ALLOWED_MIME_TYPES["csv"]
 
     def test_octet_stream_not_in_whitelist_dicts(self):
         # 白名单表只登记"显式声明时允许的具体 MIME"。

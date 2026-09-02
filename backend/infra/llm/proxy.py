@@ -69,6 +69,9 @@ def _build_llm_for(model_name: str) -> BaseChatModel:
     if provider == "minimax":
         from backend.infra.llm.providers.minimax import build_minimax
         return build_minimax(model_name)
+    if provider == "qwen":
+        from backend.infra.llm.providers.qwen import build_qwen
+        return build_qwen(model_name)
     # ollama / 兜底
     from langchain_ollama import ChatOllama
     from backend.config import LLM_TEMPERATURE, LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT
@@ -361,6 +364,70 @@ def _wrap_result(result):
 
 
 # =====================================================
+# 限流执行
+# =====================================================
+
+def _enforce_rate_limit(user_id: str | None) -> None:
+    """根据 LLM_RATE_LIMIT_ENFORCE 配置执行限流。
+
+    Phase 5: Redis 可用时使用分布式限流（跨进程一致），否则 fallback 到进程内限流。
+    off    → 仅日志（当前行为），不阻塞请求
+    wait   → 阻塞等待直到获取到令牌（轮询间隔 0.1s）
+    reject → 获取不到令牌时抛 RateLimitError
+    """
+    from backend.config.llm import LLM_RATE_LIMIT_ENFORCE, LLM_RATE_LIMIT_QPS, LLM_RATE_LIMIT_BURST
+
+    passed = _try_distributed_rate_limit(user_id, LLM_RATE_LIMIT_QPS, LLM_RATE_LIMIT_BURST)
+    if not passed:
+        from backend.infra.llm.rate_limiter import get_rate_limiter
+        limiter = get_rate_limiter()
+        passed = limiter.acquire(user_id=user_id)
+
+    if passed:
+        return
+
+    if LLM_RATE_LIMIT_ENFORCE == "reject":
+        from backend.infra.llm.rate_limiter import get_rate_limiter
+        limiter = get_rate_limiter()
+        raise RateLimitError(
+            f"LLM rate limit exceeded (user={user_id}), "
+            f"retry after {limiter.retry_after_seconds(user_id):.1f}s"
+        )
+
+    if LLM_RATE_LIMIT_ENFORCE == "wait":
+        import time
+        from backend.infra.llm.rate_limiter import get_rate_limiter
+        limiter = get_rate_limiter()
+        wait = limiter.retry_after_seconds(user_id)
+        logger.info(f"[RateLimit] wait mode: sleeping {wait:.1f}s (user={user_id})")
+        time.sleep(wait)
+        return
+
+    logger.warning(f"[RateLimit] rate limited but enforce=off, proceeding (user={user_id})")
+
+
+def _try_distributed_rate_limit(user_id: str | None, qps: float, burst: float) -> bool:
+    """尝试分布式限流。Redis 不可用时返回 True（让调用方 fallback 到进程内限流）。"""
+    try:
+        from backend.infra.redis.client import get_redis
+        if get_redis() is None:
+            return True
+        from backend.infra.llm.distributed_rate_limiter import get_distributed_rate_limiter
+        drl = get_distributed_rate_limiter()
+        if not drl.acquire("global", "all", burst, qps):
+            return False
+        if user_id and not drl.acquire("user", user_id, max(1.0, burst / 10), max(1.0, qps / 10)):
+            return False
+        return True
+    except Exception:
+        return True
+
+
+class RateLimitError(RuntimeError):
+    """LLM 限流拒绝时抛出。"""
+
+
+# =====================================================
 # 代理对象
 # =====================================================
 
@@ -382,19 +449,17 @@ class _LLMProxy:
             # 否则 _record_tokens 作用在未执行的 coroutine 上会把 token 清空（既有 bug）。
             if inspect.iscoroutinefunction(attr):
                 async def async_wrapper(*args, **kwargs):
-                    # 限流（同步 acquire）+ 熔断/重试/fallback（P1-7 韧性链）
-                    from backend.infra.llm.rate_limiter import get_rate_limiter
+                    # 限流执行 + 熔断/重试/fallback（P1-7 韧性链）
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
-                    get_rate_limiter().acquire(user_id=user_id)
+                    _enforce_rate_limit(user_id)
                     result = await _acall_with_resilience(attr, *args, **kwargs)
                     _record_tokens(result)
                     return _wrap_result(result)
                 return async_wrapper
             def wrapper(*args, **kwargs):
-                # 限流 + 熔断/重试/fallback（P1-7 韧性链）
-                from backend.infra.llm.rate_limiter import get_rate_limiter
+                # 限流执行 + 熔断/重试/fallback（P1-7 韧性链）
                 user_id = kwargs.get("user_id") or _thread_local_user_id()
-                get_rate_limiter().acquire(user_id=user_id)
+                _enforce_rate_limit(user_id)
                 result = _call_with_resilience(attr, *args, **kwargs)
                 _record_tokens(result)
                 return _wrap_result(result)
@@ -402,10 +467,9 @@ class _LLMProxy:
         return attr
 
     def __call__(self, *args, **kwargs):
-        # 限流 + 熔断/重试/fallback（P1-7 韧性链）
-        from backend.infra.llm.rate_limiter import get_rate_limiter
+        # 限流执行 + 熔断/重试/fallback（P1-7 韧性链）
         user_id = kwargs.get("user_id") or _thread_local_user_id()
-        get_rate_limiter().acquire(user_id=user_id)
+        _enforce_rate_limit(user_id)
         result = _call_with_resilience(_resolve_active_llm().invoke, *args, **kwargs)
         _record_tokens(result)
         return _wrap_result(result)

@@ -332,6 +332,8 @@ class TestAsyncTokenRecording:
         monkeypatch.setattr("backend.infra.circuit_breaker.llm_circuit_breaker",
                             fresh)
         monkeypatch.setattr(proxy_mod, "_resolve_active_llm", lambda: FakeLLM())
+        # 韧性链终态默认返回降级话术（不抛异常），本用例验证异常路径，关掉降级。
+        monkeypatch.setattr(proxy_mod, "LLM_ALLOW_DEGRADED_ANSWER", False)
         with pytest.raises(RuntimeError):
             await proxy_mod.llm.ainvoke("问题")
         assert fresh.stats()["failures"] == 1
