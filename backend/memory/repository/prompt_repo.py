@@ -43,7 +43,7 @@ class PromptRepository:
         name: str = "",
         description: str = "",
         category: str = "",
-        risk_level: str = "low",
+        risk_level: str | None = None,
         template_engine: str = "str_format",
         variables: list | None = None,
         is_code_controlled: bool = False,
@@ -53,7 +53,8 @@ class PromptRepository:
             existing.name = name or existing.name
             existing.description = description or existing.description
             existing.category = category or existing.category
-            existing.risk_level = risk_level if risk_level != "low" else existing.risk_level
+            if risk_level is not None:
+                existing.risk_level = risk_level
             existing.template_engine = template_engine
             if variables is not None:
                 existing.variables = variables
@@ -67,7 +68,7 @@ class PromptRepository:
             name=name,
             description=description,
             category=category,
-            risk_level=risk_level,
+            risk_level=risk_level or "low",
             template_engine=template_engine,
             variables=variables or [],
             is_code_controlled=is_code_controlled,
@@ -86,11 +87,14 @@ class PromptRepository:
         change_note: str = "",
         created_by: str = "system",
     ) -> PromptVersion:
+        await self._s.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": prompt_id},
+        )
         result = await self._s.execute(
             text(
-                "SELECT COALESCE(MAX(version), 0) + 1 FROM ("
-                "SELECT version FROM prompt_versions WHERE prompt_id = :pid "
-                "FOR UPDATE) sub"
+                "SELECT COALESCE(MAX(version), 0) + 1 "
+                "FROM prompt_versions WHERE prompt_id = :pid"
             ),
             {"pid": prompt_id},
         )

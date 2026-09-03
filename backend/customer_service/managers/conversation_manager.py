@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, update, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.customer_service.errors import ValidationError
 from backend.customer_service.models.conversation import CSConversation
 from backend.customer_service.models.assignment import CSAssignment
 from backend.customer_service.state_machine import (
@@ -18,7 +19,9 @@ from backend.customer_service.state_machine import (
     transition, apply,
 )
 
-_now = lambda: datetime.now(timezone.utc)
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class ConversationManager:
@@ -112,7 +115,6 @@ class ConversationManager:
         """Validate + apply a state transition.  Raises on invalid transition."""
         conv = await self.get(conversation_id)
         if not conv:
-            from backend.customer_service.errors import ValidationError
             raise ValidationError(f"Conversation {conversation_id} not found")
 
         result = transition(conv, new_status, new_mode)
@@ -136,23 +138,32 @@ class ConversationManager:
         )
 
     async def reopen(self, conversation_id: str) -> TransitionResult:
-        return await self.transition(
+        result = await self.transition(
             conversation_id,
             new_status=ConvStatus.OPEN,
         )
+        if result.changed:
+            conv = await self.get(conversation_id)
+            if conv and conv.closed_at is not None:
+                conv.closed_at = None
+                await self._s.flush()
+        return result
 
     async def escalate_to_human(
         self, conversation_id: str, agent_id: str,
     ) -> TransitionResult:
         conv = await self.get(conversation_id)
         if not conv:
-            from backend.customer_service.errors import ValidationError
             raise ValidationError(f"Conversation {conversation_id} not found")
 
-        conv.assigned_agent_id = agent_id
-        await self._s.flush()
+        old_agent = conv.assigned_agent_id
 
+        conv.assigned_agent_id = agent_id
         result = transition(conv, new_mode=HandlingMode.HUMAN)
+
+        if old_agent and old_agent != agent_id:
+            await self._close_assignment(conversation_id, old_agent)
+
         apply(conv, result)
         conv.updated_at = _now()
         await self._s.flush()
@@ -173,14 +184,18 @@ class ConversationManager:
     ) -> TransitionResult:
         conv = await self.get(conversation_id)
         if not conv:
-            from backend.customer_service.errors import ValidationError
             raise ValidationError(f"Conversation {conversation_id} not found")
 
         result = transition(conv, new_mode=HandlingMode.AI)
         apply(conv, result)
+
+        old_agent = conv.assigned_agent_id
         conv.assigned_agent_id = None
         conv.updated_at = _now()
         await self._s.flush()
+
+        if old_agent:
+            await self._close_assignment(conversation_id, old_agent)
         return result
 
     # ── assignment ──────────────────────────────────────────────────
@@ -191,7 +206,6 @@ class ConversationManager:
     ) -> None:
         conv = await self.get(conversation_id)
         if not conv:
-            from backend.customer_service.errors import ValidationError
             raise ValidationError(f"Conversation {conversation_id} not found")
 
         old_agent = conv.assigned_agent_id

@@ -14,7 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.customer_service.models.message import CSMessage
 from backend.customer_service.models.conversation import CSConversation
 
-_now = lambda: datetime.now(timezone.utc)
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class MessageManager:
@@ -116,12 +118,22 @@ class MessageManager:
         q = (
             select(CSMessage)
             .where(CSMessage.conversation_id == conversation_id)
-            .order_by(CSMessage.created_at)
         )
         if not include_private:
             q = q.where(CSMessage.private.is_(False))
         if limit:
-            q = q.limit(limit)
+            latest_ids = (
+                q.order_by(desc_col(CSMessage.created_at))
+                .limit(limit)
+                .scalar_subquery()
+            )
+            q = (
+                select(CSMessage)
+                .where(CSMessage.id.in_(latest_ids))
+                .order_by(CSMessage.created_at)
+            )
+        else:
+            q = q.order_by(CSMessage.created_at)
         result = await self._s.execute(q)
         return list(result.scalars().all())
 

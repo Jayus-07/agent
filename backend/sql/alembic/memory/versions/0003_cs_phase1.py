@@ -37,31 +37,8 @@ ALTER TABLE customer_service.conversations
     ADD COLUMN IF NOT EXISTS first_reply_at    TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS last_activity_at  TIMESTAMPTZ;
 
--- Backfill handling_mode from legacy status + ai_enabled
-UPDATE customer_service.conversations
-SET handling_mode = CASE
-    WHEN status = 'waiting_human' THEN 'waiting_human'
-    WHEN status = 'human_active'  THEN 'human'
-    WHEN ai_enabled = false       THEN 'human'
-    ELSE 'ai'
-END
-WHERE handling_mode = 'ai' AND status IN ('waiting_human', 'human_active');
-
--- Backfill last_activity_at from updated_at where null
-UPDATE customer_service.conversations
-SET last_activity_at = updated_at
-WHERE last_activity_at IS NULL;
-
--- Add new status values (keep old ones for backward compat during transition)
-ALTER TABLE customer_service.conversations
-    DROP CONSTRAINT IF EXISTS conversations_status_check;
-
-ALTER TABLE customer_service.conversations
-    ADD CONSTRAINT conversations_status_check
-    CHECK (conversation_status IN ('open', 'pending', 'resolved', 'snoozed'));
-
--- Rename old 'status' column to 'conversation_status' if it still exists as 'status'
--- Note: 006 migration created it as 'status', we need to rename
+-- Rename old 'status' column to 'conversation_status' BEFORE adding constraints
+-- Note: 006 migration created it as 'status', we need to rename first
 DO $$
 BEGIN
     IF EXISTS (
@@ -79,6 +56,30 @@ BEGIN
             RENAME COLUMN status TO conversation_status;
     END IF;
 END $$;
+
+-- Backfill handling_mode from legacy status + ai_enabled
+UPDATE customer_service.conversations
+SET handling_mode = CASE
+    WHEN conversation_status = 'waiting_human' THEN 'waiting_human'
+    WHEN conversation_status = 'human_active'  THEN 'human'
+    WHEN ai_enabled = false                   THEN 'human'
+    ELSE 'ai'
+END
+WHERE handling_mode = 'ai'
+  AND (conversation_status IN ('waiting_human', 'human_active') OR ai_enabled = false);
+
+-- Backfill last_activity_at from updated_at where null
+UPDATE customer_service.conversations
+SET last_activity_at = updated_at
+WHERE last_activity_at IS NULL;
+
+-- Add new status values (keep old ones for backward compat during transition)
+ALTER TABLE customer_service.conversations
+    DROP CONSTRAINT IF EXISTS conversations_status_check;
+
+ALTER TABLE customer_service.conversations
+    ADD CONSTRAINT conversations_status_check
+    CHECK (conversation_status IN ('open', 'pending', 'resolved', 'snoozed'));
 
 -- Migrate old status values to new ones
 UPDATE customer_service.conversations
@@ -199,11 +200,16 @@ BEGIN
 END $$;
 
 -- =============================================
--- 7. Readonly grants
+-- 7. Readonly grants (skip if role doesn't exist)
 -- =============================================
-GRANT SELECT ON customer_service.customers TO agent_readonly;
-GRANT SELECT ON customer_service.cs_agents TO agent_readonly;
-GRANT SELECT ON customer_service.assignments TO agent_readonly;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'agent_readonly') THEN
+        GRANT SELECT ON customer_service.customers TO agent_readonly;
+        GRANT SELECT ON customer_service.cs_agents TO agent_readonly;
+        GRANT SELECT ON customer_service.assignments TO agent_readonly;
+    END IF;
+END $$;
 """
 
 UPGRADE_SQL = SQL
@@ -219,6 +225,32 @@ ALTER TABLE customer_service.messages DROP COLUMN IF EXISTS content_type;
 ALTER TABLE customer_service.messages DROP COLUMN IF EXISTS private;
 ALTER TABLE customer_service.messages DROP COLUMN IF EXISTS attachments;
 DROP INDEX IF EXISTS customer_service.idx_cs_msg_intent;
+
+-- Reverse status value migrations
+UPDATE customer_service.conversations
+SET conversation_status = CASE conversation_status
+    WHEN 'open' THEN 'active'
+    WHEN 'resolved' THEN 'closed'
+    ELSE conversation_status
+END;
+
+-- Drop new CHECK constraint
+ALTER TABLE customer_service.conversations
+    DROP CONSTRAINT IF EXISTS conversations_status_check;
+
+-- Rename conversation_status back to status
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'customer_service'
+          AND table_name = 'conversations'
+          AND column_name = 'conversation_status'
+    ) THEN
+        ALTER TABLE customer_service.conversations
+            RENAME COLUMN conversation_status TO status;
+    END IF;
+END $$;
 
 ALTER TABLE customer_service.conversations DROP COLUMN IF EXISTS handling_mode;
 ALTER TABLE customer_service.conversations DROP COLUMN IF EXISTS priority;
