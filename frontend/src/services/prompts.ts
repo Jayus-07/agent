@@ -1,5 +1,18 @@
 // Prompt Management API Service
 
+export type PromptStatus = 'draft' | 'testing' | 'evaluation' | 'passed' | 'published' | 'archived'
+
+export const PROMPT_STATUSES: PromptStatus[] = ['draft', 'testing', 'evaluation', 'passed', 'published', 'archived']
+
+export const STATUS_META: Record<PromptStatus, { label: string; color: string; bg: string }> = {
+  draft:      { label: '草稿',   color: 'text-gray-600',  bg: 'bg-gray-100' },
+  testing:    { label: '测试中', color: 'text-blue-600',   bg: 'bg-blue-100' },
+  evaluation: { label: '评估中', color: 'text-amber-600',  bg: 'bg-amber-100' },
+  passed:     { label: '已通过', color: 'text-green-600',  bg: 'bg-green-100' },
+  published:  { label: '已发布', color: 'text-emerald-700', bg: 'bg-emerald-100' },
+  archived:   { label: '已归档', color: 'text-slate-500',  bg: 'bg-slate-100' },
+}
+
 export interface PromptMeta {
   key: string
   name: string
@@ -28,6 +41,9 @@ export interface PromptListItem {
   active_version: number | null
   is_code_controlled: boolean
   variable_count: number
+  latest_version_number: number | null
+  latest_version_status: PromptStatus | null
+  latest_version_updated_at: string | null
 }
 
 export interface PromptVersion {
@@ -74,7 +90,14 @@ export interface PlaygroundResult {
 const BASE = '/api/prompts'
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init)
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(process.env.NEXT_PUBLIC_API_KEY
+      ? { 'X-API-Key': process.env.NEXT_PUBLIC_API_KEY }
+      : {}),
+    ...(init?.headers as Record<string, string> || {}),
+  }
+  const res = await fetch(url, { ...init, headers })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new Error(body.detail || `HTTP ${res.status}`)
@@ -83,17 +106,18 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const promptsService = {
-  list(params?: { category?: string; risk_level?: string; q?: string }): Promise<PromptListItem[]> {
+  list(params?: { category?: string; risk_level?: string; q?: string; keys?: string[] }): Promise<PromptListItem[]> {
     const qs = new URLSearchParams()
     if (params?.category) qs.set('category', params.category)
     if (params?.risk_level) qs.set('risk_level', params.risk_level)
     if (params?.q) qs.set('q', params.q)
+    if (params?.keys?.length) qs.set('keys', params.keys.join(','))
     const query = qs.toString()
-    return api(`${BASE}${query ? `?${query}` : ''}`)
+    return api<{ items: PromptListItem[] }>(`${BASE}${query ? `?${query}` : ''}`).then(r => r.items)
   },
 
   registry(): Promise<PromptMeta[]> {
-    return api(`${BASE}/meta/registry`)
+    return api(`${BASE}/meta/registry`).then(r => (r as any).specs ?? r)
   },
 
   get(key: string): Promise<PromptDetail> {
@@ -101,7 +125,7 @@ export const promptsService = {
   },
 
   versions(key: string): Promise<PromptVersion[]> {
-    return api(`${BASE}/${encodeURIComponent(key)}/versions`)
+    return api(`${BASE}/${encodeURIComponent(key)}/versions`).then(r => (r as any).items ?? r)
   },
 
   getVersion(key: string, version: number): Promise<PromptVersion> {
@@ -109,7 +133,7 @@ export const promptsService = {
   },
 
   diff(key: string, from: number, to: number): Promise<DiffResult> {
-    return api(`${BASE}/${encodeURIComponent(key)}/diff?from=${from}&to=${to}`)
+    return api(`${BASE}/${encodeURIComponent(key)}/diff?from_version=${from}&to_version=${to}`)
   },
 
   createDraft(key: string, template: string, changeNote = ''): Promise<{ version: number }> {
@@ -153,7 +177,7 @@ export const promptsService = {
   },
 
   audit(key: string): Promise<AuditEntry[]> {
-    return api(`${BASE}/${encodeURIComponent(key)}/audit`)
+    return api(`${BASE}/${encodeURIComponent(key)}/audit`).then(r => (r as any).items ?? r)
   },
 
   seed(): Promise<{ seeded: number }> {
@@ -161,6 +185,14 @@ export const promptsService = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ auto_seed: true }),
+    })
+  },
+
+  transition(key: string, version: number, status: PromptStatus): Promise<{ version: number; status: PromptStatus }> {
+    return api(`${BASE}/${encodeURIComponent(key)}/versions/${version}/transition`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
     })
   },
 }

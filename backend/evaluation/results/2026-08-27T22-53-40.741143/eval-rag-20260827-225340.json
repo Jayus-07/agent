@@ -1,0 +1,2318 @@
+{
+  "timestamp": "2026-08-27T22:53:40.741143",
+  "module": "rag",
+  "mode": "offline",
+  "smoke": false,
+  "total_score": null,
+  "summaries": [
+    {
+      "module": "rag",
+      "total": 5,
+      "passed": 5,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "pass_rate": 1.0,
+      "metrics": {
+        "recall@5": 0.9,
+        "mrr": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0,
+        "recall@10": 0.9,
+        "chunk_recall": 0.6,
+        "ndcg@10": 0.9226
+      }
+    }
+  ],
+  "results": [
+    {
+      "case_id": "DEPT-001",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "be99388a67",
+          "79028b7792"
+        ],
+        "allowed_departments": [
+          "hr"
+        ],
+        "forbidden_departments": [
+          "finance"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "年假怎么申请？请假流程是什么？",
+        "kb_id": "policy_general",
+        "department": "hr",
+        "retrieved_docs": [
+          "be99388a67"
+        ],
+        "retrieved_departments": [
+          "hr"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "be99388a67",
+            "title": "",
+            "chunk_id": "be99388a67_6",
+            "department": "hr",
+            "rerank_score": 0.8497,
+            "source": "",
+            "snippet": "年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。",
+            "page_content": "年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。"
+          },
+          {
+            "doc_id": "be99388a67",
+            "title": "",
+            "chunk_id": "be99388a67_1",
+            "department": "hr",
+            "rerank_score": 0.7786,
+            "source": "",
+            "snippet": "1. 年假申请 正式员工入职满 1 年后享有带薪年假，天数按司龄递增： 司龄 1-3 年：5 天/年 司龄 3-10 年：10 天/年 司龄 10 年以上：15 天/年 年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。",
+            "page_content": "1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。"
+          },
+          {
+            "doc_id": "be99388a67",
+            "title": "",
+            "chunk_id": "be99388a67_0",
+            "department": "hr",
+            "rerank_score": 0.7015,
+            "source": "",
+            "snippet": "请假与考勤制度（人力资源部） 1. 年假申请 正式员工入职满 1 年后享有带薪年假，天数按司龄递增： 司龄 1-3 年：5 天/年 司龄 3-10 年：10 天/年 司龄 10 年以上：15 天/年 年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。 2. 病假与事假 病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。 事假全年累计不得超",
+            "page_content": "请假与考勤制度（人力资源部）\n1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。\n2. 病假与事假\n病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。\n3. 考勤异常\n迟到 / 早退每月允许 3 次免责机会，超出部分按事假扣减。旷工当日不计薪并记\n过一次，连续旷工 3 天按严重违纪处理。\n4. 调休\n周末加班可申请调休，调休有效期为加班发生起 90 天内，逾期自动作废。"
+          },
+          {
+            "doc_id": "be99388a67",
+            "title": "",
+            "chunk_id": "",
+            "department": "hr",
+            "rerank_score": 0.6912,
+            "source": "",
+            "snippet": "请假与考勤制度（人力资源部） 1. 年假申请 正式员工入职满 1 年后享有带薪年假，天数按司龄递增： 司龄 1-3 年：5 天/年 司龄 3-10 年：10 天/年 司龄 10 年以上：15 天/年 年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。 2. 病假与事假 病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。 事假全年累计不得超",
+            "page_content": "请假与考勤制度（人力资源部）\n1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。\n2. 病假与事假\n病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。\n3. 考勤异常\n迟到 / 早退每月允许 3 次免责机会，超出部分按事假扣减。旷工当日不计薪并记\n过一次，连续旷工 3 天按严重违纪处理。\n4. 调休\n周末加班可申请调休，调休有效期为加班发生起 90 天内，逾期自动作废。\n\n1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。\n\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n\n司龄 1-3 年：5 天/年\n\n司龄 3-10 年：10 天/年\n\n司龄 10 年以上：15 天/年\n\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。\n\n2. 病假与事假\n病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。\n\n病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。\n\n3. 考勤异常\n迟到 / 早退每月允许 3 次免责机会，超出部分按事假扣减。旷工当日不计薪并记\n过一次，连续旷工 3 天按严重违纪处理。\n\n迟到 / 早退每月允许 3 次免责机会，超出部分按事假扣减。旷工当日不计薪并记\n过一次，连续旷工 3 天按严重违纪处理。\n\n4. 调休\n周末加班可申请调休，调休有效期为加班发生起 90 天内，逾期自动作废。\n\n周末加班可申请调休，调休有效期为加班发生起 90 天内，逾期自动作废。"
+          },
+          {
+            "doc_id": "be99388a67",
+            "title": "",
+            "chunk_id": "be99388a67_2",
+            "department": "hr",
+            "rerank_score": 0.4811,
+            "source": "",
+            "snippet": "正式员工入职满 1 年后享有带薪年假，天数按司龄递增：",
+            "page_content": "正式员工入职满 1 年后享有带薪年假，天数按司龄递增："
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 2,
+          "stage1_top_docs": [
+            {
+              "doc_id": "be99388a67",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "79028b7792",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        },
+        "rejection": {
+          "confidence": "medium",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.8497,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "266c03a2e8bf",
+          "total_spans": 7,
+          "total_trace_ms": 133333,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval DEPT-001",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 45119,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "年假怎么申请？请假流程是什么？",
+                "kb_id": "policy_general"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 2324,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 10,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-08-27T14:52:55Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'policy_general', 'department': 'hr'}, persons=[], → 2 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "policy_general",
+                      "department": "hr"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 2,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 209,
+              "sequence": 2,
+              "metrics": {
+                "vector_hits": 11,
+                "bm25_hits": 0,
+                "merged_hits": 8
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "rrf_fusion",
+                  "timestamp": "2026-08-27T14:52:55Z",
+                  "level": "info",
+                  "message": "Vector:11 + BM25:0 → RRF:8",
+                  "attributes": {
+                    "vector_top3": [
+                      {
+                        "chunk_id": "be99388a67_1",
+                        "score": 0.0164,
+                        "snippet": "1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR ",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy"
+                      },
+                      {
+                        "chunk_id": "be99388a67_0",
+                        "score": 0.0161,
+                        "snippet": "请假与考勤制度（人力资源部）\n1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy"
+                      },
+                      {
+                        "chunk_id": "be99388a67_6",
+                        "score": 0.0159,
+                        "snippet": "年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy"
+                      }
+                    ],
+                    "bm25_top3": [],
+                    "fused_top5": [
+                      {
+                        "chunk_id": "be99388a67_1",
+                        "rrf_score": 0.0164,
+                        "snippet": "1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR ",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "按司龄, 递增, 天数, HR, 带薪, 申请, 审批, 职满, policy, 司龄"
+                      },
+                      {
+                        "chunk_id": "be99388a67_0",
+                        "rrf_score": 0.0161,
+                        "snippet": "请假与考勤制度（人力资源部）\n1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "事假, HR, 申请, 审批, 制度, 调休, 旷工, 加班, 病假, policy"
+                      },
+                      {
+                        "chunk_id": "be99388a67_6",
+                        "rrf_score": 0.0159,
+                        "snippet": "年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "提前, HR, 申请, 审批, 主管, 工作日, 提交, 依次, policy, 直属"
+                      },
+                      {
+                        "chunk_id": "be99388a67_7",
+                        "rrf_score": 0.0156,
+                        "snippet": "2. 病假与事假\n病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "事假, 单次, HR, 天需, 复核, 加签, 上传, 病假, 超过"
+                      },
+                      {
+                        "chunk_id": "be99388a67_8",
+                        "rrf_score": 0.0154,
+                        "snippet": "病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "事假, 单次, HR, 天需, 复核, 加签, 上传, 病假, 超过"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 55,
+              "sequence": 3,
+              "metrics": {
+                "vector_hits": 11,
+                "bm25_hits": 0,
+                "merged_hits": 8
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "rrf_fusion",
+                  "timestamp": "2026-08-27T14:52:55Z",
+                  "level": "info",
+                  "message": "Vector:11 + BM25:0 → RRF:8",
+                  "attributes": {
+                    "vector_top3": [
+                      {
+                        "chunk_id": "be99388a67_1",
+                        "score": 0.0164,
+                        "snippet": "1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR ",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy"
+                      },
+                      {
+                        "chunk_id": "be99388a67_0",
+                        "score": 0.0161,
+                        "snippet": "请假与考勤制度（人力资源部）\n1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy"
+                      },
+                      {
+                        "chunk_id": "be99388a67_6",
+                        "score": 0.0159,
+                        "snippet": "年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy"
+                      }
+                    ],
+                    "bm25_top3": [],
+                    "fused_top5": [
+                      {
+                        "chunk_id": "be99388a67_1",
+                        "rrf_score": 0.0164,
+                        "snippet": "1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR ",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "按司龄, 递增, 天数, HR, 带薪, 申请, 审批, 职满, policy, 司龄"
+                      },
+                      {
+                        "chunk_id": "be99388a67_0",
+                        "rrf_score": 0.0161,
+                        "snippet": "请假与考勤制度（人力资源部）\n1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "事假, HR, 申请, 审批, 制度, 调休, 旷工, 加班, 病假, policy"
+                      },
+                      {
+                        "chunk_id": "be99388a67_6",
+                        "rrf_score": 0.0159,
+                        "snippet": "年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "提前, HR, 申请, 审批, 主管, 工作日, 提交, 依次, policy, 直属"
+                      },
+                      {
+                        "chunk_id": "be99388a67_7",
+                        "rrf_score": 0.0156,
+                        "snippet": "2. 病假与事假\n病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "事假, 单次, HR, 天需, 复核, 加签, 上传, 病假, 超过"
+                      },
+                      {
+                        "chunk_id": "be99388a67_8",
+                        "rrf_score": 0.0154,
+                        "snippet": "病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "事假, 单次, HR, 天需, 复核, 加签, 上传, 病假, 超过"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 44,
+              "sequence": 4,
+              "metrics": {
+                "vector_hits": 11,
+                "bm25_hits": 0,
+                "merged_hits": 8
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "rrf_fusion",
+                  "timestamp": "2026-08-27T14:52:56Z",
+                  "level": "info",
+                  "message": "Vector:11 + BM25:0 → RRF:8",
+                  "attributes": {
+                    "vector_top3": [
+                      {
+                        "chunk_id": "be99388a67_1",
+                        "score": 0.0164,
+                        "snippet": "1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR ",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy"
+                      },
+                      {
+                        "chunk_id": "be99388a67_0",
+                        "score": 0.0161,
+                        "snippet": "请假与考勤制度（人力资源部）\n1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy"
+                      },
+                      {
+                        "chunk_id": "be99388a67_6",
+                        "score": 0.0159,
+                        "snippet": "年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy"
+                      }
+                    ],
+                    "bm25_top3": [],
+                    "fused_top5": [
+                      {
+                        "chunk_id": "be99388a67_1",
+                        "rrf_score": 0.0164,
+                        "snippet": "1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR ",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "按司龄, 递增, 天数, HR, 带薪, 申请, 审批, 职满, policy, 司龄"
+                      },
+                      {
+                        "chunk_id": "be99388a67_0",
+                        "rrf_score": 0.0161,
+                        "snippet": "请假与考勤制度（人力资源部）\n1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "事假, HR, 申请, 审批, 制度, 调休, 旷工, 加班, 病假, policy"
+                      },
+                      {
+                        "chunk_id": "be99388a67_6",
+                        "rrf_score": 0.0159,
+                        "snippet": "年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "提前, HR, 申请, 审批, 主管, 工作日, 提交, 依次, policy, 直属"
+                      },
+                      {
+                        "chunk_id": "be99388a67_7",
+                        "rrf_score": 0.0156,
+                        "snippet": "2. 病假与事假\n病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "事假, 单次, HR, 天需, 复核, 加签, 上传, 病假, 超过"
+                      },
+                      {
+                        "chunk_id": "be99388a67_8",
+                        "rrf_score": 0.0154,
+                        "snippet": "病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。",
+                        "source": "leave_policy_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "事假, 单次, HR, 天需, 复核, 加签, 上传, 病假, 超过"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 42791,
+              "sequence": 5,
+              "metrics": {
+                "input_docs": 9,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 42791,
+              "sequence": 6,
+              "metrics": {
+                "input_docs": 9,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 0.5,
+        "recall@10": 0.5,
+        "mrr": 1.0,
+        "ndcg@10": 0.6131,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 45445,
+      "error_msg": null
+    },
+    {
+      "case_id": "DEPT-002",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "04a34059af",
+          "8d38891a89"
+        ],
+        "allowed_departments": [
+          "finance"
+        ],
+        "forbidden_departments": [
+          "hr"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "报销流程怎么走？预算审批权限是怎样的？",
+        "kb_id": "policy_general",
+        "department": "finance",
+        "retrieved_docs": [
+          "8d38891a89",
+          "04a34059af"
+        ],
+        "retrieved_departments": [
+          "finance"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "8d38891a89",
+            "title": "",
+            "chunk_id": "8d38891a89_0",
+            "department": "finance",
+            "rerank_score": 0.8743,
+            "source": "",
+            "snippet": "预算与审批制度（财务部） 1. 年度预算 各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算 一经批准即作为费用控制的基准。 2. 预算执行 月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整 申请，说明原因并附测算依据。 3. 采购审批权限 单笔 < 1 万元：部门负责人审批 1 万 - 5 万元：部门负责人 + 财务经理 > 5 万元：追加分管副",
+            "page_content": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整\n申请，说明原因并附测算依据。\n3. 采购审批权限\n单笔 < 1 万元：部门负责人审批\n1 万 - 5 万元：部门负责人 + 财务经理\n> 5 万元：追加分管副总审批\n4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。"
+          },
+          {
+            "doc_id": "04a34059af",
+            "title": "",
+            "chunk_id": "04a34059af_3",
+            "department": "finance",
+            "rerank_score": 0.8497,
+            "source": "",
+            "snippet": "2. 报销流程 员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 → 财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
+            "page_content": "2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。"
+          },
+          {
+            "doc_id": "04a34059af",
+            "title": "",
+            "chunk_id": "04a34059af_4",
+            "department": "finance",
+            "rerank_score": 0.8146,
+            "source": "",
+            "snippet": "员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 → 财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
+            "page_content": "员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。"
+          },
+          {
+            "doc_id": "8d38891a89",
+            "title": "",
+            "chunk_id": "",
+            "department": "finance",
+            "rerank_score": 0.806,
+            "source": "",
+            "snippet": "预算与审批制度（财务部） 1. 年度预算 各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算 一经批准即作为费用控制的基准。 2. 预算执行 月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整 申请，说明原因并附测算依据。 3. 采购审批权限 单笔 < 1 万元：部门负责人审批 1 万 - 5 万元：部门负责人 + 财务经理 > 5 万元：追加分管副",
+            "page_content": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整\n申请，说明原因并附测算依据。\n3. 采购审批权限\n单笔 < 1 万元：部门负责人审批\n1 万 - 5 万元：部门负责人 + 财务经理\n> 5 万元：追加分管副总审批\n4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。\n\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整\n申请，说明原因并附测算依据。\n\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整\n申请，说明原因并附测算依据。\n\n3. 采购审批权限\n单笔 < 1 万元：部门负责人审批\n1 万 - 5 万元：部门负责人 + 财务经理\n> 5 万元：追加分管副总审批\n\n单笔 < 1 万元：部门负责人审批\n\n1 万 - 5 万元：部门负责人 + 财务经理\n\n> 5 万元：追加分管副总审批\n\n4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。\n\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。"
+          },
+          {
+            "doc_id": "04a34059af",
+            "title": "",
+            "chunk_id": "04a34059af_0",
+            "department": "finance",
+            "rerank_score": 0.6036,
+            "source": "",
+            "snippet": "费用报销制度（财务部） 1. 报销范围 可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、 罚款、礼品卡等不在报销范围内。 2. 报销流程 员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 → 财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。 3. 发票要求 报销须提供增值税发票，抬头须与公司全称一致，税号正确。连号发票、作废发票 一律退回。跨",
+            "page_content": "费用报销制度（财务部）\n1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。\n2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。\n3. 发票要求\n报销须提供增值税发票，抬头须与公司全称一致，税号正确。连号发票、作废发票\n一律退回。跨年发票不予报销。\n4. 报销时效\n费用发生后 30 日内须提交报销，逾期需书面说明。每月 25 日之后提交的报销\n顺延至次月付款。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 2,
+          "stage1_top_docs": [
+            {
+              "doc_id": "04a34059af",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "8d38891a89",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        },
+        "rejection": {
+          "confidence": "medium",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.8743,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "a3ce5b37082b",
+          "total_spans": 9,
+          "total_trace_ms": 2691,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval DEPT-002",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 914,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "报销流程怎么走？预算审批权限是怎样的？",
+                "kb_id": "policy_general"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 671,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-08-27T14:53:38Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'policy_general', 'department': 'finance'}, persons=[], → 2 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "policy_general",
+                      "department": "finance"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 2,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 181,
+              "sequence": 2,
+              "metrics": {
+                "vector_hits": 10,
+                "bm25_hits": 2,
+                "merged_hits": 8
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "rrf_fusion",
+                  "timestamp": "2026-08-27T14:53:39Z",
+                  "level": "info",
+                  "message": "Vector:10 + BM25:2 → RRF:8",
+                  "attributes": {
+                    "vector_top3": [
+                      {
+                        "chunk_id": "04a34059af_3",
+                        "score": 0.0164,
+                        "snippet": "2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "04a34059af_0",
+                        "score": 0.0161,
+                        "snippet": "费用报销制度（财务部）\n1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。\n2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_0",
+                        "score": 0.0159,
+                        "snippet": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      }
+                    ],
+                    "bm25_top3": [
+                      {
+                        "chunk_id": "8d38891a89_10",
+                        "snippet": "每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_9",
+                        "snippet": "4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      }
+                    ],
+                    "fused_top5": [
+                      {
+                        "chunk_id": "04a34059af_3",
+                        "rrf_score": 0.0164,
+                        "snippet": "2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "报销, 付款, 复核, 审批, 发票, 财务, 加签, financial, compliance, 出纳"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_10",
+                        "rrf_score": 0.0164,
+                        "snippet": "每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "出具, 专项, 科目, 季度末, 偏差, 财务, 执行, 财务部, financial, 15%"
+                      },
+                      {
+                        "chunk_id": "04a34059af_0",
+                        "rrf_score": 0.0161,
+                        "snippet": "费用报销制度（财务部）\n1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。\n2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "费及, 报销, 付款, 供应商管理, 税号, 审批, 发票, 提交, 采购, 财务"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_9",
+                        "rrf_score": 0.0161,
+                        "snippet": "4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "出具, 专项, 决算, 科目, 季度末, 偏差, 财务, 执行, financial, 财务部"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_0",
+                        "rrf_score": 0.0159,
+                        "snippet": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "财务经理, 月度, 年度预算, 决算, 供应商管理, 审批, 采购, 财务, financial, security"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 164,
+              "sequence": 3,
+              "metrics": {
+                "vector_hits": 10,
+                "bm25_hits": 2,
+                "merged_hits": 8
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "rrf_fusion",
+                  "timestamp": "2026-08-27T14:53:39Z",
+                  "level": "info",
+                  "message": "Vector:10 + BM25:2 → RRF:8",
+                  "attributes": {
+                    "vector_top3": [
+                      {
+                        "chunk_id": "04a34059af_3",
+                        "score": 0.0164,
+                        "snippet": "2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "04a34059af_0",
+                        "score": 0.0161,
+                        "snippet": "费用报销制度（财务部）\n1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。\n2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_0",
+                        "score": 0.0159,
+                        "snippet": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      }
+                    ],
+                    "bm25_top3": [
+                      {
+                        "chunk_id": "8d38891a89_10",
+                        "snippet": "每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_9",
+                        "snippet": "4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      }
+                    ],
+                    "fused_top5": [
+                      {
+                        "chunk_id": "04a34059af_3",
+                        "rrf_score": 0.0164,
+                        "snippet": "2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "报销, 付款, 复核, 审批, 发票, 财务, 加签, financial, compliance, 出纳"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_10",
+                        "rrf_score": 0.0164,
+                        "snippet": "每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "出具, 专项, 科目, 季度末, 偏差, 财务, 执行, 财务部, financial, 15%"
+                      },
+                      {
+                        "chunk_id": "04a34059af_0",
+                        "rrf_score": 0.0161,
+                        "snippet": "费用报销制度（财务部）\n1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。\n2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "费及, 报销, 付款, 供应商管理, 税号, 审批, 发票, 提交, 采购, 财务"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_9",
+                        "rrf_score": 0.0161,
+                        "snippet": "4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "出具, 专项, 决算, 科目, 季度末, 偏差, 财务, 执行, financial, 财务部"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_0",
+                        "rrf_score": 0.0159,
+                        "snippet": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "财务经理, 月度, 年度预算, 决算, 供应商管理, 审批, 采购, 财务, financial, security"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 100,
+              "sequence": 4,
+              "metrics": {
+                "vector_hits": 10,
+                "bm25_hits": 2,
+                "merged_hits": 8
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "rrf_fusion",
+                  "timestamp": "2026-08-27T14:53:39Z",
+                  "level": "info",
+                  "message": "Vector:10 + BM25:2 → RRF:8",
+                  "attributes": {
+                    "vector_top3": [
+                      {
+                        "chunk_id": "04a34059af_3",
+                        "score": 0.0164,
+                        "snippet": "2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "04a34059af_0",
+                        "score": 0.0161,
+                        "snippet": "费用报销制度（财务部）\n1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。\n2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_0",
+                        "score": 0.0159,
+                        "snippet": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      }
+                    ],
+                    "bm25_top3": [
+                      {
+                        "chunk_id": "8d38891a89_10",
+                        "snippet": "每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_9",
+                        "snippet": "4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      }
+                    ],
+                    "fused_top5": [
+                      {
+                        "chunk_id": "04a34059af_3",
+                        "rrf_score": 0.0164,
+                        "snippet": "2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "报销, 付款, 复核, 审批, 发票, 财务, 加签, financial, compliance, 出纳"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_10",
+                        "rrf_score": 0.0164,
+                        "snippet": "每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "出具, 专项, 科目, 季度末, 偏差, 财务, 执行, 财务部, financial, 15%"
+                      },
+                      {
+                        "chunk_id": "04a34059af_0",
+                        "rrf_score": 0.0161,
+                        "snippet": "费用报销制度（财务部）\n1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。\n2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "费及, 报销, 付款, 供应商管理, 税号, 审批, 发票, 提交, 采购, 财务"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_9",
+                        "rrf_score": 0.0161,
+                        "snippet": "4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "出具, 专项, 决算, 科目, 季度末, 偏差, 财务, 执行, financial, 财务部"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_0",
+                        "rrf_score": 0.0159,
+                        "snippet": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "财务经理, 月度, 年度预算, 决算, 供应商管理, 审批, 采购, 财务, financial, security"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 90,
+              "sequence": 5,
+              "metrics": {
+                "vector_hits": 10,
+                "bm25_hits": 2,
+                "merged_hits": 8
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "rrf_fusion",
+                  "timestamp": "2026-08-27T14:53:39Z",
+                  "level": "info",
+                  "message": "Vector:10 + BM25:2 → RRF:8",
+                  "attributes": {
+                    "vector_top3": [
+                      {
+                        "chunk_id": "04a34059af_3",
+                        "score": 0.0164,
+                        "snippet": "2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "04a34059af_0",
+                        "score": 0.0161,
+                        "snippet": "费用报销制度（财务部）\n1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。\n2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_0",
+                        "score": 0.0159,
+                        "snippet": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      }
+                    ],
+                    "bm25_top3": [
+                      {
+                        "chunk_id": "8d38891a89_10",
+                        "snippet": "每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_9",
+                        "snippet": "4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      }
+                    ],
+                    "fused_top5": [
+                      {
+                        "chunk_id": "04a34059af_3",
+                        "rrf_score": 0.0164,
+                        "snippet": "2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "报销, 付款, 复核, 审批, 发票, 财务, 加签, financial, compliance, 出纳"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_10",
+                        "rrf_score": 0.0164,
+                        "snippet": "每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "出具, 专项, 科目, 季度末, 偏差, 财务, 执行, 财务部, financial, 15%"
+                      },
+                      {
+                        "chunk_id": "04a34059af_0",
+                        "rrf_score": 0.0161,
+                        "snippet": "费用报销制度（财务部）\n1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。\n2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "费及, 报销, 付款, 供应商管理, 税号, 审批, 发票, 提交, 采购, 财务"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_9",
+                        "rrf_score": 0.0161,
+                        "snippet": "4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "出具, 专项, 决算, 科目, 季度末, 偏差, 财务, 执行, financial, 财务部"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_0",
+                        "rrf_score": 0.0159,
+                        "snippet": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "财务经理, 月度, 年度预算, 决算, 供应商管理, 审批, 采购, 财务, financial, security"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 91,
+              "sequence": 6,
+              "metrics": {
+                "vector_hits": 10,
+                "bm25_hits": 2,
+                "merged_hits": 8
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "rrf_fusion",
+                  "timestamp": "2026-08-27T14:53:39Z",
+                  "level": "info",
+                  "message": "Vector:10 + BM25:2 → RRF:8",
+                  "attributes": {
+                    "vector_top3": [
+                      {
+                        "chunk_id": "04a34059af_3",
+                        "score": 0.0164,
+                        "snippet": "2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "04a34059af_0",
+                        "score": 0.0161,
+                        "snippet": "费用报销制度（财务部）\n1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。\n2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_0",
+                        "score": 0.0159,
+                        "snippet": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      }
+                    ],
+                    "bm25_top3": [
+                      {
+                        "chunk_id": "8d38891a89_10",
+                        "snippet": "每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_9",
+                        "snippet": "4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      }
+                    ],
+                    "fused_top5": [
+                      {
+                        "chunk_id": "04a34059af_3",
+                        "rrf_score": 0.0164,
+                        "snippet": "2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "报销, 付款, 复核, 审批, 发票, 财务, 加签, financial, compliance, 出纳"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_10",
+                        "rrf_score": 0.0164,
+                        "snippet": "每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "出具, 专项, 科目, 季度末, 偏差, 财务, 执行, 财务部, financial, 15%"
+                      },
+                      {
+                        "chunk_id": "04a34059af_0",
+                        "rrf_score": 0.0161,
+                        "snippet": "费用报销制度（财务部）\n1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。\n2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复",
+                        "source": "reimbursement_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "费及, 报销, 付款, 供应商管理, 税号, 审批, 发票, 提交, 采购, 财务"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_9",
+                        "rrf_score": 0.0161,
+                        "snippet": "4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "出具, 专项, 决算, 科目, 季度末, 偏差, 财务, 执行, financial, 财务部"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_0",
+                        "rrf_score": 0.0159,
+                        "snippet": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "财务经理, 月度, 年度预算, 决算, 供应商管理, 审批, 采购, 财务, financial, security"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 240,
+              "sequence": 7,
+              "metrics": {
+                "input_docs": 10,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 240,
+              "sequence": 8,
+              "metrics": {
+                "input_docs": 10,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 950,
+      "error_msg": null
+    },
+    {
+      "case_id": "DEPT-003",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [],
+        "allowed_departments": [
+          "hr"
+        ],
+        "forbidden_departments": [
+          "finance"
+        ],
+        "min_relevant_chunks": 0
+      },
+      "actual": {
+        "question": "公司报销标准是多少？发票有什么要求？",
+        "kb_id": "policy_general",
+        "department": "hr",
+        "retrieved_docs": [],
+        "retrieved_departments": [],
+        "dept_leak": false,
+        "details": [],
+        "pipeline": {
+          "stage1_docs": 2,
+          "stage1_top_docs": [
+            {
+              "doc_id": "79028b7792",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "be99388a67",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 0,
+          "after_rerank": 0,
+          "adaptive": "无结果"
+        },
+        "rejection": {
+          "confidence": "none",
+          "reject_gate": "retrieval",
+          "reject_reason": "no_evidence",
+          "top1_rerank_score": null,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "2a5273c31104",
+          "total_spans": 7,
+          "total_trace_ms": 1014,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval DEPT-003",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 347,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "公司报销标准是多少？发票有什么要求？",
+                "kb_id": "policy_general"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 171,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-08-27T14:53:39Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'policy_general', 'department': 'hr'}, persons=[], → 2 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "policy_general",
+                      "department": "hr"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 2,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 49,
+              "sequence": 2,
+              "metrics": {
+                "vector_hits": 9,
+                "bm25_hits": 0,
+                "merged_hits": 8
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "rrf_fusion",
+                  "timestamp": "2026-08-27T14:53:39Z",
+                  "level": "info",
+                  "message": "Vector:9 + BM25:0 → RRF:8",
+                  "attributes": {
+                    "vector_top3": [
+                      {
+                        "chunk_id": "79028b7792_6",
+                        "score": 0.0164,
+                        "snippet": "公司按属地标准为员工缴纳五险一金，个人部分从工资中代扣。入职当月即参保，\n离职次月停保。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy"
+                      },
+                      {
+                        "chunk_id": "79028b7792_0",
+                        "score": 0.0161,
+                        "snippet": "薪酬与个税（人力资源部）\n1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。\n2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy"
+                      },
+                      {
+                        "chunk_id": "79028b7792_7",
+                        "score": 0.0159,
+                        "snippet": "4. 调薪\n年度调薪每年 4 月评审一次，结合绩效等级与市场分位确定，结果由 HR 一对一\n沟通。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy"
+                      }
+                    ],
+                    "bm25_top3": [],
+                    "fused_top5": [
+                      {
+                        "chunk_id": "79028b7792_6",
+                        "rrf_score": 0.0164,
+                        "snippet": "公司按属地标准为员工缴纳五险一金，个人部分从工资中代扣。入职当月即参保，\n离职次月停保。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "参保, 属地, 离职, 停保, 缴纳, 一金, 当月, 入职, 五险, 代扣"
+                      },
+                      {
+                        "chunk_id": "79028b7792_0",
+                        "rrf_score": 0.0161,
+                        "snippet": "薪酬与个税（人力资源部）\n1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。\n2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "五险, 工资, 预扣, HR, 调薪, 工资条, 发薪日, financial, 每月"
+                      },
+                      {
+                        "chunk_id": "79028b7792_7",
+                        "rrf_score": 0.0159,
+                        "snippet": "4. 调薪\n年度调薪每年 4 月评审一次，结合绩效等级与市场分位确定，结果由 HR 一对一\n沟通。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "一对一, 评审, 绩效, HR, 结合, 调薪, 分位, 等级, 沟通, 年度"
+                      },
+                      {
+                        "chunk_id": "79028b7792_1",
+                        "rrf_score": 0.0156,
+                        "snippet": "1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "薪资, 节假日, 法定, 工作日, 顺延, 首个, 每月, 发薪日, 发放"
+                      },
+                      {
+                        "chunk_id": "79028b7792_8",
+                        "rrf_score": 0.0154,
+                        "snippet": "年度调薪每年 4 月评审一次，结合绩效等级与市场分位确定，结果由 HR 一对一\n沟通。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "一对一, 评审, 绩效, HR, 结合, 调薪, 分位, 等级, 沟通, 年度"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 49,
+              "sequence": 3,
+              "metrics": {
+                "vector_hits": 9,
+                "bm25_hits": 0,
+                "merged_hits": 8
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "rrf_fusion",
+                  "timestamp": "2026-08-27T14:53:39Z",
+                  "level": "info",
+                  "message": "Vector:9 + BM25:0 → RRF:8",
+                  "attributes": {
+                    "vector_top3": [
+                      {
+                        "chunk_id": "79028b7792_0",
+                        "score": 0.0164,
+                        "snippet": "薪酬与个税（人力资源部）\n1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。\n2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy"
+                      },
+                      {
+                        "chunk_id": "79028b7792_6",
+                        "score": 0.0161,
+                        "snippet": "公司按属地标准为员工缴纳五险一金，个人部分从工资中代扣。入职当月即参保，\n离职次月停保。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy"
+                      },
+                      {
+                        "chunk_id": "79028b7792_1",
+                        "score": 0.0159,
+                        "snippet": "1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy"
+                      }
+                    ],
+                    "bm25_top3": [],
+                    "fused_top5": [
+                      {
+                        "chunk_id": "79028b7792_0",
+                        "rrf_score": 0.0164,
+                        "snippet": "薪酬与个税（人力资源部）\n1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。\n2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "五险, 工资, 预扣, HR, 调薪, 工资条, 发薪日, financial, 每月"
+                      },
+                      {
+                        "chunk_id": "79028b7792_6",
+                        "rrf_score": 0.0161,
+                        "snippet": "公司按属地标准为员工缴纳五险一金，个人部分从工资中代扣。入职当月即参保，\n离职次月停保。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "参保, 属地, 离职, 停保, 缴纳, 一金, 当月, 入职, 五险, 代扣"
+                      },
+                      {
+                        "chunk_id": "79028b7792_1",
+                        "rrf_score": 0.0159,
+                        "snippet": "1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "薪资, 节假日, 法定, 工作日, 顺延, 首个, 每月, 发薪日, 发放"
+                      },
+                      {
+                        "chunk_id": "79028b7792_7",
+                        "rrf_score": 0.0156,
+                        "snippet": "4. 调薪\n年度调薪每年 4 月评审一次，结合绩效等级与市场分位确定，结果由 HR 一对一\n沟通。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "一对一, 评审, 绩效, HR, 结合, 调薪, 分位, 等级, 沟通, 年度"
+                      },
+                      {
+                        "chunk_id": "79028b7792_8",
+                        "rrf_score": 0.0154,
+                        "snippet": "年度调薪每年 4 月评审一次，结合绩效等级与市场分位确定，结果由 HR 一对一\n沟通。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "一对一, 评审, 绩效, HR, 结合, 调薪, 分位, 等级, 沟通, 年度"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 50,
+              "sequence": 4,
+              "metrics": {
+                "vector_hits": 9,
+                "bm25_hits": 0,
+                "merged_hits": 8
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "rrf_fusion",
+                  "timestamp": "2026-08-27T14:53:39Z",
+                  "level": "info",
+                  "message": "Vector:9 + BM25:0 → RRF:8",
+                  "attributes": {
+                    "vector_top3": [
+                      {
+                        "chunk_id": "79028b7792_0",
+                        "score": 0.0164,
+                        "snippet": "薪酬与个税（人力资源部）\n1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。\n2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy"
+                      },
+                      {
+                        "chunk_id": "79028b7792_6",
+                        "score": 0.0161,
+                        "snippet": "公司按属地标准为员工缴纳五险一金，个人部分从工资中代扣。入职当月即参保，\n离职次月停保。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy"
+                      },
+                      {
+                        "chunk_id": "79028b7792_1",
+                        "score": 0.0159,
+                        "snippet": "1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy"
+                      }
+                    ],
+                    "bm25_top3": [],
+                    "fused_top5": [
+                      {
+                        "chunk_id": "79028b7792_0",
+                        "rrf_score": 0.0164,
+                        "snippet": "薪酬与个税（人力资源部）\n1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。\n2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "五险, 工资, 预扣, HR, 调薪, 工资条, 发薪日, financial, 每月"
+                      },
+                      {
+                        "chunk_id": "79028b7792_6",
+                        "rrf_score": 0.0161,
+                        "snippet": "公司按属地标准为员工缴纳五险一金，个人部分从工资中代扣。入职当月即参保，\n离职次月停保。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "参保, 属地, 离职, 停保, 缴纳, 一金, 当月, 入职, 五险, 代扣"
+                      },
+                      {
+                        "chunk_id": "79028b7792_1",
+                        "rrf_score": 0.0159,
+                        "snippet": "1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "薪资, 节假日, 法定, 工作日, 顺延, 首个, 每月, 发薪日, 发放"
+                      },
+                      {
+                        "chunk_id": "79028b7792_7",
+                        "rrf_score": 0.0156,
+                        "snippet": "4. 调薪\n年度调薪每年 4 月评审一次，结合绩效等级与市场分位确定，结果由 HR 一对一\n沟通。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "一对一, 评审, 绩效, HR, 结合, 调薪, 分位, 等级, 沟通, 年度"
+                      },
+                      {
+                        "chunk_id": "79028b7792_8",
+                        "rrf_score": 0.0154,
+                        "snippet": "年度调薪每年 4 月评审一次，结合绩效等级与市场分位确定，结果由 HR 一对一\n沟通。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "一对一, 评审, 绩效, HR, 结合, 调薪, 分位, 等级, 沟通, 年度"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 174,
+              "sequence": 5,
+              "metrics": {
+                "input_docs": 9,
+                "output_docs": 0,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 174,
+              "sequence": 6,
+              "metrics": {
+                "input_docs": 9,
+                "output_docs": 0,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 0.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 364,
+      "error_msg": null
+    },
+    {
+      "case_id": "DEPT-004",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "79028b7792"
+        ],
+        "allowed_departments": [
+          "hr"
+        ],
+        "forbidden_departments": [
+          "finance"
+        ],
+        "min_relevant_chunks": 1
+      },
+      "actual": {
+        "question": "工资什么时候发？个税怎么算？",
+        "kb_id": "policy_general",
+        "department": "hr",
+        "retrieved_docs": [
+          "79028b7792"
+        ],
+        "retrieved_departments": [
+          "hr"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "79028b7792",
+            "title": "",
+            "chunk_id": "79028b7792_0",
+            "department": "hr",
+            "rerank_score": 0.8621,
+            "source": "",
+            "snippet": "薪酬与个税（人力资源部） 1. 发薪日 工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。 2. 个税计算 个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、 住房贷款利息、赡养老人等。HR 系统每月自动完成个税预扣并生成工资条。 3. 社保与公积金 公司按属地标准为员工缴纳五险一金，个人部分从工资中代扣。入职当月即参保， 离职次月停保。 4. 调薪 ",
+            "page_content": "薪酬与个税（人力资源部）\n1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。\n2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系统每月自动完成个税预扣并生成工资条。\n3. 社保与公积金\n公司按属地标准为员工缴纳五险一金，个人部分从工资中代扣。入职当月即参保，\n离职次月停保。\n4. 调薪\n年度调薪每年 4 月评审一次，结合绩效等级与市场分位确定，结果由 HR 一对一\n沟通。"
+          },
+          {
+            "doc_id": "79028b7792",
+            "title": "",
+            "chunk_id": "",
+            "department": "hr",
+            "rerank_score": 0.8361,
+            "source": "",
+            "snippet": "薪酬与个税（人力资源部） 1. 发薪日 工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。 2. 个税计算 个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、 住房贷款利息、赡养老人等。HR 系统每月自动完成个税预扣并生成工资条。 3. 社保与公积金 公司按属地标准为员工缴纳五险一金，个人部分从工资中代扣。入职当月即参保， 离职次月停保。 4. 调薪 ",
+            "page_content": "薪酬与个税（人力资源部）\n1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。\n2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系统每月自动完成个税预扣并生成工资条。\n3. 社保与公积金\n公司按属地标准为员工缴纳五险一金，个人部分从工资中代扣。入职当月即参保，\n离职次月停保。\n4. 调薪\n年度调薪每年 4 月评审一次，结合绩效等级与市场分位确定，结果由 HR 一对一\n沟通。\n\n1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。\n\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。\n\n2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系统每月自动完成个税预扣并生成工资条。\n\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系统每月自动完成个税预扣并生成工资条。\n\n3. 社保与公积金\n公司按属地标准为员工缴纳五险一金，个人部分从工资中代扣。入职当月即参保，\n离职次月停保。\n\n公司按属地标准为员工缴纳五险一金，个人部分从工资中代扣。入职当月即参保，\n离职次月停保。\n\n4. 调薪\n年度调薪每年 4 月评审一次，结合绩效等级与市场分位确定，结果由 HR 一对一\n沟通。\n\n年度调薪每年 4 月评审一次，结合绩效等级与市场分位确定，结果由 HR 一对一\n沟通。"
+          },
+          {
+            "doc_id": "79028b7792",
+            "title": "",
+            "chunk_id": "79028b7792_1",
+            "department": "hr",
+            "rerank_score": 0.7013,
+            "source": "",
+            "snippet": "1. 发薪日 工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。",
+            "page_content": "1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。"
+          },
+          {
+            "doc_id": "79028b7792",
+            "title": "",
+            "chunk_id": "79028b7792_2",
+            "department": "hr",
+            "rerank_score": 0.6898,
+            "source": "",
+            "snippet": "工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。",
+            "page_content": "工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。"
+          },
+          {
+            "doc_id": "79028b7792",
+            "title": "",
+            "chunk_id": "79028b7792_3",
+            "department": "hr",
+            "rerank_score": 0.5235,
+            "source": "",
+            "snippet": "2. 个税计算 个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、 住房贷款利息、赡养老人等。HR 系统每月自动完成个税预扣并生成工资条。",
+            "page_content": "2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系统每月自动完成个税预扣并生成工资条。"
+          }
+        ],
+        "pipeline": {
+          "stage1_docs": 2,
+          "stage1_top_docs": [
+            {
+              "doc_id": "79028b7792",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "be99388a67",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        },
+        "rejection": {
+          "confidence": "medium",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.8621,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "92dafa5837ae",
+          "total_spans": 5,
+          "total_trace_ms": 890,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval DEPT-004",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 308,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "工资什么时候发？个税怎么算？",
+                "kb_id": "policy_general"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 67,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-08-27T14:53:40Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'policy_general', 'department': 'hr'}, persons=[], → 2 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "policy_general",
+                      "department": "hr"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 2,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 39,
+              "sequence": 2,
+              "metrics": {
+                "vector_hits": 16,
+                "bm25_hits": 0,
+                "merged_hits": 8
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "rrf_fusion",
+                  "timestamp": "2026-08-27T14:53:40Z",
+                  "level": "info",
+                  "message": "Vector:16 + BM25:0 → RRF:8",
+                  "attributes": {
+                    "vector_top3": [
+                      {
+                        "chunk_id": "79028b7792_0",
+                        "score": 0.0164,
+                        "snippet": "薪酬与个税（人力资源部）\n1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。\n2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy"
+                      },
+                      {
+                        "chunk_id": "79028b7792_3",
+                        "score": 0.0161,
+                        "snippet": "2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系统每月自动完成个税预扣并生成工资条。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy"
+                      },
+                      {
+                        "chunk_id": "79028b7792_1",
+                        "score": 0.0159,
+                        "snippet": "1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy"
+                      }
+                    ],
+                    "bm25_top3": [],
+                    "fused_top5": [
+                      {
+                        "chunk_id": "79028b7792_0",
+                        "rrf_score": 0.0164,
+                        "snippet": "薪酬与个税（人力资源部）\n1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。\n2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "五险, 工资, 预扣, HR, 调薪, 工资条, 发薪日, financial, 每月"
+                      },
+                      {
+                        "chunk_id": "79028b7792_3",
+                        "rrf_score": 0.0161,
+                        "snippet": "2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系统每月自动完成个税预扣并生成工资条。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "预扣, HR, 起征点, 住房贷款, 工资条, 计算, 个人所得税, 赡养, 子女教育"
+                      },
+                      {
+                        "chunk_id": "79028b7792_1",
+                        "rrf_score": 0.0159,
+                        "snippet": "1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "薪资, 节假日, 法定, 工作日, 顺延, 首个, 每月, 发薪日, 发放"
+                      },
+                      {
+                        "chunk_id": "79028b7792_4",
+                        "rrf_score": 0.0156,
+                        "snippet": "个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系统每月自动完成个税预扣并生成工资条。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "预扣, HR, 起征点, 住房贷款, 工资条, 附加, 个人所得税, 赡养, 子女教育"
+                      },
+                      {
+                        "chunk_id": "79028b7792_2",
+                        "rrf_score": 0.0154,
+                        "snippet": "工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。",
+                        "source": "payroll_hr.md",
+                        "doc_type": "policy",
+                        "keywords": "薪资, 节假日, 法定, 工作日, 顺延, 首个, 节后, 每月, 发放"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 238,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 9,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 238,
+              "sequence": 4,
+              "metrics": {
+                "input_docs": 9,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 335,
+      "error_msg": null
+    },
+    {
+      "case_id": "DEPT-005",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [],
+        "allowed_departments": [
+          "finance"
+        ],
+        "forbidden_departments": [
+          "hr"
+        ],
+        "min_relevant_chunks": 0
+      },
+      "actual": {
+        "question": "年假和调休怎么算？",
+        "kb_id": "policy_general",
+        "department": "finance",
+        "retrieved_docs": [],
+        "retrieved_departments": [],
+        "dept_leak": false,
+        "details": [],
+        "pipeline": {
+          "stage1_docs": 2,
+          "stage1_top_docs": [
+            {
+              "doc_id": "8d38891a89",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "04a34059af",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 0,
+          "after_rerank": 0,
+          "adaptive": "无结果"
+        },
+        "rejection": {
+          "confidence": "none",
+          "reject_gate": "retrieval",
+          "reject_reason": "no_evidence",
+          "top1_rerank_score": null,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "b7f27064f1a5",
+          "total_spans": 5,
+          "total_trace_ms": 741,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval DEPT-005",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 259,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "年假和调休怎么算？",
+                "kb_id": "policy_general"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 54,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-08-27T14:53:40Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'policy_general', 'department': 'finance'}, persons=[], → 2 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "policy_general",
+                      "department": "finance"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 2,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 26,
+              "sequence": 2,
+              "metrics": {
+                "vector_hits": 16,
+                "bm25_hits": 2,
+                "merged_hits": 8
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "rrf_fusion",
+                  "timestamp": "2026-08-27T14:53:40Z",
+                  "level": "info",
+                  "message": "Vector:16 + BM25:2 → RRF:8",
+                  "attributes": {
+                    "vector_top3": [
+                      {
+                        "chunk_id": "8d38891a89_3",
+                        "score": 0.0164,
+                        "snippet": "2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整\n申请，说明原因并附测算依据。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_4",
+                        "score": 0.0161,
+                        "snippet": "月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整\n申请，说明原因并附测算依据。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_0",
+                        "score": 0.0159,
+                        "snippet": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      }
+                    ],
+                    "bm25_top3": [
+                      {
+                        "chunk_id": "8d38891a89_10",
+                        "snippet": "每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_9",
+                        "snippet": "4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial"
+                      }
+                    ],
+                    "fused_top5": [
+                      {
+                        "chunk_id": "8d38891a89_9",
+                        "rrf_score": 0.0302,
+                        "snippet": "4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "出具, 专项, 决算, 科目, 季度末, 偏差, 财务, 执行, financial, 财务部"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_10",
+                        "rrf_score": 0.0299,
+                        "snippet": "每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "出具, 专项, 科目, 季度末, 偏差, 财务, 执行, 财务部, financial, 15%"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_3",
+                        "rrf_score": 0.0164,
+                        "snippet": "2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整\n申请，说明原因并附测算依据。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "均额, 月度, 提前, 年度预算, 发起, 支出, financial, 20%, 测算, 超预算"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_4",
+                        "rrf_score": 0.0161,
+                        "snippet": "月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整\n申请，说明原因并附测算依据。",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "均额, 月度, 提前, 年度预算, 发起, 支出, financial, 20%, 测算, 超预算"
+                      },
+                      {
+                        "chunk_id": "8d38891a89_0",
+                        "rrf_score": 0.0159,
+                        "snippet": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整",
+                        "source": "budget_fin.md",
+                        "doc_type": "financial",
+                        "keywords": "财务经理, 月度, 年度预算, 决算, 供应商管理, 审批, 采购, 财务, financial, security"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 201,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 9,
+                "output_docs": 0,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 201,
+              "sequence": 4,
+              "metrics": {
+                "input_docs": 9,
+                "output_docs": 0,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 0.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 275,
+      "error_msg": null
+    }
+  ]
+}

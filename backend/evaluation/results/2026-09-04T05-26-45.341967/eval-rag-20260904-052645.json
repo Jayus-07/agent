@@ -1,0 +1,4596 @@
+{
+  "timestamp": "2026-09-04T05:26:45.341967",
+  "module": "rag",
+  "mode": "offline",
+  "smoke": false,
+  "total_score": null,
+  "summaries": [
+    {
+      "module": "rag",
+      "total": 16,
+      "passed": 13,
+      "failed": 3,
+      "errors": 0,
+      "skipped": 0,
+      "pass_rate": 0.8125,
+      "metrics": {
+        "context_noise@10": 0.4792,
+        "top1_accuracy": 0.8125,
+        "gen_must_contain_hit": 0.5,
+        "ndcg@10": 0.7883,
+        "gen_S6_answer_correctness": 0.25,
+        "gen_supported_claim_count": 0.0,
+        "chunk_recall": 0.8125,
+        "dept_leak": 0.0,
+        "gen_must_not_contain_violation": 0.0,
+        "gen_claim_count": 1.0,
+        "gen_S7_faithfulness": 0.0,
+        "mrr": 0.8125,
+        "precision@5": 0.5208,
+        "recall@10": 0.7812,
+        "recall@5": 0.7812
+      }
+    }
+  ],
+  "results": [
+    {
+      "case_id": "V2-GEN-001",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "3e30e0df16"
+        ],
+        "relevant_snippets": [
+          "24小时"
+        ],
+        "match_type": "snippet"
+      },
+      "actual": {
+        "question": "下单后多久发货？请根据知识库回答。",
+        "kb_id": "rag_test_kb",
+        "department": "",
+        "retrieved_docs": [
+          "3e30e0df16",
+          "f938bc1033"
+        ],
+        "retrieved_departments": [
+          "general"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "56b2c5c6316d",
+            "department": "general",
+            "rerank_score": 0.9013,
+            "source": "",
+            "snippet": "Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。",
+            "page_content": "Q：客户下单后多久发货?\nA：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。"
+          },
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.8314,
+            "source": "",
+            "snippet": "Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。  Q：支持哪些支付方式? A：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。  Q：如何申请退款? A：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。  Q：退货运费谁承担? A：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定",
+            "page_content": "Q：客户下单后多久发货?\nA：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。\n\nQ：支持哪些支付方式?\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。\n\nQ：如何申请退款?\nA：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。\n\nQ：退货运费谁承担?\nA：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定的除外)。\n\nQ：订单可以修改地址吗?\nA：待发货状态可自行修改；已发货状态请联系客服申请拦截改址。\n\nQ：发票如何开具?\nA：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。\n\nQ：会员积分如何累计?\nA：每消费 1 元累计 1 分，满 1000 分可抵扣 10 元。\n\nQ：海外配送时效?\nA：标准配送 7-15 个工作日，加急配送 3-7 个工作日，具体以物流追踪页为准。\n\nQ：商品保修期多久?\nA：电子产品按品牌政策，一般 1 年；其他品类详见商品详情页。\n\nQ：如何联系人工客服?\nA：在线客服 9:00-22:00,电话客服 400-000-0000 转 1。\n\nQ：优惠券能否叠加使用?\nA：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。\n\nQ：退货商品需要原包装吗?\nA：建议保持原包装；若包装损坏可能影响退款金额。\n\nQ：如何查询物流轨迹?\nA：「我的订单」→「查看物流」可看到揽收、运输、派送、签收全节点。\n\nQ：地址写错了能改吗?\nA：待发货状态可修改一次，已发货请通过客服申请。\n\nQ：能开发票抬头吗?\nA：支持个人/企业抬头，需提供税号及开户银行（企业)。"
+          },
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.8314,
+            "source": "",
+            "snippet": "Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。  Q：支持哪些支付方式? A：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。  Q：如何申请退款? A：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。  Q：退货运费谁承担? A：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定",
+            "page_content": "Q：客户下单后多久发货?\nA：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。\n\nQ：支持哪些支付方式?\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。\n\nQ：如何申请退款?\nA：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。\n\nQ：退货运费谁承担?\nA：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定的除外)。\n\nQ：订单可以修改地址吗?\nA：待发货状态可自行修改；已发货状态请联系客服申请拦截改址。\n\nQ：发票如何开具?\nA：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。\n\nQ：会员积分如何累计?\nA：每消费 1 元累计 1 分，满 1000 分可抵扣 10 元。\n\nQ：海外配送时效?\nA：标准配送 7-15 个工作日，加急配送 3-7 个工作日，具体以物流追踪页为准。\n\nQ：商品保修期多久?\nA：电子产品按品牌政策，一般 1 年；其他品类详见商品详情页。\n\nQ：如何联系人工客服?\nA：在线客服 9:00-22:00,电话客服 400-000-0000 转 1。\n\nQ：优惠券能否叠加使用?\nA：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。\n\nQ：退货商品需要原包装吗?\nA：建议保持原包装；若包装损坏可能影响退款金额。\n\nQ：如何查询物流轨迹?\nA：「我的订单」→「查看物流」可看到揽收、运输、派送、签收全节点。\n\nQ：地址写错了能改吗?\nA：待发货状态可修改一次，已发货请通过客服申请。\n\nQ：能开发票抬头吗?\nA：支持个人/企业抬头，需提供税号及开户银行（企业)。"
+          },
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "672746e99b57",
+            "department": "general",
+            "rerank_score": 0.4585,
+            "source": "",
+            "snippet": "Q：发票如何开具? A：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。",
+            "page_content": "Q：发票如何开具?\nA：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。"
+          },
+          {
+            "doc_id": "f938bc1033",
+            "title": "",
+            "chunk_id": "9f3b52ec617d",
+            "department": "general",
+            "rerank_score": 0.4373,
+            "source": "",
+            "snippet": "2.1 适用条件：商品不影响二次销售，包装配件齐全。 2.2 时间窗口：客户签收后 7 天（含）内申请。 2.3 运费承担：买家承担来回运费。",
+            "page_content": "2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。\n2.3 运费承担：买家承担来回运费。"
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "f938bc1033",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "f938bc1033",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e044139401",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 1.0,
+            "doc_precision@1": 1.0,
+            "doc_recall@3": 1.0,
+            "doc_precision@3": 0.6667,
+            "doc_recall@5": 1.0,
+            "doc_precision@5": 0.4,
+            "doc_recall@10": 1.0,
+            "doc_precision@10": 0.4,
+            "doc_mrr": 1.0,
+            "doc_ndcg@10": 1.6309,
+            "context_noise@10": 0.6,
+            "top1_accuracy": 1.0
+          },
+          "S4_rerank": {
+            "avg_relevant_score": 0.7557,
+            "avg_noise_score": 0.4373,
+            "score_separation": 0.3184,
+            "top1_is_relevant": 1.0,
+            "top3_relevant_ratio": 1.0
+          },
+          "generation": {
+            "S6_answer_correctness": 0.0,
+            "must_contain_hit": 0.0,
+            "must_not_contain_violation": 0.0,
+            "S7_faithfulness": 0.0,
+            "claim_count": 1.0,
+            "supported_claim_count": 0.0
+          }
+        },
+        "rejection": {
+          "confidence": "medium",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.9013,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "b3af4e69de5b",
+          "total_spans": 5,
+          "total_trace_ms": 5619,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-GEN-001",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 2626,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "下单后多久发货？请根据知识库回答。",
+                "kb_id": "rag_test_kb"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 2311,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:40.149Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'rag_test_kb'}, persons=[], → 3 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "rag_test_kb"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 3,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 56,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 18,
+                "sparse_hits": 10,
+                "final_k": 9,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "overall_confidence": 0.3,
+                "query_complexity": "medium"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 313,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 10,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 313,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 10,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@5": 0.5,
+        "context_noise@10": 0.5,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0,
+        "gen_S6_answer_correctness": 0.0,
+        "gen_must_contain_hit": 0.0,
+        "gen_must_not_contain_violation": 0.0,
+        "gen_S7_faithfulness": 0.0,
+        "gen_claim_count": 1.0,
+        "gen_supported_claim_count": 0.0
+      },
+      "duration_ms": 3398,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-GEN-005",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "3e30e0df16"
+        ],
+        "relevant_snippets": [
+          "质量问题",
+          "运费"
+        ],
+        "match_type": "snippet"
+      },
+      "actual": {
+        "question": "退货运费由谁承担？",
+        "kb_id": "rag_test_kb",
+        "department": "",
+        "retrieved_docs": [
+          "3e30e0df16",
+          "e044139401",
+          "f938bc1033"
+        ],
+        "retrieved_departments": [
+          "general"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "33282632135e",
+            "department": "general",
+            "rerank_score": 0.9269,
+            "source": "",
+            "snippet": "Q：退货运费谁承担? A：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定的除外)。",
+            "page_content": "Q：退货运费谁承担?\nA：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定的除外)。"
+          },
+          {
+            "doc_id": "e044139401",
+            "title": "",
+            "chunk_id": "e044139401_1",
+            "department": "general",
+            "rerank_score": 0.7859,
+            "source": "",
+            "snippet": "Q：退货商品运费 A：质量问题由商家承担运费；无理由退货由买家承担运费。",
+            "page_content": "Q：退货商品运费\nA：质量问题由商家承担运费；无理由退货由买家承担运费。"
+          },
+          {
+            "doc_id": "f938bc1033",
+            "title": "",
+            "chunk_id": "0413577fc399",
+            "department": "general",
+            "rerank_score": 0.6031,
+            "source": "",
+            "snippet": "3.1 商品存在质量问题（破损/错发/性能故障),全额退款，商家承担运费。 3.2 客户需在签收后 48 小时内上传照片凭证。",
+            "page_content": "3.1 商品存在质量问题（破损/错发/性能故障),全额退款，商家承担运费。\n3.2 客户需在签收后 48 小时内上传照片凭证。"
+          },
+          {
+            "doc_id": "f938bc1033",
+            "title": "",
+            "chunk_id": "9f3b52ec617d",
+            "department": "general",
+            "rerank_score": 0.581,
+            "source": "",
+            "snippet": "2.1 适用条件：商品不影响二次销售，包装配件齐全。 2.2 时间窗口：客户签收后 7 天（含）内申请。 2.3 运费承担：买家承担来回运费。",
+            "page_content": "2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。\n2.3 运费承担：买家承担来回运费。"
+          },
+          {
+            "doc_id": "f938bc1033",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.5211,
+            "source": "",
+            "snippet": "示例跨境电商公司 退货政策 【仅供测试  内容虚构】  【仅供测试  内容虚构】  一、适用范围 所有在 示例跨境电商公司 平台销售的商品，除非商品详情页另有说明。  所有在 示例跨境电商公司 平台销售的商品，除非商品详情页另有说明。  2.1 适用条件：商品不影响二次销售，包装配件齐全。 2.2 时间窗口：客户签收后 7 天（含）内申请。 2.3 运费承担：买家承担来回运费。  3.1 商品存在",
+            "page_content": "示例跨境电商公司 退货政策\n【仅供测试  内容虚构】\n\n【仅供测试  内容虚构】\n\n一、适用范围\n所有在 示例跨境电商公司 平台销售的商品，除非商品详情页另有说明。\n\n所有在 示例跨境电商公司 平台销售的商品，除非商品详情页另有说明。\n\n2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。\n2.3 运费承担：买家承担来回运费。\n\n3.1 商品存在质量问题（破损/错发/性能故障),全额退款，商家承担运费。\n3.2 客户需在签收后 48 小时内上传照片凭证。\n\n四、不可退货商品\n贴身衣物、食品、定制商品、已拆封的密封包装商品（质量问题除外)。\n\n贴身衣物、食品、定制商品、已拆封的密封包装商品（质量问题除外)。\n\n五、退款时效\n仓库验收合格后 1-3 个工作日原路退回支付账户。\n\n仓库验收合格后 1-3 个工作日原路退回支付账户。\n\n六、争议处理\n客户与商家协商不成的，可申请平台介入，平台裁决 7 个工作日内作出。\n\n客户与商家协商不成的，可申请平台介入，平台裁决 7 个工作日内作出。"
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "f938bc1033",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "f938bc1033",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e044139401",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 0.0,
+            "doc_precision@1": 0.0,
+            "doc_recall@3": 0.0,
+            "doc_precision@3": 0.0,
+            "doc_recall@5": 1.0,
+            "doc_precision@5": 0.4,
+            "doc_recall@10": 1.0,
+            "doc_precision@10": 0.4,
+            "doc_mrr": 0.25,
+            "doc_ndcg@10": 0.8175,
+            "context_noise@10": 0.6,
+            "top1_accuracy": 0.0
+          },
+          "S4_rerank": {
+            "avg_relevant_score": 0.9269,
+            "avg_noise_score": 0.6228,
+            "score_separation": 0.3041,
+            "top1_is_relevant": 1.0,
+            "top3_relevant_ratio": 0.3333
+          },
+          "generation": {
+            "S6_answer_correctness": 0.5,
+            "must_contain_hit": 1.0,
+            "must_not_contain_violation": 0.0,
+            "S7_faithfulness": 0.0,
+            "claim_count": 1.0,
+            "supported_claim_count": 0.0
+          }
+        },
+        "rejection": {
+          "confidence": "medium",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.9269,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "b35d5b14c220",
+          "total_spans": 5,
+          "total_trace_ms": 821,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-GEN-005",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 289,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "退货运费由谁承担？",
+                "kb_id": "rag_test_kb"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 64,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:40.571Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'rag_test_kb'}, persons=[], → 3 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "rag_test_kb"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 3,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 46,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 9,
+                "sparse_hits": 10,
+                "final_k": 8,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "overall_confidence": 0.3,
+                "query_complexity": "simple"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 211,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 11,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 211,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 11,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@5": 0.3333,
+        "context_noise@10": 0.6667,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0,
+        "gen_S6_answer_correctness": 0.5,
+        "gen_must_contain_hit": 1.0,
+        "gen_must_not_contain_violation": 0.0,
+        "gen_S7_faithfulness": 0.0,
+        "gen_claim_count": 1.0,
+        "gen_supported_claim_count": 0.0
+      },
+      "duration_ms": 320,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-ADV-005",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "fd2910f986"
+        ],
+        "relevant_snippets": [
+          "CE认证",
+          "HS"
+        ],
+        "match_type": "snippet"
+      },
+      "actual": {
+        "question": "跨境电商发到欧盟需要什么认证？",
+        "kb_id": "rag_test_kb",
+        "department": "",
+        "retrieved_docs": [
+          "fd2910f986",
+          "14aa8a1c7a"
+        ],
+        "retrieved_departments": [
+          "general"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "fd2910f986",
+            "title": "",
+            "chunk_id": "560cf4e887df",
+            "department": "general",
+            "rerank_score": 0.9645,
+            "source": "",
+            "snippet": "Q：跨境电商发货到欧盟需要什么认证? A：CE 认证 + 海关申报(HS 编码)。",
+            "page_content": "Q：跨境电商发货到欧盟需要什么认证?\nA：CE 认证 + 海关申报(HS 编码)。"
+          },
+          {
+            "doc_id": "14aa8a1c7a",
+            "title": "",
+            "chunk_id": "3a71bd2f119a",
+            "department": "general",
+            "rerank_score": 0.3437,
+            "source": "",
+            "snippet": "名称：示例跨境电商公司",
+            "page_content": "名称：示例跨境电商公司"
+          },
+          {
+            "doc_id": "14aa8a1c7a",
+            "title": "",
+            "chunk_id": "d5fda6dabaeb",
+            "department": "general",
+            "rerank_score": 0.3428,
+            "source": "",
+            "snippet": "1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路 100 号 法定代表人：张三",
+            "page_content": "1.1 甲方（采购方）名称：示例跨境电商公司\n地址：示例市示例区示例路 100 号\n法定代表人：张三"
+          },
+          {
+            "doc_id": "14aa8a1c7a",
+            "title": "",
+            "chunk_id": "724c59d29139",
+            "department": "general",
+            "rerank_score": 0.331,
+            "source": "",
+            "snippet": "一、合同双方 1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路 100 号 法定代表人：张三 1.2 乙方（供应方）名称：示例供应商有限公司 地址：示例市供应商园区 B 座 法定代表人：李四",
+            "page_content": "一、合同双方\n1.1 甲方（采购方）名称：示例跨境电商公司\n地址：示例市示例区示例路 100 号\n法定代表人：张三\n1.2 乙方（供应方）名称：示例供应商有限公司\n地址：示例市供应商园区 B 座\n法定代表人：李四"
+          },
+          {
+            "doc_id": "14aa8a1c7a",
+            "title": "",
+            "chunk_id": "509e920f750c",
+            "department": "general",
+            "rerank_score": 0.3014,
+            "source": "",
+            "snippet": "四、质量要求 4.1 商品质量须符合国家相关标准及甲方书面要求。 4.2 抽检不合格率超过 5% 时，甲方有权要求换货或退货。",
+            "page_content": "四、质量要求\n4.1 商品质量须符合国家相关标准及甲方书面要求。\n4.2 抽检不合格率超过 5% 时，甲方有权要求换货或退货。"
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "fd2910f986",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "fd2910f986",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e87b88ae72",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e87b88ae72",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "14aa8a1c7a",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 1.0,
+            "doc_precision@1": 1.0,
+            "doc_recall@3": 1.0,
+            "doc_precision@3": 0.6667,
+            "doc_recall@5": 1.0,
+            "doc_precision@5": 0.4,
+            "doc_recall@10": 1.0,
+            "doc_precision@10": 0.4,
+            "doc_mrr": 1.0,
+            "doc_ndcg@10": 1.6309,
+            "context_noise@10": 0.6,
+            "top1_accuracy": 1.0
+          },
+          "S4_rerank": {
+            "avg_relevant_score": 0.9645,
+            "avg_noise_score": 0.3297,
+            "score_separation": 0.6348,
+            "top1_is_relevant": 1.0,
+            "top3_relevant_ratio": 0.3333
+          }
+        },
+        "rejection": {
+          "confidence": "high",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.9645,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "fd6be92d148e",
+          "total_spans": 5,
+          "total_trace_ms": 765,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-ADV-005",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 262,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "跨境电商发到欧盟需要什么认证？",
+                "kb_id": "rag_test_kb"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 37,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:40.876Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'rag_test_kb'}, persons=[], → 3 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "rag_test_kb"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 3,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 20,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 18,
+                "sparse_hits": 10,
+                "final_k": 9,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "low_confidence_action": "expand_k_or_rewrite",
+                "overall_confidence": 0.1,
+                "query_complexity": "medium"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 223,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 10,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 223,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 10,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@5": 0.5,
+        "context_noise@10": 0.5,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 278,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-BASIC-001",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "3e30e0df16"
+        ],
+        "relevant_snippets": [
+          "24小时",
+          "现货"
+        ],
+        "match_type": "snippet"
+      },
+      "actual": {
+        "question": "下单后多久发货？",
+        "kb_id": "rag_test_kb",
+        "department": "",
+        "retrieved_docs": [
+          "3e30e0df16",
+          "f938bc1033"
+        ],
+        "retrieved_departments": [
+          "general"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "56b2c5c6316d",
+            "department": "general",
+            "rerank_score": 0.9012,
+            "source": "",
+            "snippet": "Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。",
+            "page_content": "Q：客户下单后多久发货?\nA：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。"
+          },
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.8153,
+            "source": "",
+            "snippet": "Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。  Q：支持哪些支付方式? A：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。  Q：如何申请退款? A：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。  Q：退货运费谁承担? A：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定",
+            "page_content": "Q：客户下单后多久发货?\nA：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。\n\nQ：支持哪些支付方式?\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。\n\nQ：如何申请退款?\nA：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。\n\nQ：退货运费谁承担?\nA：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定的除外)。\n\nQ：订单可以修改地址吗?\nA：待发货状态可自行修改；已发货状态请联系客服申请拦截改址。\n\nQ：发票如何开具?\nA：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。\n\nQ：会员积分如何累计?\nA：每消费 1 元累计 1 分，满 1000 分可抵扣 10 元。\n\nQ：海外配送时效?\nA：标准配送 7-15 个工作日，加急配送 3-7 个工作日，具体以物流追踪页为准。\n\nQ：商品保修期多久?\nA：电子产品按品牌政策，一般 1 年；其他品类详见商品详情页。\n\nQ：如何联系人工客服?\nA：在线客服 9:00-22:00,电话客服 400-000-0000 转 1。\n\nQ：优惠券能否叠加使用?\nA：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。\n\nQ：退货商品需要原包装吗?\nA：建议保持原包装；若包装损坏可能影响退款金额。\n\nQ：如何查询物流轨迹?\nA：「我的订单」→「查看物流」可看到揽收、运输、派送、签收全节点。\n\nQ：地址写错了能改吗?\nA：待发货状态可修改一次，已发货请通过客服申请。\n\nQ：能开发票抬头吗?\nA：支持个人/企业抬头，需提供税号及开户银行（企业)。"
+          },
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.8153,
+            "source": "",
+            "snippet": "Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。  Q：支持哪些支付方式? A：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。  Q：如何申请退款? A：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。  Q：退货运费谁承担? A：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定",
+            "page_content": "Q：客户下单后多久发货?\nA：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。\n\nQ：支持哪些支付方式?\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。\n\nQ：如何申请退款?\nA：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。\n\nQ：退货运费谁承担?\nA：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定的除外)。\n\nQ：订单可以修改地址吗?\nA：待发货状态可自行修改；已发货状态请联系客服申请拦截改址。\n\nQ：发票如何开具?\nA：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。\n\nQ：会员积分如何累计?\nA：每消费 1 元累计 1 分，满 1000 分可抵扣 10 元。\n\nQ：海外配送时效?\nA：标准配送 7-15 个工作日，加急配送 3-7 个工作日，具体以物流追踪页为准。\n\nQ：商品保修期多久?\nA：电子产品按品牌政策，一般 1 年；其他品类详见商品详情页。\n\nQ：如何联系人工客服?\nA：在线客服 9:00-22:00,电话客服 400-000-0000 转 1。\n\nQ：优惠券能否叠加使用?\nA：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。\n\nQ：退货商品需要原包装吗?\nA：建议保持原包装；若包装损坏可能影响退款金额。\n\nQ：如何查询物流轨迹?\nA：「我的订单」→「查看物流」可看到揽收、运输、派送、签收全节点。\n\nQ：地址写错了能改吗?\nA：待发货状态可修改一次，已发货请通过客服申请。\n\nQ：能开发票抬头吗?\nA：支持个人/企业抬头，需提供税号及开户银行（企业)。"
+          },
+          {
+            "doc_id": "f938bc1033",
+            "title": "",
+            "chunk_id": "afbdc3ff53cc",
+            "department": "general",
+            "rerank_score": 0.5248,
+            "source": "",
+            "snippet": "客户与商家协商不成的，可申请平台介入，平台裁决 7 个工作日内作出。",
+            "page_content": "客户与商家协商不成的，可申请平台介入，平台裁决 7 个工作日内作出。"
+          },
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "672746e99b57",
+            "department": "general",
+            "rerank_score": 0.496,
+            "source": "",
+            "snippet": "Q：发票如何开具? A：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。",
+            "page_content": "Q：发票如何开具?\nA：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。"
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "f938bc1033",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "f938bc1033",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e044139401",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 1.0,
+            "doc_precision@1": 1.0,
+            "doc_recall@3": 1.0,
+            "doc_precision@3": 0.6667,
+            "doc_recall@5": 1.0,
+            "doc_precision@5": 0.4,
+            "doc_recall@10": 1.0,
+            "doc_precision@10": 0.4,
+            "doc_mrr": 1.0,
+            "doc_ndcg@10": 1.6309,
+            "context_noise@10": 0.6,
+            "top1_accuracy": 1.0
+          },
+          "S4_rerank": {
+            "avg_relevant_score": 0.757,
+            "avg_noise_score": 0.5248,
+            "score_separation": 0.2321,
+            "top1_is_relevant": 1.0,
+            "top3_relevant_ratio": 1.0
+          }
+        },
+        "rejection": {
+          "confidence": "medium",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.9012,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "c235624457ac",
+          "total_spans": 5,
+          "total_trace_ms": 653,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-BASIC-001",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 226,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "下单后多久发货？",
+                "kb_id": "rag_test_kb"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 37,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 9,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:41.151Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'rag_test_kb'}, persons=[], → 3 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "rag_test_kb"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 3,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 17,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 16,
+                "sparse_hits": 10,
+                "final_k": 8,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "overall_confidence": 0.3,
+                "query_complexity": "simple"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 187,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 10,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 186,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 10,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@5": 0.5,
+        "context_noise@10": 0.5,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 240,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-BASIC-002",
+      "module": "rag",
+      "status": "fail",
+      "expected": {
+        "relevant_docs": [
+          "3e30e0df16"
+        ],
+        "relevant_snippets": [
+          "支付宝",
+          "微信",
+          "信用卡"
+        ],
+        "match_type": "snippet"
+      },
+      "actual": {
+        "question": "支持哪些支付方式？",
+        "kb_id": "rag_test_kb",
+        "department": "",
+        "retrieved_docs": [
+          "894418906b",
+          "276a3f4841"
+        ],
+        "retrieved_departments": [
+          "general"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "894418906b",
+            "title": "",
+            "chunk_id": "58796282851b",
+            "department": "general",
+            "rerank_score": 0.5343,
+            "source": "",
+            "snippet": "7.2 财务核对后按合同约定方式付款。",
+            "page_content": "7.2 财务核对后按合同约定方式付款。"
+          },
+          {
+            "doc_id": "894418906b",
+            "title": "",
+            "chunk_id": "9af8469c31e8",
+            "department": "general",
+            "rerank_score": 0.373,
+            "source": "",
+            "snippet": "七、对账付款 7.1 供应商按合同账期提交对账单。 7.2 财务核对后按合同约定方式付款。",
+            "page_content": "七、对账付款\n7.1 供应商按合同账期提交对账单。\n7.2 财务核对后按合同约定方式付款。"
+          },
+          {
+            "doc_id": "276a3f4841",
+            "title": "",
+            "chunk_id": "c381e5492bd4",
+            "department": "general",
+            "rerank_score": 0.3276,
+            "source": "",
+            "snippet": "采用前后端分离 + 微服务架构。前端为多端统一的 Web / 小程序壳；后端按业务域拆分订单、商品、库存、支付、物流、风控等服务，对外通过 API Gateway 统一暴露，幂等与限流在网关层完成。",
+            "page_content": "采用前后端分离 + 微服务架构。前端为多端统一的 Web /\n小程序壳；后端按业务域拆分订单、商品、库存、支付、物流、风控等服务，对外通过 API Gateway\n统一暴露，幂等与限流在网关层完成。"
+          },
+          {
+            "doc_id": "276a3f4841",
+            "title": "",
+            "chunk_id": "a69892308002",
+            "department": "general",
+            "rerank_score": 0.321,
+            "source": "",
+            "snippet": "一、系统概述 本系统支撑示例跨境电商公司面向全球买家的商品展示、交易、履约与售后全链路。整体可用性目标 ≥ 99.95%，P99 接口延迟 ≤ 500 ms，错误率 ≤ 0.1%。",
+            "page_content": "一、系统概述\n本系统支撑示例跨境电商公司面向全球买家的商品展示、交易、履约与售后全链路。整体可用性目标\n≥ 99.95%，P99 接口延迟 ≤ 500 ms，错误率 ≤ 0.1%。"
+          },
+          {
+            "doc_id": "894418906b",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.3104,
+            "source": "",
+            "snippet": "一、适用范围 本流程适用于所有商品采购活动，涵盖国内采购与跨境采购。  本流程适用于所有商品采购活动，涵盖国内采购与跨境采购。  二、采购申请 2.1 需求部门在 OA 提交采购申请，注明商品名称、规格、数量、预算及用途。 2.2 单笔金额 5000 元以下由部门负责人审批;5000-50000 元需总监审批;50000 元以上需总经理审批。  2.1 需求部门在 OA 提交采购申请，注明商品名称",
+            "page_content": "一、适用范围\n本流程适用于所有商品采购活动，涵盖国内采购与跨境采购。\n\n本流程适用于所有商品采购活动，涵盖国内采购与跨境采购。\n\n二、采购申请\n2.1 需求部门在 OA 提交采购申请，注明商品名称、规格、数量、预算及用途。\n2.2 单笔金额 5000 元以下由部门负责人审批;5000-50000 元需总监审批;50000 元以上需总经理审批。\n\n2.1 需求部门在 OA 提交采购申请，注明商品名称、规格、数量、预算及用途。\n\n2.2 单笔金额 5000 元以下由部门负责人审批;5000-50000 元需总监审批;50000 元以上需总经理审批。\n\n三、供应商选择\n3.1 合格供应商名录内的供应商优先。\n3.2 新供应商需经资质初审、样品验证、试单三个环节，合格后纳入名录。\n\n3.1 合格供应商名录内的供应商优先。\n\n3.2 新供应商需经资质初审、样品验证、试单三个环节，合格后纳入名录。\n\n四、合同签订\n4.1 单笔金额 10000 元以上必须签订书面合同。\n4.2 合同条款需经法务审核，包含价格、质量、交期、违约责任。\n\n4.1 单笔金额 10000 元以上必须签订书面合同。\n\n4.2 合同条款需经法务审核，包含价格、质量、交期、违约责任。\n\n五、订单执行\n5.1 采购员在 ERP 下单，确认供应商及交付时间。\n5.2 大宗采购需分批下单，首批不低于总数 30%。\n\n5.1 采购员在 ERP 下单，确认供应商及交付时间。\n\n5.2 大宗采购需分批下单，首批不低于总数 30%。\n\n六、验收入库\n6.1 仓库按 PO 核对数量与规格。\n6.2 质检员按 AQL 抽样标准检验，合格批次办理入库。\n\n6.1 仓库按 PO 核对数量与规格。\n\n6.2 质检员按 AQL 抽样标准检验，合格批次办理入库。\n\n七、对账付款\n7.1 供应商按合同账期提交对账单。\n7.2 财务核对后按合同约定方式付款。\n\n7.1 供应商按合同账期提交对账单。\n\n7.2 财务核对后按合同约定方式付款。"
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "276a3f4841",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "276a3f4841",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "894418906b",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "9b708f17b6",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "9b708f17b6",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 0.0,
+            "doc_precision@1": 0.0,
+            "doc_recall@3": 0.0,
+            "doc_precision@3": 0.0,
+            "doc_recall@5": 0.0,
+            "doc_precision@5": 0.0,
+            "doc_recall@10": 0.0,
+            "doc_precision@10": 0.0,
+            "doc_mrr": 0.0,
+            "doc_ndcg@10": 0.0,
+            "context_noise@10": 1.0,
+            "top1_accuracy": 0.0
+          }
+        },
+        "rejection": {
+          "confidence": "low",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.5343,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "eefb915edb51",
+          "total_spans": 5,
+          "total_trace_ms": 929,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-BASIC-002",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 320,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "支持哪些支付方式？",
+                "kb_id": "rag_test_kb"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 66,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 10,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:41.397Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'rag_test_kb'}, persons=[], → 3 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "rag_test_kb"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 3,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 43,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 16,
+                "sparse_hits": 10,
+                "final_k": 8,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "overall_confidence": 0.3,
+                "query_complexity": "simple"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 250,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 12,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 250,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 12,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 0.0,
+        "recall@10": 0.0,
+        "precision@5": 0.0,
+        "context_noise@10": 1.0,
+        "mrr": 0.0,
+        "ndcg@10": 0.0,
+        "chunk_recall": 0.0,
+        "top1_accuracy": 0.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 336,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-BASIC-003",
+      "module": "rag",
+      "status": "fail",
+      "expected": {
+        "relevant_docs": [
+          "3e30e0df16"
+        ],
+        "relevant_snippets": [
+          "申请退款",
+          "1-2个工作日"
+        ],
+        "match_type": "snippet"
+      },
+      "actual": {
+        "question": "如何申请退款？",
+        "kb_id": "rag_test_kb",
+        "department": "",
+        "retrieved_docs": [
+          "f938bc1033",
+          "e044139401",
+          "ea58e815ba"
+        ],
+        "retrieved_departments": [
+          "general"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "f938bc1033",
+            "title": "",
+            "chunk_id": "602dd98aa916",
+            "department": "general",
+            "rerank_score": 0.4638,
+            "source": "",
+            "snippet": "五、退款时效 仓库验收合格后 1-3 个工作日原路退回支付账户。",
+            "page_content": "五、退款时效\n仓库验收合格后 1-3 个工作日原路退回支付账户。"
+          },
+          {
+            "doc_id": "e044139401",
+            "title": "",
+            "chunk_id": "e044139401_0",
+            "department": "general",
+            "rerank_score": 0.4556,
+            "source": "",
+            "snippet": "Q：七天无理由退货范围 A：支持，客户在签收后 7 天内可申请无理由退货（贴身衣物/食品等除外)。",
+            "page_content": "Q：七天无理由退货范围\nA：支持，客户在签收后 7 天内可申请无理由退货（贴身衣物/食品等除外)。"
+          },
+          {
+            "doc_id": "ea58e815ba",
+            "title": "",
+            "chunk_id": "065f95f7d39b",
+            "department": "general",
+            "rerank_score": 0.4266,
+            "source": "",
+            "snippet": "活动规则: 1. 单笔订单实付满 200 元可用 2. 优惠不与店铺券叠加 3. 退款说明：活动结束后统一发放等额优惠券，不支持现金退款。",
+            "page_content": "活动规则:\n1. 单笔订单实付满 200 元可用\n2. 优惠不与店铺券叠加\n3. 退款说明：活动结束后统一发放等额优惠券，不支持现金退款。"
+          },
+          {
+            "doc_id": "ea58e815ba",
+            "title": "",
+            "chunk_id": "89c3ad83819c",
+            "department": "general",
+            "rerank_score": 0.4243,
+            "source": "",
+            "snippet": "退款流程不适用本促销",
+            "page_content": "退款流程不适用本促销"
+          },
+          {
+            "doc_id": "e044139401",
+            "title": "",
+            "chunk_id": "e044139401_2",
+            "department": "general",
+            "rerank_score": 0.4197,
+            "source": "",
+            "snippet": "Q：退款时效 A：商品验收合格后,1-3 个工作日内原路退回支付账户。",
+            "page_content": "Q：退款时效\nA：商品验收合格后,1-3 个工作日内原路退回支付账户。"
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "ea58e815ba",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "ea58e815ba",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "f938bc1033",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "f938bc1033",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e044139401",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 0.0,
+            "doc_precision@1": 0.0,
+            "doc_recall@3": 0.0,
+            "doc_precision@3": 0.0,
+            "doc_recall@5": 0.0,
+            "doc_precision@5": 0.0,
+            "doc_recall@10": 0.0,
+            "doc_precision@10": 0.0,
+            "doc_mrr": 0.0,
+            "doc_ndcg@10": 0.0,
+            "context_noise@10": 1.0,
+            "top1_accuracy": 0.0
+          }
+        },
+        "rejection": {
+          "confidence": "none",
+          "reject_gate": "retrieval",
+          "reject_reason": "low_relevance",
+          "top1_rerank_score": 0.4638,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "62a053f7d937",
+          "total_spans": 5,
+          "total_trace_ms": 811,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-BASIC-003",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 275,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "如何申请退款？",
+                "kb_id": "rag_test_kb"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 70,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:41.729Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'rag_test_kb'}, persons=[], → 3 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "rag_test_kb"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 3,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 56,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 11,
+                "sparse_hits": 10,
+                "final_k": 8,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "overall_confidence": 0.3,
+                "query_complexity": "simple"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 205,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 11,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 205,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 11,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 0.0,
+        "recall@10": 0.0,
+        "precision@5": 0.0,
+        "context_noise@10": 1.0,
+        "mrr": 0.0,
+        "ndcg@10": 0.0,
+        "chunk_recall": 0.0,
+        "top1_accuracy": 0.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 293,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-BASIC-004",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "3e30e0df16"
+        ],
+        "relevant_snippets": [
+          "1年",
+          "电子产品"
+        ],
+        "match_type": "snippet"
+      },
+      "actual": {
+        "question": "商品保修期多久？",
+        "kb_id": "rag_test_kb",
+        "department": "",
+        "retrieved_docs": [
+          "3e30e0df16",
+          "f938bc1033"
+        ],
+        "retrieved_departments": [
+          "general"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "0ad7017475fc",
+            "department": "general",
+            "rerank_score": 0.9121,
+            "source": "",
+            "snippet": "Q：商品保修期多久? A：电子产品按品牌政策，一般 1 年；其他品类详见商品详情页。",
+            "page_content": "Q：商品保修期多久?\nA：电子产品按品牌政策，一般 1 年；其他品类详见商品详情页。"
+          },
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.8754,
+            "source": "",
+            "snippet": "Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。  Q：支持哪些支付方式? A：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。  Q：如何申请退款? A：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。  Q：退货运费谁承担? A：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定",
+            "page_content": "Q：客户下单后多久发货?\nA：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。\n\nQ：支持哪些支付方式?\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。\n\nQ：如何申请退款?\nA：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。\n\nQ：退货运费谁承担?\nA：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定的除外)。\n\nQ：订单可以修改地址吗?\nA：待发货状态可自行修改；已发货状态请联系客服申请拦截改址。\n\nQ：发票如何开具?\nA：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。\n\nQ：会员积分如何累计?\nA：每消费 1 元累计 1 分，满 1000 分可抵扣 10 元。\n\nQ：海外配送时效?\nA：标准配送 7-15 个工作日，加急配送 3-7 个工作日，具体以物流追踪页为准。\n\nQ：商品保修期多久?\nA：电子产品按品牌政策，一般 1 年；其他品类详见商品详情页。\n\nQ：如何联系人工客服?\nA：在线客服 9:00-22:00,电话客服 400-000-0000 转 1。\n\nQ：优惠券能否叠加使用?\nA：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。\n\nQ：退货商品需要原包装吗?\nA：建议保持原包装；若包装损坏可能影响退款金额。\n\nQ：如何查询物流轨迹?\nA：「我的订单」→「查看物流」可看到揽收、运输、派送、签收全节点。\n\nQ：地址写错了能改吗?\nA：待发货状态可修改一次，已发货请通过客服申请。\n\nQ：能开发票抬头吗?\nA：支持个人/企业抬头，需提供税号及开户银行（企业)。"
+          },
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.8754,
+            "source": "",
+            "snippet": "Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。  Q：支持哪些支付方式? A：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。  Q：如何申请退款? A：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。  Q：退货运费谁承担? A：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定",
+            "page_content": "Q：客户下单后多久发货?\nA：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。\n\nQ：支持哪些支付方式?\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。\n\nQ：如何申请退款?\nA：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。\n\nQ：退货运费谁承担?\nA：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定的除外)。\n\nQ：订单可以修改地址吗?\nA：待发货状态可自行修改；已发货状态请联系客服申请拦截改址。\n\nQ：发票如何开具?\nA：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。\n\nQ：会员积分如何累计?\nA：每消费 1 元累计 1 分，满 1000 分可抵扣 10 元。\n\nQ：海外配送时效?\nA：标准配送 7-15 个工作日，加急配送 3-7 个工作日，具体以物流追踪页为准。\n\nQ：商品保修期多久?\nA：电子产品按品牌政策，一般 1 年；其他品类详见商品详情页。\n\nQ：如何联系人工客服?\nA：在线客服 9:00-22:00,电话客服 400-000-0000 转 1。\n\nQ：优惠券能否叠加使用?\nA：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。\n\nQ：退货商品需要原包装吗?\nA：建议保持原包装；若包装损坏可能影响退款金额。\n\nQ：如何查询物流轨迹?\nA：「我的订单」→「查看物流」可看到揽收、运输、派送、签收全节点。\n\nQ：地址写错了能改吗?\nA：待发货状态可修改一次，已发货请通过客服申请。\n\nQ：能开发票抬头吗?\nA：支持个人/企业抬头，需提供税号及开户银行（企业)。"
+          },
+          {
+            "doc_id": "f938bc1033",
+            "title": "",
+            "chunk_id": "9f3b52ec617d",
+            "department": "general",
+            "rerank_score": 0.5161,
+            "source": "",
+            "snippet": "2.1 适用条件：商品不影响二次销售，包装配件齐全。 2.2 时间窗口：客户签收后 7 天（含）内申请。 2.3 运费承担：买家承担来回运费。",
+            "page_content": "2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。\n2.3 运费承担：买家承担来回运费。"
+          },
+          {
+            "doc_id": "f938bc1033",
+            "title": "",
+            "chunk_id": "0413577fc399",
+            "department": "general",
+            "rerank_score": 0.4716,
+            "source": "",
+            "snippet": "3.1 商品存在质量问题（破损/错发/性能故障),全额退款，商家承担运费。 3.2 客户需在签收后 48 小时内上传照片凭证。",
+            "page_content": "3.1 商品存在质量问题（破损/错发/性能故障),全额退款，商家承担运费。\n3.2 客户需在签收后 48 小时内上传照片凭证。"
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "f938bc1033",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "f938bc1033",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "99a80089e4",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 1.0,
+            "doc_precision@1": 1.0,
+            "doc_recall@3": 1.0,
+            "doc_precision@3": 0.6667,
+            "doc_recall@5": 1.0,
+            "doc_precision@5": 0.4,
+            "doc_recall@10": 1.0,
+            "doc_precision@10": 0.4,
+            "doc_mrr": 1.0,
+            "doc_ndcg@10": 1.6309,
+            "context_noise@10": 0.6,
+            "top1_accuracy": 1.0
+          },
+          "S4_rerank": {
+            "avg_relevant_score": 0.8876,
+            "avg_noise_score": 0.4939,
+            "score_separation": 0.3938,
+            "top1_is_relevant": 1.0,
+            "top3_relevant_ratio": 1.0
+          }
+        },
+        "rejection": {
+          "confidence": "medium",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.9121,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "aac09f2c68a1",
+          "total_spans": 5,
+          "total_trace_ms": 961,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-BASIC-004",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 329,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "商品保修期多久？",
+                "kb_id": "rag_test_kb"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 87,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:42.029Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'rag_test_kb'}, persons=[], → 3 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "rag_test_kb"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 3,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 69,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 10,
+                "sparse_hits": 10,
+                "final_k": 8,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "overall_confidence": 0.3,
+                "query_complexity": "simple"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 238,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 12,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 238,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 12,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@5": 0.5,
+        "context_noise@10": 0.5,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 349,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-BASIC-007",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "99a80089e4"
+        ],
+        "relevant_snippets": [
+          "盘点",
+          "年度盘点"
+        ],
+        "match_type": "snippet"
+      },
+      "actual": {
+        "question": "盘点分为哪几类？",
+        "kb_id": "rag_test_kb",
+        "department": "",
+        "retrieved_docs": [
+          "99a80089e4"
+        ],
+        "retrieved_departments": [
+          "general"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "99a80089e4",
+            "title": "",
+            "chunk_id": "c67bda588f9f",
+            "department": "general",
+            "rerank_score": 0.7622,
+            "source": "",
+            "snippet": "第四章 盘点制度 月度盘点：每月末由财务组织抽盘，差异率不超过 1%。 年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。",
+            "page_content": "第四章 盘点制度\n月度盘点：每月末由财务组织抽盘，差异率不超过 1%。\n年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。"
+          },
+          {
+            "doc_id": "99a80089e4",
+            "title": "",
+            "chunk_id": "60dc12e0b529",
+            "department": "general",
+            "rerank_score": 0.6782,
+            "source": "",
+            "snippet": "入库单、出库单、调拨单、盘点表、损益单。",
+            "page_content": "入库单、出库单、调拨单、盘点表、损益单。"
+          },
+          {
+            "doc_id": "99a80089e4",
+            "title": "",
+            "chunk_id": "36eafc3bfb88",
+            "department": "general",
+            "rerank_score": 0.6705,
+            "source": "",
+            "snippet": "月度盘点：每月末由财务组织抽盘，差异率不超过 1%。 年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。",
+            "page_content": "月度盘点：每月末由财务组织抽盘，差异率不超过 1%。\n年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。"
+          },
+          {
+            "doc_id": "99a80089e4",
+            "title": "",
+            "chunk_id": "a8a08d3e8bd5",
+            "department": "general",
+            "rerank_score": 0.6609,
+            "source": "",
+            "snippet": "库存按状态分为以下五类：",
+            "page_content": "库存按状态分为以下五类："
+          },
+          {
+            "doc_id": "99a80089e4",
+            "title": "",
+            "chunk_id": "a1ae9e4f5002",
+            "department": "general",
+            "rerank_score": 0.6141,
+            "source": "",
+            "snippet": "第二章 库存分类 库存按状态分为以下五类：",
+            "page_content": "第二章 库存分类\n库存按状态分为以下五类："
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "276a3f4841",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "276a3f4841",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "99a80089e4",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "9b708f17b6",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "9b708f17b6",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 0.0,
+            "doc_precision@1": 0.0,
+            "doc_recall@3": 1.0,
+            "doc_precision@3": 0.3333,
+            "doc_recall@5": 1.0,
+            "doc_precision@5": 0.2,
+            "doc_recall@10": 1.0,
+            "doc_precision@10": 0.2,
+            "doc_mrr": 0.3333,
+            "doc_ndcg@10": 0.5,
+            "context_noise@10": 0.8,
+            "top1_accuracy": 0.0
+          },
+          "S4_rerank": {
+            "avg_relevant_score": 0.6772,
+            "avg_noise_score": 0.0,
+            "score_separation": 0.6772,
+            "top1_is_relevant": 1.0,
+            "top3_relevant_ratio": 1.0
+          }
+        },
+        "rejection": {
+          "confidence": "medium",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.7622,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "e6bcb6f90e85",
+          "total_spans": 5,
+          "total_trace_ms": 804,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-BASIC-007",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 278,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "盘点分为哪几类？",
+                "kb_id": "rag_test_kb"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 53,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 9,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:42.377Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'rag_test_kb'}, persons=[], → 3 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "rag_test_kb"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 3,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 29,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 16,
+                "sparse_hits": 10,
+                "final_k": 8,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "overall_confidence": 0.3,
+                "query_complexity": "simple"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 222,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 10,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 222,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 10,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@5": 1.0,
+        "context_noise@10": 0.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 293,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-BASIC-014",
+      "module": "rag",
+      "status": "fail",
+      "expected": {
+        "relevant_docs": [
+          "14aa8a1c7a"
+        ],
+        "relevant_snippets": [
+          "90000",
+          "玖万"
+        ],
+        "match_type": "snippet"
+      },
+      "actual": {
+        "question": "采购合同总金额是多少？",
+        "kb_id": "rag_test_kb",
+        "department": "",
+        "retrieved_docs": [
+          "894418906b"
+        ],
+        "retrieved_departments": [
+          "general"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "894418906b",
+            "title": "",
+            "chunk_id": "265ffa17b82f",
+            "department": "general",
+            "rerank_score": 0.5326,
+            "source": "",
+            "snippet": "4.1 单笔金额 10000 元以上必须签订书面合同。",
+            "page_content": "4.1 单笔金额 10000 元以上必须签订书面合同。"
+          },
+          {
+            "doc_id": "894418906b",
+            "title": "",
+            "chunk_id": "ab04ce3d913b",
+            "department": "general",
+            "rerank_score": 0.5289,
+            "source": "",
+            "snippet": "四、合同签订 4.1 单笔金额 10000 元以上必须签订书面合同。 4.2 合同条款需经法务审核，包含价格、质量、交期、违约责任。",
+            "page_content": "四、合同签订\n4.1 单笔金额 10000 元以上必须签订书面合同。\n4.2 合同条款需经法务审核，包含价格、质量、交期、违约责任。"
+          },
+          {
+            "doc_id": "894418906b",
+            "title": "",
+            "chunk_id": "ccdb91146e79",
+            "department": "general",
+            "rerank_score": 0.444,
+            "source": "",
+            "snippet": "二、采购申请 2.1 需求部门在 OA 提交采购申请，注明商品名称、规格、数量、预算及用途。 2.2 单笔金额 5000 元以下由部门负责人审批;5000-50000 元需总监审批;50000 元以上需总经理审批。",
+            "page_content": "二、采购申请\n2.1 需求部门在 OA 提交采购申请，注明商品名称、规格、数量、预算及用途。\n2.2 单笔金额 5000 元以下由部门负责人审批;5000-50000 元需总监审批;50000 元以上需总经理审批。"
+          },
+          {
+            "doc_id": "894418906b",
+            "title": "",
+            "chunk_id": "a4825a94bba6",
+            "department": "general",
+            "rerank_score": 0.4417,
+            "source": "",
+            "snippet": "2.2 单笔金额 5000 元以下由部门负责人审批;5000-50000 元需总监审批;50000 元以上需总经理审批。",
+            "page_content": "2.2 单笔金额 5000 元以下由部门负责人审批;5000-50000 元需总监审批;50000 元以上需总经理审批。"
+          },
+          {
+            "doc_id": "894418906b",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.382,
+            "source": "",
+            "snippet": "一、适用范围 本流程适用于所有商品采购活动，涵盖国内采购与跨境采购。  本流程适用于所有商品采购活动，涵盖国内采购与跨境采购。  二、采购申请 2.1 需求部门在 OA 提交采购申请，注明商品名称、规格、数量、预算及用途。 2.2 单笔金额 5000 元以下由部门负责人审批;5000-50000 元需总监审批;50000 元以上需总经理审批。  2.1 需求部门在 OA 提交采购申请，注明商品名称",
+            "page_content": "一、适用范围\n本流程适用于所有商品采购活动，涵盖国内采购与跨境采购。\n\n本流程适用于所有商品采购活动，涵盖国内采购与跨境采购。\n\n二、采购申请\n2.1 需求部门在 OA 提交采购申请，注明商品名称、规格、数量、预算及用途。\n2.2 单笔金额 5000 元以下由部门负责人审批;5000-50000 元需总监审批;50000 元以上需总经理审批。\n\n2.1 需求部门在 OA 提交采购申请，注明商品名称、规格、数量、预算及用途。\n\n2.2 单笔金额 5000 元以下由部门负责人审批;5000-50000 元需总监审批;50000 元以上需总经理审批。\n\n三、供应商选择\n3.1 合格供应商名录内的供应商优先。\n3.2 新供应商需经资质初审、样品验证、试单三个环节，合格后纳入名录。\n\n3.1 合格供应商名录内的供应商优先。\n\n3.2 新供应商需经资质初审、样品验证、试单三个环节，合格后纳入名录。\n\n四、合同签订\n4.1 单笔金额 10000 元以上必须签订书面合同。\n4.2 合同条款需经法务审核，包含价格、质量、交期、违约责任。\n\n4.1 单笔金额 10000 元以上必须签订书面合同。\n\n4.2 合同条款需经法务审核，包含价格、质量、交期、违约责任。\n\n五、订单执行\n5.1 采购员在 ERP 下单，确认供应商及交付时间。\n5.2 大宗采购需分批下单，首批不低于总数 30%。\n\n5.1 采购员在 ERP 下单，确认供应商及交付时间。\n\n5.2 大宗采购需分批下单，首批不低于总数 30%。\n\n六、验收入库\n6.1 仓库按 PO 核对数量与规格。\n6.2 质检员按 AQL 抽样标准检验，合格批次办理入库。\n\n6.1 仓库按 PO 核对数量与规格。\n\n6.2 质检员按 AQL 抽样标准检验，合格批次办理入库。\n\n七、对账付款\n7.1 供应商按合同账期提交对账单。\n7.2 财务核对后按合同约定方式付款。\n\n7.1 供应商按合同账期提交对账单。\n\n7.2 财务核对后按合同约定方式付款。"
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "894418906b",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "894418906b",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "14aa8a1c7a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "14aa8a1c7a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "093e7e0817",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 0.0,
+            "doc_precision@1": 0.0,
+            "doc_recall@3": 1.0,
+            "doc_precision@3": 0.3333,
+            "doc_recall@5": 1.0,
+            "doc_precision@5": 0.4,
+            "doc_recall@10": 1.0,
+            "doc_precision@10": 0.4,
+            "doc_mrr": 0.3333,
+            "doc_ndcg@10": 0.9307,
+            "context_noise@10": 0.6,
+            "top1_accuracy": 0.0
+          }
+        },
+        "rejection": {
+          "confidence": "low",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.5326,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "a1b6ece00e44",
+          "total_spans": 5,
+          "total_trace_ms": 1286,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-BASIC-014",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 438,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "采购合同总金额是多少？",
+                "kb_id": "rag_test_kb"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 79,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:42.666Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'rag_test_kb'}, persons=[], → 3 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "rag_test_kb"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 3,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 51,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 12,
+                "sparse_hits": 10,
+                "final_k": 8,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "overall_confidence": 0.3,
+                "query_complexity": "simple"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 359,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 10,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 359,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 10,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 0.0,
+        "recall@10": 0.0,
+        "precision@5": 0.0,
+        "context_noise@10": 1.0,
+        "mrr": 0.0,
+        "ndcg@10": 0.0,
+        "chunk_recall": 0.0,
+        "top1_accuracy": 0.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 443,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-BASIC-015",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "14aa8a1c7a"
+        ],
+        "relevant_snippets": [
+          "30",
+          "交付"
+        ],
+        "match_type": "snippet"
+      },
+      "actual": {
+        "question": "采购合同签订后多少天内要完成交付？",
+        "kb_id": "rag_test_kb",
+        "department": "",
+        "retrieved_docs": [
+          "14aa8a1c7a"
+        ],
+        "retrieved_departments": [
+          "general"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "14aa8a1c7a",
+            "title": "",
+            "chunk_id": "1b199c45d8d2",
+            "department": "general",
+            "rerank_score": 0.8981,
+            "source": "",
+            "snippet": "三、交付条款 3.1 交付时间：合同签订后 30 个自然日内完成全部交付。 3.2 交付地点：甲方指定仓库。 3.3 运输方式：乙方负责运输并承担运费。",
+            "page_content": "三、交付条款\n3.1 交付时间：合同签订后 30 个自然日内完成全部交付。\n3.2 交付地点：甲方指定仓库。\n3.3 运输方式：乙方负责运输并承担运费。"
+          },
+          {
+            "doc_id": "14aa8a1c7a",
+            "title": "",
+            "chunk_id": "07413593c1f9",
+            "department": "general",
+            "rerank_score": 0.8874,
+            "source": "",
+            "snippet": "3.1 交付时间：合同签订后 30 个自然日内完成全部交付。 3.2 交付地点：甲方指定仓库。 3.3 运输方式：乙方负责运输并承担运费。",
+            "page_content": "3.1 交付时间：合同签订后 30 个自然日内完成全部交付。\n3.2 交付地点：甲方指定仓库。\n3.3 运输方式：乙方负责运输并承担运费。"
+          },
+          {
+            "doc_id": "14aa8a1c7a",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.8762,
+            "source": "",
+            "snippet": "跨境电商采购合同 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司** 一、合同双方 1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路 100 号 法定代表人：张三 1.2 乙方（供应方）名称：示例供应商有限公司 地址：示例市供应商园区 B 座 法定代表人：李四 二、标的物 | 商品名称 | ",
+            "page_content": "跨境电商采购合同\n【仅供测试 · 内容虚构】\n**版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司**\n一、合同双方\n1.1 甲方（采购方）名称：示例跨境电商公司\n地址：示例市示例区示例路 100 号\n法定代表人：张三\n1.2 乙方（供应方）名称：示例供应商有限公司\n地址：示例市供应商园区 B 座\n法定代表人：李四\n二、标的物\n| 商品名称 | 规格 | 数量（件) | 单价（元) | 金额（元) |\n|---------|------|---------|----------|----------|\n| 跨境商品 A | 标准 | 1000 | 50 | 50000 |\n| 跨境商品 B | 加厚 | 500 | 80 | 40000 |\n合计：人民币玖万元整(¥90,000.00)。\n三、交付条款\n3.1 交付时间：合同签订后 30 个自然日内完成全部交付。\n3.2 交付地点：甲方指定仓库。\n3.3 运输方式：乙方负责运输并承担运费。\n四、质量要求\n4.1 商品质量须符合国家相关标准及甲方书面要求。\n4.2 抽检不合格率超过 5% 时，甲方有权要求换货或退货。\n五、付款方式\n5.1 合同签订后 3 个工作日内支付 30% 预付款。\n5.2 货物验收合格后 7 个工作日内支付 65% 货款。\n5.3 质保期满（交付后 90 日）无质量问题，支付剩余 5% 尾款。\n六、违约责任\n6.1 任何一方违约，应赔偿对方因此遭受的实际损失。\n6.2 不可抗力按《民法典》相关规定处理。\n七、争议解决\n合同履行过程中发生的争议，双方协商解决；协商不成的，提交甲方所在地有管辖权的人民法院诉讼解决。\n八、其他\n合同自双方盖章之日起生效，一式两份，甲乙双方各执一份。\n\n【仅供测试 · 内容虚构】\n\n**版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司**\n\n一、合同双方\n1.1 甲方（采购方）名称：示例跨境电商公司\n地址：示例市示例区示例路 100 号\n法定代表人：张三\n1.2 乙方（供应方）名称：示例供应商有限公司\n地址：示例市供应商园区 B 座\n法定代表人：李四\n\n1.1 甲方（采购方）名称：示例跨境电商公司\n地址：示例市示例区示例路 100 号\n法定代表人：张三\n\n名称：示例跨境电商公司\n\n地址：示例市示例区示例路 100 号\n\n1.2 乙方（供应方）名称：示例供应商有限公司\n地址：示例市供应商园区 B 座\n法定代表人：李四\n\n名称：示例供应商有限公司\n\n地址：示例市供应商园区 B 座\n\n二、标的物\n| 商品名称 | 规格 | 数量（件) | 单价（元) | 金额（元) |\n|---------|------|---------|----------|----------|\n| 跨境商品 A | 标准 | 1000 | 50 | 50000 |\n| 跨境商品 B | 加厚 | 500 | 80 | 40000 |\n合计：人民币玖万元整(¥90,000.00)。\n\n合计：人民币玖万元整(¥90,000.00)。\n\n三、交付条款\n3.1 交付时间：合同签订后 30 个自然日内完成全部交付。\n3.2 交付地点：甲方指定仓库。\n3.3 运输方式：乙方负责运输并承担运费。\n\n3.1 交付时间：合同签订后 30 个自然日内完成全部交付。\n3.2 交付地点：甲方指定仓库。\n3.3 运输方式：乙方负责运输并承担运费。\n\n四、质量要求\n4.1 商品质量须符合国家相关标准及甲方书面要求。\n4.2 抽检不合格率超过 5% 时，甲方有权要求换货或退货。\n\n4.1 商品质量须符合国家相关标准及甲方书面要求。\n4.2 抽检不合格率超过 5% 时，甲方有权要求换货或退货。\n\n五、付款方式\n5.1 合同签订后 3 个工作日内支付 30% 预付款。\n5.2 货物验收合格后 7 个工作日内支付 65% 货款。\n5.3 质保期满（交付后 90 日）无质量问题，支付剩余 5% 尾款。\n\n5.1 合同签订后 3 个工作日内支付 30% 预付款。\n5.2 货物验收合格后 7 个工作日内支付 65% 货款。\n5.3 质保期满（交付后 90 日）无质量问题，支付剩余 5% 尾款。\n\n六、违约责任\n6.1 任何一方违约，应赔偿对方因此遭受的实际损失。\n6.2 不可抗力按《民法典》相关规定处理。\n\n6.1 任何一方违约，应赔偿对方因此遭受的实际损失。\n6.2 不可抗力按《民法典》相关规定处理。\n\n七、争议解决\n合同履行过程中发生的争议，双方协商解决；协商不成的，提交甲方所在地有管辖权的人民法院诉讼解决。\n\n合同履行过程中发生的争议，双方协商解决；协商不成的，提交甲方所在地有管辖权的人民法院诉讼解决。\n\n八、其他\n合同自双方盖章之日起生效，一式两份，甲乙双方各执一份。\n\n合同自双方盖章之日起生效，一式两份，甲乙双方各执一份。"
+          },
+          {
+            "doc_id": "14aa8a1c7a",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.8762,
+            "source": "",
+            "snippet": "跨境电商采购合同 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司** 一、合同双方 1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路 100 号 法定代表人：张三 1.2 乙方（供应方）名称：示例供应商有限公司 地址：示例市供应商园区 B 座 法定代表人：李四 二、标的物 | 商品名称 | ",
+            "page_content": "跨境电商采购合同\n【仅供测试 · 内容虚构】\n**版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司**\n一、合同双方\n1.1 甲方（采购方）名称：示例跨境电商公司\n地址：示例市示例区示例路 100 号\n法定代表人：张三\n1.2 乙方（供应方）名称：示例供应商有限公司\n地址：示例市供应商园区 B 座\n法定代表人：李四\n二、标的物\n| 商品名称 | 规格 | 数量（件) | 单价（元) | 金额（元) |\n|---------|------|---------|----------|----------|\n| 跨境商品 A | 标准 | 1000 | 50 | 50000 |\n| 跨境商品 B | 加厚 | 500 | 80 | 40000 |\n合计：人民币玖万元整(¥90,000.00)。\n三、交付条款\n3.1 交付时间：合同签订后 30 个自然日内完成全部交付。\n3.2 交付地点：甲方指定仓库。\n3.3 运输方式：乙方负责运输并承担运费。\n四、质量要求\n4.1 商品质量须符合国家相关标准及甲方书面要求。\n4.2 抽检不合格率超过 5% 时，甲方有权要求换货或退货。\n五、付款方式\n5.1 合同签订后 3 个工作日内支付 30% 预付款。\n5.2 货物验收合格后 7 个工作日内支付 65% 货款。\n5.3 质保期满（交付后 90 日）无质量问题，支付剩余 5% 尾款。\n六、违约责任\n6.1 任何一方违约，应赔偿对方因此遭受的实际损失。\n6.2 不可抗力按《民法典》相关规定处理。\n七、争议解决\n合同履行过程中发生的争议，双方协商解决；协商不成的，提交甲方所在地有管辖权的人民法院诉讼解决。\n八、其他\n合同自双方盖章之日起生效，一式两份，甲乙双方各执一份。\n\n【仅供测试 · 内容虚构】\n\n**版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司**\n\n一、合同双方\n1.1 甲方（采购方）名称：示例跨境电商公司\n地址：示例市示例区示例路 100 号\n法定代表人：张三\n1.2 乙方（供应方）名称：示例供应商有限公司\n地址：示例市供应商园区 B 座\n法定代表人：李四\n\n1.1 甲方（采购方）名称：示例跨境电商公司\n地址：示例市示例区示例路 100 号\n法定代表人：张三\n\n名称：示例跨境电商公司\n\n地址：示例市示例区示例路 100 号\n\n1.2 乙方（供应方）名称：示例供应商有限公司\n地址：示例市供应商园区 B 座\n法定代表人：李四\n\n名称：示例供应商有限公司\n\n地址：示例市供应商园区 B 座\n\n二、标的物\n| 商品名称 | 规格 | 数量（件) | 单价（元) | 金额（元) |\n|---------|------|---------|----------|----------|\n| 跨境商品 A | 标准 | 1000 | 50 | 50000 |\n| 跨境商品 B | 加厚 | 500 | 80 | 40000 |\n合计：人民币玖万元整(¥90,000.00)。\n\n合计：人民币玖万元整(¥90,000.00)。\n\n三、交付条款\n3.1 交付时间：合同签订后 30 个自然日内完成全部交付。\n3.2 交付地点：甲方指定仓库。\n3.3 运输方式：乙方负责运输并承担运费。\n\n3.1 交付时间：合同签订后 30 个自然日内完成全部交付。\n3.2 交付地点：甲方指定仓库。\n3.3 运输方式：乙方负责运输并承担运费。\n\n四、质量要求\n4.1 商品质量须符合国家相关标准及甲方书面要求。\n4.2 抽检不合格率超过 5% 时，甲方有权要求换货或退货。\n\n4.1 商品质量须符合国家相关标准及甲方书面要求。\n4.2 抽检不合格率超过 5% 时，甲方有权要求换货或退货。\n\n五、付款方式\n5.1 合同签订后 3 个工作日内支付 30% 预付款。\n5.2 货物验收合格后 7 个工作日内支付 65% 货款。\n5.3 质保期满（交付后 90 日）无质量问题，支付剩余 5% 尾款。\n\n5.1 合同签订后 3 个工作日内支付 30% 预付款。\n5.2 货物验收合格后 7 个工作日内支付 65% 货款。\n5.3 质保期满（交付后 90 日）无质量问题，支付剩余 5% 尾款。\n\n六、违约责任\n6.1 任何一方违约，应赔偿对方因此遭受的实际损失。\n6.2 不可抗力按《民法典》相关规定处理。\n\n6.1 任何一方违约，应赔偿对方因此遭受的实际损失。\n6.2 不可抗力按《民法典》相关规定处理。\n\n七、争议解决\n合同履行过程中发生的争议，双方协商解决；协商不成的，提交甲方所在地有管辖权的人民法院诉讼解决。\n\n合同履行过程中发生的争议，双方协商解决；协商不成的，提交甲方所在地有管辖权的人民法院诉讼解决。\n\n八、其他\n合同自双方盖章之日起生效，一式两份，甲乙双方各执一份。\n\n合同自双方盖章之日起生效，一式两份，甲乙双方各执一份。"
+          },
+          {
+            "doc_id": "14aa8a1c7a",
+            "title": "",
+            "chunk_id": "d709d29f307b",
+            "department": "general",
+            "rerank_score": 0.72,
+            "source": "",
+            "snippet": "5.1 合同签订后 3 个工作日内支付 30% 预付款。 5.2 货物验收合格后 7 个工作日内支付 65% 货款。 5.3 质保期满（交付后 90 日）无质量问题，支付剩余 5% 尾款。",
+            "page_content": "5.1 合同签订后 3 个工作日内支付 30% 预付款。\n5.2 货物验收合格后 7 个工作日内支付 65% 货款。\n5.3 质保期满（交付后 90 日）无质量问题，支付剩余 5% 尾款。"
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "894418906b",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "894418906b",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "14aa8a1c7a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "14aa8a1c7a",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 0.0,
+            "doc_precision@1": 0.0,
+            "doc_recall@3": 1.0,
+            "doc_precision@3": 0.3333,
+            "doc_recall@5": 1.0,
+            "doc_precision@5": 0.4,
+            "doc_recall@10": 1.0,
+            "doc_precision@10": 0.4,
+            "doc_mrr": 0.3333,
+            "doc_ndcg@10": 0.9307,
+            "context_noise@10": 0.6,
+            "top1_accuracy": 0.0
+          },
+          "S4_rerank": {
+            "avg_relevant_score": 0.8516,
+            "avg_noise_score": 0.0,
+            "score_separation": 0.8516,
+            "top1_is_relevant": 1.0,
+            "top3_relevant_ratio": 1.0
+          }
+        },
+        "rejection": {
+          "confidence": "medium",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.8981,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "44205c7ce48b",
+          "total_spans": 5,
+          "total_trace_ms": 1046,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-BASIC-015",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 371,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "采购合同签订后多少天内要完成交付？",
+                "kb_id": "rag_test_kb"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 140,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:43.157Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'rag_test_kb'}, persons=[], → 3 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "rag_test_kb"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 3,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 81,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 10,
+                "sparse_hits": 10,
+                "final_k": 9,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "overall_confidence": 0.3,
+                "query_complexity": "medium"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 227,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 12,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 227,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 12,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@5": 1.0,
+        "context_noise@10": 0.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 392,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-BASIC-017",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "3e30e0df16"
+        ],
+        "relevant_snippets": [
+          "1分",
+          "1000分"
+        ],
+        "match_type": "snippet"
+      },
+      "actual": {
+        "question": "会员积分如何累计？多少分可以抵扣？",
+        "kb_id": "rag_test_kb",
+        "department": "",
+        "retrieved_docs": [
+          "3e30e0df16",
+          "99a80089e4"
+        ],
+        "retrieved_departments": [
+          "general"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "ee839fd75898",
+            "department": "general",
+            "rerank_score": 0.9636,
+            "source": "",
+            "snippet": "Q：会员积分如何累计? A：每消费 1 元累计 1 分，满 1000 分可抵扣 10 元。",
+            "page_content": "Q：会员积分如何累计?\nA：每消费 1 元累计 1 分，满 1000 分可抵扣 10 元。"
+          },
+          {
+            "doc_id": "99a80089e4",
+            "title": "",
+            "chunk_id": "a8a08d3e8bd5",
+            "department": "general",
+            "rerank_score": 0.3543,
+            "source": "",
+            "snippet": "库存按状态分为以下五类：",
+            "page_content": "库存按状态分为以下五类："
+          },
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "8aa5dc623337",
+            "department": "general",
+            "rerank_score": 0.3171,
+            "source": "",
+            "snippet": "Q：优惠券能否叠加使用? A：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。",
+            "page_content": "Q：优惠券能否叠加使用?\nA：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。"
+          },
+          {
+            "doc_id": "99a80089e4",
+            "title": "",
+            "chunk_id": "36eafc3bfb88",
+            "department": "general",
+            "rerank_score": 0.3149,
+            "source": "",
+            "snippet": "月度盘点：每月末由财务组织抽盘，差异率不超过 1%。 年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。",
+            "page_content": "月度盘点：每月末由财务组织抽盘，差异率不超过 1%。\n年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。"
+          },
+          {
+            "doc_id": "99a80089e4",
+            "title": "",
+            "chunk_id": "c67bda588f9f",
+            "department": "general",
+            "rerank_score": 0.3099,
+            "source": "",
+            "snippet": "第四章 盘点制度 月度盘点：每月末由财务组织抽盘，差异率不超过 1%。 年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。",
+            "page_content": "第四章 盘点制度\n月度盘点：每月末由财务组织抽盘，差异率不超过 1%。\n年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。"
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "99a80089e4",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "8117d97802",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "99a80089e4",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 0.0,
+            "doc_precision@1": 0.0,
+            "doc_recall@3": 1.0,
+            "doc_precision@3": 0.6667,
+            "doc_recall@5": 1.0,
+            "doc_precision@5": 0.4,
+            "doc_recall@10": 1.0,
+            "doc_precision@10": 0.4,
+            "doc_mrr": 0.5,
+            "doc_ndcg@10": 1.1309,
+            "context_noise@10": 0.6,
+            "top1_accuracy": 0.0
+          },
+          "S4_rerank": {
+            "avg_relevant_score": 0.6403,
+            "avg_noise_score": 0.3264,
+            "score_separation": 0.314,
+            "top1_is_relevant": 1.0,
+            "top3_relevant_ratio": 0.6667
+          }
+        },
+        "rejection": {
+          "confidence": "high",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.9636,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "15ad0c8b4632",
+          "total_spans": 5,
+          "total_trace_ms": 801,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-BASIC-017",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 276,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "会员积分如何累计？多少分可以抵扣？",
+                "kb_id": "rag_test_kb"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 48,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 10,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:43.508Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'rag_test_kb'}, persons=[], → 3 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "rag_test_kb"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 3,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 19,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 18,
+                "sparse_hits": 10,
+                "final_k": 9,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "overall_confidence": 0.3,
+                "query_complexity": "medium"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 229,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 10,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 229,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 10,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@5": 0.5,
+        "context_noise@10": 0.5,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 287,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-BASIC-018",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "3e30e0df16"
+        ],
+        "relevant_snippets": [
+          "7-15",
+          "工作日"
+        ],
+        "match_type": "snippet"
+      },
+      "actual": {
+        "question": "海外配送标准时效是多久？",
+        "kb_id": "rag_test_kb",
+        "department": "",
+        "retrieved_docs": [
+          "3e30e0df16",
+          "ba8721e79b"
+        ],
+        "retrieved_departments": [
+          "general"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "ffe462f24bd7",
+            "department": "general",
+            "rerank_score": 0.949,
+            "source": "",
+            "snippet": "Q：海外配送时效? A：标准配送 7-15 个工作日，加急配送 3-7 个工作日，具体以物流追踪页为准。",
+            "page_content": "Q：海外配送时效?\nA：标准配送 7-15 个工作日，加急配送 3-7 个工作日，具体以物流追踪页为准。"
+          },
+          {
+            "doc_id": "ba8721e79b",
+            "title": "",
+            "chunk_id": "21497fa392f9",
+            "department": "general",
+            "rerank_score": 0.7036,
+            "source": "",
+            "snippet": "跨境物流运费标准（数字写法陷阱) 【仅供测试 · 内容虚构】 海运拼箱 海运拼箱：人民币 8.00 元 / kg(最低消费 50 元）时效:25-35 个自然日 路线：深圳盐田 → 洛杉矶长滩 空运快线 空运快线：人民币 8 元 / kg(首重 1kg 起，续重按 0.5kg 进位）时效:7-10 个自然日 路线：广州白云 → 法兰克福 专线快递 专线快递:¥8 / kg(限 5kg 以内，超出按",
+            "page_content": "跨境物流运费标准（数字写法陷阱)\n【仅供测试 · 内容虚构】\n海运拼箱\n海运拼箱：人民币 8.00 元 / kg(最低消费 50 元）时效:25-35 个自然日\n路线：深圳盐田 → 洛杉矶长滩\n空运快线\n空运快线：人民币 8 元 / kg(首重 1kg 起，续重按 0.5kg 进位）时效:7-10 个自然日\n路线：广州白云 → 法兰克福\n专线快递\n专线快递:¥8 / kg(限 5kg 以内，超出按 12 元/kg 续重）时效:5-7 个自然日\n路线：义乌 → 马德里\n对比\n三种方式**单价均为 8 元**,但**最低消费 / 续重规则 / 路线时效**差异显著，下单前请根据货值与时效需求选择。"
+          },
+          {
+            "doc_id": "ba8721e79b",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.6452,
+            "source": "",
+            "snippet": "跨境物流运费标准（数字写法陷阱) 【仅供测试 · 内容虚构】 海运拼箱 海运拼箱：人民币 8.00 元 / kg(最低消费 50 元）时效:25-35 个自然日 路线：深圳盐田 → 洛杉矶长滩 空运快线 空运快线：人民币 8 元 / kg(首重 1kg 起，续重按 0.5kg 进位）时效:7-10 个自然日 路线：广州白云 → 法兰克福 专线快递 专线快递:¥8 / kg(限 5kg 以内，超出按",
+            "page_content": "跨境物流运费标准（数字写法陷阱)\n【仅供测试 · 内容虚构】\n海运拼箱\n海运拼箱：人民币 8.00 元 / kg(最低消费 50 元）时效:25-35 个自然日\n路线：深圳盐田 → 洛杉矶长滩\n空运快线\n空运快线：人民币 8 元 / kg(首重 1kg 起，续重按 0.5kg 进位）时效:7-10 个自然日\n路线：广州白云 → 法兰克福\n专线快递\n专线快递:¥8 / kg(限 5kg 以内，超出按 12 元/kg 续重）时效:5-7 个自然日\n路线：义乌 → 马德里\n对比\n三种方式**单价均为 8 元**,但**最低消费 / 续重规则 / 路线时效**差异显著，下单前请根据货值与时效需求选择。\n\n【仅供测试 · 内容虚构】\n\n海运拼箱\n海运拼箱：人民币 8.00 元 / kg(最低消费 50 元）时效:25-35 个自然日\n路线：深圳盐田 → 洛杉矶长滩\n\n海运拼箱：人民币 8.00 元 / kg(最低消费 50 元）时效:25-35 个自然日\n路线：深圳盐田 → 洛杉矶长滩\n\n空运快线\n空运快线：人民币 8 元 / kg(首重 1kg 起，续重按 0.5kg 进位）时效:7-10 个自然日\n路线：广州白云 → 法兰克福\n\n空运快线：人民币 8 元 / kg(首重 1kg 起，续重按 0.5kg 进位）时效:7-10 个自然日\n路线：广州白云 → 法兰克福\n\n专线快递\n专线快递:¥8 / kg(限 5kg 以内，超出按 12 元/kg 续重）时效:5-7 个自然日\n路线：义乌 → 马德里\n\n专线快递:¥8 / kg(限 5kg 以内，超出按 12 元/kg 续重）时效:5-7 个自然日\n路线：义乌 → 马德里\n\n对比\n三种方式**单价均为 8 元**,但**最低消费 / 续重规则 / 路线时效**差异显著，下单前请根据货值与时效需求选择。\n\n三种方式**单价均为 8 元**,但**最低消费 / 续重规则 / 路线时效**差异显著，下单前请根据货值与时效需求选择。"
+          },
+          {
+            "doc_id": "ba8721e79b",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.6452,
+            "source": "",
+            "snippet": "跨境物流运费标准（数字写法陷阱) 【仅供测试 · 内容虚构】 海运拼箱 海运拼箱：人民币 8.00 元 / kg(最低消费 50 元）时效:25-35 个自然日 路线：深圳盐田 → 洛杉矶长滩 空运快线 空运快线：人民币 8 元 / kg(首重 1kg 起，续重按 0.5kg 进位）时效:7-10 个自然日 路线：广州白云 → 法兰克福 专线快递 专线快递:¥8 / kg(限 5kg 以内，超出按",
+            "page_content": "跨境物流运费标准（数字写法陷阱)\n【仅供测试 · 内容虚构】\n海运拼箱\n海运拼箱：人民币 8.00 元 / kg(最低消费 50 元）时效:25-35 个自然日\n路线：深圳盐田 → 洛杉矶长滩\n空运快线\n空运快线：人民币 8 元 / kg(首重 1kg 起，续重按 0.5kg 进位）时效:7-10 个自然日\n路线：广州白云 → 法兰克福\n专线快递\n专线快递:¥8 / kg(限 5kg 以内，超出按 12 元/kg 续重）时效:5-7 个自然日\n路线：义乌 → 马德里\n对比\n三种方式**单价均为 8 元**,但**最低消费 / 续重规则 / 路线时效**差异显著，下单前请根据货值与时效需求选择。\n\n【仅供测试 · 内容虚构】\n\n海运拼箱\n海运拼箱：人民币 8.00 元 / kg(最低消费 50 元）时效:25-35 个自然日\n路线：深圳盐田 → 洛杉矶长滩\n\n海运拼箱：人民币 8.00 元 / kg(最低消费 50 元）时效:25-35 个自然日\n路线：深圳盐田 → 洛杉矶长滩\n\n空运快线\n空运快线：人民币 8 元 / kg(首重 1kg 起，续重按 0.5kg 进位）时效:7-10 个自然日\n路线：广州白云 → 法兰克福\n\n空运快线：人民币 8 元 / kg(首重 1kg 起，续重按 0.5kg 进位）时效:7-10 个自然日\n路线：广州白云 → 法兰克福\n\n专线快递\n专线快递:¥8 / kg(限 5kg 以内，超出按 12 元/kg 续重）时效:5-7 个自然日\n路线：义乌 → 马德里\n\n专线快递:¥8 / kg(限 5kg 以内，超出按 12 元/kg 续重）时效:5-7 个自然日\n路线：义乌 → 马德里\n\n对比\n三种方式**单价均为 8 元**,但**最低消费 / 续重规则 / 路线时效**差异显著，下单前请根据货值与时效需求选择。\n\n三种方式**单价均为 8 元**,但**最低消费 / 续重规则 / 路线时效**差异显著，下单前请根据货值与时效需求选择。"
+          },
+          {
+            "doc_id": "ba8721e79b",
+            "title": "",
+            "chunk_id": "04fefd7a5209",
+            "department": "general",
+            "rerank_score": 0.6153,
+            "source": "",
+            "snippet": "专线快递:¥8 / kg(限 5kg 以内，超出按 12 元/kg 续重）时效:5-7 个自然日 路线：义乌 → 马德里",
+            "page_content": "专线快递:¥8 / kg(限 5kg 以内，超出按 12 元/kg 续重）时效:5-7 个自然日\n路线：义乌 → 马德里"
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "ba8721e79b",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "ba8721e79b",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "fd2910f986",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 0.0,
+            "doc_precision@1": 0.0,
+            "doc_recall@3": 1.0,
+            "doc_precision@3": 0.3333,
+            "doc_recall@5": 1.0,
+            "doc_precision@5": 0.4,
+            "doc_recall@10": 1.0,
+            "doc_precision@10": 0.4,
+            "doc_mrr": 0.3333,
+            "doc_ndcg@10": 0.9307,
+            "context_noise@10": 0.6,
+            "top1_accuracy": 0.0
+          },
+          "S4_rerank": {
+            "avg_relevant_score": 0.949,
+            "avg_noise_score": 0.6523,
+            "score_separation": 0.2967,
+            "top1_is_relevant": 1.0,
+            "top3_relevant_ratio": 0.3333
+          }
+        },
+        "rejection": {
+          "confidence": "high",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.949,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "782e26b7faff",
+          "total_spans": 5,
+          "total_trace_ms": 887,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-BASIC-018",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 303,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "海外配送标准时效是多久？",
+                "kb_id": "rag_test_kb"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 48,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:43.785Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'rag_test_kb'}, persons=[], → 3 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "rag_test_kb"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 3,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 26,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 16,
+                "sparse_hits": 10,
+                "final_k": 8,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "overall_confidence": 0.3,
+                "query_complexity": "simple"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 255,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 10,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 255,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 10,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@5": 0.5,
+        "context_noise@10": 0.5,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 311,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-BASIC-019",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "3e30e0df16"
+        ],
+        "relevant_snippets": [
+          "3张",
+          "优惠券"
+        ],
+        "match_type": "snippet"
+      },
+      "actual": {
+        "question": "优惠券最多可以叠加几张？",
+        "kb_id": "rag_test_kb",
+        "department": "",
+        "retrieved_docs": [
+          "3e30e0df16",
+          "ea58e815ba"
+        ],
+        "retrieved_departments": [
+          "general"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "8aa5dc623337",
+            "department": "general",
+            "rerank_score": 0.8769,
+            "source": "",
+            "snippet": "Q：优惠券能否叠加使用? A：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。",
+            "page_content": "Q：优惠券能否叠加使用?\nA：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。"
+          },
+          {
+            "doc_id": "ea58e815ba",
+            "title": "",
+            "chunk_id": "065f95f7d39b",
+            "department": "general",
+            "rerank_score": 0.5394,
+            "source": "",
+            "snippet": "活动规则: 1. 单笔订单实付满 200 元可用 2. 优惠不与店铺券叠加 3. 退款说明：活动结束后统一发放等额优惠券，不支持现金退款。",
+            "page_content": "活动规则:\n1. 单笔订单实付满 200 元可用\n2. 优惠不与店铺券叠加\n3. 退款说明：活动结束后统一发放等额优惠券，不支持现金退款。"
+          },
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.4708,
+            "source": "",
+            "snippet": "Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。  Q：支持哪些支付方式? A：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。  Q：如何申请退款? A：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。  Q：退货运费谁承担? A：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定",
+            "page_content": "Q：客户下单后多久发货?\nA：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。\n\nQ：支持哪些支付方式?\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。\n\nQ：如何申请退款?\nA：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。\n\nQ：退货运费谁承担?\nA：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定的除外)。\n\nQ：订单可以修改地址吗?\nA：待发货状态可自行修改；已发货状态请联系客服申请拦截改址。\n\nQ：发票如何开具?\nA：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。\n\nQ：会员积分如何累计?\nA：每消费 1 元累计 1 分，满 1000 分可抵扣 10 元。\n\nQ：海外配送时效?\nA：标准配送 7-15 个工作日，加急配送 3-7 个工作日，具体以物流追踪页为准。\n\nQ：商品保修期多久?\nA：电子产品按品牌政策，一般 1 年；其他品类详见商品详情页。\n\nQ：如何联系人工客服?\nA：在线客服 9:00-22:00,电话客服 400-000-0000 转 1。\n\nQ：优惠券能否叠加使用?\nA：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。\n\nQ：退货商品需要原包装吗?\nA：建议保持原包装；若包装损坏可能影响退款金额。\n\nQ：如何查询物流轨迹?\nA：「我的订单」→「查看物流」可看到揽收、运输、派送、签收全节点。\n\nQ：地址写错了能改吗?\nA：待发货状态可修改一次，已发货请通过客服申请。\n\nQ：能开发票抬头吗?\nA：支持个人/企业抬头，需提供税号及开户银行（企业)。"
+          },
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.4708,
+            "source": "",
+            "snippet": "Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。  Q：支持哪些支付方式? A：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。  Q：如何申请退款? A：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。  Q：退货运费谁承担? A：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定",
+            "page_content": "Q：客户下单后多久发货?\nA：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。\n\nQ：支持哪些支付方式?\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。\n\nQ：如何申请退款?\nA：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。\n\nQ：退货运费谁承担?\nA：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定的除外)。\n\nQ：订单可以修改地址吗?\nA：待发货状态可自行修改；已发货状态请联系客服申请拦截改址。\n\nQ：发票如何开具?\nA：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。\n\nQ：会员积分如何累计?\nA：每消费 1 元累计 1 分，满 1000 分可抵扣 10 元。\n\nQ：海外配送时效?\nA：标准配送 7-15 个工作日，加急配送 3-7 个工作日，具体以物流追踪页为准。\n\nQ：商品保修期多久?\nA：电子产品按品牌政策，一般 1 年；其他品类详见商品详情页。\n\nQ：如何联系人工客服?\nA：在线客服 9:00-22:00,电话客服 400-000-0000 转 1。\n\nQ：优惠券能否叠加使用?\nA：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。\n\nQ：退货商品需要原包装吗?\nA：建议保持原包装；若包装损坏可能影响退款金额。\n\nQ：如何查询物流轨迹?\nA：「我的订单」→「查看物流」可看到揽收、运输、派送、签收全节点。\n\nQ：地址写错了能改吗?\nA：待发货状态可修改一次，已发货请通过客服申请。\n\nQ：能开发票抬头吗?\nA：支持个人/企业抬头，需提供税号及开户银行（企业)。"
+          },
+          {
+            "doc_id": "ea58e815ba",
+            "title": "",
+            "chunk_id": "ef15f9c209b9",
+            "department": "general",
+            "rerank_score": 0.383,
+            "source": "",
+            "snippet": "跨境电商退货退款流程（标题党陷阱) 【仅供测试 · 内容虚构】 为感谢新老客户，本月推出满 200 减 30 的促销活动。 活动时间:2026 年 9 月 1 日至 9 月 30 日。 参与商品：全场自营跨境商品。 活动规则: 1. 单笔订单实付满 200 元可用 2. 优惠不与店铺券叠加 3. 退款说明：活动结束后统一发放等额优惠券，不支持现金退款。 注意事项：本活动最终解释权归本店所有 跨境保",
+            "page_content": "跨境电商退货退款流程（标题党陷阱)\n【仅供测试 · 内容虚构】\n为感谢新老客户，本月推出满 200 减 30 的促销活动。\n活动时间:2026 年 9 月 1 日至 9 月 30 日。\n参与商品：全场自营跨境商品。\n活动规则:\n1. 单笔订单实付满 200 元可用\n2. 优惠不与店铺券叠加\n3. 退款说明：活动结束后统一发放等额优惠券，不支持现金退款。\n注意事项：本活动最终解释权归本店所有\n跨境保税商品不参与活动\n退款流程不适用本促销"
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "ea58e815ba",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "ea58e815ba",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "99a80089e4",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 0.0,
+            "doc_precision@1": 0.0,
+            "doc_recall@3": 1.0,
+            "doc_precision@3": 0.3333,
+            "doc_recall@5": 1.0,
+            "doc_precision@5": 0.4,
+            "doc_recall@10": 1.0,
+            "doc_precision@10": 0.4,
+            "doc_mrr": 0.3333,
+            "doc_ndcg@10": 0.9307,
+            "context_noise@10": 0.6,
+            "top1_accuracy": 0.0
+          },
+          "S4_rerank": {
+            "avg_relevant_score": 0.6062,
+            "avg_noise_score": 0.4612,
+            "score_separation": 0.145,
+            "top1_is_relevant": 1.0,
+            "top3_relevant_ratio": 0.6667
+          }
+        },
+        "rejection": {
+          "confidence": "high",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.8769,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "4d5a4e7416bc",
+          "total_spans": 5,
+          "total_trace_ms": 801,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-BASIC-019",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 278,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "优惠券最多可以叠加几张？",
+                "kb_id": "rag_test_kb"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 48,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:44.111Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'rag_test_kb'}, persons=[], → 3 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "rag_test_kb"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 3,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 27,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 16,
+                "sparse_hits": 10,
+                "final_k": 8,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "overall_confidence": 0.3,
+                "query_complexity": "simple"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 224,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 12,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 224,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 12,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@5": 0.5,
+        "context_noise@10": 0.5,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 298,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-DEPT-001",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "be99388a67",
+          "79028b7792"
+        ],
+        "allowed_departments": [
+          "hr"
+        ],
+        "forbidden_departments": [
+          "finance"
+        ]
+      },
+      "actual": {
+        "question": "年假怎么申请？请假流程是什么？",
+        "kb_id": "policy_general",
+        "department": "hr",
+        "retrieved_docs": [
+          "be99388a67"
+        ],
+        "retrieved_departments": [
+          "hr"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "be99388a67",
+            "title": "",
+            "chunk_id": "be99388a67_6",
+            "department": "hr",
+            "rerank_score": 0.8497,
+            "source": "",
+            "snippet": "年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。",
+            "page_content": "年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。"
+          },
+          {
+            "doc_id": "be99388a67",
+            "title": "",
+            "chunk_id": "be99388a67_1",
+            "department": "hr",
+            "rerank_score": 0.7786,
+            "source": "",
+            "snippet": "1. 年假申请 正式员工入职满 1 年后享有带薪年假，天数按司龄递增： 司龄 1-3 年：5 天/年 司龄 3-10 年：10 天/年 司龄 10 年以上：15 天/年 年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。",
+            "page_content": "1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。"
+          },
+          {
+            "doc_id": "be99388a67",
+            "title": "",
+            "chunk_id": "be99388a67_0",
+            "department": "hr",
+            "rerank_score": 0.7015,
+            "source": "",
+            "snippet": "请假与考勤制度（人力资源部） 1. 年假申请 正式员工入职满 1 年后享有带薪年假，天数按司龄递增： 司龄 1-3 年：5 天/年 司龄 3-10 年：10 天/年 司龄 10 年以上：15 天/年 年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。 2. 病假与事假 病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。 事假全年累计不得超",
+            "page_content": "请假与考勤制度（人力资源部）\n1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。\n2. 病假与事假\n病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。\n3. 考勤异常\n迟到 / 早退每月允许 3 次免责机会，超出部分按事假扣减。旷工当日不计薪并记\n过一次，连续旷工 3 天按严重违纪处理。\n4. 调休\n周末加班可申请调休，调休有效期为加班发生起 90 天内，逾期自动作废。"
+          },
+          {
+            "doc_id": "be99388a67",
+            "title": "",
+            "chunk_id": "",
+            "department": "hr",
+            "rerank_score": 0.6912,
+            "source": "",
+            "snippet": "请假与考勤制度（人力资源部） 1. 年假申请 正式员工入职满 1 年后享有带薪年假，天数按司龄递增： 司龄 1-3 年：5 天/年 司龄 3-10 年：10 天/年 司龄 10 年以上：15 天/年 年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。 2. 病假与事假 病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。 事假全年累计不得超",
+            "page_content": "请假与考勤制度（人力资源部）\n1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。\n2. 病假与事假\n病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。\n3. 考勤异常\n迟到 / 早退每月允许 3 次免责机会，超出部分按事假扣减。旷工当日不计薪并记\n过一次，连续旷工 3 天按严重违纪处理。\n4. 调休\n周末加班可申请调休，调休有效期为加班发生起 90 天内，逾期自动作废。\n\n1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。\n\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n\n司龄 1-3 年：5 天/年\n\n司龄 3-10 年：10 天/年\n\n司龄 10 年以上：15 天/年\n\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。\n\n2. 病假与事假\n病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。\n\n病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。\n\n3. 考勤异常\n迟到 / 早退每月允许 3 次免责机会，超出部分按事假扣减。旷工当日不计薪并记\n过一次，连续旷工 3 天按严重违纪处理。\n\n迟到 / 早退每月允许 3 次免责机会，超出部分按事假扣减。旷工当日不计薪并记\n过一次，连续旷工 3 天按严重违纪处理。\n\n4. 调休\n周末加班可申请调休，调休有效期为加班发生起 90 天内，逾期自动作废。\n\n周末加班可申请调休，调休有效期为加班发生起 90 天内，逾期自动作废。"
+          },
+          {
+            "doc_id": "be99388a67",
+            "title": "",
+            "chunk_id": "be99388a67_2",
+            "department": "hr",
+            "rerank_score": 0.4811,
+            "source": "",
+            "snippet": "正式员工入职满 1 年后享有带薪年假，天数按司龄递增：",
+            "page_content": "正式员工入职满 1 年后享有带薪年假，天数按司龄递增："
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 2,
+          "stage1_top_docs": [
+            {
+              "doc_id": "be99388a67",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "79028b7792",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 0.5,
+            "doc_precision@1": 1.0,
+            "doc_recall@3": 1.0,
+            "doc_precision@3": 1.0,
+            "doc_recall@5": 1.0,
+            "doc_precision@5": 1.0,
+            "doc_recall@10": 1.0,
+            "doc_precision@10": 1.0,
+            "doc_mrr": 1.0,
+            "doc_ndcg@10": 1.0,
+            "context_noise@10": 0.0,
+            "top1_accuracy": 1.0
+          },
+          "S4_rerank": {
+            "avg_relevant_score": 0.7004,
+            "avg_noise_score": 0.0,
+            "score_separation": 0.7004,
+            "top1_is_relevant": 1.0,
+            "top3_relevant_ratio": 1.0
+          }
+        },
+        "rejection": {
+          "confidence": "medium",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.8497,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "ca0aa3ea22be",
+          "total_spans": 5,
+          "total_trace_ms": 907,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-DEPT-001",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 312,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "年假怎么申请？请假流程是什么？",
+                "kb_id": "policy_general"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 98,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:44.409Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'policy_general', 'department': 'hr'}, persons=[], → 2 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "policy_general",
+                      "department": "hr"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 2,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 69,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 12,
+                "sparse_hits": 10,
+                "final_k": 9,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "overall_confidence": 0.3,
+                "query_complexity": "medium"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 214,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 9,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 214,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 9,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 0.5,
+        "recall@10": 0.5,
+        "precision@5": 1.0,
+        "context_noise@10": 0.0,
+        "mrr": 1.0,
+        "ndcg@10": 0.6131,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 326,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-DEPT-002",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "04a34059af",
+          "8d38891a89"
+        ],
+        "allowed_departments": [
+          "finance"
+        ],
+        "forbidden_departments": [
+          "hr"
+        ]
+      },
+      "actual": {
+        "question": "报销流程怎么走？预算审批权限是怎样的？",
+        "kb_id": "policy_general",
+        "department": "finance",
+        "retrieved_docs": [
+          "8d38891a89",
+          "04a34059af"
+        ],
+        "retrieved_departments": [
+          "finance"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "8d38891a89",
+            "title": "",
+            "chunk_id": "8d38891a89_0",
+            "department": "finance",
+            "rerank_score": 0.8743,
+            "source": "",
+            "snippet": "预算与审批制度（财务部） 1. 年度预算 各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算 一经批准即作为费用控制的基准。 2. 预算执行 月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整 申请，说明原因并附测算依据。 3. 采购审批权限 单笔 < 1 万元：部门负责人审批 1 万 - 5 万元：部门负责人 + 财务经理 > 5 万元：追加分管副",
+            "page_content": "预算与审批制度（财务部）\n1. 年度预算\n各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算\n一经批准即作为费用控制的基准。\n2. 预算执行\n月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整\n申请，说明原因并附测算依据。\n3. 采购审批权限\n单笔 < 1 万元：部门负责人审批\n1 万 - 5 万元：部门负责人 + 财务经理\n> 5 万元：追加分管副总审批\n4. 决算\n每季度末财务部出具预算执行分析报告，对偏差超过 15% 的科目专项说明。"
+          },
+          {
+            "doc_id": "04a34059af",
+            "title": "",
+            "chunk_id": "04a34059af_3",
+            "department": "finance",
+            "rerank_score": 0.8497,
+            "source": "",
+            "snippet": "2. 报销流程 员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 → 财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
+            "page_content": "2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。"
+          },
+          {
+            "doc_id": "04a34059af",
+            "title": "",
+            "chunk_id": "04a34059af_4",
+            "department": "finance",
+            "rerank_score": 0.8146,
+            "source": "",
+            "snippet": "员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 → 财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
+            "page_content": "员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。"
+          },
+          {
+            "doc_id": "04a34059af",
+            "title": "",
+            "chunk_id": "04a34059af_0",
+            "department": "finance",
+            "rerank_score": 0.6036,
+            "source": "",
+            "snippet": "费用报销制度（财务部） 1. 报销范围 可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、 罚款、礼品卡等不在报销范围内。 2. 报销流程 员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 → 财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。 3. 发票要求 报销须提供增值税发票，抬头须与公司全称一致，税号正确。连号发票、作废发票 一律退回。跨",
+            "page_content": "费用报销制度（财务部）\n1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。\n2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。\n3. 发票要求\n报销须提供增值税发票，抬头须与公司全称一致，税号正确。连号发票、作废发票\n一律退回。跨年发票不予报销。\n4. 报销时效\n费用发生后 30 日内须提交报销，逾期需书面说明。每月 25 日之后提交的报销\n顺延至次月付款。"
+          },
+          {
+            "doc_id": "8d38891a89",
+            "title": "",
+            "chunk_id": "8d38891a89_5",
+            "department": "finance",
+            "rerank_score": 0.5827,
+            "source": "",
+            "snippet": "3. 采购审批权限 单笔 < 1 万元：部门负责人审批 1 万 - 5 万元：部门负责人 + 财务经理 > 5 万元：追加分管副总审批",
+            "page_content": "3. 采购审批权限\n单笔 < 1 万元：部门负责人审批\n1 万 - 5 万元：部门负责人 + 财务经理\n> 5 万元：追加分管副总审批"
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 2,
+          "stage1_top_docs": [
+            {
+              "doc_id": "04a34059af",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "8d38891a89",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(2个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 0.5,
+            "doc_precision@1": 1.0,
+            "doc_recall@3": 1.0,
+            "doc_precision@3": 1.0,
+            "doc_recall@5": 1.0,
+            "doc_precision@5": 1.0,
+            "doc_recall@10": 1.0,
+            "doc_precision@10": 1.0,
+            "doc_mrr": 1.0,
+            "doc_ndcg@10": 1.0,
+            "context_noise@10": 0.0,
+            "top1_accuracy": 1.0
+          },
+          "S4_rerank": {
+            "avg_relevant_score": 0.745,
+            "avg_noise_score": 0.0,
+            "score_separation": 0.745,
+            "top1_is_relevant": 1.0,
+            "top3_relevant_ratio": 1.0
+          }
+        },
+        "rejection": {
+          "confidence": "medium",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.8743,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "68ce44143cfa",
+          "total_spans": 5,
+          "total_trace_ms": 1045,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-DEPT-002",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 358,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "报销流程怎么走？预算审批权限是怎样的？",
+                "kb_id": "policy_general"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 125,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:44.735Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'policy_general', 'department': 'finance'}, persons=[], → 2 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "policy_general",
+                      "department": "finance"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 2,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 101,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 10,
+                "sparse_hits": 10,
+                "final_k": 9,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "low_confidence_action": "expand_k_or_rewrite",
+                "overall_confidence": 0.1667,
+                "query_complexity": "medium"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 231,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 9,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 230,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 9,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@5": 1.0,
+        "context_noise@10": 0.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 379,
+      "error_msg": null
+    },
+    {
+      "case_id": "V2-MULTI-008",
+      "module": "rag",
+      "status": "pass",
+      "expected": {
+        "relevant_docs": [
+          "3e30e0df16"
+        ],
+        "relevant_snippets": [
+          "修改",
+          "待发货"
+        ],
+        "match_type": "snippet"
+      },
+      "actual": {
+        "question": "下单后可以修改地址吗？已发货怎么办？",
+        "kb_id": "rag_test_kb",
+        "department": "",
+        "retrieved_docs": [
+          "3e30e0df16",
+          "f938bc1033"
+        ],
+        "retrieved_departments": [
+          "general"
+        ],
+        "dept_leak": false,
+        "details": [
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "fb058ec46835",
+            "department": "general",
+            "rerank_score": 0.9207,
+            "source": "",
+            "snippet": "Q：地址写错了能改吗? A：待发货状态可修改一次，已发货请通过客服申请。",
+            "page_content": "Q：地址写错了能改吗?\nA：待发货状态可修改一次，已发货请通过客服申请。"
+          },
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "1a971363dd81",
+            "department": "general",
+            "rerank_score": 0.9094,
+            "source": "",
+            "snippet": "Q：订单可以修改地址吗? A：待发货状态可自行修改；已发货状态请联系客服申请拦截改址。",
+            "page_content": "Q：订单可以修改地址吗?\nA：待发货状态可自行修改；已发货状态请联系客服申请拦截改址。"
+          },
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.7634,
+            "source": "",
+            "snippet": "Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。  Q：支持哪些支付方式? A：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。  Q：如何申请退款? A：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。  Q：退货运费谁承担? A：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定",
+            "page_content": "Q：客户下单后多久发货?\nA：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。\n\nQ：支持哪些支付方式?\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。\n\nQ：如何申请退款?\nA：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。\n\nQ：退货运费谁承担?\nA：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定的除外)。\n\nQ：订单可以修改地址吗?\nA：待发货状态可自行修改；已发货状态请联系客服申请拦截改址。\n\nQ：发票如何开具?\nA：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。\n\nQ：会员积分如何累计?\nA：每消费 1 元累计 1 分，满 1000 分可抵扣 10 元。\n\nQ：海外配送时效?\nA：标准配送 7-15 个工作日，加急配送 3-7 个工作日，具体以物流追踪页为准。\n\nQ：商品保修期多久?\nA：电子产品按品牌政策，一般 1 年；其他品类详见商品详情页。\n\nQ：如何联系人工客服?\nA：在线客服 9:00-22:00,电话客服 400-000-0000 转 1。\n\nQ：优惠券能否叠加使用?\nA：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。\n\nQ：退货商品需要原包装吗?\nA：建议保持原包装；若包装损坏可能影响退款金额。\n\nQ：如何查询物流轨迹?\nA：「我的订单」→「查看物流」可看到揽收、运输、派送、签收全节点。\n\nQ：地址写错了能改吗?\nA：待发货状态可修改一次，已发货请通过客服申请。\n\nQ：能开发票抬头吗?\nA：支持个人/企业抬头，需提供税号及开户银行（企业)。"
+          },
+          {
+            "doc_id": "3e30e0df16",
+            "title": "",
+            "chunk_id": "",
+            "department": "general",
+            "rerank_score": 0.7634,
+            "source": "",
+            "snippet": "Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。  Q：支持哪些支付方式? A：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。  Q：如何申请退款? A：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。  Q：退货运费谁承担? A：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定",
+            "page_content": "Q：客户下单后多久发货?\nA：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。\n\nQ：支持哪些支付方式?\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。\n\nQ：如何申请退款?\nA：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。\n\nQ：退货运费谁承担?\nA：质量问题由商家承担；无理由退货由买家承担（商品详情页另有约定的除外)。\n\nQ：订单可以修改地址吗?\nA：待发货状态可自行修改；已发货状态请联系客服申请拦截改址。\n\nQ：发票如何开具?\nA：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。\n\nQ：会员积分如何累计?\nA：每消费 1 元累计 1 分，满 1000 分可抵扣 10 元。\n\nQ：海外配送时效?\nA：标准配送 7-15 个工作日，加急配送 3-7 个工作日，具体以物流追踪页为准。\n\nQ：商品保修期多久?\nA：电子产品按品牌政策，一般 1 年；其他品类详见商品详情页。\n\nQ：如何联系人工客服?\nA：在线客服 9:00-22:00,电话客服 400-000-0000 转 1。\n\nQ：优惠券能否叠加使用?\nA：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。\n\nQ：退货商品需要原包装吗?\nA：建议保持原包装；若包装损坏可能影响退款金额。\n\nQ：如何查询物流轨迹?\nA：「我的订单」→「查看物流」可看到揽收、运输、派送、签收全节点。\n\nQ：地址写错了能改吗?\nA：待发货状态可修改一次，已发货请通过客服申请。\n\nQ：能开发票抬头吗?\nA：支持个人/企业抬头，需提供税号及开户银行（企业)。"
+          },
+          {
+            "doc_id": "f938bc1033",
+            "title": "",
+            "chunk_id": "9f3b52ec617d",
+            "department": "general",
+            "rerank_score": 0.4707,
+            "source": "",
+            "snippet": "2.1 适用条件：商品不影响二次销售，包装配件齐全。 2.2 时间窗口：客户签收后 7 天（含）内申请。 2.3 运费承担：买家承担来回运费。",
+            "page_content": "2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。\n2.3 运费承担：买家承担来回运费。"
+          }
+        ],
+        "pipeline": {
+          "ablation_mode": "full",
+          "stage1_docs": 5,
+          "stage1_top_docs": [
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "3e30e0df16",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "e044139401",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "f938bc1033",
+              "title": "",
+              "category": ""
+            },
+            {
+              "doc_id": "f938bc1033",
+              "title": "",
+              "category": ""
+            }
+          ],
+          "stage1_fallback_suspected": false,
+          "stage2_chunks_recalled": 5,
+          "after_rerank": 5,
+          "adaptive": "集中(1个文档)"
+        },
+        "stage_metrics": {
+          "S1_doc_retrieval": {
+            "doc_recall@1": 1.0,
+            "doc_precision@1": 1.0,
+            "doc_recall@3": 1.0,
+            "doc_precision@3": 0.6667,
+            "doc_recall@5": 1.0,
+            "doc_precision@5": 0.4,
+            "doc_recall@10": 1.0,
+            "doc_precision@10": 0.4,
+            "doc_mrr": 1.0,
+            "doc_ndcg@10": 1.6309,
+            "context_noise@10": 0.6,
+            "top1_accuracy": 1.0
+          },
+          "S4_rerank": {
+            "avg_relevant_score": 0.8392,
+            "avg_noise_score": 0.4707,
+            "score_separation": 0.3685,
+            "top1_is_relevant": 1.0,
+            "top3_relevant_ratio": 1.0
+          }
+        },
+        "rejection": {
+          "confidence": "medium",
+          "reject_gate": null,
+          "reject_reason": null,
+          "top1_rerank_score": 0.9207,
+          "query_entities": null,
+          "entity_absent": false
+        },
+        "trace": {
+          "trace_id": "5835b2d5b2e1",
+          "total_spans": 5,
+          "total_trace_ms": 727,
+          "spans": [
+            {
+              "span_id": "rag_eval_root",
+              "parent_id": null,
+              "name": "RAG eval V2-MULTI-008",
+              "type": "workflow",
+              "kind": "retrieval",
+              "status": "success",
+              "duration_ms": 253,
+              "sequence": 0,
+              "metrics": {},
+              "input": {
+                "question": "下单后可以修改地址吗？已发货怎么办？",
+                "kb_id": "rag_test_kb"
+              },
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "chunk_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "Chunk 检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 48,
+              "sequence": 1,
+              "metrics": {
+                "retrieved_chunks": 8,
+                "stage1_path": "metadata_filter_with_doc_similarity",
+                "stage1_fallback_count": 1
+              },
+              "input": null,
+              "output": null,
+              "events": [
+                {
+                  "name": "doc_filter",
+                  "timestamp": "2026-09-03T21:26:45.120Z",
+                  "level": "info",
+                  "message": "Stage1: metadata={'kb_id': 'rag_test_kb'}, persons=[], → 3 docs, path=metadata_filter_with_doc_similarity",
+                  "attributes": {
+                    "metadata_filter": {
+                      "kb_id": "rag_test_kb"
+                    },
+                    "person_names": [],
+                    "output_doc_count": 3,
+                    "stage1_path": "metadata_filter_with_doc_similarity",
+                    "stage1_fallback_count": 1
+                  }
+                }
+              ],
+              "errors": []
+            },
+            {
+              "span_id": "enhanced_hybrid_retrieval",
+              "parent_id": "rag_eval_root",
+              "name": "增强混合检索",
+              "type": "retrieval",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 18,
+              "sequence": 2,
+              "metrics": {
+                "rule_hits": 0,
+                "dense_hits": 18,
+                "sparse_hits": 10,
+                "final_k": 9,
+                "fallback_used": false,
+                "rule_available": false,
+                "dense_available": true,
+                "sparse_available": true,
+                "overall_confidence": 0.3,
+                "query_complexity": "medium"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank",
+              "parent_id": "rag_eval_root",
+              "name": "Dashscope",
+              "type": "rerank",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 204,
+              "sequence": 3,
+              "metrics": {
+                "input_docs": 12,
+                "output_docs": 5,
+                "threshold": 0.3,
+                "backend_type": "dashscope"
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            },
+            {
+              "span_id": "rerank#1",
+              "parent_id": "rag_eval_root",
+              "name": "DashScope API",
+              "type": "tool_call",
+              "kind": "tool",
+              "status": "success",
+              "duration_ms": 204,
+              "sequence": 4,
+              "metrics": {
+                "base_span_id": "rerank",
+                "input_docs": 12,
+                "output_docs": 5,
+                "backend_type": "dashscope",
+                "threshold": 0.3
+              },
+              "input": null,
+              "output": null,
+              "events": [],
+              "errors": []
+            }
+          ]
+        }
+      },
+      "metrics": {
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@5": 0.5,
+        "context_noise@10": 0.5,
+        "mrr": 1.0,
+        "ndcg@10": 1.0,
+        "chunk_recall": 1.0,
+        "top1_accuracy": 1.0,
+        "dept_leak": 0.0
+      },
+      "duration_ms": 270,
+      "error_msg": null
+    }
+  ]
+}

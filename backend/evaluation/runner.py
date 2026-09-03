@@ -8,10 +8,35 @@
 import time
 from typing import Any
 from backend.evaluation.models import (
-    TestCase, EvalResult, ModuleKind, EvalReport, ModuleSummary,
+    TestCase, EvalResult, ModuleKind, EvalReport, ModuleSummary, TierSummary,
 )
 from backend.evaluation.metrics import recall_at_k, mrr, ndcg_at_k, jaccard_similarity
 from backend.evaluation.registry import get_runner, list_registered
+
+# ==================== V2: 分层阈值配置 ====================
+# CI/CD 按 tier 差异化卡点：smoke 最严（快速门禁），hard 最松（探索性测试）
+TIER_THRESHOLDS: dict[str, float] = {
+    "smoke": 0.95,
+    "core": 0.85,
+    "hard": 0.70,
+    "regression": 1.00,
+    "all": 0.85,
+}
+
+
+def _filter_cases_by_tier(
+    cases: list[TestCase], tier: str,
+) -> list[TestCase]:
+    """按 tier 过滤用例。tier="all" 返回全部。
+
+    无 tier 标注的用例视为 "core"（默认层级）。
+    """
+    if tier == "all":
+        return cases
+    return [
+        c for c in cases
+        if (c.metadata.get("tier") or "core") == tier
+    ]
 
 
 # ==================== Planner 离线评估（通用，不依赖项目） ====================
@@ -114,6 +139,47 @@ def _build_summary(results: list[EvalResult], module: ModuleKind) -> ModuleSumma
     )
 
 
+def _build_tier_summaries(
+    cases: list[TestCase],
+    results: list[EvalResult],
+) -> list[TierSummary]:
+    """按 tier 分组构建分层汇总 — 用于 CI/CD 分层卡点。
+
+    对每个出现的 tier 计算 pass_rate 并与阈值比较。
+    无 tier 标注的用例归入 "core"。
+    """
+    result_by_id = {r.case_id: r for r in results}
+
+    tier_cases: dict[str, list[TestCase]] = {}
+    for c in cases:
+        t = c.metadata.get("tier") or "core"
+        tier_cases.setdefault(t, []).append(c)
+
+    summaries: list[TierSummary] = []
+    for tier_name in ("smoke", "core", "hard", "regression"):
+        tc = tier_cases.get(tier_name)
+        if not tc:
+            continue
+        passed = sum(
+            1 for c in tc
+            if result_by_id.get(c.id, EvalResult(
+                case_id=c.id, module=c.module, status="skip",
+                expected=c.expected, actual={},
+            )).status == "pass"
+        )
+        total = len(tc)
+        pass_rate = round(passed / max(total, 1), 4)
+        threshold = TIER_THRESHOLDS.get(tier_name, 0.85)
+        summaries.append(TierSummary(
+            tier=tier_name, total=total, passed=passed,
+            failed=total - passed, pass_rate=pass_rate,
+            threshold=threshold,
+            passed_threshold=pass_rate >= threshold,
+        ))
+
+    return summaries
+
+
 _runners_registered = False
 
 
@@ -176,6 +242,7 @@ def run_all(
     smoke: bool = False,
     judge: bool = False,
     dataset_file: str | None = None,
+    tier: str = "all",
 ) -> EvalReport:
     """主入口：运行一个或多个模块的评估，返回 EvalReport。
 
@@ -186,28 +253,30 @@ def run_all(
         judge: 是否启用 LLM-as-Judge（传递给 E2E runner）
         dataset_file: 自定义评测集文件名（如 "rag_test_kb.json"），
                       指定时用 rag runner 跑该评测集，忽略 module
+        tier: V2 分层评估 — "smoke" | "core" | "hard" | "regression" | "all"
+              按用例 metadata.tier 过滤，"all" 不过滤
 
     Returns:
-        EvalReport: 包含所有模块的汇总和详细结果
+        EvalReport: 包含所有模块的汇总、分层汇总和详细结果
     """
-    # V1.0: 自动触发 runner 注册（CLI 通过 _bootstrap_runners 注册，
-    # 但直接 import 调 run_all() 时不会，缺少这一步会全部走 skip）
     _ensure_runners_registered()
     from backend.evaluation.dataset import load_dataset, load_dataset_file
 
     if dataset_file:
-        # 自定义评测集文件 → 用 rag runner 跑（dataset_file 覆盖 module）
         cases = load_dataset_file(dataset_file, default_module="rag")
         if smoke:
             cases = cases[:5]
+        cases = _filter_cases_by_tier(cases, tier)
         results = run_module("rag", cases, live=live, judge=judge)
         return EvalReport(
             module="rag",
             mode="live" if live else "offline",
             smoke=smoke,
+            tier=tier,
             summaries=[_build_summary(results, "rag")],
             results=list(results),
             total_score=None,
+            tier_summaries=_build_tier_summaries(cases, results),
         )
 
     module_kinds: list[ModuleKind] = (
@@ -216,15 +285,18 @@ def run_all(
 
     all_results: list[EvalResult] = []
     summaries: list[ModuleSummary] = []
+    all_cases: list[TestCase] = []
 
     for m in module_kinds:
         cases = load_dataset(m)
         if smoke:
             cases = cases[:5]
+        cases = _filter_cases_by_tier(cases, tier)
 
         results = run_module(m, cases, live=live, judge=judge)
         all_results.extend(results)
         summaries.append(_build_summary(results, m))
+        all_cases.extend(cases)
 
     # 综合评分（仅全量 + live 模式计算）
     total_score = None
@@ -244,7 +316,9 @@ def run_all(
         module=module,
         mode="live" if live else "offline",
         smoke=smoke,
+        tier=tier,
         summaries=summaries,
         results=all_results,
         total_score=total_score,
+        tier_summaries=_build_tier_summaries(all_cases, all_results),
     )

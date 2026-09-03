@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>评测报告 — RAG 检索</title>
+<style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           margin: 0; background: #f5f6fa; color: #2d3142; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+              color: white; padding: 32px; border-radius: 12px; margin-bottom: 24px;
+              box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    .header h1 { margin: 0 0 8px; font-size: 28px; }
+    .header .meta { opacity: 0.9; font-size: 14px; }
+    .dashboard { display: grid; grid-template-columns: repeat(4, 1fr);
+                 gap: 16px; margin-bottom: 24px; }
+    .card { background: white; padding: 20px; border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06); text-align: center; }
+    .card-icon { font-size: 32px; margin-bottom: 8px; }
+    .card-label { font-size: 13px; color: #6c757d; margin-bottom: 8px; }
+    .card-value { font-size: 28px; font-weight: bold; margin-bottom: 4px; }
+    .card-hint { font-size: 11px; color: #adb5bd; }
+    .card-ok { border-top: 4px solid #10b9810; }
+    .card-warn { border-top: 4px solid #f59e0b; }
+    .card-fail { border-top: 4px solid #ef4444; }
+    .card-none { border-top: 4px solid #cbd5e1; }
+    h2 { color: #2d3142; border-bottom: 2px solid #667eea; padding-bottom: 8px; margin-top: 32px; }
+    h3 { color: #4a5568; margin-top: 20px; }
+    table { border-collapse: collapse; width: 100%; background: white;
+           box-shadow: 0 1px 3px rgba(0,0,0,0.05); border-radius: 6px; overflow: hidden; }
+    th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid #e9ecef; }
+    th { background: #f8f9fa; font-weight: 600; color: #495057; font-size: 13px; }
+    tr.fail { background: #fef2f2; }
+    tr.fail:hover { background: #fee2e2; }
+    tr.error { background: #fff3cd; }
+    tr.error:hover { background: #ffe69c; }
+    code { background: #f1f3f5; padding: 2px 6px; border-radius: 3px;
+           font-family: 'Menlo', monospace; font-size: 12px; }
+    details.case { background: white; border-radius: 8px; margin-bottom: 8px;
+                   box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    details.case[open] { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    details.case summary { padding: 14px 18px; cursor: pointer;
+                           font-size: 14px; user-select: none; }
+    details.case summary:hover { background: #f8f9fa; }
+    details.case summary b { color: #2d3142; }
+    details.case-pass summary { border-left: 4px solid #10b9810; }
+    details.case-fail summary { border-left: 4px solid #ef4444; background: #fef2f2; }
+    details.case-error summary { border-left: 4px solid #f59e0b; background: #fff3cd; }
+    .case-body { padding: 0 18px 18px; font-size: 13px; line-height: 1.7; }
+    .case-body h4 { color: #667eea; margin-top: 16px; }
+    table.retrieve { font-size: 12px; }
+    table.retrieve th { background: #e0e7ff; }
+    </style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>📊 RAG 评测报告</h1>
+    <div class="meta">RAG 检索 · 离线 · 2026-09-04T05:57:43.309623</div>
+  </div>
+  <div class="dashboard">
+    
+        <div class="card card-ok">
+          <div class="card-icon">📋</div>
+          <div class="card-label">通过率</div>
+          <div class="card-value">100.0% (20/20)</div>
+          <div class="card-hint">recall@5</div>
+        </div>
+        <div class="card card-warn">
+          <div class="card-icon">🎯</div>
+          <div class="card-label">Top-1 准确率</div>
+          <div class="card-value">70.0%</div>
+          <div class="card-hint">用户看到的第1条</div>
+        </div>
+        <div class="card card-none">
+          <div class="card-icon">🚫</div>
+          <div class="card-label">拒答准确率</div>
+          <div class="card-value">—</div>
+          <div class="card-hint">negative case</div>
+        </div>
+        <div class="card card-warn">
+          <div class="card-icon">📈</div>
+          <div class="card-label">MRR</div>
+          <div class="card-value">75.0%</div>
+          <div class="card-hint">排序质量</div>
+        </div>
+  </div>
+  <h2>✅ 全部用例通过，无失败</h2>
+  <h2>📂 per-case 详情（20 条）</h2>
+  
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-001</b> — 通过 (下单后多久发货？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 1577ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=0.3333, context_noise@10=0.6667, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>3e30e0df16</code></td><td>0.9012</td><td>Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。</td></tr><tr><td>2</td><td><code>3e30e0df16</code></td><td>0.8153</td><td>Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。  Q：支持哪些支付方式? A：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。  Q：如何申请退款? A：在「我的</td></tr><tr><td>3</td><td><code>3e30e0df16</code></td><td>0.8153</td><td>Q：客户下单后多久发货? A：现货商品 24 小时内发出，预售商品以商品详情页标注的发货时间为准。  Q：支持哪些支付方式? A：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。  Q：如何申请退款? A：在「我的</td></tr><tr><td>4</td><td><code>f938bc1033</code></td><td>0.4940</td><td>2.1 适用条件：商品不影响二次销售，包装配件齐全。 2.2 时间窗口：客户签收后 7 天（含）内申请。 2.3 运费承担：买家承担来回运费。</td></tr><tr><td>5</td><td><code>14aa8a1c7a</code></td><td>0.4536</td><td>5.1 合同签订后 3 个工作日内支付 30% 预付款。 5.2 货物验收合格后 7 个工作日内支付 65% 货款。 5.3 质保期满（交付后 90 日）无质量问题，支付剩余 5% 尾款。</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;3e30e0df16&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>3e30e0df16</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;3e30e0df16&#x27;, &#x27;f938bc1033&#x27;, &#x27;14aa8a1c7a&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.9012</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-002</b> — 通过 (支持哪些支付方式？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 325ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=0.3333, context_noise@10=0.6667, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(2个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>3e30e0df16</code></td><td>0.9372</td><td>Q：支持哪些支付方式? A：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。</td></tr><tr><td>2</td><td><code>894418906b</code></td><td>0.5343</td><td>7.2 财务核对后按合同约定方式付款。</td></tr><tr><td>3</td><td><code>14aa8a1c7a</code></td><td>0.4116</td><td>五、付款方式 5.1 合同签订后 3 个工作日内支付 30% 预付款。 5.2 货物验收合格后 7 个工作日内支付 65% 货款。 5.3 质保期满（交付后 90 日）无质量问题，支付剩余 5% 尾款。</td></tr><tr><td>4</td><td><code>3e30e0df16</code></td><td>0.4109</td><td>Q：能开发票抬头吗? A：支持个人/企业抬头，需提供税号及开户银行（企业)。</td></tr><tr><td>5</td><td><code>894418906b</code></td><td>0.3730</td><td>七、对账付款 7.1 供应商按合同账期提交对账单。 7.2 财务核对后按合同约定方式付款。</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;3e30e0df16&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>3e30e0df16</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;3e30e0df16&#x27;, &#x27;894418906b&#x27;, &#x27;14aa8a1c7a&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟢 <b>high</b></p><p><b>Top-1 rerank_score</b>: <code>0.9372</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-003</b> — 通过 (如何申请退款？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 320ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=0.25, context_noise@10=0.75, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>3e30e0df16</code></td><td>0.8867</td><td>Q：如何申请退款? A：在「我的订单」点击「申请退款」,填写原因后提交，客服 1-2 个工作日内审核。</td></tr><tr><td>2</td><td><code>f938bc1033</code></td><td>0.4638</td><td>五、退款时效 仓库验收合格后 1-3 个工作日原路退回支付账户。</td></tr><tr><td>3</td><td><code>e044139401</code></td><td>0.4556</td><td>Q：七天无理由退货范围 A：支持，客户在签收后 7 天内可申请无理由退货（贴身衣物/食品等除外)。</td></tr><tr><td>4</td><td><code>ea58e815ba</code></td><td>0.4266</td><td>活动规则: 1. 单笔订单实付满 200 元可用 2. 优惠不与店铺券叠加 3. 退款说明：活动结束后统一发放等额优惠券，不支持现金退款。</td></tr><tr><td>5</td><td><code>ea58e815ba</code></td><td>0.4243</td><td>退款流程不适用本促销</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;3e30e0df16&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>3e30e0df16</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;3e30e0df16&#x27;, &#x27;f938bc1033&#x27;, &#x27;e044139401&#x27;, &#x27;ea58e815ba&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟢 <b>high</b></p><p><b>Top-1 rerank_score</b>: <code>0.8867</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-004</b> — 通过 (商品保修期多久？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 356ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=0.25, context_noise@10=0.75, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>3e30e0df16</code></td><td>0.9121</td><td>Q：商品保修期多久? A：电子产品按品牌政策，一般 1 年；其他品类详见商品详情页。</td></tr><tr><td>2</td><td><code>7fae54d9ff</code></td><td>0.7037</td><td>保修期 1 年（苹果公司官方政策)</td></tr><tr><td>3</td><td><code>e044139401</code></td><td>0.5410</td><td>Q：维修申请 A：电子类商品保修期内非人为损坏可申请免费维修；人为损坏按成本价收费。</td></tr><tr><td>4</td><td><code>f938bc1033</code></td><td>0.5161</td><td>2.1 适用条件：商品不影响二次销售，包装配件齐全。 2.2 时间窗口：客户签收后 7 天（含）内申请。 2.3 运费承担：买家承担来回运费。</td></tr><tr><td>5</td><td><code>f938bc1033</code></td><td>0.4716</td><td>3.1 商品存在质量问题（破损/错发/性能故障),全额退款，商家承担运费。 3.2 客户需在签收后 48 小时内上传照片凭证。</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;3e30e0df16&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>3e30e0df16</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;3e30e0df16&#x27;, &#x27;7fae54d9ff&#x27;, &#x27;e044139401&#x27;, &#x27;f938bc1033&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟢 <b>high</b></p><p><b>Top-1 rerank_score</b>: <code>0.9121</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-005</b> — 通过 (库存按状态分为哪几类？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 285ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=1.0, context_noise@10=0.0, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>99a80089e4</code></td><td>0.9112</td><td>示例跨境电商公司 库存管理制度 版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001 【仅供测试  内容虚构】  版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001 【仅供测试  内容虚构】  第一</td></tr><tr><td>2</td><td><code>99a80089e4</code></td><td>0.9043</td><td>示例跨境电商公司 库存管理制度 版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001 【仅供测试  内容虚构】  第一章 总则 第一条 目的：规范库存管理，降低呆滞库存，提升资金周转率。 第二条 适用范围：成品仓、原料仓</td></tr><tr><td>3</td><td><code>99a80089e4</code></td><td>0.8919</td><td>第二章 库存分类 库存按状态分为以下五类：</td></tr><tr><td>4</td><td><code>99a80089e4</code></td><td>0.8852</td><td>库存按状态分为以下五类：</td></tr><tr><td>5</td><td><code>99a80089e4</code></td><td>0.4000</td><td>第一条 目的：规范库存管理，降低呆滞库存，提升资金周转率。 第二条 适用范围：成品仓、原料仓、在途仓、跨境保税仓。</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;99a80089e4&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>99a80089e4</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;99a80089e4&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.9112</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-006</b> — 通过 (滞销库存是多少天无动销转滞销池？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 280ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=1.0, context_noise@10=0.0, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>99a80089e4</code></td><td>0.8766</td><td>第五章 滞销处理 连续 90 天无动销的商品，转入滞销池，启动促销或调拨方案；连续 180 天无动销，启动退供或报废评估。 附录 A：常用单据 入库单、出库单、调拨单、盘点表、损益单。 第五章 滞销处理：共 5 行，列：类别，定义，占比目标</td></tr><tr><td>2</td><td><code>99a80089e4</code></td><td>0.8462</td><td>示例跨境电商公司 库存管理制度 版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001 【仅供测试  内容虚构】  版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001 【仅供测试  内容虚构】  第一</td></tr><tr><td>3</td><td><code>99a80089e4</code></td><td>0.8380</td><td>示例跨境电商公司 库存管理制度 版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001 【仅供测试  内容虚构】  第一章 总则 第一条 目的：规范库存管理，降低呆滞库存，提升资金周转率。 第二条 适用范围：成品仓、原料仓</td></tr><tr><td>4</td><td><code>99a80089e4</code></td><td>0.7236</td><td>第五章 滞销处理：共 5 行，列：类别，定义，占比目标，处置策略。 - 类别=正常品，定义=近 60 天有动销的健康库存，占比目标=≥ 70%, 处置策略=常规销售与补货 - 类别=呆滞品，定义=60–90 天无动销的商品，占比目标=≤ 1</td></tr><tr><td>5</td><td><code>99a80089e4</code></td><td>0.7196</td><td>【原始数据】 类别，定义，占比目标，处置策略 正常品，近 60 天有动销的健康库存, ≥ 70%, 常规销售与补货 呆滞品, 60–90 天无动销的商品, ≤ 15%, 促销 / 捆绑 / 调拨 滞销品, 90 天以上无动销的商品, ≤ 1</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;99a80089e4&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>99a80089e4</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;99a80089e4&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.8766</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-007</b> — 通过 (盘点分为哪几类？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 272ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=1.0, context_noise@10=0.0, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>99a80089e4</code></td><td>0.7622</td><td>第四章 盘点制度 月度盘点：每月末由财务组织抽盘，差异率不超过 1%。 年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。</td></tr><tr><td>2</td><td><code>99a80089e4</code></td><td>0.6782</td><td>入库单、出库单、调拨单、盘点表、损益单。</td></tr><tr><td>3</td><td><code>99a80089e4</code></td><td>0.6705</td><td>月度盘点：每月末由财务组织抽盘，差异率不超过 1%。 年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。</td></tr><tr><td>4</td><td><code>99a80089e4</code></td><td>0.5942</td><td>示例跨境电商公司 库存管理制度 版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001 【仅供测试  内容虚构】  版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001 【仅供测试  内容虚构】  第一</td></tr><tr><td>5</td><td><code>99a80089e4</code></td><td>0.5861</td><td>示例跨境电商公司 库存管理制度 版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001 【仅供测试  内容虚构】  第一章 总则 第一条 目的：规范库存管理，降低呆滞库存，提升资金周转率。 第二条 适用范围：成品仓、原料仓</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;99a80089e4&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>99a80089e4</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;99a80089e4&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.7622</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-008</b> — 通过 (供应商准入需要提交哪些资质？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 322ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=0.5, context_noise@10=0.5, 平均倒数排名 (MRR)=0.5, NDCG@10=0.6309, Chunk 级召回率=1.0, Top-1 准确率=0.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>e87b88ae72</code></td><td>0.9521</td><td>三、供应商准入 1. **资质初审**：营业执照、生产 / 经营许可证、商标注册或授权链、质检报告齐备。 2. **样品验证**：提供样品并送质检，关键指标须达标。 3. **试单考核**：小批量试单，评估交期达成率、质量合格率、售后响应。</td></tr><tr><td>2</td><td><code>e87b88ae72</code></td><td>0.9334</td><td>示例跨境电商公司 供应商管理规范 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SUPPLIER-001　维护：示例跨境电商公司** 一、目的 规范供应商从准入、合作到退出的全生命周期管理，建立稳</td></tr><tr><td>3</td><td><code>e87b88ae72</code></td><td>0.9334</td><td>示例跨境电商公司 供应商管理规范 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SUPPLIER-001　维护：示例跨境电商公司** 一、目的 规范供应商从准入、合作到退出的全生命周期管理，建立稳</td></tr><tr><td>4</td><td><code>e87b88ae72</code></td><td>0.9217</td><td>示例跨境电商公司 供应商管理规范 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SUPPLIER-001　维护：示例跨境电商公司** 一、目的 规范供应商从准入、合作到退出的全生命周期管理，建立稳</td></tr><tr><td>5</td><td><code>894418906b</code></td><td>0.7546</td><td>3.2 新供应商需经资质初审、样品验证、试单三个环节，合格后纳入名录。</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;894418906b&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>e87b88ae72</code> ❌</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;e87b88ae72&#x27;, &#x27;894418906b&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.9521</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-009</b> — 通过 (供应商分级标准是什么？A级需要多少分？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 283ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=0.5, context_noise@10=0.5, 平均倒数排名 (MRR)=0.5, NDCG@10=0.6309, Chunk 级召回率=1.0, Top-1 准确率=0.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>e87b88ae72</code></td><td>0.9368</td><td>四、供应商分级 \| 等级 \| 标准 \| 权益 \| \|------\|------\|------\| \| A 级（战略） \| 年度评分 ≥ 90，且合作满 1 年 \| 优先份额、账期优惠 \| \| B 级（合格） \| 年</td></tr><tr><td>2</td><td><code>e87b88ae72</code></td><td>0.9006</td><td>示例跨境电商公司 供应商管理规范 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SUPPLIER-001　维护：示例跨境电商公司** 一、目的 规范供应商从准入、合作到退出的全生命周期管理，建立稳</td></tr><tr><td>3</td><td><code>e87b88ae72</code></td><td>0.8657</td><td>示例跨境电商公司 供应商管理规范 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SUPPLIER-001　维护：示例跨境电商公司** 一、目的 规范供应商从准入、合作到退出的全生命周期管理，建立稳</td></tr><tr><td>4</td><td><code>e87b88ae72</code></td><td>0.8657</td><td>示例跨境电商公司 供应商管理规范 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SUPPLIER-001　维护：示例跨境电商公司** 一、目的 规范供应商从准入、合作到退出的全生命周期管理，建立稳</td></tr><tr><td>5</td><td><code>894418906b</code></td><td>0.4511</td><td>3.1 合格供应商名录内的供应商优先。</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;894418906b&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>e87b88ae72</code> ❌</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;e87b88ae72&#x27;, &#x27;894418906b&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.9368</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-010</b> — 通过 (数据分类有几个级别？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 336ms</p>
+    <p><b>指标</b>: 召回率@5=0.0, 召回率@10=0.0, precision@5=0.0, context_noise@10=1.0, 平均倒数排名 (MRR)=0.0, NDCG@10=0.0, Chunk 级召回率=1.0, Top-1 准确率=0.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>9b708f17b6</code></td><td>0.7894</td><td>二、数据分类 \| 级别 \| 示例 \| 保护措施 \| \|------\|------\|----------\| \| 公开 \| 商品目录、公开活动 \| 常规访问控制 \| \| 内部 \| 订单、库存、运营报表 \| 角色权限</td></tr><tr><td>2</td><td><code>9b708f17b6</code></td><td>0.7213</td><td>示例跨境电商公司 数据安全与隐私政策 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SECURITY-001　维护：示例跨境电商公司** 一、目的 依据《中华人民共和国个人信息保护法》《GDPR》</td></tr><tr><td>3</td><td><code>9b708f17b6</code></td><td>0.6731</td><td>示例跨境电商公司 数据安全与隐私政策 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SECURITY-001　维护：示例跨境电商公司** 一、目的 依据《中华人民共和国个人信息保护法》《GDPR》</td></tr><tr><td>4</td><td><code>9b708f17b6</code></td><td>0.6731</td><td>示例跨境电商公司 数据安全与隐私政策 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SECURITY-001　维护：示例跨境电商公司** 一、目的 依据《中华人民共和国个人信息保护法》《GDPR》</td></tr><tr><td>5</td><td><code>99a80089e4</code></td><td>0.5696</td><td>库存按状态分为以下五类：</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;e2c8b3c8a4&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>9b708f17b6</code> ❌</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;9b708f17b6&#x27;, &#x27;99a80089e4&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.7894</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-011</b> — 通过 (敏感数据的加密标准是什么？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 287ms</p>
+    <p><b>指标</b>: 召回率@5=0.0, 召回率@10=0.0, precision@5=0.0, context_noise@10=1.0, 平均倒数排名 (MRR)=0.0, NDCG@10=0.0, Chunk 级召回率=1.0, Top-1 准确率=0.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>9b708f17b6</code></td><td>0.7630</td><td>传输层强制 TLS 1.2+，存储层对敏感字段 AES-256 加密；</td></tr><tr><td>2</td><td><code>9b708f17b6</code></td><td>0.6628</td><td>四、存储与加密 传输层强制 TLS 1.2+，存储层对敏感字段 AES-256 加密； 密钥由 KMS / Vault 统一托管，禁止硬编码； 数据库按用户维度分库分表，定期备份（RPO ≤ 5 min）。</td></tr><tr><td>3</td><td><code>9b708f17b6</code></td><td>0.5652</td><td>示例跨境电商公司 数据安全与隐私政策 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SECURITY-001　维护：示例跨境电商公司** 一、目的 依据《中华人民共和国个人信息保护法》《GDPR》</td></tr><tr><td>4</td><td><code>9b708f17b6</code></td><td>0.4764</td><td>示例跨境电商公司 数据安全与隐私政策 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SECURITY-001　维护：示例跨境电商公司** 一、目的 依据《中华人民共和国个人信息保护法》《GDPR》</td></tr><tr><td>5</td><td><code>9b708f17b6</code></td><td>0.4764</td><td>示例跨境电商公司 数据安全与隐私政策 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SECURITY-001　维护：示例跨境电商公司** 一、目的 依据《中华人民共和国个人信息保护法》《GDPR》</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;e2c8b3c8a4&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>9b708f17b6</code> ❌</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;9b708f17b6&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.7630</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-012</b> — 通过 (数据安全事件多久时间内要上报？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 322ms</p>
+    <p><b>指标</b>: 召回率@5=0.0, 召回率@10=0.0, precision@5=0.0, context_noise@10=1.0, 平均倒数排名 (MRR)=0.0, NDCG@10=0.0, Chunk 级召回率=1.0, Top-1 准确率=0.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>9b708f17b6</code></td><td>0.9011</td><td>八、应急响应 发生或疑似数据安全事件，2 小时内上报数据安全负责人，24 小时内启动处置并按法规向监管与用户告知；保留事件调查与整改记录。</td></tr><tr><td>2</td><td><code>9b708f17b6</code></td><td>0.9002</td><td>发生或疑似数据安全事件，2 小时内上报数据安全负责人，24 小时内启动处置并按法规向监管与用户告知；保留事件调查与整改记录。</td></tr><tr><td>3</td><td><code>9b708f17b6</code></td><td>0.8803</td><td>示例跨境电商公司 数据安全与隐私政策 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SECURITY-001　维护：示例跨境电商公司** 一、目的 依据《中华人民共和国个人信息保护法》《GDPR》</td></tr><tr><td>4</td><td><code>9b708f17b6</code></td><td>0.8217</td><td>示例跨境电商公司 数据安全与隐私政策 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SECURITY-001　维护：示例跨境电商公司** 一、目的 依据《中华人民共和国个人信息保护法》《GDPR》</td></tr><tr><td>5</td><td><code>9b708f17b6</code></td><td>0.8217</td><td>示例跨境电商公司 数据安全与隐私政策 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SECURITY-001　维护：示例跨境电商公司** 一、目的 依据《中华人民共和国个人信息保护法》《GDPR》</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;e2c8b3c8a4&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>9b708f17b6</code> ❌</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;9b708f17b6&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.9011</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-013</b> — 通过 (采购合同的预付款比例是多少？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 328ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=1.0, context_noise@10=0.0, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>14aa8a1c7a</code></td><td>0.7431</td><td>五、付款方式 5.1 合同签订后 3 个工作日内支付 30% 预付款。 5.2 货物验收合格后 7 个工作日内支付 65% 货款。 5.3 质保期满（交付后 90 日）无质量问题，支付剩余 5% 尾款。</td></tr><tr><td>2</td><td><code>14aa8a1c7a</code></td><td>0.7352</td><td>5.1 合同签订后 3 个工作日内支付 30% 预付款。 5.2 货物验收合格后 7 个工作日内支付 65% 货款。 5.3 质保期满（交付后 90 日）无质量问题，支付剩余 5% 尾款。</td></tr><tr><td>3</td><td><code>14aa8a1c7a</code></td><td>0.7144</td><td>跨境电商采购合同 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司** 一、合同双方 1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路</td></tr><tr><td>4</td><td><code>14aa8a1c7a</code></td><td>0.6807</td><td>跨境电商采购合同 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司** 一、合同双方 1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路</td></tr><tr><td>5</td><td><code>14aa8a1c7a</code></td><td>0.6807</td><td>跨境电商采购合同 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司** 一、合同双方 1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;14aa8a1c7a&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>14aa8a1c7a</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;14aa8a1c7a&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.7431</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-014</b> — 通过 (采购合同总金额是多少？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 301ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=0.5, context_noise@10=0.5, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>14aa8a1c7a</code></td><td>0.7123</td><td>跨境电商采购合同 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司** 一、合同双方 1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路</td></tr><tr><td>2</td><td><code>14aa8a1c7a</code></td><td>0.6556</td><td>跨境电商采购合同 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司** 一、合同双方 1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路</td></tr><tr><td>3</td><td><code>14aa8a1c7a</code></td><td>0.6556</td><td>跨境电商采购合同 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司** 一、合同双方 1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路</td></tr><tr><td>4</td><td><code>894418906b</code></td><td>0.5289</td><td>四、合同签订 4.1 单笔金额 10000 元以上必须签订书面合同。 4.2 合同条款需经法务审核，包含价格、质量、交期、违约责任。</td></tr><tr><td>5</td><td><code>14aa8a1c7a</code></td><td>0.5137</td><td>1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路 100 号 法定代表人：张三</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;14aa8a1c7a&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>14aa8a1c7a</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;14aa8a1c7a&#x27;, &#x27;894418906b&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.7123</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-015</b> — 通过 (采购合同签订后多少天内要完成交付？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 368ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=1.0, context_noise@10=0.0, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>14aa8a1c7a</code></td><td>0.8981</td><td>三、交付条款 3.1 交付时间：合同签订后 30 个自然日内完成全部交付。 3.2 交付地点：甲方指定仓库。 3.3 运输方式：乙方负责运输并承担运费。</td></tr><tr><td>2</td><td><code>14aa8a1c7a</code></td><td>0.8874</td><td>3.1 交付时间：合同签订后 30 个自然日内完成全部交付。 3.2 交付地点：甲方指定仓库。 3.3 运输方式：乙方负责运输并承担运费。</td></tr><tr><td>3</td><td><code>14aa8a1c7a</code></td><td>0.8762</td><td>跨境电商采购合同 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司** 一、合同双方 1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路</td></tr><tr><td>4</td><td><code>14aa8a1c7a</code></td><td>0.8762</td><td>跨境电商采购合同 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司** 一、合同双方 1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路</td></tr><tr><td>5</td><td><code>14aa8a1c7a</code></td><td>0.7200</td><td>5.1 合同签订后 3 个工作日内支付 30% 预付款。 5.2 货物验收合格后 7 个工作日内支付 65% 货款。 5.3 质保期满（交付后 90 日）无质量问题，支付剩余 5% 尾款。</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;14aa8a1c7a&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>14aa8a1c7a</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;14aa8a1c7a&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.8981</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-016</b> — 通过 (抽检不合格率超过多少可以要求换货？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 310ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=1.0, context_noise@10=0.0, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>14aa8a1c7a</code></td><td>0.9397</td><td>四、质量要求 4.1 商品质量须符合国家相关标准及甲方书面要求。 4.2 抽检不合格率超过 5% 时，甲方有权要求换货或退货。</td></tr><tr><td>2</td><td><code>14aa8a1c7a</code></td><td>0.9349</td><td>跨境电商采购合同 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司** 一、合同双方 1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路</td></tr><tr><td>3</td><td><code>14aa8a1c7a</code></td><td>0.9317</td><td>4.1 商品质量须符合国家相关标准及甲方书面要求。 4.2 抽检不合格率超过 5% 时，甲方有权要求换货或退货。</td></tr><tr><td>4</td><td><code>14aa8a1c7a</code></td><td>0.9196</td><td>跨境电商采购合同 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司** 一、合同双方 1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路</td></tr><tr><td>5</td><td><code>14aa8a1c7a</code></td><td>0.9196</td><td>跨境电商采购合同 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：LEGAL-001　维护：示例跨境电商公司** 一、合同双方 1.1 甲方（采购方）名称：示例跨境电商公司 地址：示例市示例区示例路</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;14aa8a1c7a&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>14aa8a1c7a</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;14aa8a1c7a&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.9397</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-017</b> — 通过 (会员积分如何累计？多少分可以抵扣？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 251ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=0.25, context_noise@10=0.75, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>3e30e0df16</code></td><td>0.9636</td><td>Q：会员积分如何累计? A：每消费 1 元累计 1 分，满 1000 分可抵扣 10 元。</td></tr><tr><td>2</td><td><code>e044139401</code></td><td>0.6563</td><td>Q：会员等级升降 A：累计消费满 5000 升金卡，享 95 折；满 20000 升钻石，享 9 折。</td></tr><tr><td>3</td><td><code>ea58e815ba</code></td><td>0.4151</td><td>活动规则: 1. 单笔订单实付满 200 元可用 2. 优惠不与店铺券叠加 3. 退款说明：活动结束后统一发放等额优惠券，不支持现金退款。</td></tr><tr><td>4</td><td><code>3e30e0df16</code></td><td>0.3171</td><td>Q：优惠券能否叠加使用? A：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。</td></tr><tr><td>5</td><td><code>99a80089e4</code></td><td>0.3149</td><td>月度盘点：每月末由财务组织抽盘，差异率不超过 1%。 年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;3e30e0df16&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>3e30e0df16</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;3e30e0df16&#x27;, &#x27;e044139401&#x27;, &#x27;ea58e815ba&#x27;, &#x27;99a80089e4&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟢 <b>high</b></p><p><b>Top-1 rerank_score</b>: <code>0.9636</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-018</b> — 通过 (海外配送标准时效是多久？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 391ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=0.5, context_noise@10=0.5, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>3e30e0df16</code></td><td>0.9490</td><td>Q：海外配送时效? A：标准配送 7-15 个工作日，加急配送 3-7 个工作日，具体以物流追踪页为准。</td></tr><tr><td>2</td><td><code>ba8721e79b</code></td><td>0.7036</td><td>跨境物流运费标准（数字写法陷阱) 【仅供测试 · 内容虚构】 海运拼箱 海运拼箱：人民币 8.00 元 / kg(最低消费 50 元）时效:25-35 个自然日 路线：深圳盐田 → 洛杉矶长滩 空运快线 空运快线：人民币 8 元 / kg(</td></tr><tr><td>3</td><td><code>ba8721e79b</code></td><td>0.6452</td><td>跨境物流运费标准（数字写法陷阱) 【仅供测试 · 内容虚构】 海运拼箱 海运拼箱：人民币 8.00 元 / kg(最低消费 50 元）时效:25-35 个自然日 路线：深圳盐田 → 洛杉矶长滩 空运快线 空运快线：人民币 8 元 / kg(</td></tr><tr><td>4</td><td><code>ba8721e79b</code></td><td>0.6452</td><td>跨境物流运费标准（数字写法陷阱) 【仅供测试 · 内容虚构】 海运拼箱 海运拼箱：人民币 8.00 元 / kg(最低消费 50 元）时效:25-35 个自然日 路线：深圳盐田 → 洛杉矶长滩 空运快线 空运快线：人民币 8 元 / kg(</td></tr><tr><td>5</td><td><code>ba8721e79b</code></td><td>0.4847</td><td>三种方式**单价均为 8 元**,但**最低消费 / 续重规则 / 路线时效**差异显著，下单前请根据货值与时效需求选择。</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;3e30e0df16&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>3e30e0df16</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;3e30e0df16&#x27;, &#x27;ba8721e79b&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟢 <b>high</b></p><p><b>Top-1 rerank_score</b>: <code>0.9490</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-019</b> — 通过 (优惠券最多可以叠加几张？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 343ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, precision@5=0.5, context_noise@10=0.5, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>3e30e0df16</code></td><td>0.8769</td><td>Q：优惠券能否叠加使用? A：店铺券与平台券可叠加，但单笔订单最多使用 3 张优惠券。</td></tr><tr><td>2</td><td><code>ea58e815ba</code></td><td>0.5394</td><td>活动规则: 1. 单笔订单实付满 200 元可用 2. 优惠不与店铺券叠加 3. 退款说明：活动结束后统一发放等额优惠券，不支持现金退款。</td></tr><tr><td>3</td><td><code>ea58e815ba</code></td><td>0.3830</td><td>跨境电商退货退款流程（标题党陷阱) 【仅供测试 · 内容虚构】 为感谢新老客户，本月推出满 200 减 30 的促销活动。 活动时间:2026 年 9 月 1 日至 9 月 30 日。 参与商品：全场自营跨境商品。 活动规则: 1. 单笔订</td></tr><tr><td>4</td><td><code>ea58e815ba</code></td><td>0.3511</td><td>跨境电商退货退款流程（标题党陷阱) 【仅供测试 · 内容虚构】 为感谢新老客户，本月推出满 200 减 30 的促销活动。 活动时间:2026 年 9 月 1 日至 9 月 30 日。 参与商品：全场自营跨境商品。 活动规则: 1. 单笔订</td></tr><tr><td>5</td><td><code>ea58e815ba</code></td><td>0.3511</td><td>跨境电商退货退款流程（标题党陷阱) 【仅供测试 · 内容虚构】 为感谢新老客户，本月推出满 200 减 30 的促销活动。 活动时间:2026 年 9 月 1 日至 9 月 30 日。 参与商品：全场自营跨境商品。 活动规则: 1. 单笔订</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;3e30e0df16&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>3e30e0df16</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;3e30e0df16&#x27;, &#x27;ea58e815ba&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟢 <b>high</b></p><p><b>Top-1 rerank_score</b>: <code>0.8769</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>V2-BASIC-020</b> — 通过 (质量合格率的目标是多少？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>rag_test_kb</code> · <b>耗时</b>: 373ms</p>
+    <p><b>指标</b>: 召回率@5=0.0, 召回率@10=0.0, precision@5=0.0, context_noise@10=1.0, 平均倒数排名 (MRR)=0.0, NDCG@10=0.0, Chunk 级召回率=1.0, Top-1 准确率=0.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=5 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>e87b88ae72</code></td><td>0.9396</td><td>质量合格率（目标 ≥ 98%）</td></tr><tr><td>2</td><td><code>e87b88ae72</code></td><td>0.9216</td><td>五、考核指标 质量合格率（目标 ≥ 98%） 交期达成率（目标 ≥ 95%） 售后退货率（目标 ≤ 3%） 合规与配合度（资料及时性、整改响应）</td></tr><tr><td>3</td><td><code>e87b88ae72</code></td><td>0.9118</td><td>示例跨境电商公司 供应商管理规范 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SUPPLIER-001　维护：示例跨境电商公司** 一、目的 规范供应商从准入、合作到退出的全生命周期管理，建立稳</td></tr><tr><td>4</td><td><code>e87b88ae72</code></td><td>0.8993</td><td>示例跨境电商公司 供应商管理规范 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SUPPLIER-001　维护：示例跨境电商公司** 一、目的 规范供应商从准入、合作到退出的全生命周期管理，建立稳</td></tr><tr><td>5</td><td><code>e87b88ae72</code></td><td>0.8993</td><td>示例跨境电商公司 供应商管理规范 【仅供测试 · 内容虚构】 **版本：v1.0　生效日期：2026-08-26　文档编号：SUPPLIER-001　维护：示例跨境电商公司** 一、目的 规范供应商从准入、合作到退出的全生命周期管理，建立稳</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;894418906b&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>e87b88ae72</code> ❌</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;e87b88ae72&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.9396</code></p>
+  </div>
+</details>
+</div>
+</body>
+</html>

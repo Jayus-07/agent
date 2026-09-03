@@ -14,7 +14,7 @@ import os
 import pickle
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
@@ -25,14 +25,40 @@ from backend.config import BM25_INDEX_DIR
 from backend.shared.logger import logger
 
 
+def _doc_matches(
+    doc: Document,
+    doc_id_set: set[str],
+    file_basenames: set[str],
+) -> bool:
+    """判断 Document 是否匹配给定的 doc_id 集合或文件名集合。
+
+    双键匹配（doc_id + source_file/file_path basename），用于 remove/replace 操作。
+    """
+    meta = doc.metadata or {}
+    if meta.get("doc_id") in doc_id_set:
+        return True
+    if file_basenames:
+        src = meta.get("source_file", "")
+        fp = meta.get("file_path", "")
+        if os.path.basename(src) in file_basenames or os.path.basename(fp) in file_basenames:
+            return True
+    return False
+
+
 def source_files_out_of_sync(indexed_docs: list, current_docs: list) -> bool:
     """判断 BM25 索引文档集合与当前文档集合是否一致。
 
-    is_stale 只检查 doc_count==0，检测不到「文档已删除但索引残留」。
-    这里比较 source_file 集合，索引有残留（已删文档）或缺失（新文档）都判为需重建。
+    比较 {source_file: chunk_count} 字典：文件集合不一致或同一文件的 chunk 数量
+    不一致都判为需重建（后者检测文档修改后旧 chunk 残留导致的计数漂移）。
     """
-    indexed = {d.metadata.get("source_file", "") for d in indexed_docs}
-    current = {d.metadata.get("source_file", "") for d in current_docs}
+    indexed: dict[str, int] = {}
+    for d in indexed_docs:
+        sf = d.metadata.get("source_file", "")
+        indexed[sf] = indexed.get(sf, 0) + 1
+    current: dict[str, int] = {}
+    for d in current_docs:
+        sf = d.metadata.get("source_file", "")
+        current[sf] = current.get(sf, 0) + 1
     return indexed != current
 
 
@@ -204,18 +230,7 @@ class BM25Store:
         doc_id_set = set(doc_ids or [])
         file_basenames = {os.path.basename(fp) for fp in (file_paths or [])}
 
-        def _match(doc) -> bool:
-            meta = doc.metadata or {}
-            if meta.get("doc_id") in doc_id_set:
-                return True
-            if file_basenames:
-                src = meta.get("source_file", "")
-                fp = meta.get("file_path", "")
-                if os.path.basename(src) in file_basenames or os.path.basename(fp) in file_basenames:
-                    return True
-            return False
-
-        remaining = [d for d in all_docs if not _match(d)]
+        remaining = [d for d in all_docs if not _doc_matches(d, doc_id_set, file_basenames)]
 
         removed = len(all_docs) - len(remaining)
         if removed > 0:
@@ -227,6 +242,72 @@ class BM25Store:
         else:
             logger.info("[BM25Store] 未匹配到需要删除的文档")
             return self.load(k=k)
+
+    def replace_documents(
+        self,
+        docs: List[Document],
+        k: int = 20,
+        *,
+        doc_id: str = "",
+        file_path: str = "",
+    ) -> Optional[BM25Retriever]:
+        """替换指定文档的 chunks 后全量重建索引。
+
+        先移除该 doc_id / file_path 对应的旧 entries，再追加新 entries，
+        单次 build() 完成（避免 remove + add 两次重建）。
+
+        解决 P0-1/P0-3：旧 add_documents 只追加不清理，导致文档修改后
+        BM25 残留旧 chunk，计数漂移（339 chunks vs 343 BM25）。
+
+        Args:
+            docs: 新的 Document 列表（替换后的完整 chunks）
+            k: 检索返回数量
+            doc_id: 要替换的 doc_id
+            file_path: 要替换的文件路径（basename 匹配）
+
+        Returns:
+            重建后的 BM25Retriever 实例；无索引且无新文档时返回 None
+        """
+        doc_id_set = {doc_id} if doc_id else set()
+        file_basenames = {os.path.basename(file_path)} if file_path else set()
+
+        existing: List[Document] = []
+        if self._docs_path.exists():
+            try:
+                loaded = self._safe_load_pickle(self._docs_path)
+                existing = loaded if loaded is not None else []
+            except Exception:
+                logger.warning("[BM25Store] 读取已有文档失败，将全量重建")
+                existing = []
+
+        remaining = [
+            d for d in existing
+            if not _doc_matches(d, doc_id_set, file_basenames)
+        ]
+        removed = len(existing) - len(remaining)
+        remaining.extend(docs)
+
+        logger.info(
+            f"[BM25Store] 替换文档 doc_id={doc_id!r}: "
+            f"移除 {removed} 旧 chunks，新增 {len(docs)}，"
+            f"总计 {len(remaining)}，全量重建..."
+        )
+        return self.build(remaining, k=k)
+
+    def load_docs(self) -> List[Document]:
+        """从磁盘加载持久化的 Document 列表（供一致性检查等外部消费者使用）。
+
+        Returns:
+            Document 列表；索引不存在或损坏时返回空列表
+        """
+        if not self._docs_path.exists():
+            return []
+        try:
+            loaded = self._safe_load_pickle(self._docs_path)
+            return loaded if loaded is not None else []
+        except Exception:
+            logger.warning("[BM25Store] load_docs 加载失败")
+            return []
 
     @property
     def is_stale(self) -> bool:

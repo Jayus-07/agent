@@ -826,6 +826,11 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
             result = indexer.reindex_file(filepath, file_hash=file_hash)
         finally:
             listener.unsub()  # 索引失败也必须退订，防 trace 订阅泄漏
+        # 上传后刷新 pipeline 内存 BM25（indexer 已写入磁盘）
+        try:
+            pipeline.refresh_bm25_from_store()
+        except Exception as e:
+            logger.warning(f"[RAG] BM25 刷新失败（不影响索引结果）: {e}")
         logger.info(f"[RAG] 上传索引完成: {filename} → {result}")
         return result
     finally:

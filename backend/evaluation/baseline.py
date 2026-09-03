@@ -57,6 +57,12 @@ def promote(report: EvalReport, *, git_tag: bool = True) -> list[Path]:
     written: list[Path] = []
     timestamp = datetime.now().strftime("%Y-%m-%d")
 
+    try:
+        from backend.prompts.service import snapshot_prompt_versions
+        prompt_versions = snapshot_prompt_versions()
+    except Exception:
+        prompt_versions = {}
+
     for summary in report.summaries:
         version = get_dataset_version(summary.module)
         path = baseline_path(summary.module, version)
@@ -69,6 +75,7 @@ def promote(report: EvalReport, *, git_tag: bool = True) -> list[Path]:
             "total": summary.total,
             "passed": summary.passed,
             "failed": summary.failed,
+            "prompt_versions": report.prompt_versions or prompt_versions,
         }
         path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2),
@@ -172,6 +179,28 @@ def diff(
                     f"{cur_val:.4f} (↓{abs(delta):.4f})"
                 )
                 (errors if severity == "error" else warnings).append(msg)
+
+    # 3. Prompt 版本变更提示（仅当有回归时附加，帮助定位原因）
+    if errors and report.prompt_versions:
+        try:
+            from backend.evaluation.storage import get_dataset_version
+            for summary in report.summaries:
+                base = load(summary.module, get_dataset_version(summary.module))
+                if not base or "prompt_versions" not in base:
+                    continue
+                base_pv = base["prompt_versions"]
+                changed = [
+                    f"{k}: v{base_pv[k]}→v{report.prompt_versions.get(k)}"
+                    for k in base_pv
+                    if report.prompt_versions.get(k) != base_pv.get(k)
+                ]
+                if changed:
+                    mod_zh = MODULE_LABELS.get(summary.module, summary.module)
+                    warnings.append(
+                        f"ℹ️  {mod_zh}: 以下 prompt 版本已变更 — {', '.join(changed)}"
+                    )
+        except Exception:
+            pass
 
     return warnings, errors
 

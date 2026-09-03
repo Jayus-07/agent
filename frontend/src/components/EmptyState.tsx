@@ -9,12 +9,13 @@ const EXAMPLES = [
   { label: '复杂分析', text: '对比各部门绩效，给出改进建议' },
 ]
 
-interface Props { onExampleClick?: (question: string) => void }
+interface Props {
+  onExampleClick?: (question: string) => void
+}
 
 export default function EmptyState({ onExampleClick }: Props) {
   return (
     <div className="flex flex-col items-center justify-center h-full px-6 py-16">
-      {/* Logo */}
       <div className="w-16 h-16 rounded-2xl bg-accent/8 flex items-center justify-center mb-8">
         <Sparkles size={30} className="text-accent" strokeWidth={1.5} />
       </div>
@@ -26,7 +27,6 @@ export default function EmptyState({ onExampleClick }: Props) {
         AI 自动拆解复杂任务，并行调用数据查询、知识检索和报告引擎
       </p>
 
-      {/* 示例卡片 */}
       <div className="grid gap-2.5 w-full max-w-lg">
         {EXAMPLES.map((ex) => (
           <button

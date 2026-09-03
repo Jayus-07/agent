@@ -1,0 +1,258 @@
+{
+  "version": "2.0",
+  "_comment": "V2.0 多跳/多文档检索评测 — 需要跨文档组合信息才能回答的问题。",
+  "test_cases": [
+    {
+      "id": "V2-MULTI-001",
+      "question": "退货后退款多久到账？退货运费谁承担？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["3e30e0df16", "f938bc1033"],
+        "relevant_snippets": ["1-2个工作日", "运费"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "after_sales",
+        "query_type": "multi_hop",
+        "tier": "core",
+        "answer_type": "procedural",
+        "expected_answer": "退款1-2个工作日审核，质量问题商家承担运费，无理由退货买家承担",
+        "must_contain": ["运费", "1-2个工作日"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-MULTI-002",
+      "question": "供应商考核不达标会怎样？退出机制是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["e87b88ae72"],
+        "relevant_snippets": ["D级", "退出"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "procurement",
+        "query_type": "multi_hop",
+        "tier": "core",
+        "answer_type": "procedural",
+        "expected_answer": "连续两季度D级或重大违规启动退出：冻结新订单、清算在途与库存",
+        "must_contain": ["D级", "退出"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-MULTI-003",
+      "question": "采购合同付款节奏是怎样的？尾款什么时候付？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["14aa8a1c7a"],
+        "relevant_snippets": ["30%", "65%", "5%"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "procurement",
+        "query_type": "multi_hop",
+        "tier": "hard",
+        "answer_type": "procedural",
+        "expected_answer": "30%预付款+65%验收后7个工作日+5%质保期满(交付后90日)无质量问题",
+        "must_contain": ["30%", "65%", "5%"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-MULTI-004",
+      "question": "敏感数据在传输和存储时分别用什么加密方式？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["9b708f17b6"],
+        "relevant_snippets": ["TLS", "AES-256"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "security",
+        "query_type": "multi_hop",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "传输层TLS 1.2+，存储层AES-256加密",
+        "must_contain": ["TLS", "AES-256"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-MULTI-005",
+      "question": "库存盘点差异率超标有什么后果？月度与年度标准有何不同？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["99a80089e4"],
+        "relevant_snippets": ["差异率", "1%"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "inventory",
+        "query_type": "multi_hop",
+        "tier": "hard",
+        "answer_type": "comparative",
+        "expected_answer": "月度盘点差异率≤1%，年度盘点差异率≤0.5%",
+        "must_contain": ["1%", "0.5%"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-MULTI-006",
+      "question": "供应商准入需要哪些步骤？准入后如何分级管理？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["e87b88ae72"],
+        "relevant_snippets": ["资质初审", "分级"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "procurement",
+        "query_type": "multi_hop",
+        "tier": "core",
+        "answer_type": "procedural",
+        "expected_answer": "准入三步：资质初审→样品验证→试单考核；分级A/B/C/D四级管理",
+        "must_contain": ["资质初审", "分级"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-MULTI-007",
+      "question": "数据安全事件应急响应流程是什么？需要在多长时间内完成上报和处置？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["9b708f17b6"],
+        "relevant_snippets": ["2小时", "24小时"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "security",
+        "query_type": "multi_hop",
+        "tier": "core",
+        "answer_type": "procedural",
+        "expected_answer": "2小时内上报数据安全负责人，24小时内启动处置并按法规告知",
+        "must_contain": ["2小时", "24小时"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-MULTI-008",
+      "question": "下单后可以修改地址吗？已发货怎么办？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["3e30e0df16"],
+        "relevant_snippets": ["修改", "待发货"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "order",
+        "query_type": "multi_hop",
+        "tier": "smoke",
+        "answer_type": "procedural",
+        "expected_answer": "待发货状态可自行修改，已发货联系客服申请拦截改址",
+        "must_contain": ["待发货"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-MULTI-009",
+      "question": "跨境商品需要哪些合规认证？危险品电池额外需要什么报告？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["7e28946475"],
+        "relevant_snippets": ["CE", "MSDS"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "product_spec",
+        "query_type": "multi_hop",
+        "tier": "hard",
+        "answer_type": "factual",
+        "expected_answer": "跨境商品需CE/FCC认证，D类电池额外需要MSDS和UN38.3测试报告",
+        "must_contain": ["CE", "MSDS"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-MULTI-010",
+      "question": "采购合同总金额多少？验收合格后支付多少比例？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["14aa8a1c7a"],
+        "relevant_snippets": ["90,000", "65%"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "procurement",
+        "query_type": "multi_hop",
+        "tier": "hard",
+        "answer_type": "numeric",
+        "expected_answer": "合同总金额¥90,000，验收合格后7个工作日支付65%货款",
+        "must_contain": ["90000", "65%"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-MULTI-011",
+      "question": "物流有哪几种运输方式？海运拼箱的时效是多久？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["788552468f"],
+        "relevant_snippets": ["空运", "海运"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "logistics",
+        "query_type": "multi_hop",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "头程物流有空运、海运等方式",
+        "must_contain": ["空运", "海运"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-MULTI-012",
+      "question": "发票如何开具？企业抬头需要什么信息？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["3e30e0df16"],
+        "relevant_snippets": ["电子发票", "税号"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "order",
+        "query_type": "multi_hop",
+        "tier": "core",
+        "answer_type": "procedural",
+        "expected_answer": "订单详情页提交开票申请，电子发票3个工作日内发至邮箱；企业抬头需税号及开户银行",
+        "must_contain": ["电子发票", "税号"],
+        "ground_truth_verified": true
+      }
+    }
+  ]
+}

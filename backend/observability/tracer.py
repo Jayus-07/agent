@@ -115,6 +115,21 @@ class SpanKind(str, Enum):
     ROUTER = "router"
     KB_ROUTING = "kb_routing"
 
+    # Customer Service
+    CS_ROUTING = "cs_routing"
+    CS_KNOWLEDGE = "cs_knowledge"
+    CS_BUSINESS_QUERY = "cs_business_query"
+    CS_BUSINESS_ACTION = "cs_business_action"
+    CS_COMPLAINT = "cs_complaint"
+    CS_HANDOFF = "cs_handoff"
+    CS_CONFIRMATION = "cs_confirmation"
+    CS_GUARD = "cs_guard"
+    CS_SUPERVISOR = "cs_supervisor"
+    CS_EXPERT = "cs_expert"
+    CS_REPORTER = "cs_reporter"
+    CS_STATE_TRANSITION = "cs_state_transition"
+    CS_STATE_LOADER = "cs_state_loader"
+
 
 class SpanName:
     """RAG 链路统一 span 显示名（P1 整改：同一阶段唯一标准名称）。
@@ -439,6 +454,14 @@ class TraceCollector:
 
         self._aggregate_usage(record)
         self._record_prometheus(record, leaked, uncovered_ms)
+
+        try:
+            from backend.prompts.service import collect_prompt_usage
+            prompt_versions = collect_prompt_usage()
+            if prompt_versions:
+                record.metadata["prompt_versions"] = prompt_versions
+        except Exception:
+            pass
 
         # 嵌套恢复：子 trace 结束 → 把父 trace 还原为 current，
         # 外层流程后续 span 才不会落入 noop。

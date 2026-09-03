@@ -11,6 +11,7 @@ Sync path:
 """
 from __future__ import annotations
 
+import contextvars
 import threading
 from dataclasses import dataclass
 from typing import Callable
@@ -18,9 +19,15 @@ from typing import Callable
 from backend.infra.cache import get_cache
 from backend.memory.database import AsyncSessionLocal
 from backend.memory.repository.prompt_repo import PromptRepository
+from backend.observability.prompt_trace import record_prompt_version
 from backend.prompts.registry import PROMPT_REGISTRY, PromptSpec
-from backend.prompts.renderer import PromptRenderer, PromptRenderError, RenderResult
+from backend.prompts.renderer import PromptRenderer, RenderResult
+from backend.prompts.workflow import validate_transition
 from backend.shared.logger import logger
+
+_prompt_usage_var: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
+    "_prompt_usage_var", default=None,
+)
 
 
 @dataclass
@@ -71,6 +78,11 @@ class PromptService:
                                 )
                     self._epoch += 1
             logger.info(f"[PromptService] Snapshot refreshed: {len(self._snapshot)} prompts, epoch={self._epoch}")
+            if not self._snapshot:
+                logger.info(
+                    f"[PromptService] Snapshot 为空：DB 中无已发布 prompt — "
+                    f"正常初始状态，渲染回退 YAML defaults ({len(self._defaults)} 个内置键)"
+                )
         except Exception as exc:
             logger.warning(f"[PromptService] Snapshot refresh failed (will use defaults): {exc}")
 
@@ -83,6 +95,14 @@ class PromptService:
                 cb()
             except Exception as exc:
                 logger.warning(f"[PromptService] Reload hook failed for {key}: {exc}")
+
+    @staticmethod
+    def _record_usage(key: str, version: int | None, source: str) -> None:
+        usage = _prompt_usage_var.get()
+        if usage is None:
+            usage = []
+            _prompt_usage_var.set(usage)
+        usage.append({"key": key, "version": version, "source": source})
 
     async def get_active(self, key: str) -> tuple[str, int | None, str]:
         with self._snapshot_lock:
@@ -123,6 +143,8 @@ class PromptService:
         template, version, source = await self.get_active(key)
         spec = PROMPT_REGISTRY.get(key)
         text = self._renderer.render(template, variables, spec=spec)
+        self._record_usage(key, version, source)
+        record_prompt_version(key, version, source)
         return RenderResult(text=text, key=key, version=version, source=source)
 
     def render_sync(self, key: str, **variables: str) -> RenderResult:
@@ -132,12 +154,16 @@ class PromptService:
         if entry:
             spec = PROMPT_REGISTRY.get(key)
             text = self._renderer.render(entry.template, variables, spec=spec)
+            self._record_usage(key, entry.version, "snapshot")
+            record_prompt_version(key, entry.version, "snapshot")
             return RenderResult(text=text, key=key, version=entry.version, source="snapshot")
 
         default = self._defaults.get(key)
         if default is not None:
             spec = PROMPT_REGISTRY.get(key)
             text = self._renderer.render(default, variables, spec=spec)
+            self._record_usage(key, None, "default")
+            record_prompt_version(key, None, "default")
             return RenderResult(text=text, key=key, version=None, source="default")
 
         raise KeyError(f"Prompt not found in snapshot or defaults: {key}")
@@ -203,6 +229,7 @@ class PromptService:
         *,
         actor: str = "system",
         role: str = "",
+        skip_workflow: bool = False,
     ) -> dict:
         spec = PROMPT_REGISTRY.get(key)
         if spec and spec.code_controlled:
@@ -217,6 +244,12 @@ class PromptService:
             ver = await repo.get_version(prompt.id, version)
             if not ver:
                 raise KeyError(f"Version {version} not found for {key}")
+
+            if not skip_workflow and ver.status not in ("passed", "published"):
+                raise ValueError(
+                    f"Version {version} has status '{ver.status}'; "
+                    f"only 'passed' or 'published' versions can be published"
+                )
 
             errors = self._renderer.validate(ver.template, spec) if spec else []
             if errors:
@@ -255,7 +288,40 @@ class PromptService:
         actor: str = "system",
         role: str = "",
     ) -> dict:
-        return await self.publish(key, version, actor=actor, role=role)
+        return await self.publish(key, version, actor=actor, role=role, skip_workflow=True)
+
+    async def transition_status(
+        self,
+        key: str,
+        version: int,
+        target_status: str,
+        *,
+        actor: str = "system",
+        role: str = "",
+    ) -> dict:
+        async with AsyncSessionLocal() as session:
+            repo = PromptRepository(session)
+            prompt = await repo.get_by_key(key)
+            if not prompt:
+                raise KeyError(f"Prompt not found: {key}")
+
+            ver = await repo.get_version(prompt.id, version)
+            if not ver:
+                raise KeyError(f"Version {version} not found for {key}")
+
+            validate_transition(ver.status, target_status)
+
+            await repo.update_version_status(ver.id, target_status)
+            await repo.write_audit(
+                key, "transition",
+                from_version=version,
+                to_version=version,
+                actor=actor,
+                role=role,
+                detail={"from_status": ver.status, "to_status": target_status},
+            )
+            await session.commit()
+            return {"version": version, "status": target_status}
 
     async def seed_defaults(self, defaults: dict[str, str]) -> dict:
         count = 0
@@ -309,3 +375,24 @@ class PromptService:
 
 
 prompt_service = PromptService()
+
+
+def collect_prompt_usage() -> list[dict]:
+    """Drain the context-local prompt usage log and return it.
+
+    Called by tracer.finish() to attach prompt versions to trace metadata.
+    """
+    usage = _prompt_usage_var.get()
+    if not usage:
+        return []
+    _prompt_usage_var.set(None)
+    return list(usage)
+
+
+def snapshot_prompt_versions() -> dict[str, int | None]:
+    """Return {key: version} for all prompts currently in the snapshot.
+
+    Used by evaluation baseline to record which prompt versions produced the scores.
+    """
+    with prompt_service._snapshot_lock:
+        return {k: e.version for k, e in prompt_service._snapshot.items()}

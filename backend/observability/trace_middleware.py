@@ -29,6 +29,36 @@ _NODE_LABELS: dict[str, str] = {
     "router":              "路由决策",
     "skill_executor":      "直接执行",
     "workflow_executor":   "工作流执行",
+    # CS nodes
+    "cs_knowledge":         "客服知识问答",
+    "cs_business_query":    "业务查询",
+    "cs_business_action":   "业务操作",
+    "cs_complaint":         "投诉处理",
+    "cs_handoff":           "转接人工",
+    "cs_handoff_intercept": "转接拦截",
+    "cs_pending":           "待处理",
+    # CS Graph 独立架构节点
+    "cs_state_loader":      "状态加载",
+    "cs_supervisor":        "客服调度",
+    "cs_knowledge_expert":  "知识专家",
+    "cs_reporter":          "客服汇总",
+    "cs_graph_node":        "客服图适配",
+}
+
+_NODE_KINDS: dict[str, str] = {
+    "cs_knowledge":         "cs_knowledge",
+    "cs_business_query":    "cs_business_query",
+    "cs_business_action":   "cs_business_action",
+    "cs_complaint":         "cs_complaint",
+    "cs_handoff":           "cs_handoff",
+    "cs_handoff_intercept": "cs_handoff",
+    "cs_pending":           "cs_confirmation",
+    # CS Graph 独立架构节点
+    "cs_state_loader":      "cs_state_loader",
+    "cs_supervisor":        "cs_supervisor",
+    "cs_knowledge_expert":  "cs_expert",
+    "cs_reporter":          "cs_reporter",
+    "cs_graph_node":        "cs_graph",
 }
 
 
@@ -49,13 +79,14 @@ class TraceMiddleware:
                 return node_fn(state)
 
             label = _NODE_LABELS.get(node_name, node_name)
+            kind = _NODE_KINDS.get(node_name, "agent")
             step_id = state.get("current_step_id", "")
             question = state.get("question", "")[:80]
 
             span = trace_collector.start_span(
                 span_id=f"{node_name}:{step_id}" if step_id else node_name,
                 name=label,
-                kind="agent",
+                kind=kind,
                 input={
                     "step_id": step_id,
                     "question": question,
@@ -97,13 +128,14 @@ class TraceMiddleware:
                 return await node_fn(state)
 
             label = _NODE_LABELS.get(node_name, node_name)
+            kind = _NODE_KINDS.get(node_name, "agent")
             step_id = state.get("current_step_id", "")
             question = state.get("question", "")[:80]
 
             span = trace_collector.start_span(
                 span_id=f"{node_name}:{step_id}" if step_id else node_name,
                 name=label,
-                kind="agent",
+                kind=kind,
                 input={
                     "step_id": step_id,
                     "question": question,

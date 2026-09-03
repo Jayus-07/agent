@@ -29,24 +29,47 @@ from backend.shared.logger import logger
 # =====================================================
 
 def _score_by_keyword_overlap(question: str, docs: list, fallback_k: int = 3) -> list:
+    """关键词软重排：命中文档按 overlap 降序排前面，未命中文档保留原始 embedding 顺序。
+
+    不再硬过滤（丢弃 overlap=0 的文档），避免回归。
+    """
     query_kw = set(extract_chunk_keywords(question))
     if not query_kw:
         return docs
 
     scored = []
     for doc in docs:
-        doc_kw = set(doc.metadata.get("chunk_keywords", "").split(", "))
+        raw = doc.metadata.get("doc_keywords", "")
+        if raw:
+            try:
+                doc_kw = set(json.loads(raw) if raw.startswith("[") else raw.split(", "))
+            except (json.JSONDecodeError, TypeError):
+                doc_kw = set()
+        else:
+            doc_kw = set()
         overlap = len(query_kw & doc_kw)
         scored.append((doc, overlap))
 
-    scored.sort(key=lambda x: x[1], reverse=True)
-    filtered = [doc for doc, score in scored if score > 0]
-    if not filtered:
-        logger.info(f"关键词过滤无命中(query_kw={query_kw})，回退前{fallback_k}个")
-        filtered = [doc for doc, _ in scored[:fallback_k]]
+    matched = [(doc, s) for doc, s in scored if s > 0]
+    unmatched = [doc for doc, s in scored if s == 0]
+    matched.sort(key=lambda x: x[1], reverse=True)
 
-    logger.info(f"关键词过滤: query_kw={query_kw}, 命中 {len(filtered)}/{len(docs)}")
-    return filtered
+    logger.info(f"关键词重排: query_kw={query_kw}, 命中 {len(matched)}/{len(docs)}")
+    return [doc for doc, _ in matched] + unmatched
+
+
+def _dedup_by_doc_id(docs: list) -> list:
+    """按 doc_id 去重，保留首次出现（相似度最高）的条目。"""
+    seen = set()
+    result = []
+    for doc in docs:
+        did = doc.metadata.get("doc_id")
+        if did and did in seen:
+            continue
+        if did:
+            seen.add(did)
+        result.append(doc)
+    return result
 
 
 def attach_parent_context(docs: List[Document], parent_lookup) -> List[Document]:
@@ -139,12 +162,13 @@ class ChunkLevelRetriever(BaseRetriever):
 
     @staticmethod
     def _filter_docs_by_keywords(question: str, doc_results: list, fallback_k: int = 3) -> list:
-        filtered = _score_by_keyword_overlap(question, doc_results, fallback_k)
-        return list(set([
+        deduped = _dedup_by_doc_id(doc_results)
+        reranked = _score_by_keyword_overlap(question, deduped, fallback_k)
+        return list(dict.fromkeys(
             doc.metadata.get("doc_id")
-            for doc in filtered
+            for doc in reranked
             if doc.metadata.get("doc_id")
-        ]))
+        ))
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> List[Document]:
         """带请求内缓存的检索入口（P1-5）。
@@ -226,9 +250,9 @@ class ChunkLevelRetriever(BaseRetriever):
                 # 否则 Stage2 hybrid_retrieve doc_ids=[] 不限 doc，rerank 输入被 KB 内噪声稀释
                 # 导致高相关 doc 被挤掉（fix 2026-08-19 — RAG eval 基线从 72% 恢复）
                 if request_metadata_filter:
-                    doc_results = self.doc_db.similarity_search(query, k=5, filter=request_metadata_filter)
+                    doc_results = self.doc_db.similarity_search(query, k=15, filter=request_metadata_filter)
                 else:
-                    doc_results = self.doc_db.similarity_search(query, k=5)
+                    doc_results = self.doc_db.similarity_search(query, k=15)
                 stage1_fallback_count += 1
                 doc_ids = self._filter_docs_by_keywords(query, doc_results)
                 stage1_path = "metadata_filter_with_doc_similarity"
@@ -245,12 +269,12 @@ class ChunkLevelRetriever(BaseRetriever):
                     stage1_path = "person_name"
                     logger.info(f"ChunkLevelRetriever: 人名匹配到 {len(doc_ids)} 个文档")
                 else:
-                    doc_results = self.doc_db.similarity_search(query, k=5)
+                    doc_results = self.doc_db.similarity_search(query, k=15)
                     stage1_fallback_count += 1
                     doc_ids = self._filter_docs_by_keywords(query, doc_results)
                     stage1_path = "doc_similarity" if doc_results else "keyword_filter"
             else:
-                doc_results = self.doc_db.similarity_search(query, k=5)
+                doc_results = self.doc_db.similarity_search(query, k=15)
                 stage1_fallback_count += 1
                 if doc_results:
                     doc_ids = self._filter_docs_by_keywords(query, doc_results)

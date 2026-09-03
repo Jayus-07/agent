@@ -92,6 +92,15 @@ def print_summary(report: EvalReport) -> None:
     if report.total_score is not None:
         print(f"\n  >>> 综合得分: {report.total_score:.2%} <<<")
 
+    if report.tier_summaries:
+        print("\n  --- 分层评估 ---")
+        for ts in report.tier_summaries:
+            status = "✅" if ts.passed_threshold else "❌"
+            print(
+                f"  {status} [{ts.tier}]  通过率={ts.pass_rate:.1%}  "
+                f"({ts.passed}/{ts.total})  阈值={ts.threshold:.1%}"
+            )
+
     print(f"\n{'='*64}\n")
 
 
@@ -149,6 +158,22 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
     lines.append("")
     lines.append("> 状态阈值：✅ ≥85%（生产）/ ⚠️ 65~85%（公测）/ ❌ <65%（内测）")
     lines.append("")
+
+    if report.tier_summaries:
+        lines.append("## 📋 分层评估 (CI/CD)")
+        lines.append("")
+        lines.append("| 层级 | 用例数 | 通过 | 通过率 | 阈值 | 状态 |")
+        lines.append("|------|--------|------|--------|------|------|")
+        for ts in report.tier_summaries:
+            status = "✅ 通过" if ts.passed_threshold else "❌ 未达标"
+            lines.append(
+                f"| {ts.tier} | {ts.total} | {ts.passed} | "
+                f"{ts.pass_rate:.1%} | {ts.threshold:.1%} | {status} |"
+            )
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
     lines.append("---")
     lines.append("")
 

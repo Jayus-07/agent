@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import json
 import queue
+import random
 import threading
 import time
 from typing import Any
 
+from backend.config.observability import TRACE_SAMPLING_RATE
 from backend.shared.logger import logger
 
 _STREAM_KEY = "trace:write"
@@ -42,6 +44,18 @@ def _serialize_record(record: Any) -> dict:
                 d[k] = v
         return d
     return record
+
+
+def _should_keep(record: Any) -> bool:
+    """采样决策：error trace 始终保留，其余按 TRACE_SAMPLING_RATE 概率保留。"""
+    get = lambda k, d=None: record.get(k, d) if isinstance(record, dict) else getattr(record, k, d)
+    if get("error") or get("status") == "error":
+        return True
+    if TRACE_SAMPLING_RATE >= 1.0:
+        return True
+    if TRACE_SAMPLING_RATE <= 0.0:
+        return False
+    return random.random() < TRACE_SAMPLING_RATE
 
 
 class TraceWriteQueue:
@@ -82,6 +96,9 @@ class TraceWriteQueue:
         必须在调用前完成数据质量处理（leaked span 关闭等）。
         同时捕获当前 store 单例引用，避免 worker 写入时 store 已被测试替换。
         """
+        if not _should_keep(record):
+            return
+
         data = _serialize_record(record)
         stores = self._capture_stores()
         if self._use_redis and self._redis is not None:
@@ -175,6 +192,11 @@ class TraceWriteQueue:
                 analytics_store.save_dict(data)
             except Exception:
                 logger.warning("[TraceWriter] Analytics 写入失败", exc_info=True)
+            try:
+                from backend.observability.pg_trace_sink import write_trace
+                write_trace(data)
+            except Exception:
+                logger.debug("[TraceWriter] PG mirror 写入失败", exc_info=True)
 
     def flush(self) -> None:
         """同步排空队列并持久化（测试用，生产路径由 worker 异步处理）。

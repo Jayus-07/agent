@@ -12,6 +12,17 @@ from backend.customer_service.router.types import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _disable_cs_router_cache():
+    """Disable the module-level CS router cache during tests."""
+    from backend.customer_service.router import cs_router
+
+    original = cs_router._cs_cache.get_json
+    cs_router._cs_cache.get_json = lambda key: None
+    yield
+    cs_router._cs_cache.get_json = original
+
+
 def _make_router_with_mocks(coarse_result, fine_result):
     """构造 CSRouter，绕过 Chroma 初始化。"""
     router = CSRouter.__new__(CSRouter)

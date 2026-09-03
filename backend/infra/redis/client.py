@@ -54,6 +54,7 @@ def get_redis():
                 socket_timeout=REDIS_SOCKET_TIMEOUT,
                 socket_connect_timeout=REDIS_SOCKET_TIMEOUT,
                 decode_responses=True,
+                protocol=2,
             )
             _client.ping()
             logger.info(f"[Redis] connected: {REDIS_URL}")

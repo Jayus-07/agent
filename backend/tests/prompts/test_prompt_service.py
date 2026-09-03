@@ -153,3 +153,74 @@ class TestDBDegradation:
         result = service.render_sync("test.low", name="World")
         assert result.source == "default"
         assert result.text == "Hello World!"
+
+
+class TestPromptUsageTracking:
+    def test_render_sync_records_usage(self, service):
+        from backend.prompts.service import collect_prompt_usage, _prompt_usage_var
+        _prompt_usage_var.set(None)
+
+        service._snapshot["test.low"] = _SnapshotEntry(
+            template="Hi {name}!", version=3, variables=["name"],
+        )
+        service.render_sync("test.low", name="Alice")
+
+        usage = collect_prompt_usage()
+        assert len(usage) == 1
+        assert usage[0]["key"] == "test.low"
+        assert usage[0]["version"] == 3
+        assert usage[0]["source"] == "snapshot"
+
+    def test_render_sync_default_records_none_version(self, service):
+        from backend.prompts.service import collect_prompt_usage, _prompt_usage_var
+        _prompt_usage_var.set(None)
+
+        service.render_sync("test.low", name="Bob")
+
+        usage = collect_prompt_usage()
+        assert len(usage) == 1
+        assert usage[0]["version"] is None
+        assert usage[0]["source"] == "default"
+
+    def test_collect_drains_usage(self, service):
+        from backend.prompts.service import collect_prompt_usage, _prompt_usage_var
+        _prompt_usage_var.set(None)
+
+        service.render_sync("test.low", name="A")
+        service.render_sync("test.low", name="B")
+
+        first = collect_prompt_usage()
+        assert len(first) == 2
+
+        second = collect_prompt_usage()
+        assert second == []
+
+    def test_collect_empty_when_no_renders(self):
+        from backend.prompts.service import collect_prompt_usage, _prompt_usage_var
+        _prompt_usage_var.set(None)
+        assert collect_prompt_usage() == []
+
+
+class TestSnapshotPromptVersions:
+    def test_returns_snapshot_versions(self, service):
+        from backend.prompts.service import snapshot_prompt_versions, prompt_service
+        original_snapshot = prompt_service._snapshot
+
+        try:
+            prompt_service._snapshot = {
+                "k1": _SnapshotEntry(template="t1", version=1, variables=[]),
+                "k2": _SnapshotEntry(template="t2", version=5, variables=[]),
+            }
+            result = snapshot_prompt_versions()
+            assert result == {"k1": 1, "k2": 5}
+        finally:
+            prompt_service._snapshot = original_snapshot
+
+    def test_empty_snapshot(self):
+        from backend.prompts.service import snapshot_prompt_versions, prompt_service
+        original_snapshot = prompt_service._snapshot
+        try:
+            prompt_service._snapshot = {}
+            assert snapshot_prompt_versions() == {}
+        finally:
+            prompt_service._snapshot = original_snapshot

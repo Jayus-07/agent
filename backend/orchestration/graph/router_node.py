@@ -12,11 +12,9 @@ V1 实现:
 """
 from __future__ import annotations
 
-import asyncio
 import time
 
 from backend.orchestration.router import get_router
-from backend.orchestration.router.types import ExecutionMode
 from backend.shared.logger import logger
 
 
@@ -43,8 +41,10 @@ def router_node(state: dict) -> dict:
             if detection.is_cs:
                 from backend.customer_service.router.cs_router import get_cs_router
                 cs_result = get_cs_router().route(query, detection)
-                from backend.customer_service.router.intents import resolve_route_path
                 route_path = cs_result.route_path.value
+
+                from backend.observability.metrics import record_cs_intent
+                record_cs_intent(cs_result.intent)
 
                 if route_path == "knowledge_query":
                     cs_target = "cs_knowledge"
@@ -84,13 +84,14 @@ def router_node(state: dict) -> dict:
                             "cs_target": cs_target,
                             "authenticated_user_id": user_id,
                             "session_id": session_id,
+                            "conversation_id": session_id,
                         },
                         "final_answer": guard_result.message,
                     }
 
                 # ── Phase 5: 转接拦截 — 活跃转接时拦截业务请求 ──
-                _HANDOFF_TERMINAL_TARGETS = {"cs_handoff", "cs_complaint", "cs_handoff_intercept"}
-                if cs_target not in _HANDOFF_TERMINAL_TARGETS:
+                _handoff_terminal_targets = {"cs_handoff", "cs_complaint", "cs_handoff_intercept"}
+                if cs_target not in _handoff_terminal_targets:
                     from backend.customer_service.handoff_store import get_handoff_store
                     if get_handoff_store().has_active_handoff(user_id):
                         logger.info(
@@ -98,6 +99,21 @@ def router_node(state: dict) -> dict:
                             f"原目标={cs_target} → cs_handoff_intercept"
                         )
                         cs_target = "cs_handoff_intercept"
+
+                # ── Trace: stamp conversation_id + cs_route ──
+                try:
+                    from backend.observability.tracer import trace_collector
+                    trace = trace_collector.current()
+                    if trace is not None:
+                        trace.tags["conversation_id"] = session_id
+                        trace.metadata["cs_route"] = {
+                            "intent": cs_result.intent,
+                            "domain": cs_result.domain.value,
+                            "confidence": cs_result.confidence,
+                            "target": cs_target,
+                        }
+                except Exception:
+                    pass
 
                 return {
                     **state,
@@ -108,6 +124,7 @@ def router_node(state: dict) -> dict:
                         "cs_target": cs_target,
                         "authenticated_user_id": user_id,
                         "session_id": session_id,
+                        "conversation_id": session_id,
                     },
                 }
     except Exception as e:

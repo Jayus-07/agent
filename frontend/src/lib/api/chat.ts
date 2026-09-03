@@ -28,7 +28,12 @@ export async function* streamChat(
     `${process.env.NEXT_PUBLIC_API_URL || ""}/chat/stream`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(process.env.NEXT_PUBLIC_API_KEY
+          ? { "X-API-Key": process.env.NEXT_PUBLIC_API_KEY }
+          : {}),
+      },
       body: JSON.stringify(req),
       signal,
     },

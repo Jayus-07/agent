@@ -51,6 +51,9 @@ export async function request<T = unknown>(
       ...init,
       headers: {
         "Content-Type": "application/json",
+        ...(process.env.NEXT_PUBLIC_API_KEY
+          ? { "X-API-Key": process.env.NEXT_PUBLIC_API_KEY }
+          : {}),
         ...init.headers,
       },
       signal: controller.signal,

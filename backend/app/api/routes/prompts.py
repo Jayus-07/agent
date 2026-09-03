@@ -1,24 +1,24 @@
 """api/routes/prompts.py — Prompt 管理 API
 
 端点:
-  GET    /prompts                          — 列表（filter: category, risk_level, q）
-  GET    /prompts/meta/registry            — 静态注册表元数据
-  GET    /prompts/{key}                    — 详情 + active template
-  GET    /prompts/{key}/versions           — 版本历史
-  GET    /prompts/{key}/versions/{version} — 单版本
-  GET    /prompts/{key}/diff               — 版本间 unified diff
-  POST   /prompts/{key}/drafts             — 创建草稿
-  POST   /prompts/{key}/publish            — 发布版本
-  POST   /prompts/{key}/rollback           — 回滚
-  POST   /prompts/{key}/render             — 干跑渲染（无 LLM）
-  POST   /prompts/{key}/playground         — 渲染 + LLM 调用
-  GET    /prompts/{key}/audit              — 审计日志
-  POST   /prompts/seed                     — 种子默认值
+  GET    /prompts                                      — 列表（filter: category, risk_level, q, keys）
+  GET    /prompts/meta/registry                        — 静态注册表元数据
+  GET    /prompts/{key}                                — 详情 + active template
+  GET    /prompts/{key}/versions                       — 版本历史
+  GET    /prompts/{key}/versions/{version}             — 单版本
+  GET    /prompts/{key}/diff                           — 版本间 unified diff
+  POST   /prompts/{key}/drafts                         — 创建草稿
+  POST   /prompts/{key}/publish                        — 发布版本
+  POST   /prompts/{key}/rollback                       — 回滚
+  POST   /prompts/{key}/versions/{version}/transition  — 状态流水线转换
+  POST   /prompts/{key}/render                         — 干跑渲染（无 LLM）
+  POST   /prompts/{key}/playground                     — 渲染 + LLM 调用
+  GET    /prompts/{key}/audit                          — 审计日志
+  POST   /prompts/seed                                 — 种子默认值
 """
 import difflib
-from typing import Any
 
-from fastapi import APIRouter, HTTPException, Header, Request
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.prompts.registry import PROMPT_REGISTRY, PromptSpec
@@ -59,6 +59,10 @@ class SeedRequest(BaseModel):
     auto_seed: bool = True
 
 
+class TransitionRequest(BaseModel):
+    status: str
+
+
 # ── Permission helpers ────────────────────────────────────────
 
 def _operator_role(headers: dict | None = None, x_operator_role: str = "viewer") -> str:
@@ -82,9 +86,9 @@ def _check_permission(risk_level: str, action: str, role: str) -> None:
         return
 
     matrix = {
-        "high":   {"read": ["viewer", "editor", "admin"], "draft": ["editor", "admin"], "publish": ["admin"], "rollback": ["admin"]},
-        "medium": {"read": ["viewer", "editor", "admin"], "draft": ["editor", "admin"], "publish": ["editor", "admin"], "rollback": ["editor", "admin"]},
-        "low":    {"read": ["viewer", "editor", "admin"], "draft": ["editor", "admin"], "publish": ["editor", "admin"], "rollback": ["editor", "admin"]},
+        "high":   {"read": ["viewer", "editor", "admin"], "draft": ["editor", "admin"], "publish": ["admin"], "transition": ["admin"], "rollback": ["admin"]},
+        "medium": {"read": ["viewer", "editor", "admin"], "draft": ["editor", "admin"], "publish": ["editor", "admin"], "transition": ["editor", "admin"], "rollback": ["editor", "admin"]},
+        "low":    {"read": ["viewer", "editor", "admin"], "draft": ["editor", "admin"], "publish": ["editor", "admin"], "transition": ["editor", "admin"], "rollback": ["editor", "admin"]},
     }
     allowed = matrix.get(risk_level, matrix["low"]).get(action, [])
     if role not in allowed:
@@ -103,6 +107,7 @@ def _prompt_to_dict(p, *, include_template: bool = False, mask: bool = False) ->
         "risk_level": p.risk_level,
         "template_engine": p.template_engine,
         "variables": p.variables or [],
+        "variable_count": len(p.variables or []),
         "active_version": p.active_version,
         "is_code_controlled": p.is_code_controlled,
         "created_at": p.created_at.isoformat() if p.created_at else None,
@@ -123,6 +128,7 @@ def _version_to_dict(v, *, mask: bool = False) -> dict:
         "change_note": v.change_note,
         "created_by": v.created_by,
         "created_at": v.created_at.isoformat() if v.created_at else None,
+        "updated_at": v.updated_at.isoformat() if getattr(v, "updated_at", None) else None,
     }
 
 
@@ -150,6 +156,7 @@ def _spec_to_dict(spec: PromptSpec) -> dict:
         "code_controlled": spec.code_controlled,
         "required_substrings": list(spec.required_substrings),
         "default_file": spec.default_file,
+        "agent": spec.agent,
     }
 
 
@@ -160,20 +167,36 @@ async def list_prompts(
     category: str | None = None,
     risk_level: str | None = None,
     q: str | None = None,
+    keys: str | None = None,
     x_operator_role: str = Header(default="viewer"),
 ):
     from backend.memory.database import AsyncSessionLocal
     from backend.memory.repository.prompt_repo import PromptRepository
 
+    key_filter = [k.strip() for k in keys.split(",") if k.strip()] if keys else None
+
     async with AsyncSessionLocal() as session:
         repo = PromptRepository(session)
         prompts = await repo.list_all(category=category, risk_level=risk_level, q=q)
+
+        if key_filter:
+            prompts = [p for p in prompts if p.key in key_filter]
+
+        prompt_ids = [p.id for p in prompts]
+        latest_versions = await repo.get_latest_versions(prompt_ids)
 
     items = []
     for p in prompts:
         spec = PROMPT_REGISTRY.get(p.key)
         mask = spec and spec.code_controlled
-        items.append(_prompt_to_dict(p, mask=mask))
+        d = _prompt_to_dict(p, mask=mask)
+        lv = latest_versions.get(p.id)
+        d["latest_version_number"] = lv.version if lv else None
+        d["latest_version_status"] = lv.status if lv else None
+        d["latest_version_updated_at"] = (
+            lv.updated_at.isoformat() if lv and getattr(lv, "updated_at", None) else None
+        )
+        items.append(d)
 
     return {"items": items, "total": len(items)}
 
@@ -218,6 +241,7 @@ async def get_prompt(
                 "risk_level": spec.risk_level,
                 "variables": [{"name": v.name, "required": v.required, "description": v.description} for v in spec.variables],
                 "code_controlled": spec.code_controlled,
+                "required_substrings": list(spec.required_substrings),
                 "active_version": None,
                 "source": "default",
                 "template": "*** CODE-CONTROLLED ***" if spec.code_controlled else defaults[key],
@@ -236,6 +260,7 @@ async def get_prompt(
 
     result["source"] = "db"
     result["code_controlled"] = spec.code_controlled
+    result["required_substrings"] = list(spec.required_substrings)
     return result
 
 
@@ -428,6 +453,35 @@ async def rollback(
         raise HTTPException(422, str(e))
 
 
+# ── POST /prompts/{key}/versions/{version}/transition ─────────
+
+@router.post("/{key}/versions/{version}/transition")
+async def transition_status(
+    key: str,
+    version: int,
+    body: TransitionRequest,
+    x_operator_role: str = Header(default="editor"),
+    x_operator_id: str = Header(default="anonymous"),
+):
+    spec = PROMPT_REGISTRY.get(key)
+    if not spec:
+        raise HTTPException(404, f"Prompt not found: {key}")
+
+    _check_permission(spec.risk_level, "transition", x_operator_role)
+
+    try:
+        result = await prompt_service.transition_status(
+            key, version, body.status,
+            actor=x_operator_id,
+            role=x_operator_role,
+        )
+        return result
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
 # ── POST /prompts/{key}/render ────────────────────────────────
 
 @router.post("/{key}/render")
@@ -507,24 +561,30 @@ async def playground(
         response = await llm.ainvoke(text)
         latency = round(time.monotonic() - t0, 3)
 
-        return {
+        rendered = {
+            "text": text,
             "key": key,
-            **render_info,
-            "rendered_text": text,
-            "llm_response": response.content if hasattr(response, "content") else str(response),
-            "latency_s": latency,
-            "model": body.model or "default",
+            "version": render_info.get("version"),
+            "source": render_info.get("source", "playground"),
+        }
+        return {
+            "rendered": rendered,
+            "llm_output": response.content if hasattr(response, "content") else str(response),
+            "latency_ms": round(latency * 1000),
         }
     except Exception as e:
         logger.warning(f"[Playground] LLM invoke failed for {key}: {e}")
-        return {
+        rendered = {
+            "text": text,
             "key": key,
-            **render_info,
-            "rendered_text": text,
-            "llm_response": None,
+            "version": render_info.get("version"),
+            "source": render_info.get("source", "playground"),
+        }
+        return {
+            "rendered": rendered,
+            "llm_output": None,
             "llm_error": str(e),
-            "latency_s": None,
-            "model": body.model or "default",
+            "latency_ms": None,
         }
 
 

@@ -1,0 +1,136 @@
+{
+  "version": "2.0",
+  "_comment": "V2.0 部门隔离评测 — 验证多租户/多部门场景下检索不跨部门泄漏。使用 policy_general KB。",
+  "test_cases": [
+    {
+      "id": "V2-DEPT-001",
+      "question": "年假怎么申请？请假流程是什么？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": ["be99388a67", "79028b7792"],
+        "allowed_departments": ["hr"],
+        "forbidden_departments": ["finance"]
+      },
+      "metadata": {
+        "kb_id": "policy_general",
+        "department": "hr",
+        "difficulty": "easy",
+        "domain": "hr",
+        "query_type": "single_doc",
+        "tier": "smoke",
+        "answer_type": "procedural",
+        "isolation_test": true,
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-DEPT-002",
+      "question": "报销流程怎么走？预算审批权限是怎样的？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": ["04a34059af", "8d38891a89"],
+        "allowed_departments": ["finance"],
+        "forbidden_departments": ["hr"]
+      },
+      "metadata": {
+        "kb_id": "policy_general",
+        "department": "finance",
+        "difficulty": "easy",
+        "domain": "finance",
+        "query_type": "single_doc",
+        "tier": "smoke",
+        "answer_type": "procedural",
+        "isolation_test": true,
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-DEPT-003",
+      "question": "公司报销标准是多少？发票有什么要求？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [],
+        "allowed_departments": ["hr"],
+        "forbidden_departments": ["finance"],
+        "should_reject": true
+      },
+      "metadata": {
+        "kb_id": "policy_general",
+        "department": "hr",
+        "difficulty": "hard",
+        "domain": "hr",
+        "query_type": "negative",
+        "tier": "hard",
+        "answer_type": "factual",
+        "isolation_test": true,
+        "probe_note": "跨部门泄漏守卫：hr视角问finance话题，检索不得泄漏finance文档",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-DEPT-004",
+      "question": "工资什么时候发？个税怎么算？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": ["79028b7792"],
+        "allowed_departments": ["hr"],
+        "forbidden_departments": ["finance"]
+      },
+      "metadata": {
+        "kb_id": "policy_general",
+        "department": "hr",
+        "difficulty": "easy",
+        "domain": "hr",
+        "query_type": "single_doc",
+        "tier": "core",
+        "answer_type": "factual",
+        "isolation_test": true,
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-DEPT-005",
+      "question": "年假和调休怎么算？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [],
+        "allowed_departments": ["finance"],
+        "forbidden_departments": ["hr"],
+        "should_reject": true
+      },
+      "metadata": {
+        "kb_id": "policy_general",
+        "department": "finance",
+        "difficulty": "hard",
+        "domain": "finance",
+        "query_type": "negative",
+        "tier": "hard",
+        "answer_type": "factual",
+        "isolation_test": true,
+        "probe_note": "跨部门泄漏守卫：finance视角问hr话题，检索不得泄漏hr文档",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-DEPT-006",
+      "question": "差旅住宿报销标准是多少？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": ["04a34059af"],
+        "allowed_departments": ["finance"],
+        "forbidden_departments": ["hr"]
+      },
+      "metadata": {
+        "kb_id": "rag_test_kb",
+        "department": "finance",
+        "difficulty": "easy",
+        "domain": "finance",
+        "query_type": "single_doc",
+        "tier": "core",
+        "answer_type": "numeric",
+        "isolation_test": true,
+        "ground_truth_verified": true
+      }
+    }
+  ]
+}

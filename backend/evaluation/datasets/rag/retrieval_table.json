@@ -1,0 +1,216 @@
+{
+  "version": "2.0",
+  "_comment": "V2.0 表格/结构化数据检索评测 — 答案在文档表格中，验证对表格结构的检索能力。",
+  "test_cases": [
+    {
+      "id": "V2-TBL-001",
+      "question": "供应商B级的年度评分范围是多少？有什么权益？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["e87b88ae72"],
+        "relevant_snippets": ["B级", "75"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "procurement",
+        "query_type": "table",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "B级（合格）年度评分75-89，权益为正常合作",
+        "must_contain": ["B级", "75"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-TBL-002",
+      "question": "供应商D级会被淘汰吗？什么条件触发淘汰？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["e87b88ae72"],
+        "relevant_snippets": ["D级", "60"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "procurement",
+        "query_type": "table",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "D级（淘汰）年度评分<60或出现重大违规，移出名录",
+        "must_contain": ["D级", "60"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-TBL-003",
+      "question": "数据分类中机密级别需要什么保护措施？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["9b708f17b6"],
+        "relevant_snippets": ["机密", "双因子"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "security",
+        "query_type": "table",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "机密级别需要加密+隔离+双因子保护",
+        "must_contain": ["机密", "双因子"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-TBL-004",
+      "question": "采购合同中跨境商品A的单价和总金额分别是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["14aa8a1c7a"],
+        "relevant_snippets": ["50", "50000"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "procurement",
+        "query_type": "table",
+        "tier": "hard",
+        "answer_type": "numeric",
+        "expected_answer": "跨境商品A单价50元，总金额50000元（1000件×50元）",
+        "must_contain": ["50", "50000"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-TBL-005",
+      "question": "采购合同中跨境商品B的数量是多少？单价多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["14aa8a1c7a"],
+        "relevant_snippets": ["80", "500"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "procurement",
+        "query_type": "table",
+        "tier": "hard",
+        "answer_type": "numeric",
+        "expected_answer": "跨境商品B数量500件，单价80元",
+        "must_contain": ["80", "500"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-TBL-006",
+      "question": "敏感数据级别的保护措施是什么？与内部级别有何区别？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["9b708f17b6"],
+        "relevant_snippets": ["敏感", "加密存储"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "security",
+        "query_type": "table",
+        "tier": "hard",
+        "answer_type": "comparative",
+        "expected_answer": "敏感级别需加密存储+最小化访问；内部级别只需角色权限+审计",
+        "must_contain": ["敏感", "加密"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-TBL-007",
+      "question": "供应商考核指标中售后退货率的目标是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["e87b88ae72"],
+        "relevant_snippets": ["退货率", "3%"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "procurement",
+        "query_type": "table",
+        "tier": "core",
+        "answer_type": "numeric",
+        "expected_answer": "售后退货率目标≤3%",
+        "must_contain": ["3%"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-TBL-008",
+      "question": "供应商交期达成率的目标是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["e87b88ae72"],
+        "relevant_snippets": ["交期达成率", "95%"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "procurement",
+        "query_type": "table",
+        "tier": "core",
+        "answer_type": "numeric",
+        "expected_answer": "交期达成率目标≥95%",
+        "must_contain": ["95%"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-TBL-009",
+      "question": "A级供应商需要什么条件？与B级有何区别？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["e87b88ae72"],
+        "relevant_snippets": ["A级", "战略"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "procurement",
+        "query_type": "table",
+        "tier": "hard",
+        "answer_type": "comparative",
+        "expected_answer": "A级（战略）需年度评分≥90且合作满1年，享优先份额和账期优惠；B级75-89分仅正常合作",
+        "must_contain": ["A级", "90"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-TBL-010",
+      "question": "数据分类中公开级别和内部级别的保护措施有什么不同？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["9b708f17b6"],
+        "relevant_snippets": ["公开", "内部"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "security",
+        "query_type": "table",
+        "tier": "core",
+        "answer_type": "comparative",
+        "expected_answer": "公开级别只需常规访问控制；内部级别需角色权限+审计",
+        "must_contain": ["公开", "内部"],
+        "ground_truth_verified": true
+      }
+    }
+  ]
+}

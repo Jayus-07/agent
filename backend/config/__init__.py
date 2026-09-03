@@ -18,6 +18,12 @@ for _env_path in (_ROOT / ".env", _BACKEND_DIR / ".env"):
     if _env_path.exists():
         load_dotenv(_env_path)
 
+# 运行环境（fail-safe: 无法识别时按 production 处理，拒绝降级到宽松策略）
+_VALID_ENVIRONMENTS = {"development", "testing", "staging", "production"}
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development").strip().lower()
+if ENVIRONMENT not in _VALID_ENVIRONMENTS:
+    ENVIRONMENT = "production"
+
 # 并发控制
 MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "5"))
 
@@ -227,6 +233,12 @@ from backend.config.customer_service import (
     CS_CONFIDENCE_ANSWER,
     CS_CONFIDENCE_CAUTIOUS,
     CS_ROUTER_INDEX_DIR,
+    CS_GRAPH_ENABLED,
+    CS_EXPERT_MAX_LOOPS,
+    CS_SUPERVISOR_LLM_ENABLED,
+    CS_SUPERVISOR_LLM_TIMEOUT_MS,
+    CS_CHECKPOINTER_ENABLED,
+    CS_GRAPH_RECURSION_LIMIT,
 )
 # Redis
 from backend.config.redis import (
@@ -236,8 +248,17 @@ from backend.config.redis import (
     REDIS_MAX_CONNECTIONS,
     REDIS_SOCKET_TIMEOUT,
 )
+# Observability (trace redaction / sampling / PG mirror)
+from backend.config.observability import (
+    TRACE_PII_MASKING_ENABLED,
+    TRACE_DETAIL_LEVEL,
+    TRACE_SAMPLING_RATE,
+    TRACE_PG_MIRROR_ENABLED,
+)
 
 __all__ = [
+    # environment
+    "ENVIRONMENT",
     # settings
     "LOG_LEVEL", "LOG_FILE", "OVERALL_REQUEST_TIMEOUT",
     # sql 数据安全
@@ -311,7 +332,13 @@ __all__ = [
     "CS_KNOWLEDGE_BASES", "COMPLAINT_PATTERNS", "CS_DOMAIN_KEYWORDS",
     "CS_DOMAIN_PATTERNS", "CS_VECTOR_THRESHOLD", "CS_RULE_MIN_HITS",
     "CS_CONFIDENCE_ANSWER", "CS_CONFIDENCE_CAUTIOUS", "CS_ROUTER_INDEX_DIR",
+    # CS Graph 独立架构（Phase 0）
+    "CS_GRAPH_ENABLED", "CS_EXPERT_MAX_LOOPS", "CS_SUPERVISOR_LLM_ENABLED",
+    "CS_SUPERVISOR_LLM_TIMEOUT_MS", "CS_CHECKPOINTER_ENABLED", "CS_GRAPH_RECURSION_LIMIT",
     # redis
     "REDIS_ENABLED", "REDIS_URL", "REDIS_KEY_PREFIX",
     "REDIS_MAX_CONNECTIONS", "REDIS_SOCKET_TIMEOUT",
+    # observability
+    "TRACE_PII_MASKING_ENABLED", "TRACE_DETAIL_LEVEL",
+    "TRACE_SAMPLING_RATE", "TRACE_PG_MIRROR_ENABLED",
 ]

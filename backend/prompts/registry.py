@@ -1,4 +1,4 @@
-"""Prompt Registry — static metadata for all 27 prompts.
+"""Prompt Registry — static metadata for all 38 prompts.
 
 PromptSpec is a frozen dataclass; PROMPT_REGISTRY is the single source of truth.
 security.input_guard is flagged code_controlled=True (never DB-editable).
@@ -23,6 +23,7 @@ class PromptSpec:
     code_controlled: bool = False
     required_substrings: tuple[str, ...] = ()
     default_file: str = ""
+    agent: str = ""
 
 
 R = VarSpec
@@ -91,6 +92,7 @@ _register(PromptSpec(
     variables=(R("context"), R("input")),
     required_substrings=("<!--META",),
     default_file="rag_qa.yaml",
+    agent="rag",
 ))
 
 _register(PromptSpec(
@@ -249,6 +251,7 @@ _register(PromptSpec(
     risk_level="high",
     variables=(R("table_info"), R("question")),
     default_file="sql_generator.yaml",
+    agent="sql",
 ))
 
 _register(PromptSpec(
@@ -340,6 +343,28 @@ _register(PromptSpec(
     category="report",
     risk_level="medium",
     default_file="business_report_polish.yaml",
+    agent="report",
+))
+
+# ── Customer Service Agent ─────────────────────────────────────
+
+_register(PromptSpec(
+    key="customer_service.system",
+    name="客服系统 Prompt",
+    category="customer_service",
+    risk_level="high",
+    default_file="customer_service_system.yaml",
+    agent="customer_service",
+))
+
+_register(PromptSpec(
+    key="customer_service.answer",
+    name="客服回答生成 Prompt",
+    category="customer_service",
+    risk_level="high",
+    variables=(R("context"), R("input")),
+    default_file="customer_service_answer.yaml",
+    agent="customer_service",
 ))
 
 # ── Agent Capability ───────────────────────────────────────────

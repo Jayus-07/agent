@@ -27,6 +27,12 @@ from backend.tools.email import send_email_tool  # noqa: F401
 from backend.tools.data_collection import data_collection_tool  # noqa: F401
 from backend.tools.competitor import competitor_analyze_tool  # noqa: F401
 
+from backend.tools.tool_registry import tool_registry as _tool_registry
+from backend.shared.logger import logger as _logger
+_tool_count = len(_tool_registry._registered_tools)
+_logger.info(f"[ToolRegistry] 已加载 {_tool_count} 个 Tool")
+del _tool_registry, _logger, _tool_count
+
 # ==================== Tool Registry 手动注册 ====================
 # 每个工具模块在导入时自动注册自己的工具（见各模块内部）
 # 这里只需导出 tool_registry 供外部使用

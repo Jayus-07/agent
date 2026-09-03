@@ -1,7 +1,15 @@
 """SQLAlchemy ORM for prompt management tables"""
 from datetime import datetime, timezone
+
 from sqlalchemy import (
-    Column, String, Text, Integer, Boolean, DateTime, ForeignKey,
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -38,6 +46,10 @@ class PromptVersion(Base):
     __tablename__ = "prompt_versions"
     __table_args__ = (
         UniqueConstraint("prompt_id", "version", name="uq_prompt_version"),
+        CheckConstraint(
+            "status IN ('draft','testing','evaluation','passed','published','archived')",
+            name="ck_prompt_version_status",
+        ),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -54,6 +66,7 @@ class PromptVersion(Base):
     change_note = Column(Text, nullable=False, default="")
     created_by = Column(String(128), nullable=False, default="system")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     prompt = relationship("Prompt", back_populates="versions")
 

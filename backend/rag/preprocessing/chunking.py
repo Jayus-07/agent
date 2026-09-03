@@ -139,6 +139,22 @@ def _is_legal_clause(text: str) -> bool:
     return bool(_LEGAL_CLAUSE_RE.match(text.strip()))
 
 
+def _has_legal_clauses(ast: DocumentAST) -> bool:
+    """AST 中是否存在「第 N 条」法律条款编号。"""
+    return any(
+        n.type in LEAF_TYPES and _is_legal_clause(n.text)
+        for n in walk(ast.root)
+    )
+
+
+def _has_qa_nodes(ast: DocumentAST) -> bool:
+    """AST 中是否存在 qa_question / qa_answer 节点。"""
+    return any(
+        n.type in ("qa_question", "qa_answer")
+        for n in walk(ast.root)
+    )
+
+
 def _make_leaf_chunk(texts: list[str], file_path: str,
                      section_title: str = "", section_level: int = 0,
                      section_path: list | None = None) -> Document:
@@ -890,19 +906,25 @@ class ChunkStrategyRouter:
         )
 
         if report.is_complete:
-            cls = STRUCTURE_STRATEGIES.get(doc_type, RecursiveChunkStrategy)
-            # faq 文档：只有 AST 里真有 qa_* 节点才走 QAChunkStrategy。
-            # classify_doc_type（文件名/关键词）与 parser 的 QA 识别是两套独立
-            # 逻辑，可能不一致——文件名含「FAQ」但内容无 Q/A 结构时，QAChunkStrategy
-            # 会产 0 chunk 导致数据丢失，这里 fallback 递归切分兜底。
-            if doc_type == "faq":
-                has_qa = any(
-                    n.type in ("qa_question", "qa_answer")
+            # 资格校验：doc_type 指向的策略需要 AST 中存在对应结构特征，
+            # 否则降级（文件名分类与 parser 实际结构可能不一致）。
+            if doc_type in ("legal", "contract_template") and not _has_legal_clauses(report.ast):
+                has_sections = any(
+                    n.type == "section" and n.level > 0
                     for n in walk(report.ast.root)
                 )
-                if not has_qa:
-                    logger.info("[Router] faq 但 AST 无 qa 节点 → Recursive 兜底")
-                    return RecursiveChunkStrategy()
+                fallback = StructureChunkStrategy if has_sections else RecursiveChunkStrategy
+                logger.info(
+                    f"[Router] {doc_type} 但 AST 无「第 N 条」条款 → "
+                    + ("Structure 降级" if has_sections else "Recursive 兜底")
+                )
+                return fallback()
+
+            if doc_type == "faq" and not _has_qa_nodes(report.ast):
+                logger.info("[Router] faq 但 AST 无 qa 节点 → Recursive 兜底")
+                return RecursiveChunkStrategy()
+
+            cls = STRUCTURE_STRATEGIES.get(doc_type, RecursiveChunkStrategy)
             return cls()
 
         # Phase 3：Semantic 语义切分（无结构长文档，基于 embedding 主题边界）

@@ -133,8 +133,11 @@ async def init_prompt_service():
             defaults = load_defaults()
             prompt_service.load_defaults_into_memory(defaults)
             logger.info(f"[Startup] Prompt defaults loaded: {len(defaults)} templates")
+            import asyncio
+            asyncio.run(prompt_service.seed_defaults(defaults))
+            logger.info("[Startup] Prompt defaults seeded to DB")
         except Exception as e:
-            logger.warning(f"[Startup] Prompt defaults load failed: {e}")
+            logger.warning(f"[Startup] Prompt defaults load/seed failed: {e}")
     threading.Thread(target=_load, daemon=True, name="prompt-init").start()
 
 

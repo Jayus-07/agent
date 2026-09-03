@@ -115,11 +115,12 @@ class SelfCorrectionStrategy:
             kind=SpanKind.SELF_CORRECTION.value,
         )
         try:
-            prompt = (
-                f"原问题被拒答（原因：{reason}）。请改写使能从知识库命中，"
-                f"给 3 个更有效的检索 query，每行一个，不要编号：\n"
-                f"原问题: {question}\n改写结果:"
+            from backend.prompts.service import prompt_service
+            rendered = prompt_service.render_sync(
+                "rag.evidence_gate.self_correction",
+                reason=reason, question=question,
             )
+            prompt = rendered.text
             result = llm.invoke([HumanMessage(content=prompt)])
             raw = result.content if hasattr(result, "content") else str(result)
             rewrites = [ln.strip() for ln in raw.strip().split("\n") if ln.strip()]

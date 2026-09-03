@@ -62,6 +62,9 @@ class CSMessage(CSBase):
     intent_name = Column(String(50), nullable=True)
     confidence = Column(Float, nullable=True)
 
+    # ── trace linkage ──
+    trace_id = Column(String(64), nullable=True)
+
     # ── visibility ──
     private = Column(Boolean, nullable=False, default=False,
                      comment="Internal note — invisible to end user")

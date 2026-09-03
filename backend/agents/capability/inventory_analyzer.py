@@ -42,17 +42,8 @@ class InventoryAnalyzer(BaseAgentSkill):
     name = "inventory_analyzer"
     capabilities = ["inventory.analyze"]
 
-    SYSTEM_PROMPT = """你是电商库存分析专家。基于给定的销售数据、库存数据和补货规则，输出结构化分析。
-
-严格要求：
-- 只基于提供的数据推理，不要编造
-- 输出严格 JSON，不要 markdown 围栏
-- anomalies: 库存异常商品列表（含 product_id, current_qty, daily_sales, days_of_stock, level）
-- advice: 补货建议列表（含 product_id, recommended_qty, urgency）
-- confidence: 0~1，根据数据完整性打分
-- reasoning: 一句话说明关键发现"""
-
     async def run(self, inputs: dict) -> dict:
+        from backend.prompts.service import prompt_service
         sales_data = inputs.get("sales_data", [])
         inventory_data = inputs.get("inventory_data", [])
         rules = inputs.get("rules", "")
@@ -74,9 +65,10 @@ class InventoryAnalyzer(BaseAgentSkill):
 请输出 JSON 分析结果。"""
 
         try:
+            system_prompt = prompt_service.get_template_sync("capability.inventory_analyzer")
             content = await self._call_llm(
                 prompt=user_prompt,
-                system=self.SYSTEM_PROMPT,
+                system=system_prompt,
                 temperature=0.1,
                 max_tokens=2000,
             )

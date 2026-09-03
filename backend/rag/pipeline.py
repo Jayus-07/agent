@@ -297,15 +297,22 @@ class RAGPipeline:
         bm25_store = BM25Store()
         self.bm25_store = bm25_store  # 保留 store 引用，供删除/重索引时更新
         self.bm25 = bm25_store.load(k=BM25_SEARCH_K)
+
+        # BM25 重建语料源：优先 Chroma（indexer 实际写入的 chunks），
+        # 回退 self.docs（loader chunks）。两者切分策略不同，
+        # Chroma 语料保证 BM25 与向量检索的 chunk 集合一致。
+        chroma_docs = self._build_bm25_corpus_from_chroma()
+        bm25_source = chroma_docs if chroma_docs else self.docs
+
         if self.bm25 is None:
             logger.info("[RAG] BM25 索引不存在，全量重建...")
-            self.bm25 = bm25_store.build(self.docs, k=BM25_SEARCH_K)
+            self.bm25 = bm25_store.build(bm25_source, k=BM25_SEARCH_K)
         elif bm25_store.is_stale:
             logger.info("[RAG] BM25 索引已过期（文档数为 0），重建...")
-            self.bm25 = bm25_store.build(self.docs, k=BM25_SEARCH_K)
-        elif source_files_out_of_sync(self.bm25.docs, self.docs):
+            self.bm25 = bm25_store.build(bm25_source, k=BM25_SEARCH_K)
+        elif source_files_out_of_sync(self.bm25.docs, bm25_source):
             logger.info("[RAG] BM25 索引与文档目录不一致（残留/缺失），重建...")
-            self.bm25 = bm25_store.build(self.docs, k=BM25_SEARCH_K)
+            self.bm25 = bm25_store.build(bm25_source, k=BM25_SEARCH_K)
         else:
             logger.info(
                 f"[RAG] BM25 索引从磁盘加载成功 "
@@ -346,6 +353,49 @@ class RAGPipeline:
             logger.info(f"[RAG] BM25 已移除文档 {doc_ids} (file_paths={file_paths})")
         except Exception as e:
             logger.warning(f"[RAG] BM25 移除文档失败 ({doc_ids}): {e}")
+
+    def _build_bm25_corpus_from_chroma(self) -> list:
+        """从 Chroma chunk 向量库读取全部文档，作为 BM25 重建语料。
+
+        Chroma 是 indexer 实际写入的权威数据源；用它构建 BM25 可保证
+        BM25 chunk 集合与向量检索完全一致，消除 loader/indexer 切分差异。
+        返回空列表表示 Chroma 不可用，调用方应回退 self.docs。
+        """
+        try:
+            result = self.vectordb.get()
+            ids = result.get("ids") or []
+            documents = result.get("documents") or []
+            metadatas = result.get("metadatas") or []
+            if not ids:
+                return []
+            from langchain_core.documents import Document
+            docs = []
+            for i, cid in enumerate(ids):
+                text = documents[i] if i < len(documents) else ""
+                meta = metadatas[i] if i < len(metadatas) else {}
+                if text:
+                    docs.append(Document(page_content=text, metadata={**meta, "chroma_id": cid}))
+            logger.info(f"[RAG] 从 Chroma 构建 BM25 语料: {len(docs)} chunks")
+            return docs
+        except Exception as e:
+            logger.warning(f"[RAG] Chroma BM25 语料读取失败，回退 loader docs: {e}")
+            return []
+
+    def refresh_bm25_from_store(self) -> None:
+        """从磁盘 store 重新加载 BM25 索引（indexer 上传/重索引后调用）。"""
+        if self.bm25_store is None:
+            return
+        reloaded = self.bm25_store.load(k=BM25_SEARCH_K)
+        if reloaded is not None:
+            self.bm25 = reloaded
+            logger.info(f"[RAG] BM25 已从磁盘刷新 ({self.bm25_store.doc_count()} 文档)")
+        else:
+            logger.warning("[RAG] BM25 磁盘刷新失败，保持当前内存索引")
+
+    def check_consistency(self):
+        """审计 5 个存储之间的索引一致性。"""
+        from backend.rag.indexing.consistency import IndexConsistencyChecker
+        return IndexConsistencyChecker(self).check()
 
     # =====================================================
     # 版本校验

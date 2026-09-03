@@ -85,6 +85,11 @@ def main():
         "--dataset", type=str, default=None, metavar="FILE",
         help="自定义评测集文件名（如 rag_test_kb.json），用 rag runner 跑该评测集",
     )
+    parser.add_argument(
+        "--tier", type=str, default="all",
+        choices=["all", "smoke", "core", "hard", "regression"],
+        help="分层评估: 按用例 tier 过滤 (默认: all, 不过滤)",
+    )
 
     args = parser.parse_args()
 
@@ -102,6 +107,7 @@ def main():
         smoke=args.smoke,
         judge=args.judge,
         dataset_file=args.dataset,
+        tier=args.tier,
     )
 
     print_summary(report)
@@ -129,9 +135,16 @@ def main():
     if args.compare:
         _do_compare(args.compare, report, RESULTS_DIR, current_dir=output_dir)
 
-    # 返回适当退出码
-    has_failures = any(r.status in ("fail", "error") for r in report.results)
-    sys.exit(1 if has_failures and not args.smoke else 0)
+    # V2: 分层退出码 — 任一层级未达阈值即退出 1
+    tier_failed = [ts for ts in report.tier_summaries if not ts.passed_threshold]
+    if tier_failed:
+        for ts in tier_failed:
+            print(
+                f"⚠️  [{ts.tier}] 通过率 {ts.pass_rate:.1%} "
+                f"< 阈值 {ts.threshold:.1%}"
+            )
+        sys.exit(1)
+    sys.exit(0)
 
 
 def _print_verbose(report) -> None:

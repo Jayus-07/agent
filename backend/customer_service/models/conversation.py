@@ -74,6 +74,10 @@ class CSConversation(CSBase):
     summary = Column(Text, nullable=True)
     context_summary = Column(Text, nullable=True)
 
+    # ── trace linkage ──
+    last_trace_id = Column(String(64), nullable=True)
+    trace_count = Column(BigInteger, nullable=False, default=0)
+
     # ── timestamps ──
     created_at = Column(DateTime(timezone=True), default=_now, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)

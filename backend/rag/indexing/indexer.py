@@ -216,7 +216,7 @@ class IncrementalIndexer:
             row = registry.get(path, {})
             doc_id = row.get("doc_id", "")
             if doc_id:
-                self._remove_document(doc_id)
+                self._remove_document(doc_id, file_path=path)
             self.registry.mark_deleted(path)
             logger.info(f"[DELETED] {os.path.basename(path)}")
 
@@ -225,7 +225,7 @@ class IncrementalIndexer:
             row = registry.get(path, {})
             doc_id = row.get("doc_id", "")
             if doc_id:
-                self._remove_document(doc_id)
+                self._remove_document(doc_id, file_path=path)
             self._index_file(path)
             logger.info(f"[MODIFIED] {os.path.basename(path)}")
 
@@ -741,7 +741,7 @@ class IncrementalIndexer:
             logger.error(f"Chunk 写入失败: {e}")
             trace_collector.end_span(vdb_span, status="error",
                 metrics={"error": str(e)[:200]})
-            self._remove_document(doc_id)
+            self._remove_document(doc_id, file_path=file_path)
             raise
 
         # ── ⑤.5 BM25 同步（P0-1：上传/重索引后立即同步，避免"上传成功但 BM25 未更新"）──
@@ -749,12 +749,14 @@ class IncrementalIndexer:
         # 注意：chunk metadata 需含 doc_id/source_file 等字段（BM25 删除/去重依赖），_enrich 与上方注入已提供。
         if self.bm25_store is not None and chunks:
             try:
-                self.bm25_store.add_documents(chunks, k=BM25_SEARCH_K)
+                self.bm25_store.replace_documents(
+                    chunks, k=BM25_SEARCH_K, doc_id=doc_id, file_path=file_path,
+                )
                 logger.info(
-                    f"[BM25] 文档已同步 {len(chunks)} chunks: {os.path.basename(file_path)}"
+                    f"[BM25] 文档已替换 {len(chunks)} chunks: {os.path.basename(file_path)}"
                 )
             except Exception as e:
-                logger.error(f"[BM25] 同步失败 (doc_id={doc_id}): {e}")
+                logger.error(f"[BM25] 替换同步失败 (doc_id={doc_id}): {e}")
 
         # ── ⑨ registry（始终执行，含 metadata 用于操作日志追溯）──
         # P1-4：阻止 chunk_count=0 的"假成功"入库。
@@ -797,7 +799,7 @@ class IncrementalIndexer:
                 },
             )
         except Exception:
-            self._remove_document(doc_id)
+            self._remove_document(doc_id, file_path=file_path)
             raise
 
         # P2-2:返回 dict 给 _index_file wrapper,消除 reindex_file 反查 registry 的需要
@@ -1030,15 +1032,10 @@ class IncrementalIndexer:
             if confidence < 0.3 and doc_type == "general":
                 try:
                     from backend.config.rag import DOC_LLM_MODEL
-                    doc_type_prompt = f"""请判断以下文档的类型，从以下 14 种类型中选择一个最匹配的：
-policy(制度), sop(操作流程), ad_policy(广告政策), compliance(合规), legal(法律),
-contract_template(合同模板), security(安全), financial(财务), customer_data(客户数据),
-product_spec(商品规格), listing(商品上架), faq(常见问题), training(培训), general(通用)
-
-只输出类型名，不要解释。
-
-文档开头：
-{full_text[:1500]}"""
+                    from backend.prompts.service import prompt_service
+                    doc_type_prompt = prompt_service.render_sync(
+                        "rag.indexing.doc_type", full_text=full_text[:1500],
+                    ).text
                     if DOC_LLM_MODEL:
                         from langchain_ollama import ChatOllama
                         llm_l = ChatOllama(model=DOC_LLM_MODEL, temperature=0.0, num_ctx=2048, request_timeout=20)
@@ -1279,10 +1276,10 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
                     logger.warning(
                         f"[REINDEX] 版本快照失败，兑底删除旧数据: {e}"
                     )
-                    self._remove_document(old_doc_id)
+                    self._remove_document(old_doc_id, file_path=file_path)
                     self.registry.mark_deleted_by_doc_id(old_doc_id)
             else:
-                self._remove_document(old_doc_id)
+                self._remove_document(old_doc_id, file_path=file_path)
 
                 # 按 doc_id 软删所有行（修复重复路径导致的残余 active 行）
                 deleted = self.registry.mark_deleted_by_doc_id(old_doc_id)
@@ -1347,8 +1344,8 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
 
     # ---- 删除 ----
 
-    def _remove_document(self, doc_id: str):
-        """从向量库 + chunk_store 中删除文档的所有数据。"""
+    def _remove_document(self, doc_id: str, file_path: str = ""):
+        """从向量库 + chunk_store + BM25 中删除文档的所有数据。"""
         if not doc_id:
             return
         try:
@@ -1364,6 +1361,13 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
             get_chunk_store().delete_by_doc_id(doc_id)
         except Exception as e:
             logger.warning(f"删除 chunk_store 失败 (doc_id={doc_id}): {e}")
+        if self.bm25_store is not None:
+            try:
+                self.bm25_store.remove_documents(
+                    [doc_id], file_paths=[file_path] if file_path else None,
+                )
+            except Exception as e:
+                logger.warning(f"删除 BM25 失败 (doc_id={doc_id}): {e}")
 
     def _derive_doc_id(self, file_path: str, file_hash: str, kb_id: str) -> str:
         """生成稳定且按 (知识库, 部门, 子目录) 严格隔离的文档 ID。

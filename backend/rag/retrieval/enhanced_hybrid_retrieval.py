@@ -116,6 +116,15 @@ def _enhanced_hybrid_retrieve_impl(
         if sparse_future:
             sparse_docs = sparse_future.result() or []
             metrics["sparse_hits"] = len(sparse_docs)
+            # BM25 不接受 filter 参数，需手动按 doc_ids / metadata_filter 过滤，
+            # 否则非目标文档的 BM25 高分 chunks 会挤占 RRF 融合位置
+            if doc_ids:
+                sparse_docs = [d for d in sparse_docs if d.metadata.get("doc_id") in doc_ids]
+            if metadata_filter:
+                sparse_docs = [
+                    d for d in sparse_docs
+                    if all(d.metadata.get(k) == v for k, v in metadata_filter.items())
+                ]
             docs_list.extend(sparse_docs)
     except Exception as e:
         logger.warning(f"[EnhancedRetrieve] Sparse retrieval failed: {e}", exc_info=True)
@@ -130,8 +139,8 @@ def _enhanced_hybrid_retrieve_impl(
         trace_collector.end_span(span, metrics={"status": "fallback"})
         return fallback_docs, {"confidence": 0.0, "strategy": "fallback"}
     
-    # Step 5: RRF 融合
-    merged_docs = _ultimate_rrf_fusion(docs_list, rrf_k, k)
+    # Step 5: RRF 融合（传入 query 以启用关键词加成）
+    merged_docs = _ultimate_rrf_fusion(docs_list, rrf_k, k, query=query)
     
     # Step 6: 计算综合置信度
     overall_confidence = 0.0
@@ -162,12 +171,19 @@ def _enhanced_hybrid_retrieve_impl(
     }
 
 
-def _ultimate_rrf_fusion(docs_from_all_paths: List, rrf_k: int, top_k: int) -> List:
+def _ultimate_rrf_fusion(docs_from_all_paths: List, rrf_k: int, top_k: int,
+                         query: str = None) -> List:
     """
     三路召回的统一 RRF 融合（按 chunk_id 去重）
     权重分配：Rule-based > Dense > Sparse；
     无 chunk_type 标记的真实召回按 Dense 同权重 1.0 处理，
     不得静默丢弃（历史缺陷：只认标记导致融合结果恒为空）。
+
+    Per-doc chunk 上限：防止单文档大量相似 chunks 挤占其他文档的
+    检索结果（如采购流程 24 chunks 全部排在合同金额 chunk 前面）。
+
+    Keyword boost：当 query 提供时，对内容包含查询关键词的 chunks
+    给予额外分数加成，避免向量语义漂移导致精确关键词匹配被淹没。
     """
     _WEIGHTS = {
         "rule_match": 2.0,
@@ -200,10 +216,45 @@ def _ultimate_rrf_fusion(docs_from_all_paths: List, rrf_k: int, top_k: int) -> L
             rank += 1
             rank_map[cid] = rank_map.get(cid, 0.0) + weight / (rrf_k + rank)
 
-    # 排序取 Top-K
+    # Keyword boost: 对包含查询关键词的 chunks 加成分数
+    if query:
+        _STOPWORDS = {"的", "了", "是", "在", "和", "与", "或", "有", "为", "哪",
+                      "什么", "怎么", "如何", "多少", "几个", "几类", "吗", "呢",
+                      "要", "需要", "几个", "分为", "包括"}
+        try:
+            import jieba
+            query_keywords = {w for w in jieba.cut(query) if len(w) >= 2 and w not in _STOPWORDS}
+        except Exception:
+            query_keywords = set()
+        if query_keywords:
+            for cid, doc in docs_by_id.items():
+                content = doc.page_content or ""
+                matched = sum(1 for kw in query_keywords if kw in content)
+                if matched > 0:
+                    rank_map[cid] = rank_map.get(cid, 0.0) + 0.3 * matched
+
+    # 排序取 Top-K（带 per-doc chunk 上限）
     sorted_cids = sorted(rank_map.items(), key=lambda x: x[1], reverse=True)
 
-    return [docs_by_id[cid] for cid, _ in sorted_cids[:top_k]]
+    unique_doc_count = len({
+        docs_by_id[cid].metadata.get("doc_id", "")
+        for cid, _ in sorted_cids[:top_k * 3]
+        if cid in docs_by_id and docs_by_id[cid].metadata.get("doc_id")
+    })
+    max_per_doc = max(3, (top_k + max(unique_doc_count, 1) - 1) // max(unique_doc_count, 1))
+
+    result = []
+    doc_counts: dict = {}
+    for cid, _ in sorted_cids:
+        if len(result) >= top_k:
+            break
+        did = docs_by_id[cid].metadata.get("doc_id", "")
+        if did and doc_counts.get(did, 0) >= max_per_doc:
+            continue
+        doc_counts[did] = doc_counts.get(did, 0) + 1
+        result.append(docs_by_id[cid])
+
+    return result
 
 
 # =====================================================
@@ -304,3 +355,9 @@ class ConfidenceAggregator:
     def _extract_retrieved_entities(self, docs: List) -> set:
         all_text = " ".join([d.page_content for d in docs[:5]])
         return self._extract_entities(all_text)
+
+    def _calc_entity_coverage(self, query_entities: set, retrieved_entities: set) -> float:
+        if not query_entities:
+            return 1.0
+        overlap = len(query_entities & retrieved_entities)
+        return overlap / len(query_entities)

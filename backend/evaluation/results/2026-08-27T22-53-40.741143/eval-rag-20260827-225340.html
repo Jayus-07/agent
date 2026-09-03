@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>评测报告 — RAG 检索</title>
+<style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           margin: 0; background: #f5f6fa; color: #2d3142; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+              color: white; padding: 32px; border-radius: 12px; margin-bottom: 24px;
+              box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    .header h1 { margin: 0 0 8px; font-size: 28px; }
+    .header .meta { opacity: 0.9; font-size: 14px; }
+    .dashboard { display: grid; grid-template-columns: repeat(4, 1fr);
+                 gap: 16px; margin-bottom: 24px; }
+    .card { background: white; padding: 20px; border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06); text-align: center; }
+    .card-icon { font-size: 32px; margin-bottom: 8px; }
+    .card-label { font-size: 13px; color: #6c757d; margin-bottom: 8px; }
+    .card-value { font-size: 28px; font-weight: bold; margin-bottom: 4px; }
+    .card-hint { font-size: 11px; color: #adb5bd; }
+    .card-ok { border-top: 4px solid #10b9810; }
+    .card-warn { border-top: 4px solid #f59e0b; }
+    .card-fail { border-top: 4px solid #ef4444; }
+    .card-none { border-top: 4px solid #cbd5e1; }
+    h2 { color: #2d3142; border-bottom: 2px solid #667eea; padding-bottom: 8px; margin-top: 32px; }
+    h3 { color: #4a5568; margin-top: 20px; }
+    table { border-collapse: collapse; width: 100%; background: white;
+           box-shadow: 0 1px 3px rgba(0,0,0,0.05); border-radius: 6px; overflow: hidden; }
+    th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid #e9ecef; }
+    th { background: #f8f9fa; font-weight: 600; color: #495057; font-size: 13px; }
+    tr.fail { background: #fef2f2; }
+    tr.fail:hover { background: #fee2e2; }
+    tr.error { background: #fff3cd; }
+    tr.error:hover { background: #ffe69c; }
+    code { background: #f1f3f5; padding: 2px 6px; border-radius: 3px;
+           font-family: 'Menlo', monospace; font-size: 12px; }
+    details.case { background: white; border-radius: 8px; margin-bottom: 8px;
+                   box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    details.case[open] { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    details.case summary { padding: 14px 18px; cursor: pointer;
+                           font-size: 14px; user-select: none; }
+    details.case summary:hover { background: #f8f9fa; }
+    details.case summary b { color: #2d3142; }
+    details.case-pass summary { border-left: 4px solid #10b9810; }
+    details.case-fail summary { border-left: 4px solid #ef4444; background: #fef2f2; }
+    details.case-error summary { border-left: 4px solid #f59e0b; background: #fff3cd; }
+    .case-body { padding: 0 18px 18px; font-size: 13px; line-height: 1.7; }
+    .case-body h4 { color: #667eea; margin-top: 16px; }
+    table.retrieve { font-size: 12px; }
+    table.retrieve th { background: #e0e7ff; }
+    </style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>📊 RAG 评测报告</h1>
+    <div class="meta">RAG 检索 · 离线 · 2026-08-27T22:53:40.741143</div>
+  </div>
+  <div class="dashboard">
+    
+        <div class="card card-ok">
+          <div class="card-icon">📋</div>
+          <div class="card-label">通过率</div>
+          <div class="card-value">100.0% (5/5)</div>
+          <div class="card-hint">recall@5</div>
+        </div>
+        <div class="card card-ok">
+          <div class="card-icon">🎯</div>
+          <div class="card-label">Top-1 准确率</div>
+          <div class="card-value">100.0%</div>
+          <div class="card-hint">用户看到的第1条</div>
+        </div>
+        <div class="card card-none">
+          <div class="card-icon">🚫</div>
+          <div class="card-label">拒答准确率</div>
+          <div class="card-value">—</div>
+          <div class="card-hint">negative case</div>
+        </div>
+        <div class="card card-ok">
+          <div class="card-icon">📈</div>
+          <div class="card-label">MRR</div>
+          <div class="card-value">100.0%</div>
+          <div class="card-hint">排序质量</div>
+        </div>
+  </div>
+  <h2>✅ 全部用例通过，无失败</h2>
+  <h2>📂 per-case 详情（5 条）</h2>
+  
+<details class="case case-pass">
+  <summary>✓ <b>DEPT-001</b> — 通过 (年假怎么申请？请假流程是什么？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>policy_general</code> · <b>耗时</b>: 45445ms</p>
+    <p><b>指标</b>: 召回率@5=0.5, 召回率@10=0.5, 平均倒数排名 (MRR)=1.0, NDCG@10=0.6131, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=2 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>be99388a67</code></td><td>0.8497</td><td>年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。</td></tr><tr><td>2</td><td><code>be99388a67</code></td><td>0.7786</td><td>1. 年假申请 正式员工入职满 1 年后享有带薪年假，天数按司龄递增： 司龄 1-3 年：5 天/年 司龄 3-10 年：10 天/年 司龄 10 年以上：15 天/年 年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR </td></tr><tr><td>3</td><td><code>be99388a67</code></td><td>0.7015</td><td>请假与考勤制度（人力资源部） 1. 年假申请 正式员工入职满 1 年后享有带薪年假，天数按司龄递增： 司龄 1-3 年：5 天/年 司龄 3-10 年：10 天/年 司龄 10 年以上：15 天/年 年假需通过 HR 系统提前 3 个工作日</td></tr><tr><td>4</td><td><code>be99388a67</code></td><td>0.6912</td><td>请假与考勤制度（人力资源部） 1. 年假申请 正式员工入职满 1 年后享有带薪年假，天数按司龄递增： 司龄 1-3 年：5 天/年 司龄 3-10 年：10 天/年 司龄 10 年以上：15 天/年 年假需通过 HR 系统提前 3 个工作日</td></tr><tr><td>5</td><td><code>be99388a67</code></td><td>0.4811</td><td>正式员工入职满 1 年后享有带薪年假，天数按司龄递增：</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;be99388a67&#x27;, &#x27;79028b7792&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>be99388a67</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;be99388a67&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.8497</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>DEPT-002</b> — 通过 (报销流程怎么走？预算审批权限是怎样的？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>policy_general</code> · <b>耗时</b>: 950ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=2 / Stage2=5 / Adaptive=集中(2个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>8d38891a89</code></td><td>0.8743</td><td>预算与审批制度（财务部） 1. 年度预算 各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算 一经批准即作为费用控制的基准。 2. 预算执行 月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整</td></tr><tr><td>2</td><td><code>04a34059af</code></td><td>0.8497</td><td>2. 报销流程 员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 → 财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。</td></tr><tr><td>3</td><td><code>04a34059af</code></td><td>0.8146</td><td>员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 → 财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。</td></tr><tr><td>4</td><td><code>8d38891a89</code></td><td>0.8060</td><td>预算与审批制度（财务部） 1. 年度预算 各部门于每年 11 月提交下一年度预算，财务部汇总平衡后报管理层审批。预算 一经批准即作为费用控制的基准。 2. 预算执行 月度支出不得超过年度预算的月度均额 ±20%。超预算支出须提前发起预算调整</td></tr><tr><td>5</td><td><code>04a34059af</code></td><td>0.6036</td><td>费用报销制度（财务部） 1. 报销范围 可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、 罚款、礼品卡等不在报销范围内。 2. 报销流程 员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 → 财务复</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;04a34059af&#x27;, &#x27;8d38891a89&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>8d38891a89</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;8d38891a89&#x27;, &#x27;04a34059af&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.8743</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>DEPT-003</b> — 通过 (公司报销标准是多少？发票有什么要求？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>policy_general</code> · <b>耗时</b>: 364ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=0.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=2 / Stage2=0 / Adaptive=无结果</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      
+    </table>
+    <h4>2. 结果</h4>
+    <p><b>期望</b>: <code>[]</code> · <b>召回</b>: <code>[]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🔴 <b>none</b></p><p><b>拒答 gate</b>: <code>retrieval</code></p><p><b>拒答原因</b>: <code>no_evidence</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>DEPT-004</b> — 通过 (工资什么时候发？个税怎么算？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>policy_general</code> · <b>耗时</b>: 335ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=1.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=2 / Stage2=5 / Adaptive=集中(1个文档)</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      <tr><td>1</td><td><code>79028b7792</code></td><td>0.8621</td><td>薪酬与个税（人力资源部） 1. 发薪日 工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。 2. 个税计算 个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、 住房贷款利息、赡养老人等。HR 系</td></tr><tr><td>2</td><td><code>79028b7792</code></td><td>0.8361</td><td>薪酬与个税（人力资源部） 1. 发薪日 工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。 2. 个税计算 个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、 住房贷款利息、赡养老人等。HR 系</td></tr><tr><td>3</td><td><code>79028b7792</code></td><td>0.7013</td><td>1. 发薪日 工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。</td></tr><tr><td>4</td><td><code>79028b7792</code></td><td>0.6898</td><td>工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。</td></tr><tr><td>5</td><td><code>79028b7792</code></td><td>0.5235</td><td>2. 个税计算 个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、 住房贷款利息、赡养老人等。HR 系统每月自动完成个税预扣并生成工资条。</td></tr>
+    </table>
+    <h4>2. 结果</h4>
+    
+            <p><b>期望文档</b>: <code>[&#x27;79028b7792&#x27;]</code></p>
+            <p><b>Top-1</b>: <code>79028b7792</code> ✅</p>
+            <p><b>实际召回 Top-5</b>: <code>[&#x27;79028b7792&#x27;]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🟡 <b>medium</b></p><p><b>Top-1 rerank_score</b>: <code>0.8621</code></p>
+  </div>
+</details>
+<details class="case case-pass">
+  <summary>✓ <b>DEPT-005</b> — 通过 (年假和调休怎么算？)</summary>
+  <div class="case-body">
+    <p><b>KB</b>: <code>policy_general</code> · <b>耗时</b>: 275ms</p>
+    <p><b>指标</b>: 召回率@5=1.0, 召回率@10=1.0, 平均倒数排名 (MRR)=1.0, NDCG@10=1.0, Chunk 级召回率=0.0, Top-1 准确率=1.0, dept_leak=0.0</p>
+    
+    <h4>1. 过程细节</h4>
+    <p>Stage1=2 / Stage2=0 / Adaptive=无结果</p>
+    <table class="retrieve">
+      <tr><th>#</th><th>doc_id</th><th>rerank</th><th>snippet</th></tr>
+      
+    </table>
+    <h4>2. 结果</h4>
+    <p><b>期望</b>: <code>[]</code> · <b>召回</b>: <code>[]</code></p>
+    <h4>3. 是否拒答</h4>
+    
+            <p><b>状态</b>: 🔴 <b>none</b></p><p><b>拒答 gate</b>: <code>retrieval</code></p><p><b>拒答原因</b>: <code>no_evidence</code></p>
+  </div>
+</details>
+</div>
+</body>
+</html>

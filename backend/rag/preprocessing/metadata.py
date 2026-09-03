@@ -35,14 +35,7 @@ _ARBITRATION_CANDIDATES = {"legal", "compliance", "policy", "financial", "faq"} 
 _minhash_cache: Dict[str, List[Tuple[str, list[int]]]] = {}  # doc_type → [(file_hash, signature), ...]
 _MINHASH_CACHE_MAX_SIZE = 1024  # 最大保留类型数，自动 LRUCache
 
-# LLM 仲裁提示词 — 轻量，只选类型不生成内容
-_ARBITRATION_PROMPT = """你是电商文档分类专家。以下文档的类型有歧义，请从候选类型中选择最匹配的一个。
-
-候选类型: {candidates}
-文档内容（前 1000 字）:
-{text}
-
-只输出一个类型名，不要额外解释:"""
+# LLM 仲裁提示词 — 已迁移至 prompt_service（key: rag.preprocessing.arbitration）
 
 
 def classify_doc_type(text: str, filename: str = "", file_path: str = "") -> str:
@@ -360,9 +353,11 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
         logger.info(f"[Classify] 胶着仲裁：top4={top4}, inner_diff={inner_diff}")
         try:
             # 用模块级 llm（不在函数内重复 import，避免遮蔽测试 monkeypatch）
-            result = llm.invoke(_ARBITRATION_PROMPT.format(
+            from backend.prompts.service import prompt_service
+            result = llm.invoke(prompt_service.render_sync(
+                "rag.preprocessing.arbitration",
                 candidates=candidates, text=text[:1000],
-            ))
+            ).text)
             result_text = result.content.strip() if hasattr(result, "content") else str(result).strip()
             # sop/financial 等仲裁候选外的次名也可被 LLM 选中（盲点修复）；
             # 精确词边界匹配，避免子串误匹配（如回答含 training 误中 sop）
@@ -579,12 +574,11 @@ async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = 
         return extractive, []
 
     safe_text = text.encode('utf-8', errors='ignore')[:4000].decode('utf-8', errors='ignore')
-    prompt = f"""请用 1-2 句话概括以下文档的核心内容。保留关键术语、数字、条款编号。
-
-文档：
-{safe_text}
-
-摘要（≤{max_length}字）："""
+    from backend.prompts.service import prompt_service
+    prompt = prompt_service.render_sync(
+        "rag.preprocessing.summary",
+        safe_text=safe_text, max_length=str(max_length),
+    ).text
 
     if DOC_LLM_MODEL:
         # 本地 Ollama —— 同步调用（indexer 线程内）

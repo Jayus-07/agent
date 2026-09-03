@@ -136,6 +136,11 @@ class MultiAgentSystem:
             _end_root(trace, metrics={"span_count": len(trace.spans) - 1})
             trace_collector.finish(trace, answer, total_ms, "", "")
 
+            _persist_cs_turn_if_needed(
+                final_state.get("cs_context", {}),
+                session_id, question, answer, trace.id,
+            )
+
             self._memory.end_turn(session_id, question, answer, user_id=user_id)
             return answer
         except Exception as e:
@@ -435,6 +440,10 @@ class MultiAgentSystem:
             trace_collector.finish(trace, final_answer,
                                    int((time.time() - start_time) * 1000), "", "")
 
+            _persist_cs_turn_if_needed(
+                cs_context_snapshot, session_id, question, final_answer, trace.id,
+            )
+
             yield make_done_event(final_answer, all_step_results, start_time)
 
         except Exception as e:
@@ -519,6 +528,30 @@ class MultiAgentSystem:
 # =====================================================
 # Tracing 辅助函数（模块级）
 # =====================================================
+
+def _persist_cs_turn_if_needed(
+    cs_context: dict,
+    session_id: str,
+    question: str,
+    answer: str,
+    trace_id: str,
+) -> None:
+    """Fire-and-forget CS turn persistence — no-op when not a CS request."""
+    if not cs_context or not cs_context.get("conversation_id"):
+        return
+    try:
+        from backend.customer_service.conversation_store import record_cs_turn
+        record_cs_turn(
+            conversation_id=cs_context["conversation_id"],
+            user_id=cs_context.get("authenticated_user_id", "anonymous"),
+            question=question,
+            answer=answer,
+            trace_id=trace_id,
+            cs_route=cs_context.get("cs_route"),
+        )
+    except Exception:
+        logger.debug("[MultiAgent] CS turn persistence failed", exc_info=True)
+
 
 def _end_root(trace, output: dict = None, metrics: dict = None,
               status: str = "success"):

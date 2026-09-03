@@ -1,6 +1,6 @@
 'use client'
 
-import { Sparkles, PanelLeft, PanelLeftClose, LayoutDashboard, BookOpen, Brain, Activity, FileText, AlertTriangle, Clock, TrendingUp, ClipboardCheck, ScrollText } from 'lucide-react'
+import { Sparkles, PanelLeft, PanelLeftClose, LayoutDashboard, BookOpen, Brain, Activity, FileText, AlertTriangle, Clock, TrendingUp, ClipboardCheck, ScrollText, Headphones, BarChart3 } from 'lucide-react'
 import NavGroup from './layout/NavGroup'
 
 interface Props { collapsed: boolean; onToggle: () => void }
@@ -20,6 +20,13 @@ const NAV = [
     items: [
       { label: '智能问答', path: '/agent' },
       { label: '分析任务', path: '/agent/tasks' },
+    ],
+  },
+  {
+    icon: <Headphones size={18} />, label: '智能客服',
+    items: [
+      { label: '客服对话', path: '/cs' },
+      { label: '会话管理', path: '/cs/conversations' },
     ],
   },
   {
@@ -49,6 +56,9 @@ const NAV = [
   },
   {
     icon: <ScrollText size={18} />, label: 'Prompt 管理', path: '/prompts',
+  },
+  {
+    icon: <BarChart3 size={18} />, label: '评测结果', path: '/evaluations',
   },
 ]
 

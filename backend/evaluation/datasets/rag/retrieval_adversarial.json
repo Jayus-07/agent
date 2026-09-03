@@ -1,0 +1,241 @@
+{
+  "version": "2.0",
+  "_comment": "V2.0 对抗性检索评测 — 标题党、关键词干扰、同形异义词、数字近似陷阱等。验证系统不被表面相似性误导。",
+  "test_cases": [
+    {
+      "id": "V2-ADV-001",
+      "question": "跨境电商退货流程是怎样的？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["f938bc1033"],
+        "relevant_snippets": ["7天", "退货政策"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "return_policy",
+        "query_type": "adversarial",
+        "tier": "core",
+        "answer_type": "procedural",
+        "expected_answer": "签收后7天内可申请退货，需满足商品不影响二次销售",
+        "must_contain": ["7天"],
+        "probe_type": "title_distraction",
+        "probe_note": "24_关键词干扰文档.md 标题含'退货流程'但内容是促销活动；期望召回真实退货政策(f938bc1033)而非干扰文档",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-ADV-002",
+      "question": "Apple Watch 包装盒有什么标签要求？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["7fae54d9ff"],
+        "relevant_snippets": ["序列号", "IP6X"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "product_spec",
+        "query_type": "adversarial",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "Apple Watch包装盒标签要求序列号12位、防水等级IP6X",
+        "must_contain": ["序列号", "IP6X"],
+        "probe_type": "word_disambiguation",
+        "probe_note": "25_同形异义词.md 含Apple电子产品和水果两篇；期望召回电子产品章节而非水果章节",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-ADV-003",
+      "question": "苹果水果入库糖度要求是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["7fae54d9ff"],
+        "relevant_snippets": ["糖度", "13"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "inventory",
+        "query_type": "adversarial",
+        "tier": "core",
+        "answer_type": "numeric",
+        "expected_answer": "苹果水果入库糖度≥13°",
+        "must_contain": ["糖度", "13"],
+        "probe_type": "word_disambiguation",
+        "probe_note": "25_同形异义词.md 第二篇水果Apple，期望召回水果章节（同文档不同chunk）",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-ADV-004",
+      "question": "海运拼箱的运费单价是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["ba8721e79b"],
+        "relevant_snippets": ["海运拼箱", "8.00"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "logistics",
+        "query_type": "adversarial",
+        "tier": "hard",
+        "answer_type": "numeric",
+        "expected_answer": "海运拼箱人民币8.00元/kg，最低消费50元",
+        "must_contain": ["8.00"],
+        "probe_type": "numeric_sensitivity",
+        "probe_note": "26_数字近似陷阱.md 三档运费都是8元但写法不同(8/8.00/¥8)；期望精确召回海运拼箱段(8.00元)而非空运/专线",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-ADV-005",
+      "question": "跨境电商发到欧盟需要什么认证？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["fd2910f986"],
+        "relevant_snippets": ["CE认证", "HS"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "compliance",
+        "query_type": "adversarial",
+        "tier": "smoke",
+        "answer_type": "factual",
+        "expected_answer": "CE认证+海关申报(HS编码)",
+        "must_contain": ["CE"],
+        "probe_type": "ultra_short_doc",
+        "probe_note": "16_一句话FAQ.md 全文<50字，验证chunker极短文档边界",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-ADV-006",
+      "question": "退货后能拿到多少优惠券补偿？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "match_type": "snippet",
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "query_type": "adversarial",
+        "tier": "hard",
+        "answer_type": "factual",
+        "expected_answer": "知识库不含退货优惠券补偿信息",
+        "must_contain": [],
+        "must_not_contain": ["满200减30", "促销活动"],
+        "probe_type": "keyword_trap",
+        "probe_note": "24_关键词干扰文档含'退款''优惠券'但指促销活动非退货补偿；期望系统不被'退货+优惠券'关键词组合误导到干扰文档",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-ADV-007",
+      "question": "空运快线和专线快递哪个运费更便宜？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["ba8721e79b"],
+        "relevant_snippets": ["空运快线", "专线快递"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "logistics",
+        "query_type": "adversarial",
+        "tier": "hard",
+        "answer_type": "comparative",
+        "expected_answer": "单价均为8元/kg，但最低消费和续重规则不同",
+        "must_contain": ["8"],
+        "probe_type": "numeric_sensitivity",
+        "probe_note": "数字近似陷阱：三者单价写法不同但数值相同，需要精确区分续重规则差异",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-ADV-008",
+      "question": "促销活动期间退款怎么处理？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "match_type": "snippet",
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "query_type": "adversarial",
+        "tier": "hard",
+        "answer_type": "factual",
+        "expected_answer": "知识库不含促销活动退款规则",
+        "must_contain": [],
+        "must_not_contain": ["满200减30"],
+        "probe_type": "keyword_trap",
+        "probe_note": "24_关键词干扰文档含'退款说明'但指活动优惠券发放而非退货退款流程；期望不被误导",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-ADV-009",
+      "question": "苹果公司的总部在哪里？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "match_type": "snippet",
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "negative",
+        "query_type": "adversarial",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "知识库不含苹果公司总部信息",
+        "must_contain": [],
+        "probe_type": "entity_trap",
+        "probe_note": "KB含Apple Watch相关内容但无苹果公司企业信息；期望不被'苹果'关键词带偏到产品规格文档",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-ADV-010",
+      "question": "专线快递的最大限重是多少？超出怎么收费？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["ba8721e79b"],
+        "relevant_snippets": ["5kg", "12"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "logistics",
+        "query_type": "adversarial",
+        "tier": "core",
+        "answer_type": "numeric",
+        "expected_answer": "专线快递限5kg以内，超出按12元/kg续重",
+        "must_contain": ["5kg", "12"],
+        "probe_type": "numeric_sensitivity",
+        "probe_note": "26_数字近似陷阱.md 中专线快递段的具体数字，需要精确匹配而非混淆空运/海运数字",
+        "ground_truth_verified": true
+      }
+    }
+  ]
+}

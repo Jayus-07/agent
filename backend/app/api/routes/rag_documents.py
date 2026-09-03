@@ -215,18 +215,23 @@ async def reject_pending_doc(doc_id: str, request: Request):
         try:
             pipeline = await asyncio.to_thread(get_rag_pipeline)
             _purge_doc_vectors(doc_id, doc.get("file_path", ""), pipeline, warnings)
+            residue = _verify_doc_purged(doc_id, doc.get("file_path", ""), pipeline)
+            degraded = bool(residue)
+            if degraded:
+                warnings.extend(residue)
         except Exception as e:
             logger.warning(f"[RAG] reject 级联清理异常: {e}")
             warnings.append(f"级联清理异常: {e}")
+            degraded = False
 
         _safe_log_op(
             doc_id, doc.get("file_name", ""), "reject", source,
             trace_id=None, batch_id=None,
-            result="success", duration_ms=0,
+            result="partial" if degraded else "success", duration_ms=0,
             detail={"from": "pending_review", "to": "deleted", "warnings": warnings or None},
         )
 
-        return {"ok": True, "doc_id": doc_id, "new_status": "deleted", "warnings": warnings or None}
+        return {"ok": True, "doc_id": doc_id, "new_status": "deleted", "degraded": degraded, "warnings": warnings or None}
     except Exception as e:
         logger.error(f"[RAG] reject 失败: {e}")
         return {"ok": False, "error": str(e)}
@@ -322,6 +327,12 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
         result = indexer.reindex_file(file_path)
         elapsed_ms = int((time.time() - _t0) * 1000)
 
+        # 重索引后刷新 pipeline 内存 BM25（indexer 已写入磁盘，这里同步内存引用）
+        try:
+            pipeline.refresh_bm25_from_store()
+        except Exception as e:
+            logger.warning(f"[RAG] BM25 刷新失败（不影响索引结果）: {e}")
+
         # 获取更新后的文档信息（含 metadata 字段）
         updated_doc = reg.get_by_doc_id(doc_id) or {}
         _safe_log_op(doc_id, doc_name, "reindex", source,
@@ -374,6 +385,39 @@ def _purge_doc_vectors(doc_id: str, file_path: str, pipeline, warnings: list[str
             warnings.append(f"原文件删除失败: {e}")
 
 
+def _verify_doc_purged(doc_id: str, file_path: str, pipeline) -> list[str]:
+    """回读各存储，返回残留描述列表（空 = 清理干净）。"""
+    residue: list[str] = []
+    try:
+        result = pipeline.vectordb.get(where={"doc_id": doc_id})
+        if result and result.get("ids"):
+            residue.append(f"Chroma chunk 残留 {len(result['ids'])} 条")
+    except Exception as e:
+        residue.append(f"Chroma chunk 验证失败: {e}")
+    try:
+        result = pipeline.doc_db.get(where={"doc_id": doc_id})
+        if result and result.get("ids"):
+            residue.append(f"Chroma doc 残留 {len(result['ids'])} 条")
+    except Exception as e:
+        residue.append(f"Chroma doc 验证失败: {e}")
+    try:
+        from backend.rag.indexing.chunk_store import get_chunk_store
+        cnt = get_chunk_store().count_by_doc_id(doc_id)
+        if cnt > 0:
+            residue.append(f"chunk_store 残留 {cnt} 条")
+    except Exception as e:
+        residue.append(f"chunk_store 验证失败: {e}")
+    if pipeline.bm25_store is not None:
+        try:
+            bm25_docs = pipeline.bm25_store.load_docs()
+            hits = [d for d in bm25_docs if (d.metadata or {}).get("doc_id") == doc_id]
+            if hits:
+                residue.append(f"BM25 残留 {len(hits)} chunks")
+        except Exception as e:
+            residue.append(f"BM25 验证失败: {e}")
+    return residue
+
+
 @router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str, request: Request):
     """删除文档 — 软删 registry + 清理两处向量 + 删原文件（防 sync 复活）"""
@@ -400,11 +444,19 @@ async def delete_document(doc_id: str, request: Request):
         pipeline = await asyncio.to_thread(get_rag_pipeline)
         _purge_doc_vectors(doc_id, file_path, pipeline, warnings)
 
+        # ⑥ 回读验证：确认各存储已清理干净
+        residue = _verify_doc_purged(doc_id, file_path, pipeline)
+        degraded = bool(residue)
+        if degraded:
+            warnings.extend(residue)
+            logger.warning(f"[RAG] 删除后残留: doc_id={doc_id}, {residue}")
+
         logger.info(f"[RAG] 已删除文档: {doc_id}" + (f"（{len(warnings)} 个警告）" if warnings else ""))
         _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, batch_id=batch_id,
-                     result="success", duration_ms=int((time.time() - _delete_t0) * 1000),
+                     result="partial" if degraded else "success",
+                     duration_ms=int((time.time() - _delete_t0) * 1000),
                      detail={"file_path": file_path, "deleted_rows": deleted_rows, "warnings": warnings or None})
-        return {"ok": True, "doc_id": doc_id, "warnings": warnings or None}
+        return {"ok": True, "doc_id": doc_id, "degraded": degraded, "warnings": warnings or None}
     except Exception as e:
         logger.error(f"[RAG] 删除文档失败: {e}")
         _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, batch_id=batch_id,

@@ -12,26 +12,29 @@ Skill 节点由 tool_registry 自动发现，不在此处硬编码。
 
 import asyncio
 
-from langgraph.graph import StateGraph, START, END
-
-from backend.orchestration.state import AgentState, CSAgentState
-from backend.orchestration.graph.router_node import router_node, route_selector
-from backend.orchestration.graph.direct_executor import skill_executor_node, workflow_executor_node
-from backend.observability.trace_middleware import trace_middleware
-from backend.agents.planner.planner import planner_node
-from backend.agents.planner.critique import critique_node
-from backend.orchestration.supervisor.scheduler import supervisor_node, route_after_supervisor
-from backend.agents.reporter.reporter import reporter_node
-from backend.orchestration.tool_registry import tool_registry
-from backend.customer_service.graph.nodes import (
-    cs_knowledge_node, cs_pending_node, cs_business_query, cs_business_action,
-    cs_complaint, cs_handoff, cs_handoff_intercept,
-)
-from backend.shared.logger import logger
+from langgraph.graph import END, START, StateGraph
 
 # 触发 Skill 包自注册（必须在 build_graph() 之前 import）
 import backend.skills  # noqa: F401
-
+from backend.agents.planner.critique import critique_node
+from backend.agents.planner.planner import planner_node
+from backend.agents.reporter.reporter import reporter_node
+from backend.customer_service.graph.nodes import (
+    cs_business_action,
+    cs_business_query,
+    cs_complaint,
+    cs_handoff,
+    cs_handoff_intercept,
+    cs_knowledge_node,
+    cs_pending_node,
+)
+from backend.observability.trace_middleware import trace_middleware
+from backend.orchestration.graph.direct_executor import skill_executor_node, workflow_executor_node
+from backend.orchestration.graph.router_node import route_selector, router_node
+from backend.orchestration.state import AgentState, CSAgentState
+from backend.orchestration.supervisor.scheduler import route_after_supervisor, supervisor_node
+from backend.orchestration.tool_registry import tool_registry
+from backend.shared.logger import logger
 
 # 节点名 → 用户可读的阶段标签（与 trace_middleware.py 对齐）
 _NODE_LABELS = {
@@ -127,12 +130,15 @@ def build_graph():
     wf.add_node("cs_handoff_intercept", trace_middleware.wrap_sync_node("cs_handoff_intercept", cs_handoff_intercept))
 
     # ── Skill 节点（自动发现 + TraceMiddleware 自动记录 Span）──
-    for name, func in tool_registry.get_skill_nodes().items():
+    skill_nodes = tool_registry.get_skill_nodes()
+    for name, func in skill_nodes.items():
         sync_func = _make_sync(func)
         traced_func = trace_middleware.wrap_sync_node(name, sync_func)
         wf.add_node(name, traced_func)
         wf.add_edge(name, "supervisor")  # 完成 → 回到 Supervisor
-        logger.info(f"[Graph] 自动注册 Skill 节点: {name}")
+        logger.debug(f"[Graph] 自动注册 Skill 节点: {name}")
+    if skill_nodes:
+        logger.info(f"[Graph] 已注册 {len(skill_nodes)} 个 Skill 节点")
 
     # ── 边 ────────────────────────────────────────
     # 2026-08-11：Router 在入口（V2 三路分流）

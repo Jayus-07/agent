@@ -1,0 +1,426 @@
+{
+  "version": "2.0",
+  "_comment": "V2.0 基础检索评测 — 单文档事实查询。覆盖 FAQ、退货、库存、供应商、商品规格、技术手册、安全政策、采购合同等核心文档。",
+  "test_cases": [
+    {
+      "id": "V2-BASIC-001",
+      "question": "下单后多久发货？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["3e30e0df16"],
+        "relevant_snippets": ["24小时", "现货"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "order",
+        "query_type": "single_doc",
+        "tier": "smoke",
+        "answer_type": "factual",
+        "expected_answer": "现货商品24小时内发出，预售商品以商品详情页标注的发货时间为准",
+        "must_contain": ["24小时"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-002",
+      "question": "支持哪些支付方式？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["3e30e0df16"],
+        "relevant_snippets": ["支付宝", "微信", "信用卡"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "payment",
+        "query_type": "single_doc",
+        "tier": "smoke",
+        "answer_type": "factual",
+        "expected_answer": "支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)",
+        "must_contain": ["支付宝", "微信"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-003",
+      "question": "如何申请退款？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["3e30e0df16"],
+        "relevant_snippets": ["申请退款", "1-2个工作日"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "refund",
+        "query_type": "single_doc",
+        "tier": "smoke",
+        "answer_type": "procedural",
+        "expected_answer": "在「我的订单」点击「申请退款」，填写原因后提交，客服1-2个工作日内审核",
+        "must_contain": ["申请退款", "1-2个工作日"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-004",
+      "question": "商品保修期多久？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["3e30e0df16"],
+        "relevant_snippets": ["1年", "电子产品"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "warranty",
+        "query_type": "single_doc",
+        "tier": "smoke",
+        "answer_type": "factual",
+        "expected_answer": "电子产品按品牌政策，一般1年；其他品类详见商品详情页",
+        "must_contain": ["1年"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-005",
+      "question": "库存按状态分为哪几类？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["99a80089e4"],
+        "relevant_snippets": ["库存", "五类"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "inventory",
+        "query_type": "single_doc",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "库存按状态分五类",
+        "must_contain": ["五类"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-006",
+      "question": "滞销库存是多少天无动销转滞销池？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["99a80089e4"],
+        "relevant_snippets": ["滞销", "90"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "inventory",
+        "query_type": "single_doc",
+        "tier": "core",
+        "answer_type": "numeric",
+        "expected_answer": "90天无动销转滞销池",
+        "must_contain": ["90"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-007",
+      "question": "盘点分为哪几类？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["99a80089e4"],
+        "relevant_snippets": ["盘点", "年度盘点"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "inventory",
+        "query_type": "single_doc",
+        "tier": "smoke",
+        "answer_type": "factual",
+        "expected_answer": "月度盘点和年度盘点",
+        "must_contain": ["月度", "年度"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-008",
+      "question": "供应商准入需要提交哪些资质？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["e87b88ae72"],
+        "relevant_snippets": ["资质初审", "样品验证"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "procurement",
+        "query_type": "single_doc",
+        "tier": "core",
+        "answer_type": "procedural",
+        "expected_answer": "需要资质初审、样品验证、试单考核三个环节",
+        "must_contain": ["资质", "样品"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-009",
+      "question": "供应商分级标准是什么？A级需要多少分？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["e87b88ae72"],
+        "relevant_snippets": ["A级", "90"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "procurement",
+        "query_type": "single_doc",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "A级（战略）年度评分≥90且合作满1年；B级75-89分；C级60-74分；D级<60分",
+        "must_contain": ["A级", "90"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-010",
+      "question": "数据分类有几个级别？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["9b708f17b6"],
+        "relevant_snippets": ["数据分类", "级别"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "security",
+        "query_type": "single_doc",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "数据分为4个级别：公开、内部、敏感、机密",
+        "must_contain": ["4", "公开", "机密"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-011",
+      "question": "敏感数据的加密标准是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["9b708f17b6"],
+        "relevant_snippets": ["AES-256", "TLS"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "security",
+        "query_type": "single_doc",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "传输层强制TLS 1.2+，存储层对敏感字段AES-256加密",
+        "must_contain": ["AES-256", "TLS"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-012",
+      "question": "数据安全事件多久时间内要上报？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["9b708f17b6"],
+        "relevant_snippets": ["2小时", "上报"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "security",
+        "query_type": "single_doc",
+        "tier": "core",
+        "answer_type": "numeric",
+        "expected_answer": "2小时内上报数据安全负责人",
+        "must_contain": ["2小时"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-013",
+      "question": "采购合同的预付款比例是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["14aa8a1c7a"],
+        "relevant_snippets": ["30%", "预付款"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "procurement",
+        "query_type": "single_doc",
+        "tier": "core",
+        "answer_type": "numeric",
+        "expected_answer": "合同签订后3个工作日内支付30%预付款",
+        "must_contain": ["30%"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-014",
+      "question": "采购合同总金额是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["14aa8a1c7a"],
+        "relevant_snippets": ["90,000", "玖万"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "procurement",
+        "query_type": "single_doc",
+        "tier": "smoke",
+        "answer_type": "numeric",
+        "expected_answer": "合计人民币玖万元整（¥90,000.00）",
+        "must_contain": ["90,000"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-015",
+      "question": "采购合同签订后多少天内要完成交付？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["14aa8a1c7a"],
+        "relevant_snippets": ["30", "交付"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "procurement",
+        "query_type": "single_doc",
+        "tier": "smoke",
+        "answer_type": "numeric",
+        "expected_answer": "合同签订后30个自然日内完成全部交付",
+        "must_contain": ["30"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-016",
+      "question": "抽检不合格率超过多少可以要求换货？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["14aa8a1c7a"],
+        "relevant_snippets": ["5%", "不合格"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "procurement",
+        "query_type": "single_doc",
+        "tier": "core",
+        "answer_type": "numeric",
+        "expected_answer": "抽检不合格率超过5%时，甲方有权要求换货或退货",
+        "must_contain": ["5%"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-017",
+      "question": "会员积分如何累计？多少分可以抵扣？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["3e30e0df16"],
+        "relevant_snippets": ["1分", "1000分"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "membership",
+        "query_type": "single_doc",
+        "tier": "smoke",
+        "answer_type": "factual",
+        "expected_answer": "每消费1元累计1分，满1000分可抵扣10元",
+        "must_contain": ["1分", "1000分"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-018",
+      "question": "海外配送标准时效是多久？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["3e30e0df16"],
+        "relevant_snippets": ["7-15", "工作日"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "logistics",
+        "query_type": "single_doc",
+        "tier": "smoke",
+        "answer_type": "numeric",
+        "expected_answer": "标准配送7-15个工作日，加急配送3-7个工作日",
+        "must_contain": ["7-15"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-019",
+      "question": "优惠券最多可以叠加几张？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["3e30e0df16"],
+        "relevant_snippets": ["3张", "优惠券"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "easy",
+        "domain": "promotion",
+        "query_type": "single_doc",
+        "tier": "smoke",
+        "answer_type": "numeric",
+        "expected_answer": "单笔订单最多使用3张优惠券",
+        "must_contain": ["3张"],
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-BASIC-020",
+      "question": "质量合格率的目标是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": ["e87b88ae72"],
+        "relevant_snippets": ["98%", "质量合格率"],
+        "match_type": "snippet"
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "procurement",
+        "query_type": "single_doc",
+        "tier": "core",
+        "answer_type": "numeric",
+        "expected_answer": "质量合格率目标≥98%",
+        "must_contain": ["98%"],
+        "ground_truth_verified": true
+      }
+    }
+  ]
+}

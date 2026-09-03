@@ -1,9 +1,10 @@
 """PromptRepository — async CRUD for prompts / prompt_versions / prompt_audit_log"""
 from datetime import datetime, timezone
-from sqlalchemy import select, update, func, text
+
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.memory.models.prompt import Prompt, PromptVersion, PromptAuditLog
+from backend.memory.models.prompt import Prompt, PromptAuditLog, PromptVersion
 
 
 class PromptRepository:
@@ -144,9 +145,24 @@ class PromptRepository:
         await self._s.execute(
             update(PromptVersion)
             .where(PromptVersion.id == version_id)
-            .values(status=status)
+            .values(status=status, updated_at=datetime.now(timezone.utc))
         )
         await self._s.flush()
+
+    async def get_latest_versions(
+        self, prompt_ids: list[int]
+    ) -> dict[int, PromptVersion]:
+        if not prompt_ids:
+            return {}
+        stmt = (
+            select(PromptVersion)
+            .distinct(PromptVersion.prompt_id)
+            .where(PromptVersion.prompt_id.in_(prompt_ids))
+            .order_by(PromptVersion.prompt_id, PromptVersion.version.desc())
+        )
+        result = await self._s.execute(stmt)
+        rows = result.scalars().all()
+        return {r.prompt_id: r for r in rows}
 
     async def write_audit(
         self,

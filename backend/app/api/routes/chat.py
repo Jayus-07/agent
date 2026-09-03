@@ -66,6 +66,13 @@ _NODE_LABELS = {
     "rag_worker":    "📚 知识检索",
     "report_worker": "📄 报告生成",
     "reporter":      "✍️ 生成回复",
+    "cs_knowledge":       "💬 客服知识问答",
+    "cs_business_query":  "🔍 客服业务查询",
+    "cs_business_action": "⚙️ 客服业务操作",
+    "cs_complaint":       "📢 投诉处理",
+    "cs_handoff":         "🤝 人工转接",
+    "cs_handoff_intercept": "🤝 人工转接（进行中）",
+    "cs_intent_classifier": "🎯 意图识别",
 }
 
 

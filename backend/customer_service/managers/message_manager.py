@@ -39,6 +39,7 @@ class MessageManager:
         private: bool = False,
         metadata: dict | None = None,
         attachments: list | None = None,
+        trace_id: str | None = None,
     ) -> CSMessage:
         msg = CSMessage(
             message_id=message_id or uuid.uuid4().hex,
@@ -53,6 +54,7 @@ class MessageManager:
             private=private,
             metadata_=metadata or {},
             attachments=attachments,
+            trace_id=trace_id,
         )
         self._s.add(msg)
 
@@ -102,6 +104,7 @@ class MessageManager:
         intent_domain: str | None = None,
         intent_name: str | None = None,
         confidence: float | None = None,
+        trace_id: str | None = None,
     ) -> tuple[CSMessage, CSMessage]:
         q = await self.save_user_message(conversation_id, question)
         a = await self.save_assistant_message(
@@ -109,6 +112,7 @@ class MessageManager:
             intent_domain=intent_domain,
             intent_name=intent_name,
             confidence=confidence,
+            trace_id=trace_id,
         )
         return q, a
 

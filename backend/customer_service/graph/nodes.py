@@ -32,6 +32,9 @@ def cs_knowledge_node(state: dict) -> dict:
         f"question={question[:60]}..."
     )
 
+    from backend.observability.metrics import record_cs_intent, record_cs_rag_status
+    record_cs_intent(intent)
+
     try:
         from backend.customer_service.knowledge import get_knowledge_service
 
@@ -48,6 +51,8 @@ def cs_knowledge_node(state: dict) -> dict:
             "kb_ids": result.kb_ids,
         }
 
+        record_cs_rag_status("hit" if result.answer else "miss")
+
         logger.info(
             f"[CSKnowledgeNode] decision={result.decision.value} "
             f"conf={result.confidence:.2f} answer_len={len(result.answer)}"
@@ -59,6 +64,7 @@ def cs_knowledge_node(state: dict) -> dict:
         }
 
     except Exception as e:
+        record_cs_rag_status("rejected")
         logger.error(f"[CSKnowledgeNode] 执行异常: {e}", exc_info=True)
         return {
             "final_answer": "系统繁忙，请稍后重试或联系人工客服。",
@@ -121,6 +127,9 @@ def cs_business_query(state: dict) -> dict:
         f"question={question[:60]}..."
     )
 
+    from backend.observability.metrics import record_cs_intent, record_cs_permission_violation
+    record_cs_intent(intent)
+
     try:
         from backend.customer_service.security.output_guard import get_output_guard
         from backend.customer_service.security.permission import PermissionChecker
@@ -156,6 +165,7 @@ def cs_business_query(state: dict) -> dict:
             ValidationError,
         )
         if isinstance(e, AuthenticationError):
+            record_cs_permission_violation(intent)
             answer = "请先登录后再查询订单信息。"
         elif isinstance(e, OrderNotFoundError):
             answer = "未找到相关订单信息，请确认订单号是否正确。"
@@ -278,6 +288,14 @@ def cs_business_action(state: dict) -> dict:
         f"question={question[:60]}..."
     )
 
+    from backend.observability.metrics import (
+        record_cs_action,
+        record_cs_confirmation,
+        record_cs_intent,
+        record_cs_permission_violation,
+    )
+    record_cs_intent(intent)
+
     try:
         from backend.customer_service.audit import append_audit, build_audit_entry
         from backend.customer_service.confirmation import (
@@ -307,6 +325,7 @@ def cs_business_action(state: dict) -> dict:
         store.save(user_id, session_id, pending)
         cs_context["pending_action"] = pending
         cs_context["confirmation_state"] = ConfirmationState.PENDING_CONFIRMATION.value
+        record_cs_confirmation("initiated")
 
         audit_entry = build_audit_entry(
             user_id=user_id,
@@ -347,6 +366,7 @@ def cs_business_action(state: dict) -> dict:
             ValidationError,
         )
         if isinstance(e, AuthenticationError):
+            record_cs_permission_violation(intent)
             answer = "请先登录后再进行操作。"
         elif isinstance(e, OrderNotFoundError):
             answer = "未找到相关订单信息，请确认订单号是否正确。"
@@ -355,6 +375,7 @@ def cs_business_action(state: dict) -> dict:
         elif isinstance(e, ValidationError):
             answer = "输入信息有误，请检查后重试。"
         elif isinstance(e, ActionExecutionError):
+            record_cs_action(intent, "failed")
             answer = "操作执行失败，请稍后重试。"
         else:
             logger.error(f"[CSBusinessAction] 执行异常: {e}", exc_info=True)
@@ -386,6 +407,7 @@ def _handle_pending_confirmation(
         transition,
     )
     from backend.customer_service.security.output_guard import get_output_guard
+    from backend.observability.metrics import record_cs_action, record_cs_confirmation
 
     action_type = pending_action.get("action_type", "unknown")
     proposal_text = pending_action.get("proposal_text", "")
@@ -398,6 +420,7 @@ def _handle_pending_confirmation(
         store.clear(user_id, session_id)
         cs_context.pop("pending_action", None)
         cs_context["confirmation_state"] = ConfirmationState.EXPIRED.value
+        record_cs_confirmation("expired")
 
         audit_entry = build_audit_entry(
             user_id=user_id,
@@ -423,6 +446,7 @@ def _handle_pending_confirmation(
         store.clear(user_id, session_id)
         cs_context.pop("pending_action", None)
         cs_context["confirmation_state"] = ConfirmationState.USER_CANCELLED.value
+        record_cs_confirmation("cancelled")
 
         audit_entry = build_audit_entry(
             user_id=user_id,
@@ -444,6 +468,7 @@ def _handle_pending_confirmation(
             ConfirmationState.USER_CONFIRMED,
         )
         transition(ConfirmationState.USER_CONFIRMED, ConfirmationState.EXECUTING)
+        record_cs_confirmation("confirmed")
 
         try:
             record = _simulate_execute(pending_action)
@@ -452,6 +477,7 @@ def _handle_pending_confirmation(
             store.clear(user_id, session_id)
             cs_context.pop("pending_action", None)
             cs_context["confirmation_state"] = ConfirmationState.SUCCESS.value
+            record_cs_action(action_type, "success")
 
             cs_context["action_result"] = {
                 "action_type": action_type,
@@ -489,6 +515,7 @@ def _handle_pending_confirmation(
             store.clear(user_id, session_id)
             cs_context.pop("pending_action", None)
             cs_context["confirmation_state"] = ConfirmationState.FAILED.value
+            record_cs_action(action_type, "failed")
 
             audit_entry = build_audit_entry(
                 user_id=user_id,
@@ -645,6 +672,9 @@ def cs_complaint(state: dict) -> dict:
 
     logger.info(f"[CSComplaint] question={question[:60]}...")
 
+    from backend.observability.metrics import record_cs_handoff, record_cs_intent
+    record_cs_intent("complaint")
+
     try:
         from backend.customer_service.audit import append_audit, build_audit_entry
         from backend.customer_service.handoff import HandoffState
@@ -679,6 +709,7 @@ def cs_complaint(state: dict) -> dict:
         store = get_handoff_store()
         store.save(user_id, session_id, handoff_data)
         cs_context["handoff_state"] = HandoffState.HANDOFF_REQUESTED.value
+        record_cs_handoff("complaint")
 
         guard = get_output_guard()
         guard_result = guard.check(answer, cs_context)
@@ -748,6 +779,9 @@ def cs_handoff(state: dict) -> dict:
         else:
             trigger_type = "auto_trigger"
             trigger_reason = "系统自动触发 (低置信度/连续失败)"
+
+        from backend.observability.metrics import record_cs_handoff
+        record_cs_handoff(trigger_type)
 
         store = get_handoff_store()
         existing = store.load(user_id, session_id)

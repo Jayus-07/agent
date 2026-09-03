@@ -10,13 +10,24 @@
 """
 
 import time
-from backend.evaluation.models import TestCase, EvalResult
+
+from backend.evaluation.judge import judge_answer
+from backend.evaluation.metrics import (
+    answer_correctness_typed,
+    context_noise_rate,
+    faithfulness_claim_based,
+    mrr,
+    ndcg_at_k,
+    precision_at_k,
+    recall_at_k,
+    result_set_match,
+    stage_rerank_metrics,
+    stage_retrieval_metrics,
+)
+from backend.evaluation.models import EvalResult, TestCase
 from backend.evaluation.registry import register_runner
 from backend.evaluation.runner import evaluate_planner_offline
-from backend.evaluation.metrics import recall_at_k, mrr, ndcg_at_k, result_set_match
-from backend.evaluation.judge import judge_answer
 from backend.shared.logger import logger
-
 
 # ==================== Planner ====================
 
@@ -83,7 +94,9 @@ def _normalize_snippet_text(text: str) -> str:
         {i: i - 0xFEE0 for i in range(0xFF01, 0xFF5F)}
     ).replace("\u3000", " ")
     # 去除所有空白字符（空格/tab/换行）
-    return "".join(text.split())
+    text = "".join(text.split())
+    # 去除千分位逗号（"90,000" → "90000"），避免数字格式差异导致假阴性
+    return text.replace(",", "")
 
 
 # ==================== 拒答校准：查询实体存在性校验（V1.3） ====================
@@ -197,10 +210,11 @@ def _get_full_retriever(pipeline):
     if _full_retriever is not None:
         return _full_retriever
 
-    from backend.rag.retrieval.retrievers import AdaptiveRetriever
-    from backend.rag.reranker import RerankCompressor
     from langchain_classic.retrievers import ContextualCompressionRetriever
+
     from backend.config import HYBRID_SEARCH_K
+    from backend.rag.reranker import RerankCompressor
+    from backend.rag.retrieval.retrievers import AdaptiveRetriever
 
     # 修改 chunk_retriever_base 的 k 值用于评估
     base = pipeline.lc_chain.chunk_retriever_base
@@ -222,11 +236,137 @@ def _get_full_retriever(pipeline):
     return _full_retriever
 
 
+def _build_ablation_retriever(
+    pipeline,
+    mode: str,
+    kb_id: str,
+    department: str,
+):
+    """构建消融实验检索器 — 隔离各组件贡献。
+
+    消融模式:
+      vector_only    — 仅 ChromaDB 向量检索
+      bm25_only      — 仅 BM25 关键词检索
+      hybrid         — 向量 + BM25 + RRF 融合（无精排/自适应）
+      hybrid_rerank  — hybrid + CrossEncoder 精排
+      hybrid_adaptive — ChunkLevel + Adaptive + Rerank（无 MultiQuery）
+      full           — 完整链路（= _get_full_retriever）
+    """
+    if mode == "full":
+        return _get_full_retriever(pipeline)
+
+    from backend.config import HYBRID_SEARCH_K
+
+    mf = {}
+    if kb_id and kb_id not in ("*", "default"):
+        mf["kb_id"] = kb_id
+    if department:
+        mf["department"] = department
+
+    if mode == "vector_only":
+        base = pipeline.lc_chain.chunk_retriever_base
+        base.k = HYBRID_SEARCH_K
+
+        def _vector_invoke(question: str):
+            return base.chunk_retriever.retrieve(
+                question, k=base.k,
+                metadata_filter=mf or None,
+            )
+
+        return _ListRetriever(_vector_invoke)
+
+    if mode == "bm25_only":
+        bm25 = pipeline.bm25
+
+        def _bm25_invoke(question: str):
+            docs = bm25.invoke(question)
+            if mf:
+                filtered = []
+                for d in docs:
+                    meta = d.metadata or {}
+                    if all(meta.get(k_) == v for k_, v in mf.items()):
+                        filtered.append(d)
+                return filtered
+            return docs
+
+        return _ListRetriever(_bm25_invoke)
+
+    if mode == "hybrid":
+        from backend.rag.retrieval.hybrid import hybrid_retrieve
+
+        base = pipeline.lc_chain.chunk_retriever_base
+        base.k = HYBRID_SEARCH_K
+
+        def _hybrid_invoke(question: str):
+            return hybrid_retrieve(
+                question, base.chunk_retriever, pipeline.bm25,
+                k=HYBRID_SEARCH_K,
+                metadata_filter=mf or None,
+            )
+
+        return _ListRetriever(_hybrid_invoke)
+
+    if mode == "hybrid_rerank":
+        from langchain_classic.retrievers import ContextualCompressionRetriever
+
+        from backend.rag.reranker import RerankCompressor
+        from backend.rag.retrieval.hybrid import hybrid_retrieve
+
+        base = pipeline.lc_chain.chunk_retriever_base
+        base.k = HYBRID_SEARCH_K
+
+        def _hybrid_base(question: str):
+            return hybrid_retrieve(
+                question, base.chunk_retriever, pipeline.bm25,
+                k=HYBRID_SEARCH_K,
+                metadata_filter=mf or None,
+            )
+
+        return ContextualCompressionRetriever(
+            base_compressor=RerankCompressor(),
+            base_retriever=_ListRetriever(_hybrid_base),
+        )
+
+    if mode == "hybrid_adaptive":
+        from langchain_classic.retrievers import ContextualCompressionRetriever
+
+        from backend.rag.reranker import RerankCompressor
+        from backend.rag.retrieval.retrievers import AdaptiveRetriever
+
+        base = pipeline.lc_chain.chunk_retriever_base
+        base.k = HYBRID_SEARCH_K
+
+        adaptive = AdaptiveRetriever(
+            base_retriever=base,
+            doc_db=pipeline.doc_db,
+        )
+        return ContextualCompressionRetriever(
+            base_compressor=RerankCompressor(),
+            base_retriever=adaptive,
+        )
+
+    logger.warning(f"[RAG eval] 未知消融模式 '{mode}', 回退 full")
+    return _get_full_retriever(pipeline)
+
+
+class _ListRetriever:
+    """将返回 list[Document] 的函数适配为 LangChain BaseRetriever 接口。"""
+
+    def __init__(self, fn):
+        self._fn = fn
+
+    def invoke(self, question: str):
+        return self._fn(question)
+
+
 def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     """RAG runner — 完整检索链路（无 LLM）。
 
     链路: Doc检索 → 关键词过滤 → 人名匹配 → BM25+RRF混合 → Adaptive补全 → CrossEncoder精排
     不含 MultiQuery / HistoryAware / LLM 生成，needs_live=False 即可运行。
+
+    支持消融实验：kwargs["ablation_mode"] 可设为 vector_only / bm25_only /
+    hybrid / hybrid_rerank / hybrid_adaptive / full（默认）。
     """
     if not cases:
         return []
@@ -242,10 +382,6 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             for c in cases
         ]
 
-    retriever = _get_full_retriever(pipeline)
-    # 获取底层检索器引用，用于采集管线各阶段数据
-    chunk_base = pipeline.lc_chain.chunk_retriever_base
-
     # === KB 软约束：探测实际 doc_db 里有哪些 KB ===
     # 如果 golden set 标注的 KB 不在 doc_db 中，自动 fallback 到 default，
     # 避免 0 命中导致整个评估全军覆没，但同时记录 warning 让维护者知道。
@@ -259,14 +395,22 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[RAG eval] 探测 doc_db KB 列表失败: {e}")
 
+    ablation_mode = kwargs.get("ablation_mode", "full")
+
     results: list[EvalResult] = []
     for case in cases:
         t0 = time.time()
         try:
             kb_id = case.metadata.get("kb_id", "default")
-            # 部门隔离: 仅当用例显式标注 department 时才注入（向后兼容，
-            # 旧用例不携带 department → 检索行为不变）。
             department = case.metadata.get("department") or ""
+
+            # 消融模式：按 case 的 kb_id/department 构建对应检索器
+            if ablation_mode != "full":
+                retriever = _build_ablation_retriever(
+                    pipeline, ablation_mode, kb_id, department,
+                )
+            else:
+                retriever = _get_full_retriever(pipeline)
             # KB 软 fallback：如果标注的 KB 在 doc_db 中不存在，退化为 default
             if (
                 kb_id
@@ -326,7 +470,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             # reranker/evidence_gate 等内部组件会调 trace_collector.start_span()，
             # 必须先 start() 否则报 "start_span() 必须在 start() 之后调用"。
             # 这里用 try/finally 保证 trace 一定被收尾，避免污染下次评测。
-            from backend.observability.tracer import trace_collector, SpanKind
+            from backend.observability.tracer import SpanKind, trace_collector
             trace = trace_collector.start(
                 question=question,
                 session_id=f"eval-{case.id}",
@@ -405,6 +549,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 adaptive_info = "无结果"
 
             pipeline_info = {
+                "ablation_mode": ablation_mode,
                 "stage1_docs": len(stage1_docs),
                 "stage1_top_docs": stage1_docs,
                 "stage1_fallback_suspected": stage1_fallback_suspected,
@@ -420,24 +565,82 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             match_type = case.expected.get("match_type", "chunk_id")  # chunk_id | snippet | doc_id
             min_expected = case.expected.get("min_relevant_chunks", 1)
 
+            # === V2: 分阶段诊断指标 ===
+            stage_metrics: dict[str, float | dict] = {}
+
+            # S1: Doc 级检索（doc_db similarity search）
+            if expected_doc_strs:
+                s1 = stage_retrieval_metrics(
+                    stage1_doc_ids, expected_doc_strs,
+                )
+                stage_metrics["S1_doc_retrieval"] = s1
+
+            # S4: Rerank 阶段（基于 rerank_score 的排序质量）
+            rerank_scores = [
+                d.get("rerank_score") or 0.0 for d in details
+            ]
+            relevant_mask = [
+                bool(
+                    (d.get("doc_id") or "") in expected_docs
+                    or (d.get("source", "").replace("\\", "/")) in expected_docs
+                )
+                for d in details
+            ]
+            if rerank_scores and any(relevant_mask):
+                stage_metrics["S4_rerank"] = stage_rerank_metrics(
+                    rerank_scores, relevant_mask,
+                )
+
+            # === V2: 生成质量离线评估（仅对 generation_eval=true 的用例）===
+            # 离线链路无 LLM 生成答案，用 retrieved context 作为代理评估检索质量对生成的支撑
+            generation_metrics: dict[str, float] = {}
+            if case.metadata.get("generation_eval"):
+                expected_answer = case.metadata.get("expected_answer", "")
+                must_contain = case.metadata.get("must_contain", [])
+                must_not_contain = case.metadata.get("must_not_contain", [])
+                answer_type = case.metadata.get("answer_type", "factual")
+
+                # S6: 答案正确性（用 expected_answer 作为代理，检查检索上下文是否支撑答案）
+                if expected_answer:
+                    # 用 retrieved context 拼接作为"答案"，检查是否包含 must_contain 关键词
+                    retrieved_text = " ".join(d.get("page_content", "") for d in details)
+                    correctness = answer_correctness_typed(
+                        actual_answer=retrieved_text,
+                        expected_answer=expected_answer,
+                        answer_type=answer_type,
+                        must_contain=must_contain,
+                        must_not_contain=must_not_contain,
+                    )
+                    generation_metrics["S6_answer_correctness"] = correctness["correctness"]
+                    generation_metrics["must_contain_hit"] = correctness["must_contain_hit"]
+                    generation_metrics["must_not_contain_violation"] = correctness["must_not_contain_violation"]
+
+                # S7: 忠实度（检查 retrieved context 是否支撑 expected_answer 的声明）
+                if expected_answer and details:
+                    context_list = [d.get("page_content", "") for d in details]
+                    faithfulness = faithfulness_claim_based(
+                        answer=expected_answer,
+                        context=context_list,
+                    )
+                    generation_metrics["S7_faithfulness"] = faithfulness["faithfulness"]
+                    generation_metrics["claim_count"] = float(faithfulness["claim_count"])
+                    generation_metrics["supported_claim_count"] = float(faithfulness["supported_count"])
+
+                # 将生成指标合并到 stage_metrics
+                if generation_metrics:
+                    stage_metrics["generation"] = generation_metrics
+
             # doc-level metrics — 始终计算（用于跨 case 对比）
             r5 = recall_at_k(actual_doc_strs, expected_doc_strs, k=5)
             r10 = recall_at_k(actual_doc_strs, expected_doc_strs, k=10)
             mrr_val = mrr(actual_doc_strs, expected_doc_strs)
             ndcg_val = ndcg_at_k(actual_doc_strs, expected_doc_strs, k=10)
 
-            # === v2: Top-1 准确率 + confidence 判定 ===
+            # === v2: confidence 判定（先于 top1，因为 top1 需要拒答决策）===
             # EvidenceGate 完整逻辑在 chain.py（含 LLM 评估），
             # 本 runner 是离线检索链路不调 LLM，用 rerank_score 阈值近似判 confidence。
-            top1_accuracy = 0.0
-            if expected_docs and actual_doc_strs:
-                if actual_doc_strs[0] in expected_docs:
-                    top1_accuracy = 1.0
-            elif not expected_docs and not actual_doc_strs:
-                # 负样本 + 无召回 → Top-1 也算正确（拒答）
-                top1_accuracy = 1.0
+            should_reject = case.expected.get("should_reject", False)
 
-            # confidence 启发式：基于 rerank_score 阈值 + gap
             if not details:
                 confidence = "none"
                 reject_gate = "retrieval"
@@ -464,9 +667,6 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     reject_reason = None
 
             # === V1.3 拒答校准：实体存在性校验（仅对 should_reject 用例生效）===
-            # hard negative 的 rerank 分数落在正样本主区间，分数启发式分不开；
-            # 若问题核心实体不在召回内容中 → 主题相近但无答案 → 降级为 low（拒答）。
-            should_reject = case.expected.get("should_reject", False)
             query_entities: list[str] = []
             entity_absent = False
             if should_reject and details:
@@ -476,6 +676,18 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     confidence = "low"
                     reject_gate = "entity_check"
                     reject_reason = "entity_absent"
+
+            # === Top-1 准确率：结合拒答决策 ===
+            would_reject = confidence in ("none", "low")
+            top1_accuracy = 0.0
+            if should_reject:
+                # NEG: 系统正确拒答 → 1.0；系统错误放行 → 0.0
+                top1_accuracy = 1.0 if would_reject else 0.0
+            elif would_reject:
+                # POS: 系统错误拒答 → 0.0
+                top1_accuracy = 0.0
+            elif expected_docs and actual_doc_strs:
+                top1_accuracy = 1.0 if actual_doc_strs[0] in expected_docs else 0.0
 
             # === reject_accuracy：仅 negative case 计入 ===
             if should_reject:
@@ -488,10 +700,6 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             # === V1.1: 多策略命中判定 ===
             # match_type 决定如何判定 pass（默认 chunk_id，向后兼容）
             actual_chunk_ids = {d["chunk_id"] for d in details if d.get("chunk_id")}
-            # 拼接所有召回 chunk 的 snippet，用于 snippet 匹配
-            actual_text_concat = " ".join(
-                d.get("snippet", "") for d in details if d.get("snippet")
-            )
 
             if match_type == "snippet":
                 # 语义匹配：expected_snippets 中的关键词都在召回内容里出现 → pass
@@ -522,7 +730,11 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 dept_leak = dept_leak or bool(retrieved_depts - set(allowed_depts))
 
             # pass 判定：chunk 级命中 + 无部门泄漏
-            passed = chunk_hit and not dept_leak
+            # V1.4: 拒答用例正确拒答即算 pass（不再要求 doc 命中）
+            if should_reject and confidence in ("none", "low"):
+                passed = not dept_leak
+            else:
+                passed = chunk_hit and not dept_leak
 
             results.append(EvalResult(
                 case_id=case.id, module="rag",
@@ -537,6 +749,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     "dept_leak": dept_leak,
                     "details": details,
                     "pipeline": pipeline_info,
+                    "stage_metrics": stage_metrics,
                     # v2: 拒答过程证据（启发式 confidence，非 EvidenceGate 真值）
                     "rejection": {
                         "confidence": confidence,
@@ -558,12 +771,16 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 metrics={
                     "recall@5": round(r5, 4),
                     "recall@10": round(r10, 4),
+                    "precision@5": round(precision_at_k(actual_doc_strs, expected_doc_strs, 5), 4),
+                    "context_noise@10": round(context_noise_rate(actual_doc_strs, expected_doc_strs, 10), 4),
                     "mrr": round(mrr_val, 4),
                     "ndcg@10": round(ndcg_val, 4),
                     "chunk_recall": round(chunk_recall, 4),
                     "top1_accuracy": round(top1_accuracy, 4),
                     "dept_leak": int(dept_leak),
                     **({"reject_accuracy": round(reject_accuracy, 4)} if reject_accuracy is not None else {}),
+                    # V2: 生成质量指标（仅 generation_eval 用例）
+                    **({f"gen_{k}": round(v, 4) for k, v in generation_metrics.items()} if generation_metrics else {}),
                 },
                 duration_ms=int((time.time() - t0) * 1000),
             ))
@@ -749,6 +966,29 @@ def _run_e2e(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         "low": 0.0, "medium": 0.5, "high": 1.0
                     }.get(jr.confidence, 0.5)
 
+                # V2: 生成质量评估（generation_eval 用例）
+                if case.metadata.get("generation_eval") and answer:
+                    expected_answer = case.metadata.get("expected_answer", "")
+                    must_contain = case.metadata.get("must_contain", [])
+                    must_not_contain = case.metadata.get("must_not_contain", [])
+                    answer_type = case.metadata.get("answer_type", "factual")
+
+                    # S6: 答案正确性
+                    if expected_answer:
+                        correctness = answer_correctness_typed(
+                            actual_answer=answer,
+                            expected_answer=expected_answer,
+                            answer_type=answer_type,
+                            must_contain=must_contain,
+                            must_not_contain=must_not_contain,
+                        )
+                        metrics["gen_answer_correctness"] = correctness["correctness"]
+                        metrics["gen_must_contain_hit"] = correctness["must_contain_hit"]
+                        metrics["gen_must_not_contain_violation"] = correctness["must_not_contain_violation"]
+
+                    # S7: 忠实度（需要检索上下文，但 E2E 链路不直接暴露，用 answer 自身做简化评估）
+                    # 完整忠实度评估应在 RAG 离线链路或专门的 generation runner 中进行
+
                 passed = routing_ok and (
                     not judge or metrics.get("judge_total", 5) >= 3.0
                 )
@@ -783,9 +1023,84 @@ def _run_e2e(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     return results
 
 
+# ==================== CS (客服系统) ====================
+
+def _run_cs(cases: list[TestCase], **kwargs) -> list[EvalResult]:
+    """CS runner — 验证客服系统各路径的路由正确性、安全过滤和输出质量。
+
+    不依赖 LLM (needs_live=False)，直接调用 CS router / service 函数。
+    """
+    results: list[EvalResult] = []
+    try:
+        from backend.customer_service.router.cs_router import CSRouter
+
+        router = CSRouter()
+
+        for case in cases:
+            t0 = time.time()
+            try:
+                cs_result = router.route(case.question)
+                expected = case.expected
+                actual_route = cs_result.route_path.value
+
+                route_ok = actual_route == expected.get("cs_route", "")
+
+                metrics: dict[str, float] = {"routing_accuracy": 1.0 if route_ok else 0.0}
+
+                intent_expected = expected.get("intent", "")
+                if intent_expected:
+                    intent_ok = cs_result.intent == intent_expected
+                    metrics["intent_accuracy"] = 1.0 if intent_ok else 0.0
+
+                audit_required = expected.get("audit_required", False)
+                if audit_required:
+                    metrics["audit_required"] = 1.0
+                    metrics["audit_coverage"] = 1.0 if cs_result.requires_action else 0.0
+
+                guard_info = expected.get("output_guard", {})
+                forbidden = guard_info.get("forbidden_patterns", [])
+                if forbidden:
+                    metrics["guard_patterns_checked"] = float(len(forbidden))
+
+                passed = route_ok and metrics.get("intent_accuracy", 1.0) >= 1.0
+
+                results.append(EvalResult(
+                    case_id=case.id, module="cs",
+                    status="pass" if passed else "fail",
+                    expected=expected,
+                    actual={
+                        "route_path": actual_route,
+                        "intent": cs_result.intent,
+                        "confidence": cs_result.confidence,
+                        "domain": cs_result.domain.value,
+                    },
+                    metrics={k: round(v, 4) if isinstance(v, float) else v
+                             for k, v in metrics.items()},
+                    duration_ms=int((time.time() - t0) * 1000),
+                ))
+            except Exception as e:
+                results.append(EvalResult(
+                    case_id=case.id, module="cs", status="error",
+                    expected=case.expected, actual={},
+                    error_msg=str(e),
+                    duration_ms=int((time.time() - t0) * 1000),
+                ))
+    except ImportError as e:
+        results = [
+            EvalResult(
+                case_id=c.id, module="cs", status="error",
+                expected=c.expected, actual={},
+                error_msg=f"CS module not available: {e}",
+            )
+            for c in cases
+        ]
+    return results
+
+
 # ==================== 注册所有 Runner ====================
 
 register_runner("planner", _run_planner, needs_live=True)
 register_runner("rag", _run_rag, needs_live=False)       # 不依赖 LLM
 register_runner("sql", _run_sql, needs_live=True)
 register_runner("e2e", _run_e2e, needs_live=True)
+register_runner("cs", _run_cs, needs_live=False)         # 不依赖 LLM

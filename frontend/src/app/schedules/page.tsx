@@ -89,7 +89,7 @@ export default function SchedulesPage() {
         const s = data.summary
         setMsg({
           type: 'success',
-          text: `评测完成: hit=${(s.hit_rate * 100).toFixed(1)}% pass=${(s.pass_rate * 100).toFixed(1)}% rej=${(s.reject_rate * 100).toFixed(1)}%`,
+          text: `评测完成: top1=${(s.top1_accuracy * 100).toFixed(1)}% pass=${(s.pass_rate * 100).toFixed(1)}% rej=${(s.reject_accuracy * 100).toFixed(1)}%`,
         })
       } else {
         setMsg({ type: 'success', text: `${workflow} 已启动（job_id: ${data.job_id || '—'}）` })

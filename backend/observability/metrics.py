@@ -173,6 +173,51 @@ router_confidence = Histogram(
     buckets=(0.3, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 1.0),
 )
 
+# ── 客服系统指标（Phase 6）──
+cs_intent_total = Counter(
+    "cs_intent_total",
+    "客服意图分类总数（按意图类型）",
+    labelnames=("intent",),
+)
+cs_permission_violation_total = Counter(
+    "cs_permission_violation_total",
+    "客服权限校验违规总数",
+    labelnames=("action",),
+)
+cs_action_total = Counter(
+    "cs_action_total",
+    "客服业务操作总数（按操作类型与结果）",
+    labelnames=("action", "result"),
+)
+cs_confirmation_total = Counter(
+    "cs_confirmation_total",
+    "客服确认状态转换总数",
+    labelnames=("transition",),
+)
+cs_handoff_total = Counter(
+    "cs_handoff_total",
+    "客服人工转接总数（按触发类型）",
+    labelnames=("trigger",),
+)
+cs_rag_status_total = Counter(
+    "cs_rag_status_total",
+    "客服 RAG 查询状态总数",
+    labelnames=("status",),
+)
+
+# ── CS Graph 独立架构指标（Phase 0 新增）──
+cs_supervisor_decision_total = Counter(
+    "cs_supervisor_decision_total",
+    "CS Supervisor 决策总数（按决策层与动作类型）",
+    labelnames=("layer", "action"),
+)
+
+cs_expert_result_total = Counter(
+    "cs_expert_result_total",
+    "CS Expert 执行结果总数（按专家类型与状态）",
+    labelnames=("expert", "status"),
+)
+
 # 实时 rate（Gauge 缓存最新计算值）
 rag_hit_rate = Gauge(
     "rag_hit_rate",
@@ -286,6 +331,72 @@ def record_router_decision(mode: str, layer: str, confidence: float) -> None:
         pass
 
 
+# ── CS 指标 helpers（Phase 6）──
+
+def record_cs_intent(intent: str) -> None:
+    """埋点客服意图分类。"""
+    try:
+        cs_intent_total.labels(intent=intent).inc()
+    except Exception:
+        pass
+
+
+def record_cs_permission_violation(action: str) -> None:
+    """埋点客服权限违规。"""
+    try:
+        cs_permission_violation_total.labels(action=action).inc()
+    except Exception:
+        pass
+
+
+def record_cs_action(action: str, result: str) -> None:
+    """埋点客服业务操作（action: refund/return/exchange, result: success/failed/rejected）。"""
+    try:
+        cs_action_total.labels(action=action, result=result).inc()
+    except Exception:
+        pass
+
+
+def record_cs_confirmation(transition: str) -> None:
+    """埋点客服确认状态转换（initiated/confirmed/cancelled/expired）。"""
+    try:
+        cs_confirmation_total.labels(transition=transition).inc()
+    except Exception:
+        pass
+
+
+def record_cs_handoff(trigger: str) -> None:
+    """埋点客服人工转接（explicit/low_confidence/consecutive_fail/complaint）。"""
+    try:
+        cs_handoff_total.labels(trigger=trigger).inc()
+    except Exception:
+        pass
+
+
+def record_cs_rag_status(status: str) -> None:
+    """埋点客服 RAG 查询状态（hit/miss/rejected）。"""
+    try:
+        cs_rag_status_total.labels(status=status).inc()
+    except Exception:
+        pass
+
+
+def record_cs_supervisor_decision(layer: str, action: str) -> None:
+    """埋点 CS Supervisor 决策（layer: rule/combination/llm, action: run_expert/finish/handoff/pending）。"""
+    try:
+        cs_supervisor_decision_total.labels(layer=layer, action=action).inc()
+    except Exception:
+        pass
+
+
+def record_cs_expert_result(expert: str, status: str) -> None:
+    """埋点 CS Expert 执行结果（expert: knowledge/query/action/complaint/handoff, status: success/failed/timeout）。"""
+    try:
+        cs_expert_result_total.labels(expert=expert, status=status).inc()
+    except Exception:
+        pass
+
+
 def record_trace_finish(status: str, rejection_layer: str,
                         leaked_spans: int, uncovered_ratio: float) -> None:
     """埋点一条完成的 trace（2026-09-03）。
@@ -332,6 +443,23 @@ __all__ = [
     "update_metadata_coverage",
     "record_router_decision",
     "record_trace_finish",
+    # CS 指标（Phase 6）
+    "cs_intent_total",
+    "cs_permission_violation_total",
+    "cs_action_total",
+    "cs_confirmation_total",
+    "cs_handoff_total",
+    "cs_rag_status_total",
+    "record_cs_intent",
+    "record_cs_permission_violation",
+    "record_cs_action",
+    "record_cs_confirmation",
+    "record_cs_handoff",
+    "record_cs_rag_status",
+    "record_cs_supervisor_decision",
+    "record_cs_expert_result",
+    "cs_supervisor_decision_total",
+    "cs_expert_result_total",
     # Trace 数据质量指标（2026-09-03）
     "trace_finish_total",
     "trace_rejection_total",

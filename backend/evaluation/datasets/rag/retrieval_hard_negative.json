@@ -1,0 +1,282 @@
+{
+  "version": "2.0",
+  "_comment": "V2.0 硬负样本评测 — 知识库不含答案但关键词与文档高度重叠，测试系统拒答能力。",
+  "test_cases": [
+    {
+      "id": "V2-NEG-001",
+      "question": "笔记本电脑的保修期是多久？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "query_type": "negative",
+        "tier": "hard",
+        "answer_type": "factual",
+        "expected_answer": "",
+        "must_contain": [],
+        "probe_type": "hard_negative_near_miss",
+        "probe_note": "KB含保修内容(FAQ电子产品保修/售后FAQ)但仅限电水壶与泛称电子产品，无笔记本电脑具体政策",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-NEG-002",
+      "question": "出口退税的申报流程是怎样的？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "query_type": "negative",
+        "tier": "hard",
+        "answer_type": "procedural",
+        "expected_answer": "",
+        "must_contain": [],
+        "probe_type": "hard_negative_near_miss",
+        "probe_note": "KB含清关申报要素(物流SOP含HS编码/申报)但不含出口退税流程；需区分'清关'与'退税'",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-NEG-003",
+      "question": "员工年假天数是怎么规定的？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "query_type": "negative",
+        "tier": "hard",
+        "answer_type": "factual",
+        "expected_answer": "",
+        "must_contain": [],
+        "probe_type": "hard_negative_near_miss",
+        "probe_note": "KB含员工差旅报销制度但不含年假规定；需区分'差旅报销'与'年假'",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-NEG-004",
+      "question": "数据库的备份策略是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "query_type": "negative",
+        "tier": "hard",
+        "answer_type": "factual",
+        "expected_answer": "",
+        "must_contain": [],
+        "probe_type": "hard_negative_near_miss",
+        "probe_note": "技术手册含数据库schema/连接池参数但不含备份策略；不被'数据库'关键词带偏",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-NEG-005",
+      "question": "你们公司CEO的薪酬是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "query_type": "negative",
+        "tier": "hard",
+        "answer_type": "factual",
+        "expected_answer": "",
+        "must_contain": [],
+        "probe_type": "negative_no_answer",
+        "probe_note": "知识库无此信息，期望拒答",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-NEG-006",
+      "question": "公司2027年的营收预测是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "query_type": "negative",
+        "tier": "hard",
+        "answer_type": "numeric",
+        "expected_answer": "",
+        "must_contain": [],
+        "probe_type": "future_prediction",
+        "probe_note": "未来财务数据KB不含，期望拒答",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-NEG-007",
+      "question": "介绍一下苹果公司的创始人乔布斯？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "negative",
+        "query_type": "negative",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "",
+        "must_contain": [],
+        "probe_type": "cross_domain",
+        "probe_note": "外部公司人物传记（虽含Apple字样但语义跨域），期望拒答",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-NEG-008",
+      "question": "请问你们的仓库主管是谁？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "negative",
+        "query_type": "negative",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "",
+        "must_contain": [],
+        "probe_type": "personal_info",
+        "probe_note": "人员个人信息KB不含（人名匹配可能误命中），期望拒答",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-NEG-009",
+      "question": "贵公司有什么样的企业文化？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "query_type": "negative",
+        "tier": "hard",
+        "answer_type": "factual",
+        "expected_answer": "",
+        "must_contain": [],
+        "probe_type": "soft_info",
+        "probe_note": "软性企业文化信息，KB是业务流程不含此类，期望拒答",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-NEG-010",
+      "question": "贵公司的React版本是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "negative",
+        "query_type": "negative",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "",
+        "must_contain": [],
+        "probe_type": "internal_tech_stack",
+        "probe_note": "内部技术栈细节KB不含（技术手册是业务架构非前端栈），期望拒答",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-NEG-011",
+      "question": "供应商的银行账户信息是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "query_type": "negative",
+        "tier": "hard",
+        "answer_type": "factual",
+        "expected_answer": "",
+        "must_contain": [],
+        "probe_type": "hard_negative_near_miss",
+        "probe_note": "KB含供应商管理规范但不含银行信息；不被'供应商'关键词带偏",
+        "ground_truth_verified": true
+      }
+    },
+    {
+      "id": "V2-NEG-012",
+      "question": "数据安全的年度审计费用由谁承担？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "relevant_docs": [],
+        "relevant_snippets": [],
+        "should_reject": true
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "negative",
+        "query_type": "negative",
+        "tier": "hard",
+        "answer_type": "factual",
+        "expected_answer": "",
+        "must_contain": [],
+        "probe_type": "hard_negative_near_miss",
+        "probe_note": "KB含数据安全政策但不含审计费用信息；不被'数据安全'关键词带偏",
+        "ground_truth_verified": true
+      }
+    }
+  ]
+}

@@ -148,10 +148,10 @@ def get_cache(name: str, ttl: int = 300) -> CacheBackend:
         r = get_redis()
         if r is not None:
             cache = TwoTierCache(r, prefix=f"{REDIS_KEY_PREFIX}cache:{name}:", default_ttl=ttl)
-            logger.info(f"[Cache] {name}: TwoTierCache (Redis + L1)")
+            logger.debug(f"[Cache] {name}: TwoTierCache (Redis + L1)")
         else:
             cache = InMemoryCache(default_ttl=ttl)
-            logger.info(f"[Cache] {name}: InMemoryCache (Redis unavailable)")
+            logger.debug(f"[Cache] {name}: InMemoryCache (Redis unavailable)")
 
         _caches[name] = cache
         return cache
