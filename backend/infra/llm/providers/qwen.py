@@ -7,10 +7,12 @@ qwen.py — Qwen Provider（阿里云百炼在线模型，OpenAI 兼容协议）
 """
 
 from backend.config import (
-    LLM_TEMPERATURE, LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT,
-    QWEN_API_KEY, QWEN_API_BASE,
+    LLM_CONTEXT_LENGTH,
+    LLM_REQUEST_TIMEOUT,
+    LLM_TEMPERATURE,
+    QWEN_API_BASE,
+    QWEN_API_KEY,
 )
-from backend.shared.logger import logger
 
 
 def build_qwen(model_name: str) -> object:

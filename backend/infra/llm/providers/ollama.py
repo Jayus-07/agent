@@ -9,7 +9,7 @@ import os
 
 from langchain_ollama import ChatOllama
 
-from backend.config import LLM_TEMPERATURE, LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT
+from backend.config import LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT, LLM_TEMPERATURE
 from backend.shared.logger import logger
 
 

@@ -17,11 +17,11 @@ from typing import Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from backend.config import LLM_MODEL, DEEPSEEK_API_KEY, MINIMAX_API_KEY, QWEN_API_KEY
+from backend.config import DEEPSEEK_API_KEY, LLM_MODEL, MINIMAX_API_KEY, QWEN_API_KEY
 from backend.infra.llm.models import AVAILABLE_MODELS
-from backend.infra.llm.providers.ollama import build_ollama, get_ollama_balance
 from backend.infra.llm.providers.deepseek import build_deepseek, get_deepseek_balance
 from backend.infra.llm.providers.minimax import build_minimax, get_minimax_balance
+from backend.infra.llm.providers.ollama import build_ollama, get_ollama_balance
 from backend.infra.llm.providers.qwen import build_qwen, get_qwen_balance
 from backend.shared.logger import logger
 

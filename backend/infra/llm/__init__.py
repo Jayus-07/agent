@@ -13,7 +13,7 @@ llm — 多 Provider LLM 工厂 + 运行时切换
     from backend.infra.llm import get_llm_factory    # 获取工厂单例（切换模型）
 """
 
-from backend.infra.llm.proxy import llm, get_llm, _LLMProxy
 from backend.infra.llm.factory import LLMFactory, get_llm_factory
+from backend.infra.llm.proxy import _LLMProxy, get_llm, llm
 
 __all__ = ["llm", "get_llm", "_LLMProxy", "LLMFactory", "get_llm_factory"]

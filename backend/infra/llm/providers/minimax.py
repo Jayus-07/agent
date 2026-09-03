@@ -7,10 +7,11 @@ minimax.py — MiniMax Provider（Anthropic Messages API，官方推荐）
 """
 
 from backend.config import (
-    LLM_TEMPERATURE, LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT,
-    MINIMAX_API_KEY, MINIMAX_API_BASE,
+    LLM_CONTEXT_LENGTH,
+    LLM_REQUEST_TIMEOUT,
+    LLM_TEMPERATURE,
+    MINIMAX_API_KEY,
 )
-from backend.shared.logger import logger
 
 
 def build_minimax(model_name: str) -> object:

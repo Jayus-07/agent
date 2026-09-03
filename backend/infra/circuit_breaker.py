@@ -2,22 +2,22 @@
 
 CLOSED → OPEN → HALF_OPEN 三态状态机:
   - CLOSED: 正常调用，累计失败 N 次后进入 OPEN
-  - OPEN: 快速失败（直接抛 CircuitBreakerOpen），timeout 秒后进入 HALF_OPEN
+  - OPEN: 快速失败（直接抛 CircuitBreakerOpenError），timeout 秒后进入 HALF_OPEN
   - HALF_OPEN: 试探 1 次 → 成功恢复 CLOSED / 失败回到 OPEN
 
 用法:
     cb = CircuitBreaker("deepseek", fail_threshold=5, timeout=30)
     try:
         result = cb.call(deepseek_invoke, prompt)
-    except CircuitBreakerOpen:
+    except CircuitBreakerOpenError:
         return fallback_response
 
 参考: Netflix Hystrix / pybreaker / resilience4j
 """
 from __future__ import annotations
 
-import time
 import threading
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Awaitable, Callable, TypeVar
@@ -33,7 +33,7 @@ class State(str, Enum):
     HALF_OPEN = "half_open"     # 试探恢复
 
 
-class CircuitBreakerOpen(Exception):
+class CircuitBreakerOpenError(Exception):
     """熔断器开路异常 — 调用方应捕获并降级。"""
 
     def __init__(self, name: str, retry_in: float):
@@ -76,7 +76,7 @@ class CircuitBreaker:
         """受熔断保护的调用。
 
         Raises:
-            CircuitBreakerOpen: 熔断器开路
+            CircuitBreakerOpenError: 熔断器开路
             原异常: fn 执行失败时透传
         """
         self._check_state()
@@ -95,7 +95,7 @@ class CircuitBreaker:
         确保 async 调用与 sync 调用计入同一个熔断统计。
 
         Raises:
-            CircuitBreakerOpen: 熔断器开路
+            CircuitBreakerOpenError: 熔断器开路
             原异常: fn 执行失败时透传
         """
         self._check_state()
@@ -146,7 +146,7 @@ class CircuitBreaker:
                     f"[CB:{self.name}] OPEN → HALF_OPEN（{elapsed:.1f}s，试探性放行 1 次）"
                 )
                 return
-            raise CircuitBreakerOpen(self.name, self.timeout - elapsed)
+            raise CircuitBreakerOpenError(self.name, self.timeout - elapsed)
 
     def _on_success(self) -> None:
         """调用成功。HALF_OPEN → CLOSED，或保持 CLOSED。"""

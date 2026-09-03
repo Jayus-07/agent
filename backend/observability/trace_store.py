@@ -11,7 +11,6 @@ import os
 import sqlite3
 import threading
 import time
-from dataclasses import asdict
 from typing import Any
 
 from backend.infra.sqlite import get_connection

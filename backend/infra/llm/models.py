@@ -9,7 +9,6 @@ models.py — Provider 注册表 + 可用模型清单
 
 from langchain_ollama import ChatOllama
 
-
 # Provider 注册表：provider_name → {class, default_model, needs_api_key}
 PROVIDERS = {
     "ollama": {

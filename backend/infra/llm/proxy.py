@@ -11,6 +11,7 @@ proxy.py — _LLMProxy 代理对象 + 模块级 llm 单例
     切备用模型（LLM_FALLBACK_MODEL）→ 最终降级为固定话术
 """
 import asyncio
+import contextvars as _contextvars
 import inspect
 import threading
 import time
@@ -19,13 +20,14 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from backend.config import LLM_MODEL
 from backend.config.llm import (
-    LLM_MAX_RETRIES, LLM_RETRY_BACKOFF_BASE,
-    LLM_FALLBACK_MODEL, LLM_ALLOW_DEGRADED_ANSWER,
+    LLM_ALLOW_DEGRADED_ANSWER,
+    LLM_FALLBACK_MODEL,
+    LLM_MAX_RETRIES,
+    LLM_RETRY_BACKOFF_BASE,
 )
 from backend.infra.llm.factory import get_llm_factory
-from backend.infra.llm.models import AVAILABLE_MODELS, PROVIDERS, compute_cost_usd
+from backend.infra.llm.models import AVAILABLE_MODELS, compute_cost_usd
 from backend.shared.logger import logger
-
 
 # =====================================================
 # 懒加载默认 LLM
@@ -74,7 +76,8 @@ def _build_llm_for(model_name: str) -> BaseChatModel:
         return build_qwen(model_name)
     # ollama / 兜底
     from langchain_ollama import ChatOllama
-    from backend.config import LLM_TEMPERATURE, LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT
+
+    from backend.config import LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT, LLM_TEMPERATURE
     return ChatOllama(
         model=model_name,
         temperature=LLM_TEMPERATURE,
@@ -138,7 +141,7 @@ def _degraded_answer():
 def _notify_degradation(code: str, detail: dict) -> None:
     """降级事件告警（best-effort，失败不影响主流程）。"""
     try:
-        from backend.observability.alerts import make_alert, log_degradation
+        from backend.observability.alerts import log_degradation, make_alert
         log_degradation(make_alert(code, detail))
     except Exception:
         logger.debug("降级告警发送失败", exc_info=True)
@@ -187,13 +190,13 @@ async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
 
 def _call_with_resilience(attr, *args, **kwargs):
     """同步韧性调用：重试 → 熔断/重试耗尽 → fallback。"""
-    from backend.infra.circuit_breaker import CircuitBreakerOpen, llm_circuit_breaker
+    from backend.infra.circuit_breaker import CircuitBreakerOpenError, llm_circuit_breaker
 
     last_err: BaseException | None = None
     for attempt in range(LLM_MAX_RETRIES + 1):
         try:
             return llm_circuit_breaker.call(attr, *args, **kwargs)
-        except CircuitBreakerOpen as e:
+        except CircuitBreakerOpenError as e:
             # 熔断开路：立即兜底（快速失败是熔断的目的，不做无意义等待）
             logger.warning(f"[LLM:resilience] 熔断开路: {e}")
             _notify_degradation("LLM_CIRCUIT_OPEN", {"retry_in": round(e.retry_in, 1)})
@@ -215,13 +218,13 @@ def _call_with_resilience(attr, *args, **kwargs):
 
 async def _acall_with_resilience(attr, *args, **kwargs):
     """异步韧性调用（对称于 _call_with_resilience）。"""
-    from backend.infra.circuit_breaker import CircuitBreakerOpen, llm_circuit_breaker
+    from backend.infra.circuit_breaker import CircuitBreakerOpenError, llm_circuit_breaker
 
     last_err: BaseException | None = None
     for attempt in range(LLM_MAX_RETRIES + 1):
         try:
             return await llm_circuit_breaker.acall(attr, *args, **kwargs)
-        except CircuitBreakerOpen as e:
+        except CircuitBreakerOpenError as e:
             logger.warning(f"[LLM:resilience] 熔断开路: {e}")
             _notify_degradation("LLM_CIRCUIT_OPEN", {"retry_in": round(e.retry_in, 1)})
             return await _ahandle_terminal_failure(e, args, kwargs)
@@ -288,7 +291,6 @@ def _strip_think(text: str) -> str:
 # tracer 读到 B 的）。改用 ContextVar 按调用上下文隔离；
 # 读写必须整体 set()/get()（不可变替换），禁止对 .get() 返回的 dict
 # 做 clear()/update()（会改到共享对象）。
-import contextvars as _contextvars
 
 _last_tokens_var: _contextvars.ContextVar = _contextvars.ContextVar(
     "llm_last_tokens", default={},
@@ -375,7 +377,7 @@ def _enforce_rate_limit(user_id: str | None) -> None:
     wait   → 阻塞等待直到获取到令牌（轮询间隔 0.1s）
     reject → 获取不到令牌时抛 RateLimitError
     """
-    from backend.config.llm import LLM_RATE_LIMIT_ENFORCE, LLM_RATE_LIMIT_QPS, LLM_RATE_LIMIT_BURST
+    from backend.config.llm import LLM_RATE_LIMIT_BURST, LLM_RATE_LIMIT_ENFORCE, LLM_RATE_LIMIT_QPS
 
     passed = _try_distributed_rate_limit(user_id, LLM_RATE_LIMIT_QPS, LLM_RATE_LIMIT_BURST)
     if not passed:
@@ -396,6 +398,7 @@ def _enforce_rate_limit(user_id: str | None) -> None:
 
     if LLM_RATE_LIMIT_ENFORCE == "wait":
         import time
+
         from backend.infra.llm.rate_limiter import get_rate_limiter
         limiter = get_rate_limiter()
         wait = limiter.retry_after_seconds(user_id)

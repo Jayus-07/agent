@@ -4,9 +4,13 @@ import time
 import pytest
 
 from backend.infra.circuit_breaker import (
-    CircuitBreaker, CircuitBreakerOpen, State,
-    llm_circuit_breaker, pg_circuit_breaker, chroma_circuit_breaker,
+    CircuitBreaker,
+    CircuitBreakerOpenError,
+    State,
+    chroma_circuit_breaker,
     get_all_breakers,
+    llm_circuit_breaker,
+    pg_circuit_breaker,
 )
 
 
@@ -27,7 +31,7 @@ class TestStateMachine:
                 cb.call(lambda: 1 / 0)
             except ZeroDivisionError:
                 fail_count += 1
-            except CircuitBreakerOpen:
+            except CircuitBreakerOpenError:
                 break
         assert cb.state == State.OPEN
         assert fail_count == 3  # 第 3 次失败触发 OPEN
@@ -40,7 +44,7 @@ class TestStateMachine:
             except ZeroDivisionError:
                 pass
         assert cb.state == State.OPEN
-        with pytest.raises(CircuitBreakerOpen) as exc:
+        with pytest.raises(CircuitBreakerOpenError) as exc:
             cb.call(lambda: 42)
         assert "test" in str(exc.value)
 
@@ -71,7 +75,7 @@ class TestStateMachine:
             pass
         assert cb.state == State.OPEN  # 回到 OPEN
         # 立即调用应被拦截
-        with pytest.raises(CircuitBreakerOpen):
+        with pytest.raises(CircuitBreakerOpenError):
             cb.call(lambda: 42)
 
     def test_success_resets_failure_count(self):
