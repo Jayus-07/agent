@@ -1,7 +1,6 @@
 """L3 长期记忆 — pgvector only, async pipeline"""
 from datetime import datetime, timezone
 from backend.rag.embedding_singleton import get_embedding
-from backend.prompts.service import prompt_service
 from backend.config import L3_DEDUP_COSINE_THRESHOLD, L3_SUPERSEDE_THRESHOLD
 from backend.memory.pii_filter import scan_and_sanitize
 from backend.shared.logger import logger
@@ -35,6 +34,7 @@ class LongTermMemory:
         conversation = f"用户: {question}\n助手: {answer}"
         try:
             from backend.infra.llm import llm
+            from backend.prompts.service import prompt_service
             r = prompt_service.render_sync("memory.long_term.fact_extraction", conversation=conversation)
             resp = llm.invoke(r.text)
             text = resp.content if hasattr(resp, "content") else str(resp)

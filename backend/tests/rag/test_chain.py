@@ -72,6 +72,7 @@ def _stub_chain():
     chain.gate = EvidenceGateController()
     chain.corrector = SelfCorrectionStrategy()
     chain.formatter = CitationFormatter()
+    chain._chains_dirty = False
     return chain
 
 

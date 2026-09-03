@@ -88,9 +88,9 @@ class PromptRepository:
     ) -> PromptVersion:
         result = await self._s.execute(
             text(
-                "SELECT COALESCE(MAX(version), 0) + 1 "
-                "FROM prompt_versions WHERE prompt_id = :pid "
-                "FOR UPDATE"
+                "SELECT COALESCE(MAX(version), 0) + 1 FROM ("
+                "SELECT version FROM prompt_versions WHERE prompt_id = :pid "
+                "FOR UPDATE) sub"
             ),
             {"pid": prompt_id},
         )

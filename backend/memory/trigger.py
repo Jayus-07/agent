@@ -1,6 +1,5 @@
 """MemoryWorthinessClassifier — rule-first, LLM fallback"""
 import re
-from backend.prompts.service import prompt_service
 from backend.shared.logger import logger
 
 # Order matters — earlier patterns match first
@@ -44,6 +43,7 @@ class MemoryWorthinessClassifier:
     def _llm_classify(self, content: str) -> str:
         try:
             from backend.infra.llm import llm
+            from backend.prompts.service import prompt_service
             r = prompt_service.render_sync("memory.trigger", content=content)
             resp = llm.invoke(r.text)
             text = resp.content if hasattr(resp, "content") else str(resp)

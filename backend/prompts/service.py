@@ -42,6 +42,11 @@ class PromptService:
         self._reload_hooks: dict[str, list[ReloadHook]] = {}
         self._defaults: dict[str, str] = {}
         self._epoch = 0
+        try:
+            from backend.prompts.loader import load_defaults
+            self._defaults = load_defaults()
+        except Exception as exc:
+            logger.warning(f"[PromptService] Eager defaults load failed: {exc}")
 
     def get_spec(self, key: str) -> PromptSpec | None:
         return PROMPT_REGISTRY.get(key)
@@ -135,6 +140,20 @@ class PromptService:
             text = self._renderer.render(default, variables, spec=spec)
             return RenderResult(text=text, key=key, version=None, source="default")
 
+        raise KeyError(f"Prompt not found in snapshot or defaults: {key}")
+
+    def get_template_sync(self, key: str) -> str:
+        """返回原始模板文本（不渲染变量）。
+
+        用于构建 LangChain ChatPromptTemplate 等需要保留 {variable} 占位符的场景。
+        """
+        with self._snapshot_lock:
+            entry = self._snapshot.get(key)
+        if entry:
+            return entry.template
+        default = self._defaults.get(key)
+        if default is not None:
+            return default
         raise KeyError(f"Prompt not found in snapshot or defaults: {key}")
 
     def get_version_for_cache_key(self, key: str) -> int | None:

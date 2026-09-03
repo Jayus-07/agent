@@ -1,6 +1,5 @@
 """L2 会话记忆 — PostgreSQL async backend"""
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
-from backend.prompts.service import prompt_service
 from backend.config import SESSION_MAX_MESSAGES
 from backend.shared.logger import logger
 
@@ -46,6 +45,7 @@ class SessionMemory:
         )
         try:
             from backend.infra.llm import llm
+            from backend.prompts.service import prompt_service
             r = prompt_service.render_sync("memory.session.summary", conversation=conversation)
             resp = llm.invoke(r.text)
             self._summary = resp.content if hasattr(resp, "content") else str(resp)

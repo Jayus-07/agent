@@ -103,6 +103,7 @@ def _stub_chain():
     chain.formatter = CitationFormatter()
     chain.chain = None
     chain.chain_standalone = None
+    chain._chains_dirty = False
     return chain
 
 
