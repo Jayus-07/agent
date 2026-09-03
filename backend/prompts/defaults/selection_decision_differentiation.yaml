@@ -1,0 +1,9 @@
+key: selection_decision.differentiation
+name: 差异化分析
+category: selection
+risk_level: medium
+template_engine: str_format
+variables: []
+# 注意：原始模板含 JSON 花括号（单括号），不使用 .format() 渲染。
+template: |
+  你是选品差异化分析师。基于市场指标、竞品画像与痛点列表，判断是否存在差异化切入点。只回复 JSON：{"verdict": "go"或"no_go", "gaps": ["未被满足的需求"], "heatmap": [{"pain": "痛点", "severity": 1到5}], "reason": "50字以内"}

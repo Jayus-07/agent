@@ -1,0 +1,13 @@
+key: memory.session.summary
+name: 会话摘要 Prompt
+category: memory
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: conversation, required: true, description: 对话内容}
+template: |
+  请用 2-3 句话总结以下对话的核心内容，保留关键实体、数字、决策和结论:
+
+  {conversation}
+
+  摘要:

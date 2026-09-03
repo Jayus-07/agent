@@ -110,6 +110,35 @@ async def validate_settings():
 
 
 # ═══════════════════════════════════════════════════
+# 启动时加载 Prompt 默认值 + 刷新快照
+# ═══════════════════════════════════════════════════
+@app.on_event("startup")
+async def init_prompt_snapshot():
+    """从 DB 刷新 Prompt 快照（阻塞，确保 render_sync 可用）。"""
+    try:
+        from backend.prompts.service import prompt_service
+        await prompt_service.refresh_snapshot()
+    except Exception as e:
+        logger.warning(f"[Startup] Prompt snapshot refresh failed: {e}")
+
+
+@app.on_event("startup")
+async def init_prompt_service():
+    """加载 YAML 默认值到内存（失败不阻塞启动）。"""
+    import threading
+    def _load():
+        try:
+            from backend.prompts.loader import load_defaults
+            from backend.prompts.service import prompt_service
+            defaults = load_defaults()
+            prompt_service.load_defaults_into_memory(defaults)
+            logger.info(f"[Startup] Prompt defaults loaded: {len(defaults)} templates")
+        except Exception as e:
+            logger.warning(f"[Startup] Prompt defaults load failed: {e}")
+    threading.Thread(target=_load, daemon=True, name="prompt-init").start()
+
+
+# ═══════════════════════════════════════════════════
 # 启动时后台初始化 RAG Pipeline（避免首次上传等 13 秒）
 # ═══════════════════════════════════════════════════
 @app.on_event("startup")

@@ -1,0 +1,18 @@
+key: rag.preprocessing.chunk_single
+name: 单 Chunk 关键词提取
+category: rag_preprocessing
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: top_k, required: true, description: 最大关键词数}
+  - {name: safe_text, required: true, description: 文档片段文本}
+template: |
+  从以下文档片段提取 {top_k} 个以内的关键词（电商/企业场景）。
+  要求：只提取文档中出现的核心术语、品类、品牌、条款、指标名
+  禁止：停用词、通用动词
+  输出：纯 JSON 数组，不要任何说明
+
+  片段：
+  {safe_text}
+
+  输出：

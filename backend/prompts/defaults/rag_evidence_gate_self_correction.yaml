@@ -1,0 +1,12 @@
+key: rag.evidence_gate.self_correction
+name: 自纠错查询改写
+category: rag
+risk_level: medium
+template_engine: str_format
+variables:
+  - {name: reason, required: true, description: 拒答原因}
+  - {name: question, required: true, description: 原问题}
+template: |
+  原问题被拒答（原因：{reason}）。请改写使能从知识库命中，给 3 个更有效的检索 query，每行一个，不要编号：
+  原问题: {question}
+  改写结果:

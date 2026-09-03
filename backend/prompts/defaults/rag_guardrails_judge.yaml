@@ -1,0 +1,31 @@
+key: rag.guardrails.judge
+name: LLM-as-Judge 忠实性
+category: rag
+risk_level: medium
+template_engine: str_format
+variables:
+  - {name: context, required: true, description: 文档证据}
+  - {name: answer, required: true, description: LLM 回答}
+template: |
+  你是一个 RAG 质量评估专家。
+
+  判断"LLM 回答"是否完全由"文档"支撑。
+
+  规则:
+  1. 逐句核对：回答中每个事实/数字/政策是否都能在文档中找到对应支撑
+  2. 文档没有提到但回答里有 → 视为 unsupported claim
+  3. 回答比文档保守（少说）→ 不算 unsupported
+  4. 整体评分 (0-1): 1.0=完全支撑, 0.5=部分支持, 0.0=完全不支持
+
+  【文档】
+  {context}
+
+  【LLM 回答】
+  {answer}
+
+  请输出 JSON（只输出 JSON，不要其他文字）:
+  {{
+    "score": 0.0 到 1.0,
+    "reason": "一句话说明判断依据",
+    "unsupported_claims": ["未被支撑的句子1", "未被支撑的句子2"]
+  }}

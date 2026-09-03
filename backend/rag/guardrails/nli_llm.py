@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from backend.shared.logger import logger
+from backend.prompts.service import prompt_service
 
 # ── 配置（可从 .env 覆盖）──
 NLI_LLM_TIMEOUT = 30  # 秒
@@ -36,31 +37,6 @@ class LLMVerdict:
     raw_output: str = ""  # 原始 LLM 输出（debug 用）
     fallback: bool = False  # 解析失败时 True（视为 fallback）
     fallback_reason: str = ""
-
-
-# ── Prompt（few-shot 引导 JSON 输出）──
-JUDGE_PROMPT = """你是一个 RAG 质量评估专家。
-
-判断"LLM 回答"是否完全由"文档"支撑。
-
-规则:
-1. 逐句核对：回答中每个事实/数字/政策是否都能在文档中找到对应支撑
-2. 文档没有提到但回答里有 → 视为 unsupported claim
-3. 回答比文档保守（少说）→ 不算 unsupported
-4. 整体评分 (0-1): 1.0=完全支撑, 0.5=部分支持, 0.0=完全不支持
-
-【文档】
-{context}
-
-【LLM 回答】
-{answer}
-
-请输出 JSON（只输出 JSON，不要其他文字）:
-{{
-  "score": 0.0 到 1.0,
-  "reason": "一句话说明判断依据",
-  "unsupported_claims": ["未被支撑的句子1", "未被支撑的句子2"]
-}}"""
 
 
 def _extract_json(text: str) -> dict | None:
@@ -104,7 +80,12 @@ def evaluate_with_llm(answer: str, context_docs: list) -> LLMVerdict:
     if not answer or not answer.strip():
         return LLMVerdict(score=1.0, reason="no_answer", fallback=True, fallback_reason="no_answer")
 
-    prompt = JUDGE_PROMPT.format(context=context[:NLI_LLM_MAX_CONTEXT_CHARS], answer=answer[:2000])
+    r = prompt_service.render_sync(
+        "rag.guardrails.judge",
+        context=context[:NLI_LLM_MAX_CONTEXT_CHARS],
+        answer=answer[:2000],
+    )
+    prompt = r.text
 
     t0 = time.time()
     try:

@@ -13,23 +13,9 @@ from typing import List
 
 from backend.infra.llm import llm
 from backend.infra.cache import get_cache
+from backend.prompts.service import prompt_service
 from backend.sql.schema_loader import schema_loader
 from backend.shared.logger import logger
-
-ROUTER_PROMPT = """你是数据库表路由助手。给定用户问题和可用表列表，选出回答问题可能需要的表。
-
-规则:
-1. **表名采用 `<schema>.<table>` 全限定形式**（如 `product.products`、`order.orders`）；只从给定列表选择
-2. 选择最少但足够的表（通常 1-2 张；跨域分析如"商品+订单"可多选）
-3. 如果问题不涉及任何表，返回空数组
-4. 严格输出 JSON 数组格式
-
-可用表（schema-qualified）:
-{table_list}
-
-用户问题: {question}
-
-请输出 JSON 数组，不要添加任何解释。"""
 
 # ── P2 性能优化：关键词快路径 + 统一缓存 ──
 
@@ -134,10 +120,10 @@ def select_tables(question: str) -> List[str]:
         f"  - {t}: {schema_loader.get_table_description(t)}"
         for t in all_tables
     )
-    prompt = ROUTER_PROMPT.format(table_list=table_list, question=question)
+    r = prompt_service.render_sync("sql.router", table_list=table_list, question=question)
 
     try:
-        resp = llm.invoke(prompt)
+        resp = llm.invoke(r.text)
         content = resp.content.strip()
 
         start = content.find("[")

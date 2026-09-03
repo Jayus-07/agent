@@ -81,8 +81,10 @@ class TraceWriteQueue:
         """将已处理好的 TraceRecord 推入异步写入队列。
 
         必须在调用前完成数据质量处理（leaked span 关闭等）。
+        同时捕获当前 store 单例引用，避免 worker 写入时 store 已被测试替换。
         """
         data = _serialize_record(record)
+        stores = self._capture_stores()
         if self._use_redis and self._redis is not None:
             try:
                 payload = json.dumps(data, ensure_ascii=False, default=str)
@@ -97,9 +99,16 @@ class TraceWriteQueue:
                 self._use_redis = False
 
         try:
-            self._local_queue.put_nowait(data)
+            self._local_queue.put_nowait((data, stores))
         except queue.Full:
             logger.warning("[TraceWriter] 本地 queue 已满（10000），丢弃 trace")
+
+    @staticmethod
+    def _capture_stores() -> tuple:
+        """捕获当前 store 单例引用（避免 worker 延迟查找导致跨测试污染）。"""
+        from backend.observability.trace_store import get_trace_store
+        from backend.observability.analytics_store import get_analytics_store
+        return (get_trace_store(), get_analytics_store())
 
     def _run_worker(self):
         """后台守护线程：批量消费 → 持久化。"""
@@ -116,9 +125,9 @@ class TraceWriteQueue:
                 time.sleep(_FLUSH_INTERVAL_S)
         logger.info("[TraceWriter] worker 退出")
 
-    def _read_batch(self) -> list[dict]:
+    def _read_batch(self) -> list[tuple[dict, tuple]]:
         """从 Redis 或本地 queue 读取一批待写入的 trace。"""
-        batch: list[dict] = []
+        batch: list[tuple[dict, tuple]] = []
 
         if self._use_redis and self._redis is not None:
             try:
@@ -129,10 +138,11 @@ class TraceWriteQueue:
                     block=int(_FLUSH_INTERVAL_S * 1000),
                 )
                 if result:
+                    stores = self._capture_stores()
                     for _stream_name, messages in result:
                         for msg_id, fields in messages:
                             data = json.loads(fields.get("data", "{}"))
-                            batch.append(data)
+                            batch.append((data, stores))
                             self._redis.xack(stream_key, "agents", msg_id)
                 return batch
             except Exception:
@@ -149,24 +159,45 @@ class TraceWriteQueue:
                 break
         return batch
 
-    def _flush_batch(self, batch: list[dict]) -> None:
+    def _flush_batch(self, batch: list[tuple[dict, tuple]]) -> None:
         """将一批 trace 持久化到 Langfuse + SQLite + Analytics。"""
-        for data in batch:
+        for data, stores in batch:
+            trace_store, analytics_store = stores
             try:
                 from backend.observability.langfuse_exporter import get_langfuse_exporter
                 get_langfuse_exporter().export_trace_dict(data)
             except Exception:
                 logger.warning("[TraceWriter] Langfuse 上报失败", exc_info=True)
             try:
-                from backend.observability.trace_store import get_trace_store
-                get_trace_store().save_dict(data)
+                trace_store.save_dict(data)
             except Exception:
                 logger.warning("[TraceWriter] SQLite 持久化失败", exc_info=True)
             try:
-                from backend.observability.analytics_store import get_analytics_store
-                get_analytics_store().save_dict(data)
+                analytics_store.save_dict(data)
             except Exception:
                 logger.warning("[TraceWriter] Analytics 写入失败", exc_info=True)
+
+    def flush(self) -> None:
+        """同步排空队列并持久化（测试用，生产路径由 worker 异步处理）。
+
+        暂停 worker → 排空队列 → 同步写入 → 重启 worker，消除竞态。
+        """
+        self._stopped = True
+        if self._worker and self._worker.is_alive():
+            self._local_queue.put_nowait(None)
+            self._worker.join(timeout=5)
+
+        all_items: list[tuple[dict, tuple]] = []
+        while True:
+            batch = self._read_batch()
+            if not batch:
+                break
+            all_items.extend(batch)
+        if all_items:
+            self._flush_batch(all_items)
+
+        self._stopped = False
+        self._start_worker()
 
     def shutdown(self):
         """排空队列并停止 worker（进程退出时调用）。"""

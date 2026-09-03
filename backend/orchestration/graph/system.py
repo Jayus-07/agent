@@ -369,6 +369,7 @@ class MultiAgentSystem:
         current_plan = dict(initial_state.get("plan", {}))
         plan_changed = False
         route_mode = "plan"  # fix f8：捕获 Router 决策，trace 拓扑按模式构建
+        cs_context_snapshot = {}  # CS: 捕获 Router 输出的 cs_context
 
         try:
             for event in self._graph.stream(initial_state):
@@ -387,7 +388,8 @@ class MultiAgentSystem:
                 yield from self._stream_node_events(node_name, node_output)
 
                 if node_name in self._skill_nodes or node_name == "supervisor" \
-                        or node_name in ("workflow_executor", "skill_executor"):
+                        or node_name in ("workflow_executor", "skill_executor",
+                                         "cs_knowledge", "cs_pending"):
                     all_step_results.update(node_output.get("step_results", {}))
                     # direct/workflow executor 自己就是最终产出者
                     executor_answer = node_output.get("final_answer", "")
@@ -401,6 +403,9 @@ class MultiAgentSystem:
                     # fix f8：捕获路由模式供 trace 拓扑快照使用
                     if node_output.get("route_mode"):
                         route_mode = node_output["route_mode"]
+                    # CS: 捕获 cs_context 供 trace 拓扑快照使用
+                    if node_output.get("cs_context"):
+                        cs_context_snapshot = node_output["cs_context"]
                 elif node_name in ("planner", "critique"):
                     # 捕获 plan 用于 trace 重建
                     if node_output.get("plan"):
@@ -423,6 +428,7 @@ class MultiAgentSystem:
                 "_plan_changed": plan_changed,
                 "final_answer": final_answer,
                 "route_mode": route_mode,  # fix f8
+                "cs_context": cs_context_snapshot,
             }
             self._trace_from_state(trace, state_for_trace)
             _end_root(trace, metrics={"span_count": len(trace.spans) - 1})
@@ -553,6 +559,28 @@ def _build_graph_snapshot(state: dict, loop_count: int,
             "max_loops": MAX_SUPERVISOR_LOOPS,
             "loop_count": loop_count,
             "degradation_triggered": len(degraded_steps) > 0 if degraded_steps else False,
+        }
+
+    # ── customer_service 模式：Router → CS Node → Reporter ──
+    if route_mode == "customer_service":
+        cs_context = state.get("cs_context", {})
+        cs_target = cs_context.get("cs_target", "cs_knowledge") if cs_context else "cs_knowledge"
+        cs_label = "客服知识问答" if cs_target == "cs_knowledge" else "客服待处理"
+        graph_nodes = [
+            {"id": "router", "label": "路由决策"},
+            {"id": cs_target, "label": cs_label},
+            {"id": "reporter", "label": "Reporter 汇总"},
+        ]
+        graph_edges = [
+            {"source": "router", "target": cs_target, "label": "customer_service"},
+            {"source": cs_target, "target": "reporter", "label": "完成"},
+        ]
+        return {
+            "nodes": graph_nodes,
+            "edges": graph_edges,
+            "max_loops": 0,
+            "loop_count": 0,
+            "degradation_triggered": False,
         }
 
     # ── plan 模式：Router → Planner → Critique → Supervisor → Skills → Reporter ──

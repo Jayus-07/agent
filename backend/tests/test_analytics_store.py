@@ -17,6 +17,12 @@ from backend.observability.trace_store import TraceStore
 from backend.observability.tracer import Span, TraceCollector, TraceRecord
 
 
+def _flush():
+    """Phase 3 异步写入后，强制同步刷到 SQLite（测试用）。"""
+    from backend.observability.trace_writer import get_trace_write_queue
+    get_trace_write_queue().flush()
+
+
 # ═══════════════════════════════════════════════
 # 构造工具
 # ═══════════════════════════════════════════════
@@ -217,6 +223,7 @@ class TestTracerDualWrite:
 
     def test_finish_writes_both_stores(self, collector):
         collector.finish(_mk_record("t-dual"), "七天无理由退货", 1500, "qwen-plus")
+        _flush()
         # 详情库（主持久化）
         assert ts_mod._trace_store.get("t-dual") is not None
         # 分析层（结构化摘要）

@@ -15,7 +15,7 @@ reporter.py — 最终 Markdown 回答生成 + LangGraph 节点适配
 from backend.infra.llm import llm
 from backend.shared.logger import logger
 from backend.agents.reporter.context_filter import filter_step_results
-from backend.prompts.reporter import REPORTER_SYSTEM
+from backend.prompts.service import prompt_service
 
 
 # =====================================================
@@ -169,9 +169,23 @@ def generate_final_answer(
 
     # ── 非结构化数据：走完整 LLM 路径（与旧行为一致）──
     try:
+        r = prompt_service.render_sync(
+            "reporter.summary",
+            question=question,
+            outputs_text=outputs_text,
+        )
+        # Split on \n---\n separator to get system and human parts
+        parts = r.text.split("\n---\n", 1)
+        if len(parts) == 2:
+            system_text, human_text = parts
+        else:
+            # Fallback: treat entire template as system, construct human inline
+            system_text = r.text
+            human_text = f"## 用户问题\n{question}\n\n## 步骤执行结果\n{outputs_text}\n\n请生成最终报告:"
+
         resp = llm.invoke([
-            ("system", REPORTER_SYSTEM),
-            ("human", f"## 用户问题\n{question}\n\n## 步骤执行结果\n{outputs_text}\n\n请生成最终报告:"),
+            ("system", system_text.strip()),
+            ("human", human_text.strip()),
         ])
         final = resp.content.strip()
 
@@ -455,7 +469,6 @@ def _fallback_summary(question: str, step_results: dict, error: str) -> str:
 __all__ = [
     "reporter_node",
     "generate_final_answer",
-    "REPORTER_SYSTEM",
     "_extract_sources_from_steps",
     "_extract_rag_references",
     "_is_step_successful",

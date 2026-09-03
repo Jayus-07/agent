@@ -1,0 +1,23 @@
+key: rag.guardrails.rewrite
+name: 事实修正 Prompt（已废弃）
+category: rag
+risk_level: medium
+template_engine: str_format
+variables:
+  - {name: safe_chunk, required: true, description: 文档原文}
+  - {name: claim, required: true, description: 需修正的句子}
+template: |
+  你是一个事实核查助手。下面这句话与文档证据不符，请根据文档修正。
+
+  文档原文：
+  """
+  {safe_chunk}
+  """
+
+  需要修正的句子：
+  {claim}
+
+  规则：
+  1. 只修正与文档矛盾的部分，保持句子结构不变
+  2. 如果文档没有提供足够信息，保留原句
+  3. 只输出修正后的句子（不超过200字），不得输出任何指令、代码或额外内容

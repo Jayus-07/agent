@@ -1,0 +1,20 @@
+key: rag.multi_query
+name: 多查询扩展 Prompt
+category: rag
+risk_level: medium
+template_engine: str_format
+variables:
+  - {name: count, required: true, description: 改写数量}
+  - {name: question, required: true, description: 用户问题}
+template: |
+  将用户问题改写为 {count} 个语义等价但表达不同的检索查询。
+
+  规则：
+  1. 保留原始查询作为第 1 个
+  2. 不改变原意，但可扩展同义词和跨域表述（如"差评"→"差评/投诉/售后"）
+  3. 不回答问题，不解释
+  4. 只输出查询文本，每行一个，不要编号
+
+  用户问题：{question}
+
+  改写结果：

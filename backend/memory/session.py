@@ -1,14 +1,8 @@
 """L2 会话记忆 — PostgreSQL async backend"""
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
-from backend.infra.llm import llm
+from backend.prompts.service import prompt_service
 from backend.config import SESSION_MAX_MESSAGES
 from backend.shared.logger import logger
-
-_SUMMARY_PROMPT = """请用 2-3 句话总结以下对话的核心内容，保留关键实体、数字、决策和结论:
-
-{conversation}
-
-摘要:"""
 
 
 class SessionMemory:
@@ -51,7 +45,9 @@ class SessionMemory:
             for r in rows[-SESSION_MAX_MESSAGES:]
         )
         try:
-            resp = llm.invoke(_SUMMARY_PROMPT.format(conversation=conversation))
+            from backend.infra.llm import llm
+            r = prompt_service.render_sync("memory.session.summary", conversation=conversation)
+            resp = llm.invoke(r.text)
             self._summary = resp.content if hasattr(resp, "content") else str(resp)
         except Exception as e:
             logger.warning(f"[SessionMemory:{self.session_id}] 摘要失败: {e}")

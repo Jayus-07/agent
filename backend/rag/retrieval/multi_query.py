@@ -16,6 +16,8 @@ from backend.config import (
     MULTI_QUERY_SIMILARITY, MULTI_QUERY_MIN_LENGTH,
 )
 from backend.rag.context import get_context
+from backend.prompts.service import prompt_service
+
 from backend.shared.logger import logger
 
 # 运行时模式（可通过 API POST /llm/multiquery 动态切换）
@@ -112,19 +114,6 @@ def _is_complex(query: str) -> tuple[bool, str]:
 # Query Rewrite: Parse → Normalize → Deduplicate → Limit
 # =====================================================
 
-QUERY_REWRITE_PROMPT = """将用户问题改写为 {count} 个语义等价但表达不同的检索查询。
-
-规则：
-1. 保留原始查询作为第 1 个
-2. 不改变原意，但可扩展同义词和跨域表述（如"差评"→"差评/投诉/售后"）
-3. 不回答问题，不解释
-4. 只输出查询文本，每行一个，不要编号
-
-用户问题：{question}
-
-改写结果："""
-
-
 def _rewrite(question: str) -> list[str]:
     """LLM 改写 → Parse → Normalize → Dedup → Limit"""
     try:
@@ -133,8 +122,8 @@ def _rewrite(question: str) -> list[str]:
         from backend.infra.llm import llm
         from langchain_core.messages import HumanMessage
 
-        prompt = QUERY_REWRITE_PROMPT.format(count=MULTI_QUERY_COUNT, question=question)
-        result = llm.invoke([HumanMessage(content=prompt)])
+        r = prompt_service.render_sync("rag.multi_query", count=MULTI_QUERY_COUNT, question=question)
+        result = llm.invoke([HumanMessage(content=r.text)])
         tokens = trace_collector.parse_tokens(result)
         raw = result.content if hasattr(result, "content") else str(result)
 

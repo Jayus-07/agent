@@ -14,6 +14,8 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+# Windows cp936 环境下强制 UTF-8 模式，防止含中文的源文件解析失败
+os.environ["PYTHONUTF8"] = "1"
 # 测试环境禁用 Langfuse 上报/读取：保证用例确定性（不依赖外部服务、不联网），
 # tracer 自动降级回 SQLite 路径。必须在任何模块导入前生效。
 os.environ["LANGFUSE_ENABLED"] = "false"

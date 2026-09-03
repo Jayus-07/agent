@@ -24,6 +24,12 @@ from backend.observability.tracer import (
 from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401
 
 
+def _flush():
+    """Phase 3 异步写入后，强制同步刷到 SQLite（测试用）。"""
+    from backend.observability.trace_writer import get_trace_write_queue
+    get_trace_write_queue().flush()
+
+
 @pytest.fixture(autouse=True)
 def _reset_contextvar():
     """每条用例前清掉模块级 contextvar 残留。
@@ -66,6 +72,7 @@ class TestStart:
         for q in ["q1", "q2", "q3"]:
             t = fresh_collector.start(q)
             fresh_collector.finish(t, "", 0, "")
+        _flush()
         assert len(fresh_collector.list()) == 3
 
     def test_start_sets_utc_timestamp(self):
@@ -391,6 +398,7 @@ class TestBoundaries:
         for i in range(10):
             t = fresh_collector.start(f"q{i}")
             fresh_collector.finish(t, "", 0, "")
+        _flush()
         assert len(fresh_collector.list(limit=3)) == 3
 
     def test_list_active_filters_unfinished(self, fresh_collector):
@@ -412,6 +420,7 @@ class TestComputeMetrics:
         s = fresh_collector.start_span("root")
         fresh_collector.end_span(s, metrics={"prompt_tokens": 10, "completion_tokens": 5})
         fresh_collector.finish(t, "a", 1000, "m")
+        _flush()
         m = fresh_collector.compute_metrics()
         assert m["completed"] == 1
         assert m["success"] == 1
@@ -423,6 +432,7 @@ class TestComputeMetrics:
         s = fresh_collector.start_span("root")
         fresh_collector.end_span(s, status="error")
         fresh_collector.finish(t, "a", 500, "m")
+        _flush()
         m = fresh_collector.compute_metrics()
         assert m["success"] == 0
         assert m["error"] == 1
@@ -445,6 +455,7 @@ class TestComputeMetrics:
             s = fresh_collector.start_span("root")
             fresh_collector.end_span(s)
             fresh_collector.finish(t, "a", ms, "m")
+        _flush()
         m = fresh_collector.compute_metrics()
         # 注：compute_metrics 简版不计算 avg_elapsed_sec（从 trace_store 聚合），这里只校验 completed
         assert m["completed"] == 3
@@ -458,6 +469,7 @@ class TestQueryAPI:
     def test_get_returns_matching_record(self, fresh_collector):
         t = fresh_collector.start("q")
         fresh_collector.finish(t, "a", 100, "m")  # 必须 finish 才入 SQLite
+        _flush()
         assert fresh_collector.get(t.id) is not None
 
     def test_get_returns_none_for_unknown(self, fresh_collector):
@@ -467,6 +479,7 @@ class TestQueryAPI:
         for q in ["q1", "q2"]:
             t = fresh_collector.start(q)
             fresh_collector.finish(t, "", 0, "")
+        _flush()
         assert len(fresh_collector.list()) == 2
         # 2d627d7: clear() 保留兼容不做操作；SQLite 数据由 trace_store 控制
         fresh_collector.clear()

@@ -425,14 +425,22 @@ class RAGPipeline:
     # 公共入口
     # =====================================================
 
-    def ask(self, question: str, session_id: str = "default", kb_id: str = "default") -> str:
+    def ask(
+        self,
+        question: str,
+        session_id: str = "default",
+        kb_id: str = "default",
+        kb_ids: list[str] | None = None,
+    ) -> str:
         """提问入口：3 段式 — 准备 → 执行 → 清理。
 
         拆解后便于单测和异常定位；行为完全兼容旧版。
         Phase 4: 首轮问答命中缓存时跳过 LLM 生成（~4.8s），多轮对话不走缓存。
+        kb_ids: 多知识库指定（客服系统用），优先级高于 kb_id。
         """
+        self.last_answer_meta: dict = {}
         logger.info(f"收到问题: {question[:80]} (session={session_id}, kb={kb_id})")
-        self._prepare_context(kb_id, question)
+        self._prepare_context(kb_id, question, kb_ids=kb_ids)
         try:
             if not self._check_resources():
                 return "系统资源紧张，请稍后重试"
@@ -448,6 +456,8 @@ class RAGPipeline:
             answer = self._execute_chain(question, session_id)
             self._seen_sessions.add(session_id)
 
+            self._snapshot_answer_meta()
+
             if is_first_turn and answer and not self._is_rejection(answer):
                 self._write_answer_cache(question, kb_id, answer)
 
@@ -455,7 +465,7 @@ class RAGPipeline:
         finally:
             self._cleanup()
 
-    def _prepare_context(self, kb_id: str, question: str):
+    def _prepare_context(self, kb_id: str, question: str, kb_ids: list[str] | None = None):
         """注入 kb_id + QueryAnalyzer metadata → contextvars metadata_filter。"""
         from backend.rag.context import RequestContext, set_context
         from backend.rag.retrieval.query_analyzer import QueryAnalyzer
@@ -464,23 +474,25 @@ class RAGPipeline:
 
         mf: dict = {}
 
-        # 显式 kb_id 优先级最高：指定后跳过 Router 关键词推断。
-        # 否则推断出的 {"$or": [{"kb_id": ...}]} 会与 mf["kb_id"] 在 Chroma
-        # 顶层形成隐式 AND —— 两条件互斥，召回必为空 → 全量拒答。
-        explicit_kb = bool(kb_id and kb_id not in ("*", "default"))
-        if explicit_kb:
-            mf["kb_id"] = kb_id
+        # kb_ids（多知识库）优先级最高 → 显式 kb_id → KB Router 推断
+        if kb_ids and len(kb_ids) > 1:
+            mf["$or"] = [{"kb_id": kid} for kid in kb_ids]
+        elif kb_ids and len(kb_ids) == 1:
+            mf["kb_id"] = kb_ids[0]
         else:
-            # KB Router → 候选 KB 列表 → $or filter
-            try:
-                router = KBRouter()
-                kb_result = router.route(question)
-                candidate_ids = [c["kb_id"] for c in kb_result.get("candidates", [])]
-                kb_filter = build_kb_filter(candidate_ids)
-                if kb_filter:
-                    mf.update(kb_filter)
-            except Exception:
-                logger.debug("kb_filter 合并失败", exc_info=True)
+            explicit_kb = bool(kb_id and kb_id not in ("*", "default"))
+            if explicit_kb:
+                mf["kb_id"] = kb_id
+            else:
+                try:
+                    router = KBRouter()
+                    kb_result = router.route(question)
+                    candidate_ids = [c["kb_id"] for c in kb_result.get("candidates", [])]
+                    kb_filter = build_kb_filter(candidate_ids)
+                    if kb_filter:
+                        mf.update(kb_filter)
+                except Exception:
+                    logger.debug("kb_filter 合并失败", exc_info=True)
 
         # QueryAnalyzer → doc_type / business_domain 过滤
         try:
@@ -527,6 +539,19 @@ class RAGPipeline:
             elapsed = time.time() - start_time
             logger.error(f"请求失败 (耗时: {elapsed:.2f}s): {e}", exc_info=True)
             raise
+
+    def _snapshot_answer_meta(self):
+        """从 chain 快照置信度/证据信息，供下游（如客服知识服务）读取。"""
+        try:
+            chain = self.lc_chain
+            meta = {}
+            if hasattr(chain, "_last_meta") and isinstance(chain._last_meta, dict):
+                meta.update(chain._last_meta)
+            if hasattr(chain, "_last_sources"):
+                meta["source_count"] = len(chain._last_sources or [])
+            self.last_answer_meta = meta
+        except Exception:
+            self.last_answer_meta = {}
 
     def _check_answer_cache(self, question: str, kb_id: str) -> str | None:
         """首轮问答缓存查询。命中返回缓存答案，未命中返回 None。"""

@@ -14,7 +14,7 @@ import asyncio
 
 from langgraph.graph import StateGraph, START, END
 
-from backend.orchestration.state import AgentState
+from backend.orchestration.state import AgentState, CSAgentState
 from backend.orchestration.graph.router_node import router_node, route_selector
 from backend.orchestration.graph.direct_executor import skill_executor_node, workflow_executor_node
 from backend.observability.trace_middleware import trace_middleware
@@ -23,6 +23,7 @@ from backend.agents.planner.critique import critique_node
 from backend.orchestration.supervisor.scheduler import supervisor_node, route_after_supervisor
 from backend.agents.reporter.reporter import reporter_node
 from backend.orchestration.tool_registry import tool_registry
+from backend.customer_service.graph.nodes import cs_knowledge_node, cs_pending_node
 from backend.shared.logger import logger
 
 # 触发 Skill 包自注册（必须在 build_graph() 之前 import）
@@ -41,6 +42,8 @@ _NODE_LABELS = {
     "rag_skill":          "知识库检索",
     "report_skill":       "报告生成",
     "reporter":           "结果汇总",
+    "cs_knowledge":       "客服知识问答",
+    "cs_pending":         "客服待处理",
 }
 
 
@@ -90,12 +93,12 @@ def build_graph():
 
     Skill 节点由 tool_registry 自动发现，不在此处硬编码节点名。
     """
-    wf = StateGraph(AgentState)
+    wf = StateGraph(CSAgentState)
 
     # ── 内置节点（永远不变，TraceMiddleware 自动记录 Span）──
     # 注意：router 不用中间件包装 —— MultiTierRouter.route() 内部已自建
     # 完整 span（含 rule/vector/llm 三层事件与 metrics）。双重包装会产生
-    # 同名重复 span（浏览器实测发现的 0ms+真实时长两条“路由决策”）。
+    # 同名重复 span（浏览器实测发现的 0ms+真实时长两条"路由决策"）。
     wf.add_node("router", router_node)
     wf.add_node("skill_executor", trace_middleware.wrap_sync_node("skill_executor", skill_executor_node))
     wf.add_node("workflow_executor", trace_middleware.wrap_sync_node("workflow_executor", workflow_executor_node))
@@ -103,6 +106,10 @@ def build_graph():
     wf.add_node("critique", trace_middleware.wrap_sync_node("critique", critique_node))
     wf.add_node("supervisor", trace_middleware.wrap_sync_node("supervisor", supervisor_node))
     wf.add_node("reporter", trace_middleware.wrap_sync_node("reporter", reporter_node))
+
+    # ── 客服节点（CS 路由命中后承接，Phase 2: knowledge_query 路径）──
+    wf.add_node("cs_knowledge", trace_middleware.wrap_sync_node("cs_knowledge", cs_knowledge_node))
+    wf.add_node("cs_pending", trace_middleware.wrap_sync_node("cs_pending", cs_pending_node))
 
     # ── Skill 节点（自动发现 + TraceMiddleware 自动记录 Span）──
     for name, func in tool_registry.get_skill_nodes().items():
@@ -122,12 +129,18 @@ def build_graph():
             "planner": "planner",
             "skill_executor": "skill_executor",  # direct: 跳过 Planner
             "workflow_executor": "workflow_executor",  # workflow: 跳过 Planner
+            "cs_knowledge": "cs_knowledge",  # CS: 知识问答
+            "cs_pending": "cs_pending",  # CS: 待处理（Phase 3-5）
         },
     )
 
     # V2: skill/workflow executor 直接到 reporter
     wf.add_edge("skill_executor", "reporter")
     wf.add_edge("workflow_executor", "reporter")
+
+    # CS: 客服节点到 reporter
+    wf.add_edge("cs_knowledge", "reporter")
+    wf.add_edge("cs_pending", "reporter")
 
     wf.add_edge("planner", "critique")
 
@@ -146,7 +159,7 @@ def build_graph():
 
     skill_count = len(tool_registry.get_skill_nodes())
     logger.info(
-        f"[Graph] 图编译完成 (内置7节点+Router/executors + {skill_count} Skill = {7 + skill_count}节点)"
+        f"[Graph] 图编译完成 (内置9节点+Router/executors + {skill_count} Skill = {9 + skill_count}节点)"
     )
     return wf.compile()
 

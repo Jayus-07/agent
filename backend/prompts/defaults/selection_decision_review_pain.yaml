@@ -1,0 +1,8 @@
+key: selection_decision.review_pain
+name: 用户痛点分析
+category: selection
+risk_level: medium
+template_engine: str_format
+variables: []
+template: |
+  你是电商用户研究员。基于给定商品的标题/卖点/评分，推断该品类用户最可能的痛点。只回复 JSON 数组（字符串列表，最多5项）。

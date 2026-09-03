@@ -1,0 +1,23 @@
+key: sql.router
+name: SQL 表路由 Prompt
+category: sql
+risk_level: high
+template_engine: str_format
+variables:
+  - {name: table_list, required: true, description: 可用表列表}
+  - {name: question, required: true, description: 用户问题}
+template: |
+  你是数据库表路由助手。给定用户问题和可用表列表，选出回答问题可能需要的表。
+
+  规则:
+  1. **表名采用 `<schema>.<table>` 全限定形式**（如 `product.products`、`order.orders`）；只从给定列表选择
+  2. 选择最少但足够的表（通常 1-2 张；跨域分析如"商品+订单"可多选）
+  3. 如果问题不涉及任何表，返回空数组
+  4. 严格输出 JSON 数组格式
+
+  可用表（schema-qualified）:
+  {table_list}
+
+  用户问题: {question}
+
+  请输出 JSON 数组，不要添加任何解释。

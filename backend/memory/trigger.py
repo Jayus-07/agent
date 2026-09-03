@@ -1,6 +1,6 @@
 """MemoryWorthinessClassifier — rule-first, LLM fallback"""
 import re
-from backend.infra.llm import llm
+from backend.prompts.service import prompt_service
 from backend.shared.logger import logger
 
 # Order matters — earlier patterns match first
@@ -24,18 +24,6 @@ _IGNORE_SIGNALS = [
     r"再见", r"拜拜", r"稍等", r"等一下",
 ]
 
-_TRIGGER_PROMPT = """判断这条信息是否值得存入长期记忆。只需回答 STORE 或 IGNORE。
-
-信息: "{content}"
-
-规则:
-- 关于用户身份/角色/技能/偏好的事实 → STORE
-- 关于项目/工作/技术决策的信息 → STORE
-- 问候/闲聊/确认/情绪表达 → IGNORE
-
-回答:"""
-
-
 class MemoryWorthinessClassifier:
     def classify(self, content: str, fact_type: str = "") -> str:
         # user_fact / preference from LLM extraction → strong STORE signal
@@ -55,7 +43,9 @@ class MemoryWorthinessClassifier:
 
     def _llm_classify(self, content: str) -> str:
         try:
-            resp = llm.invoke(_TRIGGER_PROMPT.format(content=content))
+            from backend.infra.llm import llm
+            r = prompt_service.render_sync("memory.trigger", content=content)
+            resp = llm.invoke(r.text)
             text = resp.content if hasattr(resp, "content") else str(resp)
             return "STORE" if "STORE" in text.upper() else "IGNORE"
         except Exception as e:

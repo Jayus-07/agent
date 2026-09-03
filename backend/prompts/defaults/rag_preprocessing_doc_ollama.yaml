@@ -1,0 +1,21 @@
+key: rag.preprocessing.doc_ollama
+name: 文档级关键词提取（Ollama）
+category: rag_preprocessing
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: top_k, required: true, description: 最大关键词数}
+  - {name: safe_text, required: true, description: 文档文本}
+template: |
+  你是跨境电商 RAG 系统的关键词提取助手。
+
+  从以下文档中提取 {top_k} 个以内的高质量检索关键词，用于电商场景的语义搜索。
+
+  要求:
+  - 关键词必须是文档中出现的核心术语、品类、品牌、属性、政策条款
+  - 输出格式: 纯 JSON 数组，不要额外说明
+
+  文档:
+  {safe_text}
+
+  输出:

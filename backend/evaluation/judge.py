@@ -98,32 +98,15 @@ JUDGE_SYSTEM_PROMPT = """你是一个严格但公正的评估裁判。你的任�
 
 def build_judge_prompt(question: str, rubric: dict[str, str], actual_answer: str) -> str:
     """构造裁判 prompt。rubric 包含各维度的具体要求。"""
+    from backend.prompts.service import prompt_service
     rubric_lines = "\n".join(f"- {k}: {v}" for k, v in rubric.items())
-    return f"""请评估以下 AI 助手对用户问题的回答。
-
-请从以下 4 个维度评分（每个维度 1-5 分）：
-
-1. 完整性: 是否回答了问题的所有部分？遗漏了关键信息吗？
-2. 忠实性: 所有数字、事实是否能追溯到数据源？有没有编造或幻觉？
-3. 简洁性: 有没有冗余、重复或无关内容？表述是否精炼？
-4. 引用质量: 引用标注是否准确、充分？文档来源是否正确？
-
-## 用户问题
-{question}
-
-## 评估标准
-{rubric_lines}
-
-## AI 回答
-{actual_answer}
-
-请输出以下格式的 JSON：
-{{
-  "scores": {{"completeness": 4, "faithfulness": 5, "conciseness": 3, "citation_quality": 4}},
-  "total": 4.15,
-  "reasoning": "各维度评分说明...",
-  "confidence": "medium"
-}}"""
+    r = prompt_service.render_sync(
+        "evaluation.judge.user",
+        question=question,
+        rubric_lines=rubric_lines,
+        actual_answer=actual_answer,
+    )
+    return r.text
 
 
 def judge_answer(

@@ -1,0 +1,17 @@
+key: rag.preprocessing.chunk_batch
+name: 批量 Chunk 关键词提取
+category: rag_preprocessing
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: chunks_count, required: true, description: chunk 数量}
+  - {name: top_k, required: true, description: 每 chunk 最大关键词数}
+  - {name: all_chunks, required: true, description: 所有 chunk 文本}
+template: |
+  对以下 {chunks_count} 个文档片段分别提取 {top_k} 个以内的关键词。
+  输出 JSON 数组的数组：[[chunk0的关键词], [chunk1的关键词], ...]
+  只输出 JSON，不要解释。
+
+  {all_chunks}
+
+  JSON:

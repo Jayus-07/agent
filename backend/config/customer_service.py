@@ -106,3 +106,63 @@ CS_DOMAIN_KEYWORDS = {
         "人工", "客服", "真人", "转接", "经理", "主管",
     ],
 }
+
+# =============================================
+# 客服域检测正则（Domain Detector 规则通道）
+# =============================================
+CS_DOMAIN_PATTERNS: dict[str, list] = {
+    "KNOWLEDGE": [
+        re.compile(p) for p in [
+            r"怎么(办|样|弄|退|换|修)", r"如何(操|退|换|查)",
+            r"什么(是|时候|原因|条件)", r"请问", r"告[诉我]",
+            r"介绍(一下)?", r"解释(一下)?", r"有没有",
+            r"能不能", r"可以吗", r"是否",
+        ]
+    ],
+    "TRANSACTION": [
+        re.compile(p) for p in [
+            r"(查|看|跟).*(订单|物流|快递|发货|收货|签收)",
+            r"(订单|物流|快递).*(状态|进度|到哪|在哪)",
+            r"(发货|收货|签收).*(了没|没有|了吗)",
+            r"配送", r"运输", r"tracking",
+        ]
+    ],
+    "AFTER_SALES": [
+        re.compile(p) for p in [
+            r"(退|换|修).*(款|货|一下|怎么)",
+            r"售后", r"(质量|产品).*(问题|坏了|坏了|破损)",
+            r"保修", r"维修", r"不好用", r"坏了",
+        ]
+    ],
+    "ACCOUNT": [
+        re.compile(p) for p in [
+            r"(修改|更改|换).*(密码|地址|手机|邮箱)",
+            r"(登录|注册).*(不了|不上|失败|问题)",
+            r"账户.*问题", r"账号.*异常",
+        ]
+    ],
+    "COMPLAINT": [
+        re.compile(p) for p in [
+            r"投诉", r"举报", r"(态度|服务).*(差|烂|垃圾)",
+            r"不满意", r"要.*说法", r"找.*领导",
+            r"12315", r"消协", r"差评", r"曝光", r"维权",
+        ]
+    ],
+    "HUMAN": [
+        re.compile(p) for p in [
+            r"(转|找).*(人工|客服|真人|经理)", r"人工服务",
+            r"不要机器人", r"你是.*机器人.*吗",
+        ]
+    ],
+}
+
+# =============================================
+# 客服 Router 阈值
+# =============================================
+CS_VECTOR_THRESHOLD = 0.70
+CS_RULE_MIN_HITS = 2
+CS_CONFIDENCE_ANSWER = 0.85
+CS_CONFIDENCE_CAUTIOUS = 0.60
+CS_ROUTER_INDEX_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "data", "cs_router_index"
+)

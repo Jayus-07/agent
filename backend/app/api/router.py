@@ -24,6 +24,7 @@ from backend.app.api.routes import (
     competitor,
     selection,
     selection_decision,
+    prompts,
 )
 from backend.app.api.routes.health import router as health_router
 from backend.app.api.routes.keyword_routes import router as keyword_router
@@ -52,6 +53,7 @@ api_router.include_router(feedback.router)  # 2026-08-11 P1 反馈循环
 api_router.include_router(competitor.router)  # 竞品监控
 api_router.include_router(selection.router)  # 智能选品
 api_router.include_router(selection_decision.router)  # 选品决策
+api_router.include_router(prompts.router)  # Prompt 管理
 
 # ── 系统路由 ──────────────────────────────────
 api_router.include_router(health_router)

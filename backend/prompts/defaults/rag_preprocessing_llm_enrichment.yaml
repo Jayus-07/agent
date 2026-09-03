@@ -1,0 +1,29 @@
+key: rag.preprocessing.llm_enrichment
+name: RAG 元数据提取
+category: rag_preprocessing
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: questions_field, required: true, description: 模拟问题字段（可选）}
+  - {name: extra_schema, required: true, description: 额外 schema 字段}
+  - {name: safe_text, required: true, description: 文档文本}
+  - {name: chunks_block, required: true, description: chunk 文本块}
+template: |
+  你是专业 RAG 元数据提取专家。从文档提取 1 个 JSON 对象,严禁任何额外内容。
+
+  严格规则:
+  - summary 必须是 1-3 句中文摘要,严格控制在 200 个汉字以内(超出部分将被系统强制截断,视为不合格输出)
+    纯自然语言,严禁用 markdown 标题符号/列表/换行/星号
+  - keywords 是 10 个以内的关键词数组
+  - entities 是 5 个以内的实体数组(每项含 name 和 type 字段,type 取 regulation/person/platform/brand)
+  {questions_field}
+  - 严禁在 JSON 外加解释、严禁使用 markdown 围栏、严禁重复文档原文当摘要
+
+  JSON Schema:
+  {{"summary": "<1-3 句中文摘要,<=200字>", "keywords": ["<词 1>", ...], "entities": [{{"name":"<名称>","type":"<类型>"}}, ...]{extra_schema}}}
+
+  文档:
+  {safe_text}
+  {chunks_block}
+
+  只返回这个 JSON,无其他文字:

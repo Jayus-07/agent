@@ -8,29 +8,8 @@ import re
 from typing import Any
 
 from backend.competitor.adapters import confidence, detect_currency, extract_by_rules
+from backend.prompts.service import prompt_service
 from backend.shared.logger import logger
-
-_EXTRACT_PROMPT = """你是电商商品页数据抽取器。从下面的网页正文中抽取商品信息，只输出 JSON，不要任何解释。
-
-输出 JSON schema:
-{{
-  "title": "商品标题（string，无则空字符串）",
-  "price": 现价（number，找不到则 null）,
-  "original_price": 原价或划线价（number，无则 null）,
-  "currency": "CNY" 或 "USD" 等,
-  "promo_text": "促销活动文案（string，无则空字符串）",
-  "rating": 评分（number，无则 null）,
-  "review_count": 评价数（integer，无则 null）,
-  "in_stock": 有货 true / 无货 false,
-  "highlights": "商品卖点，逗号分隔，最多5个（string）"
-}}
-
-网页正文（可能被截断）:
----
-{content}
----
-
-只输出 JSON。"""
 
 
 # 智能截断锚点关键词：评分/评价/卖点/促销通常位于页面折叠区，简单 [:6000] 会丢失
@@ -124,7 +103,8 @@ def extract_fields(platform: str, markdown: str, use_llm: bool = True) -> dict[s
         from backend.infra.llm import llm
 
         content = _smart_window(markdown)  # 智能截断：头部 + 评分/评价/卖点关键段
-        resp = llm.invoke(_EXTRACT_PROMPT.format(content=content))
+        r = prompt_service.render_sync("competitor.extractor", content=content)
+        resp = llm.invoke(r.text)
         text = resp.content if hasattr(resp, "content") else str(resp)
         data = _parse_llm_json(text)
         if data:

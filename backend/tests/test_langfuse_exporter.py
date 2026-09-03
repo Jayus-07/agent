@@ -23,6 +23,13 @@ from backend.observability.tracer import Span, TraceCollector, TraceRecord
 # 构造工具
 # ═══════════════════════════════════════════════
 
+
+def _flush():
+    """Phase 3 异步写入后，强制同步刷到 SQLite（测试用）。"""
+    from backend.observability.trace_writer import get_trace_write_queue
+    get_trace_write_queue().flush()
+
+
 def _mk_record() -> TraceRecord:
     """构造典型 RAG trace：root(agent) → retrieval → llm_call。"""
     rec = TraceRecord(
@@ -260,17 +267,20 @@ class TestTracerFallback:
     def test_finish_saves_sqlite_when_disabled(self, collector):
         rec = _mk_record()
         collector.finish(rec, "七天无理由退货", 1500, "qwen-plus")
+        _flush()
         assert ts_mod._trace_store.get("t-lf-001") is not None
 
     def test_list_falls_back_to_sqlite(self, collector):
         rec = _mk_record()
         collector.finish(rec, "七天无理由退货", 1500, "qwen-plus")
+        _flush()
         rows = collector.list(10)
         assert rows and rows[0]["id"] == "t-lf-001"
 
     def test_get_falls_back_to_sqlite(self, collector):
         rec = _mk_record()
         collector.finish(rec, "七天无理由退货", 1500, "qwen-plus")
+        _flush()
         d = collector.get("t-lf-001")
         assert d is not None
         assert len(d["spans"]) == 3

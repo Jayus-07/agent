@@ -28,12 +28,45 @@ def router_node(state: dict) -> dict:
     """
     query = state.get("question") or state.get("query") or ""
     if not query:
-        # 无 query → 默认走 plan
         return {
             **state,
             "route_decision": None,
             "route_mode": "plan",
         }
+
+    # ── CS 预过滤：CS_ENABLED 时先检测客服域，命中则短路不进主 Router ──
+    try:
+        from backend.config.customer_service import CS_ENABLED
+        if CS_ENABLED:
+            from backend.customer_service.router.domain_detector import get_domain_detector
+            detection = get_domain_detector().detect(query)
+            if detection.is_cs:
+                from backend.customer_service.router.cs_router import get_cs_router
+                cs_result = get_cs_router().route(query, detection)
+                from backend.customer_service.router.intents import resolve_route_path
+                route_path = cs_result.route_path.value
+
+                if route_path == "knowledge_query":
+                    cs_target = "cs_knowledge"
+                else:
+                    cs_target = "cs_pending"
+
+                logger.info(
+                    f"[RouterNode] CS 域命中: domain={cs_result.domain.value} "
+                    f"intent={cs_result.intent} conf={cs_result.confidence:.2f} "
+                    f"→ {cs_target}"
+                )
+                return {
+                    **state,
+                    "route_decision": None,
+                    "route_mode": "customer_service",
+                    "cs_context": {
+                        "cs_route": cs_result.model_dump(),
+                        "cs_target": cs_target,
+                    },
+                }
+    except Exception as e:
+        logger.warning(f"[RouterNode] CS 预过滤失败，回退到主 Router: {e}")
 
     try:
         # P0-4: get_router() 懒加载（router 索引/向量资源首次初始化）曾贡献
@@ -78,11 +111,13 @@ def router_node(state: dict) -> dict:
 
 
 def route_selector(state: dict) -> str:
-    """Router 节点后的条件路由：选择下一步节点（V2: 3 路分流）。"""
+    """Router 节点后的条件路由：选择下一步节点（V2: 3 路分流 + CS）。"""
     mode = state.get("route_mode", "plan")
     if mode == "direct":
         return "skill_executor"
     if mode == "workflow":
         return "workflow_executor"
-    # 默认 plan
+    if mode == "customer_service":
+        cs_context = state.get("cs_context", {})
+        return cs_context.get("cs_target", "cs_knowledge")
     return "planner"
