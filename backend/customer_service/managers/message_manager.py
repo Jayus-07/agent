@@ -8,11 +8,12 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select, func, update, desc as desc_col
+from sqlalchemy import desc as desc_col
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.customer_service.models.message import CSMessage
 from backend.customer_service.models.conversation import CSConversation
+from backend.customer_service.models.message import CSMessage
 
 
 def _now() -> datetime:

@@ -8,15 +8,18 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update, func, desc
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.customer_service.errors import ValidationError
-from backend.customer_service.models.conversation import CSConversation
 from backend.customer_service.models.assignment import CSAssignment
+from backend.customer_service.models.conversation import CSConversation
 from backend.customer_service.state_machine import (
-    ConvStatus, HandlingMode, TransitionResult,
-    transition, apply,
+    ConvStatus,
+    HandlingMode,
+    TransitionResult,
+    apply,
+    transition,
 )
 
 

@@ -23,7 +23,7 @@ HTTP 端点 /metrics 在 server.py 注册。
 """
 from __future__ import annotations
 
-from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 # ==========================================================
 # 4 个核心 metric（PR-0.3 最小骨架；后续可加 workflow_run_duration 等）
@@ -147,7 +147,7 @@ llm_usage_missing_total = Counter(
 def publish_breaker_states() -> None:
     """把全部熔断器状态刷到 Prometheus Gauge（周期调用或 /metrics 请求时调用）。"""
     try:
-        from backend.infra.circuit_breaker import get_all_breakers, State
+        from backend.infra.circuit_breaker import get_all_breakers
         for name, breaker in get_all_breakers().items():
             value = {"closed": 0, "half_open": 1, "open": 2}.get(breaker.state.value, 0)
             circuit_breaker_state.labels(name=name).set(value)
@@ -305,15 +305,6 @@ def record_trace_finish(status: str, rejection_layer: str,
         trace_uncovered_ratio.observe(max(0.0, min(1.0, uncovered_ratio)))
     except Exception:
         pass
-
-
-def render_metrics() -> tuple[bytes, str]:
-    """生成 Prometheus 文本格式输出。
-
-    Returns:
-        (body, content_type) — 给 FastResponse 直接用
-    """
-    return generate_latest(), CONTENT_TYPE_LATEST
 
 
 __all__ = [

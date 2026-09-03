@@ -11,11 +11,10 @@ observability/trace_middleware.py — 统一 Trace 中间件
     wf.add_node("sql_skill", wrapped_fn)
 """
 
-import time
 import functools
+import time
 
 from backend.observability.tracer import trace_collector
-from backend.shared.logger import logger
 
 # 节点名 → 用户可读标签
 _NODE_LABELS: dict[str, str] = {

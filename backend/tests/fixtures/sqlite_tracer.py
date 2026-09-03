@@ -71,4 +71,21 @@ def fresh_collector(tmp_path, monkeypatch):
     except Exception:
         pass
 
+    # 5. 同步化 trace 写入（消除异步 worker 竞态：测试在 finish() 后立即 list()）
+    from backend.observability import trace_writer as tw_mod
+    _orig_enqueue = tw_mod.TraceWriteQueue.enqueue
+
+    def _sync_enqueue(self_queue, record):
+        data = tw_mod._serialize_record(record)
+        stores = self_queue._capture_stores()
+        trace_store = stores[0]
+        try:
+            trace_store.save_dict(data)
+        except Exception:
+            pass
+
+    monkeypatch.setattr(tw_mod.TraceWriteQueue, "enqueue", _sync_enqueue)
+
     yield new_collector
+
+    monkeypatch.setattr(tw_mod.TraceWriteQueue, "enqueue", _orig_enqueue)

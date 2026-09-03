@@ -20,11 +20,13 @@ class DomainDetector:
 
     def _ensure_index(self) -> None:
         try:
+            from pathlib import Path
+
             from langchain_chroma import Chroma
-            from backend.rag.embedding_singleton import get_embedding
+
             from backend.config.customer_service import CS_ROUTER_INDEX_DIR
             from backend.customer_service.router.seeds import CS_DOMAIN_SEEDS
-            from pathlib import Path
+            from backend.rag.embedding_singleton import get_embedding
 
             Path(CS_ROUTER_INDEX_DIR).mkdir(parents=True, exist_ok=True)
             embedding = get_embedding()
@@ -50,7 +52,9 @@ class DomainDetector:
     def detect(self, query: str) -> CSDetection:
         """双通道检测 query 是否属于客服域。"""
         from backend.config.customer_service import (
-            CS_DOMAIN_PATTERNS, CS_RULE_MIN_HITS, CS_VECTOR_THRESHOLD,
+            CS_DOMAIN_PATTERNS,
+            CS_RULE_MIN_HITS,
+            CS_VECTOR_THRESHOLD,
         )
 
         rule_hits, rule_score = self._rule_channel(query, CS_DOMAIN_PATTERNS)

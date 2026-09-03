@@ -1,6 +1,6 @@
 'use client'
 
-import { Sparkles, PanelLeft, PanelLeftClose, LayoutDashboard, BookOpen, Brain, Activity, FileText, AlertTriangle, Clock, TrendingUp, ClipboardCheck } from 'lucide-react'
+import { Sparkles, PanelLeft, PanelLeftClose, LayoutDashboard, BookOpen, Brain, Activity, FileText, AlertTriangle, Clock, TrendingUp, ClipboardCheck, ScrollText } from 'lucide-react'
 import NavGroup from './layout/NavGroup'
 
 interface Props { collapsed: boolean; onToggle: () => void }
@@ -46,6 +46,9 @@ const NAV = [
       { label: '问答追踪', path: '/observability/traces' },
       { label: '文档操作日志', path: '/knowledge/operations' },
     ],
+  },
+  {
+    icon: <ScrollText size={18} />, label: 'Prompt 管理', path: '/prompts',
   },
 ]
 

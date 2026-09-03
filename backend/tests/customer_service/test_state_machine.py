@@ -2,14 +2,20 @@
 
 Tests valid/invalid transitions and invariants without DB.
 """
-import pytest
 from unittest.mock import MagicMock
 
+import pytest
+
 from backend.customer_service.state_machine import (
-    ConvStatus, HandlingMode,
-    transition, apply, TransitionResult,
-    InvalidTransitionError, InvariantViolationError,
-    VALID_STATUS_TRANSITIONS, VALID_MODE_TRANSITIONS,
+    VALID_MODE_TRANSITIONS,
+    VALID_STATUS_TRANSITIONS,
+    ConvStatus,
+    HandlingMode,
+    InvalidTransitionError,
+    InvariantViolationError,
+    TransitionResult,
+    apply,
+    transition,
 )
 
 
@@ -78,20 +84,16 @@ class TestValidModeTransitions:
 
     @pytest.mark.parametrize("mode", ["ai", "human", "waiting_human"])
     def test_same_mode_no_change(self, mode):
-        conv = _make_conv(mode=mode)
+        conv = _make_conv(mode=mode, assigned_agent_id="agent-1" if mode == "human" else None)
         result = transition(conv, new_mode=HandlingMode(mode))
         assert result.changed is False
 
 
 class TestInvalidModeTransitions:
-    @pytest.mark.parametrize("src,dst", [
-        ("human", "waiting_human"),
-        ("waiting_human", "waiting_human"),
-    ])
-    def test_disallowed_mode_transitions(self, src, dst):
-        conv = _make_conv(mode=src)
+    def test_human_cannot_go_to_waiting_human(self):
+        conv = _make_conv(mode="human", assigned_agent_id="agent-1")
         with pytest.raises(InvalidTransitionError, match="handling_mode"):
-            transition(conv, new_mode=HandlingMode(dst))
+            transition(conv, new_mode=HandlingMode.WAITING_HUMAN)
 
 
 class TestInvariants:

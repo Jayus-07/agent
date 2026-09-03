@@ -43,6 +43,7 @@ def indexer(tmp_path, tmp_text_file):
 
     embedding = MagicMock()
     embedding.embed_query.return_value = "fake-vector-id"
+    embedding.embed_documents.side_effect = lambda texts: [[0.1] * 128 for _ in texts]
 
     registry = MagicMock()
     registry.list_all.return_value = {}

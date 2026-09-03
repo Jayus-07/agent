@@ -1,8 +1,6 @@
 """test_coarse_router.py — CSCoarseRouter 3 层 fallback 测试"""
 from unittest.mock import MagicMock
 
-import pytest
-
 from backend.customer_service.router.coarse_router import CSCoarseRouter
 from backend.customer_service.router.types import CSDomain
 

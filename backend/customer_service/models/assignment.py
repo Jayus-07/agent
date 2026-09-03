@@ -2,15 +2,23 @@
 
 Tracks assignment history for conversations (new in Alembic 0003).
 """
+from datetime import datetime, timezone
+
 from sqlalchemy import (
-    Column, BigInteger, String, DateTime, ForeignKey, Index,
+    BigInteger,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
 )
 from sqlalchemy.orm import relationship
-from datetime import datetime, timezone
 
 from backend.customer_service.models.conversation import CSBase
 
-_now = lambda: datetime.now(timezone.utc)
+
+def _now():
+    return datetime.now(timezone.utc)
 
 
 class CSAssignment(CSBase):

@@ -1,14 +1,15 @@
 """test_cs_router.py — CS Router 门面测试"""
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
+import pytest
+
+from backend.customer_service.router.cs_router import CSRouter
 from backend.customer_service.router.types import (
     CSDetection,
     CSDomain,
     CSRoutePath,
     CSRouteResult,
 )
-from backend.customer_service.router.cs_router import CSRouter
 
 
 def _make_router_with_mocks(coarse_result, fine_result):

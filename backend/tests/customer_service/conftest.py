@@ -12,7 +12,6 @@ import pytest
 
 from backend.customer_service.errors import CustomerServiceError
 
-
 # ── 基础 fixtures ─────────────────────────────────────────────
 
 @pytest.fixture
@@ -37,8 +36,8 @@ def sample_trace_id():
 @pytest.fixture
 def cs_enabled(monkeypatch):
     """强制开启 CS_ENABLED（测试 CS 路由/功能时需要）。"""
-    import backend.config.customer_service as cs_mod
     import backend.config as cfg_mod
+    import backend.config.customer_service as cs_mod
     monkeypatch.setattr(cs_mod, "CS_ENABLED", True)
     monkeypatch.setattr(cfg_mod, "CS_ENABLED", True)
     return True
@@ -47,8 +46,8 @@ def cs_enabled(monkeypatch):
 @pytest.fixture
 def cs_disabled(monkeypatch):
     """强制关闭 CS_ENABLED（测试降级/旁路时需要）。"""
-    import backend.config.customer_service as cs_mod
     import backend.config as cfg_mod
+    import backend.config.customer_service as cs_mod
     monkeypatch.setattr(cs_mod, "CS_ENABLED", False)
     monkeypatch.setattr(cfg_mod, "CS_ENABLED", False)
     return False

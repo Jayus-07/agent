@@ -18,7 +18,7 @@ from backend.orchestration.router.types import (
 )
 
 
-LLM_ROUTER_PROMPT = """路由能力选择，输出JSON。
+DEFAULT_ROUTER_PROMPT = """路由能力选择，输出JSON。
 能力: sql.query|rag.search|business.analyze|report.generate|email.send|data.export|web.search|data.collect|daily_report|inventory_alert
 问题: {query}
 输出: {{"execution_mode":"direct|plan|workflow","candidates":[{{"name":"能力","score":0-1}}],"reason":"一句话"}}"""
@@ -46,7 +46,12 @@ class LLMRouter:
         from backend.infra.llm import llm
         from backend.shared.logger import logger
 
-        prompt = LLM_ROUTER_PROMPT.format(query=query[:200])
+        try:
+            from backend.prompts.service import prompt_service
+            r = prompt_service.render_sync("router.llm", query=query[:200])
+            prompt = r.text
+        except Exception:
+            prompt = DEFAULT_ROUTER_PROMPT.format(query=query[:200])
 
         try:
             raw = safe_call_with_timeout(

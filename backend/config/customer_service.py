@@ -14,8 +14,25 @@ CS_ENABLED = os.getenv("CS_ENABLED", "false").strip().lower() in ("1", "true", "
 # =============================================
 # 确认状态机
 # =============================================
-CS_CONFIRMATION_TTL_SECONDS = int(os.getenv("CS_CONFIRMATION_TTL_SECONDS", "300"))
+CS_CONFIRMATION_TTL_SECONDS = int(os.getenv("CS_CONFIRMATION_TTL_SECONDS", "900"))
 CS_MAX_CONFIRMATION_RETRIES = int(os.getenv("CS_MAX_CONFIRMATION_RETRIES", "3"))
+
+# =============================================
+# 确认 / 取消关键词
+# =============================================
+CS_CONFIRM_KEYWORDS = frozenset({
+    "确认", "确定", "好的", "同意", "可以", "没问题", "是的",
+    "嗯", "对", "ok", "yes", "confirm",
+})
+CS_CANCEL_KEYWORDS = frozenset({
+    "取消", "算了", "不要", "不", "否", "放弃",
+    "cancel", "no",
+})
+
+# =============================================
+# 大额退款阈值（达到此金额自动升级为 CRITICAL）
+# =============================================
+CS_CRITICAL_REFUND_AMOUNT = float(os.getenv("CS_CRITICAL_REFUND_AMOUNT", "1000"))
 
 # =============================================
 # 人工转接

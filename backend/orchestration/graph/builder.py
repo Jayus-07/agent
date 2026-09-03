@@ -23,7 +23,10 @@ from backend.agents.planner.critique import critique_node
 from backend.orchestration.supervisor.scheduler import supervisor_node, route_after_supervisor
 from backend.agents.reporter.reporter import reporter_node
 from backend.orchestration.tool_registry import tool_registry
-from backend.customer_service.graph.nodes import cs_knowledge_node, cs_pending_node
+from backend.customer_service.graph.nodes import (
+    cs_knowledge_node, cs_pending_node, cs_business_query, cs_business_action,
+    cs_complaint, cs_handoff, cs_handoff_intercept,
+)
 from backend.shared.logger import logger
 
 # 触发 Skill 包自注册（必须在 build_graph() 之前 import）
@@ -43,7 +46,12 @@ _NODE_LABELS = {
     "report_skill":       "报告生成",
     "reporter":           "结果汇总",
     "cs_knowledge":       "客服知识问答",
+    "cs_business_query":  "客服业务查询",
+    "cs_business_action": "客服业务操作",
     "cs_pending":         "客服待处理",
+    "cs_complaint":       "客服投诉处理",
+    "cs_handoff":         "人工转接",
+    "cs_handoff_intercept": "转接拦截",
 }
 
 
@@ -109,7 +117,14 @@ def build_graph():
 
     # ── 客服节点（CS 路由命中后承接，Phase 2: knowledge_query 路径）──
     wf.add_node("cs_knowledge", trace_middleware.wrap_sync_node("cs_knowledge", cs_knowledge_node))
+    wf.add_node("cs_business_query", trace_middleware.wrap_sync_node("cs_business_query", cs_business_query))
+    wf.add_node("cs_business_action", trace_middleware.wrap_sync_node("cs_business_action", cs_business_action))
     wf.add_node("cs_pending", trace_middleware.wrap_sync_node("cs_pending", cs_pending_node))
+
+    # ── 客服 Phase 5 节点（投诉处理 + 人工转接 + 转接拦截）──
+    wf.add_node("cs_complaint", trace_middleware.wrap_sync_node("cs_complaint", cs_complaint))
+    wf.add_node("cs_handoff", trace_middleware.wrap_sync_node("cs_handoff", cs_handoff))
+    wf.add_node("cs_handoff_intercept", trace_middleware.wrap_sync_node("cs_handoff_intercept", cs_handoff_intercept))
 
     # ── Skill 节点（自动发现 + TraceMiddleware 自动记录 Span）──
     for name, func in tool_registry.get_skill_nodes().items():
@@ -130,7 +145,12 @@ def build_graph():
             "skill_executor": "skill_executor",  # direct: 跳过 Planner
             "workflow_executor": "workflow_executor",  # workflow: 跳过 Planner
             "cs_knowledge": "cs_knowledge",  # CS: 知识问答
-            "cs_pending": "cs_pending",  # CS: 待处理（Phase 3-5）
+            "cs_business_query": "cs_business_query",  # CS: 业务查询 (Phase 3)
+            "cs_business_action": "cs_business_action",  # CS: 业务操作 (Phase 4)
+            "cs_pending": "cs_pending",  # CS: 待处理（Phase 5）
+            "cs_complaint": "cs_complaint",  # CS: 投诉处理 (Phase 5)
+            "cs_handoff": "cs_handoff",  # CS: 人工转接 (Phase 5)
+            "cs_handoff_intercept": "cs_handoff_intercept",  # CS: 转接拦截 (Phase 5)
         },
     )
 
@@ -140,7 +160,12 @@ def build_graph():
 
     # CS: 客服节点到 reporter
     wf.add_edge("cs_knowledge", "reporter")
+    wf.add_edge("cs_business_query", "reporter")
+    wf.add_edge("cs_business_action", "reporter")
     wf.add_edge("cs_pending", "reporter")
+    wf.add_edge("cs_complaint", "reporter")
+    wf.add_edge("cs_handoff", "reporter")
+    wf.add_edge("cs_handoff_intercept", "reporter")
 
     wf.add_edge("planner", "critique")
 

@@ -1,10 +1,9 @@
 """test_types.py — CS Router 类型定义测试"""
-import pytest
 
 from backend.customer_service.router.types import (
+    CSDetection,
     CSDomain,
     CSRoutePath,
-    CSDetection,
     CSRouteResult,
     IntentProfile,
 )

@@ -7,17 +7,25 @@ Dual-dimension state:
 Maps to ``customer_service.conversations`` table (created by 006 migration,
 extended by Alembic 0003).
 """
-from sqlalchemy import (
-    Column, BigInteger, String, Text, Boolean, DateTime, Float,
-    ForeignKey, Index,
-)
-from sqlalchemy.dialects.postgresql import JSONB, ARRAY
-from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+)
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.orm import declarative_base, relationship
 
 CSBase = declarative_base()
 
-_now = lambda: datetime.now(timezone.utc)
+def _now():
+    return datetime.now(timezone.utc)
 
 
 class CSConversation(CSBase):

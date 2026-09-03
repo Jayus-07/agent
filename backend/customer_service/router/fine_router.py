@@ -38,11 +38,13 @@ class CSFineRouter:
 
     def _ensure_index(self) -> None:
         try:
+            from pathlib import Path
+
             from langchain_chroma import Chroma
-            from backend.rag.embedding_singleton import get_embedding
+
             from backend.config.customer_service import CS_ROUTER_INDEX_DIR
             from backend.customer_service.router.seeds import CS_FINE_SEEDS
-            from pathlib import Path
+            from backend.rag.embedding_singleton import get_embedding
 
             Path(CS_ROUTER_INDEX_DIR).mkdir(parents=True, exist_ok=True)
             embedding = get_embedding()
@@ -113,7 +115,6 @@ class CSFineRouter:
             if not results:
                 return "k_faq", 0.0, "no_results"
 
-            from collections import Counter
             intent_scores: dict[str, list[float]] = {}
             for doc, distance in results:
                 intent_id = doc.metadata.get("intent", "")

@@ -2,15 +2,23 @@
 
 Maps to ``customer_service.cs_agents`` table (new in Alembic 0003).
 """
+from datetime import datetime, timezone
+
 from sqlalchemy import (
-    Column, BigInteger, String, Text, Boolean, DateTime, Index,
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Index,
+    String,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from datetime import datetime, timezone
 
 from backend.customer_service.models.conversation import CSBase
 
-_now = lambda: datetime.now(timezone.utc)
+
+def _now():
+    return datetime.now(timezone.utc)
 
 
 class CSAgent(CSBase):

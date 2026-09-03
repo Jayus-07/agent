@@ -2,19 +2,19 @@
 import pytest
 
 from backend.customer_service.errors import (
-    CustomerServiceError,
+    ERROR_USER_MESSAGES,
+    ActionExecutionError,
     AuthenticationError,
     AuthorizationError,
-    ValidationError,
     BusinessRuleError,
-    OrderNotFoundError,
-    OrderNotEligibleError,
-    RetrievalError,
-    ExternalServiceError,
+    CustomerServiceError,
     DatabaseError,
-    ActionExecutionError,
+    ExternalServiceError,
     HumanHandoffError,
-    ERROR_USER_MESSAGES,
+    OrderNotEligibleError,
+    OrderNotFoundError,
+    RetrievalError,
+    ValidationError,
 )
 
 

@@ -1,13 +1,12 @@
 """test_intents.py — 意图定义、KB 映射、路由路径解析测试"""
-import pytest
 
 from backend.customer_service.router.intents import (
-    FINE_INTENTS,
-    INTENT_PROFILES,
-    INTENT_KB_MAP,
     DOMAIN_DEFAULT_INTENT,
-    resolve_route_path,
+    FINE_INTENTS,
+    INTENT_KB_MAP,
+    INTENT_PROFILES,
     kb_ids_for,
+    resolve_route_path,
 )
 from backend.customer_service.router.types import CSDomain, CSRoutePath
 

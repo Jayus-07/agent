@@ -17,30 +17,28 @@ LangChain LCEL 主 Chain
 """
 from langchain_classic.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+
 # (MultiQuery 已迁移至 retrieval/multi_query.py)
 from langchain_classic.retrievers import ContextualCompressionRetriever
+from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
-from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.runnables import RunnableLambda
 
+from backend.config import ENABLE_HISTORY_AWARE_RETRIEVAL
 from backend.infra.llm import llm
-from backend.rag.retrieval.retrievers import ChunkLevelRetriever, AdaptiveRetriever
-from backend.rag.reranker import RerankCompressor
 from backend.rag.citation import CitationFormatter
+from backend.rag.context import get_context, set_context
 from backend.rag.evidence_gate import EvidenceGateController
 from backend.rag.evidence_gate.self_correction import SelfCorrectionStrategy
-from backend.config import ENABLE_HISTORY_AWARE_RETRIEVAL
-from backend.rag.context import get_context, set_context
+from backend.rag.reranker import RerankCompressor
+from backend.rag.retrieval.retrievers import AdaptiveRetriever, ChunkLevelRetriever
 from backend.shared.logger import logger
 
-
 # =====================================================
-# Prompt: 历史感知查询重写
+# Prompt: 历史感知查询重写（DEFAULT fallback — 优先从 prompt_service 获取）
 # =====================================================
 
-# 用于将带有上下文依赖的问题（如包含代词或省略）重写为独立的检索查询
-CONTEXTUALIZE_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """你是跨境电商知识库的查询重写助手。
+DEFAULT_CONTEXTUALIZE_SYSTEM = """你是跨境电商知识库的查询重写助手。
 
 根据对话历史，将用户问题重新表述为独立的检索查询。
 
@@ -49,20 +47,13 @@ CONTEXTUALIZE_PROMPT = ChatPromptTemplate.from_messages([
 2. 如果问题已经独立完整，直接返回原问题
 3. 不要回答问题，只输出改写后的查询
 4. 保留所有专有名词、技术术语、业务词汇
-5. 不要添加解释或 markdown 格式"""),
-    MessagesPlaceholder("chat_history"),  # 占位符，运行时注入对话历史
-    ("human", "{input}"),
-])
+5. 不要添加解释或 markdown 格式"""
 
 # =====================================================
-# Prompt: QA 回答（含内联引用标注）
+# Prompt: QA 回答（DEFAULT fallback — 优先从 prompt_service 获取）
 # =====================================================
 
-# 用于最终生成答案，结合检索到的文档和对话历史
-# P1 改造：Markdown 正文 + 末尾 <!--META--> 注释（与 Citation 兼容，避 JSON 与 Faithfulness 冲突）
-# 详见 docs/architecture/rag-evidence-gate.md §0.4 表
-QA_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """你是电商企业知识库助手。你只能依据「资料」中明确提供的信息回答问题。
+DEFAULT_QA_SYSTEM = """你是电商企业知识库助手。你只能依据「资料」中明确提供的信息回答问题。
 
 ## 核心规则
 
@@ -96,13 +87,9 @@ QA_PROMPT = ChatPromptTemplate.from_messages([
 reason 取值：no_evidence / low_relevance / insufficient / out_of_scope
 
 资料:
-{context}"""),
-    MessagesPlaceholder("chat_history"),
-    ("human", "{input}"),
-])
+{context}"""
 
-# 单文档格式化：含元数据标签（非空字段才显示，不浪费 token）
-DOCUMENT_PROMPT = PromptTemplate.from_template(
+DEFAULT_DOCUMENT_TEMPLATE = (
     "[Evidence E{index}]\n"
     "{query_label}"
     "{doc_label}"
@@ -112,6 +99,53 @@ DOCUMENT_PROMPT = PromptTemplate.from_template(
     "{domain_label}"
     "{page_content}"
 )
+
+
+# =====================================================
+# Prompt 构建器：优先从 prompt_service 获取，降级到 DEFAULT 常量
+# =====================================================
+
+def _build_contextualize_prompt() -> ChatPromptTemplate:
+    """从 prompt_service 构建查询重写 ChatPromptTemplate。"""
+    try:
+        from backend.prompts.service import prompt_service
+        prompt_service.get_template_sync("rag.contextualize")
+    except Exception:
+        pass
+    return ChatPromptTemplate.from_messages([
+        ("system", DEFAULT_CONTEXTUALIZE_SYSTEM),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ])
+
+
+def _build_qa_prompt() -> ChatPromptTemplate:
+    """从 prompt_service 构建 QA ChatPromptTemplate。"""
+    system_text = DEFAULT_QA_SYSTEM
+    try:
+        from backend.prompts.service import prompt_service
+        full = prompt_service.get_template_sync("rag.qa")
+        parts = full.split("---", 1)
+        if len(parts) == 2:
+            system_text = parts[0].strip()
+    except Exception:
+        pass
+    return ChatPromptTemplate.from_messages([
+        ("system", system_text),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ])
+
+
+def _build_document_prompt() -> PromptTemplate:
+    """从 prompt_service 构建证据格式化 PromptTemplate。"""
+    template_str = DEFAULT_DOCUMENT_TEMPLATE
+    try:
+        from backend.prompts.service import prompt_service
+        template_str = prompt_service.get_template_sync("rag.document")
+    except Exception:
+        pass
+    return PromptTemplate.from_template(template_str)
 
 
 # =====================================================
@@ -144,9 +178,11 @@ class RAGChain:
         # _last_sources 是跨线程输出通道（rag_search 在 to_thread 返回后
         # 于主线程 getattr 读取），必须保留为实例字段。
         self._last_sources: list = []
+        self._chains_dirty = False
 
         self._build_retrievers()
         self._build_chains()
+        self._register_prompt_reload_hooks()
         logger.info("LangChain RAG Chain 初始化完成")
 
     # ── 决策中间态：随 RequestContext 隔离（contextvars），防单例并发串扰 ──
@@ -246,12 +282,12 @@ class RAGChain:
             return input_dict
 
         _stuff = create_stuff_documents_chain(
-            llm, QA_PROMPT,
-            document_prompt=DOCUMENT_PROMPT,
+            llm, _build_qa_prompt(),
+            document_prompt=_build_document_prompt(),
             document_separator="\n\n---\n\n",
         )
         def _timed_stuff(inp):
-            from backend.observability.tracer import trace_collector, SpanKind
+            from backend.observability.tracer import SpanKind, trace_collector
             # ── 空检索短路：0 docs 时跳过 LLM（~4.8s），Gate 会拒答 ──
             context_docs = inp.get("context", [])
             if not context_docs:
@@ -327,10 +363,23 @@ class RAGChain:
         self.chain_standalone = create_retrieval_chain(retriever, stuff_chain)
         if ENABLE_HISTORY_AWARE_RETRIEVAL:
             retriever = create_history_aware_retriever(
-                llm, retriever, CONTEXTUALIZE_PROMPT
+                llm, retriever, _build_contextualize_prompt()
             )
 
         self.chain = create_retrieval_chain(retriever, stuff_chain)
+
+    def _register_prompt_reload_hooks(self):
+        """注册 prompt 热加载钩子：版本发布时标记 chain 需要重建。"""
+        try:
+            from backend.prompts.service import prompt_service
+            for key in ("rag.qa", "rag.contextualize", "rag.document"):
+                prompt_service.register_reload_hook(key, self._mark_chains_dirty)
+        except Exception:
+            logger.debug("[RAGChain] prompt_service 不可用，跳过热加载注册",
+                         exc_info=True)
+
+    def _mark_chains_dirty(self):
+        self._chains_dirty = True
 
     # =================================================
     # Step C: 公共入口
@@ -345,6 +394,9 @@ class RAGChain:
           - gate/corrector 每请求新建实例：复用实例会让 intent/risk_level/
             retry_count 在并发请求间串扰（retry_count 还会跨请求累积）。
         """
+        if self._chains_dirty:
+            self._build_chains()
+            self._chains_dirty = False
         trace, t_total = self._start(question, session_id)
         try:
             ctx = get_context()
@@ -368,13 +420,14 @@ class RAGChain:
         而是在父 trace 中创建 "rag_skill" span 作为作用域根，所有 RAG span
         自动嵌套其下。前端无需跳转子 trace 即可看到完整 RAG 链路。
         """
-        from backend.observability.tracer import trace_collector, _scope_root_var
         import time as _time
+
+        from backend.observability.tracer import _scope_root_var, trace_collector
         prev = trace_collector.current()
         if prev is not None:
             trace = prev
             trace._rag_embedded = True
-            rag_span = trace_collector.start_span(
+            trace_collector.start_span(
                 "rag_skill", name="RAG 智能问答", type="agent",
                 kind="skill", input={"question": question})
             _scope_root_var.set("rag_skill")
@@ -426,11 +479,14 @@ class RAGChain:
         # FAITHFULNESS_REJECT_SCORE / HIGH_RISK_REJECT_SCORE 一直未生效。
         # 阈值从 config 传入（保持配置单一来源，函数签名的默认值仅作兜底）。
         if self._last_faithfulness is not None:
-            from backend.rag.evidence_gate import (
-                is_groundedness_acceptable, GateDecision, RejectReason,
-            )
             from backend.config import (
-                FAITHFULNESS_REJECT_SCORE, HIGH_RISK_REJECT_SCORE,
+                FAITHFULNESS_REJECT_SCORE,
+                HIGH_RISK_REJECT_SCORE,
+            )
+            from backend.rag.evidence_gate import (
+                GateDecision,
+                RejectReason,
+                is_groundedness_acceptable,
             )
             acceptable, _ = is_groundedness_acceptable(
                 self._last_faithfulness.score,
@@ -524,10 +580,11 @@ class RAGChain:
 
     def _finish(self, trace, answer: str, t_total: float):
         """统一 trace 收尾。"""
-        from backend.observability.tracer import trace_collector, _scope_root_var
+        import time as _time
+
         from backend.config.llm import LLM_MODEL
         from backend.infra.llm.factory import get_llm_factory
-        import time as _time
+        from backend.observability.tracer import _scope_root_var, trace_collector
         total_ms = int((_time.time() - t_total) * 1000)
         self._end_root_span(trace,
             output={"answer_preview": answer[:200], "answer_len": len(answer)},
@@ -550,8 +607,9 @@ class RAGChain:
         保证 Trace 不因异常而丢失（P0）。此函数自身在异常处理路径中，
         收尾再失败时不覆盖原始异常，仅记录日志。
         """
-        from backend.observability.tracer import trace_collector, _scope_root_var
         import time as _time
+
+        from backend.observability.tracer import _scope_root_var, trace_collector
         try:
             self._end_root_span(trace, status="error",
                                 metrics={"error": "pipeline_failed"})
@@ -623,14 +681,15 @@ class RAGChain:
         Returns:
             dict 含 "context" / "answer" / "__evidence_gate_decision__" / 可选 "__rejected"
         """
-        from backend.observability.tracer import trace_collector, SpanKind
         import time as _time
+
+        from backend.observability.tracer import trace_collector
 
         # ── 记录 query 上下文（§D4 修复） ──
         self._last_query = question
         try:
-            from backend.rag.retrieval.query_analyzer import QueryAnalyzer
             from backend.rag.context import get_context
+            from backend.rag.retrieval.query_analyzer import QueryAnalyzer
             qa_result = QueryAnalyzer().analyze(question)
             get_context().query_analysis = qa_result
             self.gate.set_query_analysis(qa_result)
@@ -683,11 +742,13 @@ class RAGChain:
           - 都通过 → 返回最后一个 passed=True 的 GateDecision
           - 总开关关闭 / 任何异常 → 返回 passed=True (透传)
         """
+        from backend.observability.tracer import SpanKind, trace_collector
         from backend.rag.evidence_gate import (
-            evidence_gate_retrieval, evidence_gate_rerank,
-            is_evidence_gate_enabled, gate_retrieval_passthrough,
+            evidence_gate_rerank,
+            evidence_gate_retrieval,
+            gate_retrieval_passthrough,
+            is_evidence_gate_enabled,
         )
-        from backend.observability.tracer import trace_collector, SpanKind
 
         if not is_evidence_gate_enabled():
             return gate_retrieval_passthrough()
@@ -722,7 +783,7 @@ class RAGChain:
         else:
             # 没注入（空召回或 fallback 路径）→ 自己跑一次
             try:
-                from backend.config import VEC_MIN_SCORE, DOC_TYPE_COVERAGE_REQUIRED
+                from backend.config import DOC_TYPE_COVERAGE_REQUIRED, VEC_MIN_SCORE
                 ret_decision = evidence_gate_retrieval(
                     context_docs,
                     query_analysis=self.gate.query_analysis,
@@ -749,7 +810,9 @@ class RAGChain:
                 from backend.config import GATE_ENTITY_CHECK_ENABLED
                 if GATE_ENTITY_CHECK_ENABLED:
                     from backend.rag.evidence_gate import (
-                        find_missing_entities, GateDecision, RejectReason,
+                        GateDecision,
+                        RejectReason,
+                        find_missing_entities,
                     )
                     missing = find_missing_entities(question, context_docs)
                     if missing:
@@ -787,8 +850,10 @@ class RAGChain:
         )
         try:
             from backend.config import (
-                RERANK_MIN_TOP1, RERANK_MIN_AVG, RERANK_MIN_GAP,
                 RERANK_HIGH_RISK_MIN_TOP1,
+                RERANK_MIN_AVG,
+                RERANK_MIN_GAP,
+                RERANK_MIN_TOP1,
             )
             rerank_decision = evidence_gate_rerank(
                 context_docs,
@@ -862,7 +927,7 @@ class RAGChain:
           - META 信息存到 self._last_meta，让 ask() 后续判定拒答/放行
         """
         from backend.observability.tracer import trace_collector
-        from backend.rag.evidence_gate import parse_meta_comment, RejectReason
+        from backend.rag.evidence_gate import parse_meta_comment
 
         raw_answer = self.formatter.strip_think(result["answer"])
         context_docs = result.get("context", [])
@@ -907,8 +972,8 @@ class RAGChain:
         Returns:
             answer（通过时原样返回）或 None（编造事实被拦截）。
         """
-        from backend.observability.tracer import trace_collector
         from backend.observability.tracer import SpanName as _SpanName
+        from backend.observability.tracer import trace_collector
         from backend.rag.evidence_gate.claim_verifier import verify_answer
 
         claim_span = trace_collector.start_span(
@@ -945,8 +1010,9 @@ class RAGChain:
           _evaluate() 改为返回 FaithfulnessResult 而非直接改写 answer。
         """
         import re
-        from backend.observability.tracer import trace_collector
+
         from backend.observability.tracer import SpanName as _SpanName
+        from backend.observability.tracer import trace_collector
         self._last_faithfulness = None
 
         try:

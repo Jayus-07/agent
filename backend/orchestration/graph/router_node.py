@@ -48,6 +48,14 @@ def router_node(state: dict) -> dict:
 
                 if route_path == "knowledge_query":
                     cs_target = "cs_knowledge"
+                elif route_path == "business_query":
+                    cs_target = "cs_business_query"
+                elif route_path == "business_action":
+                    cs_target = "cs_business_action"
+                elif route_path == "complaint_flow":
+                    cs_target = "cs_complaint"
+                elif route_path == "human_handoff":
+                    cs_target = "cs_handoff"
                 else:
                     cs_target = "cs_pending"
 
@@ -56,6 +64,41 @@ def router_node(state: dict) -> dict:
                     f"intent={cs_result.intent} conf={cs_result.confidence:.2f} "
                     f"→ {cs_target}"
                 )
+
+                # ── Phase 5: CS Input Guard ──
+                from backend.customer_service.security.input_guard import get_cs_input_guard
+                user_id = state.get("user_id", "anonymous")
+                session_id = state.get("session_id", "default")
+                guard_result = get_cs_input_guard().check(query)
+                if guard_result.action.value == "block":
+                    logger.info(
+                        f"[RouterNode] CS InputGuard BLOCK: "
+                        f"category={guard_result.category.value} reason={guard_result.reason}"
+                    )
+                    return {
+                        **state,
+                        "route_decision": None,
+                        "route_mode": "customer_service",
+                        "cs_context": {
+                            "cs_route": cs_result.model_dump(),
+                            "cs_target": cs_target,
+                            "authenticated_user_id": user_id,
+                            "session_id": session_id,
+                        },
+                        "final_answer": guard_result.message,
+                    }
+
+                # ── Phase 5: 转接拦截 — 活跃转接时拦截业务请求 ──
+                _HANDOFF_TERMINAL_TARGETS = {"cs_handoff", "cs_complaint", "cs_handoff_intercept"}
+                if cs_target not in _HANDOFF_TERMINAL_TARGETS:
+                    from backend.customer_service.handoff_store import get_handoff_store
+                    if get_handoff_store().has_active_handoff(user_id):
+                        logger.info(
+                            f"[RouterNode] 转接拦截: user={user_id} "
+                            f"原目标={cs_target} → cs_handoff_intercept"
+                        )
+                        cs_target = "cs_handoff_intercept"
+
                 return {
                     **state,
                     "route_decision": None,
@@ -63,6 +106,8 @@ def router_node(state: dict) -> dict:
                     "cs_context": {
                         "cs_route": cs_result.model_dump(),
                         "cs_target": cs_target,
+                        "authenticated_user_id": user_id,
+                        "session_id": session_id,
                     },
                 }
     except Exception as e:

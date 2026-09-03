@@ -2,14 +2,20 @@
 
 Tests model construction, defaults, and properties without DB.
 """
-import pytest
-from datetime import datetime, timezone
 
-from backend.customer_service.models.conversation import CSConversation, CSBase
-from backend.customer_service.models.message import CSMessage
-from backend.customer_service.models.customer import CSCustomer
 from backend.customer_service.models.agent import CSAgent
 from backend.customer_service.models.assignment import CSAssignment
+from backend.customer_service.models.conversation import CSBase, CSConversation
+from backend.customer_service.models.customer import CSCustomer
+from backend.customer_service.models.message import CSMessage
+
+
+def _get_schema(model_cls) -> str:
+    """Extract schema from __table_args__ tuple (contains Index objects + dict)."""
+    for item in model_cls.__table_args__:
+        if isinstance(item, dict) and "schema" in item:
+            return item["schema"]
+    return ""
 
 
 class TestCSConversationModel:
@@ -17,18 +23,14 @@ class TestCSConversationModel:
         assert CSConversation.__tablename__ == "conversations"
 
     def test_schema(self):
-        assert CSConversation.__table_args__["schema"] == "customer_service"
+        assert _get_schema(CSConversation) == "customer_service"
 
     def test_defaults(self):
-        conv = CSConversation(
-            conversation_id="test-001",
-            user_id="user-001",
-        )
-        assert conv.conversation_status == "open"
-        assert conv.handling_mode == "ai"
-        assert conv.channel == "web"
-        assert conv.priority == "medium"
-        assert conv.ai_enabled is True
+        assert CSConversation.__table__.c.conversation_status.default.arg == "open"
+        assert CSConversation.__table__.c.handling_mode.default.arg == "ai"
+        assert CSConversation.__table__.c.channel.default.arg == "web"
+        assert CSConversation.__table__.c.priority.default.arg == "medium"
+        assert CSConversation.__table__.c.ai_enabled.default.arg is True
 
     def test_is_open_property(self):
         conv = CSConversation(
@@ -62,17 +64,12 @@ class TestCSMessageModel:
         assert CSMessage.__tablename__ == "messages"
 
     def test_schema(self):
-        assert CSMessage.__table_args__["schema"] == "customer_service"
+        assert _get_schema(CSMessage) == "customer_service"
 
     def test_defaults(self):
-        msg = CSMessage(
-            message_id="msg-001",
-            conversation_id="conv-001",
-            content="Hello",
-        )
-        assert msg.sender_type == "user"
-        assert msg.content_type == "text"
-        assert msg.private is False
+        assert CSMessage.__table__.c.sender_type.default.arg == "user"
+        assert CSMessage.__table__.c.content_type.default.arg == "text"
+        assert CSMessage.__table__.c.private.default.arg is False
 
 
 class TestCSCustomerModel:
@@ -80,7 +77,7 @@ class TestCSCustomerModel:
         assert CSCustomer.__tablename__ == "customers"
 
     def test_schema(self):
-        assert CSCustomer.__table_args__["schema"] == "customer_service"
+        assert _get_schema(CSCustomer) == "customer_service"
 
     def test_defaults(self):
         customer = CSCustomer(
@@ -96,16 +93,12 @@ class TestCSAgentModel:
         assert CSAgent.__tablename__ == "cs_agents"
 
     def test_schema(self):
-        assert CSAgent.__table_args__["schema"] == "customer_service"
+        assert _get_schema(CSAgent) == "customer_service"
 
     def test_defaults(self):
-        agent = CSAgent(
-            agent_id="agent-001",
-            display_name="Agent Smith",
-        )
-        assert agent.role == "agent"
-        assert agent.available is True
-        assert agent.max_conversations == 10
+        assert CSAgent.__table__.c.role.default.arg == "agent"
+        assert CSAgent.__table__.c.available.default.arg is True
+        assert CSAgent.__table__.c.max_conversations.default.arg == 10
 
 
 class TestCSAssignmentModel:
@@ -113,7 +106,7 @@ class TestCSAssignmentModel:
         assert CSAssignment.__tablename__ == "assignments"
 
     def test_schema(self):
-        assert CSAssignment.__table_args__["schema"] == "customer_service"
+        assert _get_schema(CSAssignment) == "customer_service"
 
 
 class TestCSBaseIsolation:

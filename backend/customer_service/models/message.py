@@ -3,17 +3,27 @@
 Maps to ``customer_service.messages`` table.
 Extends the 006 schema with sender_type / content_type / private / attachments.
 """
+from datetime import datetime, timezone
+
 from sqlalchemy import (
-    Column, BigInteger, String, Text, Boolean, DateTime, Float,
-    ForeignKey, Index,
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    String,
+    Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
-from datetime import datetime, timezone
 
 from backend.customer_service.models.conversation import CSBase
 
-_now = lambda: datetime.now(timezone.utc)
+
+def _now():
+    return datetime.now(timezone.utc)
 
 
 class CSMessage(CSBase):

@@ -19,18 +19,18 @@ Tool 选择由 Supervisor + ToolRegistry 完成。
 import hashlib
 import json
 
-from backend.infra.llm import llm
 from backend.infra.cache import get_cache
+from backend.infra.llm import llm
+from backend.observability.alerts import log_degradation, make_alert
 from backend.orchestration.tool_registry import tool_registry
-from backend.observability.alerts import make_alert, log_degradation
-from backend.prompts.planner import PLANNER_SYSTEM, is_knowledge_question
+from backend.prompts.planner import is_knowledge_question
 from backend.shared.logger import logger
 
 
-def _cache_key(question: str, kb_id: str) -> str:
-    """缓存键：问题 + KB ID + capability 集合的 hash。"""
+def _cache_key(question: str, kb_id: str, prompt_version: int | None = None) -> str:
+    """缓存键：问题 + KB ID + capability 集合 + prompt 版本的 hash。"""
     caps = tuple(sorted(tool_registry.get_available_capabilities()))
-    raw = f"{question}|{kb_id}|{caps}"
+    raw = f"{question}|{kb_id}|{caps}|{prompt_version or 0}"
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
@@ -92,7 +92,9 @@ def planner_node(state: dict) -> dict:
         router_hint_text = f"\n\n【Router 建议】以下能力可能相关（仅供参考，可扩展）：{caps_text}"
 
     # ── P2 性能优化：缓存命中 → 跳过 LLM ──
-    cached = _planner_cache.get_json(_cache_key(question, kb_id))
+    from backend.prompts.service import prompt_service
+    prompt_version = prompt_service.get_version_for_cache_key("planner.system")
+    cached = _planner_cache.get_json(_cache_key(question, kb_id, prompt_version))
     if cached is not None:
         logger.info(f"[Planner] 缓存命中 → {len(cached.get('nodes',{}))} 节点")
         return {"plan": cached}
@@ -100,10 +102,19 @@ def planner_node(state: dict) -> dict:
     capabilities_schema = _format_capabilities_schema()
     cap_example = tool_registry.get_available_capabilities()[0]
 
-    prompt = PLANNER_SYSTEM.format(
-        capabilities_schema=capabilities_schema,
-        cap_example=cap_example,
-    )
+    try:
+        r = prompt_service.render_sync(
+            "planner.system",
+            capabilities_schema=capabilities_schema,
+            cap_example=cap_example,
+        )
+        prompt = r.text
+    except Exception:
+        from backend.prompts.planner import PLANNER_SYSTEM
+        prompt = PLANNER_SYSTEM.format(
+            capabilities_schema=capabilities_schema,
+            cap_example=cap_example,
+        )
     user_msg = f"用户问题: {question}{router_hint_text}\n\n请输出 JSON:"
 
     logger.info(f"[Planner] 分析问题: {question[:80]}...")
@@ -132,12 +143,12 @@ def planner_node(state: dict) -> dict:
         logger.info(f"[Planner] 计划生成: {node_count} 个节点, {edge_count} 条依赖")
 
         # P2 perf: 写入缓存
-        _planner_cache.set_json(_cache_key(question, kb_id), plan)
+        _planner_cache.set_json(_cache_key(question, kb_id, prompt_version), plan)
 
         # 兜底：空计划 → 自动添加 search_knowledge 步骤
         if not plan.get("nodes"):
             plan = _fallback_plan(question)
-            logger.info(f"[Planner] 空计划，使用兜底 RAG 步骤")
+            logger.info("[Planner] 空计划，使用兜底 RAG 步骤")
 
         # KB 隔离：为所有 search_knowledge 步骤注入 kb_id
         for step_id, node in plan.get("nodes", {}).items():

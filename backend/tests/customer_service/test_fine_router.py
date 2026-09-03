@@ -1,9 +1,7 @@
 """test_fine_router.py — CSFineRouter 按域分流测试"""
 from unittest.mock import MagicMock
 
-import pytest
-
-from backend.customer_service.router.fine_router import CSFineRouter, _RULE_INTENT_MAP
+from backend.customer_service.router.fine_router import CSFineRouter
 from backend.customer_service.router.types import CSDomain
 
 

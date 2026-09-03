@@ -18,31 +18,25 @@ class TestQAPromptShape:
     """P1.1 验证：QA_PROMPT 已改为 Markdown+META 格式"""
 
     def test_prompt_mentions_mETA_html(self):
-        from backend.rag.chain import QA_PROMPT
-        text = QA_PROMPT.messages[0].prompt.template  # system 段
-        assert "<!--META" in text, "QA_PROMPT 应包含 <!--META--> 注释说明"
-        assert "can_answer" in text
+        from backend.rag.chain import DEFAULT_QA_SYSTEM
+        assert "<!--META" in DEFAULT_QA_SYSTEM, "QA_PROMPT 应包含 <!--META--> 注释说明"
+        assert "can_answer" in DEFAULT_QA_SYSTEM
 
     def test_prompt_does_not_require_json(self):
         """§C2/C3 修复：不应再强制输出纯 JSON（与 Citation 体系冲突）"""
-        from backend.rag.chain import QA_PROMPT
-        text = QA_PROMPT.messages[0].prompt.template
-        # 旧的 JSON 格式（要求 can_answer 是顶层 JSON）已被替换
-        assert "JSON:" not in text or "JSON 注释" in text, \
+        from backend.rag.chain import DEFAULT_QA_SYSTEM
+        assert "JSON:" not in DEFAULT_QA_SYSTEM or "JSON 注释" in DEFAULT_QA_SYSTEM, \
             "QA_PROMPT 应不再要求纯 JSON 输出"
 
     def test_prompt_lists_valid_reasons(self):
-        from backend.rag.chain import QA_PROMPT
-        text = QA_PROMPT.messages[0].prompt.template
-        # 4 个 reason（与 RejectReason 5 类对齐：no_evidence/low_relevance/insufficient/out_of_scope）
+        from backend.rag.chain import DEFAULT_QA_SYSTEM
         for reason in ("no_evidence", "low_relevance", "insufficient", "out_of_scope"):
-            assert reason in text, f"QA_PROMPT 缺 reason 标签: {reason}"
+            assert reason in DEFAULT_QA_SYSTEM, f"QA_PROMPT 缺 reason 标签: {reason}"
 
     def test_prompt_requires_citation(self):
         """保留 Citation 强制（与现有 _verify_support 一致）"""
-        from backend.rag.chain import QA_PROMPT
-        text = QA_PROMPT.messages[0].prompt.template
-        assert "[" in text and "]" in text, "QA_PROMPT 保留 [1]/[2] 引用指示"
+        from backend.rag.chain import DEFAULT_QA_SYSTEM
+        assert "[" in DEFAULT_QA_SYSTEM and "]" in DEFAULT_QA_SYSTEM, "QA_PROMPT 保留 [1]/[2] 引用指示"
 
 
 # =====================================================

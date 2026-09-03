@@ -2,13 +2,13 @@
 
 Uses mock AsyncSession to test manager logic without a real DB.
 """
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from backend.customer_service.errors import ValidationError
 from backend.customer_service.managers.conversation_manager import ConversationManager
 from backend.customer_service.state_machine import ConvStatus, HandlingMode
-from backend.customer_service.errors import ValidationError
 
 
 @pytest.fixture

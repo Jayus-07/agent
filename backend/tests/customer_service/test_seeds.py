@@ -1,12 +1,11 @@
 """test_seeds.py — 种子语料结构测试"""
-import pytest
 
+from backend.customer_service.router.intents import FINE_INTENTS
 from backend.customer_service.router.seeds import (
-    CS_DOMAIN_SEEDS,
     CS_COARSE_SEEDS,
+    CS_DOMAIN_SEEDS,
     CS_FINE_SEEDS,
 )
-from backend.customer_service.router.intents import FINE_INTENTS
 
 
 class TestDomainSeeds:

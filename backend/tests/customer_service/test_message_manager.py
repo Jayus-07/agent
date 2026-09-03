@@ -2,8 +2,9 @@
 
 Uses mock AsyncSession to test manager logic without a real DB.
 """
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from backend.customer_service.managers.message_manager import MessageManager
 

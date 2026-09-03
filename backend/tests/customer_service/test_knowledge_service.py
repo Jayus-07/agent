@@ -1,16 +1,14 @@
 """test_knowledge_service.py — 客服知识问答服务测试"""
-import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 from backend.customer_service.knowledge.answer_decision import (
-    CSAnswerDecision,
-    Decision,
     CAUTIOUS_SUFFIX,
     REFUSAL_MESSAGES,
+    CSAnswerDecision,
+    Decision,
 )
 from backend.customer_service.knowledge.service import (
     CSKnowledgeService,
-    CSKnowledgeResult,
 )
 
 

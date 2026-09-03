@@ -1,8 +1,6 @@
 """test_domain_detector.py — DomainDetector 双通道检测测试"""
 import re
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from backend.customer_service.router.domain_detector import DomainDetector
 

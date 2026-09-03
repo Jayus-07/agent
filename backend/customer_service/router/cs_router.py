@@ -10,17 +10,17 @@ from __future__ import annotations
 
 import time
 
-from backend.customer_service.router.types import (
-    CSDetection,
-    CSDomain,
-    CSRouteResult,
-)
 from backend.customer_service.router.coarse_router import CSCoarseRouter
 from backend.customer_service.router.fine_router import CSFineRouter
 from backend.customer_service.router.intents import (
     INTENT_PROFILES,
     kb_ids_for,
     resolve_route_path,
+)
+from backend.customer_service.router.types import (
+    CSDetection,
+    CSDomain,
+    CSRouteResult,
 )
 from backend.infra.cache import get_cache
 from backend.shared.logger import logger

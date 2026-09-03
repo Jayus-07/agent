@@ -13,17 +13,15 @@ from __future__ import annotations
 import asyncio
 import time
 
-from backend.orchestration.router.types import (
-    CapabilityScore,
-    ExecutionMode,
-    RouteDecision,
-)
-from backend.orchestration.router.rule_router import RuleRouter
-from backend.orchestration.router.vector_router import VectorRouter
-from backend.orchestration.router.llm_router import LLMRouter
+from backend.infra.cache import get_cache
 from backend.observability import trace_collector
 from backend.observability.tracer import SpanKind
-from backend.infra.cache import get_cache
+from backend.orchestration.router.llm_router import LLMRouter
+from backend.orchestration.router.rule_router import RuleRouter
+from backend.orchestration.router.types import (
+    RouteDecision,
+)
+from backend.orchestration.router.vector_router import VectorRouter
 from backend.shared.logger import logger
 
 _router_cache = get_cache("router", ttl=300)
