@@ -14,7 +14,6 @@ import json
 import queue
 import threading
 import time
-from dataclasses import asdict
 from typing import Any
 
 from backend.shared.logger import logger
@@ -106,8 +105,8 @@ class TraceWriteQueue:
     @staticmethod
     def _capture_stores() -> tuple:
         """捕获当前 store 单例引用（避免 worker 延迟查找导致跨测试污染）。"""
-        from backend.observability.trace_store import get_trace_store
         from backend.observability.analytics_store import get_analytics_store
+        from backend.observability.trace_store import get_trace_store
         return (get_trace_store(), get_analytics_store())
 
     def _run_worker(self):

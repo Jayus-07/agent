@@ -11,11 +11,11 @@ import json
 import threading
 from typing import List
 
-from backend.infra.llm import llm
 from backend.infra.cache import get_cache
+from backend.infra.llm import llm
 from backend.prompts.service import prompt_service
-from backend.sql.schema_loader import schema_loader
 from backend.shared.logger import logger
+from backend.sql.schema_loader import schema_loader
 
 # ── P2 性能优化：关键词快路径 + 统一缓存 ──
 

@@ -44,9 +44,9 @@ def get_redis():
         try:
             import redis
             from backend.config.redis import (
-                REDIS_URL,
                 REDIS_MAX_CONNECTIONS,
                 REDIS_SOCKET_TIMEOUT,
+                REDIS_URL,
             )
             _client = redis.Redis.from_url(
                 REDIS_URL,

@@ -6,13 +6,12 @@ inner: hybrid / multi_query 内部 vector + BM25 并行
 """
 from __future__ import annotations
 
+import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable
 
 _outer: ThreadPoolExecutor | None = None
 _inner: ThreadPoolExecutor | None = None
 
-import threading
 _lock = threading.Lock()
 
 
