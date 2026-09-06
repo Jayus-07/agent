@@ -293,7 +293,7 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
             return list(documents)
 
         # 创建索引映射
-        doc_idx_map = {idx: doc for idx, _ in scored_indexed}
+        doc_idx_map = {idx: documents[idx] for idx, _ in scored_indexed}
 
         # 过滤阈值
         threshold = kwargs.get("threshold", RERANK_SCORE_THRESHOLD)

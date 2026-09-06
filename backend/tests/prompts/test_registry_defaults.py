@@ -15,7 +15,7 @@ from backend.prompts.loader import load_defaults
 
 class TestRegistryShape:
     def test_total_count(self):
-        assert len(PROMPT_REGISTRY) == 36
+        assert len(PROMPT_REGISTRY) == 38
 
     def test_exactly_one_code_controlled(self):
         code_controlled = [s for s in PROMPT_REGISTRY.values() if s.code_controlled]

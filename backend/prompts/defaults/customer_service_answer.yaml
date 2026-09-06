@@ -1,3 +1,4 @@
+key: customer_service.answer
 template: |
   基于以下参考资料和用户问题，生成准确、有帮助的回答。
 

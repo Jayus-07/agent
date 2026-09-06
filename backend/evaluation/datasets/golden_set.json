@@ -1,0 +1,38 @@
+{
+  "version": "1.0",
+  "_comment": "Golden Set v1.0 — 13 条核心用例，覆盖 RAG 检索关键维度。用于本地 pytest 快速预检 + CI quality gate。选取原则：每个维度至少 1-2 条，总运行时间 <30s（本地离线）。",
+  "source_dataset": "rag_test_kb.json",
+  "source_version": "1.4",
+  "selected_ids": [
+    "RT-001",
+    "RT-003",
+    "RT-004",
+    "RT-005",
+    "RT-016",
+    "RT-027",
+    "RT-028",
+    "RT-040",
+    "RT-043",
+    "RT-051",
+    "RT-052",
+    "DEPT-001",
+    "DEPT-003"
+  ],
+  "coverage_matrix": {
+    "basic_easy": ["RT-001", "RT-003"],
+    "medium": ["RT-004", "RT-005"],
+    "hard": ["RT-027", "RT-028"],
+    "multi_doc": ["RT-016"],
+    "negative_simple": ["RT-043"],
+    "negative_hard_negative": ["RT-051", "RT-052"],
+    "word_disambiguation": ["RT-040"],
+    "dept_isolation_positive": ["DEPT-001"],
+    "dept_isolation_leak_guard": ["DEPT-003"]
+  },
+  "thresholds": {
+    "top1_accuracy_min": 0.85,
+    "snippet_recall_min": 0.80,
+    "reject_accuracy_min": 0.80,
+    "dept_isolation_pass": true
+  }
+}

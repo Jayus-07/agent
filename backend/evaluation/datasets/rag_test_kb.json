@@ -9,7 +9,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "3e30e0df16"
+          "4b8b61b688"
         ],
         "relevant_snippets": [
           "修改地址",
@@ -30,7 +30,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "3e30e0df16"
+          "4b8b61b688"
         ],
         "relevant_snippets": [
           "物流轨迹",
@@ -51,7 +51,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "3e30e0df16"
+          "4b8b61b688"
         ],
         "relevant_snippets": [
           "支付方式",
@@ -72,7 +72,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "f938bc1033"
+          "049380acd9"
         ],
         "relevant_snippets": [
           "破损",
@@ -134,7 +134,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "99a80089e4"
+          "1978ae91d7"
         ],
         "relevant_snippets": [
           "库存",
@@ -155,7 +155,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "99a80089e4"
+          "1978ae91d7"
         ],
         "relevant_snippets": [
           "滞销",
@@ -176,7 +176,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "99a80089e4"
+          "1978ae91d7"
         ],
         "relevant_snippets": [
           "盘点",
@@ -322,7 +322,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "f938bc1033",
+          "049380acd9",
           "e044139401"
         ],
         "relevant_snippets": [
@@ -344,7 +344,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "f938bc1033"
+          "049380acd9"
         ],
         "relevant_snippets": [
           "质量问题",
@@ -364,7 +364,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "f938bc1033"
+          "049380acd9"
         ],
         "relevant_snippets": [
           "原路退回",
@@ -510,7 +510,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "276a3f4841"
+          "25521d308d"
         ],
         "relevant_snippets": [
           "架构总览",
@@ -531,7 +531,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "276a3f4841"
+          "25521d308d"
         ],
         "relevant_snippets": [
           "可用性",
@@ -552,7 +552,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "276a3f4841"
+          "25521d308d"
         ],
         "relevant_snippets": [
           "数据库设计",
@@ -573,7 +573,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "99a80089e4"
+          "1978ae91d7"
         ],
         "relevant_snippets": [
           "盘点",
@@ -702,7 +702,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "3e30e0df16"
+          "4b8b61b688"
         ],
         "relevant_snippets": [
           "电子发票",
@@ -723,7 +723,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "99a80089e4"
+          "1978ae91d7"
         ],
         "relevant_chunks": [],
         "relevant_snippets": [
@@ -745,7 +745,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "276a3f4841"
+          "25521d308d"
         ],
         "relevant_snippets": [
           "可用性",
@@ -767,7 +767,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "276a3f4841"
+          "25521d308d"
         ],
         "relevant_snippets": [
           "可观测性",
@@ -811,7 +811,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "f938bc1033"
+          "049380acd9"
         ],
         "relevant_snippets": [
           "七天",
@@ -833,7 +833,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "7fae54d9ff"
+          "e280f7f1f0"
         ],
         "relevant_snippets": [
           "序列号",
@@ -855,7 +855,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "7fae54d9ff"
+          "e280f7f1f0"
         ],
         "relevant_snippets": [
           "糖度",

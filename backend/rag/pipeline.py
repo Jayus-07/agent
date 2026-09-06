@@ -176,7 +176,11 @@ class RAGPipeline:
             logger.info(f"增量索引: {result}")
             return True
         except Exception as e:
-            logger.warning(f"增量索引失败（{type(e).__name__}: {e}），将回退全量重建；如为 NameError 请检查 indexer 变量作用域")
+            logger.warning(
+                f"增量索引失败（{type(e).__name__}: {e}），将回退全量重建；"
+                f"如为 NameError 请检查 indexer 变量作用域",
+                exc_info=True,
+            )
             if 'registry' in locals():
                 try:
                     registry.clear()
@@ -245,7 +249,6 @@ class RAGPipeline:
             # GET /documents/{id}/chunks 返回空）
             try:
                 from backend.rag.indexing.chunk_store import get_chunk_store
-                from backend.config import DOC_REGISTRY_PATH  # noqa: F401
                 chunk_docs = chunk_data.get("documents") or []
                 chunk_metas = chunk_data.get("metadatas") or [{}] * len(chunk_docs)
                 cs = get_chunk_store()

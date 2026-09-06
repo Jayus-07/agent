@@ -326,6 +326,9 @@ class IncrementalIndexer:
             ChunkingEmptyError: 解析或 chunking 产出 0 chunk（P1-4）
         """
         ext = os.path.splitext(file_path)[1].lower()
+        # department 必须按文件路径派生，不能用 self.department：批量 sync 时
+        # indexer 是单实例跨多部门构建的，self.department 只是构造默认值。
+        department = self._derive_department(file_path)
 
         # ── ① load（文件读取/元数据收集）──
         load_span = trace_collector.start_span(
@@ -509,7 +512,7 @@ class IncrementalIndexer:
             "source_file": os.path.basename(file_path),
             "file_path": file_path,
             "kb_id": kb_id,  # 用派生的 kb_id 参数，而非 self.kb_id（否则 kb 隔离失效）
-            "department": self.department,
+            "department": department,  # 同上：用路径派生值，否则部门隔离失效
             "doc_type": "general",
             "person_names": "",
         }
@@ -568,7 +571,7 @@ class IncrementalIndexer:
             ch.metadata["person_names"] = person_val
             ch.metadata["kb_id"] = kb_id_val
             ch.metadata["business_domain"] = domain_val
-            ch.metadata["department"] = self.department
+            ch.metadata["department"] = department
             # 以 indexer 派生的 doc_id 为权威，覆盖 loader 注入的值，
             # 保证 chroma chunk.doc_id 与 doc_registry/chunk_store 完全一致
             # （避免 loader 与 indexer 两路派生分歧导致评测 doc_id 失配）。
@@ -616,7 +619,7 @@ class IncrementalIndexer:
                  "section_title": ch.metadata.get("section_title", ""),
                  "doc_type": doc_type_val,
                  "kb_id": kb_id_val,
-                 "department": self.department,
+                 "department": department,
                  "simulated_questions": ch.metadata.get("simulated_questions", [])}
                 for i, ch in enumerate(chunks)
             ])
@@ -1113,35 +1116,42 @@ class IncrementalIndexer:
                 return extract_entities(full_text)
             
             # 并发执行（只调用有任务的）
+            # task_names 与 tasks 同步 append：结果必须按任务名分派，不能按下标——
+            # tasks 是条件性构建的，下标会随 need_llm_summary/need_llm_keywords 前移，
+            # 硬编码下标会把实体任务的返回值当成关键词结果解包。
             tasks = []
+            task_names: list[str] = []
             if need_llm_summary:
                 tasks.append(task_summary())
+                task_names.append("summary")
             if need_llm_keywords:
                 tasks.append(task_keywords())
+                task_names.append("keywords")
             tasks.append(task_entities())  # 始终执行实体抽取
-            
+            task_names.append("entities")
+
             # P2-2: 并行执行，总耗时 = max(各任务耗时) 而非 sum
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # 解析结果
-            for i, result in enumerate(results):
+
+            # 解析结果（按任务名分派）
+            for name, result in zip(task_names, results):
                 if isinstance(result, Exception):
-                    logger.warning(f"[Metadata] 并发任务失败 (task={i}): {result}")
+                    logger.warning(f"[Metadata] 并发任务失败 (task={name}): {result}")
                     continue
-                
-                if i == 0 and need_llm_summary:  # 摘要任务
+
+                if name == "summary":
                     summ, persons = result
                     if summ:
                         summary = summ
                         if not person_names:
                             person_names = persons
-                elif i == 1 and need_llm_keywords:  # 关键词任务
+                elif name == "keywords":
                     kws_llm_objs, tokens = result
                     kw_result.llm_keywords = kws_llm_objs
                     kw_result.llm_tokens = tokens
-                elif i == 2 or (len(tasks) > 2 and i >= 2):  # 实体任务
+                else:  # entities
                     entities_nested = result
-            
+
             if llm_generate_span:
                 total_time = sum([s.duration_ms for s in trace_collector.current().spans if hasattr(s, 'duration_ms')])
                 trace_collector.end_span(llm_generate_span, status="success",
@@ -1232,7 +1242,7 @@ class IncrementalIndexer:
             "metadata_fingerprint": _metadata_fp,
             "doc_version": 1,
             "kb_version": "v1",
-            "department": self.department,
+            "department": base_meta.get("department") or self.department,
             "questions_by_chunk": questions_by_chunk,
         }
 
@@ -1398,7 +1408,7 @@ class IncrementalIndexer:
         _, _, subpath = parse_kb_dept_subpath_from_path(file_path, str(self.docs_dir))
         return derive_doc_id(
             kb_id=kb_id,
-            department=self.department,
+            department=self._derive_department(file_path),
             basename=os.path.basename(file_path),
             subpath=subpath,
         )
@@ -1415,6 +1425,18 @@ class IncrementalIndexer:
         if len(parts) > 1:
             return parts[0]
         return "default"
+
+    def _derive_department(self, file_path: str) -> str:
+        """从文件路径推导 department（第二级子目录），与 doc_id 派生同源。
+
+        批量 sync 时 indexer 是单实例跨多部门构建的，self.department 只是构造默认值
+        （pipeline 未传即 "general"）；用它会把所有文档打成同一部门，既破坏部门隔离
+        过滤，又让 md5(kb|dept|basename) 算出错误的 doc_id。
+        """
+        _, department, _ = parse_kb_dept_subpath_from_path(
+            file_path, str(self.docs_dir)
+        )
+        return department or self.department
 
 
 # Delta 已迁至 models.py
