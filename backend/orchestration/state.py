@@ -4,8 +4,11 @@ state.py — AgentState 与 StepResult 类型定义
 统一图状态对象，所有节点通过读写此 state 协同工作。
 """
 import operator
-from typing import TypedDict, Literal, Any, Annotated
+from typing import Annotated, Any, Literal, TypedDict
+
 from langgraph.graph.message import add_messages
+
+from backend.customer_service.context import CSContext
 
 
 def _merge_step_results(left: dict, right: dict) -> dict:
@@ -76,16 +79,6 @@ class CSAgentState(AgentState):
     cs_context 承载客服专有上下文（认证用户、会话、转接状态、确认状态机等）。
     """
 
-    cs_context: dict
-    # cs_context 结构:
-    # {
-    #     "authenticated_user_id": str,
-    #     "conversation_id": str,
-    #     "handoff_state": str,           # AI_ACTIVE | HANDOFF_REQUESTED | ...
-    #     "pending_action": dict | None,   # 待确认的业务操作
-    #     "cs_route": dict,               # CS Router 输出（domain + intent）
-    #     "confirmation_state": str,       # NOT_REQUIRED | PENDING | CONFIRMED | ...
-    #     "retry_count": int,
-    # }
+    cs_context: CSContext
     cs_action_result: dict                # 业务操作执行结果
     cs_audit_entries: list[dict]          # 审计日志条目

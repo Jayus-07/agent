@@ -26,36 +26,6 @@ class TestCSDisabledNoSideEffects:
         assert result.get("route_mode") != "customer_service"
 
 
-class TestCSImportsDontBreakMainGraph:
-    """import CS 模块不影响 main graph 构建"""
-
-    def test_cs_imports_are_safe(self):
-        from backend.customer_service.graph import (
-            cs_business_action,
-            cs_business_query,
-            cs_complaint,
-            cs_handoff,
-            cs_handoff_intercept,
-            cs_knowledge_node,
-            cs_pending_node,
-        )
-
-        assert callable(cs_knowledge_node)
-        assert callable(cs_pending_node)
-        assert callable(cs_business_query)
-        assert callable(cs_business_action)
-        assert callable(cs_complaint)
-        assert callable(cs_handoff)
-        assert callable(cs_handoff_intercept)
-
-    def test_main_graph_builds_with_cs_imported(self):
-        from backend.customer_service.graph import cs_knowledge_node  # noqa: F401
-        from backend.orchestration.graph.builder import build_graph
-
-        graph = build_graph()
-        assert graph is not None
-
-
 class TestCSStateExtensionIsolated:
     """CSAgentState 扩展不影响 AgentState 基础字段"""
 

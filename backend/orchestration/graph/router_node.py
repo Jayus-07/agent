@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import time
 
+from backend.customer_service.context import build_cs_context
 from backend.orchestration.router import get_router
 from backend.shared.logger import logger
 
@@ -79,26 +80,14 @@ def router_node(state: dict) -> dict:
                         **state,
                         "route_decision": None,
                         "route_mode": "customer_service",
-                        "cs_context": {
-                            "cs_route": cs_result.model_dump(),
-                            "cs_target": cs_target,
-                            "authenticated_user_id": user_id,
-                            "session_id": session_id,
-                            "conversation_id": session_id,
-                        },
+                        "cs_context": build_cs_context(
+                            cs_route=cs_result.model_dump(),
+                            cs_target=cs_target,
+                            authenticated_user_id=user_id,
+                            session_id=session_id,
+                        ),
                         "final_answer": guard_result.message,
                     }
-
-                # ── Phase 5: 转接拦截 — 活跃转接时拦截业务请求 ──
-                _handoff_terminal_targets = {"cs_handoff", "cs_complaint", "cs_handoff_intercept"}
-                if cs_target not in _handoff_terminal_targets:
-                    from backend.customer_service.handoff_store import get_handoff_store
-                    if get_handoff_store().has_active_handoff(user_id):
-                        logger.info(
-                            f"[RouterNode] 转接拦截: user={user_id} "
-                            f"原目标={cs_target} → cs_handoff_intercept"
-                        )
-                        cs_target = "cs_handoff_intercept"
 
                 # ── Trace: stamp conversation_id + cs_route ──
                 try:
@@ -119,13 +108,12 @@ def router_node(state: dict) -> dict:
                     **state,
                     "route_decision": None,
                     "route_mode": "customer_service",
-                    "cs_context": {
-                        "cs_route": cs_result.model_dump(),
-                        "cs_target": cs_target,
-                        "authenticated_user_id": user_id,
-                        "session_id": session_id,
-                        "conversation_id": session_id,
-                    },
+                    "cs_context": build_cs_context(
+                        cs_route=cs_result.model_dump(),
+                        cs_target=cs_target,
+                        authenticated_user_id=user_id,
+                        session_id=session_id,
+                    ),
                 }
     except Exception as e:
         logger.warning(f"[RouterNode] CS 预过滤失败，回退到主 Router: {e}")
@@ -173,13 +161,18 @@ def router_node(state: dict) -> dict:
 
 
 def route_selector(state: dict) -> str:
-    """Router 节点后的条件路由：选择下一步节点（V2: 3 路分流 + CS）。"""
+    """Router 节点后的条件路由：选择下一步节点。
+
+    内置路径: direct → skill_executor, workflow → workflow_executor, 默认 → planner
+    域图路径: 通过 domain_graph_registry 动态查找
+    """
     mode = state.get("route_mode", "plan")
     if mode == "direct":
         return "skill_executor"
     if mode == "workflow":
         return "workflow_executor"
-    if mode == "customer_service":
-        cs_context = state.get("cs_context", {})
-        return cs_context.get("cs_target", "cs_knowledge")
+    from backend.orchestration.domain_registry import domain_graph_registry
+    domain = domain_graph_registry.get(mode)
+    if domain:
+        return domain.node_name
     return "planner"

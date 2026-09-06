@@ -1,6 +1,6 @@
 {
-  "version": "1.3",
-  "_comment": "RAG 检索评测 v1.3 — rag_test_kb（15 个真实文档）。relevant_docs = md5(basename)[:10]，由 rag pipeline metadata.build_all_metadata_async 写入；评测时 retrieve 出来的 doc_id 与之做集合相等判定。schema 预留字段：relevant_chunks（chunk 级召回，parent-child 验证）、expected_answer（生成层 Faithfulness/Answer Relevance 接入）、doc_type（文档类型过滤）。v1.2→v1.3 修复：20 条用例的 question/snippet 与 KB 文档实际内容脱节（标注的事实在文档中不存在），全部改写为文档原文可验证的用例；不动 KB 文档（HANDOFF §7.3 教训）。v1.1→v1.2 修复：RT-031/RT-032 ground truth 在 KB 中不存在（11_采购合同.md 无违约金/保密条款）改为可验证用例；RT-034 与 RT-008 完全重复，替换为新用例；RT-036/RT-037 doc_type 误标 security 改为 tech_manual。v1.0→v1.1 修复：原 doc_id 协议 sha256[:16] 与入库实际 md5[:10] 不匹配，全 37 条改为 md5(basename)[:10] 协议。",
+  "version": "1.4",
+  "_comment": "RAG 检索评测 v1.4 — rag_test_kb。relevant_docs 的权威来源是 doc_registry 中该文件的 active 行，而非某个固定 hash 协议：存量文件沿用旧协议 md5(basename)[:10]，2026-09-02 之后重索引的文件改用命名空间协议 md5(kb_id|department|[subpath|]basename)[:10]（见 backend/rag/indexing/doc_id.py）。Indexer._derive_doc_id 对已注册 active 文件复用原 ID，故重索引不会再漂移；但历史上两种协议并存已导致标注失效，改动标注前务必用 doc_registry / backend/scripts/validate_eval_dataset.py 核对真实 ID。评测时 retrieve 出来的 doc_id 与 relevant_docs 做交集判定（非空即 pass），top1_accuracy 看首位是否命中。schema 预留字段：relevant_chunks（chunk 级召回，parent-child 验证）、expected_answer（生成层 Faithfulness/Answer Relevance 接入）、doc_type（文档类型过滤）。v1.3→v1.4 修复：(1) 5 例 doc_id 协议漂移——cs_售后FAQ.docx 13b619e25a→e044139401（RT-005/RT-006）、finance_员工报销制度.pdf 3387d87030→8117d97802（RT-022/RT-023/RT-024），旧 ID 在 doc_registry 与 ChromaDB 中均已无记录，属『检索命中但 ID 对不上』的假失败；(2) RT-004 golden truth 由 07_物流SOP 改为 06_退货政策（§3.1/3.2 才是面向客户的破损处置口径，原标注调查漏查该文档）；(3) RT-016 golden truth 补全为双文档（退货政策 §2 条件清单 + 售后FAQ 同事实第二来源）；(4) RT-022 陈旧 snippet '500' 改为 '800'（原文住宿标准为一线城市 800/其他 600，'500' 只是 '5000 元' 审批额度的子串误匹配）。同期修复 PdfParser._HEADING_NUMBER_RE 把小数编号条款（2.1/3.2）误判为章节标题的 bug——该 bug 使『二、七天无理由退货』等真标题被拆成孤立空 section、正文 chunk 丢失标题上下文，是 RT-016 召回失败的根因，需重索引后在 KB 生效。v1.2→v1.3 修复：20 条用例的 question/snippet 与 KB 文档实际内容脱节（标注的事实在文档中不存在），全部改写为文档原文可验证的用例；不动 KB 文档（HANDOFF §7.3 教训）。v1.1→v1.2 修复：RT-031/RT-032 ground truth 在 KB 中不存在（11_采购合同.md 无违约金/保密条款）改为可验证用例；RT-034 与 RT-008 完全重复，替换为新用例；RT-036/RT-037 doc_type 误标 security 改为 tech_manual。v1.0→v1.1 修复：原 doc_id 协议 sha256[:16] 与入库实际 md5[:10] 不匹配，全 37 条改为 md5(basename)[:10] 协议。",
   "test_cases": [
     {
       "id": "RT-001",
@@ -72,17 +72,18 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "788552468f"
+          "f938bc1033"
         ],
         "relevant_snippets": [
-          "破损"
+          "破损",
+          "48 小时"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "easy",
         "domain": "after_sales",
-        "fix_note": "2026-08-19: golden truth 修正。破损相关流程在 07_物流SOP（含破损率/丢件率），02_售后FAQ 不含'48小时'/'破损'具体表述"
+        "fix_note": "2026-09-07: golden truth 修正。原标注 07_物流SOP(788552468f) 依据『02_售后FAQ 不含 48小时/破损』，但漏查 06_退货政策：其 §3.1『商品存在质量问题(破损/错发/性能故障),全额退款,商家承担运费』+ §3.2『客户需在签收后 48 小时内上传照片凭证』才是面向客户的完整处置口径，同时含『破损』与『48 小时』。物流SOP 步骤7『破损 24 小时补发』属内部 ops SLA，非客户侧答案"
       }
     },
     {
@@ -92,7 +93,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "13b619e25a"
+          "e044139401"
         ],
         "relevant_snippets": [
           "换货",
@@ -102,7 +103,8 @@
       },
       "metadata": {
         "difficulty": "medium",
-        "domain": "after_sales"
+        "domain": "after_sales",
+        "fix_note": "2026-09-07: doc_id 协议漂移修正 13b619e25a → e044139401。cs_售后FAQ.docx 于 2026-09-02 重索引时改用命名空间协议 md5(kb|dept|basename)[:10]，旧 md5(basename)[:10] ID 在 doc_registry 与 ChromaDB 中均已无记录"
       }
     },
     {
@@ -112,7 +114,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "13b619e25a"
+          "e044139401"
         ],
         "relevant_snippets": [
           "保修"
@@ -122,7 +124,7 @@
       "metadata": {
         "difficulty": "medium",
         "domain": "after_sales",
-        "fix_note": "2026-08-19: 02_售后FAQ 含'保修'但不含'序列号'，去掉片段关键词"
+        "fix_note": "2026-09-07: doc_id 协议漂移修正 13b619e25a → e044139401（同 RT-005）。历史：2026-08-19 02_售后FAQ 含'保修'但不含'序列号'，去掉片段关键词"
       }
     },
     {
@@ -320,7 +322,8 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "f938bc1033"
+          "f938bc1033",
+          "e044139401"
         ],
         "relevant_snippets": [
           "七天",
@@ -330,7 +333,8 @@
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "return_policy"
+        "domain": "return_policy",
+        "fix_note": "2026-09-07: golden truth 补全为双文档。06_退货政策 §2『二、七天无理由退货』的 2.1 适用条件/2.2 时间窗口(签收后 7 天)/2.3 运费承担 是完整条件清单（权威，列首位）；02_售后FAQ『Q:七天无理由退货范围』是同一事实的第二来源，两者皆应算命中。历史失败根因：PdfParser._HEADING_NUMBER_RE 的 \\d+(?:\\.\\d+)*[.、] 因回溯把『2.1 适用条件…』误判为章节标题，使『二、七天无理由退货』被拆成孤立空 section、§2 正文 chunk 丢失标题（既无『七天』也无『无理由』字样，仅剩『7 天』），关键词命中 0/8 → 召回失败。解析器已修（负向前瞻 (?!\\d)），需重索引后在 KB 生效"
       }
     },
     {
@@ -443,17 +447,18 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "3387d87030"
+          "8117d97802"
         ],
         "relevant_snippets": [
           "住宿",
-          "500"
+          "800"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "easy",
-        "domain": "expense"
+        "domain": "expense",
+        "fix_note": "2026-09-07: (1) doc_id 协议漂移修正 3387d87030 → 8117d97802，finance_员工报销制度.pdf 于 2026-09-02 重索引后改用命名空间协议，旧 ID 在 doc_registry/ChromaDB 中均无记录；(2) snippet '500' 属陈旧标注——文档 §3.1 实际为『国内差旅住宿:一线城市 800 元/晚,其他 600 元/晚』，'500' 仅作为 §4.2/4.3『单笔 5000 元』审批额度的子串误匹配，改为 '800'"
       }
     },
     {
@@ -463,7 +468,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "3387d87030"
+          "8117d97802"
         ],
         "relevant_snippets": [
           "报销流程",
@@ -473,7 +478,8 @@
       },
       "metadata": {
         "difficulty": "medium",
-        "domain": "expense"
+        "domain": "expense",
+        "fix_note": "2026-09-07: doc_id 协议漂移修正 3387d87030 → 8117d97802（同 RT-022）"
       }
     },
     {
@@ -483,7 +489,7 @@
       "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [
-          "3387d87030"
+          "8117d97802"
         ],
         "relevant_snippets": [
           "付款",
@@ -494,7 +500,7 @@
       "metadata": {
         "difficulty": "easy",
         "domain": "expense",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（08_员工报销制度 '财务审核后 5 个工作日内付款'，无'每周五'）"
+        "fix_note": "2026-09-07: doc_id 协议漂移修正 3387d87030 → 8117d97802（同 RT-022）。历史：2026-08-21 snippet 对齐文档原文（08_员工报销制度 '财务审核后 5 个工作日内付款'，无'每周五'）"
       }
     },
     {
@@ -508,14 +514,14 @@
         ],
         "relevant_snippets": [
           "架构总览",
-          "主流架构"
+          "微服务"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "easy",
         "domain": "tech_manual",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（09_技术手册 章节模板内容，无'分层架构/API'）"
+        "fix_note": "2026-09-07: snippet 对齐文档原文。09_技术手册 已重写为正规手册（v1.0/TECH-001，十八章），§二 架构总览 原文『采用前后端分离 + 微服务架构』，无'主流架构'一词。历史：2026-08-21 曾对齐当时的『章节模板内容』版本，该版本已被替换"
       }
     },
     {
@@ -550,14 +556,14 @@
         ],
         "relevant_snippets": [
           "数据库设计",
-          "设计原则"
+          "分库分表"
         ],
         "min_relevant_chunks": 1
       },
       "metadata": {
         "difficulty": "hard",
         "domain": "tech_manual",
-        "fix_note": "2026-08-21: 原问题（schema/表清单）在 09_技术手册 中不存在，改为针对第 18 章数据库设计的定位问题"
+        "fix_note": "2026-09-07: snippet 对齐文档原文。§十八 数据库设计 原文『所有表必须有主键、创建/更新时间、软删字段(is_deleted)。核心交易表使用 InnoDB + utf8mb4 + 按 user_id 分库分表』，不含'设计原则'，改为具区分度的'分库分表'。历史：2026-08-21 原问题（schema/表清单）在旧版手册中不存在，改为针对第 18 章数据库设计的定位问题"
       }
     },
     {
@@ -743,7 +749,7 @@
         ],
         "relevant_snippets": [
           "可用性",
-          "99.9%"
+          "99.95%"
         ],
         "min_relevant_chunks": 1
       },
@@ -751,12 +757,12 @@
         "difficulty": "medium",
         "domain": "tech_manual",
         "doc_type": "tech_manual",
-        "fix_note": "2026-08-21: 原问题（连接池 min/max）在 09_技术手册 中不存在，改为文档真实存在的可用性指标问题。历史：2026-08-20 doc_type 由 security 改为 tech_manual"
+        "fix_note": "2026-09-07: snippet 数值修正 99.9% → 99.95%。§一 系统概述 原文『整体可用性目标 ≥ 99.95%,P99 接口延迟 ≤ 500 ms,错误率 ≤ 0.1%』。历史：2026-08-21 原问题（连接池 min/max）在旧版手册中不存在，改为可用性指标问题；2026-08-20 doc_type 由 security 改为 tech_manual"
       }
     },
     {
       "id": "RT-037",
-      "question": "系统遵循的设计原则有哪些？",
+      "question": "代码评审的关注点有哪些？",
       "module": "rag",
       "kb_id": "rag_test_kb",
       "expected": {
@@ -764,8 +770,8 @@
           "276a3f4841"
         ],
         "relevant_snippets": [
-          "设计原则",
-          "实现要点"
+          "可观测性",
+          "Tech Lead"
         ],
         "min_relevant_chunks": 1
       },
@@ -773,7 +779,7 @@
         "difficulty": "medium",
         "domain": "tech_manual",
         "doc_type": "tech_manual",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（各章节模板句'设计原则与实现要点'，无'七原则/可理解'）。历史：2026-08-20 doc_type 由 security 改为 tech_manual"
+        "fix_note": "2026-09-07: 问题改写。原问题『系统遵循的设计原则有哪些？』在重写后的手册中已无 ground truth——全文不含'设计原则'/'实现要点'（那是旧版章节模板句式），沿用本集 v1.2→v1.3 做法改写为文档原文可验证用例：§六 代码评审『所有合并请求至少 1 名同模块同事 + 1 名 Tech Lead 评审通过方可合并。单次评审关注点：功能正确性、可测性、安全性、性能、可观测性』。doc_id/难度/doc_type 不变。历史：2026-08-20 doc_type 由 security 改为 tech_manual"
       }
     },
     {

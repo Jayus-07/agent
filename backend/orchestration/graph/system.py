@@ -8,19 +8,21 @@ Tracing（2026-07-16）：ask() / stream_events() 自动产出 TraceRecord + Spa
 """
 from __future__ import annotations
 
-import re
 import time
-from typing import Generator, List
+from typing import Generator
 
-from backend.orchestration.graph.builder import build_graph, _parse_event
-from backend.orchestration.supervisor.scheduler import MAX_SUPERVISOR_LOOPS
-from backend.orchestration.state import AgentState
+from backend.orchestration.graph.builder import _parse_event, build_graph
 from backend.orchestration.graph.events import (
-    stream_node_events, emit_delta_events, make_done_event,
-    make_initial_state, extract_sources_from_results,
-    make_step_payload, make_step_log_event,
+    emit_delta_events,
+    extract_sources_from_results,
+    make_done_event,
+    make_initial_state,
+    make_step_log_event,
+    make_step_payload,
+    stream_node_events,
 )
-
+from backend.orchestration.state import AgentState
+from backend.orchestration.supervisor.scheduler import MAX_SUPERVISOR_LOOPS
 from backend.orchestration.tool_registry import tool_registry
 from backend.security.input_guard import GuardAction, get_input_guard
 from backend.shared.logger import logger
@@ -90,7 +92,7 @@ class MultiAgentSystem:
 
         # ── Tracing: start + root span（提前到会话加载之前，使 memory/kb
         #    加载耗时纳入 trace 归因，不再成为无埋点黑洞）──
-        from backend.observability.tracer import trace_collector, SpanKind
+        from backend.observability.tracer import SpanKind, trace_collector
         t_total = time.time()
         trace = trace_collector.start(question, session_id, workflow_name="agent")
         trace_collector.start_span("root", parent_id=None,
@@ -394,7 +396,8 @@ class MultiAgentSystem:
 
                 if node_name in self._skill_nodes or node_name == "supervisor" \
                         or node_name in ("workflow_executor", "skill_executor",
-                                         "cs_knowledge", "cs_pending"):
+                                         "cs_knowledge", "cs_pending",
+                                         "cs_graph_node"):
                     all_step_results.update(node_output.get("step_results", {}))
                     # direct/workflow executor 自己就是最终产出者
                     executor_answer = node_output.get("final_answer", "")
@@ -409,6 +412,10 @@ class MultiAgentSystem:
                     if node_output.get("route_mode"):
                         route_mode = node_output["route_mode"]
                     # CS: 捕获 cs_context 供 trace 拓扑快照使用
+                    if node_output.get("cs_context"):
+                        cs_context_snapshot = node_output["cs_context"]
+                elif node_name == "cs_graph_node":
+                    # Phase 4: CS Graph 适配器输出合并后的 cs_context
                     if node_output.get("cs_context"):
                         cs_context_snapshot = node_output["cs_context"]
                 elif node_name in ("planner", "critique"):
@@ -594,19 +601,16 @@ def _build_graph_snapshot(state: dict, loop_count: int,
             "degradation_triggered": len(degraded_steps) > 0 if degraded_steps else False,
         }
 
-    # ── customer_service 模式：Router → CS Node → Reporter ──
-    if route_mode == "customer_service":
-        cs_context = state.get("cs_context", {})
-        cs_target = cs_context.get("cs_target", "cs_knowledge") if cs_context else "cs_knowledge"
-        cs_label = "客服知识问答" if cs_target == "cs_knowledge" else "客服待处理"
+    # ── 域图模式：Router → 域图节点 → END（通过 registry 动态查找）──
+    from backend.orchestration.domain_registry import domain_graph_registry
+    domain = domain_graph_registry.get(route_mode)
+    if domain:
         graph_nodes = [
             {"id": "router", "label": "路由决策"},
-            {"id": cs_target, "label": cs_label},
-            {"id": "reporter", "label": "Reporter 汇总"},
+            {"id": domain.node_name, "label": domain.label},
         ]
         graph_edges = [
-            {"source": "router", "target": cs_target, "label": "customer_service"},
-            {"source": cs_target, "target": "reporter", "label": "完成"},
+            {"source": "router", "target": domain.node_name, "label": route_mode},
         ]
         return {
             "nodes": graph_nodes,

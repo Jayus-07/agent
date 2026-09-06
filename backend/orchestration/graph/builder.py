@@ -2,33 +2,30 @@
 builder.py — LangGraph StateGraph 构建
 
 Graph 拓扑:
-  START → Planner → Critique → Supervisor (node) → route_after_supervisor (routing)
-    ├─ returns Send[] → Skills (并行) → supervisor (loop)
-    └─ returns "reporter" → Reporter → END
+  START → Router → route_selector (条件边)
+    ├─ planner → critique → supervisor → skills → reporter → END
+    ├─ skill_executor → reporter → END
+    ├─ workflow_executor → reporter → END
+    └─ 域图节点 (自动发现) → END
 
-Skill 节点由 tool_registry 自动发现，不在此处硬编码。
-新增 Skill 只需创建包 + 注册，builder 无需修改。
+Skill 节点由 tool_registry 自动发现，域图节点由 domain_graph_registry 自动发现。
+新增 Skill/域图只需创建包 + 注册，builder 无需修改。
 """
 
 import asyncio
 
 from langgraph.graph import END, START, StateGraph
 
+# 触发域图自注册
+import backend.domains  # noqa: F401
+
 # 触发 Skill 包自注册（必须在 build_graph() 之前 import）
 import backend.skills  # noqa: F401
 from backend.agents.planner.critique import critique_node
 from backend.agents.planner.planner import planner_node
 from backend.agents.reporter.reporter import reporter_node
-from backend.customer_service.graph.nodes import (
-    cs_business_action,
-    cs_business_query,
-    cs_complaint,
-    cs_handoff,
-    cs_handoff_intercept,
-    cs_knowledge_node,
-    cs_pending_node,
-)
 from backend.observability.trace_middleware import trace_middleware
+from backend.orchestration.domain_registry import domain_graph_registry
 from backend.orchestration.graph.direct_executor import skill_executor_node, workflow_executor_node
 from backend.orchestration.graph.router_node import route_selector, router_node
 from backend.orchestration.state import AgentState, CSAgentState
@@ -48,13 +45,6 @@ _NODE_LABELS = {
     "rag_skill":          "知识库检索",
     "report_skill":       "报告生成",
     "reporter":           "结果汇总",
-    "cs_knowledge":       "客服知识问答",
-    "cs_business_query":  "客服业务查询",
-    "cs_business_action": "客服业务操作",
-    "cs_pending":         "客服待处理",
-    "cs_complaint":       "客服投诉处理",
-    "cs_handoff":         "人工转接",
-    "cs_handoff_intercept": "转接拦截",
 }
 
 
@@ -118,16 +108,14 @@ def build_graph():
     wf.add_node("supervisor", trace_middleware.wrap_sync_node("supervisor", supervisor_node))
     wf.add_node("reporter", trace_middleware.wrap_sync_node("reporter", reporter_node))
 
-    # ── 客服节点（CS 路由命中后承接，Phase 2: knowledge_query 路径）──
-    wf.add_node("cs_knowledge", trace_middleware.wrap_sync_node("cs_knowledge", cs_knowledge_node))
-    wf.add_node("cs_business_query", trace_middleware.wrap_sync_node("cs_business_query", cs_business_query))
-    wf.add_node("cs_business_action", trace_middleware.wrap_sync_node("cs_business_action", cs_business_action))
-    wf.add_node("cs_pending", trace_middleware.wrap_sync_node("cs_pending", cs_pending_node))
-
-    # ── 客服 Phase 5 节点（投诉处理 + 人工转接 + 转接拦截）──
-    wf.add_node("cs_complaint", trace_middleware.wrap_sync_node("cs_complaint", cs_complaint))
-    wf.add_node("cs_handoff", trace_middleware.wrap_sync_node("cs_handoff", cs_handoff))
-    wf.add_node("cs_handoff_intercept", trace_middleware.wrap_sync_node("cs_handoff_intercept", cs_handoff_intercept))
+    # ── 域图节点（自动发现，每个域图自带 reporter，直接到 END）──
+    domains = domain_graph_registry.get_all()
+    for domain in domains.values():
+        wf.add_node(domain.node_name, trace_middleware.wrap_sync_node(domain.node_name, domain.adapter))
+        _NODE_LABELS[domain.node_name] = domain.label
+        logger.debug(f"[Graph] 自动注册域图节点: {domain.name} → {domain.node_name}")
+    if domains:
+        logger.info(f"[Graph] 已注册 {len(domains)} 个域图节点")
 
     # ── Skill 节点（自动发现 + TraceMiddleware 自动记录 Span）──
     skill_nodes = tool_registry.get_skill_nodes()
@@ -141,37 +129,26 @@ def build_graph():
         logger.info(f"[Graph] 已注册 {len(skill_nodes)} 个 Skill 节点")
 
     # ── 边 ────────────────────────────────────────
-    # 2026-08-11：Router 在入口（V2 三路分流）
     wf.add_edge(START, "router")
-    wf.add_conditional_edges(
-        "router",
-        route_selector,
-        {
-            "planner": "planner",
-            "skill_executor": "skill_executor",  # direct: 跳过 Planner
-            "workflow_executor": "workflow_executor",  # workflow: 跳过 Planner
-            "cs_knowledge": "cs_knowledge",  # CS: 知识问答
-            "cs_business_query": "cs_business_query",  # CS: 业务查询 (Phase 3)
-            "cs_business_action": "cs_business_action",  # CS: 业务操作 (Phase 4)
-            "cs_pending": "cs_pending",  # CS: 待处理（Phase 5）
-            "cs_complaint": "cs_complaint",  # CS: 投诉处理 (Phase 5)
-            "cs_handoff": "cs_handoff",  # CS: 人工转接 (Phase 5)
-            "cs_handoff_intercept": "cs_handoff_intercept",  # CS: 转接拦截 (Phase 5)
-        },
-    )
+
+    # 条件边映射：内置路径 + 域图自动发现
+    edge_map = {
+        "planner": "planner",
+        "skill_executor": "skill_executor",
+        "workflow_executor": "workflow_executor",
+    }
+    for domain in domains.values():
+        edge_map[domain.node_name] = domain.node_name
+
+    wf.add_conditional_edges("router", route_selector, edge_map)
 
     # V2: skill/workflow executor 直接到 reporter
     wf.add_edge("skill_executor", "reporter")
     wf.add_edge("workflow_executor", "reporter")
 
-    # CS: 客服节点到 reporter
-    wf.add_edge("cs_knowledge", "reporter")
-    wf.add_edge("cs_business_query", "reporter")
-    wf.add_edge("cs_business_action", "reporter")
-    wf.add_edge("cs_pending", "reporter")
-    wf.add_edge("cs_complaint", "reporter")
-    wf.add_edge("cs_handoff", "reporter")
-    wf.add_edge("cs_handoff_intercept", "reporter")
+    # 域图自带 reporter，直接到 END
+    for domain in domains.values():
+        wf.add_edge(domain.node_name, END)
 
     wf.add_edge("planner", "critique")
 

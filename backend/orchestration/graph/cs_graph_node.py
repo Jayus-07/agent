@@ -11,6 +11,7 @@ orchestration/graph/cs_graph_node.py — Main Graph ↔ CS Graph 适配器
 """
 from __future__ import annotations
 
+from backend.customer_service.context import merge_cs_context
 from backend.customer_service.graph_builder import get_cs_graph
 from backend.customer_service.graph_state import new_cs_graph_input
 from backend.customer_service.models.graph_result import build_cs_graph_result
@@ -26,18 +27,20 @@ def cs_graph_node(state: dict) -> dict:
     输出: dict — 写回 Main State 的字段子集
     """
     cs_context = state.get("cs_context", {})
+    conversation_id = cs_context.get("conversation_id", "")
 
     cs_input = new_cs_graph_input(
         user_message=state.get("question", ""),
         user_id=cs_context.get("authenticated_user_id", ""),
         session_id=cs_context.get("session_id", ""),
-        conversation_id=cs_context.get("conversation_id", ""),
+        conversation_id=conversation_id,
         cs_route=cs_context.get("cs_route", {}),
     )
 
     try:
         graph = get_cs_graph()
-        final_state = graph.invoke(cs_input)
+        invoke_config = _build_invoke_config(conversation_id)
+        final_state = graph.invoke(cs_input, config=invoke_config)
         result = build_cs_graph_result(final_state)
     except Exception:
         logger.exception("[cs_graph_node] CS Graph 执行异常，降级返回兜底回复")
@@ -55,18 +58,9 @@ def _build_main_state_update(original_state: dict, result: dict) -> dict:
     """
     original_ctx = original_state.get("cs_context", {})
 
-    merged_context = {
-        "authenticated_user_id": original_ctx.get("authenticated_user_id"),
-        "session_id": original_ctx.get("session_id"),
-        "cs_target": original_ctx.get("cs_target"),
-        "conversation_id": result.get("conversation_id", ""),
-        "handoff_state": result.get("handoff_state"),
-        "confirmation_state": result.get("confirmation_state"),
-    }
-
     return {
         "final_answer": result.get("final_answer", _FALLBACK_ANSWER),
-        "cs_context": merged_context,
+        "cs_context": merge_cs_context(original_ctx, result),
         "cs_action_result": result.get("action_result") or {},
         "cs_audit_entries": result.get("audit_entries", []),
     }
@@ -85,3 +79,18 @@ def _fallback_update(state: dict) -> dict:
         "cs_action_result": {},
         "cs_audit_entries": [],
     }
+
+
+def _build_invoke_config(conversation_id: str) -> dict:
+    """构建 CS Graph invoke config。
+
+    Phase 5: 当 checkpointer 启用时，thread_id 用于多轮对话状态持久化。
+    """
+    from backend.config.customer_service import CS_GRAPH_RECURSION_LIMIT
+
+    config: dict = {
+        "recursion_limit": CS_GRAPH_RECURSION_LIMIT,
+    }
+    if conversation_id:
+        config["configurable"] = {"thread_id": conversation_id}
+    return config

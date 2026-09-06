@@ -187,7 +187,7 @@ CS_ROUTER_INDEX_DIR = os.path.join(
 # =============================================
 # 独立 CS Graph（Phase 0 新增）
 # =============================================
-CS_GRAPH_ENABLED = os.getenv("CS_GRAPH_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+CS_GRAPH_ENABLED = os.getenv("CS_GRAPH_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 CS_EXPERT_MAX_LOOPS = int(os.getenv("CS_EXPERT_MAX_LOOPS", "5"))
 CS_SUPERVISOR_LLM_ENABLED = os.getenv("CS_SUPERVISOR_LLM_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 CS_SUPERVISOR_LLM_TIMEOUT_MS = int(os.getenv("CS_SUPERVISOR_LLM_TIMEOUT_MS", "800"))

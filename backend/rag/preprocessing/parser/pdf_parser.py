@@ -24,9 +24,12 @@ _PARAGRAPH_MERGE_GAP = 15  # PyMuPDF 文本块垂直间距（point）
 # 标题字号比正文大多少（pt）视为标题（实测标题 14.0 vs 正文 10.5）
 HEADING_SIZE_DELTA = 2.0
 
-# 中文标题编号模式：第 N 章 / 一、 / 1. / 1.1.
+# 标题编号模式：第 N 章 / 一、 / 1. / 10、
+# (?!\d) 排除小数编号条款（2.1 / 3.2 / 6.2）：旧模式 \d+(?:\.\d+)*[.、] 会回溯成
+# "2." 前缀而把条款误判为标题，导致每个条款各自成 section、真正的章节标题
+# （如「二、七天无理由退货」）被拆成孤立空 section，其正文 chunk 丢失标题上下文。
 _HEADING_NUMBER_RE = re.compile(
-    r"^(第[一二三四五六七八九十百\d]+[章节]|[一二三四五六七八九十]+、|\d+(?:\.\d+)*[.、])"
+    r"^(第[一二三四五六七八九十百\d]+[章节]|[一二三四五六七八九十]+、|\d+[.、](?!\d))"
 )
 
 
@@ -153,7 +156,6 @@ class PdfParser(BaseDocumentParser):
         heading_count = 0
         # 文本与表格按 y 顺序混合（表格已按 y 排序进 table_items，此处按出现顺序交错插入）
         # 简化：表格按 y 归入最近的 section —— 遍历文本构建 section 栈后，再按 y 归属表格。
-        text_cursor = 0
         for text, size in raw_items:
             if not text.strip():
                 continue

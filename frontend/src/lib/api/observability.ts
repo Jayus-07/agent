@@ -15,7 +15,7 @@ import type { TraceRecord, AlertItem } from "@/types/trace";
 export async function listTraces(limit = 50, workflowName?: string): Promise<TraceRecord[]> {
   try {
     const wf = workflowName ? `&workflow_name=${encodeURIComponent(workflowName)}` : "";
-    const data = await request<{ traces: TraceRecord[] }>(`/observability/traces?limit=${limit}${wf}`);
+    const data = await request<{ traces: TraceRecord[] }>(`/api/observability/traces?limit=${limit}${wf}`);
     return data.traces || [];
   } catch (e) {
     throw new Error(`listTraces failed: ${(e as Error).message}`);
@@ -35,13 +35,13 @@ export async function getTraceStats(
   total_cost_usd: number;
 }> {
   const wf = workflowName ? `&workflow_name=${encodeURIComponent(workflowName)}` : "";
-  return await request(`/observability/traces/stats?hours=${hours}${wf}`);
+  return await request(`/api/observability/traces/stats?hours=${hours}${wf}`);
 }
 
 /** GET /observability/traces/active — 当前活跃 trace（answer_preview 为空 = 未完成） */
 export async function listActiveTraces(): Promise<TraceRecord[]> {
   try {
-    const data = await request<{ traces: TraceRecord[] }>("/observability/traces/active");
+    const data = await request<{ traces: TraceRecord[] }>("/api/observability/traces/active");
     return data.traces || [];
   } catch (e) {
     throw new Error(`listActiveTraces failed: ${(e as Error).message}`);
@@ -51,7 +51,7 @@ export async function listActiveTraces(): Promise<TraceRecord[]> {
 /** GET /observability/traces/{id} — 单条 trace 完整详情（包含 spans 树） */
 export async function getTraceDetail(id: string): Promise<TraceRecord | null> {
   try {
-    return await request<TraceRecord>(`/observability/traces/${encodeURIComponent(id)}`);
+    return await request<TraceRecord>(`/api/observability/traces/${encodeURIComponent(id)}`);
   } catch (e) {
     // 404 → null（让页面走"不存在"分支）；其它错误抛出
     const status = (e as { status?: number }).status;

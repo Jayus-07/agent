@@ -7,6 +7,7 @@ V1.0 新增指标（覆盖召回/生成/可用性/性能/稳定性）：
 - stability_variance: 同问异答方差（越小越稳定）
 """
 import math
+import re
 import statistics
 from itertools import combinations
 from typing import Any
@@ -401,7 +402,7 @@ def answer_correctness_typed(
         must_contain_hit = hits / len(must_contain)
     else:
         # 无显式 must_contain 时，用 expected_answer 的关键词近似
-        expected_keywords = [w for w in expected_lower.split() if len(w) >= 2]
+        expected_keywords = _tokenize_text(expected_lower)
         if expected_keywords:
             hits = sum(1 for kw in expected_keywords if kw in actual_lower)
             must_contain_hit = hits / len(expected_keywords)
@@ -438,7 +439,6 @@ def answer_correctness_typed(
 
 def _numeric_match_score(actual: str, expected: str, tolerance: float) -> float:
     """数值匹配得分：提取数字并检查相对误差。"""
-    import re
 
     def extract_numbers(text: str) -> list[float]:
         return [float(n) for n in re.findall(r"[-+]?\d*\.?\d+", text)]
@@ -490,19 +490,64 @@ def _comparative_coverage_score(actual: str, expected: str) -> float:
     return covered / len(expected_words)
 
 
+_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
+
+
+def _tokenize_text(text: str) -> list[str]:
+    """中英文混合分词：CJK 用 character bigrams，其余按空白分词。
+
+    避免 ``str.split()`` 对无空格中文完全失效的问题。
+    """
+    text = text.lower()
+    tokens: list[str] = []
+    buf: list[str] = []
+    buf_is_cjk = False
+
+    def flush_buf() -> None:
+        nonlocal buf_is_cjk
+        if not buf:
+            return
+        segment = "".join(buf)
+        if buf_is_cjk:
+            tokens.extend(segment[i : i + 2] for i in range(len(segment) - 1))
+        else:
+            tokens.extend(w for w in segment.split() if len(w) >= 2)
+        buf.clear()
+        buf_is_cjk = False
+
+    for ch in text:
+        is_cjk = bool(_CJK_RE.match(ch))
+        if buf and is_cjk != buf_is_cjk:
+            flush_buf()
+        buf.append(ch)
+        buf_is_cjk = is_cjk
+
+    flush_buf()
+    return tokens
+
+
+def _split_claims(text: str) -> list[str]:
+    """按中英文句号/问号/感叹号/分号/逗号分割声明。"""
+    return [
+        c.strip()
+        for c in re.split(r"[。！？.!?；;，,、]", text)
+        if c.strip()
+    ]
+
+
 def _factual_overlap_score(actual: str, expected: str) -> float:
     """事实重叠度：基于词重叠的简单得分。"""
     if not expected:
         return 1.0 if not actual else 0.0
 
-    actual_words = set(actual.split())
-    expected_words = set(expected.split())
+    actual_tokens = set(_tokenize_text(actual))
+    expected_tokens = set(_tokenize_text(expected))
 
-    if not expected_words:
+    if not expected_tokens:
         return 1.0
 
-    overlap = len(actual_words & expected_words)
-    return overlap / len(expected_words)
+    overlap = len(actual_tokens & expected_tokens)
+    return overlap / len(expected_tokens)
 
 
 def faithfulness_claim_based(
@@ -528,28 +573,27 @@ def faithfulness_claim_based(
     if not answer.strip():
         return {"faithfulness": 1.0, "claim_count": 0, "supported_count": 0}
 
-    # 自动分解声明（按句号、问号、感叹号分割）
+    # 自动分解声明（按中英文句号、问号、感叹号、分号、逗号分割）
     if claims is None:
-        import re
-        claims = [c.strip() for c in re.split(r"[。！？.!?]", answer) if c.strip()]
+        claims = _split_claims(answer)
 
     if not claims:
         return {"faithfulness": 1.0, "claim_count": 0, "supported_count": 0}
 
-    # 合并上下文为单一文本
+    # 合并上下文为单一文本（保持原文用于子串匹配）
     context_text = " ".join(context).lower()
 
     # 检查每个声明是否有上下文支持
-    # 简化实现：检查声明的关键词是否在上下文中出现
+    # 用 _tokenize_text 提取 bigrams，检查是否在原文上下文中出现
     supported = 0
     for claim in claims:
-        claim_keywords = [w for w in claim.lower().split() if len(w) >= 2]
-        if not claim_keywords:
+        claim_tokens = _tokenize_text(claim)
+        if not claim_tokens:
             supported += 1  # 无关键词的声明视为支持
             continue
-        # 至少 50% 关键词在上下文中出现 → 视为支持
-        keyword_hits = sum(1 for kw in claim_keywords if kw in context_text)
-        if keyword_hits / len(claim_keywords) >= 0.5:
+        # 至少 50% token 在上下文中出现 → 视为支持
+        token_hits = sum(1 for tk in claim_tokens if tk in context_text)
+        if token_hits / len(claim_tokens) >= 0.5:
             supported += 1
 
     faithfulness = supported / len(claims) if claims else 1.0

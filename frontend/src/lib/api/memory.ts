@@ -19,21 +19,21 @@ export interface SessionMeta {
 
 /** GET /memory/sessions — 列出所有会话 */
 export async function listSessions(): Promise<SessionMeta[]> {
-  const data = await request<{ sessions: SessionMeta[] }>("/memory/sessions");
+  const data = await request<{ sessions: SessionMeta[] }>("/api/memory/sessions");
   return data.sessions || [];
 }
 
 /** GET /memory/sessions/{id} — 获取会话消息 */
 export async function getSessionMessages(sessionId: string): Promise<{ role: string; content: string }[]> {
   const data = await request<{ messages: { role: string; content: string }[] }>(
-    `/memory/sessions/${encodeURIComponent(sessionId)}`,
+    `/api/memory/sessions/${encodeURIComponent(sessionId)}`,
   );
   return data.messages || [];
 }
 
 /** DELETE /memory/sessions/{id} — 删除会话；会话不存在时后端返回 404（抛 ApiError） */
 export async function deleteMemorySession(sessionId: string): Promise<boolean> {
-  const data = await request<{ ok: boolean }>(`/memory/sessions/${encodeURIComponent(sessionId)}`, {
+  const data = await request<{ ok: boolean }>(`/api/memory/sessions/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
   });
   return data.ok === true;
@@ -41,7 +41,7 @@ export async function deleteMemorySession(sessionId: string): Promise<boolean> {
 
 /** PATCH /memory/sessions/{id} — 重命名会话；会话不存在时后端返回 404（抛 ApiError） */
 export async function renameMemorySession(sessionId: string, title: string): Promise<boolean> {
-  const data = await request<{ ok: boolean }>(`/memory/sessions/${encodeURIComponent(sessionId)}`, {
+  const data = await request<{ ok: boolean }>(`/api/memory/sessions/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
     body: JSON.stringify({ title }),
   });

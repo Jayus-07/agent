@@ -25,7 +25,7 @@ export async function* streamChat(
   signal?: AbortSignal,
 ): AsyncGenerator<SSEStreamEvent> {
   const res = await fetch(
-    `${process.env.NEXT_PUBLIC_API_URL || ""}/chat/stream`,
+    `${process.env.NEXT_PUBLIC_API_URL || ""}/api/chat/stream`,
     {
       method: "POST",
       headers: {
@@ -55,7 +55,7 @@ export async function* streamChat(
  * POST /chat/abort — 中止当前对话
  */
 export async function abortChat(sessionId: string, requestId: string): Promise<void> {
-  await requestSilent("/chat/abort", {
+  await requestSilent("/api/chat/abort", {
     method: "POST",
     body: JSON.stringify({ session_id: sessionId, request_id: requestId }),
   });

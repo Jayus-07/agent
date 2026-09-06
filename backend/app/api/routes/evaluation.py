@@ -1,15 +1,16 @@
 """评测集管理 API — 从 trace 创建用例 + 查询评测集 + 运行评测 + 查看结果。"""
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from backend.evaluation.models import ModuleKind
-from backend.evaluation.trace_bridge import build_test_case_from_trace
 from backend.evaluation.curator import append_case, list_cases
+from backend.evaluation.models import ModuleKind
 from backend.evaluation.storage import list_runs, load_report
+from backend.evaluation.trace_bridge import build_test_case_from_trace
 from backend.evaluation.weekly import run_weekly_rag_eval
 from backend.observability.tracer import trace_collector
 from backend.shared.logger import logger
@@ -109,7 +110,7 @@ async def run_evaluation(module: ModuleKind = Query("rag", description="评测�
     if module != "rag":
         raise HTTPException(status_code=400, detail="当前仅支持 rag 模块评测")
     try:
-        result = run_weekly_rag_eval()
+        result = await asyncio.to_thread(run_weekly_rag_eval)
         return RunEvalResponse(**result)
     except Exception as e:
         logger.error(f"评测运行失败: {e}")

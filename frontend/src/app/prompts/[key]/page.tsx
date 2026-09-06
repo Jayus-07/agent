@@ -2,9 +2,9 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { ArrowLeft, Save, Send, GitBranch, History, FileText, Lock, Play } from 'lucide-react'
+import { ArrowLeft, Save, Send, GitBranch, History, FileText, Lock, Play, Zap } from 'lucide-react'
 import { promptsService, type PromptDetail, type PromptVersion, type AuditEntry, type DiffResult, type PromptStatus } from '@/services/prompts'
-import { evaluationService, type RunEvalResult } from '@/services/evaluation'
+import { evaluationService } from '@/services/evaluation'
 import { WHITELIST_KEYS } from '@/config/promptGroups'
 import { useToast } from '@/components/shared/Toast'
 import Skeleton from '@/components/shared/Skeleton'
@@ -40,11 +40,6 @@ export default function PromptDetailPage() {
 
   // Audit state
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([])
-
-  // Eval modal state (rag.qa only)
-  const [evalModal, setEvalModal] = useState<{ open: boolean; loading: boolean; result: RunEvalResult | null }>({
-    open: false, loading: false, result: null,
-  })
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -117,32 +112,6 @@ export default function PromptDetailPage() {
 
   const handleTransition = async (target: PromptStatus) => {
     if (!latestVersion) return
-
-    // rag.qa: 点击"评测"阶段时触发真实评测
-    if (decodedKey === 'rag.qa' && target === 'evaluation') {
-      setEvalModal({ open: true, loading: true, result: null })
-      try {
-        const result = await evaluationService.runEval('rag')
-        setEvalModal({ open: true, loading: false, result })
-
-        // 评测通过 → 自动 transition 到 passed
-        if (result.ok && result.pass_rate >= 0.85) {
-          try {
-            await promptsService.transition(decodedKey, latestVersion.version, 'passed')
-            toast.success('评测通过，状态已更新为「passed」')
-            load()
-          } catch {
-            toast.warning('评测通过但状态转换失败')
-          }
-        }
-      } catch (e) {
-        setEvalModal({ open: true, loading: false, result: null })
-        toast.error(e instanceof Error ? e.message : '评测运行失败')
-      }
-      return
-    }
-
-    // 其他情况：只改状态
     setTransitioning(true)
     try {
       await promptsService.transition(decodedKey, latestVersion.version, target)
@@ -152,6 +121,38 @@ export default function PromptDetailPage() {
       toast.error(e instanceof Error ? e.message : '状态转换失败')
     } finally {
       setTransitioning(false)
+    }
+  }
+
+  const [evalRunning, setEvalRunning] = useState(false)
+
+  const handleRunEval = async () => {
+    if (evalRunning) return
+    setEvalRunning(true)
+    toast.info('评测运行中，完成后会通知你')
+    try {
+      const result = await evaluationService.runEval('rag')
+      if (result.ok) {
+        const pct = (result.pass_rate * 100).toFixed(1)
+        const top1 = (result.top1_accuracy * 100).toFixed(1)
+        if (result.pass_rate >= 0.85) {
+          toast.success(`评测通过 — 通过率 ${pct}% · Top-1 ${top1}%`)
+          if (latestVersion) {
+            try {
+              await promptsService.transition(decodedKey, latestVersion.version, 'passed')
+              load()
+            } catch { /* ignore */ }
+          }
+        } else {
+          toast.warning(`评测未通过 — 通过率 ${pct}% · Top-1 ${top1}%`)
+        }
+      } else {
+        toast.error('评测运行异常')
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '评测运行失败')
+    } finally {
+      setEvalRunning(false)
     }
   }
 
@@ -211,15 +212,27 @@ export default function PromptDetailPage() {
             </div>
             <p className="text-xs text-text-muted mt-0.5 font-mono">{prompt.key} · v{prompt.active_version ?? '—'} · {prompt.category}</p>
           </div>
-          {tab === 'editor' && (
-            <button
-              onClick={() => router.push(`/prompts/${encodeURIComponent(decodedKey)}/playground`)}
-              className={BTN_SECONDARY}
-            >
-              <Play size={14} />
-              Playground
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {tab === 'editor' && (
+              <button
+                onClick={() => router.push(`/prompts/${encodeURIComponent(decodedKey)}/playground`)}
+                className={BTN_SECONDARY}
+              >
+                <Play size={14} />
+                Playground
+              </button>
+            )}
+            {decodedKey === 'rag.qa' && (
+              <button
+                onClick={handleRunEval}
+                disabled={evalRunning}
+                className={`${BTN_PRIMARY} ${evalRunning ? 'opacity-60' : ''}`}
+              >
+                <Zap size={14} />
+                {evalRunning ? '评测中...' : '运行评测'}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* CI/CD 流水线 */}
@@ -230,71 +243,6 @@ export default function PromptDetailPage() {
               onTransition={isWhitelisted && !isReadOnly ? handleTransition : undefined}
               loading={transitioning}
             />
-          </div>
-        )}
-
-        {/* 评测结果 Modal */}
-        {evalModal.open && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-            <div className="bg-surface-base rounded-xl border border-border-subtle p-6 w-full max-w-md shadow-xl">
-              <h3 className="text-sm font-semibold text-text-primary mb-4">RAG 评测结果</h3>
-              {evalModal.loading ? (
-                <div className="flex flex-col items-center py-8">
-                  <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-                  <p className="text-xs text-text-muted mt-3">正在运行评测，请稍候...</p>
-                </div>
-              ) : evalModal.result ? (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="bg-black/[0.02] rounded-lg p-3">
-                      <p className="text-[10px] text-text-muted">Top-1 准确率</p>
-                      <p className={`text-lg font-bold ${evalModal.result.top1_accuracy >= 0.85 ? 'text-green-600' : 'text-red-500'}`}>
-                        {(evalModal.result.top1_accuracy * 100).toFixed(1)}%
-                      </p>
-                    </div>
-                    <div className="bg-black/[0.02] rounded-lg p-3">
-                      <p className="text-[10px] text-text-muted">通过率</p>
-                      <p className={`text-lg font-bold ${evalModal.result.pass_rate >= 0.85 ? 'text-green-600' : 'text-red-500'}`}>
-                        {(evalModal.result.pass_rate * 100).toFixed(1)}%
-                      </p>
-                    </div>
-                    <div className="bg-black/[0.02] rounded-lg p-3">
-                      <p className="text-[10px] text-text-muted">拒答准确率</p>
-                      <p className="text-lg font-bold text-text-primary">
-                        {(evalModal.result.reject_accuracy * 100).toFixed(1)}%
-                      </p>
-                    </div>
-                    <div className="bg-black/[0.02] rounded-lg p-3">
-                      <p className="text-[10px] text-text-muted">Recall@5</p>
-                      <p className="text-lg font-bold text-text-primary">
-                        {(evalModal.result.recall_at_5 * 100).toFixed(1)}%
-                      </p>
-                    </div>
-                  </div>
-                  <p className="text-[11px] text-text-muted">
-                    共 {evalModal.result.total} 条用例，通过 {evalModal.result.passed} 条
-                  </p>
-                  <div className="flex justify-end gap-2 pt-2">
-                    <button
-                      onClick={() => setEvalModal({ open: false, loading: false, result: null })}
-                      className="px-3 py-1.5 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors"
-                    >
-                      关闭
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="text-center py-6">
-                  <p className="text-xs text-red-500">评测运行失败</p>
-                  <button
-                    onClick={() => setEvalModal({ open: false, loading: false, result: null })}
-                    className="mt-3 px-3 py-1.5 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors"
-                  >
-                    关闭
-                  </button>
-                </div>
-              )}
-            </div>
           </div>
         )}
 

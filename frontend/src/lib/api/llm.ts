@@ -21,17 +21,17 @@ export interface LLMBalance {
 
 /** GET /llm/models — 列出可用模型 */
 export async function listLLMModels(): Promise<{ models: LLMModel[]; current: string }> {
-  return request("/llm/models");
+  return request("/api/llm/models");
 }
 
 /** GET /llm/current — 获取当前模型 */
 export async function getCurrentLLM(): Promise<{ model: string; provider: string }> {
-  return request("/llm/current");
+  return request("/api/llm/current");
 }
 
 /** POST /llm/switch — 切换当前模型 */
 export async function switchLLM(model: string): Promise<{ ok: boolean; model?: string; provider?: string; error?: string }> {
-  return request("/llm/switch", {
+  return request("/api/llm/switch", {
     method: "POST",
     body: JSON.stringify({ model }),
   });
@@ -41,7 +41,7 @@ export async function switchLLM(model: string): Promise<{ ok: boolean; model?: s
 export async function getLLMBalance(provider?: string): Promise<LLMBalance> {
   const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
   try {
-    return await request<LLMBalance>(`/llm/balance${qs}`);
+    return await request<LLMBalance>(`/api/llm/balance${qs}`);
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }
@@ -49,12 +49,12 @@ export async function getLLMBalance(provider?: string): Promise<LLMBalance> {
 
 /** GET /llm/multiquery — 获取 MultiQuery 模式 */
 export async function getMultiQueryMode(): Promise<{ mode: string }> {
-  return request("/llm/multiquery");
+  return request("/api/llm/multiquery");
 }
 
 /** POST /llm/multiquery — 设置 MultiQuery 模式 */
 export async function setMultiQueryMode(mode: string): Promise<{ ok: boolean; mode: string }> {
-  return request("/llm/multiquery", {
+  return request("/api/llm/multiquery", {
     method: "POST",
     body: JSON.stringify({ mode }),
   });
