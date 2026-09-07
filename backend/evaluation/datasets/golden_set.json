@@ -1,8 +1,8 @@
 {
-  "version": "1.0",
-  "_comment": "Golden Set v1.0 — 13 条核心用例，覆盖 RAG 检索关键维度。用于本地 pytest 快速预检 + CI quality gate。选取原则：每个维度至少 1-2 条，总运行时间 <30s（本地离线）。",
+  "version": "3.0",
+  "_comment": "Golden Set v3.0 — 语义门控。thresholds 使用语义指标（context_recall_min 替代 snippet_recall_min，semantic_top1_min 替代 top1_accuracy_min）。legacy 字段（relevant_docs/relevant_snippets）已从数据集删除，pass/fail 由 sem_context_recall 决定。",
   "source_dataset": "rag_test_kb.json",
-  "source_version": "1.4",
+  "source_version": "3.1",
   "selected_ids": [
     "RT-001",
     "RT-003",
@@ -29,10 +29,17 @@
     "dept_isolation_positive": ["DEPT-001"],
     "dept_isolation_leak_guard": ["DEPT-003"]
   },
+  "source_ratio": {
+    "curated_min": 0.8,
+    "adversarial_min": 0.0
+  },
   "thresholds": {
-    "top1_accuracy_min": 0.85,
-    "snippet_recall_min": 0.80,
+    "context_recall_min": 0.50,
+    "semantic_top1_min": 0.70,
+    "context_precision_min": 0.40,
     "reject_accuracy_min": 0.80,
-    "dept_isolation_pass": true
+    "dept_isolation_pass": true,
+    "faithfulness_min": 0.70,
+    "answer_similarity_min": 0.60
   }
 }

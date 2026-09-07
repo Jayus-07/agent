@@ -27,6 +27,8 @@ from backend.evaluation.metrics import (
 from backend.evaluation.models import EvalResult, TestCase
 from backend.evaluation.registry import register_runner
 from backend.evaluation.runner import evaluate_planner_offline
+from backend.evaluation.runners.rag_semantic import compute_semantic_metrics
+from backend.shared.jsonable import safe_jsonable as _safe_jsonable
 from backend.shared.logger import logger
 
 # ==================== Planner ====================
@@ -77,10 +79,6 @@ def _run_planner(cases: list[TestCase], **kwargs) -> list[EvalResult]:
 
 _rag_pipeline = None
 _rag_pipeline_error = None
-
-
-# safe_jsonable 已迁到 backend.shared.jsonable,这里保留别名供向后兼容
-from backend.shared.jsonable import safe_jsonable as _safe_jsonable  # noqa: F401
 
 
 def _normalize_snippet_text(text: str) -> str:
@@ -359,6 +357,19 @@ class _ListRetriever:
         return self._fn(question)
 
 
+def _gate_mode() -> str:
+    """返回当前评估门控模式: legacy | shadow | semantic。
+
+    由 EVAL_GATE 环境变量控制，默认 shadow（Phase 2）。
+    """
+    import os
+    mode = os.getenv("EVAL_GATE", "shadow")
+    if mode in ("legacy", "shadow", "semantic"):
+        return mode
+    logger.warning(f"[RAG eval] 未知 EVAL_GATE={mode!r}，回退 shadow")
+    return "shadow"
+
+
 def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     """RAG runner — 完整检索链路（无 LLM）。
 
@@ -579,13 +590,33 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             rerank_scores = [
                 d.get("rerank_score") or 0.0 for d in details
             ]
-            relevant_mask = [
-                bool(
-                    (d.get("doc_id") or "") in expected_docs
-                    or (d.get("source", "").replace("\\", "/")) in expected_docs
-                )
-                for d in details
-            ]
+            if expected_docs:
+                relevant_mask = [
+                    bool(
+                        (d.get("doc_id") or "") in expected_docs
+                        or (d.get("source", "").replace("\\", "/")) in expected_docs
+                    )
+                    for d in details
+                ]
+            elif _gate_mode() in ("shadow", "semantic") and case.expected.get("ground_truth_context"):
+                # V3: 无 doc_id 标注时用语义相关性作为 S4 mask
+                from backend.evaluation.runners.rag_semantic import _extract_gt_texts, _get_scorer
+                gt_texts = _extract_gt_texts(case.expected)
+                if gt_texts and details:
+                    scorer = _get_scorer()
+                    retrieved_texts = [d.get("page_content", "") for d in details]
+                    relevant_mask = []
+                    for rt in retrieved_texts:
+                        if not rt:
+                            relevant_mask.append(False)
+                            continue
+                        queries = [rt] * len(gt_texts)
+                        scores = scorer.score_pairs(queries, gt_texts)
+                        relevant_mask.append(max(scores) >= 0.50)
+                else:
+                    relevant_mask = [False] * len(details)
+            else:
+                relevant_mask = [False] * len(details)
             if rerank_scores and any(relevant_mask):
                 stage_metrics["S4_rerank"] = stage_rerank_metrics(
                     rerank_scores, relevant_mask,
@@ -629,6 +660,15 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 # 将生成指标合并到 stage_metrics
                 if generation_metrics:
                     stage_metrics["generation"] = generation_metrics
+
+            # === V3: 语义指标（shadow / semantic 模式）===
+            semantic_metrics: dict[str, float] = {}
+            gate = _gate_mode()
+            if gate in ("shadow", "semantic"):
+                semantic_metrics = compute_semantic_metrics(
+                    question=question, details=details, case=case,
+                    thresholds=kwargs.get("semantic_thresholds"),
+                )
 
             # doc-level metrics — 始终计算（用于跨 case 对比）
             r5 = recall_at_k(actual_doc_strs, expected_doc_strs, k=5)
@@ -688,6 +728,9 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 top1_accuracy = 0.0
             elif expected_docs and actual_doc_strs:
                 top1_accuracy = 1.0 if actual_doc_strs[0] in expected_docs else 0.0
+            elif gate in ("shadow", "semantic") and semantic_metrics:
+                # V3: 无 doc_id 标注时用 sem_top1 替代
+                top1_accuracy = semantic_metrics.get("sem_top1", 0.0)
 
             # === reject_accuracy：仅 negative case 计入 ===
             if should_reject:
@@ -729,10 +772,19 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             if allowed_depts:
                 dept_leak = dept_leak or bool(retrieved_depts - set(allowed_depts))
 
-            # pass 判定：chunk 级命中 + 无部门泄漏
+            # === pass 判定 ===
             # V1.4: 拒答用例正确拒答即算 pass（不再要求 doc 命中）
+            # V3.0: 无 legacy doc_id 标注时，shadow/semantic 均由 sem_context_recall 门控
             if should_reject and confidence in ("none", "low"):
                 passed = not dept_leak
+            elif gate in ("shadow", "semantic") and semantic_metrics and not expected_docs:
+                sem_thresh = (kwargs.get("semantic_thresholds") or {}).get("context_recall_min", 0.50)
+                sem_recall = semantic_metrics.get("sem_context_recall", 0.0)
+                passed = sem_recall >= sem_thresh and not dept_leak
+            elif gate == "semantic" and semantic_metrics:
+                sem_thresh = (kwargs.get("semantic_thresholds") or {}).get("context_recall_min", 0.50)
+                sem_recall = semantic_metrics.get("sem_context_recall", 0.0)
+                passed = sem_recall >= sem_thresh and not dept_leak
             else:
                 passed = chunk_hit and not dept_leak
 
@@ -781,6 +833,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     **({"reject_accuracy": round(reject_accuracy, 4)} if reject_accuracy is not None else {}),
                     # V2: 生成质量指标（仅 generation_eval 用例）
                     **({f"gen_{k}": round(v, 4) for k, v in generation_metrics.items()} if generation_metrics else {}),
+                    # V3: 语义指标（shadow/semantic 模式）
+                    **({k: round(v, 4) for k, v in semantic_metrics.items()} if semantic_metrics else {}),
                 },
                 duration_ms=int((time.time() - t0) * 1000),
             ))

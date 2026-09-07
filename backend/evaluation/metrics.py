@@ -603,3 +603,163 @@ def faithfulness_claim_based(
         "claim_count": len(claims),
         "supported_count": supported,
     }
+
+
+# ========== V3.0 语义指标（去 doc_id 化） ==========
+
+
+def context_recall_semantic(
+    retrieved_texts: list[str],
+    ground_truth: list[str],
+    scorer: Any,
+    threshold: float = 0.50,
+) -> dict[str, float]:
+    """RAGAS-style 语义上下文召回率。
+
+    每条 GT 片段: covered iff max_j scorer(G_i, R_j) >= threshold。
+    返回 {context_recall, context_recall_soft, covered_passages, total_passages}。
+    """
+    if not ground_truth:
+        return {
+            "context_recall": 1.0,
+            "context_recall_soft": 1.0,
+            "covered_passages": 0,
+            "total_passages": 0,
+        }
+    if not retrieved_texts:
+        return {
+            "context_recall": 0.0,
+            "context_recall_soft": 0.0,
+            "covered_passages": 0,
+            "total_passages": len(ground_truth),
+        }
+
+    covered = 0
+    soft_sum = 0.0
+    for gt in ground_truth:
+        queries = [gt] * len(retrieved_texts)
+        scores = scorer.score_pairs(queries, retrieved_texts)
+        max_score = max(scores) if scores else 0.0
+        if max_score >= threshold:
+            covered += 1
+        soft_sum += max_score
+
+    n = len(ground_truth)
+    return {
+        "context_recall": round(covered / n, 4),
+        "context_recall_soft": round(soft_sum / n, 4),
+        "covered_passages": covered,
+        "total_passages": n,
+    }
+
+
+def context_precision_semantic(
+    retrieved_texts: list[str],
+    ground_truth: list[str],
+    scorer: Any,
+    threshold: float = 0.50,
+    k: int = 10,
+) -> dict[str, float]:
+    """语义上下文精确率 — top-k 检索结果中有多少是语义相关的。"""
+    if not retrieved_texts or not ground_truth:
+        return {"context_precision": 1.0 if not ground_truth else 0.0, "relevant_count": 0, "total_retrieved": 0}
+
+    top_k = retrieved_texts[:k]
+    relevant = 0
+    for doc in top_k:
+        queries = [doc] * len(ground_truth)
+        scores = scorer.score_pairs(queries, ground_truth)
+        if max(scores) >= threshold:
+            relevant += 1
+
+    return {
+        "context_precision": round(relevant / len(top_k), 4),
+        "relevant_count": relevant,
+        "total_retrieved": len(top_k),
+    }
+
+
+def semantic_top1(
+    retrieved_texts: list[str],
+    ground_truth: list[str],
+    scorer: Any,
+    threshold: float = 0.50,
+) -> float:
+    """Top-1 语义命中 — 排名第一的检索结果是否与任一 GT 片段语义相似。"""
+    if not ground_truth:
+        return 1.0
+    if not retrieved_texts:
+        return 0.0
+
+    top1 = retrieved_texts[0]
+    queries = [top1] * len(ground_truth)
+    scores = scorer.score_pairs(queries, ground_truth)
+    return 1.0 if max(scores) >= threshold else 0.0
+
+
+def answer_similarity_semantic(
+    answer: str,
+    expected_answer: str,
+    scorer: Any,
+) -> float:
+    """语义答案相似度 — scorer(answer, expected_answer)。"""
+    if not answer or not expected_answer:
+        return 1.0 if not answer and not expected_answer else 0.0
+    scores = scorer.score_pairs([answer], [expected_answer])
+    return round(scores[0], 4)
+
+
+def faithfulness_semantic(
+    answer: str,
+    context: list[str],
+    scorer: Any,
+    threshold: float = 0.50,
+) -> dict[str, float]:
+    """基于 CrossEncoder 的忠实度评估（替代 bigram 启发式）。
+
+    将答案分解为独立声明，每个声明对全部上下文打分，
+    claim supported iff max CE(claim, ctx_j) >= threshold。
+    """
+    if not answer.strip():
+        return {"faithfulness": 1.0, "claim_count": 0, "supported_count": 0}
+    if not context:
+        claims = _split_claims(answer)
+        return {"faithfulness": 0.0, "claim_count": len(claims), "supported_count": 0}
+
+    claims = _split_claims(answer)
+    if not claims:
+        return {"faithfulness": 1.0, "claim_count": 0, "supported_count": 0}
+
+    supported = 0
+    for claim in claims:
+        queries = [claim] * len(context)
+        scores = scorer.score_pairs(queries, context)
+        if max(scores) >= threshold:
+            supported += 1
+
+    return {
+        "faithfulness": round(supported / len(claims), 4),
+        "claim_count": len(claims),
+        "supported_count": supported,
+    }
+
+
+def hallucination_rate(faithfulness_result: dict[str, float]) -> float:
+    """幻觉率 = 1 - faithfulness。"""
+    return round(1.0 - faithfulness_result.get("faithfulness", 0.0), 4)
+
+
+def answer_relevancy_proxy(
+    question: str,
+    answer: str,
+    scorer: Any,
+) -> float:
+    """答案相关性代理指标 — cosine(embed(question), embed(answer))。
+
+    使用 scorer 的 score_pairs 接口，适用于 EmbeddingScorer。
+    对于 CrossEncoderScorer 则直接打分（query→answer 相关性）。
+    """
+    if not question or not answer:
+        return 1.0 if not question and not answer else 0.0
+    scores = scorer.score_pairs([question], [answer])
+    return round(scores[0], 4)

@@ -4,9 +4,10 @@ V1.0 更新：中文化输出（metric 标签/状态名/表格表头）。
 机器字段（metric key、status enum）保持英文，确保 baseline JSON 对比稳定。
 """
 import json
-from pathlib import Path
 from datetime import datetime
-from backend.evaluation.models import EvalReport, ModuleSummary
+from pathlib import Path
+
+from backend.evaluation.models import EvalReport
 
 # ============ V1.0 中文化映射 ============
 # metric key（英文）→ 中文显示标签
@@ -35,7 +36,14 @@ METRIC_LABELS: dict[str, str] = {
     "judge_confidence": "Judge-置信度",
     "p95_latency_ms": "P95 响应时间 (ms)",
     "stability_variance": "稳定性方差",
-    "reject_accuracy": "拒答准确率",
+    "sem_context_recall": "语义上下文召回",
+    "sem_context_recall_soft": "语义上下文召回(软)",
+    "sem_context_precision": "语义上下文精确率",
+    "sem_top1": "语义 Top-1",
+    "gen_sem_faithfulness": "生成忠实度(语义)",
+    "gen_sem_hallucination_rate": "幻觉率",
+    "gen_sem_answer_similarity": "答案相似度",
+    "gen_S6_answer_correctness": "S6 答案正确性",
 }
 
 # 状态 enum → 中文显示
@@ -115,11 +123,11 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
 
     lines = [
         f"# 评估报告 — {module_zh}",
-        f"",
+        "",
         f"- **时间**: {report.timestamp}",
         f"- **模式**: {mode_zh}",
         f"- **冒烟测试**: {smoke_zh}",
-        f"",
+        "",
     ]
 
     if report.total_score is not None:
@@ -180,9 +188,9 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
     for s in report.summaries:
         mod_zh = MODULE_LABELS.get(s.module, s.module)
         lines.append(f"### {mod_zh}")
-        lines.append(f"")
-        lines.append(f"| 指标 | 数值 |")
-        lines.append(f"|------|------|")
+        lines.append("")
+        lines.append("| 指标 | 数值 |")
+        lines.append("|------|------|")
         lines.append(f"| 总数 | {s.total} |")
         lines.append(f"| 通过 | {s.passed} |")
         lines.append(f"| 失败 | {s.failed} |")
@@ -356,18 +364,18 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
         should_reject = expected.get("should_reject", False)
 
         if should_reject:
-            lines.append(f"- **类型**: 负样本（应拒答）")
-            lines.append(f"- **期望文档**: `[]`（无答案）")
+            lines.append("- **类型**: 负样本（应拒答）")
+            lines.append("- **期望文档**: `[]`（无答案）")
             lines.append(f"- **实际召回**: `{retrieved_docs[:5] or '[]'}`")
             if not retrieved_docs:
-                lines.append(f"- ✅ **结果**: 召回为空，上层直接拒答（理想路径）")
+                lines.append("- ✅ **结果**: 召回为空，上层直接拒答（理想路径）")
             else:
                 # 召回非空时，看 reject_accuracy 判断 runner 启发式 confidence 是否触发拒答
                 rej_metric = (r.metrics or {}).get("reject_accuracy")
                 if rej_metric == 1.0:
-                    lines.append(f"- ✅ **结果**: 召回非空但 confidence=low/none，触发 EvidenceGate 拒答")
+                    lines.append("- ✅ **结果**: 召回非空但 confidence=low/none，触发 EvidenceGate 拒答")
                 else:
-                    lines.append(f"- ❌ **结果**: 召回非空且 confidence=high/medium，未拒答（应拒却没拒）")
+                    lines.append("- ❌ **结果**: 召回非空且 confidence=high/medium，未拒答（应拒却没拒）")
         elif expected_docs:
             top1 = retrieved_docs[0] if retrieved_docs else "—"
             top1_hit = top1 in expected_docs if retrieved_docs else False
@@ -379,7 +387,7 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
             if hit_all:
                 lines.append(f"- ✅ **整体命中**: `{hit_all}`")
             else:
-                lines.append(f"- ❌ **未命中任何期望文档**")
+                lines.append("- ❌ **未命中任何期望文档**")
         else:
             lines.append(f"- 期望文档: `{expected_docs}`")
             lines.append(f"- 实际召回: `{retrieved_docs[:5]}`")
@@ -494,11 +502,12 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
           <div class="card-hint">{_html.escape(hint)}</div>
         </div>"""
 
-    # 计算各指标 + 状态
+    # 计算各指标 + 状态（V3 语义指标优先，legacy 降级）
     pr = rag_summary.pass_rate if rag_summary else 0
-    top1 = metrics_dict.get("top1_accuracy")
+    sem_recall = metrics_dict.get("sem_context_recall")
+    sem_top1 = metrics_dict.get("sem_top1")
     rej = metrics_dict.get("reject_accuracy")
-    mrr = metrics_dict.get("mrr")
+    faithfulness = metrics_dict.get("gen_sem_faithfulness")
 
     def _status_icon(v, th_h=0.85, th_m=0.65):
         if v is None:
@@ -510,15 +519,16 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
         return "fail", "❌"
 
     pr_st, pr_icon = _status_icon(pr, 0.9, 0.7)
-    top1_st, top1_icon = _status_icon(top1, 0.85, 0.65) if top1 is not None else ("none", "—")
+    recall_st, recall_icon = _status_icon(sem_recall, 0.85, 0.65) if sem_recall is not None else ("none", "—")
+    top1_st, top1_icon = _status_icon(sem_top1, 0.85, 0.65) if sem_top1 is not None else ("none", "—")
     rej_st, rej_icon = _status_icon(rej, 0.85, 0.65) if rej is not None else ("none", "—")
-    mrr_st, mrr_icon = _status_icon(mrr, 0.8, 0.5) if mrr is not None else ("none", "—")
+    faith_st, faith_icon = _status_icon(faithfulness, 0.80, 0.60) if faithfulness is not None else ("none", "—")
 
     cards_html = (
-        _card("📋", "通过率", f"{pr:.1%} ({rag_summary.passed}/{rag_summary.total})" if rag_summary else "—", pr_st, "recall@5") +
-        _card("🎯", "Top-1 准确率", f"{top1:.1%}" if top1 is not None else "—", top1_st, "用户看到的第1条") +
-        _card("🚫", "拒答准确率", f"{rej:.1%}" if rej is not None else "—", rej_st, "negative case") +
-        _card("📈", "MRR", f"{mrr:.1%}" if mrr is not None else "—", mrr_st, "排序质量")
+        _card("📋", "通过率", f"{pr:.1%} ({rag_summary.passed}/{rag_summary.total})" if rag_summary else "—", pr_st, "golden set") +
+        _card("🔍", "语义召回", f"{sem_recall:.1%}" if sem_recall is not None else "—", recall_st, "sem_context_recall") +
+        _card("🎯", "语义 Top-1", f"{sem_top1:.1%}" if sem_top1 is not None else "—", top1_st, "sem_top1") +
+        _card("🛡️", "忠实度", f"{faithfulness:.1%}" if faithfulness is not None else "—", faith_st, "gen_sem_faithfulness")
     )
 
     # === 失败 case 分类 ===
@@ -526,15 +536,17 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
     error_results = [r for r in report.results if r.status == "error"]
 
     def _classify_failure(r):
-        exp = r.expected or {}
         if r.status == "error":
             return "执行错误"
         retrieved = r.actual.get("retrieved_docs", []) or []
         if not retrieved:
             return "空召回"
-        exp_docs = exp.get("relevant_docs", []) or []
-        if exp_docs and retrieved[0] not in exp_docs:
-            return "Top-1 错"
+        sem_top1_val = (r.metrics or {}).get("sem_top1", 0)
+        sem_recall_val = (r.metrics or {}).get("sem_context_recall", 0)
+        if sem_top1_val < 0.5:
+            return "Top-1 语义偏差"
+        if sem_recall_val < 0.5:
+            return "语义召回不足"
         return "其他"
 
     from collections import Counter
@@ -543,20 +555,23 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
 
     if fail_results or error_results:
         group_rows = ""
-        for cat in ["Top-1 错", "空召回", "执行错误", "其他"]:
+        for cat in ["Top-1 语义偏差", "语义召回不足", "空召回", "执行错误", "其他"]:
             n = fail_groups.get(cat, 0)
             if n:
                 group_rows += f'<tr><td>{cat}</td><td>{n}</td></tr>'
 
         fail_rows = ""
         for r in fail_results + error_results:
-            exp_docs = (r.expected or {}).get("relevant_docs", [])
+            gt_contexts = (r.expected or {}).get("ground_truth_context", [])
             rd = r.actual.get("retrieved_docs", []) or []
-            exp_str = exp_docs[0] if exp_docs else "—"
-            top1 = rd[0] if rd else ("⚠️ " + (r.error_msg[:30] if r.error_msg else "error") if r.status == "error" else "empty")
+            gt_label = gt_contexts[0].get("source_doc", "—")[:30] if gt_contexts else "—"
+            top1_doc = rd[0] if rd else ("⚠️ " + (r.error_msg[:30] if r.error_msg else "error") if r.status == "error" else "empty")
+            sem_recall = (r.metrics or {}).get("sem_context_recall")
+            sem_top1_val = (r.metrics or {}).get("sem_top1")
+            metric_str = f"recall={sem_recall:.2f} top1={sem_top1_val:.2f}" if sem_recall is not None else "—"
             cat = "执行错误" if r.status == "error" else _classify_failure(r)
             cls = "fail" if r.status == "fail" else "error"
-            fail_rows += f'<tr class="{cls}"><td><b>{_html.escape(r.case_id)}</b></td><td><code>{_html.escape(exp_str)}</code></td><td><code>{_html.escape(top1)}</code></td><td>{_html.escape(cat)}</td></tr>'
+            fail_rows += f'<tr class="{cls}"><td><b>{_html.escape(r.case_id)}</b></td><td><code>{_html.escape(gt_label)}</code></td><td><code>{_html.escape(top1_doc)}</code></td><td>{metric_str}</td><td>{_html.escape(cat)}</td></tr>'
 
         failure_section = f"""
         <h2>⚠️ 失败 case ({len(fail_results)} 失败 + {error_count} 错误)</h2>
@@ -567,7 +582,7 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
         </table>
         <h3>失败 case 明细</h3>
         <table class="cases">
-          <tr><th>Case</th><th>期望 doc</th><th>Top-1 召回</th><th>分类</th></tr>
+          <tr><th>Case</th><th>期望来源</th><th>Top-1 召回</th><th>语义指标</th><th>分类</th></tr>
           {fail_rows}
         </table>"""
     else:
@@ -596,7 +611,6 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
         details_rows = ""
         for i, d in enumerate(details[:5], 1):
             doc_id = _html.escape(str(d.get("doc_id", "—")))
-            chunk_id = _html.escape(str(d.get("chunk_id", "")))[:25]
             rs = d.get("rerank_score")
             rs_str = f"{rs:.4f}" if isinstance(rs, (int, float)) else "—"
             snippet = _html.escape(str(d.get("snippet", "")).replace("|", "\\|")[:120])

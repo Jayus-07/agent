@@ -1,0 +1,269 @@
+{
+ "id": "44bbebef8c69",
+ "request_id": "44bbebef8c69",
+ "timestamp": "2026-09-02T19:20:41Z",
+ "session_id": "ZuPmxiHkRFuv8f_qolZdp",
+ "model": "",
+ "provider": "",
+ "question": "退款审核时间是多少？",
+ "answer_preview": "知识库暂无相关资料。",
+ "answer_len": 10,
+ "duration_ms": 23260,
+ "total_ms": 23260,
+ "usage": {},
+ "cost": {},
+ "error": {},
+ "metadata": {},
+ "spans": [
+  {
+   "span_id": "root",
+   "parent_id": null,
+   "name": "多 Agent 协作管线",
+   "type": "workflow",
+   "kind": "tool",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:41Z",
+   "end_time": "2026-09-02T19:21:04Z",
+   "duration_ms": 22838,
+   "sequence": 0,
+   "retry_count": 0,
+   "metrics": {
+    "span_count": 5
+   },
+   "input": {
+    "question": "退款审核时间是多少？",
+    "kb_id": "default"
+   },
+   "output": null,
+   "events": [],
+   "errors": []
+  },
+  {
+   "span_id": "input_guard",
+   "parent_id": "root",
+   "name": "Input Guard",
+   "type": "workflow",
+   "kind": "tool",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:41Z",
+   "end_time": "2026-09-02T19:20:41Z",
+   "duration_ms": 0,
+   "sequence": 1,
+   "retry_count": 0,
+   "metrics": {
+    "layer": "rule",
+    "llm_consulted": false,
+    "needs_permission": false,
+    "domain": "",
+    "policy_version": "1.0"
+   },
+   "input": {
+    "query_len": 10
+   },
+   "output": {
+    "action": "allow",
+    "category": "business_query",
+    "risk_level": "low",
+    "confidence": 0.8,
+    "reason": "命中业务正向信号"
+   },
+   "events": [],
+   "errors": []
+  },
+  {
+   "span_id": "router",
+   "parent_id": "root",
+   "name": "路由决策",
+   "type": "tool_call",
+   "kind": "router",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:50Z",
+   "end_time": "2026-09-02T19:20:57Z",
+   "duration_ms": 7286,
+   "sequence": 2,
+   "retry_count": 0,
+   "metrics": {
+    "layer": "llm",
+    "confidence": 0.7,
+    "mode": "direct"
+   },
+   "input": {
+    "query": "退款审核时间是多少？"
+   },
+   "output": {
+    "execution_mode": "direct",
+    "candidates": [
+     {
+      "name": "rag.search",
+      "score": 0.95
+     },
+     {
+      "name": "web.search",
+      "score": 0.1
+     }
+    ],
+    "confidence": 0.7,
+    "reason": "退款审核时间属于企业内部制度或流程规范，需通过企业知识库检索获取。",
+    "workflow_name": ""
+   },
+   "events": [
+    {
+     "name": "rule_hint",
+     "timestamp": "2026-09-02T19:20:50Z",
+     "level": "info",
+     "message": "Rule 提示: 匹配 RAG 关键词 2 个（弱信号） (confidence=0.70 < 0.8)",
+     "attributes": {
+      "layer": "rule",
+      "verdict": "hint",
+      "confidence": 0.7,
+      "candidate": "rag.search",
+      "reason": "匹配 RAG 关键词 2 个（弱信号）"
+     }
+    },
+    {
+     "name": "vector_hint",
+     "timestamp": "2026-09-02T19:20:51Z",
+     "level": "info",
+     "message": "Vector 提示: top=rag.search (confidence=0.63 < 0.85)",
+     "attributes": {
+      "layer": "vector",
+      "verdict": "hint",
+      "confidence": 0.629,
+      "candidate": "rag.search"
+     }
+    },
+    {
+     "name": "llm_decide",
+     "timestamp": "2026-09-02T19:20:57Z",
+     "level": "info",
+     "message": "LLM 决定: 退款审核时间属于企业内部制度或流程规范，需通过企业知识库检索获取。 (confidence=0.70)",
+     "attributes": {
+      "layer": "llm",
+      "verdict": "decide",
+      "confidence": 0.7,
+      "candidate": "rag.search",
+      "reason": "退款审核时间属于企业内部制度或流程规范，需通过企业知识库检索获取。"
+     }
+    }
+   ],
+   "errors": []
+  },
+  {
+   "span_id": "skill_executor",
+   "parent_id": "root",
+   "name": "直接执行",
+   "type": "tool_call",
+   "kind": "agent",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:57Z",
+   "end_time": "2026-09-02T19:21:01Z",
+   "duration_ms": 3517,
+   "sequence": 3,
+   "retry_count": 0,
+   "metrics": {
+    "elapsed_ms": 3516.0
+   },
+   "input": {
+    "step_id": null,
+    "question": "退款审核时间是多少？"
+   },
+   "output": {
+    "step_direct_1_status": "success"
+   },
+   "events": [],
+   "errors": []
+  },
+  {
+   "span_id": "tool-direct_1",
+   "parent_id": "root",
+   "name": "rag:rag.search",
+   "type": "tool_call",
+   "kind": "tool",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:57Z",
+   "end_time": "2026-09-02T19:21:01Z",
+   "duration_ms": 3503,
+   "sequence": 4,
+   "retry_count": 0,
+   "metrics": {
+    "elapsed_s": 3.5,
+    "retries": 0
+   },
+   "input": {
+    "params": {
+     "question": "退款审核时间是多少？"
+    },
+    "capability": "rag.search"
+   },
+   "output": {
+    "result": "知识库暂无相关资料。"
+   },
+   "events": [],
+   "errors": []
+  },
+  {
+   "span_id": "reporter:direct_1",
+   "parent_id": "root",
+   "name": "结果汇总",
+   "type": "tool_call",
+   "kind": "agent",
+   "status": "success",
+   "start_time": "2026-09-02T19:21:01Z",
+   "end_time": "2026-09-02T19:21:04Z",
+   "duration_ms": 2738,
+   "sequence": 15,
+   "retry_count": 0,
+   "metrics": {
+    "elapsed_ms": 2734.0
+   },
+   "input": {
+    "step_id": "direct_1",
+    "question": "退款审核时间是多少？"
+   },
+   "output": {},
+   "events": [],
+   "errors": []
+  }
+ ],
+ "root_span_id": "root",
+ "workflow_name": "agent",
+ "workflow_kind": "other",
+ "sla_threshold_ms": 30000,
+ "parent_id": null,
+ "children_ids": [
+  "3fcd6614ffed"
+ ],
+ "graph": {
+  "nodes": [
+   {
+    "id": "router",
+    "label": "路由决策"
+   },
+   {
+    "id": "skill_executor",
+    "label": "直接执行"
+   },
+   {
+    "id": "reporter",
+    "label": "Reporter 汇总"
+   }
+  ],
+  "edges": [
+   {
+    "source": "router",
+    "target": "skill_executor",
+    "label": "direct"
+   },
+   {
+    "source": "skill_executor",
+    "target": "reporter",
+    "label": "完成"
+   }
+  ],
+  "max_loops": 10,
+  "loop_count": 1,
+  "degradation_triggered": false
+ },
+ "tags": {},
+ "status": "success"
+}

@@ -1,16 +1,26 @@
 {
-  "version": "2.0",
+  "version": "3.0",
   "_comment": "V2.0 生成质量评测 — 验证答案正确性、Faithfulness、必须包含/禁止包含关键词。需要同时评估检索和生成两个阶段。",
   "test_cases": [
     {
       "id": "V2-GEN-001",
       "question": "下单后多久发货？请根据知识库回答。",
       "module": "rag",
-      "kb_id": "rag_test_kb",
       "expected": {
-        "relevant_docs": ["3e30e0df16"],
-        "relevant_snippets": ["24小时"],
-        "match_type": "snippet"
+        "relevant_docs": [
+          "3e30e0df16"
+        ],
+        "relevant_snippets": [
+          "24小时"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "24小时",
+            "source_doc": "",
+            "section": ""
+          }
+        ]
       },
       "metadata": {
         "difficulty": "easy",
@@ -19,21 +29,45 @@
         "tier": "smoke",
         "answer_type": "factual",
         "expected_answer": "现货商品24小时内发出，预售商品以商品详情页标注的发货时间为准",
-        "must_contain": ["24小时"],
-        "must_not_contain": ["48小时", "3-5天"],
+        "must_contain": [
+          "24小时"
+        ],
+        "must_not_contain": [
+          "48小时",
+          "3-5天"
+        ],
         "generation_eval": true,
-        "ground_truth_verified": true
-      }
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.0"
+      },
+      "kb_id": "rag_test_kb"
     },
     {
       "id": "V2-GEN-002",
       "question": "采购合同的付款方式和时间节点是怎样的？",
       "module": "rag",
-      "kb_id": "rag_test_kb",
       "expected": {
-        "relevant_docs": ["14aa8a1c7a"],
-        "relevant_snippets": ["30%", "65%"],
-        "match_type": "snippet"
+        "relevant_docs": [
+          "14aa8a1c7a"
+        ],
+        "relevant_snippets": [
+          "30%",
+          "65%"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "30%",
+            "source_doc": "",
+            "section": ""
+          },
+          {
+            "text": "65%",
+            "source_doc": "",
+            "section": ""
+          }
+        ]
       },
       "metadata": {
         "difficulty": "hard",
@@ -42,21 +76,47 @@
         "tier": "hard",
         "answer_type": "procedural",
         "expected_answer": "分三期：30%预付款(签订后3个工作日)、65%验收后(7个工作日)、5%尾款(质保期满交付后90日)",
-        "must_contain": ["30%", "65%", "5%"],
-        "must_not_contain": ["50%", "100%"],
+        "must_contain": [
+          "30%",
+          "65%",
+          "5%"
+        ],
+        "must_not_contain": [
+          "50%",
+          "100%"
+        ],
         "generation_eval": true,
-        "ground_truth_verified": true
-      }
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.0"
+      },
+      "kb_id": "rag_test_kb"
     },
     {
       "id": "V2-GEN-003",
       "question": "数据安全事件发生后，应急响应的具体步骤和时限是什么？",
       "module": "rag",
-      "kb_id": "rag_test_kb",
       "expected": {
-        "relevant_docs": ["9b708f17b6"],
-        "relevant_snippets": ["2小时", "24小时"],
-        "match_type": "snippet"
+        "relevant_docs": [
+          "9b708f17b6"
+        ],
+        "relevant_snippets": [
+          "2小时",
+          "24小时"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "2小时",
+            "source_doc": "",
+            "section": ""
+          },
+          {
+            "text": "24小时",
+            "source_doc": "",
+            "section": ""
+          }
+        ]
       },
       "metadata": {
         "difficulty": "hard",
@@ -65,21 +125,46 @@
         "tier": "hard",
         "answer_type": "procedural",
         "expected_answer": "2小时内上报数据安全负责人，24小时内启动处置并按法规向监管与用户告知",
-        "must_contain": ["2小时", "24小时"],
-        "must_not_contain": ["1小时", "72小时"],
+        "must_contain": [
+          "2小时",
+          "24小时"
+        ],
+        "must_not_contain": [
+          "1小时",
+          "72小时"
+        ],
         "generation_eval": true,
-        "ground_truth_verified": true
-      }
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.0"
+      },
+      "kb_id": "rag_test_kb"
     },
     {
       "id": "V2-GEN-004",
       "question": "供应商分级管理体系是怎样的？各级别有什么权益？",
       "module": "rag",
-      "kb_id": "rag_test_kb",
       "expected": {
-        "relevant_docs": ["e87b88ae72"],
-        "relevant_snippets": ["A级", "B级"],
-        "match_type": "snippet"
+        "relevant_docs": [
+          "e87b88ae72"
+        ],
+        "relevant_snippets": [
+          "A级",
+          "B级"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "A级",
+            "source_doc": "",
+            "section": ""
+          },
+          {
+            "text": "B级",
+            "source_doc": "",
+            "section": ""
+          }
+        ]
       },
       "metadata": {
         "difficulty": "hard",
@@ -88,21 +173,48 @@
         "tier": "hard",
         "answer_type": "factual",
         "expected_answer": "A级(战略)≥90分优先份额账期优惠；B级(合格)75-89正常合作；C级(观察)60-74限期整改；D级(淘汰)<60移出名录",
-        "must_contain": ["A级", "B级", "C级", "D级"],
-        "must_not_contain": ["S级", "特级"],
+        "must_contain": [
+          "A级",
+          "B级",
+          "C级",
+          "D级"
+        ],
+        "must_not_contain": [
+          "S级",
+          "特级"
+        ],
         "generation_eval": true,
-        "ground_truth_verified": true
-      }
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.0"
+      },
+      "kb_id": "rag_test_kb"
     },
     {
       "id": "V2-GEN-005",
       "question": "退货运费由谁承担？",
       "module": "rag",
-      "kb_id": "rag_test_kb",
       "expected": {
-        "relevant_docs": ["3e30e0df16"],
-        "relevant_snippets": ["质量问题", "运费"],
-        "match_type": "snippet"
+        "relevant_docs": [
+          "3e30e0df16"
+        ],
+        "relevant_snippets": [
+          "质量问题",
+          "运费"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "质量问题",
+            "source_doc": "",
+            "section": ""
+          },
+          {
+            "text": "运费",
+            "source_doc": "",
+            "section": ""
+          }
+        ]
       },
       "metadata": {
         "difficulty": "easy",
@@ -111,21 +223,46 @@
         "tier": "smoke",
         "answer_type": "factual",
         "expected_answer": "质量问题由商家承担，无理由退货由买家承担",
-        "must_contain": ["质量问题", "商家", "买家"],
-        "must_not_contain": ["平台承担"],
+        "must_contain": [
+          "质量问题",
+          "商家",
+          "买家"
+        ],
+        "must_not_contain": [
+          "平台承担"
+        ],
         "generation_eval": true,
-        "ground_truth_verified": true
-      }
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.0"
+      },
+      "kb_id": "rag_test_kb"
     },
     {
       "id": "V2-GEN-006",
       "question": "库存管理中滞销商品如何处理？盘点差异率标准是什么？",
       "module": "rag",
-      "kb_id": "rag_test_kb",
       "expected": {
-        "relevant_docs": ["99a80089e4"],
-        "relevant_snippets": ["滞销", "差异率"],
-        "match_type": "snippet"
+        "relevant_docs": [
+          "99a80089e4"
+        ],
+        "relevant_snippets": [
+          "滞销",
+          "差异率"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "滞销",
+            "source_doc": "",
+            "section": ""
+          },
+          {
+            "text": "差异率",
+            "source_doc": "",
+            "section": ""
+          }
+        ]
       },
       "metadata": {
         "difficulty": "hard",
@@ -134,21 +271,46 @@
         "tier": "hard",
         "answer_type": "factual",
         "expected_answer": "90天无动销转滞销池；月度盘点差异率≤1%，年度≤0.5%",
-        "must_contain": ["90", "差异率"],
-        "must_not_contain": ["30天", "60天"],
+        "must_contain": [
+          "90",
+          "差异率"
+        ],
+        "must_not_contain": [
+          "30天",
+          "60天"
+        ],
         "generation_eval": true,
-        "ground_truth_verified": true
-      }
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.0"
+      },
+      "kb_id": "rag_test_kb"
     },
     {
       "id": "V2-GEN-007",
       "question": "会员积分怎么使用？优惠券最多能用几张？",
       "module": "rag",
-      "kb_id": "rag_test_kb",
       "expected": {
-        "relevant_docs": ["3e30e0df16"],
-        "relevant_snippets": ["1000分", "3张"],
-        "match_type": "snippet"
+        "relevant_docs": [
+          "3e30e0df16"
+        ],
+        "relevant_snippets": [
+          "1000分",
+          "3张"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "1000分",
+            "source_doc": "",
+            "section": ""
+          },
+          {
+            "text": "3张",
+            "source_doc": "",
+            "section": ""
+          }
+        ]
       },
       "metadata": {
         "difficulty": "easy",
@@ -157,21 +319,30 @@
         "tier": "core",
         "answer_type": "numeric",
         "expected_answer": "满1000分可抵扣10元；单笔订单最多使用3张优惠券",
-        "must_contain": ["1000分", "3张"],
-        "must_not_contain": ["5张", "500分"],
+        "must_contain": [
+          "1000分",
+          "3张"
+        ],
+        "must_not_contain": [
+          "5张",
+          "500分"
+        ],
         "generation_eval": true,
-        "ground_truth_verified": true
-      }
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.0"
+      },
+      "kb_id": "rag_test_kb"
     },
     {
       "id": "V2-GEN-008",
       "question": "你们的CEO是谁？公司明年营收目标是多少？",
       "module": "rag",
-      "kb_id": "rag_test_kb",
       "expected": {
         "relevant_docs": [],
         "relevant_snippets": [],
-        "should_reject": true
+        "should_reject": true,
+        "ground_truth_context": []
       },
       "metadata": {
         "difficulty": "hard",
@@ -181,21 +352,44 @@
         "answer_type": "factual",
         "expected_answer": "",
         "must_contain": [],
-        "must_not_contain": ["CEO", "营收", "预测"],
+        "must_not_contain": [
+          "CEO",
+          "营收",
+          "预测"
+        ],
         "generation_eval": true,
         "probe_note": "拒答+生成守卫：知识库不含此信息，生成答案不得编造",
-        "ground_truth_verified": true
-      }
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.0"
+      },
+      "kb_id": "rag_test_kb"
     },
     {
       "id": "V2-GEN-009",
       "question": "跨境商品的包装规范有哪些要求？危险品额外需要什么？",
       "module": "rag",
-      "kb_id": "rag_test_kb",
       "expected": {
-        "relevant_docs": ["7e28946475"],
-        "relevant_snippets": ["缓冲材料", "MSDS"],
-        "match_type": "snippet"
+        "relevant_docs": [
+          "7e28946475"
+        ],
+        "relevant_snippets": [
+          "缓冲材料",
+          "MSDS"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "缓冲材料",
+            "source_doc": "",
+            "section": ""
+          },
+          {
+            "text": "MSDS",
+            "source_doc": "",
+            "section": ""
+          }
+        ]
       },
       "metadata": {
         "difficulty": "hard",
@@ -204,21 +398,46 @@
         "tier": "hard",
         "answer_type": "factual",
         "expected_answer": "包装需缓冲材料2cm厚度；危险品(D类电池)需MSDS和UN38.3测试报告",
-        "must_contain": ["缓冲材料", "2cm"],
-        "must_not_contain": ["1cm", "3cm"],
+        "must_contain": [
+          "缓冲材料",
+          "2cm"
+        ],
+        "must_not_contain": [
+          "1cm",
+          "3cm"
+        ],
         "generation_eval": true,
-        "ground_truth_verified": true
-      }
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.0"
+      },
+      "kb_id": "rag_test_kb"
     },
     {
       "id": "V2-GEN-010",
       "question": "采购合同中质保期是多久？质保期满后支付什么？",
       "module": "rag",
-      "kb_id": "rag_test_kb",
       "expected": {
-        "relevant_docs": ["14aa8a1c7a"],
-        "relevant_snippets": ["90日", "5%"],
-        "match_type": "snippet"
+        "relevant_docs": [
+          "14aa8a1c7a"
+        ],
+        "relevant_snippets": [
+          "90日",
+          "5%"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "90日",
+            "source_doc": "",
+            "section": ""
+          },
+          {
+            "text": "5%",
+            "source_doc": "",
+            "section": ""
+          }
+        ]
       },
       "metadata": {
         "difficulty": "medium",
@@ -227,11 +446,20 @@
         "tier": "hard",
         "answer_type": "numeric",
         "expected_answer": "质保期为交付后90日，期满后无质量问题支付5%尾款",
-        "must_contain": ["90日", "5%"],
-        "must_not_contain": ["60日", "180日"],
+        "must_contain": [
+          "90日",
+          "5%"
+        ],
+        "must_not_contain": [
+          "60日",
+          "180日"
+        ],
         "generation_eval": true,
-        "ground_truth_verified": true
-      }
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.0"
+      },
+      "kb_id": "rag_test_kb"
     }
   ]
 }

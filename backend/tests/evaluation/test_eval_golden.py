@@ -62,10 +62,12 @@ def _run_rag_cases(case_ids: list[str]) -> list:
 # ── Session-scoped fixture：避免重复加载模型 ──────────────────
 
 @pytest.fixture(scope="module")
-def golden_results():
+def golden_results(request):
     """运行 golden set 并缓存结果（module 级共享，避免重复检索）。"""
     ids = _load_golden_ids()
-    return _run_rag_cases(ids)
+    results = _run_rag_cases(ids)
+    request.config._golden_eval_results = results
+    return results
 
 
 @pytest.fixture(scope="module")
@@ -86,35 +88,39 @@ class TestGoldenSetAggregate:
             pytest.fail(f"{len(errors)} 条用例出错:\n" + "\n".join(msgs))
 
     def test_top1_accuracy(self, golden_results, thresholds):
-        """正样本 Top-1 准确率 ≥ 阈值。"""
-        min_acc = thresholds.get("top1_accuracy_min", 0.85)
+        """正样本语义 Top-1 准确率 ≥ 阈值。"""
+        min_acc = thresholds.get("semantic_top1_min", 0.70)
         positive = [
             r for r in golden_results
             if not r.expected.get("should_reject")
-            and r.expected.get("relevant_docs")
+            and (
+                r.expected.get("ground_truth_context")
+                or r.expected.get("relevant_docs")
+            )
         ]
         if not positive:
             pytest.skip("Golden set 无正样本")
-        hits = sum(1 for r in positive if r.metrics.get("top1_accuracy", 0) >= 1.0)
+        hits = sum(1 for r in positive if r.metrics.get("sem_top1", 0) >= 1.0)
         acc = hits / len(positive)
         assert acc >= min_acc, (
-            f"Top-1 准确率 {acc:.2%} < 阈值 {min_acc:.0%} "
+            f"语义 Top-1 准确率 {acc:.2%} < 阈值 {min_acc:.0%} "
             f"({hits}/{len(positive)} 命中)"
         )
 
-    def test_snippet_recall(self, golden_results, thresholds):
-        """Snippet 召回率 ≥ 阈值。"""
-        min_recall = thresholds.get("snippet_recall_min", 0.80)
-        cases_with_snippets = [
+    def test_context_recall(self, golden_results, thresholds):
+        """语义上下文召回率 ≥ 阈值。"""
+        min_recall = thresholds.get("context_recall_min", 0.50)
+        cases_with_gt = [
             r for r in golden_results
-            if r.expected.get("relevant_snippets")
+            if r.expected.get("ground_truth_context")
+            or r.expected.get("relevant_snippets")
         ]
-        if not cases_with_snippets:
-            pytest.skip("Golden set 无 snippet 标注用例")
-        recalls = [r.metrics.get("chunk_recall", 0) for r in cases_with_snippets]
+        if not cases_with_gt:
+            pytest.skip("Golden set 无上下文标注用例")
+        recalls = [r.metrics.get("sem_context_recall", 0) for r in cases_with_gt]
         avg = sum(recalls) / len(recalls)
         assert avg >= min_recall, (
-            f"平均 snippet 召回率 {avg:.2%} < 阈值 {min_recall:.0%}"
+            f"平均语义上下文召回率 {avg:.2%} < 阈值 {min_recall:.0%}"
         )
 
     def test_reject_accuracy(self, golden_results, thresholds):
@@ -160,10 +166,99 @@ class TestGoldenSetPerCase:
         assert r is not None, f"用例 {case_id} 未运行"
         assert r.status == "pass", (
             f"{case_id} 失败: status={r.status}, "
-            f"top1={r.metrics.get('top1_accuracy')}, "
-            f"chunk_recall={r.metrics.get('chunk_recall')}, "
+            f"sem_top1={r.metrics.get('sem_top1')}, "
+            f"sem_context_recall={r.metrics.get('sem_context_recall')}, "
             f"error={r.error_msg or ''}"
         )
+
+
+# ── V3 语义影子模式测试 ──────────────────────────────────────
+
+class TestSemanticShadow:
+    """验证 shadow 模式下语义指标正常产出（不决定 pass/fail）。"""
+
+    SEMANTIC_KEYS = {"sem_context_recall", "sem_context_recall_soft", "sem_context_precision", "sem_top1"}
+
+    def test_semantic_metrics_present(self, golden_results):
+        """所有非 error 用例都应产出 sem_* 指标。"""
+        for r in golden_results:
+            if r.status == "error":
+                continue
+            present = self.SEMANTIC_KEYS & set(r.metrics.keys())
+            assert present, f"{r.case_id} 缺少语义指标，仅有: {sorted(r.metrics.keys())}"
+
+    def test_semantic_recall_range(self, golden_results):
+        """sem_context_recall 应在 [0, 1] 范围内。"""
+        for r in golden_results:
+            val = r.metrics.get("sem_context_recall")
+            if val is not None:
+                assert 0.0 <= val <= 1.0, f"{r.case_id} sem_context_recall={val} 超出 [0,1]"
+
+    def test_semantic_vs_legacy_divergence_report(self, golden_results, capsys):
+        """输出 legacy vs semantic 分歧报告（信息性，不断言）。"""
+        positive = [
+            r for r in golden_results
+            if not r.expected.get("should_reject") and r.status == "pass"
+        ]
+        diverge_count = 0
+        for r in positive:
+            legacy_hit = r.metrics.get("top1_accuracy", 0) >= 1.0
+            sem_hit = r.metrics.get("sem_top1", 0) >= 1.0
+            if legacy_hit != sem_hit:
+                diverge_count += 1
+        report = f"Legacy vs Semantic 分歧: {diverge_count}/{len(positive)} 条正样本"
+        print(report)
+
+
+# ── Phase 4.1: 生成质量阻塞门控 ──────────────────────────────
+
+def _get_gen_eval_results(golden_results):
+    """筛选 generation_eval 用例（以产出 gen_sem_faithfulness 指标为标志）。"""
+    return [r for r in golden_results if "gen_sem_faithfulness" in r.metrics]
+
+
+class TestGenerationQualityBlocking:
+    """Phase 4.1 — generation_eval 用例的 CrossEncoder 语义门控。
+
+    阈值来源: golden_set.json thresholds（faithfulness_min / answer_similarity_min）。
+    评分器: CrossEncoder (bge-reranker-base) 替代 bigram 启发式。
+    """
+
+    def test_semantic_faithfulness(self, golden_results, thresholds):
+        """CrossEncoder 忠实度 ≥ 阈值（替代 bigram 启发式）。"""
+        min_faith = thresholds.get("faithfulness_min", 0.70)
+        gen_results = _get_gen_eval_results(golden_results)
+        if not gen_results:
+            pytest.skip("Golden set 无 generation_eval 用例")
+        for r in gen_results:
+            val = r.metrics.get("gen_sem_faithfulness", 0)
+            assert val >= min_faith, (
+                f"{r.case_id} gen_sem_faithfulness={val:.4f} < 阈值 {min_faith}"
+            )
+
+    def test_answer_correctness(self, golden_results, thresholds):
+        """答案正确性（S6 typed + must_contain）≥ 阈值。"""
+        min_sim = thresholds.get("answer_similarity_min", 0.60)
+        gen_results = _get_gen_eval_results(golden_results)
+        if not gen_results:
+            pytest.skip("Golden set 无 generation_eval 用例")
+        for r in gen_results:
+            val = r.metrics.get("gen_S6_answer_correctness", 0)
+            assert val >= min_sim, (
+                f"{r.case_id} gen_S6_answer_correctness={val:.4f} < 阈值 {min_sim}"
+            )
+
+    def test_hallucination_rate_bounded(self, golden_results):
+        """幻觉率 = 1 - faithfulness，上限 0.50（信息性指标）。"""
+        gen_results = _get_gen_eval_results(golden_results)
+        if not gen_results:
+            pytest.skip("Golden set 无 generation_eval 用例")
+        for r in gen_results:
+            hall = r.metrics.get("gen_sem_hallucination_rate")
+            if hall is not None:
+                assert hall <= 0.50, (
+                    f"{r.case_id} gen_sem_hallucination_rate={hall:.4f} > 0.50"
+                )
 
 
 # ── CLI 入口：--full 跑完整评测集 ─────────────────────────────
