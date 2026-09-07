@@ -1,4 +1,6 @@
 """语义指标单元测试 — 注入 FakeScorer，零模型依赖。"""
+import math
+
 import pytest
 
 from backend.evaluation.metrics import (
@@ -35,9 +37,9 @@ def fake():
 
 
 class TestContextRecallSemantic:
-    def test_empty_gt_returns_one(self, fake):
+    def test_empty_gt_returns_nan(self, fake):
         result = context_recall_semantic(["doc1"], [], fake)
-        assert result["context_recall"] == 1.0
+        assert math.isnan(result["context_recall"])
         assert result["total_passages"] == 0
 
     def test_empty_retrieved_returns_zero(self, fake):
@@ -70,9 +72,10 @@ class TestContextRecallSemantic:
 
 
 class TestContextPrecisionSemantic:
-    def test_empty_gt_returns_one(self, fake):
+    def test_empty_gt_returns_nan(self, fake):
+        import math
         result = context_precision_semantic(["doc1"], [], fake)
-        assert result["context_precision"] == 1.0
+        assert math.isnan(result["context_precision"])
 
     def test_empty_retrieved_returns_zero(self, fake):
         result = context_precision_semantic([], ["gt1"], fake)
@@ -91,8 +94,8 @@ class TestContextPrecisionSemantic:
 
 
 class TestSemanticTop1:
-    def test_empty_gt_returns_one(self, fake):
-        assert semantic_top1(["doc"], [], fake) == 1.0
+    def test_empty_gt_returns_nan(self, fake):
+        assert math.isnan(semantic_top1(["doc"], [], fake))
 
     def test_empty_retrieved_returns_zero(self, fake):
         assert semantic_top1([], ["gt"], fake) == 0.0
@@ -109,10 +112,10 @@ class TestSemanticTop1:
 
 class TestAnswerSimilarity:
     def test_both_empty(self, fake):
-        assert answer_similarity_semantic("", "", fake) == 1.0
+        assert math.isnan(answer_similarity_semantic("", "", fake))
 
     def test_one_empty(self, fake):
-        assert answer_similarity_semantic("answer", "", fake) == 0.0
+        assert math.isnan(answer_similarity_semantic("answer", "", fake))
 
     def test_identical(self, fake):
         assert answer_similarity_semantic("same text", "same text", fake) == 1.0
@@ -136,13 +139,15 @@ class TestFaithfulnessSemantic:
     def test_supported_claims(self):
         scorer = FakeScorer(fixed_scores=[0.9, 0.8])
         result = faithfulness_semantic("claim1。claim2。", ["ctx1", "ctx2"], scorer, threshold=0.5)
-        assert result["faithfulness"] == 1.0
+        # Soft scoring: avg of max scores = (0.9 + 0.9) / 2 = 0.9
+        assert result["faithfulness"] == 0.9
         assert result["supported_count"] == 2
 
     def test_unsupported_claims(self):
         scorer = FakeScorer(fixed_scores=[0.1, 0.2])
         result = faithfulness_semantic("claim1。claim2。", ["ctx1", "ctx2"], scorer, threshold=0.5)
-        assert result["faithfulness"] == 0.0
+        # Soft scoring: avg of max scores = (0.2 + 0.2) / 2 = 0.2
+        assert result["faithfulness"] == 0.2
         assert result["supported_count"] == 0
 
 
@@ -165,7 +170,7 @@ class TestHallucinationRate:
 
 class TestAnswerRelevancyProxy:
     def test_both_empty(self, fake):
-        assert answer_relevancy_proxy("", "", fake) == 1.0
+        assert math.isnan(answer_relevancy_proxy("", "", fake))
 
     def test_one_empty(self, fake):
         assert answer_relevancy_proxy("q", "", fake) == 0.0

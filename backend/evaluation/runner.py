@@ -5,13 +5,19 @@
 复制到新项目后只需注册自己的 runner 即可。
 """
 
-import time
+import math
 from typing import Any
+
+from backend.evaluation.metrics import jaccard_similarity
 from backend.evaluation.models import (
-    TestCase, EvalResult, ModuleKind, EvalReport, ModuleSummary, TierSummary,
+    EvalReport,
+    EvalResult,
+    ModuleKind,
+    ModuleSummary,
+    TestCase,
+    TierSummary,
 )
-from backend.evaluation.metrics import recall_at_k, mrr, ndcg_at_k, jaccard_similarity
-from backend.evaluation.registry import get_runner, list_registered
+from backend.evaluation.registry import get_runner
 
 # ==================== V2: 分层阈值配置 ====================
 # CI/CD 按 tier 差异化卡点：smoke 最严（快速门禁），hard 最松（探索性测试）
@@ -128,7 +134,12 @@ def _build_summary(results: list[EvalResult], module: ModuleKind) -> ModuleSumma
     for r in results:
         metric_keys.update(r.metrics.keys())
     for key in metric_keys:
-        values = [r.metrics[key] for r in results if key in r.metrics]
+        values = [
+            r.metrics[key] for r in results
+            if key in r.metrics
+            and isinstance(r.metrics[key], (int, float))
+            and not math.isnan(r.metrics[key])
+        ]
         if values:
             agg_metrics[key] = round(sum(values) / len(values), 4)
 
@@ -231,7 +242,7 @@ def run_module(
         return _skip_results(cases, module, f"Module '{module}' requires --live mode")
 
     try:
-        return entry.func(cases, **kwargs)
+        return entry.func(cases, live=live, **kwargs)
     except Exception as e:
         return _error_results(cases, module, str(e))
 
@@ -243,6 +254,7 @@ def run_all(
     judge: bool = False,
     dataset_file: str | None = None,
     tier: str = "all",
+    ragas: bool = False,
 ) -> EvalReport:
     """主入口：运行一个或多个模块的评估，返回 EvalReport。
 
@@ -267,7 +279,7 @@ def run_all(
         if smoke:
             cases = cases[:5]
         cases = _filter_cases_by_tier(cases, tier)
-        results = run_module("rag", cases, live=live, judge=judge)
+        results = run_module("rag", cases, live=live, judge=judge, ragas=ragas)
         return EvalReport(
             module="rag",
             mode="live" if live else "offline",
@@ -293,7 +305,7 @@ def run_all(
             cases = cases[:5]
         cases = _filter_cases_by_tier(cases, tier)
 
-        results = run_module(m, cases, live=live, judge=judge)
+        results = run_module(m, cases, live=live, judge=judge, ragas=ragas)
         all_results.extend(results)
         summaries.append(_build_summary(results, m))
         all_cases.extend(cases)

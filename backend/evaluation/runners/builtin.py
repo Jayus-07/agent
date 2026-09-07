@@ -9,6 +9,7 @@
 复制评估框架到新项目时，替换此文件中的 runner 实现即可。
 """
 
+import math
 import time
 
 from backend.evaluation.judge import judge_answer
@@ -16,6 +17,7 @@ from backend.evaluation.metrics import (
     answer_correctness_typed,
     context_noise_rate,
     faithfulness_claim_based,
+    faithfulness_semantic,
     mrr,
     ndcg_at_k,
     precision_at_k,
@@ -649,10 +651,19 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 # S7: 忠实度（检查 retrieved context 是否支撑 expected_answer 的声明）
                 if expected_answer and details:
                     context_list = [d.get("page_content", "") for d in details]
-                    faithfulness = faithfulness_claim_based(
-                        answer=expected_answer,
-                        context=context_list,
-                    )
+                    try:
+                        from backend.evaluation.runners.rag_semantic import _get_scorer
+                        scorer = _get_scorer()
+                        faithfulness = faithfulness_semantic(
+                            answer=expected_answer,
+                            context=context_list,
+                            scorer=scorer,
+                        )
+                    except Exception:
+                        faithfulness = faithfulness_claim_based(
+                            answer=expected_answer,
+                            context=context_list,
+                        )
                     generation_metrics["S7_faithfulness"] = faithfulness["faithfulness"]
                     generation_metrics["claim_count"] = float(faithfulness["claim_count"])
                     generation_metrics["supported_claim_count"] = float(faithfulness["supported_count"])
@@ -664,11 +675,50 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             # === V3: 语义指标（shadow / semantic 模式）===
             semantic_metrics: dict[str, float] = {}
             gate = _gate_mode()
+
+            # 生成答案（live 模式 + generation_eval 用例，或 RAGAS 模式）
+            _generated_answer = ""
+            if kwargs.get("live") and case.metadata.get("generation_eval"):
+                try:
+                    from backend.evaluation.generation import generate_answer_ollama
+                    retrieved_texts_for_gen = [d.get("page_content", "") for d in details if d.get("page_content")]
+                    if retrieved_texts_for_gen:
+                        _generated_answer = generate_answer_ollama(question, retrieved_texts_for_gen)
+                except Exception as e:
+                    logger.warning(f"[GenAnswer] {case.id} 答案生成失败: {e}")
+
             if gate in ("shadow", "semantic"):
                 semantic_metrics = compute_semantic_metrics(
                     question=question, details=details, case=case,
                     thresholds=kwargs.get("semantic_thresholds"),
+                    generated_answer=_generated_answer,
                 )
+
+            # === RAGAS 官方指标对比（--ragas 启用时）===
+            ragas_metrics: dict[str, float] = {}
+            if kwargs.get("ragas"):
+                try:
+                    from backend.evaluation.ragas_bridge import compute_ragas_metrics
+                    from backend.evaluation.runners.rag_semantic import _extract_gt_texts
+
+                    retrieved_texts = [d.get("page_content", "") for d in details if d.get("page_content")]
+                    gt_texts = _extract_gt_texts(case.expected)
+
+                    if retrieved_texts and gt_texts:
+                        gen_answer = _generated_answer
+                        if not gen_answer:
+                            from backend.evaluation.generation import generate_answer_ollama
+                            gen_answer = generate_answer_ollama(question, retrieved_texts)
+                        if gen_answer:
+                            ragas_metrics = compute_ragas_metrics(
+                                question=question,
+                                retrieved_texts=retrieved_texts,
+                                ground_truth_texts=gt_texts,
+                                expected_answer=case.metadata.get("expected_answer"),
+                                generated_answer=gen_answer,
+                            )
+                except Exception as e:
+                    logger.warning(f"[RAGAS] {case.id} 计算失败: {e}")
 
             # doc-level metrics — 始终计算（用于跨 case 对比）
             r5 = recall_at_k(actual_doc_strs, expected_doc_strs, k=5)
@@ -721,16 +771,17 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             would_reject = confidence in ("none", "low")
             top1_accuracy = 0.0
             if should_reject:
-                # NEG: 系统正确拒答 → 1.0；系统错误放行 → 0.0
                 top1_accuracy = 1.0 if would_reject else 0.0
             elif would_reject:
-                # POS: 系统错误拒答 → 0.0
                 top1_accuracy = 0.0
+            elif semantic_metrics:
+                sem_recall = semantic_metrics.get("sem_context_recall")
+                if sem_recall is not None and not math.isnan(sem_recall):
+                    top1_accuracy = 1.0 if sem_recall >= 0.50 else 0.0
+                elif expected_docs and actual_doc_strs:
+                    top1_accuracy = 1.0 if actual_doc_strs[0] in expected_docs else 0.0
             elif expected_docs and actual_doc_strs:
                 top1_accuracy = 1.0 if actual_doc_strs[0] in expected_docs else 0.0
-            elif gate in ("shadow", "semantic") and semantic_metrics:
-                # V3: 无 doc_id 标注时用 sem_top1 替代
-                top1_accuracy = semantic_metrics.get("sem_top1", 0.0)
 
             # === reject_accuracy：仅 negative case 计入 ===
             if should_reject:
@@ -773,18 +824,26 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 dept_leak = dept_leak or bool(retrieved_depts - set(allowed_depts))
 
             # === pass 判定 ===
-            # V1.4: 拒答用例正确拒答即算 pass（不再要求 doc 命中）
-            # V3.0: 无 legacy doc_id 标注时，shadow/semantic 均由 sem_context_recall 门控
+            # 复合门控：检索质量(recall) + 生成质量(faithfulness + answer_correctness)
             if should_reject and confidence in ("none", "low"):
                 passed = not dept_leak
-            elif gate in ("shadow", "semantic") and semantic_metrics and not expected_docs:
-                sem_thresh = (kwargs.get("semantic_thresholds") or {}).get("context_recall_min", 0.50)
-                sem_recall = semantic_metrics.get("sem_context_recall", 0.0)
-                passed = sem_recall >= sem_thresh and not dept_leak
-            elif gate == "semantic" and semantic_metrics:
-                sem_thresh = (kwargs.get("semantic_thresholds") or {}).get("context_recall_min", 0.50)
-                sem_recall = semantic_metrics.get("sem_context_recall", 0.0)
-                passed = sem_recall >= sem_thresh and not dept_leak
+            elif gate in ("semantic", "shadow") and semantic_metrics:
+                sem_thresh = kwargs.get("semantic_thresholds") or {}
+                recall_min = sem_thresh.get("sem_context_recall_min", sem_thresh.get("context_recall_min", 0.50))
+                sem_recall = semantic_metrics.get("sem_context_recall")
+                if sem_recall is not None:
+                    passed = sem_recall >= recall_min and not dept_leak
+                    if passed and case.metadata.get("generation_eval"):
+                        faith_min = sem_thresh.get("sem_faithfulness_min", sem_thresh.get("faithfulness_min", 0.50))
+                        corr_min = sem_thresh.get("sem_answer_correctness_min", sem_thresh.get("answer_similarity_min", 0.40))
+                        sem_faith = semantic_metrics.get("sem_faithfulness")
+                        sem_corr = semantic_metrics.get("sem_answer_correctness")
+                        if sem_faith is not None and sem_faith < faith_min:
+                            passed = False
+                        if sem_corr is not None and sem_corr < corr_min:
+                            passed = False
+                else:
+                    passed = chunk_hit and not dept_leak
             else:
                 passed = chunk_hit and not dept_leak
 
@@ -835,6 +894,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     **({f"gen_{k}": round(v, 4) for k, v in generation_metrics.items()} if generation_metrics else {}),
                     # V3: 语义指标（shadow/semantic 模式）
                     **({k: round(v, 4) for k, v in semantic_metrics.items()} if semantic_metrics else {}),
+                    # RAGAS 官方指标对比（--ragas 启用时）
+                    **({k: round(v, 4) for k, v in ragas_metrics.items()} if ragas_metrics else {}),
                 },
                 duration_ms=int((time.time() - t0) * 1000),
             ))

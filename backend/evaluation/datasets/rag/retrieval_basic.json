@@ -1,5 +1,5 @@
 {
-  "version": "3.0",
+  "version": "3.1",
   "_comment": "V2.0 基础检索评测 — 单文档事实查询。覆盖 FAQ、退货、库存、供应商、商品规格、技术手册、安全政策、采购合同等核心文档。",
   "test_cases": [
     {
@@ -17,14 +17,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "24小时",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：客户下单后多久发货?\nA：现货商品 24 小时内发出,预售商品以商品详情页标注的发货时间为准。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "faq_常见问题FAQ.md"
           },
           {
-            "text": "现货",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：客户下单后多久发货?\nA：现货商品 24 小时内发出,预售商品以商品详情页标注的发货时间为准。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "faq_常见问题FAQ.md"
           }
         ]
       },
@@ -40,7 +40,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -60,19 +60,19 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "支付宝",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：支持哪些支付方式?\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "faq_常见问题FAQ.md"
           },
           {
-            "text": "微信",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：支持哪些支付方式?\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "faq_常见问题FAQ.md"
           },
           {
-            "text": "信用卡",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：支持哪些支付方式?\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "faq_常见问题FAQ.md"
           }
         ]
       },
@@ -89,7 +89,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -108,14 +108,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "申请退款",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：如何申请退款?\nA：在「我的订单」点击「申请退款」,填写原因后提交,客服 1-2 个工作日内审核。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "如何申请退款?"
           },
           {
-            "text": "1-2个工作日",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：如何申请退款?\nA：在「我的订单」点击「申请退款」,填写原因后提交,客服 1-2 个工作日内审核。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "faq_常见问题FAQ.md"
           }
         ]
       },
@@ -132,7 +132,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -151,14 +151,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "1年",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：商品保修期多久?\nA：电子产品按品牌政策,一般 1 年;其他品类详见商品详情页。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "faq_常见问题FAQ.md"
           },
           {
-            "text": "电子产品",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：商品保修期多久?\nA：电子产品按品牌政策,一般 1 年;其他品类详见商品详情页。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "faq_常见问题FAQ.md"
           }
         ]
       },
@@ -174,7 +174,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -193,14 +193,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "库存",
-            "source_doc": "",
-            "section": ""
+            "text": "示例跨境电商公司 库存管理制度\n版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001\n【仅供测试  内容虚构】\n第一章 总则\n第一条 目的：规范库存管理，降低呆滞库存，提升资金周转率。\n第二条 适用范围：成品仓、原料仓、在途仓、跨境保税仓。\n第二章 库存分类\n库存按状态分为以下五类：\n第三章 出入库流程\n入库流程：采购到货 → 验收 → 质检 → 上架。\n出库流程：订单审核 → 拣货 → 复核 → 打包 → 交接物流。\n第四章 盘点制度\n月度盘点：每月末由财务组织抽盘，差异率不超过 1%。\n年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。\n第五章 滞销处理\n连续 90 天无动销的商品，转入滞销池，启动促销或调拨方案；连续 180\n天无动销，启动退供或报废评估。\n附录 A：常用单据\n入库单、出库单、调拨单、盘点表、损益单。",
+            "source_doc": "ops_库存管理制度.pdf",
+            "section": "示例跨境电商公司 库存管理制度"
           },
           {
-            "text": "五类",
-            "source_doc": "",
-            "section": ""
+            "text": "示例跨境电商公司 库存管理制度\n版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001\n【仅供测试  内容虚构】\n第一章 总则\n第一条 目的：规范库存管理，降低呆滞库存，提升资金周转率。\n第二条 适用范围：成品仓、原料仓、在途仓、跨境保税仓。\n第二章 库存分类\n库存按状态分为以下五类：\n第三章 出入库流程\n入库流程：采购到货 → 验收 → 质检 → 上架。\n出库流程：订单审核 → 拣货 → 复核 → 打包 → 交接物流。\n第四章 盘点制度\n月度盘点：每月末由财务组织抽盘，差异率不超过 1%。\n年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。\n第五章 滞销处理\n连续 90 天无动销的商品，转入滞销池，启动促销或调拨方案；连续 180\n天无动销，启动退供或报废评估。\n附录 A：常用单据\n入库单、出库单、调拨单、盘点表、损益单。",
+            "source_doc": "ops_库存管理制度.pdf",
+            "section": "第二章 库存分类"
           }
         ]
       },
@@ -216,7 +216,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -235,14 +235,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "滞销",
-            "source_doc": "",
-            "section": ""
+            "text": "示例跨境电商公司 库存管理制度\n版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001\n【仅供测试  内容虚构】\n第一章 总则\n第一条 目的：规范库存管理，降低呆滞库存，提升资金周转率。\n第二条 适用范围：成品仓、原料仓、在途仓、跨境保税仓。\n第二章 库存分类\n库存按状态分为以下五类：\n第三章 出入库流程\n入库流程：采购到货 → 验收 → 质检 → 上架。\n出库流程：订单审核 → 拣货 → 复核 → 打包 → 交接物流。\n第四章 盘点制度\n月度盘点：每月末由财务组织抽盘，差异率不超过 1%。\n年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。\n第五章 滞销处理\n连续 90 天无动销的商品，转入滞销池，启动促销或调拨方案；连续 180\n天无动销，启动退供或报废评估。\n附录 A：常用单据\n入库单、出库单、调拨单、盘点表、损益单。",
+            "source_doc": "ops_库存管理制度.pdf",
+            "section": "第五章 滞销处理"
           },
           {
-            "text": "90",
-            "source_doc": "",
-            "section": ""
+            "text": "示例跨境电商公司 库存管理制度\n版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001\n【仅供测试  内容虚构】\n第一章 总则\n第一条 目的：规范库存管理，降低呆滞库存，提升资金周转率。\n第二条 适用范围：成品仓、原料仓、在途仓、跨境保税仓。\n第二章 库存分类\n库存按状态分为以下五类：\n第三章 出入库流程\n入库流程：采购到货 → 验收 → 质检 → 上架。\n出库流程：订单审核 → 拣货 → 复核 → 打包 → 交接物流。\n第四章 盘点制度\n月度盘点：每月末由财务组织抽盘，差异率不超过 1%。\n年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。\n第五章 滞销处理\n连续 90 天无动销的商品，转入滞销池，启动促销或调拨方案；连续 180\n天无动销，启动退供或报废评估。\n附录 A：常用单据\n入库单、出库单、调拨单、盘点表、损益单。",
+            "source_doc": "ops_库存管理制度.pdf",
+            "section": "第五章 滞销处理"
           }
         ]
       },
@@ -258,7 +258,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -277,14 +277,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "盘点",
-            "source_doc": "",
-            "section": ""
+            "text": "示例跨境电商公司 库存管理制度\n版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001\n【仅供测试  内容虚构】\n第一章 总则\n第一条 目的：规范库存管理，降低呆滞库存，提升资金周转率。\n第二条 适用范围：成品仓、原料仓、在途仓、跨境保税仓。\n第二章 库存分类\n库存按状态分为以下五类：\n第三章 出入库流程\n入库流程：采购到货 → 验收 → 质检 → 上架。\n出库流程：订单审核 → 拣货 → 复核 → 打包 → 交接物流。\n第四章 盘点制度\n月度盘点：每月末由财务组织抽盘，差异率不超过 1%。\n年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。\n第五章 滞销处理\n连续 90 天无动销的商品，转入滞销池，启动促销或调拨方案；连续 180\n天无动销，启动退供或报废评估。\n附录 A：常用单据\n入库单、出库单、调拨单、盘点表、损益单。",
+            "source_doc": "ops_库存管理制度.pdf",
+            "section": "第四章 盘点制度"
           },
           {
-            "text": "年度盘点",
-            "source_doc": "",
-            "section": ""
+            "text": "示例跨境电商公司 库存管理制度\n版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001\n【仅供测试  内容虚构】\n第一章 总则\n第一条 目的：规范库存管理，降低呆滞库存，提升资金周转率。\n第二条 适用范围：成品仓、原料仓、在途仓、跨境保税仓。\n第二章 库存分类\n库存按状态分为以下五类：\n第三章 出入库流程\n入库流程：采购到货 → 验收 → 质检 → 上架。\n出库流程：订单审核 → 拣货 → 复核 → 打包 → 交接物流。\n第四章 盘点制度\n月度盘点：每月末由财务组织抽盘，差异率不超过 1%。\n年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。\n第五章 滞销处理\n连续 90 天无动销的商品，转入滞销池，启动促销或调拨方案；连续 180\n天无动销，启动退供或报废评估。\n附录 A：常用单据\n入库单、出库单、调拨单、盘点表、损益单。",
+            "source_doc": "ops_库存管理制度.pdf",
+            "section": "第四章 盘点制度"
           }
         ]
       },
@@ -301,7 +301,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -320,14 +320,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "资质初审",
-            "source_doc": "",
-            "section": ""
+            "text": "1. **资质初审**：营业执照、生产 / 经营许可证、商标注册或授权链、质检报告齐备。\n2. **样品验证**：提供样品并送质检，关键指标须达标。\n3. **试单考核**：小批量试单，评估交期达成率、质量合格率、售后响应。\n4. 三项通过后方可纳入《合格供应商名录》。",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 三、供应商准入"
           },
           {
-            "text": "样品验证",
-            "source_doc": "",
-            "section": ""
+            "text": "1. **资质初审**：营业执照、生产 / 经营许可证、商标注册或授权链、质检报告齐备。\n2. **样品验证**：提供样品并送质检，关键指标须达标。\n3. **试单考核**：小批量试单，评估交期达成率、质量合格率、售后响应。\n4. 三项通过后方可纳入《合格供应商名录》。",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 三、供应商准入"
           }
         ]
       },
@@ -344,7 +344,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -363,14 +363,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "A级",
-            "source_doc": "",
-            "section": ""
+            "text": "| 等级 | 标准 | 权益 |\n|------|------|------|\n| A 级（战略） | 年度评分 ≥ 90，且合作满 1 年 | 优先份额、账期优惠 |\n| B 级（合格） | 年度评分 75–89 | 正常合作 |\n| C 级（观察） | 年度评分 60–74 | 限期整改、减少份额 |\n| D 级（淘汰） | 年度评分 < 60 或出现重大违规 | 移出名录 |",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 四、供应商分级"
           },
           {
-            "text": "90",
-            "source_doc": "",
-            "section": ""
+            "text": "| 等级 | 标准 | 权益 |\n|------|------|------|\n| A 级（战略） | 年度评分 ≥ 90，且合作满 1 年 | 优先份额、账期优惠 |\n| B 级（合格） | 年度评分 75–89 | 正常合作 |\n| C 级（观察） | 年度评分 60–74 | 限期整改、减少份额 |\n| D 级（淘汰） | 年度评分 < 60 或出现重大违规 | 移出名录 |",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 四、供应商分级"
           }
         ]
       },
@@ -387,7 +387,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -411,9 +411,9 @@
             "section": ""
           },
           {
-            "text": "级别",
-            "source_doc": "",
-            "section": ""
+            "text": "| 级别 | 示例 | 保护措施 |\n|------|------|----------|\n| 公开 | 商品目录、公开活动 | 常规访问控制 |\n| 内部 | 订单、库存、运营报表 | 角色权限 + 审计 |\n| 敏感 | 姓名、手机号、地址、支付信息 | 加密存储 + 最小化访问 |\n| 机密 | 源码、密钥、商业合同 | 加密 + 隔离 + 双因子 |",
+            "source_doc": "security_数据安全与隐私政策.md",
+            "section": "示例跨境电商公司 数据安全与隐私政策 > 二、数据分类"
           }
         ]
       },
@@ -431,7 +431,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -450,14 +450,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "AES-256",
-            "source_doc": "",
-            "section": ""
+            "text": "- 传输层强制 TLS 1.2+，存储层对敏感字段 AES-256 加密；\n- 密钥由 KMS / Vault 统一托管，禁止硬编码；\n- 数据库按用户维度分库分表，定期备份（RPO ≤ 5 min）。",
+            "source_doc": "security_数据安全与隐私政策.md",
+            "section": "示例跨境电商公司 数据安全与隐私政策 > 四、存储与加密"
           },
           {
-            "text": "TLS",
-            "source_doc": "",
-            "section": ""
+            "text": "- 传输层强制 TLS 1.2+，存储层对敏感字段 AES-256 加密；\n- 密钥由 KMS / Vault 统一托管，禁止硬编码；\n- 数据库按用户维度分库分表，定期备份（RPO ≤ 5 min）。",
+            "source_doc": "security_数据安全与隐私政策.md",
+            "section": "示例跨境电商公司 数据安全与隐私政策 > 四、存储与加密"
           }
         ]
       },
@@ -474,7 +474,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -493,14 +493,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "2小时",
-            "source_doc": "",
-            "section": ""
+            "text": "发生或疑似数据安全事件，2 小时内上报数据安全负责人，24 小时内启动处置并按法规向监管与用户告知；保留事件调查与整改记录。",
+            "source_doc": "security_数据安全与隐私政策.md",
+            "section": "示例跨境电商公司 数据安全与隐私政策 > 八、应急响应"
           },
           {
-            "text": "上报",
-            "source_doc": "",
-            "section": ""
+            "text": "发生或疑似数据安全事件，2 小时内上报数据安全负责人，24 小时内启动处置并按法规向监管与用户告知；保留事件调查与整改记录。",
+            "source_doc": "security_数据安全与隐私政策.md",
+            "section": "示例跨境电商公司 数据安全与隐私政策 > 八、应急响应"
           }
         ]
       },
@@ -516,7 +516,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -535,14 +535,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "30%",
-            "source_doc": "",
-            "section": ""
+            "text": "5.1 合同签订后 3 个工作日内支付 30% 预付款。\n5.2 货物验收合格后 7 个工作日内支付 65% 货款。\n5.3 质保期满(交付后 90 日)无质量问题,支付剩余 5% 尾款。",
+            "source_doc": "legal_采购合同.md",
+            "section": "跨境电商采购合同 > 五、付款方式"
           },
           {
-            "text": "预付款",
-            "source_doc": "",
-            "section": ""
+            "text": "5.1 合同签订后 3 个工作日内支付 30% 预付款。\n5.2 货物验收合格后 7 个工作日内支付 65% 货款。\n5.3 质保期满(交付后 90 日)无质量问题,支付剩余 5% 尾款。",
+            "source_doc": "legal_采购合同.md",
+            "section": "跨境电商采购合同 > 五、付款方式"
           }
         ]
       },
@@ -558,7 +558,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -577,14 +577,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "90,000",
-            "source_doc": "",
-            "section": ""
+            "text": "合计:人民币玖万元整(¥90,000.00)。",
+            "source_doc": "legal_采购合同.md",
+            "section": "跨境电商采购合同 > 二、标的物"
           },
           {
-            "text": "玖万",
-            "source_doc": "",
-            "section": ""
+            "text": "合计:人民币玖万元整(¥90,000.00)。",
+            "source_doc": "legal_采购合同.md",
+            "section": "跨境电商采购合同 > 二、标的物"
           }
         ]
       },
@@ -600,7 +600,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -619,9 +619,9 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "30",
-            "source_doc": "",
-            "section": ""
+            "text": "3.1 交付时间:合同签订后 30 个自然日内完成全部交付。\n3.2 交付地点:甲方指定仓库。\n3.3 运输方式:乙方负责运输并承担运费。",
+            "source_doc": "legal_采购合同.md",
+            "section": "跨境电商采购合同 > 三、交付条款"
           },
           {
             "text": "交付",
@@ -642,7 +642,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -661,14 +661,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "5%",
-            "source_doc": "",
-            "section": ""
+            "text": "4.1 商品质量须符合国家相关标准及甲方书面要求。\n4.2 抽检不合格率超过 5% 时,甲方有权要求换货或退货。",
+            "source_doc": "legal_采购合同.md",
+            "section": "跨境电商采购合同 > 四、质量要求"
           },
           {
-            "text": "不合格",
-            "source_doc": "",
-            "section": ""
+            "text": "4.1 商品质量须符合国家相关标准及甲方书面要求。\n4.2 抽检不合格率超过 5% 时,甲方有权要求换货或退货。",
+            "source_doc": "legal_采购合同.md",
+            "section": "跨境电商采购合同 > 四、质量要求"
           }
         ]
       },
@@ -684,7 +684,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -703,14 +703,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "1分",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：会员积分如何累计?\nA：每消费 1 元累计 1 分,满 1000 分可抵扣 10 元。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "faq_常见问题FAQ.md"
           },
           {
-            "text": "1000分",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：会员积分如何累计?\nA：每消费 1 元累计 1 分,满 1000 分可抵扣 10 元。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "faq_常见问题FAQ.md"
           }
         ]
       },
@@ -727,7 +727,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -746,14 +746,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "7-15",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：海外配送时效?\nA：标准配送 7-15 个工作日,加急配送 3-7 个工作日,具体以物流追踪页为准。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "faq_常见问题FAQ.md"
           },
           {
-            "text": "工作日",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：如何申请退款?\nA：在「我的订单」点击「申请退款」,填写原因后提交,客服 1-2 个工作日内审核。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "faq_常见问题FAQ.md"
           }
         ]
       },
@@ -769,7 +769,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -788,14 +788,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "3张",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：优惠券能否叠加使用?\nA：店铺券与平台券可叠加,但单笔订单最多使用 3 张优惠券。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "faq_常见问题FAQ.md"
           },
           {
-            "text": "优惠券",
-            "source_doc": "",
-            "section": ""
+            "text": "Q：优惠券能否叠加使用?\nA：店铺券与平台券可叠加,但单笔订单最多使用 3 张优惠券。",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "优惠券能否叠加使用?"
           }
         ]
       },
@@ -811,7 +811,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -830,14 +830,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "98%",
-            "source_doc": "",
-            "section": ""
+            "text": "- 质量合格率（目标 ≥ 98%）\n- 交期达成率（目标 ≥ 95%）\n- 售后退货率（目标 ≤ 3%）\n- 合规与配合度（资料及时性、整改响应）",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 五、考核指标"
           },
           {
-            "text": "质量合格率",
-            "source_doc": "",
-            "section": ""
+            "text": "1. **资质初审**：营业执照、生产 / 经营许可证、商标注册或授权链、质检报告齐备。\n2. **样品验证**：提供样品并送质检，关键指标须达标。\n3. **试单考核**：小批量试单，评估交期达成率、质量合格率、售后响应。\n4. 三项通过后方可纳入《合格供应商名录》。",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 三、供应商准入"
           }
         ]
       },
@@ -853,7 +853,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     }

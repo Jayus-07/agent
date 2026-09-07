@@ -16,8 +16,8 @@ from pathlib import Path
 
 METRIC_DISPLAY = {
     "sem_context_recall": "语义召回",
-    "sem_top1": "语义 Top-1",
-    "gen_sem_faithfulness": "忠实度",
+    "sem_faithfulness": "忠实度",
+    "sem_answer_correctness": "答案正确性",
     "reject_accuracy": "拒答准确率",
     "top1_accuracy": "Top-1 准确率",
     "mrr": "MRR",
@@ -25,8 +25,8 @@ METRIC_DISPLAY = {
 
 METRIC_ORDER = [
     "sem_context_recall",
-    "sem_top1",
-    "gen_sem_faithfulness",
+    "sem_faithfulness",
+    "sem_answer_correctness",
     "reject_accuracy",
 ]
 
@@ -73,8 +73,8 @@ def build_comment(data: dict) -> str:
 
     thresholds = {
         "sem_context_recall": 0.50,
-        "sem_top1": 0.70,
-        "gen_sem_faithfulness": 0.70,
+        "sem_faithfulness": 0.50,
+        "sem_answer_correctness": 0.40,
         "reject_accuracy": 0.85,
     }
 
@@ -95,8 +95,8 @@ def build_comment(data: dict) -> str:
         "",
         "<details><summary>逐用例明细</summary>",
         "",
-        "| Case | 状态 | 语义召回 | 语义 Top-1 |",
-        "|------|------|---------|-----------|",
+        "| Case | 状态 | 语义召回 | 忠实度 |",
+        "|------|------|---------|--------|",
     ])
 
     for r in data.get("results", []):
@@ -105,9 +105,9 @@ def build_comment(data: dict) -> str:
             r["status"], "?"
         )
         recall = r.get("metrics", {}).get("sem_context_recall")
-        top1 = r.get("metrics", {}).get("sem_top1")
+        faith = r.get("metrics", {}).get("sem_faithfulness")
         lines.append(
-            f"| {case_id} | {status_icon} | {_format_value(recall)} | {_format_value(top1)} |"
+            f"| {case_id} | {status_icon} | {_format_value(recall)} | {_format_value(faith)} |"
         )
 
     lines.extend([

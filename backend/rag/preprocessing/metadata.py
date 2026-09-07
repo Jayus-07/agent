@@ -255,11 +255,11 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
         fname_no_ext = os.path.splitext(filename)[0]
         for hint, hint_type in FILENAME_TYPE_HINTS.items():
             if hint.lower() in fname_no_ext.lower():
-                scores[hint_type] = scores.get(hint_type, 0) + 30
+                scores[hint_type] = scores.get(hint_type, 0) + 100
                 if return_detail:
-                    detail["filename_hits"].append(f"{hint} → {hint_type} +30")
-                    detail["keyword_hits"].append({"type": hint_type, "keyword": hint, "weight": 30, "source": "filename"})
-                logger.debug(f"[Classify] 文件名命中: {hint} → {hint_type} +30")
+                    detail["filename_hits"].append(f"{hint} → {hint_type} +100")
+                    detail["keyword_hits"].append({"type": hint_type, "keyword": hint, "weight": 100, "source": "filename"})
+                logger.debug(f"[Classify] 文件名命中: {hint} → {hint_type} +100")
 
     # ── 标题关键词辅助 ──
     # 扫描文档前几行的标题，提取强信号词
@@ -626,12 +626,12 @@ async def build_llm_summary(text: str, max_length: int = SUMMARY_MAX_LENGTH) -> 
     return await build_llm_summary_cached(text_hash, text, max_length)
 
 
-async def generate_summary_if_needed(text: str, is_full_document: bool) -> tuple:
+async def generate_summary_if_needed(text: str, is_full_document: bool, fname: str = "", file_path: str = "") -> tuple:
     """根据文档类型决定是否生成摘要和人名"""
     if not is_full_document:
         return None, []
 
-    doc_type = classify_doc_type(text.lower())
+    doc_type = classify_doc_type(text.lower(), filename=fname, file_path=file_path)
     if doc_type in ["resume", "project", "report"]:
         return await build_llm_summary(text)
 
@@ -641,13 +641,13 @@ async def generate_summary_if_needed(text: str, is_full_document: bool) -> tuple
 # 主 metadata 构建器（改进：预计算小写文本、增加日志）
 # =====================================================
 
-async def build_metadata(text: str, fname: str, doc_id: str, chunk_id: str, is_full_document: bool = False):
+async def build_metadata(text: str, fname: str, doc_id: str, chunk_id: str, is_full_document: bool = False, file_path: str = ""):
     """构建元数据（异步版本）"""
     start_time = time.time()
 
     text_lower = text.lower()
 
-    doc_type = classify_doc_type(text_lower)
+    doc_type = classify_doc_type(text_lower, filename=fname, file_path=file_path)
 
     # 2026-08-10 多候选业务域：同时存主分类 + 备选（> 0.3 * top_score）
     primary_domain, alt_domains = detect_business_domain(text_lower)
@@ -658,6 +658,12 @@ async def build_metadata(text: str, fname: str, doc_id: str, chunk_id: str, is_f
         "doc_type": doc_type,
         "business_domain": primary_domain,
     }
+    if file_path:
+        rel = os.path.relpath(file_path, DOCS_DIRECTORY)
+        parts = rel.replace("\\", "/").split("/")
+        metadata["kb_id"] = parts[0] if len(parts) > 1 else "default"
+    else:
+        metadata["kb_id"] = "default"
     if alt_domains:
         metadata["business_domain_alt"] = alt_domains
 
@@ -673,7 +679,7 @@ async def build_metadata(text: str, fname: str, doc_id: str, chunk_id: str, is_f
         logger.debug(f"Doc关键词 ({len(kw_list)}个): {kw_list[:5]}..., 文档id: {doc_id}")
 
     if kw_list:
-        metadata["keywords"] = kw_list
+        metadata["doc_keywords" if is_full_document else "keywords"] = kw_list
 
     sections = extract_sections(text)
     if sections:
@@ -682,7 +688,7 @@ async def build_metadata(text: str, fname: str, doc_id: str, chunk_id: str, is_f
     person_names = []
 
     if is_full_document:
-        summary, llm_person_names = await generate_summary_if_needed(text, is_full_document)
+        summary, llm_person_names = await generate_summary_if_needed(text, is_full_document, fname=fname, file_path=file_path)
 
         if summary:
             logger.info(summary)
@@ -727,7 +733,8 @@ async def build_all_metadata_async(docs, doc_map):
             fname=fname,
             doc_id=doc_id,
             chunk_id=f"{doc_id}_{i}",
-            is_full_document=False
+            is_full_document=False,
+            file_path=d.metadata["file_path"],
         )
         chunk_tasks.append((i, task))
 
@@ -741,22 +748,30 @@ async def build_all_metadata_async(docs, doc_map):
     doc_level_texts = []
     doc_level_meta = []
 
+    file_path_by_name: dict[str, str] = {}
+    for d in docs:
+        bn = os.path.basename(d.metadata["file_path"])
+        if bn not in file_path_by_name:
+            file_path_by_name[bn] = d.metadata["file_path"]
+
     doc_tasks = []
     for name, chunks in doc_map.items():
         full_text = "\n".join(chunks)
         doc_id = hashlib.md5(name.encode()).hexdigest()[:10]
+        fpath = file_path_by_name.get(name, "")
 
         task = build_metadata(
             text=full_text,
             fname=name,
             doc_id=doc_id,
             chunk_id=f"{doc_id}_full",
-            is_full_document=True
+            is_full_document=True,
+            file_path=fpath,
         )
-        doc_tasks.append((name, full_text, task))
+        doc_tasks.append((name, full_text, fpath, task))
 
     logger.info(f"📦 提交 {len(doc_tasks)} 个 doc 元数据任务...")
-    for name, full_text, task in doc_tasks:
+    for name, full_text, fpath, task in doc_tasks:
         full_metadata = await task
         doc_level_texts.append(full_text)
         doc_level_meta.append(full_metadata)

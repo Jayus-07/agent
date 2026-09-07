@@ -11,7 +11,7 @@ from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
 from backend.rag.preprocessing.metadata import build_all_metadata_async
 from backend.rag.preprocessing.loader import load_documents_from_directory
 from backend.rag.base import CustomRetriever
-from backend.rag.retrieval.bm25_store import BM25Store, source_files_out_of_sync
+from backend.rag.retrieval.bm25_store import BM25Store, source_files_out_of_sync, compute_content_hash
 from backend.rag.chain import RAGChain
 from backend.config import (
     EMBEDDING_MODEL_PATH,
@@ -94,13 +94,18 @@ class RAGPipeline:
 
     def _build_doc_index(self):
         self.doc_map = {}
+        all_file_paths = set()
         for d in self.docs:
             fname = d.metadata["file_path"]
+            all_file_paths.add(fname)
             name = os.path.basename(fname)
             if name not in self.doc_map:
                 self.doc_map[name] = []
             self.doc_map[name].append(d.page_content)
-        logger.info(f"文档级索引: {len(self.doc_map)} 个文档")
+        logger.info(
+            f"文档级索引: {len(self.doc_map)} 个唯一文档名, "
+            f"{len(all_file_paths)} 个源文件"
+        )
 
     def _build_metadata(self):
         logger.info("开始异步批量构建元数据...")
@@ -316,10 +321,13 @@ class RAGPipeline:
         elif source_files_out_of_sync(self.bm25.docs, bm25_source):
             logger.info("[RAG] BM25 索引与文档目录不一致（残留/缺失），重建...")
             self.bm25 = bm25_store.build(bm25_source, k=BM25_SEARCH_K)
+        elif bm25_store.get_content_hash() and bm25_store.get_content_hash() != compute_content_hash(bm25_source):
+            logger.info("[RAG] BM25 索引内容 hash 不匹配（文档已修改），重建...")
+            self.bm25 = bm25_store.build(bm25_source, k=BM25_SEARCH_K)
         else:
             logger.info(
                 f"[RAG] BM25 索引从磁盘加载成功 "
-                f"({bm25_store.doc_count()} 文档)，跳过重建"
+                f"({bm25_store.doc_count()} 文档, hash={bm25_store.get_content_hash()})，跳过重建"
             )
 
         self.person_index = {}  # 懒加载：首次人名查询时构建

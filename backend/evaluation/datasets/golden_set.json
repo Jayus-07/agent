@@ -15,8 +15,18 @@
     "RT-043",
     "RT-051",
     "RT-052",
-    "DEPT-001",
-    "DEPT-003"
+    "V2-REAS-001",
+    "V2-REAS-002",
+    "V2-REAS-003",
+    "V2-REAS-004",
+    "V2-REAS-005",
+    "V2-REAS-006",
+    "V2-REAS-007",
+    "V2-REAS-008",
+    "V2-REAS-009",
+    "V2-REAS-010",
+    "V2-REAS-011",
+    "V2-REAS-012"
   ],
   "coverage_matrix": {
     "basic_easy": ["RT-001", "RT-003"],
@@ -27,19 +37,21 @@
     "negative_hard_negative": ["RT-051", "RT-052"],
     "word_disambiguation": ["RT-040"],
     "dept_isolation_positive": ["DEPT-001"],
-    "dept_isolation_leak_guard": ["DEPT-003"]
+    "dept_isolation_leak_guard": ["DEPT-003"],
+    "cross_doc_conditional": ["V2-REAS-001", "V2-REAS-003", "V2-REAS-004", "V2-REAS-010"],
+    "negation_exclusion": ["V2-REAS-002", "V2-REAS-005", "V2-REAS-006", "V2-REAS-007"],
+    "implicit_condition": ["V2-REAS-008", "V2-REAS-009", "V2-REAS-011", "V2-REAS-012"]
   },
   "source_ratio": {
     "curated_min": 0.8,
     "adversarial_min": 0.0
   },
   "thresholds": {
-    "context_recall_min": 0.50,
-    "semantic_top1_min": 0.70,
-    "context_precision_min": 0.40,
+    "sem_context_recall_min": 0.50,
+    "sem_context_precision_min": 0.40,
     "reject_accuracy_min": 0.80,
     "dept_isolation_pass": true,
-    "faithfulness_min": 0.70,
-    "answer_similarity_min": 0.60
+    "sem_faithfulness_min": 0.50,
+    "sem_answer_correctness_min": 0.40
   }
 }

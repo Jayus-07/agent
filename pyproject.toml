@@ -97,6 +97,11 @@ postgres = [
     "psycopg2>=2.9",
 ]
 
+# RAGAS 评测基准对比
+ragas = [
+    "ragas>=0.4.0",
+]
+
 # 文档
 docs = [
     "mkdocs>=1.5",

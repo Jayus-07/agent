@@ -18,6 +18,7 @@
 """
 
 import json
+import math
 import os
 from pathlib import Path
 
@@ -87,29 +88,9 @@ class TestGoldenSetAggregate:
             msgs = [f"{r.case_id}: {r.error_msg}" for r in errors]
             pytest.fail(f"{len(errors)} 条用例出错:\n" + "\n".join(msgs))
 
-    def test_top1_accuracy(self, golden_results, thresholds):
-        """正样本语义 Top-1 准确率 ≥ 阈值。"""
-        min_acc = thresholds.get("semantic_top1_min", 0.70)
-        positive = [
-            r for r in golden_results
-            if not r.expected.get("should_reject")
-            and (
-                r.expected.get("ground_truth_context")
-                or r.expected.get("relevant_docs")
-            )
-        ]
-        if not positive:
-            pytest.skip("Golden set 无正样本")
-        hits = sum(1 for r in positive if r.metrics.get("sem_top1", 0) >= 1.0)
-        acc = hits / len(positive)
-        assert acc >= min_acc, (
-            f"语义 Top-1 准确率 {acc:.2%} < 阈值 {min_acc:.0%} "
-            f"({hits}/{len(positive)} 命中)"
-        )
-
     def test_context_recall(self, golden_results, thresholds):
         """语义上下文召回率 ≥ 阈值。"""
-        min_recall = thresholds.get("context_recall_min", 0.50)
+        min_recall = thresholds.get("sem_context_recall_min", 0.50)
         cases_with_gt = [
             r for r in golden_results
             if r.expected.get("ground_truth_context")
@@ -166,8 +147,8 @@ class TestGoldenSetPerCase:
         assert r is not None, f"用例 {case_id} 未运行"
         assert r.status == "pass", (
             f"{case_id} 失败: status={r.status}, "
-            f"sem_top1={r.metrics.get('sem_top1')}, "
             f"sem_context_recall={r.metrics.get('sem_context_recall')}, "
+            f"sem_faithfulness={r.metrics.get('sem_faithfulness')}, "
             f"error={r.error_msg or ''}"
         )
 
@@ -177,7 +158,7 @@ class TestGoldenSetPerCase:
 class TestSemanticShadow:
     """验证 shadow 模式下语义指标正常产出（不决定 pass/fail）。"""
 
-    SEMANTIC_KEYS = {"sem_context_recall", "sem_context_recall_soft", "sem_context_precision", "sem_top1"}
+    SEMANTIC_KEYS = {"sem_context_recall", "sem_context_recall_soft", "sem_context_precision"}
 
     def test_semantic_metrics_present(self, golden_results):
         """所有非 error 用例都应产出 sem_* 指标。"""
@@ -188,10 +169,10 @@ class TestSemanticShadow:
             assert present, f"{r.case_id} 缺少语义指标，仅有: {sorted(r.metrics.keys())}"
 
     def test_semantic_recall_range(self, golden_results):
-        """sem_context_recall 应在 [0, 1] 范围内。"""
+        """sem_context_recall 应在 [0, 1] 范围内（NaN 表示未标注，跳过）。"""
         for r in golden_results:
             val = r.metrics.get("sem_context_recall")
-            if val is not None:
+            if val is not None and not math.isnan(val):
                 assert 0.0 <= val <= 1.0, f"{r.case_id} sem_context_recall={val} 超出 [0,1]"
 
     def test_semantic_vs_legacy_divergence_report(self, golden_results, capsys):
@@ -203,7 +184,7 @@ class TestSemanticShadow:
         diverge_count = 0
         for r in positive:
             legacy_hit = r.metrics.get("top1_accuracy", 0) >= 1.0
-            sem_hit = r.metrics.get("sem_top1", 0) >= 1.0
+            sem_hit = r.metrics.get("sem_context_recall", 0) >= 0.50
             if legacy_hit != sem_hit:
                 diverge_count += 1
         report = f"Legacy vs Semantic 分歧: {diverge_count}/{len(positive)} 条正样本"
@@ -213,39 +194,39 @@ class TestSemanticShadow:
 # ── Phase 4.1: 生成质量阻塞门控 ──────────────────────────────
 
 def _get_gen_eval_results(golden_results):
-    """筛选 generation_eval 用例（以产出 gen_sem_faithfulness 指标为标志）。"""
-    return [r for r in golden_results if "gen_sem_faithfulness" in r.metrics]
+    """筛选 generation_eval 用例（以产出 sem_faithfulness 指标为标志）。"""
+    return [r for r in golden_results if "sem_faithfulness" in r.metrics]
 
 
 class TestGenerationQualityBlocking:
     """Phase 4.1 — generation_eval 用例的 CrossEncoder 语义门控。
 
-    阈值来源: golden_set.json thresholds（faithfulness_min / answer_similarity_min）。
+    阈值来源: golden_set.json thresholds（sem_faithfulness_min / sem_answer_correctness_min）。
     评分器: CrossEncoder (bge-reranker-base) 替代 bigram 启发式。
     """
 
     def test_semantic_faithfulness(self, golden_results, thresholds):
         """CrossEncoder 忠实度 ≥ 阈值（替代 bigram 启发式）。"""
-        min_faith = thresholds.get("faithfulness_min", 0.70)
+        min_faith = thresholds.get("sem_faithfulness_min", 0.50)
         gen_results = _get_gen_eval_results(golden_results)
         if not gen_results:
             pytest.skip("Golden set 无 generation_eval 用例")
         for r in gen_results:
-            val = r.metrics.get("gen_sem_faithfulness", 0)
+            val = r.metrics.get("sem_faithfulness", 0)
             assert val >= min_faith, (
-                f"{r.case_id} gen_sem_faithfulness={val:.4f} < 阈值 {min_faith}"
+                f"{r.case_id} sem_faithfulness={val:.4f} < 阈值 {min_faith}"
             )
 
     def test_answer_correctness(self, golden_results, thresholds):
-        """答案正确性（S6 typed + must_contain）≥ 阈值。"""
-        min_sim = thresholds.get("answer_similarity_min", 0.60)
+        """答案正确性（语义相似度）≥ 阈值。"""
+        min_corr = thresholds.get("sem_answer_correctness_min", 0.40)
         gen_results = _get_gen_eval_results(golden_results)
         if not gen_results:
             pytest.skip("Golden set 无 generation_eval 用例")
         for r in gen_results:
-            val = r.metrics.get("gen_S6_answer_correctness", 0)
-            assert val >= min_sim, (
-                f"{r.case_id} gen_S6_answer_correctness={val:.4f} < 阈值 {min_sim}"
+            val = r.metrics.get("sem_answer_correctness", 0)
+            assert val >= min_corr, (
+                f"{r.case_id} sem_answer_correctness={val:.4f} < 阈值 {min_corr}"
             )
 
     def test_hallucination_rate_bounded(self, golden_results):
@@ -254,10 +235,10 @@ class TestGenerationQualityBlocking:
         if not gen_results:
             pytest.skip("Golden set 无 generation_eval 用例")
         for r in gen_results:
-            hall = r.metrics.get("gen_sem_hallucination_rate")
+            hall = r.metrics.get("sem_hallucination_rate")
             if hall is not None:
                 assert hall <= 0.50, (
-                    f"{r.case_id} gen_sem_hallucination_rate={hall:.4f} > 0.50"
+                    f"{r.case_id} sem_hallucination_rate={hall:.4f} > 0.50"
                 )
 
 

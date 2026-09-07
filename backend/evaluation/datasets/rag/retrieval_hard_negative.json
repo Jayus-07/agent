@@ -1,5 +1,5 @@
 {
-  "version": "3.0",
+  "version": "3.1",
   "_comment": "V2.0 硬负样本评测 — 知识库不含答案但关键词与文档高度重叠，测试系统拒答能力。",
   "test_cases": [
     {
@@ -24,7 +24,7 @@
         "probe_note": "KB含保修内容(FAQ电子产品保修/售后FAQ)但仅限电水壶与泛称电子产品，无笔记本电脑具体政策",
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -50,7 +50,7 @@
         "probe_note": "KB含清关申报要素(物流SOP含HS编码/申报)但不含出口退税流程；需区分'清关'与'退税'",
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -76,7 +76,7 @@
         "probe_note": "KB含员工差旅报销制度但不含年假规定；需区分'差旅报销'与'年假'",
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -102,7 +102,7 @@
         "probe_note": "技术手册含数据库schema/连接池参数但不含备份策略；不被'数据库'关键词带偏",
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -128,7 +128,7 @@
         "probe_note": "知识库无此信息，期望拒答",
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -154,7 +154,7 @@
         "probe_note": "未来财务数据KB不含，期望拒答",
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -180,7 +180,7 @@
         "probe_note": "外部公司人物传记（虽含Apple字样但语义跨域），期望拒答",
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -206,7 +206,7 @@
         "probe_note": "人员个人信息KB不含（人名匹配可能误命中），期望拒答",
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -232,7 +232,7 @@
         "probe_note": "软性企业文化信息，KB是业务流程不含此类，期望拒答",
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -258,7 +258,7 @@
         "probe_note": "内部技术栈细节KB不含（技术手册是业务架构非前端栈），期望拒答",
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -284,7 +284,7 @@
         "probe_note": "KB含供应商管理规范但不含银行信息；不被'供应商'关键词带偏",
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -310,7 +310,7 @@
         "probe_note": "KB含数据安全政策但不含审计费用信息；不被'数据安全'关键词带偏",
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     }

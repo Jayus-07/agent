@@ -4,6 +4,7 @@ V1.0 更新：中文化输出（metric 标签/状态名/表格表头）。
 机器字段（metric key、status enum）保持英文，确保 baseline JSON 对比稳定。
 """
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -39,11 +40,15 @@ METRIC_LABELS: dict[str, str] = {
     "sem_context_recall": "语义上下文召回",
     "sem_context_recall_soft": "语义上下文召回(软)",
     "sem_context_precision": "语义上下文精确率",
-    "sem_top1": "语义 Top-1",
-    "gen_sem_faithfulness": "生成忠实度(语义)",
-    "gen_sem_hallucination_rate": "幻觉率",
-    "gen_sem_answer_similarity": "答案相似度",
-    "gen_S6_answer_correctness": "S6 答案正确性",
+    "sem_faithfulness": "RAGAS 忠实度(语义)",
+    "sem_hallucination_rate": "RAGAS 幻觉率",
+    "sem_answer_correctness": "RAGAS 答案正确性(语义)",
+    "sem_claim_count": "RAGAS 声明数",
+    "ragas_context_recall": "RAGAS 上下文召回率",
+    "ragas_context_precision": "RAGAS 上下文精确度",
+    "ragas_faithfulness": "RAGAS 忠实度",
+    "ragas_answer_relevancy": "RAGAS 答案相关性",
+    "ragas_answer_correctness": "RAGAS 答案正确性",
 }
 
 # 状态 enum → 中文显示
@@ -70,6 +75,57 @@ MODULE_LABELS: dict[str, str] = {
     "planner": "任务规划",
 }
 
+# ============ 指标分层分类 ============
+METRIC_LAYERS: dict[str, list[str]] = {
+    "检索质量": [
+        "recall@5", "recall@10", "recall@20",
+        "mrr", "ndcg@5", "ndcg@10", "ndcg@20",
+        "chunk_recall", "chunk_recall@5", "chunk_recall@10",
+        "top1_accuracy",
+        "sem_context_recall", "sem_context_recall_soft",
+        "sem_context_precision",
+        "sem_chunk_recall@1", "sem_chunk_recall@3", "sem_chunk_recall@5",
+    ],
+    "生成质量": [
+        "sem_faithfulness", "sem_hallucination_rate",
+        "sem_answer_correctness", "sem_claim_count",
+        "gen_S6_answer_correctness", "gen_must_contain_hit",
+        "gen_must_not_contain_violation",
+        "gen_supported_claim_count", "gen_claim_count",
+        "S6_answer_correctness", "S7_faithfulness",
+        "must_contain_hit", "must_not_contain_violation",
+        "claim_count", "supported_claim_count",
+    ],
+    "安全与拒答": [
+        "reject_accuracy", "dept_leak",
+        "security_pass", "routing_accuracy",
+    ],
+    "性能与稳定性": [
+        "p95_latency_ms", "stability_variance",
+    ],
+    "RAGAS 对比": [
+        "ragas_context_recall", "ragas_context_precision",
+        "ragas_faithfulness", "ragas_answer_relevancy",
+        "ragas_answer_correctness",
+    ],
+}
+
+_LAYER_ORDER = ["检索质量", "生成质量", "安全与拒答", "性能与稳定性", "RAGAS 对比"]
+
+
+def _categorize_metric(key: str) -> str:
+    """返回指标所属层级名称，未分类的返回 '其他'。"""
+    for layer, keys in METRIC_LAYERS.items():
+        if key in keys:
+            return layer
+    if key.startswith("gen_") or key.startswith("S"):
+        return "生成质量"
+    if key.startswith("sem_") or key.startswith("doc_"):
+        return "检索质量"
+    if key in ("precision@5", "precision@10", "context_noise@10"):
+        return "检索质量"
+    return "其他"
+
 
 def print_summary(report: EvalReport) -> None:
     """打印控制台摘要表格（中文）。"""
@@ -88,14 +144,32 @@ def print_summary(report: EvalReport) -> None:
         print(f"\n  【{mod_zh}】  通过率={s.pass_rate:.1%}  "
               f"({s.passed}/{s.total} 通过, {s.failed} 失败, {s.errors} 错误)")
         if s.metrics:
+            grouped: dict[str, list[tuple[str, float]]] = {}
             for k, v in s.metrics.items():
-                label = METRIC_LABELS.get(k, k)
-                # 格式化值：浮点保留 4 位；int 直接输出
-                if isinstance(v, float) and abs(v) <= 1.0:
-                    val_str = f"{v:.4f}"
-                else:
-                    val_str = f"{v}"
-                print(f"    {label}: {val_str}")
+                layer = _categorize_metric(k)
+                grouped.setdefault(layer, []).append((k, v))
+            for layer_name in _LAYER_ORDER:
+                items = grouped.get(layer_name)
+                if not items:
+                    continue
+                print(f"    ── {layer_name} ──")
+                for k, v in items:
+                    label = METRIC_LABELS.get(k, k)
+                    if isinstance(v, float) and abs(v) <= 1.0:
+                        val_str = f"{v:.4f}"
+                    else:
+                        val_str = f"{v}"
+                    print(f"      {label}: {val_str}")
+            other = grouped.get("其他", [])
+            if other:
+                print("    ── 其他 ──")
+                for k, v in other:
+                    label = METRIC_LABELS.get(k, k)
+                    if isinstance(v, float) and abs(v) <= 1.0:
+                        val_str = f"{v:.4f}"
+                    else:
+                        val_str = f"{v}"
+                    print(f"      {label}: {val_str}")
 
     if report.total_score is not None:
         print(f"\n  >>> 综合得分: {report.total_score:.2%} <<<")
@@ -114,6 +188,8 @@ def print_summary(report: EvalReport) -> None:
 
 def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
     """生成 Markdown 详细报告（中文表头），保存到 output_dir，返回文件路径。"""
+    from collections import defaultdict
+
     output_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     path = output_dir / f"eval-{report.module}-{ts}.md"
@@ -197,10 +273,35 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
         lines.append(f"| 错误 | {s.errors} |")
         lines.append(f"| 跳过 | {s.skipped} |")
         lines.append(f"| **通过率** | **{s.pass_rate:.1%}** |")
-        for k, v in s.metrics.items():
-            label = METRIC_LABELS.get(k, k)
-            lines.append(f"| {label} | {v} |")
         lines.append("")
+
+        # 按层级分组显示指标
+        layered: dict[str, list[tuple[str, float]]] = defaultdict(list)
+        for k, v in s.metrics.items():
+            layer = _categorize_metric(k)
+            layered[layer].append((k, v))
+
+        for layer_name in _LAYER_ORDER:
+            if layer_name not in layered:
+                continue
+            lines.append(f"#### ── {layer_name} ──")
+            lines.append("")
+            lines.append("| 指标 | 数值 |")
+            lines.append("|------|------|")
+            for k, v in layered[layer_name]:
+                label = METRIC_LABELS.get(k, k)
+                lines.append(f"| {label} | {v} |")
+            lines.append("")
+
+        if "其他" in layered:
+            lines.append("#### ── 其他 ──")
+            lines.append("")
+            lines.append("| 指标 | 数值 |")
+            lines.append("|------|------|")
+            for k, v in layered["其他"]:
+                label = METRIC_LABELS.get(k, k)
+                lines.append(f"| {label} | {v} |")
+            lines.append("")
 
     # 失败/错误详情（v2 增强：按错误类型分组 + 表格）
     lines.append("## 失败与错误详情")
@@ -280,7 +381,9 @@ def write_markdown_report(report: EvalReport, output_dir: Path) -> Path:
             lines.append(f"**KB**: `{kb_id}`")
         if r.metrics:
             metrics_zh = ", ".join(
-                f"{METRIC_LABELS.get(k, k)}={v}" for k, v in r.metrics.items()
+                f"{METRIC_LABELS.get(k, k)}={v}"
+                for k, v in r.metrics.items()
+                if not (isinstance(v, float) and math.isnan(v))
             )
             lines.append(f"**指标**: {metrics_zh}")
         if r.duration_ms:
@@ -482,6 +585,7 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
     - 颜色编码（pass=绿 / fail=红 / reject=黄）
     """
     import html as _html
+    from collections import defaultdict
 
     output_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -505,9 +609,9 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
     # 计算各指标 + 状态（V3 语义指标优先，legacy 降级）
     pr = rag_summary.pass_rate if rag_summary else 0
     sem_recall = metrics_dict.get("sem_context_recall")
-    sem_top1 = metrics_dict.get("sem_top1")
+    sem_corr = metrics_dict.get("sem_answer_correctness")
     rej = metrics_dict.get("reject_accuracy")
-    faithfulness = metrics_dict.get("gen_sem_faithfulness")
+    faithfulness = metrics_dict.get("sem_faithfulness")
 
     def _status_icon(v, th_h=0.85, th_m=0.65):
         if v is None:
@@ -520,15 +624,15 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
 
     pr_st, pr_icon = _status_icon(pr, 0.9, 0.7)
     recall_st, recall_icon = _status_icon(sem_recall, 0.85, 0.65) if sem_recall is not None else ("none", "—")
-    top1_st, top1_icon = _status_icon(sem_top1, 0.85, 0.65) if sem_top1 is not None else ("none", "—")
+    corr_st, corr_icon = _status_icon(sem_corr, 0.85, 0.65) if sem_corr is not None else ("none", "—")
     rej_st, rej_icon = _status_icon(rej, 0.85, 0.65) if rej is not None else ("none", "—")
     faith_st, faith_icon = _status_icon(faithfulness, 0.80, 0.60) if faithfulness is not None else ("none", "—")
 
     cards_html = (
         _card("📋", "通过率", f"{pr:.1%} ({rag_summary.passed}/{rag_summary.total})" if rag_summary else "—", pr_st, "golden set") +
         _card("🔍", "语义召回", f"{sem_recall:.1%}" if sem_recall is not None else "—", recall_st, "sem_context_recall") +
-        _card("🎯", "语义 Top-1", f"{sem_top1:.1%}" if sem_top1 is not None else "—", top1_st, "sem_top1") +
-        _card("🛡️", "忠实度", f"{faithfulness:.1%}" if faithfulness is not None else "—", faith_st, "gen_sem_faithfulness")
+        _card("🎯", "答案正确性", f"{sem_corr:.1%}" if sem_corr is not None else "—", corr_st, "sem_answer_correctness") +
+        _card("🛡️", "忠实度", f"{faithfulness:.1%}" if faithfulness is not None else "—", faith_st, "sem_faithfulness")
     )
 
     # === 失败 case 分类 ===
@@ -541,12 +645,12 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
         retrieved = r.actual.get("retrieved_docs", []) or []
         if not retrieved:
             return "空召回"
-        sem_top1_val = (r.metrics or {}).get("sem_top1", 0)
         sem_recall_val = (r.metrics or {}).get("sem_context_recall", 0)
-        if sem_top1_val < 0.5:
-            return "Top-1 语义偏差"
+        sem_faith_val = (r.metrics or {}).get("sem_faithfulness", 0)
         if sem_recall_val < 0.5:
             return "语义召回不足"
+        if sem_faith_val < 0.5:
+            return "忠实度不足"
         return "其他"
 
     from collections import Counter
@@ -555,7 +659,7 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
 
     if fail_results or error_results:
         group_rows = ""
-        for cat in ["Top-1 语义偏差", "语义召回不足", "空召回", "执行错误", "其他"]:
+        for cat in ["语义召回不足", "忠实度不足", "空召回", "执行错误", "其他"]:
             n = fail_groups.get(cat, 0)
             if n:
                 group_rows += f'<tr><td>{cat}</td><td>{n}</td></tr>'
@@ -567,8 +671,8 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
             gt_label = gt_contexts[0].get("source_doc", "—")[:30] if gt_contexts else "—"
             top1_doc = rd[0] if rd else ("⚠️ " + (r.error_msg[:30] if r.error_msg else "error") if r.status == "error" else "empty")
             sem_recall = (r.metrics or {}).get("sem_context_recall")
-            sem_top1_val = (r.metrics or {}).get("sem_top1")
-            metric_str = f"recall={sem_recall:.2f} top1={sem_top1_val:.2f}" if sem_recall is not None else "—"
+            sem_faith_val = (r.metrics or {}).get("sem_faithfulness")
+            metric_str = f"recall={sem_recall:.2f} faith={sem_faith_val:.2f}" if sem_recall is not None else "—"
             cat = "执行错误" if r.status == "error" else _classify_failure(r)
             cls = "fail" if r.status == "fail" else "error"
             fail_rows += f'<tr class="{cls}"><td><b>{_html.escape(r.case_id)}</b></td><td><code>{_html.escape(gt_label)}</code></td><td><code>{_html.escape(top1_doc)}</code></td><td>{metric_str}</td><td>{_html.escape(cat)}</td></tr>'
@@ -596,9 +700,21 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
         status_icon = STATUS_ICONS.get(r.status, "?")
         question = r.actual.get("question", "")
         kb_id = r.actual.get("kb_id", "")
-        metrics_str = ", ".join(
-            f"{METRIC_LABELS.get(k, k)}={v}" for k, v in (r.metrics or {}).items()
-        )
+        # 按层级分组显示指标
+        layered_metrics: dict[str, list[str]] = defaultdict(list)
+        for k, v in (r.metrics or {}).items():
+            if not (isinstance(v, float) and math.isnan(v)):
+                layer = _categorize_metric(k)
+                label = METRIC_LABELS.get(k, k)
+                layered_metrics[layer].append(f"{label}={v}")
+
+        metrics_parts = []
+        for layer_name in _LAYER_ORDER:
+            if layer_name in layered_metrics:
+                metrics_parts.append(f"<b>{layer_name}</b>: " + ", ".join(layered_metrics[layer_name]))
+        if "其他" in layered_metrics:
+            metrics_parts.append("<b>其他</b>: " + ", ".join(layered_metrics["其他"]))
+        metrics_str = "<br>".join(metrics_parts) if metrics_parts else "—"
 
         # 1. 过程细节
         pipeline = r.actual.get("pipeline") or {}
@@ -675,6 +791,39 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
   </div>
 </details>"""
 
+    # === 自研 vs RAGAS 对比区块（仅当 ragas_* 指标存在时显示）===
+    ragas_pairs = [
+        ("sem_context_recall", "ragas_context_recall", "上下文召回"),
+        ("sem_context_precision", "ragas_context_precision", "上下文精确"),
+        ("sem_faithfulness", "ragas_faithfulness", "忠实度"),
+    ]
+    has_ragas = any(
+        metrics_dict.get(rk) is not None for _, rk, _ in ragas_pairs
+    )
+    ragas_section_html = ""
+    if has_ragas:
+        ragas_rows = ""
+        for sem_key, ragas_key, label in ragas_pairs:
+            sem_val = metrics_dict.get(sem_key)
+            ragas_val = metrics_dict.get(ragas_key)
+            if sem_val is not None and ragas_val is not None:
+                delta = ragas_val - sem_val
+                delta_str = f"{delta:+.4f}"
+                delta_color = "#10b981" if delta >= 0 else "#ef4444"
+                ragas_rows += (
+                    f'<tr><td>{label}</td>'
+                    f'<td>{sem_val:.4f}</td>'
+                    f'<td>{ragas_val:.4f}</td>'
+                    f'<td style="color:{delta_color}">{delta_str}</td></tr>'
+                )
+        if ragas_rows:
+            ragas_section_html = f"""
+            <h2>📐 自研 vs RAGAS 对比</h2>
+            <table class="stats">
+              <tr><th>指标</th><th>自研 (sem_*)</th><th>RAGAS (ragas_*)</th><th>差值</th></tr>
+              {ragas_rows}
+            </table>"""
+
     # === HTML 主框架 ===
     mode_zh = "实时" if report.mode == "live" else "离线"
     css = """
@@ -743,6 +892,7 @@ def write_html_report(report: EvalReport, output_dir: Path) -> Path:
     {cards_html}
   </div>
   {failure_section}
+  {ragas_section_html}
   <h2>📂 per-case 详情（{len(report.results)} 条）</h2>
   {details_html}
 </div>

@@ -16,7 +16,7 @@ from typing import Any
 def recall_at_k(actual: list[str], expected: list[str], k: int) -> float:
     """召回率@K：预期集中有多少出现在实际结果的前 K 个中。"""
     if not expected:
-        return 1.0
+        return float("nan")
     if not actual:
         return 0.0
     actual_set = set(actual[:k])
@@ -27,7 +27,7 @@ def recall_at_k(actual: list[str], expected: list[str], k: int) -> float:
 def mrr(actual: list[str], expected: list[str]) -> float:
     """Mean Reciprocal Rank：第一个相关结果排名的倒数均值。"""
     if not expected:
-        return 1.0
+        return float("nan")
     if not actual:
         return 0.0
     expected_set = set(expected)
@@ -49,7 +49,7 @@ def dcg_at_k(relevances: list[float], k: int) -> float:
 def ndcg_at_k(actual: list[str], expected: list[str], k: int) -> float:
     """Normalized DCG@K：考虑位置权重的排序质量。"""
     if not expected:
-        return 1.0
+        return float("nan")
     if not actual:
         return 0.0
     expected_set = set(expected)
@@ -125,10 +125,10 @@ def chunk_recall_at_k(
         k: 仅看前 K 个结果
 
     Returns:
-        float: 0.0~1.0，无 expected 时返回 1.0
+        float: 0.0~1.0，无 expected 时返回 NaN（不参与聚合）
     """
     if not expected_chunks:
-        return 1.0
+        return float("nan")
     expected = set(expected_chunks)
     top_k = set(actual_chunks[:k])
     return sum(1 for c in expected if c in top_k) / len(expected)
@@ -162,7 +162,7 @@ def reject_accuracy(
     """
     oos = [r for r in results if r.case_id in expected_reject_ids]
     if not oos:
-        return 1.0
+        return float("nan")
     rejected = sum(
         1 for r in oos
         if r.status == "pass" and r.metrics.get("reject_accuracy", 0.0) >= 1.0
@@ -208,6 +208,9 @@ def _string_jaccard(a: str, b: str) -> float:
 def aggregate_metrics(results: list[Any]) -> dict[str, float]:
     """从 EvalResult 列表聚合统计指标（per-case 指标的均值）。
 
+    NaN 值被排除（来自无标注用例的空转指标），不参与均值计算。
+    若某指标全部为 NaN，则该指标不出现在结果中。
+
     Args:
         results: EvalResult 列表（必须有 .metrics 字段）
 
@@ -217,9 +220,9 @@ def aggregate_metrics(results: list[Any]) -> dict[str, float]:
     agg: dict[str, list[float]] = {}
     for r in results:
         for k, v in (r.metrics or {}).items():
-            if isinstance(v, (int, float)):
+            if isinstance(v, (int, float)) and not math.isnan(v):
                 agg.setdefault(k, []).append(float(v))
-    return {k: round(sum(vs) / len(vs), 4) for k, vs in agg.items()}
+    return {k: round(sum(vs) / len(vs), 4) for k, vs in agg.items() if vs}
 
 
 # ========== V2.0 新增指标 ==========
@@ -258,8 +261,10 @@ def context_noise_rate(actual: list[str], expected: list[str], k: int = 10) -> f
         k: 仅看前 K 个结果（默认 10，与 NDCG 对齐）
 
     Returns:
-        float: 0.0~1.0，0.0 表示无噪声（全部相关）
+        float: 0.0~1.0，0.0 表示无噪声（全部相关）；无期望集时返回 NaN
     """
+    if not expected:
+        return float("nan")
     prec = precision_at_k(actual, expected, k)
     return 1.0 - prec
 
@@ -295,8 +300,8 @@ def stage_retrieval_metrics(
     # Top-1 accuracy
     if expected_docs and actual_docs:
         metrics["top1_accuracy"] = 1.0 if actual_docs[0] in set(expected_docs) else 0.0
-    elif not expected_docs and not actual_docs:
-        metrics["top1_accuracy"] = 1.0  # 负样本正确拒答
+    elif not expected_docs:
+        metrics["top1_accuracy"] = float("nan")
     else:
         metrics["top1_accuracy"] = 0.0
 
@@ -621,8 +626,8 @@ def context_recall_semantic(
     """
     if not ground_truth:
         return {
-            "context_recall": 1.0,
-            "context_recall_soft": 1.0,
+            "context_recall": float("nan"),
+            "context_recall_soft": float("nan"),
             "covered_passages": 0,
             "total_passages": 0,
         }
@@ -660,20 +665,32 @@ def context_precision_semantic(
     threshold: float = 0.50,
     k: int = 10,
 ) -> dict[str, float]:
-    """语义上下文精确率 — top-k 检索结果中有多少是语义相关的。"""
-    if not retrieved_texts or not ground_truth:
-        return {"context_precision": 1.0 if not ground_truth else 0.0, "relevant_count": 0, "total_retrieved": 0}
+    """语义上下文精确率 — top-k 检索结果的平均相关性得分。
+
+    使用 soft scoring：每个 retrieved doc 取 max similarity over GT，
+    然后平均。避免二值阈值导致的全有/全无模式（与 sem_top1 完全一致）。
+    """
+    if not retrieved_texts and not ground_truth:
+        return {"context_precision": float("nan"), "relevant_count": 0, "total_retrieved": 0}
+    if not ground_truth:
+        return {"context_precision": float("nan"), "relevant_count": 0, "total_retrieved": len(retrieved_texts)}
+    if not retrieved_texts:
+        return {"context_precision": 0.0, "relevant_count": 0, "total_retrieved": 0}
 
     top_k = retrieved_texts[:k]
+    soft_scores: list[float] = []
     relevant = 0
     for doc in top_k:
         queries = [doc] * len(ground_truth)
         scores = scorer.score_pairs(queries, ground_truth)
-        if max(scores) >= threshold:
+        max_score = max(scores) if scores else 0.0
+        soft_scores.append(max_score)
+        if max_score >= threshold:
             relevant += 1
 
+    avg_precision = sum(soft_scores) / len(soft_scores) if soft_scores else 0.0
     return {
-        "context_precision": round(relevant / len(top_k), 4),
+        "context_precision": round(avg_precision, 4),
         "relevant_count": relevant,
         "total_retrieved": len(top_k),
     }
@@ -687,7 +704,7 @@ def semantic_top1(
 ) -> float:
     """Top-1 语义命中 — 排名第一的检索结果是否与任一 GT 片段语义相似。"""
     if not ground_truth:
-        return 1.0
+        return float("nan")
     if not retrieved_texts:
         return 0.0
 
@@ -703,8 +720,10 @@ def answer_similarity_semantic(
     scorer: Any,
 ) -> float:
     """语义答案相似度 — scorer(answer, expected_answer)。"""
-    if not answer or not expected_answer:
-        return 1.0 if not answer and not expected_answer else 0.0
+    if not expected_answer:
+        return float("nan")
+    if not answer:
+        return 0.0
     scores = scorer.score_pairs([answer], [expected_answer])
     return round(scores[0], 4)
 
@@ -715,10 +734,16 @@ def faithfulness_semantic(
     scorer: Any,
     threshold: float = 0.50,
 ) -> dict[str, float]:
-    """基于 CrossEncoder 的忠实度评估（替代 bigram 启发式）。
+    """基于 CrossEncoder 的忠实度评估 — soft scoring 版本。
 
-    将答案分解为独立声明，每个声明对全部上下文打分，
-    claim supported iff max CE(claim, ctx_j) >= threshold。
+    将答案分解为独立声明，每个声明对全部上下文取 max similarity，
+    然后平均所有 claim 的 max score。避免二值阈值导致的全有/全无模式。
+
+    Returns:
+        dict with:
+        - faithfulness: 平均 max similarity (连续值 0-1)
+        - claim_count: 声明数
+        - supported_count: max score >= threshold 的声明数（保留用于诊断）
     """
     if not answer.strip():
         return {"faithfulness": 1.0, "claim_count": 0, "supported_count": 0}
@@ -730,15 +755,20 @@ def faithfulness_semantic(
     if not claims:
         return {"faithfulness": 1.0, "claim_count": 0, "supported_count": 0}
 
+    max_scores: list[float] = []
     supported = 0
     for claim in claims:
         queries = [claim] * len(context)
         scores = scorer.score_pairs(queries, context)
-        if max(scores) >= threshold:
+        max_score = max(scores) if scores else 0.0
+        max_scores.append(max_score)
+        if max_score >= threshold:
             supported += 1
 
+    avg_faithfulness = sum(max_scores) / len(max_scores) if max_scores else 0.0
+
     return {
-        "faithfulness": round(supported / len(claims), 4),
+        "faithfulness": round(avg_faithfulness, 4),
         "claim_count": len(claims),
         "supported_count": supported,
     }
@@ -759,7 +789,9 @@ def answer_relevancy_proxy(
     使用 scorer 的 score_pairs 接口，适用于 EmbeddingScorer。
     对于 CrossEncoderScorer 则直接打分（query→answer 相关性）。
     """
-    if not question or not answer:
-        return 1.0 if not question and not answer else 0.0
+    if not question:
+        return float("nan")
+    if not answer:
+        return 0.0
     scores = scorer.score_pairs([question], [answer])
     return round(scores[0], 4)

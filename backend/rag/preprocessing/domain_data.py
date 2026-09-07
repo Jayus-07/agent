@@ -164,6 +164,8 @@ DOC_TYPE_RULES: Dict[str, List[tuple]] = {
         (r"纠纷", 8), (r"侵权", 8), (r"章程", 6), (r"要约", 6), (r"担保", 6), (r"执照", 6),
         (r"法律意见", 8), (r"法律文书", 8), (r"调解书", 6), (r"判决书", 6),
         (r"法律顾问", 6), (r"合规协议", 6), (r"契约", 6), (r"法务", 6),
+        (r"甲方", 10), (r"乙方", 10), (r"丙方", 8), (r"签章", 8), (r"盖章", 6),
+        (r"第[一二三四五六七八九十\d]+条", 12), (r"本合同", 10), (r"双方协商", 8),
         # ── 英文 ──
         (r"terms and conditions", 10), (r"(?<!\w)contract(?!\w)", 8), (r"agreement", 8),
         (r"(?<!\w)clause(?!\w)", 8), (r"liability", 8), (r"indemnity", 8),
@@ -226,6 +228,7 @@ FILENAME_TYPE_HINTS: Dict[str, str] = {
     "财务": "financial", "报销": "financial", "发票": "financial",
     "客户数据": "customer_data", "用户隐私": "customer_data",
     "合同模板": "contract_template", "协议模板": "contract_template",
+    "README": "general", "readme": "general", "CHANGELOG": "general",
 }
 
 FOLDER_TYPE_HINTS: Dict[str, str] = {

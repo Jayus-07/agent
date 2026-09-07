@@ -1,5 +1,5 @@
 {
-  "version": "3.0",
+  "version": "3.1",
   "_comment": "V2.0 表格/结构化数据检索评测 — 答案在文档表格中，验证对表格结构的检索能力。",
   "test_cases": [
     {
@@ -17,14 +17,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "B级",
-            "source_doc": "",
-            "section": ""
+            "text": "| 等级 | 标准 | 权益 |\n|------|------|------|\n| A 级（战略） | 年度评分 ≥ 90，且合作满 1 年 | 优先份额、账期优惠 |\n| B 级（合格） | 年度评分 75–89 | 正常合作 |\n| C 级（观察） | 年度评分 60–74 | 限期整改、减少份额 |\n| D 级（淘汰） | 年度评分 < 60 或出现重大违规 | 移出名录 |",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 四、供应商分级"
           },
           {
-            "text": "75",
-            "source_doc": "",
-            "section": ""
+            "text": "| 等级 | 标准 | 权益 |\n|------|------|------|\n| A 级（战略） | 年度评分 ≥ 90，且合作满 1 年 | 优先份额、账期优惠 |\n| B 级（合格） | 年度评分 75–89 | 正常合作 |\n| C 级（观察） | 年度评分 60–74 | 限期整改、减少份额 |\n| D 级（淘汰） | 年度评分 < 60 或出现重大违规 | 移出名录 |",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 四、供应商分级"
           }
         ]
       },
@@ -41,7 +41,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -60,14 +60,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "D级",
-            "source_doc": "",
-            "section": ""
+            "text": "| 等级 | 标准 | 权益 |\n|------|------|------|\n| A 级（战略） | 年度评分 ≥ 90，且合作满 1 年 | 优先份额、账期优惠 |\n| B 级（合格） | 年度评分 75–89 | 正常合作 |\n| C 级（观察） | 年度评分 60–74 | 限期整改、减少份额 |\n| D 级（淘汰） | 年度评分 < 60 或出现重大违规 | 移出名录 |",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 四、供应商分级"
           },
           {
-            "text": "60",
-            "source_doc": "",
-            "section": ""
+            "text": "| 等级 | 标准 | 权益 |\n|------|------|------|\n| A 级（战略） | 年度评分 ≥ 90，且合作满 1 年 | 优先份额、账期优惠 |\n| B 级（合格） | 年度评分 75–89 | 正常合作 |\n| C 级（观察） | 年度评分 60–74 | 限期整改、减少份额 |\n| D 级（淘汰） | 年度评分 < 60 或出现重大违规 | 移出名录 |",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 四、供应商分级"
           }
         ]
       },
@@ -84,7 +84,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -103,14 +103,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "机密",
-            "source_doc": "",
-            "section": ""
+            "text": "| 级别 | 示例 | 保护措施 |\n|------|------|----------|\n| 公开 | 商品目录、公开活动 | 常规访问控制 |\n| 内部 | 订单、库存、运营报表 | 角色权限 + 审计 |\n| 敏感 | 姓名、手机号、地址、支付信息 | 加密存储 + 最小化访问 |\n| 机密 | 源码、密钥、商业合同 | 加密 + 隔离 + 双因子 |",
+            "source_doc": "security_数据安全与隐私政策.md",
+            "section": "示例跨境电商公司 数据安全与隐私政策 > 二、数据分类"
           },
           {
-            "text": "双因子",
-            "source_doc": "",
-            "section": ""
+            "text": "| 级别 | 示例 | 保护措施 |\n|------|------|----------|\n| 公开 | 商品目录、公开活动 | 常规访问控制 |\n| 内部 | 订单、库存、运营报表 | 角色权限 + 审计 |\n| 敏感 | 姓名、手机号、地址、支付信息 | 加密存储 + 最小化访问 |\n| 机密 | 源码、密钥、商业合同 | 加密 + 隔离 + 双因子 |",
+            "source_doc": "security_数据安全与隐私政策.md",
+            "section": "示例跨境电商公司 数据安全与隐私政策 > 二、数据分类"
           }
         ]
       },
@@ -127,7 +127,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -146,14 +146,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "50",
-            "source_doc": "",
-            "section": ""
+            "text": "| 商品名称 | 规格 | 数量(件) | 单价(元) | 金额(元) |\n|---------|------|---------|----------|----------|\n| 跨境商品 A | 标准 | 1000 | 50 | 50000 |\n| 跨境商品 B | 加厚 | 500 | 80 | 40000 |",
+            "source_doc": "legal_采购合同.md",
+            "section": "跨境电商采购合同 > 二、标的物"
           },
           {
-            "text": "50000",
-            "source_doc": "",
-            "section": ""
+            "text": "| 商品名称 | 规格 | 数量(件) | 单价(元) | 金额(元) |\n|---------|------|---------|----------|----------|\n| 跨境商品 A | 标准 | 1000 | 50 | 50000 |\n| 跨境商品 B | 加厚 | 500 | 80 | 40000 |",
+            "source_doc": "legal_采购合同.md",
+            "section": "跨境电商采购合同 > 二、标的物"
           }
         ]
       },
@@ -170,7 +170,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -189,14 +189,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "80",
-            "source_doc": "",
-            "section": ""
+            "text": "| 商品名称 | 规格 | 数量(件) | 单价(元) | 金额(元) |\n|---------|------|---------|----------|----------|\n| 跨境商品 A | 标准 | 1000 | 50 | 50000 |\n| 跨境商品 B | 加厚 | 500 | 80 | 40000 |",
+            "source_doc": "legal_采购合同.md",
+            "section": "跨境电商采购合同 > 二、标的物"
           },
           {
-            "text": "500",
-            "source_doc": "",
-            "section": ""
+            "text": "| 商品名称 | 规格 | 数量(件) | 单价(元) | 金额(元) |\n|---------|------|---------|----------|----------|\n| 跨境商品 A | 标准 | 1000 | 50 | 50000 |\n| 跨境商品 B | 加厚 | 500 | 80 | 40000 |",
+            "source_doc": "legal_采购合同.md",
+            "section": "跨境电商采购合同 > 二、标的物"
           }
         ]
       },
@@ -213,7 +213,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -232,14 +232,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "敏感",
-            "source_doc": "",
-            "section": ""
+            "text": "| 级别 | 示例 | 保护措施 |\n|------|------|----------|\n| 公开 | 商品目录、公开活动 | 常规访问控制 |\n| 内部 | 订单、库存、运营报表 | 角色权限 + 审计 |\n| 敏感 | 姓名、手机号、地址、支付信息 | 加密存储 + 最小化访问 |\n| 机密 | 源码、密钥、商业合同 | 加密 + 隔离 + 双因子 |",
+            "source_doc": "security_数据安全与隐私政策.md",
+            "section": "示例跨境电商公司 数据安全与隐私政策 > 二、数据分类"
           },
           {
-            "text": "加密存储",
-            "source_doc": "",
-            "section": ""
+            "text": "| 级别 | 示例 | 保护措施 |\n|------|------|----------|\n| 公开 | 商品目录、公开活动 | 常规访问控制 |\n| 内部 | 订单、库存、运营报表 | 角色权限 + 审计 |\n| 敏感 | 姓名、手机号、地址、支付信息 | 加密存储 + 最小化访问 |\n| 机密 | 源码、密钥、商业合同 | 加密 + 隔离 + 双因子 |",
+            "source_doc": "security_数据安全与隐私政策.md",
+            "section": "示例跨境电商公司 数据安全与隐私政策 > 二、数据分类"
           }
         ]
       },
@@ -256,7 +256,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -275,14 +275,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "退货率",
-            "source_doc": "",
-            "section": ""
+            "text": "- 质量合格率（目标 ≥ 98%）\n- 交期达成率（目标 ≥ 95%）\n- 售后退货率（目标 ≤ 3%）\n- 合规与配合度（资料及时性、整改响应）",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 五、考核指标"
           },
           {
-            "text": "3%",
-            "source_doc": "",
-            "section": ""
+            "text": "- 质量合格率（目标 ≥ 98%）\n- 交期达成率（目标 ≥ 95%）\n- 售后退货率（目标 ≤ 3%）\n- 合规与配合度（资料及时性、整改响应）",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 五、考核指标"
           }
         ]
       },
@@ -298,7 +298,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -317,14 +317,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "交期达成率",
-            "source_doc": "",
-            "section": ""
+            "text": "1. **资质初审**：营业执照、生产 / 经营许可证、商标注册或授权链、质检报告齐备。\n2. **样品验证**：提供样品并送质检，关键指标须达标。\n3. **试单考核**：小批量试单，评估交期达成率、质量合格率、售后响应。\n4. 三项通过后方可纳入《合格供应商名录》。",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 三、供应商准入"
           },
           {
-            "text": "95%",
-            "source_doc": "",
-            "section": ""
+            "text": "- 质量合格率（目标 ≥ 98%）\n- 交期达成率（目标 ≥ 95%）\n- 售后退货率（目标 ≤ 3%）\n- 合规与配合度（资料及时性、整改响应）",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 五、考核指标"
           }
         ]
       },
@@ -340,7 +340,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -359,14 +359,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "A级",
-            "source_doc": "",
-            "section": ""
+            "text": "| 等级 | 标准 | 权益 |\n|------|------|------|\n| A 级（战略） | 年度评分 ≥ 90，且合作满 1 年 | 优先份额、账期优惠 |\n| B 级（合格） | 年度评分 75–89 | 正常合作 |\n| C 级（观察） | 年度评分 60–74 | 限期整改、减少份额 |\n| D 级（淘汰） | 年度评分 < 60 或出现重大违规 | 移出名录 |",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 四、供应商分级"
           },
           {
-            "text": "战略",
-            "source_doc": "",
-            "section": ""
+            "text": "| 等级 | 标准 | 权益 |\n|------|------|------|\n| A 级（战略） | 年度评分 ≥ 90，且合作满 1 年 | 优先份额、账期优惠 |\n| B 级（合格） | 年度评分 75–89 | 正常合作 |\n| C 级（观察） | 年度评分 60–74 | 限期整改、减少份额 |\n| D 级（淘汰） | 年度评分 < 60 或出现重大违规 | 移出名录 |",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "示例跨境电商公司 供应商管理规范 > 四、供应商分级"
           }
         ]
       },
@@ -383,7 +383,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     },
@@ -402,14 +402,14 @@
         "match_type": "snippet",
         "ground_truth_context": [
           {
-            "text": "公开",
-            "source_doc": "",
-            "section": ""
+            "text": "| 级别 | 示例 | 保护措施 |\n|------|------|----------|\n| 公开 | 商品目录、公开活动 | 常规访问控制 |\n| 内部 | 订单、库存、运营报表 | 角色权限 + 审计 |\n| 敏感 | 姓名、手机号、地址、支付信息 | 加密存储 + 最小化访问 |\n| 机密 | 源码、密钥、商业合同 | 加密 + 隔离 + 双因子 |",
+            "source_doc": "security_数据安全与隐私政策.md",
+            "section": "示例跨境电商公司 数据安全与隐私政策 > 二、数据分类"
           },
           {
-            "text": "内部",
-            "source_doc": "",
-            "section": ""
+            "text": "| 级别 | 示例 | 保护措施 |\n|------|------|----------|\n| 公开 | 商品目录、公开活动 | 常规访问控制 |\n| 内部 | 订单、库存、运营报表 | 角色权限 + 审计 |\n| 敏感 | 姓名、手机号、地址、支付信息 | 加密存储 + 最小化访问 |\n| 机密 | 源码、密钥、商业合同 | 加密 + 隔离 + 双因子 |",
+            "source_doc": "security_数据安全与隐私政策.md",
+            "section": "示例跨境电商公司 数据安全与隐私政策 > 二、数据分类"
           }
         ]
       },
@@ -426,7 +426,7 @@
         ],
         "ground_truth_verified": true,
         "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "3.1"
       },
       "kb_id": "rag_test_kb"
     }

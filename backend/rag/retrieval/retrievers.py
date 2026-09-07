@@ -32,23 +32,34 @@ def _score_by_keyword_overlap(question: str, docs: list, fallback_k: int = 3) ->
     """关键词软重排：命中文档按 overlap 降序排前面，未命中文档保留原始 embedding 顺序。
 
     不再硬过滤（丢弃 overlap=0 的文档），避免回归。
+    增加子串模糊匹配：query kw 与 doc kw 存在包含关系时计 0.5 分。
     """
-    query_kw = set(extract_chunk_keywords(question))
+    query_kw = set(extract_chunk_keywords(question, top_k=10))
     if not query_kw:
         return docs
 
     scored = []
     for doc in docs:
         raw = doc.metadata.get("doc_keywords", "")
-        if raw:
+        if isinstance(raw, list):
+            doc_kw = set(raw)
+        elif raw:
             try:
                 doc_kw = set(json.loads(raw) if raw.startswith("[") else raw.split(", "))
             except (json.JSONDecodeError, TypeError):
                 doc_kw = set()
         else:
             doc_kw = set()
-        overlap = len(query_kw & doc_kw)
-        scored.append((doc, overlap))
+        exact = len(query_kw & doc_kw)
+        fuzzy = 0.0
+        if not exact:
+            for qk in query_kw:
+                for dk in doc_kw:
+                    if len(qk) >= 2 and len(dk) >= 2 and (qk in dk or dk in qk):
+                        fuzzy += 0.5
+                        break
+        score = exact + fuzzy
+        scored.append((doc, score))
 
     matched = [(doc, s) for doc, s in scored if s > 0]
     unmatched = [doc for doc, s in scored if s == 0]

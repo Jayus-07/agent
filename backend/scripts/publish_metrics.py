@@ -22,8 +22,8 @@ CSV_COLUMNS = [
     "commit_sha",
     "pass_rate",
     "sem_context_recall",
-    "sem_top1",
-    "gen_sem_faithfulness",
+    "sem_faithfulness",
+    "sem_answer_correctness",
     "reject_accuracy",
     "total_cases",
 ]
@@ -47,8 +47,8 @@ def extract_metrics(report_path: Path) -> dict:
         "timestamp": data.get("timestamp", ""),
         "pass_rate": round(passed / total, 4) if total else 0.0,
         "sem_context_recall": metrics.get("sem_context_recall"),
-        "sem_top1": metrics.get("sem_top1"),
-        "gen_sem_faithfulness": metrics.get("gen_sem_faithfulness"),
+        "sem_faithfulness": metrics.get("sem_faithfulness"),
+        "sem_answer_correctness": metrics.get("sem_answer_correctness"),
         "reject_accuracy": metrics.get("reject_accuracy"),
         "total_cases": total,
     }
@@ -77,7 +77,7 @@ def main() -> None:
     append_to_csv(row, HISTORY_FILE)
     print(f"指标已追加到 {HISTORY_FILE}")
     print(f"  pass_rate={row['pass_rate']}, sem_recall={row['sem_context_recall']}, "
-          f"sem_top1={row['sem_top1']}, faithfulness={row['gen_sem_faithfulness']}")
+          f"faithfulness={row['sem_faithfulness']}, correctness={row['sem_answer_correctness']}")
 
 
 if __name__ == "__main__":

@@ -62,6 +62,16 @@ def source_files_out_of_sync(indexed_docs: list, current_docs: list) -> bool:
     return indexed != current
 
 
+def compute_content_hash(docs: list) -> str:
+    """计算文档列表的内容摘要 hash（用于检测内容漂移）。"""
+    import hashlib
+    h = hashlib.sha256()
+    for d in docs:
+        h.update(d.page_content.encode("utf-8", errors="replace"))
+        h.update(d.metadata.get("source_file", "").encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
 class BM25Store:
     """磁盘持久化 BM25 索引。
 
@@ -124,9 +134,10 @@ class BM25Store:
         self._write_checksum(self._docs_path, docs_data)
 
         elapsed = time.time() - t0
-        self._write_meta(len(docs), elapsed)
+        content_hash = compute_content_hash(docs)
+        self._write_meta(len(docs), elapsed, content_hash=content_hash)
         logger.info(
-            f"[BM25Store] 索引构建完成: {len(docs)} 文档, {elapsed:.1f}s"
+            f"[BM25Store] 索引构建完成: {len(docs)} 文档, {elapsed:.1f}s, hash={content_hash}"
         )
         return retriever
 
@@ -322,17 +333,24 @@ class BM25Store:
         meta = self._read_meta()
         return meta.get("doc_count", 0)
 
+    def get_content_hash(self) -> str:
+        """返回已持久化的内容 hash（空字符串表示无记录）。"""
+        return self._read_meta().get("content_hash", "")
+
     # ── 内部方法 ──────────────────────────────────────
 
-    def _write_meta(self, doc_count: int, build_time_s: float) -> None:
+    def _write_meta(self, doc_count: int, build_time_s: float, content_hash: str = "") -> None:
         """写入元数据 JSON 文件。"""
+        meta = {
+            "doc_count": doc_count,
+            "build_time_s": round(build_time_s, 1),
+            "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "version": 1,
+        }
+        if content_hash:
+            meta["content_hash"] = content_hash
         with open(self._meta_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "doc_count": doc_count,
-                "build_time_s": round(build_time_s, 1),
-                "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "version": 1,
-            }, f, ensure_ascii=False, indent=2)
+            json.dump(meta, f, ensure_ascii=False, indent=2)
 
     def _read_meta(self) -> dict:
         """读取元数据 JSON 文件。"""

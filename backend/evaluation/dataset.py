@@ -13,7 +13,8 @@ DATASET_DIR = Path(__file__).resolve().parent / "datasets"
 _VALID_ANSWER_TYPES = {"factual", "numeric", "procedural", "comparative", ""}
 _VALID_QUERY_TYPES = {
     "single_doc", "multi_hop", "adversarial", "negative", "table",
-    "chunk_level", "long_doc", "comparative", "procedural", "aggregation", "",
+    "chunk_level", "long_doc", "comparative", "procedural", "aggregation",
+    "conditional_reasoning", "negation_exclusion", "implicit_condition", "",
 }
 _VALID_TIERS = {"smoke", "core", "hard", "regression", ""}
 _VALID_SOURCES = {"curated", "adversarial", "production_log", "regression", ""}

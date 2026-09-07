@@ -9,14 +9,14 @@ import argparse
 import importlib
 import sys
 from pathlib import Path
-from backend.evaluation.runner import run_all
+
 from backend.evaluation.report import (
-    print_summary,
-    write_markdown_report,
-    write_json_report,
-    compare_reports,
     flag_regressions,
+    print_summary,
+    write_json_report,
+    write_markdown_report,
 )
+from backend.evaluation.runner import run_all
 
 # Windows console encoding fix: force UTF-8 to avoid UnicodeEncodeError on CJK + emoji
 if sys.platform == "win32":
@@ -90,6 +90,10 @@ def main():
         choices=["all", "smoke", "core", "hard", "regression"],
         help="分层评估: 按用例 tier 过滤 (默认: all, 不过滤)",
     )
+    parser.add_argument(
+        "--ragas", action="store_true",
+        help="启用 RAGAS 官方指标对比（需 pip install ragas）",
+    )
 
     args = parser.parse_args()
 
@@ -108,6 +112,7 @@ def main():
         judge=args.judge,
         dataset_file=args.dataset,
         tier=args.tier,
+        ragas=args.ragas,
     )
 
     print_summary(report)
@@ -149,7 +154,7 @@ def main():
 
 def _print_verbose(report) -> None:
     """verbose 模式：逐 case 输出（中文标签）。"""
-    from backend.evaluation.report import METRIC_LABELS, STATUS_LABELS, STATUS_ICONS
+    from backend.evaluation.report import METRIC_LABELS, STATUS_ICONS, STATUS_LABELS
     print("\n--- 详细结果 ---")
     for r in report.results:
         icon = STATUS_ICONS.get(r.status, "?")
@@ -163,6 +168,7 @@ def _print_verbose(report) -> None:
 def _do_compare(compare_id: str, current, results_dir: Path, current_dir: Path | None = None):
     """加载最近的历史 JSON 报告，反序列化为 EvalReport 后对比指标 + 标记下降（中文）。"""
     import json
+
     from backend.evaluation.models import EvalReport as _EvalReport
     from backend.evaluation.report import METRIC_LABELS, MODULE_LABELS
 

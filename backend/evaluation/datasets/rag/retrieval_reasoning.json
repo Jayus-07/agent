@@ -1,0 +1,494 @@
+{
+  "version": "3.1",
+  "_comment": "V2.0 推理型检索评测 — 跨文档条件推理、否定与排除、隐含条件推导。验证系统能否检索到需要多步推理才能回答的信息。",
+  "test_cases": [
+    {
+      "id": "V2-REAS-001",
+      "question": "供应商连续两个季度考核为D级会有什么后果？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [
+          "e87b88ae72"
+        ],
+        "relevant_snippets": [
+          "D级",
+          "移出名录"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "| D 级（淘汰） | 年度评分 < 60 或出现重大违规 | 移出名录 |",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "供应商分级"
+          },
+          {
+            "text": "规范供应商从准入、合作到退出的全生命周期管理，建立稳定、合规、低风险的供应链体系。",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "目的"
+          }
+        ]
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "procurement",
+        "query_type": "conditional_reasoning",
+        "tier": "hard",
+        "answer_type": "procedural",
+        "expected_answer": "D级供应商将被移出合格名录，失去合作资格",
+        "must_contain": [
+          "移出名录"
+        ],
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.1"
+      },
+      "kb_id": "rag_test_kb"
+    },
+    {
+      "id": "V2-REAS-002",
+      "question": "以下哪种商品即使存在质量问题也不能申请七天无理由退货？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [
+          "f938bc1033"
+        ],
+        "relevant_snippets": [
+          "贴身衣物",
+          "不可退货"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "四、不可退货商品\n贴身衣物、食品、定制商品、已拆封的密封包装商品(质量问题除外)。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "不可退货商品"
+          }
+        ]
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "after_sales",
+        "query_type": "negation_exclusion",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "定制商品不在七天无理由退货范围内",
+        "must_contain": [
+          "定制"
+        ],
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.1"
+      },
+      "kb_id": "rag_test_kb"
+    },
+    {
+      "id": "V2-REAS-003",
+      "question": "库存连续90天无动销的商品如何处理？如果达到180天呢？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [
+          "99a80089e4"
+        ],
+        "relevant_snippets": [
+          "滞销池",
+          "180"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "连续 90 天无动销的商品，转入滞销池，启动促销或调拨方案；连续 180天无动销，启动退供或报废评估。",
+            "source_doc": "ops_库存管理制度.pdf",
+            "section": "滞销处理"
+          }
+        ]
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "operations",
+        "query_type": "conditional_reasoning",
+        "tier": "hard",
+        "answer_type": "procedural",
+        "expected_answer": "90天无动销转入滞销池启动促销或调拨；180天无动销启动退供或报废评估",
+        "must_contain": [
+          "滞销池",
+          "退供"
+        ],
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.1"
+      },
+      "kb_id": "rag_test_kb"
+    },
+    {
+      "id": "V2-REAS-004",
+      "question": "一笔30000元的采购需要谁审批？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [
+          "894418906b"
+        ],
+        "relevant_snippets": [
+          "总监",
+          "50000"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "采购申请审批(5000以下部门负责人/5000-50000总监/50000以上总经理)",
+            "source_doc": "purchase_采购流程.docx",
+            "section": "采购申请审批"
+          }
+        ]
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "procurement",
+        "query_type": "conditional_reasoning",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "30000元在5000-50000区间，需要总监审批",
+        "must_contain": [
+          "总监"
+        ],
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.1"
+      },
+      "kb_id": "rag_test_kb"
+    },
+    {
+      "id": "V2-REAS-005",
+      "question": "以下哪种商品属于七天无理由退货的例外？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [
+          "f938bc1033"
+        ],
+        "relevant_snippets": [
+          "定制商品",
+          "不可退货"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "四、不可退货商品\n贴身衣物、食品、定制商品、已拆封的密封包装商品(质量问题除外)。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "不可退货商品"
+          }
+        ]
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "after_sales",
+        "query_type": "negation_exclusion",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "定制商品属于七天无理由退货的例外",
+        "must_contain": [
+          "定制"
+        ],
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.1"
+      },
+      "kb_id": "rag_test_kb"
+    },
+    {
+      "id": "V2-REAS-006",
+      "question": "质检不合格品处理流程中，以下哪项不属于标准处理步骤？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [
+          "b1ec771661"
+        ],
+        "relevant_snippets": [
+          "隔离",
+          "不合格品"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "不合格品处理(隔离→30分钟通知→供应商48小时响应→退换返工)",
+            "source_doc": "qc_质检标准SOP.docx",
+            "section": "不合格品处理"
+          },
+          {
+            "text": "记录归档2年",
+            "source_doc": "qc_质检标准SOP.docx",
+            "section": "记录归档"
+          }
+        ]
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "quality",
+        "query_type": "negation_exclusion",
+        "tier": "core",
+        "answer_type": "procedural",
+        "expected_answer": "直接销毁不属于标准处理步骤，标准流程为隔离→通知→协商→退换返工",
+        "must_not_contain": [
+          "直接销毁"
+        ],
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.1"
+      },
+      "kb_id": "rag_test_kb"
+    },
+    {
+      "id": "V2-REAS-007",
+      "question": "员工报销中，哪项费用不需要事前报批？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [
+          "3387d87030"
+        ],
+        "relevant_snippets": [
+          "办公采购",
+          "事前报批"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "2.2 业务招待：客户宴请、礼品。",
+            "source_doc": "finance_员工报销制度.pdf",
+            "section": "报销类别"
+          },
+          {
+            "text": "3.2 业务招待：每人 300 元以内，需事前报批。",
+            "source_doc": "finance_员工报销制度.pdf",
+            "section": "标准与限额"
+          },
+          {
+            "text": "2.4 培训费：经 HR 批准的外部培训。",
+            "source_doc": "finance_员工报销制度.pdf",
+            "section": "报销类别"
+          },
+          {
+            "text": "2.3 办公采购：书籍、文具、低于 1000 元的办公用品。",
+            "source_doc": "finance_员工报销制度.pdf",
+            "section": "报销类别"
+          }
+        ]
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "finance",
+        "query_type": "negation_exclusion",
+        "tier": "hard",
+        "answer_type": "factual",
+        "expected_answer": "办公采购(低于1000元)不需要事前报批；业务招待需事前报批，培训费需HR批准",
+        "must_contain": [
+          "办公采购"
+        ],
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.1"
+      },
+      "kb_id": "rag_test_kb"
+    },
+    {
+      "id": "V2-REAS-008",
+      "question": "新供应商准入的最后一步是什么？合格后如何管理？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [
+          "e87b88ae72"
+        ],
+        "relevant_snippets": [
+          "准入",
+          "分级"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "规范供应商从准入、合作到退出的全生命周期管理，建立稳定、合规、低风险的供应链体系。",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "目的"
+          },
+          {
+            "text": "| A 级（战略） | 年度评分 ≥ 90，且合作满 1 年 | 优先份额、账期优惠 |\n| B 级（合格） | 年度评分 75–89 | 正常合作 |\n| C 级（观察） | 年度评分 60–74 | 限期整改、减少份额 |\n| D 级（淘汰） | 年度评分 < 60 或出现重大违规 | 移出名录 |",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "供应商分级"
+          }
+        ]
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "procurement",
+        "query_type": "implicit_condition",
+        "tier": "core",
+        "answer_type": "procedural",
+        "expected_answer": "新供应商经准入流程合格后纳入分级管理体系(A/B/C/D四级)",
+        "must_contain": [
+          "分级"
+        ],
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.1"
+      },
+      "kb_id": "rag_test_kb"
+    },
+    {
+      "id": "V2-REAS-009",
+      "question": "采购金额超过多少必须签署正式合同？合同应包含哪些关键条款？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [
+          "894418906b"
+        ],
+        "relevant_snippets": [
+          "10000",
+          "合同"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "合同签订(10000以上必须)",
+            "source_doc": "purchase_采购流程.docx",
+            "section": "合同签订"
+          }
+        ]
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "procurement",
+        "query_type": "implicit_condition",
+        "tier": "hard",
+        "answer_type": "procedural",
+        "expected_answer": "采购金额超过10000元必须签署正式合同",
+        "must_contain": [
+          "10000"
+        ],
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.1"
+      },
+      "kb_id": "rag_test_kb"
+    },
+    {
+      "id": "V2-REAS-010",
+      "question": "客户因质量问题退货，运费由谁承担？退款多久到账？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [
+          "f938bc1033",
+          "3e30e0df16"
+        ],
+        "relevant_snippets": [
+          "商家承担",
+          "1-3"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "三、质量问题退货\n3.1 商品存在质量问题(破损/错发/性能故障),全额退款,商家承担运费。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "质量问题退货"
+          },
+          {
+            "text": "五、退款时效\n仓库验收合格后 1-3 个工作日原路退回支付账户。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "退款时效"
+          }
+        ]
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "after_sales",
+        "query_type": "conditional_reasoning",
+        "tier": "core",
+        "answer_type": "procedural",
+        "expected_answer": "质量问题退货运费由商家承担，退款1-3个工作日到账",
+        "must_contain": [
+          "商家承担",
+          "1-3"
+        ],
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.1"
+      },
+      "kb_id": "rag_test_kb"
+    },
+    {
+      "id": "V2-REAS-011",
+      "question": "累计消费15000元的会员享有什么折扣？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [
+          "13b619e25a"
+        ],
+        "relevant_snippets": [
+          "金卡",
+          "95折"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "会员等级(5000金卡95折/20000钻石9折)",
+            "source_doc": "cs_售后FAQ.docx",
+            "section": "会员等级"
+          }
+        ]
+      },
+      "metadata": {
+        "difficulty": "medium",
+        "domain": "after_sales",
+        "query_type": "implicit_condition",
+        "tier": "core",
+        "answer_type": "factual",
+        "expected_answer": "累计消费15000元达到金卡标准(≥5000)，享受95折优惠",
+        "must_contain": [
+          "金卡",
+          "95折"
+        ],
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.1"
+      },
+      "kb_id": "rag_test_kb"
+    },
+    {
+      "id": "V2-REAS-012",
+      "question": "试用期员工转正后，按工龄1-5年可享多少天年休假？",
+      "module": "rag",
+      "expected": {
+        "relevant_docs": [
+          "d7e415b2ee"
+        ],
+        "relevant_snippets": [
+          "试用期",
+          "年休假"
+        ],
+        "match_type": "snippet",
+        "ground_truth_context": [
+          {
+            "text": "试用期3个月",
+            "source_doc": "hr_员工手册.docx",
+            "section": "试用期"
+          },
+          {
+            "text": "年休假5/10/15天三档",
+            "source_doc": "hr_员工手册.docx",
+            "section": "年休假"
+          }
+        ]
+      },
+      "metadata": {
+        "difficulty": "hard",
+        "domain": "hr",
+        "query_type": "implicit_condition",
+        "tier": "hard",
+        "answer_type": "factual",
+        "expected_answer": "转正后工龄1-5年可享5天年休假（三档中最低档）",
+        "must_contain": [
+          "5天"
+        ],
+        "ground_truth_verified": true,
+        "source": "curated",
+        "schema_version": "3.1"
+      },
+      "kb_id": "rag_test_kb"
+    }
+  ]
+}

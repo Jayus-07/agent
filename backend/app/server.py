@@ -163,6 +163,13 @@ async def eager_init_rag_pipeline():
             logger.info("[Startup] jieba 词典预热完成")
         except Exception:
             logger.warning("[Startup] jieba 预热失败，分词可能较慢", exc_info=True)
+        # 预热 Reranker 模型（CrossEncoder 加载 ~7s）
+        try:
+            from backend.rag.reranker import get_reranker_backend
+            get_reranker_backend()
+            logger.info("[Startup] Reranker 模型预热完成")
+        except Exception:
+            logger.warning("[Startup] Reranker 预热失败，首次查询会较慢", exc_info=True)
     threading.Thread(target=_warmup, daemon=True, name="rag-warmup").start()
 
 

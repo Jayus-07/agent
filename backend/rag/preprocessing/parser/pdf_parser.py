@@ -15,6 +15,12 @@ from collections import Counter
 
 import pymupdf as fitz  # PyMuPDF；用 pymupdf 别名 fitz 消除 1.24+ deprecation warning
 
+try:
+    import pymupdf_layout
+    _HAS_LAYOUT = True
+except ImportError:
+    _HAS_LAYOUT = False
+
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
 from backend.rag.preprocessing.parser.base import BaseDocumentParser
 from backend.shared.logger import logger
@@ -95,7 +101,16 @@ class PdfParser(BaseDocumentParser):
             for page_idx in range(len(doc)):
                 try:
                     page = doc[page_idx]
-                    blocks = page.get_text("dict")["blocks"]
+                    if _HAS_LAYOUT:
+                        try:
+                            blocks = pymupdf_layout.analyze(page)["blocks"]
+                        except Exception:
+                            logger.debug(
+                                f"[PdfParser] 第 {page_idx} 页 layout 分析回退"
+                            )
+                            blocks = page.get_text("dict")["blocks"]
+                    else:
+                        blocks = page.get_text("dict")["blocks"]
                     # P1-5: 表格识别（PyMuPDF find_tables，替代原"type=1→table"错误注释）。
                     # type=1 是图片块（当前完全忽略），表格需用 find_tables 检测行列结构，
                     # 产 table 节点走 NL+CSV 双格式，避免纯文本顺序流丢失列关系。

@@ -19,8 +19,8 @@ OUTPUT_PATH = Path(os.environ.get("OUTPUT_PATH", "reports/trend.png"))
 METRIC_COLUMNS = [
     ("pass_rate", "通过率"),
     ("sem_context_recall", "语义召回"),
-    ("sem_top1", "语义 Top-1"),
-    ("gen_sem_faithfulness", "忠实度"),
+    ("sem_faithfulness", "忠实度"),
+    ("sem_answer_correctness", "答案正确性"),
 ]
 
 
