@@ -1,1535 +1,3630 @@
 {
-  "version": "3.1",
-  "_comment": "RAG 检索评测 v1.4 — rag_test_kb。relevant_docs 的权威来源是 doc_registry 中该文件的 active 行，而非某个固定 hash 协议：存量文件沿用旧协议 md5(basename)[:10]，2026-09-02 之后重索引的文件改用命名空间协议 md5(kb_id|department|[subpath|]basename)[:10]（见 backend/rag/indexing/doc_id.py）。Indexer._derive_doc_id 对已注册 active 文件复用原 ID，故重索引不会再漂移；但历史上两种协议并存已导致标注失效，改动标注前务必用 doc_registry / backend/scripts/validate_eval_dataset.py 核对真实 ID。评测时 retrieve 出来的 doc_id 与 relevant_docs 做交集判定（非空即 pass），top1_accuracy 看首位是否命中。schema 预留字段：relevant_chunks（chunk 级召回，parent-child 验证）、expected_answer（生成层 Faithfulness/Answer Relevance 接入）、doc_type（文档类型过滤）。v1.3→v1.4 修复：(1) 5 例 doc_id 协议漂移——cs_售后FAQ.docx 13b619e25a→e044139401（RT-005/RT-006）、finance_员工报销制度.pdf 3387d87030→8117d97802（RT-022/RT-023/RT-024），旧 ID 在 doc_registry 与 ChromaDB 中均已无记录，属『检索命中但 ID 对不上』的假失败；(2) RT-004 golden truth 由 07_物流SOP 改为 06_退货政策（§3.1/3.2 才是面向客户的破损处置口径，原标注调查漏查该文档）；(3) RT-016 golden truth 补全为双文档（退货政策 §2 条件清单 + 售后FAQ 同事实第二来源）；(4) RT-022 陈旧 snippet '500' 改为 '800'（原文住宿标准为一线城市 800/其他 600，'500' 只是 '5000 元' 审批额度的子串误匹配）。同期修复 PdfParser._HEADING_NUMBER_RE 把小数编号条款（2.1/3.2）误判为章节标题的 bug——该 bug 使『二、七天无理由退货』等真标题被拆成孤立空 section、正文 chunk 丢失标题上下文，是 RT-016 召回失败的根因，需重索引后在 KB 生效。v1.2→v1.3 修复：20 条用例的 question/snippet 与 KB 文档实际内容脱节（标注的事实在文档中不存在），全部改写为文档原文可验证的用例；不动 KB 文档（HANDOFF §7.3 教训）。v1.1→v1.2 修复：RT-031/RT-032 ground truth 在 KB 中不存在（11_采购合同.md 无违约金/保密条款）改为可验证用例；RT-034 与 RT-008 完全重复，替换为新用例；RT-036/RT-037 doc_type 误标 security 改为 tech_manual。v1.0→v1.1 修复：原 doc_id 协议 sha256[:16] 与入库实际 md5[:10] 不匹配，全 37 条改为 md5(basename)[:10] 协议。",
+  "version": "4.0",
+  "_comment": "RAG 评测数据集 v4.0 — rag_test_kb。100 条用例，统一 schema 支持双轨评测(RAGAS + 自研)。新增字段: required_facts(事实点覆盖率), required_docs(多跳/引用指标), expected_answer(RAGAS reference), requires_citation(引用指标开关), base_question_id(鲁棒性同义组)。query_type 覆盖: single_doc/multi_doc/reasoning/calculation/comparison/process/negative/ambiguous/robust_typo/robust_complex。tier 分布: smoke:19, core:62, hard:19。拒答用例 15 条(should_reject=true)。历史: v3.1 及之前为 54 条 RT-xxx 用例，v4.0 重建为 100 条 RC-xxx 用例。",
   "test_cases": [
     {
-      "id": "RT-001",
-      "question": "下单后可以修改收货地址吗？",
+      "id": "RC-001",
+      "question": "现货商品的发货时间是多久？",
       "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
         "ground_truth_context": [
           {
-            "text": "Q：订单可以修改地址吗?\nA：待发货状态可自行修改；已发货状态请联系客服申请拦截改址。",
-            "source_doc": "rag_test_kb",
-            "section": "订单可以修改地址吗?"
+            "text": "现货商品 24 小时内发出,预售商品以商品详情页标注的发货时间为准",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "发货时间"
           }
-        ]
-      },
-      "metadata": {
-        "difficulty": "easy",
-        "domain": "order",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（01_FAQ '订单可以修改地址吗'/'地址写错了能改吗'，无'收货地址'措辞）",
-        "source": "curated",
-        "schema_version": "3.0",
-        "expected_answer": "待发货状态可自行修改收货地址；已发货状态请联系客服申请拦截改址",
-        "must_contain": [
-          "修改",
-          "待发货"
         ],
-        "generation_eval": true
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-002",
-      "question": "如何查看订单的物流信息？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "Q：如何查询物流轨迹?\nA：「我的订单」→「查看物流」可看到揽收、运输、派送、签收全节点。",
-            "source_doc": "rag_test_kb",
-            "section": "如何查询物流轨迹?"
-          }
-        ]
+        "should_reject": false,
+        "required_facts": [
+          "24小时内发出",
+          "预售商品以详情页标注为准"
+        ],
+        "required_docs": [
+          "faq_常见问题FAQ.md"
+        ],
+        "expected_answer": "现货商品24小时内发出，预售商品以商品详情页标注的发货时间为准"
       },
       "metadata": {
-        "difficulty": "easy",
         "domain": "order",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（01_FAQ '如何查询物流轨迹'，无'追踪号'措辞）",
+        "difficulty": "easy",
         "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": true,
+        "base_question_id": null
+      }
     },
     {
-      "id": "RT-003",
+      "id": "RC-002",
       "question": "平台支持哪些支付方式？",
       "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
         "ground_truth_context": [
           {
-            "text": "Q：支持哪些支付方式?\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。",
-            "source_doc": "rag_test_kb",
-            "section": "支持哪些支付方式?"
+            "text": "支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "支付方式"
           }
-        ]
-      },
-      "metadata": {
-        "difficulty": "easy",
-        "domain": "payment",
-        "fix_note": "2026-08-21: 原问题（支付失败扣款）在 01_FAQ 中无对应内容，改为文档真实存在的支付方式问题",
-        "source": "curated",
-        "schema_version": "3.0",
-        "expected_answer": "支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)",
-        "must_contain": [
+        ],
+        "should_reject": false,
+        "required_facts": [
           "支付宝",
-          "微信"
+          "微信支付",
+          "银联",
+          "Visa/Mastercard"
         ],
-        "generation_eval": true
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-004",
-      "question": "签收后发现商品破损怎么办？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "三、质量问题退货\n3.1 商品存在质量问题（破损/错发/性能故障),全额退款，商家承担运费。\n3.2 客户需在签收后 48 小时内上传照片凭证。",
-            "source_doc": "rag_test_kb",
-            "section": "运费承担：买家承担来回运费。"
-          }
-        ]
+        "required_docs": [
+          "faq_常见问题FAQ.md"
+        ],
+        "expected_answer": "支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)"
       },
       "metadata": {
+        "domain": "payment",
         "difficulty": "easy",
-        "domain": "after_sales",
-        "fix_note": "2026-09-07: golden truth 修正。原标注 07_物流SOP(788552468f) 依据『02_售后FAQ 不含 48小时/破损』，但漏查 06_退货政策：其 §3.1『商品存在质量问题(破损/错发/性能故障),全额退款,商家承担运费』+ §3.2『客户需在签收后 48 小时内上传照片凭证』才是面向客户的完整处置口径，同时含『破损』与『48 小时』。物流SOP 步骤7『破损 24 小时补发』属内部 ops SLA，非客户侧答案",
         "source": "curated",
-        "schema_version": "3.0",
-        "expected_answer": "签收后发现商品破损，需在48小时内上传照片凭证，商家全额退款并承担运费",
-        "must_contain": [
-          "48小时",
-          "破损"
-        ],
-        "generation_eval": true
-      },
-      "kb_id": "rag_test_kb"
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": true,
+        "base_question_id": null
+      }
     },
     {
-      "id": "RT-005",
-      "question": "换货的完整流程是怎样的？",
+      "id": "RC-003",
+      "question": "退款申请审核需要多长时间？",
       "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
         "ground_truth_context": [
           {
-            "text": "Q：换货流程\nA：在订单详情页提交「换货申请」,客服审核通过后寄回，仓库验收后重新发出。",
-            "source_doc": "rag_test_kb",
+            "text": "客服 1-2 个工作日内审核",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "退款审核"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "1-2个工作日",
+          "客服审核"
+        ],
+        "required_docs": [
+          "faq_常见问题FAQ.md"
+        ],
+        "expected_answer": "客服1-2个工作日内审核退款申请"
+      },
+      "metadata": {
+        "domain": "after_sales",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-004",
+      "question": "七天无理由退货的运费由谁承担？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "2.3 运费承担：买家承担来回运费。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "七天无理由退货"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "买家承担来回运费"
+        ],
+        "required_docs": [
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "七天无理由退货由买家承担来回运费"
+      },
+      "metadata": {
+        "domain": "return_policy",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-005",
+      "question": "商品质量问题的退货运费由谁承担？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "3.1 商品存在质量问题（破损/错发/性能故障),全额退款，商家承担运费。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "质量问题退货"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "商家承担运费",
+          "全额退款"
+        ],
+        "required_docs": [
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "商品质量问题退货由商家承担运费，全额退款"
+      },
+      "metadata": {
+        "domain": "return_policy",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-006",
+      "question": "电子产品保修期一般是多久？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "电子类商品保修期内非人为损坏可申请免费维修；人为损坏按成本价收费。",
+            "source_doc": "cs_售后FAQ.docx",
+            "section": "维修申请"
+          },
+          {
+            "text": "电子产品按品牌政策,一般 1 年",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "保修"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "一般1年",
+          "非人为损坏免费维修",
+          "人为损坏按成本价收费"
+        ],
+        "required_docs": [
+          "cs_售后FAQ.docx",
+          "faq_常见问题FAQ.md"
+        ],
+        "expected_answer": "电子产品保修期一般1年，保修期内非人为损坏免费维修，人为损坏按成本价收费"
+      },
+      "metadata": {
+        "domain": "after_sales",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-007",
+      "question": "换货流程是怎样的？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "在订单详情页提交「换货申请」,客服审核通过后寄回，仓库验收后重新发出。",
+            "source_doc": "cs_售后FAQ.docx",
             "section": "换货流程"
           }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "after_sales",
-        "fix_note": "2026-09-07: doc_id 协议漂移修正 13b619e25a → e044139401。cs_售后FAQ.docx 于 2026-09-02 重索引时改用命名空间协议 md5(kb|dept|basename)[:10]，旧 md5(basename)[:10] ID 在 doc_registry 与 ChromaDB 中均已无记录",
-        "source": "curated",
-        "schema_version": "3.0",
-        "expected_answer": "在订单详情页提交换货申请，客服审核通过后寄回，仓库验收后重新发出",
-        "must_contain": [
-          "换货申请"
         ],
-        "generation_eval": true
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-006",
-      "question": "如何申请商品保修？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "Q：维修申请\nA：电子类商品保修期内非人为损坏可申请免费维修；人为损坏按成本价收费。",
-            "source_doc": "rag_test_kb",
-            "section": "维修申请"
-          }
-        ]
+        "should_reject": false,
+        "required_facts": [
+          "提交换货申请",
+          "客服审核",
+          "寄回",
+          "仓库验收后重新发出"
+        ],
+        "required_docs": [
+          "cs_售后FAQ.docx"
+        ],
+        "expected_answer": "在订单详情页提交换货申请，客服审核通过后寄回，仓库验收后重新发出"
       },
       "metadata": {
-        "difficulty": "medium",
         "domain": "after_sales",
-        "fix_note": "2026-09-07: doc_id 协议漂移修正 13b619e25a → e044139401（同 RT-005）。历史：2026-08-19 02_售后FAQ 含'保修'但不含'序列号'，去掉片段关键词",
+        "difficulty": "medium",
         "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "procedural",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
     },
     {
-      "id": "RT-007",
+      "id": "RC-008",
       "question": "库存按状态分为哪几类？",
       "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
         "ground_truth_context": [
           {
-            "text": "示例跨境电商公司 库存管理制度\n版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001\n【仅供测试  内容虚构】",
-            "source_doc": "rag_test_kb",
-            "section": "示例跨境电商公司 库存管理制度"
-          },
-          {
-            "text": "版本：v1.0 生效日期：2026-08-26 文档编号：OPS-001\n【仅供测试  内容虚构】",
-            "source_doc": "rag_test_kb",
-            "section": "示例跨境电商公司 库存管理制度"
-          },
-          {
-            "text": "第一章 总则\n第一条 目的：规范库存管理，降低呆滞库存，提升资金周转率。\n第二条 适用范围：成品仓、原料仓、在途仓、跨境保税仓。",
-            "source_doc": "rag_test_kb",
-            "section": "第一章 总则"
-          },
-          {
-            "text": "第一条 目的：规范库存管理，降低呆滞库存，提升资金周转率。\n第二条 适用范围：成品仓、原料仓、在途仓、跨境保税仓。",
-            "source_doc": "rag_test_kb",
-            "section": "总则"
+            "text": "类别=正常品，定义=近 60 天有动销的健康库存，占比目标=≥ 70%\n类别=呆滞品，定义=60–90 天无动销的商品，占比目标=≤ 15%\n类别=滞销品，定义=90 天以上无动销的商品，占比目标=≤ 10%\n类别=在途品，定义=已下单未到货\n类别=待检品，定义=到货待质检或隔离品",
+            "source_doc": "ops_库存管理制度.pdf",
+            "section": "库存分类"
           }
-        ]
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "正常品",
+          "呆滞品",
+          "滞销品",
+          "在途品",
+          "待检品"
+        ],
+        "required_docs": [
+          "ops_库存管理制度.pdf"
+        ],
+        "expected_answer": "库存按状态分五类：正常品（近60天有动销）、呆滞品（60-90天无动销）、滞销品（90天以上无动销）、在途品、待检品"
       },
       "metadata": {
-        "difficulty": "easy",
         "domain": "inventory",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（03_库存管理制度 '库存按状态分五类'，无'可用/锁定库存'措辞）",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-008",
-      "question": "滞销库存的处理方案是什么？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "第五章 滞销处理\n连续 90 天无动销的商品，转入滞销池，启动促销或调拨方案；连续 180\n天无动销，启动退供或报废评估。\n附录 A：常用单据\n入库单、出库单、调拨单、盘点表、损益单。\n第五章 滞销处理：共 5 行，列：类别，定义，占比目标，处置策略。\n- 类别=正常品，定义=近 60 天有动销的健康库存，占比目标=≥ 70%, 处置策略=常规销售与补货\n- 类别=呆滞品，定义=60–90 天无动销的商品，占比目标=≤ 15%, 处置策略=促销 / 捆绑 / 调拨\n- 类别=滞销品，定义=90 天以上无动销的商品，占比目标=≤ 10%, 处置策略=清仓 / 退供 / 报废评估\n- 类别=在途品，定义=已下单未到货，占比目标=—, 处置策略=跟踪物流并预留仓位\n- 类别=待检品，定义=到货待质检或隔离品，占比目标=—, 处置策略=按《质检标准 SOP》处理\n\n【原始数据】\n类别，定义，占比目标，处置策略\n正常品，近 60 天有动销的健康库存, ≥ 70%, 常规销售与补货\n呆滞品, 60–90 天无动销的商品, ≤ 15%, 促销 / 捆绑 / 调拨\n滞销品, 90 天以上无动销的商品, ≤ 10%, 清仓 / 退供 / 报废评估\n在途品，已下单未到货, —, 跟踪物流并预留仓位\n待检品，到货待质检或隔离品, —, 按《质检标准 SOP》处理",
-            "source_doc": "rag_test_kb",
-            "section": "盘点制度"
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "inventory",
-        "fix_note": "2026-08-21: 原问题（安全库存公式）在 03_库存管理制度 中不存在，改为文档真实存在的滞销处理问题（90 天无动销转滞销池）",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-009",
-      "question": "盘点分为哪几类？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "第四章 盘点制度\n月度盘点：每月末由财务组织抽盘，差异率不超过 1%。\n年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。",
-            "source_doc": "rag_test_kb",
-            "section": "出入库流程"
-          }
-        ]
-      },
-      "metadata": {
         "difficulty": "easy",
-        "domain": "inventory",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（03_库存管理制度 只有月度/年度盘点，无'循环盘点'）",
         "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": true,
+        "base_question_id": null
+      }
     },
     {
-      "id": "RT-010",
-      "question": "供应商准入需要提交哪些资质？",
+      "id": "RC-009",
+      "question": "新供应商准入需要哪些环节？",
       "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
         "ground_truth_context": [
           {
-            "text": "资质初审",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "样品验证",
-            "source_doc": "",
-            "section": ""
+            "text": "准入: 资质初审(营业执照、生产/经营许可证、商标注册或授权链、质检报告) → 样品验证 → 试单考核 → 纳入《合格供应商名录》",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "供应商准入"
           }
-        ]
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "资质初审",
+          "样品验证",
+          "试单考核",
+          "纳入合格供应商名录"
+        ],
+        "required_docs": [
+          "supplier_供应商管理规范.md"
+        ],
+        "expected_answer": "新供应商准入需经过资质初审、样品验证、试单考核三个环节，通过后纳入合格供应商名录"
       },
       "metadata": {
+        "domain": "procurement",
         "difficulty": "easy",
-        "domain": "procurement",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（04_采购流程 新供应商三环节，无'营业执照/质检报告'措辞）",
         "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "procedural",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
     },
     {
-      "id": "RT-011",
-      "question": "采购审批权限是怎么划分的？",
+      "id": "RC-010",
+      "question": "危险品（D类电池）出口需要哪些测试报告？",
       "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
         "ground_truth_context": [
           {
-            "text": "部门负责人",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "总监",
-            "source_doc": "",
-            "section": ""
+            "text": "危险品（D 类电池）需提供 MSDS 与 UN38.3 测试报告",
+            "source_doc": "product_商品规格说明.pdf",
+            "section": "合规认证"
           }
-        ]
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "MSDS",
+          "UN38.3测试报告"
+        ],
+        "required_docs": [
+          "product_商品规格说明.pdf"
+        ],
+        "expected_answer": "危险品（D类电池）出口需提供MSDS与UN38.3测试报告"
       },
       "metadata": {
-        "difficulty": "medium",
-        "domain": "procurement",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（04_采购流程 按金额分级审批，无'审批权限/采购主管'措辞）",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-012",
-      "question": "到货验货的流程是什么？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "AQL",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "抽样",
-            "source_doc": "",
-            "section": ""
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "procurement",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-013",
-      "question": "商品包装的缓冲材料厚度要求是多少？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "缓冲材料",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "2cm",
-            "source_doc": "",
-            "section": ""
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "easy",
         "domain": "product_spec",
-        "fix_note": "2026-08-21: 原问题（电水壶额定功率/容量）在 05_商品规格说明 中不存在（仅 SKU 表格与包装/合规），改为文档真实存在的包装规范问题",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-014",
-      "question": "危险品（D 类电池）出口需要提供哪些测试报告？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "MSDS",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "UN38.3",
-            "source_doc": "",
-            "section": ""
-          }
-        ]
-      },
-      "metadata": {
         "difficulty": "medium",
-        "domain": "product_spec",
-        "fix_note": "2026-08-21: 原问题（电水壶异味处理）在 05_商品规格说明 中不存在，改为文档真实存在的危险品合规问题",
         "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
     },
     {
-      "id": "RT-015",
+      "id": "RC-011",
       "question": "跨境商品需要满足哪些合规认证？",
       "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
         "ground_truth_context": [
           {
-            "text": "CE",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "FCC",
-            "source_doc": "",
-            "section": ""
+            "text": "欧盟 CE、美国 FCC、日本 PSE、英国 UKCA",
+            "source_doc": "product_商品规格说明.pdf",
+            "section": "合规认证"
           }
-        ]
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "CE",
+          "FCC",
+          "PSE",
+          "UKCA"
+        ],
+        "required_docs": [
+          "product_商品规格说明.pdf"
+        ],
+        "expected_answer": "跨境商品需满足欧盟CE、美国FCC、日本PSE、英国UKCA等合规认证"
       },
       "metadata": {
-        "difficulty": "easy",
         "domain": "product_spec",
-        "fix_note": "2026-08-21: 原问题（电水壶保养/除垢）在 05_商品规格说明 中不存在，改为文档真实存在的合规认证问题",
+        "difficulty": "easy",
         "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": true,
+        "base_question_id": null
+      }
     },
     {
-      "id": "RT-016",
+      "id": "RC-012",
       "question": "七天无理由退货需要满足什么条件？",
       "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
         "ground_truth_context": [
-          {
-            "text": "二、七天无理由退货\n2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。\n2.3 运费承担：买家承担来回运费。",
-            "source_doc": "rag_test_kb",
-            "section": "适用范围"
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "easy",
-        "domain": "return_policy",
-        "fix_note": "2026-09-07: golden truth 补全为双文档。06_退货政策 §2『二、七天无理由退货』的 2.1 适用条件/2.2 时间窗口(签收后 7 天)/2.3 运费承担 是完整条件清单（权威，列首位）；02_售后FAQ『Q:七天无理由退货范围』是同一事实的第二来源，两者皆应算命中。历史失败根因：PdfParser._HEADING_NUMBER_RE 的 \\d+(?:\\.\\d+)*[.、] 因回溯把『2.1 适用条件…』误判为章节标题，使『二、七天无理由退货』被拆成孤立空 section、§2 正文 chunk 丢失标题（既无『七天』也无『无理由』字样，仅剩『7 天』），关键词命中 0/8 → 召回失败。解析器已修（负向前瞻 (?!\\d)），需重索引后在 KB 生效",
-        "source": "curated",
-        "schema_version": "3.0",
-        "expected_answer": "七天无理由退货需满足：商品不影响二次销售、包装配件齐全，签收后7天内申请，买家承担来回运费",
-        "must_contain": [
-          "7天",
-          "二次销售"
-        ],
-        "generation_eval": true
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-017",
-      "question": "商品质量问题退货，运费由谁承担？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "二、七天无理由退货\n2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。\n2.3 运费承担：买家承担来回运费。",
-            "source_doc": "rag_test_kb",
-            "section": "适用范围"
-          },
           {
             "text": "2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。\n2.3 运费承担：买家承担来回运费。",
-            "source_doc": "rag_test_kb",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "七天无理由退货"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "不影响二次销售",
+          "包装配件齐全",
+          "签收后7天内",
+          "买家承担运费"
+        ],
+        "required_docs": [
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "七天无理由退货需满足：商品不影响二次销售、包装配件齐全、签收后7天内申请、买家承担来回运费"
+      },
+      "metadata": {
+        "domain": "return_policy",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-013",
+      "question": "退款到账需要多长时间？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "仓库验收合格后 1-3 个工作日原路退回支付账户。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "退款时效"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "1-3个工作日",
+          "原路退回",
+          "仓库验收合格后"
+        ],
+        "required_docs": [
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "仓库验收合格后1-3个工作日原路退回支付账户"
+      },
+      "metadata": {
+        "domain": "return_policy",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-014",
+      "question": "系统采用什么架构？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "采用前后端分离 + 微服务架构。前端为多端统一的 Web / 小程序壳；后端按业务域拆分订单、商品、库存、支付、物流、风控等服务，对外通过 API Gateway 统一暴露，幂等与限流在网关层完成。",
+            "source_doc": "tech_技术手册.pdf",
+            "section": "架构总览"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "前后端分离",
+          "微服务架构",
+          "API Gateway"
+        ],
+        "required_docs": [
+          "tech_技术手册.pdf"
+        ],
+        "expected_answer": "采用前后端分离+微服务架构，后端按业务域拆分各服务，通过API Gateway统一暴露"
+      },
+      "metadata": {
+        "domain": "tech",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-015",
+      "question": "系统可用性SLO目标是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "整体可用性目标 ≥ 99.95%，P99 接口延迟 ≤ 500 ms，错误率 ≤ 0.1%",
+            "source_doc": "tech_技术手册.pdf",
+            "section": "系统概述"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "可用性≥99.95%",
+          "P99延迟≤500ms",
+          "错误率≤0.1%"
+        ],
+        "required_docs": [
+          "tech_技术手册.pdf"
+        ],
+        "expected_answer": "系统可用性目标≥99.95%，P99接口延迟≤500ms，错误率≤0.1%"
+      },
+      "metadata": {
+        "domain": "tech",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "numeric",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-016",
+      "question": "盘点差异率的要求是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "月度盘点：每月末由财务组织抽盘，差异率不超过 1%。\n年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。",
+            "source_doc": "ops_库存管理制度.pdf",
+            "section": "盘点制度"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "月度差异率不超过1%",
+          "年度差异率不超过0.5%"
+        ],
+        "required_docs": [
+          "ops_库存管理制度.pdf"
+        ],
+        "expected_answer": "月度盘点差异率不超过1%，年度盘点差异率不超过0.5%"
+      },
+      "metadata": {
+        "domain": "inventory",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "numeric",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-017",
+      "question": "员工离职需要提前多久申请？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "离职须提前 30 日书面申请，完成工作交接清单签字后方可结算薪资",
+            "source_doc": "hr_员工手册.docx",
+            "section": "离职"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "提前30日",
+          "书面申请",
+          "完成工作交接"
+        ],
+        "required_docs": [
+          "hr_员工手册.docx"
+        ],
+        "expected_answer": "员工离职须提前30日书面申请，完成工作交接清单签字后方可结算薪资"
+      },
+      "metadata": {
+        "domain": "hr",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-018",
+      "question": "客服的工作时间是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "在线客服 9:00-22:00,电话客服 400-000-0048 转 1",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "客服时间"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "在线客服9:00-22:00",
+          "电话客服400-000-0048转1"
+        ],
+        "required_docs": [
+          "faq_常见问题FAQ.md"
+        ],
+        "expected_answer": "在线客服9:00-22:00，电话客服400-000-0048转1"
+      },
+      "metadata": {
+        "domain": "customer_service",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-019",
+      "question": "积分如何获取和使用？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "每消费 1 元累计 1 分,满 1000 分可抵扣 10 元",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "积分规则"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "每消费1元累计1分",
+          "满1000分抵扣10元"
+        ],
+        "required_docs": [
+          "faq_常见问题FAQ.md"
+        ],
+        "expected_answer": "每消费1元累计1分，满1000分可抵扣10元"
+      },
+      "metadata": {
+        "domain": "order",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-020",
+      "question": "海外配送需要多长时间？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "标准配送 7-15 个工作日,加急配送 3-7 个工作日",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "海外配送"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "标准配送7-15个工作日",
+          "加急配送3-7个工作日"
+        ],
+        "required_docs": [
+          "faq_常见问题FAQ.md"
+        ],
+        "expected_answer": "标准配送7-15个工作日，加急配送3-7个工作日"
+      },
+      "metadata": {
+        "domain": "logistics",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-021",
+      "question": "质检不合格率超过多少时甲方有权要求换货或退货？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "抽检不合格率超过 5% 时,甲方有权要求换货或退货",
+            "source_doc": "legal_采购合同.md",
+            "section": "质量要求"
+          },
+          {
+            "text": "批次不合格率 ≤ 5% 整批通过；> 5% 整批拒收或要求换货",
+            "source_doc": "qc_质检标准SOP.docx",
+            "section": "合格判定"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "5%",
+          "换货或退货"
+        ],
+        "required_docs": [
+          "legal_采购合同.md",
+          "qc_质检标准SOP.docx"
+        ],
+        "expected_answer": "抽检不合格率超过5%时，甲方有权要求换货或退货"
+      },
+      "metadata": {
+        "domain": "procurement",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "multi_doc",
+        "answer_type": "numeric",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-022",
+      "question": "系统灾备的RPO和RTO指标分别是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "定期备份（RPO ≤ 5 min）",
+            "source_doc": "security_数据安全与隐私政策.md",
+            "section": "数据备份"
+          },
+          {
+            "text": "RPO ≤ 5 min，RTO ≤ 30 min",
+            "source_doc": "tech_技术手册.pdf",
+            "section": "灾备方案"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "RPO≤5min",
+          "RTO≤30min"
+        ],
+        "required_docs": [
+          "security_数据安全与隐私政策.md",
+          "tech_技术手册.pdf"
+        ],
+        "expected_answer": "RPO≤5分钟，RTO≤30分钟"
+      },
+      "metadata": {
+        "domain": "tech",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "multi_doc",
+        "answer_type": "numeric",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-023",
+      "question": "退货退款的时间窗口和运费规则是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "2.2 时间窗口：客户签收后 7 天（含）内申请。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "七天无理由退货"
+          },
+          {
+            "text": "2.3 运费承担：买家承担来回运费。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "运费承担"
+          },
+          {
+            "text": "签收后 7 天内可申请无理由退货(贴身衣物/食品等除外)",
+            "source_doc": "cs_售后FAQ.docx",
+            "section": "七天无理由退货"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "签收后7天内",
+          "买家承担运费",
+          "贴身衣物/食品除外"
+        ],
+        "required_docs": [
+          "returns_退货政策.pdf",
+          "cs_售后FAQ.docx"
+        ],
+        "expected_answer": "签收后7天内可申请无理由退货，买家承担来回运费，贴身衣物/食品等除外"
+      },
+      "metadata": {
+        "domain": "return_policy",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "multi_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-024",
+      "question": "采购新品上架需要哪些部门协作？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "新供应商: 资质初审、样品验证、试单三环节",
+            "source_doc": "purchase_采购流程.docx",
+            "section": "供应商选择"
+          },
+          {
+            "text": "质检员按 AQL 抽样标准检验",
+            "source_doc": "purchase_采购流程.docx",
+            "section": "验收入库"
+          },
+          {
+            "text": "标签(含 CE / FCC 标识、HS 编码、中文说明)",
+            "source_doc": "qc_质检标准SOP.docx",
+            "section": "检验项目"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "供应商准入",
+          "AQL抽样检验",
+          "CE/FCC标识"
+        ],
+        "required_docs": [
+          "purchase_采购流程.docx",
+          "qc_质检标准SOP.docx",
+          "supplier_供应商管理规范.md"
+        ],
+        "expected_answer": "采购新品上架需要采购部（供应商准入）、质检部（AQL抽检）、法务部（合规认证）多部门协作"
+      },
+      "metadata": {
+        "domain": "procurement",
+        "difficulty": "hard",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "multi_doc",
+        "answer_type": "procedural",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-025",
+      "question": "大额采购（5万元以上）的审批流程是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "50000 元以上需总经理审批",
+            "source_doc": "purchase_采购流程.docx",
+            "section": "审批分级"
+          },
+          {
+            "text": "单笔金额 10000 元以上必须签订书面合同",
+            "source_doc": "purchase_采购流程.docx",
+            "section": "合同签订"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "总经理审批",
+          "签订书面合同"
+        ],
+        "required_docs": [
+          "purchase_采购流程.docx"
+        ],
+        "expected_answer": "5万元以上采购需总经理审批，且10000元以上必须签订书面合同，条款经法务审核"
+      },
+      "metadata": {
+        "domain": "procurement",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "multi_doc",
+        "answer_type": "procedural",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-026",
+      "question": "采购合同的总金额是多少，尾款何时支付？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "合计:人民币玖万元整(¥90,000.00)",
+            "source_doc": "legal_采购合同.md",
+            "section": "标的物"
+          },
+          {
+            "text": "质保期满(交付后 90 日)无质量问题,支付剩余 5% 尾款",
+            "source_doc": "legal_采购合同.md",
+            "section": "付款方式"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "90000元",
+          "交付后90日",
+          "5%尾款"
+        ],
+        "required_docs": [
+          "legal_采购合同.md"
+        ],
+        "expected_answer": "采购合同总金额90000元，尾款5%在质保期满（交付后90日）无质量问题时支付"
+      },
+      "metadata": {
+        "domain": "finance",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "multi_doc",
+        "answer_type": "numeric",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-027",
+      "question": "报销审批中5000元是一个怎样的分界点？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "单笔 5000 元以下由部门负责人审批",
+            "source_doc": "finance_员工报销制度.pdf",
+            "section": "审批流程"
+          },
+          {
+            "text": "单笔 5000 元以上需总监 + 财务审批",
+            "source_doc": "finance_员工报销制度.pdf",
+            "section": "审批流程"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "5000元以下部门负责人审批",
+          "5000元以上需总监+财务审批"
+        ],
+        "required_docs": [
+          "finance_员工报销制度.pdf"
+        ],
+        "expected_answer": "5000元以下由部门负责人审批，5000元以上需总监+财务审批"
+      },
+      "metadata": {
+        "domain": "finance",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "multi_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-028",
+      "question": "质检不合格品的处理时限要求是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "30 分钟内通知采购部",
+            "source_doc": "qc_质检标准SOP.docx",
+            "section": "不合格品处理"
+          },
+          {
+            "text": "供应商须在 48 小时内响应",
+            "source_doc": "qc_质检标准SOP.docx",
+            "section": "不合格品处理"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "30分钟内通知采购部",
+          "供应商48小时内响应"
+        ],
+        "required_docs": [
+          "qc_质检标准SOP.docx"
+        ],
+        "expected_answer": "30分钟内通知采购部，供应商须在48小时内响应"
+      },
+      "metadata": {
+        "domain": "quality",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "multi_doc",
+        "answer_type": "numeric",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-029",
+      "question": "商品包装和标识有哪些合规要求？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "缓冲材料...厚度不低于 2 cm",
+            "source_doc": "product_商品规格说明.pdf",
+            "section": "包装规范"
+          },
+          {
+            "text": "CE/FCC/RoHS 按目的国加贴",
+            "source_doc": "product_商品规格说明.pdf",
+            "section": "合规认证"
+          },
+          {
+            "text": "标签(含 CE / FCC 标识、HS 编码、中文说明)",
+            "source_doc": "qc_质检标准SOP.docx",
+            "section": "检验项目"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "缓冲材料厚度≥2cm",
+          "CE/FCC/RoHS标识",
+          "中文说明"
+        ],
+        "required_docs": [
+          "product_商品规格说明.pdf",
+          "qc_质检标准SOP.docx"
+        ],
+        "expected_answer": "包装缓冲材料厚度不低于2cm，需按目的国加贴CE/FCC/RoHS标识，含中文说明标签"
+      },
+      "metadata": {
+        "domain": "product_spec",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "multi_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-030",
+      "question": "供应商退出机制的触发条件有哪些？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "连续两季度为 D 级，或出现售假、重大安全事故、制裁合规风险，立即启动退出",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "退出机制"
+          },
+          {
+            "text": "D 级(淘汰): < 60 或重大违规 → 移出名录",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "供应商分级"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "连续两季度D级",
+          "售假",
+          "重大安全事故",
+          "制裁合规风险"
+        ],
+        "required_docs": [
+          "supplier_供应商管理规范.md"
+        ],
+        "expected_answer": "连续两季度为D级，或出现售假、重大安全事故、制裁合规风险，立即启动退出"
+      },
+      "metadata": {
+        "domain": "procurement",
+        "difficulty": "hard",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "multi_doc",
+        "answer_type": "factual",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-031",
+      "question": "供应商连续两季度评分低于60分，同时出现了安全事故，应如何处理？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "连续两季度为 D 级，或出现售假、重大安全事故、制裁合规风险，立即启动退出",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "退出机制"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "立即启动退出",
+          "移出名录"
+        ],
+        "required_docs": [
+          "supplier_供应商管理规范.md"
+        ],
+        "expected_answer": "应立即启动退出流程，将供应商移出合格名录"
+      },
+      "metadata": {
+        "domain": "procurement",
+        "difficulty": "hard",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "reasoning",
+        "answer_type": "procedural",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-032",
+      "question": "发生数据泄露后，需要在多长时间内完成哪些动作？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "2 小时内上报数据安全负责人，24 小时内启动处置并按法规向监管与用户告知",
+            "source_doc": "security_数据安全与隐私政策.md",
+            "section": "应急响应"
+          },
+          {
+            "text": "RPO ≤ 5 min，RTO ≤ 30 min",
+            "source_doc": "tech_技术手册.pdf",
+            "section": "灾备方案"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "2小时内上报",
+          "24小时内启动处置",
+          "向监管与用户告知"
+        ],
+        "required_docs": [
+          "security_数据安全与隐私政策.md",
+          "tech_技术手册.pdf"
+        ],
+        "expected_answer": "2小时内上报数据安全负责人，24小时内启动处置并按法规向监管与用户告知"
+      },
+      "metadata": {
+        "domain": "security",
+        "difficulty": "hard",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "reasoning",
+        "answer_type": "procedural",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-033",
+      "question": "如果一批新品需要上架，涉及哪些部门的哪些流程？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "准入: 资质初审 → 样品验证 → 试单考核 → 纳入《合格供应商名录》",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "供应商准入"
+          },
+          {
+            "text": "质检员按 AQL 抽样标准检验",
+            "source_doc": "purchase_采购流程.docx",
+            "section": "验收入库"
+          },
+          {
+            "text": "标签(含 CE / FCC 标识、HS 编码、中文说明)",
+            "source_doc": "qc_质检标准SOP.docx",
+            "section": "检验项目"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "供应商准入",
+          "AQL抽样检验",
+          "CE/FCC标识"
+        ],
+        "required_docs": [
+          "supplier_供应商管理规范.md",
+          "purchase_采购流程.docx",
+          "qc_质检标准SOP.docx"
+        ],
+        "expected_answer": "涉及采购部（供应商准入三环节）、质检部（AQL抽检）、法务部（合规认证CE/FCC等）"
+      },
+      "metadata": {
+        "domain": "procurement",
+        "difficulty": "hard",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "reasoning",
+        "answer_type": "procedural",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-034",
+      "question": "一笔60000元的采购需要谁审批？是否需要签合同？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "50000 元以上需总经理审批",
+            "source_doc": "purchase_采购流程.docx",
+            "section": "审批分级"
+          },
+          {
+            "text": "单笔金额 10000 元以上必须签订书面合同",
+            "source_doc": "purchase_采购流程.docx",
+            "section": "合同签订"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "总经理审批",
+          "签订书面合同"
+        ],
+        "required_docs": [
+          "purchase_采购流程.docx"
+        ],
+        "expected_answer": "60000元采购需总经理审批，且必须签订书面合同（10000元以上即需）"
+      },
+      "metadata": {
+        "domain": "procurement",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "reasoning",
+        "answer_type": "procedural",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-035",
+      "question": "一批500件商品到货，抽检发现10件不合格，应如何判定？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "批次不合格率 ≤ 5% 整批通过；> 5% 整批拒收或要求换货",
+            "source_doc": "qc_质检标准SOP.docx",
+            "section": "合格判定"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "不合格率2%",
+          "≤5%",
+          "整批通过"
+        ],
+        "required_docs": [
+          "qc_质检标准SOP.docx"
+        ],
+        "expected_answer": "不合格率2%（10/500），低于5%阈值，整批通过"
+      },
+      "metadata": {
+        "domain": "quality",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "reasoning",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-036",
+      "question": "跨境商品发往欧盟和日本分别需要什么认证？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "欧盟 CE、美国 FCC、日本 PSE、英国 UKCA",
+            "source_doc": "product_商品规格说明.pdf",
+            "section": "合规认证"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "欧盟CE",
+          "日本PSE"
+        ],
+        "required_docs": [
+          "product_商品规格说明.pdf"
+        ],
+        "expected_answer": "发往欧盟需要CE认证，发往日本需要PSE认证"
+      },
+      "metadata": {
+        "domain": "product_spec",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "reasoning",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-037",
+      "question": "系统灾备需要满足什么指标？演练频率是怎样的？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "RPO ≤ 5 min，RTO ≤ 30 min",
+            "source_doc": "tech_技术手册.pdf",
+            "section": "灾备方案"
+          },
+          {
+            "text": "每季度跨可用区演练",
+            "source_doc": "tech_技术手册.pdf",
+            "section": "灾备方案"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "RPO≤5min",
+          "RTO≤30min",
+          "每季度演练"
+        ],
+        "required_docs": [
+          "tech_技术手册.pdf"
+        ],
+        "expected_answer": "RPO≤5分钟，RTO≤30分钟，每季度跨可用区演练"
+      },
+      "metadata": {
+        "domain": "tech",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "reasoning",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-038",
+      "question": "会员等级折扣和积分抵扣能同时使用吗？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "累计消费满 5000 升金卡,享 95 折;满 20000 升钻石,享 9 折",
+            "source_doc": "cs_售后FAQ.docx",
+            "section": "会员等级"
+          },
+          {
+            "text": "每消费 1 元累计 1 分,满 1000 分可抵扣 10 元",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "积分规则"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "会员等级折扣",
+          "积分抵扣",
+          "各自独立规则"
+        ],
+        "required_docs": [
+          "cs_售后FAQ.docx",
+          "faq_常见问题FAQ.md"
+        ],
+        "expected_answer": "会员等级折扣（金卡95折/钻石9折）和积分抵扣（1000分抵10元）是独立的两个体系，文档未说明互斥"
+      },
+      "metadata": {
+        "domain": "order",
+        "difficulty": "hard",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "reasoning",
+        "answer_type": "factual",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-039",
+      "question": "采购合同90000元的付款节点分别是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "签订后 3 个工作日内支付 30% 预付款",
+            "source_doc": "legal_采购合同.md",
+            "section": "付款方式"
+          },
+          {
+            "text": "验收合格后 7 个工作日内支付 65% 货款",
+            "source_doc": "legal_采购合同.md",
+            "section": "付款方式"
+          },
+          {
+            "text": "质保期满(交付后 90 日)无质量问题,支付剩余 5% 尾款",
+            "source_doc": "legal_采购合同.md",
+            "section": "付款方式"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "30%预付款",
+          "65%验收后",
+          "5%质保期满"
+        ],
+        "required_docs": [
+          "legal_采购合同.md"
+        ],
+        "expected_answer": "签订后3个工作日内支付30%预付款，验收合格后7个工作日内支付65%，质保期满（交付后90日）支付5%尾款"
+      },
+      "metadata": {
+        "domain": "finance",
+        "difficulty": "hard",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "reasoning",
+        "answer_type": "numeric",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-040",
+      "question": "报销审批中，3000元和8000元的审批人有什么不同？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "单笔 5000 元以下由部门负责人审批",
+            "source_doc": "finance_员工报销制度.pdf",
+            "section": "审批流程"
+          },
+          {
+            "text": "单笔 5000 元以上需总监 + 财务审批",
+            "source_doc": "finance_员工报销制度.pdf",
+            "section": "审批流程"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "3000元部门负责人审批",
+          "8000元需总监+财务审批"
+        ],
+        "required_docs": [
+          "finance_员工报销制度.pdf"
+        ],
+        "expected_answer": "3000元（5000元以下）由部门负责人审批；8000元（5000元以上）需总监+财务审批"
+      },
+      "metadata": {
+        "domain": "finance",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "reasoning",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-041",
+      "question": "采购合同总额是多少？尾款金额是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "合计:人民币玖万元整(¥90,000.00)",
+            "source_doc": "legal_采购合同.md",
+            "section": "标的物"
+          },
+          {
+            "text": "质保期满(交付后 90 日)无质量问题,支付剩余 5% 尾款",
+            "source_doc": "legal_采购合同.md",
+            "section": "付款方式"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "90000元",
+          "5%尾款=4500元"
+        ],
+        "required_docs": [
+          "legal_采购合同.md"
+        ],
+        "expected_answer": "采购合同总额90000元，尾款5%即4500元"
+      },
+      "metadata": {
+        "domain": "finance",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "calculation",
+        "answer_type": "numeric",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-042",
+      "question": "一批500件商品质检不合格率为2%，该批次是否通过？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "批次不合格率 ≤ 5% 整批通过；> 5% 整批拒收或要求换货",
+            "source_doc": "qc_质检标准SOP.docx",
+            "section": "合格判定"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "2%≤5%",
+          "整批通过"
+        ],
+        "required_docs": [
+          "qc_质检标准SOP.docx"
+        ],
+        "expected_answer": "不合格率2%低于5%阈值，整批通过"
+      },
+      "metadata": {
+        "domain": "quality",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "calculation",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-043",
+      "question": "一线城市出差3晚的住宿报销上限是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "国内差旅住宿：一线城市 800 元/晚，其他 600 元/晚。",
+            "source_doc": "finance_员工报销制度.pdf",
+            "section": "标准与限额"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "800元/晚",
+          "3晚",
+          "2400元"
+        ],
+        "required_docs": [
+          "finance_员工报销制度.pdf"
+        ],
+        "expected_answer": "一线城市住宿标准800元/晚，3晚上限2400元"
+      },
+      "metadata": {
+        "domain": "finance",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "calculation",
+        "answer_type": "numeric",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-044",
+      "question": "报销6000元差旅费需要谁审批？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "单笔 5000 元以上需总监 + 财务审批",
+            "source_doc": "finance_员工报销制度.pdf",
+            "section": "审批流程"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "6000元>5000元",
+          "总监+财务审批"
+        ],
+        "required_docs": [
+          "finance_员工报销制度.pdf"
+        ],
+        "expected_answer": "6000元超过5000元阈值，需总监+财务审批"
+      },
+      "metadata": {
+        "domain": "finance",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "calculation",
+        "answer_type": "procedural",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-045",
+      "question": "消费8500元能获得多少积分？可抵扣多少金额？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "每消费 1 元累计 1 分,满 1000 分可抵扣 10 元",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "积分规则"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "8500积分",
+          "80元"
+        ],
+        "required_docs": [
+          "faq_常见问题FAQ.md"
+        ],
+        "expected_answer": "消费8500元获得8500积分，满1000分抵扣10元，可抵扣80元（8×10元），余500分"
+      },
+      "metadata": {
+        "domain": "order",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "calculation",
+        "answer_type": "numeric",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-046",
+      "question": "海运拼箱、空运快线、专线快递三种物流方式有什么区别？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "海运拼箱:人民币 8.00 元 / kg(最低消费 50 元)\n时效:25-35 个自然日\n路线:深圳盐田 → 洛杉矶长滩",
+            "source_doc": "26_数字近似陷阱.md",
+            "section": "海运拼箱"
+          },
+          {
+            "text": "空运快线:人民币 8 元 / kg(首重 1kg 起,续重按 0.5kg 进位)\n时效:7-10 个自然日\n路线:广州白云 → 法兰克福",
+            "source_doc": "26_数字近似陷阱.md",
+            "section": "空运快线"
+          },
+          {
+            "text": "专线快递:¥8 / kg(限 5kg 以内,超出按 12 元/kg 续重)\n时效:5-7 个自然日\n路线:义乌 → 马德里",
+            "source_doc": "26_数字近似陷阱.md",
+            "section": "专线快递"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "单价均为8元/kg",
+          "最低消费/续重规则不同",
+          "路线时效不同"
+        ],
+        "required_docs": [
+          "26_数字近似陷阱.md"
+        ],
+        "expected_answer": "三种方式单价均为8元/kg，但海运拼箱最低消费50元/时效25-35天，空运快线续重按0.5kg进位/时效7-10天，专线快递限5kg超出按12元/kg续重/时效5-7天"
+      },
+      "metadata": {
+        "domain": "logistics",
+        "difficulty": "hard",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "comparison",
+        "answer_type": "comparative",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-047",
+      "question": "采购审批和报销审批的权限分级有什么不同？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "5000 元以下由部门负责人审批;5000-50000 元需总监审批;50000 元以上需总经理审批",
+            "source_doc": "purchase_采购流程.docx",
+            "section": "审批分级"
+          },
+          {
+            "text": "单笔 5000 元以下由部门负责人审批\n单笔 5000 元以上需总监 + 财务审批",
+            "source_doc": "finance_员工报销制度.pdf",
+            "section": "审批流程"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "采购三档:5000/50000",
+          "报销两档:5000",
+          "采购多总经理审批"
+        ],
+        "required_docs": [
+          "purchase_采购流程.docx",
+          "finance_员工报销制度.pdf"
+        ],
+        "expected_answer": "采购审批分三档（5000以下部门负责人/5000-50000总监/50000以上总经理），报销分两档（5000以下部门负责人/5000以上总监+财务）"
+      },
+      "metadata": {
+        "domain": "procurement",
+        "difficulty": "hard",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "comparison",
+        "answer_type": "comparative",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-048",
+      "question": "Apple Watch和苹果（水果）的质检标准有什么区别？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "Apple Watch Series 10 包装盒标签要求:\n- 序列号 12 位(S/N 格式:ABC123XYZ456)\n- 防水等级 IP6X\n- 保修期 1 年",
+            "source_doc": "25_同形异义词.md",
+            "section": "Apple Watch 包装质检标准"
+          },
+          {
+            "text": "苹果(Apple Fruit)入库规格:\n- 单果重量 ≥ 180g\n- 糖度 ≥ 13°(折光仪检测)\n- 储存温度:0-4°C",
+            "source_doc": "25_同形异义词.md",
+            "section": "水果入库质检标准(苹果)"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "Apple Watch:序列号/防水IP6X/保修1年",
+          "苹果水果:重量≥180g/糖度≥13°/储存0-4°C"
+        ],
+        "required_docs": [
+          "25_同形异义词.md"
+        ],
+        "expected_answer": "Apple Watch质检关注序列号12位、防水等级IP6X、保修期1年；苹果（水果）质检关注单果重量≥180g、糖度≥13°、储存温度0-4°C"
+      },
+      "metadata": {
+        "domain": "quality",
+        "difficulty": "hard",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "comparison",
+        "answer_type": "comparative",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-049",
+      "question": "金卡会员和钻石卡会员的折扣有什么区别？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "累计消费满 5000 升金卡,享 95 折;满 20000 升钻石,享 9 折",
+            "source_doc": "cs_售后FAQ.docx",
+            "section": "会员等级"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "金卡:满5000/95折",
+          "钻石:满20000/9折"
+        ],
+        "required_docs": [
+          "cs_售后FAQ.docx"
+        ],
+        "expected_answer": "金卡需累计消费满5000享95折，钻石卡需满20000享9折"
+      },
+      "metadata": {
+        "domain": "customer_service",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "comparison",
+        "answer_type": "comparative",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-050",
+      "question": "呆滞品和滞销品的定义和处理策略有什么区别？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "类别=呆滞品，定义=60–90 天无动销的商品，占比目标=≤ 15%, 处置策略=促销 / 捆绑 / 调拨\n类别=滞销品，定义=90 天以上无动销的商品，占比目标=≤ 10%, 处置策略=清仓 / 退供 / 报废评估",
+            "source_doc": "ops_库存管理制度.pdf",
+            "section": "库存分类"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "呆滞品:60-90天/≤15%/促销捆绑调拨",
+          "滞销品:90天以上/≤10%/清仓退供报废"
+        ],
+        "required_docs": [
+          "ops_库存管理制度.pdf"
+        ],
+        "expected_answer": "呆滞品是60-90天无动销（占比≤15%，促销/捆绑/调拨），滞销品是90天以上无动销（占比≤10%，清仓/退供/报废评估）"
+      },
+      "metadata": {
+        "domain": "inventory",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "comparison",
+        "answer_type": "comparative",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-051",
+      "question": "物流SOP的完整操作步骤是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "8 步: 入库扫描(逐件,记录重量体积,绑定 SKU) → 分拣打包 → 头程交接(获取主运单号) → 跨境运输 → 清关申报(商业发票、装箱单) → 尾程派送 → 异常处理 → 数据归档",
+            "source_doc": "logistics_物流SOP.docx",
+            "section": "操作步骤"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "入库扫描",
+          "分拣打包",
+          "头程交接",
+          "跨境运输",
+          "清关申报",
+          "尾程派送",
+          "异常处理",
+          "数据归档"
+        ],
+        "required_docs": [
+          "logistics_物流SOP.docx"
+        ],
+        "expected_answer": "物流SOP共8步：入库扫描→分拣打包→头程交接→跨境运输→清关申报→尾程派送→异常处理→数据归档"
+      },
+      "metadata": {
+        "domain": "logistics",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "process",
+        "answer_type": "procedural",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-052",
+      "question": "采购到货后的验收流程是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "验收: 按 PO 核对",
+            "source_doc": "purchase_采购流程.docx",
+            "section": "验收入库"
+          },
+          {
+            "text": "质检员按 AQL 抽样标准检验",
+            "source_doc": "purchase_采购流程.docx",
+            "section": "验收入库"
+          },
+          {
+            "text": "批次不合格率 ≤ 5% 整批通过；> 5% 整批拒收或要求换货",
+            "source_doc": "qc_质检标准SOP.docx",
+            "section": "合格判定"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "按PO核对",
+          "AQL抽样检验",
+          "合格入库/不合格隔离"
+        ],
+        "required_docs": [
+          "purchase_采购流程.docx",
+          "qc_质检标准SOP.docx"
+        ],
+        "expected_answer": "按PO核对→质检员按AQL抽样检验→合格品入库上架→不合格品隔离处理"
+      },
+      "metadata": {
+        "domain": "procurement",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "process",
+        "answer_type": "procedural",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-053",
+      "question": "退货退款的完整流程是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "客服 1-2 个工作日内审核",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "退款审核"
+          },
+          {
+            "text": "仓库验收合格后 1-3 个工作日原路退回支付账户。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "退款时效"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "提交退货申请",
+          "客服1-2工作日审核",
+          "寄回商品",
+          "仓库验收",
+          "1-3工作日退款"
+        ],
+        "required_docs": [
+          "faq_常见问题FAQ.md",
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "客户提交退货申请→客服1-2工作日审核→客户寄回商品→仓库验收→1-3工作日原路退款"
+      },
+      "metadata": {
+        "domain": "after_sales",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "process",
+        "answer_type": "procedural",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-054",
+      "question": "员工离职的完整流程是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "离职须提前 30 日书面申请，完成工作交接清单签字后方可结算薪资",
+            "source_doc": "hr_员工手册.docx",
+            "section": "离职"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "提前30日书面申请",
+          "完成工作交接",
+          "交接清单签字",
+          "结算薪资"
+        ],
+        "required_docs": [
+          "hr_员工手册.docx"
+        ],
+        "expected_answer": "提前30日书面申请→完成工作交接→交接清单签字→结算薪资"
+      },
+      "metadata": {
+        "domain": "hr",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "process",
+        "answer_type": "procedural",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-055",
+      "question": "数据安全事件的应急处置流程是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "2 小时内上报数据安全负责人，24 小时内启动处置并按法规向监管与用户告知",
+            "source_doc": "security_数据安全与隐私政策.md",
+            "section": "应急响应"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "2小时内上报",
+          "24小时内启动处置",
+          "向监管告知",
+          "向用户告知"
+        ],
+        "required_docs": [
+          "security_数据安全与隐私政策.md"
+        ],
+        "expected_answer": "2小时内上报数据安全负责人→24小时内启动处置→按法规向监管告知→向用户告知"
+      },
+      "metadata": {
+        "domain": "security",
+        "difficulty": "hard",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "process",
+        "answer_type": "procedural",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-056",
+      "question": "供应商退出的完整流程是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "连续两季度为 D 级，或出现售假、重大安全事故、制裁合规风险，立即启动退出",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "退出机制"
+          },
+          {
+            "text": "供应商档案（资质、合同、考核记录）保存至少 3 年",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "档案与保密"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "触发条件",
+          "启动退出",
+          "移出名录",
+          "档案保存≥3年"
+        ],
+        "required_docs": [
+          "supplier_供应商管理规范.md"
+        ],
+        "expected_answer": "触发退出条件→启动退出流程→移出合格供应商名录→档案保存至少3年"
+      },
+      "metadata": {
+        "domain": "procurement",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "process",
+        "answer_type": "procedural",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-057",
+      "question": "换货申请的完整流程是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "在订单详情页提交「换货申请」,客服审核通过后寄回，仓库验收后重新发出。",
+            "source_doc": "cs_售后FAQ.docx",
+            "section": "换货流程"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "提交换货申请",
+          "客服审核",
+          "寄回",
+          "仓库验收",
+          "重新发出"
+        ],
+        "required_docs": [
+          "cs_售后FAQ.docx"
+        ],
+        "expected_answer": "订单详情页提交换货申请→客服审核通过→客户寄回→仓库验收→重新发出"
+      },
+      "metadata": {
+        "domain": "after_sales",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "process",
+        "answer_type": "procedural",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-058",
+      "question": "报销审批的完整流程是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "流程: OA 填单 → 上传发票 → 直属上级审批",
+            "source_doc": "finance_员工报销制度.pdf",
+            "section": "审批流程"
+          },
+          {
+            "text": "财务审核后 5 个工作日内付款。",
+            "source_doc": "finance_员工报销制度.pdf",
+            "section": "时效"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "OA填单",
+          "上传发票",
+          "直属上级审批",
+          "5个工作日内付款"
+        ],
+        "required_docs": [
+          "finance_员工报销制度.pdf"
+        ],
+        "expected_answer": "OA填单→上传发票→直属上级审批→（超额需总监+财务审批）→财务审核→5个工作日内付款"
+      },
+      "metadata": {
+        "domain": "finance",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "process",
+        "answer_type": "procedural",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-059",
+      "question": "新供应商从准入到合格需要哪些步骤？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "准入: 资质初审(营业执照、生产/经营许可证、商标注册或授权链、质检报告) → 样品验证 → 试单考核 → 纳入《合格供应商名录》",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "供应商准入"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "资质初审",
+          "样品验证",
+          "试单考核",
+          "纳入合格名录"
+        ],
+        "required_docs": [
+          "supplier_供应商管理规范.md"
+        ],
+        "expected_answer": "资质初审（营业执照/许可证/授权链/质检报告）→样品验证→试单考核→纳入合格供应商名录"
+      },
+      "metadata": {
+        "domain": "procurement",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "process",
+        "answer_type": "procedural",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-060",
+      "question": "退货有几种情况？分别怎么处理？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "二、七天无理由退货\n2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。\n2.3 运费承担：买家承担来回运费。",
+            "source_doc": "returns_退货政策.pdf",
             "section": "七天无理由退货"
           },
           {
             "text": "三、质量问题退货\n3.1 商品存在质量问题（破损/错发/性能故障),全额退款，商家承担运费。\n3.2 客户需在签收后 48 小时内上传照片凭证。",
-            "source_doc": "rag_test_kb",
-            "section": "运费承担：买家承担来回运费。"
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "return_policy",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-018",
-      "question": "退货验收合格后多久能收到退款？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
+            "source_doc": "returns_退货政策.pdf",
+            "section": "质量问题退货"
+          },
           {
-            "text": "五、退款时效\n仓库验收合格后 1-3 个工作日原路退回支付账户。",
-            "source_doc": "rag_test_kb",
+            "text": "四、不可退货商品\n贴身衣物、食品、定制商品、已拆封的密封包装商品(质量问题除外)",
+            "source_doc": "returns_退货政策.pdf",
             "section": "不可退货商品"
           }
-        ]
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "七天无理由:7天/买家承担运费",
+          "质量问题:商家承担/全额退款",
+          "不可退货:贴身衣物/食品/定制"
+        ],
+        "required_docs": [
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "三种情况：七天无理由退货（7天内/买家承担运费）、质量问题退货（商家承担运费/全额退款）、不可退货商品（贴身衣物/食品/定制商品）"
       },
       "metadata": {
-        "difficulty": "medium",
         "domain": "return_policy",
-        "fix_note": "2026-08-21: 原问题（退款金额计算/优惠券）在 06_退货政策 中不存在，改为文档真实存在的退款时效问题（1-3 个工作日原路退回）",
+        "difficulty": "hard",
         "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
+        "schema_version": "4.0",
+        "query_type": "process",
+        "answer_type": "procedural",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": null
+      }
     },
     {
-      "id": "RT-019",
-      "question": "头程物流有哪几种方式？",
+      "id": "RC-061",
+      "question": "头疼应该吃什么药？",
       "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
-        "ground_truth_context": [
-          {
-            "text": "空运",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "海运",
-            "source_doc": "",
-            "section": ""
-          }
-        ]
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
       },
       "metadata": {
+        "domain": "medical",
         "difficulty": "easy",
-        "domain": "logistics",
         "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": false,
+        "base_question_id": null
+      }
     },
     {
-      "id": "RT-020",
-      "question": "清关申报需要哪些要素？",
+      "id": "RC-062",
+      "question": "合同纠纷应该怎么打官司？",
       "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
-        "ground_truth_context": [
-          {
-            "text": "商业发票",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "装箱单",
-            "source_doc": "",
-            "section": ""
-          }
-        ]
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
       },
       "metadata": {
-        "difficulty": "medium",
-        "domain": "logistics",
-        "fix_note": "2026-08-21: snippet 对齐文档原文（07_物流SOP 清关申报耍商业发票/装箱单，无'HS编码'）",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-021",
-      "question": "物流丢件应该怎么处理？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "丢件",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "48 小时",
-            "source_doc": "",
-            "section": ""
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "logistics",
-        "probe_type": "snippet_semantic_match",
-        "probe_note": "snippet 语义匹配：召回内容含\"丢件\"和\"48 小时\"关键词即 pass。不绑定 doc_id/chunk_id，未来文件重索引不影响",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-022",
-      "question": "差旅住宿的报销标准是多少？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "第三章 标准与限额\n3.1 国内差旅住宿：一线城市 800 元/晚，其他 600 元/晚。\n3.2 业务招待：每人 300 元以内，需事前报批。\n3.3 出租车票实报实销，需行程说明。",
-            "source_doc": "rag_test_kb",
-            "section": "培训费：经 HR 批准的外部培训。"
-          }
-        ]
-      },
-      "metadata": {
+        "domain": "legal",
         "difficulty": "easy",
-        "domain": "expense",
-        "fix_note": "2026-09-07: (1) doc_id 协议漂移修正 3387d87030 → 8117d97802，finance_员工报销制度.pdf 于 2026-09-02 重索引后改用命名空间协议，旧 ID 在 doc_registry/ChromaDB 中均无记录；(2) snippet '500' 属陈旧标注——文档 §3.1 实际为『国内差旅住宿:一线城市 800 元/晚,其他 600 元/晚』，'500' 仅作为 §4.2/4.3『单笔 5000 元』审批额度的子串误匹配，改为 '800'",
         "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": false,
+        "base_question_id": null
+      }
     },
     {
-      "id": "RT-023",
-      "question": "报销的审批流程是什么？",
+      "id": "RC-063",
+      "question": "推荐几只值得买的股票",
       "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
-        "ground_truth_context": [
-          {
-            "text": "第一章 总则\n1.1 目的：规范员工费用报销流程，确保合规、及时、准确。\n1.2 适用范围：全体正式员工，实习/外包员工参照执行。",
-            "source_doc": "rag_test_kb",
-            "section": "第一章 总则"
-          },
-          {
-            "text": "1.1 目的：规范员工费用报销流程，确保合规、及时、准确。\n1.2 适用范围：全体正式员工，实习/外包员工参照执行。",
-            "source_doc": "rag_test_kb",
-            "section": "总则"
-          },
-          {
-            "text": "第二章 报销类别\n2.1 差旅交通：出差期间的机票/火车票/出租车。\n2.2 业务招待：客户宴请、礼品。\n2.3 办公采购：书籍、文具、低于 1000 元的办公用品。\n2.4 培训费：经 HR 批准的外部培训。",
-            "source_doc": "rag_test_kb",
-            "section": "适用范围：全体正式员工，实习/外包员工参照执行。"
-          },
-          {
-            "text": "2.1 差旅交通：出差期间的机票/火车票/出租车。\n2.2 业务招待：客户宴请、礼品。\n2.3 办公采购：书籍、文具、低于 1000 元的办公用品。\n2.4 培训费：经 HR 批准的外部培训。",
-            "source_doc": "rag_test_kb",
-            "section": "报销类别"
-          }
-        ]
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
       },
       "metadata": {
-        "difficulty": "medium",
-        "domain": "expense",
-        "fix_note": "2026-09-07: doc_id 协议漂移修正 3387d87030 → 8117d97802（同 RT-022）",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-024",
-      "question": "报销款什么时候打款？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "第六章 时效\n6.1 当月费用次月 10 日前提交，逾期需书面说明。\n6.2 财务审核后 5 个工作日内付款。",
-            "source_doc": "rag_test_kb",
-            "section": "标准与限额"
-          }
-        ]
-      },
-      "metadata": {
+        "domain": "finance",
         "difficulty": "easy",
-        "domain": "expense",
-        "fix_note": "2026-09-07: doc_id 协议漂移修正 3387d87030 → 8117d97802（同 RT-022）。历史：2026-08-21 snippet 对齐文档原文（08_员工报销制度 '财务审核后 5 个工作日内付款'，无'每周五'）",
         "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": false,
+        "base_question_id": null
+      }
     },
     {
-      "id": "RT-025",
-      "question": "系统的总体架构是什么？",
+      "id": "RC-064",
+      "question": "公司员工张三的家庭住址是什么？",
       "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
+      },
+      "metadata": {
+        "domain": "privacy",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": false,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-065",
+      "question": "竞争对手公司的内部管理制度是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
+      },
+      "metadata": {
+        "domain": "competitor",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": false,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-066",
+      "question": "下个季度的销售预测是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
+      },
+      "metadata": {
+        "domain": "forecast",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": false,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-067",
+      "question": "怎么在淘宝开店？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
+      },
+      "metadata": {
+        "domain": "external",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": false,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-068",
+      "question": "帮我写一份年终总结",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
+      },
+      "metadata": {
+        "domain": "task",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": false,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-069",
+      "question": "今天天气怎么样？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
+      },
+      "metadata": {
+        "domain": "chitchat",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": false,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-070",
+      "question": "你们公司的年度营收是多少？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
+      },
+      "metadata": {
+        "domain": "finance",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": false,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-071",
+      "question": "帮我翻译一段法语",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
+      },
+      "metadata": {
+        "domain": "task",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": false,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-072",
+      "question": "推荐一家便宜的酒店",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
+      },
+      "metadata": {
+        "domain": "travel",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "smoke",
+        "requires_citation": false,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-073",
+      "question": "怎么移民到加拿大？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
+      },
+      "metadata": {
+        "domain": "immigration",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": false,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-074",
+      "question": "公司下周的会议安排是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
+      },
+      "metadata": {
+        "domain": "internal",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": false,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-075",
+      "question": "新产品的发布日期是什么时候？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [],
+        "should_reject": true,
+        "required_facts": [],
+        "required_docs": [],
+        "expected_answer": ""
+      },
+      "metadata": {
+        "domain": "product",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "negative",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": false,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-076",
+      "question": "跨境电商退货退款流程是什么？（24号文档标题陷阱）",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
       "expected": {
         "ground_truth_context": [
           {
-            "text": "二、架构总览\n采用前后端分离 + 微服务架构。前端为多端统一的 Web /\n小程序壳；后端按业务域拆分订单、商品、库存、支付、物流、风控等服务，对外通过 API Gateway\n统一暴露，幂等与限流在网关层完成。",
-            "source_doc": "rag_test_kb",
+            "text": "为感谢新老客户,本月推出满 200 减 30 的促销活动。",
+            "source_doc": "24_关键词干扰文档.md",
+            "section": "促销活动"
+          },
+          {
+            "text": "退款流程不适用本促销",
+            "source_doc": "24_关键词干扰文档.md",
+            "section": "注意事项"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "24号文档是促销内容",
+          "退款流程不适用",
+          "应参考退货政策文档"
+        ],
+        "required_docs": [
+          "24_关键词干扰文档.md",
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "24号文档标题虽为'跨境电商退货退款流程'但实际内容是促销活动（满200减30），且明确标注'退款流程不适用本促销'。真正的退货退款流程请参考退货政策"
+      },
+      "metadata": {
+        "domain": "trap",
+        "difficulty": "hard",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "ambiguous",
+        "answer_type": "factual",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-077",
+      "question": "Apple的保修政策是什么？（同形异义词消歧）",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "Apple Watch Series 10 包装盒标签要求:\n- 保修期 1 年(苹果公司官方政策)\n- 退换货标准:未拆封 7 天无理由,拆封后按官方售后政策",
+            "source_doc": "25_同形异义词.md",
+            "section": "Apple Watch 包装质检标准"
+          },
+          {
+            "text": "苹果(Apple Fruit)入库规格:\n- 货架期:冷库 60 天,常温 14 天",
+            "source_doc": "25_同形异义词.md",
+            "section": "水果入库质检标准(苹果)"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "Apple Watch保修1年",
+          "苹果水果货架期冷库60天/常温14天",
+          "需消歧"
+        ],
+        "required_docs": [
+          "25_同形异义词.md"
+        ],
+        "expected_answer": "'Apple'有双义：Apple Watch电子产品保修期1年（苹果公司官方政策）；苹果（水果）货架期冷库60天/常温14天。请明确指的是哪个"
+      },
+      "metadata": {
+        "domain": "trap",
+        "difficulty": "hard",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "ambiguous",
+        "answer_type": "factual",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-078",
+      "question": "跨境电商发货到欧盟需要什么认证？（一句话FAQ精确匹配）",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "Q:跨境电商发货到欧盟需要什么认证?\nA:CE 认证 + 海关申报(HS 编码)。",
+            "source_doc": "16_一句话FAQ.md",
+            "section": "FAQ"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "CE认证",
+          "海关申报",
+          "HS编码"
+        ],
+        "required_docs": [
+          "16_一句话FAQ.md"
+        ],
+        "expected_answer": "CE认证+海关申报（HS编码）"
+      },
+      "metadata": {
+        "domain": "compliance",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "ambiguous",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-079",
+      "question": "公司的促销活动有什么？（标题党文档干扰）",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "为感谢新老客户,本月推出满 200 减 30 的促销活动。\n活动时间:2026 年 9 月 1 日至 9 月 30 日。\n参与商品:全场自营跨境商品。",
+            "source_doc": "24_关键词干扰文档.md",
+            "section": "促销活动"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "满200减30",
+          "2026年9月1日至30日",
+          "全场自营跨境商品"
+        ],
+        "required_docs": [
+          "24_关键词干扰文档.md"
+        ],
+        "expected_answer": "2026年9月1日至30日满200减30促销活动，参与商品为全场自营跨境商品（跨境保税商品除外）"
+      },
+      "metadata": {
+        "domain": "promotion",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "ambiguous",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-080",
+      "question": "公司的流程有哪些？（歧义：多个流程）",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "8 步: 入库扫描 → 分拣打包 → 头程交接 → 跨境运输 → 清关申报 → 尾程派送 → 异常处理 → 数据归档",
+            "source_doc": "logistics_物流SOP.docx",
+            "section": "操作步骤"
+          },
+          {
+            "text": "离职须提前 30 日书面申请，完成工作交接清单签字后方可结算薪资",
+            "source_doc": "hr_员工手册.docx",
+            "section": "离职"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "物流SOP 8步",
+          "退货流程",
+          "采购流程",
+          "离职流程"
+        ],
+        "required_docs": [
+          "logistics_物流SOP.docx"
+        ],
+        "expected_answer": "公司涉及多个流程：物流SOP（8步）、退货流程、采购流程、离职流程等，请明确具体指哪个流程"
+      },
+      "metadata": {
+        "domain": "general",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "ambiguous",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": false,
+        "base_question_id": null
+      }
+    },
+    {
+      "id": "RC-081",
+      "question": "退货政策是什么？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。\n2.3 运费承担：买家承担来回运费。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "七天无理由退货"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "不影响二次销售",
+          "签收后7天内",
+          "买家承担运费"
+        ],
+        "required_docs": [
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "七天无理由退货需满足：商品不影响二次销售、包装配件齐全、签收后7天内申请、买家承担来回运费"
+      },
+      "metadata": {
+        "domain": "return_policy",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-012"
+      }
+    },
+    {
+      "id": "RC-082",
+      "question": "不想要了怎么退回去？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "七天无理由退货"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "不影响二次销售",
+          "签收后7天内"
+        ],
+        "required_docs": [
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "签收后7天内可申请退货，需商品不影响二次销售、包装配件齐全"
+      },
+      "metadata": {
+        "domain": "return_policy",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-012"
+      }
+    },
+    {
+      "id": "RC-083",
+      "question": "买了东西不满意可以退吗？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "七天无理由退货"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "可以退",
+          "7天内",
+          "不影响二次销售"
+        ],
+        "required_docs": [
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "可以，签收后7天内可申请无理由退货，需商品不影响二次销售、包装配件齐全"
+      },
+      "metadata": {
+        "domain": "return_policy",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-012"
+      }
+    },
+    {
+      "id": "RC-084",
+      "question": "系统的技术架构是怎样的？用了什么技术栈？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "采用前后端分离 + 微服务架构。",
+            "source_doc": "tech_技术手册.pdf",
+            "section": "架构总览"
+          },
+          {
+            "text": "前端 Vue 3 + TypeScript + Vite; 后端 Python 3.11（FastAPI）与 Node.js 22（NestJS）",
+            "source_doc": "tech_技术手册.pdf",
+            "section": "技术栈"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "前后端分离+微服务",
+          "Vue 3/FastAPI/NestJS"
+        ],
+        "required_docs": [
+          "tech_技术手册.pdf"
+        ],
+        "expected_answer": "前后端分离+微服务架构，前端Vue 3+TypeScript+Vite，后端Python 3.11(FastAPI)与Node.js 22(NestJS)"
+      },
+      "metadata": {
+        "domain": "tech",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-014"
+      }
+    },
+    {
+      "id": "RC-085",
+      "question": "后端用的什么语言和框架？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "后端 Python 3.11（FastAPI）与 Node.js 22（NestJS），混合",
+            "source_doc": "tech_技术手册.pdf",
+            "section": "技术栈"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "Python 3.11/FastAPI",
+          "Node.js 22/NestJS"
+        ],
+        "required_docs": [
+          "tech_技术手册.pdf"
+        ],
+        "expected_answer": "后端使用Python 3.11(FastAPI)与Node.js 22(NestJS)混合架构"
+      },
+      "metadata": {
+        "domain": "tech",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-014"
+      }
+    },
+    {
+      "id": "RC-086",
+      "question": "跨境运输有哪几种方式？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "海运拼箱:人民币 8.00 元 / kg\n空运快线:人民币 8 元 / kg\n专线快递:¥8 / kg",
+            "source_doc": "26_数字近似陷阱.md",
+            "section": "对比"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "海运拼箱",
+          "空运快线",
+          "专线快递"
+        ],
+        "required_docs": [
+          "26_数字近似陷阱.md"
+        ],
+        "expected_answer": "三种方式：海运拼箱、空运快线、专线快递"
+      },
+      "metadata": {
+        "domain": "logistics",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-046"
+      }
+    },
+    {
+      "id": "RC-087",
+      "question": "发到欧洲可以用什么物流？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "海运拼箱:深圳盐田 → 洛杉矶长滩\n空运快线:广州白云 → 法兰克福\n专线快递:义乌 → 马德里",
+            "source_doc": "26_数字近似陷阱.md",
+            "section": "路线"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "空运快线到法兰克福",
+          "专线快递到马德里"
+        ],
+        "required_docs": [
+          "26_数字近似陷阱.md"
+        ],
+        "expected_answer": "发往欧洲可用空运快线（广州→法兰克福，7-10天）或专线快递（义乌→马德里，5-7天）"
+      },
+      "metadata": {
+        "domain": "logistics",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "reasoning",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-046"
+      }
+    },
+    {
+      "id": "RC-088",
+      "question": "无理由退货的运费谁负责？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "2.3 运费承担：买家承担来回运费。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "七天无理由退货"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "买家承担来回运费"
+        ],
+        "required_docs": [
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "无理由退货由买家承担来回运费"
+      },
+      "metadata": {
+        "domain": "return_policy",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-004"
+      }
+    },
+    {
+      "id": "RC-089",
+      "question": "供应商是怎么分级的？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "A 级(战略): 年度评分 ≥ 90\nB 级(合格): 75–89\nC 级(观察): 60–74 → 限期整改、减少份额\nD 级(淘汰): < 60 或重大违规 → 移出名录",
+            "source_doc": "supplier_供应商管理规范.md",
+            "section": "供应商分级"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "A级≥90",
+          "B级75-89",
+          "C级60-74",
+          "D级<60"
+        ],
+        "required_docs": [
+          "supplier_供应商管理规范.md"
+        ],
+        "expected_answer": "供应商分ABCD四级：A级(战略)≥90分、B级(合格)75-89分、C级(观察)60-74分限期整改、D级(淘汰)<60分移出名录"
+      },
+      "metadata": {
+        "domain": "procurement",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-030"
+      }
+    },
+    {
+      "id": "RC-090",
+      "question": "采购合同怎么付款的？分几次付？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "签订后 3 个工作日内支付 30% 预付款\n验收合格后 7 个工作日内支付 65% 货款\n质保期满(交付后 90 日)无质量问题,支付剩余 5% 尾款",
+            "source_doc": "legal_采购合同.md",
+            "section": "付款方式"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "30%预付",
+          "65%验收后",
+          "5%质保期满"
+        ],
+        "required_docs": [
+          "legal_采购合同.md"
+        ],
+        "expected_answer": "分三次付款：签订后30%预付款、验收合格后65%、质保期满（交付后90日）5%尾款"
+      },
+      "metadata": {
+        "domain": "finance",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "single_doc",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-039"
+      }
+    },
+    {
+      "id": "RC-091",
+      "question": "七填无理由退霍是什么政策？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "二、七天无理由退货\n2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "七天无理由退货"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "七天无理由退货",
+          "不影响二次销售",
+          "签收后7天内"
+        ],
+        "required_docs": [
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "应为'七天无理由退货'政策：签收后7天内可申请，需商品不影响二次销售、包装配件齐全"
+      },
+      "metadata": {
+        "domain": "return_policy",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "robust_typo",
+        "answer_type": "factual",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": "RC-012"
+      }
+    },
+    {
+      "id": "RC-092",
+      "question": "电子产品的保休期是多久？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "电子产品按品牌政策,一般 1 年",
+            "source_doc": "faq_常见问题FAQ.md",
+            "section": "保修"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "一般1年"
+        ],
+        "required_docs": [
+          "faq_常见问题FAQ.md"
+        ],
+        "expected_answer": "电子产品保修期一般1年"
+      },
+      "metadata": {
+        "domain": "after_sales",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "robust_typo",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-006"
+      }
+    },
+    {
+      "id": "RC-093",
+      "question": "买了东西想退咋办？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "七天无理由退货"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "7天内申请",
+          "不影响二次销售"
+        ],
+        "required_docs": [
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "签收后7天内可申请退货，需商品不影响二次销售、包装配件齐全"
+      },
+      "metadata": {
+        "domain": "return_policy",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "robust_typo",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-012"
+      }
+    },
+    {
+      "id": "RC-094",
+      "question": "质量问题退货运费谁出？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "3.1 商品存在质量问题（破损/错发/性能故障),全额退款，商家承担运费。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "质量问题退货"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "商家承担运费",
+          "全额退款"
+        ],
+        "required_docs": [
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "质量问题退货由商家承担运费，全额退款"
+      },
+      "metadata": {
+        "domain": "return_policy",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "robust_typo",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-005"
+      }
+    },
+    {
+      "id": "RC-095",
+      "question": "发货到欧洲要多久啊大概？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "空运快线:时效:7-10 个自然日\n专线快递:时效:5-7 个自然日",
+            "source_doc": "26_数字近似陷阱.md",
+            "section": "空运快线"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "空运快线7-10天",
+          "专线快递5-7天"
+        ],
+        "required_docs": [
+          "26_数字近似陷阱.md"
+        ],
+        "expected_answer": "发往欧洲：空运快线7-10个自然日（广州→法兰克福），专线快递5-7个自然日（义乌→马德里）"
+      },
+      "metadata": {
+        "domain": "logistics",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "robust_typo",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-020"
+      }
+    },
+    {
+      "id": "RC-096",
+      "question": "我想问一下如果我在你们平台买了东西，签收之后发现不想要了，在什么条件下可以退回去，运费怎么算？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。\n2.3 运费承担：买家承担来回运费。",
+            "source_doc": "returns_退货政策.pdf",
+            "section": "七天无理由退货"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "不影响二次销售",
+          "包装配件齐全",
+          "签收后7天内",
+          "买家承担运费"
+        ],
+        "required_docs": [
+          "returns_退货政策.pdf"
+        ],
+        "expected_answer": "签收后7天内可申请无理由退货，需商品不影响二次销售、包装配件齐全，买家承担来回运费"
+      },
+      "metadata": {
+        "domain": "return_policy",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "robust_complex",
+        "answer_type": "factual",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": "RC-012"
+      }
+    },
+    {
+      "id": "RC-097",
+      "question": "请问一下我们公司跟供应商签的合同里，如果抽检不合格率超过一定比例就可以要求换货或退货，这个比例是多少来着？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "抽检不合格率超过 5% 时,甲方有权要求换货或退货",
+            "source_doc": "legal_采购合同.md",
+            "section": "质量要求"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "5%"
+        ],
+        "required_docs": [
+          "legal_采购合同.md"
+        ],
+        "expected_answer": "抽检不合格率超过5%时，甲方有权要求换货或退货"
+      },
+      "metadata": {
+        "domain": "procurement",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "robust_complex",
+        "answer_type": "numeric",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": "RC-021"
+      }
+    },
+    {
+      "id": "RC-098",
+      "question": "就是我们有一个新供应商要合作，然后采购金额比较大超过5万，请问需要谁审批？要不要签合同？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "50000 元以上需总经理审批",
+            "source_doc": "purchase_采购流程.docx",
+            "section": "审批分级"
+          },
+          {
+            "text": "单笔金额 10000 元以上必须签订书面合同",
+            "source_doc": "purchase_采购流程.docx",
+            "section": "合同签订"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "总经理审批",
+          "签订书面合同"
+        ],
+        "required_docs": [
+          "purchase_采购流程.docx"
+        ],
+        "expected_answer": "5万元以上需总经理审批，10000元以上必须签订书面合同"
+      },
+      "metadata": {
+        "domain": "procurement",
+        "difficulty": "medium",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "robust_complex",
+        "answer_type": "procedural",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": "RC-025"
+      }
+    },
+    {
+      "id": "RC-099",
+      "question": "我就是想了解一下如果员工要离职的话需要提前多少天说，然后还有什么其他要求吗？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "离职须提前 30 日书面申请，完成工作交接清单签字后方可结算薪资",
+            "source_doc": "hr_员工手册.docx",
+            "section": "离职"
+          }
+        ],
+        "should_reject": false,
+        "required_facts": [
+          "提前30日",
+          "书面申请",
+          "完成工作交接"
+        ],
+        "required_docs": [
+          "hr_员工手册.docx"
+        ],
+        "expected_answer": "须提前30日书面申请，完成工作交接清单签字后方可结算薪资"
+      },
+      "metadata": {
+        "domain": "hr",
+        "difficulty": "easy",
+        "source": "curated",
+        "schema_version": "4.0",
+        "query_type": "robust_complex",
+        "answer_type": "factual",
+        "tier": "core",
+        "requires_citation": true,
+        "base_question_id": "RC-017"
+      }
+    },
+    {
+      "id": "RC-100",
+      "question": "我们系统对可用性有什么要求？如果出故障了需要在多长时间内恢复？",
+      "module": "rag",
+      "kb_id": "rag_test_kb",
+      "expected": {
+        "ground_truth_context": [
+          {
+            "text": "整体可用性目标 ≥ 99.95%，P99 接口延迟 ≤ 500 ms，错误率 ≤ 0.1%",
+            "source_doc": "tech_技术手册.pdf",
             "section": "系统概述"
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "easy",
-        "domain": "tech_manual",
-        "fix_note": "2026-09-07: snippet 对齐文档原文。09_技术手册 已重写为正规手册（v1.0/TECH-001，十八章），§二 架构总览 原文『采用前后端分离 + 微服务架构』，无'主流架构'一词。历史：2026-08-21 曾对齐当时的『章节模板内容』版本，该版本已被替换",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-026",
-      "question": "技术手册要求的关键性能指标有哪些？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
+          },
           {
-            "text": "一、系统概述\n本系统支撑示例跨境电商公司面向全球买家的商品展示、交易、履约与售后全链路。整体可用性目标\n≥ 99.95%，P99 接口延迟 ≤ 500 ms，错误率 ≤ 0.1%。",
-            "source_doc": "rag_test_kb",
-            "section": "一、系统概述"
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "tech_manual",
-        "fix_note": "2026-08-21: 原问题（Planner/DAG）在 09_技术手册 中不存在（全文为章节模板内容），改为文档真实存在的性能指标问题",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-027",
-      "question": "技术手册中数据库设计章节讲了什么？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "十八、数据库设计\n所有表必须有主键、创建 / 更新时间、软删字段（is_deleted）。核心交易表使用 InnoDB + utf8mb4 + 按\nuser_id 分库分表。",
-            "source_doc": "rag_test_kb",
+            "text": "RPO ≤ 5 min，RTO ≤ 30 min",
+            "source_doc": "tech_技术手册.pdf",
             "section": "灾备方案"
           }
-        ]
-      },
-      "metadata": {
-        "difficulty": "hard",
-        "domain": "tech_manual",
-        "fix_note": "2026-09-07: snippet 对齐文档原文。§十八 数据库设计 原文『所有表必须有主键、创建/更新时间、软删字段(is_deleted)。核心交易表使用 InnoDB + utf8mb4 + 按 user_id 分库分表』，不含'设计原则'，改为具区分度的'分库分表'。历史：2026-08-21 原问题（schema/表清单）在旧版手册中不存在，改为针对第 18 章数据库设计的定位问题",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-028",
-      "question": "库存盘点的差异率要求是多少？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "第四章 盘点制度\n月度盘点：每月末由财务组织抽盘，差异率不超过 1%。\n年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。",
-            "source_doc": "rag_test_kb",
-            "section": "出入库流程"
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "hard",
-        "domain": "mixed",
-        "fix_note": "2026-08-21: 原问题问'整改'但文档只有差异率上限（月度≤1%/年度≤0.5%），改为差异率要求问题。历史：2026-08-19 golden truth 修正，盘点/差异率在 03_库存管理制度，不在 10_结构混乱的长文档",
-        "source": "curated",
-        "schema_version": "3.0",
-        "expected_answer": "月度盘点差异率不超过1%，年度盘点差异率不超过0.5%",
-        "must_contain": [
-          "1%",
-          "0.5%"
         ],
-        "generation_eval": true
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-029",
-      "question": "供应商交期拖延导致的问题怎么处理？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "供应商",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "交期",
-            "source_doc": "",
-            "section": ""
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "hard",
-        "domain": "mixed",
-        "fix_note": "2026-08-19: golden truth 修正。供应商/交期在 04_采购流程（合同含价格/质量/交期/违约责任），不在 10_结构混乱的长文档",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-030",
-      "question": "系统监控需要重点关注哪些指标？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "P99",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "可用性",
-            "source_doc": "",
-            "section": ""
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "hard",
-        "domain": "mixed",
-        "probe_note": "snippet 语义匹配：召回内容含\"P99\"和\"可用性\"关键词即 pass。技术手册实际用 P99/可用性≥99.9%/错误率（不是 P95/召回率）",
-        "fix_note": "2026-08-19: 关键词按文档实际内容修正（P99/可用性）",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-031",
-      "question": "采购合同签订后需要支付多少预付款？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "预付款",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "30%",
-            "source_doc": "",
-            "section": ""
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "easy",
-        "domain": "legal",
-        "doc_type": "legal",
-        "fix_note": "2026-08-20: 原问题『违约金赔付标准』的 ground truth 在 11_采购合同.md 中不存在（§六违约责任仅约定赔偿实际损失，无违约金/10%表述），替换为 §5.1『支付 30% 预付款』可验证用例",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-032",
-      "question": "采购合同的质保期是多久？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "质保",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "90 日",
-            "source_doc": "",
-            "section": ""
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "legal",
-        "doc_type": "legal",
-        "fix_note": "2026-08-20: 原问题『保密义务期限』的 ground truth 在 11_采购合同.md 中不存在（无任何保密条款），替换为 §5.3『质保期满(交付后 90 日)』可验证用例",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-033",
-      "question": "交货后甲方如何验收？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "验收",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "抽检",
-            "source_doc": "",
-            "section": ""
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "legal",
-        "doc_type": "legal",
-        "fix_note": "2026-08-20: snippet 由 AQL 改为抽检（AQL 在 04_采购流程，11_采购合同 §4.2 为『抽检不合格率超过 5%』）",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-034",
-      "question": "电子发票开具后多久能收到？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "Q：发票如何开具?\nA：在订单详情页提交开票申请，电子发票 3 个工作日内发至预留邮箱。",
-            "source_doc": "rag_test_kb",
-            "section": "发票如何开具?"
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "easy",
-        "domain": "order",
-        "fix_note": "2026-08-20: 原用例与 RT-008 完全重复（同一问题『安全库存的计算公式是什么？』），替换为 01_FAQ.md『发票如何开具? 电子发票 3 个工作日内发至预留邮箱』可验证新用例",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-035",
-      "question": "盘点差异率超过多少需要追责？",
-      "module": "rag",
-      "expected": {
-        "relevant_chunks": [],
-        "ground_truth_context": [
-          {
-            "text": "第四章 盘点制度\n月度盘点：每月末由财务组织抽盘，差异率不超过 1%。\n年度盘点：每年 12 月 31 日全员盘点，差异率不超过 0.5%。",
-            "source_doc": "rag_test_kb",
-            "section": "出入库流程"
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "inventory",
-        "doc_type": "policy",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-036",
-      "question": "技术手册要求系统可用性达到多少？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "一、系统概述\n本系统支撑示例跨境电商公司面向全球买家的商品展示、交易、履约与售后全链路。整体可用性目标\n≥ 99.95%，P99 接口延迟 ≤ 500 ms，错误率 ≤ 0.1%。",
-            "source_doc": "rag_test_kb",
-            "section": "一、系统概述"
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "tech_manual",
-        "doc_type": "tech_manual",
-        "fix_note": "2026-09-07: snippet 数值修正 99.9% → 99.95%。§一 系统概述 原文『整体可用性目标 ≥ 99.95%,P99 接口延迟 ≤ 500 ms,错误率 ≤ 0.1%』。历史：2026-08-21 原问题（连接池 min/max）在旧版手册中不存在，改为可用性指标问题；2026-08-20 doc_type 由 security 改为 tech_manual",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-037",
-      "question": "代码评审的关注点有哪些？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "六、代码评审\n所有合并请求至少 1 名同模块同事 + 1 名 Tech Lead\n评审通过方可合并。单次评审关注点：功能正确性、可测性、安全性、性能、可观测性。",
-            "source_doc": "rag_test_kb",
-            "section": "部署环境"
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "tech_manual",
-        "doc_type": "tech_manual",
-        "fix_note": "2026-09-07: 问题改写。原问题『系统遵循的设计原则有哪些？』在重写后的手册中已无 ground truth——全文不含'设计原则'/'实现要点'（那是旧版章节模板句式），沿用本集 v1.2→v1.3 做法改写为文档原文可验证用例：§六 代码评审『所有合并请求至少 1 名同模块同事 + 1 名 Tech Lead 评审通过方可合并。单次评审关注点：功能正确性、可测性、安全性、性能、可观测性』。doc_id/难度/doc_type 不变。历史：2026-08-20 doc_type 由 security 改为 tech_manual",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-038",
-      "question": "跨境电商发到欧盟需要什么认证？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "CE 认证",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "HS",
-            "source_doc": "",
-            "section": ""
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "easy",
-        "domain": "compliance",
-        "probe_type": "ultra_short_doc",
-        "probe_note": "16_一句话FAQ.md 全文<50 字，验证 chunker 极短文档边界（chunk_count 可能=1）",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-039",
-      "question": "跨境电商退货流程是怎样的？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "二、七天无理由退货\n2.1 适用条件：商品不影响二次销售，包装配件齐全。\n2.2 时间窗口：客户签收后 7 天（含）内申请。\n2.3 运费承担：买家承担来回运费。",
-            "source_doc": "rag_test_kb",
-            "section": "适用范围"
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "return_policy",
-        "probe_type": "title_distraction",
-        "probe_note": "24_关键词干扰文档.md 标题含'退货流程'但内容是营销活动；期望召回真实退货政策(06_)而非此干扰文档",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-040",
-      "question": "Apple Watch 包装盒有什么标签要求？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "25_同形异义词(Apple 双义)\n【仅供测试 · 内容虚构】\n第一篇:Apple Watch 包装质检标准\nApple Watch Series 10 包装盒标签要求：序列号 12 位(S/N 格式:ABC123XYZ456)\n防水等级 IP6X\n保修期 1 年（苹果公司官方政策）退换货标准：未拆封 7 天无理由，拆封后按官方售后政策\n适配机型:Watch Series 10 / Watch Ultra 2 / Watch SE(第三代)。\n第二篇：水果入库质检标准（苹果）苹果(Apple Fruit)入库规格：单果重量 ≥ 180g\n糖度 ≥ 13°(折光仪检测）无碰压伤、无虫眼\n储存温度:0-4°C\n货架期：冷库 60 天，常温 14 天\n产地要求：烟台富士、洛川富士、阿克苏冰糖心。",
-            "source_doc": "rag_test_kb",
-            "section": "25_同形异义词(Apple 双义)"
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "product_spec",
-        "probe_type": "word_disambiguation",
-        "probe_note": "25_同形异义词.md 第一篇(电子产品 Apple)，期望召回电子产品章节而非水果章节",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-041",
-      "question": "苹果水果入库糖度要求是多少？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "25_同形异义词(Apple 双义)\n【仅供测试 · 内容虚构】\n第一篇:Apple Watch 包装质检标准\nApple Watch Series 10 包装盒标签要求：序列号 12 位(S/N 格式:ABC123XYZ456)\n防水等级 IP6X\n保修期 1 年（苹果公司官方政策）退换货标准：未拆封 7 天无理由，拆封后按官方售后政策\n适配机型:Watch Series 10 / Watch Ultra 2 / Watch SE(第三代)。\n第二篇：水果入库质检标准（苹果）苹果(Apple Fruit)入库规格：单果重量 ≥ 180g\n糖度 ≥ 13°(折光仪检测）无碰压伤、无虫眼\n储存温度:0-4°C\n货架期：冷库 60 天，常温 14 天\n产地要求：烟台富士、洛川富士、阿克苏冰糖心。",
-            "source_doc": "rag_test_kb",
-            "section": "25_同形异义词(Apple 双义)"
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "inventory",
-        "probe_type": "word_disambiguation",
-        "probe_note": "25_同形异义词.md 第二篇(水果 Apple)，期望召回水果章节（同文档不同 chunk）",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-042",
-      "question": "海运拼箱的运费单价是多少？",
-      "module": "rag",
-      "expected": {
-        "ground_truth_context": [
-          {
-            "text": "海运拼箱",
-            "source_doc": "",
-            "section": ""
-          },
-          {
-            "text": "8.00",
-            "source_doc": "",
-            "section": ""
-          }
-        ]
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "logistics",
-        "probe_type": "numeric_sensitivity",
-        "probe_note": "26_数字近似陷阱.md 三档运费都是'8 元'但写法不同(8 / 8.00 / ¥8)；期望召回海运拼箱段('8.00 元')而非空运/专线",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-043",
-      "question": "你们公司 CEO 的薪酬是多少？",
-      "module": "rag",
-      "expected": {
-        "should_reject": true,
-        "ground_truth_context": []
-      },
-      "metadata": {
-        "difficulty": "hard",
-        "domain": "negative",
-        "probe_type": "negative_no_answer",
-        "probe_note": "知识库无此信息；期望系统拒答（v2 改造后由 reject_accuracy 指标判定）",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-044",
-      "question": "公司 2027 年的营收预测是多少？",
-      "module": "rag",
-      "expected": {
-        "should_reject": true,
-        "ground_truth_context": []
-      },
-      "metadata": {
-        "difficulty": "hard",
-        "domain": "negative",
-        "probe_type": "future_prediction",
-        "probe_note": "未来财务数据，KB 不含，期望拒答",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-045",
-      "question": "你们办公室的具体街道地址在哪？",
-      "module": "rag",
-      "expected": {
-        "should_reject": true,
-        "ground_truth_context": []
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "negative",
-        "probe_type": "physical_info",
-        "probe_note": "物理地址 KB 不含，期望拒答",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-046",
-      "question": "贵公司的 React 版本是什么？",
-      "module": "rag",
-      "expected": {
-        "should_reject": true,
-        "ground_truth_context": []
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "negative",
-        "probe_type": "internal_tech_stack",
-        "probe_note": "内部技术栈细节，KB 不含（技术手册是业务架构非前端栈），期望拒答",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-047",
-      "question": "介绍一下苹果公司的创始人乔布斯？",
-      "module": "rag",
-      "expected": {
-        "should_reject": true,
-        "ground_truth_context": []
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "negative",
-        "probe_type": "cross_domain",
-        "probe_note": "外部公司人物传记（虽含 'Apple' 字样但语义跨域），期望拒答",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-048",
-      "question": "下单时订单号怎么填？",
-      "module": "rag",
-      "expected": {
-        "should_reject": true,
-        "ground_truth_context": []
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "negative",
-        "probe_type": "ambiguous_query",
-        "probe_note": "模糊 query 无明确业务实体，期望拒答",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-049",
-      "question": "贵公司有什么样的企业文化？",
-      "module": "rag",
-      "expected": {
-        "should_reject": true,
-        "ground_truth_context": []
-      },
-      "metadata": {
-        "difficulty": "hard",
-        "domain": "negative",
-        "probe_type": "soft_info",
-        "probe_note": "软性企业文化信息，KB 是业务流程不含此类，期望拒答",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-050",
-      "question": "请问你们的仓库主管是谁？",
-      "module": "rag",
-      "expected": {
-        "should_reject": true,
-        "ground_truth_context": []
-      },
-      "metadata": {
-        "difficulty": "medium",
-        "domain": "negative",
-        "probe_type": "personal_info",
-        "probe_note": "人员个人信息，KB 不含（人名匹配可能误命中），期望拒答",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-051",
-      "question": "笔记本电脑的保修期是多久？",
-      "module": "rag",
-      "expected": {
-        "should_reject": true,
-        "ground_truth_context": []
-      },
-      "metadata": {
-        "difficulty": "hard",
-        "domain": "negative",
-        "probe_type": "hard_negative_near_miss",
-        "probe_note": "近似负样本：KB 含保修内容（01_FAQ 电子产品保修/02_售后FAQ）但仅限电水壶与泛称电子产品，无笔记本电脑具体政策；期望系统不被『保修』关键词带偏而硬答",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-052",
-      "question": "出口退税的申报流程是怎样的？",
-      "module": "rag",
-      "expected": {
-        "should_reject": true,
-        "ground_truth_context": []
-      },
-      "metadata": {
-        "difficulty": "hard",
-        "domain": "negative",
-        "probe_type": "hard_negative_near_miss",
-        "probe_note": "近似负样本：KB 含清关申报要素（07_物流SOP，含 HS编码/申报）但不含出口退税流程；期望系统区分『清关』与『退税』，不被报关类内容带偏",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-053",
-      "question": "员工年假天数是怎么规定的？",
-      "module": "rag",
-      "expected": {
-        "should_reject": true,
-        "ground_truth_context": []
-      },
-      "metadata": {
-        "difficulty": "hard",
-        "domain": "negative",
-        "probe_type": "hard_negative_near_miss",
-        "probe_note": "近似负样本：KB 含员工差旅制度（08_）但不含年假规定；期望系统区分『差旅报销』与『年假』，不被员工制度类内容带偏",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "RT-054",
-      "question": "数据库的备份策略是什么？",
-      "module": "rag",
-      "expected": {
-        "should_reject": true,
-        "ground_truth_context": []
-      },
-      "metadata": {
-        "difficulty": "hard",
-        "domain": "negative",
-        "probe_type": "hard_negative_near_miss",
-        "probe_note": "近似负样本：技术手册（09_）含数据库 schema/连接池参数但不含备份策略；期望系统不被『数据库』关键词带偏而硬答",
-        "source": "curated",
-        "schema_version": "3.0"
-      },
-      "kb_id": "rag_test_kb"
-    },
-    {
-      "id": "DEPT-001",
-      "question": "年假怎么申请？请假流程是什么？",
-      "module": "rag",
-      "expected": {
-        "allowed_departments": [
-          "hr"
+        "should_reject": false,
+        "required_facts": [
+          "可用性≥99.95%",
+          "RTO≤30min",
+          "RPO≤5min"
         ],
-        "forbidden_departments": [
-          "finance"
+        "required_docs": [
+          "tech_技术手册.pdf"
         ],
-        "ground_truth_context": [
-          {
-            "text": "请假与考勤制度（人力资源部）\n1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。\n2. 病假与事假\n病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。\n3. 考勤异常\n迟到 / 早退每月允许 3 次免责机会，超出部分按事假扣减。旷工当日不计薪并记\n过一次，连续旷工 3 天按严重违纪处理。\n4. 调休\n周末加班可申请调休，调休有效期为加班发生起 90 天内，逾期自动作废。",
-            "source_doc": "be99388a67",
-            "section": "请假与考勤制度（人力资源部）"
-          },
-          {
-            "text": "1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。",
-            "source_doc": "be99388a67",
-            "section": "1. 年假申请"
-          },
-          {
-            "text": "正式员工入职满 1 年后享有带薪年假，天数按司龄递增：",
-            "source_doc": "be99388a67",
-            "section": "1. 年假申请"
-          },
-          {
-            "text": "司龄 1-3 年：5 天/年",
-            "source_doc": "be99388a67",
-            "section": "1. 年假申请"
-          }
-        ]
+        "expected_answer": "系统可用性目标≥99.95%，RPO≤5分钟，RTO≤30分钟"
       },
       "metadata": {
-        "kb_id": "policy_general",
-        "department": "hr",
-        "difficulty": "easy",
-        "domain": "hr",
-        "isolation_test": true,
-        "fix_note": "部门隔离正向：policy_general/hr 内召回 hr 文档，不得出现 finance",
-        "source": "curated",
-        "schema_version": "3.0"
-      }
-    },
-    {
-      "id": "DEPT-002",
-      "question": "报销流程怎么走？预算审批权限是怎样的？",
-      "module": "rag",
-      "expected": {
-        "allowed_departments": [
-          "finance"
-        ],
-        "forbidden_departments": [
-          "hr"
-        ],
-        "ground_truth_context": [
-          {
-            "text": "费用报销制度（财务部）\n1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。\n2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。\n3. 发票要求\n报销须提供增值税发票，抬头须与公司全称一致，税号正确。连号发票、作废发票\n一律退回。跨年发票不予报销。\n4. 报销时效\n费用发生后 30 日内须提交报销，逾期需书面说明。每月 25 日之后提交的报销\n顺延至次月付款。",
-            "source_doc": "04a34059af",
-            "section": "费用报销制度（财务部）"
-          },
-          {
-            "text": "1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。",
-            "source_doc": "04a34059af",
-            "section": "1. 报销范围"
-          },
-          {
-            "text": "可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。",
-            "source_doc": "04a34059af",
-            "section": "1. 报销范围"
-          },
-          {
-            "text": "2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
-            "source_doc": "04a34059af",
-            "section": "2. 报销流程"
-          }
-        ]
-      },
-      "metadata": {
-        "kb_id": "policy_general",
-        "department": "finance",
-        "difficulty": "easy",
-        "domain": "finance",
-        "isolation_test": true,
-        "fix_note": "部门隔离正向：policy_general/finance 内召回 finance 文档，不得出现 hr",
-        "source": "curated",
-        "schema_version": "3.0"
-      }
-    },
-    {
-      "id": "DEPT-003",
-      "question": "公司报销标准是多少？发票有什么要求？",
-      "module": "rag",
-      "expected": {
-        "allowed_departments": [
-          "hr"
-        ],
-        "forbidden_departments": [
-          "finance"
-        ],
-        "ground_truth_context": [
-          {
-            "text": "费用报销制度（财务部）\n1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。\n2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。\n3. 发票要求\n报销须提供增值税发票，抬头须与公司全称一致，税号正确。连号发票、作废发票\n一律退回。跨年发票不予报销。\n4. 报销时效\n费用发生后 30 日内须提交报销，逾期需书面说明。每月 25 日之后提交的报销\n顺延至次月付款。",
-            "source_doc": "04a34059af",
-            "section": "费用报销制度（财务部）"
-          },
-          {
-            "text": "1. 报销范围\n可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。",
-            "source_doc": "04a34059af",
-            "section": "1. 报销范围"
-          },
-          {
-            "text": "可报销费用包括差旅费、业务招待费、办公采购费及经审批的市场费用。个人消费、\n罚款、礼品卡等不在报销范围内。",
-            "source_doc": "04a34059af",
-            "section": "1. 报销范围"
-          },
-          {
-            "text": "2. 报销流程\n员工在财务系统提交报销单，附合规发票与审批单 → 部门负责人审批 →\n财务复核 → 出纳付款。单笔超过 5000 元需财务总监加签。",
-            "source_doc": "04a34059af",
-            "section": "2. 报销流程"
-          }
-        ]
-      },
-      "metadata": {
-        "kb_id": "policy_general",
-        "department": "hr",
+        "domain": "tech",
         "difficulty": "hard",
-        "domain": "hr",
-        "isolation_test": true,
-        "fix_note": "跨部门泄漏守卫：hr 视角问 finance 话题，检索不得泄漏 finance 文档",
         "source": "curated",
-        "schema_version": "3.0"
-      }
-    },
-    {
-      "id": "DEPT-004",
-      "question": "工资什么时候发？个税怎么算？",
-      "module": "rag",
-      "expected": {
-        "allowed_departments": [
-          "hr"
-        ],
-        "forbidden_departments": [
-          "finance"
-        ],
-        "ground_truth_context": [
-          {
-            "text": "薪酬与个税（人力资源部）\n1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。\n2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系统每月自动完成个税预扣并生成工资条。\n3. 社保与公积金\n公司按属地标准为员工缴纳五险一金，个人部分从工资中代扣。入职当月即参保，\n离职次月停保。\n4. 调薪\n年度调薪每年 4 月评审一次，结合绩效等级与市场分位确定，结果由 HR 一对一\n沟通。",
-            "source_doc": "79028b7792",
-            "section": "薪酬与个税（人力资源部）"
-          },
-          {
-            "text": "1. 发薪日\n工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。",
-            "source_doc": "79028b7792",
-            "section": "1. 发薪日"
-          },
-          {
-            "text": "工资于每月 10 日发放上月薪资；遇法定节假日顺延至节后首个工作日。",
-            "source_doc": "79028b7792",
-            "section": "1. 发薪日"
-          },
-          {
-            "text": "2. 个税计算\n个人所得税按累计预扣法计算，起征点 5000 元/月，专项附加扣除含子女教育、\n住房贷款利息、赡养老人等。HR 系统每月自动完成个税预扣并生成工资条。",
-            "source_doc": "79028b7792",
-            "section": "2. 个税计算"
-          }
-        ]
-      },
-      "metadata": {
-        "kb_id": "policy_general",
-        "department": "hr",
-        "difficulty": "easy",
-        "domain": "hr",
-        "isolation_test": true,
-        "fix_note": "部门隔离正向：薪酬类 hr 文档召回，finance 不串",
-        "source": "curated",
-        "schema_version": "3.0"
-      }
-    },
-    {
-      "id": "DEPT-005",
-      "question": "年假和调休怎么算？",
-      "module": "rag",
-      "expected": {
-        "allowed_departments": [
-          "finance"
-        ],
-        "forbidden_departments": [
-          "hr"
-        ],
-        "ground_truth_context": [
-          {
-            "text": "请假与考勤制度（人力资源部）\n1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。\n2. 病假与事假\n病假须上传正规医疗机构出具的诊断证明；连续病假超过 5 个工作日需 HR 复核。\n事假全年累计不得超过 15 天，单次超过 3 天需部门负责人加签。\n3. 考勤异常\n迟到 / 早退每月允许 3 次免责机会，超出部分按事假扣减。旷工当日不计薪并记\n过一次，连续旷工 3 天按严重违纪处理。\n4. 调休\n周末加班可申请调休，调休有效期为加班发生起 90 天内，逾期自动作废。",
-            "source_doc": "be99388a67",
-            "section": "请假与考勤制度（人力资源部）"
-          },
-          {
-            "text": "1. 年假申请\n正式员工入职满 1 年后享有带薪年假，天数按司龄递增：\n司龄 1-3 年：5 天/年\n司龄 3-10 年：10 天/年\n司龄 10 年以上：15 天/年\n年假需通过 HR 系统提前 3 个工作日提交申请，由直属主管与 HR 依次审批。",
-            "source_doc": "be99388a67",
-            "section": "1. 年假申请"
-          },
-          {
-            "text": "正式员工入职满 1 年后享有带薪年假，天数按司龄递增：",
-            "source_doc": "be99388a67",
-            "section": "1. 年假申请"
-          },
-          {
-            "text": "司龄 1-3 年：5 天/年",
-            "source_doc": "be99388a67",
-            "section": "1. 年假申请"
-          }
-        ]
-      },
-      "metadata": {
-        "kb_id": "policy_general",
-        "department": "finance",
-        "difficulty": "hard",
-        "domain": "finance",
-        "isolation_test": true,
-        "fix_note": "跨部门泄漏守卫：finance 视角问 hr 话题，检索不得泄漏 hr 文档",
-        "source": "curated",
-        "schema_version": "3.0"
+        "schema_version": "4.0",
+        "query_type": "robust_complex",
+        "answer_type": "numeric",
+        "tier": "hard",
+        "requires_citation": true,
+        "base_question_id": "RC-015"
       }
     }
   ]

@@ -28,6 +28,98 @@ def _filter_by_metadata(docs: list, metadata_filter: dict | None) -> list:
     ]
 
 
+import re
+
+
+# =====================================================
+# 三层查询路由分类器
+# =====================================================
+# vector_only:         简单 FAQ → 纯向量检索（跳过 BM25 + MultiQuery）
+# hybrid:              普通查询 / 精确标识符 → Vector + BM25 + RRF
+# hybrid_multi_query:  复杂 / 多意图 / 多跳 → Vector + BM25 + LLM 改写多路召回
+
+# 精确标识符正则：检测到任一则 HYBRID（BM25 精确匹配有不可替代的价值）
+# 注意：
+# 1. 全部要求大写/明确边界，避免误伤自然语言中的英文单词
+# 2. 使用 [A-Za-z0-9] 而非 \w，因为 \w 在 Python 中默认匹配 Unicode（含中文）
+_EXACT_IDENTIFIER_PATTERNS = [
+    re.compile(r'\b[A-Z]{2,}[-_]\d{3,}\b'),                      # SKU/型号: AB-1234, XY_5678（须带连字符/下划线）
+    re.compile(r'(?:订单|单号|流水号)[号:]?\s*[A-Za-z0-9]{6,}'),   # 订单号（仅英文数字，不匹配中文）
+    re.compile(r'(?:错误码|错误号|error\s*code)[号:]?\s*[A-Za-z0-9]+', re.I),  # 错误码（仅英文数字）
+    re.compile(r'(?:保单|合同)(?:(?:编号|号|ID)[:：]?\s*|[:：]\s*)[A-Z0-9][A-Z0-9_-]{3,}', re.I),  # 保单/合同编号（须有"编号/号/ID"标签或冒号分隔）
+    re.compile(r'\b\d{4,}[-_]\d{4,}\b'),                          # 长数字序列（工单号，须带分隔符）
+    re.compile(r'\bv\d+\.\d+(?:\.\d+)?\b', re.I),                 # 版本号: v2.1, v3.0.1（须 v 前缀）
+    re.compile(r'\b[A-Z]{1,4}\d{3,6}\b'),                         # 型号: A1234, AB5678（大写+3位以上数字+词边界）
+    re.compile(r'(?:条款|条例|法规)\s*第?\s*\d+[条款章节]'),        # 法律条款引用
+    re.compile(r'\b0x[A-Fa-f0-9]{4,}\b'),                         # 十六进制错误码: 0x80004005
+    re.compile(r'\b[A-Z]{2,}_\d{2,}\b'),                          # 下划线格式: ERR_1234, CODE_5678
+]
+
+# 复杂查询信号：多意图 / 对比 / 多跳推理 → HYBRID_MULTI_QUERY
+_COMPLEX_PATTERNS = [
+    "分析", "对比", "比较", "总结", "汇总", "概述",
+    "全部", "所有", "区别", "差异", "不同",
+    "优缺点", "利弊", "优劣",
+    "关系", "影响", "作用", "意义",
+    "以及", "同时", "另外", "还有", "并且",
+]
+
+# 多问号 / 多句子 → 多意图
+_MULTI_QUESTION_THRESHOLD = 2
+
+
+def _classify_query_tier(query: str) -> str:
+    """三层查询分类。统一控制 BM25 开关 + MultiQuery 触发。
+
+    优先级：Tier 3（复杂意图）→ Tier 2（精确标识符）→ Tier 1（兜底）
+    复杂意图优先：含"分析""对比"等多意图查询即使包含产品型号，
+    也需要 LLM 改写出多个子查询，而非仅靠 BM25 精排。
+
+    Returns:
+        "vector_only" | "hybrid" | "hybrid_multi_query"
+    """
+    from backend.config.rag import ADAPTIVE_RETRIEVAL_MODE
+
+    if ADAPTIVE_RETRIEVAL_MODE in ("vector_only", "hybrid", "hybrid_multi_query"):
+        return ADAPTIVE_RETRIEVAL_MODE
+
+    q = query.strip()
+
+    # ── Tier 3: 复杂 / 多意图 → HYBRID_MULTI_QUERY（最高优先级）──
+    # 多个问号/句子（多意图）
+    question_marks = q.count("？") + q.count("?")
+    # 过滤空字符串，避免 "问题？" split 后得到 ["问题", ""] 误判
+    sentence_parts = [
+        x.strip() for x in re.split(r'[。！？；!?;.\.]', q) if x.strip()
+    ]
+    if question_marks >= _MULTI_QUESTION_THRESHOLD or len(sentence_parts) >= 3:
+        return "hybrid_multi_query"
+
+    # 复杂推理关键词
+    for pat in _COMPLEX_PATTERNS:
+        if pat in q:
+            return "hybrid_multi_query"
+
+    # ── Tier 2: 精确标识符 → HYBRID ──
+    # 错误码/订单号/SKU 等在知识库中通常有标准文档，
+    # Vector + BM25 精排效果远好于纯向量检索
+    for pattern in _EXACT_IDENTIFIER_PATTERNS:
+        if pattern.search(q):
+            return "hybrid"
+
+    # ── Tier 1: 简单 FAQ → VECTOR_ONLY ──
+    return "vector_only"
+
+
+# 向后兼容别名
+def _classify_query_mode(query: str) -> str:
+    """Deprecated: 使用 _classify_query_tier()。返回 'vector_only' 或 'hybrid'。"""
+    tier = _classify_query_tier(query)
+    if tier == "hybrid_multi_query":
+        return "hybrid"
+    return tier
+
+
 def _evaluate_retrieval_gate(merged: list, query: str):
     """Retrieval 阶段 Gate 评估，返回 GateDecision（总开关关闭时透传判定）。
 
@@ -119,9 +211,54 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
             logger.warning(f"[hybrid_retrieve] Enhanced retrieval error ({e}), falling back to original")
     
     # Fallback: 原始 hybrid 逻辑
-    logger.info(f"[hybrid_retrieve] Using ORIGINAL retrieval (adaptive disabled or fallback)")
     from backend.observability.tracer import SpanName, trace_collector
     span = trace_collector.start_span("hybrid_retrieval", name=SpanName.HYBRID_RETRIEVAL, parent_id=None)
+
+    # ── 三层查询路由：vector_only / hybrid / hybrid_multi_query ──
+    query_tier = _classify_query_tier(query)
+    logger.info(f"[hybrid_retrieve] query_tier={query_tier} for query='{query[:50]}...'")
+
+    if query_tier == "vector_only":
+        # Vector-only 路径：跳过 BM25，避免关键词噪声稀释语义信号
+        from backend.infra.thread_pools import retrieval_pool_inner
+        ex = retrieval_pool_inner()
+        try:
+            vector_docs = ex.submit(
+                vector_retriever.retrieve, query, k=k, doc_ids=doc_ids,
+                metadata_filter=metadata_filter, expanded_queries=expanded_queries,
+            ).result()
+        except Exception as e:
+            logger.warning(f"[hybrid_retrieve] Vector-only 检索失败: {e}", exc_info=True)
+            trace_collector.end_span(span, status="error",
+                                     metrics={"query_tier": "vector_only", "error": str(e)[:100]})
+            raise
+
+        vector_docs = _filter_by_metadata(vector_docs, metadata_filter)
+        if doc_ids:
+            vector_docs = [d for d in vector_docs if d.metadata.get("doc_id") in doc_ids]
+
+        # 注入 rrf_score 占位（与 hybrid 路径 metadata 协议对齐）
+        for rank, doc in enumerate(vector_docs[:k], start=1):
+            doc.metadata["rrf_score"] = round(1 / (rrf_k + rank), 4)
+            doc.metadata["retrieval_mode"] = "vector_only"
+
+        trace_collector.add_event(span, "vector_only", "info",
+                                  f"Vector-only: {len(vector_docs[:k])} docs (BM25 skipped)")
+        trace_collector.end_span(span, metrics={
+            "query_tier": "vector_only",
+            "vector_hits": len(vector_docs),
+            "bm25_hits": 0,
+            "merged_hits": min(len(vector_docs), k),
+        })
+
+        merged = vector_docs[:k]
+        if merged:
+            try:
+                decision = _evaluate_retrieval_gate(merged, query)
+                merged[0].metadata["__evidence_gate_decision__"] = decision.to_metrics()
+            except Exception as e:
+                logger.warning(f"[hybrid_retrieve] evidence_gate 评估异常: {e}")
+        return merged
 
     # 财务 SQL 旁路检索：查询含财务指标 + 数值条件时并行执行
     sql_docs: list = []
@@ -201,7 +338,8 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
     merged = []
     for cid, rrf_score in sorted_cids[:k]:
         doc = doc_dict[cid]
-        doc.metadata["rrf_score"] = round(rrf_score, 4)  # 保留 RRF 分数
+        doc.metadata["rrf_score"] = round(rrf_score, 4)
+        doc.metadata["retrieval_mode"] = "hybrid"
         merged.append(doc)
 
     # ── Retrieval Debug event ──
@@ -230,7 +368,8 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
 
     metrics = {"vector_hits": len(vector_docs),
                "bm25_hits": len(bm25_docs),
-               "merged_hits": len(merged)}
+               "merged_hits": len(merged),
+               "query_tier": query_tier}
     if sql_bypass_used:
         metrics["sql_bypass_hits"] = len(sql_docs)
     if failures:

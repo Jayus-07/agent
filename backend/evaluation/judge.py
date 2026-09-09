@@ -1,41 +1,14 @@
 """LLM-as-Judge 评分器 — 用 LLM 对端到端答案进行 4 维质量评分。
 
-可移植性：此文件不硬编码任何特定 LLM 实现。通过 set_llm_callable() 注入 LLM 调用函数，
-即可在任何项目中使用。默认 fallback 返回 3.0 分。
+可移植性：此文件不硬编码任何特定 LLM 实现。默认使用项目 LLM（backend.infra.llm）。
+异常时返回 total=0.0（明确失败），而非 3.0（会误判为通过）。
 """
 
-from typing import Callable
 from pydantic import BaseModel, Field, model_validator
-
-# 可注入的 LLM 调用函数：接受 prompt 字符串，返回 response 字符串
-_llm_callable: Callable[[str], str] | None = None
-
-
-def set_llm_callable(fn: Callable[[str], str]) -> None:
-    """注入 LLM 调用函数。新项目复制评估框架后调用此函数设置自己的 LLM。
-
-    Args:
-        fn: 签名为 (prompt: str) -> str 的可调用对象。
-            如果 LLM 返回对象，需要包装成提取 .content 的函数。
-
-    Example:
-        >>> from backend.infra.llm import get_llm
-        >>> llm = get_llm()
-        >>> def my_llm(prompt: str) -> str:
-        ...     resp = llm.invoke(prompt)
-        ...     return resp.content if hasattr(resp, 'content') else str(resp)
-        >>> set_llm_callable(my_llm)
-    """
-    global _llm_callable
-    _llm_callable = fn
 
 
 def _get_llm_response(prompt: str) -> str:
-    """获取 LLM 回复：优先使用注入的可调用对象，否则尝试默认导入。"""
-    global _llm_callable
-    if _llm_callable is not None:
-        return _llm_callable(prompt)
-    # fallback: 尝试导入项目默认 LLM
+    """获取 LLM 回复：使用项目默认 LLM。"""
     try:
         from backend.infra.llm import get_llm
         llm = get_llm()
@@ -43,15 +16,14 @@ def _get_llm_response(prompt: str) -> str:
         return resp.content if hasattr(resp, "content") else str(resp)
     except ImportError:
         raise RuntimeError(
-            "LLM not available. Either call evaluation.judge.set_llm_callable(fn) "
-            "or ensure llm.llm_factory.get_llm() is importable."
+            "LLM not available. Ensure backend.infra.llm.get_llm() is importable."
         )
 
 
 class JudgeResult(BaseModel):
     """LLM 裁判的评分结果。"""
     scores: dict[str, int] = Field(description="4维评分: completeness/faithfulness/conciseness/citation_quality")
-    total: float = Field(ge=1.0, le=5.0, description="加权综合分")
+    total: float = Field(ge=0.0, le=5.0, description="加权综合分 (0.0=评估失败)")
     reasoning: str = Field(description="评分理由")
     confidence: str = Field(default="medium", description="裁判置信度: low/medium/high")
 
@@ -152,10 +124,10 @@ def judge_answer(
             confidence=data.get("confidence", "medium"),
         )
     except Exception as e:
-        # LLM 调用失败时返回默认低分
+        # LLM 调用失败时返回明确失败分数（0.0），而非 3.0（会误判为通过）
         return JudgeResult(
-            scores={"completeness": 3, "faithfulness": 3, "conciseness": 3, "citation_quality": 3},
-            total=3.0,
+            scores={"completeness": 1, "faithfulness": 1, "conciseness": 1, "citation_quality": 1},
+            total=0.0,
             reasoning=f"Judge evaluation failed: {e}",
             confidence="low",
         )

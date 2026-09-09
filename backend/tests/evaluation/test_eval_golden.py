@@ -2,72 +2,82 @@
 
 用途：
   1. 本地 pre-commit / pre-push 快速验证 RAG 检索质量
-  2. GitHub Actions CI quality gate
+  2. GitHub Actions CI quality gate（Deterministic tier）
   3. 前端 /evaluations "运行" 按钮的离线后端
 
 运行方式：
-  # 仅 golden set（13 条，~30s）
+  # golden set（10 条 CI 门禁子集）
   pytest backend/tests/evaluation/test_eval_golden.py -v
 
-  # 完整评测集（59 条，~2min）
+  # 完整评测集（145 条 canonical）
   pytest backend/tests/evaluation/test_eval_golden.py -v --full
 
 环境变量：
   RERANKER_BACKEND=local   强制离线（CI 默认）
+  EVAL_GATE=legacy         CI 默认（Deterministic tier）
+  EVAL_GATE=semantic       离线全量（含 Semantic tier）
   HF_ENDPOINT             HF 模型镜像（CI 用 hf-mirror.com）
+
+三层指标体系（V4）：
+  Tier 1 Deterministic（CI 必跑）: recall@k, MRR, NDCG, chunk_recall, dept_leak
+  Tier 2 Semantic（离线/夜间）: sem_context_recall, sem_faithfulness
+  Tier 3 LLM Judge（夜间）: judge_completeness, judge_faithfulness
 """
 
-import json
 import math
 import os
-from pathlib import Path
 
 import pytest
 
-# 强制离线：CI 和本地预检都不应调用付费 API
 os.environ.setdefault("RERANKER_BACKEND", "local")
 
-DATASETS_DIR = Path(__file__).resolve().parents[2] / "evaluation" / "datasets"
-GOLDEN_SET_PATH = DATASETS_DIR / "golden_set.json"
-FULL_DATASET_PATH = DATASETS_DIR / "rag_test_kb.json"
+
+def _is_semantic_mode() -> bool:
+    """当前是否运行在 Semantic 模式（shadow / semantic）。"""
+    from backend.evaluation.runners._common import gate_mode
+    return gate_mode() in ("shadow", "semantic")
 
 
-def _load_golden_ids() -> list[str]:
-    with open(GOLDEN_SET_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data["selected_ids"]
+def _load_golden_cases():
+    """加载 CI golden 子集（10 条）。ID 不可解析时直接 FAIL。"""
+    from backend.evaluation.dataset import load_dataset
+    return load_dataset("rag", selection="ci_golden")
 
 
 def _load_golden_thresholds() -> dict:
-    with open(GOLDEN_SET_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data.get("thresholds", {})
+    """从 ci_golden.jsonl 的 companion 元数据或默认值获取阈值。"""
+    return {
+        "recall_at_5_min": 0.60,
+        "mrr_min": 0.50,
+        "sem_context_recall_min": 0.50,
+        "sem_context_precision_min": 0.40,
+        "reject_accuracy_min": 0.80,
+        "dept_isolation_pass": True,
+        "sem_faithfulness_min": 0.50,
+        "sem_answer_correctness_min": 0.40,
+    }
 
 
-def _run_rag_cases(case_ids: list[str]) -> list:
-    """加载数据集 → 过滤指定 case → 运行 RAG runner → 返回 EvalResult 列表。"""
-    from backend.evaluation.dataset import load_dataset_file
-    from backend.evaluation.runners.builtin import _run_rag
+def _run_rag_cases(selection: str = "ci_golden") -> tuple:
+    """通过 EvaluationService 运行指定评测集 — 单一核心链路。"""
+    from backend.evaluation.config import EvalConfig
+    from backend.evaluation.service import EvaluationService
 
-    all_cases = load_dataset_file("rag_test_kb.json", default_module="rag")
-    id_set = set(case_ids)
-    filtered = [c for c in all_cases if c.id in id_set]
+    config = EvalConfig(
+        module="rag",
+        dataset="rag",
+        selection=selection,
+        live=False,
+    )
+    report = EvaluationService().evaluate(config)
+    return report, report.results
 
-    missing = id_set - {c.id for c in filtered}
-    if missing:
-        pytest.skip(f"Golden set 中有 ID 在数据集中不存在: {sorted(missing)}")
-
-    return _run_rag(filtered)
-
-
-# ── Session-scoped fixture：避免重复加载模型 ──────────────────
 
 @pytest.fixture(scope="module")
 def golden_results(request):
     """运行 golden set 并缓存结果（module 级共享，避免重复检索）。"""
-    ids = _load_golden_ids()
-    results = _run_rag_cases(ids)
-    request.config._golden_eval_results = results
+    report, results = _run_rag_cases()
+    request.config._golden_eval_report = report
     return results
 
 
@@ -79,17 +89,46 @@ def thresholds():
 # ── 聚合指标测试 ──────────────────────────────────────────────
 
 class TestGoldenSetAggregate:
-    """Golden set 聚合指标断言。"""
+    """Golden set 聚合指标断言 — Deterministic tier（所有模式均运行）。"""
 
     def test_no_errors(self, golden_results):
-        """所有用例不应出现 error 状态。"""
         errors = [r for r in golden_results if r.status == "error"]
         if errors:
             msgs = [f"{r.case_id}: {r.error_msg}" for r in errors]
             pytest.fail(f"{len(errors)} 条用例出错:\n" + "\n".join(msgs))
 
+    def test_recall_at_k(self, golden_results, thresholds):
+        min_recall = thresholds.get("recall_at_5_min", 0.60)
+        recalls = [
+            r.metrics.get("recall@5", 0)
+            for r in golden_results
+            if r.status != "error" and not math.isnan(r.metrics.get("recall@5", 0))
+        ]
+        if not recalls:
+            pytest.fail("无有效评测结果（所有用例 recall@5 均为 NaN）")
+        avg = sum(recalls) / len(recalls)
+        assert avg >= min_recall, (
+            f"平均 recall@5={avg:.2%} < 阈值 {min_recall:.0%}"
+        )
+
+    def test_mrr(self, golden_results, thresholds):
+        min_mrr = thresholds.get("mrr_min", 0.50)
+        mrrs = [
+            r.metrics.get("mrr", 0)
+            for r in golden_results
+            if r.status != "error" and not math.isnan(r.metrics.get("mrr", 0))
+        ]
+        if not mrrs:
+            pytest.fail("无有效评测结果（所有用例 MRR 均为 NaN）")
+        avg = sum(mrrs) / len(mrrs)
+        assert avg >= min_mrr, (
+            f"平均 MRR={avg:.2%} < 阈值 {min_mrr:.0%}"
+        )
+
     def test_context_recall(self, golden_results, thresholds):
-        """语义上下文召回率 ≥ 阈值。"""
+        """语义上下文召回率 — 仅 Semantic 模式运行。"""
+        if not _is_semantic_mode():
+            pytest.skip("Deterministic tier 不检查语义召回")
         min_recall = thresholds.get("sem_context_recall_min", 0.50)
         cases_with_gt = [
             r for r in golden_results
@@ -97,7 +136,7 @@ class TestGoldenSetAggregate:
             or r.expected.get("relevant_snippets")
         ]
         if not cases_with_gt:
-            pytest.skip("Golden set 无上下文标注用例")
+            pytest.fail("Golden set 无上下文标注用例")
         recalls = [r.metrics.get("sem_context_recall", 0) for r in cases_with_gt]
         avg = sum(recalls) / len(recalls)
         assert avg >= min_recall, (
@@ -105,7 +144,6 @@ class TestGoldenSetAggregate:
         )
 
     def test_reject_accuracy(self, golden_results, thresholds):
-        """拒答用例准确率 ≥ 阈值。"""
         min_acc = thresholds.get("reject_accuracy_min", 0.80)
         negative = [r for r in golden_results if r.expected.get("should_reject")]
         if not negative:
@@ -118,7 +156,6 @@ class TestGoldenSetAggregate:
         )
 
     def test_dept_isolation(self, golden_results, thresholds):
-        """部门隔离用例无泄漏。"""
         if not thresholds.get("dept_isolation_pass", True):
             pytest.skip("部门隔离断言已禁用")
         dept_cases = [
@@ -135,33 +172,47 @@ class TestGoldenSetAggregate:
         )
 
 
-# ── 单条用例明细测试（方便定位失败点）─────────────────────────
+# ── 单条用例明细测试 ──────────────────────────────────────────
+
+def _golden_case_ids() -> list[str]:
+    return [c.id for c in _load_golden_cases()]
+
 
 class TestGoldenSetPerCase:
-    """逐条用例 pass/fail 断言 — 失败时直接显示哪个 case 出了问题。"""
+    """逐条 pass/fail 断言。"""
 
-    @pytest.mark.parametrize("case_id", _load_golden_ids())
+    @pytest.mark.parametrize("case_id", _golden_case_ids())
     def test_case_pass(self, golden_results, case_id):
         result_map = {r.case_id: r for r in golden_results}
         r = result_map.get(case_id)
         assert r is not None, f"用例 {case_id} 未运行"
+        metrics_info = (
+            f"recall@5={r.metrics.get('recall@5')}, "
+            f"mrr={r.metrics.get('mrr')}"
+        )
+        if _is_semantic_mode():
+            metrics_info += (
+                f", sem_context_recall={r.metrics.get('sem_context_recall')}, "
+                f"sem_faithfulness={r.metrics.get('sem_faithfulness')}"
+            )
         assert r.status == "pass", (
-            f"{case_id} 失败: status={r.status}, "
-            f"sem_context_recall={r.metrics.get('sem_context_recall')}, "
-            f"sem_faithfulness={r.metrics.get('sem_faithfulness')}, "
+            f"{case_id} 失败: status={r.status}, {metrics_info}, "
             f"error={r.error_msg or ''}"
         )
 
 
-# ── V3 语义影子模式测试 ──────────────────────────────────────
+# ── Semantic tier 测试（仅 shadow/semantic 模式运行） ──────────
 
-class TestSemanticShadow:
-    """验证 shadow 模式下语义指标正常产出（不决定 pass/fail）。"""
+@pytest.mark.skipif(
+    not _is_semantic_mode(),
+    reason="Deterministic tier 不运行语义指标测试",
+)
+class TestSemanticTier:
+    """Semantic tier 指标验证 — 需要 CrossEncoder 模型。"""
 
     SEMANTIC_KEYS = {"sem_context_recall", "sem_context_recall_soft", "sem_context_precision"}
 
     def test_semantic_metrics_present(self, golden_results):
-        """所有非 error 用例都应产出 sem_* 指标。"""
         for r in golden_results:
             if r.status == "error":
                 continue
@@ -169,46 +220,24 @@ class TestSemanticShadow:
             assert present, f"{r.case_id} 缺少语义指标，仅有: {sorted(r.metrics.keys())}"
 
     def test_semantic_recall_range(self, golden_results):
-        """sem_context_recall 应在 [0, 1] 范围内（NaN 表示未标注，跳过）。"""
         for r in golden_results:
             val = r.metrics.get("sem_context_recall")
             if val is not None and not math.isnan(val):
                 assert 0.0 <= val <= 1.0, f"{r.case_id} sem_context_recall={val} 超出 [0,1]"
 
-    def test_semantic_vs_legacy_divergence_report(self, golden_results, capsys):
-        """输出 legacy vs semantic 分歧报告（信息性，不断言）。"""
-        positive = [
-            r for r in golden_results
-            if not r.expected.get("should_reject") and r.status == "pass"
-        ]
-        diverge_count = 0
-        for r in positive:
-            legacy_hit = r.metrics.get("top1_accuracy", 0) >= 1.0
-            sem_hit = r.metrics.get("sem_context_recall", 0) >= 0.50
-            if legacy_hit != sem_hit:
-                diverge_count += 1
-        report = f"Legacy vs Semantic 分歧: {diverge_count}/{len(positive)} 条正样本"
-        print(report)
 
+# ── Semantic tier: 生成质量阻塞门控 ──────────────────────────
 
-# ── Phase 4.1: 生成质量阻塞门控 ──────────────────────────────
-
-def _get_gen_eval_results(golden_results):
-    """筛选 generation_eval 用例（以产出 sem_faithfulness 指标为标志）。"""
-    return [r for r in golden_results if "sem_faithfulness" in r.metrics]
-
-
+@pytest.mark.skipif(
+    not _is_semantic_mode(),
+    reason="Deterministic tier 不运行语义门控",
+)
 class TestGenerationQualityBlocking:
-    """Phase 4.1 — generation_eval 用例的 CrossEncoder 语义门控。
-
-    阈值来源: golden_set.json thresholds（sem_faithfulness_min / sem_answer_correctness_min）。
-    评分器: CrossEncoder (bge-reranker-base) 替代 bigram 启发式。
-    """
+    """generation_eval 用例的 CrossEncoder 语义门控（Semantic tier）。"""
 
     def test_semantic_faithfulness(self, golden_results, thresholds):
-        """CrossEncoder 忠实度 ≥ 阈值（替代 bigram 启发式）。"""
         min_faith = thresholds.get("sem_faithfulness_min", 0.50)
-        gen_results = _get_gen_eval_results(golden_results)
+        gen_results = [r for r in golden_results if "sem_faithfulness" in r.metrics]
         if not gen_results:
             pytest.skip("Golden set 无 generation_eval 用例")
         for r in gen_results:
@@ -218,9 +247,8 @@ class TestGenerationQualityBlocking:
             )
 
     def test_answer_correctness(self, golden_results, thresholds):
-        """答案正确性（语义相似度）≥ 阈值。"""
         min_corr = thresholds.get("sem_answer_correctness_min", 0.40)
-        gen_results = _get_gen_eval_results(golden_results)
+        gen_results = [r for r in golden_results if "sem_answer_correctness" in r.metrics]
         if not gen_results:
             pytest.skip("Golden set 无 generation_eval 用例")
         for r in gen_results:
@@ -230,8 +258,7 @@ class TestGenerationQualityBlocking:
             )
 
     def test_hallucination_rate_bounded(self, golden_results):
-        """幻觉率 = 1 - faithfulness，上限 0.50（信息性指标）。"""
-        gen_results = _get_gen_eval_results(golden_results)
+        gen_results = [r for r in golden_results if "sem_hallucination_rate" in r.metrics]
         if not gen_results:
             pytest.skip("Golden set 无 generation_eval 用例")
         for r in gen_results:
@@ -247,7 +274,7 @@ class TestGenerationQualityBlocking:
 def pytest_addoption(parser):
     parser.addoption(
         "--full", action="store_true", default=False,
-        help="运行完整评测集（59 条）而非 golden set（13 条）",
+        help="运行完整评测集（145 条 canonical）而非 golden set（10 条）",
     )
 
 
@@ -256,7 +283,4 @@ def full_results(request):
     """--full 模式下运行完整评测集。"""
     if not request.config.getoption("--full"):
         pytest.skip("未指定 --full，仅运行 golden set")
-    from backend.evaluation.dataset import load_dataset_file
-    all_cases = load_dataset_file("rag_test_kb.json", default_module="rag")
-    ids = [c.id for c in all_cases]
-    return _run_rag_cases(ids)
+    return _run_rag_cases(selection="all")

@@ -1,256 +1,251 @@
 """RAGAS 官方包适配层 — 与自研 sem_* 指标并行的基准对比。
 
-通过 --ragas CLI 标志或 EVAL_RAGAS=1 环境变量启用。
-使用本地模型：bge-small-zh-v1.5 (embeddings) + Ollama qwen2.5:3b (LLM)。
+使用本地模型：HuggingFaceEmbeddings (bge-small-zh-v1.5, GPU) + ChatOllama (qwen2.5:3b)。
+通过 LangchainLLMWrapper / LangchainEmbeddingsWrapper 官方适配层接入 RAGAS。
 计算失败不阻断主流程（fail-safe）。
+
+RAGAS 0.4.3 有两套指标 API：
+- legacy ``ragas.metrics.*``: 配合 LangchainLLMWrapper，通过 single_turn_score 调用
+- collections ``ragas.metrics.collections.*``: 需要 llm_factory 创建的 InstructorLLM
+
+本模块使用 legacy API（LangchainLLMWrapper + single_turn_score(SingleTurnSample)）。
 """
 from __future__ import annotations
 
-import json
+import concurrent.futures
 import os
 from typing import Any
 
 from backend.shared.logger import logger
 
-_EMBEDDINGS_MODEL = os.getenv("RAGAS_EMBEDDINGS_MODEL", "BAAI/bge-small-zh-v1.5")
 _OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 _OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
 
-_embeddings_cache: Any = None
-_llm_cache: Any = None
-_patched = False
+# RAGAS 单 case 超时（秒）。LLM 调用是 I/O 密集型，ThreadPoolExecutor 可正确中断。
+_RAGAS_CASE_TIMEOUT = int(os.getenv("RAGAS_CASE_TIMEOUT", "60"))
+
+RAGAS_LEVELS: dict[str, list[str]] = {
+    "basic": ["ContextRecall", "Faithfulness"],
+    "standard": ["ContextRecall", "Faithfulness", "ContextPrecision", "AnswerRelevancy"],
+    "full": [
+        "ContextRecall", "Faithfulness", "ContextPrecision",
+        "AnswerRelevancy", "AnswerCorrectness",
+    ],
+}
+
+METRIC_GT_DEPS: dict[str, bool] = {
+    "ContextRecall": True,
+    "Faithfulness": False,
+    "ContextPrecision": True,
+    "AnswerRelevancy": False,
+    "AnswerCorrectness": True,
+}
+
+_METRIC_KEY_MAP: dict[str, str] = {
+    "ContextRecall": "ragas_context_recall",
+    "Faithfulness": "ragas_faithfulness",
+    "ContextPrecision": "ragas_context_precision",
+    "AnswerRelevancy": "ragas_answer_relevancy",
+    "AnswerCorrectness": "ragas_answer_correctness",
+}
+
+_METRIC_NEEDS_EMBED: set[str] = {"AnswerRelevancy", "AnswerCorrectness"}
+
+# 全局 LLM/Embeddings 单例（避免每次调用重新初始化）
+_llm_wrapper: Any = None
+_embeddings: Any = None
 
 
-def _unwrap_nested_json(obj: Any) -> Any:
-    """递归剥掉小模型的多余嵌套层。
+def _init_llm() -> Any:
+    """初始化 LangchainLLMWrapper(ChatOllama)。"""
+    from langchain_ollama import ChatOllama
+    from ragas.llms import LangchainLLMWrapper
 
-    qwen2.5:3b 经常输出 {"ContextRecallOutput": {"classifications": [...]}}
-    而不是 RAGAS Pydantic 期望的 {"classifications": [...]}。
-    对 single-key dict 且 value 也是 dict 的情况，递归向下取。
-    """
-    if not isinstance(obj, dict) or len(obj) != 1:
-        return obj
-    key, val = next(iter(obj.items()))
-    if isinstance(val, dict):
-        return _unwrap_nested_json(val)
-    return obj
+    chat = ChatOllama(model=_OLLAMA_MODEL, temperature=0, base_url=_OLLAMA_HOST)
+    return LangchainLLMWrapper(chat)
 
 
-def _patch_instructor_json() -> None:
-    """Monkey-patch instructor registry的 response_parser，处理小模型多余嵌套。
+def _init_embeddings() -> Any:
+    """初始化 LangchainEmbeddingsWrapper(HuggingFaceEmbeddings)，复用 RAG pipeline 单例。"""
+    from backend.rag.embedding_singleton import get_embedding
 
-    RAGAS 0.4+ collections 指标通过 instructor 库解析 JSON，
-    实际调用链：metric.score() → InstructorLLM.agenerate() →
-    retry_sync_v2/retry_async_v2 → handlers.response_parser(...) →
-    model_validate_json(text)
-
-    关键发现：instructor v2 使用 mode_registry 注册函数指针（非类方法），
-    @register_mode_handler 在导入时创建实例并将 bound method 存入 registry。
-    修改类方法无效，必须直接 patch registry 中的 response_parser。
-
-    qwen2.5:3b 输出 {"ContextRecallOutput": {"classifications": [...]}}
-    而 Pydantic 期望 {"classifications": [...]}，导致 validation error。
-    """
-    global _patched
-    if _patched:
-        return
-
+    hf_emb = get_embedding()
     try:
-        from instructor.v2.core.mode import Mode
-        from instructor.v2.core.providers import Provider
-        from instructor.v2.core.registry import mode_registry
+        from ragas.embeddings import LangchainEmbeddingsWrapper
+        return LangchainEmbeddingsWrapper(hf_emb)
     except ImportError:
-        logger.warning("[RAGAS] 无法导入 instructor registry，跳过 patch")
-        return
-
-    patched_count = 0
-    for provider in [Provider.OPENAI, Provider.TOGETHER, Provider.ANYSCALE]:
-        try:
-            handlers = mode_registry.get_handlers(provider, Mode.JSON)
-            orig_parser = handlers.response_parser
-
-            def _make_wrapped_parser(_orig):
-                def _patched_parser(
-                    response: Any,
-                    response_model: type,
-                    validation_context: dict[str, Any] | None = None,
-                    strict: bool | None = None,
-                    stream: bool = False,
-                    is_async: bool = False,
-                ) -> Any:
-                    try:
-                        return _orig(
-                            response=response,
-                            response_model=response_model,
-                            validation_context=validation_context,
-                            strict=strict,
-                            stream=stream,
-                            is_async=is_async,
-                        )
-                    except Exception:
-                        try:
-                            choices = getattr(response, "choices", None)
-                            if choices:
-                                text = choices[0].message.content or ""
-                                obj = json.loads(text)
-                                unwrapped = _unwrap_nested_json(obj)
-                                if unwrapped is not obj:
-                                    parsed = response_model.model_validate_json(
-                                        json.dumps(unwrapped),
-                                        context=validation_context,
-                                        strict=strict,
-                                    )
-                                    return parsed
-                        except Exception:
-                            pass
-                        raise
-                return _patched_parser
-
-            handlers.response_parser = _make_wrapped_parser(orig_parser)
-            patched_count += 1
-        except Exception:
-            continue
-
-    _patched = True
-    logger.info(f"[RAGAS] JSON 解析管线已 patch（instructor registry response_parser × {patched_count} providers）")
+        logger.warning("[RAGAS] LangchainEmbeddingsWrapper 不可用，使用 fallback")
+        return _create_fallback_embeddings(hf_emb)
 
 
-def is_ragas_enabled() -> bool:
-    """检查 RAGAS 是否启用（CLI --ragas 或 EVAL_RAGAS=1）。"""
-    return os.getenv("EVAL_RAGAS", "").strip() in ("1", "true", "yes")
+def _create_fallback_embeddings(hf_emb: Any) -> Any:
+    """当 ragas.embeddings.LangchainEmbeddingsWrapper 不可用时的 fallback。"""
+    from ragas.embeddings.base import BaseRagasEmbeddings
+
+    class _FallbackEmbeddings(BaseRagasEmbeddings):
+        def __init__(self, emb):
+            self._embed = emb
+
+        def embed_text(self, text: str) -> list[float]:
+            return self._embed.embed_query(text)
+
+        async def aembed_text(self, text: str) -> list[float]:
+            return await self._embed.aembed_query(text)
+
+    return _FallbackEmbeddings(hf_emb)
 
 
-def _get_ragas_embeddings() -> Any:
-    """延迟初始化本地 embeddings（bge-small-zh-v1.5，使用 ragas 原生类）。"""
-    global _embeddings_cache
-    if _embeddings_cache is not None:
-        return _embeddings_cache
-
-    from ragas.embeddings import HuggingFaceEmbeddings
-
-    _embeddings_cache = HuggingFaceEmbeddings(
-        model=_EMBEDDINGS_MODEL,
-        device="cpu",
-    )
-    return _embeddings_cache
+def _get_llm() -> Any:
+    """获取全局 LLM 单例（懒初始化）。"""
+    global _llm_wrapper
+    if _llm_wrapper is None:
+        _llm_wrapper = _init_llm()
+        logger.info("[RAGAS] LLM 初始化完成（全局单例）")
+    return _llm_wrapper
 
 
-def _get_ragas_llm() -> Any:
-    """延迟初始化 Ollama LLM（通过 ragas llm_factory + OpenAI 兼容接口）。"""
-    global _llm_cache
-    if _llm_cache is not None:
-        return _llm_cache
-
-    from openai import AsyncOpenAI
-    from ragas.llms import llm_factory
-
-    client = AsyncOpenAI(
-        base_url=f"{_OLLAMA_HOST}/v1",
-        api_key="ollama",
-    )
-    _llm_cache = llm_factory(model=_OLLAMA_MODEL, provider="openai", client=client)
-    return _llm_cache
-
-
-def _score_metric_safe(name: str, metric: Any, kwargs: dict) -> float | None:
-    """调用单个 metric.score()，失败返回 None（不传播异常）。"""
-    try:
-        result = metric.score(**kwargs)
-        val = float(result.value)
-        if val != val:  # NaN check
-            return None
-        return round(val, 4)
-    except Exception as e:
-        logger.warning(f"[RAGAS] {name} 计算失败: {e}")
-        return None
+def _get_embeddings() -> Any:
+    """获取全局 Embeddings 单例（懒初始化）。"""
+    global _embeddings
+    if _embeddings is None:
+        _embeddings = _init_embeddings()
+        logger.info("[RAGAS] Embeddings 初始化完成（全局单例）")
+    return _embeddings
 
 
 def compute_ragas_metrics(
+    *,
     question: str,
-    retrieved_texts: list[str],
-    ground_truth_texts: list[str],
-    expected_answer: str | None,
-    generated_answer: str,
-) -> dict[str, float]:
-    """计算 RAGAS 官方 5 指标，返回 ragas_* 前缀字典。
+    answer: str,
+    contexts: list[str],
+    ground_truth: str | None = None,
+    reference_contexts: list[str] | None = None,
+    level: str = "standard",
+    llm_wrapper: Any,
+    embeddings: Any,
+) -> dict[str, float | None]:
+    """计算 RAGAS 指标（legacy API: single_turn_score + SingleTurnSample）。
 
-    使用 ragas 0.4+ 的 metrics.collections API：每个 metric 直接调用 score()，
-    不走 evaluate() 管道。
-
-    Parameters
-    ----------
-    question : 用户问题
-    retrieved_texts : 检索到的 chunk 全文列表
-    ground_truth_texts : ground_truth_context 纯文本列表（保留兼容性，当前未直接使用）
-    expected_answer : 期望答案（用作 reference）
-    generated_answer : Ollama 生成的答案
-
-    Returns
-    -------
-    dict[str, float] — 键名以 ragas_ 前缀，失败时返回空 dict。
+    根据 level 选取指标集；ground_truth 为空时自动移除依赖指标。
     """
-    if not retrieved_texts:
+    from ragas.dataset_schema import SingleTurnSample
+    from ragas.metrics import (
+        AnswerCorrectness,
+        AnswerRelevancy,
+        ContextPrecision,
+        ContextRecall,
+        Faithfulness,
+    )
+
+    cls_map = {
+        "ContextRecall": ContextRecall,
+        "Faithfulness": Faithfulness,
+        "ContextPrecision": ContextPrecision,
+        "AnswerRelevancy": AnswerRelevancy,
+        "AnswerCorrectness": AnswerCorrectness,
+    }
+
+    metric_names = RAGAS_LEVELS.get(level, RAGAS_LEVELS["standard"])
+
+    skipped = [n for n in metric_names if METRIC_GT_DEPS.get(n) and ground_truth is None]
+    if skipped:
+        logger.warning(f"[RAGAS] ground_truth 为空，跳过依赖指标: {skipped}")
+    metric_names = [n for n in metric_names if not METRIC_GT_DEPS.get(n) or ground_truth is not None]
+
+    sample = SingleTurnSample(
+        user_input=question,
+        response=answer,
+        retrieved_contexts=contexts,
+        reference=ground_truth or answer,
+        reference_contexts=reference_contexts,
+    )
+
+    results: dict[str, float | None] = {}
+    for name in metric_names:
+        key = _METRIC_KEY_MAP[name]
+        try:
+            kwargs: dict[str, Any] = {"llm": llm_wrapper}
+            if name in _METRIC_NEEDS_EMBED:
+                kwargs["embeddings"] = embeddings
+            metric = cls_map[name](**kwargs)
+            val = float(metric.single_turn_score(sample))
+            results[key] = round(val, 4) if val == val else None
+        except Exception as e:
+            logger.warning(f"[RAGAS] {name} 计算失败: {e}")
+            results[key] = None
+
+    return results
+
+
+def _compute_impl(
+    *,
+    question: str,
+    answer: str,
+    contexts: list[str],
+    ground_truth: str | None,
+    reference_contexts: list[str] | None,
+    level: str,
+) -> dict[str, float | None]:
+    """内部实现：初始化依赖并计算指标。"""
+    llm = _get_llm()
+    embeddings = _get_embeddings()
+    return compute_ragas_metrics(
+        question=question,
+        answer=answer,
+        contexts=contexts,
+        ground_truth=ground_truth,
+        reference_contexts=reference_contexts,
+        level=level,
+        llm_wrapper=llm,
+        embeddings=embeddings,
+    )
+
+
+def compute_ragas_metrics_safe(
+    *,
+    question: str,
+    answer: str,
+    contexts: list[str],
+    ground_truth: str | None = None,
+    reference_contexts: list[str] | None = None,
+    level: str = "standard",
+    timeout_seconds: int = 0,  # 0 = 使用默认 _RAGAS_CASE_TIMEOUT
+) -> dict[str, float | None]:
+    """公共 API：带超时保护的 RAGAS 指标计算（ThreadPoolExecutor）。
+
+    LLM/Embeddings 使用全局单例（GPU 模型不重载）。
+    超时通过 ThreadPoolExecutor 实现 — LLM 调用是 I/O 密集型，线程可正确响应取消。
+    """
+    if not contexts or not answer.strip():
+        logger.warning("[RAGAS] contexts 或 answer 为空，跳过")
         return {}
 
-    if not generated_answer.strip():
-        logger.warning("[RAGAS] generated_answer 为空，跳过 RAGAS 计算")
-        return {}
-
-    reference = expected_answer or generated_answer
-
-    _patch_instructor_json()
+    timeout = timeout_seconds if timeout_seconds > 0 else _RAGAS_CASE_TIMEOUT
+    metric_names = RAGAS_LEVELS.get(level, RAGAS_LEVELS["standard"])
+    null_result = {_METRIC_KEY_MAP[n]: None for n in metric_names}
 
     try:
-        llm = _get_ragas_llm()
-        embeddings = _get_ragas_embeddings()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                _compute_impl,
+                question=question,
+                answer=answer,
+                contexts=contexts,
+                ground_truth=ground_truth,
+                reference_contexts=reference_contexts,
+                level=level,
+            )
+            return future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        logger.warning(f"[RAGAS] 打分超时 ({timeout}s)，跳过记 null")
+        return null_result
     except Exception as e:
-        logger.warning(f"[RAGAS] LLM/Embeddings 初始化失败: {e}")
-        return {}
-
-    try:
-        from ragas.metrics.collections import (
-            AnswerCorrectness,
-            AnswerRelevancy,
-            ContextPrecision,
-            ContextRecall,
-            Faithfulness,
-        )
-    except ImportError:
-        logger.warning("[RAGAS] ragas 包未安装，跳过。pip install ragas>=0.4.0")
-        return {}
-
-    common = {"user_input": question}
-
-    metrics_spec: list[tuple[str, Any, dict]] = [
-        ("ragas_context_recall", ContextRecall(llm=llm), {
-            **common, "retrieved_contexts": retrieved_texts, "reference": reference,
-        }),
-        ("ragas_context_precision", ContextPrecision(llm=llm), {
-            **common, "reference": reference, "retrieved_contexts": retrieved_texts,
-        }),
-        ("ragas_faithfulness", Faithfulness(llm=llm), {
-            **common, "response": generated_answer, "retrieved_contexts": retrieved_texts,
-        }),
-        ("ragas_answer_relevancy", AnswerRelevancy(llm=llm, embeddings=embeddings), {
-            **common, "response": generated_answer,
-        }),
-        ("ragas_answer_correctness", AnswerCorrectness(llm=llm, embeddings=embeddings), {
-            **common, "response": generated_answer, "reference": reference,
-        }),
-    ]
-
-    output: dict[str, float] = {}
-    for key, metric, kwargs in metrics_spec:
-        val = _score_metric_safe(key, metric, kwargs)
-        if val is not None:
-            output[key] = val
-
-    return output
+        logger.warning(f"[RAGAS] 计算失败: {e}")
+        return null_result
 
 
 def reset_caches() -> None:
-    """重置 embeddings/LLM/patch 缓存（测试用）。"""
-    global _embeddings_cache, _llm_cache, _patched
-    _embeddings_cache = None
-    _llm_cache = None
-    _patched = False
+    """重置全局 LLM/Embeddings 单例（用于测试或重新配置后）。"""
+    global _llm_wrapper, _embeddings
+    _llm_wrapper = None
+    _embeddings = None

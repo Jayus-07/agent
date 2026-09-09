@@ -1,0 +1,33 @@
+{
+  "name": "quick_26",
+  "description": "Quick evaluation: 26 stratified cases (~30min). Preserves tier/query_type/reject ratios from full 100-case set.",
+  "version": "4.0",
+  "case_ids": [
+    "RC-001",
+    "RC-004",
+    "RC-005",
+    "RC-009",
+    "RC-012",
+    "RC-015",
+    "RC-021",
+    "RC-024",
+    "RC-026",
+    "RC-031",
+    "RC-034",
+    "RC-037",
+    "RC-041",
+    "RC-046",
+    "RC-051",
+    "RC-055",
+    "RC-056",
+    "RC-061",
+    "RC-064",
+    "RC-068",
+    "RC-070",
+    "RC-078",
+    "RC-081",
+    "RC-084",
+    "RC-092",
+    "RC-096"
+  ]
+}

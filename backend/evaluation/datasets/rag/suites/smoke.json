@@ -1,0 +1,26 @@
+{
+  "name": "smoke",
+  "description": "Quick smoke test: 19 easy cases for fast feedback",
+  "version": "4.0",
+  "case_ids": [
+    "RC-001",
+    "RC-002",
+    "RC-003",
+    "RC-004",
+    "RC-008",
+    "RC-011",
+    "RC-012",
+    "RC-014",
+    "RC-017",
+    "RC-018",
+    "RC-020",
+    "RC-061",
+    "RC-062",
+    "RC-063",
+    "RC-067",
+    "RC-068",
+    "RC-069",
+    "RC-071",
+    "RC-072"
+  ]
+}

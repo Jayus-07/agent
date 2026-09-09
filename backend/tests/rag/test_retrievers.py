@@ -18,6 +18,12 @@ from types import SimpleNamespace
 # =====================================================
 
 class TestHybridFallback:
+    @pytest.fixture(autouse=True)
+    def _disable_enhanced_path(self, monkeypatch):
+        """这些测试验证原始 hybrid fallback 逻辑，需绕过 enhanced 路由。"""
+        monkeypatch.setattr("backend.config.rag.ADAPTIVE_THRESHOLD_ENABLED", False)
+        monkeypatch.setattr("backend.config.rag.CONFIDENCE_AGGREGATOR_ENABLED", False)
+
     def test_vector_failure_falls_back_to_bm25(self):
         """Vector 崩溃 → 降级仅用 BM25，结果正常返回且 span 标记 fallback（可观测）。"""
         from backend.observability.tracer import trace_collector
@@ -236,7 +242,7 @@ class _FakeBaseRetriever(BaseRetriever):
 
 class TestAdaptiveRetriever:
     def test_cluster_triggers_context_expansion(self):
-        """命中集中在少数文档 → Context Expansion 拉全文。"""
+        """命中集中在少数文档 → Context Expansion 拉全文（替换 chunk，不前置）。"""
         from backend.rag.retrieval.retrievers import AdaptiveRetriever
         base = _FakeBaseRetriever(docs=[
             Document(page_content="c1", metadata={"doc_id": "d1"}),
@@ -248,8 +254,8 @@ class TestAdaptiveRetriever:
         })
         ar = AdaptiveRetriever(base_retriever=base, doc_db=doc_db)
         docs = ar._get_relevant_documents("q")
-        # 1 全文 + 2 chunks
-        assert len(docs) == 3
+        # 全文替换同 doc 的所有 chunk（不再前置导致数量膨胀）
+        assert len(docs) == 1
         assert docs[0].page_content == "文档全文"
 
     def test_dispersed_keeps_chunks_only(self):

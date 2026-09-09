@@ -9,7 +9,7 @@ from __future__ import annotations
 import threading
 from langchain_huggingface import HuggingFaceEmbeddings
 
-from backend.config import EMBEDDING_MODEL_PATH
+from backend.config import EMBEDDING_MODEL_PATH, EVAL_DEVICE
 from backend.shared.logger import logger
 
 _embedding: HuggingFaceEmbeddings | None = None
@@ -26,7 +26,10 @@ def get_embedding() -> HuggingFaceEmbeddings:
     if _embedding is None:
         with _lock:
             if _embedding is None:
-                logger.info("[Embedding] 加载模型: %s", EMBEDDING_MODEL_PATH)
-                _embedding = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
-                logger.info("[Embedding] 模型加载完成（全局单例）")
+                logger.info("[Embedding] 加载模型: %s (device=%s)", EMBEDDING_MODEL_PATH, EVAL_DEVICE)
+                _embedding = HuggingFaceEmbeddings(
+                    model_name=EMBEDDING_MODEL_PATH,
+                    model_kwargs={"device": EVAL_DEVICE},
+                )
+                logger.info("[Embedding] 模型加载完成（全局单例, device=%s）", EVAL_DEVICE)
     return _embedding

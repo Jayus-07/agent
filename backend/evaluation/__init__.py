@@ -10,9 +10,9 @@
         # 注册表
         register_runner, get_runner, list_registered,
         # 报告
-        print_summary, write_markdown_report, compare_reports,
+        print_summary, write_markdown_report,
         # 调度
-        run_all, run_module,
+        run_all,
     )
 
 === 在新项目中使用 ===
@@ -53,18 +53,17 @@ from backend.evaluation.metrics import (
 from backend.evaluation.registry import register_runner, get_runner, list_registered
 
 # 报告
-from backend.evaluation.report import print_summary, write_markdown_report, write_json_report, compare_reports
+from backend.evaluation.report import print_summary, write_markdown_report, write_json_report
 
 # 调度
-from backend.evaluation.runner import run_all, run_module, evaluate_planner_offline
+from backend.evaluation.runner import run_all, evaluate_planner_offline
 
 # 数据集
-from backend.evaluation.dataset import load_dataset, validate_dataset
+from backend.evaluation.dataset import load_dataset, validate_dataset, select_cases
 
 # LLM-as-Judge
 from backend.evaluation.judge import (
     JudgeResult, judge_answer, build_judge_prompt,
-    set_llm_callable, JUDGE_SYSTEM_PROMPT,
 )
 
 # V1.0 重构新增
@@ -72,8 +71,20 @@ from backend.evaluation.storage import (
     persist_report, load_report, list_runs,
     get_git_sha, get_dataset_version, make_run_id,
 )
-from backend.evaluation.baseline import (
-    promote, load as load_baseline, diff, check_regression,
+
+# 统一门禁（Phase 2: 合并 baseline + gate 逻辑）
+from backend.evaluation.gate import (
+    TIER_THRESHOLDS, evaluate_tiers, flag_regressions,
+    promote, load_baseline, diff_baseline, check_regression,
+)
+
+# 配置 + 服务（Phase 3: 单一核心）
+from backend.evaluation.config import EvalConfig
+from backend.evaluation.service import EvaluationService
+
+# Evaluator Provider（Phase 3: 可组合指标层）
+from backend.evaluation.evaluators import (
+    Evaluator, SemanticEvaluator,
 )
 
 __all__ = [
@@ -88,17 +99,21 @@ __all__ = [
     # Registry
     "register_runner", "get_runner", "list_registered",
     # Report
-    "print_summary", "write_markdown_report", "write_json_report", "compare_reports",
+    "print_summary", "write_markdown_report", "write_json_report",
     # Runner
-    "run_all", "run_module", "evaluate_planner_offline",
+    "run_all", "evaluate_planner_offline",
     # Dataset
-    "load_dataset", "validate_dataset",
+    "load_dataset", "validate_dataset", "select_cases",
     # Judge
     "JudgeResult", "judge_answer", "build_judge_prompt",
-    "set_llm_callable", "JUDGE_SYSTEM_PROMPT",
     # Storage (V1.0)
     "persist_report", "load_report", "list_runs",
     "get_git_sha", "get_dataset_version", "make_run_id",
-    # Baseline (V1.0)
-    "promote", "load_baseline", "diff", "check_regression",
+    # Gate (Phase 2: 统一门禁)
+    "TIER_THRESHOLDS", "evaluate_tiers", "flag_regressions",
+    "promote", "load_baseline", "diff_baseline", "check_regression",
+    # Config + Service (Phase 3: 单一核心)
+    "EvalConfig", "EvaluationService",
+    # Evaluator Providers (Phase 3: 可组合指标层)
+    "Evaluator", "SemanticEvaluator",
 ]

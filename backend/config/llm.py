@@ -18,6 +18,18 @@ RERANKER_MODEL_PATH = os.getenv(
     "BAAI/bge-reranker-base"  # HuggingFace model name，自动走缓存
 )
 
+# 推理设备（评测 / RAG 共享）
+# "auto" = 有 CUDA 则用 GPU，否则 CPU；也可显式指定 "cuda" / "cpu"
+_EVAL_DEVICE_RAW = os.getenv("EVAL_DEVICE", "auto").strip().lower()
+if _EVAL_DEVICE_RAW == "auto":
+    try:
+        import torch
+        EVAL_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        EVAL_DEVICE = "cpu"
+else:
+    EVAL_DEVICE = _EVAL_DEVICE_RAW
+
 # 模型参数
 LLM_MODEL = os.getenv("LLM_MODEL", "MiniMax-M3")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))

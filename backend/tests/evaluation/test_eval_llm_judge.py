@@ -10,33 +10,18 @@ CI 中由 rag_eval.yml 的 llm-judge job 运行（continue-on-error: true）。
 """
 from __future__ import annotations
 
-import json
 import os
-from pathlib import Path
 
 import pytest
 
 os.environ.setdefault("RERANKER_BACKEND", "local")
 
-DATASETS_DIR = Path(__file__).resolve().parents[2] / "evaluation" / "datasets"
-GOLDEN_SET_PATH = DATASETS_DIR / "golden_set.json"
-
-
-def _load_golden_ids() -> list[str]:
-    with open(GOLDEN_SET_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data["selected_ids"]
-
 
 def _get_gen_eval_ids() -> list[str]:
-    """获取 generation_eval=true 的 golden 用例 ID。"""
-    from backend.evaluation.dataset import load_dataset_file
-    all_cases = load_dataset_file("rag_test_kb.json", default_module="rag")
-    golden_ids = set(_load_golden_ids())
-    return [
-        c.id for c in all_cases
-        if c.id in golden_ids and c.metadata.get("generation_eval")
-    ]
+    """获取 generation_eval=true 的 CI golden 用例 ID。"""
+    from backend.evaluation.dataset import load_dataset
+    golden_cases = load_dataset("rag", selection="ci_golden")
+    return [c.id for c in golden_cases if c.metadata.get("generation_eval")]
 
 
 def _ollama_available() -> bool:
@@ -54,20 +39,24 @@ def _ollama_available() -> bool:
 
 @pytest.fixture(scope="module")
 def llm_results():
-    """运行 golden set 中 generation_eval 用例的 Ollama 生成 + 评估。"""
+    """运行 CI golden 中 generation_eval 用例的 Ollama 生成 + 评估。"""
     if not _ollama_available():
         pytest.skip("Ollama 服务不可用")
 
-    from backend.evaluation.dataset import load_dataset_file
+    from backend.evaluation.config import EvalConfig
+    from backend.evaluation.dataset import load_dataset
     from backend.evaluation.generation import answer_relevancy_llm, generate_answer_ollama
-    from backend.evaluation.runners.builtin import _run_rag
+    from backend.evaluation.service import EvaluationService
 
-    all_cases = load_dataset_file("rag_test_kb.json", default_module="rag")
-    golden_ids = set(_load_golden_ids())
+    golden_cases = load_dataset("rag", selection="ci_golden")
     gen_ids = set(_get_gen_eval_ids())
-    filtered = [c for c in all_cases if c.id in golden_ids and c.id in gen_ids]
+    filtered = [c for c in golden_cases if c.id in gen_ids]
 
-    base_results = _run_rag(filtered)
+    config = EvalConfig(
+        module="rag", dataset="rag", selection="ci_golden", live=False,
+    )
+    report = EvaluationService().evaluate(config)
+    base_results = [r for r in report.results if r.case_id in gen_ids]
 
     for r in base_results:
         details = r.actual.get("details", [])

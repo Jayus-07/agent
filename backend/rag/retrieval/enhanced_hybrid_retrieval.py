@@ -64,7 +64,7 @@ def _enhanced_hybrid_retrieve_impl(
                f"base_threshold={base_threshold:.2f} (VEC_MIN_SCORE={VEC_MIN_SCORE}), "
                f"k={effective_k}")
     
-    docs_list = []
+    path_results: list[tuple[list, float]] = []
     metrics = {
         "rule_hits": 0,
         "dense_hits": 0,
@@ -72,7 +72,7 @@ def _enhanced_hybrid_retrieve_impl(
         "final_k": effective_k,
         "fallback_used": False,
     }
-    
+
     # Step 2: 三路并行召回（共享线程池，避免每次检索创建/销毁）
     from backend.infra.thread_pools import retrieval_pool_outer
     executor = retrieval_pool_outer()
@@ -94,30 +94,30 @@ def _enhanced_hybrid_retrieve_impl(
     sparse_future = executor.submit(bm25_retriever.invoke, query) if bm25_retriever else None
     if sparse_future:
         metrics["sparse_available"] = True
-    
-    # Step 3: 收集结果
+
+    # Step 3: 收集结果（按路径分开，带权重；dense 权重最高因为 embedding 语义匹配更可靠）
     try:
         if rule_future:
             rule_docs = rule_future.result() or []
             metrics["rule_hits"] = len(rule_docs)
-            docs_list.extend(rule_docs)
+            if rule_docs:
+                path_results.append((rule_docs, 2.0))
     except Exception as e:
         logger.warning(f"[EnhancedRetrieve] Rule retrieval failed: {e}", exc_info=True)
-    
+
     try:
         dense_docs = dense_future.result()
         metrics["dense_hits"] = len(dense_docs)
-        docs_list.extend(dense_docs)
+        if dense_docs:
+            path_results.append((dense_docs, 3.0))
     except Exception as e:
         logger.warning(f"[EnhancedRetrieve] Dense retrieval failed: {e}", exc_info=True)
         dense_docs = []
-    
+
     try:
         if sparse_future:
             sparse_docs = sparse_future.result() or []
             metrics["sparse_hits"] = len(sparse_docs)
-            # BM25 不接受 filter 参数，需手动按 doc_ids / metadata_filter 过滤，
-            # 否则非目标文档的 BM25 高分 chunks 会挤占 RRF 融合位置
             if doc_ids:
                 sparse_docs = [d for d in sparse_docs if d.metadata.get("doc_id") in doc_ids]
             if metadata_filter:
@@ -125,12 +125,14 @@ def _enhanced_hybrid_retrieve_impl(
                     d for d in sparse_docs
                     if all(d.metadata.get(k) == v for k, v in metadata_filter.items())
                 ]
-            docs_list.extend(sparse_docs)
+            if sparse_docs:
+                path_results.append((sparse_docs, 1.0))
     except Exception as e:
         logger.warning(f"[EnhancedRetrieve] Sparse retrieval failed: {e}", exc_info=True)
-    
+
     # Step 4: Evidence Gate - 检查召回质量
-    if not docs_list:
+    all_docs_flat = [d for path, _ in path_results for d in path]
+    if not all_docs_flat:
         logger.error("[EnhancedRetrieve] No results from any path - triggering fallback")
         # 降级策略：回到原始 hybrid_retrieve
         from backend.rag.retrieval.hybrid import hybrid_retrieve
@@ -139,8 +141,8 @@ def _enhanced_hybrid_retrieve_impl(
         trace_collector.end_span(span, metrics={"status": "fallback"})
         return fallback_docs, {"confidence": 0.0, "strategy": "fallback"}
     
-    # Step 5: RRF 融合（传入 query 以启用关键词加成）
-    merged_docs = _ultimate_rrf_fusion(docs_list, rrf_k, k, query=query)
+    # Step 5: RRF 融合（各路径独立计分，保留跨路径一致性信号）
+    merged_docs = _ultimate_rrf_fusion(path_results, rrf_k, k, query=query)
     
     # Step 6: 计算综合置信度
     overall_confidence = 0.0
@@ -171,69 +173,35 @@ def _enhanced_hybrid_retrieve_impl(
     }
 
 
-def _ultimate_rrf_fusion(docs_from_all_paths: List, rrf_k: int, top_k: int,
+def _ultimate_rrf_fusion(path_results: list[tuple[list, float]], rrf_k: int, top_k: int,
                          query: str = None) -> List:
     """
-    三路召回的统一 RRF 融合（按 chunk_id 去重）
-    权重分配：Rule-based > Dense > Sparse；
-    无 chunk_type 标记的真实召回按 Dense 同权重 1.0 处理，
-    不得静默丢弃（历史缺陷：只认标记导致融合结果恒为空）。
+    多路召回的加权 RRF 融合 — 各路径独立计分后按权重累加。
 
-    Per-doc chunk 上限：防止单文档大量相似 chunks 挤占其他文档的
-    检索结果（如采购流程 24 chunks 全部排在合同金额 chunk 前面）。
+    每条路径独立编 rank（rank 从 1 开始），同一 chunk 在 N 条路径中
+    出现就累加 N 次加权 RRF 分。权重反映路径可靠性：
+    dense(3.0) > rule(2.0) > sparse(1.0)。
 
-    Keyword boost：当 query 提供时，对内容包含查询关键词的 chunks
-    给予额外分数加成，避免向量语义漂移导致精确关键词匹配被淹没。
+    Per-doc chunk 上限：防止单文档大量相似 chunks 挤占其他文档。
     """
-    _WEIGHTS = {
-        "rule_match": 2.0,
-        "dense_embedding": 1.0,
-        "bm25": 0.8,
-        "tfidf": 0.8,
-    }
+    rank_map: dict[str, float] = {}
+    docs_by_id: dict[str, object] = {}
 
-    rank_map: dict = {}
-    docs_by_id: dict = {}
-    groups: dict = {}
-
-    for doc in docs_from_all_paths:
-        cid = doc.metadata.get("chunk_id")
-        if not cid:
-            continue
-        if cid not in docs_by_id:
-            docs_by_id[cid] = doc
-        weight = _WEIGHTS.get(doc.metadata.get("chunk_type", ""), 1.0)
-        groups.setdefault(weight, []).append(cid)
-
-    # 同一权重组内按出现次序取 rank，重复出现的同一路只计一次（去重）
-    for weight, cids in groups.items():
-        seen = set()
+    for path_docs, weight in path_results:
+        seen_in_path: set[str] = set()
         rank = 0
-        for cid in cids:
-            if cid in seen:
+        for doc in path_docs:
+            cid = doc.metadata.get("chunk_id")
+            if not cid:
                 continue
-            seen.add(cid)
+            if cid in seen_in_path:
+                continue
+            seen_in_path.add(cid)
             rank += 1
+            if cid not in docs_by_id:
+                docs_by_id[cid] = doc
             rank_map[cid] = rank_map.get(cid, 0.0) + weight / (rrf_k + rank)
 
-    # Keyword boost: 对包含查询关键词的 chunks 加成分数
-    if query:
-        _STOPWORDS = {"的", "了", "是", "在", "和", "与", "或", "有", "为", "哪",
-                      "什么", "怎么", "如何", "多少", "几个", "几类", "吗", "呢",
-                      "要", "需要", "几个", "分为", "包括"}
-        try:
-            import jieba
-            query_keywords = {w for w in jieba.cut(query) if len(w) >= 2 and w not in _STOPWORDS}
-        except Exception:
-            query_keywords = set()
-        if query_keywords:
-            for cid, doc in docs_by_id.items():
-                content = doc.page_content or ""
-                matched = sum(1 for kw in query_keywords if kw in content)
-                if matched > 0:
-                    rank_map[cid] = rank_map.get(cid, 0.0) + 0.3 * matched
-
-    # 排序取 Top-K（带 per-doc chunk 上限）
     sorted_cids = sorted(rank_map.items(), key=lambda x: x[1], reverse=True)
 
     unique_doc_count = len({
@@ -244,14 +212,15 @@ def _ultimate_rrf_fusion(docs_from_all_paths: List, rrf_k: int, top_k: int,
     max_per_doc = max(3, (top_k + max(unique_doc_count, 1) - 1) // max(unique_doc_count, 1))
 
     result = []
-    doc_counts: dict = {}
-    for cid, _ in sorted_cids:
+    doc_counts: dict[str, int] = {}
+    for cid, rrf_score in sorted_cids:
         if len(result) >= top_k:
             break
         did = docs_by_id[cid].metadata.get("doc_id", "")
         if did and doc_counts.get(did, 0) >= max_per_doc:
             continue
         doc_counts[did] = doc_counts.get(did, 0) + 1
+        docs_by_id[cid].metadata["rrf_score"] = round(rrf_score, 4)
         result.append(docs_by_id[cid])
 
     return result

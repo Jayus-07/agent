@@ -1,17 +1,18 @@
-"""评估结果持久化 — V1.0 重构新增。
+"""评估结果持久化 — 文件系统存储。
 
 设计要点:
-1. 双写: PostgreSQL（聚合指标，用于趋势图）+ 文件系统（完整轨迹，用于追溯）
+1. 文件系统存储：完整轨迹，用于追溯和对比
 2. meta.json 强制包含 git_sha / dataset_version / prompt_versions，确保问题可追溯
-3. run_id 格式: {timestamp} 便于排序和去重
+3. run_id 格式: {timestamp}-{random} 便于排序和去重，避免秒级碰撞
 
 可移植性：此文件仅依赖 stdlib + 已有项目模块（git/Path）。新项目复制后调整
-DATA_ROOT 与 PGSQL 连接即可。
+DATA_ROOT 路径即可。
 """
 from __future__ import annotations
 
 import json
 import os
+import secrets
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -19,8 +20,9 @@ from typing import Any
 
 from backend.evaluation.models import EvalReport, EvalResult, ModuleSummary
 
-# 数据根目录 — 相对项目根目录
-DATA_ROOT = Path("data/eval_runs")
+# 数据根目录 — 绝对路径，相对于项目根目录
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DATA_ROOT = _PROJECT_ROOT / "data" / "eval_runs"
 
 
 def get_git_sha() -> str:
@@ -82,13 +84,44 @@ def _cmd_exists(cmd: str) -> bool:
 
 
 def get_dataset_version(module: str) -> str:
-    """从数据集 JSON 顶部读取 version 字段。
+    """从数据集查找版本字段。
 
-    V1.3 修复：查找顺序与 dataset.load_dataset 保持一致（含 {module}_test_kb.json），
-    此前只找 {module}_v2.json / {module}.json 导致 rag 永远 fallback 到 "1.0"，
-    baseline 对比永远命中旧版 baseline_rag_1.0.json。
+    查找顺序：
+    1. datasets/{module}/manifest.json → version
+    2. datasets/{module}/cases.jsonl → 首行 metadata.dataset_version
+    3. legacy JSON: {module}_v2.json / {module}_test_kb.json / {module}.json
+    4. 默认 "1.0"
     """
     from backend.evaluation.dataset import DATASET_DIR
+
+    split_dir = DATASET_DIR / module
+
+    # 1. manifest.json
+    manifest_path = split_dir / "manifest.json"
+    if manifest_path.exists():
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            ver = data.get("version")
+            if ver:
+                return str(ver)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 2. cases.jsonl 首行 metadata.dataset_version
+    jsonl_path = split_dir / "cases.jsonl"
+    if jsonl_path.exists():
+        try:
+            with open(jsonl_path, "r", encoding="utf-8") as f:
+                first_line = f.readline().strip()
+            if first_line:
+                item = json.loads(first_line)
+                ver = item.get("metadata", {}).get("dataset_version")
+                if ver:
+                    return str(ver)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 3. legacy JSON
     for fname in (f"{module}_v2.json", f"{module}_test_kb.json", f"{module}.json"):
         if ".deprecated." in fname:
             continue
@@ -103,8 +136,10 @@ def get_dataset_version(module: str) -> str:
 
 
 def make_run_id() -> str:
-    """生成 run_id — 时间戳格式: 2026-08-14T10-00-00。"""
-    return datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    """生成 run_id — 时间戳 + 随机后缀: 2026-08-14T10-00-00-a1b2c3。"""
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    random_suffix = secrets.token_hex(3)  # 6 位 hex
+    return f"{timestamp}-{random_suffix}"
 
 
 def persist_report(report: EvalReport) -> Path:
@@ -158,28 +193,6 @@ def persist_report(report: EvalReport) -> Path:
     return run_dir
 
 
-def save_aggregates_to_db(summaries: list[ModuleSummary]) -> None:
-    """保存聚合指标到 PostgreSQL（用于趋势图）。
-
-    失败不抛异常 — DB 写失败不影响 FS 持久化。
-    """
-    try:
-        from backend.observability.metrics_store import get_metrics_store
-        store = get_metrics_store()
-        for s in summaries:
-            store.insert_eval_summary(
-                module=s.module,
-                total=s.total,
-                passed=s.passed,
-                failed=s.failed,
-                errors=s.errors,
-                pass_rate=s.pass_rate,
-                metrics=s.metrics,
-            )
-    except Exception as e:
-        # DB 写失败只 warn，不阻断评估流程
-        import warnings
-        warnings.warn(f"[storage] DB aggregate save failed: {e}", stacklevel=2)
 
 
 def load_report(run_id: str) -> tuple[EvalReport, dict[str, Any]]:

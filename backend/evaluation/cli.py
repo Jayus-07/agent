@@ -10,19 +10,20 @@ import importlib
 import sys
 from pathlib import Path
 
+from backend.evaluation.gate import flag_regressions
 from backend.evaluation.report import (
-    flag_regressions,
     print_summary,
     write_json_report,
     write_markdown_report,
 )
 from backend.evaluation.runner import run_all
+from backend.evaluation.storage import DATA_ROOT
 
 # Windows console encoding fix: force UTF-8 to avoid UnicodeEncodeError on CJK + emoji
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-RESULTS_DIR = Path(__file__).resolve().parent / "results"
+RESULTS_DIR = DATA_ROOT
 
 _DEFAULT_RUNNER_CONFIG = "backend.evaluation.runners_config"
 
@@ -83,7 +84,11 @@ def main():
     )
     parser.add_argument(
         "--dataset", type=str, default=None, metavar="FILE",
-        help="自定义评测集文件名（如 rag_test_kb.json），用 rag runner 跑该评测集",
+        help="自定义评测集文件名（如 custom.json），用 rag runner 跑该评测集",
+    )
+    parser.add_argument(
+        "--selection", type=str, default=None, metavar="NAME",
+        help="命名选择集（如 ci_golden），从 datasets/rag/{NAME}.jsonl 加载",
     )
     parser.add_argument(
         "--tier", type=str, default="all",
@@ -92,7 +97,28 @@ def main():
     )
     parser.add_argument(
         "--ragas", action="store_true",
-        help="启用 RAGAS 官方指标对比（需 pip install ragas）",
+        help="RAGAS-only 模式（跳过自研 semantic 评测）",
+    )
+    parser.add_argument(
+        "--no-ragas", action="store_true",
+        help="Semantic-only 模式（跳过 RAGAS 评测）",
+    )
+    parser.add_argument(
+        "--ragas-level", type=str, default="standard",
+        choices=["basic", "standard", "full"],
+        help="RAGAS 指标档位: basic(2项) / standard(4项, 默认) / full(5项)",
+    )
+    parser.add_argument(
+        "--semantic-thresholds", type=str, default=None, metavar="JSON",
+        help="语义指标阈值配置（JSON 字符串），如 '{\"sem_context_recall_min\": 0.55}'",
+    )
+    parser.add_argument(
+        "--regression", action="store_true",
+        help="与上一次 baseline 对比，检测指标回归",
+    )
+    parser.add_argument(
+        "--promote-baseline", action="store_true",
+        help="将本次结果提升为新 baseline",
     )
 
     args = parser.parse_args()
@@ -101,6 +127,16 @@ def main():
     _bootstrap_runners(args.runner_config)
 
     live = args.live or args.judge
+
+    # 解析语义阈值 JSON
+    semantic_thresholds = None
+    if args.semantic_thresholds:
+        import json as _json
+        try:
+            semantic_thresholds = _json.loads(args.semantic_thresholds)
+        except _json.JSONDecodeError as e:
+            print(f"⚠️  --semantic-thresholds JSON 解析失败: {e}")
+            sys.exit(1)
 
     if not live:
         print("⚠️  离线模式（未启用 --live），Planner/SQL/E2E 将跳过。使用 --live 获取真实评估。")
@@ -113,15 +149,18 @@ def main():
         dataset_file=args.dataset,
         tier=args.tier,
         ragas=args.ragas,
+        no_ragas=args.no_ragas,
+        ragas_level=args.ragas_level,
+        selection=args.selection,
+        semantic_thresholds=semantic_thresholds,
+        regression=args.regression,
+        promote_baseline=args.promote_baseline,
     )
 
     print_summary(report)
 
     output_dir = Path(args.output) if args.output else RESULTS_DIR / report.timestamp.replace(":", "-")
     write_markdown_report(report, output_dir)
-    # V2.0: HTML Dashboard 报告（自包含 CSS，浏览器直接打开）
-    from backend.evaluation.report import write_html_report
-    write_html_report(report, output_dir)
     # 持久化 JSON 全量报告（含每条 case 检索轨迹），供 baseline 对比
     write_json_report(report, output_dir)
 
@@ -133,6 +172,27 @@ def main():
         persist_report(report)
     except Exception as e:  # noqa: BLE001
         print(f"⚠️  V1.0 persist_report 失败: {e}")
+
+    # 回归检测
+    if args.regression:
+        try:
+            from backend.evaluation.gate.regression import check_regression
+            exit_code = check_regression(report)
+            if exit_code == 0:
+                print("✅ 回归检测: 无显著下降")
+            else:
+                print(f"\n⚠️  回归检测: 指标下降超过阈值 (exit_code={exit_code})")
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️  回归检测失败: {e}")
+
+    # 提升 baseline
+    if args.promote_baseline:
+        try:
+            from backend.evaluation.gate.regression import promote
+            promote(report)
+            print("✅ 本次结果已提升为新 baseline")
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️  提升 baseline 失败: {e}")
 
     if args.verbose:
         _print_verbose(report)

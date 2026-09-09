@@ -4,8 +4,8 @@ CSV 可被 Grafana / InfluxDB Telegraf / Prometheus pushgateway 直接消费，
 也可配合 plot_trend.py 本地可视化趋势。
 
 用法：
-  python backend/scripts/publish_metrics.py                    # 默认读 reports/
-  REPORT_DIR=custom/path python backend/scripts/publish_metrics.py
+  python backend/scripts/publish_metrics.py                    # 默认读 data/eval_runs/
+  EVAL_RUNS_DIR=custom/path python backend/scripts/publish_metrics.py
 """
 
 import csv
@@ -14,8 +14,9 @@ import os
 import sys
 from pathlib import Path
 
-REPORT_DIR = Path(os.environ.get("REPORT_DIR", "reports"))
-HISTORY_FILE = REPORT_DIR / "metrics_history.csv"
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+EVAL_RUNS_DIR = Path(os.environ.get("EVAL_RUNS_DIR", _PROJECT_ROOT / "data" / "eval_runs"))
+HISTORY_FILE = EVAL_RUNS_DIR / "metrics_history.csv"
 
 CSV_COLUMNS = [
     "timestamp",
@@ -29,9 +30,20 @@ CSV_COLUMNS = [
 ]
 
 
-def _find_latest_report(report_dir: Path) -> Path | None:
-    reports = sorted(report_dir.glob("eval-rag-*.json"), reverse=True)
-    return reports[0] if reports else None
+def _find_latest_report(eval_runs_dir: Path) -> Path | None:
+    """找到最新的 run 目录，返回其 report.json 路径。"""
+    if not eval_runs_dir.exists():
+        return None
+    run_dirs = sorted(
+        [d for d in eval_runs_dir.iterdir() if d.is_dir()],
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
+    )
+    for run_dir in run_dirs:
+        report_path = run_dir / "report.json"
+        if report_path.exists():
+            return report_path
+    return None
 
 
 def extract_metrics(report_path: Path) -> dict:
@@ -66,9 +78,9 @@ def append_to_csv(row: dict, csv_path: Path) -> None:
 
 
 def main() -> None:
-    report_path = _find_latest_report(REPORT_DIR)
+    report_path = _find_latest_report(EVAL_RUNS_DIR)
     if not report_path:
-        print(f"未找到报告文件: {REPORT_DIR}/eval-rag-*.json", file=sys.stderr)
+        print(f"未找到报告文件: {EVAL_RUNS_DIR}/*/report.json", file=sys.stderr)
         sys.exit(1)
 
     row = extract_metrics(report_path)

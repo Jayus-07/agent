@@ -1,18 +1,60 @@
 """Ollama 生成后端 — 非阻塞 LLM Judge 的本地推理链路。
 
-直接 HTTP 调用 localhost:11434，不依赖 ollama Python 包。
-用于 Phase 4.2 的非阻塞 CI job：真实 LLM 生成 + RAGAS-style 答案相关性。
+使用 langchain_ollama.ChatOllama 替代原始 HTTP 调用。
+用于评测系统的答案生成和 LLM-based 答案相关性评估。
 """
 from __future__ import annotations
 
-import json
 import os
 
 from backend.shared.logger import logger
 
 _OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 _OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
-_GENERATION_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
+
+_token_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+
+
+def get_token_usage() -> dict[str, int]:
+    """返回累计的 token 消耗。"""
+    return dict(_token_usage)
+
+
+def reset_token_usage() -> None:
+    """重置 token 计数器（新一轮评测前调用）。"""
+    _token_usage["prompt_tokens"] = 0
+    _token_usage["completion_tokens"] = 0
+
+
+def _make_chat(model: str | None = None, base_url: str | None = None, temperature: float = 0.1):
+    from langchain_ollama import ChatOllama
+    return ChatOllama(
+        model=model or _OLLAMA_MODEL,
+        temperature=temperature,
+        base_url=base_url or _OLLAMA_BASE_URL,
+    )
+
+
+def _invoke_chat(
+    prompt: str,
+    *,
+    model: str | None = None,
+    base_url: str | None = None,
+    temperature: float = 0.1,
+) -> str:
+    """调用 ChatOllama，累计 token 用量，返回文本。"""
+    from langchain_core.messages import HumanMessage
+
+    chat = _make_chat(model, base_url, temperature)
+    try:
+        response = chat.invoke([HumanMessage(content=prompt)])
+        usage = getattr(response, "usage_metadata", None) or {}
+        _token_usage["prompt_tokens"] += usage.get("input_tokens", 0)
+        _token_usage["completion_tokens"] += usage.get("output_tokens", 0)
+        return response.content.strip()
+    except Exception as e:
+        logger.warning(f"[Ollama] 调用失败: {e}")
+        return ""
 
 
 def generate_answer_ollama(
@@ -22,7 +64,7 @@ def generate_answer_ollama(
     model: str | None = None,
     base_url: str | None = None,
 ) -> str:
-    """通过 Ollama HTTP API 生成答案。
+    """通过 ChatOllama 生成答案。
 
     Args:
         question: 用户问题
@@ -33,12 +75,6 @@ def generate_answer_ollama(
     Returns:
         生成的答案文本，失败时返回空字符串。
     """
-    import urllib.error
-    import urllib.request
-
-    url = f"{base_url or _OLLAMA_BASE_URL}/api/generate"
-    model = model or _OLLAMA_MODEL
-
     context_text = "\n---\n".join(context) if context else "（无检索结果）"
     prompt = (
         f"基于以下参考资料回答问题。如果资料不足以回答，请说明。\n\n"
@@ -46,25 +82,7 @@ def generate_answer_ollama(
         f"问题: {question}\n\n"
         f"答案:"
     )
-
-    payload = json.dumps({
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {"temperature": 0.1, "num_predict": 512},
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        url, data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=_GENERATION_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data.get("response", "").strip()
-    except Exception as e:
-        logger.warning(f"[Ollama] 生成失败: {e}")
-        return ""
+    return _invoke_chat(prompt, model=model, base_url=base_url, temperature=0.1)
 
 
 def answer_relevancy_llm(
@@ -114,66 +132,18 @@ def _generate_questions_from_answer(
     base_url: str | None = None,
 ) -> list[str]:
     """让 LLM 从答案反向生成 N 个问题。"""
-    import urllib.request
-
-    url = f"{base_url or _OLLAMA_BASE_URL}/api/generate"
-    model = model or _OLLAMA_MODEL
-
     prompt = (
         f"根据以下答案，生成 {n} 个可能导致该答案的问题。\n"
         f"每行一个问题，不要编号，不要其他内容。\n\n"
         f"答案: {answer}\n\n"
         f"问题:"
     )
-
-    payload = json.dumps({
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {"temperature": 0.7, "num_predict": 256},
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        url, data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=_GENERATION_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            text = data.get("response", "").strip()
-            questions = [
-                q.strip().lstrip("0123456789.、）) ")
-                for q in text.split("\n")
-                if q.strip() and len(q.strip()) > 4
-            ]
-            return questions[:n]
-    except Exception as e:
-        logger.warning(f"[Ollama] 问题生成失败: {e}")
+    text = _invoke_chat(prompt, model=model, base_url=base_url, temperature=0.7)
+    if not text:
         return []
-
-
-def setup_ollama_judge() -> None:
-    """将 judge_answer 的 LLM 后端设置为 Ollama。"""
-    from backend.evaluation.judge import set_llm_callable
-
-    def _ollama_callable(prompt: str) -> str:
-        import urllib.request
-
-        url = f"{_OLLAMA_BASE_URL}/api/generate"
-        payload = json.dumps({
-            "model": _OLLAMA_MODEL,
-            "prompt": prompt,
-            "stream": False,
-            "options": {"temperature": 0.2, "num_predict": 1024},
-        }).encode("utf-8")
-
-        req = urllib.request.Request(
-            url, data=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=_GENERATION_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data.get("response", "").strip()
-
-    set_llm_callable(_ollama_callable)
-    logger.info("[Ollama] Judge LLM 已设置为 Ollama")
+    questions = [
+        q.strip().lstrip("0123456789.、）) ")
+        for q in text.split("\n")
+        if q.strip() and len(q.strip()) > 4
+    ]
+    return questions[:n]

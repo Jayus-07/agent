@@ -16,31 +16,13 @@ from backend.shared.logger import logger
 _write_lock = threading.Lock()
 
 
-def _dataset_path(module: ModuleKind) -> Path:
-    """返回模块对应的评测集文件路径。
-
-    优先使用已有文件；若不存在则创建 {module}.json。
-    """
-    candidates = [
-        DATASET_DIR / f"{module}.json",
-    ]
-    for p in candidates:
-        if p.exists():
-            return p
-
-    split_dir = DATASET_DIR / module
-    if split_dir.is_dir():
-        return split_dir / "curated.json"
-
-    return DATASET_DIR / f"{module}.json"
-
 
 def append_case(
     case: TestCase,
     module: ModuleKind | None = None,
     dataset_dir: Path | None = None,
 ) -> dict:
-    """将单条 TestCase 原子追加到评测集 JSON。
+    """将单条 TestCase 原子追加到 cases.jsonl（JSONL 格式）。
 
     去重逻辑：若已有 case 的 metadata.trace_id 与当前 case 相同则跳过。
 
@@ -49,31 +31,14 @@ def append_case(
     """
     target_module = module or case.module
     base_dir = dataset_dir or DATASET_DIR
-    target_path = base_dir / f"{target_module}.json"
-
-    if not target_path.exists():
-        split_dir = base_dir / target_module
-        if split_dir.is_dir():
-            target_path = split_dir / "curated.json"
+    target_path = base_dir / target_module / "cases.jsonl"
 
     with _write_lock:
         existing_cases: list[TestCase] = []
-        dataset_version = "1.0"
 
         if target_path.exists():
             try:
-                with open(target_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                dataset_version = data.get("version", "1.0")
-                for item in data.get("test_cases", []):
-                    meta = item.get("metadata", {})
-                    existing_cases.append(TestCase(
-                        id=item["id"],
-                        question=item["question"],
-                        module=item.get("module", target_module),
-                        expected=item.get("expected", {}),
-                        metadata=meta,
-                    ))
+                existing_cases = _load_jsonl_cases(target_path, target_module)
             except Exception as exc:
                 logger.error(f"[curator] 读取评测集失败: {target_path}: {exc}")
                 return {"appended": False, "reason": f"读取失败: {exc}", "path": str(target_path)}
@@ -95,31 +60,28 @@ def append_case(
                 "path": str(target_path),
             }
 
-        existing_cases.append(case)
-
-        errors = validate_dataset(existing_cases)
+        errors = validate_dataset(existing_cases + [case])
         if errors:
             logger.warning(f"[curator] 追加后校验警告: {errors[:3]}")
 
-        payload = {
-            "version": dataset_version,
-            "test_cases": [
-                {
-                    "id": c.id,
-                    "question": c.question,
-                    "module": c.module,
-                    "expected": c.expected,
-                    "metadata": c.metadata,
-                }
-                for c in existing_cases
-            ],
-        }
+        case_line = json.dumps({
+            "id": case.id,
+            "question": case.question,
+            "module": case.module,
+            "expected": case.expected,
+            "metadata": case.metadata,
+        }, ensure_ascii=False)
 
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = target_path.with_suffix(".json.tmp")
+        tmp_path = target_path.with_suffix(".jsonl.tmp")
         try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
+            if target_path.exists():
+                tmp_path.write_text(
+                    target_path.read_text(encoding="utf-8") + case_line + "\n",
+                    encoding="utf-8",
+                )
+            else:
+                tmp_path.write_text(case_line + "\n", encoding="utf-8")
             tmp_path.replace(target_path)
         except Exception as exc:
             if tmp_path.exists():
@@ -129,6 +91,30 @@ def append_case(
 
     logger.info(f"[curator] 追加 TestCase {case.id} → {target_path}")
     return {"appended": True, "reason": "ok", "path": str(target_path)}
+
+
+def _load_jsonl_cases(file_path: Path, default_module: str) -> list[TestCase]:
+    """从 JSONL 文件加载 TestCase 列表（供 curator 内部使用）。"""
+    from backend.evaluation.dataset.validator import _normalize_ground_truth_context
+
+    cases = []
+    with open(file_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            item = json.loads(line)
+            expected = item.pop("expected", {})
+            metadata = item.pop("metadata", {})
+            _normalize_ground_truth_context(expected)
+            cases.append(TestCase(
+                id=item["id"],
+                question=item["question"],
+                module=item.get("module", default_module),
+                expected=expected,
+                metadata=metadata,
+            ))
+    return cases
 
 
 def list_cases(module: ModuleKind) -> list[TestCase]:

@@ -1,16 +1,15 @@
-# RAG 评测 CI — Golden Set 离线质量门（V3 语义门控）
+# RAG 评测 CI — Golden Set 离线质量门（V4 三层指标体系）
 #
 # 触发：PR to main / 手动 workflow_dispatch
 # 成本：¥0（全离线 — 本地 embedding + local reranker，零 API 调用）
-# 耗时：~3-5 min（首次 HF 模型下载 ~1 min，后续缓存命中 <10s）
+# 耗时：~2-3 min（首次 HF 模型下载 ~1 min，后续缓存命中 <10s）
 #
-# 流程：
-#   1. 安装 Python 依赖（pyproject.toml + requirements-dev.txt）
-#   2. 从 HuggingFace 镜像下载 embedding/reranker 模型（缓存）
-#   3. 首次 init 自动从 data/docs/ 构建 ChromaDB + BM25 索引
-#   4. 运行 golden set（13 条核心用例）→ 语义门控 pass/fail
+# V4 三层指标体系：
+#   Tier 1 Deterministic（CI 必跑）: recall@k, MRR, NDCG, chunk_recall
+#   Tier 2 Semantic（离线/夜间）: sem_context_recall, sem_faithfulness
+#   Tier 3 LLM Judge（夜间）: judge_completeness, judge_faithfulness
 #
-# V3 变更：pass/fail 由 sem_context_recall 决定，不再依赖 doc_id 标注
+# CI golden-set 只跑 Deterministic tier，不依赖 CrossEncoder 模型
 
 name: RAG Eval CI
 
@@ -35,9 +34,9 @@ concurrency:
 
 jobs:
   golden-set:
-    name: Golden Set (13 cases, offline)
+    name: Golden Set (Deterministic tier)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     env:
       RERANKER_BACKEND: local
@@ -46,7 +45,7 @@ jobs:
       LANGFUSE_ENABLED: "false"
       OBS_ANALYTICS_ENABLED: "false"
       PYTHONUTF8: "1"
-      EVAL_GATE: semantic
+      EVAL_GATE: legacy
 
     steps:
       - uses: actions/checkout@v4
@@ -66,7 +65,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: hf-${{ runner.os }}-bge-small-zh-bge-reranker-base-v1
+          key: hf-${{ runner.os }}-bge-small-zh-only
           restore-keys: hf-${{ runner.os }}-
 
       - name: Install dependencies
@@ -74,13 +73,12 @@ jobs:
           pip install -e ".[dev]"
           pip install -r backend/requirements-dev.txt
 
-      - name: Pre-download HF models
+      - name: Pre-download HF embedding model
         run: |
           python -c "
-          from sentence_transformers import SentenceTransformer, CrossEncoder
+          from sentence_transformers import SentenceTransformer
           SentenceTransformer('BAAI/bge-small-zh-v1.5')
-          CrossEncoder('BAAI/bge-reranker-base')
-          print('Models ready')
+          print('Embedding model ready')
           "
 
       - name: Run Golden Set evaluation
@@ -94,7 +92,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: eval-report
-          path: reports/
+          path: data/eval_runs/
           retention-days: 14
 
       - name: Comment PR with metrics
@@ -112,7 +110,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: metrics-history
-          path: reports/metrics_history.csv
+          path: data/eval_runs/metrics_history.csv
           retention-days: 90
 
   llm-judge:
@@ -179,6 +177,13 @@ jobs:
           print('Models ready')
           "
 
+      - name: Cache answers.jsonl
+        uses: actions/cache@v4
+        with:
+          path: data/answers.jsonl
+          key: answers-${{ hashFiles('backend/evaluation/datasets/rag_test_kb.json', 'backend/evaluation/generation.py', 'backend/evaluation/ragas_bridge.py', 'backend/evaluation/runners/rag.py', 'backend/evaluation/evaluators/ragas_provider.py') }}
+          restore-keys: answers-
+
       - name: Run LLM Judge evaluation
         run: |
           python -m pytest backend/tests/evaluation/test_eval_llm_judge.py \
@@ -194,37 +199,3 @@ jobs:
           path: llm_judge_report.txt
           retention-days: 7
 
-  deploy-pages:
-    name: Deploy Report to GitHub Pages
-    runs-on: ubuntu-latest
-    needs: golden-set
-    if: github.ref == 'refs/heads/main'
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: eval-report
-          path: site/
-
-      - name: Prepare Pages site
-        run: |
-          LATEST=$(ls -t site/eval-rag-*.html 2>/dev/null | head -1)
-          if [ -n "$LATEST" ]; then
-            cp "$LATEST" site/index.html
-            cp site/eval-rag-*.json site/ 2>/dev/null || true
-          fi
-
-      - uses: actions/configure-pages@v5
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site/
-
-      - id: deployment
-        uses: actions/deploy-pages@v4

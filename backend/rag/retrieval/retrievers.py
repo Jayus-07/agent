@@ -568,22 +568,66 @@ class AdaptiveRetriever(BaseRetriever):
 
         total = len(chunks)
 
-        # 找出占比 ≥ threshold 的文档
         clustered = [
             doc_id for doc_id, count in doc_counter.items()
             if count / total >= self.cluster_threshold
         ]
 
         if clustered and len(clustered) <= self.max_cluster_docs:
+            cluster_set = set(clustered)
+
+            # ── 置信度门控：cluster chunk 分数太低时跳过扩展 ──
+            # 低分说明 reranker 无法区分相关/噪声，扩展只会放大噪声
+            cluster_scores = [
+                s for s in (
+                    c.metadata.get("rerank_score")
+                    or c.metadata.get("rrf_score")
+                    or c.metadata.get("similarity")
+                    for c in chunks
+                    if c.metadata.get("doc_id") in cluster_set
+                )
+                if s
+            ]
+            if cluster_scores:
+                avg_score = sum(cluster_scores) / len(cluster_scores)
+                top_score = max(cluster_scores)
+                if avg_score < 0.5 and top_score < 0.7:
+                    logger.info(
+                        f"AdaptiveRetriever: Cluster 检测 (docs={clustered}) "
+                        f"但置信度低 (avg={avg_score:.3f}, top={top_score:.3f}) → 跳过 Expansion"
+                    )
+                    return chunks
+
             logger.info(f"AdaptiveRetriever: Cluster 检测 (docs={clustered}, {len(clustered)}/{len(doc_counter)}) → Context Expansion")
             try:
                 results = self.doc_db.get(where={"doc_id": {"$in": clustered}})
-                full_docs = [
-                    Document(page_content=content, metadata=results["metadatas"][i])
-                    for i, content in enumerate(results["documents"])
-                ]
-                # 全文文档放前面，chunks 补充在后
-                return full_docs + chunks
+                full_doc_map = {}
+                for i, content in enumerate(results["documents"]):
+                    doc_id = results["metadatas"][i].get("doc_id")
+                    if doc_id:
+                        full_doc_map[doc_id] = Document(
+                            page_content=content,
+                            metadata=results["metadatas"][i],
+                        )
+
+                # ── 替换而非前置：full doc 替换其 source chunks，保持排序 ──
+                # 旧实现 `full_docs + chunks` 把全文档放在最前面，导致：
+                #   1) 结果数膨胀（N full + M chunks），下游 top-k 截断丢失相关 chunk
+                #   2) 干扰文档全文排在相关 chunk 前面，排挤正确内容
+                # 新实现：原位替换，每个 cluster doc 的第一个 chunk 位置放全文，
+                # 同 doc 的后续 chunk 移除，非 cluster chunk 保持原位。
+                seen_cluster_docs = set()
+                result = []
+                for c in chunks:
+                    doc_id = c.metadata.get("doc_id")
+                    if doc_id in full_doc_map:
+                        if doc_id not in seen_cluster_docs:
+                            seen_cluster_docs.add(doc_id)
+                            result.append(full_doc_map[doc_id])
+                        # 同 doc 后续 chunk 跳过（已被全文替代）
+                    else:
+                        result.append(c)
+                return result
             except Exception as e:
                 logger.error(f"AdaptiveRetriever: Context Expansion 失败: {e}")
 

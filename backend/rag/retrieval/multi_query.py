@@ -43,7 +43,8 @@ def need_multi_query(query: str) -> tuple[bool, str]:
     mode=off     → 直接关闭
     mode=always  → 直接开启
     mode=on      → 兼容旧写法，同 always
-    mode=auto    → 调用 _is_complex 判断
+    mode=auto    → 由三层分类器 _classify_query_tier() 决定：
+                   仅 hybrid_multi_query 触发，vector_only/hybrid 不触发。
     """
     mode = _mq_mode
 
@@ -51,8 +52,16 @@ def need_multi_query(query: str) -> tuple[bool, str]:
         return False, "off"
     if mode in ("always", "on"):
         return True, mode
-    # auto
-    return _is_complex(query)
+    # auto → 统一由三层分类器决策
+    try:
+        from backend.rag.retrieval.hybrid import _classify_query_tier
+        tier = _classify_query_tier(query)
+        if tier == "hybrid_multi_query":
+            return True, f"三层路由: {tier}"
+        return False, f"三层路由: {tier}"
+    except Exception:
+        # 分类器不可用时回退到本地规则
+        return _is_complex(query)
 
 
 # =====================================================
@@ -304,6 +313,13 @@ class MultiQueryRetriever(BaseRetriever):
         queries = _rewrite(query)
         self._last_variants = len(queries)
         self._last_filtered = len(queries)
+
+        # LLM 改写失败（返回仅含原始 query）→ 降级到 hybrid 单路检索
+        if len(queries) <= 1:
+            logger.warning(
+                f"[MultiQuery] LLM 改写失败，降级到 hybrid 单路检索: {query[:30]}"
+            )
+            return self.base_retriever.invoke(query)
 
         from concurrent.futures import as_completed
         from backend.infra.thread_pools import retrieval_pool_inner

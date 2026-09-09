@@ -60,7 +60,7 @@ class EvalResult(BaseModel):
     status: Literal["pass", "fail", "error", "skip"]
     expected: dict[str, Any]
     actual: dict[str, Any]
-    metrics: dict[str, float] = Field(default_factory=dict)
+    metrics: dict[str, float | None] = Field(default_factory=dict)
     duration_ms: int = 0
     error_msg: str | None = None
 

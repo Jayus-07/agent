@@ -5,7 +5,7 @@
 
 环境变量：
     GH_TOKEN: GitHub token（CI 自动注入 secrets.GITHUB_TOKEN）
-    REPORT_DIR: 报告目录路径（默认 reports/）
+    EVAL_RUNS_DIR: 报告目录路径（默认 data/eval_runs/）
 """
 
 import json
@@ -13,6 +13,9 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+EVAL_RUNS_DIR = Path(os.environ.get("EVAL_RUNS_DIR", _PROJECT_ROOT / "data" / "eval_runs"))
 
 METRIC_DISPLAY = {
     "sem_context_recall": "语义召回",
@@ -31,9 +34,20 @@ METRIC_ORDER = [
 ]
 
 
-def _find_latest_report(report_dir: Path) -> Path | None:
-    json_files = sorted(report_dir.glob("eval-rag-*.json"), reverse=True)
-    return json_files[0] if json_files else None
+def _find_latest_report(eval_runs_dir: Path) -> Path | None:
+    """找到最新的 run 目录，返回其 report.json 路径。"""
+    if not eval_runs_dir.exists():
+        return None
+    run_dirs = sorted(
+        [d for d in eval_runs_dir.iterdir() if d.is_dir()],
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
+    )
+    for run_dir in run_dirs:
+        report_path = run_dir / "report.json"
+        if report_path.exists():
+            return report_path
+    return None
 
 
 def _status_emoji(value: float | None, threshold: float) -> str:
@@ -121,11 +135,10 @@ def build_comment(data: dict) -> str:
 
 
 def main():
-    report_dir = Path(os.environ.get("REPORT_DIR", "reports"))
-    report_path = _find_latest_report(report_dir)
+    report_path = _find_latest_report(EVAL_RUNS_DIR)
 
     if not report_path:
-        print(f"未找到评测报告（{report_dir}），跳过 PR 评论")
+        print(f"未找到评测报告（{EVAL_RUNS_DIR}），跳过 PR 评论")
         return
 
     with open(report_path, encoding="utf-8") as f:
