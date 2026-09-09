@@ -28,13 +28,14 @@ from backend.shared.logger import logger
 # 关键词重叠评分
 # =====================================================
 
-def _score_by_keyword_overlap(question: str, docs: list, fallback_k: int = 3) -> list:
+def _score_by_keyword_overlap(question: str, docs: list, fallback_k: int = 3, query_kw: set | None = None) -> list:
     """关键词软重排：命中文档按 overlap 降序排前面，未命中文档保留原始 embedding 顺序。
 
     不再硬过滤（丢弃 overlap=0 的文档），避免回归。
     增加子串模糊匹配：query kw 与 doc kw 存在包含关系时计 0.5 分。
     """
-    query_kw = set(extract_chunk_keywords(question, top_k=10))
+    if query_kw is None:
+        query_kw = set(extract_chunk_keywords(question, top_k=10))
     if not query_kw:
         return docs
 
@@ -174,12 +175,36 @@ class ChunkLevelRetriever(BaseRetriever):
     @staticmethod
     def _filter_docs_by_keywords(question: str, doc_results: list, fallback_k: int = 3) -> list:
         deduped = _dedup_by_doc_id(doc_results)
-        reranked = _score_by_keyword_overlap(question, deduped, fallback_k)
-        return list(dict.fromkeys(
+        query_kw = set(extract_chunk_keywords(question, top_k=10))
+        reranked = _score_by_keyword_overlap(question, deduped, fallback_k, query_kw=query_kw)
+        all_ids = [
             doc.metadata.get("doc_id")
             for doc in reranked
             if doc.metadata.get("doc_id")
-        ))
+        ]
+        if not query_kw:
+            return list(dict.fromkeys(all_ids))
+        matched_ids = []
+        for doc in reranked:
+            did = doc.metadata.get("doc_id")
+            if not did:
+                continue
+            raw = doc.metadata.get("doc_keywords", "")
+            if isinstance(raw, list):
+                doc_kw = set(raw)
+            elif raw:
+                try:
+                    doc_kw = set(json.loads(raw) if raw.startswith("[") else raw.split(", "))
+                except (json.JSONDecodeError, TypeError):
+                    doc_kw = set()
+            else:
+                doc_kw = set()
+            if query_kw & doc_kw:
+                matched_ids.append(did)
+        unique_matched = list(dict.fromkeys(matched_ids))
+        if unique_matched:
+            return unique_matched
+        return list(dict.fromkeys(all_ids))
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> List[Document]:
         """带请求内缓存的检索入口（P1-5）。

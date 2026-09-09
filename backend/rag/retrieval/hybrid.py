@@ -47,7 +47,6 @@ _EXACT_IDENTIFIER_PATTERNS = [
     re.compile(r'(?:订单|单号|流水号)[号:]?\s*[A-Za-z0-9]{6,}'),   # 订单号（仅英文数字，不匹配中文）
     re.compile(r'(?:错误码|错误号|error\s*code)[号:]?\s*[A-Za-z0-9]+', re.I),  # 错误码（仅英文数字）
     re.compile(r'(?:保单|合同)(?:(?:编号|号|ID)[:：]?\s*|[:：]\s*)[A-Z0-9][A-Z0-9_-]{3,}', re.I),  # 保单/合同编号（须有"编号/号/ID"标签或冒号分隔）
-    re.compile(r'\b\d{4,}[-_]\d{4,}\b'),                          # 长数字序列（工单号，须带分隔符）
     re.compile(r'\bv\d+\.\d+(?:\.\d+)?\b', re.I),                 # 版本号: v2.1, v3.0.1（须 v 前缀）
     re.compile(r'\b[A-Z]{1,4}\d{3,6}\b'),                         # 型号: A1234, AB5678（大写+3位以上数字+词边界）
     re.compile(r'(?:条款|条例|法规)\s*第?\s*\d+[条款章节]'),        # 法律条款引用
@@ -90,7 +89,7 @@ def _classify_query_tier(query: str) -> str:
     question_marks = q.count("？") + q.count("?")
     # 过滤空字符串，避免 "问题？" split 后得到 ["问题", ""] 误判
     sentence_parts = [
-        x.strip() for x in re.split(r'[。！？；!?;.\.]', q) if x.strip()
+        x.strip() for x in re.split(r'[。！？；!?;]', q) if x.strip()
     ]
     if question_marks >= _MULTI_QUESTION_THRESHOLD or len(sentence_parts) >= 3:
         return "hybrid_multi_query"

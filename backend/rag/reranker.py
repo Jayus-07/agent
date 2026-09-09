@@ -37,10 +37,9 @@ from backend.config import (
     RERANK_SCORE_THRESHOLD,
     RERANK_TIMEOUT,
     RERANK_TOP_K,
-    EVAL_DEVICE,
+    RERANKER_DEVICE,
 )
 from backend.shared.logger import logger
-from backend.infra.timeout import safe_call_with_timeout
 
 
 # ═══════════════════════════════════════════════════════════
@@ -56,9 +55,9 @@ class LocalModelLoader:
     def get_instance(cls) -> CrossEncoder:
         """获取或创建 CrossEncoder 实例 (线程安全)"""
         if cls._instance is None:
-            cls._instance = CrossEncoder(RERANKER_MODEL_PATH, device=EVAL_DEVICE)
+            cls._instance = CrossEncoder(RERANKER_MODEL_PATH, device=RERANKER_DEVICE)
             cls._loaded_at = __import__('datetime').datetime.now().isoformat()
-            logger.info(f"本地 reranker 模型懒加载完成：{RERANKER_MODEL_PATH} (device={EVAL_DEVICE}, at {cls._loaded_at})")
+            logger.info(f"本地 reranker 模型懒加载完成：{RERANKER_MODEL_PATH} (device={RERANKER_DEVICE}, at {cls._loaded_at})")
         return cls._instance
 
     @classmethod
@@ -248,15 +247,10 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
         """
         pairs = [(query, doc) for doc in documents]
 
-        scores = safe_call_with_timeout(
-            self.model.predict,
-            timeout=RERANK_TIMEOUT,
-            default_value=None,
-            error_message=f"本地 reranker 超时 ({RERANK_TIMEOUT}s)",
-            inputs=pairs  # 使用新的参数名 inputs 代替 sentences
-        )
-
-        if scores is None:
+        try:
+            scores = self.model.predict(pairs)
+        except Exception as e:
+            logger.error(f"本地 reranker 推理失败: {e}")
             return None
 
         # 配对并排序

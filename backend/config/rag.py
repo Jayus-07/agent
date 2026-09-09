@@ -94,6 +94,11 @@ RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "8"))
 # 经验值范围：0.2（宽松）~ 0.5（严格）。
 RERANK_SCORE_THRESHOLD = float(os.getenv("RERANK_SCORE_THRESHOLD", "0.3"))
 
+# Reranker 推理设备 — 独立于 EVAL_DEVICE，避免与 embedding/Ollama 争抢显存
+# 默认 "cpu"：CrossEncoder 推理 ~200-300ms/query，评测可接受
+# 显存充裕时可设 "cuda" 加速到 ~50-80ms/query
+RERANKER_DEVICE = os.getenv("RERANKER_DEVICE", "cpu").strip().lower()
+
 # ⭐ NEW: Adaptive Thresholds (Phase 1)
 VEC_MIN_SCORE_DEFAULT = float(os.getenv("VEC_MIN_SCORE_DEFAULT", "0.25"))
 ADAPTIVE_THRESHOLD_ENABLED = os.getenv("ADAPTIVE_THRESHOLD_ENABLED", "true").lower() == "true"

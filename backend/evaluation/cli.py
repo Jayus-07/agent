@@ -19,6 +19,12 @@ from backend.evaluation.report import (
 from backend.evaluation.runner import run_all
 from backend.evaluation.storage import DATA_ROOT
 
+# Windows asyncio 修复：SelectorEventLoop 避免 ProactorEventLoop 清理时的
+# "RuntimeError: Event loop is closed" 错误（来自 aiohttp/Ollama HTTP 客户端的 pipe transport）
+if sys.platform == "win32":
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
+
 # Windows console encoding fix: force UTF-8 to avoid UnicodeEncodeError on CJK + emoji
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")

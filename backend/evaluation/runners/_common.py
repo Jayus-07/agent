@@ -117,7 +117,7 @@ def get_full_retriever(pipeline):
     from backend.rag.retrieval.retrievers import AdaptiveRetriever
 
     base = pipeline.lc_chain.chunk_retriever_base
-    base.k = HYBRID_SEARCH_K
+    base.k = max(HYBRID_SEARCH_K, 20)
 
     adaptive = AdaptiveRetriever(
         base_retriever=base,

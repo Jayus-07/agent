@@ -13,6 +13,7 @@ _OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 _OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
 
 _token_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+_chat_cache: dict[tuple, object] = {}
 
 
 def get_token_usage() -> dict[str, int]:
@@ -28,11 +29,17 @@ def reset_token_usage() -> None:
 
 def _make_chat(model: str | None = None, base_url: str | None = None, temperature: float = 0.1):
     from langchain_ollama import ChatOllama
-    return ChatOllama(
-        model=model or _OLLAMA_MODEL,
-        temperature=temperature,
-        base_url=base_url or _OLLAMA_BASE_URL,
+    key = (model or _OLLAMA_MODEL, base_url or _OLLAMA_BASE_URL, temperature)
+    cached = _chat_cache.get(key)
+    if cached is not None:
+        return cached
+    chat = ChatOllama(
+        model=key[0],
+        temperature=key[2],
+        base_url=key[1],
     )
+    _chat_cache[key] = chat
+    return chat
 
 
 def _invoke_chat(

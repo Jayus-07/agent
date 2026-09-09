@@ -1,6 +1,7 @@
 """RAGAS 官方包适配层 — 与自研 sem_* 指标并行的基准对比。
 
-使用本地模型：HuggingFaceEmbeddings (bge-small-zh-v1.5, GPU) + ChatOllama (qwen2.5:3b)。
+LLM 打分使用 DashScope 云 API (qwen-plus)，Embeddings 使用本地
+HuggingFaceEmbeddings (bge-small-zh-v1.5, GPU)。
 通过 LangchainLLMWrapper / LangchainEmbeddingsWrapper 官方适配层接入 RAGAS。
 计算失败不阻断主流程（fail-safe）。
 
@@ -13,16 +14,185 @@ RAGAS 0.4.3 有两套指标 API：
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import os
+import re
 from typing import Any
 
 from backend.shared.logger import logger
 
+# ── RAGAS LLM 配置 ──────────────────────────────────────────────
+# 默认使用 DashScope 云 API（qwen-plus），本地 Ollama 作为可选 fallback
+_RAGAS_LLM_BACKEND = os.getenv("RAGAS_LLM_BACKEND", "cloud")  # "cloud" | "local"
+
+# Cloud LLM (DashScope OpenAI 兼容端点)
+_RAGAS_CLOUD_MODEL = os.getenv("RAGAS_CLOUD_MODEL", "qwen-plus")
+_RAGAS_CLOUD_API_KEY = os.getenv("QWEN_API_KEY", "")
+_RAGAS_CLOUD_API_BASE = os.getenv(
+    "QWEN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+)
+
+# Local LLM (Ollama fallback — 仅 RAGAS_LLM_BACKEND=local 时使用)
 _OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 _OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
 
-# RAGAS 单 case 超时（秒）。LLM 调用是 I/O 密集型，ThreadPoolExecutor 可正确中断。
-_RAGAS_CASE_TIMEOUT = int(os.getenv("RAGAS_CASE_TIMEOUT", "60"))
+# RAGAS 单 case 超时（秒）。Cloud API 4 个指标串行 LLM 调用，180s 留足余量。
+_RAGAS_CASE_TIMEOUT = int(os.getenv("RAGAS_CASE_TIMEOUT", "180"))
+
+
+# ── Monkey-patch: RAGAS 输出解析安全网（cloud 模型极少触发，local 小模型必需） ──
+
+def _robust_extract_json(text: str) -> str:
+    """增强版 extract_json — 处理小模型常见的格式问题。"""
+    if not text or not text.strip():
+        return "{}"
+
+    stripped = text.strip()
+
+    code_fence = stripped.find("```json")
+    if code_fence != -1:
+        stripped = stripped[code_fence + 7:]
+        end_fence = stripped.rfind("```")
+        if end_fence > 0:
+            stripped = stripped[:end_fence]
+        stripped = stripped.strip()
+
+    if stripped.startswith("{") or stripped.startswith("["):
+        try:
+            json.loads(stripped)
+            return stripped
+        except json.JSONDecodeError:
+            pass
+
+        repaired = _repair_json_string(stripped)
+        try:
+            json.loads(repaired)
+            return repaired
+        except json.JSONDecodeError:
+            pass
+
+    json_match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", stripped, re.DOTALL)
+    if json_match:
+        candidate = json_match.group()
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass
+
+    return stripped
+
+
+def _repair_json_string(text: str) -> str:
+    """尝试修复常见的 JSON 格式问题。"""
+    repaired = text.replace("'", '"')
+    repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+
+    depth_b = 0
+    depth_s = 0
+    in_string = False
+    escape = False
+    for ch in repaired:
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            if in_string:
+                escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth_b += 1
+        elif ch == "}":
+            depth_b -= 1
+        elif ch == "[":
+            depth_s += 1
+        elif ch == "]":
+            depth_s -= 1
+
+    if depth_s > 0:
+        repaired += "]" * depth_s
+    if depth_b > 0:
+        repaired += "}" * depth_b
+
+    return repaired
+
+
+def _default_for_model(output_model_cls: type) -> Any:
+    """根据 Pydantic 模型类创建中性默认实例（解析失败时的 fallback）。"""
+    from pydantic import BaseModel
+    if not isinstance(output_model_cls, type) or not issubclass(output_model_cls, BaseModel):
+        return None
+
+    cls_name = output_model_cls.__name__
+
+    try:
+        if cls_name == "NLIStatementOutput":
+            return output_model_cls(statements=[])
+        if cls_name == "StatementGeneratorOutput":
+            return output_model_cls(statements=[""])
+        if cls_name == "ContextRecallClassifications":
+            return output_model_cls(classifications=[])
+        if cls_name == "Verification":
+            return output_model_cls(reason="parse fallback", verdict=0)
+        if cls_name == "ResponseRelevanceOutput":
+            return output_model_cls(question="", noncommittal=0)
+        if cls_name == "StringIO":
+            return output_model_cls(text="{}")
+
+        return output_model_cls.model_construct()
+    except Exception:
+        return None
+
+
+async def _patched_parse_output_string(
+    self,
+    output_string: str,
+    prompt_value: Any,
+    llm: Any,
+    callbacks: Any,
+    retries_left: int = 1,
+) -> Any:
+    """替换 RagasOutputParser.parse_output_string — 去掉 LLM retry，改用本地修复。
+
+    必须是 async def：RAGAS 0.4.3 原版是协程，调用方用 await。
+    """
+    try:
+        jsonstr = _robust_extract_json(output_string)
+        return super(type(self), self).parse(jsonstr)
+    except Exception:
+        pass
+
+    try:
+        repaired = _repair_json_string(output_string)
+        jsonstr = _robust_extract_json(repaired)
+        return super(type(self), self).parse(jsonstr)
+    except Exception:
+        pass
+
+    default = _default_for_model(self.pydantic_object)
+    if default is not None:
+        logger.debug(f"[RAGAS-patch] 使用默认实例: {type(default).__name__}")
+        return default
+
+    from ragas.prompt.pydantic_prompt import RagasOutputParserException
+    raise RagasOutputParserException()
+
+
+def _apply_ragas_patches() -> None:
+    """应用所有 RAGAS monkey-patches。"""
+    import ragas.prompt.pydantic_prompt as _pp
+
+    _pp.extract_json = _robust_extract_json
+    _pp.RagasOutputParser.parse_output_string = _patched_parse_output_string
+    logger.info("[RAGAS-patch] 输出解析安全网已加载")
+
+
+_apply_ragas_patches()
 
 RAGAS_LEVELS: dict[str, list[str]] = {
     "basic": ["ContextRecall", "Faithfulness"],
@@ -56,12 +226,40 @@ _llm_wrapper: Any = None
 _embeddings: Any = None
 
 
-def _init_llm() -> Any:
-    """初始化 LangchainLLMWrapper(ChatOllama)。"""
+def _init_cloud_llm() -> Any:
+    """初始化 LangchainLLMWrapper(ChatOpenAI) — DashScope 云 API。"""
+    from langchain_openai import ChatOpenAI
+    from ragas.llms import LangchainLLMWrapper
+
+    if not _RAGAS_CLOUD_API_KEY:
+        raise RuntimeError(
+            "RAGAS cloud LLM 需要 QWEN_API_KEY 环境变量，"
+            "或设置 RAGAS_LLM_BACKEND=local 使用本地 Ollama"
+        )
+
+    chat = ChatOpenAI(
+        model=_RAGAS_CLOUD_MODEL,
+        temperature=0,
+        max_tokens=4096,
+        request_timeout=60,
+        api_key=_RAGAS_CLOUD_API_KEY,
+        base_url=_RAGAS_CLOUD_API_BASE,
+    )
+    return LangchainLLMWrapper(chat)
+
+
+def _init_local_llm() -> Any:
+    """初始化 LangchainLLMWrapper(ChatOllama) — 本地 Ollama（fallback）。"""
     from langchain_ollama import ChatOllama
     from ragas.llms import LangchainLLMWrapper
 
-    chat = ChatOllama(model=_OLLAMA_MODEL, temperature=0, base_url=_OLLAMA_HOST)
+    chat = ChatOllama(
+        model=_OLLAMA_MODEL,
+        temperature=0,
+        base_url=_OLLAMA_HOST,
+        format="json",
+        num_predict=1024,
+    )
     return LangchainLLMWrapper(chat)
 
 
@@ -99,8 +297,12 @@ def _get_llm() -> Any:
     """获取全局 LLM 单例（懒初始化）。"""
     global _llm_wrapper
     if _llm_wrapper is None:
-        _llm_wrapper = _init_llm()
-        logger.info("[RAGAS] LLM 初始化完成（全局单例）")
+        if _RAGAS_LLM_BACKEND == "local":
+            _llm_wrapper = _init_local_llm()
+            logger.info(f"[RAGAS] LLM 初始化完成（本地 Ollama: {_OLLAMA_MODEL}）")
+        else:
+            _llm_wrapper = _init_cloud_llm()
+            logger.info(f"[RAGAS] LLM 初始化完成（DashScope: {_RAGAS_CLOUD_MODEL}）")
     return _llm_wrapper
 
 
@@ -214,7 +416,8 @@ def compute_ragas_metrics_safe(
     """公共 API：带超时保护的 RAGAS 指标计算（ThreadPoolExecutor）。
 
     LLM/Embeddings 使用全局单例（GPU 模型不重载）。
-    超时通过 ThreadPoolExecutor 实现 — LLM 调用是 I/O 密集型，线程可正确响应取消。
+    超时通过 ThreadPoolExecutor + shutdown(wait=False) 实现。
+    注意：不能用 ``with`` 语句，因为 __exit__ 会 shutdown(wait=True) 无限等待挂起线程。
     """
     if not contexts or not answer.strip():
         logger.warning("[RAGAS] contexts 或 answer 为空，跳过")
@@ -224,24 +427,26 @@ def compute_ragas_metrics_safe(
     metric_names = RAGAS_LEVELS.get(level, RAGAS_LEVELS["standard"])
     null_result = {_METRIC_KEY_MAP[n]: None for n in metric_names}
 
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(
-                _compute_impl,
-                question=question,
-                answer=answer,
-                contexts=contexts,
-                ground_truth=ground_truth,
-                reference_contexts=reference_contexts,
-                level=level,
-            )
-            return future.result(timeout=timeout)
+        future = executor.submit(
+            _compute_impl,
+            question=question,
+            answer=answer,
+            contexts=contexts,
+            ground_truth=ground_truth,
+            reference_contexts=reference_contexts,
+            level=level,
+        )
+        return future.result(timeout=timeout)
     except concurrent.futures.TimeoutError:
         logger.warning(f"[RAGAS] 打分超时 ({timeout}s)，跳过记 null")
         return null_result
     except Exception as e:
         logger.warning(f"[RAGAS] 计算失败: {e}")
         return null_result
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def reset_caches() -> None:
