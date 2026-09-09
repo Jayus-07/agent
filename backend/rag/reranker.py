@@ -12,8 +12,8 @@
 
 配置环境变量:
 - RERANKER_BACKEND: "dashscope" (默认) | "local"
-- DASHSCOPE_API_KEY: 阿里云 DashScope API Key（支持 Token Plan sk-sp- 密钥）
-- DASHSCOPE_API_BASE: 原生 API Base URL（默认 dashscope 公有云；Token Plan 无需设置）
+- DASHSCOPE_API_KEY: 阿里云 DashScope API Key（标准 sk-ws- 密钥；Token Plan sk-sp- 不支持 rerank）
+- DASHSCOPE_API_BASE: 原生 API Base URL（默认 dashscope 公有云）
 - RERANK_TIMEOUT: API 超时阈值 (秒)，默认 5
 - RERANK_TOP_K: 返回文档数，默认 8
 - RERANK_SCORE_THRESHOLD: 分数过滤阈值，默认 0.3
@@ -77,33 +77,35 @@ class LocalModelLoader:
 # DashScope Reranker - API Backend
 # ═══════════════════════════════════════════════════════════
 
+_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
+_DASHSCOPE_RERANK_PATH = "/services/rerank/text-rerank/text-rerank"
+
 class DashScopeReranker(BaseDocumentCompressor):
-    """阿里云 DashScope Reranker API 实现（直接 HTTP，兼容 Token Plan 密钥）
+    """阿里云 DashScope Reranker API 实现（直接 HTTP，无需 dashscope SDK）
 
-    不再依赖 dashscope SDK 的 TextReRank.call，改用 requests 直接调用 REST API。
-    这样 Token Plan (sk-sp-) 密钥和标准 (sk-ws-) 密钥都能正常工作。
+    使用 requests 直接调用 DashScope 原生 REST API，避免 SDK 的全局状态污染。
+    需要标准 API Key（sk-ws-）；Token Plan（sk-sp-）不支持 rerank 端点。
     """
-
-    _DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
-    _RERANK_PATH = "/services/rerank/text-rerank/rerank"
 
     def __init__(self, api_key: str, timeout: int = 5):
         if not api_key:
             raise RuntimeError("DashScopeReranker 需要 DASHSCOPE_API_KEY")
 
-        self.__dict__['api_key'] = api_key
-        self.__dict__['timeout'] = timeout
-
-        base_url = os.getenv("DASHSCOPE_API_BASE", self._DEFAULT_BASE_URL).rstrip("/")
-        self.__dict__['_endpoint'] = base_url + self._RERANK_PATH
-        self.__dict__['_headers'] = {
+        base_url = os.getenv("DASHSCOPE_API_BASE", _DASHSCOPE_BASE_URL).rstrip("/")
+        endpoint = base_url + _DASHSCOPE_RERANK_PATH
+        headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
 
+        self.__dict__['api_key'] = api_key
+        self.__dict__['timeout'] = timeout
+        self.__dict__['_endpoint'] = endpoint
+        self.__dict__['_headers'] = headers
+
         logger.info(
             f"初始化 DashScope Reranker HTTP (model=qwen3-rerank, "
-            f"endpoint={base_url}, timeout={self.timeout}s)"
+            f"endpoint={base_url}, timeout={timeout}s)"
         )
 
     def rank(self, query: str, documents: list[str], top_k: int = 8) -> list[tuple[int, float]]:

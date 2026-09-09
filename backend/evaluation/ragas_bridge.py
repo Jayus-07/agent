@@ -22,11 +22,11 @@ from typing import Any
 from backend.shared.logger import logger
 
 # ── RAGAS LLM 配置 ──────────────────────────────────────────────
-# 默认使用 DashScope 云 API（qwen-plus），本地 Ollama 作为可选 fallback
+# 默认使用 DashScope 云 API（qwen3.7-plus），本地 Ollama 作为可选 fallback
 _RAGAS_LLM_BACKEND = os.getenv("RAGAS_LLM_BACKEND", "cloud")  # "cloud" | "local"
 
 # Cloud LLM (DashScope OpenAI 兼容端点)
-_RAGAS_CLOUD_MODEL = os.getenv("RAGAS_CLOUD_MODEL", "qwen-plus")
+_RAGAS_CLOUD_MODEL = os.getenv("RAGAS_CLOUD_MODEL", "qwen3.7-plus")
 _RAGAS_CLOUD_API_KEY = os.getenv("QWEN_API_KEY", "")
 _RAGAS_CLOUD_API_BASE = os.getenv(
     "QWEN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"
