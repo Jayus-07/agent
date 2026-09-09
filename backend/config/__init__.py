@@ -1,8 +1,8 @@
 """config — 配置管理（按模块拆分）
 
-.env 加载策略: 从项目根目录 agent/.env 加载（无论 CWD 在哪）。
-子模块（database/llm/rag/...）中的 load_dotenv() 会被根 .env 的
-值覆盖（override=False），因此只需根 .env 一份配置。
+.env 加载策略: 优先项目根目录 agent/.env，其次 backend/.env（无论 CWD 在哪）。
+子模块（database/llm/rag/...）中的 load_dotenv() 不会被后加载的 .env 值
+覆盖（override=False），因此只需一份配置。
 """
 import os
 from pathlib import Path
@@ -10,9 +10,19 @@ from dotenv import load_dotenv
 
 # 计算项目根目录: config/__init__.py → backend/config/ → backend/ → agent/
 _ROOT = Path(__file__).resolve().parent.parent.parent
-_ENV_PATH = _ROOT / ".env"
-if _ENV_PATH.exists():
-    load_dotenv(_ENV_PATH)
+_BACKEND_DIR = _ROOT / "backend"
+# 必须在下方读取任何 os.getenv 之前加载（否则 API_KEY/ALLOW_UNAUTHENTICATED 等
+# 会拿到未填充的空值，导致 auth 中间件误判 fail-closed）。override=False：
+# 先加载的根 .env 优先，子模块的 load_dotenv() 不会覆盖。
+for _env_path in (_ROOT / ".env", _BACKEND_DIR / ".env"):
+    if _env_path.exists():
+        load_dotenv(_env_path)
+
+# 运行环境（fail-safe: 无法识别时按 production 处理，拒绝降级到宽松策略）
+_VALID_ENVIRONMENTS = {"development", "testing", "staging", "production"}
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development").strip().lower()
+if ENVIRONMENT not in _VALID_ENVIRONMENTS:
+    ENVIRONMENT = "production"
 
 # 并发控制
 MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "5"))
@@ -71,6 +81,17 @@ from backend.config.database import (
 )
 # LLM
 from backend.config.llm import (
+    ENV_MODE,
+    EMBEDDING_MODEL,
+    EMBEDDING_API_BASE,
+    EMBEDDING_API_KEY,
+    EMBEDDING_MODEL_PATH,
+    RERANK_MODEL,
+    RERANKER_MODEL_PATH,
+    RERANK_TIMEOUT,
+    EVAL_DEVICE,
+    TOKEN_USAGE_LOG_PATH,
+    EVAL_DATASET_PATH,
     LLM_MODEL,
     LLM_TEMPERATURE,
     LLM_CONTEXT_LENGTH,
@@ -80,9 +101,8 @@ from backend.config.llm import (
     DEEPSEEK_API_BASE,
     MINIMAX_API_KEY,
     MINIMAX_API_BASE,
-    EMBEDDING_MODEL_PATH,
-    RERANKER_MODEL_PATH,
-    RERANK_TIMEOUT,
+    QWEN_API_KEY,
+    QWEN_API_BASE,
 )
 # RAG
 from backend.config.rag import (
@@ -103,6 +123,7 @@ from backend.config.rag import (
     HYBRID_SEARCH_K,
     RERANK_TOP_K,
     RERANK_SCORE_THRESHOLD,
+    RERANKER_DEVICE,
     CITATION_SUPPORT_THRESHOLD,
     MULTI_QUERY_MODE,
     MULTI_QUERY_COUNT,
@@ -202,8 +223,51 @@ from backend.config.rag import (
 from backend.config.rag import (
     ENABLE_FAITHFULNESS, FAITHFULNESS_SKIP_THRESHOLD, NLI_USE_LLM,
 )
+# Input Guard（输入侧安全门禁）
+from backend.config import guard  # noqa: F401 — 模块形式暴露（backend.config.guard.XXX）
+# Customer Service（客服子系统）
+from backend.config.customer_service import (
+    CS_ENABLED,
+    CS_CONFIRMATION_TTL_SECONDS,
+    CS_HANDOFF_TIMEOUT_SECONDS,
+    CS_MAX_CONFIRMATION_RETRIES,
+    CS_HIGH_RISK_ACTIONS,
+    CS_CRITICAL_ACTIONS,
+    CS_KNOWLEDGE_BASES,
+    COMPLAINT_PATTERNS,
+    CS_DOMAIN_KEYWORDS,
+    CS_DOMAIN_PATTERNS,
+    CS_VECTOR_THRESHOLD,
+    CS_RULE_MIN_HITS,
+    CS_CONFIDENCE_ANSWER,
+    CS_CONFIDENCE_CAUTIOUS,
+    CS_ROUTER_INDEX_DIR,
+    CS_GRAPH_ENABLED,
+    CS_EXPERT_MAX_LOOPS,
+    CS_SUPERVISOR_LLM_ENABLED,
+    CS_SUPERVISOR_LLM_TIMEOUT_MS,
+    CS_CHECKPOINTER_ENABLED,
+    CS_GRAPH_RECURSION_LIMIT,
+)
+# Redis
+from backend.config.redis import (
+    REDIS_ENABLED,
+    REDIS_URL,
+    REDIS_KEY_PREFIX,
+    REDIS_MAX_CONNECTIONS,
+    REDIS_SOCKET_TIMEOUT,
+)
+# Observability (trace redaction / sampling / PG mirror)
+from backend.config.observability import (
+    TRACE_PII_MASKING_ENABLED,
+    TRACE_DETAIL_LEVEL,
+    TRACE_SAMPLING_RATE,
+    TRACE_PG_MIRROR_ENABLED,
+)
 
 __all__ = [
+    # environment
+    "ENVIRONMENT",
     # settings
     "LOG_LEVEL", "LOG_FILE", "OVERALL_REQUEST_TIMEOUT",
     # sql 数据安全
@@ -216,8 +280,9 @@ __all__ = [
     # llm
     "LLM_MODEL", "LLM_TEMPERATURE", "LLM_CONTEXT_LENGTH", "LLM_MAX_CONCURRENCY",
     "LLM_REQUEST_TIMEOUT", "DEEPSEEK_API_KEY", "DEEPSEEK_API_BASE",
-    "MINIMAX_API_KEY", "MINIMAX_API_BASE", "EMBEDDING_MODEL_PATH",
-    "RERANKER_MODEL_PATH", "RERANK_TIMEOUT",
+    "MINIMAX_API_KEY", "MINIMAX_API_BASE", "QWEN_API_KEY", "QWEN_API_BASE",
+    "EMBEDDING_MODEL_PATH",
+    "RERANKER_MODEL_PATH", "RERANK_TIMEOUT", "EVAL_DEVICE",
     # rag
     "CHUNK_SIZE", "CHUNK_OVERLAP", "PROJECT_CHUNK_SIZE",
     "POLICY_MAX_CHUNK_SIZE", "GENERAL_CHUNK_SIZE", "GENERAL_CHUNK_OVERLAP",
@@ -229,7 +294,7 @@ __all__ = [
     "MAX_CHUNKS_PER_DOC",
     "DEFAULT_KB_ID",
     "BM25_SEARCH_K", "HYBRID_SEARCH_K", "RERANK_TOP_K",
-    "RERANK_SCORE_THRESHOLD", "CITATION_SUPPORT_THRESHOLD",
+    "RERANK_SCORE_THRESHOLD", "RERANKER_DEVICE", "CITATION_SUPPORT_THRESHOLD",
     "MULTI_QUERY_MODE", "MULTI_QUERY_COUNT", "MULTI_QUERY_TEMPERATURE",
     "MULTI_QUERY_MAX_TOKENS", "MULTI_QUERY_TOP_K_PER", "MULTI_QUERY_DEDUP",
     "MULTI_QUERY_SIMILARITY", "MULTI_QUERY_MIN_LENGTH",
@@ -270,4 +335,19 @@ __all__ = [
     "ENABLE_FAITHFULNESS", "FAITHFULNESS_SKIP_THRESHOLD", "NLI_USE_LLM",
     # email
     "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM",
+    # customer service
+    "CS_ENABLED", "CS_CONFIRMATION_TTL_SECONDS", "CS_HANDOFF_TIMEOUT_SECONDS",
+    "CS_MAX_CONFIRMATION_RETRIES", "CS_HIGH_RISK_ACTIONS", "CS_CRITICAL_ACTIONS",
+    "CS_KNOWLEDGE_BASES", "COMPLAINT_PATTERNS", "CS_DOMAIN_KEYWORDS",
+    "CS_DOMAIN_PATTERNS", "CS_VECTOR_THRESHOLD", "CS_RULE_MIN_HITS",
+    "CS_CONFIDENCE_ANSWER", "CS_CONFIDENCE_CAUTIOUS", "CS_ROUTER_INDEX_DIR",
+    # CS Graph 独立架构（Phase 0）
+    "CS_GRAPH_ENABLED", "CS_EXPERT_MAX_LOOPS", "CS_SUPERVISOR_LLM_ENABLED",
+    "CS_SUPERVISOR_LLM_TIMEOUT_MS", "CS_CHECKPOINTER_ENABLED", "CS_GRAPH_RECURSION_LIMIT",
+    # redis
+    "REDIS_ENABLED", "REDIS_URL", "REDIS_KEY_PREFIX",
+    "REDIS_MAX_CONNECTIONS", "REDIS_SOCKET_TIMEOUT",
+    # observability
+    "TRACE_PII_MASKING_ENABLED", "TRACE_DETAIL_LEVEL",
+    "TRACE_SAMPLING_RATE", "TRACE_PG_MIRROR_ENABLED",
 ]

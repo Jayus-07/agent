@@ -8,6 +8,7 @@ from langchain_core.retrievers import BaseRetriever
 from langchain_core.documents import Document
 from pydantic import Field
 
+import json
 from collections import Counter
 
 from langchain_core.callbacks.manager import CallbackManagerForRetrieverRun
@@ -27,25 +28,60 @@ from backend.shared.logger import logger
 # 关键词重叠评分
 # =====================================================
 
-def _score_by_keyword_overlap(question: str, docs: list, fallback_k: int = 3) -> list:
-    query_kw = set(extract_chunk_keywords(question))
+def _score_by_keyword_overlap(question: str, docs: list, fallback_k: int = 3, query_kw: set | None = None) -> list:
+    """关键词软重排：命中文档按 overlap 降序排前面，未命中文档保留原始 embedding 顺序。
+
+    不再硬过滤（丢弃 overlap=0 的文档），避免回归。
+    增加子串模糊匹配：query kw 与 doc kw 存在包含关系时计 0.5 分。
+    """
+    if query_kw is None:
+        query_kw = set(extract_chunk_keywords(question, top_k=10))
     if not query_kw:
         return docs
 
     scored = []
     for doc in docs:
-        doc_kw = set(doc.metadata.get("chunk_keywords", "").split(", "))
-        overlap = len(query_kw & doc_kw)
-        scored.append((doc, overlap))
+        raw = doc.metadata.get("doc_keywords", "")
+        if isinstance(raw, list):
+            doc_kw = set(raw)
+        elif raw:
+            try:
+                doc_kw = set(json.loads(raw) if raw.startswith("[") else raw.split(", "))
+            except (json.JSONDecodeError, TypeError):
+                doc_kw = set()
+        else:
+            doc_kw = set()
+        exact = len(query_kw & doc_kw)
+        fuzzy = 0.0
+        if not exact:
+            for qk in query_kw:
+                for dk in doc_kw:
+                    if len(qk) >= 2 and len(dk) >= 2 and (qk in dk or dk in qk):
+                        fuzzy += 0.5
+                        break
+        score = exact + fuzzy
+        scored.append((doc, score))
 
-    scored.sort(key=lambda x: x[1], reverse=True)
-    filtered = [doc for doc, score in scored if score > 0]
-    if not filtered:
-        logger.info(f"关键词过滤无命中(query_kw={query_kw})，回退前{fallback_k}个")
-        filtered = [doc for doc, _ in scored[:fallback_k]]
+    matched = [(doc, s) for doc, s in scored if s > 0]
+    unmatched = [doc for doc, s in scored if s == 0]
+    matched.sort(key=lambda x: x[1], reverse=True)
 
-    logger.info(f"关键词过滤: query_kw={query_kw}, 命中 {len(filtered)}/{len(docs)}")
-    return filtered
+    logger.info(f"关键词重排: query_kw={query_kw}, 命中 {len(matched)}/{len(docs)}")
+    return [doc for doc, _ in matched] + unmatched
+
+
+def _dedup_by_doc_id(docs: list) -> list:
+    """按 doc_id 去重，保留首次出现（相似度最高）的条目。"""
+    seen = set()
+    result = []
+    for doc in docs:
+        did = doc.metadata.get("doc_id")
+        if did and did in seen:
+            continue
+        if did:
+            seen.add(did)
+        result.append(doc)
+    return result
 
 
 def attach_parent_context(docs: List[Document], parent_lookup) -> List[Document]:
@@ -93,6 +129,33 @@ def attach_parent_context(docs: List[Document], parent_lookup) -> List[Document]
 
 
 # =====================================================
+# 请求内检索缓存（2026-09-03 P1-5）
+# =====================================================
+
+def _copy_docs(docs: list) -> list:
+    """Document 浅拷贝：隔离 metadata，防止调用方改写污染缓存。"""
+    return [
+        Document(page_content=d.page_content, metadata=dict(d.metadata))
+        for d in docs
+    ]
+
+
+def _retrieval_cache_hits() -> int:
+    """当前请求上下文的检索缓存命中次数（可观测）。"""
+    from backend.rag.context import get_context
+    return get_context().retrieval_cache_hits
+
+
+def _cache_key(query: str, metadata_filter: dict, k: int) -> str:
+    """缓存键：(query, metadata_filter, k)；filter 用 JSON 序列化兼容嵌套/列表值。"""
+    try:
+        f = json.dumps(metadata_filter or {}, sort_keys=True, default=str)
+    except Exception:
+        f = str(metadata_filter)
+    return f"{query}\x00{f}\x00{k}"
+
+
+# =====================================================
 # Chunk-Level Retriever
 # =====================================================
 
@@ -111,16 +174,80 @@ class ChunkLevelRetriever(BaseRetriever):
 
     @staticmethod
     def _filter_docs_by_keywords(question: str, doc_results: list, fallback_k: int = 3) -> list:
-        filtered = _score_by_keyword_overlap(question, doc_results, fallback_k)
-        return list(set([
+        deduped = _dedup_by_doc_id(doc_results)
+        query_kw = set(extract_chunk_keywords(question, top_k=10))
+        reranked = _score_by_keyword_overlap(question, deduped, fallback_k, query_kw=query_kw)
+        all_ids = [
             doc.metadata.get("doc_id")
-            for doc in filtered
+            for doc in reranked
             if doc.metadata.get("doc_id")
-        ]))
+        ]
+        if not query_kw:
+            return list(dict.fromkeys(all_ids))
+        matched_ids = []
+        for doc in reranked:
+            did = doc.metadata.get("doc_id")
+            if not did:
+                continue
+            raw = doc.metadata.get("doc_keywords", "")
+            if isinstance(raw, list):
+                doc_kw = set(raw)
+            elif raw:
+                try:
+                    doc_kw = set(json.loads(raw) if raw.startswith("[") else raw.split(", "))
+                except (json.JSONDecodeError, TypeError):
+                    doc_kw = set()
+            else:
+                doc_kw = set()
+            if query_kw & doc_kw:
+                matched_ids.append(did)
+        unique_matched = list(dict.fromkeys(matched_ids))
+        if unique_matched:
+            return unique_matched
+        return list(dict.fromkeys(all_ids))
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> List[Document]:
+        """带请求内缓存的检索入口（P1-5）。
+
+        同一请求内相同 (query, metadata_filter, k) 的重复调用直接命中缓存，
+        避免 MultiQuery 变体 × 同义词扩展组合出的重复检索；缓存随
+        RequestContext（contextvars）隔离，跨请求不共享。返回副本防止
+        下游对 metadata 的改写（如 source_query）污染缓存。
+        """
+        from backend.rag.context import get_context
+
+        ctx = get_context()
+        key = _cache_key(query, ctx.metadata_filter, self.k)
+        cached = ctx.retrieval_cache.get(key)
+        if cached is not None:
+            ctx.retrieval_cache_hits += 1
+            logger.info(
+                f"[ChunkLevelRetriever] 请求内缓存命中({ctx.retrieval_cache_hits}): {query[:30]}"
+            )
+            return _copy_docs(cached)
+
+        docs = self._retrieve_uncached(query)
+        ctx.retrieval_cache[key] = _copy_docs(docs)
+        return docs
+
+    def _retrieve_uncached(self, query: str) -> List[Document]:
+        """带 span 生命周期保障的入口：异常/提前 return 都不会泄漏 span。
+
+        旧实现两处提前 return（neighbor expansion / Stage2 空结果）漏调
+        end_span，导致 trace 中出现 end_time='' 的假 success span。
+        """
         from backend.observability.tracer import trace_collector, SpanName
-        span = trace_collector.start_span("chunk_retrieval", name=SpanName.RETRIEVAL)
+        span = trace_collector.start_span("chunk_retrieval", name=SpanName.CHUNK_RETRIEVAL, parent_id=None)
+        try:
+            docs, metrics = self._retrieve_uncached_impl(query, span)
+        except Exception:
+            trace_collector.end_span(span, status="error")
+            raise
+        trace_collector.end_span(span, metrics=metrics)
+        return docs
+
+    def _retrieve_uncached_impl(self, query: str, span) -> "tuple[List[Document], dict]":
+        from backend.observability.tracer import trace_collector
         # — Stage 1: Doc 级检索 —
         # Check for request-scoped metadata_filter (set by RAGPipeline.search() via contextvars)
         request_metadata_filter = {}
@@ -159,9 +286,9 @@ class ChunkLevelRetriever(BaseRetriever):
                 # 否则 Stage2 hybrid_retrieve doc_ids=[] 不限 doc，rerank 输入被 KB 内噪声稀释
                 # 导致高相关 doc 被挤掉（fix 2026-08-19 — RAG eval 基线从 72% 恢复）
                 if request_metadata_filter:
-                    doc_results = self.doc_db.similarity_search(query, k=5, filter=request_metadata_filter)
+                    doc_results = self.doc_db.similarity_search(query, k=15, filter=request_metadata_filter)
                 else:
-                    doc_results = self.doc_db.similarity_search(query, k=5)
+                    doc_results = self.doc_db.similarity_search(query, k=15)
                 stage1_fallback_count += 1
                 doc_ids = self._filter_docs_by_keywords(query, doc_results)
                 stage1_path = "metadata_filter_with_doc_similarity"
@@ -178,12 +305,12 @@ class ChunkLevelRetriever(BaseRetriever):
                     stage1_path = "person_name"
                     logger.info(f"ChunkLevelRetriever: 人名匹配到 {len(doc_ids)} 个文档")
                 else:
-                    doc_results = self.doc_db.similarity_search(query, k=5)
+                    doc_results = self.doc_db.similarity_search(query, k=15)
                     stage1_fallback_count += 1
                     doc_ids = self._filter_docs_by_keywords(query, doc_results)
                     stage1_path = "doc_similarity" if doc_results else "keyword_filter"
             else:
-                doc_results = self.doc_db.similarity_search(query, k=5)
+                doc_results = self.doc_db.similarity_search(query, k=15)
                 stage1_fallback_count += 1
                 if doc_results:
                     doc_ids = self._filter_docs_by_keywords(query, doc_results)
@@ -207,6 +334,12 @@ class ChunkLevelRetriever(BaseRetriever):
         # 🟢 2026-08-10 新增：Stage 1 0 匹配 fallback
         # 解决 metadata_filter 推 business_domain 不准时丢文档的问题
         # （如问"差评怎么处理" → customer，但售后流程文档标 order）
+        # 2026-09-10 fix：旧实现 domain/kb 两级放宽是 if/else 二选一 —— 只要
+        # business_domain 在 filter 中就只放宽它，剩余 kb_id（可能指向空 KB，
+        # 如「退款」→ biz_order 但文档实际在 rag_test_kb）永远不会被放宽，
+        # 兜底形同虚设 → 0 召回 → Evidence Gate 假拒答。
+        # 改为顺序放宽：先放宽 business_domain，再探测 KB 是否有文档，
+        # 空则连 kb_id 一起放宽（宁跨 KB 召回，不全量拒答）。
         if request_metadata_filter and not doc_ids:
             fallback_filter = {k: v for k, v in request_metadata_filter.items() if k != "business_domain"}
             if fallback_filter != request_metadata_filter:
@@ -218,6 +351,25 @@ class ChunkLevelRetriever(BaseRetriever):
                 doc_ids = None  # 让 Stage 2 走完整向量检索
                 stage1_path = "domain_fallback"
                 stage1_fallback_count += 1
+                # 探测放宽 domain 后 KB 是否仍有文档；空 KB → 继续放宽 kb_id
+                if not self._filter_has_docs(fallback_filter):
+                    kb_relaxed = {
+                        k: v for k, v in fallback_filter.items()
+                        if k not in ("kb_id", "$or")
+                    }
+                    if kb_relaxed != fallback_filter:
+                        logger.info(
+                            f"ChunkLevelRetriever: 放宽 business_domain 后仍无文档 "
+                            f"(filter={fallback_filter})，继续放宽 kb_id → {kb_relaxed}"
+                        )
+                        request_metadata_filter = kb_relaxed
+                        stage1_path = "kb_fallback"
+                        stage1_fallback_count += 1
+                trace_collector.add_event(span, "stage1_fallback", "info",
+                    f"Stage1 0 匹配 → 放宽后 filter={request_metadata_filter}, path={stage1_path}",
+                    data={"relaxed_filter": request_metadata_filter,
+                          "stage1_path": stage1_path,
+                          "stage1_fallback_count": stage1_fallback_count})
             else:
                 # fix f17：business_domain 不在 filter 中仍 0 命中 —— 元凶多半是
                 # kb_id 推断失配（KBRouter 关键词规则把问题路由到无文档的 KB，
@@ -237,26 +389,34 @@ class ChunkLevelRetriever(BaseRetriever):
                     doc_ids = None
                     stage1_path = "kb_fallback"
                     stage1_fallback_count += 1
+                    trace_collector.add_event(span, "stage1_fallback", "info",
+                        f"Stage1 0 匹配 → 放宽 kb_id 后 filter={request_metadata_filter}",
+                        data={"relaxed_filter": request_metadata_filter,
+                              "stage1_path": stage1_path,
+                              "stage1_fallback_count": stage1_fallback_count})
 
         # — Stage 2: Chunk 级检索 —
         # 2026-08-20: 同义词扩展 — 对 query 做同义词扩展，提升口语化 query 召回
+        # 优化：Stage 1 无匹配时跳过同义词扩展（无 doc 指引时扩展只会放大空检索）
         from backend.rag.preprocessing.synonyms import expand_query
-        queries_to_search = expand_query(query)
+        if doc_ids:
+            expanded_queries = expand_query(query)
+        else:
+            expanded_queries = None
 
         all_docs = []
         seen = set()
-        for q in queries_to_search:
-            res = hybrid_retrieve(
-                q, self.chunk_retriever, self.bm25,
-                k=self.k, doc_ids=doc_ids,
-                metadata_filter=request_metadata_filter,
-                expanded_queries=queries_to_search,  # 传全部扩展 query 给 vector_retriever
-            )
-            for d in res:
-                cid = d.metadata.get("chunk_id") or f'{d.metadata.get("doc_id","?")}:{d.metadata.get("chunk_index",0)}'
-                if cid not in seen:
-                    seen.add(cid)
-                    all_docs.append(d)
+        res = hybrid_retrieve(
+            query, self.chunk_retriever, self.bm25,
+            k=self.k, doc_ids=doc_ids,
+            metadata_filter=request_metadata_filter,
+            expanded_queries=expanded_queries,
+        )
+        for d in res:
+            cid = d.metadata.get("chunk_id") or f'{d.metadata.get("doc_id","?")}:{d.metadata.get("chunk_index",0)}'
+            if cid not in seen:
+                seen.add(cid)
+                all_docs.append(d)
 
         # — 降级: Stage 2 无结果时回退到文档全文 —
         if not all_docs:
@@ -264,24 +424,47 @@ class ChunkLevelRetriever(BaseRetriever):
             fallback_docs = self._neighbor_expansion(query, doc_ids, request_metadata_filter)
             if fallback_docs:
                 logger.info(f"ChunkLevelRetriever: Neighbor Expansion → {len(fallback_docs)} chunks")
-                return fallback_docs[: self.k]
+                return fallback_docs[: self.k], {
+                    "retrieved_chunks": len(fallback_docs),
+                    "stage1_path": stage1_path,
+                    "stage1_fallback_count": stage1_fallback_count,
+                    "fallback": "neighbor_expansion",
+                }
             logger.warning(f"ChunkLevelRetriever: 降级也无结果")
-            return []
+            return [], {
+                "retrieved_chunks": 0,
+                "stage1_path": stage1_path,
+                "stage1_fallback_count": stage1_fallback_count,
+            }
 
         logger.info(f"ChunkLevelRetriever Stage 2: 召回 {len(all_docs)} 个 chunks")
 
         # ── Adaptive Retrieval: 质量不足时自动扩大 K ──
-        all_docs = self._adaptive_expand(query, all_docs, doc_ids,
+        all_docs, effective_k = self._adaptive_expand(query, all_docs, doc_ids,
                                          request_metadata_filter, seen)
 
         # ── Parent-Child 上下文增强：检索命中的 leaf，拉取对应 parent ──
         all_docs = attach_parent_context(all_docs, self._lookup_parents)
 
-        trace_collector.end_span(span,
-                             metrics={"retrieved_chunks": len(all_docs),
-                                      "stage1_path": stage1_path,
-                                      "stage1_fallback_count": stage1_fallback_count})
-        return all_docs[: self.k]
+        return all_docs[: effective_k], {
+            "retrieved_chunks": len(all_docs),
+            "stage1_path": stage1_path,
+            "stage1_fallback_count": stage1_fallback_count,
+        }
+
+    def _filter_has_docs(self, metadata_filter: dict) -> bool:
+        """探测给定 metadata_filter 在 doc 库中是否还能匹配到文档（不做向量检索，零 embedding 成本）。
+
+        Stage1 兜底放宽 business_domain 后调用：若放宽后的 KB 仍是空的
+        （如 kb_id 指向无文档的 KB），则需要继续放宽 kb_id。
+        探测异常时按"有文档"处理（返回 True），保持只放宽一级的旧行为。
+        """
+        try:
+            res = self.doc_db.get(where=metadata_filter if metadata_filter else None)
+            return bool((res or {}).get("ids"))
+        except Exception as e:
+            logger.debug(f"[ChunkLevelRetriever] filter 探测失败({type(e).__name__}): {e}")
+            return True
 
     def _lookup_parents(self, chunk_ids: List[str]) -> List[Document]:
         """按 chunk_id 列表从向量库查 parent chunk（Parent-Child 上下文）。"""
@@ -298,18 +481,23 @@ class ChunkLevelRetriever(BaseRetriever):
         return result
 
     def _adaptive_expand(self, query: str, docs: list, doc_ids: list | None,
-                         metadata_filter: dict, seen: set) -> list:
-        """自适应 K 扩展：相似度不足或有效 chunk 太少时自动扩大检索范围。"""
+                         metadata_filter: dict, seen: set) -> "tuple[list, int]":
+        """自适应 K 扩展：相似度不足或有效 chunk 太少时自动扩大检索范围。
+
+        Returns:
+            (docs, effective_k): 扩展后的文档列表和实际使用的 k 值。
+            effective_k 用于调用方截断，不再修改 self.k（共享单例不可变）。
+        """
         try:
             from backend.config import (
                 ADAPTIVE_RETRIEVAL_ENABLED,
                 ADAPTIVE_MIN_CHUNKS, ADAPTIVE_K_STEPS,
             )
         except ImportError:
-            return docs
+            return docs, self.k
 
         if not ADAPTIVE_RETRIEVAL_ENABLED or not docs:
-            return docs
+            return docs, self.k
 
         # 用 RRF/向量相似度（优先级: rrf_score > similarity > 0）
         scores = []
@@ -325,13 +513,14 @@ class ChunkLevelRetriever(BaseRetriever):
         effective = sum(1 for d in docs if len(d.page_content.strip()) > 20)
 
         if unique_docs >= ADAPTIVE_MIN_CHUNKS or effective >= ADAPTIVE_MIN_CHUNKS * 2:
-            return docs  # 已覆盖足够多文档/chunk
+            return docs, self.k  # 已覆盖足够多文档/chunk
 
         logger.info(
             f"[Adaptive] 覆盖面不足 (unique_docs={unique_docs} < {ADAPTIVE_MIN_CHUNKS}, "
             f"effective={effective}) → 扩展检索"
         )
 
+        effective_k = self.k
         # 逐级扩展 K 直到满足阈值或用尽步长
         for step_k in ADAPTIVE_K_STEPS:
             if step_k <= self.k:
@@ -360,12 +549,12 @@ class ChunkLevelRetriever(BaseRetriever):
             effective = sum(1 for d in docs if len(d.page_content.strip()) > 20)
             if unique_docs >= ADAPTIVE_MIN_CHUNKS or effective >= ADAPTIVE_MIN_CHUNKS * 2:
                 logger.info(f"[Adaptive] 扩展后达标: k={step_k}, docs={len(docs)}, unique={unique_docs}")
-                self.k = step_k
+                effective_k = step_k
                 break
         else:
             logger.info(f"[Adaptive] 扩展用尽，最终 docs={len(docs)}")
 
-        return docs
+        return docs, effective_k
 
     def _neighbor_expansion(self, query: str, doc_ids: list | None,
                             metadata_filter: dict) -> List[Document]:
@@ -448,22 +637,66 @@ class AdaptiveRetriever(BaseRetriever):
 
         total = len(chunks)
 
-        # 找出占比 ≥ threshold 的文档
         clustered = [
             doc_id for doc_id, count in doc_counter.items()
             if count / total >= self.cluster_threshold
         ]
 
         if clustered and len(clustered) <= self.max_cluster_docs:
+            cluster_set = set(clustered)
+
+            # ── 置信度门控：cluster chunk 分数太低时跳过扩展 ──
+            # 低分说明 reranker 无法区分相关/噪声，扩展只会放大噪声
+            cluster_scores = [
+                s for s in (
+                    c.metadata.get("rerank_score")
+                    or c.metadata.get("rrf_score")
+                    or c.metadata.get("similarity")
+                    for c in chunks
+                    if c.metadata.get("doc_id") in cluster_set
+                )
+                if s
+            ]
+            if cluster_scores:
+                avg_score = sum(cluster_scores) / len(cluster_scores)
+                top_score = max(cluster_scores)
+                if avg_score < 0.5 and top_score < 0.7:
+                    logger.info(
+                        f"AdaptiveRetriever: Cluster 检测 (docs={clustered}) "
+                        f"但置信度低 (avg={avg_score:.3f}, top={top_score:.3f}) → 跳过 Expansion"
+                    )
+                    return chunks
+
             logger.info(f"AdaptiveRetriever: Cluster 检测 (docs={clustered}, {len(clustered)}/{len(doc_counter)}) → Context Expansion")
             try:
                 results = self.doc_db.get(where={"doc_id": {"$in": clustered}})
-                full_docs = [
-                    Document(page_content=content, metadata=results["metadatas"][i])
-                    for i, content in enumerate(results["documents"])
-                ]
-                # 全文文档放前面，chunks 补充在后
-                return full_docs + chunks
+                full_doc_map = {}
+                for i, content in enumerate(results["documents"]):
+                    doc_id = results["metadatas"][i].get("doc_id")
+                    if doc_id:
+                        full_doc_map[doc_id] = Document(
+                            page_content=content,
+                            metadata=results["metadatas"][i],
+                        )
+
+                # ── 替换而非前置：full doc 替换其 source chunks，保持排序 ──
+                # 旧实现 `full_docs + chunks` 把全文档放在最前面，导致：
+                #   1) 结果数膨胀（N full + M chunks），下游 top-k 截断丢失相关 chunk
+                #   2) 干扰文档全文排在相关 chunk 前面，排挤正确内容
+                # 新实现：原位替换，每个 cluster doc 的第一个 chunk 位置放全文，
+                # 同 doc 的后续 chunk 移除，非 cluster chunk 保持原位。
+                seen_cluster_docs = set()
+                result = []
+                for c in chunks:
+                    doc_id = c.metadata.get("doc_id")
+                    if doc_id in full_doc_map:
+                        if doc_id not in seen_cluster_docs:
+                            seen_cluster_docs.add(doc_id)
+                            result.append(full_doc_map[doc_id])
+                        # 同 doc 后续 chunk 跳过（已被全文替代）
+                    else:
+                        result.append(c)
+                return result
             except Exception as e:
                 logger.error(f"AdaptiveRetriever: Context Expansion 失败: {e}")
 

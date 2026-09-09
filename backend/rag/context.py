@@ -40,6 +40,19 @@ class RequestContext:
     faithfulness: Any = None                   # FaithfulnessResult（评估结果）
     mq_triggered: bool = False                 # MultiQuery 本次是否触发
 
+    # ── QueryAnalyzer 缓存（避免同一请求内多次调用）──
+    query_analysis: Any = None
+
+    # ── 证据门控 & 自纠正（每请求独立实例，避免并发串扰）──
+    gate: Any = None
+    corrector: Any = None
+
+    # ── 请求内检索缓存（2026-09-03 P1-5）──
+    # key=(query, filter_items, k) → 最终检索结果；跨请求随 context 隔离。
+    # 治理 MultiQuery 变体 × 同义词扩展组合出的重复检索调用。
+    retrieval_cache: dict = field(default_factory=dict)
+    retrieval_cache_hits: int = 0
+
     def to_dict(self) -> dict:
         return {
             "metadata_filter": self.metadata_filter,

@@ -7,8 +7,9 @@
 
 示例：
   强信号：workflow 关键词（"每天"/"自动"/"发送"）→ workflow mode
-  强信号：SQL 关键词（"多少"/"统计"/"排名"）→ 倾向 sql.query
-  弱信号：业务 SOP 关键词（"审核"/"流程"）→ 不做强制（交给 embedding）
+  强信号：SQL 关键词（"多少"/"统计"/"排名"）≥3 个 → 倾向 sql.query
+  强信号：业务 SOP 关键词（"审核"/"退款"）≥2 个 → rag.search（2026-09-10 起）
+  弱信号：单个业务 SOP 关键词 → 不做强制（交给 embedding/LLM）
 """
 from __future__ import annotations
 
@@ -118,9 +119,14 @@ class RuleRouter:
                 reason="匹配竞品分析关键词 1 个（弱信号）",
             )
 
-        # 2. 业务 SOP 关键字（审核/退款/流程等 — 弱信号，给 Vector/LLM 做 hint）
+        # 2. 业务 SOP 关键字（审核/退款/流程等）
+        # 2026-09-10：2 个命中即视为强信号直接拍板（原阈值 3）。
+        # 依据：trace c8431b548b01 —— 「退款审核时间是多少？」命中 2 个 RAG 关键词，
+        # 规则层给出候选 rag.search(0.70)，随后 Vector miss，LLM 花 8.4s 得出
+        # 与规则完全相同的结论。RAG 误路由代价低（Evidence Gate 保护，无证据即拒答），
+        # 而 2 个业务 SOP 关键词（如「退款」+「审核」「制度」+「规范」）已足够强。
         rag_hits = sum(1 for k in _RAG_KEYWORDS if re.search(k, query_lower))
-        if rag_hits >= 3:
+        if rag_hits >= 2:
             return RouteDecision(
                 execution_mode=ExecutionMode.DIRECT,
                 candidates=[CapabilityScore(name="rag.search", score=0.85)],

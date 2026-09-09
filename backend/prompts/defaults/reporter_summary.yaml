@@ -1,0 +1,13 @@
+key: reporter.summary
+name: 报告快速总结
+category: reporter
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: data_summary, required: true, description: 数据摘要}
+template: |
+  根据以下数据一句话总结业务状况（不超过50字）:
+
+  {data_summary}
+
+  直接输出总结，不要格式:

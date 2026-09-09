@@ -22,6 +22,12 @@ KNOWLEDGE_BASES: Dict[str, dict] = {
     "policy_finance": {"name": "财务制度知识库", "domain": "finance",    "owner_depts": ["finance"]},
     "policy_general": {"name": "企业公共制度知识库", "domain": "general", "owner_depts": ["all"]},
     "rag_test_kb":    {"name": "RAG 评测知识库", "domain": "general", "owner_depts": ["all"]},
+    "cs_faq":         {"name": "客服FAQ", "domain": "customer_service", "owner_depts": ["customer"]},
+    "cs_product":     {"name": "产品知识库", "domain": "customer_service", "owner_depts": ["customer", "product_dept"]},
+    "cs_policy":      {"name": "政策知识库", "domain": "customer_service", "owner_depts": ["customer"]},
+    "cs_aftersales":  {"name": "售后知识库", "domain": "customer_service", "owner_depts": ["customer"]},
+    "cs_complaint":   {"name": "投诉处理知识库", "domain": "customer_service", "owner_depts": ["customer"]},
+    "cs_scripts":     {"name": "话术知识库", "domain": "customer_service", "owner_depts": ["customer"]},
 }
 
 # 默认知识库（上传未选时回退）

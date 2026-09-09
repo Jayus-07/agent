@@ -9,20 +9,27 @@ import argparse
 import importlib
 import sys
 from pathlib import Path
-from backend.evaluation.runner import run_all
+
+from backend.evaluation.gate import flag_regressions
 from backend.evaluation.report import (
     print_summary,
-    write_markdown_report,
     write_json_report,
-    compare_reports,
-    flag_regressions,
+    write_markdown_report,
 )
+from backend.evaluation.runner import run_all
+from backend.evaluation.storage import DATA_ROOT
+
+# Windows asyncio 修复：SelectorEventLoop 避免 ProactorEventLoop 清理时的
+# "RuntimeError: Event loop is closed" 错误（来自 aiohttp/Ollama HTTP 客户端的 pipe transport）
+if sys.platform == "win32":
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
 
 # Windows console encoding fix: force UTF-8 to avoid UnicodeEncodeError on CJK + emoji
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-RESULTS_DIR = Path(__file__).resolve().parent / "results"
+RESULTS_DIR = DATA_ROOT
 
 _DEFAULT_RUNNER_CONFIG = "backend.evaluation.runners_config"
 
@@ -46,11 +53,11 @@ def _bootstrap_runners(config_module: str | None = None):
 def main():
     parser = argparse.ArgumentParser(
         prog="python -m evaluation",
-        description="Agent Platform 评估框架 — 度量 Planner/RAG/SQL/E2E 质量",
+        description="Agent Platform 评估框架 — 度量 Planner/RAG 质量",
     )
     parser.add_argument(
         "module", nargs="?", default="all",
-        choices=["all", "planner", "rag", "sql", "e2e"],
+        choices=["all", "planner", "rag"],
         help="评估模块 (默认: all)",
     )
     parser.add_argument(
@@ -63,7 +70,7 @@ def main():
     )
     parser.add_argument(
         "--judge", action="store_true",
-        help="启用 LLM-as-Judge 评分 E2E 答案（隐含 --live）",
+        help="启用 LLM-as-Judge 评分（隐含 --live）",
     )
     parser.add_argument(
         "--compare", type=str, default=None, metavar="ID",
@@ -83,7 +90,41 @@ def main():
     )
     parser.add_argument(
         "--dataset", type=str, default=None, metavar="FILE",
-        help="自定义评测集文件名（如 rag_test_kb.json），用 rag runner 跑该评测集",
+        help="自定义评测集文件名（如 custom.json），用 rag runner 跑该评测集",
+    )
+    parser.add_argument(
+        "--selection", type=str, default=None, metavar="NAME",
+        help="命名选择集（如 ci_golden），从 datasets/rag/{NAME}.jsonl 加载",
+    )
+    parser.add_argument(
+        "--tier", type=str, default="all",
+        choices=["all", "smoke", "core", "hard", "regression"],
+        help="分层评估: 按用例 tier 过滤 (默认: all, 不过滤)",
+    )
+    parser.add_argument(
+        "--ragas", action="store_true",
+        help="RAGAS-only 模式（跳过自研 semantic 评测）",
+    )
+    parser.add_argument(
+        "--no-ragas", action="store_true",
+        help="Semantic-only 模式（跳过 RAGAS 评测）",
+    )
+    parser.add_argument(
+        "--ragas-level", type=str, default="standard",
+        choices=["basic", "standard", "full"],
+        help="RAGAS 指标档位: basic(2项) / standard(4项, 默认) / full(5项)",
+    )
+    parser.add_argument(
+        "--semantic-thresholds", type=str, default=None, metavar="JSON",
+        help="语义指标阈值配置（JSON 字符串），如 '{\"sem_context_recall_min\": 0.55}'",
+    )
+    parser.add_argument(
+        "--regression", action="store_true",
+        help="与上一次 baseline 对比，检测指标回归",
+    )
+    parser.add_argument(
+        "--promote-baseline", action="store_true",
+        help="将本次结果提升为新 baseline",
     )
 
     args = parser.parse_args()
@@ -93,8 +134,18 @@ def main():
 
     live = args.live or args.judge
 
+    # 解析语义阈值 JSON
+    semantic_thresholds = None
+    if args.semantic_thresholds:
+        import json as _json
+        try:
+            semantic_thresholds = _json.loads(args.semantic_thresholds)
+        except _json.JSONDecodeError as e:
+            print(f"⚠️  --semantic-thresholds JSON 解析失败: {e}")
+            sys.exit(1)
+
     if not live:
-        print("⚠️  离线模式（未启用 --live），Planner/SQL/E2E 将跳过。使用 --live 获取真实评估。")
+        print("⚠️  离线模式（未启用 --live），Planner 将跳过。使用 --live 获取真实评估。")
 
     report = run_all(
         module=args.module,
@@ -102,26 +153,50 @@ def main():
         smoke=args.smoke,
         judge=args.judge,
         dataset_file=args.dataset,
+        tier=args.tier,
+        ragas=args.ragas,
+        no_ragas=args.no_ragas,
+        ragas_level=args.ragas_level,
+        selection=args.selection,
+        semantic_thresholds=semantic_thresholds,
+        regression=args.regression,
+        promote_baseline=args.promote_baseline,
     )
 
     print_summary(report)
 
-    output_dir = Path(args.output) if args.output else RESULTS_DIR / report.timestamp.replace(":", "-")
-    write_markdown_report(report, output_dir)
-    # V2.0: HTML Dashboard 报告（自包含 CSS，浏览器直接打开）
-    from backend.evaluation.report import write_html_report
-    write_html_report(report, output_dir)
-    # 持久化 JSON 全量报告（含每条 case 检索轨迹），供 baseline 对比
-    write_json_report(report, output_dir)
-
-    # V1.0: 持久化到 data/eval_runs/ + 写 PostgreSQL 聚合
-    #   - run_dir 包含 report.json + per_case/{id}.json + meta.json（git_sha 等）
-    #   - 失败不阻断：CLI 主流程已成功，持久化失败仅 warn
+    # 统一输出到 data/eval_runs/{run_id}/，所有产物（report.json + per_case + markdown + JSON）在同一目录
     try:
         from backend.evaluation.storage import persist_report
-        persist_report(report)
+        run_dir = persist_report(report)
     except Exception as e:  # noqa: BLE001
-        print(f"⚠️  V1.0 persist_report 失败: {e}")
+        print(f"⚠️  persist_report 失败: {e}")
+        run_dir = None
+
+    output_dir = Path(args.output) if args.output else (run_dir or RESULTS_DIR / report.timestamp.replace(":", "-"))
+    write_markdown_report(report, output_dir)
+    write_json_report(report, output_dir)
+
+    # 回归检测
+    if args.regression:
+        try:
+            from backend.evaluation.gate.regression import check_regression
+            exit_code = check_regression(report)
+            if exit_code == 0:
+                print("✅ 回归检测: 无显著下降")
+            else:
+                print(f"\n⚠️  回归检测: 指标下降超过阈值 (exit_code={exit_code})")
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️  回归检测失败: {e}")
+
+    # 提升 baseline
+    if args.promote_baseline:
+        try:
+            from backend.evaluation.gate.regression import promote
+            promote(report)
+            print("✅ 本次结果已提升为新 baseline")
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️  提升 baseline 失败: {e}")
 
     if args.verbose:
         _print_verbose(report)
@@ -129,14 +204,21 @@ def main():
     if args.compare:
         _do_compare(args.compare, report, RESULTS_DIR, current_dir=output_dir)
 
-    # 返回适当退出码
-    has_failures = any(r.status in ("fail", "error") for r in report.results)
-    sys.exit(1 if has_failures and not args.smoke else 0)
+    # V2: 分层退出码 — 任一层级未达阈值即退出 1
+    tier_failed = [ts for ts in report.tier_summaries if not ts.passed_threshold]
+    if tier_failed:
+        for ts in tier_failed:
+            print(
+                f"⚠️  [{ts.tier}] 通过率 {ts.pass_rate:.1%} "
+                f"< 阈值 {ts.threshold:.1%}"
+            )
+        sys.exit(1)
+    sys.exit(0)
 
 
 def _print_verbose(report) -> None:
     """verbose 模式：逐 case 输出（中文标签）。"""
-    from backend.evaluation.report import METRIC_LABELS, STATUS_LABELS, STATUS_ICONS
+    from backend.evaluation.report import METRIC_LABELS, STATUS_ICONS, STATUS_LABELS
     print("\n--- 详细结果 ---")
     for r in report.results:
         icon = STATUS_ICONS.get(r.status, "?")
@@ -150,6 +232,7 @@ def _print_verbose(report) -> None:
 def _do_compare(compare_id: str, current, results_dir: Path, current_dir: Path | None = None):
     """加载最近的历史 JSON 报告，反序列化为 EvalReport 后对比指标 + 标记下降（中文）。"""
     import json
+
     from backend.evaluation.models import EvalReport as _EvalReport
     from backend.evaluation.report import METRIC_LABELS, MODULE_LABELS
 

@@ -1,0 +1,17 @@
+key: rag.indexing.doc_type
+name: 文档类型二次验证
+category: rag_preprocessing
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: full_text, required: true, description: 文档文本（截取前 1500 字）}
+template: |
+  请判断以下文档的类型，从以下 14 种类型中选择一个最匹配的：
+  policy(制度), sop(操作流程), ad_policy(广告政策), compliance(合规), legal(法律),
+  contract_template(合同模板), security(安全), financial(财务), customer_data(客户数据),
+  product_spec(商品规格), listing(商品上架), faq(常见问题), training(培训), general(通用)
+
+  只输出类型名，不要解释。
+
+  文档开头：
+  {full_text}

@@ -7,9 +7,9 @@ interface Props {
 }
 
 export default function TraceOverviewCard({ trace }: Props) {
-  const hasError = trace.error && Object.keys(trace.error).length > 0;
+  const hasError = trace.status === "error" || (trace.error && Object.keys(trace.error).length > 0);
   const spans = trace.spans || [];
-  const llmCalls = spans.filter((s) => s.type === "llm_call" || s.llm_call).length;
+  const llmCalls = spans.filter((s) => s.type === "llm_call" || s.type === "agent" || s.llm_call).length;
   const toolCalls = spans.filter((s) =>
     s.type === "retrieval" || s.type === "rerank" || s.type === "tool_call"
   ).length;

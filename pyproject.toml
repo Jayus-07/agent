@@ -73,6 +73,7 @@ dependencies = [
     # ═══════════════════════════════════════════
     "prometheus-client>=0.20",
     "psutil>=5.9",
+    "langfuse>=4.0",  # LLM 可观测性平台（自托管，见 docker-compose.langfuse.yml）
 
     # ═══════════════════════════════════════════
     # 工具
@@ -94,6 +95,11 @@ dev = [
 # Postgres 完整版（psycopg2 编译可能需要 pg_config）
 postgres = [
     "psycopg2>=2.9",
+]
+
+# RAGAS 评测基准对比
+ragas = [
+    "ragas>=0.4.0",
 ]
 
 # 文档

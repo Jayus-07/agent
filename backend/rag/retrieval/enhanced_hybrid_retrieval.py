@@ -3,7 +3,6 @@
 替换原有的 hybrid.py::hybrid_retrieve 函数
 """
 
-from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Optional
 import logging
 
@@ -23,20 +22,37 @@ def enhanced_hybrid_retrieve(
     confidence_aggregator=None,
 ) -> Tuple[List, dict]:
     """
-    增强版混合检索 - 三路召回 + 置信度评估
+    增强版混合检索 - 三路召回 + 置信度评估（带 span 生命周期保障）
     
     Returns:
         (docs, {confidence_score, retrieval_strategy, metrics})
     """
-    
-    from backend.observability.tracer import SpanName, trace_collector
+    from backend.observability.tracer import trace_collector, SpanName
+
+    span = trace_collector.start_span("enhanced_hybrid_retrieval", name=SpanName.ENHANCED_RETRIEVAL, parent_id=None)
+    try:
+        return _enhanced_hybrid_retrieve_impl(
+            span, query, vector_retriever, bm25_retriever, rule_retriever,
+            k, doc_ids, rrf_k, metadata_filter, expanded_queries,
+            confidence_aggregator)
+    except Exception:
+        # P0-2: 旧实现异常路径漏调 end_span，trace 中出现 end_time='' 的
+        # 假 success span；这里统一强制收尾并标 error。
+        trace_collector.end_span(span, metrics={"status": "error_path"}, status="error")
+        raise
+
+
+def _enhanced_hybrid_retrieve_impl(
+    span, query, vector_retriever, bm25_retriever, rule_retriever,
+    k, doc_ids, rrf_k, metadata_filter, expanded_queries,
+    confidence_aggregator,
+) -> Tuple[List, dict]:
+    """三路召回主体。span 由外层创建，本函数负责在各出口正常收尾。"""
+    from backend.observability.tracer import trace_collector
     from backend.config.rag import (
-        VEC_MIN_SCORE, 
-        MULTI_QUERY_ENABLED,
+        VEC_MIN_SCORE,
         ADAPTIVE_VEC_THRESHOLDS,
     )
-    
-    span = trace_collector.start_span("enhanced_hybrid_retrieval", name=SpanName.RETRIEVAL)
     
     # Step 1: 查询复杂度分析 → 动态调整参数
     complexity = assess_query_complexity(query)
@@ -48,7 +64,7 @@ def enhanced_hybrid_retrieve(
                f"base_threshold={base_threshold:.2f} (VEC_MIN_SCORE={VEC_MIN_SCORE}), "
                f"k={effective_k}")
     
-    docs_list = []
+    path_results: list[tuple[list, float]] = []
     metrics = {
         "rule_hits": 0,
         "dense_hits": 0,
@@ -56,55 +72,67 @@ def enhanced_hybrid_retrieve(
         "final_k": effective_k,
         "fallback_used": False,
     }
-    
-    # Step 2: 三路并行召回
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        
-        # Path A: Rule-Based (仅当启用时)
-        if rule_retriever:
-            rule_future = executor.submit(rule_retriever.retrieve, query, k=int(effective_k * 0.3))
-            metrics["rule_available"] = True
-        else:
-            rule_future = None
-            metrics["rule_available"] = False
-        
-        # Path B: Dense Vector Search
-        dense_future = executor.submit(vector_retriever.retrieve, query, k=effective_k, doc_ids=doc_ids,
-                                        metadata_filter=metadata_filter, expanded_queries=expanded_queries)
-        metrics["dense_available"] = True
-        
-        # Path C: Sparse Search (BM25+TF-IDF)  
-        sparse_future = executor.submit(bm25_retriever.invoke, query) if bm25_retriever else None
-        if sparse_future:
-            metrics["sparse_available"] = True
-    
-    # Step 3: 收集结果
+
+    # Step 2: 三路并行召回（共享线程池，避免每次检索创建/销毁）
+    from backend.infra.thread_pools import retrieval_pool_outer
+    executor = retrieval_pool_outer()
+
+    # Path A: Rule-Based (仅当启用时)
+    if rule_retriever:
+        rule_future = executor.submit(rule_retriever.retrieve, query, k=int(effective_k * 0.3))
+        metrics["rule_available"] = True
+    else:
+        rule_future = None
+        metrics["rule_available"] = False
+
+    # Path B: Dense Vector Search
+    dense_future = executor.submit(vector_retriever.retrieve, query, k=effective_k, doc_ids=doc_ids,
+                                    metadata_filter=metadata_filter, expanded_queries=expanded_queries)
+    metrics["dense_available"] = True
+
+    # Path C: Sparse Search (BM25+TF-IDF)
+    sparse_future = executor.submit(bm25_retriever.invoke, query) if bm25_retriever else None
+    if sparse_future:
+        metrics["sparse_available"] = True
+
+    # Step 3: 收集结果（按路径分开，带权重；dense 权重最高因为 embedding 语义匹配更可靠）
     try:
         if rule_future:
             rule_docs = rule_future.result() or []
             metrics["rule_hits"] = len(rule_docs)
-            docs_list.extend(rule_docs)
+            if rule_docs:
+                path_results.append((rule_docs, 2.0))
     except Exception as e:
         logger.warning(f"[EnhancedRetrieve] Rule retrieval failed: {e}", exc_info=True)
-    
+
     try:
         dense_docs = dense_future.result()
         metrics["dense_hits"] = len(dense_docs)
-        docs_list.extend(dense_docs)
+        if dense_docs:
+            path_results.append((dense_docs, 3.0))
     except Exception as e:
         logger.warning(f"[EnhancedRetrieve] Dense retrieval failed: {e}", exc_info=True)
         dense_docs = []
-    
+
     try:
         if sparse_future:
             sparse_docs = sparse_future.result() or []
             metrics["sparse_hits"] = len(sparse_docs)
-            docs_list.extend(sparse_docs)
+            if doc_ids:
+                sparse_docs = [d for d in sparse_docs if d.metadata.get("doc_id") in doc_ids]
+            if metadata_filter:
+                sparse_docs = [
+                    d for d in sparse_docs
+                    if all(d.metadata.get(k) == v for k, v in metadata_filter.items())
+                ]
+            if sparse_docs:
+                path_results.append((sparse_docs, 1.0))
     except Exception as e:
         logger.warning(f"[EnhancedRetrieve] Sparse retrieval failed: {e}", exc_info=True)
-    
+
     # Step 4: Evidence Gate - 检查召回质量
-    if not docs_list:
+    all_docs_flat = [d for path, _ in path_results for d in path]
+    if not all_docs_flat:
         logger.error("[EnhancedRetrieve] No results from any path - triggering fallback")
         # 降级策略：回到原始 hybrid_retrieve
         from backend.rag.retrieval.hybrid import hybrid_retrieve
@@ -113,8 +141,8 @@ def enhanced_hybrid_retrieve(
         trace_collector.end_span(span, metrics={"status": "fallback"})
         return fallback_docs, {"confidence": 0.0, "strategy": "fallback"}
     
-    # Step 5: RRF 融合
-    merged_docs = _ultimate_rrf_fusion(docs_list, rrf_k, k)
+    # Step 5: RRF 融合（各路径独立计分，保留跨路径一致性信号）
+    merged_docs = _ultimate_rrf_fusion(path_results, rrf_k, k, query=query)
     
     # Step 6: 计算综合置信度
     overall_confidence = 0.0
@@ -145,42 +173,57 @@ def enhanced_hybrid_retrieve(
     }
 
 
-def _ultimate_rrf_fusion(docs_from_all_paths: List, rrf_k: int, top_k: int) -> List:
+def _ultimate_rrf_fusion(path_results: list[tuple[list, float]], rrf_k: int, top_k: int,
+                         query: str = None) -> List:
     """
-    三路召回的统一 RRF 融合
-    权重分配：Rule-based > Dense > Sparse
+    多路召回的加权 RRF 融合 — 各路径独立计分后按权重累加。
+
+    每条路径独立编 rank（rank 从 1 开始），同一 chunk 在 N 条路径中
+    出现就累加 N 次加权 RRF 分。权重反映路径可靠性：
+    dense(3.0) > rule(2.0) > sparse(1.0)。
+
+    Per-doc chunk 上限：防止单文档大量相似 chunks 挤占其他文档。
     """
-    
-    rank_map = {}
-    docs_by_id = {}
-    
-    # Rule-based 完美匹配 → 最高权重 (x2)
-    for doc in docs_from_all_paths[:3]:  # 假设前 3 个是 rule_based
-        if doc.metadata.get("chunk_type") == "rule_match":
+    rank_map: dict[str, float] = {}
+    docs_by_id: dict[str, object] = {}
+
+    for path_docs, weight in path_results:
+        seen_in_path: set[str] = set()
+        rank = 0
+        for doc in path_docs:
             cid = doc.metadata.get("chunk_id")
-            rank_map[cid] = rank_map.get(cid, 0) + 2.0 / (rrf_k + 1)
-            docs_by_id[cid] = doc
-    
-    # Dense retrieval → 中等权重
-    for i, doc in enumerate(docs_from_all_paths):
-        if doc.metadata.get("chunk_type") == "dense_embedding":
-            cid = doc.metadata.get("chunk_id")
-            rank = list(rank_map.keys()).count(cid) + 1
-            rank_map[cid] = rank_map.get(cid, 0) + 1.0 / (rrf_k + rank)
-            docs_by_id[cid] = doc
-    
-    # Sparse retrieval → 基础权重
-    for i, doc in enumerate(docs_from_all_paths):
-        if doc.metadata.get("chunk_type") in ["bm25", "tfidf"]:
-            cid = doc.metadata.get("chunk_id")
-            rank = list(rank_map.keys()).count(cid) + 1
-            rank_map[cid] = rank_map.get(cid, 0) + 0.8 / (rrf_k + rank)
-            docs_by_id[cid] = doc
-    
-    # 排序取 Top-K
+            if not cid:
+                continue
+            if cid in seen_in_path:
+                continue
+            seen_in_path.add(cid)
+            rank += 1
+            if cid not in docs_by_id:
+                docs_by_id[cid] = doc
+            rank_map[cid] = rank_map.get(cid, 0.0) + weight / (rrf_k + rank)
+
     sorted_cids = sorted(rank_map.items(), key=lambda x: x[1], reverse=True)
-    
-    return [docs_by_id[cid] for cid, _ in sorted_cids[:top_k]]
+
+    unique_doc_count = len({
+        docs_by_id[cid].metadata.get("doc_id", "")
+        for cid, _ in sorted_cids[:top_k * 3]
+        if cid in docs_by_id and docs_by_id[cid].metadata.get("doc_id")
+    })
+    max_per_doc = max(3, (top_k + max(unique_doc_count, 1) - 1) // max(unique_doc_count, 1))
+
+    result = []
+    doc_counts: dict[str, int] = {}
+    for cid, rrf_score in sorted_cids:
+        if len(result) >= top_k:
+            break
+        did = docs_by_id[cid].metadata.get("doc_id", "")
+        if did and doc_counts.get(did, 0) >= max_per_doc:
+            continue
+        doc_counts[did] = doc_counts.get(did, 0) + 1
+        docs_by_id[cid].metadata["rrf_score"] = round(rrf_score, 4)
+        result.append(docs_by_id[cid])
+
+    return result
 
 
 # =====================================================
@@ -281,3 +324,9 @@ class ConfidenceAggregator:
     def _extract_retrieved_entities(self, docs: List) -> set:
         all_text = " ".join([d.page_content for d in docs[:5]])
         return self._extract_entities(all_text)
+
+    def _calc_entity_coverage(self, query_entities: set, retrieved_entities: set) -> float:
+        if not query_entities:
+            return 1.0
+        overlap = len(query_entities & retrieved_entities)
+        return overlap / len(query_entities)

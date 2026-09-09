@@ -8,6 +8,13 @@ export type OperationType = 'upload' | 'reindex' | 'delete' | ''
 
 const BASE = '/api/rag'
 
+/**
+ * 带认证的 fetch 包装 — 已抽到 lib/authFetch.ts 统一维护，此处引入自用并转导出兼容旧引用
+ * （UploadDialog.tsx 等从本模块 import authFetch）。
+ */
+import { authFetch } from '@/lib/authFetch'
+export { authFetch }
+
 /** 构建查询字符串，自动过滤 undefined/null/空字符串，避免 URLSearchParams 将其转为字面字符串 "undefined" */
 const qs = (params: Record<string, any>) => {
   const clean: Record<string, string> = {}
@@ -18,24 +25,24 @@ const qs = (params: Record<string, any>) => {
 }
 
 export const knowledgeService: any = {
-  getStats: () => fetch(`${BASE}/stats`).then(r => r.json()).catch(() => ({})),
+  getStats: () => authFetch(`${BASE}/stats`).then(r => r.json()).catch(() => ({})),
 
   getDocuments: (params: any = {}) =>
-    fetch(`${BASE}/documents?${qs(params)}`).then(r => r.json()).catch(() => ({ documents: [], total: 0 })),
+    authFetch(`${BASE}/documents?${qs(params)}`).then(r => r.json()).catch(() => ({ documents: [], total: 0 })),
 
   getDocument: (id: string) =>
-    fetch(`${BASE}/documents/${id}`).then(r => r.json()).catch(() => ({})),
+    authFetch(`${BASE}/documents/${id}`).then(r => r.json()).catch(() => ({})),
 
   // P0 审核 Dashboard（2026-08-11）
   getPendingDocs: (params: { page?: number; page_size?: number } = {}) =>
-    fetch(`${BASE}/pending?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [], total: 0 })),
+    authFetch(`${BASE}/pending?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [], total: 0 })),
 
   approvePendingDoc: (doc_id: string) =>
-    fetch(`${BASE}/pending/${doc_id}/approve`, { method: 'POST' })
+    authFetch(`${BASE}/pending/${doc_id}/approve`, { method: 'POST' })
       .then(r => r.json()).catch(() => ({ ok: false })),
 
   rejectPendingDoc: (doc_id: string) =>
-    fetch(`${BASE}/pending/${doc_id}/reject`, { method: 'POST' })
+    authFetch(`${BASE}/pending/${doc_id}/reject`, { method: 'POST' })
       .then(r => r.json()).catch(() => ({ ok: false })),
 
   /**
@@ -67,12 +74,12 @@ export const knowledgeService: any = {
     // 旧实现直接把 503 当失败报给用户;批量上传场景极易触发。非 ServerBusy 的 503
     // (如服务未就绪)不重试,由下方友好提示接管。
     const postWithBusyRetry = async (): Promise<Response> => {
-      let res = await fetch(`${BASE}/upload`, { method: 'POST', body: fd, headers })
+      let res = await authFetch(`${BASE}/upload`, { method: 'POST', body: fd, headers })
       for (let attempt = 1; attempt <= 2 && res.status === 503; attempt++) {
         const text = await res.clone().text().catch(() => '')
         if (!text.includes('ServerBusy')) break
         await new Promise(r => setTimeout(r, 1500 * attempt))
-        res = await fetch(`${BASE}/upload`, { method: 'POST', body: fd, headers })
+        res = await authFetch(`${BASE}/upload`, { method: 'POST', body: fd, headers })
       }
       return res
     }
@@ -100,8 +107,9 @@ export const knowledgeService: any = {
         }
 
         // 订阅 SSE 获取索引进度
+        // P2: EventSource 不支持自定义 header（无法携带 X-API-Key，会被
+        // 后端认证中间件 401 拒绝），改用 authFetch + ReadableStream 手动解析 SSE。
         return new Promise((resolve) => {
-          const eventSource = new EventSource(`${BASE}/upload/${data.upload_id}/stream`)
           let resolved = false
           // P1 看门狗:后台任务异常死亡时服务端永不发终态事件,旧实现 Promise 永久挂起,
           // UI 卡在"索引中"。超过上限直接判失败,用户可去文档列表确认/重试。
@@ -110,19 +118,19 @@ export const knowledgeService: any = {
 
           const cleanup = () => {
             if (watchdog) clearTimeout(watchdog)
-            if (!resolved) { resolved = true; eventSource.close() }
+            resolved = true
           }
 
-          watchdog = setTimeout(() => {
-            if (resolved) return
-            resolved = true
-            eventSource.close()
-            resolve({ ok: false, error: '索引超时（10 分钟），请在文档列表确认状态或稍后重试' })
-          }, WATCHDOG_MS)
+          const fail = () => {
+            if (!resolved) {
+              cleanup()
+              resolve({ ok: false, error: '进度连接中断' })
+            }
+          }
 
-          eventSource.onmessage = (e: MessageEvent) => {
+          const handleMessage = (raw: string) => {
             let payload: any = {}
-            try { payload = JSON.parse(e.data) } catch { payload = { message: e.data } }
+            try { payload = JSON.parse(raw) } catch { payload = { message: raw } }
             const stage = payload.stage || 'unknown'
             const durationMs = typeof payload.duration_ms === 'number' ? payload.duration_ms : undefined
             const stageElapsed = payload.stage_elapsed && typeof payload.stage_elapsed === 'object'
@@ -143,20 +151,56 @@ export const knowledgeService: any = {
             }
           }
 
-          eventSource.addEventListener('error', () => {
-            if (resolved) return
-            cleanup()
-            resolve({ ok: false, error: '进度连接中断' })
-          })
+          watchdog = setTimeout(() => {
+            if (!resolved) {
+              cleanup()
+              resolve({ ok: false, error: '索引超时（10 分钟），请在文档列表确认状态或稍后重试' })
+            }
+          }, WATCHDOG_MS)
+
+          // fetch 流式解析 SSE：按空行分隔事件，取 data: 行
+          ;(async () => {
+            try {
+              const res = await authFetch(`${BASE}/upload/${data.upload_id}/stream`)
+              if (!res.ok || !res.body) {
+                fail()
+                return
+              }
+              const reader = res.body.getReader()
+              const decoder = new TextDecoder()
+              let buf = ''
+              for (;;) {
+                const { done, value } = await reader.read()
+                if (done) {
+                  // 服务端正常关闭但未收到终态事件 → 视为中断
+                  fail()
+                  return
+                }
+                buf += decoder.decode(value, { stream: true }).replace(/\r/g, '')
+                let sep: number
+                while ((sep = buf.indexOf('\n\n')) !== -1) {
+                  const rawEvent = buf.slice(0, sep)
+                  buf = buf.slice(sep + 2)
+                  const msg = rawEvent.split('\n')
+                    .filter(l => l.startsWith('data:'))
+                    .map(l => l.slice(5).trim())
+                    .join('\n')
+                  if (msg) handleMessage(msg)
+                }
+              }
+            } catch {
+              fail()
+            }
+          })()
         })
       })
   },
 
   deleteDocument: (id: string) =>
-    fetch(`${BASE}/documents/${id}`, { method: 'DELETE' }).then(r => r.json()).catch(() => ({ ok: false })),
+    authFetch(`${BASE}/documents/${id}`, { method: 'DELETE' }).then(r => r.json()).catch(() => ({ ok: false })),
 
   reindexDocument: (id: string) =>
-    fetch(`${BASE}/documents/${id}/reindex`, { method: 'POST' }).then(r => r.json()).catch(() => ({ ok: false })),
+    authFetch(`${BASE}/documents/${id}/reindex`, { method: 'POST' }).then(r => r.json()).catch(() => ({ ok: false })),
 
   /**
    * 批量删除（并发）— 使用 X-Batch-Id 头关联同一批次，操作中心按批次折叠展示。
@@ -169,7 +213,7 @@ export const knowledgeService: any = {
     return Promise.all(
       docs.map(async ({ id, name }) => {
         try {
-          const res = await fetch(`${BASE}/documents/${id}`, { method: 'DELETE', headers })
+          const res = await authFetch(`${BASE}/documents/${id}`, { method: 'DELETE', headers })
           const r = await res.json()
           return { id, name, ok: r.ok as boolean, error: r.error as string | undefined, warnings: r.warnings as string[] | undefined }
         } catch (e) {
@@ -203,7 +247,7 @@ export const knowledgeService: any = {
     if (batchId) headers['X-Batch-Id'] = batchId
     for (const id of ids) {
       try {
-        const res = await fetch(`${BASE}/documents/${id}/reindex`, { method: 'POST', headers })
+        const res = await authFetch(`${BASE}/documents/${id}/reindex`, { method: 'POST', headers })
         const r = await res.json()
         if (r.ok) ok++
         else failed.push({ id, error: r.error || '重索引失败' })
@@ -215,8 +259,8 @@ export const knowledgeService: any = {
   },
 
   getOperations: (params: any = {}) =>
-    fetch(`${BASE}/operations?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [], total: 0 })),
+    authFetch(`${BASE}/operations?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [], total: 0 })),
 
   getChunkDetail: (chunkId: string) =>
-    fetch(`${BASE}/chunks/${chunkId}/detail`).then(r => r.json()).catch(() => ({})),
+    authFetch(`${BASE}/chunks/${chunkId}/detail`).then(r => r.json()).catch(() => ({})),
 }

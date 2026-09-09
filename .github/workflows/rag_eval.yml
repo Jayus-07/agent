@@ -1,173 +1,201 @@
-name: RAG Eval
+# RAG 评测 CI — Golden Set 离线质量门（V4 三层指标体系）
+#
+# 触发：PR to main / 手动 workflow_dispatch
+# 成本：¥0（全离线 — 本地 embedding + local reranker，零 API 调用）
+# 耗时：~2-3 min（首次 HF 模型下载 ~1 min，后续缓存命中 <10s）
+#
+# V4 三层指标体系：
+#   Tier 1 Deterministic（CI 必跑）: recall@k, MRR, NDCG, chunk_recall
+#   Tier 2 Semantic（离线/夜间）: sem_context_recall, sem_faithfulness
+#   Tier 3 LLM Judge（夜间）: judge_completeness, judge_faithfulness
+#
+# CI golden-set 只跑 Deterministic tier，不依赖 CrossEncoder 模型
+
+name: RAG Eval CI
 
 on:
-  # PR 触发：影响 RAG/agents/prompts/评测集/KB 文档/baseline 时跑评估
-  pull_request:
-    paths:
-      - 'backend/rag/**'
-      - 'backend/agents/**'
-      - 'backend/evaluation/**'
-      - 'backend/prompts/**'
-      - 'data/docs/rag_test_kb/**'
-      - 'data/baselines/**'
-      - '.github/workflows/rag_eval.yml'
-  # master 合并：跑全量评估 + judge
   push:
-    branches: [master]
-  # 每周一 09:00 北京时间（01:00 UTC）跑全量
-  schedule:
-    - cron: '0 1 * * 1'
-  # 手动触发
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "data/docs/**"
+      - "pyproject.toml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "data/docs/**"
+      - "pyproject.toml"
   workflow_dispatch:
-    inputs:
-      module:
-        description: 'Module to evaluate (all/rag/e2e/sql/planner)'
-        required: false
-        default: 'all'
 
-# 取消上一次进行中的相同 workflow
 concurrency:
-  group: rag-eval-${{ github.ref }}
+  group: eval-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  rag-eval:
+  golden-set:
+    name: Golden Set (Deterministic tier)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: agent_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+    timeout-minutes: 10
 
     env:
-      # LLM API key（CI 环境变量）
-      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-      EVAL_TRIGGER: ci:${{ github.event_name }}
-      GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-      # F7: HF 离线模式 — CI 无模型下载需求，禁止 transformers 联网探测
-      # （避免冷启动 ~50s 的网络探测耗时）
-      HF_HUB_OFFLINE: "1"
+      RERANKER_BACKEND: local
+      EMBEDDING_BACKEND: local
+      HF_ENDPOINT: https://hf-mirror.com
+      LANGFUSE_ENABLED: "false"
+      OBS_ANALYTICS_ENABLED: "false"
+      PYTHONUTF8: "1"
+      EVAL_GATE: legacy
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip'
-          cache-dependency-path: 'backend/requirements-dev.txt'
+          python-version: "3.10"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r backend/requirements-dev.txt
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'backend/requirements*.txt') }}
+          restore-keys: pip-${{ runner.os }}-
 
       - name: Cache HuggingFace models
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: hf-models-bge-small-zh-bge-reranker-base-v1
+          key: hf-${{ runner.os }}-bge-small-zh-only
+          restore-keys: hf-${{ runner.os }}-
 
-      - name: Validate eval dataset
+      - name: Install dependencies
         run: |
-          python backend/scripts/validate_eval_dataset.py --dataset rag_test_kb.json --kb-dir data/docs/rag_test_kb
+          pip install -e ".[dev]"
+          pip install -r backend/requirements-dev.txt
 
-      - name: Initialize test database
+      - name: Pre-download HF embedding model
         run: |
-          cd backend
-          PGPASSWORD=postgres psql -h localhost -U postgres -d agent_test \
-            -c "CREATE SCHEMA IF NOT EXISTS product; CREATE SCHEMA IF NOT EXISTS order;"
-          echo "DB ready"
+          python -c "
+          from sentence_transformers import SentenceTransformer
+          SentenceTransformer('BAAI/bge-small-zh-v1.5')
+          print('Embedding model ready')
+          "
 
-      - name: Run RAG retrieval eval (no LLM, fast)
-        # P0-1 修复（2026-08-21）：
-        # 1. KB 源文档 data/docs/rag_test_kb/ 已入仓，RAGPipeline 首次初始化会
-        #    自动扫描建索引（无需预建索引产物）；
-        # 2. 置空 DEEPSEEK_API_KEY → 索引期 LLM 分类仲裁快速失败降级为规则打分，
-        #    保证索引与评测结果确定性（检索评测本身不需要 LLM）。
-        env:
-          DEEPSEEK_API_KEY: ''
-          MINIMAX_API_KEY: ''
+      - name: Run Golden Set evaluation
         run: |
-          cd backend
-          python -m evaluation --module rag --output ../artifacts/${{ github.run_id }}/rag/
+          python -m pytest backend/tests/evaluation/test_eval_golden.py \
+            --tb=short -s --no-cov 2>&1 | tee golden_set_report.txt
+        timeout-minutes: 10
 
-      - name: Run E2E eval (--judge on master only)
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch')
-        run: |
-          cd backend
-          python -m evaluation --module e2e --live --judge \
-            --output ../artifacts/${{ github.run_id }}/e2e/
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}  # Judge 用独立模型
-
-      - name: Run E2E eval (no judge, PR)
-        if: github.event_name == 'pull_request'
-        run: |
-          cd backend
-          python -m evaluation --module e2e --live \
-            --output ../artifacts/${{ github.run_id }}/e2e/
-
-      - name: Regression check vs baseline
-        run: |
-          cd backend
-          # 找最新一次 run
-          LATEST_RUN=$(ls -t data/eval_runs/ 2>/dev/null | head -1)
-          if [ -z "$LATEST_RUN" ]; then
-            echo "⚠️ No eval run found, skipping regression check"
-            exit 0
-          fi
-          echo "Checking regression for run: $LATEST_RUN"
-          # 按评测集 version 自动匹配 data/baselines/baseline_rag_{version}.json
-          # （当前 rag_test_kb.json v1.3 → baseline_rag_1.3.json，含 top1/reject 口径）
-          python -m evaluation.baseline "$LATEST_RUN" --threshold 0.05
-        continue-on-error: false
-
-      - name: Upload artifacts
+      - name: Upload eval report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: eval-report-${{ github.run_id }}
-          path: artifacts/
-          retention-days: 30
+          name: eval-report
+          path: data/eval_runs/
+          retention-days: 14
 
-      - name: Comment on PR with summary
-        if: github.event_name == 'pull_request' && always()
-        uses: actions/github-script@v7
+      - name: Comment PR with metrics
+        if: always() && github.event_name == 'pull_request'
+        run: python backend/scripts/pr_comment_metrics.py
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish metrics to history CSV
+        if: always()
+        run: python backend/scripts/publish_metrics.py
+
+      - name: Upload metrics history
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          script: |
-            const fs = require('fs');
-            const path = 'artifacts/${{ github.run_id }}';
-            let summary = '## 📊 RAG Eval Summary\n\n';
-            try {
-              const reports = fs.readdirSync(path, { recursive: true });
-              for (const r of reports) {
-                if (r.endsWith('eval-rag-*.md') || r.endsWith('eval-e2e-*.md')) {
-                  const content = fs.readFileSync(`${path}/${r}`, 'utf8');
-                  summary += `<details><summary>${r}</summary>\n\n\`\`\`\n${content.slice(0, 3000)}\n\`\`\`\n</details>\n\n`;
-                }
-              }
-            } catch (e) {
-              summary += `Failed to read artifacts: ${e.message}`;
-            }
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: summary,
-            });
+          name: metrics-history
+          path: data/eval_runs/metrics_history.csv
+          retention-days: 90
+
+  llm-judge:
+    name: LLM Judge (non-blocking, Ollama)
+    runs-on: ubuntu-latest
+    needs: golden-set
+    continue-on-error: true
+    timeout-minutes: 20
+
+    env:
+      RERANKER_BACKEND: local
+      EMBEDDING_BACKEND: local
+      HF_ENDPOINT: https://hf-mirror.com
+      LANGFUSE_ENABLED: "false"
+      OBS_ANALYTICS_ENABLED: "false"
+      PYTHONUTF8: "1"
+      EVAL_GATE: semantic
+      OLLAMA_MODEL: qwen2.5:3b
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'backend/requirements*.txt') }}
+          restore-keys: pip-${{ runner.os }}-
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-bge-small-zh-bge-reranker-base-v1
+          restore-keys: hf-${{ runner.os }}-
+
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama and pull model
+        run: |
+          ollama serve &
+          sleep 3
+          ollama pull qwen2.5:3b
+          echo "Ollama ready"
+        timeout-minutes: 5
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[dev]"
+          pip install -r backend/requirements-dev.txt
+
+      - name: Pre-download HF models
+        run: |
+          python -c "
+          from sentence_transformers import SentenceTransformer, CrossEncoder
+          SentenceTransformer('BAAI/bge-small-zh-v1.5')
+          CrossEncoder('BAAI/bge-reranker-base')
+          print('Models ready')
+          "
+
+      - name: Cache answers.jsonl
+        uses: actions/cache@v4
+        with:
+          path: data/answers.jsonl
+          key: answers-${{ hashFiles('backend/evaluation/datasets/rag_test_kb.json', 'backend/evaluation/generation.py', 'backend/evaluation/ragas_bridge.py', 'backend/evaluation/runners/rag.py', 'backend/evaluation/evaluators/ragas_provider.py') }}
+          restore-keys: answers-
+
+      - name: Run LLM Judge evaluation
+        run: |
+          python -m pytest backend/tests/evaluation/test_eval_llm_judge.py \
+            -v -m llm_judge --tb=short -s \
+            --no-cov 2>&1 | tee llm_judge_report.txt
+        timeout-minutes: 15
+
+      - name: Upload LLM Judge report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-judge-report
+          path: llm_judge_report.txt
+          retention-days: 7
+

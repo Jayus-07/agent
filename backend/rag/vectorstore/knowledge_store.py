@@ -159,27 +159,71 @@ class ChromaKnowledgeStore(KnowledgeStore):
 
     def __init__(self, persist_directory: str, embedding_function: Any):
         """加载已持久化的 ChromaDB。
-
-        Args:
-            persist_directory: 持久化目录路径
-            embedding_function: HuggingFaceEmbeddings 实例
+        
+        P0: 检查 embedding metadata 一致性
         """
         from langchain_chroma import Chroma
 
         self.persist_directory = str(persist_directory)
         self.embedding_function = embedding_function
+        
+        # P0: 验证 embedding model 一致性
+        self._validate_embedding_metadata()
+        
         self._chroma: Chroma = Chroma(
             persist_directory=self.persist_directory,
             embedding_function=embedding_function,
         )
+    
+    def _validate_embedding_metadata(self):
+        """P0: 验证已有 index 的 embedding metadata 是否一致。
+        
+        如果当前配置的 embedding model/backend 与已有 index 不一致，
+        输出 WARNING 但不自动删除（禁止破坏性操作）。
+        """
+        import json
+        import os
+        
+        meta_file = os.path.join(self.persist_directory, "_embedding_meta.json")
+        if not os.path.exists(meta_file):
+            return  # 无历史记录，跳过检查
+        
+        try:
+            with open(meta_file, "r", encoding="utf-8") as f:
+                stored_meta = json.load(f)
+            
+            # 获取当前配置
+            from backend.config import ENV_MODE, EMBEDDING_MODEL
+            current_meta = {
+                "embedding_model": EMBEDDING_MODEL,
+                "backend": ENV_MODE,
+            }
+            
+            # 比较
+            if stored_meta != current_meta:
+                logger.warning(
+                    f"[ChromaMetadata] Embedding model changed!\n"
+                    f"  Existing: {stored_meta}\n"
+                    f"  Current:  {current_meta}\n"
+                    f"  Warning: Existing Chroma index may be incompatible.\n"
+                    f"  Full index rebuild is required."
+                )
+        except Exception as e:
+            logger.debug(f"[ChromaMetadata] Metadata validation failed: {e}")
 
     # ---- 工厂方法 ----
 
     @classmethod
     def from_documents(
         cls, documents: list[Any], embedding: Any, persist_directory: str,
+        embedding_metadata: dict | None = None,
     ) -> "ChromaKnowledgeStore":
-        """从 Document 列表创建 chunk 级向量库。"""
+        """从 Document 列表创建 chunk 级向量库。
+        
+        Args:
+            embedding_metadata: Optional metadata about the embedding model
+                e.g., {"embedding_model": "text-embedding-v3", "backend": "cloud"}
+        """
         from langchain_chroma import Chroma
 
         for doc in documents:
@@ -188,6 +232,15 @@ class ChromaKnowledgeStore(KnowledgeStore):
         instance = cls.__new__(cls)
         instance.persist_directory = str(persist_directory)
         instance.embedding_function = embedding
+        
+        # P0: 保存 embedding metadata 到持久化文件
+        if embedding_metadata:
+            import json
+            import os
+            meta_file = os.path.join(str(persist_directory), "_embedding_meta.json")
+            with open(meta_file, "w", encoding="utf-8") as f:
+                json.dump(embedding_metadata, f, ensure_ascii=False, indent=2)
+        
         instance._chroma = Chroma.from_documents(
             documents=documents,
             embedding=embedding,
@@ -199,13 +252,27 @@ class ChromaKnowledgeStore(KnowledgeStore):
     def from_texts(
         cls, texts: list[str], embedding: Any,
         metadatas: list[dict] | None, persist_directory: str,
+        embedding_metadata: dict | None = None,
     ) -> "ChromaKnowledgeStore":
-        """从文本列表创建 doc 级向量库。"""
+        """从文本列表创建 doc 级向量库。
+        
+        Args:
+            embedding_metadata: Optional metadata about the embedding model
+        """
         from langchain_chroma import Chroma
 
         instance = cls.__new__(cls)
         instance.persist_directory = str(persist_directory)
         instance.embedding_function = embedding
+        
+        # P0: 保存 embedding metadata
+        if embedding_metadata:
+            import json
+            import os
+            meta_file = os.path.join(str(persist_directory), "_embedding_meta.json")
+            with open(meta_file, "w", encoding="utf-8") as f:
+                json.dump(embedding_metadata, f, ensure_ascii=False, indent=2)
+        
         instance._chroma = Chroma.from_texts(
             texts=texts,
             embedding=embedding,

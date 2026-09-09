@@ -12,7 +12,7 @@ import secrets
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from backend.config import ALLOW_UNAUTHENTICATED, API_KEY
+from backend.config import ALLOW_UNAUTHENTICATED, API_KEY, ENVIRONMENT
 from backend.shared.logger import logger
 
 # 不需要认证的路径
@@ -43,6 +43,21 @@ async def api_key_middleware(request: Request, call_next):
     # 未配置 API_KEY：fail-closed
     if not API_KEY:
         if ALLOW_UNAUTHENTICATED:
+            if ENVIRONMENT == "production":
+                logger.error(
+                    "[Auth] 生产环境 + ALLOW_UNAUTHENTICATED=true + 无 API_KEY → 拒绝请求"
+                    "（defense-in-depth：启动校验应已阻止此配置）"
+                )
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "ProductionAuthDenied",
+                        "detail": (
+                            "生产环境不允许无认证访问。请配置 API_KEY 并设置 "
+                            "ALLOW_UNAUTHENTICATED=false"
+                        ),
+                    },
+                )
             return await call_next(request)
         return JSONResponse(
             status_code=503,

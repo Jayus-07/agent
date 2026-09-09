@@ -1,0 +1,18 @@
+key: memory.trigger
+name: 记忆存储判断
+category: memory
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: content, required: true, description: 待判断内容}
+template: |
+  判断这条信息是否值得存入长期记忆。只需回答 STORE 或 IGNORE。
+
+  信息: "{content}"
+
+  规则:
+  - 关于用户身份/角色/技能/偏好的事实 → STORE
+  - 关于项目/工作/技术决策的信息 → STORE
+  - 问候/闲聊/确认/情绪表达 → IGNORE
+
+  回答:

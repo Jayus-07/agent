@@ -45,14 +45,19 @@ def test_legal_strategy_no_clause_single_chunk():
 
 
 def test_legal_routes_to_legal_strategy():
-    """legal / contract_template 路由到 LegalChunkStrategy。"""
+    """legal / contract_template with clause nodes → LegalChunkStrategy。"""
     from backend.rag.preprocessing.chunking import ChunkStrategyRouter
     from backend.rag.preprocessing.structure_analyzer import StructureReport
 
-    report = StructureReport(
-        ast=DocumentAST(root=DocumentNode(type="section", text="", level=0)),
-        completeness=0.9,
+    # WS8 eligibility gate requires actual clause nodes in AST
+    ast_with_clauses = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="paragraph", text="第一条 合同双方"),
+            DocumentNode(type="paragraph", text="甲方与乙方..."),
+        ]),
+        raw_text="第一条 合同双方\n甲方与乙方...",
     )
+    report = StructureReport(ast=ast_with_clauses, completeness=0.9)
     r = ChunkStrategyRouter()
     assert isinstance(r.route("legal", report), LegalChunkStrategy)
     assert isinstance(r.route("contract_template", report), LegalChunkStrategy)

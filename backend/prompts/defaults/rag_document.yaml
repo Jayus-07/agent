@@ -1,0 +1,17 @@
+key: rag.document
+name: 证据格式化 Prompt
+category: rag
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: index, required: true}
+  - {name: query_label, required: true}
+  - {name: doc_label, required: true}
+  - {name: section_label, required: true}
+  - {name: chunk_label, required: true}
+  - {name: type_label, required: true}
+  - {name: domain_label, required: true}
+  - {name: page_content, required: true}
+template: |
+  [Evidence E{index}]
+  {query_label}{doc_label}{section_label}{chunk_label}{type_label}{domain_label}{page_content}

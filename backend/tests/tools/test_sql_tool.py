@@ -242,6 +242,29 @@ class TestExecuteSQLToolIntegration:
             assert parsed['rows'][0]['id'] == 1
             assert parsed['total'] == 1
     
+    def test_execute_sql_with_multiple_rows(self):
+        """多行数据查询"""
+        from backend.tools.sql import execute_sql_tool
+        
+        mock_result = MagicMock()
+        mock_result.status = "success"
+        mock_result.rows = [
+            {"id": 1, "name": "Apple", "price": 5.5},
+            {"id": 2, "name": "Banana", "price": 3.2},
+            {"id": 3, "name": "Orange", "price": 4.8}
+        ]
+        mock_result.columns = ["id", "name", "price"]
+        mock_result.row_count = 3
+        
+        with patch('backend.tools.sql.execute_sql_struct', return_value=mock_result):
+            result = execute_sql_tool.invoke({"query": "SELECT * FROM fruits"})
+            parsed = json.loads(result)
+            
+            assert parsed['status'] == 'success'
+            assert len(parsed['rows']) == 3
+            assert parsed['total'] == 3
+            assert parsed['columns'] == ["id", "name", "price"]
+    
     def test_execute_security_validation(self):
         """SQL 注入尝试应被拒绝"""
         from backend.tools.sql import execute_sql_tool
@@ -252,6 +275,39 @@ class TestExecuteSQLToolIntegration:
                   side_effect=ValueError("Security violation")):
             with pytest.raises(ValueError, match="Security"):
                 execute_sql_tool.invoke({"query": malicious_query})
+    
+    def test_aggregate_query_count(self):
+        """聚合查询 COUNT(*)"""
+        from backend.tools.sql import execute_sql_tool
+        
+        mock_result = MagicMock()
+        mock_result.status = "success"
+        mock_result.rows = [{"count": 150}]
+        mock_result.columns = ["count"]
+        mock_result.row_count = 1
+        
+        with patch('backend.tools.sql.execute_sql_struct', return_value=mock_result):
+            result = execute_sql_tool.invoke({"query": "SELECT COUNT(*) FROM orders"})
+            parsed = json.loads(result)
+            
+            assert parsed['rows'][0]['count'] == 150
+    
+    def test_no_data_result(self):
+        """无匹配数据返回 no_data 状态"""
+        from backend.tools.sql import execute_sql_tool
+        
+        mock_result = MagicMock()
+        mock_result.status = "no_data"
+        mock_result.rows = []
+        mock_result.columns = []
+        mock_result.row_count = 0
+        
+        with patch('backend.tools.sql.execute_sql_struct', return_value=mock_result):
+            result = execute_sql_tool.invoke({"query": "SELECT * FROM non_existent_table"})
+            parsed = json.loads(result)
+            
+            assert parsed['status'] == 'no_data'
+            assert parsed['total'] == 0
 
 
 @pytest.mark.skip(reason="需要 SQL Agent 配置，后续补充完整功能测试")
@@ -280,6 +336,163 @@ class TestSQLQueryToolIntegration:
             
             assert mock_agent.ask.called
             assert "Apple" in result
+            assert "Banana" not in result
+    
+    def test_empty_result_handling(self):
+        """无匹配结果返回空表格"""
+        from backend.tools.sql import sql_query_tool
+        
+        mock_response = "| 无匹配数据 |"
+        
+        with patch('backend.tools.sql._get_sql_agent') as mock_getter:
+            mock_agent = MagicMock()
+            mock_agent.ask = MagicMock(return_value=mock_response)
+            mock_getter.return_value = mock_agent
+            
+            result = sql_query_tool.invoke({
+                "question": "查询不存在的商品 XXXXXX"
+            })
+            
+            assert "无匹配" in result or "no data" in result.lower() or "empty" in result.lower()
+    
+    def test_aggregation_query_summary(self):
+        """聚合查询返回统计摘要"""
+        from backend.tools.sql import sql_query_tool
+        
+        mock_response = """
+| 统计项 | 值 |
+|--------|--------|
+| 总订单数 | 1,234  |
+| 总金额 | $56,789 |
+"""
+        
+        with patch('backend.tools.sql._get_sql_agent') as mock_getter:
+            mock_agent = MagicMock()
+            mock_agent.ask = MagicMock(return_value=mock_response)
+            mock_getter.return_value = mock_agent
+            
+            result = sql_query_tool.invoke({
+                "question": "统计本月订单总数和总金额"
+            })
+            
+            assert mock_agent.ask.called
+            assert "总订单数" in result or "orders" in result.lower()
+    
+    def test_complex_filter_query(self):
+        """复杂筛选条件查询"""
+        from backend.tools.sql import sql_query_tool
+        
+        mock_response = """
+| product_id | name | stock_quantity |
+|------------|------|----------------|
+| 101 | Premium Widget | 150 |
+| 102 | Deluxe Gadget | 75 |
+"""
+        
+        with patch('backend.tools.sql._get_sql_agent') as mock_getter:
+            mock_agent = MagicMock()
+            mock_agent.ask = MagicMock(return_value=mock_response)
+            mock_getter.return_value = mock_agent
+            
+            result = sql_query_tool.invoke({
+                "question": "查询库存大于 100 的高端产品"
+            })
+            
+            assert mock_agent.ask.called
+            assert "Premium Widget" in result
+
+
+# ==================== 第四部分：性能基准测试 ====================
+
+class TestSQLToolPerformance:
+    """SQL Tool 性能基准测试"""
+    
+    @pytest.mark.benchmark
+    def test_execute_sql_small_dataset(self):
+        """小数据集查询<200ms"""
+        from backend.tools.sql import execute_sql_tool
+        
+        mock_result = MagicMock()
+        mock_result.status = "success"
+        mock_result.rows = [{f"k{i}": f"v{i}" for i in range(10)} for _ in range(10)]
+        mock_result.columns = [f"k{i}" for i in range(10)]
+        mock_result.row_count = 10
+        
+        with patch('backend.sql.executor.execute_sql_struct', return_value=mock_result):
+            # 预热：排除首次调用的懒加载导入开销（非稳态性能）
+            execute_sql_tool.invoke({"query": "SELECT * FROM products LIMIT 1"})
+            import time
+            start = time.perf_counter()
+            result = execute_sql_tool.invoke({"query": "SELECT * FROM products LIMIT 10"})
+            elapsed = time.perf_counter() - start
+            
+            # 包含 SQL 验证器开销，设置宽松阈值 200ms
+            assert elapsed < 0.2, f"查询耗时{elapsed:.3f}s，超过 200ms 基线"
+            parsed = json.loads(result)
+            assert parsed['total'] == 10
+    
+    @pytest.mark.benchmark
+    def test_execute_sql_medium_dataset(self):
+        """中等数据集查询<500ms"""
+        from backend.tools.sql import execute_sql_tool
+        
+        mock_result = MagicMock()
+        mock_result.status = "success"
+        mock_result.rows = [{"id": i, "name": f"Item {i}"} for i in range(100)]
+        mock_result.columns = ["id", "name"]
+        mock_result.row_count = 100
+        
+        with patch('backend.sql.executor.execute_sql_struct', return_value=mock_result):
+            import time
+            start = time.perf_counter()
+            result = execute_sql_tool.invoke({"query": "SELECT * FROM products LIMIT 100"})
+            elapsed = time.perf_counter() - start
+            
+            assert elapsed < 0.5, f"查询耗时{elapsed:.3f}s，超过 500ms 基线"
+            parsed = json.loads(result)
+            assert parsed['total'] == 100
+    
+    @pytest.mark.benchmark
+    def test_sql_query_natural_language_response(self):
+        """自然语言查询响应时间<300ms"""
+        from backend.tools.sql import sql_query_tool
+        
+        mock_response = "\n".join([
+            "| id | name |",
+            "|----|------|" + "|" * 20,
+        ] + [f"| {i} | Item {i} |" for i in range(50)])
+        
+        with patch('backend.tools.sql._get_sql_agent') as mock_getter:
+            mock_agent = MagicMock()
+            mock_agent.ask = MagicMock(return_value=mock_response)
+            mock_getter.return_value = mock_agent
+            
+            import time
+            start = time.perf_counter()
+            result = sql_query_tool.invoke({"question": "查询前 50 个商品"})
+            elapsed = time.perf_counter() - start
+            
+            assert elapsed < 0.3, f"查询耗时{elapsed:.3f}s，超过 300ms 基线"
+            assert "Item 1" in result
+    
+    def test_json_serialization_performance(self):
+        """JSON 序列化性能验证"""
+        import time
+        
+        # 大对象 JSON 序列化
+        large_data = {
+            "rows": [{"field": f"value_{i}" for i in range(100)} for _ in range(50)],
+            "columns": [f"field_{i}" for i in range(100)],
+            "total": 5000
+        }
+        
+        start = time.perf_counter()
+        for _ in range(10):
+            json_str = json.dumps(large_data, ensure_ascii=False, default=str)
+        elapsed = (time.perf_counter() - start) / 10
+        
+        # 10 次序列化的平均时间应<50ms
+        assert elapsed < 0.05, f"JSON 序列化耗时{elapsed:.3f}s，超过 50ms 基线"
 
 
 # ==================== 测试套件入口 ====================

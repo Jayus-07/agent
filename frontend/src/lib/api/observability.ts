@@ -11,20 +11,37 @@ import type { TraceRecord, AlertItem } from "@/types/trace";
 
 // ── Traces ────────────────────────────────────────────
 
-/** GET /observability/traces?limit=N — 最近 N 条 trace */
-export async function listTraces(limit = 50): Promise<TraceRecord[]> {
+/** GET /observability/traces?limit=N&workflow_name=X — 最近 N 条 trace（服务端过滤） */
+export async function listTraces(limit = 50, workflowName?: string): Promise<TraceRecord[]> {
   try {
-    const data = await request<{ traces: TraceRecord[] }>(`/observability/traces?limit=${limit}`);
+    const wf = workflowName ? `&workflow_name=${encodeURIComponent(workflowName)}` : "";
+    const data = await request<{ traces: TraceRecord[] }>(`/api/observability/traces?limit=${limit}${wf}`);
     return data.traces || [];
   } catch (e) {
     throw new Error(`listTraces failed: ${(e as Error).message}`);
   }
 }
 
+/** GET /observability/traces/stats — 时间窗聚合统计（StatsBar 下沉后端） */
+export async function getTraceStats(
+  hours = 24,
+  workflowName?: string,
+): Promise<{
+  total_24h: number;
+  success_rate: number;
+  avg_duration_ms: number;
+  p95_duration_ms: number;
+  error_count: number;
+  total_cost_usd: number;
+}> {
+  const wf = workflowName ? `&workflow_name=${encodeURIComponent(workflowName)}` : "";
+  return await request(`/api/observability/traces/stats?hours=${hours}${wf}`);
+}
+
 /** GET /observability/traces/active — 当前活跃 trace（answer_preview 为空 = 未完成） */
 export async function listActiveTraces(): Promise<TraceRecord[]> {
   try {
-    const data = await request<{ traces: TraceRecord[] }>("/observability/traces/active");
+    const data = await request<{ traces: TraceRecord[] }>("/api/observability/traces/active");
     return data.traces || [];
   } catch (e) {
     throw new Error(`listActiveTraces failed: ${(e as Error).message}`);
@@ -34,7 +51,7 @@ export async function listActiveTraces(): Promise<TraceRecord[]> {
 /** GET /observability/traces/{id} — 单条 trace 完整详情（包含 spans 树） */
 export async function getTraceDetail(id: string): Promise<TraceRecord | null> {
   try {
-    return await request<TraceRecord>(`/observability/traces/${encodeURIComponent(id)}`);
+    return await request<TraceRecord>(`/api/observability/traces/${encodeURIComponent(id)}`);
   } catch (e) {
     // 404 → null（让页面走"不存在"分支）；其它错误抛出
     const status = (e as { status?: number }).status;

@@ -14,6 +14,7 @@ from backend.rag.preprocessing.entity import extract_person_names
 from backend.rag.preprocessing.keyword import extract_doc_keywords, extract_chunk_keywords
 from backend.rag.preprocessing.llm_enrichment import (
     enrich_metadata_llm, _extract_first_sentences, _smart_truncate,
+    invoke_metadata_llm,
 )
 from backend.infra.async_utils import async_safe_call_with_timeout
 
@@ -35,14 +36,7 @@ _ARBITRATION_CANDIDATES = {"legal", "compliance", "policy", "financial", "faq"} 
 _minhash_cache: Dict[str, List[Tuple[str, list[int]]]] = {}  # doc_type → [(file_hash, signature), ...]
 _MINHASH_CACHE_MAX_SIZE = 1024  # 最大保留类型数，自动 LRUCache
 
-# LLM 仲裁提示词 — 轻量，只选类型不生成内容
-_ARBITRATION_PROMPT = """你是电商文档分类专家。以下文档的类型有歧义，请从候选类型中选择最匹配的一个。
-
-候选类型: {candidates}
-文档内容（前 1000 字）:
-{text}
-
-只输出一个类型名，不要额外解释:"""
+# LLM 仲裁提示词 — 已迁移至 prompt_service（key: rag.preprocessing.arbitration）
 
 
 def classify_doc_type(text: str, filename: str = "", file_path: str = "") -> str:
@@ -262,11 +256,11 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
         fname_no_ext = os.path.splitext(filename)[0]
         for hint, hint_type in FILENAME_TYPE_HINTS.items():
             if hint.lower() in fname_no_ext.lower():
-                scores[hint_type] = scores.get(hint_type, 0) + 30
+                scores[hint_type] = scores.get(hint_type, 0) + 100
                 if return_detail:
-                    detail["filename_hits"].append(f"{hint} → {hint_type} +30")
-                    detail["keyword_hits"].append({"type": hint_type, "keyword": hint, "weight": 30, "source": "filename"})
-                logger.debug(f"[Classify] 文件名命中: {hint} → {hint_type} +30")
+                    detail["filename_hits"].append(f"{hint} → {hint_type} +100")
+                    detail["keyword_hits"].append({"type": hint_type, "keyword": hint, "weight": 100, "source": "filename"})
+                logger.debug(f"[Classify] 文件名命中: {hint} → {hint_type} +100")
 
     # ── 标题关键词辅助 ──
     # 扫描文档前几行的标题，提取强信号词
@@ -307,6 +301,8 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
                 break  # 一个文件夹只匹配第一个命中
 
     if not scores:
+        if return_detail:
+            return "general", 0.0, detail
         return "general", 0.0
 
     # ── legal 强特征：「第 N 条」条款编号 ──
@@ -358,9 +354,11 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
         logger.info(f"[Classify] 胶着仲裁：top4={top4}, inner_diff={inner_diff}")
         try:
             # 用模块级 llm（不在函数内重复 import，避免遮蔽测试 monkeypatch）
-            result = llm.invoke(_ARBITRATION_PROMPT.format(
+            from backend.prompts.service import prompt_service
+            result = invoke_metadata_llm(prompt_service.render_sync(
+                "rag.preprocessing.arbitration",
                 candidates=candidates, text=text[:1000],
-            ))
+            ).text, llm_obj=llm)
             result_text = result.content.strip() if hasattr(result, "content") else str(result).strip()
             # sop/financial 等仲裁候选外的次名也可被 LLM 选中（盲点修复）；
             # 精确词边界匹配，避免子串误匹配（如回答含 training 误中 sop）
@@ -560,7 +558,14 @@ def detect_business_domain(text: str, min_score: int = 2, return_detail: bool = 
 # 文档摘要 — 详见 llm_enrichment.py
 # (PR-2.x: enrich_metadata_llm + _extract_first_sentences + _smart_truncate 已迁至 llm_enrichment.py)
 
-@lru_cache(maxsize=32)
+# 摘要结果缓存（text_hash → (summary, person_names)）。
+# 注意：不能用 @lru_cache 装饰 async 函数——它缓存的是 coroutine 对象，
+# 第二次命中缓存 await 已完成的 coroutine 会抛
+# "RuntimeError: cannot reuse already awaited coroutine"。改为手写 dict + FIFO。
+_summary_cache: dict = {}
+_SUMMARY_CACHE_MAX = 32
+
+
 async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = SUMMARY_MAX_LENGTH) -> tuple:
     """使用LLM生成摘要 — DOC_LLM_MODEL 有值走本地 Ollama，否则走 _LLMProxy。
     <2KB 文档直接提取前两段当摘要，不调 LLM。
@@ -577,12 +582,11 @@ async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = 
         return extractive, []
 
     safe_text = text.encode('utf-8', errors='ignore')[:4000].decode('utf-8', errors='ignore')
-    prompt = f"""请用 1-2 句话概括以下文档的核心内容。保留关键术语、数字、条款编号。
-
-文档：
-{safe_text}
-
-摘要（≤{max_length}字）："""
+    from backend.prompts.service import prompt_service
+    prompt = prompt_service.render_sync(
+        "rag.preprocessing.summary",
+        safe_text=safe_text, max_length=str(max_length),
+    ).text
 
     if DOC_LLM_MODEL:
         # 本地 Ollama —— 同步调用（indexer 线程内）
@@ -598,14 +602,15 @@ async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = 
             logger.warning(f"[Summary Ollama] 失败: {e}")
             return "", []
 
-    # Cloud API —— 异步调用
+    # Cloud API —— 异步调用（invoke_metadata_llm：qwen 思考模型关闭思考，提速 ~6x）
     try:
         response = await async_safe_call_with_timeout(
-            llm.invoke,
-            timeout=LLM_REQUEST_TIMEOUT,
-            default_value=None,
-            error_message=f"LLM摘要生成超时 ({LLM_REQUEST_TIMEOUT}s)",
-            input=prompt
+            invoke_metadata_llm,
+            LLM_REQUEST_TIMEOUT,
+            None,
+            f"LLM摘要生成超时 ({LLM_REQUEST_TIMEOUT}s)",
+            prompt,
+            llm_obj=llm,
         )
 
         if response is None:
@@ -627,15 +632,21 @@ async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = 
 async def build_llm_summary(text: str, max_length: int = SUMMARY_MAX_LENGTH) -> tuple:
     """使用LLM生成摘要和人名（入口函数，带缓存）"""
     text_hash = hash(text[:1000])
-    return await build_llm_summary_cached(text_hash, text, max_length)
+    if text_hash in _summary_cache:
+        return _summary_cache[text_hash]
+    result = await build_llm_summary_cached(text_hash, text, max_length)
+    if len(_summary_cache) >= _SUMMARY_CACHE_MAX:
+        _summary_cache.pop(next(iter(_summary_cache)))  # FIFO 淘汰最旧
+    _summary_cache[text_hash] = result
+    return result
 
 
-async def generate_summary_if_needed(text: str, is_full_document: bool) -> tuple:
+async def generate_summary_if_needed(text: str, is_full_document: bool, fname: str = "", file_path: str = "") -> tuple:
     """根据文档类型决定是否生成摘要和人名"""
     if not is_full_document:
         return None, []
 
-    doc_type = classify_doc_type(text.lower())
+    doc_type = classify_doc_type(text.lower(), filename=fname, file_path=file_path)
     if doc_type in ["resume", "project", "report"]:
         return await build_llm_summary(text)
 
@@ -645,13 +656,13 @@ async def generate_summary_if_needed(text: str, is_full_document: bool) -> tuple
 # 主 metadata 构建器（改进：预计算小写文本、增加日志）
 # =====================================================
 
-async def build_metadata(text: str, fname: str, doc_id: str, chunk_id: str, is_full_document: bool = False):
+async def build_metadata(text: str, fname: str, doc_id: str, chunk_id: str, is_full_document: bool = False, file_path: str = ""):
     """构建元数据（异步版本）"""
     start_time = time.time()
 
     text_lower = text.lower()
 
-    doc_type = classify_doc_type(text_lower)
+    doc_type = classify_doc_type(text_lower, filename=fname, file_path=file_path)
 
     # 2026-08-10 多候选业务域：同时存主分类 + 备选（> 0.3 * top_score）
     primary_domain, alt_domains = detect_business_domain(text_lower)
@@ -662,6 +673,12 @@ async def build_metadata(text: str, fname: str, doc_id: str, chunk_id: str, is_f
         "doc_type": doc_type,
         "business_domain": primary_domain,
     }
+    if file_path:
+        rel = os.path.relpath(file_path, DOCS_DIRECTORY)
+        parts = rel.replace("\\", "/").split("/")
+        metadata["kb_id"] = parts[0] if len(parts) > 1 else "default"
+    else:
+        metadata["kb_id"] = "default"
     if alt_domains:
         metadata["business_domain_alt"] = alt_domains
 
@@ -677,7 +694,7 @@ async def build_metadata(text: str, fname: str, doc_id: str, chunk_id: str, is_f
         logger.debug(f"Doc关键词 ({len(kw_list)}个): {kw_list[:5]}..., 文档id: {doc_id}")
 
     if kw_list:
-        metadata["keywords"] = kw_list
+        metadata["doc_keywords" if is_full_document else "keywords"] = kw_list
 
     sections = extract_sections(text)
     if sections:
@@ -686,7 +703,7 @@ async def build_metadata(text: str, fname: str, doc_id: str, chunk_id: str, is_f
     person_names = []
 
     if is_full_document:
-        summary, llm_person_names = await generate_summary_if_needed(text, is_full_document)
+        summary, llm_person_names = await generate_summary_if_needed(text, is_full_document, fname=fname, file_path=file_path)
 
         if summary:
             logger.info(summary)
@@ -731,7 +748,8 @@ async def build_all_metadata_async(docs, doc_map):
             fname=fname,
             doc_id=doc_id,
             chunk_id=f"{doc_id}_{i}",
-            is_full_document=False
+            is_full_document=False,
+            file_path=d.metadata["file_path"],
         )
         chunk_tasks.append((i, task))
 
@@ -745,22 +763,30 @@ async def build_all_metadata_async(docs, doc_map):
     doc_level_texts = []
     doc_level_meta = []
 
+    file_path_by_name: dict[str, str] = {}
+    for d in docs:
+        bn = os.path.basename(d.metadata["file_path"])
+        if bn not in file_path_by_name:
+            file_path_by_name[bn] = d.metadata["file_path"]
+
     doc_tasks = []
     for name, chunks in doc_map.items():
         full_text = "\n".join(chunks)
-        doc_id = hashlib.md5(name.encode()).hexdigest()[:10]
+        fpath = file_path_by_name.get(name, "")
+        doc_id = derive_doc_id_from_path(fpath, DOCS_DIRECTORY) if fpath else hashlib.md5(name.encode()).hexdigest()[:10]
 
         task = build_metadata(
             text=full_text,
             fname=name,
             doc_id=doc_id,
             chunk_id=f"{doc_id}_full",
-            is_full_document=True
+            is_full_document=True,
+            file_path=fpath,
         )
-        doc_tasks.append((name, full_text, task))
+        doc_tasks.append((name, full_text, fpath, task))
 
     logger.info(f"📦 提交 {len(doc_tasks)} 个 doc 元数据任务...")
-    for name, full_text, task in doc_tasks:
+    for name, full_text, fpath, task in doc_tasks:
         full_metadata = await task
         doc_level_texts.append(full_text)
         doc_level_meta.append(full_metadata)

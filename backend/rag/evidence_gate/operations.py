@@ -41,14 +41,20 @@ def risk_level_from_intent_and_doctype(intent: str, doc_types: list[str]) -> str
 # =====================================================
 
 def _safe_top_score(docs: list) -> float:
-    """从 docs metadata 里提取 top1 相似度 (优先级: rerank_score > rrf_score > similarity > 0)。"""
+    """从 docs metadata 里提取 top1 相似度。
+
+    优先级: rerank_score > similarity > rrf_score > 0。
+    量纲注意（2026-09-03 修复）：rrf_score 是 RRF 排序量纲（上限 ≈0.033），
+    与余弦相似度不可比，只能作为最后兜底；此前 rrf 优先于 similarity
+    会让携带真实相似度的文档被低分 rrf 覆盖导致误拒。
+    """
     if not docs:
         return 0.0
     candidates = []
     for d in docs:
         s = (d.metadata.get("rerank_score")
-             or d.metadata.get("rrf_score")
              or d.metadata.get("similarity")
+             or d.metadata.get("rrf_score")
              or 0.0)
         try:
             candidates.append(float(s))

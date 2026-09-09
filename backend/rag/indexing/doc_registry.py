@@ -13,6 +13,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from backend.infra.sqlite import get_connection
 from backend.shared.logger import logger
 
 
@@ -81,9 +82,7 @@ class DocumentRegistry:
             conn.executescript(SCHEMA_SQL)
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return get_connection(self._db_path, row_factory=sqlite3.Row)
 
     # ---- 查询 ----
 

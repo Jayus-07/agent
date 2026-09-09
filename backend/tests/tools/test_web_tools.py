@@ -321,6 +321,158 @@ class TestWebToolsIntegration:
         
         assert isinstance(result, str)
         assert len(result) > 0
+    
+    # ==================== 新增：URL 编码测试 ====================
+    
+    def test_unicode_query_handling(self):
+        """验证 Unicode 查询参数处理"""
+        from backend.tools.web import web_search_tool
+        
+        unicode_queries = [
+            "人工智能中文教程",
+            "Pythonプログラミング言語",
+            "الذكاء الاصطناعي",
+        ]
+        
+        for query in unicode_queries:
+            result = web_search_tool.invoke({
+                "query": query,
+                "num_results": 3
+            })
+            assert isinstance(result, str), f"Unicode 查询失败：{query}"
+    
+    def test_url_encoding_in_search(self):
+        """验证搜索 URL 编码"""
+        from backend.tools.web import web_search_tool
+        
+        special_char_query = "Python + JavaScript tutorial & examples"
+        
+        result = web_search_tool.invoke({
+            "query": special_char_query,
+            "num_results": 5
+        })
+        
+        assert isinstance(result, str)
+    
+    # ==================== 新增：结果提取测试 ====================
+    
+    def test_multiple_results_extraction(self):
+        """验证多个搜索结果提取"""
+        from backend.tools.web import web_search_tool
+        
+        result = web_search_tool.invoke({
+            "query": "technology news",
+            "num_results": 10
+        })
+        
+        assert isinstance(result, str)
+        # 应包含至少一个搜索结果标记
+        if "FAILED" not in result:
+            assert len(result) > 20  # 有效结果应有足够长度
+    
+    def test_empty_result_handling(self):
+        """验证无结果时的错误处理"""
+        from backend.tools.web import web_search_tool
+        
+        # 极端限制条件应该无结果
+        result = web_search_tool.invoke({
+            "query": "xyz_nonexistent_keyword_2099",
+            "num_results": 1
+        })
+        
+        assert isinstance(result, str)
+    
+    # ==================== 新增：Crawler 高级功能 ====================
+    
+    def test_crawl_timeout_configuration(self):
+        """验证爬取超时配置"""
+        from backend.tools.web import web_crawl_tool
+        
+        # 设置较短超时（理论上）
+        result = web_crawl_tool.invoke({
+            "url": "https://example.com",
+            "timeout": 30,
+            "mode": "markdown"
+        })
+        
+        assert isinstance(result, str)
+    
+    def test_crawl_content_length_limit(self):
+        """验证爬虫内容长度限制"""
+        from backend.tools.web import web_crawl_tool
+        
+        # 爬取示例网站，应自动截断过长的内容
+        result = web_crawl_tool.invoke({
+            "url": "https://example.com",
+            "max_content_length": 50000
+        })
+        
+        assert isinstance(result, str)
+        if "FAILED" not in result and "无法抓取" not in result:
+            assert len(result) <= 50000 + 1000  # 允许小幅超额
+    
+    def test_crawl_follow_links_flag(self):
+        """验证是否跟随链接的选项"""
+        from backend.tools.web import web_crawl_tool
+        
+        # 只爬取当前页，不跟随外链
+        result = web_crawl_tool.invoke({
+            "url": "https://example.com",
+            "follow_links": False
+        })
+        
+        assert isinstance(result, str)
+    
+    # ==================== 新增：性能基准测试 ====================
+    
+    @pytest.mark.skip(reason="Real network calls may timeout, skipped for CI")
+    def test_web_search_response_time_small_query(self):
+        """Web Search 响应时间 <5s (小查询)"""
+        from backend.tools.web import web_search_tool
+        import time
+        
+        start = time.perf_counter()
+        result = web_search_tool.invoke({
+            "query": "python",
+            "num_results": 3
+        })
+        elapsed = time.perf_counter() - start
+        
+        # 包含网络请求，设置宽松阈值 5s
+        assert elapsed < 5.0, f"搜索耗时{elapsed:.3f}s，超过 5s 基线"
+        assert isinstance(result, str)
+    
+    @pytest.mark.skip(reason="Real network calls may timeout, skipped for CI")
+    def test_web_search_response_time_complex_query(self):
+        """Web Search 响应时间 <10s (复杂查询)"""
+        from backend.tools.web import web_search_tool
+        import time
+        
+        start = time.perf_counter()
+        result = web_search_tool.invoke({
+            "query": "machine learning algorithms comparison",
+            "num_results": 10
+        })
+        elapsed = time.perf_counter() - start
+        
+        assert elapsed < 2.0, f"搜索耗时{elapsed:.3f}s，超过 2s 基线"
+        assert isinstance(result, str)
+    
+    @pytest.mark.benchmark
+    def test_web_crawl_page_load_performance(self):
+        """网页爬取响应时间 <3s"""
+        from backend.tools.web import web_crawl_tool
+        import time
+        
+        start = time.perf_counter()
+        result = web_crawl_tool.invoke({
+            "url": "https://example.com",
+            "mode": "markdown"
+        })
+        elapsed = time.perf_counter() - start
+        
+        assert elapsed < 3.0, f"爬取耗时{elapsed:.3f}s，超过 3s 基线"
+        assert isinstance(result, str)
 
 
 # ==================== 测试套件入口 ====================

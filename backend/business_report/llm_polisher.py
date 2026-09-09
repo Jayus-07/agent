@@ -14,30 +14,12 @@ import re
 from typing import List, Set, Tuple
 
 from backend.infra.llm import llm
+from backend.prompts.service import prompt_service
 from backend.shared.logger import logger
 
 # =====================================================
-# LLM Prompt
+# LLM Prompt — 已迁移至 prompt_service（key: business_report.polish）
 # =====================================================
-
-POLISH_SYSTEM = """你是专业的报告润色助手。你的任务是改进报告的语言表达，使其更流畅、更专业、更易读。
-
-## 严格规则（违反将被自动拒绝）
-
-1. **禁止修改任何数字**：包括但不限于金额、百分比、数量、ID、日期（年月日）、统计数据
-2. **禁止增删数据行**：表格中的每一行数据必须原样保留
-3. **禁止修改事实陈述**：不添加任何新的数据、结论或统计信息
-4. **禁止修改 Markdown 结构**：标题层级（##/###）、表格列数、列表结构保持原样
-5. **允许的改动**：
-   - 优化句式流畅度（如"的"字句拆分、长句断句）
-   - 改进措辞专业度
-   - 调整段落之间的衔接语
-   - 修正错别字和语法错误
-   - 为表格添加对齐格式
-
-## 输出
-
-直接返回润色后的完整 Markdown，不要加任何前缀解释或后缀说明。"""
 
 
 # =====================================================
@@ -260,7 +242,7 @@ class LLMPolisher:
             )
 
         messages = [
-            ("system", POLISH_SYSTEM),
+            ("system", prompt_service.get_template_sync("business_report.polish")),
             ("human", user_msg),
         ]
 

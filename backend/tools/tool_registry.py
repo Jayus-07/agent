@@ -52,7 +52,7 @@ class ToolRegistry:
             )
         
         self._registered_tools[name] = fn
-        logger.info(f"[ToolRegistry] 注册 Tool: {name} @ {source_file}")
+        logger.debug(f"[ToolRegistry] 注册 Tool: {name} @ {source_file}")
     
     @cached_property
     def available_tools(self) -> Dict[str, object]:

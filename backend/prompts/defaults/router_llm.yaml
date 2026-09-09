@@ -1,0 +1,12 @@
+key: router.llm
+name: LLM 路由 Prompt
+category: router
+risk_level: high
+template_engine: str_format
+variables:
+  - {name: query, required: true, description: 用户查询}
+template: |
+  路由能力选择，输出JSON。
+  能力: sql.query|rag.search|business.analyze|report.generate|email.send|data.export|web.search|data.collect|daily_report|inventory_alert
+  问题: {query}
+  输出: {{"execution_mode":"direct|plan|workflow","candidates":[{{"name":"能力","score":0-1}}],"reason":"一句话"}}

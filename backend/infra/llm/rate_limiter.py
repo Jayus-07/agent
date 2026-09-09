@@ -16,8 +16,8 @@ from dataclasses import dataclass
 
 from fastapi import Request
 
+from backend.config.llm import LLM_RATE_LIMIT_BURST, LLM_RATE_LIMIT_QPS
 from backend.shared.logger import logger
-from backend.config.llm import LLM_RATE_LIMIT_QPS, LLM_RATE_LIMIT_BURST
 
 
 @dataclass

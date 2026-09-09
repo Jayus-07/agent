@@ -11,6 +11,7 @@ import sqlite3
 import threading
 from typing import Any
 
+from backend.infra.sqlite import get_connection
 from backend.shared.logger import logger
 from backend.config.database import CHUNK_STORE_PATH
 
@@ -55,10 +56,8 @@ class ChunkStore:
         self._lock = threading.Lock()
         self._init_db()
 
-    def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _conn(self, row_factory=None) -> sqlite3.Connection:
+        return get_connection(self._db_path, row_factory=row_factory)
 
     def _init_db(self) -> None:
         os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
@@ -74,7 +73,6 @@ class ChunkStore:
         except sqlite3.OperationalError:
             pass  # 列已存在，跳过
         conn.commit()
-        conn.close()
 
     # ── 写入 ──
 
@@ -104,7 +102,6 @@ class ChunkStore:
             )
             conn.commit()
             count = len(rows)
-            conn.close()
         logger.debug(f"[ChunkStore] 写入 {count} chunks for doc={doc_id}")
         return count
 
@@ -115,19 +112,17 @@ class ChunkStore:
             cur = conn.execute("DELETE FROM chunk_store WHERE doc_id = ?", (doc_id,))
             conn.commit()
             deleted = cur.rowcount
-            conn.close()
         return deleted
 
     # ── 查询 ──
 
     def get_by_doc_id(self, doc_id: str) -> list[dict[str, Any]]:
         """按 doc_id 查询所有 chunk，按 chunk_index 排序。"""
-        conn = self._conn()
+        conn = self._conn(row_factory=sqlite3.Row)
         rows = conn.execute(
             "SELECT chunk_index, content, char_count, keywords, llm_keywords, llm_model, section_title, doc_type, kb_id, department, simulated_questions, created_at FROM chunk_store WHERE doc_id = ? ORDER BY chunk_index",
             (doc_id,),
         ).fetchall()
-        conn.close()
         import json as _json
         out = []
         for r in rows:
@@ -141,11 +136,10 @@ class ChunkStore:
         return out
 
     def count_by_doc_id(self, doc_id: str) -> int:
-        conn = self._conn()
+        conn = self._conn(row_factory=sqlite3.Row)
         row = conn.execute(
             "SELECT COUNT(*) as cnt FROM chunk_store WHERE doc_id = ?", (doc_id,)
         ).fetchone()
-        conn.close()
         return row["cnt"] if row else 0
 
 

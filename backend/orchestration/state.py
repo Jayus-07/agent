@@ -4,8 +4,11 @@ state.py — AgentState 与 StepResult 类型定义
 统一图状态对象，所有节点通过读写此 state 协同工作。
 """
 import operator
-from typing import TypedDict, Literal, Any, Annotated
+from typing import Annotated, Any, Literal, TypedDict
+
 from langgraph.graph.message import add_messages
+
+from backend.customer_service.context import CSContext
 
 
 def _merge_step_results(left: dict, right: dict) -> dict:
@@ -58,6 +61,7 @@ class AgentState(TypedDict):
     executor_mode: str | None                    # V2 executor 模式（direct/workflow）
     executor_workflow: str | None                # V2 executor 实际执行的 workflow 名
     workflow_result: dict | None                 # V2 workflow executor 结果快照
+    guard_result: dict                           # Input Guard 判定快照（风险标注，供 Tool Guard 预留）
     # ⭐ 新增：可观测性 + 流程控制字段
     alerts: list[dict]                          # PlanAlert 列表（SSE 流展示）
     _supervisor_loop_count: int                 # Supervisor 调度轮次计数
@@ -66,3 +70,15 @@ class AgentState(TypedDict):
     # 降级步骤集合：用 operator.or_ 作为 reducer（即 set union）
     # 节点必须返回**新** set（用 | 运算），禁止原地 .add() 修改 — 否则 reducer 看不到变化
     _degraded_steps: Annotated[set[str], operator.or_]
+
+
+class CSAgentState(AgentState):
+    """客服 Agent 状态 — 扩展现有 AgentState
+
+    通过 route_mode="customer_service" 进入客服子系统时使用。
+    cs_context 承载客服专有上下文（认证用户、会话、转接状态、确认状态机等）。
+    """
+
+    cs_context: CSContext
+    cs_action_result: dict                # 业务操作执行结果
+    cs_audit_entries: list[dict]          # 审计日志条目

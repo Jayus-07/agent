@@ -1,41 +1,14 @@
 """LLM-as-Judge 评分器 — 用 LLM 对端到端答案进行 4 维质量评分。
 
-可移植性：此文件不硬编码任何特定 LLM 实现。通过 set_llm_callable() 注入 LLM 调用函数，
-即可在任何项目中使用。默认 fallback 返回 3.0 分。
+可移植性：此文件不硬编码任何特定 LLM 实现。默认使用项目 LLM（backend.infra.llm）。
+异常时返回 total=0.0（明确失败），而非 3.0（会误判为通过）。
 """
 
-from typing import Callable
 from pydantic import BaseModel, Field, model_validator
-
-# 可注入的 LLM 调用函数：接受 prompt 字符串，返回 response 字符串
-_llm_callable: Callable[[str], str] | None = None
-
-
-def set_llm_callable(fn: Callable[[str], str]) -> None:
-    """注入 LLM 调用函数。新项目复制评估框架后调用此函数设置自己的 LLM。
-
-    Args:
-        fn: 签名为 (prompt: str) -> str 的可调用对象。
-            如果 LLM 返回对象，需要包装成提取 .content 的函数。
-
-    Example:
-        >>> from backend.infra.llm import get_llm
-        >>> llm = get_llm()
-        >>> def my_llm(prompt: str) -> str:
-        ...     resp = llm.invoke(prompt)
-        ...     return resp.content if hasattr(resp, 'content') else str(resp)
-        >>> set_llm_callable(my_llm)
-    """
-    global _llm_callable
-    _llm_callable = fn
 
 
 def _get_llm_response(prompt: str) -> str:
-    """获取 LLM 回复：优先使用注入的可调用对象，否则尝试默认导入。"""
-    global _llm_callable
-    if _llm_callable is not None:
-        return _llm_callable(prompt)
-    # fallback: 尝试导入项目默认 LLM
+    """获取 LLM 回复：使用项目默认 LLM。"""
     try:
         from backend.infra.llm import get_llm
         llm = get_llm()
@@ -43,15 +16,14 @@ def _get_llm_response(prompt: str) -> str:
         return resp.content if hasattr(resp, "content") else str(resp)
     except ImportError:
         raise RuntimeError(
-            "LLM not available. Either call evaluation.judge.set_llm_callable(fn) "
-            "or ensure llm.llm_factory.get_llm() is importable."
+            "LLM not available. Ensure backend.infra.llm.get_llm() is importable."
         )
 
 
 class JudgeResult(BaseModel):
     """LLM 裁判的评分结果。"""
     scores: dict[str, int] = Field(description="4维评分: completeness/faithfulness/conciseness/citation_quality")
-    total: float = Field(ge=1.0, le=5.0, description="加权综合分")
+    total: float = Field(ge=0.0, le=5.0, description="加权综合分 (0.0=评估失败)")
     reasoning: str = Field(description="评分理由")
     confidence: str = Field(default="medium", description="裁判置信度: low/medium/high")
 
@@ -98,32 +70,15 @@ JUDGE_SYSTEM_PROMPT = """你是一个严格但公正的评估裁判。你的任�
 
 def build_judge_prompt(question: str, rubric: dict[str, str], actual_answer: str) -> str:
     """构造裁判 prompt。rubric 包含各维度的具体要求。"""
+    from backend.prompts.service import prompt_service
     rubric_lines = "\n".join(f"- {k}: {v}" for k, v in rubric.items())
-    return f"""请评估以下 AI 助手对用户问题的回答。
-
-请从以下 4 个维度评分（每个维度 1-5 分）：
-
-1. 完整性: 是否回答了问题的所有部分？遗漏了关键信息吗？
-2. 忠实性: 所有数字、事实是否能追溯到数据源？有没有编造或幻觉？
-3. 简洁性: 有没有冗余、重复或无关内容？表述是否精炼？
-4. 引用质量: 引用标注是否准确、充分？文档来源是否正确？
-
-## 用户问题
-{question}
-
-## 评估标准
-{rubric_lines}
-
-## AI 回答
-{actual_answer}
-
-请输出以下格式的 JSON：
-{{
-  "scores": {{"completeness": 4, "faithfulness": 5, "conciseness": 3, "citation_quality": 4}},
-  "total": 4.15,
-  "reasoning": "各维度评分说明...",
-  "confidence": "medium"
-}}"""
+    r = prompt_service.render_sync(
+        "evaluation.judge.user",
+        question=question,
+        rubric_lines=rubric_lines,
+        actual_answer=actual_answer,
+    )
+    return r.text
 
 
 def judge_answer(
@@ -169,10 +124,10 @@ def judge_answer(
             confidence=data.get("confidence", "medium"),
         )
     except Exception as e:
-        # LLM 调用失败时返回默认低分
+        # LLM 调用失败时返回明确失败分数（0.0），而非 3.0（会误判为通过）
         return JudgeResult(
-            scores={"completeness": 3, "faithfulness": 3, "conciseness": 3, "citation_quality": 3},
-            total=3.0,
+            scores={"completeness": 1, "faithfulness": 1, "conciseness": 1, "citation_quality": 1},
+            total=0.0,
             reasoning=f"Judge evaluation failed: {e}",
             confidence="low",
         )

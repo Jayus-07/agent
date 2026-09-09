@@ -10,7 +10,7 @@
 运行时行为：
     import backend.evaluation.runners_config
      → 触发 evaluation.runners.builtin 的导入
-       → builtin 模块在加载时调用 register_runner() 注册 4 个 runner
+       → builtin 模块在加载时调用 register_runner() 注册 2 个 runner
 """
 
 # 导入即注册 — 触发 builtin.py 中的 register_runner() 调用

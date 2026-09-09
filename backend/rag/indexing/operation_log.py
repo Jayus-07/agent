@@ -23,6 +23,8 @@ import sqlite3
 import threading
 from typing import Any
 
+from backend.infra.sqlite import get_connection
+
 
 OPERATIONS = ("upload", "reindex", "delete")
 
@@ -61,12 +63,9 @@ class DocumentOperationLogger:
         conn = self._conn()
         conn.executescript(SCHEMA_SQL)
         conn.commit()
-        conn.close()
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return get_connection(self._db_path, row_factory=sqlite3.Row)
 
     # ---- 写入 ----
 

@@ -22,7 +22,7 @@ from backend.infra.llm import llm
 from backend.orchestration.tool_registry import tool_registry
 from backend.agents.planner.planner import _extract_json, _normalize_plan
 from backend.observability.alerts import make_alert, log_degradation
-from backend.prompts.critique import PLAN_CRITIQUE_SYSTEM
+from backend.prompts.service import prompt_service
 from backend.shared.logger import logger
 from backend.config import ENABLE_PLAN_CRITIQUE
 
@@ -192,7 +192,7 @@ def critique_node(state: dict) -> dict:
     # ── 阶段3: LLM 修正（仅余复杂问题）──
     logger.info(f"[Critique] {len(remaining)} 个问题需 LLM 修正: {remaining}")
     capabilities_schema = tool_registry.get_capabilities_schema_text()
-    system_prompt = PLAN_CRITIQUE_SYSTEM.format(capabilities_schema=capabilities_schema)
+    system_prompt = prompt_service.render_sync("planner.critique", capabilities_schema=capabilities_schema).text
 
     user_message = f"""原始用户问题: {question}
 

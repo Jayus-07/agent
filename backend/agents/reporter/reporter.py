@@ -15,7 +15,7 @@ reporter.py — 最终 Markdown 回答生成 + LangGraph 节点适配
 from backend.infra.llm import llm
 from backend.shared.logger import logger
 from backend.agents.reporter.context_filter import filter_step_results
-from backend.prompts.reporter import REPORTER_SYSTEM
+from backend.prompts.service import prompt_service
 
 
 # =====================================================
@@ -100,8 +100,8 @@ def generate_final_answer(
             f"\n\n建议换个关键词或查阅其他资料。"
         )
 
-    # Context Filter
-    if context_filter:
+    # Context Filter — 仅多步骤时启用（单步骤无交叉过滤意义，省掉 CrossEncoder ~1-2s）
+    if context_filter and len(step_results) > 1:
         step_results = filter_step_results(step_results, question)
 
     # —— 快速路径：RAG 有结果且其他步骤无实质输出时，直接透传 ——
@@ -123,6 +123,13 @@ def generate_final_answer(
         if rag_output:
             logger.info("[Reporter] RAG 有实质输出且其他步骤无，直接透传")
             return rag_output
+
+    # —— 快速路径：单步骤有实质输出时直接透传（省掉 LLM 总结 ~2s）——
+    if len(all_success) == 1:
+        sole_output = str(list(all_success.values())[0].get("output", ""))
+        if len(sole_output) > 5:
+            logger.info("[Reporter] 单步骤有实质输出，直接透传（跳过 LLM 总结）")
+            return sole_output
 
     # 提取参考文献
     rag_references = _extract_rag_references(step_results)
@@ -162,9 +169,23 @@ def generate_final_answer(
 
     # ── 非结构化数据：走完整 LLM 路径（与旧行为一致）──
     try:
+        r = prompt_service.render_sync(
+            "reporter.summary",
+            question=question,
+            outputs_text=outputs_text,
+        )
+        # Split on \n---\n separator to get system and human parts
+        parts = r.text.split("\n---\n", 1)
+        if len(parts) == 2:
+            system_text, human_text = parts
+        else:
+            # Fallback: treat entire template as system, construct human inline
+            system_text = r.text
+            human_text = f"## 用户问题\n{question}\n\n## 步骤执行结果\n{outputs_text}\n\n请生成最终报告:"
+
         resp = llm.invoke([
-            ("system", REPORTER_SYSTEM),
-            ("human", f"## 用户问题\n{question}\n\n## 步骤执行结果\n{outputs_text}\n\n请生成最终报告:"),
+            ("system", system_text.strip()),
+            ("human", human_text.strip()),
         ])
         final = resp.content.strip()
 
@@ -448,7 +469,6 @@ def _fallback_summary(question: str, step_results: dict, error: str) -> str:
 __all__ = [
     "reporter_node",
     "generate_final_answer",
-    "REPORTER_SYSTEM",
     "_extract_sources_from_steps",
     "_extract_rag_references",
     "_is_step_successful",

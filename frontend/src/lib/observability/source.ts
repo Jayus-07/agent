@@ -28,15 +28,35 @@ export async function listAllTraces(): Promise<TraceRecord[]> {
 
 /** 列出 Agent 问答链路追踪（workflow_name === "agent"）
  *  供 /observability/traces 页面使用，只展示 /agent 智能问答产生的 trace，
- *  排除文档上传/重索引等操作日志 trace。 */
+ *  排除文档上传/重索引等操作日志 trace。
+ *  服务端过滤（workflow_name 参数），不再拉 200 条客户端 filter。 */
 export async function listAgentTraces(): Promise<TraceRecord[]> {
   if (!isClient()) return [];
   try {
-    const all = await realApi.listTraces(200);
-    return all.filter((t) => t.workflow_name === "agent");
+    return await realApi.listTraces(200, "agent");
   } catch (e) {
     console.warn("[observability] listAgentTraces failed:", (e as Error).message);
     return [];
+  }
+}
+
+/** Agent 链路时间窗聚合统计（StatsBar 后端下沉；失败返回 null 由页面降级自算） */
+export interface AgentTraceStats {
+  total_24h: number;
+  success_rate: number;
+  avg_duration_ms: number;
+  p95_duration_ms: number;
+  error_count: number;
+  total_cost_usd: number;
+}
+
+export async function getAgentTraceStats(hours: number): Promise<AgentTraceStats | null> {
+  if (!isClient()) return null;
+  try {
+    return await realApi.getTraceStats(hours, "agent");
+  } catch (e) {
+    console.warn("[observability] getAgentTraceStats failed:", (e as Error).message);
+    return null;
   }
 }
 

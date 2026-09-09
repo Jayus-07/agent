@@ -1,0 +1,15 @@
+key: rag.preprocessing.summary
+name: 文档摘要生成
+category: rag_preprocessing
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: safe_text, required: true, description: 文档文本}
+  - {name: max_length, required: true, description: 摘要最大字数}
+template: |
+  请用 1-2 句话概括以下文档的核心内容。保留关键术语、数字、条款编号。
+
+  文档：
+  {safe_text}
+
+  摘要（≤{max_length}字）：

@@ -1,29 +1,10 @@
 """L3 长期记忆 — pgvector only, async pipeline"""
 from datetime import datetime, timezone
 from backend.rag.embedding_singleton import get_embedding
-from backend.infra.llm import llm
 from backend.config import L3_DEDUP_COSINE_THRESHOLD, L3_SUPERSEDE_THRESHOLD
 from backend.memory.pii_filter import scan_and_sanitize
 from backend.shared.logger import logger
 from dataclasses import dataclass, field
-
-_FACT_EXTRACTION_PROMPT = """从对话中提取值得长期记忆的关键信息。每条一行，严格使用竖线分隔: 类型|内容
-
-类型: user_fact(用户身份/角色/技能), preference(偏好/习惯), decision(决策), knowledge(知识)
-没有重要信息则只输出: NONE
-
-示例:
-用户: 我叫张三，是后端工程师，喜欢用FastAPI
-助手: 好的张三，你是后端工程师
-输出:
-user_fact|用户名张三
-user_fact|职业是后端工程师
-preference|喜欢使用FastAPI框架
-
-对话:
-{conversation}
-
-输出:"""
 
 
 @dataclass
@@ -52,7 +33,10 @@ class LongTermMemory:
     def extract_facts(self, question: str, answer: str) -> list[MemoryFact]:
         conversation = f"用户: {question}\n助手: {answer}"
         try:
-            resp = llm.invoke(_FACT_EXTRACTION_PROMPT.format(conversation=conversation))
+            from backend.infra.llm import llm
+            from backend.prompts.service import prompt_service
+            r = prompt_service.render_sync("memory.long_term.fact_extraction", conversation=conversation)
+            resp = llm.invoke(r.text)
             text = resp.content if hasattr(resp, "content") else str(resp)
         except Exception as e:
             logger.warning(f"[LongTermMemory] 事实提取失败: {e}")

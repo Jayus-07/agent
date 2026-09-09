@@ -1,0 +1,448 @@
+{
+ "id": "3fcd6614ffed",
+ "request_id": "3fcd6614ffed",
+ "timestamp": "2026-09-02T19:20:58Z",
+ "session_id": "ZuPmxiHkRFuv8f_qolZdp",
+ "model": "qwen3.7-plus",
+ "provider": "qwen",
+ "question": "退款审核时间是多少？",
+ "answer_preview": "知识库暂无相关资料。",
+ "answer_len": 10,
+ "duration_ms": 3365,
+ "total_ms": 3365,
+ "usage": {},
+ "cost": {},
+ "error": {},
+ "metadata": {
+  "rejection": {
+   "rejected": true,
+   "layer": "retrieval",
+   "reason": "no_evidence",
+   "scores": {
+    "doc_count": 0
+   },
+   "thresholds": {
+    "vec_min": 0.2
+   },
+   "suggested_queries": [],
+   "self_correction_attempted": false,
+   "timestamp": "2026-09-02T19:21:01Z"
+  }
+ },
+ "spans": [
+  {
+   "span_id": "root",
+   "parent_id": null,
+   "name": "RAG 智能问答",
+   "type": "agent",
+   "kind": "tool",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:58Z",
+   "end_time": "2026-09-02T19:21:01Z",
+   "duration_ms": 3366,
+   "sequence": 0,
+   "retry_count": 0,
+   "metrics": {
+    "rejected": true,
+    "reason": "no_evidence",
+    "gate_layer": "retrieval",
+    "span_count": 14
+   },
+   "input": {
+    "question": "退款审核时间是多少？"
+   },
+   "output": {
+    "answer_preview": "知识库暂无相关资料。",
+    "answer_len": 10
+   },
+   "events": [],
+   "errors": []
+  },
+  {
+   "span_id": "retrieval",
+   "parent_id": "root",
+   "name": "检索",
+   "type": "retrieval",
+   "kind": "retrieval",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:58Z",
+   "end_time": "2026-09-02T19:21:01Z",
+   "duration_ms": 3126,
+   "sequence": 1,
+   "retry_count": 0,
+   "metrics": {
+    "duration_ms": 3126,
+    "total_docs": 0
+   },
+   "input": {
+    "question": "退款审核时间是多少？"
+   },
+   "output": null,
+   "events": [
+    {
+     "name": "query_analyzer",
+     "timestamp": "2026-09-02T19:21:01Z",
+     "level": "info",
+     "message": "intent=order_query, doc_types=[]",
+     "attributes": {
+      "intent": "order_query",
+      "doc_types": [],
+      "metadata_filter": {
+       "business_domain": "order"
+      }
+     }
+    },
+    {
+     "name": "final_context",
+     "timestamp": "2026-09-02T19:21:01Z",
+     "level": "info",
+     "message": "0 chunks → LLM",
+     "attributes": {
+      "chunks": []
+     }
+    }
+   ],
+   "errors": []
+  },
+  {
+   "span_id": "query_rewrite",
+   "parent_id": "root",
+   "name": "LLM改写",
+   "type": "llm_call",
+   "kind": "tool",
+   "status": "skipped",
+   "start_time": "2026-09-02T19:20:58Z",
+   "end_time": "2026-09-02T19:20:58Z",
+   "duration_ms": 0,
+   "sequence": 2,
+   "retry_count": 0,
+   "metrics": {
+    "variants": 0
+   },
+   "input": null,
+   "output": null,
+   "events": [],
+   "errors": []
+  },
+  {
+   "span_id": "chunk_retrieval",
+   "parent_id": "root",
+   "name": "检索",
+   "type": "retrieval",
+   "kind": "tool",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:58Z",
+   "end_time": "",
+   "duration_ms": 0,
+   "sequence": 3,
+   "retry_count": 0,
+   "metrics": {},
+   "input": null,
+   "output": null,
+   "events": [
+    {
+     "name": "doc_filter",
+     "timestamp": "2026-09-02T19:20:58Z",
+     "level": "info",
+     "message": "Stage1: metadata={'kb_id': 'biz_order', 'business_domain': 'order'}, persons=[], → 0 docs, path=metadata_filter_with_doc_similarity",
+     "attributes": {
+      "metadata_filter": {
+       "kb_id": "biz_order",
+       "business_domain": "order"
+      },
+      "person_names": [],
+      "output_doc_count": 0,
+      "stage1_path": "metadata_filter_with_doc_similarity",
+      "stage1_fallback_count": 1
+     }
+    }
+   ],
+   "errors": []
+  },
+  {
+   "span_id": "enhanced_hybrid_retrieval",
+   "parent_id": "root",
+   "name": "检索",
+   "type": "tool_call",
+   "kind": "tool",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:58Z",
+   "end_time": "",
+   "duration_ms": 0,
+   "sequence": 4,
+   "retry_count": 0,
+   "metrics": {},
+   "input": null,
+   "output": null,
+   "events": [],
+   "errors": []
+  },
+  {
+   "span_id": "hybrid_retrieval",
+   "parent_id": "root",
+   "name": "检索",
+   "type": "retrieval",
+   "kind": "tool",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:58Z",
+   "end_time": "2026-09-02T19:20:58Z",
+   "duration_ms": 59,
+   "sequence": 5,
+   "retry_count": 0,
+   "metrics": {
+    "vector_hits": 0,
+    "bm25_hits": 0,
+    "merged_hits": 0
+   },
+   "input": null,
+   "output": null,
+   "events": [
+    {
+     "name": "rrf_fusion",
+     "timestamp": "2026-09-02T19:20:58Z",
+     "level": "info",
+     "message": "Vector:0 + BM25:0 → RRF:0",
+     "attributes": {
+      "vector_top3": [],
+      "bm25_top3": [],
+      "fused_top5": []
+     }
+    }
+   ],
+   "errors": []
+  },
+  {
+   "span_id": "enhanced_hybrid_retrieval",
+   "parent_id": "root",
+   "name": "检索",
+   "type": "tool_call",
+   "kind": "tool",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:58Z",
+   "end_time": "",
+   "duration_ms": 0,
+   "sequence": 6,
+   "retry_count": 0,
+   "metrics": {},
+   "input": null,
+   "output": null,
+   "events": [],
+   "errors": []
+  },
+  {
+   "span_id": "hybrid_retrieval",
+   "parent_id": "root",
+   "name": "检索",
+   "type": "retrieval",
+   "kind": "tool",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:58Z",
+   "end_time": "2026-09-02T19:20:58Z",
+   "duration_ms": 65,
+   "sequence": 7,
+   "retry_count": 0,
+   "metrics": {
+    "vector_hits": 0,
+    "bm25_hits": 0,
+    "merged_hits": 0
+   },
+   "input": null,
+   "output": null,
+   "events": [
+    {
+     "name": "rrf_fusion",
+     "timestamp": "2026-09-02T19:20:58Z",
+     "level": "info",
+     "message": "Vector:0 + BM25:0 → RRF:0",
+     "attributes": {
+      "vector_top3": [],
+      "bm25_top3": [],
+      "fused_top5": []
+     }
+    }
+   ],
+   "errors": []
+  },
+  {
+   "span_id": "enhanced_hybrid_retrieval",
+   "parent_id": "root",
+   "name": "检索",
+   "type": "tool_call",
+   "kind": "tool",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:58Z",
+   "end_time": "",
+   "duration_ms": 0,
+   "sequence": 8,
+   "retry_count": 0,
+   "metrics": {},
+   "input": null,
+   "output": null,
+   "events": [],
+   "errors": []
+  },
+  {
+   "span_id": "hybrid_retrieval",
+   "parent_id": "root",
+   "name": "检索",
+   "type": "retrieval",
+   "kind": "tool",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:58Z",
+   "end_time": "2026-09-02T19:20:58Z",
+   "duration_ms": 63,
+   "sequence": 9,
+   "retry_count": 0,
+   "metrics": {
+    "vector_hits": 0,
+    "bm25_hits": 0,
+    "merged_hits": 0
+   },
+   "input": null,
+   "output": null,
+   "events": [
+    {
+     "name": "rrf_fusion",
+     "timestamp": "2026-09-02T19:20:58Z",
+     "level": "info",
+     "message": "Vector:0 + BM25:0 → RRF:0",
+     "attributes": {
+      "vector_top3": [],
+      "bm25_top3": [],
+      "fused_top5": []
+     }
+    }
+   ],
+   "errors": []
+  },
+  {
+   "span_id": "enhanced_hybrid_retrieval",
+   "parent_id": "root",
+   "name": "检索",
+   "type": "tool_call",
+   "kind": "tool",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:58Z",
+   "end_time": "",
+   "duration_ms": 0,
+   "sequence": 10,
+   "retry_count": 0,
+   "metrics": {},
+   "input": null,
+   "output": null,
+   "events": [],
+   "errors": []
+  },
+  {
+   "span_id": "hybrid_retrieval",
+   "parent_id": "root",
+   "name": "检索",
+   "type": "retrieval",
+   "kind": "tool",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:58Z",
+   "end_time": "2026-09-02T19:20:58Z",
+   "duration_ms": 57,
+   "sequence": 11,
+   "retry_count": 0,
+   "metrics": {
+    "vector_hits": 0,
+    "bm25_hits": 0,
+    "merged_hits": 0
+   },
+   "input": null,
+   "output": null,
+   "events": [
+    {
+     "name": "rrf_fusion",
+     "timestamp": "2026-09-02T19:20:58Z",
+     "level": "info",
+     "message": "Vector:0 + BM25:0 → RRF:0",
+     "attributes": {
+      "vector_top3": [],
+      "bm25_top3": [],
+      "fused_top5": []
+     }
+    }
+   ],
+   "errors": []
+  },
+  {
+   "span_id": "llm_generate",
+   "parent_id": "root",
+   "name": "LLM生成",
+   "type": "llm_call",
+   "kind": "llm",
+   "status": "success",
+   "start_time": "2026-09-02T19:20:58Z",
+   "end_time": "2026-09-02T19:21:01Z",
+   "duration_ms": 2449,
+   "sequence": 12,
+   "retry_count": 0,
+   "metrics": {},
+   "input": {
+    "question": "退款审核时间是多少？"
+   },
+   "output": null,
+   "events": [],
+   "errors": []
+  },
+  {
+   "span_id": "mq_check",
+   "parent_id": "root",
+   "name": "多查询扩展",
+   "type": "tool_call",
+   "kind": "tool",
+   "status": "skipped",
+   "start_time": "2026-09-02T19:21:01Z",
+   "end_time": "2026-09-02T19:21:01Z",
+   "duration_ms": 0,
+   "sequence": 13,
+   "retry_count": 0,
+   "metrics": {
+    "triggered": false,
+    "mode": "auto"
+   },
+   "input": null,
+   "output": null,
+   "events": [],
+   "errors": []
+  },
+  {
+   "span_id": "evidence_gate_retrieval",
+   "parent_id": "root",
+   "name": "Evidence Gate - Retrieval",
+   "type": "retrieval_gate",
+   "kind": "retrieval_gate",
+   "status": "rejected",
+   "start_time": "2026-09-02T19:21:01Z",
+   "end_time": "2026-09-02T19:21:01Z",
+   "duration_ms": 0,
+   "sequence": 14,
+   "retry_count": 0,
+   "metrics": {
+    "gate_passed": false,
+    "gate_layer": "retrieval",
+    "gate_score": 0.0,
+    "gate_reason": "no_evidence",
+    "doc_count": 0,
+    "threshold": {
+     "vec_min": 0.2
+    }
+   },
+   "input": null,
+   "output": null,
+   "events": [],
+   "errors": []
+  }
+ ],
+ "root_span_id": "root",
+ "workflow_name": "rag_agent",
+ "workflow_kind": "other",
+ "sla_threshold_ms": 30000,
+ "parent_id": "44bbebef8c69",
+ "children_ids": [],
+ "graph": null,
+ "tags": {},
+ "status": "success"
+}

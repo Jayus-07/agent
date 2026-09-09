@@ -38,6 +38,8 @@ _SKIP_PREFIXES = (
     "/schedules",         # 定时任务列表
     "/chat/messages",     # 聊天历史（只读查询）
     "/chat/abort",        # 中止请求（控制信号，需立即处理）
+    "/prompts",           # 提示词管理（SQLite/PG 只读查询）
+    "/evaluation",        # 评测管理（只读查询 + 历史报告）
 )
 
 

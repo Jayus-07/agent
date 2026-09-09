@@ -173,13 +173,12 @@ def extract_chunk_keywords_qwen_batch(chunks: list[str], top_k: int = 5) -> tupl
     chunk_texts = [f"<chunk id={i}>{t[:800]}</chunk>" for i, t in enumerate(chunks)]
     all_chunks = "\n".join(chunk_texts)
 
-    prompt = f"""对以下 {len(chunks)} 个文档片段分别提取 {top_k} 个以内的关键词。
-输出 JSON 数组的数组：[[chunk0的关键词], [chunk1的关键词], ...]
-只输出 JSON，不要解释。
-
-{all_chunks}
-
-JSON:"""
+    from backend.prompts.service import prompt_service
+    rendered = prompt_service.render_sync(
+        "rag.preprocessing.chunk_batch",
+        chunks_count=str(len(chunks)), top_k=str(top_k), all_chunks=all_chunks,
+    )
+    prompt = rendered.text
 
     try:
         llm = ChatOllama(model=model_name, temperature=0.0, num_ctx=4096, request_timeout=60)
@@ -243,15 +242,11 @@ def extract_chunk_keywords_qwen(text: str, top_k: int = 5) -> tuple:
         import json as _json
 
         safe_text = text[:1500]
-        prompt = f"""从以下文档片段提取 {top_k} 个以内的关键词（电商/企业场景）。
-要求：只提取文档中出现的核心术语、品类、品牌、条款、指标名
-禁止：停用词、通用动词
-输出：纯 JSON 数组，不要任何说明
-
-片段：
-{safe_text}
-
-输出："""
+        from backend.prompts.service import prompt_service
+        prompt = prompt_service.render_sync(
+            "rag.preprocessing.chunk_single",
+            top_k=str(top_k), safe_text=safe_text,
+        ).text
 
         llm = ChatOllama(
             model=model_name,
@@ -295,18 +290,11 @@ def _extract_doc_keywords_ollama(text: str, top_k: int, model: str) -> tuple:
     from langchain_ollama import ChatOllama
 
     safe_text = text[:6000]
-    prompt = f"""你是跨境电商 RAG 系统的关键词提取助手。
-
-从以下文档中提取 {top_k} 个以内的高质量检索关键词，用于电商场景的语义搜索。
-
-要求:
-- 关键词必须是文档中出现的核心术语、品类、品牌、属性、政策条款
-- 输出格式: 纯 JSON 数组，不要额外说明
-
-文档:
-{safe_text}
-
-输出:"""
+    from backend.prompts.service import prompt_service
+    prompt = prompt_service.render_sync(
+        "rag.preprocessing.doc_ollama",
+        top_k=str(top_k), safe_text=safe_text,
+    ).text
     try:
         llm = ChatOllama(model=model, temperature=0.0, num_ctx=4096, request_timeout=60)
         result = llm.invoke(prompt)
@@ -329,27 +317,20 @@ def _extract_doc_keywords_ollama(text: str, top_k: int, model: str) -> tuple:
 def _extract_doc_keywords_proxy(text: str, top_k: int) -> tuple:
     """通过 _LLMProxy 提取文档级关键词（Cloud API，含 token 计量）。"""
     from backend.infra.llm import llm
+    from backend.rag.preprocessing.llm_enrichment import invoke_metadata_llm
     safe_text = text.encode("utf-8", errors="ignore")[:6000].decode("utf-8", errors="ignore")
-    prompt = f"""你是跨境电商 RAG 系统的关键词提取助手。
+    from backend.prompts.service import prompt_service
+    prompt = prompt_service.render_sync(
+        "rag.preprocessing.doc_proxy",
+        top_k=str(top_k), safe_text=safe_text,
+    ).text
 
-从以下文档中提取 {top_k} 个以内的高质量检索关键词，用于电商场景的语义搜索。
-
-要求:
-- 关键词必须是文档中出现的核心术语、品类、品牌、属性、政策条款
-- 优先提取: 商品类目、品牌名、合规条款、费用项、时效要求
-- 禁止提取: 停用词、通用动词（"需要""包括""进行"等）
-- 输出格式: 纯 JSON 数组，不要额外说明
-
-文档:
-{safe_text}
-
-输出:"""
     try:
         # 清理旧 token 记录（ContextVar 不可变替换）
         from backend.infra.llm.proxy import _last_call_meta_var
         _last_call_meta_var.set({})
 
-        result = llm.invoke(prompt)
+        result = invoke_metadata_llm(prompt)
         content = result.content.strip() if hasattr(result, "content") else str(result).strip()
 
         # 提取 JSON 数组

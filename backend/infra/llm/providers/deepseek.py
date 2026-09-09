@@ -7,8 +7,11 @@ deepseek.py — DeepSeek Provider（云端，兼容 OpenAI 协议）
 """
 
 from backend.config import (
-    LLM_TEMPERATURE, LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT,
-    DEEPSEEK_API_KEY, DEEPSEEK_API_BASE,
+    DEEPSEEK_API_BASE,
+    DEEPSEEK_API_KEY,
+    LLM_CONTEXT_LENGTH,
+    LLM_REQUEST_TIMEOUT,
+    LLM_TEMPERATURE,
 )
 from backend.shared.logger import logger
 

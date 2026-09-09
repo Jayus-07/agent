@@ -1,18 +1,22 @@
 """Reranker Module - CrossEncoder + DashScope API Integration
 
-提供双后端重排序能力:
-1. DashScope API(qwen3-rerank) - 默认使用，高质量中文重排序
-2. Local CrossEncoder - 降级 fallback，保证高可用性
+P0 架构重构 (ENV_MODE 双模式):
+1. ENV_MODE=cloud   → Cloud Reranker (DashScope qwen3-rerank)
+2. ENV_MODE=local   → Local Reranker (BGE CrossEncoder)
+3. RERANK_MODEL 配置动态化 (默认 qwen3-rerank)
+4. Token Tracker 记录用量，Local 模式无法获取 usage 时 total_tokens=null
 
 架构特性:
 - 懒加载：本地模型仅在首次调用时加载
-- 透明降级：API 异常自动切换到本地模型
+- 强制模式：根据 ENV_MODE 选择后端，不自动降级
 - 统一接口：返回值始终为 list[tuple[Document, float]]
-- 可观测性：完整日志追踪 backend_type、降级原因、评分详情
+- 可观测性：完整日志追踪 backend_type、评分详情
 
 配置环境变量:
-- RERANKER_BACKEND: "dashscope" (默认) | "local"
-- DASHSCOPE_API_KEY: 阿里云 DashScope API Key
+- ENV_MODE: "cloud" (默认) | "local"
+- RERANK_MODEL: "qwen3-rerank" (Cloud 模式)
+- RERANKER_MODEL_PATH: "BAAI/bge-reranker-base" (Local 模式)
+- DASHSCOPE_API_KEY: Cloud 模式必需
 - RERANK_TIMEOUT: API 超时阈值 (秒)，默认 5
 - RERANK_TOP_K: 返回文档数，默认 8
 - RERANK_SCORE_THRESHOLD: 分数过滤阈值，默认 0.3
@@ -21,25 +25,30 @@ import os
 import math
 from typing import Any
 
-# 尝试导入 dashscope SDK，如果未安装则手动降级
+import requests
+
+# dashscope SDK 可选保留（仅用于错误类型兼容）
 try:
     import dashscope
-    from http import HTTPStatus
     DASHSCOPE_AVAILABLE = True
 except ImportError:
     DASHSCOPE_AVAILABLE = False
-    # 如果使用 API 但未安装 SDK，会抛出清晰的错误
 
 from sentence_transformers import CrossEncoder
 from langchain_core.documents.compressor import BaseDocumentCompressor
 from backend.config import (
+    ENV_MODE,
+    RERANK_MODEL,
     RERANKER_MODEL_PATH,
     RERANK_SCORE_THRESHOLD,
     RERANK_TIMEOUT,
     RERANK_TOP_K,
+    RERANKER_DEVICE,
+    TOKEN_USAGE_LOG_PATH,
 )
+from backend.infra.token_tracker import create_tracker_for_rerank
+from pathlib import Path
 from backend.shared.logger import logger
-from backend.infra.timeout import safe_call_with_timeout
 
 
 # ═══════════════════════════════════════════════════════════
@@ -55,9 +64,9 @@ class LocalModelLoader:
     def get_instance(cls) -> CrossEncoder:
         """获取或创建 CrossEncoder 实例 (线程安全)"""
         if cls._instance is None:
-            cls._instance = CrossEncoder(RERANKER_MODEL_PATH)
+            cls._instance = CrossEncoder(RERANKER_MODEL_PATH, device=RERANKER_DEVICE)
             cls._loaded_at = __import__('datetime').datetime.now().isoformat()
-            logger.info(f"本地 reranker 模型懒加载完成：{RERANKER_MODEL_PATH} (at {cls._loaded_at})")
+            logger.info(f"本地 reranker 模型懒加载完成：{RERANKER_MODEL_PATH} (device={RERANKER_DEVICE}, at {cls._loaded_at})")
         return cls._instance
 
     @classmethod
@@ -76,86 +85,88 @@ class LocalModelLoader:
 # DashScope Reranker - API Backend
 # ═══════════════════════════════════════════════════════════
 
+_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
+_DASHSCOPE_RERANK_PATH = "/services/rerank/text-rerank/text-rerank"
+
 class DashScopeReranker(BaseDocumentCompressor):
-    """阿里云 DashScope Reranker API 实现 (使用官方 SDK)"""
+    """阿里云 DashScope Reranker API 实现（直接 HTTP，无需 dashscope SDK）
+
+    使用 requests 直接调用 DashScope 原生 REST API，避免 SDK 的全局状态污染。
+    需要标准 API Key（sk-ws-）；Token Plan（sk-sp-）不支持 rerank 端点。
+    
+    P0: 模型名从 RERANK_MODEL 配置读取，不再硬编码
+    """
 
     def __init__(self, api_key: str, timeout: int = 5):
-        """
-        Args:
-            api_key: 阿里云 DashScope API Key
-            timeout: API 请求超时 (秒)
-        """
-        if not DASHSCOPE_AVAILABLE:
-            raise RuntimeError(
-                "DashScope API requires the 'dashscope' package. "
-                "Please install it with: pip install dashscope"
-            )
-        
-        # 直接设置属性以避免 pydantic 约束
+        if not api_key:
+            raise RuntimeError("DashScopeReranker 需要 DASHSCOPE_API_KEY")
+
+        base_url = os.getenv("DASHSCOPE_API_BASE", _DASHSCOPE_BASE_URL).rstrip("/")
+        endpoint = base_url + _DASHSCOPE_RERANK_PATH
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
         self.__dict__['api_key'] = api_key
         self.__dict__['timeout'] = timeout
-        
-        # 配置 dashscope SDK
-        dashscope.api_key = api_key
-        dashscope.base_http_api_url = 'https://dashscope.aliyuncs.com/api/v1'
-        
-        logger.info(f"初始化 DashScope Reranker SDK (model=qwen3-rerank, timeout={self.timeout}s)")
+        self.__dict__['_endpoint'] = endpoint
+        self.__dict__['_headers'] = headers
+
+        logger.info(
+            f"初始化 DashScope Reranker HTTP "
+            f"(model={RERANK_MODEL}, endpoint={base_url}, timeout={timeout}s)"
+        )
 
     def rank(self, query: str, documents: list[str], top_k: int = 8) -> list[tuple[int, float]]:
-        """
-        调用 DashScope API 进行重排序 (使用官方 SDK)
-
-        Args:
-            query: 用户查询
-            documents: 文档内容列表
-            top_k: 返回前 K 个结果
+        """调用 DashScope Rerank REST API。
 
         Returns:
             list[tuple[int, float]]: (index, relevance_score) 列表，score 已在 0-1 区间
-
-        Raises:
-            Exception: 调用失败时抛出异常，由上层处理降级
         """
+        payload = {
+            "model": RERANK_MODEL,  # P0: 动态模型名
+            "input": {
+                "query": query,
+                "documents": documents,
+            },
+            "parameters": {
+                "top_n": top_k,
+                "return_documents": False,
+            },
+        }
+
         try:
-            # 使用官方 DashScope TextReRank API
-            resp = dashscope.TextReRank.call(
-                model="qwen3-rerank",
-                query=query,
-                documents=documents,
-                top_n=top_k,
-                return_documents=False  # 不需要返回文档内容，节省带宽
+            resp = requests.post(
+                self._endpoint,
+                json=payload,
+                headers=self._headers,
+                timeout=self.timeout,
             )
 
-            if resp.status_code == HTTPStatus.OK:
-                # 解析响应：extract (index, score) from results
-                results = resp.output.results if hasattr(resp, 'output') and hasattr(resp.output, 'results') else []
-                scored = [
-                    (r.index, r.relevance_score)
-                    for r in results
-                ]
-
-                # 记录 Token 使用
-                usage = resp.usage if hasattr(resp, 'usage') else {}
-                total_tokens = usage.get('total_tokens', 'N/A') if isinstance(usage, dict) else 'N/A'
-                
-                logger.debug(
-                    f"DashScope TextReRank OK: query_len={len(query)}, doc_count={len(documents)}, "
-                    f"top_k={top_k}, tokens={total_tokens}"
+            if resp.status_code != 200:
+                raise Exception(
+                    f"DashScope API error [status={resp.status_code}]: {resp.text[:500]}"
                 )
 
-                return scored
-            else:
-                # API 返回错误
-                error_msg = f"DashScope API error [status={resp.status_code}]: {resp.message}"
-                raise Exception(error_msg)
+            data = resp.json()
+            results = data.get("output", {}).get("results", [])
+            scored = [(r["index"], r["relevance_score"]) for r in results]
 
-        except dashscope.errors.InputError as e:
-            raise Exception(f"Invalid input to DashScope API: {e}")
-        except dashscope.errors.APIException as e:
-            raise Exception(f"DashScope API exception: {e}")
-        except dashscope.errors.NetworkError as e:
-            raise Exception(f"DashScope network error: {e}")
+            total_tokens = data.get("usage", {}).get("total_tokens", "N/A")
+            logger.debug(
+                f"DashScope Rerank OK: query_len={len(query)}, "
+                f"doc_count={len(documents)}, top_k={top_k}, tokens={total_tokens}"
+            )
+            return scored
+
+        except requests.exceptions.Timeout:
+            raise Exception(f"DashScope rerank 超时 ({self.timeout}s)")
+        except requests.exceptions.ConnectionError as e:
+            raise Exception(f"DashScope 网络连接失败: {e}")
         except Exception as e:
+            if "DashScope" in str(e):
+                raise
             raise Exception(f"DashScope rerank failed: {e}")
 
     def compress_documents(self, documents, query, **kwargs):
@@ -168,7 +179,7 @@ class DashScopeReranker(BaseDocumentCompressor):
             return []
 
         try:
-            texts = [doc.page_content for doc in documents]
+            texts = [doc.page_content[:2000] for doc in documents]
             ranked_results = self.rank(query, texts, top_k=kwargs.get("top_k", RERANK_TOP_K))
 
             # 应用阈值过滤并限制数量
@@ -247,17 +258,11 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
         """
         pairs = [(query, doc) for doc in documents]
 
-        scores = safe_call_with_timeout(
-            self.model.predict,
-            timeout=RERANK_TIMEOUT,
-            default_value=None,
-            error_message=f"本地 reranker 超时 ({RERANK_TIMEOUT}s)",
-            inputs=pairs  # 使用新的参数名 inputs 代替 sentences
-        )
-
-        if scores is None:
-            # Fallback: 返回所有文档索引，分数为 0.5
-            return [(i, 0.5) for i in range(min(len(documents), top_k))]
+        try:
+            scores = self.model.predict(pairs)
+        except Exception as e:
+            logger.error(f"本地 reranker 推理失败: {e}")
+            return None
 
         # 配对并排序
         indexed_scores = list(enumerate(scores))
@@ -280,11 +285,21 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
             trace_collector.end_span(span, metrics={"input_docs": 0, "output_docs": 0, "backend_type": "local"})
             return []
 
-        texts = [doc.page_content for doc in documents]
+        texts = [doc.page_content[:2000] for doc in documents]
         scored_indexed = self.rank(query, texts, top_k=kwargs.get("top_k", RERANK_TOP_K))
 
+        if scored_indexed is None:
+            # 超时/失败：透传原文档，标记为不可靠供下游 Gate 决策
+            for doc in documents:
+                doc.metadata["rerank_unreliable"] = True
+            trace_collector.end_span(
+                span,
+                metrics={"input_docs": len(documents), "output_docs": len(documents),
+                         "backend_type": "local", "fallback": "timeout_passthrough"})
+            return list(documents)
+
         # 创建索引映射
-        doc_idx_map = {idx: doc for idx, _ in scored_indexed}
+        doc_idx_map = {idx: documents[idx] for idx, _ in scored_indexed}
 
         # 过滤阈值
         threshold = kwargs.get("threshold", RERANK_SCORE_THRESHOLD)
@@ -314,34 +329,51 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
 
 
 # ═══════════════════════════════════════════════════════════
-# Factory Pattern - Backend Selector
+# Factory Pattern - Backend Selector (P0: ENV_MODE Control)
 # ═══════════════════════════════════════════════════════════
+
+# Singleton tracker for token tracking
+_reranker_tracker = None
+
+
+def _get_tracker() -> "TokenTracker":
+    """懒加载 TokenTracker."""
+    global _reranker_tracker
+    if _reranker_tracker is None:
+        _reranker_tracker = create_tracker_for_rerank(
+            log_path=str(Path(TOKEN_USAGE_LOG_PATH).expanduser().resolve()),
+            model_name=RERANK_MODEL if ENV_MODE == "cloud" else RERANKER_MODEL_PATH,
+            backend=ENV_MODE,
+        )
+    return _reranker_tracker
+
 
 def get_reranker_backend() -> BaseDocumentCompressor:
     """
-    获取 reranker 后端实例 (工厂函数)
-
-    选择逻辑:
-    1. 如果 RERANKER_BACKEND=dashscope 且 DASHSCOPE_API_KEY 存在 → 使用 DashScope API
-    2. 否则 → 使用本地 CrossEncoder
-
-    Returns:
-        BaseDocumentCompressor: DashScopeReranker 或 LocalCrossEncoderBackend
+    获取 reranker 后端实例 (工厂函数，P0 架构重构)
+    
+    P0 选择逻辑:
+      - ENV_MODE=cloud   → DashScopeReranker (强制，API key 错误时抛异常)
+      - ENV_MODE=local   → LocalCrossEncoderBackend
+    
+    关键约束:
+      - 不根据 API key 存在与否自动降级
+      - Cloud 模式下 DASHSCOPE_API_KEY 缺失时明确报错
+      - Token Tracker 记录用量
     """
-    backend_type = os.getenv("RERANKER_BACKEND", "dashscope")
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-
-    if backend_type == "dashscope" and api_key:
-        logger.info("使用 DashScope API 进行重排序")
-        return DashScopeReranker(api_key=api_key)
-    else:
-        reason = ""
+    if ENV_MODE == "cloud":
+        # Cloud 模式：强制使用 DashScope，缺少 API Key 时明确报错
+        api_key = os.getenv("DASHSCOPE_API_KEY")
         if not api_key:
-            reason = "缺少 DASHSCOPE_API_KEY"
-        elif backend_type != "dashscope":
-            reason = f"RERANKER_BACKEND={backend_type}"
-        
-        logger.warning(f"{reason}, 降级到本地 CrossEncoder 模型")
+            raise RuntimeError(
+                "Cloud 模式需要 DASHSCOPE_API_KEY，请在 .env 中设置.\n"
+                "或设置 ENV_MODE=local 使用本地 BGE Reranker."
+            )
+        logger.info(f"[Reranker] Cloud 模式初始化完成 (model={RERANK_MODEL})")
+        return DashScopeReranker(api_key=api_key, timeout=RERANK_TIMEOUT)
+    else:
+        # Local 模式：使用 CrossEncoder
+        logger.info(f"[Reranker] Local 模式初始化完成 (model={RERANKER_MODEL_PATH})")
         return LocalCrossEncoderBackend()
 
 
@@ -365,140 +397,77 @@ class RerankCompressor(BaseDocumentCompressor):
         self.__dict__['_backend_type'] = "unknown"
 
     def _ensure_backend(self):
-        """懒加载后端实例"""
+        """懒加载后端实例（线程安全）"""
         if self.backend is None:
-            self.__dict__['backend'] = get_reranker_backend()
-            if isinstance(self.backend, DashScopeReranker):
-                self.__dict__['_backend_type'] = "dashscope"
-            else:
-                self.__dict__['_backend_type'] = "local"
+            import threading
+            if not hasattr(self, '_ensure_lock'):
+                self.__dict__['_ensure_lock'] = threading.Lock()
+            with self._ensure_lock:
+                if self.backend is None:
+                    self.__dict__['backend'] = get_reranker_backend()
+                    if isinstance(self.backend, DashScopeReranker):
+                        self.__dict__['_backend_type'] = "dashscope"
+                    else:
+                        self.__dict__['_backend_type'] = "local"
 
     def compress_documents(self, documents, query, **kwargs):
         from backend.observability.tracer import trace_collector
-        
-        self._ensure_backend()
-        
+
+        # 后端懒加载提前到 span 之前，确保 span name 正确
+        try:
+            self._ensure_backend()
+        except Exception:
+            pass  # 下方 try 块会再次尝试并捕获完整异常
+
         span = trace_collector.start_span("rerank", name=self._backend_type.capitalize())
-        
+
         if not documents:
             trace_collector.end_span(span,
-                                     metrics={"input_docs": 0, "output_docs": 0, 
+                                     metrics={"input_docs": 0, "output_docs": 0,
                                              "threshold": self.threshold, "backend_type": self._backend_type})
             return []
-        
+
+        # 小文档集合跳过 rerank API 调用（≤2 篇排序无意义）
+        if len(documents) <= 2:
+            for doc in documents:
+                doc.metadata.setdefault("rerank_score", 1.0)
+            trace_collector.end_span(span,
+                                     metrics={"input_docs": len(documents), "output_docs": len(documents),
+                                             "backend_type": self._backend_type, "skipped": "small_n"})
+            return list(documents)
+
         in_count = len(documents)
-        
+
         try:
+            self._ensure_backend()
+
             # 委托给后端实现 - 使用实例的 threshold 属性而非从 config 导入
             result_docs = self.backend.compress_documents(
-                list(documents), 
-                query, 
+                list(documents),
+                query,
                 top_k=self.top_k,
                 threshold=self.threshold
             )
-            
+
             trace_collector.end_span(span,
-                                 metrics={"input_docs": in_count, 
-                                         "output_docs": len(result_docs), 
+                                 metrics={"input_docs": in_count,
+                                         "output_docs": len(result_docs),
                                          "threshold": RERANK_SCORE_THRESHOLD,
                                          "backend_type": self._backend_type})
             return result_docs
-            
+
         except Exception as e:
             trace_collector.end_span(span,
-                                   metrics={"input_docs": in_count, 
-                                           "output_docs": 0, 
+                                   metrics={"input_docs": in_count,
+                                           "output_docs": min(in_count, self.top_k),
                                            "threshold": RERANK_SCORE_THRESHOLD,
                                            "backend_type": self._backend_type,
+                                           "fallback": "passthrough",
                                            "error": str(e)[:100]},
                                    status="error")
-            logger.error(f"RerankCompressorscompress_documents失败：{e}")
-            # 降级：返回空列表或原始文档
-            return []
+            logger.error(f"RerankCompressor 重排失败，降级透传原文档：{e}")
+            # 降级契约：重排是增强组件，失败不得减少召回数量 —— 透传原文档，
+            # 由下游 Evidence Gate 基于其他信号判定，而非静默清空触发误拒答
+            return list(documents)[: self.top_k]
 
 
-def rerank(
-        query,
-        docs,
-        top_k=3,
-        debug=0
-):
-    """
-    全局重排序函数（向后兼容）
-
-    参数:
-        query: 用户查询字符串
-        docs: 待重排的文档列表 (每个元素应包含 page_content 和 metadata 属性)
-        top_k: 最终返回的文档数量，默认为 3
-        debug: 是否打印调试信息，默认为 False
-
-    返回:
-        重排后得分最高的 top_k 个文档，每个元素为 (doc, score) 元组
-    """
-    if not docs:
-        return []
-
-    # 使用工厂函数获取后端实例
-    backend = get_reranker_backend()
-    primary_backend_type = type(backend).__name__
-    
-    # 转换为文本列表
-    texts = [doc.page_content for doc in docs]
-    
-    # 尝试使用首选后端，如果失败则降级
-    result_docs = None
-    used_fallback = False
-    error_reason = None
-    
-    try:
-        ranked_results = backend.rank(query, texts, top_k=top_k)
-        
-        # 应用阈值过滤并构建结果
-        threshold = RERANK_SCORE_THRESHOLD
-        result_docs = [
-            (docs[idx], score)
-            for idx, score in ranked_results
-            if score > threshold
-        ][:top_k]
-
-    except Exception as e:
-        error_reason = str(e)[:100]
-        logger.warning(f"Primary backend ({primary_backend_type}) failed: {error_reason}")
-        
-        # 尝试降级到本地模型
-        if isinstance(backend, DashScopeReranker):
-            logger.info("Falling back to local CrossEncoder model...")
-            fallback_backend = LocalCrossEncoderBackend()
-            try:
-                ranked_results = fallback_backend.rank(query, texts, top_k=top_k)
-                threshold = RERANK_SCORE_THRESHOLD
-                result_docs = [
-                    (docs[idx], score)
-                    for idx, score in ranked_results
-                    if score > threshold
-                ][:top_k]
-                used_fallback = True
-            except Exception as fallback_error:
-                logger.error(f"Fallback to local model also failed: {fallback_error}")
-                raise
-        else:
-            raise
-
-    # 将重排序分数写入 metadata，供来源展示使用
-    for doc, score in result_docs:
-        doc.metadata["rerank_score"] = round(float(score), 4)
-
-    if debug:
-        logger.debug("Global rerank results:")
-        for i, (doc, score) in enumerate(result_docs[:10]):
-            logger.debug(
-                f"[{i+1}] score={score:.4f} "
-                f"source={doc.metadata.get('source_file')} "
-                f"chunk_id={doc.metadata.get('chunk_id')} "
-                f"content={doc.page_content[:50]}..."
-            )
-
-    backend_name = "DashScope API" if isinstance(backend, DashScopeReranker) else "Local Model"
-    status = " (with fallback)" if used_fallback else ""
-    logger.info(f"Re-rank complete ({backend_name}{status}): {len(docs)} -> {len(result_docs)} (threshold={RERANK_SCORE_THRESHOLD})")
-    return result_docs

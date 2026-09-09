@@ -1,0 +1,29 @@
+key: competitor.extractor
+name: 竞品数据抽取
+category: competitor
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: content, required: true, description: 网页正文}
+template: |
+  你是电商商品页数据抽取器。从下面的网页正文中抽取商品信息，只输出 JSON，不要任何解释。
+
+  输出 JSON schema:
+  {{
+    "title": "商品标题（string，无则空字符串）",
+    "price": 现价（number，找不到则 null）,
+    "original_price": 原价或划线价（number，无则 null）,
+    "currency": "CNY" 或 "USD" 等,
+    "promo_text": "促销活动文案（string，无则空字符串）",
+    "rating": 评分（number，无则 null）,
+    "review_count": 评价数（integer，无则 null）,
+    "in_stock": 有货 true / 无货 false,
+    "highlights": "商品卖点，逗号分隔，最多5个（string）"
+  }}
+
+  网页正文（可能被截断）:
+  ---
+  {content}
+  ---
+
+  只输出 JSON。

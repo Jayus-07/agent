@@ -110,6 +110,38 @@ async def validate_settings():
 
 
 # ═══════════════════════════════════════════════════
+# 启动时加载 Prompt 默认值 + 刷新快照
+# ═══════════════════════════════════════════════════
+@app.on_event("startup")
+async def init_prompt_snapshot():
+    """从 DB 刷新 Prompt 快照（阻塞，确保 render_sync 可用）。"""
+    try:
+        from backend.prompts.service import prompt_service
+        await prompt_service.refresh_snapshot()
+    except Exception as e:
+        logger.warning(f"[Startup] Prompt snapshot refresh failed: {e}")
+
+
+@app.on_event("startup")
+async def init_prompt_service():
+    """加载 YAML 默认值到内存（失败不阻塞启动）。"""
+    import threading
+    def _load():
+        try:
+            from backend.prompts.loader import load_defaults
+            from backend.prompts.service import prompt_service
+            defaults = load_defaults()
+            prompt_service.load_defaults_into_memory(defaults)
+            logger.info(f"[Startup] Prompt defaults loaded: {len(defaults)} templates")
+            import asyncio
+            asyncio.run(prompt_service.seed_defaults(defaults))
+            logger.info("[Startup] Prompt defaults seeded to DB")
+        except Exception as e:
+            logger.warning(f"[Startup] Prompt defaults load/seed failed: {e}")
+    threading.Thread(target=_load, daemon=True, name="prompt-init").start()
+
+
+# ═══════════════════════════════════════════════════
 # 启动时后台初始化 RAG Pipeline（避免首次上传等 13 秒）
 # ═══════════════════════════════════════════════════
 @app.on_event("startup")
@@ -131,6 +163,13 @@ async def eager_init_rag_pipeline():
             logger.info("[Startup] jieba 词典预热完成")
         except Exception:
             logger.warning("[Startup] jieba 预热失败，分词可能较慢", exc_info=True)
+        # 预热 Reranker 模型（CrossEncoder 加载 ~7s）
+        try:
+            from backend.rag.reranker import get_reranker_backend
+            get_reranker_backend()
+            logger.info("[Startup] Reranker 模型预热完成")
+        except Exception:
+            logger.warning("[Startup] Reranker 预热失败，首次查询会较慢", exc_info=True)
     threading.Thread(target=_warmup, daemon=True, name="rag-warmup").start()
 
 

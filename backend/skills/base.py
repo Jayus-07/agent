@@ -115,8 +115,20 @@ class BaseSkill(ABC):
 
         # ── Tracing: 创建 tool_call span ──
         cap = sr["capability"]
+        # P1-5: 真实嵌套 — 优先挂到已存在的执行方 span（中间件节点），
+        # 旧实现固定指向上游尚未合成的 "skill-{step_id}"，被 tracer 回退到
+        # root 导致整棵树扁平。
+        parent_id = f"skill-{step_id}"
+        active_trace = trace_collector.current()
+        if active_trace is not None:
+            existing = {s.span_id for s in active_trace.spans}
+            for cand in (f"skill-{step_id}", f"{self.name}:{step_id}",
+                         "skill_executor", "workflow_executor"):
+                if cand in existing:
+                    parent_id = cand
+                    break
         tool_span = trace_collector.start_span(
-            f"tool-{step_id}", parent_id=f"skill-{step_id}",
+            f"tool-{step_id}", parent_id=parent_id,
             name=f"{self.name}:{cap}" if self.name else cap,
             type="tool_call",
             input={"params": params, "capability": cap},

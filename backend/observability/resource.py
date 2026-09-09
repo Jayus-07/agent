@@ -4,8 +4,10 @@
 """
 import os
 import time
+from typing import Dict
+
 import psutil
-from typing import Dict, Optional
+
 from backend.shared.logger import logger
 
 
@@ -22,7 +24,6 @@ class ResourceMonitor:
         """获取内存使用信息"""
         try:
             memory = self.process.memory_info()
-            total_memory = psutil.virtual_memory().total
             return {
                 'rss_mb': memory.rss / (1024 * 1024),
                 'vms_mb': memory.vms / (1024 * 1024),

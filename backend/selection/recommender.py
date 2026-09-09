@@ -114,6 +114,7 @@ def generate_reason(payload: dict[str, Any]) -> dict[str, str]:
 
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
+        from backend.prompts.service import prompt_service
         human_content = (
             f"商品: {payload.get('title')}\n"
             f"平台: {payload.get('platform')}\n"
@@ -124,10 +125,7 @@ def generate_reason(payload: dict[str, Any]) -> dict[str, str]:
             f"数据缺口标注: {notes}"
         )
         messages = [
-            SystemMessage(content=(
-                "你是电商选品分析师。根据给定数据写 1-2 句推荐理由。"
-                "严格规则：只允许使用给定数据中出现的数字，禁止编造、推算或改写任何数字。"
-            )),
+            SystemMessage(content=prompt_service.get_template_sync("selection.recommender.reason")),
             HumanMessage(content=human_content),
         ]
         resp = llm.invoke(messages)

@@ -112,12 +112,11 @@ class VectorRouter:
         """启动时建索引（idempotent）。"""
         try:
             from langchain_chroma import Chroma
-            from langchain_huggingface import HuggingFaceEmbeddings
-            from backend.config import EMBEDDING_MODEL_PATH
+            from backend.rag.embedding_singleton import get_embedding
 
             Path(self.persist_dir).mkdir(parents=True, exist_ok=True)
 
-            embedding = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_PATH)
+            embedding = get_embedding()
             self._collection = Chroma(
                 collection_name=self.collection_name,
                 embedding_function=embedding,

@@ -94,6 +94,11 @@ RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "8"))
 # 经验值范围：0.2（宽松）~ 0.5（严格）。
 RERANK_SCORE_THRESHOLD = float(os.getenv("RERANK_SCORE_THRESHOLD", "0.3"))
 
+# Reranker 推理设备 — 独立于 EVAL_DEVICE，避免与 embedding/Ollama 争抢显存
+# 默认 "cpu"：CrossEncoder 推理 ~200-300ms/query，评测可接受
+# 显存充裕时可设 "cuda" 加速到 ~50-80ms/query
+RERANKER_DEVICE = os.getenv("RERANKER_DEVICE", "cpu").strip().lower()
+
 # ⭐ NEW: Adaptive Thresholds (Phase 1)
 VEC_MIN_SCORE_DEFAULT = float(os.getenv("VEC_MIN_SCORE_DEFAULT", "0.25"))
 ADAPTIVE_THRESHOLD_ENABLED = os.getenv("ADAPTIVE_THRESHOLD_ENABLED", "true").lower() == "true"
@@ -110,6 +115,15 @@ ADAPTIVE_VEC_THRESHOLDS = {
     "legal": 0.32,
     "general": VEC_MIN_SCORE_DEFAULT,
 }
+
+# ====================================
+# 三层查询路由（2026-09-09 P1-12）
+# ====================================
+# vector_only:         简单 FAQ → 纯向量检索（跳过 BM25 + MultiQuery）
+# hybrid:              普通查询 / 精确标识符 → Vector + BM25 + RRF
+# hybrid_multi_query:  复杂 / 多意图 / 多跳 → Vector + BM25 + LLM 改写多路召回
+ADAPTIVE_RETRIEVAL_MODE = os.getenv("ADAPTIVE_RETRIEVAL_MODE", "auto").lower()
+# "auto" = 按查询分类自动选择 | "vector_only" = 强制纯向量 | "hybrid" = 强制混合 | "hybrid_multi_query" = 强制多路
 
 # ⭐ Phase 3 Improvement #1: Risk-level Faithfulness rejection thresholds
 FAITHFULNESS_REJECT_SCORE_HIGH_RISK = float(os.getenv("FAITHFULNESS_REJECT_SCORE_HIGH_RISK", "0.7"))

@@ -1,5 +1,6 @@
 // Keyword rule service — 对接词库管理 API（/rag/keywords）
 // eslint-disable
+import { authFetch } from '@/lib/authFetch'
 export interface KeywordRule {
   id: number
   keyword: string
@@ -32,34 +33,34 @@ const qs = (params: Record<string, any>) => {
 
 export const keywordService = {
   list: (params: KeywordListParams = {}): Promise<{ items: KeywordRule[] }> =>
-    fetch(`${BASE}?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [] })),
+    authFetch(`${BASE}?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [] })),
 
   docTypes: (): Promise<{ doc_types: string[] }> =>
-    fetch(`${BASE}/doc-types`).then(r => r.json()).catch(() => ({ doc_types: [] })),
+    authFetch(`${BASE}/doc-types`).then(r => r.json()).catch(() => ({ doc_types: [] })),
 
   categories: (): Promise<{ categories: string[] }> =>
-    fetch(`${BASE}/categories`).then(r => r.json()).catch(() => ({ categories: [] })),
+    authFetch(`${BASE}/categories`).then(r => r.json()).catch(() => ({ categories: [] })),
 
   upsert: (rule: { keyword: string; doc_type: string; category?: string; weight?: number; enabled?: number }) =>
-    fetch(BASE, {
+    authFetch(BASE, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(rule),
     }).then(r => r.json()).catch(() => ({ ok: false })),
 
   batchUpsert: (items: Array<{ keyword: string; doc_type: string; category?: string; weight?: number }>) =>
-    fetch(`${BASE}/batch`, {
+    authFetch(`${BASE}/batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items }),
     }).then(r => r.json()).catch(() => ({ ok: false })),
 
   delete: (keyword: string) =>
-    fetch(`${BASE}/${encodeURIComponent(keyword)}`, { method: 'DELETE' })
+    authFetch(`${BASE}/${encodeURIComponent(keyword)}`, { method: 'DELETE' })
       .then(r => r.json()).catch(() => ({ ok: false })),
 
   toggle: (keyword: string, enabled: number) =>
-    fetch(`${BASE}/${encodeURIComponent(keyword)}/toggle`, {
+    authFetch(`${BASE}/${encodeURIComponent(keyword)}/toggle`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),

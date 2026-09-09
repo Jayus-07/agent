@@ -175,6 +175,15 @@ export default function DocumentsPage() {
     fn()
   }
 
+  // 打开文档详情（统一走索引轨迹页；无轨迹时提示）
+  const openDocDetail = (d: { id: string; name: string; last_trace_id?: string | null }) => {
+    if (d.last_trace_id) {
+      router.push(`/knowledge/operations/traces/${d.last_trace_id}`)
+    } else {
+      toast.info(`「${d.name}」暂无处理轨迹，可点击"重新解析"生成`)
+    }
+  }
+
   const totalPages = Math.ceil(total / pageSize)
 
   return (
@@ -292,7 +301,7 @@ export default function DocumentsPage() {
             <tbody>
               {documents.map(d => (
                 <tr key={d.id} className="border-b border-border-subtle hover:bg-surface-hover transition-colors cursor-pointer"
-                  onClick={() => router.push(d.last_trace_id ? `/knowledge/operations/traces/${d.last_trace_id}` : `/knowledge/documents/${d.id}`)}>
+                  onClick={() => openDocDetail(d)}>
                   <td className="px-4 py-2.5">
                     <button onClick={(e) => handleStopPropagation(e, () => toggleSelect(d.id))} className="text-text-muted hover:text-accent">
                       {selectedIds.has(d.id) ? <CheckSquare size={14} className="text-accent" /> : <Square size={14} />}
@@ -314,7 +323,7 @@ export default function DocumentsPage() {
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-1">
-                      <button onClick={(e) => handleStopPropagation(e, () => router.push(`/knowledge/chunks?docId=${d.id}`))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看Chunks"><Grid3X3 size={13} /></button>
+                      <button onClick={(e) => handleStopPropagation(e, () => openDocDetail(d))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看Chunks"><Grid3X3 size={13} /></button>
                       <button onClick={(e) => handleStopPropagation(e, () => handleReindex(d.id))} disabled={reindexing.has(d.id)} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors disabled:opacity-50" title="重新解析">
                         {reindexing.has(d.id) ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                       </button>

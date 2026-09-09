@@ -221,7 +221,8 @@ ON CONFLICT (id) DO NOTHING;"""
 
 
 def upgrade() -> None:
-    op.execute(SQL)
+    conn = op.get_bind()
+    conn.exec_driver_sql(SQL)
 
 
 def downgrade() -> None:

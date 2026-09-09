@@ -4,12 +4,13 @@ import { useCallback, useRef } from 'react'
 import { useChatStore } from '@/store/chat'
 import { streamChat, abortChat } from '@/lib/api/chat'
 import type { SSEStreamEvent } from '@/lib/api/chat'
+import { authFetch } from '@/lib/authFetch'
 import { nanoid } from 'nanoid'
 
 /** 持久化当前会话消息到后端 PG */
 async function persistSession(sessionId: string, question: string, answer: string) {
   try {
-    await fetch('/api/chat/messages', {
+    await authFetch('/api/chat/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

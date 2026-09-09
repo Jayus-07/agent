@@ -19,10 +19,29 @@ from backend.shared.logger import logger
 
 MAX_TRACES = 200
 
+
+def _now_iso() -> str:
+    """UTC ISO-8601 毫秒时间戳。
+
+    旧实现秒级精度，同一秒内多个 span 无法排序（瀑布图只能靠 sequence 兜底）；
+    升级到毫秒后时间线可精确重建。
+    """
+    t = time.time()
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + f".{int((t % 1) * 1000):03d}Z"
+
 # 异步安全：用 contextvars 隔离并发请求的 current_trace
 # threading.local 在 asyncio 单线程 event loop 下无法跨 await 隔离
 _current_trace_var: ContextVar[TraceRecord | None] = ContextVar(
     "trace_current", default=None
+)
+
+# 子链嵌入父 trace 时的"作用域根" span id。
+# 场景：RAGChain 被 agent 调用时，不创建独立子 trace，
+# 而是将 RAG spans 嵌入 agent trace 的 "rag_skill" span 下。
+# set_scope_root("rag_skill") 后，所有未指定 parent_id 的 start_span
+# 自动以 "rag_skill" 为父，而非 trace.root_span_id。
+_scope_root_var: ContextVar[str | None] = ContextVar(
+    "trace_scope_root", default=None
 )
 
 # span_id → type 自动推断表（type 未传时使用）
@@ -32,6 +51,7 @@ _TYPE_INFER: dict[str, str] = {
     "hybrid_retrieval": "retrieval",
     "retrieval": "retrieval",
     "chunk_retrieval": "retrieval",
+    "enhanced_hybrid_retrieval": "retrieval",
     "rerank": "rerank",
     "mq_check": "tool_call",
     "citation": "tool_call",
@@ -95,6 +115,21 @@ class SpanKind(str, Enum):
     ROUTER = "router"
     KB_ROUTING = "kb_routing"
 
+    # Customer Service
+    CS_ROUTING = "cs_routing"
+    CS_KNOWLEDGE = "cs_knowledge"
+    CS_BUSINESS_QUERY = "cs_business_query"
+    CS_BUSINESS_ACTION = "cs_business_action"
+    CS_COMPLAINT = "cs_complaint"
+    CS_HANDOFF = "cs_handoff"
+    CS_CONFIRMATION = "cs_confirmation"
+    CS_GUARD = "cs_guard"
+    CS_SUPERVISOR = "cs_supervisor"
+    CS_EXPERT = "cs_expert"
+    CS_REPORTER = "cs_reporter"
+    CS_STATE_TRANSITION = "cs_state_transition"
+    CS_STATE_LOADER = "cs_state_loader"
+
 
 class SpanName:
     """RAG 链路统一 span 显示名（P1 整改：同一阶段唯一标准名称）。
@@ -103,6 +138,9 @@ class SpanName:
     代码中不允许同一阶段同时出现中英文两个名称。
     """
     RETRIEVAL = "检索"            # 向量+BM25 混合检索（hybrid/chunk/retrieval 层）
+    CHUNK_RETRIEVAL = "Chunk 检索"  # ChunkLevelRetriever 层
+    ENHANCED_RETRIEVAL = "增强混合检索"  # EnhancedHybridRetrieval 三路召回层
+    HYBRID_RETRIEVAL = "混合检索"   # 原始 Hybrid 兜底检索层
     MULTI_QUERY = "多查询扩展"      # MultiQuery 复杂度检测与 LLM 改写
     META_PARSE = "META 解析"       # LLM 输出 <!--META--> 注释解析
     CITATION = "引文校验"          # Citation 支持度校验
@@ -205,7 +243,7 @@ class TraceCollector:
         trace = TraceRecord(
             id=rid,
             request_id=rid,
-            timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            timestamp=_now_iso(),
             session_id=session_id,
             question=question,
             workflow_name=workflow_name,
@@ -214,6 +252,15 @@ class TraceCollector:
         )
         if prev is not None:
             prev.children_ids.append(rid)
+            # P1-6: span → 子 trace 关联 — 在触发方 span 上记录子 trace id，
+            # 前端瀑布图可从父 span 直接跳转查看子 trace（软失败不影响主流程）。
+            if prev.spans:
+                try:
+                    ids = prev.spans[-1].metrics.setdefault("child_trace_ids", [])
+                    if rid not in ids:
+                        ids.append(rid)
+                except Exception:
+                    logger.debug("[Tracer] child_trace_ids 写入失败", exc_info=True)
         with self._lock:
             self._span_seq = 0
             self._thread_current = trace
@@ -259,7 +306,7 @@ class TraceCollector:
                 name=name or span_id,
                 type=type or _TYPE_INFER.get(span_id, "tool_call"),
                 kind=kind or SpanKind.TOOL.value,
-                start_time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                start_time=_now_iso(),
                 sequence=-1,
                 input=input,
                 status="skipped",
@@ -269,10 +316,14 @@ class TraceCollector:
             noop._t0 = time.time()
             noop._noop = True
             return noop
-        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        # parent_id 未传 → 取当前 root_span_id（必须已有 root）
+        now = _now_iso()
+        # parent_id 未传 → 优先取 scope_root（子链嵌入模式），否则取 root_span_id
         if parent_id is None and span_id != trace.root_span_id:
-            parent_id = trace.root_span_id or None
+            scope_root = _scope_root_var.get()
+            if scope_root is not None:
+                parent_id = scope_root
+            else:
+                parent_id = trace.root_span_id or None
         # P1-9: parent_id 指向不存在的 span（如 skill 在 graph 之外执行时
         # 父 span 尚未创建），或误传了 Span 对象（不可哈希）→ 回退到 root，
         # 避免孤儿 span 导致 trace 树断裂
@@ -290,9 +341,23 @@ class TraceCollector:
                 )
                 parent_id = trace.root_span_id or None
 
-        with self._lock:
-            seq = self._span_seq
-            self._span_seq += 1
+        # P1-7: sequence 改为 trace 内局部计数 —— 旧实现用 collector 实例级
+        # 计数器，嵌套子 trace 的 start() 会重置/消耗序号，导致父 trace 的
+        # 后续 span 拿到被污染的序号（如 reporter 拿到 seq=15）。
+        seq = getattr(trace, "_seq", 0)
+        trace._seq = seq + 1
+
+        # P0-2: span_id 同 trace 内强制唯一 —— 多查询变体/重试会复用同一
+        # span_id（如 enhanced_hybrid_retrieval 出现 3 次），前端按 span_id 建
+        # 树/key 会冲突；自动追加 #N 后缀，原 id 保留在 metrics。
+        existing_ids = {s.span_id for s in trace.spans}
+        base_span_id = None
+        if span_id in existing_ids:
+            base_span_id = span_id
+            n = 1
+            while f"{span_id}#{n}" in existing_ids:
+                n += 1
+            span_id = f"{span_id}#{n}"
 
         span = Span(
             span_id=span_id,
@@ -308,6 +373,8 @@ class TraceCollector:
         # 同名 span_id（如中间件与 router 内部都叫 "router"）不会再互相覆盖，
         # 导致一方 duration 归零。noop span 同样带 t0，end_span 不会崩。
         span._t0 = time.time()
+        if base_span_id is not None:
+            span.metrics["base_span_id"] = base_span_id
         trace.spans.append(span)
         if parent_id is None:
             trace.root_span_id = span_id
@@ -318,10 +385,10 @@ class TraceCollector:
         """结束 Span：记录 end_time、计算 duration_ms、填充 metrics/output。"""
         t0 = getattr(span, "_t0", None)
         if t0 is not None:
-            span.duration_ms = int((time.time() - t0) * 1000)
+            span.duration_ms = max(1, round((time.time() - t0) * 1000))
             span._t0 = None
 
-        span.end_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        span.end_time = _now_iso()
         span.status = status
         if metrics:
             span.metrics.update(metrics)
@@ -354,7 +421,7 @@ class TraceCollector:
         """给 span 追加事件。level: debug|info|warn|error"""
         span.events.append({
             "name": name,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "timestamp": _now_iso(),
             "level": level,
             "message": message,
             "attributes": data or {},
@@ -369,10 +436,32 @@ class TraceCollector:
         record.answer_len = len(answer)
         record.total_ms = total_ms
         record.duration_ms = total_ms
-        # 2d627d7: 顶层 status 由 spans 聚合（用于 compute_metrics 过滤）
-        record.status = "error" if any(s.status == "error" for s in record.spans) else "success"
+
+        # P0-2: 强制关闭未收尾的 span（end_time 为空 = 埋点泄漏），
+        # 标记 leaked 而非静默按 success 落库。
+        leaked = self._close_leaked_spans(record)
+        # P1-8: 折叠 0 价值 skipped span 到 root metrics，减少列表噪声。
+        self._fold_skipped_spans(record)
+        # P0-4: root 归因度量 —— uncovered_ms 直接暴露 span 之间的无埋点黑洞。
+        uncovered_ms = self._record_coverage(record)
+        # P1-8: rejection 单一事实源 = metadata.rejection，root span 冗余详情瘦身。
+        self._slim_rejection_dup(record)
+
+        # P0-1: 顶层 status 聚合 — error > rejected > success。
+        # 旧实现只看 error，Evidence Gate 拒答的 trace 被误标 success，
+        # 污染 compute_metrics 的成功率统计。
+        record.status = self._aggregate_status(record)
 
         self._aggregate_usage(record)
+        self._record_prometheus(record, leaked, uncovered_ms)
+
+        try:
+            from backend.prompts.service import collect_prompt_usage
+            prompt_versions = collect_prompt_usage()
+            if prompt_versions:
+                record.metadata["prompt_versions"] = prompt_versions
+        except Exception:
+            pass
 
         # 嵌套恢复：子 trace 结束 → 把父 trace 还原为 current，
         # 外层流程后续 span 才不会落入 noop。
@@ -383,12 +472,12 @@ class TraceCollector:
         if _current_trace_var.get() is record:
             _current_trace_var.set(parent)
 
-        # 持久化到 SQLite（重启不丢失）
+        # Phase 3: 异步持久化（Langfuse + SQLite + Analytics 由后台 worker 批量写入）
         try:
-            from backend.observability.trace_store import get_trace_store
-            get_trace_store().save(record)
+            from backend.observability.trace_writer import get_trace_write_queue
+            get_trace_write_queue().enqueue(record)
         except Exception:
-            logger.warning("trace 持久化失败", exc_info=True)  # 不阻塞主流程
+            logger.warning("trace 异步入队失败", exc_info=True)
         # O2: 清除日志上下文
         from backend.shared.logger import clear_log_context
         clear_log_context()
@@ -398,7 +487,7 @@ class TraceCollector:
     # =====================================================
 
     def list(self, limit: int = 50, include_spans: bool = False) -> list[TraceRecord | dict]:
-        """最近 N 条 trace。
+        """最近 N 条 trace（Langfuse 主查询，SQLite 降级兜底）。
 
         Args:
             limit: 最多返回条数
@@ -406,10 +495,32 @@ class TraceCollector:
                           用于测试断言。False 时返回 dict 列表（不含 spans 详情），
                           用于 API 列表渲染。
         """
+        from backend.observability.langfuse_exporter import get_langfuse_exporter
+        from backend.observability.trace_store import get_trace_store
         try:
-            from backend.observability.trace_store import get_trace_store
             store = get_trace_store()
-            rows = store.list(limit)
+        except Exception:
+            store = None
+
+        # Langfuse 优先
+        exporter = get_langfuse_exporter()
+        if exporter.enabled:
+            rows = exporter.list_traces(limit)
+            if rows or store is None:
+                if not include_spans:
+                    return rows
+                records = []
+                for r in rows:
+                    rid = r.get("id") or r.get("trace_id")
+                    if not rid:
+                        continue
+                    full = exporter.get_trace(rid) or r
+                    records.append(self._dict_to_record(full))
+                return records
+
+        # 降级：SQLite
+        try:
+            rows = store.list(limit) if store else []
             if not include_spans:
                 return rows
             # include_spans=True：重建 TraceRecord 对象，spans 转回 Span
@@ -459,30 +570,58 @@ class TraceCollector:
         return _current_trace_var.get() or self._thread_current
 
     def compute_metrics(self) -> dict:
-        """从 SQLite 聚合统计（简化版，不含延迟分位数）。"""
-        try:
-            from backend.observability.trace_store import get_trace_store
-            stored = get_trace_store().list(200)
-        except Exception:
-            logger.warning("trace 持久化存储查询失败", exc_info=True)
-            stored = []
+        """聚合统计（Langfuse 优先，SQLite 降级；含真实延迟分位数）。"""
+        from backend.observability.langfuse_exporter import get_langfuse_exporter
+        exporter = get_langfuse_exporter()
+        stored: list[dict] = []
+        if exporter.enabled:
+            stored = exporter.list_traces(200)
+        if not stored:
+            try:
+                from backend.observability.trace_store import get_trace_store
+                stored = get_trace_store().list(200)
+            except Exception:
+                logger.warning("trace 持久化存储查询失败", exc_info=True)
+                stored = []
         active = len(self.list_active())
         total = len(stored) + active
         completed = [r for r in stored if r.get("duration_ms", 0) > 0]
         n = len(completed)
+        durations = sorted(r.get("duration_ms", 0) / 1000 for r in completed)
+
+        def _pct(q: float) -> float:
+            if not durations:
+                return 0
+            idx = min(n - 1, int(q * n))
+            return round(durations[idx], 3)
+
         return {
             "total_requests": total,
             "completed": n,
             "success": sum(1 for r in completed if r.get("status") == "success"),
             "error": sum(1 for r in completed if r.get("status") == "error"),
+            "rejected": sum(1 for r in completed if r.get("status") == "rejected"),
             "aborted": 0,
             "active": active,
             "success_rate": round(sum(1 for r in completed if r.get("status") == "success") / n, 3) if n else 0,
-            "avg_elapsed_sec": 0, "p50_elapsed_sec": 0, "p95_elapsed_sec": 0, "p99_elapsed_sec": 0,
+            "rejected_rate": round(sum(1 for r in completed if r.get("status") == "rejected") / n, 3) if n else 0,
+            "avg_elapsed_sec": round(sum(durations) / n, 3) if n else 0,
+            "p50_elapsed_sec": _pct(0.50),
+            "p95_elapsed_sec": _pct(0.95),
+            "p99_elapsed_sec": _pct(0.99),
         }
 
     def get(self, trace_id: str):
-        """获取单条 trace（SQLite）。返回 dict 或 None。"""
+        """获取单条 trace（Langfuse 优先，SQLite 兜底）。返回 dict 或 None。"""
+        try:
+            from backend.observability.langfuse_exporter import get_langfuse_exporter
+            exporter = get_langfuse_exporter()
+            if exporter.enabled:
+                data = exporter.get_trace(trace_id)
+                if data is not None:
+                    return data
+        except Exception:
+            logger.debug("Langfuse trace 详情查询失败: %s", trace_id, exc_info=True)
         try:
             from backend.observability.trace_store import get_trace_store
             return get_trace_store().get(trace_id)
@@ -508,6 +647,112 @@ class TraceCollector:
             self._listeners.clear()
             self._parents.clear()
         _current_trace_var.set(None)
+
+    # =====================================================
+    # 内部 — finish() 数据质量处理（2026-09-03 数据记录优化）
+    # =====================================================
+
+    @staticmethod
+    def _close_leaked_spans(record: TraceRecord) -> int:
+        """强制关闭未收尾的 span。返回泄漏数量。
+
+        检索层提前 return / 异常路径漏调 end_span 时，span 会以
+        end_time='' + status='success' 的假象落库；这里补时间戳并改标 'leaked'
+        （不覆盖 skipped/error/rejected 等显式状态）。
+        """
+        now = _now_iso()
+        leaked = 0
+        for s in record.spans:
+            if s.end_time:
+                continue
+            t0 = getattr(s, "_t0", None)
+            if t0 is not None:
+                s.duration_ms = int((time.time() - t0) * 1000)
+                s._t0 = None
+            s.end_time = now
+            if s.status == "success":
+                s.status = "leaked"
+            s.metrics["unclosed"] = True
+            leaked += 1
+        return leaked
+
+    @staticmethod
+    def _fold_skipped_spans(record: TraceRecord) -> None:
+        """折叠 skipped span 到 root metrics（0ms 噪声不再占用 spans 数组）。
+
+        metrics 一并保留到 skipped_stages，信息无损。
+        """
+        skipped = [s for s in record.spans if s.status == "skipped"]
+        if not skipped:
+            return
+        root = next((s for s in record.spans if s.parent_id is None), None)
+        if root is not None:
+            root.metrics["skipped_stages"] = [
+                {"span_id": s.span_id, "name": s.name, "metrics": s.metrics}
+                for s in skipped
+            ]
+        record.spans = [s for s in record.spans if s.status != "skipped"]
+
+    @staticmethod
+    def _record_coverage(record: TraceRecord) -> int:
+        """root span 耗时归因：covered = 直接子 span 之和，uncovered = 无埋点黑洞。
+
+        只统计 root 直接子级（嵌套时长已包含在子级内），避免并行/嵌套重复累加。
+        """
+        root = next((s for s in record.spans if s.parent_id is None), None)
+        if root is None or record.total_ms <= 0:
+            return 0
+        covered = sum(s.duration_ms for s in record.spans
+                      if s.parent_id == root.span_id and s.duration_ms > 0)
+        uncovered = max(0, record.total_ms - covered)
+        root.metrics["covered_ms"] = covered
+        root.metrics["uncovered_ms"] = uncovered
+        return uncovered
+
+    @staticmethod
+    def _slim_rejection_dup(record: TraceRecord) -> None:
+        """rejection 单一事实源 = metadata.rejection。
+
+        root span metrics 只保留布尔索引位，删掉与 metadata 重复的
+        reason/gate_layer 详情字段。
+        """
+        rej = record.metadata.get("rejection") or {}
+        if not rej.get("rejected"):
+            return
+        for s in record.spans:
+            if s.parent_id is None and s.metrics.get("rejected"):
+                keep = {"rejected": True}
+                for k in ("span_count", "skipped_stages", "covered_ms", "uncovered_ms"):
+                    if k in s.metrics:
+                        keep[k] = s.metrics[k]
+                s.metrics = keep
+
+    @staticmethod
+    def _aggregate_status(record: TraceRecord) -> str:
+        """顶层状态聚合：rejected > error > success。
+
+        拒答优先于 error：Evidence Gate 拒答时，子 span 可能因检索失败
+        标记了 error，但系统已优雅处理，整体应显示 rejected 而非 error。
+        """
+        if (record.metadata.get("rejection") or {}).get("rejected"):
+            return "rejected"
+        statuses = {s.status for s in record.spans}
+        if "error" in statuses:
+            return "error"
+        if "rejected" in statuses:
+            return "rejected"
+        return "success"
+
+    @staticmethod
+    def _record_prometheus(record: TraceRecord, leaked: int, uncovered_ms: int) -> None:
+        """trace 完成时上报数据质量指标（软失败）。"""
+        try:
+            from backend.observability.metrics import record_trace_finish
+            rejection_layer = (record.metadata.get("rejection") or {}).get("layer") or ""
+            ratio = (uncovered_ms / record.total_ms) if record.total_ms > 0 else 0.0
+            record_trace_finish(record.status, rejection_layer, leaked, ratio)
+        except Exception:
+            logger.debug("[Tracer] Prometheus trace 指标记录失败", exc_info=True)
 
     # =====================================================
     # 内部

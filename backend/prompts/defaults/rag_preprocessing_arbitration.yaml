@@ -1,0 +1,16 @@
+key: rag.preprocessing.arbitration
+name: 文档类型仲裁
+category: rag_preprocessing
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: candidates, required: true, description: 候选类型列表}
+  - {name: text, required: true, description: 文档内容}
+template: |
+  你是电商文档分类专家。以下文档的类型有歧义，请从候选类型中选择最匹配的一个。
+
+  候选类型: {candidates}
+  文档内容（前 1000 字）:
+  {text}
+
+  只输出一个类型名，不要额外解释:

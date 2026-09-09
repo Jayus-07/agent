@@ -1,0 +1,25 @@
+key: memory.long_term.fact_extraction
+name: 事实提取 Prompt
+category: memory
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: conversation, required: true, description: 对话内容}
+template: |
+  从对话中提取值得长期记忆的关键信息。每条一行，严格使用竖线分隔: 类型|内容
+
+  类型: user_fact(用户身份/角色/技能), preference(偏好/习惯), decision(决策), knowledge(知识)
+  没有重要信息则只输出: NONE
+
+  示例:
+  用户: 我叫张三，是后端工程师，喜欢用FastAPI
+  助手: 好的张三，你是后端工程师
+  输出:
+  user_fact|用户名张三
+  user_fact|职业是后端工程师
+  preference|喜欢使用FastAPI框架
+
+  对话:
+  {conversation}
+
+  输出:

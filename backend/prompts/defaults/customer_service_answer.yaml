@@ -1,0 +1,22 @@
+key: customer_service.answer
+template: |
+  基于以下参考资料和用户问题，生成准确、有帮助的回答。
+
+  ## 参考资料
+  {context}
+
+  ## 用户问题
+  {input}
+
+  ## 回答要求
+  1. 仅基于参考资料中的信息回答，不得编造
+  2. 如果参考资料中没有相关信息，明确告知用户
+  3. 回答应简洁明了，避免冗余
+  4. 如涉及操作步骤，使用有序列表
+variables:
+  - name: context
+    required: true
+    description: RAG 检索到的参考资料
+  - name: input
+    required: true
+    description: 用户的原始问题

@@ -1,0 +1,28 @@
+key: selection.recommender.reason
+name: 选品推荐理由
+category: selection
+risk_level: medium
+template_engine: str_format
+variables:
+  - {name: title, required: true, description: 商品标题}
+  - {name: platform, required: true, description: 平台}
+  - {name: latest_price, required: true, description: 现价}
+  - {name: currency, required: true, description: 货币}
+  - {name: rating, required: true, description: 评分}
+  - {name: review_count, required: true, description: 评价数}
+  - {name: highlights, required: false, description: 卖点}
+  - {name: total, required: true, description: 潜力总分}
+  - {name: breakdown, required: true, description: 分维度详情}
+  - {name: notes, required: true, description: 数据缺口标注}
+# 原始代码使用 SystemMessage + HumanMessage 组合。
+# 此处将两部分合并，以 --- 分隔。
+template: |
+  你是电商选品分析师。根据给定数据写 1-2 句推荐理由。严格规则：只允许使用给定数据中出现的数字，禁止编造、推算或改写任何数字。
+  ---
+  商品: {title}
+  平台: {platform}
+  现价: {latest_price} {currency}
+  评分: {rating} 评价数: {review_count}
+  卖点: {highlights}
+  潜力分: {total} 分维度: {breakdown}
+  数据缺口标注: {notes}

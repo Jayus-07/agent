@@ -1,7 +1,7 @@
 """可观测性 REST API — traces / metrics / resources / alerts / graph
 
-数据源统一在 `backend.rag.tracer.trace_collector`（之前是双 store，
-已删除 `orchestration.TraceStore` 死代码）。
+数据源统一在 `backend.rag.tracer.trace_collector`：
+Langfuse 主存储（读路径优先），SQLite TraceStore 保留作为降级兜底。
 """
 
 import os
@@ -24,109 +24,11 @@ router = APIRouter(prefix="/observability", tags=["可观测性"])
 # 适配器：TraceRecord + Span → 前端 TraceRecord DTO
 # ═══════════════════════════════════════════════════
 
-def _to_span_dto(s, all_spans: list, total_ms: int) -> dict:
-    """Span / dict → 前端 Span DTO。兼容 TraceRecord Span 和 SQLite dict。"""
-    get = lambda k, d=None: s.get(k, d) if isinstance(s, dict) else getattr(s, k, d)
-    span_id = get("span_id", "")
-    dto: dict = {
-        "id": span_id,
-        "type": get("type", ""),
-        "name": get("name", ""),
-        "parent_id": get("parent_id"),
-        "status": get("status", "success"),
-        "start_time": get("start_time", ""),
-        "end_time": get("end_time", ""),
-        "duration_ms": get("duration_ms", 0),
-        "duration_ratio": get("duration_ms", 0) / total_ms if total_ms else 0,
-        "metrics": get("metrics", {}),
-        "children": [
-            (c.get("span_id") if isinstance(c, dict) else c.span_id)
-            for c in all_spans
-            if (c.get("parent_id") if isinstance(c, dict) else c.parent_id) == span_id
-        ],
-        "input": get("input"),
-        "output": get("output"),
-        "events": get("events", []),
-        "errors": get("errors", []),
-    }
-    if get("type", "") == "llm_call":
-        m = get("metrics", {})
-        inp = get("input") or {}
-        out = get("output") or {}
-        dto["llm_call"] = {
-            "model": m.get("model_name", "") if isinstance(m, dict) else "",
-            "temperature": m.get("temperature", 0) if isinstance(m, dict) else 0,
-            "prompt_tokens": m.get("prompt_tokens", 0) if isinstance(m, dict) else 0,
-            "completion_tokens": m.get("completion_tokens", 0) if isinstance(m, dict) else 0,
-            "cost_usd": m.get("cost_usd", 0) if isinstance(m, dict) else 0,
-            "prompt_text": (inp.get("prompt", "") if isinstance(inp, dict) else ""),
-            "response_text": (out.get("response", "") if isinstance(out, dict) else ""),
-        }
-    return dto
-
-
-def _to_trace_dto(t) -> dict:
-    """TraceRecord / dict → 前端 TraceRecord DTO。"""
-    # 兼容 dict（SQLite 存储格式）和 TraceRecord
-    get = lambda k, d=None: t.get(k, d) if isinstance(t, dict) else getattr(t, k, d)
-    total_ms = get("duration_ms", 0)
-    # SLA 用 trace 自身阈值（agent 链路按计划复杂度 30-90s，RAG 链路 30s）；
-    # 此前硬编码 10s 导致几乎所有请求都被前端标记 TIMEOUT（浏览器实测发现）。
-    sla_ms = get("sla_threshold_ms", 10000) or 10000
-    all_spans = get("spans", [])
-    has_error = any((s.get("status") if isinstance(s, dict) else s.status) == "error" for s in all_spans)
-    return {
-        "id": get("id", ""),
-        "timestamp": get("timestamp", ""),
-        "session_id": get("session_id", ""),
-        "question": get("question", ""),
-        "answer_preview": get("answer_preview", ""),
-        "answer_len": get("answer_len", 0),
-        "duration_ms": total_ms,
-        "model": get("model", {}) if isinstance(get("model", {}), dict) else {"name": get("model", ""), "provider": get("provider", "")},
-        "usage": get("usage", {}),
-        "cost_usd": get("cost_usd", 0),
-        "error": get("error", {}),
-        "metadata": get("metadata", {}),
-        "status": "error" if has_error else ("running" if total_ms == 0 else "success"),
-        "workflow_name": get("workflow_name", ""),
-        "root_span_id": get("root_span_id", ""),
-        "spans": [_to_span_dto(s, all_spans, total_ms) for s in all_spans],
-        "sla": {"threshold_ms": sla_ms, "breached": total_ms > 0 and total_ms > sla_ms},
-        "parent_id": get("parent_id"),
-        "children_ids": get("children_ids", []),
-        "graph": get("graph"),
-        "tags": get("tags", {}),
-    }
-
-
-def _stored_dict_to_dto(d: dict) -> dict:
-    """SQLite 存储的 trace dict → 前端兼容的 DTO（spans 已移除，仅列表摘要）"""
-    duration = d.get("duration_ms", 0)
-    sla_ms = d.get("sla_threshold_ms", 10000) or 10000
-    return {
-        "id": d.get("id", ""),
-        "timestamp": d.get("timestamp", ""),
-        "session_id": d.get("session_id", ""),
-        "question": d.get("question", ""),
-        "answer_preview": d.get("answer_preview", ""),
-        "answer_len": d.get("answer_len", 0),
-        "duration_ms": d.get("duration_ms", 0),
-        "model": d.get("model", {}),
-        "usage": d.get("usage", {}),
-        "cost_usd": d.get("cost_usd", 0),
-        "error": d.get("error", {}),
-        "metadata": d.get("metadata", {}),
-        "status": d.get("status", "success"),
-        "workflow_name": d.get("workflow_name", ""),
-        "root_span_id": d.get("root_span_id", ""),
-        "spans": [],
-        "sla": {"threshold_ms": sla_ms, "breached": duration > 0 and duration > sla_ms},
-        "parent_id": d.get("parent_id"),
-        "children_ids": d.get("children_ids", []),
-        "graph": None,
-        "tags": d.get("tags", {}),
-    }
+from backend.app.api.routes._trace_dto import (  # noqa: E402
+    to_span_dto as _to_span_dto,
+    to_trace_dto as _to_trace_dto,
+    stored_dict_to_dto as _stored_dict_to_dto,
+)
 
 
 # ═══════════════════════════════════════════════════
@@ -134,13 +36,79 @@ def _stored_dict_to_dto(d: dict) -> dict:
 # ═══════════════════════════════════════════════════
 
 @router.get("/traces")
-async def list_traces(limit: int = Query(20, ge=1, le=200)):
-    """最近 N 条 trace 摘要（内存 + SQLite 合并去重）"""
-    store = get_trace_store()
-    # trace_collector.list() 已从 SQLite 读取，内部做了去重
-    stored = store.list(limit)
-    traces = [_stored_dict_to_dto(d) for d in stored]
+async def list_traces(limit: int = Query(20, ge=1, le=200),
+                      workflow_name: str | None = Query(None),
+                      session_id: str | None = Query(None)):
+    """最近 N 条 trace 摘要（Langfuse 主查询，SQLite 降级）。
+
+    workflow_name / session_id 服务端过滤：前端不再拉 200 条本地 filter。
+    """
+    stored = trace_collector.list(limit)
+    if workflow_name:
+        stored = [d for d in stored
+                  if (d.get("workflow_name") if isinstance(d, dict)
+                      else getattr(d, "workflow_name", "")) == workflow_name]
+    if session_id:
+        stored = [d for d in stored
+                  if (d.get("session_id") if isinstance(d, dict)
+                      else getattr(d, "session_id", "")) == session_id]
+    traces = [_stored_dict_to_dto(d) if isinstance(d, dict) else _to_trace_dto(d)
+              for d in stored]
     return {"traces": traces}
+
+
+@router.get("/traces/stats")
+async def trace_stats(hours: float = Query(24, gt=0, le=24 * 30),
+                      workflow_name: str | None = Query(None)):
+    """时间窗内聚合统计（前端 StatsBar 下沉，不再客户端遍历 200 条）。
+
+    数据源：P0 analytics 结构化层优先（含新写入数据），否则 SQLite 详情库摘要。
+    口径与前端原实现一致：成功率/均值/P95 只统计已完成（duration>0）的 trace。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    def _ts_ok(ts: str) -> bool:
+        try:
+            dt = datetime.fromisoformat((ts or "").replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt >= cutoff
+        except Exception:
+            return False
+
+    rows: list[dict] = []
+    try:
+        from backend.observability.analytics_store import get_analytics_store
+        store = get_analytics_store()
+        if store.enabled and store.count() > 0:
+            rows = store.list(500, workflow_name=workflow_name)
+    except Exception:
+        logger.debug("stats: analytics 层不可用，降级 SQLite", exc_info=True)
+    if not rows:
+        rows = [r for r in trace_collector.list(200) if isinstance(r, dict)]
+        if workflow_name:
+            rows = [r for r in rows if r.get("workflow_name") == workflow_name]
+
+    rows = [r for r in rows if _ts_ok(r.get("timestamp", ""))]
+    completed = [r for r in rows if (r.get("duration_ms", 0) or 0) > 0]
+    n = len(completed)
+
+    def _is_err(r: dict) -> bool:
+        return r.get("status") == "error" or bool(r.get("error"))
+
+    durations = sorted((r.get("duration_ms", 0) for r in completed), reverse=True)
+    p95 = durations[int(n * 0.05)] if n else 0
+    err_count = sum(1 for r in rows if _is_err(r))
+    return {
+        "total_24h": len(rows),
+        "success_rate": round((n - sum(1 for r in completed if _is_err(r))) / n, 3) if n else 0,
+        "avg_duration_ms": round(sum(r.get("duration_ms", 0) for r in completed) / n) if n else 0,
+        "p95_duration_ms": p95,
+        "error_count": err_count,
+        "total_cost_usd": round(sum(r.get("cost_usd", 0) or 0 for r in rows), 6),
+    }
 
 
 @router.get("/traces/active")
@@ -152,8 +120,9 @@ async def list_active_traces():
 
 @router.get("/traces/{trace_id}")
 async def get_trace(trace_id: str):
-    """获取单条 trace 完整详情（内存优先 + SQLite 兜底）"""
-    # 优先查内存（最新 trace），fallback 到 SQLite（重启后仍可查）
+    """获取单条 trace 完整详情（Langfuse 优先，SQLite 兜底）"""
+    # trace_collector.get() 内部已做 Langfuse → SQLite 两级回退；
+    # 再保留一层 store 直读兜底（极端情况下 collector 异常）
     data = trace_collector.get(trace_id)
     if data is None:
         store = get_trace_store()
@@ -171,7 +140,8 @@ async def get_trace(trace_id: str):
 async def list_rag_traces(limit: int = Query(50, ge=1, le=200)):
     """最近 N 条 RAG Trace（与 /traces 共享数据源，仅保留向后兼容）"""
     traces = trace_collector.list(limit)
-    return {"traces": [_to_trace_dto(t) for t in traces]}
+    return {"traces": [_stored_dict_to_dto(t) if isinstance(t, dict) else _to_trace_dto(t)
+                       for t in traces]}
 
 
 @router.get("/rag-traces/stream")
@@ -184,10 +154,14 @@ async def stream_rag_traces():
         last_id = ""
         while True:
             traces = trace_collector.list(1)
-            if traces and traces[0].id != last_id:
-                t = traces[0]
-                last_id = t.id
-                data = json.dumps(_to_trace_dto(t), ensure_ascii=False)
+            tid = traces[0].get("id") if traces and isinstance(traces[0], dict) \
+                else (traces[0].id if traces else "")
+            if traces and tid and tid != last_id:
+                last_id = tid
+                data = json.dumps(
+                    _stored_dict_to_dto(traces[0]) if isinstance(traces[0], dict)
+                    else _to_trace_dto(traces[0]),
+                    ensure_ascii=False)
                 yield f"data: {data}\n\n"
             await asyncio.sleep(1)
 
@@ -196,7 +170,7 @@ async def stream_rag_traces():
 
 @router.get("/rag-traces/{trace_id}")
 async def get_rag_trace(trace_id: str):
-    """获取单条 RAG Trace 详情（内存优先，SQLite 兜底）"""
+    """获取单条 RAG Trace 详情（Langfuse 优先，SQLite 兜底）"""
     t = trace_collector.get(trace_id)
     if t is None:
         data = get_trace_store().get(trace_id)

@@ -1,8 +1,8 @@
 """周自动评测入口（P1-2，2026-08-21 从 backend.eval 迁移）。
 
-用统一框架 backend.evaluation 跑 rag_test_kb.json（v1.3，54 条）离线检索评测：
+用统一框架 backend.evaluation 跑 canonical 评测集（145 条）离线检索评测：
 - 确定性：不调 LLM，无 API 成本，可在调度线程内同步执行
-- 覆盖面：54 条（旧 golden_v1.json 仅 5 条），含 Top-1/拒答/MRR 等 v2 指标
+- 覆盖面：145 条 canonical 全集，含 Top-1/拒答/MRR 等 v2 指标
 - 留痕：报告持久化到 data/eval_runs（persist_report）
 
 调用方：
@@ -16,10 +16,8 @@ from typing import Any
 
 from backend.shared.logger import logger
 
-DEFAULT_DATASET = "rag_test_kb.json"
 
-
-def run_weekly_rag_eval(dataset_file: str = DEFAULT_DATASET) -> dict[str, Any]:
+def run_weekly_rag_eval(dataset_file: str | None = None) -> dict[str, Any]:
     """运行离线 RAG 检索评测，返回摘要 dict。
 
     Returns:
@@ -62,4 +60,4 @@ def run_weekly_rag_eval(dataset_file: str = DEFAULT_DATASET) -> dict[str, Any]:
     }
 
 
-__all__ = ["run_weekly_rag_eval", "DEFAULT_DATASET"]
+__all__ = ["run_weekly_rag_eval"]

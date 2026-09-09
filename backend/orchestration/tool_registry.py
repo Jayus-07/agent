@@ -48,7 +48,7 @@ class ToolRegistry:
     def register_skill_node(self, name: str, node_func):
         """Skill 包加载时自行调用，注册节点名 → 节点函数"""
         self._skill_nodes[name] = node_func
-        logger.info(f"[ToolRegistry] 注册 Skill: {name}")
+        logger.debug(f"[ToolRegistry] 注册 Skill: {name}")
 
     def get_skill_nodes(self) -> dict:
         """返回 {node_name: node_func}（builder.py 用于 add_node）"""

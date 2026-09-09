@@ -1,0 +1,8 @@
+{
+  "version": "4.0",
+  "case_count": 100,
+  "module": "rag",
+  "kb_id": "rag_test_kb",
+  "schema_description": "Unified schema for dual-track evaluation (RAGAS + self-built). All cases carry expected_answer for RAGAS reference, required_facts for fact coverage, required_docs for multi-hop/citation metrics.",
+  "created": "2026-09-08"
+}

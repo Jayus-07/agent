@@ -11,6 +11,37 @@ from typing import Optional
 from backend.shared.logger import logger
 
 
+def invoke_metadata_llm(prompt: str, llm_obj=None):
+    """RAG 元数据提取专用 LLM 调用 — qwen3 混合思考模型关闭思考模式。
+
+    qwen3.x-plus/max 默认开启思考（thinking budget ~4k token），结构化提取
+    （关键词/摘要/分类仲裁）不需要推理链：实测单次调用 8.5s → 1.3s（-85%）。
+    仅对 qwen 云模型传 extra_body；DeepSeek/Ollama 不识别该参数，保持原调用。
+
+    Args:
+        prompt: 提示词
+        llm_obj: 可选 LLM 对象。调用方（如 metadata.py）传模块级 llm，
+            保持测试 monkeypatch 透传；None 时用全局默认 llm。
+
+    Returns: LLM 消息对象（与 llm.invoke 一致）
+    Raises: 与 llm.invoke 一致（调用方自行 try/except 降级）
+    """
+    from backend.infra.llm.proxy import _get_provider_for
+
+    if llm_obj is None:
+        from backend.infra.llm import llm as llm_obj
+
+    try:
+        # provider 判断基于 llm_obj 自身（proxy 的 __getattr__ 委托到 active llm；
+        # 测试 FakeLLM 无 model 属性 → "" → 非 qwen → 走普通 invoke 签名）
+        model_name = str(getattr(llm_obj, "model", "") or "")
+        if _get_provider_for(model_name) == "qwen":
+            return llm_obj.invoke(prompt, extra_body={"enable_thinking": False})
+    except Exception as e:  # 解析失败不影响主流程，按普通调用
+        logger.debug(f"[MetadataLLM] 模型解析失败，走普通调用: {e}")
+    return llm_obj.invoke(prompt)
+
+
 def _fallback_questions(chunk_text: str) -> list[str]:
     """LLM 未生成问题或长度不符时的兜底 — 给 1 个无害占位问句。
 
@@ -58,24 +89,14 @@ def enrich_metadata_llm(text: str, doc_type: str, chunks_text: list[str] | None 
         )
         extra_schema = ', "simulated_questions": [["<问题 1>", "<问题 2>"], ...]'
 
-    prompt = f"""你是专业 RAG 元数据提取专家。从文档提取 1 个 JSON 对象,严禁任何额外内容。
-
-严格规则:
-- summary 必须是 1-3 句中文摘要,严格控制在 200 个汉字以内(超出部分将被系统强制截断,视为不合格输出)
-  纯自然语言,严禁用 markdown 标题符号/列表/换行/星号
-- keywords 是 10 个以内的关键词数组
-- entities 是 5 个以内的实体数组(每项含 name 和 type 字段,type 取 regulation/person/platform/brand)
-{questions_field}
-- 严禁在 JSON 外加解释、严禁使用 markdown 围栏、严禁重复文档原文当摘要
-
-JSON Schema:
-{{"summary": "<1-3 句中文摘要,<=200字>", "keywords": ["<词 1>", ...], "entities": [{{"name":"<名称>","type":"<类型>"}}, ...]{extra_schema}}}
-
-文档:
-{safe_text}
-{chunks_block}
-
-只返回这个 JSON,无其他文字:"""
+    from backend.prompts.service import prompt_service
+    prompt = prompt_service.render_sync(
+        "rag.preprocessing.llm_enrichment",
+        safe_text=safe_text,
+        questions_field=questions_field,
+        extra_schema=extra_schema,
+        chunks_block=chunks_block,
+    ).text
 
     try:
         if DOC_LLM_MODEL:

@@ -247,6 +247,7 @@ artifact-bundles/
 coverage-artifacts/
 test-results/
 build-artifacts/
+/reports/
 
 # ============================================
 # ASSETS & MEDIA FILES

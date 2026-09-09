@@ -10,7 +10,6 @@ import ChatInput from './ChatInput'
 import EmptyState from './EmptyState'
 import StatusBar from './StatusBar'
 import LLMSwitcher from './LLMSwitcher'
-import MultiQueryToggle from './MultiQueryToggle'
 import ContextPanel from './chat/ContextPanel'
 
 // 模块级稳定空数组，避免 messages 为空时 useMemo 每次返回新 []
@@ -142,7 +141,6 @@ export default function ChatView() {
 
       {/* 工具栏 — 输入框正上方 */}
       <div className="shrink-0 max-w-[720px] mx-auto w-full px-4 pb-1 flex items-center justify-end gap-2">
-        <MultiQueryToggle />
         <LLMSwitcher />
       </div>
 

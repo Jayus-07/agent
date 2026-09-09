@@ -26,9 +26,9 @@
 两处调用方必须一致:
   - indexer._derive_doc_id  → derive_doc_id(kb_id=, department=, basename=, subpath=)
   - loader/metadata         → derive_doc_id_from_path(file_path, docs_dir)
-  （注: loader.py 目前仍使用旧 md5(basename) 协议注入 chunk metadata，
-   属已知的"doc_id 协议分裂"问题，BM25 侧已用 file_path 双键兜底，
-   统一迁移归 F6 批次处理。）
+  （注: loader.py / metadata.py doc-level / pipeline.py registry sync 已全部迁移至
+   derive_doc_id_from_path，doc_id 协议统一完成 (2026-09-10)。存量数据需触发
+   full rebuild 使 doc_db 与 chunk_db 的 doc_id 对齐。）
 """
 
 import hashlib

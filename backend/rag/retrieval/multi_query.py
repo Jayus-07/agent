@@ -16,6 +16,8 @@ from backend.config import (
     MULTI_QUERY_SIMILARITY, MULTI_QUERY_MIN_LENGTH,
 )
 from backend.rag.context import get_context
+from backend.prompts.service import prompt_service
+
 from backend.shared.logger import logger
 
 # 运行时模式（可通过 API POST /llm/multiquery 动态切换）
@@ -41,7 +43,8 @@ def need_multi_query(query: str) -> tuple[bool, str]:
     mode=off     → 直接关闭
     mode=always  → 直接开启
     mode=on      → 兼容旧写法，同 always
-    mode=auto    → 调用 _is_complex 判断
+    mode=auto    → 由三层分类器 _classify_query_tier() 决定：
+                   仅 hybrid_multi_query 触发，vector_only/hybrid 不触发。
     """
     mode = _mq_mode
 
@@ -49,8 +52,16 @@ def need_multi_query(query: str) -> tuple[bool, str]:
         return False, "off"
     if mode in ("always", "on"):
         return True, mode
-    # auto
-    return _is_complex(query)
+    # auto → 统一由三层分类器决策
+    try:
+        from backend.rag.retrieval.hybrid import _classify_query_tier
+        tier = _classify_query_tier(query)
+        if tier == "hybrid_multi_query":
+            return True, f"三层路由: {tier}"
+        return False, f"三层路由: {tier}"
+    except Exception:
+        # 分类器不可用时回退到本地规则
+        return _is_complex(query)
 
 
 # =====================================================
@@ -78,6 +89,12 @@ BUSINESS_KEYWORDS = [
 
 SIMPLE_PREFIXES = ("什么是", "多少", "几点", "几号", "谁", "哪个", "哪里")
 
+# 简单事实问句模式（2026-09-03 P1-7）：单一数值/时间点答案，改写只会放大重复检索。
+# 检查置于业务关键词之前："退款审核时间是多少？"不应因"退款"触发 3 变体改写。
+SIMPLE_FACT_PATTERNS = (
+    "是多少", "是多久", "多久", "几天", "多长时间", "什么时间", "什么时候", "多少钱", "多少个",
+)
+
 
 def _is_complex(query: str) -> tuple[bool, str]:
     """判断 query 是否需要 MultiQuery 改写（2026-08-11 加业务关键词触发）。"""
@@ -85,6 +102,10 @@ def _is_complex(query: str) -> tuple[bool, str]:
     for pat in COMPLEX_PATTERNS:
         if pat in q:
             return True, f"复杂度关键词: {pat}"
+    # 简单事实问句豁免：即使命中业务关键词，单一事实答案无需多路改写
+    for pat in SIMPLE_FACT_PATTERNS:
+        if pat in q:
+            return False, f"简单事实问句({pat})"
     # 业务关键词：差评/退款/合规等业务查询自动触发改写
     for kw in BUSINESS_KEYWORDS:
         if kw in q:
@@ -93,7 +114,7 @@ def _is_complex(query: str) -> tuple[bool, str]:
         return False, "简单事实问句"
     if len(q) < 5:
         return False, f"过短({len(q)}字)"
-    if len(q) > 15:
+    if len(q) > 25:
         return True, f"较长({len(q)}字)"
     return False, "默认简单"
 
@@ -102,31 +123,28 @@ def _is_complex(query: str) -> tuple[bool, str]:
 # Query Rewrite: Parse → Normalize → Deduplicate → Limit
 # =====================================================
 
-QUERY_REWRITE_PROMPT = """将用户问题改写为 {count} 个语义等价但表达不同的检索查询。
-
-规则：
-1. 保留原始查询作为第 1 个
-2. 不改变原意，但可扩展同义词和跨域表述（如"差评"→"差评/投诉/售后"）
-3. 不回答问题，不解释
-4. 只输出查询文本，每行一个，不要编号
-
-用户问题：{question}
-
-改写结果："""
-
-
 def _rewrite(question: str) -> list[str]:
     """LLM 改写 → Parse → Normalize → Dedup → Limit"""
     try:
         from backend.observability.tracer import trace_collector
-        span = trace_collector.start_span("query_rewrite", name="LLM改写")
+        span = trace_collector.start_span("query_rewrite", name="LLM 改写")
         from backend.infra.llm import llm
         from langchain_core.messages import HumanMessage
 
-        prompt = QUERY_REWRITE_PROMPT.format(count=MULTI_QUERY_COUNT, question=question)
-        result = llm.invoke([HumanMessage(content=prompt)])
+        r = prompt_service.render_sync("rag.multi_query", count=MULTI_QUERY_COUNT, question=question)
+        result = llm.invoke([HumanMessage(content=r.text)])
+        
+        # 正确提取 content（可能是 AIMessage 或其他类型）
+        if hasattr(result, 'content'):
+            raw = str(result.content)
+        elif isinstance(result, str):
+            raw = result
+        else:
+            # 其他类型（如 list/dict）→ 降级为原始 query
+            logger.warning(f"[MultiQuery] LLM 返回非预期类型 {type(result)}，降级为原始 query")
+            return [question]
+        
         tokens = trace_collector.parse_tokens(result)
-        raw = result.content if hasattr(result, "content") else str(result)
 
         # Step 1: Parse
         lines = _parse(raw)
@@ -145,8 +163,12 @@ def _rewrite(question: str) -> list[str]:
         logger.info(f"[MultiQuery] Rewrite: {question[:40]} → {len(lines)} 变体")
         return lines
     except Exception as e:
+        # 确保 span 在使用前初始化
+        if 'span' not in locals():
+            from backend.observability.tracer import trace_collector
+            span = trace_collector.start_span("query_rewrite", name="LLM 改写")
         trace_collector.end_span(span, metrics={"variants": 0}, status="error")
-        logger.warning(f"[MultiQuery] Rewrite 失败: {e}，回退")
+        logger.warning(f"[MultiQuery] Rewrite 失败：{e}，回退到原始 query")
         return [question]
 
 
@@ -190,8 +212,37 @@ def _normalize(lines: list[str]) -> list[str]:
 
 # ── Deduplicate ────────────────────────────────────
 
+def _word_set(text: str) -> set[str]:
+    """jieba 词级切分；不可用时回退字符级。"""
+    try:
+        import jieba
+        return {w for w in jieba.cut(text) if w.strip()}
+    except Exception:
+        return set(text)
+
+
+def _similarity(original: str, line: str) -> float:
+    """综合相似度 = max(字符级 Jaccard, 词级 Jaccard, 词集最小包含度)。
+
+    字符级对中文短问句区分度不足（如仅添加虚词"的"恰好卡在阈值上）；
+    词集最小包含度 |A∩B|/min(|A|,|B|) 可识别"原查询仅加虚词/换词序"的变体。
+    """
+    o_set, l_set = set(original), set(line)
+    union = o_set | l_set
+    char_jaccard = len(o_set & l_set) / len(union) if union else 0.0
+
+    o_words, l_words = _word_set(original), _word_set(line)
+    w_union = o_words | l_words
+    word_jaccard = len(o_words & l_words) / len(w_union) if w_union else 0.0
+    containment = (
+        len(o_words & l_words) / min(len(o_words), len(l_words))
+        if o_words and l_words else 0.0
+    )
+    return max(char_jaccard, word_jaccard, containment)
+
+
 def _dedup(lines: list[str], original: str = "") -> list[str]:
-    """去重：完全重复 + Jaccard 相似度"""
+    """去重：完全重复 + 词级综合相似度（字符 Jaccard/词 Jaccard/词集包含度）"""
     # 确保原始查询在第一位
     result = [original] if original else []
     seen = {original} if original else set()
@@ -211,16 +262,12 @@ def _dedup(lines: list[str], original: str = "") -> list[str]:
         if len(line) < MULTI_QUERY_MIN_LENGTH:
             logger.debug(f"[MultiQuery] 过短: {line}")
             continue
-        # Jaccard 去重
+        # 综合相似度去重（词级 + 字符级 + 包含度）
         if original:
-            o_set = set(original)
-            l_set = set(line)
-            union = o_set | l_set
-            if union:
-                jaccard = len(o_set & l_set) / len(union)
-                if jaccard > MULTI_QUERY_SIMILARITY:
-                    logger.debug(f"[MultiQuery] Jaccard重复({jaccard:.2f}): {line}")
-                    continue
+            sim = _similarity(original, line)
+            if sim > MULTI_QUERY_SIMILARITY:
+                logger.debug(f"[MultiQuery] 相似度重复({sim:.2f}): {line}")
+                continue
         seen.add(line)
         result.append(line)
     return result
@@ -281,27 +328,37 @@ class MultiQueryRetriever(BaseRetriever):
         self._last_variants = len(queries)
         self._last_filtered = len(queries)
 
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        # LLM 改写失败（返回仅含原始 query）→ 降级到 hybrid 单路检索
+        if len(queries) <= 1:
+            logger.warning(
+                f"[MultiQuery] LLM 改写失败，降级到 hybrid 单路检索: {query[:30]}"
+            )
+            return self.base_retriever.invoke(query)
+
+        from concurrent.futures import as_completed
+        from backend.infra.thread_pools import retrieval_pool_inner
+        import contextvars
         docs, seen = [], set()
         # 按 query 分组检索，每个 doc 标记来源查询
         evidence_groups: dict[str, list] = {}
-        with ThreadPoolExecutor(max_workers=min(3, len(queries))) as ex:
-            future_to_q = {ex.submit(self.base_retriever.invoke, q): q for q in queries}
-            for future in as_completed(future_to_q):
-                q = future_to_q[future]
-                try:
-                    q_docs = []
-                    for d in future.result():
-                        cid = d.metadata.get("chunk_id", d.metadata.get("doc_id", "?"))
-                        if cid not in seen:
-                            seen.add(cid)
-                            d.metadata["source_query"] = q  # 标记来源查询
-                            q_docs.append(d)
-                            docs.append(d)
-                    evidence_groups[q] = q_docs
-                except Exception as e:
-                    logger.warning(f"[MultiQuery] 检索失败: {e}")
-                    evidence_groups[q] = []
+        ctx = contextvars.copy_context()
+        ex = retrieval_pool_inner()
+        future_to_q = {ex.submit(ctx.run, self.base_retriever.invoke, q): q for q in queries}
+        for future in as_completed(future_to_q):
+            q = future_to_q[future]
+            try:
+                q_docs = []
+                for d in future.result():
+                    cid = d.metadata.get("chunk_id", d.metadata.get("doc_id", "?"))
+                    if cid not in seen:
+                        seen.add(cid)
+                        d.metadata["source_query"] = q  # 标记来源查询
+                        q_docs.append(d)
+                        docs.append(d)
+                evidence_groups[q] = q_docs
+            except Exception as e:
+                logger.warning(f"[MultiQuery] 检索失败: {e}")
+                evidence_groups[q] = []
 
         # 注入 evidence_groups 到首个 doc，供 prompt 模板使用
         if docs:

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Clock, RefreshCw, Check, X, Play } from 'lucide-react'
 import { clsx } from 'clsx'
+import { authFetch } from '@/lib/authFetch'
 
 interface Schedule {
   id: string
@@ -31,7 +32,7 @@ export default function SchedulesPage() {
   async function loadSchedules() {
     setLoading(true)
     try {
-      const res = await fetch('/api/schedules')
+      const res = await authFetch('/api/schedules')
       const data = await res.json()
       setSchedules(data.schedules || [])
     } catch {
@@ -54,7 +55,7 @@ export default function SchedulesPage() {
     setSaving(true)
     setMsg(null)
     try {
-      const res = await fetch(`/api/schedules/${workflow}`, {
+      const res = await authFetch(`/api/schedules/${workflow}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ hour: editHour, minute: editMinute }),
@@ -79,7 +80,7 @@ export default function SchedulesPage() {
     setRunning(workflow)
     setMsg(null)
     try {
-      const res = await fetch(`/api/schedules/${workflow}/run`, { method: 'POST' })
+      const res = await authFetch(`/api/schedules/${workflow}/run`, { method: 'POST' })
       const data = await res.json()
       if (!res.ok || data.ok === false) {
         throw new Error(data.error || data.detail || '运行失败')
@@ -89,7 +90,7 @@ export default function SchedulesPage() {
         const s = data.summary
         setMsg({
           type: 'success',
-          text: `评测完成: hit=${(s.hit_rate * 100).toFixed(1)}% pass=${(s.pass_rate * 100).toFixed(1)}% rej=${(s.reject_rate * 100).toFixed(1)}%`,
+          text: `评测完成: top1=${(s.top1_accuracy * 100).toFixed(1)}% pass=${(s.pass_rate * 100).toFixed(1)}% rej=${(s.reject_accuracy * 100).toFixed(1)}%`,
         })
       } else {
         setMsg({ type: 'success', text: `${workflow} 已启动（job_id: ${data.job_id || '—'}）` })

@@ -147,8 +147,13 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
 # 共享辅助（纯函数）
 # =====================================================
 
-def make_initial_state(question: str, session_id: str, kb_id: str, messages: list) -> dict:
-    """构建初始 AgentState。"""
+def make_initial_state(question: str, session_id: str, kb_id: str, messages: list,
+                       guard_result: dict | None = None) -> dict:
+    """构建初始 AgentState。
+
+    guard_result: Input Guard 判定结果（允许/降级放行时携带，
+    供下游及后续 Tool Guard 读取风险标注；None = Guard 未启用）。
+    """
     return {
         "question": question.strip(),
         "kb_id": kb_id,
@@ -158,6 +163,7 @@ def make_initial_state(question: str, session_id: str, kb_id: str, messages: lis
         "messages": list(messages),
         "final_answer": "",
         "alerts": [],
+        "guard_result": guard_result or {},
         "_supervisor_loop_count": 0,
         "_plan_critiqued": False,
         "_plan_changed": False,

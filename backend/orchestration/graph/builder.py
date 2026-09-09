@@ -2,32 +2,36 @@
 builder.py — LangGraph StateGraph 构建
 
 Graph 拓扑:
-  START → Planner → Critique → Supervisor (node) → route_after_supervisor (routing)
-    ├─ returns Send[] → Skills (并行) → supervisor (loop)
-    └─ returns "reporter" → Reporter → END
+  START → Router → route_selector (条件边)
+    ├─ planner → critique → supervisor → skills → reporter → END
+    ├─ skill_executor → reporter → END
+    ├─ workflow_executor → reporter → END
+    └─ 域图节点 (自动发现) → END
 
-Skill 节点由 tool_registry 自动发现，不在此处硬编码。
-新增 Skill 只需创建包 + 注册，builder 无需修改。
+Skill 节点由 tool_registry 自动发现，域图节点由 domain_graph_registry 自动发现。
+新增 Skill/域图只需创建包 + 注册，builder 无需修改。
 """
 
 import asyncio
 
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 
-from backend.orchestration.state import AgentState
-from backend.orchestration.graph.router_node import router_node, route_selector
-from backend.orchestration.graph.direct_executor import skill_executor_node, workflow_executor_node
-from backend.observability.trace_middleware import trace_middleware
-from backend.agents.planner.planner import planner_node
-from backend.agents.planner.critique import critique_node
-from backend.orchestration.supervisor.scheduler import supervisor_node, route_after_supervisor
-from backend.agents.reporter.reporter import reporter_node
-from backend.orchestration.tool_registry import tool_registry
-from backend.shared.logger import logger
+# 触发域图自注册
+import backend.domains  # noqa: F401
 
 # 触发 Skill 包自注册（必须在 build_graph() 之前 import）
 import backend.skills  # noqa: F401
-
+from backend.agents.planner.critique import critique_node
+from backend.agents.planner.planner import planner_node
+from backend.agents.reporter.reporter import reporter_node
+from backend.observability.trace_middleware import trace_middleware
+from backend.orchestration.domain_registry import domain_graph_registry
+from backend.orchestration.graph.direct_executor import skill_executor_node, workflow_executor_node
+from backend.orchestration.graph.router_node import route_selector, router_node
+from backend.orchestration.state import AgentState, CSAgentState
+from backend.orchestration.supervisor.scheduler import route_after_supervisor, supervisor_node
+from backend.orchestration.tool_registry import tool_registry
+from backend.shared.logger import logger
 
 # 节点名 → 用户可读的阶段标签（与 trace_middleware.py 对齐）
 _NODE_LABELS = {
@@ -90,12 +94,12 @@ def build_graph():
 
     Skill 节点由 tool_registry 自动发现，不在此处硬编码节点名。
     """
-    wf = StateGraph(AgentState)
+    wf = StateGraph(CSAgentState)
 
     # ── 内置节点（永远不变，TraceMiddleware 自动记录 Span）──
     # 注意：router 不用中间件包装 —— MultiTierRouter.route() 内部已自建
     # 完整 span（含 rule/vector/llm 三层事件与 metrics）。双重包装会产生
-    # 同名重复 span（浏览器实测发现的 0ms+真实时长两条“路由决策”）。
+    # 同名重复 span（浏览器实测发现的 0ms+真实时长两条"路由决策"）。
     wf.add_node("router", router_node)
     wf.add_node("skill_executor", trace_middleware.wrap_sync_node("skill_executor", skill_executor_node))
     wf.add_node("workflow_executor", trace_middleware.wrap_sync_node("workflow_executor", workflow_executor_node))
@@ -104,30 +108,47 @@ def build_graph():
     wf.add_node("supervisor", trace_middleware.wrap_sync_node("supervisor", supervisor_node))
     wf.add_node("reporter", trace_middleware.wrap_sync_node("reporter", reporter_node))
 
+    # ── 域图节点（自动发现，每个域图自带 reporter，直接到 END）──
+    domains = domain_graph_registry.get_all()
+    for domain in domains.values():
+        wf.add_node(domain.node_name, trace_middleware.wrap_sync_node(domain.node_name, domain.adapter))
+        _NODE_LABELS[domain.node_name] = domain.label
+        logger.debug(f"[Graph] 自动注册域图节点: {domain.name} → {domain.node_name}")
+    if domains:
+        logger.info(f"[Graph] 已注册 {len(domains)} 个域图节点")
+
     # ── Skill 节点（自动发现 + TraceMiddleware 自动记录 Span）──
-    for name, func in tool_registry.get_skill_nodes().items():
+    skill_nodes = tool_registry.get_skill_nodes()
+    for name, func in skill_nodes.items():
         sync_func = _make_sync(func)
         traced_func = trace_middleware.wrap_sync_node(name, sync_func)
         wf.add_node(name, traced_func)
         wf.add_edge(name, "supervisor")  # 完成 → 回到 Supervisor
-        logger.info(f"[Graph] 自动注册 Skill 节点: {name}")
+        logger.debug(f"[Graph] 自动注册 Skill 节点: {name}")
+    if skill_nodes:
+        logger.info(f"[Graph] 已注册 {len(skill_nodes)} 个 Skill 节点")
 
     # ── 边 ────────────────────────────────────────
-    # 2026-08-11：Router 在入口（V2 三路分流）
     wf.add_edge(START, "router")
-    wf.add_conditional_edges(
-        "router",
-        route_selector,
-        {
-            "planner": "planner",
-            "skill_executor": "skill_executor",  # direct: 跳过 Planner
-            "workflow_executor": "workflow_executor",  # workflow: 跳过 Planner
-        },
-    )
+
+    # 条件边映射：内置路径 + 域图自动发现
+    edge_map = {
+        "planner": "planner",
+        "skill_executor": "skill_executor",
+        "workflow_executor": "workflow_executor",
+    }
+    for domain in domains.values():
+        edge_map[domain.node_name] = domain.node_name
+
+    wf.add_conditional_edges("router", route_selector, edge_map)
 
     # V2: skill/workflow executor 直接到 reporter
     wf.add_edge("skill_executor", "reporter")
     wf.add_edge("workflow_executor", "reporter")
+
+    # 域图自带 reporter，直接到 END
+    for domain in domains.values():
+        wf.add_edge(domain.node_name, END)
 
     wf.add_edge("planner", "critique")
 
@@ -146,7 +167,7 @@ def build_graph():
 
     skill_count = len(tool_registry.get_skill_nodes())
     logger.info(
-        f"[Graph] 图编译完成 (内置7节点+Router/executors + {skill_count} Skill = {7 + skill_count}节点)"
+        f"[Graph] 图编译完成 (内置9节点+Router/executors + {skill_count} Skill = {9 + skill_count}节点)"
     )
     return wf.compile()
 

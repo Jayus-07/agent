@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from backend.config import DEFAULT_KEYWORDS, SIGNAL_RULES
+from backend.infra.sqlite import get_connection
 from backend.shared.logger import logger
 
 SCHEMA_SQL = """
@@ -47,9 +48,7 @@ class KeywordRuleStore:
         self._init_db()
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return get_connection(self._db_path, row_factory=sqlite3.Row)
 
     def _init_db(self) -> None:
         os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
@@ -67,7 +66,6 @@ class KeywordRuleStore:
         count = conn.execute("SELECT COUNT(*) FROM keyword_rules").fetchone()[0]
         if count == 0:
             self._seed(conn)
-        conn.close()
 
     # 种子数据 → doc_type 分配规则
     _SEED_DOC_TYPE_MAP = {
@@ -119,7 +117,6 @@ class KeywordRuleStore:
         rows = conn.execute(
             "SELECT keyword, doc_type, category, weight FROM keyword_rules WHERE enabled=1 ORDER BY weight DESC"
         ).fetchall()
-        conn.close()
 
         # 按 doc_type 分组（词串 + 带权重）
         by_doc_type: dict[str, list[str]] = {}
@@ -201,7 +198,6 @@ class KeywordRuleStore:
             f"SELECT * FROM keyword_rules {where} ORDER BY doc_type, weight DESC, keyword",
             params,
         ).fetchall()
-        conn.close()
         return [dict(r) for r in rows]
 
     def list_doc_types(self) -> list[str]:
@@ -210,7 +206,6 @@ class KeywordRuleStore:
         rows = conn.execute(
             "SELECT DISTINCT doc_type FROM keyword_rules ORDER BY doc_type"
         ).fetchall()
-        conn.close()
         return [r["doc_type"] for r in rows]
 
     def list_categories(self) -> list[str]:
@@ -219,7 +214,6 @@ class KeywordRuleStore:
         rows = conn.execute(
             "SELECT DISTINCT category FROM keyword_rules WHERE category != '' ORDER BY category"
         ).fetchall()
-        conn.close()
         return [r["category"] for r in rows]
 
     def upsert(self, keyword: str, doc_type: str = "general", category: str = "", weight: int = 1, enabled: int = 1) -> dict:
@@ -242,7 +236,6 @@ class KeywordRuleStore:
                     (keyword, doc_type, category, weight, enabled),
                 )
             conn.commit()
-            conn.close()
         self._cache = None  # 失效缓存
         return {"ok": True, "keyword": keyword}
 
@@ -261,7 +254,6 @@ class KeywordRuleStore:
             conn = self._conn()
             conn.execute("DELETE FROM keyword_rules WHERE keyword = ?", (keyword,))
             conn.commit()
-            conn.close()
         self._cache = None
         return {"ok": True}
 
@@ -273,7 +265,6 @@ class KeywordRuleStore:
                 (enabled, keyword),
             )
             conn.commit()
-            conn.close()
         self._cache = None
         return {"ok": True, "enabled": bool(enabled)}
 

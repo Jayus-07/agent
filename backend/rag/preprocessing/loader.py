@@ -1,8 +1,8 @@
 """loader.py — 文档加载入口（委托新流水线 parse_and_chunk 分块）。"""
-import hashlib
 import os
 
-from backend.config import DEFAULT_KB_ID
+from backend.config import DEFAULT_KB_ID, DOCS_DIRECTORY
+from backend.rag.indexing.doc_id import derive_doc_id_from_path
 from backend.shared.logger import logger
 
 
@@ -37,11 +37,8 @@ def load_documents_from_directory(directory_path: str, chunk_size=None, chunk_ov
             try:
                 chunks = parse_and_chunk(file_path)
                 rel_path = os.path.relpath(file_path, directory_path).replace("\\", "/")
-                # 与 indexer._derive_doc_id 同源：统一 md5(basename)[:10] 协议（P0-2 根治），
-                # 避免 BM25 与 registry/Chroma 的 doc_id 分裂导致删除后残留
-                doc_id = hashlib.md5(
-                    os.path.basename(file).encode("utf-8")
-                ).hexdigest()[:10]
+                # 与 indexer._derive_doc_id 同源：命名空间化 (kb_id|department|basename) 协议
+                doc_id = derive_doc_id_from_path(file_path, DOCS_DIRECTORY)
                 for c in chunks:
                     c.metadata["kb_id"] = kb_id
                     c.metadata["doc_id"] = doc_id

@@ -13,6 +13,12 @@ from backend.observability import tracer as tracer_mod
 from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401  (re-export for backwards compat)
 
 
+def _flush():
+    """Phase 3 异步写入后，强制同步刷到 SQLite（测试用）。"""
+    from backend.observability.trace_writer import get_trace_write_queue
+    get_trace_write_queue().flush()
+
+
 def test_subscribe_fires_on_span_end(fresh_collector):
     events = []
 
@@ -151,6 +157,7 @@ def test_listener_works_alongside_existing_tracer_features(fresh_collector):
     # 已有 API 仍工作
     # 2d627d7: list() 只在 finish() 后从 SQLite 读取；先 finish 再 list
     fresh_collector.finish(trace, "answer", 100, "m")
+    _flush()
     records = fresh_collector.list()
     assert len(records) == 1
     assert records[0]["session_id"] == "s1"  # list() 返回 dict 而非 dataclass

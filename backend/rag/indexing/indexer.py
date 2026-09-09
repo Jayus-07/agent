@@ -216,7 +216,7 @@ class IncrementalIndexer:
             row = registry.get(path, {})
             doc_id = row.get("doc_id", "")
             if doc_id:
-                self._remove_document(doc_id)
+                self._remove_document(doc_id, file_path=path)
             self.registry.mark_deleted(path)
             logger.info(f"[DELETED] {os.path.basename(path)}")
 
@@ -225,7 +225,7 @@ class IncrementalIndexer:
             row = registry.get(path, {})
             doc_id = row.get("doc_id", "")
             if doc_id:
-                self._remove_document(doc_id)
+                self._remove_document(doc_id, file_path=path)
             self._index_file(path)
             logger.info(f"[MODIFIED] {os.path.basename(path)}")
 
@@ -326,6 +326,9 @@ class IncrementalIndexer:
             ChunkingEmptyError: 解析或 chunking 产出 0 chunk（P1-4）
         """
         ext = os.path.splitext(file_path)[1].lower()
+        # department 必须按文件路径派生，不能用 self.department：批量 sync 时
+        # indexer 是单实例跨多部门构建的，self.department 只是构造默认值。
+        department = self._derive_department(file_path)
 
         # ── ① load（文件读取/元数据收集）──
         load_span = trace_collector.start_span(
@@ -509,7 +512,7 @@ class IncrementalIndexer:
             "source_file": os.path.basename(file_path),
             "file_path": file_path,
             "kb_id": kb_id,  # 用派生的 kb_id 参数，而非 self.kb_id（否则 kb 隔离失效）
-            "department": self.department,
+            "department": department,  # 同上：用路径派生值，否则部门隔离失效
             "doc_type": "general",
             "person_names": "",
         }
@@ -568,7 +571,7 @@ class IncrementalIndexer:
             ch.metadata["person_names"] = person_val
             ch.metadata["kb_id"] = kb_id_val
             ch.metadata["business_domain"] = domain_val
-            ch.metadata["department"] = self.department
+            ch.metadata["department"] = department
             # 以 indexer 派生的 doc_id 为权威，覆盖 loader 注入的值，
             # 保证 chroma chunk.doc_id 与 doc_registry/chunk_store 完全一致
             # （避免 loader 与 indexer 两路派生分歧导致评测 doc_id 失配）。
@@ -616,7 +619,7 @@ class IncrementalIndexer:
                  "section_title": ch.metadata.get("section_title", ""),
                  "doc_type": doc_type_val,
                  "kb_id": kb_id_val,
-                 "department": self.department,
+                 "department": department,
                  "simulated_questions": ch.metadata.get("simulated_questions", [])}
                 for i, ch in enumerate(chunks)
             ])
@@ -741,7 +744,7 @@ class IncrementalIndexer:
             logger.error(f"Chunk 写入失败: {e}")
             trace_collector.end_span(vdb_span, status="error",
                 metrics={"error": str(e)[:200]})
-            self._remove_document(doc_id)
+            self._remove_document(doc_id, file_path=file_path)
             raise
 
         # ── ⑤.5 BM25 同步（P0-1：上传/重索引后立即同步，避免"上传成功但 BM25 未更新"）──
@@ -749,12 +752,14 @@ class IncrementalIndexer:
         # 注意：chunk metadata 需含 doc_id/source_file 等字段（BM25 删除/去重依赖），_enrich 与上方注入已提供。
         if self.bm25_store is not None and chunks:
             try:
-                self.bm25_store.add_documents(chunks, k=BM25_SEARCH_K)
+                self.bm25_store.replace_documents(
+                    chunks, k=BM25_SEARCH_K, doc_id=doc_id, file_path=file_path,
+                )
                 logger.info(
-                    f"[BM25] 文档已同步 {len(chunks)} chunks: {os.path.basename(file_path)}"
+                    f"[BM25] 文档已替换 {len(chunks)} chunks: {os.path.basename(file_path)}"
                 )
             except Exception as e:
-                logger.error(f"[BM25] 同步失败 (doc_id={doc_id}): {e}")
+                logger.error(f"[BM25] 替换同步失败 (doc_id={doc_id}): {e}")
 
         # ── ⑨ registry（始终执行，含 metadata 用于操作日志追溯）──
         # P1-4：阻止 chunk_count=0 的"假成功"入库。
@@ -797,7 +802,7 @@ class IncrementalIndexer:
                 },
             )
         except Exception:
-            self._remove_document(doc_id)
+            self._remove_document(doc_id, file_path=file_path)
             raise
 
         # P2-2:返回 dict 给 _index_file wrapper,消除 reindex_file 反查 registry 的需要
@@ -963,7 +968,14 @@ class IncrementalIndexer:
                     'classify', parent_id=parent_span_id, name="Classify",
                     type="llm", kind=SpanKind.INDEX_CLASSIFY.value,
                 )
-            doc_type, confidence, cls_detail = classify_with_confidence(full_text, filename=fname, file_path=fpath, return_detail=True)
+            try:
+                doc_type, confidence, cls_detail = classify_with_confidence(full_text, filename=fname, file_path=fpath, return_detail=True)
+            except Exception:
+                # 异常时也要关闭 span，避免 classify 泄漏（P0-2）
+                if parent_span_id:
+                    trace_collector.end_span(classify_span,
+                        metrics={"error": "classify_failed"}, status="error")
+                raise
             if parent_span_id:
                 trace_collector.end_span(classify_span, metrics={"doc_type": doc_type, "confidence": round(confidence, 3)},
                     output=locals().get("cls_detail", {}))
@@ -1023,22 +1035,17 @@ class IncrementalIndexer:
             if confidence < 0.3 and doc_type == "general":
                 try:
                     from backend.config.rag import DOC_LLM_MODEL
-                    doc_type_prompt = f"""请判断以下文档的类型，从以下 14 种类型中选择一个最匹配的：
-policy(制度), sop(操作流程), ad_policy(广告政策), compliance(合规), legal(法律),
-contract_template(合同模板), security(安全), financial(财务), customer_data(客户数据),
-product_spec(商品规格), listing(商品上架), faq(常见问题), training(培训), general(通用)
-
-只输出类型名，不要解释。
-
-文档开头：
-{full_text[:1500]}"""
+                    from backend.prompts.service import prompt_service
+                    doc_type_prompt = prompt_service.render_sync(
+                        "rag.indexing.doc_type", full_text=full_text[:1500],
+                    ).text
                     if DOC_LLM_MODEL:
                         from langchain_ollama import ChatOllama
                         llm_l = ChatOllama(model=DOC_LLM_MODEL, temperature=0.0, num_ctx=2048, request_timeout=20)
                         llm_type = llm_l.invoke(doc_type_prompt).content.strip()
                     else:
-                        from backend.infra.llm import llm
-                        llm_type = llm.invoke(doc_type_prompt).content.strip()
+                        from backend.rag.preprocessing.llm_enrichment import invoke_metadata_llm
+                        llm_type = invoke_metadata_llm(doc_type_prompt).content.strip()
                     valid_types = {"policy", "sop", "ad_policy", "compliance", "legal",
                                    "contract_template", "security", "financial", "customer_data",
                                    "product_spec", "listing", "faq", "training", "general"}
@@ -1049,29 +1056,21 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
                 except Exception as e:
                     logger.warning(f"[Classify] LLM 复验失败: {e}")
 
-            # 规则关键词 + 复杂度 + LLM关键词（在最终 doc_type 确定之后）
+            # 规则关键词 + 复杂度（在最终 doc_type 确定之后）
+            # extract_doc_keywords_typed（含 LLM 调用）与 extract_entities
+            # 已移入下方 gather 并发执行——原先在主线程串行阻塞，P2-2 的
+            # "并行"名不副实（关键词 LLM 调用先于 gather 发生）。
             from backend.rag.preprocessing.keyword import extract_rule_keywords
             rule_kws_preview = extract_rule_keywords(full_text, doc_type=doc_type)
             complexity = analyze_complexity(full_text, len(rule_kws_preview), confidence)
-            kw_result = extract_doc_keywords_typed(full_text, doc_type=doc_type,
-                                                    confidence=confidence, complexity=complexity)
             person_names = extract_person_names(full_text)
-            entities_nested = extract_entities(full_text)
         except Exception as e:
             logger.warning(f"[Metadata] 6步预处理失败,fallback general: {e}")
             return {"doc_type": "general"}
 
-        # 合并关键词（兼容旧字段，新字段已是对象数组）
-        kws_rule_objs = kw_result.rule_keywords  # [{"word": ..., "source": "rule"}, ...]
-        kws_llm_objs = kw_result.llm_keywords    # [{"word": ..., "source": "llm"}, ...]
-        kws_all_words = [k["word"] for k in kws_rule_objs + kws_llm_objs]
-
-        # LLM 决策信息
-        llm_decision = kw_result.llm_decision if hasattr(kw_result, 'llm_decision') else {}
-
-        # ⑧ 文档摘要 + 关键词合并（自适应采样）+ P2-2: 并发执行摘要/关键词/实体
+        # ⑧ 文档摘要 + 关键词 + 实体 — 三路并发（关键词 LLM 调用放线程池，
+        # 与摘要 LLM 调用/实体抽取真正并行；总耗时 = max 而非 sum）
         summary = ""
-        need_llm_keywords = bool(kws_llm_objs)
         need_llm_summary = len(full_text) >= 1000  # <1KB 全文当摘要，不调 LLM
 
         llm_generate_span = None
@@ -1083,98 +1082,91 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
 
         # LLM 未调用时为空列表（向后兼容；非 LLM 路径不生成问题）
         questions_by_chunk: list[list[str]] = []
-        
-        # F1: 旧合并调用路径（enrich_metadata_llm 一次性产出 keywords/summary/entities/questions）
-        # 已被上方并行任务取代；enriched 保持 None 使合并分支为死分支，保留待后续清理。
-        enriched: dict | None = None
-        if need_llm_keywords or need_llm_summary:
-            # P2-2: 并发执行三个重型任务
-            # F1: build_llm_summary 定义于 metadata.py（带缓存），此前导入名单遗漏导致 NameError
-            from backend.rag.preprocessing.metadata import (
-                enrich_metadata_llm, _extract_first_sentences, build_llm_summary,
-            )
-            sample = _sample_for_summary(full_text)
-            
-            # 定义待执行的 LLM 任务
-            async def task_summary():
-                """LLM 摘要生成"""
-                return await build_llm_summary(sample) if len(sample) >= 2000 else (_extract_first_sentences(sample, 2), [])
-            
-            async def task_keywords():
-                """LLM 关键词提取（已在前一步调用过 extract_doc_keywords_typed）"""
-                return kw_result.llm_keywords, kw_result.llm_tokens
-            
-            async def task_entities():
-                """实体抽取"""
-                return extract_entities(full_text)
-            
-            # 并发执行（只调用有任务的）
-            tasks = []
-            if need_llm_summary:
-                tasks.append(task_summary())
-            if need_llm_keywords:
-                tasks.append(task_keywords())
-            tasks.append(task_entities())  # 始终执行实体抽取
-            
-            # P2-2: 并行执行，总耗时 = max(各任务耗时) 而非 sum
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # 解析结果
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logger.warning(f"[Metadata] 并发任务失败 (task={i}): {result}")
-                    continue
-                
-                if i == 0 and need_llm_summary:  # 摘要任务
-                    summ, persons = result
-                    if summ:
-                        summary = summ
-                        if not person_names:
-                            person_names = persons
-                elif i == 1 and need_llm_keywords:  # 关键词任务
-                    kws_llm_objs, tokens = result
-                    kw_result.llm_keywords = kws_llm_objs
-                    kw_result.llm_tokens = tokens
-                elif i == 2 or (len(tasks) > 2 and i >= 2):  # 实体任务
-                    entities_nested = result
-            
-            if llm_generate_span:
-                total_time = sum([s.duration_ms for s in trace_collector.current().spans if hasattr(s, 'duration_ms')])
-                trace_collector.end_span(llm_generate_span, status="success",
-                    metrics={
-                        "strategy": "parallel", "doc_size": len(full_text),
-                        "need_llm_summary": need_llm_summary,
-                        "need_llm_keywords": need_llm_keywords,
-                        "parallel_execution": True,
-                        "estimated_speedup": "3x (summary+keywords+entities concurrent)",
-                    })
 
-            if enriched:
-                merged_kws = enriched.get("keywords", [])
-                merged_summary = enriched.get("summary", "")
-                merged_entities = enriched.get("entities", [])
-                merged_tokens = enriched.get("tokens", {})
-                questions_by_chunk = enriched.get("questions_by_chunk", [])
-                if merged_kws:
-                    kws_llm_objs = [{"word": w, "source": "llm"} for w in merged_kws]
-                    kws_all_words = [k["word"] for k in kws_rule_objs + kws_llm_objs]
-                    kw_result.llm_tokens = merged_tokens
-                if merged_summary:
-                    summary = merged_summary
-                if merged_entities and not person_names:
-                    person_names = [e.get("name", "") for e in merged_entities if e.get("name")]
-                logger.info(f"[Enrich Merged] 合并调用成功: {len(merged_kws)}kw + summary + {len(questions_by_chunk)}chunks问题")
-            # F1: enriched 恒为 None 时不再走合并分支——原 else 的"合并失败"警告
-            # 在合并调用从未发起时会误报，已移除；真实失败由上方并行任务的
-            # "[Metadata] 并发任务失败" 留痕。
-        else:
-            if llm_generate_span:
-                trace_collector.end_span(llm_generate_span, status="skipped",
-                    metrics={
-                        "strategy": "skipped",
-                        "reason": "doc < 2048 bytes, use full text as summary",
-                        "doc_size": len(full_text), "threshold_bytes": 2048,
-                    })
+        # F1: 旧合并调用路径（enrich_metadata_llm 一次性产出 keywords/summary/entities/questions）
+        # 已被并发任务取代；enriched 保持 None 使合并分支为死分支，保留待后续清理。
+        enriched: dict | None = None
+        # P2-2: 并发执行三个重型任务（原 need_llm_keywords/need_llm_summary 条件
+        # 判断在关键词提取之后才有值，现关键词提取本身就是任务之一，无条件并发）
+        from backend.rag.preprocessing.metadata import (
+            enrich_metadata_llm, _extract_first_sentences, build_llm_summary,
+        )
+        from backend.rag.preprocessing.keyword import KeywordResult as _KwResult
+        sample = _sample_for_summary(full_text)
+
+        async def task_summary():
+            """LLM 摘要生成（<2KB 采样走抽取式，不调 LLM）"""
+            return await build_llm_summary(sample) if len(sample) >= 2000 else (_extract_first_sentences(sample, 2), [])
+
+        async def task_keywords():
+            """规则+LLM 关键词提取（LLM 调用放线程池，不阻塞事件循环）"""
+            return await asyncio.to_thread(
+                extract_doc_keywords_typed, full_text,
+                doc_type=doc_type, confidence=confidence, complexity=complexity,
+            )
+
+        # 并行执行：总耗时 = max(各任务耗时) 而非 sum；
+        # 解包顺序与 gather 参数顺序一一对应
+        summary_res, kw_res, entities_res = await asyncio.gather(
+            task_summary(),
+            task_keywords(),
+            asyncio.to_thread(extract_entities, full_text),
+            return_exceptions=True,
+        )
+
+        if isinstance(summary_res, Exception):
+            logger.warning(f"[Metadata] 并发任务失败 (task=summary): {summary_res}")
+            summary_res = ("", [])
+        if isinstance(kw_res, Exception):
+            logger.warning(f"[Metadata] 并发任务失败 (task=keywords): {kw_res}")
+            kw_res = _KwResult()
+        if isinstance(entities_res, Exception):
+            logger.warning(f"[Metadata] 并发任务失败 (task=entities): {entities_res}")
+            entities_res = {}
+
+        summary, persons = summary_res
+        if summary and not person_names:
+            person_names = persons
+        kw_result = kw_res
+        entities_nested = entities_res
+
+        # 合并关键词（兼容旧字段，新字段已是对象数组）
+        kws_rule_objs = kw_result.rule_keywords  # [{"word": ..., "source": "rule"}, ...]
+        kws_llm_objs = kw_result.llm_keywords    # [{"word": ..., "source": "llm"}, ...]
+        kws_all_words = [k["word"] for k in kws_rule_objs + kws_llm_objs]
+
+        # LLM 决策信息
+        llm_decision = kw_result.llm_decision if hasattr(kw_result, 'llm_decision') else {}
+        need_llm_keywords = bool(kws_llm_objs)
+
+        if llm_generate_span:
+            trace_collector.end_span(llm_generate_span, status="success",
+                metrics={
+                    "strategy": "parallel", "doc_size": len(full_text),
+                    "need_llm_summary": need_llm_summary,
+                    "need_llm_keywords": need_llm_keywords,
+                    "parallel_execution": True,
+                    "estimated_speedup": "3x (summary+keywords+entities concurrent)",
+                })
+
+        if enriched:
+            merged_kws = enriched.get("keywords", [])
+            merged_summary = enriched.get("summary", "")
+            merged_entities = enriched.get("entities", [])
+            merged_tokens = enriched.get("tokens", {})
+            questions_by_chunk = enriched.get("questions_by_chunk", [])
+            if merged_kws:
+                kws_llm_objs = [{"word": w, "source": "llm"} for w in merged_kws]
+                kws_all_words = [k["word"] for k in kws_rule_objs + kws_llm_objs]
+                kw_result.llm_tokens = merged_tokens
+            if merged_summary:
+                summary = merged_summary
+            if merged_entities and not person_names:
+                person_names = [e.get("name", "") for e in merged_entities if e.get("name")]
+            logger.info(f"[Enrich Merged] 合并调用成功: {len(merged_kws)}kw + summary + {len(questions_by_chunk)}chunks问题")
+        # F1: enriched 恒为 None 时不再走合并分支——原 else 的"合并失败"警告
+        # 在合并调用从未发起时会误报，已移除；真实失败由上方并发任务的
+        # "[Metadata] 并发任务失败" 留痕。
 
         # 兜底：<1KB 全文当摘要 / 没生成出来的剥 markdown 取前几句
         if not summary and len(full_text) <= 1000:
@@ -1228,7 +1220,7 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
             "metadata_fingerprint": _metadata_fp,
             "doc_version": 1,
             "kb_version": "v1",
-            "department": self.department,
+            "department": base_meta.get("department") or self.department,
             "questions_by_chunk": questions_by_chunk,
         }
 
@@ -1272,10 +1264,10 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
                     logger.warning(
                         f"[REINDEX] 版本快照失败，兑底删除旧数据: {e}"
                     )
-                    self._remove_document(old_doc_id)
+                    self._remove_document(old_doc_id, file_path=file_path)
                     self.registry.mark_deleted_by_doc_id(old_doc_id)
             else:
-                self._remove_document(old_doc_id)
+                self._remove_document(old_doc_id, file_path=file_path)
 
                 # 按 doc_id 软删所有行（修复重复路径导致的残余 active 行）
                 deleted = self.registry.mark_deleted_by_doc_id(old_doc_id)
@@ -1340,8 +1332,8 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
 
     # ---- 删除 ----
 
-    def _remove_document(self, doc_id: str):
-        """从向量库 + chunk_store 中删除文档的所有数据。"""
+    def _remove_document(self, doc_id: str, file_path: str = ""):
+        """从向量库 + chunk_store + BM25 中删除文档的所有数据。"""
         if not doc_id:
             return
         try:
@@ -1357,6 +1349,13 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
             get_chunk_store().delete_by_doc_id(doc_id)
         except Exception as e:
             logger.warning(f"删除 chunk_store 失败 (doc_id={doc_id}): {e}")
+        if self.bm25_store is not None:
+            try:
+                self.bm25_store.remove_documents(
+                    [doc_id], file_paths=[file_path] if file_path else None,
+                )
+            except Exception as e:
+                logger.warning(f"删除 BM25 失败 (doc_id={doc_id}): {e}")
 
     def _derive_doc_id(self, file_path: str, file_hash: str, kb_id: str) -> str:
         """生成稳定且按 (知识库, 部门, 子目录) 严格隔离的文档 ID。
@@ -1387,7 +1386,7 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
         _, _, subpath = parse_kb_dept_subpath_from_path(file_path, str(self.docs_dir))
         return derive_doc_id(
             kb_id=kb_id,
-            department=self.department,
+            department=self._derive_department(file_path),
             basename=os.path.basename(file_path),
             subpath=subpath,
         )
@@ -1404,6 +1403,18 @@ product_spec(商品规格), listing(商品上架), faq(常见问题), training(�
         if len(parts) > 1:
             return parts[0]
         return "default"
+
+    def _derive_department(self, file_path: str) -> str:
+        """从文件路径推导 department（第二级子目录），与 doc_id 派生同源。
+
+        批量 sync 时 indexer 是单实例跨多部门构建的，self.department 只是构造默认值
+        （pipeline 未传即 "general"）；用它会把所有文档打成同一部门，既破坏部门隔离
+        过滤，又让 md5(kb|dept|basename) 算出错误的 doc_id。
+        """
+        _, department, _ = parse_kb_dept_subpath_from_path(
+            file_path, str(self.docs_dir)
+        )
+        return department or self.department
 
 
 # Delta 已迁至 models.py

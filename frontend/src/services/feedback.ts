@@ -1,4 +1,6 @@
 // Feedback service — 用户 👍/👎 反馈（2026-08-11 P1 反馈循环）
+import { authFetch } from '@/lib/authFetch'
+
 const BASE = '/api/feedback'
 
 export interface FeedbackPayload {
@@ -13,7 +15,7 @@ export interface FeedbackPayload {
 export const feedbackService = {
   send: async (payload: FeedbackPayload) => {
     try {
-      const res = await fetch(BASE, {
+      const res = await authFetch(BASE, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -25,7 +27,7 @@ export const feedbackService = {
   },
   stats: async (days: number = 7) => {
     try {
-      const res = await fetch(`${BASE}/stats?days=${days}`)
+      const res = await authFetch(`${BASE}/stats?days=${days}`)
       return await res.json()
     } catch (e) {
       return { total: 0, positive: 0, negative: 0, error: String(e) }

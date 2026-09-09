@@ -124,6 +124,15 @@ class StartupSettings(BaseModel):
     llm: LLMSettings
     auth: AuthSettings
     alerts: AlertSettings
+    environment: str = "development"
+
+
+_VALID_ENVIRONMENTS = {"development", "testing", "staging", "production"}
+
+
+def _normalize_env(raw: str) -> str:
+    v = raw.strip().lower()
+    return v if v in _VALID_ENVIRONMENTS else "production"
 
 
 def _build_settings() -> StartupSettings:
@@ -159,6 +168,7 @@ def _build_settings() -> StartupSettings:
             min_level=_env("ALERT_MIN_LEVEL", "warn").lower(),
             cooldown=_env_float("ALERT_WEBHOOK_COOLDOWN", 300.0),
         ),
+        environment=_normalize_env(_env("ENVIRONMENT", "development")),
     )
 
 
@@ -212,6 +222,34 @@ def validate_startup_settings() -> List[str]:
     if s.alerts.webhook_url and not s.alerts.webhook_url.startswith(("http://", "https://")):
         warnings.append(
             f"ALERT_WEBHOOK_URL={s.alerts.webhook_url!r} 不是 http(s) URL，webhook 推送将失败"
+        )
+
+    # ── production fatal ──
+    _is_prod = s.environment == "production"
+    _fatal: List[str] = []
+
+    if _is_prod and s.auth.allow_unauthenticated:
+        _fatal.append(
+            "ENVIRONMENT=production + ALLOW_UNAUTHENTICATED=true：生产环境禁止豁免认证。"
+            "请设置 ENVIRONMENT=development 或关闭 ALLOW_UNAUTHENTICATED。"
+        )
+
+    if _is_prod and not s.auth.api_key:
+        _fatal.append(
+            "ENVIRONMENT=production + API_KEY 未配置：生产环境必须配置 API_KEY。"
+        )
+
+    if _is_prod and s.auth.api_key and len(s.auth.api_key) < 16:
+        _fatal.append(
+            f"ENVIRONMENT=production + API_KEY 长度仅 {len(s.auth.api_key)} 位"
+            "（生产环境要求 ≥ 16 位）。"
+        )
+
+    if _fatal:
+        for f in _fatal:
+            logger.error(f"[Startup 校验] FATAL: {f}")
+        raise SettingsValidationError(
+            "生产环境配置校验失败:\n" + "\n".join(f"  - {f}" for f in _fatal)
         )
 
     for w in warnings:

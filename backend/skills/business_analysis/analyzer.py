@@ -6,18 +6,12 @@ skills/business_analysis/analyzer.py — 业务分析核心
 """
 import json
 import re
-from pathlib import Path
 from typing import Any
 
 from backend.infra.llm import llm
 from backend.shared.logger import logger
 from backend.skills.sql.models import SQLResult
 from backend.skills.business_analysis.models import BusinessInsight
-
-# 加载 Prompt 模板
-_PROMPT_PATH = Path(__file__).parent / "prompts" / "business_analysis.md"
-with open(_PROMPT_PATH, encoding="utf-8") as _f:
-    BUSINESS_ANALYSIS_PROMPT = _f.read()
 
 
 def _truncate_rows(rows: list[dict[str, Any]], max_rows: int = 20) -> str:
@@ -84,11 +78,13 @@ class BusinessAnalyzer:
         data_str = _truncate_rows(sql_result.rows)
         knowledge_str = rag_knowledge or "（无额外业务知识）"
 
-        prompt = BUSINESS_ANALYSIS_PROMPT.format(
+        from backend.prompts.service import prompt_service
+        prompt = prompt_service.render_sync(
+            "skill.business_analysis",
             columns=columns_str,
             sql_data=data_str,
             knowledge=knowledge_str,
-        )
+        ).text
 
         try:
             resp = llm.invoke(prompt)

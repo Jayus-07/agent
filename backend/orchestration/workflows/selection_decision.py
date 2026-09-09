@@ -142,10 +142,9 @@ class SelectionDecision:
         fallback = {"pain_points": [], "source": "none",
                     "note": "痛点推断失败，差异化分析将仅基于结构化数据"}
         try:
+            from backend.prompts.service import prompt_service
             data = _llm_json([
-                SystemMessage(content=(
-                    "你是电商用户研究员。基于给定商品的标题/卖点/评分，推断该品类"
-                    "用户最可能的痛点。只回复 JSON 数组（字符串列表，最多5项）。")),
+                SystemMessage(content=prompt_service.get_template_sync("selection_decision.review_pain")),
                 HumanMessage(content=material),
             ])
             pains = [str(x) for x in data][:5]
@@ -169,12 +168,9 @@ class SelectionDecision:
         conservative = {"verdict": "no_go", "gaps": [], "heatmap": [],
                         "reason": "差异化分析不可用（LLM 失败），保守拒绝"}
         try:
+            from backend.prompts.service import prompt_service
             data = _llm_json([
-                SystemMessage(content=(
-                    "你是选品差异化分析师。基于市场指标、竞品画像与痛点列表，判断是否"
-                    "存在差异化切入点。只回复 JSON："
-                    '{"verdict": "go"或"no_go", "gaps": ["未被满足的需求"], '
-                    '"heatmap": [{"pain": "痛点", "severity": 1到5}], "reason": "50字以内"}')),
+                SystemMessage(content=prompt_service.get_template_sync("selection_decision.differentiation")),
                 HumanMessage(content=json.dumps(material, ensure_ascii=False, default=str)),
             ])
             if data.get("verdict") not in ("go", "no_go"):

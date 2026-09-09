@@ -10,8 +10,9 @@ from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
 
 from backend.rag.preprocessing.metadata import build_all_metadata_async
 from backend.rag.preprocessing.loader import load_documents_from_directory
+from backend.rag.indexing.doc_id import derive_doc_id_from_path
 from backend.rag.base import CustomRetriever
-from backend.rag.retrieval.bm25_store import BM25Store, source_files_out_of_sync
+from backend.rag.retrieval.bm25_store import BM25Store, source_files_out_of_sync, compute_content_hash
 from backend.rag.chain import RAGChain
 from backend.config import (
     EMBEDDING_MODEL_PATH,
@@ -38,6 +39,7 @@ class RAGPipeline:
         self.vectordb = None
         self.doc_db = None
         self.chunk_retriever = None
+        self._seen_sessions: set[str] = set()
         self.bm25 = None
         self.bm25_store = None  # BM25Store 引用，供运行时删除/重建索引
         self._person_to_doc_cache = {}
@@ -93,13 +95,18 @@ class RAGPipeline:
 
     def _build_doc_index(self):
         self.doc_map = {}
+        all_file_paths = set()
         for d in self.docs:
             fname = d.metadata["file_path"]
+            all_file_paths.add(fname)
             name = os.path.basename(fname)
             if name not in self.doc_map:
                 self.doc_map[name] = []
             self.doc_map[name].append(d.page_content)
-        logger.info(f"文档级索引: {len(self.doc_map)} 个文档")
+        logger.info(
+            f"文档级索引: {len(self.doc_map)} 个唯一文档名, "
+            f"{len(all_file_paths)} 个源文件"
+        )
 
     def _build_metadata(self):
         logger.info("开始异步批量构建元数据...")
@@ -175,7 +182,11 @@ class RAGPipeline:
             logger.info(f"增量索引: {result}")
             return True
         except Exception as e:
-            logger.warning(f"增量索引失败（{type(e).__name__}: {e}），将回退全量重建；如为 NameError 请检查 indexer 变量作用域")
+            logger.warning(
+                f"增量索引失败（{type(e).__name__}: {e}），将回退全量重建；"
+                f"如为 NameError 请检查 indexer 变量作用域",
+                exc_info=True,
+            )
             if 'registry' in locals():
                 try:
                     registry.clear()
@@ -225,9 +236,7 @@ class RAGPipeline:
 
         for file_path, (file_hash, _, _) in disk_files.items():
             kb_id = indexer._derive_kb_id(file_path)
-            doc_id = hashlib.md5(
-                os.path.basename(file_path).encode()
-            ).hexdigest()[:10]
+            doc_id = derive_doc_id_from_path(file_path, DOCS_DIRECTORY)
 
             # 从 chunk 级向量库查找该文件的所有 chunk ID
             try:
@@ -244,7 +253,6 @@ class RAGPipeline:
             # GET /documents/{id}/chunks 返回空）
             try:
                 from backend.rag.indexing.chunk_store import get_chunk_store
-                from backend.config import DOC_REGISTRY_PATH  # noqa: F401
                 chunk_docs = chunk_data.get("documents") or []
                 chunk_metas = chunk_data.get("metadatas") or [{}] * len(chunk_docs)
                 cs = get_chunk_store()
@@ -296,19 +304,29 @@ class RAGPipeline:
         bm25_store = BM25Store()
         self.bm25_store = bm25_store  # 保留 store 引用，供删除/重索引时更新
         self.bm25 = bm25_store.load(k=BM25_SEARCH_K)
+
+        # BM25 重建语料源：优先 Chroma（indexer 实际写入的 chunks），
+        # 回退 self.docs（loader chunks）。两者切分策略不同，
+        # Chroma 语料保证 BM25 与向量检索的 chunk 集合一致。
+        chroma_docs = self._build_bm25_corpus_from_chroma()
+        bm25_source = chroma_docs if chroma_docs else self.docs
+
         if self.bm25 is None:
             logger.info("[RAG] BM25 索引不存在，全量重建...")
-            self.bm25 = bm25_store.build(self.docs, k=BM25_SEARCH_K)
+            self.bm25 = bm25_store.build(bm25_source, k=BM25_SEARCH_K)
         elif bm25_store.is_stale:
             logger.info("[RAG] BM25 索引已过期（文档数为 0），重建...")
-            self.bm25 = bm25_store.build(self.docs, k=BM25_SEARCH_K)
-        elif source_files_out_of_sync(self.bm25.docs, self.docs):
+            self.bm25 = bm25_store.build(bm25_source, k=BM25_SEARCH_K)
+        elif source_files_out_of_sync(self.bm25.docs, bm25_source):
             logger.info("[RAG] BM25 索引与文档目录不一致（残留/缺失），重建...")
-            self.bm25 = bm25_store.build(self.docs, k=BM25_SEARCH_K)
+            self.bm25 = bm25_store.build(bm25_source, k=BM25_SEARCH_K)
+        elif bm25_store.get_content_hash() and bm25_store.get_content_hash() != compute_content_hash(bm25_source):
+            logger.info("[RAG] BM25 索引内容 hash 不匹配（文档已修改），重建...")
+            self.bm25 = bm25_store.build(bm25_source, k=BM25_SEARCH_K)
         else:
             logger.info(
                 f"[RAG] BM25 索引从磁盘加载成功 "
-                f"({bm25_store.doc_count()} 文档)，跳过重建"
+                f"({bm25_store.doc_count()} 文档, hash={bm25_store.get_content_hash()})，跳过重建"
             )
 
         self.person_index = {}  # 懒加载：首次人名查询时构建
@@ -346,6 +364,52 @@ class RAGPipeline:
         except Exception as e:
             logger.warning(f"[RAG] BM25 移除文档失败 ({doc_ids}): {e}")
 
+    def _build_bm25_corpus_from_chroma(self) -> list:
+        """从 Chroma chunk 向量库读取全部文档，作为 BM25 重建语料。
+
+        Chroma 是 indexer 实际写入的权威数据源；用它构建 BM25 可保证
+        BM25 chunk 集合与向量检索完全一致，消除 loader/indexer 切分差异。
+        返回空列表表示 Chroma 不可用，调用方应回退 self.docs。
+        """
+        try:
+            result = self.vectordb.get()
+            ids = result.get("ids") or []
+            documents = result.get("documents") or []
+            metadatas = result.get("metadatas") or []
+            if not ids:
+                return []
+            from langchain_core.documents import Document
+            docs = []
+            for i, cid in enumerate(ids):
+                text = documents[i] if i < len(documents) else ""
+                meta = metadatas[i] if i < len(metadatas) else {}
+                if text:
+                    docs.append(Document(page_content=text, metadata={**meta, "chroma_id": cid}))
+            skipped = len(ids) - len(docs)
+            if skipped:
+                logger.warning(f"[RAG] BM25 语料跳过 {skipped} 个空文本 chunk (Chroma {len(ids)} → BM25 {len(docs)})")
+            logger.info(f"[RAG] 从 Chroma 构建 BM25 语料: {len(docs)} chunks")
+            return docs
+        except Exception as e:
+            logger.warning(f"[RAG] Chroma BM25 语料读取失败，回退 loader docs: {e}")
+            return []
+
+    def refresh_bm25_from_store(self) -> None:
+        """从磁盘 store 重新加载 BM25 索引（indexer 上传/重索引后调用）。"""
+        if self.bm25_store is None:
+            return
+        reloaded = self.bm25_store.load(k=BM25_SEARCH_K)
+        if reloaded is not None:
+            self.bm25 = reloaded
+            logger.info(f"[RAG] BM25 已从磁盘刷新 ({self.bm25_store.doc_count()} 文档)")
+        else:
+            logger.warning("[RAG] BM25 磁盘刷新失败，保持当前内存索引")
+
+    def check_consistency(self):
+        """审计 5 个存储之间的索引一致性。"""
+        from backend.rag.indexing.consistency import IndexConsistencyChecker
+        return IndexConsistencyChecker(self).check()
+
     # =====================================================
     # 版本校验
     # =====================================================
@@ -378,8 +442,21 @@ class RAGPipeline:
 
     @staticmethod
     def _rebuild_db(db_path: str) -> None:
-        """副作用：删除旧库，由 _need_rebuild + create_fn 配套调用。"""
-        shutil.rmtree(db_path, ignore_errors=True)
+        """副作用：删除旧库，由 _need_rebuild + create_fn 配套调用。
+
+        注意：Windows 下 Chroma 客户端持有 sqlite 句柄时 rmtree 会失败。
+        原实现 ignore_errors=True 把失败静默吞掉，导致 create_fn 打开的仍是
+        旧维度 collection，后续写入报 "Collection expecting embedding with
+        dimension of 512, got 1024"（2026-09-10 实际踩坑）。此处显式记录
+        失败并抛出，让上层走明确报错而非维度错配的隐蔽故障。
+        """
+        try:
+            shutil.rmtree(db_path)
+        except OSError as e:
+            logger.error(
+                f"旧向量库删除失败（文件被占用？请先停掉占用进程）: {db_path} → {e}"
+            )
+            raise
 
     @staticmethod
     def _save_db_version(db_path: str):
@@ -424,21 +501,47 @@ class RAGPipeline:
     # 公共入口
     # =====================================================
 
-    def ask(self, question: str, session_id: str = "default", kb_id: str = "default") -> str:
+    def ask(
+        self,
+        question: str,
+        session_id: str = "default",
+        kb_id: str = "default",
+        kb_ids: list[str] | None = None,
+    ) -> str:
         """提问入口：3 段式 — 准备 → 执行 → 清理。
 
         拆解后便于单测和异常定位；行为完全兼容旧版。
+        Phase 4: 首轮问答命中缓存时跳过 LLM 生成（~4.8s），多轮对话不走缓存。
+        kb_ids: 多知识库指定（客服系统用），优先级高于 kb_id。
         """
+        self.last_answer_meta: dict = {}
         logger.info(f"收到问题: {question[:80]} (session={session_id}, kb={kb_id})")
-        self._prepare_context(kb_id, question)
+        self._prepare_context(kb_id, question, kb_ids=kb_ids)
         try:
             if not self._check_resources():
                 return "系统资源紧张，请稍后重试"
-            return self._execute_chain(question, session_id)
+
+            is_first_turn = session_id not in self._seen_sessions
+
+            if is_first_turn:
+                cached = self._check_answer_cache(question, kb_id)
+                if cached is not None:
+                    self._seen_sessions.add(session_id)
+                    return cached
+
+            answer = self._execute_chain(question, session_id)
+            self._seen_sessions.add(session_id)
+
+            self._snapshot_answer_meta()
+
+            if is_first_turn and answer and not self._is_rejection(answer):
+                self._write_answer_cache(question, kb_id, answer)
+
+            return answer
         finally:
             self._cleanup()
 
-    def _prepare_context(self, kb_id: str, question: str):
+    def _prepare_context(self, kb_id: str, question: str, kb_ids: list[str] | None = None):
         """注入 kb_id + QueryAnalyzer metadata → contextvars metadata_filter。"""
         from backend.rag.context import RequestContext, set_context
         from backend.rag.retrieval.query_analyzer import QueryAnalyzer
@@ -447,23 +550,25 @@ class RAGPipeline:
 
         mf: dict = {}
 
-        # 显式 kb_id 优先级最高：指定后跳过 Router 关键词推断。
-        # 否则推断出的 {"$or": [{"kb_id": ...}]} 会与 mf["kb_id"] 在 Chroma
-        # 顶层形成隐式 AND —— 两条件互斥，召回必为空 → 全量拒答。
-        explicit_kb = bool(kb_id and kb_id not in ("*", "default"))
-        if explicit_kb:
-            mf["kb_id"] = kb_id
+        # kb_ids（多知识库）优先级最高 → 显式 kb_id → KB Router 推断
+        if kb_ids and len(kb_ids) > 1:
+            mf["$or"] = [{"kb_id": kid} for kid in kb_ids]
+        elif kb_ids and len(kb_ids) == 1:
+            mf["kb_id"] = kb_ids[0]
         else:
-            # KB Router → 候选 KB 列表 → $or filter
-            try:
-                router = KBRouter()
-                kb_result = router.route(question)
-                candidate_ids = [c["kb_id"] for c in kb_result.get("candidates", [])]
-                kb_filter = build_kb_filter(candidate_ids)
-                if kb_filter:
-                    mf.update(kb_filter)
-            except Exception:
-                logger.debug("kb_filter 合并失败", exc_info=True)
+            explicit_kb = bool(kb_id and kb_id not in ("*", "default"))
+            if explicit_kb:
+                mf["kb_id"] = kb_id
+            else:
+                try:
+                    router = KBRouter()
+                    kb_result = router.route(question)
+                    candidate_ids = [c["kb_id"] for c in kb_result.get("candidates", [])]
+                    kb_filter = build_kb_filter(candidate_ids)
+                    if kb_filter:
+                        mf.update(kb_filter)
+                except Exception:
+                    logger.debug("kb_filter 合并失败", exc_info=True)
 
         # QueryAnalyzer → doc_type / business_domain 过滤
         try:
@@ -510,6 +615,61 @@ class RAGPipeline:
             elapsed = time.time() - start_time
             logger.error(f"请求失败 (耗时: {elapsed:.2f}s): {e}", exc_info=True)
             raise
+
+    def _snapshot_answer_meta(self):
+        """从 chain 快照置信度/证据信息，供下游（如客服知识服务）读取。"""
+        try:
+            chain = self.lc_chain
+            meta = {}
+            if hasattr(chain, "_last_meta") and isinstance(chain._last_meta, dict):
+                meta.update(chain._last_meta)
+            if hasattr(chain, "_last_sources"):
+                meta["source_count"] = len(chain._last_sources or [])
+            self.last_answer_meta = meta
+        except Exception:
+            self.last_answer_meta = {}
+
+    def _check_answer_cache(self, question: str, kb_id: str) -> str | None:
+        """首轮问答缓存查询。命中返回缓存答案，未命中返回 None。"""
+        try:
+            from backend.rag.answer_cache import get_answer_cache
+            from backend.rag.context import get_context
+            from backend.config.llm import LLM_MODEL
+            ctx = get_context()
+            cached = get_answer_cache().get(
+                question, kb_id, ctx.metadata_filter, LLM_MODEL,
+            )
+            if cached is not None:
+                logger.info(f"[RAG.ask] 缓存命中: {question[:60]}")
+            return cached
+        except Exception as e:
+            logger.debug(f"[RAG.ask] 缓存查询失败（非致命）: {e}")
+            return None
+
+    def _write_answer_cache(self, question: str, kb_id: str, answer: str) -> None:
+        """首轮问答成功后写入缓存。失败不影响主流程。"""
+        try:
+            from backend.rag.answer_cache import get_answer_cache
+            from backend.rag.context import get_context
+            from backend.config.llm import LLM_MODEL
+            ctx = get_context()
+            get_answer_cache().put(
+                question, kb_id, ctx.metadata_filter, LLM_MODEL, answer,
+            )
+        except Exception as e:
+            logger.debug(f"[RAG.ask] 缓存写入失败（非致命）: {e}")
+
+    @staticmethod
+    def _is_rejection(answer: str) -> bool:
+        """判断答案是否为拒答（拒答不缓存 — 文档更新后可能可以回答）。"""
+        rejection_markers = (
+            "知识库中未找到",
+            "无法找到",
+            "没有足够的信息",
+            "无法回答",
+            "资料不足",
+        )
+        return any(marker in answer for marker in rejection_markers)
 
     def retrieve_knowledge(self, question: str, kb_id: str = "default", top_k: int = 3) -> str:
         """轻量检索：只检索不生成回答，供 BusinessAnalyzer 等下游使用。

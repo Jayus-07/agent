@@ -9,7 +9,6 @@ models.py — Provider 注册表 + 可用模型清单
 
 from langchain_ollama import ChatOllama
 
-
 # Provider 注册表：provider_name → {class, default_model, needs_api_key}
 PROVIDERS = {
     "ollama": {
@@ -27,12 +26,25 @@ PROVIDERS = {
         "default_model": "MiniMax-M3",
         "needs_api_key": True,
     },
+    "qwen": {
+        "class": None,  # DashScope OpenAI 兼容协议
+        "default_model": "qwen3.7-plus",
+        "needs_api_key": True,
+    },
 }
 
 
 # 可用模型清单（前端展示 + set_current 校验用 + cost 估算）
 # input_price_per_1m / output_price_per_1m: USD per 1M tokens（cost 估算用）
 AVAILABLE_MODELS = [
+    {
+        "provider": "qwen",
+        "name": "qwen3.7-plus",
+        "display": "Qwen 3.7 Plus - 在线",
+        "description": "阿里云百炼 Qwen3.7-Plus，OpenAI 兼容协议，需要 API Key",
+        "input_price_per_1m": 0.4,
+        "output_price_per_1m": 1.2,
+    },
     {
         "provider": "ollama",
         "name": "qwen2.5:3b",
