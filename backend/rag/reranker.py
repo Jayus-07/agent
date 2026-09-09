@@ -12,7 +12,8 @@
 
 配置环境变量:
 - RERANKER_BACKEND: "dashscope" (默认) | "local"
-- DASHSCOPE_API_KEY: 阿里云 DashScope API Key
+- DASHSCOPE_API_KEY: 阿里云 DashScope API Key（支持 Token Plan sk-sp- 密钥）
+- DASHSCOPE_API_BASE: 原生 API Base URL（默认 dashscope 公有云；Token Plan 无需设置）
 - RERANK_TIMEOUT: API 超时阈值 (秒)，默认 5
 - RERANK_TOP_K: 返回文档数，默认 8
 - RERANK_SCORE_THRESHOLD: 分数过滤阈值，默认 0.3
@@ -21,14 +22,14 @@ import os
 import math
 from typing import Any
 
-# 尝试导入 dashscope SDK，如果未安装则手动降级
+import requests
+
+# dashscope SDK 可选保留（仅用于错误类型兼容）
 try:
     import dashscope
-    from http import HTTPStatus
     DASHSCOPE_AVAILABLE = True
 except ImportError:
     DASHSCOPE_AVAILABLE = False
-    # 如果使用 API 但未安装 SDK，会抛出清晰的错误
 
 from sentence_transformers import CrossEncoder
 from langchain_core.documents.compressor import BaseDocumentCompressor
@@ -77,85 +78,83 @@ class LocalModelLoader:
 # ═══════════════════════════════════════════════════════════
 
 class DashScopeReranker(BaseDocumentCompressor):
-    """阿里云 DashScope Reranker API 实现 (使用官方 SDK)"""
+    """阿里云 DashScope Reranker API 实现（直接 HTTP，兼容 Token Plan 密钥）
+
+    不再依赖 dashscope SDK 的 TextReRank.call，改用 requests 直接调用 REST API。
+    这样 Token Plan (sk-sp-) 密钥和标准 (sk-ws-) 密钥都能正常工作。
+    """
+
+    _DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
+    _RERANK_PATH = "/services/rerank/text-rerank/rerank"
 
     def __init__(self, api_key: str, timeout: int = 5):
-        """
-        Args:
-            api_key: 阿里云 DashScope API Key
-            timeout: API 请求超时 (秒)
-        """
-        if not DASHSCOPE_AVAILABLE:
-            raise RuntimeError(
-                "DashScope API requires the 'dashscope' package. "
-                "Please install it with: pip install dashscope"
-            )
-        
-        # 直接设置属性以避免 pydantic 约束
+        if not api_key:
+            raise RuntimeError("DashScopeReranker 需要 DASHSCOPE_API_KEY")
+
         self.__dict__['api_key'] = api_key
         self.__dict__['timeout'] = timeout
-        
-        # 配置 dashscope SDK
-        dashscope.api_key = api_key
-        dashscope.base_http_api_url = 'https://dashscope.aliyuncs.com/api/v1'
-        
-        logger.info(f"初始化 DashScope Reranker SDK (model=qwen3-rerank, timeout={self.timeout}s)")
+
+        base_url = os.getenv("DASHSCOPE_API_BASE", self._DEFAULT_BASE_URL).rstrip("/")
+        self.__dict__['_endpoint'] = base_url + self._RERANK_PATH
+        self.__dict__['_headers'] = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        logger.info(
+            f"初始化 DashScope Reranker HTTP (model=qwen3-rerank, "
+            f"endpoint={base_url}, timeout={self.timeout}s)"
+        )
 
     def rank(self, query: str, documents: list[str], top_k: int = 8) -> list[tuple[int, float]]:
-        """
-        调用 DashScope API 进行重排序 (使用官方 SDK)
-
-        Args:
-            query: 用户查询
-            documents: 文档内容列表
-            top_k: 返回前 K 个结果
+        """调用 DashScope Rerank REST API。
 
         Returns:
             list[tuple[int, float]]: (index, relevance_score) 列表，score 已在 0-1 区间
-
-        Raises:
-            Exception: 调用失败时抛出异常，由上层处理降级
         """
+        payload = {
+            "model": "qwen3-rerank",
+            "input": {
+                "query": query,
+                "documents": documents,
+            },
+            "parameters": {
+                "top_n": top_k,
+                "return_documents": False,
+            },
+        }
+
         try:
-            # 使用官方 DashScope TextReRank API
-            resp = dashscope.TextReRank.call(
-                model="qwen3-rerank",
-                query=query,
-                documents=documents,
-                top_n=top_k,
-                return_documents=False  # 不需要返回文档内容，节省带宽
+            resp = requests.post(
+                self._endpoint,
+                json=payload,
+                headers=self._headers,
+                timeout=self.timeout,
             )
 
-            if resp.status_code == HTTPStatus.OK:
-                # 解析响应：extract (index, score) from results
-                results = resp.output.results if hasattr(resp, 'output') and hasattr(resp.output, 'results') else []
-                scored = [
-                    (r.index, r.relevance_score)
-                    for r in results
-                ]
-
-                # 记录 Token 使用
-                usage = resp.usage if hasattr(resp, 'usage') else {}
-                total_tokens = usage.get('total_tokens', 'N/A') if isinstance(usage, dict) else 'N/A'
-                
-                logger.debug(
-                    f"DashScope TextReRank OK: query_len={len(query)}, doc_count={len(documents)}, "
-                    f"top_k={top_k}, tokens={total_tokens}"
+            if resp.status_code != 200:
+                raise Exception(
+                    f"DashScope API error [status={resp.status_code}]: {resp.text[:500]}"
                 )
 
-                return scored
-            else:
-                # API 返回错误
-                error_msg = f"DashScope API error [status={resp.status_code}]: {resp.message}"
-                raise Exception(error_msg)
+            data = resp.json()
+            results = data.get("output", {}).get("results", [])
+            scored = [(r["index"], r["relevance_score"]) for r in results]
 
-        except dashscope.errors.InputError as e:
-            raise Exception(f"Invalid input to DashScope API: {e}")
-        except dashscope.errors.APIException as e:
-            raise Exception(f"DashScope API exception: {e}")
-        except dashscope.errors.NetworkError as e:
-            raise Exception(f"DashScope network error: {e}")
+            total_tokens = data.get("usage", {}).get("total_tokens", "N/A")
+            logger.debug(
+                f"DashScope Rerank OK: query_len={len(query)}, "
+                f"doc_count={len(documents)}, top_k={top_k}, tokens={total_tokens}"
+            )
+            return scored
+
+        except requests.exceptions.Timeout:
+            raise Exception(f"DashScope rerank 超时 ({self.timeout}s)")
+        except requests.exceptions.ConnectionError as e:
+            raise Exception(f"DashScope 网络连接失败: {e}")
         except Exception as e:
+            if "DashScope" in str(e):
+                raise
             raise Exception(f"DashScope rerank failed: {e}")
 
     def compress_documents(self, documents, query, **kwargs):
@@ -336,12 +335,7 @@ def get_reranker_backend() -> BaseDocumentCompressor:
     api_key = os.getenv("DASHSCOPE_API_KEY")
 
     if backend_type == "dashscope" and api_key:
-        if not DASHSCOPE_AVAILABLE:
-            # SDK 缺失时降级本地模型而非抛异常：构造失败会让上层降级路径
-            # 接管，避免整个重排环节不可用（2026-09-03 事故根因之一）
-            logger.warning("缺少 dashscope SDK，降级到本地 CrossEncoder 模型")
-            return LocalCrossEncoderBackend()
-        logger.info("使用 DashScope API 进行重排序")
+        logger.info("使用 DashScope API 进行重排序（HTTP 直连）")
         return DashScopeReranker(api_key=api_key)
     else:
         reason = ""
