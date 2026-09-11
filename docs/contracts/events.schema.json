@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-platform.local/contracts/events.schema.json",
+  "title": "Agent Platform Kafka 事件契约（单一来源）",
+  "description": "Python ai-service 与 Java business-service 共享的事件信封契约。两侧测试均加载本文件校验生产/消费的事件，禁止在代码中各自维护副本。topic 与 event_type 对应关系见 description 表格与 docs/architecture-overview.md §4。",
+  "x-topics": {
+    "cs.conversation.events": ["conversation.state_changed", "confirmation.state_changed"],
+    "cs.message.events": ["message.created"],
+    "cs.handoff.events": ["handoff.requested", "handoff.state_changed"],
+    "cs.action.events": ["action.executed"],
+    "channel.whatsapp.inbound": ["whatsapp.message.inbound"],
+    "ai.reply.events": ["ai.reply.created"]
+  },
+  "type": "object",
+  "required": ["event_id", "event_type", "occurred_at", "source", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "事件唯一 ID，消费方按其做幂等去重"
+    },
+    "event_type": {
+      "type": "string",
+      "description": "事件类型，取值见 x-topics 映射"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "事件发生时间（UTC ISO-8601）"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["ai-service", "business-service"],
+      "description": "生产方标识"
+    },
+    "conversation_id": {
+      "type": ["string", "null"],
+      "description": "会话 ID，作为 Kafka message key 保证同会话事件有序"
+    },
+    "user_id": {
+      "type": ["string", "null"]
+    },
+    "payload": {
+      "type": "object",
+      "description": "事件维度相关数据",
+      "additionalProperties": true
+    }
+  },
+  "x-payload-examples": {
+    "whatsapp.message.inbound": {
+      "channel": "whatsapp",
+      "external_user_id": "8613800000000",
+      "message_id": "wamid.xxx",
+      "msg_type": "text",
+      "text": "我的订单到哪了",
+      "timestamp": "1726118400"
+    },
+    "ai.reply.created": {
+      "channel": "whatsapp",
+      "conversation_id": "wa:8613800000000",
+      "external_user_id": "8613800000000",
+      "reply_to_message_id": "wamid.xxx",
+      "text": "您的订单预计明天送达"
+    }
+  }
+}

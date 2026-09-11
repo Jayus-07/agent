@@ -22,6 +22,9 @@ _SKIP_AUTH_PREFIXES = (
     "/redoc",
     "/openapi.json",
     "/metrics",
+    # 服务间内部端点：不走 API Key，由 internal_ai.py 的
+    # verify_internal_token 依赖校验 X-Internal-Token
+    "/internal",
 )
 
 

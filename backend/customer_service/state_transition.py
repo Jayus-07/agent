@@ -53,15 +53,28 @@ class StateTransitionResult(TypedDict, total=False):
     errors: list[str]
 
 
+def _use_java_write() -> bool:
+    """cutover 阶段 C 开关：java=状态写入权已移交 business-service。"""
+    from backend.config.messaging import CS_WRITE_SOURCE
+    return CS_WRITE_SOURCE == "java"
+
+
 class StateTransitionService:
     """统一状态转换服务
 
     所有状态变更通过 apply() 入口，逐维度校验 + 持久化。
     load_snapshot() 从各 Store 读取当前状态，供 cs_state_loader 使用。
+
+    写权模式（CS_WRITE_SOURCE）:
+      - local: 本地 PostgreSQL 直写（现状）
+      - java: 代理到 business-service /internal/*（Java 持有写权）。
+              Java 不可用时返回失败，不静默回落本地写（保证写权唯一）。
     """
 
     def apply(self, request: StateTransitionRequest) -> StateTransitionResult:
         """执行状态转换（sync facade → _db_loop.run_sync）"""
+        if _use_java_write():
+            return self._java_apply(request)
         from backend.customer_service._db_loop import run_sync
         try:
             return run_sync(self._async_apply(request))
@@ -70,6 +83,28 @@ class StateTransitionService:
             return StateTransitionResult(
                 success=False,
                 errors=["DB unavailable"],
+            )
+
+    def _java_apply(self, request: StateTransitionRequest) -> StateTransitionResult:
+        """java 写权模式：代理到 business-service（请求/响应结构已对齐）"""
+        from backend.infra.http.business_client import BusinessServiceError, post_json_sync
+
+        try:
+            result = post_json_sync("/internal/state-transitions", dict(request))
+            return StateTransitionResult(
+                success=bool(result.get("success", False)),
+                confirmation_state=result.get("confirmation_state", ""),
+                handoff_state=result.get("handoff_state", ""),
+                conversation_status=result.get("conversation_status", ""),
+                handling_mode=result.get("handling_mode", ""),
+                pending_action=result.get("pending_action"),
+                errors=list(result.get("errors") or []),
+            )
+        except BusinessServiceError as exc:
+            logger.warning(f"[StateTransitionService] java write failed: {exc}")
+            return StateTransitionResult(
+                success=False,
+                errors=[f"business-service unavailable: {exc}"],
             )
 
     async def _async_apply(
@@ -297,12 +332,29 @@ class StateTransitionService:
         """从各 Store 加载当前状态快照（sync facade）
 
         供 cs_state_loader 节点在 CS Graph 启动时调用。
+        java 写权模式下从 business-service 读取（与写入同源，避免读写分裂）。
         """
+        if _use_java_write():
+            return self._java_load_snapshot(user_id, session_id, conversation_id)
         from backend.customer_service._db_loop import run_sync
         try:
             return run_sync(self._async_load_snapshot(user_id, session_id, conversation_id))
         except Exception:
             logger.warning("[StateTransitionService] load_snapshot failed, returning defaults")
+            return _default_snapshot()
+
+    def _java_load_snapshot(
+        self, user_id: str, session_id: str, conversation_id: str
+    ) -> dict[str, Any]:
+        from backend.infra.http.business_client import BusinessServiceError, get_json_sync
+
+        try:
+            params = {"user_id": user_id, "session_id": session_id}
+            if conversation_id:
+                params["conversation_id"] = conversation_id
+            return get_json_sync("/internal/state-snapshot", params=params)
+        except BusinessServiceError as exc:
+            logger.warning(f"[StateTransitionService] java load_snapshot failed: {exc}")
             return _default_snapshot()
 
 

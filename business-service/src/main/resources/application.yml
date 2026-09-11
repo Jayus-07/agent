@@ -32,7 +32,9 @@ spring:
       group-id: business-service
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      # StringDeserializer 接原始 JSON：兼容 Python kafka-python 与 Java JsonSerializer
+      # 两种生产者（契约见 docs/contracts/events.schema.json）
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       properties:
         spring.json.trusted.packages: "*"
 
@@ -44,6 +46,11 @@ app:
     password: ${BIZ_DB_PASSWORD:}
   # 内部 REST 调用令牌（Python AI 服务 → 业务系统）；为空则不校验
   internal-api-token: ${INTERNAL_API_TOKEN:}
+  # AI 服务（Python ai-service）工具网关（业务系统 → AI 服务）
+  ai-service:
+    base-url: ${AI_SERVICE_URL:http://localhost:8000}
+    internal-token: ${AI_INTERNAL_TOKEN:${INTERNAL_API_TOKEN:}}
+    timeout-ms: 60000
   # 风控阈值（对齐 backend/config/customer_service.py）
   risk:
     high-risk-actions: refund_request,refund_execute,return_request,return_execute

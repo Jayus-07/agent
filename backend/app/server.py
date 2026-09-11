@@ -457,6 +457,19 @@ async def register_workflows_and_schedules():
 
 
 # ═══════════════════════════════════════════════════
+# 启动 WhatsApp 闭环 Kafka 消费者（KAFKA_CONSUMER_ENABLED 控制）
+# ═══════════════════════════════════════════════════
+@app.on_event("startup")
+async def start_kafka_consumer():
+    """启动 channel.whatsapp.inbound 消费线程（未启用时静默跳过）。"""
+    try:
+        from backend.infra.messaging.consumer import start_consumer_worker
+        start_consumer_worker()
+    except Exception as e:
+        logger.warning(f"[Startup] Kafka consumer start failed: {e}")
+
+
+# ═══════════════════════════════════════════════════
 # 启动
 # ═══════════════════════════════════════════════════
 if __name__ == "__main__":

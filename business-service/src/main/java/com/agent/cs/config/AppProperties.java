@@ -13,11 +13,13 @@ public class AppProperties {
     private final BizDb bizDb = new BizDb();
     private final Risk risk = new Risk();
     private final Whatsapp whatsapp = new Whatsapp();
+    private final AiService aiService = new AiService();
     private String internalApiToken = "";
 
     public BizDb getBizDb() { return bizDb; }
     public Risk getRisk() { return risk; }
     public Whatsapp getWhatsapp() { return whatsapp; }
+    public AiService getAiService() { return aiService; }
     public String getInternalApiToken() { return internalApiToken; }
     public void setInternalApiToken(String internalApiToken) { this.internalApiToken = internalApiToken; }
 
@@ -48,6 +50,21 @@ public class AppProperties {
         public void setCriticalActions(List<String> criticalActions) { this.criticalActions = criticalActions; }
         public double getCriticalRefundAmount() { return criticalRefundAmount; }
         public void setCriticalRefundAmount(double criticalRefundAmount) { this.criticalRefundAmount = criticalRefundAmount; }
+    }
+
+    /** AI 服务（Python ai-service）连接配置，供 AiClient 调用 /internal/ai/* 工具网关 */
+    public static class AiService {
+        private String baseUrl = "http://localhost:8000";
+        /** 调用 ai-service /internal/ai/* 的令牌；为空则不携带（本地开发模式） */
+        private String internalToken = "";
+        private long timeoutMs = 60000;
+
+        public String getBaseUrl() { return baseUrl; }
+        public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+        public String getInternalToken() { return internalToken; }
+        public void setInternalToken(String internalToken) { this.internalToken = internalToken; }
+        public long getTimeoutMs() { return timeoutMs; }
+        public void setTimeoutMs(long timeoutMs) { this.timeoutMs = timeoutMs; }
     }
 
     public static class Whatsapp {

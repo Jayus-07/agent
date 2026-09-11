@@ -22,8 +22,8 @@ public interface ConversationRepository extends JpaRepository<Conversation, Long
             WHERE (:status IS NULL OR c.conversationStatus = :status)
               AND (:handlingMode IS NULL OR c.handlingMode = :handlingMode)
               AND (:userId IS NULL OR c.userId = :userId)
-              AND (:cursor IS NULL OR c.lastActivityAt < :cursor)
-              AND (:q IS NULL OR LOWER(c.summary) LIKE LOWER(CONCAT('%', :q, '%')))
+              AND (CAST(:cursor AS OffsetDateTime) IS NULL OR c.lastActivityAt < :cursor)
+              AND (CAST(:q AS text) IS NULL OR c.summary LIKE LOWER(CONCAT('%', CAST(:q AS text), '%')))
             ORDER BY c.lastActivityAt DESC
             """)
     List<Conversation> listPage(@Param("status") String status,
@@ -38,7 +38,7 @@ public interface ConversationRepository extends JpaRepository<Conversation, Long
             WHERE (:status IS NULL OR c.conversationStatus = :status)
               AND (:handlingMode IS NULL OR c.handlingMode = :handlingMode)
               AND (:userId IS NULL OR c.userId = :userId)
-              AND (:q IS NULL OR LOWER(c.summary) LIKE LOWER(CONCAT('%', :q, '%')))
+              AND (CAST(:q AS text) IS NULL OR c.summary LIKE LOWER(CONCAT('%', CAST(:q AS text), '%')))
             """)
     long countFiltered(@Param("status") String status,
                        @Param("handlingMode") String handlingMode,

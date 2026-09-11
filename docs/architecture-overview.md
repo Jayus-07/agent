@@ -55,7 +55,7 @@
 | `channel.whatsapp.inbound` | business-service | whatsapp.message.inbound |
 | `ai.reply.events` | ai-service（预留） | AI 生成的渠道回复 |
 
-事件 JSON 结构（双方一致）：
+事件 JSON 结构（单一来源：[docs/contracts/events.schema.json](contracts/events.schema.json)，两侧测试加载同一文件校验，禁止在代码中各自维护副本）：
 
 ```json
 {
@@ -109,3 +109,7 @@ curl http://localhost:8000/health                 # AI 系统
 | Kafka 配置 | `backend/config/messaging.py` | topic 契约 + 业务系统地址 + cutover 开关 |
 | Kafka 客户端 | `backend/infra/messaging/kafka.py` | 单例 + 降级 + fire-and-forget 发布 |
 | 事件挂点 | `backend/customer_service/state_transition.py`、`conversation_store.py` | 状态变更/消息落库后发布 |
+| 事件契约 | `docs/contracts/events.schema.json` | 单一来源 JSON Schema，两侧测试共用 |
+| 业务系统 HTTP 客户端 | `backend/infra/http/business_client.py` | Python→Java 统一封装（连接池/重试/token/trace 透传） |
+| AI 能力工具网关 | `backend/app/api/routes/internal_ai.py` | Java→Python 同步调用（`/internal/ai/tools`、`/internal/ai/call`），X-Internal-Token 鉴权，AI_TOOLS_ENABLED 开关 |
+| AI 服务客户端 | `business-service/.../client/AiClient.java` | Java→Python 统一封装（RestClient，token + MDC traceId 透传） |

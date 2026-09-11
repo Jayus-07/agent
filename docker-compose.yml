@@ -23,7 +23,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - AI_SERVICE_URL=http://app:8000
+      - AI_SERVICE_URL=http://host.docker.internal:8000  # Python 后端跑在宿主机；若 app 容器启用则改回 http://app:8000
       - BUSINESS_SERVICE_URL=http://business-service:8081
       # 网关注入用户身份头（对接后端 TRUST_USER_HEADER 机制）
       - GATEWAY_USER_HEADER_ENABLED=${GATEWAY_USER_HEADER_ENABLED:-false}

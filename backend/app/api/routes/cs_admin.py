@@ -24,20 +24,14 @@ def _use_java_source() -> bool:
 
 async def _proxy_to_java(path: str) -> dict:
     """代理请求到 business-service（cutover 后的读源）"""
-    import httpx
+    from backend.infra.http.business_client import BusinessServiceError, get_json
 
-    from backend.config.messaging import BUSINESS_SERVICE_URL, INTERNAL_API_TOKEN
-
-    headers = {}
-    if INTERNAL_API_TOKEN:
-        headers["X-Internal-Token"] = INTERNAL_API_TOKEN
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(f"{BUSINESS_SERVICE_URL}{path}", headers=headers)
-        if resp.status_code == 404:
+    try:
+        return await get_json(path)
+    except BusinessServiceError as e:
+        if e.status_code == 404:
             raise HTTPException(404, detail="Conversation not found")
-        if resp.status_code != 200:
-            raise HTTPException(502, detail=f"business-service error: {resp.status_code}")
-        return resp.json()
+        raise HTTPException(502, detail=f"business-service error: {e}")
 
 
 # ── Response models ──────────────────────────────────────

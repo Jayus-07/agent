@@ -27,6 +27,7 @@ from backend.app.api.routes import (
     prompts,
     cs_admin,
     evaluation,
+    internal_ai,
 )
 from backend.app.api.routes.health import router as health_router
 from backend.app.api.routes.keyword_routes import router as keyword_router
@@ -58,6 +59,7 @@ api_router.include_router(selection_decision.router)  # 选品决策
 api_router.include_router(prompts.router)  # Prompt 管理
 api_router.include_router(cs_admin.router)  # 客服会话管理
 api_router.include_router(evaluation.router)  # 评测集管理
+api_router.include_router(internal_ai.router)  # Java→Python 工具网关（X-Internal-Token 鉴权）
 
 # ── 系统路由 ──────────────────────────────────
 api_router.include_router(health_router)

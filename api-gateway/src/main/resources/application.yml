@@ -6,6 +6,9 @@ spring:
     name: api-gateway
   cloud:
     gateway:
+      # 去重 CORS 头：下游服务直连调试场景也会返回 CORS 头，浏览器禁止重复 ACAO
+      default-filters:
+        - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials Vary, RETAIN_UNIQUE
       # 全局 CORS：前端跨域统一在网关处理，下游服务不再重复配置
       globalcors:
         cors-configurations:

@@ -35,6 +35,10 @@ public class Message {
     @JoinColumn(name = "conversation_id", referencedColumnName = "conversation_id", nullable = false)
     private Conversation conversation;
 
+    /** 只读标量映射：供 Spring Data 派生查询使用（写入由上方 @ManyToOne 负责） */
+    @Column(name = "conversation_id", insertable = false, updatable = false)
+    private String conversationId;
+
     /** 006 遗留列：NOT NULL，写入时与 sender_type 保持一致 */
     @Column(name = "role", nullable = false, length = 20)
     private String role = "user";
@@ -90,6 +94,7 @@ public class Message {
     public void setMessageId(String messageId) { this.messageId = messageId; }
     public Conversation getConversation() { return conversation; }
     public void setConversation(Conversation conversation) { this.conversation = conversation; }
+    public String getConversationId() { return conversationId; }
     public String getRole() { return role; }
     public void setRole(String role) { this.role = role; }
     public String getSenderType() { return senderType; }

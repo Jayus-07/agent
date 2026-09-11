@@ -38,3 +38,25 @@ INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
 # cs_admin 读源切换：local=读本地 PG（现状），java=代理到 business-service
 # Java 验证通过后置 java 并下线本地查询路径
 CS_ADMIN_SOURCE = os.getenv("CS_ADMIN_SOURCE", "local").strip().lower()
+
+# 写权切换（cutover 阶段 C）：local=Python 直写 customer_service（现状），
+# java=状态转换/消息落库改调 business-service /internal/*，Python 停止直写。
+# java 模式下 business-service 不可用时返回失败，不静默回落本地写（保证写权唯一）。
+CS_WRITE_SOURCE = os.getenv("CS_WRITE_SOURCE", "local").strip().lower()
+
+# Java→Python 工具网关（/internal/ai/*）鉴权令牌；为空=本地开发跳过校验
+# （与 business-service InternalTokenFilter 行为一致）
+AI_INTERNAL_TOKEN = os.getenv("AI_INTERNAL_TOKEN", os.getenv("INTERNAL_API_TOKEN", ""))
+
+# 是否开放 Java→Python 工具网关（默认关闭，部署后再开）
+AI_TOOLS_ENABLED = os.getenv("AI_TOOLS_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+
+# 工具白名单：Java 可调用的 tool 名，"*" 表示全部。
+# manager.route() 按 tool_name 路由，白名单在网关层先过滤，防止误调危险工具。
+AI_TOOLS_ALLOWED = os.getenv("AI_TOOLS_ALLOWED", "sql_query,list_tables,search_knowledge,list_documents")
+
+# WhatsApp 闭环：Python 消费 channel.whatsapp.inbound 的独立开关
+KAFKA_CONSUMER_ENABLED = os.getenv("KAFKA_CONSUMER_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+
+# 消费者组 ID（WhatsApp 入站消费）
+KAFKA_CONSUMER_GROUP = os.getenv("KAFKA_CONSUMER_GROUP", "ai-service")

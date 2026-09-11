@@ -102,6 +102,25 @@ nli_coverage_rate = Gauge(
     "NLI 有效校验率（0-1，1 = 无超时）",
 )
 
+# ── WhatsApp 闭环消费可观测性（Kafka 入站 → Agent → ai.reply.events）──
+kafka_consumer_processed_total = Counter(
+    "kafka_consumer_processed_total",
+    "Kafka 入站消息消费处理总数（按结果）",
+    labelnames=("topic", "status"),  # ok | duplicate | error | skipped
+)
+
+kafka_consumer_duration_seconds = Histogram(
+    "kafka_consumer_duration_seconds",
+    "Kafka 入站消息处理耗时（含 Agent 问答全链路）",
+    buckets=(0.5, 1, 2, 5, 10, 30, 60, 120),
+)
+
+ai_kafka_consumer_lag = Gauge(
+    "ai_kafka_consumer_lag",
+    "AI 服务 Kafka 消费者滞后消息数（按 topic/分区）",
+    labelnames=("topic", "partition"),
+)
+
 # ── Input Guard 可观测性（输入侧门禁）──
 input_guard_total = Counter(
     "input_guard_total",

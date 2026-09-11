@@ -275,6 +275,20 @@ http://localhost:8081/health   # business-service（Java 业务系统）
 
 架构、Kafka 事件契约与 Python↔Java cutover 步骤见 [docs/architecture-overview.md](docs/architecture-overview.md)。
 
+#### 本地构建 Java 工程（JDK 17 与系统 JDK 8 并存）
+
+系统默认 JDK 仍为 1.8，不受影响；构建 Java 工程时用脚本临时切换到 17（`D:\Program Files\Java\jdk-17*`）：
+
+```powershell
+.\scripts\mvn17.ps1 -Project business-service clean package   # PowerShell
+.\scripts\mvn17.ps1 -Project api-gateway test
+```
+
+```bash
+./scripts/mvn17.sh business-service clean package             # Git Bash
+./scripts/mvn17.sh api-gateway test
+```
+
 ---
 
 ## 开发
