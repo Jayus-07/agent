@@ -14,8 +14,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 
 from backend.shared.logger import logger
+
+# 版本号本地缓存 TTL（秒）：get/put 每次都查 Redis 版本号会多 1-2 个 RTT，
+# 版本号极少变化，本地短 TTL 缓存即可；代价是跨进程失效最多延迟该时长生效
+_VERSION_CACHE_TTL = 10.0
 
 
 class AnswerCache:
@@ -29,6 +34,8 @@ class AnswerCache:
         """
         self._ttl = ttl
         self._cache = None
+        # 本地版本号缓存：{kb_id: (version, monotonic_ts)}
+        self._version_cache: dict[str, tuple[int, float]] = {}
 
     def _get_cache(self):
         """惰性获取统一缓存实例（避免模块导入时 Redis 未就绪）。"""
@@ -56,13 +63,24 @@ class AnswerCache:
         return hashlib.sha256(raw.encode()).hexdigest()
 
     def _get_cache_version(self, kb_id: str) -> int:
-        """读取指定 KB 的缓存版本号。"""
+        """读取指定 KB 的缓存版本号（带本地短 TTL 缓存，减少 Redis RTT）。
+
+        本进程内的 invalidate_kb 会同步更新本地缓存，立即生效；
+        其他进程的失效最多延迟 _VERSION_CACHE_TTL 秒被本进程感知。
+        """
+        local = self._version_cache.get(kb_id)
+        if local is not None:
+            version, ts = local
+            if time.monotonic() - ts < _VERSION_CACHE_TTL:
+                return version
         try:
             version = self._get_cache().get_json(f"__ver__:kb:{kb_id}")
-            return int(version) if version else 0
+            version = int(version) if version else 0
         except Exception as e:
             logger.debug(f"[AnswerCache] 读取版本号失败: {e}")
-            return 0
+            return local[0] if local else 0
+        self._version_cache[kb_id] = (version, time.monotonic())
+        return version
 
     @staticmethod
     def _hash_filter(metadata_filter: dict) -> str:
@@ -114,6 +132,8 @@ class AnswerCache:
         """使指定 KB 的所有缓存失效（原子递增版本号）。"""
         try:
             new_version = self._get_cache().incr_version(f"kb:{kb_id}")
+            # 同步更新本地版本缓存，本进程后续 get/put 立即使用新版本
+            self._version_cache[kb_id] = (int(new_version), time.monotonic())
             logger.info(f"[AnswerCache] 失效: kb={kb_id} new_version={new_version}")
         except Exception as e:
             logger.warning(f"[AnswerCache] 失效失败: {e}")

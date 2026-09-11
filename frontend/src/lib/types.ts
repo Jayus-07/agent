@@ -47,9 +47,27 @@ export interface DeltaEvent {
   ts: number
 }
 
+/** 本轮请求的 token 用量（后端 done 事件透出，来自 proxy per-turn 累加器） */
+export interface TokenUsage {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  /** 缓存命中 token（prompt 的子集，上游 API 支持时才有值） */
+  cached_tokens?: number
+  /** 推理 token（reasoning 模型才有值） */
+  reasoning_tokens?: number
+  /** 本轮 LLM 调用次数 */
+  calls?: number
+  /** 预估成本（USD） */
+  cost_usd?: number
+  /** 按模型细分 */
+  models?: Record<string, { prompt_tokens: number; completion_tokens: number; total_tokens: number; calls: number }>
+}
+
 export interface DoneEvent {
   elapsed: number
   sources?: Source[]
+  usage?: TokenUsage
 }
 
 export interface ErrorEvent {
@@ -85,6 +103,8 @@ export interface Message {
   streamEvents?: SSEStreamEvent[]
   /** 来源文档（仅 RAG 类问题有值） */
   sources?: Source[]
+  /** 本轮请求 token 用量（done 事件写入；streamEvents 终态会被清空，用量需单独持久化） */
+  usage?: TokenUsage
 }
 
 // ========================================

@@ -132,15 +132,54 @@ def emit_delta_events(final_answer: str, stop_event=None) -> Generator[dict, Non
         time.sleep(0.02)
 
 
-def make_done_event(final_answer: str, all_step_results: dict, start_time: float) -> dict:
-    """构建 done 事件，附带耗时 + 引用来源。"""
+def make_done_event(final_answer: str, all_step_results: dict, start_time: float,
+                    usage: dict | None = None) -> dict:
+    """构建 done 事件，附带耗时 + 引用来源 + 本轮 token 用量。"""
     from backend.agents.reporter.reporter import _extract_sources_from_steps
     from backend.agents.reporter.context_filter import parse_sources_from_text
     elapsed = time.time() - start_time
     sources = _extract_sources_from_steps(all_step_results)
     if not sources and final_answer:
         sources = parse_sources_from_text(final_answer)
-    return {"event": "done", "data": {"elapsed": round(elapsed, 1), "sources": sources}}
+    data: dict = {"elapsed": round(elapsed, 1), "sources": sources}
+    if usage:
+        data["usage"] = usage
+    return {"event": "done", "data": data}
+
+
+def summarize_turn_usage() -> dict | None:
+    """汇总本轮（当前调用上下文）LLM token 用量，供 done 事件透出给前端。
+
+    数据源：proxy 的 per-turn 累加器（每次 llm.invoke/ainvoke 累加）。
+    无任何记录时返回 None（前端不显示用量行）。
+    """
+    try:
+        from backend.infra.llm.proxy import get_turn_usage
+        turn = get_turn_usage()
+        if not turn:
+            return None
+        summary = {
+            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+            "cached_tokens": 0, "reasoning_tokens": 0, "cost_usd": 0.0,
+            "calls": 0,
+        }
+        models = {}
+        for model, e in turn.items():
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens",
+                      "cached_tokens", "reasoning_tokens", "calls"):
+                summary[k] += int(e.get(k, 0) or 0)
+            summary["cost_usd"] += float(e.get("cost_usd", 0) or 0.0)
+            models[model] = {
+                "prompt_tokens": int(e.get("prompt_tokens", 0) or 0),
+                "completion_tokens": int(e.get("completion_tokens", 0) or 0),
+                "total_tokens": int(e.get("total_tokens", 0) or 0),
+                "calls": int(e.get("calls", 0) or 0),
+            }
+        summary["cost_usd"] = round(summary["cost_usd"], 6)
+        summary["models"] = models
+        return summary
+    except Exception:
+        return None
 
 
 # =====================================================

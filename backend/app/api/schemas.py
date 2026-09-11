@@ -34,6 +34,18 @@ class SQLAskRequest(BaseModel):
     )
 
 
+class SQLQueryResponse(BaseModel):
+    """SQL 结构化查询结果（POST /sql/query）"""
+    status: str = Field(..., description="success/no_data/failed/timeout/syntax_error/permission_denied/validation_error/no_table")
+    answer: str = Field("", description="Markdown 表格（成功时）或错误信息（失败时）")
+    columns: list = Field(default_factory=list, description="结果列名")
+    rows: list = Field(default_factory=list, description="结果行（已脱敏）")
+    row_count: int = Field(0, description="结果行数")
+    elapsed_sec: float = Field(0.0, description="执行耗时（秒）")
+    error: Optional[str] = Field(None, description="失败原因")
+    error_type: Optional[str] = Field(None, description="错误子分类")
+
+
 # ── RAG 检索 ─────────────────────────────────────
 
 class RAGAskRequest(BaseModel):

@@ -95,11 +95,14 @@ class SQLAgent:
             )
 
         # — Step 2-5: 生成 + 校验循环 —
-        question_for_retry = question
+        feedback: str | None = None  # 重试时携带上次 SQL + 失败原因，引导 LLM 修正
+        last_sql: str | None = None
         last_result: SQLResult | None = None
         for attempt in range(self.max_retries + 1):
+            sql: str | None = None
             try:
-                sql = generate_sql(question_for_retry, table_names)
+                sql = generate_sql(question, table_names, feedback=feedback)
+                last_sql = sql
 
                 safe_sql, _, _ = sql_validator.validate(sql)
 
@@ -123,18 +126,16 @@ class SQLAgent:
 
                 # 其它失败：尝试重试
                 if attempt < self.max_retries:
-                    question_for_retry = (
-                        question
-                        + f"\n(之前生成的 SQL 报错: {result.error}，请修正)"
-                    )
+                    feedback = f"上次生成的 SQL:\n{sql}\n执行报错: {result.error}"
                     continue
                 return result
 
             except ValidationError as e:
                 logger.warning(f"[SQLAgent] 校验失败 (第{attempt+1}次): {e}")
                 if attempt < self.max_retries:
-                    question_for_retry = (
-                        question + f"\n(之前生成的 SQL 因为 {e} 被拒绝，请避免同样问题)"
+                    feedback = (
+                        f"上次生成的 SQL:\n{last_sql}\n"
+                        f"被安全校验拒绝（{e}），请避免同样问题"
                     )
                     continue
                 return SQLResult.failed(
@@ -154,8 +155,9 @@ class SQLAgent:
             except Exception as e:
                 logger.error(f"[SQLAgent] 执行失败 (第{attempt+1}次): {e}")
                 if attempt < self.max_retries:
-                    question_for_retry = (
-                        question + f"\n(之前生成的 SQL 执行报错: {e}，请修正)"
+                    feedback = (
+                        f"上次生成的 SQL:\n{last_sql}\n执行报错: {e}"
+                        if last_sql else f"上次执行报错: {e}"
                     )
                     continue
                 return SQLResult.failed(

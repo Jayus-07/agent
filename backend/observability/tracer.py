@@ -773,26 +773,55 @@ class TraceCollector:
             c = tu.get("completion_tokens", tu.get("output_tokens", 0))
             t = tu.get("total_tokens", p + c)
             if t:
-                return {"prompt_tokens": p, "completion_tokens": c, "total_tokens": t}
+                # 细粒度明细：缓存命中 / 推理 token（上游未返回时为 0）
+                in_details = tu.get("input_token_details") or {}
+                out_details = tu.get("output_token_details") or {}
+                return {
+                    "prompt_tokens": p, "completion_tokens": c, "total_tokens": t,
+                    "cached_tokens": int(in_details.get("cache_read", 0) or 0),
+                    "reasoning_tokens": int(out_details.get("reasoning", 0) or 0),
+                }
         except Exception:
             logger.debug("token 用量解析失败", exc_info=True)
         return {}
 
     @staticmethod
     def _aggregate_usage(record: TraceRecord):
-        """聚合 token 用量。"""
-        pt = ct = tt = 0
+        """聚合 token 用量（含缓存/推理明细，逐 span 累加）。"""
+        pt = ct = tt = cached = reasoning = 0
         for s in record.spans:
             m = s.metrics
             pt += m.get("prompt_tokens", 0)
             ct += m.get("completion_tokens", 0)
             tt += m.get("total_tokens", 0)
+            cached += m.get("cached_tokens", 0) or 0
+            reasoning += m.get("reasoning_tokens", 0) or 0
         if tt == 0 and (pt > 0 or ct > 0):
             tt = pt + ct
         if tt:
-            record.usage = {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": tt}
+            record.usage = {
+                "prompt_tokens": pt, "completion_tokens": ct, "total_tokens": tt,
+                "cached_tokens": cached, "reasoning_tokens": reasoning,
+            }
 
 
 trace_collector = TraceCollector()
 
-__all__ = ["TraceCollector", "TraceRecord", "Span", "trace_collector", "MAX_TRACES"]
+
+def current_trace_context() -> tuple[str, str]:
+    """当前上下文活跃 trace 的 (trace_id, session_id)；无 trace 返回 ("", "")。
+
+    供 proxy 等底层模块回填调用来源（llm_usage 明细按 trace_id 分组 per-turn），
+    避免模块级循环依赖（proxy 在函数内导入本函数）。
+    """
+    try:
+        trace = _current_trace_var.get() or trace_collector._thread_current
+        if trace is not None:
+            return trace.id, trace.session_id
+    except Exception:
+        pass
+    return "", ""
+
+
+__all__ = ["TraceCollector", "TraceRecord", "Span", "trace_collector", "MAX_TRACES",
+           "current_trace_context"]

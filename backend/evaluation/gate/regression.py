@@ -32,8 +32,11 @@ def flag_regressions(
             continue
         mod_zh = MODULE_LABELS.get(cb.module, cb.module)
         for key, cur_val in cb.metrics.items():
+            # metrics 可能含嵌套 dict（token_summary）/None（无法计算），跳过
+            if isinstance(cur_val, bool) or not isinstance(cur_val, (int, float)):
+                continue
             base_val = bb.metrics.get(key)
-            if base_val is None:
+            if isinstance(base_val, bool) or not isinstance(base_val, (int, float)):
                 continue
             delta = cur_val - base_val
             if delta < -threshold:
@@ -156,10 +159,13 @@ def diff_baseline(
                 f"{summary.pass_rate:.2%} (↓{abs(delta):.2%})"
             )
 
-        crit = critical_metrics.get(summary.module, {})
+        crit = critical_metrics.get(summary.module) or critical_metrics.get("*", {})
         for key, cur_val in summary.metrics.items():
+            # metrics 可能含嵌套 dict（token_summary）/None（无法计算），跳过
+            if isinstance(cur_val, bool) or not isinstance(cur_val, (int, float)):
+                continue
             base_val = base["metrics"].get(key)
-            if base_val is None:
+            if isinstance(base_val, bool) or not isinstance(base_val, (int, float)):
                 continue
             delta = cur_val - base_val
             crit_threshold = crit.get(key, threshold)
@@ -209,8 +215,19 @@ def check_regression(
         0 = 通过（无 error，warnings 仅打印不阻断）
         2 = 阻断（有 error，CI 将失败）
     """
+    # critical_metrics 未显式配置时的默认分级阈值（key "*" 对所有模块生效）：
+    # 通过率等核心指标对噪声更敏感，统一 5% 绝对阈值会让 4.9% 的下降漏告警
+    effective_critical = critical_metrics if critical_metrics is not None else {
+        "*": {
+            "pass_rate": 0.02,
+            "recall@5": 0.03,
+            "recall@10": 0.03,
+            "sem_faithfulness": 0.03,
+            "S7_faithfulness": 0.03,
+        },
+    }
     warnings, errors = diff_baseline(
-        report, threshold=threshold, critical_metrics=critical_metrics,
+        report, threshold=threshold, critical_metrics=effective_critical,
     )
 
     print(f"\n{'='*60}")

@@ -1,0 +1,7 @@
+{
+  "version": "1.0",
+  "case_count": 15,
+  "module": "sql",
+  "schema_description": "NL2SQL 评测集：每条正向用例携带可在业务仓库（PostgreSQL agent_business）执行的 gold_sql，用执行准确率（结果集一致性）评分；对抗用例校验拒绝语义（should_reject + expected_status）。",
+  "created": "2026-09-10"
+}

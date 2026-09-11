@@ -170,9 +170,13 @@ class CitationFormatter:
         return sorted(seen.values(), key=lambda s: s.get("index", 0))
 
     def _extract_cited_indexes(self, answer: str) -> set[int]:
-        """从回答中提取所有 [1] [2] 引用编号集合。"""
+        """从回答中提取引用编号集合。
+
+        QA prompt 要求模型用 [E1] 格式引用（chain.py），这里需同时兼容
+        [E1] 与 [1] 两种格式，否则"仅展示实际被引来源"永远走兜底全量展示。
+        """
         cited: set[int] = set()
-        for m in re.finditer(r"\[(\d+)\]", answer):
+        for m in re.finditer(r"\[(?:E)?(\d+)\]", answer, re.IGNORECASE):
             cited.add(int(m.group(1)))
         return cited
 

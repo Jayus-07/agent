@@ -82,6 +82,8 @@ STATUS_ICONS: dict[str, str] = {
 MODULE_LABELS: dict[str, str] = {
     "rag": "RAG 检索",
     "planner": "任务规划",
+    "sql": "SQL 查询",
+    "e2e": "Graph 全链路",
 }
 
 # ============ 指标分层分类（双轨架构） ============
@@ -162,7 +164,7 @@ def _categorize_metric(key: str) -> str:
 
 def print_summary(report: EvalReport) -> None:
     """打印控制台摘要表格（中文）。"""
-    mode_label = "实时 LLM 调用" if report.mode == "live" else "离线（仅检索）"
+    mode_label = "实时 LLM 调用" if report.mode == "live" else "离线（不调 LLM）"
     module_zh = MODULE_LABELS.get(report.module, report.module)
     header = f"评估报告 — {module_zh} · {mode_label}"
     if report.smoke:
@@ -499,14 +501,11 @@ def compute_performance_stats(results: list[Any]) -> dict[str, Any]:
         default=0,
     )
 
-    # 成本估算（DashScope qwen-plus 参考价：输入 ¥0.004/1K, 输出 ¥0.012/1K）
-    INPUT_PRICE_PER_1K = 0.004
-    OUTPUT_PRICE_PER_1K = 0.012
-    estimated_cost = round(
-        total_prompt / 1000 * INPUT_PRICE_PER_1K
-        + total_completion / 1000 * OUTPUT_PRICE_PER_1K,
-        4,
-    )
+    # 成本估算：per-case trace 的 token 全部来自本地 Ollama 推理（免费，不计费）。
+    # 原按 DashScope qwen-plus 价格估算本地 token，方向性错误（本地高估、
+    # 云端 RAGAS 调用反而没统计到）。云端成本看 token_summary（JSONL 按
+    # run 时间窗过滤后的统计），此处仅保留本地推理量供参考。
+    estimated_cost = 0.0
 
     return {
         "p50_ms": p50, "p95_ms": p95, "avg_ms": round(avg, 1),
@@ -519,5 +518,6 @@ def compute_performance_stats(results: list[Any]) -> dict[str, Any]:
         "avg_total_tokens": avg_total,
         "max_total_tokens": max_total,
         "cases_with_tokens": cases_with_tokens,
+        "local_inference_tokens": total_tokens,
         "estimated_cost_cny": estimated_cost,
     }

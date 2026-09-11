@@ -77,14 +77,15 @@ COMPLEX_PATTERNS = [
 ]
 
 # 业务关键词（2026-08-11 P2 多路融合）：自动触发 MultiQuery 改写
-# 解决"差评怎么处理"等业务查询不会触发改写的问题
+# 解决"差评怎么处理"等业务查询不会触发改写的问题。
+# 注意保持精简：命中即触发 1 次 LLM 改写 + N 路检索，过宽会放大延迟与成本
 BUSINESS_KEYWORDS = [
-    "差评", "投诉", "退款", "退货", "换货", "售后", "客服",
+    "差评", "投诉", "退款", "退货", "换货", "售后",
     "合规", "审核", "罚款", "违规", "处罚",
-    "上架", "下架", "Listing", "关键词", "广告", "投放",
+    "上架", "下架", "Listing", "广告", "投放",
     "缺货", "断货", "调拨", "滞销", "库存", "FBA",
-    "毛利", "利润", "成本", "客单价", "转化率",
-    "Listing", "SKU", "SPU",
+    "毛利", "利润", "客单价", "转化率",
+    "SKU", "SPU",
 ]
 
 SIMPLE_PREFIXES = ("什么是", "多少", "几点", "几号", "谁", "哪个", "哪里")
@@ -102,16 +103,17 @@ def _is_complex(query: str) -> tuple[bool, str]:
     for pat in COMPLEX_PATTERNS:
         if pat in q:
             return True, f"复杂度关键词: {pat}"
-    # 简单事实问句豁免：即使命中业务关键词，单一事实答案无需多路改写
+    # 简单事实问句豁免（数值/时间点 + "什么是"等前缀）：即使命中业务关键词
+    # 也无需多路改写，"退款审核时间是多少？""什么是库存周转率"均应豁免
     for pat in SIMPLE_FACT_PATTERNS:
         if pat in q:
             return False, f"简单事实问句({pat})"
+    if q.startswith(SIMPLE_PREFIXES):
+        return False, "简单事实问句"
     # 业务关键词：差评/退款/合规等业务查询自动触发改写
     for kw in BUSINESS_KEYWORDS:
         if kw in q:
             return True, f"业务关键词: {kw}"
-    if q.startswith(SIMPLE_PREFIXES):
-        return False, "简单事实问句"
     if len(q) < 5:
         return False, f"过短({len(q)}字)"
     if len(q) > 25:

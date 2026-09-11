@@ -572,6 +572,7 @@ async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = 
 
     Returns: (summary, [person_names])
     """
+    from backend.config.llm import OLLAMA_ENABLED
     from backend.config.rag import DOC_LLM_MODEL
 
     # <2KB 文档：提取式摘要，不调 LLM
@@ -588,7 +589,7 @@ async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = 
         safe_text=safe_text, max_length=str(max_length),
     ).text
 
-    if DOC_LLM_MODEL:
+    if DOC_LLM_MODEL and OLLAMA_ENABLED:
         # 本地 Ollama —— 同步调用（indexer 线程内）
         try:
             from langchain_ollama import ChatOllama

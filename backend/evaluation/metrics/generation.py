@@ -36,10 +36,14 @@ def _tokenize_text(text: str) -> list[str]:
 
 
 def _split_claims(text: str) -> list[str]:
-    """按中英文句号/问号/感叹号/分号/逗号分割声明。"""
+    """按句级标点（中英文句号/问号/感叹号/分号/换行）切分声明。
+
+    不按逗号/顿号切：中文一个长句会被拆成大量 2-3 字微 claim，
+    bigram 子串命中即"支持"，faithfulness 系统性虚高。
+    """
     return [
         c.strip()
-        for c in re.split(r"[。！？.!?；;，,、]", text)
+        for c in re.split(r"[。！？.!?；;\n]", text)
         if c.strip()
     ]
 
@@ -160,37 +164,59 @@ def answer_correctness_typed(
     }
 
 
+def _empty_faithfulness() -> dict:
+    """空答案/无可验证内容的统一返回：None 表示"无法评估"，
+    上游应跳过该用例的 faithfulness 指标（而不是当作满分）。"""
+    return {
+        "faithfulness": None,
+        "faithfulness_soft": None,
+        "claim_count": 0,
+        "supported_count": 0,
+        "skipped": True,
+    }
+
+
 def faithfulness_claim_based(
     answer: str,
     context: list[str],
     claims: list[str] | None = None,
-) -> dict[str, float]:
-    """基于声明分解的忠实度评估（简化版 RAGAS faithfulness）。"""
+) -> dict:
+    """基于声明分解的忠实度评估（简化版 RAGAS faithfulness）。
+
+    口径与 faithfulness_semantic 统一：
+      - faithfulness: 逐 claim 得分 ≥ 0.5 的支持率（硬阈值）
+      - faithfulness_soft: 逐 claim 得分的平均值
+    逐 claim 得分 = claim token 在 context 中的命中率。
+    空答案返回 skipped（None），不参与聚合——空答案不是"完全忠实"。
+    """
     if not answer.strip():
-        return {"faithfulness": 1.0, "claim_count": 0, "supported_count": 0}
+        return _empty_faithfulness()
 
     if claims is None:
         claims = _split_claims(answer)
 
     if not claims:
-        return {"faithfulness": 1.0, "claim_count": 0, "supported_count": 0}
+        return _empty_faithfulness()
 
     context_text = " ".join(context).lower()
 
-    supported = 0
+    claim_scores: list[float] = []
     for claim in claims:
         claim_tokens = _tokenize_text(claim)
         if not claim_tokens:
-            supported += 1
             continue
         token_hits = sum(1 for tk in claim_tokens if tk in context_text)
-        if token_hits / len(claim_tokens) >= 0.5:
-            supported += 1
+        claim_scores.append(token_hits / len(claim_tokens))
 
-    faithfulness = supported / len(claims) if claims else 1.0
+    if not claim_scores:
+        return _empty_faithfulness()
+
+    supported = sum(1 for s in claim_scores if s >= 0.5)
+    soft = sum(claim_scores) / len(claim_scores)
 
     return {
-        "faithfulness": round(faithfulness, 4),
-        "claim_count": len(claims),
+        "faithfulness": round(supported / len(claim_scores), 4),
+        "faithfulness_soft": round(soft, 4),
+        "claim_count": len(claim_scores),
         "supported_count": supported,
     }

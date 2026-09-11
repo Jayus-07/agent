@@ -51,6 +51,7 @@ const NAV = [
     icon: <Activity size={18} />, label: '链路追踪',
     items: [
       { label: '问答追踪', path: '/observability/traces' },
+      { label: 'Token 用量', path: '/observability/tokens' },
       { label: '文档操作日志', path: '/knowledge/operations' },
     ],
   },

@@ -16,6 +16,7 @@ from backend.orchestration.graph.events import (
     emit_delta_events,
     extract_sources_from_results,
     make_done_event,
+    summarize_turn_usage,
     make_initial_state,
     make_step_log_event,
     make_step_payload,
@@ -451,7 +452,8 @@ class MultiAgentSystem:
                 cs_context_snapshot, session_id, question, final_answer, trace.id,
             )
 
-            yield make_done_event(final_answer, all_step_results, start_time)
+            yield make_done_event(final_answer, all_step_results, start_time,
+                                  usage=summarize_turn_usage())
 
         except Exception as e:
             logger.error(f"[MultiAgent] 流式执行失败: {e}")
@@ -463,7 +465,9 @@ class MultiAgentSystem:
             except Exception:
                 logger.debug("[P1-10] 错误路径 trace 收尾失败", exc_info=True)
         finally:
-            self._memory.end_turn(session_id, question, final_answer or "", user_id=user_id)
+            # 中止/早期失败路径 final_answer 为空：不落库，避免历史恢复时出现空气泡
+            if final_answer:
+                self._memory.end_turn(session_id, question, final_answer, user_id=user_id)
 
     # =====================================================
     # Input Guard 辅助（短路 trace / span）

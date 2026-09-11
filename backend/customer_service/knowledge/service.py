@@ -47,8 +47,10 @@ class CSKnowledgeService:
             kb_ids = ["cs_faq"]
 
         try:
-            from backend.rag.pipeline import RAGPipeline
-            pipeline = RAGPipeline()
+            # 必须用单例：RAGPipeline.__init__ 会全量加载文档/重建 BM25/加载向量库，
+            # 每请求新建一次的代价是秒级以上，且绕过 answer_cache 的失效机制
+            from backend.rag.pipeline import get_rag_pipeline
+            pipeline = get_rag_pipeline()
 
             primary_kb = kb_ids[0] if kb_ids else "cs_faq"
             logger.info(

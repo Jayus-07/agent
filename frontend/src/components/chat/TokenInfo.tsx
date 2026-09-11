@@ -1,11 +1,13 @@
 'use client'
 
 import { useMemo } from 'react'
-import type { SSEStreamEvent } from '@/lib/types'
+import type { SSEStreamEvent, TokenUsage } from '@/lib/types'
 
 interface Props {
-  /** SSE v2 流式事件列表，从中提取 token 用量和延迟 */
+  /** SSE v2 流式事件列表，从中提取 token 用量和延迟（旧链路兜底） */
   streamEvents?: SSEStreamEvent[]
+  /** 本轮请求 token 用量（done 事件写入 Message.usage，首选数据源） */
+  usage?: TokenUsage
 }
 
 interface TokenData {
@@ -46,16 +48,37 @@ function extractTokenData(events?: SSEStreamEvent[]): TokenData | null {
   return tokenData
 }
 
-export default function TokenInfo({ streamEvents }: Props) {
-  const t = useMemo(() => extractTokenData(streamEvents), [streamEvents])
+export default function TokenInfo({ streamEvents, usage }: Props) {
+  const fromUsage = useMemo(() => {
+    if (!usage || !usage.total_tokens) return null
+    return {
+      inputTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+      totalTokens: usage.total_tokens,
+      cachedTokens: usage.cached_tokens || 0,
+      reasoningTokens: usage.reasoning_tokens || 0,
+      calls: usage.calls || 0,
+      latencySec: undefined as number | undefined,
+    }
+  }, [usage])
+
+  const t = useMemo(
+    () => fromUsage ?? extractTokenData(streamEvents),
+    [fromUsage, streamEvents],
+  )
 
   if (!t) return null
 
+  const detail = t as typeof t & { cachedTokens?: number; reasoningTokens?: number; calls?: number }
+
   return (
-    <div className="flex items-center gap-3 mt-1.5 text-[10px] text-text-muted">
-      {t.inputTokens != null && <span>输入 {t.inputTokens.toLocaleString()}</span>}
-      {t.outputTokens != null && <span>输出 {t.outputTokens.toLocaleString()}</span>}
-      {t.totalTokens != null && <span>共计 {t.totalTokens.toLocaleString()} tokens</span>}
+    <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 mt-1.5 text-[10px] text-text-muted">
+      {detail.inputTokens != null && <span>输入 {detail.inputTokens.toLocaleString()}</span>}
+      {detail.outputTokens != null && <span>输出 {detail.outputTokens.toLocaleString()}</span>}
+      {detail.totalTokens != null && <span>共计 {detail.totalTokens.toLocaleString()} tokens</span>}
+      {!!detail.cachedTokens && <span title="缓存命中（计入输入）">缓存 {detail.cachedTokens.toLocaleString()}</span>}
+      {!!detail.reasoningTokens && <span title="推理 token">推理 {detail.reasoningTokens.toLocaleString()}</span>}
+      {!!detail.calls && detail.calls > 1 && <span>{detail.calls} 次调用</span>}
       {t.latencySec != null && <span className="ml-auto">{t.latencySec.toFixed(1)}s</span>}
     </div>
   )

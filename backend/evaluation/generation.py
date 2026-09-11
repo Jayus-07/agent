@@ -2,15 +2,15 @@
 
 使用 langchain_ollama.ChatOllama 替代原始 HTTP 调用。
 用于评测系统的答案生成和 LLM-based 答案相关性评估。
+
+仅 ENV_MODE=local 时启用；ENV_MODE=cloud 时所有调用直接跳过（不连接本地服务）。
 """
 from __future__ import annotations
 
-import os
-
+from backend.config.llm import OLLAMA_BASE_URL, OLLAMA_ENABLED, OLLAMA_MODEL
 from backend.shared.logger import logger
 
-_OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-_OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+_ollama_skip_logged = False
 
 _token_usage = {"prompt_tokens": 0, "completion_tokens": 0}
 _chat_cache: dict[tuple, object] = {}
@@ -29,7 +29,7 @@ def reset_token_usage() -> None:
 
 def _make_chat(model: str | None = None, base_url: str | None = None, temperature: float = 0.1):
     from langchain_ollama import ChatOllama
-    key = (model or _OLLAMA_MODEL, base_url or _OLLAMA_BASE_URL, temperature)
+    key = (model or OLLAMA_MODEL, base_url or OLLAMA_BASE_URL, temperature)
     cached = _chat_cache.get(key)
     if cached is not None:
         return cached
@@ -50,6 +50,12 @@ def _invoke_chat(
     temperature: float = 0.1,
 ) -> str:
     """调用 ChatOllama，累计 token 用量，返回文本。"""
+    global _ollama_skip_logged
+    if not OLLAMA_ENABLED:
+        if not _ollama_skip_logged:
+            logger.info("[Ollama] ENV_MODE=cloud，本地 Ollama 已禁用，评测生成走降级路径")
+            _ollama_skip_logged = True
+        return ""
     from langchain_core.messages import HumanMessage
 
     chat = _make_chat(model, base_url, temperature)
@@ -77,7 +83,7 @@ def generate_answer_ollama(
         question: 用户问题
         context: 检索到的上下文片段列表
         model: Ollama 模型名（默认读 OLLAMA_MODEL 环境变量）
-        base_url: Ollama 服务地址（默认读 OLLAMA_HOST 环境变量）
+        base_url: Ollama 服务地址（默认取 config.OLLAMA_BASE_URL，跟随 OLLAMA_BASE_URL 环境变量）
 
     Returns:
         生成的答案文本，失败时返回空字符串。

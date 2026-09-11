@@ -16,12 +16,14 @@ def load_documents_from_directory(directory_path: str, chunk_size=None, chunk_ov
     保证 BM25 与增量索引使用同一 doc_id，级联删除/检索过滤能按 doc_id 命中。
     注意：department 与 indexer 默认一致（"general"），多部门场景需抽公共派生函数。
     """
+    from backend.rag.preprocessing.chunk_cache import load_cached_chunks, save_cached_chunks
     from backend.rag.preprocessing.pipeline import parse_and_chunk
     # F6: 扩展名白名单从解析器注册表派生（单一来源）；惰性导入保持
     # loader 顶层轻量（parser 包含 fitz/docx 等重依赖）
     from backend.rag.preprocessing.parser import PARSABLE_EXTS
 
     all_documents = []
+    cached_count = 0
 
     for root, _dirs, files in os.walk(directory_path):
         # 第一级子目录名 = kb_id
@@ -35,7 +37,13 @@ def load_documents_from_directory(directory_path: str, chunk_size=None, chunk_ov
                 continue
 
             try:
-                chunks = parse_and_chunk(file_path)
+                # 指纹缓存命中 → 跳过 解析/分类(含 LLM 仲裁)/分块 全流水线
+                chunks = load_cached_chunks(file_path)
+                if chunks is not None:
+                    cached_count += 1
+                else:
+                    chunks = parse_and_chunk(file_path)
+                    save_cached_chunks(file_path, chunks)
                 rel_path = os.path.relpath(file_path, directory_path).replace("\\", "/")
                 # 与 indexer._derive_doc_id 同源：命名空间化 (kb_id|department|basename) 协议
                 doc_id = derive_doc_id_from_path(file_path, DOCS_DIRECTORY)
@@ -47,5 +55,7 @@ def load_documents_from_directory(directory_path: str, chunk_size=None, chunk_ov
             except Exception as e:
                 logger.error(f"[loader] 加载失败: {file} - 错误: {e}")
 
+    if cached_count:
+        logger.info(f"[loader] 指纹缓存命中 {cached_count} 个未变文档，跳过解析/分类/分块")
     logger.info(f"[loader] 总计加载文档块: {len(all_documents)}")
     return all_documents

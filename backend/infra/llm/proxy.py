@@ -24,6 +24,7 @@ from backend.config.llm import (
     LLM_FALLBACK_MODEL,
     LLM_MAX_RETRIES,
     LLM_RETRY_BACKOFF_BASE,
+    OLLAMA_ENABLED,
 )
 from backend.infra.llm.factory import get_llm_factory
 from backend.infra.llm.models import AVAILABLE_MODELS, compute_cost_usd
@@ -36,22 +37,22 @@ from backend.shared.logger import logger
 _default_llm = None
 _default_lock = threading.Lock()
 
-# PR-0.4: 当前请求的 user_id（限流用）— 调用方可通过 set_current_user_id() 设置
-_user_lock = threading.Lock()
-_current_user_id: str | None = None
+# PR-0.4: 当前请求的 user_id（限流用）— 调用方可通过 set_current_user_id() 设置。
+# 用 ContextVar 而非全局变量：全局变量在并发请求下互相覆盖，
+# 会把限流扣减算到错误的用户头上
+_user_id_var: _contextvars.ContextVar[str | None] = _contextvars.ContextVar(
+    "llm_current_user_id", default=None,
+)
 
 
 def set_current_user_id(user_id: str | None) -> None:
-    """设置当前线程/请求的 user_id（限流用）。FastAPI 路由层在每次请求开始时调用。"""
-    global _current_user_id
-    with _user_lock:
-        _current_user_id = user_id
+    """设置当前请求上下文的 user_id（限流用）。FastAPI 路由层在每次请求开始时调用。"""
+    _user_id_var.set(user_id)
 
 
 def _thread_local_user_id() -> str | None:
-    """读取当前 user_id（限流用）。"""
-    with _user_lock:
-        return _current_user_id
+    """读取当前请求的 user_id（限流用）。"""
+    return _user_id_var.get()
 
 
 def _get_provider_for(model_name: str) -> str:
@@ -75,6 +76,11 @@ def _build_llm_for(model_name: str) -> BaseChatModel:
         from backend.infra.llm.providers.qwen import build_qwen
         return build_qwen(model_name)
     # ollama / 兜底
+    if not OLLAMA_ENABLED:
+        raise ValueError(
+            f"ENV_MODE=cloud 时已禁用本地 Ollama，无法构建模型 '{model_name}'。"
+            f"请设置 ENV_MODE=local 或改用云端模型: {[m['name'] for m in AVAILABLE_MODELS]}"
+        )
     from langchain_ollama import ChatOllama
 
     from backend.config import LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT, LLM_TEMPERATURE
@@ -299,11 +305,52 @@ _last_call_meta_var: _contextvars.ContextVar = _contextvars.ContextVar(
     "llm_last_call_meta", default={},
 )
 
+# P0 Token 看板：per-turn 用量累加器（按调用上下文隔离）。
+# 一轮对话会产生多次 LLM 调用（planner/worker/reporter...），单次
+# _last_tokens_var 会被覆盖，这里按模型累加整轮用量，trace finish 时兜底读取。
+_turn_usage_var: _contextvars.ContextVar = _contextvars.ContextVar(
+    "llm_turn_usage", default=None,
+)
 
-def _record_tokens(result):
+
+def _accumulate_turn_usage(model: str, p: int, c: int, t: int,
+                           cached: int, reasoning: int, cost: float) -> None:
+    """把单次 LLM 调用用量累加到当前上下文的 per-turn 汇总。"""
+    if not model:
+        model = LLM_MODEL
+    acc = dict(_turn_usage_var.get() or {})
+    entry = dict(acc.get(model) or {
+        "provider": _get_provider_for(model),
+        "calls": 0,
+        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+        "cached_tokens": 0, "reasoning_tokens": 0, "cost_usd": 0.0,
+    })
+    entry["calls"] = int(entry["calls"]) + 1
+    entry["prompt_tokens"] = int(entry["prompt_tokens"]) + int(p or 0)
+    entry["completion_tokens"] = int(entry["completion_tokens"]) + int(c or 0)
+    entry["total_tokens"] = int(entry["total_tokens"]) + int(t or 0)
+    entry["cached_tokens"] = int(entry["cached_tokens"]) + int(cached or 0)
+    entry["reasoning_tokens"] = int(entry["reasoning_tokens"]) + int(reasoning or 0)
+    entry["cost_usd"] = float(entry["cost_usd"]) + float(cost or 0.0)
+    acc[model] = entry
+    _turn_usage_var.set(acc)
+
+
+def get_turn_usage() -> dict:
+    """读取当前上下文本轮 LLM 用量汇总：{model: {calls, tokens..., cost_usd}}。"""
+    return dict(_turn_usage_var.get() or {})
+
+
+def reset_turn_usage() -> None:
+    """清空本轮用量（trace start/finish 时调用，防线程池复用线程串味）。"""
+    _turn_usage_var.set(None)
+
+
+def _record_tokens(result, duration_ms: float | None = None):
     """从 LLM 返回值提取 token + finish_reason + cost，存为 dict 供 tracer 读取。
 
     无 token_usage 时清空 _last_tokens_var 和 _last_call_meta_var。
+    duration_ms: 调用方（wrapper）计得的本次 LLM 调用耗时（含重试/熔断等待）。
     """
     try:
         tu = {}
@@ -319,14 +366,29 @@ def _record_tokens(result):
             _last_tokens_var.set({})
             _last_call_meta_var.set({})
             return
+
+        # 细粒度用量：缓存命中 / 推理 token。
+        # LangChain 统一在 usage_metadata.input_token_details（cache_read/cache_creation）
+        # 与 output_token_details（reasoning）透传；上游未返回时为 0。
+        # 注意 cached_tokens 是 prompt_tokens 的子集（计费口径），仅作明细展示。
+        in_details = tu.get("input_token_details") or {}
+        out_details = tu.get("output_token_details") or {}
+        cached = int(in_details.get("cache_read", 0) or 0)
+        reasoning = int(out_details.get("reasoning", 0) or 0)
         _last_tokens_var.set({
             "prompt_tokens": p, "completion_tokens": c, "total_tokens": t,
+            "cached_tokens": cached, "reasoning_tokens": reasoning,
         })
+
+        # 实际模型名（response_metadata 优先，兜底全局配置）；成本按实际模型计价
+        model = ""
+        if hasattr(result, "response_metadata") and result.response_metadata:
+            model = (result.response_metadata.get("model_name", "")
+                     or result.response_metadata.get("model", ""))
 
         # Prometheus 指标：LLM token 用量
         try:
             from backend.observability.metrics import llm_tokens_total
-            model = result.response_metadata.get("model_name", "") if hasattr(result, "response_metadata") and result.response_metadata else ""
             if model and p:
                 llm_tokens_total.labels(model=model, direction="prompt").inc(p)
             if model and c:
@@ -340,14 +402,44 @@ def _record_tokens(result):
                 "finish_reason",
                 result.response_metadata.get("stop_reason", "unknown"),
             )
-        cost = compute_cost_usd(LLM_MODEL, p, c)
+        model = model or LLM_MODEL
+        cost = compute_cost_usd(model, p, c)
         _last_call_meta_var.set({
             "prompt_tokens": p,
             "completion_tokens": c,
             "total_tokens": t,
+            "cached_tokens": cached,
+            "reasoning_tokens": reasoning,
             "finish_reason": finish_reason,
             "cost_usd": cost,
+            "model": model,
+            "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
         })
+        _accumulate_turn_usage(model, p, c, t, cached, reasoning, cost)
+
+        # Token 看板明细落库（每调用一行，软失败不影响主链路）
+        try:
+            from backend.observability.llm_usage_store import get_llm_usage_store
+            from backend.observability.tracer import current_trace_context
+            trace_id, session_id = current_trace_context()
+            get_llm_usage_store().record({
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+                             + f".{int(time.time() % 1 * 1000):03d}Z",
+                "trace_id": trace_id,
+                "session_id": session_id,
+                "model": model,
+                "provider": _get_provider_for(model),
+                "prompt_tokens": p,
+                "completion_tokens": c,
+                "total_tokens": t,
+                "cached_tokens": cached,
+                "reasoning_tokens": reasoning,
+                "cost_usd": cost,
+                "finish_reason": finish_reason,
+                "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
+            })
+        except Exception:
+            pass
     except Exception:
         _last_tokens_var.set({})
         _last_call_meta_var.set({})
@@ -373,17 +465,20 @@ def _enforce_rate_limit(user_id: str | None) -> None:
     """根据 LLM_RATE_LIMIT_ENFORCE 配置执行限流。
 
     Phase 5: Redis 可用时使用分布式限流（跨进程一致），否则 fallback 到进程内限流。
+    二者互斥，不再叠加执行（原先两套都生效 = 同一请求双重扣减）。
     off    → 仅日志（当前行为），不阻塞请求
     wait   → 阻塞等待直到获取到令牌（轮询间隔 0.1s）
     reject → 获取不到令牌时抛 RateLimitError
     """
     from backend.config.llm import LLM_RATE_LIMIT_BURST, LLM_RATE_LIMIT_ENFORCE, LLM_RATE_LIMIT_QPS
 
-    passed = _try_distributed_rate_limit(user_id, LLM_RATE_LIMIT_QPS, LLM_RATE_LIMIT_BURST)
-    if not passed:
+    distributed = _try_distributed_rate_limit(user_id, LLM_RATE_LIMIT_QPS, LLM_RATE_LIMIT_BURST)
+    if distributed is None:
+        # 分布式限流不可用（Redis 缺失/异常）→ 进程内限流兜底
         from backend.infra.llm.rate_limiter import get_rate_limiter
-        limiter = get_rate_limiter()
-        passed = limiter.acquire(user_id=user_id)
+        passed = get_rate_limiter().acquire(user_id=user_id)
+    else:
+        passed = distributed
 
     if passed:
         return
@@ -409,12 +504,17 @@ def _enforce_rate_limit(user_id: str | None) -> None:
     logger.warning(f"[RateLimit] rate limited but enforce=off, proceeding (user={user_id})")
 
 
-def _try_distributed_rate_limit(user_id: str | None, qps: float, burst: float) -> bool:
-    """尝试分布式限流。Redis 不可用时返回 True（让调用方 fallback 到进程内限流）。"""
+def _try_distributed_rate_limit(user_id: str | None, qps: float, burst: float) -> bool | None:
+    """尝试分布式限流。
+
+    Returns:
+        True/False: 分布式限流的获取结果（True=通过）
+        None: Redis 不可用，调用方需 fallback 到进程内限流
+    """
     try:
         from backend.infra.redis.client import get_redis
         if get_redis() is None:
-            return True
+            return None
         from backend.infra.llm.distributed_rate_limiter import get_distributed_rate_limiter
         drl = get_distributed_rate_limiter()
         if not drl.acquire("global", "all", burst, qps):
@@ -423,7 +523,7 @@ def _try_distributed_rate_limit(user_id: str | None, qps: float, burst: float) -
             return False
         return True
     except Exception:
-        return True
+        return None
 
 
 class RateLimitError(RuntimeError):
@@ -444,10 +544,30 @@ class _LLMProxy:
         target = _resolve_active_llm()
         attr = getattr(target, name)
         if name in self._WRAP_METHODS and callable(attr):
-            # async generator（astream）：保持透传，不包 token 记录
-            # （逐 chunk 流式 token 语义本次不覆盖；await async_gen 会抛 TypeError）
+            # async generator（astream）：包一层限流 + token 记录。
+            # 流式响应是生产主路径，原先完全透传 = 无限流、无用量统计。
+            # 注意：流中途失败无法安全重试（会重复输出已消费的 chunk），
+            # 韧性链（重试/熔断 fallback）仅覆盖非流式路径。
             if inspect.isasyncgenfunction(attr):
-                return attr
+                async def astream_wrapper(*args, **kwargs):
+                    user_id = kwargs.get("user_id") or _thread_local_user_id()
+                    _enforce_rate_limit(user_id)
+                    _t0 = time.monotonic()
+                    usage_chunk = None
+                    try:
+                        async for chunk in attr(*args, **kwargs):
+                            # 携带 usage_metadata 的 chunk（通常为最后一个）留作用量记录
+                            if getattr(chunk, "usage_metadata", None):
+                                usage_chunk = chunk
+                            yield _wrap_result(chunk)
+                    finally:
+                        # 正常结束或客户端中断都记录（finally 在 generator close 时也执行）
+                        if usage_chunk is not None:
+                            _record_tokens(
+                                usage_chunk,
+                                duration_ms=(time.monotonic() - _t0) * 1000,
+                            )
+                return astream_wrapper
             # async 方法（ainvoke/agenerate）：coroutine 必须先 await 才能取结果，
             # 否则 _record_tokens 作用在未执行的 coroutine 上会把 token 清空（既有 bug）。
             if inspect.iscoroutinefunction(attr):
@@ -455,16 +575,18 @@ class _LLMProxy:
                     # 限流执行 + 熔断/重试/fallback（P1-7 韧性链）
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
                     _enforce_rate_limit(user_id)
+                    _t0 = time.monotonic()
                     result = await _acall_with_resilience(attr, *args, **kwargs)
-                    _record_tokens(result)
+                    _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)
                     return _wrap_result(result)
                 return async_wrapper
             def wrapper(*args, **kwargs):
                 # 限流执行 + 熔断/重试/fallback（P1-7 韧性链）
                 user_id = kwargs.get("user_id") or _thread_local_user_id()
                 _enforce_rate_limit(user_id)
+                _t0 = time.monotonic()
                 result = _call_with_resilience(attr, *args, **kwargs)
-                _record_tokens(result)
+                _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)
                 return _wrap_result(result)
             return wrapper
         return attr
@@ -473,8 +595,9 @@ class _LLMProxy:
         # 限流执行 + 熔断/重试/fallback（P1-7 韧性链）
         user_id = kwargs.get("user_id") or _thread_local_user_id()
         _enforce_rate_limit(user_id)
+        _t0 = time.monotonic()
         result = _call_with_resilience(_resolve_active_llm().invoke, *args, **kwargs)
-        _record_tokens(result)
+        _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)
         return _wrap_result(result)
 
     def __repr__(self) -> str:

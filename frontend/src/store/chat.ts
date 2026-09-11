@@ -21,6 +21,8 @@ interface ChatState {
   historyError: string | null
   /** 当前请求的 request_id（用于中止） */
   currentRequestId: string | null
+  /** 会话列表刷新信号：SSE done 后自增，HistorySidebar 监听它自动重新拉取 */
+  sessionsVersion: number
 
   // — 计算属性 —
   currentMessages: () => Message[]
@@ -36,13 +38,14 @@ interface ChatState {
   // — 消息操作 (sessionId 可选，用于 SSE 流固定目标会话) —
   addMessage: (role: 'user' | 'assistant', content: string, sessionId?: string) => void
   addStreamEvent: (evt: SSEStreamEvent, sessionId?: string) => void
-  replaceLastAssistant: (content: string, sessionId?: string, sources?: any[]) => void
+  replaceLastAssistant: (content: string, sessionId?: string, sources?: any[], usage?: import('@/lib/types').TokenUsage) => void
 
   // — 状态 —
   setLoading: (v: boolean) => void
   setError: (e: string | null) => void
   setHistoryError: (e: string | null) => void
   setCurrentRequestId: (id: string | null) => void
+  bumpSessionsVersion: () => void
   resetStream: () => void
 }
 
@@ -76,6 +79,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     error: null,
     historyError: null,
     currentRequestId: null,
+    sessionsVersion: 0,
 
     // —— 计算属性 ——
     currentMessages: () => {
@@ -216,7 +220,7 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     resetStream: () => set({ streamEvents: [], currentStatus: '', deltaText: '', currentRequestId: null }),
 
-    replaceLastAssistant: (content, sessionId, sources) => {
+    replaceLastAssistant: (content, sessionId, sources, usage) => {
       set((state) => ({
         sessions: state.sessions.map((s) => {
           const sid = targetId(state, sessionId)
@@ -228,6 +232,7 @@ export const useChatStore = create<ChatState>((set, get) => {
               ...msgs[lastIdx],
               content,
               sources: sources || msgs[lastIdx].sources,
+              usage: usage || msgs[lastIdx].usage,
               timestamp: Date.now(),
             }
           }
@@ -244,12 +249,22 @@ export const useChatStore = create<ChatState>((set, get) => {
         set({ historyError: null })
         if (!msgs || msgs.length === 0) return
 
-        const restored: Message[] = msgs.map((m: any) => ({
-          id: nanoid(),
-          role: m.role,
-          content: m.content,
-          timestamp: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
-        }))
+        // 历史双写修复：旧数据每轮问答被前端+后端各存了一次，且中止轮次会留下空回答。
+        // 恢复时过滤空气泡 + 对连续同角色同内容的消息去重，避免 UI 和上下文出现重复
+        const restored: Message[] = []
+        for (const m of msgs) {
+          const content = typeof m.content === 'string' ? m.content : ''
+          if (m.role === 'assistant' && !content.trim()) continue
+          const prev = restored[restored.length - 1]
+          if (prev && prev.role === m.role && prev.content === content) continue
+          restored.push({
+            id: nanoid(),
+            role: m.role === 'assistant' ? 'assistant' : 'user',
+            content,
+            timestamp: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
+          })
+        }
+        if (restored.length === 0) return
 
         set((state) => {
           const exists = state.sessions.some((s) => s.id === sessionId)
@@ -323,5 +338,6 @@ export const useChatStore = create<ChatState>((set, get) => {
     setLoading: (v) => set({ isLoading: v }),
     setError: (e) => set({ error: e }),
     setHistoryError: (e) => set({ historyError: e }),
+    bumpSessionsVersion: () => set((s) => ({ sessionsVersion: s.sessionsVersion + 1 })),
   }
 })

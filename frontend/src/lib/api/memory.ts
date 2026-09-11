@@ -24,7 +24,9 @@ export async function listSessions(): Promise<SessionMeta[]> {
 }
 
 /** GET /memory/sessions/{id} — 获取会话消息 */
-export async function getSessionMessages(sessionId: string): Promise<{ role: string; content: string }[]> {
+export async function getSessionMessages(
+  sessionId: string,
+): Promise<{ role: string; content: string; created_at?: string | null }[]> {
   const data = await request<{ messages: { role: string; content: string }[] }>(
     `/api/memory/sessions/${encodeURIComponent(sessionId)}`,
   );

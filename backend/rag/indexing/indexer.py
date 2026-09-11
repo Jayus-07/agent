@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,13 @@ from backend.infra.async_utils import run_async as _run_async
 
 # 单 chunk 嵌入失败时的重试上限
 EMBED_RETRY_MAX = 3
+# 嵌入重试指数退避：第 n 次重试前 sleep min(EMBED_RETRY_BACKOFF_BASE ** n, 上限) 秒
+# （原先 3 次立即连打，对抖动的远程 embedding 服务是雪崩式重试）
+EMBED_RETRY_BACKOFF_BASE = 1.5
+EMBED_RETRY_BACKOFF_MAX = 4.0
+# doc 级全文入库的文本长度上限：doc_db 单条 embedding 超长会被模型截断/报错，
+# 且大文件下内存峰值翻倍；Stage1 doc 级检索只需头部语义信息即可定位文档
+DOC_LEVEL_TEXT_MAX_CHARS = 16000
 
 
 class ChunkingEmptyError(Exception):
@@ -440,7 +448,13 @@ class IncrementalIndexer:
             trace_collector.end_span(dedup_span,
                 metrics={"cached": True, "existing_doc_id": dup_check.get("doc_id", "")})
             logger.info(f"[Dedup] 文件未变更，跳过索引: {file_path}")
-            return
+            # 返回契约：_index_file 包装器对返回值做 .get()，裸 return None 会 AttributeError
+            return {
+                "chunk_count": int(dup_check.get("chunk_count") or 0),
+                "doc_db_id": dup_check.get("doc_db_id", ""),
+                "file_hash": file_hash,
+                "skipped": True,
+            }
         trace_collector.end_span(dedup_span,
             metrics={"cached": False})
 
@@ -646,7 +660,10 @@ class IncrementalIndexer:
 
         doc_db_id = ""
         try:
-            ids = self.doc_db.add_texts(texts=[full_text], metadatas=[doc_db_meta]) if full_text else []
+            # doc 级全文超长会被 embedding 模型截断/报错，且大文件内存峰值翻倍；
+            # Stage1 doc 级检索只需头部语义即可定位文档，超长部分截断
+            doc_level_text = full_text[:DOC_LEVEL_TEXT_MAX_CHARS] if full_text else ""
+            ids = self.doc_db.add_texts(texts=[doc_level_text], metadatas=[doc_db_meta]) if doc_level_text else []
             doc_db_id = ids[0] if ids else ""
         except Exception as e:
             logger.error(f"Doc 级写入失败: {e}")
@@ -713,16 +730,13 @@ class IncrementalIndexer:
             kind=SpanKind.INDEX_EMBED.value,
         )
         embed_span.metrics["chunk_count"] = len(chunks)
-        chunk_ids = self._embed_with_retry(chunks, embed_span)
-        try:
-            trace_collector.end_span(embed_span,
-                metrics={"attempted": len(chunks),
-                         "succeeded": len(chunk_ids),
-                         "failed": len(chunks) - len(chunk_ids)})
-        except Exception as e:
-            trace_collector.end_span(embed_span, status="error",
-                metrics={"error": str(e)[:200]})
-            raise
+        # 预嵌入：除失败预检外，成功向量直接传给 vectordb.add_documents(embeddings=...)，
+        # 避免 langchain 内部对同一批文本再次全量嵌入（原先向量被丢弃，成本翻倍）
+        precomputed_vectors = self._embed_with_retry(chunks, embed_span)
+        trace_collector.end_span(embed_span,
+            metrics={"attempted": len(chunks),
+                     "succeeded": len(precomputed_vectors),
+                     "failed": len(chunks) - len(precomputed_vectors)})
 
         # ── ⑤ vector_db ──
         vdb_span = trace_collector.start_span(
@@ -734,7 +748,18 @@ class IncrementalIndexer:
         )
         try:
             if chunks:
-                chunk_ids = self.vectordb.add_documents(chunks) or []
+                if len(precomputed_vectors) == len(chunks):
+                    # 预嵌入全部成功 → 直接传入向量，跳过 add_documents 内部的二次嵌入
+                    chunk_ids = self.vectordb.add_documents(
+                        chunks, embeddings=precomputed_vectors) or []
+                else:
+                    # 预嵌入不完整（部分 chunk 嵌入失败）→ 回退由向量库统一嵌入，
+                    # 保证不产生向量空洞；此时预嵌入仅充当失败预检
+                    logger.warning(
+                        f"[Embed] 预嵌入不完整 ({len(precomputed_vectors)}/{len(chunks)})，"
+                        f"回退由向量库嵌入: {os.path.basename(file_path)}"
+                    )
+                    chunk_ids = self.vectordb.add_documents(chunks) or []
             else:
                 chunk_ids = []
             trace_collector.end_span(vdb_span,
@@ -849,6 +874,10 @@ class IncrementalIndexer:
                 return vec
             except Exception as e:
                 last_err = e
+                # 指数退避：立即连打 3 次对抖动的远程服务是雪崩式重试
+                if attempt < EMBED_RETRY_MAX - 1:
+                    time.sleep(min(EMBED_RETRY_BACKOFF_BASE ** (attempt + 1),
+                                   EMBED_RETRY_BACKOFF_MAX))
         # 所有重试都失败 → 创建 child span 记录失败
         logger.error(f"[Embed] chunk {i} 嵌入失败 {EMBED_RETRY_MAX} 次: {last_err}")
         chunk_span = trace_collector.start_span(
@@ -911,6 +940,10 @@ class IncrementalIndexer:
                     break
                 except Exception as e:
                     last_err = e
+                    # 指数退避（整批重试路径）
+                    if _attempt < EMBED_RETRY_MAX - 1:
+                        time.sleep(min(EMBED_RETRY_BACKOFF_BASE ** (_attempt + 1),
+                                       EMBED_RETRY_BACKOFF_MAX))
             if batch_ok:
                 continue
             # 整批耗尽重试 → 降级逐条，隔离单点失败（旧语义保留）
@@ -1034,12 +1067,13 @@ class IncrementalIndexer:
             # 低置信 LLM 复验（前置：必须在关键词/复杂度之前确定最终 doc_type）
             if confidence < 0.3 and doc_type == "general":
                 try:
+                    from backend.config.llm import OLLAMA_ENABLED
                     from backend.config.rag import DOC_LLM_MODEL
                     from backend.prompts.service import prompt_service
                     doc_type_prompt = prompt_service.render_sync(
                         "rag.indexing.doc_type", full_text=full_text[:1500],
                     ).text
-                    if DOC_LLM_MODEL:
+                    if DOC_LLM_MODEL and OLLAMA_ENABLED:
                         from langchain_ollama import ChatOllama
                         llm_l = ChatOllama(model=DOC_LLM_MODEL, temperature=0.0, num_ctx=2048, request_timeout=20)
                         llm_type = llm_l.invoke(doc_type_prompt).content.strip()

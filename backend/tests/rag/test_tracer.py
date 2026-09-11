@@ -285,7 +285,8 @@ class TestFinish:
         s2 = tc.start_span("llm2", parent_id="llm1")
         tc.end_span(s2, metrics={"prompt_tokens": 5, "completion_tokens": 15, "total_tokens": 20})
         tc.finish(t, "a", total_ms=100, model="m")
-        assert t.usage == {"prompt_tokens": 15, "completion_tokens": 35, "total_tokens": 50}
+        assert t.usage == {"prompt_tokens": 15, "completion_tokens": 35, "total_tokens": 50,
+                           "cached_tokens": 0, "reasoning_tokens": 0}
 
     def test_finish_aggregates_when_total_missing(self):
         """pt=10, ct=5 但 total_tokens 缺失 → 应该自己算 = 15"""
@@ -499,7 +500,8 @@ class TestParseTokensDegradation:
             usage_metadata = None
             llm_output = None
         result = TraceCollector.parse_tokens(FakeResult())
-        assert result == {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+        assert result == {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30,
+                         "cached_tokens": 0, "reasoning_tokens": 0}
 
     def test_anthropic_usage_metadata(self):
         """Anthropic 风格：usage_metadata.input_tokens / output_tokens"""
@@ -508,7 +510,8 @@ class TestParseTokensDegradation:
             usage_metadata = {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12}
             llm_output = None
         result = TraceCollector.parse_tokens(FakeResult())
-        assert result == {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}
+        assert result == {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12,
+                         "cached_tokens": 0, "reasoning_tokens": 0}
 
     def test_llm_output_token_usage(self):
         """llm_output.token_usage 兜底"""
@@ -517,7 +520,8 @@ class TestParseTokensDegradation:
             usage_metadata = None
             llm_output = {"token_usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}}
         result = TraceCollector.parse_tokens(FakeResult())
-        assert result == {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+        assert result == {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3,
+                         "cached_tokens": 0, "reasoning_tokens": 0}
 
     def test_input_output_aliases_auto_sum(self):
         """input_tokens + output_tokens 没给 total → 自己算"""

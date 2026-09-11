@@ -22,10 +22,19 @@ class SessionRepository:
         return obj
 
     async def load_messages(self, session_id: str, limit: int | None = None) -> list[ChatMessage]:
-        q = select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at)
+        """读取会话消息，按时间升序返回。
+
+        带 limit 时取「最近 N 条」（先倒序取再反转），而不是最早的 N 条 ——
+        语义修正：上下文注入和摘要只关心最近的对话，旧实现会把最早的消息
+        当成"最近历史"喂给模型。
+        """
+        q = select(ChatMessage).where(ChatMessage.session_id == session_id)
         if limit:
-            q = q.limit(limit)
-        result = await self._s.execute(q)
+            recent = await self._s.execute(
+                q.order_by(ChatMessage.created_at.desc()).limit(limit)
+            )
+            return list(recent.scalars().all())[::-1]
+        result = await self._s.execute(q.order_by(ChatMessage.created_at))
         return list(result.scalars().all())
 
     async def save_message(self, session_id: str, role: str, content: str) -> ChatMessage:
@@ -41,6 +50,12 @@ class SessionRepository:
     async def save_turn(self, session_id: str, question: str, answer: str) -> tuple[ChatMessage, ChatMessage]:
         q = await self.save_message(session_id, "user", question)
         a = await self.save_message(session_id, "assistant", answer)
+        # 首轮自动设标题（仅当 title 为空，不覆盖用户重命名）
+        await self._s.execute(
+            update(ChatSession)
+            .where(ChatSession.session_id == session_id, ChatSession.title.is_(None))
+            .values(title=question[:128])
+        )
         return q, a
 
     async def message_count(self, session_id: str) -> int:
@@ -68,6 +83,7 @@ class SessionRepository:
             select(
                 ChatSession.session_id,
                 ChatSession.user_id,
+                ChatSession.title,
                 ChatSession.summary,
                 ChatSession.context_summary,
                 ChatSession.created_at,
@@ -93,7 +109,8 @@ class SessionRepository:
         return [
             {
                 "session_id": row.session_id,
-                "title": row.summary or "新对话",
+                # title 优先（独立标题字段）；summary 兜底兼容未跑 002 迁移的旧库
+                "title": row.title or row.summary or "新对话",
                 "message_count": row.message_count,
                 "context_summary": row.context_summary,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -122,11 +139,11 @@ class SessionRepository:
         return True
 
     async def rename(self, session_id: str, title: str) -> bool:
-        """重命名会话（写 summary 字段）"""
+        """重命名会话（写独立 title 字段，不再占用 summary —— 那是 L2 摘要的位置）"""
         result = await self._s.execute(
             update(ChatSession)
             .where(ChatSession.session_id == session_id)
-            .values(summary=title, updated_at=datetime.now(timezone.utc))
+            .values(title=title[:128], updated_at=datetime.now(timezone.utc))
         )
         return result.rowcount > 0
 

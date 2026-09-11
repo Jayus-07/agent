@@ -181,6 +181,34 @@ async def get_rag_trace(trace_id: str):
 
 
 # ═══════════════════════════════════════════════════
+# Token 用量看板
+# ═══════════════════════════════════════════════════
+
+@router.get("/tokens/summary")
+async def token_summary(days: int = Query(7, ge=1, le=365)):
+    """Token 用量看板聚合（近 N 天）：总量 / 日趋势 / 按模型细分。
+
+    数据源：llm_usage 明细表（每次 LLM 调用一行，proxy 层写入），
+    按模型精确聚合，不受 trace 父子嵌套影响。
+    """
+    from backend.observability.llm_usage_store import get_llm_usage_store
+    data = get_llm_usage_store().dashboard(days)
+    data["days"] = days
+    return data
+
+
+@router.get("/tokens/calls")
+async def token_calls(days: int = Query(7, ge=1, le=365),
+                      model: str | None = Query(None),
+                      limit: int = Query(20, ge=1, le=200),
+                      offset: int = Query(0, ge=0)):
+    """LLM 调用明细（分页，最新在前）—— 每次调用一行的 token/成本记录。"""
+    from backend.observability.llm_usage_store import get_llm_usage_store
+    return get_llm_usage_store().list_calls(
+        days=days, model=model, limit=limit, offset=offset)
+
+
+# ═══════════════════════════════════════════════════
 # Metrics
 # ═══════════════════════════════════════════════════
 

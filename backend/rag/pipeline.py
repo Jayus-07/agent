@@ -3,6 +3,7 @@ import os
 import hashlib
 import shutil
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 from backend.rag.embedding_singleton import get_embedding
@@ -35,15 +36,40 @@ os.environ['TRANSFORMERS_OFFLINE'] = '1'
 
 
 class RAGPipeline:
+    # 进程内已见会话标记上限（有界 LRU）：原 set 永不清理，长期运行内存无界增长
+    _SEEN_SESSIONS_MAX = 10000
+
     def __init__(self):
         self.vectordb = None
         self.doc_db = None
         self.chunk_retriever = None
-        self._seen_sessions: set[str] = set()
+        self._seen_sessions: OrderedDict[str, None] = OrderedDict()
         self.bm25 = None
         self.bm25_store = None  # BM25Store 引用，供运行时删除/重建索引
         self._person_to_doc_cache = {}
         self._init()
+
+    def _mark_session_seen(self, session_id: str) -> None:
+        """标记会话已见（LRU 有界，防止内存无界增长）。"""
+        self._seen_sessions[session_id] = None
+        self._seen_sessions.move_to_end(session_id)
+        while len(self._seen_sessions) > self._SEEN_SESSIONS_MAX:
+            self._seen_sessions.popitem(last=False)
+
+    def _session_has_history(self, session_id: str) -> bool:
+        """检查会话在记忆库中是否已有历史轮次。
+
+        防止服务重启后进程内 _seen_sessions 丢失，把带 PG 历史的多轮对话
+        误判为首轮，用不含上下文的首轮缓存答案回填请求。
+        """
+        memory = getattr(self.lc_chain, "_memory", None)
+        if memory is None or not session_id:
+            return False
+        try:
+            buf = memory.start_session(session_id, "")
+            return bool(buf is not None and len(buf) > 0)
+        except Exception:
+            return False
 
     def _init(self):
         """初始化入口：4 个准备阶段 + 收尾。
@@ -56,10 +82,19 @@ class RAGPipeline:
         logger.info("RAG 管道初始化完成")
 
     def _prepare_documents(self):
-        """阶段 1：加载并构建文档索引。"""
-        self._load_and_chunk()
-        self._build_doc_index()
+        """阶段 1：初始化 embedding 单例。
+
+        全量 docs 的解析分块（_load_and_chunk）只在全量重建路径需要；
+        增量索引模式下该结果不会被使用，却要把整个知识库解析进内存，
+        是冷启动耗时与内存占用的大头 → 延迟到 _prepare_vector_store 按需执行。
+        """
         self._init_embedding()
+
+    def _ensure_docs_loaded(self):
+        """懒加载兜底：增量模式下 self.docs 未加载时按需加载（幂等）。"""
+        if getattr(self, "docs", None) is None:
+            self._load_and_chunk()
+            self._build_doc_index()
 
     def _prepare_vector_store(self):
         """阶段 2：构建向量库（增量优先，回退全量重建）。"""
@@ -71,7 +106,8 @@ class RAGPipeline:
         if used_incremental:
             return
 
-        # 全量重建路径
+        # 全量重建路径（需要全量 docs 解析分块）
+        self._ensure_docs_loaded()
         self._build_metadata()
         self._init_vector_dbs_full()
         # 同步 registry，失败不影响当前查询
@@ -308,8 +344,13 @@ class RAGPipeline:
         # BM25 重建语料源：优先 Chroma（indexer 实际写入的 chunks），
         # 回退 self.docs（loader chunks）。两者切分策略不同，
         # Chroma 语料保证 BM25 与向量检索的 chunk 集合一致。
+        # 增量模式下 self.docs 平时不加载，仅 Chroma 语料不可用时懒加载兜底
         chroma_docs = self._build_bm25_corpus_from_chroma()
-        bm25_source = chroma_docs if chroma_docs else self.docs
+        if chroma_docs:
+            bm25_source = chroma_docs
+        else:
+            self._ensure_docs_loaded()
+            bm25_source = self.docs
 
         if self.bm25 is None:
             logger.info("[RAG] BM25 索引不存在，全量重建...")
@@ -522,15 +563,18 @@ class RAGPipeline:
                 return "系统资源紧张，请稍后重试"
 
             is_first_turn = session_id not in self._seen_sessions
+            if is_first_turn and self._session_has_history(session_id):
+                # 进程重启后本地标记丢失，但会话实际有多轮历史 → 不走首轮缓存
+                is_first_turn = False
 
             if is_first_turn:
                 cached = self._check_answer_cache(question, kb_id)
                 if cached is not None:
-                    self._seen_sessions.add(session_id)
+                    self._mark_session_seen(session_id)
                     return cached
 
             answer = self._execute_chain(question, session_id)
-            self._seen_sessions.add(session_id)
+            self._mark_session_seen(session_id)
 
             self._snapshot_answer_meta()
 

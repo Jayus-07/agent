@@ -115,8 +115,13 @@ class KnowledgeStore(ABC):
     # ---- 写入方法 ----
 
     @abstractmethod
-    def add_documents(self, documents: list[Any]) -> list[str]:
-        """增量添加 Document 到已有库（不覆盖现有数据）。"""
+    def add_documents(
+        self, documents: list[Any], embeddings: list | None = None,
+    ) -> list[str]:
+        """增量添加 Document 到已有库（不覆盖现有数据）。
+
+        embeddings: 可选预计算向量（与 documents 对齐），避免库内部重复嵌入。
+        """
         ...
 
     @abstractmethod
@@ -304,11 +309,20 @@ class ChromaKnowledgeStore(KnowledgeStore):
 
     # ---- 写入方法 ----
 
-    def add_documents(self, documents: list[Any]) -> list[str]:
-        """增量添加 Document 到已有 ChromaDB（清洗非标量 metadata）。"""
+    def add_documents(
+        self, documents: list[Any], embeddings: list | None = None,
+    ) -> list[str]:
+        """增量添加 Document 到已有 ChromaDB（清洗非标量 metadata）。
+
+        Args:
+            embeddings: 预计算向量（与 documents 对齐）。索引链路已做过预嵌入
+                失败预检，传入可避免 langchain 内部对同一批文本再次全量嵌入。
+        """
         for doc in documents:
             if hasattr(doc, "metadata") and isinstance(doc.metadata, dict):
                 doc.metadata = _sanitize_metadata(doc.metadata)
+        if embeddings is not None:
+            return self._chroma.add_documents(documents, embeddings=embeddings)
         return self._chroma.add_documents(documents)
 
     def add_texts(

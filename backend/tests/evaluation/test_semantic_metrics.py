@@ -128,9 +128,11 @@ class TestAnswerSimilarity:
 
 
 class TestFaithfulnessSemantic:
-    def test_empty_answer(self, fake):
+    def test_empty_answer_skipped(self, fake):
+        # 2026-09-11 语义修正：空答案不是"完全忠实"，返回 skipped（None）不参与聚合
         result = faithfulness_semantic("", ["ctx"], fake)
-        assert result["faithfulness"] == 1.0
+        assert result["faithfulness"] is None
+        assert result.get("skipped") is True
 
     def test_empty_context(self, fake):
         result = faithfulness_semantic("some claim。", [], fake)
@@ -139,15 +141,18 @@ class TestFaithfulnessSemantic:
     def test_supported_claims(self):
         scorer = FakeScorer(fixed_scores=[0.9, 0.8])
         result = faithfulness_semantic("claim1。claim2。", ["ctx1", "ctx2"], scorer, threshold=0.5)
-        # Soft scoring: avg of max scores = (0.9 + 0.9) / 2 = 0.9
-        assert result["faithfulness"] == 0.9
+        # 统一口径：faithfulness = 支持率（逐 claim ≥ threshold），
+        # faithfulness_soft = 逐 claim 平均分
+        assert result["faithfulness"] == 1.0
+        # 每 claim 取 context 集合上的最大分：max([0.9, 0.8]) = 0.9
+        assert result["faithfulness_soft"] == 0.9
         assert result["supported_count"] == 2
 
     def test_unsupported_claims(self):
         scorer = FakeScorer(fixed_scores=[0.1, 0.2])
         result = faithfulness_semantic("claim1。claim2。", ["ctx1", "ctx2"], scorer, threshold=0.5)
-        # Soft scoring: avg of max scores = (0.2 + 0.2) / 2 = 0.2
-        assert result["faithfulness"] == 0.2
+        assert result["faithfulness"] == 0.0
+        assert result["faithfulness_soft"] == 0.2
         assert result["supported_count"] == 0
 
 

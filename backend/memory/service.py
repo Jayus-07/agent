@@ -46,16 +46,34 @@ class MemoryService:
                 mrepo = MemoryRepository(db_session)
 
                 # Ensure chat_sessions row exists (FK target for chat_messages)
-                await srepo.get_or_create(session_id, user_id)
+                srow = await srepo.get_or_create(session_id, user_id)
 
-                # L2 → L1
+                # L2 → L1（只取最近 SHORT_TERM_MAX_MESSAGES*2 条：
+                #  ① 查询层限量，避免长会话全量拉取；② 多取一倍给去重留余量）
+                from backend.config import SHORT_TERM_MAX_MESSAGES
                 l2 = await SessionMemory.create(session_id, srepo, user_id)
                 self._sessions[session_id] = l2
 
                 l1 = ShortTermBuffer()
-                history = await l2.load_messages()
+                history = await l2.load_messages(limit=SHORT_TERM_MAX_MESSAGES * 2)
+                # 历史双写修复：旧数据曾因前端+后端各持久化一次，产生连续重复消息。
+                # 注入上下文前按 (role, content) 连续去重，避免重复历史挤占窗口、误导模型
+                prev = None
                 for msg in history:
+                    if prev is not None and type(msg) is type(prev) and msg.content == prev.content:
+                        continue
                     l1.add(msg)
+                    prev = msg
+
+                # L2 摘要注入：超过短消息窗口的更早上下文由会话摘要补足 ——
+                # 否则摘要落库后从未参与 prompt，长会话的早期信息完全丢失。
+                # 002 迁移后 title/summary 已分字段，summary 即纯 L2 摘要；
+                # 保留短文本守卫仅为兼容未回填的旧库（summary 里可能残留旧重命名标题）
+                if srow.summary and len(srow.summary) >= 30:
+                    l1._messages.insert(0, SystemMessage(
+                        content=f"以下是本会话早期对话的摘要，可结合它理解用户当前问题：\n{srow.summary}"
+                    ))
+                    logger.info(f"[MemoryService] 注入 L2 会话摘要 (session={session_id}, {len(srow.summary)} 字)")
 
                 # L3 → L1
                 retriever = HybridRetriever(mrepo)

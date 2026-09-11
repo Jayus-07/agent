@@ -215,6 +215,44 @@ class SQLValidator:
                         )
 
     # =================================================
+    # Layer 3+: SELECT * 泄露防护 — 敏感表上禁止星号投影
+    # =================================================
+
+    def _check_star_projection(self, parsed: list, table_names: Set[str]) -> None:
+        """敏感列表上的 `*` / `t.*` 直接拒绝（fail-closed）。
+
+        Layer 3 只能拦截显式列名；`SELECT *` 会把敏感列一并带出而不触发
+        任何列名检查。这里在查询引用了含敏感列的表时，拒绝一切星号投影，
+        迫使 LLM 在重试链路中显式列出列名。COUNT(*) 等聚合内的 Star
+        不是投影，不受影响。
+        """
+        if not self.sensitive_columns:
+            return
+
+        # 敏感列配置（schema.table.column）→ 敏感表名集合
+        sensitive_tables = {
+            ".".join(ref.lower().split(".")[:2]) for ref in self.sensitive_columns
+        }
+        # 引用表可能是裸名，与敏感表做双向匹配
+        hits_sensitive = any(
+            t in sensitive_tables
+            or any(st.endswith(f".{t}") for st in sensitive_tables)
+            for t in table_names
+        )
+        if not hits_sensitive:
+            return
+
+        for select in parsed[0].find_all(exp.Select):
+            for expr in select.expressions:
+                if isinstance(expr, exp.Star) or (
+                    isinstance(expr, exp.Column) and isinstance(expr.this, exp.Star)
+                ):
+                    raise ValidationError(
+                        "查询涉及含敏感列的表，禁止使用 SELECT *，请显式列出所需列名",
+                        layer=3,
+                    )
+
+    # =================================================
     # Layer 4: 禁止函数检查
     # =================================================
 
@@ -243,11 +281,16 @@ class SQLValidator:
     # =================================================
 
     def _ensure_limit(self, parsed: list) -> Tuple[list, bool]:
-        """自动添加 LIMIT 限制"""
+        """自动添加 LIMIT 限制。
+
+        只检查顶层 SELECT 自身的 limit 子句（stmt.args["limit"]），
+        不能用 stmt.find(exp.Limit)——那会遍历整棵 AST，子查询/CTE
+        里的 LIMIT 会被误当成外层限制，导致外层查询无界扫描。
+        """
         stmt = parsed[0]
 
-        limit_clause = stmt.find(exp.Limit)
-        if limit_clause:
+        limit_clause = stmt.args.get("limit")
+        if limit_clause is not None:
             current = int(limit_clause.expression.name) if limit_clause.expression else 0
             if current > self.max_limit:
                 raise ValidationError(
@@ -301,6 +344,9 @@ class SQLValidator:
 
         # — Layer 3: 敏感列拒绝 —
         self._check_sensitive_columns(parsed, table_names)
+
+        # — Layer 3+: SELECT * 敏感列泄露防护 —
+        self._check_star_projection(parsed, table_names)
 
         # — Layer 4: 禁止函数 —
         self._check_banned_functions(parsed)

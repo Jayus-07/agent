@@ -111,24 +111,21 @@ def score_case_semantic(
     # --- 生成质量语义指标（RAGAS faithfulness / answer_correctness）---
     if case_metadata.get("generation_eval"):
         expected_answer = case_metadata.get("expected_answer", "")
-        if expected_answer and retrieved_texts:
-            answer_for_eval = generated_answer or " ".join(retrieved_texts)
+        # 只用真实生成回答；无生成答案时不用检索文本冒充（系统性虚高）
+        if expected_answer and retrieved_texts and generated_answer:
 
             faith_result = faithfulness_semantic(
-                answer_for_eval, retrieved_texts, scorer, threshold=threshold,
+                generated_answer, retrieved_texts, scorer, threshold=threshold,
             )
-            metrics["sem_faithfulness"] = faith_result["faithfulness"]
-            metrics["sem_hallucination_rate"] = hallucination_rate(faith_result)
-            metrics["sem_claim_count"] = float(faith_result["claim_count"])
+            # 空答案/无可验证 claim → skipped（None），不写入指标
+            if faith_result.get("faithfulness") is not None:
+                metrics["sem_faithfulness"] = faith_result["faithfulness"]
+                metrics["sem_hallucination_rate"] = hallucination_rate(faith_result)
+                metrics["sem_claim_count"] = float(faith_result["claim_count"])
 
-            if generated_answer:
-                metrics["sem_answer_correctness"] = answer_similarity_semantic(
-                    generated_answer, expected_answer, scorer,
-                )
-            else:
-                metrics["sem_answer_correctness"] = answer_similarity_semantic(
-                    " ".join(retrieved_texts), expected_answer, scorer,
-                )
+            metrics["sem_answer_correctness"] = answer_similarity_semantic(
+                generated_answer, expected_answer, scorer,
+            )
 
     return metrics
 

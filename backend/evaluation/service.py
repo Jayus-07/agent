@@ -12,6 +12,7 @@ from backend.config import EVAL_DATASET_PATH, TOKEN_USAGE_LOG_PATH
 from backend.evaluation.config import EvalConfig
 from backend.evaluation.gate import evaluate_tiers
 from backend.evaluation.metrics import aggregate_metrics
+from backend.evaluation.generation import reset_token_usage
 from backend.shared.logger import logger
 from backend.evaluation.models import (
     EvalReport,
@@ -70,51 +71,73 @@ def _build_summary(results: list[EvalResult], module: ModuleKind) -> ModuleSumma
     )
 
 
-def _inject_token_totals(summaries: list[ModuleSummary]) -> None:
+def _inject_token_totals(summaries: list[ModuleSummary], run_started_ts: float | None = None) -> None:
     """P0: Inject token statistics with SUT vs Evaluator separation.
-    
+
     Structure:
       - RAG module → SUT tokens (embedding, rerank, answer_llm)
       - RAGAS metrics → Evaluator tokens (judge llm calls)
-    
-    Since we use unified token_tracker (not separate counters),
-    this aggregates from JSONL file or uses module.metrics if available.
+
+    run_started_ts: 本次评测开始时间（epoch 秒）。JSONL 记录按该时间窗过滤，
+    原实现累加整个历史日志文件（无轮转时第 N 次评测是历次累计值）。
     """
     if not summaries:
         return
-    
+
     # Try to read from JSONL (if token tracker is enabled)
     try:
         import os
         import json
+        import time as _time
+        from datetime import datetime, timezone
+
         from backend.config import TOKEN_USAGE_LOG_PATH
-        
+        from backend.evaluation.generation import get_token_usage
+
         log_path = os.path.expanduser(TOKEN_USAGE_LOG_PATH)
         if os.path.exists(log_path):
             sut_tokens = {"embedding": 0, "rerank": 0, "answer_llm": 0}
             evaluator_tokens = {"judge": 0}
-            
+
             with open(log_path, "r", encoding="utf-8") as f:
                 for line in f:
                     try:
                         record = json.loads(line.strip())
+                        # 按 run 时间窗过滤：只统计本次评测期间的记录
+                        if run_started_ts is not None:
+                            ts_raw = record.get("timestamp", "")
+                            try:
+                                ts = datetime.fromisoformat(
+                                    str(ts_raw).replace("Z", "+00:00"),
+                                )
+                                if ts.timestamp() < run_started_ts:
+                                    continue
+                            except (ValueError, TypeError, OverflowError):
+                                continue
                         component = record.get("component", "")
                         total = record.get("total_tokens") or 0
-                        
+
                         if component == "embedding":
                             sut_tokens["embedding"] += total
                         elif component == "rerank":
                             sut_tokens["rerank"] += total
                         elif component == "llm":
-                            # Distinguish between answer_llm and judge
-                            # Heuristic: if evaluation_run_id present → judge, else → answer_llm
+                            # runtime 埋点的 llm 记录无 evaluation_run_id，
+                            # 计入 SUT 侧 runtime LLM（检索改写等）；带 run_id
+                            # 的为评测器（judge/RAGAS）调用
                             if record.get("evaluation_run_id"):
                                 evaluator_tokens["judge"] += total
                             else:
                                 sut_tokens["answer_llm"] += total
                     except (json.JSONDecodeError, KeyError):
                         continue
-            
+
+            # 本地 Ollama 生成计数（evaluation/generation 内存计数器，
+            # 不经过 JSONL tracker）合并进 answer_llm
+            local_usage = get_token_usage()
+            sut_tokens["answer_llm"] += int(local_usage.get("prompt_tokens", 0)) \
+                + int(local_usage.get("completion_tokens", 0))
+
             # Find RAG summary and inject comprehensive token stats
             rag_summary = next((s for s in summaries if s.module == "rag"), None)
             if rag_summary:
@@ -130,8 +153,9 @@ def _inject_token_totals(summaries: list[ModuleSummary]) -> None:
                         "total": evaluator_tokens["judge"],
                     },
                     "grand_total": sum(sut_tokens.values()) + evaluator_tokens["judge"],
+                    "window": "since_run_start" if run_started_ts is not None else "all_time",
                 }
-    
+
     except Exception as e:
         # Soft failure: don't break evaluation if token tracking fails
         logger.debug(f"[TokenStats] Failed to aggregate tokens: {e}")
@@ -171,8 +195,11 @@ class EvaluationService:
 
     def evaluate(self, config: EvalConfig) -> EvalReport:
         """执行评估，返回 EvalReport。"""
+        import time as _time
         self._ensure_runners()
         reset_token_usage()
+        # token 统计时间窗起点（JSONL 过滤用，防止跨 run 累计污染）
+        run_started_ts = _time.time()
 
         from backend.evaluation.dataset import load_dataset, load_dataset_file
 
@@ -186,9 +213,9 @@ class EvaluationService:
             if config.smoke:
                 cases = cases[:5]
             cases = _filter_cases_by_tier(cases, config.tier)
-            results = _run_module("rag", cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds)
+            results = _run_module("rag", cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume)
             summaries = [_build_summary(results, "rag")]
-            _inject_token_totals(summaries)
+            _inject_token_totals(summaries, run_started_ts)
             return EvalReport(
                 module="rag",
                 mode="live" if live else "offline",
@@ -201,7 +228,7 @@ class EvaluationService:
             )
 
         module_kinds: list[ModuleKind] = (
-            ["planner", "rag"] if config.module == "all" else [config.module]  # type: ignore
+            ["planner", "rag", "sql", "e2e"] if config.module == "all" else [config.module]  # type: ignore
         )
 
         all_results: list[EvalResult] = []
@@ -214,21 +241,21 @@ class EvaluationService:
                 cases = cases[:5]
             cases = _filter_cases_by_tier(cases, config.tier)
 
-            results = _run_module(m, cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds)
+            results = _run_module(m, cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume)
             all_results.extend(results)
             summaries.append(_build_summary(results, m))
             all_cases.extend(cases)
 
         total_score = None
         if config.module == "all" and live:
-            weights = {"planner": 0.30, "rag": 0.70}
+            weights = {"planner": 0.20, "rag": 0.45, "sql": 0.15, "e2e": 0.20}
             score = 0.0
             for s in summaries:
                 w = weights.get(s.module, 0.0)
                 score += w * s.pass_rate
             total_score = round(score, 4)
 
-        _inject_token_totals(summaries)
+        _inject_token_totals(summaries, run_started_ts)
         return EvalReport(
             module=config.module,
             mode="live" if live else "offline",

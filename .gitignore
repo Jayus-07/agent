@@ -377,3 +377,23 @@ frontend.pid
 # docker-compose.yml (container orchestration)
 # requirements*.txt (Python dependencies)
 # pyproject.toml (Python config)
+
+# ============================================
+# RUNTIME ARTIFACTS & LOCAL TOOLS (2026-09-11)
+# ============================================
+# SQLite WAL/SHM 伴随文件（主 .db 文件按原有规则处理）
+*.db-shm
+*.db-wal
+# 前端构建增量缓存
+*.tsbuildinfo
+# 本地 AI 工具目录
+.qoder/
+.workbuddy/
+# 清理脚本产生的备份/隔离目录
+data/_rag_clear_backup_*/
+backend/data/_rag_clear_backup_*/
+backend/data/_quarantine_damaged_*/
+# 记忆库运行时数据目录（索引/向量库/上传文件，不进 git）
+backend/data/
+# LLM token 用量流水
+token_usage.jsonl

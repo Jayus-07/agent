@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Literal, Protocol, Callable
 from pydantic import BaseModel, Field
 
-ModuleKind = Literal["planner", "rag", "cs"]
+ModuleKind = Literal["planner", "rag", "cs", "sql", "e2e"]
 
 
 class RunnerFunc(Protocol):
@@ -74,7 +74,8 @@ class ModuleSummary(BaseModel):
     errors: int
     skipped: int
     pass_rate: float = 0.0
-    metrics: dict[str, float] = Field(default_factory=dict)
+    # 实际会注入嵌套结构（如 token_summary），不能声明为 float
+    metrics: dict[str, Any] = Field(default_factory=dict)
 
 
 class TierSummary(BaseModel):

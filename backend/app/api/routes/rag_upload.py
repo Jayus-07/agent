@@ -251,6 +251,9 @@ async def progress_queue_gc_loop(interval_seconds: float = 300) -> None:
 #   4. 模块级常量，方便纯函数 import 测试。
 from backend.rag.preprocessing.parser import PARSABLE_EXTS
 
+# 后台索引任务的存活引用集：防止 fire-and-forget task 被 GC / 异常静默丢失
+_background_index_tasks: set[asyncio.Task] = set()
+
 _MIME_BY_EXT: dict[str, set[str]] = {
     "pdf":      {"application/pdf"},
     "md":       {"text/markdown", "text/plain"},
@@ -361,12 +364,15 @@ async def upload_document(request: Request, file: UploadFile = File(...),
     if not result.get("ok"):
         return result
 
-    asyncio.create_task(_run_index_background(
+    task = asyncio.create_task(_run_index_background(
         result["upload_id"], result["filepath"], result["filename"],
         result["source"], result["batch_id"], kb_id=kb_id, department=department,
         upload_elapsed_ms=result.get("upload_elapsed_ms"),
         was_overwrite=result.get("was_overwrite", False),  # P0-X
     ))
+    # 持有引用：无引用的 fire-and-forget task 可能被 GC，异常也会被静默吞掉
+    _background_index_tasks.add(task)
+    task.add_done_callback(_background_index_tasks.discard)
     return {"ok": True, "upload_id": result["upload_id"], "filename": result["filename"]}
 
 
@@ -601,8 +607,9 @@ def _write_progress_redis(upload_id: str, stage: str, message: str = "", **extra
             "detail": _json.dumps(extra, ensure_ascii=False, default=str) if extra else "{}",
         })
         r.expire(key, 600)
-    except Exception:
-        pass
+    except Exception as e:
+        # 至少留一条观测日志：Redis 故障静默吞掉会让进度镜像失效无从排查
+        logger.debug(f"[RAG] 进度镜像写入 Redis 失败: {e}")
 
 
 async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general", upload_elapsed_ms: int | None = None, was_overwrite: bool = False):
@@ -621,7 +628,8 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
 
     async def emit(stage: str, message: str = "", **extra):
         await queue.put({"stage": stage, "message": message, **extra})
-        _write_progress_redis(upload_id, stage, message, **extra)
+        # Redis 写盘是同步网络 IO，放线程池执行，避免 Redis 慢时阻塞事件循环
+        await asyncio.to_thread(_write_progress_redis, upload_id, stage, message, **extra)
 
     _upload_t0 = time.time()
     result = None

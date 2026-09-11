@@ -22,13 +22,15 @@ class RagasEvaluator(Evaluator):
             return False
         return True
 
-    def evaluate(self, case: TestCase, ctx: dict[str, Any]) -> dict[str, float]:
+    def evaluate(self, case: TestCase, ctx: dict[str, Any]) -> dict[str, float | None]:
         ragas_input = ctx.get("ragas_input")
         if not ragas_input:
+            # None = 无法计算（缺失），聚合自动跳过；不能记 0 分冒充"真实得零分"，
+            # 否则计算失败会拉低均值污染回归判断
             return {
-                "ragas_context_recall": 0.0,
-                "ragas_context_precision": 0.0,
-                "ragas_faithfulness": 0.0,
+                "ragas_context_recall": None,
+                "ragas_context_precision": None,
+                "ragas_faithfulness": None,
                 "ragas_reason": "no_ragas_input",
             }
 
@@ -40,9 +42,9 @@ class RagasEvaluator(Evaluator):
 
         if not contexts or not answer or not answer.strip():
             return {
-                "ragas_context_recall": 0.0,
-                "ragas_context_precision": 0.0,
-                "ragas_faithfulness": 0.0,
+                "ragas_context_recall": None,
+                "ragas_context_precision": None,
+                "ragas_faithfulness": None,
                 "ragas_reason": "missing_context_or_answer",
             }
 
@@ -61,8 +63,8 @@ class RagasEvaluator(Evaluator):
         except Exception as e:
             logger.warning(f"[RAGAS] {case.id} 计算失败: {e}")
             return {
-                "ragas_context_recall": 0.0,
-                "ragas_context_precision": 0.0,
-                "ragas_faithfulness": 0.0,
+                "ragas_context_recall": None,
+                "ragas_context_precision": None,
+                "ragas_faithfulness": None,
                 "ragas_reason": f"error: {e}",
             }

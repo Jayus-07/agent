@@ -11,6 +11,8 @@ import 此文件会触发各子模块加载，从而执行 register_runner() 注
 # --- 导入即注册：各子模块在加载时调用 register_runner() ---
 from backend.evaluation.runners.planner import _run_planner
 from backend.evaluation.runners.rag import _run_rag
+from backend.evaluation.runners.sql import _run_sql
+from backend.evaluation.runners.e2e import _run_e2e
 
 # --- 测试兼容：直接 import 的工具函数 ---
 from backend.evaluation.runners._common import (
@@ -23,6 +25,8 @@ from backend.evaluation.runners._common import (
 __all__ = [
     "_run_planner",
     "_run_rag",
+    "_run_sql",
+    "_run_e2e",
     "_match_by_snippet",
     "_extract_query_entities",
     "_entities_all_present",

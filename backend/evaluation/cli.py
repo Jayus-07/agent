@@ -53,11 +53,11 @@ def _bootstrap_runners(config_module: str | None = None):
 def main():
     parser = argparse.ArgumentParser(
         prog="python -m evaluation",
-        description="Agent Platform 评估框架 — 度量 Planner/RAG 质量",
+        description="Agent Platform 评估框架 — 度量 Planner/RAG/SQL 质量",
     )
     parser.add_argument(
         "module", nargs="?", default="all",
-        choices=["all", "planner", "rag"],
+        choices=["all", "planner", "rag", "sql", "e2e"],
         help="评估模块 (默认: all)",
     )
     parser.add_argument(
@@ -126,6 +126,18 @@ def main():
         "--promote-baseline", action="store_true",
         help="将本次结果提升为新 baseline",
     )
+    parser.add_argument(
+        "--workers", type=int, default=1, metavar="N",
+        help="case 级并发线程数（默认 1=串行；本地 LLM 生成场景收益有限）",
+    )
+    parser.add_argument(
+        "--ragas-workers", type=int, default=4, metavar="N",
+        help="RAGAS 批量评估并发线程数（默认 4）",
+    )
+    parser.add_argument(
+        "--no-resume", action="store_true",
+        help="忽略 checkpoint 断点续跑，强制全量重跑",
+    )
 
     args = parser.parse_args()
 
@@ -161,6 +173,9 @@ def main():
         semantic_thresholds=semantic_thresholds,
         regression=args.regression,
         promote_baseline=args.promote_baseline,
+        workers=args.workers,
+        ragas_workers=args.ragas_workers,
+        resume=not args.no_resume,
     )
 
     print_summary(report)
@@ -257,6 +272,24 @@ def _do_compare(compare_id: str, current, results_dir: Path, current_dir: Path |
         prev_dict = json.load(f)
     base = _EvalReport.model_validate(prev_dict)
 
+    # 可比性校验：smoke(5条) vs 全量、offline vs live、不同 dataset/tier 的
+    # 报告直接对比，delta 无意义。不匹配时警告并终止对比。
+    mismatches = []
+    if base.mode != current.mode:
+        mismatches.append(f"mode: {base.mode} vs {current.mode}")
+    if base.smoke != current.smoke:
+        mismatches.append(f"smoke: {base.smoke} vs {current.smoke}")
+    if base.tier != current.tier:
+        mismatches.append(f"tier: {base.tier} vs {current.tier}")
+    base_total = sum(s.total for s in base.summaries)
+    cur_total = sum(s.total for s in current.summaries)
+    if base_total != cur_total:
+        mismatches.append(f"用例数: {base_total} vs {cur_total}")
+    if mismatches:
+        print(f"\n⚠️  历史报告 {prev_file.name} 与本次不可比（{'; '.join(mismatches)}），跳过对比。")
+        print("   请用 --promote-base 重建同口径基线后再对比。")
+        return
+
     print(f"\n=== 基线对比: {prev_file.name} ===")
 
     # 逐模块打印对比（中文）
@@ -271,8 +304,11 @@ def _do_compare(compare_id: str, current, results_dir: Path, current_dir: Path |
         print(f"\n[{mod_zh}]  通过率: {prev_s.pass_rate:.1%} → "
               f"{cur_s.pass_rate:.1%} ({pass_delta:+.1%}){pass_flag}")
         for key, cur_val in cur_s.metrics.items():
+            # metrics 可能含嵌套 dict（token_summary）/None（无法计算），跳过非数值
+            if isinstance(cur_val, bool) or not isinstance(cur_val, (int, float)):
+                continue
             base_val = prev_s.metrics.get(key)
-            if base_val is None:
+            if isinstance(base_val, bool) or not isinstance(base_val, (int, float)):
                 continue
             delta = cur_val - base_val
             label = METRIC_LABELS.get(key, key)

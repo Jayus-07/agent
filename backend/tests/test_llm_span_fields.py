@@ -100,6 +100,7 @@ class TestRecordTokensMeta:
         proxy_mod._record_tokens(r)
         assert proxy_mod._last_tokens_var.get() == {
             "prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150,
+            "cached_tokens": 0, "reasoning_tokens": 0,
         }
 
     def test_records_finish_reason_stop(self):

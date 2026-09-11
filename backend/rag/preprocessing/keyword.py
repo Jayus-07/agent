@@ -132,25 +132,35 @@ extract_doc_keywords_rule = extract_rule_keywords
 _ollama_cache: dict[str, bool] = {}
 
 def _ollama_available(model_name: str) -> bool:
-    """检查 Ollama 服务是否可用 + 模型是否已拉取。结果缓存 5 分钟。"""
+    """检查 Ollama 服务是否可用 + 模型是否已拉取。结果缓存 5 分钟。
+
+    ENV_MODE=cloud 时直接返回 False，不发起本地连接。
+    """
     import time, requests
+
+    from backend.config.llm import OLLAMA_BASE_URL, OLLAMA_ENABLED
+
     now = time.time()
     cached = _ollama_cache.get('_ts', 0)
     if now - cached < 300 and model_name in _ollama_cache:
         return _ollama_cache[model_name]
-    try:
-        r = requests.get("http://localhost:11434/api/tags", timeout=2)
-        if r.status_code == 200:
-            models = [m.get("name", "") for m in r.json().get("models", [])]
-            available = any(model_name in m or model_name.split(':')[0] in m for m in models)
-        else:
-            available = False
-    except Exception:
+    if not OLLAMA_ENABLED:
         available = False
+        logger.info("[ChunkLLM] ENV_MODE=cloud，本地 Ollama 已禁用，chunk LLM 关键词走规则降级")
+    else:
+        try:
+            r = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=2)
+            if r.status_code == 200:
+                models = [m.get("name", "") for m in r.json().get("models", [])]
+                available = any(model_name in m or model_name.split(':')[0] in m for m in models)
+            else:
+                available = False
+        except Exception:
+            available = False
+        if not available:
+            logger.info(f"[ChunkLLM] Ollama 不可用或模型 {model_name} 未找到，chunk LLM 关键词禁用")
     _ollama_cache['_ts'] = now
     _ollama_cache[model_name] = available
-    if not available:
-        logger.info(f"[ChunkLLM] Ollama 不可用或模型 {model_name} 未找到，chunk LLM 关键词禁用")
     return available
 
 
@@ -230,6 +240,11 @@ def extract_chunk_keywords_qwen(text: str, top_k: int = 5) -> tuple:
     仅对 LLM_FORCED_TYPES 文档的 chunk 调用，返回 (keyword_list, model_name)。
     失败时返回空列表，不影响索引流程。
     """
+    from backend.config.llm import OLLAMA_ENABLED
+
+    if not OLLAMA_ENABLED:
+        return [], "disabled"
+
     try:
         from backend.config.rag import CHUNK_LLM_MODEL
     except ImportError:
@@ -275,11 +290,12 @@ def extract_chunk_keywords_qwen(text: str, top_k: int = 5) -> tuple:
 def extract_doc_keywords_llm(text: str, top_k: int = 10) -> tuple:
     """LLM 关键词提取 — 返回 (keyword_dicts, token_dict)。
 
-    路由逻辑：DOC_LLM_MODEL 有值 → 本地 Ollama；否则 → _LLMProxy（DeepSeek/当前模型）。
+    路由逻辑：DOC_LLM_MODEL 有值且 ENV_MODE=local → 本地 Ollama；否则 → _LLMProxy（DeepSeek/当前模型）。
     """
+    from backend.config.llm import OLLAMA_ENABLED
     from backend.config.rag import DOC_LLM_MODEL
 
-    if DOC_LLM_MODEL:
+    if DOC_LLM_MODEL and OLLAMA_ENABLED:
         return _extract_doc_keywords_ollama(text, top_k, DOC_LLM_MODEL)
     return _extract_doc_keywords_proxy(text, top_k)
 

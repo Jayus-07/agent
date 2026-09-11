@@ -24,6 +24,15 @@ if ENV_MODE not in ("cloud", "local"):
     )
 
 # =====================================================
+# Ollama 本地推理开关（跟随 ENV_MODE）
+# 仅 ENV_MODE=local 时启用本地 Ollama（评测生成/chunk 关键词/RAGAS local 后端）；
+# ENV_MODE=cloud 时所有链路一律走云端 API，不再尝试连接本地 Ollama
+# =====================================================
+OLLAMA_ENABLED = ENV_MODE == "local"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+
+# =====================================================
 # Embedding Configuration (P0 - 动态配置)
 # =====================================================
 

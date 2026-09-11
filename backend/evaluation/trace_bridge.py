@@ -17,6 +17,8 @@ _WORKFLOW_TO_MODULE: dict[str, ModuleKind] = {
     "rag_agent": "rag",
     "rag_chain": "rag",
     "planner": "planner",
+    "sql_agent": "sql",
+    "multi_agent": "e2e",
 }
 
 
@@ -38,7 +40,8 @@ def _infer_module(trace: dict | Any) -> ModuleKind:
     if "rag" in workflow_kind:
         return "rag"
 
-    return "rag"
+    # 无法识别的 workflow 归入 Graph E2E（全链路）轨道
+    return "e2e"
 
 
 def _extract_answer(trace: dict | Any) -> str:

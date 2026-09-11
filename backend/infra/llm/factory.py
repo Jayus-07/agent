@@ -18,6 +18,7 @@ from typing import Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from backend.config import DEEPSEEK_API_KEY, LLM_MODEL, MINIMAX_API_KEY, QWEN_API_KEY
+from backend.config.llm import OLLAMA_ENABLED
 from backend.infra.llm.models import AVAILABLE_MODELS
 from backend.infra.llm.providers.deepseek import build_deepseek, get_deepseek_balance
 from backend.infra.llm.providers.minimax import build_minimax, get_minimax_balance
@@ -72,6 +73,13 @@ class LLMFactory:
             return {"ok": False, "error": "MINIMAX_API_KEY 未配置，请在 .env 中设置"}
         if provider == "qwen" and not QWEN_API_KEY:
             return {"ok": False, "error": "QWEN_API_KEY 未配置，请在 .env 中设置"}
+        # cloud 模式禁用本地 Ollama 模型
+        if provider == "ollama" and not OLLAMA_ENABLED:
+            return {
+                "ok": False,
+                "error": "ENV_MODE=cloud 已禁用本地 Ollama，请在 .env 中设置 ENV_MODE=local 后重试",
+                "available": [m["name"] for m in AVAILABLE_MODELS],
+            }
 
         # 预热实例化
         try:

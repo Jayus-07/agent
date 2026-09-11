@@ -82,6 +82,9 @@ from backend.config.database import (
 # LLM
 from backend.config.llm import (
     ENV_MODE,
+    OLLAMA_ENABLED,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
     EMBEDDING_MODEL,
     EMBEDDING_API_BASE,
     EMBEDDING_API_KEY,

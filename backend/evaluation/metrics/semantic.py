@@ -1,7 +1,7 @@
 """语义指标 — CrossEncoder/Embedding scorer 驱动的软评分。"""
 from typing import Any
 
-from backend.evaluation.metrics.generation import _split_claims
+from backend.evaluation.metrics.generation import _empty_faithfulness, _split_claims
 
 
 def context_recall_semantic(
@@ -116,40 +116,50 @@ def faithfulness_semantic(
     context: list[str],
     scorer: Any,
     threshold: float = 0.50,
-) -> dict[str, float]:
-    """基于 CrossEncoder 的忠实度评估 — soft scoring 版本。"""
+) -> dict:
+    """基于 CrossEncoder 的忠实度评估。
+
+    口径与 faithfulness_claim_based 统一：
+      - faithfulness: 逐 claim CrossEncoder 得分 ≥ threshold 的支持率
+      - faithfulness_soft: 逐 claim 得分平均值
+    （旧版 faithfulness 字段返回平均分、supported_count 按阈值计数的
+    混合语义已废弃——同一字段跨版本漂移导致基线不可比）
+    空答案返回 skipped（None），不参与聚合——空答案不是"完全忠实"。
+    """
     if not answer.strip():
-        return {"faithfulness": 1.0, "claim_count": 0, "supported_count": 0}
+        return _empty_faithfulness()
     if not context:
         claims = _split_claims(answer)
-        return {"faithfulness": 0.0, "claim_count": len(claims), "supported_count": 0}
+        return {"faithfulness": 0.0, "faithfulness_soft": 0.0,
+                "claim_count": len(claims), "supported_count": 0}
 
     claims = _split_claims(answer)
     if not claims:
-        return {"faithfulness": 1.0, "claim_count": 0, "supported_count": 0}
+        return _empty_faithfulness()
 
-    max_scores: list[float] = []
-    supported = 0
+    claim_scores: list[float] = []
     for claim in claims:
         queries = [claim] * len(context)
         scores = scorer.score_pairs(queries, context)
-        max_score = max(scores) if scores else 0.0
-        max_scores.append(max_score)
-        if max_score >= threshold:
-            supported += 1
+        claim_scores.append(max(scores) if scores else 0.0)
 
-    avg_faithfulness = sum(max_scores) / len(max_scores) if max_scores else 0.0
+    supported = sum(1 for s in claim_scores if s >= threshold)
+    soft = sum(claim_scores) / len(claim_scores)
 
     return {
-        "faithfulness": round(avg_faithfulness, 4),
-        "claim_count": len(claims),
+        "faithfulness": round(supported / len(claim_scores), 4),
+        "faithfulness_soft": round(soft, 4),
+        "claim_count": len(claim_scores),
         "supported_count": supported,
     }
 
 
-def hallucination_rate(faithfulness_result: dict[str, float]) -> float:
-    """幻觉率 = 1 - faithfulness。"""
-    return round(1.0 - faithfulness_result.get("faithfulness", 0.0), 4)
+def hallucination_rate(faithfulness_result: dict) -> float:
+    """幻觉率 = 1 - faithfulness。skipped（None）时返回 nan，不参与聚合。"""
+    f = faithfulness_result.get("faithfulness")
+    if f is None:
+        return float("nan")
+    return round(1.0 - f, 4)
 
 
 def answer_relevancy_proxy(

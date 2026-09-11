@@ -149,7 +149,7 @@ function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubb
             {!isCurrentStreaming && message.content && (
               <>
                 <SqlViz streamEvents={message.streamEvents ?? []} />
-                <TokenInfo streamEvents={message.streamEvents ?? []} />
+                <TokenInfo streamEvents={message.streamEvents ?? []} usage={message.usage} />
                 <MessageActions
                   content={message.content}
                   isUser={false}

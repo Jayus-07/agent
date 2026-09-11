@@ -10,18 +10,22 @@ from backend.sql.schema_loader import schema_loader
 from backend.shared.logger import logger
 
 
-def generate_sql(question: str, table_names: list) -> str:
+def generate_sql(question: str, table_names: list, feedback: str | None = None) -> str:
     """
     生成 SQL 语句。
 
     参数:
         question: 用户自然语言问题
         table_names: 相关 schema-qualified 表名（如 ['product.products', 'order.orders']）
+        feedback: 上次失败的反馈（错误原因 + 上次 SQL），重试时传入以引导修正
 
     返回:
         SQL 字符串
     """
     table_info = schema_loader.get_table_info(table_names)
+
+    if feedback:
+        question = f"{question}\n\n## 上次生成失败，请修正\n{feedback}"
 
     r = prompt_service.render_sync("sql.generator", table_info=table_info, question=question)
 

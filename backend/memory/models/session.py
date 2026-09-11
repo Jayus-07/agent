@@ -11,6 +11,9 @@ class ChatSession(Base):
     id = Column(Integer, primary_key=True)
     session_id = Column(String(128), unique=True, nullable=False, index=True)
     user_id = Column(String(64), nullable=False, default="default")
+    # 会话标题：首轮用户问题截断（save_turn 自动填）或用户重命名；
+    # 与 L2 自动摘要 summary 分离 —— 摘要只喂 prompt，标题只管展示
+    title = Column(String(128), nullable=True, comment="会话标题（与L2摘要summary分离）")
     summary = Column(Text, nullable=True)
     context_summary = Column(Text, nullable=True, comment="Agent工作上下文: SQL结果/RAG文档/报告摘要聚合JSON")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

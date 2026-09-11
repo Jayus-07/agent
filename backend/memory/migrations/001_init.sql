@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 );
 -- 兼容旧库：早期版本建表时无 context_summary，ORM 的 INSERT/UPDATE 会报 UndefinedColumn
 ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS context_summary TEXT;
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS title VARCHAR(128); -- 会话标题（002 分字段）
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions (user_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS chat_messages (

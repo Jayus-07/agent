@@ -73,6 +73,9 @@ def run_all(
     semantic_thresholds: dict[str, float] | None = None,
     regression: bool = False,
     promote_baseline: bool = False,
+    workers: int = 1,
+    ragas_workers: int = 4,
+    resume: bool = True,
 ) -> Any:
     """主入口 — 薄包装器，委托给 EvaluationService.evaluate()。
 
@@ -95,5 +98,8 @@ def run_all(
         semantic_thresholds=semantic_thresholds,
         regression=regression,
         promote_baseline=promote_baseline,
+        workers=workers,
+        ragas_workers=ragas_workers,
+        resume=resume,
     )
     return EvaluationService().evaluate(config)

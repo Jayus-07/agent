@@ -25,6 +25,10 @@ class DocIdResolver:
         self._alias: dict[str, str] = {}
         self._backend = "empty"
         self._unresolved: list[str] = []
+        # canonical() 回落查库的惰性单例 registry + 已尝试 token 集合
+        # （原先每次未命中都新建 DocumentRegistry 查磁盘，且发生在双层内循环中）
+        self._registry_lazy = None
+        self._db_attempted: set[str] = set()
         self._load_registry(registry_path)
 
     def _load_registry(self, registry_path: str | None) -> None:
@@ -82,20 +86,24 @@ class DocIdResolver:
         if base and "." in base:
             return base
 
-        try:
-            from backend.rag.indexing.doc_registry import DocumentRegistry
-            from backend.config.database import DOC_REGISTRY_PATH
-            registry = DocumentRegistry(DOC_REGISTRY_PATH)
-            row = registry.get_by_doc_id(token)
-            if row:
-                file_name = row.get("file_name", "")
-                if not file_name:
-                    file_name = os.path.basename(row.get("file_path", ""))
-                if file_name:
-                    self._hash_to_name[token] = file_name
-                    return file_name
-        except Exception:
-            pass
+        # DB 回落：每个 token 只查一次库，registry 实例惰性复用
+        if token not in self._db_attempted:
+            self._db_attempted.add(token)
+            try:
+                if self._registry_lazy is None:
+                    from backend.rag.indexing.doc_registry import DocumentRegistry
+                    from backend.config.database import DOC_REGISTRY_PATH
+                    self._registry_lazy = DocumentRegistry(DOC_REGISTRY_PATH)
+                row = self._registry_lazy.get_by_doc_id(token)
+                if row:
+                    file_name = row.get("file_name", "")
+                    if not file_name:
+                        file_name = os.path.basename(row.get("file_path", ""))
+                    if file_name:
+                        self._hash_to_name[token] = file_name
+                        return file_name
+            except Exception:
+                pass
 
         self._unresolved.append(token)
         return token
@@ -138,7 +146,12 @@ class DocIdResolver:
 
         actual_base = Path(actual.replace("\\", "/")).name
         expected_base = Path(expected.replace("\\", "/")).name
-        if actual_base and expected_base and actual_base == expected_base:
+        # basename 相等即命中会把"同名不同 KB/部门"的文档误判为相关（虚增 recall）；
+        # 仅当该文件名在 registry 中无歧义（只对应一个 doc_id）时才接受
+        if (
+            actual_base and expected_base and actual_base == expected_base
+            and len(self._name_to_hashes.get(expected_base, set())) <= 1
+        ):
             return True
 
         if actual in self.candidate_hashes(expected, kb_id, department):

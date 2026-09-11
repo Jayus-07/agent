@@ -4,27 +4,8 @@ import { useCallback, useRef } from 'react'
 import { useChatStore } from '@/store/chat'
 import { streamChat, abortChat } from '@/lib/api/chat'
 import type { SSEStreamEvent } from '@/lib/api/chat'
-import { authFetch } from '@/lib/authFetch'
+import { invalidateSessionsCache } from '@/lib/sessions-cache'
 import { nanoid } from 'nanoid'
-
-/** 持久化当前会话消息到后端 PG */
-async function persistSession(sessionId: string, question: string, answer: string) {
-  try {
-    await authFetch('/api/chat/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        session_id: sessionId,
-        messages: [
-          { role: 'user', content: question },
-          { role: 'assistant', content: answer },
-        ],
-      }),
-    })
-  } catch {
-    // 保存失败不影响用户体验
-  }
-}
 
 export function useSSE() {
   const abortRef = useRef<AbortController | null>(null)
@@ -73,16 +54,21 @@ export function useSSE() {
           return
         }
 
-        // done 事件 → 将累积的 delta 文本 + sources 写入最终消息，并持久化到 PG
+        // done 事件 → 将累积的 delta 文本 + sources 写入最终消息
         if (evt.event === 'done') {
           const finalState = useChatStore.getState()
           replaceLastAssistant(
             finalState.deltaText || '(空回答)',
             sessionId,
             evt.data.sources,
+            evt.data.usage,
           )
-          // 持久化消息到后端 PG
-          persistSession(sessionId, question, finalState.deltaText || '(空回答)')
+          // 持久化由后端 end_turn 统一完成（finally 中 save_turn），
+          // 前端不再调 /chat/messages 二次写入 —— 双写会让历史恢复时消息重复、
+          // 下一轮注入的上下文也翻倍。
+          // 失效会话列表缓存并通知侧栏刷新，让新会话/更新时间立即出现在右侧历史里
+          invalidateSessionsCache()
+          useChatStore.getState().bumpSessionsVersion()
         }
       }
     } catch (err: any) {

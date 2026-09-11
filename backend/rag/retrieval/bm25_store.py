@@ -24,6 +24,23 @@ from backend.config import BM25_SEARCH_K
 from backend.config import BM25_INDEX_DIR
 from backend.shared.logger import logger
 
+# 索引格式版本：分词器等影响倒排统计的变更需递增，load 时版本不符自动重建
+BM25_META_VERSION = 2
+
+
+def _tokenize_chinese(text: str) -> List[str]:
+    """BM25 中文分词（jieba）。
+
+    langchain BM25Retriever 默认按空格/小写切分，对中文语料会退化成整句匹配；
+    构建索引与查询两侧必须使用同一分词函数（load 时也需显式设置，
+    preprocess_func 不会被 pickle 持久化）。
+    """
+    try:
+        import jieba
+    except ImportError:
+        return [t for t in text.split() if t]
+    return [t for t in jieba.lcut(text) if t.strip()]
+
 
 def _doc_matches(
     doc: Document,
@@ -119,7 +136,7 @@ class BM25Store:
             logger.info("[BM25Store] 空文档列表，跳过索引构建")
             return None
 
-        retriever = BM25Retriever.from_documents(docs, k=k)
+        retriever = BM25Retriever.from_documents(docs, k=k, preprocess_func=_tokenize_chinese)
 
         # 持久化 CountVectorizer（已拟合）+ SHA256 校验
         corpus_data = pickle.dumps(retriever.vectorizer)
@@ -162,14 +179,23 @@ class BM25Store:
             if vectorizer is None or docs is None:
                 return None
 
-            # 直接构造 BM25Retriever，跳过 from_documents 的拟合步骤
+            # 直接构造 BM25Retriever，跳过 from_documents 的拟合步骤；
+            # 查询侧必须与构建侧使用同一分词函数（见 _tokenize_chinese 注释）
             retriever = BM25Retriever(
                 vectorizer=vectorizer,
                 docs=docs,
                 k=k,
+                preprocess_func=_tokenize_chinese,
             )
 
             meta = self._read_meta()
+            # 版本不匹配（如分词器变更）→ 旧索引的倒排统计与新查询分词不一致，需重建
+            if meta.get("version", 0) < BM25_META_VERSION:
+                logger.info(
+                    f"[BM25Store] 索引版本过期 "
+                    f"(meta={meta.get('version', 0)} < {BM25_META_VERSION})，将重建"
+                )
+                return None
             logger.info(
                 f"[BM25Store] 索引加载成功: {meta.get('doc_count', '?')} 文档, "
                 f"构建于 {meta.get('built_at', '?')}"
@@ -345,7 +371,7 @@ class BM25Store:
             "doc_count": doc_count,
             "build_time_s": round(build_time_s, 1),
             "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "version": 1,
+            "version": BM25_META_VERSION,
         }
         if content_hash:
             meta["content_hash"] = content_hash

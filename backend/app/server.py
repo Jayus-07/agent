@@ -124,21 +124,23 @@ async def init_prompt_snapshot():
 
 @app.on_event("startup")
 async def init_prompt_service():
-    """加载 YAML 默认值到内存（失败不阻塞启动）。"""
-    import threading
-    def _load():
-        try:
-            from backend.prompts.loader import load_defaults
-            from backend.prompts.service import prompt_service
-            defaults = load_defaults()
-            prompt_service.load_defaults_into_memory(defaults)
-            logger.info(f"[Startup] Prompt defaults loaded: {len(defaults)} templates")
-            import asyncio
-            asyncio.run(prompt_service.seed_defaults(defaults))
-            logger.info("[Startup] Prompt defaults seeded to DB")
-        except Exception as e:
-            logger.warning(f"[Startup] Prompt defaults load/seed failed: {e}")
-    threading.Thread(target=_load, daemon=True, name="prompt-init").start()
+    """加载 YAML 默认值到内存并 seed 到 DB（失败不阻塞启动）。
+
+    必须在主事件循环内 await：AsyncSessionLocal 是全局 engine 单例，
+    后台线程 asyncio.run() 会创建临时 loop，池内 asyncpg 连接绑定主循环，
+    跨 loop 使用即报 "attached to a different loop" 并污染连接池。
+    36 条 upsert 为毫秒级，无需后台线程。
+    """
+    try:
+        from backend.prompts.loader import load_defaults
+        from backend.prompts.service import prompt_service
+        defaults = load_defaults()
+        prompt_service.load_defaults_into_memory(defaults)
+        logger.info(f"[Startup] Prompt defaults loaded: {len(defaults)} templates")
+        await prompt_service.seed_defaults(defaults)
+        logger.info("[Startup] Prompt defaults seeded to DB")
+    except Exception as e:
+        logger.warning(f"[Startup] Prompt defaults load/seed failed: {e}")
 
 
 # ═══════════════════════════════════════════════════
@@ -148,7 +150,25 @@ async def init_prompt_service():
 async def eager_init_rag_pipeline():
     """后台线程预热 RAG pipeline，不阻塞服务启动。"""
     import threading
+    def _warm_jieba():
+        # 预热 jieba 分词词典（首次加载 ~1s），与 RAG 管道并行
+        try:
+            import jieba
+            jieba.initialize()
+            logger.info("[Startup] jieba 词典预热完成")
+        except Exception:
+            logger.warning("[Startup] jieba 预热失败，分词可能较慢", exc_info=True)
+    def _warm_reranker():
+        # 预热 Reranker 模型（CrossEncoder 加载 ~7s），与 RAG 管道并行
+        try:
+            from backend.rag.reranker import get_reranker_backend
+            get_reranker_backend()
+            logger.info("[Startup] Reranker 模型预热完成")
+        except Exception:
+            logger.warning("[Startup] Reranker 预热失败，首次查询会较慢", exc_info=True)
     def _warmup():
+        threading.Thread(target=_warm_jieba, daemon=True, name="jieba-warmup").start()
+        threading.Thread(target=_warm_reranker, daemon=True, name="reranker-warmup").start()
         try:
             from backend.app.api.deps import get_rag_pipeline
             logger.info("[Startup] 后台预热 RAG 管道...")
@@ -156,20 +176,6 @@ async def eager_init_rag_pipeline():
             logger.info("[Startup] RAG 管道预热完成")
         except Exception as e:
             logger.warning(f"[Startup] RAG 管道预热失败（首次请求会重试）: {e}")
-        # 预热 jieba 分词词典（首次加载 ~1s）
-        try:
-            import jieba
-            jieba.initialize()
-            logger.info("[Startup] jieba 词典预热完成")
-        except Exception:
-            logger.warning("[Startup] jieba 预热失败，分词可能较慢", exc_info=True)
-        # 预热 Reranker 模型（CrossEncoder 加载 ~7s）
-        try:
-            from backend.rag.reranker import get_reranker_backend
-            get_reranker_backend()
-            logger.info("[Startup] Reranker 模型预热完成")
-        except Exception:
-            logger.warning("[Startup] Reranker 预热失败，首次查询会较慢", exc_info=True)
     threading.Thread(target=_warmup, daemon=True, name="rag-warmup").start()
 
 

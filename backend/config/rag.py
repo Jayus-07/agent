@@ -195,13 +195,15 @@ FILTER_ENABLE_PII_MASK = os.getenv("FILTER_ENABLE_PII_MASK", "false").lower() ==
 # ====================================
 # Faithfulness 检测（NLI 答案验证）
 # ====================================
-# 默认 True（对齐企业生产实践，§0.2 对标：Vertex AI / AWS Bedrock / RAGAS），
-# 关闭用 ENABLE_FAITHFULNESS=false
-ENABLE_FAITHFULNESS = os.getenv("ENABLE_FAITHFULNESS", "true").lower() == "true"
+# 默认 False：LLM Judge 每个回答串行多花 5-10s 且离线评测误判率 90%+（见
+# guardrails/scorer.py 记录），性价比过低；程序化 Gate（retrieval/rerank/
+# ClaimVerifier/实体覆盖）不受影响。需要时用 ENABLE_FAITHFULNESS=true 开启
+ENABLE_FAITHFULNESS = os.getenv("ENABLE_FAITHFULNESS", "false").lower() == "true"
 # Faithfulness 跳过阈值：unsupported 比例超过此值时跳过 rewrite
 FAITHFULNESS_SKIP_THRESHOLD = float(os.getenv("FAITHFULNESS_SKIP_THRESHOLD", "0.5"))
-# 2026-08-11：LLM-as-Judge 开关（Qwen 整体评估，2026-08-12 起为唯一路径）
-NLI_USE_LLM = os.getenv("NLI_USE_LLM", "true").lower() == "true"
+# LLM-as-Judge 开关（Qwen 整体评估）。与 ENABLE_FAITHFULNESS 同理默认关闭，
+# 开启后每次回答额外一次 LLM 调用（仅产生 [?] 存疑标记）
+NLI_USE_LLM = os.getenv("NLI_USE_LLM", "false").lower() == "true"
 
 # ====================================
 # Evidence Gate — RAG 主动拒答
@@ -250,8 +252,10 @@ FINANCIAL_TABLE_ROWS_PER_CHUNK = int(os.getenv("FINANCIAL_TABLE_ROWS_PER_CHUNK",
 FINANCIAL_MAX_CHUNKS_PER_DOC = int(os.getenv("FINANCIAL_MAX_CHUNKS_PER_DOC", "10000"))
 # 财务文档强制 PII 脱敏（覆写全局 FILTER_ENABLE_PII_MASK）
 FINANCIAL_PII_MASK_FORCE = os.getenv("FINANCIAL_PII_MASK_FORCE", "true").lower() == "true"
-# 财务 SQL 旁路检索开关：查询含财务指标 + 数值条件时走 SQL 精确检索
-FINANCIAL_SQL_BYPASS_ENABLED = os.getenv("FINANCIAL_SQL_BYPASS_ENABLED", "true").lower() == "true"
+# 财务 SQL 旁路检索开关：查询含财务指标 + 数值条件时走 SQL 精确检索。
+# 默认 False：_build_financial_sql 生成的 SQL 语法非法（::text 无操作数），
+# 触发后只会静默失败并浪费一次 QueryAnalyzer；修复前保持关闭
+FINANCIAL_SQL_BYPASS_ENABLED = os.getenv("FINANCIAL_SQL_BYPASS_ENABLED", "false").lower() == "true"
 
 # ====================================
 # Metadata 规则指纹 — 改任何规则文件自动变化

@@ -98,8 +98,11 @@ def enrich_metadata_llm(text: str, doc_type: str, chunks_text: list[str] | None 
         chunks_block=chunks_block,
     ).text
 
+    from backend.config.llm import OLLAMA_ENABLED
+    from backend.config.rag import DOC_LLM_MODEL
+
     try:
-        if DOC_LLM_MODEL:
+        if DOC_LLM_MODEL and OLLAMA_ENABLED:
             from langchain_ollama import ChatOllama
             llm = ChatOllama(model=DOC_LLM_MODEL, temperature=0.0, num_ctx=4096, request_timeout=60)
             result = llm.invoke(prompt)

@@ -67,3 +67,78 @@ export interface AlertsResponse {
   alerts: AlertItem[];
   total: number;
 }
+
+// ── Token 用量看板 ──────────────────────────────────────
+
+export interface TokenUsageTotals {
+  requests: number
+  calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  cached_tokens: number
+  reasoning_tokens: number
+  cost_usd: number
+}
+
+export interface TokenUsageDaily {
+  day: string
+  calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  cost_usd: number
+}
+
+export interface TokenUsageByModel {
+  provider: string
+  model: string
+  calls: number
+  requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  cached_tokens: number
+  reasoning_tokens: number
+  cost_usd: number
+}
+
+export interface TokensSummary {
+  days: number
+  totals: TokenUsageTotals
+  daily: TokenUsageDaily[]
+  models: TokenUsageByModel[]
+}
+
+/** GET /observability/tokens/summary?days=N — Token 用量看板聚合（近 N 天） */
+export async function getTokensSummary(days = 7): Promise<TokensSummary> {
+  return await request<TokensSummary>(`/api/observability/tokens/summary?days=${days}`);
+}
+
+export interface TokenCallRow {
+  ts: string
+  trace_id: string
+  session_id: string
+  model: string
+  provider: string
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  cached_tokens: number
+  reasoning_tokens: number
+  cost_usd: number
+  duration_ms: number
+  finish_reason: string
+}
+
+/** GET /observability/tokens/calls — LLM 调用明细（分页，最新在前） */
+export async function getTokensCalls(
+  days = 7,
+  opts: { model?: string; limit?: number; offset?: number } = {},
+): Promise<{ calls: TokenCallRow[]; total: number }> {
+  const p = new URLSearchParams({ days: String(days) });
+  if (opts.model) p.set("model", opts.model);
+  p.set("limit", String(opts.limit ?? 20));
+  p.set("offset", String(opts.offset ?? 0));
+  return await request(`/api/observability/tokens/calls?${p.toString()}`);
+}

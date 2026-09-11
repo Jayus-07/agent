@@ -104,6 +104,21 @@ def init_rag_pipeline():
 _full_retriever = None
 
 
+def _copied_base(pipeline, k: int):
+    """复制共享 chunk_retriever_base 并设置独立的 k。
+
+    原实现直接改写共享单例的 k 属性：get_full_retriever 设 max(HYBRID_SEARCH_K,20)、
+    ablation 模式设 HYBRID_SEARCH_K，两种模式来回改写互相污染（并发执行时更甚）。
+    浅拷贝共享底层 retriever（只读使用），k 各自独立。
+    """
+    import copy as _copy
+
+    base = pipeline.lc_chain.chunk_retriever_base
+    copied = base.model_copy(deep=False) if hasattr(base, "model_copy") else _copy.copy(base)
+    copied.k = k
+    return copied
+
+
 def get_full_retriever(pipeline):
     """构建完整检索链路: ChunkLevelRetriever -> Adaptive -> CrossEncoder 精排。"""
     global _full_retriever
@@ -116,8 +131,7 @@ def get_full_retriever(pipeline):
     from backend.rag.reranker import RerankCompressor
     from backend.rag.retrieval.retrievers import AdaptiveRetriever
 
-    base = pipeline.lc_chain.chunk_retriever_base
-    base.k = max(HYBRID_SEARCH_K, 20)
+    base = _copied_base(pipeline, max(HYBRID_SEARCH_K, 20))
 
     adaptive = AdaptiveRetriever(
         base_retriever=base,
@@ -162,8 +176,7 @@ def build_ablation_retriever(
         mf["department"] = department
 
     if mode == "vector_only":
-        base = pipeline.lc_chain.chunk_retriever_base
-        base.k = HYBRID_SEARCH_K
+        base = _copied_base(pipeline, HYBRID_SEARCH_K)
 
         def _vector_invoke(question: str):
             return base.chunk_retriever.retrieve(
@@ -192,8 +205,7 @@ def build_ablation_retriever(
     if mode == "hybrid":
         from backend.rag.retrieval.hybrid import hybrid_retrieve
 
-        base = pipeline.lc_chain.chunk_retriever_base
-        base.k = HYBRID_SEARCH_K
+        base = _copied_base(pipeline, HYBRID_SEARCH_K)
 
         def _hybrid_invoke(question: str):
             return hybrid_retrieve(
@@ -210,8 +222,7 @@ def build_ablation_retriever(
         from backend.rag.reranker import RerankCompressor
         from backend.rag.retrieval.hybrid import hybrid_retrieve
 
-        base = pipeline.lc_chain.chunk_retriever_base
-        base.k = HYBRID_SEARCH_K
+        base = _copied_base(pipeline, HYBRID_SEARCH_K)
 
         def _hybrid_base(question: str):
             return hybrid_retrieve(
@@ -231,8 +242,7 @@ def build_ablation_retriever(
         from backend.rag.reranker import RerankCompressor
         from backend.rag.retrieval.retrievers import AdaptiveRetriever
 
-        base = pipeline.lc_chain.chunk_retriever_base
-        base.k = HYBRID_SEARCH_K
+        base = _copied_base(pipeline, HYBRID_SEARCH_K)
 
         adaptive = AdaptiveRetriever(
             base_retriever=base,

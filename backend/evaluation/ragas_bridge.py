@@ -32,9 +32,11 @@ _RAGAS_CLOUD_API_BASE = os.getenv(
     "QWEN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"
 )
 
-# Local LLM (Ollama fallback — 仅 RAGAS_LLM_BACKEND=local 时使用)
-_OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-_OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+# Local LLM (Ollama fallback — 仅 RAGAS_LLM_BACKEND=local 且 ENV_MODE=local 时使用)
+from backend.config.llm import OLLAMA_BASE_URL, OLLAMA_ENABLED, OLLAMA_MODEL
+
+_OLLAMA_HOST = OLLAMA_BASE_URL
+_OLLAMA_MODEL = OLLAMA_MODEL
 
 # RAGAS 单 case 超时（秒）。Cloud API 4 个指标串行 LLM 调用，180s 留足余量。
 _RAGAS_CASE_TIMEOUT = int(os.getenv("RAGAS_CASE_TIMEOUT", "180"))
@@ -301,7 +303,14 @@ def _get_llm() -> Any:
     if _llm_wrapper is None:
         with _init_lock:
             if _llm_wrapper is None:
-                if _RAGAS_LLM_BACKEND == "local":
+                backend = _RAGAS_LLM_BACKEND
+                if backend == "local" and not OLLAMA_ENABLED:
+                    logger.warning(
+                        "[RAGAS] RAGAS_LLM_BACKEND=local 但 ENV_MODE=cloud，"
+                        "本地 Ollama 已禁用，改用云端 DashScope"
+                    )
+                    backend = "cloud"
+                if backend == "local":
                     _llm_wrapper = _init_local_llm()
                     logger.info(f"[RAGAS] LLM 初始化完成（本地 Ollama: {_OLLAMA_MODEL}）")
                 else:
@@ -372,10 +381,7 @@ def compute_ragas_metrics(
     for name in metric_names:
         key = _METRIC_KEY_MAP[name]
         try:
-            kwargs: dict[str, Any] = {"llm": llm_wrapper}
-            if name in _METRIC_NEEDS_EMBED:
-                kwargs["embeddings"] = embeddings
-            metric = cls_map[name](**kwargs)
+            metric = _get_cached_metric(name, llm_wrapper, embeddings)
             val = float(metric.single_turn_score(sample))
             results[key] = round(val, 4) if val == val else None
         except Exception as e:
@@ -460,3 +466,22 @@ def reset_caches() -> None:
     global _llm_wrapper, _embeddings
     _llm_wrapper = None
     _embeddings = None
+    _metric_cache.clear()
+
+
+# RAGAS metric 对象缓存：LLM/Embeddings 是全局单例，metric 本身无状态，
+# 每用例每指标重新实例化是纯浪费。key = (metric_name, id(embeddings) or 0)
+_metric_cache: dict[tuple[str, int], Any] = {}
+
+
+def _get_cached_metric(name: str, llm_wrapper: Any, embeddings: Any) -> Any:
+    """获取（或创建并缓存）RAGAS metric 实例。"""
+    cache_key = (name, id(embeddings) if embeddings is not None else 0)
+    metric = _metric_cache.get(cache_key)
+    if metric is None:
+        kwargs: dict[str, Any] = {"llm": llm_wrapper}
+        if name in _METRIC_NEEDS_EMBED:
+            kwargs["embeddings"] = embeddings
+        metric = cls_map[name](**kwargs)
+        _metric_cache[cache_key] = metric
+    return metric

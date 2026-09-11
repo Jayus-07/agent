@@ -23,6 +23,7 @@ P0 架构重构 (ENV_MODE 双模式):
 """
 import os
 import math
+import threading
 from typing import Any
 
 import requests
@@ -59,14 +60,18 @@ class LocalModelLoader:
     """本地 CrossEncoder 模型懒加载单例"""
     _instance: CrossEncoder | None = None
     _loaded_at: str = ""
+    _lock = threading.Lock()
 
     @classmethod
     def get_instance(cls) -> CrossEncoder:
-        """获取或创建 CrossEncoder 实例 (线程安全)"""
+        """获取或创建 CrossEncoder 实例 (线程安全：双检锁，模型加载耗时长，
+        并发首查若无锁会重复加载数百 MB 模型)"""
         if cls._instance is None:
-            cls._instance = CrossEncoder(RERANKER_MODEL_PATH, device=RERANKER_DEVICE)
-            cls._loaded_at = __import__('datetime').datetime.now().isoformat()
-            logger.info(f"本地 reranker 模型懒加载完成：{RERANKER_MODEL_PATH} (device={RERANKER_DEVICE}, at {cls._loaded_at})")
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = CrossEncoder(RERANKER_MODEL_PATH, device=RERANKER_DEVICE)
+                    cls._loaded_at = __import__('datetime').datetime.now().isoformat()
+                    logger.info(f"本地 reranker 模型懒加载完成：{RERANKER_MODEL_PATH} (device={RERANKER_DEVICE}, at {cls._loaded_at})")
         return cls._instance
 
     @classmethod
@@ -136,38 +141,45 @@ class DashScopeReranker(BaseDocumentCompressor):
             },
         }
 
-        try:
-            resp = requests.post(
-                self._endpoint,
-                json=payload,
-                headers=self._headers,
-                timeout=self.timeout,
-            )
-
-            if resp.status_code != 200:
-                raise Exception(
-                    f"DashScope API error [status={resp.status_code}]: {resp.text[:500]}"
+        last_err: Exception | None = None
+        for attempt in range(2):  # 一次网络抖动不该直接损失整轮排序质量，最多重试 1 次
+            try:
+                resp = requests.post(
+                    self._endpoint,
+                    json=payload,
+                    headers=self._headers,
+                    timeout=self.timeout,
                 )
 
-            data = resp.json()
-            results = data.get("output", {}).get("results", [])
-            scored = [(r["index"], r["relevance_score"]) for r in results]
+                if resp.status_code != 200:
+                    raise Exception(
+                        f"DashScope API error [status={resp.status_code}]: {resp.text[:500]}"
+                    )
 
-            total_tokens = data.get("usage", {}).get("total_tokens", "N/A")
-            logger.debug(
-                f"DashScope Rerank OK: query_len={len(query)}, "
-                f"doc_count={len(documents)}, top_k={top_k}, tokens={total_tokens}"
-            )
-            return scored
+                data = resp.json()
+                results = data.get("output", {}).get("results", [])
+                scored = [(r["index"], r["relevance_score"]) for r in results]
 
-        except requests.exceptions.Timeout:
+                total_tokens = data.get("usage", {}).get("total_tokens", "N/A")
+                logger.debug(
+                    f"DashScope Rerank OK: query_len={len(query)}, "
+                    f"doc_count={len(documents)}, top_k={top_k}, tokens={total_tokens}"
+                )
+                return scored
+            except requests.exceptions.Timeout as e:
+                last_err = e
+            except requests.exceptions.ConnectionError as e:
+                last_err = e
+            except Exception as e:
+                if "DashScope" in str(e):
+                    raise
+                last_err = Exception(f"DashScope rerank failed: {e}")
+
+        if isinstance(last_err, requests.exceptions.Timeout):
             raise Exception(f"DashScope rerank 超时 ({self.timeout}s)")
-        except requests.exceptions.ConnectionError as e:
-            raise Exception(f"DashScope 网络连接失败: {e}")
-        except Exception as e:
-            if "DashScope" in str(e):
-                raise
-            raise Exception(f"DashScope rerank failed: {e}")
+        if isinstance(last_err, requests.exceptions.ConnectionError):
+            raise Exception(f"DashScope 网络连接失败: {last_err}")
+        raise last_err or Exception("DashScope rerank failed: unknown")
 
     def compress_documents(self, documents, query, **kwargs):
         """BaseDocumentCompressor 接口实现"""

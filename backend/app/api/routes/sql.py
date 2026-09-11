@@ -4,7 +4,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 
-from backend.app.api.schemas import SQLAskRequest, ErrorResponse
+from backend.app.api.schemas import SQLAskRequest, SQLQueryResponse, ErrorResponse
 from backend.app.api.deps import get_sql_agent
 from backend.config import TRUST_USER_HEADER, USER_ID_HEADER
 from backend.shared.logger import logger
@@ -57,3 +57,27 @@ async def sql_ask(req: SQLAskRequest, request: Request):
     user_id = _resolve_user_id(request)
     answer = await asyncio.to_thread(agent.ask, req.question, user_id)
     return {"answer": answer}
+
+
+@router.post("/query", response_model=SQLQueryResponse,
+             responses={500: {"model": ErrorResponse}})
+async def sql_query(req: SQLAskRequest, request: Request) -> SQLQueryResponse:
+    """结构化查询端点：返回 status / 行列数据 / 耗时 / 错误分类。
+
+    与 POST /sql 的区别：后者只返回 Markdown 字符串；本端点返回
+    结构化 JSON，供前端表格渲染和程序化调用。安全语义一致
+    （行级安全、敏感列拦截、脱敏均由 SQLAgent 内部完成）。
+    """
+    agent = get_sql_agent()
+    user_id = _resolve_user_id(request)
+    result = await asyncio.to_thread(agent.ask_struct, req.question, user_id)
+    return SQLQueryResponse(
+        status=result.status,
+        answer=result.to_markdown(),
+        columns=result.columns or [],
+        rows=result.rows or [],
+        row_count=result.row_count,
+        elapsed_sec=result.elapsed_sec,
+        error=result.error,
+        error_type=result.error_type,
+    )
