@@ -24,6 +24,7 @@ P0 架构重构 (ENV_MODE 双模式):
 import os
 import math
 import threading
+import time
 from typing import Any
 
 import requests
@@ -117,6 +118,7 @@ class DashScopeReranker(BaseDocumentCompressor):
         self.__dict__['timeout'] = timeout
         self.__dict__['_endpoint'] = endpoint
         self.__dict__['_headers'] = headers
+        self.__dict__['_last_total_tokens'] = 0
 
         logger.info(
             f"初始化 DashScope Reranker HTTP "
@@ -160,10 +162,14 @@ class DashScopeReranker(BaseDocumentCompressor):
                 results = data.get("output", {}).get("results", [])
                 scored = [(r["index"], r["relevance_score"]) for r in results]
 
-                total_tokens = data.get("usage", {}).get("total_tokens", "N/A")
+                raw_tokens = data.get("usage", {}).get("total_tokens", 0)
+                try:
+                    self.__dict__['_last_total_tokens'] = int(raw_tokens)
+                except (ValueError, TypeError):
+                    self.__dict__['_last_total_tokens'] = 0
                 logger.debug(
                     f"DashScope Rerank OK: query_len={len(query)}, "
-                    f"doc_count={len(documents)}, top_k={top_k}, tokens={total_tokens}"
+                    f"doc_count={len(documents)}, top_k={top_k}, tokens={self._last_total_tokens}"
                 )
                 return scored
             except requests.exceptions.Timeout as e:
@@ -184,6 +190,7 @@ class DashScopeReranker(BaseDocumentCompressor):
     def compress_documents(self, documents, query, **kwargs):
         """BaseDocumentCompressor 接口实现"""
         from backend.observability.tracer import trace_collector
+        t0 = time.monotonic()
         span = trace_collector.start_span("rerank", name="DashScope API")
         
         if not documents:
@@ -208,6 +215,7 @@ class DashScopeReranker(BaseDocumentCompressor):
             for doc, score in result:
                 doc.metadata["rerank_score"] = round(float(score), 4)
 
+            duration_ms = (time.monotonic() - t0) * 1000
             trace_collector.end_span(
                 span,
                 metrics={
@@ -218,9 +226,13 @@ class DashScopeReranker(BaseDocumentCompressor):
                 }
             )
 
+            # 记录 token 用量到 SQLite（使用 rank() 从 API 响应中提取的实际值）
+            self._record_tokens(len(texts), duration_ms, total_tokens=self._last_total_tokens)
+
             return [doc for doc, _ in result]
 
         except Exception as e:
+            duration_ms = (time.monotonic() - t0) * 1000
             trace_collector.end_span(
                 span,
                 metrics={
@@ -233,7 +245,30 @@ class DashScopeReranker(BaseDocumentCompressor):
                 status="error"
             )
             logger.error(f"DashScope API rerank 失败：{e}")
+            self._record_tokens(len(texts), duration_ms, status="error")
             raise
+
+    def _record_tokens(self, doc_count, duration_ms, total_tokens=0, status="success"):
+        """写入 SQLite（LLMUsageStore）。软失败不影响主流程。"""
+        try:
+            from backend.observability.llm_usage_store import get_llm_usage_store
+            from backend.observability.tracer import current_trace_context
+            trace_id, session_id = current_trace_context()
+            get_llm_usage_store().record({
+                "component": "rerank",
+                "model": RERANK_MODEL,
+                "provider": "dashscope",
+                "prompt_tokens": total_tokens,
+                "completion_tokens": 0,
+                "total_tokens": total_tokens,
+                "cost_usd": 0.0,
+                "duration_ms": duration_ms,
+                "trace_id": trace_id or "",
+                "session_id": session_id or "",
+                "finish_reason": status,
+            })
+        except Exception:
+            pass  # 软失败
 
 
 # ═══════════════════════════════════════════════════════════
@@ -291,6 +326,7 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
     def compress_documents(self, documents, query, **kwargs):
         """BaseDocumentCompressor 接口实现"""
         from backend.observability.tracer import trace_collector
+        t0 = time.monotonic()
         span = trace_collector.start_span("rerank", name="Local Model")
 
         if not documents:
@@ -304,10 +340,13 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
             # 超时/失败：透传原文档，标记为不可靠供下游 Gate 决策
             for doc in documents:
                 doc.metadata["rerank_unreliable"] = True
+            duration_ms = (time.monotonic() - t0) * 1000
             trace_collector.end_span(
                 span,
                 metrics={"input_docs": len(documents), "output_docs": len(documents),
                          "backend_type": "local", "fallback": "timeout_passthrough"})
+            # 记录失败
+            self._record_tokens(len(texts), duration_ms, status="error")
             return list(documents)
 
         # 创建索引映射
@@ -327,6 +366,7 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
         for doc, score in result:
             doc.metadata["rerank_score"] = round(score, 4)
 
+        duration_ms = (time.monotonic() - t0) * 1000
         trace_collector.end_span(
             span,
             metrics={
@@ -337,7 +377,35 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
             }
         )
 
+        # 记录 token 用量
+        self._record_tokens(len(texts), duration_ms)
+
         return [doc for doc, _ in result]
+
+    def _record_tokens(self, doc_count, duration_ms, status="success"):
+        """写入 SQLite（LLMUsageStore）。软失败不影响主流程。"""
+        try:
+            from backend.observability.llm_usage_store import get_llm_usage_store
+            from backend.observability.tracer import current_trace_context
+            trace_id, session_id = current_trace_context()
+            # Local CrossEncoder 无 token usage API，用估算值
+            # 平均每个文档 ~500 chars，按 3 chars/token 估算
+            estimated_tokens = doc_count * 150  # 500 / 3 ≈ 167，保守取 150
+            get_llm_usage_store().record({
+                "component": "rerank",
+                "model": RERANKER_MODEL_PATH,
+                "provider": "local",
+                "prompt_tokens": estimated_tokens,
+                "completion_tokens": 0,
+                "total_tokens": estimated_tokens,
+                "cost_usd": 0.0,
+                "duration_ms": duration_ms,
+                "trace_id": trace_id or "",
+                "session_id": session_id or "",
+                "finish_reason": status,
+            })
+        except Exception:
+            pass  # 软失败
 
 
 # ═══════════════════════════════════════════════════════════

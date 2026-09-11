@@ -57,12 +57,30 @@ class LLMUsageStore:
 
     def _init_db(self):
         with self._lock, self._conn() as conn:
+            # 检查是否需要迁移：旧表没有 component 字段
+            needs_migration = False
+            try:
+                cols = [row[1] for row in conn.execute(
+                    "PRAGMA table_info(llm_usage)").fetchall()]
+                if "component" not in cols:
+                    needs_migration = True
+            except Exception:
+                pass
+
+            if needs_migration:
+                logger.info("[LLMUsageStore] 检测到旧表结构，开始迁移添加 component 字段...")
+                conn.execute("""
+                    ALTER TABLE llm_usage ADD COLUMN component TEXT NOT NULL DEFAULT 'llm'
+                """)
+                logger.info("[LLMUsageStore] 迁移完成：所有历史数据标记为 component='llm'")
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS llm_usage (
                     id                INTEGER PRIMARY KEY AUTOINCREMENT,
                     ts                TEXT NOT NULL,      -- ISO8601 UTC（与 trace ts 同格式，支持字典序过滤）
                     trace_id          TEXT NOT NULL DEFAULT '',
                     session_id        TEXT NOT NULL DEFAULT '',
+                    component         TEXT NOT NULL DEFAULT 'llm',  -- llm | embedding | rerank
                     model             TEXT NOT NULL DEFAULT '',
                     provider          TEXT NOT NULL DEFAULT '',
                     prompt_tokens     INTEGER NOT NULL DEFAULT 0,
@@ -79,27 +97,30 @@ class LLMUsageStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_lu_ts ON llm_usage(ts)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_lu_model ON llm_usage(model, ts)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_lu_trace ON llm_usage(trace_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_lu_component ON llm_usage(component, ts)")
 
     def record(self, event: dict[str, Any]) -> bool:
-        """写入单次 LLM 调用用量。失败只记日志返回 False。"""
+        """写入单次调用用量（LLM / Embedding / Reranker）。失败只记日志返回 False。"""
         if not _cfg_enabled():
             return False
         try:
             # ts 必须用 UTC ISO "T" 格式（与 trace ts 同构），否则 dashboard 的
             # 字符序时间窗过滤（"..." >= "YYYY-MM-DDT00:00:00"）会漏掉数据
             now = _now_iso()
+            component = event.get("component", "llm")  # 默认 llm 保持向后兼容
             with self._lock, self._conn() as conn:
                 conn.execute("""
                     INSERT INTO llm_usage (
-                        ts, trace_id, session_id, model, provider,
+                        ts, trace_id, session_id, component, model, provider,
                         prompt_tokens, completion_tokens, total_tokens,
                         cached_tokens, reasoning_tokens, cost_usd,
                         duration_ms, finish_reason, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     event.get("timestamp") or now,
                     str(event.get("trace_id") or ""),
                     str(event.get("session_id") or ""),
+                    str(component),
                     str(event.get("model") or ""),
                     str(event.get("provider") or ""),
                     int(event.get("prompt_tokens") or 0),
@@ -129,6 +150,7 @@ class LLMUsageStore:
             return False
 
     def list_calls(self, days: int = 7, model: str | None = None,
+                   component: str | None = None,
                    limit: int = 20, offset: int = 0) -> dict:
         """调用明细（分页，最新在前）。返回 {calls: [...], total: n}。"""
         try:
@@ -137,6 +159,9 @@ class LLMUsageStore:
             if model:
                 where.append("model = ?")
                 params.append(model)
+            if component and component != "all":
+                where.append("component = ?")
+                params.append(component)
             where_sql = " AND ".join(where)
             with self._lock, self._conn() as conn:
                 conn.row_factory = sqlite3.Row
@@ -144,7 +169,7 @@ class LLMUsageStore:
                     f"SELECT COUNT(*) FROM llm_usage WHERE {where_sql}",
                     params).fetchone()[0]
                 rows = conn.execute(f"""
-                    SELECT ts, trace_id, session_id, model, provider,
+                    SELECT ts, trace_id, session_id, component, model, provider,
                            prompt_tokens, completion_tokens, total_tokens,
                            cached_tokens, reasoning_tokens, cost_usd,
                            duration_ms, finish_reason
@@ -165,7 +190,7 @@ class LLMUsageStore:
         """N 天前（含当天）的 UTC 零点，ISO 格式；llm_usage.ts 为 ISO 字典序可比。"""
         return time.strftime("%Y-%m-%dT00:00:00", time.gmtime(time.time() - (days - 1) * 86400))
 
-    def dashboard(self, days: int = 7) -> dict:
+    def dashboard(self, days: int = 7, component: str | None = None) -> dict:
         """Token 看板聚合：总量 / 日趋势 / 按模型。失败返回空骨架。"""
         empty = {
             "totals": {
@@ -178,11 +203,18 @@ class LLMUsageStore:
         }
         try:
             cutoff = self._cutoff_iso(days)
+            where_base = ["ts >= ?"]
+            params_base = [cutoff]
+            if component and component != "all":
+                where_base.append("component = ?")
+                params_base.append(component)
+            where_sql = " AND ".join(where_base)
+
             with self._lock, self._conn() as conn:
                 conn.row_factory = sqlite3.Row
 
-                # ① 总量（requests = 去重轮次；calls = LLM 调用次数）
-                totals = dict(conn.execute("""
+                # ① 总量（requests = 去重轮次；calls = 调用次数）
+                totals = dict(conn.execute(f"""
                     SELECT COUNT(DISTINCT CASE WHEN trace_id != '' THEN trace_id END) AS requests,
                            COUNT(*) AS calls,
                            COALESCE(SUM(prompt_tokens), 0)     AS prompt_tokens,
@@ -191,24 +223,24 @@ class LLMUsageStore:
                            COALESCE(SUM(cached_tokens), 0)     AS cached_tokens,
                            COALESCE(SUM(reasoning_tokens), 0)  AS reasoning_tokens,
                            COALESCE(SUM(cost_usd), 0)          AS cost_usd
-                    FROM llm_usage WHERE ts >= ?
-                """, (cutoff,)).fetchone())
+                    FROM llm_usage WHERE {where_sql}
+                """, params_base).fetchone())
 
                 # ② 日趋势（日 × 输入/输出/成本）
-                daily = [dict(r) for r in conn.execute("""
+                daily = [dict(r) for r in conn.execute(f"""
                     SELECT substr(ts, 1, 10)             AS day,
                            COUNT(*)                      AS calls,
                            COALESCE(SUM(prompt_tokens), 0)     AS prompt_tokens,
                            COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
                            COALESCE(SUM(total_tokens), 0)      AS total_tokens,
                            COALESCE(SUM(cost_usd), 0)          AS cost_usd
-                    FROM llm_usage WHERE ts >= ?
+                    FROM llm_usage WHERE {where_sql}
                     GROUP BY substr(ts, 1, 10)
                     ORDER BY day ASC
-                """, (cutoff,)).fetchall()]
+                """, params_base).fetchall()]
 
                 # ③ 按模型细分（Provider/Model 维度）
-                models = [dict(r) for r in conn.execute("""
+                models = [dict(r) for r in conn.execute(f"""
                     SELECT provider, model,
                            COUNT(*) AS calls,
                            COUNT(DISTINCT CASE WHEN trace_id != '' THEN trace_id END) AS requests,
@@ -218,10 +250,10 @@ class LLMUsageStore:
                            COALESCE(SUM(cached_tokens), 0)     AS cached_tokens,
                            COALESCE(SUM(reasoning_tokens), 0)  AS reasoning_tokens,
                            COALESCE(SUM(cost_usd), 0)          AS cost_usd
-                    FROM llm_usage WHERE ts >= ?
+                    FROM llm_usage WHERE {where_sql}
                     GROUP BY provider, model
                     ORDER BY total_tokens DESC
-                """, (cutoff,)).fetchall()]
+                """, params_base).fetchall()]
 
             totals["cost_usd"] = round(totals.get("cost_usd", 0) or 0, 6)
             for d in daily:

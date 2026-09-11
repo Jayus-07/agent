@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import json
 import os
+import random
 import time
 from pathlib import Path
 from typing import Any
@@ -32,16 +33,28 @@ from backend.rag.preprocessing.cleaner import DocumentCleaner
 from backend.rag.preprocessing.parser import PARSABLE_EXTS
 from backend.rag.indexing.models import SyncResult, Delta
 from backend.rag.indexing.doc_id import derive_doc_id, parse_kb_dept_subpath_from_path
-from backend.config.rag import BM25_SEARCH_K, EMBED_BATCH_SIZE
+from backend.config.rag import (
+    BM25_SEARCH_K,
+    EMBED_BATCH_SIZE,
+    EMBED_RETRY_MAX,
+    EMBED_RETRY_BACKOFF_BASE,
+    EMBED_RETRY_BACKOFF_MAX,
+)
 from backend.shared.logger import logger
 from backend.infra.async_utils import run_async as _run_async
 
-# 单 chunk 嵌入失败时的重试上限
-EMBED_RETRY_MAX = 3
-# 嵌入重试指数退避：第 n 次重试前 sleep min(EMBED_RETRY_BACKOFF_BASE ** n, 上限) 秒
-# （原先 3 次立即连打，对抖动的远程 embedding 服务是雪崩式重试）
-EMBED_RETRY_BACKOFF_BASE = 1.5
-EMBED_RETRY_BACKOFF_MAX = 4.0
+# 索引中途崩溃/重启后视为"待恢复"的 registry 状态（任务持久化的 recovery 口径）
+INTERRUPTED_STATUSES = ("uploading", "parsing", "embedding")
+
+
+def _embed_backoff_seconds(attempt: int) -> float:
+    """第 attempt 次重试（0 起）前的退避秒数：指数退避 + 随机抖动。
+
+    抖动防止多文档并发索引时所有批次同拍重试（thundering herd）。
+    """
+    base = min(EMBED_RETRY_BACKOFF_BASE ** (attempt + 1), EMBED_RETRY_BACKOFF_MAX)
+    return base + random.uniform(0, 1.0)
+
 # doc 级全文入库的文本长度上限：doc_db 单条 embedding 超长会被模型截断/报错，
 # 且大文件下内存峰值翻倍；Stage1 doc 级检索只需头部语义信息即可定位文档
 DOC_LEVEL_TEXT_MAX_CHARS = 16000
@@ -122,8 +135,15 @@ class IncrementalIndexer:
 
         首次运行（registry 为空）→ 所有文件视为 ADDED。
         后续运行 → 按 SHA256 diff。
+
+        启动恢复（①）：索引任务在后台线程跑、进程不持久化任务队列，
+        服务重启会把 registry 留在 uploading/parsing/embedding 的文档悬在
+        半途。sync() 先显式恢复这批文档（文件还在 → 重索引；文件没了 →
+        清理悬空行），再做常规增量 diff。
         """
         disk_files = self._scan_disk()
+        self._recover_interrupted(disk_files)
+
         registry_rows = self.registry.list_all()
 
         # 只考虑 active 的条目（排除已标记 deleted 的）
@@ -145,6 +165,60 @@ class IncrementalIndexer:
         )
         logger.info(f"增量索引完成: {result}")
         return result
+
+    # ---- 中断恢复（任务持久化的 recovery 路径）----
+
+    def _recover_interrupted(self, disk_files: dict[str, tuple[str, int, float]]) -> dict[str, int]:
+        """重索引 registry 中停留在非终态（uploading/parsing/embedding）的文档。
+
+        背景：上传索引走 fire-and-forget 后台任务，进程重启即丢任务；
+        恢复口依赖 registry 状态（_index_file_inner 开始时写入 parsing 占位行）。
+
+        - 文件仍在磁盘 → 重新索引（幂等：成功后 register 覆盖为 active）
+        - 文件已丢失 → 行标记 deleted（清理悬空占位）
+        - 恢复失败 → 行标记 failed（下次 sync 仍会按 ADDED 重试）
+        """
+        list_by_statuses = getattr(self.registry, "list_by_statuses", None)
+        if not callable(list_by_statuses):
+            return {"recovered": 0, "cleaned": 0, "failed": 0}
+        try:
+            stuck_rows = list_by_statuses(INTERRUPTED_STATUSES)
+        except Exception as e:
+            logger.warning(f"[Recovery] 读取中断文档状态失败，跳过恢复: {e}")
+            return {"recovered": 0, "cleaned": 0, "failed": 0}
+        if not stuck_rows:
+            return {"recovered": 0, "cleaned": 0, "failed": 0}
+
+        logger.info(f"[Recovery] 发现 {len(stuck_rows)} 个中断文档，开始恢复")
+        counts = {"recovered": 0, "cleaned": 0, "failed": 0}
+        disk_abs = {os.path.abspath(p) for p in disk_files}
+        for row in stuck_rows:
+            path = row.get("file_path", "")
+            if not path:
+                continue
+            if not (os.path.isfile(path) or os.path.abspath(path) in disk_abs):
+                try:
+                    self.registry.mark_deleted(path)
+                    counts["cleaned"] += 1
+                    logger.warning(f"[Recovery] 中断文档源文件已丢失，清理记录: {path}")
+                except Exception as e:
+                    logger.warning(f"[Recovery] 清理悬空记录失败 {path}: {e}")
+                continue
+            try:
+                disk_row = disk_files.get(os.path.abspath(path)) or disk_files.get(path)
+                file_hash = disk_row[0] if disk_row else None
+                self._index_file(path, file_hash=file_hash)
+                counts["recovered"] += 1
+                logger.info(f"[Recovery] 中断文档已恢复索引: {os.path.basename(path)}")
+            except Exception as e:
+                counts["failed"] += 1
+                logger.warning(f"[Recovery] 中断文档恢复失败 {path}: {e}")
+                try:
+                    self.registry.update_status(path, "failed")
+                except Exception as status_err:
+                    logger.debug(f"[Recovery] 标记 failed 失败 {path}: {status_err}")
+        logger.info(f"[Recovery] 恢复完成: {counts}")
+        return counts
 
     # ---- 磁盘扫描 ----
 
@@ -443,6 +517,20 @@ class IncrementalIndexer:
             kind=SpanKind.INDEX_DEDUP.value,
             input={"file_hash": file_hash},
         )
+        # ── ④.5 任务状态持久化（parsing 占位行）—— 必须在 dedup 检查之前 ──
+        # 后台索引任务不持久化，进程重启即丢；启动时 sync() 依据该状态恢复中断
+        # 文档。放在 dedup 之前的第二个原因：reindex_file 是强制重建入口，
+        # 占位行把状态置为 parsing 后，下方 dedup 早退（要求 active）不再触发，
+        # 否则"跳过重建 + 先写后删清理旧向量"叠加会凭空丢文档。
+        # 已有行（重索引场景）只改状态、保留 chunk_ids 等历史元数据；
+        # 成功后 register() 覆盖为 active。软失败不影响索引。
+        try:
+            self.registry.register_in_progress(
+                file_path, doc_id=doc_id, file_hash=file_hash,
+                kb_id=kb_id, department=department,
+            )
+        except Exception as e:
+            logger.debug(f"[Indexer] parsing 占位行写入失败（不影响索引）: {e}")
         dup_check = self.registry.get_by_path(file_path)
         if dup_check and dup_check.get("file_hash") == file_hash and dup_check.get("status") == "active":
             trace_collector.end_span(dedup_span,
@@ -539,6 +627,15 @@ class IncrementalIndexer:
             doc_meta.update(meta_result)
         except Exception as e:
             logger.warning(f"元数据构建失败（使用默认值）: {e}")
+
+        # 截断留痕：分块超上限被 _enrich 截断时，检索覆盖天然不完整，
+        # 必须写进 registry quality_issues 可追溯，而不是只有日志
+        chunks_truncated = any(ch.metadata.get("chunks_truncated") for ch in chunks)
+        if chunks_truncated:
+            prev = doc_meta.get("quality_issues", "")
+            doc_meta["quality_issues"] = (
+                f"{prev}, " if prev else ""
+            ) + "chunks_truncated(超出单文档上限被截断,检索覆盖不完整)"
 
         # 注入 chunk metadata — 分层：
         #   - doc_type / person_names → 继承文档级（用于 filter）
@@ -661,8 +758,12 @@ class IncrementalIndexer:
         doc_db_id = ""
         try:
             # doc 级全文超长会被 embedding 模型截断/报错，且大文件内存峰值翻倍；
-            # Stage1 doc 级检索只需头部语义即可定位文档，超长部分截断
+            # Stage1 doc 级检索只需头部语义即可定位文档，超长部分截断。
+            # 截断打标进 metadata，doc 级检索对长文档天然残缺，需可观测。
             doc_level_text = full_text[:DOC_LEVEL_TEXT_MAX_CHARS] if full_text else ""
+            if len(full_text) > DOC_LEVEL_TEXT_MAX_CHARS:
+                doc_db_meta["doc_level_truncated"] = "true"
+                doc_db_meta["doc_level_full_chars"] = len(full_text)
             ids = self.doc_db.add_texts(texts=[doc_level_text], metadatas=[doc_db_meta]) if doc_level_text else []
             doc_db_id = ids[0] if ids else ""
         except Exception as e:
@@ -682,6 +783,8 @@ class IncrementalIndexer:
             "person_count": len(doc_meta.get("person_names", "").split(",")) if doc_meta.get("person_names") else 0,
             "doc_db_id": doc_db_id,
         }
+        if chunks_truncated:
+            metrics["chunks_truncated"] = "true"
         if llm_used:
             metrics["llm_prompt_tokens"] = llm_tokens.get("prompt_tokens", 0)
             metrics["llm_completion_tokens"] = llm_tokens.get("completion_tokens", 0)
@@ -874,10 +977,9 @@ class IncrementalIndexer:
                 return vec
             except Exception as e:
                 last_err = e
-                # 指数退避：立即连打 3 次对抖动的远程服务是雪崩式重试
+                # 指数退避 + 抖动：立即连打对抖动的远程服务是雪崩式重试
                 if attempt < EMBED_RETRY_MAX - 1:
-                    time.sleep(min(EMBED_RETRY_BACKOFF_BASE ** (attempt + 1),
-                                   EMBED_RETRY_BACKOFF_MAX))
+                    time.sleep(_embed_backoff_seconds(attempt))
         # 所有重试都失败 → 创建 child span 记录失败
         logger.error(f"[Embed] chunk {i} 嵌入失败 {EMBED_RETRY_MAX} 次: {last_err}")
         chunk_span = trace_collector.start_span(
@@ -922,9 +1024,14 @@ class IncrementalIndexer:
                     succeeded.append(vec)
             return succeeded
 
-        for start in range(0, len(chunks), EMBED_BATCH_SIZE):
-            batch_chunks = chunks[start:start + EMBED_BATCH_SIZE]
-            batch_texts = texts[start:start + EMBED_BATCH_SIZE]
+        # 批大小：优先取 embedding 实现声明的最优批（cloud 模式受 DashScope
+        # 单请求上限约束，直接取上限避免外层大批被内部再拆）；实现未声明
+        # （测试 fake / 非标准包装）或非法时回退配置批大小。
+        _declared = getattr(self.embedding, "embed_batch_size", None)
+        batch_size = _declared if isinstance(_declared, int) and _declared > 0 else EMBED_BATCH_SIZE
+        for start in range(0, len(chunks), batch_size):
+            batch_chunks = chunks[start:start + batch_size]
+            batch_texts = texts[start:start + batch_size]
             last_err = None
             batch_ok = False
             for _attempt in range(EMBED_RETRY_MAX):
@@ -940,15 +1047,14 @@ class IncrementalIndexer:
                     break
                 except Exception as e:
                     last_err = e
-                    # 指数退避（整批重试路径）
+                    # 指数退避 + 抖动（整批重试路径）
                     if _attempt < EMBED_RETRY_MAX - 1:
-                        time.sleep(min(EMBED_RETRY_BACKOFF_BASE ** (_attempt + 1),
-                                       EMBED_RETRY_BACKOFF_MAX))
+                        time.sleep(_embed_backoff_seconds(_attempt))
             if batch_ok:
                 continue
             # 整批耗尽重试 → 降级逐条，隔离单点失败（旧语义保留）
             logger.warning(
-                f"[Embed] 批次 {start // EMBED_BATCH_SIZE}（{len(batch_texts)} chunks）"
+                f"[Embed] 批次 {start // batch_size}（{len(batch_texts)} chunks）"
                 f"重试 {EMBED_RETRY_MAX} 次全失败 ({last_err})，降级逐条"
             )
             for j, chunk in enumerate(batch_chunks):
@@ -1279,36 +1385,65 @@ class IncrementalIndexer:
         row = self.registry.get_by_path(file_path)
         old_doc_id = row.get("doc_id", "") if row else ""
         old_doc_type = row.get("doc_type", "") if row else ""
+        # 旧向量定位信息必须在重新索引前捕获 —— 成功后 register() 会用新
+        # chunk_ids 覆盖同一行。chunk 向量 ID 由向量库生成（UUID），新旧必不冲突，
+        # 因此"先写新、后按旧 ID 精确删"可行。
+        old_chunk_ids: list[str] = []
+        old_doc_db_id = ""
+        if row:
+            try:
+                _raw = row.get("chunk_ids") or "[]"
+                _parsed = json.loads(_raw) if isinstance(_raw, str) else _raw
+                if isinstance(_parsed, list):
+                    old_chunk_ids = [str(x) for x in _parsed]
+            except (ValueError, TypeError):
+                old_chunk_ids = []
+            old_doc_db_id = row.get("doc_db_id") or ""
 
-        # 1. 处理旧数据：财务文档走版本快照，其他类型直接删除
-        if old_doc_id:
-            if self._should_use_version_snapshot(old_doc_type, file_path):
-                # 版本快照：旧 chunk 标记 is_latest=False，保留历史版本向量
-                try:
-                    updated = self.vectordb.update_metadata_where(
-                        where={"doc_id": old_doc_id},
-                        metadata_update={"is_latest": False},
-                    )
-                    logger.info(
-                        f"[REINDEX] 版本快照: doc_id={old_doc_id}, "
-                        f"标记 {updated} 个旧版 chunk is_latest=False"
-                    )
-                except Exception as e:
-                    # 快照失败 → 兑底删除旧数据，不影响新索引
-                    logger.warning(
-                        f"[REINDEX] 版本快照失败，兑底删除旧数据: {e}"
-                    )
-                    self._remove_document(old_doc_id, file_path=file_path)
-                    self.registry.mark_deleted_by_doc_id(old_doc_id)
-            else:
+        # 1. 处理旧数据：财务文档走版本快照；其他类型"先写后删"——
+        #    旧向量保留到新索引成功后再清理，消除删旧→写新之间的检索空窗
+        #    （文档越大空窗越长，期间该文档完全查不到）；索引失败时旧数据
+        #    原样保留，不再出现"失败即丢旧版本"。
+        if old_doc_id and self._should_use_version_snapshot(old_doc_type, file_path):
+            # 版本快照：旧 chunk 标记 is_latest=False，保留历史版本向量
+            try:
+                updated = self.vectordb.update_metadata_where(
+                    where={"doc_id": old_doc_id},
+                    metadata_update={"is_latest": False},
+                )
+                logger.info(
+                    f"[REINDEX] 版本快照: doc_id={old_doc_id}, "
+                    f"标记 {updated} 个旧版 chunk is_latest=False"
+                )
+            except Exception as e:
+                # 快照失败 → 兜底删除旧数据，不影响新索引
+                logger.warning(
+                    f"[REINDEX] 版本快照失败，兜底删除旧数据: {e}"
+                )
                 self._remove_document(old_doc_id, file_path=file_path)
-
-                # 按 doc_id 软删所有行（修复重复路径导致的残余 active 行）
-                deleted = self.registry.mark_deleted_by_doc_id(old_doc_id)
-                logger.info(f"[REINDEX] 已清理旧数据: doc_id={old_doc_id}, rows={deleted}")
+                self.registry.mark_deleted_by_doc_id(old_doc_id)
+        elif old_doc_id:
+            logger.info(
+                f"[REINDEX] 先写后删模式: 保留旧数据 doc_id={old_doc_id} "
+                f"({len(old_chunk_ids)} chunks)，待新索引成功后清理"
+            )
 
         # 2. 重新索引（_index_file 返回完整 dict，含 trace_id/chunk_count/doc_db_id）
+        #    注意：doc_id 复用 active 记录（保持评测集/Trace 稳定），若索引中途
+        #    在向量库写入/registry 阶段失败，内部清理会连带旧向量（与旧"先删
+        #    后写"的失败行为一致，不会更差）；parse/chunk/embed 阶段失败则旧
+        #    数据完整保留（严格优于旧行为）。
         index_result = self._index_file(file_path, file_hash=file_hash)
+        # dedup 命中（内容未变，如占位行写入失败的极端场景）→ 没有新数据，
+        # 清理旧向量会造成数据丢失，直接原样返回
+        skipped = bool(index_result.get("skipped"))
+        if not skipped:
+            # 2.25 清理被取代的旧向量（精确按旧 ID，不碰同 doc_id 的新 chunk）
+            self._cleanup_superseded(
+                old_doc_id, old_chunk_ids, old_doc_db_id,
+                new_doc_db_id=index_result.get("doc_db_id", ""),
+                file_path=file_path,
+            )
         trace_id = index_result.get("trace_id", "")
         new_chunk_count = index_result.get("chunk_count", 0)
         new_doc_db_id = index_result.get("doc_db_id", "")
@@ -1316,7 +1451,7 @@ class IncrementalIndexer:
 
         # 2.5 bump doc_version（重索引 +1）— P2-3 用公开方法替代私有 cursor 访问
         new_version = 0
-        if old_doc_id:
+        if old_doc_id and not skipped:
             new_version = self.registry.bump_doc_version(old_doc_id, delta=1)
 
         # 3. 汇总每阶段真实耗时（取自本次 trace 的 span），供前端展示
@@ -1343,6 +1478,47 @@ class IncrementalIndexer:
             "trace_id": trace_id or "",
             "stage_elapsed": stage_elapsed,
         }
+
+    def _cleanup_superseded(
+        self,
+        old_doc_id: str,
+        old_chunk_ids: list[str],
+        old_doc_db_id: str,
+        new_doc_db_id: str = "",
+        file_path: str = "",
+    ):
+        """重索引成功后清理被取代的旧向量（"先写后删"的删半边）。
+
+        只按旧 ID 精确删除，绝不按 doc_id 条件删 —— 新旧 chunk 共享同一
+        doc_id，条件删会把刚写入的新向量一起删掉。BM25 无需处理：
+        replace_documents 在单次重建里已完成旧条目移除 + 新条目写入。
+        """
+        if not old_doc_id:
+            return
+        if old_chunk_ids:
+            try:
+                self.vectordb.delete(ids=old_chunk_ids)
+                logger.info(
+                    f"[REINDEX] 已清理旧 chunk 向量 {len(old_chunk_ids)} 条 "
+                    f"(doc_id={old_doc_id})"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[REINDEX] 旧 chunk 向量清理失败（残留孤儿向量，"
+                    f"doc_id={old_doc_id}）: {e}"
+                )
+        else:
+            logger.warning(
+                f"[REINDEX] 旧记录无 chunk_ids，跳过旧向量清理 "
+                f"(doc_id={old_doc_id}) — 如持续出现请检查 registry 数据"
+            )
+        if old_doc_db_id and old_doc_db_id != new_doc_db_id:
+            try:
+                self.doc_db.delete(ids=[old_doc_db_id])
+            except Exception as e:
+                logger.warning(
+                    f"[REINDEX] 旧 doc 级向量清理失败 (doc_db_id={old_doc_db_id}): {e}"
+                )
 
     @staticmethod
     def _should_use_version_snapshot(doc_type: str, file_path: str) -> bool:

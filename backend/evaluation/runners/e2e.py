@@ -5,12 +5,13 @@
 
 双模式（与 rag/sql runner 的 live/offline 双轨一致）：
 
-离线模式 (live=False) — 数据集健全性校验，不调 LLM / 不执行图：
+离线模式 (live=False) — 健全性校验，不调 LLM / 不执行图：
   - expected.route 必须是合法路由模式（direct/plan/workflow/customer_service）
   - expected.capabilities 必须全部在 Skill 注册表（capability 单一事实来源）
   - expected.workflow_name 必须在 Workflow 注册表（与 app/server.py 启动注册对齐）
   - expected.final_state 必须是合法终态（SUCCESS/FAILED/BLOCKED）
-  - 对抗用例（should_block）不进图，标记 skip
+  - 对抗用例（should_block）直接评测 Input Guard 拦截语义
+    （L0/L1 为纯规则，LLM 分支默认关闭 → 离线确定可跑，不 skip）
   适合 CI 常驻：数据集改动即触发校验。
 
 在线模式 (live=True) — 真实构建 StateGraph 并 invoke，四指标：
@@ -80,11 +81,17 @@ def _run_offline_sanity(cases: list[TestCase]) -> list[EvalResult]:
     results: list[EvalResult] = []
     for case in cases:
         exp = case.expected
+
+        # 对抗用例：Guard L0/L1 是纯规则，离线确定性可跑（不进图）
         if exp.get("should_block"):
-            results.append(EvalResult(
-                case_id=case.id, module="e2e", status="skip",
-                expected=exp, actual={},
-            ))
+            try:
+                er = _eval_guard_case(case, exp)
+            except Exception as e:
+                er = EvalResult(
+                    case_id=case.id, module="e2e", status="error",
+                    expected=exp, actual={}, error_msg=f"Guard 评测异常: {e}",
+                )
+            results.append(er)
             continue
 
         problems: list[str] = []

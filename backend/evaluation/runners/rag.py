@@ -216,7 +216,10 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         pipeline, ablation_mode, kb_id, department,
                     )
                 else:
-                    retriever = get_full_retriever(pipeline)
+                    # --multiquery：评测链套上生产链的 MultiQuery 层（口径对齐）
+                    retriever = get_full_retriever(
+                        pipeline, use_multiquery=bool(kwargs.get("multiquery")),
+                    )
                 if (
                     kb_id
                     and kb_id not in ("*", "default")
@@ -705,7 +708,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     import re
                     # 提取 [1][2] 引用标记
                     cited_indices = set()
-                    for m in re.finditer(r'\[(\d+)\]', _generated_answer):
+                    for m in re.finditer(r'\[(?:E)?(\d+)\]', _generated_answer, re.IGNORECASE):
                         cited_indices.add(int(m.group(1)) - 1)  # 转为 0-indexed
 
                     # 期望来源文档（canonical 化）

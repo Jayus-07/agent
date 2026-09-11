@@ -4,15 +4,24 @@ import { useState, useMemo, useRef, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { getTraceById, listAllTraces } from "@/lib/observability/source";
+import dynamic from "next/dynamic";
 import TraceOverviewCard from "@/components/observability/trace/TraceOverviewCard";
 import InputOutputPanel from "@/components/observability/trace/InputOutputPanel";
-import StepTimeline from "@/components/observability/trace/StepTimeline";
 import TraceBreadcrumb from "@/components/observability/trace/TraceBreadcrumb";
-import FlameGraph from "@/components/observability/trace/FlameGraph";
 import LLMCallDetail from "@/components/observability/trace/LLMCallDetail";
 import CostPanel from "@/components/observability/trace/CostPanel";
 import HttpBreakdown from "@/components/observability/trace/HttpBreakdown";
 import SpanTypeSummary from "@/components/observability/trace/SpanTypeSummary";
+
+// 两个可视化组件含 recharts，懒加载避免拖慢详情页首帧
+const StepTimeline = dynamic(() => import("@/components/observability/trace/StepTimeline"), {
+  ssr: false,
+  loading: () => <div className="h-40 rounded-lg bg-slate-100 animate-pulse" />,
+});
+const FlameGraph = dynamic(() => import("@/components/observability/trace/FlameGraph"), {
+  ssr: false,
+  loading: () => <div className="h-40 rounded-lg bg-slate-100 animate-pulse" />,
+});
 import SpanTypeFilter from "@/components/observability/trace/SpanTypeFilter";
 import GraphTopology from "@/components/observability/trace/GraphTopology";
 import { useToast } from "@/components/shared/Toast";

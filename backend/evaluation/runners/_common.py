@@ -101,7 +101,7 @@ def init_rag_pipeline():
 
 # ==================== 完整检索链路 ====================
 
-_full_retriever = None
+_full_retriever: dict[bool, object] = {}
 
 
 def _copied_base(pipeline, k: int):
@@ -119,11 +119,18 @@ def _copied_base(pipeline, k: int):
     return copied
 
 
-def get_full_retriever(pipeline):
-    """构建完整检索链路: ChunkLevelRetriever -> Adaptive -> CrossEncoder 精排。"""
+def get_full_retriever(pipeline, use_multiquery: bool = False):
+    """构建完整检索链路: ChunkLevelRetriever -> Adaptive -> [MultiQuery] -> CrossEncoder 精排。
+
+    use_multiquery=False（默认）保持历史基线口径（原评测链不含 MultiQuery，
+    与生产存在已知口径漂移）；True 时按生产链装配顺序（rag/chain.py：
+    MultiQuery 在 Rerank 内层）套上 MultiQueryRetriever，
+    用 CLI --multiquery 开启，用于度量线上真实链路。
+    """
     global _full_retriever
-    if _full_retriever is not None:
-        return _full_retriever
+    cached = _full_retriever.get(use_multiquery)
+    if cached is not None:
+        return cached
 
     from langchain_classic.retrievers import ContextualCompressionRetriever
 
@@ -133,18 +140,21 @@ def get_full_retriever(pipeline):
 
     base = _copied_base(pipeline, max(HYBRID_SEARCH_K, 20))
 
-    adaptive = AdaptiveRetriever(
+    retriever = AdaptiveRetriever(
         base_retriever=base,
         doc_db=pipeline.doc_db,
     )
+    if use_multiquery:
+        from backend.rag.retrieval.multi_query import MultiQueryRetriever
+        retriever = MultiQueryRetriever(base_retriever=retriever)
 
     full_retriever = ContextualCompressionRetriever(
         base_compressor=RerankCompressor(),
-        base_retriever=adaptive,
+        base_retriever=retriever,
     )
 
-    _full_retriever = full_retriever
-    return _full_retriever
+    _full_retriever[use_multiquery] = full_retriever
+    return full_retriever
 
 
 class _ListRetriever:

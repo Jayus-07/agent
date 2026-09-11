@@ -70,6 +70,52 @@ def _invoke_chat(
         return ""
 
 
+def _build_prompt(question: str, context: list[str]) -> str:
+    """构造生成 prompt — 复用生产 prompt 模板链。
+
+    2026-09-11 口径统一：评测专用硬编码 prompt 与生产链漂移，导致
+    S6/S7/citation 等 answer 类指标度量的不是线上真实答案质量。
+    现按生产链装配方式复刻：rag.qa 模板 system 段（含 {context}）+
+    rag.document Evidence 格式 + human 段（{input}）。
+    模板渲染失败时回退旧硬编码 prompt（保底可用）。
+    """
+    try:
+        from backend.prompts.service import prompt_service
+
+        full = prompt_service.get_template_sync("rag.qa")
+        parts = full.split("---", 1)
+        doc_tpl = prompt_service.get_template_sync("rag.document")
+        docs = []
+        for i, c in enumerate(context, 1):
+            docs.append(doc_tpl.format(
+                index=i, query_label="", doc_label="", section_label="",
+                chunk_label="", type_label="", domain_label="",
+                page_content=c,
+            ))
+        evidence = "\n\n---\n\n".join(docs) if docs else "（无检索结果）"
+
+        if len(parts) == 2:
+            system_text = parts[0].strip()
+            human_text = parts[1].strip()
+            return (
+                system_text.replace("{context}", evidence)
+                + "\n\n"
+                + human_text.replace("{input}", question)
+            )
+        # 模板无 "---" 分隔符：整段作为 prompt 正文，{context}/{input} 均在其中
+        return full.strip().replace("{context}", evidence).replace("{input}", question)
+    except Exception:
+        pass
+    # 回退：旧评测专用 prompt
+    context_text = "\n---\n".join(context) if context else "（无检索结果）"
+    return (
+        f"基于以下参考资料回答问题。如果资料不足以回答，请说明。\n\n"
+        f"参考资料:\n{context_text}\n\n"
+        f"问题: {question}\n\n"
+        f"答案:"
+    )
+
+
 def generate_answer_ollama(
     question: str,
     context: list[str],
@@ -86,16 +132,15 @@ def generate_answer_ollama(
         base_url: Ollama 服务地址（默认取 config.OLLAMA_BASE_URL，跟随 OLLAMA_BASE_URL 环境变量）
 
     Returns:
-        生成的答案文本，失败时返回空字符串。
+        生成的答案文本（已剥离 META 注释块），失败时返回空字符串。
     """
-    context_text = "\n---\n".join(context) if context else "（无检索结果）"
-    prompt = (
-        f"基于以下参考资料回答问题。如果资料不足以回答，请说明。\n\n"
-        f"参考资料:\n{context_text}\n\n"
-        f"问题: {question}\n\n"
-        f"答案:"
-    )
-    return _invoke_chat(prompt, model=model, base_url=base_url, temperature=0.1)
+    prompt = _build_prompt(question, context)
+    raw = _invoke_chat(prompt, model=model, base_url=base_url, temperature=0.1)
+    if not raw:
+        return raw
+    # 剥离生产模型输出的 META 注释块（前端解析用，评测指标不需要）
+    import re as _re
+    return _re.sub(r"<!--META.*?-->", "", raw, flags=_re.S).strip()
 
 
 def answer_relevancy_llm(

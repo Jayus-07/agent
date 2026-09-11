@@ -5,7 +5,10 @@ Phase 2 简化策略：
 - 段落合并：同一页面、相邻、间距 < 阈值 视为同一段
 - 表格识别（P1-5）：PyMuPDF page.find_tables() → table 节点（rows 保留，
   文本流剔除表格区域块，避免重复）；列关系通过 NL+CSV 双格式保留
-- 图片（type=1 块）完全忽略（无 OCR/Vision，见 P0-3）
+- 图片（type=1 块）完全忽略（无 Vision）
+- OCR 兜底：文本层近乎为空（扫描件/纯图片）且 RAG_OCR_PROVIDER 启用时，
+  按页渲染 PNG 走 OCR（parser/ocr.py）；OCR 页无字号信息，标题仅靠编号
+  模式识别，表格不提取（OCR 无法还原行列结构）
 - 可观测：单页失败 → log warning + 计数器，最终汇总报告
 """
 from __future__ import annotations
@@ -23,6 +26,7 @@ except ImportError:
 
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
 from backend.rag.preprocessing.parser.base import BaseDocumentParser
+from backend.config.rag import RAG_OCR_MIN_TEXT_CHARS
 from backend.shared.logger import logger
 
 _PARAGRAPH_MERGE_GAP = 15  # PyMuPDF 文本块垂直间距（point）
@@ -97,6 +101,7 @@ class PdfParser(BaseDocumentParser):
         raw_items: list[tuple[str, float]] = []  # (文本, 字号) — 仅非表格文本
         table_items: list[tuple[float, list[list[str]]]] = []  # (y_top, rows) — 表格
         skipped_pages: list[int] = []
+        page_count = len(doc)
         try:
             for page_idx in range(len(doc)):
                 try:
@@ -164,6 +169,31 @@ class PdfParser(BaseDocumentParser):
                 f"[PdfParser] {file_path} 识别 {len(table_items)} 个表格"
             )
 
+        # ── OCR 兜底：文本层近乎为空（扫描件/纯图片）→ 按页渲染走 OCR ──
+        # 触发口径：平均每页字符 < RAG_OCR_MIN_TEXT_CHARS（按页均而非总量，
+        # 避免"1 页几行字"的真实短文档被误触发 OCR 造成内容重复）。
+        # OCR 页无字号信息（size=0），标题仅靠「第N章/一、/1.」编号模式识别；
+        # 表格无法还原行列结构，不提取。OCR 不可用时返回空（下游按
+        # ChunkingEmptyError 报"扫描件无法解析"，与旧行为一致）。
+        ocr_pages = 0
+        total_text_chars = sum(len(text) for text, _ in raw_items)
+        if page_count > 0 and total_text_chars < RAG_OCR_MIN_TEXT_CHARS * page_count:
+            from backend.config import rag as rag_cfg
+            from backend.rag.preprocessing.parser import ocr as ocr_mod
+            if ocr_mod.ocr_available():
+                logger.warning(
+                    f"[PdfParser] {file_path} 文本层为空"
+                    f"（{total_text_chars} chars / {page_count} 页），"
+                    f"启动 OCR 兜底（{rag_cfg.RAG_OCR_PROVIDER}）"
+                )
+                ocr_items = self._ocr_fallback(file_path, page_count)
+                ocr_pages = len(ocr_items)
+                raw_items.extend(ocr_items)
+                logger.info(
+                    f"[PdfParser] {file_path} OCR 完成: "
+                    f"{ocr_pages} 页产出文本"
+                )
+
         # 标题启发式：统计正文字号（众数），识别标题 → section，其余 → paragraph
         body_size = _body_font_size([size for _, size in raw_items])
         root = DocumentNode(type="section", text="", level=0)
@@ -203,6 +233,32 @@ class PdfParser(BaseDocumentParser):
                 make_table_chunk_text(rows) for _, rows in table_items
             )
         return DocumentAST(root=root, source_file=file_path, raw_text=raw_text)
+
+    def _ocr_fallback(self, file_path: str, page_count: int) -> list[tuple[str, float]]:
+        """按页渲染 PNG 走 OCR，返回与 raw_items 同构的 (text, size=0) 列表。
+
+        单页失败只丢该页（与主解析的 per-page 容错一致）；整本失败返回空，
+        由下游 ChunkingEmptyError 报业务失败。
+        """
+        from backend.config import rag as rag_cfg
+        from backend.rag.preprocessing.parser import ocr as ocr_mod
+        items: list[tuple[str, float]] = []
+        doc = fitz.open(file_path)
+        try:
+            for page_idx in range(min(page_count, rag_cfg.RAG_OCR_MAX_PAGES)):
+                try:
+                    pix = doc[page_idx].get_pixmap(dpi=rag_cfg.RAG_OCR_DPI)
+                    text = ocr_mod.ocr_image(pix.tobytes("png"))
+                    if text and text.strip():
+                        items.append((text.strip(), 0.0))
+                except Exception as e:
+                    logger.warning(
+                        f"[PdfParser][OCR] {file_path} 第 {page_idx} 页失败: "
+                        f"{type(e).__name__}: {e}"
+                    )
+        finally:
+            doc.close()
+        return items
 
     def _extract_blocks(
         self, blocks: list, out: list, table_bboxes: list[tuple] | None = None

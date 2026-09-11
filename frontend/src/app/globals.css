@@ -57,12 +57,11 @@ html, body {
 }
 
 /* ========================================
-   Frosted Glass
+   Frosted Glass — 背后是纯色页面背景，
+   不再使用 backdrop-filter（持续 GPU 合成开销大、视觉收益≈0）
    ======================================== */
 .glass {
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgba(255, 255, 255, 0.92);
   border-color: rgba(0, 0, 0, 0.06);
 }
 

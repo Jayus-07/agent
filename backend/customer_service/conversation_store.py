@@ -97,3 +97,22 @@ async def _async_record_turn(
         )
 
         await db.commit()
+
+    # 发布消息事件到 Kafka（fire-and-forget，Kafka 未启用/不可用时静默跳过）
+    try:
+        from backend.config.messaging import TOPIC_MESSAGE_EVENTS
+        from backend.infra.messaging.kafka import publish_event
+        publish_event(
+            TOPIC_MESSAGE_EVENTS,
+            "message.created",
+            conversation_id,
+            user_id,
+            {
+                "trace_id": trace_id,
+                "intent_domain": intent_domain,
+                "intent_name": intent_name,
+                "confidence": confidence,
+            },
+        )
+    except Exception:
+        logger.debug("[ConversationStore] event publish failed", exc_info=True)

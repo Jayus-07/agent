@@ -75,9 +75,9 @@ class CSInputGuardResult:
 # ── 检测模式 ──────────────────────────────────────────────
 
 _INJECTION_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"忽略(之前|上面|以上)(的|地)?(所有)?(指令|规则|设定)"), "ignore_instruction"),
+    (re.compile(r"忽略(之前|上面|以上)(的|地)?(所有|全部)?(的|地)?(指令|规则|设定)"), "ignore_instruction"),
     (re.compile(r"(你现在|请你?|请)(是|作为|扮演)(一个|一名)?"), "role_override"),
-    (re.compile(r"(系统|system)\s*(prompt|指令|消息)"), "system_prompt_probe"),
+    (re.compile(r"(系统|system)\s*(prompt|提示词|指令|消息)"), "system_prompt_probe"),
     (re.compile(r"(DAN|do\s+anything\s+now)", re.IGNORECASE), "dan_mode"),
 ]
 
@@ -89,7 +89,7 @@ _SQL_INJECTION_PATTERNS: list[tuple[re.Pattern, str]] = [
 ]
 
 _SCOPE_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"(查|看|查?看)(一下)?(别人|其他|所有)(用户|人)(的)?.{0,4}(订单|信息|数据)"), "query_other_user"),
+    (re.compile(r"(查|看|查?看)(一下)?(别人|其他|所有)(用户|人)?(的)?.{0,4}(订单|信息|数据)"), "query_other_user"),
     (re.compile(r"(帮我|给我)(修改|改|删除|删)(别人|其他)(的)"), "modify_other_user"),
 ]
 

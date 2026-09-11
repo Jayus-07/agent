@@ -138,6 +138,10 @@ def main():
         "--no-resume", action="store_true",
         help="忽略 checkpoint 断点续跑，强制全量重跑",
     )
+    parser.add_argument(
+        "--multiquery", action="store_true",
+        help="评测检索链套生产 MultiQuery 层（对齐线上真实链路口径）",
+    )
 
     args = parser.parse_args()
 
@@ -176,6 +180,7 @@ def main():
         workers=args.workers,
         ragas_workers=args.ragas_workers,
         resume=not args.no_resume,
+        multiquery=args.multiquery,
     )
 
     print_summary(report)

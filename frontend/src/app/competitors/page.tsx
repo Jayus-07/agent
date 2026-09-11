@@ -16,9 +16,12 @@ import {
   Lock, KeyRound, CheckCircle, ExternalLink,
   Smartphone, Clock, Loader2, Database,
 } from 'lucide-react'
+import dynamic from 'next/dynamic'
 import { competitorService, type WatchItem, type CompetitorStats, type CookieStatus, type CookieTestResult, type QrLoginResult, type QrPollResult, type RetryResult } from '@/services/competitor'
-import PriceHistoryModal from '@/components/competitor/PriceHistoryModal'
-import CompareModal from '@/components/selection/CompareModal'
+
+// 两个弹窗都含 recharts，懒加载避免拖慢页面首帧
+const PriceHistoryModal = dynamic(() => import('@/components/competitor/PriceHistoryModal'), { ssr: false })
+const CompareModal = dynamic(() => import('@/components/selection/CompareModal'), { ssr: false })
 import { selectionService, type ScoreResult } from '@/services/selection'
 import { useToast } from '@/components/shared/Toast'
 import { clsx } from 'clsx'

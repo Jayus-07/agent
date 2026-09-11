@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from backend.rag.preprocessing.structure_analyzer import StructureReport
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from backend.config import LEAF_CHUNK_TOKENS, PARENT_CHUNK_TOKENS
+from backend.config import LEAF_CHUNK_TOKENS, PARENT_CHUNK_TOKENS, CHUNK_OVERLAP
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode, LEAF_TYPES, walk
 from backend.rag.preprocessing.token_counter import count_tokens
 from backend.shared.logger import logger
@@ -43,19 +43,25 @@ def _chunk_id(doc_id: str, anchor: str, text: str) -> str:
     ).hexdigest()[:12]
 
 
-def _enrich(chunks: List[Document], file_path: str) -> List[Document]:
+def _enrich(chunks: List[Document], file_path: str,
+            max_chunks: int | None = None) -> List[Document]:
     """统一 metadata：parent_doc_id / chunk_index / source_file / file_path。
 
-    生产防护：chunk 数量超过 MAX_CHUNKS_PER_DOC 时截断 + 告警，
-    防止解析失控的异常文档无界产出撑爆 embedding/向量库。
+    生产防护：chunk 数量超过上限时截断 + 告警，防止解析失控的异常文档
+    无界产出撑爆 embedding/向量库。截断不是静默的：所有保留 chunk 打上
+    chunks_truncated 标记，indexer 会写入 registry quality_issues（截断
+    文档的检索覆盖天然不完整，必须可追溯）。财务文档行级切分产出多，
+    由调用方传 FINANCIAL_MAX_CHUNKS_PER_DOC 上限。
     """
     from backend.config import MAX_CHUNKS_PER_DOC
-    if len(chunks) > MAX_CHUNKS_PER_DOC:
+    limit = max_chunks or MAX_CHUNKS_PER_DOC
+    truncated = len(chunks) > limit
+    if truncated:
         logger.warning(
             f"[Chunking] {file_path} 产出 {len(chunks)} chunks 超过上限 "
-            f"{MAX_CHUNKS_PER_DOC}，截断保留前 {MAX_CHUNKS_PER_DOC} 个"
+            f"{limit}，截断保留前 {limit} 个"
         )
-        chunks = chunks[:MAX_CHUNKS_PER_DOC]
+        chunks = chunks[:limit]
     parent_doc_id = hashlib.md5(file_path.encode()).hexdigest()[:10]
     source_file = os.path.basename(file_path)
     for i, c in enumerate(chunks):
@@ -66,6 +72,9 @@ def _enrich(chunks: List[Document], file_path: str) -> List[Document]:
             "source_file": source_file,
             "file_path": file_path,
         })
+        if truncated:
+            # Chroma metadata 只收标量，用字符串标记
+            c.metadata["chunks_truncated"] = "true"
     return chunks
 
 
@@ -280,7 +289,7 @@ class StructureChunkStrategy:
         leaf_text = leaf.text
         if count_tokens(leaf_text) > LEAF_CHUNK_TOKENS:
             splitter = RecursiveCharacterTextSplitter(
-                chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=50,
+                chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=CHUNK_OVERLAP,
                 length_function=count_tokens, separators=_SEPARATORS,
             )
             subs = splitter.split_text(leaf_text)
@@ -357,7 +366,7 @@ class FixedSizeChunkStrategy:
     def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
         # separators=[""] → 不查分隔符，直接按 chunk_size 字符级硬切
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=50,
+            chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=CHUNK_OVERLAP,
             length_function=count_tokens, separators=[""],
         )
         leaf_texts = [n.text for n in walk(ast.root) if n.type in LEAF_TYPES]
@@ -384,7 +393,7 @@ class RecursiveChunkStrategy:
 
     def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=50,
+            chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=CHUNK_OVERLAP,
             length_function=count_tokens, separators=_SEPARATORS,
         )
         leaf_texts = [n.text for n in walk(ast.root) if n.type in LEAF_TYPES]
@@ -606,10 +615,19 @@ class SemanticChunkStrategy:
         批次之间相互独立，避免可用句子的向量被一次失败拖垮。
         """
         from backend.config import SEMANTIC_EMBED_BATCH_SIZE, SEMANTIC_EMBED_RETRY
+        # 批大小与 indexer 主路径同口径：云端 embedding 声明的
+        # embed_batch_size（DashScope 单请求上限）取 min，
+        # 避免外层大批在 OpenAIEmbeddings 内部再拆、白多 RTT
+        _declared = getattr(embedding, "embed_batch_size", None)
+        batch_size = (
+            min(SEMANTIC_EMBED_BATCH_SIZE, _declared)
+            if isinstance(_declared, int) and _declared > 0
+            else SEMANTIC_EMBED_BATCH_SIZE
+        )
         vecs: list[list[float]] = []
-        for i in range(0, len(sentences), SEMANTIC_EMBED_BATCH_SIZE):
-            batch = sentences[i:i + SEMANTIC_EMBED_BATCH_SIZE]
-            batch_no = i // SEMANTIC_EMBED_BATCH_SIZE
+        for i in range(0, len(sentences), batch_size):
+            batch = sentences[i:i + batch_size]
+            batch_no = i // batch_size
             for attempt in range(SEMANTIC_EMBED_RETRY):
                 try:
                     vecs.extend(embedding.embed_documents(batch))
@@ -657,7 +675,7 @@ class SemanticChunkStrategy:
                 return RecursiveChunkStrategy().split(ast, file_path)
             starts = _detect_boundaries(sentences, vecs, SEMANTIC_SIMILARITY_THRESHOLD)
             splitter = RecursiveCharacterTextSplitter(
-                chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=50,
+                chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=CHUNK_OVERLAP,
                 length_function=count_tokens, separators=_SEPARATORS,
             )
             for i, start in enumerate(starts):
@@ -742,7 +760,10 @@ class FinancialTableChunkStrategy:
             chunks.extend(self._split_with_tables(
                 sec, path, file_path, FINANCIAL_TABLE_ROWS_PER_CHUNK,
             ))
-        return _enrich(chunks, file_path)
+        # 财务行级切分产出多，走独立上限（此前 FINANCIAL_MAX_CHUNKS_PER_DOC
+        # 定义了但从未被使用，财务文档被通用 5000 上限截断，与配置意图相悖）
+        from backend.config import FINANCIAL_MAX_CHUNKS_PER_DOC
+        return _enrich(chunks, file_path, max_chunks=FINANCIAL_MAX_CHUNKS_PER_DOC)
 
     def _split_with_tables(
         self, sec, path: list, file_path: str, rows_per_chunk: int,
@@ -839,8 +860,10 @@ class FinancialTableChunkStrategy:
                 # ── 非表格 leaf：走原 StructureChunkStrategy 逻辑 ──
                 leaf_text = leaf.text
                 if count_tokens(leaf_text) > LEAF_CHUNK_TOKENS:
+                    # 行级表格文档的非表格段落同样不设 overlap：相邻段落
+                    # 语义独立，overlap 只会制造重复向量污染数值检索
                     splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=50,
+                        chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=0,
                         length_function=count_tokens, separators=_SEPARATORS,
                     )
                     subs = splitter.split_text(leaf_text)

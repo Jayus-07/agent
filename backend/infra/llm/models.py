@@ -92,3 +92,50 @@ def compute_cost_usd(model_name: str,
         (completion_tokens / 1_000_000) * out_p,
         6,
     )
+
+
+# =====================================================
+# Embedding / Reranker 定价（DashScope 官方 CNY → USD 换算）
+# =====================================================
+# 汇率：1 CNY ≈ 0.138 USD（2026-09 近似值，可按需调整）
+_CNY_TO_USD = 0.138
+
+# DashScope Embedding/Reranker 定价表（USD per 1M tokens）
+# 来源：阿里云百炼官方定价（CNY/M tokens）× 汇率换算
+# - qwen3-rerank: 0.5 元/M → 0.069 USD/M
+# - text-embedding-v3: 0.125 元/M → 0.01725 USD/M
+# - text-embedding-v4: 0.125 元/M → 0.01725 USD/M
+# - qwen-vl-embedding text: 0.7 元/M → 0.0966 USD/M
+# - qwen-vl-embedding image: 1.8 元/M → 0.2484 USD/M
+EMBEDDING_RERANK_PRICING: dict[str, dict] = {
+    "qwen3-rerank": {
+        "component": "rerank",
+        "input_per_1m_usd": round(0.5 * _CNY_TO_USD, 6),   # 0.069
+    },
+    "text-embedding-v3": {
+        "component": "embedding",
+        "input_per_1m_usd": round(0.125 * _CNY_TO_USD, 6), # 0.01725
+    },
+    "text-embedding-v4": {
+        "component": "embedding",
+        "input_per_1m_usd": round(0.125 * _CNY_TO_USD, 6), # 0.01725
+    },
+    "qwen-vl-embedding": {
+        "component": "embedding",
+        "input_per_1m_usd": round(0.7 * _CNY_TO_USD, 6),   # 0.0966 (text)
+        "image_per_1m_usd": round(1.8 * _CNY_TO_USD, 6),   # 0.2484 (image)
+    },
+}
+
+
+def compute_embedding_cost(model_name: str, total_tokens: int) -> float:
+    """按 Embedding/Reranker 定价表估算单次调用 cost (USD)。
+
+    Embedding/Reranker 只有输入 token，无输出 token。
+    未匹配的模型返回 0.0（Local 模式无 API 费用）。
+    """
+    pricing = EMBEDDING_RERANK_PRICING.get(model_name)
+    if not pricing:
+        return 0.0
+    price_per_1m = pricing.get("input_per_1m_usd", 0.0)
+    return round((total_tokens / 1_000_000) * price_per_1m, 6)

@@ -76,6 +76,10 @@ class IndexConsistencyChecker:
             actions = checker.repair(report)
     """
 
+    # 索引进行中的状态：这些 doc 的向量属于"先写后删"/新上传的中间态，
+    # 孤儿判定必须排除，否则 Sweeper 会把正在索引的文档向量误删
+    _IN_PROGRESS_STATUSES = ("uploading", "parsing", "embedding")
+
     def __init__(self, pipeline: RAGPipeline):
         self.pipeline = pipeline
         from backend.rag.indexing.doc_registry import DocumentRegistry
@@ -131,6 +135,22 @@ class IndexConsistencyChecker:
     def _active_docIds(self) -> set[str]:
         return {r["doc_id"] for r in self.registry.list_active() if r.get("doc_id")}
 
+    def _in_progress_doc_ids(self) -> set[str]:
+        """索引进行中的 doc_id（占位行状态）。查询失败软降级为空集。"""
+        try:
+            rows = self.registry.list_by_statuses(self._IN_PROGRESS_STATUSES)
+        except Exception:
+            return set()
+        return {r["doc_id"] for r in rows if r.get("doc_id")}
+
+    def _expected_doc_ids(self) -> set[str]:
+        """孤儿判定口径：active ∪ 索引进行中。
+
+        只用于"存储有、registry 没有"的孤儿检查；"registry 有、存储没有"
+        的缺失检查仍按 active 口径（进行中记录本来就该还没写完）。
+        """
+        return self._active_docIds() | self._in_progress_doc_ids()
+
     def _check_registry_disk(self, report: ConsistencyReport) -> None:
         for row in self.registry.list_active():
             fp = row.get("file_path", "")
@@ -144,7 +164,7 @@ class IndexConsistencyChecker:
                 ))
 
     def _check_chroma_chunk_orphans(self, report: ConsistencyReport) -> None:
-        active_ids = self._active_docIds()
+        expected_ids = self._expected_doc_ids()
         try:
             result = self.vectordb.get()
             chroma_doc_ids: set[str] = set()
@@ -152,7 +172,7 @@ class IndexConsistencyChecker:
                 did = (meta or {}).get("doc_id")
                 if did:
                     chroma_doc_ids.add(did)
-            for orphan_id in chroma_doc_ids - active_ids:
+            for orphan_id in chroma_doc_ids - expected_ids:
                 report.issues.append(ConsistencyIssue(
                     severity="error",
                     store="chroma_chunk",
@@ -195,6 +215,7 @@ class IndexConsistencyChecker:
 
     def _check_doc_db(self, report: ConsistencyReport) -> None:
         active_ids = self._active_docIds()
+        expected_ids = self._expected_doc_ids()
         try:
             result = self.doc_db.get()
             doc_db_ids: set[str] = set()
@@ -202,7 +223,7 @@ class IndexConsistencyChecker:
                 did = (meta or {}).get("doc_id")
                 if did:
                     doc_db_ids.add(did)
-            for orphan_id in doc_db_ids - active_ids:
+            for orphan_id in doc_db_ids - expected_ids:
                 report.issues.append(ConsistencyIssue(
                     severity="error",
                     store="chroma_doc",
@@ -225,7 +246,7 @@ class IndexConsistencyChecker:
             ))
 
     def _check_chunk_store(self, report: ConsistencyReport) -> None:
-        active_ids = self._active_docIds()
+        expected_ids = self._expected_doc_ids()
         try:
             from backend.rag.indexing.chunk_store import get_chunk_store
             cs = get_chunk_store()
@@ -237,7 +258,7 @@ class IndexConsistencyChecker:
             finally:
                 conn.close()
             cs_doc_ids = {r[0] for r in rows if r[0]}
-            for orphan_id in cs_doc_ids - active_ids:
+            for orphan_id in cs_doc_ids - expected_ids:
                 report.issues.append(ConsistencyIssue(
                     severity="error",
                     store="chunk_store",
@@ -256,6 +277,7 @@ class IndexConsistencyChecker:
         if self.bm25_store is None:
             return
         active_ids = self._active_docIds()
+        expected_ids = self._expected_doc_ids()
         try:
             bm25_docs = self.bm25_store.load_docs()
             if not bm25_docs:
@@ -270,7 +292,7 @@ class IndexConsistencyChecker:
                     bm25_doc_ids.add(did)
                     bm25_counts[did] = bm25_counts.get(did, 0) + 1
 
-            for orphan_id in bm25_doc_ids - active_ids:
+            for orphan_id in bm25_doc_ids - expected_ids:
                 report.issues.append(ConsistencyIssue(
                     severity="error",
                     store="bm25",
@@ -305,3 +327,40 @@ class IndexConsistencyChecker:
                 doc_id="",
                 detail=f"BM25 读取失败: {e}",
             ))
+
+
+async def consistency_sweep_loop(
+    first_delay_seconds: float | None = None,
+    interval_seconds: float | None = None,
+) -> None:
+    """后台定期对账 + 修复 — 五路存储最终一致性清扫（Sweeper）。
+
+    写路径的补偿回滚自身也可能失败（孤儿向量 / BM25 幽灵 chunk 残留），
+    即时重试既阻塞用户请求又会因同样故障再次失败；改为事后对账清扫：
+    定期跑 check() + repair()，修复失败留日志，下一轮重试。
+
+    由 server 启动时 create_task。首次延迟避开启动期的全量增量索引；
+    pipeline 未就绪（get_rag_pipeline 抛错）时本轮跳过、下轮再试。
+    """
+    import asyncio
+    from backend.config.rag import (
+        RAG_CONSISTENCY_SWEEP_FIRST_DELAY_MIN,
+        RAG_CONSISTENCY_SWEEP_INTERVAL_HOURS,
+    )
+    first_delay = first_delay_seconds or RAG_CONSISTENCY_SWEEP_FIRST_DELAY_MIN * 60
+    interval = interval_seconds or RAG_CONSISTENCY_SWEEP_INTERVAL_HOURS * 3600
+    await asyncio.sleep(first_delay)
+    while True:
+        try:
+            from backend.app.api.deps import get_rag_pipeline
+            checker = IndexConsistencyChecker(get_rag_pipeline())
+            report = await asyncio.to_thread(checker.check)
+            if not report.consistent:
+                actions = await asyncio.to_thread(checker.repair, report)
+                logger.warning(
+                    f"[ConsistencySweep] 检出不一致并执行修复 {len(actions)} 项: "
+                    f"{actions[:10]}{'...' if len(actions) > 10 else ''}"
+                )
+        except Exception as e:
+            logger.warning(f"[ConsistencySweep] 对账轮失败（下轮重试）: {e}")
+        await asyncio.sleep(interval)

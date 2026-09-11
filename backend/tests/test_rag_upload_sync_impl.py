@@ -587,12 +587,16 @@ class TestUploadEndpoint:
         assert body["ok"] is False
         assert "called" not in captured, "MIME 校验失败时不应进入上传实现"
 
-    def test_explicit_octet_stream_rejected(self, client):
-        tc, _ = client
+    def test_explicit_octet_stream_passes_to_upload(self, client):
+        """显式 application/octet-stream 放行（浏览器/Windows 客户端对 docx 等
+        的通用声明，旧实现一律拒绝属误伤），文件真实性由落盘后的魔数校验兜底
+        （本 fixture 的 sync_upload_impl 为 stub，魔数行为在上传 e2e 中覆盖）。"""
+        tc, captured = client
         resp = tc.post("/upload",
                        files={"file": ("a.md", b"x", "application/octet-stream")},
                        data={"kb_id": "policy_general", "department": "general"})
-        assert resp.json()["ok"] is False
+        assert resp.json()["ok"] is True
+        assert captured.get("called") is True, "octet-stream 应进入上传流程"
 
     def test_content_length_oversize_precheck(self, client, monkeypatch):
         """Content-Length 超上限 → 端点预检直接拒(不进入流式)。"""

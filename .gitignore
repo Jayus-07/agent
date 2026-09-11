@@ -397,3 +397,7 @@ backend/data/_quarantine_damaged_*/
 backend/data/
 # LLM token 用量流水
 token_usage.jsonl
+
+# Java 构建产物与本地 agent 配置
+business-service/target/
+.zcode/

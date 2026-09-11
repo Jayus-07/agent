@@ -263,6 +263,18 @@ cd backend && uvicorn app.server:app --host 0.0.0.0 --port 8000 --reload
 cd frontend && npm run dev
 ```
 
+### 微服务模式（Java 业务系统 + API Gateway + Kafka）
+
+```bash
+docker compose up -d --build   # postgres + kafka + app(AI) + business-service(Java) + api-gateway
+
+# 入口
+http://localhost:8080          # API Gateway（统一入口，前端已指向）
+http://localhost:8081/health   # business-service（Java 业务系统）
+```
+
+架构、Kafka 事件契约与 Python↔Java cutover 步骤见 [docs/architecture-overview.md](docs/architecture-overview.md)。
+
 ---
 
 ## 开发

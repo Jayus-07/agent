@@ -58,14 +58,18 @@ class TestDataset:
 
 
 class TestOfflineRunner:
-    def test_offline_all_pass_or_skip(self, e2e_cases):
-        """离线评测门禁：健全性校验不通过即数据集有错。"""
+    def test_offline_all_pass(self, e2e_cases):
+        """离线评测门禁：健全性校验 + Guard 拦截语义（纯规则，离线确定可跑）。"""
         results = _run_e2e(e2e_cases, live=False)
         for r in results:
-            assert r.status in ("pass", "skip"), f"{r.case_id}: {r.error_msg}"
-        statuses = [r.status for r in results]
-        assert statuses.count("skip") == 2  # 两条对抗用例
-        assert statuses.count("pass") == 11
+            assert r.status == "pass", f"{r.case_id}: {r.error_msg}"
+        assert len(results) == 13
+
+    def test_offline_guard_cases_intercepted(self, e2e_cases):
+        guards = [c for c in e2e_cases if c.expected.get("should_block")]
+        results = _run_e2e(guards, live=False)
+        assert all(r.status == "pass" for r in results)
+        assert all(r.metrics.get("guard_intercepted") == 1.0 for r in results)
 
 
 def _make_case(exp: dict) -> TestCase:

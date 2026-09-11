@@ -1,13 +1,12 @@
 """RAG 上传模块的纯函数测试 — MIME 白名单校验。
 
-P0-2:收紧 MIME 白名单。
-
 设计目标:
 - ALLOWED_MIME_TYPES 必须是模块级常量,方便纯 import 测试
 - _validate_mime(ext, content_type) → (ok, error_msg) 是纯函数,无副作用
-- 收紧点:content_type 为空 / None 时由空值分支提前放行(落盘后靠魔数兜底);
-         客户端显式声明 application/octet-stream 必须拒绝;
-         白名单表不登记永不可达的 octet-stream 条目
+- octet-stream 放行策略:空 content_type / 显式 octet-stream 都放行,
+  文件真实性统一由落盘后的魔数校验兜底（PDF %PDF- / OOXML PK\x03\x04 /
+  文本格式 NUL + UTF-16 BOM 探测）。旧实现显式拒绝 octet-stream,
+  会误伤以 octet-stream 声明上传 docx 的浏览器/Windows 客户端。
 """
 import pytest
 
@@ -41,11 +40,11 @@ class TestAllowedMimeStructure:
 
     def test_octet_stream_not_in_whitelist_dicts(self):
         # 白名单表只登记"显式声明时允许的具体 MIME"。
-        # octet-stream 的兜底由 _validate_mime 空 content_type 提前返回分支实现，
-        # 显式声明 octet-stream 则被前置拒绝 — 表内不应出现永不可达的条目（防误导）。
+        # octet-stream 由 _validate_mime 的专用分支放行（不等同于登记白名单），
+        # 表内不应出现该条目（防误导）。
         for ext, mimes in ALLOWED_MIME_TYPES.items():
             assert "application/octet-stream" not in mimes, (
-                f"{ext} 白名单不应包含 octet-stream（该分支永不可达，见模块注释）"
+                f"{ext} 白名单不应包含 octet-stream（由专用分支处理，见模块注释）"
             )
 
     def test_pdf_does_not_accept_octet_stream(self):
@@ -93,7 +92,7 @@ class TestValidateMime:
         assert ok is False, f"应拒绝 {bad_why}"
         assert "MIME" in err or "not allowed" in err
 
-    # --- octet-stream 兜底:仅当 content_type 为空时允许 ---
+    # --- octet-stream:空声明与显式声明都放行,由魔数校验兜底 ---
 
     def test_octet_stream_allowed_when_content_type_empty(self):
         """content_type 为空(None / "")时,允许 octet-stream 兜底
@@ -102,16 +101,13 @@ class TestValidateMime:
             ok, err = _validate_mime("md", empty)
             assert ok is True, f"content_type={empty!r} 应走 magic 兜底,实际拒绝: {err}"
 
-    def test_octet_stream_rejected_when_content_type_explicit(self):
-        """客户端显式声明 application/octet-stream 时,必须拒绝。
-
-        收紧了 P0-2:之前任何 octet-stream 都过,现在必须靠 magic 校验兜底。
-        magic 校验在 sync_upload_impl 里,与 MIME 校验互补。
-        """
-        # MD 扩展 + 显式 octet-stream → 拒
-        ok, err = _validate_mime("md", "application/octet-stream")
-        assert ok is False
-        assert "octet-stream" in err or "MIME" in err
+    @pytest.mark.parametrize("ext", ["md", "txt", "csv", "docx", "xlsx", "pdf"])
+    def test_octet_stream_allowed_when_explicit(self, ext):
+        """显式 application/octet-stream 放行（浏览器/Windows 客户端对 docx
+        等的通用声明,旧实现一律拒绝属误伤）。真实性由魔数校验兜底:
+        伪装的二进制文件过不了 sync_upload_impl 的 NUL/BOM/%PDF-/PK 探测。"""
+        ok, err = _validate_mime(ext, "application/octet-stream")
+        assert ok is True, f"{ext} + 显式 octet-stream 应放行,实际拒绝: {err}"
 
     # --- 大小写 / charset 参数 ---
 
@@ -140,18 +136,17 @@ class TestValidateMime:
 # ============ 与 sync_upload_impl 的集成点测试 ============
 
 class TestSyncUploadMimeIntegration:
-    """验证 _validate_mime 在 sync_upload_impl 中实际被调用,且 octet-stream 收紧生效。"""
+    """验证 _validate_mime 在 sync_upload_impl 中实际被调用,octet-stream 走魔数兜底。"""
 
-    def test_octet_stream_md_blocks_before_magic_check(self):
-        """模拟 sync_upload_impl 的入口校验流程:显式 octet-stream + md 必须被拒。
+    def test_octet_stream_falls_through_to_magic_check(self):
+        """显式 octet-stream + md 放行,依赖魔数校验拦截伪装文件。
 
-        这是 P0-1 残留问题的根因:GBK 字节写入磁盘前,如果客户端声明了
-        application/octet-stream,旧代码会放行,然后 magic 校验通过(纯文本内容)
-        导致乱码文件入库。
+        旧实现（P0-2 收紧）在此直接拒绝,误伤了以 octet-stream 声明上传
+        docx 的浏览器客户端;现在 MIME 层放行,伪装二进制由
+        sync_upload_impl 的 NUL 字节 / UTF-16 BOM 探测拦截。
         """
-        # 模拟一个 multipart 上传,content_type 是 octet-stream
         ok, err = _validate_mime("md", "application/octet-stream")
-        assert ok is False, (
-            "P0-2 收紧失败:application/octet-stream 不应作为 MD 的合法 MIME。"
-            "客户端必须正确声明 text/markdown 或 text/plain。"
+        assert ok is True, (
+            "octet-stream 应放行并交由魔数校验兜底"
+            f",实际拒绝: {err}"
         )

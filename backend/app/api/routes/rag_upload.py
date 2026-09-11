@@ -1,5 +1,5 @@
 """RAG 上传路由 — PR-2.x 从 rag.py 抽出。"""
-import asyncio, os, shutil, uuid, time
+import asyncio, os, shutil, threading, time, uuid
 from asyncio import Queue
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
@@ -36,8 +36,13 @@ class FileLockedByOtherError(Exception):
 # Stale 锁 TTL:进程崩溃残留的 .lock 超过该时长后允许被新请求接管(自愈)。
 # 背景:旧实现无任何回收路径,索引中途崩溃后 .lock 永久残留,
 # 同名文件此后每次上传都被 FileLockedByOtherError 拒绝。
-# 取 30 分钟:大于 50MB 上限文件的最慢索引耗时,避免误抢仍在跑的锁。
+# 取 30 分钟:语义是"心跳超时判定"——持锁方有心跳线程持续刷新时间戳,
+# 活锁永不超时(超长索引任务不再被误抢);持有进程死亡后心跳停止,
+# 超过该时长即可安全接管。取值需远大于心跳间隔(LOCK_HEARTBEAT_SECONDS)。
 LOCK_STALE_SECONDS = 30 * 60
+
+# 锁心跳间隔:持锁期间每 N 秒重写 .lock 时间戳。判死需 TTL >> 该值。
+LOCK_HEARTBEAT_SECONDS = 60.0
 
 
 def _lock_age_seconds(lock_path: str) -> float | None:
@@ -123,6 +128,32 @@ def acquire_index_lock(filepath: str) -> int:
     )
 
 
+def _pdf_has_text_layer(path: str, max_pages: int = 10) -> bool | None:
+    """检测 PDF 是否有文本层（扫描件预检，纯函数便于测试）。
+
+    Returns:
+        True  — 检查的前 max_pages 页中存在足够文本 → 正常解析
+        False — 检查页全部无文本 → 扫描件/纯图片，索引必然失败，入口即拒
+        None  — 无法判定（加密/损坏/PyMuPDF 异常）→ 放行，交给解析层报错
+
+    判定阈值：单页可提取文本 ≥ 20 字符即认为有文本层（页码/水印级噪音
+    不算）。只查前 max_pages 页：扫描件通常整本无文本，无需全量扫描。
+    """
+    try:
+        import fitz  # PyMuPDF（pdf_parser 同源依赖）
+        with fitz.open(path) as doc:
+            if doc.is_encrypted:
+                return None
+            for i, page in enumerate(doc):
+                if i >= max_pages:
+                    break
+                if len(page.get_text().strip()) >= 20:
+                    return True
+            return False
+    except Exception:
+        return None
+
+
 def sha256_of_file(path: str, chunk_size: int = 8 * 1024 * 1024) -> str:
     """分块流式计算文件 SHA256 — 避免整文件读入内存。
 
@@ -160,6 +191,34 @@ def release_index_lock(fd: int, filepath: str = "") -> None:
             os.unlink(lock_path)
         except OSError:
             pass
+
+
+def _start_lock_heartbeat(lock_path: str, stop_event: threading.Event) -> threading.Thread:
+    """启动锁心跳线程：持锁期间定期重写 .lock 时间戳。
+
+    把 stale 判定从"固定 30 分钟"变为"心跳超时"：超长索引任务（真实存在，
+    30 分钟 TTL 就是按它定的上限）不再被并发请求误判接管；持有进程崩溃后
+    心跳停止，时间戳停滞，TTL 后照常自愈接管——两种场景都正确。
+
+    防御：每拍心跳先校验锁文件仍属于本进程（pid 匹配），锁已被他人接管或
+    清理时立即退出，绝不复活已易主的锁文件。
+    """
+    my_pid = str(os.getpid())
+
+    def _beat():
+        while not stop_event.wait(LOCK_HEARTBEAT_SECONDS):
+            try:
+                with open(lock_path, "r", encoding="utf-8", errors="replace") as f:
+                    if f.readline().strip() != my_pid:
+                        return  # 锁已易主/被清理，退出
+                with open(lock_path, "w", encoding="utf-8") as f:
+                    f.write(f"{my_pid}\n{time.time()}\n")
+            except OSError:
+                return  # 锁文件已消失（正常释放），心跳退出
+
+    t = threading.Thread(target=_beat, name="lock-heartbeat", daemon=True)
+    t.start()
+    return t
 
 
 def cleanup_stale_upload_artifacts(docs_dir: str, tmp_dir: str,
@@ -243,16 +302,20 @@ async def progress_queue_gc_loop(interval_seconds: float = 300) -> None:
 # 设计要点：
 #   1. 支持的扩展名从解析器注册表 PARSABLE_EXTS 派生（F6 单一来源），
 #      与解析层永远一致；新增解析器自动对上传开放，无需同步多处名单。
-#   2. content_type 为空时（curl 命令行场景）由 _validate_mime 空值分支提前放行，
-#      落盘后靠魔数校验兜底；白名单表只登记"显式声明时允许的具体 MIME"。
-#      历史教训：曾在表里列 octet-stream 作兜底，但该条目永不可达
-#      （空 content_type 提前返回、显式 octet-stream 前置拒绝），已清理防误导。
-#   3. PDF 不接受 octet-stream（PDF 是二进制格式，octet-stream 兜底没意义）。
+#   2. content_type 为空或显式 application/octet-stream 时由 _validate_mime
+#      放行，落盘后靠魔数校验兜底（Windows/浏览器客户端常对 docx 等声明
+#      octet-stream，MIME 层拒绝会误伤合法文件）；白名单表只登记
+#      "显式声明时允许的具体 MIME"。
+#   3. 文本格式的魔数探测：NUL 字节 + UTF-16 BOM 拒绝二进制/双字节伪装。
 #   4. 模块级常量，方便纯函数 import 测试。
 from backend.rag.preprocessing.parser import PARSABLE_EXTS
 
 # 后台索引任务的存活引用集：防止 fire-and-forget task 被 GC / 异常静默丢失
 _background_index_tasks: set[asyncio.Task] = set()
+
+# 索引并发闸门（懒创建信号量，见 _get_index_semaphore）
+_INDEX_CONCURRENCY_LIMIT = int(os.getenv("RAG_MAX_CONCURRENT_INDEX", "2"))
+_index_semaphore: asyncio.Semaphore | None = None
 
 _MIME_BY_EXT: dict[str, set[str]] = {
     "pdf":      {"application/pdf"},
@@ -300,7 +363,10 @@ def _validate_mime(ext: str, content_type: str | None) -> tuple[bool, str]:
       - ext 不在 SUPPORTED_EXTS → 拒（unsupported ext）
       - content_type 为 None / "" → 通过（走 magic 校验兜底）
       - 显式 content_type（去 charset 后）必须在 ALLOWED_MIME_TYPES[ext] 内
-        显式声明 application/octet-stream 必须拒绝（P0-2 收紧）
+      - application/octet-stream 放行：这是 Windows / 部分浏览器客户端对
+        "未知二进制"的通用声明，一律拒绝会误伤合法的 docx/xlsx 上传；
+        文件真实性由落盘后的魔数校验兜底（PDF %PDF- / OOXML PK\x03\x04 /
+        文本格式 NUL + UTF-16 BOM 探测）。
     """
     if ext not in SUPPORTED_EXTS:
         return False, f"unsupported ext: .{ext}"
@@ -311,16 +377,12 @@ def _validate_mime(ext: str, content_type: str | None) -> tuple[bool, str]:
     ctype = content_type.split(";", 1)[0].strip().lower()
     if not ctype:
         return True, ""
-    # P0-2 收紧：客户端显式声明 application/octet-stream 必须拒绝。
-    # 原因：octet-stream 兜底仅在 content_type 为空时生效（curl/某些 SDK 默认场景），
-    # 一旦客户端声明了 octet-stream，多半是扩展名伪装（如 MD 实际是二进制），
-    # 必须走 magic 校验后端兜底，而不是 MIME 层面放行。
-    # 历史教训：P0-1 GBK 乱码文件就是通过 octet-stream 蒙混进 doc_db 的。
+    # octet-stream 放行（历史教训改为由魔数校验兜底）：旧实现在此直接拒绝，
+    # 结果是浏览器/Windows 客户端上传 docx（常声明 octet-stream）被误拒。
+    # 二进制格式有强魔数（%PDF- / PK\x03\x04），文本格式有 NUL + BOM 探测，
+    # 伪装文件进不到索引环节。
     if ctype == "application/octet-stream":
-        return False, (
-            f"explicit application/octet-stream not allowed for .{ext}; "
-            f"客户端必须声明具体 MIME（如 text/markdown / application/pdf）"
-        )
+        return True, ""
     if ctype not in ALLOWED_MIME_TYPES[ext]:
         return False, f"MIME type not allowed for .{ext}: {ctype}"
     return True, ""
@@ -494,8 +556,11 @@ async def sync_upload_impl(
         elif ext in ("docx", "xlsx") and not head.startswith(b"PK\x03\x04"):
             # F6: xlsx 同为 OOXML zip 容器，魔数与 docx 一致
             _magic_ok = False
-        elif ext in ("md", "markdown", "txt") and b"\x00" in head:
-            # P2: 文本格式无魔数可查,用 NUL 字节探测拒绝二进制伪装。
+        elif ext in ("md", "markdown", "txt", "csv") and (
+            b"\x00" in head or head[:2] in (b"\xff\xfe", b"\xfe\xff")
+        ):
+            # P2: 文本格式无魔数可查,用 NUL 字节探测拒绝二进制伪装;
+            # UTF-16 BOM 同拒（解析器只有 utf-8/gbk 链路,UTF-16 会整体乱码）。
             # 历史教训:P0-1 二进制/乱码文件曾直接进入 doc_db。
             _magic_ok = False
         if not _magic_ok:
@@ -504,6 +569,21 @@ async def sync_upload_impl(
             except OSError:
                 pass
             return {"ok": False, "error": f"file is corrupted or not a valid .{ext} file (magic check failed)"}
+        # 扫描件预检：PDF 无文本层时，OCR 兜底已启用（RAG_OCR_PROVIDER != off）
+        # 则放行交给索引链路走 OCR；OCR 关闭时索引必然产出 0 chunk，
+        # 入口直接明确拒绝，不让用户等后台索引几十秒才报错（预检失败不误杀）
+        if ext == "pdf":
+            from backend.config.rag import RAG_PDF_PRECHECK_PAGES, RAG_OCR_PROVIDER
+            if (RAG_PDF_PRECHECK_PAGES > 0 and RAG_OCR_PROVIDER == "off"
+                    and _pdf_has_text_layer(tmp_path, RAG_PDF_PRECHECK_PAGES) is False):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                return {"ok": False, "error": (
+                    "PDF 无文本层（可能为扫描件/纯图片），且 OCR 兜底未开启，无法解析；"
+                    "请使用可复制文字的 PDF，或配置 RAG_OCR_PROVIDER 开启 OCR 支持"
+                )}
         # F9: 覆盖检测紧贴 replace — P0-X: 覆盖场景下 _cleanup_failed_upload
         # 必须保留源文件（atomic rename 已覆盖，删除会丢用户原文件）。
         was_overwrite = os.path.isfile(final_path)
@@ -612,6 +692,29 @@ def _write_progress_redis(upload_id: str, stage: str, message: str = "", **extra
         logger.debug(f"[RAG] 进度镜像写入 Redis 失败: {e}")
 
 
+def _mark_registry_failed(filepath: str) -> None:
+    """索引失败后把 registry 占位行标为 failed（启动恢复的状态依据）。
+
+    _index_file 开始时写入的 parsing 占位行若不收口，会在每次启动时被
+    sync() 反复重试永久失败文档；active 行（覆盖上传前的旧版本）不降级。
+    """
+    try:
+        row = _get_registry().get_by_path(filepath)
+        if row and row.get("status") not in ("active", "deleted"):
+            _get_registry().update_status(filepath, "failed")
+    except Exception as exc:
+        logger.debug(f"[RAG] registry 失败状态标记异常（不影响主流程）: {exc}")
+
+
+def _get_index_semaphore() -> asyncio.Semaphore:
+    """索引并发信号量（懒创建）：模块导入时可能尚无事件循环，
+    首次使用时创建，避免 loop 绑定兼容问题。"""
+    global _index_semaphore
+    if _index_semaphore is None:
+        _index_semaphore = asyncio.Semaphore(_INDEX_CONCURRENCY_LIMIT)
+    return _index_semaphore
+
+
 async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general", upload_elapsed_ms: int | None = None, was_overwrite: bool = False):
     """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志。
 
@@ -638,9 +741,19 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
 
         # 同步索引（在线程池跑，不阻塞事件循环）；返回含 trace_id
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, _do_index_sync, upload_id, filepath, filename, loop, kb_id, department)
+        # 并发闸门：解析/chunks/向量都驻留单任务内存，限制同时索引数防
+        # 内存峰值叠加；槽位满时提示排队（emit 用 uploading 阶段，前端无感）
+        sem = _get_index_semaphore()
+        if sem.locked():
+            await emit("uploading",
+                       f"索引队列繁忙（最大并发 {_INDEX_CONCURRENCY_LIMIT}），排队等待中...")
+        async with sem:
+            result = await loop.run_in_executor(
+                None, _do_index_sync, upload_id, filepath, filename, loop, kb_id, department)
     except Exception as e:
         logger.error(f"[RAG] 后台索引失败: {e}")
+        # 任务状态收口：parsing 占位行 → failed（否则启动恢复会反复重试）
+        _mark_registry_failed(filepath)
         # P1-4:ChunkingEmptyError 是业务失败(扫描件/结构损坏),保留源文件供排查;
         #      其它异常按孤儿文件处理逻辑清理
         from backend.rag.indexing.indexer import ChunkingEmptyError
@@ -782,6 +895,9 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
     # 导致同 doc_id 写两次到向量库。这里在入口加非阻塞锁,
     # 第二个请求立即抛 FileLockedByOtherError(不让它阻塞 SSE)。
     index_lock_fd = acquire_index_lock(filepath)
+    # 锁心跳：持锁期间持续刷新时间戳，超长索引不再被 stale 判定误抢
+    _heartbeat_stop = threading.Event()
+    _start_lock_heartbeat(filepath + ".lock", _heartbeat_stop)
     try:
         # === 原 _do_index_locked_body 内容内联到这里 ——
         # 必须在本函数作用域内,否则 DOCS_DIRECTORY 找不到
@@ -842,6 +958,7 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
         logger.info(f"[RAG] 上传索引完成: {filename} → {result}")
         return result
     finally:
+        _heartbeat_stop.set()
         release_index_lock(index_lock_fd, filepath)
 
 

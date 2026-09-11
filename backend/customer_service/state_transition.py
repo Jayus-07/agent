@@ -122,7 +122,7 @@ class StateTransitionService:
                     conversation_status = conversation_status or conv.get("conversation_status", "")
                     handling_mode = handling_mode or conv.get("handling_mode", "")
 
-        return StateTransitionResult(
+        result = StateTransitionResult(
             success=len(errors) == 0,
             confirmation_state=confirmation_state,
             handoff_state=handoff_state,
@@ -131,6 +131,28 @@ class StateTransitionService:
             pending_action=pending_action,
             errors=errors,
         )
+
+        # 发布状态变更事件到 Kafka（fire-and-forget，Kafka 未启用时静默跳过）
+        if len(errors) == 0:
+            try:
+                from backend.config.messaging import TOPIC_CONVERSATION_EVENTS
+                from backend.infra.messaging.kafka import publish_event
+                publish_event(
+                    TOPIC_CONVERSATION_EVENTS,
+                    "conversation.state_changed",
+                    conversation_id or None,
+                    user_id or None,
+                    {
+                        "confirmation_state": confirmation_state,
+                        "handoff_state": handoff_state,
+                        "conversation_status": conversation_status,
+                        "handling_mode": handling_mode,
+                    },
+                )
+            except Exception:
+                logger.debug("[StateTransitionService] event publish failed", exc_info=True)
+
+        return result
 
     async def _apply_confirmation(
         self,

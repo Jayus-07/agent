@@ -142,6 +142,62 @@ class DocumentRegistry:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def list_by_statuses(self, statuses: tuple[str, ...] | list[str]) -> list[dict]:
+        """返回 status 在给定集合内的所有记录（启动恢复中断索引用）。"""
+        if not statuses:
+            return []
+        placeholders = ",".join(["?"] * len(statuses))
+        with self._lock, self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM doc_registry WHERE status IN ({placeholders})",
+                tuple(statuses),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def register_in_progress(
+        self,
+        file_path: str,
+        doc_id: str,
+        file_hash: str,
+        kb_id: str,
+        department: str = "",
+        doc_type: str = "general",
+    ):
+        """登记"索引进行中"占位行（status='parsing'）。
+
+        后台索引任务不持久化，进程重启即丢；该占位行是启动恢复的依据
+        （sync() 按 INTERRUPTED_STATUSES 找回中断文档）。
+
+        - 已有行（重索引场景）：只改状态 + file_hash，保留 chunk_ids /
+          doc_version 等历史元数据 —— 启动恢复与"先写后删"清理都依赖
+          旧 chunk_ids 定位旧向量，覆盖即丢失。
+        - 新文件：插入最小占位行，成功后由 register() 覆盖为完整记录。
+        """
+        normalized = os.path.realpath(file_path) if file_path else file_path
+        try:
+            stat = os.stat(file_path)
+            fsize, fmtime = stat.st_size, stat.st_mtime
+        except OSError:
+            fsize, fmtime = 0, 0.0
+        with self._lock, self._conn() as conn:
+            cur = conn.execute(
+                """UPDATE doc_registry
+                   SET status = 'parsing', file_hash = ?, updated_at = datetime('now')
+                   WHERE file_path IN (?, ?)""",
+                (file_hash, file_path, normalized),
+            )
+            if cur.rowcount == 0:
+                conn.execute(
+                    """INSERT OR REPLACE INTO doc_registry
+                       (file_path, file_name, kb_id, doc_id, file_hash, file_size,
+                        file_mtime, doc_type, department, status, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'parsing', datetime('now'))""",
+                    (
+                        file_path, os.path.basename(file_path), kb_id, doc_id,
+                        file_hash, fsize, fmtime, doc_type, department,
+                    ),
+                )
+
     def list_by_doc_type(self, doc_type: str, limit: int = 50) -> list[dict]:
         """按文档类型查询（供 MinHash 去重）。"""
         with self._lock, self._conn() as conn:

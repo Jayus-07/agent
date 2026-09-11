@@ -110,15 +110,18 @@ export interface TokensSummary {
   models: TokenUsageByModel[]
 }
 
-/** GET /observability/tokens/summary?days=N — Token 用量看板聚合（近 N 天） */
-export async function getTokensSummary(days = 7): Promise<TokensSummary> {
-  return await request<TokensSummary>(`/api/observability/tokens/summary?days=${days}`);
+/** GET /observability/tokens/summary?days=N&component=X — Token 用量看板聚合（近 N 天） */
+export async function getTokensSummary(days = 7, component?: string): Promise<TokensSummary> {
+  const p = new URLSearchParams({ days: String(days) });
+  if (component && component !== "all") p.set("component", component);
+  return await request<TokensSummary>(`/api/observability/tokens/summary?${p.toString()}`);
 }
 
 export interface TokenCallRow {
   ts: string
   trace_id: string
   session_id: string
+  component: string  // llm | embedding | rerank
   model: string
   provider: string
   prompt_tokens: number
@@ -131,13 +134,14 @@ export interface TokenCallRow {
   finish_reason: string
 }
 
-/** GET /observability/tokens/calls — LLM 调用明细（分页，最新在前） */
+/** GET /observability/tokens/calls — 调用明细（分页，最新在前） */
 export async function getTokensCalls(
   days = 7,
-  opts: { model?: string; limit?: number; offset?: number } = {},
+  opts: { model?: string; component?: string; limit?: number; offset?: number } = {},
 ): Promise<{ calls: TokenCallRow[]; total: number }> {
   const p = new URLSearchParams({ days: String(days) });
   if (opts.model) p.set("model", opts.model);
+  if (opts.component && opts.component !== "all") p.set("component", opts.component);
   p.set("limit", String(opts.limit ?? 20));
   p.set("offset", String(opts.offset ?? 0));
   return await request(`/api/observability/tokens/calls?${p.toString()}`);

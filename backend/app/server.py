@@ -232,6 +232,18 @@ async def start_progress_queue_gc():
     asyncio.create_task(progress_queue_gc_loop(), name="progress-queue-gc")
 
 
+@app.on_event("startup")
+async def start_consistency_sweeper():
+    """五路存储最终一致性清扫：定期对账孤儿向量 / BM25 幽灵残留并修复。
+
+    写路径补偿回滚失败的残留没有即时重试通道（会阻塞请求且同样可能失败），
+    由本任务按周期（默认 6h，首次延迟 10min 避开启动期增量索引）兜底清扫。
+    """
+    import asyncio
+    from backend.rag.indexing.consistency import consistency_sweep_loop
+    asyncio.create_task(consistency_sweep_loop(), name="consistency-sweeper")
+
+
 # ═══════════════════════════════════════════════════
 # 启动时后台预热 MultiAgent（避免首请求 5-15s 图编译）
 # ═══════════════════════════════════════════════════

@@ -5,6 +5,8 @@ Phase 3: 语义门控模式 — sem_context_recall 替代 snippet/chunk 命中�
 """
 from __future__ import annotations
 
+import threading
+
 from typing import Any
 
 from backend.evaluation.metrics import (
@@ -131,13 +133,19 @@ def score_case_semantic(
 
 
 _scorer_instance: SemanticScorer | None = None
+_scorer_lock = threading.Lock()
 
 
 def _get_scorer() -> SemanticScorer:
-    """延迟初始化 + 缓存 scorer 实例（避免每条用例重复加载模型）。"""
+    """延迟初始化 + 缓存 scorer 实例（避免每条用例重复加载模型）。
+
+    双检锁：--workers 并发时防止重复加载模型。
+    """
     global _scorer_instance
     if _scorer_instance is None:
-        _scorer_instance = get_eval_scorer()
+        with _scorer_lock:
+            if _scorer_instance is None:
+                _scorer_instance = get_eval_scorer()
     return _scorer_instance
 
 

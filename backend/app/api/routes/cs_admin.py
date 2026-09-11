@@ -1,6 +1,11 @@
 """CS Admin API — conversation list / detail / trace linkage.
 
 Prefix: ``/cs/conversations``
+
+Cutover 开关（CS_ADMIN_SOURCE，见 backend/config/messaging.py）:
+  - local（默认）：读本地 PostgreSQL（现状，Java 业务系统未验证前的过渡态）
+  - java：代理到 business-service（Java 业务系统），本地查询路径停用
+traces 端点始终走 Python（trace 数据在 observability.trace_store）。
 """
 from __future__ import annotations
 
@@ -10,6 +15,29 @@ from pydantic import BaseModel
 from backend.shared.logger import logger
 
 router = APIRouter(prefix="/cs/conversations", tags=["智能客服-管理"])
+
+
+def _use_java_source() -> bool:
+    from backend.config.messaging import CS_ADMIN_SOURCE
+    return CS_ADMIN_SOURCE == "java"
+
+
+async def _proxy_to_java(path: str) -> dict:
+    """代理请求到 business-service（cutover 后的读源）"""
+    import httpx
+
+    from backend.config.messaging import BUSINESS_SERVICE_URL, INTERNAL_API_TOKEN
+
+    headers = {}
+    if INTERNAL_API_TOKEN:
+        headers["X-Internal-Token"] = INTERNAL_API_TOKEN
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(f"{BUSINESS_SERVICE_URL}{path}", headers=headers)
+        if resp.status_code == 404:
+            raise HTTPException(404, detail="Conversation not found")
+        if resp.status_code != 200:
+            raise HTTPException(502, detail=f"business-service error: {resp.status_code}")
+        return resp.json()
 
 
 # ── Response models ──────────────────────────────────────
@@ -74,6 +102,20 @@ async def list_conversations(
     q: str | None = Query(None, description="Search in summary/messages"),
 ):
     """Paginated conversation list ordered by last_activity_at DESC."""
+    if _use_java_source():
+        try:
+            from urllib.parse import urlencode
+            params = {k: v for k, v in {
+                "limit": limit, "cursor": cursor, "status": status,
+                "handling_mode": handling_mode, "user_id": user_id, "q": q,
+            }.items() if v is not None}
+            return await _proxy_to_java(f"/cs/conversations?{urlencode(params)}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"[CSAdmin] java proxy list_conversations failed: {e}")
+            raise HTTPException(502, detail="business-service unavailable")
+
     try:
         from backend.customer_service._db_loop import run_sync
         return await _async_list_conversations(
@@ -89,6 +131,15 @@ async def list_conversations(
 @router.get("/{conversation_id}", response_model=ConversationDetail)
 async def get_conversation(conversation_id: str):
     """Conversation detail with ordered messages."""
+    if _use_java_source():
+        try:
+            return await _proxy_to_java(f"/cs/conversations/{conversation_id}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"[CSAdmin] java proxy get_conversation failed: {e}")
+            raise HTTPException(502, detail="business-service unavailable")
+
     try:
         from backend.customer_service._db_loop import run_sync
         result = await _async_get_conversation(conversation_id, run_sync)

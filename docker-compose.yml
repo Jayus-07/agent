@@ -10,10 +10,66 @@
 #   - 应用业务库查询走 agent_readonly 只读账号（数据库层只读防线）
 #   - 首次启动由 docker/init-dbs.sh 自动建库 + 建角色（幂等）
 #   - PGPASSWORD / PG_READONLY_PASSWORD 必填（fail-fast，无默认弱密码）
-version: "3.8"
+
+# 微服务拆分后的统一网络
+networks:
+  agent-net:
+    driver: bridge
 
 services:
-  # ── 应用服务 ──
+  # ── API Gateway（Spring Cloud Gateway，统一入口）──
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - AI_SERVICE_URL=http://app:8000
+      - BUSINESS_SERVICE_URL=http://business-service:8081
+      # 网关注入用户身份头（对接后端 TRUST_USER_HEADER 机制）
+      - GATEWAY_USER_HEADER_ENABLED=${GATEWAY_USER_HEADER_ENABLED:-false}
+      - GATEWAY_DEFAULT_USER_ID=${GATEWAY_DEFAULT_USER_ID:-}
+    depends_on:
+      app:
+        condition: service_started
+      business-service:
+        condition: service_started
+    networks:
+      - agent-net
+    restart: unless-stopped
+
+  # ── 业务系统（Java：工单/客户/会话/审计/渠道接入）──
+  business-service:
+    build: ./business-service
+    ports:
+      - "8081:8081"
+    environment:
+      # 记忆库（读写：customer_service schema）
+      - MEM_DB_URL=jdbc:postgresql://postgres:5432/agent_memory
+      - MEM_DB_USERNAME=postgres
+      - MEM_DB_PASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+      # 业务库（只读：订单等，数据库层强制只读）
+      - BIZ_DB_URL=jdbc:postgresql://postgres:5432/agent_business
+      - BIZ_DB_USERNAME=agent_readonly
+      - BIZ_DB_PASSWORD=${PG_READONLY_PASSWORD:?PG_READONLY_PASSWORD is required}
+      # Kafka
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      # 内部调用令牌（Python AI 服务 → 业务系统内部 REST）
+      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
+      # WhatsApp Cloud API（无 token 时仅收不发）
+      - WHATSAPP_ACCESS_TOKEN=${WHATSAPP_ACCESS_TOKEN:-}
+      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID:-}
+      - WHATSAPP_VERIFY_TOKEN=${WHATSAPP_VERIFY_TOKEN:-}
+      - WHATSAPP_APP_SECRET=${WHATSAPP_APP_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    networks:
+      - agent-net
+    restart: unless-stopped
+
+  # ── 应用服务（AI 系统：RAG/Agent/LLM）──
   app:
     build: .
     ports:
@@ -43,6 +99,13 @@ services:
       # Redis
       - REDIS_ENABLED=${REDIS_ENABLED:-true}
       - REDIS_URL=redis://redis:6379/0
+      # Kafka（事件发布，默认关闭保证向后兼容）
+      - KAFKA_ENABLED=${KAFKA_ENABLED:-true}
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      # 业务系统（Java）地址：cs_admin cutover 开关用
+      - BUSINESS_SERVICE_URL=http://business-service:8081
+      - CS_ADMIN_SOURCE=${CS_ADMIN_SOURCE:-local}
+      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
     volumes:
       - app_data:/app/data
       - app_cache:/app/.cache
@@ -51,6 +114,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      kafka:
+        condition: service_started
+    networks:
+      - agent-net
     restart: unless-stopped
 
   # ── PostgreSQL + pgvector ──
@@ -73,6 +140,34 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - agent-net
+    restart: unless-stopped
+
+  # ── Kafka（事件总线，KRaft 单节点）──
+  kafka:
+    image: apache/kafka:3.7.0
+    ports:
+      # 外部监听器供宿主机开发调试（Python/Java 本地运行时用）
+      - "127.0.0.1:9094:9094"
+    environment:
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://127.0.0.1:9094
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_NUM_PARTITIONS=3
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+    volumes:
+      - kafka_data:/opt/kafka/data
+    networks:
+      - agent-net
     restart: unless-stopped
 
   # ── Ollama（可选，本地模型）──
@@ -98,6 +193,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - agent-net
     restart: unless-stopped
 
 volumes:
@@ -106,3 +203,4 @@ volumes:
   pg_data:
   ollama_data:
   redis_data:
+  kafka_data:

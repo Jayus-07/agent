@@ -49,6 +49,8 @@ dependencies = [
     "psycopg2-binary>=2.9",
     "sqlalchemy>=2.0",
     "alembic>=1.13",
+    "kafka-python>=2.0.2",  # 事件总线（微服务拆分后与 business-service 协作，见 backend/config/messaging.py）
+    "httpx>=0.27",  # 业务系统（Java）cutover 代理调用
 
     # ═══════════════════════════════════════════
     # 数据处理

@@ -48,16 +48,17 @@ class FakeEmbedding:
 
 
 class FakeVectorDB:
-    """记录 add_documents / delete;id 由 page_content hash 决定,可追踪删除。
+    """记录 add_documents / delete；id 由 page_content hash 决定，可追踪删除。
 
-    注意真实接口:删除走 delete(where={"doc_id": ...})(Chroma 风格),
-    不是按 ids 删 — fake 签名必须对齐,否则 TypeError 被降级吞掉,断言失真。
+    删除支持两种口径：where 条件删（_remove_document 内部清理）与 ids 精确删
+    （reindex "先写后删"按 registry 旧 chunk_ids 清理，不碰同 doc_id 新向量）。
     """
     _collection_name = "fake_chunks"
 
     def __init__(self):
         self.added: list = []   # [(docs_batch, ids_batch)]
         self.deleted_where: list[dict] = []
+        self.deleted_ids: list[list[str]] = []
         self._n = 0
 
     def add_documents(self, docs, **kwargs):
@@ -68,8 +69,11 @@ class FakeVectorDB:
         self.added.append((list(docs), ids))
         return ids
 
-    def delete(self, where=None, **kwargs):
-        self.deleted_where.append(where or {})
+    def delete(self, where=None, ids=None, **kwargs):
+        if ids is not None:
+            self.deleted_ids.append(list(ids))
+        if where is not None:
+            self.deleted_where.append(where)
 
 
 class FakeDocDB:
@@ -77,6 +81,7 @@ class FakeDocDB:
         self.texts: list[str] = []
         self.metas: list[dict] = []
         self.deleted_where: list[dict] = []
+        self.deleted_ids: list[list[str]] = []
         self._n = 0
 
     def add_texts(self, texts, metadatas=None, **kwargs):
@@ -88,16 +93,33 @@ class FakeDocDB:
             ids.append(f"doc-{self._n}")
         return ids
 
-    def delete(self, where=None, **kwargs):
-        self.deleted_where.append(where or {})
+    def delete(self, where=None, ids=None, **kwargs):
+        if ids is not None:
+            self.deleted_ids.append(list(ids))
+        if where is not None:
+            self.deleted_where.append(where)
 
 
 class FakeBM25Store:
+    """对齐生产接口：索引主链路调 replace_documents（单次重建完成旧删新增）。
+    旧 fake 只实现 add_documents，与生产漂移导致 BM25 断言恒失败。"""
+
     def __init__(self):
         self.batches: list[list] = []
+        self.replaced: list[dict] = []
+        self.removed: list[list] = []
 
     def add_documents(self, docs, k=5, **kwargs):
         self.batches.append(list(docs))
+
+    def replace_documents(self, docs, k=20, *, doc_id="", file_path=""):
+        self.batches.append(list(docs))
+        self.replaced.append({"doc_id": doc_id, "file_path": file_path,
+                              "count": len(docs)})
+
+    def remove_documents(self, doc_ids, k=20, file_paths=None):
+        self.removed.append(list(doc_ids))
+        return None
 
 
 class FakeUploadFile:
@@ -316,13 +338,14 @@ class TestIndexerIngestion:
         # registry 只有一行 active(路径唯一)
         row = index_env.registry.get_by_path(str(fp))
         assert row["status"] == "active"
-        # 向量库写过两批,但第二批前旧 doc 的删除被触发过(where 带 doc_id)
+        # 向量库写过两批；先写后删：第二次成功后按旧 chunk_ids 精确清理
+        # （旧向量保留到新数据写完才删，期间无检索空窗）
         assert len(index_env.vectordb.added) == 2
-        assert index_env.vectordb.deleted_where, "重索引应先删旧向量"
-        assert all(w.get("doc_id") == r1["doc_id"]
-                   for w in index_env.vectordb.deleted_where)
-        # doc_db 同样按 doc_id 清理旧全文
-        assert index_env.doc_db.deleted_where
+        assert index_env.vectordb.deleted_ids, "重索引成功后应按旧 chunk_ids 清理旧向量"
+        first_ids = index_env.vectordb.added[0][1]
+        assert index_env.vectordb.deleted_ids[0] == first_ids
+        # doc_db 同样按旧 doc_db_id 清理旧全文
+        assert index_env.doc_db.deleted_ids == [["doc-1"]]
 
     def test_empty_content_file_raises_chunking_empty(self, index_env):
         """解析出 0 chunk 的文件绝不'假成功'入库(P1-4 契约)。"""
@@ -432,9 +455,9 @@ class TestUploadToIndexChain:
         row = route_env.registry.get_by_path(res2["filepath"])
         assert row["file_hash"] == hashlib.sha256(
             new_content.encode("utf-8")).hexdigest()
-        # 向量库第二批写入,且重索引按 doc_id 触发旧向量删除
+        # 向量库第二批写入,重索引成功后按旧 chunk_ids 清理旧向量(先写后删)
         assert len(route_env.vectordb.added) == 2
-        assert route_env.vectordb.deleted_where
+        assert route_env.vectordb.deleted_ids, "重索引成功后应按旧 chunk_ids 清理旧向量"
 
     def test_queue_vanished_still_indexes(self, route_env):
         """P1 修复:SSE 断连导致队列被 pop 后,索引必须继续,绝不静默跳过。

@@ -1,0 +1,49 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      # 全局 CORS：前端跨域统一在网关处理，下游服务不再重复配置
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOriginPatterns: "*"
+            allowedMethods: "*"
+            allowedHeaders: "*"
+            allowCredentials: true
+            maxAge: 3600
+      routes:
+        # ── 业务系统（Java）：客服管理面 ──
+        - id: business-service
+          uri: ${BUSINESS_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/cs/conversations/**,/api/channels/**
+          filters:
+            - StripPrefix=1
+        # ── AI 系统（Python）：chat/rag/observability/... 其余全部 ──
+        - id: ai-service
+          uri: ${AI_SERVICE_URL:http://localhost:8000}
+          predicates:
+            - Path=/api/**
+          filters:
+            - StripPrefix=1
+
+# 网关身份注入：开启后所有请求带 X-User-Id（无真实登录体系时用默认用户）
+# 对接 Python 侧 TRUST_USER_HEADER=true + USER_ID_HEADER=X-User-Id
+gateway:
+  user-header-enabled: ${GATEWAY_USER_HEADER_ENABLED:false}
+  user-header-name: X-User-Id
+  default-user-id: ${GATEWAY_DEFAULT_USER_ID:demo-user}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    org.springframework.cloud.gateway: INFO

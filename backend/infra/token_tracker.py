@@ -166,6 +166,9 @@ class TokenTracker:
                 # JSONL 写入 (线程安全)
                 self._write_jsonl(event)
                 
+                # SQLite 写入（统一数据源供看板聚合）
+                self._write_sqlite(event)
+                
                 # Prometheus 指标 (独立 metric)
                 self._record_prometheus(event)
                 
@@ -198,6 +201,37 @@ class TokenTracker:
         with self._lock:
             with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write(event.to_json() + "\n")
+    
+    def _write_sqlite(self, event: TokenUsageEvent):
+        """同步写入 SQLite（LLMUsageStore），供看板聚合。软失败不阻塞主流程。"""
+        try:
+            from backend.infra.llm.models import compute_embedding_cost
+            from backend.observability.llm_usage_store import get_llm_usage_store
+
+            tokens = event.total_tokens or 0
+            cost_usd = compute_embedding_cost(event.model_name, tokens) if event.backend == "cloud" else 0.0
+
+            store = get_llm_usage_store()
+            store.record({
+                "component": event.component,
+                "model": event.model_name,
+                "provider": "dashscope" if event.backend == "cloud" else "local",
+                "prompt_tokens": tokens,
+                "completion_tokens": 0,
+                "total_tokens": tokens,
+                "cost_usd": cost_usd,
+                "duration_ms": event.duration_ms,
+                "trace_id": event.trace_id or "",
+                "session_id": "",
+                "finish_reason": event.status,
+            })
+        except Exception as e:
+            # 软失败：SQLite 写入失败不影响主流程和 JSONL 记录
+            try:
+                from backend.shared.logger import logger as _logger
+                _logger.debug(f"[TokenTracker] SQLite 写入失败: {e}")
+            except Exception:
+                pass
     
     def _record_prometheus(self, event: TokenUsageEvent):
         """记录到 Prometheus - 使用独立 metric token_usage_total。"""

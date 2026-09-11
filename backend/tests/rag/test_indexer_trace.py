@@ -249,7 +249,9 @@ class TestFailurePaths:
             if s.span_id.startswith("embed_chunk_") and s.status == "error"
         ]
         assert len(chunk_error_spans) >= 1
-        assert chunk_error_spans[0].retry_count == 3
+        # 重试上限来自配置（EMBED_RETRY_MAX，默认 5，可环境变量覆盖）
+        from backend.rag.indexing.indexer import EMBED_RETRY_MAX
+        assert chunk_error_spans[0].retry_count == EMBED_RETRY_MAX
         assert "error" in chunk_error_spans[0].metrics
 
     def test_embed_succeeds_after_retry(self, tmp_path, fresh_collector):

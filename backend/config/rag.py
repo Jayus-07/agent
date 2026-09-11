@@ -41,6 +41,35 @@ RAG_UPLOAD_CHUNK_SIZE = int(os.getenv("RAG_UPLOAD_CHUNK_SIZE", str(1024 * 1024))
 # SSE 进度推送间隔: 每 5MB 或 500ms 触发一次
 RAG_UPLOAD_EMIT_BYTES = int(os.getenv("RAG_UPLOAD_EMIT_BYTES", str(5 * 1024 * 1024)))
 RAG_UPLOAD_EMIT_MS = int(os.getenv("RAG_UPLOAD_EMIT_MS", "500"))
+# 索引并发闸门：解析 AST + chunks + 向量全在单任务内存里，多文件并发上传
+# 会叠加内存峰值（50MB 文件可展开成数百 MB），信号量排队限制同时索引数
+RAG_MAX_CONCURRENT_INDEX = int(os.getenv("RAG_MAX_CONCURRENT_INDEX", "2"))
+# PDF 扫描件预检：上传入口检查前 N 页是否有文本层，无文本层（扫描件/纯图片）
+# 直接明确报错，不再等索引走到分块阶段才失败（0 = 关闭预检）。
+# 注意：OCR 启用时预检自动放行扫描件（交给 OCR 兜底），仅 OCR=off 时拒绝
+RAG_PDF_PRECHECK_PAGES = int(os.getenv("RAG_PDF_PRECHECK_PAGES", "10"))
+
+# ── PDF OCR 兜底（扫描件/无文本层）──
+# 供应商：rapidocr（默认，离线免费）| dashscope（备选，qwen-vl 逐页识别，
+# token 用量计入 /observability/tokens 的 OCR 维度）| off（关闭，入口拒绝扫描件）
+RAG_OCR_PROVIDER = os.getenv("RAG_OCR_PROVIDER", "rapidocr").lower()
+# 触发阈值：平均每页文本层字符数低于该值视为无文本层（扫描件/纯图片）。
+# 按页均而非全文总量判定，避免"1 页只有几行字"的真实短文档被误触发 OCR
+RAG_OCR_MIN_TEXT_CHARS = int(os.getenv("RAG_OCR_MIN_TEXT_CHARS", "30"))
+# 渲染 DPI（越高越准越慢）与单文档 OCR 页数上限（防异常大文档失控烧钱/耗时）
+RAG_OCR_DPI = int(os.getenv("RAG_OCR_DPI", "200"))
+RAG_OCR_MAX_PAGES = int(os.getenv("RAG_OCR_MAX_PAGES", "100"))
+# DashScope 备选配置（key 依次取 OCR_DASHSCOPE_API_KEY → DASHSCOPE_API_KEY
+# → EMBEDDING_API_KEY，通常为同一阿里云账号）
+RAG_OCR_DASHSCOPE_MODEL = os.getenv("RAG_OCR_DASHSCOPE_MODEL", "qwen-vl-max")
+RAG_OCR_DASHSCOPE_BASE_URL = os.getenv(
+    "RAG_OCR_DASHSCOPE_BASE_URL",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1")
+RAG_OCR_DASHSCOPE_TIMEOUT = int(os.getenv("RAG_OCR_DASHSCOPE_TIMEOUT", "60"))
+# 五路存储一致性清扫（Sweeper）：写路径的补偿回滚自身可能失败留下孤儿/幽灵，
+# 事后定期对账 + 修复。首次延迟避开启动期全量增量索引，之后按小时周期跑
+RAG_CONSISTENCY_SWEEP_FIRST_DELAY_MIN = int(os.getenv("RAG_CONSISTENCY_SWEEP_FIRST_DELAY_MIN", "10"))
+RAG_CONSISTENCY_SWEEP_INTERVAL_HOURS = int(os.getenv("RAG_CONSISTENCY_SWEEP_INTERVAL_HOURS", "6"))
 
 # 文档级关键词 LLM 模型 — 设了用本地 Ollama（免费），不设走 _LLMProxy（当前 DeepSeek）
 DOC_LLM_MODEL = os.getenv("DOC_LLM_MODEL", "")
@@ -76,6 +105,17 @@ SEMANTIC_EMBED_RETRY = int(os.getenv("SEMANTIC_EMBED_RETRY", "3"))
 # 索引主路径 embedding 批量化（P2）：embed_documents 批调用走本地模型矩阵运算，
 # 比逐条 embed_query 快数倍；批失败降级逐条以隔离失败点
 EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "32"))
+# 云端 embedding 单请求文本条数上限（DashScope text-embedding-v3 = 10，
+# 与 embedding_singleton 的 OpenAIEmbeddings chunk_size 同源）。
+# indexer 批大小取 min(EMBED_BATCH_SIZE, EMBED_REQUEST_LIMIT)：
+# 旧实现外层攒 32 条、内部再拆 10+10+10+2，白多 3 次 RTT。
+EMBED_REQUEST_LIMIT = int(os.getenv("EMBED_REQUEST_LIMIT", "10"))
+# embedding 重试预算：远程 embedding 限流窗口是秒~分钟级，旧值（3 次、
+# 退避上限 4s）撑不过一次正常限流，随后整批降级逐条反而把请求量放大几十倍。
+# 现默认 5 次、退避上限 30s + 随机抖动，可用环境变量覆盖。
+EMBED_RETRY_MAX = int(os.getenv("EMBED_RETRY_MAX", "5"))
+EMBED_RETRY_BACKOFF_BASE = float(os.getenv("EMBED_RETRY_BACKOFF_BASE", "1.5"))
+EMBED_RETRY_BACKOFF_MAX = float(os.getenv("EMBED_RETRY_BACKOFF_MAX", "30"))
 # 单文档 chunk 数量上限（生产防护）：异常超长/解析失控文档超限时截断 + 告警，
 # 防止无界产出撑爆 embedding/向量库
 MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "5000"))
