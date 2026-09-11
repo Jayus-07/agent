@@ -1,8 +1,8 @@
 """周自动评测入口（P1-2，2026-08-21 从 backend.eval 迁移）。
 
-用统一框架 backend.evaluation 跑 canonical 评测集（145 条）离线检索评测：
+用统一框架 backend.evaluation 跑 canonical 评测集（100 条）离线检索评测：
 - 确定性：不调 LLM，无 API 成本，可在调度线程内同步执行
-- 覆盖面：145 条 canonical 全集，含 Top-1/拒答/MRR 等 v2 指标
+- 覆盖面：100 条 canonical 全集，含 Top-1/拒答/MRR 等 v2 指标
 - 留痕：报告持久化到 data/eval_runs（persist_report）
 
 调用方：

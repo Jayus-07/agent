@@ -213,7 +213,7 @@ class EvaluationService:
             if config.smoke:
                 cases = cases[:5]
             cases = _filter_cases_by_tier(cases, config.tier)
-            results = _run_module("rag", cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume, multiquery=config.multiquery)
+            results = _run_module("rag", cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume, multiquery=config.multiquery, full_trace=config.full_trace)
             summaries = [_build_summary(results, "rag")]
             _inject_token_totals(summaries, run_started_ts)
             return EvalReport(
@@ -241,7 +241,7 @@ class EvaluationService:
                 cases = cases[:5]
             cases = _filter_cases_by_tier(cases, config.tier)
 
-            results = _run_module(m, cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume, multiquery=config.multiquery)
+            results = _run_module(m, cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume, multiquery=config.multiquery, full_trace=config.full_trace)
             all_results.extend(results)
             summaries.append(_build_summary(results, m))
             all_cases.extend(cases)

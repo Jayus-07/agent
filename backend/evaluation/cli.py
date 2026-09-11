@@ -13,7 +13,6 @@ from pathlib import Path
 from backend.evaluation.gate import flag_regressions
 from backend.evaluation.report import (
     print_summary,
-    write_json_report,
     write_markdown_report,
 )
 from backend.evaluation.runner import run_all
@@ -142,6 +141,10 @@ def main():
         "--multiquery", action="store_true",
         help="评测检索链套生产 MultiQuery 层（对齐线上真实链路口径）",
     )
+    parser.add_argument(
+        "--full-trace", action="store_true",
+        help="per_case 保留完整 page_content 与 span input/output（默认瘦身）",
+    )
 
     args = parser.parse_args()
 
@@ -181,11 +184,12 @@ def main():
         ragas_workers=args.ragas_workers,
         resume=not args.no_resume,
         multiquery=args.multiquery,
+        full_trace=args.full_trace,
     )
 
     print_summary(report)
 
-    # 统一输出到 data/eval_runs/{run_id}/，所有产物（report.json + per_case + markdown + JSON）在同一目录
+    # 统一输出到 data/eval_runs/{run_id}/，所有产物（report.json + per_case + markdown）在同一目录
     try:
         from backend.evaluation.storage import persist_report
         run_dir = persist_report(report)
@@ -195,7 +199,8 @@ def main():
 
     output_dir = Path(args.output) if args.output else (run_dir or RESULTS_DIR / report.timestamp.replace(":", "-"))
     write_markdown_report(report, output_dir)
-    write_json_report(report, output_dir)
+    # JSON 报告只保留 persist_report 的 report.json 一份（原 write_json_report
+    # 会再写内容重复的 eval-*.json，体积翻倍）；--compare 已兼容读取两种文件
 
     # 回归检测
     if args.regression:
@@ -256,9 +261,9 @@ def _do_compare(compare_id: str, current, results_dir: Path, current_dir: Path |
     from backend.evaluation.models import EvalReport as _EvalReport
     from backend.evaluation.report import METRIC_LABELS, MODULE_LABELS
 
-    # 找最近的 JSON 报告（write_json_report 存档的，递归查找）
+    # 找最近的 JSON 报告（persist_report 的 report.json + 历史 eval-*.json，递归查找）
     json_files = sorted(
-        results_dir.rglob("eval-*.json"),
+        [p for pat in ("report.json", "eval-*.json") for p in results_dir.rglob(pat)],
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )

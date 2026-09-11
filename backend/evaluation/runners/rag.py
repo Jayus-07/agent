@@ -45,6 +45,9 @@ from backend.shared.logger import logger
 
 _ANSWERS_FILE: Path | None = None
 
+# Stage1 doc 级探针检索的 top-k（诊断指标 S1 用，独立于主检索链路）
+_STAGE1_PROBE_K = 5
+
 
 def _doc_id_match(actual_id: str, expected_set: set[str], resolver=None, kb_id: str = "", department: str = "") -> bool:
     """规范化比较 — 通过 resolver 桥接 hash doc_id ↔ filename。"""
@@ -69,7 +72,8 @@ def _normalize_fact_text(text: str) -> str:
     t = re.sub(r'\s+', '', t)
     t = t.replace('，', ',').replace('。', '.').replace('：', ':')
     t = t.replace('（', '(').replace('）', ')')
-    t = re.sub(r'第([一二三四五六七八九十]+)季度', lambda m: _cn_to_q(m.group(1)), t)
+    # 中文季度只有一到四，多字符匹配（如"十一"）无意义且会漏归一化
+    t = re.sub(r'第([一二三四])季度', lambda m: _cn_to_q(m.group(1)), t)
     t = t.replace('亿元', '亿').replace('万元', '万')
     return t
 
@@ -254,7 +258,11 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     doc_filter["kb_id"] = kb_id
                 if department:
                     doc_filter["department"] = department
-                doc_results = pipeline.doc_db.similarity_search(question, k=5, filter=doc_filter) if doc_filter else pipeline.doc_db.similarity_search(question, k=5)
+                doc_results = (
+                    pipeline.doc_db.similarity_search(question, k=_STAGE1_PROBE_K, filter=doc_filter)
+                    if doc_filter
+                    else pipeline.doc_db.similarity_search(question, k=_STAGE1_PROBE_K)
+                )
                 stage1_docs = []
                 stage1_doc_ids = []
                 for d in doc_results:
@@ -545,6 +553,28 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                             generation_metrics["claim_count"] = float(faithfulness["claim_count"])
                             generation_metrics["supported_claim_count"] = float(faithfulness["supported_count"])
 
+                # === LLM-as-Judge（--judge 时启用）===
+                # 原实现 judge.py 从未被任何 runner 调用（死代码），现接线：
+                # 对真实生成答案做 4 维质量评分，分数进 judge_* 指标
+                if kwargs.get("judge") and _generated_answer and expected_answer:
+                    try:
+                        from backend.evaluation.judge import judge_answer
+                        _rubric = {
+                            "completeness": f"参考答案: {expected_answer}",
+                            "faithfulness": "所有数字/事实必须能追溯到检索证据，不得编造",
+                            "conciseness": "表述精炼，无冗余重复",
+                            "citation_quality": "引用标注准确且与证据一致",
+                        }
+                        if required_facts:
+                            _rubric["completeness"] += f"；必须覆盖的事实: {', '.join(required_facts)}"
+                        _jr = judge_answer(question, _rubric, _generated_answer)
+                        if _jr.total > 0:  # total=0.0 表示评估失败，不写入（避免污染均值）
+                            generation_metrics["judge_total"] = round(_jr.total / 5, 4)
+                            for _k, _v in _jr.scores.items():
+                                generation_metrics[f"judge_{_k}"] = round(_v / 5, 4)
+                    except Exception as judge_err:
+                        logger.debug(f"[Judge] {case.id} 评分失败（跳过）: {judge_err}")
+
                     if generation_metrics:
                         stage_metrics["generation"] = generation_metrics
 
@@ -806,6 +836,22 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 _tok_after = _get_token_usage()
                 _case_prompt_tokens = _tok_after["prompt_tokens"] - _tok_before["prompt_tokens"]
                 _case_completion_tokens = _tok_after["completion_tokens"] - _tok_before["completion_tokens"]
+
+                # ── 结果瘦身（--full-trace 保留全量）──
+                # per_case JSON 原样携带完整 page_content + 全部 span 的
+                # input/output，报告体积随检索量线性膨胀。默认只保留
+                # snippet（前 200 字）与 span 的 metrics 摘要。
+                # 注意：瘦身在全部打分完成之后执行，不影响指标计算。
+                if not kwargs.get("full_trace", False):
+                    details = [
+                        {k: v for k, v in d.items() if k != "page_content"}
+                        for d in details
+                    ]
+                    trace_spans = [
+                        {k: v for k, v in sp.items()
+                         if k not in ("input", "output", "events", "errors")}
+                        for sp in trace_spans
+                    ]
 
                 result_holder.append(EvalResult(
                     case_id=case.id, module="rag",

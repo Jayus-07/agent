@@ -77,6 +77,7 @@ def run_all(
     ragas_workers: int = 4,
     resume: bool = True,
     multiquery: bool = False,
+    full_trace: bool = False,
 ) -> Any:
     """主入口 — 薄包装器，委托给 EvaluationService.evaluate()。
 
@@ -103,5 +104,6 @@ def run_all(
         ragas_workers=ragas_workers,
         resume=resume,
         multiquery=multiquery,
+        full_trace=full_trace,
     )
     return EvaluationService().evaluate(config)

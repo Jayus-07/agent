@@ -475,10 +475,28 @@ _metric_cache: dict[tuple[str, int], Any] = {}
 
 
 def _get_cached_metric(name: str, llm_wrapper: Any, embeddings: Any) -> Any:
-    """获取（或创建并缓存）RAGAS metric 实例。"""
+    """获取（或创建并缓存）RAGAS metric 实例。
+
+    metric 类延迟导入（ragas 为可选依赖），与 compute_ragas_metrics 的
+    导入源保持一致（ragas.metrics，0.4.3 弃用 shim）。
+    """
     cache_key = (name, id(embeddings) if embeddings is not None else 0)
     metric = _metric_cache.get(cache_key)
     if metric is None:
+        from ragas.metrics import (
+            AnswerCorrectness,
+            AnswerRelevancy,
+            ContextPrecision,
+            ContextRecall,
+            Faithfulness,
+        )
+        cls_map = {
+            "ContextRecall": ContextRecall,
+            "Faithfulness": Faithfulness,
+            "ContextPrecision": ContextPrecision,
+            "AnswerRelevancy": AnswerRelevancy,
+            "AnswerCorrectness": AnswerCorrectness,
+        }
         kwargs: dict[str, Any] = {"llm": llm_wrapper}
         if name in _METRIC_NEEDS_EMBED:
             kwargs["embeddings"] = embeddings
