@@ -68,6 +68,10 @@ def _run_rag_cases(selection: str = "ci_golden") -> tuple:
         dataset="rag",
         selection=selection,
         live=False,
+        # 质量门禁必须真实重跑：checkpoint 按 case_id 索引、无代码/索引版本
+        # 指纹，改检索代码后旧结果会掩蔽新行为（2026-09-13 RC-086/095 修复
+        # 曾被旧缓存结果掩蔽）。CLI 长跑仍可用 --resume 断点续跑。
+        resume=False,
     )
     report = EvaluationService().evaluate(config)
     return report, report.results

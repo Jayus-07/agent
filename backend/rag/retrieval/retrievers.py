@@ -184,6 +184,11 @@ class ChunkLevelRetriever(BaseRetriever):
         ]
         if not query_kw:
             return list(dict.fromkeys(all_ids))
+        similarity_top = [
+            d.metadata.get("doc_id")
+            for d in deduped[:fallback_k]
+            if d.metadata.get("doc_id")
+        ]
         matched_ids = []
         for doc in reranked:
             did = doc.metadata.get("doc_id")
@@ -203,7 +208,13 @@ class ChunkLevelRetriever(BaseRetriever):
                 matched_ids.append(did)
         unique_matched = list(dict.fromkeys(matched_ids))
         if unique_matched:
-            return unique_matched
+            # 相似度兜底并集：doc_keywords 缺失/为空的文档（关键词提取失败的
+            # 历史文档、测试夹具）不应仅因 metadata 没有关键词而被 Stage1
+            # 整体排除 —— 即使它是 doc 级相似度 Top-1（2026-09-13 golden
+            # RC-080/086/095 回归）。并入 doc 相似度前 fallback_k 名保底；
+            # 注意必须取 deduped（相似度序）而非 reranked（关键词重排序），
+            # 否则兜底名额会被关键词命中文档占满，等于没兜底。
+            return list(dict.fromkeys(unique_matched + similarity_top))
         return list(dict.fromkeys(all_ids))
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> List[Document]:
