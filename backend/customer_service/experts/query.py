@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from backend.customer_service.experts.base import ExpertResult, ExpertStatus
@@ -17,6 +18,12 @@ _INTENT_SERVICE_MAP = {
     "t_logistics": "logistics",
     "as_repair": "order",
     "as_quality_issue": "order",
+}
+
+# 复合问题预判：问题命中 ≥2 个不同服务域的关键词 → 疑似复合诉求
+_SERVICE_KEYWORDS = {
+    "order": ["订单", "退款", "退货", "换货", "售后", "维修", "保修", "质量", "破损", "发票"],
+    "logistics": ["物流", "快递", "发货", "收货", "签收", "配送", "到货", "运输", "到哪"],
 }
 
 
@@ -45,6 +52,28 @@ def execute_query(
         intent, user_id, user_message[:60],
     )
 
+    intents = None
+    if _compound_suspected(user_message):
+        intents = _llm_decompose_intents(user_message)
+
+    if intents and len(intents) > 1:
+        # 复合问题：逐意图查询后合并（同一服务去重，避免重复输出）
+        sections: list[str] = []
+        dispatched_services: list[str] = []
+        for it in intents:
+            service_type = _INTENT_SERVICE_MAP.get(it, "order")
+            if service_type in dispatched_services:
+                continue
+            dispatched_services.append(service_type)
+            sections.append(_dispatch_service(user_id, it, user_message, cs_route))
+        answer = "\n\n---\n\n".join(sections)
+        return ExpertResult(
+            expert="query",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=answer,
+            data={"intent": intents, "user_id": user_id, "decomposed": True},
+        )
+
     answer = _dispatch_service(user_id, intent, user_message, cs_route)
 
     return ExpertResult(
@@ -53,6 +82,65 @@ def execute_query(
         response_draft=answer,
         data={"intent": intent, "user_id": user_id},
     )
+
+
+def _compound_suspected(question: str) -> bool:
+    """规则预判：关键词命中 ≥2 个服务域才触发 LLM 分解，控制成本。"""
+    hits = {
+        svc for svc, keywords in _SERVICE_KEYWORDS.items()
+        if any(k in question for k in keywords)
+    }
+    return len(hits) >= 2
+
+
+def _llm_decompose_intents(question: str) -> list[str] | None:
+    """LLM 意图分解 → intent 列表。失败或格式无效返回 None（确定性降级）。
+
+    仅在规则预判疑似复合问题时调用；单意图问题不付这笔 LLM 延迟。
+    """
+    try:
+        from langchain_core.messages import HumanMessage
+
+        from backend.config.customer_service import (
+            CS_QUERY_LLM_DECOMPOSE_ENABLED,
+            CS_QUERY_LLM_TIMEOUT_MS,
+        )
+        from backend.infra.llm import get_llm
+
+        if not CS_QUERY_LLM_DECOMPOSE_ENABLED:
+            return None
+
+        prompt = (
+            "你是客服意图分析器。用户的问题可能包含多个业务诉求，"
+            "请从以下意图中选出问题实际涉及的项（可多选）：\n"
+            "t_order_status（订单状态/退款/退货/售后）\n"
+            "t_logistics（物流/快递/发货进度）\n"
+            "as_repair（维修/保修申请）\n"
+            "as_quality_issue（质量问题反馈）\n\n"
+            f"用户问题: {question[:200]}\n"
+            '只回复 JSON 数组，如 ["t_order_status", "t_logistics"]，不要解释。'
+        )
+        response = get_llm().invoke(
+            [HumanMessage(content=prompt)],
+            config={"timeout": CS_QUERY_LLM_TIMEOUT_MS / 1000.0},
+        )
+        content = response.content.strip()
+        if content.startswith("```"):
+            content = content.strip("`")
+            if content.startswith("json"):
+                content = content[4:]
+        intents = json.loads(content)
+        if not isinstance(intents, list):
+            logger.warning("[QueryExpert] LLM 分解返回非数组，回退单意图")
+            return None
+        valid = [i for i in intents if isinstance(i, str) and i in _INTENT_SERVICE_MAP]
+        if not valid:
+            return None
+        logger.info("[QueryExpert] 复合问题分解: %s", valid)
+        return valid
+    except Exception as e:
+        logger.warning("[QueryExpert] LLM 意图分解失败，回退单意图: %s", e)
+        return None
 
 
 def query_expert_node(state: dict[str, Any]) -> dict[str, Any]:

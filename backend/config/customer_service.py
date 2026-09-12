@@ -196,6 +196,18 @@ CS_GRAPH_ENABLED = os.getenv("CS_GRAPH_ENABLED", "true").strip().lower() in ("1"
 CS_EXPERT_MAX_LOOPS = int(os.getenv("CS_EXPERT_MAX_LOOPS", "5"))
 CS_SUPERVISOR_LLM_ENABLED = os.getenv("CS_SUPERVISOR_LLM_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 CS_SUPERVISOR_LLM_TIMEOUT_MS = int(os.getenv("CS_SUPERVISOR_LLM_TIMEOUT_MS", "800"))
+
+# =============================================
+# 投诉严重度 LLM 兜底（规则 0 命中时的级联第二层）
+# =============================================
+CS_COMPLAINT_LLM_ENABLED = os.getenv("CS_COMPLAINT_LLM_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+CS_COMPLAINT_LLM_TIMEOUT_MS = int(os.getenv("CS_COMPLAINT_LLM_TIMEOUT_MS", "3000"))
+
+# =============================================
+# Query 专家复合问题 LLM 意图分解
+# =============================================
+CS_QUERY_LLM_DECOMPOSE_ENABLED = os.getenv("CS_QUERY_LLM_DECOMPOSE_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+CS_QUERY_LLM_TIMEOUT_MS = int(os.getenv("CS_QUERY_LLM_TIMEOUT_MS", "3000"))
 CS_CHECKPOINTER_ENABLED = os.getenv("CS_CHECKPOINTER_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 # checkpointer 后端：postgres（生产，跨进程/重启持久）| memory（本地调试降级）
 CS_CHECKPOINTER_BACKEND = os.getenv("CS_CHECKPOINTER_BACKEND", "postgres").strip().lower()
@@ -208,3 +220,8 @@ CS_ROLLOUT_PERCENT = max(0, min(100, int(os.getenv("CS_ROLLOUT_PERCENT", "100"))
 CS_ROLLOUT_WHITELIST = {
     s.strip() for s in os.getenv("CS_ROLLOUT_WHITELIST", "").split(",") if s.strip()
 }
+
+# ── CS 质量报告告警阈值（超过即触发 alerts）────────────────
+CS_QUALITY_ALERT_FALLBACK_RATE = float(os.getenv("CS_QUALITY_ALERT_FALLBACK_RATE", "0.02"))
+CS_QUALITY_ALERT_ROUTE_CONSISTENCY = float(os.getenv("CS_QUALITY_ALERT_ROUTE_CONSISTENCY", "0.85"))
+CS_QUALITY_ALERT_CAPABILITY_HANDOFF_RATE = float(os.getenv("CS_QUALITY_ALERT_CAPABILITY_HANDOFF_RATE", "0.15"))

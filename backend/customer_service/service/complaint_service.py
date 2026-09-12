@@ -9,12 +9,14 @@ Phase 6: 替换为 DB 持久化。
 """
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from backend.config.customer_service import COMPLAINT_PATTERNS
+from backend.shared.logger import logger
 
 
 @dataclass
@@ -83,6 +85,70 @@ class ComplaintService:
             severity=severity,
             matched_patterns=matched,
         )
+
+    def detect_with_llm_fallback(self, query: str) -> ComplaintDetection:
+        """规则优先的级联检测：规则命中直接用，0 命中时 LLM 兜底评估。
+
+        调用方（complaint expert）仅在路由已判定投诉意图后进入，此时规则
+        0 命中意味着委婉表达（关键词盲区，如"再不处理就没法用了"），
+        用 LLM 评估严重度；LLM 失败或判非投诉则回退规则结果。
+        """
+        detection = self.detect(query)
+        if detection.is_complaint:
+            return detection
+
+        from backend.config.customer_service import CS_COMPLAINT_LLM_ENABLED
+        if not CS_COMPLAINT_LLM_ENABLED:
+            return detection
+
+        verdict = self._llm_assess(query)
+        if verdict is None or not verdict.get("is_complaint"):
+            return detection
+        return ComplaintDetection(
+            is_complaint=True,
+            severity=verdict["severity"],
+            matched_patterns=["llm_fallback"],
+        )
+
+    def _llm_assess(self, query: str) -> dict | None:
+        """LLM 评估投诉与严重度。异常或格式无效返回 None（确定性降级）。"""
+        try:
+            from langchain_core.messages import HumanMessage
+
+            from backend.config.customer_service import CS_COMPLAINT_LLM_TIMEOUT_MS
+            from backend.infra.llm import get_llm
+
+            prompt = (
+                "你是客服质检员。判断用户消息是否为投诉，并评估严重度。\n"
+                f"用户消息: {query[:300]}\n"
+                '只回复 JSON: {"is_complaint": true或false, '
+                '"severity": "low"或"medium"或"high"}，不要解释。'
+            )
+            response = get_llm().invoke(
+                [HumanMessage(content=prompt)],
+                config={"timeout": CS_COMPLAINT_LLM_TIMEOUT_MS / 1000.0},
+            )
+            content = response.content.strip()
+            if content.startswith("```"):
+                content = content.strip("`")
+                if content.startswith("json"):
+                    content = content[4:]
+            data = json.loads(content)
+            if (
+                isinstance(data, dict)
+                and isinstance(data.get("is_complaint"), bool)
+                and data.get("severity") in ("low", "medium", "high")
+            ):
+                logger.info(
+                    "[ComplaintService] LLM 兜底: is_complaint=%s severity=%s",
+                    data["is_complaint"], data["severity"],
+                )
+                return data
+            logger.warning("[ComplaintService] LLM 返回格式无效，回退规则结果")
+            return None
+        except Exception as e:
+            logger.warning("[ComplaintService] LLM 兜底失败，回退规则结果: %s", e)
+            return None
 
     def create_ticket(
         self,

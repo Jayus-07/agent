@@ -42,7 +42,7 @@ def execute_complaint(
     )
 
     service = get_complaint_service()
-    detection = service.detect(user_message)
+    detection = service.detect_with_llm_fallback(user_message)
 
     ticket = service.create_ticket(
         user_id=user_id,
