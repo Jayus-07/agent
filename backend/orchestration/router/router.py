@@ -179,7 +179,33 @@ class Router:
                 )
 
         # 3. LLM Router（~3-5s，真正理解 → 兜底拍板）
-        result = self.llm.route(query)
+        # P1-5: 补 llm_call span — 旧实现只记 tool_call 事件，LLM 明细面板
+        # 看不到这次最该被审计的调用（token/耗时/prompt 全缺失）。
+        llm_span = trace_collector.start_span(
+            "router_llm", name="路由 LLM", type="llm_call", kind=SpanKind.LLM.value,
+            parent_id=span.span_id, input={"query": query[:500]},
+        )
+        try:
+            result = self.llm.route(query)
+        except Exception:
+            trace_collector.end_span(llm_span, status="error")
+            raise
+        # proxy 同步调用后 ContextVar 内有本次调用的 token/cost（读不到由
+        # tracer finish 的 llm_usage 回填兜底）
+        try:
+            from backend.infra.llm.proxy import _last_call_meta_var
+            _m = dict(_last_call_meta_var.get() or {})
+            if _m.get("total_tokens"):
+                llm_span.metrics.update({
+                    "prompt_tokens": _m.get("prompt_tokens", 0),
+                    "completion_tokens": _m.get("completion_tokens", 0),
+                    "total_tokens": _m.get("total_tokens", 0),
+                    "cost_usd": _m.get("cost_usd", 0),
+                    "model_name": _m.get("model", ""),
+                })
+        except Exception:
+            pass
+        trace_collector.end_span(llm_span, metrics={"router_layer": "llm"})
         final_layer = "llm"
         llm_conf = result.confidence if result else 0.0
         trace_collector.add_event(

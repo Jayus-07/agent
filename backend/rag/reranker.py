@@ -188,13 +188,14 @@ class DashScopeReranker(BaseDocumentCompressor):
         raise last_err or Exception("DashScope rerank failed: unknown")
 
     def compress_documents(self, documents, query, **kwargs):
-        """BaseDocumentCompressor 接口实现"""
-        from backend.observability.tracer import trace_collector
+        """BaseDocumentCompressor 接口实现
+
+        span 埋点在外层 RerankCompressor.compress_documents（同名 "rerank"），
+        此处不再重复创建 —— 旧双层埋点导致 trace 树出现两条几乎等时的 rerank 行。
+        """
         t0 = time.monotonic()
-        span = trace_collector.start_span("rerank", name="DashScope API")
-        
+
         if not documents:
-            trace_collector.end_span(span, metrics={"input_docs": 0, "output_docs": 0, "backend_type": "dashscope"})
             return []
 
         try:
@@ -204,7 +205,7 @@ class DashScopeReranker(BaseDocumentCompressor):
             # 应用阈值过滤并限制数量
             threshold = kwargs.get("threshold", RERANK_SCORE_THRESHOLD)
             top_k = kwargs.get("top_k", RERANK_TOP_K)
-            
+
             result = [
                 (documents[idx], score)
                 for idx, score in ranked_results
@@ -216,15 +217,6 @@ class DashScopeReranker(BaseDocumentCompressor):
                 doc.metadata["rerank_score"] = round(float(score), 4)
 
             duration_ms = (time.monotonic() - t0) * 1000
-            trace_collector.end_span(
-                span,
-                metrics={
-                    "input_docs": len(documents),
-                    "output_docs": len(result),
-                    "backend_type": "dashscope",
-                    "threshold": threshold
-                }
-            )
 
             # 记录 token 用量到 SQLite（使用 rank() 从 API 响应中提取的实际值）
             self._record_tokens(len(texts), duration_ms, total_tokens=self._last_total_tokens)
@@ -233,19 +225,8 @@ class DashScopeReranker(BaseDocumentCompressor):
 
         except Exception as e:
             duration_ms = (time.monotonic() - t0) * 1000
-            trace_collector.end_span(
-                span,
-                metrics={
-                    "input_docs": len(documents),
-                    "output_docs": 0,
-                    "backend_type": "dashscope",
-                    "error_type": type(e).__name__,
-                    "error_message": str(e)[:100]
-                },
-                status="error"
-            )
             logger.error(f"DashScope API rerank 失败：{e}")
-            self._record_tokens(len(texts), duration_ms, status="error")
+            self._record_tokens(len(documents), duration_ms, status="error")
             raise
 
     def _record_tokens(self, doc_count, duration_ms, total_tokens=0, status="success"):
@@ -324,13 +305,10 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
         return scored[:top_k]
 
     def compress_documents(self, documents, query, **kwargs):
-        """BaseDocumentCompressor 接口实现"""
-        from backend.observability.tracer import trace_collector
+        """BaseDocumentCompressor 接口实现（span 埋点在外层 RerankCompressor，见 DashScope 同名说明）"""
         t0 = time.monotonic()
-        span = trace_collector.start_span("rerank", name="Local Model")
 
         if not documents:
-            trace_collector.end_span(span, metrics={"input_docs": 0, "output_docs": 0, "backend_type": "local"})
             return []
 
         texts = [doc.page_content[:2000] for doc in documents]
@@ -341,10 +319,6 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
             for doc in documents:
                 doc.metadata["rerank_unreliable"] = True
             duration_ms = (time.monotonic() - t0) * 1000
-            trace_collector.end_span(
-                span,
-                metrics={"input_docs": len(documents), "output_docs": len(documents),
-                         "backend_type": "local", "fallback": "timeout_passthrough"})
             # 记录失败
             self._record_tokens(len(texts), duration_ms, status="error")
             return list(documents)
@@ -355,7 +329,7 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
         # 过滤阈值
         threshold = kwargs.get("threshold", RERANK_SCORE_THRESHOLD)
         top_k = kwargs.get("top_k", RERANK_TOP_K)
-        
+
         result = [
             (doc_idx_map[idx], score)
             for idx, score in scored_indexed
@@ -364,18 +338,9 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
 
         # 写入 rerank_score 到 metadata
         for doc, score in result:
-            doc.metadata["rerank_score"] = round(score, 4)
+            doc.metadata["rerank_score"] = round(float(score), 4)
 
         duration_ms = (time.monotonic() - t0) * 1000
-        trace_collector.end_span(
-            span,
-            metrics={
-                "input_docs": len(documents),
-                "output_docs": len(result),
-                "backend_type": "local",
-                "threshold": threshold
-            }
-        )
 
         # 记录 token 用量
         self._record_tokens(len(texts), duration_ms)

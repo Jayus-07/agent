@@ -149,6 +149,33 @@ class LLMUsageStore:
             logger.warning(f"[LLMUsageStore] 写入失败: {e}")
             return False
 
+    def by_trace(self, trace_id: str, limit: int = 200) -> list[dict[str, Any]]:
+        """按 trace_id 取该 trace 的全部调用明细（ts 升序）。
+
+        供 tracer.finish() 回填 usage/model/llm span 指标使用：
+        proxy 层每次调用同步写入本表，finish 时数据已就绪。
+        """
+        if not trace_id:
+            return []
+        try:
+            with self._lock, self._conn() as conn:
+                rows = conn.execute(
+                    """SELECT ts, trace_id, session_id, component, model, provider,
+                              prompt_tokens, completion_tokens, total_tokens,
+                              cached_tokens, reasoning_tokens, cost_usd,
+                              duration_ms, finish_reason
+                       FROM llm_usage WHERE trace_id = ? ORDER BY ts ASC LIMIT ?""",
+                    (trace_id, limit),
+                ).fetchall()
+            cols = ["ts", "trace_id", "session_id", "component", "model", "provider",
+                    "prompt_tokens", "completion_tokens", "total_tokens",
+                    "cached_tokens", "reasoning_tokens", "cost_usd",
+                    "duration_ms", "finish_reason"]
+            return [dict(zip(cols, r)) for r in rows]
+        except Exception as e:
+            logger.warning(f"[LLMUsageStore] by_trace({trace_id}) 查询失败: {e}")
+            return []
+
     def list_calls(self, days: int = 7, model: str | None = None,
                    component: str | None = None,
                    limit: int = 20, offset: int = 0) -> dict:

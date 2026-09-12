@@ -13,6 +13,7 @@ from backend.evaluation.runners.planner import _run_planner
 from backend.evaluation.runners.rag import _run_rag
 from backend.evaluation.runners.sql import _run_sql
 from backend.evaluation.runners.e2e import _run_e2e
+from backend.evaluation.runners.cs import _run_cs
 
 # --- 测试兼容：直接 import 的工具函数 ---
 from backend.evaluation.runners._common import (
@@ -27,6 +28,7 @@ __all__ = [
     "_run_rag",
     "_run_sql",
     "_run_e2e",
+    "_run_cs",
     "_match_by_snippet",
     "_extract_query_entities",
     "_entities_all_present",

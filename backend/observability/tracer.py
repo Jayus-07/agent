@@ -187,6 +187,7 @@ class TraceRecord:
     total_ms: int = 0
     usage: dict = field(default_factory=dict)
     cost: dict = field(default_factory=dict)
+    cost_usd: float = 0.0  # 全 trace 成本（llm_usage 明细回填；含 embedding/rerank）
     error: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
     spans: List[Span] = field(default_factory=list)
@@ -317,13 +318,21 @@ class TraceCollector:
             noop._noop = True
             return noop
         now = _now_iso()
-        # parent_id 未传 → 优先取 scope_root（子链嵌入模式），否则取 root_span_id
+        # parent_id 未传 → 时间嵌套推断：优先取最近一个仍未关闭的 span（栈顶），
+        # 其次 scope_root（子链嵌入模式），最后 root_span_id。
+        # Why: chain 内部埋点（chunk_retrieval / enhanced_hybrid_retrieval / rerank 等）
+        # 不传 parent_id，旧实现一律平铺到 scope_root/root，嵌套层级丢失，
+        # 前端树形图与火焰图无法表达包含关系。
         if parent_id is None and span_id != trace.root_span_id:
-            scope_root = _scope_root_var.get()
-            if scope_root is not None:
-                parent_id = scope_root
+            open_stack = getattr(trace, "_open_spans", None)
+            if open_stack:
+                parent_id = open_stack[-1].span_id
             else:
-                parent_id = trace.root_span_id or None
+                scope_root = _scope_root_var.get()
+                if scope_root is not None:
+                    parent_id = scope_root
+                else:
+                    parent_id = trace.root_span_id or None
         # P1-9: parent_id 指向不存在的 span（如 skill 在 graph 之外执行时
         # 父 span 尚未创建），或误传了 Span 对象（不可哈希）→ 回退到 root，
         # 避免孤儿 span 导致 trace 树断裂
@@ -376,6 +385,13 @@ class TraceCollector:
         if base_span_id is not None:
             span.metrics["base_span_id"] = base_span_id
         trace.spans.append(span)
+        # P1-4: 维护开放 span 栈（后续无 parent 的 span 按时间嵌套挂到栈顶）
+        open_stack = getattr(trace, "_open_spans", None)
+        if open_stack is None:
+            open_stack = []
+            trace._open_spans = open_stack
+        open_stack.append(span)
+        span._stack_ref = open_stack  # end_span 跨线程也能正确出栈
         if parent_id is None:
             trace.root_span_id = span_id
         return span
@@ -383,6 +399,10 @@ class TraceCollector:
     def end_span(self, span: Span, output: dict = None,
                  metrics: dict = None, status: str = "success"):
         """结束 Span：记录 end_time、计算 duration_ms、填充 metrics/output。"""
+        if span.end_time:
+            # 幂等守卫：已收口的 span 不重复覆盖（如 end_open_span 提前收口后，
+            # 外层包装调用的 end_span 应为 no-op 而非把边界推迟）
+            return
         t0 = getattr(span, "_t0", None)
         if t0 is not None:
             span.duration_ms = max(1, round((time.time() - t0) * 1000))
@@ -395,6 +415,15 @@ class TraceCollector:
         if output is not None:
             span.output = output
 
+        # P1-4: 从开放栈移除（跨线程安全：栈引用存在 span 上）
+        stack = getattr(span, "_stack_ref", None)
+        if stack is not None:
+            try:
+                stack.remove(span)
+            except ValueError:
+                pass
+            span._stack_ref = None
+
         # Phase 1.5: 通知 listener（用于 SSE 实时进度推送）
         trace = _current_trace_var.get() or self._thread_current
         if trace is not None and self._listeners:
@@ -403,6 +432,23 @@ class TraceCollector:
                     cb(trace, span)
                 except Exception:
                     logger.debug("trace listener 回调异常", exc_info=True)
+
+    def end_open_span(self, span_id: str, metrics: dict = None,
+                      status: str = "success") -> Span | None:
+        """收口指定 span_id 的最近一个未关闭 span（精确边界收口）。
+
+        Why: chain 顶层 "retrieval" span 曾包住整条 LCEL 链（含 LLM 生成），
+        检索耗时虚增 10 倍以上。内部埋点在真实边界（context 就绪）调用本方法
+        提前收口；外层原有的 end_span 调用因幂等守卫自动变为 no-op。
+        """
+        trace = _current_trace_var.get() or self._thread_current
+        if trace is None:
+            return None
+        for span in reversed(trace.spans):
+            if span.span_id == span_id and not span.end_time:
+                self.end_span(span, metrics=metrics, status=status)
+                return span
+        return None
 
     def subscribe(self, callback) -> callable:
         """订阅 span end 事件。返回 unsubscribe() 函数（Phase 1.5 — 用于 SSE 推送）。
@@ -442,6 +488,11 @@ class TraceCollector:
         leaked = self._close_leaked_spans(record)
         # P1-8: 折叠 0 价值 skipped span 到 root metrics，减少列表噪声。
         self._fold_skipped_spans(record)
+        # P1-5: root 的 span_count 在折叠后与实际落库 spans 对齐
+        #（旧值由 _end_root 在折叠前写入，常与真实条数差 1）
+        root_span = next((s for s in record.spans if s.parent_id is None), None)
+        if root_span is not None and "span_count" in root_span.metrics:
+            root_span.metrics["span_count"] = len(record.spans) - 1
         # P0-4: root 归因度量 —— uncovered_ms 直接暴露 span 之间的无埋点黑洞。
         uncovered_ms = self._record_coverage(record)
         # P1-8: rejection 单一事实源 = metadata.rejection，root span 冗余详情瘦身。
@@ -453,6 +504,10 @@ class TraceCollector:
         record.status = self._aggregate_status(record)
 
         self._aggregate_usage(record)
+        # P0-2: llm_usage 明细回填 — token/成本/模型以按 trace_id 关联的调用
+        # 明细为准（proxy 层每次 LLM 调用已同步落库），修复 ContextVar 跨线程
+        # 丢失 + response_metadata 无 token_usage 导致的 usage 全 0 / model 空。
+        self._backfill_usage_from_store(record)
         self._record_prometheus(record, leaked, uncovered_ms)
 
         try:
@@ -803,6 +858,111 @@ class TraceCollector:
                 "prompt_tokens": pt, "completion_tokens": ct, "total_tokens": tt,
                 "cached_tokens": cached, "reasoning_tokens": reasoning,
             }
+
+    @staticmethod
+    def _backfill_usage_from_store(record: TraceRecord):
+        """以 llm_usage 明细表为准回填 usage / model / cost 与 llm span 指标。
+
+        数据流：proxy 层每次 LLM 调用同步写入 llm_usage（带 trace_id），
+        finish() 时本表数据已完整。span metrics 采集链（ContextVar →
+        response_metadata）任一环节丢失时，本方法兜底，保证：
+          - trace.usage / cost_usd 有真值（前端不再显示误导性 0）
+          - trace.model / provider 有真值（调用方 finish 传空串的场景）
+          - llm_call span 的 token/cost/model_name 指标补齐
+        任何异常只降级不阻断（明细表禁用/为空时保持 _aggregate_usage 结果）。
+        """
+        try:
+            from backend.observability.llm_usage_store import get_llm_usage_store
+            rows = get_llm_usage_store().by_trace(record.id)
+        except Exception:
+            logger.debug("usage 回填：llm_usage 明细不可用", exc_info=True)
+            return
+        if not rows:
+            return
+
+        from datetime import datetime, timezone
+
+        def _ts_key(iso: str) -> float:
+            try:
+                dt = datetime.fromisoformat((iso or "").replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.timestamp()
+            except Exception:
+                return 0.0
+
+        # ── 按组件聚合：usage 主口径只计 LLM 调用，embedding/rerank 进 by_component ──
+        by_comp: dict[str, dict] = {}
+        total_cost = 0.0
+        for r in rows:
+            comp = r.get("component") or "llm"
+            agg = by_comp.setdefault(comp, {
+                "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+                "cached_tokens": 0, "reasoning_tokens": 0, "calls": 0,
+            })
+            agg["prompt_tokens"] += r.get("prompt_tokens") or 0
+            agg["completion_tokens"] += r.get("completion_tokens") or 0
+            agg["total_tokens"] += r.get("total_tokens") or 0
+            agg["cached_tokens"] += r.get("cached_tokens") or 0
+            agg["reasoning_tokens"] += r.get("reasoning_tokens") or 0
+            agg["calls"] += 1
+            total_cost += r.get("cost_usd") or 0.0
+
+        llm_agg = by_comp.get("llm")
+        if llm_agg and llm_agg["total_tokens"] > 0:
+            record.usage = dict(llm_agg)
+        record.usage["cost_usd"] = round(total_cost, 6)
+        record.usage["by_component"] = by_comp
+        record.cost_usd = round(total_cost, 6)
+
+        # ── model / provider：调用方未显式传入时，取 LLM token 量最大的模型 ──
+        if not (record.model or "").strip():
+            llm_rows = [r for r in rows if (r.get("component") or "llm") == "llm"]
+            if llm_rows:
+                best = max(llm_rows, key=lambda r: r.get("total_tokens") or 0)
+                record.model = best.get("model") or ""
+                record.provider = best.get("provider") or ""
+
+        # ── llm_call span 指标补齐：按时间最近邻配对（调用 ts ↔ span start）──
+        llm_rows = sorted(
+            (r for r in rows if (r.get("component") or "llm") == "llm"),
+            key=lambda r: _ts_key(r.get("ts", "")),
+        )
+        if llm_rows:
+            pending = [r for r in llm_rows if r.get("total_tokens")]
+            llm_spans = [s for s in record.spans if s.type == "llm_call"]
+            for span in llm_spans:
+                has_tokens = (span.metrics.get("total_tokens")
+                              or span.metrics.get("prompt_tokens")
+                              or span.metrics.get("completion_tokens"))
+                if has_tokens or not pending:
+                    continue
+                st = _ts_key(span.start_time)
+                et = _ts_key(span.end_time) if span.end_time else None
+                # 优先取落在 span 时间窗内的调用（LLM 行 ts ≈ 调用结束时刻），
+                # 仅在无窗口内命中时才退化为全局最近邻（避免跨 span 错配）
+                in_window = [r for r in pending
+                             if _ts_key(r.get("ts", "")) >= st
+                             and (et is None or _ts_key(r.get("ts", "")) <= et)]
+                pool = in_window or pending
+                row = min(pool, key=lambda r: abs(_ts_key(r.get("ts", "")) - st))
+                pending.remove(row)
+                span.metrics.update({
+                    "prompt_tokens": row.get("prompt_tokens") or 0,
+                    "completion_tokens": row.get("completion_tokens") or 0,
+                    "total_tokens": row.get("total_tokens") or 0,
+                    "cached_tokens": row.get("cached_tokens") or 0,
+                    "reasoning_tokens": row.get("reasoning_tokens") or 0,
+                    "cost_usd": row.get("cost_usd") or 0.0,
+                    "model_name": row.get("model") or "",
+                    "duration_ms_call": row.get("duration_ms") or 0.0,
+                    "token_source": "llm_usage_backfill",
+                })
+                if span.output is None:
+                    span.output = {}
+                if isinstance(span.output, dict):
+                    span.output.setdefault("model", row.get("model") or "")
+                    span.output.setdefault("provider", row.get("provider") or "")
 
 
 trace_collector = TraceCollector()

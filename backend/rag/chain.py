@@ -290,6 +290,17 @@ class RAGChain:
             from backend.observability.tracer import SpanKind, trace_collector
             # ── 空检索短路：0 docs 时跳过 LLM（~4.8s），Gate 会拒答 ──
             context_docs = inp.get("context", [])
+            # P0-1: 检索边界收口 — 调到本层时 context 已就绪（retriever 执行
+            # 完毕、LLM 生成尚未开始），此刻收口 "retrieval" span 才是真实
+            # 检索耗时。旧实现在外层 invoke 返回后才收口，把 LLM 生成的
+            # 十几秒全部计入了"检索"。
+            try:
+                trace_collector.end_open_span(
+                    "retrieval",
+                    metrics={"retrieved_chunks": len(context_docs),
+                             "total_docs": len(context_docs)})
+            except Exception:
+                logger.debug("[RAGChain] retrieval span 提前收口失败", exc_info=True)
             if not context_docs:
                 logger.info("[RAGChain] 空检索短路，跳过 LLM Generate")
                 return AIMessage(content="知识库暂无相关资料。")
@@ -698,7 +709,8 @@ class RAGChain:
             logger.debug(f"[RAGChain] QueryAnalyzer 分析失败: {e}", exc_info=True)
             self.gate.set_query_analysis(None)
 
-        # ── retrieval span（包裹整个检索过程，挂 debug event）──
+        # ── retrieval span（挂在真实检索边界：_timed_stuff 收到 context 时
+        # 提前收口；此处的 end_span 仅在异常/短路等未收口路径兜底）──
         from backend.observability.tracer import SpanName as _SpanName
         ret_span = trace_collector.start_span(
             "retrieval",
@@ -706,18 +718,15 @@ class RAGChain:
             kind="retrieval",
             input={"question": question[:500]},
         )
-        t_ret_start = _time.time()
 
         # ── 双链选择：无历史时跳过 HistoryAware LLM 调用 ──
         active_chain = self.chain_standalone if not chat_history else self.chain
         result = active_chain.invoke({"input": question, "chat_history": chat_history})
 
-        # ── 采集检索中间结果 ──
+        # ── 采集检索中间结果（正常路径 span 已提前收口，end_span 幂等跳过）──
         context_docs = result.get("context", [])
         self._record_retrieval_events(ret_span, context_docs)
-        trace_collector.end_span(ret_span,
-            metrics={"duration_ms": int((_time.time() - t_ret_start) * 1000),
-                     "total_docs": len(context_docs)})
+        trace_collector.end_span(ret_span, metrics={"total_docs": len(context_docs)})
 
         # mq_check
         mq_span = trace_collector.start_span("mq_check", name=_SpanName.MULTI_QUERY)

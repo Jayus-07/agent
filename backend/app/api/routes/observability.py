@@ -28,6 +28,7 @@ from backend.app.api.routes._trace_dto import (  # noqa: E402
     to_span_dto as _to_span_dto,
     to_trace_dto as _to_trace_dto,
     stored_dict_to_dto as _stored_dict_to_dto,
+    backfill_usage_from_llm_store as _backfill_usage,
 )
 
 
@@ -129,6 +130,8 @@ async def get_trace(trace_id: str):
         data = store.get(trace_id)
     if data is None:
         raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在或已过期")
+    # 读取时回填：存量 trace 的 usage/model/cost 以 llm_usage 明细补齐（历史数据兼容）
+    _backfill_usage(data)
     return _to_trace_dto(data)  # 统一转为前端 DTO 格式
 
 

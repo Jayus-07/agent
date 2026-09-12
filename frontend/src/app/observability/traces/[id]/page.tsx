@@ -284,38 +284,59 @@ export default function TraceDetailPage() {
               </section>
             )}
 
-            {/* ── Span 耗时占比 ── */}
+            {/* ── Span 时间线（耗时分布 + 类型过滤，合并自旧"耗时分布/时间线"两个重复区块） ── */}
             {childSpans.length > 0 && (
               <section>
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider">📊 Span 耗时分布 (嵌套层级)</h2>
-                  <label className="flex items-center gap-2 text-[11px] text-slate-500 cursor-pointer">
-                    <input type="checkbox" checked={autoExpandLarge} onChange={e => setAutoExpandLarge(e.target.checked)} className="rounded" />
-                    <span>自动展开 &gt;1s 的步骤</span>
-                  </label>
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                  <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider">📊 Span 耗时时间线 (嵌套层级)</h2>
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 text-[11px] text-slate-500 cursor-pointer">
+                      <input type="checkbox" checked={autoExpandLarge} onChange={e => setAutoExpandLarge(e.target.checked)} className="rounded" />
+                      <span>自动展开 &gt;1s 的步骤</span>
+                    </label>
+                    <span className="text-[10px] text-slate-400">
+                      {filteredSpans.length}/{childSpans.length} span
+                      {activeSpanTypes.size > 0 && <button onClick={() => setActiveSpanTypes(new Set())} className="ml-2 text-violet-500 hover:text-violet-700">清除过滤</button>}
+                    </span>
+                  </div>
                 </div>
-                <div className="bg-white border border-slate-200 rounded-xl p-4">
-                  <StepTimeline
-                    steps={filteredSpans}
-                    totalMs={trace.duration_ms}
-                    onToggle={toggleStep}
-                    expanded={expandedSteps}
-                    jsonExpanded={jsonExpanded}
-                    onJsonToggle={(id) => {
-                      const next = new Set(jsonExpanded);
-                      next.has(id) ? next.delete(id) : next.add(id);
-                      setJsonExpanded(next);
-                    }}
-                    highlightStepId={highlightStepId}
-                    autoExpandLarge={autoExpandLarge}
-                  />
+                <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+                  <SpanTypeFilter spans={childSpans} activeTypes={activeSpanTypes} onChange={setActiveSpanTypes} />
+                  <div className="border-t border-slate-100 pt-3">
+                    <StepTimeline
+                      steps={filteredSpans}
+                      totalMs={trace.duration_ms}
+                      onToggle={toggleStep}
+                      expanded={expandedSteps}
+                      jsonExpanded={jsonExpanded}
+                      onJsonToggle={(id) => {
+                        const next = new Set(jsonExpanded);
+                        next.has(id) ? next.delete(id) : next.add(id);
+                        setJsonExpanded(next);
+                      }}
+                      highlightStepId={highlightStepId}
+                      autoExpandLarge={autoExpandLarge}
+                    />
+                  </div>
+
+                  {/* 展开后追加 HTTP 拆分 */}
+                  {Array.from(expandedSteps).map((sid) => {
+                    const span = findSpan(spans, sid);
+                    if (!span || !span.http_breakdown) return null;
+                    return (
+                      <div key={`http-${sid}`} className="border-t border-slate-100 pt-3">
+                        <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-2">📡 {span.name} · HTTP 耗时拆分</p>
+                        <HttpBreakdown step={span} />
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
             )}
 
-            {/* ── 火焰图 ── */}
+            {/* ── 时间轴甘特图（真实执行时序，点击定位到 Span） ── */}
             <section>
-              <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-3">🔥 耗时火焰图</h2>
+              <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-3">⏱ 执行时序甘特图</h2>
               <div className="bg-white border border-slate-200 rounded-xl p-5">
                 <FlameGraph
                   steps={filteredSpans}
@@ -383,43 +404,6 @@ export default function TraceDetailPage() {
             <section>
               <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-3">输入 / 输出</h2>
               <InputOutputPanel question={trace.question} answer={trace.answer_preview} error={trace.error} />
-            </section>
-
-            {/* ── Span Timeline ── */}
-            <section>
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider">⏱ Span 时间线</h2>
-                <span className="text-[10px] text-slate-400">
-                  {filteredSpans.length}/{childSpans.length} span
-                  {activeSpanTypes.size > 0 && <button onClick={() => setActiveSpanTypes(new Set())} className="ml-2 text-violet-500 hover:text-violet-700">清除过滤</button>}
-                </span>
-              </div>
-              <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
-                <SpanTypeFilter spans={childSpans} activeTypes={activeSpanTypes} onChange={setActiveSpanTypes} />
-                <div className="border-t border-slate-100 pt-3">
-                  <StepTimeline
-                    steps={filteredSpans}
-                    totalMs={trace.duration_ms}
-                    onToggle={toggleStep}
-                    expanded={expandedSteps}
-                    jsonExpanded={jsonExpanded}
-                    onJsonToggle={(id) => { const n=new Set(jsonExpanded); n.has(id)?n.delete(id):n.add(id); setJsonExpanded(n); }}
-                    highlightStepId={highlightStepId}
-                  />
-                </div>
-
-                {/* 展开后追加 HTTP 拆分 */}
-                {Array.from(expandedSteps).map((sid) => {
-                  const span = findSpan(spans, sid);
-                  if (!span || !span.http_breakdown) return null;
-                  return (
-                    <div key={`http-${sid}`} className="border-t border-slate-100 pt-3">
-                      <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-2">📡 {span.name} · HTTP 耗时拆分</p>
-                      <HttpBreakdown step={span} />
-                    </div>
-                  );
-                })}
-              </div>
             </section>
 
             {/* ── LLM 调用明细 ── */}

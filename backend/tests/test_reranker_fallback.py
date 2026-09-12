@@ -70,17 +70,26 @@ class TestRerankCompressorFallback:
 
 
 class TestBackendFactoryFallback:
-    def test_missing_sdk_falls_back_to_local(self, monkeypatch):
-        """配置了 dashscope 但 SDK 缺失 → 工厂降级本地模型而非抛异常。"""
+    def test_factory_selects_by_env_mode(self, monkeypatch):
+        """工厂按 ENV_MODE 单一维度选择后端（P0 契约：不按 SDK 可用性降级）。
+
+        旧测试断言"SDK 缺失自动降级 Local"，与 P0 重构后的设计契约相悖
+        （见 get_reranker_backend docstring："不根据 API key 存在与否自动降级"），
+        已按现行契约重写。
+        """
         from backend.rag import reranker as mod
 
+        # cloud 模式 → DashScope，即使 SDK 标记缺失也不静默降级
+        monkeypatch.setattr(mod, "ENV_MODE", "cloud")
         monkeypatch.setattr(mod, "DASHSCOPE_AVAILABLE", False)
-        monkeypatch.setenv("RERANKER_BACKEND", "dashscope")
         monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
-        # 避免真实加载 CrossEncoder 权重
+        backend = mod.get_reranker_backend()
+        assert isinstance(backend, mod.DashScopeReranker)
+
+        # local 模式 → Local CrossEncoder（mock 权重加载避免真实加载）
+        monkeypatch.setattr(mod, "ENV_MODE", "local")
         monkeypatch.setattr(
             mod.LocalModelLoader, "get_instance", staticmethod(lambda: object())
         )
-
         backend = mod.get_reranker_backend()
         assert isinstance(backend, mod.LocalCrossEncoderBackend)

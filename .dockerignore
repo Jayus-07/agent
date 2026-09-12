@@ -21,6 +21,8 @@ data/report_snapshots/
 data/long_term_memory/
 data/chat_history.db
 data/report_preferences.json
+# 本地 Windows 绝对路径符号链接（backend/data → D:/...），打镜像会变成悬空链接
+backend/data
 
 # Logs
 *.log

@@ -28,7 +28,14 @@ def _get_pref_path() -> str:
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "data"
     )
-    os.makedirs(base, exist_ok=True)
+    try:
+        os.makedirs(base, exist_ok=True)
+    except OSError:
+        # 容器镜像中 base 可能被同名文件占用导致启动崩溃循环；
+        # 偏好写入是辅助功能，软降级到临时目录不阻塞服务启动
+        import tempfile
+        base = os.path.join(tempfile.gettempdir(), "agent_prefs")
+        os.makedirs(base, exist_ok=True)
     return os.path.join(base, "report_preferences.json")
 
 

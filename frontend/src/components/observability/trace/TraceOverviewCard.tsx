@@ -9,34 +9,21 @@ interface Props {
 export default function TraceOverviewCard({ trace }: Props) {
   const hasError = trace.status === "error" || (trace.error && Object.keys(trace.error).length > 0);
   const spans = trace.spans || [];
-  const llmCalls = spans.filter((s) => s.type === "llm_call" || s.type === "agent" || s.llm_call).length;
-  const toolCalls = spans.filter((s) =>
-    s.type === "retrieval" || s.type === "rerank" || s.type === "tool_call"
-  ).length;
+
+  // P1-5: 优先用后端 DTO summary（单一口径）；旧数据无 summary 时前端兜底
+  const summary = (trace as unknown as { summary?: { llm_calls: number; tool_calls: number; retrieval_calls: number; span_count: number } }).summary;
+  const llmCalls = summary?.llm_calls ?? spans.filter((s) => s.type === "llm_call" || s.llm_call).length;
+  const toolCalls = summary?.tool_calls ?? spans.filter((s) => s.type === "tool_call").length;
+  const retrievalCalls = summary?.retrieval_calls
+    ?? spans.filter((s) => s.type === "retrieval" || s.type === "rerank").length;
+
+  // P0-2: 区分"真 0"与"未采集"——span 指标或 usage 任一有值才算采集到
   const totalTokens = trace.usage?.total_tokens ?? 0;
+  const tokensCollected = totalTokens > 0
+    || spans.some((s) => Number(s.metrics?.total_tokens ?? 0) > 0);
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-      {/* Trace ID */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4">
-        <p className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">Trace ID</p>
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-sm font-semibold text-slate-800">{trace.id.slice(0, 12)}</span>
-          <button
-            onClick={() => navigator.clipboard.writeText(trace.id)}
-            className="text-slate-400 hover:text-slate-600"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="9" y="9" width="13" height="13" rx="2" />
-              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-            </svg>
-          </button>
-        </div>
-        {trace.workflow_name && (
-          <p className="text-[10px] text-slate-400 mt-0.5 font-mono">{trace.workflow_name}</p>
-        )}
-      </div>
-
       {/* Duration */}
       <div className="bg-white border border-slate-200 rounded-xl p-4">
         <p className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">总耗时</p>
@@ -69,10 +56,18 @@ export default function TraceOverviewCard({ trace }: Props) {
       {/* Token */}
       <div className="bg-white border border-slate-200 rounded-xl p-4">
         <p className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">Token 消耗</p>
-        <p className="font-mono text-sm font-semibold text-slate-800">{totalTokens}</p>
-        <p className="text-[10px] text-slate-400 mt-0.5">
-          P:{trace.usage?.prompt_tokens ?? 0} C:{trace.usage?.completion_tokens ?? 0}
-        </p>
+        {tokensCollected ? (
+          <>
+            <p className="font-mono text-sm font-semibold text-slate-800">{totalTokens}</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">
+              P:{trace.usage?.prompt_tokens ?? 0} C:{trace.usage?.completion_tokens ?? 0}
+            </p>
+          </>
+        ) : (
+          <p className="text-xs text-slate-400 mt-1" title="该 trace 未采集到 token 用量（llm_usage 明细缺失）">
+            未采集
+          </p>
+        )}
       </div>
 
       {/* LLM Calls */}
@@ -85,6 +80,12 @@ export default function TraceOverviewCard({ trace }: Props) {
       <div className="bg-white border border-slate-200 rounded-xl p-4">
         <p className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">工具调用</p>
         <p className="font-mono text-sm font-semibold text-slate-800">{toolCalls}</p>
+      </div>
+
+      {/* Retrieval Calls */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4">
+        <p className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">检索 / 重排</p>
+        <p className="font-mono text-sm font-semibold text-slate-800">{retrievalCalls}</p>
       </div>
     </div>
   );

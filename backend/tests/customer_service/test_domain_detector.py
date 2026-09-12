@@ -106,14 +106,34 @@ class TestDualChannelLogic:
         result = det.detect("怎么办退款")
         assert result.is_cs is False
 
-    def test_rule_fail_vector_pass_is_cs_false(self, monkeypatch):
+    def test_rule_fail_vector_decide_is_cs_true(self, monkeypatch):
+        """向量强匹配（≥CS_VECTOR_DECIDE）单独决定，无需规则双命中。"""
         monkeypatch.setattr(
             "backend.config.customer_service.CS_RULE_MIN_HITS", 2
         )
         monkeypatch.setattr(
             "backend.config.customer_service.CS_VECTOR_THRESHOLD", 0.70
         )
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_VECTOR_DECIDE", 0.85
+        )
         det = _make_detector_with_mocks(rule_hits=["KNOWLEDGE"], vector_score=0.90)
+        result = det.detect("怎么办")
+        assert result.is_cs is True
+        assert "vec_decide=" in result.reason
+
+    def test_rule_fail_vector_mid_band_is_cs_false(self, monkeypatch):
+        """向量在 [阈值, 决定线) 区间且规则不足 → 仍不判定（保守）。"""
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_RULE_MIN_HITS", 2
+        )
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_VECTOR_THRESHOLD", 0.70
+        )
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_VECTOR_DECIDE", 0.85
+        )
+        det = _make_detector_with_mocks(rule_hits=["KNOWLEDGE"], vector_score=0.75)
         result = det.detect("怎么办")
         assert result.is_cs is False
 
@@ -139,4 +159,5 @@ class TestDualChannelLogic:
         det = _make_detector_with_mocks(rule_hits=["KNOWLEDGE", "AFTER_SALES"], vector_score=0.85)
         result = det.detect("怎么办退款")
         assert "rule=" in result.reason
-        assert "vec=" in result.reason
+        # 0.85 命中强决定线，reason 走 vec_decide 分支
+        assert "vec_decide=" in result.reason

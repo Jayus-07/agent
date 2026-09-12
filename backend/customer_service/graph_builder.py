@@ -134,11 +134,38 @@ def get_cs_graph() -> Any:
 
 
 def _build_checkpointer() -> Any:
-    """根据 CS_CHECKPOINTER_ENABLED 构建 checkpointer。"""
+    """根据 CS_CHECKPOINTER_ENABLED 构建 checkpointer。
+
+    企业实践：会话状态持久化用 Postgres（跨进程/重启保留，多 worker 共享），
+    MemorySaver 仅作初始化失败时的降级兜底。
+    通过 CS_CHECKPOINTER_BACKEND=memory 可强制回退内存模式（本地调试用）。
+    """
     from backend.config.customer_service import CS_CHECKPOINTER_ENABLED
 
     if not CS_CHECKPOINTER_ENABLED:
         return None
+
+    from backend.config.customer_service import CS_CHECKPOINTER_BACKEND
+
+    if CS_CHECKPOINTER_BACKEND == "postgres":
+        try:
+            import psycopg
+            from langgraph.checkpoint.postgres import PostgresSaver
+
+            from backend.config.database import MEMORY_DB_CONFIG
+            c = MEMORY_DB_CONFIG
+            dsn = (f"postgresql://{c['user']}:{c['password']}"
+                   f"@{c['host']}:{c['port']}/{c['dbname']}")
+            # autocommit：checkpointer 写入需即时提交（官方建议）
+            conn = psycopg.Connection.connect(dsn, autocommit=True)
+            checkpointer = PostgresSaver(conn)
+            checkpointer.setup()  # 首次建表（幂等）
+            logger.info("[CS Graph] checkpointer enabled (PostgresSaver: %s/%s)",
+                        c["host"], c["dbname"])
+            return checkpointer
+        except Exception:
+            logger.warning("[CS Graph] PostgresSaver init failed, "
+                           "falling back to MemorySaver", exc_info=True)
 
     try:
         from langgraph.checkpoint.memory import MemorySaver

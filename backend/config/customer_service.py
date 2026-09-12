@@ -174,10 +174,15 @@ CS_DOMAIN_PATTERNS: dict[str, list] = {
 }
 
 # =============================================
-# 客服 Router 阈值
+# 客服 Router 阈值（env 可覆盖：容器云端 embedding 与种子调参时的本地 BGE
+# 分数分布不同，固定值易漏判；默认对齐 coarse_router 的 0.60 采纳线）
 # =============================================
-CS_VECTOR_THRESHOLD = 0.70
-CS_RULE_MIN_HITS = 2
+CS_VECTOR_THRESHOLD = float(os.getenv("CS_VECTOR_THRESHOLD", "0.60"))
+# 向量强匹配单独决定线（与 coarse_router 的"≥0.85 决定"语义对齐）：
+# 域检测原本要求 rule≥2 且 vec≥0.70 同时成立，导致"申请退款"(vec=0.94, rule=1hit)
+# 这类明显客服问法被漏判，客服链路几乎无法触发
+CS_VECTOR_DECIDE = float(os.getenv("CS_VECTOR_DECIDE", "0.85"))
+CS_RULE_MIN_HITS = int(os.getenv("CS_RULE_MIN_HITS", "2"))
 CS_CONFIDENCE_ANSWER = 0.85
 CS_CONFIDENCE_CAUTIOUS = 0.60
 CS_ROUTER_INDEX_DIR = os.path.join(
@@ -192,4 +197,14 @@ CS_EXPERT_MAX_LOOPS = int(os.getenv("CS_EXPERT_MAX_LOOPS", "5"))
 CS_SUPERVISOR_LLM_ENABLED = os.getenv("CS_SUPERVISOR_LLM_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 CS_SUPERVISOR_LLM_TIMEOUT_MS = int(os.getenv("CS_SUPERVISOR_LLM_TIMEOUT_MS", "800"))
 CS_CHECKPOINTER_ENABLED = os.getenv("CS_CHECKPOINTER_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+# checkpointer 后端：postgres（生产，跨进程/重启持久）| memory（本地调试降级）
+CS_CHECKPOINTER_BACKEND = os.getenv("CS_CHECKPOINTER_BACKEND", "postgres").strip().lower()
 CS_GRAPH_RECURSION_LIMIT = int(os.getenv("CS_GRAPH_RECURSION_LIMIT", "20"))
+
+# ── CS 流量灰度（CS_ENABLED=true 时的放量控制）────────────────
+# percent: 0-100，按 session_id 稳定哈希放量（同一会话永远同一组，避免体验分裂）
+CS_ROLLOUT_PERCENT = max(0, min(100, int(os.getenv("CS_ROLLOUT_PERCENT", "100"))))
+# 白名单：逗号分隔的 session_id，始终命中 treatment 组（调试/内部账号用）
+CS_ROLLOUT_WHITELIST = {
+    s.strip() for s in os.getenv("CS_ROLLOUT_WHITELIST", "").split(",") if s.strip()
+}

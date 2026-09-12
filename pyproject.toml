@@ -58,6 +58,15 @@ dependencies = [
     "pandas>=2.0",
     "pydantic>=2.0",
     "python-dotenv>=1.0",
+    "python-docx>=1.1",  # RAG docx 文档解析（backend/rag/preprocessing/parser/docx_parser.py）
+    "pymupdf>=1.24",  # RAG pdf 文档解析（backend/rag/preprocessing/parser/pdf_parser.py）
+    "openpyxl>=3.1",  # RAG excel 文档解析（backend/rag/preprocessing/parser/excel_parser.py）
+    "pgvector>=0.3",  # 长期记忆向量列（backend/memory/models/memory.py）
+    "sqlglot>=23.0",  # SQL 行级安全与校验（backend/sql/row_security.py）
+    "langchain-chroma>=0.1",  # 向量路由（backend/customer_service/router/coarse_router.py）
+    "apscheduler>=3.10",  # 工作流定时调度（backend/orchestration/workflow/scheduler.py）
+    "matplotlib>=3.8",  # 业务报告图表（backend/business_report/chart_generator.py）
+    "langchain-anthropic>=0.2",  # minimax 等 provider（backend/infra/llm/providers/minimax.py）
 
     # ═══════════════════════════════════════════
     # NLP + AI

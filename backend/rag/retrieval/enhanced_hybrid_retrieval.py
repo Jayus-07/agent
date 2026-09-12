@@ -138,7 +138,7 @@ def _enhanced_hybrid_retrieve_impl(
         from backend.rag.retrieval.hybrid import hybrid_retrieve
         fallback_docs = hybrid_retrieve(query, vector_retriever, bm25_retriever, k=k, doc_ids=doc_ids, rrf_k=rrf_k, metadata_filter=metadata_filter)
         metrics["fallback_used"] = True
-        trace_collector.end_span(span, metrics={"status": "fallback"})
+        trace_collector.end_span(span, metrics={"status": "fallback", "retrieved_chunks": len(fallback_docs)})
         return fallback_docs, {"confidence": 0.0, "strategy": "fallback"}
     
     # Step 5: RRF 融合（各路径独立计分，保留跨路径一致性信号）
@@ -162,6 +162,8 @@ def _enhanced_hybrid_retrieve_impl(
     
     trace_collector.end_span(span, metrics={
         **metrics,
+        "retrieved_chunks": len(merged_docs),
+        "total_docs": len(merged_docs),
         "overall_confidence": round(overall_confidence, 4),
         "query_complexity": complexity["level"],
     })

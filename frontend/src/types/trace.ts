@@ -177,6 +177,13 @@ export interface TraceRecord {
     success_rate: number[];
     p95_ms: number[];
   };
+  /** 后端统一统计口径（P1-5）：概览/过滤/明细共用，不再各自计数 */
+  summary?: {
+    llm_calls: number;
+    tool_calls: number;
+    retrieval_calls: number;
+    span_count: number;
+  };
 }
 
 // ── 向后兼容 ─────────────────────────────────────────
@@ -425,14 +432,17 @@ export function severityStyle(sev: AlertItem["severity"]): { bg: string; text: s
 
 // ── Span 工具函数 ────────────────────────────────────
 
-/** 扁平化 Span 树为列表（BFS） */
+/** 扁平化 Span 树为列表（BFS）。用 Map 索引避免 O(n²) 的 find 嵌套 */
 export function flattenSpans(spans: Span[]): Span[] {
   const result: Span[] = [];
+  const byId = new Map(spans.map(s => [s.id, s]));
   const queue = [...spans.filter(s => s.parent_id === null)];
   while (queue.length > 0) {
     const span = queue.shift()!;
     result.push(span);
-    const children = span.children.map(cid => spans.find(s => s.id === cid)).filter(Boolean) as Span[];
+    const children = span.children
+      .map(cid => byId.get(cid))
+      .filter(Boolean) as Span[];
     queue.push(...children);
   }
   return result;

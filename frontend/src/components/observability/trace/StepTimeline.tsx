@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Span, spanColor, spanTypeColor, SPAN_TYPE_LABELS, safeNum, safeStr } from "@/types/trace";
 
 // 注：safeNum / safeStr 已统一在 @/types/trace.ts 导出，避免重复实现。
@@ -15,12 +15,18 @@ function SpanMetrics({ span }: { span: Span }) {
     if (m.bm25_hits !== undefined || m.vector_hits !== undefined) {
       return <span className="text-[11px] text-slate-500">BM25:{safeNum(m.bm25_hits)} | 向量:{safeNum(m.vector_hits)} | 合并:{safeNum(m.merged_hits)}</span>;
     }
-    return <span className="text-[11px] text-slate-500">召回 {safeNum(m.retrieved_chunks)} chunks</span>;
+    // 顶层检索 span 用 total_docs（retrieved_chunks 为旧字段名），两者回退兼容
+    const chunks = m.retrieved_chunks ?? m.total_docs;
+    return <span className="text-[11px] text-slate-500">召回 {safeNum(chunks)} chunks</span>;
   }
   if (span.type === "rerank") {
     return <span className={`text-[11px] ${Number(m.output_docs ?? 1) === 0 ? "text-red-500 font-semibold" : "text-slate-500"}`}>输入 {safeNum(m.input_docs)} → 输出 {safeNum(m.output_docs)} (阈值 {safeNum(m.threshold)})</span>;
   }
   if (span.type === "llm_call") {
+    // token_source=unavailable 表示采集链路失败，显示"未采集"而非误导性的 0
+    if (m.token_source === "unavailable") {
+      return <span className="text-[11px] text-amber-500" title="proxy ContextVar 与 response_metadata 均未返回 token">Token 未采集</span>;
+    }
     return <span className="text-[11px] text-slate-500">P:{safeNum(m.prompt_tokens)} C:{safeNum(m.completion_tokens)} T:{safeNum(m.total_tokens)}</span>;
   }
   if (span.type === "tool_call") {
@@ -41,7 +47,8 @@ function SpanMetrics({ span }: { span: Span }) {
 
 function SpanJsonPanel({ span }: { span: Span }) {
   const [copied, setCopied] = useState(false);
-  const json = JSON.stringify(span, null, 2);
+  // 大 trace 的 span JSON 序列化开销高，序列化结果随 span 缓存（重渲染不再重复 stringify）
+  const json = useMemo(() => JSON.stringify(span, null, 2), [span]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(json);

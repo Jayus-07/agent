@@ -54,6 +54,7 @@ class DomainDetector:
         from backend.config.customer_service import (
             CS_DOMAIN_PATTERNS,
             CS_RULE_MIN_HITS,
+            CS_VECTOR_DECIDE,
             CS_VECTOR_THRESHOLD,
         )
 
@@ -62,13 +63,16 @@ class DomainDetector:
 
         rule_pass = len(rule_hits) >= CS_RULE_MIN_HITS
         vector_pass = vector_score >= CS_VECTOR_THRESHOLD
-
-        is_cs = rule_pass and vector_pass
+        # 双通道组合判定：规则≥min_hits 且向量过阈值；或向量强匹配单独决定
+        # （对齐 coarse_router 的 ≥0.85 决定语义，避免单关键词强语义被漏判）
+        is_cs = (rule_pass and vector_pass) or vector_score >= CS_VECTOR_DECIDE
 
         reason_parts = []
         if rule_pass:
             reason_parts.append(f"rule={len(rule_hits)}hits")
-        if vector_pass:
+        if vector_score >= CS_VECTOR_DECIDE:
+            reason_parts.append(f"vec_decide={vector_score:.2f}")
+        elif vector_pass:
             reason_parts.append(f"vec={vector_score:.2f}")
 
         return CSDetection(

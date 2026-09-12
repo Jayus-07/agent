@@ -1,0 +1,20 @@
+{"id": "CS-001", "question": "我的订单怎么申请退款", "module": "cs", "expected": {"target": "cs_business_action", "must_contain": ["退款"]}, "metadata": {"domain": "after_sales", "tier": "smoke"}}
+{"id": "CS-002", "question": "退货流程是什么", "module": "cs", "expected": {"target": "cs_business_query", "must_contain": []}, "metadata": {"domain": "after_sales", "tier": "smoke"}}
+{"id": "CS-003", "question": "帮我查一下物流单号 SF1234567890 到哪了", "module": "cs", "expected": {"target": "cs_business_query", "must_contain": []}, "metadata": {"domain": "logistics", "tier": "smoke"}}
+{"id": "CS-004", "question": "这个商家卖假货，我要投诉他", "module": "cs", "expected": {"target": "cs_complaint", "must_contain": []}, "metadata": {"domain": "complaint", "tier": "core"}}
+{"id": "CS-005", "question": "你们这服务太差了，我要投诉", "module": "cs", "expected": {"target": "cs_complaint", "must_contain": []}, "metadata": {"domain": "complaint", "tier": "core"}}
+{"id": "CS-006", "question": "转人工客服，我要跟人说话", "module": "cs", "expected": {"target": "cs_handoff", "must_contain": []}, "metadata": {"domain": "handoff", "tier": "core"}}
+{"id": "CS-007", "question": "收到的商品破损了怎么办", "module": "cs", "expected": {"target": "cs_business_query", "must_contain": []}, "metadata": {"domain": "after_sales", "tier": "smoke"}}
+{"id": "CS-008", "question": "能帮我修改收货地址吗", "module": "cs", "expected": {"target": "cs_business_action", "must_contain": []}, "metadata": {"domain": "action", "tier": "core"}}
+{"id": "CS-009", "question": "发票抬头开错了怎么重新开", "module": "cs", "expected": {"target": "cs_business_action", "must_contain": []}, "metadata": {"domain": "action", "tier": "core"}}
+{"id": "CS-010", "question": "你们营业时间是几点到几点", "module": "cs", "expected": {"target": "cs_knowledge", "must_contain": []}, "metadata": {"domain": "faq", "tier": "smoke"}}
+{"id": "CS-011", "question": "我买的商品三天了还没发货，帮我催一下", "module": "cs", "expected": {"target": "cs_business_action", "must_contain": []}, "metadata": {"domain": "logistics", "tier": "core"}}
+{"id": "CS-012", "question": "退款什么时候能到账", "module": "cs", "expected": {"target": "cs_business_query", "must_contain": []}, "metadata": {"domain": "after_sales", "tier": "smoke"}}
+{"id": "CS-013", "question": "优惠券用不了是怎么回事", "module": "cs", "expected": {"target": "cs_business_query", "must_contain": []}, "metadata": {"domain": "action", "tier": "core"}}
+{"id": "CS-014", "question": "我账号登录不上去怎么办", "module": "cs", "expected": {"target": "cs_business_query", "must_contain": []}, "metadata": {"domain": "account", "tier": "core"}}
+{"id": "CS-015", "question": "尺寸不合适可以换货吗", "module": "cs", "expected": {"target": "cs_business_query", "must_contain": []}, "metadata": {"domain": "after_sales", "tier": "smoke"}}
+{"id": "CS-016", "question": "付款失败了但是钱扣了", "module": "cs", "expected": {"target": "cs_business_action", "must_contain": []}, "metadata": {"domain": "payment", "tier": "core"}}
+{"id": "CS-017", "question": "你们发什么快递，能送到乡镇吗", "module": "cs", "expected": {"target": "cs_knowledge", "must_contain": []}, "metadata": {"domain": "logistics", "tier": "smoke"}}
+{"id": "CS-018", "question": "买的时候有赠品为什么没收到", "module": "cs", "expected": {"target": "cs_business_action", "must_contain": []}, "metadata": {"domain": "action", "tier": "core"}}
+{"id": "CS-019", "question": "投诉你们快递员态度恶劣", "module": "cs", "expected": {"target": "cs_complaint", "must_contain": []}, "metadata": {"domain": "complaint", "tier": "core"}}
+{"id": "CS-020", "question": "之前的投诉处理得怎么样了", "module": "cs", "expected": {"target": "cs_business_query", "must_contain": []}, "metadata": {"domain": "complaint", "tier": "core"}}
