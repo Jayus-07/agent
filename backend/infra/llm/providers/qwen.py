@@ -16,13 +16,23 @@ from backend.config import (
 
 
 def build_qwen(model_name: str) -> object:
-    """构建 Qwen 在线模型实例（通过 DashScope OpenAI 兼容协议）"""
+    """构建 Qwen 在线模型实例（通过 DashScope OpenAI 兼容协议）
+
+    注意 enable_thinking：qwen3 系列是推理模型，DashScope 兼容端点上
+    thinking 默认开启——非流式调用时 content 为空、实际输出落在
+    reasoning_content（LangChain 不解析该字段），下游拿到空回答。
+    项目内对话/RAG/评测场景均已显式关闭（ragas_bridge、llm_enrichment
+    同款处理）；需要推理链的场景设置 QWEN_ENABLE_THINKING=true。
+    """
     try:
         from langchain_openai import ChatOpenAI
     except ImportError as e:
         raise ImportError(
             "qwen provider 需要 langchain_openai 包，请 pip install langchain-openai"
         ) from e
+
+    import os
+    enable_thinking = os.getenv("QWEN_ENABLE_THINKING", "false").strip().lower() in ("1", "true", "yes")
 
     return ChatOpenAI(
         model=model_name,
@@ -31,6 +41,7 @@ def build_qwen(model_name: str) -> object:
         request_timeout=LLM_REQUEST_TIMEOUT,
         api_key=QWEN_API_KEY,
         base_url=QWEN_API_BASE,
+        extra_body={"enable_thinking": enable_thinking},
     )
 
 

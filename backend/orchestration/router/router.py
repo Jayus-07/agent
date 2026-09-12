@@ -30,9 +30,10 @@ _router_cache = get_cache("router", ttl=300)
 class Router:
     """3 层 fallback Router。"""
 
-    def __init__(self, llm_timeout: int = 12):
+    def __init__(self, llm_timeout: int | None = None):
         self.rule = RuleRouter()
         self.vector = VectorRouter()
+        # 兜底层超时由 ROUTER_LLM_TIMEOUT 统一控制（默认 6s，原 12s）
         self.llm = LLMRouter(timeout=llm_timeout)
 
     def route(self, query: str) -> RouteDecision:

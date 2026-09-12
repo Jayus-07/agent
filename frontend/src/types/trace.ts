@@ -149,7 +149,7 @@ export interface TraceRecord {
   workflow_version?: number;
   /** 根 span ID */
   root_span_id?: string;
-  status?: "success" | "error" | "timeout" | "cancelled" | "running";
+  status?: "success" | "error" | "timeout" | "cancelled" | "running" | "rejected";
   parent_id?: string | null;
   children_ids?: string[];
   session?: {
@@ -185,6 +185,17 @@ export interface TraceRecord {
     span_count: number;
   };
 }
+
+/** CS Router 预过滤 target → CS Graph expert（与后端 graph_state 同源映射）。
+ *  trace.tags 的 cs_target ↔ cs_expert_final 按此判定路由一致。 */
+export const CS_TARGET_TO_EXPERT: Record<string, string> = {
+  cs_knowledge: "cs_knowledge_expert",
+  cs_business_query: "cs_query_expert",
+  cs_business_action: "cs_action_expert",
+  cs_complaint: "cs_complaint_expert",
+  cs_handoff: "cs_handoff_expert",
+  cs_pending: "cs_pending_handler",
+};
 
 // ── 向后兼容 ─────────────────────────────────────────
 // 旧代码中仍有 TraceStep 引用的过渡期类型别名
@@ -317,6 +328,7 @@ export function statusBadge(status: string): { bg: string; text: string; label: 
     case "success":   return { bg: "bg-emerald-100 text-emerald-700", text: "text-emerald-700", label: "SUCCESS" };
     case "error":     return { bg: "bg-red-100 text-red-700", text: "text-red-700", label: "ERROR" };
     case "timeout":   return { bg: "bg-amber-100 text-amber-700", text: "text-amber-700", label: "TIMEOUT" };
+    case "rejected":  return { bg: "bg-orange-100 text-orange-700", text: "text-orange-700", label: "REJECTED" };
     case "cancelled": return { bg: "bg-slate-100 text-slate-500", text: "text-slate-500", label: "CANCELLED" };
     case "skipped":   return { bg: "bg-slate-100 text-slate-500", text: "text-slate-500", label: "SKIPPED" };
     default:          return { bg: "bg-slate-100 text-slate-500", text: "text-slate-500", label: status.toUpperCase() };

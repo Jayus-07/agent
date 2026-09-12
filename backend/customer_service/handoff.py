@@ -124,6 +124,25 @@ class TriggerType(str, Enum):
     NONE = "none"
 
 
+# 转人工原因 → 质量分析口径（三层拆分，转人工率按此分桶）
+#   healthy_user: 用户主动要求 —— 产品正常行为
+#   healthy_escalation: 业务升级/高危确认 —— 产品设计使然
+#   capability_gap: AI 能力不足被迫转人工 —— 目标趋近 0
+HANDOFF_REASON_BUCKETS = {
+    TriggerType.EXPLICIT_REQUEST.value: "healthy_user",
+    TriggerType.LOW_CONFIDENCE.value: "capability_gap",
+    TriggerType.CONSECUTIVE_FAILURES.value: "capability_gap",
+    TriggerType.COMPLAINT_ESCALATION.value: "healthy_escalation",
+    TriggerType.HIGH_RISK_ACTION.value: "healthy_escalation",
+    TriggerType.NONE.value: "capability_gap",  # 无明确 trigger 的转人工按能力缺口处理
+}
+
+
+def handoff_reason_bucket(trigger_type: str) -> str:
+    """trigger_type 值 → 分析桶；loop_limit 等来源在聚合层单独归类。"""
+    return HANDOFF_REASON_BUCKETS.get(trigger_type, "capability_gap")
+
+
 @dataclass(frozen=True)
 class HandoffTrigger:
     trigger_type: TriggerType

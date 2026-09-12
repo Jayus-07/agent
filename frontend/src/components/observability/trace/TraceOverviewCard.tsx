@@ -1,6 +1,53 @@
 "use client";
 
-import { TraceRecord } from "@/types/trace";
+import { TraceRecord, CS_TARGET_TO_EXPERT } from "@/types/trace";
+
+/** CS 灰度标签行：放量组别 + 路由一致性一目了然 */
+function CSBadgeRow({ trace }: { trace: TraceRecord }) {
+  const tags = (trace.tags || {}) as Record<string, string>;
+  const variant = tags.cs_variant;
+  if (!variant) return null; // 非 CS 灰度 trace 不显示
+
+  const target = tags.cs_target || "";
+  const expertFinal = tags.cs_expert_final || "";
+  const expectedExpert = CS_TARGET_TO_EXPERT[target] || "";
+  // 预过滤 target 与实际派发 expert 不一致 = 路由问题，标红提示
+  const routeMismatch = Boolean(expectedExpert && expertFinal && expectedExpert !== expertFinal);
+  const handoff = tags.cs_handoff_state || "";
+
+  return (
+    <div className="col-span-2 md:col-span-4 lg:col-span-6 flex flex-wrap items-center gap-2">
+      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
+        variant === "treatment" ? "bg-violet-600 text-white" : "bg-slate-200 text-slate-600"
+      }`}>
+        CS {variant === "treatment" ? "Treatment" : "Control"}
+      </span>
+      {target && (
+        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+          路由 → {target}
+        </span>
+      )}
+      {expertFinal && (
+        <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${
+          routeMismatch ? "bg-red-100 text-red-700 font-semibold" : "bg-emerald-50 text-emerald-700"
+        }`}
+          title={routeMismatch ? `预过滤期望 ${expectedExpert}，实际派发 ${expertFinal}` : "路由一致"}
+        >
+          {routeMismatch ? "⚠ 路由不一致: " : "Expert: "}{expertFinal}
+        </span>
+      )}
+      {handoff && (
+        <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${
+          handoff.includes("handoff") || handoff.includes("human")
+            ? "bg-amber-100 text-amber-700"
+            : "bg-slate-100 text-slate-500"
+        }`}>
+          人工状态: {handoff}
+        </span>
+      )}
+    </div>
+  );
+}
 
 interface Props {
   trace: TraceRecord;
@@ -24,6 +71,9 @@ export default function TraceOverviewCard({ trace }: Props) {
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+      {/* CS 灰度标签行（仅 CS trace 显示） */}
+      <CSBadgeRow trace={trace} />
+
       {/* Duration */}
       <div className="bg-white border border-slate-200 rounded-xl p-4">
         <p className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">总耗时</p>

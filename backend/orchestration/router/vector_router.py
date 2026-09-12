@@ -100,10 +100,20 @@ class VectorRouter:
     索引结构:
       collection: router_v1
       docs: [{text: example_query, metadata: {capability: name}}, ...]
+
+    注意：embedding 模型更换（维度变化）后必须删除索引目录重建——
+    Chroma 不会自动迁移维度，旧索引会导致检索报错并静默降级 LLM Router。
     """
 
-    def __init__(self, persist_dir: str = "backend/data/router_index", collection_name: str = "router_v1"):
-        self.persist_dir = persist_dir
+    # 绝对路径（相对 cwd 的 "backend/data/router_index" 在 cwd=backend 时
+    # 会解析成 backend/backend/data/... 双重嵌套）
+    _DEFAULT_PERSIST_DIR = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "data", "router_index",
+    )
+
+    def __init__(self, persist_dir: str | None = None, collection_name: str = "router_v1"):
+        self.persist_dir = persist_dir or self._DEFAULT_PERSIST_DIR
         self.collection_name = collection_name
         self._collection = None
         self._ensure_index()
@@ -150,6 +160,23 @@ class VectorRouter:
             )
             logger.info(f"[VectorRouter] 已建路由索引: {len(all_examples)} 条 example")
 
+    def _rebuild_index(self) -> None:
+        """删除旧 collection 并按当前 embedding 维度重建（embedding 模型换型自愈）。
+
+        不删目录：chromadb 的 PersistentClient 对同一路径有进程级缓存，
+        Windows 下 rmtree 会因文件锁静默失败、旧 schema 残留。改用
+        delete_collection 清掉旧 schema，同一 client 内重建新维度 collection。
+        """
+        from backend.shared.logger import logger
+        try:
+            if self._collection is not None:
+                self._collection._client.delete_collection(self.collection_name)
+                logger.info(f"[VectorRouter] 已删除旧 collection: {self.collection_name}")
+        except Exception:
+            logger.debug("[VectorRouter] 删除旧 collection 失败", exc_info=True)
+        self._collection = None
+        self._ensure_index()
+
     def route(self, query: str, top_k: int = 3, confidence_threshold: float = 0.85) -> RouteDecision:
         """Embedding 相似度匹配，返回 candidates + 分数。
 
@@ -174,13 +201,29 @@ class VectorRouter:
         try:
             results = self._collection.similarity_search_with_score(query, k=top_k)
         except Exception as e:
-            logger.warning(f"[VectorRouter] 检索失败: {e}")
-            return RouteDecision(
-                execution_mode=ExecutionMode.PLAN,
-                candidates=[],
-                confidence=0.0,
-                reason="检索异常，交给 LLM Router",
-            )
+            # embedding 模型更换（维度变化）→ 旧索引作废：自动重建一次再试，
+            # 避免 vector 层静默失效导致所有请求落到 LLM Router（数秒级延迟）
+            if "dimension" in str(e).lower():
+                logger.warning(f"[VectorRouter] embedding 维度不匹配，自动重建路由索引: {e}")
+                self._rebuild_index()
+                try:
+                    results = self._collection.similarity_search_with_score(query, k=top_k)
+                except Exception as e2:
+                    logger.warning(f"[VectorRouter] 重建后检索仍失败: {e2}")
+                    return RouteDecision(
+                        execution_mode=ExecutionMode.PLAN,
+                        candidates=[],
+                        confidence=0.0,
+                        reason="检索异常，交给 LLM Router",
+                    )
+            else:
+                logger.warning(f"[VectorRouter] 检索失败: {e}")
+                return RouteDecision(
+                    execution_mode=ExecutionMode.PLAN,
+                    candidates=[],
+                    confidence=0.0,
+                    reason="检索异常，交给 LLM Router",
+                )
 
         # 归一化距离 → 相似度（chroma 默认 L2，越小越相似）
         # 实际不同 collection 距离分布不同，这里简化：直接用倒数

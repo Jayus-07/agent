@@ -85,12 +85,13 @@ def try_cs_prefilter(query: str, state: dict) -> dict | None:
             "final_answer": guard_result.message,
         }
 
-    # ── Trace: stamp conversation_id + cs_route ──
+    # ── Trace: stamp conversation_id + cs_route + cs_target（路由一致率用）──
     try:
         from backend.observability.tracer import trace_collector
         trace = trace_collector.current()
         if trace is not None:
             trace.tags["conversation_id"] = session_id
+            trace.tags["cs_target"] = cs_target
             trace.metadata["cs_route"] = {
                 "intent": cs_result.intent,
                 "domain": cs_result.domain.value,

@@ -23,6 +23,18 @@ CS_ACTION_EXPERT = "cs_action_expert"
 CS_COMPLAINT_EXPERT = "cs_complaint_expert"
 CS_HANDOFF_EXPERT = "cs_handoff_expert"
 
+# Router 预过滤产物 cs_target → CS Graph expert 节点名
+# 单一事实源：cs_prefilter / cs_graph_node / evaluation runner 共用，
+# 路由一致率（tags.cs_target ↔ tags.cs_expert_final）按此映射判定。
+CS_TARGET_TO_EXPERT = {
+    "cs_knowledge": CS_KNOWLEDGE_EXPERT,
+    "cs_business_query": CS_QUERY_EXPERT,
+    "cs_business_action": CS_ACTION_EXPERT,
+    "cs_complaint": CS_COMPLAINT_EXPERT,
+    "cs_handoff": CS_HANDOFF_EXPERT,
+    "cs_pending": CS_PENDING_HANDLER,
+}
+
 
 class CSGraphState(TypedDict, total=False):
     """CS Graph 独立状态

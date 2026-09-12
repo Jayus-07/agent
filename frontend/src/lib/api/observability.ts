@@ -9,6 +9,37 @@
 import { request } from "../fetcher";
 import type { TraceRecord, AlertItem } from "@/types/trace";
 
+// ── CS 灰度质量报告 ───────────────────────────────────
+
+export interface CSVariantSummary {
+  total: number;
+  route_consistency: number | null;
+  route_n?: number;
+  fallback_rate: number | null;
+  handoff_rate: number | null;
+  handoff_by_reason: Record<string, number>;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  avg_ms: number | null;
+}
+
+export interface CSQualityReport {
+  window_hours: number;
+  generated_at: string;
+  total_cs_traces: number;
+  by_variant: Record<string, CSVariantSummary>;
+  alerts: { severity: "warning" | "error"; type: string; message: string }[];
+}
+
+/** GET /observability/cs-quality?hours=N — CS 灰度质量聚合报告 */
+export async function getCsQualityReport(hours = 24): Promise<CSQualityReport | null> {
+  try {
+    return await request<CSQualityReport>(`/api/observability/cs-quality?hours=${hours}`);
+  } catch {
+    return null; // 端点不可用/未升级时静默降级，卡片显示占位
+  }
+}
+
 // ── Traces ────────────────────────────────────────────
 
 /** GET /observability/traces?limit=N&workflow_name=X — 最近 N 条 trace（服务端过滤） */

@@ -4,8 +4,10 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import TraceFilterBar from "@/components/observability/trace/TraceFilter";
 import StatsBar from "@/components/observability/trace/StatsBar";
+import CSQualityCard from "@/components/observability/trace/CSQualityCard";
+import TraceInsightsPanel, { DURATION_BUCKETS, DurationBucket } from "@/components/observability/trace/TraceInsightsPanel";
 import TraceBreadcrumb from "@/components/observability/trace/TraceBreadcrumb";
-import TraceRow, { ColKey } from "@/components/observability/trace/TraceRow";
+import TraceRow, { ColKey, VALID_COL_KEYS } from "@/components/observability/trace/TraceRow";
 import { useToast } from "@/components/shared/Toast";
 import {
   TraceFilter,
@@ -25,20 +27,19 @@ const COLUMNS_KEY = "obs.traceColumns";
 // 前端时间窗 → 后端 stats 接口的 hours 参数（"custom" 按 24h 处理）
 const RANGE_HOURS: Record<string, number> = { "15m": 0.25, "1h": 1, "6h": 6, "24h": 24, custom: 24 };
 
-const DEFAULT_COLUMNS: ColKey[] = ["status", "id", "question", "duration", "tokens", "cost", "session", "time", "actions"];
+const DEFAULT_COLUMNS: ColKey[] = ["status", "question", "duration", "usage", "time", "actions"];
 
 const ALL_COLUMNS: { key: ColKey; label: string }[] = [
   { key: "status", label: "状态" },
-  { key: "id", label: "Trace ID" },
   { key: "question", label: "用户问题" },
   { key: "duration", label: "耗时" },
-  { key: "tokens", label: "Token" },
-  { key: "cost", label: "成本" },
-  { key: "session", label: "Session" },
-  { key: "kb", label: "KB" },
+  { key: "usage", label: "Token/成本" },
   { key: "time", label: "时间" },
   { key: "actions", label: "操作" },
 ];
+
+// Live tail 轮询间隔（ms）
+const LIVE_INTERVAL = 10000;
 
 export default function TracesPage() {
   const router = useRouter();
@@ -57,6 +58,10 @@ export default function TracesPage() {
   const [columns, setColumns] = useState<ColKey[]>(DEFAULT_COLUMNS);
   const [typedTraces, setTypedTraces] = useState<TraceRecord[]>([]);
   const [mounted, setMounted] = useState(false);
+  // Live tail：观察新流量时开启（10s 轮询列表）
+  const [live, setLive] = useState(false);
+  // 延迟桶过滤（洞察面板直方图点击触发）
+  const [durationBucket, setDurationBucket] = useState<DurationBucket>("");
 
   useEffect(() => {
     try {
@@ -65,7 +70,12 @@ export default function TracesPage() {
       const savedBookmarks = localStorage.getItem(BOOKMARK_KEY);
       if (savedBookmarks) setBookmarks(new Set(JSON.parse(savedBookmarks)));
       const savedCols = localStorage.getItem(COLUMNS_KEY);
-      if (savedCols) setColumns(JSON.parse(savedCols));
+      if (savedCols) {
+        // 过滤无效列（旧版列定义含已合并的 id/tokens/cost/session/kb/error）
+        const parsed: ColKey[] = JSON.parse(savedCols);
+        const valid = parsed.filter((k) => VALID_COL_KEYS.includes(k));
+        setColumns(valid.length > 0 ? valid : DEFAULT_COLUMNS);
+      }
     } catch {}
     // 数据加载推迟到 mount 后：避免 SSR 阶段同步 IO（mock 时 import 22 JSON；
     // API 时 fetch 也必须在 client 端）
@@ -93,6 +103,20 @@ export default function TracesPage() {
     localStorage.setItem(COLUMNS_KEY, JSON.stringify(columns));
   }, [columns]);
 
+  // Live tail：开启后定时拉取新 trace + stats
+  useEffect(() => {
+    if (!live || !mounted) return;
+    const timer = setInterval(async () => {
+      const [traces] = await Promise.all([
+        listAgentTraces(),
+        getAgentTraceStats(RANGE_HOURS[filter.timeRange] ?? 24).then((s) => setServerStats(s)),
+      ]);
+      setTypedTraces(traces);
+    }, LIVE_INTERVAL);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live, mounted, filter.timeRange]);
+
   const handleRefresh = async () => {
     setIsRefreshing(true);
     // 触发真实数据拉取（mock 也走异步路径，保持一致 UX）
@@ -104,7 +128,8 @@ export default function TracesPage() {
     }
   };
 
-  const filtered = useMemo(() => {
+  // 除延迟桶之外的筛选结果（直方图基于它计算，保证选桶后其他桶仍可见）
+  const filteredBase = useMemo(() => {
     let arr = filterByTimeRange(typedTraces, filter.timeRange);
 
     if (filter.status !== "all") {
@@ -134,6 +159,16 @@ export default function TracesPage() {
         t.id.toLowerCase().includes(kw)
       );
     }
+    return arr;
+  }, [typedTraces, filter]);
+
+  const filtered = useMemo(() => {
+    let arr = filteredBase;
+    // 延迟桶过滤（点击洞察面板直方图触发）
+    if (durationBucket) {
+      const b = DURATION_BUCKETS.find((x) => x.key === durationBucket);
+      if (b) arr = arr.filter((t) => (t.duration_ms || 0) >= b.min && (t.duration_ms || 0) < b.max);
+    }
 
     if (sortField === "duration_ms") {
       arr = [...arr].sort((a, b) => sortDir === "desc" ? b.duration_ms - a.duration_ms : a.duration_ms - b.duration_ms);
@@ -147,6 +182,8 @@ export default function TracesPage() {
   }, [typedTraces, filter, sortField, sortDir]);
 
   const total = filtered.length;
+  // 耗时相对比例条的归一化基准：当前筛选下最大耗时
+  const maxDuration = useMemo(() => filtered.reduce((m, t) => Math.max(m, t.duration_ms), 0), [filtered]);
   const traces = useMemo(() => filtered.slice((page - 1) * pageSize, page * pageSize), [filtered, page, pageSize]);
 
   // stats 下沉后端（/traces/stats）：不再客户端遍历 200 条；
@@ -277,6 +314,18 @@ export default function TracesPage() {
               📥 导出 CSV
             </button>
             <button
+              onClick={() => setLive(!live)}
+              className={`flex items-center gap-1.5 text-xs rounded-lg px-3 py-1.5 border transition-colors ${
+                live
+                  ? "text-white bg-emerald-600 border-emerald-600 animate-pulse"
+                  : "text-slate-600 bg-white border-slate-200 hover:text-slate-800"
+              }`}
+              title={live ? "每 10s 自动拉取新 trace" : "开启后每 10s 自动刷新"}
+            >
+              <span className={`inline-block w-1.5 h-1.5 rounded-full ${live ? "bg-white" : "bg-emerald-500"}`} />
+              Live
+            </button>
+            <button
               onClick={handleRefresh}
               disabled={isRefreshing}
               className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 bg-white border border-slate-200 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50"
@@ -287,8 +336,24 @@ export default function TracesPage() {
           </div>
         </div>
 
-        {/* Stats */}
-        <StatsBar stats={stats} traceCount={total} />
+        {/* Stats（KPI 卡可点击：错误卡 → 只看失败，总数卡 → 清除状态筛选） */}
+        <StatsBar
+          stats={stats}
+          traceCount={total}
+          breachedCount={filteredBase.filter((t) => t.sla?.breached).length}
+          onSelectStatus={(s) => { setFilter((f) => ({ ...f, status: s, page: 1 })); setPage(1); }}
+          activeStatus={filter.status}
+        />
+
+        {/* 洞察区：延迟分布（可点击过滤）+ 24h 请求趋势 */}
+        <TraceInsightsPanel
+          traces={filteredBase}
+          activeBucket={durationBucket}
+          onBucketClick={setDurationBucket}
+        />
+
+        {/* CS 灰度质量（treatment vs control），时间窗与列表过滤联动 */}
+        <CSQualityCard hours={RANGE_HOURS[filter.timeRange] ?? 24} />
 
         {/* Filters */}
         <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-2">
@@ -330,28 +395,24 @@ export default function TracesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs font-medium text-slate-500">
-                  {has("status") && <th className="py-3 px-4 w-10">状态</th>}
-                  {has("id") && <th className="py-3 px-4">Trace ID</th>}
-                  {has("question") && <th className="py-3 px-4">用户问题</th>}
+                  {has("status") && <th className="py-2.5 px-3 w-16">状态</th>}
+                  {has("question") && <th className="py-2.5 px-3">用户问题</th>}
                   {has("duration") && (
-                    <th className="py-3 px-4 w-24 text-right cursor-pointer select-none" onClick={() => handleSort("duration_ms")}>
+                    <th className="py-2.5 px-3 w-44 text-right cursor-pointer select-none" onClick={() => handleSort("duration_ms")}>
                       耗时<SortIcon field="duration_ms" />
                     </th>
                   )}
-                  {has("tokens") && <th className="py-3 px-4 w-28">Token</th>}
-                  {has("cost") && (
-                    <th className="py-3 px-4 w-24 text-right cursor-pointer select-none" onClick={() => handleSort("cost_usd")}>
-                      成本<SortIcon field="cost_usd" />
+                  {has("usage") && (
+                    <th className="py-2.5 px-3 w-28 text-right cursor-pointer select-none" onClick={() => handleSort("cost_usd")}>
+                      Token / 成本<SortIcon field="cost_usd" />
                     </th>
                   )}
-                  {has("session") && <th className="py-3 px-4">Session</th>}
-                  {has("kb") && <th className="py-3 px-4 w-28">KB</th>}
                   {has("time") && (
-                    <th className="py-3 px-4 w-32 cursor-pointer select-none" onClick={() => handleSort("timestamp")}>
+                    <th className="py-2.5 px-3 w-32 cursor-pointer select-none" onClick={() => handleSort("timestamp")}>
                       时间<SortIcon field="timestamp" />
                     </th>
                   )}
-                  {has("actions") && <th className="py-3 px-4 w-20"></th>}
+                  {has("actions") && <th className="py-2.5 px-3 w-20"></th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -360,6 +421,7 @@ export default function TracesPage() {
                     key={t.id}
                     t={t}
                     columns={columns}
+                    maxDuration={maxDuration}
                     isBookmarked={bookmarks.has(t.id)}
                     isCompared={compareIds.has(t.id)}
                     isCopied={copiedId === t.id}

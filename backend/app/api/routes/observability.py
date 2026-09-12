@@ -119,6 +119,13 @@ async def list_active_traces():
     return {"traces": [_stored_dict_to_dto(t) for t in active]}
 
 
+@router.get("/cs-quality")
+async def cs_quality_report(hours: float = Query(24, gt=0, le=24 * 30)):
+    """CS 灰度质量报告：按 cs_variant 分组的路由一致率/兜底率/转人工率/时延 + 告警。"""
+    from backend.observability.cs_quality_report import build_cs_quality_report
+    return build_cs_quality_report(hours=hours)
+
+
 @router.get("/traces/{trace_id}")
 async def get_trace(trace_id: str):
     """获取单条 trace 完整详情（Langfuse 优先，SQLite 兜底）"""

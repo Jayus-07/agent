@@ -15,14 +15,8 @@ from backend.evaluation.registry import register_runner
 from backend.shared.logger import logger
 
 # cs_target（Router 预过滤产物）→ CS Graph expert 节点名
-_TARGET_TO_EXPERT = {
-    "cs_knowledge": "cs_knowledge_expert",
-    "cs_business_query": "cs_query_expert",
-    "cs_business_action": "cs_action_expert",
-    "cs_complaint": "cs_complaint_expert",
-    "cs_handoff": "cs_handoff_expert",
-    "cs_pending": "cs_pending_handler",
-}
+# 单一事实源在 customer_service/graph_state.py（cs_graph_node 同用此映射）
+from backend.customer_service.graph_state import CS_TARGET_TO_EXPERT as _TARGET_TO_EXPERT
 
 _VALID_TARGETS = set(_TARGET_TO_EXPERT)
 

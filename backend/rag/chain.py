@@ -24,14 +24,20 @@ from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.runnables import RunnableLambda
 
-from backend.config import ENABLE_HISTORY_AWARE_RETRIEVAL
+from backend.config import (
+    ENABLE_HISTORY_AWARE_RETRIEVAL,
+    ENABLE_TOKEN_STREAMING,
+    EVIDENCE_TOKEN_BUDGET,
+)
 from backend.infra.llm import llm
+from backend.infra.llm.proxy import emit_stream_delta, extract_chunk_text
 from backend.rag.citation import CitationFormatter
 from backend.rag.context import get_context, set_context
 from backend.rag.evidence_gate import EvidenceGateController
 from backend.rag.evidence_gate.self_correction import SelfCorrectionStrategy
 from backend.rag.reranker import RerankCompressor
 from backend.rag.retrieval.retrievers import AdaptiveRetriever, ChunkLevelRetriever
+from backend.memory.token_budget import trim_texts_to_budget
 from backend.shared.logger import logger
 
 # =====================================================
@@ -265,6 +271,19 @@ class RAGChain:
         # Citation Filter: 注入文档序号 + 自定义文档格式，使 LLM 可内联引用 [1][2]
         def _index_docs(input_dict):
             docs = input_dict.get("context", [])
+            # ── 证据 token 预算（P3）：rerank 后输入顺序即相关性顺序，从头保留，
+            # 超出预算的尾部文档整体丢弃（长文档场景仅靠 top_k 条数会挤爆上下文）。
+            # 首条文档即使超预算也保留（保证至少有证据可引用）。
+            if EVIDENCE_TOKEN_BUDGET > 0 and docs:
+                page_texts = [d.page_content for d in docs]
+                kept_texts, dropped = trim_texts_to_budget(
+                    page_texts, EVIDENCE_TOKEN_BUDGET)
+                if dropped:
+                    docs = docs[:len(kept_texts)]
+                    input_dict["context"] = docs
+                    logger.info(
+                        f"[RAGChain] 证据 token 预算裁剪: 丢弃 {dropped} 个尾部文档 "
+                        f"(budget={EVIDENCE_TOKEN_BUDGET})")
             for i, doc in enumerate(docs, 1):
                 doc.metadata["index"] = i
                 # ── Evidence 边界字段（非空才显示，不浪费 token）──
@@ -304,13 +323,33 @@ class RAGChain:
             if not context_docs:
                 logger.info("[RAGChain] 空检索短路，跳过 LLM Generate")
                 return AIMessage(content="知识库暂无相关资料。")
+            # Gate 前置：检索层 Gate 已拒（实体覆盖/证据不足）→ 跳过 LLM 生成
+            gate_injected = (context_docs[0].metadata or {}).get("__evidence_gate_decision__") or {}
+            if gate_injected.get("gate_passed") is False:
+                logger.info(
+                    f"[RAGChain] Gate 前置拒答，跳过 LLM Generate: "
+                    f"reason={gate_injected.get('gate_reason')}")
+                return AIMessage(content="知识库暂无相关资料。")
             llm_span = trace_collector.start_span(
                 "llm_generate", name="LLM生成",
                 kind=SpanKind.LLM.value,
                 input={"question": inp.get("input", "")[:1000]},
             )
             try:
-                r = _stuff.invoke(inp)
+                # ── P1 真 token 级流式：流式消费生成 chunk，边生成边经 sink
+                # 推给 SSE（TTFT 从"生成完"提前到"首 chunk 到达"）。
+                # 增量聚合成完整答案后包成 AIMessage 返回，下游 metrics/
+                # 决策逻辑与 invoke 路径一致。开关关闭或无 sink 时走 invoke。
+                if ENABLE_TOKEN_STREAMING:
+                    parts: list[str] = []
+                    for chunk in _stuff.stream(inp):
+                        text = extract_chunk_text(chunk)
+                        if text:
+                            parts.append(text)
+                            emit_stream_delta(text)
+                    r = AIMessage(content="".join(parts))
+                else:
+                    r = _stuff.invoke(inp)
                 # 注入 token + finish_reason + cost_usd（从 proxy ContextVar 读，
                 # 与 _record_tokens 同上下文，保证并发下各请求读到自己的 token）
                 from backend.infra.llm.proxy import _last_call_meta_var
@@ -331,14 +370,29 @@ class RAGChain:
                             llm_usage_missing_total.inc()
                         except Exception:
                             pass
-                # 截断文本字段，避免大输出撑爆 trace
-                completion_text = ""
-                if hasattr(r, "content") and isinstance(r.content, str):
+                # 截断文本字段，避免大输出撑爆 trace。
+                # 注意：create_stuff_documents_chain 的返回值随 langchain 版本不同
+                # 可能是 AIMessage（.content）或 str（无 .content 属性）——
+                # 旧版返回 str 曾导致 completion_text 永远为空（RESPONSE 面板空白）。
+                if isinstance(r, str):
+                    completion_text = r[:1000]
+                elif hasattr(r, "content") and isinstance(r.content, str):
                     completion_text = r.content[:1000]
                 elif hasattr(r, "content"):
                     completion_text = str(r.content)[:1000]
+                if not completion_text:
+                    # 兜底：推理模型 thinking 开启时 content 为空（输出在
+                    # reasoning_content），记录思考链供审计而非静默留空
+                    reasoning = (getattr(r, "additional_kwargs", {}) or {}).get("reasoning_content", "")
+                    if reasoning:
+                        completion_text = f"[reasoning] {reasoning[:900]}"
                 if completion_text:
                     metrics["completion_text"] = completion_text
+                logger.info(
+                    f"[RAGChain][diag] llm metrics keys={sorted(metrics.keys())} "
+                    f"ct_len={len(completion_text)} "
+                    f"r_type={type(r).__name__} "
+                    f"content_repr={repr(getattr(r, 'content', r))[:80]}")
                 trace_collector.end_span(llm_span, metrics=metrics)
                 return r
             except Exception:
@@ -369,12 +423,18 @@ class RAGChain:
         )
         self._rerank_wrapper = retriever  # Rerank 包装层（供测试/诊断断言装配顺序）
 
+        # ── Gate 前置：检索后、LLM 生成前执行 Evidence Gate（Gate 1+1.5+2）──
+        # Why: 原 Gate 排在 LLM 之后（_execute 里 invoke 后评估），拒答场景
+        # 白烧一次 LLM 调用（2~6s + token）。前置后拒答在 _timed_stuff 短路。
+        # decision 经 doc.metadata 注入传递（链内同步安全，不依赖 ContextVar）。
+        gate_retriever = RunnableLambda(self._gate_wrap_retrieve)
+
         # ── ① HistoryAware: 对话历史改写（最外层，最先执行）─
         # 双链策略：standalone 链跳过 HistoryAware LLM 调用，首轮对话省 ~1-2s
-        self.chain_standalone = create_retrieval_chain(retriever, stuff_chain)
+        self.chain_standalone = create_retrieval_chain(gate_retriever, stuff_chain)
         if ENABLE_HISTORY_AWARE_RETRIEVAL:
             retriever = create_history_aware_retriever(
-                llm, retriever, _build_contextualize_prompt()
+                llm, gate_retriever, _build_contextualize_prompt()
             )
 
         self.chain = create_retrieval_chain(retriever, stuff_chain)
@@ -738,10 +798,75 @@ class RAGChain:
             status="skipped" if not triggered else "success")
 
         # ── Evidence Gate 决策链 ────────────────────────────────
-        result["__evidence_gate_decision__"] = self._run_evidence_gates(
-            question, context_docs
-        )
+        # Gate 已前置到检索后/LLM 前（_gate_wrap_retrieve，链内执行），
+        # 此处从 doc.metadata 反序列化决策结果，供 _respond 统一决策。
+        # 无注入（空召回等）→ 回退原 Gate 评估路径，保持空召回拒答行为。
+        injected = (context_docs[0].metadata.get("__evidence_gate_decision__")
+                    if context_docs else None)
+        if injected is not None:
+            result["__evidence_gate_decision__"] = self._decision_from_injected(injected)
+        else:
+            result["__evidence_gate_decision__"] = self._run_evidence_gates(
+                question, context_docs)
         return result
+
+    def _gate_wrap_retrieve(self, payload):
+        """Gate 前置检索包装：调底层检索 → 执行 Evidence Gate → 注入 decision。
+
+        create_retrieval_chain / history_aware_retriever 的 retriever 槽位。
+        payload 兼容 dict（{"input": ...}）与 str 两种输入形态。
+        实体覆盖校验使用 self._last_query（原始用户问题）——history-aware
+        改写后的 query 不反映用户原始实体。
+        """
+        query = payload.get("input") if isinstance(payload, dict) else payload
+        docs = list(self._rerank_wrapper.invoke(query))
+        try:
+            from backend.rag.evidence_gate import is_evidence_gate_enabled
+            if is_evidence_gate_enabled() and docs:
+                question = self._last_query or (query if isinstance(query, str) else str(query))
+                decision = self._run_evidence_gates(question, docs)
+                if decision is not None:
+                    stamp = {
+                        "gate_passed": bool(decision.passed),
+                        "gate_layer": decision.layer or "retrieval",
+                        "gate_score": float(decision.score or 0.0),
+                        "gate_reason": (decision.reason.value if decision.reason else ""),
+                        **(decision.diagnostics or {}),
+                    }
+                    for d in docs:
+                        d.metadata["__evidence_gate_decision__"] = stamp
+        except Exception as e:  # noqa: BLE001
+            # Gate 前置失败 → 不拦截 docs，交由原兜底路径处理（软降级）
+            logger.warning(f"[RAGChain] Gate 前置评估失败，透传 docs: {e}", exc_info=True)
+        return docs
+
+    def _decision_from_injected(self, injected):
+        """doc.metadata 注入的 decision dict → GateDecision 对象。
+
+        无注入（空 docs / Gate 关闭）→ 透传放行，与原 _run_evidence_gates
+        的兜底行为一致。
+        """
+        from backend.rag.evidence_gate import (
+            gate_retrieval_passthrough,
+            is_evidence_gate_enabled,
+        )
+        if injected is None or not is_evidence_gate_enabled():
+            return gate_retrieval_passthrough()
+        from backend.rag.evidence_gate import GateDecision, RejectReason
+        try:
+            return GateDecision(
+                passed=bool(injected.get("gate_passed")),
+                reason=(RejectReason(injected["gate_reason"])
+                        if injected.get("gate_reason") else None),
+                layer="retrieval",
+                score=float(injected.get("gate_score", 0.0)),
+                diagnostics={k: v for k, v in injected.items()
+                             if k not in ("gate_passed", "gate_layer",
+                                          "gate_score", "gate_reason")},
+            )
+        except Exception as e:
+            logger.warning(f"[RAGChain] Gate decision 反序列化失败，透传放行: {e}")
+            return gate_retrieval_passthrough()
 
     def _run_evidence_gates(self, question: str, context_docs: list):
         """两层 Gate（Retrieval + Rerank）的合并判定。
