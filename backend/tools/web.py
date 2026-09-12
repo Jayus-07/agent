@@ -75,8 +75,9 @@ def web_search_tool(query: str, num_results: int = 5) -> str:
             results.append(f"{i+1}. **{title}**\n   {snippet}\n   {link}")
 
     except Exception as e:
+        # 上抛给 BaseSkill：网络失败可重试，吞掉会绕过 Skill 层重试机制
         logger.warning(f"[Tool:web_search] 搜索失败: {e}")
-        return f"[SEARCH FAILED] 无法搜索 '{query}': {e}"
+        raise
 
     if not results:
         return f"[NO RESULTS] 未找到 '{query}' 的相关结果"
@@ -101,8 +102,9 @@ def web_crawl_tool(url: str, mode: str = "markdown") -> str:
     try:
         result = crawl(url, mode=mode, timeout=60.0)
         if not result["ok"]:
+            # 抓取失败上抛给 BaseSkill 重试；业务级空内容不属于此路径
             logger.warning(f"[Tool:web_crawl] 抓取失败: {result['error']}")
-            return f"[CRAWL FAILED] 无法抓取 '{url}': {result['error']}"
+            raise RuntimeError(f"无法抓取 '{url}': {result['error']}")
         text = result["content"]
         # 50000 字符上限: 电商商品页（亚马逊等）正文通常 50-300KB，
         # 前段是导航/面包屑，商品数据（价格/评价/规格）在中后段。
@@ -112,8 +114,9 @@ def web_crawl_tool(url: str, mode: str = "markdown") -> str:
         logger.info(f"[Tool:web_crawl] 成功抓取 {url} ({len(text)} 字符, mode={mode})")
         return text
     except Exception as e:
+        # 上抛给 BaseSkill：网络失败可重试，吞掉会绕过 Skill 层重试机制
         logger.warning(f"[Tool:web_crawl] 抓取失败：{e}")
-        return f"[CRAWL FAILED] 无法抓取 '{url}': {e}"
+        raise
 
 
 # ==================== Tool Registry 自动注册 ====================

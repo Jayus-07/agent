@@ -11,17 +11,24 @@ class CompetitorAnalysisSkill(BaseSkill):
 
     name = "competitor_analysis"
     capabilities = ["competitor.analyze", "competitor.watch", "competitor.history"]
+    # 单次页面抓取自身 timeout=90s（crawler_runtime），Skill 层必须大于它，
+    # 否则抓取未完成就被判超时重试，重复发起完整抓取流程
+    default_timeout = 120.0
     description = (
         "竞品分析：抓取竞品商品页/官网，抽取价格、促销、评价数等结构化信息，"
         "存为快照并与历史对比（识别涨价/降价）。支持监控列表管理与价格历史查询。"
         "适合'分析这个竞品链接'、'竞品最近降价了吗'、'巡检所有监控的竞品'等请求。"
     )
     params_schema = {
-        "action": "analyze（分析 URL，默认）| watch（巡检全部监控项）| history（价格历史）| add（加入监控）| remove（移除监控）| toggle（启用/停用）| list（查看监控列表）",
-        "url": "竞品页面完整 URL",
-        "name": "竞品名称（可选）",
-        "question": "用户原始问题（其中的 URL 会被自动提取）",
-        "enabled": "toggle 时是否启用（默认 True）",
+        "action": {
+            "type": "string", "required": False,
+            "enum": ["analyze", "watch", "history", "add", "remove", "toggle", "list"],
+            "description": "操作类型（默认 analyze）",
+        },
+        "url": {"type": "string", "required": False, "description": "竞品页面完整 URL（analyze/history/add/remove/toggle 需要）"},
+        "name": {"type": "string", "required": False, "description": "竞品名称（add 时可选）"},
+        "question": {"type": "string", "required": False, "description": "用户原始问题（其中的 URL 会被自动提取）"},
+        "enabled": {"type": "boolean", "required": False, "description": "toggle 时是否启用（默认 True）"},
     }
     examples = [
         {"action": "analyze", "url": "https://item.jd.com/100012043978.html", "question": "帮我分析这个竞品的价格"},

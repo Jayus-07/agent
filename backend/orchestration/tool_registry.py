@@ -24,6 +24,26 @@ def _node_name(skill_name: str) -> str:
     return f"{skill_name}_skill"
 
 
+def format_params_schema(schema_params: dict) -> str:
+    """渲染参数 schema 为 Planner/Critique prompt 可读文本。
+
+    支持两种写法（向后兼容）:
+      - 类型化: {"type": "string", "required": True, "description": ..., "enum": [...]}
+      - 旧式:   "参数说明文本"（视为 string 可选）
+    """
+    lines = []
+    for name, spec in schema_params.items():
+        if isinstance(spec, dict):
+            p_type = spec.get("type", "string")
+            required = "必填" if spec.get("required") else "可选"
+            enum = spec.get("enum")
+            enum_text = f"，可选值: {'|'.join(map(str, enum))}" if enum else ""
+            lines.append(f"- {name} ({p_type}, {required}{enum_text}): {spec.get('description', '')}")
+        else:
+            lines.append(f"- {name} (string, 可选): {spec}")
+    return "\n".join(lines)
+
+
 class ToolRegistry:
     """Capability 派生注册表。
 
@@ -133,7 +153,8 @@ class ToolRegistry:
                 continue
             lines.append(f"### {cap_name}")
             lines.append(f"描述: {schema['description']}")
-            lines.append(f"参数: {json.dumps(schema['params'], ensure_ascii=False)}")
+            lines.append("参数:")
+            lines.append(format_params_schema(schema["params"]))
             if "示例" in schema:
                 lines.append(f"示例: {json.dumps(schema['示例'], ensure_ascii=False)}")
             lines.append("")

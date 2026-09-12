@@ -48,7 +48,9 @@ class TestADRDualRegistryMerge:
 
         rag = schema["rag.search"]
         assert "知识库" in rag["description"]
-        assert rag["params"] == {"question": "检索问题"}
+        assert rag["params"] == {
+            "question": {"type": "string", "required": True, "description": "检索问题"},
+        }
         assert "question" in rag["示例"]
 
         sql = schema["sql.query"]

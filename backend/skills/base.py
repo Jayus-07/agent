@@ -38,9 +38,13 @@ class BaseSkill(ABC):
     子类需声明:
       - capabilities:    ClassVar[list[str]]  — 如 ["sql.query", "sql.analyze"]
       - description:     str                   — Planner prompt 用（必填）
-      - params_schema:   dict                  — 参数说明（必填）
+      - params_schema:   dict                  — 参数说明（必填）。推荐类型化格式
+                        {"param": {"type": "string|int|object|boolean", "required": bool,
+                                   "description": str, "enum": [...]}}；
+                        旧式纯字符串值向后兼容（视为 string 可选）
       - examples:        list[dict]            — Planner 用的示例（至少 1 个）
       - _tool_fn:        property → LangChain Tool
+      - default_timeout / default_max_retries — 类级执行参数（可选覆盖）
 
     Capability 是 Planner 与 Skill 之间唯一的契约。
     """
@@ -50,6 +54,10 @@ class BaseSkill(ABC):
     description: str = ""
     params_schema: ClassVar[dict] = {}
     examples: ClassVar[list[dict]] = []
+    # 类级默认：execute 未显式传参时生效。子类可覆盖（如 competitor
+    # 单次抓取自身 timeout=90s，必须大于它，否则被 Skill 层先判超时重试）
+    default_timeout: ClassVar[float] = DEFAULT_TIMEOUT
+    default_max_retries: ClassVar[int] = DEFAULT_MAX_RETRIES
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -80,16 +88,20 @@ class BaseSkill(ABC):
         self,
         state: dict,
         step_capability: str = "",
-        max_retries: int = DEFAULT_MAX_RETRIES,
-        timeout: float = DEFAULT_TIMEOUT,
+        max_retries: int | None = None,
+        timeout: float | None = None,
     ) -> dict:
         """执行当前 Capability：从 state 提取 step → 调用 Tool → 写回结果。
 
         每次 Tool 调用都会创建 Span（type=tool_call），重试记录为 span.events。
+        timeout/max_retries 缺省时取类级 default_timeout / default_max_retries。
         返回: {"step_results": {...}}
         """
         from backend.observability.alerts import make_alert, log_degradation
         from backend.observability.tracer import trace_collector
+
+        timeout = self.default_timeout if timeout is None else timeout
+        max_retries = self.default_max_retries if max_retries is None else max_retries
 
         step_id = state.get("current_step_id")
         if not step_id:

@@ -13,6 +13,29 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 
+# ── 模块级 mock 助手：不打真实网络，统一模拟 DuckDuckGo 响应 ──
+
+def _ddg_html(n):
+    """构造 DuckDuckGo HTML 搜索结果页（n 条结果）"""
+    items = []
+    for i in range(n):
+        items.append(
+            f'<a class="result__a" href="#">标题{i}</a>'
+            f'<a class="result__snippet" href="#">摘要{i}</a>'
+            f'<a class="result__url" href="#">example.com/{i}</a>'
+        )
+    return f"<html>{''.join(items)}</html>"
+
+
+def _fake_urlopen(html: str):
+    """构造支持 with 语句的 urlopen 返回值"""
+    resp = MagicMock()
+    resp.read.return_value = html.encode("utf-8")
+    resp.__enter__ = MagicMock(return_value=resp)
+    resp.__exit__ = MagicMock(return_value=False)
+    return resp
+
+
 class TestWebToolsRegistry:
     """Web Tools 注册中心测试"""
     
@@ -70,56 +93,66 @@ class TestWebSearchToolBasic:
         assert True
     
     def test_query_parameter_required(self):
-        """query parameter should be validated"""
+        """query parameter should be validated（mock 网络）"""
         from backend.tools.web import web_search_tool
-        
-        # Empty query might return error or handle gracefully
-        result = web_search_tool.invoke({"query": "", "num_results": 3})
+
+        with patch("urllib.request.urlopen",
+                   return_value=_fake_urlopen(_ddg_html(2))):
+            result = web_search_tool.invoke({"query": "", "num_results": 3})
         assert isinstance(result, str)
 
 
 class TestWebSearchToolQueryHandling:
-    """web_search_tool 查询处理测试"""
-    
+    """web_search_tool 查询处理测试（全部 mock 网络）"""
+
     def test_single_word_query(self):
         """single word query should work"""
         from backend.tools.web import web_search_tool
-        
-        result = web_search_tool.invoke({
-            "query": "python",
-            "num_results": 3
-        })
+
+        with patch("urllib.request.urlopen",
+                   return_value=_fake_urlopen(_ddg_html(3))):
+            result = web_search_tool.invoke({
+                "query": "python",
+                "num_results": 3
+            })
         assert isinstance(result, str)
-    
+        assert "标题0" in result
+
     def test_multi_word_query(self):
         """multi-word query should work"""
         from backend.tools.web import web_search_tool
-        
-        result = web_search_tool.invoke({
-            "query": "machine learning algorithms",
-            "num_results": 5
-        })
+
+        with patch("urllib.request.urlopen",
+                   return_value=_fake_urlopen(_ddg_html(5))):
+            result = web_search_tool.invoke({
+                "query": "machine learning algorithms",
+                "num_results": 5
+            })
         assert isinstance(result, str)
-    
+
     def test_special_characters_in_query(self):
         """special characters should be handled"""
         from backend.tools.web import web_search_tool
-        
-        result = web_search_tool.invoke({
-            "query": "Python + JavaScript tutorial",
-            "num_results": 3
-        })
+
+        with patch("urllib.request.urlopen",
+                   return_value=_fake_urlopen(_ddg_html(2))):
+            result = web_search_tool.invoke({
+                "query": "Python + JavaScript tutorial",
+                "num_results": 3
+            })
         assert isinstance(result, str)
-    
+
     def test_unicode_query_handling(self):
         """unicode characters should be processed correctly"""
         from backend.tools.web import web_search_tool
-        
+
         unicode_query = "人工智能中文教程"
-        result = web_search_tool.invoke({
-            "query": unicode_query,
-            "num_results": 3
-        })
+        with patch("urllib.request.urlopen",
+                   return_value=_fake_urlopen(_ddg_html(2))):
+            result = web_search_tool.invoke({
+                "query": unicode_query,
+                "num_results": 3
+            })
         assert isinstance(result, str)
 
 
@@ -136,45 +169,46 @@ class TestWebSearchResultValidation:
         assert num_results <= 10  # Reasonable limit
         
     def test_too_many_results_handled(self):
-        """large num_results should still work"""
+        """large num_results should still work（结果数受实际结果数约束）"""
         from backend.tools.web import web_search_tool
-        
-        # Edge case: very high number of results
-        result = web_search_tool.invoke({
-            "query": "test",
-            "num_results": 20
-        })
+
+        with patch("urllib.request.urlopen",
+                   return_value=_fake_urlopen(_ddg_html(3))):
+            result = web_search_tool.invoke({
+                "query": "test",
+                "num_results": 20
+            })
         assert isinstance(result, str)
 
 
 class TestWebSearchErrorHandling:
     """web_search_tool 错误处理测试"""
     
-    def test_network_error_simulation(self):
-        """network errors should be caught and reported"""
+    def test_network_error_raises_for_skill_retry(self):
+        """网络异常应上抛，由 BaseSkill 重试机制接管（不吞异常）"""
+        import urllib.error
+        import urllib.request
+        from unittest.mock import patch
+
+        import pytest
+
         from backend.tools.web import web_search_tool
-        
-        # This simulates a network failure
-        # In production, DuckDuckGo API might fail
-        # We expect graceful error handling
-        result = web_search_tool.invoke({"query": "test", "num_results": 3})
-        
-        # Should either succeed or return an error message
-        assert isinstance(result, str)
-        # If it failed, the message should indicate SEARCH FAILED
-        if "FAILED" in result:
-            assert "无法搜索" in result or "search" in result.lower()
+
+        with patch("urllib.request.urlopen",
+                   side_effect=urllib.error.URLError("connection refused")):
+            with pytest.raises(urllib.error.URLError):
+                web_search_tool.invoke({"query": "test", "num_results": 3})
     
     def test_timeout_handling(self):
-        """timeout should be handled gracefully"""
-        # Timeout is implemented internally (10s)
-        # No specific test needed beyond basic invocation
+        """timeout should be handled internally（10s），异常由 BaseSkill 接管"""
         from backend.tools.web import web_search_tool
-        
-        result = web_search_tool.invoke({
-            "query": "test timeout",
-            "num_results": 1
-        })
+
+        with patch("urllib.request.urlopen",
+                   return_value=_fake_urlopen(_ddg_html(1))):
+            result = web_search_tool.invoke({
+                "query": "test timeout",
+                "num_results": 1
+            })
         assert isinstance(result, str)
 
 
@@ -207,8 +241,12 @@ class TestWebCrawlToolBasic:
             # Expected: pydantic ValidationError for missing required field
             assert "missing" in str(e).lower() or "required" in str(e).lower()
         
-        # Alternatively, provide a mock URL
-        result = web_crawl_tool.invoke({"url": "https://example.com"})
+        # Alternatively, provide a mock URL（mock crawl，不打真实网络）
+        from unittest.mock import patch
+
+        with patch("backend.tools.crawler_runtime.crawl",
+                   return_value={"ok": True, "content": "页面正文"}):
+            result = web_crawl_tool.invoke({"url": "https://example.com"})
         assert isinstance(result, str)
     
     def test_url_format_validation(self):
@@ -241,15 +279,19 @@ class TestWebCrawlModeValidation:
         assert True
     
     def test_invalid_mode_handling(self):
-        """invalid mode should fall back to default"""
-        # Invalid modes are handled internally
+        """mode 透传给 crawler_runtime，不在此层校验（mock 验证透传）"""
+        from unittest.mock import patch
+
         from backend.tools.web import web_crawl_tool
-        
-        result = web_crawl_tool.invoke({
-            "url": "https://example.com",
-            "mode": "invalid_mode"
-        })
+
+        with patch("backend.tools.crawler_runtime.crawl",
+                   return_value={"ok": True, "content": "正文"}) as mock_crawl:
+            result = web_crawl_tool.invoke({
+                "url": "https://example.com",
+                "mode": "invalid_mode"
+            })
         assert isinstance(result, str)
+        assert mock_crawl.call_args.kwargs.get("mode") == "invalid_mode"
 
 
 class TestWebCrawlErrorHandling:
@@ -266,23 +308,25 @@ class TestWebCrawlErrorHandling:
             "   ",
         ]
         
+        import pytest
+
         for url in invalid_urls:
-            result = web_crawl_tool.invoke({"url": url})
-            assert isinstance(result, str)
-            # Should contain error indicator
-            if "[CRAWL FAILED]" in result:
-                assert "无法抓取" in result or "crawl" in result.lower()
+            # 抓取失败上抛（BaseSkill 依赖异常触发重试），不再吞成失败字符串
+            with pytest.raises(Exception):
+                web_crawl_tool.invoke({"url": url})
     
     def test_network_timeout_handling(self):
-        """slow websites should timeout gracefully"""
+        """抓取失败上抛（BaseSkill 依赖异常触发重试）"""
+        from unittest.mock import patch
+
+        import pytest
+
         from backend.tools.web import web_crawl_tool
-        
-        # Timeout is handled internally (60s max)
-        result = web_crawl_tool.invoke({
-            "url": "https://example.com/slow-page",
-            "timeout": 60
-        })
-        assert isinstance(result, str)
+
+        with patch("backend.tools.crawler_runtime.crawl",
+                   return_value={"ok": False, "error": "timed out"}):
+            with pytest.raises(RuntimeError):
+                web_crawl_tool.invoke({"url": "https://example.com/slow-page"})
     
     def test_large_content_handling(self):
         """very large pages should be truncated appropriately"""
@@ -325,102 +369,117 @@ class TestWebToolsIntegration:
     # ==================== 新增：URL 编码测试 ====================
     
     def test_unicode_query_handling(self):
-        """验证 Unicode 查询参数处理"""
+        """验证 Unicode 查询参数处理（mock 网络）"""
         from backend.tools.web import web_search_tool
-        
+
         unicode_queries = [
             "人工智能中文教程",
             "Pythonプログラミング言語",
             "الذكاء الاصطناعي",
         ]
-        
+
         for query in unicode_queries:
-            result = web_search_tool.invoke({
-                "query": query,
-                "num_results": 3
-            })
+            with patch("urllib.request.urlopen",
+                       return_value=_fake_urlopen(_ddg_html(2))):
+                result = web_search_tool.invoke({
+                    "query": query,
+                    "num_results": 3
+                })
             assert isinstance(result, str), f"Unicode 查询失败：{query}"
-    
+
     def test_url_encoding_in_search(self):
-        """验证搜索 URL 编码"""
+        """验证搜索 URL 编码（mock 网络响应）"""
         from backend.tools.web import web_search_tool
-        
+
         special_char_query = "Python + JavaScript tutorial & examples"
-        
-        result = web_search_tool.invoke({
-            "query": special_char_query,
-            "num_results": 5
-        })
-        
+
+        with patch("urllib.request.urlopen",
+                   return_value=_fake_urlopen(_ddg_html(2))):
+            result = web_search_tool.invoke({
+                "query": special_char_query,
+                "num_results": 5
+            })
         assert isinstance(result, str)
     
     # ==================== 新增：结果提取测试 ====================
     
+    @staticmethod
+    def _ddg_html(n):
+        """构造 DuckDuckGo HTML 搜索结果页（n 条结果）"""
+        items = []
+        for i in range(n):
+            items.append(
+                f'<a class="result__a" href="#">标题{i}</a>'
+                f'<a class="result__snippet" href="#">摘要{i}</a>'
+                f'<a class="result__url" href="#">example.com/{i}</a>'
+            )
+        return f"<html>{''.join(items)}</html>"
+
     def test_multiple_results_extraction(self):
-        """验证多个搜索结果提取"""
+        """验证多个搜索结果提取（mock 网络响应）"""
+        from unittest.mock import MagicMock, patch
+
         from backend.tools.web import web_search_tool
-        
-        result = web_search_tool.invoke({
-            "query": "technology news",
-            "num_results": 10
-        })
-        
+
+        resp = MagicMock()
+        resp.read.return_value = self._ddg_html(3).encode("utf-8")
+        resp.__enter__ = MagicMock(return_value=resp)
+        resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=resp):
+            result = web_search_tool.invoke({"query": "technology news", "num_results": 10})
         assert isinstance(result, str)
-        # 应包含至少一个搜索结果标记
-        if "FAILED" not in result:
-            assert len(result) > 20  # 有效结果应有足够长度
-    
+        assert "标题0" in result and "标题2" in result  # 3 条结果全部提取
+
     def test_empty_result_handling(self):
-        """验证无结果时的错误处理"""
+        """验证无结果时返回业务级空结果（非异常）"""
+        from unittest.mock import MagicMock, patch
+
         from backend.tools.web import web_search_tool
-        
-        # 极端限制条件应该无结果
-        result = web_search_tool.invoke({
-            "query": "xyz_nonexistent_keyword_2099",
-            "num_results": 1
-        })
-        
-        assert isinstance(result, str)
+
+        resp = MagicMock()
+        resp.read.return_value = b"<html></html>"
+        resp.__enter__ = MagicMock(return_value=resp)
+        resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=resp):
+            result = web_search_tool.invoke({"query": "xyz_none_2099", "num_results": 1})
+        assert "[NO RESULTS]" in result
     
     # ==================== 新增：Crawler 高级功能 ====================
     
     def test_crawl_timeout_configuration(self):
-        """验证爬取超时配置"""
+        """tool 层固定 60s 超时传给 crawler_runtime"""
+        from unittest.mock import patch
+
         from backend.tools.web import web_crawl_tool
-        
-        # 设置较短超时（理论上）
-        result = web_crawl_tool.invoke({
-            "url": "https://example.com",
-            "timeout": 30,
-            "mode": "markdown"
-        })
-        
+
+        with patch("backend.tools.crawler_runtime.crawl",
+                   return_value={"ok": True, "content": "正文"}) as mock_crawl:
+            result = web_crawl_tool.invoke({"url": "https://example.com"})
         assert isinstance(result, str)
-    
+        assert mock_crawl.call_args.kwargs.get("timeout") == 60.0
+
     def test_crawl_content_length_limit(self):
-        """验证爬虫内容长度限制"""
+        """超长内容截断到 50000 字符"""
+        from unittest.mock import patch
+
         from backend.tools.web import web_crawl_tool
-        
-        # 爬取示例网站，应自动截断过长的内容
-        result = web_crawl_tool.invoke({
-            "url": "https://example.com",
-            "max_content_length": 50000
-        })
-        
+
+        with patch("backend.tools.crawler_runtime.crawl",
+                   return_value={"ok": True, "content": "x" * 60000}):
+            result = web_crawl_tool.invoke({"url": "https://example.com"})
         assert isinstance(result, str)
-        if "FAILED" not in result and "无法抓取" not in result:
-            assert len(result) <= 50000 + 1000  # 允许小幅超额
-    
+        assert len(result) <= 50000 + 1000  # 允许截断注记
+        assert "内容已截断" in result
+
     def test_crawl_follow_links_flag(self):
-        """验证是否跟随链接的选项"""
+        """follow_links 不是 tool 的参数，仅确认正常路径可用（mock）"""
+        from unittest.mock import patch
+
         from backend.tools.web import web_crawl_tool
-        
-        # 只爬取当前页，不跟随外链
-        result = web_crawl_tool.invoke({
-            "url": "https://example.com",
-            "follow_links": False
-        })
-        
+
+        with patch("backend.tools.crawler_runtime.crawl",
+                   return_value={"ok": True, "content": "正文"}):
+            result = web_crawl_tool.invoke({"url": "https://example.com"})
         assert isinstance(result, str)
     
     # ==================== 新增：性能基准测试 ====================
@@ -460,17 +519,21 @@ class TestWebToolsIntegration:
     
     @pytest.mark.benchmark
     def test_web_crawl_page_load_performance(self):
-        """网页爬取响应时间 <3s"""
+        """网页爬取响应时间 <3s（mock 网络，验证 tool 层开销）"""
+        from unittest.mock import patch
+
         from backend.tools.web import web_crawl_tool
         import time
-        
-        start = time.perf_counter()
-        result = web_crawl_tool.invoke({
-            "url": "https://example.com",
-            "mode": "markdown"
-        })
-        elapsed = time.perf_counter() - start
-        
+
+        with patch("backend.tools.crawler_runtime.crawl",
+                   return_value={"ok": True, "content": "正文"}):
+            start = time.perf_counter()
+            result = web_crawl_tool.invoke({
+                "url": "https://example.com",
+                "mode": "markdown"
+            })
+            elapsed = time.perf_counter() - start
+
         assert elapsed < 3.0, f"爬取耗时{elapsed:.3f}s，超过 3s 基线"
         assert isinstance(result, str)
 

@@ -22,7 +22,7 @@ import json
 from backend.infra.cache import get_cache
 from backend.infra.llm import llm
 from backend.observability.alerts import log_degradation, make_alert
-from backend.orchestration.tool_registry import tool_registry
+from backend.orchestration.tool_registry import format_params_schema, tool_registry
 from backend.prompts.planner import is_knowledge_question
 from backend.shared.logger import logger
 
@@ -54,7 +54,8 @@ def _format_capabilities_schema() -> str:
             continue
         lines.append(f"### {cap_name}")
         lines.append(f"描述: {schema['description']}")
-        lines.append(f"参数: {json.dumps(schema['params'], ensure_ascii=False)}")
+        lines.append("参数:")
+        lines.append(format_params_schema(schema['params']))
         if "示例" in schema:
             lines.append(f"示例: {json.dumps(schema['示例'], ensure_ascii=False)}")
         lines.append("")
@@ -120,10 +121,11 @@ def planner_node(state: dict) -> dict:
     logger.info(f"[Planner] 分析问题: {question[:80]}...")
 
     try:
+        from backend.config import PLANNER_LLM_MAX_TOKENS
         resp = llm.invoke([
             ("system", prompt),
             ("human", user_msg),
-        ])
+        ], max_tokens=PLANNER_LLM_MAX_TOKENS)
         content = resp.content.strip()
 
         # 提取 JSON（现在直接返回 dict）

@@ -1201,10 +1201,13 @@ class TestCompetitorAnalyzeTool:
         assert "item.jd.com/456.html" in call_args[0][0]
 
     @patch("backend.tools.competitor.analyze_url")
-    def test_exception_returns_failed(self, mock_analyze):
+    def test_exception_raises_for_skill_retry(self, mock_analyze):
+        # 异常上抛（BaseSkill 依赖异常触发重试），不再吞成失败字符串
+        import pytest
+
         mock_analyze.side_effect = RuntimeError("unexpected error")
-        result = competitor_analyze_tool.invoke({"action": "analyze", "url": "https://test.com"})
-        assert "COMPETITOR FAILED" in result
+        with pytest.raises(RuntimeError):
+            competitor_analyze_tool.invoke({"action": "analyze", "url": "https://test.com"})
 
 
 # ────────────────────────────────────────────────────────────────────────────

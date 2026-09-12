@@ -110,8 +110,9 @@ def competitor_analyze_tool(action: str = "analyze", url: str = "",
         return f"未知 action: {action}（支持 analyze / watch / history / add / remove / toggle / list）"
 
     except Exception as e:
+        # 上抛给 BaseSkill：抓取/抽取失败可重试，吞掉会绕过 Skill 层重试机制
         logger.warning(f"[Tool:competitor] 失败：{e}")
-        return f"[COMPETITOR FAILED] 竞品分析失败：{e}"
+        raise
 
 
 # ==================== Tool Registry 自动注册 ====================
