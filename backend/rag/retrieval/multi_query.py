@@ -129,11 +129,15 @@ def _rewrite(question: str) -> list[str]:
     """LLM 改写 → Parse → Normalize → Dedup → Limit"""
     try:
         from backend.observability.tracer import trace_collector
-        span = trace_collector.start_span("query_rewrite", name="LLM 改写")
+        span = trace_collector.start_span("query_rewrite", name="LLM 改写",
+                                          input={"question": question[:500]})
         from backend.infra.llm import llm
         from langchain_core.messages import HumanMessage
 
         r = prompt_service.render_sync("rag.multi_query", count=MULTI_QUERY_COUNT, question=question)
+        # 渲染后的完整 prompt 落入 span.input（前端 LLM 调用明细展示原文）
+        if isinstance(span.input, dict):
+            span.input["prompt"] = r.text[:1000]
         result = llm.invoke([HumanMessage(content=r.text)])
         
         # 正确提取 content（可能是 AIMessage 或其他类型）
@@ -160,8 +164,12 @@ def _rewrite(question: str) -> list[str]:
         # Step 4: Limit
         lines = _limit(lines)
 
-        trace_collector.end_span(span,
-                             metrics={**tokens, "variants": len(lines)})
+        # LLM 原始返回 + 解析后的变体落地（前端 LLM 明细 / MultiQuery 区块展示）
+        metrics = {**tokens, "variants": len(lines)}
+        if raw:
+            metrics["completion_text"] = raw[:1000]
+        trace_collector.end_span(span, metrics=metrics,
+                                 output={"variants": lines[:10]})
         logger.info(f"[MultiQuery] Rewrite: {question[:40]} → {len(lines)} 变体")
         return lines
     except Exception as e:

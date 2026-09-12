@@ -24,6 +24,7 @@ const FlameGraph = dynamic(() => import("@/components/observability/trace/FlameG
 });
 import SpanTypeFilter from "@/components/observability/trace/SpanTypeFilter";
 import GraphTopology from "@/components/observability/trace/GraphTopology";
+import { evaluationService } from "@/services/evaluation";
 import { useToast } from "@/components/shared/Toast";
 import {
   statusBadge,
@@ -53,6 +54,7 @@ export default function TraceDetailPage() {
   const [highlightStepId, setHighlightStepId] = useState<string | null>(null);
   const [activeSpanTypes, setActiveSpanTypes] = useState<Set<string>>(new Set());  // 空=全部
   const [autoExpandLarge, setAutoExpandLarge] = useState(true);  // 自动展开大耗时 span
+  const [addingToEval, setAddingToEval] = useState(false);  // 加入评测集请求中
   const toast = useToast();
 
   // 异步加载：详情页需要单条 trace + 父子链
@@ -167,6 +169,27 @@ export default function TraceDetailPage() {
     toast.info(`重新执行 trace ${trace.id.slice(0, 12)}…（待对接 API）`);
   };
 
+  // 坏 case 一键转评测用例：POST /evaluation/cases/from-trace
+  const handleAddToEval = async () => {
+    if (addingToEval) return;
+    setAddingToEval(true);
+    try {
+      const result = await evaluationService.createFromTrace({
+        trace_id: trace.id,
+        note: `来自 trace 详情页手动收录 · ${trace.workflow_name || "workflow 未知"}`,
+      });
+      if (result.appended) {
+        toast.success(`已加入评测集（case ${result.case_id.slice(0, 8)}）`);
+      } else {
+        toast.info(`未重复收录：${result.reason}`);
+      }
+    } catch (e) {
+      toast.error(`加入评测集失败：${(e as Error).message}`);
+    } finally {
+      setAddingToEval(false);
+    }
+  };
+
   const handleExport = () => {
     const blob = new Blob([JSON.stringify(trace, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -211,6 +234,14 @@ export default function TraceDetailPage() {
           </div>
           <div className="flex items-center gap-2">
             <button onClick={handleRetry} className="text-xs text-slate-500 border border-slate-200 rounded px-3 py-1 hover:bg-slate-100">🔄 重新执行</button>
+            <button
+              onClick={handleAddToEval}
+              disabled={addingToEval}
+              className="text-xs text-violet-700 border border-violet-200 rounded px-3 py-1 hover:bg-violet-50 disabled:opacity-50"
+              title="将本次问答作为评测用例加入回归评测集"
+            >
+              {addingToEval ? "加入中…" : "🧪 加入评测集"}
+            </button>
             <button onClick={() => setShowJson(!showJson)} className="text-xs text-slate-500 border border-slate-200 rounded px-3 py-1 hover:bg-slate-100">{showJson ? "隐藏" : "{} JSON"}</button>
             <button onClick={handleExport} className="text-xs text-slate-500 border border-slate-200 rounded px-3 py-1 hover:bg-slate-100">📥 导出</button>
           </div>
@@ -422,16 +453,21 @@ export default function TraceDetailPage() {
                     <span className="text-sm text-slate-700 font-mono">{trace.question}</span>
                   </div>
                   <div className="space-y-1.5 ml-4 border-l-2 border-violet-200 pl-4">
-                    {findSpan(spans, "query_rewrite")?.metrics?.variants ? (
-                      [...Array(Number(findSpan(spans, "query_rewrite")?.metrics?.variants ?? 0))].map((_, i) => (
-                        <div key={i} className="flex items-center gap-2">
-                          <span className="text-[10px] text-violet-400">改写{i + 1}</span>
-                          <span className="text-xs text-slate-500 font-mono">变体 #{i + 1}</span>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-xs text-slate-400">改写已触发，变体详情需后端 span.output 字段支持</p>
-                    )}
+                    {(() => {
+                      const rwSpan = findSpan(spans, "query_rewrite") || findSpan(spans, "query_rewrite#1");
+                      const variants = (rwSpan?.output?.variants as string[] | undefined) ?? [];
+                      if (variants.length > 0) {
+                        return variants.map((v, i) => (
+                          <div key={i} className="flex items-start gap-2">
+                            <span className="text-[10px] text-violet-400 shrink-0 mt-0.5">改写{i + 1}</span>
+                            <span className="text-xs text-slate-600 font-mono break-all">{v}</span>
+                          </div>
+                        ));
+                      }
+                      return (
+                        <p className="text-xs text-slate-400">改写已触发，但该 trace 未记录变体文本（历史数据或改写失败）</p>
+                      );
+                    })()}
                   </div>
                 </div>
               </section>
