@@ -26,6 +26,9 @@ if ENVIRONMENT not in _VALID_ENVIRONMENTS:
 
 # 并发控制
 MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "5"))
+# 优先级排队：槽位满时高优先级请求（对话）进等待队列而不是立刻 503，
+# 低优先级（上传/重索引/导出）几乎不等待直接拒绝。0 表示禁用排队（恢复纯 503）。
+CONCURRENCY_QUEUE_TIMEOUT = float(os.getenv("CONCURRENCY_QUEUE_TIMEOUT", "10"))
 
 # 安全
 API_KEY = os.getenv("API_KEY", "")
@@ -85,6 +88,7 @@ from backend.config.llm import (
     OLLAMA_ENABLED,
     OLLAMA_BASE_URL,
     OLLAMA_MODEL,
+    OLLAMA_KEEP_ALIVE,
     EMBEDDING_MODEL,
     EMBEDDING_API_BASE,
     EMBEDDING_API_KEY,

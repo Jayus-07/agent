@@ -9,23 +9,32 @@ import os
 
 from langchain_ollama import ChatOllama
 
-from backend.config import LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT, LLM_TEMPERATURE
+from backend.config import (
+    LLM_CONTEXT_LENGTH,
+    LLM_REQUEST_TIMEOUT,
+    LLM_TEMPERATURE,
+    OLLAMA_BASE_URL,
+    OLLAMA_KEEP_ALIVE,
+)
 from backend.shared.logger import logger
 
 
 def build_ollama(model_name: str) -> ChatOllama:
     """构建 Ollama 模型实例。
 
-    base_url 优先从环境变量 OLLAMA_BASE_URL 读取，未设置则走 langchain 默认
-    http://localhost:11434，方便本地或远程 Ollama 部署切换。
+    base_url 优先级：环境变量 OLLAMA_BASE_URL > backend/config/llm.py 默认值。
+    keep_alive 控制模型驻留时长，避免空闲卸载后重载权重的冷启动 TTFT 飙升；
+    同时 Ollama（llama.cpp）对相同 prompt 前缀自动复用 KV Cache（prefix caching），
+    多轮同会话请求 TTFT 进一步下降。
     """
-    base_url = os.getenv("OLLAMA_BASE_URL") or None
+    base_url = os.getenv("OLLAMA_BASE_URL") or OLLAMA_BASE_URL
     return ChatOllama(
         model=model_name,
         base_url=base_url,
         temperature=LLM_TEMPERATURE,
         num_ctx=LLM_CONTEXT_LENGTH,
         request_timeout=LLM_REQUEST_TIMEOUT,
+        keep_alive=OLLAMA_KEEP_ALIVE,
     )
 
 

@@ -1,0 +1,17 @@
+# prometheus.yml — Prometheus 抓取配置
+#
+# 挂载：docker compose --profile observability up -d
+# 抓取目标：宿主机 Python 后端 /metrics（Prometheus 文本格式，见 backend/app/server.py）
+# 告警规则：docker/prometheus-alert-rules.yml（阈值定义见 docs/observability/slo.md）
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/prometheus-alert-rules.yml
+
+scrape_configs:
+  - job_name: agent-platform-app
+    # Python 后端跑在宿主机 8000；若后端改为容器部署（app 服务启用），改成 app:8000
+    static_configs:
+      - targets: ["host.docker.internal:8000"]

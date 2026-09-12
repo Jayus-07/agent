@@ -9,6 +9,19 @@
 #   critical — 服务不可用，需要立即处理（page）
 #   warning  — 降级运行，工作时间处理（ticket）
 groups:
+  # ── Recording rules：QPS / P99 分位数预计算（Grafana 面板与告警复用）──
+  - name: agent-platform-recording
+    interval: 30s
+    rules:
+      - record: chat:qps:rate5m
+        expr: sum(rate(chat_request_total[5m]))
+      - record: chat:latency_p99_seconds
+        expr: histogram_quantile(0.99, sum(rate(chat_request_duration_seconds_bucket[10m])) by (le))
+      - record: chat:ttft_p99_seconds
+        expr: histogram_quantile(0.99, sum(rate(chat_ttft_seconds_bucket[10m])) by (le))
+      - record: chat:tpot_p99_seconds
+        expr: histogram_quantile(0.99, sum(rate(chat_tpot_seconds_bucket[10m])) by (le))
+
   - name: agent-platform-sli
     rules:
       # ── 可用性 ──────────────────────────────
@@ -32,6 +45,44 @@ groups:
         annotations:
           summary: "Chat P95 延迟超过 30s"
           description: "检查 RAG 检索耗时与 LLM 响应时间"
+
+      # ── P99 延迟（SLO 目标见 docs/observability/slo.md）──────────
+      - alert: ChatLatencyP99High
+        expr: chat:latency_p99_seconds > 60
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Chat P99 E2E 延迟超过 60s（SLO: < 60s）"
+          description: "P99={{ $value | humanizeDuration }}，检查慢请求 trace 定位瓶颈阶段"
+
+      - alert: ChatTTFTP99High
+        expr: chat:ttft_p99_seconds > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Chat P99 TTFT 超过 3s（SLO: < 3s）"
+          description: "TTFT 反映 prefill + 首包链路：检查 Router 是否频繁落到 LLM 层、LLM 上游排队、以及并发排队（request_concurrency_wait_seconds）"
+
+      - alert: ChatTPOTP99High
+        expr: chat:tpot_p99_seconds > 0.2
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Chat P99 TPOT 超过 200ms（SLO: < 200ms）"
+          description: "TPOT 反映 LLM decode 速度：检查 LLM 上游限流/降速、输出长度分布、以及网络吞吐"
+
+      # ── 并发饱和（优先级排队中间件）──────────────
+      - alert: ConcurrencyQueueSustained
+        expr: min_over_time(request_concurrency_queued[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "并发槽位持续满载，请求开始排队"
+          description: "近 10 分钟一直有请求在等待队列中；高优先级对话会挤占 normal 批量任务，评估是否扩容 MAX_CONCURRENT_REQUESTS"
 
       # ── LLM 韧性链（P1-7/P1-8 新增）────────────
       - alert: LLMCircuitBreakerOpen

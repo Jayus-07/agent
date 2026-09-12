@@ -275,6 +275,44 @@ services:
       - ollama_data:/root/.ollama
     restart: unless-stopped
 
+  # ── Prometheus（指标抓取 + 告警，可选）──
+  # 启动：docker compose --profile observability up -d prometheus grafana
+  # UI: http://localhost:9090（查询 recording rules：chat:qps:rate5m 等）
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["observability"]
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus-alert-rules.yml:/etc/prometheus/prometheus-alert-rules.yml:ro
+      - prometheus_data:/prometheus
+    extra_hosts:
+      # Linux 宿主机也能解析 host.docker.internal（Docker Desktop 自带该解析）
+      - "host.docker.internal:host-gateway"
+    networks:
+      - agent-net
+    restart: unless-stopped
+
+  # ── Grafana（看板，可选；数据源自动装配指向 prometheus）──
+  # UI: http://localhost:3001（默认 admin/admin，GRAFANA_PASSWORD 可覆盖）
+  grafana:
+    image: grafana/grafana:latest
+    profiles: ["observability"]
+    ports:
+      - "127.0.0.1:3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - agent-net
+    restart: unless-stopped
+
   # ── Redis（缓存/限流/异步队列）──
   redis:
     image: redis:7-alpine
@@ -299,3 +337,5 @@ volumes:
   ollama_data:
   redis_data:
   kafka_data:
+  prometheus_data:
+  grafana_data:

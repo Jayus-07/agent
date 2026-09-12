@@ -31,6 +31,8 @@ if ENV_MODE not in ("cloud", "local"):
 OLLAMA_ENABLED = ENV_MODE == "local"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+# 模型驻留时长（避免空闲卸载后重载权重的冷启动 TTFT 飙升）；"30m" / "-1"（常驻）
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 
 # =====================================================
 # Embedding Configuration (P0 - 动态配置)

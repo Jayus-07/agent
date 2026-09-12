@@ -30,6 +30,7 @@ from backend.app.api.schemas import ChatRequest, ChatResponse, AbortRequest, Err
 from backend.app.api.deps import get_multi_agent
 from backend.infra.llm.rate_limiter import require_rate_limit
 from backend.observability.metrics import (
+    StreamLatencyTracker,
     chat_request_total,
     chat_request_duration_seconds,
     chat_stream_event_dropped_total,
@@ -212,7 +213,7 @@ async def chat_stream(
 
         client_aborted = False
         final_status = "ok"
-        _ttft_recorded = False
+        _latency_tracker = StreamLatencyTracker(start=t0)
 
         def _record_status(status: str):
             """真实记录 ok/error/abort 计数（P0-2：原 _record_stream_metrics 是死代码）。"""
@@ -240,14 +241,12 @@ async def chat_stream(
                 evt_type = evt.get("event")
                 if evt_type == "error":
                     final_status = "error"
-                elif evt_type == "delta" and not _ttft_recorded:
-                    # TTFT：首个 delta 距请求开始（P1 流式改造的核心验收指标）
-                    _ttft_recorded = True
+                elif evt_type == "delta":
+                    # TTFT / TPOT：首 delta 记 TTFT，收尾统一算 TPOT（P1 流式核心验收指标）
                     try:
-                        from backend.observability.metrics import chat_ttft_seconds
-                        chat_ttft_seconds.observe(time.monotonic() - t0)
+                        _latency_tracker.on_delta(time.monotonic())
                     except Exception:
-                        logger.debug("[P1] TTFT 指标记录失败", exc_info=True)
+                        logger.debug("[P1] 流式延迟指标记录失败", exc_info=True)
                 yield _sse_encode(evt)
                 await asyncio.sleep(0)  # 让出事件循环
 
@@ -270,6 +269,7 @@ async def chat_stream(
                 _record_status("aborted")
             else:
                 _record_status(final_status)
+            _latency_tracker.finish()
             chat_request_duration_seconds.observe(time.monotonic() - t0)
 
     return StreamingResponse(
