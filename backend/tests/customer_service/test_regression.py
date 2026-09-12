@@ -27,7 +27,7 @@ class TestCSDisabledNoSideEffects:
 
 
 class TestCSStateExtensionIsolated:
-    """CSAgentState 扩展不影响 AgentState 基础字段"""
+    """OrchestratorState 扩展不影响 AgentState 基础字段"""
 
     def test_agent_state_has_base_fields(self):
         from backend.orchestration.state import AgentState

@@ -72,11 +72,13 @@ class AgentState(TypedDict):
     _degraded_steps: Annotated[set[str], operator.or_]
 
 
-class CSAgentState(AgentState):
-    """客服 Agent 状态 — 扩展现有 AgentState
+class OrchestratorState(AgentState):
+    """主图（编排层）状态 — 整张主 StateGraph 共用
 
-    通过 route_mode="customer_service" 进入客服子系统时使用。
-    cs_context 承载客服专有上下文（认证用户、会话、转接状态、确认状态机等）。
+    扩展 AgentState，供主图所有节点读写。其中 cs_context 等客服专有字段
+    是主图挂载的客服扩展：route_mode="customer_service" 时由 cs_graph_node
+    转换为客服子图输入，cs_context 承载认证用户、会话、转接状态、确认状态机等。
+    客服子图内部状态为独立的 CSGraphState（backend/customer_service/graph_state.py）。
     """
 
     cs_context: CSContext

@@ -2,7 +2,7 @@
 orchestration/graph/cs_graph_node.py — Main Graph ↔ CS Graph 适配器
 
 职责 (仅 State 转换，不含业务逻辑):
-  1. 从 CSAgentState 构建 CS Graph 输入 (new_cs_graph_input)
+  1. 从 OrchestratorState 构建 CS Graph 输入 (new_cs_graph_input)
   2. 调用 get_cs_graph().invoke(cs_input)
   3. 通过 build_cs_graph_result() 将 CSGraphState → CSGraphResult
   4. 将 CSGraphResult 映射回 Main State 字段
@@ -23,7 +23,7 @@ _FALLBACK_ANSWER = "抱歉，客服系统暂时不可用，请稍后再试。"
 def cs_graph_node(state: dict) -> dict:
     """Main Graph → CS Graph → Main Graph 适配器
 
-    输入: CSAgentState (Main Graph 状态)
+    输入: OrchestratorState (Main Graph 状态)
     输出: dict — 写回 Main State 的字段子集
     """
     cs_context = state.get("cs_context", {})

@@ -28,7 +28,7 @@ from backend.observability.trace_middleware import trace_middleware
 from backend.orchestration.domain_registry import domain_graph_registry
 from backend.orchestration.graph.direct_executor import skill_executor_node, workflow_executor_node
 from backend.orchestration.graph.router_node import route_selector, router_node
-from backend.orchestration.state import AgentState, CSAgentState
+from backend.orchestration.state import AgentState, OrchestratorState
 from backend.orchestration.supervisor.scheduler import route_after_supervisor, supervisor_node
 from backend.orchestration.tool_registry import tool_registry
 from backend.shared.logger import logger
@@ -94,7 +94,7 @@ def build_graph():
 
     Skill 节点由 tool_registry 自动发现，不在此处硬编码节点名。
     """
-    wf = StateGraph(CSAgentState)
+    wf = StateGraph(OrchestratorState)
 
     # ── 内置节点（永远不变，TraceMiddleware 自动记录 Span）──
     # 注意：router 不用中间件包装 —— MultiTierRouter.route() 内部已自建

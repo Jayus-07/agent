@@ -1,7 +1,7 @@
 """test_cs_graph_node_adapter.py — cs_graph_node 适配器测试
 
 Phase 0.12: 验证 Main State ↔ CS Graph 适配逻辑
-- 输入映射 (CSAgentState → CS Graph input)
+- 输入映射 (OrchestratorState → CS Graph input)
 - 输出映射 (CSGraphResult → Main State)
 - cs_context 合并策略
 - 异常安全网

@@ -1,7 +1,7 @@
 """
 customer_service/graph_state.py — CS Graph 独立状态定义
 
-独立于 Main Graph 的 CSAgentState，CS Graph 内部所有节点读写此状态。
+独立于 Main Graph 的 OrchestratorState，CS Graph 内部所有节点读写此状态。
 通过 cs_graph_node 适配器 + CSGraphResult 契约与 Main Graph 通信。
 
 设计参考: docs/customer-service/langgraph-multi-expert-design.md §7.2
@@ -28,7 +28,7 @@ class CSGraphState(TypedDict, total=False):
     """CS Graph 独立状态
 
     设计原则:
-    1. 与 Main Graph 的 CSAgentState 完全分离
+    1. 与 Main Graph 的 OrchestratorState 完全分离
     2. 持久化状态 (conversation/confirmation/handoff) 只放引用，不放完整对象
     3. Graph State 只放执行态 — 当前决策需要的上下文
     4. 通过 CSGraphResult 契约与 Main Graph 通信
