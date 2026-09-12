@@ -97,8 +97,9 @@ curl http://localhost:8000/health                 # AI 系统
 
 1. **阶段 A（现状）**：`CS_ADMIN_SOURCE=local`（默认），cs_admin 读本地 PG；Java 已就绪
 2. **阶段 B（验证 Java）**：`CS_ADMIN_SOURCE=java`，cs_admin 列表/详情代理到 business-service；前端无感
-3. **阶段 C（写权切换）**：Python 的 `state_transition.py` / `conversation_store.py` 改调 `POST /internal/state-transitions`、`POST /internal/messages`（`BUSINESS_SERVICE_URL` + `X-Internal-Token`），Python 停止直写
-4. Java 侧按 `(conversation_id, 状态)` 幂等消费 Kafka 事件，双写窗口期数据安全
+3. **阶段 C（写权切换，开关已实现）**：`CS_WRITE_SOURCE=java` 后，Python 的 `StateTransitionService.apply()/load_snapshot()` 经 `backend/infra/http/business_client.py` 调 `/internal/state-transitions`、`/internal/state-snapshot`，`conversation_store.record_cs_turn()` 调 `/internal/messages`（question/answer 拆两条），Python 停止直写。Java 不可用时返回失败并告警，**不静默回落本地写**（保证写权唯一）；Kafka message/conversation 事件仍由 Python 发布
+4. **对账兜底（已实现）**：Java `ReconciliationConsumer` 按 event_id 幂等消费 `cs.conversation.events`/`cs.message.events`，conversation 状态与本地库不一致时告警（不覆盖写），覆盖双写窗口期
+5. **WhatsApp 闭环（已实现）**：Python `backend/infra/messaging/consumer.py` 消费 `channel.whatsapp.inbound`（`KAFKA_CONSUMER_ENABLED` 开关，Redis 幂等去重）→ `MultiAgentSystem.ask()` → 发布 `ai.reply.events` → Java `AiReplyConsumer` 经 WhatsAppSender 发送并审计；回执（statuses）不触发 AI，回环已由 `WhatsAppLoopGuardTest` 锁定
 
 ## 7. 新增组件速查
 
