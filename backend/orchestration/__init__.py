@@ -26,7 +26,6 @@ orchestration — 基于 LangGraph 的 Multi-Agent 工作流系统
 
 from backend.orchestration.state import AgentState, StepResult
 from backend.orchestration.tool_registry import ToolRegistry, tool_registry
-from backend.orchestration.graph import MultiAgentSystem
 
 __all__ = [
     "AgentState",
@@ -35,3 +34,15 @@ __all__ = [
     "tool_registry",
     "MultiAgentSystem",
 ]
+
+
+def __getattr__(name: str):
+    # 延迟导入 MultiAgentSystem：graph/builder 依赖 agents.planner，而
+    # planner → tool_registry 会先触发本包初始化，eager 导入形成循环
+    # （planner → orchestration → graph/builder → critique → 半初始化的 planner）。
+    # PEP 562 包级 __getattr__ 保持 `from backend.orchestration import
+    # MultiAgentSystem` 用法不变。
+    if name == "MultiAgentSystem":
+        from backend.orchestration.graph import MultiAgentSystem
+        return MultiAgentSystem
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
