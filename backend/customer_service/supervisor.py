@@ -294,6 +294,66 @@ def _record_decision(decision: CSSupervisorDecision) -> None:
         pass
 
 
+def _recover_handoff_timeout(state: dict[str, Any]) -> dict[str, Any] | None:
+    """人工接入超时回退（CS_HANDOFF_TIMEOUT_SECONDS）。
+
+    handoff_requested / waiting_human 超过时限仍无人工接入 → 关闭本次
+    转接（状态机两者均可合法转换到 CLOSED），清 store，handoff_state
+    归 ai_active，本 turn 恢复正常专家路由。未超时/无活跃转接返回 None。
+    """
+    from datetime import datetime, timezone
+
+    from backend.config.customer_service import CS_HANDOFF_TIMEOUT_SECONDS
+    from backend.customer_service.audit import append_audit, build_audit_entry
+    from backend.customer_service.handoff_store import get_handoff_store
+
+    handoff_state = state.get("handoff_state", "ai_active")
+    if handoff_state not in ("handoff_requested", "waiting_human"):
+        return None
+
+    user_id = state.get("user_id", "")
+    session_id = state.get("session_id", "default")
+    store = get_handoff_store()
+    active = store.get_active_handoff(user_id)
+    if not active:
+        return None
+
+    stamp = active.get("updated_at") or active.get("created_at")
+    if not stamp:
+        return None
+    try:
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(stamp)
+    except (ValueError, TypeError):
+        return None
+    if age.total_seconds() < CS_HANDOFF_TIMEOUT_SECONDS:
+        return None
+
+    store.clear(user_id, session_id)
+    logger.warning(
+        "[CS Supervisor] 人工接入超时 (%.0fs >= %ds)，回退 AI 服务: user=%s",
+        age.total_seconds(), CS_HANDOFF_TIMEOUT_SECONDS, user_id,
+    )
+    audit_entry = build_audit_entry(
+        user_id=user_id or "anonymous",
+        action_type="handoff_timeout_recovered",
+        result="success",
+        target_type="handoff",
+        target_id=str(active.get("ticket_id", "")),
+        detail=f"handoff timeout after {int(age.total_seconds())}s, recovered to ai_active",
+        conversation_id=state.get("conversation_id", ""),
+    )
+    return {
+        "handoff_state": "ai_active",
+        "cs_audit_entries": append_audit(
+            list(state.get("cs_audit_entries", [])), audit_entry,
+        ),
+        "cs_context": {
+            **(state.get("cs_context") or {}),
+            "handoff_state": "ai_active",
+        },
+    }
+
+
 def cs_supervisor_node(state: dict[str, Any]) -> Command:
     """CS Supervisor 节点函数 — 返回 Command(goto=..., update={...})
 
@@ -307,6 +367,10 @@ def cs_supervisor_node(state: dict[str, Any]) -> Command:
         CS_QUERY_EXPERT,
         CS_REPORTER,
     )
+
+    timeout_update = _recover_handoff_timeout(state)
+    if timeout_update is not None:
+        state = {**state, **timeout_update}
 
     decision = make_supervisor_decision(state)
     action = decision["next_action"]
@@ -339,42 +403,6 @@ def cs_supervisor_node(state: dict[str, Any]) -> Command:
             "supervisor_decision": dict(decision),
             "current_expert": expert or "",
             "expert_loop_count": state.get("expert_loop_count", 0) + 1,
+            **(timeout_update or {}),
         },
     )
-
-
-def route_after_cs_supervisor(state: dict[str, Any]) -> str:
-    """conditional-edge 函数: Supervisor 之后路由到哪个节点
-
-    Phase 4 将替换为 Command(goto=...) 模式。
-    """
-    from backend.customer_service.graph_state import (
-        CS_ACTION_EXPERT,
-        CS_COMPLAINT_EXPERT,
-        CS_HANDOFF_EXPERT,
-        CS_KNOWLEDGE_EXPERT,
-        CS_QUERY_EXPERT,
-        CS_REPORTER,
-    )
-
-    decision = state.get("supervisor_decision", {})
-    action = decision.get("next_action", ExpertAction.FINISH.value)
-    expert = decision.get("next_expert", "")
-
-    if action == ExpertAction.FINISH.value or action == ExpertAction.PENDING.value:
-        return CS_REPORTER
-
-    if action == ExpertAction.HANDOFF.value:
-        if decision.get("is_finished"):
-            return CS_REPORTER
-        return CS_HANDOFF_EXPERT
-
-    expert_to_node = {
-        ExpertType.KNOWLEDGE.value: CS_KNOWLEDGE_EXPERT,
-        ExpertType.QUERY.value: CS_QUERY_EXPERT,
-        ExpertType.ACTION.value: CS_ACTION_EXPERT,
-        ExpertType.COMPLAINT.value: CS_COMPLAINT_EXPERT,
-        ExpertType.HANDOFF.value: CS_HANDOFF_EXPERT,
-    }
-
-    return expert_to_node.get(expert, CS_KNOWLEDGE_EXPERT)

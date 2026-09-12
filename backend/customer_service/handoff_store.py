@@ -34,9 +34,17 @@ class HandoffStore:
         return db_data
 
     def save(self, user_id: str, session_id: str, handoff_data: dict) -> None:
+        from datetime import datetime, timezone
+
+        # 统一盖章：调用方传入的 dict 不带时间戳（DB 行才有），而
+        # CS_HANDOFF_TIMEOUT_SECONDS 超时回退依赖缓存条目的 updated_at
+        stamped = dict(handoff_data)
+        now = datetime.now(timezone.utc).isoformat()
+        stamped.setdefault("created_at", now)
+        stamped["updated_at"] = now
         with self._lock:
-            self._data[(user_id, session_id)] = handoff_data
-        self._db_save(user_id, session_id, handoff_data)
+            self._data[(user_id, session_id)] = stamped
+        self._db_save(user_id, session_id, stamped)
 
     def clear(self, user_id: str, session_id: str) -> None:
         with self._lock:

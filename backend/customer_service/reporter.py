@@ -145,6 +145,7 @@ def _run_output_guard(answer: str, state: dict) -> str:
 
 def _build_cs_context_snapshot(state: dict) -> dict:
     """构建 CS 上下文快照，回传给 Main Graph"""
+    inner_ctx = state.get("cs_context", {}) or {}
     return {
         "conversation_id": state.get("conversation_id", ""),
         "handoff_state": state.get("handoff_state", ""),
@@ -152,4 +153,7 @@ def _build_cs_context_snapshot(state: dict) -> dict:
         "cs_route": state.get("cs_route", {}),
         "expert_history": state.get("expert_history", []),
         "supervisor_decision": state.get("supervisor_decision", {}),
+        # 投诉工单幂等标记（complaint 专家防重入）
+        "complaint_ticket_id": inner_ctx.get("complaint_ticket_id", ""),
+        "complaint_severity": inner_ctx.get("complaint_severity", ""),
     }

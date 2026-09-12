@@ -40,6 +40,10 @@ class CSContext(TypedDict, total=False):
     action_result: dict
     handoff_state: str
 
+    # ── Complaint 幂等防重入 ──
+    complaint_ticket_id: str
+    complaint_severity: str
+
     # ── OutputGuard 读取（生产代码不写入）──
     known_other_user_ids: list[str]
 

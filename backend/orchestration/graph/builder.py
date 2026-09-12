@@ -52,17 +52,6 @@ _NODE_LABELS = {
 # 路由函数
 # =====================================================
 
-def route_after_planner(state: AgentState) -> str:
-    """Planner 之后：有 plan → supervisor，空 → reporter"""
-    plan = state.get("plan", {})
-    nodes = plan.get("nodes", {})
-    if nodes:
-        logger.info("[Graph] Planner → Supervisor")
-        return "supervisor"
-    logger.info("[Graph] Planner → Reporter (空计划)")
-    return "reporter"
-
-
 def route_after_critique(state: AgentState) -> str:
     """Critique 后的路由：空计划直接到 Reporter，否则到 Supervisor"""
     plan = state.get("plan", {})

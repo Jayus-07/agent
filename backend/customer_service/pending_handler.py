@@ -84,13 +84,30 @@ def _process_pending(
         )
 
     proposal_text = pending_action.get("proposal_text", "")
+
+    # 追问上限：意图不明连续超过 CS_MAX_CONFIRMATION_RETRIES 次 →
+    # 按过期处理（PENDING→EXPIRED 转换 + 清 store），防止无限追问
+    from backend.config.customer_service import CS_MAX_CONFIRMATION_RETRIES
+    from backend.customer_service.confirmation_store import get_confirmation_store
+
+    retries = int(pending_action.get("retry_count", 0)) + 1
+    if retries > CS_MAX_CONFIRMATION_RETRIES:
+        logger.warning(
+            "[PendingHandler] 追问达上限 (%d 次)，按过期处理: user=%s",
+            CS_MAX_CONFIRMATION_RETRIES, user_id,
+        )
+        return _handle_expired(pending_action, user_id, session_id)
+    get_confirmation_store().save(
+        user_id, session_id, {**pending_action, "retry_count": retries},
+    )
+
     return Command(
         goto="cs_reporter",
         update={
             "supervisor_decision": {
                 "next_action": "pending",
                 "decision_layer": 2,
-                "reason": "pending_handler — 用户意图不明确，重新追问",
+                "reason": f"pending_handler — 用户意图不明确，重新追问（第 {retries}/{CS_MAX_CONFIRMATION_RETRIES} 次）",
             },
             "last_expert_result": {
                 "response_draft": f"您有一个待确认的操作：\n\n{proposal_text}\n\n请回复「确认」继续，或「取消」放弃。",

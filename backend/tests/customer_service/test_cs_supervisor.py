@@ -18,7 +18,6 @@ from backend.customer_service.supervisor import (
     _resolve_expert,
     cs_supervisor_node,
     make_supervisor_decision,
-    route_after_cs_supervisor,
 )
 
 
@@ -213,66 +212,6 @@ class TestLayer3LLM:
         d = make_supervisor_decision(s)
         assert d["next_action"] == ExpertAction.RUN_EXPERT.value
         assert d["decision_layer"] == 3
-
-
-class TestRouteAfterSupervisor:
-    def test_finish_goes_to_reporter(self):
-        state = {"supervisor_decision": {"next_action": "finish"}}
-        assert route_after_cs_supervisor(state) == CS_REPORTER
-
-    def test_pending_goes_to_reporter(self):
-        state = {"supervisor_decision": {"next_action": "pending"}}
-        assert route_after_cs_supervisor(state) == CS_REPORTER
-
-    def test_handoff_goes_to_handoff_expert(self):
-        state = {"supervisor_decision": {
-            "next_action": "handoff",
-            "next_expert": "handoff",
-        }}
-        assert route_after_cs_supervisor(state) == CS_HANDOFF_EXPERT
-
-    def test_handoff_intercept_goes_to_reporter(self):
-        state = {"supervisor_decision": {
-            "next_action": "handoff",
-            "next_expert": "handoff",
-            "is_finished": True,
-        }}
-        assert route_after_cs_supervisor(state) == CS_REPORTER
-
-    def test_run_expert_knowledge(self):
-        state = {"supervisor_decision": {
-            "next_action": "run_expert",
-            "next_expert": "knowledge",
-        }}
-        assert route_after_cs_supervisor(state) == CS_KNOWLEDGE_EXPERT
-
-    def test_run_expert_query(self):
-        state = {"supervisor_decision": {
-            "next_action": "run_expert",
-            "next_expert": "query",
-        }}
-        assert route_after_cs_supervisor(state) == CS_QUERY_EXPERT
-
-    def test_run_expert_action(self):
-        state = {"supervisor_decision": {
-            "next_action": "run_expert",
-            "next_expert": "action",
-        }}
-        assert route_after_cs_supervisor(state) == CS_ACTION_EXPERT
-
-    def test_run_expert_complaint(self):
-        state = {"supervisor_decision": {
-            "next_action": "run_expert",
-            "next_expert": "complaint",
-        }}
-        assert route_after_cs_supervisor(state) == CS_COMPLAINT_EXPERT
-
-    def test_unknown_expert_defaults_to_knowledge(self):
-        state = {"supervisor_decision": {
-            "next_action": "run_expert",
-            "next_expert": "nonexistent",
-        }}
-        assert route_after_cs_supervisor(state) == CS_KNOWLEDGE_EXPERT
 
 
 class TestCSupervisorNodeCommandRouting:
