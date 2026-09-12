@@ -34,6 +34,12 @@ Reporter    — 结果汇总 + 引用格式化
 
 支持 8 个 Skill 并行调度，超时降级，Self-Correction 自动修正。
 
+**节点类型口径**（表述系统规模时请勿混用"Agent"一词）：
+LLM 决策节点 3 个（Planner / Critique / Reporter）；混合路由点 2 个
+（三层 Router 与 CS Supervisor 的 LLM 兜底层）；Supervisor 为纯规则 DAG
+调度器；客服子图 5 专家中仅 Knowledge 专家走 LLM（经 RAG），其余为
+业务服务编排。共 10 个工具型 Skill 节点。
+
 ### NL2SQL 数据分析
 
 ```

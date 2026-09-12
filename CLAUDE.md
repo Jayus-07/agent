@@ -24,11 +24,19 @@ API → Router → Planner → Critique → Supervisor → Skills → Reporter
 ### 节点职责
 
 - **Planner**: 只负责任务拆解 → 输出 Capability DAG（nodes + edges），禁止调用 Tool/Skill/DB
-- **Critique**: 审查修正计划
+- **Critique**: 审查修正计划（规则校验 0ms 优先，仅 anomaly 时调 LLM）
 - **Supervisor**: 按 edges 依赖顺序调度，通过 Send[] 并行派发，自动注入 previous_outputs
 - **Skill**: 业务能力封装，不直接访问外部系统
 - **Reporter**: 汇总 step_results → Markdown
 - **Tool**: 无状态、可测试
+
+### Agent 口径
+
+描述系统规模时区分节点类型，勿把所有节点统称 Agent：
+- **LLM 决策节点（3）**: planner / critique（仅 anomaly 时）/ reporter
+- **混合路由点（2）**: router（rule→vector→llm 三层兜底）、cs_supervisor（规则优先+LLM 兜底）
+- **规则/执行节点**: 主图 supervisor 是纯规则 DAG 调度器（不调 LLM）；客服 5 专家中仅 knowledge 走 LLM（经 RAG），query/action/complaint/handoff 为业务服务编排
+- **工具节点（10）**: skills/registry.py 注册的 Skill，非决策 agent
 
 ### Capability DAG
 
