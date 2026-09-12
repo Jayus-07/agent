@@ -212,6 +212,7 @@ async def chat_stream(
 
         client_aborted = False
         final_status = "ok"
+        _ttft_recorded = False
 
         def _record_status(status: str):
             """真实记录 ok/error/abort 计数（P0-2：原 _record_stream_metrics 是死代码）。"""
@@ -239,6 +240,14 @@ async def chat_stream(
                 evt_type = evt.get("event")
                 if evt_type == "error":
                     final_status = "error"
+                elif evt_type == "delta" and not _ttft_recorded:
+                    # TTFT：首个 delta 距请求开始（P1 流式改造的核心验收指标）
+                    _ttft_recorded = True
+                    try:
+                        from backend.observability.metrics import chat_ttft_seconds
+                        chat_ttft_seconds.observe(time.monotonic() - t0)
+                    except Exception:
+                        logger.debug("[P1] TTFT 指标记录失败", exc_info=True)
                 yield _sse_encode(evt)
                 await asyncio.sleep(0)  # 让出事件循环
 

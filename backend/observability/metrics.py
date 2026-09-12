@@ -78,6 +78,15 @@ chat_stream_event_produced_total = Counter(
     labelnames=("event",),  # status | delta | log | done | error | meta
 )
 
+# ── TTFT 可观测性（P1 真 token 级流式）──
+# 首 delta 事件距请求开始的秒数：真流式下 ≈ 首个生成 chunk 到达时间，
+# 假打字机回退时 ≈ 全链路耗时。对比两条曲线即可验证流式改造收益。
+chat_ttft_seconds = Histogram(
+    "chat_ttft_seconds",
+    "Time to first delta event (TTFT) in seconds",
+    buckets=(0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0, 30.0, 60.0),
+)
+
 # ── 运营指标（2026-08-11 新增）──
 # 累计计数（用于计算 rates）
 rag_query_total = Counter(

@@ -92,7 +92,17 @@ LLM_CONTEXT_LENGTH = int(os.getenv("LLM_CONTEXT_LENGTH", "4096"))
 
 # LLM 请求超时（秒）
 LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "30"))
-RERANK_TIMEOUT = int(os.getenv("RERANK_TIMEOUT", "15"))
+# Rerank API 超时：超时后 RerankCompressor 降级透传原文档（排序是增强组件），
+# 收紧到 4s 避免检索段被慢 rerank 拖住尾延迟
+RERANK_TIMEOUT = int(os.getenv("RERANK_TIMEOUT", "4"))
+
+# ── TTFT 优化：定向节点输出上限与超时 ──
+# Router LLM 兜底：输出只是路由 JSON，限制 max_tokens 缩短生成时间；
+# 超时收紧到 6s（原 12s），超时落默认路由（plan + rag.search）
+ROUTER_LLM_TIMEOUT = int(os.getenv("ROUTER_LLM_TIMEOUT", "6"))
+ROUTER_LLM_MAX_TOKENS = int(os.getenv("ROUTER_LLM_MAX_TOKENS", "256"))
+# Planner 输出是计划 JSON（通常 <500 token），限制上限防推理模型发散
+PLANNER_LLM_MAX_TOKENS = int(os.getenv("PLANNER_LLM_MAX_TOKENS", "1024"))
 
 # 异步并发控制
 LLM_MAX_CONCURRENCY = int(os.getenv("LLM_MAX_CONCURRENCY", "4"))
@@ -104,6 +114,13 @@ LLM_RATE_LIMIT_BURST = float(os.getenv("LLM_RATE_LIMIT_BURST", "1000"))
 
 # 限流执行模式：off=仅日志（默认）| wait=阻塞等待 | reject=抛异常拒绝
 LLM_RATE_LIMIT_ENFORCE = os.getenv("LLM_RATE_LIMIT_ENFORCE", "off").strip().lower()
+
+# ── P1 真 token 级流式（TTFT 优化）────────────────────────────
+# true: 生成节点（RAG 链/Reporter）走 llm.stream，增量经 sink 推给 SSE；
+# false: 回退旧行为（整图跑完 + 假打字机 emit_delta_events）
+ENABLE_TOKEN_STREAMING = os.getenv(
+    "ENABLE_TOKEN_STREAMING", "true"
+).strip().lower() in ("1", "true", "yes")
 
 # =====================================================
 # Token Usage Tracking (P0 - 审计日志)
@@ -136,9 +153,11 @@ QWEN_API_BASE = os.getenv(
 
 # ── P1-7: LLM 韧性（重试 + 熔断 fallback）────────────────────
 # 瞬时错误（超时/连接/限流）的显式重试次数（0 = 不重试）
-LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
-# 重试退避基数（秒），第 n 次重试等待 base**n
-LLM_RETRY_BACKOFF_BASE = float(os.getenv("LLM_RETRY_BACKOFF_BASE", "1.5"))
+# 交互链路 TTFT 考量：默认收紧为 1 次（批处理/评测脚本可 env 调回 2）
+LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "1"))
+# 重试退避基数（秒），第 n 次重试等待 base**n；1.5 时 2 次重试累计等 3.75s，
+# 交互场景改 0.5 把尾延迟压到 0.75s
+LLM_RETRY_BACKOFF_BASE = float(os.getenv("LLM_RETRY_BACKOFF_BASE", "0.5"))
 # 熔断开路/重试耗尽后的备用模型（须是 AVAILABLE_MODELS 中的模型名；
 # 留空 = 不切备用模型，直接返回降级话术）
 LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "")

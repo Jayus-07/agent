@@ -55,6 +55,63 @@ def _thread_local_user_id() -> str | None:
     return _user_id_var.get()
 
 
+# =====================================================
+# P1 真 token 级流式：per-turn 增量 sink
+# =====================================================
+# 生成节点（RAG 链 / Reporter）切到 llm.stream 后，proxy 在每个内容 chunk
+# 到达时调用当前上下文的 sink 回调，把增量文本推给 SSE 层。
+# ContextVar 按上下文隔离：并发请求各推各的，不会串味；
+# LangGraph/LCEL 在同线程执行节点（含 asyncio.run 包装），上下文可达。
+# 限制：LangGraph 并行 Send 的分支任务在内部线程池执行，上下文不可达 →
+# 该分支不产生 delta（最终答案仍由节点输出兜底，仅少流式体验）。
+
+_stream_sink_var: _contextvars.ContextVar = _contextvars.ContextVar(
+    "llm_stream_sink", default=None,
+)
+
+
+def set_stream_sink(sink) -> None:
+    """设置当前上下文的流式增量回调 sink(text: str) -> None。"""
+    _stream_sink_var.set(sink)
+
+
+def reset_stream_sink() -> None:
+    """清除当前上下文的流式 sink（请求结束时调用，防线程复用串味）。"""
+    _stream_sink_var.set(None)
+
+
+def emit_stream_delta(text: str) -> bool:
+    """把生成增量转发给当前 sink。无 sink / 空 text / sink 失败均静默跳过。
+
+    Returns:
+        是否真正转发了（供调用方判断本轮是否发生过流式输出）。
+    """
+    if not text:
+        return False
+    sink = _stream_sink_var.get()
+    if sink is None:
+        return False
+    try:
+        sink(text)
+        return True
+    except Exception:
+        return False
+
+
+def extract_chunk_text(chunk) -> str:
+    """从流式 chunk 提取文本（兼容 str / AIMessageChunk / 多模态 content list）。"""
+    if isinstance(chunk, str):
+        return chunk
+    c = getattr(chunk, "content", "")
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return "".join(
+            p.get("text", "") for p in c if isinstance(p, dict)
+        )
+    return str(c) if c else ""
+
+
 def _get_provider_for(model_name: str) -> str:
     """根据模型名查找所属 provider"""
     for m in AVAILABLE_MODELS:
@@ -568,6 +625,50 @@ class _LLMProxy:
                                 duration_ms=(time.monotonic() - _t0) * 1000,
                             )
                 return astream_wrapper
+            # sync generator（stream）：修好此前走通用 wrapper 的坏路径
+            # （generator 未消费就被 _record_tokens，token 清空），
+            # 并包上限流 + sink 增量转发 + token 记录 + 首 chunk 前重试。
+            # 流中途失败无法安全重试（会重复已输出内容）——
+            # 仅"第一个内容 chunk 之前"的瞬时错误整体重试；输出后失败直接抛。
+            if inspect.isgeneratorfunction(attr):
+                def stream_wrapper(*args, **kwargs):
+                    user_id = kwargs.get("user_id") or _thread_local_user_id()
+                    _enforce_rate_limit(user_id)
+                    _t0 = time.monotonic()
+                    usage_chunk = None
+                    yielded_content = False
+                    try:
+                        for attempt in range(LLM_MAX_RETRIES + 1):
+                            try:
+                                for chunk in attr(*args, **kwargs):
+                                    if getattr(chunk, "usage_metadata", None):
+                                        usage_chunk = chunk
+                                    wrapped = _wrap_result(chunk)
+                                    text = extract_chunk_text(wrapped)
+                                    if text:
+                                        yielded_content = True
+                                        emit_stream_delta(text)
+                                    yield wrapped
+                                break  # 正常结束
+                            except Exception as e:
+                                if yielded_content or not _is_transient(e) \
+                                        or attempt >= LLM_MAX_RETRIES:
+                                    raise
+                                delay = LLM_RETRY_BACKOFF_BASE ** (attempt + 1)
+                                logger.warning(
+                                    f"[LLM:stream] 首 chunk 前瞬时错误，重试 "
+                                    f"{attempt + 1}/{LLM_MAX_RETRIES} "
+                                    f"({type(e).__name__}, {delay:.1f}s 后)")
+                                time.sleep(delay)
+                    finally:
+                        # 正常结束 / 中止 / 客户端断开都记录（finally 在
+                        # generator close 时也执行），与 astream 包装对齐
+                        if usage_chunk is not None:
+                            _record_tokens(
+                                usage_chunk,
+                                duration_ms=(time.monotonic() - _t0) * 1000,
+                            )
+                return stream_wrapper
             # async 方法（ainvoke/agenerate）：coroutine 必须先 await 才能取结果，
             # 否则 _record_tokens 作用在未执行的 coroutine 上会把 token 清空（既有 bug）。
             if inspect.iscoroutinefunction(attr):

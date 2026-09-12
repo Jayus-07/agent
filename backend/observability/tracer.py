@@ -273,6 +273,15 @@ class TraceCollector:
         set_log_context(trace_id=rid, session_id=session_id)
         return trace
 
+    def bind(self, trace: TraceRecord | None) -> None:
+        """显式把 trace 绑定到当前执行上下文（ContextVar）。
+
+        场景：P1 流式改造后 graph.stream 在独立 worker 线程执行，
+        新线程不继承 producer 线程的 ContextVar，须在 worker 内重新绑定，
+        否则该线程内的 start_span 全部落 noop（软失败，静默丢 trace）。
+        """
+        _current_trace_var.set(trace)
+
     def start_span(self, span_id: str, parent_id: str | None = None,
                    name: str = "", type: str = "",
                    kind: str = SpanKind.TOOL.value,

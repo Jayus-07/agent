@@ -37,13 +37,16 @@ def _extract_json(text: str) -> dict | None:
 class LLMRouter:
     """LLM Router：用 qwen2.5:3b 做最后兜底。"""
 
-    def __init__(self, timeout: int = 12):
-        self.timeout = timeout
+    def __init__(self, timeout: int | None = None):
+        # 超时默认收紧到 6s（原 12s）：兜底层超时即落默认路由，别拖尾延迟
+        from backend.config import ROUTER_LLM_TIMEOUT
+        self.timeout = timeout if timeout is not None else ROUTER_LLM_TIMEOUT
 
     def route(self, query: str) -> RouteDecision:
         """LLM 判断意图 + 选能力。返回 RouteDecision（candidates 来自 LLM）。"""
         from backend.infra.timeout import safe_call_with_timeout
         from backend.infra.llm import llm
+        from backend.config import ROUTER_LLM_MAX_TOKENS
         from backend.shared.logger import logger
 
         try:
@@ -60,6 +63,8 @@ class LLMRouter:
                 default_value=None,
                 error_message=f"[LLMRouter] 推理超时 ({self.timeout}s)",
                 input=[{"role": "user", "content": prompt}],
+                # 输出只是路由 JSON，限制生成上限直接缩短 LLM 耗时（TTFT）
+                max_tokens=ROUTER_LLM_MAX_TOKENS,
             )
         except Exception as e:
             logger.warning(f"[LLMRouter] 推理异常: {e}")

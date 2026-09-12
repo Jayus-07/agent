@@ -174,19 +174,10 @@ def planner_node(state: dict) -> dict:
 # JSON 提取（P1-14：统一收敛到 backend.shared.json_extractor）
 # =====================================================
 
-def _extract_json(text: str) -> dict:
-    """4 层修复管道（实现见 shared/json_extractor.py）。
-
-    全失败返回空 dict（触发 _fallback_plan），并记录降级告警。
-    """
-    from backend.shared.json_extractor import extract_json_or_empty
-
-    result = extract_json_or_empty(text)
-    if not result:
-        logger.warning("[Planner] JSON 修复管道全部失败，触发兜底")
-        alert = make_alert("PLAN_JSON_INVALID", {"text_preview": text[:200]})
-        log_degradation(alert)
-    return result
+# 解析/规范化工具已抽离到 plan_utils（断开 critique→planner 循环导入）；
+# 保留原模块别名，兼容外部对 planner._extract_json 的 patch
+from backend.agents.planner.plan_utils import extract_json as _extract_json
+from backend.agents.planner.plan_utils import normalize_plan as _normalize_plan
 
 
 # =====================================================
@@ -297,51 +288,3 @@ def _fallback_plan(question: str) -> dict:
         },
         "edges": {},
     }
-
-
-def _normalize_plan(plan: dict) -> dict:
-    """校验并规范化 plan 结构"""
-    valid_capabilities = set(tool_registry.get_available_capabilities())
-
-    raw_nodes = plan.get("nodes", [])
-    nodes = {}
-
-    if isinstance(raw_nodes, list):
-        for node in raw_nodes:
-            sid = str(node.get("step_id", ""))
-            capability = node.get("capability", "")
-            if capability not in valid_capabilities:
-                logger.warning(f"[Planner] 无效 capability '{capability}' (step={sid})，跳过")
-                continue
-            nodes[sid] = {
-                "step_id": sid,
-                "capability": capability,
-                "description": node.get("description", ""),
-                "params": node.get("params", {}),
-            }
-    elif isinstance(raw_nodes, dict):
-        for sid, node in raw_nodes.items():
-            capability = node.get("capability", "")
-            if capability not in valid_capabilities:
-                logger.warning(f"[Planner] 无效 capability '{capability}' (step={sid})，跳过")
-                continue
-            nodes[str(sid)] = {
-                "step_id": str(sid),
-                "capability": capability,
-                "description": node.get("description", ""),
-                "params": node.get("params", {}),
-            }
-
-    # 规范化 edges
-    raw_edges = plan.get("edges", {})
-    edges = {}
-    if isinstance(raw_edges, dict):
-        for key, deps in raw_edges.items():
-            if isinstance(deps, str):
-                deps = [deps]
-            elif not isinstance(deps, list):
-                deps = []
-            deps = [str(d) for d in deps]
-            edges[str(key)] = deps
-
-    return {"nodes": nodes, "edges": edges}

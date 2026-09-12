@@ -84,7 +84,8 @@ class MemoryManager:
             logger.debug("[P1-10] async engine 关闭失败（进程退出路径）", exc_info=True)
 
     def start_session(self, session_id: str, question: str, user_id: str = "default") -> ShortTermBuffer:
-        result = self._run(lambda: self._service.start_session(session_id, user_id))
+        # question 透传给 L3：长期记忆检索用当前问题做语义 query（此前误用 session_id）
+        result = self._run(lambda: self._service.start_session(session_id, user_id, query=question))
         if result is None:
             return ShortTermBuffer()
         return result

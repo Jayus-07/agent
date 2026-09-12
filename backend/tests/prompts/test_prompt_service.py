@@ -95,6 +95,8 @@ class TestPublish:
         mock_version.version = 2
         mock_version.variables = ["name"]
         mock_version.id = 10
+        # publish 守卫要求版本状态为 passed/published（MagicMock 默认值会被拒绝）
+        mock_version.status = "passed"
 
         mock_prompt = MagicMock()
         mock_prompt.id = 1

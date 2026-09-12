@@ -45,7 +45,8 @@ class _FakeLLM:
         self._exc = exc
         self.calls: list[list] = []
 
-    def invoke(self, messages, config=None):
+    def invoke(self, messages, config=None, **kwargs):
+        # planner 会传 max_tokens 等生成参数，桩必须吞掉
         self.calls.append(messages)
         if self._exc:
             raise self._exc

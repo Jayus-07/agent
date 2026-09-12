@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal, TypedDict
 from langgraph.graph.message import add_messages
 
 from backend.customer_service.context import CSContext
+from backend.orchestration.request_context import RequestContext
 
 
 def _merge_step_results(left: dict, right: dict) -> dict:
@@ -70,6 +71,10 @@ class AgentState(TypedDict):
     # 降级步骤集合：用 operator.or_ 作为 reducer（即 set union）
     # 节点必须返回**新** set（用 | 运算），禁止原地 .add() 修改 — 否则 reducer 看不到变化
     _degraded_steps: Annotated[set[str], operator.or_]
+    # 请求级执行上下文（trace/session/user/流式 sink）— 随状态显式流动，
+    # Send 派发时透传（scheduler.route_after_supervisor），节点入口经
+    # trace_middleware 统一重新绑定（跨线程 ContextVar 不可继承）
+    request_context: RequestContext
 
 
 class OrchestratorState(AgentState):

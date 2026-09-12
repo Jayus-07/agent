@@ -14,6 +14,15 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import importlib.util
+import pytest
+
+# ragas 为可选依赖（pyproject extras）；patch("ragas.metrics.*") 需要
+# 模块可导入，未安装时跳过"已安装路径"用例（"未安装降级"用例不依赖 ragas）
+_ragas_missing = importlib.util.find_spec("ragas") is None
+_requires_ragas = pytest.mark.skipif(
+    _ragas_missing, reason="ragas 未安装（可选依赖）",
+)
 import pytest
 
 
@@ -87,6 +96,7 @@ class TestSafeWrapperEmptyInput:
 class TestComputeRagasMetrics:
     """compute_ragas_metrics：返回值结构 / 失败隔离 / NaN 过滤 / GT 依赖裁剪。"""
 
+    @_requires_ragas
     def test_returns_ragas_prefixed_keys(self):
         """验证返回值结构：全部 ragas_* 前缀，standard 档 4 项指标。"""
         result = _compute_with_patched_metrics(
@@ -104,6 +114,7 @@ class TestComputeRagasMetrics:
         assert result["ragas_context_recall"] == 0.85
         assert result["ragas_faithfulness"] == 0.85
 
+    @_requires_ragas
     def test_single_metric_exception_isolated(self):
         """验证失败隔离：单个 metric 异常记 None，不传播、不影响其他指标。"""
         calls = {"n": 0}
@@ -121,6 +132,7 @@ class TestComputeRagasMetrics:
         assert result["ragas_context_recall"] is None
         assert result["ragas_faithfulness"] == 0.9
 
+    @_requires_ragas
     def test_nan_values_recorded_as_none(self):
         """验证 NaN 被过滤为 None（缺失语义），不冒充真实得分。"""
         values = iter([0.85, float("nan"), 0.90, float("nan")])
@@ -138,6 +150,7 @@ class TestComputeRagasMetrics:
         assert result["ragas_context_precision"] == 0.90
         assert result["ragas_answer_relevancy"] is None
 
+    @_requires_ragas
     def test_ground_truth_none_skips_dep_metrics(self):
         """ground_truth 为空时自动移除依赖指标（ContextRecall/Precision/Correctness）。"""
         result = _compute_with_patched_metrics(

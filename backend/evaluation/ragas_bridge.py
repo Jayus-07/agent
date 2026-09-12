@@ -186,8 +186,16 @@ async def _patched_parse_output_string(
 
 
 def _apply_ragas_patches() -> None:
-    """应用所有 RAGAS monkey-patches。"""
-    import ragas.prompt.pydantic_prompt as _pp
+    """应用所有 RAGAS monkey-patches。
+
+    ragas 为可选依赖（pyproject extras），未安装时跳过补丁——
+    模块导入不能因此失败，指标计算会按"ragas 未安装"降级为 None。
+    """
+    try:
+        import ragas.prompt.pydantic_prompt as _pp
+    except ImportError:
+        logger.info("[RAGAS-patch] ragas 未安装，跳过 monkey-patch")
+        return
 
     _pp.extract_json = _robust_extract_json
     _pp.RagasOutputParser.parse_output_string = _patched_parse_output_string

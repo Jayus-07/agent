@@ -8,10 +8,14 @@ Tracing（2026-07-16）：ask() / stream_events() 自动产出 TraceRecord + Spa
 """
 from __future__ import annotations
 
+import queue
+import threading
 import time
 from typing import Generator
 
+from backend.config import ENABLE_TOKEN_STREAMING
 from backend.orchestration.graph.builder import _parse_event, build_graph
+from backend.orchestration.request_context import RequestContext, put_context
 from backend.orchestration.graph.events import (
     emit_delta_events,
     extract_sources_from_results,
@@ -113,6 +117,10 @@ class MultiAgentSystem:
                 question, session_id, kb_id, l1.messages,
                 guard_result=guard_result.model_dump(mode="json"),
             )
+            # 请求上下文随状态显式流动：节点入口（trace_middleware）从 state
+            # 绑定 trace/session/user，LangGraph Send 分支也天然可达
+            put_context(initial_state, RequestContext(
+                session_id=session_id, user_id=user_id, kb_id=kb_id, trace=trace))
         except Exception as e:
             trace_collector.end_span(load_span, status="error",
                                      metrics={"error": str(e)[:100]})
@@ -325,7 +333,14 @@ class MultiAgentSystem:
         stop_event=None,
         user_id: str = "default",
     ) -> Generator[dict, None, None]:
-        """SSE 流式处理。同步产出 trace + span 树。"""
+        """SSE 流式处理。同步产出 trace + span 树。
+
+        P1 真 token 级流式：graph.stream 在 worker 线程执行，节点事件与
+        LLM 生成增量（sink 回调）合并进同一队列，生成器逐个产出 ——
+        skill 节点生成期间 delta 持续流出，TTFT 从"整图跑完"提前到
+        "首个生成 chunk 到达"。无流式输出时（非 LLM 路径/降级）兜底
+        emit_delta_events 假打字机，保证任何路径都有增量呈现。
+        """
         from backend.observability.tracer import trace_collector
 
         start_time = time.time()
@@ -355,8 +370,6 @@ class MultiAgentSystem:
             input={"session_id": session_id})
         try:
             l1 = self._memory.start_session(session_id, question, user_id=user_id)
-            from backend.orchestration.tools import set_session_id
-            set_session_id(session_id)
             initial_state = make_initial_state(
                 question, session_id, kb_id, l1.messages,
                 guard_result=guard_result.model_dump(mode="json"),
@@ -372,102 +385,168 @@ class MultiAgentSystem:
         trace_collector.end_span(
             load_span, metrics={"history_messages": len(l1.messages)})
 
-        final_answer = ""
-        all_step_results = {}
-        current_plan = dict(initial_state.get("plan", {}))
-        plan_changed = False
-        route_mode = "plan"  # fix f8：捕获 Router 决策，trace 拓扑按模式构建
-        cs_context_snapshot = {}  # CS: 捕获 Router 输出的 cs_context
+        # ── worker 线程执行图 + 事件合并队列 ──
+        # merged_q 元素: ("evt", event_dict) 或 ("done", None) 哨兵
+        merged_q: queue.Queue = queue.Queue()
+        # 请求上下文：trace/sink 显式持有并随状态流动，Send 分支经
+        # trace_middleware 从 state 重新绑定（ContextVar 不跨线程继承）
+        request_ctx = RequestContext(
+            session_id=session_id, user_id=user_id, kb_id=kb_id, trace=trace)
+        ctx = {
+            "final_answer": "",
+            "all_step_results": {},
+            "current_plan": dict(initial_state.get("plan", {})),
+            "plan_changed": False,
+            "route_mode": "plan",   # fix f8：捕获 Router 决策，trace 拓扑按模式构建
+            "cs_context_snapshot": {},
+            "usage": None,
+            "aborted": False,       # 用户中止（worker 内检测）
+            "worker_error": False,  # 图执行异常（worker 已 yield error 事件）
+        }
+        streamed = [False]  # 本轮是否发生过真流式 delta
+
+        def _sink(text: str) -> None:
+            """proxy 流式 sink：生成 chunk 增量直接入队（worker/LangGraph 线程调用）。"""
+            if stop_event is not None and stop_event.is_set():
+                return
+            streamed[0] = True
+            merged_q.put(("evt", {
+                "event": "delta", "data": {"content": text, "ts": time.time()},
+            }))
+
+        request_ctx.stream_sink = _sink if ENABLE_TOKEN_STREAMING else None
+        put_context(initial_state, request_ctx)
+
+        def _worker() -> None:
+            # ContextVar 不跨线程：worker 入口整体绑定一次请求上下文；
+            # Send 内部线程分支由节点入口的 bind_from_state 覆盖
+            request_ctx.bind()
+            try:
+                for event in self._graph.stream(initial_state):
+                    if stop_event is not None and stop_event.is_set():
+                        ctx["aborted"] = True
+                        break
+
+                    node_name, node_output = _parse_event(event)
+                    if node_name is None:
+                        continue
+
+                    merged_q.put(("evt", {"event": "status",
+                                          "data": {"node": node_name, "ts": time.time()}}))
+                    for evt in self._stream_node_events(node_name, node_output):
+                        merged_q.put(("evt", evt))
+
+                    if node_name in self._skill_nodes or node_name == "supervisor" \
+                            or node_name in ("workflow_executor", "skill_executor",
+                                             "cs_knowledge", "cs_pending",
+                                             "cs_graph_node"):
+                        ctx["all_step_results"].update(node_output.get("step_results", {}))
+                        # direct/workflow executor 自己就是最终产出者
+                        executor_answer = node_output.get("final_answer", "")
+                        if executor_answer:
+                            ctx["final_answer"] = executor_answer
+                    elif node_name == "reporter":
+                        # reporter 只在 plan 模式下才是最终答案；direct/workflow 已由 executor 产出
+                        if not ctx["final_answer"]:
+                            ctx["final_answer"] = node_output.get("final_answer", "")
+                    elif node_name == "router":
+                        # fix f8：捕获路由模式供 trace 拓扑快照使用
+                        if node_output.get("route_mode"):
+                            ctx["route_mode"] = node_output["route_mode"]
+                        # CS: 捕获 cs_context 供 trace 拓扑快照使用
+                        if node_output.get("cs_context"):
+                            ctx["cs_context_snapshot"] = node_output["cs_context"]
+                    elif node_name == "cs_graph_node":
+                        # Phase 4: CS Graph 适配器输出合并后的 cs_context
+                        if node_output.get("cs_context"):
+                            ctx["cs_context_snapshot"] = node_output["cs_context"]
+                    elif node_name in ("planner", "critique"):
+                        # 捕获 plan 用于 trace 重建
+                        if node_output.get("plan"):
+                            ctx["current_plan"] = node_output["plan"]
+                        if node_output.get("_plan_changed"):
+                            ctx["plan_changed"] = True
+                # 用量 ContextVar 在 worker 上下文累计，必须就地汇总
+                ctx["usage"] = summarize_turn_usage()
+            except Exception as e:
+                logger.error(f"[MultiAgent] 流式执行失败: {e}")
+                ctx["worker_error"] = True
+                merged_q.put(("evt", {"event": "error",
+                                      "data": {"message": f"执行失败: {e}", "ts": time.time()}}))
+            finally:
+                from backend.infra.llm.proxy import reset_stream_sink
+                reset_stream_sink()
+                merged_q.put(("done", None))
+
+        threading.Thread(target=_worker, daemon=True, name="graph-worker").start()
 
         try:
-            for event in self._graph.stream(initial_state):
-                if stop_event is not None and stop_event.is_set():
-                    yield {"event": "error", "data": {"message": "用户中止", "ts": time.time()}}
-                    _end_root(trace, status="error", metrics={"reason": "user_abort"})
-                    trace_collector.finish(trace, final_answer or "",
-                                           int((time.time() - start_time) * 1000), "", "")
-                    return
+            while True:
+                kind, evt = merged_q.get()
+                if kind == "done":
+                    break
+                yield evt
 
-                node_name, node_output = _parse_event(event)
-                if node_name is None:
-                    continue
-
-                yield {"event": "status", "data": {"node": node_name, "ts": time.time()}}
-                yield from self._stream_node_events(node_name, node_output)
-
-                if node_name in self._skill_nodes or node_name == "supervisor" \
-                        or node_name in ("workflow_executor", "skill_executor",
-                                         "cs_knowledge", "cs_pending",
-                                         "cs_graph_node"):
-                    all_step_results.update(node_output.get("step_results", {}))
-                    # direct/workflow executor 自己就是最终产出者
-                    executor_answer = node_output.get("final_answer", "")
-                    if executor_answer:
-                        final_answer = executor_answer
-                elif node_name == "reporter":
-                    # reporter 只在 plan 模式下才是最终答案；direct/workflow 已经由 executor 产出
-                    if not final_answer:
-                        final_answer = node_output.get("final_answer", "")
-                elif node_name == "router":
-                    # fix f8：捕获路由模式供 trace 拓扑快照使用
-                    if node_output.get("route_mode"):
-                        route_mode = node_output["route_mode"]
-                    # CS: 捕获 cs_context 供 trace 拓扑快照使用
-                    if node_output.get("cs_context"):
-                        cs_context_snapshot = node_output["cs_context"]
-                elif node_name == "cs_graph_node":
-                    # Phase 4: CS Graph 适配器输出合并后的 cs_context
-                    if node_output.get("cs_context"):
-                        cs_context_snapshot = node_output["cs_context"]
-                elif node_name in ("planner", "critique"):
-                    # 捕获 plan 用于 trace 重建
-                    if node_output.get("plan"):
-                        current_plan = node_output["plan"]
-                    if node_output.get("_plan_changed"):
-                        plan_changed = True
-
-            yield from emit_delta_events(final_answer, stop_event)
-            if stop_event is not None and stop_event.is_set():
+            # ── 图执行结束后的收尾（原同步逻辑语义保持）──
+            if ctx["aborted"]:
                 yield {"event": "error", "data": {"message": "用户中止", "ts": time.time()}}
+                _end_root(trace, status="error", metrics={"reason": "user_abort"})
+                trace_collector.finish(trace, ctx["final_answer"] or "",
+                                       int((time.time() - start_time) * 1000), "", "")
+                return
+            if ctx["worker_error"]:
+                try:
+                    _end_root(trace, status="error", metrics={"error": "graph_failed"})
+                    trace_collector.finish(trace, ctx["final_answer"] or "",
+                                           int((time.time() - start_time) * 1000), "", "")
+                except Exception:
+                    logger.debug("[P1-10] 错误路径 trace 收尾失败", exc_info=True)
                 return
 
-            # ── Tracing: 重建 span 树（仅在未被中止时执行；stop 后直接退出，
-            #    既避免错误地把半截内容持久化为最终答案，也避开不必要的 trace 重建）──
+            # 未发生过真流式输出 → 兜底假打字机（guard/降级/非 LLM 路径仍有增量呈现）
+            if not streamed[0] and ctx["final_answer"]:
+                yield from emit_delta_events(ctx["final_answer"], stop_event)
+                if stop_event is not None and stop_event.is_set():
+                    yield {"event": "error", "data": {"message": "用户中止", "ts": time.time()}}
+                    return
+
+            # ── Tracing: 重建 span 树 ──
             state_for_trace = {
-                "plan": current_plan,           # 从 Planner/Critique 捕获，非初始空 plan
-                "step_results": all_step_results,
-                "_supervisor_loop_count": _count_rounds_from_results(all_step_results),
+                "plan": ctx["current_plan"],       # 从 Planner/Critique 捕获，非初始空 plan
+                "step_results": ctx["all_step_results"],
+                "_supervisor_loop_count": _count_rounds_from_results(ctx["all_step_results"]),
                 "_degraded_steps": set(),
-                "_plan_changed": plan_changed,
-                "final_answer": final_answer,
-                "route_mode": route_mode,  # fix f8
-                "cs_context": cs_context_snapshot,
+                "_plan_changed": ctx["plan_changed"],
+                "final_answer": ctx["final_answer"],
+                "route_mode": ctx["route_mode"],   # fix f8
+                "cs_context": ctx["cs_context_snapshot"],
             }
             self._trace_from_state(trace, state_for_trace)
             _end_root(trace, metrics={"span_count": len(trace.spans) - 1})
-            trace_collector.finish(trace, final_answer,
+            trace_collector.finish(trace, ctx["final_answer"],
                                    int((time.time() - start_time) * 1000), "", "")
 
             _persist_cs_turn_if_needed(
-                cs_context_snapshot, session_id, question, final_answer, trace.id,
+                ctx["cs_context_snapshot"], session_id, question, ctx["final_answer"], trace.id,
             )
 
-            yield make_done_event(final_answer, all_step_results, start_time,
-                                  usage=summarize_turn_usage())
+            yield make_done_event(ctx["final_answer"], ctx["all_step_results"], start_time,
+                                  usage=ctx["usage"])
 
         except Exception as e:
             logger.error(f"[MultiAgent] 流式执行失败: {e}")
             yield {"event": "error", "data": {"message": f"执行失败: {e}", "ts": time.time()}}
             try:
                 _end_root(trace, status="error", metrics={"error": str(e)[:100]})
-                trace_collector.finish(trace, final_answer or "",
+                trace_collector.finish(trace, ctx["final_answer"] or "",
                                        int((time.time() - start_time) * 1000), "", "")
             except Exception:
                 logger.debug("[P1-10] 错误路径 trace 收尾失败", exc_info=True)
         finally:
             # 中止/早期失败路径 final_answer 为空：不落库，避免历史恢复时出现空气泡
-            if final_answer:
-                self._memory.end_turn(session_id, question, final_answer, user_id=user_id)
+            if ctx["final_answer"]:
+                self._memory.end_turn(session_id, question, ctx["final_answer"],
+                                      user_id=user_id)
 
     # =====================================================
     # Input Guard 辅助（短路 trace / span）

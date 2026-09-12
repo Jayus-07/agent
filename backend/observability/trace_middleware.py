@@ -74,6 +74,12 @@ class TraceMiddleware:
 
         @functools.wraps(node_fn)
         def wrapper(state: dict) -> dict:
+            # ── 请求上下文显式绑定（P1 重构）：节点可能跑在 LangGraph Send
+            # 内部线程池，ContextVar 不跨线程继承，须从 state 重新绑定。
+            # 必须在 current() 读取之前——绑定后 Send 分支的 span 才能挂上。
+            from backend.orchestration.request_context import bind_from_state
+            bind_from_state(state)
+
             trace = trace_collector.current()
             if trace is None:
                 return node_fn(state)

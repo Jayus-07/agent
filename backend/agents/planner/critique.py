@@ -20,7 +20,8 @@ import json
 
 from backend.infra.llm import llm
 from backend.orchestration.tool_registry import tool_registry
-from backend.agents.planner.planner import _extract_json, _normalize_plan
+from backend.agents.planner.plan_utils import extract_json as _extract_json
+from backend.agents.planner.plan_utils import normalize_plan as _normalize_plan
 from backend.observability.alerts import make_alert, log_degradation
 from backend.prompts.service import prompt_service
 from backend.shared.logger import logger

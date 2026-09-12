@@ -33,6 +33,19 @@ if not errorlevel 1 (
     echo [WARNING] Port 3000 in use - run stop_all.bat first
 )
 
+:: Block if Docker container holds port 8000 (gateway mode active)
+:: taskkill by port would kill com.docker.backend.exe and break Docker port forwarding
+docker ps --format "{{.Names}} {{.Ports}}" 2>nul | findstr /C:":8000->" >nul 2>&1
+if not errorlevel 1 (
+    echo [ERROR] Port 8000 is held by Docker container ^(app^) - gateway mode is active.
+    echo         This script starts a LOCAL backend on 8000 and would break Docker.
+    echo         Restart backend : docker compose restart app
+    echo         Restart frontend: close frontend window, then run start_micro.bat
+    echo         To switch to local mode: docker compose down first
+    pause
+    exit /b 1
+)
+
 :: Start backend in new window
 echo.
 echo Starting backend on port 8000 ...

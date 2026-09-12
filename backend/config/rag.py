@@ -211,6 +211,14 @@ ADAPTIVE_RETRIEVAL_ENABLED = os.getenv("ADAPTIVE_RETRIEVAL_ENABLED", "true").low
 ADAPTIVE_MIN_CHUNKS = int(os.getenv("ADAPTIVE_MIN_CHUNKS", "1"))         # 覆盖文档数/有效 chunk 低于此触发扩展
 ADAPTIVE_K_STEPS = [int(x) for x in os.getenv("ADAPTIVE_K_STEPS", "8,12,16").split(",")]  # 扩展步长
 
+# ====================================
+# 证据注入 token 预算（P3 上下文管理）
+# ====================================
+# rerank 后的证据按相关性顺序注入 LLM，超出预算的尾部文档整体丢弃。
+# 弥补"仅条数控制"（RERANK_TOP_K / evidence 取前 N）对长文档失效的问题。
+# 0 = 关闭预算，仅条数控制
+EVIDENCE_TOKEN_BUDGET = int(os.getenv("EVIDENCE_TOKEN_BUDGET", "3000"))
+
 # 摘要长度限制
 SUMMARY_MAX_LENGTH = 250
 

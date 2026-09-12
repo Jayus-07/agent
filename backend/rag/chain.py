@@ -338,16 +338,22 @@ class RAGChain:
             try:
                 # ── P1 真 token 级流式：流式消费生成 chunk，边生成边经 sink
                 # 推给 SSE（TTFT 从"生成完"提前到"首 chunk 到达"）。
-                # 增量聚合成完整答案后包成 AIMessage 返回，下游 metrics/
-                # 决策逻辑与 invoke 路径一致。开关关闭或无 sink 时走 invoke。
+                # 聚合后返回类型与 invoke 保持一致（当前版本
+                # create_stuff_documents_chain 返回 str，下游 strip_think
+                # 等仅接受 str）；开关关闭时走 invoke。
                 if ENABLE_TOKEN_STREAMING:
                     parts: list[str] = []
+                    is_message = False
                     for chunk in _stuff.stream(inp):
                         text = extract_chunk_text(chunk)
-                        if text:
-                            parts.append(text)
-                            emit_stream_delta(text)
-                    r = AIMessage(content="".join(parts))
+                        if not text:
+                            continue
+                        parts.append(text)
+                        emit_stream_delta(text)
+                        if not isinstance(chunk, str) and hasattr(chunk, "content"):
+                            is_message = True
+                    joined = "".join(parts)
+                    r = AIMessage(content=joined) if is_message else joined
                 else:
                     r = _stuff.invoke(inp)
                 # 注入 token + finish_reason + cost_usd（从 proxy ContextVar 读，

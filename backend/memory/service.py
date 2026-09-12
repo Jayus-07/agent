@@ -12,6 +12,8 @@ from backend.memory.importance import ImportanceScorer
 from backend.memory.retriever import HybridRetriever
 from backend.memory.decay import MemoryDecayService
 from backend.memory.pii_filter import scan_and_sanitize
+from backend.memory.token_budget import trim_messages_to_budget
+from backend.config import HISTORY_TOKEN_BUDGET
 from langchain_core.messages import SystemMessage
 from backend.shared.logger import logger
 
@@ -39,7 +41,9 @@ class MemoryService:
     # Session lifecycle
     # ============================================================
 
-    async def start_session(self, session_id: str, user_id: str = "default") -> ShortTermBuffer:
+    async def start_session(
+        self, session_id: str, user_id: str = "default", query: str = ""
+    ) -> ShortTermBuffer:
         async with AsyncSessionLocal() as db_session:
             try:
                 srepo = SessionRepository(db_session)
@@ -78,14 +82,26 @@ class MemoryService:
                 # L3 → L1
                 retriever = HybridRetriever(mrepo)
                 l3 = LongTermMemory(mrepo)
-                # Use a dummy query to get user context
-                emb = l3.embedding.embed_query(session_id)
-                records = await retriever.retrieve(session_id, emb, user_id, top_k=5)
+                # L3 语义 query：用当前用户问题检索长期记忆（此前误用 session_id，
+                # 召回与当前问题语义无关）；空 query 兜底回退 session_id 保持旧行为
+                l3_query = query or session_id
+                emb = l3.embedding.embed_query(l3_query)
+                records = await retriever.retrieve(l3_query, emb, user_id, top_k=5)
                 if records:
                     facts = [MemoryFact(fact_type=r.memory_type, content=r.content, session_id=r.session_id) for r in records]
                     prompt_text = LongTermMemory.format_for_prompt(facts)
                     l1._messages.insert(0, SystemMessage(content=prompt_text))
                     logger.info(f"[MemoryService] 注入 {len(records)} 条长期记忆 (session={session_id})")
+
+                # Token 预算裁剪（P3）：L1 条数上限（20 条）挡不住单条超长消息，
+                # 注入摘要/长期记忆后按 token 整体裁剪，防止挤爆 LLM_CONTEXT_LENGTH
+                kept, dropped = trim_messages_to_budget(
+                    l1._messages, HISTORY_TOKEN_BUDGET)
+                if dropped:
+                    l1._messages = kept
+                    logger.info(
+                        f"[MemoryService] 历史 token 预算裁剪: 丢弃 {dropped} 条旧消息 "
+                        f"(budget={HISTORY_TOKEN_BUDGET})")
 
                 await db_session.commit()
                 return l1

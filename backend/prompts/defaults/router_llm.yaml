@@ -8,5 +8,12 @@ variables:
 template: |
   路由能力选择，输出JSON。
   能力: sql.query|rag.search|business.analyze|report.generate|email.send|data.export|web.search|data.collect|daily_report|inventory_alert
+  选择规则:
+  - rag.search: 公司内部知识库问题（制度/流程/政策/SOP/商品规范/售后处理等），业务咨询默认选它
+  - web.search: 仅当用户明确要求联网搜索、查询外部网站或强调需要实时网络信息时才可选，内部知识问题禁止使用
+  - sql.query: 业务数据统计与查询（销量/库存/退款金额/客户排名等结构化数据）
+  - business.analyze: 对已有业务数据做原因分析或趋势解读
+  - report.generate / data.export / email.send: 分别对应生成报告、导出数据、发邮件的明确指令
+  - daily_report / inventory_alert: 定时任务的创建与管理
   问题: {query}
   输出: {{"execution_mode":"direct|plan|workflow","candidates":[{{"name":"能力","score":0-1}}],"reason":"一句话"}}

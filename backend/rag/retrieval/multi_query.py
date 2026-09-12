@@ -14,6 +14,7 @@ from backend.config import (
     MULTI_QUERY_MODE as _DEFAULT_MODE, MULTI_QUERY_COUNT,
     MULTI_QUERY_TOP_K_PER, MULTI_QUERY_DEDUP,
     MULTI_QUERY_SIMILARITY, MULTI_QUERY_MIN_LENGTH,
+    MULTI_QUERY_MAX_TOKENS,
 )
 from backend.rag.context import get_context
 from backend.prompts.service import prompt_service
@@ -116,7 +117,9 @@ def _is_complex(query: str) -> tuple[bool, str]:
             return True, f"业务关键词: {kw}"
     if len(q) < 5:
         return False, f"过短({len(q)}字)"
-    if len(q) > 25:
+    # 长度触发阈值 25→40（TTFT 收敛）：25~40 字的问题多数语义已完整，
+    # 为其多付一次改写 LLM 调用（~1-2s 串行）不划算
+    if len(q) > 40:
         return True, f"较长({len(q)}字)"
     return False, "默认简单"
 
@@ -138,7 +141,12 @@ def _rewrite(question: str) -> list[str]:
         # 渲染后的完整 prompt 落入 span.input（前端 LLM 调用明细展示原文）
         if isinstance(span.input, dict):
             span.input["prompt"] = r.text[:1000]
-        result = llm.invoke([HumanMessage(content=r.text)])
+        result = llm.invoke(
+            [HumanMessage(content=r.text)],
+            # 改写输出只是几行查询（MULTI_QUERY_MAX_TOKENS=200 足够），
+            # 限制生成上限直接缩短这次串行 LLM 调用的耗时
+            max_tokens=MULTI_QUERY_MAX_TOKENS,
+        )
         
         # 正确提取 content（可能是 AIMessage 或其他类型）
         if hasattr(result, 'content'):

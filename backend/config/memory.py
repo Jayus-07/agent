@@ -18,6 +18,10 @@ ENABLE_HISTORY_AWARE_RETRIEVAL = os.getenv("ENABLE_HISTORY_AWARE_RETRIEVAL", "tr
 # 短期记忆 (L1)
 SHORT_TERM_MAX_MESSAGES = int(os.getenv("SHORT_TERM_MAX_MESSAGES", "20"))
 
+# 对话历史 token 预算：L1 组装（含 L2 摘要 / L3 记忆注入）后整体按 token 裁剪，
+# 弥补"按条数"截断对长消息失效的问题（0 = 关闭预算，仅条数控制）
+HISTORY_TOKEN_BUDGET = int(os.getenv("HISTORY_TOKEN_BUDGET", "2048"))
+
 # 会话记忆 (L2)
 SESSION_MAX_MESSAGES = int(os.getenv("SESSION_MAX_MESSAGES", "50"))
 

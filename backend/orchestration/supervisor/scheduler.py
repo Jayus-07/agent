@@ -249,6 +249,10 @@ def route_after_supervisor(state: dict) -> str | list:
                     "messages": state.get("messages", []),
                     "final_answer": state.get("final_answer", ""),
                     "alerts": state.get("alerts", []),
+                    # 请求上下文透传：Send 分支跑在 LangGraph 内部线程池，
+                    # ContextVar 不可继承，节点入口（trace_middleware）从
+                    # state 重新绑定 trace/session/user/流式 sink
+                    "request_context": state.get("request_context"),
                     "_all_steps_done": False,
                     "_ready_dispatch": [],
                     "_supervisor_loop_count": state.get("_supervisor_loop_count", 0),
