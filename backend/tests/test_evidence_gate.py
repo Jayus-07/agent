@@ -34,7 +34,6 @@ from backend.config import (
     RERANK_MIN_AVG,
     RERANK_HIGH_RISK_MIN_TOP1,
     FAITHFULNESS_REJECT_SCORE,
-    ENABLE_FAITHFULNESS,
     SELF_CORRECTION_ENABLED,
 )
 
@@ -322,9 +321,17 @@ class TestConfigDefaults:
                 _os.environ[env_key] = saved
             importlib.reload(rag_cfg)  # 恢复运行时值（load_dotenv 重新加载 .env）
 
-    def test_faithfulness_default_true(self):
-        """§0.2 行业默认开"""
-        assert ENABLE_FAITHFULNESS is True
+    def test_faithfulness_default_off(self):
+        """偏离行业默认（默认关）——刻意决策，非遗漏。
+
+        行业（RAGFlow/Vertex）默认开 LLM-as-Judge 验证，但本项目离线评测
+        实测：每次回答串行多花 5-10s 且误判率 90%+（见 config/rag.py 注释）。
+        防幻觉职责由程序化组件承担（ClaimVerifier 确定性事实校验 +
+        Evidence Gate 检索/重排/实体覆盖门，LLM Judge 不能覆盖）。
+        需要时用 ENABLE_FAITHFULNESS=true 显式开启。
+        """
+        assert self._code_default("ENABLE_FAITHFULNESS", "ENABLE_FAITHFULNESS") is False
+        assert self._code_default("NLI_USE_LLM", "NLI_USE_LLM") is False
 
     def test_vec_min_score_aligns_with_ragflow(self):
         """RAGFlow 默认 0.2（COSINE 阈值）"""
