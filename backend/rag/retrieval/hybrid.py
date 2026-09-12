@@ -110,15 +110,6 @@ def _classify_query_tier(query: str) -> str:
     return "vector_only"
 
 
-# 向后兼容别名
-def _classify_query_mode(query: str) -> str:
-    """Deprecated: 使用 _classify_query_tier()。返回 'vector_only' 或 'hybrid'。"""
-    tier = _classify_query_tier(query)
-    if tier == "hybrid_multi_query":
-        return "hybrid"
-    return tier
-
-
 def _evaluate_retrieval_gate(merged: list, query: str):
     """Retrieval 阶段 Gate 评估，返回 GateDecision（总开关关闭时透传判定）。
 

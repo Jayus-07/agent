@@ -8,6 +8,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ====================================
+# RAG 服务化（阶段 1：独立部署，backend/services/rag_server.py）
+# ====================================
+# local:  进程内直调 RAGPipeline 单例（默认；单机/开发模式，行为与历史版本一致）
+# remote: 通过 HTTP 调用独立 rag-service（backend/rag/client.py 代理），
+#         本进程不加载 embedding/Chroma —— app 可独立扩缩容与重启，
+#         索引初始化（可能数十分钟）只发生在 rag-service 一侧。
+# 限制：remote 模式下文档管理 API（上传/删除，直接访问 pipeline.vectordb）
+# 需直连 rag-service 或切回 local（阶段 1b 迁移这些路由）。
+RAG_MODE = os.getenv("RAG_MODE", "local").strip().lower()
+RAG_SERVICE_URL = os.getenv("RAG_SERVICE_URL", "http://rag-service:8090").strip().rstrip("/")
+
 # ── 业务领域数据（已迁至 preprocessing/domain_data.py，此处 re-export 保持兼容）──
 from backend.rag.preprocessing.domain_data import (  # noqa: F401
     KNOWN_PERSON_NAMES, TIME_PATTERNS, DEFAULT_KEYWORDS, SIGNAL_RULES,

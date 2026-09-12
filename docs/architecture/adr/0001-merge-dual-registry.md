@@ -234,3 +234,34 @@ def __init_subclass__(cls, **kwargs):
 
 - 长期：考虑把 `description/params_schema/examples` 抽取到独立 `manifest.yaml`，与代码解耦
 - 长期：加 CLI 工具 `python -m orchestration.skill_info` 列出所有 capability，方便调试
+---
+
+## 补记（2026-09-13）：实施验证完成 + 单一来源延伸到 MCP 层
+
+ADR 主体已实施并验证：
+
+- `orchestration/tool_registry.py` 的 CAPABILITY_MAP/CAPABILITY_SCHEMA 均为
+  Skill 实例派生视图（cached_property），静态字典已删除
+- `skills/base.py` 的 `__init_subclass__` 强制校验 description/capabilities/examples
+- 一致性自检：`backend/tests/test_registry_consistency.py` 锁定四条链路，
+  任何一环手写漂移即刻测试失败
+
+本次收尾将"单一事实来源"从 Planner 层延伸到 MCP 暴露层：
+
+| 链路 | 事实来源 | 消费方 |
+|------|---------|--------|
+| capability → 节点名/schema | Skill 类元数据 | Planner / Critique |
+| MCP tool 参数 | LangChain tool args_schema（经 mcp_servers/schema_adapter.py 派生） | /mcp/call、标准 MCP 端点（protocol_app） |
+
+此前 `RAGMCPServer.list_tools()` / `SQLMCPServer.list_tools()` 手写参数表，
+与 tool 层 args_schema 存在漂移风险；现改为 `langchain_tool_to_mcp_meta()`
+自动派生，tool 层改参数 MCP 侧自动同步。无 tool 等价物的管理类工具
+（list_documents/get_stats/list_tables）保留手写并注释说明。
+
+新增/变更文件：
+- `mcp_servers/schema_adapter.py`（新增）
+- `mcp_servers/servers/rag.py`、`mcp_servers/servers/sql.py`（list_tools 派生化）
+- `backend/tests/test_registry_consistency.py`（新增，8 项自检）
+- `mcp_servers/manager.py`（+iter_servers 公开遍历）
+- `mcp_servers/protocol_app.py`（标准 MCP 协议端点，阶段 2 产物，工具清单
+  经 build_mcp 从 manager 派生，parity 有测试锁定）

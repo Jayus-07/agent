@@ -40,6 +40,10 @@ def _kick_pipeline_init() -> None:
     初始化也会被触发，且绝不阻塞当前（事件循环）线程。
     """
     from backend.rag import pipeline as _p
+    from backend.config.rag import RAG_MODE
+    if RAG_MODE == "remote":
+        # 远端模式：本地无索引可预热，rag-service 自己负责启动初始化
+        return
     if _p._pipeline_singleton is not None or _p._pipeline_initializing:
         return
     def _bg_init():
@@ -60,6 +64,14 @@ def get_rag_status() -> dict:
     state = get_rag_pipeline_state()
     if state["state"] == "ready":
         return {"ready": True, "status": "ready"}
+    if state["state"] == "remote":
+        # 远端模式：rag-service 就绪与否由其 /readyz 决定，此处只透传模式信息
+        return {
+            "ready": True,
+            "status": "remote",
+            "endpoint": state["endpoint"],
+            "message": "RAG 运行于远端服务模式，实际就绪状态见 rag-service /readyz",
+        }
     if state["state"] == "error":
         return {"ready": False, "status": "error", "error": state["error"]}
     if state["state"] == "not_started":

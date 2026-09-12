@@ -661,14 +661,21 @@ class RAGPipeline:
             raise
 
     def _snapshot_answer_meta(self):
-        """从 chain 快照置信度/证据信息，供下游（如客服知识服务）读取。"""
+        """从 chain 快照置信度/证据/来源信息，供下游（客服知识服务、
+        rag-server /ask、远端代理）读取。
+
+        sources 为结构化引用列表（index/filename/doc_type/score），
+        供前端 SourceCard 与客服置信度判定使用；截断防 meta 膨胀。
+        """
         try:
             chain = self.lc_chain
             meta = {}
             if hasattr(chain, "_last_meta") and isinstance(chain._last_meta, dict):
                 meta.update(chain._last_meta)
             if hasattr(chain, "_last_sources"):
-                meta["source_count"] = len(chain._last_sources or [])
+                sources = chain._last_sources or []
+                meta["source_count"] = len(sources)
+                meta["sources"] = sources[:8]
             self.last_answer_meta = meta
         except Exception:
             self.last_answer_meta = {}
@@ -777,13 +784,15 @@ _pipeline_init_error: str | None = None
 _pipeline_initializing: bool = False
 
 
-def get_rag_pipeline() -> RAGPipeline:
-    """惰性初始化 RAGPipeline 单例（线程安全，可能阻塞数十分钟）。
+def _get_local_pipeline() -> RAGPipeline:
+    """惰性初始化本地 RAGPipeline 单例（线程安全，可能阻塞数十分钟）。
 
     RAGPipeline() 构造含全量增量同步，期间持 _pipeline_lock。
     【禁止】在事件循环线程直接调用 —— async 端点必须用
     `await asyncio.to_thread(get_rag_pipeline)`，状态检查用非阻塞的
     get_rag_pipeline_state()。
+    rag-server（backend/services/rag_server.py）直接调用本函数，
+    绕过 RAG_MODE 路由，防止服务端误配 remote 时自我代理。
     """
     global _pipeline_singleton, _pipeline_init_error, _pipeline_initializing
     if _pipeline_singleton is None:
@@ -804,8 +813,24 @@ def get_rag_pipeline() -> RAGPipeline:
     return _pipeline_singleton
 
 
-def get_rag_pipeline_state() -> dict:
-    """非阻塞状态查询 —— 不触碰 _pipeline_lock，可在事件循环线程安全调用。
+def get_rag_pipeline():
+    """RAG pipeline 统一入口（所有消费方经此获取，勿直接调 _get_local_pipeline）。
+
+    RAG_MODE=local（默认）→ 本地单例（历史行为，含索引同步阻塞）
+    RAG_MODE=remote      → 远端代理（backend/rag/client.py，同 ask/retrieve 签名，
+                            本进程不加载 embedding/Chroma）
+    返回类型：RAGPipeline | RAGServiceProxy（鸭子类型兼容问答面）。
+    """
+    # 函数内读取（非 import 期固化）：测试与运行时可动态切换
+    from backend.config.rag import RAG_MODE
+    if RAG_MODE == "remote":
+        from backend.rag.client import get_rag_proxy
+        return get_rag_proxy()
+    return _get_local_pipeline()
+
+
+def _get_local_pipeline_state() -> dict:
+    """本地单例状态 —— 不触碰 _pipeline_lock，可在事件循环线程安全调用。
 
     返回 {"state": "ready"|"initializing"|"error"|"not_started", ...}
     """
@@ -816,4 +841,17 @@ def get_rag_pipeline_state() -> dict:
     if _pipeline_init_error is not None:
         return {"state": "error", "error": _pipeline_init_error}
     return {"state": "not_started"}
+
+
+def get_rag_pipeline_state() -> dict:
+    """非阻塞状态查询（供 deps.get_rag_status 等使用）。
+
+    remote 模式返回 {"state": "remote", "endpoint": ...}，
+    就绪与否由真正调用时的 HTTP 结果决定（fail-fast，错误信息含排查指引）。
+    """
+    from backend.config.rag import RAG_MODE
+    if RAG_MODE == "remote":
+        from backend.config.rag import RAG_SERVICE_URL
+        return {"state": "remote", "endpoint": RAG_SERVICE_URL}
+    return _get_local_pipeline_state()
 

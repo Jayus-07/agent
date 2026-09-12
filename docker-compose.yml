@@ -78,6 +78,9 @@ services:
       # LLM
       - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - QWEN_API_KEY=${QWEN_API_KEY:-}
+      # 阿里云 DashScope（embedding/rerank/OCR 共用，EMBEDDING_API_KEY 未设时回退此值）
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
       # PostgreSQL — 记忆库（读写，服务账号）
       - PGHOST=postgres
@@ -102,10 +105,19 @@ services:
       # Kafka（事件发布，默认关闭保证向后兼容）
       - KAFKA_ENABLED=${KAFKA_ENABLED:-true}
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      # Kafka 入站消费者（WhatsApp 闭环：webhook → 本消费者 → agent.ask → ai.reply.events）
+      - KAFKA_CONSUMER_ENABLED=${KAFKA_CONSUMER_ENABLED:-true}
+      # 客服模块（意图路由/转人工/确认态，.env 中 CS_ENABLED 控制）
+      - CS_ENABLED=${CS_ENABLED:-true}
+      # AI 工具网关（Java business-service 经 /internal/ai/call 调用 Python 工具）
+      - AI_TOOLS_ENABLED=${AI_TOOLS_ENABLED:-true}
       # 业务系统（Java）地址：cs_admin cutover 开关用
       - BUSINESS_SERVICE_URL=http://business-service:8081
       - CS_ADMIN_SOURCE=${CS_ADMIN_SOURCE:-local}
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
+      # RAG 服务化：app 走远端代理（rag-service 持有 embedding/Chroma/索引）
+      - RAG_MODE=remote
+      - RAG_SERVICE_URL=http://rag-service:8090
     volumes:
       - app_data:/app/data
       - app_cache:/app/.cache
@@ -116,6 +128,81 @@ services:
         condition: service_healthy
       kafka:
         condition: service_started
+      rag-service:
+        condition: service_started
+    networks:
+      - agent-net
+    restart: unless-stopped
+
+  # ── RAG 独立服务（重资源：embedding 模型 + Chroma + BM25 + 索引同步）──
+  # 初始化含全量增量同步（可能数十分钟），readyz 就绪前 /ask 返回 503；
+  # 与 app 共享 app_data 卷（索引数据原地复用，存量部署无迁移成本；
+  # remote 模式下 app 不再写索引路径，实际写路径归本服务独占）；
+  # 共享 app_cache 卷（embedding/reranker 模型只存一份，不重复下载）
+  rag-service:
+    build: .
+    command: ["python", "-m", "uvicorn", "backend.services.rag_server:app", "--host", "0.0.0.0", "--port", "8090"]
+    ports:
+      - "127.0.0.1:8090:8090"
+    environment:
+      # 强制本地模式（服务端自我代理防护，rag_server 内部还有二次校验）
+      - RAG_MODE=local
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
+      - RERANKER_MODEL_PATH=${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+    volumes:
+      - app_data:/app/data
+      - app_cache:/app/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/healthz"]
+      # liveness 只看进程；就绪状态看 /readyz（app 侧 fail-fast + 重试）
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5m
+    networks:
+      - agent-net
+    restart: unless-stopped
+
+  # ── 标准 MCP 协议服务（streamable HTTP，供 Claude/Cursor 等外部 client）──
+  # 工具执行复用 MCPServer.call_tool；RAG 工具经代理转发 rag-service（不重复
+  # 加载 embedding/Chroma）；鉴权沿用全局 API_KEY（X-API-Key，fail-closed）
+  mcp-service:
+    build: .
+    command: ["python", "-m", "uvicorn", "mcp_servers.protocol_app:app", "--host", "0.0.0.0", "--port", "8091"]
+    ports:
+      - "127.0.0.1:8091:8091"
+    environment:
+      # RAG 走远端：本进程不加载索引（rag-service 才是索引单点）
+      - RAG_MODE=remote
+      - RAG_SERVICE_URL=http://rag-service:8090
+      # 鉴权（fail-closed：未配置时拒绝所有 MCP 调用）
+      - API_KEY=${API_KEY:-}
+      # DNS rebinding 防护白名单（只经 127.0.0.1 发布端口访问时够用；
+      # 经网关/域名接入时追加对应 host，如 mcp.example.com:*）
+      - MCP_ALLOWED_HOSTS=localhost:*,127.0.0.1:*
+      # SQL 工具（本进程直连业务库）
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGDATABASE=agent_memory
+      - PGUSER=postgres
+      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+      - BUSINESS_PGDATABASE=agent_business
+      - PG_READONLY_USER=agent_readonly
+      - PG_READONLY_PASSWORD=${PG_READONLY_PASSWORD:?PG_READONLY_PASSWORD is required}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      rag-service:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     networks:
       - agent-net
     restart: unless-stopped

@@ -1,23 +1,28 @@
 """RAG MCP Server — 知识库检索能力"""
 from mcp_servers.manager import MCPServer
+from mcp_servers.schema_adapter import langchain_tool_to_mcp_meta
 from backend.rag.pipeline import get_rag_pipeline
+from backend.tools.rag import search_knowledge_tool
 
 
 class RAGMCPServer(MCPServer):
-    """知识库检索：search/list_documents/get_stats。"""
+    """知识库检索：search/list_documents/get_stats。
+
+    search_knowledge 的参数定义从 search_knowledge_tool.args_schema 派生
+    （ADR-0001 单一事实来源延伸：tool 层改参数 → MCP tools/list 自动同步）；
+    list_documents/get_stats 无 tool 等价物，保留手写。
+    """
     name = "rag"
     description = "跨境电商知识库检索（RAG）"
 
     def list_tools(self) -> list:
+        search_meta = langchain_tool_to_mcp_meta(
+            search_knowledge_tool,
+            name="search_knowledge",
+            description="从知识库检索 + LLM 生成回答",
+        )
         return [
-            {
-                "name": "search_knowledge",
-                "description": "从知识库检索 + LLM 生成回答",
-                "parameters": {
-                    "question": {"type": "string", "required": True, "description": "用户问题"},
-                    "kb_id": {"type": "string", "required": False, "default": "default", "description": "知识库 ID"},
-                },
-            },
+            search_meta,
             {
                 "name": "list_documents",
                 "description": "列出知识库中的文档",

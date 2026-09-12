@@ -1,22 +1,27 @@
 """SQL MCP Server — 自然语言查询数据库"""
 from mcp_servers.manager import MCPServer
+from mcp_servers.schema_adapter import langchain_tool_to_mcp_meta
 from backend.sql.sql_agent import get_sql_agent
+from backend.tools.sql import sql_query_tool
 
 
 class SQLMCPServer(MCPServer):
-    """自然语言 SQL 查询 + 表结构。"""
+    """自然语言 SQL 查询 + 表结构。
+
+    sql_query 参数定义从 sql_query_tool.args_schema 派生（单一事实来源）；
+    list_tables 无 tool 等价物，保留手写。
+    """
     name = "sql"
     description = "自然语言查询 PostgreSQL 跨境电商数据库"
 
     def list_tools(self) -> list:
+        query_meta = langchain_tool_to_mcp_meta(
+            sql_query_tool,
+            name="sql_query",
+            description="自然语言转 SQL 并执行",
+        )
         return [
-            {
-                "name": "sql_query",
-                "description": "自然语言转 SQL 并执行",
-                "parameters": {
-                    "question": {"type": "string", "required": True, "description": "查询问题"},
-                },
-            },
+            query_meta,
             {
                 "name": "list_tables",
                 "description": "列出数据库中的所有表",

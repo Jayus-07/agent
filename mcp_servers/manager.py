@@ -59,6 +59,10 @@ class MCPManager:
             for s in self._servers.values()
         ]
 
+    def iter_servers(self) -> List[MCPServer]:
+        """按注册顺序遍历 server 实例（供协议端点构建工具清单用）。"""
+        return list(self._servers.values())
+
     def route(self, tool_name: str, params: dict) -> Any:
         """根据 tool_name 路由到对应 server。"""
         for server in self._servers.values():
