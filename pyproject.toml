@@ -92,6 +92,7 @@ dependencies = [
     "crawl4ai>=0.4",
     "modelscope>=1.0",
     "requests>=2.28.0",  # 用于 DashScope API 调用
+    "mcp>=1.28,<2",  # 标准 MCP 协议服务（mcp_servers/protocol_app.py，mcp-service 容器）；2.x 改名 FastMCP→MCPServer，不兼容
 ]
 
 [project.optional-dependencies]

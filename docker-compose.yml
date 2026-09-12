@@ -118,6 +118,9 @@ services:
       # RAG 服务化：app 走远端代理（rag-service 持有 embedding/Chroma/索引）
       - RAG_MODE=remote
       - RAG_SERVICE_URL=http://rag-service:8090
+      # RAG 数据根目录指向 app_data 卷挂载点（文档注册表/Chroma/BM25/docs 全在此，
+      # 与 rag-service 共享同一份数据；文档管理路由读的注册表也在这里）
+      - RAG_DATA_DIR=/app/data
     volumes:
       - app_data:/app/data
       - app_cache:/app/.cache
@@ -147,6 +150,11 @@ services:
     environment:
       # 强制本地模式（服务端自我代理防护，rag_server 内部还有二次校验）
       - RAG_MODE=local
+      # RAG 数据根目录指向 app_data 卷（与 app 共享同一份注册表/索引/文档）
+      - RAG_DATA_DIR=/app/data
+      # 显式传 embedding 模型：必须与宿主机建索引用的模型一致（宿主 .env 为 text-embedding-v3），
+      # 否则增量 sync 会用不同模型重嵌入全量文档
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-v3}
       - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
