@@ -30,7 +30,10 @@ from backend.tools.export import export_csv_tool  # noqa: F401
 from backend.tools.web import web_search_tool, web_crawl_tool  # noqa: F401
 from backend.tools.email import send_email_tool  # noqa: F401
 from backend.tools.data_collection import data_collection_tool  # noqa: F401
-from backend.tools.competitor import competitor_analyze_tool  # noqa: F401
+from backend.tools.competitor import (  # noqa: F401
+    competitor_analyze_tool, competitor_watch_tool,
+    competitor_history_tool, competitor_watchlist_tool,
+)
 from backend.tools.memory import memory_search_tool, memory_store_tool  # noqa: F401
 from backend.tools.calculator import calculate_tool  # noqa: F401
 
@@ -60,6 +63,9 @@ __all__ = [
     'send_email_tool',
     'data_collection_tool',
     'competitor_analyze_tool',
+    'competitor_watch_tool',
+    'competitor_history_tool',
+    'competitor_watchlist_tool',
     'memory_search_tool',
     'memory_store_tool',
     'calculate_tool',

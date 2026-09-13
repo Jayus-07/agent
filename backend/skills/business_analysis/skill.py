@@ -42,6 +42,8 @@ class BusinessAnalysisSkill(BaseSkill):
             "sql_result": "{sql: 'SELECT ...', tables: ['inventory.inventory'], rows: [...], ...}"
         }
     ]
+    # 输出契约：BusinessInsight.model_dump()（execute 已重写并用 Pydantic 收口）
+    output_type = "structured"
 
     @property
     def _tool_fn(self):  # type: ignore[override]

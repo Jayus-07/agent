@@ -200,9 +200,35 @@ def skill_executor_node(state: dict) -> dict:
     return {
         **state,
         "step_results": step_results,
-        "final_answer": step.get("output", ""),
+        "final_answer": _coerce_final_answer(step),
         "executor_mode": "direct",
     }
+
+
+def _coerce_final_answer(step: dict) -> str:
+    """final_answer 必须是 str:dict 形态的 SQLResult 渲染为 Markdown 表格。
+
+    背景: sql.query 的 output 是 SQLResult dict,曾原样塞进 final_answer,
+    导致下游所有按字符串处理的地方崩溃
+    (done 事件 sources 解析、emit_delta、memory end_turn 把 dict 写
+    VARCHAR 等,日志中 2026-09-07 即有同类报错)。
+    """
+    out = step.get("output", "")
+    if isinstance(out, str):
+        return out
+    if isinstance(out, dict) and "columns" in out and "rows" in out:
+        try:
+            from backend.agents.reporter.reporter import _render_table_section
+            return _render_table_section(
+                step.get("description", "查询结果"),
+                out.get("columns", []), out.get("rows", []),
+            )
+        except Exception:
+            logger.warning("[SkillExecutor] SQLResult 渲染失败,降级 JSON", exc_info=True)
+    if isinstance(out, dict):
+        import json
+        return json.dumps(out, ensure_ascii=False, default=str)
+    return str(out)
 
 
 def workflow_executor_node(state: dict) -> dict:

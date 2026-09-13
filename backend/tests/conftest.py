@@ -74,6 +74,22 @@ _prepare_isolated_data_dir()
 
 
 @pytest.fixture(autouse=True)
+def _auto_approve_tools(monkeypatch):
+    """测试会话写操作免审批（TOOL_APPROVAL_MODE=auto）。
+
+    背景：写操作工具（data_collection/competitor 等）默认走审批门
+    （config 默认 required），而审批单在 PG 里有 TTL——批准过一次后
+    600 秒内重跑测试"侥幸通过"，超时后被拦，测试结果随时间漂移
+    （2026-09-13 全量隔离套件 13 个失败即此因）。
+    审批门自身的行为契约由 security/test_tool_approval.py 专项覆盖
+    （其 required_mode fixture 会覆盖本 fixture 的设置）。
+    """
+    from backend.security import tool_approval
+
+    monkeypatch.setattr(tool_approval, "TOOL_APPROVAL_MODE", "auto")
+
+
+@pytest.fixture(autouse=True)
 def _reset_langfuse_exporter(monkeypatch):
     """逐用例重置 exporter 单例，防止模块加载时缓存的 enabled 状态泄漏。"""
     monkeypatch.setenv("LANGFUSE_ENABLED", "false")

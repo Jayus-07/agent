@@ -195,6 +195,10 @@ class GraphRunner:
                         # direct/workflow executor 自己就是最终产出者
                         executor_answer = node_output.get("final_answer", "")
                         if executor_answer:
+                            # 类型兜底:final_answer 必须是 str(direct executor
+                            # 的结构化输出已在源头渲染,此处仅防御)
+                            if not isinstance(executor_answer, str):
+                                executor_answer = str(executor_answer)
                             ctx["final_answer"] = executor_answer
                     elif node_name == "reporter":
                         # reporter 只在 plan 模式下才是最终答案；direct/workflow 已由 executor 产出
@@ -220,7 +224,7 @@ class GraphRunner:
                 # 用量 ContextVar 在 worker 上下文累计，必须就地汇总
                 ctx["usage"] = summarize_turn_usage()
             except Exception as e:
-                logger.error(f"[GraphRunner] 流式执行失败: {e}")
+                logger.error(f"[GraphRunner] 流式执行失败: {e}", exc_info=True)
                 ctx["worker_error"] = True
                 merged_q.put(("evt", {"event": "error",
                                       "data": {"message": f"执行失败: {e}", "ts": time.time()}}))
@@ -291,7 +295,7 @@ class GraphRunner:
                                   usage=ctx["usage"])
 
         except Exception as e:
-            logger.error(f"[GraphRunner] 流式执行失败: {e}")
+            logger.error(f"[GraphRunner] 流式执行失败: {e}", exc_info=True)
             yield {"event": "error", "data": {"message": f"执行失败: {e}", "ts": time.time()}}
             try:
                 _end_root(trace, status="error", metrics={"error": str(e)[:100]})

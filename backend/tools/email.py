@@ -1,8 +1,22 @@
-"""邮件工具 — SMTP 发送（写操作，需人工审批）。"""
+"""邮件工具 — SMTP 发送（写操作，需人工审批 + 内容指纹幂等）。"""
 import hashlib
+import time
 
 from langchain_core.tools import tool
 from backend.shared.logger import logger
+
+# ── 发送幂等：同指纹（收件人+主题+正文哈希）在窗口内只发一次。
+# 背景: BaseSkill 用 to_thread+wait_for 执行 Tool，超时判重试时线程不可
+# 取消——若 SMTP 实际已发出而 Skill 层判超时重试，会重复发信。
+# 只缓存"已成功发出"的指纹；SMTP 异常不缓存，重试路径保持畅通。
+_EMAIL_DEDUP_WINDOW_SECONDS = 600
+_SENT_FINGERPRINTS: dict[str, float] = {}
+
+
+def _email_fingerprint(to: str, cc: str, subject: str, body: str) -> str:
+    return hashlib.sha256(
+        f"{to}|{cc or ''}|{subject}|{body}".encode("utf-8")).hexdigest()
+
 
 @tool
 def send_email_tool(to: str, subject: str, body: str, cc: str = "") -> str:
@@ -33,6 +47,17 @@ def send_email_tool(to: str, subject: str, body: str, cc: str = "") -> str:
     if pending is not None:
         return pending
 
+    # 幂等拦截：窗口内同指纹视为重试，直接拒绝再次发送
+    now = time.time()
+    for fp, ts in list(_SENT_FINGERPRINTS.items()):
+        if now - ts > _EMAIL_DEDUP_WINDOW_SECONDS:
+            _SENT_FINGERPRINTS.pop(fp, None)
+    fingerprint = _email_fingerprint(to, cc, subject, body)
+    if fingerprint in _SENT_FINGERPRINTS:
+        logger.warning(f"[Tool:send_email] 幂等拦截: 窗口内已发送过 → {to} ({subject})")
+        return (f"[EMAIL DUPLICATE] 内容相同的邮件已发送成功（收件人 {to}，"
+                f"主题 '{subject}'），为避免重复发送本次已拦截，请勿重试。")
+
     try:
         msg = MIMEMultipart("alternative")
         msg["From"] = SMTP_FROM
@@ -50,6 +75,7 @@ def send_email_tool(to: str, subject: str, body: str, cc: str = "") -> str:
                 recipients += [a.strip() for a in cc.split(",")]
             server.sendmail(SMTP_FROM, recipients, msg.as_string())
 
+        _SENT_FINGERPRINTS[fingerprint] = time.time()
         logger.info(f"[Tool:send_email] 已发送 → {to} ({subject})")
         return f"邮件已发送: 收件人 {to}, 主题 '{subject}'"
     except Exception as e:

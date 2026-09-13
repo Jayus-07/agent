@@ -1,9 +1,16 @@
 """skills/competitor_analysis/skill.py — Competitor Analysis Skill.
 Capabilities: competitor.analyze / competitor.watch / competitor.history
+（监控列表管理 list/add/remove/toggle 由 Planner 以 analyze+action 参数
+表达，_select_tool 分发到 competitor_watchlist_tool）
 """
 from backend.skills.base import BaseSkill
 from backend.shared.logger import logger
-from backend.tools.competitor import competitor_analyze_tool
+from backend.tools.competitor import (
+    competitor_analyze_tool,
+    competitor_history_tool,
+    competitor_watch_tool,
+    competitor_watchlist_tool,
+)
 
 
 class CompetitorAnalysisSkill(BaseSkill):
@@ -41,6 +48,21 @@ class CompetitorAnalysisSkill(BaseSkill):
     @property
     def _tool_fn(self):
         return competitor_analyze_tool
+
+    def _select_tool(self, capability: str, params: dict):
+        """按 capability/action 分发到单职责 Tool，并把参数过滤到
+        目标 Tool 签名内（LangChain invoke 遇未知参数会直接抛错）。"""
+        action = params.get("action") or ""
+        if action == "watch" or capability == "competitor.watch":
+            tool = competitor_watch_tool
+        elif action == "history" or capability == "competitor.history":
+            tool = competitor_history_tool
+        elif action in ("add", "remove", "toggle", "list"):
+            tool = competitor_watchlist_tool
+        else:
+            tool = competitor_analyze_tool
+        allowed = set(getattr(tool, "args", {}) or {})
+        return tool, {k: v for k, v in params.items() if k in allowed}
 
 
 async def competitor_analysis_skill_node(state: dict) -> dict:

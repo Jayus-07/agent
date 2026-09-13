@@ -122,15 +122,20 @@ def emit_delta_events(final_answer: str, stop_event=None) -> Generator[dict, Non
 
     P1 之前这里按句切开 + sleep(0.02) 模拟打字机（假流式）。真 token 级
     流式上线后，本函数仅剩两类调用方：Guard 短路话术、未发生 LLM 生成的
-    兜底路径（如纯模板/降级回答）。这些场景没有"边生成边出字"可言，
-    一次性发送整段即可，不再人为延迟。
+    兜底路径（如答案缓存命中/纯模板/降级回答）。这些场景没有"边生成边
+    出字"可言，一次性发送整段即可，不再人为延迟。
+    内容剥离 <!--META...--> 机读尾部（真流式路径由 MetaStreamFilter 处理）。
     """
+    import re
     if not final_answer:
+        return
+    text = re.sub(r"<!--META.*?-->\s*", "", final_answer, flags=re.DOTALL).strip()
+    if not text:
         return
     if stop_event is not None and stop_event.is_set():
         yield {"event": "error", "data": {"message": "用户中止", "ts": time.time()}}
         return
-    yield {"event": "delta", "data": {"content": final_answer, "ts": time.time()}}
+    yield {"event": "delta", "data": {"content": text, "ts": time.time()}}
 
 
 def make_done_event(final_answer: str, all_step_results: dict, start_time: float,

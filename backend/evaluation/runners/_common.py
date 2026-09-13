@@ -95,7 +95,12 @@ def init_rag_pipeline():
         _rag_pipeline = RAGPipeline()
         return _rag_pipeline
     except Exception as e:
-        _rag_pipeline_error = str(e)
+        # 治理 A：构建失败必须留痕 —— 此处静默吞错会让后续所有用例
+        # 只看到 "RAG pipeline not available"，真实异常无迹可寻
+        import traceback
+
+        _rag_pipeline_error = f"{e}\n{traceback.format_exc(limit=5)}"
+        logger.error(f"[RAG eval] RAGPipeline 构建失败: {_rag_pipeline_error}")
         return None
 
 

@@ -341,18 +341,25 @@ class RAGChain:
                 # 聚合后返回类型与 invoke 保持一致（当前版本
                 # create_stuff_documents_chain 返回 str，下游 strip_think
                 # 等仅接受 str）；开关关闭时走 invoke。
+                # META 拦截：<!--META...--> 尾部只进聚合（_verify 依赖），
+                # 不外发前端——MetaStreamFilter 处理跨 chunk 切分。
                 if ENABLE_TOKEN_STREAMING:
-                    parts: list[str] = []
+                    from backend.rag.meta_stream_filter import MetaStreamFilter
+                    mfilter = MetaStreamFilter()
                     is_message = False
                     for chunk in _stuff.stream(inp):
                         text = extract_chunk_text(chunk)
                         if not text:
                             continue
-                        parts.append(text)
-                        emit_stream_delta(text)
+                        emit_text = mfilter.feed(text)
+                        if emit_text:
+                            emit_stream_delta(emit_text)
                         if not isinstance(chunk, str) and hasattr(chunk, "content"):
                             is_message = True
-                    joined = "".join(parts)
+                    tail = mfilter.flush()
+                    if tail:
+                        emit_stream_delta(tail)
+                    joined = mfilter.full
                     r = AIMessage(content=joined) if is_message else joined
                 else:
                     r = _stuff.invoke(inp)

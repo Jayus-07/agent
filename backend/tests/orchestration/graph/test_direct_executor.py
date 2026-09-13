@@ -74,7 +74,14 @@ class TestDirectExecution:
         out = skill_executor_node(_state(candidates=_mk_candidates("sql.query")))
         assert out["executor_mode"] == "direct"
         assert out["step_results"]["direct_1"]["status"] == "success"
-        assert out["final_answer"] == {"rows": [{"x": 1}]}
+        # final_answer 必须是 str：skill 返回的 dict 不得原样透传
+        # （曾把 SQLResult dict 塞进 final_answer，炸掉下游所有按字符串
+        # 处理的地方——done 事件 sources、emit_delta、记忆落库等）
+        import json
+        assert isinstance(out["final_answer"], str)
+        assert json.loads(out["final_answer"]) == {"rows": [{"x": 1}]}
+        # step_results 保留结构化原貌，供 reporter/trace 使用
+        assert out["step_results"]["direct_1"]["output"] == {"rows": [{"x": 1}]}
 
     def test_business_analyze_auto_runs_predecessor(self, monkeypatch):
         """fix f13：business.analyze 无前置输出 → 先跑 sql.query（direct_0），

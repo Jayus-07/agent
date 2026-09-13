@@ -16,10 +16,18 @@ Stack:
 ## Architecture
 
 ```
-API → Router → Planner → Critique → Supervisor → Skills → Reporter
-                                                  ↓
-                                              Tool / RAG / SQL / Memory
+POST /chat/stream → GraphRunner（Input Guard 门禁 → memory.start_session → graph.stream）
+START → router ─┬─ CS 预过滤命中（灰度放量） ──────────→ 客服域图 cs_graph_node → END
+                └─ 三层 Router（rule→vector→LLM）→ route_selector
+                      ├─ direct  → skill_executor（跳过 Planner 直调 skill）→ reporter → END
+                      ├─ workflow → workflow_executor → reporter → END
+                      └─ plan    → planner → critique → supervisor（Send 并行）→ reporter → END
 ```
+
+> planner→critique→supervisor 只是 plan 模式支线；direct/workflow/客服域图均绕过它。
+> 客服子图：cs_state_loader → cs_pending_handler → cs_supervisor（handoff 拦截/循环上限/LLM 兜底）→ 5 专家 → 回 supervisor → cs_reporter。
+> RAG 子链路：改写 → MultiQuery → 混合检索（向量+BM25）→ 同文档扩展 → Rerank → EvidenceGate → 带引用生成 → META 尾拒答判定。
+> 流式：节点 status/log + LLM stream_sink delta 汇入 merged_q；SSE 帧序 meta → status/log/delta → done/error。
 
 ### 节点职责
 
