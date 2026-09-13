@@ -136,7 +136,7 @@ def _enhanced_hybrid_retrieve_impl(
         logger.error("[EnhancedRetrieve] No results from any path - triggering fallback")
         # 降级策略：回到原始 hybrid_retrieve
         from backend.rag.retrieval.hybrid import hybrid_retrieve
-        fallback_docs = hybrid_retrieve(query, vector_retriever, bm25_retriever, k=k, doc_ids=doc_ids, rrf_k=rrf_k, metadata_filter=metadata_filter)
+        fallback_docs = hybrid_retrieve(query, vector_retriever, bm25_retriever, k=k, doc_ids=doc_ids, rrf_k=rrf_k, metadata_filter=metadata_filter, expanded_queries=expanded_queries)
         metrics["fallback_used"] = True
         trace_collector.end_span(span, metrics={"status": "fallback", "retrieved_chunks": len(fallback_docs)})
         return fallback_docs, {"confidence": 0.0, "strategy": "fallback"}

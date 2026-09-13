@@ -3626,6 +3626,111 @@
         "requires_citation": true,
         "base_question_id": "RC-015"
       }
-    }
+    },
+{
+        "id": "RC-101",
+        "question": "发欧洲大概要多少天？",
+        "module": "rag",
+        "kb_id": "rag_test_kb",
+        "expected": {
+          "ground_truth_context": [
+            {
+              "text": "欧洲方向(英法德意等)标准配送 10-15 个工作日,加急配送 5-7 个工作日;旺季或清关高峰可能顺延 2-3 个工作日。",
+              "source_doc": "faq_常见问题FAQ.md",
+              "section": "发欧洲大概要多少天?"
+            }
+          ],
+          "should_reject": false,
+          "required_facts": [
+            "标准配送 10-15 个工作日",
+            "加急配送 5-7 个工作日"
+          ],
+          "required_docs": [
+            "faq_常见问题FAQ.md"
+          ],
+          "expected_answer": "发欧洲标准配送 10-15 个工作日,加急配送 5-7 个工作日,旺季或清关高峰可能顺延。"
+        },
+        "metadata": {
+          "domain": "logistics",
+          "difficulty": "medium",
+          "source": "regression",
+          "schema_version": "4.0",
+          "query_type": "robust_complex",
+          "answer_type": "factual",
+          "tier": "regression",
+          "requires_citation": true,
+          "note": "口语化时效问法回归（存量问题：口语与书面时效词零词面重叠）"
+        }
+      },
+      {
+        "id": "RC-102",
+        "question": "发美国多久能到？",
+        "module": "rag",
+        "kb_id": "rag_test_kb",
+        "expected": {
+          "ground_truth_context": [
+            {
+              "text": "美国方向标准配送 7-12 个工作日,加急配送 3-5 个工作日;清关或旺季可能顺延 1-3 个工作日。",
+              "source_doc": "faq_常见问题FAQ.md",
+              "section": "发美国多久能到?"
+            }
+          ],
+          "should_reject": false,
+          "required_facts": [
+            "标准配送 7-12 个工作日",
+            "加急配送 3-5 个工作日"
+          ],
+          "required_docs": [
+            "faq_常见问题FAQ.md"
+          ],
+          "expected_answer": "发美国标准配送 7-12 个工作日,加急配送 3-5 个工作日,清关或旺季可能顺延。"
+        },
+        "metadata": {
+          "domain": "logistics",
+          "difficulty": "medium",
+          "source": "regression",
+          "schema_version": "4.0",
+          "query_type": "robust_complex",
+          "answer_type": "factual",
+          "tier": "regression",
+          "requires_citation": true,
+          "note": "口语化时效问法回归（存量问题：口语与书面时效词零词面重叠）"
+        }
+      },
+      {
+        "id": "RC-103",
+        "question": "东西几天能寄到欧洲？",
+        "module": "rag",
+        "kb_id": "rag_test_kb",
+        "expected": {
+          "ground_truth_context": [
+            {
+              "text": "欧洲方向(英法德意等)标准配送 10-15 个工作日,加急配送 5-7 个工作日;旺季或清关高峰可能顺延 2-3 个工作日。",
+              "source_doc": "faq_常见问题FAQ.md",
+              "section": "发欧洲大概要多少天?"
+            }
+          ],
+          "should_reject": false,
+          "required_facts": [
+            "标准配送 10-15 个工作日",
+            "加急配送 5-7 个工作日"
+          ],
+          "required_docs": [
+            "faq_常见问题FAQ.md"
+          ],
+          "expected_answer": "寄到欧洲标准配送 10-15 个工作日,加急配送 5-7 个工作日。"
+        },
+        "metadata": {
+          "domain": "logistics",
+          "difficulty": "medium",
+          "source": "regression",
+          "schema_version": "4.0",
+          "query_type": "robust_complex",
+          "answer_type": "factual",
+          "tier": "regression",
+          "requires_citation": true,
+          "note": "口语化时效问法回归（存量问题：口语与书面时效词零词面重叠）"
+        }
+      }
   ]
 }
