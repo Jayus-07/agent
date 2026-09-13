@@ -25,14 +25,16 @@ def _state(step_id="step_1", params=None):
 
 
 class _CountingTool:
-    """记录被调用次数，可配置抛错。"""
-    calls = 0
+    """记录被调用次数（实例级，避免类属性跨用例串扰），可配置抛错。"""
     error: Exception | None = None
-    seen_params: dict | None = None
+
+    def __init__(self):
+        self.calls = 0
+        self.seen_params: dict | None = None
 
     def invoke(self, params):
-        type(self).calls += 1
-        type(self).seen_params = dict(params)
+        self.calls += 1
+        self.seen_params = dict(params)
         if self.error:
             raise self.error
         return "ok"

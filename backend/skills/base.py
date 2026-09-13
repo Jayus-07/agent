@@ -26,10 +26,12 @@ RETRY_BACKOFF_BASE = 1.5
 _ERROR_TYPE_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
     ("timeout", ("超时", "timed out", "timeout")),
     ("permission", ("权限不足", "permission denied", "unauthorized", "forbidden")),
-    ("not_found", ("no such table", "table does not exist", "not found")),
-    ("syntax", ("syntax error",)),
+    # invalid_param 必须先于 not_found："column not found" 含子串 "not found"，
+    # 但它是 Schema/参数问题而非表不存在
     ("invalid_param", ("column not found", "invalid parameter",
                        "参数校验失败", "缺少必填参数")),
+    ("syntax", ("syntax error",)),
+    ("not_found", ("no such table", "table does not exist", "not found")),
 ]
 
 # 命中即不可重试的错误类型；unknown/timeout 之外的其他类型可重试

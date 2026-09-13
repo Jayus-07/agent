@@ -87,9 +87,11 @@ class TestEmailIdempotency:
         def _boom(*a, **k):
             raise ConnectionError("smtp down")
 
-        monkeypatch.setattr(smtplib, "SMTP", _boom)
-        with pytest.raises(ConnectionError):
-            send_email_tool.invoke(dict(self.ARGS))
+        # 故障只限第一次调用，之后恢复正常 SMTP
+        with monkeypatch.context() as m:
+            m.setattr(smtplib, "SMTP", _boom)
+            with pytest.raises(ConnectionError):
+                send_email_tool.invoke(dict(self.ARGS))
 
         # 恢复正常 SMTP 后重试可达
         result = send_email_tool.invoke(dict(self.ARGS))
