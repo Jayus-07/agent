@@ -358,9 +358,16 @@ class MultiQueryRetriever(BaseRetriever):
         docs, seen = [], set()
         # 按 query 分组检索，每个 doc 标记来源查询
         evidence_groups: dict[str, list] = {}
-        ctx = contextvars.copy_context()
         ex = retrieval_pool_inner()
-        future_to_q = {ex.submit(ctx.run, self.base_retriever.invoke, q): q for q in queries}
+        base_invoke = self.base_retriever.invoke
+
+        def _invoke_isolated(q: str) -> list:
+            # Context 对象不可重入：多个任务共享同一个 ctx 并发 ctx.run
+            # 会抛 "cannot enter context: already entered"，变体检索全灭
+            # → 整轮检索为空。每个任务独立 copy_context 携带调用方上下文。
+            return contextvars.copy_context().run(base_invoke, q)
+
+        future_to_q = {ex.submit(_invoke_isolated, q): q for q in queries}
         for future in as_completed(future_to_q):
             q = future_to_q[future]
             try:

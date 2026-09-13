@@ -45,8 +45,16 @@ def _llm_stream(msgs):
     """generator function 包装：LCEL coerce 时走 RunnableGenerator，链上
     .stream() 真正逐 chunk 拉取。直接传 llm（可调用代理，非 Runnable）会被
     coerce 成 RunnableLambda——invoke 整段生成后只 yield 1 个整段 chunk，
-    打字机效果失效（2026-09-14）。"""
-    yield from llm.stream(msgs)
+    打字机效果失效（2026-09-14）。
+
+    RunnableGenerator 的 transform 语义把"输入迭代器"（langchain 为 tracing
+    会包成 itertools._tee）传给本函数，invoke 语义传单个 PromptValue——
+    两种形态都归一成逐个 PromptValue 消费，否则真实模型会校验报错。
+    """
+    from collections.abc import Iterator
+    inputs = msgs if isinstance(msgs, Iterator) else (msgs,)
+    for m in inputs:
+        yield from llm.stream(m)
 
 
 # =====================================================

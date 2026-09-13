@@ -26,9 +26,19 @@ _TOKENS = ["你好", "，", "这是", "逐", "token", "输出", "的", "回答",
 
 
 class _FakeChunkedLLM:
-    """假 LLM：stream 逐 token 产出（模拟真 token 级流式 provider）。"""
+    """假 LLM：stream 逐 token 产出，并像真实 BaseChatModel 一样校验输入类型。
 
-    def stream(self, *args, **kwargs):
+    生产曾翻车：RunnableGenerator 把 langchain 为 tracing 包的 itertools._tee
+    直接传给模型步，真实模型校验 "Invalid input type" 抛错 → 链路静默回退
+    invoke 整段生成 → 打字机失效。假模型同样校验才能锁住该回归。
+    """
+
+    def stream(self, msgs, *args, **kwargs):
+        if not isinstance(msgs, (str, list)) and not hasattr(msgs, "to_messages"):
+            raise ValueError(
+                f"Invalid input type {type(msgs).__name__}. "
+                "Must be a PromptValue, str, or list of BaseMessages."
+            )
         for t in _TOKENS:
             yield AIMessageChunk(content=t)
 
