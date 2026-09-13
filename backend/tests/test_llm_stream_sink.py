@@ -1,8 +1,9 @@
 """proxy 流式通道单测（P1 真 token 级流式）
 
 覆盖:
-- sync stream 包装：逐 chunk 透传 + sink 增量转发 + 用量记录
-- 首 chunk 前瞬时错误：整体重试后成功（sink 无重复输出）
+- sync stream 包装：逐 chunk 透传 + 用量记录（sink 转发由调用方显式负责——
+  RAG 链要过滤 META、reporter 聚合后转发，proxy 自动转发会双发 + 泄漏 META）
+- 首 chunk 前瞬时错误：整体重试后成功
 - 首 chunk 后失败：不重试，异常上抛（避免重复文本）
 - emit_stream_delta / extract_chunk_text 边界行为
 """
@@ -43,8 +44,8 @@ def reset_sink():
     proxy_mod.reset_stream_sink()
 
 
-def test_stream_forwards_deltas_to_sink(monkeypatch):
-    """有 sink 时逐 chunk 转发增量文本，透传结果不受影响。"""
+def test_stream_does_not_auto_forward_to_sink(monkeypatch):
+    """proxy 不自动转发 sink：emit 责任在调用方（防双发/META 泄漏），透传不受影响。"""
     received = []
     proxy_mod.set_stream_sink(received.append)
     fake = _FakeStreamLLM(["你", "好", "！"])
@@ -52,7 +53,7 @@ def test_stream_forwards_deltas_to_sink(monkeypatch):
 
     chunks = list(proxy_mod.llm.stream("问题"))
 
-    assert received == ["你", "好", "！"]
+    assert received == []
     assert [c.content for c in chunks] == ["你", "好", "！"]
 
 
@@ -65,7 +66,7 @@ def test_stream_no_sink_still_yields(monkeypatch):
 
 
 def test_stream_retry_before_first_content(monkeypatch):
-    """首 chunk 前瞬时错误 → 整体重试成功，sink 不收到重复/缺失内容。"""
+    """首 chunk 前瞬时错误 → 整体重试成功，透传内容完整无重复。"""
     monkeypatch.setattr(proxy_mod, "LLM_MAX_RETRIES", 1)
     monkeypatch.setattr(proxy_mod, "LLM_RETRY_BACKOFF_BASE", 0.0)
     received = []
@@ -83,7 +84,7 @@ def test_stream_retry_before_first_content(monkeypatch):
     chunks = list(proxy_mod.llm.stream("q"))
 
     assert fake.calls == 2
-    assert received == ["回", "答"]
+    assert received == []
     assert [c.content for c in chunks] == ["回", "答"]
 
 
@@ -106,7 +107,7 @@ def test_stream_no_retry_after_first_content(monkeypatch):
         list(proxy_mod.llm.stream("q"))
 
     assert fake.calls == 1
-    assert received == ["开"]
+    assert received == []
 
 
 def test_stream_records_usage_from_usage_chunk(monkeypatch):

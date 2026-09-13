@@ -21,7 +21,6 @@ export default function CustomerServicePage() {
   const isLoading = useCSChatStore((s) => s.isLoading)
   const error = useCSChatStore((s) => s.error)
   const currentStatus = useCSChatStore((s) => s.currentStatus)
-  const deltaText = useCSChatStore((s) => s.deltaText)
   const intentDetected = useCSChatStore((s) => s.intentDetected)
   const handoffState = useCSChatStore((s) => s.handoffState)
   const currentNode = useCSChatStore((s) => s.currentNode)

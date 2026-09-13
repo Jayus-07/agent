@@ -96,8 +96,10 @@ def _get_override_llm(model_name: str) -> BaseChatModel:
 # =====================================================
 # P1 真 token 级流式：per-turn 增量 sink
 # =====================================================
-# 生成节点（RAG 链 / Reporter）切到 llm.stream 后，proxy 在每个内容 chunk
-# 到达时调用当前上下文的 sink 回调，把增量文本推给 SSE 层。
+# 生成节点（RAG 链 / Reporter）切到 llm.stream 后，由调用方在每个内容
+# chunk 到达时显式调用 emit_stream_delta，把增量文本推给 SSE 层。
+# proxy 不自动转发：RAG 链的增量要经 MetaStreamFilter 过滤机读尾部，
+# 自动转发会双发并泄漏 META（2026-09-14 修复打字机失效时统一约定）。
 # ContextVar 按上下文隔离：并发请求各推各的，不会串味；
 # LangGraph/LCEL 在同线程执行节点（含 asyncio.run 包装），上下文可达。
 # 限制：LangGraph 并行 Send 的分支任务在内部线程池执行，上下文不可达 →
@@ -739,7 +741,9 @@ class _LLMProxy:
                 return astream_wrapper
             # sync generator（stream）：修好此前走通用 wrapper 的坏路径
             # （generator 未消费就被 _record_tokens，token 清空），
-            # 并包上限流 + sink 增量转发 + token 记录 + 首 chunk 前重试。
+            # 并包上限流 + token 记录 + 首 chunk 前重试。
+            # 注意：不做 sink 增量转发——emit 责任在调用方（RAG 链要过滤
+            # META 尾部、reporter 聚合后转发；proxy 自动转发会双发 + 泄漏 META）。
             # 流中途失败无法安全重试（会重复已输出内容）——
             # 仅"第一个内容 chunk 之前"的瞬时错误整体重试；输出后失败直接抛。
             if inspect.isgeneratorfunction(attr):
@@ -756,10 +760,8 @@ class _LLMProxy:
                                     if getattr(chunk, "usage_metadata", None):
                                         usage_chunk = chunk
                                     wrapped = _wrap_result(chunk)
-                                    text = extract_chunk_text(wrapped)
-                                    if text:
+                                    if extract_chunk_text(wrapped):
                                         yielded_content = True
-                                        emit_stream_delta(text)
                                     yield wrapped
                                 break  # 正常结束
                             except Exception as e:

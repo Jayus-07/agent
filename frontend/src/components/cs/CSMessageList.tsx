@@ -20,10 +20,11 @@ export default function CSMessageList({ messages, isLoading, currentNode }: Prop
 
   return (
     <div ref={containerRef} className="flex-1 overflow-y-auto px-4 py-4">
-      {messages.map((msg) => (
+      {messages.map((msg, i) => (
         <CSMessageBubble
           key={msg.id}
           message={msg}
+          isLast={i === messages.length - 1}
           currentNode={msg.role === 'assistant' ? currentNode : undefined}
         />
       ))}

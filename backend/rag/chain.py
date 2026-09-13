@@ -40,6 +40,15 @@ from backend.rag.retrieval.retrievers import AdaptiveRetriever, ChunkLevelRetrie
 from backend.memory.token_budget import trim_texts_to_budget
 from backend.shared.logger import logger
 
+
+def _llm_stream(msgs):
+    """generator function 包装：LCEL coerce 时走 RunnableGenerator，链上
+    .stream() 真正逐 chunk 拉取。直接传 llm（可调用代理，非 Runnable）会被
+    coerce 成 RunnableLambda——invoke 整段生成后只 yield 1 个整段 chunk，
+    打字机效果失效（2026-09-14）。"""
+    yield from llm.stream(msgs)
+
+
 # =====================================================
 # Prompt: 历史感知查询重写（DEFAULT fallback — 优先从 prompt_service 获取）
 # =====================================================
@@ -329,7 +338,7 @@ class RAGChain:
             return input_dict
 
         _stuff = create_stuff_documents_chain(
-            llm, _build_qa_prompt(),
+            _llm_stream, _build_qa_prompt(),
             document_prompt=_build_document_prompt(),
             document_separator="\n\n---\n\n",
         )
@@ -481,7 +490,10 @@ class RAGChain:
         gate_retriever = RunnableLambda(self._gate_wrap_retrieve)
 
         # ── ① HistoryAware: 对话历史改写（最外层，最先执行）─
-        # 双链策略：standalone 链跳过 HistoryAware LLM 调用，首轮对话省 ~1-2s
+        # 双链策略：standalone 链跳过 HistoryAware LLM 调用，首轮对话省 ~1-2s。
+        # 此处 llm 走 invoke-only（改写问题），无需 _llm_stream 桥接；但注意
+        # 代理对象被 LCEL coerce 成 RunnableLambda 时流式/回调语义会静默丢失
+        # —— 新增任何"链上要流式"的 LCEL 集成点必须用 _llm_stream（见其注释）。
         self.chain_standalone = create_retrieval_chain(gate_retriever, stuff_chain)
         if ENABLE_HISTORY_AWARE_RETRIEVAL:
             retriever = create_history_aware_retriever(
