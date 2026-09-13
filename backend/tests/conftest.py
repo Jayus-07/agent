@@ -47,8 +47,13 @@ def _prepare_isolated_data_dir() -> None:
         ).stdout
         tracked = [p for p in out.decode("utf-8", "replace").split("\0") if p]
     except Exception as e:
-        print(f"[conftest] git 不可用（{e}），放弃数据目录隔离，使用真实 data/")
-        return
+        # fail-fast：静默降级到真实 data/ 会让检索类测试的结果取决于工作区
+        # 索引的实时状态（2026-09-14 RC-097 假失败即经此路径），宁可套件
+        # 起不来也不能让测试在脏索引上"跑绿"
+        raise RuntimeError(
+            f"[conftest] git ls-files 失败，无法重建数据快照，拒绝降级到真实 data/ "
+            f"（如需调试工作区索引请设 RAG_EVAL_NO_ISOLATION=1）: {e}"
+        ) from e
 
     tmp_root = tempfile.mkdtemp(prefix="agent_test_data_")
     copied = 0
@@ -61,8 +66,15 @@ def _prepare_isolated_data_dir() -> None:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
             copied += 1
-        except OSError:
-            pass  # 个别文件缺失/被锁，跳过（快照允许缺运行态文件）
+        except OSError as e:
+            # 文档是索引构建的源，缺一个就是真缺口（表现为检索类用例概率性
+            # 假失败）；运行态文件（db/索引/缓存）被锁缺省可接受
+            if rel.startswith("data/docs/"):
+                raise RuntimeError(
+                    f"[conftest] 快照复制文档失败: {rel}（{e}）。源文件被占用时"
+                    f"请稍后重跑，禁止在缺文档的快照上跑测试"
+                ) from e
+            pass  # 个别运行态文件缺失/被锁，跳过（快照允许缺运行态文件)
     os.environ["RAG_DATA_DIR"] = tmp_root
     print(
         f"[conftest] 数据目录隔离: RAG_DATA_DIR={tmp_root} "
