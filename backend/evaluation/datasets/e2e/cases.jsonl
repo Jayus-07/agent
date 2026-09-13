@@ -22,3 +22,4 @@
 {"id": "F-009", "question": "direct 执行无 candidates", "module": "e2e", "expected": {"fault": "executor_no_candidates"}, "metadata": {"tier": "core", "query_type": "fault_injection", "note": "executor_error=no_candidates + failed step 留痕"}}
 {"id": "F-010", "question": "direct 执行 skill 不存在", "module": "e2e", "expected": {"fault": "executor_skill_not_found"}, "metadata": {"tier": "core", "query_type": "fault_injection", "note": "executor_error=skill_not_found + failed step 留痕"}}
 {"id": "F-011", "question": "direct 模式 SQLResult dict 渲染", "module": "e2e", "expected": {"fault": "sqlresult_rendered"}, "metadata": {"tier": "core", "query_type": "fault_injection", "note": "SQLResult 渲染为 Markdown 表格进 final_answer（09-07 存量 bug 回归）"}}
+{"id": "F-012", "question": "探针：direct 执行步骤失败", "module": "e2e", "expected": {"fault": "executor_step_failed"}, "metadata": {"tier": "core", "query_type": "fault_injection", "note": "失败步骤 final_answer 必须为空串，reporter 降级接管"}}

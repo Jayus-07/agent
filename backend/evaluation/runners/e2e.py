@@ -266,6 +266,7 @@ def _eval_fault_case(case: TestCase, exp: dict) -> EvalResult:
       param_missing_required / param_enum_violation  — 参数契约快速失败
       approval_pending                               — 写操作审批门降级
       executor_no_candidates / executor_skill_not_found — direct 执行降级
+      executor_step_failed                           — 失败步骤不产 final_answer
       sqlresult_rendered                             — SQLResult 渲染进 final_answer
     """
     import json as _json
@@ -429,6 +430,34 @@ def _eval_fault_case(case: TestCase, exp: dict) -> EvalResult:
         answer = out.get("final_answer")
         if not isinstance(answer, str) or "|" not in answer or "商品" not in answer:
             problems.append(f"SQLResult 应渲染为 Markdown 表格，实际 {answer!r}")
+        actual["final_answer_preview"] = (answer or "")[:80]
+
+    elif fault == "executor_step_failed":
+        from backend.orchestration.graph import direct_executor as _de
+
+        async def failing_sql(state):
+            sid = state["current_step_id"]
+            return {"step_results": {sid: {
+                "status": "failed", "output": None,
+                "error": "no such table: orders", "error_type": "not_found"}}}
+
+        state = {"question": "查库存",
+                 "route_decision": {"candidates": [{"name": "sql.query", "score": 0.9}]}}
+        with patch.object(_de.tool_registry, "get_skill_nodes",
+                          lambda: {"sql_skill": failing_sql}):
+            out = _de.skill_executor_node(state)
+        answer = out.get("final_answer")
+        if answer:
+            # 曾返回 str(None)="None"，占住 truthy final_answer 后 reporter
+            # 的降级文案被 runner 忽略，用户看到字面量 "None" 且被记忆落库
+            problems.append(
+                f"失败步骤 final_answer 必须为空串（让 reporter 降级接管），实际 {answer!r}")
+        failed_step = (out.get("step_results") or {}).get("direct_1", {})
+        if failed_step.get("status") != "failed" \
+                or failed_step.get("error_type") != "not_found":
+            problems.append(
+                f"失败步骤应留痕 status=failed/error_type=not_found，"
+                f"实际 {failed_step.get('status')}/{failed_step.get('error_type')}")
         actual["final_answer_preview"] = (answer or "")[:80]
 
     else:

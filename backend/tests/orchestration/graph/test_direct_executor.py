@@ -83,6 +83,23 @@ class TestDirectExecution:
         # step_results 保留结构化原貌，供 reporter/trace 使用
         assert out["step_results"]["direct_1"]["output"] == {"rows": [{"x": 1}]}
 
+    def test_failed_step_empty_final_answer(self, monkeypatch):
+        """失败步骤 final_answer 必须为空串：曾返回 str(None)="None"，
+        占住 truthy final_answer 后 reporter 的降级文案被 runner 忽略，
+        用户看到字面量 "None" 且被记忆落库"""
+        async def failing_sql(state):
+            sid = state["current_step_id"]
+            return {"step_results": {sid: {
+                "status": "failed", "output": None,
+                "error": "no such table: orders", "error_type": "not_found"}}}
+
+        self._patch_nodes(monkeypatch, {"sql_skill": failing_sql})
+        out = skill_executor_node(_state(candidates=_mk_candidates("sql.query")))
+        assert out["final_answer"] == ""
+        sr = out["step_results"]["direct_1"]
+        assert sr["status"] == "failed"
+        assert sr["error_type"] == "not_found"
+
     def test_business_analyze_auto_runs_predecessor(self, monkeypatch):
         """fix f13：business.analyze 无前置输出 → 先跑 sql.query（direct_0），
         其 output 注入 previous_outputs 后再跑 business.analyze（direct_1）"""

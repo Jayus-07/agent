@@ -94,6 +94,8 @@ def _run_skill_step(skill_nodes: dict, state: dict, step_id: str,
     step["status"] = skill_output.get("status", "success")
     if skill_output.get("error"):
         step["error"] = skill_output["error"]
+    if skill_output.get("error_type"):
+        step["error_type"] = skill_output["error_type"]
     return step
 
 
@@ -212,8 +214,14 @@ def _coerce_final_answer(step: dict) -> str:
     导致下游所有按字符串处理的地方崩溃
     (done 事件 sources 解析、emit_delta、memory end_turn 把 dict 写
     VARCHAR 等,日志中 2026-09-07 即有同类报错)。
+    步骤失败时返回空串——runner 对 truthy final_answer 会跳过 reporter,
+    返回 str(None) 曾让用户看到字面量 "None" 且被记忆落库。
     """
-    out = step.get("output", "")
+    if step.get("status") != "success":
+        return ""
+    out = step.get("output")
+    if out is None or out == "":
+        return ""
     if isinstance(out, str):
         return out
     if isinstance(out, dict) and "columns" in out and "rows" in out:

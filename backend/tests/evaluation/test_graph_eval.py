@@ -25,7 +25,7 @@ def e2e_cases():
 
 class TestDataset:
     def test_loads_and_counts(self, e2e_cases):
-        assert len(e2e_cases) == 24
+        assert len(e2e_cases) == 25
 
     def test_ids_unique(self, e2e_cases):
         ids = [c.id for c in e2e_cases]
@@ -58,15 +58,16 @@ class TestDataset:
         assert all(c.expected.get("final_state") == "BLOCKED" for c in guards)
 
     def test_fault_cases_declared(self, e2e_cases):
-        """11 个故障注入用例齐全，覆盖 Skill 边界的每类语义"""
+        """12 个故障注入用例齐全，覆盖 Skill 边界的每类语义"""
         faults = [c for c in e2e_cases if c.expected.get("fault")]
-        assert len(faults) == 11
+        assert len(faults) == 12
         assert {c.expected["fault"] for c in faults} == {
             "unretryable_error", "retryable_error", "timeout",
             "output_dict_normalized", "structured_str_parsed",
             "param_missing_required", "param_enum_violation",
             "approval_pending", "executor_no_candidates",
-            "executor_skill_not_found", "sqlresult_rendered",
+            "executor_skill_not_found", "executor_step_failed",
+            "sqlresult_rendered",
         }
 
 
@@ -76,7 +77,7 @@ class TestOfflineRunner:
         results = _run_e2e(e2e_cases, live=False)
         for r in results:
             assert r.status == "pass", f"{r.case_id}: {r.error_msg}"
-        assert len(results) == 24
+        assert len(results) == 25
 
     def test_offline_guard_cases_intercepted(self, e2e_cases):
         guards = [c for c in e2e_cases if c.expected.get("should_block")]
