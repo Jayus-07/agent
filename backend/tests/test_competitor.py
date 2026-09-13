@@ -1088,6 +1088,9 @@ from backend.tools.competitor import (
     _extract_url,
     _format_watchlist,
     competitor_analyze_tool,
+    competitor_history_tool,
+    competitor_watch_tool,
+    competitor_watchlist_tool,
 )
 
 
@@ -1132,31 +1135,33 @@ class TestFormatWatchlist:
 
 
 class TestCompetitorAnalyzeTool:
+    """工具按单职责拆分后：analyze/watch/history/watchlist 各自独立测试"""
+
     @patch("backend.tools.competitor.analyze_url")
     def test_action_analyze(self, mock_analyze):
         mock_analyze.return_value = "## 竞品分析: 结果"
-        result = competitor_analyze_tool.invoke({"action": "analyze", "url": "https://test.com"})
+        result = competitor_analyze_tool.invoke({"url": "https://test.com"})
         assert "竞品分析" in result
         mock_analyze.assert_called_once_with("https://test.com", name="")
 
     def test_action_analyze_no_url(self):
-        result = competitor_analyze_tool.invoke({"action": "analyze", "url": ""})
+        result = competitor_analyze_tool.invoke({"url": ""})
         assert "请提供" in result
 
     @patch("backend.tools.competitor.scan_watchlist")
     def test_action_watch(self, mock_scan):
         mock_scan.return_value = "## 竞品巡检"
-        result = competitor_analyze_tool.invoke({"action": "watch"})
+        result = competitor_watch_tool.invoke({})
         assert "巡检" in result
 
     @patch("backend.tools.competitor.history_report")
     def test_action_history(self, mock_history):
         mock_history.return_value = "## 价格历史"
-        result = competitor_analyze_tool.invoke({"action": "history", "url": "https://test.com"})
+        result = competitor_history_tool.invoke({"url": "https://test.com"})
         assert "价格历史" in result
 
     def test_action_history_no_url(self):
-        result = competitor_analyze_tool.invoke({"action": "history", "url": ""})
+        result = competitor_history_tool.invoke({"url": ""})
         assert "请提供" in result
 
     @patch("backend.tools.competitor.analyze_url")
@@ -1165,7 +1170,7 @@ class TestCompetitorAnalyzeTool:
         store = CompetitorStore(db_path=str(tmp_path / "cmp.db"))
         mock_get_store.return_value = store
         mock_analyze.return_value = "## 竞品分析: 首次抓取"
-        result = competitor_analyze_tool.invoke({
+        result = competitor_watchlist_tool.invoke({
             "action": "add", "url": "https://item.jd.com/123.html", "name": "我的竞品"
         })
         assert "已加入监控" in result
@@ -1175,24 +1180,23 @@ class TestCompetitorAnalyzeTool:
         assert watch["name"] == "我的竞品"
 
     def test_action_add_no_url(self):
-        result = competitor_analyze_tool.invoke({"action": "add", "url": ""})
+        result = competitor_watchlist_tool.invoke({"action": "add", "url": ""})
         assert "请提供" in result
 
     @patch("backend.tools.competitor._format_watchlist")
     def test_action_list(self, mock_format):
         mock_format.return_value = "## 竞品监控列表"
-        result = competitor_analyze_tool.invoke({"action": "list"})
+        result = competitor_watchlist_tool.invoke({"action": "list"})
         assert "监控列表" in result
 
     def test_unknown_action(self):
-        result = competitor_analyze_tool.invoke({"action": "unknown_action"})
+        result = competitor_watchlist_tool.invoke({"action": "unknown_action"})
         assert "未知 action" in result
 
     @patch("backend.tools.competitor.analyze_url")
     def test_url_extracted_from_question(self, mock_analyze):
         mock_analyze.return_value = "分析结果"
         result = competitor_analyze_tool.invoke({
-            "action": "analyze",
             "url": "",
             "question": "帮我分析 https://item.jd.com/456.html 这个竞品",
         })
@@ -1207,7 +1211,7 @@ class TestCompetitorAnalyzeTool:
 
         mock_analyze.side_effect = RuntimeError("unexpected error")
         with pytest.raises(RuntimeError):
-            competitor_analyze_tool.invoke({"action": "analyze", "url": "https://test.com"})
+            competitor_analyze_tool.invoke({"url": "https://test.com"})
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -1394,14 +1398,14 @@ class TestAnalyzeUrlQualityGate:
 
 
 class TestToolNewActions:
-    """O2: tool 新 action (remove / toggle)"""
+    """O2: watchlist tool 写动作 (remove / toggle)"""
 
     @patch("backend.tools.competitor.get_store")
     def test_action_remove_success(self, mock_get_store, tmp_path):
         store = CompetitorStore(db_path=str(tmp_path / "cmp.db"))
         mock_get_store.return_value = store
         store.add_watch("A", "https://a.com")
-        result = competitor_analyze_tool.invoke({"action": "remove", "url": "https://a.com"})
+        result = competitor_watchlist_tool.invoke({"action": "remove", "url": "https://a.com"})
         assert "已" in result and "移除" in result
         assert store.get_watch_by_url("https://a.com") is None
 
@@ -1409,11 +1413,11 @@ class TestToolNewActions:
     def test_action_remove_not_found(self, mock_get_store, tmp_path):
         store = CompetitorStore(db_path=str(tmp_path / "cmp.db"))
         mock_get_store.return_value = store
-        result = competitor_analyze_tool.invoke({"action": "remove", "url": "https://nonexist.com"})
+        result = competitor_watchlist_tool.invoke({"action": "remove", "url": "https://nonexist.com"})
         assert "未找到" in result
 
     def test_action_remove_no_url(self):
-        result = competitor_analyze_tool.invoke({"action": "remove", "url": ""})
+        result = competitor_watchlist_tool.invoke({"action": "remove", "url": ""})
         assert "请提供" in result
 
     @patch("backend.tools.competitor.get_store")
@@ -1421,7 +1425,7 @@ class TestToolNewActions:
         store = CompetitorStore(db_path=str(tmp_path / "cmp.db"))
         mock_get_store.return_value = store
         store.add_watch("A", "https://a.com")
-        result = competitor_analyze_tool.invoke({
+        result = competitor_watchlist_tool.invoke({
             "action": "toggle", "url": "https://a.com", "enabled": False
         })
         assert "停用" in result
@@ -1432,20 +1436,20 @@ class TestToolNewActions:
         mock_get_store.return_value = store
         store.add_watch("A", "https://a.com")
         store.toggle_watch("https://a.com", enabled=False)
-        result = competitor_analyze_tool.invoke({
+        result = competitor_watchlist_tool.invoke({
             "action": "toggle", "url": "https://a.com", "enabled": True
         })
         assert "启用" in result
 
     def test_action_toggle_no_url(self):
-        result = competitor_analyze_tool.invoke({"action": "toggle", "url": ""})
+        result = competitor_watchlist_tool.invoke({"action": "toggle", "url": ""})
         assert "请提供" in result
 
     @patch("backend.tools.competitor.get_store")
     def test_action_toggle_not_found(self, mock_get_store, tmp_path):
         store = CompetitorStore(db_path=str(tmp_path / "cmp.db"))
         mock_get_store.return_value = store
-        result = competitor_analyze_tool.invoke({
+        result = competitor_watchlist_tool.invoke({
             "action": "toggle", "url": "https://nonexist.com"
         })
         assert "未找到" in result
