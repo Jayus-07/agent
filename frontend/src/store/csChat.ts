@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
 import type { SSEStreamEvent } from '@/lib/types'
+import { isTerminalEvent, reduceStreamCore } from '@/store/stream-reduce'
 import type { CSConfirmationState, CSHandoffState } from '@/components/cs/constants'
 
 export interface CSMessage {
@@ -8,7 +9,6 @@ export interface CSMessage {
   role: 'user' | 'assistant'
   content: string
   timestamp: number
-  streamEvents?: SSEStreamEvent[]
   csNodes?: string[]
 }
 
@@ -23,7 +23,6 @@ export interface CSSession {
 interface CSChatState {
   sessions: CSSession[]
   currentId: string
-  streamEvents: SSEStreamEvent[]
   currentStatus: string
   deltaText: string
   nodeLabels: Record<string, string>
@@ -74,7 +73,6 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
   return {
     sessions: [initialSession],
     currentId: initialSession.id,
-    streamEvents: [],
     currentStatus: '',
     deltaText: '',
     nodeLabels: {},
@@ -144,35 +142,20 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
       })
     },
 
+    // — SSE v2: 按事件类型分流更新 —
+    //  公共字段（deltaText/currentStatus/nodeLabels）走 stream-reduce.ts 共享归约。
+    //  流式期间不触碰 sessions：CS 无 message.streamEvents 消费方（时间线在终态
+    //  由 replaceLastAssistant 从 csTimeline 一次性写入），每条 delta 重建
+    //  messages 数组只会让整棵消息树白白重渲染。
     addStreamEvent: (evt, sessionId) => {
       set((state) => {
-        const sid = targetId(state, sessionId)
-        const isCurrentSession = !sessionId || sessionId === state.currentId
-        const MAX_EVENTS = 200
+        const core = reduceStreamCore(state, evt)
 
-        let storeEvents = state.streamEvents
-        if (isCurrentSession) {
-          if (evt.event === 'done') {
-            storeEvents = []
-          } else if (evt.event !== 'meta') {
-            storeEvents = storeEvents.length >= MAX_EVENTS
-              ? [...storeEvents.slice(storeEvents.length - MAX_EVENTS + 1), evt]
-              : [...storeEvents, evt]
-          }
-        }
-
-        let deltaText = state.deltaText
-        let currentStatus = state.currentStatus
-        let nodeLabels = state.nodeLabels
-        let intentDetected = state.intentDetected
         let currentNode = state.currentNode
+        let intentDetected = state.intentDetected
         let csTimeline = state.csTimeline
-        const isTerminal = evt.event === 'done' || evt.event === 'error'
 
-        if (evt.event === 'meta') {
-          nodeLabels = evt.data.node_labels
-        } else if (evt.event === 'status') {
-          currentStatus = evt.data.node
+        if (evt.event === 'status') {
           currentNode = evt.data.node
           if (evt.data.node.startsWith('cs_')) {
             csTimeline = [...csTimeline, evt.data.node]
@@ -186,40 +169,18 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
               intentDetected = intentMap[evt.data.node] ?? null
             }
           }
-        } else if (evt.event === 'delta') {
-          deltaText = state.deltaText + evt.data.content
-        } else if (isTerminal) {
-          currentStatus = ''
+        } else if (isTerminalEvent(evt)) {
           currentNode = null
         }
 
-        const sessions = state.sessions.map((s) => {
-          if (s.id !== sid) return s
-          const msgs = s.messages.map((m, idx) => {
-            if (idx !== s.messages.length - 1 || m.role !== 'assistant') return m
-            if (isTerminal) {
-              return { ...m, streamEvents: [], csNodes: csTimeline }
-            }
-            const cur = m.streamEvents || []
-            const next = cur.length >= MAX_EVENTS
-              ? [...cur.slice(cur.length - MAX_EVENTS + 1), evt]
-              : [...cur, evt]
-            return { ...m, streamEvents: next }
-          })
-          return { ...s, messages: msgs, updatedAt: Date.now() }
-        })
-
-        return {
-          sessions, streamEvents: storeEvents, deltaText, currentStatus,
-          nodeLabels, intentDetected, currentNode, csTimeline,
-        }
+        return { ...core, intentDetected, currentNode, csTimeline }
       })
     },
 
     setCurrentRequestId: (id) => set({ currentRequestId: id }),
 
     resetStream: () => set({
-      streamEvents: [], currentStatus: '', deltaText: '',
+      currentStatus: '', deltaText: '',
       currentRequestId: null, currentNode: null, csTimeline: [],
     }),
 

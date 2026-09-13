@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
 import type { Session, Message, ChatMode, SSEStreamEvent } from '@/lib/types'
+import { isTerminalEvent, reduceStreamCore } from '@/store/stream-reduce'
 
 interface ChatState {
   // — 数据 —
@@ -153,7 +154,9 @@ export const useChatStore = create<ChatState>((set, get) => {
     // — SSE v2: 按事件类型分流更新 —
     //  设计：
     //   - delta 文本不再回写 message.content（P0-4：避免每条 token 触发所有 bubble 重渲染）；
-    //     流式文本只写入 store.deltaText，由 StreamingBubble 单独订阅。
+    //     流式文本只写入 store.deltaText，由 StreamingContent 单独订阅。
+    //   - 公共字段（deltaText/currentStatus/nodeLabels）归约走 stream-reduce.ts
+    //     共享实现，与 csChat 保持一致。
     //   - done/error 终态事件清空 message.streamEvents 和 store.streamEvents（P0-5：
     //     防止长会话累积撑爆内存；OOM 风险）。
     //   - 通用事件（status/log/delta）按 200 上限环形追加；超长后丢弃最老。
@@ -175,26 +178,13 @@ export const useChatStore = create<ChatState>((set, get) => {
           }
         }
 
-        let deltaText = state.deltaText
-        let currentStatus = state.currentStatus
-        let nodeLabels = state.nodeLabels
-        const isTerminal = evt.event === 'done' || evt.event === 'error'
-
-        if (evt.event === 'meta') {
-          nodeLabels = evt.data.node_labels
-        } else if (evt.event === 'status') {
-          currentStatus = evt.data.node
-        } else if (evt.event === 'delta') {
-          deltaText = state.deltaText + evt.data.content
-        } else if (isTerminal) {
-          // 终态清空状态节点：否则 error/中断路径（无 done 事件）下
-          // StatusBar 会残留最后一个阶段标签（如“✍️ 生成回复”）
-          currentStatus = ''
-        }
+        // 公共字段（deltaText/currentStatus/nodeLabels）走共享归约
+        const core = reduceStreamCore(state, evt)
 
         // 实时更新最后一条 assistant 消息的 streamEvents
         // - 终态：清空该字段（释放内存）
         // - 其他事件：环形追加（200 上限）
+        const isTerminal = isTerminalEvent(evt)
         const sessions = state.sessions.map((s) => {
           if (s.id !== sid) return s
           const msgs = s.messages.map((m, idx) => {
@@ -212,7 +202,7 @@ export const useChatStore = create<ChatState>((set, get) => {
           return { ...s, messages: msgs, updatedAt: Date.now() }
         })
 
-        return { sessions, streamEvents: storeEvents, deltaText, currentStatus, nodeLabels }
+        return { sessions, streamEvents: storeEvents, ...core }
       })
     },
 

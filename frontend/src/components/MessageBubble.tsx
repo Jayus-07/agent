@@ -5,12 +5,11 @@
  *
  * 设计原则（P0-4 / P1-8 / P1-11）：
  *   1. 普通气泡不订阅流式字段：仅当 isLast && isLoading && !content 时进入"流式模式"，
- *      由 StreamingBubble 子组件订阅 storeDeltaText / storeStreamEvents。
+ *      流式文本由共享的 StreamingContent 组件订阅 store.deltaText。
  *      流式期间 store 更新只让最后一个 bubble 重渲；N-1 条历史气泡由 React.memo 跳过。
- *   2. 流式光标抽到独立组件，外层 re-render 不中断 CSS 动画。
- *   3. 用户气泡始终静态 → 不订阅任何 store 字段。
+ *   2. 用户气泡始终静态 → 不订阅任何 store 字段。
  */
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo } from 'react'
 import type { Message } from '@/lib/types'
 import { useChatStore } from '@/store/chat'
 import SourceCard from './SourceCard'
@@ -18,6 +17,7 @@ import MarkdownContent from './MarkdownContent'
 import MessageActions from './chat/MessageActions'
 import SqlViz from './chat/SqlViz'
 import TokenInfo from './chat/TokenInfo'
+import StreamingContent from './chat/StreamingContent'
 
 function stripReferences(content: string): string {
   const markers = ['\n\n---\n\n### 参考文献', '\n\n---\n\n### 参考来源',
@@ -29,61 +29,9 @@ function stripReferences(content: string): string {
   return content
 }
 
-/** 独立光标组件 —— 父级 re-render 不会中断 CSS 动画（P1-8） */
-function StreamingCursor() {
-  return (
-    <span
-      className="inline-block w-0.5 h-4 bg-accent ml-0.5 align-text-bottom rounded-full cursor-blink"
-      aria-hidden
-    />
-  )
-}
-
-/**
- * 流式内容渲染 —— 只在"当前流式气泡"挂载一次，订阅 store 字段。
- *   非当前气泡（isLast=false 或非流式状态）不会加载此组件。
- */
-function StreamingBubble({ message: _message }: { message: Message }) {
-  // 单字段 selector：Zustand v5 不再支持自定义 equalityFn，引用稳定的 string 足够
-  const deltaText = useChatStore((s) => s.deltaText)
-  const [renderText, setRenderText] = useState('')
-  const rafRef = useRef<number | null>(null)
-  const lastRenderedRef = useRef('')
-
-  useEffect(() => {
-    if (rafRef.current) return
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null
-      if (deltaText !== lastRenderedRef.current) {
-        lastRenderedRef.current = deltaText
-        setRenderText(deltaText)
-      }
-    })
-    return () => {
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
-      }
-    }
-  }, [deltaText])
-
-  const displayContent = renderText || deltaText
-  return (
-    <div>
-      {displayContent ? (
-        <div className="text-sm text-text-primary leading-relaxed">
-          <MarkdownContent content={displayContent} />
-          <StreamingCursor />
-        </div>
-      ) : (
-        <div className="flex items-center gap-1.5 py-2">
-          <span className="typing-dot w-1.5 h-1.5 rounded-full bg-accent/30 inline-block" />
-          <span className="typing-dot w-1.5 h-1.5 rounded-full bg-accent/30 inline-block" />
-          <span className="typing-dot w-1.5 h-1.5 rounded-full bg-accent/30 inline-block" />
-        </div>
-      )}
-    </div>
-  )
+/** 绑定主 chat store 的流式文本订阅（StreamingContent 经 props 接收 hook） */
+function useChatDelta(): string {
+  return useChatStore((s) => s.deltaText)
 }
 
 interface MessageBubbleProps {
@@ -95,7 +43,7 @@ interface MessageBubbleProps {
 
 function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubbleProps) {
   const isUser = message.role === 'user'
-  // 只订阅 isLoading —— 单字段、引用稳定；其余流式字段由 StreamingBubble 单独订阅
+  // 只订阅 isLoading —— 单字段、引用稳定；流式文本由 StreamingContent 单独订阅
   const isLoading = useChatStore((s) => s.isLoading)
   // 流式模式：最后一条 assistant + 加载中 + 当前消息还没写入完成内容
   const isCurrentStreaming = !isUser && isLoading && isLast && !message.content
@@ -127,7 +75,7 @@ function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubb
         ) : (
           <div>
             {isCurrentStreaming ? (
-              <StreamingBubble message={message} />
+              <StreamingContent useDeltaText={useChatDelta} />
             ) : (
               <>
                 {message.sources && message.sources.length > 0 && (

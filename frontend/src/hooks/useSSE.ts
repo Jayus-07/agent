@@ -3,7 +3,6 @@
 import { useCallback, useRef } from 'react'
 import { useChatStore } from '@/store/chat'
 import { streamChat, abortChat } from '@/lib/api/chat'
-import type { SSEStreamEvent } from '@/lib/api/chat'
 import { invalidateSessionsCache } from '@/lib/sessions-cache'
 import { getSelectedDepartment } from '@/lib/department'
 import { nanoid } from 'nanoid'
@@ -34,7 +33,6 @@ export function useSSE() {
     addMessage('user', question, sessionId)
     addMessage('assistant', '', sessionId)
 
-    const streamEvents: SSEStreamEvent[] = []
     try {
       for await (const evt of streamChat(
         { question, session_id: sessionId, request_id: requestId,
@@ -43,7 +41,6 @@ export function useSSE() {
       )) {
         if (controller.signal.aborted) return
 
-        streamEvents.push(evt)
         addStreamEvent(evt, sessionId)
 
         // error 事件 → 立即持久化到消息内容
