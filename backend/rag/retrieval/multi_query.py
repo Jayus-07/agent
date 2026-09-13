@@ -361,13 +361,16 @@ class MultiQueryRetriever(BaseRetriever):
         ex = retrieval_pool_inner()
         base_invoke = self.base_retriever.invoke
 
-        def _invoke_isolated(q: str) -> list:
-            # Context 对象不可重入：多个任务共享同一个 ctx 并发 ctx.run
-            # 会抛 "cannot enter context: already entered"，变体检索全灭
-            # → 整轮检索为空。每个任务独立 copy_context 携带调用方上下文。
-            return contextvars.copy_context().run(base_invoke, q)
+        def _submit_isolated(q: str):
+            # context 快照必须在提交方（请求）线程做：池线程 context 为空，
+            # 在任务函数内 copy 会丢失全部请求状态（metadata_filter/主体授权/
+            # 检索缓存），禁入库内容可经变体检索漏出（2026-09-14 冒烟实测）。
+            # 每个任务持有独立 ctx 副本——多任务共享同一 ctx 并发 ctx.run 会抛
+            # "cannot enter context: already entered"，变体检索全灭。
+            ctx = contextvars.copy_context()
+            return ex.submit(ctx.run, base_invoke, q)
 
-        future_to_q = {ex.submit(_invoke_isolated, q): q for q in queries}
+        future_to_q = {_submit_isolated(q): q for q in queries}
         for future in as_completed(future_to_q):
             q = future_to_q[future]
             try:
