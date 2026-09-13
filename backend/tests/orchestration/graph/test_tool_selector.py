@@ -228,3 +228,95 @@ class TestEvents:
     def test_passthrough_emits_nothing(self):
         assert self._build({"source": "passthrough", "reason": "fast_path"}) == []
         assert self._build({}) == []
+
+
+class TestRollout:
+    """灰度放量：白名单 session 优先，其余按 md5 稳定哈希百分比。"""
+
+    def test_zero_percent_all_passthrough(self, monkeypatch):
+        monkeypatch.setattr(ts, "FC_TOOL_SELECTION_ROLLOUT_PERCENT", 0)
+        fake = _FakeLLM()
+        with patch.object(ts, "llm", fake):
+            out = tool_selector_node(_state(
+                [{"name": "report.generate", "score": 0.7}], session_id="s1"))
+        assert fake.bound_calls == 0
+        assert out["_tool_selection"]["reason"] == "rollout_skip"
+
+    def test_whitelist_overrides_zero_percent(self, monkeypatch):
+        monkeypatch.setattr(ts, "FC_TOOL_SELECTION_ROLLOUT_PERCENT", 0)
+        monkeypatch.setattr(ts, "FC_TOOL_SELECTION_ALLOWLIST", ["vip-session"])
+        fake = _FakeLLM([AIMessage(content="", tool_calls=[
+            _tc("report__generate", {"report_type": "daily_sales"})])])
+        with patch.object(ts, "llm", fake):
+            out = tool_selector_node(_state(
+                [{"name": "report.generate", "score": 0.7}], session_id="vip-session"))
+        assert out["resolved_params"] == {"report_type": "daily_sales"}
+
+    def test_stable_hash_grouping(self, monkeypatch):
+        """同一 session_id 多次判定结果稳定（md5 无随机盐）"""
+        monkeypatch.setattr(ts, "FC_TOOL_SELECTION_ROLLOUT_PERCENT", 50)
+        results = {ts._in_rollout("stable-session") for _ in range(5)}
+        assert len(results) == 1
+
+    def test_default_100_percent_passes(self):
+        assert ts._in_rollout("any-session") is True
+
+
+class TestDedicatedModel:
+    """TOOL_SELECTOR_MODEL 专用轻量模型：配置时优先，空/失败回退全局。"""
+
+    def test_dedicated_model_used_when_configured(self, monkeypatch):
+        monkeypatch.setattr(ts, "TOOL_SELECTOR_MODEL", "deepseek-v4-flash")
+        dedicated = _FakeLLM([AIMessage(content="", tool_calls=[
+            _tc("report__generate", {"report_type": "daily_sales"})])])
+        global_llm = _FakeLLM()
+        monkeypatch.setattr(
+            ts, "bind_tools_for_model",
+            lambda name, tools: dedicated.bind_tools(tools))
+        with patch.object(ts, "llm", global_llm):
+            out = tool_selector_node(_state([{"name": "report.generate", "score": 0.7}]))
+        assert dedicated.bound_calls == 1
+        assert global_llm.bound_calls == 0
+        assert out["resolved_params"] == {"report_type": "daily_sales"}
+
+    def test_fallback_to_global_when_dedicated_unavailable(self, monkeypatch):
+        """专用模型未注册/构建失败（bind_tools_for_model 返回 None）→ 走全局"""
+        monkeypatch.setattr(ts, "TOOL_SELECTOR_MODEL", "ghost-model")
+        monkeypatch.setattr(ts, "bind_tools_for_model", lambda name, tools: None)
+        global_llm = _FakeLLM([AIMessage(content="", tool_calls=[
+            _tc("report__generate", {"report_type": "daily_sales"})])])
+        with patch.object(ts, "llm", global_llm):
+            out = tool_selector_node(_state([{"name": "report.generate", "score": 0.7}]))
+        assert global_llm.bound_calls == 1
+        assert out["resolved_params"] == {"report_type": "daily_sales"}
+
+
+class TestMetricsRecording:
+    def _recorder(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(ts, "_record",
+                            lambda source, reason="", capability="", t0=None:
+                            calls.append((source, reason, capability)))
+        return calls
+
+    def test_fc_success_records_capability(self, monkeypatch):
+        calls = self._recorder(monkeypatch)
+        fake = _FakeLLM([AIMessage(content="", tool_calls=[
+            _tc("report__generate", {"report_type": "daily_sales"})])])
+        with patch.object(ts, "llm", fake):
+            tool_selector_node(_state([{"name": "report.generate", "score": 0.7}]))
+        assert ("fc", "ok", "report.generate") in calls
+
+    def test_passthrough_reasons_recorded(self, monkeypatch):
+        calls = self._recorder(monkeypatch)
+        fake = _FakeLLM()
+        with patch.object(ts, "llm", fake):
+            tool_selector_node(_state([{"name": "sql.query", "score": 0.9}]))
+        assert ("passthrough", "fast_path", "") in calls
+
+    def test_no_match_recorded(self, monkeypatch):
+        calls = self._recorder(monkeypatch)
+        fake = _FakeLLM([AIMessage(content="无匹配工具")])
+        with patch.object(ts, "llm", fake):
+            tool_selector_node(_state([{"name": "report.generate", "score": 0.7}]))
+        assert ("no_match", "model_declined", "") in calls

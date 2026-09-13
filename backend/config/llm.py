@@ -143,6 +143,17 @@ ENABLE_FC_TOOL_SELECTION = os.getenv(
 # 失败/超时直接回退直通路径（等价旧行为），不拖尾延迟
 TOOL_SELECTOR_LLM_TIMEOUT = int(os.getenv("TOOL_SELECTOR_LLM_TIMEOUT", "8"))
 TOOL_SELECTOR_LLM_MAX_TOKENS = int(os.getenv("TOOL_SELECTOR_LLM_MAX_TOKENS", "256"))
+# 选择+填参是小任务，可指定低延迟模型（推荐已注册的 deepseek-v4-flash）；
+# 空 = 跟随全局默认模型。未注册/构建失败自动回退全局模型
+TOOL_SELECTOR_MODEL = os.getenv("TOOL_SELECTOR_MODEL", "").strip()
+# 灰度放量（照 cs_prefilter 模式）：白名单 session 优先，其余按
+# md5(session_id) 稳定哈希百分比。默认 100 = 全量；0 = 全部直通（回旧行为）
+FC_TOOL_SELECTION_ROLLOUT_PERCENT = int(
+    os.getenv("FC_TOOL_SELECTION_ROLLOUT_PERCENT", "100"))
+FC_TOOL_SELECTION_ALLOWLIST = [
+    s.strip() for s in os.getenv("FC_TOOL_SELECTION_ALLOWLIST", "").split(",")
+    if s.strip()
+]
 
 # =====================================================
 # Token Usage Tracking (P0 - 审计日志)

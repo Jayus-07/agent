@@ -309,6 +309,40 @@ router_confidence = Histogram(
     buckets=(0.3, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 1.0),
 )
 
+# ── FC 工具选择可观测性（tool_selector 节点）──
+# source: fc（模型选定）| no_match（模型明确无匹配）| passthrough（直通，
+#         reason 细分: flag_off/rollout_skip/fast_path/not_direct/no_candidates/
+#         no_valid_candidates/schema_convert_failed/llm_failed/fc_invalid_after_retry）
+tool_selector_total = Counter(
+    "tool_selector_total",
+    "FC 工具选择结果总数（按来源与原因）",
+    labelnames=("source", "reason"),
+)
+tool_selector_selected_total = Counter(
+    "tool_selector_selected_total",
+    "FC 选定的 capability 分布（仅 source=fc 时计数）",
+    labelnames=("capability",),
+)
+tool_selector_latency_seconds = Histogram(
+    "tool_selector_latency_seconds",
+    "tool_selector 节点决策耗时（含 LLM 调用）",
+    buckets=(0.005, 0.05, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 17.0, 30.0),
+)
+
+
+def record_tool_selection(source: str, reason: str = "",
+                          capability: str = "", elapsed_ms: float | None = None) -> None:
+    """埋点 FC 工具选择结果（软失败不影响主流程）。"""
+    try:
+        tool_selector_total.labels(source=source, reason=reason or "-").inc()
+        if source == "fc" and capability:
+            tool_selector_selected_total.labels(capability=capability).inc()
+        if elapsed_ms is not None:
+            tool_selector_latency_seconds.observe(elapsed_ms / 1000.0)
+    except Exception:
+        pass
+
+
 # ── 客服系统指标（Phase 6）──
 cs_intent_total = Counter(
     "cs_intent_total",
@@ -586,6 +620,11 @@ __all__ = [
     "update_metadata_coverage",
     "record_router_decision",
     "record_trace_finish",
+    # FC 工具选择指标
+    "tool_selector_total",
+    "tool_selector_selected_total",
+    "tool_selector_latency_seconds",
+    "record_tool_selection",
     # CS 指标（Phase 6）
     "cs_intent_total",
     "cs_permission_violation_total",

@@ -18,14 +18,19 @@ question 透传"的旧行为。
 """
 from __future__ import annotations
 
+import hashlib
 import time
 
 from backend.config import (
     ENABLE_FC_TOOL_SELECTION,
-    TOOL_SELECTOR_LLM_TIMEOUT,
+    FC_TOOL_SELECTION_ALLOWLIST,
+    FC_TOOL_SELECTION_ROLLOUT_PERCENT,
     TOOL_SELECTOR_LLM_MAX_TOKENS,
+    TOOL_SELECTOR_LLM_TIMEOUT,
+    TOOL_SELECTOR_MODEL,
 )
 from backend.infra.llm import llm
+from backend.infra.llm.proxy import bind_tools_for_model
 from backend.infra.timeout import safe_call_with_timeout
 from backend.orchestration.tool_registry import tool_registry
 from backend.orchestration.tool_schema import (
@@ -51,9 +56,23 @@ _SYSTEM_PROMPT = """你是电商运营平台的工具选择器。根据用户问
 - 路由系统的建议仅供参考，可能不准确，以问题实际意图为准"""
 
 
+def _record(source: str, reason: str = "", capability: str = "",
+            t0: float | None = None) -> None:
+    """指标埋点（软失败不影响主流程；直通路径不记 latency——无意义）。"""
+    try:
+        from backend.observability.metrics import record_tool_selection
+        record_tool_selection(
+            source, reason, capability,
+            elapsed_ms=int((time.time() - t0) * 1000) if t0 is not None else None,
+        )
+    except Exception:
+        pass
+
+
 def _passthrough(state: dict, reason: str) -> dict:
     """直通：不设置 resolved_params → direct_executor 回退旧行为
     （candidates[0] + question 透传）。"""
+    _record("passthrough", reason)
     return {**state, "_tool_selection": {"source": "passthrough", "reason": reason}}
 
 
@@ -107,7 +126,9 @@ def _select_via_fc(state: dict, valid_caps: list[str], t0: float) -> dict:
     if not tools:
         return _passthrough(state, "schema_convert_failed")
 
-    bound = llm.bind_tools(tools)
+    # 专用轻量模型优先（选择+填参小任务），未配置/不可用回退全局模型；
+    # 两者都经 _BoundLLMProxy 走限流/韧性链/token 记录
+    bound = bind_tools_for_model(TOOL_SELECTOR_MODEL, tools) or llm.bind_tools(tools)
     feedback = ""
     for attempt in range(2):
         raw = safe_call_with_timeout(
@@ -129,9 +150,11 @@ def _select_via_fc(state: dict, valid_caps: list[str], t0: float) -> dict:
             # 模型明确不调工具（无匹配 / 降级话术 / 纯文本）→ 保守直通
             content = (getattr(raw, "content", "") or "")[:100]
             logger.info(f"[ToolSelector] 模型未调用工具: {content}")
+            elapsed_ms = int((time.time() - t0) * 1000)
+            _record("no_match", "model_declined", t0=t0)
             return {**state, "_tool_selection": {
                 "source": "no_match", "candidates": valid_caps,
-                "elapsed_ms": int((time.time() - t0) * 1000),
+                "elapsed_ms": elapsed_ms,
             }}
 
         tc = tool_calls[0]
@@ -155,9 +178,11 @@ def _select_via_fc(state: dict, valid_caps: list[str], t0: float) -> dict:
         rest = [c for c in (decision.get("candidates") or [])
                 if isinstance(c, dict) and c.get("name") != cap]
         new_decision = {**decision, "candidates": [{"name": cap, "score": 0.95}] + rest}
+        elapsed_ms = int((time.time() - t0) * 1000)
+        _record("fc", "ok", capability=cap, t0=t0)
         logger.info(
             f"[ToolSelector] FC 选定 {cap} params={list(params.keys())} "
-            f"(attempt={attempt + 1}, {int((time.time() - t0) * 1000)}ms)"
+            f"(attempt={attempt + 1}, {elapsed_ms}ms)"
         )
         return {
             **state,
@@ -171,6 +196,18 @@ def _select_via_fc(state: dict, valid_caps: list[str], t0: float) -> dict:
         }
 
     return _passthrough(state, "fc_invalid_after_retry")
+
+
+def _in_rollout(session_id: str) -> bool:
+    """灰度判定（照 cs_prefilter 模式）：白名单 session 优先，其次
+    md5 稳定哈希百分比。用 md5 而非内置 hash——内置 hash 有随机盐，
+    进程重启会改变分组。"""
+    if session_id in FC_TOOL_SELECTION_ALLOWLIST:
+        return True
+    if FC_TOOL_SELECTION_ROLLOUT_PERCENT >= 100:
+        return True
+    digest = int(hashlib.md5(session_id.encode()).hexdigest(), 16)
+    return (digest % 100) < FC_TOOL_SELECTION_ROLLOUT_PERCENT
 
 
 def tool_selector_node(state: dict) -> dict:
@@ -188,6 +225,11 @@ def tool_selector_node(state: dict) -> dict:
 
     if state.get("route_mode") != "direct":
         return _passthrough(state, "not_direct")
+
+    # 灰度放量：未命中的 session 走 control 组（直通 = 旧行为），
+    # 便于按 session 对比 FC 与直通的表现
+    if not _in_rollout(state.get("session_id", "default")):
+        return _passthrough(state, "rollout_skip")
 
     decision = state.get("route_decision") or {}
     candidates = decision.get("candidates", []) if isinstance(decision, dict) else []

@@ -670,6 +670,28 @@ class _BoundLLMProxy:
         return getattr(self._bound, name)
 
 
+def bind_tools_for_model(model_name: str, tools) -> "_BoundLLMProxy | None":
+    """为指定模型构建 bind_tools 包装（专用轻量模型场景，如 tool_selector）。
+
+    返回 None（model_name 为空 / 未注册 / 构建失败）时调用方应回退
+    全局 llm.bind_tools(tools)。实例经 _get_override_llm 缓存，且用
+    _BoundLLMProxy 包装——专用模型同样走限流/韧性链/token 记录。
+    """
+    if not model_name:
+        return None
+    try:
+        from backend.infra.llm.models import AVAILABLE_MODELS
+        if model_name not in {m["name"] for m in AVAILABLE_MODELS}:
+            logger.warning(
+                f"[LLM:proxy] 专用模型未注册: {model_name}，回退全局模型")
+            return None
+        inst = _get_override_llm(model_name)
+        return _BoundLLMProxy(inst.bind_tools(tools))
+    except Exception as e:
+        logger.warning(f"[LLM:proxy] 专用模型 bind_tools 失败，回退全局: {e}")
+        return None
+
+
 # =====================================================
 # 代理对象
 # =====================================================
