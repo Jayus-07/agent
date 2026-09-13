@@ -34,6 +34,22 @@ function useChatDelta(): string {
   return useChatStore((s) => s.deltaText)
 }
 
+/**
+ * 流式阶段状态行 —— 参考通用 AI 对话交互：进度提示置于回复顶部
+ * （问题气泡之下、流式正文之上），阶段标签来自 meta 下发的 nodeLabels。
+ */
+function StreamingStatusLine() {
+  const currentStatus = useChatStore((s) => s.currentStatus)
+  const nodeLabels = useChatStore((s) => s.nodeLabels)
+  const label = nodeLabels[currentStatus] || currentStatus || '思考中'
+  return (
+    <div key={currentStatus} className="flex items-center gap-1.5 mb-1.5 text-xs text-text-muted animate-fade-in">
+      <span>{label}</span>
+      <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent/50 animate-pulse" />
+    </div>
+  )
+}
+
 interface MessageBubbleProps {
   message: Message
   isLast: boolean
@@ -75,12 +91,12 @@ function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubb
         ) : (
           <div>
             {isCurrentStreaming ? (
-              <StreamingContent useDeltaText={useChatDelta} />
+              <div>
+                <StreamingStatusLine />
+                <StreamingContent useDeltaText={useChatDelta} hideDots />
+              </div>
             ) : (
               <>
-                {message.sources && message.sources.length > 0 && (
-                  <SourceCard sources={message.sources} />
-                )}
                 <div className="text-sm text-text-primary leading-relaxed">
                   <MarkdownContent
                     content={
@@ -90,6 +106,10 @@ function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubb
                     }
                   />
                 </div>
+                {/* 参考来源置于正文之下（浅色卡片） */}
+                {message.sources && message.sources.length > 0 && (
+                  <SourceCard sources={message.sources} />
+                )}
               </>
             )}
 

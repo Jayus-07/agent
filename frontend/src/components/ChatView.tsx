@@ -8,7 +8,6 @@ import type { Message } from '@/lib/types'
 import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import EmptyState from './EmptyState'
-import StatusBar from './StatusBar'
 import LLMSwitcher from './LLMSwitcher'
 import ContextPanel from './chat/ContextPanel'
 
@@ -121,9 +120,6 @@ export default function ChatView() {
         )}
         <div ref={bottomRef} />
       </div>
-
-      {/* Status */}
-      <StatusBar />
 
       {/* Stop button */}
       {isLoading && (

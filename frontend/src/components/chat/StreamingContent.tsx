@@ -23,7 +23,14 @@ function StreamingCursor() {
   )
 }
 
-export default function StreamingContent({ useDeltaText }: { useDeltaText: () => string }) {
+export default function StreamingContent({
+  useDeltaText,
+  hideDots = false,
+}: {
+  useDeltaText: () => string
+  /** 无正文时不再渲染加载点（调用方在上方有自己的状态行时使用） */
+  hideDots?: boolean
+}) {
   const deltaText = useDeltaText()
   const [renderText, setRenderText] = useState('')
   const rafRef = useRef<number | null>(null)
@@ -47,6 +54,7 @@ export default function StreamingContent({ useDeltaText }: { useDeltaText: () =>
   }, [deltaText])
 
   const displayContent = renderText || deltaText
+  if (!displayContent && hideDots) return null
   return (
     <div className="text-sm text-text-primary leading-relaxed">
       {displayContent ? (

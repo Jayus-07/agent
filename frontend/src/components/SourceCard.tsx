@@ -25,8 +25,8 @@ export default function SourceCard({ sources }: { sources: Source[] }) {
   if (!sources || sources.length === 0) return null
 
   return (
-    <div className="mb-3 rounded-lg border border-[#3f3f3f] bg-[#1a1a1a] px-3 py-2">
-      <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[#8e8e8e]">
+    <div className="mt-2.5 rounded-lg border border-border-subtle bg-black/[0.02] px-3 py-2">
+      <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-text-muted">
         <FileText className="h-3.5 w-3.5" />
         参考来源 ({sources.length} 份文档)
       </div>
@@ -43,7 +43,7 @@ export default function SourceCard({ sources }: { sources: Source[] }) {
               <Icon className="h-3 w-3" />
               <span className="max-w-[200px] truncate">{s.filename}</span>
               {s.score != null && (
-                <span className="ml-0.5 rounded bg-white/50 px-1 text-[10px] font-mono">
+                <span className="ml-0.5 rounded bg-white/70 px-1 text-[10px] font-mono">
                   {s.score}
                 </span>
               )}
