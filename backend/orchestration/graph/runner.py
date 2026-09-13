@@ -26,7 +26,7 @@ import threading
 import time
 from typing import Generator
 
-from backend.config import ENABLE_TOKEN_STREAMING
+from backend.config import ENABLE_TOKEN_STREAMING, MAIN_GRAPH_RECURSION_LIMIT
 from backend.infra.llm.proxy import reset_stream_sink
 from backend.orchestration.graph.builder import _parse_event
 from backend.orchestration.graph.events import (
@@ -64,12 +64,14 @@ class GraphRunner:
         user_id: str = "default",
         *,
         fallback_deltas: bool = True,
+        model: str = "",
     ) -> Generator[dict, None, None]:
         """执行图并产出统一事件流。
 
         Args:
             fallback_deltas: 无真流式 delta 时是否用假打字机兜底呈现
                 （SSE 模式 True；ask 模式 False，事件流仅用于取答案）
+            model: 按请求模型覆盖（空 = 全局 LLM_MODEL；非法名在 bind 时忽略）
         """
         from backend.observability.tracer import SpanKind, trace_collector
 
@@ -122,7 +124,8 @@ class GraphRunner:
         # 请求上下文：trace/sink 显式持有并随状态流动，Send 分支经
         # trace_middleware 从 state 重新绑定（ContextVar 不跨线程继承）
         request_ctx = RequestContext(
-            session_id=session_id, user_id=user_id, kb_id=kb_id, trace=trace)
+            session_id=session_id, user_id=user_id, kb_id=kb_id, trace=trace,
+            model=model)
         ctx = {
             "final_answer": "",
             "all_step_results": {},
@@ -146,14 +149,29 @@ class GraphRunner:
             }))
 
         request_ctx.stream_sink = _sink if ENABLE_TOKEN_STREAMING else None
-        put_context(initial_state, request_ctx)
+        # 主图 checkpointer 感知：开启时 state 里只能放可序列化的 dict 形态
+        # （trace/sink 进不了 checkpoint），节点入口经 get_context_from_state 还原
+        has_checkpointer = getattr(self._graph, "checkpointer", None) is not None
+        if has_checkpointer:
+            initial_state["request_context"] = request_ctx.checkpoint_safe()
+        else:
+            put_context(initial_state, request_ctx)
 
         def _worker() -> None:
             # ContextVar 不跨线程：worker 入口整体绑定一次请求上下文；
             # Send 内部线程分支由节点入口的 bind_from_state 覆盖
             request_ctx.bind()
             try:
-                for event in self._graph.stream(initial_state):
+                # recursion_limit：超限时 LangGraph 抛 GraphRecursionError 而非
+                # 静默挂起（supervisor 自身 10 轮上限之外的最后一道防线）。
+                # thread_id：每轮唯一（session+毫秒），checkpoint 定位用于崩溃
+                # 恢复/审计，不做跨轮状态合并（多轮记忆由 MemoryService 负责）
+                invoke_config: dict = {"recursion_limit": MAIN_GRAPH_RECURSION_LIMIT}
+                if has_checkpointer:
+                    invoke_config["configurable"] = {
+                        "thread_id": f"agent-{session_id}-{int(time.time() * 1000)}",
+                    }
+                for event in self._graph.stream(initial_state, config=invoke_config):
                     if stop_event is not None and stop_event.is_set():
                         ctx["aborted"] = True
                         break

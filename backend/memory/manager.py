@@ -93,5 +93,23 @@ class MemoryManager:
     def end_turn(self, session_id: str, question: str, answer: str, user_id: str = "default") -> None:
         self._run(lambda: self._service.end_turn(session_id, question, answer, user_id))
 
+    @property
+    def service(self) -> MemoryService:
+        """底层 MemoryService（供记忆工具等需要完整超时/报错的调用方使用）。"""
+        return self._service
+
+    def run_tool(self, coro_factory, timeout: float = 15.0):
+        """在后台 loop 执行协程并返回结果（供 Tool 层调用）。
+
+        与 _run（内部静默降级，5s）不同：工具是显式调用路径，超时/失败
+        必须抛异常，让工具返回错误信息而不是静默空结果。
+        """
+        if not self._ready.wait(timeout=timeout):
+            raise RuntimeError("memory event loop 未就绪")
+        if self._loop is None or not self._loop.is_running():
+            raise RuntimeError("memory event loop 未运行")
+        future = asyncio.run_coroutine_threadsafe(coro_factory(), self._loop)
+        return future.result(timeout=timeout)
+
 
 memory_manager = MemoryManager()

@@ -29,7 +29,8 @@ class MultiAgentSystem:
 
     def __init__(self):
         logger.info("[MultiAgent] 初始化 Multi-Agent 工作流系统...")
-        self._graph = build_graph()
+        from backend.orchestration.graph.checkpointer import build_main_checkpointer
+        self._graph = build_graph(checkpointer=build_main_checkpointer())
         from backend.memory import memory_manager
         self._memory = memory_manager
         self._skill_nodes = tool_registry.get_skill_node_names()
@@ -68,11 +69,13 @@ class MultiAgentSystem:
         session_id: str = "default",
         kb_id: str = "default",
         user_id: str = "default",
+        model: str = "",
     ) -> str:
         """处理用户问题，返回最终 Markdown 回答。
 
         复用 GraphRunner 事件流（fallback_deltas=False：不做打字机增量），
         物化后取 _answer 内部事件作为回答。语义与旧同步实现一致。
+        model: 按请求模型覆盖（空 = 全局默认）。
         """
         logger.info(f"[MultiAgent] 收到问题: {(question or '')[:80]}... (session={session_id}, kb={kb_id}, user={user_id})")
 
@@ -82,6 +85,7 @@ class MultiAgentSystem:
             kb_id=kb_id,
             user_id=user_id,
             fallback_deltas=False,
+            model=model,
         ))
 
         answer = ""
@@ -113,6 +117,7 @@ class MultiAgentSystem:
         kb_id: str = "default",
         stop_event=None,
         user_id: str = "default",
+        model: str = "",
     ) -> Generator[dict, None, None]:
         """SSE 流式处理。委托 GraphRunner 统一执行核心，过滤内部事件。
 
@@ -125,7 +130,8 @@ class MultiAgentSystem:
                 kb_id=kb_id,
                 stop_event=stop_event,
                 user_id=user_id,
-                fallback_deltas=True):
+                fallback_deltas=True,
+                model=model):
             if evt.get("event") == _ANSWER_EVENT:
                 continue  # 内部事件（ask 用），不属于 SSE 协议
             yield evt

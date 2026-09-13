@@ -16,9 +16,11 @@
   - ContextVar 仅保留给 FastAPI / proxy / tracer 层的读取方，不再依赖
     跨线程继承。
 
-注意: dataclass 实例直接放入 state——主图（OrchestratorState）无
-checkpointer，不做序列化；若未来给主图加 checkpoint，需要为此 key
-注册 serializer 或改存 dict。
+注意: dataclass 实例直接放入 state——若主图开启 checkpointer
+（MAIN_GRAPH_CHECKPOINTER_ENABLED），trace/stream_sink 不可序列化，
+此时 runner 会改存 checkpoint_safe() 的纯字段 dict，
+get_context_from_state 负责还原（bind_sink=False：不覆盖当前线程
+已绑定的 sink/trace，Send 并行分支的流式/trace 降级为已知限制）。
 """
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -35,24 +37,42 @@ class RequestContext:
     trace: Any = None
     # 流式增量回调 sink(text: str) -> None；None = 非流式请求
     stream_sink: Callable[[str], None] | None = None
+    # 按请求模型覆盖（空 = 用全局 LLM_MODEL；非法模型名在 bind 时被忽略）
+    model: str = ""
+    # dict 还原形态为 False：不覆盖当前线程已绑定的 sink/trace（防清掉 worker 主上下文）
+    bind_sink: bool = True
 
     def bind(self) -> None:
         """把上下文绑定到当前线程的 ContextVar（节点入口 / worker 入口调用）。
 
         幂等：重复绑定同值无害；stream_sink=None 会显式清除陈旧 sink，
-        防止线程池复用导致的跨请求串味。
+        防止线程池复用导致的跨请求串味（bind_sink=False 时不覆盖）。
         """
         from backend.infra.llm.proxy import (
-            set_current_user_id, set_stream_sink,
+            set_current_user_id, set_request_model, set_stream_sink,
         )
         from backend.observability.tracer import trace_collector
-        from backend.tools import set_session_id
+        from backend.shared.logger import set_log_context
+        from backend.tools import set_session_id, set_tool_user_id
 
         if self.trace is not None:
             trace_collector.bind(self.trace)
         set_session_id(self.session_id)
         set_current_user_id(self.user_id)
-        set_stream_sink(self.stream_sink)
+        set_tool_user_id(self.user_id)
+        set_log_context(user_id=self.user_id)
+        set_request_model(self.model)
+        if self.bind_sink:
+            set_stream_sink(self.stream_sink)
+
+    def checkpoint_safe(self) -> dict:
+        """checkpointer 序列化安全形态：剔除 trace/sink 等不可序列化对象。"""
+        return {
+            "session_id": self.session_id,
+            "user_id": self.user_id,
+            "kb_id": self.kb_id,
+            "model": self.model,
+        }
 
 
 def put_context(state: dict, ctx: RequestContext) -> None:
@@ -61,11 +81,27 @@ def put_context(state: dict, ctx: RequestContext) -> None:
 
 
 def get_context_from_state(state: dict | None) -> RequestContext | None:
-    """从节点输入状态取 RequestContext；无（旧路径/子图/测试假 state）返回 None。"""
+    """从节点输入状态取 RequestContext；无（旧路径/子图/测试假 state）返回 None。
+
+    兼容 checkpoint 安全 dict 形态（主图开 checkpointer 时 runner 存的是
+    checkpoint_safe() 的纯字段 dict）——还原时 trace/sink 为空且不覆盖绑定。
+    """
     if not state:
         return None
     ctx = state.get("request_context")
-    return ctx if isinstance(ctx, RequestContext) else None
+    if isinstance(ctx, RequestContext):
+        return ctx
+    if isinstance(ctx, dict):
+        return RequestContext(
+            session_id=ctx.get("session_id", "default"),
+            user_id=ctx.get("user_id", "default"),
+            kb_id=ctx.get("kb_id", "default"),
+            model=ctx.get("model", ""),
+            trace=None,
+            stream_sink=None,
+            bind_sink=False,
+        )
+    return None
 
 
 def bind_from_state(state: dict | None) -> None:

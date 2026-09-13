@@ -55,6 +55,44 @@ def _thread_local_user_id() -> str | None:
     return _user_id_var.get()
 
 
+# 按请求模型覆盖：RequestContext.model → bind() 时设置（空 = 用全局模型）。
+# ContextVar 隔离并发请求，与 user_id 限流变量同一模式。
+_request_model_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
+    "llm_request_model", default="",
+)
+
+
+def set_request_model(model: str) -> None:
+    """设置当前请求的模型覆盖。空串清除；非法模型名忽略（回退全局 LLM_MODEL）。"""
+    model = (model or "").strip()
+    if not model:
+        _request_model_var.set("")
+        return
+    from backend.infra.llm.models import AVAILABLE_MODELS
+    if model not in {m["name"] for m in AVAILABLE_MODELS}:
+        logger.warning(f"[LLM:proxy] 忽略非法模型覆盖: {model} "
+                       f"(可用: {[m['name'] for m in AVAILABLE_MODELS]})")
+        _request_model_var.set("")
+        return
+    _request_model_var.set(model)
+
+
+# 覆盖模型的实例缓存（独立于全局默认模型，按需构建）
+_override_llm_cache: dict[str, BaseChatModel] = {}
+_override_llm_lock = threading.Lock()
+
+
+def _get_override_llm(model_name: str) -> BaseChatModel:
+    """获取按请求覆盖模型的实例（懒构建 + 缓存）。"""
+    with _override_llm_lock:
+        inst = _override_llm_cache.get(model_name)
+        if inst is None:
+            logger.info(f"[LLM:proxy] 按请求模型覆盖生效: {model_name}")
+            inst = _build_llm_for(model_name)
+            _override_llm_cache[model_name] = inst
+        return inst
+
+
 # =====================================================
 # P1 真 token 级流式：per-turn 增量 sink
 # =====================================================
@@ -323,10 +361,18 @@ def _build_default_llm():
 
 
 def _resolve_active_llm() -> BaseChatModel:
-    """返回当前生效的 LLM 实例：factory 缓存 > 懒加载默认。
+    """返回当前生效的 LLM 实例：请求覆盖 > factory 缓存 > 懒加载默认。
 
     每次调用都实时获取工厂实例，确保模型切换后立即生效。
     """
+    override = _request_model_var.get()
+    if override:
+        factory = get_llm_factory()
+        if factory is not None:
+            cached = factory._instance_cache.get(override)
+            if cached is not None:
+                return cached
+        return _get_override_llm(override)
     factory = get_llm_factory()
     if factory is not None:
         cached = factory._instance_cache.get(factory._current_model)

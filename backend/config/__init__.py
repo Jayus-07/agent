@@ -56,6 +56,26 @@ SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
 
+# Tool 审批门（写操作工具的 human-in-the-loop）
+# required: 写操作需人工审批后执行（默认，企业安全基线）
+# auto:     跳过审批直接执行（仅本地开发调试）
+TOOL_APPROVAL_MODE = os.getenv("TOOL_APPROVAL_MODE", "required").strip().lower()
+if TOOL_APPROVAL_MODE not in ("required", "auto"):
+    TOOL_APPROVAL_MODE = "required"
+# 已批准审批单的有效期（秒）：批准后需在 TTL 内重试相同操作才放行
+TOOL_APPROVAL_TTL_SECONDS = int(os.getenv("TOOL_APPROVAL_TTL_SECONDS", "600"))
+
+# MCP 工具调用超时（秒）— manager.route 无超时会挂死协议端点
+MCP_TOOL_TIMEOUT = int(os.getenv("MCP_TOOL_TIMEOUT", "60"))
+
+# 主图 LangGraph 保护
+# 递归上限：supervisor 最多 10 轮 × (调度+执行) + 规划/审查/汇总 ≈ 25 超步，
+# 取 80 留余量（超限 LangGraph 抛 GraphRecursionError 而非静默挂起）
+MAIN_GRAPH_RECURSION_LIMIT = int(os.getenv("MAIN_GRAPH_RECURSION_LIMIT", "80"))
+# 主图 checkpointer（默认关：开启后 request_context 以 checkpoint 安全 dict 进状态，
+# Send 并行分支的流式/trace 绑定降级 — 见 orchestration/request_context.py）
+MAIN_GRAPH_CHECKPOINTER_ENABLED = os.getenv("MAIN_GRAPH_CHECKPOINTER_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+
 # 通用 settings
 from backend.config.settings import (
     LOG_LEVEL,
@@ -286,6 +306,9 @@ __all__ = [
     "LOG_LEVEL", "LOG_FILE", "OVERALL_REQUEST_TIMEOUT",
     # sql 数据安全
     "TRUST_USER_HEADER", "USER_ID_HEADER", "SQL_ROW_SECURITY_ENABLED",
+    # tool 审批门 / MCP / 主图保护
+    "TOOL_APPROVAL_MODE", "TOOL_APPROVAL_TTL_SECONDS", "MCP_TOOL_TIMEOUT",
+    "MAIN_GRAPH_RECURSION_LIMIT", "MAIN_GRAPH_CHECKPOINTER_ENABLED",
     # database
     "RAG_DATA_DIR", "CHUNK_STORE_PATH",
     "BM25_INDEX_DIR", "CHROMA_PATH", "DOC_DB_PATH", "DOCS_DIRECTORY",

@@ -1,4 +1,4 @@
-"""导出工具 — CSV 导出（UTF-8 BOM，Excel 兼容）。"""
+"""导出工具 — CSV 导出（UTF-8 BOM，Excel 兼容；写文件操作，需人工审批）。"""
 from langchain_core.tools import tool
 from backend.shared.logger import logger
 
@@ -14,10 +14,22 @@ def export_csv_tool(question: str, filename: str = "") -> str:
     from pathlib import Path
     from datetime import datetime
     from backend.config import STORAGE_DOCS_DIR
+    from backend.security.tool_approval import ensure_approved
+    from backend.tools.session import _get_session_id, get_tool_user_id
+
+    # 写操作审批门：指纹只用 question（filename 自动生成，不含时间戳则稳定，
+    # 含时间戳的默认名在批准后才生成，不参与指纹）
+    pending = ensure_approved(
+        "export_csv", "export",
+        user_id=get_tool_user_id(),
+        detail={"question": question, "filename": filename, "session_id": _get_session_id()},
+    )
+    if pending is not None:
+        return pending
 
     # 委托 SQL agent 生成并执行 SQL
     agent = _get_sql_agent()
-    result = agent.ask(question, current_user_id=None)
+    result = agent.ask(question, current_user_id=get_tool_user_id() or None)
 
     # 从 SQL agent 结果中提取表格数据
     rows, columns = _extract_table_from_markdown(result)

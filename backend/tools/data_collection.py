@@ -26,10 +26,9 @@ def data_collection_tool(
     groupby_keys: str = "",
     write_mode: str = "append",
     enable_analysis: bool = True,
-    enable_write: bool = False,
 ) -> str:
     """
-    从指定数据源采集数据，经清洗+分析后写入数据库。
+    从指定数据源采集数据，经清洗+分析后写入数据库（写操作，首次执行需管理员审批）。
 
     参数:
         source: 数据源
@@ -42,23 +41,36 @@ def data_collection_tool(
         groupby_keys: 分析维度，逗号分隔，如 "平台,品类"
         write_mode: "append" | "replace" | "upsert"
         enable_analysis: 是否执行 Pandas 统计分析
-        enable_write: 是否写入数据库（仅测试时可设为 false）
 
     返回: Markdown 格式的采集报告，含统计摘要。
     """
+    from backend.security.tool_approval import ensure_approved
+    from backend.tools.session import get_tool_user_id
+
     # 前置处理
     if not source:
         return "❌ 错误: 请提供 source 参数（数据源标识）"
+
+    # 写操作审批门：写入数据库属高危副作用，参数不再开放给 LLM 控制
+    # （旧 enable_write 参数可被 LLM 传参打开，形同虚设，已移除）。
+    pending = ensure_approved(
+        "data_collection", "write_db",
+        user_id=get_tool_user_id(),
+        detail={"source": source, "target_table": target_table,
+                "write_mode": write_mode},
+    )
+    if pending is not None:
+        return pending
 
     # 简写 → 完整路径
     if not source.startswith(("static://", "http://", "https://")):
         source = f"static://datasets/{source}.json"
 
-    # 构建 Pipeline
+    # 构建 Pipeline（写入仅在审批通过后发生）
     pipeline = _build_pipeline(
         fetcher_type=fetcher_type,
         enable_analysis=enable_analysis,
-        enable_write=enable_write,
+        enable_write=True,
     )
 
     # 去重键 → clean 阶段规则

@@ -36,7 +36,7 @@ API → Router → Planner → Critique → Supervisor → Skills → Reporter
 - **LLM 决策节点（3）**: planner / critique（仅 anomaly 时）/ reporter
 - **混合路由点（2）**: router（rule→vector→llm 三层兜底）、cs_supervisor（规则优先+LLM 兜底）
 - **规则/执行节点**: 主图 supervisor 是纯规则 DAG 调度器（不调 LLM）；客服 5 专家中仅 knowledge 走 LLM（经 RAG），query/action/complaint/handoff 为业务服务编排
-- **工具节点（10）**: skills/registry.py 注册的 Skill，非决策 agent
+- **工具节点（13）**: skills/registry.py 注册的 Skill，非决策 agent；LangChain tool 见 backend/tools/（含 memory_search/memory_store/calculate）
 
 ### Capability DAG
 
@@ -108,6 +108,20 @@ P1: 外键完整 + CHECK 约束 + 高频列索引
 - Python: snake_case、类型注解、logger 替代 print、具体异常、SQL 参数化
 - 禁止: 业务代码直接 os.getenv、文件名 misc/helper/common/utils2
 - Tool 必须独立可测试
+
+### 写操作审批门（human-in-the-loop）
+
+写副作用工具（send_email/export_csv/data_collection/competitor 写动作）执行前
+必须调用 `security/tool_approval.ensure_approved()`：TOOL_APPROVAL_MODE=required
+（默认）时建审批单返回待批提示，管理员经 `/api/approvals` 批准后重试同指纹操作
+放行（TTL 内）。表: ai.tool_approval_requests（migration 007）。工具层身份来自
+`tools/session.get_tool_user_id()`（RequestContext.bind 注入），禁止硬编码 user_id。
+
+### 主图 LangGraph 保护
+
+- recursion_limit: MAIN_GRAPH_RECURSION_LIMIT（默认 80），runner 每次 stream 传入
+- checkpointer: MAIN_GRAPH_CHECKPOINTER_ENABLED（默认关）；开启后 request_context
+  以 checkpoint_safe() dict 进状态（trace/sink 不序列化），thread_id 每轮唯一
 
 ## Change Flow
 

@@ -6,9 +6,15 @@ MCP Manager — 管理 MCP Server 生命周期
   - MCPManager: 注册/发现/路由多个 MCPServer
   - manager: 全局单例（在 server.py 启动时 register 各 Server）
 """
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import Dict, List, Any
 
 from backend.shared.logger import logger
+
+# 工具调用执行器：route() 的超时控制依赖线程隔离
+# （超时后线程无法强杀，但调用方不再等待，协议端点不被挂死）
+_CALL_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mcp-tool")
 
 
 class MCPServer:
@@ -64,14 +70,22 @@ class MCPManager:
         return list(self._servers.values())
 
     def route(self, tool_name: str, params: dict) -> Any:
-        """根据 tool_name 路由到对应 server。"""
+        """根据 tool_name 路由到对应 server（带超时保护）。"""
+        from backend.config import MCP_TOOL_TIMEOUT
+
         for server in self._servers.values():
             tool_names = [t["name"] for t in server.list_tools()]
             if tool_name in tool_names:
                 logger.info(f"[MCP] route {tool_name} -> {server.name}")
                 try:
-                    result = server.call_tool(tool_name, params)
+                    future = _CALL_EXECUTOR.submit(server.call_tool, tool_name, params)
+                    result = future.result(timeout=MCP_TOOL_TIMEOUT)
                     return {"ok": True, "tool": tool_name, "server": server.name, "result": result}
+                except FutureTimeoutError:
+                    future.cancel()
+                    logger.error(f"[MCP] {tool_name} 调用超时（>{MCP_TOOL_TIMEOUT}s）")
+                    return {"ok": False, "tool": tool_name,
+                            "error": f"MCP 工具调用超时（>{MCP_TOOL_TIMEOUT}s）"}
                 except Exception as e:
                     logger.error(f"[MCP] {tool_name} 调用失败: {e}", exc_info=True)
                     return {"ok": False, "tool": tool_name, "error": str(e)}

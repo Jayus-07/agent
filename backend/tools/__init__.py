@@ -12,12 +12,17 @@ Skill → Tool → Infrastructure (RAG / SQL / Report)
 - export.py:           export_csv_tool
 - data_collection.py:  data_collection_tool
 - competitor.py:       competitor_analyze_tool
-- session.py:          set_session_id (contextvar 辅助工具)
+- memory.py:           memory_search_tool, memory_store_tool
+- calculator.py:       calculate_tool
+- session.py:          set_session_id / set_tool_user_id (contextvar 辅助工具)
 
 Tool Registry:
 - tool_registry.py:    注册中心与重复定义检测 (P0 防护)
 """
-from backend.tools.session import set_session_id, _get_session_id, _current_session_id  # noqa: F401
+from backend.tools.session import (
+    set_session_id, _get_session_id, _current_session_id,
+    set_tool_user_id, get_tool_user_id,  # noqa: F401
+)
 from backend.tools.sql import execute_sql_tool, sql_query_tool  # noqa: F401
 from backend.tools.rag import search_knowledge_tool  # noqa: F401
 from backend.tools.report import generate_report_tool, run_report  # noqa: F401
@@ -26,6 +31,8 @@ from backend.tools.web import web_search_tool, web_crawl_tool  # noqa: F401
 from backend.tools.email import send_email_tool  # noqa: F401
 from backend.tools.data_collection import data_collection_tool  # noqa: F401
 from backend.tools.competitor import competitor_analyze_tool  # noqa: F401
+from backend.tools.memory import memory_search_tool, memory_store_tool  # noqa: F401
+from backend.tools.calculator import calculate_tool  # noqa: F401
 
 from backend.tools.tool_registry import tool_registry as _tool_registry
 from backend.shared.logger import logger as _logger
@@ -40,6 +47,8 @@ __all__ = [
     'set_session_id',
     '_get_session_id',
     '_current_session_id',
+    'set_tool_user_id',
+    'get_tool_user_id',
     'execute_sql_tool',
     'sql_query_tool',
     'search_knowledge_tool',
@@ -51,5 +60,8 @@ __all__ = [
     'send_email_tool',
     'data_collection_tool',
     'competitor_analyze_tool',
+    'memory_search_tool',
+    'memory_store_tool',
+    'calculate_tool',
     'tool_registry',  # ✅ 供外部访问
 ]

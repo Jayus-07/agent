@@ -20,6 +20,10 @@ from backend.shared.logger import logger
 
 _URL_RE = re.compile(r"https?://[^\s)）\]】<>\"']+")
 
+# 需人工审批的写动作（增删改监控列表）；analyze/watch 虽写快照库，
+# 但属缓存量级副作用且是分析主路径，不阻断（快照仅追加不修改业务状态）
+_WRITE_ACTIONS = ("add", "remove", "toggle")
+
 
 def _extract_url(question: str) -> str:
     """从自然语言里抠出第一个 URL"""
@@ -45,6 +49,7 @@ def competitor_analyze_tool(action: str = "analyze", url: str = "",
     """
     竞品分析：抓取竞品商品页/官网页，抽取价格、促销、评价等结构化信息，
     存为快照并与历史对比（变价提醒）。支持监控列表管理与价格历史。
+    注意：add/remove/toggle 属写操作，首次执行需管理员审批。
 
     action: analyze（分析 URL，默认）| watch（巡检全部监控项）| history（价格历史）
             | add（加入监控）| remove（移除监控）| toggle（启用/停用）| list（查看监控列表）
@@ -58,6 +63,18 @@ def competitor_analyze_tool(action: str = "analyze", url: str = "",
     target_url = url or _extract_url(question)
     if not url and question and target_url and action == "analyze":
         url = target_url
+
+    # 写操作审批门（仅 add/remove/toggle）
+    if action in _WRITE_ACTIONS:
+        from backend.security.tool_approval import ensure_approved
+        from backend.tools.session import get_tool_user_id
+        pending = ensure_approved(
+            "competitor_analyze", action,
+            user_id=get_tool_user_id(),
+            detail={"url": url, "name": name},
+        )
+        if pending is not None:
+            return pending
 
     try:
         if action == "analyze":

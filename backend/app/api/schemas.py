@@ -11,6 +11,7 @@ class ChatRequest(BaseModel):
     kb_id: Optional[str] = Field(None, description="知识库ID（policy/tech/finance/hr 等，默认 default）")
     request_id: Optional[str] = Field("default", description="请求ID，用于中止信号路由")
     user_id: Optional[str] = Field(None, description="用户ID（优先从请求体获取，其次从信任网关注头获取）")
+    model: Optional[str] = Field(None, description="按请求模型覆盖（须为已注册模型名，空 = 全局默认）")
 
 class ChatResponse(BaseModel):
     answer: str

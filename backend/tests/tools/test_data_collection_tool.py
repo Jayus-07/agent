@@ -277,7 +277,6 @@ class TestDataCollectionIntegration:
         result = data_collection_tool.invoke({
             "source": "products",
             "target_table": "test_stg_products",
-            "enable_write": False,
             "enable_analysis": True,
         })
         
@@ -306,8 +305,7 @@ class TestDataCollectionIntegration:
         with patch.object(HttpFetcher, 'fetch', return_value=mock_raw):
             result = data_collection_tool.invoke({
                 "source": "http://localhost:8001/mock/products",
-                "fetcher_type": "http",
-                "enable_write": False,
+                "fetcher_type": "http"
             })
         
         assert isinstance(result, str)
@@ -321,8 +319,7 @@ class TestDataCollectionIntegration:
         
         result = data_collection_tool.invoke({
             "source": "static://datasets/non_existent_file.json",
-            "fetcher_type": "static",
-            "enable_write": False,
+            "fetcher_type": "static"
         })
         
         assert isinstance(result, str)
@@ -354,8 +351,7 @@ class TestDataCollectionIntegration:
         result = data_collection_tool.invoke({
             "source": "products",
             "groupby_keys": "platform,category",
-            "enable_analysis": True,
-            "enable_write": False,
+            "enable_analysis": True
         })
         
         assert isinstance(result, str)
@@ -366,8 +362,7 @@ class TestDataCollectionIntegration:
         
         result = data_collection_tool.invoke({
             "source": "products",
-            "write_mode": "append",
-            "enable_write": True,
+            "write_mode": "append"
         })
         
         assert isinstance(result, str)
@@ -378,8 +373,7 @@ class TestDataCollectionIntegration:
         
         result = data_collection_tool.invoke({
             "source": "products",
-            "write_mode": "replace",
-            "enable_write": True,
+            "write_mode": "replace"
         })
         
         assert isinstance(result, str)
@@ -390,8 +384,7 @@ class TestDataCollectionIntegration:
         
         result = data_collection_tool.invoke({
             "source": "products",
-            "write_mode": "upsert",
-            "enable_write": True,
+            "write_mode": "upsert"
         })
         
         assert isinstance(result, str)

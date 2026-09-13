@@ -78,10 +78,12 @@ def _make_sync(async_fn):
 # 图构建
 # =====================================================
 
-def build_graph():
+def build_graph(checkpointer=None):
     """构建 Multi-Agent StateGraph。
 
     Skill 节点由 tool_registry 自动发现，不在此处硬编码节点名。
+    checkpointer: 主图状态持久化（MAIN_GRAPH_CHECKPOINTER_ENABLED 开启时由
+    system.py 传入 build_main_checkpointer() 的结果；None = 不持久化）。
     """
     wf = StateGraph(OrchestratorState)
 
@@ -156,9 +158,10 @@ def build_graph():
 
     skill_count = len(tool_registry.get_skill_nodes())
     logger.info(
-        f"[Graph] 图编译完成 (内置9节点+Router/executors + {skill_count} Skill = {9 + skill_count}节点)"
+        f"[Graph] 图编译完成 (内置9节点+Router/executors + {skill_count} Skill = {9 + skill_count}节点,"
+        f"checkpointer={'on' if checkpointer is not None else 'off'})"
     )
-    return wf.compile()
+    return wf.compile(checkpointer=checkpointer)
 
 
 # =====================================================

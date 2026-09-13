@@ -76,9 +76,13 @@ def sql_query_tool(question: str) -> str:
     输入自然语言问题，返回 Markdown 格式的查询结果表格。
     适用场景：数据统计、排行、筛选、聚合、对比分析。
     """
+    from backend.tools.session import get_tool_user_id
+
     logger.info(f"[Tool:sql_query] 问题：{question[:80]}...")
     agent = _get_sql_agent()
-    return agent.ask(question, current_user_id=None)
+    # 行级安全/偏好学习的用户上下文来自请求上下文（网关/请求体解析），
+    # 不再硬编码 None（SQL_ROW_SECURITY_ENABLED 开启时 None 会被严格模式拒绝）
+    return agent.ask(question, current_user_id=get_tool_user_id() or None)
 
 
 # ==================== Tool Registry 自动注册 ====================

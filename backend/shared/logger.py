@@ -39,23 +39,27 @@ from backend.config import LOG_LEVEL, LOG_FILE
 # ── 日志上下文（tracer 自动注入）──
 _trace_id_ctx: ContextVar[str] = ContextVar("log_trace_id", default="")
 _session_id_ctx: ContextVar[str] = ContextVar("log_session_id", default="")
+_user_id_ctx: ContextVar[str] = ContextVar("log_user_id", default="")
 
 # 日志格式: "text" (默认) | "json" (生产推荐)
 LOG_FORMAT = os.getenv("LOG_FORMAT", "text")
 
 
-def set_log_context(trace_id: str = "", session_id: str = "") -> None:
-    """设置当前协程的日志上下文（由 tracer.start/finish 自动调用）。"""
+def set_log_context(trace_id: str = "", session_id: str = "", user_id: str = "") -> None:
+    """设置当前协程的日志上下文（由 tracer.start/finish、RequestContext.bind 调用）。"""
     if trace_id:
         _trace_id_ctx.set(trace_id)
     if session_id:
         _session_id_ctx.set(session_id)
+    if user_id:
+        _user_id_ctx.set(user_id)
 
 
 def clear_log_context() -> None:
     """清除当前协程日志上下文（请求结束调用）。"""
     _trace_id_ctx.set("")
     _session_id_ctx.set("")
+    _user_id_ctx.set("")
 
 
 class _JsonFormatter(logging.Formatter):
@@ -69,6 +73,7 @@ class _JsonFormatter(logging.Formatter):
             "msg": record.getMessage(),
             "trace_id": _trace_id_ctx.get() or None,
             "session_id": _session_id_ctx.get() or None,
+            "user_id": _user_id_ctx.get() or None,
             "module": record.module,
             "line": record.lineno,
         }, ensure_ascii=False, default=str)
