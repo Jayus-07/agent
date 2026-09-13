@@ -9,6 +9,9 @@ export interface ChatRequest {
   question: string;
   session_id: string;
   request_id: string;
+  /** 员工部门ID（检索授权用）：带部门 = employee 主体，按部门矩阵授权；
+   *  不带 = 后端按对客最严格集合处理（fail-safe） */
+  department?: string;
 }
 
 /**

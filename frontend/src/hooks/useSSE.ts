@@ -5,6 +5,7 @@ import { useChatStore } from '@/store/chat'
 import { streamChat, abortChat } from '@/lib/api/chat'
 import type { SSEStreamEvent } from '@/lib/api/chat'
 import { invalidateSessionsCache } from '@/lib/sessions-cache'
+import { getSelectedDepartment } from '@/lib/department'
 import { nanoid } from 'nanoid'
 
 export function useSSE() {
@@ -36,7 +37,8 @@ export function useSSE() {
     const streamEvents: SSEStreamEvent[] = []
     try {
       for await (const evt of streamChat(
-        { question, session_id: sessionId, request_id: requestId },
+        { question, session_id: sessionId, request_id: requestId,
+          department: getSelectedDepartment() || undefined },
         controller.signal,
       )) {
         if (controller.signal.aborted) return

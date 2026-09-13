@@ -1,18 +1,30 @@
 'use client'
 
 import { useState, useRef, useEffect, KeyboardEvent } from 'react'
-import { ArrowUp } from 'lucide-react'
+import { ArrowUp, Building2 } from 'lucide-react'
+import { DEPARTMENTS, getSelectedDepartment, setSelectedDepartment } from '@/lib/department'
 
 interface Props { onSend: (text: string) => void; isLoading: boolean }
 
 export default function ChatInput({ onSend, isLoading }: Props) {
   const [input, setInput] = useState('')
+  const [department, setDepartment] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     const el = textareaRef.current
     if (el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 160) + 'px' }
   }, [input])
+
+  // localStorage 仅客户端可读，挂载后再取，避免 SSR 水合不一致
+  useEffect(() => {
+    setDepartment(getSelectedDepartment())
+  }, [])
+
+  function handleDepartmentChange(value: string) {
+    setDepartment(value)
+    setSelectedDepartment(value)
+  }
 
   function handleSend() {
     const trimmed = input.trim()
@@ -31,6 +43,27 @@ export default function ChatInput({ onSend, isLoading }: Props) {
           border border-border-subtle shadow-sm
           focus-within:border-accent/40 focus-within:shadow-input
           transition-all duration-250">
+          {/* 部门选择：决定检索授权范围（空 = 按对客最严格集合） */}
+          <div
+            className="shrink-0 flex items-center gap-1 rounded-xl bg-black/[0.04] hover:bg-black/[0.07]
+              transition-colors duration-200 px-2.5 py-2"
+            title="选择部门以获得对应知识库的检索范围；未选择按对客最严格范围处理"
+          >
+            <Building2 size={14} className="text-text-muted" aria-hidden />
+            <select
+              value={department}
+              onChange={(e) => handleDepartmentChange(e.target.value)}
+              disabled={isLoading}
+              aria-label="选择部门（检索授权范围）"
+              className="bg-transparent outline-none text-xs text-text-primary cursor-pointer
+                disabled:opacity-40 max-w-[88px] appearance-none"
+            >
+              <option value="">未选择</option>
+              {DEPARTMENTS.map((d) => (
+                <option key={d.id} value={d.id}>{d.label}</option>
+              ))}
+            </select>
+          </div>
           <textarea
             ref={textareaRef}
             value={input}
