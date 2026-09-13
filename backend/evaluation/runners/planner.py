@@ -27,7 +27,14 @@ def _run_planner(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     for node in nodes.values()
                     if node.get("capability")
                 ))
-                result = evaluate_planner_offline(case.id, case.expected, actual_caps)
+                # capability → Planner 填的参数（供 expected.params 断言）
+                actual_params = {
+                    node.get("capability"): node.get("params") or {}
+                    for node in nodes.values()
+                    if node.get("capability")
+                }
+                result = evaluate_planner_offline(
+                    case.id, case.expected, actual_caps, actual_params)
                 result.duration_ms = int((time.time() - t0) * 1000)
                 results.append(result)
             except Exception as e:

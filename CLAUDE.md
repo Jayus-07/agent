@@ -125,6 +125,22 @@ P1: 外键完整 + CHECK 约束 + 高频列索引
 放行（TTL 内）。表: ai.tool_approval_requests（migration 007）。工具层身份来自
 `tools/session.get_tool_user_id()`（RequestContext.bind 注入），禁止硬编码 user_id。
 
+### 工具契约兼容规则（代替 per-schema 版本号）
+
+工具/Skill 契约（params_schema、output_type、capability 名）与消费方（Planner、
+Reporter）同仓同发布，schema 变更与消费方适配原子提交，**不加 per-schema 版本号**。
+兼容靠三条规则：
+
+1. **向后兼容演进**：只新增可选参数；不改既有参数语义；不删除/改名已有字段
+   （proto 演进规则）。破坏性变更 = 新 capability 名 + 旧Capability 保留一个废弃期
+2. **测试守护**：`test_registry_consistency.py`（注册表一致性）+
+   `test_base_output_contract.py`（输出契约）+ e2e 离线故障注入集
+   （`datasets/e2e/cases.jsonl` F-* 用例）构成契约回归门
+3. **变更跑评估**：改 params_schema/描述/prompt 后跑 planner 评估（live），
+   关键写操作参数用 `datasets/planner_params.json` 的 expected.params 断言
+
+只有当工具以独立部署制品对外（MCP Server 发布、跨团队共享）时，才引入显式版本号。
+
 ### 主图 LangGraph 保护
 
 - recursion_limit: MAIN_GRAPH_RECURSION_LIMIT（默认 80），runner 每次 stream 传入

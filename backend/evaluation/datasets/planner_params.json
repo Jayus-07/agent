@@ -1,0 +1,102 @@
+{
+  "module": "planner",
+  "version": "1.0",
+  "description": "Planner 参数填充评估——写操作 skill 的关键参数断言。expected.params 按 capability 声明关键参数（标量=相等断言，{contains: s}=子串断言），不做全量对比。需 live 模式（真实 LLM）运行。",
+  "test_cases": [
+    {
+      "id": "PP-001",
+      "question": "给 zhangsan@company.com 发一封邮件，主题是月度库存报告，正文见附件模板",
+      "expected": {
+        "capabilities": ["email.send"],
+        "max_steps": 1,
+        "params": {
+          "email.send": {"to": {"contains": "zhangsan@company.com"}}
+        }
+      },
+      "metadata": {"difficulty": "easy", "type": "write_op_email"}
+    },
+    {
+      "id": "PP-002",
+      "question": "把这个竞品 https://item.jd.com/100012043978.html 加入监控列表，名称叫iPhone 15",
+      "expected": {
+        "capabilities": ["competitor.analyze"],
+        "max_steps": 1,
+        "params": {
+          "competitor.analyze": {"action": "add", "url": {"contains": "item.jd.com"}}
+        }
+      },
+      "metadata": {"difficulty": "easy", "type": "write_op_watchlist"}
+    },
+    {
+      "id": "PP-003",
+      "question": "把 https://item.jd.com/100012043978.html 从竞品监控里移除",
+      "expected": {
+        "capabilities": ["competitor.analyze"],
+        "max_steps": 1,
+        "params": {
+          "competitor.analyze": {"action": "remove"}
+        }
+      },
+      "metadata": {"difficulty": "easy", "type": "write_op_watchlist"}
+    },
+    {
+      "id": "PP-004",
+      "question": "抓取 https://www.example.com/product/123 这个页面的内容",
+      "expected": {
+        "capabilities": ["web.crawl"],
+        "max_steps": 1,
+        "params": {
+          "web.crawl": {"url": {"contains": "example.com/product/123"}}
+        }
+      },
+      "metadata": {"difficulty": "easy", "type": "read_op_crawl"}
+    },
+    {
+      "id": "PP-005",
+      "question": "查询库存低于安全库存的商品",
+      "expected": {
+        "capabilities": ["sql.query"],
+        "max_steps": 1,
+        "params": {
+          "sql.query": {"question": {"contains": "安全库存"}}
+        }
+      },
+      "metadata": {"difficulty": "easy", "type": "read_op_sql"}
+    },
+    {
+      "id": "PP-006",
+      "question": "搜索一下人工智能行业的白皮书",
+      "expected": {
+        "capabilities": ["web.search"],
+        "max_steps": 1,
+        "params": {
+          "web.search": {"query": {"contains": "人工智能"}}
+        }
+      },
+      "metadata": {"difficulty": "easy", "type": "read_op_search"}
+    },
+    {
+      "id": "PP-007",
+      "question": "把上周各渠道销售额导出成表格文件",
+      "expected": {
+        "capabilities": ["data.export"],
+        "max_steps": 1,
+        "params": {
+          "data.export": {"question": {"contains": "销售额"}}
+        }
+      },
+      "metadata": {"difficulty": "medium", "type": "write_op_export"}
+    },
+    {
+      "id": "PP-008",
+      "question": "分析一下库存周转率低的商品有什么风险",
+      "expected": {
+        "capabilities": ["business.analyze"],
+        "max_steps": 2,
+        "params": {},
+        "should_not_contain": ["email.send"]
+      },
+      "metadata": {"difficulty": "medium", "type": "analysis_multi_step", "note": "依赖 sql.query 前置，Planner 可拆两步；capability 覆盖由 jaccard 判定"}
+    }
+  ]
+}
