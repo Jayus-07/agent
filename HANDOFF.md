@@ -1,5 +1,29 @@
 # 交接文档 — 2026-09-13 深夜（换会话用）
 
+> ✅ **2026-09-14 午间会话结论（最新，先读这段）**：
+>
+> **两个定向重构任务均已完成并入库**：
+> 1. **任务 2 retriever 阶段化**（cc827a0）：`_retrieve_uncached_impl` 约 300 行单函数拆为编排器 + Stage 方法序列（Stage0 上下文/授权 → Stage1 门控 → 放宽兜底 → Stage2 混检 → neighbor 兜底 → 后处理收口），层间状态收进 `_Staging` dataclass。trace 事件名/metrics 键/缓存包装契约原样（RC-086/095 回放依据）。验收：backend/tests/rag + test_stage_contract_trace.py 375 passed。
+> 2. **任务 1 统一请求上下文**（fe5aade）：权威 `RequestContext` 收敛至 `backend/core/request_context.py`（新增 `subject_type` 字段），`bind()` 为 orchestration → RAG/tools/proxy 唯一转换点（末尾 `attach_identity` 组合借读注入）；`rag/context.py` 重写为 `RagRequestState`（**identity 字段组合借读，文件内 department 零命中**）；tools 会话 ContextVar 定义收编 core、session.py 薄封装；orchestration/request_context.py 变 re-export + 图状态管道（import 方零改动）。验收：acceptance 套件 1545 passed / 15 skipped。
+>
+> **手工冒烟已完成**（/chat/stream 实测，2026-09-14 07:2x-07:4x）：
+> - **带 department=hr**（问题"差旅报销标准是什么"，vector_only 档）：trace `doc_filter` 显示 router 产出的 `$or[policy_finance, policy_general]` 中**越界的 policy_finance 被主体授权剥离**（残留 `doc_type/business_domain` 标量收窄）；`stage1_doc_gate` 候选**仅授权内文档**（reimbursement_fin.md + budget_fin.md，均 policy_general）；rag_test_kb 内容不可达。答案 rejected 为证据门控诚实拒答（设计行为）。
+> - **不带 department**：fail-safe customer 生效——cs_* 主体对 policy_*/rag_test_kb 内容全盲，诚实拒答"知识库暂无相关资料"。
+> - 说明：字面 `subject_scope_filtered` 事件未触发（其触发条件是越界 chunk 进入 keep-set 后被剔除；实际链路中 doc 级搜索**前置**授权过滤已把越界文档挡在门外，keep-set 无可剔）——授权生效的证据以"filter 剥离 + 候选域收窄"呈现，属等效可观测。
+>
+> **⚠️ 冒烟过程中发现的两个非本次重构引入的既有缺陷（建议另开任务）**：
+> 1. **multi_query.py 在途修改引入授权旁路（安全相关，优先）**：工作区未提交的 `_invoke_isolated` 把 `contextvars.copy_context()` 写在**池线程内**执行——copy 到的是空 context，MultiQuery 变体检索（`retrieval_pool_inner`）全部丢失请求状态（metadata_filter/授权/检索缓存全失效），禁入库内容可经 MultiQuery 路径漏出（冒烟中实测复现：finance_员工报销制度.pdf 属 rag_test_kb 却出现在 hr 请求答案里）。修法：回到**提交方线程** copy（每次任务独立 ctx 副本，仍避免共享 ctx 的 already-entered 重入问题）。该文件为并行会话在途改动，本会话按红线未触碰。
+> 2. **QueryAnalyzer 列表值 filter 击穿 Chroma（存量）**：部分问法产出 `doc_type: ['policy', 'financial']` 列表值（如"报销的单笔审批限额是多少"），Chroma where 拒绝列表值 → doc 搜索抛错 → 工具重试 3 次全失败 → 空答案。修法方向：analyzer 出口归一化（取首值或改 $in）。
+> 另注：冒烟依赖服务端 8000（uvicorn --reload 已加载重构后代码）；并行会话当日另落 cb29491/8a3b943/c2a4401 三笔（流式/评测/校验），与本两笔重构零文件交集。
+
+> ✅ **2026-09-14 晨间续会结论**（新会话先读这段，下述旧文部分已过时）：
+> 1. **"golden 全量下全挂（RAG pipeline not available）"已终结**：两次全量（02:47 / 05:04 起）0 次出现，判为当时撞上并行会话中间编辑态的瞬态，init_rag_pipeline 的 traceback 留痕保留即可。
+> 2. **RC-097 概率性 flaky 已根因 + 口径修正**：pass 判定 = top5 文档与 required_docs 交集；Chroma 全默认 HNSW 配置下近似检索边界波动，legal_采购合同.md 的 chunk 概率性掉出 dense top-32（召回池 20/17 条交替，同态内部 rerank 分数精确可复现，跨代码版本复现——非回归）。已把 cases.jsonl 的 RC-097 口径对齐 RC-021（required_docs 加 qc_质检标准SOP.docx，同事实双文档），真退化仍会被门禁拦截。
+> 3. **conftest 数据隔离已 fail-fast 加固**：git ls-files 失败不再静默降级到真实 data/（02:37 那次 RC-097 假失败即经此路径）；data/docs/ 文档复制失败也改为报错，仅运行态文件允许跳过。
+> 4. **remote 主体授权透传缺口已由本会话代修**（提交 7f034a8）：`RAGServiceProxy.ask` 补 `subject_type`/`department` 参数并写入 POST body，rag-server `AskRequest` 补字段（默认空串，wire 兼容）并透传给 pipeline；签名契约测试转绿，citation 测试的 FakePipeline mock 签名已同步对齐。
+> 5. 其余：competitor/data_collection/services 审批门修复已全量确认（两次全量 0 失败）；asyncpg teardown 噪音仍在（已知存量）；test_planner_critique 仍需 --ignore。
+> 本会话三笔提交均已入库并验证：28e7476（RC-097 口径）、87ff9ae（conftest fail-fast）、7f034a8（remote 主体授权透传）；本文件按用户要求不提交，仅作会话间交接。
+
 > ⚠️ **交接时刻的并行会话动态**（比本文其他内容都新）：
 > - 新提交：133d9b6（**competitor 工具已拆分为四个单职责 Tool，测试已迁移**）、337c398（Planner 参数填充断言 + e2e 离线故障注入）、fb6e5f9（reporter None 占位修复）
 > - 工作区在途：memory/manager.py、memory/service.py、infra/async_utils.py（**正在修 asyncpg 跨 loop teardown**）、rag_test_kb.json、customer_service/supervisor.py 等
