@@ -383,6 +383,21 @@ def _resolve_active_llm() -> BaseChatModel:
     return _build_default_llm()
 
 
+def get_active_model_name() -> str:
+    """返回当前生效模型名（解析顺序与 _resolve_active_llm 一致）。
+
+    供日志/trace 标注"这次 LLM 调用用的哪个模型"
+    （请求覆盖 > factory 当前 > 全局默认 LLM_MODEL）。
+    """
+    override = _request_model_var.get()
+    if override:
+        return override
+    factory = get_llm_factory()
+    if factory is not None:
+        return factory._current_model
+    return LLM_MODEL
+
+
 # =====================================================
 # <think> 剥离（防御性，正规方案是 Provider 传 reasoning_split）
 # =====================================================

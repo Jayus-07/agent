@@ -354,3 +354,91 @@ class TestMetricsRecording:
         with patch.object(ts, "llm", fake):
             tool_selector_node(_state([{"name": "report.generate", "score": 0.7}]))
         assert ("no_match", "model_declined", "") in calls
+
+
+class TestTraceObservability:
+    """trace 全链路：LLM span + metadata 决策快照（所有路径都写）。"""
+
+    def _fake_trace(self, monkeypatch):
+        """替换 trace_collector 为记录桩，返回 (记录列表, 桩)。"""
+        import backend.observability.tracer as tracer_mod
+
+        spans = []
+        metadata = {}
+        trace_inst = type("T", (), {"metadata": metadata})()
+
+        # 真实 API: start_span/end_span 是 trace_collector 的方法，
+        # current() 返回的 trace 对象携带 metadata（cs_prefilter 模式）
+        class _FakeCollector:
+            def current(self):
+                return trace_inst
+
+            def start_span(self, span_id, **kw):
+                spans.append(("start", span_id, kw))
+                return span_id
+
+            def end_span(self, span, **kw):
+                spans.append(("end", span, kw))
+
+        # _write_trace_metadata 与 _select_via_fc 内部 import trace_collector，
+        # patch 源模块属性（函数内 import 每次执行都会重新取）
+        monkeypatch.setattr(tracer_mod, "trace_collector", _FakeCollector())
+        return spans, metadata
+
+    def test_metadata_written_on_fc(self, monkeypatch):
+        spans, metadata = self._fake_trace(monkeypatch)
+        fake = _FakeLLM([AIMessage(content="", tool_calls=[
+            _tc("report__generate", {"report_type": "daily_sales"})])])
+        with patch.object(ts, "llm", fake):
+            out = tool_selector_node(_state([{"name": "report.generate", "score": 0.7}]))
+        snap = metadata["tool_selection"]
+        assert snap["source"] == "fc"
+        assert snap["capability"] == "report.generate"
+        assert snap["model"]  # 模型名已标注
+        # LLM span: 开始 + 结束，挂在 tool_selector 下
+        kinds = [s[0] for s in spans]
+        assert kinds == ["start", "end"]
+        assert spans[0][1] == "tool_selector_llm"
+        assert spans[0][2]["parent_id"] == "tool_selector"
+        end_kw = spans[1][2]
+        assert end_kw["status"] == "success"
+        assert end_kw["output"]["capability"] == "report.generate"
+
+    def test_metadata_written_on_passthrough(self, monkeypatch):
+        """直通路径（fast_path）也写 metadata——排查需要知道直通原因"""
+        spans, metadata = self._fake_trace(monkeypatch)
+        fake = _FakeLLM()
+        with patch.object(ts, "llm", fake):
+            out = tool_selector_node(_state([{"name": "sql.query", "score": 0.9}]))
+        assert metadata["tool_selection"]["source"] == "passthrough"
+        assert metadata["tool_selection"]["reason"] == "fast_path"
+
+    def test_llm_failure_span_marked_failed(self, monkeypatch):
+        spans, metadata = self._fake_trace(monkeypatch)
+        fake = _FakeLLM([RuntimeError("boom")])
+        with patch.object(ts, "llm", fake):
+            tool_selector_node(_state([{"name": "report.generate", "score": 0.7}]))
+        end_kw = spans[1][2]
+        assert end_kw["status"] == "failed"
+
+    def test_no_trace_context_is_silent(self, monkeypatch):
+        """无 trace 上下文（单测/后台任务）→ 不崩、决策照常返回"""
+        import backend.observability.tracer as tracer_mod
+
+        class _NoneCollector:
+            def current(self):
+                return None
+
+        monkeypatch.setattr(tracer_mod, "trace_collector", _NoneCollector())
+        fake = _FakeLLM()
+        with patch.object(ts, "llm", fake):
+            out = tool_selector_node(_state([{"name": "sql.query", "score": 0.9}]))
+        assert out["_tool_selection"]["reason"] == "fast_path"
+
+
+class TestActiveModelName:
+    def test_get_active_model_name_returns_configured(self, monkeypatch):
+        from backend.infra.llm.proxy import get_active_model_name
+        # 无请求覆盖时返回全局默认（.env/默认值为 MiniMax-M3 或 qwen3.7-plus）
+        name = get_active_model_name()
+        assert isinstance(name, str) and name

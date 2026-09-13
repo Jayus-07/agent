@@ -124,3 +124,41 @@ class TestWarningCases:
         monkeypatch.delenv("DEEPSEEK_API_KEY")
         warnings = su.validate_startup_settings()  # 不抛
         assert isinstance(warnings, list)
+
+
+class TestToolSelectorModelValidation:
+    """TOOL_SELECTOR_MODEL 启动校验：未注册 / 缺 provider key 都要 warning。
+
+    背景: deepseek 402 余额不足曾静默回退全局模型，配错无法察觉。
+    """
+
+    def test_unregistered_model_warns(self, valid_env, monkeypatch):
+        monkeypatch.setenv("TOOL_SELECTOR_MODEL", "ghost-model")
+        warnings = su.validate_startup_settings()
+        assert any("TOOL_SELECTOR_MODEL" in w and "注册" in w for w in warnings)
+
+    def test_missing_provider_key_warns(self, valid_env, monkeypatch):
+        # 主模型换 qwen（deepseek 前缀会触发 LLMSettings 的 fatal 校验，
+        # 到不了 warning 段），专用模型用 deepseek 验 key 缺失 warning
+        monkeypatch.setenv("LLM_MODEL", "qwen3.7-plus")
+        monkeypatch.setenv("TOOL_SELECTOR_MODEL", "deepseek-v4-flash")
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        warnings = su.validate_startup_settings()
+        assert any("TOOL_SELECTOR_MODEL" in w and "DEEPSEEK_API_KEY" in w
+                   for w in warnings)
+
+    def test_valid_config_no_warning(self, valid_env, monkeypatch):
+        monkeypatch.setenv("TOOL_SELECTOR_MODEL", "deepseek-v4-flash")
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+        warnings = su.validate_startup_settings()
+        assert not any("TOOL_SELECTOR_MODEL" in w for w in warnings)
+
+    def test_empty_no_warning(self, valid_env, monkeypatch):
+        monkeypatch.setenv("TOOL_SELECTOR_MODEL", "")
+        warnings = su.validate_startup_settings()
+        assert not any("TOOL_SELECTOR_MODEL" in w for w in warnings)
+
+    def test_local_model_needs_no_key(self, valid_env, monkeypatch):
+        monkeypatch.setenv("TOOL_SELECTOR_MODEL", "qwen2.5:3b")
+        warnings = su.validate_startup_settings()
+        assert not any("TOOL_SELECTOR_MODEL" in w for w in warnings)

@@ -32,7 +32,7 @@ from backend.config import (
     TOOL_SELECTOR_MODEL,
 )
 from backend.infra.llm import llm
-from backend.infra.llm.proxy import bind_tools_for_model
+from backend.infra.llm.proxy import bind_tools_for_model, get_active_model_name
 from backend.infra.timeout import safe_call_with_timeout
 from backend.orchestration.tool_registry import tool_registry
 from backend.orchestration.tool_schema import (
@@ -150,7 +150,47 @@ def _parse_text_tool_call(content: str, fn2cap: dict[str, str]) -> tuple[str, di
 
 
 def _select_via_fc(state: dict, valid_caps: list[str], t0: float) -> dict:
-    """FC 选择主循环：最多 2 次尝试（首试 + 带反馈重试 1 次）。"""
+    """FC 选择入口：包 LLM span（trace 瀑布图中可见耗时/token/模型），
+    决策逻辑在 _fc_decide。"""
+    from backend.observability.tracer import SpanKind, trace_collector
+
+    span = None
+    try:
+        active = trace_collector.current()
+        if active is not None:
+            span = trace_collector.start_span(
+                "tool_selector_llm", parent_id="tool_selector",
+                name="工具选择 LLM", kind=SpanKind.LLM.value,
+                input={
+                    "query": (state.get("question") or "")[:200],
+                    "candidates": valid_caps,
+                    "model": TOOL_SELECTOR_MODEL or get_active_model_name(),
+                },
+            )
+    except Exception:
+        span = None  # 埋点软失败不影响决策
+
+    result = _fc_decide(state, valid_caps, t0)
+    if span is not None:
+        try:
+            sel = result.get("_tool_selection") or {}
+            source = sel.get("source", "")
+            status = "success" if source in ("fc", "no_match") else "failed"
+            output = {"decision": source, "reason": sel.get("reason", "")}
+            metrics = {"elapsed_ms": sel.get("elapsed_ms", int((time.time() - t0) * 1000))}
+            if source == "fc":
+                output["capability"] = sel.get("capability")
+                output["attempts"] = sel.get("attempts", 1)
+                output["params"] = sel.get("params")
+            trace_collector.end_span(span, output=output, metrics=metrics,
+                                     status=status)
+        except Exception:
+            pass  # span 收尾软失败
+    return result
+
+
+def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
+    """FC 决策主循环：最多 2 次尝试（首试 + 带反馈重试 1 次）。"""
     query = state.get("question", "")
     decision = state.get("route_decision") or {}
     tools, fn2cap = capabilities_to_tools(valid_caps)
@@ -217,7 +257,8 @@ def _select_via_fc(state: dict, valid_caps: list[str], t0: float) -> dict:
         elapsed_ms = int((time.time() - t0) * 1000)
         _record("fc", "ok", capability=cap, t0=t0)
         logger.info(
-            f"[ToolSelector] FC 选定 {cap} params={list(params.keys())} "
+            f"[ToolSelector] FC 选定 {cap} model={TOOL_SELECTOR_MODEL or get_active_model_name()} "
+            f"params={list(params.keys())} "
             f"(attempt={attempt + 1}, {elapsed_ms}ms)"
         )
         return {
@@ -254,6 +295,13 @@ def tool_selector_node(state: dict) -> dict:
         + _tool_selection（供 events 层发 log 事件；不在 state schema 内，
         仅随 stream update 透出，与 supervisor 的 _ready_dispatch 同模式）
     """
+    result = _decide(state)
+    _write_trace_metadata(result)
+    return result
+
+
+def _decide(state: dict) -> dict:
+    """决策主体（门控 → 直通 / FC），trace metadata 由出口统一写入。"""
     t0 = time.time()
 
     if not ENABLE_FC_TOOL_SELECTION:
@@ -283,3 +331,31 @@ def tool_selector_node(state: dict) -> dict:
         return _passthrough(state, "no_valid_candidates")
 
     return _select_via_fc(state, valid_caps, t0)
+
+
+def _write_trace_metadata(result: dict) -> None:
+    """把选择决策快照写入 trace.metadata（所有路径都写，含直通）。
+
+    解决"为什么选了这个工具/为什么直通"的单请求排查——此前只有
+    SSE log 事件与 Prometheus 计数，翻单个请求的决策上下文要拼日志。
+    埋点软失败不影响决策结果。
+    """
+    try:
+        from backend.observability.tracer import trace_collector
+
+        trace = trace_collector.current()
+        if trace is None:
+            return
+        sel = result.get("_tool_selection") or {}
+        trace.metadata["tool_selection"] = {
+            "source": sel.get("source", ""),
+            "reason": sel.get("reason", ""),
+            "capability": sel.get("capability"),
+            "params": sel.get("params"),
+            "candidates": sel.get("candidates", []),
+            "attempts": sel.get("attempts"),
+            "model": TOOL_SELECTOR_MODEL or get_active_model_name(),
+            "elapsed_ms": sel.get("elapsed_ms"),
+        }
+    except Exception:
+        pass

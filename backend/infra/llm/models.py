@@ -83,6 +83,33 @@ def get_model_pricing(model_name: str) -> tuple[float, float]:
     return 0.0, 0.0
 
 
+# provider → 启用该 provider 模型所需的环境变量名（None = 无需 key）。
+# provider→key 的单一事实来源：startup 校验、专用模型配置校验共用
+PROVIDER_API_KEY_ENV = {
+    "ollama": None,
+    "deepseek": "DEEPSEEK_API_KEY",
+    "qwen": "QWEN_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
+}
+
+
+def is_registered_model(model_name: str) -> bool:
+    """模型名是否在 AVAILABLE_MODELS 注册。"""
+    return any(m["name"] == model_name for m in AVAILABLE_MODELS)
+
+
+def get_provider_api_key_env(model_name: str) -> str | None:
+    """模型名 → 启用所需 API key 的环境变量名。
+
+    未注册的模型返回 None（校验方应先过 is_registered_model）；
+    ollama 等本地 provider 返回 None（无需 key）。
+    """
+    for m in AVAILABLE_MODELS:
+        if m["name"] == model_name:
+            return PROVIDER_API_KEY_ENV.get(m["provider"])
+    return None
+
+
 def compute_cost_usd(model_name: str,
                      prompt_tokens: int, completion_tokens: int) -> float:
     """按 model pricing 表估算单次调用 cost (USD)。"""
