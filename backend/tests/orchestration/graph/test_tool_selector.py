@@ -291,6 +291,40 @@ class TestDedicatedModel:
         assert out["resolved_params"] == {"report_type": "daily_sales"}
 
 
+class TestTextToolCallFallback:
+    """文本兜底：模型把工具调用写成 JSON 文本而非 tool_calls 结构（评测实测）。"""
+
+    def test_json_fence_recovered(self):
+        cap_args = ts._parse_text_tool_call(
+            '```json\n{"tool": "web__crawl", "parameters": {"url": "https://x.com"}}\n```',
+            {"web__crawl": "web.crawl"})
+        assert cap_args == ("web.crawl", {"url": "https://x.com"})
+
+    def test_name_arguments_variant(self):
+        cap_args = ts._parse_text_tool_call(
+            '{"name": "report__generate", "arguments": {"report_type": "daily_sales"}}',
+            {"report__generate": "report.generate"})
+        assert cap_args == ("report.generate", {"report_type": "daily_sales"})
+
+    def test_unknown_tool_rejected(self):
+        assert ts._parse_text_tool_call(
+            '{"tool": "email__send", "parameters": {}}',
+            {"report__generate": "report.generate"}) is None
+
+    def test_plain_text_rejected(self):
+        assert ts._parse_text_tool_call("无匹配工具", {"report__generate": "report.generate"}) is None
+        assert ts._parse_text_tool_call("", {}) is None
+
+    def test_end_to_end_recovery(self):
+        """no_match 场景 + JSON 文本 → 兜底解析后按 fc 处理"""
+        fake = _FakeLLM([AIMessage(
+            content='{"tool": "report__generate", "parameters": {"report_type": "daily_sales"}}')])
+        with patch.object(ts, "llm", fake):
+            out = tool_selector_node(_state([{"name": "report.generate", "score": 0.7}]))
+        assert out["_tool_selection"]["source"] == "fc"
+        assert out["resolved_params"] == {"report_type": "daily_sales"}
+
+
 class TestMetricsRecording:
     def _recorder(self, monkeypatch):
         calls = []

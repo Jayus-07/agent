@@ -140,9 +140,11 @@ ENABLE_FC_TOOL_SELECTION = os.getenv(
     "ENABLE_FC_TOOL_SELECTION", "true"
 ).strip().lower() in ("1", "true", "yes")
 # tool_selector 的 LLM 调用约束：选择+填参输出很小，收紧超时与上限，
-# 失败/超时直接回退直通路径（等价旧行为），不拖尾延迟
+# 失败/超时直接回退直通路径（等价旧行为），不拖尾延迟。
+# max_tokens 不宜低于 512：qwen3 系会先写一段普通 CoT 再发 tool_calls，
+# 截断会吞掉 tool_calls（评测实测 256 时 no_match 率飙升）
 TOOL_SELECTOR_LLM_TIMEOUT = int(os.getenv("TOOL_SELECTOR_LLM_TIMEOUT", "8"))
-TOOL_SELECTOR_LLM_MAX_TOKENS = int(os.getenv("TOOL_SELECTOR_LLM_MAX_TOKENS", "256"))
+TOOL_SELECTOR_LLM_MAX_TOKENS = int(os.getenv("TOOL_SELECTOR_LLM_MAX_TOKENS", "512"))
 # 选择+填参是小任务，可指定低延迟模型（推荐已注册的 deepseek-v4-flash）；
 # 空 = 跟随全局默认模型。未注册/构建失败自动回退全局模型
 TOOL_SELECTOR_MODEL = os.getenv("TOOL_SELECTOR_MODEL", "").strip()
@@ -154,6 +156,11 @@ FC_TOOL_SELECTION_ALLOWLIST = [
     s.strip() for s in os.getenv("FC_TOOL_SELECTION_ALLOWLIST", "").split(",")
     if s.strip()
 ]
+# 门控阈值（评测校准后可调）：fast set 高置信直通阈值 / FC 候选截断上限
+TOOL_SELECTOR_FAST_PATH_SCORE = float(
+    os.getenv("TOOL_SELECTOR_FAST_PATH_SCORE", "0.85"))
+TOOL_SELECTOR_MAX_CANDIDATES = int(
+    os.getenv("TOOL_SELECTOR_MAX_CANDIDATES", "3"))
 
 # =====================================================
 # Token Usage Tracking (P0 - 审计日志)

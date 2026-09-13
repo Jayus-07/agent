@@ -1,0 +1,354 @@
+{
+  "version": "1.0",
+  "_comment": "FC 工具选择评测集 v1.0 — 58 条用例。评估 tool_selector 节点（路由缩候选 → FC 选工具+填参）。candidates 模拟三层路由的灰区输出（0.6~0.84，确保走 FC 路径而非 fast_path）。category: enum_param(enum 抽取) | multi_param(多参数) | typed_param(integer/url) | free_param(自由文本) | grey_zone(单候选灰区) | ambiguous(跨域歧义) | no_match(应不选/保守直通)。评分: expected.params 精确匹配结构性键；params_free_keys 只要求存在且非空；params_absent_keys 要求不出现（禁止编造）。no_match 用例只要不选中错误工具即算通过。",
+  "test_cases": [
+    {
+      "id": "TS-001", "category": "enum_param",
+      "query": "帮我生成上个月 Amazon US 渠道的销售日报",
+      "candidates": [{"name": "report.generate", "score": 0.72}, {"name": "sql.query", "score": 0.65}],
+      "expected": {"capability": "report.generate", "params": {"report_type": "daily_sales", "filters": {"channel": "Amazon US"}}}
+    },
+    {
+      "id": "TS-002", "category": "enum_param",
+      "query": "出一份商品动销分析报告，要看上周的数据",
+      "candidates": [{"name": "report.generate", "score": 0.7}, {"name": "rag.search", "score": 0.6}],
+      "expected": {"capability": "report.generate", "params": {"report_type": "product_performance"}}
+    },
+    {
+      "id": "TS-003", "category": "enum_param",
+      "query": "看看现在库存健康状况怎么样，生成库存健康报告",
+      "candidates": [{"name": "report.generate", "score": 0.68}, {"name": "sql.query", "score": 0.66}],
+      "expected": {"capability": "report.generate", "params": {"report_type": "inventory_health"}}
+    },
+    {
+      "id": "TS-004", "category": "enum_param",
+      "query": "上周广告效果怎么样？给我出个广告效果报告",
+      "candidates": [{"name": "report.generate", "score": 0.74}, {"name": "sql.query", "score": 0.62}],
+      "expected": {"capability": "report.generate", "params": {"report_type": "ad_performance"}}
+    },
+    {
+      "id": "TS-005", "category": "enum_param",
+      "query": "生成一份订单履约报告",
+      "candidates": [{"name": "report.generate", "score": 0.75}, {"name": "rag.search", "score": 0.55}],
+      "expected": {"capability": "report.generate", "params": {"report_type": "order_fulfillment"}}
+    },
+    {
+      "id": "TS-006", "category": "enum_param",
+      "query": "做一份客户分析报告，重点是复购情况",
+      "candidates": [{"name": "report.generate", "score": 0.71}, {"name": "business.analyze", "score": 0.63}],
+      "expected": {"capability": "report.generate", "params": {"report_type": "customer_analysis"}}
+    },
+    {
+      "id": "TS-007", "category": "enum_param",
+      "query": "给我来一份 Amazon US 渠道的销售日报，只要 Amazon US 的数据",
+      "candidates": [{"name": "report.generate", "score": 0.76}, {"name": "sql.query", "score": 0.6}],
+      "expected": {"capability": "report.generate", "params": {"report_type": "daily_sales", "filters": {"channel": "Amazon US"}}}
+    },
+    {
+      "id": "TS-008", "category": "enum_param",
+      "query": "生成日报",
+      "candidates": [{"name": "report.generate", "score": 0.66}, {"name": "sql.query", "score": 0.6}],
+      "expected": {"capability": "report.generate", "params": {"report_type": "daily_sales"}, "params_absent_keys": ["filters"]}
+    },
+    {
+      "id": "TS-010", "category": "multi_param",
+      "query": "给 procurement@company.com 发邮件，主题是补货提醒，正文写：SKU-A123 库存低于安全线，请本周内完成补货",
+      "candidates": [{"name": "email.send", "score": 0.8}, {"name": "report.generate", "score": 0.55}],
+      "expected": {"capability": "email.send", "params": {"to": "procurement@company.com", "subject": "补货提醒"}, "params_free_keys": ["body"]}
+    },
+    {
+      "id": "TS-011", "category": "multi_param",
+      "query": "把上周的销售汇总发给 boss@corp.com，抄送 team@corp.com，标题写「周销售汇总」",
+      "candidates": [{"name": "email.send", "score": 0.78}, {"name": "data.export", "score": 0.6}],
+      "expected": {"capability": "email.send", "params": {"to": "boss@corp.com", "cc": "team@corp.com", "subject": "周销售汇总"}, "params_free_keys": ["body"]}
+    },
+    {
+      "id": "TS-012", "category": "multi_param",
+      "query": "发邮件通知 ops@shop.com：服务器将在周六凌晨维护，请提前做好值班安排，主题写「维护通知」",
+      "candidates": [{"name": "email.send", "score": 0.79}, {"name": "rag.search", "score": 0.5}],
+      "expected": {"capability": "email.send", "params": {"to": "ops@shop.com", "subject": "维护通知"}, "params_free_keys": ["body"]}
+    },
+    {
+      "id": "TS-013", "category": "multi_param",
+      "query": "给 sales@company.com 发一封邮件，主题季度复盘，内容总结本季度 GMV 增长 20%",
+      "candidates": [{"name": "email.send", "score": 0.77}, {"name": "report.generate", "score": 0.58}],
+      "expected": {"capability": "email.send", "params": {"to": "sales@company.com", "subject": "季度复盘"}, "params_free_keys": ["body"]}
+    },
+    {
+      "id": "TS-014", "category": "multi_param",
+      "query": "邮件发送库存预警给 warehouse@corp.com，主题「库存预警」，正文：3 个 SKU 触达安全库存",
+      "candidates": [{"name": "email.send", "score": 0.81}, {"name": "sql.query", "score": 0.55}],
+      "expected": {"capability": "email.send", "params": {"to": "warehouse@corp.com", "subject": "库存预警"}, "params_free_keys": ["body"]}
+    },
+    {
+      "id": "TS-015", "category": "multi_param",
+      "query": "给 support@company.com 发邮件说明客诉处理进度，主题「客诉周报」",
+      "candidates": [{"name": "email.send", "score": 0.75}, {"name": "rag.search", "score": 0.52}],
+      "expected": {"capability": "email.send", "params": {"to": "support@company.com", "subject": "客诉周报"}, "params_free_keys": ["body"]}
+    },
+    {
+      "id": "TS-020", "category": "free_param",
+      "query": "把上周各渠道的销售额和订单数导出来",
+      "candidates": [{"name": "data.export", "score": 0.73}, {"name": "sql.query", "score": 0.68}],
+      "expected": {"capability": "data.export", "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-021", "category": "free_param",
+      "query": "导出上个月华南区所有退货订单明细，文件名叫 return_orders_last_month",
+      "candidates": [{"name": "data.export", "score": 0.74}, {"name": "sql.query", "score": 0.66}],
+      "expected": {"capability": "data.export", "params": {"filename": "return_orders_last_month"}, "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-022", "category": "free_param",
+      "query": "导出一份本季度 TOP10 SKU 的销量数据",
+      "candidates": [{"name": "data.export", "score": 0.7}, {"name": "sql.query", "score": 0.69}],
+      "expected": {"capability": "data.export", "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-023", "category": "free_param",
+      "query": "把广告花费明细导出成文件，文件名 ad_cost_detail",
+      "candidates": [{"name": "data.export", "score": 0.72}, {"name": "report.generate", "score": 0.6}],
+      "expected": {"capability": "data.export", "params": {"filename": "ad_cost_detail"}, "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-024", "category": "free_param",
+      "query": "导出库存周转天数超过 60 天的商品清单",
+      "candidates": [{"name": "data.export", "score": 0.71}, {"name": "business.analyze", "score": 0.62}],
+      "expected": {"capability": "data.export", "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-030", "category": "typed_param",
+      "query": "搜索一下 Amazon FBA 费用政策最近的变化，给我前 10 条结果",
+      "candidates": [{"name": "web.search", "score": 0.78}, {"name": "rag.search", "score": 0.62}],
+      "expected": {"capability": "web.search", "params": {"num_results": 10}, "params_free_keys": ["query"]}
+    },
+    {
+      "id": "TS-031", "category": "typed_param",
+      "query": "网上搜搜 2026 年跨境物流价格走势",
+      "candidates": [{"name": "web.search", "score": 0.76}, {"name": "rag.search", "score": 0.64}],
+      "expected": {"capability": "web.search", "params_free_keys": ["query"], "params_absent_keys": ["num_results"]}
+    },
+    {
+      "id": "TS-032", "category": "typed_param",
+      "query": "搜索竞品 Anker 最近的新品发布信息，返回 5 条",
+      "candidates": [{"name": "web.search", "score": 0.74}, {"name": "competitor.analyze", "score": 0.66}],
+      "expected": {"capability": "web.search", "params": {"num_results": 5}, "params_free_keys": ["query"]}
+    },
+    {
+      "id": "TS-033", "category": "typed_param",
+      "query": "帮我搜一下最新的欧盟包装法 EPR 合规要求",
+      "candidates": [{"name": "web.search", "score": 0.72}, {"name": "rag.search", "score": 0.66}],
+      "expected": {"capability": "web.search", "params_free_keys": ["query"]}
+    },
+    {
+      "id": "TS-034", "category": "typed_param",
+      "query": "搜索 Shein 在东南亚市场的扩张新闻，只要 3 条",
+      "candidates": [{"name": "web.search", "score": 0.75}, {"name": "rag.search", "score": 0.6}],
+      "expected": {"capability": "web.search", "params": {"num_results": 3}, "params_free_keys": ["query"]}
+    },
+    {
+      "id": "TS-040", "category": "typed_param",
+      "query": "抓取 https://www.example.com/pricing 这个页面的内容",
+      "candidates": [{"name": "web.crawl", "score": 0.8}, {"name": "web.search", "score": 0.6}],
+      "expected": {"capability": "web.crawl", "params": {"url": "https://www.example.com/pricing"}}
+    },
+    {
+      "id": "TS-041", "category": "typed_param",
+      "query": "把 https://competitor.com/product 页面抓下来，要原始 HTML",
+      "candidates": [{"name": "web.crawl", "score": 0.79}, {"name": "web.search", "score": 0.58}],
+      "expected": {"capability": "web.crawl", "params": {"url": "https://competitor.com/product", "mode": "raw"}}
+    },
+    {
+      "id": "TS-042", "category": "typed_param",
+      "query": "爬取 https://news.example.com/industry 的正文内容，转成 markdown",
+      "candidates": [{"name": "web.crawl", "score": 0.77}, {"name": "rag.search", "score": 0.55}],
+      "expected": {"capability": "web.crawl", "params": {"url": "https://news.example.com/industry", "mode": "markdown"}}
+    },
+    {
+      "id": "TS-043", "category": "typed_param",
+      "query": "抓一下 https://blog.example.com/post/123 这篇文章",
+      "candidates": [{"name": "web.crawl", "score": 0.76}, {"name": "web.search", "score": 0.62}],
+      "expected": {"capability": "web.crawl", "params": {"url": "https://blog.example.com/post/123"}}
+    },
+    {
+      "id": "TS-050", "category": "typed_param",
+      "query": "从 static 数据集导入商品数据，用 static://datasets/products.json 这个源",
+      "candidates": [{"name": "data.collect", "score": 0.74}, {"name": "sql.query", "score": 0.58}],
+      "expected": {"capability": "data.collect", "params": {"source": "static://datasets/products.json", "fetcher_type": "static"}}
+    },
+    {
+      "id": "TS-051", "category": "typed_param",
+      "query": "从 mock 接口 http://localhost:8001/mock/products 拉取商品数据入库",
+      "candidates": [{"name": "data.collect", "score": 0.73}, {"name": "data.export", "score": 0.56}],
+      "expected": {"capability": "data.collect", "params": {"source": "http://localhost:8001/mock/products", "fetcher_type": "http"}}
+    },
+    {
+      "id": "TS-052", "category": "typed_param",
+      "query": "导入 static://datasets/products.json 的数据，去重键用 SKU 和仓库",
+      "candidates": [{"name": "data.collect", "score": 0.72}, {"name": "sql.query", "score": 0.6}],
+      "expected": {"capability": "data.collect", "params": {"source": "static://datasets/products.json", "dedup_keys": "SKU,仓库"}}
+    },
+    {
+      "id": "TS-053", "category": "typed_param",
+      "query": "把商品数据导入到 ods_products 表，数据源是 static://datasets/products.json",
+      "candidates": [{"name": "data.collect", "score": 0.7}, {"name": "data.export", "score": 0.58}],
+      "expected": {"capability": "data.collect", "params": {"source": "static://datasets/products.json", "target_table": "ods_products"}}
+    },
+    {
+      "id": "TS-060", "category": "enum_param",
+      "query": "分析一下 https://www.amazon.com/dp/B0XXXX 竞品链接的详情",
+      "candidates": [{"name": "competitor.analyze", "score": 0.74}, {"name": "web.crawl", "score": 0.65}],
+      "expected": {"capability": "competitor.analyze", "params": {"action": "analyze", "url": "https://www.amazon.com/dp/B0XXXX"}}
+    },
+    {
+      "id": "TS-061", "category": "enum_param",
+      "query": "把 https://competitor.com/item/1 加到竞品监控列表，名字叫竞品A",
+      "candidates": [{"name": "competitor.analyze", "score": 0.75}, {"name": "web.crawl", "score": 0.6}],
+      "expected": {"capability": "competitor.analyze", "params": {"action": "add", "url": "https://competitor.com/item/1", "name": "竞品A"}}
+    },
+    {
+      "id": "TS-062", "category": "enum_param",
+      "query": "查一下竞品 https://competitor.com/item/2 的历史价格",
+      "candidates": [{"name": "competitor.analyze", "score": 0.73}, {"name": "web.search", "score": 0.62}],
+      "expected": {"capability": "competitor.analyze", "params": {"action": "history", "url": "https://competitor.com/item/2"}}
+    },
+    {
+      "id": "TS-063", "category": "enum_param",
+      "query": "看看我现在监控了哪些竞品",
+      "candidates": [{"name": "competitor.analyze", "score": 0.71}, {"name": "sql.query", "score": 0.6}],
+      "expected": {"capability": "competitor.analyze", "params": {"action": "list"}}
+    },
+    {
+      "id": "TS-070", "category": "grey_zone",
+      "query": "平台的退款审核流程是怎么规定的？",
+      "candidates": [{"name": "rag.search", "score": 0.78}, {"name": "sql.query", "score": 0.66}],
+      "expected": {"capability": "rag.search", "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-071", "category": "grey_zone",
+      "query": "新品上架的 Listing 优化规范有哪些？",
+      "candidates": [{"name": "rag.search", "score": 0.77}, {"name": "web.search", "score": 0.64}],
+      "expected": {"capability": "rag.search", "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-072", "category": "grey_zone",
+      "query": "FBA 入库的包装要求制度在哪里看？",
+      "candidates": [{"name": "rag.search", "score": 0.76}, {"name": "web.search", "score": 0.63}],
+      "expected": {"capability": "rag.search", "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-073", "category": "grey_zone",
+      "query": "客服话术 SOP 里对差评回复有什么要求",
+      "candidates": [{"name": "rag.search", "score": 0.79}, {"name": "sql.query", "score": 0.58}],
+      "expected": {"capability": "rag.search", "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-080", "category": "grey_zone",
+      "query": "上个月华东区的销售额是多少？",
+      "candidates": [{"name": "sql.query", "score": 0.77}, {"name": "data.export", "score": 0.64}],
+      "expected": {"capability": "sql.query", "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-081", "category": "grey_zone",
+      "query": "查一下 SKU-A123 最近 7 天的销量 TOP5 门店",
+      "candidates": [{"name": "sql.query", "score": 0.78}, {"name": "data.export", "score": 0.62}],
+      "expected": {"capability": "sql.query", "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-082", "category": "grey_zone",
+      "query": "本月订单量环比上个月增长了多少",
+      "candidates": [{"name": "sql.query", "score": 0.76}, {"name": "business.analyze", "score": 0.65}],
+      "expected": {"capability": "sql.query", "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-083", "category": "grey_zone",
+      "query": "各渠道的退货率分别是多少",
+      "candidates": [{"name": "sql.query", "score": 0.75}, {"name": "report.generate", "score": 0.63}],
+      "expected": {"capability": "sql.query", "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-090", "category": "grey_zone",
+      "query": "分析一下上个月毛利率下滑的业务原因和风险",
+      "candidates": [{"name": "business.analyze", "score": 0.72}, {"name": "sql.query", "score": 0.68}],
+      "expected": {"capability": "business.analyze"}
+    },
+    {
+      "id": "TS-091", "category": "grey_zone",
+      "query": "结合库存数据给出滞销风险预警和清理建议",
+      "candidates": [{"name": "business.analyze", "score": 0.71}, {"name": "rag.search", "score": 0.62}],
+      "expected": {"capability": "business.analyze"}
+    },
+    {
+      "id": "TS-092", "category": "grey_zone",
+      "query": "对客单价变化趋势做业务解读，给出行动建议",
+      "candidates": [{"name": "business.analyze", "score": 0.7}, {"name": "report.generate", "score": 0.64}],
+      "expected": {"capability": "business.analyze"}
+    },
+    {
+      "id": "TS-100", "category": "ambiguous",
+      "query": "看看上个月各 SKU 的动销情况",
+      "candidates": [{"name": "sql.query", "score": 0.72}, {"name": "report.generate", "score": 0.7}],
+      "expected": {"capability": "sql.query", "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-101", "category": "ambiguous",
+      "query": "退款规则是什么？顺便看下本月退款订单量",
+      "candidates": [{"name": "rag.search", "score": 0.73}, {"name": "sql.query", "score": 0.71}],
+      "expected": {"capability": "rag.search", "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-102", "category": "ambiguous",
+      "query": "导出商品主数据，然后抓取 https://supplier.com/catalog 页面核对",
+      "candidates": [{"name": "data.export", "score": 0.7}, {"name": "web.crawl", "score": 0.7}],
+      "expected": {"capability": "data.export", "params_free_keys": ["question"]}
+    },
+    {
+      "id": "TS-103", "category": "ambiguous",
+      "query": "给运营团队发周报邮件，附上销售数据导出文件",
+      "candidates": [{"name": "email.send", "score": 0.72}, {"name": "data.export", "score": 0.7}],
+      "expected": {"capability": "email.send", "params_free_keys": ["to", "subject", "body"]}
+    },
+    {
+      "id": "TS-104", "category": "ambiguous",
+      "query": "竞品上周降价了，分析下我们要不要跟",
+      "candidates": [{"name": "business.analyze", "score": 0.71}, {"name": "competitor.analyze", "score": 0.7}],
+      "expected": {"capability": "business.analyze"}
+    },
+    {
+      "id": "TS-105", "category": "ambiguous",
+      "query": "生成广告效果报告并且搜一下行业 benchmark",
+      "candidates": [{"name": "report.generate", "score": 0.72}, {"name": "web.search", "score": 0.7}],
+      "expected": {"capability": "report.generate", "params": {"report_type": "ad_performance"}}
+    },
+    {
+      "id": "TS-110", "category": "no_match",
+      "query": "今天天气怎么样",
+      "candidates": [{"name": "rag.search", "score": 0.62}, {"name": "web.search", "score": 0.6}],
+      "expected": {"no_match": true}
+    },
+    {
+      "id": "TS-111", "category": "no_match",
+      "query": "帮我写一首关于大海的诗",
+      "candidates": [{"name": "rag.search", "score": 0.63}, {"name": "report.generate", "score": 0.61}],
+      "expected": {"no_match": true}
+    },
+    {
+      "id": "TS-112", "category": "no_match",
+      "query": "1 加 1 等于几",
+      "candidates": [{"name": "sql.query", "score": 0.64}, {"name": "rag.search", "score": 0.6}],
+      "expected": {"no_match": true}
+    },
+    {
+      "id": "TS-113", "category": "no_match",
+      "query": "你觉得我们公司明年的战略方向应该是什么",
+      "candidates": [{"name": "business.analyze", "score": 0.66}, {"name": "rag.search", "score": 0.62}],
+      "expected": {"no_match": true}
+    },
+    {
+      "id": "TS-114", "category": "no_match",
+      "query": "你好，在吗",
+      "candidates": [{"name": "rag.search", "score": 0.61}, {"name": "sql.query", "score": 0.6}],
+      "expected": {"no_match": true}
+    }
+  ]
+}

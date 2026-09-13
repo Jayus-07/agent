@@ -25,8 +25,10 @@ from backend.config import (
     ENABLE_FC_TOOL_SELECTION,
     FC_TOOL_SELECTION_ALLOWLIST,
     FC_TOOL_SELECTION_ROLLOUT_PERCENT,
+    TOOL_SELECTOR_FAST_PATH_SCORE,
     TOOL_SELECTOR_LLM_MAX_TOKENS,
     TOOL_SELECTOR_LLM_TIMEOUT,
+    TOOL_SELECTOR_MAX_CANDIDATES,
     TOOL_SELECTOR_MODEL,
 )
 from backend.infra.llm import llm
@@ -41,19 +43,21 @@ from backend.shared.logger import logger
 from backend.skills.base import validate_params
 
 # 参数平凡（只有 question）/自动注入（business.analyze 的 sql_result 走
-# previous_outputs）的高频能力：路由高置信时直通，避免无意义的 LLM 调用
+# previous_outputs）的高频能力：路由高置信时直通，避免无意义的 LLM 调用。
+# 阈值与候选上限可经 env 校准（评测数据说话后调，见 run_tool_selector_eval）
 FAST_PATH_CAPS = {"sql.query", "rag.search", "business.analyze"}
-FAST_PATH_SCORE = 0.85
-# FC 候选上限：路由缩候选后通常 ≤3，防止极端情况下 prompt 膨胀
-MAX_FC_CANDIDATES = 3
+FAST_PATH_SCORE = TOOL_SELECTOR_FAST_PATH_SCORE
+MAX_FC_CANDIDATES = TOOL_SELECTOR_MAX_CANDIDATES
 
 _SYSTEM_PROMPT = """你是电商运营平台的工具选择器。根据用户问题，从候选工具中选出最合适的一个，并从问题中抽取该工具需要的全部参数。
 
 规则：
 - 只能调用候选列表中的工具，禁止调用其他任何工具
 - 参数值必须来自用户问题，禁止编造；问题中没有的信息不要填
-- 若所有候选工具都不适合该问题，不要调用任何工具，直接回复：无匹配工具
-- 路由系统的建议仅供参考，可能不准确，以问题实际意图为准"""
+- 候选列表由上游路由系统筛选得出，至少一个候选与问题相关。若多个候选都可能相关，选择与问题核心意图最匹配的一个，不要拒绝选择
+- 仅当问题与所有候选明显无关时，才不调用任何工具，直接回复：无匹配工具
+- 直接发起工具调用，回复中不要写分析推理过程
+- 路由建议的分值仅供参考，以问题实际意图为准"""
 
 
 def _record(source: str, reason: str = "", capability: str = "",
@@ -118,6 +122,33 @@ def _converge_candidates(candidates: list) -> list[str]:
     return valid
 
 
+def _parse_text_tool_call(content: str, fn2cap: dict[str, str]) -> tuple[str, dict] | None:
+    """文本兜底：模型把工具调用写成 JSON 文本而非 tool_calls 结构时解析。
+
+    实测发现（评测 TS-040）：部分模型偶尔输出 ```json {"tool": ...,
+    "parameters": ...}``` 或 {"name": ..., "arguments": ...}。解析出的
+    工具名必须命中候选映射，参数走与 fc 相同的校验；解析失败返回 None。
+    """
+    import json
+    import re
+
+    from backend.shared.json_extractor import extract_json
+
+    if not content or ("{" not in content):
+        return None
+    parsed = extract_json(content)
+    if not isinstance(parsed, dict):
+        return None
+    name = parsed.get("tool") or parsed.get("name") or parsed.get("function")
+    if not isinstance(name, str):
+        return None
+    cap = fn2cap.get(name)
+    if cap is None:
+        return None
+    args = parsed.get("parameters") or parsed.get("arguments") or {}
+    return cap, args if isinstance(args, dict) else {}
+
+
 def _select_via_fc(state: dict, valid_caps: list[str], t0: float) -> dict:
     """FC 选择主循环：最多 2 次尝试（首试 + 带反馈重试 1 次）。"""
     query = state.get("question", "")
@@ -147,24 +178,29 @@ def _select_via_fc(state: dict, valid_caps: list[str], t0: float) -> dict:
 
         tool_calls = getattr(raw, "tool_calls", None) or []
         if not tool_calls:
-            # 模型明确不调工具（无匹配 / 降级话术 / 纯文本）→ 保守直通
-            content = (getattr(raw, "content", "") or "")[:100]
-            logger.info(f"[ToolSelector] 模型未调用工具: {content}")
-            elapsed_ms = int((time.time() - t0) * 1000)
-            _record("no_match", "model_declined", t0=t0)
-            return {**state, "_tool_selection": {
-                "source": "no_match", "candidates": valid_caps,
-                "elapsed_ms": elapsed_ms,
-            }}
-
-        tc = tool_calls[0]
-        fn = tc.get("name", "")
-        args = dict(tc.get("args") or {})
-        cap = fn2cap.get(fn)
-        if cap is None:
-            feedback = f"工具 {fn} 不在候选列表内，只能从候选工具中选择。"
-            logger.warning(f"[ToolSelector] 越界选择 {fn}，重试")
-            continue
+            # 文本兜底：模型把调用写成了 JSON 文本
+            content = getattr(raw, "content", "") or ""
+            recovered = _parse_text_tool_call(content, fn2cap)
+            if recovered is not None:
+                cap, args = recovered
+                logger.info(f"[ToolSelector] 文本兜底解析出工具调用: {cap}")
+            else:
+                # 模型明确不调工具（无匹配 / 降级话术 / 纯文本）→ 保守直通
+                logger.info(f"[ToolSelector] 模型未调用工具: {content[:100]}")
+                elapsed_ms = int((time.time() - t0) * 1000)
+                _record("no_match", "model_declined", t0=t0)
+                return {**state, "_tool_selection": {
+                    "source": "no_match", "candidates": valid_caps,
+                    "elapsed_ms": elapsed_ms,
+                }}
+        else:
+            tc = tool_calls[0]
+            cap = fn2cap.get(tc.get("name", ""))
+            args = dict(tc.get("args") or {})
+            if cap is None:
+                feedback = f"工具 {tc.get('name')} 不在候选列表内，只能从候选工具中选择。"
+                logger.warning(f"[ToolSelector] 越界选择 {tc.get('name')}，重试")
+                continue
 
         schema = tool_registry.get_schema(cap)
         err = validate_params(schema["params"], args) if schema else None
