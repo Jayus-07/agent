@@ -494,6 +494,33 @@ class RerankCompressor(BaseDocumentCompressor):
                 threshold=self.threshold
             )
 
+            # ── 驱逐明细（治理 A）：记录哪些文档被 rerank 淘汰及原因 ──
+            # 2026-09-13 golden RC-013/080 排查事故：中间阶段静默驱逐文档，
+            # 无任何"谁被淘汰、为什么"的留痕。签名 = (source, 内容前40字)，
+            # 兼容 backend 返回新对象的情况。
+            def _sig(d):
+                m = d.metadata or {}
+                name = m.get("source") or m.get("source_file") or m.get("doc_id") or "?"
+                return (name, (d.page_content or "")[:40])
+
+            try:
+                survived = {_sig(d) for d in result_docs}
+                evicted = [
+                    {"doc": _sig(d)[0], "content_head": _sig(d)[1][:30]}
+                    for d in documents if _sig(d) not in survived
+                ]
+                if evicted:
+                    trace_collector.add_event(span, "rerank_eviction", "info",
+                        f"Rerank 淘汰 {len(evicted)}/{in_count} 篇 "
+                        f"(低于阈值 {RERANK_SCORE_THRESHOLD} 或超出 top_k={self.top_k})",
+                        data={"evicted": evicted[:10], "evicted_count": len(evicted)})
+                    logger.info(
+                        f"[Rerank] 淘汰 {len(evicted)}/{in_count} 篇: "
+                        f"{[e['doc'] for e in evicted[:5]]}{'...' if len(evicted) > 5 else ''}"
+                    )
+            except Exception:
+                pass  # 契约留痕失败不影响主流程
+
             trace_collector.end_span(span,
                                  metrics={"input_docs": in_count,
                                          "output_docs": len(result_docs),

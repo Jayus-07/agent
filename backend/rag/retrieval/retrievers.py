@@ -173,7 +173,18 @@ class ChunkLevelRetriever(BaseRetriever):
         arbitrary_types_allowed = True
 
     @staticmethod
-    def _filter_docs_by_keywords(question: str, doc_results: list, fallback_k: int = 3) -> list:
+    def _doc_name(meta: dict) -> str:
+        """doc 级 metadata → 可读名称（Stage1 契约 trace 用）。"""
+        return meta.get("source") or meta.get("source_file") or meta.get("doc_id") or "?"
+
+    @staticmethod
+    def _filter_docs_by_keywords(question: str, doc_results: list, fallback_k: int = 3) -> tuple:
+        """Stage1 文档门控，返回 (doc_ids, gate_info)。
+
+        gate_info 是阶段契约数据（2026-09-13 治理 A）：记录候选/关键词命中/
+        相似度兜底/最终保留/被排除项及理由，经 trace event 暴露 —— 此前本阶段
+        静默丢弃文档（相似度 Top-1 因 keywords 为空被踢）导致排查耗时数小时。
+        """
         deduped = _dedup_by_doc_id(doc_results)
         query_kw = set(extract_chunk_keywords(question, top_k=10))
         reranked = _score_by_keyword_overlap(question, deduped, fallback_k, query_kw=query_kw)
@@ -182,8 +193,21 @@ class ChunkLevelRetriever(BaseRetriever):
             for doc in reranked
             if doc.metadata.get("doc_id")
         ]
+        id2name = {
+            d.metadata.get("doc_id"): ChunkLevelRetriever._doc_name(d.metadata)
+            for d in deduped
+            if d.metadata.get("doc_id")
+        }
         if not query_kw:
-            return list(dict.fromkeys(all_ids))
+            ids = list(dict.fromkeys(all_ids))
+            return ids, {
+                "reason": "no_query_keywords",
+                "candidates": [id2name[i] for i in ids],
+                "keyword_matched": [],
+                "similarity_top": [],
+                "kept": [id2name[i] for i in ids],
+                "excluded": [],
+            }
         similarity_top = [
             d.metadata.get("doc_id")
             for d in deduped[:fallback_k]
@@ -214,8 +238,22 @@ class ChunkLevelRetriever(BaseRetriever):
             # RC-080/086/095 回归）。并入 doc 相似度前 fallback_k 名保底；
             # 注意必须取 deduped（相似度序）而非 reranked（关键词重排序），
             # 否则兜底名额会被关键词命中文档占满，等于没兜底。
-            return list(dict.fromkeys(unique_matched + similarity_top))
-        return list(dict.fromkeys(all_ids))
+            ids = list(dict.fromkeys(unique_matched + similarity_top))
+        else:
+            ids = list(dict.fromkeys(all_ids))
+        kept_set = set(ids)
+        info = {
+            "reason": "keyword_match_plus_similarity_top" if unique_matched else "keyword_fallback_all",
+            "candidates": [id2name[i] for i in all_ids],
+            "keyword_matched": [id2name[i] for i in unique_matched],
+            "similarity_top": [id2name[i] for i in similarity_top],
+            "kept": [id2name[i] for i in ids],
+            "excluded": [
+                {"doc": id2name[i], "reason": "no_keyword_match_and_below_similarity_top"}
+                for i in all_ids if i not in kept_set
+            ],
+        }
+        return ids, info
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> List[Document]:
         """带请求内缓存的检索入口（P1-5）。
@@ -272,6 +310,7 @@ class ChunkLevelRetriever(BaseRetriever):
 
         person_names = extract_person_names(query)
         doc_ids = None
+        gate_info = None  # Stage1 门控契约数据（治理 A：阶段进出+排除理由）
         # 🟢 V1.5 埋点：Stage 1 路径选择，4 个候选
         # person_name: 人名索引命中；doc_similarity: 退化到 doc 级向量检索；
         # keyword_filter: 退化到关键词过滤；domain_fallback: 0 匹配业务域回退。
@@ -301,7 +340,7 @@ class ChunkLevelRetriever(BaseRetriever):
                 else:
                     doc_results = self.doc_db.similarity_search(query, k=15)
                 stage1_fallback_count += 1
-                doc_ids = self._filter_docs_by_keywords(query, doc_results)
+                doc_ids, gate_info = self._filter_docs_by_keywords(query, doc_results)
                 stage1_path = "metadata_filter_with_doc_similarity"
             logger.info(
                 f"ChunkLevelRetriever Stage 1: metadata_filter={request_metadata_filter} "
@@ -318,16 +357,16 @@ class ChunkLevelRetriever(BaseRetriever):
                 else:
                     doc_results = self.doc_db.similarity_search(query, k=15)
                     stage1_fallback_count += 1
-                    doc_ids = self._filter_docs_by_keywords(query, doc_results)
+                    doc_ids, gate_info = self._filter_docs_by_keywords(query, doc_results)
                     stage1_path = "doc_similarity" if doc_results else "keyword_filter"
             else:
                 doc_results = self.doc_db.similarity_search(query, k=15)
                 stage1_fallback_count += 1
                 if doc_results:
-                    doc_ids = self._filter_docs_by_keywords(query, doc_results)
+                    doc_ids, gate_info = self._filter_docs_by_keywords(query, doc_results)
                     stage1_path = "doc_similarity"
                 else:
-                    doc_ids = self._filter_docs_by_keywords(query, doc_results)
+                    doc_ids, gate_info = self._filter_docs_by_keywords(query, doc_results)
                     stage1_path = "keyword_filter"
 
             if doc_ids:
@@ -341,6 +380,23 @@ class ChunkLevelRetriever(BaseRetriever):
                   "output_doc_count": len(doc_ids or []),
                   "stage1_path": stage1_path,
                   "stage1_fallback_count": stage1_fallback_count})
+
+        # ── Stage1 门控契约（治理 A）：候选/命中/兜底/排除项及理由 ──
+        # 2026-09-13 RC-086/095 事故：相似度 Top-1 文档因 keywords 为空被静默
+        # 排除，无任何"谁被排除、为什么"的留痕，排查耗时数小时。本事件保证
+        # 门控决策全程可回放。
+        if gate_info:
+            excluded_names = [e["doc"] for e in gate_info["excluded"]]
+            trace_collector.add_event(span, "stage1_doc_gate", "info",
+                f"Stage1 门控: kept={len(gate_info['kept'])}, "
+                f"excluded={len(gate_info['excluded'])}, reason={gate_info['reason']}",
+                data=gate_info)
+            if excluded_names:
+                logger.info(
+                    f"[Stage1 门控] 排除 {len(excluded_names)} 个文档: "
+                    f"{excluded_names[:5]}{'...' if len(excluded_names) > 5 else ''} "
+                    f"(理由: 无关键词命中且不在相似度 Top{3})"
+                )
 
         # 🟢 2026-08-10 新增：Stage 1 0 匹配 fallback
         # 解决 metadata_filter 推 business_domain 不准时丢文档的问题
@@ -636,8 +692,41 @@ class AdaptiveRetriever(BaseRetriever):
     def _get_relevant_documents(
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun = None
     ) -> List[Document]:
+        from backend.observability.tracer import trace_collector
+
+        # 治理 A：扩展阶段契约 span —— 扩展触发/替换/驱逐全程留痕
+        # （无 active trace 时 start_span 返回 noop，安全降级）
+        span = trace_collector.start_span(
+            "adaptive_expansion", name="Adaptive Context Expansion", type="retrieval",
+        )
+
+        def _cname(c) -> str:
+            m = c.metadata or {}
+            return m.get("source") or m.get("source_file") or str(m.get("doc_id") or "?")
+
+        def _end(metrics_extra: dict | None = None, event_data: dict | None = None):
+            if metrics_extra:
+                trace_collector.end_span(span, metrics={
+                    "input_chunks": len(chunks), "output_chunks": len(result),
+                    "clustered_docs": len(clustered),
+                    **metrics_extra,
+                })
+            else:
+                trace_collector.end_span(span, metrics={
+                    "input_chunks": len(chunks), "output_chunks": len(chunks),
+                    "clustered_docs": 0,
+                })
+            if event_data:
+                trace_collector.add_event(
+                    span, "adaptive_expansion_decision", "info",
+                    f"Adaptive: {event_data.get('decision', '')}", data=event_data,
+                )
+
         chunks = self.base_retriever.invoke(query)
+        result = chunks
+        clustered = []
         if not chunks:
+            _end({"skipped": "empty"})
             return []
 
         doc_counter = Counter()
@@ -653,63 +742,87 @@ class AdaptiveRetriever(BaseRetriever):
             if count / total >= self.cluster_threshold
         ]
 
-        if clustered and len(clustered) <= self.max_cluster_docs:
-            cluster_set = set(clustered)
+        if not (clustered and len(clustered) <= self.max_cluster_docs):
+            _end({"skipped": "no_cluster"})
+            return result
 
-            # ── 置信度门控：cluster chunk 分数太低时跳过扩展 ──
-            # 低分说明 reranker 无法区分相关/噪声，扩展只会放大噪声
-            cluster_scores = [
-                s for s in (
-                    c.metadata.get("rerank_score")
-                    or c.metadata.get("rrf_score")
-                    or c.metadata.get("similarity")
-                    for c in chunks
-                    if c.metadata.get("doc_id") in cluster_set
+        cluster_set = set(clustered)
+
+        # ── 置信度门控：cluster chunk 分数太低时跳过扩展 ──
+        # 低分说明 reranker 无法区分相关/噪声，扩展只会放大噪声
+        cluster_scores = [
+            s for s in (
+                c.metadata.get("rerank_score")
+                or c.metadata.get("rrf_score")
+                or c.metadata.get("similarity")
+                for c in chunks
+                if c.metadata.get("doc_id") in cluster_set
+            )
+            if s
+        ]
+        if cluster_scores:
+            avg_score = sum(cluster_scores) / len(cluster_scores)
+            top_score = max(cluster_scores)
+            if avg_score < 0.5 and top_score < 0.7:
+                logger.info(
+                    f"AdaptiveRetriever: Cluster 检测 (docs={clustered}) "
+                    f"但置信度低 (avg={avg_score:.3f}, top={top_score:.3f}) → 跳过 Expansion"
                 )
-                if s
-            ]
-            if cluster_scores:
-                avg_score = sum(cluster_scores) / len(cluster_scores)
-                top_score = max(cluster_scores)
-                if avg_score < 0.5 and top_score < 0.7:
-                    logger.info(
-                        f"AdaptiveRetriever: Cluster 检测 (docs={clustered}) "
-                        f"但置信度低 (avg={avg_score:.3f}, top={top_score:.3f}) → 跳过 Expansion"
+                _end({"skipped": "low_confidence"}, {
+                    "decision": "skip_low_confidence",
+                    "clustered_docs": [_cname(c) for c in chunks if c.metadata.get("doc_id") in cluster_set][:5],
+                    "avg_score": round(avg_score, 3),
+                    "top_score": round(top_score, 3),
+                })
+                return chunks
+
+        logger.info(f"AdaptiveRetriever: Cluster 检测 (docs={clustered}, {len(clustered)}/{len(doc_counter)}) → Context Expansion")
+        try:
+            results = self.doc_db.get(where={"doc_id": {"$in": clustered}})
+            full_doc_map = {}
+            for i, content in enumerate(results["documents"]):
+                doc_id = results["metadatas"][i].get("doc_id")
+                if doc_id:
+                    full_doc_map[doc_id] = Document(
+                        page_content=content,
+                        metadata=results["metadatas"][i],
                     )
-                    return chunks
 
-            logger.info(f"AdaptiveRetriever: Cluster 检测 (docs={clustered}, {len(clustered)}/{len(doc_counter)}) → Context Expansion")
-            try:
-                results = self.doc_db.get(where={"doc_id": {"$in": clustered}})
-                full_doc_map = {}
-                for i, content in enumerate(results["documents"]):
-                    doc_id = results["metadatas"][i].get("doc_id")
-                    if doc_id:
-                        full_doc_map[doc_id] = Document(
-                            page_content=content,
-                            metadata=results["metadatas"][i],
-                        )
+            # ── 替换而非前置：full doc 替换其 source chunks，保持排序 ──
+            # 旧实现 `full_docs + chunks` 把全文档放在最前面，导致：
+            #   1) 结果数膨胀（N full + M chunks），下游 top-k 截断丢失相关 chunk
+            #   2) 干扰文档全文排在相关 chunk 前面，排挤正确内容
+            # 新实现：原位替换，每个 cluster doc 的第一个 chunk 位置放全文，
+            # 同 doc 的后续 chunk 移除，非 cluster chunk 保持原位。
+            seen_cluster_docs = set()
+            result = []
+            for c in chunks:
+                doc_id = c.metadata.get("doc_id")
+                if doc_id in full_doc_map:
+                    if doc_id not in seen_cluster_docs:
+                        seen_cluster_docs.add(doc_id)
+                        result.append(full_doc_map[doc_id])
+                    # 同 doc 后续 chunk 跳过（已被全文替代）
+                else:
+                    result.append(c)
 
-                # ── 替换而非前置：full doc 替换其 source chunks，保持排序 ──
-                # 旧实现 `full_docs + chunks` 把全文档放在最前面，导致：
-                #   1) 结果数膨胀（N full + M chunks），下游 top-k 截断丢失相关 chunk
-                #   2) 干扰文档全文排在相关 chunk 前面，排挤正确内容
-                # 新实现：原位替换，每个 cluster doc 的第一个 chunk 位置放全文，
-                # 同 doc 的后续 chunk 移除，非 cluster chunk 保持原位。
-                seen_cluster_docs = set()
-                result = []
-                for c in chunks:
-                    doc_id = c.metadata.get("doc_id")
-                    if doc_id in full_doc_map:
-                        if doc_id not in seen_cluster_docs:
-                            seen_cluster_docs.add(doc_id)
-                            result.append(full_doc_map[doc_id])
-                        # 同 doc 后续 chunk 跳过（已被全文替代）
-                    else:
-                        result.append(c)
-                return result
-            except Exception as e:
-                logger.error(f"AdaptiveRetriever: Context Expansion 失败: {e}")
-
-        logger.info(f"AdaptiveRetriever: 分散分布 ({len(doc_counter)} docs) → 跳过 Expansion")
+            replaced_names = [_cname(full_doc_map[did]) for did in seen_cluster_docs]
+            kept_names = [_cname(c) for c in chunks if c.metadata.get("doc_id") not in cluster_set]
+            _end({"replaced_chunks": len(chunks) - len(result)}, {
+                "decision": "expanded",
+                "clustered_docs": replaced_names,
+                "kept_non_cluster_chunks": len(kept_names),
+                "note": "cluster doc 原位替换为全文记录；非 cluster chunk 原位保留",
+            })
+            logger.info(
+                f"AdaptiveRetriever: 扩展替换 {replaced_names}，"
+                f"非 cluster chunk 保留 {len(kept_names)} 条"
+            )
+            return result
+        except Exception as e:
+            logger.error(f"AdaptiveRetriever: Context Expansion 失败: {e}")
+            _end({"fallback": "passthrough"}, {
+                "decision": "expansion_failed_passthrough",
+                "error": str(e)[:200],
+            })
         return chunks
