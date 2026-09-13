@@ -42,7 +42,7 @@ class TestCheckpointSafe:
                              trace=object(), stream_sink=lambda t: None)
         safe = ctx.checkpoint_safe()
         assert safe == {"session_id": "s1", "user_id": "u1",
-                        "kb_id": "k1", "model": ""}
+                        "kb_id": "k1", "department": "", "model": ""}
         # 可 JSON 序列化（checkpoint 传输前提）
         import json
         json.dumps(safe, ensure_ascii=False)
