@@ -402,3 +402,6 @@ token_usage.jsonl
 # Java 构建产物与本地 agent 配置
 business-service/target/
 .zcode/
+
+# 评测产物（运行时生成）
+data/eval_reports/
