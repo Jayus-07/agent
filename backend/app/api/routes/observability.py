@@ -6,6 +6,7 @@ Langfuse 主存储（读路径优先），SQLite TraceStore 保留作为降级�
 
 import os
 import json
+import threading
 
 from fastapi import APIRouter, Query, HTTPException
 
@@ -293,6 +294,126 @@ async def get_alerts(limit: int = Query(50, ge=1, le=500)):
         "alerts": list(reversed(alerts)),
         "total": total,
         "file": DEGRADATION_LOG_FILE,
+    }
+
+
+# ═══════════════════════════════════════════════════
+# Skill / 节点健康度
+# ═══════════════════════════════════════════════════
+
+@router.get("/skill-health")
+async def skill_health(limit: int = Query(200, ge=1, le=1000)):
+    """按节点/Skill 聚合最近 trace 的健康度：调用量/成功率/平均耗时/重试次数。
+
+    数据源为最近 N 条 trace 的 span 明细，按 span.name 分组（排除 route/round
+    这类流程控制 span）。前端能力健康度卡片的数据入口，也为熔断/错误预算
+    策略提供依据。
+    """
+    rows = trace_collector.list(limit=limit, include_spans=True)
+
+    def _get(obj, key, default=None):
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    stats: dict[str, dict] = {}
+    for row in rows:
+        spans = _get(row, "spans", []) or []
+        ts = _get(row, "timestamp", "")
+        for sp in spans:
+            sp_type = str(_get(sp, "type", "") or "")
+            if sp_type in ("route", "round"):
+                continue  # 流程控制 span 不计入能力健康度
+            name = str(_get(sp, "name", "?") or "?")
+            status = str(_get(sp, "status", "") or "unknown")
+            duration = int(_get(sp, "duration_ms", 0) or 0)
+            events = _get(sp, "events", []) or []
+            retries = sum(
+                1 for ev in events
+                if str(_get(ev, "name", "")).startswith("retry_")
+            )
+            s = stats.setdefault(name, {
+                "name": name, "type": sp_type,
+                "total": 0, "success": 0, "error": 0, "skipped": 0,
+                "duration_sum_ms": 0, "retries": 0,
+                "last_status": "", "last_error": "", "last_ts": "",
+            })
+            s["total"] += 1
+            if status == "success":
+                s["success"] += 1
+            elif status in ("error", "failed"):
+                s["error"] += 1
+                err = _get(sp, "error", None)
+                if err and not s["last_error"]:
+                    s["last_error"] = str(err)[:200]
+            elif status == "skipped":
+                s["skipped"] += 1
+            s["duration_sum_ms"] += duration
+            s["retries"] += retries
+            if ts > s["last_ts"]:
+                s["last_ts"] = ts
+                s["last_status"] = status
+
+    items = []
+    for s in stats.values():
+        executed = s["success"] + s["error"]
+        items.append({
+            **s,
+            "avg_duration_ms": round(s["duration_sum_ms"] / s["total"]) if s["total"] else 0,
+            "success_rate": round(s["success"] / executed, 4) if executed else None,
+        })
+    # 失败多的排前，其次按调用量
+    items.sort(key=lambda x: (-x["error"], -x["total"]))
+    return {"skills": items, "trace_window": limit}
+
+
+# ═══════════════════════════════════════════════════
+# Trace 重放
+# ═══════════════════════════════════════════════════
+
+@router.post("/traces/{trace_id}/replay")
+async def replay_trace(trace_id: str):
+    """重放一条历史 trace：用原问题重新走一遍 Agent 链路（异步启动）。
+
+    失败/降级 trace 的"重试"按钮后端。fire-and-forget：立即返回，
+    新 trace 稍后出现在链路追踪列表中。
+    """
+    data = trace_collector.get(trace_id)
+    if data is None:
+        store = get_trace_store()
+        data = store.get(trace_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在或已过期")
+
+    def _get(obj, key, default=None):
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    question = str(_get(data, "question", "") or "")
+    if not question.strip():
+        raise HTTPException(status_code=400, detail="该 trace 无原始问题，无法重放")
+    session_id = str(_get(data, "session_id", "") or "default")
+    tags = _get(data, "tags", {}) or {}
+    kb_id = str(tags.get("kb_id", "default") or "default")
+
+    def _run():
+        try:
+            from backend.orchestration.graph.system import MultiAgentSystem
+            MultiAgentSystem().ask(question, session_id=session_id, kb_id=kb_id)
+            logger.info(f"[Replay] trace {trace_id[:12]} 重放完成")
+        except Exception:
+            logger.warning(f"[Replay] trace {trace_id[:12]} 重放失败", exc_info=True)
+
+    # fire-and-forget：重放可能耗时数十秒，绝不能占用 API worker
+    threading.Thread(target=_run, name=f"replay-{trace_id[:8]}", daemon=True).start()
+    logger.info(f"[Replay] 已启动: 原 trace {trace_id[:12]} question={question[:60]}")
+    return {
+        "started": True,
+        "source_trace_id": trace_id,
+        "question": question[:120],
+        "session_id": session_id,
+        "kb_id": kb_id,
     }
 
 

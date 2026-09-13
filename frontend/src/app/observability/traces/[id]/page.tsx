@@ -25,6 +25,7 @@ const FlameGraph = dynamic(() => import("@/components/observability/trace/FlameG
 import SpanTypeFilter from "@/components/observability/trace/SpanTypeFilter";
 import GraphTopology from "@/components/observability/trace/GraphTopology";
 import { evaluationService } from "@/services/evaluation";
+import { authFetch } from "@/lib/authFetch";
 import { useToast } from "@/components/shared/Toast";
 import {
   statusBadge,
@@ -165,8 +166,26 @@ export default function TraceDetailPage() {
     timersRef.current.add(t2);
   };
 
-  const handleRetry = () => {
-    toast.info(`重新执行 trace ${trace.id.slice(0, 12)}…（待对接 API）`);
+  // 重放：用原问题重走一遍链路（后端异步执行，新 trace 稍后出现在列表）
+  const [replaying, setReplaying] = useState(false);
+  const handleRetry = async () => {
+    if (replaying) return;
+    setReplaying(true);
+    try {
+      const resp = await authFetch(`/api/observability/traces/${trace.id}/replay`, {
+        method: "POST",
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${resp.status}`);
+      }
+      toast.success("重放已启动，新链路稍后出现在追踪列表");
+      setTimeout(() => router.push("/observability/traces"), 800);
+    } catch (e) {
+      toast.error(`重放失败：${(e as Error).message}`);
+    } finally {
+      setReplaying(false);
+    }
   };
 
   // 坏 case 一键转评测用例：POST /evaluation/cases/from-trace
@@ -233,7 +252,7 @@ export default function TraceDetailPage() {
             <span className="text-[10px] text-slate-400" title={formatTime(trace.timestamp)}>{formatRelative(trace.timestamp)}</span>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={handleRetry} className="text-xs text-slate-500 border border-slate-200 rounded px-3 py-1 hover:bg-slate-100">🔄 重新执行</button>
+            <button onClick={handleRetry} disabled={replaying} className="text-xs text-slate-500 border border-slate-200 rounded px-3 py-1 hover:bg-slate-100 disabled:opacity-50">{replaying ? "重放中…" : "🔄 重新执行"}</button>
             <button
               onClick={handleAddToEval}
               disabled={addingToEval}

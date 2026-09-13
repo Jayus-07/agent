@@ -213,6 +213,9 @@ export default function StepTimeline({ steps, totalMs, onToggle, expanded, jsonE
         }
 
         // ── 普通 Span 行 ──
+        const retryEvents = (span.events || []).filter((ev) =>
+          String((ev as any)?.name || "").startsWith("retry_")
+        );
         return (
           <div key={span.id} id={`step-${span.id}`}>
             <div
@@ -221,6 +224,8 @@ export default function StepTimeline({ steps, totalMs, onToggle, expanded, jsonE
               className={`group flex items-center gap-4 py-2.5 px-3 rounded-md transition-colors cursor-pointer ${
                 isHighlight
                   ? "bg-violet-100 ring-2 ring-violet-400"
+                  : span.status === "error"
+                  ? "bg-red-50 border border-red-200"
                   : isRerankZero
                   ? "bg-red-50 border border-red-100"
                   : isSlowest
@@ -237,6 +242,17 @@ export default function StepTimeline({ steps, totalMs, onToggle, expanded, jsonE
                 <span className={`text-xs ${span.status === "skipped" ? "text-slate-400 line-through" : "text-slate-700"}`}>
                   {span.name}
                 </span>
+                {retryEvents.length > 0 && (
+                  <span
+                    className="inline-flex items-center px-1 py-0.5 rounded bg-orange-100 text-orange-700 text-[9px] font-semibold"
+                    title={`执行了 ${retryEvents.length + 1} 次（重试 ${retryEvents.length} 次）`}
+                  >
+                    ↻{retryEvents.length}
+                  </span>
+                )}
+                {span.status === "error" && (
+                  <span className="inline-flex items-center px-1 py-0.5 rounded bg-red-100 text-red-700 text-[9px] font-semibold">失败</span>
+                )}
               </div>
 
               {/* Bar */}
@@ -277,6 +293,28 @@ export default function StepTimeline({ steps, totalMs, onToggle, expanded, jsonE
               </div>
             </div>
 
+            {/* 重试链：BaseSkill 每次 attempt 记一条 retry_N 事件 */}
+            {isJsonOpen && retryEvents.length > 0 && (
+              <div className="mt-1 ml-8 bg-orange-50 border border-orange-100 rounded-md p-2.5 space-y-1.5">
+                <p className="text-[10px] uppercase tracking-wider text-orange-600 font-semibold">
+                  🔁 重试链（共 {retryEvents.length + 1} 次尝试）
+                </p>
+                {retryEvents.map((ev, i) => (
+                  <div key={i} className="flex items-start gap-2 text-[10px]">
+                    <span className={`px-1 rounded font-mono font-semibold ${
+                      (ev as any)?.level === "error" ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700"
+                    }`}>
+                      {String((ev as any)?.name || `retry_${i + 1}`)}
+                    </span>
+                    <span className="text-slate-600">{String((ev as any)?.message || "")}</span>
+                    <span className="ml-auto text-slate-400 font-mono shrink-0">
+                      {String((ev as any)?.timestamp || "").slice(11, 19)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Raw JSON 展开 */}
             {isJsonOpen && <SpanJsonPanel span={span} />}
           </div>
@@ -287,7 +325,9 @@ export default function StepTimeline({ steps, totalMs, onToggle, expanded, jsonE
       <div className="flex items-center gap-4 px-3 pt-3 text-[10px] text-slate-400">
         <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-violet-500" /> 正常</span>
         <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-500" /> &gt;1s</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-400" /> 失败</span>
         <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-slate-200 border border-dashed border-slate-300" /> 跳过</span>
+        <span className="flex items-center gap-1">↻N = 重试 N 次</span>
         <span className="flex items-center gap-1 ml-auto">{steps.length} span · {totalMs}ms</span>
       </div>
     </div>

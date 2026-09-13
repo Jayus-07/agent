@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import TraceFilterBar from "@/components/observability/trace/TraceFilter";
 import StatsBar from "@/components/observability/trace/StatsBar";
 import CSQualityCard from "@/components/observability/trace/CSQualityCard";
@@ -299,6 +300,13 @@ export default function TracesPage() {
             <p className="text-xs text-slate-500 mt-0.5">共 {total} 条 Trace · {filter.timeRange} 筛选</p>
           </div>
           <div className="flex items-center gap-2">
+            <Link
+              href="/observability/alerts"
+              className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-1.5 transition-colors"
+              title="降级/告警事件流 + 能力健康度"
+            >
+              🚨 系统告警
+            </Link>
             {compareIds.size >= 2 && (
               <button
                 onClick={goCompare}
