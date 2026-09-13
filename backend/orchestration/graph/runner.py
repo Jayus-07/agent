@@ -226,8 +226,11 @@ class GraphRunner:
             except Exception as e:
                 logger.error(f"[GraphRunner] 流式执行失败: {e}", exc_info=True)
                 ctx["worker_error"] = True
+                import traceback as _tb
+                _tb_tail = "\n".join(_tb.format_exc().splitlines()[-12:])
                 merged_q.put(("evt", {"event": "error",
-                                      "data": {"message": f"执行失败: {e}", "ts": time.time()}}))
+                                      "data": {"message": f"执行失败: {e}\n{_tb_tail}",
+                                               "ts": time.time()}}))
             finally:
                 reset_stream_sink()
                 merged_q.put(("done", None))
@@ -295,8 +298,11 @@ class GraphRunner:
                                   usage=ctx["usage"])
 
         except Exception as e:
+            import traceback as _tb
             logger.error(f"[GraphRunner] 流式执行失败: {e}", exc_info=True)
-            yield {"event": "error", "data": {"message": f"执行失败: {e}", "ts": time.time()}}
+            _tb_tail = "\n".join(_tb.format_exc().splitlines()[-12:])
+            yield {"event": "error",
+                   "data": {"message": f"执行失败: {e}\n{_tb_tail}", "ts": time.time()}}
             try:
                 _end_root(trace, status="error", metrics={"error": str(e)[:100]})
                 trace_collector.finish(trace, ctx["final_answer"] or "",
