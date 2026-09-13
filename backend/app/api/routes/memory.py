@@ -13,6 +13,8 @@ PR-2.x: 业务逻辑已迁移至 MemoryService，路由仅做参数提取和委�
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from backend.memory.manager import memory_manager
+
 router = APIRouter(prefix="/memory", tags=["记忆"])
 
 # 惰性初始化 MemoryService 单例（避免启动时加载 DB 连接池）
@@ -52,38 +54,55 @@ class RenameRequest(BaseModel):
 
 
 @router.get("/sessions")
-async def list_sessions(user_id: str = "default",
-                        limit: int = 50, before: str | None = None):
+def list_sessions(user_id: str = "default",
+                  limit: int = 50, before: str | None = None):
     """列出用户的所有持久化会话（支持游标分页）。
 
     Query:
       limit: 单次返回上限（默认 50，最大 200）
       before: ISO timestamp 游标；只返回 updated_at < before 的会话
+
+    注意必须经 memory_manager 后台 loop 桥接执行：DB engine 在该 loop
+    上初始化后即绑死（asyncpg 连接不可跨 loop），路由若在主 loop 直接
+    await 会抛 "attached to a different loop"（前端侧栏红色报错的根因）。
+    同步 def 由 FastAPI 放线程池执行，阻塞等待桥接结果不占主 loop。
     """
     return _raise_for_error(
-        await _get_service().list_sessions(user_id=user_id, limit=limit, before=before)
+        memory_manager.run_tool(
+            lambda: _get_service().list_sessions(user_id=user_id, limit=limit, before=before)
+        )
     )
 
 
 @router.get("/sessions/{session_id}")
-async def get_session(session_id: str):
+def get_session(session_id: str):
     """获取指定会话的消息列表"""
-    return _raise_for_error(await _get_service().get_session_messages(session_id))
+    return _raise_for_error(
+        memory_manager.run_tool(lambda: _get_service().get_session_messages(session_id))
+    )
 
 
 @router.get("/sessions/{session_id}/context")
-async def get_session_context(session_id: str):
+def get_session_context(session_id: str):
     """获取会话的 Agent 工作上下文（SQL结果/RAG文档/报告摘要）"""
-    return _raise_for_error(await _get_service().get_session_context(session_id))
+    return _raise_for_error(
+        memory_manager.run_tool(lambda: _get_service().get_session_context(session_id))
+    )
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
+def delete_session(session_id: str):
     """删除会话及其所有消息"""
-    return _raise_for_error(await _get_service().delete_session(session_id))
+    return _raise_for_error(
+        memory_manager.run_tool(lambda: _get_service().delete_session(session_id))
+    )
 
 
 @router.patch("/sessions/{session_id}")
-async def rename_session(session_id: str, req: RenameRequest):
+def rename_session(session_id: str, req: RenameRequest):
     """重命名会话标题"""
-    return _raise_for_error(await _get_service().rename_session(session_id, req.title))
+    return _raise_for_error(
+        memory_manager.run_tool(
+            lambda: _get_service().rename_session(session_id, req.title)
+        )
+    )

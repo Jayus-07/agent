@@ -292,15 +292,22 @@ async def chat_stream(
 # POST /chat/messages — 持久化会话消息到 PG
 # ═══════════════════════════════════════════════════
 @router.post("/messages")
-async def save_messages(req: dict):
+def save_messages(req: dict):
     """批量保存会话消息（前端 SSE done 后调用）
 
     body: { session_id, messages: [{ role, content }, ...] }
+
+    同步 def + memory_manager 桥接：DB engine 绑定在 memory 后台 loop，
+    主 loop 直接 await 会抛 "attached to a different loop"（CS 页消息
+    持久化失败的根因）。
     """
+    from backend.memory.manager import memory_manager
     from backend.memory.service import MemoryService
-    return await MemoryService().save_messages(
-        session_id=req.get("session_id", ""),
-        messages=req.get("messages", []),
+    return memory_manager.run_tool(
+        lambda: MemoryService().save_messages(
+            session_id=req.get("session_id", ""),
+            messages=req.get("messages", []),
+        )
     )
 
 
