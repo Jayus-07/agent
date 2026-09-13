@@ -10,6 +10,7 @@ from pydantic import Field
 
 import json
 from collections import Counter
+from dataclasses import dataclass, field
 
 from langchain_core.callbacks.manager import CallbackManagerForRetrieverRun
 
@@ -232,6 +233,49 @@ def _drop_excluded_kb_fallback_docs(docs: list, span=None) -> list:
 
 
 # =====================================================
+# 检索阶段共享状态（staging context）
+# =====================================================
+
+@dataclass
+class _Staging:
+    """一次未命中缓存检索的跨阶段状态（ChunkLevelRetriever 专用）。
+
+    检索链 9 层降级拆分前，十几个局部变量在单个 300 行函数里串状态；
+    拆分后各 Stage 方法按固定顺序读写此对象。字段按阶段分组，
+    语义与拆分前的局部变量一一对应——只动结构不动行为。
+    """
+
+    query: str
+    span: object  # chunk_retrieval span（不可序列化，仅用于挂载 trace 事件）
+
+    # ── Stage 0 产出（此后只读；0 匹配放宽会改写 metadata_filter/doc_ids）──
+    metadata_filter: dict = field(default_factory=dict)
+    subject_type: str = ""
+    department: str = ""
+    # 主体授权 keep-set；None=未声明主体（授权未启用，旧行为）
+    authorized: set | None = None
+
+    # ── Stage 1 产出 ──
+    person_names: list = field(default_factory=list)
+    doc_ids: list | None = None
+    gate_info: dict | None = None  # Stage1 门控契约数据（治理 A：排除理由留痕）
+    # 路径契约值: person_name / person_name_miss /
+    # metadata_filter_with_doc_similarity / doc_similarity / keyword_filter /
+    # domain_fallback / kb_fallback（空召回重试追加 +synonym_retry 后缀）
+    stage1_path: str | None = None
+    stage1_fallback_count: int = 0  # 累计退化次数（>=1 即认为走了 fallback）
+    # kb 兜底放宽发生过 → 未声明主体时召回结果需剔除 test 库（旧行为；
+    # 已声明主体走 authorized 白名单，更严格）
+    cross_kb_fallback: bool = False
+
+    # ── Stage 2 产出 ──
+    docs: list = field(default_factory=list)
+    seen: set = field(default_factory=set)  # 已收录 chunk_id（跨重试/扩展去重）
+    expanded_queries: list | None = None
+    effective_k: int = 0  # adaptive 扩展后的实际 k（调用方截断用）
+
+
+# =====================================================
 # Chunk-Level Retriever
 # =====================================================
 
@@ -372,126 +416,150 @@ class ChunkLevelRetriever(BaseRetriever):
         return docs
 
     def _retrieve_uncached_impl(self, query: str, span) -> "tuple[List[Document], dict]":
-        from backend.observability.tracer import trace_collector
-        # — Stage 1: Doc 级检索 —
-        # Check for request-scoped metadata_filter (set by RAGPipeline.search() via contextvars)
-        request_metadata_filter = {}
-        subject_type = ""
-        department = ""
+        """检索编排：按固定顺序执行各 Stage，阶段间状态经 _Staging 传递。
+
+        Stage 划分只动结构不动行为；trace 事件名与 metrics 键（stage1_path
+        取值、stage1_fallback_count、fallback: neighbor_expansion）是阶段契约
+        （RC-086/095 事故排查的回放依据），名称与取值不可变。
+        """
+        st = _Staging(query=query, span=span)
+        self._load_request_context(st)
+        self._stage1_select_docs(st)
+        self._emit_stage1_events(st)
+        self._stage1_relax_on_zero_match(st)
+        self._stage2_hybrid_retrieve(st)
+        early = self._stage2_neighbor_fallback(st)
+        if early is not None:
+            return early
+        self._stage2_postprocess(st)
+        return st.docs[: st.effective_k], {
+            "retrieved_chunks": len(st.docs),
+            "stage1_path": st.stage1_path,
+            "stage1_fallback_count": st.stage1_fallback_count,
+        }
+
+    def _load_request_context(self, st: "_Staging") -> None:
+        """Stage 0：读取请求上下文 + 计算主体授权。
+
+        输入: contextvars 中的 RequestContext（缺失 → 软降级为无 filter，留痕）
+        输出: st.metadata_filter / st.subject_type / st.department /
+              st.authorized（keep-set；有授权时 filter 的 kb 范围已收敛）
+        """
         try:
             from backend.rag.context import get_context
             ctx = get_context()
-            request_metadata_filter = ctx.metadata_filter
-            subject_type = getattr(ctx, "subject_type", "") or ""
-            department = getattr(ctx, "department", "") or ""
+            st.metadata_filter = ctx.metadata_filter
+            st.subject_type = getattr(ctx, "subject_type", "") or ""
+            st.department = getattr(ctx, "department", "") or ""
         except Exception as e:
             # request 上下文缺失 → 按无 filter 全量检索（软降级），留痕
             logger.debug(f"[ChunkLevelRetriever] 读取 request context 失败: {e}", exc_info=True)
 
         # ── 主体授权（属性驱动，确定性计算）──
-        # authorized=None 表示未声明主体 → 授权未启用（旧行为）；已声明则
+        # st.authorized=None 表示未声明主体 → 授权未启用（旧行为）；已声明则
         # filter 中的 kb 范围先收敛到授权集合，后续召回再以 keep-set 兜底——
         # 显式 kb 选择（含 LLM 选库）同样受限，路由只提议、属性裁决。
         from backend.config.knowledge_base import authorized_kbs
-        authorized = authorized_kbs(subject_type, department)
+        authorized = authorized_kbs(st.subject_type, st.department)
         if authorized is not None:
-            allowed_kbs = set(authorized)
-            request_metadata_filter = _scope_kb_filter(request_metadata_filter, allowed_kbs)
+            st.authorized = set(authorized)
+            st.metadata_filter = _scope_kb_filter(st.metadata_filter, st.authorized)
 
-        person_names = extract_person_names(query)
-        doc_ids = None
-        gate_info = None  # Stage1 门控契约数据（治理 A：阶段进出+排除理由）
-        # 🟢 V1.5 埋点：Stage 1 路径选择，4 个候选
-        # person_name: 人名索引命中；doc_similarity: 退化到 doc 级向量检索；
-        # keyword_filter: 退化到关键词过滤；domain_fallback: 0 匹配业务域回退。
-        stage1_path = None
-        stage1_fallback_count = 0  # 累计退化次数（>=1 即认为走了 fallback）
-        # kb 兜底放宽发生过 → 未声明主体时召回结果需剔除 test 库（旧行为；
-        # 已声明主体走 authorized 白名单，更严格）
-        cross_kb_fallback = False
+    def _authorized_doc_search(self, st: "_Staging", k: int = 15, flt: dict | None = None) -> list:
+        """Doc 级检索 + 主体授权后过滤（st.authorized 为 None 时零行为变化）。"""
+        docs = (self.doc_db.similarity_search(st.query, k=k, filter=flt)
+                if flt else self.doc_db.similarity_search(st.query, k=k))
+        if st.authorized is not None:
+            docs = [d for d in docs if d.metadata.get("kb_id") in st.authorized]
+        return docs
 
-        def _authorized_doc_search(k: int = 15, flt=None) -> list:
-            """Doc 级检索 + 主体授权后过滤（authorized 为 None 时零行为变化）。"""
-            docs = (self.doc_db.similarity_search(query, k=k, filter=flt)
-                    if flt else self.doc_db.similarity_search(query, k=k))
-            if authorized is not None:
-                docs = [d for d in docs if d.metadata.get("kb_id") in allowed_kbs]
-            return docs
+    def _stage1_select_docs(self, st: "_Staging") -> None:
+        """Stage 1：Doc 级候选选择（人名索引 → filter/相似度/关键词门控）。
 
-        if request_metadata_filter:
+        输入: st.query / st.metadata_filter / st.authorized / self.person_index
+        输出: st.person_names / st.doc_ids / st.gate_info /
+              st.stage1_path / st.stage1_fallback_count
+        🟢 V1.5 埋点：stage1_path 契约取值（4 个候选）
+        person_name: 人名索引命中；doc_similarity: 退化到 doc 级向量检索；
+        keyword_filter: 退化到关键词过滤；domain_fallback: 0 匹配业务域回退。
+        """
+        st.person_names = extract_person_names(st.query)
+        if st.metadata_filter:
             # MetadataFilter has already determined the scope — use it directly
-            known_persons = request_metadata_filter.get("person_names")
+            known_persons = st.metadata_filter.get("person_names")
             if known_persons:
                 p = known_persons
                 if isinstance(p, list):
                     p = p[0]
                 matched_ids = self.person_index.get(p, [])
                 if matched_ids:
-                    doc_ids = matched_ids
-                    stage1_path = "person_name"
+                    st.doc_ids = matched_ids
+                    st.stage1_path = "person_name"
                 else:
-                    doc_ids = []
-                    stage1_path = "person_name_miss"
+                    st.doc_ids = []
+                    st.stage1_path = "person_name_miss"
             else:
                 # 即使有 metadata_filter（如 kb_id）也要做 doc 级检索计算 doc_ids，
                 # 否则 Stage2 hybrid_retrieve doc_ids=[] 不限 doc，rerank 输入被 KB 内噪声稀释
                 # 导致高相关 doc 被挤掉（fix 2026-08-19 — RAG eval 基线从 72% 恢复）
-                if request_metadata_filter:
-                    doc_results = _authorized_doc_search(flt=request_metadata_filter)
-                else:
-                    doc_results = _authorized_doc_search()
-                stage1_fallback_count += 1
-                doc_ids, gate_info = self._filter_docs_by_keywords(query, doc_results)
-                stage1_path = "metadata_filter_with_doc_similarity"
+                doc_results = self._authorized_doc_search(st, flt=st.metadata_filter)
+                st.stage1_fallback_count += 1
+                st.doc_ids, st.gate_info = self._filter_docs_by_keywords(st.query, doc_results)
+                st.stage1_path = "metadata_filter_with_doc_similarity"
             logger.info(
-                f"ChunkLevelRetriever Stage 1: metadata_filter={request_metadata_filter} "
-                f"→ doc_ids={len(doc_ids)} matched, path={stage1_path}"
+                f"ChunkLevelRetriever Stage 1: metadata_filter={st.metadata_filter} "
+                f"→ doc_ids={len(st.doc_ids)} matched, path={st.stage1_path}"
             )
         else:
-            if person_names:
-                person_name = person_names[0] if isinstance(person_names, list) else person_names
+            if st.person_names:
+                person_name = st.person_names[0] if isinstance(st.person_names, list) else st.person_names
                 matched_ids = self.person_index.get(person_name, [])
                 if matched_ids:
-                    doc_ids = matched_ids
-                    stage1_path = "person_name"
-                    logger.info(f"ChunkLevelRetriever: 人名匹配到 {len(doc_ids)} 个文档")
+                    st.doc_ids = matched_ids
+                    st.stage1_path = "person_name"
+                    logger.info(f"ChunkLevelRetriever: 人名匹配到 {len(st.doc_ids)} 个文档")
                 else:
-                    doc_results = _authorized_doc_search()
-                    stage1_fallback_count += 1
-                    doc_ids, gate_info = self._filter_docs_by_keywords(query, doc_results)
-                    stage1_path = "doc_similarity" if doc_results else "keyword_filter"
+                    doc_results = self._authorized_doc_search(st)
+                    st.stage1_fallback_count += 1
+                    st.doc_ids, st.gate_info = self._filter_docs_by_keywords(st.query, doc_results)
+                    st.stage1_path = "doc_similarity" if doc_results else "keyword_filter"
             else:
-                doc_results = _authorized_doc_search()
-                stage1_fallback_count += 1
+                doc_results = self._authorized_doc_search(st)
+                st.stage1_fallback_count += 1
                 if doc_results:
-                    doc_ids, gate_info = self._filter_docs_by_keywords(query, doc_results)
-                    stage1_path = "doc_similarity"
+                    st.doc_ids, st.gate_info = self._filter_docs_by_keywords(st.query, doc_results)
+                    st.stage1_path = "doc_similarity"
                 else:
-                    doc_ids, gate_info = self._filter_docs_by_keywords(query, doc_results)
-                    stage1_path = "keyword_filter"
+                    st.doc_ids, st.gate_info = self._filter_docs_by_keywords(st.query, doc_results)
+                    st.stage1_path = "keyword_filter"
 
-            if doc_ids:
-                logger.info(f"ChunkLevelRetriever Stage 1: 召回 {len(doc_ids)} 个相关文档, path={stage1_path}")
+            if st.doc_ids:
+                logger.info(f"ChunkLevelRetriever Stage 1: 召回 {len(st.doc_ids)} 个相关文档, path={st.stage1_path}")
 
+    def _emit_stage1_events(self, st: "_Staging") -> None:
+        """Stage 1 契约事件：doc_filter（路径/规模）+ stage1_doc_gate（门控明细）。
+
+        2026-09-13 RC-086/095 事故：相似度 Top-1 文档因 keywords 为空被静默
+        排除，无任何"谁被排除、为什么"的留痕，排查耗时数小时。本事件保证
+        门控决策全程可回放。
+        """
+        from backend.observability.tracer import trace_collector
         # ── Doc Filter event ──
-        trace_collector.add_event(span, "doc_filter", "info",
-            f"Stage1: metadata={request_metadata_filter}, persons={person_names}, → {len(doc_ids or [])} docs, path={stage1_path}",
-            data={"metadata_filter": request_metadata_filter,
-                  "person_names": person_names,
-                  "output_doc_count": len(doc_ids or []),
-                  "stage1_path": stage1_path,
-                  "stage1_fallback_count": stage1_fallback_count})
+        trace_collector.add_event(st.span, "doc_filter", "info",
+            f"Stage1: metadata={st.metadata_filter}, persons={st.person_names}, → {len(st.doc_ids or [])} docs, path={st.stage1_path}",
+            data={"metadata_filter": st.metadata_filter,
+                  "person_names": st.person_names,
+                  "output_doc_count": len(st.doc_ids or []),
+                  "stage1_path": st.stage1_path,
+                  "stage1_fallback_count": st.stage1_fallback_count})
 
         # ── Stage1 门控契约（治理 A）：候选/命中/兜底/排除项及理由 ──
-        # 2026-09-13 RC-086/095 事故：相似度 Top-1 文档因 keywords 为空被静默
-        # 排除，无任何"谁被排除、为什么"的留痕，排查耗时数小时。本事件保证
-        # 门控决策全程可回放。
-        if gate_info:
-            excluded_names = [e["doc"] for e in gate_info["excluded"]]
-            trace_collector.add_event(span, "stage1_doc_gate", "info",
-                f"Stage1 门控: kept={len(gate_info['kept'])}, "
-                f"excluded={len(gate_info['excluded'])}, reason={gate_info['reason']}",
-                data=gate_info)
+        if st.gate_info:
+            excluded_names = [e["doc"] for e in st.gate_info["excluded"]]
+            trace_collector.add_event(st.span, "stage1_doc_gate", "info",
+                f"Stage1 门控: kept={len(st.gate_info['kept'])}, "
+                f"excluded={len(st.gate_info['excluded'])}, reason={st.gate_info['reason']}",
+                data=st.gate_info)
             if excluded_names:
                 logger.info(
                     f"[Stage1 门控] 排除 {len(excluded_names)} 个文档: "
@@ -499,6 +567,15 @@ class ChunkLevelRetriever(BaseRetriever):
                     f"(理由: 无关键词命中且不在相似度 Top{3})"
                 )
 
+    def _stage1_relax_on_zero_match(self, st: "_Staging") -> None:
+        """Stage 1 0 匹配兜底：顺序放宽 business_domain → kb_id。
+
+        输入: st.metadata_filter / st.doc_ids（0 匹配时触发）
+        输出: 改写 st.metadata_filter / st.doc_ids=None / st.stage1_path /
+              st.stage1_fallback_count / st.cross_kb_fallback
+        """
+        if not (st.metadata_filter and not st.doc_ids):
+            return
         # 🟢 2026-08-10 新增：Stage 1 0 匹配 fallback
         # 解决 metadata_filter 推 business_domain 不准时丢文档的问题
         # （如问"差评怎么处理" → customer，但售后流程文档标 order）
@@ -508,159 +585,166 @@ class ChunkLevelRetriever(BaseRetriever):
         # 兜底形同虚设 → 0 召回 → Evidence Gate 假拒答。
         # 改为顺序放宽：先放宽 business_domain，再探测 KB 是否有文档，
         # 空则连 kb_id 一起放宽（宁跨 KB 召回，不全量拒答）。
-        if request_metadata_filter and not doc_ids:
-            fallback_filter = {k: v for k, v in request_metadata_filter.items() if k != "business_domain"}
-            if fallback_filter != request_metadata_filter:
-                logger.info(
-                    f"ChunkLevelRetriever: metadata_filter {request_metadata_filter} 0 匹配, "
-                    f"回退到放宽 business_domain 的检索"
-                )
-                request_metadata_filter = fallback_filter
-                doc_ids = None  # 让 Stage 2 走完整向量检索
-                stage1_path = "domain_fallback"
-                stage1_fallback_count += 1
-                # 探测放宽 domain 后 KB 是否仍有文档；空 KB → 继续放宽 kb_id
-                if not self._filter_has_docs(fallback_filter):
-                    kb_relaxed = {
-                        k: v for k, v in fallback_filter.items()
-                        if k not in ("kb_id", "$or")
-                    }
-                    if kb_relaxed != fallback_filter:
-                        logger.info(
-                            f"ChunkLevelRetriever: 放宽 business_domain 后仍无文档 "
-                            f"(filter={fallback_filter})，继续放宽 kb_id → {kb_relaxed}"
-                        )
-                        request_metadata_filter = kb_relaxed
-                        stage1_path = "kb_fallback"
-                        stage1_fallback_count += 1
-                        cross_kb_fallback = True
-                trace_collector.add_event(span, "stage1_fallback", "info",
-                    f"Stage1 0 匹配 → 放宽后 filter={request_metadata_filter}, path={stage1_path}",
-                    data={"relaxed_filter": request_metadata_filter,
-                          "stage1_path": stage1_path,
-                          "stage1_fallback_count": stage1_fallback_count})
-            else:
-                # fix f17：business_domain 不在 filter 中仍 0 命中 —— 元凶多半是
-                # kb_id 推断失配（KBRouter 关键词规则把问题路由到无文档的 KB，
-                # 如"报销"→policy_finance，但文档实际在 rag_test_kb）。
-                # 与 business_domain 放宽同理：宁跨 KB 召回，不全量拒答；
-                # 保留 doc_type 等语义收窄条件。
-                fallback_filter = {
-                    k: v for k, v in request_metadata_filter.items()
+        from backend.observability.tracer import trace_collector
+        fallback_filter = {k: v for k, v in st.metadata_filter.items() if k != "business_domain"}
+        if fallback_filter != st.metadata_filter:
+            logger.info(
+                f"ChunkLevelRetriever: metadata_filter {st.metadata_filter} 0 匹配, "
+                f"回退到放宽 business_domain 的检索"
+            )
+            st.metadata_filter = fallback_filter
+            st.doc_ids = None  # 让 Stage 2 走完整向量检索
+            st.stage1_path = "domain_fallback"
+            st.stage1_fallback_count += 1
+            # 探测放宽 domain 后 KB 是否仍有文档；空 KB → 继续放宽 kb_id
+            if not self._filter_has_docs(fallback_filter):
+                kb_relaxed = {
+                    k: v for k, v in fallback_filter.items()
                     if k not in ("kb_id", "$or")
                 }
-                if fallback_filter != request_metadata_filter:
+                if kb_relaxed != fallback_filter:
                     logger.info(
-                        f"ChunkLevelRetriever: metadata_filter {request_metadata_filter} 0 匹配, "
-                        f"回退到放宽 kb_id 的检索"
+                        f"ChunkLevelRetriever: 放宽 business_domain 后仍无文档 "
+                        f"(filter={fallback_filter})，继续放宽 kb_id → {kb_relaxed}"
                     )
-                    request_metadata_filter = fallback_filter
-                    doc_ids = None
-                    stage1_path = "kb_fallback"
-                    stage1_fallback_count += 1
-                    cross_kb_fallback = True
-                    trace_collector.add_event(span, "stage1_fallback", "info",
-                        f"Stage1 0 匹配 → 放宽 kb_id 后 filter={request_metadata_filter}",
-                        data={"relaxed_filter": request_metadata_filter,
-                              "stage1_path": stage1_path,
-                              "stage1_fallback_count": stage1_fallback_count})
+                    st.metadata_filter = kb_relaxed
+                    st.stage1_path = "kb_fallback"
+                    st.stage1_fallback_count += 1
+                    st.cross_kb_fallback = True
+            trace_collector.add_event(st.span, "stage1_fallback", "info",
+                f"Stage1 0 匹配 → 放宽后 filter={st.metadata_filter}, path={st.stage1_path}",
+                data={"relaxed_filter": st.metadata_filter,
+                      "stage1_path": st.stage1_path,
+                      "stage1_fallback_count": st.stage1_fallback_count})
+        else:
+            # fix f17：business_domain 不在 filter 中仍 0 命中 —— 元凶多半是
+            # kb_id 推断失配（KBRouter 关键词规则把问题路由到无文档的 KB，
+            # 如"报销"→policy_finance，但文档实际在 rag_test_kb）。
+            # 与 business_domain 放宽同理：宁跨 KB 召回，不全量拒答；
+            # 保留 doc_type 等语义收窄条件。
+            fallback_filter = {
+                k: v for k, v in st.metadata_filter.items()
+                if k not in ("kb_id", "$or")
+            }
+            if fallback_filter != st.metadata_filter:
+                logger.info(
+                    f"ChunkLevelRetriever: metadata_filter {st.metadata_filter} 0 匹配, "
+                    f"回退到放宽 kb_id 的检索"
+                )
+                st.metadata_filter = fallback_filter
+                st.doc_ids = None
+                st.stage1_path = "kb_fallback"
+                st.stage1_fallback_count += 1
+                st.cross_kb_fallback = True
+                trace_collector.add_event(st.span, "stage1_fallback", "info",
+                    f"Stage1 0 匹配 → 放宽 kb_id 后 filter={st.metadata_filter}",
+                    data={"relaxed_filter": st.metadata_filter,
+                          "stage1_path": st.stage1_path,
+                          "stage1_fallback_count": st.stage1_fallback_count})
 
-        # — Stage 2: Chunk 级检索 —
+    def _stage2_hybrid_retrieve(self, st: "_Staging") -> None:
+        """Stage 2：Chunk 级混合检索（向量+BM25+同义词扩展）+ 空召回重试。
+
+        输入: st.query / st.doc_ids / st.metadata_filter / self.k
+        输出: st.docs / st.seen / st.expanded_queries；重试发生时
+              stage1_path 追加 +synonym_retry 后缀、fallback 计数 +1。
+        """
+        from backend.rag.preprocessing.synonyms import expand_query
         # 2026-08-20: 同义词扩展 — 对 query 做同义词扩展，提升口语化 query 召回
         # 优化：Stage 1 无匹配时跳过同义词扩展（无 doc 指引时扩展只会放大空检索）
-        from backend.rag.preprocessing.synonyms import expand_query
-        if doc_ids:
-            expanded_queries = expand_query(query)
-        else:
-            expanded_queries = None
+        st.expanded_queries = expand_query(st.query) if st.doc_ids else None
 
-        all_docs = []
-        seen = set()
-        res = hybrid_retrieve(
-            query, self.chunk_retriever, self.bm25,
-            k=self.k, doc_ids=doc_ids,
-            metadata_filter=request_metadata_filter,
-            expanded_queries=expanded_queries,
-        )
-        for d in res:
-            cid = d.metadata.get("chunk_id") or f'{d.metadata.get("doc_id","?")}:{d.metadata.get("chunk_index",0)}'
-            if cid not in seen:
-                seen.add(cid)
-                all_docs.append(d)
+        self._hybrid_collect(st, st.expanded_queries)
 
         # — 空召回降级：首查无扩展且 0 结果 → 补一次同义词扩展重试 —
         # 口语化 query（"发欧洲大概要多少天"）与书面文档词面零重叠，首查会被
         # 相似度阈值全过滤；空召回时补充候选是纯增益（rerank/Gate 照常把关），
         # 且只在空召回路径发生，正常请求零额外开销
-        if not all_docs and expanded_queries is None:
-            retry_expanded = expand_query(query)
+        if not st.docs and st.expanded_queries is None:
+            retry_expanded = expand_query(st.query)
             if len(retry_expanded) > 1:
                 logger.info(
                     f"ChunkLevelRetriever: Stage 2 首查空召回, "
                     f"同义词扩展重试 ({len(retry_expanded) - 1} 个变体)"
                 )
-                stage1_path = f"{stage1_path}+synonym_retry"
-                stage1_fallback_count += 1
-                res = hybrid_retrieve(
-                    query, self.chunk_retriever, self.bm25,
-                    k=self.k, doc_ids=doc_ids,
-                    metadata_filter=request_metadata_filter,
-                    expanded_queries=retry_expanded,
-                )
-                for d in res:
-                    cid = d.metadata.get("chunk_id") or f'{d.metadata.get("doc_id","?")}:{d.metadata.get("chunk_index",0)}'
-                    if cid not in seen:
-                        seen.add(cid)
-                        all_docs.append(d)
-                trace_collector.add_event(span, "stage2_synonym_retry", "info",
-                    f"Stage2 空召回 → 同义词扩展重试: {len(retry_expanded) - 1} 变体 → {len(all_docs)} chunks",
+                st.stage1_path = f"{st.stage1_path}+synonym_retry"
+                st.stage1_fallback_count += 1
+                self._hybrid_collect(st, retry_expanded)
+                from backend.observability.tracer import trace_collector
+                trace_collector.add_event(st.span, "stage2_synonym_retry", "info",
+                    f"Stage2 空召回 → 同义词扩展重试: {len(retry_expanded) - 1} 变体 → {len(st.docs)} chunks",
                     data={"expanded_queries": retry_expanded,
-                          "output_count": len(all_docs)})
+                          "output_count": len(st.docs)})
 
-        # — 降级: Stage 2 无结果时回退到文档全文 —
-        if not all_docs:
-            logger.warning(f"ChunkLevelRetriever: Stage 2 无结果，尝试 Neighbor Expansion")
-            fallback_docs = self._neighbor_expansion(query, doc_ids, request_metadata_filter)
-            if authorized is not None and fallback_docs:
-                fallback_docs = _keep_docs_in_allowed_kbs(fallback_docs, allowed_kbs, span)
-            elif cross_kb_fallback and fallback_docs:
-                fallback_docs = _drop_excluded_kb_fallback_docs(fallback_docs, span)
-            if fallback_docs:
-                logger.info(f"ChunkLevelRetriever: Neighbor Expansion → {len(fallback_docs)} chunks")
-                return fallback_docs[: self.k], {
-                    "retrieved_chunks": len(fallback_docs),
-                    "stage1_path": stage1_path,
-                    "stage1_fallback_count": stage1_fallback_count,
-                    "fallback": "neighbor_expansion",
-                }
-            logger.warning(f"ChunkLevelRetriever: 降级也无结果")
-            return [], {
-                "retrieved_chunks": 0,
-                "stage1_path": stage1_path,
-                "stage1_fallback_count": stage1_fallback_count,
+    def _hybrid_collect(self, st: "_Staging", expanded_queries) -> None:
+        """执行一次 hybrid_retrieve，结果按 chunk_id 去重增量并入 st.docs/st.seen。
+
+        首查与同义词重试共享同一 seen 集合——重试不会重复收录首查已命中的
+        chunk，adaptive 扩展（_adaptive_expand）也依赖此集合的去重语义。
+        """
+        res = hybrid_retrieve(
+            st.query, self.chunk_retriever, self.bm25,
+            k=self.k, doc_ids=st.doc_ids,
+            metadata_filter=st.metadata_filter,
+            expanded_queries=expanded_queries,
+        )
+        for d in res:
+            cid = d.metadata.get("chunk_id") or f'{d.metadata.get("doc_id","?")}:{d.metadata.get("chunk_index",0)}'
+            if cid not in st.seen:
+                st.seen.add(cid)
+                st.docs.append(d)
+
+    def _stage2_neighbor_fallback(self, st: "_Staging") -> "tuple[List[Document], dict] | None":
+        """Stage 2 空结果 → Neighbor Expansion（拉文档全文）兜底。
+
+        返回 (docs, metrics) 表示流程以兜底结束（调用方直接返回）；
+        返回 None 表示有正常召回，继续走后处理。
+        兜底结果同样过主体授权/跨库禁入收口（keep-set 强制优先于禁入剔除）。
+        """
+        if st.docs:
+            return None
+        logger.warning(f"ChunkLevelRetriever: Stage 2 无结果，尝试 Neighbor Expansion")
+        fallback_docs = self._neighbor_expansion(st.query, st.doc_ids, st.metadata_filter)
+        if st.authorized is not None and fallback_docs:
+            fallback_docs = _keep_docs_in_allowed_kbs(fallback_docs, st.authorized, st.span)
+        elif st.cross_kb_fallback and fallback_docs:
+            fallback_docs = _drop_excluded_kb_fallback_docs(fallback_docs, st.span)
+        if fallback_docs:
+            logger.info(f"ChunkLevelRetriever: Neighbor Expansion → {len(fallback_docs)} chunks")
+            return fallback_docs[: self.k], {
+                "retrieved_chunks": len(fallback_docs),
+                "stage1_path": st.stage1_path,
+                "stage1_fallback_count": st.stage1_fallback_count,
+                "fallback": "neighbor_expansion",
             }
+        logger.warning(f"ChunkLevelRetriever: 降级也无结果")
+        return [], {
+            "retrieved_chunks": 0,
+            "stage1_path": st.stage1_path,
+            "stage1_fallback_count": st.stage1_fallback_count,
+        }
 
-        logger.info(f"ChunkLevelRetriever Stage 2: 召回 {len(all_docs)} 个 chunks")
+    def _stage2_postprocess(self, st: "_Staging") -> None:
+        """Stage 2 后处理：adaptive 扩 K → parent 上下文 → 授权收口过滤。
+
+        输入: st.docs（非空，空召回已被 neighbor 兜底短路）
+        输出: st.docs / st.effective_k（调用方按 effective_k 截断）
+        """
+        logger.info(f"ChunkLevelRetriever Stage 2: 召回 {len(st.docs)} 个 chunks")
 
         # ── Adaptive Retrieval: 质量不足时自动扩大 K ──
-        all_docs, effective_k = self._adaptive_expand(query, all_docs, doc_ids,
-                                         request_metadata_filter, seen)
+        st.docs, st.effective_k = self._adaptive_expand(st.query, st.docs, st.doc_ids,
+                                         st.metadata_filter, st.seen)
 
         # ── Parent-Child 上下文增强：检索命中的 leaf，拉取对应 parent ──
-        all_docs = attach_parent_context(all_docs, self._lookup_parents)
+        st.docs = attach_parent_context(st.docs, self._lookup_parents)
 
         # ── 收口过滤：adaptive 扩展可能再拉入文档，统一在此执行 ──
         # 已声明主体 → 白名单强制（无条件）；未声明 → 仅跨库兜底剔除 test 库
-        if authorized is not None:
-            all_docs = _keep_docs_in_allowed_kbs(all_docs, allowed_kbs, span)
-        elif cross_kb_fallback:
-            all_docs = _drop_excluded_kb_fallback_docs(all_docs, span)
-
-        return all_docs[: effective_k], {
-            "retrieved_chunks": len(all_docs),
-            "stage1_path": stage1_path,
-            "stage1_fallback_count": stage1_fallback_count,
-        }
+        if st.authorized is not None:
+            st.docs = _keep_docs_in_allowed_kbs(st.docs, st.authorized, st.span)
+        elif st.cross_kb_fallback:
+            st.docs = _drop_excluded_kb_fallback_docs(st.docs, st.span)
 
     def _filter_has_docs(self, metadata_filter: dict) -> bool:
         """探测给定 metadata_filter 在 doc 库中是否还能匹配到文档（不做向量检索，零 embedding 成本）。
