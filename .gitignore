@@ -87,6 +87,7 @@ report_preferences.json
 doc_registry.sqlite3
 data/chroma_market/
 data/router_index/
+data/cs_router_index/
 data/eval_runs/
 data/bm25/
 data/doc_db/
