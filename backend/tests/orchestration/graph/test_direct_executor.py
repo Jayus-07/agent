@@ -137,6 +137,44 @@ class TestDirectExecution:
         assert kind == "analyze"
         assert prev["direct_0"]["row_count"] == 1
 
+    def test_resolved_params_flow_into_skill(self, monkeypatch):
+        """tool_selector FC 填参结果必须进入 plan.nodes[direct_1].params"""
+        seen = {}
+
+        async def fake_report(state):
+            sid = state["current_step_id"]
+            seen["params"] = state["plan"]["nodes"][sid]["params"]
+            return {"step_results": {sid: {
+                "status": "success", "output": "报告已生成"}}}
+
+        self._patch_nodes(monkeypatch, {"report_skill": fake_report})
+        out = skill_executor_node(_state(
+            candidates=_mk_candidates("report.generate"),
+            resolved_params={"report_type": "daily_sales",
+                             "filters": {"channel": "Amazon US"}},
+        ))
+        assert seen["params"] == {"report_type": "daily_sales",
+                                  "filters": {"channel": "Amazon US"}}
+        assert out["step_results"]["direct_1"]["status"] == "success"
+
+    def test_empty_resolved_params_falls_back_to_question(self, monkeypatch):
+        """resolved_params 为空 dict（ falsy）时回退 question 透传（旧语义）"""
+        seen = {}
+
+        async def fake_rag(state):
+            sid = state["current_step_id"]
+            seen["params"] = state["plan"]["nodes"][sid]["params"]
+            return {"step_results": {sid: {
+                "status": "success", "output": "ok"}}}
+
+        self._patch_nodes(monkeypatch, {"rag_skill": fake_rag})
+        skill_executor_node(_state(
+            question="退款政策是什么",
+            candidates=_mk_candidates("rag.search"),
+            resolved_params={},
+        ))
+        assert seen["params"] == {"question": "退款政策是什么"}
+
     def test_business_analyze_with_existing_predecessor_skips_prefetch(self, monkeypatch):
         """已有 previous_outputs（plan 模式传递场景）时不重复补前置步骤"""
         async def fake_analyze(state):

@@ -34,7 +34,9 @@ class BusinessAnalysisSkill(BaseSkill):
         "生成风险洞察和行动建议。依赖前置 sql.query 步骤的 SQLResult。"
     )
     params_schema = {
-        "sql_result": {"type": "object", "required": True,
+        # auto=True: 由 previous_outputs 自动注入，不参与参数校验、
+        # 不暴露给 function calling（tool_schema 转换器据此剔除）
+        "sql_result": {"type": "object", "required": True, "auto": True,
                        "description": "前置 sql.query 步骤产出的 SQLResult（由 previous_outputs 自动传递，无需手动指定）"},
     }
     examples = [

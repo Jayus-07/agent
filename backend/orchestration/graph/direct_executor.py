@@ -57,19 +57,33 @@ def _failed_step(step_id: str, error_msg: str) -> dict:
 _PREDECESSOR_CAPS = {"business.analyze": "sql.query"}
 
 
+def _resolved_params(state: dict) -> dict:
+    """本次 direct 步骤的执行参数。
+
+    tool_selector FC 选参成功时用 resolved_params（模型抽取的
+    report_type/enum 等）；未设置/为空时回退旧行为（question 透传，
+    参数抽取交给 skill 内部 NL2SQL）。
+    """
+    return state.get("resolved_params") or {"question": state.get("question", "")}
+
+
 def _run_skill_step(skill_nodes: dict, state: dict, step_id: str,
-                    cap_name: str, description: str) -> dict:
+                    cap_name: str, description: str,
+                    params: dict | None = None) -> dict:
     """执行单个 skill 节点，返回 step dict（含 status/output）。
 
     与 BaseSkill.execute() 的契约：state 需有 current_step_id 与
     plan.nodes[step_id]；skill 返回 {"step_results": {step_id: {...}}}。
+    params 缺省时回退 question 透传（前置补拉步骤等场景）。
     """
+    if params is None:
+        params = {"question": state.get("question", "")}
     step = {
         "step_id": step_id,
         "capability": cap_name,
         "description": description,
         "status": "running",
-        "params": {"question": state.get("question", "")},
+        "params": params,
     }
     skill_func = skill_nodes[_extract_capability_name(cap_name)]
     result = asyncio.run(skill_func({
@@ -147,6 +161,7 @@ def skill_executor_node(state: dict) -> dict:
     # 构造 step（供 reporter 读取 + BaseSkill 需要 plan.nodes[step_id]）
     step_id = "direct_1"
     step_results: dict = {}
+    main_params = _resolved_params(state)
 
     # fix f13：business.analyze 等依赖型 capability 在 direct 模式缺前置输出，
     # 先自动补前置步骤（sql.query 拉数）再执行本体，避免必败。
@@ -182,7 +197,7 @@ def skill_executor_node(state: dict) -> dict:
     state["plan"] = {
         "nodes": {step_id: {"capability": cap_name,
                             "description": f"直接执行 {cap_name}",
-                            "params": {"question": state.get("question", "")}}},
+                            "params": main_params}},
         "edges": {},
     }
 
@@ -190,7 +205,7 @@ def skill_executor_node(state: dict) -> dict:
     try:
         step = _run_skill_step(
             skill_nodes, {**state, "step_results": step_results},
-            step_id, cap_name, f"直接执行 {cap_name}",
+            step_id, cap_name, f"直接执行 {cap_name}", params=main_params,
         )
         step_results[step_id] = step
         logger.info(f"[SkillExecutor] {cap_name} 完成: {len(str(step['output']))} chars")

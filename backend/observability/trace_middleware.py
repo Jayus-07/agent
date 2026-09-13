@@ -27,6 +27,7 @@ _NODE_LABELS: dict[str, str] = {
     "reporter":             "结果汇总",
     "business_analysis_skill": "业务分析",
     "router":              "路由决策",
+    "tool_selector":       "工具选择",
     "skill_executor":      "直接执行",
     "workflow_executor":   "工作流执行",
     # CS nodes

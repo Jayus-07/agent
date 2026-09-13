@@ -15,6 +15,8 @@ def stream_node_events(node_name: str, node_output: dict, skill_nodes: set,
         yield from _build_critique_events(node_output)
     elif node_name == "supervisor":
         yield from _build_supervisor_events(node_output, make_step_log_event)
+    elif node_name == "tool_selector":
+        yield from _build_tool_selector_events(node_output)
     elif node_name == "reporter":
         yield from _build_reporter_events(node_output)
     elif node_name in skill_nodes:
@@ -46,6 +48,40 @@ def _build_critique_events(output: dict) -> Generator[dict, None, None]:
             "message": f"计划已修正，共 {len(nodes)} 个步骤" if plan_changed
                        else "计划审查通过，无需修正",
             "payload": {"plan_changed": plan_changed, "task_count": len(nodes)},
+            "ts": time.time(),
+        },
+    }
+
+
+def _build_tool_selector_events(output: dict) -> Generator[dict, None, None]:
+    """tool_selector 的 FC 选择结果事件。
+
+    只在 FC 真正介入时发声（fc / no_match）；fast_path / passthrough
+    直通不发——否则每条 direct 查询都多一条无信息量的日志。
+    """
+    sel = output.get("_tool_selection") or {}
+    source = sel.get("source", "")
+    if source == "fc":
+        cap = sel.get("capability", "")
+        message = (f"工具选择: {cap}（{len(sel.get('candidates', []))} 个候选，"
+                   f"第 {sel.get('attempts', 1)} 次尝试，{sel.get('elapsed_ms', 0)}ms）")
+        level = "info"
+    elif source == "no_match":
+        message = "未匹配到合适工具，回退默认执行"
+        level = "warn"
+    else:
+        return
+    yield {
+        "event": "log", "data": {
+            "level": level, "node": "tool_selector", "step_id": "tool_selection",
+            "message": message,
+            "payload": {
+                "source": source,
+                "capability": sel.get("capability"),
+                "candidates": sel.get("candidates", []),
+                "params": sel.get("params"),
+                "elapsed_ms": sel.get("elapsed_ms"),
+            },
             "ts": time.time(),
         },
     }
@@ -209,6 +245,7 @@ def make_initial_state(question: str, session_id: str, kb_id: str, messages: lis
         "final_answer": "",
         "alerts": [],
         "guard_result": guard_result or {},
+        "resolved_params": None,
         "_supervisor_loop_count": 0,
         "_plan_critiqued": False,
         "_plan_changed": False,

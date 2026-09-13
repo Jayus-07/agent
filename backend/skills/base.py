@@ -56,6 +56,58 @@ def _is_retryable(error: str) -> bool:
     return classify_error(error) not in UNRETRYABLE_ERROR_TYPES
 
 
+# params_schema 声明的 type → 运行时类型检查。
+# "integer" 是 JSON Schema 风格别名（web_search 已在用，此前会被静默跳过）
+PARAM_TYPE_CHECKS = {
+    "string": str,
+    "int": int,
+    "integer": int,
+    "object": dict,
+    "boolean": bool,
+    "number": (int, float),
+}
+
+
+def validate_params(params_schema: dict, params: dict) -> str | None:
+    """按 params_schema 运行时校验入参，返回错误消息（None=通过）。
+
+    模块级纯函数：BaseSkill._validate_params 与 tool_selector（function
+    calling 填参校验）共用同一份校验语义，避免两处漂移。规则：
+      - 只校验显式声明的参数，未声明的键不拦（交由 Tool 签名兜底）
+      - 旧式字符串声明视为 string 可选，跳过
+      - auto=True 的参数由运行时自动注入（如 business.analyze 的
+        sql_result 走 previous_outputs），不参与校验
+    """
+    errors = []
+    for name, spec in params_schema.items():
+        if isinstance(spec, str):
+            continue
+        if isinstance(spec, dict) and spec.get("auto"):
+            continue
+        val = params.get(name)
+        if spec.get("required") and val in (None, ""):
+            errors.append(
+                f"缺少必填参数 {name}: {spec.get('description', '')}")
+            continue
+        if val is None:
+            continue
+        ptype = spec.get("type", "string")
+        expected = PARAM_TYPE_CHECKS.get(ptype)
+        type_ok = expected is not None and isinstance(val, expected)
+        # bool 是 int 的子类：声明 int/integer 时布尔值应判为类型错误
+        if ptype in ("int", "integer") and isinstance(val, bool):
+            type_ok = False
+        if expected is not None and not type_ok:
+            errors.append(
+                f"参数 {name} 类型应为 {ptype}，实际为 {type(val).__name__}")
+            continue
+        enum = spec.get("enum")
+        if enum and val not in enum:
+            errors.append(
+                f"参数 {name} 取值 {val!r} 不在允许范围 {list(enum)}")
+    return "; ".join(errors) or None
+
+
 class BaseSkill(ABC):
     """Skill 抽象基类。每个 Skill 封装一组 Capability。
 
@@ -128,49 +180,18 @@ class BaseSkill(ABC):
         """
         return self._tool_fn, params
 
-    # params_schema 声明的 type → 运行时类型检查
-    _PARAM_TYPE_CHECKS = {
-        "string": str,
-        "int": int,
-        "object": dict,
-        "boolean": bool,
-        "number": (int, float),
-    }
+    # 历史名保留（子类/测试可能引用）：指向模块级 PARAM_TYPE_CHECKS
+    _PARAM_TYPE_CHECKS = PARAM_TYPE_CHECKS
 
     def _validate_params(self, params: dict) -> str | None:
         """按 params_schema 运行时校验入参，返回错误消息（None=通过）。
 
-        只校验显式声明的参数，未声明的键不拦（交由 Tool 签名兜底）；
-        旧式字符串声明视为 string 可选，跳过。校验失败属 invalid_param
-        （不可重试）——与其让 Tool 深处报晦涩错误再空转重试，不如
-        在 Skill 边界给模型可读的失败原因。
+        校验语义收敛在模块级 validate_params()（tool_selector 的 FC
+        填参校验共用同一份），失败属 invalid_param（不可重试）——与其
+        让 Tool 深处报晦涩错误再空转重试，不如在 Skill 边界给模型可读
+        的失败原因。
         """
-        errors = []
-        for name, spec in self.params_schema.items():
-            if isinstance(spec, str):
-                continue
-            val = params.get(name)
-            if spec.get("required") and val in (None, ""):
-                errors.append(
-                    f"缺少必填参数 {name}: {spec.get('description', '')}")
-                continue
-            if val is None:
-                continue
-            ptype = spec.get("type", "string")
-            expected = self._PARAM_TYPE_CHECKS.get(ptype)
-            type_ok = expected is not None and isinstance(val, expected)
-            # bool 是 int 的子类：声明 int 时布尔值应判为类型错误
-            if ptype == "int" and isinstance(val, bool):
-                type_ok = False
-            if expected is not None and not type_ok:
-                errors.append(
-                    f"参数 {name} 类型应为 {ptype}，实际为 {type(val).__name__}")
-                continue
-            enum = spec.get("enum")
-            if enum and val not in enum:
-                errors.append(
-                    f"参数 {name} 取值 {val!r} 不在允许范围 {list(enum)}")
-        return "; ".join(errors) or None
+        return validate_params(self.params_schema, params)
 
     def _normalize_output(self, capability: str, output: Any) -> Any:
         """输出契约边界：按 capability 声明的类型归一化 Tool 返回值。

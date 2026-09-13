@@ -63,6 +63,7 @@ def _request_key(session_id: str, request_id: str) -> str:
 _NODE_LABELS = {
     "planner":       "📋 任务规划",
     "supervisor":    "🧠 调度决策",
+    "tool_selector": "🧰 工具选择",
     "sql_worker":    "📊 数据查询",
     "rag_worker":    "📚 知识检索",
     "report_worker": "📄 报告生成",

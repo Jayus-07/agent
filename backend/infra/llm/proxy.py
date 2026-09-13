@@ -633,6 +633,43 @@ class RateLimitError(RuntimeError):
     """LLM 限流拒绝时抛出。"""
 
 
+class _BoundLLMProxy:
+    """bind_tools 返回的 RunnableBinding 包装。
+
+    _LLMProxy.__getattr__ 只包装 _WRAP_METHODS 里的方法名，bind_tools
+    若原样透传，拿到的是真实实例上的 RunnableBinding——其后续
+    invoke/ainvoke 会绕过限流、韧性链（重试/熔断/fallback）与 token
+    记录。本类把绑定后的调用重新纳入与 _LLMProxy 相同的包装路径；
+    其余属性（如 bind / with_config）原样透传。
+    """
+
+    def __init__(self, bound):
+        self._bound = bound
+
+    def invoke(self, *args, **kwargs):
+        user_id = kwargs.get("user_id") or _thread_local_user_id()
+        _enforce_rate_limit(user_id)
+        _t0 = time.monotonic()
+        result = _call_with_resilience(self._bound.invoke, *args, **kwargs)
+        _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)
+        return _wrap_result(result)
+
+    async def ainvoke(self, *args, **kwargs):
+        user_id = kwargs.get("user_id") or _thread_local_user_id()
+        _enforce_rate_limit(user_id)
+        _t0 = time.monotonic()
+        result = await _acall_with_resilience(self._bound.ainvoke, *args, **kwargs)
+        _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)
+        return _wrap_result(result)
+
+    def bind_tools(self, *args, **kwargs):
+        # 链式绑定（罕见）：继续走包装，不裸透传
+        return _BoundLLMProxy(self._bound.bind_tools(*args, **kwargs))
+
+    def __getattr__(self, name: str):
+        return getattr(self._bound, name)
+
+
 # =====================================================
 # 代理对象
 # =====================================================
@@ -646,6 +683,13 @@ class _LLMProxy:
     def __getattr__(self, name: str):
         target = _resolve_active_llm()
         attr = getattr(target, name)
+        # bind_tools 返回 RunnableBinding，其 invoke/ainvoke 不在
+        # _WRAP_METHODS 内，裸透传会绕过限流/韧性链/token 记录——
+        # 用 _BoundLLMProxy 重新纳入包装（function calling 路径）
+        if name == "bind_tools" and callable(attr):
+            def bind_tools_wrapper(*args, **kwargs):
+                return _BoundLLMProxy(attr(*args, **kwargs))
+            return bind_tools_wrapper
         if name in self._WRAP_METHODS and callable(attr):
             # async generator（astream）：包一层限流 + token 记录。
             # 流式响应是生产主路径，原先完全透传 = 无限流、无用量统计。

@@ -132,6 +132,18 @@ LLM_STREAM_USAGE = os.getenv(
     "LLM_STREAM_USAGE", "true"
 ).strip().lower() in ("1", "true", "yes")
 
+# ── FC 工具选择（tool RAG / 动态工具暴露）────────────────────
+# true: direct 模式门控走 function calling 选工具+填参（tool_selector 节点，
+#       路由缩候选 → 模型在候选内选择）；false 一键回退旧行为
+#       （candidates[0] 直取 + question 透传，零 LLM）
+ENABLE_FC_TOOL_SELECTION = os.getenv(
+    "ENABLE_FC_TOOL_SELECTION", "true"
+).strip().lower() in ("1", "true", "yes")
+# tool_selector 的 LLM 调用约束：选择+填参输出很小，收紧超时与上限，
+# 失败/超时直接回退直通路径（等价旧行为），不拖尾延迟
+TOOL_SELECTOR_LLM_TIMEOUT = int(os.getenv("TOOL_SELECTOR_LLM_TIMEOUT", "8"))
+TOOL_SELECTOR_LLM_MAX_TOKENS = int(os.getenv("TOOL_SELECTOR_LLM_MAX_TOKENS", "256"))
+
 # =====================================================
 # Token Usage Tracking (P0 - 审计日志)
 # =====================================================

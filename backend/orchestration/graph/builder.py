@@ -28,6 +28,7 @@ from backend.observability.trace_middleware import trace_middleware
 from backend.orchestration.domain_registry import domain_graph_registry
 from backend.orchestration.graph.direct_executor import skill_executor_node, workflow_executor_node
 from backend.orchestration.graph.router_node import route_selector, router_node
+from backend.orchestration.graph.tool_selector import tool_selector_node
 from backend.orchestration.state import AgentState, OrchestratorState
 from backend.orchestration.supervisor.scheduler import route_after_supervisor, supervisor_node
 from backend.orchestration.tool_registry import tool_registry
@@ -36,6 +37,7 @@ from backend.shared.logger import logger
 # 节点名 → 用户可读的阶段标签（与 trace_middleware.py 对齐）
 _NODE_LABELS = {
     "router":             "路由决策",
+    "tool_selector":      "工具选择",
     "skill_executor":     "直接执行",
     "workflow_executor":  "工作流执行",
     "planner":            "任务规划",
@@ -92,6 +94,9 @@ def build_graph(checkpointer=None):
     # 完整 span（含 rule/vector/llm 三层事件与 metrics）。双重包装会产生
     # 同名重复 span（浏览器实测发现的 0ms+真实时长两条"路由决策"）。
     wf.add_node("router", router_node)
+    # direct 路径: router --direct--> tool_selector（FC 门控选工具+填参，
+    # 失败/快路径直通零开销）→ skill_executor
+    wf.add_node("tool_selector", trace_middleware.wrap_sync_node("tool_selector", tool_selector_node))
     wf.add_node("skill_executor", trace_middleware.wrap_sync_node("skill_executor", skill_executor_node))
     wf.add_node("workflow_executor", trace_middleware.wrap_sync_node("workflow_executor", workflow_executor_node))
     wf.add_node("planner", trace_middleware.wrap_sync_node("planner", planner_node))
@@ -122,16 +127,20 @@ def build_graph(checkpointer=None):
     # ── 边 ────────────────────────────────────────
     wf.add_edge(START, "router")
 
-    # 条件边映射：内置路径 + 域图自动发现
+    # 条件边映射：内置路径 + 域图自动发现。
+    # direct 的返回值 "skill_executor" 映射到 tool_selector（先做 FC 门控
+    # 选择再进 executor）；route_selector 本身不改，语义仍是"直接执行路径"
     edge_map = {
         "planner": "planner",
-        "skill_executor": "skill_executor",
+        "skill_executor": "tool_selector",
         "workflow_executor": "workflow_executor",
     }
     for domain in domains.values():
         edge_map[domain.node_name] = domain.node_name
 
     wf.add_conditional_edges("router", route_selector, edge_map)
+
+    wf.add_edge("tool_selector", "skill_executor")
 
     # V2: skill/workflow executor 直接到 reporter
     wf.add_edge("skill_executor", "reporter")
