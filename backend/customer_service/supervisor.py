@@ -245,15 +245,16 @@ def _llm_decision(state: dict[str, Any]) -> CSSupervisorDecision | None:
     try:
         from langchain_core.messages import HumanMessage
 
+        from backend.infra.async_utils import sync_call_with_timeout
         from backend.infra.llm import get_llm
 
         llm = get_llm()
         t0 = time.monotonic()
         timeout_s = CS_SUPERVISOR_LLM_TIMEOUT_MS / 1000.0
 
-        response = llm.invoke(
-            [HumanMessage(content=prompt)],
-            config={"timeout": timeout_s},
+        # config={"timeout"} 实测不生效（2026-09），须线程级限时
+        response = sync_call_with_timeout(
+            llm.invoke, timeout_s, [HumanMessage(content=prompt)],
         )
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 

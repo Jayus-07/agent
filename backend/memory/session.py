@@ -37,7 +37,12 @@ class SessionMemory:
     def needs_summarization(self) -> bool:
         return self._message_count >= SESSION_MAX_MESSAGES
 
-    async def summarize(self) -> str:
+    async def summarize(self) -> str | None:
+        """生成会话摘要；失败返回 None（调用方不覆盖旧摘要）。
+
+        此前失败时用 conversation[:500] 顶替并落库——把坏摘要写进 DB，
+        且异常只有 warning 级日志，静默污染 L2。
+        """
         rows = await self._repo.load_messages(self.session_id, limit=SESSION_MAX_MESSAGES)
         conversation = "\n".join(
             f"{'用户' if r.role == 'user' else '助手'}: {r.content}"
@@ -49,10 +54,10 @@ class SessionMemory:
             r = prompt_service.render_sync("memory.session.summary", conversation=conversation)
             resp = llm.invoke(r.text)
             self._summary = resp.content if hasattr(resp, "content") else str(resp)
+            return self._summary
         except Exception as e:
-            logger.warning(f"[SessionMemory:{self.session_id}] 摘要失败: {e}")
-            self._summary = conversation[:500]
-        return self._summary
+            logger.error(f"[SessionMemory:{self.session_id}] 摘要失败，保留旧摘要: {e}")
+            return None
 
     @property
     def message_count(self) -> int:

@@ -126,9 +126,12 @@ def generate_final_answer(
             return rag_output
 
     # —— 快速路径：单步骤有实质输出时直接透传（省掉 LLM 总结 ~2s）——
+    # 仅限字符串输出（RAG/报告类）；SQL/BusinessInsight 是结构化 dict，
+    # 裸透传会变成 dict repr 展示给用户，必须走下方渲染或 LLM 路径
     if len(all_success) == 1:
-        sole_output = str(list(all_success.values())[0].get("output", ""))
-        if len(sole_output) > 5:
+        sole_sr = list(all_success.values())[0]
+        sole_output = sole_sr.get("output", "")
+        if isinstance(sole_output, str) and len(sole_output.strip()) > 5:
             logger.info("[Reporter] 单步骤有实质输出，直接透传（跳过 LLM 总结）")
             return sole_output
 
@@ -148,15 +151,12 @@ def generate_final_answer(
     structured = _render_structured_sections(step_results)
     if structured:
         try:
-            # LLM 只写一句话执行摘要（<50 tokens）
+            # LLM 只写一句话执行摘要（max_tokens=64 防超长；模板由 reporter.summary 提供）
             data_summary = _build_data_summary(step_results)
-            resp = llm.invoke(
-                f"""根据以下数据一句话总结业务状况（不超过50字）:
-
-{data_summary}
-
-直接输出总结，不要格式:"""
-            )
+            summary_prompt = prompt_service.render_sync(
+                "reporter.summary", data_summary=data_summary
+            ).text
+            resp = llm.bind(max_tokens=64).invoke(summary_prompt)
             summary = resp.content.strip()
             final = f"## {summary}\n\n{structured}"
             if rag_references:
@@ -170,22 +170,17 @@ def generate_final_answer(
 
     # ── 非结构化数据：走完整 LLM 路径（与旧行为一致）──
     try:
-        r = prompt_service.render_sync(
-            "reporter.summary",
-            question=question,
-            outputs_text=outputs_text,
+        # system 用 reporter.system（含禁编造/引用保留等严格规则）；
+        # human 内联构建——此前误用 reporter.summary（变量为 data_summary）
+        # 渲染必失败，导致该路径长期落入 _fallback_summary 降级。
+        system_r = prompt_service.render_sync("reporter.system")
+        human_text = (
+            f"## 用户问题\n{question}\n\n"
+            f"## 步骤执行结果（回答只能基于以下内容）\n{outputs_text}\n\n"
+            f"请生成最终报告:"
         )
-        # Split on \n---\n separator to get system and human parts
-        parts = r.text.split("\n---\n", 1)
-        if len(parts) == 2:
-            system_text, human_text = parts
-        else:
-            # Fallback: treat entire template as system, construct human inline
-            system_text = r.text
-            human_text = f"## 用户问题\n{question}\n\n## 步骤执行结果\n{outputs_text}\n\n请生成最终报告:"
-
         msgs = [
-            ("system", system_text.strip()),
+            ("system", system_r.text.strip()),
             ("human", human_text.strip()),
         ]
 

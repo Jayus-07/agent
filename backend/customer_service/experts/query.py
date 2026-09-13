@@ -105,6 +105,7 @@ def _llm_decompose_intents(question: str) -> list[str] | None:
             CS_QUERY_LLM_DECOMPOSE_ENABLED,
             CS_QUERY_LLM_TIMEOUT_MS,
         )
+        from backend.infra.async_utils import sync_call_with_timeout
         from backend.infra.llm import get_llm
 
         if not CS_QUERY_LLM_DECOMPOSE_ENABLED:
@@ -120,9 +121,11 @@ def _llm_decompose_intents(question: str) -> list[str] | None:
             f"用户问题: {question[:200]}\n"
             '只回复 JSON 数组，如 ["t_order_status", "t_logistics"]，不要解释。'
         )
-        response = get_llm().invoke(
+        # config={"timeout"} 实测不生效（2026-09），须线程级限时
+        response = sync_call_with_timeout(
+            get_llm().invoke,
+            CS_QUERY_LLM_TIMEOUT_MS / 1000.0,
             [HumanMessage(content=prompt)],
-            config={"timeout": CS_QUERY_LLM_TIMEOUT_MS / 1000.0},
         )
         content = response.content.strip()
         if content.startswith("```"):

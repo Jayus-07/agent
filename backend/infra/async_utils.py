@@ -3,8 +3,31 @@
 """
 import asyncio
 import concurrent.futures
+import threading
 from typing import Callable, Any
 from backend.shared.logger import logger
+
+# 同步限时调用的共享线程池；超时后孤儿线程由 provider 构造期超时（默认 30s）
+# 自然退出兜底，不会无限堆积
+_sync_timeout_pool: concurrent.futures.ThreadPoolExecutor | None = None
+_sync_timeout_pool_lock = threading.Lock()
+
+
+def sync_call_with_timeout(func: Callable, timeout: float, *args, **kwargs) -> Any:
+    """在线程中执行同步调用并限时；超时抛 concurrent.futures.TimeoutError。
+
+    背景：LLM invoke 的 config={"timeout"} 在当前 ChatOpenAI 版本实测不生效
+    （2026-09 验证），per-call 限时必须走线程级超时。
+    """
+    global _sync_timeout_pool
+    if _sync_timeout_pool is None:
+        with _sync_timeout_pool_lock:
+            if _sync_timeout_pool is None:
+                _sync_timeout_pool = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix="sync-timeout",
+                )
+    future = _sync_timeout_pool.submit(func, *args, **kwargs)
+    return future.result(timeout=timeout)
 
 
 def run_async(coro):

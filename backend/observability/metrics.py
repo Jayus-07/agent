@@ -174,6 +174,23 @@ rag_query_total = Counter(
     labelnames=("status",),  # hit | rejected | fallback
 )
 
+# RAG 防线异常软降级计数（R3 fail-visible）：fail-open 语义保留，
+# 但每次异常放行必须可见。layer: pre_wrap | gate1 | gate1_deserialize |
+# gate1_entity | risk_level | gate2 | claim_verify | faithfulness | prompt
+rag_gate_degraded_total = Counter(
+    "rag_gate_degraded_total",
+    "RAG 防线异常软降级总数（按防线层）",
+    labelnames=("layer",),
+)
+
+# RAG 生成前短路计数（区分空检索与 Gate 前置拒答，此前两者 trace 不可区分）
+rag_short_circuit_total = Counter(
+    "rag_short_circuit_total",
+    "RAG 生成前短路总数（按原因）",
+    labelnames=("reason",),  # empty_retrieval | evidence_gate
+)
+
+
 feedback_total = Counter(
     "feedback_total",
     "用户反馈总数（按投票）",

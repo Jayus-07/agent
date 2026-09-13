@@ -127,8 +127,18 @@ class MemoryService:
                     if l2:
                         l2._repo = srepo
                         summary = await l2.summarize()
-                        # 摘要必须落库，否则下次会话列表/历史读取时 summary 永远为空
-                        await srepo.update_summary(session_id, summary)
+                        if summary is not None:
+                            # 摘要必须落库，否则下次会话列表/历史读取时 summary 永远为空
+                            await srepo.update_summary(session_id, summary)
+                        else:
+                            # 摘要失败：保留旧摘要并留痕（静默丢失上下文最难排查）
+                            try:
+                                from backend.observability.metrics import degradation_alerts_total
+                                degradation_alerts_total.labels(
+                                    code="memory_summary_failed", level="warn",
+                                ).inc()
+                            except Exception:
+                                pass
 
                 await db_session.commit()
             except Exception as e:

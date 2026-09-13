@@ -56,18 +56,31 @@ class MemoryManager:
     def _run(self, coro_factory):
         """在后台 loop 上执行协程，最多等 _MEMORY_TIMEOUT 秒。
 
-        返回结果或 None（超时/失败时静默降级）。
+        返回结果或 None（超时/失败时降级）。降级必须留痕（error 日志 +
+        degradation_alerts_total），静默丢失上下文是最难排查的故障形态。
         """
         if not self._ready.wait(timeout=_MEMORY_TIMEOUT):
+            self._degraded("memory_loop_not_ready", "memory loop 未就绪，本次记忆操作被跳过")
             return None
         loop = self._loop
         if loop is None or not loop.is_running():
+            self._degraded("memory_loop_not_running", "memory loop 未运行，本次记忆操作被跳过")
             return None
         try:
             future = asyncio.run_coroutine_threadsafe(coro_factory(), loop)
             return future.result(timeout=_MEMORY_TIMEOUT)
-        except Exception:
+        except Exception as e:
+            self._degraded("memory_op_failed", f"memory 操作失败: {e}")
             return None
+
+    @staticmethod
+    def _degraded(code: str, message: str) -> None:
+        logger.error(f"[MemoryManager] {message} (code={code})")
+        try:
+            from backend.observability.metrics import degradation_alerts_total
+            degradation_alerts_total.labels(code=code, level="warn").inc()
+        except Exception:
+            pass
 
     def _shutdown(self) -> None:
         try:

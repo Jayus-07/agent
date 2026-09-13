@@ -108,6 +108,34 @@ DEFAULT_DOCUMENT_TEMPLATE = (
 
 
 # =====================================================
+# Fail-visible helper（R3）：防线软降级必须留痕，行为保持 fail-open
+# =====================================================
+
+def _mark_gate_degraded(layer: str, action: str, error, span=None) -> None:
+    """记录一次防线异常软降级：span 事件（如有 open span）+ Prometheus 计数。
+
+    只补可见性，不改变放行/拒答行为。span 为 None 时（无 open span 的
+    降级点，如 prompt 回退、实体校验忽略）只记指标。
+    """
+    try:
+        from backend.observability.metrics import rag_gate_degraded_total
+        rag_gate_degraded_total.labels(layer=layer).inc()
+    except Exception:  # noqa: BLE001
+        pass
+    if span is None:
+        return
+    try:
+        from backend.observability.tracer import trace_collector
+        trace_collector.add_event(
+            span, "gate_degraded", level="warn",
+            message=f"Gate 软降级: {layer}",
+            data={"layer": layer, "action": action, "error": str(error)[:200]},
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# =====================================================
 # Prompt 构建器：优先从 prompt_service 获取，降级到 DEFAULT 常量
 # =====================================================
 
@@ -116,8 +144,8 @@ def _build_contextualize_prompt() -> ChatPromptTemplate:
     try:
         from backend.prompts.service import prompt_service
         prompt_service.get_template_sync("rag.contextualize")
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[RAGChain] prompt_service 不可用，rag.contextualize 回退内置默认: {e}")
     return ChatPromptTemplate.from_messages([
         ("system", DEFAULT_CONTEXTUALIZE_SYSTEM),
         MessagesPlaceholder("chat_history"),
@@ -134,8 +162,8 @@ def _build_qa_prompt() -> ChatPromptTemplate:
         parts = full.split("---", 1)
         if len(parts) == 2:
             system_text = parts[0].strip()
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[RAGChain] prompt_service 不可用，rag.qa 回退内置默认: {e}")
     return ChatPromptTemplate.from_messages([
         ("system", system_text),
         MessagesPlaceholder("chat_history"),
@@ -149,8 +177,8 @@ def _build_document_prompt() -> PromptTemplate:
     try:
         from backend.prompts.service import prompt_service
         template_str = prompt_service.get_template_sync("rag.document")
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[RAGChain] prompt_service 不可用，rag.document 回退内置默认: {e}")
     return PromptTemplate.from_template(template_str)
 
 
@@ -322,6 +350,11 @@ class RAGChain:
                 logger.debug("[RAGChain] retrieval span 提前收口失败", exc_info=True)
             if not context_docs:
                 logger.info("[RAGChain] 空检索短路，跳过 LLM Generate")
+                try:
+                    from backend.observability.metrics import rag_short_circuit_total
+                    rag_short_circuit_total.labels(reason="empty_retrieval").inc()
+                except Exception:  # noqa: BLE001
+                    pass
                 return AIMessage(content="知识库暂无相关资料。")
             # Gate 前置：检索层 Gate 已拒（实体覆盖/证据不足）→ 跳过 LLM 生成
             gate_injected = (context_docs[0].metadata or {}).get("__evidence_gate_decision__") or {}
@@ -329,6 +362,11 @@ class RAGChain:
                 logger.info(
                     f"[RAGChain] Gate 前置拒答，跳过 LLM Generate: "
                     f"reason={gate_injected.get('gate_reason')}")
+                try:
+                    from backend.observability.metrics import rag_short_circuit_total
+                    rag_short_circuit_total.labels(reason="evidence_gate").inc()
+                except Exception:  # noqa: BLE001
+                    pass
                 return AIMessage(content="知识库暂无相关资料。")
             llm_span = trace_collector.start_span(
                 "llm_generate", name="LLM生成",
@@ -849,8 +887,9 @@ class RAGChain:
                     for d in docs:
                         d.metadata["__evidence_gate_decision__"] = stamp
         except Exception as e:  # noqa: BLE001
-            # Gate 前置失败 → 不拦截 docs，交由原兜底路径处理（软降级）
+            # Gate 前置失败 → 不拦截 docs，交由原兜底路径处理（软降级，留痕）
             logger.warning(f"[RAGChain] Gate 前置评估失败，透传 docs: {e}", exc_info=True)
+            _mark_gate_degraded("pre_wrap", "passthrough", e)
         return docs
 
     def _decision_from_injected(self, injected):
@@ -909,6 +948,7 @@ class RAGChain:
         # 优先复用 hybrid.py 注入的 decision
         injected = (context_docs[0].metadata.get("__evidence_gate_decision__")
                     if context_docs else None)
+        gate1_degraded = False
         if injected is not None:
             # 序列化 → 反序列化为 GateDecision-like
             from backend.rag.evidence_gate import GateDecision, RejectReason
@@ -927,6 +967,8 @@ class RAGChain:
                 # 注入的 decision 反序列化失败 → 透传放行（软降级），留痕以便 trace 定位
                 logger.warning(f"[RAGChain] Gate 1 decision 反序列化失败，透传放行: {e}")
                 ret_decision = gate_retrieval_passthrough()
+                gate1_degraded = True
+                _mark_gate_degraded("gate1_deserialize", "passthrough", e, span=gate_span)
         else:
             # 没注入（空召回或 fallback 路径）→ 自己跑一次
             try:
@@ -941,9 +983,15 @@ class RAGChain:
                 # Gate 评估异常 → 透传放行（软降级），留痕；不放行拒答会误伤正常检索
                 logger.warning(f"[RAGChain] Gate 1 评估异常，透传放行: {e}", exc_info=True)
                 ret_decision = gate_retrieval_passthrough()
+                gate1_degraded = True
+                _mark_gate_degraded("gate1", "passthrough", e, span=gate_span)
 
-        trace_collector.end_span(gate_span, metrics=ret_decision.to_metrics(),
-                                 status="success" if ret_decision.passed else "rejected")
+        # 异常放行标 skipped（与"评估成功通过"在 trace 上可区分；
+        # skipped 会被折叠进 root.metrics["skipped_stages"]，不影响聚合状态）
+        trace_collector.end_span(
+            gate_span, metrics=ret_decision.to_metrics(),
+            status=("skipped" if gate1_degraded
+                    else ("success" if ret_decision.passed else "rejected")))
 
         if not ret_decision.passed:
             return ret_decision
@@ -975,6 +1023,7 @@ class RAGChain:
                         )
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"[RAGChain] 实体覆盖校验异常，忽略: {e}")
+                _mark_gate_degraded("gate1_entity", "skip_check", e)
 
         if not ret_decision.passed:
             return ret_decision
@@ -990,11 +1039,13 @@ class RAGChain:
             # 风险等级推导失败 → 保守按低风险处理（软降级），留痕
             logger.debug(f"[RAGChain] 风险等级推导失败，按 low 处理: {e}", exc_info=True)
             self.gate.set_risk_level("low")
+            _mark_gate_degraded("risk_level", "low_fallback", e)
 
         rerank_span = trace_collector.start_span(
             "evidence_gate_rerank", name="Evidence Gate - Rerank",
             kind=SpanKind.RERANK_GATE.value,
         )
+        rerank_degraded = False
         try:
             from backend.config import (
                 RERANK_HIGH_RISK_MIN_TOP1,
@@ -1015,10 +1066,14 @@ class RAGChain:
             # Gate 2 评估异常 → 透传放行（软降级），留痕；不放行会误伤正常检索
             logger.warning(f"[RAGChain] Gate 2 评估异常，透传放行: {e}", exc_info=True)
             rerank_decision = gate_retrieval_passthrough()
+            rerank_degraded = True
+            _mark_gate_degraded("gate2", "passthrough", e, span=rerank_span)
 
-        trace_collector.end_span(rerank_span,
-                                 metrics=rerank_decision.to_metrics(),
-                                 status="success" if rerank_decision.passed else "rejected")
+        trace_collector.end_span(
+            rerank_span,
+            metrics=rerank_decision.to_metrics(),
+            status=("skipped" if rerank_degraded
+                    else ("success" if rerank_decision.passed else "rejected")))
 
         return rerank_decision
 
@@ -1142,6 +1197,7 @@ class RAGChain:
             logger.warning(f"[RAGChain] ClaimVerifier 异常跳过: {e}")
             trace_collector.end_span(claim_span, status="skipped",
                                      metrics={"error": str(e)[:100]})
+            _mark_gate_degraded("claim_verify", "skip_check", e)
             return answer
 
     def _evaluate(self, answer: str, context_docs: list) -> str:
@@ -1161,6 +1217,8 @@ class RAGChain:
         from backend.observability.tracer import SpanName as _SpanName
         from backend.observability.tracer import trace_collector
         self._last_faithfulness = None
+        # 预绑定：import 失败等早期异常路径下 except 引用未定义变量会二次炸
+        faith_span = None
 
         try:
             from backend.rag.guardrails import check_faithfulness
@@ -1191,8 +1249,10 @@ class RAGChain:
             return answer
         except Exception as e:
             logger.warning(f"[RAGChain] Faithfulness 检测跳过: {e}")
-            trace_collector.end_span(faith_span, status="skipped",
-                                 metrics={"error": str(e)[:100]})
+            if faith_span is not None:
+                trace_collector.end_span(faith_span, status="skipped",
+                                     metrics={"error": str(e)[:100]})
+            _mark_gate_degraded("faithfulness", "skip_check", e)
             return answer
 
     @staticmethod
