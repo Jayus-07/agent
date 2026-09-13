@@ -37,6 +37,10 @@ class AskRequest(BaseModel):
     session_id: str = Field("default", description="会话 ID（多轮缓存判定用）")
     kb_id: str = Field("default", description="知识库 ID")
     kb_ids: list[str] | None = Field(None, description="多知识库指定（优先级高于 kb_id）")
+    # 主体属性（检索侧授权）：空 = 未声明主体，授权未启用（旧行为）。
+    # 默认空串保证旧客户端不传时行为不变。
+    subject_type: str = Field("", description="主体类型（customer/employee，空=未声明）")
+    department: str = Field("", description="主体部门（employee 授权矩阵用）")
 
 
 class RetrieveRequest(BaseModel):
@@ -96,6 +100,8 @@ def ask(req: AskRequest) -> dict[str, Any]:
         session_id=req.session_id,
         kb_id=req.kb_id,
         kb_ids=req.kb_ids,
+        subject_type=req.subject_type,
+        department=req.department,
     )
     return {"answer": answer, "meta": getattr(pipeline, "last_answer_meta", {}) or {}}
 

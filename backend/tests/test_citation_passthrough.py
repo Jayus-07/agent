@@ -74,7 +74,8 @@ class TestRagServerAskPassthrough:
         class FakePipeline:
             last_answer_meta = {"confidence": 0.9, "sources": _SOURCES}
 
-            def ask(self, question, session_id="default", kb_id="default", kb_ids=None):
+            def ask(self, question, session_id="default", kb_id="default",
+                   kb_ids=None, subject_type="", department=""):
                 return "答案"
 
         monkeypatch.setattr(server, "_kick_init", lambda: None)

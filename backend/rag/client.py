@@ -49,6 +49,8 @@ class RAGServiceProxy:
         session_id: str = "default",
         kb_id: str = "default",
         kb_ids: list[str] | None = None,
+        subject_type: str = "",
+        department: str = "",
     ) -> str:
         try:
             resp = self._client.post(
@@ -58,6 +60,8 @@ class RAGServiceProxy:
                     "session_id": session_id,
                     "kb_id": kb_id,
                     "kb_ids": kb_ids,
+                    "subject_type": subject_type,
+                    "department": department,
                 },
                 timeout=_ASK_TIMEOUT_S,
             )

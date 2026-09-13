@@ -9,6 +9,7 @@
   6. 状态查询：remote 返回 {"state": "remote"}，local 行为不变
 """
 import inspect
+import json
 
 import httpx
 import pytest
@@ -91,6 +92,35 @@ class TestProxyHTTP:
         answer = proxy.ask("问题", session_id="s1", kb_id="cs_faq", kb_ids=["cs_faq"])
         assert answer == "答案"
         assert proxy.last_answer_meta == {"confidence": 0.9}
+
+    def test_ask_passes_subject_context(self):
+        """主体属性必须透传到服务端 —— remote 模式检索侧授权的前提。"""
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.read()))
+            return httpx.Response(200, json={"answer": "答案", "meta": {}})
+
+        proxy = _make_proxy(handler)
+        proxy.ask(
+            "问题", session_id="s1", kb_id="cs_faq",
+            subject_type="customer", department="after_sales",
+        )
+        assert captured["subject_type"] == "customer"
+        assert captured["department"] == "after_sales"
+
+    def test_ask_subject_defaults_keep_wire_compat(self):
+        """旧调用方不传主体属性时 wire 上带空串（服务端默认同值，行为不变）。"""
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.read()))
+            return httpx.Response(200, json={"answer": "答案", "meta": {}})
+
+        proxy = _make_proxy(handler)
+        proxy.ask("问题")
+        assert captured["subject_type"] == ""
+        assert captured["department"] == ""
 
     def test_retrieve_returns_result(self):
         def handler(request: httpx.Request) -> httpx.Response:
