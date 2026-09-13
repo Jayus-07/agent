@@ -62,6 +62,7 @@ class GraphRunner:
         kb_id: str = "default",
         stop_event=None,
         user_id: str = "default",
+        department: str = "",
         *,
         fallback_deltas: bool = True,
         model: str = "",
@@ -124,8 +125,8 @@ class GraphRunner:
         # 请求上下文：trace/sink 显式持有并随状态流动，Send 分支经
         # trace_middleware 从 state 重新绑定（ContextVar 不跨线程继承）
         request_ctx = RequestContext(
-            session_id=session_id, user_id=user_id, kb_id=kb_id, trace=trace,
-            model=model)
+            session_id=session_id, user_id=user_id, kb_id=kb_id,
+            department=department, trace=trace, model=model)
         ctx = {
             "final_answer": "",
             "all_step_results": {},

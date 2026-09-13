@@ -2,6 +2,12 @@
 
 字段说明:
   - owner_depts: 负责维护的部门（上传文档时可选范围）
+  - audience: 内容受众标签（2026-09-14）——
+      "customer": 对客安全（CS 知识问答可输出）
+      "internal": 内部制度/业务（仅内部检索场景）
+      "test":     测试/评测数据（虚构内容，禁止对客输出）
+    跨库兜底（f17 放宽 kb_id）据此推导禁入名单，单一来源在本文件；
+    未来检索侧 ACL（allowed_roles）应演进为读取同一标签，而非另立名单。
   - 未来: allowed_roles 控制访问权限，与 owner_depts 不同
 
 用法:
@@ -12,23 +18,71 @@
 """
 
 from typing import Dict, List
+import os
 
 # ── 知识库定义 ──
 KNOWLEDGE_BASES: Dict[str, dict] = {
-    "biz_inventory":  {"name": "库存业务知识库", "domain": "inventory",  "owner_depts": ["warehouse", "supply_chain"]},
-    "biz_order":      {"name": "订单业务知识库", "domain": "order",      "owner_depts": ["order_dept", "customer"]},
-    "biz_product":    {"name": "商品业务知识库", "domain": "product",    "owner_depts": ["product_dept"]},
-    "policy_hr":      {"name": "人事制度知识库", "domain": "hr",         "owner_depts": ["hr"]},
-    "policy_finance": {"name": "财务制度知识库", "domain": "finance",    "owner_depts": ["finance"]},
-    "policy_general": {"name": "企业公共制度知识库", "domain": "general", "owner_depts": ["all"]},
-    "rag_test_kb":    {"name": "RAG 评测知识库", "domain": "general", "owner_depts": ["all"]},
-    "cs_faq":         {"name": "客服FAQ", "domain": "customer_service", "owner_depts": ["customer"]},
-    "cs_product":     {"name": "产品知识库", "domain": "customer_service", "owner_depts": ["customer", "product_dept"]},
-    "cs_policy":      {"name": "政策知识库", "domain": "customer_service", "owner_depts": ["customer"]},
-    "cs_aftersales":  {"name": "售后知识库", "domain": "customer_service", "owner_depts": ["customer"]},
-    "cs_complaint":   {"name": "投诉处理知识库", "domain": "customer_service", "owner_depts": ["customer"]},
-    "cs_scripts":     {"name": "话术知识库", "domain": "customer_service", "owner_depts": ["customer"]},
+    "biz_inventory":  {"name": "库存业务知识库", "domain": "inventory",  "owner_depts": ["warehouse", "supply_chain"], "audience": "internal"},
+    "biz_order":      {"name": "订单业务知识库", "domain": "order",      "owner_depts": ["order_dept", "customer"], "audience": "internal"},
+    "biz_product":    {"name": "商品业务知识库", "domain": "product",    "owner_depts": ["product_dept"], "audience": "internal"},
+    "policy_hr":      {"name": "人事制度知识库", "domain": "hr",         "owner_depts": ["hr"], "audience": "internal"},
+    "policy_finance": {"name": "财务制度知识库", "domain": "finance",    "owner_depts": ["finance"], "audience": "internal"},
+    # 现装的是 HR/财务内部制度文档；若要转为对客通用库，先迁走内部内容再改标签
+    "policy_general": {"name": "企业公共制度知识库", "domain": "general", "owner_depts": ["all"], "audience": "internal"},
+    "rag_test_kb":    {"name": "RAG 评测知识库", "domain": "general", "owner_depts": ["all"], "audience": "test"},
+    "cs_faq":         {"name": "客服FAQ", "domain": "customer_service", "owner_depts": ["customer"], "audience": "customer"},
+    "cs_product":     {"name": "产品知识库", "domain": "customer_service", "owner_depts": ["customer", "product_dept"], "audience": "customer"},
+    "cs_policy":      {"name": "政策知识库", "domain": "customer_service", "owner_depts": ["customer"], "audience": "customer"},
+    "cs_aftersales":  {"name": "售后知识库", "domain": "customer_service", "owner_depts": ["customer"], "audience": "customer"},
+    "cs_complaint":   {"name": "投诉处理知识库", "domain": "customer_service", "owner_depts": ["customer"], "audience": "customer"},
+    "cs_scripts":     {"name": "话术知识库", "domain": "customer_service", "owner_depts": ["customer"], "audience": "customer"},
 }
+
+
+def cross_kb_fallback_excluded() -> list[str]:
+    """跨库兜底禁入名单：由 audience 标签推导（单一来源，非人肉名单）。
+
+    audience="test" 的库（现有及未来新建）禁止经 f17 放宽路径召回——
+    虚构数据对客输出等同信息安全事故。属性驱动的好处：新建测试库只要
+    打上标签自动被挡，不依赖名单维护。
+
+    一键回滚：CROSS_KB_FALLBACK_EXCLUDE_TEST=false 恢复"跨库全放行"旧行为。
+    """
+    if os.getenv("CROSS_KB_FALLBACK_EXCLUDE_TEST", "true").strip().lower() != "true":
+        return []
+    return [kb_id for kb_id, info in KNOWLEDGE_BASES.items()
+            if info.get("audience") == "test"]
+
+
+def authorized_kbs(subject_type: str, department: str = "") -> list[str] | None:
+    """主体属性 → 可见知识库集合（检索侧授权的单一来源，确定性计算）。
+
+    属性驱动授权（ABAC）：
+      - subject_type="customer"：仅 audience=="customer" 的库（cs_*）。
+        对客会话（含 CS 知识问答与漏进主图的客服流量）的兜底/显式范围
+        都被收敛到这个集合。
+      - subject_type="employee"：复用 owner_depts 上传期同一矩阵——
+        owner_depts 含其部门或 "all" 的库；test 库对任何主体不可见。
+        员工未带部门时按 fail-safe 只见 "all" 库（policy_general）。
+      - 其他/空（未声明主体）：返回 None，表示授权未启用——调用方保持
+        旧行为（评测/内部直调等显式 kb 场景不受影响）。
+
+    原则：授权是确定性计算（本函数），路由/LLM 只能在授权集合内挑选；
+    主体属性在入口解析一次，下游只读。
+    """
+    if subject_type == "customer":
+        return [kb_id for kb_id, info in KNOWLEDGE_BASES.items()
+                if info.get("audience") == "customer"]
+    if subject_type == "employee":
+        out: list[str] = []
+        for kb_id, info in KNOWLEDGE_BASES.items():
+            if info.get("audience") == "test":
+                continue
+            depts = info.get("owner_depts", [])
+            if "all" in depts or (department and department in depts):
+                out.append(kb_id)
+        return out
+    return None
 
 # 默认知识库（上传未选时回退）
 DEFAULT_KB_ID = "policy_general"

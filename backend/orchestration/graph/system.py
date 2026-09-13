@@ -69,6 +69,7 @@ class MultiAgentSystem:
         session_id: str = "default",
         kb_id: str = "default",
         user_id: str = "default",
+        department: str = "",
         model: str = "",
     ) -> str:
         """处理用户问题，返回最终 Markdown 回答。
@@ -84,6 +85,7 @@ class MultiAgentSystem:
             session_id,
             kb_id=kb_id,
             user_id=user_id,
+            department=department,
             fallback_deltas=False,
             model=model,
         ))
@@ -117,6 +119,7 @@ class MultiAgentSystem:
         kb_id: str = "default",
         stop_event=None,
         user_id: str = "default",
+        department: str = "",
         model: str = "",
     ) -> Generator[dict, None, None]:
         """SSE 流式处理。委托 GraphRunner 统一执行核心，过滤内部事件。
@@ -130,6 +133,7 @@ class MultiAgentSystem:
                 kb_id=kb_id,
                 stop_event=stop_event,
                 user_id=user_id,
+                department=department,
                 fallback_deltas=True,
                 model=model):
             if evt.get("event") == _ANSWER_EVENT:

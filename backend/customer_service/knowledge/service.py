@@ -63,6 +63,8 @@ class CSKnowledgeService:
                 session_id=session_id,
                 kb_id=primary_kb,
                 kb_ids=kb_ids,
+                # 对客知识问答：检索授权收敛到 audience=="customer" 库（cs_*）
+                subject_type="customer",
             )
 
             meta = getattr(pipeline, "last_answer_meta", {}) or {}

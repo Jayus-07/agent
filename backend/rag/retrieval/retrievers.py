@@ -155,6 +155,82 @@ def _cache_key(query: str, metadata_filter: dict, k: int) -> str:
     return f"{query}\x00{f}\x00{k}"
 
 
+def _scope_kb_filter(metadata_filter: dict, allowed: set) -> dict:
+    """把 filter 中的 kb 范围收敛到授权集合（主体已声明时）。
+
+    - 无 kb 限定 / 完全在授权内 → 原样返回（保留精确 pushdown）
+    - 部分/完全不在授权内 → 去掉 kb_id/$or 限定（交由 keep-set 后过滤收窄；
+      不改写为 $in——手工后过滤是等值语义，$in 会误杀全部结果）
+    """
+    if not metadata_filter:
+        return metadata_filter
+    scoped: set = set()
+    if "kb_id" in metadata_filter:
+        v = metadata_filter["kb_id"]
+        scoped = {v} if isinstance(v, str) else set(v)
+    if "$or" in metadata_filter:
+        for item in metadata_filter["$or"]:
+            if isinstance(item, dict) and "kb_id" in item:
+                v = item["kb_id"]
+                scoped |= {v} if isinstance(v, str) else set(v)
+    if not scoped or scoped <= allowed:
+        return metadata_filter
+    return {k: v for k, v in metadata_filter.items()
+            if k not in ("kb_id", "$or")}
+
+
+def _keep_docs_in_allowed_kbs(docs: list, allowed: set, span=None) -> list:
+    """主体已声明时强制白名单：只保留授权库的文档（未知 kb 一律剔除）。
+
+    与 _drop_excluded_kb_fallback_docs 的区别：这是无条件执行的主体授权
+    （显式 kb 选择也受限——LLM 选库不可信，属性裁决），后者仅作用于
+    跨库兜底路径的 test 库排除（未声明主体的旧行为）。
+    """
+    kept = [d for d in docs if d.metadata.get("kb_id") in allowed]
+    dropped = len(docs) - len(kept)
+    if dropped:
+        logger.info(
+            f"ChunkLevelRetriever: 主体授权剔除越界库文档 {dropped} 条 "
+            f"(allowed={sorted(allowed)})"
+        )
+        if span is not None:
+            from backend.observability.tracer import trace_collector
+            trace_collector.add_event(span, "subject_scope_filtered", "info",
+                f"主体授权剔除越界库文档: {dropped}",
+                data={"allowed_kbs": sorted(allowed),
+                      "dropped": dropped, "kept": len(kept)})
+    return kept
+
+
+def _drop_excluded_kb_fallback_docs(docs: list, span=None) -> list:
+    """跨库兜底禁入剔除（2026-09-14）：kb 放宽后的召回剔除禁入库文档。
+
+    f17 的"宁跨 KB 召回，不全量拒答"不适用于测试/评测库——虚构数据经兜底
+    路径对客输出等同信息安全事故。名单由 KNOWLEDGE_BASES 的 audience 标签
+    推导（单一来源），仅作用于 kb 放宽路径，显式 kb_id 检索不受影响；
+    CROSS_KB_FALLBACK_EXCLUDE_TEST=false 一键回滚。
+    """
+    from backend.config.knowledge_base import cross_kb_fallback_excluded
+    excluded = cross_kb_fallback_excluded()
+    if not excluded or not docs:
+        return docs
+    kept = [d for d in docs
+            if d.metadata.get("kb_id") not in excluded]
+    dropped = len(docs) - len(kept)
+    if dropped:
+        logger.warning(
+            f"ChunkLevelRetriever: 跨库兜底剔除禁入库文档 {dropped} 条 "
+            f"(excluded={excluded})"
+        )
+        if span is not None:
+            from backend.observability.tracer import trace_collector
+            trace_collector.add_event(span, "cross_kb_fallback_excluded", "warning",
+                f"跨库兜底剔除禁入库文档: {dropped}",
+                data={"excluded_kbs": excluded,
+                      "dropped": dropped, "kept": len(kept)})
+    return kept
+
+
 # =====================================================
 # Chunk-Level Retriever
 # =====================================================
@@ -300,13 +376,27 @@ class ChunkLevelRetriever(BaseRetriever):
         # — Stage 1: Doc 级检索 —
         # Check for request-scoped metadata_filter (set by RAGPipeline.search() via contextvars)
         request_metadata_filter = {}
+        subject_type = ""
+        department = ""
         try:
             from backend.rag.context import get_context
             ctx = get_context()
             request_metadata_filter = ctx.metadata_filter
+            subject_type = getattr(ctx, "subject_type", "") or ""
+            department = getattr(ctx, "department", "") or ""
         except Exception as e:
             # request 上下文缺失 → 按无 filter 全量检索（软降级），留痕
             logger.debug(f"[ChunkLevelRetriever] 读取 request context 失败: {e}", exc_info=True)
+
+        # ── 主体授权（属性驱动，确定性计算）──
+        # authorized=None 表示未声明主体 → 授权未启用（旧行为）；已声明则
+        # filter 中的 kb 范围先收敛到授权集合，后续召回再以 keep-set 兜底——
+        # 显式 kb 选择（含 LLM 选库）同样受限，路由只提议、属性裁决。
+        from backend.config.knowledge_base import authorized_kbs
+        authorized = authorized_kbs(subject_type, department)
+        if authorized is not None:
+            allowed_kbs = set(authorized)
+            request_metadata_filter = _scope_kb_filter(request_metadata_filter, allowed_kbs)
 
         person_names = extract_person_names(query)
         doc_ids = None
@@ -316,6 +406,17 @@ class ChunkLevelRetriever(BaseRetriever):
         # keyword_filter: 退化到关键词过滤；domain_fallback: 0 匹配业务域回退。
         stage1_path = None
         stage1_fallback_count = 0  # 累计退化次数（>=1 即认为走了 fallback）
+        # kb 兜底放宽发生过 → 未声明主体时召回结果需剔除 test 库（旧行为；
+        # 已声明主体走 authorized 白名单，更严格）
+        cross_kb_fallback = False
+
+        def _authorized_doc_search(k: int = 15, flt=None) -> list:
+            """Doc 级检索 + 主体授权后过滤（authorized 为 None 时零行为变化）。"""
+            docs = (self.doc_db.similarity_search(query, k=k, filter=flt)
+                    if flt else self.doc_db.similarity_search(query, k=k))
+            if authorized is not None:
+                docs = [d for d in docs if d.metadata.get("kb_id") in allowed_kbs]
+            return docs
 
         if request_metadata_filter:
             # MetadataFilter has already determined the scope — use it directly
@@ -336,9 +437,9 @@ class ChunkLevelRetriever(BaseRetriever):
                 # 否则 Stage2 hybrid_retrieve doc_ids=[] 不限 doc，rerank 输入被 KB 内噪声稀释
                 # 导致高相关 doc 被挤掉（fix 2026-08-19 — RAG eval 基线从 72% 恢复）
                 if request_metadata_filter:
-                    doc_results = self.doc_db.similarity_search(query, k=15, filter=request_metadata_filter)
+                    doc_results = _authorized_doc_search(flt=request_metadata_filter)
                 else:
-                    doc_results = self.doc_db.similarity_search(query, k=15)
+                    doc_results = _authorized_doc_search()
                 stage1_fallback_count += 1
                 doc_ids, gate_info = self._filter_docs_by_keywords(query, doc_results)
                 stage1_path = "metadata_filter_with_doc_similarity"
@@ -355,12 +456,12 @@ class ChunkLevelRetriever(BaseRetriever):
                     stage1_path = "person_name"
                     logger.info(f"ChunkLevelRetriever: 人名匹配到 {len(doc_ids)} 个文档")
                 else:
-                    doc_results = self.doc_db.similarity_search(query, k=15)
+                    doc_results = _authorized_doc_search()
                     stage1_fallback_count += 1
                     doc_ids, gate_info = self._filter_docs_by_keywords(query, doc_results)
                     stage1_path = "doc_similarity" if doc_results else "keyword_filter"
             else:
-                doc_results = self.doc_db.similarity_search(query, k=15)
+                doc_results = _authorized_doc_search()
                 stage1_fallback_count += 1
                 if doc_results:
                     doc_ids, gate_info = self._filter_docs_by_keywords(query, doc_results)
@@ -432,6 +533,7 @@ class ChunkLevelRetriever(BaseRetriever):
                         request_metadata_filter = kb_relaxed
                         stage1_path = "kb_fallback"
                         stage1_fallback_count += 1
+                        cross_kb_fallback = True
                 trace_collector.add_event(span, "stage1_fallback", "info",
                     f"Stage1 0 匹配 → 放宽后 filter={request_metadata_filter}, path={stage1_path}",
                     data={"relaxed_filter": request_metadata_filter,
@@ -456,6 +558,7 @@ class ChunkLevelRetriever(BaseRetriever):
                     doc_ids = None
                     stage1_path = "kb_fallback"
                     stage1_fallback_count += 1
+                    cross_kb_fallback = True
                     trace_collector.add_event(span, "stage1_fallback", "info",
                         f"Stage1 0 匹配 → 放宽 kb_id 后 filter={request_metadata_filter}",
                         data={"relaxed_filter": request_metadata_filter,
@@ -485,10 +588,43 @@ class ChunkLevelRetriever(BaseRetriever):
                 seen.add(cid)
                 all_docs.append(d)
 
+        # — 空召回降级：首查无扩展且 0 结果 → 补一次同义词扩展重试 —
+        # 口语化 query（"发欧洲大概要多少天"）与书面文档词面零重叠，首查会被
+        # 相似度阈值全过滤；空召回时补充候选是纯增益（rerank/Gate 照常把关），
+        # 且只在空召回路径发生，正常请求零额外开销
+        if not all_docs and expanded_queries is None:
+            retry_expanded = expand_query(query)
+            if len(retry_expanded) > 1:
+                logger.info(
+                    f"ChunkLevelRetriever: Stage 2 首查空召回, "
+                    f"同义词扩展重试 ({len(retry_expanded) - 1} 个变体)"
+                )
+                stage1_path = f"{stage1_path}+synonym_retry"
+                stage1_fallback_count += 1
+                res = hybrid_retrieve(
+                    query, self.chunk_retriever, self.bm25,
+                    k=self.k, doc_ids=doc_ids,
+                    metadata_filter=request_metadata_filter,
+                    expanded_queries=retry_expanded,
+                )
+                for d in res:
+                    cid = d.metadata.get("chunk_id") or f'{d.metadata.get("doc_id","?")}:{d.metadata.get("chunk_index",0)}'
+                    if cid not in seen:
+                        seen.add(cid)
+                        all_docs.append(d)
+                trace_collector.add_event(span, "stage2_synonym_retry", "info",
+                    f"Stage2 空召回 → 同义词扩展重试: {len(retry_expanded) - 1} 变体 → {len(all_docs)} chunks",
+                    data={"expanded_queries": retry_expanded,
+                          "output_count": len(all_docs)})
+
         # — 降级: Stage 2 无结果时回退到文档全文 —
         if not all_docs:
             logger.warning(f"ChunkLevelRetriever: Stage 2 无结果，尝试 Neighbor Expansion")
             fallback_docs = self._neighbor_expansion(query, doc_ids, request_metadata_filter)
+            if authorized is not None and fallback_docs:
+                fallback_docs = _keep_docs_in_allowed_kbs(fallback_docs, allowed_kbs, span)
+            elif cross_kb_fallback and fallback_docs:
+                fallback_docs = _drop_excluded_kb_fallback_docs(fallback_docs, span)
             if fallback_docs:
                 logger.info(f"ChunkLevelRetriever: Neighbor Expansion → {len(fallback_docs)} chunks")
                 return fallback_docs[: self.k], {
@@ -512,6 +648,13 @@ class ChunkLevelRetriever(BaseRetriever):
 
         # ── Parent-Child 上下文增强：检索命中的 leaf，拉取对应 parent ──
         all_docs = attach_parent_context(all_docs, self._lookup_parents)
+
+        # ── 收口过滤：adaptive 扩展可能再拉入文档，统一在此执行 ──
+        # 已声明主体 → 白名单强制（无条件）；未声明 → 仅跨库兜底剔除 test 库
+        if authorized is not None:
+            all_docs = _keep_docs_in_allowed_kbs(all_docs, allowed_kbs, span)
+        elif cross_kb_fallback:
+            all_docs = _drop_excluded_kb_fallback_docs(all_docs, span)
 
         return all_docs[: effective_k], {
             "retrieved_chunks": len(all_docs),

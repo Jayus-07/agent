@@ -33,6 +33,9 @@ class RequestContext:
     session_id: str = "default"
     user_id: str = "default"
     kb_id: str = "default"
+    # 员工部门（检索侧授权用）：请求体/网关注头带入；空 = 未声明，
+    # RAG 工具按 fail-safe 以 customer 主体检索（对客最严格集合）
+    department: str = ""
     # TraceRecord 引用（不注具体类型：避免 observability ← orchestration 导入环）
     trace: Any = None
     # 流式增量回调 sink(text: str) -> None；None = 非流式请求
@@ -53,13 +56,14 @@ class RequestContext:
         )
         from backend.observability.tracer import trace_collector
         from backend.shared.logger import set_log_context
-        from backend.tools import set_session_id, set_tool_user_id
+        from backend.tools import set_session_id, set_tool_user_id, set_tool_department
 
         if self.trace is not None:
             trace_collector.bind(self.trace)
         set_session_id(self.session_id)
         set_current_user_id(self.user_id)
         set_tool_user_id(self.user_id)
+        set_tool_department(self.department)
         set_log_context(user_id=self.user_id)
         set_request_model(self.model)
         if self.bind_sink:
@@ -71,6 +75,7 @@ class RequestContext:
             "session_id": self.session_id,
             "user_id": self.user_id,
             "kb_id": self.kb_id,
+            "department": self.department,
             "model": self.model,
         }
 
@@ -96,6 +101,7 @@ def get_context_from_state(state: dict | None) -> RequestContext | None:
             session_id=ctx.get("session_id", "default"),
             user_id=ctx.get("user_id", "default"),
             kb_id=ctx.get("kb_id", "default"),
+            department=ctx.get("department", ""),
             model=ctx.get("model", ""),
             trace=None,
             stream_sink=None,

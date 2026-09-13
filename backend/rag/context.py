@@ -35,6 +35,13 @@ class RequestContext:
     intent_label: str = ""
     query: str = ""
 
+    # ── 主体属性（2026-09-14 检索侧授权）──
+    # 入口解析一次，下游只读；"" = 未声明主体 → 授权未启用（旧行为）。
+    # customer=对客会话（兜底/显式范围收敛到 cs_* 库）；
+    # employee=员工会话（按 department 经 owner_depts 矩阵授权）。
+    subject_type: str = ""
+    department: str = ""
+
     # ── 决策中间态（并发隔离：随 contextvar 按请求隔离）──
     meta: dict = field(default_factory=dict)   # LLM 输出 <!--META--> 解析结果
     faithfulness: Any = None                   # FaithfulnessResult（评估结果）

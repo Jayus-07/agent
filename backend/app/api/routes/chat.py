@@ -172,6 +172,7 @@ async def chat_stream(
                 kb_id=kb_id,
                 stop_event=stop_event,
                 user_id=user_id,
+                department=req.department or "",
                 model=req.model or "",
             ):
                 if stop_event.is_set():

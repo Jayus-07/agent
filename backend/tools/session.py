@@ -24,3 +24,16 @@ def get_tool_user_id() -> str:
     """当前请求用户 ID；无上下文（MCP 直调/脚本）返回空串。"""
     return _current_user_id.get()
 
+
+# 当前请求用户部门：检索侧授权（subject_type=employee 时决定可见知识库范围）
+_current_department: ContextVar[str] = ContextVar("tool_department", default="")
+
+
+def set_tool_department(department: str):
+    _current_department.set(department or "")
+
+
+def get_tool_department() -> str:
+    """当前请求用户部门；无上下文/未声明返回空串。"""
+    return _current_department.get()
+

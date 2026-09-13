@@ -548,16 +548,21 @@ class RAGPipeline:
         session_id: str = "default",
         kb_id: str = "default",
         kb_ids: list[str] | None = None,
+        subject_type: str = "",
+        department: str = "",
     ) -> str:
         """提问入口：3 段式 — 准备 → 执行 → 清理。
 
         拆解后便于单测和异常定位；行为完全兼容旧版。
         Phase 4: 首轮问答命中缓存时跳过 LLM 生成（~4.8s），多轮对话不走缓存。
         kb_ids: 多知识库指定（客服系统用），优先级高于 kb_id。
+        subject_type/department: 主体属性（customer/employee+部门），检索侧
+        授权用；空 = 未声明主体，保持旧行为（见 knowledge_base.authorized_kbs）。
         """
         self.last_answer_meta: dict = {}
         logger.info(f"收到问题: {question[:80]} (session={session_id}, kb={kb_id})")
-        self._prepare_context(kb_id, question, kb_ids=kb_ids)
+        self._prepare_context(kb_id, question, kb_ids=kb_ids,
+                              subject_type=subject_type, department=department)
         try:
             if not self._check_resources():
                 return "系统资源紧张，请稍后重试"
@@ -585,7 +590,8 @@ class RAGPipeline:
         finally:
             self._cleanup()
 
-    def _prepare_context(self, kb_id: str, question: str, kb_ids: list[str] | None = None):
+    def _prepare_context(self, kb_id: str, question: str, kb_ids: list[str] | None = None,
+                         subject_type: str = "", department: str = ""):
         """注入 kb_id + QueryAnalyzer metadata → contextvars metadata_filter。"""
         from backend.rag.context import RequestContext, set_context
         from backend.rag.retrieval.query_analyzer import QueryAnalyzer
@@ -630,6 +636,8 @@ class RAGPipeline:
             metadata_filter=mf,
             intent_label=pq.intent if 'pq' in dir() else "",
             query=question,
+            subject_type=subject_type,
+            department=department,
         )
         set_context(ctx)
         logger.info(f"[RAG.ask] metadata_filter={mf}")

@@ -22,6 +22,7 @@ Tool Registry:
 from backend.tools.session import (
     set_session_id, _get_session_id, _current_session_id,
     set_tool_user_id, get_tool_user_id,  # noqa: F401
+    set_tool_department, get_tool_department,  # noqa: F401
 )
 from backend.tools.sql import execute_sql_tool, sql_query_tool  # noqa: F401
 from backend.tools.rag import search_knowledge_tool  # noqa: F401
