@@ -109,3 +109,18 @@ class TestProtocolEndpointParity:
         mcp_tools = {t.name for t in asyncio.run(mcp.list_tools())}
         discover_tools = {t["name"] for t in manager.discover()}
         assert mcp_tools == discover_tools
+
+
+# ==================== 5. 规则表单一来源（治理 B） ====================
+
+class TestRuleTableSingleSource:
+    def test_complex_patterns_single_source(self):
+        """multi_query 兜底复杂度检测必须引用 hybrid 的统一清单（同一对象），
+        历史上两份清单各自维护曾漂移（操作性信号丢失 → 检索层回退）。"""
+        from backend.rag.retrieval.hybrid import COMPLEX_PATTERNS
+        from backend.rag.retrieval.multi_query import (
+            COMPLEX_PATTERNS as MQ_PATTERNS,
+        )
+
+        assert MQ_PATTERNS is COMPLEX_PATTERNS
+        assert len(COMPLEX_PATTERNS) == len(set(COMPLEX_PATTERNS)), "清单内含重复信号"

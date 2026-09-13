@@ -55,11 +55,10 @@ _EXACT_IDENTIFIER_PATTERNS = [
 ]
 
 # 复杂查询信号：多意图 / 对比 / 多跳推理 / 操作流程 → HYBRID_MULTI_QUERY
-# 注意保持与 multi_query.py COMPLEX_PATTERNS（兜底规则）同源语义：
-# P1-12 三层路由重构时此表遗漏了操作性信号（怎么/如何/流程/步骤），
-# 导致"退款流程是什么，怎么操作"被判为 vector_only（连 BM25 都跳过），
-# 而 SOP/流程类查询恰是 BM25 强项 —— 2026-09-13 回归修复
-_COMPLEX_PATTERNS = [
+# ⭐ 单一事实来源（治理 B）：multi_query.py 的兜底复杂度检测也引用本清单，
+#    勿在此处与 multi_query.py 各维护一份（P1-12 重构时曾漂移——本表遗漏
+#    操作性信号导致"退款流程怎么操作"被判 vector_only，2026-09-13 回归修复）
+COMPLEX_PATTERNS = [
     "分析", "对比", "比较", "总结", "汇总", "概述",
     "全部", "所有", "区别", "差异", "不同",
     "优缺点", "利弊", "优劣",
@@ -100,7 +99,7 @@ def _classify_query_tier(query: str) -> str:
         return "hybrid_multi_query"
 
     # 复杂推理关键词
-    for pat in _COMPLEX_PATTERNS:
+    for pat in COMPLEX_PATTERNS:
         if pat in q:
             return "hybrid_multi_query"
 
