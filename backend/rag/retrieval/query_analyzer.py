@@ -53,7 +53,14 @@ class ParsedQuery:
         if self.organizations:
             f["organization"] = self.organizations[0] if len(self.organizations) == 1 else self.organizations
         if self.doc_types:
-            f["doc_type"] = self.doc_types[0] if len(self.doc_types) == 1 else self.doc_types
+            # 多 doc_type 与 business_domain 同法：$in 而非裸 list——Chroma where
+            # 只接受标量或操作符表达式，裸 list 直接抛
+            # "Expected where value to be a str, int, float, or operator expression"，
+            # doc 搜索/Stage1 门控整轮失败（2026-09-14 冒烟实测）。
+            if len(self.doc_types) == 1:
+                f["doc_type"] = self.doc_types[0]
+            else:
+                f["doc_type"] = {"$in": self.doc_types}
         if self.domains:
             # 多 domain 兼容（2026-08-10）：用 $in 而非取第一个，避免误判
             # 例："差评怎么处理" → customer + order（兼容售后流程的 order 标注）
