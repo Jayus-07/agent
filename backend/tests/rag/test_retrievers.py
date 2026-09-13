@@ -208,9 +208,10 @@ class TestKbIdFallback:
     def test_wrong_kb_id_relaxed_to_cross_kb(self):
         """filter={kb_id: policy_finance, doc_type: financial} 但文档在
         policy_general → 放宽 kb_id 后 Stage 2 用剩余条件召回到结果。"""
-        from backend.rag.context import RequestContext, set_context, clear_context
+        from backend.core.request_context import RequestContext
+        from backend.rag.context import RagRequestState, set_context, clear_context
 
-        set_context(RequestContext(
+        set_context(RagRequestState(
             metadata_filter={"kb_id": "policy_finance", "doc_type": "financial"},
             query="员工出差报销需要提交哪些材料？",
         ))
@@ -252,9 +253,9 @@ class TestKbIdFallback:
         f17"宁跨 KB 召回"不适用于测试/评测库——虚构内容经兜底对客输出
         等同泄漏；宁可空结果走拒答，不返回禁入库内容。
         """
-        from backend.rag.context import RequestContext, set_context, clear_context
+        from backend.rag.context import RagRequestState, set_context, clear_context
 
-        set_context(RequestContext(
+        set_context(RagRequestState(
             metadata_filter={"kb_id": "cs_faq"},
             query="发欧洲大概要多少天？",
         ))
@@ -284,9 +285,9 @@ class TestKbIdFallback:
     def test_cross_kb_fallback_exclusion_can_be_disabled(self, monkeypatch):
         """kill-switch 关闭 → 一键回滚旧行为（跨库兜底返回 rag_test_kb 文档）。"""
         monkeypatch.setenv("CROSS_KB_FALLBACK_EXCLUDE_TEST", "false")
-        from backend.rag.context import RequestContext, set_context, clear_context
+        from backend.rag.context import RagRequestState, set_context, clear_context
 
-        set_context(RequestContext(
+        set_context(RagRequestState(
             metadata_filter={"kb_id": "cs_faq"},
             query="发欧洲大概要多少天？",
         ))
@@ -380,12 +381,13 @@ class TestKbIdFallback:
         客服流量漏进主图时，LLM 可能用 search_knowledge_tool 选任意 kb；
         显式 kb 选择同样受主体授权约束（路由只提议，属性裁决）。
         """
-        from backend.rag.context import RequestContext, set_context, clear_context
+        from backend.core.request_context import RequestContext
+        from backend.rag.context import RagRequestState, set_context, clear_context
 
-        set_context(RequestContext(
+        set_context(RagRequestState(
             metadata_filter={"kb_id": "policy_hr"},
             query="薪资制度是什么",
-            subject_type="customer",
+            identity=RequestContext(subject_type="customer"),
         ))
         try:
             doc_db = SimpleNamespace(
@@ -420,13 +422,13 @@ class TestKbIdFallback:
 
     def test_employee_subject_department_matrix_at_retrieval(self):
         """employee(h dept=hr) + 宽搜 → owner_depts 矩阵外的库文档被剔除。"""
-        from backend.rag.context import RequestContext, set_context, clear_context
+        from backend.core.request_context import RequestContext
+        from backend.rag.context import RagRequestState, set_context, clear_context
 
-        set_context(RequestContext(
+        set_context(RagRequestState(
             metadata_filter={},
             query="库存怎么盘点",
-            subject_type="employee",
-            department="hr",
+            identity=RequestContext(subject_type="employee", department="hr"),
         ))
         try:
             doc_db = SimpleNamespace(
@@ -460,9 +462,9 @@ class TestKbIdFallback:
 
     def test_or_scope_filter_also_relaxed(self):
         """$or 形式的多 KB 候选同样在 0 命中时被放宽。"""
-        from backend.rag.context import RequestContext, set_context, clear_context
+        from backend.rag.context import RagRequestState, set_context, clear_context
 
-        set_context(RequestContext(
+        set_context(RagRequestState(
             metadata_filter={"$or": [{"kb_id": "policy_finance"},
                                      {"kb_id": "policy_general"}]},
         ))

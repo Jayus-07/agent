@@ -24,7 +24,7 @@ print(f"[PASS] rule_router: 「退款金额是多少」仍为弱信号 (conf={ge
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from langchain_core.documents import Document
-from backend.rag.context import RequestContext, set_context
+from backend.rag.context import RagRequestState, set_context
 from backend.rag.retrieval.retrievers import ChunkLevelRetriever
 
 class FakeDocDB:
@@ -57,7 +57,7 @@ retriever = ChunkLevelRetriever(
 )
 
 # 模拟 trace c8431b548b01 的请求上下文：query_analyzer 推 order 域 + kb 路由到空的 biz_order
-set_context(RequestContext(metadata_filter={"kb_id": "biz_order", "business_domain": "order"}))
+set_context(RagRequestState(metadata_filter={"kb_id": "biz_order", "business_domain": "order"}))
 
 docs = retriever.invoke("退款审核时间是多少？")
 assert docs, "顺序放宽后应能召回 rag_test_kb 的 chunk（旧实现此处返回空 → 假拒答）"

@@ -1,7 +1,8 @@
 """tests/orchestration/test_request_context.py — RequestContext 上下文契约测试
 
 覆盖:
-1. dataclass 形态 bind():user_id 透传到工具层 ContextVar 与日志上下文
+1. dataclass 形态 bind():user_id 透传到工具层 ContextVar 与日志上下文;
+   身份借读注入 RAG 运行态（orchestration → RAG 唯一转换点）
 2. checkpoint_safe():剔除 trace/sink,保留纯字段
 3. dict 还原:get_context_from_state 兼容 checkpointer 安全形态,
    还原后 bind_sink=False(bind 不覆盖当前线程 sink)
@@ -35,6 +36,30 @@ class TestDataclassContext:
         RequestContext(session_id="s", user_id="u", kb_id="k").bind()
         assert proxy._stream_sink_var.get() is None
 
+    def test_bind_attaches_identity_to_rag_state(self):
+        """bind() 把权威实例注入 RAG 运行态（组合借读，非复制）。
+
+        orchestration → RAG 的唯一身份转换点：检索层经
+        get_context().identity 读到的必须是 bind 的同一实例。
+        """
+        from backend.rag.context import get_context
+
+        ctx = RequestContext(session_id="s1", user_id="u1",
+                             department="hr", subject_type="employee")
+        ctx.bind()
+        assert get_context().identity is ctx
+
+    def test_clear_context_resets_borrowed_identity(self):
+        """clear_context 重置运行态后，identity 回到全新默认实例，
+        不残留上一请求借读的权威实例（防跨请求串味）。"""
+        from backend.rag.context import clear_context, get_context
+
+        ctx = RequestContext(department="hr")
+        ctx.bind()
+        clear_context()
+        assert get_context().identity is not ctx
+        assert get_context().identity.department == ""
+
 
 class TestCheckpointSafe:
     def test_checkpoint_safe_strips_objects(self):
@@ -42,7 +67,8 @@ class TestCheckpointSafe:
                              trace=object(), stream_sink=lambda t: None)
         safe = ctx.checkpoint_safe()
         assert safe == {"session_id": "s1", "user_id": "u1",
-                        "kb_id": "k1", "department": "", "model": ""}
+                        "kb_id": "k1", "department": "",
+                        "subject_type": "", "model": ""}
         # 可 JSON 序列化（checkpoint 传输前提）
         import json
         json.dumps(safe, ensure_ascii=False)
@@ -56,6 +82,7 @@ class TestCheckpointSafe:
         assert restored.session_id == "s1"
         assert restored.user_id == "u2"
         assert restored.model == "deepseek-chat"
+        assert restored.subject_type == ""
         assert restored.trace is None
         assert restored.stream_sink is None
         assert restored.bind_sink is False

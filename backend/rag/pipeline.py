@@ -592,8 +592,14 @@ class RAGPipeline:
 
     def _prepare_context(self, kb_id: str, question: str, kb_ids: list[str] | None = None,
                          subject_type: str = "", department: str = ""):
-        """注入 kb_id + QueryAnalyzer metadata → contextvars metadata_filter。"""
-        from backend.rag.context import RequestContext, set_context
+        """注入 kb_id + QueryAnalyzer metadata → contextvars metadata_filter。
+
+        主体属性以本次调用声明为准回填到运行态借读的权威身份实例
+        （组合非复制）：图路径该实例已由 RequestContext.bind() 注入；
+        CS/eval/直连路径无图上下文，用默认实例。mf 为空时提前返回、
+        不触碰上下文——与旧实现"未 set 即默认空身份"语义一致。
+        """
+        from backend.rag.context import RagRequestState, get_context, set_context
         from backend.rag.retrieval.query_analyzer import QueryAnalyzer
         from backend.rag.routing.kb_router import KBRouter
         from backend.rag.retrieval.kb_filter import build_kb_filter
@@ -632,13 +638,14 @@ class RAGPipeline:
         if not mf:
             return
 
-        ctx = RequestContext(
+        ctx = RagRequestState(
             metadata_filter=mf,
             intent_label=pq.intent if 'pq' in dir() else "",
             query=question,
-            subject_type=subject_type,
-            department=department,
+            identity=get_context().identity,
         )
+        ctx.identity.subject_type = subject_type
+        ctx.identity.department = department
         set_context(ctx)
         logger.info(f"[RAG.ask] metadata_filter={mf}")
 

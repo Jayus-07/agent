@@ -449,8 +449,10 @@ class ChunkLevelRetriever(BaseRetriever):
             from backend.rag.context import get_context
             ctx = get_context()
             st.metadata_filter = ctx.metadata_filter
-            st.subject_type = getattr(ctx, "subject_type", "") or ""
-            st.department = getattr(ctx, "department", "") or ""
+            # 身份从权威上下文组合借读（identity 缺失/异常均软降级为未声明主体）
+            identity = getattr(ctx, "identity", None)
+            st.subject_type = getattr(identity, "subject_type", "") or ""
+            st.department = getattr(identity, "department", "") or ""
         except Exception as e:
             # request 上下文缺失 → 按无 filter 全量检索（软降级），留痕
             logger.debug(f"[ChunkLevelRetriever] 读取 request context 失败: {e}", exc_info=True)

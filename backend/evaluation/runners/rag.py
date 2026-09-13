@@ -238,19 +238,19 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 question = case.question
 
                 if kb_id and kb_id != "*" and kb_id != "default":
-                    from backend.rag.context import RequestContext, set_context
+                    from backend.rag.context import RagRequestState, set_context
                     mf = {"kb_id": kb_id}
                     if department:
                         mf["department"] = department
-                    ctx = RequestContext(
+                    ctx = RagRequestState(
                         metadata_filter=mf,
                         intent_label="",
                         query=question,
                     )
                     set_context(ctx)
                 else:
-                    from backend.rag.context import RequestContext, set_context
-                    set_context(RequestContext())
+                    from backend.rag.context import RagRequestState, set_context
+                    set_context(RagRequestState())
 
                 # === Stage 1: Doc 级检索 ===
                 doc_filter = {}

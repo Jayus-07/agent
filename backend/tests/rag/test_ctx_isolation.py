@@ -1,8 +1,8 @@
-"""P1 并发隔离测试：请求级中间态（RequestContext / proxy ContextVar）互不串扰。
+"""P1 并发隔离测试：请求级中间态（RagRequestState / proxy ContextVar）互不串扰。
 
 覆盖：
   1. proxy token 元数据：并发线程各自写入/读取，互不覆盖（模块级 dict 的串扰已被消除）
-  2. RequestContext 决策中间态（meta）：并发线程各自 set/读，互不干扰
+  2. RagRequestState 决策中间态（meta）：并发线程各自 set/读，互不干扰
   3. get_context 惰性 set：未 set 时读写同一稳定实例（不丢写）
   4. ask 每请求新建 gate/corrector：并发/串行请求间 retry_count 等状态不串
   5. 同一 chain 实例并发 ask：各请求的 _last_meta 不串扰
@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from langchain_core.documents import Document
 
-from backend.rag.context import RequestContext, get_context, set_context
+from backend.rag.context import RagRequestState, get_context, set_context
 
 
 def _doc():
@@ -56,7 +56,7 @@ class TestProxyTokenIsolation:
 
 
 # =====================================================
-# 2. RequestContext 决策中间态隔离
+# 2. RagRequestState 决策中间态隔离
 # =====================================================
 
 class TestRequestContextIsolation:
@@ -64,7 +64,7 @@ class TestRequestContextIsolation:
         """两线程各自 set_context 不同 meta，get_context 读到各自的。"""
 
         def worker(tag):
-            set_context(RequestContext(meta={"tag": tag}))
+            set_context(RagRequestState(meta={"tag": tag}))
             time.sleep(0.05)
             return get_context().meta["tag"]
 
