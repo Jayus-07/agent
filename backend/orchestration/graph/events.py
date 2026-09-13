@@ -2,7 +2,6 @@
 
 所有函数纯函数/静态方法，无状态，可独立测试。
 """
-import re
 import time
 from typing import Generator, Optional
 
@@ -119,17 +118,19 @@ def _build_reporter_events(output: dict) -> Generator[dict, None, None]:
 # =====================================================
 
 def emit_delta_events(final_answer: str, stop_event=None) -> Generator[dict, None, None]:
-    """将最终回答按句子切分，逐句产出 delta 事件（打字机效果）。"""
+    """将最终回答作为单个 delta 一次性产出（无真流式路径的兜底呈现）。
+
+    P1 之前这里按句切开 + sleep(0.02) 模拟打字机（假流式）。真 token 级
+    流式上线后，本函数仅剩两类调用方：Guard 短路话术、未发生 LLM 生成的
+    兜底路径（如纯模板/降级回答）。这些场景没有"边生成边出字"可言，
+    一次性发送整段即可，不再人为延迟。
+    """
     if not final_answer:
         return
-    sentences = re.split(r'(?<=[。！？\n])', final_answer)
-    sentences = [s for s in sentences if s.strip()]
-    for sentence in sentences:
-        if stop_event is not None and stop_event.is_set():
-            yield {"event": "error", "data": {"message": "用户中止", "ts": time.time()}}
-            return
-        yield {"event": "delta", "data": {"content": sentence, "ts": time.time()}}
-        time.sleep(0.02)
+    if stop_event is not None and stop_event.is_set():
+        yield {"event": "error", "data": {"message": "用户中止", "ts": time.time()}}
+        return
+    yield {"event": "delta", "data": {"content": final_answer, "ts": time.time()}}
 
 
 def make_done_event(final_answer: str, all_step_results: dict, start_time: float,

@@ -162,6 +162,11 @@ def _build_checkpointer() -> Any:
             checkpointer.setup()  # 首次建表（幂等）
             logger.info("[CS Graph] checkpointer enabled (PostgresSaver: %s/%s)",
                         c["host"], c["dbname"])
+            # TTL 清理守护：checkpoint 按轮累积，无清理会无限膨胀（软失败）
+            from backend.customer_service.checkpointer_cleanup import (
+                start_cleanup_daemon,
+            )
+            start_cleanup_daemon()
             return checkpointer
         except Exception:
             logger.warning("[CS Graph] PostgresSaver init failed, "

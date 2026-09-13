@@ -124,6 +124,14 @@ ENABLE_TOKEN_STREAMING = os.getenv(
     "ENABLE_TOKEN_STREAMING", "true"
 ).strip().lower() in ("1", "true", "yes")
 
+# 流式请求附带 stream_options.include_usage，让尾 chunk 携带 token 用量
+# （否则流式路径的 token 看板只能走 fallback 记 unavailable）。
+# 仅加给已确认支持的 provider：DeepSeek / Qwen-DashScope 官方文档明确支持；
+# MiniMax 兼容性未验证，暂不加（设 LLM_STREAM_USAGE=false 可整体关闭）
+LLM_STREAM_USAGE = os.getenv(
+    "LLM_STREAM_USAGE", "true"
+).strip().lower() in ("1", "true", "yes")
+
 # =====================================================
 # Token Usage Tracking (P0 - 审计日志)
 # =====================================================

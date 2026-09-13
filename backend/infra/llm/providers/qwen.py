@@ -9,6 +9,7 @@ qwen.py — Qwen Provider（阿里云百炼在线模型，OpenAI 兼容协议）
 from backend.config import (
     LLM_CONTEXT_LENGTH,
     LLM_REQUEST_TIMEOUT,
+    LLM_STREAM_USAGE,
     LLM_TEMPERATURE,
     QWEN_API_BASE,
     QWEN_API_KEY,
@@ -42,6 +43,8 @@ def build_qwen(model_name: str) -> object:
         api_key=QWEN_API_KEY,
         base_url=QWEN_API_BASE,
         extra_body={"enable_thinking": enable_thinking},
+        # 流式尾 chunk 携带 token 用量（DashScope 兼容端点支持 stream_options）
+        stream_usage=LLM_STREAM_USAGE,
     )
 
 

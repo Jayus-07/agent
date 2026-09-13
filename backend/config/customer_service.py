@@ -211,6 +211,9 @@ CS_QUERY_LLM_TIMEOUT_MS = int(os.getenv("CS_QUERY_LLM_TIMEOUT_MS", "3000"))
 CS_CHECKPOINTER_ENABLED = os.getenv("CS_CHECKPOINTER_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 # checkpointer 后端：postgres（生产，跨进程/重启持久）| memory（本地调试降级）
 CS_CHECKPOINTER_BACKEND = os.getenv("CS_CHECKPOINTER_BACKEND", "postgres").strip().lower()
+# PostgresSaver checkpoint 保留天数：每轮对话都累积 checkpoint 行/blob，
+# 无清理会无限膨胀。每日守护线程清理超过 TTL 的 checkpoint 及孤儿 blob/writes
+CS_CHECKPOINT_TTL_DAYS = int(os.getenv("CS_CHECKPOINT_TTL_DAYS", "7"))
 CS_GRAPH_RECURSION_LIMIT = int(os.getenv("CS_GRAPH_RECURSION_LIMIT", "20"))
 
 # ── CS 流量灰度（CS_ENABLED=true 时的放量控制）────────────────

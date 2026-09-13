@@ -11,6 +11,7 @@ from backend.config import (
     DEEPSEEK_API_KEY,
     LLM_CONTEXT_LENGTH,
     LLM_REQUEST_TIMEOUT,
+    LLM_STREAM_USAGE,
     LLM_TEMPERATURE,
 )
 from backend.shared.logger import logger
@@ -32,6 +33,8 @@ def build_deepseek(model_name: str) -> object:
         request_timeout=LLM_REQUEST_TIMEOUT,
         api_key=DEEPSEEK_API_KEY,
         base_url=DEEPSEEK_API_BASE,
+        # 流式尾 chunk 携带 token 用量（DeepSeek 官方支持 stream_options.include_usage）
+        stream_usage=LLM_STREAM_USAGE,
     )
 
 

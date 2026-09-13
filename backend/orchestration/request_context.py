@@ -1,0 +1,79 @@
+"""request_context.py — 请求级执行上下文（显式传递 + 节点入口绑定）
+
+问题背景:
+  请求上下文（trace / session_id / user_id / 流式 sink）此前散落在多个
+  独立 ContextVar 中，依赖"线程环境自动继承"。但执行链路跨多层线程
+  （chat SSE executor → graph worker → LangGraph Send 线程池），新线程
+  不继承 ContextVar，漏绑即静默故障：span 落 noop、并行 Skill 分支不
+  流式、限流扣错用户。
+
+方案（显式上下文）:
+  - RequestContext dataclass 集中持有上下文值，随图状态显式流动
+    （state key: "request_context"）；
+  - Supervisor Send 派发时透传该 key → 并行 Skill 分支天然可达；
+  - 每个节点入口（trace_middleware 统一收口）从 state 重新绑定
+    ContextVar，绑定幂等：proxy/tracer 的 ContextVar set 本身覆盖语义；
+  - ContextVar 仅保留给 FastAPI / proxy / tracer 层的读取方，不再依赖
+    跨线程继承。
+
+注意: dataclass 实例直接放入 state——主图（OrchestratorState）无
+checkpointer，不做序列化；若未来给主图加 checkpoint，需要为此 key
+注册 serializer 或改存 dict。
+"""
+from dataclasses import dataclass
+from typing import Any, Callable
+
+
+@dataclass
+class RequestContext:
+    """一次用户请求的执行上下文，随图状态显式传递。"""
+
+    session_id: str = "default"
+    user_id: str = "default"
+    kb_id: str = "default"
+    # TraceRecord 引用（不注具体类型：避免 observability ← orchestration 导入环）
+    trace: Any = None
+    # 流式增量回调 sink(text: str) -> None；None = 非流式请求
+    stream_sink: Callable[[str], None] | None = None
+
+    def bind(self) -> None:
+        """把上下文绑定到当前线程的 ContextVar（节点入口 / worker 入口调用）。
+
+        幂等：重复绑定同值无害；stream_sink=None 会显式清除陈旧 sink，
+        防止线程池复用导致的跨请求串味。
+        """
+        from backend.infra.llm.proxy import (
+            set_current_user_id, set_stream_sink,
+        )
+        from backend.observability.tracer import trace_collector
+        from backend.tools import set_session_id
+
+        if self.trace is not None:
+            trace_collector.bind(self.trace)
+        set_session_id(self.session_id)
+        set_current_user_id(self.user_id)
+        set_stream_sink(self.stream_sink)
+
+
+def put_context(state: dict, ctx: RequestContext) -> None:
+    """把 RequestContext 写入图初始状态（make_initial_state 后调用）。"""
+    state["request_context"] = ctx
+
+
+def get_context_from_state(state: dict | None) -> RequestContext | None:
+    """从节点输入状态取 RequestContext；无（旧路径/子图/测试假 state）返回 None。"""
+    if not state:
+        return None
+    ctx = state.get("request_context")
+    return ctx if isinstance(ctx, RequestContext) else None
+
+
+def bind_from_state(state: dict | None) -> None:
+    """节点入口快捷方式：state 携带上下文则绑定，否则不动环境。
+
+    "否则不动"很重要：ask()/CS 子图等无 state 上下文的路径依赖
+    调用方（system.py worker / CS 适配器线程）的环境绑定，清除反而破坏。
+    """
+    ctx = get_context_from_state(state)
+    if ctx is not None:
+        ctx.bind()
