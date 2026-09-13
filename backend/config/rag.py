@@ -189,6 +189,12 @@ FAITHFULNESS_REJECT_SCORE = FAITHFULNESS_REJECT_SCORE_MED_RISK
 CITATION_SUPPORT_THRESHOLD = float(os.getenv("CITATION_SUPPORT_THRESHOLD", "0.4"))
 
 # ====================================
+# RAG 答案缓存（首轮问答，相同查询跳过 LLM 生成）
+# ====================================
+# 开发调试希望每次都看到真实生成（打字机效果）时设为 false
+RAG_ANSWER_CACHE_ENABLED = os.getenv("RAG_ANSWER_CACHE_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+
+# ====================================
 # MultiQuery 检索配置
 # ====================================
 # mode: "auto"(自动判断复杂问题) | "always"(强制开启) | "off"(关闭)

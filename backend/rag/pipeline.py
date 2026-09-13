@@ -25,6 +25,7 @@ from backend.config import (
     ENABLE_INCREMENTAL_INDEX,
     ENABLE_MEMORY,
     OVERALL_REQUEST_TIMEOUT,
+    RAG_ANSWER_CACHE_ENABLED,
     ENABLE_RESOURCE_MONITOR,
 )
 from backend.shared.logger import logger
@@ -696,7 +697,12 @@ class RAGPipeline:
             self.last_answer_meta = {}
 
     def _check_answer_cache(self, question: str, kb_id: str) -> str | None:
-        """首轮问答缓存查询。命中返回缓存答案，未命中返回 None。"""
+        """首轮问答缓存查询。命中返回缓存答案，未命中返回 None。
+
+        RAG_ANSWER_CACHE_ENABLED=false 时整体旁路（调试看真实生成）。
+        """
+        if not RAG_ANSWER_CACHE_ENABLED:
+            return None
         try:
             from backend.rag.answer_cache import get_answer_cache
             from backend.rag.context import get_context
@@ -713,7 +719,9 @@ class RAGPipeline:
             return None
 
     def _write_answer_cache(self, question: str, kb_id: str, answer: str) -> None:
-        """首轮问答成功后写入缓存。失败不影响主流程。"""
+        """首轮问答成功后写入缓存。失败不影响主流程；开关关闭时跳过。"""
+        if not RAG_ANSWER_CACHE_ENABLED:
+            return
         try:
             from backend.rag.answer_cache import get_answer_cache
             from backend.rag.context import get_context
