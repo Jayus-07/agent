@@ -1,14 +1,19 @@
-"""workflows/selection_decision.py — 选品决策 Workflow（Phase 1 决策闭环 MVP）
+"""workflows/selection_decision.py — 选品决策 Workflow（批次3 v2：评估/决策职责分离）
 
-架构（spec §4.2）：
+架构（v2 计划书批次3）：
 - Layer 0: competitor_data（watchlist 快照）
-- Layer 1（并行）: market_assess / competitor_profile / review_pain
-- Layer 2: differentiation（run_if 市场 go）→ finance_model（run_if 差异化 go，内部≤3轮循环）
-- Layer 3: review_panel（run_if 财务达标）
-- Layer 4: decision_report（恒定执行，组装 Go/No-Go 决策包）
+- Layer 1（并行）: market_evidence_assess / competitor_profile / review_pain
+- Layer 2: selection_decision_gate（市场门控；insufficient 硬禁 go）
+- Layer 3: differentiation（run_if 门控 go）→ finance_model（run_if 差异化 go）
+- Layer 4: review_panel（run_if 财务达标）
+- Layer 5: decision_report（恒定执行，组装决策包 + decision_log 留痕）
+
+职责分离（评审定稿）：market_evidence_assess 只判"证据够不够格"
+（sufficient/partial/insufficient），selection_decision_gate 才做决策——
+证据不足时禁止输出"推荐"，只能产出"证据不足，无法决策"。
 
 Phase 1 限制（报告中如实标注）：
-- 无新数据源：市场评估用代理指标；痛点为 LLM 推断而非评论实证
+- 无新数据源：证据评估用代理指标；痛点为 LLM 推断而非评论实证
 """
 from __future__ import annotations
 
@@ -26,15 +31,15 @@ from backend.selection_decision.report import build_report
 from backend.selection_decision.store import get_selection_decision_store
 from backend.shared.logger import logger
 
-# ── 门控阈值常量（market_assess 规则门控）──────────────
-MIN_CANDIDATES = 3       # 市场门控：候选竞品数下限
-MIN_TOTAL_REVIEWS = 100  # 市场门控：评价总量下限
+# ── 门控阈值常量（市场门控代理指标）──────────────
+MIN_CANDIDATES = 3       # 证据/门控：候选竞品数下限
+MIN_TOTAL_REVIEWS = 100  # 证据/门控：评价总量下限
 
 # ── run_if 谓词（Decision 分支，spec §4.3）──────────────
 
 
 def _market_go(out: dict[str, Any]) -> bool:
-    return (out.get("market_assess") or {}).get("verdict") == "go"
+    return ((out.get("selection_decision_gate") or {}).get("verdict")) == "go"
 
 
 def _diff_go(out: dict[str, Any]) -> bool:
@@ -43,6 +48,53 @@ def _diff_go(out: dict[str, Any]) -> bool:
 
 def _finance_pass(out: dict[str, Any]) -> bool:
     return (out.get("finance_model") or {}).get("verdict") == "pass"
+
+
+# ── 证据资格与市场门控（批次3：评估职责 ≠ 决策职责）──────────
+
+
+def _evidence_verdict(candidate_count: int, total_reviews: int,
+                      has_prices: bool) -> str:
+    """市场证据资格判定（纯函数）：sufficient | partial | insufficient。
+
+    只回答"证据够不够格"——数据量与维度覆盖，不含任何决策倾向。
+    """
+    if candidate_count < 2 or total_reviews <= 0 or not has_prices:
+        return "insufficient"
+    if candidate_count < MIN_CANDIDATES or total_reviews < MIN_TOTAL_REVIEWS:
+        return "partial"
+    return "sufficient"
+
+
+def evaluate_gate(evidence_verdict: str, metrics: dict[str, Any],
+                  data_gaps: list[str]) -> dict[str, Any]:
+    """市场决策门控（纯函数）：证据资格 + 代理指标 → go/no_go + 推荐上限。
+
+    硬规则（计划书批次3）：evidence_verdict == insufficient 时禁止 go，
+    只能产出"证据不足，无法决策"——防止凭一份内容完整但证据不足的报告
+    直接给出"推荐进入"。partial 证据下推荐上限为"谨慎"（cautious）。
+    """
+    proxy_go = (metrics.get("candidate_count", 0) >= MIN_CANDIDATES
+                and metrics.get("total_reviews", 0) >= MIN_TOTAL_REVIEWS)
+    if evidence_verdict == "insufficient":
+        return {"verdict": "no_go", "evidence_verdict": evidence_verdict,
+                "blocked_by_evidence": True, "recommendation_cap": "reject",
+                "metrics": metrics, "data_gaps": data_gaps,
+                "reason": "证据不足，无法决策（候选/评价/价格维度缺失）"}
+    cap = None if evidence_verdict == "sufficient" else "cautious"
+    return {"verdict": "go" if proxy_go else "no_go",
+            "evidence_verdict": evidence_verdict,
+            "blocked_by_evidence": False,
+            "recommendation_cap": cap,
+            "metrics": metrics, "data_gaps": data_gaps,
+            "reason": "" if proxy_go else "代理指标未达门控阈值"}
+
+
+def _recommendation_of(verdict: str, recommendation_cap: str | None) -> str:
+    """最终推荐档位：recommend | cautious | reject（decision_log 用）。"""
+    if verdict != "go":
+        return "reject"
+    return "recommend" if recommendation_cap in (None, "recommend") else "cautious"
 
 
 def _llm_json(messages) -> Any:
@@ -87,9 +139,9 @@ class SelectionDecision:
         return {"candidates": candidates, "count": len(candidates)}
 
     # ── Layer 1 分析层（并行）──────────────────
-    @step(depends_on=["competitor_data"], name="市场评估(Q1)", timeout_sec=60)
-    async def market_assess(self, ctx):
-        """代理指标评估（免费数据源限制，spec R2：如实标注缺口）"""
+    @step(depends_on=["competitor_data"], name="市场证据评估", timeout_sec=60)
+    async def market_evidence_assess(self, ctx):
+        """证据资格评估（只判数据够不够格，不做决策；免费数据源代理指标）"""
         cands = ctx.outputs["competitor_data"]["candidates"]
         prices = [c["price"] for c in cands if c.get("price") is not None]
         reviews = sorted([c["review_count"] for c in cands if c.get("review_count")],
@@ -104,17 +156,25 @@ class SelectionDecision:
             "total_reviews": total_reviews,
             "top3_review_share": top3_share,
         }
-        # 规则门控：候选≥MIN_CANDIDATES 且评价总量≥MIN_TOTAL_REVIEWS → 视为存在需求（代理判断）
-        verdict = "go" if (len(cands) >= MIN_CANDIDATES
-                           and total_reviews >= MIN_TOTAL_REVIEWS) else "no_go"
-        return {
-            "verdict": verdict,
-            "metrics": metrics,
-            "data_gaps": [
-                "市场体量/增长率/季节性无免费数据源，以候选数与评价量作代理指标",
-                "搜索趋势/供需比缺失（Phase 2 接入下拉词采集）",
-            ],
-        }
+        verdict = _evidence_verdict(len(cands), total_reviews, bool(prices))
+        data_gaps = [
+            "市场体量/增长率/季节性无免费数据源，以候选数与评价量作代理指标",
+            "搜索趋势/供需比缺失（Phase 2 接入下拉词采集）",
+        ]
+        if verdict != "sufficient":
+            data_gaps.append("证据未达充分标准：结构化维度覆盖不足，结论按推断级处理")
+        return {"evidence_verdict": verdict, "metrics": metrics,
+                "data_gaps": data_gaps}
+
+    # ── Layer 2 市场门控（评估与决策分离）──────────
+    @step(depends_on=["market_evidence_assess"], name="市场门控", timeout_sec=30)
+    async def selection_decision_gate(self, ctx):
+        """决策门控：证据资格 + 代理指标 → go/no_go + 推荐上限。
+
+        insufficient 硬禁 go（run_if 谓词层强制，见 _market_go）。
+        """
+        ev = ctx.outputs["market_evidence_assess"]
+        return evaluate_gate(ev["evidence_verdict"], ev["metrics"], ev["data_gaps"])
 
     @step(depends_on=["competitor_data"], name="竞品画像", timeout_sec=60)
     async def competitor_profile(self, ctx):
@@ -154,14 +214,16 @@ class SelectionDecision:
         return {"pain_points": pains, "source": "inferred",
                 "note": "非评论实证，基于卖点/评分的 LLM 推断（Phase 1 降级）"}
 
-    # ── Layer 2 决策层 ──────────────────────────
-    @step(depends_on=["market_assess", "competitor_profile", "review_pain"],
+    # ── Layer 3 决策层 ──────────────────────────
+    @step(depends_on=["selection_decision_gate", "competitor_profile", "review_pain"],
           name="差异化分析", timeout_sec=180, run_if=_market_go)
     async def differentiation(self, ctx):
         """Decision1：是否存在差异化切入点（LLM 推理 + 保守兜底）"""
         from langchain_core.messages import HumanMessage, SystemMessage
+        gate = ctx.outputs["selection_decision_gate"]
         material = {
-            "market": ctx.outputs["market_assess"]["metrics"],
+            "market": gate["metrics"],
+            "evidence_verdict": gate.get("evidence_verdict"),
             "profiles": ctx.outputs["competitor_profile"]["profiles"],
             "pain_points": (ctx.outputs.get("review_pain") or {}).get("pain_points", []),
         }
@@ -197,7 +259,7 @@ class SelectionDecision:
         params = ctx.inputs.get("finance") or {}
         return run_finance(params)
 
-    # ── Layer 3 验证层 ──────────────────────────
+    # ── Layer 4 验证层 ──────────────────────────
     @step(depends_on=["finance_model"], name="AI评审团",
           timeout_sec=300, run_if=_finance_pass)
     async def review_panel(self, ctx):
@@ -205,28 +267,32 @@ class SelectionDecision:
         summary = {
             "category": ctx.inputs.get("category"),
             "platforms": ctx.inputs.get("platforms"),
-            "market": ctx.outputs["market_assess"]["metrics"],
+            "market": ctx.outputs["selection_decision_gate"]["metrics"],
+            "evidence_verdict": ctx.outputs["selection_decision_gate"].get("evidence_verdict"),
             "differentiation": ctx.outputs["differentiation"],
             "finance": ctx.outputs["finance_model"]["final_model"],
         }
         return await run_panel(summary, size=int(ctx.inputs.get("panel_size", 7)))
 
-    # ── Layer 4 产出 ────────────────────────────
-    @step(depends_on=["market_assess", "differentiation",
+    # ── Layer 5 产出 ────────────────────────────
+    @step(depends_on=["selection_decision_gate", "differentiation",
                        "finance_model", "review_panel"],
           name="决策报告", timeout_sec=60)
     async def decision_report(self, ctx):
         outputs = ctx.outputs
+        gate = outputs.get("selection_decision_gate") or {}
         checks = {
-            "market": (outputs.get("market_assess") or {}).get("verdict") == "go",
+            "market": gate.get("verdict") == "go",
             "differentiation": (outputs.get("differentiation") or {}).get("verdict") == "go",
             "finance": (outputs.get("finance_model") or {}).get("verdict") == "pass",
             "panel": (outputs.get("review_panel") or {}).get("verdict") == "pass",
         }
         failed = [k for k, ok in checks.items() if not ok]
         verdict = "go" if not failed else "no_go"
+        recommendation = _recommendation_of(verdict, gate.get("recommendation_cap"))
         report_md = build_report(ctx.inputs, outputs, verdict=verdict, failed_gates=failed)
         task_id = ctx.inputs.get("task_id")
+        decision_id = None
         if task_id:
             sd_store = get_selection_decision_store()
             # 直跑/测试场景无 API 预建行：用公共接口补建后回写
@@ -234,7 +300,32 @@ class SelectionDecision:
             sd_store.update_result(
                 task_id, status="success", verdict=verdict,
                 report_md=report_md, trace_id=ctx.trace_id or "")
-        return {"verdict": verdict, "failed_gates": failed, "report_md": report_md}
+            # decision_log 留痕（批次3）：快照不可变；失败不阻塞报告产出
+            try:
+                decision_id = sd_store.record_decision(
+                    task_id=task_id,
+                    candidate_id=f"category:{ctx.inputs.get('category') or 'unknown'}",
+                    category=ctx.inputs.get("category"),
+                    evidence_snapshot={
+                        "evidence_verdict": gate.get("evidence_verdict"),
+                        "metrics": gate.get("metrics") or {},
+                        "data_gaps": gate.get("data_gaps") or [],
+                    },
+                    score_snapshot={
+                        "differentiation": (outputs.get("differentiation") or {}).get("verdict"),
+                        "finance": (outputs.get("finance_model") or {}).get("final_model") or {},
+                        "panel": (outputs.get("review_panel") or {}).get("verdict"),
+                        "recommendation_cap": gate.get("recommendation_cap"),
+                        "monitor_keywords": (outputs.get("review_pain") or {}).get("pain_points", []),
+                    },
+                    recommendation=recommendation,
+                )
+            except Exception as e:  # noqa: BLE001 — 留痕失败仅告警
+                logger.warning(f"[SelectionDecision] decision_log 留痕失败: {e}")
+        return {"verdict": verdict, "recommendation": recommendation,
+                "evidence_verdict": gate.get("evidence_verdict"),
+                "decision_id": decision_id,
+                "failed_gates": failed, "report_md": report_md}
 
 
 __all__ = ["SelectionDecision"]

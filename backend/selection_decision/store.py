@@ -28,7 +28,34 @@ CREATE TABLE IF NOT EXISTS selection_tasks (
     finished_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sd_tasks_created ON selection_tasks(created_at DESC);
+
+-- 批次3：decision_log — 决策留痕与结果反馈闭环（计划书批次3 数据模型定稿）
+-- 不可变原则：evidence_snapshot / score_snapshot 写入后禁止 UPDATE；
+-- 后续改权重/重抓数据一律新增 decision_version 行（见触发器 + 应用层只读封装）
+CREATE TABLE IF NOT EXISTS decision_log (
+    decision_id       TEXT PRIMARY KEY,
+    task_id           TEXT,
+    candidate_id      TEXT NOT NULL,
+    category          TEXT,
+    decision_version  INTEGER NOT NULL DEFAULT 1,
+    evidence_snapshot TEXT NOT NULL,
+    score_snapshot    TEXT NOT NULL,
+    recommendation    TEXT NOT NULL,
+    user_decision     TEXT,
+    decision_at       TEXT NOT NULL,
+    actual_metrics    TEXT,
+    feedback_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_dlog_candidate ON decision_log(candidate_id, decision_version DESC);
+CREATE TRIGGER IF NOT EXISTS trg_decision_log_snapshot_immutable
+BEFORE UPDATE ON decision_log
+WHEN OLD.evidence_snapshot IS NOT NEW.evidence_snapshot
+  OR OLD.score_snapshot IS NOT NEW.score_snapshot
+BEGIN
+    SELECT RAISE(ABORT, 'decision_log 快照不可变：evidence_snapshot/score_snapshot 禁止更新，请新增 decision_version 行');
+END;
 """
+
 
 
 class SelectionDecisionStore:
@@ -144,6 +171,93 @@ class SelectionDecisionStore:
             d["inputs"] = _json.loads(d.pop("inputs_json"))
         except (TypeError, ValueError):
             d["inputs"] = {}
+        return d
+
+    # ==================== decision_log（批次3：决策留痕与反馈闭环） ====================
+    # 证据/评分快照一旦写入不可变（触发器兜底）；可变字段仅限
+    # user_decision / actual_metrics / feedback_at，且各有专用方法。
+
+    def record_decision(self, *, task_id: str | None, candidate_id: str,
+                        category: str | None, evidence_snapshot: dict[str, Any],
+                        score_snapshot: dict[str, Any], recommendation: str) -> str:
+        """记录一次决策（快照不可变）。同一 candidate 自动递增 decision_version。"""
+        decision_id = uuid.uuid4().hex[:12]
+        with self._lock, self._conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(decision_version), 0) AS v FROM decision_log WHERE candidate_id = ?",
+                (candidate_id,),
+            ).fetchone()
+            version = (row["v"] if row else 0) + 1
+            conn.execute(
+                """INSERT INTO decision_log
+                   (decision_id, task_id, candidate_id, category, decision_version,
+                    evidence_snapshot, score_snapshot, recommendation, decision_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (decision_id, task_id, candidate_id, category, version,
+                 _json.dumps(evidence_snapshot, ensure_ascii=False, default=str),
+                 _json.dumps(score_snapshot, ensure_ascii=False, default=str),
+                 recommendation,
+                 datetime.now().isoformat(timespec="seconds")),
+            )
+            conn.commit()
+        logger.info(f"[SelectionDecision:store] 决策留痕 {decision_id} v{version} "
+                    f"candidate={candidate_id} recommendation={recommendation}")
+        return decision_id
+
+    def set_user_decision(self, decision_id: str, user_decision: str) -> bool:
+        """回填用户拍板（adopted / rejected / deferred）。"""
+        with self._lock, self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE decision_log SET user_decision = ? WHERE decision_id = ?",
+                (user_decision, decision_id),
+            )
+            conn.commit()
+        return cur.rowcount > 0
+
+    def set_feedback(self, decision_id: str, actual_metrics: dict[str, Any]) -> bool:
+        """回填事后真实表现（销量/评价/收益等），同时记 feedback_at。"""
+        with self._lock, self._conn() as conn:
+            cur = conn.execute(
+                """UPDATE decision_log SET actual_metrics = ?, feedback_at = ?
+                   WHERE decision_id = ?""",
+                (_json.dumps(actual_metrics, ensure_ascii=False, default=str),
+                 datetime.now().isoformat(timespec="seconds"), decision_id),
+            )
+            conn.commit()
+        return cur.rowcount > 0
+
+    def get_decision(self, decision_id: str) -> dict[str, Any] | None:
+        with self._lock, self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM decision_log WHERE decision_id = ?", (decision_id,)
+            ).fetchone()
+        return self._decision_row_to_dict(row) if row else None
+
+    def list_decisions(self, candidate_id: str | None = None,
+                       limit: int = 50) -> list[dict[str, Any]]:
+        """列出决策记录（默认全量倒序；传 candidate_id 则按该候选过滤）。"""
+        with self._lock, self._conn() as conn:
+            if candidate_id:
+                rows = conn.execute(
+                    """SELECT * FROM decision_log WHERE candidate_id = ?
+                       ORDER BY decision_version DESC LIMIT ?""",
+                    (candidate_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM decision_log ORDER BY decision_at DESC, rowid DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        return [self._decision_row_to_dict(r) for r in rows]
+
+    @staticmethod
+    def _decision_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+        d = dict(row)
+        for key in ("evidence_snapshot", "score_snapshot", "actual_metrics"):
+            try:
+                d[key] = _json.loads(d[key]) if d.get(key) else {}
+            except (TypeError, ValueError):
+                d[key] = {}
         return d
 
 

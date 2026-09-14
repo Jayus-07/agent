@@ -71,7 +71,9 @@ def test_dag_layers_structure():
     dag = DAG({name: cfg for name, (_, cfg) in steps.items()})
     layers = dag.layers
     assert layers[0] == ["competitor_data"]
-    assert set(layers[1]) == {"market_assess", "competitor_profile", "review_pain"}
+    # 批次3：评估与决策分离——Layer1 证据评估，Layer2 市场门控
+    assert set(layers[1]) == {"market_evidence_assess", "competitor_profile", "review_pain"}
+    assert layers[2] == ["selection_decision_gate"]
     assert layers[-1] == ["decision_report"]
 
 
@@ -84,13 +86,23 @@ def test_full_run_happy_path_go(patched_env):
     ctx = asyncio.run(WorkflowExecutor(registry=reg).run("selection_decision", inputs=inputs))
     assert ctx.status == "success"
     assert ctx.outputs["decision_report"]["verdict"] == "go"
+    # 批次3：证据充分 → 推荐档位 recommend
+    assert ctx.outputs["decision_report"]["recommendation"] == "recommend"
+    assert ctx.outputs["decision_report"]["evidence_verdict"] == "sufficient"
     assert "🚀 Go" in ctx.outputs["decision_report"]["report_md"]
     row = patched_env.get("t-happy")
     assert row["status"] == "success" and row["verdict"] == "go"
+    # decision_log 留痕（快照不可变，批次3）
+    decisions = patched_env.list_decisions(candidate_id="category:蓝牙耳机")
+    assert len(decisions) == 1
+    d = decisions[0]
+    assert d["recommendation"] == "recommend"
+    assert d["evidence_snapshot"]["evidence_verdict"] == "sufficient"
+    assert d["score_snapshot"]["recommendation_cap"] is None
 
 
 def test_market_no_go_short_circuits(patched_env, monkeypatch):
-    """候选不足 3 个 → 市场评估 no_go → 后续决策环节被 run_if 跳过 → No-Go 报告"""
+    """候选仅 1 个 → 证据不足 → 门控硬禁 go → 后续决策环节 run_if 跳过 → No-Go 报告"""
     import backend.orchestration.workflows.selection_decision as wf_mod
     class _TinyStore:
         def list_watch(self, enabled_only=True):
@@ -108,3 +120,24 @@ def test_market_no_go_short_circuits(patched_env, monkeypatch):
     assert "finance_model" in ctx.skip_steps
     assert "review_panel" in ctx.skip_steps
     assert ctx.outputs["decision_report"]["verdict"] == "no_go"
+    # 证据不足路径：blocked_by_evidence + 推荐 reject
+    assert ctx.outputs["decision_report"]["evidence_verdict"] == "insufficient"
+    assert ctx.outputs["decision_report"]["recommendation"] == "reject"
+    assert "无法决策" in ctx.outputs["decision_report"]["report_md"]
+
+
+def test_partial_evidence_caps_recommendation(patched_env, monkeypatch):
+    """批次3：partial 证据（候选 2 个）→ 门控 no_go 不变，
+    但纯函数层面验证推荐上限为 cautious"""
+    from backend.orchestration.workflows.selection_decision import (
+        _evidence_verdict, _recommendation_of, evaluate_gate)
+
+    assert _evidence_verdict(2, 500, True) == "partial"
+    gate = evaluate_gate("partial", {"candidate_count": 2, "total_reviews": 500}, [])
+    assert gate["recommendation_cap"] == "cautious"
+    assert _recommendation_of("go", "cautious") == "cautious"
+    assert _recommendation_of("go", None) == "recommend"
+    assert _recommendation_of("no_go", None) == "reject"
+    # insufficient 硬门控
+    gate2 = evaluate_gate("insufficient", {"candidate_count": 1, "total_reviews": 0}, [])
+    assert gate2["verdict"] == "no_go" and gate2["blocked_by_evidence"] is True

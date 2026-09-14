@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any
 
 GATE_LABELS = {
-    "market": "市场评估（Q1）",
+    "market": "证据评估与市场门控",
     "differentiation": "差异化分析",
     "finance": "财务测算",
     "panel": "AI 评审团",
@@ -30,28 +30,43 @@ def build_report(inputs: dict[str, Any], outputs: dict[str, Any],
         f"- 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}",
         f"- 品类关键词：{inputs.get('category', '-')}",
         f"- 目标平台：{'、'.join(inputs.get('platforms') or []) or '-'}",
-        f"- **最终决策：{'🚀 Go — 建议入场' if verdict == 'go' else '❌ No-Go — 不建议入场'}**",
     ]
+    cap = ((outputs.get("selection_decision_gate") or {}).get("recommendation_cap"))
+    if verdict == "go" and cap == "cautious":
+        lines.append("- **最终决策：⚠️ Go — 谨慎入场（证据部分充分，建议小步试错）**")
+    else:
+        lines.append(f"- **最终决策：{'🚀 Go — 建议入场' if verdict == 'go' else '❌ No-Go — 不建议入场'}**")
     if failed_gates:
         lines += ["- 未通过环节：" + "、".join(
             GATE_LABELS.get(g, g) for g in failed_gates), ""]
 
-    # ── 市场评估 ──
-    market = outputs.get("market_assess")
-    lines += ["", "## 一、市场评估（Q1：这个市场要不要做）", ""]
-    if _skipped(market):
-        lines.append(f"本环节未执行（{market.get('reason', '前置条件未满足')}）。")
-    elif market:
-        m = market.get("metrics") or {}
+    # ── 市场证据评估 + 决策门控（批次3：两段式）──
+    evidence = outputs.get("market_evidence_assess")
+    gate = outputs.get("selection_decision_gate")
+    lines += ["", "## 一、市场证据评估与门控（Q1：这个市场要不要做）", ""]
+    if evidence and not _skipped(evidence):
+        ev_label = {"sufficient": "充分", "partial": "部分充分",
+                    "insufficient": "不足"}.get(evidence.get("evidence_verdict"),
+                                               evidence.get("evidence_verdict", "-"))
+        lines.append(f"- 证据资格：**{ev_label}**")
+        if evidence.get("data_gaps"):
+            lines.append("- ⚠️ 数据缺口：" + "；".join(evidence["data_gaps"]))
+    if _skipped(gate):
+        lines.append(f"决策门控未执行（{gate.get('reason', '前置条件未满足')}）。")
+    elif gate:
+        m = gate.get("metrics") or {}
+        blocked = gate.get("blocked_by_evidence")
+        conclusion = "不建议" if gate.get("verdict") != "go" else "建议继续"
+        if blocked:
+            conclusion = "**证据不足，无法决策**"
         lines += [
-            f"- 结论：**{'建议继续' if market.get('verdict') == 'go' else '不建议'}**",
+            f"- 门控结论：**{conclusion}**"
+            + (f"（{gate.get('reason')}）" if gate.get("reason") and not blocked else ""),
             f"- 候选竞品数：{m.get('candidate_count', '-')}（代理指标，非真实市场体量）",
             f"- 价格带：{m.get('price_min', '-')} ~ {m.get('price_max', '-')}",
             f"- 评价总量：{m.get('total_reviews', '-')}（需求热度代理）",
             f"- TOP3 评价集中度：{m.get('top3_review_share', '-')}",
         ]
-        if market.get("data_gaps"):
-            lines.append("- ⚠️ 数据缺口：" + "；".join(market["data_gaps"]))
     else:
         lines.append("本环节未执行（前置条件未满足）。")
 
@@ -67,6 +82,10 @@ def build_report(inputs: dict[str, Any], outputs: dict[str, Any],
         if diff.get("reason"):
             lines.append(f"- 依据：{diff['reason']}")
         lines.append("- ⚠️ Phase 1 痛点来源为 LLM 推断（非评论实证），仅供参考。")
+        pains = (outputs.get("review_pain") or {}).get("pain_points") or []
+        if pains:
+            lines.append("- 建议监控关键词（痛点 Top，供 watchlist 采集参考）："
+                         + "、".join(pains[:5]))
     else:
         lines.append("本环节未执行（前置条件未满足）。")
 
