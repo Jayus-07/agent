@@ -63,10 +63,11 @@ def test_semantic_split_by_topic_boundary():
         raw_text="主题A第一句。主题A第二句。主题B第一句。主题B第二句。",
     )
     embedding = _FakeEmbedding({
-        "主题A第一句": [1.0, 0.0],
-        "主题A第二句": [0.9, 0.1],   # 与 A1 相似
-        "主题B第一句": [0.1, 0.9],   # 与 A2 不相似 → 边界
-        "主题B第二句": [0.0, 1.0],   # 与 B1 相似
+        # C4 起句子保留原标点，fake 映射按带标点整句查
+        "主题A第一句。": [1.0, 0.0],
+        "主题A第二句。": [0.9, 0.1],   # 与 A1 相似
+        "主题B第一句。": [0.1, 0.9],   # 与 A2 不相似 → 边界
+        "主题B第二句。": [0.0, 1.0],   # 与 B1 相似
     })
     chunks = SemanticChunkStrategy()._split_with_embedding(ast, "x.md", embedding)
     assert len(chunks) == 2

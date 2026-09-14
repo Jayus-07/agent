@@ -26,9 +26,15 @@ def test_legal_strategy_splits_by_clause():
         raw_text="第一条 合同双方\n甲方与乙方就...\n第二条 违约责任\n违约方应赔偿...",
     )
     chunks = LegalChunkStrategy().split(ast, "x.txt")
-    assert len(chunks) == 2
-    assert "第一条" in chunks[0].page_content
-    assert "第二条" in chunks[1].page_content
+    # C1 起：2 条款 leaf + 1 个虚拟 parent（2 条 < 5 条/组 → 单 parent）
+    assert len(chunks) == 3
+    leaves = [c for c in chunks if c.metadata["granularity"] == "leaf"]
+    assert "第一条" in leaves[0].page_content
+    assert "第二条" in leaves[1].page_content
+    parents = [c for c in chunks if c.metadata["granularity"] == "parent"]
+    assert len(parents) == 1
+    assert all(c.metadata["parent_chunk_id"] == parents[0].metadata["chunk_id"]
+               for c in leaves)
 
 
 def test_legal_strategy_no_clause_single_chunk():

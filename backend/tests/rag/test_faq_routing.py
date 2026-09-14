@@ -65,9 +65,13 @@ def test_qa_strategy_handles_qa_nodes():
         ]),
     )
     chunks = QAChunkStrategy().split(ast, "faq.md")
-    assert len(chunks) == 1
-    assert chunks[0].page_content == "Q：怎么退货？\nA：提交申请。"
-    assert all(c.metadata["granularity"] == "leaf" for c in chunks)
+    # C1 起：1 leaf + 1 文档级虚拟 parent
+    assert len(chunks) == 2
+    leaves = [c for c in chunks if c.metadata["granularity"] == "leaf"]
+    assert leaves[0].page_content == "Q：怎么退货？\nA：提交申请。"
+    parents = [c for c in chunks if c.metadata["granularity"] == "parent"]
+    assert len(parents) == 1
+    assert leaves[0].metadata["parent_chunk_id"] == parents[0].metadata["chunk_id"]
 
 
 def test_qa_strategy_handles_orphan_answer():
@@ -78,8 +82,10 @@ def test_qa_strategy_handles_orphan_answer():
         ]),
     )
     chunks = QAChunkStrategy().split(ast, "faq.md")
-    assert len(chunks) == 1
-    assert "只有答案" in chunks[0].page_content
+    # C1 起：1 leaf + 1 文档级虚拟 parent
+    assert len(chunks) == 2
+    leaves = [c for c in chunks if c.metadata["granularity"] == "leaf"]
+    assert "只有答案" in leaves[0].page_content
 
 
 def test_qa_strategy_chunks_have_required_metadata():

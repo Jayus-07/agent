@@ -119,13 +119,13 @@ class TestMetadataWiring:
         # 隔离重依赖：关键词/实体走假实现，摘要走抽取式（<2000 字）
         from backend.rag.preprocessing.keyword import KeywordResult
         import backend.rag.preprocessing.keyword as kw_mod
-        import backend.rag.preprocessing.metadata as md_mod
+        import backend.rag.preprocessing.entity as entity_mod
 
         monkeypatch.setattr(
             kw_mod, "extract_doc_keywords_typed",
             lambda *a, **k: KeywordResult(),
         )
-        monkeypatch.setattr(md_mod, "extract_entities", lambda *a, **k: {})
+        monkeypatch.setattr(entity_mod, "extract_entities", lambda *a, **k: {})
 
         # 修复后 question_gen 会被 gather 并发调用——此处桩化以隔离 LLM
         import backend.rag.preprocessing.question_gen as qg_mod
@@ -137,25 +137,31 @@ class TestMetadataWiring:
         )
 
         idx = _mk_indexer()
+        # 模拟生产调用形态：_index_file_inner 传入 chunks 文本列表
+        chunks_text = ["第一条 报销标准为每月两千元。", "第二条 请假需提前审批。"]
         result = asyncio.run(
-            idx._build_doc_metadata(_full_text(), dict(_BASE_META))
+            idx._build_doc_metadata(_full_text(), dict(_BASE_META),
+                                    chunks_text=chunks_text)
         )
 
         assert result.get("questions_by_chunk"), (
             "S0 回归：_build_doc_metadata 必须产出非空 questions_by_chunk"
             "（F1 重构漏迁第四任务导致的静默失效）"
         )
+        assert len(result["questions_by_chunk"]) == len(chunks_text), (
+            "问题数组长度必须与 chunk 数对齐"
+        )
 
     def test_metadata_sums_llm_tokens_from_all_sources(self, monkeypatch):
         """1.3b：summary/question 路径 tokens 与 keywords 路径一起进 llm_tokens 口径。"""
         from backend.rag.preprocessing.keyword import KeywordResult
         import backend.rag.preprocessing.keyword as kw_mod
-        import backend.rag.preprocessing.metadata as md_mod
+        import backend.rag.preprocessing.entity as entity_mod
 
         kw = KeywordResult()
         kw.llm_tokens = {"prompt_tokens": 100, "completion_tokens": 20, "cost_usd": 0.1}
         monkeypatch.setattr(kw_mod, "extract_doc_keywords_typed", lambda *a, **k: kw)
-        monkeypatch.setattr(md_mod, "extract_entities", lambda *a, **k: {})
+        monkeypatch.setattr(entity_mod, "extract_entities", lambda *a, **k: {})
 
         import backend.rag.preprocessing.question_gen as qg_mod
         monkeypatch.setattr(
@@ -172,8 +178,10 @@ class TestMetadataWiring:
         )
 
         idx = _mk_indexer()
+        chunks_text = ["第一条 报销标准为每月两千元。", "第二条 请假需提前审批。"]
         result = asyncio.run(
-            idx._build_doc_metadata(_full_text(), dict(_BASE_META))
+            idx._build_doc_metadata(_full_text(), dict(_BASE_META),
+                                    chunks_text=chunks_text)
         )
         tokens = result.get("llm_tokens") or {}
         assert tokens.get("prompt_tokens", 0) >= 100, (
