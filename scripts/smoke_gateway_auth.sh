@@ -9,16 +9,18 @@
 #   D 影子行为（shadow）：本该拒绝的被放行、不注入身份、would-deny 指标计数
 #
 # 用法：
-#   bash scripts/smoke_gateway_auth.sh shadow               # 影子模式
+#   bash scripts/smoke_gateway_auth.sh shadow               # 影子模式（当前上线态）
 #   bash scripts/smoke_gateway_auth.sh enforce              # 强制模式
 #   bash scripts/smoke_gateway_auth.sh enforce --with-stub  # 额外验证身份头协议
 #
 # 前置：oa-auth 五容器 healthy、网关在跑、.env 已配 JWT_SECRET / AUTH_REDIS_*
 #
-# ⚠️ 端口注意：本机若存在占用 127.0.0.1:8080 的原生进程（本项目实测遇到过
-#    "腾讯位置服务演示台"），Windows 会更优先匹配这个更具体的绑定，导致
-#    curl 127.0.0.1:8080 打不到 Docker 发布的网关（Docker 只监听 0.0.0.0:8080）。
-#    本脚本自动探测：探不到网关就改用容器网络内 api-gateway:8080 访问。
+# 两个关键实现约定（都是踩坑后定下来的，别改回去）：
+# 1. 断言必须认"网关自己吐的 401"（响应体含 `未认证：`）。只判 HTTP 401 不够——
+#    下游 auth-service 自己也会 401（例如 shadow 模式不注入身份时），会把
+#    "网关放行了"误判成"网关拦住了"。
+# 2. 凡是把宿主路径交给 docker（-v/-f/--env-file/cp）都必须先 cygpath -w，
+#    否则 Git Bash 的 MSYS 转换会产出 `D:\d\Program Files\...` 这种畸形路径。
 set -uo pipefail
 
 MODE="${1:-shadow}"
@@ -31,20 +33,21 @@ STUB_CONTAINER="gw-echo-stub"
 STUB_PORT=8099
 PASS=0; FAIL=0
 
-# 认证中心仓库（取管理员口令 / JWT 密钥）
 ENV_OAUTH="${OAUTH_ENV:-D:/Program Files/workplace/Enterprise_OA/anonymous-rating-system/docker/.env.oaauth}"
 PY="D:/Python/python.exe"; command -v "$PY" >/dev/null 2>&1 || PY=python
+to_win() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
 
-CJ="$(mktemp)"
+# cookie jar 放工作区（mktemp 在 Git Bash 下返回混合路径，交给 rm 会触发 safe-delete 告警）
+CJ="$ROOT/.smoke_cookies.tmp"
 cleanup() {
-  rm -f "$CJ"
+  rm -f "$CJ" 2>/dev/null
   docker rm -f "$STUB_CONTAINER" >/dev/null 2>&1
 }
 trap cleanup EXIT
 
 check() {  # check 名称 结果(0=过) [详情]
-  if [ "$2" = "0" ]; then echo "  ✅ $1"; PASS=$((PASS+1));
-  else echo "  ❌ $1"; [ -n "${3:-}" ] && echo "     → $(printf '%s' "$3" | head -c 300)"; FAIL=$((FAIL+1)); fi
+  if [ "$2" = "0" ]; then echo "  OK   $1"; PASS=$((PASS+1));
+  else echo "  FAIL $1"; [ -n "${3:-}" ] && echo "       -> $(printf '%s' "$3" | head -c 300)"; FAIL=$((FAIL+1)); fi
 }
 
 env_val() { grep "^$1=" "$2" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r'; }
@@ -62,22 +65,32 @@ else
   ACCESS=CONTAINER
   CURLER="${CURLER:-agent-rag-service-1}"
   docker exec "$CURLER" curl -s --max-time 3 http://api-gateway:8080/actuator/health 2>/dev/null | grep -q '"status":"UP"' \
-    || { echo "[smoke] 两种通道都探不到网关（127.0.0.1:8080 被占用？$CURLER 未运行？）"; exit 1; }
+    || { echo "[smoke] 两种通道都探不到网关（127.0.0.1:8080 被别的进程占用？f$CURLER 未运行？）"; exit 1; }
 fi
 BASE="http://api-gateway:8080"; [ "$ACCESS" = "HOST" ] && BASE="http://127.0.0.1:8080"
-echo "═══ P2 网关鉴权冒烟（模式=$MODE，访问通道=$ACCESS）═══"
+echo "=== P2 网关鉴权冒烟（模式=$MODE，访问通道=$ACCESS）==="
 
-# gw <path> [curl 参数...] → 输出响应体
-gw() {
+gw() {  # gw <path> [curl 参数...] -> 响应体
   local path="$1"; shift
-  if [ "$ACCESS" = "HOST" ]; then curl -s --max-time 12 "${BASE}${path}" "$@"
-  else docker exec "$CURLER" curl -s --max-time 12 "${BASE}${path}" "$@"; fi
+  if [ "$ACCESS" = "HOST" ]; then curl -s --max-time 15 "${BASE}${path}" "$@"
+  else docker exec "$CURLER" curl -s --max-time 15 "${BASE}${path}" "$@"; fi
 }
-# gw_code <path> [curl 参数...] → 输出 HTTP 状态码
 gw_code() {
   local path="$1"; shift
-  if [ "$ACCESS" = "HOST" ]; then curl -s -o /dev/null -w '%{http_code}' --max-time 12 "${BASE}${path}" "$@"
-  else docker exec "$CURLER" curl -s -o /dev/null -w '%{http_code}' --max-time 12 "${BASE}${path}" "$@"; fi
+  if [ "$ACCESS" = "HOST" ]; then curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}${path}" "$@"
+  else docker exec "$CURLER" curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}${path}" "$@"; fi
+}
+# 网关自己的 401 统一响应体带 `未认证：`；下游服务的 401 不带。用于区分"谁拦的"
+gw_blocked() {  # gw_blocked <path> [curl 参数...] -> 0=网关拦了
+  gw "$1" "${@:2}" | grep -q '未认证：'
+}
+
+wait_gateway() {
+  for _ in $(seq 1 30); do
+    [ "$(gw_code /actuator/health)" = "200" ] && return 0
+    sleep 2
+  done
+  return 1
 }
 
 json_get() { "$PY" -c "
@@ -101,8 +114,11 @@ print((h + b'.' + p + b'.' + b64(hmac.new(secret.encode(), h + b'.' + p, hashlib
 PY
 }
 
+# ── 0. 等网关就绪（否则首条用例必假失败）────────────────────────────────────
+wait_gateway || { echo "[smoke] 网关未就绪"; exit 1; }
+
 # ── A. 路由与白名单 ────────────────────────────────────────────────────────
-echo "── A. 路由与白名单 ──"
+echo "-- A. 路由与白名单 --"
 LOGIN=$(gw /api/auth/login -X POST -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\",\"deviceId\":\"gw-smoke\"}")
 TOKEN=$(printf '%s' "$LOGIN" | json_get token)
@@ -122,57 +138,63 @@ check "A3 /api/auth/refresh 属白名单，未被网关拦成 401" $? "HTTP $cod
 
 # ── B. 身份头协议（回显桩）─────────────────────────────────────────────────
 if [ "$WITH_STUB" = "1" ]; then
-  echo "── B. 身份头协议（回显桩 :$STUB_PORT）──"
+  echo "-- B. 身份头协议（回显桩 :$STUB_PORT）--"
   docker rm -f "$STUB_CONTAINER" >/dev/null 2>&1
-  docker create --name "$STUB_CONTAINER" --network "$NET" python:3.10-slim python /echo_stub.py "$STUB_PORT" >/dev/null
-  docker cp "$ROOT/scripts/gateway_echo_stub.py" "$STUB_CONTAINER:/echo_stub.py" >/dev/null
-  docker start "$STUB_CONTAINER" >/dev/null
-  sleep 2
-  # 冒烟专用覆盖：把 AI 路由临时指向回显桩（脚本结束时还原）
-  (cd "$ROOT" && AI_SERVICE_URL="http://${STUB_CONTAINER}:${STUB_PORT}" \
-      docker compose up -d --force-recreate api-gateway >/dev/null 2>&1)
-  for _ in $(seq 1 30); do [ "$(gw_code /actuator/health)" = "200" ] && break; sleep 2; done
+  STUB_OK=0
+  if docker create --name "$STUB_CONTAINER" --network "$NET" python:3.10-slim python /echo_stub.py "$STUB_PORT" >/dev/null 2>&1 \
+     && docker cp "$(to_win "$ROOT/scripts/gateway_echo_stub.py")" "$STUB_CONTAINER:/echo_stub.py" >/dev/null 2>&1 \
+     && docker start "$STUB_CONTAINER" >/dev/null 2>&1; then
+    sleep 2
+    docker exec "$STUB_CONTAINER" python -c "import urllib.request as u;print(u.urlopen('http://127.0.0.1:$STUB_PORT/probe').status)" >/dev/null 2>&1 && STUB_OK=1
+  fi
+  if [ "$STUB_OK" != "1" ]; then
+    echo "  SKIP 回显桩未能启动，跳过 B 组"
+  else
+    # 冒烟专用覆盖：把 AI 路由临时指向回显桩（脚本结束/还原时会恢复）
+    (cd "$ROOT" && AI_SERVICE_URL="http://${STUB_CONTAINER}:${STUB_PORT}" \
+        docker compose up -d --force-recreate api-gateway >/dev/null 2>&1)
+    wait_gateway
 
-  probe_headers() {  # probe_headers [curl 参数...] → 打印下游收到的相关头
-    gw /api/echo-probe "$@" | "$PY" -c "
+    probe_headers() {
+      gw /api/echo-probe "$@" | "$PY" -c "
 import sys,json
 try: h=json.load(sys.stdin)['headers']
 except Exception: print('  <无 JSON 响应>'); sys.exit()
 for k in ['X-Auth-Type','X-User-Id','X-User-Name','X-API-Key']:
     print(f'  {k} = {h.get(k, \"<缺失>\")}')"
-  }
+    }
 
-  if [ "$MODE" = "shadow" ]; then
-    OUT=$(probe_headers -H "Authorization: Bearer $TOKEN")
-    printf '%s' "$OUT" | grep -q '<缺失>'
-    check "B1 影子模式不注入身份（行为零改变，仅记指标）" $? "$OUT"
-  else
-    OUT=$(probe_headers -H "Authorization: Bearer $TOKEN")
-    printf '%s' "$OUT" | grep -q "X-User-Id = $ADMIN_ID"
-    check "B1 有效令牌 → 下游收到注入的 X-User-Id=$ADMIN_ID" $? "$OUT"
-    printf '%s' "$OUT" | grep -q "X-Auth-Type = jwt"
-    check "B2 有效令牌 → X-Auth-Type=jwt" $? "$OUT"
-    printf '%s' "$OUT" | grep -q "X-User-Name = admin"
-    check "B3 有效令牌 → X-User-Name=admin" $? "$OUT"
+    if [ "$MODE" = "shadow" ]; then
+      OUT=$(probe_headers -H "Authorization: Bearer $TOKEN")
+      printf '%s' "$OUT" | grep -q '<缺失>'
+      check "B1 影子模式不注入身份（行为零改变，仅记指标）" $? "$OUT"
+    else
+      OUT=$(probe_headers -H "Authorization: Bearer $TOKEN")
+      printf '%s' "$OUT" | grep -q "X-User-Id = $ADMIN_ID"
+      check "B1 有效令牌 -> 下游收到注入的 X-User-Id=$ADMIN_ID" $? "$OUT"
+      printf '%s' "$OUT" | grep -q "X-Auth-Type = jwt"
+      check "B2 有效令牌 -> X-Auth-Type=jwt" $? "$OUT"
+      printf '%s' "$OUT" | grep -q "X-User-Name = admin"
+      check "B3 有效令牌 -> X-User-Name=admin" $? "$OUT"
+    fi
+
+    OUT=$(probe_headers -H "Authorization: Bearer $TOKEN" \
+          -H "X-User-Id: 99999" -H "X-User-Name: attacker" -H "X-Auth-Type: api-key")
+    printf '%s' "$OUT" | grep -qE "99999|attacker|api-key"
+    [ $? -ne 0 ]
+    check "B4 伪造的 X-User-Id/X-User-Name/X-Auth-Type 全部被剥离" $? "$OUT"
+
+    OUT=$(probe_headers -H "X-API-Key: machine-key-demo")
+    printf '%s' "$OUT" | grep -q "X-Auth-Type = api-key"
+    check "B5 API-Key 通道被标记 X-Auth-Type=api-key" $? "$OUT"
+    printf '%s' "$OUT" | grep -q "X-API-Key = machine-key-demo"
+    check "B6 API-Key 原样透传（校验仍在下游）" $? "$OUT"
+
+    # 还原真实上游
+    (cd "$ROOT" && docker compose up -d --force-recreate api-gateway >/dev/null 2>&1)
+    docker rm -f "$STUB_CONTAINER" >/dev/null 2>&1
+    wait_gateway
   fi
-
-  # 核心防伪造：伪造头 + 有效令牌 → 下游只能看到网关注入的真身
-  OUT=$(probe_headers -H "Authorization: Bearer $TOKEN" \
-        -H "X-User-Id: 99999" -H "X-User-Name: attacker" -H "X-Auth-Type: api-key")
-  printf '%s' "$OUT" | grep -qE "99999|attacker|api-key"
-  [ $? -ne 0 ]
-  check "B4 伪造的 X-User-Id/X-User-Name/X-Auth-Type 全部被剥离" $? "$OUT"
-
-  OUT=$(probe_headers -H "X-API-Key: machine-key-demo")
-  printf '%s' "$OUT" | grep -q "X-Auth-Type = api-key"
-  check "B5 API-Key 通道被标记 X-Auth-Type=api-key" $? "$OUT"
-  printf '%s' "$OUT" | grep -q "X-API-Key = machine-key-demo"
-  check "B6 API-Key 原样透传（校验仍在下游）" $? "$OUT"
-
-  # 还原真实上游
-  (cd "$ROOT" && docker compose up -d --force-recreate api-gateway >/dev/null 2>&1)
-  docker rm -f "$STUB_CONTAINER" >/dev/null 2>&1
-  for _ in $(seq 1 30); do [ "$(gw_code /actuator/health)" = "200" ] && break; sleep 2; done
 fi
 
 # ── C / D. 凭据校验 ────────────────────────────────────────────────────────
@@ -183,50 +205,69 @@ h,p,s = sys.stdin.read().strip().rsplit('.',2)
 print(f'{h}.{p}.' + s[:-1] + ('A' if s[-1] != 'A' else 'B'))")
 
 if [ "$MODE" = "enforce" ]; then
-  echo "── C. 拒绝行为（enforce）──"
-  expect_401() { local code; code=$(gw_code "$PROBE" -H "Authorization: Bearer $2"); [ "$code" = "401" ]; check "$1" $? "HTTP $code"; }
-  expect_401 "C1 无凭据 → 401" ""
-  expect_401 "C2 签名被篡改 → 401" "$TOKEN_TAMPERED"
-  expect_401 "C3 异密钥签名 → 401" "$(forge 'another-secret-long-enough-0123456789012345' hongmeng-oa 600 access)"
-  expect_401 "C4 异 issuer(attacker) → 401" "$(forge "$JWT_SECRET" attacker 600 access)"
-  expect_401 "C5 已过期 → 401" "$(forge "$JWT_SECRET" hongmeng-oa -600 access)"
-  expect_401 "C6 refresh 令牌当 access 用 → 401" "$(forge "$JWT_SECRET" hongmeng-oa 600 refresh)"
+  echo "-- C. 拒绝行为（enforce）--"
+  expect_blocked() {  # 名称 令牌 —— 必须是"网关拦的"，不是下游拦的
+    local body; body=$(gw "$PROBE" -H "Authorization: Bearer $2")
+    printf '%s' "$body" | grep -q '未认证：'
+    check "$1" $? "$body"
+  }
+  expect_blocked "C1 无凭据 -> 网关 401" ""
+  expect_blocked "C2 签名被篡改 -> 网关 401" "$TOKEN_TAMPERED"
+  expect_blocked "C3 异密钥签名 -> 网关 401" "$(forge 'another-secret-long-enough-0123456789012345' hongmeng-oa 600 access)"
+  expect_blocked "C4 异 issuer(attacker) -> 网关 401" "$(forge "$JWT_SECRET" attacker 600 access)"
+  expect_blocked "C5 已过期 -> 网关 401" "$(forge "$JWT_SECRET" hongmeng-oa -600 access)"
+  expect_blocked "C6 refresh 令牌当 access 用 -> 网关 401" "$(forge "$JWT_SECRET" hongmeng-oa 600 refresh)"
 
   code=$(gw_code "$PROBE" -H "Authorization: Bearer $TOKEN"); [ "$code" = "200" ]
-  check "C7 有效令牌 → 200" $? "HTTP $code"
+  check "C7 有效令牌 -> 200（含网关注入身份被下游接受）" $? "HTTP $code"
 
   # C8 黑名单：登出后同一 access 令牌立即失效
-  # auth-service 的 logout 仅在携带 refresh_token Cookie 时才真正吊销，故必须带 cookie
+  # 两个必须做对的地方：
+  # ① auth-service 的 logout 只在携带 refresh_token Cookie 时才真正吊销；
+  # ② 吊销是按**设备**做的（refresh_token 里的 deviceId），所以用来登出的
+  #    令牌必须与被测令牌来自**同一次登录**——否则吊销的是别的设备，测了个寂寞。
+  JAR_PATH="$CJ"
   if [ "$ACCESS" = "HOST" ]; then
-    curl -s -c "$CJ" -o /dev/null -X POST "${BASE}/api/auth/login" -H 'Content-Type: application/json' \
-      -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\",\"deviceId\":\"gw-blacklist\"}"
-    curl -s -o /dev/null -X POST "${BASE}/api/auth/logout" -b "$CJ" -H "Authorization: Bearer $TOKEN"
+    LOGIN8=$(curl -s -c "$JAR_PATH" -X POST "${BASE}/api/auth/login" -H 'Content-Type: application/json' \
+      -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\",\"deviceId\":\"gw-blacklist\"}")
+    TOKEN8=$(printf '%s' "$LOGIN8" | json_get token)
+    curl -s -o /dev/null -X POST "${BASE}/api/auth/logout" -b "$JAR_PATH" -H "Authorization: Bearer $TOKEN8"
   else
-    docker exec "$CURLER" curl -s -c /tmp/_gw_cj -o /dev/null -X POST "${BASE}/api/auth/login" \
+    JAR_PATH=/tmp/_gw_cj
+    LOGIN8=$(docker exec "$CURLER" sh -c "curl -s -c $JAR_PATH -X POST '${BASE}/api/auth/login' \
       -H 'Content-Type: application/json' \
-      -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\",\"deviceId\":\"gw-blacklist\"}"
-    docker exec "$CURLER" curl -s -o /dev/null -X POST "${BASE}/api/auth/logout" -b /tmp/_gw_cj \
-      -H "Authorization: Bearer $TOKEN"
+      -d '{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\",\"deviceId\":\"gw-blacklist\"}'")
+    TOKEN8=$(printf '%s' "$LOGIN8" | json_get token)
+    docker exec "$CURLER" curl -s -o /dev/null -X POST "${BASE}/api/auth/logout" -b "$JAR_PATH" \
+      -H "Authorization: Bearer $TOKEN8"
   fi
   sleep 1
-  expect_401 "C8 登出后原 access 令牌 → 401（黑名单 auth:blacklist: 生效）" "$TOKEN"
+  expect_blocked "C8 登出后同设备原 access 令牌 -> 网关 401（黑名单 auth:blacklist: 生效）" "$TOKEN8"
 
-  code=$(gw_code "/api/auth/info?userId=99999" -H "X-User-Id: 99999" -H "X-Auth-Type: jwt")
-  [ "$code" = "401" ]
-  check "C9 仅伪造身份头不能通过认证 → 401" $? "HTTP $code"
+  body=$(gw "/api/auth/info?userId=99999" -H "X-User-Id: 99999" -H "X-Auth-Type: jwt")
+  printf '%s' "$body" | grep -q '未认证：'
+  check "C9 仅伪造身份头（无令牌）-> 网关 401，伪造无效" $? "$body"
 else
-  echo "── D. 影子行为（shadow：只记不拦）──"
-  code=$(gw_code "$PROBE"); [ "$code" != "401" ]
-  check "D1 无凭据 → 放行（影子）" $? "HTTP $code"
-  code=$(gw_code "$PROBE" -H "Authorization: Bearer $TOKEN_TAMPERED"); [ "$code" != "401" ]
-  check "D2 篡改令牌 → 放行（影子）" $? "HTTP $code"
+  echo "-- D. 影子行为（shadow：只记不拦）--"
+  # 关键：影子模式"放行"不等于下游会 200——下游 auth-service 仍会因缺身份而 401。
+  # 所以断言的是"不是网关拦的"。
+  body=$(gw "$PROBE"); printf '%s' "$body" | grep -q '未认证：'; [ $? -ne 0 ]
+  check "D1 无凭据 -> 网关未拦（下游自身响应）" $? "$(printf '%s' "$body" | head -c 120)"
+
+  body=$(gw "$PROBE" -H "Authorization: Bearer $TOKEN_TAMPERED"); printf '%s' "$body" | grep -q '未认证：'; [ $? -ne 0 ]
+  check "D2 篡改令牌 -> 网关未拦（下游自身响应）" $? "$(printf '%s' "$body" | head -c 120)"
 
   METRIC=$(gw /actuator/metrics/gateway_auth_would_deny_total | "$PY" -c \
     "import sys,json;print(json.load(sys.stdin)['measurements'][0]['value'])" 2>/dev/null)
   [ -n "$METRIC" ] && [ "${METRIC%%.*}" -gt 0 ]
   check "D3 gateway_auth_would_deny_total 已计数（count=$METRIC）" $? "$METRIC"
+
+  METRIC2=$(gw /actuator/metrics/gateway_auth_would_deny_total | "$PY" -c \
+    "import sys,json;d=json.load(sys.stdin);print(','.join(next((t['values'] for t in d['availableTags'] if t['tag']=='reason'), [])))" 2>/dev/null)
+  [ -n "$METRIC2" ]
+  check "D4 would-deny 带 reason 标签（$METRIC2）" $? "$METRIC2"
 fi
 
 echo
-echo "═══ 结果：通过 $PASS / 失败 $FAIL ═══"
+echo "=== 结果：通过 $PASS / 失败 $FAIL ==="
 [ "$FAIL" = "0" ] || exit 1

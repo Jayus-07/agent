@@ -405,5 +405,9 @@ business-service/target/
 api-gateway/target/
 .zcode/
 
+# 网关鉴权冒烟脚本的临时产物
+.smoke_cookies.tmp
+_smoke*.log
+
 # 评测产物（运行时生成）
 data/eval_reports/
