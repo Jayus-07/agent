@@ -187,10 +187,17 @@ def generate_final_answer(
         # ── P1 真 token 级流式：完整 LLM 路径切 llm.stream，边生成边经 sink
         # 推给 SSE；增量聚合为完整回答，行为与 invoke 路径一致 ──
         from backend.config import ENABLE_TOKEN_STREAMING
-        from backend.infra.llm.proxy import emit_stream_delta, extract_chunk_text
+        from backend.infra.llm.proxy import (
+            emit_stream_delta, extract_chunk_reasoning, extract_chunk_text,
+        )
         if ENABLE_TOKEN_STREAMING:
             parts = []
             for chunk in llm.stream(msgs):
+                # 思考链增量（推理模型 reasoning_content）走独立 thinking 事件，
+                # 不计入回答正文
+                reasoning = extract_chunk_reasoning(chunk)
+                if reasoning:
+                    emit_stream_delta(reasoning, kind="thinking")
                 text = extract_chunk_text(chunk)
                 if text:
                     parts.append(text)

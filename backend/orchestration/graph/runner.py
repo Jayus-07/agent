@@ -140,9 +140,18 @@ class GraphRunner:
         }
         streamed = [False]  # 本轮是否发生过真流式 delta
 
-        def _sink(text: str) -> None:
-            """proxy 流式 sink：生成 chunk 增量直接入队（worker/LangGraph 线程调用）。"""
+        def _sink(text: str, kind: str = "answer") -> None:
+            """proxy 流式 sink：生成 chunk 增量直接入队（worker/LangGraph 线程调用）。
+
+            kind="thinking" → 推理模型思考链增量，走独立 thinking 事件；
+            不置 streamed[0]（思考链不算回答输出，全思考零回答时仍走假打字机兜底）。
+            """
             if stop_event is not None and stop_event.is_set():
+                return
+            if kind == "thinking":
+                merged_q.put(("evt", {
+                    "event": "thinking", "data": {"content": text, "ts": time.time()},
+                }))
                 return
             streamed[0] = True
             merged_q.put(("evt", {

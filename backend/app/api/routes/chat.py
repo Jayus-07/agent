@@ -5,6 +5,7 @@ SSE 流式协议 (v2):
   event: status → 宏观阶段切换（纯 node 字段，前端自行映射）
   event: log    → 详细时间线（含 payload 入参/出参）
   event: delta  → 流式内容块（句子级切分，打字机数据源）
+  event: thinking → 思考链增量（推理模型 reasoning_content，"已思考"折叠面板数据源）
   event: done   → 结束信号（elapsed + sources）
   event: error  → 错误/中止
 """

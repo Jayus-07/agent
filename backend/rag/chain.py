@@ -30,7 +30,7 @@ from backend.config import (
     EVIDENCE_TOKEN_BUDGET,
 )
 from backend.infra.llm import llm
-from backend.infra.llm.proxy import emit_stream_delta, extract_chunk_text
+from backend.infra.llm.proxy import emit_stream_delta, extract_chunk_reasoning, extract_chunk_text
 from backend.rag.citation import CitationFormatter
 from backend.rag.context import get_context, set_context
 from backend.rag.evidence_gate import EvidenceGateController
@@ -403,6 +403,11 @@ class RAGChain:
                     mfilter = MetaStreamFilter()
                     is_message = False
                     for chunk in _stuff.stream(inp):
+                        # 思考链增量（推理模型 reasoning_content）先于正文转发：
+                        # 走独立 thinking 事件供前端"已思考"面板，不混入回答正文
+                        reasoning = extract_chunk_reasoning(chunk)
+                        if reasoning:
+                            emit_stream_delta(reasoning, kind="thinking")
                         text = extract_chunk_text(chunk)
                         if not text:
                             continue

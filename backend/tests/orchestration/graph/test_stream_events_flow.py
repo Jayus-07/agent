@@ -117,6 +117,74 @@ def test_stream_events_fallback_typewriter():
     assert out[-1]["event"] == "done"
 
 
+def test_stream_events_thinking_separate_channel():
+    """思考链增量走独立 thinking 事件：与 delta 分流，正文流式语义不变。"""
+    class ThinkingGraph(_FakeGraph):
+        def __init__(self):
+            super().__init__([{"reporter": {"final_answer": "最终回答"}}])
+
+        def stream(self, initial_state, config=None):
+            assert proxy_mod.emit_stream_delta("让我想想", kind="thinking") is True
+            assert proxy_mod.emit_stream_delta("用户在问什么", kind="thinking") is True
+            assert proxy_mod.emit_stream_delta("你好") is True  # 正文 delta（默认 answer）
+            yield from self._events
+
+    sys_obj = _make_system(ThinkingGraph())
+    out = _collect_events(sys_obj)
+
+    thinking = [e["data"]["content"] for e in out if e["event"] == "thinking"]
+    deltas = [e["data"]["content"] for e in out if e["event"] == "delta"]
+    assert "".join(thinking) == "让我想想用户在问什么"
+    assert deltas == ["你好"]
+    assert out[-1]["event"] == "done"
+
+
+def test_thinking_only_does_not_block_fallback_typewriter():
+    """只有思考链、无正文 delta（如思考后 content 为空）→ 假打字机兜底不被抑制。"""
+    class OnlyThinkingGraph(_FakeGraph):
+        def __init__(self):
+            super().__init__([{"reporter": {"final_answer": "兜底回答全文"}}])
+
+        def stream(self, initial_state, config=None):
+            assert proxy_mod.emit_stream_delta("思考中", kind="thinking") is True
+            yield from self._events
+
+    sys_obj = _make_system(OnlyThinkingGraph())
+    out = _collect_events(sys_obj)
+
+    thinking = [e["data"]["content"] for e in out if e["event"] == "thinking"]
+    deltas = [e["data"]["content"] for e in out if e["event"] == "delta"]
+    assert thinking == ["思考中"]
+    assert "".join(deltas) == "兜底回答全文"
+
+
+def test_emit_stream_delta_legacy_single_arg_sink():
+    """旧式单参 sink(text) 兼容：kind 参数经 TypeError 回退仍可达。"""
+    received = []
+    proxy_mod.set_stream_sink(received.append)
+    try:
+        assert proxy_mod.emit_stream_delta("文本", kind="thinking") is True
+    finally:
+        proxy_mod.reset_stream_sink()
+    assert received == ["文本"]
+
+
+def test_extract_chunk_reasoning():
+    """思考链提取：reasoning_content 在 additional_kwargs 上，str/空 kwargs 返回空。"""
+    assert proxy_mod.extract_chunk_reasoning("纯文本") == ""
+
+    reasoning_chunk = type("C", (), {
+        "additional_kwargs": {"reasoning_content": "思考增量"}, "content": "",
+    })()
+    assert proxy_mod.extract_chunk_reasoning(reasoning_chunk) == "思考增量"
+
+    empty_chunk = type("C", (), {"additional_kwargs": {}, "content": ""})()
+    assert proxy_mod.extract_chunk_reasoning(empty_chunk) == ""
+
+    no_kwargs_chunk = type("C", (), {"content": "回答"})()
+    assert proxy_mod.extract_chunk_reasoning(no_kwargs_chunk) == ""
+
+
 def test_stream_events_user_abort():
     """用户中止：产出中止 error，不产出 done。"""
     stop = threading.Event()

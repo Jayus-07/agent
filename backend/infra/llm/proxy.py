@@ -120,9 +120,12 @@ def reset_stream_sink() -> None:
     _stream_sink_var.set(None)
 
 
-def emit_stream_delta(text: str) -> bool:
+def emit_stream_delta(text: str, kind: str = "answer") -> bool:
     """把生成增量转发给当前 sink。无 sink / 空 text / sink 失败均静默跳过。
 
+    Args:
+        text: 增量文本
+        kind: "answer"（默认，正文 delta）或 "thinking"（推理模型思考链增量）
     Returns:
         是否真正转发了（供调用方判断本轮是否发生过流式输出）。
     """
@@ -132,7 +135,11 @@ def emit_stream_delta(text: str) -> bool:
     if sink is None:
         return False
     try:
-        sink(text)
+        try:
+            sink(text, kind)
+        except TypeError:
+            # 兼容旧式单参 sink(text)（测试桩/未升级的调用方）
+            sink(text)
         return True
     except Exception:
         return False
@@ -150,6 +157,20 @@ def extract_chunk_text(chunk) -> str:
             p.get("text", "") for p in c if isinstance(p, dict)
         )
     return str(c) if c else ""
+
+
+def extract_chunk_reasoning(chunk) -> str:
+    """从流式 chunk 提取思考链增量（推理模型 reasoning_content）。
+
+    LangChain 不解析 reasoning_content，思考型模型（deepseek-reasoner /
+    qwen3 thinking）流式期间它挂在 additional_kwargs 上且 content 为空。
+    非思考模型/str chunk 返回空串，调用方零成本跳过。
+    """
+    if isinstance(chunk, str):
+        return ""
+    kw = getattr(chunk, "additional_kwargs", None) or {}
+    reasoning = kw.get("reasoning_content", "")
+    return reasoning if isinstance(reasoning, str) else ""
 
 
 def _get_provider_for(model_name: str) -> str:
