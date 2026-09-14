@@ -1,0 +1,17 @@
+{
+  "name": "feasibility_10",
+  "description": "Feasibility smoke: 10 stratified cases (~5min). 2 smoke / 6 core / 2 hard; 8 positive + 2 reject; covers single_doc, multi_doc, process, reasoning, robust_typo, negative.",
+  "version": "4.0",
+  "case_ids": [
+    "RC-001",
+    "RC-005",
+    "RC-015",
+    "RC-021",
+    "RC-051",
+    "RC-092",
+    "RC-070",
+    "RC-061",
+    "RC-024",
+    "RC-031"
+  ]
+}
