@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # scripts/regression_check.sh — 回归对比，避免被全量套件的预存失败数吓到
 #
-# 背景：本沙箱跑 `pytest backend/tests` 恒有 ~105 个失败，全部来自
-#   - backend/tests/evaluation/test_eval_golden.py      (RAG 黄金集评测，依赖 Postgres，沙箱无库)
-#   - backend/tests/evaluation/test_eval_characterization.py
-#   - backend/tests/test_startup_validation.py          (环境探测)
-# 这些与业务改动无关（git 里这些目录未改动）。若只看总失败数，任何一次改动
-# 都会显得"红了一片"，实则无一源于本次工作。本脚本只关心「相对基线的【新增】失败」。
+# 背景：本沙箱跑 `pytest backend/tests` 会有大量失败，主要来自
+#   - backend/tests/evaluation/test_eval_golden.py  (RAG 黄金集检索质量评测，需建好的
+#       RAG 索引 + Postgres + embedding + reranker + LLM，沙箱全无；缺基础设施时会
+#       【挂起】而非快速失败) —— 本脚本在 run_suite 里 --ignore 它，不参与比对。
+# 注意：test_eval_characterization / test_startup_validation 是纯逻辑/启动探针测试，
+# 本就该是绿的（依赖齐了就过），NOT 恒失败，故不参与忽略、也不进已知预存名单。
+# 若只看总失败数，任何一次改动都会显得"红了一片"，实则无一源于本次工作。
+# 本脚本只跑「除 golden set 外的全量」，只关心「相对基线的【新增】失败」。
 #
 # 用法：
 #   ./scripts/regression_check.sh            # 用已存的基线对比当前配置（无基线则先生成）
@@ -31,17 +33,24 @@ MODE="${1:-check}"
 
 # 这些模块/文件在本沙箱恒失败（环境依赖，与代码改动无关）。即使它们某次
 # 在"当前配置"下比基线多冒出几个用例，也一律算预存失败，不计入"新增"。
+# 注意：只放【真正环境依赖、且不承载业务回归信号】的模块。
+#   - test_eval_golden.py 是 RAG 黄金集检索质量评测，需建好的 RAG 索引 +
+#     Postgres + embedding + reranker + LLM，沙箱全无；且缺基础设施时会
+#     【挂起】而非快速失败，故除过滤外还在 run_suite 里 --ignore 掉，避免
+#     整轮卡死。它应在有真实 infra 的 CI 里单独跑，不在本沙箱参与比对。
+#   - 切勿把 test_eval_characterization / test_startup_validation 放进这里：
+#     它们是纯逻辑/启动探针测试，本就该是绿的；放进来会掩盖真回归。
 KNOWN_FLAKY_PREFIXES=(
   "backend/tests/evaluation/test_eval_golden.py"
-  "backend/tests/evaluation/test_eval_characterization.py"
-  "backend/tests/test_startup_validation.py"
 )
 
 # 跑一轮全量，只把 "^FAILED ..." 行抽出来（含参数化 id），按 id 去重排序。
+# 通过 --ignore 排除会挂起的 RAG 黄金集评测（见上），保证本沙箱内快速失败。
 run_suite() {
   local te="$1"
   TRAVEL_ENABLED="$te" PYTHONIOENCODING=utf-8 "$PY" -m pytest backend/tests \
     -q --no-header -p no:cacheprovider --no-cov \
+    --ignore=backend/tests/evaluation/test_eval_golden.py \
     2>/dev/null | grep -E "^FAILED" | sort -u
 }
 
