@@ -27,6 +27,10 @@ _SKIP_AUTH_PREFIXES = (
     "/internal",
 )
 
+# 精确匹配豁免（绝不能进 _SKIP_AUTH_PREFIXES：那里的 startswith 语义
+# 会让 "/" 前缀把全部路径都豁免掉，等于关闭鉴权）
+_EXACT_SKIP_AUTH = frozenset({"/"})
+
 
 async def api_key_middleware(request: Request, call_next):
     """API Key 认证中间件。
@@ -37,8 +41,8 @@ async def api_key_middleware(request: Request, call_next):
     """
     path = request.url.path
 
-    # 跳过系统端点（健康检查、文档、metrics）
-    if path in _SKIP_AUTH_PREFIXES or any(
+    # 跳过系统端点（健康检查、文档、metrics、服务首页）
+    if path in _EXACT_SKIP_AUTH or path in _SKIP_AUTH_PREFIXES or any(
         path.startswith(prefix) for prefix in _SKIP_AUTH_PREFIXES
     ):
         return await call_next(request)

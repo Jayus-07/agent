@@ -77,6 +77,22 @@ app.add_exception_handler(Exception, global_exception_handler)
 # ── 注册所有路由（聚合在 api/router.py） ──────────────
 app.include_router(api_router)
 
+# ── 服务首页：让直接用浏览器访问根路径的人知道去哪（此前 401 令人困惑）──
+@app.get("/", include_in_schema=False)
+async def root_index():
+    """自描述首页。业务端点仍受 X-API-Key 保护，这里只放公开导航信息。"""
+    from fastapi.responses import JSONResponse
+    return JSONResponse({
+        "service": "agent-backend",
+        "health": "/health",
+        "docs": "/docs",
+        "openapi": "/openapi.json",
+        "usage": (
+            "业务端点需请求头 X-API-Key；浏览器调试请打开 /docs，"
+            "点右上角 Authorize 填入 API Key 后即可在页面内调用"
+        ),
+    })
+
 # ── Prometheus /metrics 端点（PR-0.3）────────────────
 @app.get("/metrics", include_in_schema=False)
 async def metrics_endpoint():

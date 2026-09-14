@@ -417,3 +417,6 @@ data/eval_reports/
 
 # 跨项目一次性诊断脚本（属 Enterprise_OA，需读其 .env.oaauth 取口令，不入库）
 scripts/_diag_*.py
+
+# code-review-graph 索引库（204MB WAL 反复 churn，暂不入库）
+.code-review-graph/
