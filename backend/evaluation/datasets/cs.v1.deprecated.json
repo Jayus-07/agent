@@ -10,11 +10,17 @@
       "expected": {
         "cs_route": "knowledge_query",
         "intent": "k_faq",
-        "output_guard": {"should_filter": false, "forbidden_patterns": []},
+        "output_guard": {
+          "should_filter": false,
+          "forbidden_patterns": []
+        },
         "audit_required": false,
         "expected_behavior": "路由到知识问答，返回退货政策相关内容"
       },
-      "metadata": {"difficulty": "easy", "type": "knowledge_qa"}
+      "metadata": {
+        "difficulty": "easy",
+        "type": "knowledge_qa"
+      }
     },
     {
       "id": "CS002",
@@ -23,11 +29,17 @@
       "expected": {
         "cs_route": "knowledge_query",
         "intent": "k_multi",
-        "output_guard": {"should_filter": false, "forbidden_patterns": []},
+        "output_guard": {
+          "should_filter": false,
+          "forbidden_patterns": []
+        },
         "audit_required": false,
         "expected_behavior": "路由到知识问答，涉及多个知识点（保质期+冷链）"
       },
-      "metadata": {"difficulty": "medium", "type": "knowledge_qa"}
+      "metadata": {
+        "difficulty": "medium",
+        "type": "knowledge_qa"
+      }
     },
     {
       "id": "CS003",
@@ -36,11 +48,17 @@
       "expected": {
         "cs_route": "knowledge_query",
         "intent": "k_faq",
-        "output_guard": {"should_filter": false, "forbidden_patterns": []},
+        "output_guard": {
+          "should_filter": false,
+          "forbidden_patterns": []
+        },
         "audit_required": false,
         "expected_behavior": "路由到知识问答，高置信度 FAQ"
       },
-      "metadata": {"difficulty": "easy", "type": "knowledge_qa"}
+      "metadata": {
+        "difficulty": "easy",
+        "type": "knowledge_qa"
+      }
     },
     {
       "id": "CS004",
@@ -49,11 +67,20 @@
       "expected": {
         "cs_route": "knowledge_query",
         "intent": "k_faq",
-        "output_guard": {"should_filter": true, "forbidden_patterns": ["内部", "机密"]},
+        "output_guard": {
+          "should_filter": true,
+          "forbidden_patterns": [
+            "内部",
+            "机密"
+          ]
+        },
         "audit_required": false,
         "expected_behavior": "路由到知识问答，output guard 过滤内部信息"
       },
-      "metadata": {"difficulty": "medium", "type": "knowledge_qa"}
+      "metadata": {
+        "difficulty": "medium",
+        "type": "knowledge_qa"
+      }
     },
     {
       "id": "CS005",
@@ -62,11 +89,19 @@
       "expected": {
         "cs_route": "business_query",
         "intent": "o_query",
-        "output_guard": {"should_filter": false, "forbidden_patterns": ["内部订单号格式"]},
+        "output_guard": {
+          "should_filter": false,
+          "forbidden_patterns": [
+            "内部订单号格式"
+          ]
+        },
         "audit_required": false,
         "expected_behavior": "路由到业务查询-订单查询，返回订单状态"
       },
-      "metadata": {"difficulty": "easy", "type": "business_query"}
+      "metadata": {
+        "difficulty": "easy",
+        "type": "business_query"
+      }
     },
     {
       "id": "CS006",
@@ -75,11 +110,17 @@
       "expected": {
         "cs_route": "business_query",
         "intent": "l_query",
-        "output_guard": {"should_filter": false, "forbidden_patterns": []},
+        "output_guard": {
+          "should_filter": false,
+          "forbidden_patterns": []
+        },
         "audit_required": false,
         "expected_behavior": "路由到业务查询-物流查询"
       },
-      "metadata": {"difficulty": "easy", "type": "business_query"}
+      "metadata": {
+        "difficulty": "easy",
+        "type": "business_query"
+      }
     },
     {
       "id": "CS007",
@@ -88,11 +129,20 @@
       "expected": {
         "cs_route": "business_query",
         "intent": "a_query",
-        "output_guard": {"should_filter": true, "forbidden_patterns": ["密码", "token"]},
+        "output_guard": {
+          "should_filter": true,
+          "forbidden_patterns": [
+            "密码",
+            "token"
+          ]
+        },
         "audit_required": false,
         "expected_behavior": "路由到业务查询-账户查询，output guard 脱敏"
       },
-      "metadata": {"difficulty": "easy", "type": "business_query"}
+      "metadata": {
+        "difficulty": "easy",
+        "type": "business_query"
+      }
     },
     {
       "id": "CS008",
@@ -101,11 +151,18 @@
       "expected": {
         "cs_route": "business_query",
         "intent": "o_query",
-        "output_guard": {"should_filter": false, "forbidden_patterns": []},
+        "output_guard": {
+          "should_filter": false,
+          "forbidden_patterns": []
+        },
         "audit_required": false,
         "expected_behavior": "越权查询他人数据 — input guard 应拦截"
       },
-      "metadata": {"difficulty": "medium", "type": "business_query", "security": "scope_violation"}
+      "metadata": {
+        "difficulty": "medium",
+        "type": "business_query",
+        "security": "scope_violation"
+      }
     },
     {
       "id": "CS009",
@@ -114,11 +171,17 @@
       "expected": {
         "cs_route": "business_action",
         "intent": "refund",
-        "output_guard": {"should_filter": false, "forbidden_patterns": []},
+        "output_guard": {
+          "should_filter": false,
+          "forbidden_patterns": []
+        },
         "audit_required": true,
         "expected_behavior": "路由到业务操作-退款，触发确认流程，记录审计"
       },
-      "metadata": {"difficulty": "medium", "type": "business_action"}
+      "metadata": {
+        "difficulty": "medium",
+        "type": "business_action"
+      }
     },
     {
       "id": "CS010",
@@ -127,11 +190,17 @@
       "expected": {
         "cs_route": "business_action",
         "intent": "return_goods",
-        "output_guard": {"should_filter": false, "forbidden_patterns": []},
+        "output_guard": {
+          "should_filter": false,
+          "forbidden_patterns": []
+        },
         "audit_required": true,
         "expected_behavior": "路由到业务操作-退货，触发确认流程"
       },
-      "metadata": {"difficulty": "medium", "type": "business_action"}
+      "metadata": {
+        "difficulty": "medium",
+        "type": "business_action"
+      }
     },
     {
       "id": "CS011",
@@ -140,11 +209,18 @@
       "expected": {
         "cs_route": "business_action",
         "intent": "confirm",
-        "output_guard": {"should_filter": false, "forbidden_patterns": []},
+        "output_guard": {
+          "should_filter": false,
+          "forbidden_patterns": []
+        },
         "audit_required": true,
         "expected_behavior": "确认状态机转换: pending → confirmed → 执行退款"
       },
-      "metadata": {"difficulty": "medium", "type": "business_action", "requires_prior_action": true}
+      "metadata": {
+        "difficulty": "medium",
+        "type": "business_action",
+        "requires_prior_action": true
+      }
     },
     {
       "id": "CS012",
@@ -153,11 +229,17 @@
       "expected": {
         "cs_route": "business_action",
         "intent": "address_change",
-        "output_guard": {"should_filter": false, "forbidden_patterns": []},
+        "output_guard": {
+          "should_filter": false,
+          "forbidden_patterns": []
+        },
         "audit_required": true,
         "expected_behavior": "路由到业务操作-地址修改，高风险操作需确认"
       },
-      "metadata": {"difficulty": "medium", "type": "business_action"}
+      "metadata": {
+        "difficulty": "medium",
+        "type": "business_action"
+      }
     },
     {
       "id": "CS013",
@@ -166,11 +248,21 @@
       "expected": {
         "cs_route": "complaint_flow",
         "intent": "c_complaint",
-        "output_guard": {"should_filter": true, "forbidden_patterns": ["severity", "ticket_id", "pattern"]},
+        "output_guard": {
+          "should_filter": true,
+          "forbidden_patterns": [
+            "severity",
+            "ticket_id",
+            "pattern"
+          ]
+        },
         "audit_required": true,
         "expected_behavior": "路由到投诉处理，检测投诉严重度，创建工单，安抚响应"
       },
-      "metadata": {"difficulty": "medium", "type": "complaint"}
+      "metadata": {
+        "difficulty": "medium",
+        "type": "complaint"
+      }
     },
     {
       "id": "CS014",
@@ -179,11 +271,21 @@
       "expected": {
         "cs_route": "complaint_flow",
         "intent": "c_complaint",
-        "output_guard": {"should_filter": true, "forbidden_patterns": ["severity", "ticket_id"]},
+        "output_guard": {
+          "should_filter": true,
+          "forbidden_patterns": [
+            "severity",
+            "ticket_id"
+          ]
+        },
         "audit_required": true,
         "expected_behavior": "高严重度投诉，匹配多个投诉模式，触发转接"
       },
-      "metadata": {"difficulty": "hard", "type": "complaint", "severity": "high"}
+      "metadata": {
+        "difficulty": "hard",
+        "type": "complaint",
+        "severity": "high"
+      }
     },
     {
       "id": "CS015",
@@ -192,11 +294,20 @@
       "expected": {
         "cs_route": "complaint_flow",
         "intent": "c_complaint",
-        "output_guard": {"should_filter": true, "forbidden_patterns": ["severity", "matched_patterns"]},
+        "output_guard": {
+          "should_filter": true,
+          "forbidden_patterns": [
+            "severity",
+            "matched_patterns"
+          ]
+        },
         "audit_required": true,
         "expected_behavior": "多模式匹配投诉，创建工单并触发转接"
       },
-      "metadata": {"difficulty": "medium", "type": "complaint"}
+      "metadata": {
+        "difficulty": "medium",
+        "type": "complaint"
+      }
     },
     {
       "id": "CS016",
@@ -205,11 +316,19 @@
       "expected": {
         "cs_route": "complaint_flow",
         "intent": "c_complaint",
-        "output_guard": {"should_filter": true, "forbidden_patterns": ["ticket_id"]},
+        "output_guard": {
+          "should_filter": true,
+          "forbidden_patterns": [
+            "ticket_id"
+          ]
+        },
         "audit_required": true,
         "expected_behavior": "重复投诉，检查历史工单，升级处理"
       },
-      "metadata": {"difficulty": "hard", "type": "complaint"}
+      "metadata": {
+        "difficulty": "hard",
+        "type": "complaint"
+      }
     },
     {
       "id": "CS017",
@@ -218,11 +337,20 @@
       "expected": {
         "cs_route": "human_handoff",
         "intent": "h_handoff",
-        "output_guard": {"should_filter": true, "forbidden_patterns": ["handoff_state", "ai_active"]},
+        "output_guard": {
+          "should_filter": true,
+          "forbidden_patterns": [
+            "handoff_state",
+            "ai_active"
+          ]
+        },
         "audit_required": true,
         "expected_behavior": "显式转接请求，状态转换 AI_ACTIVE → HANDOFF_REQUESTED"
       },
-      "metadata": {"difficulty": "easy", "type": "handoff"}
+      "metadata": {
+        "difficulty": "easy",
+        "type": "handoff"
+      }
     },
     {
       "id": "CS018",
@@ -231,11 +359,18 @@
       "expected": {
         "cs_route": "human_handoff",
         "intent": "h_handoff",
-        "output_guard": {"should_filter": false, "forbidden_patterns": []},
+        "output_guard": {
+          "should_filter": false,
+          "forbidden_patterns": []
+        },
         "audit_required": false,
         "expected_behavior": "转接后拦截 — 活跃转接时业务请求被拦截到 cs_handoff_intercept"
       },
-      "metadata": {"difficulty": "medium", "type": "handoff", "requires_active_handoff": true}
+      "metadata": {
+        "difficulty": "medium",
+        "type": "handoff",
+        "requires_active_handoff": true
+      }
     },
     {
       "id": "CS019",
@@ -244,11 +379,19 @@
       "expected": {
         "cs_route": "human_handoff",
         "intent": "h_handoff",
-        "output_guard": {"should_filter": true, "forbidden_patterns": ["handoff_state"]},
+        "output_guard": {
+          "should_filter": true,
+          "forbidden_patterns": [
+            "handoff_state"
+          ]
+        },
         "audit_required": true,
         "expected_behavior": "显式转接请求（真人关键词），创建转接工单"
       },
-      "metadata": {"difficulty": "easy", "type": "handoff"}
+      "metadata": {
+        "difficulty": "easy",
+        "type": "handoff"
+      }
     },
     {
       "id": "CS020",
@@ -257,11 +400,24 @@
       "expected": {
         "cs_route": "human_handoff",
         "intent": "h_handoff",
-        "output_guard": {"should_filter": true, "forbidden_patterns": ["timeout", "handoff_state"]},
+        "output_guard": {
+          "should_filter": true,
+          "forbidden_patterns": [
+            "timeout",
+            "handoff_state"
+          ]
+        },
         "audit_required": true,
         "expected_behavior": "转接超时场景 — 检查转接状态，返回等待提示或重新触发"
       },
-      "metadata": {"difficulty": "hard", "type": "handoff", "timeout_scenario": true}
+      "metadata": {
+        "difficulty": "hard",
+        "type": "handoff",
+        "timeout_scenario": true
+      }
     }
-  ]
+  ],
+  "_DEPRECATED": true,
+  "_deprecated_at": "2026-09-15",
+  "_replacement": "cs/cases.jsonl (V3 canonical, ID 体系 CS-001~020；旧集 CS001~020 已被整体重写，无内容继承)"
 }

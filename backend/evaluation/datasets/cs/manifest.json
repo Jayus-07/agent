@@ -1,0 +1,8 @@
+{
+  "version": "1.0",
+  "case_count": 20,
+  "module": "cs",
+  "schema_description": "客服域（customer_service）域图评测：退款/物流/支付等意图分流，断言 target 路由与 must_contain 关键词；case 无 schema_version 字段（早于 v4.0 统一 schema，保持原样）。",
+  "created": "2026-09-08",
+  "notes": "旧顶层 cs.json（ID 体系 CS001~020）已整体重写为 CS-001~020 并迁入 V3 目录，旧文件更名为 cs.v1.deprecated.json 留档。"
+}

@@ -1,7 +1,8 @@
 {
   "version": "1.0",
-  "case_count": 13,
+  "case_count": 25,
   "module": "e2e",
   "schema_description": "Graph E2E 评测集：验证 Router 路由模式、Planner DAG 拆解、Skill capability 调用、Workflow 分发与最终终态。正向用例声明 route + capabilities（或 workflow_name）+ final_state；对抗用例声明 should_block（Input Guard 应拦截，不进图）。",
-  "created": "2026-09-11"
+  "created": "2026-09-11",
+  "notes": "2026-09-15 校正：manifest 原记 13 条，实际 cases.jsonl 已扩至 25 条（后续补充对抗/扩展用例未同步 manifest）。"
 }

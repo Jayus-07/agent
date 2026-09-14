@@ -1,0 +1,7 @@
+{
+  "version": "1.0",
+  "case_count": 20,
+  "module": "planner",
+  "schema_description": "Planner 任务规划评估数据集 — 验证 LLM 是否正确拆解问题为 capability DAG",
+  "notes": "2026-09-15 由顶层 planner.json 迁入 V3 目录（cases.jsonl + manifest），加载优先级 cases.jsonl 最高，行为不变。"
+}
