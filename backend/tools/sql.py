@@ -20,7 +20,7 @@ def _get_sql_agent():
 
 def _get_rag_pipeline():
     """获取 RAG Pipeline 单例（统一入口，避免双重初始化）"""
-    from backend.app.api.deps import get_rag_pipeline
+    from backend.rag.pipeline import get_rag_pipeline
     return get_rag_pipeline()
 
 

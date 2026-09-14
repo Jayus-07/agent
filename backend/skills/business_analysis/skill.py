@@ -161,7 +161,7 @@ class BusinessAnalysisSkill(BaseSkill):
         只做 BM25+向量检索+返回原始文本（3-5s）。
         """
         try:
-            from backend.app.api.deps import get_rag_pipeline
+            from backend.rag.pipeline import get_rag_pipeline
             pipeline = get_rag_pipeline()
 
             table_names = ", ".join(sql_result.tables[:3]) if sql_result.tables else "电商业务"

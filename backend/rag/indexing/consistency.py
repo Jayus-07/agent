@@ -352,7 +352,7 @@ async def consistency_sweep_loop(
     await asyncio.sleep(first_delay)
     while True:
         try:
-            from backend.app.api.deps import get_rag_pipeline
+            from backend.rag.pipeline import get_rag_pipeline
             checker = IndexConsistencyChecker(get_rag_pipeline())
             report = await asyncio.to_thread(checker.check)
             if not report.consistent:
