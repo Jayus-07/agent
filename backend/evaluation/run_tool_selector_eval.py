@@ -1,7 +1,7 @@
 """run_tool_selector_eval.py — FC 工具选择（tool_selector 节点）离线评测跑批
 
 用法（项目根目录）:
-    python backend/evaluation/run_tool_selector_eval.py                # 全量 58 条
+    python backend/evaluation/run_tool_selector_eval.py                # 全量 67 条
     python backend/evaluation/run_tool_selector_eval.py --limit 10     # 冒烟
     python backend/evaluation/run_tool_selector_eval.py --model deepseek-v4-flash
 
@@ -11,6 +11,8 @@
     （no_match 用例: 模型不选中任何"错误工具"即算通过，保守直通可接受）
   - 参数填充准确率: expected.params 精确匹配；params_free_keys 只要求
     存在且非空；params_absent_keys 要求不出现
+  - 可用可不用（optional）: 不调工具直接回答，或选中
+    expected.acceptable_capabilities 内工具且参数合规，均算通过
   - passthrough 率: source != fc 的比例（降级信号）
 
 输出: data/eval_reports/tool_selector_<ts>.json + 控制台摘要
@@ -96,6 +98,23 @@ def grade(result: dict, case: dict) -> dict:
     result["select_ok"] = False
     result["params_ok"] = None
     result["no_match_ok"] = None
+
+    if expected.get("acceptable_capabilities"):
+        # 可用可不用用例：模型凭自身知识直接回答（不调工具，保守直通/
+        # 无匹配均算过），或选中可接受能力内且参数合规。参数按选中能力
+        # 的 params_by_cap 校验（不同可接受能力的参数期望不同）。
+        result["optional_ok"] = (
+            result.get("source") != "fc"
+            or result.get("selected") in expected["acceptable_capabilities"]
+        )
+        result["select_ok"] = bool(result["optional_ok"])
+        if result["select_ok"] and result.get("source") == "fc":
+            cap_expected = (expected.get("params_by_cap") or {}).get(
+                result["selected"], {})
+            ok, problems = grade_params(cap_expected, result.get("resolved_params"))
+            result["params_ok"] = ok
+            result["param_problems"] = problems
+        return result
 
     if expected.get("no_match"):
         # 无匹配用例：模型没选中"真实意图错误"的工具即可

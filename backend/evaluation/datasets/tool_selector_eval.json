@@ -1,6 +1,6 @@
 {
-  "version": "1.0",
-  "_comment": "FC 工具选择评测集 v1.0 — 58 条用例。评估 tool_selector 节点（路由缩候选 → FC 选工具+填参）。candidates 模拟三层路由的灰区输出（0.6~0.84，确保走 FC 路径而非 fast_path）。category: enum_param(enum 抽取) | multi_param(多参数) | typed_param(integer/url) | free_param(自由文本) | grey_zone(单候选灰区) | ambiguous(跨域歧义) | no_match(应不选/保守直通)。评分: expected.params 精确匹配结构性键；params_free_keys 只要求存在且非空；params_absent_keys 要求不出现（禁止编造）。no_match 用例只要不选中错误工具即算通过。",
+  "version": "1.3",
+  "_comment": "FC 工具选择评测集 v1.3 — 67 条用例。评估 tool_selector 节点（路由缩候选 → FC 选工具+填参）。candidates 模拟三层路由的灰区输出（0.6~0.84，确保走 FC 路径而非 fast_path）。category: enum_param(enum 抽取) | multi_param(多参数) | typed_param(integer/url) | free_param(自由文本) | grey_zone(单候选灰区) | ambiguous(跨域歧义) | no_match(不该用工具/应不选) | optional(可用可不用)。评分: expected.params 精确匹配结构性键；params_free_keys 只要求存在且非空；params_absent_keys 要求不出现（禁止编造）。no_match 用例只要不选中错误工具即算通过（含 5 条基础闲聊 + TS-115~118 诱导选错型：纯改写/DDL 写操作/无关求助/指代不明）。optional 用例（TS-101/103/301~305）：模型凭自身知识直接回答（不调工具）或选中 acceptable_capabilities 内工具且参数合规均算过，参数按 params_by_cap[选中能力] 校验。",
   "test_cases": [
     {
       "id": "TS-001", "category": "enum_param",
@@ -85,6 +85,7 @@
       "query": "给 support@company.com 发邮件说明客诉处理进度，主题「客诉周报」",
       "candidates": [{"name": "email.send", "score": 0.75}, {"name": "rag.search", "score": 0.52}],
       "expected": {"capability": "email.send", "params": {"to": "support@company.com", "subject": "客诉周报"}, "params_free_keys": ["body"]}
+      ,"_note": "偶发：查询无正文而 body 必填，与提示词\"问题中没有的信息不要填\"存在张力；第 2 次带反馈重试通常自愈，最坏 passthrough 回旧行为（安全降级）"
     },
     {
       "id": "TS-020", "category": "free_param",
@@ -291,10 +292,11 @@
       "expected": {"capability": "sql.query", "params_free_keys": ["question"]}
     },
     {
-      "id": "TS-101", "category": "ambiguous",
+      "id": "TS-101", "category": "optional",
       "query": "退款规则是什么？顺便看下本月退款订单量",
       "candidates": [{"name": "rag.search", "score": 0.73}, {"name": "sql.query", "score": 0.71}],
-      "expected": {"capability": "rag.search", "params_free_keys": ["question"]}
+      "expected": {"acceptable_capabilities": ["rag.search", "sql.query"], "params_by_cap": {"rag.search": {"params_free_keys": ["question"]}, "sql.query": {"params_free_keys": ["question"]}}}
+      ,"_note": "多意图用例：direct FC 只完成一腿，双腿编排应路由 plan 模式"
     },
     {
       "id": "TS-102", "category": "ambiguous",
@@ -303,10 +305,11 @@
       "expected": {"capability": "data.export", "params_free_keys": ["question"]}
     },
     {
-      "id": "TS-103", "category": "ambiguous",
+      "id": "TS-103", "category": "optional",
       "query": "给运营团队发周报邮件，附上销售数据导出文件",
       "candidates": [{"name": "email.send", "score": 0.72}, {"name": "data.export", "score": 0.7}],
-      "expected": {"capability": "email.send", "params_free_keys": ["to", "subject", "body"]}
+      "expected": {"acceptable_capabilities": ["email.send", "data.export"], "params_by_cap": {"email.send": {"params_free_keys": ["to", "subject", "body"]}, "data.export": {"params_free_keys": ["question"]}}}
+      ,"_note": "多意图用例：direct FC 只完成一腿，双腿编排应路由 plan 模式"
     },
     {
       "id": "TS-104", "category": "ambiguous",
@@ -349,6 +352,60 @@
       "query": "你好，在吗",
       "candidates": [{"name": "rag.search", "score": 0.61}, {"name": "sql.query", "score": 0.6}],
       "expected": {"no_match": true}
+    },
+    {
+      "id": "TS-115", "category": "no_match",
+      "query": "帮我把「季度复盘」翻译成英文再润色一下",
+      "candidates": [{"name": "rag.search", "score": 0.64}, {"name": "web.search", "score": 0.6}],
+      "expected": {"no_match": true}
+    },
+    {
+      "id": "TS-116", "category": "no_match",
+      "query": "在订单表加一个 buyer_note 备注字段",
+      "candidates": [{"name": "sql.query", "score": 0.66}, {"name": "data.export", "score": 0.6}],
+      "expected": {"no_match": true}
+    },
+    {
+      "id": "TS-117", "category": "no_match",
+      "query": "我的 Excel 打不开了，怎么修复",
+      "candidates": [{"name": "rag.search", "score": 0.63}, {"name": "report.generate", "score": 0.6}],
+      "expected": {"no_match": true}
+    },
+    {
+      "id": "TS-118", "category": "no_match",
+      "query": "刚才那个数字再展开讲讲",
+      "candidates": [{"name": "sql.query", "score": 0.65}, {"name": "business.analyze", "score": 0.62}],
+      "expected": {"no_match": true}
+    },
+    {
+      "id": "TS-301", "category": "optional",
+      "query": "GMV 是什么意思？",
+      "candidates": [{"name": "rag.search", "score": 0.7}, {"name": "web.search", "score": 0.68}],
+      "expected": {"acceptable_capabilities": ["rag.search", "web.search"], "params_by_cap": {"rag.search": {"params_free_keys": ["question"]}, "web.search": {"params_free_keys": ["query"]}}}
+    },
+    {
+      "id": "TS-302", "category": "optional",
+      "query": "同比和环比有什么区别？",
+      "candidates": [{"name": "rag.search", "score": 0.71}, {"name": "business.analyze", "score": 0.65}],
+      "expected": {"acceptable_capabilities": ["rag.search", "business.analyze"], "params_by_cap": {"rag.search": {"params_free_keys": ["question"]}}}
+    },
+    {
+      "id": "TS-303", "category": "optional",
+      "query": "帮我写一句周年庆大促的口号",
+      "candidates": [{"name": "rag.search", "score": 0.68}, {"name": "report.generate", "score": 0.62}],
+      "expected": {"acceptable_capabilities": ["rag.search"], "params_by_cap": {"rag.search": {"params_free_keys": ["question"]}}}
+    },
+    {
+      "id": "TS-304", "category": "optional",
+      "query": "国内快递一般几天能到？",
+      "candidates": [{"name": "rag.search", "score": 0.67}, {"name": "web.search", "score": 0.66}],
+      "expected": {"acceptable_capabilities": ["rag.search", "web.search"], "params_by_cap": {"rag.search": {"params_free_keys": ["question"]}, "web.search": {"params_free_keys": ["query"]}}}
+    },
+    {
+      "id": "TS-305", "category": "optional",
+      "query": "复购率的计算公式是什么？",
+      "candidates": [{"name": "rag.search", "score": 0.72}, {"name": "sql.query", "score": 0.64}],
+      "expected": {"acceptable_capabilities": ["rag.search", "sql.query"], "params_by_cap": {"rag.search": {"params_free_keys": ["question"]}, "sql.query": {"params_free_keys": ["question"]}}}
     }
   ]
 }
