@@ -289,9 +289,15 @@ def workflow_executor_node(state: dict) -> dict:
         if ctx.status == "failed":
             answer_parts.append(f"❌ 失败: {ctx.error or '未知错误'}\n")
         else:
-            for step_name, output in ctx.outputs.items():
-                if output:
-                    answer_parts.append(f"### {step_name}\n{str(output)[:500]}\n")
+            # 报告类 workflow（如 market_research）直接输出完整报告而非每步截断 500 字
+            report_out = ctx.outputs.get("report") or {}
+            report_md = report_out.get("report_md") if isinstance(report_out, dict) else None
+            if report_md:
+                answer_parts = [str(report_md)]
+            else:
+                for step_name, output in ctx.outputs.items():
+                    if output:
+                        answer_parts.append(f"### {step_name}\n{str(output)[:500]}\n")
         answer_parts.append(f"\n---\n*状态: {ctx.status} | run_id: {ctx.run_id}*")
 
         final_answer = "\n".join(answer_parts)

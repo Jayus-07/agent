@@ -44,8 +44,8 @@ SEARCH_ASPECTS = (          # 采集维度 → 搜索词
     "价格 价格带",
     "趋势 机会 风险",
 )
-SEARCH_RESULTS_PER_QUERY = 4
-MAX_CRAWL = 6               # 抓取上限（控制耗时与封禁风险）
+SEARCH_RESULTS_PER_QUERY = 8   # Bing 相似查询 top 结果重叠度高，取深一点保唯一性
+MAX_CRAWL = 10              # 抓取上限（控制耗时与封禁风险）
 RAW_TEXT_LIMIT = 2000       # 证据原文摘录上限
 
 # ── 分组章任务（12 章节模板：三组各 4 节 + 执行摘要/进入建议在 report 组装）──
@@ -89,7 +89,13 @@ class MarketResearch:
     async def collect(self, ctx):
         category = str(ctx.inputs.get("category") or "").strip()
         if not category:
-            raise ValueError("缺少 category 输入（要调研的品类名称）")
+            # chat 链路只传 question：从问句提取品类（如「调研一下蓝牙耳机市场」）
+            from backend.market_research.pipeline import extract_category
+            category = extract_category(str(ctx.inputs.get("question") or "")) or ""
+        if not category:
+            raise ValueError(
+                "缺少要调研的品类名称：请输入结构化 category，"
+                "或在问句中包含「调研 XX 市场」句式")
         queries = [f"{category} {aspect}" for aspect in SEARCH_ASPECTS]
 
         # 逐查询搜索：个别查询失败不中止（降级继续），全失败则无证据走 abort
@@ -99,7 +105,10 @@ class MarketResearch:
             try:
                 md = web_search_tool.invoke({"query": q,
                                              "num_results": SEARCH_RESULTS_PER_QUERY})
-                for r in parse_search_results(md):
+                parsed = parse_search_results(md)
+                if not parsed:
+                    search_failures += 1  # 零结果也算软失败，进覆盖缺口
+                for r in parsed:
                     r["search_query"] = q
                     found.append(r)
             except Exception as e:
@@ -113,6 +122,7 @@ class MarketResearch:
         seen_urls: set[str] = set()
         raw: list[dict[str, Any]] = []
         crawl_failures = 0
+        failed_items: list[dict[str, Any]] = []
         for r in found:
             if r["url"] in seen_urls:
                 continue
@@ -124,15 +134,33 @@ class MarketResearch:
                 raw.append({**r, "content": str(content)[:RAW_TEXT_LIMIT]})
             except Exception as e:
                 crawl_failures += 1
+                failed_items.append(r)
                 logger.warning(f"[MarketResearch] 抓取失败 {r['url']}: {e}")
+
+        # 摘要级证据降级：抓取失败/不足时用搜索摘要兜底（raw_text=snippet），
+        # 保证有效证据产量；报告的覆盖缺口如实标注
+        snippet_only = 0
+        if len(raw) < MIN_EVIDENCE + 1:
+            for r in failed_items + [f for f in found
+                                     if f["url"] not in seen_urls]:
+                if len(raw) >= MIN_EVIDENCE + 1:
+                    break
+                seen_urls.add(r["url"])
+                if (r.get("snippet") or "").strip():
+                    raw.append({**r, "content": r["snippet"],
+                                "snippet_only": True})
+                    snippet_only += 1
 
         coverage_gaps = []
         if search_failures:
             coverage_gaps.append(f"{search_failures} 个搜索查询失败")
         if crawl_failures:
             coverage_gaps.append(f"{crawl_failures} 个来源抓取失败")
+        if snippet_only:
+            coverage_gaps.append(f"{snippet_only} 条为搜索摘要级证据（正文抓取失败的降级）")
         return {"category": category, "raw": raw,
                 "search_failures": search_failures, "crawl_failures": crawl_failures,
+                "snippet_only": snippet_only,
                 "coverage_gaps": coverage_gaps}
 
     # ── 第 2 段：清洗、去重、证据标准化 ───────────

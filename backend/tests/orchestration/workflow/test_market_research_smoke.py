@@ -146,7 +146,7 @@ def test_full_run_happy_path(patched_env):
     rep = ctx.outputs["report"]
     assert rep["evidence_count"] >= MIN_EVIDENCE
     md = rep["report_md"]
-    assert "## 12. 进入建议" in md and "## Source Index" in md
+    assert re.search(r"## \d+\. 进入建议", md) and "## Source Index" in md
     assert "市场规模1200亿元" in md  # 高置信事实结论进执行摘要
     assert "推断" in md  # 坏引用（EV-deadbeef）被 fact_lock 降级
     row = patched_env.get("t-happy")

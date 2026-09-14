@@ -116,6 +116,30 @@ def normalize_evidence(raw_items: list[dict[str, Any]], fetched_at: str) -> list
     return evidence
 
 
+def extract_category(question: str) -> str | None:
+    """从自然语言问句中提取品类名（chat 链路触发 workflow 时无结构化输入的兜底）。
+
+    匹配「调研/分析/评估 + 品类名 + 市场/品类/行业」等常见句式；
+    提取不到返回 None（workflow 层给出明确报错提示）。
+    """
+    q = (question or "").strip()
+    if not q:
+        return None
+    patterns = (
+        r"(?:调研|分析|评估|研究)(?:一下)?([\u4e00-\u9fa5A-Za-z0-9]{2,12}?)(?:的市场|市场|品类|行业)",
+        r"(?:帮|请|给我)?(?:我做|做)?(?:一次)?(?:关于)?([\u4e00-\u9fa5A-Za-z0-9]{2,12}?)(?:品类|市场)(?:的)?(?:市场)?调研",
+        r"(?:针对|对)([\u4e00-\u9fa5A-Za-z0-9]{2,12}?)(?:品类|市场|行业)(?:做|进行)",
+    )
+    for p in patterns:
+        m = re.search(p, q)
+        if m:
+            name = m.group(1).strip().rstrip("的").strip()
+            # 过滤抽到代词/泛词的情况
+            if name and name not in ("一下", "这个", "该", "目标", "当前", "一个"):
+                return name
+    return None
+
+
 def route_group(evidence: list[dict[str, Any]]) -> dict[str, list[str]]:
     """按关键词密度把证据分到组 A/B/C（每组独立分析，互不依赖）。
 
@@ -241,7 +265,7 @@ def build_report_md(category: str, locked_groups: dict[str, dict[str, Any]],
             seq += 1
 
     # 12. 进入建议（唯一汇合点，确定性组装）
-    lines += ["## 12. 进入建议", ""]
+    lines += [f"## {seq}. 进入建议", ""]
     if coverage_gaps:
         lines.append("**数据覆盖缺口**：")
         for gap in coverage_gaps[:8]:

@@ -49,6 +49,16 @@ _TRUSTED_SUFFIXES = tuple(
     ).split(",") if s.strip()
 )
 
+# fake-ip 感知（默认关闭）：Clash/mihomo 类 TUN 代理的 fake-ip 模式会把**所有**
+# 域名解析到 198.18.0.0/15（RFC 2544 基准测试保留段，真实公网服务绝不落在这段）。
+# 本机开发开启 SSRF_FAKEIP_AWARE=true 后，对该段跳过拦截（字面私网 IP 与
+# loopback/元数据地址仍照拦；真实出站流量由本地代理接管）。
+_FAKEIP_V4_NET = ipaddress.ip_network("198.18.0.0/15")
+
+
+def _fakeip_aware() -> bool:
+    return os.getenv("SSRF_FAKEIP_AWARE", "").strip().lower() in ("1", "true", "yes", "on")
+
 
 def _is_trusted_host(host: str) -> bool:
     """判断 host 是否匹配可信域名后缀（精确匹配或子域）。"""
@@ -65,8 +75,13 @@ class UrlBlockedError(ValueError):
 
 def _is_forbidden_ip(ip: ipaddress._BaseAddress) -> bool:
     """判断 IP 是否落在禁止访问的网段。"""
-    if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved \
-            or ip.is_multicast or ip.is_unspecified:
+    if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+        return True
+    if isinstance(ip, ipaddress.IPv4Address):
+        # fake-ip 感知：198.18.0.0/15 在开关开启时放行（见 _FAKEIP_V4_NET 注释）
+        if ip in _FAKEIP_V4_NET and _fakeip_aware():
+            return False
+    if ip.is_private or ip.is_reserved:
         return True
     if isinstance(ip, ipaddress.IPv4Address):
         return any(ip in net for net in _EXTRA_BLOCKED_V4_NETS)

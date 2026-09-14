@@ -443,7 +443,32 @@ class TestWebToolsIntegration:
         with patch("urllib.request.urlopen", return_value=resp):
             result = web_search_tool.invoke({"query": "xyz_none_2099", "num_results": 1})
         assert "[NO RESULTS]" in result
-    
+
+    def test_bing_fallback_when_ddg_empty(self):
+        """DDG 返回空/bot-challenge 页时自动兜底 Bing（2026-09-15 实测 DDG 202 挑战）"""
+        from unittest.mock import MagicMock, patch
+
+        from backend.tools.web import web_search_tool
+
+        ddg_challenge = MagicMock()  # 202 bot-challenge：200 状态但无可解析结果
+        ddg_challenge.read.return_value = b'<html><body>challenge</body></html>'
+        ddg_challenge.__enter__ = MagicMock(return_value=ddg_challenge)
+        ddg_challenge.__exit__ = MagicMock(return_value=False)
+        bing_html = MagicMock()
+        bing_html.read.return_value = (
+            '<html><li class="b_algo"><h2><a href="https://www.bing.com/ck/a?!&amp;&amp;'
+            'u=a1aHR0cHM6Ly9leGFtcGxlLmNvbS9hcnRpY2xl">市场规模报告</a></h2>'
+            '<p>2025年市场规模1200亿元</p></li></html>').encode()
+        bing_html.__enter__ = MagicMock(return_value=bing_html)
+        bing_html.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen",
+                   side_effect=[ddg_challenge, bing_html]):
+            result = web_search_tool.invoke({"query": "耳机市场", "num_results": 3})
+        assert "市场规模报告" in result
+        assert "https://example.com/article" in result  # ck/a 跳转已解码 + &amp; 实体已处理
+        assert "1200亿元" in result
+
     # ==================== 新增：Crawler 高级功能 ====================
     
     def test_crawl_timeout_configuration(self):

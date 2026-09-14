@@ -112,3 +112,34 @@ class TestAssertUrl:
         assert not _is_trusted_host("evil-taobao.com")
         assert not _is_trusted_host("taobao.com.evil.com")
         assert not _is_trusted_host("evil.example.com")
+
+
+class TestFakeIpAware:
+    """fake-ip 感知开关（SSRF_FAKEIP_AWARE）：Clash TUN 环境全域名解析到 198.18.0.0/15"""
+
+    def test_fakeip_blocked_by_default(self, monkeypatch):
+        monkeypatch.delenv("SSRF_FAKEIP_AWARE", raising=False)
+        assert _is_forbidden_ip(_ip("198.18.1.144"))
+        fake = [("AF_INET", 1, 6, "", ("198.18.1.144", 0))]
+        with patch.object(socket, "getaddrinfo", return_value=fake):
+            with pytest.raises(UrlBlockedError, match="SSRF"):
+                assert_url_allowed("https://zh.wikipedia.org/wiki/Main_Page")
+
+    def test_fakeip_allowed_when_aware(self, monkeypatch):
+        monkeypatch.setenv("SSRF_FAKEIP_AWARE", "true")
+        assert not _is_forbidden_ip(_ip("198.18.1.144"))
+        assert not _is_forbidden_ip(_ip("198.19.255.255"))
+        fake = [("AF_INET", 1, 6, "", ("198.18.1.144", 0))]
+        with patch.object(socket, "getaddrinfo", return_value=fake):
+            assert assert_url_allowed("https://zh.wikipedia.org/wiki/Main_Page") == \
+                "https://zh.wikipedia.org/wiki/Main_Page"
+
+    def test_fakeip_aware_still_blocks_private_and_loopback(self, monkeypatch):
+        """开关只放行 fake-ip 段，真实内网/环照拦"""
+        monkeypatch.setenv("SSRF_FAKEIP_AWARE", "true")
+        assert _is_forbidden_ip(_ip("127.0.0.1"))
+        assert _is_forbidden_ip(_ip("192.168.1.1"))
+        assert _is_forbidden_ip(_ip("10.0.0.5"))
+        assert _is_forbidden_ip(_ip("169.254.169.254"))
+        with pytest.raises(UrlBlockedError):
+            assert_url_allowed("http://192.168.1.1/admin")
