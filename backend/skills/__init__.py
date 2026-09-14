@@ -26,6 +26,7 @@ from backend.skills.data_export.skill import DataExportSkill, data_export_skill_
 from backend.skills.web_search.skill import WebSearchSkill, web_search_skill_node
 from backend.skills.web_crawl.skill import WebCrawlSkill, web_crawl_skill_node
 from backend.skills.travel_poi.skill import TravelPoiSkill, travel_poi_skill_node
+from backend.skills.map.skill import MapLookupSkill, map_lookup_skill_node
 
 __all__ = [
     "BaseSkill", "execute_with_retry",
@@ -38,4 +39,5 @@ __all__ = [
     "WebSearchSkill", "web_search_skill_node",
     "WebCrawlSkill", "web_crawl_skill_node",
     "TravelPoiSkill", "travel_poi_skill_node",
+    "MapLookupSkill", "map_lookup_skill_node",
 ]

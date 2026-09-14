@@ -21,6 +21,7 @@ from backend.skills.data_collection.skill import DataCollectionSkill, data_colle
 from backend.skills.business_analysis.skill import BusinessAnalysisSkill, business_analysis_skill_node
 from backend.skills.competitor_analysis.skill import CompetitorAnalysisSkill
 from backend.skills.travel_poi.skill import TravelPoiSkill
+from backend.skills.map.skill import MapLookupSkill
 
 # 全局实例（PR-2.x: DataCollection 已从外部惰性加载升级为内置注册）
 _instances: list = [
@@ -35,6 +36,7 @@ _instances: list = [
     BusinessAnalysisSkill(),
     CompetitorAnalysisSkill(),
     TravelPoiSkill(),
+    MapLookupSkill(),
 ]
 
 # capability → Skill 实例
