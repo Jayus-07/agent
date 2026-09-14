@@ -1,7 +1,14 @@
 /**
  * 底层 fetch 抽象：统一 JSON 解析、错误处理、超时
  * 所有 API 模块都基于这个，避免重复
+ *
+ * 认证（对接网关 JWT 体系）：
+ * - 有登录态时自动附带 Authorization: Bearer
+ * - 401 → 静默 refresh 一次并重试原请求；refresh 也失败 → 清态跳 /login
+ * - X-API-Key 双通道保留（网关与下游 Python 服务按机器凭据校验）
  */
+
+import { bearerHeaders, handleAuthFailure, tryRefreshOnce } from "./auth";
 
 export class ApiError extends Error {
   constructor(
@@ -30,11 +37,12 @@ function joinUrl(path: string): string {
 }
 
 /**
- * 通用 JSON 请求
+ * 通用 JSON 请求（_retried 供 401 重试防递归，外部不要传）
  */
 export async function request<T = unknown>(
   path: string,
   options: RequestOptions = {},
+  _retried = false,
 ): Promise<T> {
   const { timeout = DEFAULT_TIMEOUT, signal: externalSignal, ...init } = options;
   const controller = new AbortController();
@@ -54,6 +62,7 @@ export async function request<T = unknown>(
         ...(process.env.NEXT_PUBLIC_API_KEY
           ? { "X-API-Key": process.env.NEXT_PUBLIC_API_KEY }
           : {}),
+        ...bearerHeaders(),
         ...init.headers,
       },
       signal: controller.signal,
@@ -62,6 +71,13 @@ export async function request<T = unknown>(
     const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
+      // 401：先尝试静默刷新，成功则重试一次原请求；失败则跳登录页
+      if (res.status === 401 && !_retried && !path.startsWith("/api/auth/")) {
+        if (await tryRefreshOnce()) {
+          return request<T>(path, options, true);
+        }
+        handleAuthFailure();
+      }
       // 后端 FastAPI 习惯：detail 字段含错误信息
       const detail = data?.detail;
       const message =

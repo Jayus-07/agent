@@ -2,6 +2,7 @@
  * Chat 业务 API：流式对话 + 中止
  */
 import { request, requestSilent } from "../fetcher";
+import { bearerHeaders, handleAuthFailure, tryRefreshOnce } from "../auth";
 import { parseSSEStream } from "../sse-parser";
 import type { SSEStreamEvent as TypedSSEStreamEvent } from "../types";
 
@@ -27,20 +28,32 @@ export async function* streamChat(
   req: ChatRequest,
   signal?: AbortSignal,
 ): AsyncGenerator<SSEStreamEvent> {
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_API_URL || ""}/api/chat/stream`,
-    {
+  const doFetch = () =>
+    fetch(`${process.env.NEXT_PUBLIC_API_URL || ""}/api/chat/stream`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...(process.env.NEXT_PUBLIC_API_KEY
           ? { "X-API-Key": process.env.NEXT_PUBLIC_API_KEY }
           : {}),
+        ...bearerHeaders(),
       },
       body: JSON.stringify(req),
       signal,
-    },
-  );
+    });
+
+  let res = await doFetch();
+
+  // 401：静默刷新一次并重试；刷新失败则清态跳登录页
+  if (res.status === 401) {
+    if (await tryRefreshOnce()) {
+      res = await doFetch();
+    } else {
+      handleAuthFailure();
+      throw new Error("登录已过期");
+    }
+  }
+
   if (!res.ok || !res.body) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     const detail = err?.detail;

@@ -231,11 +231,26 @@ E2E: `cd backend && python e2e_demo.py`
 设计文档: `docs/README.md`（7 个顶层文档 + 7 个关键深读）
 记忆: 用户级 `~/.claude/projects/<project>/memory/MEMORY.md`（按项目分类的会话记忆）
 
+## 服务启停约定（2026-09-15 起生效）
 
 ```bash
-# 一键启动
-start_all.bat
-# 一键关闭
-stop_all.bat
-# 一键重启 
-restart_all.bat
+# Python 后端 :8000（uvicorn --reload --reload-dir app，改代码即生效）
+start_py.bat / stop_py.bat / restart_py.bat
+# Java 服务（原生 jar：auth-service :8006 / system-service :8001 / api-gateway :8080；
+# business-service 留容器；mysql/redis/nacos/postgres/kafka 基础设施容器不动）
+start_java.bat / stop_java.bat / restart_java.bat
+# 改了 Java 源码 → 本地 mvn 打包（免 docker build）→ restart_java.bat
+build_java.bat
+# 后端+前端一起（冷启动场景）；start.bat 按 .env.local 自动选模式
+start_all.bat / stop_all.bat / restart_all.bat
+```
+
+- 前端 :3000 用 `start_all.bat` / `frontend/start_dev.bat`；`NEXT_PUBLIC_*` 改动需重启 dev server
+- 网关路由/白名单改 `api-gateway/config/application.yml`（compose 挂载的外部配置，
+  唯一事实源）→ `restart_java.bat` 生效，**无需 docker build**
+- 热路由（仅本机开发）：`set GATEWAY_HOT_ROUTES=true` 后 start_java.bat，
+  可 `POST /actuator/gateway/routes/{id}` 运行时增改路由；生产必须保持关闭
+- 登录链路：前端 `/login` → 网关 `/api/auth/**` → auth-service(JWT)；
+  refresh_token 走 HttpOnly Cookie（REFRESH_COOKIE_SECURE 本地必须 false）
+- 杀端口脚本都带 docker 守卫：容器占端口时跳过，防误杀 com.docker.backend
+- 完整文档: `命令文档.md`（含热路由 curl 示例、两种模式说明）

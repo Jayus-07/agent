@@ -1,3 +1,17 @@
+# =============================================================================
+# api-gateway 外部配置（挂载进容器 /app/config/application.yml）
+#
+# 工作流（免重建）：
+#   1. 改本文件（路由 / 白名单 / 环境变量默认值）
+#   2. docker compose restart api-gateway
+#   完毕 —— 不需要 docker compose build。
+#
+# 优先级说明：Spring Boot 会用本文件覆盖镜像内 application.yml 的同名配置
+# （列表型配置如 routes / exclude-paths 是整段替换，不是合并），
+# 因此改路由、改白名单请只改这里，镜像内的那份仅作容器裸跑兜底。
+#
+# 本文件由 2026-09-15 的镜像内 application.yml 复制而来，内容保持同步。
+# =============================================================================
 server:
   port: 8080
 
@@ -30,10 +44,10 @@ spring:
             allowCredentials: true
             maxAge: 3600
       routes:
-        # ── 认证中心（旧系统 auth-service 复用，P2 新增；必须置于列表最前）──
+        # ── 认证中心（旧系统 auth-service 复用；必须置于列表最前）──
         # /api/auth/login → /auth/login（后端 context-path 不变，旧接口契约零改动）
         - id: auth-service
-          uri: ${AUTH_SERVICE_URL:http://localhost:8006}
+          uri: ${AUTH_SERVICE_URL:http://host.docker.internal:8006}
           predicates:
             - Path=/api/auth/**
           filters:
@@ -41,21 +55,21 @@ spring:
         # ── 用户中心（旧系统 system-service，注册/用户管理）──
         # /api/sys/users/register → /system/users/register（context-path /system，端口 8001）
         - id: system-service
-          uri: ${SYS_SERVICE_URL:http://localhost:8001}
+          uri: ${SYS_SERVICE_URL:http://host.docker.internal:8001}
           predicates:
             - Path=/api/sys/**
           filters:
             - RewritePath=/api/sys/(?<segment>.*), /system/$\{segment}
         # ── 业务系统（Java）：客服管理面 ──
         - id: business-service
-          uri: ${BUSINESS_SERVICE_URL:http://localhost:8081}
+          uri: ${BUSINESS_SERVICE_URL:http://business-service:8081}
           predicates:
             - Path=/api/cs/conversations/**,/api/channels/**
           filters:
             - StripPrefix=1
         # ── AI 系统（Python）：chat/rag/observability/... 其余全部 ──
         - id: ai-service
-          uri: ${AI_SERVICE_URL:http://localhost:8000}
+          uri: ${AI_SERVICE_URL:http://host.docker.internal:8000}
           predicates:
             - Path=/api/**
           filters:
@@ -95,7 +109,18 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        # 环境变量控制：GATEWAY_ACTUATOR_INCLUDE=health,info,metrics,gateway
+        # 打开 gateway 端点后可运行时增改路由（零重启）：
+        #   POST /actuator/gateway/routes/{id}   Content-Type: application/json
+        #   {"predicates":[{"name":"Path","args":{"pattern":"/api/foo/**"}}],
+        #    "filters":[],"uri":"http://127.0.0.1:9000"}
+        #   POST /actuator/gateway/refresh  （老版本不生效时手动刷新）
+        # 安全提示：actuator 无鉴权，仅限纯本机开发；对外/生产环境保持默认
+        #（health,info,metrics），或用防火墙只放行 127.0.0.1。
+        include: ${GATEWAY_ACTUATOR_INCLUDE:health,info,metrics}
+  endpoint:
+    gateway:
+      enabled: ${GATEWAY_HOT_ROUTES:false}
   health:
     # 认证 Redis 可用性由鉴权过滤器 fail-closed 兜底（401），不应把网关整体标 DOWN
     redis:

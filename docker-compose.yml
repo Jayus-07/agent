@@ -22,6 +22,12 @@ services:
     build: ./api-gateway
     ports:
       - "8080:8080"
+    volumes:
+      # 外部配置覆盖（Spring Boot 默认读取 ./config/application.yml，WORKDIR=/app）：
+      # 改路由/白名单只动 api-gateway/config/application.yml，然后
+      #   docker compose restart api-gateway
+      # 无需 --build 重新打镜像（镜像内那份 yml 仅作容器裸跑兜底）
+      - ./api-gateway/config:/app/config:ro
     environment:
       # Python 后端跑在宿主机；若 app 容器启用则改回 http://app:8000
       # 支持环境变量覆盖：冒烟脚本用它把上游临时切到回显桩，验证网关下发/剥离的身份头
@@ -30,6 +36,12 @@ services:
       # ── 认证中心接入 + 网关统一鉴权（P2）──
       # 认证中心为 oa-auth 独立 compose（端口仅绑宿主机 loopback），容器经 host.docker.internal 访问
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://host.docker.internal:8006}
+      # system-service（注册/用户中心）：Nacos 配置端口 8001、context-path /system
+      - SYS_SERVICE_URL=${SYS_SERVICE_URL:-http://host.docker.internal:8001}
+      # 网关热路由开关（仅本地开发）：true 时暴露 /actuator/gateway 端点，
+      # 可 POST 运行时增改路由零重启；生产/对外必须保持 false
+      - GATEWAY_HOT_ROUTES=${GATEWAY_HOT_ROUTES:-false}
+      - GATEWAY_ACTUATOR_INCLUDE=${GATEWAY_ACTUATOR_INCLUDE:-health,info,metrics}
       - GATEWAY_AUTH_ENABLED=${GATEWAY_AUTH_ENABLED:-false}
       - GATEWAY_AUTH_MODE=${GATEWAY_AUTH_MODE:-shadow}
       # JWT_SECRET 必须与 Enterprise_OA/anonymous-rating-system/docker/.env.oaauth 的 JWT_SECRET_KEY 同值

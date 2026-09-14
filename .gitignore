@@ -32,6 +32,10 @@ lib/
 lib64/
 parts/
 sdist/
+# 例外：上面 Python 打包遗留的 lib/ 会误伤前端源码目录，
+# 导致 frontend/src/lib/ 下新文件永远进不了 git（auth.ts/authFetch.ts 曾中招）
+!frontend/src/lib/
+!frontend/src/lib/**
 var/
 wheels/
 *.egg-info/
