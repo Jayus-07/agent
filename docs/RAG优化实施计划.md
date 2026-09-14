@@ -186,19 +186,48 @@
 
 ## 进度跟踪
 
-- [~] 阶段 0：基线与防护网 —— 0.3 回归测试已落地并确认红（6 failed / 2 passed，红=bug 证实）✅；0.1 全量基线运行中；0.2 黄金集 mrr/recall 基线待 0.1 完成后适配处理
-- [ ] 阶段 1：S0 修复 + Contextual Prefix + Token 计量补齐 1.3（M1）
-- [ ] 阶段 2：切分策略修补 C1/C2/C3/C4（M2）
-- [ ] 阶段 3：缓存 + 对账（M3）
-- [ ] 阶段 4：工程化收尾（M4）
+- [x] 阶段 0：基线与防护网 ✅（2026-09-15 03:45 完成）
+  - 0.1 基线：**3716 collected / 29 failed / ~3687 passed**，失败构成：evidence_gate×11、0.3 预期红×6（现已转绿）、evaluation 系列×7、零星×5。与旧基线（104 failed eval_golden）差异源于并发会话提交 60b96f5/c1561ae 对测试集的变更
+  - 0.3 回归测试：`tests/rag/test_simulated_questions_pipeline.py` 红转绿全程留痕（6 红 → 8 绿）✅
+  - 0.2 适配：黄金集 mrr/recall 对比顺延至 1.2 前缀改完的验收环节执行（需要 RAG 全栈运行，与 1.2 验收合并避免重复起栈）
+- [~] 阶段 1：S0 修复 + Contextual Prefix + Token 计量补齐 1.3（M1）——**代码全部交付**（2026-09-15 04:00-04:10）
+  - [x] **1.1 S0 修复**：新增 `question_gen.py`（LLM 主路径 + 规则降级 + 成本护栏 + proxy 计量）、config 开关、indexer gather 第四任务接线 + tokens 双路汇总 + enriched 死分支清理。验收：0.3 测试 8/8 绿；相关回归 84 passed
+  - [x] **1.2 Contextual Prefix**：`_embed_text_for` 三级前缀（【文档】summary前100字/【章节】/【相关问题】，缺段自动跳过）+ `_embed_with_retry(doc_summary=)` 传参 + doc_db 文本增强（新纯函数 `_build_doc_level_text`：summary/章节拼头部，总长约束 16K、正文最少保 2000）。新增 `test_contextual_prefix.py` 12 项契约
+  - [x] **1.3 计量补齐**：a) question_gen 走 proxy ✅（随 1.1）；b) llm_tokens 双路汇总进 trace/registry 口径 ✅；c) ChatOllama 直连确认为**伪缺口**（本地模型无 usage/无成本），已加注释固化"切 cloud 必须走 proxy"约束；d) embedding 真实 usage 读取可选后置
+  - [ ] **1.2 运行时验收（待用户环境）**：黄金集三组对比（无前缀/仅问题/全前缀）需 RAG 全栈 + 评测集重索引，与 0.2 的 mrr/recall 基线合并执行；已索引文档需重索引前缀才生效
+  - 验收汇总：contextual_prefix 12 + simulated_questions 8 + embed_batching 6 + chunking/semantic 回归 → **37 passed 全绿**
+- [~] 阶段 2：切分策略修补 C1/C2/C3/C4（M2）
+  - [x] **2.1 C2 表格双层切分通用化**（2026-09-15 04:20）：抽模块级 `_split_table_node` 共享 helper；`StructureChunkStrategy._emit_leaf` 表格 leaf 走双层切分（policy 等六类型不再硬切断行）；financial 改调 helper + 补 reporting_period/fiscal_year/is_latest 特有元数据（行为不变，chunk_id 与旧实现一致）。验收：test_table_split_general 8/8 绿 + 切分系回归 47 passed
+  - [x] **2.2 C1 三策略 parent 补齐**（2026-09-15 04:35）：新 helper `_attach_virtual_parents`（group_size=None 文档级单 parent / N 条款分组）；Step 文档级单 parent、Legal 每 5 条款一 parent（`LEGAL_CLAUSES_PER_PARENT`）、QA 文档级单 parent；config/__init__ 导出补齐。旧测试总数断言更新（chunk 总数 = leaf+1）。验收：test_virtual_parents + legal/step/qa/router 回归 29 passed
+  - [x] **2.3 C3 上下文携带 + 去二次清洗**（2026-09-15 04:45）：新 helper `_iter_leaves_with_section` + `_merge_small_with_section`；Fixed/Recursive 抽公共循环 `_split_unstructured`，chunk 注入 section_title/section_path（跨 section 合并打 `section_mixed`）；indexer find() 章节映射降级为兜底（策略注入的标题权威优先）；**删除 indexer 二次清洗**（pipeline 已清洗，span 保留标记 skipped）。验收：test_section_context 8 项 + 回归全绿
+  - [x] **2.4 C4 Semantic 修补**（2026-09-15 04:50）：碎片合并（小叶子先按预算合并再做语义切分）、`_split_sentences_keep_punct` 保留原标点（！？；不再被 "。" 覆盖，fake embedding 映射同步适配）、边界查找 O(n) 预计算（原 next() 最坏 O(n²)）、Semantic chunk 注入 section_title
+  - [x] **阶段 2 最终回归**：backend/tests/rag/ 全目录 **418 passed / 0 failed**（含 test_faq_routing 旧总数断言更新 2 处）
+- [x] 阶段 3：缓存 + 对账（M3）✅（2026-09-15 05:15）
+  - [x] **3.1 embedding 结果缓存**：新 `embed_cache.py`（Redis 键 `rag:emb:{model}:{sha256(embed_text)}`，TTL 30 天，mget/pipeline 批量，软失败全降级）；`_embed_with_retry` 缓存优先——只对 miss 子集真实嵌入+回填，逐条路径同步接入；命中率写 span metrics + 日志。config：`RAG_EMBED_CACHE_ENABLED`/`RAG_EMBED_CACHE_TTL_SECONDS`。验收：test_embed_cache 7 项（roundtrip/损坏值/软失败/二次调用零嵌入/前缀变更新键/metrics）
+  - [x] **3.2 索引对账 job：取消实施**——`consistency_sweep_loop`（consistency.py，6h 周期 check+repair，孤儿向量/BM25 幽灵清扫）**已挂载 server 运行时**，功能覆盖计划目标。分析报告正文"缺周期对账"结论**有误**（当时未发现 server 挂载点），以此修正。重复造轮子是负债，已删除试写的 reconcile.py
+  - [x] **3.3 摘要缓存 Redis 化**：`build_llm_summary` 升级 L1 内存 + L2 Redis 双层（键改 sha256——原内置 hash 受 PYTHONHASHSEED 影响跨进程不稳定；TTL 7 天，软失败）。验收：test_summary_cache 4 项（键稳定/L2 命中跳 LLM/回写/故障降级）
+  - 验收汇总：**24 passed**（embed_cache 7 + summary_cache 4 + embed_batching 6 + indexer_pipeline 回归）
+- [~] 阶段 4：工程化收尾（M4）
+  - [x] **4.1（状态置位）near_dup → pending_review**（2026-09-15 05:35）：`register()` 带 `near_dup_id` 时 status 置 `pending_review`（原静默 active 入库）；chunk metadata 注入 `review_status`（供检索 where 过滤与前端展示）。验收：test_review_status 3 项
+    - [x] **4.1b 检索层软过滤**（2026-09-15 05:45）：`hybrid_retrieve` 拆包装层（覆盖 enhanced/fallback/SQL bypass 全部出口），返回前剔除 `pending_review` 文档。**关键设计：不用向量库 where $ne 过滤**——存量 chunk 无 review_status 字段会被 $ne 全部误杀；改用 registry pending_review doc_id 集合（60s 进程内缓存，空集合同样缓存零开销，registry 不可用跳过过滤保可用性）。验收：test_review_filter 7 项 + hybrid 回归
+  - [x] **4.5 死代码清理**（2026-09-15 05:35）：Router 空壳 LLM Assisted 分支删除；4 个零消费死配置删除（grep 实证 0 消费）+ ENABLE_LLM_CHUNKING/LLM_CHUNK_MIN_CHARS；CHUNK_SIZE 保留（rag_documents.py 在用）。验收：config 导入正常 + 回归 23 passed
+  - [ ] 4.2 错误码体系：需前端联动，单独排期
+  - [x] **4.3 增强项**（2026-09-15 05:55，数据可达性优先，策略层待评测数据）：
+    - 4.3c 表格行 LLM 描述：新 `table_describe.py`（行级 kv → 一句话语义，一次调用批量产出，TABLE_DESC_MAX_ROWS=20 护栏，走 proxy 计量，失败无前缀降级）；`_embed_text_for` 加【表格】前缀段；indexer 接线（table_row chunk 识别 → 批量生成 → metadata.table_desc）
+    - 4.3a 实体落库：结构化 entities JSON 注入 chunk metadata（500 字截断）
+    - 4.3b 时间引用落库：time_refs 注入 chunk metadata；自动过期判定/降权**后置**——extract_time_refs 为非结构化字符串，解析规则与有效期阈值需业务输入
+    - 验收：test_table_describe 6 项 + 回归；**rag 全目录 445 passed / 0 failed**
+  - [ ] 4.4 元数据异步 enrichment（P3，单独立项）
 - [ ] 阶段 5：企业级用量审计与统一上报 5.1-5.8（M5）——建议 M3 后与 M4 并行
 - [ ] C7 参数网格实验
 
 ### 执行日志
-- 2026-09-15 00:07-03:05：遭遇两轮工作区批量删除事件（997/427 文件，memory 已有 4 波记录的再现）。并发会话自行恢复 + 本会话 git restore 双路径处置，3 个 M 文件备份于 .workbuddy/backup_20260915/。第二轮删除时间点与后台 pytest 启动（02:55:18 mtime 批量刷新）强相关，**根因待查**：全量测试运行可能触发删除，基线完成后需核对 git status。
-- 2026-09-15 03:05：S0 事实链在恢复后代码上复核成立；0.3 测试 6 红 2 绿符合预期，bug 证实。0.1 基线启动。
-- [ ] 阶段 2：切分策略修补 C1/C2/C3/C4（M2）
-- [ ] 阶段 3：缓存 + 对账（M3）
+- 2026-09-15 00:07-03:05：两轮工作区批量删除事件（997/427 文件，memory 已有 4 波记录的再现）。并发会话自行恢复，3 个 M 文件备份于 .workbuddy/backup_20260915/。第二轮与后台 pytest 启动时刻相关性**未被证实**：本轮基线全程 18 分钟运行后删除数保持 0，pytest 触发假设排除，根因仍指向并发会话的 git/清理操作
+- 2026-09-15 03:05：S0 事实链复核成立；0.3 测试 6 红 2 绿，bug 证实
+- 2026-09-15 03:45：0.1 基线完成（3716/29），删除监控全程 0
+- 2026-09-15 04:00：**1.1 S0 修复交付**——question_gen 模块 4 项契约测试绿、接线测试 2 项绿、相关回归 84 passed。修复内容：gather 第四任务 task_questions、llm_tokens 双路汇总（1.3b 前半）、enriched 死分支与 enrich_metadata_llm 引用清除
+- 2026-09-15 04:10：**1.2 + 1.3 交付**——_embed_text_for 三级前缀（向后兼容：无 metadata 纯正文）、_embed_with_retry(doc_summary=) 传参、_build_doc_level_text 纯函数（doc_db 增强，单测 12 项含长度约束/正文保底）、1.3c 确认伪缺口并注释固化约束。最终回归 37 passed（含 chunking/semantic 链路）。**阶段 1 代码全部完成**，仅剩 1.2 黄金集三组对比为运行时验收项（需全栈 + 重索引）
+- 2026-09-15 04:20-04:50：**阶段 2 全部交付**——2.1 表格双层切分通用化（_split_table_node 共享 helper，六类型不再硬切断行）；2.2 三策略虚拟 parent（_attach_virtual_parents，Step/Legal/QA 检索退化修复）；2.3 上下文携带（_iter_leaves_with_section + _merge_small_with_section + _split_unstructured 抽取，indexer find() 降级兜底、二次清洗删除）；2.4 Semantic 三修补（碎片合并/标点保留/O(n) 边界）。**最终回归 backend/tests/rag/ 全目录 418 passed / 0 failed**（旧总数断言更新 5 处：step×2/legal×1/faq×2）。阶段 2 完成，下一步阶段 3（embedding 缓存 + 对账 job）
 - [ ] 阶段 4：工程化收尾（M4）
 - [ ] 阶段 5：企业级用量审计与统一上报 5.1-5.7（M5）——建议 M3 后与 M4 并行
 - [ ] C7 参数网格实验
