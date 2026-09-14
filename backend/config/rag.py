@@ -93,18 +93,12 @@ CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
 
 # 文档类型感知分块
-POLICY_MAX_CHUNK_SIZE = int(os.getenv("POLICY_MAX_CHUNK_SIZE", "2000"))
-PROJECT_CHUNK_SIZE = int(os.getenv("PROJECT_CHUNK_SIZE", "1500"))
-GENERAL_CHUNK_SIZE = int(os.getenv("GENERAL_CHUNK_SIZE", "1000"))
-GENERAL_CHUNK_OVERLAP = int(os.getenv("GENERAL_CHUNK_OVERLAP", "100"))
 
 # 切分重构（token 计数 + 语义/LLM 切分开关）
 LEAF_CHUNK_TOKENS = int(os.getenv("LEAF_CHUNK_TOKENS", "500"))
 PARENT_CHUNK_TOKENS = int(os.getenv("PARENT_CHUNK_TOKENS", "2000"))
 STRUCTURE_COMPLETE_THRESHOLD = float(os.getenv("STRUCTURE_COMPLETE_THRESHOLD", "0.7"))
 ENABLE_SEMANTIC_CHUNKING = os.getenv("ENABLE_SEMANTIC_CHUNKING", "false").lower() == "true"
-ENABLE_LLM_CHUNKING = os.getenv("ENABLE_LLM_CHUNKING", "false").lower() == "true"
-LLM_CHUNK_MIN_CHARS = int(os.getenv("LLM_CHUNK_MIN_CHARS", "2000"))
 
 # Semantic 语义切分（Phase 3）：仅对「无结构长文档」启用，避免短文档过度调用 embedding
 # 文档 token 数超过此阈值才走语义切分，否则递归切分足够
@@ -114,6 +108,24 @@ SEMANTIC_SIMILARITY_THRESHOLD = float(os.getenv("SEMANTIC_SIMILARITY_THRESHOLD",
 # 语义切分句子级 embedding 加固：分批大小 + 每批重试次数（对齐 indexer EMBED_RETRY_MAX 模式）
 SEMANTIC_EMBED_BATCH_SIZE = int(os.getenv("SEMANTIC_EMBED_BATCH_SIZE", "32"))
 SEMANTIC_EMBED_RETRY = int(os.getenv("SEMANTIC_EMBED_RETRY", "3"))
+
+# 模拟问题生成（Document Expansion，S0 修复）——为每 chunk 生成口语化提问拼入
+# embedding 文本前缀，弥合「口语化提问 ↔ 书面文档」语义鸿沟
+ENABLE_SIMULATED_QUESTIONS = os.getenv("ENABLE_SIMULATED_QUESTIONS", "true").lower() == "true"
+# 成本护栏：超长文档只对前 N chunk 走 LLM 生成问题，其余规则兜底
+QUESTION_GEN_MAX_CHUNKS = int(os.getenv("QUESTION_GEN_MAX_CHUNKS", "24"))
+
+# C1 修复：Legal 策略的虚拟 parent 分组大小（每 N 个条款 leaf 挂一个 parent，
+# 供「命中 leaf → 取 parent 扩上下文」的 parent-child 检索使用）
+LEGAL_CLAUSES_PER_PARENT = int(os.getenv("LEGAL_CLAUSES_PER_PARENT", "5"))
+
+# 3.1 embedding 结果缓存（Redis）——重索引时未变化 chunk 免重复嵌入
+RAG_EMBED_CACHE_ENABLED = os.getenv("RAG_EMBED_CACHE_ENABLED", "true").lower() == "true"
+RAG_EMBED_CACHE_TTL_SECONDS = int(os.getenv("RAG_EMBED_CACHE_TTL_SECONDS", str(30 * 86400)))
+
+# 4.3c 表格行 LLM 描述——为行级 kv chunk 生成一句话语义描述拼入 embedding
+ENABLE_TABLE_DESCRIPTIONS = os.getenv("ENABLE_TABLE_DESCRIPTIONS", "true").lower() == "true"
+TABLE_DESC_MAX_ROWS = int(os.getenv("TABLE_DESC_MAX_ROWS", "20"))
 # 索引主路径 embedding 批量化（P2）：embed_documents 批调用走本地模型矩阵运算，
 # 比逐条 embed_query 快数倍；批失败降级逐条以隔离失败点
 EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "32"))

@@ -29,7 +29,6 @@ from typing import Any
 from langchain_core.documents import Document
 
 from backend.observability.tracer import trace_collector, WorkflowKind, SpanKind
-from backend.rag.preprocessing.cleaner import DocumentCleaner
 from backend.rag.preprocessing.parser import PARSABLE_EXTS
 from backend.rag.indexing.models import SyncResult, Delta
 from backend.rag.indexing.doc_id import derive_doc_id, parse_kb_dept_subpath_from_path
@@ -58,6 +57,39 @@ def _embed_backoff_seconds(attempt: int) -> float:
 # doc 级全文入库的文本长度上限：doc_db 单条 embedding 超长会被模型截断/报错，
 # 且大文件下内存峰值翻倍；Stage1 doc 级检索只需头部语义信息即可定位文档
 DOC_LEVEL_TEXT_MAX_CHARS = 16000
+
+# doc 级文本增强（1.2）：摘要/章节头部最少保住的正文预算——
+# header 过长时正文不至于被挤没，保证 doc 级仍含原始语义
+_DOC_LEVEL_BODY_MIN_CHARS = 2000
+
+
+def _build_doc_level_text(full_text: str, doc_meta: dict) -> str:
+    """构造 doc 级入库文本：summary/章节头部 + 全文头 N 字（1.2 doc_db 增强）。
+
+    背景：doc 级入库原本是"全文头 16K 字符"裸文本，元数据阶段花 LLM 成本
+    生成的 summary/sections 没有参与 doc 级向量——Stage1 文档定位对
+    「文档讲什么」的语义表达不完整。本函数把 header 拼到全文头部，
+    总长仍受 DOC_LEVEL_TEXT_MAX_CHARS 约束（header 挤占正文预算，
+    但正文最少保 _DOC_LEVEL_BODY_MIN_CHARS）。
+
+    纯函数便于单测（tests/rag/test_contextual_prefix.py）。
+    """
+    if not full_text:
+        return ""
+    header_parts: list[str] = []
+    summary = (doc_meta.get("summary") or "").strip()
+    if summary:
+        header_parts.append(summary)
+    sections = doc_meta.get("sections") or []
+    if isinstance(sections, list) and sections:
+        joined = "、".join(str(s) for s in sections[:15] if str(s).strip())
+        if joined:
+            header_parts.append("章节：" + joined)
+    header = "\n".join(header_parts)
+    if not header:
+        return full_text[:DOC_LEVEL_TEXT_MAX_CHARS]
+    body_budget = max(DOC_LEVEL_TEXT_MAX_CHARS - len(header), _DOC_LEVEL_BODY_MIN_CHARS)
+    return header + "\n\n" + full_text[:body_budget]
 
 
 class ChunkingEmptyError(Exception):
@@ -474,7 +506,17 @@ class IncrementalIndexer:
                 metrics={"error": error_msg, "loader": "pipeline"})
             raise RuntimeError(f"parse failed: {error_msg}") from e
 
-        # ── ②.5 clean（文本清洗：控制字符/全角半角/HTML/PDF页眉页脚等）──
+        # ── ②.5 clean（C3 起不再二次清洗）──
+        # pipeline.parse_and_chunk 已做节点级清洗（控制字符/全角半角/HTML/
+        # PDF 页眉页脚/URL 邮箱等，DocumentCleaner 同源）。本段原有的
+        # chunk 级二次清洗删除：
+        #   1. 重复劳动——同一文本被 DocumentCleaner 处理两遍；
+        #   2. 非幂等操作（URL/邮箱改写、中文标点统一）二次执行会再次
+        #      变更文本，使 chunk 内容与解析产物漂移，影响 embedding 输入
+        #      稳定性与章节映射；
+        #   3. chunk_id 为内容派生，二次变更会让同内容重索引产出不同 id，
+        #      破坏幂等重索引承诺。
+        # span 保留（观测树连续性），标记 skip 供 Trace 详情页解释。
         clean_span = trace_collector.start_span(
             "index_clean",
             parent_id="index_upload",
@@ -483,30 +525,9 @@ class IncrementalIndexer:
             kind=SpanKind.INDEX_CLEAN.value,
             input={"doc_count": len(chunks)},
         )
-        try:
-            ext = os.path.splitext(file_path)[1].lower()
-            source_type = "pdf" if ext == ".pdf" else "text"
-            cleaner = DocumentCleaner()
-            clean_changes: list[str] = []
-            total_chars_before = 0
-            total_chars_after = 0
-            for ch in chunks:
-                total_chars_before += len(ch.page_content)
-                result = cleaner.clean(ch.page_content, source_type=source_type)
-                ch.page_content = result.text
-                total_chars_after += len(result.text)
-                clean_changes.extend(result.changes)
-            trace_collector.end_span(clean_span,
-                metrics={"docs_cleaned": len(chunks),
-                         "chars_before": total_chars_before,
-                         "chars_after": total_chars_after,
-                         "operations": ", ".join(clean_changes) if clean_changes else "none"},
-            )
-        except Exception as e:
-            trace_collector.end_span(clean_span, status="error",
-                metrics={"error": str(e)[:200]})
-            # 清洗失败不阻塞后续流程，使用原始文本继续
-            logger.warning(f"[Clean] 清洗失败，继续使用原始文本: {e}")
+        trace_collector.end_span(clean_span,
+            metrics={"skipped": "cleaned_in_pipeline", "docs": len(chunks)},
+        )
 
         # ── ④ dedup（SHA256 缓存检查）──
         dedup_span = trace_collector.start_span(
@@ -677,6 +698,36 @@ class IncrementalIndexer:
         # 模拟问题（从 doc_meta 拿；metadata 构建阶段已写入 questions_by_chunk）
         questions_by_chunk = doc_meta.get("questions_by_chunk", []) or []
 
+        # ── 4.3c: 表格行描述（kv 数据行 → 一句话语义，供 embedding 前缀）──
+        table_row_indexes = [
+            i for i, ch in enumerate(chunks)
+            if ch.metadata.get("chunk_type") == "table_row"
+        ]
+        if table_row_indexes:
+            try:
+                from backend.rag.preprocessing.table_describe import generate_table_descriptions
+                # 同步直调：_index_file_inner 整体在线程池执行，无事件循环阻塞问题
+                row_descs = generate_table_descriptions(
+                    [chunks[i].page_content for i in table_row_indexes],
+                    table_summary=doc_meta.get("summary", "") or "",
+                )
+                for i, desc in row_descs.items():
+                    if 0 <= i < len(table_row_indexes):
+                        chunks[table_row_indexes[i]].metadata["table_desc"] = desc
+            except Exception as e:
+                logger.warning(f"[TableDesc] 生成失败（无描述降级）: {e}")
+
+        # ── 4.3a/4.3b: 实体与时间引用随 chunk 落库（数据可达性）──
+        # 检索加分/时效降权策略待评测数据与业务规则输入后另做
+        entities_json = ""
+        if doc_meta.get("entities"):
+            try:
+                entities_json = json.dumps(doc_meta["entities"], ensure_ascii=False)[:500]
+            except (TypeError, ValueError):
+                entities_json = ""
+        time_refs_val = doc_meta.get("time_refs") or []
+        time_refs_str = ", ".join(str(t) for t in time_refs_val[:10]) if isinstance(time_refs_val, list) else str(time_refs_val)[:200]
+
         for i, ch in enumerate(chunks):
             ch.metadata["doc_type"] = doc_type_val
             ch.metadata["person_names"] = person_val
@@ -697,8 +748,23 @@ class IncrementalIndexer:
             if _sq:
                 ch.metadata["simulated_questions"] = _sq
 
-            # 章节归属
-            if section_positions:
+            # 4.1: 审核状态随 chunk 落库——near_dup 文档 = pending_review，
+            # 供检索层 where 过滤（$ne）与前端文档列表展示；正常文档 active
+            ch.metadata["review_status"] = (
+                "pending_review" if doc_meta.get("near_dup_id") else "active"
+            )
+            # 4.3a: 结构化实体（检索加分策略待评测数据）
+            if entities_json:
+                ch.metadata["entities"] = entities_json
+            # 4.3b: 时间引用（时效降权策略待业务规则输入）
+            if time_refs_str:
+                ch.metadata["time_refs"] = time_refs_str
+
+            # 章节归属（C3 改为兜底：切分策略（含 Fixed/Recursive 的
+            # section 感知合并）已注入的 section_title 权威优先；
+            # find() 首次出现位置映射只在 chunk 无标题时使用——
+            # 文本重复出现（模板化措辞）会错配章节）
+            if section_positions and not (ch.metadata.get("section_title") or "").strip():
                 chunk_start = full_text.find(ch.page_content[:80])
                 section_title = ""
                 for pos, title in section_positions:
@@ -760,7 +826,8 @@ class IncrementalIndexer:
             # doc 级全文超长会被 embedding 模型截断/报错，且大文件内存峰值翻倍；
             # Stage1 doc 级检索只需头部语义即可定位文档，超长部分截断。
             # 截断打标进 metadata，doc 级检索对长文档天然残缺，需可观测。
-            doc_level_text = full_text[:DOC_LEVEL_TEXT_MAX_CHARS] if full_text else ""
+            # 1.2 增强：summary/章节头部拼入 doc 级文本，LLM 元数据参与 doc 级向量
+            doc_level_text = _build_doc_level_text(full_text, doc_meta)
             if len(full_text) > DOC_LEVEL_TEXT_MAX_CHARS:
                 doc_db_meta["doc_level_truncated"] = "true"
                 doc_db_meta["doc_level_full_chars"] = len(full_text)
@@ -835,7 +902,8 @@ class IncrementalIndexer:
         embed_span.metrics["chunk_count"] = len(chunks)
         # 预嵌入：除失败预检外，成功向量直接传给 vectordb.add_documents(embeddings=...)，
         # 避免 langchain 内部对同一批文本再次全量嵌入（原先向量被丢弃，成本翻倍）
-        precomputed_vectors = self._embed_with_retry(chunks, embed_span)
+        precomputed_vectors = self._embed_with_retry(
+            chunks, embed_span, doc_summary=doc_meta.get("summary", "") or "")
         trace_collector.end_span(embed_span,
             metrics={"attempted": len(chunks),
                      "succeeded": len(precomputed_vectors),
@@ -941,11 +1009,31 @@ class IncrementalIndexer:
         }
 
     @staticmethod
-    def _embed_text_for(chunk) -> str:
-        """构造 embedding 文本：模拟问题前缀（Document Expansion）+ 正文。"""
-        questions = chunk.metadata.get("simulated_questions", [])
+    def _embed_text_for(chunk, doc_summary: str = "") -> str:
+        """构造 embedding 文本：Contextual Prefix + 正文（1.2）。
+
+        三级前缀（字段缺失自动跳过对应段，全缺则纯正文）：
+          1.【文档】文档级摘要前 100 字——contextual retrieval 的零 LLM 版：
+            复用元数据阶段已生成的 summary，为 chunk 补文档级上下文
+          2.【章节】chunk 所属章节标题（切分策略/indexer 章节映射已注入）
+          3.【相关问题】模拟问题（Document Expansion，question_gen 产出）
+        """
+        parts: list[str] = []
+        if doc_summary:
+            parts.append("【文档】" + doc_summary.strip()[:100])
+        section_title = (chunk.metadata.get("section_title") or "").strip()
+        if section_title:
+            parts.append("【章节】" + section_title)
+        questions = chunk.metadata.get("simulated_questions") or []
         if questions:
-            return "【相关问题】" + " | ".join(questions) + "\n\n" + chunk.page_content
+            parts.append("【相关问题】" + " | ".join(questions))
+        # 4.3c: 表格行 LLM 描述——kv 数据行的自然语言语义
+        table_desc = (chunk.metadata.get("table_desc") or "").strip()
+        if table_desc:
+            parts.append("【表格】" + table_desc)
+        prefix = "\n".join(parts)
+        if prefix:
+            return prefix + "\n\n" + chunk.page_content
         return chunk.page_content
 
     def _embed_single_with_retry(self, i: int, chunk, embed_text: str):
@@ -997,7 +1085,7 @@ class IncrementalIndexer:
                      "retry_count": EMBED_RETRY_MAX})
         return None
 
-    def _embed_with_retry(self, chunks, parent_span) -> list:
+    def _embed_with_retry(self, chunks, parent_span, doc_summary: str = "") -> list:
         """批量嵌入（P2 批量化）；成功静默，失败单独 child span 记录。
 
         - 每批 EMBED_BATCH_SIZE 条调 embed_documents：本地模型批推理走矩阵
@@ -1005,6 +1093,7 @@ class IncrementalIndexer:
         - 每批重试 EMBED_RETRY_MAX 次；耗尽重试的批降级逐条 embed_query，
           隔离失败点，保留逐 chunk 失败 span 语义
         - embedding 实现无 embed_documents → 直接逐条路径
+        - doc_summary：1.2 Contextual Prefix——文档级摘要拼入每条嵌入文本
 
         Returns: 成功嵌入的向量列表（失败的 chunk 不在此列）。
 
@@ -1013,15 +1102,26 @@ class IncrementalIndexer:
         """
         if not chunks:
             return []
-        texts = [self._embed_text_for(c) for c in chunks]
+        texts = [self._embed_text_for(c, doc_summary=doc_summary) for c in chunks]
         succeeded: list = []
+        cache = self._get_embed_cache()
+        cache_hits = 0
 
         batch_embed = getattr(self.embedding, "embed_documents", None)
         if not callable(batch_embed):
             for i, chunk in enumerate(chunks):
-                vec = self._embed_single_with_retry(i, chunk, texts[i])
+                vec = None
+                cached = cache.get_many([texts[i]])[0] if cache.enabled else None
+                if cached is not None:
+                    vec = cached
+                    cache_hits += 1
+                else:
+                    vec = self._embed_single_with_retry(i, chunk, texts[i])
+                    if vec is not None:
+                        cache.put_many([texts[i]], [vec])
                 if vec is not None:
                     succeeded.append(vec)
+            self._report_cache_metrics(parent_span, cache_hits, len(chunks))
             return succeeded
 
         # 批大小：优先取 embedding 实现声明的最优批（cloud 模式受 DashScope
@@ -1032,36 +1132,75 @@ class IncrementalIndexer:
         for start in range(0, len(chunks), batch_size):
             batch_chunks = chunks[start:start + batch_size]
             batch_texts = texts[start:start + batch_size]
+            batch_vecs: list = [None] * len(batch_texts)
+            # 3.1: 缓存优先——命中的位置直接填充，只对 miss 的子集真实嵌入
+            if cache.enabled:
+                cached = cache.get_many(batch_texts)
+                for i, v in enumerate(cached):
+                    if v is not None:
+                        batch_vecs[i] = v
+            miss_positions = [i for i, v in enumerate(batch_vecs) if v is None]
+            cache_hits += len(batch_texts) - len(miss_positions)
             last_err = None
             batch_ok = False
-            for _attempt in range(EMBED_RETRY_MAX):
-                try:
-                    vecs = batch_embed(batch_texts)
-                    if not isinstance(vecs, (list, tuple)) or len(vecs) != len(batch_texts):
-                        raise ValueError(
-                            f"embed_documents 返回非法: type={type(vecs).__name__}, "
-                            f"期望 {len(batch_texts)} 条向量"
-                        )
-                    succeeded.extend(vecs)
-                    batch_ok = True
-                    break
-                except Exception as e:
-                    last_err = e
-                    # 指数退避 + 抖动（整批重试路径）
-                    if _attempt < EMBED_RETRY_MAX - 1:
-                        time.sleep(_embed_backoff_seconds(_attempt))
-            if batch_ok:
-                continue
-            # 整批耗尽重试 → 降级逐条，隔离单点失败（旧语义保留）
-            logger.warning(
-                f"[Embed] 批次 {start // batch_size}（{len(batch_texts)} chunks）"
-                f"重试 {EMBED_RETRY_MAX} 次全失败 ({last_err})，降级逐条"
-            )
-            for j, chunk in enumerate(batch_chunks):
-                vec = self._embed_single_with_retry(start + j, chunk, batch_texts[j])
-                if vec is not None:
-                    succeeded.append(vec)
+            if miss_positions:
+                miss_texts = [batch_texts[i] for i in miss_positions]
+                for _attempt in range(EMBED_RETRY_MAX):
+                    try:
+                        vecs = batch_embed(miss_texts)
+                        if not isinstance(vecs, (list, tuple)) or len(vecs) != len(miss_texts):
+                            raise ValueError(
+                                f"embed_documents 返回非法: type={type(vecs).__name__}, "
+                                f"期望 {len(miss_texts)} 条向量"
+                            )
+                        for i, v in zip(miss_positions, vecs):
+                            batch_vecs[i] = v
+                        cache.put_many(miss_texts, list(vecs))
+                        batch_ok = True
+                        break
+                    except Exception as e:
+                        last_err = e
+                        # 指数退避 + 抖动（整批重试路径）
+                        if _attempt < EMBED_RETRY_MAX - 1:
+                            time.sleep(_embed_backoff_seconds(_attempt))
+                if batch_ok:
+                    succeeded.extend(v for v in batch_vecs if v is not None)
+                    continue
+                # 整批（miss 子集）耗尽重试 → 降级逐条，隔离单点失败（旧语义保留）
+                logger.warning(
+                    f"[Embed] 批次 {start // batch_size}（{len(miss_texts)}/{len(batch_texts)} chunks，"
+                    f"其余命中缓存）重试 {EMBED_RETRY_MAX} 次全失败 ({last_err})，降级逐条"
+                )
+                for i in miss_positions:
+                    vec = self._embed_single_with_retry(start + i, batch_chunks[i], batch_texts[i])
+                    if vec is not None:
+                        batch_vecs[i] = vec
+                        cache.put_many([batch_texts[i]], [vec])
+            succeeded.extend(v for v in batch_vecs if v is not None)
+        self._report_cache_metrics(parent_span, cache_hits, len(texts))
         return succeeded
+
+    def _get_embed_cache(self):
+        """3.1: embedding 结果缓存读写器（实例级懒创建）。"""
+        if not hasattr(self, "_embed_cache"):
+            from backend.rag.indexing.embed_cache import EmbeddingCache
+            model_name = (getattr(self.embedding, "model_name", "") or
+                          os.path.basename(str(getattr(self.embedding, "model", "") or "")) or
+                          "unknown")
+            self._embed_cache = EmbeddingCache(model_name)
+        return self._embed_cache
+
+    @staticmethod
+    def _report_cache_metrics(parent_span, hits: int, total: int) -> None:
+        if hits <= 0 or total <= 0:
+            return
+        logger.info(f"[Embed] 缓存命中 {hits}/{total}")
+        try:
+            if parent_span is not None and hasattr(parent_span, "metrics"):
+                parent_span.metrics["embedding_cache_hit"] = hits
+                parent_span.metrics["embedding_cache_miss"] = total - hits
+        except Exception:  # pragma: no cover - metrics 写失败不影响主流程
+            pass
 
 
     async def _build_doc_metadata(self, full_text: str, base_meta: dict, parent_span_id: str = "", chunks_text: list[str] | None = None) -> dict:
@@ -1171,6 +1310,9 @@ class IncrementalIndexer:
                 trace_collector.end_span(domain_span, metrics={"domain": domain},
                     output=domain_detail or {})
             # 低置信 LLM 复验（前置：必须在关键词/复杂度之前确定最终 doc_type）
+            # 1.3c 计量约束：本处仅允许本地模型（ChatOllama，无 usage/无成本，
+            # 无需计量）；若未来切到 cloud 模型，必须改走 invoke_metadata_llm
+            # （proxy 层自动落 llm_usage_store），禁止直连云 SDK——否则漏记。
             if confidence < 0.3 and doc_type == "general":
                 try:
                     from backend.config.llm import OLLAMA_ENABLED
@@ -1223,13 +1365,11 @@ class IncrementalIndexer:
         # LLM 未调用时为空列表（向后兼容；非 LLM 路径不生成问题）
         questions_by_chunk: list[list[str]] = []
 
-        # F1: 旧合并调用路径（enrich_metadata_llm 一次性产出 keywords/summary/entities/questions）
-        # 已被并发任务取代；enriched 保持 None 使合并分支为死分支，保留待后续清理。
-        enriched: dict | None = None
-        # P2-2: 并发执行三个重型任务（原 need_llm_keywords/need_llm_summary 条件
-        # 判断在关键词提取之后才有值，现关键词提取本身就是任务之一，无条件并发）
+        # P2-2: 并发执行四个重型任务（S0 修复：恢复 F1 重构漏迁的第四任务
+        # 「模拟问题生成」——旧合并路径 enrich_metadata_llm 自失去调用方后，
+        # questions_by_chunk 恒空，Document Expansion 前缀静默失效）
         from backend.rag.preprocessing.metadata import (
-            enrich_metadata_llm, _extract_first_sentences, build_llm_summary,
+            _extract_first_sentences, build_llm_summary,
         )
         from backend.rag.preprocessing.keyword import KeywordResult as _KwResult
         sample = _sample_for_summary(full_text)
@@ -1245,12 +1385,28 @@ class IncrementalIndexer:
                 doc_type=doc_type, confidence=confidence, complexity=complexity,
             )
 
+        async def task_questions():
+            """模拟问题生成（Document Expansion，S0 恢复）。
+
+            走 question_gen（proxy 自动计量），tokens 经模块级
+            LAST_QUESTION_GEN_TOKENS 回传，在下方与关键词路径 tokens 汇总。
+            """
+            if not chunks_text:
+                return [], {}
+            from backend.rag.preprocessing import question_gen as _qg
+            questions = await asyncio.to_thread(
+                _qg.generate_chunk_questions, chunks_text, doc_type,
+            )
+            _qg_tokens = dict(getattr(_qg, "LAST_QUESTION_GEN_TOKENS", {}) or {})
+            return questions, _qg_tokens
+
         # 并行执行：总耗时 = max(各任务耗时) 而非 sum；
         # 解包顺序与 gather 参数顺序一一对应
-        summary_res, kw_res, entities_res = await asyncio.gather(
+        summary_res, kw_res, entities_res, questions_res = await asyncio.gather(
             task_summary(),
             task_keywords(),
             asyncio.to_thread(extract_entities, full_text),
+            task_questions(),
             return_exceptions=True,
         )
 
@@ -1263,12 +1419,16 @@ class IncrementalIndexer:
         if isinstance(entities_res, Exception):
             logger.warning(f"[Metadata] 并发任务失败 (task=entities): {entities_res}")
             entities_res = {}
+        if isinstance(questions_res, Exception):
+            logger.warning(f"[Metadata] 并发任务失败 (task=questions): {questions_res}")
+            questions_res = ([], {})
 
         summary, persons = summary_res
         if summary and not person_names:
             person_names = persons
         kw_result = kw_res
         entities_nested = entities_res
+        questions_by_chunk, question_gen_tokens = questions_res
 
         # 合并关键词（兼容旧字段，新字段已是对象数组）
         kws_rule_objs = kw_result.rule_keywords  # [{"word": ..., "source": "rule"}, ...]
@@ -1279,6 +1439,19 @@ class IncrementalIndexer:
         llm_decision = kw_result.llm_decision if hasattr(kw_result, 'llm_decision') else {}
         need_llm_keywords = bool(kws_llm_objs)
 
+        # 1.3b: tokens 汇总口径补全——keywords + questions 两路合并
+        #（summary 抽取式路径无 tokens；build_llm_summary 的 LLM 用量
+        #  已由 proxy 自动落 Store，此处只合并可回传的内存 tokens）
+        merged_tokens = dict(kw_result.llm_tokens or {})
+        if question_gen_tokens:
+            for key in ("prompt_tokens", "completion_tokens"):
+                merged_tokens[key] = int(merged_tokens.get(key, 0)) + int(
+                    question_gen_tokens.get(key, 0) or 0)
+            merged_tokens["cost_usd"] = round(
+                float(merged_tokens.get("cost_usd", 0) or 0)
+                + float(question_gen_tokens.get("cost_usd", 0) or 0), 6)
+            kw_result.llm_tokens = merged_tokens
+
         if llm_generate_span:
             trace_collector.end_span(llm_generate_span, status="success",
                 metrics={
@@ -1286,27 +1459,9 @@ class IncrementalIndexer:
                     "need_llm_summary": need_llm_summary,
                     "need_llm_keywords": need_llm_keywords,
                     "parallel_execution": True,
-                    "estimated_speedup": "3x (summary+keywords+entities concurrent)",
+                    "simulated_questions_chunks": len(questions_by_chunk),
+                    "estimated_speedup": "4x (summary+keywords+entities+questions concurrent)",
                 })
-
-        if enriched:
-            merged_kws = enriched.get("keywords", [])
-            merged_summary = enriched.get("summary", "")
-            merged_entities = enriched.get("entities", [])
-            merged_tokens = enriched.get("tokens", {})
-            questions_by_chunk = enriched.get("questions_by_chunk", [])
-            if merged_kws:
-                kws_llm_objs = [{"word": w, "source": "llm"} for w in merged_kws]
-                kws_all_words = [k["word"] for k in kws_rule_objs + kws_llm_objs]
-                kw_result.llm_tokens = merged_tokens
-            if merged_summary:
-                summary = merged_summary
-            if merged_entities and not person_names:
-                person_names = [e.get("name", "") for e in merged_entities if e.get("name")]
-            logger.info(f"[Enrich Merged] 合并调用成功: {len(merged_kws)}kw + summary + {len(questions_by_chunk)}chunks问题")
-        # F1: enriched 恒为 None 时不再走合并分支——原 else 的"合并失败"警告
-        # 在合并调用从未发起时会误报，已移除；真实失败由上方并发任务的
-        # "[Metadata] 并发任务失败" 留痕。
 
         # 兜底：<1KB 全文当摘要 / 没生成出来的剥 markdown 取前几句
         if not summary and len(full_text) <= 1000:

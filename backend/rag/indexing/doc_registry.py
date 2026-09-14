@@ -360,6 +360,11 @@ class DocumentRegistry:
         kb_version = meta.get("kb_version", "v1")
         department = meta.get("department", "")
 
+        # 4.1: MinHash 近似重复文档进入 pending_review 审核态（此前只是
+        # 静默标记 near_dup_id 后照常 active 入库，检测结果无后续策略）。
+        # pending_review 文档仍写入全部存储（可人工比对），检索层按状态软过滤。
+        status = "pending_review" if near_dup_id else "active"
+
         with self._lock, self._conn() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO doc_registry
@@ -369,7 +374,7 @@ class DocumentRegistry:
                     summary, keywords, time_refs, business_domain, complexity,
                     metadata_fingerprint, doc_version, kb_version, department,
                     status, last_indexed, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
                 (
                     file_path, file_name, kb_id, doc_id, file_hash,
                     fsize, fmtime,
@@ -379,6 +384,7 @@ class DocumentRegistry:
                     minhash_sig, near_dup_id,
                     summary, keywords, time_refs, business_domain, complexity,
                     metadata_fingerprint, doc_version, kb_version, department,
+                    status,
                 ),
             )
 

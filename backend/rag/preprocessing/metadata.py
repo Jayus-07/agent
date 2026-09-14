@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import re
 import time
@@ -630,12 +631,58 @@ async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = 
         return _smart_truncate(first_two, max_length), []
 
 
+def _summary_redis_key(text_hash: str) -> str:
+    from backend.config.redis import REDIS_KEY_PREFIX
+    return f"{REDIS_KEY_PREFIX}summary:{text_hash}"
+
+
+def _summary_redis_get(text_hash: str) -> tuple | None:
+    """3.3: L2 Redis 摘要缓存读取（软失败，任何异常按 miss 处理）。"""
+    try:
+        from backend.infra.redis.client import get_redis
+        r = get_redis()
+        if r is None:
+            return None
+        raw = r.get(_summary_redis_key(text_hash))
+        if raw is None:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        data = json.loads(raw)
+        if isinstance(data, list) and len(data) == 2:
+            return (data[0], data[1])
+        return None
+    except Exception as e:
+        logger.debug(f"[SummaryCache] Redis 读取失败（按 miss 处理）: {e}")
+        return None
+
+
+def _summary_redis_put(text_hash: str, result: tuple) -> None:
+    """3.3: L2 Redis 摘要缓存写入（软失败）。TTL 7 天。"""
+    try:
+        from backend.infra.redis.client import get_redis
+        r = get_redis()
+        if r is None:
+            return
+        r.setex(_summary_redis_key(text_hash), 7 * 86400,
+                json.dumps([result[0], result[1]], ensure_ascii=False))
+    except Exception as e:
+        logger.debug(f"[SummaryCache] Redis 写入失败（不影响主流程）: {e}")
+
+
 async def build_llm_summary(text: str, max_length: int = SUMMARY_MAX_LENGTH) -> tuple:
-    """使用LLM生成摘要和人名（入口函数，带缓存）"""
-    text_hash = hash(text[:1000])
+    """使用LLM生成摘要和人名（入口函数，L1 进程内存 + L2 Redis 双层缓存）"""
+    # 3.3: 缓存键从 hash() 改为 sha256——原内置 hash 受 PYTHONHASHSEED
+    # 影响跨进程不稳定，无法作为 Redis 键
+    text_hash = hashlib.sha256(text[:1000].encode("utf-8")).hexdigest()
     if text_hash in _summary_cache:
         return _summary_cache[text_hash]
-    result = await build_llm_summary_cached(text_hash, text, max_length)
+    redis_val = _summary_redis_get(text_hash)
+    if redis_val is not None:
+        result = redis_val
+    else:
+        result = await build_llm_summary_cached(text_hash, text, max_length)
+        _summary_redis_put(text_hash, result)
     if len(_summary_cache) >= _SUMMARY_CACHE_MAX:
         _summary_cache.pop(next(iter(_summary_cache)))  # FIFO 淘汰最旧
     _summary_cache[text_hash] = result

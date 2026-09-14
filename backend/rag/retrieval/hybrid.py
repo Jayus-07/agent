@@ -168,7 +168,63 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
       - 从 enhanced_hybrid_retrieval 导入核心逻辑
       - 当 ADAPTIVE_THRESHOLD_ENABLED=true 时启用动态阈值
       - Rule-based retriever 仅对 FAQ/条款类查询激活
+    4.1b: 返回前过滤 pending_review（near_dup 审核态）文档——软过滤，
+    不动向量库 where（兼容无 review_status 字段的存量 chunk）。
     """
+    docs = _hybrid_retrieve_impl(
+        query, vector_retriever, bm25_retriever, k=k, doc_ids=doc_ids,
+        rrf_k=rrf_k, metadata_filter=metadata_filter,
+        expanded_queries=expanded_queries,
+    )
+    return _filter_review_blocked(docs)
+
+
+# pending_review doc_id 集合的进程内缓存（60s）——空集合同样缓存，
+# 无待审文档时零额外查询开销
+_review_block_cache: dict = {"ids": frozenset(), "ts": 0.0}
+_REVIEW_BLOCK_TTL = 60.0
+
+
+def _pending_review_doc_ids() -> frozenset:
+    import time as _time
+    now = _time.monotonic()
+    if now - _review_block_cache["ts"] < _REVIEW_BLOCK_TTL:
+        return _review_block_cache["ids"]
+    ids = frozenset()
+    try:
+        from backend.config import DOC_REGISTRY_PATH
+        from backend.rag.indexing.doc_registry import DocumentRegistry
+        rows = DocumentRegistry(DOC_REGISTRY_PATH).list_by_statuses(("pending_review",))
+        ids = frozenset(r.get("doc_id", "") for r in rows if r.get("doc_id"))
+    except Exception as e:
+        # registry 不可用 → 跳过过滤（可用性优先于审核过滤）
+        logger.debug(f"[ReviewFilter] pending_review 集合获取失败（跳过过滤）: {e}")
+    _review_block_cache["ids"] = ids
+    _review_block_cache["ts"] = now
+    return ids
+
+
+def _filter_review_blocked(docs: list) -> list:
+    """4.1b: 剔除 pending_review 文档的 chunk（near_dup 审核态不应被检索）。"""
+    if not docs:
+        return docs
+    blocked = _pending_review_doc_ids()
+    if not blocked:
+        return docs
+    filtered = [
+        d for d in docs
+        if (d.metadata.get("doc_id") if hasattr(d, "metadata") else None) not in blocked
+    ]
+    if len(filtered) < len(docs):
+        logger.info(
+            f"[ReviewFilter] 过滤 pending_review 文档命中 {len(docs) - len(filtered)} 条"
+        )
+    return filtered
+
+
+def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60, metadata_filter=None,
+                          expanded_queries: list[str] | None = None):
+    """增强版混合检索实现（原 hybrid_retrieve 主体，4.1b 拆出便于结果过滤包装）。"""
     from backend.config.rag import ADAPTIVE_THRESHOLD_ENABLED, CONFIDENCE_AGGREGATOR_ENABLED
     
     # 尝试启用增强检索（如果配置开启且依赖可用；已在增强路径内则不再进入）
