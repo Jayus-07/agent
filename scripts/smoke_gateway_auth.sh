@@ -237,7 +237,7 @@ if [ "$MODE" = "enforce" ]; then
   # ④ 设备号必须唯一：auth-service 按 (userId,deviceId) 缓存 access/refresh 并按设备吊销，
   #    固定 deviceId 会撞上历史运行残留的黑名单与缓存，令用例时好时坏。
   DEV8="gw-bl8-$(date +%s)-$$"
-  # ⑤ 诊断用：直接问 Redis「这个令牌进黑名单了吗」，把"登出没吊销"和"网关没拦住"区分开
+  # ⑥ 诊断用：直接问 Redis「这个令牌进黑名单了吗」，把"登出没吊销"和"网关没拦住"区分开
   REDIS_C="${REDIS_CONTAINER:-oa-auth-redis}"
   REDIS_P="$(env_val AUTH_REDIS_PASSWORD "$ROOT/.env")"
   if [ "$ACCESS" = "HOST" ]; then
