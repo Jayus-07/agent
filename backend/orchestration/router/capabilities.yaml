@@ -1,0 +1,151 @@
+# capabilities.yaml — Capability 路由清单（唯一事实源）
+#
+# 治理规则（企业惯例：声明式 manifest，启动期派生，fail-fast）：
+#   - ALL_CAPABILITIES / ROUTE_EXAMPLES / WORKFLOW_NAMES / WORKFLOW_EXAMPLES
+#     全部由本文件派生（见 orchestration/router/manifest.py），手写回去会被
+#     test_registry_consistency 抓住。
+#   - routed: true  → 进入向量/LLM 路由，examples 必填（>=2 条，建议 5-10 条）
+#   - routed: false → 已注册但不参与用户问题路由（内部能力），reason 必填
+#   - skill 字段必须与 skills/<name>/skill.py 的 name 属性一致
+#     （consistency 测试做双向校验：manifest ↔ skills/registry）
+#
+# 注意：增删 examples 后，VectorRouter 启动时会按数量自检并自动重建 Chroma
+# 索引（collection 内自愈，无需手动删 backend/data/router_index）。
+
+version: 1
+
+capabilities:
+  - name: sql.query
+    skill: sql
+    routed: true
+    examples:
+      - 最近 30 天销售金额
+      - 本月销量前 10 的商品
+      - 查询库存不足的商品
+      - 上个月退款金额
+      - 各品类商品数量统计
+      - 排名前五的客户
+
+  - name: rag.search
+    skill: rag
+    routed: true
+    examples:
+      - 公司制度是什么
+      - 请解释退款流程
+      - 员工福利有哪些规定
+      - 广告政策说明
+      - 商品上架要求
+      - 差评处理 SOP
+
+  - name: business.analyze
+    skill: business_analysis
+    routed: true
+    examples:
+      - 分析库存不足的原因
+      - 毛利率下降趋势分析
+      - 找出销量下降的关键商品
+      - 评估供应商绩效
+
+  - name: report.generate
+    skill: report
+    routed: true
+    examples:
+      - 生成月度销售报告
+      - 生成库存分析报告
+      - 生成经营周报
+
+  - name: email.send
+    skill: email
+    routed: true
+    examples:
+      - 发送邮件给运营
+      - 把日报发给 CEO
+      - 邮件通知采购
+
+  - name: data.export
+    skill: data_export
+    routed: true
+    examples:
+      - 导出销售数据到 Excel
+      - 把客户名单导出
+
+  - name: web.search
+    skill: web_search
+    routed: true
+    examples:
+      - 搜索 Amazon 政策更新
+      - 查 Google 趋势
+
+  - name: web.crawl
+    skill: web_crawl
+    routed: true
+    examples:
+      - 抓取竞品网站
+      - 爬取新闻内容
+
+  - name: data.collect
+    skill: data_collection
+    routed: true
+    examples:
+      - 采集 90 天销售数据
+      - 收集各平台数据
+
+  # 仅覆盖「候选地点检索」这一无状态能力；完整行程规划走旅游域图，
+  # 不经主 Router（见 orchestration/graph/travel_prefilter.py）
+  - name: travel.poi_search
+    skill: travel_poi
+    routed: true
+    examples:
+      - 福州有哪些值得去的景点
+      - 厦门必去的打卡点有哪些
+      - 帮我找杭州适合亲子的地方
+      - 查一下鼓浪屿附近的景点
+
+  - name: map.lookup
+    skill: map_lookup
+    routed: true
+    examples:
+      - 福州现在天气怎么样
+      - 明天厦门会下雨吗
+      - 三坊七巷具体在哪
+      - 这个坐标是什么地方
+      - 从福州站到长乐机场要多久
+      - 帮我查一下附近有什么咖啡店
+      - 把这几个地点画成一张地图
+
+  # 竞品分析此前只在 rule_router 硬编码强信号，ALL_CAPABILITIES 缺失导致
+  # LLM Router 会拒绝它（tool_selector.py 注释已承认该漂移）。manifest 化
+  # 后正式纳入路由，规则强信号依旧优先生效。
+  - name: competitor.analyze
+    skill: competitor_analysis
+    routed: true
+    examples:
+      - 分析这个竞品链接
+      - 帮我跟竞品比价
+      - 看看竞品这个商品的卖点和差评
+      - 监控一下竞品价格变化
+
+  # 内部能力：仅 selection_decision workflow 消费，不对用户问题开放路由
+  - name: competitor.watch
+    skill: competitor_analysis
+    routed: false
+    reason: 竞品监控写入操作，仅 selection_decision workflow 内部使用
+
+  - name: competitor.history
+    skill: competitor_analysis
+    routed: false
+    reason: 竞品快照历史查询，仅 selection_decision workflow 内部使用
+
+workflows:
+  - name: daily_report
+    examples:
+      - 每天跑日报
+      - 自动生成日报
+      - 今天的日报
+      - 把日报发邮件
+
+  - name: inventory_alert
+    examples:
+      - 检查库存风险
+      - 自动提醒采购
+      - 库存预警扫描

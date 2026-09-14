@@ -24,91 +24,19 @@ from backend.orchestration.router.types import (
 )
 
 
-# ── 路由 example queries（启动时建索引）──
-# 每条 capability 5-10 条 example
+# ── 路由 example queries：由 capabilities.yaml 派生（唯一事实源）──
+# 手写字典已成历史（曾与 skills 注册表漂移）。增删 examples 改 YAML；
+# VectorRouter 启动时按 manifest 对账，数量不符自动重建索引。
+from backend.orchestration.router.manifest import load_manifest
+
+_manifest = load_manifest()
 ROUTE_EXAMPLES: dict[str, list[str]] = {
-    "sql.query": [
-        "最近 30 天销售金额",
-        "本月销量前 10 的商品",
-        "查询库存不足的商品",
-        "上个月退款金额",
-        "各品类商品数量统计",
-        "排名前五的客户",
-    ],
-    "rag.search": [
-        "公司制度是什么",
-        "请解释退款流程",
-        "员工福利有哪些规定",
-        "广告政策说明",
-        "商品上架要求",
-        "差评处理 SOP",
-    ],
-    "business.analyze": [
-        "分析库存不足的原因",
-        "毛利率下降趋势分析",
-        "找出销量下降的关键商品",
-        "评估供应商绩效",
-    ],
-    "report.generate": [
-        "生成月度销售报告",
-        "生成库存分析报告",
-        "生成竞品对比报告",
-    ],
-    "email.send": [
-        "发送邮件给运营",
-        "把日报发给 CEO",
-        "邮件通知采购",
-    ],
-    "data.export": [
-        "导出销售数据到 Excel",
-        "把客户名单导出",
-    ],
-    "web.search": [
-        "搜索 Amazon 政策更新",
-        "查 Google 趋势",
-    ],
-    "web.crawl": [
-        "抓取竞品网站",
-        "爬取新闻内容",
-    ],
-    "data.collect": [
-        "采集 90 天销售数据",
-        "收集各平台数据",
-    ],
-    # 仅覆盖「候选地点检索」这一无状态能力；完整行程规划走旅游域图，
-    # 不经主 Router（见 orchestration/graph/travel_prefilter.py）
-    "travel.poi_search": [
-        "福州有哪些值得去的景点",
-        "厦门必去的打卡点有哪些",
-        "帮我找杭州适合亲子的地方",
-        "查一下鼓浪屿附近的景点",
-    ],
-    "map.lookup": [
-        "福州现在天气怎么样",
-        "明天厦门会下雨吗",
-        "三坊七巷具体在哪",
-        "这个坐标是什么地方",
-        "从福州站到长乐机场要多久",
-        "帮我查一下附近有什么咖啡店",
-        "把这几个地点画成一张地图",
-    ],
+    c.name: list(c.examples) for c in _manifest.routed_capabilities
 }
-
-
-# 特殊 workflow 不在 ALL_CAPABILITIES 里
 WORKFLOW_EXAMPLES: dict[str, list[str]] = {
-    "daily_report": [
-        "每天跑日报",
-        "自动生成日报",
-        "今天的日报",
-        "把日报发邮件",
-    ],
-    "inventory_alert": [
-        "检查库存风险",
-        "自动提醒采购",
-        "库存预警扫描",
-    ],
+    w.name: list(w.examples) for w in _manifest.workflows
 }
+_EXPECTED_EXAMPLE_COUNT = _manifest.total_example_count
 
 
 class VectorRouter:
@@ -150,9 +78,20 @@ class VectorRouter:
                 persist_directory=self.persist_dir,
             )
 
-            # 如果索引为空，初始化
-            if self._collection._collection.count() == 0:
+            # 空索引 → 初始化；非空但数量与 manifest 对不上 → manifest 改过
+            # 而索引没重建（如新增 capability），自动重建自愈。旧逻辑只在
+            # count()==0 时建，曾导致新增 capability 的 examples 永远进不了
+            # 索引（静默漏路由）。
+            count = self._collection._collection.count()
+            if count == 0:
                 self._init_examples()
+            elif count != _EXPECTED_EXAMPLE_COUNT:
+                from backend.shared.logger import logger
+                logger.warning(
+                    f"[VectorRouter] 路由索引条数({count})与 manifest({_EXPECTED_EXAMPLE_COUNT})"
+                    "不符，自动重建索引"
+                )
+                self._rebuild_index()
         except Exception as e:
             # 启动期失败不阻塞（让 LLM Router 兜底）
             from backend.shared.logger import logger

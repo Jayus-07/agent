@@ -124,3 +124,109 @@ class TestRuleTableSingleSource:
 
         assert MQ_PATTERNS is COMPLEX_PATTERNS
         assert len(COMPLEX_PATTERNS) == len(set(COMPLEX_PATTERNS)), "清单内含重复信号"
+
+
+# ==================== 6. capabilities.yaml manifest（路由声明唯一事实源） ====================
+
+class TestCapabilityManifest:
+    """manifest ↔ skills/registry ↔ 路由派生量三方对账。
+
+    背景：曾出现 competitor.analyze 已注册 skill、可被 rule_router 硬编码
+    路由、却被 LLM Router 拒绝（ALL_CAPABILITIES 缺失）的三方漂移。manifest
+    化后由本组测试锁死。
+    """
+
+    def test_types_derived_from_manifest(self):
+        """ALL_CAPABILITIES / WORKFLOW_NAMES 必须等于 manifest 派生值，
+        手写回去立即失败。"""
+        from backend.orchestration.router import types
+        from backend.orchestration.router.manifest import load_manifest
+
+        m = load_manifest()
+        assert types.ALL_CAPABILITIES == [c.name for c in m.routed_capabilities]
+        assert types.ALL_DECLARED_CAPABILITIES == list(m.all_capability_names)
+        assert types.WORKFLOW_NAMES == [w.name for w in m.workflows]
+
+    def test_vector_router_examples_derived_from_manifest(self):
+        """ROUTE_EXAMPLES / WORKFLOW_EXAMPLES 必须等于 manifest 派生值。"""
+        from backend.orchestration.router.manifest import load_manifest
+        from backend.orchestration.router import vector_router
+
+        m = load_manifest()
+        assert vector_router.ROUTE_EXAMPLES == {
+            c.name: list(c.examples) for c in m.routed_capabilities
+        }
+        assert vector_router.WORKFLOW_EXAMPLES == {
+            w.name: list(w.examples) for w in m.workflows
+        }
+
+    def test_manifest_routed_capability_has_skill(self):
+        """manifest 中每条 routed capability 都能在 skills/registry 拿到
+        Skill 实例，且 skill 字段与实例 name 一致（防打错名）。"""
+        from backend.orchestration.router.manifest import load_manifest
+        from backend.skills import registry as skill_reg
+
+        for c in load_manifest().routed_capabilities:
+            inst = skill_reg.get(c.name)
+            assert inst is not None, f"manifest 声明了 {c.name} 但无 Skill 注册"
+            assert inst.name == c.skill, (
+                f"manifest 的 {c.name}.skill={c.skill!r} 与 Skill 实例 name={inst.name!r} 不一致"
+            )
+
+    def test_every_skill_capability_in_manifest(self):
+        """反向对账：skills 注册表里每个 capability 都出现在 manifest
+        （routed 或 unrouted）。新 Skill 加了 capability 忘了更新 manifest
+        会导致它对路由不可见——正是 competitor.analyze 曾经的病。"""
+        from backend.orchestration.router.manifest import load_manifest
+        from backend.skills import registry as skill_reg
+
+        declared = set(load_manifest().all_capability_names)
+        for cap in skill_reg._registry:
+            assert cap in declared, (
+                f"capability {cap} 已注册 Skill 但不在 capabilities.yaml 中"
+            )
+
+    def test_routed_examples_keys_match_all_capabilities(self):
+        """向量路由例子表与 ALL_CAPABILITIES 键集合一致（每条可路由能力
+        都必须有 examples，否则向量层对它静默失明）。"""
+        from backend.orchestration.router.types import ALL_CAPABILITIES
+        from backend.orchestration.router.vector_router import ROUTE_EXAMPLES
+
+        assert set(ROUTE_EXAMPLES) == set(ALL_CAPABILITIES)
+
+    def test_manifest_load_is_fail_fast(self, tmp_path):
+        """坏 manifest 必须炸而非静默：重复名 / examples 不足 / 缺 reason。"""
+        import yaml
+
+        from backend.orchestration.router.manifest import ManifestError, load_manifest
+
+        def write(data, name):
+            f = tmp_path / name
+            f.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+            return str(f)
+
+        good_cap = {
+            "name": "x.y", "skill": "s", "routed": True,
+            "examples": ["例一", "例二"],
+        }
+
+        duplicate = {"version": 1, "capabilities": [good_cap, dict(good_cap)]}
+        with pytest.raises(ManifestError, match="重复"):
+            load_manifest(write(duplicate, "dup.yaml"))
+
+        thin = {"version": 1, "capabilities": [dict(good_cap, examples=["只有一条"])]}
+        with pytest.raises(ManifestError, match="examples"):
+            load_manifest(write(thin, "thin.yaml"))
+
+        unreasoned = {
+            "version": 1,
+            "capabilities": [dict(good_cap, routed=False, examples=[])],
+        }
+        with pytest.raises(ManifestError, match="reason"):
+            load_manifest(write(unreasoned, "no_reason.yaml"))
+
+    def test_missing_manifest_raises(self, tmp_path):
+        from backend.orchestration.router.manifest import ManifestError, load_manifest
+
+        with pytest.raises(ManifestError):
+            load_manifest(str(tmp_path / "nope.yaml"))

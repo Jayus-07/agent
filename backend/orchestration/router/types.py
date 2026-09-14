@@ -46,20 +46,14 @@ class RouteDecision(BaseModel):
     workflow_name: Optional[str] = Field(None, description="WORKFLOW 模式时指定 workflow 名")
 
 
-# ── 已知 Capability 列表（Router 候选）──
-ALL_CAPABILITIES = [
-    "sql.query",
-    "rag.search",
-    "business.analyze",
-    "report.generate",
-    "email.send",
-    "data.export",
-    "web.search",
-    "web.crawl",
-    "data.collect",
-    "travel.poi_search",
-    "map.lookup",
-]
+# ── Capability / Workflow 名单：由 capabilities.yaml 派生（唯一事实源）──
+# 手写清单已成历史：曾因 competitor.analyze 只在 rule_router 硬编码、
+# ALL_CAPABILITIES 缺失，被 LLM Router 拒绝（见 manifest.py 模块注释）。
+# 新增/修改 capability 一律改 capabilities.yaml，这里不许再手写。
+from backend.orchestration.router.manifest import load_manifest
 
-# 已注册 Workflow 名（不在 ALL_CAPABILITIES 里）
-WORKFLOW_NAMES = ["daily_report", "inventory_alert"]
+_manifest = load_manifest()
+ALL_CAPABILITIES = [c.name for c in _manifest.routed_capabilities]
+# 含 routed: false 的内部能力（workflow 内部消费，不对用户问题开放路由）
+ALL_DECLARED_CAPABILITIES = [c.name for c in _manifest.capabilities]
+WORKFLOW_NAMES = [w.name for w in _manifest.workflows]
