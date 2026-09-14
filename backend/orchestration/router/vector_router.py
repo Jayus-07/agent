@@ -75,6 +75,14 @@ ROUTE_EXAMPLES: dict[str, list[str]] = {
         "采集 90 天销售数据",
         "收集各平台数据",
     ],
+    # 仅覆盖「候选地点检索」这一无状态能力；完整行程规划走旅游域图，
+    # 不经主 Router（见 orchestration/graph/travel_prefilter.py）
+    "travel.poi_search": [
+        "福州有哪些值得去的景点",
+        "厦门必去的打卡点有哪些",
+        "帮我找杭州适合亲子的地方",
+        "查一下鼓浪屿附近的景点",
+    ],
 }
 
 

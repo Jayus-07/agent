@@ -166,6 +166,9 @@ tokens.txt
 # ============================================
 node_modules/
 .next/
+# 通过 NEXT_DIST_DIR 指定的备用构建目录（沙箱/并行构建用）
+.next-dev/
+.next-dev-*/
 .out/
 dist/
 dist-build/
@@ -411,3 +414,6 @@ _smoke*.log
 
 # 评测产物（运行时生成）
 data/eval_reports/
+
+# 跨项目一次性诊断脚本（属 Enterprise_OA，需读其 .env.oaauth 取口令，不入库）
+scripts/_diag_*.py

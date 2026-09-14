@@ -130,6 +130,20 @@ class StartupSettings(BaseModel):
 _VALID_ENVIRONMENTS = {"development", "testing", "staging", "production"}
 
 
+def _postgres_checkpointer_available() -> bool:
+    """LangGraph PostgresSaver 是否真的可用（驱动 + 后端包都在）。
+
+    只做 import 探测，不建连接 —— 启动校验不该依赖数据库可用性，
+    它要回答的是「配了 postgres 后端到底会不会生效」。
+    """
+    try:
+        import psycopg  # noqa: F401
+        from langgraph.checkpoint.postgres import PostgresSaver  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def _normalize_env(raw: str) -> str:
     v = raw.strip().lower()
     return v if v in _VALID_ENVIRONMENTS else "production"
@@ -242,6 +256,33 @@ def validate_startup_settings() -> List[str]:
                     f"TOOL_SELECTOR_MODEL={_tool_selector_model} 需要 {_key_env}"
                     f"（当前为空），tool_selector 将回退全局模型"
                 )
+
+    # ── checkpointer 后端可用性（warning 级）──
+    # LangGraph 的 PostgresSaver 需要 psycopg v3 + langgraph-checkpoint-postgres。
+    # 依赖在 pyproject.toml（>=2.0）与 requirements-lock.txt（已钉版本）中**都已声明**，
+    # 但运行时环境未必装上（本地 venv 就常缺）。缺依赖时 _build_checkpointer
+    # 会静默降级成 MemorySaver：看着「已开启持久化」，实际只存在进程内、重启即失、
+    # 多 worker 各存一份。这种「假开启」比明确关闭更危险（排查时会被日志里的
+    # "enabled" 误导），所以在启动期直接点名，而不是等运行期 warning 被刷过去。
+    _cp_owners = [
+        _label for _label, _flag in (
+            ("主图", "MAIN_GRAPH_CHECKPOINTER_ENABLED"),
+            ("客服域", "CS_CHECKPOINTER_ENABLED"),
+            ("旅游域", "TRAVEL_CHECKPOINTER_ENABLED"),
+        )
+        if _env(_flag, "false").lower() in ("1", "true", "yes")
+    ]
+    if _cp_owners and not _postgres_checkpointer_available():
+        warnings.append(
+            "以下子图开启了 checkpointer，但当前环境的 Postgres 后端不可用："
+            + "、".join(_cp_owners)
+            + "。缺少 psycopg v3 / langgraph-checkpoint-postgres"
+              "（pyproject 与 requirements-lock 都已声明，仅本环境未安装），"
+              "运行期会静默降级为 MemorySaver：状态仅存于进程内、重启即失、"
+              "多 worker 各存一份。补齐：pip install langgraph-checkpoint-postgres"
+              "（版本取 requirements-lock.txt 中的锁定值）；"
+              "或关闭上述开关，避免误以为已持久化。"
+        )
 
     # ── production fatal ──
     _is_prod = s.environment == "production"

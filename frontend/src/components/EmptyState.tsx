@@ -3,7 +3,7 @@
 import { Sparkles } from 'lucide-react'
 
 const EXAMPLES = [
-  { label: '数据查询', text: '？' },
+  { label: '数据查询', text: '查询上个月销量前 10 的商品' },
   { label: '知识检索', text: '退款审核时间是多少？' },
   { label: '生成报告', text: '分析最近一个月价格最高商品并生成报告' },
   { label: '复杂分析', text: '对比各部门绩效，给出改进建议' },
@@ -21,10 +21,10 @@ export default function EmptyState({ onExampleClick }: Props) {
       </div>
 
       <h1 className="text-2xl font-semibold text-text-primary mb-3 tracking-tight">
-        有什么可以帮助你的？
+        描述你要完成的任务
       </h1>
       <p className="text-sm text-text-muted mb-10 text-center max-w-md leading-relaxed">
-        AI 自动拆解复杂任务，并行调用数据查询、知识检索和报告引擎
+        AI 自动拆解任务，并行调用数据查询、知识检索与报告引擎，产出可直接使用的结论
       </p>
 
       <div className="grid gap-2.5 w-full max-w-lg">

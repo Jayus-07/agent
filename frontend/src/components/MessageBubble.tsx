@@ -1,23 +1,26 @@
 'use client'
 
 /**
- * MessageBubble — 单条消息气泡
+ * MessageBubble — 单条消息气泡（DeepSeek 风格：用户浅色气泡右对齐，AI 无背景左对齐）
  *
  * 设计原则（P0-4 / P1-8 / P1-11）：
  *   1. 普通气泡不订阅流式字段：仅当 isLast && isLoading && !content 时进入"流式模式"，
- *      流式文本由共享的 StreamingContent 组件订阅 store.deltaText。
+ *      流式文本由共享的 StreamingContent 组件订阅 store.deltaText，
+ *      思考链由 ThinkingPanel 订阅 store.thinkingText —— 都是组件级订阅。
  *      流式期间 store 更新只让最后一个 bubble 重渲；N-1 条历史气泡由 React.memo 跳过。
  *   2. 用户气泡始终静态 → 不订阅任何 store 字段。
  */
 import { memo } from 'react'
 import type { Message } from '@/lib/types'
 import { useChatStore } from '@/store/chat'
+import { useSSE } from '@/hooks/useSSE'
 import SourceCard from './SourceCard'
 import MarkdownContent from './MarkdownContent'
 import MessageActions from './chat/MessageActions'
 import SqlViz from './chat/SqlViz'
 import TokenInfo from './chat/TokenInfo'
 import StreamingContent from './chat/StreamingContent'
+import ThinkingPanel from './chat/ThinkingPanel'
 
 function stripReferences(content: string): string {
   const markers = ['\n\n---\n\n### 参考文献', '\n\n---\n\n### 参考来源',
@@ -32,6 +35,13 @@ function stripReferences(content: string): string {
 /** 绑定主 chat store 的流式文本订阅（StreamingContent 经 props 接收 hook） */
 function useChatDelta(): string {
   return useChatStore((s) => s.deltaText)
+}
+
+/** 绑定主 chat store 的思考链订阅（ThinkingPanel 经 props 接收 hook） */
+function useChatThinking(): { text: string; seconds: number | null } {
+  const text = useChatStore((s) => s.thinkingText)
+  const seconds = useChatStore((s) => s.thinkingSeconds)
+  return { text, seconds }
 }
 
 /**
@@ -59,23 +69,19 @@ interface MessageBubbleProps {
 
 function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubbleProps) {
   const isUser = message.role === 'user'
-  // 只订阅 isLoading —— 单字段、引用稳定；流式文本由 StreamingContent 单独订阅
+  // 只订阅 isLoading —— 单字段、引用稳定；流式文本/思考链由子组件单独订阅
   const isLoading = useChatStore((s) => s.isLoading)
+  const { regenerate } = useSSE()
   // 流式模式：最后一条 assistant + 加载中 + 当前消息还没写入完成内容
   const isCurrentStreaming = !isUser && isLoading && isLast && !message.content
 
   return (
-    <div className={`animate-fade-in flex gap-3 group/message ${isUser ? 'justify-end' : ''}`}>
-      {!isUser && (
-        <div className="w-7 h-7 rounded-full bg-accent/8 flex items-center justify-center shrink-0 mt-0.5">
-          <div className="w-2 h-2 rounded-full bg-accent" />
-        </div>
-      )}
-
-      <div className={`min-w-0 ${isUser ? 'max-w-[75%]' : 'max-w-[80%]'}`}>
+    <div className={`animate-fade-in group/message ${isUser ? 'flex justify-end' : ''}`}>
+      <div className={`min-w-0 ${isUser ? 'max-w-[75%]' : 'w-full'}`}>
         {isUser ? (
           <div>
-            <div className="bg-accent text-white rounded-2xl rounded-br-md px-4 py-2.5 text-sm leading-relaxed shadow-sm">
+            <div className="bg-surface-elevated border border-border-subtle text-text-primary rounded-xl px-4 py-2.5
+              text-[15px] leading-[1.6] whitespace-pre-wrap break-words">
               {message.content}
             </div>
             <MessageActions
@@ -84,8 +90,6 @@ function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubb
               isLast={isLast}
               sessionId={sessionId}
               msgId={message.id}
-              onEdit={() => {/* TODO: wire to store */}}
-              onResend={() => {/* TODO: wire to store */}}
             />
           </div>
         ) : (
@@ -93,11 +97,18 @@ function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubb
             {isCurrentStreaming ? (
               <div>
                 <StreamingStatusLine />
+                <StreamingThinking />
                 <StreamingContent useDeltaText={useChatDelta} hideDots />
               </div>
             ) : (
               <>
-                <div className="text-sm text-text-primary leading-relaxed">
+                {message.thinking && (
+                  <ThinkingPanel
+                    text={message.thinking}
+                    seconds={message.thinkingSeconds ?? null}
+                  />
+                )}
+                <div className="text-[15px] leading-[1.6] text-[#333]">
                   <MarkdownContent
                     content={
                       message.sources && message.sources.length > 0
@@ -125,21 +136,22 @@ function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubb
                   sessionId={sessionId}
                   msgId={message.id}
                   question={question}
-                  onRegenerate={() => {/* TODO: wire to store */}}
+                  onRegenerate={sessionId ? () => regenerate(sessionId) : undefined}
                 />
               </>
             )}
           </div>
         )}
       </div>
-
-      {isUser && (
-        <div className="w-7 h-7 rounded-full bg-accent flex items-center justify-center shrink-0 mt-0.5">
-          <div className="text-white text-[10px] font-semibold">You</div>
-        </div>
-      )}
     </div>
   )
+}
+
+/** 流式中的思考链面板：订阅 store，思考中展开、首块回答到达自动收起 */
+function StreamingThinking() {
+  const { text, seconds } = useChatThinking()
+  const answering = useChatStore((s) => s.deltaText !== '')
+  return <ThinkingPanel text={text} seconds={seconds} live answering={answering} />
 }
 
 // memo：message / isLast prop 不变则跳过 re-render ——

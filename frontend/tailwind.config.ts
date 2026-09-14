@@ -18,6 +18,8 @@ const config: Config = {
         },
         sidebar: {
           glass: 'rgba(255, 255, 255, 0.72)',
+          /** DeepSeek 风格聊天页侧栏实底浅灰 */
+          solid: '#f9f9f9',
         },
       },
       boxShadow: {

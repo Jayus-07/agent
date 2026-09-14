@@ -129,3 +129,27 @@ def _reset_circuit_breakers():
     yield
     for breaker in get_all_breakers().values():
         breaker.reset()
+
+
+@pytest.fixture(autouse=True)
+def _disable_tencent_lbs(monkeypatch):
+    """测试期切断腾讯位置服务，保证单测不依赖网络与开发机 .env。
+
+    背景：travel 域在 register 时会按 .env 的 TRAVEL_USE_LIVE_MAP 注入真实
+    路线数据源。若开发机 .env 开着开关，单测就变成联网测试 —— 结果随网络、
+    配额与实时路况漂移，还会把真实请求打到腾讯（消耗配额）。
+    而测试真正要验证的是「降级到本地估算后排程依然正确」，这条路径必须
+    在断网状态下也稳定通过。
+
+    真实数据源的验证由两处覆盖：
+      - backend/scripts/verify_tencent_lbs.py（端到端实网自检）
+      - 需要实网的用例自行 monkeypatch 覆盖本 fixture（同 _auto_approve_tools 的做法）
+    """
+    from backend.config import map as map_cfg
+    from backend.tools.travel import routing
+
+    monkeypatch.setattr(map_cfg, "TENCENT_LBS_ENABLED", False)
+    monkeypatch.setattr(map_cfg, "TRAVEL_USE_LIVE_MAP", False)
+    routing.set_route_provider(None)
+    yield
+    routing.set_route_provider(None)

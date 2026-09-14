@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>腾讯位置服务 · 能力演示台</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --border: #e3e6ea;
+    --text: #1c2024;
+    --muted: #6b7280;
+    --accent: #0b6bcb;
+    --accent-soft: #e8f1fb;
+    --ok: #137a49;
+    --err: #c0392b;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header h1 span { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 13px; }
+  .grow { flex: 1; }
+  .status {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--muted);
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 999px; padding: 4px 12px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #c9ced6; }
+  .dot.on { background: var(--ok); }
+  .dot.off { background: var(--err); }
+
+  .wrap { display: grid; grid-template-columns: 400px 1fr; gap: 16px; padding: 16px 24px 40px; }
+  @media (max-width: 980px) { .wrap { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
+  }
+  .card h2 {
+    font-size: 13px; margin: 0 0 12px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card h2 .tag {
+    font-weight: 400; font-size: 11px; color: var(--muted);
+    background: var(--bg); border-radius: 4px; padding: 1px 6px;
+  }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  input, select {
+    width: 100%; padding: 7px 10px; font-size: 13px; font-family: inherit;
+    border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text);
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  button {
+    margin-top: 12px; width: 100%; padding: 8px 14px; font-size: 13px; font-family: inherit;
+    background: var(--accent); color: #fff; border: 0; border-radius: 6px; cursor: pointer;
+  }
+  button:hover { background: #0959ab; }
+  button.ghost { background: #fff; color: var(--accent); border: 1px solid var(--border); }
+  button.ghost:hover { background: var(--accent-soft); }
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .btns button { margin-top: 0; }
+
+  pre {
+    margin: 0; padding: 12px; background: #fbfcfd; border: 1px solid var(--border);
+    border-radius: 8px; font-size: 12px; line-height: 1.55; overflow: auto;
+    max-height: 340px; white-space: pre-wrap; word-break: break-all;
+    font-family: "Cascadia Mono", Consolas, monospace;
+  }
+  .map-box { margin-top: 12px; }
+  .map-box img {
+    width: 100%; border: 1px solid var(--border); border-radius: 8px; display: block;
+    background: var(--bg); min-height: 120px;
+  }
+  .map-box .cap { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .flash { font-size: 12px; margin-top: 8px; }
+  .flash.ok { color: var(--ok); }
+  .flash.err { color: var(--err); }
+  .hint { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+  code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>腾讯位置服务 · 能力演示台<span>Tencent LBS WebService API</span></h1>
+  <div class="grow"></div>
+  <div class="status"><i class="dot" id="dot"></i><span id="stext">检测中…</span></div>
+</header>
+
+<div class="wrap">
+
+  <!-- ── 左栏：操作 ───────────────────────────── -->
+  <div>
+    <div class="card">
+      <h2>后端地址 <span class="tag">Key 只存在于服务端</span></h2>
+      <input id="base" value="">
+      <p class="hint">
+        本页不持有任何密钥，所有请求经服务端代理转发。Key 配置见服务端
+        <code>.env</code> 的 <code>TENCENT_LBS_KEY</code>。
+      </p>
+      <button class="ghost" onclick="loadHealth()">重新自检</button>
+    </div>
+
+    <div class="card">
+      <h2>定位与地址解析</h2>
+      <div class="btns">
+        <button class="ghost" onclick="doIp()">IP 定位</button>
+        <button class="ghost" onclick="doDistrict()">行政区划</button>
+      </div>
+      <label>地址 → 坐标</label>
+      <input id="address" value="福州市鼓楼区南后街139号">
+      <button onclick="doGeocode()">地理编码</button>
+      <label>坐标 → 地址（纬度,经度）</label>
+      <input id="location" value="26.0824,119.2968">
+      <button onclick="doReverse()">逆地理编码（含周边 POI）</button>
+    </div>
+
+    <div class="card">
+      <h2>地点检索</h2>
+      <label>关键词</label>
+      <input id="kw" value="美食">
+      <div class="row">
+        <div><label>城市</label><input id="city" value="福州"></div>
+        <div><label>周边半径(m)</label><input id="radius" value="2000"></div>
+      </div>
+      <label><input type="checkbox" id="useNear" style="width:auto" checked> 以「坐标 → 地址」中的坐标做周边检索</label>
+      <button onclick="doSearch()">检索地点</button>
+    </div>
+
+    <div class="card">
+      <h2>路线规划</h2>
+      <div class="row">
+        <div><label>起点</label><input id="rfrom" value="26.0824,119.2968"></div>
+        <div><label>终点</label><input id="rto" value="26.049,119.3896"></div>
+      </div>
+      <label>出行方式</label>
+      <select id="mode">
+        <option value="driving">驾车</option>
+        <option value="walking">步行</option>
+        <option value="bicycling">骑行</option>
+        <option value="transit">公交</option>
+      </select>
+      <button onclick="doRoute()">规划路线并画图</button>
+      <button class="ghost" onclick="doNavigate()">生成导航调起链接</button>
+      <p class="hint">网页端无腾讯导航 SDK，真导航靠调起腾讯地图 App。</p>
+    </div>
+
+    <div class="card">
+      <h2>天气 <span class="tag">已开通</span></h2>
+      <div class="row">
+        <div><label>城市</label><input id="wcity" value="福州"></div>
+        <div><label>类型</label>
+          <select id="wkind">
+            <option value="now">实时</option>
+            <option value="future">未来几天</option>
+            <option value="hours">逐小时</option>
+          </select>
+        </div>
+      </div>
+      <button onclick="doWeather()">查天气</button>
+    </div>
+
+    <div class="card">
+      <h2>街景 <span class="tag">申请制服务</span></h2>
+      <label>坐标（纬度,经度）</label>
+      <input id="svloc" value="26.0824,119.2968">
+      <button onclick="doStreetView()">查街景</button>
+      <p class="hint">
+        街景对企业开发者开放，需按官方模板发邮件申请配额（mapapi@vip.qq.com），
+        未开通时返回 <code>113 此功能未被授权</code> —— 这里正是用来验证该状态的。
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>坐标系换算 <span class="tag">本地纯函数，不耗配额</span></h2>
+      <div class="row">
+        <div><label>坐标</label><input id="cc" value="26.0824,119.2968"></div>
+        <div><label>源坐标系</label>
+          <select id="crssrc">
+            <option value="wgs84">WGS-84 (GPS)</option>
+            <option value="gcj02">GCJ-02</option>
+            <option value="bd09">BD-09 (百度)</option>
+          </select>
+        </div>
+      </div>
+      <button onclick="doConvert()">转换为 GCJ-02</button>
+    </div>
+  </div>
+
+  <!-- ── 右栏：结果 ───────────────────────────── -->
+  <div>
+    <div class="card">
+      <h2>响应 <span class="tag" id="reqPath">—</span></h2>
+      <div class="flash" id="flash"></div>
+      <pre id="out">点击左侧任意按钮发起请求。
+
+所有能力均经后端 /map/* 代理，浏览器侧不出现任何密钥。</pre>
+      <div class="map-box" id="mapBox" style="display:none">
+        <img id="mapImg" alt="静态地图">
+        <div class="cap" id="mapCap"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// 经后端 /map/demo 打开时用相对路径（同源，无 CORS 问题）；
+// 直接双击本地文件打开时回退到后端地址。
+const baseInput = document.getElementById('base');
+baseInput.value = location.protocol === 'file:' ? 'http://localhost:8000/map' : '/map';
+
+const $ = id => document.getElementById(id);
+
+function base() {
+  return baseInput.value.replace(/\/+$/, '');
+}
+
+function setFlash(msg, kind) {
+  const el = $('flash');
+  el.textContent = msg || '';
+  el.className = 'flash' + (kind ? ' ' + kind : '');
+}
+
+async function call(path, params, label) {
+  const url = base() + path + (params ? '?' + params.toString() : '');
+  $('reqPath').textContent = 'GET ' + path;
+  setFlash('请求中…');
+  try {
+    const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    const data = await resp.json().catch(() => ({ raw: '非 JSON 响应' }));
+    if (!resp.ok) {
+      setFlash('HTTP ' + resp.status + '：' + (data.detail || '请求失败'), 'err');
+    } else if (data.found === false || data.count === 0) {
+      setFlash((label || '查询') + '完成，但没有匹配结果', 'ok');
+    } else {
+      setFlash((label || '查询') + '成功', 'ok');
+    }
+    $('out').textContent = JSON.stringify(data, null, 2);
+    return data;
+  } catch (e) {
+    setFlash('请求失败：' + e.message + '（若以本地文件打开，请改用后端 /map/demo 地址）', 'err');
+    $('out').textContent = String(e);
+    return null;
+  }
+}
+
+async function loadHealth() {
+  const data = await call('/health', null, '自检');
+  const dot = $('dot'), txt = $('stext');
+  if (data && data.configured) {
+    dot.className = 'dot on';
+    txt.textContent = '已配置 · ' + (data.signature ? '已开启签名校验' : '未开启签名校验');
+  } else {
+    dot.className = 'dot off';
+    txt.textContent = data ? '未配置 Key' : '后端不可达';
+  }
+}
+
+const doIp = () => call('/ip-location', null, 'IP 定位');
+
+const doGeocode = () => call('/geocode',
+  new URLSearchParams({ address: $('address').value, city: $('city').value }),
+  '地理编码');
+
+const doReverse = () => call('/reverse-geocode',
+  new URLSearchParams({ location: $('location').value, with_poi: 'true' }),
+  '逆地理编码');
+
+const doSearch = () => {
+  const p = new URLSearchParams({ keyword: $('kw').value, page_size: '10' });
+  if ($('useNear').checked) {
+    p.set('near', $('location').value);
+    p.set('radius', $('radius').value);
+  } else {
+    p.set('city', $('city').value);
+  }
+  return call('/place/search', p, '地点检索');
+};
+
+const doDistrict = () => call('/district',
+  new URLSearchParams({ keyword: $('city').value }), '行政区划查询');
+
+const doConvert = () => call('/coord/convert',
+  new URLSearchParams({ location: $('cc').value, from_type: $('crssrc').value }),
+  '坐标换算');
+
+async function doRoute() {
+  const from = $('rfrom').value.trim(), to = $('rto').value.trim();
+  const data = await call('/route',
+    new URLSearchParams({ from, to, mode: $('mode').value }), '路线规划');
+  if (!data || !data.found) { $('mapBox').style.display = 'none'; return; }
+
+  const p = new URLSearchParams({
+    // 用两端点的中点作为视野中心，zoom 按距离粗调
+    center: mid(from, to),
+    zoom: data.distance_km > 20 ? 11 : (data.distance_km > 5 ? 13 : 15),
+    size: '700*420',
+    markers: from + ',A;' + to + ',B',
+  });
+  const img = $('mapImg');
+  img.src = base() + '/static-map?' + p.toString();
+  $('mapBox').style.display = 'block';
+  $('mapCap').textContent =
+    `${data.mode} · ${data.distance_km} km · ${data.duration_min} 分钟` +
+    (data.taxi_fare_cny ? ` · 打车约 ${data.taxi_fare_cny} 元` : '') +
+    ' · 图片经后端代理生成（页面不含密钥）';
+}
+
+function mid(a, b) {
+  const p = s => s.split(',').map(Number);
+  const [la1, ln1] = p(a), [la2, ln2] = p(b);
+  return ((la1 + la2) / 2).toFixed(6) + ',' + ((ln1 + ln2) / 2).toFixed(6);
+}
+
+const doWeather = () => call('/weather',
+  new URLSearchParams({ city: $('wcity').value, kind: $('wkind').value }), '天气查询');
+
+async function doNavigate() {
+  const p = new URLSearchParams({
+    to: $('rto').value.trim(),
+    to_name: '目的地',
+    from: $('rfrom').value.trim(),
+    mode: $('mode').value === 'transit' ? 'bus' : $('mode').value.replace('driving', 'drive'),
+  });
+  const data = await call('/navigate', p, '导航调起');
+  if (!data) return;
+  // key_kind=backend 时 URL 含后端密钥，只提示不外发；已配前端专用 Key 才给可点链接
+  if (data.key_kind === 'frontend') {
+    $('mapCap').textContent = '';
+    const a = document.createElement('a');
+    a.href = data.url; a.target = '_blank'; a.textContent = '👉 点此调起腾讯地图导航';
+    $('flash').appendChild(document.createElement('br'));
+    $('flash').appendChild(a);
+  } else {
+    setFlash('⚠ 调起链接用的是后端 Key，含密钥，未在页面上提供可点链接。'
+      + '请在服务端配置 TENCENT_LBS_FRONTEND_KEY（前端专用 Key + Referer 白名单）。', 'err');
+  }
+}
+
+async function doStreetView() {
+  const data = await call('/street-view/pano',
+    new URLSearchParams({ location: $('svloc').value, radius: '100' }), '街景查询');
+  if (!data || !data.pano) {
+    $('mapBox').style.display = 'none';
+    return;
+  }
+  const img = $('mapImg');
+  img.src = base() + '/street-view?' + new URLSearchParams({
+    pano: data.pano, heading: '0', pitch: '0', width: '800', height: '460',
+  }).toString();
+  $('mapBox').style.display = 'block';
+  $('mapCap').textContent = `全景点 ${data.pano} · ${data.description || '（无描述）'} · 经后端代理取图`;
+}
+
+loadHealth();
+</script>
+</body>
+</html>

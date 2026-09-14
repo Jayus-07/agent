@@ -34,13 +34,14 @@ def build_main_checkpointer() -> Any:
         checkpointer.setup()  # 首次建表（幂等）
         logger.info("[MainGraph] checkpointer enabled (PostgresSaver: %s/%s)",
                     c["host"], c["dbname"])
-        # checkpoint 膨胀防护：复用 CS 的 TTL 清理守护（同一 agent_memory 库，
-        # 同一组 checkpoints 表，daemon 已在 CS 开启时启动；这里幂等启动）
+        # checkpoint 膨胀防护：TTL 清理守护（同一 agent_memory 库、同一组
+        # checkpoints 表，全进程单例；各域都幂等启动，谁先起谁定的 TTL 生效，
+        # 因此三方统一用 DEFAULT_TTL_DAYS=7）
         try:
-            from backend.customer_service.checkpointer_cleanup import (
-                start_cleanup_daemon,
+            from backend.orchestration.graph.checkpointer_cleanup import (
+                DEFAULT_TTL_DAYS, start_cleanup_daemon,
             )
-            start_cleanup_daemon()
+            start_cleanup_daemon(DEFAULT_TTL_DAYS, owner="main")
         except Exception:
             logger.debug("[MainGraph] cleanup daemon 启动失败（非致命）", exc_info=True)
         return checkpointer

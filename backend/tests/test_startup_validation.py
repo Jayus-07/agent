@@ -2,6 +2,8 @@
 
 用 monkeypatch 隔离环境变量，覆盖 fatal / warning 两级判定。
 """
+import sys
+
 import pytest
 
 from backend.config import startup as su
@@ -18,6 +20,9 @@ def _clean_env(monkeypatch):
         "API_KEY", "ALLOW_UNAUTHENTICATED", "TRUST_USER_HEADER", "USER_ID_HEADER",
         "ALERT_WEBHOOK_URL", "ALERT_WEBHOOK_TYPE", "ALERT_MIN_LEVEL",
         "ALERT_WEBHOOK_COOLDOWN",
+        # checkpointer 开关：宿主 .env 里可能已打开，须隔离后再断言
+        "MAIN_GRAPH_CHECKPOINTER_ENABLED", "CS_CHECKPOINTER_ENABLED",
+        "TRAVEL_CHECKPOINTER_ENABLED",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -162,3 +167,59 @@ class TestToolSelectorModelValidation:
         monkeypatch.setenv("TOOL_SELECTOR_MODEL", "qwen2.5:3b")
         warnings = su.validate_startup_settings()
         assert not any("TOOL_SELECTOR_MODEL" in w for w in warnings)
+
+
+class TestCheckpointerBackendValidation:
+    """checkpointer 「假开启」必须在启动期被点名。
+
+    背景：LangGraph 的 PostgresSaver 需要 psycopg v3，而本仓依赖里只有
+    psycopg2；缺依赖时运行期会静默降级成 MemorySaver —— 看着开启了持久化，
+    实际只在进程内。这个校验就是把这种错觉在启动日志里说清楚。
+    """
+
+    @staticmethod
+    def _no_postgres_driver(monkeypatch):
+        # sys.modules 置 None 是让 ``import X`` 直接抛 ImportError 的标准手法
+        monkeypatch.setitem(sys.modules, "psycopg", None)
+        monkeypatch.setitem(sys.modules, "langgraph.checkpoint.postgres", None)
+
+    def test_driver_probe_reflects_environment(self):
+        """探测函数必须与真实环境一致（本仓当前无 psycopg v3）。"""
+        import importlib.util
+
+        expected = (
+            importlib.util.find_spec("psycopg") is not None
+            and importlib.util.find_spec("langgraph.checkpoint.postgres") is not None
+        )
+        assert su._postgres_checkpointer_available() is expected
+
+    def test_enabled_without_driver_warns_and_names_owner(
+        self, valid_env, monkeypatch,
+    ):
+        self._no_postgres_driver(monkeypatch)
+        monkeypatch.setenv("TRAVEL_CHECKPOINTER_ENABLED", "true")
+
+        warnings = su.validate_startup_settings()
+
+        hit = [w for w in warnings if "checkpointer" in w and "Postgres" in w]
+        assert hit, f"应给出 checkpointer 后端不可用告警，实际: {warnings}"
+        assert "旅游域" in hit[0]
+        # 必须点出「会静默降级为 MemorySaver」的后果，否则用户仍以为在持久化
+        assert "MemorySaver" in hit[0]
+        assert "psycopg" in hit[0]
+
+    def test_all_owners_listed_when_multiple_enabled(self, valid_env, monkeypatch):
+        self._no_postgres_driver(monkeypatch)
+        monkeypatch.setenv("MAIN_GRAPH_CHECKPOINTER_ENABLED", "true")
+        monkeypatch.setenv("CS_CHECKPOINTER_ENABLED", "true")
+        monkeypatch.setenv("TRAVEL_CHECKPOINTER_ENABLED", "true")
+
+        warnings = su.validate_startup_settings()
+        hit = [w for w in warnings if "checkpointer" in w and "Postgres" in w][0]
+        assert "主图" in hit and "客服域" in hit and "旅游域" in hit
+
+    def test_disabled_everywhere_no_warning(self, valid_env, monkeypatch):
+        """全关时不打扰 —— 没开启就没有「假开启」问题。"""
+        warnings = su.validate_startup_settings()
+        assert not any(
+            "checkpointer" in w and "Postgres" in w for w in warnings)

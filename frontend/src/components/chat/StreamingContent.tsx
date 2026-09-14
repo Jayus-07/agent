@@ -56,7 +56,7 @@ export default function StreamingContent({
   const displayContent = renderText || deltaText
   if (!displayContent && hideDots) return null
   return (
-    <div className="text-sm text-text-primary leading-relaxed">
+    <div className="text-[15px] leading-[1.6] text-[#333]">
       {displayContent ? (
         <>
           <MarkdownContent content={displayContent} />

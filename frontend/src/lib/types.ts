@@ -47,6 +47,12 @@ export interface DeltaEvent {
   ts: number
 }
 
+/** 思考链增量（推理模型 reasoning_content，"已思考"折叠面板数据源） */
+export interface ThinkingEvent {
+  content: string
+  ts: number
+}
+
 /** 本轮请求的 token 用量（后端 done 事件透出，来自 proxy per-turn 累加器） */
 export interface TokenUsage {
   prompt_tokens: number
@@ -77,12 +83,13 @@ export interface ErrorEvent {
 
 /** SSE v2 事件联合类型 */
 export type SSEStreamEvent =
-  | { event: 'meta';   data: MetaEvent }
-  | { event: 'status'; data: StatusEvent }
-  | { event: 'log';    data: LogEvent }
-  | { event: 'delta';  data: DeltaEvent }
-  | { event: 'done';   data: DoneEvent }
-  | { event: 'error';  data: ErrorEvent }
+  | { event: 'meta';     data: MetaEvent }
+  | { event: 'status';   data: StatusEvent }
+  | { event: 'log';      data: LogEvent }
+  | { event: 'delta';    data: DeltaEvent }
+  | { event: 'thinking'; data: ThinkingEvent }
+  | { event: 'done';     data: DoneEvent }
+  | { event: 'error';    data: ErrorEvent }
 
 // ========================================
 // 对话模式
@@ -105,6 +112,10 @@ export interface Message {
   sources?: Source[]
   /** 本轮请求 token 用量（done 事件写入；streamEvents 终态会被清空，用量需单独持久化） */
   usage?: TokenUsage
+  /** 思考链全文（done 事件时从 store.thinkingText 固化；后端未下发思考链则无值） */
+  thinking?: string
+  /** 思考耗时（秒，前端从首条 thinking 到首条 delta 计时；未走完思考链则无值） */
+  thinkingSeconds?: number
 }
 
 // ========================================

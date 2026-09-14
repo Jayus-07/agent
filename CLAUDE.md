@@ -18,14 +18,17 @@ Stack:
 ```
 POST /chat/stream → GraphRunner（Input Guard 门禁 → memory.start_session → graph.stream）
 START → router ─┬─ CS 预过滤命中（灰度放量） ──────────→ 客服域图 cs_graph_node → END
+                ├─ 旅游预过滤命中（TRAVEL_ENABLED） ─→ 旅游域图 travel_graph_node → END
                 └─ 三层 Router（rule→vector→LLM）→ route_selector
                       ├─ direct  → skill_executor（跳过 Planner 直调 skill）→ reporter → END
                       ├─ workflow → workflow_executor → reporter → END
                       └─ plan    → planner → critique → supervisor（Send 并行）→ reporter → END
 ```
 
-> planner→critique→supervisor 只是 plan 模式支线；direct/workflow/客服域图均绕过它。
+> planner→critique→supervisor 只是 plan 模式支线；direct/workflow/客服域图/旅游域图均绕过它。
 > 客服子图：cs_state_loader → cs_pending_handler → cs_supervisor（handoff 拦截/循环上限/LLM 兜底）→ 5 专家 → 回 supervisor → cs_reporter。
+> 旅游子图：travel_slot_filler → travel_supervisor（纯规则）→ poi/transit/budget/risk 专家 → travel_validator →（未通过）travel_repair → 回 supervisor → travel_reporter。
+> 预过滤优先级：客服 > 旅游（"订单里的行程单"属客服诉求）。
 > RAG 子链路：改写 → MultiQuery → 混合检索（向量+BM25）→ 同文档扩展 → Rerank → EvidenceGate → 带引用生成 → META 尾拒答判定。
 > 流式：节点 status/log + LLM stream_sink delta 汇入 merged_q；SSE 帧序 meta → status/log/delta → done/error。
 
@@ -58,7 +61,7 @@ START → router ─┬─ CS 预过滤命中（灰度放量） ─────�
 }
 ```
 
-### 已注册 Capability（9 个）
+### 已注册 Capability（13 个）
 
 | capability | Skill | 节点名 |
 |---|---|---|
@@ -71,6 +74,8 @@ START → router ─┬─ CS 预过滤命中（灰度放量） ─────�
 | web.search | WebSearchSkill | web_search_skill |
 | web.crawl | WebCrawlSkill | web_crawl_skill |
 | data.collect | DataCollectionSkill | data_collection_skill |
+| competitor.analyze / .watch / .history | CompetitorAnalysisSkill | competitor_analysis_skill |
+| travel.poi_search | TravelPoiSkill | travel_poi_skill |
 
 新增 Skill: 创建 `skills/<name>/skill.py` → `skills/registry.py` 注册 → 自动发现。
 
@@ -94,6 +99,69 @@ SQLSkill → SQLAgent → Router → Generator → Validator(6层) → RowSecuri
 连接池: ThreadedConnectionPool（min=2, max=10）
 只读账号: agent_readonly（scram-sha-256 认证）
 Migration: `sql/migrations/001~005`
+
+### 旅游规划域图（`backend/travel/`，P0）
+
+与 `customer_service/` 同级的独立域图，接入方式完全一致：`travel/register.py`
+自注册 → `backend/domains/__init__.py` 触发 → builder 自动布线，**不改 builder.py**。
+
+数据契约（对齐 SQLResult / BusinessInsight 口径，Pydantic）：
+  `TravelBrief`（需求）→ `Poi`（候选）→ `Itinerary`（输出，含 warnings/sources/confidence）
+  状态里只存 dict（`load_*/save_*` 转换），保证开启 checkpointer 时可序列化。
+
+**validator 是旅游域的 Evidence Gate**：RAG 的 Gate 解决「没有依据就别答」，
+这里解决「这份行程物理上成不成立」。四条硬纪律：
+  ① 纯规则、零 LLM、零 IO —— 正确性不押在模型上，也不能有网络抖动
+  ② 只判定不修改 —— 修复动作在 `repair.py`，两者独立演进、独立单测
+  ③ error 阻塞交付并触发修复；warning 只提示（夜里逛夜市是合理需求）
+  ④ 四轴：时间（营业时段/闭馆日/重叠/长等候）· 地理（长通勤/在途总量/重复到访）
+     · 体力（单日 POI 数与**纯到访**时长，不含通勤与用餐）· 预算（超支/逼近上限）
+
+**局部修复**（`repair.py`）：只处理被点名的天与条目，不整条重规划；
+用户点名必去的条目**永不被静默丢弃**，命中违规时保留并记为 kept_required 告知用户。
+
+**为什么 travel.plan 不注册成主图 Skill**：行程生成需要「槽位追问 → 骨架 → 排程 →
+校验 → 修复」的有状态多步流程，已由域图承担；再包一层 Skill 会产生第二套实现
+且少了约束校验这道安全网。POI 候选检索是无状态单点能力，故注册为 `travel.poi_search`。
+
+数据源：P0 用本地种子数据（`tools/travel/poi_seed.py`，source=`seed:local`，
+坐标/营业时间/票价为**示例值**，非权威），reporter 会如实标注来源与置信度。
+P1 替换为地图/票务 MCP 供给，`Poi`/`Itinerary` 契约不变。
+
+开关：`TRAVEL_ENABLED`（默认 false，与 CS_ENABLED 同策略），
+阈值集中在 `config/travel.py`，校验器只读该文件，不散落魔数。
+
+**跨轮契约（checkpointer 开启时才生效，但契约必须一直遵守）**
+
+1. `new_travel_graph_input()` **只放本轮输入**，不得预置产物/执行态默认值。
+   checkpointer 把 input 当作对上一轮状态的**更新**合并，预置
+   `brief: {} / itinerary: None / expert_history: []` 等于每轮清空成果
+   （实测表现：第二轮槽位全丢、跨轮改单完全失效）。
+2. 相应纪律：读状态一律 `.get()` —— 「本轮没写过的键」不会出现在最终状态里。
+3. 需求变化靠 `brief_fingerprint` 判定：指纹变 → `planning_reset()` 清空规划产物重排。
+   只在 slot_filler 里做（它是每轮唯一改写 brief 的地方）。若不清，
+   supervisor 会看到「专家都跑过 + validation 通过」直接进 reporter，
+   把**上一轮行程**当成新需求的结果输出 —— 比不持久化更糟。
+
+**checkpointer 现状（2026-09-14 已打通）**：三处 `_build_checkpointer`（主图 / 客服域 /
+旅游域）都按「postgres 优先、失败降级 MemorySaver」实现。PostgresSaver 需要
+psycopg **v3** 与 `langgraph-checkpoint-postgres` —— 依赖在 `pyproject.toml` 与
+`requirements-lock.txt` 中**都已声明**，Docker 镜像照 pyproject 装（生产侧不缺），
+缺的只是本地 venv；已在 `.venv` 补齐，并修掉锁文件下面那两个坑。
+`config/startup.py` 有启动校验：开关开着但**当前环境**导入不到驱动 → warning 级点名
+（说清"会静默降级为 MemorySaver"的后果）。它只探测 import、不探测数据库连通性 ——
+启动期不该因为 PG 还在启动就报错。
+
+已修的两处依赖问题（**照旧锁文件装会失败**，务必留意）：
+1. `requirements-lock.txt` 原把 `langgraph-checkpoint` 钉在 **4.0.3**，而
+   `langgraph-checkpoint-postgres==3.1.0` 要求 **>=4.1.0** —— 一组自相矛盾、
+   无法求解的依赖集。已升到 **4.2.0**。
+2. Windows / 无 libpq 环境下只装 `psycopg` 会报
+   `ImportError: no pq wrapper available`，必须装 `psycopg[binary]`。
+
+checkpoint TTL 清理已收敛到 `orchestration/graph/checkpointer_cleanup.py`
+（三方共用同一组表，**全进程单例**：谁先启动谁的 TTL 生效，
+`customer_service/checkpointer_cleanup.py` 保留为兼容薄壳）。改 TTL 必须三处一起改。
 
 ## Design Principle
 

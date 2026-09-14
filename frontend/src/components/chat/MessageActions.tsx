@@ -65,18 +65,20 @@ export default function MessageActions({
   }
 
   return (
-    <div className="flex items-center gap-0.5 mt-1.5 opacity-0 group-hover/message:opacity-100 transition-opacity duration-200">
+    <div className="flex items-center justify-end gap-0.5 mt-1.5 opacity-0 group-hover/message:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
       <ActionBtn icon={copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
         label={copied ? '已复制' : '复制'} onClick={handleCopy} />
-      {isUser && isLast && (
-        <>
-          <ActionBtn icon={<Pencil size={12} />} label="编辑" onClick={() => { setEditText(content); setEditing(true) }} />
-          <ActionBtn icon={<Send size={12} />} label="重发" onClick={() => onResend?.(content)} />
-        </>
+      {isUser && isLast && onEdit && (
+        <ActionBtn icon={<Pencil size={12} />} label="编辑" onClick={() => { setEditText(content); setEditing(true) }} />
+      )}
+      {isUser && isLast && onResend && (
+        <ActionBtn icon={<Send size={12} />} label="重发" onClick={() => onResend(content)} />
       )}
       {!isUser && (
         <>
-          <ActionBtn icon={<RefreshCw size={12} />} label="重新生成" onClick={() => onRegenerate?.()} />
+          {onRegenerate && (
+            <ActionBtn icon={<RefreshCw size={12} />} label="重新生成" onClick={() => onRegenerate()} />
+          )}
           <ActionBtn icon={<ThumbsUp size={12} className={liked === 'up' ? 'text-green-500' : ''} />}
             label="有用" onClick={() => handleFeedback('positive')} />
           <ActionBtn icon={<ThumbsDown size={12} className={liked === 'down' ? 'text-red-500' : ''} />}

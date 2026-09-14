@@ -8,8 +8,8 @@ import type { Message } from '@/lib/types'
 import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import EmptyState from './EmptyState'
-import LLMSwitcher from './LLMSwitcher'
 import ContextPanel from './chat/ContextPanel'
+import RunStatusLine from './agent/RunStatusLine'
 
 // 模块级稳定空数组，避免 messages 为空时 useMemo 每次返回新 []
 const EMPTY_MESSAGES: Message[] = []
@@ -94,7 +94,7 @@ export default function ChatView() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0 relative">
-      {/* Error toast — P1-16: historyError 已迁移至 HistorySidebar，避免与 sidebar 错误双显示 */}
+      {/* Error toast — P1-16: historyError 已迁移至任务栏（TaskSidebar/SessionList），避免双显示 */}
       {error && (
         <div className="shrink-0 mx-5 mt-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-center gap-2.5 animate-fade-in">
           <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />
@@ -121,24 +121,8 @@ export default function ChatView() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Stop button */}
-      {isLoading && (
-        <div className="shrink-0 flex justify-center pb-2">
-          <button
-            type="button"
-            onClick={stopStream}
-            className="flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-accent/5 border border-accent/20 text-accent text-xs hover:bg-accent/10 transition-all duration-200"
-          >
-            <span className="inline-block w-1.5 h-1.5 rounded-sm bg-accent animate-pulse" />
-            停止生成
-          </button>
-        </div>
-      )}
-
-      {/* 工具栏 — 输入框正上方 */}
-      <div className="shrink-0 max-w-[720px] mx-auto w-full px-4 pb-1 flex items-center justify-end gap-2">
-        <LLMSwitcher />
-      </div>
+      {/* 运行状态行（P0：生成中提示 + 本会话已消耗 tokens + 停止生成） */}
+      <RunStatusLine onStop={stopStream} />
 
       <ChatInput onSend={send} isLoading={isLoading} />
     </div>

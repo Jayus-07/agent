@@ -25,6 +25,7 @@ from backend.skills.email.skill import EmailSkill, email_skill_node
 from backend.skills.data_export.skill import DataExportSkill, data_export_skill_node
 from backend.skills.web_search.skill import WebSearchSkill, web_search_skill_node
 from backend.skills.web_crawl.skill import WebCrawlSkill, web_crawl_skill_node
+from backend.skills.travel_poi.skill import TravelPoiSkill, travel_poi_skill_node
 
 __all__ = [
     "BaseSkill", "execute_with_retry",
@@ -36,4 +37,5 @@ __all__ = [
     "DataExportSkill", "data_export_skill_node",
     "WebSearchSkill", "web_search_skill_node",
     "WebCrawlSkill", "web_crawl_skill_node",
+    "TravelPoiSkill", "travel_poi_skill_node",
 ]

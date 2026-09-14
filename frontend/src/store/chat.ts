@@ -13,6 +13,13 @@ interface ChatState {
   currentStatus: string
   /** 流式 delta 累积文本（ChatContent 消费） */
   deltaText: string
+  /** 思考链累积文本（thinking 事件，"已思考"折叠面板消费）。
+   *  chat 私有字段：csChat 无思考链，不进共享归约 stream-reduce */
+  thinkingText: string
+  /** 思考耗时（秒）：首条 delta 到达时定格；null = 未产生过思考链或思考被中止 */
+  thinkingSeconds: number | null
+  /** 思考起始时间戳（内部记账：首条 thinking 事件写入，用于算耗时） */
+  thinkingStartAt: number
   /** node → emoji 映射表（meta 事件下发） */
   nodeLabels: Record<string, string>
   isLoading: boolean
@@ -39,7 +46,9 @@ interface ChatState {
   // — 消息操作 (sessionId 可选，用于 SSE 流固定目标会话) —
   addMessage: (role: 'user' | 'assistant', content: string, sessionId?: string) => void
   addStreamEvent: (evt: SSEStreamEvent, sessionId?: string) => void
-  replaceLastAssistant: (content: string, sessionId?: string, sources?: any[], usage?: import('@/lib/types').TokenUsage) => void
+  removeLastAssistant: (sessionId?: string) => void
+  replaceLastAssistant: (content: string, sessionId?: string, sources?: any[], usage?: import('@/lib/types').TokenUsage,
+    thinking?: string, thinkingSeconds?: number) => void
 
   // — 状态 —
   setLoading: (v: boolean) => void
@@ -75,6 +84,9 @@ export const useChatStore = create<ChatState>((set, get) => {
     streamEvents: [],
     currentStatus: '',
     deltaText: '',
+    thinkingText: '',
+    thinkingSeconds: null,
+    thinkingStartAt: 0,
     nodeLabels: {},
     isLoading: false,
     error: null,
@@ -165,6 +177,20 @@ export const useChatStore = create<ChatState>((set, get) => {
         const sid = targetId(state, sessionId)
         const isCurrentSession = !sessionId || sessionId === state.currentId
 
+        // —— chat 私有：思考链累积（不进共享归约 stream-reduce，csChat 无此字段）——
+        let thinkingText = state.thinkingText
+        let thinkingSeconds = state.thinkingSeconds
+        let thinkingStartAt = state.thinkingStartAt
+        if (isCurrentSession) {
+          if (evt.event === 'thinking') {
+            if (!thinkingStartAt) thinkingStartAt = Date.now()
+            thinkingText += evt.data.content
+          } else if (evt.event === 'delta' && thinkingText && thinkingSeconds === null) {
+            // 首块回答到达 → 思考阶段定格（秒）；下限 1s 避免亚秒抖动
+            thinkingSeconds = Math.max(1, Math.round((Date.now() - thinkingStartAt) / 1000))
+          }
+        }
+
         const MAX_STREAM_EVENTS = 200
         let storeEvents = state.streamEvents
         if (isCurrentSession) {
@@ -202,15 +228,34 @@ export const useChatStore = create<ChatState>((set, get) => {
           return { ...s, messages: msgs, updatedAt: Date.now() }
         })
 
-        return { sessions, streamEvents: storeEvents, ...core }
+        return { sessions, streamEvents: storeEvents, thinkingText, thinkingSeconds, thinkingStartAt, ...core }
       })
     },
 
     setCurrentRequestId: (id) => set({ currentRequestId: id }),
 
-    resetStream: () => set({ streamEvents: [], currentStatus: '', deltaText: '', currentRequestId: null }),
+    resetStream: () => set({
+      streamEvents: [], currentStatus: '', deltaText: '',
+      thinkingText: '', thinkingSeconds: null, thinkingStartAt: 0,
+      currentRequestId: null,
+    }),
 
-    replaceLastAssistant: (content, sessionId, sources, usage) => {
+    // 重新生成：移除尾部 assistant 占位/旧回答（user 提问保留，问题由调用方重发）
+    removeLastAssistant: (sessionId) => {
+      set((state) => {
+        const sid = targetId(state, sessionId)
+        return {
+          sessions: state.sessions.map((s) => {
+            if (s.id !== sid) return s
+            const msgs = [...s.messages]
+            if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') msgs.pop()
+            return { ...s, messages: msgs, updatedAt: Date.now() }
+          }),
+        }
+      })
+    },
+
+    replaceLastAssistant: (content, sessionId, sources, usage, thinking, thinkingSeconds) => {
       set((state) => ({
         sessions: state.sessions.map((s) => {
           const sid = targetId(state, sessionId)
@@ -223,6 +268,8 @@ export const useChatStore = create<ChatState>((set, get) => {
               content,
               sources: sources || msgs[lastIdx].sources,
               usage: usage || msgs[lastIdx].usage,
+              thinking: thinking ?? msgs[lastIdx].thinking,
+              thinkingSeconds: thinkingSeconds ?? msgs[lastIdx].thinkingSeconds,
               timestamp: Date.now(),
             }
           }

@@ -17,6 +17,9 @@ function resetStore() {
     streamEvents: [],
     currentStatus: '',
     deltaText: '',
+    thinkingText: '',
+    thinkingSeconds: null,
+    thinkingStartAt: 0,
     nodeLabels: {},
     isLoading: false,
     error: null,
@@ -112,5 +115,121 @@ describe('addStreamEvent — 终态清理（StatusBar 残留修复）', () => {
       'local1',
     )
     expect(useChatStore.getState().currentStatus).toBe('planner')
+  })
+})
+
+describe('addStreamEvent — thinking 思考链归约', () => {
+  it('thinking 事件累积 thinkingText，不污染 deltaText', () => {
+    useChatStore.getState().addStreamEvent(
+      { event: 'thinking', data: { content: '用户在问什么', ts: 1 } } as any,
+      'local1',
+    )
+    useChatStore.getState().addStreamEvent(
+      { event: 'thinking', data: { content: '，应该查知识库', ts: 2 } } as any,
+      'local1',
+    )
+    const state = useChatStore.getState()
+    expect(state.thinkingText).toBe('用户在问什么，应该查知识库')
+    expect(state.deltaText).toBe('')
+  })
+
+  it('首块 delta 到达后思考耗时定格（秒，下限 1s）', () => {
+    useChatStore.getState().addStreamEvent(
+      { event: 'thinking', data: { content: '思考中', ts: 1 } } as any,
+      'local1',
+    )
+    useChatStore.getState().addStreamEvent(
+      { event: 'delta', data: { content: '回答', ts: 2 } } as any,
+      'local1',
+    )
+    const state = useChatStore.getState()
+    expect(state.thinkingSeconds).toBe(1)
+    expect(state.deltaText).toBe('回答')
+  })
+
+  it('后续 delta 不再重复定格耗时', () => {
+    useChatStore.getState().addStreamEvent(
+      { event: 'thinking', data: { content: '思考中', ts: 1 } } as any,
+      'local1',
+    )
+    useChatStore.getState().addStreamEvent(
+      { event: 'delta', data: { content: '回', ts: 2 } } as any,
+      'local1',
+    )
+    useChatStore.getState().addStreamEvent(
+      { event: 'delta', data: { content: '答', ts: 3 } } as any,
+      'local1',
+    )
+    expect(useChatStore.getState().thinkingSeconds).toBe(1)
+  })
+
+  it('无思考链直接出回答时 thinkingSeconds 保持 null', () => {
+    useChatStore.getState().addStreamEvent(
+      { event: 'delta', data: { content: '直接回答', ts: 1 } } as any,
+      'local1',
+    )
+    const state = useChatStore.getState()
+    expect(state.thinkingSeconds).toBeNull()
+    expect(state.thinkingText).toBe('')
+  })
+
+  it('resetStream 清空思考链状态', () => {
+    useChatStore.getState().addStreamEvent(
+      { event: 'thinking', data: { content: '思考中', ts: 1 } } as any,
+      'local1',
+    )
+    useChatStore.getState().resetStream()
+    const state = useChatStore.getState()
+    expect(state.thinkingText).toBe('')
+    expect(state.thinkingSeconds).toBeNull()
+    expect(state.thinkingStartAt).toBe(0)
+  })
+
+  it('非当前会话的 thinking 事件不累积', () => {
+    useChatStore.getState().addStreamEvent(
+      { event: 'thinking', data: { content: '别的会话', ts: 1 } } as any,
+      'other-session',
+    )
+    expect(useChatStore.getState().thinkingText).toBe('')
+  })
+})
+
+describe('removeLastAssistant / replaceLastAssistant — 重新生成支撑', () => {
+  function seedTurn() {
+    useChatStore.getState().addMessage('user', '问题', 'local1')
+    useChatStore.getState().addMessage('assistant', '旧回答', 'local1')
+  }
+
+  it('removeLastAssistant 只移除尾部 assistant，保留 user 提问', () => {
+    seedTurn()
+    useChatStore.getState().removeLastAssistant('local1')
+    const msgs = useChatStore.getState().sessions.find((s) => s.id === 'local1')!.messages
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].role).toBe('user')
+  })
+
+  it('尾部不是 assistant 时不动消息（幂等）', () => {
+    useChatStore.getState().addMessage('user', '问题', 'local1')
+    useChatStore.getState().removeLastAssistant('local1')
+    const msgs = useChatStore.getState().sessions.find((s) => s.id === 'local1')!.messages
+    expect(msgs).toHaveLength(1)
+  })
+
+  it('replaceLastAssistant 固化 thinking 与耗时', () => {
+    seedTurn()
+    useChatStore.getState().replaceLastAssistant('新回答', 'local1', undefined, undefined, '思考全文', 8)
+    const msgs = useChatStore.getState().sessions.find((s) => s.id === 'local1')!.messages
+    expect(msgs[1].content).toBe('新回答')
+    expect(msgs[1].thinking).toBe('思考全文')
+    expect(msgs[1].thinkingSeconds).toBe(8)
+  })
+
+  it('replaceLastAssistant 不传 thinking 时保留原值（error 中断路径不丢思考链）', () => {
+    seedTurn()
+    useChatStore.getState().replaceLastAssistant('新回答', 'local1', undefined, undefined, '思考全文', 8)
+    useChatStore.getState().replaceLastAssistant('新回答 v2', 'local1')
+    const msgs = useChatStore.getState().sessions.find((s) => s.id === 'local1')!.messages
+    expect(msgs[1].thinking).toBe('思考全文')
+    expect(msgs[1].thinkingSeconds).toBe(8)
   })
 })

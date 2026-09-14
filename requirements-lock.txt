@@ -140,7 +140,9 @@ langchain-text-splitters==1.1.2
 langdetect==1.0.9
 langfuse==4.12.0
 langgraph==1.1.10
-langgraph-checkpoint==4.0.3
+# 4.0.3 与 langgraph-checkpoint-postgres==3.1.0 不兼容（后者要求 >=4.1.0），
+# 照旧锁文件安装会得到互相矛盾、无法求解的依赖集。已实测升到 4.2.0。
+langgraph-checkpoint==4.2.0
 langgraph-checkpoint-postgres==3.1.0
 langgraph-prebuilt==1.0.13
 langgraph-sdk==0.3.14
@@ -211,6 +213,11 @@ prometheus_client==0.25.0
 propcache==0.5.2
 protobuf==6.33.6
 psutil==7.2.2
+# psycopg v3 是 LangGraph PostgresSaver 的驱动（与 psycopg2 并存，两者用途不同）；
+# psycopg-binary 提供 Windows/无 libpq 环境必需的 pq 包装
+psycopg==3.3.5
+psycopg-binary==3.3.5
+psycopg-pool==3.3.1
 psycopg2-binary==2.9.12
 py-key-value-aio==0.4.5
 py-spy==0.4.2

@@ -42,6 +42,15 @@ def router_node(state: dict) -> dict:
     except Exception as e:
         logger.warning(f"[RouterNode] CS 预过滤失败，回退到主 Router: {e}")
 
+    # ── 旅游预过滤：顺序放在客服之后（客服诉求优先级更高，如"订单里的行程单"）──
+    try:
+        from backend.orchestration.graph.travel_prefilter import try_travel_prefilter
+        travel_update = try_travel_prefilter(query, state)
+        if travel_update is not None:
+            return {**state, **travel_update}
+    except Exception as e:
+        logger.warning(f"[RouterNode] 旅游预过滤失败，回退到主 Router: {e}")
+
     try:
         # P0-4: get_router() 懒加载（router 索引/向量资源首次初始化）曾贡献
         # 数秒无埋点黑洞；单独成 span 使其在瀑布图中可见（埋点软失败）。

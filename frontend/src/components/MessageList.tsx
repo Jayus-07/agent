@@ -16,7 +16,7 @@ interface Props { messages: Message[]; isLoading: boolean; sessionId?: string }
 export default function MessageList({ messages, isLoading: _isLoading, sessionId }: Props) {
   const last = messages.length - 1
   return (
-    <div className="max-w-[720px] mx-auto px-5 py-8 space-y-6">
+    <div className="max-w-3xl mx-auto px-5 py-8 space-y-6">
       {messages.map((msg, i) => {
         // 找当前 assistant 消息的上一条 user 消息（作为 question）
         const question = msg.role === 'assistant'

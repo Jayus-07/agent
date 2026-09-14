@@ -202,7 +202,9 @@ PROBE="/api/auth/info?userId=$ADMIN_ID"
 TOKEN_TAMPERED=$(printf '%s' "$TOKEN" | "$PY" -c "
 import sys
 h,p,s = sys.stdin.read().strip().rsplit('.',2)
-print(f'{h}.{p}.' + s[:-1] + ('A' if s[-1] != 'A' else 'B'))")
+# 必须改签名『首字符』而不是末字符：base64url 末位只承载 2~4 个有效比特，
+# 改动会在解码时被丢弃，『篡改』后的签名与原签名等价——用例因此时好时坏。
+print(f'{h}.{p}.' + ('B' if s[:1] == 'A' else 'A') + s[1:])")
 
 if [ "$MODE" = "enforce" ]; then
   echo "-- C. 拒绝行为（enforce）--"
@@ -226,23 +228,45 @@ if [ "$MODE" = "enforce" ]; then
   # ① auth-service 的 logout 只在携带 refresh_token Cookie 时才真正吊销；
   # ② 吊销是按**设备**做的（refresh_token 里的 deviceId），所以用来登出的
   #    令牌必须与被测令牌来自**同一次登录**——否则吊销的是别的设备，测了个寂寞。
-  JAR_PATH="$CJ"
+  # ⑤ 路径必须转成 Windows 风格：curl 是原生 Windows 程序，MSYS 的 /d/... 路径
+  #    传给 -c 时会静默写不出 jar（文件根本不存在），logout 就带不上 refresh_token。
+  JAR_PATH="$(to_win "$CJ")"
+  # ③ jar 必须是"本次登录"的：残留 jar 会让 logout 带上一轮的 refresh_token，
+  #    吊销的是上一轮设备，当前令牌不受影响（logout 仍返回"登出成功"，极具迷惑性）。
+  rm -f "$CJ"
+  # ④ 设备号必须唯一：auth-service 按 (userId,deviceId) 缓存 access/refresh 并按设备吊销，
+  #    固定 deviceId 会撞上历史运行残留的黑名单与缓存，令用例时好时坏。
+  DEV8="gw-bl8-$(date +%s)-$$"
+  # ⑤ 诊断用：直接问 Redis「这个令牌进黑名单了吗」，把"登出没吊销"和"网关没拦住"区分开
+  REDIS_C="${REDIS_CONTAINER:-oa-auth-redis}"
+  REDIS_P="$(env_val AUTH_REDIS_PASSWORD "$ROOT/.env")"
   if [ "$ACCESS" = "HOST" ]; then
     LOGIN8=$(curl -s -c "$JAR_PATH" -X POST "${BASE}/api/auth/login" -H 'Content-Type: application/json' \
-      -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\",\"deviceId\":\"gw-blacklist\"}")
+      -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\",\"deviceId\":\"$DEV8\"}")
     TOKEN8=$(printf '%s' "$LOGIN8" | json_get token)
-    curl -s -o /dev/null -X POST "${BASE}/api/auth/logout" -b "$JAR_PATH" -H "Authorization: Bearer $TOKEN8"
+    LOGOUT_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/auth/logout" \
+      -b "$JAR_PATH" -H "Authorization: Bearer $TOKEN8")
   else
     JAR_PATH=/tmp/_gw_cj
+    docker exec "$CURLER" rm -f "$JAR_PATH" >/dev/null 2>&1   # 同上：清掉上一轮残留
     LOGIN8=$(docker exec "$CURLER" sh -c "curl -s -c $JAR_PATH -X POST '${BASE}/api/auth/login' \
       -H 'Content-Type: application/json' \
-      -d '{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\",\"deviceId\":\"gw-blacklist\"}'")
+      -d '{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\",\"deviceId\":\"$DEV8\"}'")
     TOKEN8=$(printf '%s' "$LOGIN8" | json_get token)
-    docker exec "$CURLER" curl -s -o /dev/null -X POST "${BASE}/api/auth/logout" -b "$JAR_PATH" \
-      -H "Authorization: Bearer $TOKEN8"
+    LOGOUT_CODE=$(docker exec "$CURLER" curl -s -o /dev/null -w '%{http_code}' \
+      -X POST "${BASE}/api/auth/logout" -b "$JAR_PATH" -H "Authorization: Bearer $TOKEN8")
   fi
   sleep 1
-  expect_blocked "C8 登出后同设备原 access 令牌 -> 网关 401（黑名单 auth:blacklist: 生效）" "$TOKEN8"
+  JAR_INFO="文件缺失"
+  if [ -f "$CJ" ]; then
+    JAR_INFO="cookie=$(grep -c refresh_token "$CJ" 2>/dev/null)"
+  fi
+  BL_HIT="?"
+  if [ -n "$REDIS_P" ] && docker exec "$REDIS_C" true >/dev/null 2>&1; then
+    BL_HIT=$(docker exec "$REDIS_C" redis-cli -a "$REDIS_P" --no-auth-warning \
+             EXISTS "auth:blacklist:$TOKEN8" 2>/dev/null | tail -1 | tr -d '\r')
+  fi
+  expect_blocked "C8 登出后同设备原 access 令牌 -> 网关 401（logout=$LOGOUT_CODE jar=$JAR_INFO 黑名单命中=$BL_HIT）" "$TOKEN8"
 
   body=$(gw "/api/auth/info?userId=99999" -H "X-User-Id: 99999" -H "X-Auth-Type: jwt")
   printf '%s' "$body" | grep -q '未认证：'

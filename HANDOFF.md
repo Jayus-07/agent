@@ -97,3 +97,25 @@ git commit -m "test: 写操作测试免审批 fixture + init_rag_pipeline 失败
 - RC-080 歧义 query 的产品级处理（已移出确定性门禁，标 eval_tier=semantic；需要 query 澄清能力时再议）
 - MemoryManager 跨 loop teardown 噪音（见 4）
 - .dockerignore / pyproject.toml 有用户自己的未提交改动，别动
+
+## 五、统一认证与网关统一鉴权项目（2026-09-14 新增，与上述 RAG 事项无关）
+
+**P0 / P1 / P2 均已完成**，当前处于 P3 起点：
+- `docs/auth/01-现状评估报告.md` ／ `docs/auth/02-详细架构设计.md`
+- **`docs/auth/03-实施进度追踪.md`（跨会话唯一事实源，动认证相关代码前先读它）**
+- 涉及第二仓库 `D:\Program Files\workplace\Enterprise_OA`（git 基线 e4683cc，最新提交 24157af）
+
+**P2 交付内容（当前项目）**：
+- `api-gateway/` 新增 `AuthenticationGlobalFilter`(order=-200) + `JwtVerifier`/`HmacJwtVerifier` + `GatewayAuthProperties`/`GatewayAuthConfig`；`application.yml` 新增 `/api/auth/**` 路由与 `gateway.auth.*` 配置块，Redis 走 `spring.data.redis.*` 指向 oa-auth-redis
+- `docker-compose.yml` 网关新增 AUTH_SERVICE_URL / GATEWAY_AUTH_* / JWT_SECRET / JWT_ISSUER / AUTH_REDIS_* 透传
+- `scripts/smoke_gateway_auth.sh`（P2 验收冒烟，20/20 全绿）+ `scripts/gateway_echo_stub.py`（回显桩）
+- 上线态：`GATEWAY_AUTH_ENABLED=true` + `GATEWAY_AUTH_MODE=shadow`（`restart: unless-stopped`，Docker 重启后自动回来）。回退：置 `GATEWAY_AUTH_ENABLED=false`
+
+**动认证代码前必须知道的 5 件事**：
+1. JWT 实测 **HS512**，`iss=hongmeng-oa`（P2 双端对齐，旧值 MyApp 已废），access TTL **2h**——nacos 键名必须是 `jwt.expiration`（不是 `expiration-time`，P0 曾写错导致 TTL 恒为 2.5h）。
+2. 网关黑名单前缀 `auth:blacklist:<完整 token>`，连 **oa-auth-redis（noeviction）**，Redis 异常 fail-closed。
+3. `gateway.auth.enabled` 与 `gateway.user-header-enabled` **互斥**，同时开拒绝启动。
+4. **本机有进程占用 `127.0.0.1:8080`**（"腾讯位置服务演示台"），Windows 优先匹配该绑定，`curl 127.0.0.1:8080` 打不到网关（Docker 只监听 0.0.0.0:8080）。改用容器网络内 `api-gateway:8080`。
+5. **历史提交 `975ccf3` 含 `.env.oaauth` 明文口令**（已修忽略规则并移出跟踪，但历史仍在）——口令轮换待用户决策，见 03 文档 §九 D-3。
+
+ARCH 决策已按推荐项锁定（见 03 决策日志），未决项仅 ARCH-16（CORS 域名清单，待用户提供）。

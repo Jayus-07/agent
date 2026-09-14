@@ -57,6 +57,7 @@ ALL_CAPABILITIES = [
     "web.search",
     "web.crawl",
     "data.collect",
+    "travel.poi_search",
 ]
 
 # 已注册 Workflow 名（不在 ALL_CAPABILITIES 里）
