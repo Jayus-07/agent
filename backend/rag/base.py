@@ -133,4 +133,14 @@ class CustomRetriever:
             doc.metadata["similarity"] = round(score, 4)  # 保留向量相似度，供自适应检索用
             docs.append(doc)
 
+        # 4.1b: pending_review（near_dup 审核态）文档软过滤——本方法是
+        # rag_search / retrieve_knowledge / hybrid 向量路径的公共出口，
+        # 在此统一过滤（幂等；hybrid 外层已有同样的包装）。registry
+        # 不可用时内部自动跳过（可用性优先）。
+        try:
+            from backend.rag.retrieval.hybrid import _filter_review_blocked
+            docs = _filter_review_blocked(docs)
+        except Exception as e:
+            logger.debug(f"[ReviewFilter] 过滤异常（跳过）: {e}")
+
         return docs
