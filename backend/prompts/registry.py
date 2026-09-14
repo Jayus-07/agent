@@ -242,6 +242,16 @@ _register(PromptSpec(
     default_file="selection_decision_differentiation.yaml",
 ))
 
+# ── 市场调研（Skill 集成计划批次 2）────────────────────────────
+
+_register(PromptSpec(
+    key="market_research.analyzer",
+    name="品类市场调研分组分析",
+    category="selection",
+    risk_level="medium",
+    default_file="market_research_analyzer.yaml",
+))
+
 # ── SQL Agent ──────────────────────────────────────────────────
 
 _register(PromptSpec(
