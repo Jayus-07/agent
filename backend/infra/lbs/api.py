@@ -615,6 +615,12 @@ def weather_for_city(city: str, kind: str = "now") -> dict | None:
 # 尚未开通该服务，因此**下面的响应字段解析基于官方文档而非实测**。
 # 故此处刻意采用宽松提取 + 原始 payload 透传，不硬编码字段名，
 # 待服务开通后跑 scripts/verify_tencent_lbs.py 的街景段落即可核实并收紧。
+#
+# 【接入前置】2026-09-14 确认：当前账号为**个人开发者**，而街景仅对企业
+# 开发者开放（邮件申请制，个人身份无法申请）→ 街景功能处于**待接入**状态。
+# 启用路径：完成企业开发者认证 → 邮件申请（正文格式勿发附件，
+# mapapi@vip.qq.com 抄送 mapbd@tencent.com，约 3 个工作日审批）→
+# 通过后跑 scripts/verify_tencent_lbs.py 街景段落收紧解析，代码无需改动。
 
 
 def street_view_pano(lat: float, lng: float, *, radius: int = 50) -> dict:
