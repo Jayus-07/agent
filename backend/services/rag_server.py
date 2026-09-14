@@ -19,6 +19,7 @@ import threading
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from backend.shared.logger import logger
@@ -28,6 +29,56 @@ app = FastAPI(
     version="1.0.0",
     description="知识库检索/问答独立服务（重资源：embedding + Chroma + LLM）",
 )
+
+
+# ==================== 内部令牌防护（P3，docs/auth 就绪清单第 5 条） ====================
+# rag-server 的请求体带 subject_type/department 等授权字段，裸暴露等于任何人
+# 可以冒充 employee 直查授权知识库。防护规则：
+#   - production 且 AI_INTERNAL_TOKEN 为空 → 拒启动（fail-fast）
+#   - 除健康检查/探针/docs 外一律校验 X-Internal-Token（常量时间比较）
+#   - 本地开发（token 空 + 非 production）跳过校验，对齐 /internal/ai/* 行为
+# 判定抽成 require_internal_boot(token, environment) 纯函数：参数可注入，
+# 测试无需 importlib.reload（config 的 ENVIRONMENT 是进程内缓存常量，
+# setenv 改不动它——首轮实现的教训）。
+
+def _internal_token() -> str:
+    from backend.config.messaging import AI_INTERNAL_TOKEN
+    return AI_INTERNAL_TOKEN
+
+
+def require_internal_boot(token: str | None = None,
+                          environment: str | None = None) -> None:
+    """启动期守卫：production 环境缺内部令牌直接拒启动。"""
+    if token is None:
+        token = _internal_token()
+    if token:
+        return
+    if environment is None:
+        from backend.config import ENVIRONMENT
+        environment = ENVIRONMENT
+    if environment == "production":
+        raise RuntimeError(
+            "RAG_INTERNAL_TOKEN 缺失: production 环境必须配置 AI_INTERNAL_TOKEN "
+            "（rag-server 携带授权字段，无令牌即拒启动）"
+        )
+
+
+require_internal_boot()
+
+_INTERNAL_OPEN_PATHS = {"/healthz", "/readyz", "/docs", "/redoc", "/openapi.json"}
+
+@app.middleware("http")
+async def _check_internal_token(request, call_next):
+    if request.url.path in _INTERNAL_OPEN_PATHS:
+        return await call_next(request)
+    token = _internal_token()
+    if not token:  # 本地开发模式（非 production 已在启动期拦截）
+        return await call_next(request)
+    import hmac as _hmac
+    provided = request.headers.get("X-Internal-Token", "")
+    if not _hmac.compare_digest(token.encode("utf-8"), provided.encode("utf-8")):
+        return JSONResponse(status_code=401, content={"detail": "invalid internal token"})
+    return await call_next(request)
 
 
 # ==================== 请求/响应模型 ====================

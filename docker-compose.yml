@@ -99,7 +99,10 @@ services:
   app:
     build: .
     ports:
-      - "8000:8000"
+      # P3（docs/auth 修复清单④）：信任边界=网络边界——app 信任网关注入的
+      # 身份头（IDENTITY_SOURCE=header/strict），8000 只允许宿主机内部访问，
+      # 外部流量必须走 8080 网关；对外暴露 8000 等于允许任何人伪造身份头。
+      - "127.0.0.1:8000:8000"
     environment:
       # LLM
       - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}

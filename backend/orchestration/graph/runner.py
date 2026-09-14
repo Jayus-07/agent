@@ -35,6 +35,8 @@ from backend.orchestration.graph.events import (
     make_initial_state,
     make_step_log_event,
     make_step_payload,
+    make_todo_event,
+    make_usage_event,
     stream_node_events,
     summarize_turn_usage,
 )
@@ -122,6 +124,7 @@ class GraphRunner:
             initial_state = make_initial_state(
                 question, session_id, kb_id, l1.messages,
                 guard_result=guard_result.model_dump(mode="json"),
+                user_id=user_id, department=department,
             )
         except Exception as e:
             trace_collector.end_span(load_span, status="error",
@@ -251,6 +254,19 @@ class GraphRunner:
                             ctx["current_plan"] = node_output["plan"]
                         if node_output.get("_plan_changed"):
                             ctx["plan_changed"] = True
+
+                    # P1: todo 快照 —— 任务列表变化节点跑完后，同步全量快照给前端。
+                    # 位置在 all_step_results.update 之后：supervisor 轮次能带上最新步骤状态。
+                    if node_name in ("planner", "critique", "supervisor"):
+                        plan_nodes = (ctx.get("current_plan") or {}).get("nodes") or {}
+                        if plan_nodes:
+                            merged_q.put(("evt", make_todo_event(plan_nodes, ctx["all_step_results"])))
+                    # P1: 流中用量 —— supervisor 每轮调度后透出累计用量（粒度 = supervisor 轮数）
+                    if node_name == "supervisor":
+                        usage_evt = make_usage_event()
+                        if usage_evt:
+                            merged_q.put(("evt", usage_evt))
+
                 # 用量 ContextVar 在 worker 上下文累计，必须就地汇总
                 ctx["usage"] = summarize_turn_usage()
             except Exception as e:

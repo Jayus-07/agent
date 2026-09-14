@@ -1,0 +1,39 @@
+"""config/auth.py — app 侧身份来源模式机（P3，docs/auth/03 五之二）
+
+网关（AuthenticationGlobalFilter）验完 JWT 后向下游注入身份头：
+
+    X-Auth-Type: jwt | guest          # 认证方式
+    X-User-Id / X-User-Name / X-User-Dept
+
+app 侧不再自行验 JWT，按 IDENTITY_SOURCE 决定信谁：
+
+    legacy = 现状兼容：请求体 user_id 优先，TRUST_USER_HEADER=true 时头次之。
+             保留是为了存量客户端/本地直调不破——但请求体身份可伪造，
+             上线网关后应尽快切走。
+    header = 网关权威：只认身份头，请求体身份字段一律忽略；
+             未认证降级 guest（user_id=""）。
+    strict = header + 未认证直接 401（由调用方据 auth_type 判断抛出）。
+
+信任边界即网络边界：header/strict 模式的前提是 8000 端口不对宿主机外
+暴露（docker-compose 已收口 127.0.0.1），否则任何人都能伪造身份头。
+"""
+import os
+
+# ── 网关注入契约（与 api-gateway .../AuthenticationGlobalFilter.java 对齐）──
+AUTH_TYPE_HEADER = "X-Auth-Type"
+USER_ID_HEADER = "X-User-Id"
+USER_NAME_HEADER = "X-User-Name"
+USER_DEPT_HEADER = "X-User-Dept"
+
+_AUTH_MODES = ("legacy", "header", "strict")
+IDENTITY_SOURCE: str = os.getenv("IDENTITY_SOURCE", "legacy").strip().lower()
+if IDENTITY_SOURCE not in _AUTH_MODES:  # 防呆：写错模式宁可启动期兜回 legacy
+    IDENTITY_SOURCE = "legacy"
+
+# 旧开关（TRUST_USER_HEADER / USER_ID_HEADER 定义在 config/__init__.py），
+# 仅 legacy 模式继续消费；header/strict 不再看它。
+
+
+def identity_source() -> str:
+    """当前身份来源模式（legacy/header/strict）。"""
+    return IDENTITY_SOURCE

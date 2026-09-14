@@ -138,13 +138,11 @@ async def chat_stream(
     kb_id = req.kb_id or "default"
     request_id = req.request_id or "default"
 
-    # user_id 解析：请求体优先，信任网关注头次之
-    from backend.config import TRUST_USER_HEADER, USER_ID_HEADER
-    user_id = req.user_id or "default"
-    if user_id == "default" and TRUST_USER_HEADER:
-        header_uid = r.headers.get(USER_ID_HEADER)
-        if header_uid:
-            user_id = header_uid
+    # user_id 解析：统一走 identity.py（P3 收敛）。
+    # legacy=请求体优先+网关头兜底（现网行为不变）；header/strict=网关权威，body 身份被无视。
+    from backend.app.api.identity import resolve_identity
+    ident = resolve_identity(r, body_user_id=req.user_id)
+    user_id = ident.user_id or "default"
     key = _request_key(req.session_id, request_id)
 
     # —— 队列与中止标志延后到生成器内部，确保只在真正进入流式后注册 _active_stops；

@@ -76,6 +76,12 @@ class AgentState(TypedDict):
     # Send 派发时透传（scheduler.route_after_supervisor），节点入口经
     # trace_middleware 统一重新绑定（跨线程 ContextVar 不可继承）
     request_context: RequestContext
+    # 请求身份平铺（P3 CS 断链修复）：request_context 是权威对象，但 CS 域
+    # （cs_prefilter / cs_graph_node / experts/*）按惯例直接读 state 平铺键，
+    # 缺这俩键会导致客服域恒为 anonymous（审计/授权/会话归属全部失真）。
+    # 每轮由 make_initial_state 写入当前请求值，无跨轮残留问题。
+    user_id: str
+    department: str
 
 
 class OrchestratorState(AgentState):

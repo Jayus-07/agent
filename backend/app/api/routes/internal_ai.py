@@ -75,6 +75,11 @@ async def list_tools():
 class AiCallRequest(BaseModel):
     tool: str
     params: dict = {}
+    # P3（docs/auth 修复清单③）：Java 侧透传终端用户身份（payload 委托）——
+    # 该路由是 Java→Python 直连（不过网关，无身份头），工具层的权限校验与
+    # 审计归属靠这里绑定；不传即 anonymous，工具侧 fail-safe。
+    actor_user_id: str = ""
+    actor_department: str = ""
 
 
 @router.post("/call", dependencies=[Depends(verify_internal_token)])
@@ -89,8 +94,15 @@ async def call_tool(req: AiCallRequest, request: Request):
         logger.warning(f"[InternalAI] tool not whitelisted: {req.tool}")
         raise HTTPException(status_code=403, detail=f"tool not allowed: {req.tool}")
 
+    from backend.core.request_context import set_tool_department, set_tool_user_id
     from backend.observability.tracer import current_trace_context
     from mcp_servers.manager import manager
+
+    # FastAPI 每请求独立 ContextVar 上下文，绑定不会跨请求泄漏
+    if req.actor_user_id:
+        set_tool_user_id(req.actor_user_id)
+    if req.actor_department:
+        set_tool_department(req.actor_department)
 
     started = time.perf_counter()
     result = manager.route(req.tool, req.params)

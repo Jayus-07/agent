@@ -6,6 +6,37 @@ import time
 from typing import Generator, Optional
 
 
+# =====================================================
+# P1: todo 快照 + 流中用量
+# =====================================================
+
+_TODO_STATUS_MAP = {"success": "completed", "failed": "failed", "skipped": "skipped"}
+
+
+def make_todo_event(plan_nodes: dict, step_results: dict) -> dict:
+    """构建 todo 事件 —— 任务列表全量快照。
+
+    plan_nodes: plan["nodes"]（{step_id: {description, ...}}）
+    step_results: 累积步骤结果（{step_id: {status, ...}}）
+    全量快照而非增量：任务数有限，全量让前端无脑替换即可，避免乱序丢更新。
+    """
+    items = []
+    for sid, node in plan_nodes.items():
+        desc = node.get("description", "") if isinstance(node, dict) else str(node)
+        raw = step_results.get(sid, {}).get("status", "pending")
+        status = _TODO_STATUS_MAP.get(raw, "pending" if raw == "pending" else "in_progress")
+        items.append({"id": sid, "text": desc or sid, "status": status})
+    return {"event": "todo", "data": {"items": items, "ts": time.time()}}
+
+
+def make_usage_event() -> Optional[dict]:
+    """构建流中 usage 事件（当前轮次累计），无记录时返回 None。"""
+    usage = summarize_turn_usage()
+    if not usage:
+        return None
+    return {"event": "usage", "data": {**usage, "ts": time.time()}}
+
+
 def stream_node_events(node_name: str, node_output: dict, skill_nodes: set,
                        make_step_payload, make_step_log_event) -> Generator[dict, None, None]:
     """根据节点名分派到对应的事件构建器。"""
@@ -229,15 +260,21 @@ def summarize_turn_usage() -> dict | None:
 # =====================================================
 
 def make_initial_state(question: str, session_id: str, kb_id: str, messages: list,
-                       guard_result: dict | None = None) -> dict:
+                       guard_result: dict | None = None,
+                       user_id: str = "", department: str = "") -> dict:
     """构建初始 AgentState。
 
     guard_result: Input Guard 判定结果（允许/降级放行时携带，
     供下游及后续 Tool Guard 读取风险标注；None = Guard 未启用）。
+    user_id/department: 请求身份平铺进 state（P3 CS 断链修复）——
+    CS 域（cs_prefilter/cs_graph_node/experts/*）直接读 state["user_id"]，
+    此前不注入导致客服域恒为 anonymous。
     """
     return {
         "question": question.strip(),
         "kb_id": kb_id,
+        "user_id": user_id or "",
+        "department": department or "",
         "plan": {"nodes": {}, "edges": {}},
         "step_results": {},
         "current_step_id": None,
