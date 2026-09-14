@@ -130,6 +130,26 @@ def _append_result_checkpoint(path: Path, result: EvalResult) -> None:
         logger.debug("[RAG eval] checkpoint 写入失败（忽略）", exc_info=True)
 
 
+def _reset_jsonl(path: Path) -> None:
+    """清空一个 jsonl 文件（断点续跑的「从头开始」语义）。
+
+    优先删除；删除失败时降级为原地截断。删除可能因文件被占用
+    （其他评测进程/杀软/平台删除守卫把 unlink 送回收站）而失败，
+    但对 checkpoint 与 answers 来说「截断为空」与「删除」效果等价
+    （后续都是 append 写），不值得让整轮评测因此作废。
+    """
+    if not path.exists():
+        return
+    try:
+        path.unlink()
+    except OSError as e:
+        logger.warning(f"[RAG eval] 删除 {path.name} 失败（{e}），改为原地截断")
+        try:
+            path.write_text("", encoding="utf-8")
+        except OSError:
+            logger.error(f"[RAG eval] 截断 {path} 也失败，续跑数据可能混入旧结果", exc_info=True)
+
+
 def _load_result_checkpoint(path: Path) -> dict[str, EvalResult]:
     """读取 checkpoint 中已完成用例的结果，按 case_id 索引（坏行跳过）。"""
     done: dict[str, EvalResult] = {}
@@ -193,9 +213,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
         if done_results:
             logger.info(f"[RAG eval] 断点续跑：checkpoint 命中 {len(done_results)} 条已完成用例，将跳过")
     else:
-        if checkpoint_file.exists():
-            checkpoint_file.unlink()
-        _ANSWERS_FILE.write_text("", encoding="utf-8")
+        _reset_jsonl(checkpoint_file)
+        _reset_jsonl(_ANSWERS_FILE)
 
     results: list[EvalResult] = []
     _deferred_ragas: list[tuple[int, TestCase, dict, dict]] = []

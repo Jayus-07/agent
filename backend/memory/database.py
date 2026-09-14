@@ -1,4 +1,6 @@
 """Async database engine + session factory — 惰性初始化"""
+import asyncio
+
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from backend.config import DB_CONFIG, MEMORY_ASYNC_POOL_SIZE, MEMORY_ASYNC_MAX_OVERFLOW
 from backend.shared.logger import logger
@@ -10,6 +12,7 @@ DATABASE_URL = (
 
 _engine = None
 _sessionmaker = None
+_engine_loop: "asyncio.AbstractEventLoop | None" = None
 
 
 class MemoryDatabaseUnavailable(RuntimeError):
@@ -45,8 +48,27 @@ def _validate_config() -> None:
 
 
 async def _ensure_engine():
-    """确保 engine 在当前 event loop 上初始化"""
-    global _engine, _sessionmaker
+    """确保 engine 在**当前** event loop 上可用。
+
+    asyncpg 连接绑定创建时的 event loop，不可跨 loop 使用。本模块的
+    engine 是模块级单例，而调用方可能来自不同 loop（MemoryManager 的
+    后台线程 loop、pytest-asyncio 的每测试 loop、FastAPI 的主 loop）。
+    旧实现「只建一次、永不换绑」：第一个 loop 关闭后，其余调用方要么
+    撞 "attached to a different loop"，要么在进程退出时于错误的 loop
+    上 dispose（teardown 崩进程的来源）。现在检测到 loop 切换就重建，
+    旧 engine 交给它自己的 loop 释放（loop 已死则交给 GC 兜底）。
+    """
+    global _engine, _sessionmaker, _engine_loop
+    loop = asyncio.get_running_loop()
+    if _engine is not None and _engine_loop is not loop:
+        old, old_loop = _engine, _engine_loop
+        _engine, _sessionmaker = None, None
+        logger.warning("[Database] event loop 已切换，重建 engine（旧 engine 交还原 loop 释放）")
+        if old_loop is not None and old_loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(old.dispose(), old_loop)
+            except Exception:  # noqa: BLE001
+                logger.debug("[Database] 旧 engine 异步释放失败，交给 GC", exc_info=True)
     if _engine is None:
         _validate_config()
         _engine = create_async_engine(
@@ -58,6 +80,7 @@ async def _ensure_engine():
             echo=False,
         )
         _sessionmaker = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
+        _engine_loop = loop
         logger.info("[Database] Engine 初始化完成")
 
 

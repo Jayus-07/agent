@@ -47,6 +47,21 @@ from backend.shared.logger import logger
 _ANSWER_EVENT = "_answer"
 
 
+def _domain_node_names() -> set[str]:
+    """已注册域图的主图节点名集合（cs_graph_node / travel_graph_node / …）。
+
+    runner 的输出消费逻辑按节点名白名单取 final_answer，域图节点必须
+    在内，否则域图跑完的答案会被主图丢弃。用注册表而非硬编码：新增域
+    图（domains/<x>/register.py）注册即生效，无需改 runner。
+    """
+    try:
+        from backend.orchestration.domain_registry import domain_graph_registry
+        return domain_graph_registry.get_node_names()
+    except Exception:  # noqa: BLE001 — 注册表不可用时退回仅内置节点
+        logger.debug("[GraphRunner] domain registry 不可用，按空域图节点集处理", exc_info=True)
+        return set()
+
+
 class GraphRunner:
     """统一图执行核心。"""
 
@@ -197,10 +212,15 @@ class GraphRunner:
                             make_step_payload, make_step_log_event):
                         merged_q.put(("evt", evt))
 
+                    # 域图节点（cs_graph_node / travel_graph_node / 未来新增域）
+                    # 统一从注册表取——加新域不必回来改这份白名单。
+                    # （曾漏掉 travel_graph_node：域图跑完产出 903 字行程，
+                    # 主图却因白名单不含它而丢弃 final_answer，前端只看到
+                    # 「未能获取任何有效数据」兜底文案。）
                     if node_name in self._skill_nodes or node_name == "supervisor" \
                             or node_name in ("workflow_executor", "skill_executor",
-                                             "cs_knowledge", "cs_pending",
-                                             "cs_graph_node"):
+                                             "cs_knowledge", "cs_pending") \
+                            or node_name in _domain_node_names():
                         ctx["all_step_results"].update(node_output.get("step_results", {}))
                         # direct/workflow executor 自己就是最终产出者
                         executor_answer = node_output.get("final_answer", "")

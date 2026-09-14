@@ -123,6 +123,13 @@ services:
       - KAFKA_CONSUMER_ENABLED=${KAFKA_CONSUMER_ENABLED:-true}
       # 客服模块（意图路由/转人工/确认态，.env 中 CS_ENABLED 控制）
       - CS_ENABLED=${CS_ENABLED:-true}
+      # 旅游域图（行程规划，.env 中 TRAVEL_ENABLED 控制；checkpointer 走
+      # postgres，需 agent_memory 库已建 checkpoints 表——首次由
+      # PostgresSaver.setup 自动建表）
+      - TRAVEL_ENABLED=${TRAVEL_ENABLED:-true}
+      - TRAVEL_CHECKPOINTER_ENABLED=${TRAVEL_CHECKPOINTER_ENABLED:-true}
+      - TRAVEL_CHECKPOINTER_BACKEND=${TRAVEL_CHECKPOINTER_BACKEND:-postgres}
+      - TRAVEL_CHECKPOINT_TTL_DAYS=${TRAVEL_CHECKPOINT_TTL_DAYS:-7}
       # AI 工具网关（Java business-service 经 /internal/ai/call 调用 Python 工具）
       - AI_TOOLS_ENABLED=${AI_TOOLS_ENABLED:-true}
       # 业务系统（Java）地址：cs_admin cutover 开关用

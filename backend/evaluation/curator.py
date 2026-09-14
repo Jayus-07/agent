@@ -84,8 +84,11 @@ def append_case(
                 tmp_path.write_text(case_line + "\n", encoding="utf-8")
             tmp_path.replace(target_path)
         except Exception as exc:
-            if tmp_path.exists():
-                tmp_path.unlink(missing_ok=True)
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass  # 清理失败不掩盖真正的写入错误
             logger.error(f"[curator] 写入评测集失败: {target_path}: {exc}")
             return {"appended": False, "reason": f"写入失败: {exc}", "path": str(target_path)}
 

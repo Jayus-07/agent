@@ -48,6 +48,7 @@ dependencies = [
     # ═══════════════════════════════════════════
     "chromadb>=0.5",
     "psycopg2-binary>=2.9",
+    "asyncpg>=0.30",  # memory/database.py 的 async 引擎（缺失时镜像内 /memory/* 全 500）
     "sqlalchemy>=2.0",
     "alembic>=1.13",
     "kafka-python>=2.0.2",  # 事件总线（微服务拆分后与 business-service 协作，见 backend/config/messaging.py）
@@ -105,9 +106,12 @@ dev = [
     "pytest-mock>=3.12",
 ]
 
-# Postgres 完整版（psycopg2 编译可能需要 pg_config）
+# Postgres 完整版：checkpoint 持久化用 psycopg v3（PostgresSaver 硬要求，
+# 不能只靠 langgraph-checkpoint-postgres 的传递依赖），psycopg2 供存量同步连接。
+# psycopg2 源码编译可能需要 pg_config，生产镜像统一用 binary 轮子。
 postgres = [
-    "psycopg2>=2.9",
+    "psycopg[binary]>=3.2",
+    "psycopg2-binary>=2.9",
 ]
 
 # RAGAS 评测基准对比
