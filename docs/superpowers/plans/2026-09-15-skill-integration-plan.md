@@ -12,7 +12,7 @@
 |---|---|---|---|---|
 | 1 | Agently Mail 升级 EmailSkill | ✅ 基本完成 | 2026-09-15 | 已提交（d3f9f19）；CLI 已装 + OAuth 已通（mint1614@agent.qq.com）；真实搜索经包装层验证 ok:true。发送侧验收并入首个业务场景调用 |
 | 2 | market_research Workflow（证据管线） | 🔄 代码完成 | 2026-09-15 | 五段式 DAG 7 step 已提交（e9dc554）；全量回归 0 failed（05:28，含批次1+2）；剩真实联网端到端验收 |
-| 3 | 评估职责拆分 + decision_log | 🔄 代码完成 | 2026-09-15 | market_evidence_assess + selection_decision_gate 拆分、insufficient 硬门控、decision_log 十字段+不可变触发器；定向 21 + 关联面 422 passed。⚠️ evaluation/golden 因阿里云欠费（Arrearage）环境性失败，待充值后复验 |
+| 3 | 评估职责拆分 + decision_log | ✅ 基本完成 | 2026-09-15 | 已提交（b6626a9）；定向 21 + 关联面 422 passed；golden 评测复验全绿（106 passed/4 skipped，拒答准确率 1.0、分层全 100%，07:34）。剩全量回归收尾门禁 + 用户拍板/表现回填 API |
 | 4 | CPR 吸收 + 证据分型 + golden 评测 | ⬜ 未开始 | — | |
 | 5 | 数据源欠账（榜单/评论/自家数据） | ⬜ 未开始 | — | |
 | 6 | cloak 引擎开关 + 主动通知 | ⬜ 未开始 | — | 先过 CloakBrowser 风控清单 |
