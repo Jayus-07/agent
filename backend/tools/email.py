@@ -1,4 +1,11 @@
-"""邮件工具 — SMTP 发送（写操作，需人工审批 + 内容指纹幂等）。"""
+"""邮件工具 — 发送（SMTP | Agently Mail 双引擎）+ 收/搜/读/监听（批次1）。
+
+发送引擎由 EMAIL_ENGINE 配置切换：
+  smtp    — 传统 SMTP（原路径，幂等指纹 + 审批门不变）
+  agently — QQ 邮箱 Agently Mail（agently-cli）；审批门 ensure_approved
+            通过后以 --confirmed 直发（不叠加 CLI 自己的两阶段确认）
+search / read / watch 三个只读能力仅 agently 引擎提供。
+"""
 import hashlib
 import time
 
@@ -47,6 +54,10 @@ def send_email_tool(to: str, subject: str, body: str, cc: str = "") -> str:
     if pending is not None:
         return pending
 
+    from backend.config import EMAIL_ENGINE
+    if EMAIL_ENGINE == "agently":
+        return _send_via_agently(to, subject, body, cc)
+
     # 幂等拦截：窗口内同指纹视为重试，直接拒绝再次发送
     now = time.time()
     for fp, ts in list(_SENT_FINGERPRINTS.items()):
@@ -83,6 +94,82 @@ def send_email_tool(to: str, subject: str, body: str, cc: str = "") -> str:
         raise
 
 
+def _send_via_agently(to: str, subject: str, body: str, cc: str) -> str:
+    """Agently 引擎发送：审批门已过（ensure_approved），--confirmed 直发。
+
+    幂等指纹与 SMTP 路径共用同一份 _SENT_FINGERPRINTS（收件人+主题+正文
+    哈希同口径），引擎切换不会造成窗口内重复发送。
+    """
+    from backend.tools import agently
+
+    if not agently.agently_available():
+        return "[AGENTLY ERROR:4] agently-cli 未安装，无法以 agently 引擎发送"
+
+    fingerprint = _email_fingerprint(to, cc, subject, body)
+    if fingerprint in _SENT_FINGERPRINTS:
+        return (f"[EMAIL DUPLICATE] 内容相同的邮件已发送成功（收件人 {to}，"
+                f"主题 '{subject}'），为避免重复发送本次已拦截，请勿重试。")
+
+    cc_list = [a.strip() for a in cc.split(",") if a.strip()] if cc else []
+    result = agently.agently_send(
+        to=[a.strip() for a in to.split(",") if a.strip()],
+        subject=subject, body=body, cc=cc_list or None,
+    )
+    if result.startswith("[AGENTLY ERROR:"):
+        # 与 SMTP 路径一致：失败不缓存指纹，重试路径畅通
+        logger.error(f"[Tool:send_email/agently] 发送失败：{result}")
+        return result
+    _SENT_FINGERPRINTS[fingerprint] = time.time()
+    logger.info(f"[Tool:send_email/agently] 已发送 → {to} ({subject})")
+    return f"邮件已发送(Agently): 收件人 {to}, 主题 '{subject}'"
+
+
+# ==================== 只读能力（仅 agently 引擎，批次1） ====================
+
+@tool
+def search_email_tool(query: str, folder: str = "", limit: int = 10,
+                      cursor: str = "") -> str:
+    """
+    搜索 Agently 邮箱邮件（只读，需 EMAIL_ENGINE=agently 且已完成 OAuth）。
+    query: 关键词
+    folder: 文件夹 inbox/sent/trash/spam（可选，默认全部）
+    limit: 返回条数（默认 10）
+    cursor: 翻页游标（必须保留原查询条件再传 cursor）
+    """
+    from backend.tools import agently
+    if not agently.agently_available():
+        return "[AGENTLY ERROR:4] agently-cli 未安装，搜索不可用"
+    return agently.agently_search(query=query, folder=folder, limit=limit, cursor=cursor)
+
+
+@tool
+def read_email_tool(message_id: str) -> str:
+    """
+    读取 Agently 邮件完整内容（只读，含正文与附件清单）。
+    message_id: 邮件 ID，形如 msg_xxx（来自 search/list 结果）
+    """
+    from backend.tools import agently
+    if not agently.agently_available():
+        return "[AGENTLY ERROR:4] agently-cli 未安装，读取不可用"
+    return agently.agently_read(message_id=message_id)
+
+
+@tool
+def watch_email_tool(timeout_sec: int = 120) -> str:
+    """
+    监听 Agently 新邮件（长轮询，窗口内无新邮件返回空结果）。
+    timeout_sec: 等待窗口秒数（上限 AGENTLY_WATCH_MAX_SECONDS，默认 120）。
+    供通知闭环/automation 消费，不建议在对话中长时间挂起。
+    """
+    from backend.tools import agently
+    if not agently.agently_available():
+        return "[AGENTLY ERROR:4] agently-cli 未安装，监听不可用"
+    return agently.agently_watch(timeout_sec=float(timeout_sec))
+
+
 # ==================== Tool Registry 自动注册 ====================
 from backend.tools.tool_registry import tool_registry
 tool_registry.register(send_email_tool, __file__)
+tool_registry.register(search_email_tool, __file__)
+tool_registry.register(read_email_tool, __file__)
+tool_registry.register(watch_email_tool, __file__)
