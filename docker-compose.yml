@@ -23,8 +23,22 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - AI_SERVICE_URL=http://host.docker.internal:8000  # Python 后端跑在宿主机；若 app 容器启用则改回 http://app:8000
+      # Python 后端跑在宿主机；若 app 容器启用则改回 http://app:8000
+      # 支持环境变量覆盖：冒烟脚本用它把上游临时切到回显桩，验证网关下发/剥离的身份头
+      - AI_SERVICE_URL=${AI_SERVICE_URL:-http://host.docker.internal:8000}
       - BUSINESS_SERVICE_URL=http://business-service:8081
+      # ── 认证中心接入 + 网关统一鉴权（P2）──
+      # 认证中心为 oa-auth 独立 compose（端口仅绑宿主机 loopback），容器经 host.docker.internal 访问
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://host.docker.internal:8006}
+      - GATEWAY_AUTH_ENABLED=${GATEWAY_AUTH_ENABLED:-false}
+      - GATEWAY_AUTH_MODE=${GATEWAY_AUTH_MODE:-shadow}
+      # JWT_SECRET 必须与 Enterprise_OA/anonymous-rating-system/docker/.env.oaauth 的 JWT_SECRET_KEY 同值
+      - JWT_SECRET=${JWT_SECRET:-}
+      - JWT_ISSUER=${JWT_ISSUER:-hongmeng-oa}
+      # 黑名单 Redis 指向 oa-auth-redis（独立实例，noeviction，ARCH-03）
+      - AUTH_REDIS_HOST=${AUTH_REDIS_HOST:-host.docker.internal}
+      - AUTH_REDIS_PORT=${AUTH_REDIS_PORT:-16379}
+      - AUTH_REDIS_PASSWORD=${AUTH_REDIS_PASSWORD:-}
       # 网关注入用户身份头（对接后端 TRUST_USER_HEADER 机制）
       - GATEWAY_USER_HEADER_ENABLED=${GATEWAY_USER_HEADER_ENABLED:-false}
       - GATEWAY_DEFAULT_USER_ID=${GATEWAY_DEFAULT_USER_ID:-}
