@@ -51,6 +51,18 @@ check() {  # check 名称 结果(0=过) [详情]
 }
 
 env_val() { grep "^$1=" "$2" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r'; }
+
+# 模式：显式传参优先；否则问**运行中的容器**实际生效的环境变量。
+# 不能拿 .env 当依据：改 .env 不 force-recreate 是不会生效的，两者会错位
+# （脚本判 enforce、网关实际跑 shadow → D1~D4 全假红，极易被误读成网关坏了）。
+if [ $# -ge 1 ] && [ "${1#--}" = "$1" ]; then
+  :   # 第一个参数是模式，MODE 已在上面赋值
+else
+  MODE="$(docker inspect "$GW_CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+          | grep '^GATEWAY_AUTH_MODE=' | head -1 | cut -d= -f2- | tr -d '\r')"
+  MODE="${MODE:-$(env_val GATEWAY_AUTH_MODE "$ROOT/.env")}"
+  MODE="${MODE:-shadow}"
+fi
 ADMIN_PASS="$(env_val ADMIN_INITIAL_PASSWORD "$ENV_OAUTH")"
 JWT_SECRET="$(env_val JWT_SECRET_KEY "$ENV_OAUTH")"
 [ -n "$ADMIN_PASS" ] && [ -n "$JWT_SECRET" ] || { echo "[smoke] 无法读取 .env.oaauth 中的口令/密钥"; exit 1; }

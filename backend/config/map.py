@@ -31,7 +31,7 @@ def _bool(name: str, default: bool) -> bool:
 # =============================================
 # 鉴权
 # =============================================
-# WebService API 开发者密钥（形如 PNMBZ-BVRCP-...，共 6 段）
+# WebService API 开发者密钥（6 段式，见 .env 的 TENCENT_LBS_KEY）
 TENCENT_LBS_KEY = os.getenv("TENCENT_LBS_KEY", "").strip()
 # 签名密钥（SK）。仅当控制台开启了「签名校验(SN)」时才需要；
 # 开启后请求必须附带 sig=md5(path?排序后的查询串+SK)。
