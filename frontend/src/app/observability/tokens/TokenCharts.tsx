@@ -5,7 +5,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Legend, LineChart, Line,
 } from 'recharts'
-import type { TokenUsageDaily } from '@/lib/api/observability'
+import type { TokenUsageDaily } from '@/api/observability'
 
 export type TokenChartRow = TokenUsageDaily & { label: string }
 export type MetricMode = 'tokens' | 'cost'

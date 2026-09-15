@@ -16,7 +16,7 @@ import {
   type TokensSummary,
   type TokenUsageDaily,
   type TokenCallRow,
-} from "@/lib/api/observability";
+} from "@/api/observability";
 
 // 时间窗选项（天）
 const RANGE_OPTIONS = [

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getCsQualityReport, CSQualityReport, CSVariantSummary } from "@/lib/api/observability";
+import { getCsQualityReport, CSQualityReport, CSVariantSummary } from "@/api/observability";
 
 /**
  * CS 灰度质量卡片 — treatment(CS graph) vs control(主图) 灰度对比

@@ -6,7 +6,7 @@
  *   (span_id → id, model str → {name, provider}, 派生 duration_ratio/children/llm_call)，
  *   前端直接使用 TraceRecord/Span 类型即可。
  */
-import { request } from "../fetcher";
+import { request } from "@/lib/fetcher";
 import type { TraceRecord, AlertItem } from "@/types/trace";
 
 // ── CS 灰度质量报告 ───────────────────────────────────

@@ -3,7 +3,7 @@
  *
  * SSR 阶段返回空数组以避免 Next.js 同步 IO 问题。
  */
-import * as realApi from "@/lib/api/observability";
+import * as realApi from "@/api/observability";
 import type { TraceRecord } from "@/types/trace";
 
 /** 服务端 / 客户端安全的数据获取：浏览器环境外跳过 fetch，避免 SSR 阶段同步 IO */

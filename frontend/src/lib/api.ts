@@ -4,13 +4,13 @@
  *   import { streamChat } from '@/api/chat'
  *   import { listLLMModels } from '@/api/llm'
  *   import { listSessions } from '@/api/memory'
- *   import { listTraces } from '@/lib/api/observability'
+ *   import { listTraces } from '@/api/observability'
  */
 
 export * from "@/api/chat";
 export * from "@/api/llm";
 export * from "@/api/memory";
-export * from "./api/observability";
+export * from "@/api/observability";
 
 export { ApiError } from "./fetcher";
 export { parseSSEFrame, parseSSEStream } from "./sse-parser";
