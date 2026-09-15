@@ -1,7 +1,9 @@
 -- gateway-auth.lua — APISIX 入口认证插件（B2）
 --
 -- 行为合同：1:1 平移 Java AuthenticationGlobalFilter（B0 审计 docs/gateway-apisix-audit-report.md §3）
---   ① 无条件剥离入站伪造身份头（四头：X-Auth-Type/X-User-Id/X-User-Name/X-User-Dept）
+--   ① 无条件剥离入站伪造身份头（六头：X-Auth-Type/X-User-Id/X-User-Name/X-User-Dept
+--      + X-Operator-Role/X-Operator-Id；X-Operator-* 为 operator 身份族，B4 未开、py 不消费，
+--      此处置为剥离是提前堵「客户端伪造 operator 头」的洞，与 X-User-* 同理）
 --   ② X-Trace-Id 不剥离：有则透传复用，无则生成
 --   ③ OPTIONS 预检放行（路由级白名单由路由配置承担：auth/sys 路由不挂本插件）
 --   ④ 带 X-API-Key → 打标 X-Auth-Type: api-key 透传（服务级 Key 仍由 FastAPI 校验）
@@ -31,8 +33,11 @@ local math_random     = math.random
 local tostring        = tostring
 local find            = string.find
 
--- 与 SCG AuthenticationGlobalFilter 一致的伪造头剥离清单（四头，不含 X-Trace-Id）
-local FORGED_HEADERS  = { "X-Auth-Type", "X-User-Id", "X-User-Name", "X-User-Dept" }
+-- 与 SCG AuthenticationGlobalFilter 一致的伪造头剥离清单（六头，不含 X-Trace-Id）
+-- 含 X-Operator-Role / X-Operator-Id：operator 身份族，客户端不可伪造（B4 未开、py 不消费 X-Operator-*，
+-- 此处置为剥离属提前防御；大小写变体无需单列——ngx.req.set_header 对头名大小写不敏感，会一并清除）
+local FORGED_HEADERS  = { "X-Auth-Type", "X-User-Id", "X-User-Name", "X-User-Dept",
+                          "X-Operator-Role", "X-Operator-Id" }
 
 local HEADER_AUTH_TYPE = "X-Auth-Type"
 local HEADER_USER_ID   = "X-User-Id"
