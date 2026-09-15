@@ -171,8 +171,8 @@ tokens.txt
 node_modules/
 .next/
 # 通过 NEXT_DIST_DIR 指定的备用构建目录（沙箱/并行构建用）
-.next-dev/
-.next-dev-*/
+# 收敛为通配：各会话常建 .next-dev-* / .next-smoke-* / .next-login-* 等临时目录
+.next-*/
 .out/
 dist/
 dist-build/
