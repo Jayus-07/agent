@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, Fragment } from 'react'
 import Link from 'next/link'
 import { ChevronLeft, ChevronRight, RefreshCw, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
 import { useToast } from '@/components/shared/Toast'
-import { knowledgeService, OperationLog, type OperationType } from '@/services/knowledge'
+import { knowledgeService, OperationLog, type OperationType } from '@/api/knowledge'
 
 /** 操作徽章配置 */
 const OPERATION_CONFIG: Record<string, { label: string; className: string }> = {

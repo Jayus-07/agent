@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { CheckCircle2, XCircle, FileText, Clock } from 'lucide-react'
-import { knowledgeService } from '@/services/knowledge'
+import { knowledgeService } from '@/api/knowledge'
 
 interface PendingDoc {
   id: string

@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { Upload, Loader2, CheckCircle2, XCircle, FileText, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
-import { knowledgeService } from '@/services/knowledge'
+import { knowledgeService } from '@/api/knowledge'
 import { fetchRaw } from '@/api/client'
 
 interface Props { open: boolean; onClose: () => void; onSuccess: () => void }

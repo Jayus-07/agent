@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { FileText, Search, Trash2, RefreshCw, Grid3X3, Loader2, ChevronLeft, ChevronRight, CheckSquare, Square, X } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useDocuments } from '@/hooks/useKnowledge'
-import { knowledgeService } from '@/services/knowledge'
+import { knowledgeService } from '@/api/knowledge'
 import UploadDialog from '@/components/knowledge/UploadDialog'
 import { useToast } from '@/components/shared/Toast'
 

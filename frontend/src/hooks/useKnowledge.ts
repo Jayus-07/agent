@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { knowledgeService, type KnowledgeStats, type KnowledgeDoc } from '@/services/knowledge'
+import { knowledgeService, type KnowledgeStats, type KnowledgeDoc } from '@/api/knowledge'
 
 // Hook — 知识库统计（真实 API，无 Mock 回退）
 export function useKnowledgeStats() {

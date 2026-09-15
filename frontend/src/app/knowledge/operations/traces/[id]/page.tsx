@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { getTraceById } from "@/lib/observability/source";
 import type { TraceRecord, Span } from "@/types/trace";
 import { statusBadge, formatTime, formatRelative } from "@/types/trace";
-import { knowledgeService } from "@/services/knowledge";
+import { knowledgeService } from "@/api/knowledge";
 import { X, Loader2 } from "lucide-react";
 
 const SPAN_LABELS: Record<string, { label: string; order: number }> = {
