@@ -11,7 +11,7 @@
  * 光标抽成独立组件，父级 re-render 不中断 CSS 动画。
  */
 import { useEffect, useRef, useState } from 'react'
-import MarkdownContent from '@/components/MarkdownContent'
+import MarkdownContent from '@/components/chat/MarkdownContent'
 
 /** 独立光标组件 —— 父级 re-render 不会中断 CSS 动画 */
 function StreamingCursor() {

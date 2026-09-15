@@ -16,12 +16,12 @@ import { useChatStore } from '@/store/chat'
 import { useSSE } from '@/hooks/useSSE'
 import SourceCard from './SourceCard'
 import MarkdownContent from './MarkdownContent'
-import MessageActions from './chat/MessageActions'
-import SqlViz from './chat/SqlViz'
-import TokenInfo from './chat/TokenInfo'
-import StreamingContent from './chat/StreamingContent'
-import ThinkingPanel from './chat/ThinkingPanel'
-import CompletionLine from './chat/CompletionLine'
+import MessageActions from './MessageActions'
+import SqlViz from './SqlViz'
+import TokenInfo from './TokenInfo'
+import StreamingContent from './StreamingContent'
+import ThinkingPanel from './ThinkingPanel'
+import CompletionLine from './CompletionLine'
 
 function stripReferences(content: string): string {
   const markers = ['\n\n---\n\n### 参考文献', '\n\n---\n\n### 参考来源',

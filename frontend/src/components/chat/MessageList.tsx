@@ -3,7 +3,7 @@
 import { Fragment } from 'react'
 import type { Message } from '@/lib/types'
 import MessageBubble from './MessageBubble'
-import ProgressCards from './chat/ProgressCards'
+import ProgressCards from './ProgressCards'
 
 interface Props { messages: Message[]; isLoading: boolean; sessionId?: string; onStop?: () => void }
 

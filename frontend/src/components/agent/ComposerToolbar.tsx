@@ -13,7 +13,7 @@ import { useEffect, useState } from 'react'
 import { ArrowUp, Building2, Paperclip, ShieldCheck, ShieldOff } from 'lucide-react'
 import { DEPARTMENTS } from '@/lib/department'
 import { useToast } from '@/components/shared/Toast'
-import LLMSwitcher from '@/components/LLMSwitcher'
+import LLMSwitcher from '@/components/agent/LLMSwitcher'
 
 const PERMISSION_KEY = 'chat_permission'
 

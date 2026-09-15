@@ -1,8 +1,8 @@
 'use client'
 
 import { Sparkles, PanelLeft, PanelLeftClose } from 'lucide-react'
-import NavGroup from './layout/NavGroup'
-import { NAV } from './layout/navConfig'
+import NavGroup from './NavGroup'
+import { NAV } from './navConfig'
 
 interface Props { collapsed: boolean; onToggle: () => void }
 

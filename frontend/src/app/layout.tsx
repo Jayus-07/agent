@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { usePathname } from 'next/navigation'
-import Sidebar from '@/components/Sidebar'
+import Sidebar from '@/components/layout/Sidebar'
 import AuthGate from '@/components/AuthGate'
 import { ToastProvider } from '@/components/shared/Toast'
 import './globals.css'

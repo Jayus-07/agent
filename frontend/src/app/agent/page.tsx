@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useChatStore } from '@/store/chat'
-import ChatView from '@/components/ChatView'
+import ChatView from '@/components/chat/ChatView'
 import ChatHeader from '@/components/chat/ChatHeader'
 import TaskSidebar from '@/components/agent/TaskSidebar'
 import SidebarRail from '@/components/agent/SidebarRail'

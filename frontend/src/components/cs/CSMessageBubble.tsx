@@ -2,7 +2,7 @@
 
 import { memo } from 'react'
 import { Headphones } from 'lucide-react'
-import MarkdownContent from '@/components/MarkdownContent'
+import MarkdownContent from '@/components/chat/MarkdownContent'
 import CSTimeline from './CSTimeline'
 import type { CSMessage } from '@/store/csChat'
 import { useCSChatStore } from '@/store/csChat'

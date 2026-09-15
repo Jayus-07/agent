@@ -7,8 +7,8 @@ import { useSendMessage } from '@/hooks/useChat'
 import type { Message } from '@/lib/types'
 import MessageList from './MessageList'
 import ChatInput from './ChatInput'
-import EmptyState from './EmptyState'
-import ContextPanel from './chat/ContextPanel'
+import WelcomeState from './WelcomeState'
+import ContextPanel from './ContextPanel'
 
 // 模块级稳定空数组，避免 messages 为空时 useMemo 每次返回新 []
 const EMPTY_MESSAGES: Message[] = []
@@ -115,7 +115,7 @@ export default function ChatView() {
       {/* Messages */}
       <div ref={contentRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
         {messages.length === 0 ? (
-          <EmptyState onExampleClick={send} />
+          <WelcomeState onExampleClick={send} />
         ) : (
           <MessageList messages={messages} isLoading={isLoading} sessionId={currentId} onStop={stopStream} />
         )}
