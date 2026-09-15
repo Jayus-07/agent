@@ -2,7 +2,7 @@
 
 import { useCallback } from 'react'
 import { useChatStore } from '@/store/chat'
-import { streamChat, abortChat } from '@/lib/api/chat'
+import { streamChat, abortChat } from '@/api/chat'
 import { invalidateSessionsCache } from '@/lib/sessions-cache'
 import { getSelectedDepartment } from '@/lib/department'
 import { nanoid } from 'nanoid'

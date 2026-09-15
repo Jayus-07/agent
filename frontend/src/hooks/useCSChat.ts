@@ -2,7 +2,7 @@
 
 import { useCallback, useRef } from 'react'
 import { useCSChatStore } from '@/store/csChat'
-import { streamChat, abortChat } from '@/lib/api/chat'
+import { streamChat, abortChat } from '@/api/chat'
 import { fetchRaw } from '@/api/client'
 import { nanoid } from 'nanoid'
 

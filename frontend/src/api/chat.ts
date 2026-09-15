@@ -1,10 +1,10 @@
 /**
  * Chat 业务 API：流式对话 + 中止
  */
-import { request, requestSilent } from "../fetcher";
-import { bearerHeaders, handleAuthFailure, tryRefreshOnce } from "../auth";
-import { parseSSEStream } from "../sse-parser";
-import type { SSEStreamEvent as TypedSSEStreamEvent } from "../types";
+import { request, requestSilent } from "@/lib/fetcher";
+import { bearerHeaders, handleAuthFailure, tryRefreshOnce } from "@/lib/auth";
+import { parseSSEStream } from "@/lib/sse-parser";
+import type { SSEStreamEvent as TypedSSEStreamEvent } from "@/lib/types";
 
 export interface ChatRequest {
   question: string;
