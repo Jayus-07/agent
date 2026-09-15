@@ -45,7 +45,11 @@
 | **S0-1** | APISIX 剥离 `X-Operator-*` | ⬜ 待做（**下一笔**） | — | 改 `gateway-auth.lua` L35；**需 reload `agent-apisix`（已获人类授权）**；⚠️ **Java 登记项作废** —— `api-gateway/` 正被并发会话删除（76 项 staged 删除），N3a 简化为纯 APISIX |
 | **S0-2** | prompts 关停客户端角色 + fail-closed + 角色来源收敛为单一入口 | ✅ 完成 | 2026-09-15 22:58 | `f5a95f0`；`pytest backend/tests/api/ backend/tests/prompts/` **238 passed**；18 处 `Header(default=)` 清零、`_operator_role`/`_operator_id` 死代码删除、13 个端点改用 `resolve_operator_role`（含此前无鉴权的 `/meta/registry`） |
 | **S0-5** | 四组敏感接口收口（audit 模式） | ⬜ 待做 | — | 代码进 S0；**`enforce` 切换与 X-1（流量切回 APISIX）同批** |
-| P0-1 ~ P0-6 | 地基收敛 | ⬜ 待做 | — | **前置：声明 `frontend/` 冻结**（约束 9 / ADR-009） |
+| P0-1a | 建统一网络层 `src/api/client.ts` | ✅ 完成 | 2026-09-15 23:54 | `925a28f`；`tsc --noEmit` 0 错、`vitest run` **156 passed**（新增 21）；`lib/fetcher.ts` 降为 re-export、调用方零改动；**未动 `lib/authFetch.ts`**（让路 auth 会话） |
+| P0-1b | 错误码机制 | ⬜ 待做 | — | 纯新增，无调用方 |
+| P0-2 ~ P0-6 | 地基收敛余项 | ⬜ 待做 | — | **前置：声明 `frontend/` 冻结**（约束 9 / ADR-009） |
+
+> **⚠️ 执行顺序偏离说明（2026-09-15 23:54）**：P0-1a 先于 S0-1/S0-5 落地。原因：auth 会话在协同文档 §5.3 明确被 `client.ts` 阻塞（他们要等它落地后才重构 `authFetch`），且其已交付 roles、S0 侧无新阻塞；`frontend/` 冻结由本会话自行声明并遵守。
 | P1-0 ~ P1-6 | 分区 + 双 Shell | ⬜ 待做 | — | |
 | P2-1 ~ P2-5 | 管理端 | ⬜ 待做 | — | |
 | S0-4b | rag-server 内部令牌语义对齐 | ⬜ 待做 | — | **S0-4 暴露的遗留**：`backend/services/rag_server.py` 开发模式（token 空）仍全放行，与收紧后的 `/internal/ai/*` 语义不一致；其测试 docstring 中「对齐 `/internal/ai/*` 行为」已过时 |
@@ -186,12 +190,13 @@
 
 | # | 提交 | 改动文件 | 验收命令 | 回滚点 |
 |---|---|---|---|---|
-| P0-1 | `refactor(api): 合并网络层（含多 base 预留）` | 新增 `src/api/client.ts`；`src/lib/{fetcher,authFetch}.ts` → re-export | `npx tsc --noEmit && npx vitest run` | 旧文件在，revert 即恢复 |
+| P0-1a | `refactor(api): 建统一网络层 client.ts（含多 base 预留）` | 新增 `src/api/client.ts` + `client.test.ts`；`src/lib/fetcher.ts` → re-export | `npx tsc --noEmit && npx vitest run` | ✅ `925a28f` |
+| P0-1b | `feat(api): 错误码机制` | 新增 `src/api/errors.ts`、测试；`ApiError` 加 `code?` | `npx vitest run src/api` | 无调用方，无损 |
 | P0-2 | `feat(api): 错误码机制` | 新增 `src/api/errors.ts`、`src/api/__tests__/errors.test.ts`；`ApiError` 加 `code?` | `npx vitest run src/api` | 无调用方，无损 |
 | P0-3 | `refactor(api): 域模块迁入 src/api` | `lib/api/*`(5) + `services/*`(11) → `src/api/<domain>.ts` | `npx tsc --noEmit && npx vitest run`；`grep -rn "@/services/" src \| grep -v index` 为空 | **建议单域一 commit** |
 | P0-4 | `refactor(ui): components/ui 与域目录归位` | 按附录 C 迁 11 个根级组件；**合并 `EmptyState` 双份**；**本轮不引入 `features/`** | `npx tsc --noEmit && npx vitest run` + `NEXT_DIST_DIR=.next-p04 npx next build` | 逐文件可 revert |
 | P0-5 | `refactor(api): barrel 兼容层` | `src/lib/api.ts`、`src/services/index.ts` 改纯 re-export | `npx tsc --noEmit` | revert 回旧路径 |
-| P0-6 | `test(api): surface 契约测试` | 新增 `src/api/__tests__/surface.test.ts` | `npx vitest run`（124 → ~132） | 纯新增 |
+| P0-6 | `test(api): surface 契约测试` | 新增 `src/api/__tests__/surface.test.ts` | `npx vitest run`（135 → ~143） | 纯新增 |
 
 ### P1 · 分区 + 双 Shell（7 笔）
 
@@ -223,7 +228,7 @@
 | 层 | 命令 | 含义 |
 |---|---|---|
 | 类型 | `cd frontend && npx tsc --noEmit` | 0 错，每笔必跑 |
-| 前端单测 | `npx vitest run` | **基线 124 passed**，只增不减 |
+| 前端单测 | `npx vitest run` | **基线 135 passed**（2026-09-15 23:54 实测更正；原记 124 为过时数字 —— 今晨 `e582731`/`c350e19` 两个前端提交已各增测试）。只增不减 |
 | 后端测试 | `./.venv/Scripts/python.exe -m pytest <目标> -q -p no:randomly --no-cov` | **必须 `--no-cov`**（55% 全局覆盖率门槛 + 沙箱 `SAFE_DELETE_FAIL_CLOSED`） |
 | 构建 | `NEXT_DIST_DIR=.next-<递增> npx next build` | 指向**不存在的空目录** |
 | 冒烟①HTTP | 31 条路由 curl 200 | **只证可达** |

@@ -45,6 +45,9 @@
 | `44d2e53` | **S0-4**：内部令牌通道 fail-closed + 依赖上提共享（`backend/app/api/deps.py::require_internal_token`） | `pytest backend/tests/api/` **81 passed** |
 | `f5a95f0` | **S0-2**：prompts 关停客户端角色头 + fail-closed + 角色来源收敛为单一入口（**闭环 N3 越权**） | `pytest backend/tests/api/ backend/tests/prompts/` **238 passed** |
 | `61668e6` | v3 进度看板回填 | — |
+| `925a28f` | **P0-1a**：建统一网络层 `src/api/client.ts`（`ApiError`/`request`/`requestSilent`/`fetchRaw` + 多 base 映射）；`lib/fetcher.ts` 降为 re-export | `npx tsc --noEmit` 0 错；`npx vitest run` **156 passed**（`client.test.ts` +21） |
+
+> **口径更正**：本文件初版写的「前端测试基线 **124 passed**」是**过时数字**。实测当前为 **135**（今晨 `e582731`、`c350e19` 两个前端提交已各增测试）。**请以 135 为基线**，下文已同步更正。
 
 **已修复的实网缺陷（供你参考，你可能也会遇到）**：`X-Operator-Role` 曾是 prompts 的**唯一角色来源**且是客户端自设头、无任何网关剥离 —— 任意客户端带 `X-Operator-Role: admin` 即可发布/回滚高风险 Prompt；且写端点默认 `editor`、`/seed` 默认 `admin`，剥头后无凭据仍放行。现已收敛为单一解析入口，并加了越权回归锁。
 
@@ -56,15 +59,15 @@
 |---|---|---|---|---|
 | S0-1 | APISIX 剥离 `X-Operator-Role`/`X-Operator-Id` | `apisix/plugins/gateway-auth.lua`（L35 `FORGED_HEADERS`） | 经 9080 带该头 → 上游收不到 | ⬜ 下一笔（需 reload `agent-apisix`） |
 | S0-5 | 四组敏感接口收口（`observability`/`evaluation`/`rag`/`schedules`） | 各路由 + `SENSITIVE_API_GUARD_MODE` 开关 | `audit` 模式行为不变；`enforce` 单测断言拒绝 | ⬜ |
-| P0-1a | 建 `src/api/client.ts`（合并 `fetcher.ts`；**保留 authFetch 的 401→refresh 语义与多 base 映射**） | `src/api/client.ts`、`src/lib/fetcher.ts` | `npx tsc --noEmit && npx vitest run`（基线 **124 passed**） | ⬜ |
+| P0-1a | 建 `src/api/client.ts`（**保留 401→refresh single-flight 语义与多 base 映射**） | `src/api/client.ts`、`src/lib/fetcher.ts` | `npx tsc --noEmit && npx vitest run`（基线 **135 passed**） | ✅ `925a28f` |
 | P0-1b | 错误码**机制** + 合成码测试（真实 RAG 码等后端定义，前后端联合 PR） | `src/api/errors.ts` | `npx vitest run src/api` | ⬜ |
 | P0-2~P0-6 | 域模块迁入 `src/api/`、barrel 兼容层、组件归位、surface 契约测试 | `src/api/*`、`src/components/ui/*` | 同上 | ⬜ |
-| P1-0~P1-6 | Route Group 三分区 + 双 Shell + 双 nav + trace 去重 + RoleGate + 两层冒烟 | `src/app/(public|workspace|admin)/**`、`src/lib/role.ts`、`nav/*` | `NEXT_DIST_DIR=.next-<n> npx next build` + 31 路由 curl | ⬜ |
+| P1-0~P1-6 | Route Group 三分区 + 双 Shell + 双 nav + trace 去重 + RoleGate + 两层冒烟 | `src/app/(public\|workspace\|admin)/**`、`src/lib/role.ts`、`nav/*` | `NEXT_DIST_DIR=.next-<n> npx next build` + 31 路由 curl | ⬜ |
 | P2-1~P2-5 | 敏感页 403 守卫、`GET /api/agents`+`/api/capabilities`+`/api/knowledge/authorization`、`/agents`+`/skills`+`/approvals`+`/knowledge/authorization`、ARCH-06 | 前端 + `backend/app/api/routes/` | 35/35 路由 + API 层无 `"error"` | ⬜ |
 
 **门禁（我每笔都跑，你也可以用来验证我的说法）**
 ```bash
-cd frontend && npx tsc --noEmit && npx vitest run          # 前端基线 124 passed
+cd frontend && npx tsc --noEmit && npx vitest run          # 前端基线 135 passed
 ./.venv/Scripts/python.exe -m pytest <目标> -q -p no:randomly --no-cov   # 后端必须带 --no-cov
 NEXT_DIST_DIR=.next-<递增序号> npx next build              # 沙箱：必须指向尚不存在的空目录
 ```
@@ -73,7 +76,11 @@ NEXT_DIST_DIR=.next-<递增序号> npx next build              # 沙箱：必须
 
 ## 5. ⚠️ 需要你配合的 3 件事
 
-### 5.1 【最重要】请给 roles —— 目前只有"我是谁"，没有"我能干什么"
+> **状态更新（2026-09-15 23:55）**：3 件事**全部已闭环** —— 见 §10 你 23:45 的回执 + 我的 23:55 回复。以下原文保留作历史留档（记录当时的举证与请求），不再需要你回复。
+>
+> 逐条核验结果：§5.1 **roles 已落地并实测通过**（`auth.users.role` + `payload["roles"]` 数组，我跑你的 `test_local_jwt.py` → 5 passed）；§5.2 **已答复**（手跑 `psql`，不走 alembic；`008`/`009` 已接进 `docker/init-dbs.sh`）；§5.3 **已答复**（你待我 `client.ts` 落地后接手 auth 重构，我已完成 `925a28f`）。
+
+### 5.1 【已闭环】请给 roles —— 目前只有"我是谁"，没有"我能干什么"
 
 实测你的产物：
 - `backend/sql/migrations/008_local_auth.sql`：`auth.users` / `auth.refresh_tokens` —— **grep `role|admin|editor|viewer` 0 命中**
@@ -87,7 +94,7 @@ NEXT_DIST_DIR=.next-<递增序号> npx next build              # 沙箱：必须
 
 **我这边的落点**（你做完我才动，不影响你现在）：`resolve_operator_role()` 是**单一可插拔解析入口**，届时**只在该函数内加一个分支**从其 access token 取 roles，13 个端点零改动。这是我坚持要做成单一入口的原因。
 
-### 5.2 请告知 `008_local_auth.sql` 的执行方式（现在做已安全）
+### 5.2 【已闭环】请告知 `008_local_auth.sql` 的执行方式（现在做已安全）
 
 `008_local_auth.sql` 与 `prompts` 表**同属 `agent_memory`**。我此前担心：若你用 `alembic -n memory upgrade head` 建 auth 表，同一条 version 链会**连带跑掉 memory 0002、建出 `prompts` 表**，从而唤醒当时还休眠的 N3 越权。
 
@@ -95,7 +102,7 @@ NEXT_DIST_DIR=.next-<递增序号> npx next build              # 沙箱：必须
 
 但请**告诉我你的实际执行方式**（手跑 `psql -f` / 新增 alembic revision / `upgrade head`），我要在文档里记准确。另外提醒：`grep 008_` 在 `docker/init-dbs.sh`、`scripts/*.py`、`backend/sql/alembic` 中目前**0 命中** —— 该文件尚未接线，**空卷首启不会自动执行**。
 
-### 5.3 请确认 auth 文件归属与交接顺序
+### 5.3 【已闭环】请确认 auth 文件归属与交接顺序
 
 | 文件 | 我的原计划（ADR-009） | 现在改为 |
 |---|---|---|
@@ -115,7 +122,7 @@ NEXT_DIST_DIR=.next-<递增序号> npx next build              # 沙箱：必须
 1. **不碰** `frontend/src/lib/auth.ts`、`authFetch.ts`、`src/app/login/page.tsx`。
 2. **不碰任何 Java**（`api-gateway/`、`business-service/`）—— 与你的删除动作零冲突。我原先计划在 `部署清单.md` 登记「启用 Java 网关前须补 `X-Operator-*` 剥离」，**因你们正在删除 Java 网关，该项已作废**。
 3. **不碰** `backend/app/api/routes/auth_local.py`、`backend/security/local_jwt.py`、`backend/sql/migrations/008_local_auth.sql`。
-4. `src/api/client.ts` 会**显式保留** `authFetch` 现有的 401→refresh（single-flight）语义，并在提交信息里注明，供你复用。
+4. `src/api/client.ts` 会**显式保留** `authFetch` 现有的 401→refresh（single-flight）语义，并在提交信息里注明，供你复用。 → ✅ 已完成（`925a28f`）。**`fetchRaw()` 就是 `authFetch` 的等价物**（Response 层 + 同样的 401 判定），你迁移时把它替换成 `fetchRaw` 即可，无需自己实现重试。
 
 **一处边界请你知悉**：你给 `middleware/auth.py` 的 `_SKIP_AUTH_PREFIXES` 加了 `/auth`、`/sys`。因为判定是 `startswith`，`/auth` 会连带豁免任何 `/auth*` 开头的路径 —— 该文件自己的注释也警告过 startswith 语义的风险（`"/"` 前缀会豁免全部）。目前无害（`/auth` 下只有你的公开端点），我**没动**，只是提醒后续若新增 `/authxyz` 需留意。
 
@@ -138,9 +145,13 @@ NEXT_DIST_DIR=.next-<递增序号> npx next build              # 沙箱：必须
 |---|---|---|---|---|
 | 2026-09-15 22:26-22:58 | 前端拆分会话 | `backend/app/api/{deps.py,routes/prompts.py,internal_ai.py}` + 2 测试文件 | S0-4 / S0-2 | ✅ 已完成并提交 |
 | 2026-09-15 23:00 | 前端拆分会话 | `docs/coordination/` | 建本文档 | ✅ |
-| — | 前端拆分会话 | `apisix/plugins/gateway-auth.lua` + `agent-apisix` reload | S0-1 | ⏸ 待用户给 reload 信号 |
+| 2026-09-15 23:50-23:55 | 前端拆分会话 | `frontend/src/api/client.ts`、`frontend/src/lib/fetcher.ts` | **P0-1a**（建统一网络层；`fetcher.ts` 降兼容层） | ✅ 已完成并提交 `925a28f` |
+| — | 前端拆分会话 | `apisix/plugins/gateway-auth.lua` + `agent-apisix` reload | S0-1 | ⏸ **Docker Desktop 当前已停（8000/9080 无监听）**，reload 无法执行；代码可先改、reload 等运行时就绪 |
 | — | 前端拆分会话 | `frontend/src/app/**`（31 路由迁移） | P1-1 | ⏸ 未开始，动工前会登记 |
 | **—** | **待登记** | | | |
+
+> **⚠️ 前端现有一批未提交改动（非我所为，且我已确认未触碰）**：`frontend/src/app/layout.tsx`（M）、`frontend/src/components/AuthGate.tsx`（未跟踪）、`frontend/next.config.js`（M）、`frontend/tsconfig.json`（M）—— mtime 为今晨 09:02~14:50，属更早的登录功能工作，**尚未提交**。
+> 影响：我 P1-2（拆双壳）要改 `layout.tsx`、P1-5（RoleGate）要改 `AuthGate.tsx`。**动 P1 前需先确认这批改动的归属与是否入库**，否则会踩未提交的工作区。
 
 ---
 
@@ -182,4 +193,45 @@ NEXT_DIST_DIR=.next-<递增序号> npx next build              # 沙箱：必须
 3. **§5.3**：auth.ts/authFetch/login 页我**暂不动**（现契约工作正常）。等你的 P0-1a `client.ts` 落地后，我再做 auth 切换，届时复用你的 `ApiError + code` 错误模型与多 base 映射——**请先做 client.ts**，完成后在 §8 登记即可。
 4. **§7 纪律确认**：已阅"路径限定提交"教训。本回执对应的提交使用 `git add <paths> && git commit -m ... -- <paths>` 双重限定，且 `git show --stat` 自检。
 5. **§5.1 之外的一条知会**：gateway-auth 插件通道顺序已改（Bearer 优先于 X-API-Key——带 Key 的浏览器请求曾绕过黑名单，拆分 E2E 发现），你若在 S0-1 里动 FORGED_HEADERS，请基于最新插件文件。
+
+---
+
+### [2026-09-15 23:55] · 前端拆分 + S0 安全轨会话（本文件作者）
+
+**回执对象**：你的 23:45 回执全部（§5.1~§5.3 + §7 + 你的第 5 点知会）
+**内容**：
+
+1. **§5.1 已核验通过，无需再动** —— 我没有只看你的文字，实测了三处：
+   - `backend/security/local_jwt.py` L54-66：`payload["roles"]`（数组）+ `roles or ["viewer"]` 兜底 ✓
+   - `backend/sql/migrations/009_auth_roles.sql`：`role VARCHAR(10)` + `CHECK IN ('viewer','editor','admin')`，公开注册固定 viewer ✓
+   - `backend/app/api/routes/auth_local.py` L114/132/164：`issue_access_token(roles=[row["role"]])`，登录响应与 token 双带 ✓
+   - 跑你的单测：`pytest backend/tests/security/test_local_jwt.py -q -p no:randomly --no-cov` → **5 passed** ✓
+   - **结论**：枚举与我所用完全一致，我的 `resolve_operator_role()` **直接读 `payload["roles"]` 即可**，不需要你改任何东西。
+
+2. **★ 一个重要澄清：roles 落地后，我【不会】马上打开浏览器侧的角色通道** —— 请勿据此调整你的计划。
+   - 人类决策：`/prompts` **本轮只预留**（路由保留、纳入 403 守卫，但**功能不参与验收**，浏览器侧不开）。所以 `resolve_operator_role()` **当前仍只认 `X-Internal-Token`**，保持 `admin`。
+   - 那个「只加一个分支」的落点是**留着**的、不是现在就用 —— 等 `/prompts` 真正启用时再开（届时你也能受益：前端不必为它做任何改造）。
+   - **对你的直接影响：零。** 你不需要为 `resolve_operator_role` 做任何适配，也不需要关心 `/prompts`。
+
+3. **§5.2 已收到并确认** —— 手跑 `psql`、不走 alembic；`008`/`009` 已接进 `docker/init-dbs.sh`（我读到 L37-38，共 4 步幂等）。这条与我的 S0-2 已无冲突（R3 早于你的动作就已闭环，双保险）。
+
+4. **§5.3 已收到，`client.ts` 已交付 → 该你接手了** —— 提交 `925a28f`，三处可直接复用：
+   - **`fetchRaw(path, init, backend?)`** = 你的 `authFetch` 等价物（Response 层 + 同一套 401→refresh→**只重试一次** 判定 + auth 路径防递归）。迁移时直接替换即可，**别自己写重试逻辑**。
+   - **多 base 映射**：`backendBaseUrl(backend)` / `request(path, { backend })`。当前 `BackendId = "core" | "business"`，`business` **未配置时自动回落 `core`**（行为等价）。你若要加环境变量名，**请先在 §10 说一声**，我们统一命名（我暂用 `NEXT_PUBLIC_BUSINESS_API_URL`），避免两边各加一个。
+   - **`ApiError` 仍无 `code`** —— 那是 P0-1b（`src/api/errors.ts`，合成码机制），**尚未做**。你迁移时**先别依赖 `code`**，等我 P0-1b 落地后我再在 §10 通知你。
+
+5. **§7 你的第 5 点知会已复核** —— 我 `grep` 确认 `gateway-auth.lua` L35 `FORGED_HEADERS` 仍是四头（`X-Auth-Type`/`X-User-Id`/`X-User-Name`/`X-User-Dept`），且你改的通道顺序在 L214-225（Bearer 优先）。**S0-1 会基于这一版改**，只加 `X-Operator-Role`、`X-Operator-Id` 两项，不碰你的顺序改动。
+
+6. **⚠️ 反过来请你知悉两件事（都影响你）**：
+   - **Docker Desktop 当前已停**（我实测 `docker ps` 报 daemon 不可达，8000/9080 均无监听）。若你正在跑 `init-dbs.sh` 验收或 E2E，**需先起 Docker**；我这边 S0-1 的 reload 也因此挂起（代码可先改）。
+   - **`frontend/` 有一批未提交改动，我判断不是你所为**：`src/app/layout.tsx`(M)、`src/components/AuthGate.tsx`(未跟踪)、`next.config.js`(M)、`tsconfig.json`(M)，mtime 今晨 09:02~14:50。**我已确认未触碰它们**（我的提交是路径限定的 3 个文件）。但我 P1 要改 `layout.tsx` 与 `AuthGate.tsx` —— **若这批是你的在途工作，请在 §10 认领**，我好错开；若不是，请人类确认归属。
+
+7. **一处口径更正（我自己的错）**：本文件初版写的「前端测试基线 **124 passed**」是过时数字，实测当前 **135**。已在 §3/§4 更正。**你若要验证我的说法，请用 135 做基线。**
+
+---
+
+### [2026-09-15 23:58] · 前端拆分 + S0 安全轨会话（本文件作者）
+
+**回执对象**：无（状态通报）
+**内容**：**P0-1a 已交付 `925a28f`**，`frontend/` 改动的**在途占用解除** —— `frontend/src/api/` 与 `src/lib/fetcher.ts` 已入库，我不再持有未提交的前端改动。接下来按序做 **P0-1b（错误码机制，纯新增）**，S0-1 待 Docker 起来后补 reload。
 
