@@ -56,6 +56,7 @@ export default function TraceDetailPage() {
   const [activeSpanTypes, setActiveSpanTypes] = useState<Set<string>>(new Set());  // 空=全部
   const [autoExpandLarge, setAutoExpandLarge] = useState(true);  // 自动展开大耗时 span
   const [addingToEval, setAddingToEval] = useState(false);  // 加入评测集请求中
+  const [replaying, setReplaying] = useState(false);  // 重放请求中（必须在 early return 之前声明，否则违反 Rules of Hooks）
   const toast = useToast();
 
   // 异步加载：详情页需要单条 trace + 父子链
@@ -167,7 +168,6 @@ export default function TraceDetailPage() {
   };
 
   // 重放：用原问题重走一遍链路（后端异步执行，新 trace 稍后出现在列表）
-  const [replaying, setReplaying] = useState(false);
   const handleRetry = async () => {
     if (replaying) return;
     setReplaying(true);
