@@ -32,6 +32,22 @@
 
 ---
 
+## 零·二、进度看板（实时回填）
+
+| # | 事项 | 状态 | 完成时间 | 提交 / 备注 |
+|---|---|---|---|---|
+| — | v3 计划落盘（取代 v2） | ✅ 完成 | 2026-09-15 22:31 | `78fd3aa` |
+| **S0-4** | 内部令牌通道 fail-closed + 依赖上提共享 | ✅ 完成 | 2026-09-15 22:33 | `44d2e53`；`pytest backend/tests/api/` **81 passed**（新增 7 项契约测试 + 防回退锁） |
+| **S0-1** | APISIX 剥离 `X-Operator-*` | ⬜ 待做（**下一笔**） | — | 改 `gateway-auth.lua` L35；**需 reload `agent-apisix`（已获人类授权）**；⚠️ **Java 登记项作废** —— `api-gateway/` 正被并发会话删除（76 项 staged 删除），N3a 简化为纯 APISIX |
+| **S0-2** | prompts 关停客户端角色 + fail-closed + 角色来源收敛为单一入口 | ✅ 完成 | 2026-09-15 22:58 | `f5a95f0`；`pytest backend/tests/api/ backend/tests/prompts/` **238 passed**；18 处 `Header(default=)` 清零、`_operator_role`/`_operator_id` 死代码删除、13 个端点改用 `resolve_operator_role`（含此前无鉴权的 `/meta/registry`） |
+| **S0-5** | 四组敏感接口收口（audit 模式） | ⬜ 待做 | — | 代码进 S0；**`enforce` 切换与 X-1（流量切回 APISIX）同批** |
+| P0-1 ~ P0-6 | 地基收敛 | ⬜ 待做 | — | **前置：声明 `frontend/` 冻结**（约束 9 / ADR-009） |
+| P1-0 ~ P1-6 | 分区 + 双 Shell | ⬜ 待做 | — | |
+| P2-1 ~ P2-5 | 管理端 | ⬜ 待做 | — | |
+| S0-4b | rag-server 内部令牌语义对齐 | ⬜ 待做 | — | **S0-4 暴露的遗留**：`backend/services/rag_server.py` 开发模式（token 空）仍全放行，与收紧后的 `/internal/ai/*` 语义不一致；其测试 docstring 中「对齐 `/internal/ai/*` 行为」已过时 |
+
+---
+
 ## 一、企业版结论
 
 **可实施 —— 无阻塞。** 落盘前 4 处实现核查（均已实测）：
@@ -114,7 +130,10 @@
 > **N1（alembic 迁移）降级为「后续完善批次」，不进任何 gate。**
 > 权威命令（容器内）：`docker exec agent-app-1 python -m alembic -c alembic.ini -n memory upgrade head`
 > **迁移前置检查（硬性）**：执行前必须确认 **S0-2 已绿**。原因：`prompts` 表一出现，N3 立即从「休眠」变为「可利用」。
-> 落地形态：`scripts/precheck_n1_migration.sh` 断言 ① `to_regclass('public.prompts')` 为空；② 无凭据请求 `/prompts` 返回 **403**（而非 500/200）。
+> **✅ 2026-09-15 22:58 起该前置已满足**（`f5a95f0` 闭环 N3）—— 迁移竞态解除：
+> 并发会话的 `008_local_auth.sql` 与 `prompts`（alembic memory 线 0002）同属 `agent_memory`，
+> 若其执行方式为 `alembic -n memory upgrade head`，会连带建出 `prompts` 表；**现在跑是安全的**。
+> 落地形态：`scripts/precheck_n1_migration.sh` 断言 ① `to_regclass('public.prompts')` 为空；② 无凭据请求 `/prompts` 返回 **401/403**（而非 500/200）。
 ```
 
 ### ADR-008 · P2-4 角色来源改挂 py 用户体系（R2）
