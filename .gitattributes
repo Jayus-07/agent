@@ -1,0 +1,92 @@
+# .gitattributes — 换行符与文本/二进制判定（2026-09-16 加固）
+#
+# 背景（P0 级，已实际发生两次）：
+#   宿主为 Windows 且 `core.autocrlf=true`。仓库此前**没有任何 .gitattributes**，
+#   于是 clone / checkout 时 git 会把 shell 脚本的 LF 改写成 CRLF。
+#   而 `docker/init-dbs.sh` 是**挂载进 Linux 容器执行**的 →
+#   内核读 shebang 得到 `#!/bin/bash^M` → `Exited (127)` → 空卷首启整栈起不来。
+#   2026-09-15 曾手工把该文件改回 LF 修复，但只要缺本文件，任何人重新 clone 就会复发。
+#
+# 本文件的作用：把"换行符"从「依赖各人本地 git config」提升为**仓库级契约**，
+# 无论宿主 autocrlf 怎么配，容器内脚本永远是 LF。
+#
+# 维护约定：新增「会被 Linux 容器执行」的脚本类型，务必在此登记。
+
+# ── 本文件自身与忽略清单：LF ───────────────────────────────────
+# （git 官方建议 .gitattributes 以 LF 入库；否则自身也会被 autocrlf 改写成 CRLF）
+.gitattributes  text eol=lf
+.gitignore      text eol=lf
+
+# ── Shell：一律 LF（容器内执行，CRLF 会直接报错） ──────────────
+*.sh      text eol=lf
+*.bash    text eol=lf
+*.zsh     text eol=lf
+# 无扩展名的脚本入口
+docker/entrypoint*  text eol=lf
+
+# ── 容器 / 构建描述文件：LF ───────────────────────────────────
+Dockerfile        text eol=lf
+Dockerfile.*      text eol=lf
+*.dockerfile      text eol=lf
+.dockerignore     text eol=lf
+
+# ── 配置 / 源码：LF（跨平台一致，避免 diff 噪音） ─────────────
+*.py    text eol=lf
+*.lua   text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+*.toml  text eol=lf
+*.ini   text eol=lf
+*.cfg   text eol=lf
+*.sql   text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.jsx   text eol=lf
+*.mjs   text eol=lf
+*.cjs   text eol=lf
+*.css   text eol=lf
+*.md    text eol=lf
+*.env*  text eol=lf
+
+# ── Windows 原生脚本：保留 CRLF（cmd.exe / PowerShell 对 LF 敏感） ──
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+
+# ── 二进制：禁止任何换行符转换与 diff 文本化 ───────────────────
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.svg   text eol=lf
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+*.whl   binary
+*.so    binary
+*.pyd   binary
+*.dll   binary
+*.exe   binary
+*.bin   binary
+*.pkl   binary
+*.db    binary
+*.sqlite binary
+*.sqlite3 binary
+*.onnx  binary
+*.pt    binary
+*.safetensors binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+
+# ── 生成物 / 快照：不参与语言统计与 diff ───────────────────────
+package-lock.json   -diff linguist-generated
+pnpm-lock.yaml      -diff linguist-generated
+yarn.lock           -diff linguist-generated
+*.min.js            -diff linguist-generated
+*.min.css           -diff linguist-generated
