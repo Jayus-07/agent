@@ -1,5 +1,5 @@
 import { useRouter } from 'next/navigation'
-import type { PromptListItem } from '@/services/prompts'
+import type { PromptListItem } from '@/api/prompts'
 import type { PromptGroup } from '@/config/promptGroups'
 import StatusBadge from './StatusBadge'
 

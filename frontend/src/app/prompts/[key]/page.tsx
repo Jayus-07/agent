@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, Save, Send, GitBranch, History, FileText, Lock, Play, Zap } from 'lucide-react'
-import { promptsService, type PromptDetail, type PromptVersion, type AuditEntry, type DiffResult, type PromptStatus } from '@/services/prompts'
+import { promptsService, type PromptDetail, type PromptVersion, type AuditEntry, type DiffResult, type PromptStatus } from '@/api/prompts'
 import { evaluationService } from '@/api/evaluation'
 import { WHITELIST_KEYS } from '@/config/promptGroups'
 import { useToast } from '@/components/shared/Toast'

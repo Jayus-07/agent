@@ -1,4 +1,4 @@
-import { STATUS_META, type PromptStatus } from '@/services/prompts'
+import { STATUS_META, type PromptStatus } from '@/api/prompts'
 
 export default function StatusBadge({ status }: { status: PromptStatus | string | null }) {
   if (!status || !(status in STATUS_META)) {

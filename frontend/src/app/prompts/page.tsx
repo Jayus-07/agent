@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { Database } from 'lucide-react'
-import { promptsService, type PromptListItem } from '@/services/prompts'
+import { promptsService, type PromptListItem } from '@/api/prompts'
 import { PROMPT_GROUPS, WHITELIST_KEYS } from '@/config/promptGroups'
 import PromptCard from '@/components/prompts/PromptCard'
 import PageHeader from '@/components/layout/PageHeader'

@@ -1,5 +1,5 @@
 import { Check, ChevronLeft, ChevronRight } from 'lucide-react'
-import { PROMPT_STATUSES, STATUS_META, type PromptStatus } from '@/services/prompts'
+import { PROMPT_STATUSES, STATUS_META, type PromptStatus } from '@/api/prompts'
 
 interface StatusPipelineProps {
   current: PromptStatus | string | null

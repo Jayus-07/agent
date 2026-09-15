@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, Play, Eye, Zap, Clock, Hash, Loader2 } from 'lucide-react'
-import { promptsService, type PromptDetail, type RenderResult, type PlaygroundResult } from '@/services/prompts'
+import { promptsService, type PromptDetail, type RenderResult, type PlaygroundResult } from '@/api/prompts'
 import { useToast } from '@/components/shared/Toast'
 import Skeleton from '@/components/shared/Skeleton'
 
