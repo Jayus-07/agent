@@ -1,0 +1,28 @@
+diff --git a/frontend/next.config.js b/frontend/next.config.js
+index 691f447..092eb21 100644
+--- a/frontend/next.config.js
++++ b/frontend/next.config.js
+@@ -13,10 +13,22 @@ const nextConfig = {
+   // 压缩如需要应由前置 nginx 层承担。
+   compress: false,
+ 
+-  // API 代理：将 /api/* 转发到 FastAPI 后端
++  // API 代理：按路径分流
++  // - /api/auth/** 与 /api/sys/** → Java 网关(8080)：JWT 登录/注册走
++  //   auth-service(8006)/system-service(8002)，网关白名单放行这两个前缀
++  // - 其余 /api/** → FastAPI 后端
+   // 本地 dev → http://localhost:8000，Docker → http://api:8000
+   async rewrites() {
++    const gateway = process.env.AUTH_GATEWAY_URL || 'http://localhost:8080'
+     return [
++      {
++        source: '/api/auth/:path*',
++        destination: `${gateway}/api/auth/:path*`,
++      },
++      {
++        source: '/api/sys/:path*',
++        destination: `${gateway}/api/sys/:path*`,
++      },
+       {
+         source: '/api/:path*',
+         destination: `${process.env.API_URL || 'http://localhost:8000'}/:path*`,
