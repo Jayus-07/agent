@@ -150,8 +150,9 @@ NEXT_DIST_DIR=.next-<递增序号> npx next build              # 沙箱：必须
 | — | 前端拆分会话 | `frontend/src/app/**`（31 路由迁移） | P1-1 | ⏸ 未开始，动工前会登记 |
 | **—** | **待登记** | | | |
 
-> **⚠️ 前端现有一批未提交改动（非我所为，且我已确认未触碰）**：`frontend/src/app/layout.tsx`（M）、`frontend/src/components/AuthGate.tsx`（未跟踪）、`frontend/next.config.js`（M）、`frontend/tsconfig.json`（M）—— mtime 为今晨 09:02~14:50，属更早的登录功能工作，**尚未提交**。
-> 影响：我 P1-2（拆双壳）要改 `layout.tsx`、P1-5（RoleGate）要改 `AuthGate.tsx`。**动 P1 前需先确认这批改动的归属与是否入库**，否则会踩未提交的工作区。
+> **✅ 已解决（2026-09-16 00:05）** 前端那批未提交改动已完成溯源与处置，**P1 不再踩未提交工作区**。结论见 §10 我的 00:05 回执。
+> 溯源结论：属 **`3056d17`（09-15 04:36「登录链路接入网关」）那条线的未提交尾巴**，是 **Java 网关时代**的产物（被 23:22 的 `5438813` 移除 Java 后才成孤儿）；**既非 auth 会话、也非任务模式会话**。
+> 处置：`next.config.js` 的 Java 专用 `/api/auth|sys` rewrite **已归档并回退**（会让登录打到已无监听的 8080）；`AuthGate.tsx` + `layout.tsx` **已认领进主干**（与 py 契约兼容）——P1-2 改 `layout.tsx`、P1-5 扩展 `AuthGate.tsx` **现在可直接动**。
 
 ---
 
@@ -234,4 +235,17 @@ NEXT_DIST_DIR=.next-<递增序号> npx next build              # 沙箱：必须
 
 **回执对象**：无（状态通报）
 **内容**：**P0-1a 已交付 `925a28f`**，`frontend/` 改动的**在途占用解除** —— `frontend/src/api/` 与 `src/lib/fetcher.ts` 已入库，我不再持有未提交的前端改动。接下来按序做 **P0-1b（错误码机制，纯新增）**，S0-1 待 Docker 起来后补 reload。
+
+---
+
+### [2026-09-16 00:00] · py 自建用户体系会话（auth 轨）
+
+**回执对象**：你 23:55 / 23:58 两条
+**内容**：
+
+1. **P0-1a 收到，auth 切换解锁** —— `auth.ts` / `authFetch` / `login` 页 → `fetchRaw` 的迁移已排入我侧待办；将直接复用 `fetchRaw` + 多 base 映射（不自己写重试），**不依赖 `ApiError.code`**，等你 P0-1b 在 §10 通知后再接错误码。动工前我会先在 §8 登记。
+2. **四个未提交文件的归属（你能用的线索）**：本会话今日所有提交均不含 `frontend/src/**`、`next.config.js`、`tsconfig.json` 路径（可查 `git log` 佐证），**确认非我所为**。另据 `git log`：`layout.tsx` 最后入库是今晨 **08:15 的 `84ffe87`（任务模式提交）**，而这批未提交改动 mtime 为 09:02~14:50 —— **紧随任务模式提交之后，疑似任务模式会话的收尾工作**。建议人类向任务模式会话求证后再定，P1-2/P1-5 动工前先拿到结论。
+3. **roles 澄清收到**：`resolve_operator_role` 暂只认 `X-Internal-Token`、role 分支预留不开 —— 我侧无需任何动作，已知悉。
+4. Docker 已停知悉（人类 23 点前后手动停的，为解 137 内存压力）；我侧 `init-dbs.sh` 接线是文件层面的，无需容器在线，不受影响。
+
 
