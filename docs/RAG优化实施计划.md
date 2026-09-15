@@ -209,7 +209,9 @@
   - 验收汇总：**24 passed**（embed_cache 7 + summary_cache 4 + embed_batching 6 + indexer_pipeline 回归）
 - [~] 阶段 4：工程化收尾（M4）
   - [x] **4.1（状态置位）near_dup → pending_review**（2026-09-15 05:35）：`register()` 带 `near_dup_id` 时 status 置 `pending_review`（原静默 active 入库）；chunk metadata 注入 `review_status`（供检索 where 过滤与前端展示）。验收：test_review_status 3 项
-    - [x] **4.1b 检索层软过滤**（2026-09-15 05:45）：`hybrid_retrieve` 拆包装层（覆盖 enhanced/fallback/SQL bypass 全部出口），返回前剔除 `pending_review` 文档。**关键设计：不用向量库 where $ne 过滤**——存量 chunk 无 review_status 字段会被 $ne 全部误杀；改用 registry pending_review doc_id 集合（60s 进程内缓存，空集合同样缓存零开销，registry 不可用跳过过滤保可用性）。验收：test_review_filter 7 项 + hybrid 回归
+    - [x] **4.1b 检索层软过滤**（2026-09-15 05:45，**运行时验收通过** 06:45）：
+      - 实现注意：只包 hybrid_retrieve 不够——rag_search/retrieve_knowledge 直连 chunk_retriever；已在 CustomRetriever.retrieve 公共出口统一过滤（幂等）
+      - 运行时验证：上传原版+副本采购合同 → MinHash sim=1.00 触发 near_dup → registry pending_review → 检索"采购合同违约责任"仅返回 active 旧版 1 条，两条待审文档被过滤（ReviewFilter 日志确认）`hybrid_retrieve` 拆包装层（覆盖 enhanced/fallback/SQL bypass 全部出口），返回前剔除 `pending_review` 文档。**关键设计：不用向量库 where $ne 过滤**——存量 chunk 无 review_status 字段会被 $ne 全部误杀；改用 registry pending_review doc_id 集合（60s 进程内缓存，空集合同样缓存零开销，registry 不可用跳过过滤保可用性）。验收：test_review_filter 7 项 + hybrid 回归
   - [x] **4.5 死代码清理**（2026-09-15 05:35）：Router 空壳 LLM Assisted 分支删除；4 个零消费死配置删除（grep 实证 0 消费）+ ENABLE_LLM_CHUNKING/LLM_CHUNK_MIN_CHARS；CHUNK_SIZE 保留（rag_documents.py 在用）。验收：config 导入正常 + 回归 23 passed
   - [ ] 4.2 错误码体系：需前端联动，单独排期
   - [x] **4.3 增强项**（2026-09-15 05:55，数据可达性优先，策略层待评测数据）：
@@ -227,6 +229,11 @@
 - 2026-09-15 03:45：0.1 基线完成（3716/29），删除监控全程 0
 - 2026-09-15 04:00：**1.1 S0 修复交付**——question_gen 模块 4 项契约测试绿、接线测试 2 项绿、相关回归 84 passed。修复内容：gather 第四任务 task_questions、llm_tokens 双路汇总（1.3b 前半）、enriched 死分支与 enrich_metadata_llm 引用清除
 - 2026-09-15 04:10：**1.2 + 1.3 交付**——_embed_text_for 三级前缀（向后兼容：无 metadata 纯正文）、_embed_with_retry(doc_summary=) 传参、_build_doc_level_text 纯函数（doc_db 增强，单测 12 项含长度约束/正文保底）、1.3c 确认伪缺口并注释固化约束。最终回归 37 passed（含 chunking/semantic 链路）。**阶段 1 代码全部完成**，仅剩 1.2 黄金集三组对比为运行时验收项（需全栈 + 重索引）
+- 2026-09-15 06:10-06:45：**git 收口（3 批提交）+ 运行时验收（部分通过）**
+  - 提交：0e3fb22（核心代码 10 文件）/ 4a84ebe（测试 14 文件）/ 3e1e36c（文档）/ f755fd5（4.1b base.py 补全）
+  - 运行时验收通过：S0 模拟问题（chunk_store 10/10 有内容）、C3 section_title、4.1 near_dup→pending_review（MinHash sim=1.00 触发）、4.1b 检索软过滤（检索仅返回 active 旧版）
+  - 运行时验收受阻：3.1 缓存命中率——Docker Desktop 崩溃重启 2 次，Redis 容器随之离线（REDIS_ENABLED 已改 true、question_gen 批级缓存已补）；4.3c 表格描述——企业文档目录暂无财务 xlsx
+  - 环境注意：:8000 后端与并发会话共用（workflow 请求 observed）；.env REDIS_ENABLED 已改 true
 - 2026-09-15 04:20-04:50：**阶段 2 全部交付**——2.1 表格双层切分通用化（_split_table_node 共享 helper，六类型不再硬切断行）；2.2 三策略虚拟 parent（_attach_virtual_parents，Step/Legal/QA 检索退化修复）；2.3 上下文携带（_iter_leaves_with_section + _merge_small_with_section + _split_unstructured 抽取，indexer find() 降级兜底、二次清洗删除）；2.4 Semantic 三修补（碎片合并/标点保留/O(n) 边界）。**最终回归 backend/tests/rag/ 全目录 418 passed / 0 failed**（旧总数断言更新 5 处：step×2/legal×1/faq×2）。阶段 2 完成，下一步阶段 3（embedding 缓存 + 对账 job）
 - [ ] 阶段 4：工程化收尾（M4）
 - [ ] 阶段 5：企业级用量审计与统一上报 5.1-5.7（M5）——建议 M3 后与 M4 并行

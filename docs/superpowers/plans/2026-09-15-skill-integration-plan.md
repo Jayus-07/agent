@@ -11,7 +11,7 @@
 | 批次 | 内容 | 状态 | 完成日期 | 备注 |
 |---|---|---|---|---|
 | 1 | Agently Mail 升级 EmailSkill | ✅ 基本完成 | 2026-09-15 | 已提交（d3f9f19）；CLI 已装 + OAuth 已通（mint1614@agent.qq.com）；真实搜索经包装层验证 ok:true。发送侧验收并入首个业务场景调用 |
-| 2 | market_research Workflow（证据管线） | 🔄 代码完成 | 2026-09-15 | 五段式 DAG 7 step 已提交（e9dc554）；全量回归 0 failed（05:28，含批次1+2）；剩真实联网端到端验收 |
+| 2 | market_research Workflow（证据管线） | ✅ 基本完成 | 2026-09-15 | 端到端验收通过（e6aefa7）：API + 浏览器 chat 双通道 success（156s，7 证据/15 章节，含 Bing 兜底/SSRF fake-ip 开关/问句抽品类/摘要级降级四修）；遗留 P1：长 workflow 的 chat SSE ~97s 断流（进度事件透传或异步任务模式，另行处理） |
 | 3 | 评估职责拆分 + decision_log | ✅ 基本完成 | 2026-09-15 | 已提交（b6626a9）；定向 21 + 关联面 422 passed；golden 评测复验全绿（106 passed/4 skipped，拒答准确率 1.0、分层全 100%，07:34）。剩全量回归收尾门禁 + 用户拍板/表现回填 API |
 | 4 | CPR 吸收 + 证据分型 + golden 评测 | ⬜ 未开始 | — | |
 | 5 | 数据源欠账（榜单/评论/自家数据） | ⬜ 未开始 | — | |
