@@ -6,6 +6,10 @@
 > 执行顺序：**S0 → P0 → P1 → P2**；S0 不等 `frontend/` 冻结，安全修复最高优先级
 > 每笔提交单一目的、可独立 `git revert <sha>`，提交号回填本文件「决策台账」
 
+> 📌 **跨会话协同**：与「py 自建用户体系」会话的接口、边界与冲突规则见
+> `docs/coordination/2026-09-15-frontend-split-x-auth-session.md`（含 append-only 回执区）。
+> 需要对方配合的三件事：① 给 roles claim（枚举对齐 `viewer/editor/admin`）；② 告知 `008_local_auth.sql` 执行方式；③ 确认 `lib/auth.ts`/`authFetch.ts` 归属与顺序。
+
 ---
 
 ## 零、决策台账（全部已锁定，不得推翻）
