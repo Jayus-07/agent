@@ -6,8 +6,11 @@
   3. 前端 /evaluations "运行" 按钮的离线后端
 
 运行方式：
-  # golden set（10 条 CI 门禁子集）
-  pytest backend/tests/evaluation/test_eval_golden.py -v
+  # golden set（10 条 CI 门禁子集）— 默认被跳过（真实重建索引+检索 ~10min），
+  # 必须显式开启：
+  pytest backend/tests/evaluation/test_eval_golden.py -v --quality-gate
+  #   或 RUN_QUALITY_GATE=1 pytest backend/tests/evaluation/test_eval_golden.py -v
+  #   并行跑建议加 --dist loadscope（module 级 fixture 只在每个 worker 各建一次）
 
   # 完整评测集（145 条 canonical）
   pytest backend/tests/evaluation/test_eval_golden.py -v --full
@@ -29,7 +32,18 @@ import os
 
 import pytest
 
-os.environ.setdefault("RERANKER_BACKEND", "local")
+# 语义评分器默认用 embedding 通道：ENV_MODE=cloud 时 EmbeddingScorer 走
+# DashScope 在线 API（embedding_singleton），避免本地 cross_encoder 在
+# CPU torch 上加载/推理（曾拖出 ~10min setup，且 RERANKER_DEVICE=cuda
+# 与 CPU torch 不匹配必然降级）。原 RERANKER_BACKEND 环境变量无任何
+# 代码消费（死变量），已移除。
+# 离线 CI 场景可显式 EVAL_SEMANTIC_SCORER=lexical 走零依赖兜底。
+os.environ.setdefault("EVAL_SEMANTIC_SCORER", "embedding")
+
+# 质量门禁标记：conftest 的 pytest_collection_modifyitems 会默认跳过本文件
+# 全部用例（真实重建索引+本地 embedding/reranker，单跑 ~10min），必须
+# --quality-gate 或 RUN_QUALITY_GATE=1 显式运行。跳过原因见 conftest。
+pytestmark = pytest.mark.quality_gate
 
 
 def _is_semantic_mode() -> bool:

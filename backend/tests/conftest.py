@@ -23,6 +23,34 @@ os.environ["LANGFUSE_ENABLED"] = "false"
 os.environ["OBS_ANALYTICS_ENABLED"] = "false"
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--quality-gate",
+        action="store_true",
+        default=False,
+        help="运行 quality_gate 标记的 RAG 质量门禁用例（真实重建索引+检索，~10min）",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """quality_gate 用例默认跳过，显式 opt-in 才运行。
+
+    背景：test_eval_golden 走 EvaluationService 真实链路 —— conftest 的
+    数据目录隔离会从 git 快照重建索引（CPU 重嵌入整个语料），加本地
+    embedding/reranker 加载，单跑 ~10min，且 xdist 下每个分到该模块测试
+    的 worker 各跑一遍。日常全量不等它；发版/夜间跑门禁时显式开启。
+    """
+    if config.getoption("--quality-gate") or os.getenv("RUN_QUALITY_GATE") == "1":
+        return
+    skip = pytest.mark.skip(
+        reason="质量门禁默认跳过（真实重建索引+检索 ~10min）："
+               "用 --quality-gate 或 RUN_QUALITY_GATE=1 显式运行"
+    )
+    for item in items:
+        if "quality_gate" in item.keywords:
+            item.add_marker(skip)
+
+
 # ── 数据目录隔离（治理 C，2026-09-13）────────────────────────────
 # 在任何 backend 模块导入前，把 RAG_DATA_DIR 重定向到临时目录，并从 git
 # 跟踪的 data/ 文件重建"仓库快照"。此前 golden 评测跑在真实工作区索引上，
