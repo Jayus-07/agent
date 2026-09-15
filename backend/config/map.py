@@ -67,6 +67,11 @@ TENCENT_LBS_RETRY_BACKOFF = float(os.getenv("TENCENT_LBS_RETRY_BACKOFF", "0.4"))
 # 客户端节流：同一 Key 的最小请求间隔（秒），0 表示不限速。
 # 默认 0.2s ≈ 5 QPS，与个人 Key 的并发限制对齐。
 TENCENT_LBS_MIN_INTERVAL = float(os.getenv("TENCENT_LBS_MIN_INTERVAL", "0.2"))
+# 熔断（2026-09-15）：连续失败 N 次开路 cooldown 秒，期间调用立即失败 →
+# 调用方（行程规划的 POI 解析/路线估算）随即走本地估算兜底。避免网络
+# 故障时每次调用都等满 connect+read 超时（实测把一次请求拖到 6 分钟）。
+TENCENT_LBS_BREAKER_THRESHOLD = int(os.getenv("TENCENT_LBS_BREAKER_THRESHOLD", "3"))
+TENCENT_LBS_BREAKER_COOLDOWN = float(os.getenv("TENCENT_LBS_BREAKER_COOLDOWN", "60"))
 
 # =============================================
 # 结果缓存

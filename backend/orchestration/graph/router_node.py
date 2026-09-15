@@ -32,17 +32,38 @@ def router_node(state: dict) -> dict:
             "route_mode": "plan",
         }
 
-    # ── CS 预过滤：CS_ENABLED 时先检测客服域，命中则短路不进主 Router ──
-    # 逻辑在 cs_prefilter.py（只判断"是不是客服"，不判断"走哪个 expert"）
+    # ── 预过滤顺序（2026-09-15 性能优化，判定语义保持不变）──────────
+    # 背景：CS 检测器双通道，向量通道每次请求一次云端 embedding 往返
+    # （实测 1.0~3.4s）；旅游预过滤是纯正则（~1ms）。原先无条件先跑完整
+    # CS 检测 → 旅游/普通请求白烧一次 embedding。
+    # 新顺序：
+    #   1) CS 廉价规则预判（~1ms）：命中 → 立即做完整 CS 检测（保客服优先）
+    #   2) 旅游纯正则预过滤（~1ms）：命中 → 短路进旅游域
+    #   3) 都没命中 → 完整 CS 检测（含向量通道，保留语义兜底路径）
+    # 对"订单里的行程单"这类同时含 CS 规则的 query：规则命中 → 仍走 CS
+    # 优先，与旧行为一致。
     try:
-        from backend.orchestration.graph.cs_prefilter import try_cs_prefilter
-        cs_update = try_cs_prefilter(query, state)
+        from backend.customer_service.router.domain_detector import cs_rule_hit_count
+        cs_rule_hits = cs_rule_hit_count(query)
+    except Exception as e:
+        logger.debug(f"[RouterNode] CS 规则预判失败，按旧顺序处理: {e}")
+        cs_rule_hits = 1  # 保守：视作命中，维持 CS 优先
+
+    def _try_cs_prefilter() -> dict | None:
+        # 逻辑在 cs_prefilter.py（只判断"是不是客服"，不判断"走哪个 expert"）
+        try:
+            from backend.orchestration.graph.cs_prefilter import try_cs_prefilter
+            return try_cs_prefilter(query, state)
+        except Exception as e:
+            logger.warning(f"[RouterNode] CS 预过滤失败，回退到主 Router: {e}")
+            return None
+
+    if cs_rule_hits:
+        cs_update = _try_cs_prefilter()
         if cs_update is not None:
             return {**state, **cs_update}
-    except Exception as e:
-        logger.warning(f"[RouterNode] CS 预过滤失败，回退到主 Router: {e}")
 
-    # ── 旅游预过滤：顺序放在客服之后（客服诉求优先级更高，如"订单里的行程单"）──
+    # ── 旅游预过滤：纯正则，先于 CS 向量检测执行（省一次 embedding）──
     try:
         from backend.orchestration.graph.travel_prefilter import try_travel_prefilter
         travel_update = try_travel_prefilter(query, state)
@@ -50,6 +71,12 @@ def router_node(state: dict) -> dict:
             return {**state, **travel_update}
     except Exception as e:
         logger.warning(f"[RouterNode] 旅游预过滤失败，回退到主 Router: {e}")
+
+    # ── CS 语义兜底：无 CS 规则命中时，向量通道仍可能判定为客服域 ──
+    if not cs_rule_hits:
+        cs_update = _try_cs_prefilter()
+        if cs_update is not None:
+            return {**state, **cs_update}
 
     try:
         # P0-4: get_router() 懒加载（router 索引/向量资源首次初始化）曾贡献

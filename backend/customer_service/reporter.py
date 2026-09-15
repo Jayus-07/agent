@@ -61,7 +61,35 @@ def _assemble_answer(
     if action_result:
         return _format_action_result(action_result)
 
+    # 专家执行失败：把 error 映射成可操作的提示（2026-09-15 修复）
+    # 此前直接落到 _summarize_expert_results 的泛化占位语（"正在处理中，
+    # 请稍候。"），用户既不知道失败原因也无从下手——实测匿名用户请求退款时
+    # 得到的就是这句话。
+    if expert_result.get("status") == "failed" or expert_result.get("error"):
+        return _failed_expert_reply(expert_result)
+
     return _summarize_expert_results(state)
+
+
+def _failed_expert_reply(expert_result: dict) -> str:
+    """把专家失败原因映射为用户可读、可操作的话术（不泄漏技术细节）。"""
+    raw = str(expert_result.get("error") or "")
+    low = raw.lower()
+
+    if "authentication" in low or "user_id missing" in low or "anonymous" in low:
+        return (
+            "这项操作需要先确认您的身份，暂时无法为您执行。\n\n"
+            "- 请登录后重试（登录后可自助办理）\n"
+            "- 或回复「转人工」，由客服协助处理"
+        )
+    if "permission" in low or "forbidden" in low or "无权限" in raw:
+        return "我暂时没有权限为您执行这项操作，已记录您的问题。回复「转人工」可由客服人工处理。"
+    if "timeout" in low or "timed out" in low:
+        return "系统当前响应较慢，这次没能完成处理。请稍后重试，或回复「转人工」由客服协助。"
+    if expert_result.get("status") == "failed":
+        return "抱歉，处理您的请求时遇到了问题。请稍后重试，或回复「转人工」由客服协助处理。"
+    # 有 error 字段但状态非 failed：给一句可操作的通用兜底（不再用占位语）
+    return "抱歉，我暂时没能完成这项处理。可以补充更多信息后重试，或回复「转人工」由客服协助。"
 
 
 def _handoff_intercept_reply(state: dict) -> str:

@@ -24,6 +24,7 @@ from urllib.parse import quote
 import httpx
 
 from backend.config import map as MAP
+from backend.infra.circuit_breaker import CircuitBreakerOpenError
 from backend.shared.logger import logger
 
 # ── 端点常量（均为已实测可用的路径，改动请同步 scripts/verify_tencent_lbs.py）──
@@ -251,6 +252,32 @@ def _parse(resp: httpx.Response, path: str = "") -> dict:
 
 # ── 同步客户端
 _sync_client: httpx.Client | None = None
+
+
+# ── 熔断器（2026-09-15）：网络持续失败时快速失败，交调用方本地兜底 ──
+_lbs_breaker = None
+_lbs_breaker_lock = threading.Lock()
+
+
+def _get_lbs_breaker():
+    """LBS 专用熔断器（懒加载单例，参数走 config/map）。
+
+    fail_threshold 次连续失败 → 开路 cooldown 秒；期间调用立即抛
+    CircuitBreakerOpenError，由 call_sync 转成 TencentLbsError，
+    调用方（travel POI 解析 / 路线估算）随即走本地估算兜底。
+    """
+    global _lbs_breaker
+    if _lbs_breaker is None:
+        with _lbs_breaker_lock:
+            if _lbs_breaker is None:
+                from backend.infra.circuit_breaker import CircuitBreaker
+
+                _lbs_breaker = CircuitBreaker(
+                    "tencent-lbs",
+                    fail_threshold=MAP.TENCENT_LBS_BREAKER_THRESHOLD,
+                    timeout=MAP.TENCENT_LBS_BREAKER_COOLDOWN,
+                )
+    return _lbs_breaker
 _sync_lock = threading.Lock()
 
 
@@ -298,12 +325,24 @@ def call_sync(path: str, params: "dict | list[tuple[str, str]] | None" = None,
     attempts = (MAP.TENCENT_LBS_RETRIES + 1) if MAP.TENCENT_LBS_RETRIES >= 0 else 1
     effective_ttl = MAP.TENCENT_LBS_CACHE_TTL if ttl is None else ttl
 
+    # ── 熔断快速失败（2026-09-15）───────────────────────────────
+    # 背景：网络抖动/LBS 侧不可达时，每次调用都要等满 connect+read 超时
+    # （3s+8s）× 重试；而一次行程规划会发起多次调用（POI 解析/逐段路线），
+    # 实测把首次请求拖到 6 分钟。熔断开路后立即失败 → 调用方既有的本地
+    # 估算兜底接管，延迟与正确性都不再被网络拖累。
+    breaker = _get_lbs_breaker()
+
     last_error: TencentLbsError | None = None
     for attempt in range(1, attempts + 1):
         _throttle()
         try:
-            resp = client.get(url, params=merged)
+            resp = breaker.call(lambda: client.get(url, params=merged))
             payload = _parse(resp, path)
+        except CircuitBreakerOpenError as e:
+            # 熔断开路：不再等超时，直接把"已降级"事实交给调用方兜底
+            raise TencentLbsError(
+                f"TencentLBS 熔断开路（{e}）——本次降级为本地估算", status=0
+            ) from e
         except httpx.HTTPError as e:
             last_error = TencentLbsError(f"网络错误: {e}", status=0)
             logger.warning("[TencentLBS] %s %s (第 %d/%d 次)",

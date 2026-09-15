@@ -29,10 +29,12 @@ def try_cs_prefilter(query: str, state: dict) -> dict | None:
     except Exception:
         return None
 
-    from backend.customer_service.router.domain_detector import get_domain_detector
+    from backend.customer_service.router.domain_detector import detect_cached
     from backend.customer_service.router.cs_router import get_cs_router
 
-    detection = get_domain_detector().detect(query)
+    # detect_cached：同 query 5min 内复用检测结果（检测只依赖 query、
+    # 与 session 无关），省掉重复请求的云端 embedding 往返（实测 1.0~3.4s）。
+    detection = detect_cached(query)
     if not detection.is_cs:
         return None
 

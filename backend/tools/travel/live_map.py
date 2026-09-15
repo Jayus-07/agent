@@ -69,6 +69,60 @@ def is_enabled() -> bool:
 # =============================================
 # 1. 通勤时长：真实路线
 # =============================================
+# 路段缓存（2026-09-15 性能优化）：同一段路线在一次会话/多天行程里可能被
+# 重复求解（排程、修复重排、校验都会问到），每次都是一次腾讯 API 往返。
+# 键用 4 位小数坐标（约 11m 精度）——排程用的坐标本身来自 POI 库，重复度极高。
+_LEG_CACHE: dict[tuple, tuple[float, dict]] = {}
+_LEG_CACHE_TTL = 900.0  # 15 分钟
+
+
+def _leg_cache_key(from_lat: float, from_lng: float, to_lat: float, to_lng: float) -> tuple:
+    return (round(from_lat, 4), round(from_lng, 4), round(to_lat, 4), round(to_lng, 4))
+
+
+_PREFETCH_BUDGET_S = 4.0  # 预热硬性时间预算：超时未回的段直接放弃（串行路径自会兜底）
+
+
+def prefetch_legs(pairs, max_workers: int = 6) -> None:
+    """并行预热路段缓存（best-effort，**有硬性时间预算**）。
+
+    pairs: 可迭代的 (from_lat, from_lng, to_lat, to_lng) 四元组。
+    排程循环是串行的，逐段等待 API 会让多天行程多花数秒；这里先把
+    「同一天内相邻 POI」的路线并发取回，串行循环随后直接命中缓存。
+
+    2026-09-15：早期版本用 pool.map（等最慢的一个）——网络抖动时会
+    把整个请求拖到分钟级。现改为 wait(timeout=预算)：到点即放弃未回
+    的段，绝不阻塞主流程（LBS 熔断开路时这些调用也会立即失败）。
+    """
+    unique = []
+    seen = set()
+    import time as _t
+    for p in pairs:
+        key = _leg_cache_key(*p)
+        if key in seen:
+            continue
+        seen.add(key)
+        hit = _LEG_CACHE.get(key)
+        if hit and _t.monotonic() - hit[0] < _LEG_CACHE_TTL:
+            continue
+        unique.append(p)
+    if not unique:
+        return
+    try:
+        from concurrent.futures import ThreadPoolExecutor, wait
+        pool = ThreadPoolExecutor(max_workers=min(max_workers, len(unique)))
+        try:
+            futures = [pool.submit(live_leg, *p) for p in unique]
+            _, not_done = wait(futures, timeout=_PREFETCH_BUDGET_S)
+            for f in not_done:
+                f.cancel()
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+    except Exception as e:  # noqa: BLE001 — 预热失败不影响主流程
+        from backend.shared.logger import logger
+        logger.debug(f"[TravelLiveMap] 路段预热失败（不致命）: {e}")
+
+
 def live_leg(from_lat: float, from_lng: float, to_lat: float, to_lng: float) -> dict | None:
     """真实路线通勤估算，返回与 ``routing.estimate_leg`` 同构的 dict。
 
@@ -81,6 +135,12 @@ def live_leg(from_lat: float, from_lng: float, to_lat: float, to_lng: float) -> 
     """
     if not is_enabled():
         return None
+
+    import time as _t
+    ck = _leg_cache_key(from_lat, from_lng, to_lat, to_lng)
+    cached = _LEG_CACHE.get(ck)
+    if cached and _t.monotonic() - cached[0] < _LEG_CACHE_TTL:
+        return cached[1]
 
     straight = routing.haversine_km(from_lat, from_lng, to_lat, to_lng)
     mode = routing.choose_mode(straight * T.TRAVEL_ROUTE_DETOUR_FACTOR)
@@ -103,13 +163,15 @@ def live_leg(from_lat: float, from_lng: float, to_lat: float, to_lng: float) -> 
         taxi = route.get("taxi_fare_cny")
         cost = float(taxi) if taxi else routing.leg_cost_cny(distance_km, mode)
 
-    return {
+    result = {
         "distance_km": round(distance_km, 2),
         "mode": mode,
         "minutes": minutes,
         "cost_cny": round(cost, 2),
         "source": SOURCE_LBS,
     }
+    _LEG_CACHE[ck] = (_t.monotonic(), result)
+    return result
 
 
 def install_live_map() -> bool:

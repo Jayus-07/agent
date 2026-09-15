@@ -198,8 +198,31 @@ def build_itinerary(
     return itinerary, notes
 
 
+def _prefetch_day_legs(pois_by_day: list[list[Poi]]) -> None:
+    """并行预热「同日相邻 POI」的路线（best-effort）。
+
+    2026-09-15 性能优化：排程循环逐段串行调用腾讯路线 API（实测 5 段 ≈5s）。
+    先把相邻段并发取回进缓存，串行循环随后直接命中。
+    预热顺序取 order_pois 的结果，与 schedule_day 的实际遍历一致；
+    午餐点位的插入会产生少量未覆盖段（数量小，可接受）。
+    """
+    try:
+        from backend.tools.travel.live_map import prefetch_legs
+
+        pairs = []
+        for pois in pois_by_day:
+            ordered = order_pois(list(pois))
+            for a, b in zip(ordered, ordered[1:]):
+                pairs.append((a.lat, a.lng, b.lat, b.lng))
+        if pairs:
+            prefetch_legs(pairs)
+    except Exception as e:  # noqa: BLE001 — 预热失败不阻塞排程
+        logger.debug("[TravelTransit] 路段预热跳过: %s", e)
+
+
 def transit_expert_node(state: dict) -> dict:
     """通勤专家节点：骨架 → 带时刻的行程。"""
+
     def _run(_state: dict) -> dict:
         brief = load_brief(state)
         candidates = {p["poi_id"]: Poi.model_validate(p)
@@ -214,6 +237,7 @@ def transit_expert_node(state: dict) -> dict:
             [candidates[pid] for pid in day if pid in candidates]
             for day in day_plan
         ]
+        _prefetch_day_legs(pois_by_day)
         itinerary, notes = build_itinerary(brief, pois_by_day)
         logger.info("[TravelTransit] 排程完成 days=%d legs=%d",
                     len(itinerary.days),
