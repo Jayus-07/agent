@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react'
 import { Copy, Check, RefreshCw, ThumbsUp, ThumbsDown, Pencil, Send } from 'lucide-react'
-import { feedbackService } from '@/services/feedback'
+import { feedbackService } from '@/api/feedback'
 
 interface Props {
   content: string; isUser: boolean; isLast: boolean
