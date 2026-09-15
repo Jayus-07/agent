@@ -268,5 +268,10 @@ start_frontend.bat / stop_frontend.bat
 - app 容器重启换 IP 后 APISIX 有 ~1-2min 502 窗口（`dns_resolver_valid: 5` 已缓解）；
   急用 `docker compose restart apisix`。oa-auth-service/system 容器无重启策略，
   Docker 引擎重启后需手动 `docker start oa-auth-service oa-auth-system`
+- **oa-auth 整栈曾被反复 SIGKILL(137)**（09:40/14:35/19:55/20:56 四轮，引擎崩溃连带）。
+  修复链路三步：① `docker start oa-auth-nacos oa-auth-mysql oa-auth-redis oa-auth-service oa-auth-system`
+  ② `docker network connect agent_agent-net <oa-auth容器>`（接入后 APISIX 可容器名直连）
+  ③ 前端重启即恢复。vpnkit 回环（host.docker.internal）在引擎异常后不可靠，
+  **容器名直连是首选**；本机 5432 通的是宿主机原生 PG，不是 agent-postgres（无宿主端口）
 - 杀端口脚本都带 docker 守卫：容器占端口时跳过，防误杀 com.docker.backend
 - 完整文档: `命令文档.md`、`docs/gateway-apisix-final-report.md`（迁移验收 + 回滚 runbook）
