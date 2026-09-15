@@ -759,20 +759,34 @@ class RAGPipeline:
 
         self._prepare_context(kb_id, question)
         try:
-            # 直接从 retrievers 获取相关 chunks（不经过 LLM）
-            chunks = []
-            # BM25 检索
+            # 读取 _prepare_context 注入的 metadata_filter（KB 路由 + QueryAnalyzer）
             try:
-                bm25_results = self.bm25.search(question, k=top_k)
+                from backend.rag.context import get_context
+                mf = get_context().metadata_filter
+            except Exception:
+                mf = None
+
+            chunks = []
+            # BM25 检索 —— LangChain BM25Retriever 的公开接口是 .invoke(query)
+            # （旧代码误用 .search，BM25 腿 100% 断，被软降级吞掉）；它不支持
+            # metadata 过滤，结果按 Chroma where 语义手工后过滤。
+            try:
+                bm25_results = self.bm25.invoke(question)
                 for doc in bm25_results:
+                    if not self._doc_matches_filter(getattr(doc, "metadata", {}), mf):
+                        continue
                     chunks.append(doc.page_content if hasattr(doc, 'page_content') else str(doc))
             except Exception as e:
                 # BM25 失败 → 降级只用向量检索（软降级），留痕；全部失败时 chunks 为空返回 ""
                 logger.warning(f"[RAG.retrieve] BM25 检索失败，跳过: {e}", exc_info=True)
 
-            # 向量检索
+            # 向量检索 —— CustomRetriever 的接口是 .retrieve（旧代码误用
+            # LangChain 的 get_relevant_documents，向量腿同样 100% 断）。
+            # 原生支持 metadata_filter，KB/域过滤在此生效。
             try:
-                vec_results = self.chunk_retriever.get_relevant_documents(question)
+                vec_results = self.chunk_retriever.retrieve(
+                    question, k=top_k, metadata_filter=mf,
+                )
                 for doc in vec_results[:top_k]:
                     content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
                     if content not in chunks:
@@ -792,6 +806,41 @@ class RAGPipeline:
             return "\n\n---\n\n".join(chunks[:top_k])
         finally:
             self._cleanup()
+
+    @staticmethod
+    def _doc_matches_filter(meta: dict, mf: dict | None) -> bool:
+        """按 Chroma where 表达式语义对单个文档 metadata 做匹配。
+
+        BM25Retriever 无 metadata 过滤参数（向量腿的过滤在 CustomRetriever
+        内部完成），BM25 命中结果在此统一后过滤，防止跨知识库泄漏。
+        """
+        if not mf:
+            return True
+
+        def match(cond, val) -> bool:
+            if isinstance(cond, dict):
+                if "$in" in cond:
+                    return val in cond["$in"]
+                if "$eq" in cond:
+                    return val == cond["$eq"]
+                if "$ne" in cond:
+                    return val != cond["$ne"]
+                return True
+            return val == cond
+
+        def where(expr: dict) -> bool:
+            for k, v in expr.items():
+                if k == "$and":
+                    if not all(where(sub) for sub in v):
+                        return False
+                elif k == "$or":
+                    if not any(where(sub) for sub in v):
+                        return False
+                elif not match(v, (meta or {}).get(k)):
+                    return False
+            return True
+
+        return where(mf)
 
     def _cleanup(self):
         """清理 contextvars（无论成功失败都执行）。"""
