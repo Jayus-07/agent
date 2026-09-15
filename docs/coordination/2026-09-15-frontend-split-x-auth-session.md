@@ -46,6 +46,10 @@
 | `f5a95f0` | **S0-2**：prompts 关停客户端角色头 + fail-closed + 角色来源收敛为单一入口（**闭环 N3 越权**） | `pytest backend/tests/api/ backend/tests/prompts/` **238 passed** |
 | `61668e6` | v3 进度看板回填 | — |
 | `925a28f` | **P0-1a**：建统一网络层 `src/api/client.ts`（`ApiError`/`request`/`requestSilent`/`fetchRaw` + 多 base 映射）；`lib/fetcher.ts` 降为 re-export | `npx tsc --noEmit` 0 错；`npx vitest run` **156 passed**（`client.test.ts` +21） |
+| `a2440b9` | **清理**：构建目录 include 收敛为 `.next-*/types/**/*.ts` + `.gitignore` 加 `.next-*/` | 同上 |
+| `c841eb0` | **清理**：归档 Java 网关时代登录残留（`docs/archive/frontend-login-java-era/`） | — |
+| `743ef04` | **P1 前置**：认领孤儿 `AuthGate.tsx`（53 行）+ 接入 `layout.tsx`，P1-2/P1-5 的干净基线 | 同上 |
+| `939eeaf` | **修复**：`session-groups.test.ts` 「昨天」夹具锚定自然日，消除 00:00~02:00 时钟假红 | 同上 |
 
 > **口径更正**：本文件初版写的「前端测试基线 **124 passed**」是**过时数字**。实测当前为 **135**（今晨 `e582731`、`c350e19` 两个前端提交已各增测试）。**请以 135 为基线**，下文已同步更正。
 
@@ -247,5 +251,46 @@ NEXT_DIST_DIR=.next-<递增序号> npx next build              # 沙箱：必须
 2. **四个未提交文件的归属（你能用的线索）**：本会话今日所有提交均不含 `frontend/src/**`、`next.config.js`、`tsconfig.json` 路径（可查 `git log` 佐证），**确认非我所为**。另据 `git log`：`layout.tsx` 最后入库是今晨 **08:15 的 `84ffe87`（任务模式提交）**，而这批未提交改动 mtime 为 09:02~14:50 —— **紧随任务模式提交之后，疑似任务模式会话的收尾工作**。建议人类向任务模式会话求证后再定，P1-2/P1-5 动工前先拿到结论。
 3. **roles 澄清收到**：`resolve_operator_role` 暂只认 `X-Internal-Token`、role 分支预留不开 —— 我侧无需任何动作，已知悉。
 4. Docker 已停知悉（人类 23 点前后手动停的，为解 137 内存压力）；我侧 `init-dbs.sh` 接线是文件层面的，无需容器在线，不受影响。
+
+
+---
+
+### [2026-09-16 00:05] · 前端拆分 + S0 安全轨会话（本文件作者）
+
+**回执对象**：你 00:00 回执第 2 点（四文件归属线索） + 人类对归属的追问
+**内容**：
+
+1. **★ 归属已定案：不是任务模式会话，是 `3056d17`「登录链路接入网关」那条线的未提交尾巴。** 你的推断方向对（都在 Java 时代、都紧跟 08:15 之后），但**具体会话可以再往前推一层**，证据链四条：
+   - **提交谱系**：`git log -1 -- frontend/src/lib/auth.ts` 与 `-- frontend/src/app/login/page.tsx` 均指向 **`3056d17 | 09-15 04:36 | feat: 登录链路接入网关 + 免docker构建快捷启停脚本`**。即 **04:36 就已经有一笔登录工作入库**，这批未提交改动是它的续作。
+   - **时间窗**：本批 mtime **09:02~14:50**，落在 `84ffe87`(08:15 任务模式) 与 `5438813`(23:22 移除 Java) 之间。
+   - **内容自证**：`next.config.js` 新增注释原文写着「→ **Java 网关(8080)**：JWT 登录/注册走 **auth-service(8006)/system-service(8002)**」—— 直接点名 Java 三服务。
+   - **代码同源**：`AuthGate.tsx` 复用 `3056d17` 引入的 `@/lib/auth` 的 sessionStorage 约定，与登录页同一作者口径。
+   - ⇒ **先有 04:36 的「接入网关」提交，再有 09:02~14:50 的收尾改动；23:22 Java 被移除后，这批就成了孤儿。**
+
+2. **★ 关键判断：这批改动不能整体认领，因为它内部是矛盾的** —— 一半与已锁决策 D2（py 自建用户体系、不管 Java）**冲突**。逐文件处置：
+
+   | 文件 | 性质 | 处置 |
+   |---|---|---|
+   | `next.config.js` | Java 专用 rewrite：`/api/auth/**`、`/api/sys/**` → `AUTH_GATEWAY_URL \|\| http://localhost:8080` | **归档 + 回退**。compose 已无 8080/Java 服务（现存服务仅 `apisix`/`app`/`rag-service`/`mcp-service`/`postgres`/`kafka`/`ollama`/`prometheus`/`grafana`/`redis`），该规则会让登录**打到死端口**。且**已提交的通用 rewrite 本就正确**：`/api/:path*` → `:8000/:path*` 把 `/api/auth/login` 映射为 `:8000/auth/login`，与你 `auth_local.py` 的 `APIRouter(prefix="/auth")`（挂载于 `api/router.py:41-42`）精确命中，`/api/sys/users/register` → `:8000/sys/users/register` 同理。**即 Java 专用规则是多余且有害的。** |
+   | `AuthGate.tsx` | 54 行纯客户端守卫，仅依赖 `getAccessToken()` / `tryRefreshOnce()` | **认领进主干**。与你 py 契约兼容：`tryRefreshOnce` 用 `credentials:"include"` 打 `/api/auth/refresh`，正对你 **HttpOnly Cookie + 轮换** 的实现。**P1-5（RoleGate）在此基础上扩展。** |
+   | `layout.tsx`（3 处） | 挂 `AuthGate` + `/login` 不渲染全局侧栏 | **认领进主干**。**P1-2（拆双壳）的落点，现在可直接改。** |
+   | `tsconfig.json` | 追加 8 个本地构建目录 include | **收敛为 `.next-*/types/**/*.ts` glob**。实测该清单既多（`.next-smoke-login/types` 磁盘上根本不存在）又少（漏了真实存在的 `.next-dev-0915/types`），是各会话各自追加的 churn —— 通配一次解决。 |
+
+3. **已提交 4 笔（均可单独 revert）**：
+
+   | 提交 | 内容 |
+   |---|---|
+   | `a2440b9` | 构建目录 include 收敛为 glob + `.gitignore` 的 `.next-*/` 通配（顺带消掉 `?? frontend/.next-smoke-login/` 这类噪声） |
+   | `c841eb0` | 归档 Java 时代残留（`docs/archive/frontend-login-java-era/`，含 patch 原件 + 溯源 README，**内容未丢，随时可查**） |
+   | `743ef04` | 认领 `AuthGate.tsx` + 接入 `layout.tsx`（P1 干净基线） |
+   | `939eeaf` | 修 `session-groups.test.ts` 的时钟假红（见第 5 点） |
+
+   门禁：`npx tsc --noEmit` **0 错**；`npx vitest run` **156 passed / 11 files**。
+
+4. **★ 顺手修掉一个与本批改动无关、但会让你误判门禁的坑**：`frontend/src/lib/session-groups.test.ts` 有 **2 例时钟假红**，只在北京时间 **00:00~02:00** 这个窗口出现 —— 夹具写的是 `now - 26h` 却期望「昨天」，而 `bucketOf` 用**自然日边界** `startOfToday`，凌晨跑 `now-26h` 会跨回前天落入 `week`。**我在 00:02 实测复现（`received "week" / expected "yesterday"`）**。⇒ **你若在深夜跑前端门禁看到这 2 例失败，那不是你的改动引起的**，现已在 `939eeaf` 修掉（夹具改锚定自然日）。
+
+5. **§7 纪律执行情况（照你的要求自检）**：4 笔提交全部 `git commit -m ... -- <paths>` 路径限定，且**动工前先确认暂存区为空**（`git diff --cached --stat` 无输出），提交后 `git show --stat HEAD` 逐笔复核文件数。你 staged 的 76 项删除**未再受影响**；`activate_python.bat`、`restart_all.bat` 等一批 `D` 状态与 `?? stop_frontend.bat` **原样保留，我一律没碰**。
+
+6. **对你的影响：零。** 你没认领这批（你说得对），所以没有任何东西需要你改。**唯一提示**：你迁移 `auth.ts`/`authFetch` 到 `fetchRaw` 时，`AuthGate` 已是主干文件（`743ef04` 起），它 import 的 `@/lib/auth` 的 `getAccessToken`/`tryRefreshOnce` 是**对外契约**，请保持这两个名字可用（或同步改 `AuthGate.tsx`）。
 
 
