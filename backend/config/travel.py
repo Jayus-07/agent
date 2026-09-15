@@ -15,12 +15,21 @@ load_dotenv()
 # =============================================
 TRAVEL_ENABLED = os.getenv("TRAVEL_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 
-# 独立子图运行时
-TRAVEL_GRAPH_RECURSION_LIMIT = int(os.getenv("TRAVEL_GRAPH_RECURSION_LIMIT", "25"))
-# 校验失败后的局部修复轮数上限（防止 repair ↔ validate 死循环）
-TRAVEL_MAX_REPAIR_ROUNDS = int(os.getenv("TRAVEL_MAX_REPAIR_ROUNDS", "2"))
 # 专家调度循环上限（与 CS_EXPERT_MAX_LOOPS 同语义，兜底防御）
 TRAVEL_MAX_STEPS = int(os.getenv("TRAVEL_MAX_STEPS", "12"))
+# 校验失败后的局部修复轮数上限（防止 repair ↔ validate 死循环）
+TRAVEL_MAX_REPAIR_ROUNDS = int(os.getenv("TRAVEL_MAX_REPAIR_ROUNDS", "2"))
+
+# 独立子图运行时。
+# **默认值由 TRAVEL_MAX_STEPS 派生，不能各自硬编码**：一个调度回合要花 2 个
+# 图步（supervisor 自己 + 它跳到的那个节点），所以 recursion_limit 必须显著
+# 大于 2×TRAVEL_MAX_STEPS，否则等在业务护栏前面的 LangGraph 兜底会先抛
+# GraphRecursionError —— 用户看到的是「服务暂时不可用」且行程丢失，而不是
+# 「已达步数上限，如实收尾」。原实现硬编码 25 配 MAX_STEPS=12：护栏要等
+# step_count 到 12（≈第 24~26 图步）才判定，实测永远轮不到生效。
+# 余量 10 步留给首尾节点（slot_filler / reporter）；25 是 LangGraph 默认下限。
+TRAVEL_GRAPH_RECURSION_LIMIT = int(os.getenv(
+    "TRAVEL_GRAPH_RECURSION_LIMIT", str(max(25, TRAVEL_MAX_STEPS * 2 + 10))))
 
 # =============================================
 # checkpointer（与 CS / 主图同策略）

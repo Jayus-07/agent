@@ -10,10 +10,15 @@
          └────────── repair ←── 校验失败且未达轮数上限
   validate 通过 / 无法修复 / 轮数用尽 → report
 
-三条终止护栏：
+四条终止护栏：
   1. TRAVEL_MAX_STEPS —— 全局步数上限（防未知循环）
   2. TRAVEL_MAX_REPAIR_ROUNDS —— 修复轮数上限（防 validate↔repair 乒乓）
-  3. 任一专家失败且无产物 —— 直接 report，把失败如实告知而不是空转重试
+  3. repair_stalled —— 修复器明确回报「本轮违反无自动修复手段」（防 repair 原地打转）
+  4. 任一专家失败且无产物 —— 直接 report，把失败如实告知而不是空转重试
+
+护栏的共同前提：**本节点只认状态里的事实，不认上游节点声明的 stage**。
+任何「判定收尾」的分支都必须落一个可被 decide() 读到的事实，否则只是把
+stage 写成 report 而路由照旧 —— repair 的无法修复分支就曾因此死循环。
 """
 from __future__ import annotations
 
@@ -131,6 +136,15 @@ def decide(state: dict) -> TravelDecision:
         return TravelDecision(
             TravelStage.REPORT,
             f"校验通过（提示 {len(report.warnings)} 项）",
+        )
+
+    # 修复器已明确回报「本轮违反无自动修复手段」——再调一次结果必然相同，
+    # 直接收尾交由 reporter 如实披露（顺序在轮数判定之前：这种情况往往是
+    # 第 1 轮就卡住，轮数还是 0，按轮数判会误判回 REPAIR）。
+    if state.get("repair_stalled"):
+        return TravelDecision(
+            TravelStage.REPORT,
+            f"存在 {len(report.errors)} 项违反且无自动修复手段，如实披露",
         )
 
     repair_rounds = state.get("repair_rounds", 0)

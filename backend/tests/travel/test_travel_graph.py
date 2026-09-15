@@ -130,6 +130,28 @@ class TestSupervisorDecide:
         )
         assert decide(state).stage is TravelStage.VALIDATE
 
+    def test_stalled_repair_terminates(self):
+        """修复器回报「无自动修复手段」后不得再回 REPAIR。
+
+        回归用例（曾致 GraphRecursionError）：repair 的「无法修复」分支原先
+        既不推进 repair_rounds 也不清 validation，而 supervisor 只认状态事实、
+        不认上游声明的 stage → 永远判 REPAIR 原地打转，直到撞上
+        LangGraph 的 recursion_limit，用户侧表现为「服务暂时不可用」且行程丢失。
+        """
+        report = ValidationReport(violations=[Violation(
+            code="PACE_TOO_INTENSE", level=LEVEL_ERROR, message="x")])
+        state = _state(
+            expert_history=[{"expert": e} for e in ("poi", "transit", "budget", "risk")],
+            candidates=[{"poi_id": "a"}],
+            itinerary=save_itinerary(_empty_itinerary()),
+            validation=save_validation(report),
+            repair_rounds=0,          # 关键：轮数还是 0，按轮数判会误判回 REPAIR
+            repair_stalled=True,
+        )
+        got = decide(state)
+        assert got.stage is TravelStage.REPORT
+        assert "自动修复" in got.reason
+
 
 class TestTravelPrefilter:
     def test_trip_request_detected(self):
@@ -267,3 +289,16 @@ class TestEndToEnd:
                 assert item["end"] <= poi["close_time"], (
                     f"{poi['name']} 于 {item['end']} 结束，晚于闭馆 "
                     f"{poi['close_time']}")
+
+
+class TestRuntimeGuards:
+    """护栏参数之间的数量关系 —— 配错就等于没有护栏。"""
+
+    def test_recursion_limit_outlasts_step_guard(self):
+        """recursion_limit 必须留够步数，否则 LangGraph 兜底抢在业务护栏之前抛错。
+
+        一个调度回合 ≈ 2 个图步（supervisor + 它跳到的节点），故上限至少要有
+        2×TRAVEL_MAX_STEPS；留不出余量时 step_count 永远到不了护栏线，
+        用户看到的是 GraphRecursionError，而不是「已达步数上限，如实收尾」。
+        """
+        assert T.TRAVEL_GRAPH_RECURSION_LIMIT > 2 * T.TRAVEL_MAX_STEPS

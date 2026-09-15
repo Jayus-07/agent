@@ -329,8 +329,19 @@ def repair_node(state: dict) -> dict:
     log = list(state.get("repair_log", [])) + [a.to_dict() for a in actions]
 
     if repaired is None:
+        # 本轮没有任何可自动执行的动作（典型：违规项全是必去地点，而必去不可删）。
+        #
+        # **必须显式打上 repair_stalled**：supervisor 不看本节点返回的 stage，
+        # 只认状态里的事实（repair_rounds / validation / …）。此前这个分支既不
+        # 推进 repair_rounds 也不清 validation，于是 supervisor 永远判 REPAIR →
+        # 原地打转，直到撞上 LangGraph 的 recursion_limit 抛 GraphRecursionError
+        # （实测：厦门2天+必去鼓浪屿，第 6 步起无限循环，用户侧表现为
+        # 「服务暂时不可用」且行程直接丢失）。
+        # 这个标记是「本次违反没有自动修复手段」的唯一事实来源，
+        # 与「修了 N 轮仍没修好」不是一回事，不要并进同一个计数。
         return {
             "stage": "report",
+            "repair_stalled": True,
             "repair_log": log,
             "notes": list(state.get("notes", [])) + [
                 "存在无法自动调整的约束冲突（可能因地点均为必去项），"
@@ -343,5 +354,6 @@ def repair_node(state: dict) -> dict:
         "validation": None,          # 清除 → supervisor 触发复检
         "stage": "validate",
         "repair_rounds": repaired.repair_rounds,
+        "repair_stalled": False,     # 有动作被真正执行 → 解除终态标记
         "repair_log": log,
     }

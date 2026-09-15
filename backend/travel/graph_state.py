@@ -71,6 +71,10 @@ class TravelGraphState(TypedDict, total=False):
     itinerary: dict | None
     validation: dict | None
     repair_rounds: int
+    # 「本次违反无自动修复手段」的终态标记（repair 节点写、supervisor 读）。
+    # 与 repair_rounds 分工不同：轮数是「试了几次」，本标记是「试也没用」。
+    # 缺了它，repair 会被反复调起（同一状态必得同一决策）直到撞 recursion_limit。
+    repair_stalled: bool
     repair_log: list[dict]
     notes: list[str]
 
@@ -206,6 +210,7 @@ def planning_reset() -> dict:
         "itinerary": None,
         "validation": None,
         "repair_rounds": 0,
+        "repair_stalled": False,
         "repair_log": [],
         "expert_history": [],
         "last_expert_result": {},

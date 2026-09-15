@@ -14,8 +14,9 @@ from backend.tests.travel.conftest import (
     make_itinerary,
     make_poi,
 )
+from backend.travel.graph_state import save_itinerary, save_validation
 from backend.travel.models.brief import TravelBrief
-from backend.travel.repair import repair_itinerary
+from backend.travel.repair import repair_itinerary, repair_node
 from backend.travel.validator import check_itinerary
 
 
@@ -192,3 +193,55 @@ class TestRepairPreservesContract:
         repaired, _ = repair_itinerary(it, check_itinerary(it))
         assert repaired.sources == ["seed:local"]
         assert repaired.warnings == ["示例数据声明"]
+
+
+class TestStalledRepairIsTerminal:
+    """修复节点必须把「无自动修复手段」写成一个 supervisor 读得到的事实。
+
+    P0 回归：该分支原先只写 ``stage="report"``，而 supervisor **不看 stage**、
+    只认状态事实，于是被反复调起直到 GraphRecursionError。
+    """
+
+    def test_unfixable_marks_stalled(self):
+        """必去项自身违规 → 无动作可执行 → 必须打上终止标记。"""
+        poi = make_poi(poi_id="must", name="必去馆", open_time="09:00",
+                       close_time="17:00", required=True)
+        it = make_itinerary(
+            brief=TravelBrief(destination="测试城", days=1, must_go=["必去馆"]),
+            days=[make_day(items=[
+                make_item(title="必去馆", start="18:00", end="19:30", poi=poi),
+            ])],
+        )
+        state = {"itinerary": save_itinerary(it),
+                 "validation": save_validation(check_itinerary(it))}
+
+        out = repair_node(state)
+
+        assert out["repair_stalled"] is True
+        assert out["stage"] == "report"
+        # 行程原样保留（必去项不可删），只把说明写进 notes 交由 reporter 披露
+        assert "itinerary" not in out
+        assert any("无法自动调整" in n for n in out["notes"])
+
+    def test_successful_repair_clears_stalled(self):
+        """有动作真正执行时必须解除标记，否则后续轮次会被误判成终态。"""
+        late = make_poi(poi_id="late", name="深夜馆", open_time="09:00",
+                        close_time="17:00")
+        ok = make_poi(poi_id="ok", name="正常馆", open_time="09:00",
+                      close_time="17:00")
+        it = make_itinerary(
+            brief=TravelBrief(destination="测试城", days=1),
+            days=[make_day(items=[
+                make_item(title="正常馆", start="09:00", end="10:30", poi=ok),
+                make_item(title="深夜馆", start="18:00", end="19:30", poi=late),
+            ])],
+        )
+        state = {"itinerary": save_itinerary(it),
+                 "validation": save_validation(check_itinerary(it)),
+                 "repair_stalled": True, "repair_rounds": 0}
+
+        out = repair_node(state)
+
+        assert out["repair_stalled"] is False
+        assert out["stage"] == "validate"
+        assert out["repair_rounds"] == 1
