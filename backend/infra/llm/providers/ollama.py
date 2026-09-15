@@ -6,8 +6,7 @@ ollama.py — Ollama Provider（本地部署）
   - get_ollama_balance(): 返回本地免费状态
 """
 import os
-
-from langchain_ollama import ChatOllama
+from typing import TYPE_CHECKING
 
 from backend.config import (
     LLM_CONTEXT_LENGTH,
@@ -18,8 +17,11 @@ from backend.config import (
 )
 from backend.shared.logger import logger
 
+if TYPE_CHECKING:
+    from langchain_ollama import ChatOllama
 
-def build_ollama(model_name: str) -> ChatOllama:
+
+def build_ollama(model_name: str) -> "ChatOllama":
     """构建 Ollama 模型实例。
 
     base_url 优先级：环境变量 OLLAMA_BASE_URL > backend/config/llm.py 默认值。
@@ -27,6 +29,10 @@ def build_ollama(model_name: str) -> ChatOllama:
     同时 Ollama（llama.cpp）对相同 prompt 前缀自动复用 KV Cache（prefix caching），
     多轮同会话请求 TTFT 进一步下降。
     """
+    # 延迟导入：langchain_ollama 顶层导入连带 torch/transformers（实测 ~8s），
+    # 而本模块经 factory 被 backend.infra.llm 的高频导入链引用。
+    from langchain_ollama import ChatOllama
+
     base_url = os.getenv("OLLAMA_BASE_URL") or OLLAMA_BASE_URL
     return ChatOllama(
         model=model_name,

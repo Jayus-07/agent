@@ -24,11 +24,20 @@ from backend.observability.tracer import (
 from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401  (公共 fixture)
 
 
+async def _stub_doc_metadata(self, full_text, base_meta, parent_span_id="", chunks_text=None):
+    """_build_doc_metadata 的即时替身：真实实现走 LLM 摘要/分类/人名链
+    （云 API 或 30s 超时降级），单次 sync() 拖 5~8s。trace 断言只关心
+    index_metadata span 的事件序列（span 在 sync() 内收尾），stub 不影响。"""
+    return dict(base_meta)
+
+
 @pytest.fixture(autouse=True)
 def _zero_embed_backoff(monkeypatch):
     """重试退避清零：本文件多条用例走「重试耗尽→降级」失败路径，
     生产退避 1.5^n（5 次 ≈12s/批）会真实 sleep，拖慢全量但不增加覆盖。"""
     monkeypatch.setattr(indexer_mod, "EMBED_RETRY_BACKOFF_BASE", 0.0)
+    monkeypatch.setattr(indexer_mod.IncrementalIndexer, "_build_doc_metadata",
+                        _stub_doc_metadata)
 
 
 @pytest.fixture

@@ -12,18 +12,21 @@ factory.py — LLMFactory: 多 Provider 注册 + 运行时切换
   - _LLMProxy 代理对象（那是 proxy.py 的事）
 """
 
-import threading
-from typing import Optional
+from __future__ import annotations
 
-from langchain_core.language_models.chat_models import BaseChatModel
+import threading
+from typing import TYPE_CHECKING, Optional
+
+# 注：BaseChatModel 仅作类型标注（TYPE_CHECKING 化）—— langchain_core 1.4.x 的
+# chat_models 模块在环境装了 transformers 时会连带导入 torch（实测 ~8s），
+# 而本模块处在 backend.infra.llm 的高频导入链上。
+# providers/* 的延迟导入同理（langchain_openai / langchain_ollama 顶层导入重）。
+if TYPE_CHECKING:
+    from langchain_core.language_models.chat_models import BaseChatModel
 
 from backend.config import DEEPSEEK_API_KEY, LLM_MODEL, MINIMAX_API_KEY, QWEN_API_KEY
 from backend.config.llm import OLLAMA_ENABLED
 from backend.infra.llm.models import AVAILABLE_MODELS
-from backend.infra.llm.providers.deepseek import build_deepseek, get_deepseek_balance
-from backend.infra.llm.providers.minimax import build_minimax, get_minimax_balance
-from backend.infra.llm.providers.ollama import build_ollama, get_ollama_balance
-from backend.infra.llm.providers.qwen import build_qwen, get_qwen_balance
 from backend.shared.logger import logger
 
 
@@ -111,13 +114,18 @@ class LLMFactory:
 
         provider = self._get_provider(model_name)
 
+        # providers/* 延迟导入（见文件顶部注释）
         if provider == "ollama":
+            from backend.infra.llm.providers.ollama import build_ollama
             return build_ollama(model_name)
         elif provider == "deepseek":
+            from backend.infra.llm.providers.deepseek import build_deepseek
             return build_deepseek(model_name)
         elif provider == "minimax":
+            from backend.infra.llm.providers.minimax import build_minimax
             return build_minimax(model_name)
         elif provider == "qwen":
+            from backend.infra.llm.providers.qwen import build_qwen
             return build_qwen(model_name)
         else:
             raise ValueError(f"未知 provider: {provider}")
@@ -148,13 +156,18 @@ class LLMFactory:
         if provider is None:
             provider = self._get_provider(self._current_model)
 
+        # providers/* 延迟导入（见文件顶部注释）
         if provider == "deepseek":
+            from backend.infra.llm.providers.deepseek import get_deepseek_balance
             return get_deepseek_balance()
         elif provider == "minimax":
+            from backend.infra.llm.providers.minimax import get_minimax_balance
             return get_minimax_balance()
         elif provider == "qwen":
+            from backend.infra.llm.providers.qwen import get_qwen_balance
             return get_qwen_balance()
         elif provider == "ollama":
+            from backend.infra.llm.providers.ollama import get_ollama_balance
             return get_ollama_balance()
         else:
             return {"ok": False, "error": f"不支持的 provider: {provider}"}

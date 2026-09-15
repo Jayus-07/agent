@@ -13,6 +13,14 @@ import pytest
 from backend.skills.base import BaseSkill, _CompatSkill, classify_error
 
 
+@pytest.fixture(autouse=True)
+def _zero_retry_backoff(monkeypatch):
+    """重试退避清零：BaseSkill 重试间隔 RETRY_BACKOFF_BASE**(n+1)（1.5^2+1.5^3
+    ≈3.75s/耗尽）是纯 sleep，不增加覆盖。delay 在运行期读模块属性，patch 生效。"""
+    from backend.skills import base as base_mod
+    monkeypatch.setattr(base_mod, "RETRY_BACKOFF_BASE", 0.0)
+
+
 def _state(step_id="step_1", params=None):
     return {
         "current_step_id": step_id,

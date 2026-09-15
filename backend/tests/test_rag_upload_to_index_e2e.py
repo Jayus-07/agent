@@ -181,6 +181,13 @@ def index_env(tmp_path, monkeypatch):
         FakeVectorDB(), FakeDocDB(), FakeBM25Store(), FakeEmbedding(),
     )
 
+    # _build_doc_metadata 即时替身：真实实现走 LLM 摘要/分类链，每次 sync()
+    # 打真实 API 拖 2~5s；本文件只验证上传→索引→注册表的链路语义。
+    async def _stub_doc_metadata(full_text, base_meta, parent_span_id="", chunks_text=None):
+        return dict(base_meta)
+
+    monkeypatch.setattr(IncrementalIndexer, "_build_doc_metadata", _stub_doc_metadata)
+
     def make_indexer(**overrides):
         kwargs = dict(
             docs_dir=str(docs_dir), vectordb=vectordb, doc_db=doc_db,

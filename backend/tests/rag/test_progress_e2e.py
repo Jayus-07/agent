@@ -20,6 +20,22 @@ from backend.observability import tracer as tracer_mod
 from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401
 
 
+async def _stub_doc_metadata(self, full_text, base_meta, parent_span_id="", chunks_text=None):
+    """_build_doc_metadata 的即时替身：真实实现走 LLM 摘要/分类/人名链，
+    每次被测的 sync() 都会打真实 API（14~28s），本文件只验证进度事件链路。
+    index_metadata span 由 sync() 自己收尾，stub 不影响事件序列断言。"""
+    return dict(base_meta)
+
+
+@pytest.fixture(autouse=True)
+def _stub_metadata_llm(monkeypatch):
+    from backend.rag.indexing import indexer as indexer_mod
+    monkeypatch.setattr(IncrementalIndexer, "_build_doc_metadata", _stub_doc_metadata)
+    # MagicMock 的 embed 返回值会让 embed 链走「重试耗尽→降级」，生产退避
+    # 1.5^n 真实 sleep（28s/call 的主因）。清零后重试逻辑仍被覆盖。
+    monkeypatch.setattr(indexer_mod, "EMBED_RETRY_BACKOFF_BASE", 0.0)
+
+
 # ==========================================================
 # Fixtures
 # ==========================================================

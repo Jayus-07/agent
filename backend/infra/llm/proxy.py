@@ -10,13 +10,20 @@ proxy.py — _LLMProxy 代理对象 + 模块级 llm 单例
   - P1-7: 韧性链 — 瞬时错误显式重试（指数退避）→ 熔断开路/重试耗尽时
     切备用模型（LLM_FALLBACK_MODEL）→ 最终降级为固定话术
 """
+from __future__ import annotations
+
 import asyncio
 import contextvars as _contextvars
 import inspect
 import threading
 import time
 
-from langchain_core.language_models.chat_models import BaseChatModel
+from typing import TYPE_CHECKING
+
+# BaseChatModel 仅作类型标注（TYPE_CHECKING 化）—— langchain_core 1.4.x 的
+# chat_models 在装了 transformers 的环境下连带导入 torch（实测 ~8s）。
+if TYPE_CHECKING:
+    from langchain_core.language_models.chat_models import BaseChatModel
 
 from backend.config import LLM_MODEL
 from backend.config.llm import (

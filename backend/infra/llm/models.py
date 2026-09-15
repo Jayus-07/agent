@@ -7,12 +7,17 @@ models.py — Provider 注册表 + 可用模型清单
   3. 在 providers/ 目录实现 build_xxx() 和 get_xxx_balance() 函数
 """
 
-from langchain_ollama import ChatOllama
+from __future__ import annotations
 
+from typing import Any
+
+# 注：不要在这里顶层 import langchain_ollama —— 实测它连带 torch/transformers
+# （~8s），而本模块处在 backend.infra.llm 的高频导入链上。registry 的 class
+# 字段无任何消费方（工厂走 build_xxx()），置 None 即可。
 # Provider 注册表：provider_name → {class, default_model, needs_api_key}
-PROVIDERS = {
+PROVIDERS: dict[str, dict[str, Any]] = {
     "ollama": {
-        "class": ChatOllama,
+        "class": None,  # 懒加载（langchain_ollama.ChatOllama，见 providers/ollama.py）
         "default_model": "qwen2.5:3b",
         "needs_api_key": False,
     },

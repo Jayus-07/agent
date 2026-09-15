@@ -13,8 +13,8 @@ from __future__ import annotations
 import os
 
 import pytest
-
-os.environ.setdefault("RERANKER_BACKEND", "local")
+# 注：不要在这里设 RERANKER_BACKEND —— 该环境变量无任何代码消费（真开关是
+# ENV_MODE，见 backend/rag/reranker.py get_reranker_backend），设了只是死变量。
 
 
 def _get_gen_eval_ids() -> list[str]:

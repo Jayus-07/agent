@@ -15,13 +15,19 @@ LangChain LCEL 主 Chain
   L3 长期: PostgreSQL + pgvector (via MemoryRepository)
   MemoryManager 统一管理三层，chain 只持有引用。
 """
-from langchain_classic.chains import create_history_aware_retriever, create_retrieval_chain
-from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+# 注：langchain_classic 的 chains/retrievers 工厂延迟到 _build_chains 内导入 ——
+# 它们顶层连带 langchain_text_splitters → sentence_transformers/transformers
+# （-X importtime 实测合计 ~17s），而 backend.rag.chain 在大量测试/路由模块
+# 的导入链上，模块级导入会让所有进程陪跑；仅真正构建 RAG 链时才需要。
+
+from __future__ import annotations
 
 # (MultiQuery 已迁移至 retrieval/multi_query.py)
-from langchain_classic.retrievers import ContextualCompressionRetriever
+# 注：langchain_core.prompts 也延迟 —— `from langchain_core.prompts import
+# ChatPromptTemplate` 会触发 prompts.base → output_parsers.base →
+# transformers/torch（~7s，langchain_core 1.4.x 行为）；prompt 构建
+# 只发生在 _build_chains 内，故下沉到 _build_*_prompt 助手里。
 from langchain_core.messages import AIMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.runnables import RunnableLambda
 
 from backend.config import (
@@ -158,6 +164,8 @@ def _mark_gate_degraded(layer: str, action: str, error, span=None) -> None:
 
 def _build_contextualize_prompt() -> ChatPromptTemplate:
     """从 prompt_service 构建查询重写 ChatPromptTemplate。"""
+    # 延迟导入（见文件顶部注释）
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
     try:
         from backend.prompts.service import prompt_service
         prompt_service.get_template_sync("rag.contextualize")
@@ -172,6 +180,8 @@ def _build_contextualize_prompt() -> ChatPromptTemplate:
 
 def _build_qa_prompt() -> ChatPromptTemplate:
     """从 prompt_service 构建 QA ChatPromptTemplate。"""
+    # 延迟导入（见文件顶部注释）
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
     system_text = DEFAULT_QA_SYSTEM
     try:
         from backend.prompts.service import prompt_service
@@ -190,6 +200,8 @@ def _build_qa_prompt() -> ChatPromptTemplate:
 
 def _build_document_prompt() -> PromptTemplate:
     """从 prompt_service 构建证据格式化 PromptTemplate。"""
+    # 延迟导入（见文件顶部注释）
+    from langchain_core.prompts import PromptTemplate
     template_str = DEFAULT_DOCUMENT_TEMPLATE
     try:
         from backend.prompts.service import prompt_service
@@ -313,6 +325,14 @@ class RAGChain:
           ⑤ ChunkLevel     — Hybrid Retrieval:  向量 + BM25 混合检索
           ⑥ LLM Generate   — 带引用标注 [1][2] 的最终回答
         """
+        # 延迟导入（见模块顶部注释）：避开 sentence_transformers 导入链 ~17s
+        from langchain_classic.chains import (
+            create_history_aware_retriever,
+            create_retrieval_chain,
+        )
+        from langchain_classic.chains.combine_documents import (
+            create_stuff_documents_chain,
+        )
         # Citation Filter: 注入文档序号 + 自定义文档格式，使 LLM 可内联引用 [1][2]
         def _index_docs(input_dict):
             docs = input_dict.get("context", [])
@@ -490,6 +510,7 @@ class RAGChain:
         # ── ② Rerank: CrossEncoder 全局重排序（包在 MultiQuery 外层）──
         # 变体先各自检索合并去重，重排只在合并结果上执行一次；
         # 避免每个改写变体各自触发一次重排（2026-09-03 事故性能问题）
+        from langchain_classic.retrievers import ContextualCompressionRetriever
         retriever = ContextualCompressionRetriever(
             base_compressor=RerankCompressor(),
             base_retriever=retriever,
