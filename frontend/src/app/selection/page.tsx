@@ -20,7 +20,7 @@ const TrendPanels = dynamic(() => import('./TrendPanels'), {
 import {
   selectionService, RecommendationItem, TrendsData,
 } from '@/services/selection'
-import { competitorService } from '@/services/competitor'
+import { competitorService } from '@/api/competitor'
 import { useToast } from '@/components/shared/Toast'
 
 function scoreColor(total: number): string {

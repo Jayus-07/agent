@@ -13,7 +13,7 @@ import {
   Tooltip, CartesianGrid,
 } from 'recharts'
 import { X } from 'lucide-react'
-import { competitorService, type PriceSnapshot, type PriceChange } from '@/services/competitor'
+import { competitorService, type PriceSnapshot, type PriceChange } from '@/api/competitor'
 import { clsx } from 'clsx'
 
 interface Props {

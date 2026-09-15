@@ -17,7 +17,7 @@ import {
   Smartphone, Clock, Loader2, Database,
 } from 'lucide-react'
 import dynamic from 'next/dynamic'
-import { competitorService, type WatchItem, type CompetitorStats, type CookieStatus, type CookieTestResult, type QrLoginResult, type QrPollResult, type RetryResult } from '@/services/competitor'
+import { competitorService, type WatchItem, type CompetitorStats, type CookieStatus, type CookieTestResult, type QrLoginResult, type QrPollResult, type RetryResult } from '@/api/competitor'
 
 // 两个弹窗都含 recharts，懒加载避免拖慢页面首帧
 const PriceHistoryModal = dynamic(() => import('@/components/competitor/PriceHistoryModal'), { ssr: false })
