@@ -21,11 +21,13 @@ P0 架构重构 (ENV_MODE 双模式):
 - RERANK_TOP_K: 返回文档数，默认 8
 - RERANK_SCORE_THRESHOLD: 分数过滤阈值，默认 0.3
 """
+from __future__ import annotations
+
 import os
 import math
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import requests
 
@@ -36,7 +38,11 @@ try:
 except ImportError:
     DASHSCOPE_AVAILABLE = False
 
-from sentence_transformers import CrossEncoder
+# sentence_transformers 延迟导入：顶层 import 连带 torch/transformers（~8s），
+# 仅 ENV_MODE=local 真正加载本地 CrossEncoder 时才需要（LazyLocalModelLoader）。
+if TYPE_CHECKING:
+    from sentence_transformers import CrossEncoder
+
 from langchain_core.documents.compressor import BaseDocumentCompressor
 from backend.config import (
     ENV_MODE,
@@ -70,6 +76,7 @@ class LocalModelLoader:
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
+                    from sentence_transformers import CrossEncoder
                     cls._instance = CrossEncoder(RERANKER_MODEL_PATH, device=RERANKER_DEVICE)
                     cls._loaded_at = __import__('datetime').datetime.now().isoformat()
                     logger.info(f"本地 reranker 模型懒加载完成：{RERANKER_MODEL_PATH} (device={RERANKER_DEVICE}, at {cls._loaded_at})")
