@@ -350,12 +350,6 @@ class TestErrorPaths:
 # ==========================================================
 
 class TestBoundaries:
-    @pytest.mark.skip(reason="2d627d7: 内存 deque 已删除，maxlen 行为由 SQLite _MAX_ROWS 取代")
-    def test_deque_maxlen_caps_records(self):
-        # 旧实现测 _records deque(maxlen=3) — 新架构 SQLite _MAX_ROWS=5000
-        # SQLite 容量由 trace_store 控制，不在 TraceCollector
-        pass
-
     def test_empty_records_compute_metrics(self, fresh_collector):
         m = fresh_collector.compute_metrics()
         assert m["total_requests"] == 0
@@ -476,16 +470,15 @@ class TestQueryAPI:
     def test_get_returns_none_for_unknown(self, fresh_collector):
         assert fresh_collector.get("nope") is None
 
-    def test_clear_removes_all_records(self, fresh_collector):
+    def test_clear_is_noop_keeps_records(self, fresh_collector):
+        """2d627d7 起 clear() 为兼容保留的 no-op：数据生命周期归 SQLite trace_store。"""
         for q in ["q1", "q2"]:
             t = fresh_collector.start(q)
             fresh_collector.finish(t, "", 0, "")
         _flush()
         assert len(fresh_collector.list()) == 2
-        # 2d627d7: clear() 保留兼容不做操作；SQLite 数据由 trace_store 控制
-        fresh_collector.clear()
-        # 验证 clear() 不抛异常
-        assert fresh_collector.list() is not None
+        fresh_collector.clear()  # 兼容入口，不得抛异常
+        assert len(fresh_collector.list()) == 2  # no-op：记录必须原样保留
 
 
 # ==========================================================

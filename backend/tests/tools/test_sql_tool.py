@@ -126,38 +126,47 @@ class TestExecuteSQLToolSecurity:
     """execute_sql_tool 安全性测试"""
     
     def test_sql_injection_blocked(self):
-        """verify SQL injection is blocked by validator"""
+        """写操作必须被 sql_validator（真校验器）拒绝，且到不了执行器"""
+        from backend.sql.sql_validator import ValidationError
         from backend.tools.sql import execute_sql_tool
-        
-        # 这些查询应该被安全校验器拒绝
+
         malicious_queries = [
             "DROP TABLE products;",
             "DELETE FROM users WHERE id=1;",
             "INSERT INTO logs VALUES ('hacked');",
             "UPDATE users SET role='admin';",
+            "SELECT * FROM users; DROP TABLE products; --",  # 多语句夹带
         ]
-        
-        for query in malicious_queries:
-            # 验证工具存在 invoke 方法
-            assert hasattr(execute_sql_tool, 'invoke')
-            # 实际的注入防御由 sql_validator 处理
-            # 这里我们验证工具定义正确
-            assert execute_sql_tool.name == 'execute_sql_tool'
-    
+
+        with patch("backend.sql.executor.execute_sql_struct") as mock_exec:
+            for query in malicious_queries:
+                with pytest.raises(ValidationError):
+                    execute_sql_tool.invoke({"query": query})
+        mock_exec.assert_not_called()
+
     def test_read_only_operations_allowed(self):
-        """verify SELECT operations are allowed"""
+        """SELECT 必须通过真校验器并真实下发执行器（执行器 mock，不碰 DB）"""
         from backend.tools.sql import execute_sql_tool
-        
+
+        mock_result = MagicMock()
+        mock_result.status = "success"
+        mock_result.rows = [{"id": 1, "name": "test"}]
+        mock_result.columns = ["id", "name"]
+        mock_result.row_count = 1
+
         safe_queries = [
             "SELECT * FROM products",
             "SELECT name, price FROM inventory WHERE quantity > 0",
             "SELECT COUNT(*) FROM orders WHERE status = 'completed'",
         ]
-        
-        for query in safe_queries:
-            # 验证工具可以处理只读操作
-            assert execute_sql_tool.name == 'execute_sql_tool'
-            # 实际的执行会在运行时进行校验
+
+        with patch("backend.sql.executor.execute_sql_struct",
+                   return_value=mock_result) as mock_exec:
+            for query in safe_queries:
+                out = json.loads(execute_sql_tool.invoke({"query": query}))
+                assert out["rows"] == [{"id": 1, "name": "test"}]
+                assert out["total"] == 1
+        assert mock_exec.call_count == len(safe_queries)
 
 
 class TestSqlQueryToolBasic:
@@ -220,9 +229,8 @@ class TestRegistryEdgeCases:
             pass
 
 
-@pytest.mark.skip(reason="需要数据库配置，后续补充完整功能测试")
 class TestExecuteSQLToolIntegration:
-    """execute_sql_tool 集成测试（需要数据库环境）"""
+    """execute_sql_tool 集成测试（执行器 mock，不碰真实 DB）"""
     
     def test_execute_valid_select_statement(self):
         """正常执行 SELECT 查询"""
@@ -234,11 +242,10 @@ class TestExecuteSQLToolIntegration:
         mock_result.columns = ["id", "name"]
         mock_result.row_count = 1
         
-        with patch('backend.tools.sql.execute_sql_struct', return_value=mock_result):
+        with patch('backend.sql.executor.execute_sql_struct', return_value=mock_result):
             result = execute_sql_tool.invoke({"query": "SELECT * FROM products"})
             parsed = json.loads(result)
             
-            assert parsed['status'] == 'success'
             assert parsed['rows'][0]['id'] == 1
             assert parsed['total'] == 1
     
@@ -256,24 +263,24 @@ class TestExecuteSQLToolIntegration:
         mock_result.columns = ["id", "name", "price"]
         mock_result.row_count = 3
         
-        with patch('backend.tools.sql.execute_sql_struct', return_value=mock_result):
-            result = execute_sql_tool.invoke({"query": "SELECT * FROM fruits"})
+        with patch('backend.sql.executor.execute_sql_struct', return_value=mock_result):
+            result = execute_sql_tool.invoke({"query": "SELECT * FROM product.products"})
             parsed = json.loads(result)
-            
-            assert parsed['status'] == 'success'
+
             assert len(parsed['rows']) == 3
             assert parsed['total'] == 3
             assert parsed['columns'] == ["id", "name", "price"]
     
     def test_execute_security_validation(self):
-        """SQL 注入尝试应被拒绝"""
+        """SQL 注入尝试应被拒绝（校验器异常从工具层原样上抛）"""
+        from backend.sql.sql_validator import ValidationError
         from backend.tools.sql import execute_sql_tool
-        
+
         malicious_query = "SELECT * FROM users; DROP TABLE products; --"
-        
-        with patch('backend.tools.sql.sql_validator.validate', 
-                  side_effect=ValueError("Security violation")):
-            with pytest.raises(ValueError, match="Security"):
+
+        with patch('backend.sql.sql_validator.sql_validator.validate',
+                   side_effect=ValidationError("Security violation", layer=1)):
+            with pytest.raises(ValidationError, match="Security"):
                 execute_sql_tool.invoke({"query": malicious_query})
     
     def test_aggregate_query_count(self):
@@ -286,7 +293,7 @@ class TestExecuteSQLToolIntegration:
         mock_result.columns = ["count"]
         mock_result.row_count = 1
         
-        with patch('backend.tools.sql.execute_sql_struct', return_value=mock_result):
+        with patch('backend.sql.executor.execute_sql_struct', return_value=mock_result):
             result = execute_sql_tool.invoke({"query": "SELECT COUNT(*) FROM orders"})
             parsed = json.loads(result)
             
@@ -302,17 +309,17 @@ class TestExecuteSQLToolIntegration:
         mock_result.columns = []
         mock_result.row_count = 0
         
-        with patch('backend.tools.sql.execute_sql_struct', return_value=mock_result):
-            result = execute_sql_tool.invoke({"query": "SELECT * FROM non_existent_table"})
+        with patch('backend.sql.executor.execute_sql_struct', return_value=mock_result):
+            result = execute_sql_tool.invoke(
+                {"query": "SELECT * FROM product.products WHERE 1=0"})
             parsed = json.loads(result)
-            
-            assert parsed['status'] == 'no_data'
+
             assert parsed['total'] == 0
+            assert parsed['rows'] == []
 
 
-@pytest.mark.skip(reason="需要 SQL Agent 配置，后续补充完整功能测试")
 class TestSQLQueryToolIntegration:
-    """sql_query_tool 集成测试（需要 SQL Agent 环境）"""
+    """sql_query_tool 集成测试（SQL Agent mock，不碰真实 DB/LLM）"""
     
     def test_natural_language_query(self):
         """自然语言转 SQL 并执行"""
@@ -336,7 +343,7 @@ class TestSQLQueryToolIntegration:
             
             assert mock_agent.ask.called
             assert "Apple" in result
-            assert "Banana" not in result
+            assert "Banana" in result  # mock 表格含两行，均应原样透传
     
     def test_empty_result_handling(self):
         """无匹配结果返回空表格"""

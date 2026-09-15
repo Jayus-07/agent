@@ -40,25 +40,14 @@ class TestLLMRateLimiter:
         assert rl.acquire()
 
     def test_global_exhaustion(self):
-        rl = LLMRateLimiter(global_qps=1, global_burst=2)
+        """burst 耗尽后 acquire() 必须返回 False（qps 极低，测试窗口内补充可忽略）。"""
+        rl = LLMRateLimiter(global_qps=0.001, global_burst=3)
         assert rl.acquire()
         assert rl.acquire()
-        # 第 3 个应被限流（burst=2 已用完，refill_rate=1 太慢）
-        # 但 sleep 1s 也会补充，sleep 0 让 refill 不够
-        time.sleep(0.01)  # 几乎无补充
-        # 严格地说 refill=1*0.01=0.01 tokens，不足以补充
-        # 但实现可能因精度通过
-        # 直接断言至少能在某次被限流
-        rejected = False
-        for _ in range(20):
-            if not rl.acquire():
-                rejected = True
-                break
-            time.sleep(0.001)
-        # 100ms 内 100 tokens 补充 → burst 100 永远不会限流
-        # 所以这里只验证 stats() 工作
-        s = rl.stats()
-        assert "global_tokens" in s
+        assert rl.acquire()
+        # burst=3 已耗尽；0.001 qps 补充 1 个令牌需 ~1000s，窗口内必然拒绝
+        assert not rl.acquire()
+        assert not rl.acquire()
 
     def test_per_user_isolation(self):
         rl = LLMRateLimiter(global_qps=1000, global_burst=1000,

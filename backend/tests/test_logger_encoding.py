@@ -22,7 +22,7 @@ import sys
 
 import pytest
 
-from backend.shared.logger import setup_logger, logger
+from backend.shared.logger import logger, reset_logger_cache, setup_logger
 
 
 # ============ Helper:模拟 GBK stdout ============
@@ -50,26 +50,31 @@ class TestHandleErrorObservable:
     默默写一条 '--- Logging error ---' 到 stderr。我们要的不是这样:
     要让 error_type + error_msg 可观测(不是静默丢失日志)。"""
 
-    def test_logger_does_not_silently_drop_unicode_message(self, capsys, caplog):
-        """CJK 扩展区字符 + GBK stdout 旧行为:消息静默丢失。
-        新行为:logger 必须把消息输出到 file_handler(UTF-8),即使 stdout 失败。"""
-        # 使用独立 logger 避免污染全局
-        test_logger = setup_logger(name="test_drop_silent_001", level="DEBUG")
-        # 移除非 file handler 以避免污染 log 文件;只验证 file handler 不丢
-        file_handlers = [h for h in test_logger.handlers
-                         if isinstance(h, logging.FileHandler)]
-        if not file_handlers:
-            pytest.skip("file_handler 未配置")
-
-        # CJK 扩展 B 区字符(U+20000),GBK 一定不能编码
-        msg_with_extb = "包含扩展 B 字符: \U00020000"
+    def test_logger_does_not_silently_drop_unicode_message(
+            self, gbk_stdout, tmp_path, monkeypatch):
+        """GBK stdout 环境下，setup_logger 真实创建的 file_handler（UTF-8）
+        必须保留 GBK 不可编码字符（旧 bug：UnicodeEncodeError 后静默丢失）。"""
+        log_file = tmp_path / "cjk.log"
+        # LOG_FILE 在 setup_logger 调用时读取，patch 模块属性 + 清实例缓存才生效
+        monkeypatch.setattr("backend.shared.logger.LOG_FILE", str(log_file))
+        reset_logger_cache()
+        content = ""
+        test_logger = None
         try:
-            test_logger.info(msg_with_extb)
-        except Exception as e:
-            pytest.fail(f"logger.info 不应抛异常,实际抛了: {e}")
-
-        # 至少 file_handler 应该记录了这条消息(UTF-8)
-        # 我们没法直接断言 file 内容,但可以断言 handleError 没被静默调用
+            test_logger = setup_logger(name="test_drop_silent_001", level="DEBUG")
+            # file_handler 级别为 WARNING，用 warning 才会落盘
+            test_logger.warning("包含扩展 B 字符: \U00020000")
+            fh = next(h for h in test_logger.handlers
+                      if isinstance(h, logging.FileHandler))
+            fh.flush()
+            content = log_file.read_text(encoding="utf-8")
+        finally:
+            if test_logger is not None:
+                for h in list(test_logger.handlers):
+                    test_logger.removeHandler(h)
+                    h.close()
+            reset_logger_cache()
+        assert "\U00020000" in content, f"file_handler 不应丢字符,实际: {content!r}"
 
 
 # ============ UTF-8 console 输出测试 ============
@@ -138,32 +143,24 @@ class TestCjkMessageSurvives:
     """CJK 字符经过 logger 后,文件 / 编码层都应保持完整。"""
 
     def test_common_cjk_writes_to_file_handler(self, tmp_path, monkeypatch):
-        """常见 CJK 字符(检索/解析)即使 console 编码失败,file_handler 也应保留。"""
+        """常见 CJK 字符(检索/解析)经 setup_logger 真实 file_handler 落盘后保持完整。"""
         log_file = tmp_path / "test.log"
-        monkeypatch.setenv("LOG_FILE", str(log_file))
-        # 强制 reload 以让 setup_logger 用新路径
-        # 直接构造 logger 测试更干净
-        from backend.shared import logger as logger_mod
-
-        # 用 setup_logger 重新配置
-        test_logger = logger_mod.setup_logger(name="test_cjk_001", level="DEBUG")
-        # 清掉旧 file_handler(默认指向 rag_system.log)
-        for h in list(test_logger.handlers):
-            if isinstance(h, logging.FileHandler):
-                test_logger.removeHandler(h)
-                h.close()
-        # 加新 file_handler 指向 tmp_path
-        new_fh = logging.FileHandler(str(log_file), encoding="utf-8")
-        new_fh.setLevel(logging.DEBUG)
-        new_fh.setFormatter(logging.Formatter('%(message)s'))
-        test_logger.addHandler(new_fh)
-
+        monkeypatch.setattr("backend.shared.logger.LOG_FILE", str(log_file))
+        reset_logger_cache()
+        content = ""
+        test_logger = None
         try:
-            test_logger.info("检索:解析成功")
+            test_logger = setup_logger(name="test_cjk_001", level="DEBUG")
+            test_logger.warning("检索:解析成功")  # file_handler 级别为 WARNING
+            fh = next(h for h in test_logger.handlers
+                      if isinstance(h, logging.FileHandler))
+            fh.flush()
+            content = log_file.read_text(encoding="utf-8")
         finally:
-            new_fh.close()
-            test_logger.removeHandler(new_fh)
-
-        content = log_file.read_text(encoding="utf-8")
+            if test_logger is not None:
+                for h in list(test_logger.handlers):
+                    test_logger.removeHandler(h)
+                    h.close()
+            reset_logger_cache()
         assert "检索" in content, f"file_handler 应保留中文,实际内容: {content!r}"
         assert "解析" in content, f"file_handler 应保留中文,实际内容: {content!r}"

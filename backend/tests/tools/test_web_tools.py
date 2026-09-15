@@ -88,9 +88,14 @@ class TestWebSearchToolBasic:
         assert web_search_tool.__doc__ is not None
     
     def test_default_num_results(self):
-        """verify default num_results parameter"""
-        # Default should be 5 results
-        assert True
+        """缺省 num_results 时按默认 5 条截断（mock 网络供 10 条）"""
+        from backend.tools.web import web_search_tool
+
+        with patch("urllib.request.urlopen",
+                   return_value=_fake_urlopen(_ddg_html(10))):
+            result = web_search_tool.invoke({"query": "default"})
+        assert "标题4" in result
+        assert "标题5" not in result
     
     def test_query_parameter_required(self):
         """query parameter should be validated（mock 网络）"""
@@ -161,12 +166,16 @@ class TestWebSearchResultValidation:
     
     @pytest.mark.parametrize("num_results", [1, 3, 5, 10])
     def test_various_result_counts(self, num_results):
-        """test different result count configurations"""
+        """不同 num_results 真实截断结果数（mock 网络固定供 10 条）"""
         from backend.tools.web import web_search_tool
-        
-        # Just verify the function accepts these parameters
-        assert num_results >= 1
-        assert num_results <= 10  # Reasonable limit
+
+        with patch("urllib.request.urlopen",
+                   return_value=_fake_urlopen(_ddg_html(10))):
+            result = web_search_tool.invoke({
+                "query": "test", "num_results": num_results})
+        assert f"标题{num_results - 1}" in result
+        if num_results < 10:
+            assert f"标题{num_results}" not in result
         
     def test_too_many_results_handled(self):
         """large num_results should still work（结果数受实际结果数约束）"""
@@ -229,19 +238,14 @@ class TestWebCrawlToolBasic:
         assert web_crawl_tool.name == 'web_crawl_tool'
     
     def test_has_url_parameter(self):
-        """url parameter should be required"""
+        """url 为必填参数：缺参必须被 pydantic schema 拒绝；合法路径 mock 透传"""
+        from pydantic import ValidationError
+
         from backend.tools.web import web_crawl_tool
-        
-        # URL is required by pydantic schema
-        # The validation error is expected behavior
-        try:
-            result = web_crawl_tool.invoke({})
-            # If it succeeds, that's fine too (backward compatible)
-        except Exception as e:
-            # Expected: pydantic ValidationError for missing required field
-            assert "missing" in str(e).lower() or "required" in str(e).lower()
-        
-        # Alternatively, provide a mock URL（mock crawl，不打真实网络）
+
+        with pytest.raises(ValidationError):
+            web_crawl_tool.invoke({})
+
         from unittest.mock import patch
 
         with patch("backend.tools.crawler_runtime.crawl",
@@ -250,15 +254,21 @@ class TestWebCrawlToolBasic:
         assert isinstance(result, str)
     
     def test_url_format_validation(self):
-        """valid URLs should be accepted"""
+        """合法 URL 应透传给 crawler 并返回正文（mock 抓取）"""
+        from backend.tools.web import web_crawl_tool
+
         valid_urls = [
             "https://example.com/page",
             "http://example.org/article",
             "https://docs.python.org/3/tutorial/index.html",
         ]
-        
+
         for url in valid_urls:
-            assert url.startswith(("http://", "https://"))
+            with patch("backend.tools.crawler_runtime.crawl",
+                       return_value={"ok": True, "content": "页面正文"}) as mock_crawl:
+                result = web_crawl_tool.invoke({"url": url})
+            assert mock_crawl.call_args.args[0] == url
+            assert result == "页面正文"
 
 
 class TestWebCrawlModeValidation:
@@ -266,17 +276,24 @@ class TestWebCrawlModeValidation:
     
     @pytest.mark.parametrize("mode", ["markdown", "raw"])
     def test_valid_modes(self, mode):
-        """valid crawl modes should be accepted"""
+        """合法 mode 应透传给 crawler_runtime（mock 抓取）"""
         from backend.tools.web import web_crawl_tool
-        
-        assert mode in ["markdown", "raw"]
+
+        with patch("backend.tools.crawler_runtime.crawl",
+                   return_value={"ok": True, "content": "正文"}) as mock_crawl:
+            result = web_crawl_tool.invoke({
+                "url": "https://example.com", "mode": mode})
+        assert result == "正文"
+        assert mock_crawl.call_args.kwargs.get("mode") == mode
     
     def test_markdown_mode_default(self):
-        """markdown mode should be the default"""
+        """缺省 mode 应默认 markdown 透传给 crawler_runtime"""
         from backend.tools.web import web_crawl_tool
-        
-        # Default mode is "markdown"
-        assert True
+
+        with patch("backend.tools.crawler_runtime.crawl",
+                   return_value={"ok": True, "content": "正文"}) as mock_crawl:
+            web_crawl_tool.invoke({"url": "https://example.com"})
+        assert mock_crawl.call_args.kwargs.get("mode") == "markdown"
     
     def test_invalid_mode_handling(self):
         """mode 透传给 crawler_runtime，不在此层校验（mock 验证透传）"""
@@ -328,15 +345,6 @@ class TestWebCrawlErrorHandling:
             with pytest.raises(RuntimeError):
                 web_crawl_tool.invoke({"url": "https://example.com/slow-page"})
     
-    def test_large_content_handling(self):
-        """very large pages should be truncated appropriately"""
-        from backend.tools.web import web_crawl_tool
-        
-        # Large content (>50k chars) is truncated
-        # This is tested implicitly by normal usage
-        assert True
-
-
 class TestWebToolsIntegration:
     """Web Tools 集成测试（需网络环境）"""
     

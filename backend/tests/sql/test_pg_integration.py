@@ -30,10 +30,14 @@ def _conn_alive() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _conn_alive(),
-    reason="No PostgreSQL reachable on localhost:5432/agent_business/postgres",
-)
+# pg marker：unit-only 运行（-m "not pg"）必须能排除本文件，即使 PG 可达也不连真实库
+pytestmark = [
+    pytest.mark.pg,
+    pytest.mark.skipif(
+        not _conn_alive(),
+        reason="No PostgreSQL reachable on localhost:5432/agent_business/postgres",
+    ),
+]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -129,15 +133,6 @@ class TestExecuteStructRealPG:
             BUSINESS_DB_CONFIG,
         )
         assert result.status == "syntax_error"
-
-    def test_statement_timeout_returns_timeout(self):
-        """SQL 超过 5s 应触发 timeout（statement_timeout=5s in schema_config）。"""
-        # 用 pg_sleep 试探；executor 拦截 banned_functions → 改成 pg_catalog 长操作
-        # 跳过：banned function 拦截比 timeout 早，本测试只验证接口存在
-        pytest.skip(
-            "pg_sleep 被 banned_functions 拦截；timeout 通过长查询触发，"
-            "此处仅验证接口，不强测 timeout 路径"
-        )
 
 
 # ─────────────────────────────────────────────────────────────

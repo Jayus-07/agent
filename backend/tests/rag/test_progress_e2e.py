@@ -324,6 +324,9 @@ class TestSSEStreamE2E:
             "done",         # 来自 _run_index_background
         ]
 
+        # 清理：_progress_queues 是模块级共享字典，必须自清理避免跨用例残留
+        del rag_route._progress_queues[upload_id]
+
 
 # ==========================================================
 # 全链路 fixture 模拟 _run_index_background 完整流程

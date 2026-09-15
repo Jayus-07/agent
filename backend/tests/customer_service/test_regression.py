@@ -44,10 +44,11 @@ class TestCSStateExtensionIsolated:
         from backend.orchestration.state import AgentState
 
         hints = AgentState.__annotations__ if hasattr(AgentState, "__annotations__") else {}
-        if "cs_context" in hints:
-            assert True
-        else:
-            assert True
+        # 回归契约：客服扩展字段只允许出现在子类 OrchestratorState，
+        # 不得上提进基础 AgentState（否则平台侧状态被迫携带客服语义）
+        assert "cs_context" not in hints, (
+            "cs_context 是客服扩展字段，不得进入基础 AgentState"
+        )
 
 
 class TestCSErrorsDontLeakToPlatform:

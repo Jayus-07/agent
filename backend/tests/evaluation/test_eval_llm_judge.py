@@ -89,10 +89,3 @@ class TestLLMJudge:
             assert relevancy > 0.3, (
                 f"{r.case_id} llm_answer_relevancy={relevancy:.4f} < 0.3"
             )
-
-    def test_metrics_report(self, llm_results, capsys):
-        """输出 LLM Judge 指标摘要（信息性）。"""
-        for r in llm_results:
-            relevancy = r.metrics.get("llm_answer_relevancy", 0)
-            length = r.metrics.get("llm_generated_length", 0)
-            print(f"  {r.case_id}: relevancy={relevancy:.4f}, length={length:.0f}")

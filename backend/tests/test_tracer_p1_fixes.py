@@ -22,7 +22,7 @@ class TestNoopSpan:
         # end_span 能计算 duration（不再恒为 0）且不崩溃
         time.sleep(0.02)
         tc.end_span(span, output={"x": 1})
-        assert span.duration_ms >= 0  # 至少不抛异常
+        assert span.duration_ms >= 15  # sleep 20ms 后必须有真实耗时；恒 0 即计时被改坏
         assert span.output == {"x": 1}
 
     def test_real_span_still_works(self):
