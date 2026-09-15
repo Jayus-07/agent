@@ -1,14 +1,15 @@
 'use client'
 
 /**
- * navConfig — 控制台全局导航配置（单一数据源）
+ * navConfig — 用户端全局导航配置（单一数据源）
  *
  * Sidebar（控制台框架）渲染入口的唯一来源；后续任何页面需要
  * 业务入口（如菜单/跳转）也从这里取，避免多处硬编码漂移。
+ * 运维/配置入口（trace/Prompt/评测/定时任务）已拆至管理端 frontend-admin/。
  */
 import {
-  Sparkles, LayoutDashboard, BookOpen, Brain, Activity, FileText, AlertTriangle,
-  Clock, TrendingUp, ClipboardCheck, ScrollText, Headphones, BarChart3,
+  Sparkles, LayoutDashboard, BookOpen, Brain, FileText, AlertTriangle,
+  TrendingUp, ClipboardCheck, Headphones,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 
@@ -64,22 +65,5 @@ export const NAV: NavEntry[] = [
   },
   {
     icon: <ClipboardCheck size={18} />, label: '选品决策', path: '/selection-decision',
-  },
-  {
-    icon: <Clock size={18} />, label: '定时任务', path: '/schedules',
-  },
-  {
-    icon: <Activity size={18} />, label: '链路追踪',
-    items: [
-      { label: '问答追踪', path: '/observability/traces' },
-      { label: 'Token 用量', path: '/observability/tokens' },
-      { label: '文档操作日志', path: '/knowledge/operations' },
-    ],
-  },
-  {
-    icon: <ScrollText size={18} />, label: 'Prompt 管理', path: '/prompts',
-  },
-  {
-    icon: <BarChart3 size={18} />, label: '评测结果', path: '/evaluations',
   },
 ]
