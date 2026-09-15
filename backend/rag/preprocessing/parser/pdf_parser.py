@@ -18,11 +18,22 @@ from collections import Counter
 
 import pymupdf as fitz  # PyMuPDF；用 pymupdf 别名 fitz 消除 1.24+ deprecation warning
 
-try:
-    import pymupdf_layout
-    _HAS_LAYOUT = True
-except ImportError:
-    _HAS_LAYOUT = False
+# 版面分析增强（可选）状态。
+#
+# 2026-09-15 核实：PyPI 包 `pymupdf-layout` 不提供顶层模块 `pymupdf_layout`
+# ——它把代码装进 PyMuPDF 插件命名空间 `pymupdf.layout`（`import pymupdf.layout`
+# 即通过 monkey-patch `pymupdf._get_layout` 完成激活）。因此原实现
+# `import pymupdf_layout` 恒失败、`pymupdf_layout.analyze(page)` 也是不存在的
+# API（真实入口是 `pymupdf.layout.DocumentLayoutAnalyzer` / `activate()`）：
+# 该增强分支从未生效过，一直走 `get_text("dict")` 原生块。
+#
+# 这里保持显式 False（= 现状），因为激活会改变块结构 → 影响切分与既有索引，
+# 需连同解析质量评估 + 重索引一起做。正确接线姿势（后续任务）：
+#     import pymupdf.layout   # 激活版面分析（副作用式）
+#     # 再按 pymupdf.layout.activate() 的集成方式取块，不要调用不存在的 analyze()
+_HAS_LAYOUT = False
+
+# 依赖声明保留在 pyproject（pymupdf-layout）——装好≠接线，避免"包已装但路径静默失效"。
 
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
 from backend.rag.preprocessing.parser.base import BaseDocumentParser
@@ -106,16 +117,10 @@ class PdfParser(BaseDocumentParser):
             for page_idx in range(len(doc)):
                 try:
                     page = doc[page_idx]
-                    if _HAS_LAYOUT:
-                        try:
-                            blocks = pymupdf_layout.analyze(page)["blocks"]
-                        except Exception:
-                            logger.debug(
-                                f"[PdfParser] 第 {page_idx} 页 layout 分析回退"
-                            )
-                            blocks = page.get_text("dict")["blocks"]
-                    else:
-                        blocks = page.get_text("dict")["blocks"]
+                    # 版面分析未接线（见文件头 _HAS_LAYOUT 说明）——现阶段
+                    # 一律走 PyMuPDF 原生 dict 块；接入时在此处替换为
+                    # pymupdf.layout 的真实调用，别复活不存在的 analyze()。
+                    blocks = page.get_text("dict")["blocks"]
                     # P1-5: 表格识别（PyMuPDF find_tables，替代原"type=1→table"错误注释）。
                     # type=1 是图片块（当前完全忽略），表格需用 find_tables 检测行列结构，
                     # 产 table 节点走 NL+CSV 双格式，避免纯文本顺序流丢失列关系。
