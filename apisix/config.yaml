@@ -23,6 +23,22 @@ nginx_config:
     - GATEWAY_AUTH_REDIS_POOL_SIZE
     - GATEWAY_AUTH_REDIS_POOL_IDLE_MS
 
+  # ── 访问审计日志（docs/gateway-observability-and-ratelimit.md GAP 5 第一层）──
+  # 每请求一行 JSON 到 /dev/stdout（docker logs agent-apisix 直接查）；
+  # 字段含义：
+  #   client_ip —— 网关直连 IP；real_ip_from 仅信任 loopback（nginx.conf set_real_ip_from
+  #                127.0.0.1），客户端伪造 X-Real-IP 不会被采纳，此值可信
+  #   user_id   —— gateway-auth 验签后注入的 X-User-Id，enforce 下不可伪造；
+  #                注意 auth/sys 白名单路由不挂插件，该值是客户端自带头，仅参考
+  #   trace_id  —— 网关生成/透传，可与后端 ai.trace_records 关联到 agent 执行链路
+  #   duration  —— 含 SSE 长连接总时长；upstream_time 为 "-" 表示无上游（网关层 401/429）
+  # escape=json：变量值运行时按 JSON 转义，UA/query 含引号不会破坏行结构
+  http:
+    enable_access_log: true
+    access_log: /dev/stdout
+    access_log_format: '{"time":"$time_iso8601","client_ip":"$remote_addr","user_id":"$http_x_user_id","auth_type":"$http_x_auth_type","trace_id":"$http_x_trace_id","method":"$request_method","uri":"$uri","query":"$args","status":$status,"bytes":$body_bytes_sent,"duration":$request_time,"upstream_time":"$upstream_response_time","ua":"$http_user_agent"}'
+    access_log_format_escape: json
+
 apisix:
   # 自研插件：容器内挂载为 custom_plugins/apisix/plugins/*.lua，
   # 使 require("apisix.plugins.gateway-auth") 命中（B2 实测路径映射要求）

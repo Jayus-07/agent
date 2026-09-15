@@ -23,6 +23,14 @@ nginx_config:
     - GATEWAY_AUTH_REDIS_POOL_SIZE
     - GATEWAY_AUTH_REDIS_POOL_IDLE_MS
 
+  # 访问审计日志：与生产 apisix/config.yaml 保持一致（台架同时承担生产配置的
+  # 加载前验证，log_format 语法错误在这里先炸）
+  http:
+    enable_access_log: true
+    access_log: /dev/stdout
+    access_log_format: '{"time":"$time_iso8601","client_ip":"$remote_addr","user_id":"$http_x_user_id","auth_type":"$http_x_auth_type","trace_id":"$http_x_trace_id","method":"$request_method","uri":"$uri","query":"$args","status":$status,"bytes":$body_bytes_sent,"duration":$request_time,"upstream_time":"$upstream_response_time","ua":"$http_user_agent"}'
+    access_log_format_escape: json
+
 apisix:
   # 自研插件：容器内挂载为 custom_plugins/apisix/plugins/*.lua，
   # 使 require("apisix.plugins.gateway-auth") 命中（B2 实测路径映射要求）
