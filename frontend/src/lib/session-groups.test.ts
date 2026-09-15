@@ -6,6 +6,22 @@ import type { SessionMeta } from './api/memory'
 const HOUR = 3_600_000
 const DAY = 86_400_000
 
+/**
+ * 「昨天」夹具必须锚定自然日，不能写成「当前时刻往前推 26 小时」。
+ * bucketOf 用自然日边界（startOfToday），而 now-26h 只有在本地时间 > 02:00 时才落在昨天：
+ * 00:00~02:00 之间它会跨回前天 → 被归入「week」，测试假红。
+ * （2026-09-16 00:02 实测复现：received "week" / expected "yesterday"）
+ */
+function startOfToday(): number {
+  const n = new Date()
+  return new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime()
+}
+
+/** 昨天正午 —— 任何时刻运行都稳定落在「昨天」桶 */
+function yesterdayNoon(): string {
+  return new Date(startOfToday() - 12 * HOUR).toISOString()
+}
+
 function meta(id: string, updatedAt: string | null, title = id): SessionMeta {
   return {
     session_id: id,
@@ -26,7 +42,7 @@ describe('bucketOf — 时间桶归属', () => {
   it('今天 / 昨天 / 最近 7 天 / 更早 各自落桶', () => {
     const now = Date.now()
     expect(bucketOf(new Date(now).toISOString())).toBe('today')
-    expect(bucketOf(new Date(now - 26 * HOUR).toISOString())).toBe('yesterday')
+    expect(bucketOf(yesterdayNoon())).toBe('yesterday')
     expect(bucketOf(new Date(now - 3 * DAY).toISOString())).toBe('week')
     expect(bucketOf(new Date(now - 30 * DAY).toISOString())).toBe('older')
   })
@@ -67,7 +83,7 @@ describe('groupByTime — 分组顺序与内容', () => {
     const groups = groupByTime([
       meta('old', new Date(now - 30 * DAY).toISOString()),
       meta('today', new Date(now).toISOString()),
-      meta('yest', new Date(now - 26 * HOUR).toISOString()),
+      meta('yest', yesterdayNoon()),
     ])
 
     expect(groups.map((g) => g.bucket)).toEqual(['today', 'yesterday', 'older'])
