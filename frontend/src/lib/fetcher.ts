@@ -1,109 +1,18 @@
 /**
- * 底层 fetch 抽象：统一 JSON 解析、错误处理、超时
- * 所有 API 模块都基于这个，避免重复
+ * lib/fetcher.ts — 兼容层（P0-1a 起）
  *
- * 认证（对接网关 JWT 体系）：
- * - 有登录态时自动附带 Authorization: Bearer
- * - 401 → 静默 refresh 一次并重试原请求；refresh 也失败 → 清态跳 /login
- * - X-API-Key 双通道保留（网关与下游 Python 服务按机器凭据校验）
+ * ⚠️ 实现已迁移至 `@/api/client`。新代码请直接 import：
+ *   import { request, requestSilent, ApiError } from '@/api/client'
+ *
+ * 本文件仅做 re-export，保留一个发布周期后移除。
+ * Response 层（`authFetch`）见 `@/lib/authFetch`，迁移由 auth 会话负责。
  */
 
-import { bearerHeaders, handleAuthFailure, tryRefreshOnce } from "./auth";
-
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    public status: number,
-    public detail?: unknown,
-  ) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
-
-export interface RequestOptions extends Omit<RequestInit, "signal"> {
-  /** 超时毫秒，默认 30000 */
-  timeout?: number;
-  /** AbortSignal 用于外部取消 */
-  signal?: AbortSignal;
-}
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
-const DEFAULT_TIMEOUT = 30_000;
-
-function joinUrl(path: string): string {
-  if (path.startsWith("http")) return path;
-  return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
-}
-
-/**
- * 通用 JSON 请求（_retried 供 401 重试防递归，外部不要传）
- */
-export async function request<T = unknown>(
-  path: string,
-  options: RequestOptions = {},
-  _retried = false,
-): Promise<T> {
-  const { timeout = DEFAULT_TIMEOUT, signal: externalSignal, ...init } = options;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error("Request timeout")), timeout);
-
-  // 合并外部 signal
-  if (externalSignal) {
-    if (externalSignal.aborted) controller.abort(externalSignal.reason);
-    else externalSignal.addEventListener("abort", () => controller.abort(externalSignal.reason), { once: true });
-  }
-
-  try {
-    const res = await fetch(joinUrl(path), {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        ...(process.env.NEXT_PUBLIC_API_KEY
-          ? { "X-API-Key": process.env.NEXT_PUBLIC_API_KEY }
-          : {}),
-        ...bearerHeaders(),
-        ...init.headers,
-      },
-      signal: controller.signal,
-    });
-
-    const data = await res.json().catch(() => ({}));
-
-    if (!res.ok) {
-      // 401：先尝试静默刷新，成功则重试一次原请求；失败则跳登录页
-      if (res.status === 401 && !_retried && !path.startsWith("/api/auth/")) {
-        if (await tryRefreshOnce()) {
-          return request<T>(path, options, true);
-        }
-        handleAuthFailure();
-      }
-      // 后端 FastAPI 习惯：detail 字段含错误信息
-      const detail = data?.detail;
-      const message =
-        (typeof detail === "string" && detail) ||
-        (typeof detail === "object" && detail && (detail.error || detail.message)) ||
-        res.statusText ||
-        `HTTP ${res.status}`;
-      throw new ApiError(String(message), res.status, detail);
-    }
-
-    return data as T;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * 不抛错的请求：用于"删了也行，删失败也不影响主流程"的场景
- */
-export async function requestSilent(
-  path: string,
-  options: RequestOptions = {},
-): Promise<void> {
-  try {
-    await request(path, options);
-  } catch {
-    /* ignore */
-  }
-}
+export {
+  ApiError,
+  backendBaseUrl,
+  fetchRaw,
+  request,
+  requestSilent,
+} from "@/api/client";
+export type { BackendId, RequestOptions } from "@/api/client";
