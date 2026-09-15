@@ -17,7 +17,7 @@
 --
 -- 配置一律来自环境变量（apisix.yaml 是 Git 文件，密钥禁止落盘）：
 --   JWT_SECRET / JWT_SECRET_PREVIOUS / JWT_ISSUER(默认 hongmeng-oa)
---   GATEWAY_AUTH_MODE(默认 shadow) / GATEWAY_AUTH_CLOCK_SKEW(默认 60)
+--   GATEWAY_AUTH_MODE(默认 enforce，fail-closed；观测复测显式设 shadow) / GATEWAY_AUTH_CLOCK_SKEW(默认 60)
 --   AUTH_REDIS_HOST / AUTH_REDIS_PORT / AUTH_REDIS_PASSWORD
 --   GATEWAY_AUTH_REDIS_CMD_TIMEOUT_MS(300) / GATEWAY_AUTH_REDIS_POOL_SIZE(20) / GATEWAY_AUTH_REDIS_POOL_IDLE_MS(10000)
 --
@@ -76,20 +76,64 @@ local function expected_alg(secret)
     return nil
 end
 
--- 可观测计数：prometheus 插件存在则记自定义 counter，否则仅日志（不因缺依赖而失败）
-local function metric(name, route, reason)
-    local ok, prometheus = pcall(require, "apisix.plugins.prometheus.metrics")
-    if ok and prometheus then
-        pcall(function() prometheus:counter(name, { route or "unknown", reason or "unknown" }, 1) end)
+-- 可观测计数：经 prometheus 插件的 exporter 单例记自定义 counter，失败仅日志。
+-- ⚠️ 3.13 接口（旧写法 require "apisix.plugins.prometheus.metrics" 在 3.13 不存在，
+-- pcall 静默失败导致自定义指标从未生效——2026-09-16 实测修复）：
+--   exporter.get_prometheus() 返回 lua-resty-prometheus 对象；
+--   APISIX 初始化 prometheus 对象时带 metric_prefix="apisix_"，
+--   故最终指标名为 apisix_gateway_auth_denied_total / apisix_gateway_auth_would_deny_total。
+-- ⚠️ 必须惰性初始化（不能在 init_worker 注册）：APISIX 按 priority 降序执行各插件
+--   init_worker，gateway-auth(2500) 先于 prometheus(500)——那时 exporter 单例还是 nil。
+--   access 阶段首次计数时 prometheus 对象必已就绪（lua-resty-prometheus 的 counter
+--   注册无相位限制，inc 经 parent._counter 回退到 init_worker 期建好的 worker 计数器）。
+local METRICS = nil  -- {denied = counter, would_deny = counter}
+
+local function init_metrics()
+    local ok, exporter = pcall(require, "apisix.plugins.prometheus.exporter")
+    if not ok or type(exporter) ~= "table" then
+        return false
+    end
+    local ok2, prom = pcall(exporter.get_prometheus)
+    if not ok2 or type(prom) ~= "table" then
+        return false  -- prometheus 插件未启用/未就绪：保持 nil，下次再试
+    end
+    local ok3 = pcall(function()
+        METRICS = {
+            denied = prom:counter("gateway_auth_denied_total",
+                                  "gateway-auth rejected requests",
+                                  {"route", "reason"}),
+            would_deny = prom:counter("gateway_auth_would_deny_total",
+                                      "gateway-auth shadow mode would-reject",
+                                      {"route", "reason"}),
+        }
+    end)
+    if not ok3 then
+        METRICS = nil
+        core.log.warn("[gateway-auth] 自定义 counter 注册失败，降级为仅日志")
+        return false
+    end
+    return true
+end
+
+local function metric(kind, route, reason)
+    if not METRICS and not init_metrics() then
+        return  -- 降级为仅日志（deny/would_deny 的 core.log.warn 仍在）
+    end
+    local m = METRICS[kind]
+    if m then
+        pcall(function() m:inc(1, {route or "unknown", reason or "unknown"}) end)
     end
 end
 
 -- 401（合同体：FastAPI 错误风格 + `未认证：` 判别符）
 local function deny(ctx, route, reason, count_it)
     if count_it then
-        metric("gateway_auth_denied_total", route, reason)
+        metric("denied", route, reason)
     end
     core.log.warn("[gateway-auth] deny route=", route, " reason=", reason)
+    -- 401 也带 X-Trace-Id，便于客户端凭响应头直接上报排障
+    -- （core.response.exit 不支持 headers 参数，须先 set_header 再 exit）
+    core.response.set_header(HEADER_TRACE_ID, trace_id(ctx))
     core.response.exit(401, {
         error = "Unauthorized",
         detail = "未认证：" .. reason,
@@ -98,7 +142,7 @@ end
 
 -- 观测型策略：只记不拦
 local function would_deny(ctx, route, reason)
-    metric("gateway_auth_would_deny_total", route, reason)
+    metric("would_deny", route, reason)
     core.log.warn("[gateway-auth] shadow would-deny route=", route, " reason=", reason, "（已放行）")
 end
 
@@ -200,7 +244,7 @@ function _M.access(_, ctx)
         end
     end
     local route = ctx.route_id or "unknown"
-    local policy = env("GATEWAY_AUTH_MODE", "shadow")
+    local policy = env("GATEWAY_AUTH_MODE", "enforce")
 
     -- ① 无条件剥离伪造头（白名单放行前也执行；remove 语义）
     for _, h in ipairs(FORGED_HEADERS) do

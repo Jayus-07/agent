@@ -36,3 +36,15 @@ plugins:
   - proxy-rewrite
   - prometheus
   - gateway-auth
+  - limit-conn
+  - limit-count
+
+# Prometheus 导出服务：默认绑定容器内 127.0.0.1，Prometheus 容器跨网络够不着
+# （GAP 实测 9091 在听但对 agent-net 不可达）。改绑 0.0.0.0——compose 未发布
+# 9091 端口到宿主机，暴露面仍收敛在容器网络内（对齐"指标不上公网"约束）。
+plugin_attr:
+  prometheus:
+    enable_export_server: true
+    export_addr:
+      ip: "0.0.0.0"
+      port: 9091

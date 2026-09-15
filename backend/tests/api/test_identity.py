@@ -90,6 +90,41 @@ def test_header_mode_full_fields(client, monkeypatch):
                         "auth_type": "jwt", "source": "header"}
 
 
+# ── header：网关 guest 模式的 anonymous 占位身份不算已认证 ──
+
+def test_header_mode_gateway_anonymous_is_guest(client, monkeypatch):
+    # GATEWAY_AUTH_MODE=guest 时网关对未认证请求注入 anonymous 占位头，
+    # 后端必须视同 guest（否则记忆库/配额按共享账号 "anonymous" 落库）
+    _set_mode(monkeypatch, "header")
+    r = client.post("/whoami", headers={"X-Auth-Type": "anonymous", "X-User-Id": "anonymous"})
+    assert r.json() == {"user_id": "", "user_name": "", "department": "",
+                        "auth_type": "guest", "source": "guest"}
+
+
+def test_header_mode_api_key_tag_without_uid_is_guest(client, monkeypatch):
+    # 网关对 X-API-Key 通道只打标 X-Auth-Type: api-key，无用户头 → guest
+    _set_mode(monkeypatch, "header")
+    r = client.post("/whoami", headers={"X-Auth-Type": "api-key"})
+    assert r.json()["user_id"] == "" and r.json()["source"] == "guest"
+
+
+def test_strict_rejects_gateway_anonymous(client, monkeypatch):
+    _set_mode(monkeypatch, "strict")
+    resp = client.get("/strict", headers={"X-Auth-Type": "anonymous", "X-User-Id": "anonymous"})
+    assert resp.status_code == 401
+
+
+# ── 默认模式：env 缺失时兜回 header（网关权威），不再兜回 legacy ──
+
+def test_default_mode_is_header(monkeypatch):
+    import importlib
+
+    from backend.config import auth as auth_cfg
+    monkeypatch.delenv("IDENTITY_SOURCE", raising=False)
+    importlib.reload(auth_cfg)
+    assert auth_cfg.IDENTITY_SOURCE == "header"
+
+
 # ── strict：未认证 401 ──
 
 def test_strict_requires_identity_header(client, monkeypatch):

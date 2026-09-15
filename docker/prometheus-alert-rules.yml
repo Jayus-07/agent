@@ -137,3 +137,40 @@ groups:
         annotations:
           summary: "RAG 命中率低于 70%"
           description: "检查向量库健康度与检索参数"
+
+      # ── APISIX 网关（2026-09-16 接入 Prometheus）──────────────
+      - alert: GatewayDown
+        expr: up{job="agent-platform-apisix"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "APISIX 网关指标端点失联"
+          description: "Prometheus 连续 1 分钟抓不到 agent-apisix:9091；检查容器状态（docker ps | grep apisix）与导出服务日志"
+
+      - alert: GatewayAuthDeniedSpike
+        expr: increase(apisix_gateway_auth_denied_total[10m]) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "网关认证拒绝量突增（10 分钟 >100 次）"
+          description: "按 {{ $labels.reason }} 排查：signature/expired 批量出现可能是密钥轮换未同步；blacklist 突增可能是登出风暴或撞库"
+
+      - alert: GatewayRateLimitedSpike
+        expr: sum(increase(apisix_http_status{code="429"}[10m])) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "网关限流触发量突增（10 分钟 >50 次 429）"
+          description: "按 route 标签定位：正常用户被误伤则放宽对应路由配额（apisix/apisix.yaml），异常流量则保持并关注来源"
+
+      - alert: GatewayUpstream5xxHigh
+        expr: sum(rate(apisix_http_status{code=~"5.."}[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "网关侧上游 5xx 超过 1 rps 持续 5 分钟"
+          description: "上游 app/Java 服务异常；结合 backend/app 指标与日志定位（网关 retries=0，5xx 即上游真实失败）"

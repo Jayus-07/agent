@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 
 class EchoHandler(BaseHTTPRequestHandler):
@@ -28,6 +30,14 @@ class EchoHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         if length:
             self.rfile.read(length)
+        # ?delay=N：响应前挂起 N 秒，供网关 limit-conn 并发限制测试用
+        #（连接需在 upstream 处理期间保持才能触发并发拒绝）
+        qs = parse_qs(urlsplit(self.path).query)
+        if qs.get("delay"):
+            try:
+                time.sleep(min(float(qs["delay"][0]), 30))
+            except ValueError:
+                pass
         payload = {
             "method": self.command,
             "path": self.path,

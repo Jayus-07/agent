@@ -120,3 +120,7 @@ P1 运维：
 3. 401 合同以 FastAPI 错误风格为准，不复制 Java Result 格式。
 4. `/internal/*` 与 rag-service/mcp-service 不经 APISIX；MCP 外部暴露为后置可选项。
 5. 不引 Nacos/etcd；standalone + 五步发布流程；HA 在 B4 实测而非假设。
+
+## 8. 后续增强记录
+
+- 2026-09-16 P1：APISIX 指标接入 Prometheus（含 gateway-auth 自定义 counter 修复）+ 网关限流（limit-count/limit-conn）。设计与验证记录见 `docs/gateway-observability-and-ratelimit.md`；9081 台架重建脚本 `scripts/run_gateway_test_stack.sh`，限流回归 `scripts/gateway_rate_limit_check.py`。

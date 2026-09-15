@@ -305,6 +305,14 @@ def validate_startup_settings() -> List[str]:
             "（生产环境要求 ≥ 16 位）。"
         )
 
+    # 身份来源：legacy 采信请求体 user_id（可伪造），生产必须走网关注入头。
+    if _is_prod and _env("IDENTITY_SOURCE", "header").lower() == "legacy":
+        _fatal.append(
+            "ENVIRONMENT=production + IDENTITY_SOURCE=legacy：生产环境禁止采信"
+            "请求体身份（可伪造）。请设置 IDENTITY_SOURCE=header 或 strict，"
+            "由网关验签后注入 X-User-Id 等身份头。"
+        )
+
     if _fatal:
         for f in _fatal:
             logger.error(f"[Startup 校验] FATAL: {f}")

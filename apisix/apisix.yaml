@@ -14,6 +14,16 @@
 # 7. CORS 由上游各自处理（FastAPI CORSMiddleware / Java 网关），APISIX 不加 cors 插件，
 #    避免与上游 CORS 头重复（SCG 曾为此专门配 DedupeResponseHeader）。
 #
+# 限流设计（2026-09-16 P1 增强）：
+# - 限流键 $http_x_user_id：gateway-auth(priority=2500) 先注入身份头，limit 插件后执行；
+#   键为空（api-key 通道 / OPTIONS 预检）时 limit-count 自动回退 remote_addr（插件源码
+#   limit-count/init.lua 实测语义），即用户配额与 IP 配额天然分桶。
+# - 未认证请求在 gateway-auth 层已被 401，不会消耗限流配额。
+# - policy=local 为进程级计数：当前单副本语义正确；扩多副本时必须切 redis 策略
+#   （否则配额按副本数放大），见 docs/gateway-observability-and-ratelimit.md。
+# - 阈值刻意宽松（后端还有 MAX_CONCURRENT_REQUESTS=5 并发门兜底）：网关层定位是
+#   反滥用与按用户公平，不是主容量防线。
+#
 # 系统直通路由（/, /health, /metrics, /openapi.json）：B1 为基线兼容保留，
 # B4 生产加固时按 §2 "不对外" 收口决策复核。
 
@@ -44,6 +54,7 @@ routes:
     uri: /api/auth/*
     upstream_id: app
     plugins:
+      prometheus: {}
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
 
@@ -51,24 +62,49 @@ routes:
     uri: /api/sys/*
     upstream_id: app
     plugins:
+      prometheus: {}
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
 
   # ── SSE/长任务：独立 upstream（600s + retries=0）+ 禁缓冲 ──
+  # 限流：每用户并发 3（SSE 长连接最贵，10 个流就能占满后端并发门）+
+  # 每用户 30 次/分钟（LLM 调用配额，防脚本刷 chat）
   - id: chat-sse
     uri: /api/chat/*
     upstream_id: app_chat
     plugins:
       gateway-auth: {}
+      prometheus: {}
+      limit-conn:
+        key: http_x_user_id
+        conn: 3
+        burst: 2
+        default_conn_delay: 0.1
+        rejected_code: 429
+      limit-count:
+        key: http_x_user_id
+        count: 30
+        time_window: 60
+        rejected_code: 429
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
 
   # ── 副作用路由（禁重试，retries=0 已在 upstream 层设置）──
+  # 限流：按 IP 并发闸（api-key 服务调用为主，无用户头；副作用防并行风暴）
+  # ⚠️ limit-conn 的 key 是必填字段（无 limit-count 的空值回退 IP 语义——
+  #    生产坏配置门禁实测抓到），按 IP 限流必须显式写 remote_addr
   - id: sql-side-effect
     uri: /api/sql/*
     upstream_id: app
     plugins:
       gateway-auth: {}
+      prometheus: {}
+      limit-conn:
+        key: remote_addr
+        conn: 10
+        burst: 5
+        default_conn_delay: 0.1
+        rejected_code: 429
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
   - id: mcp-side-effect
@@ -76,29 +112,51 @@ routes:
     upstream_id: app
     plugins:
       gateway-auth: {}
+      prometheus: {}
+      limit-conn:
+        key: remote_addr
+        conn: 10
+        burst: 5
+        default_conn_delay: 0.1
+        rejected_code: 429
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
 
   # ── 系统直通（B1 基线兼容；B4 复核收口）──
   - id: sys-health
     uri: /health
+    plugins:
+      prometheus: {}
     upstream_id: app
   - id: sys-metrics
     uri: /metrics
+    plugins:
+      prometheus: {}
     upstream_id: app
   - id: sys-openapi
     uri: /openapi.json
+    plugins:
+      prometheus: {}
     upstream_id: app
   - id: sys-index
     uri: /
+    plugins:
+      prometheus: {}
     upstream_id: app
 
   # ── 兜底：/api/* → FastAPI（整段转发，剥 /api）──
+  # 限流：每用户 600 次/分钟（≈10 rps，反滥用基线；预检/api-key 回退按 IP 计数）
   - id: app-fallback
     uri: /api/*
     upstream_id: app
     plugins:
       gateway-auth: {}
+      prometheus: {}
+      limit-count:
+        key: http_x_user_id
+        count: 600
+        time_window: 60
+        rejected_code: 429
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
 

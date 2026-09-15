@@ -34,8 +34,9 @@ services:
       # 自研认证插件（B2；源码进 Git，密钥走环境变量不落盘）
       - ./apisix/plugins:/usr/local/apisix/custom_plugins/apisix/plugins:ro
     environment:
-      # 认证模式灰度：shadow（默认，只记不拦）→ guest → enforce（B4 切流时定）
-      - GATEWAY_AUTH_MODE=${GATEWAY_AUTH_MODE:-shadow}
+      # 认证模式：默认 enforce（fail-closed）。灰度已完成（.env 曾设 shadow→enforce），
+      # 需要临时回观测时在 .env 显式设 GATEWAY_AUTH_MODE=shadow
+      - GATEWAY_AUTH_MODE=${GATEWAY_AUTH_MODE:-enforce}
       # JWT 验签（与 Java auth-service 同源；值来自 .env，禁止写入本文件）
       - JWT_SECRET=${JWT_SECRET:-}
       - JWT_SECRET_PREVIOUS=${JWT_SECRET_PREVIOUS:-}
@@ -92,6 +93,10 @@ services:
       - LOG_FORMAT=${LOG_FORMAT:-json}
       # 认证（fail-closed：未配置 API_KEY 时业务端点拒绝服务）
       - API_KEY=${API_KEY:-}
+      # 身份来源：只认网关验签后注入的身份头（默认 header；生产禁 legacy 由
+      # backend/config/startup.py 启动校验强制）。9000 外任何直连 8000 的
+      # 流量一律按 guest 处理
+      - IDENTITY_SOURCE=${IDENTITY_SOURCE:-header}
       # Redis
       - REDIS_ENABLED=${REDIS_ENABLED:-true}
       - REDIS_URL=redis://redis:6379/0

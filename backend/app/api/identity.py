@@ -41,14 +41,23 @@ class Identity:
         return bool(self.user_id)
 
 
+# 网关 guest 模式（GATEWAY_AUTH_MODE=guest）对未认证请求注入的占位身份：
+# X-Auth-Type: anonymous + X-User-Id: anonymous。不能当作真实用户，
+# 否则记忆库/配额会按 "anonymous" 这个共享账号落库。
+_ANONYMOUS = "anonymous"
+
+
 def _from_headers(request: Request) -> Identity:
     uid = (request.headers.get(USER_ID_HEADER) or "").strip()
+    auth_type = (request.headers.get(AUTH_TYPE_HEADER) or "").strip()
+    if not uid or uid == _ANONYMOUS or auth_type == _ANONYMOUS:
+        return Identity(user_id="", auth_type="guest", source="guest")
     return Identity(
         user_id=uid,
         user_name=(request.headers.get(USER_NAME_HEADER) or "").strip(),
         department=(request.headers.get(USER_DEPT_HEADER) or "").strip(),
-        auth_type=(request.headers.get(AUTH_TYPE_HEADER) or "").strip() or ("jwt" if uid else "guest"),
-        source="header" if uid else "guest",
+        auth_type=auth_type or "jwt",
+        source="header",
     )
 
 

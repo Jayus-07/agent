@@ -7,12 +7,15 @@
 
 app 侧不再自行验 JWT，按 IDENTITY_SOURCE 决定信谁：
 
-    legacy = 现状兼容：请求体 user_id 优先，TRUST_USER_HEADER=true 时头次之。
-             保留是为了存量客户端/本地直调不破——但请求体身份可伪造，
-             上线网关后应尽快切走。
+    legacy = 显式 opt-in 的兼容模式：请求体 user_id 优先，TRUST_USER_HEADER=true
+             时头次之。请求体身份可伪造，仅限本地直调调试；生产环境启动校验
+             （config/startup.py）直接拒绝该模式。
     header = 网关权威：只认身份头，请求体身份字段一律忽略；
              未认证降级 guest（user_id=""）。
     strict = header + 未认证直接 401（由调用方据 auth_type 判断抛出）。
+
+默认 header：网关 enforce/guest 模式验完 JWT 后注入身份头，前端所有流量
+（dev 走 Next rewrite → APISIX:9080，生产同拓扑）都经网关进入。
 
 信任边界即网络边界：header/strict 模式的前提是 8000 端口不对宿主机外
 暴露（docker-compose 已收口 127.0.0.1），否则任何人都能伪造身份头。
@@ -26,9 +29,9 @@ USER_NAME_HEADER = "X-User-Name"
 USER_DEPT_HEADER = "X-User-Dept"
 
 _AUTH_MODES = ("legacy", "header", "strict")
-IDENTITY_SOURCE: str = os.getenv("IDENTITY_SOURCE", "legacy").strip().lower()
-if IDENTITY_SOURCE not in _AUTH_MODES:  # 防呆：写错模式宁可启动期兜回 legacy
-    IDENTITY_SOURCE = "legacy"
+IDENTITY_SOURCE: str = os.getenv("IDENTITY_SOURCE", "header").strip().lower()
+if IDENTITY_SOURCE not in _AUTH_MODES:  # 防呆：写错模式宁可启动期兜回 header
+    IDENTITY_SOURCE = "header"
 
 # 旧开关（TRUST_USER_HEADER / USER_ID_HEADER 定义在 config/__init__.py），
 # 仅 legacy 模式继续消费；header/strict 不再看它。

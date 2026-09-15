@@ -15,3 +15,10 @@ scrape_configs:
     # Python 后端跑在宿主机 8000；若后端改为容器部署（app 服务启用），改成 app:8000
     static_configs:
       - targets: ["host.docker.internal:8000"]
+
+  - job_name: agent-platform-apisix
+    # APISIX 独立导出服务（容器网络内 9091，compose 未发布该端口到宿主机）；
+    # 自定义指标：gateway_auth_denied_total{route,reason} / gateway_auth_would_deny_total
+    metrics_path: /apisix/prometheus/metrics
+    static_configs:
+      - targets: ["agent-apisix:9091"]

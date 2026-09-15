@@ -70,6 +70,28 @@ class TestProductionAuthFailFast:
         warnings = validate_startup_settings()
         assert any("ALLOW_UNAUTHENTICATED" in w for w in warnings)
 
+    def test_prod_legacy_identity_is_fatal(self, monkeypatch):
+        self._patch_env(monkeypatch,
+            ENVIRONMENT="production",
+            ALLOW_UNAUTHENTICATED="false",
+            API_KEY="a" * 32,
+            IDENTITY_SOURCE="legacy",
+            PGHOST="localhost", PGPORT="5432", PGUSER="u", PGPASSWORD="pw",
+        )
+        with pytest.raises(SettingsValidationError, match="IDENTITY_SOURCE"):
+            validate_startup_settings()
+
+    def test_prod_header_identity_passes(self, monkeypatch):
+        self._patch_env(monkeypatch,
+            ENVIRONMENT="production",
+            ALLOW_UNAUTHENTICATED="false",
+            API_KEY="a" * 32,
+            IDENTITY_SOURCE="header",
+            PGHOST="localhost", PGPORT="5432", PGUSER="u", PGPASSWORD="pw",
+        )
+        warnings = validate_startup_settings()
+        assert isinstance(warnings, list)
+
     def test_unknown_environment_defaults_to_production(self, monkeypatch):
         self._patch_env(monkeypatch,
             ENVIRONMENT="banana",

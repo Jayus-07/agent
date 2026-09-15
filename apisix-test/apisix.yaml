@@ -19,20 +19,44 @@ routes:
     upstream_id: echo
     plugins:
       gateway-auth: {}
+      prometheus: {}
+
+  # 限流专项测试路由：配额刻意取小让断言快（count=5/min，并发 2+burst 1）；
+  # 键语义与生产一致（http_x_user_id，空回退 IP）。/echo 保持不限流，
+  # 认证矩阵大量复用它，二者不能混。
+  - id: limited
+    uri: /limited
+    upstream_id: echo
+    plugins:
+      gateway-auth: {}
+      prometheus: {}
+      limit-conn:
+        key: http_x_user_id
+        conn: 2
+        burst: 1
+        default_conn_delay: 0.1
+        rejected_code: 429
+      limit-count:
+        key: http_x_user_id
+        count: 5
+        time_window: 60
+        rejected_code: 429
 
   - id: chat
     uri: /api/chat/*
     upstream_id: app
     plugins:
       gateway-auth: {}
+      prometheus: {}
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
 
-  # 白名单对照：auth 路由不挂插件（与生产一致）
+  # 白名单对照：auth 路由不挂认证插件（与生产一致；prometheus 例外——观测与认证无关）
   - id: auth-passthrough
     uri: /api/auth/*
     upstream_id: auth
     plugins:
+      prometheus: {}
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
 
