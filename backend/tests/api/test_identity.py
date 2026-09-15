@@ -101,6 +101,14 @@ def test_header_mode_gateway_anonymous_is_guest(client, monkeypatch):
                         "auth_type": "guest", "source": "guest"}
 
 
+def test_header_mode_anonymous_uid_without_anon_tag_is_guest(client, monkeypatch):
+    # 网关异常场景：X-User-Id 单独为 anonymous（X-Auth-Type 正常打标）也必须视同
+    # guest，否则共享占位账号会以已认证身份落库
+    _set_mode(monkeypatch, "header")
+    r = client.post("/whoami", headers={"X-Auth-Type": "jwt", "X-User-Id": "anonymous"})
+    assert r.json()["user_id"] == "" and r.json()["source"] == "guest"
+
+
 def test_header_mode_api_key_tag_without_uid_is_guest(client, monkeypatch):
     # 网关对 X-API-Key 通道只打标 X-Auth-Type: api-key，无用户头 → guest
     _set_mode(monkeypatch, "header")
@@ -120,9 +128,16 @@ def test_default_mode_is_header(monkeypatch):
     import importlib
 
     from backend.config import auth as auth_cfg
+    # reload 是进程级副作用：先记录模块当前值，finally 里经 env 还原后 reload，
+    # 否则同会话后续直接读 auth_cfg.IDENTITY_SOURCE 的测试拿到的是本用例的残留值
+    original = auth_cfg.IDENTITY_SOURCE
     monkeypatch.delenv("IDENTITY_SOURCE", raising=False)
-    importlib.reload(auth_cfg)
-    assert auth_cfg.IDENTITY_SOURCE == "header"
+    try:
+        importlib.reload(auth_cfg)
+        assert auth_cfg.IDENTITY_SOURCE == "header"
+    finally:
+        monkeypatch.setenv("IDENTITY_SOURCE", original)
+        importlib.reload(auth_cfg)
 
 
 # ── strict：未认证 401 ──

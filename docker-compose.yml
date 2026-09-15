@@ -97,6 +97,9 @@ services:
       # backend/config/startup.py 启动校验强制）。9000 外任何直连 8000 的
       # 流量一律按 guest 处理
       - IDENTITY_SOURCE=${IDENTITY_SOURCE:-header}
+      # 网关安全页数据源（/observability/gateway-auth 只读代理）。prometheus 属
+      # observability profile：未启动时该路由返回 available=false，前端显式降级
+      - PROMETHEUS_URL=${PROMETHEUS_URL:-http://prometheus:9090}
       # Redis
       - REDIS_ENABLED=${REDIS_ENABLED:-true}
       - REDIS_URL=redis://redis:6379/0

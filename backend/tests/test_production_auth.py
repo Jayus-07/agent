@@ -90,7 +90,9 @@ class TestProductionAuthFailFast:
             PGHOST="localhost", PGPORT="5432", PGUSER="u", PGPASSWORD="pw",
         )
         warnings = validate_startup_settings()
+        # 不抛 fatal 且不产生 IDENTITY_SOURCE 相关告警，才是真"通过"
         assert isinstance(warnings, list)
+        assert not any("IDENTITY_SOURCE" in w for w in warnings), warnings
 
     def test_unknown_environment_defaults_to_production(self, monkeypatch):
         self._patch_env(monkeypatch,
