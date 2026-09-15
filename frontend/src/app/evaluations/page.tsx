@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { RefreshCw, ChevronDown, ChevronRight, CheckCircle2, XCircle, AlertCircle, SkipForward } from 'lucide-react'
-import { evaluationService, type RunSummary, type EvalRunDetail } from '@/services/evaluation'
+import { evaluationService, type RunSummary, type EvalRunDetail } from '@/api/evaluation'
 import { useToast } from '@/components/shared/Toast'
 import dynamic from 'next/dynamic'
 

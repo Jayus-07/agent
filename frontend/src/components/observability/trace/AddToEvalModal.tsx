@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { evaluationService, type AppendResult } from "@/services/evaluation";
+import { evaluationService, type AppendResult } from "@/api/evaluation";
 
 interface Props {
   traceId: string;

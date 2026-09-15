@@ -24,7 +24,7 @@ const FlameGraph = dynamic(() => import("@/components/observability/trace/FlameG
 });
 import SpanTypeFilter from "@/components/observability/trace/SpanTypeFilter";
 import GraphTopology from "@/components/observability/trace/GraphTopology";
-import { evaluationService } from "@/services/evaluation";
+import { evaluationService } from "@/api/evaluation";
 import { fetchRaw } from "@/api/client"
 import { useToast } from "@/components/shared/Toast";
 import {
