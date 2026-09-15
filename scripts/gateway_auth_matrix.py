@@ -212,17 +212,22 @@ def run_scenarios(args) -> list[dict]:
                         "pass": None, "note": "需测试 redis"})
 
     # 10 伪造身份头：剥离 + 正确注入 + X-Trace-Id 透传保留
+    #    B5/S0-1 扩展：伪造头新增 X-Operator-Role / X-Operator-Id，
+    #    二者必须同样被网关剥离 —— 响应头中不应出现（断言 is None）
     st, _, body = http("GET", base + "/echo",
                        {**bearer(tok_valid), "X-User-Id": "hacker", "X-Auth-Type": "admin",
                         "X-User-Name": "hacker-name", "X-User-Dept": "hacker-dept",
+                        "X-Operator-Role": "superadmin", "X-Operator-Id": "op-999",
                         "X-Trace-Id": "matrix-trace-123"})
     hs = echo_headers(body)
     record("forged_headers",
-           "200 + x-user-id=10001/x-auth-type=jwt（伪造值被剥离）+ x-trace-id=matrix-trace-123（透传保留）",
+           "200 + x-user-id=10001/x-auth-type=jwt（伪造值被剥离）+ x-operator-role/x-operator-id 不存在 "
+           "+ x-trace-id=matrix-trace-123（透传保留）",
            f"{st} + {hs}",
            st == 200 and hs.get("x-user-id") == "10001" and hs.get("x-auth-type") == "jwt"
            and hs.get("x-user-name") == "matrix-user" and hs.get("x-user-dept") == "dept-42"
-           and hs.get("x-trace-id") == "matrix-trace-123")
+           and hs.get("x-trace-id") == "matrix-trace-123"
+           and hs.get("x-operator-role") is None and hs.get("x-operator-id") is None)
 
     # 11 白名单透传：login 不带 JWT → Java auth-service 业务响应（非网关 401）
     st, _, body = http("POST", base + "/api/auth/login",
