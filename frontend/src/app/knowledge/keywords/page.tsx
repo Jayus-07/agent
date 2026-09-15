@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Tags, Search, Plus, Trash2, RefreshCw, Loader2, Pencil, Power, Upload, X, ChevronDown, Scale, ShieldCheck, BookOpen, ShoppingBag, Wallet, Boxes, Layers } from 'lucide-react'
-import { keywordService, type KeywordRule } from '@/services/keyword'
+import { keywordService, type KeywordRule } from '@/api/keyword'
 import { useToast } from '@/components/shared/Toast'
 
 const DOC_TYPE_CN: Record<string, string> = {
