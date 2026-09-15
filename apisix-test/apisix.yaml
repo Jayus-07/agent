@@ -1,0 +1,39 @@
+# B2 测试路由：echo 桩（验证身份头注入/剥离）+ 真实 chat（验证下游 401 判别）+ auth 白名单
+upstreams:
+  - id: echo
+    type: roundrobin
+    nodes:
+      "host.docker.internal:8099": 1
+  - id: app
+    type: roundrobin
+    nodes:
+      "host.docker.internal:8000": 1
+  - id: auth
+    type: roundrobin
+    nodes:
+      "host.docker.internal:8006": 1
+
+routes:
+  - id: echo
+    uri: /echo
+    upstream_id: echo
+    plugins:
+      gateway-auth: {}
+
+  - id: chat
+    uri: /api/chat/*
+    upstream_id: app
+    plugins:
+      gateway-auth: {}
+      proxy-rewrite:
+        regex_uri: ["^/api/(.*)$", "/$1"]
+
+  # 白名单对照：auth 路由不挂插件（与生产一致）
+  - id: auth-passthrough
+    uri: /api/auth/*
+    upstream_id: auth
+    plugins:
+      proxy-rewrite:
+        regex_uri: ["^/api/(.*)$", "/$1"]
+
+#END

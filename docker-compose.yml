@@ -17,6 +17,40 @@ networks:
     driver: bridge
 
 services:
+  # ── APISIX（Python 项目独立入口，B1 起）──
+  # standalone 声明式配置（apisix/apisix.yaml 进 git，不引 Nacos/etcd）；
+  # 端口绑 127.0.0.1：B1~B3 仅本机验证，B4 切流时才评估对外暴露。
+  # Java SCG(8080) 原样保留，是回滚路径，二者并存互不影响。
+  apisix:
+    image: apache/apisix:3.13.0-debian
+    container_name: agent-apisix
+    ports:
+      - "127.0.0.1:9080:9080"
+    volumes:
+      # 改路由只动 apisix/apisix.yaml，重启容器即生效（发布/回滚流程见方案 §8）
+      - ./apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+      # standalone 声明：role=data_plane + config_provider=yaml（3.13 镜像要求显式声明）
+      - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      # 自研认证插件（B2；源码进 Git，密钥走环境变量不落盘）
+      - ./apisix/plugins:/usr/local/apisix/custom_plugins/apisix/plugins:ro
+    environment:
+      # 认证模式灰度：shadow（默认，只记不拦）→ guest → enforce（B4 切流时定）
+      - GATEWAY_AUTH_MODE=${GATEWAY_AUTH_MODE:-shadow}
+      # JWT 验签（与 Java auth-service 同源；值来自 .env，禁止写入本文件）
+      - JWT_SECRET=${JWT_SECRET:-}
+      - JWT_SECRET_PREVIOUS=${JWT_SECRET_PREVIOUS:-}
+      - JWT_ISSUER=${JWT_ISSUER:-hongmeng-oa}
+      # Redis 黑名单（只读 oa-auth-redis，写侧归 auth-service）
+      - AUTH_REDIS_HOST=${AUTH_REDIS_HOST:-host.docker.internal}
+      - AUTH_REDIS_PORT=${AUTH_REDIS_PORT:-16379}
+      - AUTH_REDIS_PASSWORD=${AUTH_REDIS_PASSWORD:-}
+    # 注意：不要加 extra_hosts host-gateway —— Docker Desktop (Windows) 自带的
+    # host.docker.internal 才能到达宿主机 loopback 服务（8000/8006）；
+    # host-gateway 指向 VM 网关，loopback 服务不可达（B1 实测 502）。
+    networks:
+      - agent-net
+    restart: unless-stopped
+
   # ── API Gateway（Spring Cloud Gateway，统一入口）──
   api-gateway:
     build: ./api-gateway

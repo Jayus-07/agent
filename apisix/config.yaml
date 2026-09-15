@@ -1,0 +1,38 @@
+# APISIX 数据面配置（standalone：配置来源 = 同目录 apisix.yaml，无 etcd/控制面）
+# 部署形态见 docs/gateway-apisix-migration-plan.md §8（standalone 多副本 + 五步发布流程）
+
+deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
+
+nginx_config:
+  # nginx 默认剥离 worker 继承的全部环境变量；网关插件所需变量必须显式保留。
+  # ⚠️ schema 键名是 envs 不是 env——写错会被静默忽略（B2 实测踩坑）
+  envs:
+    - GATEWAY_AUTH_MODE
+    - JWT_SECRET
+    - JWT_SECRET_PREVIOUS
+    - JWT_ISSUER
+    - GATEWAY_AUTH_CLOCK_SKEW
+    - AUTH_REDIS_HOST
+    - AUTH_REDIS_PORT
+    - AUTH_REDIS_PASSWORD
+    - GATEWAY_AUTH_BLACKLIST_PREFIX
+    - GATEWAY_AUTH_REDIS_CMD_TIMEOUT_MS
+    - GATEWAY_AUTH_REDIS_POOL_SIZE
+    - GATEWAY_AUTH_REDIS_POOL_IDLE_MS
+
+apisix:
+  # 自研插件：容器内挂载为 custom_plugins/apisix/plugins/*.lua，
+  # 使 require("apisix.plugins.gateway-auth") 命中（B2 实测路径映射要求）
+  extra_lua_path: "/usr/local/apisix/custom_plugins/?.lua;;"
+  # DNS 解析缓存 5s：app 容器重启换 IP 后，网关 5s 内自愈（B3 实测默认 TTL 曾致 30s+ 502 窗口）
+  dns_resolver_valid: 5
+
+# 最小插件清单（显式声明，不用默认全量列表——本入口只用到这几个；
+# proxy-buffering 非本镜像内置插件，SSE 无缓冲依赖镜像默认行为并在 B3 矩阵复测）
+plugins:
+  - proxy-rewrite
+  - prometheus
+  - gateway-auth

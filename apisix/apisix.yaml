@@ -1,0 +1,125 @@
+# APISIX standalone 声明式配置 — Python 项目独立入口（B1：鉴权旁路，仅路由/转发/兼容性）
+#
+# 方案：docs/gateway-apisix-migration-plan.md v2.0 §2（B0 审计实测修正版）
+# 审计：docs/gateway-apisix-audit-report.md
+#
+# B0 实测约束（改这里之前先读审计报告）：
+# 1. FastAPI 路由无 /api 前缀 —— 所有 /api/* 路由必须 StripPrefix（regex_uri 剥 /api）。
+# 2. /api/sys/* 目标是 /system/<path>（对齐 SCG RewritePath，非裸 StripPrefix）。
+# 3. FastAPI 鉴权中间件先于路由执行 → 未知路径 401；APISIX 兜底 /api/* 整段转发，不做前缀过滤。
+# 4. /api/chat/* 禁 gzip（本配置从未开启 gzip）、read/send 600s、retries=0；
+#    响应无缓冲依赖镜像默认行为（B1/B2 实测逐块传输），B3 矩阵持续复测。
+# 5. /internal/* 不经 APISIX（本文件不含该路由）。
+# 6. B1 不含 gateway-auth / 黑名单 / 身份头注入（B2 硬闸门内容）。
+# 7. CORS 由上游各自处理（FastAPI CORSMiddleware / Java 网关），APISIX 不加 cors 插件，
+#    避免与上游 CORS 头重复（SCG 曾为此专门配 DedupeResponseHeader）。
+#
+# 系统直通路由（/, /health, /metrics, /openapi.json）：B1 为基线兼容保留，
+# B4 生产加固时按 §2 "不对外" 收口决策复核。
+
+upstreams:
+  - id: app
+    type: roundrobin
+    retries: 0
+    timeout:
+      connect: 5
+      read: 60
+      send: 60
+    # app 以 compose 容器形态运行（agent-app-1），容器名直连；
+    # 若改为宿主机裸跑 uvicorn，改回 "host.docker.internal:8000"
+    nodes:
+      "app:8000": 1
+  - id: app_chat
+    type: roundrobin
+    retries: 0
+    timeout:
+      connect: 5
+      read: 600
+      send: 600
+    nodes:
+      "app:8000": 1
+  - id: auth
+    type: roundrobin
+    retries: 0
+    timeout:
+      connect: 5
+      read: 60
+      send: 60
+    nodes:
+      "host.docker.internal:8006": 1
+  - id: system
+    type: roundrobin
+    retries: 0
+    timeout:
+      connect: 5
+      read: 60
+      send: 60
+    nodes:
+      "host.docker.internal:8001": 1
+
+routes:
+  # ── Java 认证/用户中心（保留前缀剥除：/api/auth/* → /auth/*）──
+  - id: auth-service
+    uri: /api/auth/*
+    upstream_id: auth
+    plugins:
+      proxy-rewrite:
+        regex_uri: ["^/api/(.*)$", "/$1"]
+
+  # ── Java 用户中心（对齐 SCG RewritePath：/api/sys/* → /system/*）──
+  - id: system-service
+    uri: /api/sys/*
+    upstream_id: system
+    plugins:
+      proxy-rewrite:
+        regex_uri: ["^/api/sys/(.*)$", "/system/$1"]
+
+  # ── SSE/长任务：独立 upstream（600s + retries=0）+ 禁缓冲 ──
+  - id: chat-sse
+    uri: /api/chat/*
+    upstream_id: app_chat
+    plugins:
+      gateway-auth: {}
+      proxy-rewrite:
+        regex_uri: ["^/api/(.*)$", "/$1"]
+
+  # ── 副作用路由（禁重试，retries=0 已在 upstream 层设置）──
+  - id: sql-side-effect
+    uri: /api/sql/*
+    upstream_id: app
+    plugins:
+      gateway-auth: {}
+      proxy-rewrite:
+        regex_uri: ["^/api/(.*)$", "/$1"]
+  - id: mcp-side-effect
+    uri: /api/mcp/*
+    upstream_id: app
+    plugins:
+      gateway-auth: {}
+      proxy-rewrite:
+        regex_uri: ["^/api/(.*)$", "/$1"]
+
+  # ── 系统直通（B1 基线兼容；B4 复核收口）──
+  - id: sys-health
+    uri: /health
+    upstream_id: app
+  - id: sys-metrics
+    uri: /metrics
+    upstream_id: app
+  - id: sys-openapi
+    uri: /openapi.json
+    upstream_id: app
+  - id: sys-index
+    uri: /
+    upstream_id: app
+
+  # ── 兜底：/api/* → FastAPI（整段转发，剥 /api）──
+  - id: app-fallback
+    uri: /api/*
+    upstream_id: app
+    plugins:
+      gateway-auth: {}
+      proxy-rewrite:
+        regex_uri: ["^/api/(.*)$", "/$1"]
+
+#END

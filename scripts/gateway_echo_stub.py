@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class EchoHandler(BaseHTTPRequestHandler):
@@ -52,7 +52,9 @@ class EchoHandler(BaseHTTPRequestHandler):
 def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8099
     print(f"[echo-stub] listening on 0.0.0.0:{port}", flush=True)
-    HTTPServer(("0.0.0.0", port), EchoHandler).serve_forever()
+    server = ThreadingHTTPServer(("0.0.0.0", port), EchoHandler)
+    server.daemon_threads = True  # 线程随主进程退出；避免单线程被 keepalive 空闲连接阻塞（B2 实测）
+    server.serve_forever()
 
 
 if __name__ == "__main__":
