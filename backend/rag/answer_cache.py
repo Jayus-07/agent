@@ -50,16 +50,23 @@ class AnswerCache:
         kb_id: str,
         metadata_filter: dict,
         model: str,
+        scope: str = "",
     ) -> str:
         """构建缓存 key。
 
-        Key = sha256(normalized_query | kb_id | cache_version | filter_hash | model)
+        Key = sha256(normalized_query | kb_id | cache_version | filter_hash | model | scope)
+
+        2026-09-15 补 scope：主体授权过滤发生在检索之后（ChunkLevelRetriever
+        按 subject_type/department 剔除越界文档），因此不同主体的"同一个问题"
+        可以有合法的不同答案。此前键不含身份维度，实测 customer 主体的拒答
+        答案污染了 employee 的缓存条目（在线服务里表现为"越权缓存污染"）。
+        scope 缺省空串 = 历史行为（无主体信息路径）。
         """
         normalized = query.strip().lower()
         cache_version = self._get_cache_version(kb_id)
         filter_hash = self._hash_filter(metadata_filter)
 
-        raw = f"{normalized}|{kb_id}|{cache_version}|{filter_hash}|{model}"
+        raw = f"{normalized}|{kb_id}|{cache_version}|{filter_hash}|{model}|{scope}"
         return hashlib.sha256(raw.encode()).hexdigest()
 
     def _get_cache_version(self, kb_id: str) -> int:
@@ -99,10 +106,11 @@ class AnswerCache:
         kb_id: str,
         metadata_filter: dict,
         model: str,
+        scope: str = "",
     ) -> str | None:
-        """查询缓存。命中返回答案字符串，未命中返回 None。"""
+        """查询缓存。命中返回答案字符串，未命中返回 None。scope=主体授权范围。"""
         try:
-            key = self._build_key(query, kb_id, metadata_filter, model)
+            key = self._build_key(query, kb_id, metadata_filter, model, scope)
             cached = self._get_cache().get_json(key)
             if cached:
                 logger.info(f"[AnswerCache] 命中: query={query[:60]}... kb={kb_id}")
@@ -119,10 +127,11 @@ class AnswerCache:
         metadata_filter: dict,
         model: str,
         answer: str,
+        scope: str = "",
     ) -> None:
-        """写入缓存。"""
+        """写入缓存。scope=主体授权范围（与 get 必须一致）。"""
         try:
-            key = self._build_key(query, kb_id, metadata_filter, model)
+            key = self._build_key(query, kb_id, metadata_filter, model, scope)
             self._get_cache().set_json(key, answer, ttl=self._ttl)
             logger.debug(f"[AnswerCache] 写入: query={query[:60]}... kb={kb_id}")
         except Exception as e:

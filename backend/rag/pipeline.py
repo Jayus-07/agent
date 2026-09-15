@@ -708,8 +708,11 @@ class RAGPipeline:
             from backend.rag.context import get_context
             from backend.config.llm import LLM_MODEL
             ctx = get_context()
+            ident = ctx.identity
+            scope = (f"{getattr(ident, 'subject_type', '') or '-'}"
+                     f":{getattr(ident, 'department', '') or '-'}")
             cached = get_answer_cache().get(
-                question, kb_id, ctx.metadata_filter, LLM_MODEL,
+                question, kb_id, ctx.metadata_filter, LLM_MODEL, scope=scope,
             )
             if cached is not None:
                 logger.info(f"[RAG.ask] 缓存命中: {question[:60]}")
@@ -727,21 +730,32 @@ class RAGPipeline:
             from backend.rag.context import get_context
             from backend.config.llm import LLM_MODEL
             ctx = get_context()
+            ident = ctx.identity
+            scope = (f"{getattr(ident, 'subject_type', '') or '-'}"
+                     f":{getattr(ident, 'department', '') or '-'}")
             get_answer_cache().put(
                 question, kb_id, ctx.metadata_filter, LLM_MODEL, answer,
+                scope=scope,
             )
         except Exception as e:
             logger.debug(f"[RAG.ask] 缓存写入失败（非致命）: {e}")
 
     @staticmethod
     def _is_rejection(answer: str) -> bool:
-        """判断答案是否为拒答（拒答不缓存 — 文档更新后可能可以回答）。"""
+        """判断答案是否为拒答（拒答不缓存 — 文档更新后可能可以回答）。
+
+        2026-09-15 补漏：EvidenceGate 的标准 NO_EVIDENCE 话术
+        "知识库暂无相关资料。" 此前不在标记表中 → 拒答被当正常答案缓存
+        1 小时（实测污染整轮验证：授权过滤导致的拒答被复用给其他主体）。
+        """
         rejection_markers = (
+            "知识库暂无相关资料",
             "知识库中未找到",
             "无法找到",
             "没有足够的信息",
             "无法回答",
             "资料不足",
+            "未能获取任何有效数据",
         )
         return any(marker in answer for marker in rejection_markers)
 
