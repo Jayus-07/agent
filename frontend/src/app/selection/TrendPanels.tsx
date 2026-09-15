@@ -2,7 +2,7 @@
 
 // 从 selection/page.tsx 抽出：recharts 较重，由页面用 next/dynamic 懒加载
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
-import type { TrendsData } from '@/services/selection'
+import type { TrendsData } from '@/api/selection'
 
 export default function TrendPanels({ trends }: { trends: TrendsData }) {
   return (

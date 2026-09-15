@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
-import { selectionService, type CompareItem } from '@/services/selection'
+import { selectionService, type CompareItem } from '@/api/selection'
 
 interface Props {
   urls: string[]

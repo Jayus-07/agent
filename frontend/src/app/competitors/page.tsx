@@ -22,7 +22,7 @@ import { competitorService, type WatchItem, type CompetitorStats, type CookieSta
 // 两个弹窗都含 recharts，懒加载避免拖慢页面首帧
 const PriceHistoryModal = dynamic(() => import('@/components/competitor/PriceHistoryModal'), { ssr: false })
 const CompareModal = dynamic(() => import('@/components/selection/CompareModal'), { ssr: false })
-import { selectionService, type ScoreResult } from '@/services/selection'
+import { selectionService, type ScoreResult } from '@/api/selection'
 import { useToast } from '@/components/shared/Toast'
 import { clsx } from 'clsx'
 

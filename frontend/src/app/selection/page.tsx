@@ -19,7 +19,7 @@ const TrendPanels = dynamic(() => import('./TrendPanels'), {
 })
 import {
   selectionService, RecommendationItem, TrendsData,
-} from '@/services/selection'
+} from '@/api/selection'
 import { competitorService } from '@/api/competitor'
 import { useToast } from '@/components/shared/Toast'
 
