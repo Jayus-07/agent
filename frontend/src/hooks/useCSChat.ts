@@ -3,12 +3,12 @@
 import { useCallback, useRef } from 'react'
 import { useCSChatStore } from '@/store/csChat'
 import { streamChat, abortChat } from '@/lib/api/chat'
-import { authFetch } from '@/lib/authFetch'
+import { fetchRaw } from '@/api/client'
 import { nanoid } from 'nanoid'
 
 async function persistSession(sessionId: string, question: string, answer: string) {
   try {
-    await authFetch('/api/chat/messages', {
+    await fetchRaw('/api/chat/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

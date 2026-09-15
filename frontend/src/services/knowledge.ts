@@ -8,12 +8,7 @@ export type OperationType = 'upload' | 'reindex' | 'delete' | ''
 
 const BASE = '/api/rag'
 
-/**
- * 带认证的 fetch 包装 — 已抽到 lib/authFetch.ts 统一维护，此处引入自用并转导出兼容旧引用
- * （UploadDialog.tsx 等从本模块 import authFetch）。
- */
-import { authFetch } from '@/lib/authFetch'
-export { authFetch }
+import { fetchRaw } from '@/api/client'
 
 /** 构建查询字符串，自动过滤 undefined/null/空字符串，避免 URLSearchParams 将其转为字面字符串 "undefined" */
 const qs = (params: Record<string, any>) => {
@@ -25,24 +20,24 @@ const qs = (params: Record<string, any>) => {
 }
 
 export const knowledgeService: any = {
-  getStats: () => authFetch(`${BASE}/stats`).then(r => r.json()).catch(() => ({})),
+  getStats: () => fetchRaw(`${BASE}/stats`).then(r => r.json()).catch(() => ({})),
 
   getDocuments: (params: any = {}) =>
-    authFetch(`${BASE}/documents?${qs(params)}`).then(r => r.json()).catch(() => ({ documents: [], total: 0 })),
+    fetchRaw(`${BASE}/documents?${qs(params)}`).then(r => r.json()).catch(() => ({ documents: [], total: 0 })),
 
   getDocument: (id: string) =>
-    authFetch(`${BASE}/documents/${id}`).then(r => r.json()).catch(() => ({})),
+    fetchRaw(`${BASE}/documents/${id}`).then(r => r.json()).catch(() => ({})),
 
   // P0 审核 Dashboard（2026-08-11）
   getPendingDocs: (params: { page?: number; page_size?: number } = {}) =>
-    authFetch(`${BASE}/pending?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [], total: 0 })),
+    fetchRaw(`${BASE}/pending?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [], total: 0 })),
 
   approvePendingDoc: (doc_id: string) =>
-    authFetch(`${BASE}/pending/${doc_id}/approve`, { method: 'POST' })
+    fetchRaw(`${BASE}/pending/${doc_id}/approve`, { method: 'POST' })
       .then(r => r.json()).catch(() => ({ ok: false })),
 
   rejectPendingDoc: (doc_id: string) =>
-    authFetch(`${BASE}/pending/${doc_id}/reject`, { method: 'POST' })
+    fetchRaw(`${BASE}/pending/${doc_id}/reject`, { method: 'POST' })
       .then(r => r.json()).catch(() => ({ ok: false })),
 
   /**
@@ -74,12 +69,12 @@ export const knowledgeService: any = {
     // 旧实现直接把 503 当失败报给用户;批量上传场景极易触发。非 ServerBusy 的 503
     // (如服务未就绪)不重试,由下方友好提示接管。
     const postWithBusyRetry = async (): Promise<Response> => {
-      let res = await authFetch(`${BASE}/upload`, { method: 'POST', body: fd, headers })
+      let res = await fetchRaw(`${BASE}/upload`, { method: 'POST', body: fd, headers })
       for (let attempt = 1; attempt <= 2 && res.status === 503; attempt++) {
         const text = await res.clone().text().catch(() => '')
         if (!text.includes('ServerBusy')) break
         await new Promise(r => setTimeout(r, 1500 * attempt))
-        res = await authFetch(`${BASE}/upload`, { method: 'POST', body: fd, headers })
+        res = await fetchRaw(`${BASE}/upload`, { method: 'POST', body: fd, headers })
       }
       return res
     }
@@ -108,7 +103,7 @@ export const knowledgeService: any = {
 
         // 订阅 SSE 获取索引进度
         // P2: EventSource 不支持自定义 header（无法携带 X-API-Key，会被
-        // 后端认证中间件 401 拒绝），改用 authFetch + ReadableStream 手动解析 SSE。
+        // 后端认证中间件 401 拒绝），改用 fetchRaw + ReadableStream 手动解析 SSE。
         return new Promise((resolve) => {
           let resolved = false
           // P1 看门狗:后台任务异常死亡时服务端永不发终态事件,旧实现 Promise 永久挂起,
@@ -161,7 +156,7 @@ export const knowledgeService: any = {
           // fetch 流式解析 SSE：按空行分隔事件，取 data: 行
           ;(async () => {
             try {
-              const res = await authFetch(`${BASE}/upload/${data.upload_id}/stream`)
+              const res = await fetchRaw(`${BASE}/upload/${data.upload_id}/stream`)
               if (!res.ok || !res.body) {
                 fail()
                 return
@@ -197,10 +192,10 @@ export const knowledgeService: any = {
   },
 
   deleteDocument: (id: string) =>
-    authFetch(`${BASE}/documents/${id}`, { method: 'DELETE' }).then(r => r.json()).catch(() => ({ ok: false })),
+    fetchRaw(`${BASE}/documents/${id}`, { method: 'DELETE' }).then(r => r.json()).catch(() => ({ ok: false })),
 
   reindexDocument: (id: string) =>
-    authFetch(`${BASE}/documents/${id}/reindex`, { method: 'POST' }).then(r => r.json()).catch(() => ({ ok: false })),
+    fetchRaw(`${BASE}/documents/${id}/reindex`, { method: 'POST' }).then(r => r.json()).catch(() => ({ ok: false })),
 
   /**
    * 批量删除（并发）— 使用 X-Batch-Id 头关联同一批次，操作中心按批次折叠展示。
@@ -213,7 +208,7 @@ export const knowledgeService: any = {
     return Promise.all(
       docs.map(async ({ id, name }) => {
         try {
-          const res = await authFetch(`${BASE}/documents/${id}`, { method: 'DELETE', headers })
+          const res = await fetchRaw(`${BASE}/documents/${id}`, { method: 'DELETE', headers })
           const r = await res.json()
           return { id, name, ok: r.ok as boolean, error: r.error as string | undefined, warnings: r.warnings as string[] | undefined }
         } catch (e) {
@@ -247,7 +242,7 @@ export const knowledgeService: any = {
     if (batchId) headers['X-Batch-Id'] = batchId
     for (const id of ids) {
       try {
-        const res = await authFetch(`${BASE}/documents/${id}/reindex`, { method: 'POST', headers })
+        const res = await fetchRaw(`${BASE}/documents/${id}/reindex`, { method: 'POST', headers })
         const r = await res.json()
         if (r.ok) ok++
         else failed.push({ id, error: r.error || '重索引失败' })
@@ -259,8 +254,8 @@ export const knowledgeService: any = {
   },
 
   getOperations: (params: any = {}) =>
-    authFetch(`${BASE}/operations?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [], total: 0 })),
+    fetchRaw(`${BASE}/operations?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [], total: 0 })),
 
   getChunkDetail: (chunkId: string) =>
-    authFetch(`${BASE}/chunks/${chunkId}/detail`).then(r => r.json()).catch(() => ({})),
+    fetchRaw(`${BASE}/chunks/${chunkId}/detail`).then(r => r.json()).catch(() => ({})),
 }

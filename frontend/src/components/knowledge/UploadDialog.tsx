@@ -2,7 +2,8 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { Upload, Loader2, CheckCircle2, XCircle, FileText, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
-import { knowledgeService, authFetch } from '@/services/knowledge'
+import { knowledgeService } from '@/services/knowledge'
+import { fetchRaw } from '@/api/client'
 
 interface Props { open: boolean; onClose: () => void; onSuccess: () => void }
 
@@ -63,7 +64,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
   // 加载 KB 列表
   useEffect(() => {
     if (!open) return
-    authFetch('/api/rag/knowledge-bases')
+    fetchRaw('/api/rag/knowledge-bases')
       .then(r => r.json())
       .then(d => {
         const kbs = d.knowledge_bases || []
@@ -83,7 +84,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
     let cancelled = false
     const check = async () => {
       try {
-        const res = await authFetch('/api/rag/health')
+        const res = await fetchRaw('/api/rag/health')
         const data = await res.json()
         if (!cancelled) {
           setRagReady(data.ready === true)

@@ -11,7 +11,7 @@
  * - 检查期间渲染 null，避免受保护内容闪烁。
  *
  * 复用 lib/auth 的既有约定：token 存 sessionStorage（agent.access_token），
- * 401 时的兜底拦截仍在 fetcher/authFetch 的 handleAuthFailure，两者互补：
+ * 401 时的兜底拦截仍在 `@/api/client` 的 handleAuthFailure，两者互补：
  * 这里拦"进入页面时就没有 token"，那里拦"请求中途 token 失效"。
  */
 import { useEffect, useState, type ReactNode } from "react";

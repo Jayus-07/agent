@@ -191,7 +191,7 @@ export function handleAuthFailure(): void {
   window.location.assign(`/login?redirect=${redirect}`);
 }
 
-/** 请求头注入：业务请求统一带 Bearer（X-API-Key 由 fetcher/authFetch 各自保留） */
+/** 请求头注入：业务请求统一带 Bearer（X-API-Key 由 @/api/client 保留） */
 export function bearerHeaders(): Record<string, string> {
   const token = getAccessToken();
   return token ? { Authorization: `Bearer ${token}` } : {};

@@ -7,7 +7,7 @@
  * 无 case id、无状态机，不能用于本页面。
  */
 
-import { authFetch } from '@/lib/authFetch'
+import { fetchRaw } from '@/api/client'
 
 /** 告警工单：库存状态机的一个 case */
 export interface AlertCase {
@@ -60,7 +60,7 @@ const BASE = '/api/inventory'
  * 失败时抛错而非静默返回空对象 —— 让调用方能区分"没有告警"和"接口挂了"。
  */
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await authFetch(url, init)
+  const res = await fetchRaw(url, init)
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
     throw new Error(`${init?.method ?? 'GET'} ${url} 失败 (${res.status})${detail ? `: ${detail.slice(0, 200)}` : ''}`)

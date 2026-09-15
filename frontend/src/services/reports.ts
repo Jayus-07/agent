@@ -11,7 +11,7 @@
  *    导致报告中心顶部的 KPI 卡片从未显示过
  */
 
-import { authFetch } from '@/lib/authFetch'
+import { fetchRaw } from '@/api/client'
 
 /** KPI 摘要（由 workflow 生成，字段可能缺失） */
 export interface ReportKpiSummary {
@@ -41,7 +41,7 @@ const BASE = '/api/reports'
 
 /** 失败时抛错，让调用方能区分"没有报告"和"接口挂了" */
 async function api<T>(url: string): Promise<T> {
-  const res = await authFetch(url)
+  const res = await fetchRaw(url)
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
     throw new Error(`GET ${url} 失败 (${res.status})${detail ? `: ${detail.slice(0, 200)}` : ''}`)

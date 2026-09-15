@@ -25,7 +25,7 @@ const FlameGraph = dynamic(() => import("@/components/observability/trace/FlameG
 import SpanTypeFilter from "@/components/observability/trace/SpanTypeFilter";
 import GraphTopology from "@/components/observability/trace/GraphTopology";
 import { evaluationService } from "@/services/evaluation";
-import { authFetch } from "@/lib/authFetch";
+import { fetchRaw } from "@/api/client"
 import { useToast } from "@/components/shared/Toast";
 import {
   statusBadge,
@@ -172,7 +172,7 @@ export default function TraceDetailPage() {
     if (replaying) return;
     setReplaying(true);
     try {
-      const resp = await authFetch(`/api/observability/traces/${trace.id}/replay`, {
+      const resp = await fetchRaw(`/api/observability/traces/${trace.id}/replay`, {
         method: "POST",
       });
       if (!resp.ok) {

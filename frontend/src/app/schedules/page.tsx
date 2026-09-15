@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Clock, RefreshCw, Check, X, Play } from 'lucide-react'
 import { clsx } from 'clsx'
-import { authFetch } from '@/lib/authFetch'
+import { fetchRaw } from '@/api/client'
 
 interface Schedule {
   id: string
@@ -32,7 +32,7 @@ export default function SchedulesPage() {
   async function loadSchedules() {
     setLoading(true)
     try {
-      const res = await authFetch('/api/schedules')
+      const res = await fetchRaw('/api/schedules')
       const data = await res.json()
       setSchedules(data.schedules || [])
     } catch {
@@ -55,7 +55,7 @@ export default function SchedulesPage() {
     setSaving(true)
     setMsg(null)
     try {
-      const res = await authFetch(`/api/schedules/${workflow}`, {
+      const res = await fetchRaw(`/api/schedules/${workflow}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ hour: editHour, minute: editMinute }),
@@ -80,7 +80,7 @@ export default function SchedulesPage() {
     setRunning(workflow)
     setMsg(null)
     try {
-      const res = await authFetch(`/api/schedules/${workflow}/run`, { method: 'POST' })
+      const res = await fetchRaw(`/api/schedules/${workflow}/run`, { method: 'POST' })
       const data = await res.json()
       if (!res.ok || data.ok === false) {
         throw new Error(data.error || data.detail || '运行失败')

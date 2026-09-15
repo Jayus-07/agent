@@ -1,6 +1,6 @@
 // Keyword rule service — 对接词库管理 API（/rag/keywords）
 // eslint-disable
-import { authFetch } from '@/lib/authFetch'
+import { fetchRaw } from '@/api/client'
 export interface KeywordRule {
   id: number
   keyword: string
@@ -33,34 +33,34 @@ const qs = (params: Record<string, any>) => {
 
 export const keywordService = {
   list: (params: KeywordListParams = {}): Promise<{ items: KeywordRule[] }> =>
-    authFetch(`${BASE}?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [] })),
+    fetchRaw(`${BASE}?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [] })),
 
   docTypes: (): Promise<{ doc_types: string[] }> =>
-    authFetch(`${BASE}/doc-types`).then(r => r.json()).catch(() => ({ doc_types: [] })),
+    fetchRaw(`${BASE}/doc-types`).then(r => r.json()).catch(() => ({ doc_types: [] })),
 
   categories: (): Promise<{ categories: string[] }> =>
-    authFetch(`${BASE}/categories`).then(r => r.json()).catch(() => ({ categories: [] })),
+    fetchRaw(`${BASE}/categories`).then(r => r.json()).catch(() => ({ categories: [] })),
 
   upsert: (rule: { keyword: string; doc_type: string; category?: string; weight?: number; enabled?: number }) =>
-    authFetch(BASE, {
+    fetchRaw(BASE, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(rule),
     }).then(r => r.json()).catch(() => ({ ok: false })),
 
   batchUpsert: (items: Array<{ keyword: string; doc_type: string; category?: string; weight?: number }>) =>
-    authFetch(`${BASE}/batch`, {
+    fetchRaw(`${BASE}/batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items }),
     }).then(r => r.json()).catch(() => ({ ok: false })),
 
   delete: (keyword: string) =>
-    authFetch(`${BASE}/${encodeURIComponent(keyword)}`, { method: 'DELETE' })
+    fetchRaw(`${BASE}/${encodeURIComponent(keyword)}`, { method: 'DELETE' })
       .then(r => r.json()).catch(() => ({ ok: false })),
 
   toggle: (keyword: string, enabled: number) =>
-    authFetch(`${BASE}/${encodeURIComponent(keyword)}/toggle`, {
+    fetchRaw(`${BASE}/${encodeURIComponent(keyword)}/toggle`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),

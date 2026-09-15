@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { authFetch } from '@/lib/authFetch'
+import { fetchRaw } from '@/api/client'
 import TraceBreadcrumb from '@/components/observability/trace/TraceBreadcrumb'
 
 interface DegradationAlert {
@@ -61,7 +61,7 @@ export default function DegradationAlertsPage() {
 
   const loadAlerts = useCallback(async () => {
     try {
-      const resp = await authFetch('/api/observability/alerts?limit=300')
+      const resp = await fetchRaw('/api/observability/alerts?limit=300')
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const data = await resp.json()
       setAlerts(data.alerts || [])
@@ -74,7 +74,7 @@ export default function DegradationAlertsPage() {
 
   const loadHealth = useCallback(async () => {
     try {
-      const resp = await authFetch('/api/observability/skill-health?limit=300')
+      const resp = await fetchRaw('/api/observability/skill-health?limit=300')
       if (!resp.ok) return
       const data = await resp.json()
       setHealth(data.skills || [])
