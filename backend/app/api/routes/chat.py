@@ -54,6 +54,8 @@ _active_stops: dict[str, threading.Event] = {}
 _SSE_QUEUE_MAXSIZE = CHAT_SSE_QUEUE_MAXSIZE
 # consumer 阻塞拉取超时（秒）→ CPU 占用从 100Hz 轮询降到 ~0.5Hz
 _SSE_GET_TIMEOUT = CHAT_SSE_GET_TIMEOUT
+# SSE 心跳间隔（秒）：空闲超过此值发 ping 保活（实测链路空闲 ~97s 断流，15s 余量充足）
+_SSE_PING_INTERVAL = 15.0
 
 
 def _request_key(session_id: str, request_id: str) -> str:
@@ -229,6 +231,8 @@ async def chat_stream(
         try:
             yield meta_event
 
+            last_yield_at = time.monotonic()  # 心跳节流基准（P0 保活）
+
             while True:
                 # 阻塞拉取：避免 100Hz 轮询消耗 CPU（P1-14）
                 try:
@@ -237,6 +241,15 @@ async def chat_stream(
                     # 超时：检查 producer 是否已结束；未结束则继续等
                     if future.done() and q.empty():
                         break
+                    # SSE 心跳保活（P0）：长 workflow（market_research 156s）执行期
+                    # 事件稀疏，代理/浏览器对无数据连接按空闲超时断流（实测 ~97s），
+                    # final_answer 因此到不了页面。q.get 0.5s 一轮，按 WALL间隔 15s
+                    # 节流发 ping——字节流重置链路空闲计时，前端解析器透传、
+                    # store 归约层 default 忽略，零副作用。
+                    now = time.monotonic()
+                    if now - last_yield_at >= _SSE_PING_INTERVAL:
+                        last_yield_at = now
+                        yield _sse_encode({"event": "ping", "data": {"ts": time.time()}})
                     continue
 
                 if evt is None:  # sentinel → producer 走完（正常/异常）
@@ -252,6 +265,7 @@ async def chat_stream(
                     except Exception:
                         logger.debug("[P1] 流式延迟指标记录失败", exc_info=True)
                 yield _sse_encode(evt)
+                last_yield_at = time.monotonic()  # 有真实事件流动，心跳计时重置
                 await asyncio.sleep(0)  # 让出事件循环
 
         except GeneratorExit:

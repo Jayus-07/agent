@@ -225,8 +225,9 @@ export const useChatStore = create<ChatState>((set, get) => {
         const MAX_STREAM_EVENTS = 200
         let storeEvents = state.streamEvents
         if (isCurrentSession) {
-          if (evt.event === 'meta' || evt.event === 'done') {
-            // meta 是握手事件，不入流；done 清空队列（流结束 = 全部渲染完）
+          if (evt.event === 'meta' || evt.event === 'done' || evt.event === 'ping') {
+            // meta 是握手事件，不入流；done 清空队列（流结束 = 全部渲染完）；
+            // ping 是后端 SSE 保活心跳（P0 防空闲断流），消费方零语义，不入渲染流
             if (evt.event === 'done') storeEvents = []
           } else {
             storeEvents = storeEvents.length >= MAX_STREAM_EVENTS

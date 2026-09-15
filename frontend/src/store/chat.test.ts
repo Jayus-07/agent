@@ -120,6 +120,26 @@ describe('addStreamEvent — 终态清理（StatusBar 残留修复）', () => {
   })
 })
 
+describe('addStreamEvent — ping 保活心跳（P0 防空闲断流）', () => {
+  it('ping 不入 streamEvents 渲染流（与 meta 同类零语义事件）', () => {
+    useChatStore.getState().addStreamEvent(
+      { event: 'ping', data: { ts: 1 } } as any,
+      'local1',
+    )
+    expect(useChatStore.getState().streamEvents).toEqual([])
+  })
+
+  it('ping 不影响 deltaText 与 currentStatus', () => {
+    useChatStore.setState({ deltaText: 'abc', currentStatus: 'reporter' })
+    useChatStore.getState().addStreamEvent(
+      { event: 'ping', data: { ts: 2 } } as any,
+      'local1',
+    )
+    expect(useChatStore.getState().deltaText).toBe('abc')
+    expect(useChatStore.getState().currentStatus).toBe('reporter')
+  })
+})
+
 describe('addStreamEvent — thinking 思考链归约', () => {
   it('thinking 事件累积 thinkingText，不污染 deltaText', () => {
     useChatStore.getState().addStreamEvent(
