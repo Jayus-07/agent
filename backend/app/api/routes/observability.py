@@ -428,3 +428,107 @@ async def get_graph():
         "topology": GRAPH_TOPOLOGY,
         "node_labels": NODE_LABELS,
     }
+
+
+# ═══════════════════════════════════════════════════
+# Gateway Auth（2026-09-16：管理端「网关安全」页数据源）
+# ═══════════════════════════════════════════════════
+
+_PROMETHEUS_TIMEOUT_S = 3.0
+
+
+def _prometheus_url() -> str:
+    return os.getenv("PROMETHEUS_URL", "http://127.0.0.1:9090").rstrip("/")
+
+
+async def _prom_instant(promql: str) -> list[dict]:
+    """即时查询。返回 [{labels, value}]，Prometheus 不可达时抛异常由上层降级。"""
+    import httpx
+    import time as _time
+
+    async with httpx.AsyncClient(timeout=_PROMETHEUS_TIMEOUT_S) as client:
+        resp = await client.get(
+            f"{_prometheus_url()}/api/v1/query",
+            params={"query": promql, "time": f"{_time.time():.3f}"},
+        )
+        resp.raise_for_status()
+        body = resp.json()
+    if body.get("status") != "success":
+        raise RuntimeError(f"prometheus query failed: {body.get('errorType')}")
+    return [
+        {"labels": r.get("metric", {}), "value": float(r["value"][1])}
+        for r in body.get("data", {}).get("result", [])
+    ]
+
+
+async def _prom_range(promql: str, hours: float, step_seconds: int) -> list[dict]:
+    """区间查询。返回 [{ts, value}]，点数上限约 120（步长按窗口自动放大）。"""
+    import httpx
+    import time as _time
+
+    end = _time.time()
+    start = end - hours * 3600
+    async with httpx.AsyncClient(timeout=_PROMETHEUS_TIMEOUT_S) as client:
+        resp = await client.get(
+            f"{_prometheus_url()}/api/v1/query_range",
+            params={
+                "query": promql,
+                "start": f"{start:.3f}",
+                "end": f"{end:.3f}",
+                "step": str(step_seconds),
+            },
+        )
+        resp.raise_for_status()
+        body = resp.json()
+    if body.get("status") != "success":
+        raise RuntimeError(f"prometheus query failed: {body.get('errorType')}")
+    series = body.get("data", {}).get("result", [])
+    if not series:
+        return []
+    merged: dict[int, float] = {}
+    for s in series:  # 多条（按 route 分片）求和为总量
+        for ts, val in s.get("values", []):
+            merged[int(float(ts))] = merged.get(int(float(ts)), 0.0) + float(val)
+    return [{"ts": ts, "value": round(v, 4)} for ts, v in sorted(merged.items())]
+
+
+@router.get("/gateway-auth")
+async def get_gateway_auth(hours: float = Query(6, gt=0, le=24 * 30)):
+    """网关认证/限流指标（代理 Prometheus，只读）。
+
+    数据源：apisix_gateway_auth_denied_total / _would_deny_total（gateway-auth 插件）
+    与 apisix_http_status（prometheus 插件）。Prometheus 未启动（observability
+    profile 可选）时返回 available=false，前端显式降级而不是报错。
+    """
+    window = f"{hours:g}h"
+    job = '{job="agent-platform-apisix"}'
+    step = max(300, int(hours * 3600 / 120))
+    import asyncio
+
+    try:
+        denied_by_reason, would_deny, codes, series = await asyncio.gather(
+            _prom_instant(f"sum by (reason) (increase(apisix_gateway_auth_denied_total{job}[{window}]))"),
+            _prom_instant(f"sum by (reason) (increase(apisix_gateway_auth_would_deny_total{job}[{window}]))"),
+            _prom_instant(f'sum by (code) (increase(apisix_http_status{job}{{code=~"401|429"}}[{window}]))'),
+            _prom_range(f"sum(increase(apisix_gateway_auth_denied_total{job}[5m]))", hours, step),
+        )
+    except Exception as e:  # 连接拒绝/超时/prom 未启动都归为「数据源不可用」
+        logger.warning(f"[GatewayAuth] Prometheus 不可达: {e}")
+        return {"available": False, "window_hours": hours, "error": str(e)}
+
+    def _top(items: list[dict], label: str) -> list[dict]:
+        rows = [
+            {label: (i["labels"].get(label) or "unknown"), "count": i["value"]}
+            for i in items if i["value"] > 0
+        ]
+        return sorted(rows, key=lambda r: -r["count"])
+
+    return {
+        "available": True,
+        "window_hours": hours,
+        "total_denied": round(sum(r["count"] for r in _top(denied_by_reason, "reason")), 2),
+        "denied_by_reason": _top(denied_by_reason, "reason"),
+        "would_deny_by_reason": _top(would_deny, "reason"),
+        "status_codes": _top(codes, "code"),
+        "denied_series": series,
+    }
