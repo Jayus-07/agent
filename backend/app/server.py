@@ -182,9 +182,32 @@ async def eager_init_rag_pipeline():
             logger.info("[Startup] Reranker 模型预热完成")
         except Exception:
             logger.warning("[Startup] Reranker 预热失败，首次查询会较慢", exc_info=True)
+    def _warm_llm_and_detector():
+        """预热 LLM 客户端 + 域检测索引（2026-09-15）。
+
+        实测：首次 LLM 调用要等客户端初始化 ~30s（proxy 的 "正在初始化
+        默认 LLM"），域检测器首次建索引 ~7s——两者此前都落在**第一个
+        用户请求**上（冷启 35s 里的大头）。放到启动后台线程，请求路径不再
+        为它们买单。
+        """
+        try:
+            from backend.infra.llm import get_llm
+            get_llm()
+            logger.info("[Startup] LLM 客户端预热完成")
+        except Exception:
+            logger.warning("[Startup] LLM 客户端预热失败（首次请求会较慢）", exc_info=True)
+        try:
+            from backend.customer_service.router.domain_detector import get_domain_detector
+            get_domain_detector()
+            logger.info("[Startup] 域检测索引预热完成")
+        except Exception:
+            logger.warning("[Startup] 域检测索引预热失败（首次请求会较慢）", exc_info=True)
+
     def _warmup():
         threading.Thread(target=_warm_jieba, daemon=True, name="jieba-warmup").start()
         threading.Thread(target=_warm_reranker, daemon=True, name="reranker-warmup").start()
+        threading.Thread(target=_warm_llm_and_detector, daemon=True,
+                         name="llm-warmup").start()
         try:
             from backend.app.api.deps import get_rag_pipeline
             logger.info("[Startup] 后台预热 RAG 管道...")
