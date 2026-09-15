@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AlertTriangle, AlertCircle, Info, CheckCircle2, ChevronRight, RefreshCw } from 'lucide-react'
-import { alertService, type AlertCase, type AlertStats } from '@/services/alerts'
+import { alertService, type AlertCase, type AlertStats } from '@/api/alerts'
 import { clsx } from 'clsx'
 
 const LEVEL_CONFIG: Record<string, { icon: React.ReactNode; label: string; color: string }> = {

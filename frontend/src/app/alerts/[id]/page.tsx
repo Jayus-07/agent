@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, AlertCircle, AlertTriangle, CheckCircle2, XCircle, ExternalLink } from 'lucide-react'
-import { alertService, type AlertDetail, type AlertEvent } from '@/services/alerts'
+import { alertService, type AlertDetail, type AlertEvent } from '@/api/alerts'
 import { clsx } from 'clsx'
 
 const EVENT_LABELS: Record<string, string> = {
