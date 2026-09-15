@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from backend.rag.indexing.indexer import IncrementalIndexer
+import backend.rag.indexing.indexer as indexer_mod
 from backend.observability.tracer import (
     trace_collector,
     TraceCollector,
@@ -21,6 +22,13 @@ from backend.observability.tracer import (
     SpanKind,
 )
 from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401  (公共 fixture)
+
+
+@pytest.fixture(autouse=True)
+def _zero_embed_backoff(monkeypatch):
+    """重试退避清零：本文件多条用例走「重试耗尽→降级」失败路径，
+    生产退避 1.5^n（5 次 ≈12s/批）会真实 sleep，拖慢全量但不增加覆盖。"""
+    monkeypatch.setattr(indexer_mod, "EMBED_RETRY_BACKOFF_BASE", 0.0)
 
 
 @pytest.fixture

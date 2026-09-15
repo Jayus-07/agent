@@ -37,6 +37,9 @@ def patched(monkeypatch):
     # 不禁用的话，上一轮跑成功的用例会把向量写进 Redis，下一轮直接缓存命中、
     # embed_query 一次都不调（自污染：第一次绿、之后永远红）。
     monkeypatch.setattr("backend.config.rag.RAG_EMBED_CACHE_ENABLED", False)
+    # 退避清零：重试耗尽路径照常被测到，但不再真等 1.5^n 秒
+    # （5 次指数退避 ≈12s/批，曾让 2 个降级用例干等 43 秒）。
+    monkeypatch.setattr(indexer_mod, "EMBED_RETRY_BACKOFF_BASE", 0.0)
     return monkeypatch
 
 
