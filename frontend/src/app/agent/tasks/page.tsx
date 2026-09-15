@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { CheckCircle2, Brain } from 'lucide-react'
 import { useRouter } from 'next/navigation'
-import type { SessionMeta } from '@/lib/api/memory'
+import type { SessionMeta } from '@/api/memory'
 import { getSessionsCached } from '@/lib/sessions-cache'
 import { parseContextSummary } from '@/lib/context-summary'
 

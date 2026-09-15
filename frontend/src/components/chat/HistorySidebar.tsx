@@ -10,9 +10,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useChatStore } from '@/store/chat'
-import type { SessionMeta } from '@/lib/api/memory'
+import type { SessionMeta } from '@/api/memory'
 import { getSessionsCached, invalidateSessionsCache } from '@/lib/sessions-cache'
-import { deleteMemorySession, renameMemorySession } from '@/lib/api/memory'
+import { deleteMemorySession, renameMemorySession } from '@/api/memory'
 import { BUCKET_LABELS, filterByKeyword, groupByTime } from '@/lib/session-groups'
 import SessionRow from '@/components/agent/SessionRow'
 import {

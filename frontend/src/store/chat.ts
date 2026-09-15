@@ -314,7 +314,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     // —— 从后端加载持久化会话历史消息 ——
     loadHistory: async (sessionId: string) => {
       try {
-        const { getSessionMessages } = await import('@/lib/api/memory')
+        const { getSessionMessages } = await import('@/api/memory')
         const msgs = await getSessionMessages(sessionId)
         set({ historyError: null })
         if (!msgs || msgs.length === 0) return

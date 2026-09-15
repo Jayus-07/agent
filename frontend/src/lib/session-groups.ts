@@ -5,7 +5,7 @@
  * 共用同一套「今天 / 昨天 / 最近 7 天 / 更早」分组逻辑与时间显示格式。
  * 抽出的原因：两处各写一份会把 380 行实现复制粘贴，分组口径容易漂移。
  */
-import type { SessionMeta } from './api/memory'
+import type { SessionMeta } from '@/api/memory'
 
 export type TimeBucket = 'today' | 'yesterday' | 'week' | 'older'
 

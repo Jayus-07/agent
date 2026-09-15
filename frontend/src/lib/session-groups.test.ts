@@ -1,7 +1,7 @@
 /** session-groups 回归测试 — 时间分组口径与关键字过滤（HistorySidebar / TaskSidebar 共用） */
 import { describe, it, expect } from 'vitest'
 import { bucketOf, formatTime, groupByTime, filterByKeyword, BUCKET_LABELS } from './session-groups'
-import type { SessionMeta } from './api/memory'
+import type { SessionMeta } from '@/api/memory'
 
 const HOUR = 3_600_000
 const DAY = 86_400_000

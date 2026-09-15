@@ -8,7 +8,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, MessageSquare, Pencil, Trash2 } from 'lucide-react'
-import type { SessionMeta } from '@/lib/api/memory'
+import type { SessionMeta } from '@/api/memory'
 import { parseContextSummary } from '@/lib/context-summary'
 import { formatTime } from '@/lib/session-groups'
 

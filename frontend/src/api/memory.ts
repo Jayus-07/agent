@@ -5,7 +5,7 @@
  * 是展示错误态还是降级。历史教训：这里曾用 catch { return [] } 把 PostgreSQL
  * 认证失败降级成空数组，UI 显示"暂无记录"，真因只能去翻 PG 服务端日志。
  */
-import { request } from "../fetcher";
+import { request } from "@/lib/fetcher";
 
 export interface SessionMeta {
   session_id: string;

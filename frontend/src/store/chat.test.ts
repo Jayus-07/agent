@@ -1,12 +1,12 @@
 /** chat store 回归测试 — 会话恢复 + 终态状态清理（2026-08-21 浏览器实测整改） */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/api/memory', () => ({
+vi.mock('@/api/memory', () => ({
   getSessionMessages: vi.fn(),
 }))
 
 import { useChatStore } from '@/store/chat'
-import { getSessionMessages } from '@/lib/api/memory'
+import { getSessionMessages } from '@/api/memory'
 
 const mockedGetMessages = getSessionMessages as ReturnType<typeof vi.fn>
 

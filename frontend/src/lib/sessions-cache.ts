@@ -7,7 +7,7 @@
  *  - 用户来回切换时（50ms 内）复用前次结果。
  *  - TTL 10s 防止连续请求打爆后端，又不至于过期（业务变更后最多 10s 看到新数据）。
  */
-import { listSessions, type SessionMeta } from './api/memory'
+import { listSessions, type SessionMeta } from '@/api/memory'
 
 interface CacheEntry {
   promise: Promise<SessionMeta[]>
