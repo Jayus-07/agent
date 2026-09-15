@@ -231,26 +231,42 @@ E2E: `cd backend && python e2e_demo.py`
 设计文档: `docs/README.md`（7 个顶层文档 + 7 个关键深读）
 记忆: 用户级 `~/.claude/projects/<project>/memory/MEMORY.md`（按项目分类的会话记忆）
 
-## 服务启停约定（2026-09-15 起生效）
+## 服务启停约定（2026-09-15 APISIX 迁移后生效）
 
 ```bash
-# Python 后端 :8000（uvicorn --reload --reload-dir app，改代码即生效）
+# Python 后端 :8000 —— 默认容器形态（agent-app-1，compose env 完整）：
 start_py.bat / stop_py.bat / restart_py.bat
-# Java 服务（原生 jar：auth-service :8006 / system-service :8001 / api-gateway :8080；
-# business-service 留容器；mysql/redis/nacos/postgres/kafka 基础设施容器不动）
+#   native 参数 = 宿主机裸跑 uvicorn --reload（仅临时调试：
+#   需同时把 apisix/apisix.yaml 的 app 节点改回 host.docker.internal:8000）
+# Java 服务（原生 mvn 热加载：auth-service :8006 / system-service :8002 / api-gateway :8080；
+#   business-service 留容器；mysql/redis/nacos/postgres/kafka 基础设施容器不动）
 start_java.bat / stop_java.bat / restart_java.bat
-# 改了 Java 源码 → 本地 mvn 打包（免 docker build）→ restart_java.bat
-build_java.bat
-# 后端+前端一起（冷启动场景）；start.bat 按 .env.local 自动选模式
-start_all.bat / stop_all.bat / restart_all.bat
+# 改了 Java 源码 → build_java.bat（本地打包）→ restart_java.bat
+# 前端 :3100（start 脚本默认注入 AUTH_GATEWAY_URL=http://127.0.0.1:9080）
+start_frontend.bat / stop_frontend.bat
 ```
 
-- 前端 :3000 用 `start_all.bat` / `frontend/start_dev.bat`；`NEXT_PUBLIC_*` 改动需重启 dev server
-- 网关路由/白名单改 `api-gateway/config/application.yml`（compose 挂载的外部配置，
-  唯一事实源）→ `restart_java.bat` 生效，**无需 docker build**
-- 热路由（仅本机开发）：`set GATEWAY_HOT_ROUTES=true` 后 start_java.bat，
-  可 `POST /actuator/gateway/routes/{id}` 运行时增改路由；生产必须保持关闭
-- 登录链路：前端 `/login` → 网关 `/api/auth/**` → auth-service(JWT)；
-  refresh_token 走 HttpOnly Cookie（REFRESH_COOKIE_SECURE 本地必须 false）
+### 网关（2026-09-15 APISIX 迁移完成）
+
+- **APISIX(9080) 是 Python 项目独立入口**（standalone 声明式 `apisix/apisix.yaml` 进 git +
+  自研插件 `apisix/plugins/gateway-auth.lua`）；Java SCG(8080) 原样保留为回滚路径
+- **切流开关** = 前端启动 env `AUTH_GATEWAY_URL`：`http://127.0.0.1:9080`（APISIX，现默认）/
+  `http://localhost:8080`（回滚到 SCG）；改完重启前端生效。next dev 模式启动时读取；
+  standalone 构建形态 rewrites 固化在构建期，切流须重建镜像
+- 认证：`gateway-auth` 插件（enforce 模式）在网关层验 JWT（issuer hongmeng-oa）+
+  Redis 黑名单（只读 oa-auth-redis:16379）+ 注入 X-User-Id 等身份头；
+  带 X-API-Key 的请求打标透传由 FastAPI 校验；契约见 `docs/contracts/identity-header-protocol.md`
+- 登录链路：前端 `/login` → APISIX `/api/auth/**`（白名单）→ auth-service(JWT)；
+  refresh_token 走 HttpOnly Cookie（同源经 Next 代理，域不变）
+- 回滚 = env 改回 8080 重启前端；SCG 与全部 Java 服务从未被修改
+
+### 启停已知坑（实测）
+
+- **.bat 文件必须 ASCII-only**：cmd 按 GBK 解析，UTF-8 中文注释会被误读并破坏控制流
+- **.bat 里别用 `timeout /t`**：Git Bash PATH 会解析到 GNU timeout；用 `ping -n N 127.0.0.1 >nul` 延时
+- 宿主机 `127.0.0.1:8000` 有 Docker 残留僵尸绑定（pid 无法杀）——宿主机裸跑 uvicorn 前先重启 Docker Desktop
+- app 容器重启换 IP 后 APISIX 有 ~1-2min 502 窗口（`dns_resolver_valid: 5` 已缓解）；
+  急用 `docker compose restart apisix`。oa-auth-service/system 容器无重启策略，
+  Docker 引擎重启后需手动 `docker start oa-auth-service oa-auth-system`
 - 杀端口脚本都带 docker 守卫：容器占端口时跳过，防误杀 com.docker.backend
-- 完整文档: `命令文档.md`（含热路由 curl 示例、两种模式说明）
+- 完整文档: `命令文档.md`、`docs/gateway-apisix-final-report.md`（迁移验收 + 回滚 runbook）
