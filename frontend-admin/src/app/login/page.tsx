@@ -10,18 +10,18 @@
  * - 登录成功 → 跳 redirect 参数指定的原页面（默认 /）
  * - 会话被 401 拦截器踢回时显示"登录已过期"提示（sessionStorage 标记）
  * - 错误内联展示（密码错误 / 网络异常），不用 alert
- * - 记住账号密码：localStorage 明文保存（内部工具取舍），下次预填 + 可一键登录
+ * - 记住用户名：localStorage 只存用户名（密码永不落盘），下次预填
  * - 注册开发者账号：走网关 → system-service /users/register，成功后自动登录
  */
 import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  clearSavedCredentials,
+  clearSavedUsername,
   consumeExpiredFlag,
-  getSavedCredentials,
+  getSavedUsername,
   login,
   register,
-  saveCredentials,
+  saveUsername,
 } from "@/lib/auth";
 
 type Mode = "login" | "register";
@@ -37,18 +37,15 @@ function LoginForm() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [realName, setRealName] = useState("");
   const [remember, setRemember] = useState(false);
-  const [savedCreds, setSavedCreds] = useState<{ username: string; password: string } | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // 挂载：恢复"记住的账号密码"（预填）+ 会话过期标记
+  // 挂载：预填"记住的用户名"（只预填用户名，密码必须手输）+ 会话过期标记
   useEffect(() => {
-    setSavedCreds(getSavedCredentials());
-    const creds = getSavedCredentials();
-    if (creds) {
-      setUsername(creds.username);
-      setPassword(creds.password);
+    const saved = getSavedUsername();
+    if (saved) {
+      setUsername(saved);
       setRemember(true);
     }
     if (consumeExpiredFlag()) {
@@ -65,8 +62,8 @@ function LoginForm() {
     setError("");
     try {
       await login(name, pass);
-      if (persist) saveCredentials(name, pass);
-      else clearSavedCredentials();
+      if (persist) saveUsername(name);
+      else clearSavedUsername();
       goNext();
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败，请稍后重试");
@@ -105,9 +102,9 @@ function LoginForm() {
     setLoading(true);
     try {
       await register(username.trim(), password, confirmPassword, realName.trim() || undefined);
-      // 注册成功 → 自动登录并记住凭据（"创建开发者账号 → 一键登录"闭环）
+      // 注册成功 → 自动登录并记住用户名（密码不落盘）
       await login(username.trim(), password);
-      saveCredentials(username.trim(), password);
+      saveUsername(username.trim());
       goNext();
     } catch (err) {
       setError(err instanceof Error ? err.message : "注册失败，请稍后重试");
@@ -135,8 +132,6 @@ function LoginForm() {
     e.target.style.borderColor = "var(--border-subtle)";
     e.target.style.boxShadow = "var(--shadow-input)";
   };
-
-  const hasOneClick = mode === "login" && !!savedCreds;
 
   return (
     <main
@@ -173,7 +168,7 @@ function LoginForm() {
           </h1>
         </div>
         <p className="mb-4 text-[13px]" style={{ color: "var(--text-muted)" }}>
-          {mode === "login" ? "登录 AI Agent 工作台" : "注册后自动登录并记住凭据"}
+          {mode === "login" ? "登录 AI Agent 工作台" : "注册后自动登录并记住用户名"}
         </p>
 
         {/* 登录 / 注册 切换 */}
@@ -214,25 +209,6 @@ function LoginForm() {
           >
             {error}
           </div>
-        )}
-
-        {/* 一键登录（有记住的凭据时显示） */}
-        {hasOneClick && (
-          <button
-            type="button"
-            disabled={loading}
-            onClick={() => savedCreds && doLogin(savedCreds.username, savedCreds.password, true)}
-            className="mb-3 w-full rounded-lg py-2.5 text-[13px] font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-            style={{ background: "var(--accent)" }}
-            onMouseEnter={(e) => {
-              if (!loading) e.currentTarget.style.background = "var(--accent-hover)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "var(--accent)";
-            }}
-          >
-            {loading ? "登录中…" : `一键登录（${savedCreds?.username}）`}
-          </button>
         )}
 
         <form onSubmit={handleSubmit} noValidate>
@@ -311,7 +287,7 @@ function LoginForm() {
                 onChange={(e) => setRemember(e.target.checked)}
                 style={{ accentColor: "var(--accent)" }}
               />
-              记住账号密码（本机保存，可一键登录）
+              记住用户名（本机保存，密码不保存）
             </label>
           )}
 
@@ -319,25 +295,15 @@ function LoginForm() {
             type="submit"
             disabled={loading}
             className="mt-5 w-full rounded-lg py-2.5 text-[13px] font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-            style={{
-              background: hasOneClick ? "#fff" : "var(--accent)",
-              color: hasOneClick ? "var(--accent)" : "#fff",
-              border: hasOneClick ? "0.5px solid var(--accent)" : "none",
-            }}
+            style={{ background: "var(--accent)" }}
             onMouseEnter={(e) => {
-              if (!loading && !hasOneClick) e.currentTarget.style.background = "var(--accent-hover)";
+              if (!loading) e.currentTarget.style.background = "var(--accent-hover)";
             }}
             onMouseLeave={(e) => {
-              if (!hasOneClick) e.currentTarget.style.background = "var(--accent)";
+              e.currentTarget.style.background = "var(--accent)";
             }}
           >
-            {loading
-              ? "处理中…"
-              : hasOneClick
-                ? "使用其他账号登录"
-                : mode === "login"
-                  ? "登 录"
-                  : "注册并登录"}
+            {loading ? "处理中…" : mode === "login" ? "登 录" : "注册并登录"}
           </button>
         </form>
 

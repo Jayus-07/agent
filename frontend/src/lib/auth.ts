@@ -210,11 +210,14 @@ export function consumeExpiredFlag(): boolean {
 }
 
 /* ────────────────────────────────────────────────────────────
- * 开发者注册 + 记住凭据（仅限内部工具：凭据明文存 localStorage，
- * 换取"一键登录"体验；该存储暴露于 XSS 时可被读取，生产对外环境勿开启）
+ * 开发者注册 + 记住用户名（只记用户名，密码永不落 localStorage——
+ * 该存储暴露于 XSS 时可被读取；历史上曾明文存过密码
+ * （agent.saved_credentials），getSavedUsername 读取时顺带清除残留）
  * ──────────────────────────────────────────────────────────── */
 
-const CREDS_KEY = "agent.saved_credentials";
+const USERNAME_KEY = "agent.saved_username";
+// 历史版本的明文凭据键（{username, password}），读到即清除
+const LEGACY_CREDS_KEY = "agent.saved_credentials";
 
 export interface RegisterResult {
   userId?: number;
@@ -248,36 +251,41 @@ export async function register(
   return unwrapResult<RegisterResult>(body);
 }
 
-/** 记住凭据：注册/登录成功后按需调用 */
-export function saveCredentials(username: string, password: string): void {
-  if (!isBrowser()) return;
+/** 清除历史明文凭据残留（幂等，随 getSavedUsername/clear 一并触发） */
+function purgeLegacyCredentials(): void {
   try {
-    localStorage.setItem(CREDS_KEY, JSON.stringify({ username, password }));
+    localStorage.removeItem(LEGACY_CREDS_KEY);
   } catch {
     /* ignore */
   }
 }
 
-export function getSavedCredentials(): { username: string; password: string } | null {
-  if (!isBrowser()) return null;
+/** 记住用户名：登录成功后按需调用（只记用户名，不记密码） */
+export function saveUsername(username: string): void {
+  if (!isBrowser()) return;
   try {
-    const raw = localStorage.getItem(CREDS_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { username?: string; password?: string };
-    if (parsed?.username && parsed?.password) {
-      return { username: parsed.username, password: parsed.password };
-    }
-    return null;
+    localStorage.setItem(USERNAME_KEY, username);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getSavedUsername(): string | null {
+  if (!isBrowser()) return null;
+  purgeLegacyCredentials();
+  try {
+    return localStorage.getItem(USERNAME_KEY) || null;
   } catch {
     return null;
   }
 }
 
-/** 忘记此账号（一键登录失效，改回手动输入） */
-export function clearSavedCredentials(): void {
+/** 忘记此用户名（下次登录改回手动输入） */
+export function clearSavedUsername(): void {
   if (!isBrowser()) return;
+  purgeLegacyCredentials();
   try {
-    localStorage.removeItem(CREDS_KEY);
+    localStorage.removeItem(USERNAME_KEY);
   } catch {
     /* ignore */
   }
