@@ -12,19 +12,36 @@ from backend.customer_service.context import CSContext
 from backend.orchestration.request_context import RequestContext
 
 
+# 步骤状态的进展优先级：终态 > running > pending。
+# 并行 Send 分支返回的是"全量 step_results 快照"（BaseSkill.execute 在
+# dispatch 时刻的 state 上更新自己的步骤），其他步骤在快照里还是 running
+# 旧视图。朴素 dict.update 会让**后返回的分支把先返回分支的真实成果覆盖
+# 成过期快照**（实测 2026-09-15：sql success 被 rag 分支的 running 快照
+# 覆盖，reporter 全判失败）。合并必须按状态进展择优。
+_STATUS_PRIORITY = {"pending": 0, "running": 1, "skipped": 2, "failed": 3, "success": 4}
+
+
 def _merge_step_results(left: dict, right: dict) -> dict:
     """Reducer: 合并并行 Worker 返回的 step_results。
 
-    LangGraph 并行执行多个 Worker 时，每个 Worker 返回
-    {"step_results": {"step_id": result}}，reducer 负责合并。
-    right 中的 key 覆盖 left 中的同 key（允许状态更新覆盖旧值）。
+    按步骤逐个择优：状态更"进展"的版本胜出（success > failed/skipped >
+    running > pending）；同优先级时取 right（最新写入）。
+    降级重试场景（failed → 重新派发 → success）最终态仍能正确胜出。
     """
     if not left:
         return dict(right)
     if not right:
         return dict(left)
     merged = dict(left)
-    merged.update(right)
+    for sid, sr in right.items():
+        cur = merged.get(sid)
+        if cur is None:
+            merged[sid] = sr
+            continue
+        cur_pri = _STATUS_PRIORITY.get(cur.get("status"), 0)
+        new_pri = _STATUS_PRIORITY.get(sr.get("status"), 0)
+        if new_pri >= cur_pri:
+            merged[sid] = sr
     return merged
 
 

@@ -190,6 +190,10 @@ class VectorRouter:
             score = 1.0 / (1.0 + distance)
             candidates.append(CapabilityScore(name=cap, score=round(score, 3)))
 
+        # 确定性排序（2026-09-15）：同分候选按名字稳定排序，不再依赖
+        # Chroma 返回顺序——索引重建后顺序漂移是路由波动来源之一。
+        candidates.sort(key=lambda c: (-c.score, c.name))
+
         # 整体置信度 = top1 分数
         top1 = candidates[0].score if candidates else 0.0
         reason = f"embedding top1={candidates[0].name} score={top1:.2f}" if candidates else "no match"

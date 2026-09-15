@@ -40,7 +40,7 @@ def _failed_step(step_id: str, error_msg: str) -> dict:
         step_id: {
             "step_id": step_id,
             "capability": "direct",
-            "description": "直接执行",
+            "description": "信息查询",
             "status": "failed",
             "output": None,
             "error": error_msg,
@@ -49,6 +49,37 @@ def _failed_step(step_id: str, error_msg: str) -> dict:
             "finished_at": 0,
         }
     }
+
+
+# ── 用户可读能力标签（2026-09-15 整改）──────────────
+# 主流实践：内部标识（capability 名/节点名）只进日志与 trace，
+# 用户可见文案一律用业务语言。此前 description=f"直接执行 {cap_name}"
+# 被 _coerce_final_answer 渲染成标题 "### 直接执行 sql.query"，内部
+# 标识直接暴露给终端用户。description 会流入 reporter 多个渲染路径
+# （表标题/兜底汇总），必须从一开始就是用户可读的。
+_USER_CAP_LABELS = {
+    "sql.query": "数据库查询",
+    "rag.search": "知识库检索",
+    "report.generate": "报告生成",
+    "business.analyze": "业务分析",
+    "data.export": "数据导出",
+    "data.collect": "数据采集",
+    "web.search": "网络搜索",
+    "web.crawl": "网页抓取",
+    "competitor.analyze": "竞品分析",
+    "competitor.watch": "竞品监控",
+    "competitor.history": "竞品历史",
+    "travel.poi_search": "地点检索",
+    "map.lookup": "地图查询",
+    "email.send": "邮件发送",
+    "email.search": "邮件搜索",
+    "email.read": "邮件阅读",
+}
+
+
+def _user_label(cap_name: str) -> str:
+    """capability → 用户可读标签；未知能力统一泛称，不泄漏内部命名。"""
+    return _USER_CAP_LABELS.get(cap_name, "信息查询")
 
 
 # fix f13：需要前置数据输入的 capability。direct 单步执行时 previous_outputs
@@ -175,7 +206,7 @@ def skill_executor_node(state: dict) -> dict:
             try:
                 pre_step = _run_skill_step(
                     skill_nodes, state, "direct_0", pre_cap,
-                    f"自动补前置步骤 {pre_cap}",
+                    f"数据准备（{_user_label(pre_cap)}）",
                 )
                 step_results["direct_0"] = pre_step
                 if pre_step["status"] == "success" and pre_step.get("output"):
@@ -196,7 +227,7 @@ def skill_executor_node(state: dict) -> dict:
     state["current_step_id"] = step_id
     state["plan"] = {
         "nodes": {step_id: {"capability": cap_name,
-                            "description": f"直接执行 {cap_name}",
+                            "description": _user_label(cap_name),
                             "params": main_params}},
         "edges": {},
     }
@@ -205,7 +236,7 @@ def skill_executor_node(state: dict) -> dict:
     try:
         step = _run_skill_step(
             skill_nodes, {**state, "step_results": step_results},
-            step_id, cap_name, f"直接执行 {cap_name}", params=main_params,
+            step_id, cap_name, _user_label(cap_name), params=main_params,
         )
         step_results[step_id] = step
         logger.info(f"[SkillExecutor] {cap_name} 完成: {len(str(step['output']))} chars")

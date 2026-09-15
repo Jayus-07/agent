@@ -67,6 +67,32 @@ _RAG_KEYWORDS = [
     r"审核", r"退款", r"退货", r"换货", r"售后",  # 业务流程类
 ]
 
+# ── 复合意图强信号（2026-09-15，企业路由器主流做法）──────────
+# 单一能力的问题由 direct 秒答；带"同时/并"等连接词、横跨 ≥2 个能力组
+# 的复合问题需要多步编排，必须稳定走 plan（DAG 并行 + Reporter 汇总），
+# 不能交给 Vector/LLM 层随机拍板成 direct（此前同一问题在 plan/direct
+# 间波动、plan 并行难触发的根因之一）。
+#
+# 判定（防误杀，双条件同时满足）：
+#   1. 显式复合连接词（同时/并且/以及/还要/然后再/顺便）
+#   2. ≥2 个不同能力组的关键词命中
+# 仅关键词共现不算（"退款审核时间是多少"是单意图 RAG 问题，不能被拆）。
+_COMPOUND_CONNECTOR = re.compile(r"同时|并且|并(?![发联排集])|以及|还要|然后再|然后|顺便|接着|另外")
+
+# 复合意图专用富词表（独立于单意图强信号列表——判定目的是"这个问题
+# 涉及哪几类能力"，词表要宽；单意图路由的强/弱信号语义不受影响）
+_COMPOSITE_GROUP_KEYWORDS: dict[str, list[str]] = {
+    "sql.query": [
+        r"查询", r"统计", r"多少", r"数量", r"库存", r"商品", r"订单",
+        r"销售额", r"销量", r"金额", r"数据", r"报表", r"排名", r"项目",
+        r"预算", r"成本", r"利润", r"供应商", r"客户数",
+    ],
+    "rag.search": [
+        r"知识库", r"制度", r"规定", r"政策", r"流程", r"经验", r"文档",
+        r"资料", r"规范", r"标准", r"SOP", r"说明", r"解释", r"怎么操作",
+    ],
+}
+
 
 class RuleRouter:
     """Rule Router：基于关键词强信号快速路由（0 成本，~1ms）。"""
@@ -119,7 +145,24 @@ class RuleRouter:
                 reason="匹配竞品分析关键词 1 个（弱信号）",
             )
 
-        # 2. 业务 SOP 关键字（审核/退款/流程等）
+        # 2. 复合意图强信号（显式连接词 + ≥2 能力组命中 → 稳定走 plan）
+        if _COMPOUND_CONNECTOR.search(query_lower):
+            hit_groups = [
+                cap for cap, kws in _COMPOSITE_GROUP_KEYWORDS.items()
+                if any(re.search(k, query_lower) for k in kws)
+            ]
+            if len(hit_groups) >= 2:
+                return RouteDecision(
+                    execution_mode=ExecutionMode.PLAN,
+                    candidates=[
+                        CapabilityScore(name=cap, score=0.80)
+                        for cap in hit_groups
+                    ],
+                    confidence=0.85,
+                    reason=f"复合意图（连接词 + {'/'.join(hit_groups)}）→ plan 编排",
+                )
+
+        # 3. 业务 SOP 关键字（审核/退款/流程等）
         # 2026-09-10：2 个命中即视为强信号直接拍板（原阈值 3）。
         # 依据：trace c8431b548b01 —— 「退款审核时间是多少？」命中 2 个 RAG 关键词，
         # 规则层给出候选 rag.search(0.70)，随后 Vector miss，LLM 花 8.4s 得出

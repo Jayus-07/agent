@@ -49,6 +49,11 @@ class LLMRouter:
         from backend.config import ROUTER_LLM_MAX_TOKENS
         from backend.shared.logger import logger
 
+        # 主流实践：路由决策必须确定性。全局 LLM 温度 0.1 仍会带来
+        # 少量输出抖动（同一问题跨请求在 direct/plan 间摇摆），
+        # 路由这个场景统一压到 temperature=0（贪心解码）。
+        router_llm = llm.bind(temperature=0, max_tokens=ROUTER_LLM_MAX_TOKENS)
+
         try:
             from backend.prompts.service import prompt_service
             r = prompt_service.render_sync("router.llm", query=query[:200])
@@ -57,15 +62,13 @@ class LLMRouter:
             prompt = DEFAULT_ROUTER_PROMPT.format(query=query[:200])
 
         try:
-            raw = safe_call_with_timeout(
-                llm.invoke,
-                timeout=self.timeout,
-                default_value=None,
-                error_message=f"[LLMRouter] 推理超时 ({self.timeout}s)",
-                input=[{"role": "user", "content": prompt}],
-                # 输出只是路由 JSON，限制生成上限直接缩短 LLM 耗时（TTFT）
-                max_tokens=ROUTER_LLM_MAX_TOKENS,
-            )
+                raw = safe_call_with_timeout(
+                    router_llm.invoke,
+                    timeout=self.timeout,
+                    default_value=None,
+                    error_message=f"[LLMRouter] 推理超时 ({self.timeout}s)",
+                    input=[{"role": "user", "content": prompt}],
+                )
         except Exception as e:
             logger.warning(f"[LLMRouter] 推理异常: {e}")
             return self._fallback(query, reason=str(e))
