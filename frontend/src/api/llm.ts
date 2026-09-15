@@ -1,7 +1,7 @@
 /**
  * LLM 业务 API：模型列表 / 切换 / 余额 / MultiQuery 模式
  */
-import { request } from "../fetcher";
+import { request } from "@/lib/fetcher";
 
 export interface LLMModel {
   provider: string;
