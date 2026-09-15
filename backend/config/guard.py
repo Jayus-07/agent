@@ -40,4 +40,4 @@ LLM_GUARD_THRESHOLD = float(os.getenv("LLM_GUARD_THRESHOLD", "0.75"))
 LLM_GUARD_TIMEOUT = int(os.getenv("LLM_GUARD_TIMEOUT", "10"))
 
 # ── 策略版本（写入 Audit / Trace，便于回溯规则变更）──────
-GUARD_POLICY_VERSION = os.getenv("GUARD_POLICY_VERSION", "1.0")
+GUARD_POLICY_VERSION = os.getenv("GUARD_POLICY_VERSION", "1.1")  # 1.1: vague 误杀整改（查询意图豁免+组织域名词）

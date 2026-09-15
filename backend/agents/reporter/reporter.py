@@ -248,7 +248,24 @@ def _is_step_successful(result: dict) -> bool:
     # 降门槛：5 字符即可（原 20 字符过于严格，RAG 短摘要被误杀）
     if len(output.strip()) <= 5:
         return False
+    # EvidenceGate 拒答/空话术不是有效产出（实测 2026-09-15：RAG 拒答短语
+    # "知识库暂无相关资料。" 长 10 字符绕过长度门槛，被当成有效结果透传，
+    # 最终回答只剩这一句，SQL 空结果完全没交代）
+    if output.strip() in _EMPTY_RESULT_PHRASES:
+        return False
     return True
+
+
+# Skill 层的"标准空结果"话术——内容为空但 status=success 的产出。
+# 命中即视为该步骤"未获得数据"，Reporter 汇总时必须显式交代，不得透传。
+_EMPTY_RESULT_PHRASES = frozenset({
+    "知识库暂无相关资料。",
+    "知识库暂无相关资料",
+    "未找到相关信息。",
+    "未找到相关信息",
+    "无结果",
+    "未能获取任何有效数据。",
+})
 
 
 def _extract_rag_references(step_results: dict) -> str:
@@ -349,33 +366,58 @@ def _render_structured_sections(step_results: dict) -> str:
     """对结构化数据（SQLResult dict + BusinessInsight dict）进行模板渲染。
 
     返回 Markdown 字符串，或 ""（数据非结构化时回退到 LLM 路径）。
+
+    实测整改（2026-09-15）：SQL 0 行结果此前被静默跳过（if columns and rows），
+    配合 RAG 拒答话术透传，最终回答只剩一句"知识库暂无相关资料"，用户完全
+    看不到"查了什么、查到没有"。现在：
+      - SQL 成功但 0 行 → 显式渲染"查询成功但无数据"说明节；
+      - 失败 / 被跳过 / 空话术的步骤 → 渲染"未获得数据"交代节；
+    只要有任一节就返回，不再要求 >=2 节。
     """
     sections = []
     for step_id, sr in sorted(step_results.items()):
-        if sr.get("status") != "success":
-            continue
+        status = sr.get("status", "unknown")
         output = sr.get("output")
-        if not isinstance(output, dict):
-            continue
-
         capability = sr.get("capability", "")
         description = sr.get("description", step_id)
 
-        # SQLResult → 表格
-        if "columns" in output and "rows" in output and capability == "sql.query":
-            columns = output.get("columns", [])
-            rows = output.get("rows", [])
-            if columns and rows:
-                section = _render_table_section(description, columns, rows)
+        if status == "success" and isinstance(output, dict):
+            # SQLResult → 表格（0 行也渲染说明，不再静默丢弃）
+            if "columns" in output and "rows" in output and capability == "sql.query":
+                columns = output.get("columns", [])
+                rows = output.get("rows", [])
+                if rows:
+                    section = _render_table_section(description, columns, rows)
+                else:
+                    section = (
+                        f"### {description}\n\n"
+                        f"查询执行成功，但未返回任何数据（0 行）。\n\n"
+                        f"可能原因：筛选条件下当前无匹配记录，或相关表暂无数据。"
+                    )
                 sections.append(section)
+            # BusinessInsight → 风险+建议
+            elif "summary" in output and "risks" in output:
+                section = _render_insight_section(description, output)
+                sections.append(section)
+            continue
 
-        # BusinessInsight → 风险+建议
-        elif "summary" in output and "risks" in output:
-            section = _render_insight_section(description, output)
-            sections.append(section)
+        # 非成功 / 空话术步骤：显式交代（原实现完全隐身）
+        if status != "success":
+            reason = sr.get("error", "") or "步骤未执行成功"
+            label = _user_step_label(sr)
+            sections.append(
+                f"### {description}\n\n"
+                f"- {label}未获得数据：{reason[:120]}"
+            )
+        elif isinstance(output, str) and output.strip() in _EMPTY_RESULT_PHRASES:
+            label = _user_step_label(sr)
+            sections.append(
+                f"### {description}\n\n"
+                f"- {label}未找到相关内容（数据源中无匹配信息）。"
+            )
 
-    # 只有同时有表格和洞察时才走结构化路径
-    if len(sections) >= 2:
+    # 有任一节就走结构化路径（原 >=2 门槛导致单节被丢弃、回退弱 LLM 路径）
+    if sections:
         return "\n\n---\n\n".join(sections)
     return ""
 

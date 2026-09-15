@@ -7,6 +7,23 @@ import time
 from typing import Generator, Optional
 
 
+def _capability_owner(cap: str) -> Optional[str]:
+    """capability → 属主 Skill 节点名（f"{name}_skill"）；未知返回 None。
+
+    不走 tool_registry.CAPABILITY_MAP——它是 cached_property，若在本模块
+    被访问时 skills 尚未加载，会把空映射永久缓存，污染 Planner 能力清单。
+    这里直接读底层注册表，不触发缓存。
+    """
+    if not cap:
+        return None
+    try:
+        from backend.orchestration.tool_registry import tool_registry
+        inst = tool_registry._get_skill_registry().get(cap)
+        return f"{inst.name}_skill" if inst else None
+    except Exception:  # noqa: BLE001 — 注册表不可用时不过滤（向后兼容）
+        return None
+
+
 # =====================================================
 # P1: todo 快照 + 流中用量
 # =====================================================
@@ -186,6 +203,20 @@ def _build_skill_events(node_name: str, output: dict, make_step_payload) -> Gene
         status = sr.get("status", "?")
         if status == "?":
             continue
+
+        # 归属过滤（实测 2026-09-15 整改）：并行 Send 时每个 Skill 分支的
+        # state 快照都携带其他步骤（BaseSkill.execute 返回全量 step_results），
+        # 旧实现把整个 dict 全部打上本节点名 → step1 的失败挂在 rag_skill 名下、
+        # 同一完成事件被两个 skill 各发一遍。现在按 capability 反查属主节点，
+        # 只发本节点拥有的步骤；非终态（pending/running）是并行分支的快照
+        # 噪声，也不发（进度由 supervisor 事件负责）。
+        cap = sr.get("capability", "")
+        owner = _capability_owner(cap)
+        if owner is not None and owner != node_name:
+            continue
+        if status in ("pending", "running"):
+            continue
+
         desc = sr.get("description", sid)
         output_val = sr.get("output", "")
         payload = make_step_payload(sr, include_output=True)
@@ -200,10 +231,11 @@ def _build_skill_events(node_name: str, output: dict, make_step_payload) -> Gene
         elif status == "skipped":
             level = "warn"
 
+        status_label = {"success": "完成", "failed": "失败", "skipped": "跳过"}.get(status, status)
         yield {
             "event": "log", "data": {
                 "level": level, "node": node_name, "step_id": sid,
-                "message": f"{'完成' if status == 'success' else '失败'}: {desc}",
+                "message": f"{status_label}: {desc}",
                 "payload": payload, "ts": time.time(),
             },
         }
