@@ -32,15 +32,20 @@ export function bucketOf(iso: string | null | undefined): TimeBucket {
   return 'older'
 }
 
-/** 紧凑时间显示：今天显示时刻，更早显示日期 */
+/** 相对时间显示（WorkBuddy 式）：刚刚 / N分钟前 / N小时前 / 更早回退日期 */
 export function formatTime(iso: string | null | undefined): string {
   if (!iso) return ''
   const d = new Date(iso)
   if (isNaN(d.getTime())) return ''
+  const diff = Date.now() - d.getTime()
+  if (diff < 60_000) return '刚刚'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}分钟前`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}小时前`
   const now = new Date()
   if (d.toDateString() === now.toDateString()) {
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
   }
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}天前`
   return `${d.getMonth() + 1}/${d.getDate()}`
 }
 

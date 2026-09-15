@@ -44,7 +44,7 @@ export default function ChatInput({ onSend, isLoading }: Props) {
 
   return (
     <div className="shrink-0 bg-gradient-to-t from-surface-root via-surface-root to-transparent">
-      <div className="max-w-3xl mx-auto px-4 pb-4 pt-2">
+      <div className="max-w-4xl mx-auto px-4 pb-4 pt-2">
         <div className="bg-surface-base rounded-2xl px-4 pt-3 pb-2
           border border-border-subtle shadow-sm
           focus-within:border-accent/40 focus-within:shadow-input

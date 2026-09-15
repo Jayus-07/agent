@@ -34,6 +34,7 @@ export default function SessionList({ keyword = '', refreshKey = 0, onRefreshing
   const historyError = useChatStore((s) => s.historyError)
   const sessionsVersion = useChatStore((s) => s.sessionsVersion)
   const currentId = useChatStore((s) => s.currentId)
+  const isStreaming = useChatStore((s) => s.isLoading)
   const router = useRouter()
 
   const [sessions, setSessions] = useState<SessionMeta[]>([])
@@ -154,6 +155,9 @@ export default function SessionList({ keyword = '', refreshKey = 0, onRefreshing
 
   return (
     <div>
+      <div className="px-2 pt-1 pb-1 text-[10px] font-medium text-text-muted/80 uppercase tracking-wide">
+        任务 ({filtered.length})
+      </div>
       {groups.map(({ bucket, items }) => (
         <div key={bucket} className="mb-2">
           <div className="px-2 py-1 text-[10px] font-medium text-text-muted/80 uppercase tracking-wide">
@@ -165,6 +169,7 @@ export default function SessionList({ keyword = '', refreshKey = 0, onRefreshing
                 key={s.session_id}
                 session={s}
                 isActive={s.session_id === currentId}
+                running={isStreaming && s.session_id === currentId}
                 onSelect={() => handleSelect(s.session_id)}
                 onRename={(title) => handleRename(s.session_id, title)}
                 onDelete={() => handleDelete(s.session_id)}

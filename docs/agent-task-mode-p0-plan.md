@@ -1,5 +1,10 @@
 # /agent 任务模式改造方案 · P0
 
+> **✅ 实施状态（2026-09-15）**：P0 已实施并提交（`5f4d9c6 feat(travel|lbs|frontend): /agent 任务模式 P0`）。
+> - 12 个一级模块入口最终采用**双通道**：`layout.tsx` 在 `/agent` 下渲染折叠态全局 Sidebar（56px 模块图标条，`forceCompact` 禁止展开，快速直达）+ TaskSidebar 内「全部功能」折叠分组（可展开子菜单）。两者分工不同，并存不冗余。
+> - 实际落地与本文第二节略有出入：TaskSidebar 用 `SessionList` 子组件承载列表逻辑；`RunStatusLine` 显示「本会话已消耗」（后端仅在 done 事件一次性下发 usage，实时累计待 P1）。
+> - 验证：`npx tsc --noEmit` 通过，`npm run test` 124/124 通过。
+
 > **目标**：把 `/agent` 从"控制台内嵌的对话页"改造成任务型 Agent 界面（左侧任务栏 + 居中对话流 + 两段式输入框）。
 > **边界**：只动 `/agent` 一个路由。其余 11 个业务页面（知识库、客服、报告、告警、竞品、选品、定时任务、链路追踪、Prompt、评测、驾驶舱）零影响。
 > **不含**：任务列表卡片、文件操作列表、实时 token 累计 —— 这三项需要扩展后端 SSE 协议，属 P1。
@@ -155,14 +160,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
 ---
 
-## 八、P1 预告（不在本次范围）
+## 八、P1 实施记录（2026-09-15 完成）
 
-改造完成后会立刻暴露出三个"缺数据"的位置，需要后端配合：
+SSE 协议扩展为 `meta | status | log | delta | thinking | todo | usage | file | done | error`：
 
-| 缺口 | 需要的 SSE 事件 | 后端现状 |
-|---|---|---|
-| 任务列表卡片（○/✓ 待办） | 新增 `todo` 事件 | planner agent 已有 plan 数据，未下发 |
-| 文件操作列表（创建 xxx.py） | 新增 `file` 事件 | 工具执行时已有文件路径，未下发 |
-| 实时 token 累计 | `delta` 携带 usage 或周期性 `usage` 事件 | 目前仅在 `done` 事件一次性下发 |
+| 事件 | 触发时机 | 后端 | 前端 |
+|---|---|---|---|
+| `todo` | planner/critique/supervisor 节点跑完后发全量任务快照 | `events.make_todo_event` + `runner.py` 循环内发射 | `store.todoItems` → `TodoCard` |
+| `usage` | supervisor 每轮调度后发轮内累计用量 | `events.make_usage_event` | `store.streamUsage` → `RunStatusLine`（实时优先，会话累计兜底） |
+| `file` | skill 步骤落盘文件时（正则提取绝对路径，export_csv 已覆盖） | `events.make_file_event` + `_build_skill_events` | `store.fileOps`（文件级去重）→ `FileOpsCard` |
 
-现有协议：`meta | status | log | delta | thinking | done | error`（`src/lib/types.ts`）
+另挂载 `AgentTimeline`（此前零引用的成品组件）到 ChatView 顶部，与 TodoCard/FileOpsCard 构成执行进度信息带。
+
+验证：后端事件流测试 19/19、前端 129/129、`tsc --noEmit` 通过。

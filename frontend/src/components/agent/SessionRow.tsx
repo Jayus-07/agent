@@ -7,7 +7,7 @@
  * 宽度自适应：外框不设固定宽度，由父容器决定；hover 操作按钮绝对定位在右侧。
  */
 import { useEffect, useRef, useState } from 'react'
-import { MessageSquare, Pencil, Trash2 } from 'lucide-react'
+import { Loader2, MessageSquare, Pencil, Trash2 } from 'lucide-react'
 import type { SessionMeta } from '@/lib/api/memory'
 import { parseContextSummary } from '@/lib/context-summary'
 import { formatTime } from '@/lib/session-groups'
@@ -15,6 +15,8 @@ import { formatTime } from '@/lib/session-groups'
 export interface SessionRowProps {
   session: SessionMeta
   isActive: boolean
+  /** 该会话正在流式生成中：时间位置显示转圈（WorkBuddy 式进行中标记） */
+  running?: boolean
   onSelect: () => void
   onRename: (title: string) => void
   onDelete: () => void
@@ -22,7 +24,7 @@ export interface SessionRowProps {
 }
 
 export default function SessionRow({
-  session: s, isActive, onSelect, onRename, onDelete, activeRef,
+  session: s, isActive, running, onSelect, onRename, onDelete, activeRef,
 }: SessionRowProps) {
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(s.title)
@@ -75,17 +77,26 @@ export default function SessionRow({
         <button
           ref={activeRef}
           onClick={onSelect}
-          className={`w-full text-left px-3 py-2 pr-14 rounded-lg transition-colors ${
+          className={`w-full text-left px-3 py-1.5 pr-14 rounded-lg transition-colors ${
             isActive ? 'text-accent' : 'text-text-secondary'
           }`}
         >
           <div className="text-[13px] font-medium truncate">{s.title}</div>
-          <div className="flex items-center gap-2 mt-1 text-[10px] text-text-muted">
+          <div className="flex items-center gap-2 mt-0.5 text-[10px] text-text-muted">
             <span className="flex items-center gap-1">
               <MessageSquare size={10} /> {s.message_count}
             </span>
             {ctx?.turns ? <span>{ctx.turns} 轮</span> : null}
-            <span className="ml-auto">{formatTime(s.updated_at)}</span>
+            <span className="ml-auto flex items-center gap-1">
+              {running ? (
+                <span className="flex items-center gap-1 text-accent" title="生成中">
+                  <Loader2 size={10} className="animate-spin" />
+                  生成中
+                </span>
+              ) : (
+                formatTime(s.updated_at)
+              )}
+            </span>
           </div>
           {ctx && (ctx.sql_results || ctx.rag_docs) && (
             <div className="flex items-center gap-1.5 mt-1 text-[10px]">

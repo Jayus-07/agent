@@ -39,12 +39,17 @@ describe('bucketOf — 时间桶归属', () => {
   })
 })
 
-describe('formatTime — 紧凑时间显示', () => {
-  it('今天显示时刻，更早显示月/日', () => {
+describe('formatTime — 相对时间显示（WorkBuddy 式）', () => {
+  it('1小时内 → 刚刚/N分钟前；24小时内 → N小时前', () => {
+    expect(formatTime(new Date(Date.now() - 10_000).toISOString())).toBe('刚刚')
+    expect(formatTime(new Date(Date.now() - 5 * 60_000).toISOString())).toBe('5分钟前')
+    expect(formatTime(new Date(Date.now() - 3 * 3_600_000).toISOString())).toBe('3小时前')
+  })
+
+  it('7天内按天回退，更早显示月/日', () => {
     const now = new Date()
-    const hh = String(now.getHours()).padStart(2, '0')
-    const mm = String(now.getMinutes()).padStart(2, '0')
-    expect(formatTime(now.toISOString())).toBe(`${hh}:${mm}`)
+    const days = 2
+    expect(formatTime(new Date(now.getTime() - days * DAY).toISOString())).toBe(`${days}天前`)
 
     const old = new Date(now.getTime() - 30 * DAY)
     expect(formatTime(old.toISOString())).toBe(`${old.getMonth() + 1}/${old.getDate()}`)

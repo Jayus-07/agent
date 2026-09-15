@@ -20,12 +20,14 @@ interface Props {
 
 export default function TaskSidebar({ onCollapse, onNewTask }: Props) {
   const [keyword, setKeyword] = useState('')
+  // 12 个一级模块菜单默认展开（WorkBuddy 式布局：菜单在左上、历史在左下）；
+  // 小屏可手动收起换空间。
   const [refreshKey, setRefreshKey] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
-  const [navOpen, setNavOpen] = useState(false)
+  const [navOpen, setNavOpen] = useState(true)
 
   return (
-    <aside className="hidden md:flex w-[264px] shrink-0 flex-col bg-sidebar border-r border-black/5">
+    <aside className="hidden md:flex w-[252px] shrink-0 flex-col bg-sidebar border-r border-black/5">
       {/* 品牌 + 收起 */}
       <div className="flex items-center gap-2 px-4 h-12 shrink-0">
         <Brain size={18} className="text-accent shrink-0" />
@@ -69,7 +71,7 @@ export default function TaskSidebar({ onCollapse, onNewTask }: Props) {
       <div className="px-3 pb-2 shrink-0">
         <button
           onClick={onNewTask}
-          className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-accent px-3 py-2
+          className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-accent px-3 py-1.5
             text-[13px] font-medium text-white shadow-sm
             hover:bg-accent-hover active:scale-[0.99] transition-all duration-200"
         >
@@ -78,7 +80,7 @@ export default function TaskSidebar({ onCollapse, onNewTask }: Props) {
         </button>
       </div>
 
-      {/* 全部功能（收纳原 NAV 12 个业务模块，默认折叠） */}
+      {/* 一级模块菜单（左上，默认展开；小屏可收起换空间） */}
       <div className="px-3 pb-1 shrink-0">
         <button
           onClick={() => setNavOpen((v) => !v)}
@@ -95,13 +97,13 @@ export default function TaskSidebar({ onCollapse, onNewTask }: Props) {
         {navOpen && (
           <nav className="mt-0.5 space-y-0.5 max-h-[45vh] overflow-y-auto">
             {NAV.map((g) => (
-              <NavGroup key={g.path || g.label} {...g} collapsed={false} />
+              <NavGroup key={g.path || g.label} {...g} collapsed={false} compact />
             ))}
           </nav>
         )}
       </div>
 
-      {/* 任务列表（时间分组） */}
+      {/* 历史任务（左下，时间分组）——「任务 (N)」标题由 SessionList 渲染（持有数量） */}
       <div className="flex-1 overflow-y-auto px-3 pb-3">
         <SessionList
           keyword={keyword}

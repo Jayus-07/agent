@@ -81,6 +81,35 @@ export interface ErrorEvent {
   ts: number
 }
 
+// ========================================
+// P1: todo 快照 + 流中用量
+// ========================================
+
+/** 任务列表项（planner plan 的前端视图） */
+export interface TodoItem {
+  id: string
+  text: string
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped'
+}
+
+export interface TodoEvent {
+  items: TodoItem[]
+  ts: number
+}
+
+/** 流中用量（supervisor 每轮调度后透出的轮内累计） */
+export interface UsageEvent extends TokenUsage {
+  ts: number
+}
+
+/** 工具落盘文件事件（export_csv 等工具的产出清单） */
+export interface FileEvent {
+  node: string
+  step_id: string
+  files: string[]
+  ts: number
+}
+
 /** SSE v2 事件联合类型 */
 export type SSEStreamEvent =
   | { event: 'meta';     data: MetaEvent }
@@ -88,6 +117,9 @@ export type SSEStreamEvent =
   | { event: 'log';      data: LogEvent }
   | { event: 'delta';    data: DeltaEvent }
   | { event: 'thinking'; data: ThinkingEvent }
+  | { event: 'todo';     data: TodoEvent }
+  | { event: 'usage';    data: UsageEvent }
+  | { event: 'file';     data: FileEvent }
   | { event: 'done';     data: DoneEvent }
   | { event: 'error';    data: ErrorEvent }
 
@@ -101,11 +133,22 @@ export type ChatMode = 'chat' | 'sql' | 'rag' | 'report'
 // 消息
 // ========================================
 
+/** done 时固化的执行过程快照（完成态常驻行 CompletionLine 回看用） */
+export interface AgentTrace {
+  /** 本轮总耗时（秒，done 事件 elapsed） */
+  elapsed: number
+  streamEvents: SSEStreamEvent[]
+  todoItems: TodoItem[]
+  nodeLabels: Record<string, string>
+}
+
 export interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
   timestamp: number
+  /** 执行过程快照（done 时写入；历史恢复的消息无此字段） */
+  trace?: AgentTrace
   /** SSE v2 流式事件 */
   streamEvents?: SSEStreamEvent[]
   /** 来源文档（仅 RAG 类问题有值） */

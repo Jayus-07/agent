@@ -42,6 +42,16 @@ export function useSSE() {
       )) {
         if (controller.signal.aborted) return
 
+        // done 前快照执行过程（done 事件本身会清空 streamEvents，防 OOM）
+        const isDone = evt.event === 'done'
+        const snapshot = isDone
+          ? {
+              streamEvents: useChatStore.getState().streamEvents,
+              todoItems: useChatStore.getState().todoItems,
+              nodeLabels: useChatStore.getState().nodeLabels,
+            }
+          : null
+
         addStreamEvent(evt, sessionId)
 
         // error 事件 → 立即持久化到消息内容
@@ -57,6 +67,15 @@ export function useSSE() {
         // done 事件 → 将累积的 delta 文本 + sources + 思考链写入最终消息
         if (evt.event === 'done') {
           const finalState = useChatStore.getState()
+          // 固化执行过程快照（完成态常驻行回看用）；done 前已截取，此处 streamEvents 已被终态清空
+          if (snapshot) {
+            useChatStore.getState().attachTrace(sessionId, {
+              elapsed: evt.data.elapsed,
+              streamEvents: snapshot.streamEvents,
+              todoItems: snapshot.todoItems,
+              nodeLabels: snapshot.nodeLabels,
+            })
+          }
           replaceLastAssistant(
             finalState.deltaText || '(空回答)',
             sessionId,

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
-import type { Session, Message, ChatMode, SSEStreamEvent } from '@/lib/types'
+import type { Session, Message, ChatMode, SSEStreamEvent, TodoItem, TokenUsage } from '@/lib/types'
 import { isTerminalEvent, reduceStreamCore } from '@/store/stream-reduce'
 
 interface ChatState {
@@ -31,6 +31,12 @@ interface ChatState {
   currentRequestId: string | null
   /** 会话列表刷新信号：SSE done 后自增，HistorySidebar 监听它自动重新拉取 */
   sessionsVersion: number
+  /** 任务列表快照（todo 事件，全量替换）。chat 私有：csChat 无 planner，不进共享归约 */
+  todoItems: TodoItem[]
+  /** 流中用量（usage 事件，supervisor 每轮透出的轮内累计；done 后固化进 message.usage） */
+  streamUsage: TokenUsage | null
+  /** 工具产出文件（file 事件展开为文件级记录，按路径去重、新的覆盖旧的） */
+  fileOps: { path: string; node: string; step_id: string; ts: number }[]
 
   // — 计算属性 —
   currentMessages: () => Message[]
@@ -49,6 +55,9 @@ interface ChatState {
   removeLastAssistant: (sessionId?: string) => void
   replaceLastAssistant: (content: string, sessionId?: string, sources?: any[], usage?: import('@/lib/types').TokenUsage,
     thinking?: string, thinkingSeconds?: number) => void
+
+  /** done 时固化执行过程快照到尾部 assistant 消息（CompletionLine 回看用） */
+  attachTrace: (sessionId: string, trace: import('@/lib/types').AgentTrace) => void
 
   // — 状态 —
   setLoading: (v: boolean) => void
@@ -93,6 +102,9 @@ export const useChatStore = create<ChatState>((set, get) => {
     historyError: null,
     currentRequestId: null,
     sessionsVersion: 0,
+    todoItems: [],
+    streamUsage: null,
+    fileOps: [],
 
     // —— 计算属性 ——
     currentMessages: () => {
@@ -191,6 +203,25 @@ export const useChatStore = create<ChatState>((set, get) => {
           }
         }
 
+        // —— chat 私有：任务列表快照 + 流中用量 + 产出文件（P1 新事件，csChat 不消费）——
+        let todoItems = state.todoItems
+        let streamUsage = state.streamUsage
+        let fileOps = state.fileOps
+        if (isCurrentSession) {
+          if (evt.event === 'todo') {
+            todoItems = evt.data.items
+          } else if (evt.event === 'usage') {
+            streamUsage = evt.data
+          } else if (evt.event === 'file') {
+            // 文件级去重：同一文件被后续步骤再次触达时以最新记录为准，
+            // 且不影响同事件内其他文件（事件级去重会把它们一并吞掉）
+            const incoming = evt.data.files.map((p) => ({
+              path: p, node: evt.data.node, step_id: evt.data.step_id, ts: evt.data.ts,
+            }))
+            fileOps = [...fileOps.filter((f) => !incoming.some((i) => i.path === f.path)), ...incoming]
+          }
+        }
+
         const MAX_STREAM_EVENTS = 200
         let storeEvents = state.streamEvents
         if (isCurrentSession) {
@@ -228,7 +259,7 @@ export const useChatStore = create<ChatState>((set, get) => {
           return { ...s, messages: msgs, updatedAt: Date.now() }
         })
 
-        return { sessions, streamEvents: storeEvents, thinkingText, thinkingSeconds, thinkingStartAt, ...core }
+        return { sessions, streamEvents: storeEvents, thinkingText, thinkingSeconds, thinkingStartAt, todoItems, streamUsage, fileOps, ...core }
       })
     },
 
@@ -238,6 +269,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       streamEvents: [], currentStatus: '', deltaText: '',
       thinkingText: '', thinkingSeconds: null, thinkingStartAt: 0,
       currentRequestId: null,
+      todoItems: [], streamUsage: null, fileOps: [],
     }),
 
     // 重新生成：移除尾部 assistant 占位/旧回答（user 提问保留，问题由调用方重发）
@@ -369,6 +401,22 @@ export const useChatStore = create<ChatState>((set, get) => {
       } catch (e) {
         set({ historyError: e instanceof Error ? e.message : '加载会话列表失败' })
       }
+    },
+
+    // done 时固化执行过程快照到尾部 assistant 消息。
+    // streamEvents 本体会被终态清空（防 OOM），这里在清空前由 useSSE 截快照传入
+    attachTrace: (sessionId, trace) => {
+      set((state) => ({
+        sessions: state.sessions.map((s) => {
+          if (s.id !== sessionId) return s
+          const msgs = [...s.messages]
+          const last = msgs.length - 1
+          if (last >= 0 && msgs[last].role === 'assistant') {
+            msgs[last] = { ...msgs[last], trace }
+          }
+          return { ...s, messages: msgs }
+        }),
+      }))
     },
 
     // —— 状态 ——

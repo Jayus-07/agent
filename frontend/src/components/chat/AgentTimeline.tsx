@@ -78,15 +78,25 @@ function buildTimeline(events: SSEStreamEvent[], nodeLabels: Record<string, stri
   })
 }
 
-export default function AgentTimeline({ collapsed: outerCollapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+interface TimelineProps {
+  collapsed: boolean
+  onToggle: () => void
+  /** 外部数据源（完成态回看：传入 done 时固化的快照）；缺省订阅 store（生成中） */
+  events?: SSEStreamEvent[]
+  nodeLabels?: Record<string, string>
+}
+
+export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, events: eventsProp, nodeLabels: labelsProp }: TimelineProps) {
   const [expandedNode, setExpandedNode] = useState<string | null>(null)
   const [showLogs, setShowLogs] = useState(false)
 
-  // 全部从 store 派生，无本地 state
-  const events = useChatStore((s) => s.streamEvents)
-  const nodeLabels = useChatStore((s) => s.nodeLabels)
+  // 默认从 store 派生（生成中）；传入固化快照时以 props 为准（完成后回看，isLoading 恒 false）
+  const storeEvents = useChatStore((s) => s.streamEvents)
+  const storeLabels = useChatStore((s) => s.nodeLabels)
   const isLoading = useChatStore((s) => s.isLoading)
   const currentStatus = useChatStore((s) => s.currentStatus)
+  const events = eventsProp ?? storeEvents
+  const nodeLabels = labelsProp ?? storeLabels
 
   const nodes = useMemo(() => buildTimeline(events, nodeLabels, isLoading), [events, nodeLabels, isLoading])
   const doneCount = nodes.filter((n) => n.status === 'done' || n.status === 'error').length
@@ -96,7 +106,7 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle }: {
   // 折叠态：紧凑按钮
   if (outerCollapsed) {
     return (
-      <div className="border-b border-border-subtle bg-surface-elevated px-4 py-2">
+      <div className="border border-border-subtle rounded-xl bg-surface-elevated px-4 py-2 overflow-hidden">
         <button onClick={onToggle} className="flex items-center gap-2 text-xs text-accent hover:underline">
           <Zap size={12} />
           {isLoading ? 'Agent 执行中' : (nodes.length > 0 ? 'Agent 执行完成' : 'Agent 待执行')}
@@ -109,7 +119,7 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle }: {
   // 空态：未开始
   if (nodes.length === 0) {
     return (
-      <div className="border-b border-border-subtle bg-surface-elevated">
+      <div className="border border-border-subtle rounded-xl bg-surface-elevated overflow-hidden">
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-subtle">
           <div className="flex items-center gap-2 text-xs font-medium text-text-primary">
             <Zap size={13} className="text-accent" />
@@ -124,7 +134,7 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle }: {
   }
 
   return (
-    <div className="border-b border-border-subtle bg-surface-elevated">
+    <div className="border border-border-subtle rounded-xl bg-surface-elevated overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-subtle">
         <button onClick={onToggle} className="flex items-center gap-2 text-xs font-medium text-text-primary">

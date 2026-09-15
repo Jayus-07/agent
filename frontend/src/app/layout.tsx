@@ -10,7 +10,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const pathname = usePathname()
 
-  // /agent 走任务模式：全局控制台导航让位给页面自渲染的 TaskSidebar。
+  // /agent 走任务模式：全局控制台导航让位给页面自渲染的 TaskSidebar
+  // （12 个业务入口在 TaskSidebar 上半区常驻，会话历史在下半区）。
   // 用精确匹配而非 startsWith —— /agent/tasks 仍走原控制台导航，避免扩大影响面。
   const isTaskMode = pathname === '/agent'
 

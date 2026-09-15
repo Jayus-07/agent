@@ -9,7 +9,6 @@ import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import EmptyState from './EmptyState'
 import ContextPanel from './chat/ContextPanel'
-import RunStatusLine from './agent/RunStatusLine'
 
 // 模块级稳定空数组，避免 messages 为空时 useMemo 每次返回新 []
 const EMPTY_MESSAGES: Message[] = []
@@ -26,7 +25,6 @@ export default function ChatView() {
   )
   const isLoading = useChatStore((s) => s.isLoading)
   const error = useChatStore((s) => s.error)
-  const [timelineOpen, setTimelineOpen] = useState(true)
   const { send, stopStream } = useSendMessage()
 
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -111,18 +109,18 @@ export default function ChatView() {
       {/* Memory context panel */}
       <ContextPanel sessionId={currentId} />
 
+      {/* Messages —— Agent 进度卡片（时间线/任务清单/产出文件）已嵌入消息流：
+          最后一轮提问之下、回答之上，由 MessageList 控制，流结束自动收起 */}
+
       {/* Messages */}
       <div ref={contentRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
         {messages.length === 0 ? (
           <EmptyState onExampleClick={send} />
         ) : (
-          <MessageList messages={messages} isLoading={isLoading} sessionId={currentId} />
+          <MessageList messages={messages} isLoading={isLoading} sessionId={currentId} onStop={stopStream} />
         )}
         <div ref={bottomRef} />
       </div>
-
-      {/* 运行状态行（P0：生成中提示 + 本会话已消耗 tokens + 停止生成） */}
-      <RunStatusLine onStop={stopStream} />
 
       <ChatInput onSend={send} isLoading={isLoading} />
     </div>

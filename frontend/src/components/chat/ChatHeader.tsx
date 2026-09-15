@@ -59,8 +59,7 @@ export default function ChatHeader({
           aria-label="新建任务"
           title="新建任务"
         >
-          <Plus size={14} />
-          <span className="hidden sm:inline">新建任务</span>
+          <Plus size={16} />
         </button>
       )}
 
@@ -71,8 +70,7 @@ export default function ChatHeader({
         aria-label="分享会话链接"
         title="分享会话链接"
       >
-        <Share2 size={14} />
-        <span className="hidden sm:inline">分享</span>
+        <Share2 size={16} />
       </button>
     </header>
   )

@@ -25,6 +25,8 @@ function resetStore() {
     error: null,
     historyError: null,
     currentRequestId: null,
+    todoItems: [],
+    streamUsage: null,
   })
 }
 
@@ -231,5 +233,109 @@ describe('removeLastAssistant / replaceLastAssistant — 重新生成支撑', ()
     const msgs = useChatStore.getState().sessions.find((s) => s.id === 'local1')!.messages
     expect(msgs[1].thinking).toBe('思考全文')
     expect(msgs[1].thinkingSeconds).toBe(8)
+  })
+})
+
+describe('addStreamEvent — todo / usage 事件（P1）', () => {
+  it('todo 事件全量替换 todoItems', () => {
+    useChatStore.getState().addStreamEvent({
+      event: 'todo',
+      data: { items: [
+        { id: 's1', text: '查销量', status: 'completed' },
+        { id: 's2', text: '生成报告', status: 'pending' },
+      ], ts: 1 },
+    })
+    const items = useChatStore.getState().todoItems
+    expect(items).toHaveLength(2)
+    expect(items[0].status).toBe('completed')
+
+    // 第二次快照全量替换（supervisor 轮次更新状态）
+    useChatStore.getState().addStreamEvent({
+      event: 'todo',
+      data: { items: [
+        { id: 's1', text: '查销量', status: 'completed' },
+        { id: 's2', text: '生成报告', status: 'in_progress' },
+      ], ts: 2 },
+    })
+    expect(useChatStore.getState().todoItems[1].status).toBe('in_progress')
+  })
+
+  it('usage 事件写入 streamUsage，done 不清空（供最终消息固化兜底）', () => {
+    useChatStore.getState().addStreamEvent({
+      event: 'usage',
+      data: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150, calls: 2, ts: 1 },
+    })
+    expect(useChatStore.getState().streamUsage?.total_tokens).toBe(150)
+
+    useChatStore.getState().addStreamEvent({ event: 'done', data: { elapsed: 1.2 } })
+    expect(useChatStore.getState().streamUsage?.total_tokens).toBe(150)
+  })
+
+  it('resetStream 清空 todoItems 与 streamUsage', () => {
+    useChatStore.setState({
+      todoItems: [{ id: 's1', text: 'x', status: 'pending' }],
+      streamUsage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    })
+    useChatStore.getState().resetStream()
+    expect(useChatStore.getState().todoItems).toHaveLength(0)
+    expect(useChatStore.getState().streamUsage).toBeNull()
+  })
+})
+
+describe('addStreamEvent — file 事件（P1）', () => {
+  it('file 事件展开为文件级记录，同路径以最新为准且不吞同事件其他文件', () => {
+    useChatStore.getState().addStreamEvent({
+      event: 'file',
+      data: { node: 'sql_executor', step_id: 's1', files: ['D:////export////a.csv'], ts: 1 },
+    })
+    useChatStore.getState().addStreamEvent({
+      event: 'file',
+      data: { node: 'export', step_id: 's2', files: ['D:////export////b.csv', 'D:////export////a.csv'], ts: 2 },
+    })
+    const ops = useChatStore.getState().fileOps
+    expect(ops).toHaveLength(2)
+    const aOp = ops.find((o) => o.path === 'D:////export////a.csv')
+    expect(aOp?.step_id).toBe('s2')
+    const bOp = ops.find((o) => o.path === 'D:////export////b.csv')
+    expect(bOp?.step_id).toBe('s2')
+  })
+
+  it('resetStream 清空 fileOps', () => {
+    useChatStore.setState({
+      fileOps: [{ path: 'D:////x.csv', node: 'n', step_id: 's', ts: 1 }],
+    })
+    useChatStore.getState().resetStream()
+    expect(useChatStore.getState().fileOps).toHaveLength(0)
+  })
+})
+
+describe('attachTrace — 完成态快照固化（#3）', () => {
+  it('done 后 trace 固化到尾部 assistant 消息', () => {
+    useChatStore.getState().addMessage('user', '问题', 'local1')
+    useChatStore.getState().addMessage('assistant', '回答', 'local1')
+    useChatStore.getState().attachTrace('local1', {
+      elapsed: 12.3,
+      streamEvents: [{ event: 'status', data: { node: 'planner', ts: 1 } }],
+      todoItems: [{ id: 's1', text: '查数据', status: 'completed' }],
+      nodeLabels: { planner: '📋 规划' },
+    })
+    const msgs = useChatStore.getState().sessions.find((s) => s.id === 'local1')!.messages
+    expect(msgs[1].trace?.elapsed).toBe(12.3)
+    expect(msgs[1].trace?.streamEvents).toHaveLength(1)
+    expect(msgs[1].trace?.todoItems[0].status).toBe('completed')
+  })
+
+  it('尾部不是 assistant 消息时不写入（幂等）', () => {
+    useChatStore.setState({
+      sessions: [{ id: 'local1', title: 't', mode: 'chat', messages: [
+        { id: 'u1', role: 'user', content: 'q', timestamp: 1 },
+      ], createdAt: 1, updatedAt: 1 }],
+      currentId: 'local1',
+    })
+    useChatStore.getState().attachTrace('local1', {
+      elapsed: 1, streamEvents: [], todoItems: [], nodeLabels: {},
+    })
+    const msgs = useChatStore.getState().sessions.find((s) => s.id === 'local1')!.messages
+    expect(msgs[0].trace).toBeUndefined()
   })
 })

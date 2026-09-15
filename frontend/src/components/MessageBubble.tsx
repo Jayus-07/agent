@@ -21,6 +21,7 @@ import SqlViz from './chat/SqlViz'
 import TokenInfo from './chat/TokenInfo'
 import StreamingContent from './chat/StreamingContent'
 import ThinkingPanel from './chat/ThinkingPanel'
+import CompletionLine from './chat/CompletionLine'
 
 function stripReferences(content: string): string {
   const markers = ['\n\n---\n\n### 参考文献', '\n\n---\n\n### 参考来源',
@@ -102,6 +103,7 @@ function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubb
               </div>
             ) : (
               <>
+                {message.trace && <CompletionLine trace={message.trace} />}
                 {message.thinking && (
                   <ThinkingPanel
                     text={message.thinking}
