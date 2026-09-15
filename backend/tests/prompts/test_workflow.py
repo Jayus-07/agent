@@ -107,9 +107,19 @@ class TestStatusConstants:
 
 # ── API endpoint tests ────────────────────────────────────────
 
+# 2026-09-15 S0-2：prompts 全部端点的角色改由
+# `backend.app.api.deps.resolve_operator_role` 解析 —— 当前只认
+# `X-Internal-Token` 服务凭据。原先用 `X-Operator-Role` 头传角色的写法已废除
+# （该头是客户端自设头、可伪造，曾是越权发布高风险 Prompt 的入口）。
+INTERNAL_TOKEN = "test-internal-token"
+AUTH = {"X-Internal-Token": INTERNAL_TOKEN}
+
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    monkeypatch.setattr(
+        "backend.config.messaging.AI_INTERNAL_TOKEN", INTERNAL_TOKEN, raising=False
+    )
     from backend.app.api.routes.prompts import router as prompts_router
 
     app = FastAPI()
@@ -126,7 +136,7 @@ class TestTransitionAPI:
             resp = client.post(
                 "/api/prompts/rag.qa/versions/1/transition",
                 json={"status": "testing"},
-                headers={"X-Operator-Role": "admin"},
+                headers=AUTH,
             )
         assert resp.status_code == 200
         data = resp.json()
@@ -140,7 +150,7 @@ class TestTransitionAPI:
             resp = client.post(
                 "/api/prompts/rag.qa/versions/1/transition",
                 json={"status": "published"},
-                headers={"X-Operator-Role": "admin"},
+                headers=AUTH,
             )
         assert resp.status_code == 422
 
@@ -148,19 +158,37 @@ class TestTransitionAPI:
         resp = client.post(
             "/api/prompts/nonexistent.key/versions/1/transition",
             json={"status": "testing"},
-            headers={"X-Operator-Role": "admin"},
+            headers=AUTH,
         )
         assert resp.status_code == 404
 
-    def test_transition_high_risk_requires_admin(self, client):
+    def test_transition_high_risk_denied_without_credential(self, client):
+        """高风险转换在**无凭据**下必须拒绝（S0-2 后的边界）。
+
+        注：原先本用例是「editor 角色被拒」。角色头已废除，请求级无法再表达
+        「一个已认证但权限不足的 editor」；该权限矩阵语义改由
+        `test_prompts_api.py::TestPermissionMatrix` 直接单测 `_check_permission` 锁定。
+        """
         resp = client.post(
             "/api/prompts/planner.system/versions/1/transition",
             json={"status": "testing"},
-            headers={"X-Operator-Role": "editor"},
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 401
 
-    def test_transition_medium_risk_editor_allowed(self, client):
+    def test_old_spoofed_role_header_no_longer_grants_access(self, client):
+        """回归锁：客户端自带 `X-Operator-Role: admin` 不再有任何作用。
+
+        改造前：该头即角色来源，任意客户端可提权发布/回滚高风险 Prompt。
+        改造后：无 X-Internal-Token 一律 401 —— 即便把角色头写到最满。
+        """
+        resp = client.post(
+            "/api/prompts/rag.qa/versions/1/transition",
+            json={"status": "testing"},
+            headers={"X-Operator-Role": "admin"},
+        )
+        assert resp.status_code == 401, "伪造角色头必须已失效"
+
+    def test_transition_medium_risk_service_credential_allowed(self, client):
         with patch("backend.app.api.routes.prompts.prompt_service") as mock_svc:
             mock_svc.transition_status = AsyncMock(
                 return_value={"version": 1, "status": "testing"}
@@ -168,7 +196,7 @@ class TestTransitionAPI:
             resp = client.post(
                 "/api/prompts/rag.qa/versions/1/transition",
                 json={"status": "testing"},
-                headers={"X-Operator-Role": "editor"},
+                headers=AUTH,
             )
         assert resp.status_code == 200
 
@@ -184,7 +212,7 @@ class TestPublishTightening:
             resp = client.post(
                 "/api/prompts/rag.qa/publish",
                 json={"version": 1},
-                headers={"X-Operator-Role": "admin"},
+                headers=AUTH,
             )
         assert resp.status_code == 422
 
@@ -194,6 +222,6 @@ class TestPublishTightening:
             resp = client.post(
                 "/api/prompts/rag.qa/publish",
                 json={"version": 1},
-                headers={"X-Operator-Role": "admin"},
+                headers=AUTH,
             )
         assert resp.status_code == 200

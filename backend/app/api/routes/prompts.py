@@ -15,12 +15,20 @@
   POST   /prompts/{key}/playground                     — 渲染 + LLM 调用
   GET    /prompts/{key}/audit                          — 审计日志
   POST   /prompts/seed                                 — 种子默认值
+
+鉴权（2026-09-15 S0-2 起）：
+  **全部端点（含只读）** 均需通过 `backend.app.api.deps.resolve_operator_role` ——
+  该依赖是运营角色的**唯一解析入口**，当前只认 `X-Internal-Token` 服务凭据
+  （浏览器侧本轮不开放，`/prompts` 功能处于预留状态）。
+  **本模块禁止读取 `X-Operator-Role` / `X-Operator-Id`**：前者曾是客户端自设头
+  （可伪造 → 越权发布高风险 Prompt），后者是审计身份的伪造入口。
 """
 import difflib
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from backend.app.api.deps import OperatorIdentity, resolve_operator_role
 from backend.prompts.registry import PROMPT_REGISTRY, PromptSpec
 from backend.prompts.renderer import PromptRenderer, PromptRenderError
 from backend.prompts.service import prompt_service
@@ -64,13 +72,12 @@ class TransitionRequest(BaseModel):
 
 
 # ── Permission helpers ────────────────────────────────────────
-
-def _operator_role(headers: dict | None = None, x_operator_role: str = "viewer") -> str:
-    return x_operator_role
-
-
-def _operator_id(x_operator_id: str = "anonymous") -> str:
-    return x_operator_id
+#
+# 2026-09-15 S0-2：角色来源已收敛到 `backend.app.api.deps.resolve_operator_role`
+# （唯一入口）。此处只保留风险等级 × 动作 的权限矩阵。
+# 原有的 `_operator_role()` / `_operator_id()` 两个透传桩函数已删除 ——
+# 它们是死代码（返回自身入参、从未接线到身份层），留着会诱导后人走客户端头那条路。
+# **禁止再从此模块读取 `X-Operator-Role` / `X-Operator-Id`。**
 
 
 def _check_permission(risk_level: str, action: str, role: str) -> None:
@@ -168,7 +175,7 @@ async def list_prompts(
     risk_level: str | None = None,
     q: str | None = None,
     keys: str | None = None,
-    x_operator_role: str = Header(default="viewer"),
+    operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
     from backend.memory.database import AsyncSessionLocal
     from backend.memory.repository.prompt_repo import PromptRepository
@@ -204,7 +211,9 @@ async def list_prompts(
 # ── GET /prompts/meta/registry ────────────────────────────────
 
 @router.get("/meta/registry")
-async def get_registry():
+async def get_registry(
+    operator: OperatorIdentity = Depends(resolve_operator_role),
+):
     return {
         "specs": [_spec_to_dict(s) for s in PROMPT_REGISTRY.values()],
         "total": len(PROMPT_REGISTRY),
@@ -216,13 +225,13 @@ async def get_registry():
 @router.get("/{key}")
 async def get_prompt(
     key: str,
-    x_operator_role: str = Header(default="viewer"),
+    operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
     spec = PROMPT_REGISTRY.get(key)
     if not spec:
         raise HTTPException(404, f"Prompt not found: {key}")
 
-    _check_permission(spec.risk_level, "read", x_operator_role)
+    _check_permission(spec.risk_level, "read", operator.role)
 
     from backend.memory.database import AsyncSessionLocal
     from backend.memory.repository.prompt_repo import PromptRepository
@@ -269,13 +278,13 @@ async def get_prompt(
 @router.get("/{key}/versions")
 async def list_versions(
     key: str,
-    x_operator_role: str = Header(default="viewer"),
+    operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
     spec = PROMPT_REGISTRY.get(key)
     if not spec:
         raise HTTPException(404, f"Prompt not found: {key}")
 
-    _check_permission(spec.risk_level, "read", x_operator_role)
+    _check_permission(spec.risk_level, "read", operator.role)
 
     from backend.memory.database import AsyncSessionLocal
     from backend.memory.repository.prompt_repo import PromptRepository
@@ -297,13 +306,13 @@ async def list_versions(
 async def get_version(
     key: str,
     version: int,
-    x_operator_role: str = Header(default="viewer"),
+    operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
     spec = PROMPT_REGISTRY.get(key)
     if not spec:
         raise HTTPException(404, f"Prompt not found: {key}")
 
-    _check_permission(spec.risk_level, "read", x_operator_role)
+    _check_permission(spec.risk_level, "read", operator.role)
 
     from backend.memory.database import AsyncSessionLocal
     from backend.memory.repository.prompt_repo import PromptRepository
@@ -327,7 +336,7 @@ async def diff_versions(
     key: str,
     from_version: int,
     to_version: int,
-    x_operator_role: str = Header(default="viewer"),
+    operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
     spec = PROMPT_REGISTRY.get(key)
     if not spec:
@@ -336,7 +345,7 @@ async def diff_versions(
     if spec.code_controlled:
         raise HTTPException(403, "Cannot diff code-controlled prompt")
 
-    _check_permission(spec.risk_level, "read", x_operator_role)
+    _check_permission(spec.risk_level, "read", operator.role)
 
     from backend.memory.database import AsyncSessionLocal
     from backend.memory.repository.prompt_repo import PromptRepository
@@ -375,20 +384,19 @@ async def diff_versions(
 async def create_draft(
     key: str,
     body: DraftRequest,
-    x_operator_role: str = Header(default="editor"),
-    x_operator_id: str = Header(default="anonymous"),
+    operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
     spec = PROMPT_REGISTRY.get(key)
     if not spec:
         raise HTTPException(404, f"Prompt not found: {key}")
 
-    _check_permission(spec.risk_level, "draft", x_operator_role)
+    _check_permission(spec.risk_level, "draft", operator.role)
 
     try:
         result = await prompt_service.create_draft(
             key, body.template,
             change_note=body.change_note,
-            created_by=x_operator_id,
+            created_by=operator.actor,
         )
         return result
     except KeyError as e:
@@ -403,20 +411,19 @@ async def create_draft(
 async def publish(
     key: str,
     body: PublishRequest,
-    x_operator_role: str = Header(default="editor"),
-    x_operator_id: str = Header(default="anonymous"),
+    operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
     spec = PROMPT_REGISTRY.get(key)
     if not spec:
         raise HTTPException(404, f"Prompt not found: {key}")
 
-    _check_permission(spec.risk_level, "publish", x_operator_role)
+    _check_permission(spec.risk_level, "publish", operator.role)
 
     try:
         result = await prompt_service.publish(
             key, body.version,
-            actor=x_operator_id,
-            role=x_operator_role,
+            actor=operator.actor,
+            role=operator.role,
         )
         return result
     except KeyError as e:
@@ -431,20 +438,19 @@ async def publish(
 async def rollback(
     key: str,
     body: RollbackRequest,
-    x_operator_role: str = Header(default="editor"),
-    x_operator_id: str = Header(default="anonymous"),
+    operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
     spec = PROMPT_REGISTRY.get(key)
     if not spec:
         raise HTTPException(404, f"Prompt not found: {key}")
 
-    _check_permission(spec.risk_level, "rollback", x_operator_role)
+    _check_permission(spec.risk_level, "rollback", operator.role)
 
     try:
         result = await prompt_service.rollback(
             key, body.version,
-            actor=x_operator_id,
-            role=x_operator_role,
+            actor=operator.actor,
+            role=operator.role,
         )
         return result
     except KeyError as e:
@@ -460,20 +466,19 @@ async def transition_status(
     key: str,
     version: int,
     body: TransitionRequest,
-    x_operator_role: str = Header(default="editor"),
-    x_operator_id: str = Header(default="anonymous"),
+    operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
     spec = PROMPT_REGISTRY.get(key)
     if not spec:
         raise HTTPException(404, f"Prompt not found: {key}")
 
-    _check_permission(spec.risk_level, "transition", x_operator_role)
+    _check_permission(spec.risk_level, "transition", operator.role)
 
     try:
         result = await prompt_service.transition_status(
             key, version, body.status,
-            actor=x_operator_id,
-            role=x_operator_role,
+            actor=operator.actor,
+            role=operator.role,
         )
         return result
     except KeyError as e:
@@ -488,13 +493,13 @@ async def transition_status(
 async def render_prompt(
     key: str,
     body: RenderRequest,
-    x_operator_role: str = Header(default="viewer"),
+    operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
     spec = PROMPT_REGISTRY.get(key)
     if not spec:
         raise HTTPException(404, f"Prompt not found: {key}")
 
-    _check_permission(spec.risk_level, "read", x_operator_role)
+    _check_permission(spec.risk_level, "read", operator.role)
 
     template = body.template
     if not template:
@@ -531,13 +536,13 @@ async def render_prompt(
 async def playground(
     key: str,
     body: PlaygroundRequest,
-    x_operator_role: str = Header(default="viewer"),
+    operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
     spec = PROMPT_REGISTRY.get(key)
     if not spec:
         raise HTTPException(404, f"Prompt not found: {key}")
 
-    _check_permission(spec.risk_level, "read", x_operator_role)
+    _check_permission(spec.risk_level, "read", operator.role)
 
     try:
         if body.template:
@@ -594,7 +599,7 @@ async def playground(
 async def audit_log(
     key: str,
     limit: int = 50,
-    x_operator_role: str = Header(default="viewer"),
+    operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
     spec = PROMPT_REGISTRY.get(key)
     if not spec:
@@ -615,10 +620,9 @@ async def audit_log(
 @router.post("/seed")
 async def seed_defaults(
     body: SeedRequest = SeedRequest(),
-    x_operator_role: str = Header(default="admin"),
-    x_operator_id: str = Header(default="anonymous"),
+    operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
-    if x_operator_role != "admin":
+    if operator.role != "admin":
         raise HTTPException(403, "Only admin can seed defaults")
 
     from backend.prompts.loader import seed

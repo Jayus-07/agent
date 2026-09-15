@@ -5,6 +5,7 @@
 """
 import hmac
 import threading
+from dataclasses import dataclass
 
 from fastapi import HTTPException, Request
 
@@ -188,3 +189,53 @@ async def require_internal_token(request: Request) -> None:
         AI_INTERNAL_TOKEN.encode("utf-8"), provided.encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="invalid internal token")
+
+
+# ── 运营角色解析（prompts 等治理类接口的唯一入口）──────────────
+#
+# 2026-09-15 S0-2：此前的实现是**每个端点各自声明**
+#   `x_operator_role: str = Header(default="viewer"|"editor")`
+# 即角色完全由**客户端自设请求头**决定，且未被任何网关剥离 —— 任意客户端带
+# `X-Operator-Role: admin` 即可发布/回滚高风险 Prompt。同时写端点默认值为
+# `editor`、`/seed` 为 `admin`，意味着**剥头后无凭据调用仍然放行**。
+#
+# 本次收敛为单一入口，要点：
+#   ① 角色只能由本函数产出，**任何地方不得再读 X-Operator-Role**；
+#   ② 当前（过渡形态）只认 `X-Internal-Token` 服务凭据 —— 浏览器侧本轮不开放
+#      （`/prompts` 功能处于预留状态，见 v3 计划决策 D8/D9）；
+#   ③ **演进点**：py 自建用户体系（`backend/security/local_jwt.py`，另一会话交付）
+#      就绪后，**只在本函数内增加一个分支**，从其 access token 解析 roles 即可，
+#      调用方（各端点）零改动。不要在别处判定角色。
+#
+# 角色枚举与 `backend/app/api/routes/prompts.py::_check_permission` 的权限矩阵对应：
+#   viewer / editor / admin
+
+
+@dataclass(frozen=True)
+class OperatorIdentity:
+    """运营操作者身份：`role` 决定能做什么，`actor` 进审计留痕。
+
+    - role：viewer / editor / admin（权限矩阵见 prompts.py::_check_permission）
+    - actor：审计用操作者标识。服务凭据调用固定为 `service:internal-token` ——
+      **刻意不采用 `X-User-Id`**：当前浏览器业务流量直连 :8000、不经网关，
+      该头在客户端可伪造，用它做审计等于让调用方自证身份。
+    """
+
+    role: str
+    actor: str
+
+
+async def resolve_operator_role(request: Request) -> OperatorIdentity:
+    """运营角色的**唯一解析入口**（S0-2 起）。
+
+    当前实现（过渡形态）：仅接受 `X-Internal-Token` 服务凭据。
+    - 凭据缺失/错误 → 401；令牌未配置且未显式豁免 → 503（由 require_internal_token 决定）
+    - 通过 → role = admin（服务凭据是机器凭据，具备完整运营权限）
+
+    为什么服务凭据映射为 admin：`_check_permission` 的矩阵里 `high` 风险的
+    publish/rollback 仅 admin 可做。若映射为 editor，则高风险 Prompt 将**无人可发布**
+    （前端也从不发送角色头），功能性上等于锁死；而服务凭据本身是不外发的服务端
+    机密，映射为 admin 既恢复合法运营能力、又彻底关闭不可信通道。
+    """
+    await require_internal_token(request)
+    return OperatorIdentity(role="admin", actor="service:internal-token")
