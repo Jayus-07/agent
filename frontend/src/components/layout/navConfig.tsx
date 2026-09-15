@@ -3,14 +3,12 @@
 /**
  * navConfig — 用户端全局导航配置（单一数据源）
  *
- * Sidebar（控制台框架）渲染入口的唯一来源；后续任何页面需要
- * 业务入口（如菜单/跳转）也从这里取，避免多处硬编码漂移。
- * 运维/配置入口（trace/Prompt/评测/定时任务）已拆至管理端 frontend-admin/。
+ * 2026-09-16 二次收敛：用户端只保留「业务对话 + 报告」两类入口；
+ * 知识运营/竞品/选品/客服/告警工单等全部归管理端 frontend-admin/
+ * （见 docs/2026-09-16-前端拆分计划.md §1）。Sidebar 与 /agent 任务页
+ * 的「全部功能」菜单（TaskSidebar）都消费本配置。
  */
-import {
-  Sparkles, LayoutDashboard, BookOpen, Brain, FileText, AlertTriangle,
-  TrendingUp, ClipboardCheck, Headphones,
-} from 'lucide-react'
+import { Brain, FileText } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 export interface NavItem {
@@ -28,15 +26,6 @@ export interface NavEntry {
 }
 
 export const NAV: NavEntry[] = [
-  { icon: <LayoutDashboard size={18} />, label: '数据驾驶舱', path: '/' },
-  {
-    icon: <BookOpen size={18} />, label: 'RAG 知识库',
-    items: [
-      { label: '概览', path: '/knowledge' },
-      { label: '文档管理', path: '/knowledge/documents' },
-      { label: '词库管理', path: '/knowledge/keywords' },
-    ],
-  },
   {
     icon: <Brain size={18} />, label: 'AI 对话',
     items: [
@@ -45,25 +34,6 @@ export const NAV: NavEntry[] = [
     ],
   },
   {
-    icon: <Headphones size={18} />, label: '智能客服',
-    items: [
-      { label: '客服对话', path: '/cs' },
-      { label: '会话管理', path: '/cs/conversations' },
-    ],
-  },
-  {
     icon: <FileText size={18} />, label: '报告中心', path: '/reports',
-  },
-  {
-    icon: <AlertTriangle size={18} />, label: '告警中心', path: '/alerts',
-  },
-  {
-    icon: <TrendingUp size={18} />, label: '竞品监控', path: '/competitors',
-  },
-  {
-    icon: <Sparkles size={18} />, label: '智能选品', path: '/selection',
-  },
-  {
-    icon: <ClipboardCheck size={18} />, label: '选品决策', path: '/selection-decision',
   },
 ]
