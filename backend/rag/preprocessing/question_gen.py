@@ -133,6 +133,50 @@ def _read_last_tokens() -> dict:
         return {}
 
 
+def _cache_key(chunks_text: list[str], doc_type: str) -> str:
+    """批级缓存键：全部 chunk 文本 + doc_type 的 sha256。
+
+    内容寻址保证：同内容重索引/副本文档 → 相同问题 → 前缀稳定 →
+    embedding 缓存（3.1）可命中。LLM 非确定性输出若不缓存，
+    会在重索引时生成不同问题、击穿下游嵌入缓存（运行时验收发现）。
+    """
+    import hashlib
+    joined = doc_type + "\x00" + "\x00".join(chunks_text)
+    return "question_gen:" + hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def _cache_get(key: str) -> list[list[str]] | None:
+    try:
+        from backend.config.redis import REDIS_KEY_PREFIX
+        from backend.infra.redis.client import get_redis
+        r = get_redis()
+        if r is None:
+            return None
+        raw = r.get(f"{REDIS_KEY_PREFIX}{key}")
+        if raw is None:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        data = json.loads(raw)
+        return data if isinstance(data, list) else None
+    except Exception as e:
+        logger.debug(f"[QuestionGen] 缓存读取失败（按 miss）: {e}")
+        return None
+
+
+def _cache_put(key: str, value: list[list[str]]) -> None:
+    try:
+        from backend.config.redis import REDIS_KEY_PREFIX
+        from backend.infra.redis.client import get_redis
+        r = get_redis()
+        if r is None:
+            return
+        r.setex(f"{REDIS_KEY_PREFIX}{key}", 7 * 86400,
+                json.dumps(value, ensure_ascii=False))
+    except Exception as e:
+        logger.debug(f"[QuestionGen] 缓存写入失败: {e}")
+
+
 def generate_chunk_questions(chunks_text: list[str],
                              doc_type: str = "general") -> list[list[str]]:
     """为每个 chunk 生成模拟问题（Document Expansion）。
@@ -151,6 +195,13 @@ def generate_chunk_questions(chunks_text: list[str],
     if not ENABLE_SIMULATED_QUESTIONS or not chunks_text:
         return []
 
+    # 内容寻址缓存：同内容重索引/副本 → 相同问题（前缀稳定 → 嵌入缓存可命中）
+    ckey = _cache_key(chunks_text, doc_type)
+    cached = _cache_get(ckey)
+    if cached is not None and len(cached) == len(chunks_text):
+        logger.info(f"[QuestionGen] 缓存命中 {len(cached)} chunks")
+        return cached
+
     # 成本护栏：超长文档只对前 N chunk 走 LLM，其余规则兜底
     llm_scope = list(chunks_text[:QUESTION_GEN_MAX_CHUNKS])
     tail_scope = chunks_text[len(llm_scope):]
@@ -167,7 +218,9 @@ def generate_chunk_questions(chunks_text: list[str],
         parsed = _extract_json_questions(content, len(llm_scope), llm_scope)
         if parsed is None:
             return fallback_result
-        return parsed + [_fallback_questions(ct) for ct in tail_scope]
+        result_questions = parsed + [_fallback_questions(ct) for ct in tail_scope]
+        _cache_put(ckey, result_questions)
+        return result_questions
     except Exception as e:
         logger.warning(f"[QuestionGen] LLM 调用失败，规则降级: {type(e).__name__}: {e}")
         return fallback_result

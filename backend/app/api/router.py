@@ -6,6 +6,7 @@
 from fastapi import APIRouter
 
 from backend.app.api.routes import (
+    auth_local,
     chat,
     sql,
     rag,
@@ -37,6 +38,8 @@ from backend.app.api.routes.keyword_routes import router as keyword_router
 api_router = APIRouter()
 
 # ── 业务路由 ──────────────────────────────────
+api_router.include_router(auth_local.router)  # 自建认证（2026-09-15 拆分，替代 Java auth-service）
+api_router.include_router(auth_local.sys_router)  # 用户中心（register）
 api_router.include_router(chat.router)
 api_router.include_router(sql.router)
 api_router.include_router(rag.router)

@@ -38,41 +38,21 @@ upstreams:
       send: 600
     nodes:
       "app:8000": 1
-  - id: auth
-    type: roundrobin
-    retries: 0
-    timeout:
-      connect: 5
-      read: 60
-      send: 60
-    nodes:
-      "host.docker.internal:8006": 1
-  - id: system
-    type: roundrobin
-    retries: 0
-    timeout:
-      connect: 5
-      read: 60
-      send: 60
-    nodes:
-      "host.docker.internal:8001": 1
-
 routes:
-  # ── Java 认证/用户中心（保留前缀剥除：/api/auth/* → /auth/*）──
+  # ── 认证/用户中心（2026-09-15 拆分：py 自建 auth 模块，经兜底 strip /api → /auth/*、/sys/*）──
   - id: auth-service
     uri: /api/auth/*
-    upstream_id: auth
+    upstream_id: app
     plugins:
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
 
-  # ── Java 用户中心（对齐 SCG RewritePath：/api/sys/* → /system/*）──
   - id: system-service
     uri: /api/sys/*
-    upstream_id: system
+    upstream_id: app
     plugins:
       proxy-rewrite:
-        regex_uri: ["^/api/sys/(.*)$", "/system/$1"]
+        regex_uri: ["^/api/(.*)$", "/$1"]
 
   # ── SSE/长任务：独立 upstream（600s + retries=0）+ 禁缓冲 ──
   - id: chat-sse

@@ -246,16 +246,25 @@ start_java.bat / stop_java.bat / restart_java.bat
 start_frontend.bat / stop_frontend.bat
 ```
 
-### 网关（2026-09-15 APISIX 迁移完成）
+### 网关与项目边界（2026-09-15 拆分后）
 
-- **APISIX(9080) 是 Python 项目独立入口**（standalone 声明式 `apisix/apisix.yaml` 进 git +
-  自研插件 `apisix/plugins/gateway-auth.lua`）；Java SCG(8080) 原样保留为回滚路径
-- **切流开关** = 前端启动 env `AUTH_GATEWAY_URL`：`http://127.0.0.1:9080`（APISIX，现默认）/
-  `http://localhost:8080`（回滚到 SCG）；改完重启前端生效。next dev 模式启动时读取；
-  standalone 构建形态 rewrites 固化在构建期，切流须重建镜像
-- 认证：`gateway-auth` 插件（enforce 模式）在网关层验 JWT（issuer hongmeng-oa）+
-  Redis 黑名单（只读 oa-auth-redis:16379）+ 注入 X-User-Id 等身份头；
-  带 X-API-Key 的请求打标透传由 FastAPI 校验；契约见 `docs/contracts/identity-header-protocol.md`
+- **py 与 Java 是两个独立项目**：py = 本仓库（backend/frontend/apisix/postgres/redis/rag/mcp），
+  Java = Enterprise_OA（oa-auth 栈 + business-service + SCG，源码已移出本仓，
+  备份 `.workbuddy/java-legacy-backup/`，割接清单 `docs/java-side-handover.md`）。
+- **唯一保留的联系**：Java 客服系统调用 py agent（/internal/ai/call + chat API）；
+  认证已 py 自建（issuer=agent-platform，`backend/security/local_jwt.py` +
+  `routes/auth_local.py` + migration 008），不再依赖 Java auth-service。
+- **APISIX(9080) 是 Python 项目唯一入口**（standalone 声明式 `apisix/apisix.yaml` 进 git +
+  自研插件 `apisix/plugins/gateway-auth.lua`）；Java SCG 归 Java 项目，与 py 无关
+- 容器最小集（6 个）：postgres / redis / rag-service / mcp-service / app / apisix；
+  kafka 已加 profile（java-loop，归 Java 闭环），ollama/prometheus/grafana 保持 profile 不随 up
+- 前端 env `AUTH_GATEWAY_URL` 默认 `http://127.0.0.1:9080`（start_frontend.bat 注入）；
+  next dev 模式启动时读取；standalone 构建形态 rewrites 固化在构建期，改 env 须重建镜像
+- 认证模型：`gateway-auth` 插件（enforce）验 py 签发 JWT（Bearer 优先于 X-API-Key——
+  带 Bearer 的请求即使带 Key 也必须过完整 JWT 流，防止绕过黑名单）+
+  Redis 黑名单（只读 agent-redis:6379）+ 注入 X-User-Id 等身份头；
+  仅 X-API-Key 无 Bearer 的请求走服务级透传（服务间调用契约）；
+  契约见 `docs/contracts/identity-header-protocol.md`
 - 登录链路：前端 `/login` → APISIX `/api/auth/**`（白名单）→ auth-service(JWT)；
   refresh_token 走 HttpOnly Cookie（同源经 Next 代理，域不变）
 - 回滚 = env 改回 8080 重启前端；SCG 与全部 Java 服务从未被修改

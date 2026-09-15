@@ -39,10 +39,10 @@ services:
       # JWT 验签（与 Java auth-service 同源；值来自 .env，禁止写入本文件）
       - JWT_SECRET=${JWT_SECRET:-}
       - JWT_SECRET_PREVIOUS=${JWT_SECRET_PREVIOUS:-}
-      - JWT_ISSUER=${JWT_ISSUER:-hongmeng-oa}
+      - JWT_ISSUER=${JWT_ISSUER:-agent-platform}
       # Redis 黑名单（只读 oa-auth-redis，写侧归 auth-service）
-      - AUTH_REDIS_HOST=${AUTH_REDIS_HOST:-host.docker.internal}
-      - AUTH_REDIS_PORT=${AUTH_REDIS_PORT:-16379}
+      - AUTH_REDIS_HOST=${AUTH_REDIS_HOST:-redis}
+      - AUTH_REDIS_PORT=${AUTH_REDIS_PORT:-6379}
       - AUTH_REDIS_PASSWORD=${AUTH_REDIS_PASSWORD:-}
     # 注意：不要加 extra_hosts host-gateway —— Docker Desktop (Windows) 自带的
     # host.docker.internal 才能到达宿主机 loopback 服务（8000/8006）；
@@ -52,83 +52,6 @@ services:
     restart: unless-stopped
 
   # ── API Gateway（Spring Cloud Gateway，统一入口）──
-  api-gateway:
-    build: ./api-gateway
-    ports:
-      - "8080:8080"
-    volumes:
-      # 外部配置覆盖（Spring Boot 默认读取 ./config/application.yml，WORKDIR=/app）：
-      # 改路由/白名单只动 api-gateway/config/application.yml，然后
-      #   docker compose restart api-gateway
-      # 无需 --build 重新打镜像（镜像内那份 yml 仅作容器裸跑兜底）
-      - ./api-gateway/config:/app/config:ro
-    environment:
-      # Python 后端跑在宿主机；若 app 容器启用则改回 http://app:8000
-      # 支持环境变量覆盖：冒烟脚本用它把上游临时切到回显桩，验证网关下发/剥离的身份头
-      - AI_SERVICE_URL=${AI_SERVICE_URL:-http://host.docker.internal:8000}
-      - BUSINESS_SERVICE_URL=http://business-service:8081
-      # ── 认证中心接入 + 网关统一鉴权（P2）──
-      # 认证中心为 oa-auth 独立 compose（端口仅绑宿主机 loopback），容器经 host.docker.internal 访问
-      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://host.docker.internal:8006}
-      # system-service（注册/用户中心）：Nacos 配置端口 8001、context-path /system
-      - SYS_SERVICE_URL=${SYS_SERVICE_URL:-http://host.docker.internal:8001}
-      # 网关热路由开关（仅本地开发）：true 时暴露 /actuator/gateway 端点，
-      # 可 POST 运行时增改路由零重启；生产/对外必须保持 false
-      - GATEWAY_HOT_ROUTES=${GATEWAY_HOT_ROUTES:-false}
-      - GATEWAY_ACTUATOR_INCLUDE=${GATEWAY_ACTUATOR_INCLUDE:-health,info,metrics}
-      - GATEWAY_AUTH_ENABLED=${GATEWAY_AUTH_ENABLED:-false}
-      - GATEWAY_AUTH_MODE=${GATEWAY_AUTH_MODE:-shadow}
-      # JWT_SECRET 必须与 Enterprise_OA/anonymous-rating-system/docker/.env.oaauth 的 JWT_SECRET_KEY 同值
-      - JWT_SECRET=${JWT_SECRET:-}
-      - JWT_ISSUER=${JWT_ISSUER:-hongmeng-oa}
-      # 黑名单 Redis 指向 oa-auth-redis（独立实例，noeviction，ARCH-03）
-      - AUTH_REDIS_HOST=${AUTH_REDIS_HOST:-host.docker.internal}
-      - AUTH_REDIS_PORT=${AUTH_REDIS_PORT:-16379}
-      - AUTH_REDIS_PASSWORD=${AUTH_REDIS_PASSWORD:-}
-      # 网关注入用户身份头（对接后端 TRUST_USER_HEADER 机制）
-      - GATEWAY_USER_HEADER_ENABLED=${GATEWAY_USER_HEADER_ENABLED:-false}
-      - GATEWAY_DEFAULT_USER_ID=${GATEWAY_DEFAULT_USER_ID:-}
-    depends_on:
-      app:
-        condition: service_started
-      business-service:
-        condition: service_started
-    networks:
-      - agent-net
-    restart: unless-stopped
-
-  # ── 业务系统（Java：工单/客户/会话/审计/渠道接入）──
-  business-service:
-    build: ./business-service
-    ports:
-      - "8081:8081"
-    environment:
-      # 记忆库（读写：customer_service schema）
-      - MEM_DB_URL=jdbc:postgresql://postgres:5432/agent_memory
-      - MEM_DB_USERNAME=postgres
-      - MEM_DB_PASSWORD=${PGPASSWORD:?PGPASSWORD is required}
-      # 业务库（只读：订单等，数据库层强制只读）
-      - BIZ_DB_URL=jdbc:postgresql://postgres:5432/agent_business
-      - BIZ_DB_USERNAME=agent_readonly
-      - BIZ_DB_PASSWORD=${PG_READONLY_PASSWORD:?PG_READONLY_PASSWORD is required}
-      # Kafka
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      # 内部调用令牌（Python AI 服务 → 业务系统内部 REST）
-      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
-      # WhatsApp Cloud API（无 token 时仅收不发）
-      - WHATSAPP_ACCESS_TOKEN=${WHATSAPP_ACCESS_TOKEN:-}
-      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID:-}
-      - WHATSAPP_VERIFY_TOKEN=${WHATSAPP_VERIFY_TOKEN:-}
-      - WHATSAPP_APP_SECRET=${WHATSAPP_APP_SECRET:-}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      kafka:
-        condition: service_started
-    networks:
-      - agent-net
-    restart: unless-stopped
-
   # ── 应用服务（AI 系统：RAG/Agent/LLM）──
   app:
     build: .
@@ -186,10 +109,11 @@ services:
       - TRAVEL_CHECKPOINTER_ENABLED=${TRAVEL_CHECKPOINTER_ENABLED:-true}
       - TRAVEL_CHECKPOINTER_BACKEND=${TRAVEL_CHECKPOINTER_BACKEND:-postgres}
       - TRAVEL_CHECKPOINT_TTL_DAYS=${TRAVEL_CHECKPOINT_TTL_DAYS:-7}
-      # AI 工具网关（Java business-service 经 /internal/ai/call 调用 Python 工具）
+      # AI 工具网关（唯一保留的 Java 侧联系：Java 客服系统经 /internal/ai/call 调用 Python 工具）
       - AI_TOOLS_ENABLED=${AI_TOOLS_ENABLED:-true}
-      # 业务系统（Java）地址：cs_admin cutover 开关用
-      - BUSINESS_SERVICE_URL=http://business-service:8081
+      # 业务系统（Java）地址：cs_admin cutover 开关用——项目拆分后 Java 容器已移出
+      # 本 compose；除非 Java 侧自行恢复容器并接入网络，否则保持 CS_ADMIN_SOURCE=local
+      - BUSINESS_SERVICE_URL=${BUSINESS_SERVICE_URL:-}
       - CS_ADMIN_SOURCE=${CS_ADMIN_SOURCE:-local}
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
       # RAG 服务化：app 走远端代理（rag-service 持有 embedding/Chroma/索引）
@@ -206,8 +130,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      kafka:
-        condition: service_started
+      # kafka 依赖已移除：项目拆分后 Kafka 归 Java 闭环（profiles: java-loop），
+      # py 侧 KAFKA_ENABLED=false 不消费
       rag-service:
         condition: service_started
     networks:
@@ -326,7 +250,9 @@ services:
     restart: unless-stopped
 
   # ── Kafka（事件总线，KRaft 单节点）──
+  # kafka：仅 Java 客服闭环使用（py 侧 KAFKA_ENABLED=false）——默认不随 up 启动
   kafka:
+    profiles: ["java-loop"]
     image: apache/kafka:3.7.0
     ports:
       # 外部监听器供宿主机开发调试（Python/Java 本地运行时用）

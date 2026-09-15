@@ -166,7 +166,7 @@ local function build_conf()
     return {
         jwt_secret = jwt_secret,
         jwt_secret_previous = (prev ~= "" and prev) or nil,
-        issuer = env("JWT_ISSUER", "hongmeng-oa"),
+        issuer = env("JWT_ISSUER", "agent-platform"),
         clock_skew = tonumber(env("GATEWAY_AUTH_CLOCK_SKEW", "60")),
         alg_expected = expected_alg(jwt_secret),
         secret_ready = #jwt_secret >= 32,
@@ -211,19 +211,20 @@ function _M.access(_, ctx)
         return
     end
 
-    -- ④ API-Key 通道：打标透传，网关不校验（下游 api_key_middleware 负责）
-    if core.request.header(ctx, "X-API-Key") then
-        core.request.set_header(ctx, HEADER_AUTH_TYPE, "api-key")
-        return
-    end
-
-    -- ⑤ Bearer 提取
+    -- ④⑤ Bearer 提取（Bearer 优先于 API-Key 通道）：浏览器流量必须过完整 JWT 流——
+    -- 若 X-API-Key 优先，带 Key 的请求会绕过黑名单（2026-09-15 拆分实测发现的设计缺陷）。
+    -- 仅当**没有** Bearer 时，X-API-Key 才走服务级透传（网关不校验，下游负责）。
     local authz = core.request.header(ctx, "Authorization") or ""
     local token = nil
     if #authz > 8 and find(authz:sub(1, 7):lower(), "bearer ", 1, true) then
         token = authz:sub(8)
         token = token:match("^%s*(.-)%s*$")  -- trim
         if token == "" then token = nil end
+    end
+
+    if not token and core.request.header(ctx, "X-API-Key") then
+        core.request.set_header(ctx, HEADER_AUTH_TYPE, "api-key")
+        return
     end
 
     if not token then

@@ -25,6 +25,9 @@ _SKIP_AUTH_PREFIXES = (
     # 服务间内部端点：不走 API Key，由 internal_ai.py 的
     # verify_internal_token 依赖校验 X-Internal-Token
     "/internal",
+    # 自建认证公开端点（2026-09-15 拆分：login/refresh/logout/register 本就无凭据）
+    "/auth",
+    "/sys",
 )
 
 # 精确匹配豁免（绝不能进 _SKIP_AUTH_PREFIXES：那里的 startswith 语义
