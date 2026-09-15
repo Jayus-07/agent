@@ -91,11 +91,39 @@ APISIX prometheus 插件（逐路由挂载）
 | 告警规则 | Gateway* 4 条加载成功 |
 | 自定义指标端到端 | `apisix_gateway_auth_denied_total{route,reason}` Prometheus 可查 |
 
-## 4. 遗留（不在本次范围）
+## 4. 访问审计日志（2026-09-16 补齐：GAP 5 第一层）
+
+回答"哪个用户从哪个 IP 访问了后端、做了什么"——两层留痕，用户 ID 与 IP 首次落到同一条记录：
+
+### 网关层（apisix/config.yaml → /dev/stdout）
+
+每请求一行 JSON（`docker logs agent-apisix` 直接查）：
+`time / client_ip / user_id / auth_type / trace_id / method / uri / query / status / bytes / duration / upstream_time / ua`。
+
+- `client_ip` 可信：`real_ip_from` 仅信任 loopback，伪造 `X-Real-IP` 不影响 `$remote_addr`。
+- `user_id` 可信（gateway-auth 验签后注入，限流键同源）；**例外**：auth/sys 白名单
+  路由不挂插件，客户端自带头原样透传，该段路由的 user_id 不可当真。
+- 被网关 401/429 拒绝的请求同样留痕（`upstream_time` 为 "-" 即网关层拒绝）。
+
+### 后端层（backend/app/api/middleware/access_log.py）
+
+每请求一行 `[Access] ip= user= auth= METHOD path?query -> status Xms trace=`（logger "rag_system"）。
+
+- IP 取 `X-Forwarded-For` **最后一跳**（APISIX `$proxy_add_x_forwarded_for` 追加，
+  客户端自带的左侧前缀可伪造）；直连 8000 调试无 XFF 时回退 peer。
+- 注册在 api_key/concurrency **之后**（Starlette 后注册的在外层执行），
+  401/503/413 短路也会被打点；回归测试 `backend/tests/api/test_access_log.py`。
+- 后端容器需重建镜像后生效（代码 COPY 进镜像）。
+
+与 `X-Trace-Id` 关联即可从 access log 跳到 `ai.trace_records` 的 agent 执行链路。
+集中访问日志平台（GAP 5 完整形态）仍属遗留，见下。
+
+## 5. 遗留（不在本次范围）
 
 - GAP 3 TLS / GAP 6 多副本：对外暴露 9080 前的决策项（当前 loopback-only）。
   多副本时除 limit 切 redis 策略外，按 migration-plan §4 五步发布流程滚动。
-- GAP 5 WAF / 集中访问日志：无日志平台支撑前不引入。
+- GAP 5 WAF / 集中访问日志：无日志平台支撑前不引入（stdout JSON + 后端
+  [Access] 日志为第一层，见 §4；接入 Loki/ELK 时按此结构直采即可）。
 - 疑点待确认：生产容器 `JWT_ISSUER=agent-platform`，但 B0 审计记录 Java 签发方
   issuer 为 `hongmeng-oa`（9081 台架合同值）。若真实前端流量走 Java 签发的 JWT，
   enforce 下会全量 401 issuer——切真实流量前需与 auth-service 实际签发值核对。

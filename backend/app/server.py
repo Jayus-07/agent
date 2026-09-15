@@ -15,6 +15,7 @@ from backend.app.exceptions import (
     global_exception_handler,
     memory_db_unavailable_handler,
 )
+from backend.app.api.middleware.access_log import access_log_middleware
 from backend.app.api.middleware.concurrency import concurrency_limit_middleware
 from backend.app.api.middleware.auth import api_key_middleware
 from backend.observability.metrics import render_metrics
@@ -31,7 +32,9 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# ── 中间件（按执行顺序：auth → size limit → concurrency）────────────────
+# ── 中间件（按执行顺序：CORS → access_log → concurrency → size limit → auth）──
+# Starlette 后注册的在外层执行。访问审计注册在认证/并发之后（其外层），
+# 短路返回的 401/503/413 才会被记录；CORS（add_middleware 最后注册）在最外层。
 # 1. 认证：未认证请求尽早 401，不消耗下游资源
 app.middleware("http")(api_key_middleware)
 
@@ -53,6 +56,9 @@ async def upload_size_limit_middleware(request, call_next):
 
 # 3. 并发控制：最后，只限流已认证的合法请求
 app.middleware("http")(concurrency_limit_middleware)
+
+# 4. 访问审计日志：注册在认证/并发之后（= 外层执行），短路 401/503 也会被打点
+app.middleware("http")(access_log_middleware)
 
 # ── CORS ────────────────────────────────────────
 # 生产环境通过 CORS_ORIGINS 环境变量配置（逗号分隔多个域名）
@@ -452,22 +458,13 @@ async def ops_dashboard():
 async def register_workflows_and_schedules():
     """注册所有 workflow + 启动定时调度器"""
     try:
-        from backend.orchestration.workflow.registry import get_workflow_registry
         from backend.orchestration.workflow.scheduler import get_workflow_scheduler
-        from backend.orchestration.workflows.daily_report import DailyReport
-        from backend.orchestration.workflows.inventory_alert import InventoryAlert
-        from backend.orchestration.workflows.selection_decision import SelectionDecision
-        from backend.orchestration.workflows.market_research import MarketResearch
+        from backend.orchestration.workflows import register_all as register_workflows
 
-        reg = get_workflow_registry()
-        if reg.get("daily_report") is None:
-            reg.register(DailyReport)
-        if reg.get("inventory_alert") is None:
-            reg.register(InventoryAlert)
-        if reg.get("selection_decision") is None:
-            reg.register(SelectionDecision)
-        if reg.get("market_research") is None:
-            reg.register(MarketResearch)
+        # Workflow 注册清单的唯一事实源：orchestration/workflows/__init__.py
+        # （2026-09-16 归一：此前在此手写 4 条，evaluation 侧另手写 3 条并漏了
+        #  MarketResearch；现在两处都调同一个 register_all()）
+        register_workflows()
 
         sched = get_workflow_scheduler()
         sched.register_daily("daily_report", hour=9, minute=0)
