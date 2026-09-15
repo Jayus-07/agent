@@ -18,6 +18,7 @@ const authMock = vi.hoisted(() => ({
 vi.mock("@/lib/auth", () => authMock);
 
 import { ApiError, backendBaseUrl, fetchRaw, request, requestSilent } from "./client";
+import { CLIENT_ERROR_CODES, describeApiError } from "./errors";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -276,5 +277,82 @@ describe("超时与取消", () => {
     await expect(
       request("/x", { signal: controller.signal, timeout: 5000 }),
     ).rejects.toThrow("user cancelled");
+  });
+});
+
+describe("P0-1b 错误码提取与翻译", () => {
+  it("顶层 code 被提取到 ApiError.code", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ code: "RAG_TEST_001", detail: "索引失败" }, 500),
+    );
+
+    const err = (await request("/x").catch((e: unknown) => e)) as ApiError;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.code).toBe("RAG_TEST_001");
+    expect(err.message).toBe("索引失败");
+  });
+
+  it("兼容 detail.code 写法", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ detail: { code: "AUTH_TOKEN_EXPIRED", message: "过期" } }, 401),
+    );
+
+    const err = (await request("/x").catch((e: unknown) => e)) as ApiError;
+    expect(err.code).toBe("AUTH_TOKEN_EXPIRED");
+  });
+
+  it("兼容 detail.error_code 写法", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ detail: { error_code: "E_LEGACY", error: "旧格式" } }, 400),
+    );
+
+    const err = (await request("/x").catch((e: unknown) => e)) as ApiError;
+    expect(err.code).toBe("E_LEGACY");
+  });
+
+  it("无 code 时为 undefined（向后兼容：老接口不受影响）", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ detail: "boom" }, 500),
+    );
+
+    const err = (await request("/x").catch((e: unknown) => e)) as ApiError;
+    expect(err.code).toBeUndefined();
+    expect(err.status).toBe(500);
+  });
+
+  it("code 为非字符串时忽略，不污染错误模型", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ code: 500, detail: "x" }, 500),
+    );
+
+    const err = (await request("/x").catch((e: unknown) => e)) as ApiError;
+    expect(err.code).toBeUndefined();
+  });
+
+  it("端到端：ApiError 交给 describeApiError 能拿到兜底文案", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ detail: "无权访问" }, 403),
+    );
+
+    const err = (await request("/x").catch((e: unknown) => e)) as ApiError;
+    const desc = describeApiError(err);
+    expect(desc.kind).toBe("permission");
+    expect(desc.retriable).toBe(false);
+    expect(desc.status).toBe(403);
+    // 界面上展示的是降级后的中文文案，而不是后端英文 detail
+    expect(desc.message).not.toBe("无权访问");
+  });
+
+  it("超时异常经 describeApiError 归为 timeout（与 client 的终止原因对齐）", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+      const signal = (init as RequestInit)?.signal;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason));
+      });
+    });
+
+    const err = await request("/slow", { timeout: 10 }).catch((e: unknown) => e);
+    expect(describeApiError(err).kind).toBe("timeout");
+    expect(describeApiError(err).code).toBe(CLIENT_ERROR_CODES.TIMEOUT);
   });
 });

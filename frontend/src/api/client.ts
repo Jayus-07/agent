@@ -2,8 +2,15 @@
  * src/api/client.ts — 统一网络层（P0-1a）
  *
  * 合并自 `lib/fetcher.ts`（JSON 层：request / requestSilent / ApiError）与
- * `lib/authFetch.ts`（Response 层：authFetch）的核心语义，作为**唯一**的网络出口。
- * 旧两文件保留为兼容层（re-export / 待迁），一个发布周期后移除。
+ * `lib/authFetch.ts`（原 Response 层：authFetch，**已于 2026-09-16 全量迁至本文件并删除**）。
+ * 作为**唯一**的网络出口：新增请求一律走本文件，不要再引入第三个 fetch 包装。
+ *
+ * 迁移状态（2026-09-16）：
+ *   - `lib/fetcher.ts` 仅 re-export（保留一个发布周期）
+ *   - `lib/authFetch.ts` 已删除；原 11 个引用方（services/* 与若干 page/hook）全部改用 `fetchRaw`
+ *   - 迁移前后行为等价的前提：`NEXT_PUBLIC_API_URL` 未设置时 `joinUrl` 退化为原样路径
+ *     （与 authFetch 的裸 `fetch(input)` 一致）；若将来配置了该变量，**所有**调用方
+ *     （含原先直连相对路径的那些）会一并切到绝对基址，属预期行为。
  *
  * 设计要点：
  * 1. **错误模型统一**：所有非 2xx 抛 `ApiError`（含 status / detail），调用方只认一种错误类型。
@@ -21,18 +28,49 @@
  */
 
 import { bearerHeaders, handleAuthFailure, tryRefreshOnce } from "@/lib/auth";
+import { TIMEOUT_REASON } from "./errors";
 
 // ── 错误模型 ──────────────────────────────────────────────────
 
 export class ApiError extends Error {
+  /**
+   * @param message 面向用户 / 日志的文案（优先取后端 `detail`）
+   * @param status  HTTP 状态码
+   * @param detail  后端原始 `detail`，供排查用；**不要**直接渲染
+   * @param code    后端业务错误码（P0-1b）。后端尚未定义真实码时为 `undefined`，
+   *                此时交由 `@/api/errors` 按状态码兜底翻译，调用方无需分支。
+   */
   constructor(
     message: string,
     public status: number,
     public detail?: unknown,
+    public code?: string,
   ) {
     super(message);
     this.name = "ApiError";
   }
+}
+
+/**
+ * 从响应体里尽力取出业务错误码（P0-1b）。
+ *
+ * 兼容三种后端写法：顶层 `code`、`detail.code`、`detail.error_code`。
+ * 取不到返回 `undefined` —— 由 `@/api/errors` 的降级链兜底，**不抛错**。
+ */
+function extractErrorCode(data: unknown): string | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const body = data as Record<string, unknown>;
+  const direct = body.code;
+  if (typeof direct === "string" && direct) return direct;
+  const detail = body.detail;
+  if (detail && typeof detail === "object") {
+    const d = detail as Record<string, unknown>;
+    for (const key of ["code", "error_code"] as const) {
+      const v = d[key];
+      if (typeof v === "string" && v) return v;
+    }
+  }
+  return undefined;
 }
 
 // ── 后端基址映射（多后端预留） ─────────────────────────────────
@@ -148,7 +186,7 @@ export async function request<T = unknown>(
 
   const controller = new AbortController();
   const timer = setTimeout(
-    () => controller.abort(new Error("Request timeout")),
+    () => controller.abort(new Error(TIMEOUT_REASON)),
     timeout,
   );
 
@@ -193,7 +231,12 @@ export async function request<T = unknown>(
             (detail as Record<string, string>).message)) ||
         res.statusText ||
         `HTTP ${res.status}`;
-      throw new ApiError(String(message), res.status, detail);
+      throw new ApiError(
+        String(message),
+        res.status,
+        detail,
+        extractErrorCode(data),
+      );
     }
 
     return data as T;
