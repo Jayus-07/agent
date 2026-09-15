@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import MarkdownContent from '@/components/MarkdownContent'
-import { selectionDecisionApi, SelectionTaskDetail } from '@/services/selectionDecision'
+import { selectionDecisionApi, SelectionTaskDetail } from '@/api/selectionDecision'
 
 export default function SelectionDecisionReportPage() {
   const params = useParams<{ id: string }>()

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { selectionDecisionApi, SelectionTask, TaskPayload } from '@/services/selectionDecision'
+import { selectionDecisionApi, SelectionTask, TaskPayload } from '@/api/selectionDecision'
 
 const PLATFORMS = [
   { key: 'jd', label: '京东' },
