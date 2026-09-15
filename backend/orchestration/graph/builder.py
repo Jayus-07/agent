@@ -34,7 +34,11 @@ from backend.orchestration.supervisor.scheduler import route_after_supervisor, s
 from backend.orchestration.tool_registry import tool_registry
 from backend.shared.logger import logger
 
-# 节点名 → 用户可读的阶段标签（与 trace_middleware.py 对齐）
+# 节点名 → 用户可读的阶段标签（单一事实源）。
+# 2026-09-15 收敛：chat.py 曾维护一份含过期节点名（sql_worker/rag_worker，
+# 实际节点为 sql_skill/rag_skill）的重复映射，meta 事件发给前端的标签与
+# 真实节点漂移。现统一由本表提供，chat.py 直接 import；域图标签在
+# build_graph 时动态补入。
 _NODE_LABELS = {
     "router":             "路由决策",
     "tool_selector":      "工具选择",

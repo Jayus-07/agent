@@ -62,23 +62,11 @@ def _request_key(session_id: str, request_id: str) -> str:
     return f"{session_id}:{request_id}"
 
 
-# ── node_name → emoji 映射表（通过 meta 事件传给前端） ──
-_NODE_LABELS = {
-    "planner":       "📋 任务规划",
-    "supervisor":    "🧠 调度决策",
-    "tool_selector": "🧰 工具选择",
-    "sql_worker":    "📊 数据查询",
-    "rag_worker":    "📚 知识检索",
-    "report_worker": "📄 报告生成",
-    "reporter":      "✍️ 生成回复",
-    "cs_knowledge":       "💬 客服知识问答",
-    "cs_business_query":  "🔍 客服业务查询",
-    "cs_business_action": "⚙️ 客服业务操作",
-    "cs_complaint":       "📢 投诉处理",
-    "cs_handoff":         "🤝 人工转接",
-    "cs_handoff_intercept": "🤝 人工转接（进行中）",
-    "cs_intent_classifier": "🎯 意图识别",
-}
+# ── node_name → 用户可读标签映射表（通过 meta 事件传给前端）──
+# 2026-09-15 收敛：单一事实源在 builder._NODE_LABELS（build_graph 时动态
+# 补入域图标签）。旧实现自维护一份含过期节点名（sql_worker/rag_worker，
+# 实际节点为 sql_skill/rag_skill）的映射，标签与真实节点漂移。
+from backend.orchestration.graph.builder import _NODE_LABELS
 
 
 def _sse_encode(event: dict) -> str:

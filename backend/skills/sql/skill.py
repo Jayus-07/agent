@@ -141,7 +141,7 @@ class SQLSkill(BaseSkill):
                         f"[SQL Skill] step={step_id} 成功 ({result.status}) "
                         f"{result.row_count} 行, 耗时 {elapsed:.2f}s"
                     )
-                    return {"step_results": step_results}
+                    return {"step_results": {step_id: sr}}
 
                 # 不可重试的错误
                 if result.status in _NON_RETRYABLE_STATUSES:
@@ -154,7 +154,7 @@ class SQLSkill(BaseSkill):
                         f"[SQL Skill] step={step_id} 不可重试失败: "
                         f"{result.status} - {result.error}"
                     )
-                    return {"step_results": step_results}
+                    return {"step_results": {step_id: sr}}
 
                 # 其它错误 → 重试
                 logger.warning(
@@ -195,7 +195,7 @@ class SQLSkill(BaseSkill):
             sr["error_type"] = "timeout"
 
         logger.error(f"[SQL Skill] step={step_id} 最终失败: {sr['error']}")
-        return {"step_results": step_results}
+        return {"step_results": {step_id: sr}}
 
 
 # =================================================

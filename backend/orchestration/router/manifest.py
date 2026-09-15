@@ -42,6 +42,9 @@ class CapabilityDecl:
     routed: bool
     examples: tuple[str, ...]
     reason: str = ""
+    # 规则路由关键词（可选，2026-09-15 迁入）：单意图强/弱信号判定用。
+    # 未声明时 rule_router 回退内置缺省表（行为零变化）。
+    rule_keywords: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,14 @@ class RouterManifest:
     def all_capability_names(self) -> tuple[str, ...]:
         """全部声明过的 capability（含 routed:false 的内部能力）。"""
         return tuple(c.name for c in self.capabilities)
+
+    @property
+    def rule_keyword_groups(self) -> dict[str, tuple[str, ...]]:
+        """声明了 rule_keywords 的 capability → 关键词组（保持 yaml 顺序）。"""
+        return {
+            c.name: c.rule_keywords
+            for c in self.capabilities if c.rule_keywords
+        }
 
     @property
     def total_example_count(self) -> int:
@@ -134,6 +145,9 @@ def load_manifest(path: str | None = None) -> RouterManifest:
                 routed=routed,
                 examples=examples,
                 reason=str(item.get("reason", "")).strip(),
+                rule_keywords=tuple(
+                    str(k).strip() for k in (item.get("rule_keywords") or []) if str(k).strip()
+                ),
             )
         )
 

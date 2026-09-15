@@ -82,10 +82,24 @@ def _user_label(cap_name: str) -> str:
     return _USER_CAP_LABELS.get(cap_name, "信息查询")
 
 
-# fix f13：需要前置数据输入的 capability。direct 单步执行时 previous_outputs
-# 为空必失败（business.analyze 契约依赖 sql.query 的 SQLResult），
-# 此处自动补前置步骤形成两段微编排（plan 模式由 Planner DAG 保证依赖）。
-_PREDECESSOR_CAPS = {"business.analyze": "sql.query"}
+# fix f13（2026-09-15 重构）：需要前置数据输入的 capability 不再硬编码——
+# 由 Skill 的 params_schema 自描述：auto="<capability>" 声明该参数由指定
+# capability 的 previous_outputs 自动注入（单一事实源，与 Planner/
+# tool_schema 消费同一份声明）。旧式 auto=True（布尔）视为无显式来源。
+def _predecessor_capability(cap_name: str) -> str | None:
+    """从 Skill 的 params_schema 读取前置依赖 capability。"""
+    try:
+        inst = tool_registry._get_skill_registry().get(cap_name)
+    except Exception:  # noqa: BLE001 — 注册表不可用时按无前置处理
+        return None
+    if inst is None:
+        return None
+    for spec in (inst.params_schema or {}).values():
+        if isinstance(spec, dict):
+            auto = spec.get("auto")
+            if isinstance(auto, str) and auto:
+                return auto
+    return None
 
 
 def _resolved_params(state: dict) -> dict:
@@ -194,9 +208,10 @@ def skill_executor_node(state: dict) -> dict:
     step_results: dict = {}
     main_params = _resolved_params(state)
 
-    # fix f13：business.analyze 等依赖型 capability 在 direct 模式缺前置输出，
-    # 先自动补前置步骤（sql.query 拉数）再执行本体，避免必败。
-    pre_cap = _PREDECESSOR_CAPS.get(cap_name)
+    # fix f13（重构版）：business.analyze 等依赖型 capability 在 direct 模式
+    # 缺前置输出，先自动补前置步骤（sql.query 拉数）再执行本体，避免必败。
+    # 前置关系由 Skill params_schema 的 auto="<capability>" 自描述。
+    pre_cap = _predecessor_capability(cap_name)
     if pre_cap and not state.get("previous_outputs"):
         pre_node = _extract_capability_name(pre_cap)
         if pre_node in skill_nodes:

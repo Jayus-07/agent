@@ -287,7 +287,10 @@ class BaseSkill(ABC):
                       started_at=time.time(), finished_at=time.time())
             step_results[step_id] = dict(sr)
             logger.warning(f"[{self.name}] step={step_id} {error}")
-            return {"step_results": step_results}
+            # 只返回自有步骤（2026-09-15 整改）：并行 Send 时各分支不再
+            # 携带他人的 running 过期快照；全局累积由 AgentState
+            # ._merge_step_results 按键合并完成。
+            return {"step_results": {step_id: step_results[step_id]}}
 
         # ── Tracing: 创建 tool_call span ──
         cap = sr["capability"]
@@ -382,7 +385,8 @@ class BaseSkill(ABC):
             log_degradation(alert)
             logger.error(f"[{self.name}] step={step_id} 最终失败: {last_error}")
 
-        return {"step_results": step_results}
+        # 只返回自有步骤（同上，消除并行分支过期快照的根源）
+        return {"step_results": {step_id: step_results[step_id]}}
 
 
 # 向后兼容

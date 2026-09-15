@@ -51,7 +51,9 @@ _COMPETITOR_KEYWORDS = [
 ]
 
 # ── SQL 强信号（多少/统计/最近 → 查数据）──
-_SQL_KEYWORDS = [
+# 2026-09-15 迁移：关键词组已迁入 capabilities.yaml 的 rule_keywords 字段
+# （单一事实源），本列表降级为「yaml 未声明时的内置缺省表」，行为不变。
+_SQL_KEYWORDS_DEFAULT = [
     r"多少", r"几个", r"统计", r"数量", r"金额", r"总和",
     r"排名", r"TOP", r"前.*?名", r"最高", r"最低",
     r"最近", r"本月", r"上月", r"今年", r"去年",
@@ -60,12 +62,36 @@ _SQL_KEYWORDS = [
 
 
 # ── 业务 SOP 弱信号（"怎么做"/"时效" → 走 RAG，不强制）──
-_RAG_KEYWORDS = [
+_RAG_KEYWORDS_DEFAULT = [
     r"制度", r"规定", r"规范", r"政策", r"流程", r"标准",
     r"时效", r"SLA", r"多久", r"如何", r"怎么",
     r"是什么", r"什么叫", r"定义",
     r"审核", r"退款", r"退货", r"换货", r"售后",  # 业务流程类
 ]
+
+
+def _load_rule_keyword_groups() -> dict[str, list[str]]:
+    """从 capabilities.yaml 的 rule_keywords 字段派生关键词组。
+
+    yaml 未声明某能力的关键词时回退内置缺省表（与迁移前行为逐条一致）；
+    manifest 加载失败（理论上 fail-fast 不会走到这）同样回退。
+    """
+    groups: dict[str, list[str]] = {
+        "sql.query": list(_SQL_KEYWORDS_DEFAULT),
+        "rag.search": list(_RAG_KEYWORDS_DEFAULT),
+    }
+    try:
+        from backend.orchestration.router.manifest import load_manifest
+        declared = load_manifest().rule_keyword_groups
+        for cap, kws in declared.items():
+            if kws:
+                groups[cap] = list(kws)
+    except Exception:  # noqa: BLE001 — 回退内置表
+        pass
+    return groups
+
+
+_RULE_KEYWORD_GROUPS = _load_rule_keyword_groups()
 
 # ── 复合意图强信号（2026-09-15，企业路由器主流做法）──────────
 # 单一能力的问题由 direct 秒答；带"同时/并"等连接词、横跨 ≥2 个能力组
@@ -168,7 +194,7 @@ class RuleRouter:
         # 规则层给出候选 rag.search(0.70)，随后 Vector miss，LLM 花 8.4s 得出
         # 与规则完全相同的结论。RAG 误路由代价低（Evidence Gate 保护，无证据即拒答），
         # 而 2 个业务 SOP 关键词（如「退款」+「审核」「制度」+「规范」）已足够强。
-        rag_hits = sum(1 for k in _RAG_KEYWORDS if re.search(k, query_lower))
+        rag_hits = sum(1 for k in _RULE_KEYWORD_GROUPS["rag.search"] if re.search(k, query_lower))
         if rag_hits >= 2:
             return RouteDecision(
                 execution_mode=ExecutionMode.DIRECT,
@@ -186,7 +212,7 @@ class RuleRouter:
             )
 
         # 3. SQL 关键字（同样：信号越强置信越高）
-        sql_hits = sum(1 for k in _SQL_KEYWORDS if re.search(k, query_lower))
+        sql_hits = sum(1 for k in _RULE_KEYWORD_GROUPS["sql.query"] if re.search(k, query_lower))
         if sql_hits >= 3:
             return RouteDecision(
                 execution_mode=ExecutionMode.DIRECT,

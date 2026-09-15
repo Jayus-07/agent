@@ -34,9 +34,11 @@ class BusinessAnalysisSkill(BaseSkill):
         "生成风险洞察和行动建议。依赖前置 sql.query 步骤的 SQLResult。"
     )
     params_schema = {
-        # auto=True: 由 previous_outputs 自动注入，不参与参数校验、
-        # 不暴露给 function calling（tool_schema 转换器据此剔除）
-        "sql_result": {"type": "object", "required": True, "auto": True,
+        # auto="<capability>": 参数由指定 capability 的 previous_outputs 自动
+        # 注入，不参与参数校验、不暴露给 function calling（tool_schema 转换器
+        # 据此剔除）。同时是 direct 模式自动补前置步骤的唯一声明源
+        # （direct_executor 读此字段，不再硬编码 _PREDECESSOR_CAPS）。
+        "sql_result": {"type": "object", "required": True, "auto": "sql.query",
                        "description": "前置 sql.query 步骤产出的 SQLResult（由 previous_outputs 自动传递，无需手动指定）"},
     }
     examples = [
@@ -96,7 +98,7 @@ class BusinessAnalysisSkill(BaseSkill):
             sr["error_type"] = "missing_dependency"
             sr["finished_at"] = time.time()
             logger.error(f"[BusinessAnalysis] {sr['error']}")
-            return {"step_results": step_results}
+            return {"step_results": {step_id: sr}}
 
         # 取第一个前置步骤的输出（通常只有一个前置步骤）
         raw_output = next(iter(previous_outputs.values()), None)
@@ -106,7 +108,7 @@ class BusinessAnalysisSkill(BaseSkill):
             sr["error_type"] = "empty_input"
             sr["finished_at"] = time.time()
             logger.error(f"[BusinessAnalysis] {sr['error']}")
-            return {"step_results": step_results}
+            return {"step_results": {step_id: sr}}
 
         try:
             sql_result = SQLResult(**raw_output)
@@ -116,7 +118,7 @@ class BusinessAnalysisSkill(BaseSkill):
             sr["error_type"] = "parse_error"
             sr["finished_at"] = time.time()
             logger.error(f"[BusinessAnalysis] {sr['error']}")
-            return {"step_results": step_results}
+            return {"step_results": {step_id: sr}}
 
         # 2. RAG 检索业务知识
         rag_knowledge = ""
@@ -151,7 +153,7 @@ class BusinessAnalysisSkill(BaseSkill):
             sr["finished_at"] = time.time()
             logger.error(f"[BusinessAnalysis] {sr['error']}")
 
-        return {"step_results": step_results}
+        return {"step_results": {step_id: sr}}
 
     def _fetch_rag_knowledge(self, sql_result: SQLResult) -> str:
         """从 RAG 知识库检索相关业务规则（轻量检索，不触发 LLM 生成）。

@@ -18,6 +18,28 @@ capabilities:
   - name: sql.query
     skill: sql
     routed: true
+    # rule_keywords：规则路由（RuleRouter）单意图强/弱信号关键词（正则）。
+    # 未声明的 capability 由 rule_router 回退内置缺省表，行为不变。
+    rule_keywords:
+      - 多少
+      - 几个
+      - 统计
+      - 数量
+      - 金额
+      - 总和
+      - 排名
+      - "TOP"
+      - 前.*?名
+      - 最高
+      - 最低
+      - 最近
+      - 本月
+      - 上月
+      - 今年
+      - 去年
+      - 环比
+      - 同比
+      - 增长率
     examples:
       - 最近 30 天销售金额
       - 本月销量前 10 的商品
@@ -29,6 +51,26 @@ capabilities:
   - name: rag.search
     skill: rag
     routed: true
+    rule_keywords:
+      - 制度
+      - 规定
+      - 规范
+      - 政策
+      - 流程
+      - 标准
+      - 时效
+      - "SLA"
+      - 多久
+      - 如何
+      - 怎么
+      - 是什么
+      - 什么叫
+      - 定义
+      - 审核
+      - 退款
+      - 退货
+      - 换货
+      - 售后
     examples:
       - 公司制度是什么
       - 请解释退款流程
