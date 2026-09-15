@@ -42,8 +42,10 @@ def make_usage_event() -> Optional[dict]:
 # P1: file 事件 —— 工具落盘文件提取
 # =====================================================
 
-# 绝对路径 + 常见数据/文档后缀（export_csv 等工具产出；避免误匹配 URL 查询串）
-_FILE_PATH_RE = re.compile(r"[A-Za-z]:[\\/][^\s\"']+?\.(?:csv|xlsx|xls|md|json|txt|py)\b")
+# 绝对路径 + 常见数据/文档后缀（export_csv 等工具产出；避免误匹配 URL 查询串）。
+# (?<![A-Za-z]) 排除 URL scheme：https://x.com/a.csv 里的 "s:/x.com/a.csv"
+# 恰好长得像盘符路径，前向一个字母即可区分（盘符前必是空白/行首/引号）。
+_FILE_PATH_RE = re.compile(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\s\"']+?\.(?:csv|xlsx|xls|md|json|txt|py)\b")
 # dict 输出中承载文件路径的常见 key
 _FILE_PATH_KEYS = ("file_path", "filepath", "export_path", "path", "output")
 
