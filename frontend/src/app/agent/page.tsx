@@ -6,6 +6,7 @@ import { useChatStore } from '@/store/chat'
 import ChatView from '@/components/ChatView'
 import ChatHeader from '@/components/chat/ChatHeader'
 import TaskSidebar from '@/components/agent/TaskSidebar'
+import SidebarRail from '@/components/agent/SidebarRail'
 
 export default function AgentChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -26,9 +27,12 @@ export default function AgentChatPage() {
 
   return (
     <div className="flex-1 flex min-h-0 relative">
-      {/* 左侧任务栏（任务模式：/agent 下全局控制台导航让位，见 app/layout.tsx） */}
-      {sidebarOpen && (
+      {/* 左侧任务栏（任务模式：/agent 下全局控制台导航让位，见 app/layout.tsx）
+          收起态渲染图标 rail：新建任务 / 展开仍可用，搜索与历史需展开 */}
+      {sidebarOpen ? (
         <TaskSidebar onCollapse={() => setSidebarOpen(false)} onNewTask={handleNewTask} />
+      ) : (
+        <SidebarRail onExpand={() => setSidebarOpen(true)} onNewTask={handleNewTask} />
       )}
 
       {/* Chat area */}

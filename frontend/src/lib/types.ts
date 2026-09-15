@@ -110,6 +110,11 @@ export interface FileEvent {
   ts: number
 }
 
+/** SSE 保活心跳（零语义，不入渲染流） */
+export interface PingEvent {
+  ts: number
+}
+
 /** SSE v2 事件联合类型 */
 export type SSEStreamEvent =
   | { event: 'meta';     data: MetaEvent }
@@ -120,6 +125,8 @@ export type SSEStreamEvent =
   | { event: 'todo';     data: TodoEvent }
   | { event: 'usage';    data: UsageEvent }
   | { event: 'file';     data: FileEvent }
+  /** SSE 保活心跳（后端空闲 >间隔 发 ping 防断流，消费方零语义、不入渲染流） */
+  | { event: 'ping';     data: PingEvent }
   | { event: 'done';     data: DoneEvent }
   | { event: 'error';    data: ErrorEvent }
 

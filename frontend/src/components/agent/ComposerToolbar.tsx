@@ -60,10 +60,12 @@ export default function ComposerToolbar({
   }
 
   return (
-    <div className="flex items-center gap-1.5 pt-2">
+    // flex-wrap：320px 级窄屏下放不下单行（部门+附件+模型胶囊+权限+发送 ≈ 380px），
+    // 模型切换器整组换行而不是溢出；≥sm 视口仍单行
+    <div className="flex flex-wrap items-center gap-1.5 gap-y-1 pt-2">
       {/* 部门选择：决定检索授权范围（空 = 按对客最严格集合） */}
       <div
-        className="shrink-0 flex items-center gap-1 rounded-lg hover:bg-black/[0.05]
+        className="shrink-0 min-w-0 flex items-center gap-1 rounded-lg hover:bg-black/[0.05]
           transition-colors duration-200 px-2 py-1.5"
         title="选择部门以获得对应知识库的检索范围；未选择按对客最严格范围处理"
       >
@@ -95,10 +97,10 @@ export default function ComposerToolbar({
         <Paperclip size={15} />
       </button>
 
-      <div className="flex-1" />
-
-      {/* 模型切换（从 ChatHeader 下移） */}
-      <LLMSwitcher />
+      {/* 模型切换（从 ChatHeader 下移）；窄屏下胶囊占整行宽度，由 wrap 兜底 */}
+      <div className="flex-1 basis-full sm:basis-0 sm:flex-none order-last sm:order-none flex justify-end sm:block">
+        <LLMSwitcher />
+      </div>
 
       {/* 权限开关（P0 占位） */}
       <button

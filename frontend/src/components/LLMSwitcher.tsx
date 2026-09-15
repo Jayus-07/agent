@@ -152,7 +152,7 @@ export default function LLMSwitcher() {
         ) : justSwitched ? (
           <Check className="w-3.5 h-3.5 text-[#1e8e3e]" strokeWidth={2.5} />
         ) : (
-          <span className="max-w-[180px] truncate">
+          <span className="max-w-[110px] sm:max-w-[180px] truncate">
             {currentModel?.display || current || '加载中'}
           </span>
         )}
