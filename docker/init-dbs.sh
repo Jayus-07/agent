@@ -33,5 +33,9 @@ echo "[init-dbs] 3/3 初始化记忆库（schema + 种子）..."
 $PSQL -d agent_memory -f /docker-migrations/002_agent_memory_schema.sql
 $PSQL -d agent_memory -f /docker-migrations/003_agent_memory_seed.sql
 
+echo "[init-dbs] 4/4 初始化自建认证（auth schema，幂等）..."
+$PSQL -d agent_memory -f /docker-migrations/008_local_auth.sql
+$PSQL -d agent_memory -f /docker-migrations/009_auth_roles.sql
+
 echo "[init-dbs] 完成。验证只读角色："
 $PSQL -d postgres -c "SELECT rolname, rolcanlogin, rolsuper FROM pg_roles WHERE rolname = 'agent_readonly';"

@@ -71,7 +71,7 @@ def _fail(message: str, code: int = 400):
 
 async def _fetch_user(session, username: str):
     row = (await session.execute(text(
-        "SELECT id, username, password_hash, real_name, dept, status "
+        "SELECT id, username, password_hash, real_name, dept, role, status "
         "FROM auth.users WHERE username = :u"), {"u": username})).mappings().first()
     return row
 
@@ -110,7 +110,8 @@ async def login(request: Request, response: Response):
         return _fail("用户名或密码错误", code=400)
 
     issued = issue_access_token(user_id=row["id"], username=row["username"],
-                                dept=row["dept"], device_id=device_id)
+                                dept=row["dept"], device_id=device_id,
+                                roles=[row["role"]])
     raw_refresh, token_hash = new_refresh_token()
     async with _db() as session:
         await session.execute(text(
@@ -127,7 +128,8 @@ async def login(request: Request, response: Response):
         "tokenType": "Bearer",
         "expiresIn": issued["expiresIn"],
         "userInfo": {"userId": row["id"], "username": row["username"],
-                     "realName": row["real_name"] or row["username"]},
+                     "realName": row["real_name"] or row["username"],
+                     "roles": [row["role"]]},
     })
 
 
@@ -142,7 +144,7 @@ async def refresh(request: Request, response: Response):
 
     async with _db() as session:
         row = (await session.execute(text(
-            "SELECT rt.id, rt.user_id, rt.expires_at, rt.revoked, u.username, u.dept, u.status "
+            "SELECT rt.id, rt.user_id, rt.expires_at, rt.revoked, u.username, u.dept, u.role, u.status "
             "FROM auth.refresh_tokens rt JOIN auth.users u ON u.id = rt.user_id "
             "WHERE rt.token_hash = :th"), {"th": token_hash})).mappings().first()
         from datetime import datetime, timezone
@@ -159,7 +161,7 @@ async def refresh(request: Request, response: Response):
         await session.commit()
 
     issued = issue_access_token(user_id=row["user_id"], username=row["username"],
-                                dept=row["dept"])
+                                dept=row["dept"], roles=[row["role"]])
     response.set_cookie(value=raw_new, **_COOKIE_KWARGS)
     return _result({"token": issued["token"], "refreshToken": None,
                     "tokenType": "Bearer", "expiresIn": issued["expiresIn"],
@@ -208,8 +210,8 @@ async def register(request: Request):
         if exists:
             return _fail("用户名已存在", code=400)
         row = (await session.execute(text(
-            "INSERT INTO auth.users (username, password_hash, real_name) "
-            "VALUES (:u, :p, :r) RETURNING id, username, real_name"),
+            "INSERT INTO auth.users (username, password_hash, real_name, role) "
+            "VALUES (:u, :p, :r, 'viewer') RETURNING id, username, real_name, role"),
             {"u": username, "p": hash_password(password), "r": real_name})).mappings().first()
         await session.commit()
 

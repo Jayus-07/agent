@@ -52,11 +52,18 @@ def _b64url_decode(data: str) -> bytes:
 # ── JWT（HS512）──────────────────────────────────────────────
 
 def issue_access_token(*, user_id: int, username: str, dept: str = "",
-                       device_id: str = "", ttl_seconds: int = _ACCESS_TTL_SECONDS) -> dict:
-    """签发 access token。返回 {token, expiresIn(ms), exp}。"""
+                       device_id: str = "", roles: list[str] | None = None,
+                       ttl_seconds: int = _ACCESS_TTL_SECONDS) -> dict:
+    """签发 access token。返回 {token, expiresIn(ms), exp}。
+
+    roles：角色数组（viewer/editor/admin，来源 auth.users.role，对齐
+    prompts.py::_check_permission 权限矩阵）。写入 payload["roles"] 供
+    前端 resolve_operator_role() 单点消费（2026-09-15 跨会话协同 §5.1）。
+    """
     now = int(time.time())
     exp = now + ttl_seconds
     payload = {"userId": user_id, "username": username, "dept": dept,
+               "roles": roles or ["viewer"],
                "type": "access", "deviceId": device_id,
                "iss": _ISSUER, "iat": now, "exp": exp}
     header = {"alg": "HS512", "typ": "JWT"}
