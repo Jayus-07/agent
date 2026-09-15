@@ -86,6 +86,9 @@ def fresh_collector(tmp_path, monkeypatch):
 
     monkeypatch.setattr(tw_mod.TraceWriteQueue, "enqueue", _sync_enqueue)
 
+    # 注：Redis 通道的隔离由 conftest 的 _trace_writer_local_only 统一负责
+    # （全局禁用 _use_redis + 每条用例前排空本地队列），此处无需重复处理。
+
     yield new_collector
 
     monkeypatch.setattr(tw_mod.TraceWriteQueue, "enqueue", _orig_enqueue)

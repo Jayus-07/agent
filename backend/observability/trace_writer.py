@@ -23,6 +23,9 @@ from backend.shared.logger import logger
 _STREAM_KEY = "trace:write"
 _BATCH_SIZE = 50
 _FLUSH_INTERVAL_S = 2.0
+# flush() 排空循环的轮数上限（防御性）：即使上游持续返回非空也必须收敛，
+# 否则无界循环会把进程内存吃光并永久挂起。
+_MAX_FLUSH_ROUNDS = 200
 
 
 def _serialize_record(record: Any) -> dict:
@@ -67,6 +70,10 @@ class TraceWriteQueue:
         self._redis = None
         self._worker: threading.Thread | None = None
         self._stopped = False
+        # Redis Streams 消费位点。必须从上次读到的位置继续，不能固定从 "0" 读：
+        # xack 只影响消费者组的 PEL，对普通 XREAD 无效，固定 "0" 会每轮返回同一批
+        # 历史消息，使 flush() 的排空循环永不结束（全量测试曾因此卡死在 54%）。
+        self._last_id = "0"
         self._try_init_redis()
         self._start_worker()
 
@@ -149,7 +156,7 @@ class TraceWriteQueue:
             try:
                 stream_key = f"agent:{_STREAM_KEY}"
                 result = self._redis.xread(
-                    {stream_key: "0"},
+                    {stream_key: self._last_id},
                     count=_BATCH_SIZE,
                     block=int(_FLUSH_INTERVAL_S * 1000),
                 )
@@ -159,6 +166,8 @@ class TraceWriteQueue:
                         for msg_id, fields in messages:
                             data = json.loads(fields.get("data", "{}"))
                             batch.append((data, stores))
+                            # 先推进位点再 ack：ack 只写 PEL，即使失败也不该回退位点
+                            self._last_id = msg_id
                             self._redis.xack(stream_key, "agents", msg_id)
                 return batch
             except Exception:
@@ -208,12 +217,27 @@ class TraceWriteQueue:
             self._local_queue.put_nowait(None)
             self._worker.join(timeout=5)
 
+        # 只排空本地队列。Redis 流 `agent:trace:write` 是跨进程共享的公共通道，
+        # 里面的历史消息不属于本次 flush 的调用方：一来它们没有 store 归属信息，
+        # 会被按"读取时捕获的 store"写入而污染调用方；二来公共流几乎不可能为空，
+        # 排空循环将永不收敛（曾导致全量测试卡死、进程内存涨到 9.8GB）。
+        # Redis 路径的消息由 worker 异步消费，不需要 flush 代劳。
+        saved_use_redis = self._use_redis
+        self._use_redis = False
         all_items: list[tuple[dict, tuple]] = []
-        while True:
-            batch = self._read_batch()
-            if not batch:
-                break
-            all_items.extend(batch)
+        try:
+            for _ in range(_MAX_FLUSH_ROUNDS):
+                batch = self._read_batch()
+                if not batch:
+                    break
+                all_items.extend(batch)
+            else:
+                logger.warning(
+                    "[TraceWriter] flush 达到 %d 轮上限仍未排空，剩余消息交回 worker 处理",
+                    _MAX_FLUSH_ROUNDS,
+                )
+        finally:
+            self._use_redis = saved_use_redis
         if all_items:
             self._flush_batch(all_items)
 

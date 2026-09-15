@@ -216,6 +216,7 @@ class TestTracerDualWrite:
         ts_mod._trace_store = TraceStore(db_path=str(tmp_path / "t.db"))
         as_mod._analytics_store = AnalyticsStore(
             db_path=str(tmp_path / "analytics.db"))
+        # 注：Redis 通道隔离由 conftest 的 _trace_writer_local_only 统一负责。
         yield c
         c.clear_for_test()
         ts_mod._trace_store = None

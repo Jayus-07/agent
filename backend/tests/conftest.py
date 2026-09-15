@@ -153,3 +153,28 @@ def _disable_tencent_lbs(monkeypatch):
     routing.set_route_provider(None)
     yield
     routing.set_route_provider(None)
+
+
+@pytest.fixture(autouse=True)
+def _trace_writer_local_only(monkeypatch):
+    """测试期让 trace 只走本地队列，不碰公共 Redis 流 `agent:trace:write`。
+
+    背景：该流是跨进程共享的公共通道，里面的历史消息既不属于当前用例，也不
+    带 store 归属信息。一旦 flush() 或后台 worker 从流里读到数据，就会按
+    「读取时捕获的 store」写入，污染当前用例的断言；更糟的是公共流几乎不可能
+    为空，排空循环因此永不收敛 —— 曾导致全量测试卡死在 54%、进程内存涨到
+    9.8GB（条目 `docs`: 见 2026-09-16 日志）。
+
+    测试要验证的是 trace 的落库语义，与走哪条通道无关：统一降级到本地队列，
+    并在每条用例开始前排空，避免跨用例残留。
+    """
+    from backend.observability import trace_writer as tw
+
+    queue = tw.get_trace_write_queue()
+    monkeypatch.setattr(queue, "_use_redis", False)
+    try:
+        while True:
+            queue._local_queue.get_nowait()
+    except Exception:
+        pass
+    yield
