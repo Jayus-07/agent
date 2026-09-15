@@ -2,6 +2,7 @@
 
 所有函数纯函数/静态方法，无状态，可独立测试。
 """
+import re
 import time
 from typing import Generator, Optional
 
@@ -35,6 +36,43 @@ def make_usage_event() -> Optional[dict]:
     if not usage:
         return None
     return {"event": "usage", "data": {**usage, "ts": time.time()}}
+
+
+# =====================================================
+# P1: file 事件 —— 工具落盘文件提取
+# =====================================================
+
+# 绝对路径 + 常见数据/文档后缀（export_csv 等工具产出；避免误匹配 URL 查询串）
+_FILE_PATH_RE = re.compile(r"[A-Za-z]:[\\/][^\s\"']+?\.(?:csv|xlsx|xls|md|json|txt|py)\b")
+# dict 输出中承载文件路径的常见 key
+_FILE_PATH_KEYS = ("file_path", "filepath", "export_path", "path", "output")
+
+
+def _extract_file_paths(output) -> list[str]:
+    """从工具 step 输出中提取落盘文件路径（去重保序）。
+
+    支持：dict（命中 _FILE_PATH_KEYS 的值 + output/output_preview 文本）、str（全文正则）。
+    """
+    paths: list[str] = []
+    if isinstance(output, dict):
+        for k in _FILE_PATH_KEYS:
+            v = output.get(k)
+            if isinstance(v, str):
+                paths.extend(m.group(0) for m in _FILE_PATH_RE.finditer(v))
+    elif isinstance(output, str):
+        paths.extend(m.group(0) for m in _FILE_PATH_RE.finditer(output))
+    return list(dict.fromkeys(paths))
+
+
+def make_file_event(node_name: str, step_id: str, output) -> Optional[dict]:
+    """构建 file 事件 —— 该步骤产出的文件清单，无文件时返回 None。"""
+    files = _extract_file_paths(output)
+    if not files:
+        return None
+    return {
+        "event": "file",
+        "data": {"node": node_name, "step_id": step_id, "files": files, "ts": time.time()},
+    }
 
 
 def stream_node_events(node_name: str, node_output: dict, skill_nodes: set,
@@ -167,6 +205,11 @@ def _build_skill_events(node_name: str, output: dict, make_step_payload) -> Gene
                 "payload": payload, "ts": time.time(),
             },
         }
+
+        # P1: 工具落盘文件（如 export_csv）→ file 事件，前端展示产出文件清单
+        file_evt = make_file_event(node_name, sid, output_val)
+        if file_evt:
+            yield file_evt
 
 
 def _build_reporter_events(output: dict) -> Generator[dict, None, None]:

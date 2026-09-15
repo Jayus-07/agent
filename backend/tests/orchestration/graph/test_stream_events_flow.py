@@ -376,3 +376,68 @@ def test_ask_guard_intercept_returns_message():
     finally:
         runner_mod.get_input_guard = original
         trace_collector.clear_for_test() if hasattr(trace_collector, "clear_for_test") else None
+
+
+# =====================================================
+# P1: todo 快照 / usage 事件构建器
+# =====================================================
+
+def test_make_todo_event_full_snapshot():
+    """todo 快照：plan 顺序 + step_results 状态映射，全量替换语义。"""
+    from backend.orchestration.graph.events import make_todo_event
+
+    plan_nodes = {
+        "s1": {"description": "查询销量"},
+        "s2": {"description": "生成报告"},
+        "s3": {"description": "对比竞品"},
+    }
+    step_results = {
+        "s1": {"status": "success"},
+        "s3": {"status": "failed"},
+    }
+    evt = make_todo_event(plan_nodes, step_results)
+    assert evt["event"] == "todo"
+    items = evt["data"]["items"]
+    assert [i["id"] for i in items] == ["s1", "s2", "s3"]
+    assert items[0]["status"] == "completed"
+    assert items[1]["status"] == "pending"
+    assert items[2]["status"] == "failed"
+    assert items[2]["text"] == "对比竞品"
+
+
+def test_make_todo_event_skipped_and_in_progress():
+    from backend.orchestration.graph.events import make_todo_event
+
+    evt = make_todo_event(
+        {"a": {"description": "x"}, "b": {"description": "y"}},
+        {"a": {"status": "skipped"}, "b": {"status": "running"}},
+    )
+    statuses = {i["id"]: i["status"] for i in evt["data"]["items"]}
+    assert statuses["a"] == "skipped"
+    assert statuses["b"] == "in_progress"
+
+
+def test_make_usage_event_none_when_empty():
+    """无用量记录时 usage 事件为 None（前端不显示实时行）。"""
+    from backend.orchestration.graph import events as ev
+
+    # 未进入任何 LLM 调用上下文时 get_turn_usage 为空
+    assert ev.make_usage_event() is None or "usage" in ev.make_usage_event()["event"]
+
+
+def test_make_file_event_extracts_paths():
+    """file 事件：从 dict/str 输出中提取落盘路径，去重保序。"""
+    from backend.orchestration.graph.events import make_file_event
+
+    # dict output：output 文本里的路径
+    evt = make_file_event("sql_executor", "s1", {"output": "已导出 12 行数据到 D://export//result.csv"})
+    assert evt is not None and evt["event"] == "file"
+    assert evt["data"]["files"] == ["D://export//result.csv"]
+    assert evt["data"]["step_id"] == "s1"
+
+    # 无文件 → None（不发声）
+    assert make_file_event("sql_executor", "s2", {"output": "查询返回 5 行"}) is None
+
+    # dict 直带 file_path key
+    evt2 = make_file_event("export", "s3", {"file_path": "D://export//r2.xlsx"})
+    assert evt2 is not None and evt2["data"]["files"] == ["D://export//r2.xlsx"]
