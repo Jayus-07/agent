@@ -32,6 +32,11 @@ def patched(monkeypatch):
     """小批大小 + mock trace_collector，避免真实 span 落库。"""
     monkeypatch.setattr(indexer_mod, "EMBED_BATCH_SIZE", 2)
     monkeypatch.setattr(indexer_mod, "trace_collector", MagicMock())
+    # 禁用 embedding Redis 缓存：EmbeddingCache 默认连真实 Redis（TTL 30 天），
+    # 而本文件用例的嵌入对象无 model_name → 前缀 rag:emb:unknown:*。
+    # 不禁用的话，上一轮跑成功的用例会把向量写进 Redis，下一轮直接缓存命中、
+    # embed_query 一次都不调（自污染：第一次绿、之后永远红）。
+    monkeypatch.setattr("backend.config.rag.RAG_EMBED_CACHE_ENABLED", False)
     return monkeypatch
 
 
