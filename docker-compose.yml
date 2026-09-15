@@ -137,6 +137,13 @@ services:
       # 身份头（IDENTITY_SOURCE=header/strict），8000 只允许宿主机内部访问，
       # 外部流量必须走 8080 网关；对外暴露 8000 等于允许任何人伪造身份头。
       - "127.0.0.1:8000:8000"
+    # 环境变量来源（2026-09-15 固化）：.env 全量注入。
+    # 显式 environment 条目优先级更高——列表中的容器内地址（PGHOST=postgres、
+    # REDIS_URL=redis://...）不会被 .env 的宿主值覆盖。
+    # 背景：environment 是白名单式，新增凭据 / base URL 极易漏传，实测
+    # 漏 QWEN_API_BASE → LLM 401（且降级话术冒充模型输出，误报成 SQL 语法错）。
+    env_file:
+      - .env
     environment:
       # LLM
       - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
@@ -217,9 +224,18 @@ services:
     command: ["python", "-m", "uvicorn", "backend.services.rag_server:app", "--host", "0.0.0.0", "--port", "8090"]
     ports:
       - "127.0.0.1:8090:8090"
+    env_file:
+      - .env
     environment:
       # 强制本地模式（服务端自我代理防护，rag_server 内部还有二次校验）
       - RAG_MODE=local
+      # PostgreSQL：memory 会话/索引注册需要（缺 PGHOST 会连容器内 localhost:5432 失败）。
+      # env_file 注入的是宿主值 localhost，故此处必须显式覆盖为容器网络别名。
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGDATABASE=agent_memory
+      - PGUSER=postgres
+      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
       # RAG 数据根目录指向 app_data 卷（与 app 共享同一份注册表/索引/文档）
       - RAG_DATA_DIR=/app/data
       # 显式传 embedding 模型：必须与宿主机建索引用的模型一致（宿主 .env 为 text-embedding-v3），

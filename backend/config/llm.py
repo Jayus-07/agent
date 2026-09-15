@@ -199,9 +199,20 @@ LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "1"))
 # 交互场景改 0.5 把尾延迟压到 0.75s
 LLM_RETRY_BACKOFF_BASE = float(os.getenv("LLM_RETRY_BACKOFF_BASE", "0.5"))
 # 熔断开路/重试耗尽后的备用模型（须是 AVAILABLE_MODELS 中的模型名；
-# 留空 = 不切备用模型，直接返回降级话术）
+# 留空 = 不切备用模型，直接按 LLM_ALLOW_DEGRADED_ANSWER 处理）
 LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "")
-# 是否允许最终降级为固定话术（False 时把原始异常抛给调用方）
+# 是否允许最终降级为固定话术（默认 False = fail-fast，把原始异常抛给调用方）。
+#
+# 2026-09-15 默认值由 true 改为 false（线上实测教训）：
+#   LLM 不可用时返回的"AI 服务暂时不可用…"话术会**冒充模型输出**流向下游，
+#   而下游是结构化消费者——SQL 生成让它当 SQL 解析（sqlglot 把中文解析成
+#   Alias 节点，校验器报出"只允许 SELECT 查询，检测到 Alias"）、Planner 让
+#   它当 DAG JSON 解析（PLAN_JSON_INVALID）……真实原因（401/超时/熔断）被
+#   埋在 N 层语义错误之下，排查成本极高。
+#   fail-fast 后：结构化消费者拿到真实异常（走各自的 error 分支，错误分类
+#   正确）；用户可见的最终回答由 Reporter 的 except → _fallback_summary 兜底，
+#   体验不降级。
+# 仅在确有"必须拿到字符串、调用方自行判断"的场景，用 env 显式开启 true。
 LLM_ALLOW_DEGRADED_ANSWER = os.getenv(
-    "LLM_ALLOW_DEGRADED_ANSWER", "true"
+    "LLM_ALLOW_DEGRADED_ANSWER", "false"
 ).strip().lower() in ("1", "true", "yes")

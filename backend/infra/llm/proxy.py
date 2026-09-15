@@ -256,10 +256,42 @@ def _is_transient(err: BaseException) -> bool:
     return any(m in name for m in _TRANSIENT_MARKERS)
 
 
-def _degraded_answer():
-    """构造降级 AIMessage（结构与正常 LLM 返回一致，调用方无需感知差异）。"""
+def _degraded_answer(reason: str = ""):
+    """构造降级 AIMessage（结构与正常 LLM 返回一致）。
+
+    2026-09-15：**必须带可识别标记**。此消息会流向下游结构化消费者
+    （JSON 解析 / SQL 解析 / 校验器），若不标记就会被当成真实模型内容
+    解析，产出"检测到 Alias"这类与真实原因（LLM 401/超时）毫无关系的
+    报错。消费者可用 is_degraded_response() 判定后 fail-fast。
+    """
     from langchain_core.messages import AIMessage
-    return AIMessage(content=_DEGRADED_ANSWER)
+    return AIMessage(
+        content=_DEGRADED_ANSWER,
+        additional_kwargs={
+            "llm_degraded": True,
+            "llm_degrade_reason": reason[:200],
+        },
+        response_metadata={"llm_degraded": True, "llm_degrade_reason": reason[:200]},
+    )
+
+
+def is_degraded_response(msg) -> bool:
+    """判断 LLM 返回是否为降级话术（结构化消费者应据此 fail-fast）。
+
+    双通道判定：additional_kwargs/response_metadata 标记为主（LLM_ALLOW_DEGRADED_ANSWER
+    开启时由 _degraded_answer 打上）；正文前缀匹配为辅——兼容标记丢失
+    （部分 provider 重打包消息）以及跨进程/持久化后仅剩文本的场景。
+    """
+    if msg is None:
+        return False
+    for attr in ("additional_kwargs", "response_metadata"):
+        meta = getattr(msg, attr, None)
+        if isinstance(meta, dict) and meta.get("llm_degraded"):
+            return True
+    content = getattr(msg, "content", None)
+    if isinstance(content, str):
+        return content.strip().startswith(_DEGRADED_ANSWER[:24])
+    return False
 
 
 def _notify_degradation(code: str, detail: dict) -> None:
@@ -288,8 +320,8 @@ def _handle_terminal_failure(err: BaseException, args, kwargs):
     if LLM_ALLOW_DEGRADED_ANSWER:
         logger.warning(f"[LLM:resilience] 最终降级为拒答话术 ({reason})")
         _notify_degradation("LLM_DEGRADED_ANSWER", {"reason": reason})
-        return _degraded_answer()
-    # 3) 抛回原异常
+        return _degraded_answer(reason)
+    # 3) 抛回原异常（默认路径 — fail-fast，见 config/llm.py 注释）
     raise err
 
 
@@ -308,7 +340,7 @@ async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
     if LLM_ALLOW_DEGRADED_ANSWER:
         logger.warning(f"[LLM:resilience] 最终降级为拒答话术 ({reason})")
         _notify_degradation("LLM_DEGRADED_ANSWER", {"reason": reason})
-        return _degraded_answer()
+        return _degraded_answer(reason)
     raise err
 
 

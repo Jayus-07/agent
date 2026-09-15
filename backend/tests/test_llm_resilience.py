@@ -122,3 +122,55 @@ class TestTransientDetection:
         assert proxy._is_transient(FakeTimeoutError())
         assert not proxy._is_transient(FakeAuthError())
         assert proxy._is_transient(Exception("x")) is False  # 泛型异常不算瞬时
+
+
+class TestFailFastMode:
+    """2026-09-15：降级话术冒充模型输出会把真实原因埋进下游语义错误。
+
+    （实测：LLM 401 → 拒绝话术当 SQL 解析 → 报"只允许 SELECT 查询，检测到
+    Alias"）。默认改为 fail-fast，结构化消费者拿到真实异常。
+    """
+
+    def test_default_config_is_fail_fast(self):
+        """配置默认值必须是 false（回归防线：不得改回 true）。"""
+        import inspect
+
+        import backend.config.llm as llm_cfg
+
+        src = inspect.getsource(llm_cfg)
+        assert 'LLM_ALLOW_DEGRADED_ANSWER", "false"' in src
+
+    def test_terminal_failure_raises_when_disabled(self):
+        def always_fail():
+            raise FakeTimeoutError("always down")
+
+        with patch.object(proxy, "LLM_ALLOW_DEGRADED_ANSWER", False):
+            with pytest.raises(FakeTimeoutError):
+                proxy._call_with_resilience(always_fail)
+
+    def test_open_circuit_raises_when_disabled(self):
+        cb = CircuitBreaker("test-llm-ff", fail_threshold=5, timeout=30.0)
+        cb._state = State.OPEN
+        cb._stats.last_state_change = time.monotonic()
+
+        with patch("backend.infra.circuit_breaker.llm_circuit_breaker", cb), \
+             patch.object(proxy, "LLM_ALLOW_DEGRADED_ANSWER", False):
+            with pytest.raises(Exception):  # CircuitBreakerOpenError 原异常上抛
+                proxy._call_with_resilience(lambda: "never-called")
+
+    def test_degraded_message_is_tagged_and_detectable(self):
+        """开启降级模式时，消息必须可被 is_degraded_response 识别。"""
+        msg = proxy._degraded_answer("FakeTimeoutError: boom")
+        assert proxy.is_degraded_response(msg) is True
+        assert msg.additional_kwargs.get("llm_degraded") is True
+        assert "boom" in msg.additional_kwargs.get("llm_degrade_reason", "")
+
+    def test_is_degraded_response_text_fallback(self):
+        """标记丢失（provider 重打包/持久化只剩文本）时，按正文前缀兜底识别。"""
+        from langchain_core.messages import AIMessage
+
+        bare = AIMessage(content=proxy._DEGRADED_ANSWER)
+        assert proxy.is_degraded_response(bare) is True
+        normal = AIMessage(content="这是正常回答")
+        assert proxy.is_degraded_response(normal) is False
+        assert proxy.is_degraded_response(None) is False
