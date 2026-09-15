@@ -8,7 +8,7 @@
 
 import { request } from '@/lib/fetcher'
 
-const BASE = '/selection'
+const BASE = '/api/selection'
 
 // ── 类型定义 ──────────────────────────────────
 

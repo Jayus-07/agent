@@ -7,7 +7,7 @@
 
 import { request } from '@/lib/fetcher'
 
-const BASE = '/competitor'
+const BASE = '/api/competitor'
 
 // ── 类型定义 ──────────────────────────────────────
 

@@ -18,6 +18,7 @@ const API_DIR = path.join(SRC_ROOT, 'api')
 
 // P0-3 之后应存在的域模块（不含 client/errors 这类基础件）
 const DOMAINS = [
+  'approvals',
   'alerts',
   'chat',
   'cs',

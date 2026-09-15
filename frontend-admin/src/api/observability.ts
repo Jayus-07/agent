@@ -177,3 +177,31 @@ export async function getTokensCalls(
   p.set("offset", String(opts.offset ?? 0));
   return await request(`/api/observability/tokens/calls?${p.toString()}`);
 }
+
+// ── 网关安全（APISIX 认证拒绝 / 限流，数据源 Prometheus 只读代理） ──
+
+export interface GatewayAuthReasonRow {
+  reason: string
+  count: number
+}
+
+export interface GatewayAuthCodeRow {
+  code: string
+  count: number
+}
+
+export interface GatewayAuthMetrics {
+  available: boolean
+  window_hours: number
+  error?: string
+  total_denied?: number
+  denied_by_reason?: GatewayAuthReasonRow[]
+  would_deny_by_reason?: GatewayAuthReasonRow[]
+  status_codes?: GatewayAuthCodeRow[]
+  denied_series?: { ts: number; value: number }[]
+}
+
+/** GET /observability/gateway-auth?hours=N — Prometheus 不可达时 available=false（显式降级） */
+export async function getGatewayAuthMetrics(hours = 6): Promise<GatewayAuthMetrics> {
+  return await request<GatewayAuthMetrics>(`/api/observability/gateway-auth?hours=${hours}`);
+}

@@ -6,7 +6,7 @@
  */
 import { request } from '@/lib/fetcher'
 
-const BASE = '/selection-decision'
+const BASE = '/api/selection-decision'
 
 export interface FinanceParams {
   sell_price: number
