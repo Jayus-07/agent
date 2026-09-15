@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { FileText, AlertTriangle, TrendingUp, Package, ChevronRight } from 'lucide-react'
-import { reportService, type DailyReportSummary } from '@/services/reports'
+import { reportService, type DailyReportSummary } from '@/api/reports'
 import { clsx } from 'clsx'
 
 interface WorkflowMeta {

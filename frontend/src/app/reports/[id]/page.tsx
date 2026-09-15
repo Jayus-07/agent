@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { reportService, type DailyReportDetail } from '@/services/reports'
+import { reportService, type DailyReportDetail } from '@/api/reports'
 
 export default function ReportDetailPage() {
   const { id } = useParams<{ id: string }>()
