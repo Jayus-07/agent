@@ -6,8 +6,10 @@
   POST /internal/ai/call    调用工具，统一响应壳
                             {ok, tool, server, result|error, latency_ms, trace_id}
 
-鉴权：X-Internal-Token（AI_INTERNAL_TOKEN，与 business-service InternalTokenFilter
-行为一致：令牌为空 = 本地开发模式跳过校验）。
+鉴权：X-Internal-Token（AI_INTERNAL_TOKEN）。校验逻辑已上提为共享依赖
+`backend.app.api.deps.require_internal_token`（2026-09-15 S0-4），供 prompts 等路由复用。
+**fail-closed**：令牌未配置时不再静默跳过 —— 生产环境一律拒绝；仅当显式设置
+ALLOW_UNAUTHENTICATED=true（本地开发）才放行。
 开关：AI_TOOLS_ENABLED=false 时网关整体关闭（默认，部署验证后再开启）。
 
 协议选型说明：Java 侧调用序列固定、Agent 动态推理均在 Python 侧完成，
@@ -15,28 +17,15 @@
 """
 from __future__ import annotations
 
-import hmac
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from backend.app.api.deps import require_internal_token
 from backend.shared.logger import logger
 
 router = APIRouter(prefix="/internal/ai", tags=["内部-AI能力网关"])
-
-
-async def verify_internal_token(request: Request) -> None:
-    """路由级鉴权依赖：校验 X-Internal-Token（常量时间比较，防时序侧信道）。"""
-    from backend.config.messaging import AI_INTERNAL_TOKEN
-
-    if not AI_INTERNAL_TOKEN:
-        return  # 本地开发模式：令牌未配置时跳过（对齐 Java InternalTokenFilter）
-    provided = request.headers.get("X-Internal-Token", "")
-    if not hmac.compare_digest(
-        AI_INTERNAL_TOKEN.encode("utf-8"), provided.encode("utf-8")
-    ):
-        raise HTTPException(status_code=401, detail="invalid internal token")
 
 
 def _allowed_tools() -> list[str] | str:
@@ -59,7 +48,7 @@ def _ensure_gateway_enabled() -> None:
         )
 
 
-@router.get("/tools", dependencies=[Depends(verify_internal_token)])
+@router.get("/tools", dependencies=[Depends(require_internal_token)])
 async def list_tools():
     """列出 Java 可调用的 AI 工具清单（按白名单过滤）。"""
     _ensure_gateway_enabled()
@@ -82,7 +71,7 @@ class AiCallRequest(BaseModel):
     actor_department: str = ""
 
 
-@router.post("/call", dependencies=[Depends(verify_internal_token)])
+@router.post("/call", dependencies=[Depends(require_internal_token)])
 async def call_tool(req: AiCallRequest, request: Request):
     """调用指定 AI 工具，统一响应壳（与 /mcp/call 兼容但增加延迟与 trace 字段）。"""
     _ensure_gateway_enabled()

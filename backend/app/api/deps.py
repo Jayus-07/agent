@@ -3,8 +3,12 @@
 工厂函数已迁移到源模块（sql/sql_agent.py + rag/pipeline.py），
 本模块封装惰性 import + 状态查询，避免启动时强制加载所有依赖。
 """
+import hmac
 import threading
 
+from fastapi import HTTPException, Request
+
+from backend.config import ALLOW_UNAUTHENTICATED, ENVIRONMENT
 from backend.shared.logger import logger
 
 _lock = threading.Lock()
@@ -111,3 +115,76 @@ def warmup_multi_agent() -> bool:
     except Exception as e:
         logger.warning(f"[Warmup] MultiAgent 预热失败（首请求会重试）: {e}")
         return False
+
+
+# ── 内部服务凭据（X-Internal-Token）────────────────────────────
+#
+# 2026-09-15 S0-4：由 fail-open 改为 fail-closed，对齐 middleware/auth.py 的既有
+# 约定（显式 ALLOW_UNAUTHENTICATED 开关 + 生产环境防御性拒绝）。
+#
+# 原实现位于 routes/internal_ai.py，在 AI_INTERNAL_TOKEN 未配置时直接 return 放行
+# —— 等于「服务间网关无凭据即开放」。现上提到本模块，供 prompts 等路由复用，
+# 避免 routes → routes 的横向导入。
+#
+# 实测背景（2026-09-15）：容器内 AI_INTERNAL_TOKEN 为空、AI_TOOLS_ENABLED=true，
+# 即该网关处于「已启用 + 无凭据」状态；同时 prompts 的写权限也准备收敛到本依赖，
+# 因此这条通道必须与 API Key 中间件同为 fail-closed，否则等于换个门继续开。
+
+_INTERNAL_TOKEN_EXEMPT_WARNED = False
+
+
+async def require_internal_token(request: Request) -> None:
+    """路由级鉴权依赖：校验 X-Internal-Token（常量时间比较，防时序侧信道）。
+
+    fail-closed 语义：
+    - 未配置 AI_INTERNAL_TOKEN：
+        · ENVIRONMENT=production → 503 拒绝（即使开了豁免开关，defense-in-depth）
+        · ALLOW_UNAUTHENTICATED=true → 放行（仅本地开发显式豁免，只告警一次）
+        · 否则 → 503 拒绝（不再静默跳过）
+    - 已配置：缺头或不匹配 → 401
+
+    失败响应沿用本仓既有错误壳（`{"error": ..., "detail": ...}`），与
+    middleware/auth.py 的 `AuthNotConfigured` / `Unauthorized` 保持同构。
+    """
+    global _INTERNAL_TOKEN_EXEMPT_WARNED
+
+    from backend.config.messaging import AI_INTERNAL_TOKEN
+
+    if not AI_INTERNAL_TOKEN:
+        if ENVIRONMENT == "production":
+            logger.error(
+                "[InternalToken] 生产环境未配置 AI_INTERNAL_TOKEN → 拒绝请求"
+                "（服务间网关不得无凭据开放；defense-in-depth）"
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "InternalTokenNotConfigured",
+                    "message": "生产环境必须配置 AI_INTERNAL_TOKEN",
+                },
+            )
+        if ALLOW_UNAUTHENTICATED:
+            if not _INTERNAL_TOKEN_EXEMPT_WARNED:
+                logger.warning(
+                    "[InternalToken] ALLOW_UNAUTHENTICATED=true：内部令牌校验已显式豁免"
+                    "（仅限本地开发调试，生产禁止开启）"
+                )
+                _INTERNAL_TOKEN_EXEMPT_WARNED = True
+            return
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "InternalTokenNotConfigured",
+                "message": (
+                    "服务端未配置 AI_INTERNAL_TOKEN，已拒绝请求（fail-closed）。"
+                    "请设置 AI_INTERNAL_TOKEN；仅本地开发可显式设置 "
+                    "ALLOW_UNAUTHENTICATED=true"
+                ),
+            },
+        )
+
+    provided = request.headers.get("X-Internal-Token", "")
+    if not hmac.compare_digest(
+        AI_INTERNAL_TOKEN.encode("utf-8"), provided.encode("utf-8")
+    ):
+        raise HTTPException(status_code=401, detail="invalid internal token")
