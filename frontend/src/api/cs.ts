@@ -1,4 +1,4 @@
-import { request } from "../fetcher";
+import { request } from "@/lib/fetcher";
 import type {
   PaginatedConversations,
   ConversationDetail,

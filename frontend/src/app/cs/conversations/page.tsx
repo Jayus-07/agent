@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Headphones, Search, ChevronRight, MessageSquare, GitBranch } from "lucide-react";
-import { listConversations } from "@/lib/api/cs";
+import { listConversations } from "@/api/cs";
 import type { ConversationSummary, PaginatedConversations } from "@/types/cs";
 import { formatRelative } from "@/types/trace";
 

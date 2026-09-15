@@ -7,7 +7,7 @@ import {
   Headphones, ArrowLeft, MessageSquare, GitBranch,
   Eye, User, Bot, Clock, AlertCircle,
 } from "lucide-react";
-import { getConversation, getConversationTraces } from "@/lib/api/cs";
+import { getConversation, getConversationTraces } from "@/api/cs";
 import { getTraceById } from "@/lib/observability/source";
 import TraceDetailPanels from "@/components/observability/trace/TraceDetailPanels";
 import type { ConversationDetail, MessageDTO } from "@/types/cs";
