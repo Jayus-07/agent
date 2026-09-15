@@ -125,7 +125,6 @@ from backend.config.llm import (
     RERANK_MODEL,
     RERANKER_MODEL_PATH,
     RERANK_TIMEOUT,
-    EVAL_DEVICE,
     TOKEN_USAGE_LOG_PATH,
     EVAL_DATASET_PATH,
     LLM_MODEL,
@@ -414,3 +413,12 @@ __all__ = [
     "TRACE_PII_MASKING_ENABLED", "TRACE_DETAIL_LEVEL",
     "TRACE_SAMPLING_RATE", "TRACE_PG_MIRROR_ENABLED",
 ]
+
+def __getattr__(name: str):
+    # PEP 562 惰性转发：EVAL_DEVICE 的 auto 解析需要 import torch（~6s），
+    # 不能在包导入期做（backend.config 在几乎所有模块的导入链上）。
+    # 真正要用设备的代码请优先调 backend.config.llm.resolve_eval_device()。
+    if name == "EVAL_DEVICE":
+        from backend.config.llm import resolve_eval_device
+        return resolve_eval_device()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

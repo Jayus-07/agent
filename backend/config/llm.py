@@ -77,15 +77,37 @@ RERANKER_MODEL_PATH = os.getenv(
 # Inference Device (评测 / RAG 共享)
 # =====================================================
 # "auto" = 有 CUDA 则用 GPU，否则 CPU；也可显式指定 "cuda" / "cpu"
+#
+# ⚠️ 延迟解析：模块导入期不做 torch 探测 —— torch import 本身 ~6s，
+#   而 backend.config 处在几乎所有模块的导入链上，每次进程启动/每测试
+#   worker 都白付这笔钱（-X importtime 实测：单模块导入 10.9s 里 torch 占 6.3s）。
+#   torch 只在真正要加载模型（如 embedding_singleton._get_local_embedding）
+#   时才经 resolve_eval_device() 引入。
 _EVAL_DEVICE_RAW = os.getenv("EVAL_DEVICE", "auto").strip().lower()
-if _EVAL_DEVICE_RAW == "auto":
-    try:
-        import torch
-        EVAL_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    except ImportError:
-        EVAL_DEVICE = "cpu"
-else:
-    EVAL_DEVICE = _EVAL_DEVICE_RAW
+_EVAL_DEVICE_CACHE: str | None = None
+
+
+def resolve_eval_device() -> str:
+    """解析推理设备；auto 模式首次调用时才 import torch 探测 CUDA。"""
+    global _EVAL_DEVICE_CACHE
+    if _EVAL_DEVICE_CACHE is None:
+        if _EVAL_DEVICE_RAW == "auto":
+            try:
+                import torch
+                _EVAL_DEVICE_CACHE = "cuda" if torch.cuda.is_available() else "cpu"
+            except ImportError:
+                _EVAL_DEVICE_CACHE = "cpu"
+        else:
+            _EVAL_DEVICE_CACHE = _EVAL_DEVICE_RAW
+    return _EVAL_DEVICE_CACHE
+
+
+def __getattr__(name: str):
+    # PEP 562：保持 `from backend.config.llm import EVAL_DEVICE` 兼容，
+    # 但解析推迟到首次属性访问。
+    if name == "EVAL_DEVICE":
+        return resolve_eval_device()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # 模型参数
 LLM_MODEL = os.getenv("LLM_MODEL", "MiniMax-M3")

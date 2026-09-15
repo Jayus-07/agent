@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Any, List
 
 from langchain_core.embeddings import Embeddings
-from langchain_huggingface import HuggingFaceEmbeddings
+# langchain_huggingface 顶层 import 会连带 torch（~6s/进程），只在实际
+# 加载本地模型时才引入 —— 见 _get_local_embedding 内的延迟导入。
 
 from backend.config import (
     ENV_MODE,
@@ -28,7 +29,6 @@ from backend.config import (
     EMBEDDING_API_BASE,
     EMBEDDING_API_KEY,
     EMBEDDING_MODEL_PATH,
-    EVAL_DEVICE,
     TOKEN_USAGE_LOG_PATH,
 )
 from backend.infra.token_tracker import create_tracker_for_embedding
@@ -78,14 +78,19 @@ def _get_cloud_embedding() -> Embeddings:
 
 def _get_local_embedding() -> Embeddings:
     """获取 Local Embedding (HuggingFace BGE)."""
+    # 延迟解析设备：resolve_eval_device() 首次调用才 import torch，
+    # 避免本模块在导入链上时所有进程陪跑 ~6s 的 torch 导入。
+    from backend.config.llm import resolve_eval_device
+    from langchain_huggingface import HuggingFaceEmbeddings
+    device = resolve_eval_device()
     embedding = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL_PATH,
-        model_kwargs={"device": EVAL_DEVICE},
+        model_kwargs={"device": device},
     )
-    
+
     logger.info(
         "[Embedding] Local 模式初始化完成 "
-        f"(model={EMBEDDING_MODEL_PATH}, device={EVAL_DEVICE})"
+        f"(model={EMBEDDING_MODEL_PATH}, device={device})"
     )
     return embedding
 
