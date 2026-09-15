@@ -8,6 +8,11 @@
 #   - routed: false → 已注册但不参与用户问题路由（内部能力），reason 必填
 #   - skill 字段必须与 skills/<name>/skill.py 的 name 属性一致
 #     （consistency 测试做双向校验：manifest ↔ skills/registry）
+#   - workflow 名须形如 ^[a-z][a-z0-9_]*$（纯蛇形，不带点——带点的是
+#     capability 命名空间），且必须与 @workflow 装饰器写入的 meta.name 一致。
+#     本段必须覆盖 orchestration/workflows/__init__.py::register_all() 里的
+#     每一个 workflow，否则该 workflow 在向量路由里"失明"（2026-09-16 前的
+#     selection_decision 就是这个状态）。
 #
 # 注意：增删 examples 后，VectorRouter 启动时会按数量自检并自动重建 Chroma
 # 索引（collection 内自愈，无需手动删 backend/data/router_index）。
@@ -222,3 +227,13 @@ workflows:
       - 调研一下蓝牙耳机市场
       - 帮我做宠物零食的品类市场调研报告
       - 分析这个品类的市场规模和竞争格局
+
+  # 批次3 选品决策：市场评估→差异化→财务测算→AI评审团→决策报告
+  # 2026-09-16 补登记：该 workflow 此前只在 app/server.py 注册、不在本清单，
+  # 导致向量路由对用户问题看不见它（manifest 不完整）。
+  - name: selection_decision
+    examples:
+      - 评估蓝牙耳机品类值不值得做
+      - 帮我做一次选品决策
+      - 这个品类能不能上
+      - 给宠物零食品类出一份选品决策报告

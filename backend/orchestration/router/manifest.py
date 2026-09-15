@@ -15,7 +15,8 @@ test_registry_consistency.py 做双向守护（manifest ↔ skills/registry）�
   - 名字全局唯一（capability 之间、capability 与 workflow 之间）
   - routed: true → examples >= 2（建议 5-10，太少向量路由会不稳）
   - routed: false → reason 必填（说不清为什么不对用户开放就别注册）
-  - workflow → examples >= 1
+  - workflow 名须形如 ^[a-z][a-z0-9_]*$（纯蛇形，不带点；带点是 capability 的
+    命名空间）→ workflow 至少需 1 条 examples
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ import yaml
 
 _MANIFEST_PATH = Path(__file__).with_name("capabilities.yaml")
 _CAP_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
+_WF_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _MIN_ROUTED_EXAMPLES = 2
 
 
@@ -162,6 +164,11 @@ def load_manifest(path: str | None = None) -> RouterManifest:
         name = str(item.get("name", "")).strip()
         if not name:
             raise ManifestError(f"{where}: name 必填")
+        if not _WF_NAME_RE.match(name):
+            raise ManifestError(
+                f"{where}: workflow 名须形如 ^[a-z][a-z0-9_]*$（纯蛇形、不带点），"
+                f"实际 {name!r}"
+            )
         if name in seen:
             raise ManifestError(f"{where}: 名字与 capability 冲突: {name}")
         seen[name] = "workflow"

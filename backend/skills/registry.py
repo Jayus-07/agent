@@ -17,8 +17,8 @@ from backend.skills.email.skill import EmailSkill
 from backend.skills.data_export.skill import DataExportSkill
 from backend.skills.web_search.skill import WebSearchSkill
 from backend.skills.web_crawl.skill import WebCrawlSkill
-from backend.skills.data_collection.skill import DataCollectionSkill, data_collection_skill_node
-from backend.skills.business_analysis.skill import BusinessAnalysisSkill, business_analysis_skill_node
+from backend.skills.data_collection.skill import DataCollectionSkill
+from backend.skills.business_analysis.skill import BusinessAnalysisSkill
 from backend.skills.competitor_analysis.skill import CompetitorAnalysisSkill
 from backend.skills.travel_poi.skill import TravelPoiSkill
 from backend.skills.map.skill import MapLookupSkill
@@ -45,10 +45,10 @@ for _inst in _instances:
     for _cap in _inst.capabilities:
         _registry[_cap] = _inst
 
-# 注册 LangGraph 节点函数
-from backend.orchestration.tool_registry import tool_registry
-tool_registry.register_skill_node("data_collection_skill", data_collection_skill_node)
-tool_registry.register_skill_node("business_analysis_skill", business_analysis_skill_node)
+# 图节点注册约定（2026-09-16 归一）：每个 Skill 包在自身 __init__.py 里
+# 调 tool_registry.register_skill_node("<name>_skill", <name>_skill_node)，
+# 本模块不再集中代注册。上面 import 各 .skill 子模块时会先初始化其父包，
+# 因此节点注册此时已全部完成。
 
 
 def get(capability: str):

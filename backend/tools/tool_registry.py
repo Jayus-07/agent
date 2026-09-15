@@ -1,13 +1,28 @@
-"""tools/tool_registry.py — Tool 注册中心与去重验证
+"""tools/tool_registry.py — Tool 层的发现与查重权威
 
 职责：
 1. 检测 Tool 重复定义（P0 级防护）
-2. 提供统一的 Tool 发现 API
-3. 记录 Tool 元数据用于 Planner prompt
-4. 在模块加载时自动扫描并注册所有 Tool
+2. 静态发现：AST 扫描 ``@tool`` 声明（``scan_repo_declared_tools``）——
+   质量脚本与守护测试的唯一判据来源，消除「两份硬编码清单各自漂移」
+3. 登记运行期已加载的 Tool 对象（``register``）
+
+⚠️ 与同名模块的区分（读 import 路径，别看名字）::
+
+    backend/tools/tool_registry.py          ← 本模块：**Tool** 注册表（34 个 @tool）
+    backend/orchestration/tool_registry.py  ← **Capability** 注册表（从 Skill 派生，
+                                               被 Planner / tool_selector / builder 消费）
+
+两者同名不同物。本表**不参与** Planner prompt —— Planner 的输入来自
+Capability 层（``CAPABILITY_SCHEMA`` 是 ``orchestration.tool_registry`` 的
+派生属性，与本表无关）。
+
+消费方：``scripts/tool_quality_check.py``、``backend/tests/test_layer_consistency.py``
+（均在运行时之外；详见 docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md §3.3）
 """
+import ast
 import inspect
-from typing import Dict, Set
+from pathlib import Path
+from typing import Dict, List, Set, Tuple
 from functools import cached_property
 
 from backend.shared.logger import logger
@@ -123,3 +138,66 @@ def register_tool(tool_fn, source_file: str = ""):
         if frame and frame.f_back:
             source_file = frame.f_back.f_code.co_filename
     tool_registry.register(tool_fn, source_file)
+
+
+# =====================================================
+# 静态发现（AST）—— 脚本 / 守护测试共用的唯一判据
+# =====================================================
+
+# @tool 允许出现的扫描根（相对仓库根）。
+# 同时扫 skills/ 是为了能发现「Tool 出界到 Skill 层」这种偏差。
+TOOL_SCAN_ROOTS: Tuple[str, ...] = ("backend/tools", "backend/skills")
+
+
+def scan_decorated_tools(root: str | Path) -> List[Tuple[Path, str, int]]:
+    """AST 扫描 root 下所有被 ``@tool`` / ``@<x>.tool`` 装饰的函数。
+
+    纯静态解析，**不导入模块** —— 因此不受导入副作用与循环导入影响，
+    可在脚本、测试、CI 任意上下文使用。
+
+    Returns:
+        ``[(源文件 Path, 函数名, 行号), ...]``（按文件路径排序，结果稳定）
+    """
+    root = Path(root)
+    found: List[Tuple[Path, str, int]] = []
+    for py in sorted(root.rglob("*.py")):
+        if "__pycache__" in py.parts:
+            continue
+        try:
+            tree = ast.parse(py.read_text(encoding="utf-8"))
+        except SyntaxError as e:  # 语法坏文件不应让整个扫描崩掉，也要能被看见
+            logger.warning(f"[ToolRegistry] 跳过无法解析的文件 {py}: {e}")
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for dec in node.decorator_list:
+                if isinstance(dec, ast.Name):
+                    deco = dec.id
+                elif isinstance(dec, ast.Attribute):
+                    deco = dec.attr
+                else:
+                    continue
+                if deco == "tool":
+                    found.append((py, node.name, node.lineno))
+    return found
+
+
+def scan_repo_declared_tools(repo_root: str | Path) -> Dict[str, List[str]]:
+    """扫描 ``TOOL_SCAN_ROOTS`` 下所有 ``@tool`` 声明。
+
+    Returns:
+        ``{函数名: ["backend/tools/sql.py:90", ...]}``
+
+    与 ``tool_names`` 的差集即「漏注册」（已定义但未登记）。
+    """
+    repo_root = Path(repo_root)
+    result: Dict[str, List[str]] = {}
+    for rel in TOOL_SCAN_ROOTS:
+        for py, fn, lineno in scan_decorated_tools(repo_root / rel):
+            try:
+                where = f"{py.relative_to(repo_root).as_posix()}:{lineno}"
+            except ValueError:  # 不在仓库内（测试用 tmp 目录）
+                where = f"{py.as_posix()}:{lineno}"
+            result.setdefault(fn, []).append(where)
+    return result

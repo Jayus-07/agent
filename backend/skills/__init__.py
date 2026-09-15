@@ -27,6 +27,12 @@ from backend.skills.web_search.skill import WebSearchSkill, web_search_skill_nod
 from backend.skills.web_crawl.skill import WebCrawlSkill, web_crawl_skill_node
 from backend.skills.travel_poi.skill import TravelPoiSkill, travel_poi_skill_node
 from backend.skills.map.skill import MapLookupSkill, map_lookup_skill_node
+from backend.skills.data_collection.skill import DataCollectionSkill, data_collection_skill_node
+from backend.skills.business_analysis.skill import BusinessAnalysisSkill, business_analysis_skill_node
+from backend.skills.competitor_analysis.skill import (
+    CompetitorAnalysisSkill,
+    competitor_analysis_skill_node,
+)
 
 __all__ = [
     "BaseSkill", "execute_with_retry",
@@ -40,4 +46,7 @@ __all__ = [
     "WebCrawlSkill", "web_crawl_skill_node",
     "TravelPoiSkill", "travel_poi_skill_node",
     "MapLookupSkill", "map_lookup_skill_node",
+    "DataCollectionSkill", "data_collection_skill_node",
+    "BusinessAnalysisSkill", "business_analysis_skill_node",
+    "CompetitorAnalysisSkill", "competitor_analysis_skill_node",
 ]

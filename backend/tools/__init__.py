@@ -42,8 +42,12 @@ from backend.tools.travel import travel_poi_search_tool  # noqa: F401
 
 from backend.tools.tool_registry import tool_registry as _tool_registry
 from backend.shared.logger import logger as _logger
+# 注意用词：此处只能报「本包（tools/__init__ 直接导入的范围）已注册数」。
+# 地图工具经 skills/map → tools/map 侧导入、以及 travel 包，注册发生在本行之后，
+# 因此这里的数字必然小于最终总数（当前最终为 34）。曾经写作"已加载 N 个 Tool"
+# 造成了误导（2026-09-16 修正措辞）。
 _tool_count = len(_tool_registry._registered_tools)
-_logger.info(f"[ToolRegistry] 已加载 {_tool_count} 个 Tool")
+_logger.info(f"[ToolRegistry] tools 包导入完成，本包已注册 {_tool_count} 个 Tool")
 del _tool_registry, _logger, _tool_count
 
 # ==================== Tool Registry 手动注册 ====================

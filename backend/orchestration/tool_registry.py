@@ -1,9 +1,23 @@
 """
-tool_registry.py — Capability 注册表（派生视图）
+tool_registry.py — **Capability** 注册表（派生视图）
+
+⚠️ 命名澄清（易混，务必看清 import 路径）::
+
+    backend/orchestration/tool_registry.py  ← 本模块：**Capability** 注册表
+                                              数据源是 Skill（不是 Tool）
+    backend/tools/tool_registry.py          ← **Tool** 注册表（34 个 @tool，
+                                              运行时无消费方）
+
+两者同名不同物。本模块是被 Planner / Critique / tool_selector /
+direct_executor / builder / system 重度消费的那一个 ——
+``CAPABILITY_SCHEMA`` 是**本模块**的派生属性，与 ``tools/tool_registry.py``
+没有任何关系。
+（长期应收敛命名：本模块宜改名 ``capability_registry.py``；涉及 30+ 处
+import，未在 2026-09-16 归一，登记于四层设计规范 §8 遗留项。）
 
 ADR-0001: 合并双注册表
   - 静态字典 CAPABILITY_MAP / CAPABILITY_SCHEMA 已废弃
-  - 改为从 backend.orchestration.skills.registry 的 Skill 实例动态派生
+  - 改为从 backend.skills.registry 的 Skill 实例动态派生
   - 单一事实来源：Skill 类自身的 description/params_schema/examples
 
 Skill 自己持有 Tool，Tool 调用 Infrastructure。

@@ -13,6 +13,7 @@
   weather.py     天气（实时 / 未来 / 逐小时）
   street_view.py 街景全景图（返回后端代理地址，不泄露密钥）
   static_map.py  静态地图图片（返回后端代理地址，不泄露密钥）
+  lookup.py      聚合入口（action 分发上面 13 个原子工具 → capability map.lookup）
 
 统一约定：返回 JSON 字符串；失败时返回 ``{"error": ...}`` 而非静默空值，
 以便 LLM 区分「查不到」与「查不了」。
@@ -25,6 +26,7 @@ from backend.tools.map.geo import (
     map_ip_location_tool,
     map_reverse_geocode_tool,
 )
+from backend.tools.map.lookup import ACTIONS, map_lookup_tool
 from backend.tools.map.place import map_place_search_tool, map_place_suggest_tool
 from backend.tools.map.route import (
     map_distance_matrix_tool,
@@ -53,4 +55,6 @@ __all__ = [
     "map_weather_tool",
     "map_street_view_tool",
     "map_static_map_tool",
+    "map_lookup_tool",
+    "ACTIONS",
 ]

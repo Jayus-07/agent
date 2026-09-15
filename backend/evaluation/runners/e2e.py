@@ -58,18 +58,17 @@ def _known_capabilities() -> set[str]:
 def _known_workflows() -> set[str]:
     """已注册 workflow 名集合。
 
-    评测独立运行时全局 registry 为空 —— 按 app/server.py 启动注册顺序补齐
-    （register 幂等覆盖，server 启动后再跑也不会重复注册）。
+    评测独立运行时全局 registry 为空 —— 调 workflows.register_all() 补齐。
+    该函数是 workflow 注册的唯一入口，幂等（已注册的同名跳过；registry.register
+    本身遇重复会抛 ValueError，所以幂等由 register_all 保证）。
+    此前这里手写 3 条且**漏了 MarketResearch**，评测侧对它的 workflow 判定为空，
+    已由 register_all 收敛（2026-09-16）。
     """
     from backend.orchestration.workflow.registry import get_workflow_registry
-    reg = get_workflow_registry()
-    if not reg.list_metas():
-        from backend.orchestration.workflows.daily_report import DailyReport
-        from backend.orchestration.workflows.inventory_alert import InventoryAlert
-        from backend.orchestration.workflows.selection_decision import SelectionDecision
-        for cls in (DailyReport, InventoryAlert, SelectionDecision):
-            reg.register(cls)
-    return {m.name for m in reg.list_metas()}
+    from backend.orchestration.workflows import register_all
+
+    register_all()
+    return {m.name for m in get_workflow_registry().list_metas()}
 
 
 # =================================================
