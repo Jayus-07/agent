@@ -109,7 +109,13 @@ async def api_key_middleware(request: Request, call_next):
 
 
 def _session_guard_mode() -> str:
-    return os.getenv("JWT_SESSION_GUARD_MODE", "audit").strip().lower()
+    """生效模式：DB 覆盖层（免重启，15s 内生效）→ env 兜底。
+
+    2026-09-16 动态化：原先仅读 env（改动需重启）。现走 sys_config 服务
+    （进程内缓存，零阻塞、fail-closed——DB 异常时维持上次已知值或 env 默认）。
+    """
+    from backend.services.sys_config import get_mode
+    return get_mode("JWT_SESSION_GUARD_MODE")
 
 
 async def _session_guard(request: Request):

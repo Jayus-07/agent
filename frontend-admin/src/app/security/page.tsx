@@ -4,7 +4,8 @@
  * /security — 安全运营（方案 A 配套运营面，2026-09-16）
  *
  * 三段式：
- *   1. 灰度开关状态（JWT 会话闸 / 敏感守卫 / 网关会话闸）—— 只读；
+ *   1. 灰度开关状态（JWT 会话闸 / 敏感守卫 / 网关会话闸）；
+ *      后端两枚经 PUT /sys/config/{key} 免重启切换（DB 覆盖 + env 兜底），
  *      网关值属部署层 env，后端返回 null，展示切换指引而非猜测运行值
  *   2. 在线会话（Redis auth:session:*）+ 强制下线（删键，
  *      enforce 下即刻生效；audit 灰度期仅保证凭据链收紧，页面已提示）
@@ -19,6 +20,7 @@ import {
   forceLogout,
   getSecurityOverview,
   getSessions,
+  updateGuardMode,
   type GuardModeInfo,
   type SecurityOverview,
   type SessionRow,
@@ -40,14 +42,43 @@ function ModeBadge({ mode, fallback = '未知' }: { mode: string | null; fallbac
   )
 }
 
-function ModeCard({ info, title }: { info: GuardModeInfo; title: string }) {
+function ModeCard({ info, title, onSwitch, switching }: {
+  info: GuardModeInfo;
+  title: string;
+  onSwitch?: (value: string) => void;
+  switching?: boolean;
+}) {
+  const switchable = Boolean(info.configKey && info.allowed?.length && info.mode !== null)
   return (
     <div className="rounded-lg border border-black/[0.08] bg-white p-4">
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-[13px] font-medium text-text-primary">{title}</span>
-        <ModeBadge mode={info.mode} fallback="部署层" />
+        <div className="flex items-center gap-1.5">
+          {info.source === 'db' && (
+            <span className="rounded bg-green-50 px-1.5 py-0.5 text-[10px] text-green-700">DB 覆盖</span>
+          )}
+          {switchable ? (
+            <select
+              value={info.mode ?? ''}
+              disabled={switching}
+              onChange={(e) => onSwitch?.(e.target.value)}
+              className="rounded border border-black/15 bg-white px-1.5 py-0.5 text-[11px] text-text-primary disabled:opacity-50"
+            >
+              {info.allowed!.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          ) : (
+            <ModeBadge mode={info.mode} fallback="部署层" />
+          )}
+        </div>
       </div>
       <p className="text-[11px] leading-relaxed text-text-muted">{info.note}</p>
+      {info.source === 'db' && info.updatedBy && (
+        <p className="mt-1 text-[10px] text-text-muted">
+          最近修改：{info.updatedBy}{info.updatedAt ? ` · ${info.updatedAt.slice(0, 16).replace('T', ' ')}` : ''}
+        </p>
+      )}
     </div>
   )
 }
@@ -68,6 +99,7 @@ export default function SecurityPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [kicking, setKicking] = useState<string | null>(null)
+  const [switching, setSwitching] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
 
   const load = useCallback(async (silent = false) => {
@@ -107,11 +139,31 @@ export default function SecurityPage() {
     }
   }
 
+  async function switchMode(title: string, configKey: string, value: string) {
+    const risky = value === 'enforce' || value === 'off'
+    if (!window.confirm(
+      risky
+        ? `确认把「${title}」切到 ${value}？该操作立即影响请求处置行为（${value === 'off' ? '关闭校验' : '开始拦截'}），旧值可在历史中查回。`
+        : `确认把「${title}」切到 ${value}？（audit 仅记日志不拦截）`,
+    )) return
+    setSwitching(configKey)
+    setNotice('')
+    try {
+      const { old, new: newVal } = await updateGuardMode(configKey, value)
+      setNotice(`已切换 ${configKey}：${old ?? '(env 值)'} → ${newVal}，免重启生效（其他实例 ≤15s）`)
+      await load(true)
+    } catch (e) {
+      setError(`切换失败: ${(e as Error).message}`)
+    } finally {
+      setSwitching(null)
+    }
+  }
+
   return (
     <div>
       <PageHeader
         title="安全运营"
-        desc="JWT 单通道鉴权的运营面：灰度开关、在线会话、敏感端点清单（只读 + 会话强制下线）"
+        desc="JWT 单通道鉴权的运营面：灰度开关（免重启切换）、在线会话、敏感端点清单"
       />
 
       {error && (
@@ -131,12 +183,22 @@ export default function SecurityPage() {
         <div className="py-16 text-center text-[12px] text-text-muted">无数据</div>
       ) : (
         <div className="space-y-8">
-          {/* ① 灰度开关 */}
+          {/* ① 灰度开关（后端两枚可免重启切换；网关属部署层只读展示） */}
           <section>
             <h2 className="mb-3 text-[13px] font-semibold text-text-primary">灰度开关</h2>
             <div className="grid gap-3 md:grid-cols-3">
-              <ModeCard title="会话闸（后端中间件）" info={overview.modes.jwtSessionGuard} />
-              <ModeCard title="敏感守卫（统一依赖）" info={overview.modes.sensitiveApiGuard} />
+              <ModeCard
+                title="会话闸（后端中间件）"
+                info={overview.modes.jwtSessionGuard}
+                switching={switching === overview.modes.jwtSessionGuard.configKey}
+                onSwitch={(v) => void switchMode('会话闸（后端中间件）', overview.modes.jwtSessionGuard.configKey!, v)}
+              />
+              <ModeCard
+                title="敏感守卫（统一依赖）"
+                info={overview.modes.sensitiveApiGuard}
+                switching={switching === overview.modes.sensitiveApiGuard.configKey}
+                onSwitch={(v) => void switchMode('敏感守卫（统一依赖）', overview.modes.sensitiveApiGuard.configKey!, v)}
+              />
               <ModeCard title="会话闸（APISIX 网关）" info={overview.modes.gatewaySessionCheck} />
             </div>
           </section>

@@ -14,6 +14,13 @@ export interface GuardModeInfo {
   mode: string | null;
   scope: string;
   note: string;
+  /** 2026-09-16 动态化：生效来源 db 覆盖 / env-default / deployment */
+  source?: string;
+  /** 合法值白名单（非空 = 该开关可在线切换；部署层开关不返回） */
+  allowed?: string[];
+  configKey?: string;
+  updatedAt?: string | null;
+  updatedBy?: string | null;
 }
 
 export interface SensitiveEndpoint {
@@ -75,6 +82,18 @@ export async function forceLogout(userId: number, jti: string): Promise<{ revoke
   const res = await request<Result<{ revoked: boolean; userId: number; jti: string }>>(
     `/api/sys/security/sessions/${userId}/${jti}`,
     { method: "DELETE" },
+  );
+  return res.data;
+}
+
+/** PUT /sys/config/{key} — 覆盖写入灰度开关（免重启，本实例即时生效） */
+export async function updateGuardMode(
+  configKey: string,
+  value: string,
+): Promise<{ key: string; old: string | null; new: string }> {
+  const res = await request<Result<{ key: string; old: string | null; new: string }>>(
+    `/api/sys/config/${configKey}`,
+    { method: "PUT", body: JSON.stringify({ value }) },
   );
   return res.data;
 }

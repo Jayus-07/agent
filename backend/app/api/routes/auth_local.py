@@ -20,7 +20,6 @@
 """
 from __future__ import annotations
 
-import os
 import re
 import time
 
@@ -32,6 +31,7 @@ from backend.app.api.deps import (
     require_admin_user,
     resolve_operator_role,
 )
+from backend.services import sys_config
 
 from contextlib import asynccontextmanager
 
@@ -396,17 +396,21 @@ async def security_overview(request: Request,
     return _result({
         "modes": {
             "jwtSessionGuard": {
-                "mode": os.getenv("JWT_SESSION_GUARD_MODE", "audit").strip().lower(),
+                # 2026-09-16 动态化：DB 覆盖层（PUT /sys/config/{key} 免重启切换）
+                **sys_config.get_info("JWT_SESSION_GUARD_MODE"),
+                "configKey": "JWT_SESSION_GUARD_MODE",
                 "scope": "backend-middleware",
-                "note": "off/audit/enforce（默认 audit）；改 .env 后需重启 app 容器",
+                "note": "off/audit/enforce；DB 覆盖值 15s 内生效，回滚=写回旧值",
             },
             "sensitiveApiGuard": {
-                "mode": os.getenv("SENSITIVE_API_GUARD_MODE", "enforce").strip().lower(),
+                **sys_config.get_info("SENSITIVE_API_GUARD_MODE"),
+                "configKey": "SENSITIVE_API_GUARD_MODE",
                 "scope": "backend-deps",
-                "note": "audit/enforce；改 .env 后需重启 app 容器",
+                "note": "audit/enforce；DB 覆盖值 15s 内生效，回滚=写回旧值",
             },
             "gatewaySessionCheck": {
                 "mode": None,
+                "source": "deployment",
                 "scope": "apisix-container",
                 "note": "部署层 env（GATEWAY_SESSION_CHECK，默认 audit），app 进程读不到；"
                         "切换 runbook 见 docs/2026-09-16-方案A-JWT单通道实施报告.md",

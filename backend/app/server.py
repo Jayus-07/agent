@@ -278,6 +278,17 @@ async def start_progress_queue_gc():
 
 
 @app.on_event("startup")
+async def start_sys_config_refresh():
+    """灰度开关动态配置：首轮拉取 + 15s 轮询 DB 覆盖层（2026-09-16 Lite）。
+
+    失败不阻塞启动（守卫回退 env 默认 / 上次已知值，见 services/sys_config.py）。
+    """
+    import asyncio
+    from backend.services.sys_config import refresh_loop
+    asyncio.create_task(refresh_loop(), name="sys-config-refresh")
+
+
+@app.on_event("startup")
 async def start_consistency_sweeper():
     """五路存储最终一致性清扫：定期对账孤儿向量 / BM25 幽灵残留并修复。
 

@@ -35,6 +35,7 @@ from backend.app.api.routes import (
     maps,
     tasks,
     admin_tasks,
+    sys_config_admin,
 )
 from backend.app.api.routes.health import router as health_router
 from backend.app.api.routes.keyword_routes import router as keyword_router
@@ -44,6 +45,7 @@ api_router = APIRouter()
 # ── 业务路由 ──────────────────────────────────
 api_router.include_router(auth_local.router)  # 自建认证（2026-09-15 拆分，替代 Java auth-service）
 api_router.include_router(auth_local.sys_router)  # 用户中心（register）
+api_router.include_router(sys_config_admin.router)  # 灰度开关动态配置（2026-09-16 Lite，管理员闸）
 api_router.include_router(chat.router)
 api_router.include_router(sql.router)
 api_router.include_router(rag.router)

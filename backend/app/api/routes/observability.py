@@ -42,7 +42,9 @@ router = APIRouter(prefix="/observability", tags=["可观测性"])
 #     用于灰度回退（与汇总文档 A3 的 audit 先行策略一致）。
 
 def _sensitive_guard_mode() -> str:
-    return os.getenv("SENSITIVE_API_GUARD_MODE", "enforce").strip().lower()
+    # 2026-09-16 动态化：DB 覆盖层（免重启）→ env 兜底，见 services/sys_config.py
+    from backend.services.sys_config import get_mode
+    return get_mode("SENSITIVE_API_GUARD_MODE")
 
 
 async def require_admin_operator(request: Request) -> None:
