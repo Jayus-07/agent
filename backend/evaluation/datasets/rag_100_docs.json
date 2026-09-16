@@ -1,0 +1,1260 @@
+{
+  "version": "0.1.0-probe",
+  "name": "rag_100_docs",
+  "kb_id": "rag_100_docs",
+  "_comment": "R3 探路版测试集（任务书 §4）。8 个标注字段位于每条用例的 annotation 内：doc_id / expected_doc_ids / expected_chunk_ids / key_facts(关键事实) / query_type(查询类型, 7 类) / should_refuse(是否拒答, 辅以 refusal_reason) / version_requirement(版本要求) / permission_scope(权限范围)。expected_chunk_ids 在索引完成前不可知，暂为 null，以 expected_chunk_anchors (原文锚点) 替代，索引后回填。无答案用例 key_facts 为空且应拒答。权限用例的 should_refuse 以「general 权限视角」标注。",
+  "fixture_dir": "../fixtures/rag_100_docs/files",
+  "documents_count": 27,
+  "test_cases": [
+    {
+      "id": "RD-001",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "公司访客 Wi-Fi 的名称是什么？",
+      "annotation": {
+        "doc_id": "faq_employee",
+        "expected_doc_ids": [
+          "faq_employee"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [
+          "访客 Wi-Fi 名称 XC-Guest"
+        ],
+        "key_facts": [
+          "XC-Guest",
+          "密码每月1日更新"
+        ],
+        "query_type": "faq",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "faq",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-002",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "费用报销审核需要多长时间？",
+      "annotation": {
+        "doc_id": "faq_employee",
+        "expected_doc_ids": [
+          "faq_employee"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "10个工作日内"
+        ],
+        "query_type": "faq",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "faq",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-003",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "工牌遗失了怎么补办？费用多少？",
+      "annotation": {
+        "doc_id": "faq_employee",
+        "expected_doc_ids": [
+          "faq_employee"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "3个工作日",
+          "补办费20元"
+        ],
+        "query_type": "faq",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "faq",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-004",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "运维值班电话是多少？P1 级故障要求多久内响应？",
+      "annotation": {
+        "doc_id": "faq_ops",
+        "expected_doc_ids": [
+          "faq_ops"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "0591-8888-6677",
+          "15分钟内响应"
+        ],
+        "query_type": "faq",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "txt",
+        "doc_type": "faq",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-005",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "合同编号 XC-HT-2025-041 的合同金额和服务期限分别是什么？",
+      "annotation": {
+        "doc_id": "contract_bluewhale",
+        "expected_doc_ids": [
+          "contract_bluewhale"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [
+          "合同编号：XC-HT-2025-041"
+        ],
+        "key_facts": [
+          "120万元",
+          "2025年3月1日至2027年2月28日"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "contract",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-006",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "资产编号 ZC-2021-118 的设备报废申请，申请人是谁？审批何时完成？",
+      "annotation": {
+        "doc_id": "scan_asset_disposal",
+        "expected_doc_ids": [
+          "scan_asset_disposal"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "陈斌",
+          "2026-06-12"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "form",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "group": "scanned"
+      }
+    },
+    {
+      "id": "RD-007",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "制度编号 XC-XZ-2023-009 对应哪份制度？公章由哪个部门保管？",
+      "annotation": {
+        "doc_id": "policy_seal",
+        "expected_doc_ids": [
+          "policy_seal"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "印章使用管理办法",
+          "行政部"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-008",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "数据字典中 c_user_id 字段的格式是什么？",
+      "annotation": {
+        "doc_id": "dict_customer",
+        "expected_doc_ids": [
+          "dict_customer"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "CU+8位数字"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "txt",
+        "doc_type": "reference",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-009",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "研发中心员工月度迟到几次以内不处罚？加班时长从多久起算？",
+      "annotation": {
+        "doc_id": "policy_attendance_rnd",
+        "expected_doc_ids": [
+          "policy_attendance_rnd"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "3次以内含3次且每次不超过10分钟",
+          "满2小时起算"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-010",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "市场部考勤的弹性打卡区间和迟到免罚次数是多少？",
+      "annotation": {
+        "doc_id": "policy_attendance_mkt",
+        "expected_doc_ids": [
+          "policy_attendance_mkt"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "08:30至09:00",
+          "5次以内含5次且每次不超过15分钟"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "group": "similar_pair"
+      }
+    },
+    {
+      "id": "RD-011",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "会议室通过什么渠道预订？单次最长可订多久？",
+      "annotation": {
+        "doc_id": "manual_meetingroom",
+        "expected_doc_ids": [
+          "manual_meetingroom"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "星辰办公App",
+          "单次最长3小时"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "manual",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-012",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "供应商准入的综合评分门槛是多少？年审安排在每年几月？",
+      "annotation": {
+        "doc_id": "policy_supplier",
+        "expected_doc_ids": [
+          "policy_supplier"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "综合评分80分及以上",
+          "每年3月年审"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "policy",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-013",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "产品企业版的年费是多少？包含多少席位？",
+      "annotation": {
+        "doc_id": "table_pricing",
+        "expected_doc_ids": [
+          "table_pricing"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "12,999元/年",
+          "席位不限"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-014",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 年第二季度研发部的人力成本是多少？",
+      "annotation": {
+        "doc_id": "table_hrcost_2026q2",
+        "expected_doc_ids": [
+          "table_hrcost_2026q2"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "486.5万元"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "hr_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-015",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "资产编号 SL-0031 的服务器部署在哪个机房？",
+      "annotation": {
+        "doc_id": "table_servers",
+        "expected_doc_ids": [
+          "table_servers"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "A1机房"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "it_admin"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-016",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 年 6 月华东区销售额是多少？",
+      "annotation": {
+        "doc_id": "table_sales_2026",
+        "expected_doc_ids": [
+          "table_sales_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "168.4万元"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-017",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 年 6 月客服工单解决率和平均响应时长分别是多少？",
+      "annotation": {
+        "doc_id": "table_tickets_2026",
+        "expected_doc_ids": [
+          "table_tickets_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "93.8%",
+          "41秒"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "table",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-018",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "蓝鲸数据服务合同的合同金额和办公室租赁的月租金分别是多少？",
+      "annotation": {
+        "doc_id": "contract_bluewhale",
+        "expected_doc_ids": [
+          "contract_bluewhale",
+          "contract_office_lease"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "120万元",
+          "18.5万元"
+        ],
+        "query_type": "cross_doc",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "finance_restricted"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "contract",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-019",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "差旅住宿一线城市标准从 V1 至今调整过几次？当前标准是多少？",
+      "annotation": {
+        "doc_id": "policy_travel_v3",
+        "expected_doc_ids": [
+          "policy_travel_v1",
+          "policy_travel_v2",
+          "policy_travel_v3"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "调整过2次",
+          "当前700元/晚"
+        ],
+        "query_type": "cross_doc",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "all_versions",
+          "supersedes_chain": [
+            "policy_travel_v1",
+            "policy_travel_v2",
+            "policy_travel_v3"
+          ]
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "group": "version_chain"
+      }
+    },
+    {
+      "id": "RD-020",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 年上半年公司毛利率是多少？6 月华东区销售额是多少？",
+      "annotation": {
+        "doc_id": "report_fin_h1_2026",
+        "expected_doc_ids": [
+          "report_fin_h1_2026",
+          "table_sales_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "61.2%",
+          "168.4万元"
+        ],
+        "query_type": "cross_doc",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "finance_restricted"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "report",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-021",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "转正答辩需要提前多久预约？",
+      "annotation": {
+        "doc_id": "manual_onboarding",
+        "expected_doc_ids": [
+          "manual_onboarding"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [
+          "需提前 5 个工作日 在 OA 上预约答辩时间"
+        ],
+        "key_facts": [
+          "提前5个工作日"
+        ],
+        "query_type": "low_confidence",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "manual",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-022",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "投影仪 HDMI 转接头在哪里可以借到？",
+      "annotation": {
+        "doc_id": "manual_meetingroom",
+        "expected_doc_ids": [
+          "manual_meetingroom"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "B1层前台"
+        ],
+        "query_type": "low_confidence",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "manual",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-023",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "按 2025 年 8 月执行的差旅制度，一线城市住宿标准是多少？",
+      "annotation": {
+        "doc_id": "policy_travel_v2",
+        "expected_doc_ids": [
+          "policy_travel_v2"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "600元/晚"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "as_of",
+          "date": "2025-08-01"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "group": "version_chain"
+      }
+    },
+    {
+      "id": "RD-024",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2024 年 6 月出差时，一线城市住宿标准是多少？",
+      "annotation": {
+        "doc_id": "policy_travel_v1",
+        "expected_doc_ids": [
+          "policy_travel_v1"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "500元/晚"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "as_of",
+          "date": "2024-06-01"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "group": "version_chain"
+      }
+    },
+    {
+      "id": "RD-025",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "按现行差旅制度提交报销单，除发票外还必须注明什么信息？",
+      "annotation": {
+        "doc_id": "policy_travel_v3",
+        "expected_doc_ids": [
+          "policy_travel_v3"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "出差事由与项目编号"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "current"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "policy",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "group": "version_chain"
+      }
+    },
+    {
+      "id": "RD-032",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "公司数据密级分为几级？数据对外导出需要谁的审批？",
+      "annotation": {
+        "doc_id": "policy_infosec",
+        "expected_doc_ids": [
+          "policy_infosec"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "public/internal/confidential三级",
+          "数据保护官（DPO）书面审批"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-033",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2025 年全年客服工单总量和客户满意度分别是多少？",
+      "annotation": {
+        "doc_id": "report_cs_2025",
+        "expected_doc_ids": [
+          "report_cs_2025"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "58,320件",
+          "92.4%"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "report",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-034",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "星盾 2.0 是什么时候正式上线的？",
+      "annotation": {
+        "doc_id": "report_q2_product",
+        "expected_doc_ids": [
+          "report_q2_product"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "2026-04-18"
+        ],
+        "query_type": "faq",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "report",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-035",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "门禁权限申请表里，王倩申请的是哪个区域？权限有效期多久？",
+      "annotation": {
+        "doc_id": "scan_access_request",
+        "expected_doc_ids": [
+          "scan_access_request"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "B2层机房",
+          "90天（2026-07-01至2026-09-28）"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "form",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "group": "scanned"
+      }
+    },
+    {
+      "id": "RD-036",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "报销单 BX-2026-0207 的报销金额是多少？",
+      "annotation": {
+        "doc_id": "table_expense_h1_2026",
+        "expected_doc_ids": [
+          "table_expense_h1_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "5,210.50元"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-026",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "公司年假天数是多少？",
+      "annotation": {
+        "doc_id": null,
+        "expected_doc_ids": [],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [],
+        "query_type": "no_evidence",
+        "should_refuse": true,
+        "refusal_reason": "no_evidence",
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "n/a",
+        "doc_type": "n/a",
+        "difficulty": "easy",
+        "is_no_answer": true,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-027",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "公司 2024 年营业收入是多少？",
+      "annotation": {
+        "doc_id": null,
+        "expected_doc_ids": [],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [],
+        "query_type": "no_evidence",
+        "should_refuse": true,
+        "refusal_reason": "no_evidence",
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "n/a",
+        "doc_type": "n/a",
+        "difficulty": "easy",
+        "is_no_answer": true,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-028",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "星辰会议助手 v1.2 具体在哪一天上线？",
+      "annotation": {
+        "doc_id": "notes_product_review",
+        "expected_doc_ids": [
+          "notes_product_review"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [],
+        "query_type": "no_evidence",
+        "should_refuse": true,
+        "refusal_reason": "no_evidence",
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "txt",
+        "doc_type": "notes",
+        "difficulty": "hard",
+        "is_no_answer": true,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-029",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "差旅餐费补贴标准是每餐多少元？",
+      "annotation": {
+        "doc_id": null,
+        "expected_doc_ids": [],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [],
+        "query_type": "no_evidence",
+        "should_refuse": true,
+        "refusal_reason": "no_evidence",
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "n/a",
+        "doc_type": "n/a",
+        "difficulty": "easy",
+        "is_no_answer": true,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-030",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "公司的 CTO 是谁？",
+      "annotation": {
+        "doc_id": "faq_ops",
+        "expected_doc_ids": [
+          "faq_ops"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [],
+        "query_type": "no_evidence",
+        "should_refuse": true,
+        "refusal_reason": "no_evidence",
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "txt",
+        "doc_type": "faq",
+        "difficulty": "hard",
+        "is_no_answer": true,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    },
+    {
+      "id": "RD-031",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 年上半年公司经营性现金流是多少？",
+      "annotation": {
+        "doc_id": "report_fin_h1_2026",
+        "expected_doc_ids": [
+          "report_fin_h1_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [],
+        "query_type": "no_evidence",
+        "should_refuse": true,
+        "refusal_reason": "permission",
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "finance_restricted"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "report",
+        "difficulty": "medium",
+        "is_no_answer": true,
+        "source": "generated",
+        "schema_version": "1.0-probe"
+      }
+    }
+  ]
+}

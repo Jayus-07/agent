@@ -1,0 +1,616 @@
+{
+  "version": "0.1.0-probe",
+  "name": "rag_100_docs",
+  "kb_id": "rag_100_docs",
+  "generated_at": "2026-09-17",
+  "note": "R3 探路版语料清单（27 份）。每份文档的关键事实在生成期固化在源内容中；is_scanned=true 的 PDF 为文字渲染成图像封装（无真实 OCR，在线 OCR 回填结果应与 key_facts 一致）。expected_chunk_ids 需索引后回填。",
+  "documents": [
+    {
+      "doc_id": "policy_attendance_rnd",
+      "file": "md/policy_考勤管理制度_研发中心.md",
+      "format": "md",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "弹性打卡09:30至10:00",
+        "月内迟到3次以内且每次≤10分钟不计罚",
+        "加班满2小时起算",
+        "调休当年12月31日前用完"
+      ],
+      "section_anchors": [
+        "弹性区间为 09:30 至 10:00",
+        "满 2 小时起算"
+      ]
+    },
+    {
+      "doc_id": "policy_attendance_mkt",
+      "file": "md/policy_考勤管理制度_市场部.md",
+      "format": "md",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": "similar_pair",
+      "key_facts": [
+        "弹性打卡08:30至09:00",
+        "月内迟到5次以内且每次≤15分钟不计罚",
+        "加班满1.5小时起算"
+      ],
+      "section_anchors": [
+        "弹性区间为 08:30 至 09:00",
+        "满 1.5 小时起算"
+      ]
+    },
+    {
+      "doc_id": "policy_seal",
+      "file": "md/policy_印章使用管理办法.md",
+      "format": "md",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "行政",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "公章由行政部双人分管",
+        "合同用印须法务会签",
+        "用印登记保存5年"
+      ],
+      "section_anchors": [
+        "制度编号：XC-XZ-2023-009",
+        "行政部"
+      ]
+    },
+    {
+      "doc_id": "faq_employee",
+      "file": "md/faq_员工常见问题.md",
+      "format": "md",
+      "doc_type": "faq",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "行政",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "访客Wi-Fi: XC-Guest, 密码每月1日更新",
+        "报销审核10个工作日内",
+        "工牌补办3个工作日/20元",
+        "班车3条线路",
+        "体检9~10月"
+      ],
+      "section_anchors": [
+        "访客 Wi-Fi 名称 XC-Guest",
+        "10 个工作日内"
+      ]
+    },
+    {
+      "doc_id": "manual_onboarding",
+      "file": "md/manual_新员工入职手册.md",
+      "format": "md",
+      "doc_type": "manual",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "试用期6个月",
+        "导师辅导3个月",
+        "转正答辩提前5个工作日预约"
+      ],
+      "section_anchors": [
+        "需提前 5 个工作日 在 OA 上预约答辩时间"
+      ]
+    },
+    {
+      "doc_id": "policy_infosec",
+      "file": "md/policy_信息安全管理制度.md",
+      "format": "md",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "数据安全委员会",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "密级public/internal/confidential",
+        "导出须DPO书面审批",
+        "离岗当日回收权限"
+      ],
+      "section_anchors": [
+        "public（公开）、internal（内部）、confidential（机密）"
+      ]
+    },
+    {
+      "doc_id": "contract_bluewhale",
+      "file": "md/contract_蓝鲸数据服务合同.md",
+      "format": "md",
+      "doc_type": "contract",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "法务",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "合同编号XC-HT-2025-041",
+        "合同金额120万元",
+        "服务期2025-03-01至2027-02-28",
+        "逾期违约金月服务费5%"
+      ],
+      "section_anchors": [
+        "合同编号：XC-HT-2025-041",
+        "120 万元"
+      ]
+    },
+    {
+      "doc_id": "report_cs_2025",
+      "file": "md/report_客服运营年度报告_2025.md",
+      "format": "md",
+      "doc_type": "report",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "客服部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "2025年工单总量58,320件",
+        "满意度92.4%",
+        "平均首次响应45秒"
+      ],
+      "section_anchors": [
+        "58,320 件",
+        "92.4%"
+      ]
+    },
+    {
+      "doc_id": "policy_travel_v1",
+      "file": "md/policy_差旅费管理办法_v1.md",
+      "format": "md",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": {
+        "version_id": "v1",
+        "effective_from": "2024-04-01",
+        "effective_to": "2025-06-30",
+        "supersedes": null,
+        "superseded_by": "policy_travel_v2"
+      },
+      "is_scanned": false,
+      "group": "version_chain",
+      "key_facts": [
+        "一线城市住宿500元/晚",
+        "二线城市380元/晚",
+        "纸质增值税发票"
+      ],
+      "section_anchors": [
+        "500 元/晚"
+      ]
+    },
+    {
+      "doc_id": "policy_travel_v2",
+      "file": "docx/policy_差旅费管理办法_v2.docx",
+      "format": "docx",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": {
+        "version_id": "v2",
+        "effective_from": "2025-07-01",
+        "effective_to": "2026-08-31",
+        "supersedes": "policy_travel_v1",
+        "superseded_by": "policy_travel_v3"
+      },
+      "is_scanned": false,
+      "group": "version_chain",
+      "key_facts": [
+        "一线城市住宿600元/晚",
+        "二线城市450元/晚",
+        "须增值税电子发票",
+        "行程变更24小时内补充说明",
+        "废止V1"
+      ],
+      "section_anchors": [
+        "600 元/晚",
+        "废止 V1"
+      ]
+    },
+    {
+      "doc_id": "report_q2_product",
+      "file": "docx/report_Q2产品迭代总结_2026.docx",
+      "format": "docx",
+      "doc_type": "report",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "产品部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "星盾2.0于2026-04-18上线",
+        "灰度3周覆盖40%客户",
+        "修复P1缺陷12个"
+      ],
+      "section_anchors": [
+        "2026-04-18"
+      ]
+    },
+    {
+      "doc_id": "manual_meetingroom",
+      "file": "docx/manual_会议室使用规范.docx",
+      "format": "docx",
+      "doc_type": "manual",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "行政",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "星辰办公App预订",
+        "单次最长3小时",
+        "取消提前30分钟",
+        "HDMI转接头B1层前台借阅"
+      ],
+      "section_anchors": [
+        "单次最长 3 小时",
+        "B1 层前台"
+      ]
+    },
+    {
+      "doc_id": "policy_supplier",
+      "file": "docx/policy_供应商准入管理办法.docx",
+      "format": "docx",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "采购部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "准入综合评分≥80分",
+        "年审每年3月",
+        "黑名单3年内不得再准入"
+      ],
+      "section_anchors": [
+        "80 分及以上",
+        "每年 3 月"
+      ]
+    },
+    {
+      "doc_id": "policy_travel_v3",
+      "file": "pdf/policy_差旅费管理办法_v3.pdf",
+      "format": "pdf",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": {
+        "version_id": "v3",
+        "effective_from": "2026-09-01",
+        "effective_to": null,
+        "supersedes": "policy_travel_v2",
+        "superseded_by": null
+      },
+      "is_scanned": false,
+      "group": "version_chain",
+      "key_facts": [
+        "一线城市住宿700元/晚",
+        "二线城市520元/晚",
+        "报销单须注明出差事由与项目编号",
+        "废止V2"
+      ],
+      "section_anchors": [
+        "700 元/晚",
+        "出差事由与项目编号"
+      ]
+    },
+    {
+      "doc_id": "contract_office_lease",
+      "file": "pdf/contract_办公室租赁合同.pdf",
+      "format": "pdf",
+      "doc_type": "contract",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "finance_restricted",
+      "department": "行政",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "租期2025-01-01至2027-12-31",
+        "月租金18.5万元",
+        "押三付一（押金3个月租金）"
+      ],
+      "section_anchors": [
+        "185,000 元（18.5 万元）",
+        "押三付一"
+      ]
+    },
+    {
+      "doc_id": "report_fin_h1_2026",
+      "file": "pdf/report_2026上半年财务摘要.pdf",
+      "format": "pdf",
+      "doc_type": "report",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "finance_restricted",
+      "department": "财务部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "上半年营收2.34亿元",
+        "毛利率61.2%",
+        "经营性现金流3,180万元"
+      ],
+      "section_anchors": [
+        "61.2%",
+        "3,180 万元"
+      ]
+    },
+    {
+      "doc_id": "scan_asset_disposal",
+      "file": "pdf/scan_设备报废申请单.pdf",
+      "format": "pdf",
+      "doc_type": "form",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "行政",
+      "version": null,
+      "is_scanned": true,
+      "group": "scanned",
+      "key_facts": [
+        "资产编号ZC-2021-118（ThinkPad T15）",
+        "申请人陈斌",
+        "审批完成日期2026-06-12",
+        "报废理由：维修费超残值"
+      ],
+      "section_anchors": [
+        "ZC-2021-118",
+        "2026-06-12"
+      ]
+    },
+    {
+      "doc_id": "scan_access_request",
+      "file": "pdf/scan_门禁权限申请表.pdf",
+      "format": "pdf",
+      "doc_type": "form",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "it_admin",
+      "department": "IT",
+      "version": null,
+      "is_scanned": true,
+      "group": "scanned",
+      "key_facts": [
+        "申请人王倩（工号XC-0847）",
+        "申请区域B2层机房",
+        "有效期90天（2026-07-01至2026-09-28）",
+        "审批人李洪"
+      ],
+      "section_anchors": [
+        "B2 层机房",
+        "90 天"
+      ]
+    },
+    {
+      "doc_id": "faq_ops",
+      "file": "txt/faq_运维值班FAQ.txt",
+      "format": "txt",
+      "doc_type": "faq",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "IT",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "值班电话0591-8888-6677",
+        "P1级15分钟内响应",
+        "升级路径值班工程师→值班经理→CTO"
+      ],
+      "section_anchors": [
+        "0591-8888-6677",
+        "15 分钟内响应"
+      ]
+    },
+    {
+      "doc_id": "notes_product_review",
+      "file": "txt/notes_产品评审会议纪要_20260830.txt",
+      "format": "txt",
+      "doc_type": "notes",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "产品部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "会议助手v1.2排期2026年10月上线（具体日期待9月评审）",
+        "Q4预算追加35万元",
+        "负责人苏黎"
+      ],
+      "section_anchors": [
+        "2026 年 10 月上线",
+        "35 万元"
+      ]
+    },
+    {
+      "doc_id": "dict_customer",
+      "file": "txt/readme_数据字典_客户域.txt",
+      "format": "txt",
+      "doc_type": "reference",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "数据部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "c_user_id格式CU+8位数字",
+        "c_tier枚举A/B/C",
+        "c_created_at为UTC+8 ISO8601"
+      ],
+      "section_anchors": [
+        "CU + 8 位数字"
+      ]
+    },
+    {
+      "doc_id": "table_hrcost_2026q2",
+      "file": "xlsx/table_2026Q2部门人力成本.xlsx",
+      "format": "xlsx",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "hr_confidential",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "2026Q2研发部人力成本486.5万元",
+        "市场部152.3万元",
+        "客服部98.7万元"
+      ],
+      "section_anchors": [
+        "研发部",
+        "486.5"
+      ]
+    },
+    {
+      "doc_id": "table_pricing",
+      "file": "xlsx/table_产品定价表.xlsx",
+      "format": "xlsx",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "产品部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "基础版999元/年含5席位",
+        "专业版3,999元/年含20席位",
+        "企业版12,999元/年席位不限"
+      ],
+      "section_anchors": [
+        "12999",
+        "不限"
+      ]
+    },
+    {
+      "doc_id": "table_servers",
+      "file": "xlsx/table_服务器资产清单.xlsx",
+      "format": "xlsx",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "it_admin",
+      "department": "IT",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "SL-0012华为2288H在B2机房",
+        "SL-0031浪潮NF5280M6在A1机房",
+        "SL-0058戴尔R750在B2机房"
+      ],
+      "section_anchors": [
+        "SL-0031",
+        "A1机房"
+      ]
+    },
+    {
+      "doc_id": "table_sales_2026",
+      "file": "csv/table_区域销售月报_2026.csv",
+      "format": "csv",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "销售部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "2026-06华东销售额168.4万元",
+        "2026-06华南122.7万元",
+        "2026-05华东141.2万元"
+      ],
+      "section_anchors": [
+        "168.4",
+        "华东"
+      ]
+    },
+    {
+      "doc_id": "table_expense_h1_2026",
+      "file": "csv/table_差旅报销明细_2026H1.csv",
+      "format": "csv",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "财务部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "BX-2026-0132王倩3,860元",
+        "BX-2026-0207陈斌5,210.5元",
+        "BX-2026-0356苏黎2,478元",
+        "BX-2026-0411李洪1,905元"
+      ],
+      "section_anchors": [
+        "BX-2026-0207",
+        "5,210.50"
+      ]
+    },
+    {
+      "doc_id": "table_tickets_2026",
+      "file": "csv/table_客服工单统计_2026.csv",
+      "format": "csv",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "客服部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "2026-06工单量5,120件",
+        "2026-06解决率93.8%",
+        "2026-06平均响应41秒"
+      ],
+      "section_anchors": [
+        "5,120",
+        "93.8%"
+      ]
+    }
+  ],
+  "groups": {
+    "similar_pair": [
+      "policy_attendance_rnd",
+      "policy_attendance_mkt"
+    ],
+    "version_chain": [
+      "policy_travel_v1",
+      "policy_travel_v2",
+      "policy_travel_v3"
+    ],
+    "scanned": [
+      "scan_asset_disposal",
+      "scan_access_request"
+    ]
+  },
+  "format_counts": {}
+}
