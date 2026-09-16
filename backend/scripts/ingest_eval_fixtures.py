@@ -6,10 +6,13 @@
   2. sync 的 modified 分支先 _remove_document 再 _index_file，预注册的
      slug 行会被删掉导致 md5 协议重派 doc_id。因此 slug 行必须带真实
      file_hash 让 sync 视为 unchanged，重索引由本脚本在 sync 之后直调。
-  3. 扫描件（无文字层 PDF）会让 sync 直接抛 RuntimeError → 管线回退
+  3. 扫描件（无文字层 PDF）历史上会让 sync 抛 RuntimeError → 管线回退
      「全量重建」路径 → _sync_registry_after_full_rebuild 执行
      registry.clear() + 全量 md5 重派（near-dup pending 状态全丢）。
-     所以扫描件绝不进 data/docs，等在线 OCR 阶段再接入。
+     ⚠️ 2026-09-17 起两点已变：cd92801 加固后单文件失败只跳过不再回退
+     全量重建；在线 OCR（D6，RAG_OCR_PROVIDER=dashscope）接通后扫描件
+     可正常解析。因此扫描件可用 --include-scanned 正式入库（脚本会先
+     ocr_available() 预检，OCR 不可用则拒绝执行，仍保持"绝不无 OCR 进库"）。
   4. 版本指纹 .version 覆盖 data/docs 全目录，文件增删后必须刷新，
      否则触发全量重建（同 3 的灾难）。
 
@@ -28,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -64,11 +68,22 @@ def _refresh_version():
 
 
 def main() -> int:
+    include_scanned = "--include-scanned" in sys.argv
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     docs = manifest["documents"]
-    texts = [d for d in docs if not d.get("is_scanned")]
+    texts = docs if include_scanned else [
+        d for d in docs if not d.get("is_scanned")]
     scans = [d for d in docs if d.get("is_scanned")]
-    print(f"fixtures: {len(docs)} 份（文本 {len(texts)} + 扫描件 {len(scans)}），kb_id={KB_ID}")
+    if include_scanned:
+        # OCR 预检：在线 OCR 不可用（供应商 off / 未配 Key）时拒绝把扫描件入库
+        from backend.rag.preprocessing.parser import ocr as ocr_mod
+        if not ocr_mod.ocr_available():
+            print("[ABORT] --include-scanned 需要在线 OCR 可用"
+                  "（RAG_OCR_PROVIDER=dashscope 且已配置 API Key）")
+            return 2
+        print(f"[OCR] 供应商 {ocr_mod.rag_cfg.RAG_OCR_PROVIDER} 就绪，"
+              f"扫描件 {len(scans)} 份将走 OCR 入库")
+    print(f"fixtures: {len(docs)} 份（文本 {len(docs) - len(scans)} + 扫描件 {len(scans)}），kb_id={KB_ID}")
 
     registry = DocumentRegistry(DOC_REGISTRY_PATH)
 
@@ -85,6 +100,8 @@ def main() -> int:
             shutil.copy2(src, dest)
         paths[d["doc_id"]] = str(dest)
     for d in scans:
+        if include_scanned:
+            continue  # 扫描件随文本一起部署（下方 texts 循环已含）
         stray = DEST_DIR / d["file"]
         if stray.exists():
             stray.unlink()

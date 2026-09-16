@@ -97,6 +97,12 @@ def _filter_quality_summary(filtered_details: list[dict]) -> str:
     return f"filtered_chunks:{len(filtered_details)}({breakdown_str})"
 
 
+def _append_quality_issue(doc_meta: dict, issue: str) -> None:
+    """追加一条质量留痕到 doc_meta["quality_issues"]（逗号分隔，既有串保留）。"""
+    prev = doc_meta.get("quality_issues", "")
+    doc_meta["quality_issues"] = (f"{prev}, " if prev else "") + issue
+
+
 class ChunkingEmptyError(Exception):
     """文档解析/切片成功但最终未产出任何有效 chunk（chunk_count=0）。
 
@@ -714,19 +720,24 @@ class IncrementalIndexer:
         # 必须写进 registry quality_issues 可追溯，而不是只有日志
         chunks_truncated = any(ch.metadata.get("chunks_truncated") for ch in chunks)
         if chunks_truncated:
-            prev = doc_meta.get("quality_issues", "")
-            doc_meta["quality_issues"] = (
-                f"{prev}, " if prev else ""
-            ) + "chunks_truncated(超出单文档上限被截断,检索覆盖不完整)"
+            _append_quality_issue(
+                doc_meta, "chunks_truncated(超出单文档上限被截断,检索覆盖不完整)")
+
+        # §5.1 质量记录：扫描件经 OCR 兜底识别 → 留痕（pipeline 已打标到 chunk
+        # metadata）；OCR 文本质量天然低于文字层，门禁/审计按此字段甄别
+        if any(ch.metadata.get("ocr_triggered") for ch in chunks):
+            ocr_pages = max(
+                (int(ch.metadata.get("ocr_pages") or 0) for ch in chunks),
+                default=0,
+            )
+            _append_quality_issue(
+                doc_meta, f"ocr_triggered(扫描件经OCR识别,{ocr_pages}页产出文本)")
 
         # R-P1-3: 过滤留痕汇总进 quality_issues（逐条明细在 index_chunk span
         # output.filtered_details，trace 详情页可查），保证误删可事后审计
         filter_summary = _filter_quality_summary(filtered_details)
         if filter_summary:
-            prev = doc_meta.get("quality_issues", "")
-            doc_meta["quality_issues"] = (
-                f"{prev}, " if prev else ""
-            ) + filter_summary
+            _append_quality_issue(doc_meta, filter_summary)
 
         # 注入 chunk metadata — 分层：
         #   - doc_type / person_names → 继承文档级（用于 filter）

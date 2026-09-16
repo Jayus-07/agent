@@ -237,7 +237,12 @@ class PdfParser(BaseDocumentParser):
             raw_text += "\n\n" + "\n\n".join(
                 make_table_chunk_text(rows) for _, rows in table_items
             )
-        return DocumentAST(root=root, source_file=file_path, raw_text=raw_text)
+        ast = DocumentAST(root=root, source_file=file_path, raw_text=raw_text)
+        # §5.1 质量记录：OCR 兜底发生 → AST 置位（pipeline 据此给 chunk 打标，
+        # indexer 汇总进 registry quality_issues，门禁按 ocr_triggered 审计）
+        ast.ocr_triggered = ocr_pages > 0
+        ast.ocr_pages = ocr_pages
+        return ast
 
     def _ocr_fallback(self, file_path: str, page_count: int) -> list[tuple[str, float]]:
         """按页渲染 PNG 走 OCR，返回与 raw_items 同构的 (text, size=0) 列表。

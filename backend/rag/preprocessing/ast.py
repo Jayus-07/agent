@@ -36,6 +36,9 @@ class DocumentAST:
     root: DocumentNode
     source_file: str = ""
     raw_text: str = ""
+    # §5.1 质量记录：扫描件经 OCR 兜底识别时置位（ PdfParser 写入，下游留痕用）
+    ocr_triggered: bool = False
+    ocr_pages: int = 0  # 实际产出文本的 OCR 页数（失败页不计）
 
 
 def walk(node: DocumentNode) -> Iterator[DocumentNode]:

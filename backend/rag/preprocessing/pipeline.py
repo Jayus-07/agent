@@ -45,10 +45,16 @@ def parse_and_chunk(file_path: str, doc_type_hint: str = "") -> List[Document]:
             hint = (
                 f"该 PDF 共 {page_count} 页但无文字层"
                 + (f"（含 {img_blocks} 个图片块，可能为扫描件/纯图片）" if img_blocks else "（可能为图片型 PDF）")
-                + "，当前系统不支持 OCR/图片理解，请上传含可复制文字的 PDF"
             )
         except Exception as e:
             hint = f"该 PDF 无法提取文字（可能为损坏文件或扫描件）: {type(e).__name__}"
+        # OCR 兜底已在解析器内部尝试过（走到这里说明 OCR 不可用或产出为空），
+        # 报错信息按 OCR 实际配置给出可操作指引，不再笼统说"不支持"
+        from backend.rag.preprocessing.parser import ocr as _ocr_mod
+        if _ocr_mod.ocr_available():
+            hint += "；OCR 已启用但未能识别出文本（页面可能全为失败页），请检查文档内容或 OCR 日志"
+        else:
+            hint += "；当前未启用可用的 OCR 供应商（检查 RAG_OCR_PROVIDER 及 API Key 配置），请上传含可复制文字的 PDF"
         raise ValueError(hint)
 
     # 结构安全清洗：清洗每个节点文本，保留结构
@@ -70,4 +76,11 @@ def parse_and_chunk(file_path: str, doc_type_hint: str = "") -> List[Document]:
         f"[ChunkPipeline] {file_path} doc_type={doc_type} "
         f"completeness={report.completeness} → {strategy.__class__.__name__}"
     )
-    return strategy.split(normalized_ast, file_path)
+    chunks = strategy.split(normalized_ast, file_path)
+    # §5.1 质量记录：扫描件 OCR 触发 → 打进 chunk metadata（Chroma 只收标量，
+    # 沿用 chunks_truncated 的字符串标记惯例），indexer 汇总进 quality_issues
+    if getattr(raw_ast, "ocr_triggered", False):
+        for c in chunks:
+            c.metadata["ocr_triggered"] = "true"
+            c.metadata["ocr_pages"] = int(getattr(raw_ast, "ocr_pages", 0) or 0)
+    return chunks

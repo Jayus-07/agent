@@ -17,11 +17,16 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
+import os
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from backend.config import rag as rag_cfg
+from backend.config.database import RAG_DATA_DIR
 from backend.shared.logger import logger
 
 
@@ -162,10 +167,75 @@ def _ocr_image_dashscope(png_bytes: bytes) -> str:
 
 
 def ocr_image(png_bytes: bytes) -> str:
-    """按当前配置的供应商识别单页 PNG 文本。供应商不可用时抛异常由调用方容错。"""
+    """按当前配置的供应商识别单页 PNG 文本。供应商不可用时抛异常由调用方容错。
+
+    云端供应商（dashscope）外层套 按页缓存 + 限流（D6 ③：在线 API 有成本，
+    幂等重跑不重复调用）；离线 rapidocr 免费，直连不缓存。
+    """
     provider = (rag_cfg.RAG_OCR_PROVIDER or "").lower()
     if provider == "rapidocr":
         return _ocr_image_rapidocr(png_bytes)
     if provider == "dashscope":
-        return _ocr_image_dashscope(png_bytes)
+        return _ocr_image_cloud_cached(png_bytes)
     raise RuntimeError(f"OCR 供应商不可用: {provider!r}")
+
+
+# ── 云端 OCR：按页缓存 + 限流（D6 ③）──
+
+_ocr_cache_dir = Path(RAG_DATA_DIR) / "ocr_cache"
+_cloud_lock = threading.Lock()
+_last_call_mono: float = 0.0
+
+
+def _cache_path(png_bytes: bytes) -> Path:
+    """缓存键 = sha256(provider|model|页面图像字节)。图像不变即命中。"""
+    h = hashlib.sha256(
+        f"{(rag_cfg.RAG_OCR_PROVIDER or '').lower()}|{rag_cfg.RAG_OCR_DASHSCOPE_MODEL}|".encode()
+        + png_bytes
+    ).hexdigest()
+    return _ocr_cache_dir / f"{h}.json"
+
+
+def _throttle_cloud() -> None:
+    """相邻两次云端调用强制最小间隔（批量入库限流，防触发平台 429）。"""
+    global _last_call_mono
+    interval_ms = max(int(rag_cfg.RAG_OCR_MIN_INTERVAL_MS), 0)
+    if interval_ms <= 0:
+        return
+    with _cloud_lock:
+        wait = interval_ms / 1000.0 - (time.monotonic() - _last_call_mono)
+        if wait > 0:
+            time.sleep(wait)
+        _last_call_mono = time.monotonic()
+
+
+def _ocr_image_cloud_cached(png_bytes: bytes) -> str:
+    """云端 OCR 带缓存入口：命中直接返回；未命中限流后调用并落盘（软失败）。"""
+    if not rag_cfg.RAG_OCR_CACHE_ENABLED:
+        _throttle_cloud()
+        return _ocr_image_dashscope(png_bytes)
+    path = _cache_path(png_bytes)
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data.get("text"), str):
+                return data["text"]
+    except Exception as e:
+        logger.debug(f"[OCR] 缓存读取失败（走直连）: {e}")
+    text = _throttled_call(png_bytes)
+    try:
+        _ocr_cache_dir.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(
+            {"text": text, "model": rag_cfg.RAG_OCR_DASHSCOPE_MODEL,
+             "ts": int(time.time())}, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)  # 原子落盘，多 worker 同页竞争无半写文件
+    except Exception as e:
+        logger.debug(f"[OCR] 缓存写入失败（不影响主流程）: {e}")
+    return text
+
+
+def _throttled_call(png_bytes: bytes) -> str:
+    """限流包裹的云端调用（独立函数便于测试桩替换）。"""
+    _throttle_cloud()
+    return _ocr_image_dashscope(png_bytes)

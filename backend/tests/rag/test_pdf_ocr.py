@@ -240,3 +240,107 @@ def test_precheck_rejects_scanned_pdf_when_ocr_off(upload_env, tmp_path, monkeyp
     ))
     assert res["ok"] is False
     assert "文本层" in res["error"]
+
+
+# ============ 云端按页缓存 + 限流（D6 ③，2026-09-17）============
+
+class TestCloudCacheAndThrottle:
+    """dashscope 供应商：同页图像缓存命中不重复计费；相邻调用限流拉开间隔。"""
+
+    @pytest.fixture
+    def cloud_env(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_CACHE_ENABLED", True)
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_MIN_INTERVAL_MS", 0)
+        monkeypatch.setattr(ocr_mod, "_ocr_cache_dir", tmp_path / "ocr_cache")
+        ocr_mod._last_call_mono = 0.0  # 重置全局限流状态，避免用例间串扰
+        calls = {"n": 0}
+
+        def fake_call(png):
+            calls["n"] += 1
+            return f"识别文本-{calls['n']}"
+
+        monkeypatch.setattr(ocr_mod, "_ocr_image_dashscope", fake_call)
+        return calls
+
+    def test_cache_hit_no_recost(self, cloud_env):
+        png = b"\x89PNG-same-page"
+        t1 = ocr_mod.ocr_image(png)
+        t2 = ocr_mod.ocr_image(png)
+        assert t1 == t2 == "识别文本-1"
+        assert cloud_env["n"] == 1, "同页图像第二次调用必须命中缓存，不得重复计费"
+
+    def test_different_page_both_called(self, cloud_env):
+        ocr_mod.ocr_image(b"page-a")
+        ocr_mod.ocr_image(b"page-b")
+        assert cloud_env["n"] == 2, "不同页面图像各自调用"
+
+    def test_cache_disabled_calls_every_time(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_CACHE_ENABLED", False)
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_MIN_INTERVAL_MS", 0)
+        monkeypatch.setattr(ocr_mod, "_ocr_cache_dir", tmp_path / "ocr_cache")
+        ocr_mod._last_call_mono = 0.0
+        calls = {"n": 0}
+
+        def fake_call(png):
+            calls["n"] += 1
+            return "x"
+
+        monkeypatch.setattr(ocr_mod, "_ocr_image_dashscope", fake_call)
+        ocr_mod.ocr_image(b"p")
+        ocr_mod.ocr_image(b"p")
+        assert calls["n"] == 2, "缓存关闭时每次都直连"
+
+    def test_throttle_enforces_min_interval(self, tmp_path, monkeypatch):
+        import time as _time
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_MIN_INTERVAL_MS", 60)
+        monkeypatch.setattr(ocr_mod, "_ocr_cache_dir", tmp_path / "ocr_cache")
+        ocr_mod._last_call_mono = 0.0
+        monkeypatch.setattr(ocr_mod, "_ocr_image_dashscope", lambda png: "x")
+        t0 = _time.monotonic()
+        ocr_mod.ocr_image(b"p1")
+        ocr_mod.ocr_image(b"p2")
+        assert _time.monotonic() - t0 >= 0.06, "第二次调用须被限流拉开最小间隔"
+
+    def test_cache_persists_to_disk(self, cloud_env, tmp_path):
+        import json as _json
+        ocr_mod.ocr_image(b"\x89PNG-disk-page")
+        files = list((tmp_path / "ocr_cache").glob("*.json"))
+        assert len(files) == 1
+        assert _json.loads(files[0].read_text(encoding="utf-8"))["text"] == "识别文本-1"
+
+
+# ============ ocr_triggered 标记贯通（AST → chunk metadata → quality_issues）============
+
+class TestOcrTriggeredPropagation:
+    """§5.1 质量记录：OCR 触发必须全链路可追溯，不得静默发生。"""
+
+    def test_ast_flag_set_on_scanned_pdf(self, tmp_path, ocr_on):
+        pdf = _make_pdf(tmp_path, "scan_flag.pdf", pages=2)
+        ast = PdfParser().parse(pdf)
+        assert ast.ocr_triggered is True
+        assert ast.ocr_pages == 2
+
+    def test_ast_flag_not_set_for_text_pdf(self, tmp_path, ocr_on):
+        long_text = "这是一份足够长的正常文本文档内容，" * 10
+        pdf = _make_pdf(tmp_path, "text_flag.pdf", pages=1, text=long_text)
+        ast = PdfParser().parse(pdf)
+        assert ast.ocr_triggered is False
+        assert ast.ocr_pages == 0
+
+    def test_chunks_marked_ocr_triggered(self, tmp_path, ocr_on):
+        from backend.rag.preprocessing.pipeline import parse_and_chunk
+        pdf = _make_pdf(tmp_path, "scan_chunks.pdf", pages=1)
+        chunks = parse_and_chunk(pdf)
+        assert chunks, "扫描件经 OCR 应产出 chunk 而非空"
+        assert all(c.metadata.get("ocr_triggered") == "true" for c in chunks)
+        assert any(int(c.metadata.get("ocr_pages") or 0) == 1 for c in chunks)
+
+    def test_append_quality_issue_helper(self):
+        from backend.rag.indexing.indexer import _append_quality_issue
+        meta = {}
+        _append_quality_issue(meta, "a")
+        _append_quality_issue(meta, "b")
+        assert meta["quality_issues"] == "a, b", "逗号拼接且既有串保留"

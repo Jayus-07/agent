@@ -288,7 +288,9 @@
         "expected_doc_ids": [
           "scan_asset_disposal"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "scan_asset_disposal_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "陈斌",
@@ -1739,7 +1741,9 @@
         "expected_doc_ids": [
           "scan_access_request"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "scan_access_request_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "B2层机房",

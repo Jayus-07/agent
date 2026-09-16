@@ -16,6 +16,20 @@ from backend.rag.preprocessing.ast import walk
 from backend.rag.preprocessing.parser.pdf_parser import PdfParser
 
 
+@pytest.fixture(autouse=True)
+def _ocr_off(monkeypatch):
+    """本文件专测文字层解析路径。
+
+    2026-09-17 起 .env 将 RAG_OCR_PROVIDER 切到 dashscope 在线 OCR：解析失败
+    页/空白页会被 OCR 兜底救回（设计语义如此），既产生真实网络调用又会
+    产出模型幻觉文本，与本文件多处「0 leaf」断言冲突。OCR 行为本身由
+    test_pdf_ocr.py 单独覆盖（其用例各自 mock ocr_available）。
+    """
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.parser.ocr.ocr_available", lambda: False
+    )
+
+
 @pytest.fixture
 def sample_pdf(tmp_path):
     """创建 2 页 PDF，每页 2 段。"""

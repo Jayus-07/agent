@@ -78,6 +78,10 @@ RAG_OCR_DASHSCOPE_BASE_URL = os.getenv(
     "RAG_OCR_DASHSCOPE_BASE_URL",
     "https://dashscope.aliyuncs.com/compatible-mode/v1")
 RAG_OCR_DASHSCOPE_TIMEOUT = int(os.getenv("RAG_OCR_DASHSCOPE_TIMEOUT", "60"))
+# 云端 OCR 成本控制（D6 ③，2026-09-17）：按页缓存（同页图像幂等重跑不重复计费）
+# + 相邻调用最小间隔毫秒（批量入库限流，防平台 429）。仅对 dashscope 供应商生效
+RAG_OCR_CACHE_ENABLED = os.getenv("RAG_OCR_CACHE_ENABLED", "1") == "1"
+RAG_OCR_MIN_INTERVAL_MS = int(os.getenv("RAG_OCR_MIN_INTERVAL_MS", "300"))
 # 五路存储一致性清扫（Sweeper）：写路径的补偿回滚自身可能失败留下孤儿/幽灵，
 # 事后定期对账 + 修复。首次延迟避开启动期全量增量索引，之后按小时周期跑
 RAG_CONSISTENCY_SWEEP_FIRST_DELAY_MIN = int(os.getenv("RAG_CONSISTENCY_SWEEP_FIRST_DELAY_MIN", "10"))
