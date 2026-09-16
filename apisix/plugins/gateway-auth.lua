@@ -10,6 +10,9 @@
 --   ⑤ Bearer 提取 → Redis 黑名单（EXISTS auth:blacklist:<token>，fail-closed，先于验签——SCG 顺序）
 --   ⑥ 验签（HS256/384/512 按密钥长度，JJWT hmacShaKeyFor 语义；issuer；exp+skew；previous-secret 轮换）
 --   ⑦ claim type=access（refresh 令牌拒绝）
+--   ⑦.5 会话闸（方案 A，2026-09-16）：EXISTS auth:session:{userId}:{jti}，
+--      缺失 = 已吊销；GATEWAY_SESSION_CHECK=off/audit/enforce（默认 audit），
+--      Redis 故障 fail-closed（session-timeout/session-unavailable）
 --   ⑧ 策略阶梯 open/shadow/guest/enforce（默认读 env GATEWAY_AUTH_MODE）
 --   ⑨ 通过后注入 X-Auth-Type: jwt + X-User-Id/X-User-Name/X-User-Dept
 --   ⑨.5 角色闸（正向清单 + 方法感知，403 role-insufficient；shadow 只记不拦）
@@ -232,6 +235,10 @@ local function build_conf()
             pool_size = tonumber(env("GATEWAY_AUTH_REDIS_POOL_SIZE", "20")),
             pool_max_idle_ms = tonumber(env("GATEWAY_AUTH_REDIS_POOL_IDLE_MS", "10000")),
         },
+        -- 方案 A 会话闸（2026-09-16）：签名有效 ≠ 会话有效。
+        -- GATEWAY_SESSION_CHECK：off / audit（默认，只记日志）/ enforce（无会话即 401）
+        session_check = env("GATEWAY_SESSION_CHECK", "audit"),
+        session_prefix = env("GATEWAY_SESSION_PREFIX", "auth:session:"),
     }
 end
 
@@ -249,6 +256,11 @@ local READ_METHODS = { GET = true, HEAD = true, OPTIONS = true }
 local ROLE_GATE_PREFIXES = {
     ["/api/approvals"] = { write = "admin" },   -- 审批处置权（后端已同语义 403，网关是外层硬闸）
     ["/api/prompts"]   = { write = "editor" },  -- draft/publish/rollback 的粗闸；高风险仍由后端收紧为 admin
+    -- 方案 A（2026-09-16）：网关审计类端点外层硬闸（前后缀精确覆盖
+    -- /gateway-auth 与 /gateway-access-logs 两个 GET 端点；后端
+    -- require_admin_operator 仍保留，双层分工）。api-key 通道无 roles，
+    -- 按既有设计不在此拦，由后端统一守卫判定
+    ["/api/observability/gateway"] = { read = "admin", write = "admin" },
 }
 
 local function role_gate(uri, method, roles)
@@ -370,6 +382,39 @@ function _M.access(_, ctx)
     local token_type = to_str_or_nil(payload.type)
     if token_type ~= "access" then
         return deny_or_shadow(ctx, route, "token-type-mismatch", policy)
+    end
+
+    -- ⑩.2 会话闸（方案 A，2026-09-16）：py 签发时写 auth:session:{userId}:{jti}，
+    -- 登出/强制下线删键 → 已签发令牌即时全链路失效，不等 30min TTL。
+    -- 语义：签名有效但会话键缺失 = 已吊销。audit 只记不拦（灰度），enforce 401。
+    -- 旧令牌（无 jti）audit 放行记日志；enforce 拒绝（重新登录即得新令牌）。
+    -- Redis 故障与黑名单同语义 fail-closed（session-timeout / session-unavailable）。
+    local session_mode = CONF.session_check
+    if session_mode ~= "off" then
+        local jti = to_str_or_nil(payload.jti)
+        local session_key = nil
+        if jti and user_id then
+            session_key = CONF.session_prefix .. user_id .. ":" .. jti
+        end
+        if not session_key then
+            if session_mode == "enforce" then
+                return deny_or_shadow(ctx, route, "missing-jti", policy)
+            end
+            core.log.warn("[gateway-auth] session-audit 放行无 jti 旧令牌 route=", route)
+        else
+            local alive, s_err = blacklist.exists(CONF.redis, session_key)
+            if s_err then
+                -- 黑名单组件 reason 归一为 session-*，告警口径可区分
+                local reason = (s_err == "redis-timeout") and "session-timeout" or "session-unavailable"
+                return deny_or_shadow(ctx, route, reason, policy)
+            end
+            if not alive then
+                if session_mode == "enforce" then
+                    return deny_or_shadow(ctx, route, "session-revoked", policy)
+                end
+                core.log.warn("[gateway-auth] session-audit 放行已吊销会话 route=", route)
+            end
+        end
     end
 
     -- ⑩.5 角色闸（正向清单 + 方法感知；shadow 模式只记不拦）

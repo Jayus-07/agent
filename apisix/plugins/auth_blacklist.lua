@@ -14,7 +14,9 @@ local redis = require("resty.redis")
 
 local _M = { _VERSION = "0.1.0" }
 
-function _M.is_blacklisted(conf, token)
+-- 通用只读 EXISTS（2026-09-16 方案 A：会话闸复用同一连接/故障语义）。
+-- 返回 exists 布尔或 nil, err_reason（timeout/unavailable，均须 fail-closed）。
+function _M.exists(conf, key)
     local red = redis:new()
 
     -- set_timeout 覆盖连接 + 命令两个阶段（lua-resty-redis 无独立连接超时）；
@@ -23,40 +25,48 @@ function _M.is_blacklisted(conf, token)
 
     local ok, err = red:connect(conf.host, conf.port)
     if not ok then
-        -- 连接失败：拒连（connection refused / DNS）或连接超时
         red:close()
         if err and tostring(err):find("timeout", 1, true) then
-            return false, "blacklist-timeout"
+            return nil, "redis-timeout"
         end
-        return false, "blacklist-unavailable"
+        return nil, "redis-unavailable"
     end
 
     if conf.password and conf.password ~= "" then
         local ok_auth, err_auth = red:auth(conf.password)
         if not ok_auth then
             red:close()
-            -- 认证失败同样视为不可用（fail-closed，且不得泄露失败细节）
             if err_auth and tostring(err_auth):find("timeout", 1, true) then
-                return false, "blacklist-timeout"
+                return nil, "redis-timeout"
             end
-            return false, "blacklist-unavailable"
+            return nil, "redis-unavailable"
         end
     end
 
-    local ok_exists, err_exists = red:exists(conf.blacklist_prefix .. token)
+    local ok_exists, err_exists = red:exists(key)
     if not ok_exists then
         red:close()  -- 命令失败不回池（连接状态未知），直接丢弃
         if err_exists and tostring(err_exists):find("timeout", 1, true) then
+            return nil, "redis-timeout"
+        end
+        return nil, "redis-unavailable"
+    end
+
+    red:set_keepalive(conf.pool_max_idle_ms or 10000, conf.pool_size or 20)
+    return ok_exists == 1, nil
+end
+
+function _M.is_blacklisted(conf, token)
+    -- 黑名单 = 通用 EXISTS 的特例（key = <prefix><token>）；
+    -- 故障 reason 保留旧名（blacklist-*），下游告警/日志口径不变。
+    local hit, err = _M.exists(conf, conf.blacklist_prefix .. token)
+    if err then
+        if err == "redis-timeout" then
             return false, "blacklist-timeout"
         end
         return false, "blacklist-unavailable"
     end
-
-    -- 成功：连接回连接池（显式上限；池满时 lua-resty-redis 会退化为新建连接，
-    -- 不存在"池满阻塞"形态 —— 连接建立失败统一走 fail-closed 路径）
-    red:set_keepalive(conf.pool_max_idle_ms or 10000, conf.pool_size or 20)
-
-    return ok_exists == 1, nil
+    return hit, nil
 end
 
 return _M

@@ -6,7 +6,18 @@
 - 未配置 API_KEY 且未显式开启 ALLOW_UNAUTHENTICATED：拒绝所有业务请求（503），
   不再静默放行
 - ALLOW_UNAUTHENTICATED=true：显式豁免，仅限本地开发调试使用
+
+会话闸（2026-09-16 方案 A，纵深防御层）:
+
+- 主校验在 APISIX gateway-auth（验签 + 黑名单 fail-closed + 会话键检查）；
+  本中间件对随请求透传的 Bearer 做**第二道**会话校验：
+  签名有效 + jti 会话键存在，否则按 JWT_SESSION_GUARD_MODE 处置。
+- JWT_SESSION_GUARD_MODE：off / audit（默认，只记日志）/ enforce（401）
+- Redis 不可用时本层放行并告警（网关层已 fail-closed 兜底，避免双写故障面）
+- 纯 api-key 通道（无 Bearer）不检查——服务身份的敏感端点治理
+  由 deps.require_user_actor 统一守卫承担
 """
+import os
 import secrets
 
 from fastapi import Request
@@ -89,7 +100,71 @@ async def api_key_middleware(request: Request, call_next):
             content={"error": "Unauthorized", "detail": "无效或缺失 X-API-Key"},
         )
 
+    # ── 会话闸（方案 A 纵深防御；主校验在 APISIX gateway-auth）──────────
+    result = await _session_guard(request)
+    if result is not None:
+        return result
+
     return await call_next(request)
+
+
+def _session_guard_mode() -> str:
+    return os.getenv("JWT_SESSION_GUARD_MODE", "audit").strip().lower()
+
+
+async def _session_guard(request: Request):
+    """Bearer 会话校验：签名有效且 auth:session:{userId}:{jti} 存在。
+
+    返回 None 表示放行（或无需检查）；返回 JSONResponse 表示按 enforce 拒绝。
+    - 旧令牌（无 jti）：audit 记日志放行；enforce 拒绝（重新登录即得新令牌）
+    - Redis 不可用：放行 + warning（网关层同键检查已 fail-closed 兜底）
+    """
+    authz = request.headers.get("authorization") or ""
+    if authz[:7].lower() != "bearer ":
+        return None
+    token = authz[7:].strip()
+    if not token:
+        return None
+
+    from backend.security.local_jwt import session_key, verify_access_token
+
+    payload = verify_access_token(token)
+    if payload is None:
+        return None  # 签名/exp 问题由网关主校验拒绝，本层不重复判定
+
+    key = session_key(payload)
+    if key is None:
+        if _session_guard_mode() == "enforce":
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Unauthorized",
+                         "detail": "未认证：令牌缺少会话标识（jti），请重新登录"},
+            )
+        logger.warning("[SessionGuard] audit 放行无 jti 旧令牌: userId=%s",
+                       payload.get("userId"))
+        return None
+
+    from backend.infra.redis.client import get_redis
+    client = get_redis()
+    if client is None:
+        logger.warning("[SessionGuard] Redis 不可用，会话校验跳过（网关层兜底）")
+        return None
+    try:
+        alive = client.exists(key) == 1
+    except Exception:
+        logger.warning("[SessionGuard] 会话键查询异常，跳过（网关层兜底）", exc_info=True)
+        return None
+
+    if alive:
+        return None
+    if _session_guard_mode() == "enforce":
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Unauthorized",
+                     "detail": "未认证：会话已失效（登出或被强制下线），请重新登录"},
+        )
+    logger.warning("[SessionGuard] audit 放行已失效会话: userId=%s jti=%s…",
+                   payload.get("userId"), str(payload.get("jti"))[:8])
 
 
 # 在首次加载模块时打印一次状态

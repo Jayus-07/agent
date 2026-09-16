@@ -4,6 +4,7 @@
 本模块封装惰性 import + 状态查询，避免启动时强制加载所有依赖。
 """
 import hmac
+import os
 import threading
 from dataclasses import dataclass
 
@@ -219,10 +220,17 @@ class OperatorIdentity:
       JWT 用户为 `user:<X-User-Id>`——该头由网关验签后注入（enforce 下不可
       伪造，信任边界=网络边界：app:8000 不对外暴露），与早期「直连可伪造」
       的前提已不同。
+    - kind（2026-09-16 方案 A）：user（JWT 通道，网关验签注入）|
+      service（API Key / 内部令牌凭据）。**JWT 是唯一用户身份来源**——
+      敏感端点治理只认 kind，不再逐处解析 actor 字符串前缀。
     """
 
     role: str
     actor: str
+
+    @property
+    def kind(self) -> str:
+        return "user" if self.actor.startswith("user:") else "service"
 
 
 _KNOWN_ROLES = ("viewer", "editor", "admin")
@@ -259,3 +267,71 @@ async def resolve_operator_role(request: Request) -> OperatorIdentity:
             return OperatorIdentity(role=role, actor=f"user:{ident.user_id}")
     await require_internal_token(request)
     return OperatorIdentity(role="admin", actor="service:internal-token")
+
+
+# ── 敏感端点统一守卫（2026-09-16 方案 A）──────────────────────
+#
+# 规则下沉：JWT 是唯一用户身份来源，API Key / 内部令牌一律映射 service
+# 身份，敏感端点只认 kind == "user"。此前该规则散落在各路由自带的守卫里
+# （如 observability.require_admin_operator 以 actor 字符串前缀判定），
+# 本依赖是收敛后的唯一实现，新敏感端点一律挂它。
+#
+# 灰度开关 SENSITIVE_API_GUARD_MODE（与 observability 既有开关同源）：
+#   audit   —— 规则生效但仅记日志不拦截（灰度观察 1-2 周）
+#   enforce —— 拦截 service 身份请求，403
+# 切换方式：.env 设 SENSITIVE_API_GUARD_MODE=enforce 后重启 app 容器。
+
+
+async def require_user_actor(request: Request):
+    """敏感端点统一依赖：仅允许 actor.kind == "user"（JWT 通道）通过。
+
+    不限角色——角色门槛（如 admin）由调用方在本依赖之后叠加判断
+    （operator.role）。audit 模式放行 service 请求但记 warning，
+    enforce 模式 403（错误体与 observability 既有守卫同构）。
+    """
+    ident = await resolve_operator_role(request)
+    if ident.kind == "user":
+        return ident
+    mode = os.getenv("SENSITIVE_API_GUARD_MODE", "enforce").strip().lower()
+    if mode == "audit":
+        logger.warning(
+            "[SensitiveGuard] audit 放行 service 身份访问敏感端点: "
+            f"actor={ident.actor} role={ident.role}"
+        )
+        return ident
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "Forbidden",
+            "message": "敏感端点仅限 JWT 用户身份访问；"
+                       "API Key / 内部令牌属服务间凭据，不映射用户身份",
+        },
+    )
+
+
+async def require_admin_user(request: Request):
+    """敏感端点统一依赖（管理员档）：kind == "user" 且 role == admin。
+
+    语义与 observability.require_admin_operator 等价，作为收敛后的
+    统一实现提供；observability 迁移本依赖前两者并存（行为一致）。
+    kind 门槛由 require_user_actor 处理（audit 下会先记一次 service
+    放行日志），这里只叠加角色判定。
+    """
+    ident = await require_user_actor(request)
+    if ident.role == "admin":
+        return ident
+    mode = os.getenv("SENSITIVE_API_GUARD_MODE", "enforce").strip().lower()
+    if mode == "audit":
+        logger.warning(
+            "[SensitiveGuard] audit 放行非管理员访问敏感端点: "
+            f"actor={ident.actor} role={ident.role}"
+        )
+        return ident
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "Forbidden",
+            "message": "该端点仅限管理员（role=admin）访问；"
+                       "服务级凭据通道不可访问",
+        },
+    )

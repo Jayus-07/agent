@@ -37,6 +37,7 @@ from backend.security.local_jwt import (
     issue_access_token,
     new_refresh_token,
     token_ttl_seconds,
+    verify_access_token,
     verify_password,
 )
 from backend.infra.redis.client import get_redis
@@ -95,6 +96,50 @@ def _blacklist_access(token: str) -> bool:
         return False
 
 
+def _write_session(issued: dict) -> bool:
+    """登录/刷新后写会话键 auth:session:{userId}:{jti}（TTL=token 剩余有效期）。
+
+    方案 A 会话闸的写侧：键存在 = token 处于"已签发且未吊销"状态。
+    尽力而为：Redis 不可用时记 warning（audit 灰度期无影响；enforce 前必须
+    确认 Redis 稳定，否则该 token 会被网关会话闸拒绝——黑名单通道本就
+    fail-closed，Redis 稳定性是同一前提）。
+    """
+    jti = issued.get("jti")
+    if not jti:
+        return False
+    client = get_redis()
+    if client is None:
+        logger.warning("[local-auth] Redis 不可用，会话键未写入（jti=%s…，enforce 下该 token 将被拒）",
+                       jti[:8])
+        return False
+    try:
+        ttl = max(1, int(issued["exp"]) - int(time.time()))
+        client.set(f"auth:session:{issued.get('userId')}:{jti}", "1", ex=ttl)
+        return True
+    except Exception:
+        logger.warning("[local-auth] 会话键写入异常", exc_info=True)
+        return False
+
+
+def _revoke_session(token: str) -> None:
+    """logout 时删除会话键（尽力而为；键不存在/Redis 不可用均静默——
+    黑名单已兜底，本函数只是让会话闸立即生效，不等黑名单 TTL）。"""
+    payload = verify_access_token(token)
+    if not payload:
+        return
+    from backend.security.local_jwt import session_key
+    key = session_key(payload)
+    if not key:
+        return
+    client = get_redis()
+    if client is None:
+        return
+    try:
+        client.delete(key)
+    except Exception:
+        logger.warning("[local-auth] 会话键删除异常", exc_info=True)
+
+
 # ── /auth/login ──────────────────────────────────────────────
 
 @router.post("/login")
@@ -114,6 +159,7 @@ async def login(request: Request, response: Response):
     issued = issue_access_token(user_id=row["id"], username=row["username"],
                                 dept=row["dept"], device_id=device_id,
                                 roles=[row["role"]])
+    _write_session(issued)
     raw_refresh, token_hash = new_refresh_token()
     async with _db() as session:
         await session.execute(text(
@@ -164,6 +210,7 @@ async def refresh(request: Request, response: Response):
 
     issued = issue_access_token(user_id=row["user_id"], username=row["username"],
                                 dept=row["dept"], roles=[row["role"]])
+    _write_session(issued)
     response.set_cookie(value=raw_new, **_COOKIE_KWARGS)
     return _result({"token": issued["token"], "refreshToken": None,
                     "tokenType": "Bearer", "expiresIn": issued["expiresIn"],
@@ -177,6 +224,7 @@ async def logout(request: Request, response: Response):
     authz = request.headers.get("authorization") or ""
     token = authz[7:].strip() if authz[:7].lower() == "bearer " else ""
     if token:
+        _revoke_session(token)   # 会话闸：立即删键（方案 A）
         _blacklist_access(token)
     raw = request.cookies.get("refresh_token")
     if raw:

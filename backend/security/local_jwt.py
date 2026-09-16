@@ -54,23 +54,38 @@ def _b64url_decode(data: str) -> bytes:
 def issue_access_token(*, user_id: int, username: str, dept: str = "",
                        device_id: str = "", roles: list[str] | None = None,
                        ttl_seconds: int = _ACCESS_TTL_SECONDS) -> dict:
-    """签发 access token。返回 {token, expiresIn(ms), exp}。
+    """签发 access token。返回 {token, expiresIn(ms), exp, jti}。
 
     roles：角色数组（viewer/editor/admin，来源 auth.users.role，对齐
     prompts.py::_check_permission 权限矩阵）。写入 payload["roles"] 供
     前端 resolve_operator_role() 单点消费（2026-09-15 跨会话协同 §5.1）。
+
+    jti（2026-09-16 方案 A）：令牌唯一标识，签发方据此写 Redis 会话键
+    `auth:session:{userId}:{jti}`（TTL=本 token 有效期）；网关/后端校验
+    "签名有效且会话存在"——登出删键即全链路即时失效，不再等 TTL。
     """
     now = int(time.time())
     exp = now + ttl_seconds
+    jti = secrets.token_hex(16)
     payload = {"userId": user_id, "username": username, "dept": dept,
                "roles": roles or ["viewer"],
                "type": "access", "deviceId": device_id,
-               "iss": _ISSUER, "iat": now, "exp": exp}
+               "iss": _ISSUER, "iat": now, "exp": exp, "jti": jti}
     header = {"alg": "HS512", "typ": "JWT"}
     signing_input = (_b64url(json.dumps(header).encode()) + "." +
                      _b64url(json.dumps(payload).encode()))
     sig = _b64url(hmac.new(_secret().encode(), signing_input.encode(), hashlib.sha512).digest())
-    return {"token": f"{signing_input}.{sig}", "expiresIn": ttl_seconds * 1000, "exp": exp}
+    return {"token": f"{signing_input}.{sig}", "expiresIn": ttl_seconds * 1000,
+            "exp": exp, "jti": jti, "userId": str(user_id)}
+
+
+def session_key(payload: dict[str, Any]) -> str | None:
+    """由已验签的 payload 构造会话键。缺 jti/userId（旧令牌）返回 None。"""
+    uid = payload.get("userId")
+    jti = payload.get("jti")
+    if not uid or not jti:
+        return None
+    return f"auth:session:{uid}:{jti}"
 
 
 def verify_access_token(token: str) -> dict[str, Any] | None:
