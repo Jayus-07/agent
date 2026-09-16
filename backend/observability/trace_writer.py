@@ -1,7 +1,7 @@
 """异步 Trace 写入队列 — Redis Streams 优先，本地 queue 降级。
 
 TraceCollector.finish() 的数据质量处理（leaked span 关闭、status 聚合等）
-仍在调用线程同步完成；此模块只接管后续的持久化步骤（Langfuse + SQLite +
+仍在调用线程同步完成；此模块只接管后续的持久化步骤（SQLite +
 Analytics），将阻塞 I/O 从请求路径移入后台 worker。
 
 Redis 可用时：XADD → stream `agent:trace:write`，worker XREAD 批量消费。
@@ -185,14 +185,9 @@ class TraceWriteQueue:
         return batch
 
     def _flush_batch(self, batch: list[tuple[dict, tuple]]) -> None:
-        """将一批 trace 持久化到 Langfuse + SQLite + Analytics。"""
+        """将一批 trace 持久化到 SQLite + Analytics。"""
         for data, stores in batch:
             trace_store, analytics_store = stores
-            try:
-                from backend.observability.langfuse_exporter import get_langfuse_exporter
-                get_langfuse_exporter().export_trace_dict(data)
-            except Exception:
-                logger.warning("[TraceWriter] Langfuse 上报失败", exc_info=True)
             try:
                 trace_store.save_dict(data)
             except Exception:

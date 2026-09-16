@@ -254,10 +254,19 @@ class TestTracerFallback:
 
     @pytest.fixture
     def collector(self, tmp_path, monkeypatch):
-        """exporter 关闭 + 临时 SQLite 的独立 collector。"""
+        """exporter 关闭 + 临时 SQLite + 本地队列的独立 collector。
+
+        必须强制走本地 queue：Redis 真流（agent:trace:write）里有后端容器的
+        生产 trace 消息，且队列 _last_id 从 "0" 起读，worker 会把整条生产
+        backlog 消费进 tmp store，造成数据污染与时序 flaky（2026-09-16 实测）。
+        """
         monkeypatch.setenv("LANGFUSE_ENABLED", "false")
         lf_mod._exporter = None  # 重置单例
         c = TraceCollector()
+        from backend.observability.trace_writer import get_trace_write_queue
+        q = get_trace_write_queue()
+        monkeypatch.setattr(q, "_use_redis", False)
+        monkeypatch.setattr(q, "_redis", None)
         ts_mod._trace_store = TraceStore(db_path=str(tmp_path / "t.db"))
         yield c
         c.clear_for_test()
@@ -285,8 +294,12 @@ class TestTracerFallback:
         assert d is not None
         assert len(d["spans"]) == 3
 
-    def test_list_prefers_langfuse_when_enabled(self, collector):
-        """exporter 开启且有数据时，list 不走 SQLite。"""
+    def test_list_ignores_langfuse_even_when_enabled(self, collector):
+        """Langfuse 已下线（2026-09-16）：即使 exporter 开启且有数据，
+        list 也只读 SQLite trace_store，不再走 Langfuse。"""
+        rec = _mk_record()
+        collector.finish(rec, "七天无理由退货", 1500, "qwen-plus")
+        _flush()
         fake = [{"id": "lf-only", "question": "q", "duration_ms": 10,
                  "status": "success"}]
         fake_ex = LangfuseExporter(host="http://x", public_key="pk",
@@ -296,4 +309,4 @@ class TestTracerFallback:
                 with patch.object(type(fake_ex), "enabled",
                                   new_callable=lambda: property(lambda self: True)):
                     rows = collector.list(10)
-        assert rows and rows[0]["id"] == "lf-only"
+        assert rows and rows[0]["id"] == "t-lf-001"

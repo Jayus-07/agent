@@ -536,7 +536,7 @@ class TraceCollector:
         if _current_trace_var.get() is record:
             _current_trace_var.set(parent)
 
-        # Phase 3: 异步持久化（Langfuse + SQLite + Analytics 由后台 worker 批量写入）
+        # Phase 3: 异步持久化（SQLite + Analytics 由后台 worker 批量写入）
         try:
             from backend.observability.trace_writer import get_trace_write_queue
             get_trace_write_queue().enqueue(record)
@@ -551,7 +551,7 @@ class TraceCollector:
     # =====================================================
 
     def list(self, limit: int = 50, include_spans: bool = False) -> list[TraceRecord | dict]:
-        """最近 N 条 trace（Langfuse 主查询，SQLite 降级兜底）。
+        """最近 N 条 trace（SQLite trace_store 直读）。
 
         Args:
             limit: 最多返回条数
@@ -559,30 +559,12 @@ class TraceCollector:
                           用于测试断言。False 时返回 dict 列表（不含 spans 详情），
                           用于 API 列表渲染。
         """
-        from backend.observability.langfuse_exporter import get_langfuse_exporter
         from backend.observability.trace_store import get_trace_store
         try:
             store = get_trace_store()
         except Exception:
             store = None
 
-        # Langfuse 优先
-        exporter = get_langfuse_exporter()
-        if exporter.enabled:
-            rows = exporter.list_traces(limit)
-            if rows or store is None:
-                if not include_spans:
-                    return rows
-                records = []
-                for r in rows:
-                    rid = r.get("id") or r.get("trace_id")
-                    if not rid:
-                        continue
-                    full = exporter.get_trace(rid) or r
-                    records.append(self._dict_to_record(full))
-                return records
-
-        # 降级：SQLite
         try:
             rows = store.list(limit) if store else []
             if not include_spans:
@@ -634,19 +616,13 @@ class TraceCollector:
         return _current_trace_var.get() or self._thread_current
 
     def compute_metrics(self) -> dict:
-        """聚合统计（Langfuse 优先，SQLite 降级；含真实延迟分位数）。"""
-        from backend.observability.langfuse_exporter import get_langfuse_exporter
-        exporter = get_langfuse_exporter()
-        stored: list[dict] = []
-        if exporter.enabled:
-            stored = exporter.list_traces(200)
-        if not stored:
-            try:
-                from backend.observability.trace_store import get_trace_store
-                stored = get_trace_store().list(200)
-            except Exception:
-                logger.warning("trace 持久化存储查询失败", exc_info=True)
-                stored = []
+        """聚合统计（SQLite trace_store 直读；含真实延迟分位数）。"""
+        try:
+            from backend.observability.trace_store import get_trace_store
+            stored: list[dict] = get_trace_store().list(200)
+        except Exception:
+            logger.warning("trace 持久化存储查询失败", exc_info=True)
+            stored = []
         active = len(self.list_active())
         total = len(stored) + active
         completed = [r for r in stored if r.get("duration_ms", 0) > 0]
@@ -676,16 +652,7 @@ class TraceCollector:
         }
 
     def get(self, trace_id: str):
-        """获取单条 trace（Langfuse 优先，SQLite 兜底）。返回 dict 或 None。"""
-        try:
-            from backend.observability.langfuse_exporter import get_langfuse_exporter
-            exporter = get_langfuse_exporter()
-            if exporter.enabled:
-                data = exporter.get_trace(trace_id)
-                if data is not None:
-                    return data
-        except Exception:
-            logger.debug("Langfuse trace 详情查询失败: %s", trace_id, exc_info=True)
+        """获取单条 trace（SQLite trace_store 直读）。返回 dict 或 None。"""
         try:
             from backend.observability.trace_store import get_trace_store
             return get_trace_store().get(trace_id)
