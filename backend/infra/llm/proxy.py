@@ -70,15 +70,34 @@ _request_model_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
 
 
 def set_request_model(model: str) -> None:
-    """设置当前请求的模型覆盖。空串清除；非法模型名忽略（回退全局 LLM_MODEL）。"""
+    """设置当前请求的模型覆盖。空串清除；非法模型名忽略（回退全局 LLM_MODEL）。
+
+    校验口径与 LLMFactory.set_current 对齐（2026-09-16）：
+    除注册表外，还校验 provider API Key 与 cloud 模式 Ollama 禁用——
+    否则配置缺失要拖到首次 invoke 才暴露（401/构建异常）。
+    """
     model = (model or "").strip()
     if not model:
         _request_model_var.set("")
         return
-    from backend.infra.llm.models import AVAILABLE_MODELS
+    import os
+
+    from backend.infra.llm.models import AVAILABLE_MODELS, PROVIDER_API_KEY_ENV
     if model not in {m["name"] for m in AVAILABLE_MODELS}:
         logger.warning(f"[LLM:proxy] 忽略非法模型覆盖: {model} "
                        f"(可用: {[m['name'] for m in AVAILABLE_MODELS]})")
+        _request_model_var.set("")
+        return
+    provider = _get_provider_for(model)
+    key_env = PROVIDER_API_KEY_ENV.get(provider)
+    if key_env and not os.getenv(key_env, "").strip():
+        logger.warning(f"[LLM:proxy] 忽略模型覆盖 {model}: {key_env} 未配置 "
+                       f"(回退全局 {get_active_model_name()})")
+        _request_model_var.set("")
+        return
+    if provider == "ollama" and not OLLAMA_ENABLED:
+        logger.warning(f"[LLM:proxy] 忽略模型覆盖 {model}: "
+                       f"ENV_MODE=cloud 已禁用本地 Ollama (回退全局 {get_active_model_name()})")
         _request_model_var.set("")
         return
     _request_model_var.set(model)

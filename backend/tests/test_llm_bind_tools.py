@@ -113,3 +113,32 @@ class TestWrapResultPreservesToolCalls:
         assert out.content == "正文"
         assert out.tool_calls[0]["name"] == "report__generate"
         assert out.tool_calls[0]["args"] == {"report_type": "daily_sales"}
+
+
+class TestSetRequestModelValidation:
+    """set_request_model 校验口径（2026-09-16 对齐 set_current）：
+
+    未注册 / provider Key 缺失 / cloud 禁 Ollama → 忽略覆盖并回退全局。
+    """
+
+    def teardown_method(self):
+        proxy_mod._request_model_var.set("")
+
+    def test_unregistered_model_ignored(self):
+        proxy_mod.set_request_model("nonexistent-model-xyz")
+        assert proxy_mod._request_model_var.get() == ""
+
+    def test_missing_provider_key_ignored(self, monkeypatch):
+        monkeypatch.delenv("VLLM_API_KEY", raising=False)
+        proxy_mod.set_request_model("Qwen/Qwen3-32B-AWQ")  # provider=vllm
+        assert proxy_mod._request_model_var.get() == ""
+
+    def test_valid_model_with_key_accepted(self, monkeypatch):
+        monkeypatch.setenv("QWEN_TP_API_KEY", "sk-sp-test")
+        proxy_mod.set_request_model("qwen3.7-plus@tp")
+        assert proxy_mod._request_model_var.get() == "qwen3.7-plus@tp"
+
+    def test_ollama_disabled_in_cloud_ignored(self, monkeypatch):
+        monkeypatch.setattr(proxy_mod, "OLLAMA_ENABLED", False)
+        proxy_mod.set_request_model("qwen2.5:3b")
+        assert proxy_mod._request_model_var.get() == ""
