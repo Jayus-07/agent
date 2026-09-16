@@ -107,11 +107,11 @@ services:
       # 显式注入容器内地址，优先级高于 .env 的宿主值（与 REDIS_URL 同策略）
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      # Kafka（事件发布，默认关闭保证向后兼容）
-      - KAFKA_ENABLED=${KAFKA_ENABLED:-true}
+      # Kafka（事件发布，默认关闭；需要 WhatsApp/Java 闭环时在 .env 设 true）
+      - KAFKA_ENABLED=${KAFKA_ENABLED:-false}
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       # Kafka 入站消费者（WhatsApp 闭环：webhook → 本消费者 → agent.ask → ai.reply.events）
-      - KAFKA_CONSUMER_ENABLED=${KAFKA_CONSUMER_ENABLED:-true}
+      - KAFKA_CONSUMER_ENABLED=${KAFKA_CONSUMER_ENABLED:-false}
       # 客服模块（意图路由/转人工/确认态，.env 中 CS_ENABLED 控制）
       - CS_ENABLED=${CS_ENABLED:-true}
       # 旅游域图（行程规划，.env 中 TRAVEL_ENABLED 控制；checkpointer 走
