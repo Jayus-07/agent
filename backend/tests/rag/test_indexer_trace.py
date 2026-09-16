@@ -15,6 +15,7 @@ import pytest
 
 from backend.rag.indexing.indexer import IncrementalIndexer
 import backend.rag.indexing.indexer as indexer_mod
+import backend.rag.indexing.stages.embedding_stage as embed_stage_mod
 from backend.observability.tracer import (
     trace_collector,
     TraceCollector,
@@ -35,7 +36,7 @@ async def _stub_doc_metadata(self, full_text, base_meta, parent_span_id="", chun
 def _zero_embed_backoff(monkeypatch):
     """重试退避清零：本文件多条用例走「重试耗尽→降级」失败路径，
     生产退避 1.5^n（5 次 ≈12s/批）会真实 sleep，拖慢全量但不增加覆盖。"""
-    monkeypatch.setattr(indexer_mod, "EMBED_RETRY_BACKOFF_BASE", 0.0)
+    monkeypatch.setattr(embed_stage_mod, "EMBED_RETRY_BACKOFF_BASE", 0.0)
     monkeypatch.setattr(indexer_mod.IncrementalIndexer, "_build_doc_metadata",
                         _stub_doc_metadata)
 
@@ -267,7 +268,7 @@ class TestFailurePaths:
         ]
         assert len(chunk_error_spans) >= 1
         # 重试上限来自配置（EMBED_RETRY_MAX，默认 5，可环境变量覆盖）
-        from backend.rag.indexing.indexer import EMBED_RETRY_MAX
+        from backend.rag.indexing.stages.embedding_stage import EMBED_RETRY_MAX
         assert chunk_error_spans[0].retry_count == EMBED_RETRY_MAX
         assert "error" in chunk_error_spans[0].metrics
 

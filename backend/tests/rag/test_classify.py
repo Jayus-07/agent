@@ -69,8 +69,13 @@ def test_close_call_arbitration_includes_runner_up(monkeypatch):
     # _LLMProxy 是 __slots__ 动态代理，无法 patch 实例属性 → 整体替换模块级 llm
     monkeypatch.setattr(md, "llm", _FakeLLM())
     # 阈值放宽确保触发仲裁分支（验证候选集构成而非具体分差）
-    monkeypatch.setattr(md, "_ARBITRATION_THRESHOLD", 100)
-    result = md.classify_doc_type(text, filename="采购流程.docx")
+    # 阶段1 改造：阈值收口至 config/indexing_rules，用 override_rules 运行时覆盖
+    from backend.config.indexing_rules import override_rules, reset_rules_override
+    override_rules(arbitration_score_gap=100)
+    try:
+        result = md.classify_doc_type(text, filename="采购流程.docx")
+    finally:
+        reset_rules_override()
 
     assert "prompt" in invoked, "分差接近时必须触发 LLM 仲裁"
     assert "sop" in invoked["prompt"], "次名 sop 必须进入仲裁候选"

@@ -262,7 +262,7 @@ services:
     build: .
     command:
       ["celery", "-A", "backend.workers.agent_worker", "worker",
-       "--loglevel=info", "-Q", "agent",
+       "--loglevel=info", "-Q", "agent,rag_index",
        "--concurrency=${CELERY_WORKER_CONCURRENCY:-4}",
        "-n", "agent-worker@%h"]
     env_file:

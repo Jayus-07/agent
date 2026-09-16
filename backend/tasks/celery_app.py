@@ -20,6 +20,7 @@ celery_app = Celery(
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
     include=["backend.tasks.agent_tasks",     # Worker 启动自动注册任务模块
+             "backend.tasks.index_tasks",     # 阶段4：RAG 上传索引队列化任务
              "backend.tasks.signals"],        # 运行时埋点（worker/queue/耗时/异常）
 )
 
@@ -49,6 +50,8 @@ celery_app.conf.update(
     enable_utc=True,
 
     # ── 路由：agent 任务专用队列（水平扩展时按队列扩 Worker）──
+    # 阶段4：RAG 上传索引独立队列（索引吃内存/模型，与 agent 图任务隔离扩缩容）
     task_default_queue="agent",
-    task_routes={"tasks.execute_agent": {"queue": "agent"}},
+    task_routes={"tasks.execute_agent": {"queue": "agent"},
+                 "tasks.execute_index": {"queue": "rag_index"}},
 )

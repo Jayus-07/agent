@@ -1,22 +1,26 @@
-"""Reranker Module - CrossEncoder + DashScope API Integration
+"""Reranker Module - CrossEncoder + Cloud API Integration
 
-P0 架构重构 (ENV_MODE 双模式):
-1. ENV_MODE=cloud   → Cloud Reranker (DashScope qwen3-rerank)
-2. ENV_MODE=local   → Local Reranker (BGE CrossEncoder)
+P0 架构重构 (双模式):
+1. RERANK_PROVIDER=cloud → Cloud Reranker (DashScope qwen3-rerank / SiliconFlow bge-reranker)
+2. RERANK_PROVIDER=local → Local Reranker (BGE CrossEncoder)
 3. RERANK_MODEL 配置动态化 (默认 qwen3-rerank)
 4. Token Tracker 记录用量，Local 模式无法获取 usage 时 total_tokens=null
 
+RERANK_PROVIDER 留空时跟随 ENV_MODE（向后兼容）。
+
 架构特性:
 - 懒加载：本地模型仅在首次调用时加载
-- 强制模式：根据 ENV_MODE 选择后端，不自动降级
+- 强制模式：根据 RERANK_PROVIDER 选择后端，不自动降级
 - 统一接口：返回值始终为 list[tuple[Document, float]]
 - 可观测性：完整日志追踪 backend_type、评分详情
 
 配置环境变量:
-- ENV_MODE: "cloud" (默认) | "local"
+- RERANK_PROVIDER: "cloud" | "local"（留空跟随 ENV_MODE）
+- ENV_MODE: "cloud" (默认) | "local"（全局兜底）
 - RERANK_MODEL: "qwen3-rerank" (Cloud 模式)
-- RERANKER_MODEL_PATH: "BAAI/bge-reranker-base" (Local 模式)
-- DASHSCOPE_API_KEY: Cloud 模式必需
+- RERANK_API_FORMAT: "dashscope" | "jina"（Cloud 模式协议）
+- RERANKER_MODEL_PATH: 本地 CrossEncoder 模型路径 (Local 模式)
+- DASHSCOPE_API_KEY / RERANK_API_KEY: Cloud 模式必需
 - RERANK_TIMEOUT: API 超时阈值 (秒)，默认 5
 - RERANK_TOP_K: 返回文档数，默认 8
 - RERANK_SCORE_THRESHOLD: 分数过滤阈值，默认 0.3
@@ -46,7 +50,10 @@ if TYPE_CHECKING:
 from langchain_core.documents.compressor import BaseDocumentCompressor
 from backend.config import (
     ENV_MODE,
+    RERANK_PROVIDER,
     RERANK_MODEL,
+    RERANK_API_FORMAT,
+    RERANK_BASE_URL,
     RERANKER_MODEL_PATH,
     RERANK_SCORE_THRESHOLD,
     RERANK_TIMEOUT,
@@ -95,27 +102,45 @@ class LocalModelLoader:
 
 
 # ═══════════════════════════════════════════════════════════
-# DashScope Reranker - API Backend
+# Cloud Reranker - API Backend (dashscope | jina 双协议)
 # ═══════════════════════════════════════════════════════════
 
-_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
+# 两种协议的默认 base / 路径：
+#   dashscope → 阿里云百炼原生 REST（qwen3-rerank）
+#   jina      → Jina 兼容 /rerank（SiliconFlow 的 bge-reranker-v2-m3 等）
+_DEFAULT_RERANK_BASE = {
+    "dashscope": "https://dashscope.aliyuncs.com/api/v1",
+    "jina": "https://api.siliconflow.cn/v1",
+}
 _DASHSCOPE_RERANK_PATH = "/services/rerank/text-rerank/text-rerank"
+_JINA_RERANK_PATH = "/rerank"
+
+def _resolve_rerank_base() -> str:
+    """Rerank base URL 解析：RERANK_BASE_URL > DASHSCOPE_API_BASE(兼容旧env) > 协议默认值"""
+    return (os.getenv("RERANK_BASE_URL")
+            or os.getenv("DASHSCOPE_API_BASE")
+            or _DEFAULT_RERANK_BASE.get(RERANK_API_FORMAT, _DEFAULT_RERANK_BASE["dashscope"]))
 
 class DashScopeReranker(BaseDocumentCompressor):
-    """阿里云 DashScope Reranker API 实现（直接 HTTP，无需 dashscope SDK）
+    """云端 Reranker API 实现（直接 HTTP，无需 dashscope SDK）
 
-    使用 requests 直接调用 DashScope 原生 REST API，避免 SDK 的全局状态污染。
+    支持两种协议（RERANK_API_FORMAT env 切换）：
+    - dashscope: {"model","input":{...},"parameters":{...}} → output.results
+    - jina:      {"model","query","documents","top_n"}      → results（扁平结构）
+
     需要标准 API Key（sk-ws-）；Token Plan（sk-sp-）不支持 rerank 端点。
-    
+
     P0: 模型名从 RERANK_MODEL 配置读取，不再硬编码
     """
 
     def __init__(self, api_key: str, timeout: int = 5):
         if not api_key:
-            raise RuntimeError("DashScopeReranker 需要 DASHSCOPE_API_KEY")
+            raise RuntimeError("云端 Reranker 需要 DASHSCOPE_API_KEY（dashscope）或 RERANK_API_KEY（jina）")
 
-        base_url = os.getenv("DASHSCOPE_API_BASE", _DASHSCOPE_BASE_URL).rstrip("/")
-        endpoint = base_url + _DASHSCOPE_RERANK_PATH
+        base_url = _resolve_rerank_base().rstrip("/")
+        endpoint = base_url + (
+            _DASHSCOPE_RERANK_PATH if RERANK_API_FORMAT == "dashscope" else _JINA_RERANK_PATH
+        )
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -128,8 +153,8 @@ class DashScopeReranker(BaseDocumentCompressor):
         self.__dict__['_last_total_tokens'] = 0
 
         logger.info(
-            f"初始化 DashScope Reranker HTTP "
-            f"(model={RERANK_MODEL}, endpoint={base_url}, timeout={timeout}s)"
+            f"初始化 Cloud Reranker HTTP "
+            f"(format={RERANK_API_FORMAT}, model={RERANK_MODEL}, endpoint={base_url}, timeout={timeout}s)"
         )
 
     def rank(self, query: str, documents: list[str], top_k: int = 8) -> list[tuple[int, float]]:
@@ -138,17 +163,27 @@ class DashScopeReranker(BaseDocumentCompressor):
         Returns:
             list[tuple[int, float]]: (index, relevance_score) 列表，score 已在 0-1 区间
         """
-        payload = {
-            "model": RERANK_MODEL,  # P0: 动态模型名
-            "input": {
+        if RERANK_API_FORMAT == "jina":
+            # Jina 兼容格式（SiliconFlow / TEI / jina rerank）
+            payload = {
+                "model": RERANK_MODEL,
                 "query": query,
                 "documents": documents,
-            },
-            "parameters": {
                 "top_n": top_k,
-                "return_documents": False,
-            },
-        }
+            }
+        else:
+            # DashScope 原生格式
+            payload = {
+                "model": RERANK_MODEL,  # P0: 动态模型名
+                "input": {
+                    "query": query,
+                    "documents": documents,
+                },
+                "parameters": {
+                    "top_n": top_k,
+                    "return_documents": False,
+                },
+            }
 
         last_err: Exception | None = None
         for attempt in range(2):  # 一次网络抖动不该直接损失整轮排序质量，最多重试 1 次
@@ -166,7 +201,10 @@ class DashScopeReranker(BaseDocumentCompressor):
                     )
 
                 data = resp.json()
-                results = data.get("output", {}).get("results", [])
+                # dashscope: output.results / jina: results（字段名 index、relevance_score 一致）
+                results = (data.get("output", {}).get("results")
+                           if RERANK_API_FORMAT == "dashscope"
+                           else data.get("results")) or []
                 scored = [(r["index"], r["relevance_score"]) for r in results]
 
                 raw_tokens = data.get("usage", {}).get("total_tokens", 0)
@@ -245,7 +283,7 @@ class DashScopeReranker(BaseDocumentCompressor):
             get_llm_usage_store().record({
                 "component": "rerank",
                 "model": RERANK_MODEL,
-                "provider": "dashscope",
+                "provider": RERANK_API_FORMAT,
                 "prompt_tokens": total_tokens,
                 "completion_tokens": 0,
                 "total_tokens": total_tokens,
@@ -394,8 +432,8 @@ def _get_tracker() -> "TokenTracker":
     if _reranker_tracker is None:
         _reranker_tracker = create_tracker_for_rerank(
             log_path=str(Path(TOKEN_USAGE_LOG_PATH).expanduser().resolve()),
-            model_name=RERANK_MODEL if ENV_MODE == "cloud" else RERANKER_MODEL_PATH,
-            backend=ENV_MODE,
+            model_name=RERANK_MODEL if RERANK_PROVIDER == "cloud" else RERANKER_MODEL_PATH,
+            backend=RERANK_PROVIDER,
         )
     return _reranker_tracker
 
@@ -403,23 +441,28 @@ def _get_tracker() -> "TokenTracker":
 def get_reranker_backend() -> BaseDocumentCompressor:
     """
     获取 reranker 后端实例 (工厂函数，P0 架构重构)
-    
+
     P0 选择逻辑:
-      - ENV_MODE=cloud   → DashScopeReranker (强制，API key 错误时抛异常)
-      - ENV_MODE=local   → LocalCrossEncoderBackend
-    
+      - RERANK_PROVIDER=cloud → DashScopeReranker (强制，API key 错误时抛异常)
+      - RERANK_PROVIDER=local → LocalCrossEncoderBackend
+      - RERANK_PROVIDER 留空时跟随 ENV_MODE（向后兼容）
+
     关键约束:
       - 不根据 API key 存在与否自动降级
-      - Cloud 模式下 DASHSCOPE_API_KEY 缺失时明确报错
+      - Cloud 模式下 API key 缺失时明确报错
       - Token Tracker 记录用量
     """
-    if ENV_MODE == "cloud":
-        # Cloud 模式：强制使用 DashScope，缺少 API Key 时明确报错
-        api_key = os.getenv("DASHSCOPE_API_KEY")
+    if RERANK_PROVIDER == "cloud":
+        # Cloud 模式：强制使用云端 API，缺少 API Key 时明确报错
+        # dashscope 格式用 DASHSCOPE_API_KEY；jina 格式优先 RERANK_API_KEY
+        # （SiliconFlow 等），未设则回退 DASHSCOPE_API_KEY
+        api_key = (os.getenv("RERANK_API_KEY")
+                   if RERANK_API_FORMAT == "jina" else None) or os.getenv("DASHSCOPE_API_KEY")
         if not api_key:
             raise RuntimeError(
-                "Cloud 模式需要 DASHSCOPE_API_KEY，请在 .env 中设置.\n"
-                "或设置 ENV_MODE=local 使用本地 BGE Reranker."
+                "Cloud 模式需要 DASHSCOPE_API_KEY（dashscope 格式）"
+                "或 RERANK_API_KEY（jina 格式，如 SiliconFlow），请在 .env 中设置.\n"
+                "或设置 RERANK_PROVIDER=local（或 ENV_MODE=local）使用本地 BGE Reranker."
             )
         logger.info(f"[Reranker] Cloud 模式初始化完成 (model={RERANK_MODEL})")
         return DashScopeReranker(api_key=api_key, timeout=RERANK_TIMEOUT)

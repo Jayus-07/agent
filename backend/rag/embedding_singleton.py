@@ -1,11 +1,13 @@
 """Embedding 模型全局单例 — 双模式 (Cloud/Local) + Token Tracking.
 
 架构设计 (P0 - 硬性约束):
-1. ENV_MODE=cloud → Cloud Embedding (OpenAIEmbeddings via DashScope)
-2. ENV_MODE=local → Local Embedding (HuggingFaceEmbeddings)
+1. EMBEDDING_PROVIDER=cloud → Cloud Embedding (OpenAIEmbeddings，DashScope/SiliconFlow 等)
+2. EMBEDDING_PROVIDER=local → Local Embedding (HuggingFaceEmbeddings)
 3. Cloud 模式必须校验 EMBEDDING_API_KEY，不存在时明确报错
 4. 禁止 Cloud 配置错误时静默降级到 Local
 5. Token Tracker 记录用量，Local 模式无法获取 usage 时 total_tokens=null
+
+EMBEDDING_PROVIDER 留空时跟随 ENV_MODE（向后兼容）。
 
 用法:
     from backend.rag.embedding_singleton import get_embedding
@@ -25,10 +27,12 @@ from langchain_core.embeddings import Embeddings
 
 from backend.config import (
     ENV_MODE,
+    EMBEDDING_PROVIDER,
     EMBEDDING_MODEL,
     EMBEDDING_API_BASE,
     EMBEDDING_API_KEY,
     EMBEDDING_MODEL_PATH,
+    EMBEDDING_BATCH_SIZE,
     TOKEN_USAGE_LOG_PATH,
 )
 from backend.infra.token_tracker import create_tracker_for_embedding
@@ -44,7 +48,7 @@ def _get_cloud_embedding() -> Embeddings:
     if not EMBEDDING_API_KEY:
         raise RuntimeError(
             "Cloud 模式需要 EMBEDDING_API_KEY，请在 .env 中设置.\n"
-            "或设置 ENV_MODE=local 使用本地 BGE 模型."
+            "或设置 EMBEDDING_PROVIDER=local（或 ENV_MODE=local）使用本地 BGE 模型."
         )
     
     try:
@@ -63,10 +67,10 @@ def _get_cloud_embedding() -> Embeddings:
         # list of str"，导致启动时全量索引重建失败（chroma 0 embeddings）。
         # 关闭本地分词后直接发原文。
         check_embedding_ctx_length=False,
-        # DashScope text-embedding-v3 单次请求最多 10 条文本，
-        # 默认 chunk_size=1000 会把全部 chunk 一把发出，触发
-        # 400 "batch size ... should not be larger than 10"。
-        chunk_size=10,
+        # 单次请求携带的文本条数（EMBEDDING_BATCH_SIZE，默认 10）：
+        # DashScope text-embedding-v3 上限 10；换 SiliconFlow / TEI 时可
+        # 在 .env 调大到 32+ 提速索引。
+        chunk_size=EMBEDDING_BATCH_SIZE,
     )
     
     logger.info(
@@ -105,13 +109,13 @@ class _TrackedEmbedding(Embeddings):
     def __init__(self, inner: Embeddings, tracker):
         self._inner = inner
         self._tracker = tracker
-        self._model_name = EMBEDDING_MODEL if ENV_MODE == "cloud" else EMBEDDING_MODEL_PATH
-        self._provider = "dashscope" if ENV_MODE == "cloud" else "local"
+        self._model_name = EMBEDDING_MODEL if EMBEDDING_PROVIDER == "cloud" else EMBEDDING_MODEL_PATH
+        self._provider = "dashscope" if EMBEDDING_PROVIDER == "cloud" else "local"
         # 单次 embed_documents 调用的最优文本条数，供索引链路取批大小：
         # cloud 模式受 DashScope 单请求上限约束（外层攒 32 条会被
         # OpenAIEmbeddings 内部再拆 10+10+10+2，白多 3 次 RTT），直接取上限；
         # local 模式批推理走矩阵运算，维持配置批大小。
-        if ENV_MODE == "cloud":
+        if EMBEDDING_PROVIDER == "cloud":
             from backend.config.rag import EMBED_REQUEST_LIMIT
             self.embed_batch_size = max(1, EMBED_REQUEST_LIMIT)
         else:
@@ -186,41 +190,45 @@ def _init_tracker():
     if _tracker is None:
         _tracker = create_tracker_for_embedding(
             log_path=str(Path(TOKEN_USAGE_LOG_PATH).expanduser().resolve()),
-            model_name=EMBEDDING_MODEL if ENV_MODE == "cloud" else EMBEDDING_MODEL_PATH,
-            backend=ENV_MODE,
+            model_name=EMBEDDING_MODEL if EMBEDDING_PROVIDER == "cloud" else EMBEDDING_MODEL_PATH,
+            backend=EMBEDDING_PROVIDER,
         )
     return _tracker
 
 
 def get_embedding() -> Embeddings:
     """获取共享的 embedding 模型实例（线程安全单例）。
-    
-    根据 ENV_MODE 自动选择 Cloud/Local 后端:
-      - ENV_MODE=cloud   → OpenAIEmbeddings (DashScope)
-      - ENV_MODE=local   → HuggingFaceEmbeddings (BGE)
-    
+
+    根据 EMBEDDING_PROVIDER 自动选择 Cloud/Local 后端:
+      - EMBEDDING_PROVIDER=cloud → OpenAIEmbeddings（DashScope/SiliconFlow 等）
+      - EMBEDDING_PROVIDER=local → HuggingFaceEmbeddings (BGE)
+    留空 EMBEDDING_PROVIDER 时跟随 ENV_MODE（向后兼容）。
+
     返回：
         Embeddings: LangChain Embeddings 接口
-    
+
     抛出:
         RuntimeError: Cloud 模式下缺少 EMBEDDING_API_KEY
     """
     global _embedding
-    
+
     if _embedding is None:
         with _lock:
             if _embedding is None:
-                # 根据 ENV_MODE 选择后端
-                if ENV_MODE == "cloud":
+                # 根据 EMBEDDING_PROVIDER 选择后端
+                if EMBEDDING_PROVIDER == "cloud":
                     base_embedding = _get_cloud_embedding()
                 else:
                     base_embedding = _get_local_embedding()
-                
+
                 # 包装为带 Token Tracker 的版本
                 tracker = _init_tracker()
                 _embedding = _TrackedEmbedding(base_embedding, tracker)
-                
-                logger.info(f"[Embedding] 全局单例创建完成 (mode={ENV_MODE}, tracking=True)")
+
+                logger.info(
+                    f"[Embedding] 全局单例创建完成 "
+                    f"(provider={EMBEDDING_PROVIDER}, env_mode={ENV_MODE}, tracking=True)"
+                )
     
     return _embedding
 

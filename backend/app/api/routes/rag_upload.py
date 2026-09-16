@@ -280,6 +280,7 @@ def cleanup_expired_progress_queues() -> int:
                if getattr(q, "_created_at", 0) < now - PROGRESS_QUEUE_TTL_SECONDS]
     for uid in expired:
         _progress_queues.pop(uid, None)
+        _celery_routed.discard(uid)
     if expired:
         logger.info(f"[RAG] 清理过期进度队列 {len(expired)} 个")
     return len(expired)
@@ -641,8 +642,8 @@ async def _finalize_upload_queue(upload_id: str) -> None:
             logger.warning(f"[RAG] queue.put(None) 失败 ({upload_id}): {put_err}")
 
 
-async def _cleanup_failed_upload(filepath: str, was_overwrite: bool = False) -> None:
-    """索引失败后删除已落盘文件，避免孤儿文档被后续扫描重新索引。
+def _cleanup_failed_upload_sync(filepath: str, was_overwrite: bool = False) -> None:
+    """索引失败后删除已落盘文件（同步核心，Celery Worker 侧复用）。
 
     Args:
         filepath: 上传后落盘的目标路径。
@@ -668,6 +669,11 @@ async def _cleanup_failed_upload(filepath: str, was_overwrite: bool = False) -> 
             logger.info(f"[RAG] 已清理索引失败文件: {filepath}")
     except OSError as exc:
         logger.warning(f"[RAG] 索引失败文件清理失败 {filepath}: {exc}")
+
+
+async def _cleanup_failed_upload(filepath: str, was_overwrite: bool = False) -> None:
+    """异步包装（兼容既有调用方）；实现见 _cleanup_failed_upload_sync。"""
+    _cleanup_failed_upload_sync(filepath, was_overwrite=was_overwrite)
 
 
 def _write_progress_redis(upload_id: str, stage: str, message: str = "", **extra) -> None:
@@ -715,6 +721,124 @@ def _get_index_semaphore() -> asyncio.Semaphore:
     return _index_semaphore
 
 
+def _settle_index_result(upload_id: str, filepath: str, filename: str, source: str,
+                         batch_id: str | None, kb_id: str,
+                         upload_elapsed_ms: int | None, was_overwrite: bool,
+                         upload_t0: float, result: dict | None, emit_fn,
+                         exc: BaseException | None = None) -> None:
+    """索引终态收口 —— API 进程内与 Celery Worker 两条路径的统一出口（阶段4）。
+
+    emit_fn: 同步事件发射器 (stage, message, **extra)。
+      - API 进程内模式 = 进程内 queue.put_nowait + Redis 镜像
+      - Celery Worker 模式 = 仅 Redis 镜像（跨进程，SSE 轮询消费）
+    exc: 非 None 走失败分支（ChunkingEmptyError 保留源文件，其余清理）。
+    队列 None 哨兵不在本函数处理 —— API 模式调用方负责 _finalize_upload_queue；
+    Worker 模式无队列概念（SSE 由 Redis 轮询，见 stream_upload_progress）。
+
+    行为与拆分前 _run_index_background 的三个终态分支逐行等价
+    （duplicate / done / error），仅 emit 从 await queue.put 改为
+    put_nowait（asyncio.Queue 无界，语义一致）。
+    """
+    from backend.rag.progress_listener import ProgressListener
+
+    # ---- 失败终态 ----
+    if exc is not None:
+        logger.error(f"[RAG] 后台索引失败: {exc}")
+        # 任务状态收口：parsing 占位行 → failed（否则启动恢复会反复重试）
+        _mark_registry_failed(filepath)
+        # P1-4:ChunkingEmptyError 是业务失败(扫描件/结构损坏),保留源文件供排查;
+        #      其它异常按孤儿文件处理逻辑清理
+        from backend.rag.indexing.indexer import ChunkingEmptyError
+        duration_ms = int((time.time() - upload_t0) * 1000) + (upload_elapsed_ms or 0)
+        if isinstance(exc, ChunkingEmptyError):
+            emit_fn("error", f"索引失败:{exc}（源文件已保留,请检查文档内容或解析器兼容性）",
+                    error_type="chunking_empty", recoverable=True)
+            _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
+                         result="failed", duration_ms=duration_ms,
+                         detail={"error": str(exc)[:200], "error_type": "chunking_empty"})
+        else:
+            _cleanup_failed_upload_sync(filepath, was_overwrite=was_overwrite)
+            emit_fn("error", str(exc))
+            _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
+                         result="failed", duration_ms=duration_ms,
+                         detail={"error": str(exc)[:200]})
+        return
+
+    result = result or {}
+    terminal = result.get("terminal", "done")
+    # span_id → 前端 stage 键的统一映射（终态阶段耗时使用同一规则）
+    _SPAN_STAGE_KEY = ProgressListener.SPAN_STAGE_KEY
+
+    # ---- duplicate 终态 ----
+    if terminal == "duplicate":
+        duplicate_doc = result.get("doc") or {}
+        stage_elapsed = result.get("stage_elapsed") or {}
+        # 用真实上传耗时覆盖（duplicate 跳过索引，后端算的 uploading 没意义）
+        if upload_elapsed_ms is not None:
+            stage_elapsed["uploading"] = upload_elapsed_ms
+        total_ms = (upload_elapsed_ms or 0) + int((time.time() - upload_t0) * 1000)
+        emit_fn("duplicate", "文件已存在，未重复索引",
+                doc=duplicate_doc, trace_id="", stage_elapsed=stage_elapsed, total_ms=total_ms)
+        _remove_bak(filepath)  # 内容未变,旧版本备份无保留价值
+        _safe_log_op(
+            duplicate_doc.get("doc_id", ""), filename, "upload", source,
+            trace_id="", batch_id=batch_id, result="duplicate",
+            duration_ms=total_ms,
+            detail={"duplicate": True, "chunk_count": duplicate_doc.get("chunk_count", 0)},
+        )
+        return
+
+    # ---- 成功终态：按 path 直接拿刚索引的文档 ----
+    new_doc = None
+    try:
+        reg = _get_registry()
+        new_doc = reg.get_by_path(filepath)
+        # 终态携带完整阶段耗时（来自后端 span duration_ms），覆盖前端累加
+        raw_elapsed = result.get("stage_elapsed") or {}
+        # span_id 转为前端 stage 键（如 index_chunk → chunking）
+        stage_elapsed: dict[str, int] = {}
+        for sid, ms in raw_elapsed.items():
+            stage_key = _SPAN_STAGE_KEY.get(sid, sid)
+            stage_elapsed[stage_key] = int(ms)
+        # 优先用 sync_upload_impl 实测的上传耗时；缺失时回退到减法逻辑（向后兼容）
+        index_elapsed_ms = int((time.time() - upload_t0) * 1000)
+        total_ms = index_elapsed_ms + (upload_elapsed_ms or 0)
+        if upload_elapsed_ms is not None:
+            stage_elapsed["uploading"] = upload_elapsed_ms
+        elif "uploading" not in stage_elapsed:
+            others = sum(v for k, v in stage_elapsed.items() if k != "uploading")
+            stage_elapsed["uploading"] = max(total_ms - others, 0)
+        emit_fn("done", "索引完成", doc=new_doc,
+                trace_id=result.get("trace_id") or "",
+                stage_elapsed=stage_elapsed,
+                total_ms=total_ms)
+        _remove_bak(filepath)  # 新版本已确认入库,清理覆盖备份
+        # Phase 4: 文档变更后失效该 KB 的答案缓存（避免返回过时答案）
+        try:
+            from backend.rag.answer_cache import get_answer_cache
+            get_answer_cache().invalidate_kb(kb_id)
+        except Exception as cache_err:
+            logger.debug(f"[RAG] 答案缓存失效失败（非致命）: {cache_err}")
+    except Exception as e:
+        emit_fn("done", "索引完成（文档信息获取失败）")
+        logger.warning(f"[RAG] 获取入库文档信息失败: {e}")
+
+    _safe_log_op(
+        (new_doc or {}).get("doc_id", ""), filename, "upload", source,
+        trace_id=result.get("trace_id") or None,
+        batch_id=batch_id, result="success",
+        duration_ms=int((time.time() - upload_t0) * 1000),
+        detail={
+            "chunk_count": result.get("chunk_count", 0),
+            "file_hash": result.get("file_hash", ""),
+            "duplicate": False,
+            "doc_type": (new_doc or {}).get("doc_type", "general"),
+            "llm_used": bool((new_doc or {}).get("llm_used", False)),
+            "confidence": (new_doc or {}).get("confidence", 0),
+        },
+    )
+
+
 async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general", upload_elapsed_ms: int | None = None, was_overwrite: bool = False):
     """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志。
 
@@ -723,6 +847,10 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
     total_ms 改为 upload_elapsed_ms + 后台索引耗时（端到端总耗时）。
 
     was_overwrite: P0-X 上传是否覆盖了已有同名文件。True 时 cleanup 不能删源文件。
+
+    Celery 队列化（固定主路径）：索引任务投递 Celery（rag_index 队列）由
+    Worker 执行，终态经 _settle_index_result 写 Redis 镜像（SSE 由 Redis
+    轮询通道消费）；入队失败（broker 不可达）自动回退进程内执行。
     """
     queue = _progress_queues.get(upload_id)
     if queue is None:
@@ -734,7 +862,38 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
         # Redis 写盘是同步网络 IO，放线程池执行，避免 Redis 慢时阻塞事件循环
         await asyncio.to_thread(_write_progress_redis, upload_id, stage, message, **extra)
 
+    # 同步发射器：终态收口（_settle_index_result）与 Celery 分流共用。
+    # queue.put_nowait 对无界 asyncio.Queue 与 await put 语义一致。
+    def emit_fn(stage: str, message: str = "", **extra):
+        if queue is not None:
+            queue.put_nowait({"stage": stage, "message": message, **extra})
+        _write_progress_redis(upload_id, stage, message, **extra)
+
     _upload_t0 = time.time()
+
+    # ── Celery 队列化分流（固定主路径，无开关）──
+    try:
+        from backend.tasks.index_tasks import execute_index_task
+        from backend.config.tasks import CELERY_RAG_INDEX_QUEUE
+        execute_index_task.apply_async(kwargs=dict(
+            upload_id=upload_id, filepath=filepath, filename=filename,
+            kb_id=kb_id, department=department, source=source,
+            batch_id=batch_id, upload_elapsed_ms=upload_elapsed_ms,
+            was_overwrite=was_overwrite,
+        ), queue=CELERY_RAG_INDEX_QUEUE)
+        # 打标必须在发任何事件之前：SSE 队列模式每轮检查此标记，
+        # 看到即切换 Redis 轮询通道消费 Worker 事件（跨进程队列收不到）
+        _celery_routed.add(upload_id)
+        await emit("uploading", f"文件 {filename} 已保存，索引任务已入队（Celery Worker 执行）")
+        # 终态由 Worker 写 Redis 进度镜像；本进程队列不再有后续事件
+        # （SSE 订阅切换 Redis 轮询通道；队列残留由定时 GC 回收）
+        return
+    except Exception as enqueue_err:
+        # broker 不可达：可用性优先，回退本进程索引（与 task_manager 503 语义对齐）
+        logger.warning(f"[RAG] Celery 入队失败，回退进程内索引: {enqueue_err}")
+        _celery_routed.discard(upload_id)
+        await emit("uploading", "索引队列暂不可用，已切换为本机索引")
+
     result = None
     try:
         await emit("uploading", f"文件 {filename} 已保存，开始索引")
@@ -751,101 +910,18 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
             result = await loop.run_in_executor(
                 None, _do_index_sync, upload_id, filepath, filename, loop, kb_id, department)
     except Exception as e:
-        logger.error(f"[RAG] 后台索引失败: {e}")
-        # 任务状态收口：parsing 占位行 → failed（否则启动恢复会反复重试）
-        _mark_registry_failed(filepath)
-        # P1-4:ChunkingEmptyError 是业务失败(扫描件/结构损坏),保留源文件供排查;
-        #      其它异常按孤儿文件处理逻辑清理
-        from backend.rag.indexing.indexer import ChunkingEmptyError
-        if isinstance(e, ChunkingEmptyError):
-            await emit("error", f"索引失败:{e}（源文件已保留,请检查文档内容或解析器兼容性）",
-                       error_type="chunking_empty", recoverable=True)
-            _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
-                         result="failed", duration_ms=int((time.time() - _upload_t0) * 1000) + (upload_elapsed_ms or 0),
-                         detail={"error": str(e)[:200], "error_type": "chunking_empty"})
-        else:
-            await _cleanup_failed_upload(filepath, was_overwrite=was_overwrite)
-            await emit("error", str(e))
-            _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
-                         result="failed", duration_ms=int((time.time() - _upload_t0) * 1000) + (upload_elapsed_ms or 0),
-                         detail={"error": str(e)[:200]})
+        _settle_index_result(
+            upload_id, filepath, filename, source, batch_id, kb_id,
+            upload_elapsed_ms, was_overwrite, _upload_t0,
+            result=None, emit_fn=emit_fn, exc=e)
         await _finalize_upload_queue(upload_id)
         return
 
-    terminal = (result or {}).get("terminal", "done")
-    # span_id → 前端 stage 键的统一映射（终态阶段耗时使用同一规则）
-    _SPAN_STAGE_KEY = ProgressListener.SPAN_STAGE_KEY
-    if terminal == "duplicate":
-        duplicate_doc = (result or {}).get("doc") or {}
-        stage_elapsed = (result or {}).get("stage_elapsed") or {}
-        # 用真实上传耗时覆盖（duplicate 跳过索引，后端算的 uploading 没意义）
-        if upload_elapsed_ms is not None:
-            stage_elapsed["uploading"] = upload_elapsed_ms
-        total_ms = (upload_elapsed_ms or 0) + int((time.time() - _upload_t0) * 1000)
-        await emit("duplicate", "文件已存在，未重复索引",
-                   doc=duplicate_doc, trace_id="", stage_elapsed=stage_elapsed, total_ms=total_ms)
-        _remove_bak(filepath)  # 内容未变,旧版本备份无保留价值
-        await _finalize_upload_queue(upload_id)
-        _safe_log_op(
-            duplicate_doc.get("doc_id", ""), filename, "upload", source,
-            trace_id="", batch_id=batch_id, result="duplicate",
-            duration_ms=total_ms,
-            detail={"duplicate": True, "chunk_count": duplicate_doc.get("chunk_count", 0)},
-        )
-        return
-
-    # 成功终态：按 path 直接拿刚索引的文档
-    new_doc = None
-    try:
-        reg = _get_registry()
-        new_doc = reg.get_by_path(filepath)
-        # 终态携带完整阶段耗时（来自后端 span duration_ms），覆盖前端累加
-        raw_elapsed = (result or {}).get("stage_elapsed") or {}
-        # span_id 转为前端 stage 键（如 index_chunk → chunking）
-        stage_elapsed: dict[str, int] = {}
-        for sid, ms in raw_elapsed.items():
-            stage_key = _SPAN_STAGE_KEY.get(sid, sid)
-            stage_elapsed[stage_key] = int(ms)
-        # 优先用 sync_upload_impl 实测的上传耗时；缺失时回退到减法逻辑（向后兼容）
-        index_elapsed_ms = int((time.time() - _upload_t0) * 1000)
-        total_ms = index_elapsed_ms + (upload_elapsed_ms or 0)
-        if upload_elapsed_ms is not None:
-            stage_elapsed["uploading"] = upload_elapsed_ms
-        elif "uploading" not in stage_elapsed:
-            others = sum(v for k, v in stage_elapsed.items() if k != "uploading")
-            stage_elapsed["uploading"] = max(total_ms - others, 0)
-        await emit("done", "索引完成", doc=new_doc,
-                   trace_id=(result or {}).get("trace_id") or "",
-                   stage_elapsed=stage_elapsed,
-                   total_ms=total_ms)
-        _remove_bak(filepath)  # 新版本已确认入库,清理覆盖备份
-        # Phase 4: 文档变更后失效该 KB 的答案缓存（避免返回过时答案）
-        try:
-            from backend.rag.answer_cache import get_answer_cache
-            get_answer_cache().invalidate_kb(kb_id)
-        except Exception as cache_err:
-            logger.debug(f"[RAG] 答案缓存失效失败（非致命）: {cache_err}")
-    except Exception as e:
-        await emit("done", "索引完成（文档信息获取失败）")
-        logger.warning(f"[RAG] 获取入库文档信息失败: {e}")
-    finally:
-        await _finalize_upload_queue(upload_id)
-
-    _safe_log_op(
-        (new_doc or {}).get("doc_id", ""), filename, "upload", source,
-        trace_id=(result or {}).get("trace_id") or None,
-        batch_id=batch_id, result="success",
-        duration_ms=int((time.time() - _upload_t0) * 1000),
-        detail={
-            "chunk_count": (result or {}).get("chunk_count", 0),
-            "file_hash": (result or {}).get("file_hash", ""),
-            "duplicate": False,
-            "doc_type": (new_doc or {}).get("doc_type", "general"),
-            "llm_used": bool((new_doc or {}).get("llm_used", False)),
-            "confidence": (new_doc or {}).get("confidence", 0),
-        },
-    )
-
+    _settle_index_result(
+        upload_id, filepath, filename, source, batch_id, kb_id,
+        upload_elapsed_ms, was_overwrite, _upload_t0,
+        result=result, emit_fn=emit_fn)
+    await _finalize_upload_queue(upload_id)
 
 def _remove_bak(filepath: str) -> None:
     """索引成功终态清理覆盖上传的 .bak 备份。
@@ -964,6 +1040,99 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
 
 
 
+# ── 阶段4：Celery 模式下的 SSE Redis 轮询通道 ──────────────────
+# 进度权威 = Redis Hash {REDIS_KEY_PREFIX}upload:{upload_id}
+# （_write_progress_redis 镜像，跨进程可查）。Worker 与 API 分属不同
+# 进程，进程内队列里没有 Worker 的事件，SSE 必须改为轮询 Redis。
+_SSE_REDIS_POLL_SECONDS = float(os.getenv("RAG_SSE_REDIS_POLL_SECONDS", "0.5"))
+_SSE_REDIS_POLL_MAX_SECONDS = float(os.getenv("RAG_SSE_REDIS_POLL_MAX_SECONDS", "1900"))
+_SSE_REDIS_EMPTY_GRACE_POLLS = 20   # 连续无镜像判定过期（20 × 0.5s = 10s）
+_SSE_TERMINAL_STAGES = ("done", "error", "duplicate")
+_SSE_KEEPALIVE_EVERY_N_POLLS = 60   # 无变化时每 30s 一条 keepalive
+
+# 已成功入队 Celery 的 upload_id（进程内标记）。SSE 通道以此做上传级路由：
+# 命中 → Redis 轮询通道（Worker 在另一进程，进程内队列没有它的事件）；
+# 未命中 → 进程内队列模式（含入队失败回退本机索引的场景）。
+# 队列模式消费循环每轮复查该标记，入队成功后无缝切换，无路由竞态。
+_celery_routed: set = set()
+
+
+def _read_progress_redis(upload_id: str) -> dict | None:
+    """读 Redis 进度镜像并还原为事件 dict（{stage, message, **extra}）。
+
+    Redis 不可用 / 键不存在返回 None（调用方区分「暂时还没有」与「过期」
+    靠连续空轮询计数，不靠单次 None）。
+    """
+    import json as _json
+    try:
+        from backend.infra.redis.client import get_redis
+        r = get_redis()
+        if r is None:
+            return None
+        from backend.config.redis import REDIS_KEY_PREFIX
+        data = r.hgetall(f"{REDIS_KEY_PREFIX}upload:{upload_id}")
+        if not data:
+            return None
+        evt: dict = {"stage": data.get("stage", ""),
+                     "message": data.get("message", "")}
+        try:
+            detail = _json.loads(data.get("detail") or "{}")
+            if isinstance(detail, dict):
+                evt.update(detail)
+        except Exception:
+            pass
+        return evt
+    except Exception:
+        return None
+
+
+async def _redis_poll_events(upload_id: str, last_sig: str | None = None):
+    """Celery 模式 SSE 事件源：轮询 Redis 进度镜像直到终态（async 生成器）。
+
+    last_sig: 切换通道前已推送的最后一条事件签名，避免跨通道重复推送。
+    事件格式与队列模式完全一致（_sse_encode("message", evt)），前端零感知。
+    """
+    empty_polls = 0
+    unchanged_polls = 0
+    deadline = asyncio.get_running_loop().time() + _SSE_REDIS_POLL_MAX_SECONDS
+    while True:
+        evt = await asyncio.to_thread(_read_progress_redis, upload_id)
+        if evt is None:
+            empty_polls += 1
+            if empty_polls >= _SSE_REDIS_EMPTY_GRACE_POLLS:
+                yield _sse_encode("error", {"message": f"upload_id {upload_id} 不存在或已过期"})
+                return
+            await asyncio.sleep(_SSE_REDIS_POLL_SECONDS)
+            continue
+        empty_polls = 0
+        import json as _json
+        sig = _json.dumps(evt, sort_keys=True, ensure_ascii=False, default=str)
+        if sig != last_sig:
+            last_sig = sig
+            unchanged_polls = 0
+            yield _sse_encode("message", evt)
+            if evt.get("stage") in _SSE_TERMINAL_STAGES:
+                return
+        else:
+            unchanged_polls += 1
+            if unchanged_polls >= _SSE_KEEPALIVE_EVERY_N_POLLS:
+                unchanged_polls = 0
+                yield ": keepalive\n\n"
+        if asyncio.get_running_loop().time() > deadline:
+            yield _sse_encode("error", {"message": "索引进度轮询超时（任务可能仍在后台执行）"})
+            return
+        await asyncio.sleep(_SSE_REDIS_POLL_SECONDS)
+
+
+def _redis_poll_stream_response(upload_id: str, last_sig: str | None = None):
+    """Celery 模式 SSE：包装 _redis_poll_events 为 StreamingResponse。"""
+    async def event_stream():
+        async for chunk in _redis_poll_events(upload_id, last_sig=last_sig):
+            yield chunk
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 @router.get("/upload/{upload_id}/stream")
 async def stream_upload_progress(upload_id: str):
     """SSE 订阅：实时推送上传 + 索引进度。
@@ -972,7 +1141,16 @@ async def stream_upload_progress(upload_id: str):
       stage  → {stage: uploading|parsing|chunking|embedding|writing|done|error, message}
       done   → 包含 doc 信息
       error  → 索引失败
+
+    通道路由（上传级，按 _celery_routed 标记）：
+      已入队 Celery → Redis 轮询通道（Worker 在另一进程，进程内队列没有它的事件）；
+      未入队 → 进程内队列模式。队列模式消费循环每轮复查标记，
+      入队成功后无缝切换 Redis 轮询（携带 last_sig 去重）。
+      入队失败回退本机索引时标记不会出现，全程队列模式。
     """
+    if upload_id in _celery_routed:
+        return _redis_poll_stream_response(upload_id)
+
     queue = _progress_queues.get(upload_id)
     if queue is None:
         async def not_found():
@@ -980,8 +1158,14 @@ async def stream_upload_progress(upload_id: str):
         return StreamingResponse(not_found(), media_type="text/event-stream")
 
     async def event_stream():
+        last_sig: str | None = None
         try:
             while True:
+                # Celery 入队成功（后台任务与 SSE 并发竞速）→ 切 Redis 轮询
+                if upload_id in _celery_routed:
+                    async for chunk in _redis_poll_events(upload_id, last_sig=last_sig):
+                        yield chunk
+                    return
                 try:
                     evt = await asyncio.wait_for(
                         queue.get(), timeout=SSE_KEEPALIVE_TIMEOUT_SECONDS)
@@ -994,6 +1178,8 @@ async def stream_upload_progress(upload_id: str):
                     break
                 # 关键：保留 stage 字段在 data 中 — 前端 onmessage 解析 payload.stage
                 # _sse_encode 的 event 参数（stage）不再用作 SSE event name（无 event: 字段）
+                import json as _json
+                last_sig = _json.dumps(evt, sort_keys=True, ensure_ascii=False, default=str)
                 yield _sse_encode("message", evt)
         finally:
             # SSE 断开 → 清理队列（防内存泄漏）

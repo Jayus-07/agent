@@ -71,23 +71,26 @@ class TestRerankCompressorFallback:
 
 class TestBackendFactoryFallback:
     def test_factory_selects_by_env_mode(self, monkeypatch):
-        """工厂按 ENV_MODE 单一维度选择后端（P0 契约：不按 SDK 可用性降级）。
+        """工厂按 RERANK_PROVIDER 维度选择后端（P0 契约：不按 SDK 可用性降级）。
 
         旧测试断言"SDK 缺失自动降级 Local"，与 P0 重构后的设计契约相悖
         （见 get_reranker_backend docstring："不根据 API key 存在与否自动降级"），
         已按现行契约重写。
+
+        2026-09-16：RERANK_PROVIDER 从 ENV_MODE 解耦（留空跟随 ENV_MODE），
+        工厂改按 RERANK_PROVIDER 选择。
         """
         from backend.rag import reranker as mod
 
-        # cloud 模式 → DashScope，即使 SDK 标记缺失也不静默降级
-        monkeypatch.setattr(mod, "ENV_MODE", "cloud")
+        # cloud → 云端 Reranker，即使 SDK 标记缺失也不静默降级
+        monkeypatch.setattr(mod, "RERANK_PROVIDER", "cloud")
         monkeypatch.setattr(mod, "DASHSCOPE_AVAILABLE", False)
         monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
         backend = mod.get_reranker_backend()
         assert isinstance(backend, mod.DashScopeReranker)
 
-        # local 模式 → Local CrossEncoder（mock 权重加载避免真实加载）
-        monkeypatch.setattr(mod, "ENV_MODE", "local")
+        # local → Local CrossEncoder（mock 权重加载避免真实加载）
+        monkeypatch.setattr(mod, "RERANK_PROVIDER", "local")
         monkeypatch.setattr(
             mod.LocalModelLoader, "get_instance", staticmethod(lambda: object())
         )

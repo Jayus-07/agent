@@ -12,6 +12,7 @@ import pytest
 from langchain_core.documents import Document
 
 import backend.rag.indexing.indexer as indexer_mod
+import backend.rag.indexing.stages.embedding_stage as embed_stage_mod
 from backend.rag.indexing.indexer import IncrementalIndexer
 
 
@@ -29,9 +30,13 @@ def _chunks(n):
 
 @pytest.fixture
 def patched(monkeypatch):
-    """小批大小 + mock trace_collector，避免真实 span 落库。"""
-    monkeypatch.setattr(indexer_mod, "EMBED_BATCH_SIZE", 2)
-    monkeypatch.setattr(indexer_mod, "trace_collector", MagicMock())
+    """小批大小 + mock trace_collector，避免真实 span 落库。
+
+    阶段3拆分后 embedding 实现迁至 stages/embedding_stage.py，
+    常量与 trace_collector 的 patch 目标随实现迁移。
+    """
+    monkeypatch.setattr(embed_stage_mod, "EMBED_BATCH_SIZE", 2)
+    monkeypatch.setattr(embed_stage_mod, "trace_collector", MagicMock())
     # 禁用 embedding Redis 缓存：EmbeddingCache 默认连真实 Redis（TTL 30 天），
     # 而本文件用例的嵌入对象无 model_name → 前缀 rag:emb:unknown:*。
     # 不禁用的话，上一轮跑成功的用例会把向量写进 Redis，下一轮直接缓存命中、
@@ -39,7 +44,7 @@ def patched(monkeypatch):
     monkeypatch.setattr("backend.config.rag.RAG_EMBED_CACHE_ENABLED", False)
     # 退避清零：重试耗尽路径照常被测到，但不再真等 1.5^n 秒
     # （5 次指数退避 ≈12s/批，曾让 2 个降级用例干等 43 秒）。
-    monkeypatch.setattr(indexer_mod, "EMBED_RETRY_BACKOFF_BASE", 0.0)
+    monkeypatch.setattr(embed_stage_mod, "EMBED_RETRY_BACKOFF_BASE", 0.0)
     return monkeypatch
 
 
@@ -95,7 +100,7 @@ class TestBatchFallback:
 
         vecs = idx._embed_with_retry(_chunks(2), parent_span=None)
         assert len(vecs) == 2
-        assert emb.embed_documents.call_count == indexer_mod.EMBED_RETRY_MAX
+        assert emb.embed_documents.call_count == embed_stage_mod.EMBED_RETRY_MAX
         assert emb.embed_query.call_count == 2
 
     def test_single_chunk_failure_isolated(self, patched):
@@ -113,8 +118,8 @@ class TestBatchFallback:
 
         vecs = idx._embed_with_retry(_chunks(2), parent_span=None)
         assert vecs == [[9.9]], "失败 chunk 的向量不能混入成功列表"
-        # 失败 chunk 记录了 error span（trace_collector 已 mock）
-        tc = indexer_mod.trace_collector
+        # 失败 chunk 记录了 error span（trace_collector 已 mock，随实现迁至 embedding_stage）
+        tc = embed_stage_mod.trace_collector
         assert tc.start_span.called
         assert tc.end_span.called
 

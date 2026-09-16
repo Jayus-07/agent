@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
 
-from backend.config import DEEPSEEK_API_KEY, LLM_MODEL, MINIMAX_API_KEY, QWEN_API_KEY
+from backend.config import DEEPSEEK_API_KEY, LLM_MODEL, MINIMAX_API_KEY, QWEN_API_KEY, QWEN_TP_API_KEY, VLLM_API_KEY
 from backend.config.llm import OLLAMA_ENABLED
 from backend.infra.llm.models import AVAILABLE_MODELS
 from backend.shared.logger import logger
@@ -76,6 +76,10 @@ class LLMFactory:
             return {"ok": False, "error": "MINIMAX_API_KEY 未配置，请在 .env 中设置"}
         if provider == "qwen" and not QWEN_API_KEY:
             return {"ok": False, "error": "QWEN_API_KEY 未配置，请在 .env 中设置"}
+        if provider == "qwen_tp" and not QWEN_TP_API_KEY:
+            return {"ok": False, "error": "QWEN_TP_API_KEY 未配置，请在 .env 中设置（sk-sp- 模型包 Key）"}
+        if provider == "vllm" and not VLLM_API_KEY:
+            return {"ok": False, "error": "VLLM_API_KEY 未配置，请在 .env 中设置（deploy.sh 会生成）"}
         # cloud 模式禁用本地 Ollama 模型
         if provider == "ollama" and not OLLAMA_ENABLED:
             return {
@@ -127,6 +131,12 @@ class LLMFactory:
         elif provider == "qwen":
             from backend.infra.llm.providers.qwen import build_qwen
             return build_qwen(model_name)
+        elif provider == "qwen_tp":
+            from backend.infra.llm.providers.qwen_tp import build_qwen_tp
+            return build_qwen_tp(model_name)
+        elif provider == "vllm":
+            from backend.infra.llm.providers.vllm import build_vllm
+            return build_vllm(model_name)
         else:
             raise ValueError(f"未知 provider: {provider}")
 
@@ -166,9 +176,15 @@ class LLMFactory:
         elif provider == "qwen":
             from backend.infra.llm.providers.qwen import get_qwen_balance
             return get_qwen_balance()
+        elif provider == "qwen_tp":
+            from backend.infra.llm.providers.qwen_tp import get_qwen_tp_balance
+            return get_qwen_tp_balance()
         elif provider == "ollama":
             from backend.infra.llm.providers.ollama import get_ollama_balance
             return get_ollama_balance()
+        elif provider == "vllm":
+            from backend.infra.llm.providers.vllm import get_vllm_balance
+            return get_vllm_balance()
         else:
             return {"ok": False, "error": f"不支持的 provider: {provider}"}
 

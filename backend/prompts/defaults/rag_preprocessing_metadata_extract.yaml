@@ -1,0 +1,27 @@
+key: rag.preprocessing.metadata_extract
+name: 文档元数据统一抽取
+category: rag_preprocessing
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: doc_types, required: true, description: 允许的文档类型枚举}
+  - {name: filename, required: true, description: 文件名}
+  - {name: text, required: true, description: 文档内容采样}
+template: |
+  你是电商知识库的文档元数据抽取引擎。请通读文档，一次性输出以下元数据。
+
+  允许的 doc_type 枚举（必须从中选一个，无法判断时选 general）:
+  {doc_types}
+
+  文件名: {filename}
+  文档内容:
+  {text}
+
+  请严格输出如下 JSON（不要 markdown 代码块，不要任何解释文字）:
+  {{"doc_type": "枚举之一",
+    "confidence": 0.0到1.0的小数，表示你对 doc_type 判断的把握,
+    "business_domain": "文档所属业务域（如 after_sale/order/customer/logistics/product/marketing/finance/general 之一或更贴切的单词）",
+    "summary": "不超过120字的文档一句话摘要",
+    "keywords": ["关键词1", "关键词2", "关键词3", "关键词4", "关键词5"],
+    "entities": {{"person": ["人名"], "org": ["组织/公司"], "product": ["产品/SKU"], "regulation": ["法规/制度名"]}},
+    "time_refs": ["文档中提到的具体时间，如 2026年Q3、2026-09-01；没有则为空数组"]}}

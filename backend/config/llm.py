@@ -24,11 +24,43 @@ if ENV_MODE not in ("cloud", "local"):
     )
 
 # =====================================================
+# 嵌入 / 重排独立开关（P0 - 与 ENV_MODE 解耦）
+# =====================================================
+# 空 = 跟随 ENV_MODE（向后兼容，行为与历史版本一致）。
+# 显式设置后可与 LLM 链路混搭，例如本地开发时：
+#   ENV_MODE=cloud（LLM 走 vLLM/在线 API）
+#   EMBEDDING_PROVIDER=local + RERANK_PROVIDER=local（嵌入/重排留本地，索引在本地）
+# ⚠️ 嵌入模型与向量索引强绑定：切换 EMBEDDING_PROVIDER / EMBEDDING_MODEL 后
+#    必须全量重建向量索引（语义空间不同，维度相同也不兼容）。
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "").strip().lower() or ENV_MODE
+RERANK_PROVIDER = os.getenv("RERANK_PROVIDER", "").strip().lower() or ENV_MODE
+if EMBEDDING_PROVIDER not in ("local", "cloud"):
+    raise ValueError(
+        f"EMBEDDING_PROVIDER 必须是 'cloud' 或 'local'（留空跟随 ENV_MODE），"
+        f"当前值为：'{os.getenv('EMBEDDING_PROVIDER')}'"
+    )
+if RERANK_PROVIDER not in ("local", "cloud"):
+    raise ValueError(
+        f"RERANK_PROVIDER 必须是 'cloud' 或 'local'（留空跟随 ENV_MODE），"
+        f"当前值为：'{os.getenv('RERANK_PROVIDER')}'"
+    )
+
+# =====================================================
 # Ollama 本地推理开关（跟随 ENV_MODE）
 # 仅 ENV_MODE=local 时启用本地 Ollama（评测生成/chunk 关键词/RAGAS local 后端）；
 # ENV_MODE=cloud 时所有链路一律走云端 API，不再尝试连接本地 Ollama
 # =====================================================
-OLLAMA_ENABLED = ENV_MODE == "local"
+# Ollama 本地推理开关
+# 留空 = 跟随 ENV_MODE（ENV_MODE=local 启用，向后兼容）；
+# 显式 1/0 可覆盖 —— 混搭场景：ENV_MODE=cloud（LLM 走 vLLM/在线 API）时
+# 仍可用本机 Ollama 跑 chunk 关键词/评测生成/文档元数据抽取等免费小任务
+_OLLAMA_ENABLED_RAW = os.getenv("OLLAMA_ENABLED", "").strip().lower()
+if _OLLAMA_ENABLED_RAW in ("1", "true", "yes"):
+    OLLAMA_ENABLED = True
+elif _OLLAMA_ENABLED_RAW in ("0", "false", "no"):
+    OLLAMA_ENABLED = False
+else:
+    OLLAMA_ENABLED = ENV_MODE == "local"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
 # 模型驻留时长（避免空闲卸载后重载权重的冷启动 TTFT 飙升）；"30m" / "-1"（常驻）
@@ -58,6 +90,11 @@ EMBEDDING_MODEL_PATH = os.getenv(
     "EMBEDDING_MODEL_PATH",
     "BAAI/bge-small-zh-v1.5"  # HuggingFace model name，自动走缓存
 )
+
+# 嵌入批量大小（每次 API 请求携带的文本条数）
+# DashScope text-embedding-v3 上限 10；SiliconFlow / TEI 可调到 32+ 提速。
+# 换嵌入供应商时同步调整此值。
+EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "10"))
 # =====================================================
 # Rerank Configuration (P0 - 动态配置)
 # =====================================================
@@ -65,6 +102,16 @@ EMBEDDING_MODEL_PATH = os.getenv(
 RERANK_MODEL = os.getenv(
     "RERANK_MODEL",
     "qwen3-rerank",  # Cloud 模式默认模型
+)
+
+# Rerank API 协议格式：
+#   dashscope → 阿里云百炼（endpoint = base + /services/rerank/text-rerank/text-rerank）
+#   jina      → Jina 兼容格式（SiliconFlow 等，endpoint = base + /rerank）
+RERANK_API_FORMAT = os.getenv("RERANK_API_FORMAT", "dashscope").strip().lower()
+# Rerank 服务 base URL（不含路径）。默认 DashScope 原生 API；
+# SiliconFlow 示例: https://api.siliconflow.cn/v1
+RERANK_BASE_URL = os.getenv(
+    "RERANK_BASE_URL", "https://dashscope.aliyuncs.com/api/v1"
 )
 
 # Local Reranker 模型路径（仅在 ENV_MODE=local 时使用）
@@ -212,6 +259,21 @@ QWEN_API_KEY = os.getenv("QWEN_API_KEY", "")
 QWEN_API_BASE = os.getenv(
     "QWEN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"
 )
+
+# Qwen Token Plan（模型包/折扣计划，sk-sp- key）独立配置
+# 与标准 API 的差异：端点不同；不支持 rerank 端点（rerank 走 DASHSCOPE_API_KEY）；
+# 余额无查询接口。注册名带 @tp 后缀（如 qwen3.7-plus@tp），构建时剥掉再发 API。
+QWEN_TP_API_KEY = os.getenv("QWEN_TP_API_KEY", "")
+QWEN_TP_API_BASE = os.getenv(
+    "QWEN_TP_API_BASE",
+    "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+)
+
+# vLLM 自托管配置（OpenAI 兼容协议）
+# 服务器部署：vLLM 起 LLM 服务（:8000/v1），TEI 起嵌入/重排服务（:8080）
+# 本地开发经 SSH 隧道连接；API Key 来自 deploy.sh 生成的 VLLM_API_KEY
+VLLM_API_KEY = os.getenv("VLLM_API_KEY", "")
+VLLM_API_BASE = os.getenv("VLLM_API_BASE", "http://localhost:8000/v1")
 
 # ── P1-7: LLM 韧性（重试 + 熔断 fallback）────────────────────
 # 瞬时错误（超时/连接/限流）的显式重试次数（0 = 不重试）

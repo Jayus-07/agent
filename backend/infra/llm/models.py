@@ -36,6 +36,16 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "default_model": "qwen3.7-plus",
         "needs_api_key": True,
     },
+    "qwen_tp": {
+        "class": None,  # Qwen Token Plan（模型包端点，注册名带 @tp 后缀）
+        "default_model": "qwen3.7-plus@tp",
+        "needs_api_key": True,
+    },
+    "vllm": {
+        "class": None,  # 自托管 vLLM（OpenAI 兼容协议），见 providers/vllm.py
+        "default_model": "Qwen/Qwen3-32B-AWQ",
+        "needs_api_key": True,
+    },
 }
 
 
@@ -49,6 +59,14 @@ AVAILABLE_MODELS = [
         "description": "阿里云百炼 Qwen3.7-Plus，OpenAI 兼容协议，需要 API Key",
         "input_price_per_1m": 0.4,
         "output_price_per_1m": 1.2,
+    },
+    {
+        "provider": "qwen_tp",
+        "name": "qwen3.7-plus@tp",
+        "display": "Qwen 3.7 Plus - Token Plan",
+        "description": "阿里云百炼模型包端点（sk-sp- Key），需配置 QWEN_TP_API_KEY",
+        "input_price_per_1m": 0.0,   # 模型包按购买量计费，不走 token 计价
+        "output_price_per_1m": 0.0,
     },
     {
         "provider": "ollama",
@@ -74,6 +92,14 @@ AVAILABLE_MODELS = [
         "input_price_per_1m": 3.0,
         "output_price_per_1m": 15.0,
     },
+    {
+        "provider": "vllm",
+        "name": "Qwen/Qwen3-32B-AWQ",
+        "display": "Qwen3 32B (AWQ) - 自托管",
+        "description": "自托管 vLLM（OpenAI 兼容），需配置 VLLM_API_BASE/VLLM_API_KEY",
+        "input_price_per_1m": 0.0,
+        "output_price_per_1m": 0.0,
+    },
 ]
 
 
@@ -94,7 +120,9 @@ PROVIDER_API_KEY_ENV = {
     "ollama": None,
     "deepseek": "DEEPSEEK_API_KEY",
     "qwen": "QWEN_API_KEY",
+    "qwen_tp": "QWEN_TP_API_KEY",
     "minimax": "MINIMAX_API_KEY",
+    "vllm": "VLLM_API_KEY",
 }
 
 

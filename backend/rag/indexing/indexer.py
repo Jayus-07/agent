@@ -21,8 +21,6 @@ import asyncio
 import hashlib
 import json
 import os
-import random
-import time
 from pathlib import Path
 from typing import Any
 
@@ -34,25 +32,17 @@ from backend.rag.indexing.models import SyncResult, Delta
 from backend.rag.indexing.doc_id import derive_doc_id, parse_kb_dept_subpath_from_path
 from backend.config.rag import (
     BM25_SEARCH_K,
-    EMBED_BATCH_SIZE,
-    EMBED_RETRY_MAX,
-    EMBED_RETRY_BACKOFF_BASE,
-    EMBED_RETRY_BACKOFF_MAX,
 )
 from backend.shared.logger import logger
 from backend.infra.async_utils import run_async as _run_async
 
+# 阶段3 Stage 拆分：元数据/embedding 实现迁至 stages/，本类保留薄委托层
+# （_sample_for_summary 一并迁移，此处 re-export 兼容旧导入路径）
+from backend.rag.indexing.stages.embedding_stage import EmbeddingStage
+from backend.rag.indexing.stages.metadata_stage import MetadataStage, _sample_for_summary  # noqa: F401
+
 # 索引中途崩溃/重启后视为"待恢复"的 registry 状态（任务持久化的 recovery 口径）
 INTERRUPTED_STATUSES = ("uploading", "parsing", "embedding")
-
-
-def _embed_backoff_seconds(attempt: int) -> float:
-    """第 attempt 次重试（0 起）前的退避秒数：指数退避 + 随机抖动。
-
-    抖动防止多文档并发索引时所有批次同拍重试（thundering herd）。
-    """
-    base = min(EMBED_RETRY_BACKOFF_BASE ** (attempt + 1), EMBED_RETRY_BACKOFF_MAX)
-    return base + random.uniform(0, 1.0)
 
 # doc 级全文入库的文本长度上限：doc_db 单条 embedding 超长会被模型截断/报错，
 # 且大文件下内存峰值翻倍；Stage1 doc 级检索只需头部语义信息即可定位文档
@@ -1008,516 +998,67 @@ class IncrementalIndexer:
             "file_hash": file_hash,
         }
 
+    # ---- Stage 委托层（阶段3拆分：实现见 stages/embedding_stage.py）----
+
+    @property
+    def _embed_stage(self) -> EmbeddingStage:
+        """embedding Stage（实例级缓存，跨文件复用 embed cache）。"""
+        st = getattr(self, "_embed_stage_inst", None)
+        if st is None:
+            st = self._embed_stage_inst = EmbeddingStage(self.embedding)
+        return st
+
     @staticmethod
     def _embed_text_for(chunk, doc_summary: str = "") -> str:
-        """构造 embedding 文本：Contextual Prefix + 正文（1.2）。
-
-        三级前缀（字段缺失自动跳过对应段，全缺则纯正文）：
-          1.【文档】文档级摘要前 100 字——contextual retrieval 的零 LLM 版：
-            复用元数据阶段已生成的 summary，为 chunk 补文档级上下文
-          2.【章节】chunk 所属章节标题（切分策略/indexer 章节映射已注入）
-          3.【相关问题】模拟问题（Document Expansion，question_gen 产出）
-        """
-        parts: list[str] = []
-        if doc_summary:
-            parts.append("【文档】" + doc_summary.strip()[:100])
-        section_title = (chunk.metadata.get("section_title") or "").strip()
-        if section_title:
-            parts.append("【章节】" + section_title)
-        questions = chunk.metadata.get("simulated_questions") or []
-        if questions:
-            parts.append("【相关问题】" + " | ".join(questions))
-        # 4.3c: 表格行 LLM 描述——kv 数据行的自然语言语义
-        table_desc = (chunk.metadata.get("table_desc") or "").strip()
-        if table_desc:
-            parts.append("【表格】" + table_desc)
-        prefix = "\n".join(parts)
-        if prefix:
-            return prefix + "\n\n" + chunk.page_content
-        return chunk.page_content
+        return EmbeddingStage.text_for(chunk, doc_summary=doc_summary)
 
     def _embed_single_with_retry(self, i: int, chunk, embed_text: str):
-        """逐条 embedding（含重试 + 失败/重试 span），成功返回向量，失败返回 None。
-
-        供批量化降级路径与不支持 embed_documents 的 embedding 实现复用，
-        保留旧版"逐 chunk 失败 span"语义。
-        """
-        last_err = None
-        for attempt in range(EMBED_RETRY_MAX):
-            try:
-                vec = self.embedding.embed_query(embed_text)
-                if attempt > 0:
-                    chunk_span = trace_collector.start_span(
-                        f"embed_chunk_{i}",
-                        parent_id="index_embed",
-                        name=f"Embed chunk {i} retried",
-                        type="embedding",
-                        kind=SpanKind.INDEX_EMBED.value,
-                        input={"chunk_index": i,
-                               "doc_id": chunk.metadata.get("doc_id", "")},
-                    )
-                    chunk_span.retry_count = attempt
-                    trace_collector.end_span(
-                        chunk_span,
-                        metrics={"attempt": attempt + 1,
-                                 "retry_count": attempt},
-                    )
-                return vec
-            except Exception as e:
-                last_err = e
-                # 指数退避 + 抖动：立即连打对抖动的远程服务是雪崩式重试
-                if attempt < EMBED_RETRY_MAX - 1:
-                    time.sleep(_embed_backoff_seconds(attempt))
-        # 所有重试都失败 → 创建 child span 记录失败
-        logger.error(f"[Embed] chunk {i} 嵌入失败 {EMBED_RETRY_MAX} 次: {last_err}")
-        chunk_span = trace_collector.start_span(
-            f"embed_chunk_{i}",
-            parent_id="index_embed",
-            name=f"Embed chunk {i} FAILED",
-            type="embedding",
-            kind=SpanKind.INDEX_EMBED.value,
-            input={"chunk_index": i,
-                   "doc_id": chunk.metadata.get("doc_id", "")},
-        )
-        chunk_span.retry_count = EMBED_RETRY_MAX
-        trace_collector.end_span(chunk_span, status="error",
-            metrics={"error": str(last_err)[:100] if last_err else "unknown",
-                     "retry_count": EMBED_RETRY_MAX})
-        return None
+        return self._embed_stage.single_with_retry(i, chunk, embed_text)
 
     def _embed_with_retry(self, chunks, parent_span, doc_summary: str = "") -> list:
-        """批量嵌入（P2 批量化）；成功静默，失败单独 child span 记录。
-
-        - 每批 EMBED_BATCH_SIZE 条调 embed_documents：本地模型批推理走矩阵
-          运算，比逐条 embed_query 快数倍（对齐 chunking._embed_sentences_batched 模式）
-        - 每批重试 EMBED_RETRY_MAX 次；耗尽重试的批降级逐条 embed_query，
-          隔离失败点，保留逐 chunk 失败 span 语义
-        - embedding 实现无 embed_documents → 直接逐条路径
-        - doc_summary：1.2 Contextual Prefix——文档级摘要拼入每条嵌入文本
-
-        Returns: 成功嵌入的向量列表（失败的 chunk 不在此列）。
-
-        P1: 每个 chunk 在 embedding 前拼接"模拟问题前缀"（Document Expansion），
-        召回率 +10-15%（口语化提问 ↔ 书面文档的语义鸿沟）。
-        """
-        if not chunks:
-            return []
-        texts = [self._embed_text_for(c, doc_summary=doc_summary) for c in chunks]
-        succeeded: list = []
-        cache = self._get_embed_cache()
-        cache_hits = 0
-
-        batch_embed = getattr(self.embedding, "embed_documents", None)
-        if not callable(batch_embed):
-            for i, chunk in enumerate(chunks):
-                vec = None
-                cached = cache.get_many([texts[i]])[0] if cache.enabled else None
-                if cached is not None:
-                    vec = cached
-                    cache_hits += 1
-                else:
-                    vec = self._embed_single_with_retry(i, chunk, texts[i])
-                    if vec is not None:
-                        cache.put_many([texts[i]], [vec])
-                if vec is not None:
-                    succeeded.append(vec)
-            self._report_cache_metrics(parent_span, cache_hits, len(chunks))
-            return succeeded
-
-        # 批大小：优先取 embedding 实现声明的最优批（cloud 模式受 DashScope
-        # 单请求上限约束，直接取上限避免外层大批被内部再拆）；实现未声明
-        # （测试 fake / 非标准包装）或非法时回退配置批大小。
-        _declared = getattr(self.embedding, "embed_batch_size", None)
-        batch_size = _declared if isinstance(_declared, int) and _declared > 0 else EMBED_BATCH_SIZE
-        for start in range(0, len(chunks), batch_size):
-            batch_chunks = chunks[start:start + batch_size]
-            batch_texts = texts[start:start + batch_size]
-            batch_vecs: list = [None] * len(batch_texts)
-            # 3.1: 缓存优先——命中的位置直接填充，只对 miss 的子集真实嵌入
-            if cache.enabled:
-                cached = cache.get_many(batch_texts)
-                for i, v in enumerate(cached):
-                    if v is not None:
-                        batch_vecs[i] = v
-            miss_positions = [i for i, v in enumerate(batch_vecs) if v is None]
-            cache_hits += len(batch_texts) - len(miss_positions)
-            last_err = None
-            batch_ok = False
-            if miss_positions:
-                miss_texts = [batch_texts[i] for i in miss_positions]
-                for _attempt in range(EMBED_RETRY_MAX):
-                    try:
-                        vecs = batch_embed(miss_texts)
-                        if not isinstance(vecs, (list, tuple)) or len(vecs) != len(miss_texts):
-                            raise ValueError(
-                                f"embed_documents 返回非法: type={type(vecs).__name__}, "
-                                f"期望 {len(miss_texts)} 条向量"
-                            )
-                        for i, v in zip(miss_positions, vecs):
-                            batch_vecs[i] = v
-                        cache.put_many(miss_texts, list(vecs))
-                        batch_ok = True
-                        break
-                    except Exception as e:
-                        last_err = e
-                        # 指数退避 + 抖动（整批重试路径）
-                        if _attempt < EMBED_RETRY_MAX - 1:
-                            time.sleep(_embed_backoff_seconds(_attempt))
-                if batch_ok:
-                    succeeded.extend(v for v in batch_vecs if v is not None)
-                    continue
-                # 整批（miss 子集）耗尽重试 → 降级逐条，隔离单点失败（旧语义保留）
-                logger.warning(
-                    f"[Embed] 批次 {start // batch_size}（{len(miss_texts)}/{len(batch_texts)} chunks，"
-                    f"其余命中缓存）重试 {EMBED_RETRY_MAX} 次全失败 ({last_err})，降级逐条"
-                )
-                for i in miss_positions:
-                    vec = self._embed_single_with_retry(start + i, batch_chunks[i], batch_texts[i])
-                    if vec is not None:
-                        batch_vecs[i] = vec
-                        cache.put_many([batch_texts[i]], [vec])
-            succeeded.extend(v for v in batch_vecs if v is not None)
-        self._report_cache_metrics(parent_span, cache_hits, len(texts))
-        return succeeded
+        return self._embed_stage.batch_with_retry(
+            chunks, parent_span, doc_summary=doc_summary)
 
     def _get_embed_cache(self):
-        """3.1: embedding 结果缓存读写器（实例级懒创建）。"""
-        if not hasattr(self, "_embed_cache"):
-            from backend.rag.indexing.embed_cache import EmbeddingCache
-            model_name = (getattr(self.embedding, "model_name", "") or
-                          os.path.basename(str(getattr(self.embedding, "model", "") or "")) or
-                          "unknown")
-            self._embed_cache = EmbeddingCache(model_name)
-        return self._embed_cache
+        return self._embed_stage.cache()
 
     @staticmethod
     def _report_cache_metrics(parent_span, hits: int, total: int) -> None:
-        if hits <= 0 or total <= 0:
-            return
-        logger.info(f"[Embed] 缓存命中 {hits}/{total}")
-        try:
-            if parent_span is not None and hasattr(parent_span, "metrics"):
-                parent_span.metrics["embedding_cache_hit"] = hits
-                parent_span.metrics["embedding_cache_miss"] = total - hits
-        except Exception:  # pragma: no cover - metrics 写失败不影响主流程
-            pass
-
+        EmbeddingStage.report_cache_metrics(parent_span, hits, total)
 
     async def _build_doc_metadata(self, full_text: str, base_meta: dict, parent_span_id: str = "", chunks_text: list[str] | None = None) -> dict:
-        """异步构建文档级元数据 — LLM Decision Router 评分决策。
-        
-        P2-2: LLM 计算异步批处理 —— 摘要、关键词、实体抽取并发执行
+        """构建文档级元数据 — 委托 MetadataStage（stages/metadata_stage.py）。
+
+        返回 dict 契约与拆分前完全一致（下游 chunk 注入 / doc_db 落库 /
+        registry.register 零感知）。
         """
-        try:
-            from backend.rag.preprocessing.metadata import (
-                classify_with_confidence, analyze_complexity,
-                extract_time_refs, detect_business_domain,
-            )
-            from backend.config.rag import METADATA_SCHEMA_FINGERPRINT as _metadata_fp
-            from backend.rag.preprocessing.keyword import extract_doc_keywords_typed
-            from backend.rag.preprocessing.entity import extract_entities, extract_person_names
-        except ImportError:
-            return {}
+        return await self._meta_stage.build(
+            full_text, base_meta,
+            parent_span_id=parent_span_id, chunks_text=chunks_text)
 
-        try:
-            fname = base_meta.get("source_file", "")
-            fpath = base_meta.get("file_path", "")
-            cls_detail: dict | None = None
-            domain_detail: dict | None = None
+    @property
+    def _meta_stage(self) -> MetadataStage:
+        """metadata Stage（实例级缓存，引用 registry/embedding/department）。"""
+        st = getattr(self, "_meta_stage_inst", None)
+        if st is None:
+            st = self._meta_stage_inst = MetadataStage(
+                self.registry, self.embedding, self.department)
+        return st
 
-            # 质量门禁（P1）
-            from backend.rag.preprocessing.metadata import assess_quality
-            if parent_span_id:
-                quality_span = trace_collector.start_span(
-                    'quality', parent_id=parent_span_id, name="Quality check",
-                    type="llm", kind=SpanKind.INDEX_QUALITY_CHECK.value,
-                )
-            quality = assess_quality(full_text)
-            if parent_span_id:
-                trace_collector.end_span(quality_span,
-                    metrics={"score": quality.get("score", 0), "status": quality.get("status", "?"), "issues": quality.get("issues", [])},
-                    output=quality.get("dimensions", {}))
+    # ---- 统一抽取路径的收口（纯规则部分照旧计算）----
 
-            if not quality["passed"]:
-                logger.warning(f"[Quality] 文档未通过质量门禁: {quality['issues']}")
+    @staticmethod
+    def _detect_near_dup(registry, minhash_sig: list[int], doc_type: str,
+                         exclude_doc_id: str = "") -> str:
+        return MetadataStage.detect_near_dup(
+            registry, minhash_sig, doc_type, exclude_doc_id=exclude_doc_id)
 
-            if parent_span_id:
-                classify_span = trace_collector.start_span(
-                    'classify', parent_id=parent_span_id, name="Classify",
-                    type="llm", kind=SpanKind.INDEX_CLASSIFY.value,
-                )
-            try:
-                doc_type, confidence, cls_detail = classify_with_confidence(full_text, filename=fname, file_path=fpath, return_detail=True)
-            except Exception:
-                # 异常时也要关闭 span，避免 classify 泄漏（P0-2）
-                if parent_span_id:
-                    trace_collector.end_span(classify_span,
-                        metrics={"error": "classify_failed"}, status="error")
-                raise
-            if parent_span_id:
-                trace_collector.end_span(classify_span, metrics={"doc_type": doc_type, "confidence": round(confidence, 3)},
-                    output=locals().get("cls_detail", {}))
-
-
-            # P2-1: MinHash 语义去重 — 检查同类型文档的近似内容
-            from backend.rag.preprocessing.metadata import compute_minhash, minhash_similarity, _SIMILARITY_THRESHOLD
-            if parent_span_id:
-                dedup_minhash_span = trace_collector.start_span(
-                    'dedup_minhash', parent_id=parent_span_id, name="MinHash dedup",
-                    type="llm", kind=SpanKind.INDEX_DEDUP_MINHASH.value,
-                )
-            minhash_sig = compute_minhash(full_text)
-            if parent_span_id:
-                trace_collector.end_span(dedup_minhash_span, metrics={"near_dup_id": "(see below)"})
-
-            existing_same_type = self.registry.list_by_doc_type(doc_type)
-            near_dup_id = ""
-            for existing in existing_same_type:
-                if existing.get("doc_id") == base_meta.get("doc_id", ""):
-                    continue
-                existing_sig = existing.get("minhash_sig", "")
-                if existing_sig:
-                    try:
-                        existing_sig = json.loads(existing_sig) if isinstance(existing_sig, str) else existing_sig
-                        sim = minhash_similarity(minhash_sig, existing_sig)
-                        if sim > _SIMILARITY_THRESHOLD:
-                            near_dup_id = existing.get("doc_id", "")
-                            logger.warning(f"[MinHash] 检测到近似文档: sim={sim:.2f}, existing={near_dup_id}")
-                            break
-                    except Exception as e:
-                        # 单个已有文档签名损坏/格式异常 → 跳过该文档继续比对（软降级），留痕
-                        logger.debug(f"[MinHash] 单文档签名比对失败，跳过: {e}", exc_info=True)
-
-            if parent_span_id:
-                rule_extract_span = trace_collector.start_span(
-                    'rule_extract', parent_id=parent_span_id, name="Rule extract",
-                    type="llm", kind=SpanKind.INDEX_KEYWORD_RULE.value,
-                )
-            time_refs = extract_time_refs(full_text)
-            if parent_span_id:
-                trace_collector.end_span(rule_extract_span, metrics={"time_refs_count": len(time_refs or []), "domain": "(computed below)"})
-
-            if parent_span_id:
-                domain_span = trace_collector.start_span(
-                    'domain_classify', parent_id=parent_span_id, name="Domain classify",
-                    type="llm", kind=SpanKind.INDEX_DOMAIN_CLASSIFY.value,
-                )
-            domain_result = detect_business_domain(full_text, return_detail=True)
-            # P1: domain_result 返回 3 元组 (primary, alternatives, detail) 当 return_detail=True
-            domain, _alternatives, domain_detail = domain_result
-            domain_detail = domain_detail or {}
-            if parent_span_id:
-                trace_collector.end_span(domain_span, metrics={"domain": domain},
-                    output=domain_detail or {})
-            # 低置信 LLM 复验（前置：必须在关键词/复杂度之前确定最终 doc_type）
-            # 1.3c 计量约束：本处仅允许本地模型（ChatOllama，无 usage/无成本，
-            # 无需计量）；若未来切到 cloud 模型，必须改走 invoke_metadata_llm
-            # （proxy 层自动落 llm_usage_store），禁止直连云 SDK——否则漏记。
-            if confidence < 0.3 and doc_type == "general":
-                try:
-                    from backend.config.llm import OLLAMA_ENABLED
-                    from backend.config.rag import DOC_LLM_MODEL
-                    from backend.prompts.service import prompt_service
-                    doc_type_prompt = prompt_service.render_sync(
-                        "rag.indexing.doc_type", full_text=full_text[:1500],
-                    ).text
-                    if DOC_LLM_MODEL and OLLAMA_ENABLED:
-                        from langchain_ollama import ChatOllama
-                        llm_l = ChatOllama(model=DOC_LLM_MODEL, temperature=0.0, num_ctx=2048, request_timeout=20)
-                        llm_type = llm_l.invoke(doc_type_prompt).content.strip()
-                    else:
-                        from backend.rag.preprocessing.llm_enrichment import invoke_metadata_llm
-                        llm_type = invoke_metadata_llm(doc_type_prompt).content.strip()
-                    valid_types = {"policy", "sop", "ad_policy", "compliance", "legal",
-                                   "contract_template", "security", "financial", "customer_data",
-                                   "product_spec", "listing", "faq", "training", "general"}
-                    if llm_type and llm_type.lower() in valid_types:
-                        doc_type = llm_type.lower()
-                        confidence = 0.7
-                        logger.info(f"[Classify] LLM 复验: {doc_type}")
-                except Exception as e:
-                    logger.warning(f"[Classify] LLM 复验失败: {e}")
-
-            # 规则关键词 + 复杂度（在最终 doc_type 确定之后）
-            # extract_doc_keywords_typed（含 LLM 调用）与 extract_entities
-            # 已移入下方 gather 并发执行——原先在主线程串行阻塞，P2-2 的
-            # "并行"名不副实（关键词 LLM 调用先于 gather 发生）。
-            from backend.rag.preprocessing.keyword import extract_rule_keywords
-            rule_kws_preview = extract_rule_keywords(full_text, doc_type=doc_type)
-            complexity = analyze_complexity(full_text, len(rule_kws_preview), confidence)
-            person_names = extract_person_names(full_text)
-        except Exception as e:
-            logger.warning(f"[Metadata] 6步预处理失败,fallback general: {e}")
-            return {"doc_type": "general"}
-
-        # ⑧ 文档摘要 + 关键词 + 实体 — 三路并发（关键词 LLM 调用放线程池，
-        # 与摘要 LLM 调用/实体抽取真正并行；总耗时 = max 而非 sum）
-        summary = ""
-        need_llm_summary = len(full_text) >= 1000  # <1KB 全文当摘要，不调 LLM
-
-        llm_generate_span = None
-        if parent_span_id:
-            llm_generate_span = trace_collector.start_span(
-                "llm_generate", parent_id=parent_span_id, name="LLM generate (keywords+summary+entities)",
-                type="llm", kind=SpanKind.INDEX_LLM_GENERATE.value,
-            )
-
-        # LLM 未调用时为空列表（向后兼容；非 LLM 路径不生成问题）
-        questions_by_chunk: list[list[str]] = []
-
-        # P2-2: 并发执行四个重型任务（S0 修复：恢复 F1 重构漏迁的第四任务
-        # 「模拟问题生成」——旧合并路径 enrich_metadata_llm 自失去调用方后，
-        # questions_by_chunk 恒空，Document Expansion 前缀静默失效）
-        from backend.rag.preprocessing.metadata import (
-            _extract_first_sentences, build_llm_summary,
-        )
-        from backend.rag.preprocessing.keyword import KeywordResult as _KwResult
-        sample = _sample_for_summary(full_text)
-
-        async def task_summary():
-            """LLM 摘要生成（<2KB 采样走抽取式，不调 LLM）"""
-            return await build_llm_summary(sample) if len(sample) >= 2000 else (_extract_first_sentences(sample, 2), [])
-
-        async def task_keywords():
-            """规则+LLM 关键词提取（LLM 调用放线程池，不阻塞事件循环）"""
-            return await asyncio.to_thread(
-                extract_doc_keywords_typed, full_text,
-                doc_type=doc_type, confidence=confidence, complexity=complexity,
-            )
-
-        async def task_questions():
-            """模拟问题生成（Document Expansion，S0 恢复）。
-
-            走 question_gen（proxy 自动计量），tokens 经模块级
-            LAST_QUESTION_GEN_TOKENS 回传，在下方与关键词路径 tokens 汇总。
-            """
-            if not chunks_text:
-                return [], {}
-            from backend.rag.preprocessing import question_gen as _qg
-            questions = await asyncio.to_thread(
-                _qg.generate_chunk_questions, chunks_text, doc_type,
-            )
-            _qg_tokens = dict(getattr(_qg, "LAST_QUESTION_GEN_TOKENS", {}) or {})
-            return questions, _qg_tokens
-
-        # 并行执行：总耗时 = max(各任务耗时) 而非 sum；
-        # 解包顺序与 gather 参数顺序一一对应
-        summary_res, kw_res, entities_res, questions_res = await asyncio.gather(
-            task_summary(),
-            task_keywords(),
-            asyncio.to_thread(extract_entities, full_text),
-            task_questions(),
-            return_exceptions=True,
-        )
-
-        if isinstance(summary_res, Exception):
-            logger.warning(f"[Metadata] 并发任务失败 (task=summary): {summary_res}")
-            summary_res = ("", [])
-        if isinstance(kw_res, Exception):
-            logger.warning(f"[Metadata] 并发任务失败 (task=keywords): {kw_res}")
-            kw_res = _KwResult()
-        if isinstance(entities_res, Exception):
-            logger.warning(f"[Metadata] 并发任务失败 (task=entities): {entities_res}")
-            entities_res = {}
-        if isinstance(questions_res, Exception):
-            logger.warning(f"[Metadata] 并发任务失败 (task=questions): {questions_res}")
-            questions_res = ([], {})
-
-        summary, persons = summary_res
-        if summary and not person_names:
-            person_names = persons
-        kw_result = kw_res
-        entities_nested = entities_res
-        questions_by_chunk, question_gen_tokens = questions_res
-
-        # 合并关键词（兼容旧字段，新字段已是对象数组）
-        kws_rule_objs = kw_result.rule_keywords  # [{"word": ..., "source": "rule"}, ...]
-        kws_llm_objs = kw_result.llm_keywords    # [{"word": ..., "source": "llm"}, ...]
-        kws_all_words = [k["word"] for k in kws_rule_objs + kws_llm_objs]
-
-        # LLM 决策信息
-        llm_decision = kw_result.llm_decision if hasattr(kw_result, 'llm_decision') else {}
-        need_llm_keywords = bool(kws_llm_objs)
-
-        # 1.3b: tokens 汇总口径补全——keywords + questions 两路合并
-        #（summary 抽取式路径无 tokens；build_llm_summary 的 LLM 用量
-        #  已由 proxy 自动落 Store，此处只合并可回传的内存 tokens）
-        merged_tokens = dict(kw_result.llm_tokens or {})
-        if question_gen_tokens:
-            for key in ("prompt_tokens", "completion_tokens"):
-                merged_tokens[key] = int(merged_tokens.get(key, 0)) + int(
-                    question_gen_tokens.get(key, 0) or 0)
-            merged_tokens["cost_usd"] = round(
-                float(merged_tokens.get("cost_usd", 0) or 0)
-                + float(question_gen_tokens.get("cost_usd", 0) or 0), 6)
-            kw_result.llm_tokens = merged_tokens
-
-        if llm_generate_span:
-            trace_collector.end_span(llm_generate_span, status="success",
-                metrics={
-                    "strategy": "parallel", "doc_size": len(full_text),
-                    "need_llm_summary": need_llm_summary,
-                    "need_llm_keywords": need_llm_keywords,
-                    "parallel_execution": True,
-                    "simulated_questions_chunks": len(questions_by_chunk),
-                    "estimated_speedup": "4x (summary+keywords+entities+questions concurrent)",
-                })
-
-        # 兜底：<1KB 全文当摘要 / 没生成出来的剥 markdown 取前几句
-        if not summary and len(full_text) <= 1000:
-            summary = full_text.strip()
-        elif not summary:
-            from backend.rag.preprocessing.metadata import _extract_first_sentences
-            summary = _extract_first_sentences(full_text, 3) or ""
-
-        # ⑨ 章节提取（纯正则，零成本，所有文档都做）
-        sections = []
-        try:
-            from backend.rag.preprocessing.metadata import extract_sections
-            if parent_span_id:
-                section_span = trace_collector.start_span(
-                    'section', parent_id=parent_span_id, name="Section extract",
-                    type="llm", kind=SpanKind.INDEX_SECTION.value,
-                )
-            sections = extract_sections(full_text, max_sections=15)
-            if parent_span_id:
-                trace_collector.end_span(section_span, metrics={"sections_count": len(sections or [])})
-
-        except Exception as e:
-            # 章节提取失败 → 跳过 sections 元数据（软降级），留痕
-            logger.debug(f"[Indexer] 章节提取失败，跳过: {e}", exc_info=True)
-
-        return {
-            "doc_type": doc_type,
-            "confidence": confidence,
-            "business_domain": domain,
-            "domain_detail": domain_detail,
-            "time_refs": time_refs,
-            "complexity": complexity,
-            "doc_keywords": kws_all_words,
-            "keywords_rule": kws_rule_objs,
-            "keywords_llm": kws_llm_objs,
-            "llm_tokens": kw_result.llm_tokens,
-            "llm_used": bool(kws_llm_objs),
-            "llm_strategy": kw_result.llm_strategy,
-            "llm_decision": llm_decision,
-            "person_names": ", ".join(person_names) if isinstance(person_names, list)
-                           else str(person_names),
-            "entities": entities_nested,   # P1: 结构化实体 {person, org, regulation, ...}
-            "summary": summary,
-            "sections": list(sections),
-            "quality_score": quality.get("score", 0),
-            "quality_issues": ", ".join(quality.get("issues", [])),
-            "embedding_model": os.path.basename(getattr(self.embedding, "model_name", "") or
-                                                 str(getattr(self.embedding, "model", ""))) or "",
-            "minhash_sig": json.dumps(minhash_sig),
-            "near_dup_id": near_dup_id,
-            "metadata_fingerprint": _metadata_fp,
-            "doc_version": 1,
-            "kb_version": "v1",
-            "department": base_meta.get("department") or self.department,
-            "questions_by_chunk": questions_by_chunk,
-        }
+    async def _finalize_unified_metadata(self, full_text: str, base_meta: dict, unified: dict,
+                                         parent_span_id: str = "", chunks_text: list[str] | None = None) -> dict:
+        """统一 LLM 抽取收口 — 委托 MetadataStage.finalize_unified。"""
+        return await self._meta_stage.finalize_unified(
+            full_text, base_meta, unified,
+            parent_span_id=parent_span_id, chunks_text=chunks_text)
 
     # ---- 公开重索引 ----
 

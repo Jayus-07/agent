@@ -26,12 +26,13 @@ from backend.rag.indexing.doc_id import derive_doc_id_from_path
 
 # =====================================================
 # 文档类型分类（V2 加权计分 + 文件名辅助 + LLM 胶着仲裁）
+# 阈值/权重已收口至 config/indexing_rules.py（get_rules()，支持热加载）
 # =====================================================
 
-# legal/compliance/policy/financial 得分差 < 此阈值时触发 LLM 仲裁
 # P3: financial 加入仲裁候选集（电商场景财务/售后经常混淆）
+_ARBITRATION_CANDIDATES = {"legal", "compliance", "policy", "financial", "faq"}
+# 向后兼容别名（旧代码 import 该常量；真实取值以 get_rules() 为准）
 _ARBITRATION_THRESHOLD = 5
-_ARBITRATION_CANDIDATES = {"legal", "compliance", "policy", "financial", "faq"}  # P3: 扩展仲裁类型
 
 # P2-1: MinHash 缓存 —— 内存中建立 doc_type → signatures 快速索引
 _minhash_cache: Dict[str, List[Tuple[str, list[int]]]] = {}  # doc_type → [(file_hash, signature), ...]
@@ -47,10 +48,12 @@ def classify_doc_type(text: str, filename: str = "", file_path: str = "") -> str
 
 
 def assess_quality(text: str) -> dict:
-    """质量门禁：多维度文档质量评分。
+    """质量门禁：多维度文档质量评分（权重取自 indexing_rules，可热加载）。
 
     Returns: {score: int 0-100, status: pass/warn/reject, dimensions: dict, issues: [str]}
     """
+    from backend.config.indexing_rules import get_rules
+    _irules = get_rules()
     issues: list[str] = []
     chars = len(text.strip())
 
@@ -66,20 +69,21 @@ def assess_quality(text: str) -> dict:
     elif chars < 1000:
         completeness = 35
     else:
-        completeness = 40
+        completeness = _irules.quality_completeness_max
 
     # 结构完整度（0-30）
     has_heading = bool(re.search(r'^#{1,6}\s+', text, re.MULTILINE))
     has_chapter = bool(re.search(r'(第[一二三四五六七八九十\d]+章|[一二三四五六七八九十]+、)', text))
     has_paragraph = chars > 200
-    structure = (10 if has_heading else 0) + (10 if has_chapter else 0) + (10 if has_paragraph else 0)
+    unit = _irules.quality_structure_max // 3
+    structure = (unit if has_heading else 0) + (unit if has_chapter else 0) + (unit if has_paragraph else 0)
     if structure == 0:
         issues.append("无标题/章节结构")
 
     # 噪音比例（0-20，越低越好）
     alpha_chars = sum(1 for c in text if c.isalpha() or '一' <= c <= '鿿')
     noise_ratio = 1 - alpha_chars / max(chars, 1)
-    if noise_ratio < 0.1:       noise_score = 20
+    if noise_ratio < 0.1:       noise_score = _irules.quality_noise_max
     elif noise_ratio < 0.3:     noise_score = 15
     elif noise_ratio < 0.5:     noise_score = 10
     elif noise_ratio < 0.7:     noise_score = 5
@@ -90,15 +94,16 @@ def assess_quality(text: str) -> dict:
     # 重复检测（简易，0-10）
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     dup_ratio = 1 - len(set(lines)) / max(len(lines), 1) if lines else 0
-    if dup_ratio < 0.1:      unique_score = 10
-    elif dup_ratio < 0.3:    unique_score = 5
+    uniq_unit = _irules.quality_uniqueness_max // 2
+    if dup_ratio < 0.1:      unique_score = _irules.quality_uniqueness_max
+    elif dup_ratio < 0.3:    unique_score = uniq_unit
     else:
         unique_score = 0
         issues.append("内容重复率偏高")
 
     total = completeness + structure + noise_score + unique_score
-    status = "reject" if total < 40 else ("warn" if total < 60 else "pass")
-    passed = total >= 40
+    status = "reject" if total < _irules.quality_reject_below else ("warn" if total < _irules.quality_warn_below else "pass")
+    passed = total >= _irules.quality_reject_below
 
     return {
         "score": total,
@@ -113,16 +118,22 @@ def assess_quality(text: str) -> dict:
     }
 
 
-def compute_minhash(text: str, n_gram: int = 3, n_hashes: int = 128) -> list[int]:
+def compute_minhash(text: str, n_gram: int | None = None, n_hashes: int | None = None) -> list[int]:
     """MinHash 签名 — 用于近似文档去重（无需 LLM）。
 
-    返回 128 个最小 hash 值作为文档指纹。Jaccard 相似度 ≈ 签名匹配比例。
-    P2-1: 增加文件级缓存键支持（由调用方传入 file_hash）
+    返回 n_hashes 个最小 hash 值作为文档指纹。Jaccard 相似度 ≈ 签名匹配比例。
+    参数缺省时取 indexing_rules 配置（支持热加载）。
     """
     import hashlib
+    from backend.config.indexing_rules import get_rules
+    _irules = get_rules()
+    if n_gram is None:
+        n_gram = _irules.minhash_n_gram
+    if n_hashes is None:
+        n_hashes = _irules.minhash_n_hashes
     # 提取 n-gram token（中文按字级 3-gram）
     tokens: set[str] = set()
-    clean = re.sub(r'\s+', '', text)[:5000]  # 取前 5000 字，去空格
+    clean = re.sub(r'\s+', '', text)[:_irules.minhash_text_max_chars]  # 取前 N 字，去空格
     for i in range(len(clean) - n_gram + 1):
         tokens.add(clean[i:i + n_gram])
 
@@ -148,7 +159,7 @@ def minhash_similarity(sig1: list[int], sig2: list[int]) -> float:
     return matches / len(sig1)
 
 
-_SIMILARITY_THRESHOLD = 0.85  # 相似度 > 85% 视为近重复
+_SIMILARITY_THRESHOLD = 0.85  # 兼容别名；真实阈值以 get_rules().near_dup_similarity_threshold 为准
 
 # =====================================================
 # P2-1: MinHash 缓存管理 —— 内存索引加速
@@ -208,6 +219,9 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
         detail["keyword_hits"] = []  # [{type, keyword, weight}, ...]
     text_lower = text[:6000].lower()
 
+    from backend.config.indexing_rules import get_rules
+    _irules = get_rules()
+
     # ── 加权计分 ──
     scores: dict[str, int] = {}
     for doc_type, rules in DOC_TYPE_RULES.items():
@@ -257,36 +271,27 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
         fname_no_ext = os.path.splitext(filename)[0]
         for hint, hint_type in FILENAME_TYPE_HINTS.items():
             if hint.lower() in fname_no_ext.lower():
-                scores[hint_type] = scores.get(hint_type, 0) + 100
+                scores[hint_type] = scores.get(hint_type, 0) + _irules.classify_filename_weight
                 if return_detail:
-                    detail["filename_hits"].append(f"{hint} → {hint_type} +100")
-                    detail["keyword_hits"].append({"type": hint_type, "keyword": hint, "weight": 100, "source": "filename"})
-                logger.debug(f"[Classify] 文件名命中: {hint} → {hint_type} +100")
+                    detail["filename_hits"].append(f"{hint} → {hint_type} +{_irules.classify_filename_weight}")
+                    detail["keyword_hits"].append({"type": hint_type, "keyword": hint, "weight": _irules.classify_filename_weight, "source": "filename"})
+                logger.debug(f"[Classify] 文件名命中: {hint} → {hint_type} +{_irules.classify_filename_weight}")
 
     # ── 标题关键词辅助 ──
-    # 扫描文档前几行的标题，提取强信号词
+    # 扫描文档前几行的标题，提取强信号词（词表收口在 indexing_rules.title_type_hints）
     heading_lines = re.findall(r'^#{1,3}\s+(.+)$', text[:3000], re.MULTILINE)
     heading_lines += re.findall(r'^(?:第[一二三四五六七八九十\d]+章|第[一二三四五六七八九十\d]+节)\s*(.*)$', text[:3000], re.MULTILINE)
-    _TITLE_TYPE_HINTS: dict[str, str] = {
-        "合规": "compliance", "GDPR": "compliance", "数据保护": "compliance",
-        "制度": "policy", "管理": "policy", "规范": "policy",
-        "财务": "financial", "预算": "financial", "报销": "financial",
-        "合同": "legal", "法律": "legal", "保密": "legal",
-        "FAQ": "faq", "常见问题": "faq",
-        "商品": "product_spec", "规格": "product_spec", "SKU": "product_spec",
-        "SOP": "sop", "流程": "sop", "操作": "sop",
-    }
     for h in heading_lines:
         h_lower = h.lower()
-        for hint, hint_type in _TITLE_TYPE_HINTS.items():
+        for hint, hint_type in _irules.title_type_hints.items():
             if hint.lower() in h_lower:
-                scores[hint_type] = scores.get(hint_type, 0) + 20
+                scores[hint_type] = scores.get(hint_type, 0) + _irules.classify_title_weight
                 if return_detail:
-                    detail["title_hits"].append(f"{hint} → {hint_type} +20")
-                    detail["keyword_hits"].append({"type": hint_type, "keyword": hint, "weight": 20, "source": "title"})
-                logger.debug(f"[Classify] 标题命中: {hint} → {hint_type} +20")
+                    detail["title_hits"].append(f"{hint} → {hint_type} +{_irules.classify_title_weight}")
+                    detail["keyword_hits"].append({"type": hint_type, "keyword": hint, "weight": _irules.classify_title_weight, "source": "title"})
+                logger.debug(f"[Classify] 标题命中: {hint} → {hint_type} +{_irules.classify_title_weight}")
                 if hint_type not in scores:
-                    scores[hint_type] = 20
+                    scores[hint_type] = _irules.classify_title_weight
 
     # ── 文件夹路径辅助（强信号，直接 +0.3 confidence）──
     folder_bonus: str | None = None
@@ -294,11 +299,11 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
         path_lower = os.path.dirname(file_path).lower().replace("\\", "/")
         for hint, hint_type in FOLDER_TYPE_HINTS.items():
             if hint.lower() in path_lower.split("/"):
-                scores[hint_type] = scores.get(hint_type, 0) + 40
+                scores[hint_type] = scores.get(hint_type, 0) + _irules.classify_folder_weight
                 folder_bonus = hint_type
                 if return_detail:
-                    detail["folder_hit"] = f"{hint} → {hint_type} +40"
-                logger.debug(f"[Classify] 文件夹命中: {hint} → {hint_type} +40 (path={path_lower})")
+                    detail["folder_hit"] = f"{hint} → {hint_type} +{_irules.classify_folder_weight}"
+                logger.debug(f"[Classify] 文件夹命中: {hint} → {hint_type} +{_irules.classify_folder_weight} (path={path_lower})")
                 break  # 一个文件夹只匹配第一个命中
 
     if not scores:
@@ -316,7 +321,7 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
             scores["legal"] = max(scores["legal"] // 2, 1)
             logger.debug("[Classify] legal 无「第 N 条」条款编号，得分折半")
         else:
-            scores["legal"] += min(clause_hits * 5, 20)
+            scores["legal"] += min(clause_hits * _irules.legal_clause_bonus_per, _irules.legal_clause_bonus_cap)
 
     # 同步 detail["scores"] 到最终 scores（标题/文件名可能后续改了 scores）
     if return_detail:
@@ -330,7 +335,7 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
     second_score = sorted_scores[1][1] if len(sorted_scores) >= 2 else 0
     confidence = top_score / (top_score + second_score) if (top_score + second_score) > 0 else 1.0
     if folder_bonus and top_type == folder_bonus:
-        confidence = min(confidence + 0.3, 1.0)
+        confidence = min(confidence + _irules.classify_folder_conf_bonus, 1.0)
     confidence = round(min(confidence, 1.0), 2)
 
     # ── 胶着仲裁 ──
@@ -347,9 +352,9 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
                   if len(scores_in_set) >= 2 else 999)
     candidate_narrow_lead = (
         top_type in _ARBITRATION_CANDIDATES
-        and (top_score - second_score) <= _ARBITRATION_THRESHOLD
+        and (top_score - second_score) <= _irules.arbitration_score_gap
     )
-    if (candidate_narrow_lead or (len(close_set) >= 2 and inner_diff < _ARBITRATION_THRESHOLD)):
+    if (candidate_narrow_lead or (len(close_set) >= 2 and inner_diff < _irules.arbitration_score_gap)):
         # 候选含 top4 全部类型（含 sop/financial 等非仲裁类次名，盲点修复）
         candidates = ", ".join(t for t, _ in top4)
         logger.info(f"[Classify] 胶着仲裁：top4={top4}, inner_diff={inner_diff}")
@@ -369,8 +374,8 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
                     logger.info(f"[Classify] LLM 仲裁结果：{t}")
                     if return_detail:
                         detail["llm_fallback"] = True
-                        return t, 0.95, detail
-                    return t, 0.95
+                        return t, _irules.arbitration_confidence, detail
+                    return t, _irules.arbitration_confidence
             logger.warning(f"[Classify] LLM 仲裁返回未知结果：{result_text[:100]}")
         except Exception as e:
             logger.warning(f"[Classify] LLM 仲裁失败，使用最高分: {e}")
@@ -507,7 +512,7 @@ def extract_time_refs(text: str) -> List[str]:
 # 业务领域识别（改进：带权重、最低得分阈值）
 # =====================================================
 
-def detect_business_domain(text: str, min_score: int = 2, return_detail: bool = False):
+def detect_business_domain(text: str, min_score: int | None = None, return_detail: bool = False):
     """识别业务领域，返回 (primary, [alternatives])。
 
     Returns:
@@ -516,7 +521,12 @@ def detect_business_domain(text: str, min_score: int = 2, return_detail: bool = 
         - alternatives: 备选 domains（> top_score * 0.3）
 
     2026-08-10 改进：返回多候选，避免单一标注导致跨域问题（如售后流程被标 order 而漏查 customer）。
+    min_score 缺省时取 indexing_rules.domain_min_score（可热加载）。
     """
+    from backend.config.indexing_rules import get_rules
+    _irules = get_rules()
+    if min_score is None:
+        min_score = _irules.domain_min_score
     scores: Dict[str, int] = Counter()
     detail: dict = {"scores": {}, "hits": []} if return_detail else {}
     text_lower = text.lower()
@@ -547,8 +557,8 @@ def detect_business_domain(text: str, min_score: int = 2, return_detail: bool = 
             return "general", [], detail
         return "general", []
 
-    # 备选 domains（> 0.3 * top_score）
-    alternatives = [d for d, s in sorted_scores[1:] if s >= top_score * 0.3]
+    # 备选 domains（> domain_alt_ratio * top_score）
+    alternatives = [d for d, s in sorted_scores[1:] if s >= top_score * _irules.domain_alt_ratio]
 
     if return_detail:
         return primary, alternatives, detail

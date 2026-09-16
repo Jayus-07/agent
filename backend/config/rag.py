@@ -87,6 +87,15 @@ RAG_CONSISTENCY_SWEEP_INTERVAL_HOURS = int(os.getenv("RAG_CONSISTENCY_SWEEP_INTE
 DOC_LLM_MODEL = os.getenv("DOC_LLM_MODEL", "")
 
 # ====================================
+# 阶段2：元数据统一 LLM 抽取（metadata_llm.py）
+# ====================================
+# true = 上传时优先走单次 LLM JSON 抽取（doc_type/domain/summary/keywords/
+# entities/time_refs 一次抽齐），失败自动降级原规则路径；false = 维持纯规则链路
+ENABLE_LLM_METADATA_EXTRACT = os.getenv("ENABLE_LLM_METADATA_EXTRACT", "true").lower() == "true"
+# 参与抽取的文本采样上限（超长文档按 60/20/20 头中尾采样，控制 token 成本）
+METADATA_LLM_EXTRACT_MAX_CHARS = int(os.getenv("METADATA_LLM_EXTRACT_MAX_CHARS", "6000"))
+
+# ====================================
 # Chunk 配置
 # ====================================
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))

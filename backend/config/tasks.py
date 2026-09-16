@@ -42,3 +42,9 @@ TASK_EVENT_CHANNEL = TASK_KEY_PREFIX + "events:"
 
 # 任务列表默认分页
 TASKS_LIST_DEFAULT_LIMIT = int(os.getenv("TASKS_LIST_DEFAULT_LIMIT", "20"))
+
+# ── RAG 上传索引队列化（固定启用，无开关）──────────────────
+# 上传后索引任务固定投递 Celery（rag_index 队列）由 Worker 执行，
+# SSE 经 Redis 进度镜像跨进程轮询消费；broker 不可达入队失败时
+# 自动回退进程内索引，上传可用性不受影响。
+CELERY_RAG_INDEX_QUEUE = os.getenv("CELERY_RAG_INDEX_QUEUE", "rag_index")

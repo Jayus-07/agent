@@ -30,10 +30,11 @@ async def _stub_doc_metadata(self, full_text, base_meta, parent_span_id="", chun
 @pytest.fixture(autouse=True)
 def _stub_metadata_llm(monkeypatch):
     from backend.rag.indexing import indexer as indexer_mod
+    import backend.rag.indexing.stages.embedding_stage as embed_stage_mod
     monkeypatch.setattr(IncrementalIndexer, "_build_doc_metadata", _stub_doc_metadata)
     # MagicMock 的 embed 返回值会让 embed 链走「重试耗尽→降级」，生产退避
     # 1.5^n 真实 sleep（28s/call 的主因）。清零后重试逻辑仍被覆盖。
-    monkeypatch.setattr(indexer_mod, "EMBED_RETRY_BACKOFF_BASE", 0.0)
+    monkeypatch.setattr(embed_stage_mod, "EMBED_RETRY_BACKOFF_BASE", 0.0)
 
 
 # ==========================================================
