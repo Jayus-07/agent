@@ -20,12 +20,18 @@
 """
 from __future__ import annotations
 
+import os
+import re
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
-from backend.app.api.deps import OperatorIdentity, resolve_operator_role
+from backend.app.api.deps import (
+    OperatorIdentity,
+    require_admin_user,
+    resolve_operator_role,
+)
 
 from contextlib import asynccontextmanager
 
@@ -304,3 +310,152 @@ async def change_role(user_id: int, request: Request,
                 f"user={row['username']}({row['id']}) → {row['role']}")
     return _result({"userId": row["id"], "username": row["username"],
                     "role": row["role"], "changedBy": operator.actor})
+
+
+# ── 安全运营（2026-09-16 方案 A 配套：管理员只读 + 会话强制下线）──────────
+#
+# JWT 单通道的运营面：在线会话、灰度开关状态、敏感端点清单。语义边界：
+# - 会话 = Redis `auth:session:{userId}:{jti}`（方案 A 会话闸键空间）。
+#   "强制下线" = 删键：enforce 下下一次请求即被网关/后端会话闸拒绝（401）；
+#   audit 灰度期删键不产生实际拦截（闸只记日志），页面已提示。
+# - 网关侧 GATEWAY_SESSION_CHECK 是 APISIX 容器的部署层 env，app 进程读不到，
+#   返回 mode=None 由前端展示部署说明——不猜测运行值。
+# - 三个端点统一挂 require_admin_user（kind==user 且 role==admin）：安全运营
+#   接口不开放给服务凭据通道（service 不该管理用户会话）。
+
+_SECURITY_ENDPOINT_GUARDS = (
+    "require_admin_user",
+    "require_user_actor",
+    "require_admin_operator",
+)
+
+# 内联守卫（handler 体内 await require_admin_operator(request)）运行时扫描
+# 不到，此清单人工维护；与动态扫描结果按 (path, methods) 合并，runtime 优先。
+# observability 三项见 2026-09-16 审计页测试报告 §敏感端点清单。
+_SECURITY_ENDPOINTS_CURATED = [
+    {"path": "/api/observability/gateway-auth", "methods": ["GET"],
+     "guard": "require_admin_operator", "source": "curated"},
+    {"path": "/api/observability/gateway-access-logs", "methods": ["GET"],
+     "guard": "require_admin_operator", "source": "curated"},
+    {"path": "/api/observability/system-health", "methods": ["GET"],
+     "guard": "require_admin_operator", "source": "curated"},
+    # admin_tasks.py 为并发会话开发中模块（未提交），是否生效以其合并为准
+    {"path": "/api/admin/tasks", "methods": ["GET"],
+     "guard": "require_admin_operator", "source": "curated"},
+]
+
+
+def _scan_guarded_endpoints(app) -> list[dict]:
+    """扫描 FastAPI 路由表，找出以统一守卫作为 Depends 的端点（运行时口径）。"""
+    out: list[dict] = []
+    for route in getattr(app, "routes", []):
+        dep = getattr(route, "dependant", None)
+        if dep is None:
+            continue
+        guard = None
+        for d in getattr(dep, "dependencies", []) or []:
+            name = getattr(getattr(d, "call", None), "__name__", "")
+            if name in _SECURITY_ENDPOINT_GUARDS:
+                guard = name
+                break
+        if guard is None:
+            continue
+        methods_raw = getattr(route, "methods", None) or set()
+        methods = sorted(methods_raw - {"HEAD", "OPTIONS"})
+        out.append({"path": route.path, "methods": methods,
+                    "guard": guard, "source": "runtime"})
+    return out
+
+
+async def _attach_usernames(parsed: list[dict]) -> None:
+    """按 userId 批量补 username/realName/role（expanding IN，单次查询）。"""
+    uids = sorted({p["userId"] for p in parsed})
+    if not uids:
+        return
+    async with _db() as session:
+        rows = (await session.execute(
+            text("SELECT id, username, real_name, role FROM auth.users "
+                 "WHERE id IN :ids").bindparams(bindparam("ids", expanding=True)),
+            {"ids": uids})).mappings().all()
+    names = {r["id"]: r for r in rows}
+    for p in parsed:
+        u = names.get(p["userId"])
+        p["username"] = u["username"] if u else None
+        p["realName"] = ((u["real_name"] if u else None) or p["username"]) if u else None
+        p["role"] = u["role"] if u else None
+
+
+@sys_router.get("/security/overview")
+async def security_overview(request: Request,
+                            operator: OperatorIdentity = Depends(require_admin_user)):
+    """灰度开关状态 + 敏感端点清单（只读）。"""
+    runtime = _scan_guarded_endpoints(request.app)
+    seen = {(e["path"], tuple(e["methods"])) for e in runtime}
+    endpoints = runtime + [e for e in _SECURITY_ENDPOINTS_CURATED
+                           if (e["path"], tuple(e["methods"])) not in seen]
+    return _result({
+        "modes": {
+            "jwtSessionGuard": {
+                "mode": os.getenv("JWT_SESSION_GUARD_MODE", "audit").strip().lower(),
+                "scope": "backend-middleware",
+                "note": "off/audit/enforce（默认 audit）；改 .env 后需重启 app 容器",
+            },
+            "sensitiveApiGuard": {
+                "mode": os.getenv("SENSITIVE_API_GUARD_MODE", "enforce").strip().lower(),
+                "scope": "backend-deps",
+                "note": "audit/enforce；改 .env 后需重启 app 容器",
+            },
+            "gatewaySessionCheck": {
+                "mode": None,
+                "scope": "apisix-container",
+                "note": "部署层 env（GATEWAY_SESSION_CHECK，默认 audit），app 进程读不到；"
+                        "切换 runbook 见 docs/2026-09-16-方案A-JWT单通道实施报告.md",
+            },
+        },
+        "endpoints": endpoints,
+        "actor": operator.actor,
+    })
+
+
+@sys_router.get("/security/sessions")
+async def list_sessions(operator: OperatorIdentity = Depends(require_admin_user)):
+    """在线会话列表（扫 Redis auth:session:*，按 userId 联表补用户信息）。"""
+    client = get_redis()
+    if client is None:
+        return _result({"sessions": [], "redisAvailable": False})
+    try:
+        keys = list(client.scan_iter(match="auth:session:*", count=200))
+    except Exception:
+        logger.warning("[security-ops] 会话扫描异常", exc_info=True)
+        return _result({"sessions": [], "redisAvailable": False})
+
+    parsed: list[dict] = []
+    for k in keys:
+        rest = k[len("auth:session:"):]
+        uid_s, sep, jti = rest.partition(":")
+        if not sep or not uid_s.isdigit() or not jti:
+            continue
+        parsed.append({"key": k, "userId": int(uid_s), "jti": jti,
+                       "ttlSeconds": client.ttl(k)})
+    await _attach_usernames(parsed)
+    parsed.sort(key=lambda x: (x["userId"], x["jti"]))
+    return _result({"sessions": parsed, "redisAvailable": True})
+
+
+@sys_router.delete("/security/sessions/{user_id}/{jti}")
+async def force_logout(user_id: int, jti: str,
+                       operator: OperatorIdentity = Depends(require_admin_user)):
+    """强制下线：删除该用户的会话键（方案 A 会话闸即刻生效）。"""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", jti):
+        return _fail("jti 格式非法", code=400)
+    client = get_redis()
+    if client is None:
+        return _fail("Redis 不可用，无法强制下线", code=503)
+    try:
+        deleted = bool(client.delete(f"auth:session:{user_id}:{jti}"))
+    except Exception:
+        logger.warning("[security-ops] 强制下线删除键异常", exc_info=True)
+        return _fail("Redis 操作失败，无法强制下线", code=503)
+    logger.info(f"[security-ops] 强制下线 actor={operator.actor} "
+                f"userId={user_id} jti={jti[:8]}… deleted={deleted}")
+    return _result({"revoked": deleted, "userId": user_id, "jti": jti})

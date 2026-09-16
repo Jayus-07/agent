@@ -57,6 +57,7 @@ export const NAV: NavEntry[] = [
     items: [
       { label: '问答追踪', path: '/observability/traces' },
       { label: '网关安全', path: '/observability/gateway' },
+      { label: '安全运营', path: '/security' },
       { label: 'Token 用量', path: '/observability/tokens' },
       { label: '告警中心', path: '/observability/alerts' },
     ],
