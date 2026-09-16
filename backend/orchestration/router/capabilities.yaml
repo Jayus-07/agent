@@ -14,6 +14,32 @@
 #     每一个 workflow，否则该 workflow 在向量路由里"失明"（2026-09-16 前的
 #     selection_decision 就是这个状态）。
 #
+# examples 撰写要点（2026-09-16 补）：
+#   - 条数是**召回余量**，不是装饰。2 条只是硬下限，5-10 条才是安全区；
+#     向量路由靠它们建索引，条数太少的 capability 容易在多个近义能力间被抢走。
+#   - 必须落在该 capability 的**能力边界内**：travel.poi_search 只支持
+#     福州/厦门/杭州；competitor.analyze 只处理「有明确竞品 URL 的页面级分析」，
+#     不含无 URL 的经营决策咨询（那属 business.analyze）。
+#   - 块内不得重复（manifest.py 会抛 ManifestError）。
+#
+# 「反直觉设计」备忘（2026-09-16 核实；审计时最容易误判的三点）：
+#   - routed: false 的能力（email.watch / competitor.watch /
+#     competitor.history）**不在向量索引里**（vector_router 只索引
+#     routed_capabilities），Rule/LLM Router 也选不到它们 —— 因此它们
+#     **抢不走**任何 routed 能力的路由。写 examples 时不必为「避让」
+#     内部能力而回避某些措辞。
+#   - 竞品三个 capability 是「漏斗式」：RuleRouter 把 竞品/比价/巡检/
+#     监控列表/价格监控/降价/涨价 全部指向 competitor.analyze，再由
+#     Skill._select_tool 按 action 分发到 analyze / watch / history /
+#     watchlist 四个 Tool。故 competitor.analyze 的 examples **必须**
+#     保留「监控」类措辞（如「监控一下竞品价格变化」）—— 该问句在
+#     RuleRouter 只命中「竞品」1 个弱信号（confidence 0.72 < 0.8），
+#     会 fallback 到向量路由；删掉这条样例会让「监控」类提问失去
+#     determinism，而不是「消除重叠」。
+#   - routed: false 只约束**路由层**：Planner prompt 与 critique 的能力
+#     清单取 orchestration/tool_registry 全量（17 个，含内部），故内部
+#     能力对 Planner LLM 仍可见。详见四层设计规范 §4 台账 E9。
+#
 # 注意：增删 examples 后，VectorRouter 启动时会按数量自检并自动重建 Chroma
 # 索引（collection 内自愈，无需手动删 backend/data/router_index）。
 
@@ -92,6 +118,8 @@ capabilities:
       - 毛利率下降趋势分析
       - 找出销量下降的关键商品
       - 评估供应商绩效
+      - 分析最近三个月退货率变化的原因
+      - 各渠道的转化率表现怎么样
 
   - name: report.generate
     skill: report
@@ -100,6 +128,9 @@ capabilities:
       - 生成月度销售报告
       - 生成库存分析报告
       - 生成经营周报
+      - 出一份上月经营分析报告
+      - 生成季度销售总结
+      - 帮我写一份库存盘点报告
 
   - name: email.send
     skill: email
@@ -108,6 +139,9 @@ capabilities:
       - 发送邮件给运营
       - 把日报发给 CEO
       - 邮件通知采购
+      - 帮我发一封邮件给采购部
+      - 给团队群发会议通知
+      - 发封邮件跟供应商确认交期
 
   # 批次1 Agently Mail 扩展：读能力需 EMAIL_ENGINE=agently 且完成 OAuth；
   # 未安装 CLI 时工具层返回不可用提示，不炸路由
@@ -118,6 +152,9 @@ capabilities:
       - 帮我搜一下邮箱里关于发货单的邮件
       - 最近收到了哪些邮件
       - 找一下客户发来的报价邮件
+      - 搜一下上周的订单确认邮件
+      - 邮箱里有没有物流公司的回信
+      - 找找关于合同续签的邮件
 
   - name: email.read
     skill: email
@@ -126,6 +163,9 @@ capabilities:
       - 读一下这封邮件的内容
       - 这封邮件里说了什么
       - 看看邮件的附件
+      - 打开最新那封邮件看看
+      - 帮我读一下第三封邮件
+      - 这封邮件里有没有提到交期
 
   # 内部能力：watch 长轮询不适合对话内触发，供通知闭环/automation 消费
   - name: email.watch
@@ -139,6 +179,10 @@ capabilities:
     examples:
       - 导出销售数据到 Excel
       - 把客户名单导出
+      - 导出全部商品清单
+      - 把这份数据存成 CSV
+      - 导出近半年的销售明细
+      - 把上个月的订单导出成 Excel
 
   - name: web.search
     skill: web_search
@@ -146,6 +190,10 @@ capabilities:
     examples:
       - 搜索 Amazon 政策更新
       - 查 Google 趋势
+      - 搜一下最新的跨境电商政策
+      - 查一下 Temu 最近的规则变化
+      - 网上有没有关于这个类目的报道
+      - 搜一下这个品牌最近有什么新动作
 
   - name: web.crawl
     skill: web_crawl
@@ -153,6 +201,10 @@ capabilities:
     examples:
       - 抓取竞品网站
       - 爬取新闻内容
+      - 抓取这个商品详情页的内容
+      - 把这个网页的正文提取出来
+      - 爬一下这篇文章的全文
+      - 帮我抓取这个页面的价格信息
 
   - name: data.collect
     skill: data_collection
@@ -160,6 +212,10 @@ capabilities:
     examples:
       - 采集 90 天销售数据
       - 收集各平台数据
+      - 采集最近一个月的订单数据
+      - 拉取各平台的销量数据
+      - 导入这批商品的价格数据
+      - 采集供应商的库存数据
 
   # 仅覆盖「候选地点检索」这一无状态能力；完整行程规划走旅游域图，
   # 不经主 Router（见 orchestration/graph/travel_prefilter.py）
@@ -171,6 +227,8 @@ capabilities:
       - 厦门必去的打卡点有哪些
       - 帮我找杭州适合亲子的地方
       - 查一下鼓浪屿附近的景点
+      - 厦门有哪些适合看海的地方
+      - 杭州有什么值得逛的博物馆
 
   - name: map.lookup
     skill: map_lookup
@@ -195,17 +253,20 @@ capabilities:
       - 帮我跟竞品比价
       - 看看竞品这个商品的卖点和差评
       - 监控一下竞品价格变化
+      - 查一下这个商品页的价格和促销信息
+      - 这个竞品链接的价格有变化吗
 
-  # 内部能力：仅 selection_decision workflow 消费，不对用户问题开放路由
+  # 内部能力：不参与用户问题路由。用户侧「巡检/监控」类提问由
+  # competitor.analyze 的 examples 承接，再经 action=watch 分发。
   - name: competitor.watch
     skill: competitor_analysis
     routed: false
-    reason: 竞品监控写入操作，仅 selection_decision workflow 内部使用
+    reason: 竞品巡检为全量扫描 + 快照写入，不参与用户问题路由：用户侧「巡检/监控」类提问由 competitor.analyze 承接并经 action=watch 分发（selection_decision workflow 直接读 store，不经过本能力）
 
   - name: competitor.history
     skill: competitor_analysis
     routed: false
-    reason: 竞品快照历史查询，仅 selection_decision workflow 内部使用
+    reason: 竞品快照历史查询依赖已存快照，不参与用户问题路由：用户侧「价格历史」类提问由 competitor.analyze 承接并经 action=history 分发（selection_decision workflow 直接读 store，不经过本能力）
 
 workflows:
   - name: daily_report

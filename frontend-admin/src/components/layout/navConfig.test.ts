@@ -1,6 +1,6 @@
 /** navConfig 回归测试 — 管理端六组导航的完整性与拆分边界（2026-09-16 Phase 1.5） */
-import { describe, it, expect } from 'vitest'
-import { NAV } from './navConfig'
+import { describe, it, expect, afterEach } from 'vitest'
+import { NAV, visibleNav } from './navConfig'
 
 const allPaths = NAV.flatMap((e) => [e.path, ...(e.items ?? []).map((i) => i.path)]).filter(
   (p): p is string => Boolean(p),
@@ -42,6 +42,9 @@ describe('NAV — 导航配置完整性', () => {
       '/cs/conversations',
       '/alerts',
       '/schedules',
+      // B13 能力治理只读页（2026-09-16）
+      '/agents',
+      '/skills',
     ]) {
       expect(allPaths, `核心路由 ${p} 丢失`).toContain(p)
     }
@@ -55,7 +58,54 @@ describe('NAV — 导航配置完整性', () => {
       expect(labels).not.toContain(userOnly)
     }
     for (const p of allPaths) {
-      expect(p.startsWith('/agent'), `用户端独有路由 ${p} 不应出现在管理端`).toBe(false)
+      // 边界是用户端 AI 对话入口 /agent（含子路径）。C11 起管理端另有顶层
+      // /agents（Agent 节点总览），不能再用 startsWith('/agent') 一刀切。
+      const isUserAgentRoute = p === '/agent' || p.startsWith('/agent/')
+      expect(isUserAgentRoute, `用户端独有路由 ${p} 不应出现在管理端`).toBe(false)
     }
   })
 })
+
+describe('visibleNav — 按角色过滤（2026-09-16 角色硬闸的 UI 层）', () => {
+  const labels = () => visibleNav().map((e) => e.label)
+
+  function loginAs(role: string | null) {
+    sessionStorage.clear()
+    if (role) sessionStorage.setItem('agent.user_info', JSON.stringify({ userId: 1, roles: [role] }))
+  }
+
+  afterEach(() => sessionStorage.clear())
+
+  it('admin 看到全部分组', () => {
+    loginAs('admin')
+    expect(labels()).toEqual(NAV.map((e) => e.label))
+  })
+
+  it('editor 无「运营干预」（处置权仅 admin），其余可见', () => {
+    loginAs('editor')
+    expect(labels()).not.toContain('运营干预')
+    expect(labels()).toContain('质量与配置')
+    expect(labels()).toContain('知识运营')
+  })
+
+  it('viewer 只看免角色分组（总览/业务分析/可观测/自动化）', () => {
+    loginAs('viewer')
+    expect(labels()).toEqual(expect.arrayContaining(['运营总览', '业务分析', '可观测', '自动化']))
+    for (const hidden of ['知识运营', '质量与配置', '运营干预']) {
+      expect(labels(), `viewer 不应看到「${hidden}」`).not.toContain(hidden)
+    }
+  })
+
+  it('未登录（无角色缓存）只看免角色分组，且不抛错', () => {
+    loginAs(null)
+    expect(labels()).not.toContain('运营干预')
+  })
+
+  it('minRole 声明与后端 RBAC 同语义（知识运营/质量配置=editor，运营干预=admin）', () => {
+    for (const e of NAV) {
+      if (e.label === '知识运营' || e.label === '质量与配置') expect(e.minRole).toBe('editor')
+      if (e.label === '运营干预') expect(e.minRole).toBe('admin')
+    }
+  })
+})
+
