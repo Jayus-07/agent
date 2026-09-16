@@ -344,3 +344,7 @@ yarl==1.23.0
 zh_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/zh_core_web_sm-3.8.0/zh_core_web_sm-3.8.0-py3-none-any.whl#sha256=7de3bd267176b9b2a8defb6997c1cd296da16c57b5e712f72ea44a51755421c8
 zipp==3.23.1
 zstandard==0.25.0
+
+# ── 异步任务编排（2026-09-16）──────────────────
+celery[redis]==5.4.0
+flower==2.0.1

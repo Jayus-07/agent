@@ -58,6 +58,11 @@ dependencies = [
     # pyproject 构建 → 缺包 → 容器内 Redis 全线静默降级（只留一条
     # "[Redis] connection failed ... No module named 'redis'" 的 warning）。
     "redis>=5.0",
+    # Celery 任务队列（backend/tasks/celery_app.py）。2026-09-16 补声明：
+    # tasks 模块（routes/tasks.py → backend.tasks）上线时只写进了
+    # requirements-lock.txt，未同步 pyproject → 镜像内缺包 →
+    # ModuleNotFoundError: celery → 容器启动即崩（Restarting 循环）。
+    "celery[redis]>=5.4",
     "faker>=25.0",  # demo/seed 数据上下文（backend/seed/core/context.py 模块级导入）
 
     # ═══════════════════════════════════════════
