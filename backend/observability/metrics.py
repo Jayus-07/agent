@@ -78,6 +78,20 @@ chat_stream_event_produced_total = Counter(
     labelnames=("event",),  # status | delta | log | done | error | meta
 )
 
+# ── 索引一致性 Sweeper（2026-09-17 P0-1 告警闭环）──
+# 五路存储对账检出的问题数：error 级持续增长 = 有数据不一致未修复，需告警
+rag_consistency_issues_total = Counter(
+    "rag_consistency_issues_total",
+    "索引五路存储一致性检查检出的问题数（按存储与严重级别）",
+    labelnames=("store", "severity"),  # store: registry|chroma_chunk|chroma_doc|chunk_store|bm25; severity: error|warning
+)
+
+rag_consistency_repairs_total = Counter(
+    "rag_consistency_repairs_total",
+    "Sweeper 执行的修复动作数（按存储与结果）",
+    labelnames=("store", "result"),  # result: ok | failed
+)
+
 # ── TTFT / TPOT 可观测性（P1 真 token 级流式 + 2026-09-13 补 TPOT）──
 # TTFT：首 delta 事件距请求开始的秒数：真流式下 ≈ 首个生成 chunk 到达时间，
 # 假打字机回退时 ≈ 全链路耗时。对比两条曲线即可验证流式改造收益。

@@ -18,6 +18,24 @@ from typing import TYPE_CHECKING
 
 from backend.shared.logger import logger
 
+
+def _metric_inc_issues(store: str, severity: str) -> None:
+    """Prometheus 打点：对账检出问题数（软降级，metrics 不可用不影响主流程）。"""
+    try:
+        from backend.observability.metrics import rag_consistency_issues_total
+        rag_consistency_issues_total.labels(store=store, severity=severity).inc()
+    except Exception:
+        pass
+
+
+def _metric_inc_repair(store: str, ok: bool) -> None:
+    """Prometheus 打点：修复动作结果（软降级同上）。"""
+    try:
+        from backend.observability.metrics import rag_consistency_repairs_total
+        rag_consistency_repairs_total.labels(store=store, result="ok" if ok else "failed").inc()
+    except Exception:
+        pass
+
 if TYPE_CHECKING:
     from backend.rag.pipeline import RAGPipeline
 
@@ -110,13 +128,16 @@ class IndexConsistencyChecker:
                 if issue.store == "chroma_chunk":
                     self.vectordb.delete(where={"doc_id": issue.doc_id})
                     actions.append(f"删除 Chroma chunk 孤儿: doc_id={issue.doc_id}")
+                    _metric_inc_repair(issue.store, ok=True)
                 elif issue.store == "chroma_doc":
                     self.doc_db.delete(where={"doc_id": issue.doc_id})
                     actions.append(f"删除 Chroma doc 孤儿: doc_id={issue.doc_id}")
+                    _metric_inc_repair(issue.store, ok=True)
                 elif issue.store == "chunk_store":
                     from backend.rag.indexing.chunk_store import get_chunk_store
                     get_chunk_store().delete_by_doc_id(issue.doc_id)
                     actions.append(f"删除 chunk_store 孤儿: doc_id={issue.doc_id}")
+                    _metric_inc_repair(issue.store, ok=True)
                 elif issue.store == "bm25":
                     if self.bm25_store is not None:
                         if "缺失" in issue.detail:
@@ -124,8 +145,10 @@ class IndexConsistencyChecker:
                         else:
                             self.bm25_store.remove_documents([issue.doc_id])
                             actions.append(f"清理 BM25 残留: doc_id={issue.doc_id}")
+                        _metric_inc_repair(issue.store, ok=True)
             except Exception as e:
                 actions.append(f"修复失败 ({issue.store} doc_id={issue.doc_id}): {e}")
+                _metric_inc_repair(issue.store, ok=False)
         if actions and self.bm25_store is not None:
             try:
                 self.pipeline.refresh_bm25_from_store()
@@ -408,6 +431,9 @@ async def consistency_sweep_loop(
             from backend.rag.pipeline import get_rag_pipeline
             checker = IndexConsistencyChecker(get_rag_pipeline())
             report = await asyncio.to_thread(checker.check)
+            # 告警打点：error 级持续增长 = 数据不一致未收敛，接 Alertmanager
+            for issue in report.issues:
+                _metric_inc_issues(issue.store, issue.severity)
             if not report.consistent:
                 actions = await asyncio.to_thread(checker.repair, report)
                 logger.warning(

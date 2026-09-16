@@ -207,6 +207,49 @@ class TestExecuteIndexTaskImpl:
         assert any(w["stage"] == "error" for w in redis_writes), \
             "业务终态必须立即发 error 事件"
 
+    def test_lock_conflict_reraises_for_retry(self, monkeypatch):
+        """P0-2 清单4:锁冲突是瞬态——重试期间只发进度不发终态,
+        交给 Celery autoretry,锁释放后重跑会经 SHA256 检测收敛为 duplicate。"""
+        redis_writes = []
+        monkeypatch.setattr(ru, "_write_progress_redis",
+                            lambda uid, stage, message="", **ex:
+                            redis_writes.append({"stage": stage, "message": message}))
+        monkeypatch.setattr(ru, "_do_index_sync",
+                            lambda *a, **kw: (_ for _ in ()).throw(
+                                ru.FileLockedByOtherError("locked")))
+        monkeypatch.setattr(ru, "_settle_index_result", MagicMock())
+
+        with pytest.raises(ru.FileLockedByOtherError):
+            it.execute_index_task_impl("u1", "/docs/a.pdf", "a.pdf", retries=0)
+
+        assert not any(w["stage"] == "error" for w in redis_writes), \
+            "锁冲突重试期间不得发终态 error"
+        assert any("自动重试" in w["message"] for w in redis_writes)
+
+    def test_lock_conflict_final_failure_keeps_file(self, monkeypatch):
+        """P0-2 清单4:末次重试仍锁冲突 → 终态收口但保留源文件
+        （持锁方可能正在读它）。"""
+        redis_writes = []
+        monkeypatch.setattr(ru, "_write_progress_redis",
+                            lambda uid, stage, message="", **ex:
+                            redis_writes.append({"stage": stage}))
+        monkeypatch.setattr(ru, "_do_index_sync",
+                            lambda *a, **kw: (_ for _ in ()).throw(
+                                ru.FileLockedByOtherError("locked")))
+        # 走真实 _settle_index_result,只 mock 外部副作用
+        monkeypatch.setattr(ru, "_mark_registry_failed", lambda p: None)
+        cleaned = []
+        monkeypatch.setattr(ru, "_cleanup_failed_upload_sync",
+                            lambda p, was_overwrite=False: cleaned.append(p))
+        monkeypatch.setattr(ru, "_safe_log_op", MagicMock())
+
+        with pytest.raises(ru.FileLockedByOtherError):
+            it.execute_index_task_impl("u1", "/docs/a.pdf", "a.pdf",
+                                       retries=it.CELERY_MAX_RETRIES)
+
+        assert any(w["stage"] == "error" for w in redis_writes)
+        assert cleaned == [], "锁冲突终态也必须保留源文件"
+
 
 # ═══════════════════════════════════════════════════
 # _run_index_background 分流
@@ -355,3 +398,48 @@ class TestSSEChannelRouting:
 
 def _ru_sse(ru, evt):
     return ru._sse_encode("message", evt)
+
+
+class TestRedisPollEvents:
+    """P1-1 清单5:Redis 轮询通道的过期判定——
+    镜像已有事件（入队即写）时不得误报「不存在或已过期」
+    （覆盖 Worker 冷启动/排队超过 10s empty-grace 窗口的场景）。"""
+
+    @staticmethod
+    def _messages(chunks):
+        """解析 SSE data 行为 JSON（与前端 onmessage 同口径）。"""
+        import json as _json
+        return [_json.loads(line[len("data: "):])
+                for line in "".join(chunks).splitlines()
+                if line.startswith("data: ")]
+
+    @pytest.mark.asyncio
+    async def test_existing_mirror_never_reports_expired(self, monkeypatch):
+        monkeypatch.setattr(ru, "_SSE_REDIS_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(ru, "_SSE_REDIS_POLL_MAX_SECONDS", 0.05)
+        mirror = {"stage": "uploading", "message": "已入队"}
+        monkeypatch.setattr(ru, "_read_progress_redis", lambda uid: dict(mirror))
+
+        chunks = []
+        async for chunk in ru._redis_poll_events("u-cold"):
+            chunks.append(chunk)
+
+        msgs = self._messages(chunks)
+        assert not any("不存在或已过期" in str(m) for m in msgs), \
+            "镜像存在时绝不能走 empty-grace 过期判定"
+        assert any("轮询超时" in m.get("message", "") for m in msgs), \
+            "deadline 到达后应走轮询超时兜底"
+
+    @pytest.mark.asyncio
+    async def test_empty_mirror_after_grace_reports_expired(self, monkeypatch):
+        """镜像持续为空（upload_id 真不存在 / TTL 已过期）→ grace 耗尽明确报过期。"""
+        monkeypatch.setattr(ru, "_SSE_REDIS_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(ru, "_SSE_REDIS_EMPTY_GRACE_POLLS", 3)
+        monkeypatch.setattr(ru, "_read_progress_redis", lambda uid: None)
+
+        chunks = []
+        async for chunk in ru._redis_poll_events("u-gone"):
+            chunks.append(chunk)
+
+        msgs = self._messages(chunks)
+        assert any("不存在或已过期" in m.get("message", "") for m in msgs)
