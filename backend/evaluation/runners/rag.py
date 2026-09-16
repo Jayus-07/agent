@@ -485,8 +485,16 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 ]
                 if retrieved_texts_for_gen:
                     try:
-                        from backend.evaluation.generation import generate_answer_ollama
-                        _generated_answer = generate_answer_ollama(question, retrieved_texts_for_gen)
+                        from backend.evaluation.generation import generate_answer
+                        # 云生成仅评测显式 opt-in（--judge/--ragas）时启用——
+                        # 默认不改变"cloud 模式不生成答案"的既有基线口径
+                        _allow_cloud = bool(
+                            kwargs.get("judge") or kwargs.get("ragas")
+                        )
+                        _generated_answer = generate_answer(
+                            question, retrieved_texts_for_gen,
+                            allow_cloud=_allow_cloud,
+                        )
                     except Exception as e:
                         logger.warning(f"[GenAnswer] {case.id} 答案生成失败: {e}")
 

@@ -1,16 +1,23 @@
-"""Ollama 生成后端 — 非阻塞 LLM Judge 的本地推理链路。
+"""评测答案生成后端 — LLM Judge 的推理链路。
 
-使用 langchain_ollama.ChatOllama 替代原始 HTTP 调用。
-用于评测系统的答案生成和 LLM-based 答案相关性评估。
+两个后端：
+- Ollama（本地）：仅 ENV_MODE=local 启用；ENV_MODE=cloud 时跳过（不连本地服务）
+- DashScope（云）：OpenAI 兼容端点，与 ragas_bridge 同配置族（QWEN_API_KEY/
+  QWEN_API_BASE/RAGAS_CLOUD_MODEL）。**仅在评测显式 opt-in（--judge/--ragas）
+  时使用**——默认行为保持"cloud 模式不生成答案"，避免改变既有基线口径。
 
-仅 ENV_MODE=local 时启用；ENV_MODE=cloud 时所有调用直接跳过（不连接本地服务）。
+统一入口 generate_answer(question, context, allow_cloud=...)：
+allow_cloud=True 且本地 Ollama 不可用时走云后端；否则回落 Ollama 行为。
 """
 from __future__ import annotations
+
+import os
 
 from backend.config.llm import OLLAMA_BASE_URL, OLLAMA_ENABLED, OLLAMA_MODEL
 from backend.shared.logger import logger
 
 _ollama_skip_logged = False
+_cloud_skip_logged = False
 
 _token_usage = {"prompt_tokens": 0, "completion_tokens": 0}
 _chat_cache: dict[tuple, object] = {}
@@ -114,6 +121,78 @@ def _build_prompt(question: str, context: list[str]) -> str:
         f"问题: {question}\n\n"
         f"答案:"
     )
+
+
+def _invoke_cloud(prompt: str) -> str:
+    """DashScope 云生成（OpenAI 兼容端点），累计 token 用量，失败返回空串。"""
+    global _cloud_skip_logged
+    api_key = os.getenv("QWEN_API_KEY", "")
+    if not api_key:
+        if not _cloud_skip_logged:
+            logger.warning("[CloudGen] QWEN_API_KEY 未配置，云生成不可用")
+            _cloud_skip_logged = True
+        return ""
+    from langchain_core.messages import HumanMessage
+
+    chat = _make_cloud_chat(api_key)
+    try:
+        response = chat.invoke([HumanMessage(content=prompt)])
+        usage = getattr(response, "usage_metadata", None) or {}
+        _token_usage["prompt_tokens"] += usage.get("input_tokens", 0)
+        _token_usage["completion_tokens"] += usage.get("output_tokens", 0)
+        return (response.content or "").strip()
+    except Exception as e:
+        logger.warning(f"[CloudGen] 调用失败: {e}")
+        return ""
+
+
+def _make_cloud_chat(api_key: str):
+    from langchain_openai import ChatOpenAI
+    key = (
+        os.getenv("RAGAS_CLOUD_MODEL", "qwen3.7-plus"),
+        os.getenv("QWEN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        0.1,
+    )
+    cached = _chat_cache.get(("cloud",) + key)
+    if cached is not None:
+        return cached
+    chat = ChatOpenAI(
+        model=key[0],
+        temperature=key[2],
+        max_tokens=2048,
+        request_timeout=120,
+        api_key=api_key,
+        base_url=key[1],
+        extra_body={"enable_thinking": False},
+    )
+    _chat_cache[("cloud",) + key] = chat
+    return chat
+
+
+def _strip_meta(raw: str) -> str:
+    """剥离生产模型输出的 META 注释块（前端解析用，评测指标不需要）。"""
+    import re as _re
+    return _re.sub(r"<!--META.*?-->", "", raw, flags=_re.S).strip()
+
+
+def generate_answer(
+    question: str,
+    context: list[str],
+    *,
+    allow_cloud: bool = False,
+) -> str:
+    """统一生成入口。
+
+    allow_cloud=True（评测显式 opt-in --judge/--ragas）且本地 Ollama 不可用时，
+    走 DashScope 云后端；其余情况回落 generate_answer_ollama 原行为
+    （cloud 环境返回空串，保持既有基线口径不变）。
+    """
+    prompt = _build_prompt(question, context)
+    if allow_cloud and not OLLAMA_ENABLED:
+        raw = _invoke_cloud(prompt)
+        if raw:
+            return _strip_meta(raw)
+    return _invoke_chat(prompt)
 
 
 def generate_answer_ollama(

@@ -262,12 +262,18 @@ def derive_expected(case: dict) -> dict:
     version_requirement / permission_scope 暂无消费方（§5 门禁全量字段阶段接入）。
     """
     a = case.get("annotation") or {}
+    # expected_answer：key_facts 拼接为参考答案，供 LLM-as-judge（--judge）与
+    # RAGAS ground_truth（ContextRecall/ContextPrecision）消费；
+    # 拒答用例不给参考答案（judge 门禁自动跳过，不对拒答场景评分）。
+    key_facts = a.get("key_facts") or []
+    expected_answer = "；".join(key_facts) if key_facts and not a.get("should_refuse") else ""
     return {
         "relevant_docs": a.get("expected_doc_ids") or [],
         "relevant_chunks": a.get("expected_chunk_ids") or [],
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
-        "required_facts": a.get("key_facts") or [],
+        "required_facts": key_facts,
+        "expected_answer": expected_answer,
         "should_reject": bool(a.get("should_refuse")),
     }
 

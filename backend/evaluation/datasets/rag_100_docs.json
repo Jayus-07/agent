@@ -58,7 +58,8 @@
           "XC-Guest",
           "密码每月1日更新"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "XC-Guest；密码每月1日更新"
       }
     },
     {
@@ -109,7 +110,8 @@
         "required_facts": [
           "10个工作日内"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "10个工作日内"
       }
     },
     {
@@ -162,7 +164,8 @@
           "3个工作日",
           "补办费20元"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "3个工作日；补办费20元"
       }
     },
     {
@@ -215,7 +218,8 @@
           "0591-8888-6677",
           "15分钟内响应"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "0591-8888-6677；15分钟内响应"
       }
     },
     {
@@ -270,7 +274,8 @@
           "120万元",
           "2025年3月1日至2027年2月28日"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "120万元；2025年3月1日至2027年2月28日"
       }
     },
     {
@@ -320,7 +325,8 @@
           "陈斌",
           "2026-06-12"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "陈斌；2026-06-12"
       }
     },
     {
@@ -387,7 +393,8 @@
           "印章使用管理办法",
           "行政部"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "印章使用管理办法；行政部"
       }
     },
     {
@@ -438,7 +445,8 @@
         "required_facts": [
           "CU+8位数字"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "CU+8位数字"
       }
     },
     {
@@ -505,7 +513,8 @@
           "3次以内含3次且每次不超过10分钟",
           "满2小时起算"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "3次以内含3次且每次不超过10分钟；满2小时起算"
       }
     },
     {
@@ -577,7 +586,8 @@
           "08:30至09:00",
           "5次以内含5次且每次不超过15分钟"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "08:30至09:00；5次以内含5次且每次不超过15分钟"
       }
     },
     {
@@ -644,7 +654,8 @@
           "星辰办公App",
           "单次最长3小时"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "星辰办公App；单次最长3小时"
       }
     },
     {
@@ -711,7 +722,8 @@
           "综合评分80分及以上",
           "每年3月年审"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "综合评分80分及以上；每年3月年审"
       }
     },
     {
@@ -764,7 +776,8 @@
           "12,999元/年",
           "席位不限"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "12,999元/年；席位不限"
       }
     },
     {
@@ -825,7 +838,8 @@
         "required_facts": [
           "486.5万元"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "486.5万元"
       }
     },
     {
@@ -876,7 +890,8 @@
         "required_facts": [
           "A1机房"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "A1机房"
       }
     },
     {
@@ -927,7 +942,8 @@
         "required_facts": [
           "168.4万元"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "168.4万元"
       }
     },
     {
@@ -980,7 +996,8 @@
           "93.8%",
           "41秒"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "93.8%；41秒"
       }
     },
     {
@@ -1056,7 +1073,8 @@
           "120万元",
           "18.5万元"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "120万元；18.5万元"
       }
     },
     {
@@ -1157,7 +1175,8 @@
           "调整过2次",
           "当前700元/晚"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "调整过2次；当前700元/晚"
       }
     },
     {
@@ -1215,7 +1234,8 @@
           "61.2%",
           "168.4万元"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "61.2%；168.4万元"
       }
     },
     {
@@ -1270,7 +1290,8 @@
         "required_facts": [
           "提前5个工作日"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "提前5个工作日"
       }
     },
     {
@@ -1335,7 +1356,8 @@
         "required_facts": [
           "B1层前台"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "B1层前台"
       }
     },
     {
@@ -1406,7 +1428,8 @@
         "required_facts": [
           "600元/晚"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "600元/晚"
       }
     },
     {
@@ -1475,7 +1498,8 @@
         "required_facts": [
           "500元/晚"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "500元/晚"
       }
     },
     {
@@ -1527,7 +1551,8 @@
         "required_facts": [
           "出差事由与项目编号"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "出差事由与项目编号"
       }
     },
     {
@@ -1594,7 +1619,8 @@
           "public/internal/confidential三级",
           "数据保护官（DPO）书面审批"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "public/internal/confidential三级；数据保护官（DPO）书面审批"
       }
     },
     {
@@ -1647,7 +1673,8 @@
           "58,320件",
           "92.4%"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "58,320件；92.4%"
       }
     },
     {
@@ -1698,7 +1725,8 @@
         "required_facts": [
           "2026-04-18"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "2026-04-18"
       }
     },
     {
@@ -1748,7 +1776,8 @@
           "B2层机房",
           "90天（2026-07-01至2026-09-28）"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "B2层机房；90天（2026-07-01至2026-09-28）"
       }
     },
     {
@@ -1807,7 +1836,8 @@
         "required_facts": [
           "5,210.50元"
         ],
-        "should_reject": false
+        "should_reject": false,
+        "expected_answer": "5,210.50元"
       }
     },
     {
@@ -1846,7 +1876,8 @@
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
         "required_facts": [],
-        "should_reject": true
+        "should_reject": true,
+        "expected_answer": ""
       }
     },
     {
@@ -1885,7 +1916,8 @@
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
         "required_facts": [],
-        "should_reject": true
+        "should_reject": true,
+        "expected_answer": ""
       }
     },
     {
@@ -1928,7 +1960,8 @@
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
         "required_facts": [],
-        "should_reject": true
+        "should_reject": true,
+        "expected_answer": ""
       }
     },
     {
@@ -1967,7 +2000,8 @@
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
         "required_facts": [],
-        "should_reject": true
+        "should_reject": true,
+        "expected_answer": ""
       }
     },
     {
@@ -2010,7 +2044,8 @@
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
         "required_facts": [],
-        "should_reject": true
+        "should_reject": true,
+        "expected_answer": ""
       }
     },
     {
@@ -2053,7 +2088,8 @@
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
         "required_facts": [],
-        "should_reject": true
+        "should_reject": true,
+        "expected_answer": ""
       }
     }
   ]
