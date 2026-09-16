@@ -31,7 +31,6 @@ from backend.config.llm import (
     LLM_FALLBACK_MODEL,
     LLM_MAX_RETRIES,
     LLM_RETRY_BACKOFF_BASE,
-    OLLAMA_ENABLED,
 )
 from backend.infra.llm.factory import get_llm_factory
 from backend.infra.llm.models import AVAILABLE_MODELS, compute_cost_usd
@@ -93,11 +92,6 @@ def set_request_model(model: str) -> None:
     if key_env and not os.getenv(key_env, "").strip():
         logger.warning(f"[LLM:proxy] 忽略模型覆盖 {model}: {key_env} 未配置 "
                        f"(回退全局 {get_active_model_name()})")
-        _request_model_var.set("")
-        return
-    if provider == "ollama" and not OLLAMA_ENABLED:
-        logger.warning(f"[LLM:proxy] 忽略模型覆盖 {model}: "
-                       f"ENV_MODE=cloud 已禁用本地 Ollama (回退全局 {get_active_model_name()})")
         _request_model_var.set("")
         return
     _request_model_var.set(model)
@@ -225,12 +219,9 @@ def _build_llm_for(model_name: str) -> BaseChatModel:
         # 均已注册 qwen_tp，proxy 构建口径 2026-09-17 对齐）
         from backend.infra.llm.providers.qwen_tp import build_qwen_tp
         return build_qwen_tp(model_name)
-    # ollama / 兜底
-    if not OLLAMA_ENABLED:
-        raise ValueError(
-            f"ENV_MODE=cloud 时已禁用本地 Ollama，无法构建模型 '{model_name}'。"
-            f"请设置 ENV_MODE=local 或改用云端模型: {[m['name'] for m in AVAILABLE_MODELS]}"
-        )
+    # ollama / 兜底 — 模型选择完全由 env 配置驱动（LLM_MODEL / 请求覆盖），
+    # 构建层不再按 ENV_MODE 拒建（2026-09-17 拍板：不做 cloud/local 区分）。
+    # 用户配了本地模型但 Ollama 未运行时，invoke 阶段自然报连接错误。
     from langchain_ollama import ChatOllama
 
     from backend.config import LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT, LLM_TEMPERATURE
