@@ -17,6 +17,7 @@ import concurrent.futures
 import json
 import os
 import re
+import time
 from typing import Any
 
 from backend.shared.logger import logger
@@ -40,6 +41,24 @@ _OLLAMA_MODEL = OLLAMA_MODEL
 
 # RAGAS 单 case 超时（秒）。Cloud API 4 个指标串行 LLM 调用，180s 留足余量。
 _RAGAS_CASE_TIMEOUT = int(os.getenv("RAGAS_CASE_TIMEOUT", "180"))
+
+# 限流重试：单指标计算遇 429/rate limit 时按退避重试（2026-09-17 实跑
+# workers=4 时限流丢 3~7 个样本/指标，聚合均值偏小）。0 = 不重试。
+_RAGAS_METRIC_RETRIES = int(os.getenv("RAGAS_METRIC_RETRIES", "2"))
+_RAGAS_RETRY_BACKOFF = float(os.getenv("RAGAS_RETRY_BACKOFF", "5"))
+_RATE_LIMIT_HINTS = ("429", "rate limit", "ratelimit", "throttl", "too many requests")
+
+
+def _get_evaluator_token_handler():
+    """获取 evaluator token 计量回调 handler（generation.py 提供，懒导入防环）。"""
+    from backend.evaluation.generation import EvaluatorTokenCallback
+
+    return EvaluatorTokenCallback().as_handler()
+
+
+def _is_rate_limit_error(e: Exception) -> bool:
+    text = str(e).lower()
+    return any(h in text for h in _RATE_LIMIT_HINTS)
 
 
 # ── Monkey-patch: RAGAS 输出解析安全网（cloud 模型极少触发，local 小模型必需） ──
@@ -256,6 +275,9 @@ def _init_cloud_llm() -> Any:
         api_key=_RAGAS_CLOUD_API_KEY,
         base_url=_RAGAS_CLOUD_API_BASE,
         extra_body={"enable_thinking": False},
+        # 模型级回调：RAGAS 经 LangchainLLMWrapper 内部调用，拿不到原始返回值，
+        # token 计量只能走 on_llm_end 回调（计入 evaluator 侧统计）
+        callbacks=[_get_evaluator_token_handler()],
     )
     return LangchainLLMWrapper(chat)
 
@@ -271,6 +293,7 @@ def _init_local_llm() -> Any:
         base_url=_OLLAMA_HOST,
         format="json",
         num_predict=1024,
+        callbacks=[_get_evaluator_token_handler()],
     )
     return LangchainLLMWrapper(chat)
 

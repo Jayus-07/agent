@@ -92,7 +92,10 @@ def _inject_token_totals(summaries: list[ModuleSummary], run_started_ts: float |
         from datetime import datetime, timezone
 
         from backend.config import TOKEN_USAGE_LOG_PATH
-        from backend.evaluation.generation import get_token_usage
+        from backend.evaluation.generation import (
+            get_evaluator_token_usage,
+            get_token_usage,
+        )
 
         log_path = os.path.expanduser(TOKEN_USAGE_LOG_PATH)
         if os.path.exists(log_path):
@@ -137,6 +140,12 @@ def _inject_token_totals(summaries: list[ModuleSummary], run_started_ts: float |
             local_usage = get_token_usage()
             sut_tokens["answer_llm"] += int(local_usage.get("prompt_tokens", 0)) \
                 + int(local_usage.get("completion_tokens", 0))
+
+            # evaluator 侧（judge 走项目 LLM、RAGAS 走独立云 LLM，均不经过
+            # JSONL tracker）内存计数器合并进 evaluator.judge
+            evaluator_usage = get_evaluator_token_usage()
+            evaluator_tokens["judge"] += int(evaluator_usage.get("prompt_tokens", 0)) \
+                + int(evaluator_usage.get("completion_tokens", 0))
 
             # Find RAG summary and inject comprehensive token stats
             rag_summary = next((s for s in summaries if s.module == "rag"), None)

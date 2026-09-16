@@ -7,12 +7,34 @@
 from pydantic import BaseModel, Field, model_validator
 
 
+def _record_judge_tokens(resp) -> None:
+    """judge 链路 token 计量对齐：计入 evaluator 侧统计（失败不影响评分）。
+
+    judge 走 backend.infra.llm 项目 LLM（独立于 generation.py 的 SUT 生成链路），
+    此前其 token 用量未进任何统计（token_summary.evaluator.judge 恒为 0）。
+    """
+    try:
+        usage = getattr(resp, "usage_metadata", None) or {}
+        if not usage:
+            usage = (getattr(resp, "response_metadata", None) or {}).get("token_usage") or {}
+        if usage:
+            from backend.evaluation.generation import add_evaluator_tokens
+
+            add_evaluator_tokens(
+                int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0),
+                int(usage.get("output_tokens") or usage.get("completion_tokens") or 0),
+            )
+    except Exception:
+        pass
+
+
 def _get_llm_response(prompt: str) -> str:
     """获取 LLM 回复：使用项目默认 LLM。"""
     try:
         from backend.infra.llm import get_llm
         llm = get_llm()
         resp = llm.invoke(prompt)
+        _record_judge_tokens(resp)
         return resp.content if hasattr(resp, "content") else str(resp)
     except ImportError:
         raise RuntimeError(

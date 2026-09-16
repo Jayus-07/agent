@@ -976,7 +976,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     # === RAGAS 并行评估（所有 case 批量并发）===
     # 整段包 try/except：RAGAS 阶段失败不应吞掉前面几十条已完成用例的结果
     if _deferred_ragas:
-        _ragas_workers = int(kwargs.get("ragas_workers", 4))
+        _ragas_workers = int(kwargs.get("ragas_workers", 2))
         logger.info(f"[RAGAS] 并行评估 {len(_deferred_ragas)} 个 case（workers={_ragas_workers}）")
         try:
             from backend.evaluation.evaluators.ragas_provider import RagasEvaluator

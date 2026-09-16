@@ -219,6 +219,12 @@ def _build_llm_for(model_name: str) -> BaseChatModel:
     if provider == "qwen":
         from backend.infra.llm.providers.qwen import build_qwen
         return build_qwen(model_name)
+    if provider == "qwen_tp":
+        # Token Plan 模型包端点（@tp 后缀）。此前 proxy 缺此分支，
+        # @tp 模型落到 ollama 兜底被 cloud 模式拒绝（models.py/factory.py
+        # 均已注册 qwen_tp，proxy 构建口径 2026-09-17 对齐）
+        from backend.infra.llm.providers.qwen_tp import build_qwen_tp
+        return build_qwen_tp(model_name)
     # ollama / 兜底
     if not OLLAMA_ENABLED:
         raise ValueError(

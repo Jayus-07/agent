@@ -130,8 +130,9 @@ def main():
         help="case 级并发线程数（默认 1=串行；本地 LLM 生成场景收益有限）",
     )
     parser.add_argument(
-        "--ragas-workers", type=int, default=4, metavar="N",
-        help="RAGAS 批量评估并发线程数（默认 4）",
+        "--ragas-workers", type=int, default=2, metavar="N",
+        help="RAGAS 批量评估并发线程数（默认 2；4 曾触发 DashScope 限流丢样本，"
+             "配合 RAGAS_METRIC_RETRIES 限流重试使用）",
     )
     parser.add_argument(
         "--no-resume", action="store_true",

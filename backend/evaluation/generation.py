@@ -20,6 +20,12 @@ _ollama_skip_logged = False
 _cloud_skip_logged = False
 
 _token_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+# Evaluator 侧 token 计量（judge / RAGAS 的 LLM 调用）。
+# 这两条链路不走 generation 的 SUT 生成路径，也不经过 JSONL token tracker
+# （data/token_usage.jsonl 只有 embedding/rerank 记录），此前完全未计入
+# token_summary.evaluator.judge（2026-09-17 实测恒为 0）。现统一在此累加，
+# 由 service._inject_token_totals 并入 evaluator 侧。
+_evaluator_token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "llm_calls": 0}
 _chat_cache: dict[tuple, object] = {}
 
 
@@ -32,6 +38,56 @@ def reset_token_usage() -> None:
     """重置 token 计数器（新一轮评测前调用）。"""
     _token_usage["prompt_tokens"] = 0
     _token_usage["completion_tokens"] = 0
+    _evaluator_token_usage.update(prompt_tokens=0, completion_tokens=0, llm_calls=0)
+
+
+def add_evaluator_tokens(prompt_tokens: int, completion_tokens: int) -> None:
+    """累加 evaluator 侧（judge/RAGAS）LLM 调用的 token 用量。线程安全（GIL 下 +=）。"""
+    _evaluator_token_usage["prompt_tokens"] += int(prompt_tokens or 0)
+    _evaluator_token_usage["completion_tokens"] += int(completion_tokens or 0)
+    _evaluator_token_usage["llm_calls"] += 1
+
+
+def get_evaluator_token_usage() -> dict[str, int]:
+    """返回 evaluator 侧（judge/RAGAS）累计 token 用量与调用次数。"""
+    return dict(_evaluator_token_usage)
+
+
+class EvaluatorTokenCallback:
+    """LangChain 模型级回调：把 evaluator LLM 每次调用的 token 计入评测统计。
+
+    用于 RAGAS（LangchainLLMWrapper 内部调用，拿不到原始返回值）——
+    挂在 ChatOpenAI/ChatOllama 的 callbacks 上，on_llm_end 时提取 usage。
+    计量失败绝不抛错（不影响评分主流程）。
+    """
+
+    def __init__(self):
+        from langchain_core.callbacks import BaseCallbackHandler
+
+        outer = self
+
+        class _Handler(BaseCallbackHandler):
+            def on_llm_end(self, response, **kwargs) -> None:
+                try:
+                    usage = (getattr(response, "llm_output", None) or {}).get("token_usage") or {}
+                    p = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+                    c = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+                    if not (p or c):
+                        # ChatOllama 等把 usage 放在 generations 消息的 usage_metadata
+                        gens = getattr(response, "generations", None) or []
+                        msg = getattr(gens[0][0], "message", None) if gens and gens[0] else None
+                        um = getattr(msg, "usage_metadata", None) or {}
+                        p = um.get("input_tokens") or 0
+                        c = um.get("output_tokens") or 0
+                    if p or c:
+                        add_evaluator_tokens(int(p), int(c))
+                except Exception:
+                    pass
+
+        self._handler = _Handler()
+
+    def as_handler(self):
+        return self._handler
 
 
 def _make_chat(model: str | None = None, base_url: str | None = None, temperature: float = 0.1):
