@@ -62,7 +62,10 @@ dependencies = [
     # tasks 模块（routes/tasks.py → backend.tasks）上线时只写进了
     # requirements-lock.txt，未同步 pyproject → 镜像内缺包 →
     # ModuleNotFoundError: celery → 容器启动即崩（Restarting 循环）。
-    "celery[redis]>=5.4",
+    # 2026-09-16 对齐：pin ==5.4.0 与 requirements-lock.txt（生产/CI 安装源）
+    # 及宿主 venv 一致；容器首次构建时曾解析到 5.6.3，下次 rebuild 归位 5.4.0
+    # （celery_app.py 仅用基础 API，5.4/5.6 兼容）。
+    "celery[redis]==5.4.0",
     "faker>=25.0",  # demo/seed 数据上下文（backend/seed/core/context.py 模块级导入）
 
     # ═══════════════════════════════════════════
