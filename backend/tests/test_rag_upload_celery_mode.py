@@ -78,6 +78,27 @@ class TestSettleIndexResult:
         assert extra.get("recoverable") is True
         assert cleaned == [], "chunking_empty 必须保留源文件"
 
+    def test_error_file_locked_keeps_file(self, monkeypatch):
+        """P0-2:锁冲突 = 同文件另一请求正在索引,源文件绝不能删（持锁方可能正在读）。"""
+        upload_id, _q, _ev, _rw = _mk_queue_ctx(monkeypatch)
+        emitted = []
+        cleaned = []
+        monkeypatch.setattr(ru, "_cleanup_failed_upload_sync",
+                            lambda p, was_overwrite=False: cleaned.append(p))
+        monkeypatch.setattr(ru, "_safe_log_op", MagicMock())
+
+        ru._settle_index_result(
+            upload_id, "/docs/same.pdf", "same.pdf", "web", None, "kb1",
+            None, False, 1000.0, result=None,
+            emit_fn=lambda s, m="", **ex: emitted.append((s, m, ex)),
+            exc=ru.FileLockedByOtherError("locked by another request"))
+
+        stage, _msg, extra = emitted[0]
+        assert stage == "error"
+        assert extra.get("error_type") == "file_locked"
+        assert extra.get("recoverable") is True
+        assert cleaned == [], "锁冲突必须保留源文件"
+
     def test_error_generic_cleans_file(self, monkeypatch):
         upload_id, _q, _ev, _rw = _mk_queue_ctx(monkeypatch)
         emitted = []
@@ -238,6 +259,36 @@ class TestRunIndexBackgroundDispatch:
             if evt is not None:
                 stages.append(evt["stage"])
         assert "duplicate" in stages, "回退路径必须走到终态收口"
+
+    @pytest.mark.asyncio
+    async def test_fallback_lock_conflict_switches_to_worker_channel(self, monkeypatch):
+        """P0-2 双重投递兜底:broker 模糊失败 + 本机回退抢锁失败 →
+        不收口、不删文件,打标切 Redis 轮询消费 Worker 的终态。"""
+        upload_id, q, _ev, _rw = _mk_queue_ctx(monkeypatch)
+        fake_task = MagicMock()
+        fake_task.apply_async = MagicMock(side_effect=ConnectionError("ambiguous"))
+        monkeypatch.setattr(it, "execute_index_task", fake_task)
+        monkeypatch.setattr(ru, "_do_index_sync",
+                            lambda *a, **kw: (_ for _ in ()).throw(
+                                ru.FileLockedByOtherError("locked by worker")))
+        monkeypatch.setattr(ru, "_get_index_semaphore", lambda: asyncio.Semaphore(2))
+        cleaned = []
+        monkeypatch.setattr(ru, "_cleanup_failed_upload_sync",
+                            lambda p, was_overwrite=False: cleaned.append(p))
+        settle = MagicMock()
+        monkeypatch.setattr(ru, "_settle_index_result", settle)
+
+        await ru._run_index_background(upload_id, "/docs/a.pdf", "a.pdf")
+
+        assert upload_id in ru._celery_routed, "必须打标让 SSE 切到 Worker 通道"
+        assert cleaned == [], "锁冲突绝不能删源文件（Worker 正在索引它）"
+        settle.assert_not_called(), "不能按失败收口（Worker 终态还没来）"
+        stages = []
+        while not q.empty():
+            evt = q.get_nowait()
+            if evt is not None:
+                stages.append(evt["stage"])
+        assert "error" not in stages, "锁冲突不得产生本侧 error 终态"
 
 
 # ═══════════════════════════════════════════════════

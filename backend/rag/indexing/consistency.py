@@ -119,8 +119,11 @@ class IndexConsistencyChecker:
                     actions.append(f"删除 chunk_store 孤儿: doc_id={issue.doc_id}")
                 elif issue.store == "bm25":
                     if self.bm25_store is not None:
-                        self.bm25_store.remove_documents([issue.doc_id])
-                        actions.append(f"清理 BM25 残留: doc_id={issue.doc_id}")
+                        if "缺失" in issue.detail:
+                            actions.append(self._repair_bm25_missing(issue.doc_id))
+                        else:
+                            self.bm25_store.remove_documents([issue.doc_id])
+                            actions.append(f"清理 BM25 残留: doc_id={issue.doc_id}")
             except Exception as e:
                 actions.append(f"修复失败 ({issue.store} doc_id={issue.doc_id}): {e}")
         if actions and self.bm25_store is not None:
@@ -129,6 +132,41 @@ class IndexConsistencyChecker:
             except Exception:
                 pass
         return actions
+
+    def _repair_bm25_missing(self, doc_id: str) -> str:
+        """BM25 缺失修复：从 chunk_store 重建该文档的 BM25 条目。
+
+        chunk_store 持有与向量库同源的 chunk 全文（上传路径先写 chunk_store
+        再写 BM25，失败窗口内文本是完整的），以它为事实来源重建，避免整文档
+        重索引（解析/嵌入成本）。file_path 取自 registry active 行。
+        """
+        try:
+            row = next(
+                (r for r in self.registry.list_all().values()
+                 if r.get("doc_id") == doc_id and r.get("status") == "active"),
+                None,
+            )
+            if row is None:
+                return f"BM25 缺失修复跳过（registry 无 active 行）: doc_id={doc_id}"
+            from backend.rag.indexing.chunk_store import get_chunk_store
+            from langchain_core.documents import Document  # 局部导入:保持模块轻依赖
+            rows = get_chunk_store().get_by_doc_id(doc_id)
+            docs = [
+                Document(page_content=r["content"],
+                         metadata={"doc_id": doc_id,
+                                   "source_file": row.get("file_path", ""),
+                                   "chunk_index": r.get("chunk_index", 0),
+                                   "doc_type": row.get("doc_type", "general")})
+                for r in rows if (r.get("content") or "").strip()
+            ]
+            if not docs:
+                return f"BM25 缺失修复跳过（chunk_store 无有效 chunk）: doc_id={doc_id}"
+            file_path = row.get("file_path", "")
+            self.bm25_store.replace_documents(
+                docs, doc_id=doc_id, file_path=file_path)
+            return f"BM25 缺失已从 chunk_store 重建 {len(docs)} chunks: doc_id={doc_id}"
+        except Exception as e:
+            return f"BM25 缺失修复失败（下轮重试）: doc_id={doc_id}: {e}"
 
     # ── 内部检查方法 ──
 
@@ -302,11 +340,26 @@ class IndexConsistencyChecker:
 
             try:
                 result = self.vectordb.get()
+                chroma_doc_ids: set[str] = set()
                 chroma_counts: dict[str, int] = {}
                 for meta in (result.get("metadatas") or []):
                     did = (meta or {}).get("doc_id", "")
                     if did:
+                        chroma_doc_ids.add(did)
                         chroma_counts[did] = chroma_counts.get(did, 0) + 1
+
+                # P0-1: BM25 缺失检测 —— active 文档在 Chroma 有向量但 BM25
+                # 无条目（上传时 replace_documents 失败被吞 / 历史遗留）。
+                # 按 active 口径而非 expected：进行中文档（先写后删/新上传
+                # 占位行）尚未写 BM25 属正常中间态，不能误报。
+                for did in active_ids & (chroma_doc_ids - bm25_doc_ids):
+                    report.issues.append(ConsistencyIssue(
+                        severity="error",
+                        store="bm25",
+                        doc_id=did,
+                        detail="BM25 缺失: Chroma 有向量但 BM25 无条目（同步失败或历史遗留）",
+                    ))
+
                 for did in bm25_doc_ids & set(chroma_counts.keys()):
                     if bm25_counts.get(did, 0) != chroma_counts.get(did, 0):
                         report.issues.append(ConsistencyIssue(

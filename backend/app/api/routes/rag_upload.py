@@ -756,6 +756,15 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
                          result="failed", duration_ms=duration_ms,
                          detail={"error": str(exc)[:200], "error_type": "chunking_empty"})
+        elif isinstance(exc, FileLockedByOtherError):
+            # P0-2:锁冲突 = 同文件另一请求正在索引。源文件绝不能删 ——
+            # 持锁方（Celery Worker 或另一本机任务）可能正在读它，
+            # 删除会让对方索引中途断源。标 recoverable 让前端提示可重试。
+            emit_fn("error", "同文件正在被另一请求索引，本请求已让行（可稍后重试）",
+                    error_type="file_locked", recoverable=True)
+            _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
+                         result="failed", duration_ms=duration_ms,
+                         detail={"error": str(exc)[:200], "error_type": "file_locked"})
         else:
             _cleanup_failed_upload_sync(filepath, was_overwrite=was_overwrite)
             emit_fn("error", str(exc))
@@ -918,6 +927,19 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
         async with sem:
             result = await loop.run_in_executor(
                 None, _do_index_sync, upload_id, filepath, filename, loop, kb_id, department)
+    except FileLockedByOtherError:
+        # P0-2 双重投递兜底：Celery 任务实际已入队（broker 响应丢失被误判为
+        # 入队失败）+ 本机回退同时执行，本机抢锁失败即此场景。
+        # 索引由 Worker 负责 —— 这里绝不能走失败收口（旧实现会
+        # _cleanup_failed_upload_sync 删掉 Worker 正在索引的源文件，导致
+        # Worker 中途断源）。改为打标切换 SSE 到 Redis 轮询通道，消费
+        # Worker 的终态事件；若 Worker 任务实际不存在（极罕见的跨上传
+        # 锁冲突），SSE 空转后由轮询超时兜底报错，源文件保持原样。
+        logger.warning(
+            f"[RAG] {filename} 文件锁被占（Celery 任务大概率已在执行），本机回退退出")
+        _celery_routed.add(upload_id)
+        await emit("uploading", "索引任务已在队列中执行，等待其结果...")
+        return
     except Exception as e:
         _settle_index_result(
             upload_id, filepath, filename, source, batch_id, kb_id,

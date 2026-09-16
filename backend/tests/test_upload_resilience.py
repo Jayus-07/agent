@@ -208,12 +208,17 @@ class FakeBM25:
         self.docs = [Document(page_content="x", metadata={"doc_id": d})
                      for d in doc_ids]
         self.removed = []
+        self.replaced = []
 
     def load_docs(self):
         return self.docs
 
     def remove_documents(self, doc_ids, k=20, file_paths=None):
         self.removed.extend(doc_ids)
+
+    def replace_documents(self, docs, k=20, *, doc_id="", file_path=""):
+        self.replaced.append({"doc_id": doc_id, "file_path": file_path,
+                              "count": len(docs)})
 
 
 @pytest.fixture
@@ -281,3 +286,44 @@ class TestConsistencySweeper:
         assert "doc-active" not in chroma_deletes
         assert "doc-wip" not in chroma_deletes
         assert checker_env.bm25.removed == ["doc-ghost"]
+
+    # ---- P0-1: BM25 缺失检测与修复 ----
+
+    def _register_active(self, env, tmp_path, doc_id):
+        f = tmp_path / f"{doc_id}.md"
+        f.write_text("body", encoding="utf-8")
+        env.registry.register(file_path=str(f), doc_id=doc_id,
+                              file_hash="h", kb_id="kb", chunk_ids=["c1"],
+                              doc_db_id="dd-" + doc_id)
+        env.vectordb._ids.append(doc_id)
+
+    def test_bm25_missing_active_doc_detected(self, checker_env, tmp_path):
+        """active 文档在 Chroma 有向量但 BM25 缺失（同步失败被吞/历史遗留）→ 必须检出。"""
+        self._register_active(checker_env, tmp_path, "doc-no-bm25")
+        report = checker_env.checker.check()
+        missing = {i.doc_id for i in report.issues
+                   if i.store == "bm25" and i.severity == "error"
+                   and "缺失" in i.detail}
+        assert "doc-no-bm25" in missing
+        assert "doc-wip" not in missing, "进行中文档尚未写 BM25 属正常中间态，不误报"
+
+    def test_repair_resyncs_bm25_missing_from_chunk_store(self, checker_env, tmp_path,
+                                                          monkeypatch):
+        """修复语义分叉:BM25 幽灵 → 删除;BM25 缺失 → 从 chunk_store 重建。"""
+        self._register_active(checker_env, tmp_path, "doc-no-bm25")
+        fake_store = SimpleNamespace(get_by_doc_id=lambda d: [
+            {"chunk_index": 0, "content": "hello 世界"},
+            {"chunk_index": 1, "content": ""},  # 空 content 必须被过滤
+        ])
+        monkeypatch.setattr("backend.rag.indexing.chunk_store.get_chunk_store",
+                            lambda: fake_store)
+
+        report = checker_env.checker.check()
+        actions = checker_env.checker.repair(report)
+
+        assert checker_env.bm25.removed == ["doc-ghost"], "幽灵仍走删除"
+        replaced = [a for a in checker_env.bm25.replaced
+                    if a["doc_id"] == "doc-no-bm25"]
+        assert len(replaced) == 1, "缺失必须走 chunk_store 重建"
+        assert replaced[0]["count"] == 1, "空 content chunk 必须被过滤"
+        assert any("doc-no-bm25" in a and "重建" in a for a in actions)
