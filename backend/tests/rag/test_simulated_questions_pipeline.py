@@ -62,11 +62,12 @@ class TestQuestionGenModule:
         from backend.rag.preprocessing.question_gen import generate_chunk_questions
 
         chunks_text = ["第一条 内容甲。", "第二条 内容乙。", "第三条 内容丙。"]
-        result = generate_chunk_questions(chunks_text, doc_type="policy")
+        result, tokens = generate_chunk_questions(chunks_text, doc_type="policy")
         assert isinstance(result, list)
         assert len(result) == len(chunks_text), "问题数必须与 chunk 数对齐"
         for per_chunk in result:
             assert isinstance(per_chunk, list)
+        assert isinstance(tokens, dict), "tokens 必须随返回值回传"
 
     def test_llm_path_length_mismatch_falls_back(self, monkeypatch):
         """LLM 返回的模拟问题长度不符 → 整体降级规则版，不得返回空。"""
@@ -81,7 +82,7 @@ class TestQuestionGenModule:
 
         monkeypatch.setattr(question_gen, "_invoke_llm", fake_llm)
         chunks_text = ["第一条 甲。", "第二条 乙。", "第三条 丙。"]
-        result = question_gen.generate_chunk_questions(chunks_text, doc_type="policy")
+        result, tokens = question_gen.generate_chunk_questions(chunks_text, doc_type="policy")
         assert len(result) == 3
         assert all(len(qs) >= 1 for qs in result), "mismatch 后必须规则兜底，不得留空"
 
@@ -94,17 +95,19 @@ class TestQuestionGenModule:
 
         monkeypatch.setattr(question_gen, "_invoke_llm", boom)
         chunks_text = ["报销标准是什么？每月上限两千元。", "请假流程如下：先审批后执行。"]
-        result = question_gen.generate_chunk_questions(chunks_text, doc_type="policy")
+        result, tokens = question_gen.generate_chunk_questions(chunks_text, doc_type="policy")
         assert len(result) == 2
         assert all(len(qs) >= 1 for qs in result)
+        assert tokens == {}
 
     def test_disabled_flag_returns_empty(self, monkeypatch):
         """ENABLE_SIMULATED_QUESTIONS=off → 空产出（功能开关可关闭）。"""
         from backend.rag.preprocessing import question_gen
 
         monkeypatch.setattr(question_gen, "ENABLE_SIMULATED_QUESTIONS", False)
-        result = question_gen.generate_chunk_questions(["某内容。"], doc_type="policy")
+        result, tokens = question_gen.generate_chunk_questions(["某内容。"], doc_type="policy")
         assert result == []
+        assert tokens == {}
 
 
 # ---------- 2. _build_doc_metadata 接线契约 ----------
@@ -128,12 +131,13 @@ class TestMetadataWiring:
         monkeypatch.setattr(entity_mod, "extract_entities", lambda *a, **k: {})
 
         # 修复后 question_gen 会被 gather 并发调用——此处桩化以隔离 LLM
+        # （2026-09-16 契约变更：返回 (questions, tokens) 二元组）
         import backend.rag.preprocessing.question_gen as qg_mod
         monkeypatch.setattr(
             qg_mod, "generate_chunk_questions",
-            lambda chunks_text, doc_type="general": [
-                [f"问题{i}a", f"问题{i}b"] for i in range(len(chunks_text))
-            ],
+            lambda chunks_text, doc_type="general": (
+                [[f"问题{i}a", f"问题{i}b"] for i in range(len(chunks_text))], {},
+            ),
         )
 
         idx = _mk_indexer()
@@ -164,17 +168,13 @@ class TestMetadataWiring:
         monkeypatch.setattr(entity_mod, "extract_entities", lambda *a, **k: {})
 
         import backend.rag.preprocessing.question_gen as qg_mod
+        # 2026-09-16 契约变更：tokens 随返回值回传（不再走模块级全局变量）
         monkeypatch.setattr(
             qg_mod, "generate_chunk_questions",
-            lambda chunks_text, doc_type="general": [
-                ["q"] for _ in chunks_text
-            ],
-        )
-        # question_gen 路径的 tokens（修复实现需回传）
-        monkeypatch.setattr(
-            qg_mod, "LAST_QUESTION_GEN_TOKENS",
-            {"prompt_tokens": 50, "completion_tokens": 10, "cost_usd": 0.05},
-            raising=False,
+            lambda chunks_text, doc_type="general": (
+                [["q"] for _ in chunks_text],
+                {"prompt_tokens": 50, "completion_tokens": 10, "cost_usd": 0.05},
+            ),
         )
 
         idx = _mk_indexer()

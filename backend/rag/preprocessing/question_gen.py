@@ -14,13 +14,16 @@ F1 重构把 `_build_doc_metadata` 的 summary/keywords/entities 三路并发化
   chunk 独立校验，坏一块不影响其余。
 - 规则降级：LLM 失败/未配置/长度不符 → 无害占位问句（不引入召回噪声）。
 - 计量：统一走 `invoke_metadata_llm`（proxy 层自动落 llm_usage_store），
-  tokens 经模块级 LAST_QUESTION_GEN_TOKENS 回传给 indexer 汇总
-  （信号量限并发 ≤2，且仅作 trace 视图用途，模块级变量可接受）。
+  tokens 经返回值 (questions, tokens) 回传给 indexer 汇总——
+  2026-09-16 由模块级 LAST_QUESTION_GEN_TOKENS 改为返回值回传：
+  信号量限并发 ≤2 下模块级全局会被并发上传互相覆盖（与 proxy.py
+  ContextVar 重构前同款问题）。
 
 对接契约（被 tests/rag/test_simulated_questions_pipeline.py 锁定）：
-    generate_chunk_questions(chunks_text, doc_type="general") -> list[list[str]]
-    ENABLE_SIMULATED_QUESTIONS / QUESTION_GEN_MAX_CHUNKS / _invoke_llm /
-    LAST_QUESTION_GEN_TOKENS 均为模块级可 monkeypatch 属性。
+    generate_chunk_questions(chunks_text, doc_type="general")
+        -> tuple[list[list[str]], dict]   # (questions_by_chunk, tokens)
+    ENABLE_SIMULATED_QUESTIONS / QUESTION_GEN_MAX_CHUNKS / _invoke_llm
+    均为模块级可 monkeypatch 属性。
 """
 from __future__ import annotations
 
@@ -37,9 +40,6 @@ from backend.config.rag import (
 )
 
 _LAST_META_CLEANUP_RE = re.compile(r"\{.*\}", re.DOTALL)
-
-# 每次调用的 token 用量回传（indexer 汇总进 index_metadata span / registry）
-LAST_QUESTION_GEN_TOKENS: dict = {}
 
 
 def _fallback_questions(chunk_text: str) -> list[str]:
@@ -178,7 +178,7 @@ def _cache_put(key: str, value: list[list[str]]) -> None:
 
 
 def generate_chunk_questions(chunks_text: list[str],
-                             doc_type: str = "general") -> list[list[str]]:
+                             doc_type: str = "general") -> tuple[list[list[str]], dict]:
     """为每个 chunk 生成模拟问题（Document Expansion）。
 
     Args:
@@ -186,21 +186,21 @@ def generate_chunk_questions(chunks_text: list[str],
         doc_type: 文档类型（进 prompt 提升问题措辞相关性）。
 
     Returns:
-        list[list[str]]，长度 == len(chunks_text)；每个元素是该 chunk 的
-        1-3 个模拟问题。功能关闭时返回空列表（调用方跳过前缀注入）。
+        (questions_by_chunk, tokens) 二元组：
+        - questions_by_chunk: 长度 == len(chunks_text)，每个元素是该 chunk 的
+          1-3 个模拟问题。功能关闭时返回空列表（调用方跳过前缀注入）。
+        - tokens: 本次 LLM 调用用量（prompt_tokens/completion_tokens/cost_usd），
+          LLM 未调用或缓存命中时为 {}。
     """
-    global LAST_QUESTION_GEN_TOKENS
-    LAST_QUESTION_GEN_TOKENS = {}
-
     if not ENABLE_SIMULATED_QUESTIONS or not chunks_text:
-        return []
+        return [], {}
 
     # 内容寻址缓存：同内容重索引/副本 → 相同问题（前缀稳定 → 嵌入缓存可命中）
     ckey = _cache_key(chunks_text, doc_type)
     cached = _cache_get(ckey)
     if cached is not None and len(cached) == len(chunks_text):
         logger.info(f"[QuestionGen] 缓存命中 {len(cached)} chunks")
-        return cached
+        return cached, {}
 
     # 成本护栏：超长文档只对前 N chunk 走 LLM，其余规则兜底
     llm_scope = list(chunks_text[:QUESTION_GEN_MAX_CHUNKS])
@@ -208,19 +208,19 @@ def generate_chunk_questions(chunks_text: list[str],
 
     fallback_result = [_fallback_questions(ct) for ct in chunks_text]
     if not llm_scope:
-        return fallback_result
+        return fallback_result, {}
 
     prompt = _build_prompt(llm_scope, doc_type)
     try:
         result = _invoke_llm(prompt)
         content = result.content.strip() if hasattr(result, "content") else str(result)
-        LAST_QUESTION_GEN_TOKENS = _read_last_tokens()
+        tokens = _read_last_tokens()
         parsed = _extract_json_questions(content, len(llm_scope), llm_scope)
         if parsed is None:
-            return fallback_result
+            return fallback_result, tokens
         result_questions = parsed + [_fallback_questions(ct) for ct in tail_scope]
         _cache_put(ckey, result_questions)
-        return result_questions
+        return result_questions, tokens
     except Exception as e:
         logger.warning(f"[QuestionGen] LLM 调用失败，规则降级: {type(e).__name__}: {e}")
-        return fallback_result
+        return fallback_result, {}

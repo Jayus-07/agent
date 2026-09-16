@@ -249,17 +249,16 @@ class MetadataStage:
         async def task_questions():
             """模拟问题生成（Document Expansion，S0 恢复）。
 
-            走 question_gen（proxy 自动计量），tokens 经模块级
-            LAST_QUESTION_GEN_TOKENS 回传，在下方与关键词路径 tokens 汇总。
+            走 question_gen（proxy 自动计量），tokens 随返回值回传
+            （2026-09-16 起不再走模块级全局，避免并发上传互相覆盖），
+            在下方与关键词路径 tokens 汇总。
             """
             if not chunks_text:
                 return [], {}
             from backend.rag.preprocessing import question_gen as _qg
-            questions = await asyncio.to_thread(
+            return await asyncio.to_thread(
                 _qg.generate_chunk_questions, chunks_text, doc_type,
             )
-            _qg_tokens = dict(getattr(_qg, "LAST_QUESTION_GEN_TOKENS", {}) or {})
-            return questions, _qg_tokens
 
         # 并行执行：总耗时 = max(各任务耗时) 而非 sum；
         # 解包顺序与 gather 参数顺序一一对应
@@ -449,10 +448,8 @@ class MetadataStage:
             from backend.config.rag import ENABLE_SIMULATED_QUESTIONS
             if ENABLE_SIMULATED_QUESTIONS and chunks_text:
                 from backend.rag.preprocessing import question_gen as _qg
-                questions_by_chunk = await asyncio.to_thread(
+                questions_by_chunk, question_gen_tokens = await asyncio.to_thread(
                     _qg.generate_chunk_questions, chunks_text, unified["doc_type"])
-                question_gen_tokens = dict(
-                    getattr(_qg, "LAST_QUESTION_GEN_TOKENS", {}) or {})
         except Exception as e:
             logger.warning(f"[MetaLLM] 模拟问题生成失败（不影响元数据）: {e}")
 
