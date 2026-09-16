@@ -52,11 +52,15 @@ def parse_and_chunk(file_path: str, doc_type_hint: str = "") -> List[Document]:
         raise ValueError(hint)
 
     # 结构安全清洗：清洗每个节点文本，保留结构
+    # R-P0-3 原文可追溯：清洗前留存 raw_text + 清洗操作留痕（不改清洗行为本身）
     cleaner = DocumentCleaner()
     source_type = "pdf" if file_path.lower().endswith(".pdf") else "text"
     for node in walk(raw_ast.root):
         if node.type not in ("table",):  # table 的 rows 不在 text 清洗范围
-            node.text = cleaner.clean(node.text, source_type=source_type).text
+            node.raw_text = node.text
+            clean_result = cleaner.clean(node.text, source_type=source_type)
+            node.text = clean_result.text
+            node.cleaning_operations = list(clean_result.changes)
 
     normalized_ast, report = StructureAnalyzer().analyze(raw_ast)
 
