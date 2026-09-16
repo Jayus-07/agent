@@ -205,3 +205,57 @@ export interface GatewayAuthMetrics {
 export async function getGatewayAuthMetrics(hours = 6): Promise<GatewayAuthMetrics> {
   return await request<GatewayAuthMetrics>(`/api/observability/gateway-auth?hours=${hours}`);
 }
+
+// ── 网关访问审计明细（APISIX → Redis Streams → ai.gateway_access_logs）──
+
+export interface GatewayAccessLogRow {
+  ts: string
+  client_ip: string
+  user_id: string
+  /** auth.users 回显的用户名（user_id 非纯数字时为 null，前端回退显示 user_id） */
+  username: string | null
+  auth_type: string
+  trace_id: string
+  method: string
+  uri: string
+  query: string
+  status: number
+  bytes: number
+  duration_ms: number
+  ua: string
+}
+
+export interface GatewayAccessLogs {
+  available: boolean
+  window_hours: number
+  error?: string
+  total?: number
+  logs?: GatewayAccessLogRow[]
+}
+
+export interface GatewayAccessLogQuery {
+  hours?: number
+  userId?: string
+  ip?: string
+  path?: string
+  /** true：仅 4xx/5xx（安全审计默认视角；后端排序恒为异常优先） */
+  abnormalOnly?: boolean
+  /** true：包含 /health 心跳与 /observability 自引用（默认排除防自膨胀） */
+  includeNoise?: boolean
+  limit?: number
+  offset?: number
+}
+
+/** GET /observability/gateway-access-logs — 表未建/PG 不可达时 available=false（显式降级） */
+export async function getGatewayAccessLogs(q: GatewayAccessLogQuery): Promise<GatewayAccessLogs> {
+  const sp = new URLSearchParams()
+  if (q.hours != null) sp.set("hours", String(q.hours))
+  if (q.userId) sp.set("user_id", q.userId)
+  if (q.ip) sp.set("ip", q.ip)
+  if (q.path) sp.set("path", q.path)
+  if (q.abnormalOnly) sp.set("abnormal_only", "true")
+  if (q.includeNoise) sp.set("include_noise", "true")
+  sp.set("limit", String(q.limit ?? 100))
+  sp.set("offset", String(q.offset ?? 0))
+  return await request<GatewayAccessLogs>(`/api/observability/gateway-access-logs?${sp.toString()}`)
+}

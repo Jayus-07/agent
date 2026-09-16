@@ -509,6 +509,16 @@ async def start_kafka_consumer():
 
 
 # ═══════════════════════════════════════════════════
+# 启动网关访问日志消费者（APISIX → Redis Streams → ai.gateway_access_logs，
+# 管理端 /observability/gateway 查询；GATEWAY_LOG_INGEST_ENABLED 控制）
+# ═══════════════════════════════════════════════════
+@app.on_event("startup")
+async def start_gateway_log_ingest_task():
+    from backend.observability.gateway_log_ingest import start_gateway_log_ingest
+    start_gateway_log_ingest()
+
+
+# ═══════════════════════════════════════════════════
 # 启动
 # ═══════════════════════════════════════════════════
 if __name__ == "__main__":

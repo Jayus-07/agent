@@ -52,16 +52,19 @@ def test_raise_for_error_maps_infra_failure_to_503():
 # ─────────────────────────────────────────────────────────────
 
 class _FakeService:
-    """按需返回成功/失败载荷的假 MemoryService"""
+    """按需返回成功/失败载荷的假 MemoryService（记录收到的 user_id 供断言）"""
 
     def __init__(self, payload: dict):
         self._payload = payload
+        self.seen_user_id: str | None = None
 
     # 注：路由会传 limit/before（P1-12 加的分页参数）；fake 接收可变参数忽略
     async def list_sessions(self, user_id: str = "default", **_: object) -> dict:
+        self.seen_user_id = user_id
         return self._payload
 
-    async def delete_session(self, session_id: str) -> dict:
+    async def delete_session(self, session_id: str, user_id: str | None = None) -> dict:
+        self.seen_user_id = user_id
         return self._payload
 
 
@@ -81,10 +84,29 @@ def client_factory(monkeypatch):
 
 
 def test_list_sessions_success_returns_200(client_factory):
-    client = client_factory(_FakeService({"sessions": [{"session_id": "s1", "title": "t"}], "total": 1}))
-    res = client.get("/memory/sessions")
+    service = _FakeService({"sessions": [{"session_id": "s1", "title": "t"}], "total": 1})
+    client = client_factory(service)
+    res = client.get("/memory/sessions", headers={"X-User-Id": "15"})
     assert res.status_code == 200
     assert res.json()["total"] == 1
+    # 2026-09-16 按登录用户隔离：user_id 必须来自身份头，而非查询参数
+    assert service.seen_user_id == "15"
+
+
+def test_list_sessions_guest_returns_401(client_factory):
+    """未认证（无网关注入身份头）→ 401，不再落到 user_id="default" 共享桶"""
+    client = client_factory(_FakeService({"sessions": [], "total": 0}))
+    res = client.get("/memory/sessions")
+    assert res.status_code == 401
+
+
+def test_list_sessions_rejects_self_reported_user_id(client_factory):
+    """回归防护：?user_id= 自报参数必须被无视（隔离前的旧调用方式）"""
+    service = _FakeService({"sessions": [], "total": 0})
+    client = client_factory(service)
+    res = client.get("/memory/sessions?user_id=999", headers={"X-User-Id": "15"})
+    assert res.status_code == 200
+    assert service.seen_user_id == "15"
 
 
 def test_list_sessions_db_failure_returns_503_not_empty_200(client_factory):
@@ -92,14 +114,14 @@ def test_list_sessions_db_failure_returns_503_not_empty_200(client_factory):
     client = client_factory(_FakeService(
         {"sessions": [], "total": 0, "error": "connection was closed in the middle of operation"}
     ))
-    res = client.get("/memory/sessions")
+    res = client.get("/memory/sessions", headers={"X-User-Id": "15"})
     assert res.status_code == 503
     assert "记忆库不可用" in res.json()["detail"]
 
 
 def test_delete_missing_session_returns_404(client_factory):
     client = client_factory(_FakeService({"ok": False, "error": "会话不存在"}))
-    res = client.delete("/memory/sessions/does-not-exist")
+    res = client.delete("/memory/sessions/does-not-exist", headers={"X-User-Id": "15"})
     assert res.status_code == 404
 
 
@@ -111,7 +133,7 @@ def test_memory_db_unavailable_is_handled_as_503(client_factory):
             raise MemoryDatabaseUnavailable("PostgreSQL 连接配置缺失: PGPASSWORD")
 
     client = client_factory(_BrokenService())
-    res = client.get("/memory/sessions")
+    res = client.get("/memory/sessions", headers={"X-User-Id": "15"})
     assert res.status_code == 503
     assert res.json()["error"] == "MemoryDatabaseUnavailable"
     # 完整配置细节只进日志，不能泄到 HTTP 响应体

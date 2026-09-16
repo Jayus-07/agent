@@ -22,6 +22,7 @@ from backend.config.auth import (
     USER_DEPT_HEADER,
     USER_ID_HEADER,
     USER_NAME_HEADER,
+    USER_ROLES_HEADER,
     identity_source,
 )
 
@@ -35,6 +36,7 @@ class Identity:
     department: str = ""
     auth_type: str = ""        # jwt | guest | ""（legacy 且无头时）
     source: str = ""           # 调试可读：header|body|default|guest
+    roles: tuple[str, ...] = ()  # 网关注入的 JWT roles claim（viewer/editor/admin）
 
     @property
     def authenticated(self) -> bool:
@@ -52,12 +54,17 @@ def _from_headers(request: Request) -> Identity:
     auth_type = (request.headers.get(AUTH_TYPE_HEADER) or "").strip()
     if not uid or uid == _ANONYMOUS or auth_type == _ANONYMOUS:
         return Identity(user_id="", auth_type="guest", source="guest")
+    roles = tuple(
+        r.strip() for r in (request.headers.get(USER_ROLES_HEADER) or "").split(",")
+        if r.strip()
+    )
     return Identity(
         user_id=uid,
         user_name=(request.headers.get(USER_NAME_HEADER) or "").strip(),
         department=(request.headers.get(USER_DEPT_HEADER) or "").strip(),
         auth_type=auth_type or "jwt",
         source="header",
+        roles=roles,
     )
 
 

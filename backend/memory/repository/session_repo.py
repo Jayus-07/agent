@@ -126,6 +126,17 @@ class SessionRepository:
         )
         return int(result.scalar() or 0)
 
+    async def get_owner(self, session_id: str) -> str | None:
+        """查询会话归属（user_id）。会话不存在返回 None。
+
+        供路由层做属主校验：跨用户访问与「会话不存在」同语义返回 404，
+        不向调用方泄露该 session_id 是否真实存在。
+        """
+        result = await self._s.execute(
+            select(ChatSession.user_id).where(ChatSession.session_id == session_id)
+        )
+        return result.scalar_one_or_none()
+
     async def delete(self, session_id: str) -> bool:
         """删除会话（级联删除 messages）"""
         result = await self._s.execute(

@@ -98,7 +98,9 @@ def test_short_circuited_responses_still_logged(caplog, app):
     app.middleware("http")(deny_all)      # 先注册 → 内层（模拟 api_key 短路）
     app.middleware("http")(access_log_middleware)  # 后注册 → 外层
     TestClient(app).get("/ping", headers={"X-User-Id": "1001"})
-    assert "user=1001 GET /ping -> 401" in " ".join(_access_lines(caplog)).replace("auth=- ", "")
+    lines = _access_lines(caplog)
+    assert len(lines) == 1
+    assert "user=1001" in lines[0] and "GET /ping -> 401" in lines[0]
 
 
 def test_exception_still_logged_with_fallback_status(caplog, app):

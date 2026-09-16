@@ -51,6 +51,15 @@ routes:
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
 
+  # 角色闸专项路由：/api/approvals 前缀在 gateway-auth 里配了 write=admin 的闸，
+  # 上游指向 echo 桩——矩阵用它验证 403 role-insufficient / admin 放行
+  - id: approvals-gate
+    uri: /api/approvals/*
+    upstream_id: echo
+    plugins:
+      gateway-auth: {}
+      prometheus: {}
+
   # 白名单对照：auth 路由不挂认证插件（与生产一致；prometheus 例外——观测与认证无关）
   - id: auth-passthrough
     uri: /api/auth/*
@@ -59,5 +68,11 @@ routes:
       prometheus: {}
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
+
+# 访问审计日志挂全路由（与生产一致，台架同时承担生产配置加载前验证）
+global_rules:
+  - id: access-log-global
+    plugins:
+      gateway-access-log: {}
 
 #END

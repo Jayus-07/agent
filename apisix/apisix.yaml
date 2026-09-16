@@ -49,9 +49,23 @@ upstreams:
     nodes:
       "app:8000": 1
 routes:
-  # ── 认证/用户中心（2026-09-15 拆分：py 自建 auth 模块，经兜底 strip /api → /auth/*、/sys/*）──
+  # ── 认证（2026-09-15 拆分：py 自建 auth 模块，strip /api → /auth/*）──
+  # login/refresh/logout 公开可达；logout 的令牌吊销由后端写 Redis 黑名单
   - id: auth-service
     uri: /api/auth/*
+    upstream_id: app
+    plugins:
+      prometheus: {}
+      proxy-rewrite:
+        regex_uri: ["^/api/(.*)$", "/$1"]
+
+  # ── 用户中心（2026-09-16 拆白名单）──
+  # 自助注册必须匿名可达 → 单列无插件路由（radixtree 静态路径优先于通配，
+  # 命中不受声明顺序影响）；其余 /api/sys/*（提权 PATCH /sys/users/{id}/role
+  # 等）挂 gateway-auth——此前整段白名单绕过网关验签，注入头（含
+  # X-User-Roles）到不了后端，角色类接口在浏览器链路上 401 不可用
+  - id: sys-register
+    uri: /api/sys/users/register
     upstream_id: app
     plugins:
       prometheus: {}
@@ -62,6 +76,7 @@ routes:
     uri: /api/sys/*
     upstream_id: app
     plugins:
+      gateway-auth: {}
       prometheus: {}
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
@@ -159,5 +174,13 @@ routes:
         rejected_code: 429
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
+
+# global_rules：访问审计日志挂全路由（含 auth/sys 白名单——登录尝试恰是重点
+# 审计对象）。log 阶段 XADD Redis Stream，后端落库，管理端观测页查询。
+# fail-open：日志链路故障不影响转发。
+global_rules:
+  - id: access-log-global
+    plugins:
+      gateway-access-log: {}
 
 #END

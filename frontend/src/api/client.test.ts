@@ -76,8 +76,7 @@ describe("backendBaseUrl 多后端映射", () => {
 });
 
 describe("request 请求构造", () => {
-  it("合并 X-API-Key 与 Bearer，且调用方 headers 优先级最高", async () => {
-    process.env.NEXT_PUBLIC_API_KEY = "k-123";
+  it("合并 Bearer 与调用方 headers，且调用方优先级最高（凭据收口后浏览器不带 Key）", async () => {
     authMock.bearerHeaders.mockReturnValue({ Authorization: "Bearer t" });
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -88,10 +87,11 @@ describe("request 请求构造", () => {
     const init = fetchSpy.mock.calls[0][1] as RequestInit;
     expect(init.headers).toMatchObject({
       "Content-Type": "application/json",
-      "X-API-Key": "k-123",
       Authorization: "Bearer t",
       "X-Custom": "1",
     });
+    // 凭据收口（方案 B）：浏览器侧不再注入 X-API-Key（由 BFF 代理路由注入）
+    expect((init.headers as Record<string, string>)["X-API-Key"]).toBeUndefined();
   });
 
   it("调用方可用 headers 覆写默认值（含 Content-Type）", async () => {
@@ -99,10 +99,10 @@ describe("request 请求构造", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(jsonResponse({ ok: true }));
 
-    await request("/x", { headers: { "X-API-Key": "override" } });
+    await request("/x", { headers: { "Content-Type": "text/plain" } });
 
     const init = fetchSpy.mock.calls[0][1] as RequestInit;
-    expect((init.headers as Record<string, string>)["X-API-Key"]).toBe("override");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("text/plain");
   });
 
   it("绝对 URL 原样透传，不拼基址", async () => {

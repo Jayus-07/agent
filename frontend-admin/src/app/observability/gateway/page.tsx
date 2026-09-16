@@ -12,12 +12,15 @@
  * blacklist / issuer / missing-user-id / token-type-mismatch / ...
  */
 import { useEffect, useState } from 'react'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { RefreshCw, ShieldAlert } from 'lucide-react'
 import { clsx } from 'clsx'
 import PageHeader from '@/components/layout/PageHeader'
 import {
   getGatewayAuthMetrics,
+  getGatewayAccessLogs,
   type GatewayAuthReasonRow,
+  type GatewayAccessLogRow,
 } from '@/api/observability'
 
 const WINDOWS = [
@@ -67,25 +70,38 @@ function BarRow(props: { label: string; value: number; max: number; color: strin
   )
 }
 
-/** 内联 sparkline（纯 div 柱状，10 分钟粒度） */
+/** 内联 sparkline（纯 div 柱状，5 分钟粒度；带 y 峰值与 x 首尾时间标注） */
 function Sparkbars({ series }: { series: { ts: number; value: number }[] }) {
   if (series.length === 0) {
     return <div className="py-8 text-center text-[12px] text-text-muted">窗口内无拒绝记录</div>
   }
   const max = Math.max(...series.map((p) => p.value), 0.0001)
+  const maxInt = Math.ceil(max)
+  const first = new Date(series[0].ts * 1000)
+  const last = new Date(series[series.length - 1].ts * 1000)
+  const fmtAxis = (d: Date) => d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
   return (
-    <div className="flex h-20 items-end gap-[2px]">
-      {series.map((p) => {
-        const h = Math.max(3, (p.value / max) * 100)
-        return (
-          <div
-            key={p.ts}
-            className="flex-1 rounded-t bg-accent/60"
-            style={{ height: `${h}%` }}
-            title={`${new Date(p.ts * 1000).toLocaleString('zh-CN')}：${p.value}`}
-          />
-        )
-      })}
+    <div>
+      {/* y 轴峰值标注 */}
+      <div className="mb-0.5 text-right text-[10px] tabular-nums text-text-muted">峰值 {maxInt.toLocaleString('zh-CN')} / 格</div>
+      <div className="flex h-20 items-end gap-[2px]">
+        {series.map((p) => {
+          const h = Math.max(3, (p.value / max) * 100)
+          return (
+            <div
+              key={p.ts}
+              className="flex-1 rounded-t bg-accent/60"
+              style={{ height: `${h}%` }}
+              title={`${new Date(p.ts * 1000).toLocaleString('zh-CN')}：${Math.round(p.value)} 次`}
+            />
+          )
+        })}
+      </div>
+      {/* x 轴首尾时间 */}
+      <div className="mt-1 flex justify-between text-[10px] tabular-nums text-text-muted">
+        <span>{fmtAxis(first)}</span>
+        <span>{fmtAxis(last)}</span>
+      </div>
     </div>
   )
 }
@@ -167,13 +183,17 @@ export default function GatewayPage() {
               <div className="mt-2 text-2xl font-semibold" style={{ color: (data.total_denied ?? 0) > 100 ? '#791F1F' : 'var(--text-primary)' }}>
                 {(data.total_denied ?? 0).toLocaleString('zh-CN')}
               </div>
-              <div className="mt-1 text-[11px] text-text-muted">超 100 触发告警规则（prometheus-alert-rules）</div>
+              <div className="mt-1 text-[11px] text-text-muted" title="口径：gateway-auth 插件验签被拒次数（denied_total 按拒绝原因聚合）；与右侧 401 计数不同——401 还包含限流等其他来源">
+                按拒绝原因聚合 · 超 100 触发告警
+              </div>
             </div>
             {(data.status_codes ?? []).map((c) => (
               <div key={c.code} className="rounded-xl border border-black/5 bg-white p-4 shadow-card">
                 <div className="text-[12px] text-text-secondary">{CODE_LABELS[c.code] ?? c.code}</div>
                 <div className="mt-2 text-2xl font-semibold text-text-primary">{Math.round(c.count).toLocaleString('zh-CN')}</div>
-                <div className="mt-1 text-[11px] text-text-muted">网关层计数（含 deny 与限流）</div>
+                <div className="mt-1 text-[11px] text-text-muted" title="口径：apisix_http_status 按 HTTP 状态码计数，范围比左侧「认证拒绝」宽">
+                  按 HTTP 状态码聚合（含 deny 与限流）
+                </div>
               </div>
             ))}
           </div>
@@ -215,6 +235,233 @@ export default function GatewayPage() {
           )}
         </>
       )}
+
+      {/* 访问审计明细：数据源独立于 Prometheus（PG 表），指标不可用时本区块仍可用 */}
+      <AccessLogsSection hours={hours} />
     </div>
+  )
+}
+
+/** 状态码着色：2xx 绿 / 3xx 灰 / 429 橙 / 其他 4xx、5xx、0（无上游）红 */
+function statusColor(s: number): string {
+  if (s >= 200 && s < 300) return '#15803d'
+  if (s >= 300 && s < 400) return '#64748b'
+  if (s === 429) return '#B45309'
+  return '#791F1F'
+}
+
+function fmtTime(ts: string): string {
+  const d = new Date(ts)
+  return isNaN(d.getTime()) ? ts : d.toLocaleString('zh-CN', { hour12: false })
+}
+
+/**
+ * 访问审计明细（2026-09-16）：谁从哪个 IP 访问了什么端点、结果如何。
+ * 数据链路 APISIX gateway-access-log 插件 → Redis Streams → ai.gateway_access_logs。
+ * 30s 静默轮询；user_id 经 gateway-auth 验签注入可信，auth/sys 白名单路由
+ * 未验签（auth_type 为空），用户列显式标注。
+ */
+const ACCESS_LOG_LIMIT = 100
+
+function AccessLogsSection({ hours }: { hours: number }) {
+  // 表单草稿 vs 已提交过滤词：Enter/查询按钮才触发请求，避免逐键查询
+  const [draft, setDraft] = useState({ userId: '', ip: '', path: '' })
+  const [filters, setFilters] = useState({ userId: '', ip: '', path: '' })
+  const [offset, setOffset] = useState(0)
+  // 安全页默认视角是「仅异常」：打开就看到 401/403/429，而不是一屏 200
+  // （后端排序恒为异常优先，切「全部」时异常行仍置顶）。心跳/自引用默认
+  // 排除，防止 30s 轮询把审计表刷成自己的查询记录。
+  const [abnormalOnly, setAbnormalOnly] = useState(true)
+  const [includeNoise, setIncludeNoise] = useState(false)
+
+  // React Query 接管轮询（2026-09-16）：30s 静默轮询 + 后台标签自动暂停
+  // （refetchIntervalInBackground 默认 false）+ 切回前台自动补刷
+  // （Provider 级 refetchOnWindowFocus）+ 相同参数请求去重，取代手写 setInterval。
+  const { data, error, refetch, isFetching } = useQuery({
+    queryKey: ['gateway-access-logs', hours, filters, abnormalOnly, includeNoise, offset],
+    queryFn: () =>
+      getGatewayAccessLogs({ hours, ...filters, abnormalOnly, includeNoise, limit: ACCESS_LOG_LIMIT, offset }),
+    refetchInterval: 30_000,
+    placeholderData: keepPreviousData, // 翻页/切视角时保留旧数据，不闪空白
+  })
+
+  // 切时间窗/过滤词/视角回到第一页；查询本身由 queryKey 变化驱动
+  useEffect(() => {
+    setOffset(0)
+  }, [hours, filters, abnormalOnly, includeNoise])
+
+  const logs: GatewayAccessLogRow[] = data?.logs ?? []
+  const total = data?.total ?? 0
+
+  return (
+    <section className="mt-4 rounded-xl border border-black/5 bg-white p-4 shadow-card">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-[13px] font-medium text-text-primary">
+          访问审计明细
+          <span className="ml-2 text-[11px] font-normal text-text-muted">
+            谁从哪个 IP 访问了什么端点 · 30s 自动刷新（后台暂停）
+          </span>
+        </h2>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {/* 视角切换：默认仅异常（4xx/5xx）。心跳/自引用默认排除，防 30s 轮询自膨胀 */}
+          <div className="flex items-center gap-0.5 rounded-lg bg-black/[0.03] p-0.5 text-[12px]">
+            <button
+              type="button"
+              onClick={() => setAbnormalOnly(true)}
+              className={clsx('rounded-[6px] px-2.5 py-1 transition-colors',
+                abnormalOnly ? 'bg-white font-medium text-accent shadow-sm' : 'text-text-secondary hover:text-text-primary')}
+            >
+              仅异常
+            </button>
+            <button
+              type="button"
+              onClick={() => setAbnormalOnly(false)}
+              className={clsx('rounded-[6px] px-2.5 py-1 transition-colors',
+                !abnormalOnly ? 'bg-white font-medium text-accent shadow-sm' : 'text-text-secondary hover:text-text-primary')}
+            >
+              全部
+            </button>
+          </div>
+          <label
+            className="flex cursor-pointer select-none items-center gap-1 text-[11px] text-text-secondary"
+            title="包含 /health 心跳与 /observability 自引用查询（默认排除，防审计列表自我膨胀）"
+          >
+            <input type="checkbox" checked={includeNoise} onChange={(e) => setIncludeNoise(e.target.checked)} className="accent-[var(--accent)]" />
+            含心跳/自引用
+          </label>
+          <form
+            className="flex items-center gap-1.5"
+            onSubmit={(e) => {
+              e.preventDefault()
+              setFilters({ userId: draft.userId.trim(), ip: draft.ip.trim(), path: draft.path.trim() })
+            }}
+          >
+          <input
+            value={draft.userId}
+            onChange={(e) => setDraft({ ...draft, userId: e.target.value })}
+            placeholder="用户 ID"
+            className="w-24 rounded-lg border border-black/10 px-2 py-1 text-[12px] outline-none focus:border-accent"
+          />
+          <input
+            value={draft.ip}
+            onChange={(e) => setDraft({ ...draft, ip: e.target.value })}
+            placeholder="IP"
+            className="w-28 rounded-lg border border-black/10 px-2 py-1 text-[12px] outline-none focus:border-accent"
+          />
+          <input
+            value={draft.path}
+            onChange={(e) => setDraft({ ...draft, path: e.target.value })}
+            placeholder="路径"
+            className="w-28 rounded-lg border border-black/10 px-2 py-1 text-[12px] outline-none focus:border-accent"
+          />
+          <button
+            type="submit"
+            className="rounded-lg border border-black/10 px-2.5 py-1 text-[12px] text-text-secondary transition-colors hover:bg-black/[0.03]"
+          >
+            查询
+          </button>
+          <button
+            type="button"
+            onClick={() => refetch()}
+            className="flex items-center gap-1 rounded-lg border border-black/10 px-2 py-1 text-[12px] text-text-secondary transition-colors hover:bg-black/[0.03]"
+          >
+            <RefreshCw size={12} className={isFetching ? 'animate-spin' : ''} />
+          </button>
+          </form>
+        </div>
+      </div>
+
+      {error ? (
+        <div className="py-6 text-center text-[12px]" style={{ color: '#791F1F' }}>
+          {error instanceof Error ? error.message : '加载失败'}
+        </div>
+      ) : !data?.available ? (
+        <div className="rounded-lg bg-black/[0.02] p-6 text-center text-[12px] leading-relaxed text-text-muted">
+          访问日志数据源不可用（迁移未跑或 PostgreSQL 不可达）
+          <code className="mt-2 block rounded bg-black/[0.04] px-2 py-1 text-[11px]">
+            alembic upgrade head
+          </code>
+        </div>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-left text-xs font-medium text-slate-500">
+                  <th className="py-2.5 px-3 w-36">时间</th>
+                  <th className="py-2.5 px-3 w-32">IP</th>
+                  <th className="py-2.5 px-3 w-32">用户</th>
+                  <th className="py-2.5 px-3 w-14">方法</th>
+                  <th className="py-2.5 px-3">路径</th>
+                  <th className="py-2.5 px-3 w-14">状态</th>
+                  <th className="py-2.5 px-3 w-20 text-right">耗时</th>
+                  <th className="py-2.5 px-3 w-40">Trace ID</th>
+                </tr>
+              </thead>
+              <tbody>
+                {logs.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="py-6 text-center text-[12px] text-text-muted">
+                      窗口内无访问记录
+                    </td>
+                  </tr>
+                ) : (
+                  logs.map((l, i) => (
+                    <tr key={`${l.trace_id}-${l.ts}-${i}`} className="border-b border-slate-100 text-[12px]">
+                      <td className="py-2 px-3 tabular-nums text-text-secondary" title={l.ts}>{fmtTime(l.ts)}</td>
+                      <td className="py-2 px-3 font-mono text-[11px]">{l.client_ip || '-'}</td>
+                      <td className="py-2 px-3">
+                        {/* 用户名列优先：后端 LEFT JOIN auth.users 回显（user_id 纯数字才关联） */}
+                        {l.username ? (
+                          <span title={`ID: ${l.user_id ?? '-'}`}>{l.username}</span>
+                        ) : l.user_id ? (
+                          <span className="font-mono text-[11px]" title="user_id 非数字 ID，未关联到用户表">{l.user_id}</span>
+                        ) : (
+                          <span className="text-text-muted">guest</span>
+                        )}
+                        {l.user_id && !l.auth_type && (
+                          <span className="ml-1 rounded bg-black/[0.05] px-1 py-0.5 text-[10px] text-text-muted" title="auth/sys 白名单路由，头为客户端自带，未经网关验签">未验签</span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3 text-text-secondary">{l.method}</td>
+                      <td className="py-2 px-3 font-mono text-[11px]">
+                        <span className="block max-w-[420px] truncate" title={`${l.uri}${l.query ? `?${l.query}` : ''}  ·  ${l.ua}`}>
+                          {l.uri}{l.query && <span className="text-text-muted">?{l.query}</span>}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 font-medium tabular-nums" style={{ color: statusColor(l.status) }}>{l.status}</td>
+                      <td className="py-2 px-3 text-right tabular-nums text-text-secondary">{l.duration_ms.toFixed(1)}ms</td>
+                      <td className="py-2 px-3 font-mono text-[11px] text-text-muted" title={l.trace_id}>
+                        {l.trace_id ? l.trace_id.slice(-14) : '-'}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          {/* 分页 */}
+          <div className="mt-3 flex items-center justify-between text-[12px] text-text-secondary">
+            <span>共 {total.toLocaleString('zh-CN')} 条 · 本页 {logs.length} 条</span>
+            <div className="flex gap-1.5">
+              <button
+                disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - ACCESS_LOG_LIMIT))}
+                className="rounded-lg border border-black/10 px-2.5 py-1 transition-colors hover:bg-black/[0.03] disabled:opacity-40"
+              >
+                上一页
+              </button>
+              <button
+                disabled={offset + ACCESS_LOG_LIMIT >= total}
+                onClick={() => setOffset(offset + ACCESS_LOG_LIMIT)}
+                className="rounded-lg border border-black/10 px-2.5 py-1 transition-colors hover:bg-black/[0.03] disabled:opacity-40"
+              >
+                下一页
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
   )
 }

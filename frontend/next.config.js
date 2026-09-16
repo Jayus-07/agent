@@ -13,20 +13,13 @@ const nextConfig = {
   // 压缩如需要应由前置 nginx 层承担。
   compress: false,
 
-  // API 代理：将 /api/* 转发到 APISIX 网关（与生产拓扑一致）
-  // 网关 enforce 模式验签 JWT 后向下游注入 X-User-Id 等身份头——后端
-  // IDENTITY_SOURCE=header 只认身份头，dev 直连 :8000 会拿不到身份
-  // （chat 一律 guest）。需要临时绕过网关直连后端时：
-  //   API_URL=http://localhost:8000 npx next dev
-  // Docker 部署 → http://api:8000（容器网络内仍应经 apisix）
-  async rewrites() {
-    return [
-      {
-        source: '/api/:path*',
-        destination: `${process.env.API_URL || 'http://127.0.0.1:9080'}/:path*`,
-      },
-    ]
-  },
+  // API 代理：已由 BFF 路由 `src/app/api/[...path]/route.ts` 接管（凭据收口，
+  // 2026-09-16 方案 B）——服务端注入 X-API-Key，浏览器不再持有密钥。
+  // ⚠️ 此处**不能**再配 `/api/:path*` 的 rewrite：Next 的 afterFiles rewrite
+  // 优先级高于动态路由（catch-all route handler），rewrite 一旦存在代理路由
+  // 就永远不会被命中（2026-09-16 实测：请求全部走 rewrite、Key 未注入、后端 401）。
+  // 临时绕过网关直连后端调试时：API_URL=http://localhost:8000（后端路由无
+  // /api 前缀，需同时给代理路由的 target 去掉 /api，或临时恢复本 rewrite）。
 }
 
 module.exports = nextConfig

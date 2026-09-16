@@ -9,9 +9,17 @@ api/routes/memory.py — 会话记忆 API
   PATCH  /memory/sessions/{id}         — 重命名会话
 
 PR-2.x: 业务逻辑已迁移至 MemoryService，路由仅做参数提取和委托。
+
+2026-09-16 按登录用户隔离：user_id 一律取网关验签后注入的身份头
+（resolve_identity，IDENTITY_SOURCE=header），不再接受查询参数自报——
+此前 ?user_id=xxx 谁都能传，所有用户实际共享 "default" 桶。
+单会话读/删/改名额外做属主校验，跨用户访问按 404 处理（不泄露存在性）。
+未认证（guest，即未经网关 JWT 的直连流量）一律 401。
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+
+from backend.app.api.identity import resolve_identity
 
 from backend.memory.manager import memory_manager
 
@@ -53,10 +61,22 @@ class RenameRequest(BaseModel):
     title: str
 
 
+def _require_user(request: Request) -> str:
+    """记忆按登录用户隔离：解析身份，guest（无网关注入身份头）直接 401。
+
+    注意必须在 memory_manager.run_tool 之外先解析——Request 头读取
+    在线程池 lambda 里也可用，但统一在路由入口判定语义更清晰。
+    """
+    ident = resolve_identity(request)
+    if not ident.authenticated:
+        raise HTTPException(status_code=401, detail="未认证：记忆库按登录用户隔离")
+    return ident.user_id
+
+
 @router.get("/sessions")
-def list_sessions(user_id: str = "default",
+def list_sessions(request: Request,
                   limit: int = 50, before: str | None = None):
-    """列出用户的所有持久化会话（支持游标分页）。
+    """列出当前登录用户的所有持久化会话（支持游标分页）。
 
     Query:
       limit: 单次返回上限（默认 50，最大 200）
@@ -67,6 +87,7 @@ def list_sessions(user_id: str = "default",
     await 会抛 "attached to a different loop"（前端侧栏红色报错的根因）。
     同步 def 由 FastAPI 放线程池执行，阻塞等待桥接结果不占主 loop。
     """
+    user_id = _require_user(request)
     return _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().list_sessions(user_id=user_id, limit=limit, before=before)
@@ -75,34 +96,44 @@ def list_sessions(user_id: str = "default",
 
 
 @router.get("/sessions/{session_id}")
-def get_session(session_id: str):
-    """获取指定会话的消息列表"""
+def get_session(session_id: str, request: Request):
+    """获取指定会话的消息列表（仅属主）"""
+    user_id = _require_user(request)
     return _raise_for_error(
-        memory_manager.run_tool(lambda: _get_service().get_session_messages(session_id))
+        memory_manager.run_tool(
+            lambda: _get_service().get_session_messages(session_id, user_id=user_id)
+        )
     )
 
 
 @router.get("/sessions/{session_id}/context")
-def get_session_context(session_id: str):
-    """获取会话的 Agent 工作上下文（SQL结果/RAG文档/报告摘要）"""
+def get_session_context(session_id: str, request: Request):
+    """获取会话的 Agent 工作上下文（SQL结果/RAG文档/报告摘要，仅属主）"""
+    user_id = _require_user(request)
     return _raise_for_error(
-        memory_manager.run_tool(lambda: _get_service().get_session_context(session_id))
+        memory_manager.run_tool(
+            lambda: _get_service().get_session_context(session_id, user_id=user_id)
+        )
     )
 
 
 @router.delete("/sessions/{session_id}")
-def delete_session(session_id: str):
-    """删除会话及其所有消息"""
+def delete_session(session_id: str, request: Request):
+    """删除会话及其所有消息（仅属主）"""
+    user_id = _require_user(request)
     return _raise_for_error(
-        memory_manager.run_tool(lambda: _get_service().delete_session(session_id))
+        memory_manager.run_tool(
+            lambda: _get_service().delete_session(session_id, user_id=user_id)
+        )
     )
 
 
 @router.patch("/sessions/{session_id}")
-def rename_session(session_id: str, req: RenameRequest):
-    """重命名会话标题"""
+def rename_session(session_id: str, req: RenameRequest, request: Request):
+    """重命名会话标题（仅属主）"""
+    user_id = _require_user(request)
     return _raise_for_error(
         memory_manager.run_tool(
-            lambda: _get_service().rename_session(session_id, req.title)
+            lambda: _get_service().rename_session(session_id, req.title, user_id=user_id)
         )
     )

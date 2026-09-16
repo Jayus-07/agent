@@ -269,6 +269,20 @@ class MemoryService:
     # Session CRUD（供 API 路由使用）
     # ============================================================
 
+    @staticmethod
+    async def _check_owner(repo, session_id: str, user_id: str | None) -> str | None:
+        """路由面属主校验：user_id 给定时，非属主/不存在都返回统一「会话不存在」。
+
+        返回 None 表示校验通过（user_id=None 为内部调用方直通，不做校验）。
+        404 而非 403：不向调用方泄露 session_id 是否真实存在。
+        """
+        if user_id is None:
+            return None
+        owner = await repo.get_owner(session_id)
+        if owner != user_id:
+            return "会话不存在"
+        return None
+
     async def list_sessions(self, user_id: str = "default",
                             limit: int = 50, before: str | None = None) -> dict:
         """列出用户所有会话（支持分页）。
@@ -297,11 +311,14 @@ class MemoryService:
                 logger.error(f"[MemoryService] list_sessions 失败: {e}")
                 return {"sessions": [], "total": 0, "error": str(e)}
 
-    async def get_session_messages(self, session_id: str) -> dict:
+    async def get_session_messages(self, session_id: str, user_id: str | None = None) -> dict:
         """获取会话消息列表。"""
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
+                denied = await self._check_owner(repo, session_id, user_id)
+                if denied:
+                    return {"session_id": session_id, "messages": [], "error": denied}
                 msgs = await repo.load_messages(session_id)
                 await db_session.commit()
                 return {
@@ -316,11 +333,14 @@ class MemoryService:
                 logger.error(f"[MemoryService] get_session_messages 失败: {e}")
                 return {"session_id": session_id, "messages": [], "error": str(e)}
 
-    async def get_session_context(self, session_id: str) -> dict:
+    async def get_session_context(self, session_id: str, user_id: str | None = None) -> dict:
         """获取会话 Agent 工作上下文。"""
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
+                denied = await self._check_owner(repo, session_id, user_id)
+                if denied:
+                    return {"session_id": session_id, "context": None, "error": denied}
                 ctx = await repo.get_context(session_id)
                 await db_session.commit()
                 if ctx:
@@ -335,11 +355,14 @@ class MemoryService:
                 await db_session.rollback()
                 return {"session_id": session_id, "context": None, "error": str(e)}
 
-    async def delete_session(self, session_id: str) -> dict:
+    async def delete_session(self, session_id: str, user_id: str | None = None) -> dict:
         """删除会话及消息。"""
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
+                denied = await self._check_owner(repo, session_id, user_id)
+                if denied:
+                    return {"ok": False, "error": denied}
                 ok = await repo.delete(session_id)
                 await db_session.commit()
                 if ok:
@@ -351,11 +374,14 @@ class MemoryService:
                 logger.error(f"[MemoryService] delete_session 失败: {e}")
                 return {"ok": False, "error": str(e)}
 
-    async def rename_session(self, session_id: str, title: str) -> dict:
+    async def rename_session(self, session_id: str, title: str, user_id: str | None = None) -> dict:
         """重命名会话。"""
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
+                denied = await self._check_owner(repo, session_id, user_id)
+                if denied:
+                    return {"ok": False, "error": denied}
                 ok = await repo.rename(session_id, title)
                 await db_session.commit()
                 if ok:

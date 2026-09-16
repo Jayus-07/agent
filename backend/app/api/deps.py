@@ -201,11 +201,10 @@ async def require_internal_token(request: Request) -> None:
 #
 # 本次收敛为单一入口，要点：
 #   ① 角色只能由本函数产出，**任何地方不得再读 X-Operator-Role**；
-#   ② 当前（过渡形态）只认 `X-Internal-Token` 服务凭据 —— 浏览器侧本轮不开放
-#      （`/prompts` 功能处于预留状态，见 v3 计划决策 D8/D9）；
-#   ③ **演进点**：py 自建用户体系（`backend/security/local_jwt.py`，另一会话交付）
-#      就绪后，**只在本函数内增加一个分支**，从其 access token 解析 roles 即可，
-#      调用方（各端点）零改动。不要在别处判定角色。
+#   ② 双通道（2026-09-16 兑现演进点③）：
+#      a) JWT 用户：网关 gateway-auth 验签后注入 X-User-Roles（roles claim，
+#         客户端伪造会被剥离），管理端浏览器链路由此打通；
+#      b) 服务凭据：X-Internal-Token（机器凭据，映射 admin），服务间调用不变。
 #
 # 角色枚举与 `backend/app/api/routes/prompts.py::_check_permission` 的权限矩阵对应：
 #   viewer / editor / admin
@@ -216,26 +215,47 @@ class OperatorIdentity:
     """运营操作者身份：`role` 决定能做什么，`actor` 进审计留痕。
 
     - role：viewer / editor / admin（权限矩阵见 prompts.py::_check_permission）
-    - actor：审计用操作者标识。服务凭据调用固定为 `service:internal-token` ——
-      **刻意不采用 `X-User-Id`**：当前浏览器业务流量直连 :8000、不经网关，
-      该头在客户端可伪造，用它做审计等于让调用方自证身份。
+    - actor：审计用操作者标识。服务凭据调用固定为 `service:internal-token`；
+      JWT 用户为 `user:<X-User-Id>`——该头由网关验签后注入（enforce 下不可
+      伪造，信任边界=网络边界：app:8000 不对外暴露），与早期「直连可伪造」
+      的前提已不同。
     """
 
     role: str
     actor: str
 
 
-async def resolve_operator_role(request: Request) -> OperatorIdentity:
-    """运营角色的**唯一解析入口**（S0-2 起）。
+_KNOWN_ROLES = ("viewer", "editor", "admin")
+_ROLE_RANK = {"viewer": 0, "editor": 1, "admin": 2}
 
-    当前实现（过渡形态）：仅接受 `X-Internal-Token` 服务凭据。
-    - 凭据缺失/错误 → 401；令牌未配置且未显式豁免 → 503（由 require_internal_token 决定）
-    - 通过 → role = admin（服务凭据是机器凭据，具备完整运营权限）
+
+def _highest_known_role(roles: tuple[str, ...]) -> str | None:
+    """取 roles 中已知的最高角色；全未知/为空返回 None（多角色按高权限生效）。"""
+    known = [r for r in roles if r in _ROLE_RANK]
+    if not known:
+        return None
+    return max(known, key=lambda r: _ROLE_RANK[r])
+
+
+async def resolve_operator_role(request: Request) -> OperatorIdentity:
+    """运营角色的**唯一解析入口**（S0-2 起；2026-09-16 双通道）。
+
+    通道 a（JWT 用户）：网关验签后注入的 X-User-Id + X-User-Roles（roles
+    claim，逗号分隔）。多角色取最高；全部未知视为无角色，落到通道 b。
+    通道 b（服务凭据）：X-Internal-Token → role = admin。凭据缺失/错误 → 401；
+    令牌未配置且未显式豁免 → 503（由 require_internal_token 决定）。
 
     为什么服务凭据映射为 admin：`_check_permission` 的矩阵里 `high` 风险的
     publish/rollback 仅 admin 可做。若映射为 editor，则高风险 Prompt 将**无人可发布**
-    （前端也从不发送角色头），功能性上等于锁死；而服务凭据本身是不外发的服务端
-    机密，映射为 admin 既恢复合法运营能力、又彻底关闭不可信通道。
+    （服务调用方没有用户上下文），功能性上等于锁死；而服务凭据本身是不外发的
+    服务端机密，映射为 admin 既恢复合法运营能力、又彻底关闭不可信通道。
     """
+    from backend.app.api.identity import resolve_identity  # 局部导入避免循环依赖
+
+    ident = resolve_identity(request)
+    if ident.authenticated:
+        role = _highest_known_role(ident.roles)
+        if role is not None:
+            return OperatorIdentity(role=role, actor=f"user:{ident.user_id}")
     await require_internal_token(request)
     return OperatorIdentity(role="admin", actor="service:internal-token")

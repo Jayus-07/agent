@@ -17,3 +17,10 @@ TRACE_PG_MIRROR_ENABLED = (
     os.getenv("TRACE_PG_MIRROR_ENABLED", "false").strip().lower()
     in ("1", "true", "yes")
 )
+
+# ── 网关访问审计日志（APISIX gateway-access-log.lua → Redis Streams → PG）──
+GATEWAY_LOG_INGEST_ENABLED = (
+    os.getenv("GATEWAY_LOG_INGEST_ENABLED", "true").strip().lower()
+    in ("1", "true", "yes")
+)
+GATEWAY_LOG_RETENTION_DAYS = int(os.getenv("GATEWAY_LOG_RETENTION_DAYS", "14"))

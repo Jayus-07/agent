@@ -157,6 +157,30 @@ def run_scenarios(args) -> list[dict]:
            and hs.get("x-user-id") == "10001" and hs.get("x-user-name") == "matrix-user"
            and hs.get("x-user-dept") == "dept-42")
 
+    # 1.5 roles claim → X-User-Roles 注入（逗号分隔，顺序保持）
+    st, _, body = http("GET", base + "/echo",
+                       bearer(valid_token(secret, roles=["admin", "editor"])))
+    hs = echo_headers(body)
+    record("roles_header_injection", "200 + 注入 x-user-roles=admin,editor",
+           f"{st} + {hs}", st == 200 and hs.get("x-user-roles") == "admin,editor")
+
+    # 1.6 角色闸：/api/approvals 写操作（非 GET）要求 admin
+    st, _, body = http("POST", base + "/api/approvals/req-1/approve",
+                       bearer(valid_token(secret, roles=["viewer"])), body=b"{}")
+    record("role_gate_viewer_403", "403 + 未认证：role-insufficient",
+           f"{st} + {body[:120]}",
+           st == 403 and "role-insufficient" in body)
+
+    # 1.7 角色闸：admin 放行（上游 echo 桩 200）；viewer 的 GET 读不受限
+    st, _, body = http("POST", base + "/api/approvals/req-1/approve",
+                       bearer(valid_token(secret, roles=["admin"])), body=b"{}")
+    ok_admin = st == 200
+    st2, _, _ = http("GET", base + "/api/approvals/list",
+                     bearer(valid_token(secret, roles=["viewer"])))
+    record("role_gate_admin_pass_read_open",
+           "admin POST 200；viewer GET 读放行 200",
+           f"admin={st} viewer-get={st2}", ok_admin and st2 == 200)
+
     # 2 缺失 JWT
     st, _, body = http("GET", base + "/echo")
     record("no_credential", "401 + 未认证：no-credential", f"{st} + {body[:120]}",

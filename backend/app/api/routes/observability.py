@@ -6,9 +6,12 @@ Langfuse 主存储（读路径优先），SQLite TraceStore 保留作为降级�
 
 import os
 import json
+import time
+import hashlib
 import threading
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
 
 from backend.shared.logger import logger
 
@@ -17,8 +20,53 @@ from backend.observability.resource import resource_monitor
 from backend.rag.metrics import metrics_collector
 from backend.observability.tracer import trace_collector, TraceRecord, Span
 from backend.observability.trace_store import get_trace_store
+from backend.memory.database import AsyncSessionLocal
 
 router = APIRouter(prefix="/observability", tags=["可观测性"])
+
+
+# ═══════════════════════════════════════════════════
+# 敏感接口收口 —— 网关审计类端点（汇总文档 A3，2026-09-16）
+# ═══════════════════════════════════════════════════
+#
+# 收口前：网关对「无 Bearer 但有 X-API-Key」的请求直接放行（打标 api-key），
+# 后端中间件只比对该 Key；而该 Key 正是前端的 NEXT_PUBLIC_API_KEY——编译进
+# 浏览器 bundle 的**公开值**。实测仅凭此 Key（无需登录）即可 200 拿到完整
+# 网关访问审计明细。同时网关角色闸 ROLE_GATE_PREFIXES 未覆盖 observability，
+# 任何 viewer 登录用户也能读全部审计数据。
+#
+# 收口为：仅允许「经网关验签的 JWT 用户且 role=admin」访问。
+#   - 服务凭据通道（X-Internal-Token）**不再**放行：这两个端点是管理端页面
+#     专用，无服务间消费方，收窄通道可一并堵住 api-key 匿名访问；
+#   - 开关 SENSITIVE_API_GUARD_MODE=audit 可回到「仅记日志、行为不变」，
+#     用于灰度回退（与汇总文档 A3 的 audit 先行策略一致）。
+
+def _sensitive_guard_mode() -> str:
+    return os.getenv("SENSITIVE_API_GUARD_MODE", "enforce").strip().lower()
+
+
+async def require_admin_operator(request: Request) -> None:
+    """网关审计类端点的管理员闸（A3 收口；enforce 默认 / audit 可回退）。"""
+    from backend.app.api.deps import resolve_operator_role  # 局部导入避免循环依赖
+
+    ident = await resolve_operator_role(request)
+    # actor 形如 "user:<id>"（JWT 通道）或 "service:internal-token"（服务凭据）
+    if ident.role == "admin" and ident.actor.startswith("user:"):
+        return
+    if _sensitive_guard_mode() == "audit":
+        logger.warning(
+            f"[SensitiveGuard] audit 模式放行非管理员访问网关审计数据: "
+            f"actor={ident.actor} role={ident.role}"
+        )
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "Forbidden",
+            "message": "网关访问审计数据仅限管理员（role=admin）访问；"
+                       "服务级 API Key 通道不可访问（该 Key 会下发到浏览器）",
+        },
+    )
 
 
 # ═══════════════════════════════════════════════════
@@ -493,32 +541,62 @@ async def _prom_range(promql: str, hours: float, step_seconds: int) -> list[dict
 
 
 @router.get("/gateway-auth")
-async def get_gateway_auth(hours: float = Query(6, gt=0, le=24 * 30)):
+async def get_gateway_auth(request: Request, hours: float = Query(6, gt=0, le=24 * 30)):
     """网关认证/限流指标（代理 Prometheus，只读）。
 
     数据源：apisix_gateway_auth_denied_total / _would_deny_total（gateway-auth 插件）
     与 apisix_http_status（prometheus 插件）。Prometheus 未启动（observability
     profile 可选）时返回 available=false，前端显式降级而不是报错。
+
+    权限：仅管理员（A3 收口，见 require_admin_operator）。
     """
+    await require_admin_operator(request)
     window = f"{hours:g}h"
     job = '{job="agent-platform-apisix"}'
+    # ⚠️ 状态码查询必须与 job 写在**同一个**选择器内，用逗号分隔。
+    # 曾写成 `apisix_http_status{job="..."}{code=~"401|429"}`（两段并列花括号），
+    # 是非法 PromQL → Prometheus 400 parse error → 整个接口降级为
+    # available=false（2026-09-16 实测修复）。
+    status_sel = '{job="agent-platform-apisix",code=~"401|429"}'
     step = max(300, int(hours * 3600 / 120))
     import asyncio
 
-    try:
-        denied_by_reason, would_deny, codes, series = await asyncio.gather(
-            _prom_instant(f"sum by (reason) (increase(apisix_gateway_auth_denied_total{job}[{window}]))"),
-            _prom_instant(f"sum by (reason) (increase(apisix_gateway_auth_would_deny_total{job}[{window}]))"),
-            _prom_instant(f'sum by (code) (increase(apisix_http_status{job}{{code=~"401|429"}}[{window}]))'),
-            _prom_range(f"sum(increase(apisix_gateway_auth_denied_total{job}[5m]))", hours, step),
-        )
-    except Exception as e:  # 连接拒绝/超时/prom 未启动都归为「数据源不可用」
-        logger.warning(f"[GatewayAuth] Prometheus 不可达: {e}")
-        return {"available": False, "window_hours": hours, "error": str(e)}
+    # 单点容错：任一查询失败不应拖垮整个接口。此前四路 gather 中只要一路抛
+    # 异常就整体降级，导致明明有数据的 denied_by_reason 也一并拿不到
+    # （2026-09-16 实测：status_codes 拼错后全盘 available=false）。
+    gathered = await asyncio.gather(
+        _prom_instant(f"sum by (reason) (increase(apisix_gateway_auth_denied_total{job}[{window}]))"),
+        _prom_instant(f"sum by (reason) (increase(apisix_gateway_auth_would_deny_total{job}[{window}]))"),
+        _prom_instant(f"sum by (code) (increase(apisix_http_status{status_sel}[{window}]))"),
+        _prom_range(f"sum(increase(apisix_gateway_auth_denied_total{job}[5m]))", hours, step),
+        return_exceptions=True,
+    )
+
+    errors: list[str] = []
+
+    def _or_default(idx: int, default):
+        r = gathered[idx]
+        if isinstance(r, BaseException):
+            errors.append(f"query#{idx}: {r}")
+            logger.warning(f"[GatewayAuth] Prometheus 查询 {idx} 失败（该分项置空）: {r}")
+            return default
+        return r
+
+    denied_by_reason = _or_default(0, [])
+    would_deny = _or_default(1, [])
+    codes = _or_default(2, [])
+    series = _or_default(3, [])
+
+    # 全部失败 = Prometheus 不可达/未启动 → 整体降级（前端显示启动指引）
+    if len(errors) == len(gathered):
+        logger.warning(f"[GatewayAuth] Prometheus 不可达: {errors[0]}")
+        return {"available": False, "window_hours": hours, "error": errors[0]}
 
     def _top(items: list[dict], label: str) -> list[dict]:
         rows = [
-            {label: (i["labels"].get(label) or "unknown"), "count": i["value"]}
+            # 计数取整：increase() 补偿 counter 重置时会产生浮点（如 21.03 次），
+            # 次数语义必须是整数，否则前端出现「认证拒绝 21.03」这种显示
+            {label: (i["labels"].get(label) or "unknown"), "count": int(round(i["value"]))}
             for i in items if i["value"] > 0
         ]
         return sorted(rows, key=lambda r: -r["count"])
@@ -526,9 +604,160 @@ async def get_gateway_auth(hours: float = Query(6, gt=0, le=24 * 30)):
     return {
         "available": True,
         "window_hours": hours,
-        "total_denied": round(sum(r["count"] for r in _top(denied_by_reason, "reason")), 2),
+        # 分项查询失败时非空：此时数据是**部分可用**的（前端未消费该字段，
+        # 仅用于排障——避免"整体 available=false"掩盖"其实有数据"）
+        "partial_errors": errors,
+        "total_denied": int(round(sum(r["count"] for r in _top(denied_by_reason, "reason")))),
         "denied_by_reason": _top(denied_by_reason, "reason"),
         "would_deny_by_reason": _top(would_deny, "reason"),
         "status_codes": _top(codes, "code"),
         "denied_series": series,
     }
+
+
+# ═══════════════════════════════════════════════════
+# Gateway Access Logs（2026-09-16：访问审计明细，管理端「网关安全」页）
+# ═══════════════════════════════════════════════════
+
+# 微缓存（2026-09-16）：管理端 30s 轮询 × 多标签会把同一查询参数打到 PG；
+# 进程内 5s 缓存把重叠轮询合并为 1 次 DB 查询。数据为管理员全局审计视图
+# （require_admin_operator 后），同参数同结果，无按用户越权风险。
+_ACCESS_LOGS_CACHE_TTL = 5.0
+_access_logs_cache: dict[str, tuple[float, str, dict]] = {}  # key -> (expires_at, etag, payload)
+_access_logs_cache_lock = threading.Lock()
+
+
+def _etag_of(payload: dict) -> str:
+    body = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    return f'"{hashlib.sha256(body.encode()).hexdigest()[:32]}"'
+
+
+@router.get("/gateway-access-logs")
+async def get_gateway_access_logs(
+    request: Request,
+    hours: float = Query(6, gt=0, le=24 * 30),
+    user_id: str | None = Query(None, max_length=128),
+    ip: str | None = Query(None, max_length=64),
+    path: str | None = Query(None, max_length=200),
+    abnormal_only: bool = Query(False, description="仅看 4xx/5xx（安全审计默认视角）"),
+    include_noise: bool = Query(False, description="包含 /health 心跳与 /observability 自引用（默认排除）"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """网关访问审计明细（APISIX → Redis Streams → ai.gateway_access_logs）。
+
+    user_id 可信性说明（前端需展示提示）：经 gateway-auth 验签注入的头可信；
+    /api/auth/*、/api/sys/* 白名单路由不挂插件，客户端自带头原样透传，
+    对应行的 auth_type 为空。username 由 auth.users LEFT JOIN 回显
+    （user_id 为纯数字才尝试关联，u-* / user:* 等格式安全跳过）。
+
+    默认排除两类噪音（include_noise=true 可看回）：
+    - /health 心跳；- /observability/* 自引用——审计查询本身也会被记录，
+      30s 轮询下列表会持续自我膨胀。
+
+    排序恒为异常优先：status>=400 在前，其余按时间倒序。
+
+    表未建（迁移未跑）或 PG 不可达时 available=false，前端显式降级。
+
+    权限：仅管理员（A3 收口，见 require_admin_operator）。
+    """
+    await require_admin_operator(request)
+
+    # 微缓存命中：同参数 5s 内复用上次结果（多标签轮询合并为一次 DB 查询）
+    cache_key = "&".join(f"{k}={v}" for k, v in sorted(request.query_params.items()))
+    now = time.monotonic()
+    with _access_logs_cache_lock:
+        cached = _access_logs_cache.get(cache_key)
+        cache_hit = bool(cached and cached[0] > now)
+        if cache_hit:
+            etag, payload = cached[1], cached[2]
+    if cache_hit:
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
+        return JSONResponse(payload, headers={"ETag": etag, "Cache-Control": "no-cache"})
+
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import text
+    from sqlalchemy.exc import NoSuchTableError, ProgrammingError
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    where = ["l.ts >= :cutoff"]
+    params: dict = {"cutoff": cutoff, "limit": limit, "offset": offset}
+    if user_id:
+        where.append("l.user_id = :user_id")
+        params["user_id"] = user_id
+    if ip:
+        where.append("l.client_ip = :ip")
+        params["ip"] = ip
+    if path:
+        where.append("(l.uri ILIKE :path OR l.query ILIKE :path)")
+        params["path"] = f"%{path}%"
+    if abnormal_only:
+        where.append("l.status >= 400")
+    if not include_noise:
+        where.append("l.uri NOT LIKE '/observability/%'")
+        where.append("l.uri NOT LIKE '/api/observability/%'")
+        where.append("l.uri NOT IN ('/health', '/api/health')")
+    where_sql = " AND ".join(where)
+
+    try:
+        async with AsyncSessionLocal() as db:
+            total = (await db.execute(
+                text(f"SELECT count(*) FROM ai.gateway_access_logs l WHERE {where_sql}"),
+                params,
+            )).scalar_one()
+            rows = (await db.execute(
+                text(f"""
+                    SELECT l.ts, l.client_ip, l.user_id, u.username, l.auth_type,
+                           l.trace_id, l.method, l.uri, l.query, l.status, l.bytes,
+                           l.duration_ms, l.ua
+                    FROM ai.gateway_access_logs l
+                    LEFT JOIN auth.users u
+                      ON u.id = CASE WHEN l.user_id ~ '^[0-9]+$' THEN l.user_id::bigint END
+                    WHERE {where_sql}
+                    ORDER BY (l.status >= 400) DESC, l.ts DESC
+                    LIMIT :limit OFFSET :offset
+                """),
+                params,
+            )).mappings().all()
+    except (ProgrammingError, NoSuchTableError, OSError) as e:
+        # 42P01 undefined_table 等归为数据源不可用；OSError=PG 连不上
+        logger.warning(f"[GatewayAccessLogs] 数据源不可用: {e}")
+        return {"available": False, "window_hours": hours, "error": str(e)}
+
+    payload = {
+        "available": True,
+        "window_hours": hours,
+        "total": total,
+        "logs": [
+            {
+                "ts": r["ts"].isoformat(),
+                "client_ip": r["client_ip"],
+                "user_id": r["user_id"],
+                "username": r["username"],
+                "trace_id": r["trace_id"],
+                "method": r["method"],
+                "uri": r["uri"],
+                "query": r["query"],
+                "status": r["status"],
+                "bytes": r["bytes"],
+                "duration_ms": r["duration_ms"],
+                "ua": r["ua"],
+            }
+            for r in rows
+        ],
+    }
+
+    # 写缓存 + ETag 协商：浏览器持有旧 ETag 时回 304，省响应体传输
+    etag = _etag_of(payload)
+    now = time.monotonic()
+    with _access_logs_cache_lock:
+        if len(_access_logs_cache) > 256:  # 机会式清理，防参数组合爆炸
+            expired = [k for k, v in _access_logs_cache.items() if v[0] <= now]
+            for k in expired:
+                _access_logs_cache.pop(k, None)
+        _access_logs_cache[cache_key] = (now + _ACCESS_LOGS_CACHE_TTL, etag, payload)
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
+    return JSONResponse(payload, headers={"ETag": etag, "Cache-Control": "no-cache"})

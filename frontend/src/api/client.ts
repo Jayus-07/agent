@@ -116,10 +116,10 @@ function isAuthPath(input: string): boolean {
 }
 
 function buildHeaders(init?: RequestInit): Record<string, string> {
+  // 凭据收口（2026-09-16 方案 B）：X-API-Key 由服务端代理路由
+  // （app/api/[...path]/route.ts）注入，浏览器不再持有服务级密钥。
+  // 旧变量 NEXT_PUBLIC_API_KEY 已废弃，请勿在此引用（会重新泄漏进 bundle）。
   return {
-    ...(process.env.NEXT_PUBLIC_API_KEY
-      ? { "X-API-Key": process.env.NEXT_PUBLIC_API_KEY }
-      : {}),
     ...bearerHeaders(),
     ...((init?.headers as Record<string, string>) || {}),
   };

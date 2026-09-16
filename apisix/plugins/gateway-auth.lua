@@ -12,6 +12,7 @@
 --   ⑦ claim type=access（refresh 令牌拒绝）
 --   ⑧ 策略阶梯 open/shadow/guest/enforce（默认读 env GATEWAY_AUTH_MODE）
 --   ⑨ 通过后注入 X-Auth-Type: jwt + X-User-Id/X-User-Name/X-User-Dept
+--   ⑨.5 角色闸（正向清单 + 方法感知，403 role-insufficient；shadow 只记不拦）
 --   ⑩ 401 体：{"error":"Unauthorized","detail":"未认证：<reason>"} + X-Trace-Id 头
 --      （FastAPI 错误风格 + SCG 冒烟判别符 `未认证：` 兼顾）
 --
@@ -32,17 +33,20 @@ local ngx_time        = ngx.time
 local math_random     = math.random
 local tostring        = tostring
 local find            = string.find
+local concat          = table.concat
 
--- 与 SCG AuthenticationGlobalFilter 一致的伪造头剥离清单（六头，不含 X-Trace-Id）
+-- 与 SCG AuthenticationGlobalFilter 一致的伪造头剥离清单（七头，不含 X-Trace-Id）
 -- 含 X-Operator-Role / X-Operator-Id：operator 身份族，客户端不可伪造（B4 未开、py 不消费 X-Operator-*，
 -- 此处置为剥离属提前防御；大小写变体无需单列——ngx.req.set_header 对头名大小写不敏感，会一并清除）
-local FORGED_HEADERS  = { "X-Auth-Type", "X-User-Id", "X-User-Name", "X-User-Dept",
+-- X-User-Roles 2026-09-16 起由本插件注入（JWT roles claim → 逗号分隔），同样禁止客户端伪造
+local FORGED_HEADERS  = { "X-Auth-Type", "X-User-Id", "X-User-Name", "X-User-Dept", "X-User-Roles",
                           "X-Operator-Role", "X-Operator-Id" }
 
 local HEADER_AUTH_TYPE = "X-Auth-Type"
 local HEADER_USER_ID   = "X-User-Id"
 local HEADER_USER_NAME = "X-User-Name"
 local HEADER_USER_DEPT = "X-User-Dept"
+local HEADER_USER_ROLES = "X-User-Roles"
 local HEADER_TRACE_ID  = "X-Trace-Id"
 
 -- 进程级配置缓存（init_worker 构建；必须先于 _M.access 声明，否则 access 引用全局 nil）
@@ -125,17 +129,17 @@ local function metric(kind, route, reason)
     end
 end
 
--- 401（合同体：FastAPI 错误风格 + `未认证：` 判别符）
-local function deny(ctx, route, reason, count_it)
+-- 401/403（合同体：FastAPI 错误风格 + `未认证：` 判别符；403 用于角色不足）
+local function deny(ctx, route, reason, count_it, status)
     if count_it then
         metric("denied", route, reason)
     end
-    core.log.warn("[gateway-auth] deny route=", route, " reason=", reason)
-    -- 401 也带 X-Trace-Id，便于客户端凭响应头直接上报排障
+    core.log.warn("[gateway-auth] deny route=", route, " reason=", reason, " status=", status or 401)
+    -- 响应也带 X-Trace-Id，便于客户端凭响应头直接上报排障
     -- （core.response.exit 不支持 headers 参数，须先 set_header 再 exit）
     core.response.set_header(HEADER_TRACE_ID, trace_id(ctx))
-    core.response.exit(401, {
-        error = "Unauthorized",
+    core.response.exit(status or 401, {
+        error = status == 403 and "Forbidden" or "Unauthorized",
         detail = "未认证：" .. reason,
     })
 end
@@ -146,12 +150,12 @@ local function would_deny(ctx, route, reason)
     core.log.warn("[gateway-auth] shadow would-deny route=", route, " reason=", reason, "（已放行）")
 end
 
-local function deny_or_shadow(ctx, route, reason, policy)
+local function deny_or_shadow(ctx, route, reason, policy, status)
     if policy == "shadow" or policy == "open" then
         would_deny(ctx, route, reason)
         return
     end
-    deny(ctx, route, reason, true)
+    deny(ctx, route, reason, true, status)
 end
 
 -- ── JWT 验签（对齐 HmacJwtVerifier.java）──────────────────────
@@ -229,6 +233,57 @@ local function build_conf()
             pool_max_idle_ms = tonumber(env("GATEWAY_AUTH_REDIS_POOL_IDLE_MS", "10000")),
         },
     }
+end
+
+
+-- ── 角色闸（2026-09-16：path 前缀硬闸，与后端 _ROLE_RANK 同构）──
+-- 设计约束：
+--   * 正向清单：只有列出的前缀才被闸，未列出的一律放行（新路由默认不误伤）；
+--   * 方法感知：GET/HEAD 算读，其余算写；某维度的最低角色缺省 = 不设限；
+--   * 粗粒度网关闸 + 后端细粒度矩阵（prompts._check_permission）双层分工；
+--   * roles 缺省（旧令牌/服务 key 通道）不拦，交给后端判定；
+--   * 匹配用**原始请求 URI**（request_uri，proxy-rewrite 只改 upstream 路径），
+--     所以前缀必须写成 /api/... 形态。
+local ROLE_RANK = { viewer = 0, editor = 1, admin = 2 }
+local READ_METHODS = { GET = true, HEAD = true, OPTIONS = true }
+local ROLE_GATE_PREFIXES = {
+    ["/api/approvals"] = { write = "admin" },   -- 审批处置权（后端已同语义 403，网关是外层硬闸）
+    ["/api/prompts"]   = { write = "editor" },  -- draft/publish/rollback 的粗闸；高风险仍由后端收紧为 admin
+}
+
+local function role_gate(uri, method, roles)
+    -- 命中清单且角色不足 → 返回拒绝 reason；否则 nil 放行
+    local rule, best_len = nil, 0
+    for prefix, r in pairs(ROLE_GATE_PREFIXES) do
+        if #prefix > best_len and string.sub(uri, 1, #prefix) == prefix then
+            rule, best_len = r, #prefix
+        end
+    end
+    if not rule then
+        return nil
+    end
+    -- ⚠️ 不能写 `READ_METHODS[method] and rule.read or rule.write`：
+    -- Lua 的 and-or 在 rule.read 为 nil 时会落到 rule.write，把读也拦掉（矩阵实测踩坑）
+    local need
+    if READ_METHODS[method] then
+        need = rule.read
+    else
+        need = rule.write
+    end
+    if not need then
+        return nil
+    end
+    local have = -1
+    for _, r in ipairs(roles or {}) do
+        local rr = ROLE_RANK[r]
+        if rr and rr > have then
+            have = rr
+        end
+    end
+    if have >= ROLE_RANK[need] then
+        return nil
+    end
+    return "role-insufficient"
 end
 
 
@@ -317,6 +372,23 @@ function _M.access(_, ctx)
         return deny_or_shadow(ctx, route, "token-type-mismatch", policy)
     end
 
+    -- ⑩.5 角色闸（正向清单 + 方法感知；shadow 模式只记不拦）
+    local claims_roles = {}
+    if type(payload.roles) == "table" then
+        for _, r in ipairs(payload.roles) do
+            local rs = to_str_or_nil(r)
+            if rs then
+                claims_roles[#claims_roles + 1] = rs
+            end
+        end
+    end
+    local raw_uri = ngx.var.request_uri or ""
+    local gate_reason = role_gate(string.match(raw_uri, "^([^?]*)") or "",
+                                  ngx.req.get_method(), claims_roles)
+    if gate_reason then
+        return deny_or_shadow(ctx, route, gate_reason, policy, 403)
+    end
+
     -- 观测型策略到此放行但不注入（SCG shadow 语义：行为保持不注入）
     if policy == "shadow" or policy == "open" then
         return
@@ -332,6 +404,18 @@ function _M.access(_, ctx)
     local dept = to_str_or_nil(payload.dept)
     if dept then
         core.request.set_header(ctx, HEADER_USER_DEPT, dept)
+    end
+    -- roles claim（数组）→ 逗号分隔注入，后端 resolve_operator_role 消费
+    -- （prompts RBAC / 审批角色校验）。缺省或非数组不注入，后端按无角色处理
+    if type(payload.roles) == "table" and #payload.roles > 0 then
+        local parts = {}
+        for _, r in ipairs(payload.roles) do
+            local rs = to_str_or_nil(r)
+            if rs then parts[#parts + 1] = rs end
+        end
+        if #parts > 0 then
+            core.request.set_header(ctx, HEADER_USER_ROLES, concat(parts, ","))
+        end
     end
 end
 

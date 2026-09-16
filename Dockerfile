@@ -53,6 +53,9 @@ COPY --from=builder /opt/venv /opt/venv
 # ── 代码 ──
 WORKDIR /app
 COPY backend/ ./backend/
+# memory 库迁移在容器内执行（PG 未发布端口到宿主机，容器外无法连库）；
+# 缺此文件 alembic 报 No 'script_location' key found
+COPY alembic.ini ./
 COPY mcp_servers/ ./mcp_servers/
 COPY scripts/ ./scripts/
 

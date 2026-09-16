@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import text
+
+from backend.app.api.deps import OperatorIdentity, resolve_operator_role
 
 from contextlib import asynccontextmanager
 
@@ -218,3 +220,39 @@ async def register(request: Request):
     logger.info(f"[local-auth] 注册用户 id={row['id']} username={row['username']}")
     return _result({"userId": row["id"], "username": row["username"],
                     "realName": row["real_name"], "message": "注册成功"})
+
+
+_ALLOWED_ROLES = ("viewer", "editor", "admin")
+
+
+@sys_router.patch("/users/{user_id}/role")
+async def change_role(user_id: int, request: Request,
+                      operator: "OperatorIdentity" = Depends(resolve_operator_role)):
+    """变更用户角色（提权/降权）。仅 admin 可操作（resolve_operator_role 双通道）。
+
+    - 变更即时落库；目标用户已签发的 access token（30min TTL）与 refresh
+      不回收，新角色在下次登录/刷新时进入 JWT roles claim 生效。
+    - 首个 admin 无法由本接口产生（鸡生蛋）：用 SQL 一次性提权
+      `UPDATE auth.users SET role='admin' WHERE username='...'`，之后即可界面化管理。
+    """
+    if operator.role != "admin":
+        raise HTTPException(status_code=403, detail="仅 admin 可变更用户角色")
+
+    body = await request.json()
+    role = (body.get("role") or "").strip()
+    if role not in _ALLOWED_ROLES:
+        return _fail(f"角色必须是 {'/'.join(_ALLOWED_ROLES)}", code=400)
+
+    async with _db() as session:
+        row = (await session.execute(text(
+            "UPDATE auth.users SET role = :role WHERE id = :uid "
+            "RETURNING id, username, role"),
+            {"role": role, "uid": user_id})).mappings().first()
+        await session.commit()
+    if row is None:
+        return _fail("用户不存在", code=404)
+
+    logger.info(f"[local-auth] 角色变更 actor={operator.actor} "
+                f"user={row['username']}({row['id']}) → {row['role']}")
+    return _result({"userId": row["id"], "username": row["username"],
+                    "role": row["role"], "changedBy": operator.actor})

@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { usePathname } from 'next/navigation'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import Sidebar from '@/components/layout/Sidebar'
 import AuthGate from '@/components/AuthGate'
 import { ToastProvider } from '@/components/shared/Toast'
@@ -10,6 +11,20 @@ import './globals.css'
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const pathname = usePathname()
+
+  // React Query（2026-09-16 起）：轮询/缓存/去重统一收口，取代手写 setInterval。
+  // refetchOnWindowFocus 开启 → 切回前台自动补一次刷新（此前手写在 gateway 页）。
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            retry: 1,
+            refetchOnWindowFocus: true,
+          },
+        },
+      }),
+  )
 
   // /agent 走任务模式：全局控制台导航让位给页面自渲染的 TaskSidebar
   // （12 个业务入口在 TaskSidebar 上半区常驻，会话历史在下半区）。
@@ -30,7 +45,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         )}
         <main className="flex-1 flex flex-col min-w-0">
           <AuthGate>
-            <ToastProvider>{children}</ToastProvider>
+            <QueryClientProvider client={queryClient}>
+              <ToastProvider>{children}</ToastProvider>
+            </QueryClientProvider>
           </AuthGate>
         </main>
       </body>

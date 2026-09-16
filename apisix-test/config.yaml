@@ -46,6 +46,7 @@ plugins:
   - gateway-auth
   - limit-conn
   - limit-count
+  - gateway-access-log
 
 # 与生产对齐（容器网络内可达；测试容器未发布 9091 端口，无暴露面）
 plugin_attr:
