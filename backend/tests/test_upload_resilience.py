@@ -21,6 +21,16 @@ from backend.app.api.routes.rag_upload import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _sim_broker_down(monkeypatch):
+    """Celery 队列化已固定为主路径：本文件测并发闸门等本机回退链路，
+    模拟 broker 不可达触发回退（否则任务会投进真实 broker，闸门测不到）。
+    """
+    def _raise(*a, **kw):
+        raise ConnectionError("simulated broker down (test fixture)")
+    monkeypatch.setattr(ru, "_dispatch_index_to_celery", _raise)
+
+
 # ============ 1. PDF 扫描件预检 ============
 
 class TestPdfTextLayerPrecheck:

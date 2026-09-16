@@ -361,17 +361,19 @@ def _extract_doc_keywords_proxy(text: str, top_k: int) -> tuple:
         else:
             kws = [w.strip() for w in content.replace('"', '').replace("'", "").split(",") if w.strip()]
 
-        # 读取 token + 花费 + 模型名
+        # 读取 token + 花费 + 模型名（模型名以 proxy 记录的实际模型为准——
+        # 运行时切换/按请求覆盖时 LLM_MODEL 不等于真实调用的模型）
         from backend.config import LLM_MODEL
         _meta = _last_call_meta_var.get()
+        actual_model = _meta.get("model") or LLM_MODEL
         tokens = {
             "prompt_tokens": _meta.get("prompt_tokens", 0),
             "completion_tokens": _meta.get("completion_tokens", 0),
             "cost_usd": _meta.get("cost_usd", 0),
-            "model": LLM_MODEL,
+            "model": actual_model,
         }
         kw_dicts = [{"word": w, "source": "llm"} for w in kws[:top_k]]
-        logger.info(f"[LLM Keywords] {LLM_MODEL} 提取 {len(kw_dicts)} 个, tokens: {tokens}")
+        logger.info(f"[LLM Keywords] {actual_model} 提取 {len(kw_dicts)} 个, tokens: {tokens}")
         return kw_dicts, tokens
 
     except Exception as e:

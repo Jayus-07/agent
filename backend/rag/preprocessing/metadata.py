@@ -14,7 +14,7 @@ from backend.rag.preprocessing.entity import extract_person_names
 
 from backend.rag.preprocessing.keyword import extract_doc_keywords, extract_chunk_keywords
 from backend.rag.preprocessing.llm_enrichment import (
-    enrich_metadata_llm, _extract_first_sentences, _smart_truncate,
+    _extract_first_sentences, _smart_truncate,
     invoke_metadata_llm,
 )
 from backend.infra.async_utils import async_safe_call_with_timeout
@@ -567,7 +567,9 @@ def detect_business_domain(text: str, min_score: int | None = None, return_detai
 
 # =====================================================
 # 文档摘要 — 详见 llm_enrichment.py
-# (PR-2.x: enrich_metadata_llm + _extract_first_sentences + _smart_truncate 已迁至 llm_enrichment.py)
+# (PR-2.x: _extract_first_sentences + _smart_truncate + invoke_metadata_llm 已迁至 llm_enrichment.py；
+#  enrich_metadata_llm 已于 2026-09-16 删除——F1 重构后失去全部调用方，由
+#  metadata_llm.py 统一抽取 + question_gen.py 独立问题生成取代)
 
 # 摘要结果缓存（text_hash → (summary, person_names)）。
 # 注意：不能用 @lru_cache 装饰 async 函数——它缓存的是 coroutine 对象，

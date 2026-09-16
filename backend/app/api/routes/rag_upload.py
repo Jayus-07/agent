@@ -839,6 +839,18 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
     )
 
 
+def _dispatch_index_to_celery(**kwargs) -> None:
+    """上传索引任务入队 Celery（rag_index 队列）。broker 不可达时抛异常。
+
+    独立成函数便于测试注入：链路 e2e 测试用 autouse fixture 把它替换为
+    抛 ConnectionError，即模拟 broker 不可达 → 覆盖进程内回退路径
+    （celery 队列化主路径由 test_rag_upload_celery_mode.py 单独覆盖）。
+    """
+    from backend.tasks.index_tasks import execute_index_task
+    from backend.config.tasks import CELERY_RAG_INDEX_QUEUE
+    execute_index_task.apply_async(kwargs=kwargs, queue=CELERY_RAG_INDEX_QUEUE)
+
+
 async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general", upload_elapsed_ms: int | None = None, was_overwrite: bool = False):
     """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志。
 
@@ -873,14 +885,11 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
 
     # ── Celery 队列化分流（固定主路径，无开关）──
     try:
-        from backend.tasks.index_tasks import execute_index_task
-        from backend.config.tasks import CELERY_RAG_INDEX_QUEUE
-        execute_index_task.apply_async(kwargs=dict(
+        _dispatch_index_to_celery(
             upload_id=upload_id, filepath=filepath, filename=filename,
             kb_id=kb_id, department=department, source=source,
             batch_id=batch_id, upload_elapsed_ms=upload_elapsed_ms,
-            was_overwrite=was_overwrite,
-        ), queue=CELERY_RAG_INDEX_QUEUE)
+            was_overwrite=was_overwrite)
         # 打标必须在发任何事件之前：SSE 队列模式每轮检查此标记，
         # 看到即切换 Redis 轮询通道消费 Worker 事件（跨进程队列收不到）
         _celery_routed.add(upload_id)

@@ -291,8 +291,12 @@ services:
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
       - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
       - RERANKER_MODEL_PATH=${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
-      # RAG 走远端（本进程不加载索引）
-      - RAG_MODE=remote
+      # 索引执行体必须在本地：Celery worker 消费 rag_index 队列跑上传索引，
+      # RAG_MODE=remote 下 RAGPipeline 是 ask/retrieve 代理（索引管理面被
+      # client.py 明确拒绝），reindex_file 无法执行。改为 local 直接加载
+      # 索引资源（bge 模型在共享 app_cache 卷内），写共享 app_data 存储
+      # （与 rag-service 同卷）；ask/retrieve 仍由 rag-service 承担。
+      - RAG_MODE=local
       - RAG_SERVICE_URL=http://rag-service:8090
       - RAG_DATA_DIR=/app/data
       - LOG_FORMAT=${LOG_FORMAT:-json}

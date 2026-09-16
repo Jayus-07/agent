@@ -37,6 +37,17 @@ from backend.rag.indexing import chunk_store as chunk_store_mod
 from backend.rag.indexing.chunk_store import ChunkStore
 
 
+@pytest.fixture(autouse=True)
+def _sim_broker_down(monkeypatch):
+    """Celery 队列化已固定为主路径：本文件验证上传→索引本机回退链路，
+    模拟 broker 不可达触发回退（Celery 主路径由 test_rag_upload_celery_mode.py 覆盖）。
+    不模拟的话 apply_async 会把任务投进真实 broker，本地索引不执行。
+    """
+    def _raise(*a, **kw):
+        raise ConnectionError("simulated broker down (test fixture)")
+    monkeypatch.setattr(rag_upload, "_dispatch_index_to_celery", _raise)
+
+
 # ============ Fake 组件(内存记录型) ============
 
 class FakeEmbedding:
