@@ -52,7 +52,9 @@ def _on_prerun(sender=None, task=None, **kwargs):
         if not task_id:
             return
         _prerun_ts[str(task_id)] = time.monotonic()
-        hostname = getattr(kwargs.get("task").request if kwargs.get("task") else None,
+        # task 是命名参数（不进 kwargs）；sender 同为 task 实例，两者兜底
+        _task_inst = task or sender
+        hostname = getattr(getattr(_task_inst, "request", None),
                            "hostname", "") or ""
         from backend.services import task_service
 
