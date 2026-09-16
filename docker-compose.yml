@@ -228,6 +228,14 @@ services:
       - LOG_FORMAT=${LOG_FORMAT:-json}
     volumes:
       - app_data:/app/data
+    # 覆盖镜像级 HEALTHCHECK（Dockerfile 写死 8000，本服务监听 8091，
+    # 不覆盖会永远 unhealthy——与 rag-service 同款修正）
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8091/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     depends_on:
       rag-service:
         condition: service_started
