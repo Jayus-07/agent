@@ -248,10 +248,29 @@ def A(doc_id, doc_ids, key_facts, qtype, refuse=False, reason=None,
 def M(fmt, doctype, difficulty="easy", no_answer=False, group=None):
     md = {"format": fmt, "doc_type": doctype, "difficulty": difficulty,
           "is_no_answer": no_answer, "source": "generated",
-          "schema_version": "1.0-probe"}
+          "schema_version": "1.0-probe", "kb_id": "rag_100_docs"}
     if group:
         md["group"] = group
     return md
+
+def derive_expected(case: dict) -> dict:
+    """§4 annotation → 评测器执行契约（backend.evaluation runner 消费的 expected）。
+
+    双 schema 并存：annotation = 任务书 §4 契约（权威标注），expected = harness
+    执行契约（由 annotation 派生，勿手工编辑）。expected_doc_ids 直接以语义
+    slug 传递——DocIdResolver 判分时经 registry 桥接 slug ↔ 文件名。
+    version_requirement / permission_scope 暂无消费方（§5 门禁全量字段阶段接入）。
+    """
+    a = case.get("annotation") or {}
+    return {
+        "relevant_docs": a.get("expected_doc_ids") or [],
+        "relevant_chunks": a.get("expected_chunk_ids") or [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": a.get("key_facts") or [],
+        "should_reject": bool(a.get("should_refuse")),
+    }
+
 
 VREQ_AS_OF_202508 = {"type": "as_of", "date": "2025-08-01"}
 VREQ_AS_OF_202406 = {"type": "as_of", "date": "2024-06-01"}
@@ -995,7 +1014,7 @@ def main() -> int:
             "权限用例的 should_refuse 以「general 权限视角」标注。"),
         "fixture_dir": "../fixtures/rag_100_docs/files",
         "documents_count": len(manifest["documents"]),
-        "test_cases": CASES,
+        "test_cases": [{**c, "expected": derive_expected(c)} for c in CASES],
     }
     errs = validate(dataset, manifest)
     if errs:

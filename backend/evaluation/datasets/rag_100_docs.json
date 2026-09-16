@@ -16,7 +16,9 @@
         "expected_doc_ids": [
           "faq_employee"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "faq_employee_0"
+        ],
         "expected_chunk_anchors": [
           "访客 Wi-Fi 名称 XC-Guest"
         ],
@@ -40,7 +42,23 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "faq_employee"
+        ],
+        "relevant_chunks": [
+          "faq_employee_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "XC-Guest",
+          "密码每月1日更新"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -53,7 +71,9 @@
         "expected_doc_ids": [
           "faq_employee"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "faq_employee_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "10个工作日内"
@@ -74,7 +94,22 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "faq_employee"
+        ],
+        "relevant_chunks": [
+          "faq_employee_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "10个工作日内"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -87,7 +122,9 @@
         "expected_doc_ids": [
           "faq_employee"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "faq_employee_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "3个工作日",
@@ -109,7 +146,23 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "faq_employee"
+        ],
+        "relevant_chunks": [
+          "faq_employee_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "3个工作日",
+          "补办费20元"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -122,7 +175,9 @@
         "expected_doc_ids": [
           "faq_ops"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "faq_ops_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "0591-8888-6677",
@@ -144,7 +199,23 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "faq_ops"
+        ],
+        "relevant_chunks": [
+          "faq_ops_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "0591-8888-6677",
+          "15分钟内响应"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -157,7 +228,9 @@
         "expected_doc_ids": [
           "contract_bluewhale"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "contract_bluewhale_0"
+        ],
         "expected_chunk_anchors": [
           "合同编号：XC-HT-2025-041"
         ],
@@ -181,7 +254,23 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "contract_bluewhale"
+        ],
+        "relevant_chunks": [
+          "contract_bluewhale_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "120万元",
+          "2025年3月1日至2027年2月28日"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -217,7 +306,21 @@
         "is_no_answer": false,
         "source": "generated",
         "schema_version": "1.0-probe",
-        "group": "scanned"
+        "group": "scanned",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "scan_asset_disposal"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "陈斌",
+          "2026-06-12"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -230,7 +333,16 @@
         "expected_doc_ids": [
           "policy_seal"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "policy_seal_0",
+          "policy_seal_1",
+          "policy_seal_2",
+          "policy_seal_3",
+          "policy_seal_4",
+          "policy_seal_5",
+          "policy_seal_6",
+          "policy_seal_7"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "印章使用管理办法",
@@ -252,7 +364,30 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_seal"
+        ],
+        "relevant_chunks": [
+          "policy_seal_0",
+          "policy_seal_1",
+          "policy_seal_2",
+          "policy_seal_3",
+          "policy_seal_4",
+          "policy_seal_5",
+          "policy_seal_6",
+          "policy_seal_7"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "印章使用管理办法",
+          "行政部"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -265,7 +400,9 @@
         "expected_doc_ids": [
           "dict_customer"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "dict_customer_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "CU+8位数字"
@@ -286,7 +423,22 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "dict_customer"
+        ],
+        "relevant_chunks": [
+          "dict_customer_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "CU+8位数字"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -299,7 +451,16 @@
         "expected_doc_ids": [
           "policy_attendance_rnd"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "policy_attendance_rnd_0",
+          "policy_attendance_rnd_1",
+          "policy_attendance_rnd_2",
+          "policy_attendance_rnd_3",
+          "policy_attendance_rnd_4",
+          "policy_attendance_rnd_5",
+          "policy_attendance_rnd_6",
+          "policy_attendance_rnd_7"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "3次以内含3次且每次不超过10分钟",
@@ -321,7 +482,30 @@
         "difficulty": "medium",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_attendance_rnd"
+        ],
+        "relevant_chunks": [
+          "policy_attendance_rnd_0",
+          "policy_attendance_rnd_1",
+          "policy_attendance_rnd_2",
+          "policy_attendance_rnd_3",
+          "policy_attendance_rnd_4",
+          "policy_attendance_rnd_5",
+          "policy_attendance_rnd_6",
+          "policy_attendance_rnd_7"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "3次以内含3次且每次不超过10分钟",
+          "满2小时起算"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -334,7 +518,18 @@
         "expected_doc_ids": [
           "policy_attendance_mkt"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "policy_attendance_mkt_0",
+          "policy_attendance_mkt_1",
+          "policy_attendance_mkt_2",
+          "policy_attendance_mkt_3",
+          "policy_attendance_mkt_4",
+          "policy_attendance_mkt_5",
+          "policy_attendance_mkt_6",
+          "policy_attendance_mkt_7",
+          "policy_attendance_mkt_8",
+          "policy_attendance_mkt_9"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "08:30至09:00",
@@ -357,7 +552,32 @@
         "is_no_answer": false,
         "source": "generated",
         "schema_version": "1.0-probe",
-        "group": "similar_pair"
+        "group": "similar_pair",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_attendance_mkt"
+        ],
+        "relevant_chunks": [
+          "policy_attendance_mkt_0",
+          "policy_attendance_mkt_1",
+          "policy_attendance_mkt_2",
+          "policy_attendance_mkt_3",
+          "policy_attendance_mkt_4",
+          "policy_attendance_mkt_5",
+          "policy_attendance_mkt_6",
+          "policy_attendance_mkt_7",
+          "policy_attendance_mkt_8",
+          "policy_attendance_mkt_9"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "08:30至09:00",
+          "5次以内含5次且每次不超过15分钟"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -370,7 +590,16 @@
         "expected_doc_ids": [
           "manual_meetingroom"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "manual_meetingroom_0",
+          "manual_meetingroom_1",
+          "manual_meetingroom_2",
+          "manual_meetingroom_3",
+          "manual_meetingroom_4",
+          "manual_meetingroom_5",
+          "manual_meetingroom_6",
+          "manual_meetingroom_7"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "星辰办公App",
@@ -392,7 +621,30 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "manual_meetingroom"
+        ],
+        "relevant_chunks": [
+          "manual_meetingroom_0",
+          "manual_meetingroom_1",
+          "manual_meetingroom_2",
+          "manual_meetingroom_3",
+          "manual_meetingroom_4",
+          "manual_meetingroom_5",
+          "manual_meetingroom_6",
+          "manual_meetingroom_7"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "星辰办公App",
+          "单次最长3小时"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -405,7 +657,16 @@
         "expected_doc_ids": [
           "policy_supplier"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "policy_supplier_0",
+          "policy_supplier_1",
+          "policy_supplier_2",
+          "policy_supplier_3",
+          "policy_supplier_4",
+          "policy_supplier_5",
+          "policy_supplier_6",
+          "policy_supplier_7"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "综合评分80分及以上",
@@ -427,7 +688,30 @@
         "difficulty": "medium",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_supplier"
+        ],
+        "relevant_chunks": [
+          "policy_supplier_0",
+          "policy_supplier_1",
+          "policy_supplier_2",
+          "policy_supplier_3",
+          "policy_supplier_4",
+          "policy_supplier_5",
+          "policy_supplier_6",
+          "policy_supplier_7"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "综合评分80分及以上",
+          "每年3月年审"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -440,7 +724,9 @@
         "expected_doc_ids": [
           "table_pricing"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "table_pricing_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "12,999元/年",
@@ -462,7 +748,23 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_pricing"
+        ],
+        "relevant_chunks": [
+          "table_pricing_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "12,999元/年",
+          "席位不限"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -475,7 +777,14 @@
         "expected_doc_ids": [
           "table_hrcost_2026q2"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "table_hrcost_2026q2_0",
+          "table_hrcost_2026q2_1",
+          "table_hrcost_2026q2_2",
+          "table_hrcost_2026q2_3",
+          "table_hrcost_2026q2_4",
+          "table_hrcost_2026q2_5"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "486.5万元"
@@ -496,7 +805,27 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_hrcost_2026q2"
+        ],
+        "relevant_chunks": [
+          "table_hrcost_2026q2_0",
+          "table_hrcost_2026q2_1",
+          "table_hrcost_2026q2_2",
+          "table_hrcost_2026q2_3",
+          "table_hrcost_2026q2_4",
+          "table_hrcost_2026q2_5"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "486.5万元"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -509,7 +838,9 @@
         "expected_doc_ids": [
           "table_servers"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "table_servers_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "A1机房"
@@ -530,7 +861,22 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_servers"
+        ],
+        "relevant_chunks": [
+          "table_servers_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "A1机房"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -543,7 +889,9 @@
         "expected_doc_ids": [
           "table_sales_2026"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "table_sales_2026_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "168.4万元"
@@ -564,7 +912,22 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_sales_2026"
+        ],
+        "relevant_chunks": [
+          "table_sales_2026_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "168.4万元"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -577,7 +940,9 @@
         "expected_doc_ids": [
           "table_tickets_2026"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "table_tickets_2026_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "93.8%",
@@ -599,7 +964,23 @@
         "difficulty": "medium",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_tickets_2026"
+        ],
+        "relevant_chunks": [
+          "table_tickets_2026_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "93.8%",
+          "41秒"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -613,7 +994,19 @@
           "contract_bluewhale",
           "contract_office_lease"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "contract_bluewhale_0",
+          "contract_bluewhale_1",
+          "contract_bluewhale_2",
+          "contract_bluewhale_3",
+          "contract_bluewhale_4",
+          "contract_bluewhale_5",
+          "contract_bluewhale_6",
+          "contract_bluewhale_7",
+          "contract_bluewhale_8",
+          "contract_bluewhale_9",
+          "contract_office_lease_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "120万元",
@@ -636,7 +1029,34 @@
         "difficulty": "hard",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "contract_bluewhale",
+          "contract_office_lease"
+        ],
+        "relevant_chunks": [
+          "contract_bluewhale_0",
+          "contract_bluewhale_1",
+          "contract_bluewhale_2",
+          "contract_bluewhale_3",
+          "contract_bluewhale_4",
+          "contract_bluewhale_5",
+          "contract_bluewhale_6",
+          "contract_bluewhale_7",
+          "contract_bluewhale_8",
+          "contract_bluewhale_9",
+          "contract_office_lease_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "120万元",
+          "18.5万元"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -651,7 +1071,28 @@
           "policy_travel_v2",
           "policy_travel_v3"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "policy_travel_v1_0",
+          "policy_travel_v1_1",
+          "policy_travel_v1_2",
+          "policy_travel_v1_3",
+          "policy_travel_v1_4",
+          "policy_travel_v1_5",
+          "policy_travel_v1_6",
+          "policy_travel_v1_7",
+          "policy_travel_v1_8",
+          "policy_travel_v2_0",
+          "policy_travel_v2_1",
+          "policy_travel_v2_2",
+          "policy_travel_v2_3",
+          "policy_travel_v2_4",
+          "policy_travel_v2_5",
+          "policy_travel_v2_6",
+          "policy_travel_v2_7",
+          "policy_travel_v2_8",
+          "policy_travel_v2_9",
+          "policy_travel_v3_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "调整过2次",
@@ -679,7 +1120,44 @@
         "is_no_answer": false,
         "source": "generated",
         "schema_version": "1.0-probe",
-        "group": "version_chain"
+        "group": "version_chain",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_travel_v1",
+          "policy_travel_v2",
+          "policy_travel_v3"
+        ],
+        "relevant_chunks": [
+          "policy_travel_v1_0",
+          "policy_travel_v1_1",
+          "policy_travel_v1_2",
+          "policy_travel_v1_3",
+          "policy_travel_v1_4",
+          "policy_travel_v1_5",
+          "policy_travel_v1_6",
+          "policy_travel_v1_7",
+          "policy_travel_v1_8",
+          "policy_travel_v2_0",
+          "policy_travel_v2_1",
+          "policy_travel_v2_2",
+          "policy_travel_v2_3",
+          "policy_travel_v2_4",
+          "policy_travel_v2_5",
+          "policy_travel_v2_6",
+          "policy_travel_v2_7",
+          "policy_travel_v2_8",
+          "policy_travel_v2_9",
+          "policy_travel_v3_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "调整过2次",
+          "当前700元/晚"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -693,7 +1171,10 @@
           "report_fin_h1_2026",
           "table_sales_2026"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "report_fin_h1_2026_0",
+          "table_sales_2026_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "61.2%",
@@ -716,7 +1197,25 @@
         "difficulty": "hard",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "report_fin_h1_2026",
+          "table_sales_2026"
+        ],
+        "relevant_chunks": [
+          "report_fin_h1_2026_0",
+          "table_sales_2026_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "61.2%",
+          "168.4万元"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -729,7 +1228,10 @@
         "expected_doc_ids": [
           "manual_onboarding"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "manual_onboarding_1",
+          "manual_onboarding_5"
+        ],
         "expected_chunk_anchors": [
           "需提前 5 个工作日 在 OA 上预约答辩时间"
         ],
@@ -752,7 +1254,23 @@
         "difficulty": "hard",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "manual_onboarding"
+        ],
+        "relevant_chunks": [
+          "manual_onboarding_1",
+          "manual_onboarding_5"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "提前5个工作日"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -765,7 +1283,16 @@
         "expected_doc_ids": [
           "manual_meetingroom"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "manual_meetingroom_0",
+          "manual_meetingroom_1",
+          "manual_meetingroom_2",
+          "manual_meetingroom_3",
+          "manual_meetingroom_4",
+          "manual_meetingroom_5",
+          "manual_meetingroom_6",
+          "manual_meetingroom_7"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "B1层前台"
@@ -786,7 +1313,29 @@
         "difficulty": "hard",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "manual_meetingroom"
+        ],
+        "relevant_chunks": [
+          "manual_meetingroom_0",
+          "manual_meetingroom_1",
+          "manual_meetingroom_2",
+          "manual_meetingroom_3",
+          "manual_meetingroom_4",
+          "manual_meetingroom_5",
+          "manual_meetingroom_6",
+          "manual_meetingroom_7"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "B1层前台"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -799,7 +1348,18 @@
         "expected_doc_ids": [
           "policy_travel_v2"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "policy_travel_v2_0",
+          "policy_travel_v2_1",
+          "policy_travel_v2_2",
+          "policy_travel_v2_3",
+          "policy_travel_v2_4",
+          "policy_travel_v2_5",
+          "policy_travel_v2_6",
+          "policy_travel_v2_7",
+          "policy_travel_v2_8",
+          "policy_travel_v2_9"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "600元/晚"
@@ -822,7 +1382,31 @@
         "is_no_answer": false,
         "source": "generated",
         "schema_version": "1.0-probe",
-        "group": "version_chain"
+        "group": "version_chain",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_travel_v2"
+        ],
+        "relevant_chunks": [
+          "policy_travel_v2_0",
+          "policy_travel_v2_1",
+          "policy_travel_v2_2",
+          "policy_travel_v2_3",
+          "policy_travel_v2_4",
+          "policy_travel_v2_5",
+          "policy_travel_v2_6",
+          "policy_travel_v2_7",
+          "policy_travel_v2_8",
+          "policy_travel_v2_9"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "600元/晚"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -835,7 +1419,17 @@
         "expected_doc_ids": [
           "policy_travel_v1"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "policy_travel_v1_0",
+          "policy_travel_v1_1",
+          "policy_travel_v1_2",
+          "policy_travel_v1_3",
+          "policy_travel_v1_4",
+          "policy_travel_v1_5",
+          "policy_travel_v1_6",
+          "policy_travel_v1_7",
+          "policy_travel_v1_8"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "500元/晚"
@@ -858,7 +1452,30 @@
         "is_no_answer": false,
         "source": "generated",
         "schema_version": "1.0-probe",
-        "group": "version_chain"
+        "group": "version_chain",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_travel_v1"
+        ],
+        "relevant_chunks": [
+          "policy_travel_v1_0",
+          "policy_travel_v1_1",
+          "policy_travel_v1_2",
+          "policy_travel_v1_3",
+          "policy_travel_v1_4",
+          "policy_travel_v1_5",
+          "policy_travel_v1_6",
+          "policy_travel_v1_7",
+          "policy_travel_v1_8"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "500元/晚"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -871,7 +1488,9 @@
         "expected_doc_ids": [
           "policy_travel_v3"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "policy_travel_v3_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "出差事由与项目编号"
@@ -893,7 +1512,22 @@
         "is_no_answer": false,
         "source": "generated",
         "schema_version": "1.0-probe",
-        "group": "version_chain"
+        "group": "version_chain",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_travel_v3"
+        ],
+        "relevant_chunks": [
+          "policy_travel_v3_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "出差事由与项目编号"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -906,7 +1540,16 @@
         "expected_doc_ids": [
           "policy_infosec"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "policy_infosec_0",
+          "policy_infosec_1",
+          "policy_infosec_2",
+          "policy_infosec_3",
+          "policy_infosec_4",
+          "policy_infosec_5",
+          "policy_infosec_6",
+          "policy_infosec_7"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "public/internal/confidential三级",
@@ -928,7 +1571,30 @@
         "difficulty": "medium",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_infosec"
+        ],
+        "relevant_chunks": [
+          "policy_infosec_0",
+          "policy_infosec_1",
+          "policy_infosec_2",
+          "policy_infosec_3",
+          "policy_infosec_4",
+          "policy_infosec_5",
+          "policy_infosec_6",
+          "policy_infosec_7"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "public/internal/confidential三级",
+          "数据保护官（DPO）书面审批"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -941,7 +1607,9 @@
         "expected_doc_ids": [
           "report_cs_2025"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "report_cs_2025_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "58,320件",
@@ -963,7 +1631,23 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "report_cs_2025"
+        ],
+        "relevant_chunks": [
+          "report_cs_2025_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "58,320件",
+          "92.4%"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -976,7 +1660,9 @@
         "expected_doc_ids": [
           "report_q2_product"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "report_q2_product_0"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "2026-04-18"
@@ -997,7 +1683,22 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "report_q2_product"
+        ],
+        "relevant_chunks": [
+          "report_q2_product_0"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "2026-04-18"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -1033,7 +1734,21 @@
         "is_no_answer": false,
         "source": "generated",
         "schema_version": "1.0-probe",
-        "group": "scanned"
+        "group": "scanned",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "scan_access_request"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "B2层机房",
+          "90天（2026-07-01至2026-09-28）"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -1046,7 +1761,13 @@
         "expected_doc_ids": [
           "table_expense_h1_2026"
         ],
-        "expected_chunk_ids": null,
+        "expected_chunk_ids": [
+          "table_expense_h1_2026_0",
+          "table_expense_h1_2026_1",
+          "table_expense_h1_2026_2",
+          "table_expense_h1_2026_3",
+          "table_expense_h1_2026_4"
+        ],
         "expected_chunk_anchors": [],
         "key_facts": [
           "5,210.50元"
@@ -1067,7 +1788,26 @@
         "difficulty": "easy",
         "is_no_answer": false,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_expense_h1_2026"
+        ],
+        "relevant_chunks": [
+          "table_expense_h1_2026_0",
+          "table_expense_h1_2026_1",
+          "table_expense_h1_2026_2",
+          "table_expense_h1_2026_3",
+          "table_expense_h1_2026_4"
+        ],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "5,210.50元"
+        ],
+        "should_reject": false
       }
     },
     {
@@ -1097,7 +1837,16 @@
         "difficulty": "easy",
         "is_no_answer": true,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [],
+        "should_reject": true
       }
     },
     {
@@ -1127,7 +1876,16 @@
         "difficulty": "easy",
         "is_no_answer": true,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [],
+        "should_reject": true
       }
     },
     {
@@ -1159,7 +1917,18 @@
         "difficulty": "hard",
         "is_no_answer": true,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "notes_product_review"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [],
+        "should_reject": true
       }
     },
     {
@@ -1189,7 +1958,16 @@
         "difficulty": "easy",
         "is_no_answer": true,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [],
+        "should_reject": true
       }
     },
     {
@@ -1221,7 +1999,18 @@
         "difficulty": "hard",
         "is_no_answer": true,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "faq_ops"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [],
+        "should_reject": true
       }
     },
     {
@@ -1253,7 +2042,18 @@
         "difficulty": "medium",
         "is_no_answer": true,
         "source": "generated",
-        "schema_version": "1.0-probe"
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "report_fin_h1_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [],
+        "should_reject": true
       }
     }
   ]
