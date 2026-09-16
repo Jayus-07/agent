@@ -1,9 +1,11 @@
 # Agent Platform — FastAPI + LangGraph Multi-Agent
-# P1-12 生产化：多阶段构建（builder 编译依赖 / runtime 仅运行时库）、
-# 非 root 用户、容器级 HEALTHCHECK。
+# P1-12 生产化：多阶段构建（builder 编译依赖 / runtime 仅运行时库）、非 root 用户。
 #
 # 构建:  docker build -t agent-platform .
 # 运行:  见 docker-compose.yml（业务库走 agent_readonly 只读账号）
+# 健康检查: 统一在各服务的 compose healthcheck 定义（2026-09-16 从此处移除——
+# 本镜像被 app/rag/mcp/worker 四个不同端口的服务共用，镜像级探针写死端口
+# 会导致其他服务永久 unhealthy，实测踩坑：mcp-service 8091 失败 1918 次）
 
 # ════════════════════════════════════════════════
 # Stage 1 — builder：安装依赖到独立 venv
@@ -44,7 +46,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # HuggingFace 模型缓存固定到 /app/.cache（非 root HOME 由 compose 卷挂载持久化）
     HF_HOME=/app/.cache/huggingface
 
-# 运行时依赖：curl（HEALTHCHECK）、libpq5（psycopg2）、中文字体（报告/图表渲染）
+# 运行时依赖：curl（compose healthcheck 用）、libpq5（psycopg2）、中文字体（报告/图表渲染）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl libpq5 fonts-wqy-microhei \
     && rm -rf /var/lib/apt/lists/*
@@ -68,9 +70,5 @@ RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser \
 USER appuser
 
 EXPOSE 8000
-
-# ── 容器级健康检查（/health 已在认证中间件白名单中）──
-HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8000/health || exit 1
 
 CMD ["python", "-m", "uvicorn", "backend.app.server:app", "--host", "0.0.0.0", "--port", "8000"]

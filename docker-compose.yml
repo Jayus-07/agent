@@ -137,6 +137,14 @@ services:
     volumes:
       - app_data:/app/data
       - app_cache:/app/.cache
+    # 健康检查统一在 compose 定义（镜像级 HEALTHCHECK 已从 Dockerfile 移除——
+    # 它写死 8000 端口，对同镜像的非 8000 服务是永久 unhealthy 陷阱）
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
     depends_on:
       postgres:
         condition: service_healthy
