@@ -333,6 +333,23 @@ class DocumentRegistry:
                 (status, file_path),
             )
 
+    def update_fields(self, file_path: str, fields: dict):
+        """白名单字段部分更新（全量重建后回填快照字段用，防注入只放行元数据列）。"""
+        allowed = {
+            "minhash_sig", "near_dup_id", "doc_type", "summary", "keywords",
+            "time_refs", "business_domain", "complexity", "quality_score",
+            "quality_issues", "confidence",
+        }
+        sets = {k: v for k, v in (fields or {}).items() if k in allowed}
+        if not sets:
+            return
+        clause = ", ".join(f"{k} = ?" for k in sets)
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                f"UPDATE doc_registry SET {clause}, updated_at = datetime('now') WHERE file_path = ?",
+                [*sets.values(), file_path],
+            )
+
     # ---- 写入 ----
 
     def register(

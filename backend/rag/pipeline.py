@@ -216,6 +216,19 @@ class RAGPipeline:
             logger.warning(f"注册表初始化失败: {e}，回退全量重建")
             return False
 
+        # 全量重建快照：在任何破坏性操作（sync 异常 clear / 全量重建 clear）之前
+        # 抓取 registry 现状，供 _sync_registry_after_full_rebuild 回填 doc_id/
+        # status/minhash_sig——防止全量重建把语义 slug 与近重复基线抹掉
+        #（2026-09-17 事故：registry.clear() + md5 重派导致主语料 doc_id 全变、
+        #  minhash_sig 清空、4 份 pending_review 近重复副本被翻成 active）。
+        try:
+            self._registry_snapshot = {
+                p: dict(r) for p, r in registry.list_all().items()
+            }
+        except Exception:
+            self._registry_snapshot = {}
+            logger.warning("registry 快照失败（若触发全量重建将无法回填历史字段）", exc_info=True)
+
         # 执行增量同步
         try:
             indexer = IncrementalIndexer(
@@ -266,10 +279,17 @@ class RAGPipeline:
 
         try:
             registry = DocumentRegistry(DOC_REGISTRY_PATH)
-            registry.clear()
         except Exception as e:
             logger.warning(f"无法初始化 registry: {e}")
             return
+        # 优先用增量阶段抓取的快照（sync 崩溃路径可能已 clear，届时本地现查为空）
+        snapshot = getattr(self, "_registry_snapshot", None)
+        if not snapshot:
+            try:
+                snapshot = {p: dict(r) for p, r in registry.list_all().items()}
+            except Exception:
+                snapshot = {}
+        registry.clear()
 
         # 扫描所有文档
         indexer = IncrementalIndexer(
@@ -284,7 +304,10 @@ class RAGPipeline:
 
         for file_path, (file_hash, _, _) in disk_files.items():
             kb_id = indexer._derive_kb_id(file_path)
-            doc_id = derive_doc_id_from_path(file_path, DOCS_DIRECTORY)
+            snap = snapshot.get(file_path) or {}
+            # 快照中已有 doc_id（语义 slug 或历史 hash）→ 原样沿用；
+            # 否则按 md5 协议新派生（首次入库）。
+            doc_id = snap.get("doc_id") or derive_doc_id_from_path(file_path, DOCS_DIRECTORY)
 
             # 从 chunk 级向量库查找该文件的所有 chunk ID
             try:
@@ -339,11 +362,68 @@ class RAGPipeline:
                 kb_id=kb_id,
                 chunk_ids=chunk_ids,
                 doc_db_id=doc_db_id,
+                metadata={
+                    "doc_type": snap.get("doc_type", "general"),
+                    "minhash_sig": snap.get("minhash_sig", ""),
+                    "near_dup_id": snap.get("near_dup_id", ""),
+                    "summary": snap.get("summary", ""),
+                    "keywords": snap.get("keywords", ""),
+                    "business_domain": snap.get("business_domain", ""),
+                },
             )
+            # 回填非重建产物字段（近重复基线：非 active 状态 + minhash_sig 兜底）
+            self._restore_snapshot_fields(registry, file_path, snap)
+
+        # 不在磁盘上的存量行（如近重复隔离副本 pending_review）原样恢复，
+        # 防止全量重建把它们从 registry 抹掉（检索层按状态软过滤依赖这些行）。
+        registered = set(disk_files.keys())
+        for p, row in snapshot.items():
+            if p in registered or row.get("status") in ("deleted", "", None):
+                continue
+            try:
+                registry.register(
+                    file_path=p,
+                    doc_id=row.get("doc_id", ""),
+                    file_hash=row.get("file_hash", ""),
+                    kb_id=row.get("kb_id", ""),
+                    chunk_ids=row.get("chunk_ids") or [],
+                    doc_db_id=row.get("doc_db_id", ""),
+                    metadata={
+                        "doc_type": row.get("doc_type", "general"),
+                        "minhash_sig": row.get("minhash_sig", ""),
+                        "near_dup_id": row.get("near_dup_id", ""),
+                        "summary": row.get("summary", ""),
+                        "keywords": row.get("keywords", ""),
+                        "business_domain": row.get("business_domain", ""),
+                    },
+                )
+                self._restore_snapshot_fields(registry, p, row)
+                logger.info(
+                    f"[Pipeline] 快照恢复离盘存量行: {os.path.basename(p)} "
+                    f"status={row.get('status')}"
+                )
+            except Exception as e:
+                logger.warning(f"[Pipeline] 快照行恢复失败 ({p}): {e}")
 
         logger.info(
             f"Registry 同步完成: {registry.count()} 条记录"
         )
+
+    @staticmethod
+    def _restore_snapshot_fields(registry, file_path: str, snap: dict) -> None:
+        """回填快照中的非重建产物字段：非 active 状态（pending_review 等审核态）
+        与 minhash_sig（近重复检测依据）。active 不用回写（register 默认即 active）。"""
+        if not snap:
+            return
+        try:
+            status = snap.get("status")
+            if status and status != "active":
+                registry.update_status(file_path, status)
+            sig = snap.get("minhash_sig")
+            if sig:
+                registry.update_fields(file_path, {"minhash_sig": sig})
+        except Exception as e:
+            logger.warning(f"[Pipeline] registry 快照回填失败 ({file_path}): {e}")
 
     def _init_retrievers(self):
         self.chunk_retriever = CustomRetriever(self.vectordb)

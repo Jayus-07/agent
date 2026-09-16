@@ -11,14 +11,20 @@ class SyncResult:
     modified: int = 0
     deleted: int = 0
     skipped: int = 0
+    # 单文件索引失败数（per-file 跳过后不再让整轮 sync 崩溃回退全量重建）
+    failed: int = 0
+    failed_files: list[str] = field(default_factory=list)
 
     @property
     def total_changed(self) -> int:
         return self.added + self.modified + self.deleted
 
     def __repr__(self) -> str:
-        return (f"SyncResult(added={self.added}, modified={self.modified}, "
-                f"deleted={self.deleted}, skipped={self.skipped})")
+        base = (f"SyncResult(added={self.added}, modified={self.modified}, "
+                f"deleted={self.deleted}, skipped={self.skipped}")
+        if self.failed:
+            base += f", failed={self.failed}"
+        return base + ")"
 
 
 @dataclass

@@ -131,9 +131,11 @@ class MetadataStage:
             if parent_span_id:
                 trace_collector.end_span(dedup_minhash_span, metrics={"near_dup_id": "(see below)"})
 
-            existing_same_type = self._registry.list_by_doc_type(doc_type)
+            # 跨 doc_type 比对：分类漂移会使同一文档重索引时被判成不同类型，
+            # 按类型过滤会漏检近重复（2026-09-17 副本误翻 active 事故根因之一）
+            existing_rows = list(self._registry.list_all().values())
             near_dup_id = ""
-            for existing in existing_same_type:
+            for existing in existing_rows:
                 if existing.get("doc_id") == base_meta.get("doc_id", ""):
                     continue
                 existing_sig = existing.get("minhash_sig", "")
@@ -381,12 +383,17 @@ class MetadataStage:
     @staticmethod
     def detect_near_dup(registry, minhash_sig: list[int], doc_type: str,
                         exclude_doc_id: str = "") -> str:
-        """MinHash 近重复检测：与同 doc_type 存量文档比对，返回 near_dup_id 或 ""。"""
+        """MinHash 近重复检测：与全部存量文档比对（跨 doc_type），返回 near_dup_id 或 ""。
+
+        2026-09-17 起不再按 doc_type 过滤：LLM/规则分类存在漂移，同一文档重索引
+        可能被判成不同 doc_type，按类型过滤会造成近重复漏检（副本被误翻 active
+        的事故根因之一）。内容相似度本身与类型无关。
+        """
         from backend.config.indexing_rules import get_rules
         from backend.rag.preprocessing.metadata import minhash_similarity
         rules = get_rules()
-        existing_same_type = registry.list_by_doc_type(doc_type)
-        for existing in existing_same_type:
+        existing_rows = list(registry.list_all().values())
+        for existing in existing_rows:
             if existing.get("doc_id") == exclude_doc_id:
                 continue
             existing_sig = existing.get("minhash_sig", "")

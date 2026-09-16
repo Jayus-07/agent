@@ -192,15 +192,22 @@ class IncrementalIndexer:
                 active_registry[norm_path] = r
 
         delta = self._compute_delta(disk_files, active_registry)
-        self._apply_delta(delta, disk_files, active_registry)
+        failed_files = self._apply_delta(delta, disk_files, active_registry)
 
         result = SyncResult(
             added=len(delta.added),
             modified=len(delta.modified),
             deleted=len(delta.deleted),
             skipped=len(delta.unchanged),
+            failed=len(failed_files),
+            failed_files=failed_files,
         )
-        logger.info(f"增量索引完成: {result}")
+        if failed_files:
+            logger.warning(
+                f"增量索引完成（含 {len(failed_files)} 个失败文件，已跳过）: {result}"
+            )
+        else:
+            logger.info(f"增量索引完成: {result}")
         return result
 
     # ---- 中断恢复（任务持久化的 recovery 路径）----
@@ -328,8 +335,18 @@ class IncrementalIndexer:
         delta: Delta,
         disk_files: dict,
         registry: dict,
-    ):
-        """逐文件处理增量变更。"""
+    ) -> list[str]:
+        """逐文件处理增量变更。
+
+        per-file 容错：单个文件索引失败只记录并跳过，不再让整轮 sync 崩溃——
+        此前一个坏文件（如 0 文本的扫描件）会触发 pipeline 回退全量重建
+        （registry.clear() + doc_id 重派），造成灾难性状态抹除（2026-09-17 事故）。
+
+        Returns:
+            失败文件路径列表。
+        """
+        failed: list[str] = []
+
         # 删除
         for path in delta.deleted:
             row = registry.get(path, {})
@@ -345,13 +362,31 @@ class IncrementalIndexer:
             doc_id = row.get("doc_id", "")
             if doc_id:
                 self._remove_document(doc_id, file_path=path)
-            self._index_file(path)
-            logger.info(f"[MODIFIED] {os.path.basename(path)}")
+            try:
+                self._index_file(path)
+                logger.info(f"[MODIFIED] {os.path.basename(path)}")
+            except Exception as e:
+                failed.append(path)
+                logger.error(
+                    f"[MODIFIED-FAILED] {os.path.basename(path)}: "
+                    f"{type(e).__name__}: {e}（跳过，不中断本轮 sync）",
+                    exc_info=True,
+                )
 
         # 新增
         for path in delta.added:
-            self._index_file(path)
-            logger.info(f"[ADDED] {os.path.basename(path)}")
+            try:
+                self._index_file(path)
+                logger.info(f"[ADDED] {os.path.basename(path)}")
+            except Exception as e:
+                failed.append(path)
+                logger.error(
+                    f"[ADDED-FAILED] {os.path.basename(path)}: "
+                    f"{type(e).__name__}: {e}（跳过，不中断本轮 sync）",
+                    exc_info=True,
+                )
+
+        return failed
 
     # ---- 单文件索引 ----
 
