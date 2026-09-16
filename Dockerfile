@@ -12,7 +12,9 @@ FROM python:3.10-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=10
 
 # 编译期依赖（仅存在于 builder 层，不进最终镜像）
 RUN apt-get update && apt-get install -y --no-install-recommends \

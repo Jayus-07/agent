@@ -55,6 +55,7 @@ export const NAV: NavEntry[] = [
   {
     icon: <Activity size={18} />, label: '可观测',
     items: [
+      { label: '任务中心', path: '/tasks' },
       { label: '问答追踪', path: '/observability/traces' },
       { label: '网关安全', path: '/observability/gateway' },
       { label: '安全运营', path: '/security' },

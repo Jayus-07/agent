@@ -9,9 +9,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Celery 基础 ──────────────────────────────────────────────
-# broker / backend 分库（/1）避免与业务缓存 (/0) 相互污染
+# broker / backend 分库：/1 队列（broker），/2 结果（result backend），
+# 均与业务缓存 (/0) 隔离，避免键冲突与监控口径混淆。
+# 容器化部署由 docker-compose 显式注入 redis://redis:6379/{1,2}（优先级更高）。
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/1")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
 
 # 任务超时（秒）：soft limit 触发 SoftTimeLimitExceeded → 任务 FAILED；
 # hard limit = soft + 30s 兜底杀进程

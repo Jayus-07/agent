@@ -22,3 +22,18 @@ scrape_configs:
     metrics_path: /apisix/prometheus/metrics
     static_configs:
       - targets: ["agent-apisix:9091"]
+
+  # ── 基础设施 exporters（2026-09-16 任务中心观测，observability profile）──
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  - job_name: celery
+    # danihodovic/celery-exporter：celery_worker_up / celery_queue_length /
+    # celery_task_{sent,succeeded,failed,retried}_total / celery_task_runtime_seconds
+    static_configs:
+      - targets: ["celery-exporter:9808"]

@@ -19,7 +19,8 @@ celery_app = Celery(
     "agent_tasks",
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    include=["backend.tasks.agent_tasks"],  # Worker 启动自动注册任务模块
+    include=["backend.tasks.agent_tasks",     # Worker 启动自动注册任务模块
+             "backend.tasks.signals"],        # 运行时埋点（worker/queue/耗时/异常）
 )
 
 celery_app.conf.update(
@@ -34,6 +35,9 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,     # Worker 被 OOM kill 等异常退出 → 任务回队
     broker_connection_retry_on_startup=True,
     task_track_started=True,             # STARTED 状态可见（监控用）
+    # 事件流（celery-exporter 消费：celery_task_{sent,succeeded,failed,retried}_total）
+    worker_send_task_events=True,
+    task_send_sent_event=True,
 
     # ── 超时 ──
     task_soft_time_limit=CELERY_TASK_TIMEOUT,   # 触发 SoftTimeLimitExceeded → FAILED

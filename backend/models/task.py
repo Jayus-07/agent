@@ -57,9 +57,22 @@ class TaskRecord:
     current_node: str = ""
     progress: str = ""
     error_message: str = ""
+    error_type: str = ""
+    traceback: str = ""
     retry_count: int = 0
+    max_retries: int = 3
+    duration_ms: int | None = None
+    queue: str = "agent"
+    worker: str = ""
+    trace_id: str = ""
+    biz_type: str = ""
+    biz_id: str = ""
+    parent_task_id: str = ""
     celery_task_id: str = ""
     created_at: datetime | None = None
+    queued_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
     updated_at: datetime | None = None
 
     @classmethod
@@ -82,9 +95,22 @@ class TaskRecord:
             current_node=row.get("current_node") or "",
             progress=row.get("progress") or "",
             error_message=row.get("error_message") or "",
+            error_type=row.get("error_type") or "",
+            traceback=row.get("traceback") or "",
             retry_count=int(row.get("retry_count") or 0),
+            max_retries=int(row.get("max_retries") or 3),
+            duration_ms=int(row["duration_ms"]) if row.get("duration_ms") is not None else None,
+            queue=row.get("queue") or "agent",
+            worker=row.get("worker") or "",
+            trace_id=row.get("trace_id") or "",
+            biz_type=row.get("biz_type") or "",
+            biz_id=row.get("biz_id") or "",
+            parent_task_id=str(row["parent_task_id"]) if row.get("parent_task_id") else "",
             celery_task_id=row.get("celery_task_id") or "",
             created_at=row.get("created_at"),
+            queued_at=row.get("queued_at"),
+            started_at=row.get("started_at"),
+            finished_at=row.get("finished_at"),
             updated_at=row.get("updated_at"),
         )
 
@@ -97,9 +123,34 @@ class TaskRecord:
             "current_node": self.current_node,
             "result": self.output,
             "error_message": self.error_message,
+            "error_type": self.error_type,
             "retry_count": self.retry_count,
+            "max_retries": self.max_retries,
+            "duration_ms": self.duration_ms,
+            "queue": self.queue,
+            "worker": self.worker,
+            "trace_id": self.trace_id,
+            "biz_type": self.biz_type,
+            "biz_id": self.biz_id,
             "graph_name": self.graph_name,
             "tenant_id": self.tenant_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "queued_at": self.queued_at.isoformat() if self.queued_at else None,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def to_admin_dict(self) -> dict:
+        """管理端形态：额外暴露 traceback 与内部定位字段（celery_task_id/thread_id）。
+
+        调用方须已过管理员闸；traceback 可能含敏感内容，仅在 admin 通道输出。
+        """
+        return {
+            **self.to_public_dict(),
+            "traceback": self.traceback,
+            "celery_task_id": self.celery_task_id,
+            "thread_id": self.thread_id,
+            "input": self.input,
+            "parent_task_id": self.parent_task_id,
         }

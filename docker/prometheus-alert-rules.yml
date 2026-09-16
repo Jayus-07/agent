@@ -174,3 +174,49 @@ groups:
         annotations:
           summary: "网关侧上游 5xx 超过 1 rps 持续 5 分钟"
           description: "上游 app/Java 服务异常；结合 backend/app 指标与日志定位（网关 retries=0，5xx 即上游真实失败）"
+
+      # ── 任务体系（2026-09-16 接入 redis/postgres/celery exporters）──────
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis exporter 失联"
+          description: "缓存/限流/取消标志/事件通道/SSE 全依赖 Redis；连续 1 分钟抓不到 redis-exporter:9121 即判不可用"
+
+      - alert: PostgresDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL exporter 失联"
+          description: "记忆库/任务状态权威/checkpoint 全在 PG；连续 1 分钟抓不到 postgres-exporter:9187 即判不可用"
+
+      - alert: CeleryWorkerDown
+        expr: min(celery_worker_up) == 0 or absent(celery_worker_up) == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Celery Worker 全部离线或无 worker 心跳"
+          description: "celery_worker_up 无样本（absent）= 没有 worker 在跑；== 0 = 心跳超时。任务会积压无人消费，检查 compose worker 服务与健康检查"
+
+      - alert: CeleryQueueBacklog
+        expr: celery_queue_length > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Celery 队列积压（{{ $labels.queue }} > 20 持续 5 分钟）"
+          description: "入队速率超过消费能力：检查 worker 在线数/并发（celery_worker_up、/observability/system-health），必要时横向扩 worker 副本"
+
+      - alert: CeleryTaskFailureRateHigh
+        expr: sum(rate(celery_task_failed_total[10m])) / clamp_min(sum(rate(celery_task_failed_total[10m])) + sum(rate(celery_task_succeeded_total[10m])), 0.001) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "任务失败率超过 30%（10 分钟窗口）"
+          description: "按 name/queue 标签定位失败任务类型；管理端任务中心看 traceback（/api/admin/tasks/{id}），常见为 LLM 凭据失效或超时"

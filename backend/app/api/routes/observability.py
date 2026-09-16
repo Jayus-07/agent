@@ -1,7 +1,7 @@
 """可观测性 REST API — traces / metrics / resources / alerts / graph
 
 数据源统一在 `backend.rag.tracer.trace_collector`：
-Langfuse 主存储（读路径优先），SQLite TraceStore 保留作为降级兜底。
+SQLite TraceStore 直读（Langfuse 已下线，2026-09-16）。
 """
 
 import os
@@ -89,7 +89,7 @@ from backend.app.api.routes._trace_dto import (  # noqa: E402
 async def list_traces(limit: int = Query(20, ge=1, le=200),
                       workflow_name: str | None = Query(None),
                       session_id: str | None = Query(None)):
-    """最近 N 条 trace 摘要（Langfuse 主查询，SQLite 降级）。
+    """最近 N 条 trace 摘要（SQLite TraceStore）。
 
     workflow_name / session_id 服务端过滤：前端不再拉 200 条本地 filter。
     """
@@ -177,8 +177,8 @@ async def cs_quality_report(hours: float = Query(24, gt=0, le=24 * 30)):
 
 @router.get("/traces/{trace_id}")
 async def get_trace(trace_id: str):
-    """获取单条 trace 完整详情（Langfuse 优先，SQLite 兜底）"""
-    # trace_collector.get() 内部已做 Langfuse → SQLite 两级回退；
+    """获取单条 trace 完整详情（SQLite TraceStore）"""
+    # trace_collector.get() 直读 SQLite TraceStore；
     # 再保留一层 store 直读兜底（极端情况下 collector 异常）
     data = trace_collector.get(trace_id)
     if data is None:
@@ -229,7 +229,7 @@ async def stream_rag_traces():
 
 @router.get("/rag-traces/{trace_id}")
 async def get_rag_trace(trace_id: str):
-    """获取单条 RAG Trace 详情（Langfuse 优先，SQLite 兜底）"""
+    """获取单条 RAG Trace 详情（SQLite TraceStore）"""
     t = trace_collector.get(trace_id)
     if t is None:
         data = get_trace_store().get(trace_id)
@@ -613,6 +613,175 @@ async def get_gateway_auth(request: Request, hours: float = Query(6, gt=0, le=24
         "status_codes": _top(codes, "code"),
         "denied_series": series,
     }
+
+
+# ═══════════════════════════════════════════════════
+# System Health（2026-09-16：管理端「系统健康」数据源）
+# ═══════════════════════════════════════════════════
+#
+# 设计约束：celery inspect 是阻塞广播（秒级），绝不能随页面请求实时打。
+# 采集函数整体在 threadpool 执行 + 进程内 15s 缓存——多标签页/轮询共享一份
+# 快照（与 gateway-access-logs 微缓存同模式，但 TTL 更长：广播成本更高）。
+
+_SYSTEM_HEALTH_CACHE_TTL = 15.0
+_system_health_cache: dict[str, tuple[float, dict]] = {}
+_system_health_lock = threading.Lock()
+
+
+def _redis_health_block() -> dict:
+    """业务 Redis(db0) + Celery broker(db1) + result(db2) 三段健康。"""
+    import redis as redis_lib
+
+    from backend.config.tasks import CELERY_BROKER_URL, CELERY_RESULT_BACKEND
+
+    def _probe(url: str) -> dict:
+        t0 = time.monotonic()
+        client = redis_lib.Redis.from_url(
+            url, socket_connect_timeout=2, socket_timeout=2, decode_responses=True)
+        try:
+            client.ping()
+            latency_ms = round((time.monotonic() - t0) * 1000, 1)
+            info = client.info("server")
+            mem = client.info("memory")
+            return {
+                "available": True,
+                "latency_ms": latency_ms,
+                "version": info.get("redis_version", ""),
+                "used_memory_human": mem.get("used_memory_human", ""),
+                "connected_clients": client.info("clients").get("connected_clients"),
+                "keys": int(client.dbsize()),
+            }
+        except Exception as e:  # noqa: BLE001 — 单段失败不拖垮整体
+            return {"available": False, "error": str(e)[:200]}
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    block = {"db0": _probe(os.getenv("REDIS_URL", "redis://localhost:6379/0")),
+             "broker": _probe(CELERY_BROKER_URL),
+             "result": _probe(CELERY_RESULT_BACKEND)}
+
+    # 队列长度（broker db1；默认队列名取 celery 配置）
+    if block["broker"]["available"]:
+        try:
+            from backend.tasks.celery_app import celery_app
+
+            qname = celery_app.conf.task_default_queue or "agent"
+            client = redis_lib.Redis.from_url(
+                CELERY_BROKER_URL, socket_connect_timeout=2, socket_timeout=2,
+                decode_responses=True)
+            try:
+                block["queues"] = {qname: int(client.llen(qname))}
+            finally:
+                client.close()
+        except Exception as e:  # noqa: BLE001
+            block["queues"] = {}
+            block["queues_error"] = str(e)[:200]
+    return block
+
+
+def _db_health_block() -> dict:
+    """PG 健康健查：PING 延迟 / 版本 / 活跃连接 / tasks 表可用性。"""
+    t0 = time.monotonic()
+    try:
+        from backend.config.database import MEMORY_DB_CONFIG
+        import psycopg
+
+        c = MEMORY_DB_CONFIG
+        with psycopg.connect(
+            f"postgresql://{c['user']}:{c['password']}@{c['host']}:{c['port']}/{c['dbname']}",
+            connect_timeout=3, autocommit=True,
+        ) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            latency_ms = round((time.monotonic() - t0) * 1000, 1)
+            cur.execute("SHOW server_version")
+            version = str(cur.fetchone()[0]).split()[0]  # type: ignore[index]
+            cur.execute("SELECT count(*) FROM pg_stat_activity WHERE state = 'active'")
+            active = int(cur.fetchone()[0])  # type: ignore[index]
+            cur.execute("SELECT count(*) FROM tasks WHERE status IN "
+                        "('PENDING','RUNNING','WAITING_USER','PAUSED')")
+            open_tasks = int(cur.fetchone()[0])  # type: ignore[index]
+        return {"available": True, "latency_ms": latency_ms, "version": version,
+                "active_connections": active, "open_tasks": open_tasks}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "error": str(e)[:200]}
+
+
+def _worker_health_block() -> dict:
+    """Celery Worker 广播采集（阻塞调用，仅在缓存 miss 的 threadpool 里执行）。"""
+    try:
+        from backend.tasks.celery_app import celery_app
+
+        insp = celery_app.control.inspect(timeout=2.0)
+        ping = insp.ping() or {}
+        stats = insp.stats() or {}
+        active = insp.active() or {}
+        workers = [
+            {
+                "name": name,
+                "concurrency": (stats.get(name, {}) or {}).get("pool", {}).get("max-concurrency"),
+                "version": (stats.get(name, {}) or {}).get("version", ""),
+                "active_tasks": len(active.get(name, []) or []),
+            }
+            for name in ping
+        ]
+        return {"available": True, "online_count": len(workers), "workers": workers,
+                "collected_at": time.time()}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "error": str(e)[:200], "workers": []}
+
+
+def _tasks_health_block() -> dict:
+    """任务面统计（24h）+ 最近失败 TOP5。"""
+    try:
+        from backend.services import task_service
+
+        stats = task_service.stats_tasks(hours=24)
+        fails, _total = task_service.list_tasks_admin(status="FAILED", hours=24, limit=5)
+        stats["recent_failures"] = [
+            {"task_id": r.id, "error_type": r.error_type,
+             "error_message": r.error_message[:200],
+             "worker": r.worker, "retry_count": r.retry_count,
+             "finished_at": r.finished_at.isoformat() if r.finished_at else None}
+            for r in fails
+        ]
+        return {"available": True, **stats}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "error": str(e)[:200]}
+
+
+def _collect_system_health() -> dict:
+    return {
+        "collected_at": time.time(),
+        "redis": _redis_health_block(),
+        "db": _db_health_block(),
+        "worker": _worker_health_block(),
+        "tasks": _tasks_health_block(),
+    }
+
+
+@router.get("/system-health")
+async def get_system_health(request: Request):
+    """系统健康快照（Redis/DB/Worker/任务面，只读）。
+
+    权限：仅管理员（require_admin_operator）。15s 进程内缓存——celery inspect
+    广播是秒级阻塞操作，页面轮询共享同一份快照，不随请求实时广播。
+    单段不可用以 available=false 降级，不影响其余段。
+    """
+    await require_admin_operator(request)
+    now = time.monotonic()
+    with _system_health_lock:
+        cached = _system_health_cache.get("v")
+        if cached and cached[0] > now:
+            return JSONResponse(cached[1], headers={"Cache-Control": "no-cache"})
+    from starlette.concurrency import run_in_threadpool
+
+    payload = await run_in_threadpool(_collect_system_health)
+    with _system_health_lock:
+        _system_health_cache["v"] = (now + _SYSTEM_HEALTH_CACHE_TTL, payload)
+    return JSONResponse(payload, headers={"Cache-Control": "no-cache"})
 
 
 # ═══════════════════════════════════════════════════

@@ -62,8 +62,13 @@ def ensure_schema() -> None:
 # ═══════════════════════════════════════════════════
 
 def create_task(user_id: str, query: str, *, tenant_id: str = "default",
-                graph_name: str = "main") -> TaskRecord:
+                graph_name: str = "main",
+                trace_id: str = "",
+                biz_type: str = "", biz_id: str = "",
+                parent_task_id: str = "") -> TaskRecord:
     """创建 PENDING 任务并落库。thread_id 全局唯一（checkpoint 定位键）。"""
+    from backend.config.tasks import CELERY_MAX_RETRIES
+
     ensure_schema()
     task_id = str(uuid.uuid4())
     thread_id = f"task-{task_id}"
@@ -71,27 +76,62 @@ def create_task(user_id: str, query: str, *, tenant_id: str = "default",
         cur.execute(
             """
             INSERT INTO tasks (id, user_id, tenant_id, graph_name, status,
-                               input, thread_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                               input, thread_id, trace_id,
+                               biz_type, biz_id, parent_task_id, max_retries)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (task_id, user_id, tenant_id, graph_name,
              TaskStatus.PENDING.value,
              json.dumps({"query": query}, ensure_ascii=False),
-             thread_id),
+             thread_id, trace_id, biz_type, biz_id,
+             parent_task_id or None, CELERY_MAX_RETRIES),
         )
     return get_task(task_id)  # type: ignore[return-value]
 
 
+def mark_queued(task_id: str, celery_task_id: str, *,
+                queue: str = "agent") -> None:
+    """apply_async 成功后回填：celery id + 队列 + queued_at（排队耗时起点）。"""
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET celery_task_id = %s, queue = %s, "
+            "queued_at = now(), updated_at = now() WHERE id = %s",
+            (celery_task_id, queue, task_id),
+        )
+
+
 def update_status(task_id: str, status: TaskStatus, *,
                   error_message: str = "",
+                  error_type: str | None = None,
+                  traceback_text: str | None = None,
+                  worker: str | None = None,
+                  duration_ms: int | None = None,
                   progress: str | None = None,
                   checkpoint_id: str | None = None,
                   output: dict | None = None,
                   celery_task_id: str | None = None) -> None:
-    """状态迁移 + 可选字段一并更新（单条 UPDATE，避免多写竞态）。"""
+    """状态迁移 + 可选字段一并更新（单条 UPDATE，避免多写竞态）。
+
+    时间戳自动治理：
+    - RUNNING → started_at（COALESCE 保留首次启动，重试不覆盖）
+    - 终态 → finished_at，且 started_at 非空时自动计算 duration_ms
+    """
     ensure_schema()
     sets = ["status = %s", "error_message = %s", "updated_at = now()"]
     args: list = [status.value, error_message]
+    if error_type is not None:
+        sets.append("error_type = %s")
+        args.append(error_type[:128])
+    if traceback_text is not None:
+        sets.append("traceback = %s")
+        args.append(traceback_text[:20000])
+    if worker is not None:
+        sets.append("worker = %s")
+        args.append(worker[:128])
+    if duration_ms is not None:
+        sets.append("duration_ms = %s")
+        args.append(int(duration_ms))
     if progress is not None:
         sets.append("progress = %s")
         args.append(progress[:500])
@@ -104,6 +144,15 @@ def update_status(task_id: str, status: TaskStatus, *,
     if celery_task_id is not None:
         sets.append("celery_task_id = %s")
         args.append(celery_task_id)
+    if status == TaskStatus.RUNNING:
+        sets.append("started_at = COALESCE(started_at, now())")
+    if status.is_terminal():
+        sets.append("finished_at = now()")
+        # 未显式给耗时时自动补算（执行段耗时，不含排队）
+        if duration_ms is None:
+            sets.append("duration_ms = CASE WHEN started_at IS NOT NULL THEN "
+                        "(EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::int "
+                        "ELSE duration_ms END")
     args.append(task_id)
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id = %s", args)
@@ -226,6 +275,129 @@ def list_checkpoints(task_id: str, user_id: str) -> list[dict]:
     owner = get_task_for_user(task_id, user_id)
     if owner is None:
         return []
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, node_name, state_json, created_at "
+            "FROM agent_checkpoints WHERE task_id = %s ORDER BY id", (task_id,))
+        rows = cur.fetchall()
+        cols = [d.name for d in cur.description]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+# ═══════════════════════════════════════════════════
+# 管理端查询（跨用户，调用方必须已过管理员闸）
+# ═══════════════════════════════════════════════════
+
+def list_tasks_admin(
+    *,
+    status: str = "",
+    graph_name: str = "",
+    queue: str = "",
+    worker: str = "",
+    user_id: str = "",
+    tenant_id: str = "",
+    biz_type: str = "",
+    biz_id: str = "",
+    trace_id: str = "",
+    retries_gt: int | None = None,
+    hours: float = 24 * 7,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[TaskRecord], int]:
+    """管理员全局任务列表（多条件 AND，created_at 倒序，返回 (records, total)）。"""
+    ensure_schema()
+    where = ["t.created_at >= now() - (%s || ' hours')::interval"]
+    args: list = [float(hours)]
+    if status:
+        where.append("t.status = %s")
+        args.append(status)
+    if graph_name:
+        where.append("t.graph_name = %s")
+        args.append(graph_name)
+    if queue:
+        where.append("t.queue = %s")
+        args.append(queue)
+    if worker:
+        where.append("t.worker ILIKE %s")
+        args.append(f"%{worker}%")
+    if user_id:
+        where.append("t.user_id = %s")
+        args.append(user_id)
+    if tenant_id:
+        where.append("t.tenant_id = %s")
+        args.append(tenant_id)
+    if biz_type:
+        where.append("t.biz_type = %s")
+        args.append(biz_type)
+    if biz_id:
+        where.append("t.biz_id = %s")
+        args.append(biz_id)
+    if trace_id:
+        where.append("t.trace_id = %s")
+        args.append(trace_id)
+    if retries_gt is not None:
+        where.append("t.retry_count > %s")
+        args.append(int(retries_gt))
+    where_sql = " AND ".join(where)
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT count(*) FROM tasks t WHERE {where_sql}", args)
+        total = int(cur.fetchone()[0])  # type: ignore[index]
+        cur.execute(
+            f"SELECT t.* FROM tasks t WHERE {where_sql} "
+            "ORDER BY t.created_at DESC LIMIT %s OFFSET %s",
+            [*args, max(1, min(int(limit), 200)), max(0, int(offset))],
+        )
+        rows = cur.fetchall()
+        cols = [d.name for d in cur.description]
+    records = [TaskRecord.from_row(dict(zip(cols, r))) for r in rows]
+    return records, total
+
+
+def stats_tasks(*, hours: float = 24) -> dict:
+    """任务统计：窗口内各状态计数 / 成功率 / 失败率 / 平均与 P95 耗时 / 重试任务数。"""
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, count(*) AS n,
+                   percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95,
+                   avg(duration_ms) AS avg_ms
+            FROM tasks
+            WHERE created_at >= now() - (%s || ' hours')::interval
+            GROUP BY status
+            """,
+            (float(hours),),
+        )
+        rows = cur.fetchall()
+        by_status = {r[0]: {"count": int(r[1]),
+                            "p95_duration_ms": int(r[2]) if r[2] is not None else None,
+                            "avg_duration_ms": int(r[3]) if r[3] is not None else None}
+                     for r in rows}
+        cur.execute(
+            "SELECT count(*) FROM tasks WHERE created_at >= "
+            "now() - (%s || ' hours')::interval AND retry_count > 0",
+            (float(hours),),
+        )
+        retried = int(cur.fetchone()[0])  # type: ignore[index]
+    total = sum(v["count"] for v in by_status.values())
+    success = by_status.get("SUCCESS", {}).get("count", 0)
+    failed = by_status.get("FAILED", {}).get("count", 0)
+    finished = success + failed
+    p95 = [v["p95_duration_ms"] for v in by_status.values() if v["p95_duration_ms"] is not None]
+    return {
+        "window_hours": hours,
+        "total": total,
+        "by_status": by_status,
+        "success_rate": round(success / finished, 4) if finished else None,
+        "failure_rate": round(failed / finished, 4) if finished else None,
+        "p95_duration_ms": max(p95) if p95 else None,
+        "retried_count": retried,
+    }
+
+
+def list_checkpoints_admin(task_id: str) -> list[dict]:
+    """管理员视角节点 checkpoint 历史（不做 user 归属校验，闸在上层）。"""
     ensure_schema()
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(

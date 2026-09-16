@@ -34,6 +34,7 @@ from backend.app.api.routes import (
     approvals,
     maps,
     tasks,
+    admin_tasks,
 )
 from backend.app.api.routes.health import router as health_router
 from backend.app.api.routes.keyword_routes import router as keyword_router
@@ -72,6 +73,7 @@ api_router.include_router(evaluation.router)  # 评测集管理
 api_router.include_router(internal_ai.router)  # Java→Python 工具网关（X-Internal-Token 鉴权）
 api_router.include_router(approvals.router)  # 写操作工具审批门（human-in-the-loop）
 api_router.include_router(tasks.router)  # 异步任务编排（Celery + LangGraph checkpoint）
+api_router.include_router(admin_tasks.router)  # 管理端任务中心（管理员闸 + 操作审计）
 api_router.include_router(maps.router)  # 腾讯位置服务代理（前端调 /api/map/*，Key 不出后端）
 
 # ── 系统路由 ──────────────────────────────────

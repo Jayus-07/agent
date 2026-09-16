@@ -103,6 +103,10 @@ services:
       # Redis
       - REDIS_ENABLED=${REDIS_ENABLED:-true}
       - REDIS_URL=redis://redis:6379/0
+      # Celery（broker/result 分库：/1 队列，/2 结果，避免键冲突）
+      # 显式注入容器内地址，优先级高于 .env 的宿主值（与 REDIS_URL 同策略）
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
       # Kafka（事件发布，默认关闭保证向后兼容）
       - KAFKA_ENABLED=${KAFKA_ENABLED:-true}
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
@@ -233,6 +237,72 @@ services:
       - agent-net
     restart: unless-stopped
 
+  # ── Celery Worker（异步任务执行，独立于 API 进程水平扩展）──
+  # 与 app 共用同一镜像；只消费 agent 队列（task_routes 固定路由）。
+  # 纵向扩并发用 CELERY_WORKER_CONCURRENCY，横向扩 = 起多个本服务副本。
+  # agent 执行需要 LLM/PG checkpoint/RAG(远端)：LLM key 来自 env_file(.env)，
+  # 容器内地址（PG/Redis/RAG/Ollama）在此显式覆盖。
+  worker:
+    build: .
+    command:
+      ["celery", "-A", "backend.workers.agent_worker", "worker",
+       "--loglevel=info", "-Q", "agent",
+       "--concurrency=${CELERY_WORKER_CONCURRENCY:-4}",
+       "-n", "agent-worker@%h"]
+    env_file:
+      - .env
+    environment:
+      # Celery：broker db1 / result db2（与 app 注入保持一致）
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      # 控制面（取消/暂停标志、事件 pub/sub 走业务 db0）
+      - REDIS_ENABLED=true
+      - REDIS_URL=redis://redis:6379/0
+      # PostgreSQL — 任务状态权威（agent_memory.tasks）+ LangGraph checkpoint
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGDATABASE=agent_memory
+      - PGUSER=postgres
+      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+      - TRAVEL_CHECKPOINTER_ENABLED=${TRAVEL_CHECKPOINTER_ENABLED:-true}
+      - TRAVEL_CHECKPOINTER_BACKEND=${TRAVEL_CHECKPOINTER_BACKEND:-postgres}
+      - TRAVEL_CHECKPOINT_TTL_DAYS=${TRAVEL_CHECKPOINT_TTL_DAYS:-7}
+      # LLM / 模型
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - QWEN_API_KEY=${QWEN_API_KEY:-}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
+      - RERANKER_MODEL_PATH=${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
+      # RAG 走远端（本进程不加载索引）
+      - RAG_MODE=remote
+      - RAG_SERVICE_URL=http://rag-service:8090
+      - RAG_DATA_DIR=/app/data
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+    volumes:
+      - app_data:/app/data
+      - app_cache:/app/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rag-service:
+        condition: service_started
+    # 存活判定：向本容器节点发 inspect ping（default 节点名 celery@<hostname>，
+    # -n agent-worker@%h 时节点名为 agent-worker@<hostname>）。
+    # $$ 为 compose 转义 → 运行时由 shell 展开 hostname。
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A backend.workers.agent_worker inspect ping -d agent-worker@$$(hostname) --timeout 10 | grep -q pong"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 40s
+    networks:
+      - agent-net
+    restart: unless-stopped
+
   # ── PostgreSQL + pgvector ──
   postgres:
     image: pgvector/pgvector:pg16
@@ -329,6 +399,45 @@ services:
       - grafana_data:/var/lib/grafana
     depends_on:
       - prometheus
+    networks:
+      - agent-net
+    restart: unless-stopped
+
+  # ── Redis exporter（observability profile；redis:6379 → :9121/metrics）──
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    profiles: ["observability"]
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+    networks:
+      - agent-net
+    restart: unless-stopped
+
+  # ── PostgreSQL exporter（observability profile；agent_memory → :9187/metrics）──
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    profiles: ["observability"]
+    environment:
+      # 仅监控账号只读查询；密码与 postgres 超管同源（本地单机部署，够用）
+      - DATA_SOURCE_NAME=postgresql://postgres:${PGPASSWORD:?PGPASSWORD is required}@postgres:5432/agent_memory?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - agent-net
+    restart: unless-stopped
+
+  # ── Celery exporter（observability profile；消费 worker 事件流 → :9808/metrics）──
+  # 指标：celery_worker_up / celery_queue_length / celery_task_{sent,succeeded,
+  # failed,retried}_total / celery_task_runtime_seconds。事件流开关已在
+  # celery_app.conf 打开（worker_send_task_events / task_send_sent_event）。
+  celery-exporter:
+    image: danihodovic/celery-exporter:latest
+    profiles: ["observability"]
+    command: ["--broker-url=redis://redis:6379/1"]
+    depends_on:
+      redis:
+        condition: service_healthy
     networks:
       - agent-net
     restart: unless-stopped

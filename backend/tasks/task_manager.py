@@ -101,8 +101,7 @@ def enqueue_task(record: TaskRecord) -> str | None:
 
         async_result = execute_agent_task.apply_async(
             args=[record.id], queue="agent")
-        task_service.update_status(record.id, record.status,
-                                   celery_task_id=async_result.id)
+        task_service.mark_queued(record.id, async_result.id, queue="agent")
         return async_result.id
     except Exception as e:
         # broker 不可达：任务留在 PENDING，由 API 返回 503 提示
