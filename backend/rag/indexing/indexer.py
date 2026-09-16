@@ -82,6 +82,21 @@ def _build_doc_level_text(full_text: str, doc_meta: dict) -> str:
     return header + "\n\n" + full_text[:body_budget]
 
 
+def _filter_quality_summary(filtered_details: list[dict]) -> str:
+    """R-P1-3: 被过滤 chunk 的 quality_issues 汇总串（无过滤返回空串）。
+
+    例: "filtered_chunks:3(empty=1,too_short=2)"。逐条明细（含 preview）
+    持久化在 index_chunk span output.filtered_details，供 trace 详情页审计。
+    """
+    if not filtered_details:
+        return ""
+    reason_breakdown: dict[str, int] = {}
+    for d in filtered_details:
+        reason_breakdown[d["reason"]] = reason_breakdown.get(d["reason"], 0) + 1
+    breakdown_str = ",".join(f"{k}={v}" for k, v in reason_breakdown.items())
+    return f"filtered_chunks:{len(filtered_details)}({breakdown_str})"
+
+
 class ChunkingEmptyError(Exception):
     """文档解析/切片成功但最终未产出任何有效 chunk（chunk_count=0）。
 
@@ -587,8 +602,9 @@ class IncrementalIndexer:
 
             from backend.rag.preprocessing.filter import ChunkFilter
             chunk_filter = ChunkFilter()
+            total_before_filter = len(chunks)
             filtered_chunks = []
-            filtered_count = 0
+            filtered_details: list[dict] = []  # R-P1-3: 被过滤 chunk 明细（原因可追溯）
             for chunk in chunks:
                 ok, reason = chunk_filter.should_keep(chunk.page_content, chunk.metadata)
                 if ok:
@@ -596,14 +612,25 @@ class IncrementalIndexer:
                         chunk.page_content = ChunkFilter.apply_pii_mask(chunk.page_content)
                     filtered_chunks.append(chunk)
                 else:
-                    filtered_count += 1
+                    filtered_details.append({
+                        "chunk_index": chunk.metadata.get("chunk_index", len(filtered_chunks)),
+                        "reason": reason,
+                        "preview": chunk.page_content[:80],
+                    })
                     logger.debug(f"[Filter] 拒绝 chunk: {reason} (doc={file_path})")
+            filtered_count = len(filtered_details)
             if filtered_count > 0:
-                logger.info(f"[Filter] {file_path}: 过滤 {filtered_count}/{len(chunks)} 个 chunk")
+                reason_breakdown: dict[str, int] = {}
+                for d in filtered_details:
+                    reason_breakdown[d["reason"]] = reason_breakdown.get(d["reason"], 0) + 1
+                logger.info(
+                    f"[Filter] {file_path}: 过滤 {filtered_count}/{total_before_filter} "
+                    f"个 chunk ({reason_breakdown})"
+                )
             chunks = filtered_chunks
 
             trace_collector.end_span(chunk_span,
-                metrics={"raw_chunks": len(chunks),
+                metrics={"raw_chunks": total_before_filter,
                          "kept_chunks": len(filtered_chunks),
                          "filtered_out": filtered_count,
                          "chunk_size": chunk_size,
@@ -612,7 +639,9 @@ class IncrementalIndexer:
                         "total": len(filtered_chunks),
                         "strategy": strategy_name,
                         "chunk_size": chunk_size,
-                        "chunk_overlap": chunk_overlap})
+                        "chunk_overlap": chunk_overlap,
+                        # R-P1-3: 明细持久化进 trace（截断到 20 条防膨胀）
+                        "filtered_details": filtered_details[:20]})
         except Exception as e:
             trace_collector.end_span(chunk_span, status="error",
                 metrics={"error": str(e)[:200]})
@@ -654,6 +683,15 @@ class IncrementalIndexer:
             doc_meta["quality_issues"] = (
                 f"{prev}, " if prev else ""
             ) + "chunks_truncated(超出单文档上限被截断,检索覆盖不完整)"
+
+        # R-P1-3: 过滤留痕汇总进 quality_issues（逐条明细在 index_chunk span
+        # output.filtered_details，trace 详情页可查），保证误删可事后审计
+        filter_summary = _filter_quality_summary(filtered_details)
+        if filter_summary:
+            prev = doc_meta.get("quality_issues", "")
+            doc_meta["quality_issues"] = (
+                f"{prev}, " if prev else ""
+            ) + filter_summary
 
         # 注入 chunk metadata — 分层：
         #   - doc_type / person_names → 继承文档级（用于 filter）

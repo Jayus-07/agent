@@ -6,6 +6,17 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
+# R-P0-1（Windows 原生库加载顺序加固）：langchain_text_splitters 顶层会拉起
+# sentence_transformers→torch；若该导入发生在 chroma/doc_db 等原生库已加载
+# 之后（如 indexer.py:471 惰性导入 parse_and_chunk 触发），进程确定性段错误
+# （exit 139，见 docs/RAG质量专项-01-审计报告.md §2.2 与探针 logs/r2_probe*.log）。
+# 在任何原生库加载前预导入，使其进入 sys.modules，后续惰性导入变为无操作。
+# 实测：预导入后完整启动（含恢复重索引）正常；失败时软降级不影响启动。
+try:
+    import langchain_text_splitters  # noqa: F401
+except Exception:  # pragma: no cover - 环境缺失时保持旧行为
+    pass
+
 from backend.rag.embedding_singleton import get_embedding
 from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
 

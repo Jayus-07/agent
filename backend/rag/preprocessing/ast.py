@@ -25,6 +25,9 @@ class DocumentNode:
     children: list["DocumentNode"] = field(default_factory=list)
     rows: list[list[str]] | None = None       # table 专用
     source_range: tuple[int, int] = (0, 0)    # (start, end) 在 raw_text 中的偏移
+    # R-P0-3 原文可追溯：清洗前原文 + 清洗操作留痕（字段追加在尾部，位置构造兼容）
+    raw_text: str = ""                        # 清洗前原始文本；未清洗时为空串（等价 text）
+    cleaning_operations: list[str] = field(default_factory=list)  # DocumentCleaner 执行的操作清单
 
 
 @dataclass
