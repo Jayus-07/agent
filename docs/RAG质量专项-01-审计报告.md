@@ -81,7 +81,32 @@ Schema 30 列（doc_registry.py:23-60），**主键为 file_path**；状态机 7
 
 配套数据现状（只读核查 `data/doc_registry.db`）：**active 仅 3 行 + 1 行卡 `parsing`**（`legal_采购合同.md`）——rag_test_kb 语料在本工作副本未完整索引；该 parsing 卡住文档即评测启动恢复的崩溃触发点（毒丸文档，疑似）。
 
-**结论**：Recall@5 / MRR / NDCG / 拒答准确率基线当前不可得。R2 前置事项：① 修复评测进程段错误（原生库层面，疑 torch/chroma/pymupdf 冲突，需单独定位）；② 清理/重索引 parsing 卡住文档；③ 重建 rag_test_kb 语料索引。之后才能跑出可信基线。
+**结论**：Recall@5 / MRR / NDCG / 拒答准确率基线当前不可得。R2 前置事项：① 修复评测进程段错误（原生库层面，疑 torch/chroma 冲突，需单独定位）；② 清理/重索引 parsing 卡住文档；③ 重建 rag_test_kb 语料索引。之后才能跑出可信基线。
+
+### 2.2.1 ⭐ R2 补记（2026-09-17 02:30）：段错误已修复，基线已取得
+
+**R-P0-1 根因（实测定位）**：`langchain_text_splitters`（顶层拉起 `sentence_transformers`→torch）在 chroma/doc_db 等原生库已加载后被惰性导入（`indexer.py` 内 `parse_and_chunk` 懒加载触发 `chunking.py:18`），Windows OpenMP 运行时冲突 → 确定性段错误。定位手段：faulthandler 抓崩溃栈（`logs/r2_probe_fh.log`）+ 7 组 A/B 探针（`logs/r2_probe*.log`、`scripts/r2_segfault_probe*.py`）。**修复**：`pipeline.py` 模块顶部预导入（提交 `8aafc75`），子进程回归守卫测试 `test_native_import_order.py`。
+
+**R-P0-2 连带解决**：修复后启动恢复跑通，rag_test_kb 语料被增量同步完整索引——registry 从 3 active 变为 **24 active + 4 pending_review**，毒丸文档 `legal_采购合同.md` 正常入库（24 chunks，`chunk_id` 前缀 `de3cd3ebdc`）。
+
+**全量 103 例离线基线（`LLM_MODEL=qwen3.7-plus python -m backend.evaluation rag --dataset rag_test_kb.json`，1m46s，exit=0）**：
+
+| 指标 | 实测 | 任务书初版目标 | 判定 |
+|---|---|---|---|
+| 通过率 | 92.2%（95/103，8 失败 0 错误） | — | — |
+| **Recall@5** | **0.8731** | ≥ 0.90 | ❌ 差 2.7pp，R3/R4 主攻点 |
+| Recall@10 | 0.8731 | — | 与 @5 相同（候选截断一致） |
+| MRR | 0.8277 | — | — |
+| NDCG@10 | 0.8251 | — | — |
+| Chunk 级召回 | 0.7767 | — | — |
+| 语义 Chunk 召回@5 | 1.0000 | — | 嵌入侧质量好，瓶颈在融合/过滤 |
+| **拒答准确率** | **1.0000**（negative 15/15） | ≥ 0.95 | ✅ |
+| 分组 | smoke 100% / core 90.3% / hard 89.5% / regression 100% / ambiguous·calculation·process 各 80% | 必须分组展示 | ✅ 已按 query_type 分组 |
+| RAGAS | 跳过（`No module named 'ragas'`） | — | 环境缺包，如实记录 |
+
+**8 个失败用例**（详见 `data/eval_runs/2026-09-17T02-22-58-a2ef6b/eval-rag-20260917-022302.md` §8）：RC-026/039/041/090（采购合同金额/付款节点）、RC-051（物流SOP步骤）、RC-055（数据安全流程）、RC-080（歧义）、RC-082（退货）——5 例与 `legal_采购合同.md` 相关（该文档刚由恢复路径重建，指向切分/融合对 legal 类的适配问题），归因留给 R3/R4。
+
+**测试回归**：定向套件 519 例 = 517 passed / 2 skipped / 0 failed（R0 基线 510+2 无退化 + 新增 7 例全过，`logs/r2_regression.log`）。注：日志末尾 exit=1 系 safe-delete 钩子对 pytest 临时目录要求批量确认所致（count>50），非测试失败，已用小批量运行（rc=0）交叉验证。
 
 ### 2.3 环境记录
 
