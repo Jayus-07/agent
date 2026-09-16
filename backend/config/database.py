@@ -61,6 +61,16 @@ BUSINESS_DB_READONLY_CONFIG = {
     "password": os.getenv("PG_READONLY_PASSWORD", "agent_readonly_dev"),
 }
 
+# === Doc registry 存储引擎开关（R1/C19：SQLite → PostgreSQL）===
+# "sqlite"（默认，回滚开关）| "postgres"
+# 切换 postgres 前，先跑 backend/scripts/migrate_doc_registry_to_pg.py 迁移历史数据。
+DOC_REGISTRY_BACKEND = os.getenv("DOC_REGISTRY_BACKEND", "sqlite").strip().lower()
+# PG 模式专用库名：默认 agent_memory（Agent 自身元数据库）。
+# ⚠️ 不跟随 PGDATABASE（本地 .env 常把它指到 demo 等业务库）。
+DOC_REGISTRY_PG_CONFIG = _pg_cfg("DOC_REGISTRY_PGDATABASE", "agent_memory")
+# 表名可覆盖（测试隔离用）；生产保持默认 doc_registry。
+DOC_REGISTRY_PG_TABLE = os.getenv("DOC_REGISTRY_PG_TABLE", "doc_registry")
+
 # === 连接池参数 ===
 DB_POOL_MIN_CONN = int(os.getenv("DB_POOL_MIN_CONN", "2"))
 DB_POOL_MAX_CONN = int(os.getenv("DB_POOL_MAX_CONN", "10"))

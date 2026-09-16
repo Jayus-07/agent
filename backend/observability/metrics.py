@@ -472,30 +472,24 @@ def update_metadata_coverage() -> None:
     """扫描 doc_registry 计算活跃文档 metadata 完整度（异步调用）。
 
     完整定义: doc_type + business_domain + summary 都有值的 active 文档 / 总 active 文档。
+    R1: 改走 DocumentRegistry（支持 SQLite/PG 双后端），原先硬编码路径的裸 sqlite
+    读在 PG 模式下会读到过期数据。
     """
     try:
-        import sqlite3
-        conn = sqlite3.connect("data/doc_registry.db")
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT
-              COUNT(*) AS total,
-              SUM(
-                CASE WHEN doc_type IS NOT NULL AND doc_type != 'general'
-                     AND business_domain IS NOT NULL AND business_domain != 'general'
-                     AND summary IS NOT NULL AND summary != ''
-                THEN 1 ELSE 0 END
-              ) AS complete
-            FROM doc_registry WHERE status = 'active'
-            """
-        )
-        row = cur.fetchone()
-        conn.close()
-        if row and row[0] > 0:
-            doc_metadata_coverage.set(row[1] / row[0])
+        from backend.config.database import DOC_REGISTRY_PATH
+        from backend.rag.indexing.doc_registry import DocumentRegistry
+        rows = DocumentRegistry(DOC_REGISTRY_PATH).list_active()
+        total = len(rows)
+        if total > 0:
+            complete = sum(
+                1 for r in rows
+                if r.get("doc_type") is not None and r.get("doc_type") != "general"
+                and r.get("business_domain") is not None and r.get("business_domain") != "general"
+                and r.get("summary") is not None and r.get("summary") != ""
+            )
+            doc_metadata_coverage.set(complete / total)
     except Exception:
-        # 文件可能不存在（首次启动）
+        # registry 可能尚未初始化（首次启动）
         pass
 
 

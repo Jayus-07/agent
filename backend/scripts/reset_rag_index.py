@@ -1,7 +1,8 @@
 """清空 RAG 索引数据,便于重新跑端到端上传测试。
 
-清空范围(只清索引数据,不动 PostgreSQL / 用户文件):
-  - doc_registry.db           文档注册表
+清空范围(只清索引数据,不动 PostgreSQL 业务库 / 用户文件):
+  - doc_registry              文档注册表(SQLite 模式清 .db 文件;DOC_REGISTRY_BACKEND=postgres
+                              时改为清空 agent_memory.doc_registry 表)
   - chunk_store.db            chunk 原文
   - chroma/chroma.sqlite3     chunk 级向量
   - doc_db/chroma.sqlite3     doc 级向量
@@ -11,7 +12,7 @@
   - data/docs/                 物理文档(测试还会重新扫描)
   - data/uploads/             上传临时区
   - trace_store.db            trace 持久化(留给评测后看)
-  - PostgreSQL databases
+  - agent_business 等 PostgreSQL 业务库
 
 幂等:目录不存在或为空时跳过,不抛错。
 """
@@ -114,6 +115,28 @@ def _wipe_bm25(path: Path) -> int:
         return 0
 
 
+def _wipe_doc_registry() -> int:
+    """按 DOC_REGISTRY_BACKEND 清空文档注册表（R1/C19）。
+
+    - sqlite（默认）: 清 .db 文件内所有表（原行为）。
+    - postgres: 清空 agent_memory.doc_registry 表（PG 模式下 sqlite 文件只是
+      历史残留，清了也不影响运行时）。
+    """
+    import os
+    if os.getenv("DOC_REGISTRY_BACKEND", "").strip().lower() == "postgres":
+        try:
+            from backend.rag.indexing.doc_registry import DocumentRegistry
+            reg = DocumentRegistry(DOC_REGISTRY_PATH)
+            total = reg.count()
+            reg.clear()
+            logger.info(f"[reset] doc_registry(PG backend={type(reg).__name__}) 清空: {total} 行")
+            return total
+        except Exception as e:
+            logger.error(f"[reset] doc_registry(PG) 清空失败: {e}", exc_info=True)
+            return 0
+    return _wipe_sqlite(Path(DOC_REGISTRY_PATH), "doc_registry")
+
+
 def main() -> int:
     logger.info("=" * 60)
     logger.info("[reset] 开始清空 RAG 索引数据")
@@ -121,7 +144,7 @@ def main() -> int:
     logger.info("=" * 60)
 
     total = 0
-    total += _wipe_sqlite(Path(DOC_REGISTRY_PATH), "doc_registry")
+    total += _wipe_doc_registry()
     total += _wipe_sqlite(Path(CHUNK_STORE_PATH), "chunk_store")
     total += _wipe_chroma(Path(CHROMA_PATH), "chroma/chunks")
     total += _wipe_chroma(Path(DOC_DB_PATH), "doc_db/docs")

@@ -1,7 +1,12 @@
-"""DocumentRegistry — SQLite 文档元数据注册表。
+"""DocumentRegistry — 文档元数据注册表（连接层可切换：SQLite / PostgreSQL）。
 
 记录每篇已索引文档的路径、SHA256、状态等元数据。
 增量索引器依赖此注册表判断文档的新增/修改/删除。
+
+存储引擎开关（R1/C19，默认 sqlite = 回滚开关）：
+    DOC_REGISTRY_BACKEND=postgres  → 返回 PostgresDocumentRegistry（同接口 PG 实现）
+    其余/未设置                     → SQLite 实现（行为与历史版本完全一致）
+调用方零改动：`DocumentRegistry(path)` 仍为唯一入口，PG 实现是其子类。
 """
 
 from __future__ import annotations
@@ -69,6 +74,14 @@ class DocumentRegistry:
         row = registry.get_by_path("/path/to/doc.txt")
         registry.mark_deleted("/path/to/doc.txt")
     """
+
+    def __new__(cls, db_path: str = "data/doc_registry.db"):
+        # 引擎分发：默认 SQLite；DOC_REGISTRY_BACKEND=postgres 时返回 PG 子类实例。
+        # 惰性导入，避免 sqlite 模式拉起 psycopg2。
+        if os.getenv("DOC_REGISTRY_BACKEND", "").strip().lower() == "postgres":
+            from backend.rag.indexing.doc_registry_pg import PostgresDocumentRegistry
+            return super().__new__(PostgresDocumentRegistry)
+        return super().__new__(cls)
 
     def __init__(self, db_path: str = "data/doc_registry.db"):
         self._db_path = db_path
