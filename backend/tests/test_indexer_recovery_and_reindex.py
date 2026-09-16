@@ -141,6 +141,116 @@ class TestReindexWriteThenDelete:
         idx.doc_db.delete.assert_not_called()
 
 
+# ============ F4: 重索引中途失败的精确清理 ============
+
+class FakeVecStore:
+    """内存向量库：id -> doc_id 映射，支持 get(where) / delete(ids, where)。"""
+
+    def __init__(self, vectors: dict[str, str]):
+        self.vectors = dict(vectors)
+        self.deleted_ids: list[str] = []
+        self.deleted_where: list[dict] = []
+
+    def get(self, where=None):
+        doc = (where or {}).get("doc_id")
+        ids = [i for i, d in self.vectors.items() if d == doc]
+        return {"ids": ids, "metadatas": [], "documents": []}
+
+    def delete(self, ids=None, where=None):
+        if ids:
+            self.deleted_ids.extend(ids)
+            for i in ids:
+                self.vectors.pop(i, None)
+        if where:
+            self.deleted_where.append(dict(where))
+            doc = where.get("doc_id")
+            self.vectors = {i: d for i, d in self.vectors.items() if d != doc}
+        return len(self.deleted_ids)
+
+
+class TestReindexFailurePreciseCleanup:
+    """F4：重索引 vdb/registry 阶段失败只清本次新写入，旧版本向量必须保留
+    （旧实现 _remove_document 按 doc_id 条件删，新旧共享 doc_id → 连带删旧）。"""
+
+    def _mk(self, tmp_path, registry, vectordb):
+        idx = _mk_indexer(tmp_path, registry, vectordb=vectordb)
+        idx.vectordb = vectordb
+        return idx
+
+    def test_failure_keeps_old_vectors(self, tmp_path, registry):
+        """新旧向量共存（doc_id 相同）时：只删新写入（差集），旧向量原样保留。"""
+        vec = FakeVecStore({"c1": "did1", "c2": "did1",       # 旧版本
+                            "n1": "did1", "n2": "did1"})      # 本次新写入
+        idx = self._mk(tmp_path, registry, vec)
+        idx.doc_db = MagicMock()
+
+        idx._cleanup_partial_write(
+            "did1", file_path="/fake/doc.md",
+            reindex_ctx={"old_chunk_ids": ["c1", "c2"], "old_doc_db_id": "ddb-old"},
+            new_doc_db_id="ddb-new")
+
+        assert set(vec.vectors) == {"c1", "c2"}, "旧向量必须原样保留"
+        assert sorted(vec.deleted_ids) == ["n1", "n2"], "只按 id 精确删本次新写入"
+        assert vec.deleted_where == [], "绝不允许 doc_id 条件删"
+        idx.doc_db.delete.assert_called_once_with(ids=["ddb-new"])
+
+    def test_first_index_failure_falls_back_to_doc_wide(self, tmp_path, registry):
+        """首次索引（无 reindex_ctx）：没有旧版本，维持 doc_id 全量清理。"""
+        vec = FakeVecStore({"n1": "d_new"})
+        idx = self._mk(tmp_path, registry, vec)
+        idx._remove_document = MagicMock()
+
+        idx._cleanup_partial_write("d_new")
+
+        idx._remove_document.assert_called_once_with("d_new", file_path="")
+
+    def test_unknown_old_chunk_ids_skips_vector_delete(self, tmp_path, registry):
+        """旧 chunk_ids 未知（如历史行缺失）→ 宁可残留交 Sweeper，不可误删。"""
+        vec = FakeVecStore({"x1": "did1"})
+        idx = self._mk(tmp_path, registry, vec)
+
+        idx._cleanup_partial_write(
+            "did1", reindex_ctx={"old_chunk_ids": [], "old_doc_db_id": ""})
+
+        assert vec.deleted_ids == [] and vec.deleted_where == []
+        assert set(vec.vectors) == {"x1"}
+
+    def test_get_failure_never_doc_wide_delete(self, tmp_path, registry):
+        """get(where) 异常时不得退化为 doc_id 条件删（会把旧版本删掉）。"""
+        vec = FakeVecStore({"c1": "did1"})
+        vec.get = MagicMock(side_effect=RuntimeError("chroma down"))
+        idx = self._mk(tmp_path, registry, vec)
+
+        idx._cleanup_partial_write(
+            "did1", reindex_ctx={"old_chunk_ids": ["c1"], "old_doc_db_id": "ddb-old"},
+            new_doc_db_id="ddb-new")
+
+        assert vec.deleted_ids == [] and vec.deleted_where == []
+        assert set(vec.vectors) == {"c1"}
+
+    def test_reindex_file_passes_ctx_to_index_file(self, tmp_path, registry):
+        """reindex_file 必须把旧版本定位信息传进 _index_file。"""
+        target = tmp_path / "doc.md"
+        target.write_text("body", encoding="utf-8")
+        registry.register(
+            file_path=str(target), doc_id="did1", file_hash="old_hash",
+            kb_id="kb1", chunk_ids=["c1", "c2"], doc_db_id="ddb-old",
+            metadata={"doc_version": 1},
+        )
+
+        idx = _mk_indexer(tmp_path, registry)
+        idx._index_file = MagicMock(return_value={
+            "trace_id": "t", "doc_id": "did1", "chunk_count": 1,
+            "doc_db_id": "ddb-new", "file_hash": "new_hash", "status": "active",
+        })
+
+        idx.reindex_file(str(target))
+
+        kwargs = idx._index_file.call_args.kwargs
+        assert kwargs["reindex_ctx"] == {
+            "old_chunk_ids": ["c1", "c2"], "old_doc_db_id": "ddb-old"}
+
+
 # ============ sync() 中断恢复 ============
 
 class TestRecoverInterrupted:

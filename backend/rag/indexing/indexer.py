@@ -340,13 +340,18 @@ class IncrementalIndexer:
 
     # ---- 单文件索引 ----
 
-    def _index_file(self, file_path: str, file_hash: str | None = None):
+    def _index_file(self, file_path: str, file_hash: str | None = None,
+                    reindex_ctx: dict | None = None):
         """索引单篇文档: 加载 → 解析 → 清洗 → 去重 → 分块 → 元数据 → embed → 写入。
 
         Args:
             file_path: 文档路径。
             file_hash: 调用方已算好的 SHA256(如上传路由 duplicate 检测时算过)。
                 传入可避免对大文件重复全盘读取;缺省时内部计算。
+            reindex_ctx: 重索引上下文（F4 精确失败清理）。含旧版本定位信息：
+                {"old_chunk_ids": [...], "old_doc_db_id": "..."}。传入后，
+                vdb/registry 阶段失败只精确清理本次新写入的数据，旧版本
+                向量原样保留；None（首次索引）维持 doc_id 全量清理。
 
         Trace 树（每文件一棵）：
           index_upload (root)
@@ -389,7 +394,8 @@ class IncrementalIndexer:
             input={"file_path": file_path, "size_bytes": file_size},
         )
         try:
-            inner_result = self._index_file_inner(file_path, kb_id, doc_id, file_hash)
+            inner_result = self._index_file_inner(
+                file_path, kb_id, doc_id, file_hash, reindex_ctx=reindex_ctx)
             trace_collector.end_span(upload_span,
                 metrics={"doc_id": doc_id, "kb_id": kb_id})
             trace_collector.finish(trace, os.path.basename(file_path),
@@ -416,7 +422,8 @@ class IncrementalIndexer:
                 )
             raise
 
-    def _index_file_inner(self, file_path: str, kb_id: str, doc_id: str, file_hash: str) -> dict:
+    def _index_file_inner(self, file_path: str, kb_id: str, doc_id: str,
+                          file_hash: str, reindex_ctx: dict | None = None) -> dict:
         """_index_file 的实际工作，被 index_upload span 包裹。
 
         新流程: load → parse → clean → dedup → chunk → metadata → embed → vector_db
@@ -930,7 +937,10 @@ class IncrementalIndexer:
             logger.error(f"Chunk 写入失败: {e}")
             trace_collector.end_span(vdb_span, status="error",
                 metrics={"error": str(e)[:200]})
-            self._remove_document(doc_id, file_path=file_path)
+            # F4: 重索引时只精确清本次新写入，绝不按 doc_id 条件删（会连带旧版本）
+            self._cleanup_partial_write(doc_id, file_path=file_path,
+                                        reindex_ctx=reindex_ctx,
+                                        new_doc_db_id=doc_db_id)
             raise
 
         # ── ⑤.5 BM25 同步（P0-1：上传/重索引后立即同步，避免"上传成功但 BM25 未更新"）──
@@ -988,7 +998,11 @@ class IncrementalIndexer:
                 },
             )
         except Exception:
-            self._remove_document(doc_id, file_path=file_path)
+            # F4: registry 阶段失败同样精确清理——此向量/BM25 新数据已写入，
+            # doc_id 条件删会把旧版本向量连带删掉
+            self._cleanup_partial_write(doc_id, file_path=file_path,
+                                        reindex_ctx=reindex_ctx,
+                                        new_doc_db_id=doc_db_id)
             raise
 
         # P2-2:返回 dict 给 _index_file wrapper,消除 reindex_file 反查 registry 的需要
@@ -1125,11 +1139,18 @@ class IncrementalIndexer:
             )
 
         # 2. 重新索引（_index_file 返回完整 dict，含 trace_id/chunk_count/doc_db_id）
-        #    注意：doc_id 复用 active 记录（保持评测集/Trace 稳定），若索引中途
-        #    在向量库写入/registry 阶段失败，内部清理会连带旧向量（与旧"先删
-        #    后写"的失败行为一致，不会更差）；parse/chunk/embed 阶段失败则旧
-        #    数据完整保留（严格优于旧行为）。
-        index_result = self._index_file(file_path, file_hash=file_hash)
+        #    注意：doc_id 复用 active 记录（保持评测集/Trace 稳定）。传入 reindex_ctx
+        #    后，vdb/registry 阶段失败走 F4 精确清理——只删本次新写入，旧版本向量
+        #    原样保留（旧实现内部清理按 doc_id 条件删，会连带旧向量）；parse/chunk/
+        #    embed 阶段失败本就不触碰存储，旧数据完整保留。
+        reindex_ctx = None
+        if old_doc_id:
+            reindex_ctx = {
+                "old_chunk_ids": old_chunk_ids,
+                "old_doc_db_id": old_doc_db_id,
+            }
+        index_result = self._index_file(
+            file_path, file_hash=file_hash, reindex_ctx=reindex_ctx)
         # dedup 命中（内容未变，如占位行写入失败的极端场景）→ 没有新数据，
         # 清理旧向量会造成数据丢失，直接原样返回
         skipped = bool(index_result.get("skipped"))
@@ -1237,6 +1258,67 @@ class IncrementalIndexer:
             return False
 
     # ---- 删除 ----
+
+    def _cleanup_partial_write(self, doc_id: str, file_path: str = "",
+                               reindex_ctx: dict | None = None,
+                               new_doc_db_id: str = ""):
+        """索引中途失败（vdb/registry 阶段）后的清理（F4）。
+
+        首次索引（reindex_ctx=None）：文档没有旧版本，按 doc_id 全量清理是正确行为。
+        重索引（reindex_ctx 传入）：新旧 chunk 共享同一 doc_id，条件删会把旧版本
+        向量一起删掉（破坏"先写后删"的失败语义）——改为精确删：
+          - vectordb: get(where=doc_id) 取现有 id，与旧 chunk_ids 求差集后按 ids 删，
+            只清本次新写入/部分写入的向量；旧 chunk_ids 未知（空）时**不删向量**，
+            残留交由 Sweeper 对账（宁可多留，不可误删）；
+          - doc_db: 只删本次运行分配的 doc_db_id（新 doc 级向量），旧版本 id 不同不受影响；
+          - BM25/chunk_store: vdb 阶段失败时 BM25 尚未写入、旧数据完好；
+            registry 阶段失败时 BM25 已被 replace_documents 换成新内容、无法回滚，
+            与向量的内容差异由 Sweeper 计数对账收敛。chunk_store 为单版本覆盖写，
+            旧文本在本段失败前已被替换，属既有行为。
+        """
+        if not doc_id:
+            return
+        if not reindex_ctx:
+            self._remove_document(doc_id, file_path=file_path)
+            return
+        old_chunk_ids = set(reindex_ctx.get("old_chunk_ids") or [])
+        old_doc_db_id = reindex_ctx.get("old_doc_db_id") or ""
+        # ── vectordb: 差集精确删本次新写入的 chunk ──
+        if old_chunk_ids:
+            try:
+                res = self.vectordb.get(where={"doc_id": doc_id}) or {}
+                current = [str(x) for x in (res.get("ids") or [])]
+                stale = [x for x in current if x not in old_chunk_ids]
+                if stale:
+                    self.vectordb.delete(ids=stale)
+                    logger.info(
+                        f"[REINDEX] 失败精确清理: 删除本次新写入向量 {len(stale)} 条, "
+                        f"保留旧向量 {len(current) - len(stale)} 条 (doc_id={doc_id})"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[REINDEX] 失败精确清理异常（残留新向量待 Sweeper 对账, "
+                    f"不做 doc_id 条件删以防误删旧版本）: {e}"
+                )
+        else:
+            logger.warning(
+                f"[REINDEX] 旧 chunk_ids 未知，失败清理跳过向量删除"
+                f"（残留交由 Sweeper 对账, doc_id={doc_id}）"
+            )
+        # ── doc_db: 只删本次新写入的 doc 级向量 ──
+        if new_doc_db_id:
+            try:
+                self.doc_db.delete(ids=[new_doc_db_id])
+            except Exception as e:
+                logger.warning(
+                    f"[REINDEX] 失败清理新 doc 级向量失败 (id={new_doc_db_id}): {e}"
+                )
+        elif not old_doc_db_id:
+            # 旧版本本就没有 doc 级向量 → doc_id 条件删不会误删旧数据
+            try:
+                self.doc_db.delete(where={"doc_id": doc_id})
+            except Exception as e:
+                logger.warning(f"失败清理 doc 级向量失败 (doc_id={doc_id}): {e}")
 
     def _remove_document(self, doc_id: str, file_path: str = ""):
         """从向量库 + chunk_store + BM25 中删除文档的所有数据。"""
