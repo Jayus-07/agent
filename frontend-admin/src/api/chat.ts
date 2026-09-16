@@ -33,9 +33,9 @@ export async function* streamChat(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(process.env.NEXT_PUBLIC_API_KEY
-          ? { "X-API-Key": process.env.NEXT_PUBLIC_API_KEY }
-          : {}),
+        // 凭据收口（2026-09-16 方案 B）：X-API-Key 由 BFF 代理路由
+        // （app/api/[...path]/route.ts）服务端注入。勿引用 NEXT_PUBLIC_API_KEY ——
+        // NEXT_PUBLIC_* 会被 Next 内联进浏览器 bundle，等于重新泄漏服务级密钥。
         ...bearerHeaders(),
       },
       body: JSON.stringify(req),

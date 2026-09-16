@@ -92,9 +92,8 @@ const BASE = '/api/prompts'
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(process.env.NEXT_PUBLIC_API_KEY
-      ? { 'X-API-Key': process.env.NEXT_PUBLIC_API_KEY }
-      : {}),
+    // 凭据收口（2026-09-16 方案 B）：X-API-Key 由 BFF 代理路由服务端注入；
+    // 勿引用 NEXT_PUBLIC_API_KEY（NEXT_PUBLIC_* 会被内联进浏览器 bundle）。
     ...(init?.headers as Record<string, string> || {}),
   }
   const res = await fetch(url, { ...init, headers })
