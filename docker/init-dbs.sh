@@ -52,8 +52,17 @@ $PSQL -d agent_memory -f /docker-migrations/015_workflow_runs_pg.sql
 $PSQL -d agent_business -f /docker-migrations/016_inventory_alerts_pg.sql
 $PSQL -d agent_business -f /docker-migrations/017_business_stores_pg.sql
 
-echo "[init-dbs] 7/7 Prompt 管理三表（清库重建缺口补齐，幂等）..."
+echo "[init-dbs] 7/7 Prompt 管理三表 + 网关审计日志（清库重建缺口补齐，幂等）..."
 $PSQL -d agent_memory -f /docker-migrations/018_prompts_pg.sql
+$PSQL -d agent_memory -f /docker-migrations/019_gateway_access_logs_pg.sql
+
+echo "[init-dbs] 8/8 客服域 + 工具审批 + Alembic 缺口手写化（清库重建缺口补齐，幂等）..."
+# 006/014_cs_rating → agent_memory（customer_service schema）；007 → agent_business（ai.tool_approval_requests）
+# 020 收录 Alembic 0003/0004/0005/0007 的 schema 变更 + chat_sessions.title（ORM 漂移列）
+$PSQL -d agent_memory -f /docker-migrations/006_customer_service.sql
+$PSQL -d agent_memory -f /docker-migrations/014_cs_rating.sql
+$PSQL -d agent_business -f /docker-migrations/007_tool_approval.sql
+$PSQL -d agent_memory -f /docker-migrations/020_alembic_gaps_pg.sql
 
 echo "[init-dbs] 完成。验证只读角色："
 $PSQL -d postgres -c "SELECT rolname, rolcanlogin, rolsuper FROM pg_roles WHERE rolname = 'agent_readonly';"
