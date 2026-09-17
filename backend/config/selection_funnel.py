@@ -120,8 +120,11 @@ def build_config_snapshot(category: str, min_margin: float) -> dict:
 
     事后回答「这份报告是用哪套阈值跑出来的」——快照与报告同源，
     env 或类目规则后续变更不影响已产出报告的口径说明。
+    rules_version：快照内容指纹（sha1 前 8 位）——阈值集任何变更都会
+    产生新版本号，报告/trace 可据此判断两次运行口径是否一致（P2 版本管理）；
+    run_id 由 reporter 在调用方追加，不参与指纹（两次确定性运行同版本）。
     """
-    return {
+    snap = {
         "pool_sources": list(SELECTION_FUNNEL_POOL_SOURCES),
         "min_rating": SELECTION_FUNNEL_MIN_RATING,
         "min_reviews": SELECTION_FUNNEL_MIN_REVIEWS,
@@ -135,3 +138,12 @@ def build_config_snapshot(category: str, min_margin: float) -> dict:
         "top_n": SELECTION_FUNNEL_TOP_N,
         "category_rules": dict(CATEGORY_RULES.get(category, {})),
     }
+    snap["rules_version"] = _content_hash(snap)
+    return snap
+
+
+def _content_hash(snap: dict) -> str:
+    """快照内容指纹（sha1 前 8 位；键排序序列化，同一配置恒同指纹）。"""
+    import hashlib
+    payload = json.dumps(snap, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:8]

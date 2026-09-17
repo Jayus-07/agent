@@ -100,26 +100,39 @@ def build_pool(category: str, platform: str = "",
                price_min: float | None = None,
                price_max: float | None = None,
                max_pool: int = 200,
-               store: Any = None) -> tuple[list[dict], list[str], list[dict]]:
+               store: Any = None) -> tuple[list[dict], list[str], list[dict], list[dict]]:
     """构建候选池（多源合并 → 统一过滤 → 去重 → 截断）。
 
     Returns:
-        (pool, notes, reasons) —— reasons 供 stage_logs 记录剔除明细。
+        (pool, notes, reasons, sources) —— reasons 供 stage_logs 记录剔除明细；
+        sources 为来源健康度（P2）：每源 {source, status: ok|empty|error, count}。
     """
     from backend.config.selection_funnel import SELECTION_FUNNEL_POOL_SOURCES
 
     notes: list[str] = []
     reasons: list[dict] = []
+    sources: list[dict] = []   # 来源健康度（P2）：每源 ok/empty/error + 条数
 
     # 1) 按 POOL_SOURCES 顺序收集（前源优先）
     collected: list[dict] = []
     for source in SELECTION_FUNNEL_POOL_SOURCES:
         if source == "import":
-            items, src_notes = _load_import_candidates()
+            try:
+                items, src_notes = _load_import_candidates()
+            except Exception as e:   # 双保险：健康度记录 error，不让单源炸池
+                items, src_notes = [], [f"导入候选池读取失败，已跳过该源: {e}"]
+            sources.append({"source": source, "status": _src_status(items, src_notes),
+                            "count": len(items)})
         elif source == "watchlist":
-            items, src_notes = _load_watchlist_candidates(store or _default_store())
+            try:
+                items, src_notes = _load_watchlist_candidates(store or _default_store())
+            except Exception as e:
+                items, src_notes = [], [f"竞品监控池读取失败，已跳过该源: {e}"]
+            sources.append({"source": source, "status": _src_status(items, src_notes),
+                            "count": len(items)})
         else:
             items, src_notes = [], [f"未知数据源「{source}」已跳过（支持: import, watchlist）"]
+            sources.append({"source": source, "status": "error", "count": 0})
         notes.extend(src_notes)
         collected.extend(items)
 
@@ -154,7 +167,16 @@ def build_pool(category: str, platform: str = "",
     if pool and not any(c.get("category") for c in pool):
         notes.append("候选缺 category 字段，本次按 title/highlights 关键词匹配类目；"
                      "导入表格加「类目」列后匹配更准。")
-    return pool, notes, reasons
+    return pool, notes, reasons, sources
+
+
+def _src_status(items: list[dict], src_notes: list[str]) -> str:
+    """来源健康度判定：有货 ok / 空池 empty / 读取失败 error（按 notes 关键词）。"""
+    if items:
+        return "ok"
+    if any("失败" in n or "异常" in n for n in src_notes):
+        return "error"
+    return "empty"
 
 
 def _match_category(snap: dict, category: str) -> bool:
@@ -174,7 +196,7 @@ def pool_node(state: dict) -> dict:
     from backend.selection_funnel.graph_state import load_brief
 
     brief = load_brief(state)
-    pool, notes, reasons = build_pool(
+    pool, notes, reasons, sources = build_pool(
         category=brief.category, platform=brief.platform,
         price_min=brief.price_min, price_max=brief.price_max,
         max_pool=SELECTION_FUNNEL_MAX_POOL,
@@ -182,7 +204,7 @@ def pool_node(state: dict) -> dict:
     logs = list(state.get("stage_logs") or [])
     notes_all = list(state.get("notes") or []) + notes
     logs.append({"stage": "pool", "kept": len(pool), "dropped": len(reasons),
-                 "reasons": reasons[:50], "notes": notes})
+                 "reasons": reasons[:50], "notes": notes, "sources": sources})
 
     if not pool:
         from backend.selection_funnel.reporter import render_empty_pool

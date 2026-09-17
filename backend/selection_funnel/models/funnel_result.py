@@ -20,6 +20,13 @@ def build_funnel_result(final_state: dict) -> dict[str, Any]:
          "dropped": log.get("dropped", 0)}
         for log in stage_logs
     ]
+    # pool 层附来源健康度（P2）：trace funnel_stage_summary 可见，
+    # 管理端运行历史页后续可据此聚合跨运行健康趋势
+    for log in stage_logs:
+        if log.get("stage") == "pool" and log.get("sources"):
+            for entry in stage_summary:
+                if entry["stage"] == "pool":
+                    entry["sources"] = log["sources"]
     top = [
         {
             "rank": c.get("rank"),

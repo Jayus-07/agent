@@ -77,7 +77,7 @@ def test_golden_pool_dedup_url_then_title_fallback(patch_stores):
         make_snap(url="", title="宠物零食冻干鸡肉 500g", price=65.0, snapshot_id=2),
         make_snap(url="u-x", title="宠物零食冻干鸡肉 250g", price=35.0, snapshot_id=3),
     ])
-    pool, _notes, reasons = build_pool(category="宠物零食")
+    pool, _notes, reasons, _sources = build_pool(category="宠物零食")
     assert len(pool) == 2
     assert [r["rule"] for r in reasons].count("duplicate") == 1
 
@@ -157,6 +157,8 @@ def test_golden_pet_snacks_full_funnel(funnel_graph, patch_stores):
     assert "贡献利润率" in answer and "商品毛利率" in answer
     assert "贡献利润率 14.3% < 目标 20%" in answer
     assert "运行配置" in answer
+    assert "规则版本" in answer and "来源健康" in answer   # P2 余量：指纹 + 来源健康度
+    assert "价格与热度趋势" in answer   # P2 余量：g-a 有 2 次快照（含重复 url 快照）
     # P1：执行摘要 / 证据与假设 / 数据完整度 / 节点耗时
     assert "执行摘要" in answer and "证据与假设" in answer
     assert "建池 7 条 → 推荐 4 条" in answer

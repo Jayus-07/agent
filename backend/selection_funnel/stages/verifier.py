@@ -50,6 +50,34 @@ def _freshness(candidate: dict) -> dict:
     return {"freshness": level, "age_days": age_days}
 
 
+def _trend(history: list[dict]) -> dict:
+    """多次快照趋势（P2 余量）：价格/评价/评分首末对比，仅监控池候选有历史。
+
+    history 新→旧（store 口径），反转后取首末；只算端点不拟合——
+    快照少时趋势仅方向性提示。单点导入候选无历史 → {"snapshots": 1} 如实披露。
+    缺端点字段不补造（None 保留，报告层跳过该维度）。
+    """
+    snaps = [h for h in (history or []) if isinstance(h, dict)]
+    if len(snaps) < 2:
+        return {"snapshots": len(snaps)}
+    old, new = snaps[-1], snaps[0]   # 反转：old=最早，new=最新
+
+    def _delta(field: str) -> dict | None:
+        a, b = old.get(field), new.get(field)
+        if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+            return None
+        pct = round((b - a) / a, 4) if a else None
+        direction = "flat" if b == a else ("up" if b > a else "down")
+        return {"first": a, "last": b, "pct": pct, "direction": direction}
+
+    return {
+        "snapshots": len(snaps),
+        "price": _delta("price"),
+        "reviews": _delta("review_count"),
+        "rating": _delta("rating"),
+    }
+
+
 def _data_quality(candidate: dict) -> dict:
     """候选级数据质量：关键字段完整度比例 + 缺失清单 + 数据新鲜度。"""
     missing = [f for f in _KEY_FIELDS
@@ -85,6 +113,7 @@ def verify_candidates(candidates: list[dict],
         item["score"] = score
         item["pain_points"] = extract_pain_points(c)
         item["data_quality"] = _data_quality(c)
+        item["trend"] = _trend(history)
         enriched.append(item)
     return enriched, notes
 

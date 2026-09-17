@@ -319,3 +319,82 @@ def test_decision_report_discloses_funnel_source():
                        {"competitor_data": {"source": "watchlist"}},
                        verdict="no_go", failed_gates=["market"])
     assert "候选来源：竞品监控池" in md2
+
+
+# ── P2 余量：来源健康度 / 多次快照趋势 / 规则版本 ──────────────
+
+def test_pool_source_health_statuses(patch_stores):
+    """来源健康度：ok / empty / error（单源炸不炸池都如实记录）。"""
+    from backend.selection_funnel.stages import pool_builder as pb
+    patch_stores([{"url": "u-1", "title": "宠物零食冻干鸡肉", "price": 59.0,
+                   "snapshot_id": 1}])
+    pool, _notes, _reasons, sources = pb.build_pool("宠物零食")
+    by_src = {s["source"]: s for s in sources}
+    assert by_src["import"]["status"] == "empty" and by_src["import"]["count"] == 0
+    assert by_src["watchlist"]["status"] == "ok" and by_src["watchlist"]["count"] == 1
+
+    # 单源读取异常 → error 状态 + 池不炸（双保险路径）
+    def _boom():
+        raise RuntimeError("db locked")
+    orig = pb._load_import_candidates
+    pb._load_import_candidates = _boom
+    try:
+        _pool, notes, _r, sources2 = pb.build_pool("宠物零食")
+    finally:
+        pb._load_import_candidates = orig
+    by_src2 = {s["source"]: s for s in sources2}
+    assert by_src2["import"]["status"] == "error"
+    assert any("失败" in n for n in notes)
+
+
+def test_verify_trend_from_snapshot_history(patch_stores):
+    """多次快照趋势：两端点对比（价格降 10%）；单点如实 snapshots=1。"""
+    from backend.selection_funnel.stages.verifier import _trend
+    hist = [  # 新→旧（store 口径）
+        {"price": 90.0, "review_count": 1500, "rating": 4.7, "crawled_at": "2026-09-10"},
+        {"price": 100.0, "review_count": 1200, "rating": 4.8, "crawled_at": "2026-09-01"},
+    ]
+    t = _trend(hist)
+    assert t["snapshots"] == 2
+    assert t["price"] == {"first": 100.0, "last": 90.0, "pct": -0.1, "direction": "down"}
+    assert t["reviews"]["direction"] == "up" and t["reviews"]["pct"] == 0.25
+    assert t["rating"]["first"] == 4.8 and t["rating"]["last"] == 4.7
+    assert _trend([{"price": 59.0}]) == {"snapshots": 1}
+    assert _trend([]) == {"snapshots": 0}
+    # 缺端点字段不补造
+    assert _trend([{"price": None}, {"price": 50.0}])["price"] is None
+
+
+def test_trend_lines_render():
+    """报告趋势章：有历史给首末对比，全单点给补数指引。"""
+    from backend.selection_funnel.reporter import _trend_lines
+    with_hist = {"url": "u1", "title": "监控款", "trend": {
+        "snapshots": 2, "price": {"first": 100.0, "last": 90.0, "pct": -0.1,
+                                  "direction": "down"},
+        "reviews": {"first": 1200, "last": 1500, "pct": 0.25,
+                    "direction": "up"}, "rating": None}}
+    single = {"url": "u2", "title": "导入款", "trend": {"snapshots": 1}}
+    lines = _trend_lines([with_hist, single])
+    assert any("价格 100→90（-10.0%）" in ln and "评价 1200→1500（+25.0%）" in ln
+               for ln in lines)
+    assert any("其余 1 条为单点候选" in ln for ln in lines)
+    # 全单点 → 口径指引
+    lines2 = _trend_lines([single])
+    assert len(lines2) == 1 and "单点数据" in lines2[0] and "监控" in lines2[0]
+
+
+def test_config_rules_version_stable_and_changes(monkeypatch):
+    """规则版本指纹：同一配置恒同指纹；类目规则变更 → 新指纹。"""
+    from backend.config.selection_funnel import build_config_snapshot
+    v1 = build_config_snapshot("宠物零食", 0.20)["rules_version"]
+    v2 = build_config_snapshot("宠物零食", 0.20)["rules_version"]
+    assert v1 == v2 and len(v1) == 8
+    # 阈值变更 → 新版本
+    v3 = build_config_snapshot("宠物零食", 0.25)["rules_version"]
+    assert v3 != v1
+    # 类目规则变更 → 新版本
+    import backend.config.selection_funnel as cfg
+    monkeypatch.setattr(cfg, "CATEGORY_RULES",
+                        {**cfg.CATEGORY_RULES, "宠物零食": {"min_margin": 0.35}})
+    v4 = build_config_snapshot("宠物零食", 0.20)["rules_version"]
+    assert v4 != v1

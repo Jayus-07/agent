@@ -29,7 +29,7 @@ def test_import_priority_over_watchlist(patch_stores):
     """同 url 双源 → 导入源在前，保留导入版数据。"""
     _seed_import([IMPORT_ROW | {"url": "u-imp", "price": 149.0}])
     patch_stores([make_snap(url="u-imp", price=59.0, title="监控版冻干鸡肉")])
-    pool, notes, _ = build_pool("宠物零食")
+    pool, notes, _, _ = build_pool("宠物零食")
     assert len(pool) == 1
     assert pool[0]["price"] == 149.0
 
@@ -37,7 +37,7 @@ def test_import_priority_over_watchlist(patch_stores):
 def test_watchlist_fallback_when_import_empty(patch_stores):
     """导入池空 → watchlist 兜底，note 提示导入通道可用。"""
     patch_stores([make_snap()])
-    pool, notes, _ = build_pool("宠物零食")
+    pool, notes, _, _ = build_pool("宠物零食")
     assert len(pool) == 1 and pool[0]["title"].startswith("宠物零食")
     assert any("导入候选池为空" in n for n in notes)
 
@@ -46,7 +46,7 @@ def test_dedup_no_url_by_title_platform(patch_stores):
     """无 url 候选按 (title, platform) 去重。"""
     _seed_import([IMPORT_ROW, IMPORT_ROW | {"price": 155.0}])
     patch_stores([])
-    pool, _notes, reasons = build_pool("宠物零食")
+    pool, _notes, reasons, _sources = build_pool("宠物零食")
     assert len(pool) == 1
     assert any(r["rule"] == "duplicate" for r in reasons)
 
@@ -54,14 +54,14 @@ def test_dedup_no_url_by_title_platform(patch_stores):
 def test_unknown_source_skipped_with_note(monkeypatch):
     from backend.config import selection_funnel as cfg
     monkeypatch.setattr(cfg, "SELECTION_FUNNEL_POOL_SOURCES", ("import", "nope"))
-    pool, notes, _ = build_pool("宠物零食")
+    pool, notes, _, _ = build_pool("宠物零食")
     assert pool == []
     assert any("未知数据源「nope」" in n for n in notes)
 
 
 def test_empty_pool_note_mentions_import_channel(patch_stores):
     patch_stores([])
-    pool, notes, _ = build_pool("宠物零食")
+    pool, notes, _, _ = build_pool("宠物零食")
     assert pool == []
     assert any("导入池" in n and "监控" in n for n in notes)
 
@@ -74,7 +74,7 @@ def test_single_source_failure_degrades(patch_stores, monkeypatch):
         raise RuntimeError("db locked")
     monkeypatch.setattr(import_pool, "get_import_store", _boom)
     patch_stores([make_snap()])
-    pool, notes, _ = build_pool("宠物零食")
+    pool, notes, _, _ = build_pool("宠物零食")
     assert len(pool) == 1
     assert any("导入候选池读取失败" in n for n in notes)
 

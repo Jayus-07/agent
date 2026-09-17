@@ -328,6 +328,54 @@ def _evidence_lines(candidates: list[dict]) -> list[str]:
     return lines
 
 
+def _source_lines(stage_logs: list[dict]) -> list[str]:
+    """来源健康度（P2）：pool 层各源 ok/empty/error，进漏斗计数段。"""
+    for log in stage_logs:
+        if log.get("stage") != "pool":
+            continue
+        sources = log.get("sources") or []
+        if not sources:
+            return []
+        parts = [f"{s.get('source')} {s.get('status')}({s.get('count', 0)})"
+                 for s in sources]
+        if any(s.get("status") != "ok" for s in sources):
+            parts.append("error=读取失败已跳过 / empty=空池")
+        return ["- 来源健康：" + " / ".join(parts)]
+    return []
+
+
+def _trend_lines(candidates: list[dict]) -> list[str]:
+    """多次快照趋势（P2 余量）：价格/评价/评分首末对比；单点如实披露。"""
+    if not candidates:
+        return []
+    lines: list[str] = []
+    no_history = 0
+    for c in candidates:
+        t = c.get("trend") or {}
+        n = t.get("snapshots", 0)
+        if not isinstance(n, int) or n < 2:
+            no_history += 1
+            continue
+        parts = []
+        p = t.get("price")
+        if p and p.get("pct") is not None:
+            parts.append(f"价格 {p['first']:g}→{p['last']:g}（{p['pct']:+.1%}）")
+        r = t.get("reviews")
+        if r and r.get("pct") is not None:
+            parts.append(f"评价 {r['first']:g}→{r['last']:g}（{r['pct']:+.1%}）")
+        rt = t.get("rating")
+        if rt and rt.get("first") != rt.get("last"):
+            parts.append(f"评分 {rt['first']:g}→{rt['last']:g}")
+        lines.append(f"- 「{(c.get('title') or '')[:24]}」近 {n} 次快照："
+                     + ("；".join(parts) if parts else "关键指标持平"))
+    if lines and no_history:
+        lines.append(f"- 其余 {no_history} 条为单点候选，无历史快照，趋势不可算")
+    if not lines:
+        lines.append("- 本轮候选均为单点数据（导入池无时间序列）：把核心竞品加入监控，"
+                     "或同款多次导入后可看价格/热度走势")
+    return lines
+
+
 def _config_lines(brief, min_margin: float) -> list[str]:
     """运行配置快照渲染（与 build_config_snapshot 同源，报告可复现）。"""
     from backend.config.selection_funnel import build_config_snapshot
@@ -344,6 +392,8 @@ def _config_lines(brief, min_margin: float) -> list[str]:
     ]
     if snap.get("category_rules"):
         lines.append(f"- 类目差异化规则：{snap['category_rules']}")
+    lines.append(f"- 规则版本：`{snap.get('rules_version', '-')}`"
+                 "（阈值集内容指纹，任何阈值变更即新版本）")
     return lines
 
 
@@ -372,6 +422,7 @@ def render_report(brief, stage_logs: list[dict], candidates: list[dict],
         "### 漏斗计数", "",
     ]
     lines += _stage_table(stage_logs)
+    lines += _source_lines(stage_logs)
     if config_lines:
         lines += ["", "### 运行配置（本次口径）", ""] + config_lines
     lines += ["", "### 推荐 Top-N", ""]
@@ -389,6 +440,9 @@ def render_report(brief, stage_logs: list[dict], candidates: list[dict],
     competition = _competition_lines(pool or [], candidates)
     if competition:
         lines += ["", "### 竞争格局（商品榜）", ""] + competition
+    trend = _trend_lines(candidates)
+    if trend:
+        lines += ["", "### 价格与热度趋势（多次快照）", ""] + trend
     if pains:
         lines += ["", "### 痛点机会（差评实证）", ""] + pains
     test_plan = _test_plan_lines(candidates, moq=moq)
@@ -429,6 +483,7 @@ def render_empty_pool(brief, stage_logs: list[dict], notes: list[str]) -> str:
         "### 漏斗计数", "",
     ]
     lines += _stage_table(stage_logs)
+    lines += _source_lines(stage_logs)
     lines += ["", "### 运行配置（本次口径）", ""] + _config_lines(brief, min_margin)
     drop_details = _drop_details(stage_logs)
     if drop_details:
