@@ -9,7 +9,7 @@
  * 事件语义见 docs/customer-service/演示沙盒方案-2026-09-17.md §七。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Headphones, Send, UserRound, XCircle } from "lucide-react";
+import { BellRing, Headphones, Send, UserRound, Volume2, VolumeX, XCircle } from "lucide-react";
 import {
   claimConversation,
   closeConversation,
@@ -38,6 +38,70 @@ const SENDER_LABELS: Record<string, string> = {
 };
 
 const AGENT_ID_KEY = "cs_handoff_agent_id";
+const MUTE_KEY = "cs_handoff_muted";
+
+// ── 通知基建（模块级，纯浏览器 API）──────────────────────
+// 提示音：WebAudio 双 beep，无音频资源依赖。浏览器自动播放策略下
+// 首次用户手势前可能被拦，静默失败即可（toast/桌面通知不受影响）。
+let audioCtx: AudioContext | null = null;
+function playBeep() {
+  try {
+    const Ctor =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!Ctor) return;
+    audioCtx = audioCtx ?? new Ctor();
+    if (audioCtx.state === "suspended") {
+      void audioCtx.resume().catch(() => undefined);
+    }
+    const beepAt = (delayMs: number) => {
+      const osc = audioCtx!.createOscillator();
+      const gain = audioCtx!.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx!.destination);
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      const t0 = audioCtx!.currentTime + delayMs;
+      gain.gain.setValueAtTime(0.001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.18, t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.45);
+      osc.start(t0);
+      osc.stop(t0 + 0.5);
+    };
+    beepAt(0);
+    beepAt(0.28);
+  } catch {
+    // 静默：声音只是提醒增强手段
+  }
+}
+
+// 桌面通知：仅在页面不可见时发（可见时 toast 已足够），点击聚焦窗口
+function systemNotify(title: string, body: string) {
+  try {
+    if (
+      typeof Notification === "undefined" ||
+      Notification.permission !== "granted" ||
+      document.visibilityState === "visible"
+    ) {
+      return;
+    }
+    const n = new Notification(title, { body, tag: "cs-handoff" });
+    n.onclick = () => {
+      window.focus();
+      n.close();
+    };
+  } catch {
+    // 静默
+  }
+}
+
+type WaitingToast = {
+  id: number;
+  conversationId: string;
+  preview: string;
+  reason: string;
+};
 
 export default function HandoffWorkbenchPage() {
   const [agentId, setAgentId] = useState("");
@@ -60,84 +124,174 @@ export default function HandoffWorkbenchPage() {
     if (agentId) localStorage.setItem(AGENT_ID_KEY, agentId);
   }, [agentId]);
 
+  // ── 转人工通知层（toast + 提示音 + 桌面通知 + 标题角标）──────
+  const [toasts, setToasts] = useState<WaitingToast[]>([]);
+  const [muted, setMuted] = useState(true);
+  const [notifPerm, setNotifPerm] = useState<string>("default");
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
+
+  useEffect(() => {
+    setMuted(localStorage.getItem(MUTE_KEY) === "1");
+    if (typeof Notification !== "undefined") {
+      setNotifPerm(Notification.permission);
+    }
+  }, []);
+
+  const toggleMuted = () => {
+    setMuted((m) => {
+      localStorage.setItem(MUTE_KEY, m ? "0" : "1");
+      return !m;
+    });
+  };
+
+  const requestNotifPermission = async () => {
+    if (typeof Notification === "undefined") return;
+    try {
+      setNotifPerm(await Notification.requestPermission());
+    } catch {
+      // 用户拒绝/浏览器不支持：保持现状
+    }
+  };
+
+  const pushToast = useCallback((t: Omit<WaitingToast, "id">) => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev.slice(-3), { ...t, id }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((x) => x.id !== id));
+    }, 10_000);
+  }, []);
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((x) => x.id !== id));
+  }, []);
+
+  // 新 waiting_human 工单触达：toast 必发，声音/桌面通知按开关与环境
+  const notifyWaiting = useCallback(
+    (item: HandoffQueueItem) => {
+      const preview = item.last_message_preview ?? "（无消息）";
+      const reason = item.trigger_reason ?? item.trigger_type ?? "用户转人工";
+      pushToast({
+        conversationId: item.conversation_id,
+        preview,
+        reason,
+      });
+      if (!mutedRef.current) playBeep();
+      systemNotify("新转人工工单待接入", `${reason}：${preview}`);
+    },
+    [pushToast],
+  );
+
+  // 队列唯一写入口：diff 出新进入排队的工单 → 触发通知。
+  // WS 与降级轮询两条通道都走这里，轮询路径也能弹通知。
+  const queueRef = useRef<HandoffQueueItem[]>([]);
+  const notifyWaitingRef = useRef(notifyWaiting);
+  notifyWaitingRef.current = notifyWaiting;
+
+  const applyQueue = useCallback((next: HandoffQueueItem[]) => {
+    const prev = queueRef.current;
+    const incoming = next.filter(
+      (n) =>
+        n.handoff_state === "waiting_human" &&
+        !prev.some(
+          (p) =>
+            p.conversation_id === n.conversation_id &&
+            p.handoff_state === "waiting_human",
+        ),
+    );
+    queueRef.current = next;
+    setQueue(next);
+    for (const item of incoming) notifyWaitingRef.current(item);
+  }, []);
+
+  // 标题角标：有待接入工单时浏览器标签页直接可见（后台标签也能看到）
+  useEffect(() => {
+    const waiting = queue.filter((q) => q.handoff_state === "waiting_human").length;
+    const base = "人工接入坐席工作台";
+    document.title = waiting > 0 ? `(${waiting}) 待接入 — ${base}` : base;
+  }, [queue]);
+
   // ── WS 事件处理（下行主通道）────────────────────────
-  const handleAgentEvent = useCallback((e: AgentEvent) => {
-    switch (e.type) {
-      case "conversation.waiting": {
-        const item = e.item as HandoffQueueItem;
-        setQueue((prev) => {
+  const handleAgentEvent = useCallback(
+    (e: AgentEvent) => {
+      switch (e.type) {
+        case "conversation.waiting": {
+          const item = e.item as HandoffQueueItem;
+          const prev = queueRef.current;
           const idx = prev.findIndex(
             (q) => q.conversation_id === item.conversation_id,
           );
-          if (idx === -1) return [item, ...prev];
-          const next = [...prev];
-          next[idx] = item;
-          return next;
-        });
-        break;
-      }
-      case "conversation.claimed": {
-        const cid = e.conversation_id as string;
-        setQueue((prev) =>
-          prev.map((q) =>
-            q.conversation_id === cid
-              ? { ...q, handoff_state: "human_active" }
-              : q,
-          ),
-        );
-        if (selectedRef.current?.conversation_id === cid) {
-          setSelected((s) =>
-            s && s.conversation_id === cid
-              ? { ...s, handoff_state: "human_active" }
-              : s,
-          );
+          const next =
+            idx === -1
+              ? [item, ...prev]
+              : prev.map((q, i) => (i === idx ? item : q));
+          applyQueue(next);
+          break;
         }
-        break;
-      }
-      case "conversation.closed": {
-        const cid = e.conversation_id as string;
-        setQueue((prev) =>
-          prev.filter((q) => q.conversation_id !== cid),
-        );
-        if (selectedRef.current?.conversation_id === cid) {
-          setSelected((s) =>
-            s && s.conversation_id === cid
-              ? { ...s, handoff_state: "closed" }
-              : s,
+        case "conversation.claimed": {
+          const cid = e.conversation_id as string;
+          applyQueue(
+            queueRef.current.map((q) =>
+              q.conversation_id === cid
+                ? { ...q, handoff_state: "human_active" }
+                : q,
+            ),
           );
+          if (selectedRef.current?.conversation_id === cid) {
+            setSelected((s) =>
+              s && s.conversation_id === cid
+                ? { ...s, handoff_state: "human_active" }
+                : s,
+            );
+          }
+          break;
         }
-        break;
+        case "conversation.closed": {
+          const cid = e.conversation_id as string;
+          applyQueue(
+            queueRef.current.filter((q) => q.conversation_id !== cid),
+          );
+          if (selectedRef.current?.conversation_id === cid) {
+            setSelected((s) =>
+              s && s.conversation_id === cid
+                ? { ...s, handoff_state: "closed" }
+                : s,
+            );
+          }
+          break;
+        }
+        case "message.created": {
+          const cid = e.conversation_id as string;
+          const lastId = Number(e.last_id ?? 0);
+          const msg = e.message as HandoffMessageDTO;
+          if (selectedRef.current?.conversation_id !== cid) break;
+          setMessages((prev) => {
+            if (prev.some((m) => m.message_id === msg.message_id)) return prev;
+            return [...prev, msg];
+          });
+          if (lastId > sinceIdRef.current) sinceIdRef.current = lastId;
+          break;
+        }
+        default:
+          // hello / heartbeat / pong：仅保活
+          break;
       }
-      case "message.created": {
-        const cid = e.conversation_id as string;
-        const lastId = Number(e.last_id ?? 0);
-        const msg = e.message as HandoffMessageDTO;
-        if (selectedRef.current?.conversation_id !== cid) break;
-        setMessages((prev) => {
-          if (prev.some((m) => m.message_id === msg.message_id)) return prev;
-          return [...prev, msg];
-        });
-        if (lastId > sinceIdRef.current) sinceIdRef.current = lastId;
-        break;
-      }
-      default:
-        // hello / heartbeat / pong：仅保活
-        break;
-    }
-  }, []);
+    },
+    [applyQueue],
+  );
 
   const { connected } = useAgentSocket(handleAgentEvent);
 
   // 全量对账：WS 刚连上（或重连）时拉一次队列 + 选中会话消息，
-  // 补齐断线期间漏掉的事件
+  // 补齐断线期间漏掉的事件（走 applyQueue：断线期间新排队的工单同样触发通知）
   const refreshQueue = useCallback(async () => {
     try {
       const res = await getHandoffQueue();
-      setQueue(res.items);
+      applyQueue(res.items);
     } catch {
       // 静默，下轮重试
     }
-  }, []);
+  }, [applyQueue]);
 
   useEffect(() => {
     if (!connected) return;
@@ -164,7 +318,7 @@ export default function HandoffWorkbenchPage() {
     const tick = async () => {
       try {
         const res = await getHandoffQueue();
-        if (alive) setQueue(res.items);
+        if (alive) applyQueue(res.items);
       } catch {
         // 轮询失败静默，下轮重试
       }
@@ -175,7 +329,7 @@ export default function HandoffWorkbenchPage() {
       alive = false;
       clearInterval(timer);
     };
-  }, [connected]);
+  }, [connected, applyQueue]);
 
   // 选中会话：重置增量游标
   const selectConversation = useCallback((item: HandoffQueueItem) => {
@@ -183,6 +337,16 @@ export default function HandoffWorkbenchPage() {
     setMessages([]);
     sinceIdRef.current = 0;
   }, []);
+
+  // toast「查看」：定位到对应会话（队列里还在才可跳）
+  const viewToastConversation = useCallback(
+    (cid: string) => {
+      const item = queueRef.current.find((q) => q.conversation_id === cid);
+      if (item) selectConversation(item);
+      setToasts((prev) => prev.filter((t) => t.conversationId !== cid));
+    },
+    [selectConversation],
+  );
 
   // 消息增量轮询（降级：仅 WS 未连接且选中会话时，2s）
   useEffect(() => {
@@ -225,8 +389,8 @@ export default function HandoffWorkbenchPage() {
     try {
       await claimConversation(item.conversation_id, agentId.trim());
       selectConversation(item);
-      setQueue((prev) =>
-        prev.map((q) =>
+      applyQueue(
+        queueRef.current.map((q) =>
           q.conversation_id === item.conversation_id
             ? { ...q, handoff_state: "human_active" }
             : q,
@@ -248,8 +412,10 @@ export default function HandoffWorkbenchPage() {
     try {
       await closeConversation(selected.conversation_id, agentId.trim());
       // 乐观更新（WS 在线时 conversation.closed 事件会再次兜底）
-      setQueue((prev) =>
-        prev.filter((q) => q.conversation_id !== selected.conversation_id),
+      applyQueue(
+        queueRef.current.filter(
+          (q) => q.conversation_id !== selected.conversation_id,
+        ),
       );
       setSelected((s) =>
         s && s.conversation_id === selected.conversation_id
@@ -327,6 +493,30 @@ export default function HandoffWorkbenchPage() {
           >
             {connected ? "实时推送" : "轮询降级"}
           </span>
+          <button
+            onClick={toggleMuted}
+            title={muted ? "提示音已静音，点击开启" : "提示音开启中，点击静音"}
+            aria-label={muted ? "开启提示音" : "静音提示音"}
+            className={`p-1.5 rounded-lg border transition-colors ${
+              muted
+                ? "border-slate-200 text-slate-400 hover:text-slate-600"
+                : "border-blue-200 bg-blue-50 text-blue-600"
+            }`}
+          >
+            {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+          </button>
+          {typeof Notification !== "undefined" && notifPerm === "default" && (
+            <button
+              onClick={requestNotifPermission}
+              title="授权浏览器桌面通知（页面在后台也能收到系统级提醒）"
+              className="px-2 py-1 rounded-lg border border-slate-200 text-[11px]
+                text-slate-500 hover:text-slate-700 hover:border-slate-300
+                transition-colors flex items-center gap-1"
+            >
+              <BellRing size={12} />
+              桌面通知
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <UserRound size={14} className="text-slate-500" />
@@ -345,6 +535,44 @@ export default function HandoffWorkbenchPage() {
           {error}
         </div>
       )}
+
+      {/* 转人工通知 toast 堆栈 */}
+      <div className="fixed top-4 right-4 z-50 w-80 space-y-2">
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            className="bg-white border border-red-200 rounded-xl shadow-lg p-3"
+          >
+            <div className="flex items-start gap-2">
+              <BellRing size={15} className="text-red-500 mt-0.5 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-slate-800">
+                  新转人工工单待接入
+                </p>
+                <p className="text-xs text-slate-500 truncate mt-0.5">
+                  {t.reason}：{t.preview}
+                </p>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  onClick={() => viewToastConversation(t.conversationId)}
+                  className="px-2 py-1 text-xs rounded-lg bg-blue-600 text-white
+                    hover:bg-blue-700 transition-colors"
+                >
+                  查看
+                </button>
+                <button
+                  onClick={() => dismissToast(t.id)}
+                  aria-label="关闭提醒"
+                  className="p-1 text-slate-400 hover:text-slate-600"
+                >
+                  <XCircle size={14} />
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
 
       <div className="grid grid-cols-5 gap-4">
         {/* 队列 */}
