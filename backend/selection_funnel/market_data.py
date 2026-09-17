@@ -251,6 +251,99 @@ def market_snapshot(category: str) -> dict:
     return {"total": len(kws), "top": top, "opportunities": opportunities}
 
 
+# ── 竞争格局（商品榜结构化，2026-09-17 六步法补缺）─────────────────────
+# 品牌桶：标题命中这些词视作品牌款（结构性标记；类目品牌词用 env 扩充，
+# 绝不把具体品牌名写死在业务代码里 —— 与阈值集中配置同一纪律）
+_BRAND_WORDS_DEFAULT: tuple[str, ...] = ("旗舰店", "官方", "专卖", "直营")
+BRAND_WORDS: tuple[str, ...] = (
+    tuple(w.strip() for w in
+          os.getenv("SELECTION_FUNNEL_BRAND_WORDS", "").split(",") if w.strip())
+    or _BRAND_WORDS_DEFAULT
+)
+REVIEW_RATIO_HIGH = 0.5    # 评论数/销量 > 0.5：刷评或销量口径失真嫌疑
+REVIEW_RATIO_LOW = 0.02    # 评论数/销量 < 0.02 且销量达线：销量数据存疑
+REVIEW_RATIO_LOW_MIN_SALES = 1000
+
+
+def _percentile(sorted_vals: list[float], q: float) -> float | None:
+    """线性插值分位（numpy 默认口径）；空列表返回 None。"""
+    if not sorted_vals:
+        return None
+    if len(sorted_vals) == 1:
+        return sorted_vals[0]
+    pos = q * (len(sorted_vals) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    frac = pos - lo
+    return round(sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * frac, 2)
+
+
+def competition_structure(products: list[dict]) -> dict:
+    """商品榜竞争结构：CR5 / 价格分位 / 评价比异常 / 品牌占比。
+
+    只做结构描述富化报告，不做淘汰依据（与赛道画像/痛点同一纪律）。
+    传建池全量快照（pool）而非筛后候选 —— 竞争格局要看全池。
+
+    Returns:
+        {total, cr5, price_p25, price_p50, price_p75, anomalies,
+         brand_like, brand_ratio, brand_words_hit, notes}；空池返回 {}。
+    """
+    if not products:
+        return {}
+    notes: list[str] = []
+    prices = sorted(float(p["price"]) for p in products if p.get("price"))
+
+    # CR5：热度前 5 款占全池热度份额（评论数代销量，缺评论数用 sales 兜底）
+    heat = [(p.get("review_count") or 0) or (p.get("sales") or 0) for p in products]
+    cr5: float | None = None
+    if sum(heat) > 0:
+        top5 = sorted(heat, reverse=True)[:5]
+        cr5 = round(sum(top5) / sum(heat), 4)
+        if len([h for h in heat if h]) < 5:
+            notes.append("有效热度数据不足 5 款，CR5 仅作参考")
+    else:
+        notes.append("全池缺评论数/销量，无法计算 CR5")
+
+    # 评价比异常（评论数/销量 双字段齐才判）
+    anomalies: list[dict] = []
+    for p in products:
+        rc, sales = p.get("review_count"), p.get("sales")
+        if not rc or not sales:
+            continue
+        ratio = rc / sales
+        title = (p.get("title") or "")[:24]
+        if ratio > REVIEW_RATIO_HIGH:
+            anomalies.append({"title": title, "ratio": round(ratio, 3),
+                              "flag": "评论数接近销量（刷评或销量口径失真）"})
+        elif ratio < REVIEW_RATIO_LOW and sales >= REVIEW_RATIO_LOW_MIN_SALES:
+            anomalies.append({"title": title, "ratio": round(ratio, 3),
+                              "flag": "销量高评论极少（评价关闭或销量存疑）"})
+
+    # 品牌桶
+    brand_words_hit: dict[str, int] = {}
+    brand_like = 0
+    for p in products:
+        title = p.get("title") or ""
+        hit = [w for w in BRAND_WORDS if w in title]
+        if hit:
+            brand_like += 1
+            for w in hit:
+                brand_words_hit[w] = brand_words_hit.get(w, 0) + 1
+
+    return {
+        "total": len(products),
+        "cr5": cr5,
+        "price_p25": _percentile(prices, 0.25),
+        "price_p50": _percentile(prices, 0.50),
+        "price_p75": _percentile(prices, 0.75),
+        "anomalies": anomalies[:5],
+        "brand_like": brand_like,
+        "brand_ratio": round(brand_like / len(products), 3),
+        "brand_words_hit": brand_words_hit,
+        "notes": notes,
+    }
+
+
 # ── 差评痛点 ──────────────────────────────────────────────────────────
 def _match_title(product_title: str, candidate_title: str) -> bool:
     """标题包含匹配（双向、去空白），P0 口径；报告披露。"""

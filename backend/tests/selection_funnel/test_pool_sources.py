@@ -94,14 +94,19 @@ _E2E_TSV = (
 
 
 def test_graph_end_to_end_with_import_pool(patch_stores, funnel_graph):
-    """导入 8 行海选数据 → 完整漏斗出 Top-5 报告（本轮拍板的核心验收）。"""
+    """导入 8 行海选数据 → 完整漏斗出 Top-5 报告（本轮拍板的核心验收）。
+
+    2026-09-17 口径升级：经济测算含 3% 退款损耗后，纯估计成本（45% 售价）
+    的低价款不再达 30% 毛利线 —— 需求给出成本约束（成本60元以内），
+    129/139 元两款在 econ 层被如实淘汰，漏斗保留真实淘汰记录。
+    """
     from backend.selection_funnel.import_pool import import_table
     _batch, n, _notes = import_table(_E2E_TSV)
     assert n == 8
     patch_stores([])  # 监控池为空——纯导入源驱动
 
     from backend.selection_funnel.graph_state import new_selection_funnel_graph_input
-    state = new_selection_funnel_graph_input("给宠物零食做一次智能选品")
+    state = new_selection_funnel_graph_input("给宠物零食做一次智能选品，成本60元以内")
     result = funnel_graph.invoke(state, config={"recursion_limit": 25})
 
     assert result["status"] == "ok"
@@ -111,6 +116,9 @@ def test_graph_end_to_end_with_import_pool(patch_stores, funnel_graph):
     # 池层日志：8 进 0 出局，逐层有淘汰记录
     pool_log = next(l for l in result["stage_logs"] if l["stage"] == "pool")
     assert pool_log["kept"] == 8 and pool_log["dropped"] == 0
+    # econ 层：退款损耗口径下 129/139 元两款被淘汰（成本 60 元固定口径可复算）
+    econ_log = next(l for l in result["stage_logs"] if l["stage"] == "econ")
+    assert econ_log["dropped"] == 2 and econ_log["kept"] == 6
     # 排序非增（同分按 margin/url 决胜，此处只验总分单调）
     totals = [(c.get("score") or {}).get("total") or 0.0 for c in ranked]
     assert all(totals[i] >= totals[i + 1] for i in range(len(totals) - 1))

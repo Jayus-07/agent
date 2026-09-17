@@ -81,6 +81,17 @@ def _market_lines(category: str) -> list[str]:
     return lines
 
 
+# 痛点 → 对策映射（六桶；只给方向，不给臆造事实 —— 2026-09-17 六步法补缺）
+PAIN_ACTIONS: dict[str, str] = {
+    "质量做工": "要求供应商出质检报告并首批验货，详情页拍用料/做工细节图",
+    "物流包装": "加硬纸盒或气泡柱加固包装，换时效更稳的快递，详情页明示发货时效",
+    "尺寸规格": "详情页上实物对比图与克重标注，SKU 分大小档校准预期",
+    "气味口感": "先索样试吃/试闻，优先无香精配方并在卖点中声明",
+    "描述不符": "主图实拍不过度修图，加色差与规格声明压退货率",
+    "售后服务": "建售后 SOP（退款时效承诺+标准话术），放售后卡引导直连客服",
+}
+
+
 def _pain_lines(candidates: list[dict], category: str) -> list[str]:
     """痛点机会（差评实证上传数据）；无数据/不可用 → 空。"""
     try:
@@ -96,14 +107,131 @@ def _pain_lines(candidates: list[dict], category: str) -> list[str]:
     for r in rows:
         pains = "、".join(f"{p}({n})" for p, n in r["pains"]) or "（未聚类出高频桶）"
         lines.append(f"- 「{r['title']}」：差评 {r['negative']}/{r['review_total']} —— 痛点：{pains}")
+        actions = [PAIN_ACTIONS[b] for b, _ in r["pains"] if b in PAIN_ACTIONS]
+        if actions:
+            lines.append(f"  - 对策：{'；'.join(actions[:2])}")
+    return lines
+
+
+def _competition_lines(pool: list[dict], candidates: list[dict]) -> list[str]:
+    """竞争格局（商品榜结构化）；无池且无候选 → 空（不渲染段）。"""
+    data = list(pool or [])
+    fallback = False
+    if not data:
+        data = list(candidates or [])
+        fallback = True
+    if not data:
+        return []
+    try:
+        from backend.selection_funnel.market_data import competition_structure
+        comp = competition_structure(data)
+    except Exception as e:
+        logger.warning("[FunnelReport] 竞争格局不可用: %s", e)
+        return []
+    if not comp:
+        return []
+    lines = []
+    if fallback:
+        lines.append("- 口径：建池快照缺失，以存活候选近似全池（竞争格局看全池更准，"
+                     "导池后重跑可得完整结构）")
+    else:
+        lines.append(f"- 口径：建池全量 {comp['total']} 款，评论数代销量")
+    if comp.get("cr5") is not None:
+        level = ("头部集中度高（CR5 ≥ 60%），新进者需差异化避开头部主力价格带"
+                 if comp["cr5"] >= 0.6 else "头部集中度中等，格局未固化")
+        lines.append(f"- CR5 = {comp['cr5']:.0%}：{level}")
+    p25, p50, p75 = (comp.get("price_p25"), comp.get("price_p50"),
+                     comp.get("price_p75"))
+    if p25 is not None and p50 is not None and p75 is not None:
+        lines.append(f"- 价格分位 P25/P50/P75 = {_fmt(p25)} / {_fmt(p50)} / {_fmt(p75)} 元"
+                     "（贴 P25 定价是价格战，P50 以上需差异化支撑）")
+    if comp.get("brand_like"):
+        words = "、".join(f"{w}×{n}" for w, n in comp["brand_words_hit"].items())
+        lines.append(f"- 疑似品牌款 {comp['brand_like']} 款（占 {comp['brand_ratio']:.0%}，"
+                     f"命中词：{words}）")
+        if comp["brand_ratio"] >= 0.5:
+            lines.append("  - 品牌款占比过半：白牌新链建议避开品牌正面战场，"
+                         "从规格/场景差异化切入")
+    for a in comp.get("anomalies", []):
+        lines.append(f"- ⚠「{a['title']}」评价比 {a['ratio']}：{a['flag']}")
+    lines += [f"- {n}" for n in comp.get("notes", [])]
+    return lines
+
+
+def _test_plan_lines(candidates: list[dict], moq: float | None = None) -> list[str]:
+    """测款计划卡（小额试错口径，2026-09-17 六步法补缺）。"""
+    if not candidates:
+        return []
+    lines = ["- 口径：直通车/搜索推广 ¥300-500/天 × 14 天，先验证点击与加购，再谈放量"]
+    for c in candidates[:2]:
+        econ = c.get("economics") or {}
+        price = econ.get("price") or c.get("price")
+        unit_cost = econ.get("unit_cost")
+        batch = round(moq * unit_cost, 2) if (moq and unit_cost) else None
+        line = (f"- 「{(c.get('title') or '')[:24]}」（¥{_fmt(price)}）："
+                "点击率 > 行业 1.2 倍且加购率 > 8% → 加预算；"
+                "累计花费达 30% 预算仍无加购 → 停投止损；"
+                "14 天 ROI < 1 → 复盘或放弃")
+        if batch is not None:
+            line += f"；按 MOQ {moq:g} 估首批投入约 ¥{_fmt(batch)}"
+        lines.append(line)
+    if moq is None:
+        lines.append("- 首批投入未估：漏斗上下文未提供 MOQ（起订量），补齐后可算首批资金占用")
+    return lines
+
+
+def _decision_draft_lines(candidates: list[dict],
+                          min_margin: float | None = None) -> list[str]:
+    """决策草案（规则初判，供人工拍板）；依据全部来自漏斗已算数字。"""
+    if not candidates:
+        return []
+    if min_margin is None:
+        from backend.config.selection_funnel import SELECTION_FUNNEL_MIN_MARGIN
+        min_margin = SELECTION_FUNNEL_MIN_MARGIN
+    lines = [f"- 口径：规则初判草案（毛利线 {min_margin:.0%}），供人工拍板，"
+             "依据全部来自漏斗已算数字"]
+    for c in candidates[:3]:
+        econ = c.get("economics") or {}
+        margin = econ.get("margin")
+        title = (c.get("title") or c.get("url", ""))[:24]
+        if margin is None:
+            lines.append(f"- 「{title}」→ **条件做**（毛利率缺失：补售价/成本后复测）")
+            continue
+        buffer_pp = (margin - min_margin) * 100
+        if margin < min_margin:
+            lines.append(f"- 「{title}」→ **放弃**（毛利率 {margin:.1%} 已低于 "
+                         f"{min_margin:.0%} 线）")
+            continue
+        conditions: list[str] = []
+        verdict = "做"
+        if buffer_pp < 2:
+            verdict = "放弃"
+            conditions = [f"毛利率 {margin:.1%} 贴线（仅高 {buffer_pp:.1f}pp），无缓冲"]
+        elif buffer_pp < 5:
+            verdict = "条件做"
+            conditions.append(f"毛利率缓冲 {buffer_pp:.1f}pp 不足 5pp，控制首单量")
+        if verdict != "放弃":
+            if econ.get("unit_cost_estimated"):
+                verdict = "条件做"
+                conditions.append("成本为估计值，先向供应商询价校准")
+            if c.get("pain_points"):
+                verdict = "条件做"
+                conditions.append("存在差评实证痛点，对策落地后再上量")
+        cond = f"；条件：{'；'.join(conditions)}" if conditions else ""
+        lines.append(f"- 「{title}」→ **{verdict}**（毛利率 {margin:.1%}，"
+                     f"缓冲 {buffer_pp:+.1f}pp{cond}）")
     return lines
 
 
 def render_report(brief, stage_logs: list[dict], candidates: list[dict],
                   notes: list[str], knowledge: list[str] | None = None,
                   market: list[str] | None = None,
-                  pains: list[str] | None = None) -> str:
-    """正常路径报告。knowledge = 合规提示；market/pains = 赛道画像 / 痛点机会。"""
+                  pains: list[str] | None = None,
+                  pool: list[dict] | None = None,
+                  moq: float | None = None,
+                  min_margin: float | None = None) -> str:
+    """正常路径报告。knowledge = 合规提示；market/pains = 赛道画像 / 痛点机会；
+    pool = 建池全量（竞争格局）；moq/min_margin = 测款卡首批投入 / 决策草案毛利线。"""
     lines = [
         f"## 智能选品漏斗报告（{brief.category}）", "",
         f"需求口径：平台 {brief.platform or '不限'}；"
@@ -125,17 +253,28 @@ def render_report(brief, stage_logs: list[dict], candidates: list[dict],
         lines += ["", "### 合规与知识层提示", ""] + knowledge
     if market:
         lines += ["", "### 赛道画像（关键词榜）", ""] + market
+    competition = _competition_lines(pool or [], candidates)
+    if competition:
+        lines += ["", "### 竞争格局（商品榜）", ""] + competition
     if pains:
         lines += ["", "### 痛点机会（差评实证）", ""] + pains
+    test_plan = _test_plan_lines(candidates, moq=moq)
+    if test_plan:
+        lines += ["", "### 测款计划（小额试错）", ""] + test_plan
+    draft = _decision_draft_lines(candidates, min_margin=min_margin)
+    if draft:
+        lines += ["", "### 决策草案（规则初判）", ""] + draft
     if notes:
         lines += ["", "### 数据缺口与说明", ""]
         lines += [f"- {n}" for n in dict.fromkeys(notes)]
-    lines += [
-        "", "### 下一步建议", "",
-        "- 对 Top 1-2 款做小额测款（直通车/搜索推广 300-500 元），"
-        "点击率 > 行业 1.2 倍、加购率 > 8% 再放量",
-        "- 需要判断「这个品类值不值得做」时，让我跑选品决策（差异化 + 财务 + AI 评审团）",
-    ]
+    lines += ["", "### 下一步建议", ""]
+    if candidates:
+        lines.append("- 按「测款计划」小额验证 Top 1-2 款，验证通过再谈放量与供应链")
+    else:
+        lines.append("- 对 Top 1-2 款做小额测款（直通车/搜索推广 300-500 元），"
+                     "点击率 > 行业 1.2 倍、加购率 > 8% 再放量")
+    lines.append("- 需要判断「这个品类值不值得做」时，让我跑选品决策"
+                 "（差异化 + 财务 + AI 评审团）")
     return "\n".join(lines)
 
 
@@ -182,14 +321,22 @@ def reporter_node(state: dict) -> dict:
                 "finished": True}
     from backend.selection_funnel.graph_state import load_brief
     from backend.selection_funnel.knowledge import compliance_review
+    from backend.config.selection_funnel import SELECTION_FUNNEL_MIN_MARGIN, rules_for
     brief = load_brief(state)
     candidates = list(state.get("candidates") or [])
     knowledge, knotes = compliance_review(
         candidates, brief.platform, brief.category)
     notes = list(state.get("notes") or []) + knotes
+    min_margin = float(brief.target_margin
+                       or rules_for(brief.category).get("min_margin",
+                                                        SELECTION_FUNNEL_MIN_MARGIN))
+    ctx = state.get("funnel_context") or {}
+    moq = (ctx.get("supply") or {}).get("moq") if isinstance(ctx, dict) else None
     answer = render_report(brief, list(state.get("stage_logs") or []),
                            candidates, notes, knowledge=knowledge,
                            market=_market_lines(brief.category),
-                           pains=_pain_lines(candidates, brief.category))
+                           pains=_pain_lines(candidates, brief.category),
+                           pool=list(state.get("pool") or []),
+                           moq=moq, min_margin=min_margin)
     return {"final_answer": answer, "status": "ok",
             "finished": True}

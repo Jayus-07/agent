@@ -65,6 +65,9 @@ SELECTION_FUNNEL_LOGISTICS_FEE_CNY = float(
     os.getenv("SELECTION_FUNNEL_LOGISTICS_FEE_CNY", "5.0"))
 # 推广费占售价比例（直通车/多多搜索常规投放口径）
 SELECTION_FUNNEL_ADS_RATIO = float(os.getenv("SELECTION_FUNNEL_ADS_RATIO", "0.15"))
+# 退货退款损耗率（货值损失+逆向运费摊销简化口径，2026-09-17 补）
+SELECTION_FUNNEL_REFUND_RATIO = float(
+    os.getenv("SELECTION_FUNNEL_REFUND_RATIO", "0.03"))
 # 进货成本占售价比例的默认估计（无 brief.max_unit_cost 时使用）
 SELECTION_FUNNEL_DEFAULT_COST_RATIO = float(
     os.getenv("SELECTION_FUNNEL_DEFAULT_COST_RATIO", "0.45"))

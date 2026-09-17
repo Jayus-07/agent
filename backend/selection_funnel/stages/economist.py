@@ -17,7 +17,8 @@ from backend.selection_funnel.graph_state import load_brief
 def econ_candidates(candidates: list[dict], category: str,
                     min_margin: float, unit_cost: float | None,
                     fee_rate: float, logistics_fee: float,
-                    ads_ratio: float, default_cost_ratio: float,
+                    ads_ratio: float, refund_ratio: float,
+                    default_cost_ratio: float,
                     ) -> tuple[list[dict], list[dict], list[str]]:
     """Returns (kept, reasons, notes)。kept 每项附 economics dict。"""
     kept: list[dict] = []
@@ -27,7 +28,8 @@ def econ_candidates(candidates: list[dict], category: str,
         econ = calc_unit_economics(
             price=c.get("price"), unit_cost=unit_cost,
             fee_rate=fee_rate, logistics_fee=logistics_fee,
-            ads_ratio=ads_ratio, default_cost_ratio=default_cost_ratio,
+            ads_ratio=ads_ratio, refund_ratio=refund_ratio,
+            default_cost_ratio=default_cost_ratio,
         )
         item = dict(c)
         item["economics"] = econ
@@ -43,7 +45,7 @@ def econ_candidates(candidates: list[dict], category: str,
                 "value": f"毛利率 {econ['margin']:.1%} < 目标 {min_margin:.0%} "
                          f"(售价 {econ['price']} − 成本 {econ['unit_cost']} "
                          f"− 扣点 {econ['platform_fee']} − 物流 {econ['logistics_fee']} "
-                         f"− 推广 {econ['ads_fee']})",
+                         f"− 推广 {econ['ads_fee']} − 退款损耗 {econ['refund_loss']})",
             })
             continue
         kept.append(item)
@@ -57,6 +59,7 @@ def econ_node(state: dict) -> dict:
         SELECTION_FUNNEL_LOGISTICS_FEE_CNY,
         SELECTION_FUNNEL_MIN_MARGIN,
         SELECTION_FUNNEL_PLATFORM_FEE_RATE,
+        SELECTION_FUNNEL_REFUND_RATIO,
         rules_for,
     )
     from backend.selection_funnel.graph_state import load_brief
@@ -73,6 +76,7 @@ def econ_node(state: dict) -> dict:
         fee_rate=float(rules.get("fee_rate", SELECTION_FUNNEL_PLATFORM_FEE_RATE)),
         logistics_fee=float(rules.get("logistics_fee", SELECTION_FUNNEL_LOGISTICS_FEE_CNY)),
         ads_ratio=float(rules.get("ads_ratio", SELECTION_FUNNEL_ADS_RATIO)),
+        refund_ratio=float(rules.get("refund_ratio", SELECTION_FUNNEL_REFUND_RATIO)),
         default_cost_ratio=float(rules.get(
             "default_cost_ratio", SELECTION_FUNNEL_DEFAULT_COST_RATIO)),
     )

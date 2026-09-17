@@ -117,6 +117,130 @@ def test_report_sections_absent_without_data():
     assert _pain_lines([{"title": "没有评论的品"}], "不存在的类目") == []
 
 
+# ── 竞争格局（六步法②）───────────────────────────────────────────────
+def test_competition_structure_cr5_and_price_bands():
+    from backend.selection_funnel.market_data import competition_structure
+    products = [
+        {"title": "a 旗舰店冻干", "price": 10.0, "review_count": 900, "sales": 2000},
+        {"title": "b 官方鸡肉干", "price": 20.0, "review_count": 500, "sales": 1500},
+        {"title": "c 白牌", "price": 30.0, "review_count": 200, "sales": 800},
+        {"title": "d 白牌", "price": 40.0, "review_count": 100, "sales": 500},
+        {"title": "e 白牌", "price": 50.0, "review_count": 50, "sales": 200},
+        {"title": "f 白牌", "price": 60.0, "review_count": 10, "sales": 100},
+    ]
+    comp = competition_structure(products)
+    assert comp["total"] == 6
+    # CR5 = (900+500+200+100+50)/1760 ≈ 0.9943
+    assert comp["cr5"] == round(1750 / 1760, 4)
+    # 价格分位（线性插值，pos=q×(n−1)）：P25 = 20+0.25×10 = 22.5，P50 = 35，P75 = 47.5
+    assert comp["price_p25"] == 22.5
+    assert comp["price_p50"] == 35.0
+    assert comp["price_p75"] == 47.5
+    assert comp["anomalies"] == []
+
+
+def test_competition_structure_review_ratio_anomalies():
+    from backend.selection_funnel.market_data import competition_structure
+    products = [
+        # 1200/2000 = 0.6 > 0.5 → 刷评嫌疑
+        {"title": "刷评嫌疑品", "price": 30.0, "review_count": 1200, "sales": 2000},
+        # 40/5000 = 0.008 < 0.02 且销量 ≥1000 → 销量存疑
+        {"title": "销量存疑品", "price": 30.0, "review_count": 40, "sales": 5000},
+        # 300/5000 = 0.06 → 正常区间
+        {"title": "正常品", "price": 30.0, "review_count": 300, "sales": 5000},
+    ]
+    comp = competition_structure(products)
+    flags = {a["title"]: a["flag"] for a in comp["anomalies"]}
+    assert "刷评嫌疑品" in flags and "刷评" in flags["刷评嫌疑品"]
+    assert "销量存疑品" in flags and "销量存疑" in flags["销量存疑品"]
+    assert "正常品" not in flags
+
+
+def test_competition_structure_brand_bucket_and_empty():
+    from backend.selection_funnel.market_data import competition_structure
+    assert competition_structure([]) == {}
+    products = [
+        {"title": "麦富迪旗舰店 冻干", "price": 30.0, "review_count": 100, "sales": 1000},
+        {"title": "XX官方直营店", "price": 30.0, "review_count": 90, "sales": 900},
+        {"title": "白牌散装称重", "price": 30.0, "review_count": 80, "sales": 800},
+    ]
+    comp = competition_structure(products)
+    assert comp["brand_like"] == 2
+    assert comp["brand_ratio"] == round(2 / 3, 3)
+    assert comp["brand_words_hit"]["旗舰店"] == 1
+    assert comp["brand_words_hit"]["直营"] == 1
+
+
+# ── 报告段：竞争格局 / 测款计划 / 决策草案（六步法②⑤⑥）──────────────
+def test_report_competition_test_plan_and_draft_sections():
+    from backend.selection_funnel.reporter import render_report
+
+    class _B:
+        category = "宠物零食"; platform = "淘宝"
+        price_min = None; price_max = None; target_margin = 0.30
+
+    pool = [
+        {"title": "a 旗舰店冻干", "price": 10.0, "review_count": 900, "sales": 2000},
+        {"title": "b 官方鸡肉干", "price": 20.0, "review_count": 500, "sales": 1500},
+        {"title": "c 白牌", "price": 30.0, "review_count": 200, "sales": 800},
+        {"title": "d 白牌", "price": 40.0, "review_count": 100, "sales": 500},
+        {"title": "e 白牌", "price": 50.0, "review_count": 50, "sales": 200},
+        {"title": "f 白牌", "price": 60.0, "review_count": 10, "sales": 100},
+    ]
+    cands = [{"title": "a 旗舰店冻干", "url": "u1", "rank": 1,
+              "score": {"total": 85.0},
+              "economics": {"price": 30.0, "margin": 0.40, "net_profit": 12.0,
+                            "unit_cost": 10.0, "unit_cost_estimated": False},
+              "pain_points": []}]
+    report = render_report(_B(), [], cands, [], pool=pool, moq=500,
+                           min_margin=0.30)
+    assert "### 竞争格局（商品榜）" in report and "CR5" in report
+    assert "### 测款计划（小额试错）" in report and "加购率" in report
+    assert "首批投入约 ¥5,000" in report or "首批投入约 ¥5000" in report  # 500×10
+    assert "### 决策草案（规则初判）" in report and "**做**" in report
+
+
+def test_decision_draft_verdicts():
+    from backend.selection_funnel.reporter import _decision_draft_lines
+    # 草案只对 Top-3 出结论（与推荐 Top-N 同口径）
+    cands = [
+        {"title": "稳款", "url": "u1",
+         "economics": {"price": 100, "margin": 0.40, "unit_cost_estimated": False},
+         "pain_points": []},
+        {"title": "估本款", "url": "u2",
+         "economics": {"price": 100, "margin": 0.33, "unit_cost_estimated": True},
+         "pain_points": []},
+        {"title": "贴线款", "url": "u3",
+         "economics": {"price": 100, "margin": 0.31, "unit_cost_estimated": False},
+         "pain_points": []},
+        {"title": "第四款不进草案", "url": "u4",
+         "economics": {"price": 100, "margin": 0.40, "unit_cost_estimated": False},
+         "pain_points": []},
+    ]
+    lines = _decision_draft_lines(cands, min_margin=0.30)
+    by_title = {l.split("」")[0].split("「")[-1]: l
+                for l in lines if "」" in l and "→" in l}
+    assert "**做**" in by_title["稳款"] and "条件做" not in by_title["稳款"]
+    assert "**条件做**" in by_title["估本款"] and "询价校准" in by_title["估本款"]
+    assert "**放弃**" in by_title["贴线款"]
+    assert "第四款不进草案" not in by_title
+    # 痛点候选 → 条件做（对策落地后再上量）
+    pain_cand = [{"title": "痛点款", "url": "u5",
+                  "economics": {"price": 100, "margin": 0.40,
+                                "unit_cost_estimated": False},
+                  "pain_points": ["同池促销依赖度高：价格战竞争"]}]
+    lines2 = _decision_draft_lines(pain_cand, min_margin=0.30)
+    assert "**条件做**" in lines2[1] and "对策" in lines2[1]
+
+
+def test_competition_lines_fallback_to_candidates():
+    from backend.selection_funnel.reporter import _competition_lines
+    cands = [{"title": "t", "price": 30.0, "review_count": 100, "sales": 500}]
+    lines = _competition_lines([], cands)
+    assert lines and any("近似全池" in l for l in lines)
+    assert _competition_lines([], []) == []
+
+
 # ── API kind 分发 ─────────────────────────────────────────────────────
 @pytest.fixture
 def client():

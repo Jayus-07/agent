@@ -1,7 +1,8 @@
 """selection_funnel/economics.py — 单位经济测算（纯函数，零 IO）
 
-利润口径（毛利瀑布简化版）：
-  margin = (price − cost − price×fee_rate − logistics − price×ads_ratio) / price
+利润口径（毛利瀑布简化版，2026-09-17 补退货退款损耗）：
+  margin = (price − cost − price×fee_rate − logistics − price×ads_ratio
+            − price×refund_ratio) / price
 
 用途：漏斗层五的淘汰判据 + 推荐理由里的数字来源。
 后续要暴露给主图 Planner 时再包 Skill，域内直接 import 本模块。
@@ -17,13 +18,16 @@ def calc_unit_economics(
     fee_rate: float = 0.055,
     logistics_fee: float = 5.0,
     ads_ratio: float = 0.15,
+    refund_ratio: float = 0.03,
     default_cost_ratio: float = 0.45,
 ) -> dict:
     """计算单件毛利。price 缺失或非正时 margin=None + 说明。
 
+    refund_ratio：退货退款损耗率（货值损失 + 逆向运费摊销的简化口径）。
+
     Returns:
         {price, unit_cost, unit_cost_estimated, platform_fee, logistics_fee,
-         ads_fee, net_profit, margin, warnings}
+         ads_fee, refund_loss, net_profit, margin, warnings}
     """
     warnings: list[str] = []
     unit_cost_estimated = False
@@ -31,7 +35,7 @@ def calc_unit_economics(
         return {"price": price, "unit_cost": unit_cost,
                 "unit_cost_estimated": False,
                 "platform_fee": None, "logistics_fee": None, "ads_fee": None,
-                "net_profit": None, "margin": None,
+                "refund_loss": None, "net_profit": None, "margin": None,
                 "warnings": ["售价缺失或非正，无法测算利润"]}
     if unit_cost is None:
         unit_cost = round(price * default_cost_ratio, 2)
@@ -40,7 +44,8 @@ def calc_unit_economics(
 
     platform_fee = round(price * fee_rate, 2)
     ads_fee = round(price * ads_ratio, 2)
-    net = round(price - unit_cost - platform_fee - logistics_fee - ads_fee, 2)
+    refund_loss = round(price * refund_ratio, 2)
+    net = round(price - unit_cost - platform_fee - logistics_fee - ads_fee - refund_loss, 2)
     margin = round(net / price, 4)
     if unit_cost >= price:
         warnings.append("成本不低于售价，该品没有利润空间")
@@ -50,6 +55,7 @@ def calc_unit_economics(
         "platform_fee": platform_fee,
         "logistics_fee": logistics_fee,
         "ads_fee": ads_fee,
+        "refund_loss": refund_loss,
         "net_profit": net,
         "margin": margin,
         "warnings": warnings,
