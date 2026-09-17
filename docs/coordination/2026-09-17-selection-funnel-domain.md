@@ -265,3 +265,21 @@ person_names 列（chunk metadata 有值，registry 无列，一致性核查可�
 理由、竞争结构/异常/品牌桶、三段渲染、草案分档、候选近似回退）。
 **遗留给新数据源/他会话域**：C2 榜单直连（②的真实数据源）、供给端 MOQ 上游、
 RAG 层 to_metadata_filter 正解、漏斗→决策任务打通。
+
+## 十三、/selection 智能选品页面下线（2026-09-17 第九轮，2d28f8e）
+
+用户拍板「/selection 智能选品 这个删掉」。管理端导航「业务分析」组从
+竞品监控/智能选品/选品漏斗/选品决策/报告中心 → 收敛为
+**竞品监控/选品漏斗/选品决策/报告中心** 四项。
+
+- 删 `frontend-admin/src/app/selection/`（page.tsx：监控池推荐+趋势面板+
+  评分权重配置；TrendPanels.tsx 懒加载组件，无其他引用方）。
+- **保留 `src/api/selection.ts` 与后端 `/selection` API**：competitors
+  竞品对比（batchScores）与 CompareModal（compare）仍在消费，
+  surface.test.ts 契约不破。
+- 副作用：评分权重配置（/selection/weights）暂无 UI 入口，后端 API 未动，
+  将来选品决策页接权重策略可直接复用。
+- 验证：tsc --noEmit 零错误（`.next`/`.next-p0-rolegate` 里指向已删页面的
+  过期类型存根需清子目录）；navConfig+surface 契约测试 28 passed。
+- 此前遗留「/selection 改名需与他会话对齐」随下线自动消掉；
+  「漏斗 Top-5 → 决策任务打通」仍是漏斗侧下一步。
