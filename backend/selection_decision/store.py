@@ -276,8 +276,12 @@ _store: SelectionDecisionStore | None = None
 
 
 def get_selection_decision_store() -> SelectionDecisionStore:
-    """模块级单例。"""
+    """模块级单例（双后端分发：SELECTION_DECISION_BACKEND=postgres 切 PG 实现）。"""
     global _store
     if _store is None:
-        _store = SelectionDecisionStore()
+        if os.getenv("SELECTION_DECISION_BACKEND", "sqlite").strip().lower() == "postgres":
+            from backend.selection_decision.store_pg import PostgresSelectionDecisionStore
+            _store = PostgresSelectionDecisionStore()
+        else:
+            _store = SelectionDecisionStore()
     return _store

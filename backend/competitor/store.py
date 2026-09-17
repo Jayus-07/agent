@@ -265,10 +265,14 @@ _store: Optional[CompetitorStore] = None
 
 
 def get_store() -> CompetitorStore:
-    """全局单例"""
+    """全局单例（双后端分发：COMPETITOR_BACKEND=postgres 切 PG 实现）"""
     global _store
     if _store is None:
-        _store = CompetitorStore()
+        if os.getenv("COMPETITOR_BACKEND", "sqlite").strip().lower() == "postgres":
+            from backend.competitor.store_pg import PostgresCompetitorStore
+            _store = PostgresCompetitorStore()
+        else:
+            _store = CompetitorStore()
     return _store
 
 

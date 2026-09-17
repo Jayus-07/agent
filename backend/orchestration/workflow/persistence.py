@@ -159,5 +159,13 @@ _store: WorkflowRunStore | None = None
 def get_workflow_run_store() -> WorkflowRunStore:
     global _store
     if _store is None:
-        _store = WorkflowRunStore()
+        # 双后端分发（迁移计划 Batch C）：WORKFLOW_DB_BACKEND=postgres 切 PG 实现
+        if os.getenv("WORKFLOW_DB_BACKEND", "sqlite").strip().lower() == "postgres":
+            from backend.orchestration.workflow.persistence_pg import (
+                PostgresWorkflowRunStore,
+            )
+
+            _store = PostgresWorkflowRunStore()
+        else:
+            _store = WorkflowRunStore()
     return _store

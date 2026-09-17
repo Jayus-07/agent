@@ -411,6 +411,24 @@ class InventoryStore:
                 )
             conn.commit()
 
+    def update_event_case_id(self, event_id: int, case_id: int) -> None:
+        """回填事件的 case_id（CREATE 场景：事件先落库、case 后创建的时序修补）"""
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "UPDATE inventory_alert_events SET case_id = ? WHERE id = ?",
+                (case_id, event_id),
+            )
+            conn.commit()
+
+    def set_case_notified(self, case_id: int, notified_at: str) -> None:
+        """更新 case 的 last_notified_at（UPGRADE/REMIND 通知触达）"""
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "UPDATE inventory_alert_cases SET last_notified_at = ? WHERE id = ?",
+                (notified_at, case_id),
+            )
+            conn.commit()
+
     # ──────────── Events ────────────
 
     def insert_event(self, event: dict) -> int:
@@ -545,8 +563,16 @@ _store: InventoryStore | None = None
 
 
 def get_inventory_store() -> InventoryStore:
-    """获取 InventoryStore 单例（默认 data/inventory_alerts.db）"""
+    """获取 InventoryStore 单例（默认 data/inventory_alerts.db）
+
+    双后端分发（迁移计划 Batch C）：INVENTORY_DB_BACKEND=postgres 切 PG 实现。
+    """
     global _store
     if _store is None:
-        _store = InventoryStore()
+        if os.getenv("INVENTORY_DB_BACKEND", "sqlite").strip().lower() == "postgres":
+            from backend.orchestration.inventory.store_pg import PostgresInventoryStore
+
+            _store = PostgresInventoryStore()
+        else:
+            _store = InventoryStore()
     return _store

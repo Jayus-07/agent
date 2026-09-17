@@ -231,11 +231,7 @@ class InventoryAlert:
                 })
                 # 修正 event 的 case_id
                 if event_id:
-                    store._conn().execute(
-                        "UPDATE inventory_alert_events SET case_id = ? WHERE id = ?",
-                        (case_id, event_id),
-                    )
-                    store._conn().commit()
+                    store.update_event_case_id(event_id, case_id)
             elif decision.action in ("UPGRADE", "REMIND"):
                 if current_case:
                     store.upsert_case({
@@ -246,11 +242,7 @@ class InventoryAlert:
                     })
                     if decision.notify:
                         # 更新 last_notified_at
-                        store._conn().execute(
-                            "UPDATE inventory_alert_cases SET last_notified_at = ? WHERE id = ?",
-                            (now_str, current_case["id"]),
-                        )
-                        store._conn().commit()
+                        store.set_case_notified(current_case["id"], now_str)
             elif decision.action == "RESOLVE":
                 if current_case:
                     is_manual = decision.reason and "人工" in (decision.reason[0] if decision.reason else "")

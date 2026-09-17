@@ -164,8 +164,12 @@ _store: MarketResearchStore | None = None
 
 
 def get_market_research_store() -> MarketResearchStore:
-    """模块级单例。"""
+    """模块级单例（双后端分发：MARKET_RESEARCH_BACKEND=postgres 切 PG 实现）。"""
     global _store
     if _store is None:
-        _store = MarketResearchStore()
+        if os.getenv("MARKET_RESEARCH_BACKEND", "sqlite").strip().lower() == "postgres":
+            from backend.market_research.store_pg import PostgresMarketResearchStore
+            _store = PostgresMarketResearchStore()
+        else:
+            _store = MarketResearchStore()
     return _store

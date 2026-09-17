@@ -46,5 +46,11 @@ $PSQL -d agent_memory -f /docker-migrations/012_obs_trace_store_pg.sql
 $PSQL -d agent_memory -f /docker-migrations/013_obs_analytics_pg.sql
 $PSQL -d agent_memory -f /docker-migrations/014_rag_stores_pg.sql
 
+echo "[init-dbs] 6/6 初始化编排族与业务族 PG 存储（迁移计划 Batch C/D，幂等）..."
+# 库归属：workflow_runs → agent_memory；inventory 4 表 + 业务族 11 表 → agent_business
+$PSQL -d agent_memory -f /docker-migrations/015_workflow_runs_pg.sql
+$PSQL -d agent_business -f /docker-migrations/016_inventory_alerts_pg.sql
+$PSQL -d agent_business -f /docker-migrations/017_business_stores_pg.sql
+
 echo "[init-dbs] 完成。验证只读角色："
 $PSQL -d postgres -c "SELECT rolname, rolcanlogin, rolsuper FROM pg_roles WHERE rolname = 'agent_readonly';"

@@ -1,9 +1,17 @@
-"""feedback 表初始化（2026-08-11 P1 反馈循环）"""
+"""feedback 表初始化（2026-08-11 P1 反馈循环）
+
+双后端分发（迁移计划 Batch D）：FEEDBACK_BACKEND=postgres 时走 backend/feedback/pg.py，
+默认 sqlite（回滚开关）。
+"""
 import os
 import sqlite3
 from pathlib import Path
 
 DB_PATH = os.getenv("FEEDBACK_DB_PATH", "data/feedback.db")
+
+
+def _use_pg() -> bool:
+    return os.getenv("FEEDBACK_BACKEND", "sqlite").strip().lower() == "postgres"
 
 
 def _ensure_dir():
@@ -12,6 +20,10 @@ def _ensure_dir():
 
 def init_db() -> None:
     """创建 feedback 表（幂等）"""
+    if _use_pg():
+        from backend.feedback.pg import init_db as _pg_init_db
+        _pg_init_db()
+        return
     _ensure_dir()
     with sqlite3.connect(DB_PATH) as conn:
         conn.executescript("""
@@ -42,6 +54,12 @@ def add_feedback(
     """写入反馈，返回新 id"""
     if vote not in ("positive", "negative"):
         raise ValueError(f"vote 必须是 positive/negative，得到: {vote}")
+    if _use_pg():
+        from backend.feedback.pg import add_feedback as _pg_add_feedback
+        return _pg_add_feedback(
+            session_id, vote, msg_id=msg_id, question=question,
+            answer_preview=answer_preview, reason=reason,
+        )
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
             """INSERT INTO feedback
@@ -54,6 +72,9 @@ def add_feedback(
 
 def stats(days: int = 7) -> dict:
     """最近 N 天的反馈统计"""
+    if _use_pg():
+        from backend.feedback.pg import stats as _pg_stats
+        return _pg_stats(days)
     with sqlite3.connect(DB_PATH) as conn:
         total = conn.execute(
             "SELECT COUNT(*) FROM feedback WHERE created_at >= datetime('now', ?)",

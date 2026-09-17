@@ -151,10 +151,14 @@ _store: Optional[SelectionStore] = None
 
 
 def get_selection_store() -> SelectionStore:
-    """全局单例"""
+    """全局单例（双后端分发：SELECTION_BACKEND=postgres 切 PG 实现）"""
     global _store
     if _store is None:
-        _store = SelectionStore()
+        if os.getenv("SELECTION_BACKEND", "sqlite").strip().lower() == "postgres":
+            from backend.selection.store_pg import PostgresSelectionStore
+            _store = PostgresSelectionStore()
+        else:
+            _store = SelectionStore()
     return _store
 
 

@@ -92,6 +92,27 @@ CHUNK_STORE_BACKEND = os.getenv("CHUNK_STORE_BACKEND", "sqlite").strip().lower()
 KEYWORD_STORE_BACKEND = os.getenv("KEYWORD_STORE_BACKEND", "sqlite").strip().lower()
 OPLOG_BACKEND = os.getenv("OPLOG_BACKEND", "sqlite").strip().lower()
 
+# === 编排族存储引擎开关（迁移计划 2026-09-17 Batch C）===
+# "sqlite"（默认，回滚开关）| "postgres"
+# 库归属：workflow_runs → agent_memory；inventory_alerts 4 表 → agent_business
+WORKFLOW_DB_BACKEND = os.getenv("WORKFLOW_DB_BACKEND", "sqlite").strip().lower()
+WORKFLOW_DB_PG_CONFIG = _pg_cfg("WORKFLOW_DB_PGDATABASE", "agent_memory")
+INVENTORY_DB_BACKEND = os.getenv("INVENTORY_DB_BACKEND", "sqlite").strip().lower()
+INVENTORY_DB_PG_CONFIG = _pg_cfg("INVENTORY_DB_PGDATABASE", "agent_business")
+
+# === 业务族存储引擎开关（迁移计划 2026-09-17 Batch D，目标库 agent_business）===
+# "sqlite"（默认，回滚开关）| "postgres"；各自 <STORE>_BACKEND 工厂分发
+SELECTION_BACKEND = os.getenv("SELECTION_BACKEND", "sqlite").strip().lower()
+SELECTION_PG_CONFIG = _pg_cfg("SELECTION_PGDATABASE", "agent_business")
+SELECTION_DECISION_BACKEND = os.getenv("SELECTION_DECISION_BACKEND", "sqlite").strip().lower()
+SELECTION_DECISION_PG_CONFIG = _pg_cfg("SELECTION_DECISION_PGDATABASE", "agent_business")
+MARKET_RESEARCH_BACKEND = os.getenv("MARKET_RESEARCH_BACKEND", "sqlite").strip().lower()
+MARKET_RESEARCH_PG_CONFIG = _pg_cfg("MARKET_RESEARCH_PGDATABASE", "agent_business")
+COMPETITOR_BACKEND = os.getenv("COMPETITOR_BACKEND", "sqlite").strip().lower()
+COMPETITOR_PG_CONFIG = _pg_cfg("COMPETITOR_PGDATABASE", "agent_business")
+FEEDBACK_BACKEND = os.getenv("FEEDBACK_BACKEND", "sqlite").strip().lower()
+FEEDBACK_PG_CONFIG = _pg_cfg("FEEDBACK_PGDATABASE", "agent_business")
+
 # === 连接池参数 ===
 DB_POOL_MIN_CONN = int(os.getenv("DB_POOL_MIN_CONN", "2"))
 DB_POOL_MAX_CONN = int(os.getenv("DB_POOL_MAX_CONN", "10"))
