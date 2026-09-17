@@ -228,31 +228,28 @@ async def test_transient_event_skips_persist():
 
 
 async def test_broadcast_is_concurrent():
-    """并发广播：慢客户端并行发送（两个 0.1s 慢连接总耗时 <0.15s，
-    串行逐发需 ≥0.2s），全部送达且死连接被清理。"""
+    """并发广播（确定性判定，不依赖计时）：首个 send 挂起等第二路进入——
+    gather 并发下两路同时开始；若退回串行逐发，第二路永远不会开始，
+    断言 entered==2 必红。"""
     hub = _bare_hub()
-    slow1, slow2 = _FakeWS(), _FakeWS()
-    _orig_send = _FakeWS.send_text
+    gate = asyncio.Event()
+    entered: list[bool] = []
+    sent: list[str] = []
 
-    def _make_slow():
-        async def _send(self, data):
-            await asyncio.sleep(0.1)  # 模拟慢客户端 TCP 背压
-            await _orig_send(self, data)
-        return _send
+    class _GateWS:
+        async def send_text(self, data: str) -> None:
+            entered.append(True)
+            if len(entered) == 1:
+                # 第一路挂起，等第二路也进入 send（只有并发才可能发生）
+                await asyncio.wait_for(gate.wait(), timeout=2.0)
+            sent.append(data)
 
-    slow1.send_text = _make_slow().__get__(slow1)  # type: ignore[method-assign]
-    slow2.send_text = _make_slow().__get__(slow2)  # type: ignore[method-assign]
-    hub._connections.update({slow1, slow2})
+    ws1, ws2 = _GateWS(), _GateWS()
+    hub._connections.update({ws1, ws2})
 
-    import time as _time
-
-    t0 = _time.monotonic()
     hub.publish("message.created", conversation_id="c1")
-    while (len(slow1.sent) == 0 or len(slow2.sent) == 0) and (
-        _time.monotonic() - t0 < 1.0
-    ):
-        await asyncio.sleep(0.01)
-    elapsed = _time.monotonic() - t0
-
-    assert len(slow1.sent) == 1 and len(slow2.sent) == 1
-    assert elapsed < 0.15
+    await asyncio.sleep(0.05)
+    assert len(entered) == 2  # 串行实现：第一路仍阻塞在 gate，entered==1
+    gate.set()
+    await asyncio.sleep(0.05)
+    assert len(sent) == 2
