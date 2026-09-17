@@ -30,9 +30,13 @@ def screen_candidates(candidates: list[dict], category: str,
                             "rule": "min_rating", "value": rating})
             continue
         reviews = c.get("review_count")
-        if reviews is not None and reviews < min_reviews:
+        heat = reviews
+        if heat is None and c.get("sales") is not None:
+            # 榜单数据常有销量没评价数：以销量代热度线（口径披露，不静默）
+            heat = c.get("sales")
+        if heat is not None and heat < min_reviews:
             reasons.append({"url": c.get("url", ""), "title": c.get("title") or "",
-                            "rule": "min_reviews", "value": reviews})
+                            "rule": "min_reviews", "value": heat})
             continue
         price = c.get("price")
         if price is not None and price_min is not None and price < price_min:
@@ -47,7 +51,9 @@ def screen_candidates(candidates: list[dict], category: str,
         warn = []
         if rating is None:
             warn.append("rating 缺失")
-        if reviews is None:
+        if reviews is None and c.get("sales") is not None:
+            warn.append(f"review_count 缺失，热度线按销量 {c.get('sales'):g} 代判")
+        elif reviews is None:
             warn.append("review_count 缺失")
         item["screening"] = {"passed": True, "warnings": warn}
         if warn:

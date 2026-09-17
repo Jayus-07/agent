@@ -76,6 +76,16 @@ def isolated_import_store(tmp_path, monkeypatch):
     return store
 
 
+@pytest.fixture(autouse=True)
+def isolated_market_store(isolated_import_store, monkeypatch):
+    """赛道数据（关键词榜/差评）store 隔离——与导入池同 tmp 库文件。"""
+    import backend.selection_funnel.market_data as md
+    tmp_db = str(isolated_import_store._db_path)
+    store = md.MarketStore(tmp_db)
+    monkeypatch.setattr(md, "get_market_store", lambda: store)
+    return store
+
+
 @pytest.fixture
 def patch_stores(monkeypatch):
     """把漏斗域两个数据源入口都替换为 FakeCompetitorStore 工厂。"""

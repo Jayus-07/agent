@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from backend.selection_funnel.graph_state import STATUS_EMPTY, STATUS_NEED_INFO
+from backend.shared.logger import logger
 
 _STAGE_LABELS = {
     "brief": "需求解析", "pool": "建池", "screen": "指标初筛",
@@ -60,9 +61,49 @@ def _recommend_table(candidates: list[dict]) -> list[str]:
     return lines
 
 
+def _market_lines(category: str) -> list[str]:
+    """赛道画像（关键词榜上传数据）；无数据/不可用 → 空（不渲染段）。"""
+    try:
+        from backend.selection_funnel.market_data import market_snapshot
+        snap = market_snapshot(category)
+    except Exception as e:
+        logger.warning("[FunnelReport] 赛道画像不可用: %s", e)
+        return []
+    if not snap:
+        return []
+    lines = [f"- 关键词共 {snap['total']} 个，按搜索人气 Top 5："]
+    for k in snap["top"][:5]:
+        lines.append(f"  - {k['keyword']}：人气 {_fmt(k.get('search_pop'))}，"
+                     f"竞争度 {_fmt(k.get('competition'))}")
+    if snap.get("opportunities"):
+        lines.append("- 机会词（搜索人气高、竞争度低，优先做标题覆盖）：")
+        lines += [f"  - {k['keyword']}" for k in snap["opportunities"][:3]]
+    return lines
+
+
+def _pain_lines(candidates: list[dict], category: str) -> list[str]:
+    """痛点机会（差评实证上传数据）；无数据/不可用 → 空。"""
+    try:
+        from backend.selection_funnel.market_data import pain_points_for
+        rows = pain_points_for([(c.get("title") or "") for c in candidates], category)
+    except Exception as e:
+        logger.warning("[FunnelReport] 痛点分析不可用: %s", e)
+        return []
+    if not rows:
+        return []
+    lines = ["- 口径：评论按标题包含匹配；星级≤3 或无星级计差评；痛点为规则桶聚类，"
+             "请人工抽评复核"]
+    for r in rows:
+        pains = "、".join(f"{p}({n})" for p, n in r["pains"]) or "（未聚类出高频桶）"
+        lines.append(f"- 「{r['title']}」：差评 {r['negative']}/{r['review_total']} —— 痛点：{pains}")
+    return lines
+
+
 def render_report(brief, stage_logs: list[dict], candidates: list[dict],
-                  notes: list[str], knowledge: list[str] | None = None) -> str:
-    """正常路径报告。knowledge = 知识层合规提示（极限词/平台规则/RAG 片段）。"""
+                  notes: list[str], knowledge: list[str] | None = None,
+                  market: list[str] | None = None,
+                  pains: list[str] | None = None) -> str:
+    """正常路径报告。knowledge = 合规提示；market/pains = 赛道画像 / 痛点机会。"""
     lines = [
         f"## 智能选品漏斗报告（{brief.category}）", "",
         f"需求口径：平台 {brief.platform or '不限'}；"
@@ -82,6 +123,10 @@ def render_report(brief, stage_logs: list[dict], candidates: list[dict],
         lines += ["", "### 淘汰明细", ""] + drop_details
     if knowledge:
         lines += ["", "### 合规与知识层提示", ""] + knowledge
+    if market:
+        lines += ["", "### 赛道画像（关键词榜）", ""] + market
+    if pains:
+        lines += ["", "### 痛点机会（差评实证）", ""] + pains
     if notes:
         lines += ["", "### 数据缺口与说明", ""]
         lines += [f"- {n}" for n in dict.fromkeys(notes)]
@@ -143,6 +188,8 @@ def reporter_node(state: dict) -> dict:
         candidates, brief.platform, brief.category)
     notes = list(state.get("notes") or []) + knotes
     answer = render_report(brief, list(state.get("stage_logs") or []),
-                           candidates, notes, knowledge=knowledge)
+                           candidates, notes, knowledge=knowledge,
+                           market=_market_lines(brief.category),
+                           pains=_pain_lines(candidates, brief.category))
     return {"final_answer": answer, "status": "ok",
             "finished": True}
