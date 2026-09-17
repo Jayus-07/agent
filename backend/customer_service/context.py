@@ -104,26 +104,9 @@ def merge_cs_context(
     return CSContext(**merged)
 
 
-def build_reporter_snapshot(state: dict) -> CSContext:
-    """从 CSGraphState 构建 Reporter 输出的 cs_context 快照
-
-    CS Reporter 在组装最终响应后调用，将关键执行态字段
-    打包为 cs_context 供 Main Graph 读取。
-    """
-    return CSContext(
-        conversation_id=state.get("conversation_id", ""),
-        handoff_state=state.get("handoff_state", ""),
-        confirmation_state=state.get("confirmation_state", ""),
-        cs_route=state.get("cs_route", {}),
-        expert_history=state.get("expert_history", []),
-        supervisor_decision=state.get("supervisor_decision", {}),
-    )
-
-
 __all__ = [
     "CSContext",
     "build_cs_context",
     "copy_cs_context",
     "merge_cs_context",
-    "build_reporter_snapshot",
 ]

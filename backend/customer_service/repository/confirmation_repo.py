@@ -147,6 +147,36 @@ class ConfirmationRepository:
         )
         return bool(result.scalar())
 
+    async def expire_stale(self) -> list[dict]:
+        """全局扫描：pending 且已过 expires_at 的确认 → expired（P2.4）。
+
+        原子条件 UPDATE（幂等闸门同 claim_pending 模式）：并发扫描/确认
+        只有一方生效；用户确认与过期竞争时 state 条件保证二者互斥。
+        返回被过期确认的 {confirmation_id, user_id, conversation_id} 列表。
+        """
+        result = await self._s.execute(
+            update(CSConfirmation)
+            .where(
+                CSConfirmation.state == "pending",
+                CSConfirmation.expires_at <= datetime.now(timezone.utc),
+            )
+            .values(state="expired")
+            .returning(
+                CSConfirmation.confirmation_id,
+                CSConfirmation.user_id,
+                CSConfirmation.conversation_id,
+            )
+        )
+        await self._s.flush()
+        return [
+            {
+                "confirmation_id": r.confirmation_id,
+                "user_id": r.user_id,
+                "conversation_id": r.conversation_id,
+            }
+            for r in result.all()
+        ]
+
 
 def _parse_dt(value: str | datetime | None) -> datetime:
     if value is None:

@@ -21,6 +21,7 @@ celery_app = Celery(
     backend=CELERY_RESULT_BACKEND,
     include=["backend.tasks.agent_tasks",     # Worker 启动自动注册任务模块
              "backend.tasks.index_tasks",     # 阶段4：RAG 上传索引队列化任务
+             "backend.tasks.cs_maintenance_tasks",  # P2.4：客服全局维护（beat）
              "backend.tasks.signals"],        # 运行时埋点（worker/queue/耗时/异常）
 )
 
@@ -54,4 +55,17 @@ celery_app.conf.update(
     task_default_queue="agent",
     task_routes={"tasks.execute_agent": {"queue": "agent"},
                  "tasks.execute_index": {"queue": "rag_index"}},
+
+    # ── Beat 周期任务（P2.4：客服全局维护，60s 兜底扫描）──
+    # 幂等（原子条件 UPDATE）：重复调度/多实例并发安全，无需去重键
+    beat_schedule={
+        "cs-handoff-timeout-scan": {
+            "task": "cs.handoff_timeout_scan",
+            "schedule": 60.0,
+        },
+        "cs-confirmation-expiry-scan": {
+            "task": "cs.confirmation_expiry_scan",
+            "schedule": 60.0,
+        },
+    },
 )

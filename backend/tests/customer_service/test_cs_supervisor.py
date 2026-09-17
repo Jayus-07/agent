@@ -127,15 +127,46 @@ class TestLayer1Rules:
         assert d["is_finished"] is True
 
     @patch("backend.config.customer_service.CS_CONFIDENCE_CAUTIOUS", 0.60)
-    def test_confidence_fallback_no_history(self):
+    def test_low_confidence_knowledge_passthrough(self):
+        """P2.1（audit #156）：低置信但意图为知识类（低风险无权限）→ 放行检索。
+
+        旧行为直接 finish —— 知识库明明可答却拿泛化兜底（标尺错位误拒）。
+        """
         s = _state(cs_route={
             "domain": "KNOWLEDGE",
             "route_path": "knowledge_query",
             "confidence": 0.30,
         })
         d = make_supervisor_decision(s)
+        assert d["next_action"] == ExpertAction.RUN_EXPERT.value
+        assert d["next_expert"] == "knowledge"
+        assert d["decision_layer"] == 1
+        assert "放行知识检索" in d["reason"]
+
+    @patch("backend.config.customer_service.CS_CONFIDENCE_CAUTIOUS", 0.60)
+    def test_confidence_fallback_no_history_action_blocked(self):
+        """低置信 + 非知识类（动作/高权限）→ 维持降级兜底。"""
+        s = _state(cs_route={
+            "domain": "AFTER_SALES",
+            "route_path": "business_action",
+            "confidence": 0.30,
+        })
+        d = make_supervisor_decision(s)
         assert d["next_action"] == ExpertAction.FINISH.value
         assert d["decision_layer"] == 1
+        assert d["is_finished"] is True
+
+    @patch("backend.config.customer_service.CS_CONFIDENCE_CAUTIOUS", 0.60)
+    def test_confidence_fallback_no_history_auth_required_blocked(self):
+        """低置信 + 知识类但 requires_auth=True → 维持降级兜底。"""
+        s = _state(cs_route={
+            "domain": "KNOWLEDGE",
+            "route_path": "knowledge_query",
+            "confidence": 0.30,
+            "requires_auth": True,
+        })
+        d = make_supervisor_decision(s)
+        assert d["next_action"] == ExpertAction.FINISH.value
         assert d["is_finished"] is True
 
 
@@ -200,7 +231,11 @@ class TestDefaultRouting:
 class TestLayer3LLM:
     @patch("backend.config.customer_service.CS_SUPERVISOR_LLM_ENABLED", False)
     @patch("backend.config.customer_service.CS_CONFIDENCE_CAUTIOUS", 0.60)
-    def test_llm_disabled_falls_through(self):
+    def test_llm_disabled_same_expert_just_ran_finishes(self):
+        """P2.1 跟进：低置信 + LLM 不可用 + 同 expert 刚执行 → 直接收尾。
+
+        旧行为盲目重派同一 expert（重跑浪费，靠 2b 重复检测第 3 次才拦）。
+        """
         s = _state(
             cs_route={
                 "domain": "KNOWLEDGE",
@@ -210,8 +245,28 @@ class TestLayer3LLM:
             expert_history=[{"expert": "knowledge", "status": "success"}],
         )
         d = make_supervisor_decision(s)
-        assert d["next_action"] == ExpertAction.RUN_EXPERT.value
+        assert d["next_action"] == ExpertAction.FINISH.value
         assert d["decision_layer"] == 3
+        assert d["is_finished"] is True
+        assert "防止重复" in d["reason"]
+
+    @patch("backend.config.customer_service.CS_SUPERVISOR_LLM_ENABLED", False)
+    @patch("backend.config.customer_service.CS_CONFIDENCE_CAUTIOUS", 0.60)
+    def test_llm_disabled_different_expert_falls_through(self):
+        """低置信 + LLM 不可用 + 目标 expert 与历史不同 → 降级放行（layer=3）。"""
+        s = _state(
+            cs_route={
+                "domain": "TRANSACTION",
+                "route_path": "business_query",
+                "confidence": 0.40,
+            },
+            expert_history=[{"expert": "knowledge", "status": "success"}],
+        )
+        d = make_supervisor_decision(s)
+        assert d["next_action"] == ExpertAction.RUN_EXPERT.value
+        assert d["next_expert"] == "query"
+        assert d["decision_layer"] == 3
+        assert "LLM 决策不可用" in d["reason"]
 
 
 class TestCSupervisorNodeCommandRouting:

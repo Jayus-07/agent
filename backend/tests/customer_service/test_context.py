@@ -1,11 +1,12 @@
 """test_context.py — CSContext 类型层测试
 
-Phase 1: 测试 CSContext TypedDict 的 4 个辅助函数。
+Phase 1: 测试 CSContext TypedDict 的辅助函数。
+（build_reporter_snapshot 已随 P2.2 死代码清理删除——reporter._build_cs_context_snapshot
+为唯一快照实现，audit #145）
 """
 from backend.customer_service.context import (
     CSContext,
     build_cs_context,
-    build_reporter_snapshot,
     copy_cs_context,
     merge_cs_context,
 )
@@ -160,50 +161,6 @@ class TestMergeCsContext:
         assert merged["conversation_id"] == "conv-new"
         assert merged["handoff_state"] == "ai_active"
         assert merged["confirmation_state"] == "not_required"
-
-
-class TestBuildReporterSnapshot:
-    """build_reporter_snapshot() — Reporter 输出快照"""
-
-    def test_snapshot_from_state(self):
-        """从 CSGraphState 构建快照"""
-        state = {
-            "conversation_id": "conv-001",
-            "handoff_state": "handoff_requested",
-            "confirmation_state": "pending",
-            "cs_route": {"intent": "as_refund"},
-            "expert_history": [{"expert": "action", "status": "success"}],
-            "supervisor_decision": {"action": "route", "target": "cs_action_expert"},
-        }
-        snapshot = build_reporter_snapshot(state)
-        assert snapshot["conversation_id"] == "conv-001"
-        assert snapshot["handoff_state"] == "handoff_requested"
-        assert snapshot["confirmation_state"] == "pending"
-        assert snapshot["cs_route"]["intent"] == "as_refund"
-        assert len(snapshot["expert_history"]) == 1
-        assert snapshot["supervisor_decision"]["action"] == "route"
-
-    def test_snapshot_empty_state(self):
-        """空 state 返回默认值"""
-        snapshot = build_reporter_snapshot({})
-        assert snapshot["conversation_id"] == ""
-        assert snapshot["handoff_state"] == ""
-        assert snapshot["confirmation_state"] == ""
-        assert snapshot["cs_route"] == {}
-        assert snapshot["expert_history"] == []
-        assert snapshot["supervisor_decision"] == {}
-
-    def test_snapshot_partial_state(self):
-        """部分 state 只填充有值字段"""
-        state = {
-            "conversation_id": "conv-002",
-            "handoff_state": "ai_active",
-        }
-        snapshot = build_reporter_snapshot(state)
-        assert snapshot["conversation_id"] == "conv-002"
-        assert snapshot["handoff_state"] == "ai_active"
-        assert snapshot["confirmation_state"] == ""
-        assert snapshot["cs_route"] == {}
 
 
 class TestCSContextType:

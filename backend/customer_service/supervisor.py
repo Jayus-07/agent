@@ -51,22 +51,13 @@ class CSSupervisorDecision(TypedDict, total=False):
     context_updates: dict
 
 
-_ROUTE_PATH_TO_EXPERT: dict[str, str] = {
-    "knowledge_query": ExpertType.KNOWLEDGE.value,
-    "business_query": ExpertType.QUERY.value,
-    "business_action": ExpertType.ACTION.value,
-    "complaint_flow": ExpertType.COMPLAINT.value,
-    "human_handoff": ExpertType.HANDOFF.value,
-}
-
-_DOMAIN_TO_EXPERT: dict[str, str] = {
-    "KNOWLEDGE": ExpertType.KNOWLEDGE.value,
-    "TRANSACTION": ExpertType.QUERY.value,
-    "AFTER_SALES": ExpertType.ACTION.value,
-    "ACCOUNT": ExpertType.ACTION.value,
-    "COMPLAINT": ExpertType.COMPLAINT.value,
-    "HUMAN": ExpertType.HANDOFF.value,
-}
+# P2.2：route_path / domain → expert 映射统一到 graph_state 单一事实源
+# （此前本文件、cs_prefilter、run_supervisor_node 各自硬编码，存在漂移风险）
+from backend.customer_service.graph_state import (
+    DOMAIN_TO_EXPERT_NAME as _DOMAIN_TO_EXPERT,
+    EXPERT_NAME_TO_NODE as _EXPERT_NAME_TO_NODE,
+    ROUTE_PATH_TO_EXPERT_NAME as _ROUTE_PATH_TO_EXPERT,
+)
 
 
 def _make_decision(
@@ -177,6 +168,27 @@ def make_supervisor_decision(state: dict[str, Any]) -> CSSupervisorDecision:
 
     # ── Layer 1c: confidence 降级 ──
     if confidence < CS_CONFIDENCE_CAUTIOUS and not expert_history:
+        # P2.1（audit #156）：低置信但意图明确的知识类请求放行检索——
+        # 知识库命中自带相关性校验，比泛化兜底回复更可用；
+        # 高权限（requires_auth）或非知识类维持拦截（低置信执行动作危险）。
+        expert = _resolve_expert(cs_route)
+        requires_auth = bool(cs_route.get("requires_auth"))
+        risk_level = str(cs_route.get("risk_level", "low"))
+        if (
+            expert == ExpertType.KNOWLEDGE.value
+            and not requires_auth
+            and risk_level == "low"
+        ):
+            decision = _make_decision(
+                ExpertAction.RUN_EXPERT, ExpertType.KNOWLEDGE, layer=1,
+                reason=(
+                    f"低置信度 ({confidence:.2f} < {CS_CONFIDENCE_CAUTIOUS}) "
+                    "但意图为知识类（低风险无权限）— 放行知识检索兜底"
+                ),
+            )
+            _record_decision(decision)
+            return decision
+
         decision = _make_decision(
             ExpertAction.FINISH, None, layer=1,
             reason=f"低置信度 ({confidence:.2f} < {CS_CONFIDENCE_CAUTIOUS}) 且无历史 — 降级兜底",
@@ -194,11 +206,36 @@ def make_supervisor_decision(state: dict[str, Any]) -> CSSupervisorDecision:
 
     # ── 默认: route_path → expert ──
     expert = _resolve_expert(cs_route)
+
+    # P2.1 跟进：低置信场景下 LLM 决策不可用时，不重复派发刚执行过的同一
+    # expert（回答已产出，重跑纯浪费；Layer 2b 重复检测要到第 3 次派发才拦）
+    if (
+        confidence < CS_CONFIDENCE_CAUTIOUS
+        and expert_history
+        and expert_history[-1].get("expert") == expert
+    ):
+        decision = _make_decision(
+            ExpertAction.FINISH, None, layer=3,
+            reason=(
+                f"低置信度 ({confidence:.2f}) 且 LLM 决策不可用 — "
+                f"{expert} 刚已执行，直接收尾防止重复"
+            ),
+            is_finished=True,
+        )
+        _record_decision(decision)
+        return decision
+    # P2.1（audit #197）：decision_layer 如实标注——低置信落到这里的唯一情形
+    # 是 Layer 3 LLM 决策不可用后的规则降级（此时确无 LLM 参与），注明之；
+    # 此前无差别标 layer=3 造成标注失真。
+    if confidence >= CS_CONFIDENCE_CAUTIOUS:
+        layer, layer_note = 1, ""
+    else:
+        layer, layer_note = 3, "（LLM 决策不可用，规则降级放行）"
     decision = _make_decision(
         ExpertAction.RUN_EXPERT,
         ExpertType(expert),
-        layer=1 if confidence >= CS_CONFIDENCE_CAUTIOUS else 3,
-        reason=f"route → expert={expert} (confidence={confidence:.2f})",
+        layer=layer,
+        reason=f"route → expert={expert} (confidence={confidence:.2f}){layer_note}",
     )
     _record_decision(decision)
     return decision
@@ -384,14 +421,8 @@ def cs_supervisor_node(state: dict[str, Any]) -> Command:
     elif action == ExpertAction.HANDOFF.value:
         target = CS_HANDOFF_EXPERT
     else:
-        _expert_to_node = {
-            ExpertType.KNOWLEDGE.value: CS_KNOWLEDGE_EXPERT,
-            ExpertType.QUERY.value: CS_QUERY_EXPERT,
-            ExpertType.ACTION.value: CS_ACTION_EXPERT,
-            ExpertType.COMPLAINT.value: CS_COMPLAINT_EXPERT,
-            ExpertType.HANDOFF.value: CS_HANDOFF_EXPERT,
-        }
-        target = _expert_to_node.get(expert, CS_KNOWLEDGE_EXPERT)
+        # P2.2：expert 语义名 → 节点名改查 graph_state 权威表
+        target = _EXPERT_NAME_TO_NODE.get(expert, CS_KNOWLEDGE_EXPERT)
 
     logger.info(
         "[CS Supervisor] action=%s expert=%s layer=%d reason=%s → %s",

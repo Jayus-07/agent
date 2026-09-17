@@ -185,8 +185,11 @@ class TestCSGraphCompiles:
         assert result["expert_history"][0]["expert"] == "knowledge"
 
     @patch("backend.customer_service.graph_builder.get_state_transition_service")
-    def test_low_confidence_skips_expert(self, mock_sts):
-        """低置信度: supervisor 直接 → reporter，不经过 expert"""
+    def test_low_confidence_knowledge_enters_expert(self, mock_sts):
+        """P2.1（audit #156）：低置信但知识类（低风险无权限）→ 放行 knowledge expert。
+
+        旧行为直接 finish（标尺错位误拒），知识库明明可答却拿泛化兜底。
+        """
         mock_sts.return_value.load_snapshot.return_value = {
             "conversation_status": "open",
             "handling_mode": "ai",
@@ -206,6 +209,52 @@ class TestCSGraphCompiles:
             "cs_route": {
                 "domain": "KNOWLEDGE",
                 "route_path": "knowledge_query",
+                "intent": "unknown",
+                "confidence": 0.20,
+            },
+            "supervisor_decision": {},
+            "expert_history": [],
+            "last_expert_result": {},
+            "current_expert": "",
+            "expert_loop_count": 0,
+            "conversation_status": "",
+            "handling_mode": "",
+            "handoff_state": "",
+            "confirmation_state": "",
+            "pending_action": None,
+            "final_answer": "",
+            "cs_context": {},
+            "cs_audit_entries": [],
+            "cs_action_result": {},
+        }
+
+        result = graph.invoke(cs_input)
+
+        assert result["final_answer"]
+        assert [h["expert"] for h in result["expert_history"]] == ["knowledge"]
+
+    @patch("backend.customer_service.graph_builder.get_state_transition_service")
+    def test_low_confidence_action_skips_expert(self, mock_sts):
+        """低置信 + 动作类（非知识、有风险）→ supervisor 直接 → reporter。"""
+        mock_sts.return_value.load_snapshot.return_value = {
+            "conversation_status": "open",
+            "handling_mode": "ai",
+            "handoff_state": "ai_active",
+            "confirmation_state": "not_required",
+            "pending_action": None,
+        }
+
+        from backend.customer_service.graph_builder import build_cs_graph
+        graph = build_cs_graph()
+
+        cs_input = {
+            "user_message": "ambiguous",
+            "user_id": "u1",
+            "session_id": "s1",
+            "conversation_id": "c1",
+            "cs_route": {
+                "domain": "AFTER_SALES",
+                "route_path": "business_action",
                 "intent": "unknown",
                 "confidence": 0.20,
             },

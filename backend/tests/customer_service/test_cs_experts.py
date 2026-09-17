@@ -53,6 +53,38 @@ class TestRunExpertSafely:
         result = run_expert_safely("action", fn, {})
         assert result["status"] == "success"
 
+    def test_timeout_returns_timeout_status(self):
+        """P2.3：超时 → status=timeout（线程级限时，fn 慢于 timeout_s）。"""
+        import time as _time
+
+        def slow_fn(state):
+            _time.sleep(1.5)
+            return {"response_draft": "never"}
+
+        result = run_expert_safely("knowledge", slow_fn, {}, timeout_s=0.2)
+        assert result["expert"] == "knowledge"
+        assert result["status"] == "timeout"
+        assert "timed out" in result["error"]
+        assert result["duration_ms"] >= 0
+
+    def test_timeout_not_triggered_when_fast(self):
+        """P2.3：快于 timeout_s 正常返回 success。"""
+        def fast_fn(state):
+            return {"response_draft": "quick"}
+
+        result = run_expert_safely("knowledge", fast_fn, {}, timeout_s=10)
+        assert result["status"] == "success"
+        assert result["response_draft"] == "quick"
+
+    def test_timeout_exception_inside_maps_to_failed(self):
+        """P2.3：限时窗口内 fn 自身异常 → 仍判 failed（非 timeout）。"""
+        def bad_fn(state):
+            raise ValueError("inner boom")
+
+        result = run_expert_safely("action", bad_fn, {}, timeout_s=5)
+        assert result["status"] == "failed"
+        assert "inner boom" in result["error"]
+
     @patch("backend.observability.metrics.record_cs_expert_result")
     def test_metrics_called_on_success(self, mock_record):
         def fn(state):

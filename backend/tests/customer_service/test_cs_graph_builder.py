@@ -83,7 +83,11 @@ class TestBuildCSGraph:
     @patch(
         "backend.customer_service.graph_builder.get_state_transition_service"
     )
-    def test_low_confidence_finishes_without_expert(self, mock_sts):
+    def test_low_confidence_knowledge_enters_expert(self, mock_sts):
+        """P2.1（audit #156）：低置信但知识类（低风险无权限）→ 放行 knowledge。
+
+        旧行为直接 finish（标尺错位误拒），知识库明明可答却拿泛化兜底。
+        """
         mock_sts.return_value.load_snapshot.return_value = {
             "conversation_status": "open",
             "handling_mode": "ai",
@@ -124,4 +128,4 @@ class TestBuildCSGraph:
         result = graph.invoke(cs_input)
 
         assert result["final_answer"]
-        assert result["expert_history"] == []
+        assert [h["expert"] for h in result["expert_history"]] == ["knowledge"]

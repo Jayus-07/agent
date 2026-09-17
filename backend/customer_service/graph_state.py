@@ -23,17 +23,54 @@ CS_ACTION_EXPERT = "cs_action_expert"
 CS_COMPLAINT_EXPERT = "cs_complaint_expert"
 CS_HANDOFF_EXPERT = "cs_handoff_expert"
 
-# Router 预过滤产物 cs_target → CS Graph expert 节点名
-# 单一事实源：cs_prefilter / cs_graph_node / evaluation runner 共用，
-# 路由一致率（tags.cs_target ↔ tags.cs_expert_final）按此映射判定。
-CS_TARGET_TO_EXPERT = {
-    "cs_knowledge": CS_KNOWLEDGE_EXPERT,
-    "cs_business_query": CS_QUERY_EXPERT,
-    "cs_business_action": CS_ACTION_EXPERT,
-    "cs_complaint": CS_COMPLAINT_EXPERT,
-    "cs_handoff": CS_HANDOFF_EXPERT,
-    "cs_pending": CS_PENDING_HANDLER,
+# ============================================================
+# 路由映射 — 单一事实源（P2.2 映射统一，此前 4 处独立硬编码存在漂移风险）
+# ============================================================
+# 权威表仅两张：ROUTE_PATH_TO_EXPERT_NAME（route_path → expert 语义名）与
+# EXPERT_NAME_TO_NODE（expert 语义名 → 图节点名）。其余表全部由此派生：
+#   - ROUTE_PATH_TO_CS_TARGET / CS_TARGET_TO_EXPERT：兼容视图
+#     （cs_target 是 prefilter 的历史 trace 标识，评测与质量报告按其判定路由一致率）
+#   - DOMAIN_TO_EXPERT_NAME：domain 兜底映射（cs_route.route_path 缺失时用）
+
+ROUTE_PATH_TO_EXPERT_NAME = {
+    "knowledge_query": "knowledge",
+    "business_query": "query",
+    "business_action": "action",
+    "complaint_flow": "complaint",
+    "human_handoff": "handoff",
 }
+
+EXPERT_NAME_TO_NODE = {
+    "knowledge": CS_KNOWLEDGE_EXPERT,
+    "query": CS_QUERY_EXPERT,
+    "action": CS_ACTION_EXPERT,
+    "complaint": CS_COMPLAINT_EXPERT,
+    "handoff": CS_HANDOFF_EXPERT,
+}
+
+DOMAIN_TO_EXPERT_NAME = {
+    "KNOWLEDGE": "knowledge",
+    "TRANSACTION": "query",
+    "AFTER_SALES": "action",
+    "ACCOUNT": "action",
+    "COMPLAINT": "complaint",
+    "HUMAN": "handoff",
+}
+
+ROUTE_PATH_TO_CS_TARGET = {
+    "knowledge_query": "cs_knowledge",
+    "business_query": "cs_business_query",
+    "business_action": "cs_business_action",
+    "complaint_flow": "cs_complaint",
+    "human_handoff": "cs_handoff",
+}
+
+CS_TARGET_TO_EXPERT = {
+    ROUTE_PATH_TO_CS_TARGET[rp]: EXPERT_NAME_TO_NODE[expert_name]
+    for rp, expert_name in ROUTE_PATH_TO_EXPERT_NAME.items()
+}
+# "cs_pending"（确认拦截）不在 route_path 体系内，单独补映射
+CS_TARGET_TO_EXPERT["cs_pending"] = CS_PENDING_HANDLER
 
 
 class CSGraphState(TypedDict, total=False):

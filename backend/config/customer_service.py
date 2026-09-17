@@ -97,47 +97,30 @@ COMPLAINT_PATTERNS = [
 ]
 
 # =============================================
-# 客服域意图关键词（粗分类用）
+# 客服域规则 — 单一配置块（P2.2 映射统一：两套词表成对维护）
 # =============================================
-CS_DOMAIN_KEYWORDS = {
-    "KNOWLEDGE": [
-        "怎么", "如何", "什么是", "请问", "告诉我", "介绍",
-        "说明", "解释", "有没有", "能不能",
-    ],
-    "TRANSACTION": [
-        "订单", "物流", "快递", "发货", "收货", "签收",
-        " tracking", "配送", "运输",
-    ],
-    "AFTER_SALES": [
-        "退款", "退货", "换货", "退换", "售后", "维修",
-        "保修", "质量问题", "破损",
-    ],
-    "ACCOUNT": [
-        "账户", "账号", "密码", "登录", "注册", "修改信息",
-        "地址", "收货地址",
-    ],
-    "COMPLAINT": [
-        "投诉", "举报", "不满意", "差评", "态度差",
-    ],
-    "HUMAN": [
-        "人工", "客服", "真人", "转接", "经理", "主管",
-    ],
-}
-
-# =============================================
-# 客服域检测正则（Domain Detector 规则通道）
-# =============================================
-CS_DOMAIN_PATTERNS: dict[str, list] = {
-    "KNOWLEDGE": [
-        re.compile(p) for p in [
+# 每域同时定义 keywords（字面计数 → coarse_router 规则通道）与
+# patterns（语序正则 → domain_detector 的 is_cs 判定 + 域 hint）。
+# 两层语义不同但词表必须成对维护，防止各自漂移（audit P2-22）。
+_CS_DOMAIN_RULES = {
+    "KNOWLEDGE": {
+        "keywords": [
+            "怎么", "如何", "什么是", "请问", "告诉我", "介绍",
+            "说明", "解释", "有没有", "能不能",
+        ],
+        "patterns": [
             r"怎么(办|样|弄|退|换|修)", r"如何(操|退|换|查)",
             r"什么(是|时候|原因|条件)", r"请问", r"告[诉我]",
             r"介绍(一下)?", r"解释(一下)?", r"有没有",
             r"能不能", r"可以吗", r"是否",
-        ]
-    ],
-    "TRANSACTION": [
-        re.compile(p) for p in [
+        ],
+    },
+    "TRANSACTION": {
+        "keywords": [
+            "订单", "物流", "快递", "发货", "收货", "签收",
+            "tracking", "配送", "运输",
+        ],
+        "patterns": [
             r"(查|看|跟).*(订单|物流|快递|发货|收货|签收)",
             r"(订单|物流|快递).*(状态|进度|到哪|在哪)",
             r"(发货|收货|签收).*(了没|没有|了吗)",
@@ -147,55 +130,70 @@ CS_DOMAIN_PATTERNS: dict[str, list] = {
             r"(一直没|迟迟没|迟迟不|还没|还没有)(发货|到货|送到|收到|更新|动静)",
             r"没(发货|到货|动静)",
             r"配送", r"运输", r"tracking",
-        ]
-    ],
-    "AFTER_SALES": [
-        re.compile(p) for p in [
+        ],
+    },
+    "AFTER_SALES": {
+        "keywords": [
+            "退款", "退货", "换货", "退换", "售后", "维修",
+            "保修", "质量问题", "破损",
+        ],
+        "patterns": [
             r"(退|换|修).*(款|货|一下|怎么)",
             r"售后", r"(质量|产品).*(问题|坏了|坏了|破损)",
             r"保修", r"维修", r"不好用", r"坏了",
-        ]
-    ],
-    "ACCOUNT": [
-        re.compile(p) for p in [
+        ],
+    },
+    "ACCOUNT": {
+        "keywords": [
+            "账户", "账号", "密码", "登录", "注册", "修改信息",
+            "地址", "收货地址",
+        ],
+        "patterns": [
             r"(修改|更改|换).*(密码|地址|手机|邮箱)",
             r"(登录|注册).*(不了|不上|失败|问题)",
             r"账户.*问题", r"账号.*异常",
-        ]
-    ],
-    "COMPLAINT": [
-        re.compile(p) for p in [
+        ],
+    },
+    "COMPLAINT": {
+        "keywords": ["投诉", "举报", "不满意", "差评", "态度差"],
+        "patterns": [
             r"投诉", r"举报", r"(态度|服务).*(差|烂|垃圾)",
             r"不满意", r"要.*说法", r"找.*领导",
             r"12315", r"消协", r"差评", r"曝光", r"维权",
-        ]
-    ],
-    "HUMAN": [
-        re.compile(p) for p in [
+        ],
+    },
+    "HUMAN": {
+        "keywords": ["人工", "客服", "真人", "转接", "经理", "主管"],
+        "patterns": [
             r"(转|找).*(人工|客服|真人|经理)", r"人工服务",
             r"不要机器人", r"你是.*机器人.*吗",
-        ]
-    ],
+        ],
+    },
+}
+
+# 下游消费方常量（名字保持不变）：coarse_router 用 KEYWORDS，domain_detector 用 PATTERNS
+CS_DOMAIN_KEYWORDS = {
+    domain: rules["keywords"] for domain, rules in _CS_DOMAIN_RULES.items()
+}
+CS_DOMAIN_PATTERNS: dict[str, list] = {
+    domain: [re.compile(p) for p in rules["patterns"]]
+    for domain, rules in _CS_DOMAIN_RULES.items()
 }
 
 # =============================================
-# 客服 Router 阈值（env 可覆盖：容器云端 embedding 与种子调参时的本地 BGE
-# 分数分布不同，固定值易漏判；默认对齐 coarse_router 的 0.60 采纳线）
+# 客服 Router 阈值
+# （2026-09-17 删除向量通道及其阈值 CS_VECTOR_THRESHOLD/CS_VECTOR_DECIDE
+#   与索引目录 CS_ROUTER_INDEX_DIR；域检测为纯规则判定。若进线率异常，
+#   调低 CS_RULE_MIN_HITS 或扩充 CS_DOMAIN_PATTERNS。）
 # =============================================
-CS_VECTOR_THRESHOLD = float(os.getenv("CS_VECTOR_THRESHOLD", "0.60"))
-# 向量强匹配单独决定线：域检测原本要求 rule≥2 且 vec≥0.70 同时成立，导致
-# "申请退款"(vec=0.94, rule=1hit) 这类明显客服问法被漏判，客服链路几乎无法触发。
-# 2026-09-17 实测再下调 0.85 → 0.68：云端 embedding 下短问句分数系统性偏低——
-# "物流到哪了"=0.794/"查下我的订单"=0.789/"退货地址是什么"=0.751 全部漏判；
-# 而非客服句实测最高 0.576（"帮我订个餐厅"），真客服最低 0.751，0.68 居中
-# （下方 margin 0.10+，上方 margin 0.07+）。
-CS_VECTOR_DECIDE = float(os.getenv("CS_VECTOR_DECIDE", "0.68"))
 CS_RULE_MIN_HITS = int(os.getenv("CS_RULE_MIN_HITS", "2"))
 CS_CONFIDENCE_ANSWER = 0.85
 CS_CONFIDENCE_CAUTIOUS = 0.60
-CS_ROUTER_INDEX_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "data", "cs_router_index"
-)
+
+# 专家显式超时（P2.3）：knowledge（RAG 检索+LLM 生成实测 1~30s）、
+# action（DB 写+状态机）节点级限时；0/负值 = 不限时。query expert 内部
+# 已有自己的 RAG ask 线程级超时，不经此参数。
+CS_EXPERT_TIMEOUT_S = float(os.getenv("CS_EXPERT_TIMEOUT_S", "60"))
 
 # =============================================
 # 独立 CS Graph（Phase 0 新增）

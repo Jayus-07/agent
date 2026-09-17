@@ -85,6 +85,7 @@ def knowledge_expert_node(state: dict[str, Any]) -> dict[str, Any]:
     从 CSGraphState 读取输入，调用 execute_knowledge，
     将结果写入 last_expert_result + expert_history。
     """
+    from backend.config.customer_service import CS_EXPERT_TIMEOUT_S
     from backend.customer_service.experts.base import run_expert_safely
 
     user_message = state.get("user_message", "")
@@ -95,6 +96,7 @@ def knowledge_expert_node(state: dict[str, Any]) -> dict[str, Any]:
         expert_name="knowledge",
         fn=lambda _state: execute_knowledge(user_message, cs_route, session_id),
         state=state,
+        timeout_s=CS_EXPERT_TIMEOUT_S,
     )
 
     expert_history = list(state.get("expert_history", []))

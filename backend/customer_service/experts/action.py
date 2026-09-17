@@ -78,6 +78,7 @@ def execute_action(
 
 def action_expert_node(state: dict[str, Any]) -> dict[str, Any]:
     """CS Graph ActionExpert 节点函数。"""
+    from backend.config.customer_service import CS_EXPERT_TIMEOUT_S
     from backend.customer_service.experts.base import run_expert_safely
 
     user_message = state.get("user_message", "")
@@ -87,6 +88,7 @@ def action_expert_node(state: dict[str, Any]) -> dict[str, Any]:
         expert_name="action",
         fn=lambda _state: execute_action(user_message, cs_route, state),
         state=state,
+        timeout_s=CS_EXPERT_TIMEOUT_S,
     )
 
     expert_history = list(state.get("expert_history", []))

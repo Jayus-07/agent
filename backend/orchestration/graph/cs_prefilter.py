@@ -81,18 +81,10 @@ def try_cs_prefilter(query: str, state: dict) -> dict | None:
 
     route_path = cs_result.route_path.value
 
-    if route_path == "knowledge_query":
-        cs_target = "cs_knowledge"
-    elif route_path == "business_query":
-        cs_target = "cs_business_query"
-    elif route_path == "business_action":
-        cs_target = "cs_business_action"
-    elif route_path == "complaint_flow":
-        cs_target = "cs_complaint"
-    elif route_path == "human_handoff":
-        cs_target = "cs_handoff"
-    else:
-        cs_target = "cs_pending"
+    # P2.2：route_path → cs_target 改查 graph_state 单一事实源（此前 if/elif
+    # 与 supervisor/graph_state 的映射各自硬编码，新增 route_path 需改 4 处）
+    from backend.customer_service.graph_state import ROUTE_PATH_TO_CS_TARGET
+    cs_target = ROUTE_PATH_TO_CS_TARGET.get(route_path, "cs_pending")
 
     logger.info(
         f"[CsPrefilter] CS 域命中: domain={cs_result.domain.value} "
