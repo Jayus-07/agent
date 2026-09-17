@@ -12,7 +12,7 @@
  * （ChatHeader onOpenCS → components/cs/CSDrawer.tsx 滑出抽屉），不设独立导航路由；
  * 坐席工作台 /cs/handoff 仅在管理端 frontend-admin。
  */
-import { Brain, FileText } from 'lucide-react'
+import { Bell, Brain, FileText } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 export interface NavItem {
@@ -39,5 +39,10 @@ export const NAV: NavEntry[] = [
   },
   {
     icon: <FileText size={18} />, label: '报告中心', path: '/reports',
+  },
+  {
+    // 2026-09-17 UX P1（X7）：ADR-001 判归 workspace 的「我的告警」补上导航入口；
+    // 用户端为只读视图，工单流转操作留在管理端 frontend-admin /alerts。
+    icon: <Bell size={18} />, label: '我的告警', path: '/alerts',
   },
 ]

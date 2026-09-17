@@ -1,4 +1,13 @@
-/** navConfig 回归测试 — 用户端极简导航（2026-09-16 二次收敛：仅 AI 对话 + 报告中心） */
+/**
+ * navConfig 回归测试 — 用户端导航边界
+ *
+ * 演进记录：
+ * - 2026-09-16 二次收敛：仅 AI 对话 + 报告中心（管理端专属入口全部回 admin）
+ * - 2026-09-17 UX P1（docs/2026-09-17-UX体验架构设计.md §4.1，衔接 v3 ADR-001）：
+ *   /alerts 判归 workspace 单组，用户端新增「我的告警」只读入口（工单流转操作仍在
+ *   管理端 frontend-admin /alerts「告警中心」）。故 /alerts 从「管理端专属路由」
+ *   黑名单中移出，但管理端入口标签「告警中心」仍禁止回渗。
+ */
 import { describe, it, expect } from 'vitest'
 import { NAV } from './navConfig'
 
@@ -21,10 +30,10 @@ describe('NAV — 导航配置完整性', () => {
     expect(new Set(allPaths).size).toBe(allPaths.length)
   })
 
-  it('用户端只保留 AI 对话 + 报告中心（二次收敛边界）', () => {
+  it('用户端导航 = AI 对话 + 报告中心 + 我的告警（ADR-001 workspace 单组）', () => {
     const labels = NAV.map((e) => e.label)
-    expect(labels).toEqual(['AI 对话', '报告中心'])
-    for (const p of ['/agent', '/agent/tasks', '/reports']) {
+    expect(labels).toEqual(['AI 对话', '报告中心', '我的告警'])
+    for (const p of ['/agent', '/agent/tasks', '/reports', '/alerts']) {
       expect(allPaths, `用户端核心路由 ${p} 丢失`).toContain(p)
     }
   })
@@ -39,7 +48,7 @@ describe('NAV — 导航配置完整性', () => {
     }
     for (const p of allPaths) {
       expect(
-        p.startsWith('/knowledge') || p.startsWith('/cs') || p.startsWith('/alerts') ||
+        p.startsWith('/knowledge') || p.startsWith('/cs') ||
         p.startsWith('/competitors') || p.startsWith('/selection'),
         `管理端路由 ${p} 不应出现在用户端`,
       ).toBe(false)
