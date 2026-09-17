@@ -346,10 +346,14 @@ def make_initial_state(question: str, session_id: str, kb_id: str, messages: lis
     user_id/department: 请求身份平铺进 state（P3 CS 断链修复）——
     CS 域（cs_prefilter/cs_graph_node/experts/*）直接读 state["user_id"]，
     此前不注入导致客服域恒为 anonymous。
+    session_id: 同批平铺（2026-09-17 补漏）——cs_prefilter 此前
+    state.get("session_id", "default") 恒取兜底，转人工工单
+    conversation_id 全部挤在 "default"，坐席无法按真实会话认领。
     """
     return {
         "question": question.strip(),
         "kb_id": kb_id,
+        "session_id": session_id,
         "user_id": user_id or "",
         "department": department or "",
         "plan": {"nodes": {}, "edges": {}},

@@ -99,6 +99,12 @@ class AgentState(TypedDict):
     # 每轮由 make_initial_state 写入当前请求值，无跨轮残留问题。
     user_id: str
     department: str
+    # 会话 ID 平铺（与 user_id/department 同一批断链修复，session_id 被漏）：
+    # cs_prefilter / travel_prefilter / experts/* 按惯例读 state["session_id"]，
+    # 缺此键导致客服域恒回退 "default" —— 转人工工单 conversation_id 全部
+    # 挤在 "default" 一个桶里，坐席无法按真实会话认领（2026-09-17 实测）。
+    # 每轮由 make_initial_state 写入当前请求值，无跨轮残留问题。
+    session_id: str
 
 
 class OrchestratorState(AgentState):

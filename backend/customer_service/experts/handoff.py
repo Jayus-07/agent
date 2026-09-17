@@ -62,6 +62,47 @@ def execute_handoff(
     )
     current_state = HandoffState(current_state_str)
 
+    # 幂等保护（2026-09-17）：Supervisor 可能对同一 handoff 意图重复调度
+    # 本 expert（实测同一 turn 内 reason=route 连跑两次）。工单已在排队/
+    # 人工处理中时复用工单直接成功返回 —— waiting_human → handoff_requested
+    # 是非法转换，二次执行绝不能炸（炸了用户会收到兜底报错文案）。
+    if current_state in (
+        HandoffState.WAITING_HUMAN, HandoffState.HUMAN_ACTIVE,
+    ):
+        reused_ticket = (existing or {}).get("ticket_id", "")
+        # 文案按状态区分（2026-09-17）：人工已接入时仍说"请稍候"会误导。
+        if current_state == HandoffState.HUMAN_ACTIVE:
+            answer = "人工客服正在为您服务，您的消息已同步给客服人员。"
+        else:
+            answer = "已为您转接人工客服，请稍候。客服人员将尽快为您服务。"
+        audit_entry = build_audit_entry(
+            user_id=user_id,
+            action_type="handoff_duplicate_skipped",
+            result="success",
+            target_type="handoff",
+            target_id=reused_ticket,
+            detail=f"already {current_state.value}, reuse ticket",
+            conversation_id=conversation_id,
+        )
+        logger.info(
+            "[HandoffExpert] duplicate trigger, reuse ticket=%s state=%s",
+            reused_ticket, current_state.value,
+        )
+        return ExpertResult(
+            expert="handoff",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=answer,
+            data={
+                "ticket_id": reused_ticket,
+                "trigger_type": trigger_type,
+                "trigger_reason": trigger_reason,
+                "handoff_state": current_state.value,
+                "handling_mode": "human",
+                "duplicate": True,
+                "audit_entry": audit_entry,
+            },
+        )
+
     handoff_transition(current_state, HandoffState.HANDOFF_REQUESTED)
 
     ticket_id = f"HANDOFF-{uuid.uuid4().hex[:8].upper()}"

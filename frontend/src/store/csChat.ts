@@ -6,7 +6,8 @@ import type { CSConfirmationState, CSHandoffState } from '@/components/cs/consta
 
 export interface CSMessage {
   id: string
-  role: 'user' | 'assistant'
+  // 2026-09-17: 新增 'agent' —— 人工坐席消息（useCSHandoffSync 轮询落库）
+  role: 'user' | 'assistant' | 'agent'
   content: string
   timestamp: number
   csNodes?: string[]
@@ -40,7 +41,7 @@ interface CSChatState {
   switchSession: (id: string) => void
   deleteSession: (id: string) => void
 
-  addMessage: (role: 'user' | 'assistant', content: string, sessionId?: string) => void
+  addMessage: (role: 'user' | 'assistant' | 'agent', content: string, sessionId?: string) => void
   addStreamEvent: (evt: SSEStreamEvent, sessionId?: string) => void
   replaceLastAssistant: (content: string, sessionId?: string) => void
 

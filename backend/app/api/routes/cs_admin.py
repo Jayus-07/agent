@@ -632,6 +632,8 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
             handoff_sm.HandoffState.HUMAN_ACTIVE,
         )
 
+        # commit 前捕获（expire_on_commit=False 虽安全，仍按 close 同款收口）
+        handoff_user_id = row.user_id
         row.handoff_state = handoff_sm.HandoffState.HUMAN_ACTIVE.value
         await db.execute(
             update(CSConversation)
@@ -639,6 +641,12 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
             .values(handling_mode="human", updated_at=datetime.now(timezone.utc))
         )
         await db.commit()
+
+    # L1 缓存失效：用户侧下个 turn 的 state loader 才能从 DB 读到
+    # human_active（否则仍读缓存里的 waiting_human，回复话术滞后一档）
+    from backend.customer_service.handoff_store import get_handoff_store
+
+    get_handoff_store().invalidate(handoff_user_id, conversation_id)
 
     # 广播：其他坐席队列摘除该会话 / 用户侧卡片切「人工已接入」
     from backend.customer_service.realtime import get_agent_hub
@@ -758,7 +766,9 @@ async def _async_messages_since(conversation_id: str, since_id: int, limit: int,
         last_id = max((r.id for r in rows), default=since_id)
         return HandoffMessagesResponse(
             conversation_id=conversation_id,
-            handoff_state=handoff_row.handoff_state if handoff_row else "closed",
+            # 2026-09-17: 无进行中工单返回 none（原为 closed，会让没有
+            # 转人工记录的新会话在用户侧误显示「人工服务已结束」）
+            handoff_state=handoff_row.handoff_state if handoff_row else "none",
             last_id=last_id,
             messages=[
                 MessageDTO(

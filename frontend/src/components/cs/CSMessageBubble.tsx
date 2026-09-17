@@ -1,7 +1,7 @@
 'use client'
 
 import { memo } from 'react'
-import { Headphones } from 'lucide-react'
+import { Headphones, UserCircle } from 'lucide-react'
 import MarkdownContent from '@/components/chat/MarkdownContent'
 import CSTimeline from './CSTimeline'
 import type { CSMessage } from '@/store/csChat'
@@ -32,6 +32,23 @@ function CSMessageBubbleImpl({ message, currentNode, isLast }: Props) {
         <div className="max-w-[75%] px-4 py-2.5 rounded-2xl rounded-br-md
           bg-accent text-white text-sm leading-relaxed">
           {message.content}
+        </div>
+      </div>
+    )
+  }
+
+  // 人工坐席消息：同助手侧布局，加「人工客服」标识与区分色
+  if (message.role === 'agent') {
+    return (
+      <div className="flex gap-3 mb-4">
+        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center">
+          <UserCircle size={16} className="text-emerald-600" />
+        </div>
+        <div className="flex-1 min-w-0 max-w-[80%]">
+          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl rounded-tl-md px-4 py-3 text-sm text-text-primary leading-relaxed">
+            <div className="text-[10px] text-emerald-600 mb-1 font-medium">人工客服</div>
+            <div className="whitespace-pre-wrap break-words">{message.content}</div>
+          </div>
         </div>
       </div>
     )
