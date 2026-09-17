@@ -128,3 +128,37 @@
 - 测试 71 passed（选品域，+12）+ 守护/路由 30 passed
 - 二期仅剩：评估层（待动销回流）；关键词榜的「拉词搜索建池」仍需商品榜配合上传
   （关键词级数据不直接产商品候选，正解依旧是 C2 榜单源直连）
+
+
+## 九、管理端选品漏斗工作台 + mock 样例（2026-09-17 第五轮，f0e2d10）
+
+用户双任务：「缺前端上传页（体验缺口不堵功能）在管理端加一个」+「mock 一份商品榜」。
+
+### 前端工作台（业务分析 → 选品漏斗）
+- `frontend-admin/src/api/selectionFunnel.ts`：service 对接 BFF `/api/selection-funnel/*`
+  （importFile/importText/listCandidates/marketSnapshot/painPoints/clearBatch），
+  BFF catch-all 自动注入 X-API-Key，无需 rewrite
+- `frontend-admin/src/app/selection-funnel/page.tsx`：三卡上传（商品榜/关键词榜/差评，
+  各带表头说明 + 文件/粘贴双模式 + 类目输入）→ 赛道画像卡（关键词 Top10 + 机会词徽章）
+  → 候选池表（价格/评分/评价数/销量/类目，痛点展开行，按批次清除）
+- navConfig 业务分析组插入「选品漏斗」（智能选品与选品决策之间）
+- 验证：**3200 端口有其他会话的 dev server（PID 24112），按纪律不跑 next build**
+  （会清写 .next 打断对方），改 `tsc --noEmit` 全量类型检查通过（EXIT=0）
+
+### mock 样例（docs/samples/，gen_samples.py 生成）
+三份 utf-8-sig CSV：样例-商品榜-宠物零食.csv（30 行）、样例-关键词榜（12 行）、
+样例-差评（15 行）。商品榜刻意混脏格式——¥ 前缀、「1.5万」「4.8分」、3 行缺评价人数、
+2 行极限词（「全网最低价」「销量第一」）——全被真实链路正确解析/识别。
+
+### 两次端到端实测（同一批 30 品）
+1. 默认阈值（min_margin 0.30）：pool 30 → screen 30 → econ 0 → **empty_pool**，
+   每条淘汰带可复算数字（宠物零食实际毛利 15-28%，30% 线全灭）——正确行为不是 bug，
+   暴露阈值校准需求
+2. `SELECTION_FUNNEL_CATEGORY_RULES='{"宠物零食":{"min_margin":0.18,"min_reviews":1000}}'`：
+   30 → screen 24（6 淘汰）→ econ 14（10 淘汰）→ **Top-5**，
+   Top-1 冻干鹌鹑 66.7 分 / 毛利 23.6%，报告含合规提示（2 条极限词命中）、
+   赛道画像、痛点机会三段
+
+⚠️ **mock 数据已真实入库**（data/selection_import.db）：批次
+`imp-20260917123800`（商品）/ `kw-20260917123801`（关键词）/ `rv-20260917123801`（差评），
+页面候选池可按批次清除，勿与真实数据混判。
