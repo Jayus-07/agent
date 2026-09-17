@@ -389,7 +389,12 @@ class GraphRunner:
                 logger.debug("[P1-10] 错误路径 trace 收尾失败", exc_info=True)
         finally:
             # 中止/早期失败路径 final_answer 为空：不落库，避免历史恢复时出现空气泡
-            if ctx["final_answer"]:
+            # CS 轮次不落主库：客服域已由 _persist_cs_turn_if_needed 独家落库
+            # （customer_service.conversations/messages），再写 chat_sessions 会让
+            # 客服会话泄漏进主历史侧栏（「我想转接人工客服」混入任务列表的根因）
+            if ctx["final_answer"] and not (
+                ctx["cs_context_snapshot"].get("conversation_id")
+            ):
                 self._memory.end_turn(session_id, question, ctx["final_answer"],
                                       user_id=user_id)
 
