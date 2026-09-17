@@ -33,6 +33,8 @@ export interface ImportCandidate {
   url: string
   promo_text: string
   highlights: string
+  /** 同款跨批次记录数（url 优先，无 url 按 标题|平台）：≥2 表示已积累时间序列 */
+  history_batches?: number
 }
 
 export interface KeywordStat {

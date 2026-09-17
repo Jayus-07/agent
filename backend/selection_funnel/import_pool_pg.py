@@ -1,8 +1,7 @@
 """PostgresImportPoolStore — 导入候选池 PostgreSQL 连接层（2026-09-18 高并发设计）。
 
-与 SQLite 版 `ImportPoolStore` 对外接口完全一致（isinstance 兼容）；
-工厂按 SELECTION_FUNNEL_DB_BACKEND 分发（默认 postgres），SQLite 轨保留作
-测试逃生舱（backend/tests/selection_funnel/conftest.py 统一注入隔离）。
+生产唯一后端（2026-09-18 用户拍板「SQLite 不要了」，SQLite 轨退场；
+单测经 conftest 内存替身注入，PG 真实行为由 test_import_pool_pg.py 锁定）。
 
 库归属：agent_business（SELECTION_PG_CONFIG，业务族，对 NL2SQL 可见）。
 schema 与 backend/sql/migrations/021_selection_funnel_pg.sql 保持一致。
@@ -12,12 +11,12 @@ schema 与 backend/sql/migrations/021_selection_funnel_pg.sql 保持一致。
      per-op 借还连接替代每操作新建 TCP+auth（PG 握手 1-5ms，高频写入下是首要瓶颈）
   2. 批量写入 psycopg2.extras.execute_values（一次网络往返写整批，替代逐条 INSERT）
   3. 表名前缀隔离（SELECTION_FUNNEL_PG_TABLE_PREFIX，测试用）
-  4. 批次 id 带随机后缀（同秒多批不碰撞，与 SQLite 版同修）
-语义纪律：list_candidates 保持哑管道（过滤查询，不去重）——同款去重统一由
-build_pool 的 duplicate 规则负责（保留最新批次，旧行进 reasons 披露）。
-方言映射（对齐 selection_decision/store_pg.py）：
-  - `?` → `%s`；sqlite3 隐式事务 → psycopg2 显式 commit/rollback
-  - 时间戳沿用应用侧生成的 ISO 文本（不依赖 PG 服务器时区，与全仓约定一致）
+  4. 批次 id 带随机后缀（同秒多批不碰撞）
+语义纪律：list_candidates 保持哑管道（过滤查询 + 窗口计数，不去重）——
+同款去重统一由 build_pool 的 duplicate 规则负责（保留最新批次，旧行进 reasons 披露）；
+history_batches 字段是窗口 COUNT（同款跨批次记录数），供工作台「历史」徽章透出。
+方言纪律：时间戳沿用应用侧生成的 ISO 文本（不依赖 PG 服务器时区，全仓约定）；
+连接借还统一走 pool_conn（读也 commit，杜绝 idle-in-transaction 回流池子）。
 """
 
 from __future__ import annotations
@@ -34,7 +33,6 @@ import psycopg2
 import psycopg2.extras
 
 from backend.config.database import DB_POOL_MAX_CONN, DB_POOL_MIN_CONN, SELECTION_PG_CONFIG
-from backend.selection_funnel.import_pool import ImportPoolStore
 from backend.shared.logger import logger
 
 _PREFIX = os.getenv("SELECTION_FUNNEL_PG_TABLE_PREFIX", "")
@@ -104,8 +102,8 @@ def pool_conn() -> Iterator[Any]:
         pool.putconn(conn)
 
 
-class PostgresImportPoolStore(ImportPoolStore):
-    """导入候选池存储 — PostgreSQL 实现（isinstance 兼容，高并发连接池）。"""
+class PostgresImportPoolStore:
+    """导入候选池存储 — PostgreSQL（生产唯一后端，高并发连接池）。"""
 
     def __init__(self, db_path: str = ""):
         self._init_lock = threading.Lock()
@@ -156,10 +154,12 @@ class PostgresImportPoolStore(ImportPoolStore):
 
     def list_candidates(self, category: str = "",
                         platform: str = "") -> list[dict[str, Any]]:
-        """拉取候选（粗过滤，哑管道不去重，语义与 SQLite 版一致）。
+        """拉取候选（粗过滤，哑管道不去重，语义与建池层约定一致）。
 
         同款去重统一由 build_pool 的 duplicate 规则负责（保留最新批次）。
-        返回字段与漏斗 _POOL_FIELDS 对齐 + sales/extra。
+        返回字段与漏斗 _POOL_FIELDS 对齐 + sales/extra + history_batches
+        （窗口 COUNT：同款跨批次记录数，工作台「历史」徽章数据源，
+        口径与 dedup_key 一致——url 优先，无 url 退 title|platform）。
         """
         conds, params = [], []
         if category:
@@ -169,7 +169,12 @@ class PostgresImportPoolStore(ImportPoolStore):
             conds.append("platform = %s")
             params.append(platform)
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
-        sql = (f"SELECT * FROM {_TABLE} {where} ORDER BY id ASC")
+        sql = (
+            f"SELECT *, COUNT(*) OVER (PARTITION BY"
+            f" CASE WHEN url <> '' THEN 'url:' || url"
+            f" ELSE 'title:' || title || '|' || platform END) AS history_batches"
+            f" FROM {_TABLE} {where} ORDER BY id ASC"
+        )
         with self._conn() as conn:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cur.execute(sql, tuple(params))

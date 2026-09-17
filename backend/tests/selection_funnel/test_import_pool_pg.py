@@ -1,10 +1,12 @@
-"""test_import_pool_pg.py — 漏斗导入存储 PG 层测试（2026-09-18 PG 化）。
+"""test_import_pool_pg.py — 漏斗导入存储 PG 层测试（2026-09-18 PG-only）。
 
 覆盖：
-  1. 工厂分发纯函数：默认 postgres → PG 子类；SELECTION_FUNNEL_DB_BACKEND=sqlite → SQLite 逃生舱
-  2. PostgresImportPoolStore：add_batch/list_candidates 往返（哑管道全量）、
-     类目/平台过滤、clear_batch、count（批次 id 随机后缀防同秒碰撞）
+  1. 工厂分发纯函数：生产唯一后端 → PG store（conftest 单测替身不在此生效）
+  2. PostgresImportPoolStore：add_batch/list_candidates 往返（哑管道全量 +
+     history_batches 窗口计数）、类目/平台过滤、clear_batch、count、
+     history_by_keys 同款历史分组（批次 id 随机后缀防同秒碰撞）
   3. PostgresMarketStore：keywords 排序与类目过滤、reviews、clear_batch 跨两表
+  4. pool_conn 连接卫生：读路径退出即 commit（idle-in-transaction 回归锁定）
 
 前置：本机 agent_business 库可达（并行会话 PG 容器 127.0.0.1:5433 或本地 5432）。
 不可达时整文件 skip；unit-only 运行用 -m "not pg"。
@@ -86,33 +88,14 @@ class TestFactoryDispatch:
         assert isinstance(ip._new_default_store(), ipp.PostgresImportPoolStore)
         assert isinstance(md._new_default_market(), mdp.PostgresMarketStore)
 
-    def test_sqlite_escape_hatch(self, monkeypatch, tmp_path):
-        import backend.selection_funnel.import_pool as ip
-        import backend.selection_funnel.market_data as md
-        monkeypatch.setenv("SELECTION_FUNNEL_DB_BACKEND", "sqlite")
-        # fake 类捕获分发结果，不打真实磁盘/库
-        created = {}
-
-        class _FakeIP(ip.ImportPoolStore):
-            def __init__(self):  # noqa: super 不建库
-                created["ip"] = True
-
-        class _FakeMD(md.MarketStore):
-            def __init__(self):  # noqa: super 不建库
-                created["md"] = True
-
-        monkeypatch.setattr(ip, "ImportPoolStore", _FakeIP)
-        monkeypatch.setattr(md, "MarketStore", _FakeMD)
-        assert isinstance(ip._new_default_store(), _FakeIP)
-        assert isinstance(md._new_default_market(), _FakeMD)
-
 
 class TestImportPoolPG:
     def test_roundtrip_and_filters(self, pg_sf):
         ipp, _ = pg_sf
         store = ipp.PostgresImportPoolStore()
         batch, n = store.add_batch(
-            [_row("冻干鸡肉 500g", "https://e.com/1", 149.0),
+            [{"title": "冻干鸡肉 500g", "url": "https://e.com/1", "price": 149.0,
+              "unit_cost": 45.0},
              _row("冻干牛肉 400g", "https://e.com/2", 129.0, platform="京东")],
             category="宠物零食")
         assert batch.startswith("imp-") and n == 2
@@ -124,6 +107,8 @@ class TestImportPoolPG:
         assert top["price"] == 149.0
         assert top["category"] == "宠物零食"
         assert top["batch_id"] == batch and top["extra"] == {}
+        assert top["unit_cost"] == 45.0   # 候选级成本列往返（P1 人工补录源）
+        assert top["history_batches"] == 1   # 工作台「历史」徽章数据源
 
         assert len(store.list_candidates(category="宠物")) == 2
         assert store.list_candidates(category="美妆") == []
@@ -131,7 +116,8 @@ class TestImportPoolPG:
 
     def test_list_returns_all_batches(self, pg_sf):
         """list_candidates 是哑管道（不去重）：跨批次同款全量返回，
-        去重语义由 build_pool 的 duplicate 规则统一负责（见 test_pool_sources）。"""
+        去重语义由 build_pool 的 duplicate 规则统一负责（见 test_pool_sources）；
+        history_batches 窗口计数对齐 dedup_key 口径（url 优先）。"""
         ipp, _ = pg_sf
         store = ipp.PostgresImportPoolStore()
         store.add_batch([_row("冻干鸡肉 500g", "https://e.com/1", 100.0)],
@@ -143,6 +129,7 @@ class TestImportPoolPG:
         rows = store.list_candidates()
         assert len(rows) == 3, "哑管道返回全部批次行（id ASC）"
         assert [r["price"] for r in rows] == [100.0, 80.0, 60.0]
+        assert [r["history_batches"] for r in rows] == [2, 2, 1]
         # 类目/平台过滤仍生效
         assert len(store.list_candidates(category="宠物")) == 3
         assert store.list_candidates(category="美妆") == []
@@ -218,6 +205,13 @@ class TestHistoryByKeysPG:
         hist = store.history_by_keys([("", "洁齿骨", "淘宝")])
         assert list(hist) == ["title:洁齿骨|淘宝"]
         assert [s["price"] for s in hist["title:洁齿骨|淘宝"]] == [10.0]
+
+    def test_empty_keys_returns_empty(self, pg_sf):
+        """判定键原料全空 → 不发查询直接返回空。"""
+        ipp, _mdp = pg_sf
+        store = ipp.PostgresImportPoolStore()
+        assert store.history_by_keys([]) == {}
+        assert store.history_by_keys([("", "", "")]) == {}
 
 
 class TestPoolConnHygiene:

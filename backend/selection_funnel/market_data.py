@@ -9,24 +9,21 @@
      → product_reviews 表 → 规则桶聚类 → 报告「痛点机会」段
      （竞品差评 = 产品改良机会，选品经典打法；P0 关键词桶，LLM 聚类 P1）
 
-复用 import_pool 的解析基建（数值清洗/表头归一），同库 selection_import.db。
+复用 import_pool 的解析基建（数值清洗/表头归一）。
+存储演进（2026-09-18 用户拍板「SQLite 不要了」）：SQLite 轨退场，
+生产唯一后端为 market_data_pg.PostgresMarketStore（与导入池同库同连接池）；
+单测经 conftest 注入内存替身，PG 真实行为由 test_import_pool_pg.py 锁定。
 纪律：画像与痛点只富化报告，不做淘汰依据；候选-评论按标题包含匹配，
 口径在报告披露。
 """
 from __future__ import annotations
 
-import json
+import io
 import os
-import sqlite3
-import uuid
-from datetime import datetime
 from typing import Any
 
-from backend.selection_funnel.import_pool import IMPORT_DB_PATH, _norm_header, _to_float
+from backend.selection_funnel.import_pool import _norm_header, _to_float
 from backend.shared.logger import logger
-
-# 与商品导入池同库同 env（SELECTION_IMPORT_DB_PATH），三张表分工
-MARKET_DB_PATH = IMPORT_DB_PATH
 
 # ── 表头映射 ──────────────────────────────────────────────────────────
 KEYWORD_ALIASES: dict[str, set[str]] = {
@@ -89,106 +86,22 @@ PAIN_BUCKETS: dict[str, tuple[str, ...]] = {
 NEGATIVE_STAR_MAX = 3.0   # 星级 ≤3 视为差评；无星级列时全量计
 
 
-# ── 存储 ──────────────────────────────────────────────────────────────
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS keyword_stats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, batch_id TEXT, category TEXT DEFAULT '',
-    keyword TEXT, search_pop REAL, click_rate REAL, pay_rate REAL,
-    competition REAL, imported_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_kw_cat ON keyword_stats(category);
-CREATE TABLE IF NOT EXISTS product_reviews (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, batch_id TEXT, category TEXT DEFAULT '',
-    product_title TEXT, content TEXT, star REAL, imported_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_rv_cat ON product_reviews(category);
-"""
+# ── 存储工厂（PG-only，2026-09-18 SQLite 轨退场）───────────────────────
+_default_market: Any = None
 
 
-class MarketStore:
-    def __init__(self, db_path: str = MARKET_DB_PATH):
-        self._db_path = db_path
-        os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
-        with self._connect() as conn:
-            conn.executescript(_SCHEMA)
+def _new_default_market() -> Any:
+    """生产唯一后端：PostgresMarketStore（agent_business 库，与导入池共享连接池）。
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def add_keywords(self, rows: list[dict], category: str) -> tuple[str, int]:
-        # 批次 id 带随机后缀：同秒两次上传不再碰撞（2026-09-18 实测缺陷修复）
-        batch_id = f"kw-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
-        now = datetime.now().isoformat(timespec="seconds")
-        with self._connect() as conn:
-            conn.executemany(
-                "INSERT INTO keyword_stats (batch_id, category, keyword, search_pop,"
-                " click_rate, pay_rate, competition, imported_at) VALUES (?,?,?,?,?,?,?,?)",
-                [(batch_id, category, r.get("keyword") or "", r.get("search_pop"),
-                  r.get("click_rate"), r.get("pay_rate"), r.get("competition"), now)
-                 for r in rows])
-        return batch_id, len(rows)
-
-    def add_reviews(self, rows: list[dict], category: str) -> tuple[str, int]:
-        batch_id = f"rv-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
-        now = datetime.now().isoformat(timespec="seconds")
-        with self._connect() as conn:
-            conn.executemany(
-                "INSERT INTO product_reviews (batch_id, category, product_title,"
-                " content, star, imported_at) VALUES (?,?,?,?,?,?)",
-                [(batch_id, category, r.get("product_title") or "",
-                  r.get("content") or "", r.get("star"), now) for r in rows])
-        return batch_id, len(rows)
-
-    def keywords(self, category: str = "") -> list[dict]:
-        sql = "SELECT keyword, search_pop, click_rate, pay_rate, competition FROM keyword_stats"
-        params: tuple = ()
-        if category:
-            sql += " WHERE category LIKE ?"
-            params = (f"%{category}%",)
-        sql += " ORDER BY search_pop DESC"
-        with self._connect() as conn:
-            return [dict(r) for r in conn.execute(sql, params).fetchall()]
-
-    def reviews(self, category: str = "") -> list[dict]:
-        sql = "SELECT product_title, content, star FROM product_reviews"
-        params: tuple = ()
-        if category:
-            sql += " WHERE category LIKE ?"
-            params = (f"%{category}%",)
-        with self._connect() as conn:
-            return [dict(r) for r in conn.execute(sql, params).fetchall()]
-
-    def clear_batch(self, batch_id: str) -> int:
-        """按批次清除关键词/差评（2026-09-17 全流程实测补：页面按批次清除此前只覆盖商品表）。"""
-        removed = 0
-        with self._connect() as conn:
-            cur = conn.execute("DELETE FROM keyword_stats WHERE batch_id = ?", (batch_id,))
-            removed += cur.rowcount
-            cur = conn.execute("DELETE FROM product_reviews WHERE batch_id = ?", (batch_id,))
-            removed += cur.rowcount
-        return removed
-
-
-_default_market: MarketStore | None = None
-
-
-def _new_default_market() -> MarketStore:
-    """按 SELECTION_FUNNEL_DB_BACKEND 新建默认 store（纯分发，可直测）。
-
-    默认 postgres（PostgresMarketStore，agent_business 库，与导入池共享连接池）；
-    显式设 sqlite 走本文件 SQLite 轨（测试逃生舱，conftest 统一注入）。
+    纯分发函数保留供测试直测（conftest 以内存替身 monkeypatch
+    get_market_store，DB 属外部依赖按纪律 mock）。
     """
-    import os as _os
-    if _os.getenv("SELECTION_FUNNEL_DB_BACKEND", "").lower() == "sqlite":
-        return MarketStore()
     from backend.selection_funnel.market_data_pg import PostgresMarketStore
     return PostgresMarketStore()
 
 
-def get_market_store() -> MarketStore:
-    """惰性单例（测试 monkeypatch get_market_store 隔离）。"""
+def get_market_store() -> Any:
+    """惰性单例（测试 monkeypatch get_market_store 注入内存替身）。"""
     global _default_market
     if _default_market is None:
         _default_market = _new_default_market()

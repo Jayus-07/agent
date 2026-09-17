@@ -1,8 +1,7 @@
 """PostgresMarketStore — 赛道数据（关键词榜 + 差评）PostgreSQL 连接层（2026-09-18）。
 
-与 SQLite 版 `MarketStore` 对外接口完全一致（isinstance 兼容）；
-工厂 `get_market_store()` 按 SELECTION_FUNNEL_DB_BACKEND 分发（默认 postgres），
-SQLite 轨保留作测试逃生舱（backend/tests/selection_funnel/conftest.py 统一注入）。
+生产唯一后端（2026-09-18 SQLite 轨退场；单测经 conftest 内存替身注入，
+PG 真实行为由 test_import_pool_pg.py 锁定）。
 
 库归属：agent_business（SELECTION_PG_CONFIG，与导入池同库同连接池）。
 schema 与 backend/sql/migrations/021_selection_funnel_pg.sql 保持一致。
@@ -24,7 +23,6 @@ from typing import Any
 import psycopg2.extras
 
 from backend.selection_funnel.import_pool_pg import pool_conn
-from backend.selection_funnel.market_data import MarketStore
 from backend.shared.logger import logger
 
 _PREFIX = os.getenv("SELECTION_FUNNEL_PG_TABLE_PREFIX", "")
@@ -75,8 +73,8 @@ def _ensure_schema() -> None:
         logger.debug("[PostgresMarketStore] schema 就绪（agent_business）")
 
 
-class PostgresMarketStore(MarketStore):
-    """赛道数据存储 — PostgreSQL 实现（isinstance 兼容，高并发连接池）。
+class PostgresMarketStore:
+    """赛道数据存储 — PostgreSQL（生产唯一后端，高并发连接池）。
 
     借还连接统一走 import_pool_pg.pool_conn（读也 commit，杜绝
     idle-in-transaction 连接回流池子——2026-09-18 修）。

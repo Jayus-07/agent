@@ -366,3 +366,42 @@ keyword_stats / product_reviews）搬 PG，**完全跟随业务族 PG 约定**�
   中性 2 例）、selection_decision api/store/trends 22 passed
 - 运行命令同 §四（PYTHONPATH 前缀 + --basetemp）；PG 集成例带 pg 标记
   （前缀 pgtest_sf_ 自隔离）
+
+## 十七、SQLite 轨退场 + 工作台「历史」徽章落地（2026-09-18，d073423 后续轮）
+
+用户拍板「SQLite 现在不要了 准备删」+ 确认落地 §十六 提议的前端透出。本轮两件事：
+
+### 1. SQLite 轨整体退场（生产代码 + 测试基建 + 库文件）
+- **生产**：删 `ImportPoolStore` / `MarketStore`（SQLite 实现）与
+  `SELECTION_FUNNEL_DB_BACKEND` 分发、`IMPORT_DB_PATH`/`MARKET_DB_PATH`；
+  import_pool.py / market_data.py 只留解析基建（表头映射/数值清洗/parse_table）、
+  dedup_key、画像/痛点/竞争格局纯函数与 PG-only 工厂（`_new_default_*` 保留
+  供测试直测，惰性 import 避免 python↔pg 循环）；PG 两个 store 类去掉继承
+  改独立类（基类已不存在，isinstance 兼容随之作废）。
+- **测试**：conftest 两个 autouse fixture 换内存替身（FakeImportPoolStore /
+  FakeMarketStore，语义对齐 PG：id 单调、list 旧行在前、history 新→旧、
+  crawled_at=imported_at、history_batches 窗口计数）——单测绝不打真实 PG；
+  删 SQLite 轨用例（store 往返/unit_cost 往返/history_by_keys×3/sqlite 逃生舱
+  工厂分发），unit_cost 与空键断言移入 PG 集成类。替身只保管道语义，
+  真实存储行为由 test_import_pool_pg.py（11 例）锁定——不测替身本身。
+- **库文件**：data/selection_import.db 实测三表 0 行（§十六 已核），
+  gitignore 未跟踪，直接删除（含 -wal/-shm 残留）。
+- 021 迁移头注释同步（去掉「sqlite 逃生舱」说法）。
+
+### 2. 工作台「历史」徽章（§十六 提议的前端透出，本轮兑现）
+- 后端：`list_candidates` 加 `history_batches` 窗口 COUNT（PARTITION BY
+  dedup_key 同款口径：url 优先，无 url 退 title|platform）——仍是哑管道
+  （不去重），纯派生展示字段；FakeImportPoolStore 同步实现。
+- 前端：候选池表加「历史」列——同款 ≥2 次记录显示琥珀徽章「N 次记录」
+  （tooltip：已积累时间序列，跑漏斗可看趋势），单点显示「-」；
+  `ImportCandidate` 类型补 `history_batches?`；痛点展开行 colSpan 8→9。
+  用户每周重传榜单后，工作台立刻能看到哪些款攒出了序列（引导再跑漏斗），
+  不用等跑完去历史页翻报告。
+
+### 验证
+- selection_funnel 套件 **128 passed**（133 - 6 删 + 1 新增；其中 PG 集成
+  11 例全数执行非 skip），test_selection_scoring + selection_decision api
+  回归 155 passed 合并跑
+- 前端 `tsc --noEmit` 0 错误（按纪律不跑 next build，3200 端口有他会话 dev server）
+- 全仓 grep 确认无 ImportPoolStore/MarketStore/SELECTION_FUNNEL_DB_BACKEND/
+  SELECTION_IMPORT_DB_PATH 残留引用（生产 + 测试）

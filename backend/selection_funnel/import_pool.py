@@ -7,8 +7,14 @@
 
 本模块承接运营真实工作流：从生意参谋 / 竞品分析工具导出表格
 （CSV / Excel(.xlsx) / Excel 复制出的 TSV 文本）→ 中文表头宽松映射 →
-归一化候选池（SQLite）→ pool_builder 的主源。watchlist 降级为兜底补充源
-（顺序由 SELECTION_FUNNEL_POOL_SOURCES 配置，默认 import 在前）。
+归一化候选池（PostgreSQL，agent_business 库）→ pool_builder 的主源。
+watchlist 降级为兜底补充源（顺序由 SELECTION_FUNNEL_POOL_SOURCES 配置，
+默认 import 在前）。
+
+存储演进（2026-09-18 用户拍板「SQLite 不要了」）：SQLite 轨整体退场，
+生产唯一后端为 import_pool_pg.PostgresImportPoolStore（高并发连接池）；
+单测经 conftest 注入内存替身（DB 属外部依赖，按测试纪律 mock），
+PG 真实行为由 test_import_pool_pg.py 集成测试锁定。
 
 原则：
   - 宁缺毋造：销量列不冒充评价数；缺失字段保留 None 由下游披露
@@ -18,21 +24,11 @@
 from __future__ import annotations
 
 import io
-import json
 import os
 import re
-import sqlite3
-import uuid
-from datetime import datetime
 from typing import Any
 
 from backend.shared.logger import logger
-
-# ── 路径（与 competitor/store.py 的 data/ 惯例一致）───────────────────
-_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-IMPORT_DB_PATH = os.getenv(
-    "SELECTION_IMPORT_DB_PATH", os.path.join(_PROJECT_ROOT, "data", "selection_import.db")
-)
 
 # 单批导入行数上限（防手滑拖入超大文件拖垮建库）
 MAX_IMPORT_ROWS = int(os.getenv("SELECTION_IMPORT_MAX_ROWS", "2000"))
@@ -223,187 +219,22 @@ def dedup_key(url: str, title: str, platform: str) -> str:
     return f"title:{(title or '').strip()}|{platform or ''}"
 
 
-# ── SQLite 存储 ────────────────────────────────────────────────────────
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS import_candidates (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    batch_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    platform TEXT DEFAULT '',
-    price REAL,
-    original_price REAL,
-    rating REAL,
-    review_count INTEGER,
-    sales INTEGER,
-    unit_cost REAL,
-    category TEXT DEFAULT '',
-    url TEXT DEFAULT '',
-    promo_text TEXT DEFAULT '',
-    highlights TEXT DEFAULT '',
-    extra_json TEXT DEFAULT '',
-    imported_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_import_category ON import_candidates(category);
-CREATE INDEX IF NOT EXISTS idx_import_batch ON import_candidates(batch_id);
-CREATE INDEX IF NOT EXISTS idx_import_url ON import_candidates(url);
-"""
-
-_BATCH_NOTE = ""
+# ── 存储工厂（PG-only，2026-09-18 SQLite 轨退场）───────────────────────
+_default_store: Any = None
 
 
-class ImportPoolStore:
-    """导入候选池存储。单写多读，连接即建 schema（IF NOT EXISTS 幂等）。"""
+def _new_default_store() -> Any:
+    """生产唯一后端：PostgresImportPoolStore（agent_business 库，高并发连接池）。
 
-    def __init__(self, db_path: str = IMPORT_DB_PATH):
-        self._db_path = db_path
-        os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
-        with self._connect() as conn:
-            conn.executescript(_SCHEMA)
-            # 旧库平滑迁移：unit_cost 列（2026-09-17 P1 候选级成本补录）
-            cols = {r["name"] for r in conn.execute("PRAGMA table_info(import_candidates)")}
-            if "unit_cost" not in cols:
-                conn.execute("ALTER TABLE import_candidates ADD COLUMN unit_cost REAL")
-
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def add_batch(self, rows: list[dict[str, Any]], category: str = "",
-                  platform: str = "") -> tuple[str, int]:
-        """写入一个导入批次；行内 category/platform 缺失时用批次级默认补齐。
-
-        Returns: (batch_id, 写入行数)
-        """
-        batch_id = f"imp-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
-        now = datetime.now().isoformat(timespec="seconds")
-        with self._connect() as conn:
-            conn.executemany(
-                "INSERT INTO import_candidates (batch_id, title, platform, price, original_price,"
-                " rating, review_count, sales, unit_cost, category, url, promo_text, highlights, extra_json, imported_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                [
-                    (
-                        batch_id,
-                        r.get("title") or "",
-                        r.get("platform") or platform,
-                        r.get("price"),
-                        r.get("original_price"),
-                        r.get("rating"),
-                        r.get("review_count"),
-                        r.get("sales"),
-                        r.get("unit_cost"),
-                        r.get("category") or category,
-                        r.get("url") or "",
-                        r.get("promo_text") or "",
-                        r.get("highlights") or "",
-                        json.dumps(r.get("extra") or {}, ensure_ascii=False),
-                        now,
-                    )
-                    for r in rows
-                ],
-            )
-        return batch_id, len(rows)
-
-    def list_candidates(self, category: str = "", platform: str = "") -> list[dict[str, Any]]:
-        """拉取候选（粗过滤，哑管道不去重）。
-
-        同款去重统一由 build_pool 的 duplicate 规则负责（保留最新批次，
-        旧行进 reasons 披露）——数据层与建池层职责单一，双轨（PG/SQLite）同语义。
-        返回字段与漏斗 _POOL_FIELDS 对齐 + sales/extra。
-        """
-        sql = "SELECT * FROM import_candidates"
-        conds, params = [], []
-        if category:
-            conds.append("category LIKE ?")
-            params.append(f"%{category}%")
-        if platform:
-            conds.append("platform = ?")
-            params.append(platform)
-        if conds:
-            sql += " WHERE " + " AND ".join(conds)
-        sql += " ORDER BY id ASC"
-        with self._connect() as conn:
-            rows = conn.execute(sql, tuple(params)).fetchall()
-        out: list[dict[str, Any]] = []
-        for r in rows:
-            d = dict(r)
-            d["extra"] = json.loads(d.pop("extra_json") or "{}")
-            out.append(d)
-        return out
-
-    def clear_batch(self, batch_id: str) -> int:
-        with self._connect() as conn:
-            cur = conn.execute("DELETE FROM import_candidates WHERE batch_id = ?", (batch_id,))
-            return cur.rowcount
-
-    def history_by_keys(self, keys: list[tuple[str, str, str]],
-                        limit: int = 50) -> dict[str, list[dict[str, Any]]]:
-        """批量取同款历史批次（趋势接线，2026-09-18）：一次查询替代逐候选 N 次。
-
-        Args:
-            keys: [(url, title, platform), ...]（候选集的判定键原料，url 可空）
-            limit: 每款最多返回快照条数（与竞品 store.history 的 limit 同义）
-        Returns:
-            {dedup_key(url,title,platform): [快照 新→旧]}。快照字段对齐
-            scoring 的 history 口径：crawled_at=imported_at（该行的数据时点，
-            供热度日增速计算）；in_stock 不补造（导入表无此列，评分层按中性处理）。
-        """
-        wanted = {dedup_key(u, t, p) for u, t, p in keys}
-        if not wanted:
-            return {}
-        urls = sorted({(u or "").strip() for u, _, _ in keys if (u or "").strip()})
-        titles = sorted({(t or "").strip() for _, t, _ in keys if (t or "").strip()})
-        conds, params = [], []
-        if urls:
-            conds.append(f"url IN ({','.join('?' * len(urls))})")
-            params.extend(urls)
-        if titles:
-            conds.append(f"title IN ({','.join('?' * len(titles))})")
-            params.extend(titles)
-        if not conds:
-            return {}
-        sql = (f"SELECT * FROM import_candidates WHERE {' OR '.join(conds)}"
-               " ORDER BY id DESC")
-        with self._connect() as conn:
-            rows = [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for r in rows:
-            key = dedup_key(r.get("url") or "", r.get("title") or "",
-                            r.get("platform") or "")
-            if key not in wanted:
-                continue   # title 命中但 (title, platform) 不同款 → 剔除
-            snap = {"title": r.get("title"), "url": r.get("url"),
-                    "platform": r.get("platform"), "price": r.get("price"),
-                    "rating": r.get("rating"), "review_count": r.get("review_count"),
-                    "sales": r.get("sales"), "imported_at": r.get("imported_at"),
-                    "crawled_at": r.get("imported_at")}
-            grouped.setdefault(key, []).append(snap)
-        return {k: v[:limit] for k, v in grouped.items()}
-
-    def count(self) -> int:
-        with self._connect() as conn:
-            return conn.execute("SELECT COUNT(*) FROM import_candidates").fetchone()[0]
-
-
-_default_store: ImportPoolStore | None = None
-
-
-def _new_default_store() -> ImportPoolStore:
-    """按 SELECTION_FUNNEL_DB_BACKEND 新建默认 store（纯分发，可直测）。
-
-    默认 postgres（PostgresImportPoolStore，agent_business 库，高并发连接池）；
-    显式设 sqlite 走本文件 SQLite 轨（测试逃生舱，conftest 统一注入）。
+    纯分发函数保留供测试直测（conftest 以内存替身 monkeypatch
+    get_import_store，DB 属外部依赖按纪律 mock）。
     """
-    import os as _os
-    if _os.getenv("SELECTION_FUNNEL_DB_BACKEND", "").lower() == "sqlite":
-        return ImportPoolStore()
     from backend.selection_funnel.import_pool_pg import PostgresImportPoolStore
     return PostgresImportPoolStore()
 
 
-def get_import_store() -> ImportPoolStore:
-    """惰性单例（测试 monkeypatch get_import_store 或 IMPORT_DB_PATH 隔离）。"""
+def get_import_store() -> Any:
+    """惰性单例（测试 monkeypatch get_import_store 注入内存替身）。"""
     global _default_store
     if _default_store is None:
         _default_store = _new_default_store()

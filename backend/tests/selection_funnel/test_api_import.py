@@ -1,7 +1,7 @@
 """tests/selection_funnel/test_api_import.py — 导入通道 API 冒烟
 
 TestClient 只挂本域 router（不拉全 app），配合 conftest 的
-isolated_import_store 临时库，绝不碰真实 data/selection_import.db。
+isolated_import_store 内存替身，单测绝不打真实 PG（agent_business）。
 """
 from __future__ import annotations
 

@@ -308,6 +308,7 @@ export default function SelectionFunnelPage() {
                   <th className="px-4 py-2 text-right font-medium">评价数</th>
                   <th className="px-4 py-2 text-right font-medium">销量</th>
                   <th className="px-4 py-2 font-medium">类目</th>
+                  <th className="px-4 py-2 font-medium">历史</th>
                   <th className="px-4 py-2" />
                 </tr>
               </thead>
@@ -322,6 +323,18 @@ export default function SelectionFunnelPage() {
                       <td className="px-4 py-2 text-right text-text-secondary">{c.review_count?.toLocaleString() ?? '-'}</td>
                       <td className="px-4 py-2 text-right text-text-secondary">{c.sales?.toLocaleString() ?? '-'}</td>
                       <td className="px-4 py-2 text-text-secondary">{c.category || '-'}</td>
+                      <td className="px-4 py-2">
+                        {(c.history_batches ?? 1) >= 2 ? (
+                          <span
+                            className="inline-flex text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200"
+                            title={`同款已导入 ${c.history_batches} 次，已积累价格/评价时间序列——跑一次漏斗即可在报告中看趋势`}
+                          >
+                            {c.history_batches} 次记录
+                          </span>
+                        ) : (
+                          <span className="text-text-muted text-xs">-</span>
+                        )}
+                      </td>
                       <td className="px-4 py-2 text-right">
                         <button
                           onClick={() => togglePain(c.title)}
@@ -335,7 +348,7 @@ export default function SelectionFunnelPage() {
                       </tr>
                     {painOpen[c.title] !== undefined && (
                       <tr className="border-b border-border-subtle/50 bg-surface-elevated/50">
-                        <td colSpan={8} className="px-4 py-2.5 text-xs">
+                        <td colSpan={9} className="px-4 py-2.5 text-xs">
                           {painOpen[c.title] === null ? (
                             <span className="text-text-muted">无匹配差评数据（检查评论的商品标题是否包含该商品名）</span>
                           ) : (

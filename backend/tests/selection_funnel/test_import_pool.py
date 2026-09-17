@@ -1,7 +1,8 @@
 """tests/selection_funnel/test_import_pool.py — 批量导入通道单测
 
 覆盖：中文表头宽松映射 / 宽松数值清洗 / TSV(Ctrl+C粘贴)·CSV·XLSX 解析 /
-销量不冒充评价数 / 无效行剔除 / 存储往返 / 批次级类目补齐 / 一条龙失败降级。
+销量不冒充评价数 / 无效行剔除 / 一条龙管道与失败降级 / 候选级成本列。
+存储行为不打真实库（conftest 内存替身）；PG 真实语义由 test_import_pool_pg.py 锁定。
 """
 from __future__ import annotations
 
@@ -10,7 +11,6 @@ import io
 import pytest
 
 from backend.selection_funnel.import_pool import (
-    ImportPoolStore,
     import_table,
     map_columns,
     normalize_row,
@@ -110,36 +110,17 @@ def test_parse_empty_raises():
         parse_table("")
 
 
-# ── 存储与一条龙 ──────────────────────────────────────────────────────
-def test_store_roundtrip(tmp_path):
-    store = ImportPoolStore(str(tmp_path / "t.db"))
-    batch, n = store.add_batch(
-        [{"title": "A", "price": 59.0, "rating": 4.8, "review_count": 100,
-          "category": "宠物零食", "url": "u1"}], platform="淘宝")
-    assert n == 1 and batch.startswith("imp-")
-    items = store.list_candidates()
-    assert len(items) == 1
-    assert items[0]["platform"] == "淘宝"   # 行内缺失 → 批次级补齐
-    assert items[0]["title"] == "A"
-    assert store.count() == 1
-    assert store.clear_batch(batch) == 1
-    assert store.count() == 0
+# ── 存储与一条龙（store 走 conftest 内存替身；PG 真实语义见 test_import_pool_pg）──
+def test_import_table_pipeline(isolated_import_store):
+    store = isolated_import_store
+    batch, n, notes = import_table(TSV_PASTE, category="宠物零食")
+    assert n == 2 and batch and "导入批次" in notes[0]
+    assert store.count() == 2
+    # 工作台「历史」徽章数据源：单批次单款 → 记录数 1
+    assert all(i["history_batches"] == 1 for i in store.list_candidates())
 
 
-def test_import_table_pipeline(tmp_path):
-    store = ImportPoolStore(str(tmp_path / "t.db"))
-    import backend.selection_funnel.import_pool as ip
-    orig = ip.get_import_store
-    ip.get_import_store = lambda: store   # 一条龙走临时库
-    try:
-        batch, n, notes = import_table(TSV_PASTE, category="宠物零食")
-        assert n == 2 and batch and "导入批次" in notes[0]
-        assert store.count() == 2
-    finally:
-        ip.get_import_store = orig
-
-
-def test_import_table_failure_degrades(tmp_path):
+def test_import_table_failure_degrades():
     """解析失败不炸调用方：("", 0, [原因])。"""
     batch, n, notes = import_table("这不是一个表格", category="x")
     assert batch == "" and n == 0 and notes and "导入失败" in notes[0]
@@ -156,46 +137,3 @@ def test_normalize_row_unit_cost():
     assert row["unit_cost"] == 45.0
     row2 = normalize_row({"标题": "x"})
     assert row2["unit_cost"] is None
-
-
-def test_import_store_unit_cost_roundtrip(isolated_import_store):
-    csv_data = "标题,价格,成本\n冻干鸡肉,59.0,20\n鸡肉干,29.0,\n"
-    batch_id, n, _notes = import_table(csv_data, category="宠物零食")
-    assert n == 2 and batch_id.startswith("imp-")
-    costs = {i["title"]: i.get("unit_cost")
-             for i in isolated_import_store.list_candidates()}
-    assert costs["冻干鸡肉"] == 20.0
-    assert costs["鸡肉干"] is None
-
-
-# ── history_by_keys：同款历史批次批量取数（趋势接线，2026-09-18）─────────
-def test_history_by_keys_groups_across_batches(isolated_import_store):
-    """同款（同 url）跨批次 → 历史聚合并 新→旧 排序；crawled_at 映射 imported_at。"""
-    store = isolated_import_store
-    store.add_batch([{"title": "冻干鸡肉", "url": "u1", "price": 59.0,
-                      "review_count": 100}], category="宠物零食")
-    store.add_batch([{"title": "冻干鸡肉", "url": "u1", "price": 49.0,
-                      "review_count": 150}], category="宠物零食")
-    hist = store.history_by_keys([("u1", "冻干鸡肉", "淘宝")])
-    snaps = hist["url:u1"]
-    assert [s["price"] for s in snaps] == [49.0, 59.0]   # 新→旧（scoring 口径）
-    assert snaps[0]["crawled_at"] == snaps[0]["imported_at"]
-    assert all("in_stock" not in s for s in snaps)       # 导入快照不补造有货字段
-
-
-def test_history_by_keys_title_platform_match(isolated_import_store):
-    """无 url 候选按 (title, platform) 匹配；异平台同款不串。"""
-    store = isolated_import_store
-    store.add_batch([{"title": "洁齿骨", "platform": "淘宝", "price": 10.0}],
-                    category="宠物零食")
-    store.add_batch([{"title": "洁齿骨", "platform": "京东", "price": 12.0}],
-                    category="宠物零食")
-    hist = store.history_by_keys([("", "洁齿骨", "淘宝")])
-    assert list(hist) == ["title:洁齿骨|淘宝"]
-    assert [s["price"] for s in hist["title:洁齿骨|淘宝"]] == [10.0]
-
-
-def test_history_by_keys_no_url_no_title_returns_empty(isolated_import_store):
-    """判定键原料全空 → 不发查询直接返回空。"""
-    assert isolated_import_store.history_by_keys([("", "", "")]) == {}
-    assert isolated_import_store.history_by_keys([]) == {}

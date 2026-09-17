@@ -3,7 +3,7 @@
 -- 三张表：import_candidates（商品榜导入池）/ keyword_stats（关键词榜）/
 -- product_reviews（差评实证）。库归属 agent_business（业务族，对 NL2SQL 可见）。
 -- 代码侧 schema：backend/selection_funnel/import_pool_pg.py / market_data_pg.py
--- （工厂默认 postgres；SELECTION_FUNNEL_DB_BACKEND=sqlite 为测试逃生舱）。
+-- （2026-09-18 起 PG 为生产唯一后端，SQLite 轨已退场）。
 --
 -- 高并发要点：
 --   1. 同款去重在 build_pool 层统一负责（保留最新批次，旧行进 reasons 披露），
