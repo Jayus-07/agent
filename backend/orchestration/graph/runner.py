@@ -49,6 +49,19 @@ from backend.shared.logger import logger
 _ANSWER_EVENT = "_answer"
 
 
+def _is_explicit_handoff(question: str) -> bool:
+    """是否为显式转人工表述（复用 handoff 关键词/正则表，零模型调用）。
+
+    供 input_guard clarify 豁免判断；检测器不可用时返回 False（保持
+    原短路行为，宁可多澄清一次也不误放行）。
+    """
+    try:
+        from backend.customer_service.handoff import detect_handoff_trigger
+        return detect_handoff_trigger(question) is not None
+    except Exception:  # noqa: BLE001 — 检测失败按非转人工处理
+        return False
+
+
 def _domain_node_names() -> set[str]:
     """已注册域图的主图节点名集合（cs_graph_node / travel_graph_node / …）。
 
@@ -98,14 +111,33 @@ class GraphRunner:
         # ── Input Guard：输入侧门禁（Router/Planner 之前；拦截即短路不进图）──
         guard_result = get_input_guard().guard(question or "", session_id=session_id)
         if guard_result.action in (GuardAction.BLOCK, GuardAction.CLARIFY):
-            finish_guard_trace(session_id, guard_result)
-            yield {"event": "status", "data": {"node": "input_guard", "ts": time.time()}}
-            message = guard_result.message or "## 提示\n\n无法处理该问题。"
-            if fallback_deltas:
-                yield from emit_delta_events(message, stop_event)
-            yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
-            yield make_done_event(message, {}, start_time)
-            return
+            # 显式转人工豁免（2026-09-17）：guard 的「模糊问题→clarify」规则
+            # 会把「转人工/找真人客服」类硬意图短路在图外（13ms 内直接回澄清
+            # 话术），cs_prefilter 直通层永远收不到。此处仅豁免体验层的
+            # CLARIFY——改写为 ALLOW 放行进图，由 cs_prefilter 直通路由到
+            # cs_handoff；BLOCK（安全拦截：注入/有害）不豁免。
+            if (
+                guard_result.action == GuardAction.CLARIFY
+                and _is_explicit_handoff(question or "")
+            ):
+                logger.info(
+                    "[Runner] 显式转人工豁免 input_guard clarify，放行进图: "
+                    f"{(question or '')[:40]}"
+                )
+                guard_result = guard_result.model_copy(update={
+                    "action": GuardAction.ALLOW,
+                    "confidence": 1.0,
+                    "reason": f"explicit_handoff_bypass: {guard_result.reason}",
+                })
+            else:
+                finish_guard_trace(session_id, guard_result)
+                yield {"event": "status", "data": {"node": "input_guard", "ts": time.time()}}
+                message = guard_result.message or "## 提示\n\n无法处理该问题。"
+                if fallback_deltas:
+                    yield from emit_delta_events(message, stop_event)
+                yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
+                yield make_done_event(message, {}, start_time)
+                return
 
         # ── Tracing（提前到会话加载之前，使 memory/kb 加载耗时可归因）──
         trace = trace_collector.start(question, session_id, workflow_name="agent")
