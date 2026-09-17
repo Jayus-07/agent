@@ -59,14 +59,17 @@ export function useCSHandoffSync(sessionId: string, enabled: boolean) {
 
         const { setHandoffState, addMessage } = useCSChatStore.getState()
 
-        // 坐席消息入列（历史补拉 + 增量都走这里，message_id 幂等无需去重——
-        // since_id 游标保证不重复；切换会话时 effect 重置游标）
+        // 坐席消息入列（历史补拉 + 增量都走这里；id=message_id 幂等，
+        // appendAgentMessage 按 id 去重——切换会话/水合恢复后 since_id 归零
+        // 会重拉全量，靠去重防重复气泡）
         const agentMsgs = data.messages.filter((m) => m.sender_type === 'human_agent')
         for (const m of agentMsgs) {
-          const msg: Omit<CSMessage, 'id'> = {
+          const msg: CSMessage = {
+            id: m.message_id,
             role: 'agent',
             content: m.content,
             timestamp: m.created_at ? Date.parse(m.created_at) || Date.now() : Date.now(),
+            csNodes: [],
           }
           appendAgentMessage(sessionId, msg)
         }
@@ -95,24 +98,23 @@ export function useCSHandoffSync(sessionId: string, enabled: boolean) {
   }, [sessionId, enabled])
 }
 
-/** 直接写 store：绕过 addMessage（agent 消息不应抢占会话标题） */
+/** 直接写 store：绕过 addMessage（agent 消息不应抢占会话标题）；按 message_id 幂等去重 */
 function appendAgentMessage(
   sessionId: string,
-  msg: Omit<CSMessage, 'id'>,
+  msg: CSMessage,
 ): void {
   useCSChatStore.setState((state) => {
     const sid = sessionId || state.currentId
     return {
       sessions: state.sessions.map((s) =>
         s.id === sid
-          ? {
-              ...s,
-              messages: [
-                ...s.messages,
-                { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...msg },
-              ],
-              updatedAt: Date.now(),
-            }
+          ? s.messages.some((m) => m.id === msg.id)
+            ? s
+            : {
+                ...s,
+                messages: [...s.messages, msg],
+                updatedAt: Date.now(),
+              }
           : s,
       ),
     }

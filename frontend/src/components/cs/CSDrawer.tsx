@@ -7,11 +7,12 @@
  * 与 useCSChat 流式 hook，在 /agent 页右侧滑出，展示客服聊天记录。
  * 组件装配方式与管理端 frontend-admin/src/app/cs/page.tsx 保持一致。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Headphones, Plus, X } from 'lucide-react'
 import { useCSChatStore } from '@/store/csChat'
 import { useCSChat } from '@/hooks/useCSChat'
 import { useCSHandoffSync } from '@/hooks/useCSHandoffSync'
+import { listMyConversations } from '@/api/cs'
 import CSWelcome from '@/components/cs/CSWelcome'
 import CSMessageList from '@/components/cs/CSMessageList'
 import CSInput from '@/components/cs/CSInput'
@@ -42,6 +43,17 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
 
   // 人工介入同步：坐席消息轮询入列 + 转接状态卡片（抽屉打开期间生效）
   useCSHandoffSync(currentId, open)
+
+  // csChat store 纯内存，刷新即失——首次打开抽屉时从 CS 域恢复最近会话
+  // （GET /cs/conversations/my 按登录身份过滤；静默失败不打扰， guest 401 跳过）
+  const hydratedRef = useRef(false)
+  useEffect(() => {
+    if (!open || hydratedRef.current) return
+    hydratedRef.current = true
+    listMyConversations(10).then((items) => {
+      if (items.length > 0) useCSChatStore.getState().hydrateFromServer(items)
+    })
+  }, [open])
 
   // 满意度评价：会话有回复且非流式中显示；切换会话时重置
   const [showSatisfaction, setShowSatisfaction] = useState(true)

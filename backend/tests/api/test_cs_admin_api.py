@@ -226,6 +226,85 @@ class TestGetConversationTraces:
         assert resp.status_code == 503
 
 
+class TestMyConversations:
+    """GET /cs/conversations/my — 用户侧恢复历史（按登录身份过滤）。"""
+
+    @staticmethod
+    def _fake_identity(user_id):
+        from backend.app.api.identity import Identity
+
+        return Identity(
+            user_id=user_id,
+            auth_type="jwt" if user_id else "guest",
+            source="header" if user_id else "guest",
+        )
+
+    def test_guest_returns_401(self, client, monkeypatch):
+        """未认证（guest）一律 401，不触发 DB。"""
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda req: self._fake_identity(""),
+        )
+        resp = client.get("/cs/conversations/my")
+        assert resp.status_code == 401
+
+    def test_returns_own_items(self, client, monkeypatch):
+        """认证用户 → 返回自己的会话（含消息），user_id/limit 透传 helper。"""
+        captured = {}
+
+        async def fake_my(*, user_id, limit):
+            captured["user_id"] = user_id
+            captured["limit"] = limit
+            return cs_admin.MyConversationsResponse(items=[
+                cs_admin.MyConversationItem(
+                    conversation_id="conv-9",
+                    summary="转人工",
+                    conversation_status="open",
+                    handling_mode="human",
+                    created_at="2026-09-17T05:00:00+00:00",
+                    last_activity_at="2026-09-17T05:30:00+00:00",
+                    messages=[
+                        cs_admin.MyConversationMessage(
+                            message_id="m1", sender_type="user",
+                            content="我想转接人工客服",
+                            created_at="2026-09-17T05:00:00+00:00",
+                        ),
+                        cs_admin.MyConversationMessage(
+                            message_id="m2", sender_type="human_agent",
+                            content="您好，我是人工坐席",
+                            created_at="2026-09-17T05:30:00+00:00",
+                        ),
+                    ],
+                ),
+            ])
+
+        monkeypatch.setattr(cs_admin, "_async_my_conversations", fake_my)
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda req: self._fake_identity("9"),
+        )
+        resp = client.get("/cs/conversations/my?limit=5")
+        assert resp.status_code == 200
+        assert captured == {"user_id": "9", "limit": 5}
+        items = resp.json()["items"]
+        assert len(items) == 1
+        assert items[0]["conversation_id"] == "conv-9"
+        assert items[0]["messages"][1]["sender_type"] == "human_agent"
+
+    def test_db_error_returns_503(self, client, monkeypatch):
+        """DB 故障 → 503（与其它读端点语义一致）。"""
+        async def fake_my(**kwargs):
+            raise RuntimeError("connection refused")
+
+        monkeypatch.setattr(cs_admin, "_async_my_conversations", fake_my)
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda req: self._fake_identity("9"),
+        )
+        resp = client.get("/cs/conversations/my")
+        assert resp.status_code == 503
+
+
 class TestResponseModels:
 
     def test_message_dto_defaults(self):

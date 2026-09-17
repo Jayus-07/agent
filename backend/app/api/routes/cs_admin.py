@@ -9,7 +9,7 @@ traces 端点始终走 Python（trace 数据在 observability.trace_store）。
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from backend.shared.logger import logger
@@ -82,6 +82,28 @@ class PaginatedConversations(BaseModel):
     items: list[ConversationSummary]
     total: int
     has_more: bool
+
+
+class MyConversationMessage(BaseModel):
+    message_id: str
+    sender_type: str
+    content: str
+    content_type: str = "text"
+    created_at: str
+
+
+class MyConversationItem(BaseModel):
+    conversation_id: str
+    summary: str | None = None
+    conversation_status: str
+    handling_mode: str
+    created_at: str
+    last_activity_at: str | None = None
+    messages: list[MyConversationMessage]
+
+
+class MyConversationsResponse(BaseModel):
+    items: list[MyConversationItem]
 
 
 class RatingRequest(BaseModel):
@@ -205,6 +227,33 @@ async def rate_conversation(conversation_id: str, body: RatingRequest):
         raise
     except Exception as e:
         logger.warning(f"[CSAdmin] rate_conversation failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
+
+@router.get("/my", response_model=MyConversationsResponse)
+async def list_my_conversations(
+    request: Request,
+    limit: int = Query(10, ge=1, le=50),
+):
+    """用户侧「我的客服会话」（含消息）——客服抽屉刷新后恢复历史用。
+
+    身份取网关验签后注入的头（与 /memory/* 同一 resolve_identity 模式），
+    只返回当前登录用户自己的会话；guest 一律 401。
+    必须注册在 GET /{conversation_id} 之前，否则 "my" 被当作 conversation_id。
+    消息读本地库（与 get_conversation_messages 同一先例：读侧不随 java cutover 代理）。
+    """
+    from backend.app.api.identity import resolve_identity
+
+    ident = resolve_identity(request)
+    if not ident.authenticated:
+        raise HTTPException(401, detail="未认证：客服会话按登录用户隔离")
+
+    try:
+        return await _async_my_conversations(user_id=ident.user_id, limit=limit)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[CSAdmin] list_my_conversations failed: {e}")
         raise HTTPException(503, detail="Database unavailable")
 
 
@@ -495,6 +544,75 @@ async def get_conversation_messages(
 
 
 # ── Async helpers ────────────────────────────────────────
+
+async def _async_my_conversations(*, user_id: str, limit: int) -> MyConversationsResponse:
+    """当前用户的最近会话（含消息，单会话上限 100 条）。"""
+    from sqlalchemy import select
+
+    from backend.customer_service.models.conversation import CSConversation
+    from backend.customer_service.models.message import CSMessage
+    from backend.memory.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        convs = (
+            (
+                await db.execute(
+                    select(CSConversation)
+                    .where(CSConversation.user_id == user_id)
+                    .order_by(CSConversation.last_activity_at.desc().nulls_last())
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not convs:
+            return MyConversationsResponse(items=[])
+
+        ids = [c.conversation_id for c in convs]
+        msgs = (
+            (
+                await db.execute(
+                    select(CSMessage)
+                    .where(CSMessage.conversation_id.in_(ids))
+                    .order_by(CSMessage.id.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        by_conv: dict[str, list] = {}
+        for m in msgs:
+            bucket = by_conv.setdefault(m.conversation_id, [])
+            if len(bucket) < 100:  # 单会话消息上限，防御异常长会话
+                bucket.append(m)
+
+        items = [
+            MyConversationItem(
+                conversation_id=c.conversation_id,
+                summary=c.summary,
+                conversation_status=c.conversation_status,
+                handling_mode=c.handling_mode,
+                created_at=c.created_at.isoformat() if c.created_at else "",
+                last_activity_at=(
+                    c.last_activity_at.isoformat() if c.last_activity_at else None
+                ),
+                messages=[
+                    MyConversationMessage(
+                        message_id=m.message_id,
+                        sender_type=m.sender_type,
+                        content=m.content,
+                        content_type=m.content_type or "text",
+                        created_at=m.created_at.isoformat() if m.created_at else "",
+                    )
+                    for m in by_conv.get(c.conversation_id, [])
+                ],
+            )
+            for c in convs
+        ]
+        return MyConversationsResponse(items=items)
+
 
 async def _async_list_conversations(
     *, limit, cursor, status, handling_mode, user_id, q, run_sync,

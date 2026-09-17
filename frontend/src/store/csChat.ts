@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid'
 import type { SSEStreamEvent } from '@/lib/types'
 import { isTerminalEvent, reduceStreamCore } from '@/store/stream-reduce'
 import type { CSConfirmationState, CSHandoffState } from '@/components/cs/constants'
+import type { MyConversationItem } from '@/api/cs'
 
 export interface CSMessage {
   id: string
@@ -40,6 +41,7 @@ interface CSChatState {
   newSession: () => string
   switchSession: (id: string) => void
   deleteSession: (id: string) => void
+  hydrateFromServer: (items: MyConversationItem[]) => void
 
   addMessage: (role: 'user' | 'assistant' | 'agent', content: string, sessionId?: string) => void
   addStreamEvent: (evt: SSEStreamEvent, sessionId?: string) => void
@@ -67,6 +69,43 @@ function createCSSession(): CSSession {
 
 function targetId(state: CSChatState, sid?: string): string {
   return sid ?? state.currentId
+}
+
+/** 服务端消息 → 前端气泡。id 用 message_id（与 useCSHandoffSync 轮询幂等去重共用） */
+function mapServerMessage(m: MyConversationItem['messages'][number]): CSMessage | null {
+  if (!m.content) return null
+  const role: CSMessage['role'] =
+    m.sender_type === 'human_agent'
+      ? 'agent'
+      : m.sender_type === 'user'
+        ? 'user'
+        : 'assistant'
+  return {
+    id: m.message_id,
+    role,
+    content: m.content,
+    timestamp: m.created_at ? Date.parse(m.created_at) || Date.now() : Date.now(),
+    csNodes: [],
+  }
+}
+
+function mapConversation(c: MyConversationItem): CSSession | null {
+  const messages = c.messages
+    .map(mapServerMessage)
+    .filter((m): m is CSMessage => m !== null)
+  if (messages.length === 0) return null
+  const firstUser = c.messages.find((m) => m.sender_type === 'user')?.content ?? ''
+  const title = c.summary?.trim()
+    || (firstUser ? firstUser.slice(0, 30) + (firstUser.length > 30 ? '...' : '') : '客服会话')
+  return {
+    id: c.conversation_id,
+    title,
+    messages,
+    createdAt: c.created_at ? Date.parse(c.created_at) || Date.now() : Date.now(),
+    updatedAt: c.last_activity_at
+      ? Date.parse(c.last_activity_at) || Date.now()
+      : Date.now(),
+  }
 }
 
 export const useCSChatStore = create<CSChatState>((set, get) => {
@@ -107,6 +146,37 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
     },
 
     switchSession: (id) => set({ currentId: id, error: null }),
+
+    // 刷新后恢复：抽屉首次打开时用服务端「我的客服会话」水合。
+    // 服务端按 last_activity_at 倒序返回；只并入本地没有的会话（幂等）。
+    hydrateFromServer: (items) => {
+      const restored = items
+        .map(mapConversation)
+        .filter((s): s is CSSession => s !== null)
+      if (restored.length === 0) return
+      set((state) => {
+        const existingIds = new Set(state.sessions.map((s) => s.id))
+        const fresh = restored.filter((s) => !existingIds.has(s.id))
+        if (fresh.length === 0) return {}
+        const current = state.sessions.find((s) => s.id === state.currentId)
+        const currentActive = !!current && current.messages.length > 0
+        if (currentActive) {
+          // 用户本轮已在聊：只并入历史，不抢 currentId
+          return { sessions: [...fresh, ...state.sessions] }
+        }
+        // 当前是未动过的空占位 → 最近一条恢复为当前会话，空占位丢弃
+        const latest = fresh[0]
+        const others = state.sessions.filter((s) => s.messages.length > 0)
+        return {
+          sessions: [
+            latest,
+            ...fresh.filter((s) => s.id !== latest.id),
+            ...others,
+          ],
+          currentId: latest.id,
+        }
+      })
+    },
 
     deleteSession: (id) => {
       set((state) => {
