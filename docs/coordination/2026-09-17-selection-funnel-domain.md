@@ -298,3 +298,24 @@ RAG 层 to_metadata_filter 正解、漏斗→决策任务打通。
 - 行内「查看报告」展开行：渲染报告全文（数据新鲜度披露 / 分层汇总 / 来源健康 / 价格趋势），
   免回会话翻记录。
 - 验证：selection_funnel 套件 114 passed；前端 tsc --noEmit 0 错误。
+
+## 十五、导入存储 PG 化：高并发双后端 + 源内去重保留最新（2026-09-18，012bf3e）
+
+用户拍板「按高并发设计，以后都能用」→ 漏斗三张表（import_candidates /
+keyword_stats / product_reviews）搬 PG，**完全跟随业务族 PG 约定**：
+
+- `import_pool_pg.py` / `market_data_pg.py`（isinstance 兼容子类）：
+  库归属 agent_business（复用 `SELECTION_PG_CONFIG`，未动 config/database.py）、
+  ThreadedConnectionPool（min/max 读 `DB_POOL_*`）、execute_values 批量写、
+  `SELECTION_FUNNEL_PG_TABLE_PREFIX` 测试隔离；迁移 SQL `021_selection_funnel_pg.sql`。
+- 工厂分发：`SELECTION_FUNNEL_DB_BACKEND`（默认 postgres；sqlite 为测试逃生舱——
+  漏斗单测经 conftest monkeypatch 工厂，天然隔离不打 PG）；
+  分发逻辑抽 `_new_default_store` / `_new_default_market` 纯函数可直测。
+- **语义修正**：pool_builder 源内同款去重从「留首见（旧行）」改为「保留最新批次」
+  ——用户每周更新商品榜自动用最新价，旧行照常进 reasons 披露（rule=duplicate）；
+  跨源去重仍先源优先（导入 > watchlist），「最新」只在同源内判定，
+  避免监控旧快照覆盖刚上传的新数据（test_import_priority_over_watchlist 锁定）。
+- 批次 id 加 uuid 后缀：imp-/kw-/rv- 同秒多次上传不再碰撞（实测缺陷，双轨同修）。
+- 遗留：导入池历史批次 → verifier `_trend` 接线（趋势段当前只认监控池快照），
+  数据已在库里，接线改动集中在 verify_candidates 的 history 取数处。
+- 验证：selection_funnel 套件 122 passed（114 基线 + 8 新增，含 PG 集成 7 例）。
