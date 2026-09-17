@@ -84,6 +84,22 @@ class PaginatedConversations(BaseModel):
     has_more: bool
 
 
+class RatingRequest(BaseModel):
+    rating: int
+    comment: str | None = None
+
+
+class CSStatsResponse(BaseModel):
+    """管理端统计汇总（满意度 + 意图分布 + 转人工率）"""
+    session_count: int = 0
+    message_count: int = 0
+    rated_count: int = 0
+    avg_rating: float | None = None
+    rating_dist: dict[int, int] = {}
+    intent_dist: list[dict] = []   # [{name, count}]
+    handoff_count: int = 0
+
+
 # ── Endpoints ────────────────────────────────────────────
 
 @router.get("", response_model=PaginatedConversations)
@@ -119,6 +135,76 @@ async def list_conversations(
         )
     except Exception as e:
         logger.warning(f"[CSAdmin] list_conversations failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
+
+# ── 满意度评分与统计（014_cs_rating） ──────────────────
+# 注意：GET /stats 必须注册在 GET /{conversation_id} 之前，否则 "stats" 被当作 conversation_id
+
+@router.get("/stats", response_model=CSStatsResponse)
+async def cs_stats():
+    """管理端统计汇总：会话/消息量、满意度均分与分布、意图分布、转人工会话数。"""
+    try:
+        from backend.customer_service._db_loop import run_sync
+        return await _async_cs_stats(run_sync)
+    except Exception as e:
+        logger.warning(f"[CSAdmin] stats failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
+
+@router.post("/{conversation_id}/rating")
+async def rate_conversation(conversation_id: str, body: RatingRequest):
+    """用户端满意度评分：1-5 星 + 选填备注，写入 conversations 行。"""
+    if not (1 <= body.rating <= 5):
+        raise HTTPException(422, detail="rating 必须为 1-5 的整数")
+
+    from datetime import datetime, timezone
+
+    try:
+        from sqlalchemy import select
+
+        from backend.customer_service.models.conversation import CSConversation
+        from backend.memory.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            conv = (
+                await db.execute(
+                    select(CSConversation).where(
+                        CSConversation.conversation_id == conversation_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if conv is None:
+                raise HTTPException(404, detail="Conversation not found")
+
+            conv.rating = body.rating
+            conv.rating_comment = (body.comment or "").strip() or None
+            conv.rated_at = datetime.now(timezone.utc)
+            # commit 后实例过期，作用域外不可再访问（同 close 端点的处理）
+            rated_at_iso = conv.rated_at.isoformat()
+            await db.commit()
+
+        # 广播给坐席工作台（会话列表角标实时刷新）
+        try:
+            from backend.customer_service.realtime import get_agent_hub
+
+            get_agent_hub().publish(
+                "conversation.rated",
+                conversation_id=conversation_id,
+                rating=body.rating,
+            )
+        except Exception:
+            pass  # 广播失败不影响评分落库
+
+        return {
+            "conversation_id": conversation_id,
+            "rating": body.rating,
+            "rated_at": rated_at_iso,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[CSAdmin] rate_conversation failed: {e}")
         raise HTTPException(503, detail="Database unavailable")
 
 
@@ -480,6 +566,70 @@ async def _async_list_conversations(
             return PaginatedConversations(items=items, total=total, has_more=has_more)
 
     return await _query()
+
+
+async def _async_cs_stats(run_sync) -> CSStatsResponse:
+    from sqlalchemy import distinct, func, select
+
+    from backend.customer_service.models.conversation import CSConversation
+    from backend.customer_service.models.handoff import CSHandoff
+    from backend.customer_service.models.message import CSMessage
+    from backend.memory.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        session_count = int(
+            (await db.execute(select(func.count()).select_from(CSConversation))).scalar() or 0
+        )
+        message_count = int(
+            (await db.execute(select(func.count()).select_from(CSMessage))).scalar() or 0
+        )
+
+        # 满意度：均分 + 1-5 分布
+        rating_rows = (
+            await db.execute(
+                select(CSConversation.rating, func.count())
+                .where(CSConversation.rating.isnot(None))
+                .group_by(CSConversation.rating)
+            )
+        ).all()
+        rating_dist: dict[int, int] = {}
+        rated_total = 0
+        rated_sum = 0
+        for rating_val, cnt in rating_rows:
+            rating_dist[int(rating_val)] = int(cnt)
+            rated_total += int(cnt)
+            rated_sum += int(rating_val) * int(cnt)
+
+        # 意图分布（来自消息级意图识别，取 top 6）
+        intent_rows = (
+            await db.execute(
+                select(CSMessage.intent_name, func.count())
+                .where(CSMessage.intent_name.isnot(None))
+                .group_by(CSMessage.intent_name)
+                .order_by(func.count().desc())
+                .limit(6)
+            )
+        ).all()
+        intent_dist = [{"name": name, "count": int(cnt)} for name, cnt in intent_rows]
+
+        # 转人工：出现 handoff 记录的会话数（去重）
+        handoff_count = int(
+            (
+                await db.execute(
+                    select(func.count(distinct(CSHandoff.conversation_id)))
+                )
+            ).scalar() or 0
+        )
+
+    return CSStatsResponse(
+        session_count=session_count,
+        message_count=message_count,
+        rated_count=rated_total,
+        avg_rating=round(rated_sum / rated_total, 2) if rated_total else None,
+        rating_dist=rating_dist,
+        intent_dist=intent_dist,
+        handoff_count=handoff_count,
+    )
 
 
 async def _async_get_conversation(conversation_id: str, run_sync):

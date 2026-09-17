@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Headphones, Search, ChevronRight, MessageSquare, GitBranch } from "lucide-react";
+import { Headphones, Search, ChevronRight, MessageSquare, GitBranch, BarChart3 } from "lucide-react";
 import { listConversations } from "@/api/cs";
 import type { ConversationSummary, PaginatedConversations } from "@/types/cs";
 import { formatRelative } from "@/types/trace";
@@ -84,6 +84,15 @@ export default function ConversationsPage() {
             <h1 className="text-lg font-semibold text-text-primary">会话管理</h1>
             <p className="text-xs text-text-muted">客服对话记录与链路追踪</p>
           </div>
+          <Link
+            href="/cs/stats"
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg
+              border border-border-subtle bg-white text-text-secondary
+              hover:text-accent hover:border-accent/40 transition-colors"
+          >
+            <BarChart3 size={13} />
+            满意度统计
+          </Link>
         </div>
 
         {/* Filter bar */}

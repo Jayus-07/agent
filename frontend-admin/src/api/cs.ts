@@ -7,6 +7,7 @@ import type {
   HandoffClaimResult,
   HandoffMessageDTO,
   HandoffMessagesResponse,
+  CSStatsResponse,
 } from "@/types/cs";
 
 export async function listConversations(params: {
@@ -131,4 +132,14 @@ export async function closeConversation(
       body: JSON.stringify({ agent_id: agentId }),
     },
   );
+}
+
+// ── 满意度统计（014_cs_rating）────────────────────
+
+export async function getCSStats(): Promise<CSStatsResponse> {
+  try {
+    return await request<CSStatsResponse>(`/api/cs/conversations/stats`);
+  } catch (e) {
+    throw new Error(`getCSStats failed: ${(e as Error).message}`);
+  }
 }

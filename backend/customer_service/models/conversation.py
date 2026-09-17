@@ -78,6 +78,11 @@ class CSConversation(CSBase):
     last_trace_id = Column(String(64), nullable=True)
     trace_count = Column(BigInteger, nullable=False, default=0)
 
+    # ── satisfaction rating (014_cs_rating) ──
+    rating = Column(BigInteger, nullable=True, comment="满意度 1-5 星，NULL=未评价")
+    rating_comment = Column(Text, nullable=True, comment="评分备注（选填）")
+    rated_at = Column(DateTime(timezone=True), nullable=True, comment="评分时间")
+
     # ── timestamps ──
     created_at = Column(DateTime(timezone=True), default=_now, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)

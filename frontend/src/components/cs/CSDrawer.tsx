@@ -7,7 +7,7 @@
  * 与 useCSChat 流式 hook，在 /agent 页右侧滑出，展示客服聊天记录。
  * 组件装配方式与管理端 frontend-admin/src/app/cs/page.tsx 保持一致。
  */
-import { useCallback } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Headphones, Plus, X } from 'lucide-react'
 import { useCSChatStore } from '@/store/csChat'
 import { useCSChat } from '@/hooks/useCSChat'
@@ -17,6 +17,7 @@ import CSMessageList from '@/components/cs/CSMessageList'
 import CSInput from '@/components/cs/CSInput'
 import CSStatusBar from '@/components/cs/CSStatusBar'
 import CSHandoffCard from '@/components/cs/CSHandoffCard'
+import CSSatisfactionCard from '@/components/cs/CSSatisfactionCard'
 
 interface CSDrawerProps {
   open: boolean
@@ -41,6 +42,15 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
 
   // 人工介入同步：坐席消息轮询入列 + 转接状态卡片（抽屉打开期间生效）
   useCSHandoffSync(currentId, open)
+
+  // 满意度评价：会话有回复且非流式中显示；切换会话时重置
+  const [showSatisfaction, setShowSatisfaction] = useState(true)
+  useEffect(() => {
+    setShowSatisfaction(true)
+  }, [currentId])
+  const lastRole = messages.length > 0 ? messages[messages.length - 1].role : null
+  const showRatingCard = messages.length > 0 && !isLoading && showSatisfaction
+    && (lastRole === 'assistant' || lastRole === 'agent')
 
   const handleSend = useCallback(
     (text: string) => {
@@ -123,6 +133,12 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
                 currentNode={currentNode}
               />
               {handoffState !== 'none' && <CSHandoffCard handoffState={handoffState} />}
+              {showRatingCard && (
+                <CSSatisfactionCard
+                  conversationId={currentId}
+                  onDismissed={() => setShowSatisfaction(false)}
+                />
+              )}
             </>
           ) : (
             <CSWelcome onQuickPrompt={handleSend} />

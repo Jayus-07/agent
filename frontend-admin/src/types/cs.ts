@@ -90,3 +90,15 @@ export interface HandoffMessagesResponse {
   last_id: number;
   messages: HandoffMessageDTO[];
 }
+
+// ── 满意度统计（014_cs_rating）────────────────────
+
+export interface CSStatsResponse {
+  session_count: number;
+  message_count: number;
+  rated_count: number;
+  avg_rating: number | null;
+  rating_dist: Record<string, number>;
+  intent_dist: Array<{ name: string; count: number }>;
+  handoff_count: number;
+}
