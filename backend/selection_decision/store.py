@@ -250,6 +250,17 @@ class SelectionDecisionStore:
                 ).fetchall()
         return [self._decision_row_to_dict(r) for r in rows]
 
+    def list_decisions_by_task(self, task_id: str,
+                               limit: int = 100) -> list[dict[str, Any]]:
+        """列出某任务下的全部决策记录（拍板时间倒序；B1 API 专用查询）。"""
+        with self._lock, self._conn() as conn:
+            rows = conn.execute(
+                """SELECT * FROM decision_log WHERE task_id = ?
+                   ORDER BY decision_at DESC, rowid DESC LIMIT ?""",
+                (task_id, limit),
+            ).fetchall()
+        return [self._decision_row_to_dict(r) for r in rows]
+
     @staticmethod
     def _decision_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         d = dict(row)

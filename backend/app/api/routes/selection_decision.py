@@ -91,3 +91,72 @@ def get_task(task_id: str):
     if row is None:
         raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
     return row
+
+
+# ── B1：决策拍板 / 表现回填（2026-09-17 UX 会话补齐） ──────────────
+# store 层 set_user_decision/set_feedback/record_decision 早已就绪但无路由，
+# 前端也无入口（docs/未完成功能进度汇总 B1）。语义约定：
+# - 拍板 = 留痕 + 用户决策一步完成（workflow 当前不自动 record_decision）；
+# - adopted / rejected / deferred 与 store.set_user_decision docstring 同构；
+# - 快照仅留拍板时点的证据/评分引用，事后表现走 feedback 端点回填。
+
+VALID_USER_DECISIONS = ("adopted", "rejected", "deferred")
+
+
+class DecisionRequest(BaseModel):
+    candidate_id: str = Field(..., min_length=1, max_length=128)
+    decision: str = Field(..., description="adopted / rejected / deferred")
+    category: str | None = Field(None, max_length=64)
+    recommendation: str | None = Field(None, max_length=64,
+                                       description="workflow 建议，缺省记 manual")
+    evidence_snapshot: dict = Field(default_factory=dict)
+    score_snapshot: dict = Field(default_factory=dict)
+
+
+class FeedbackRequest(BaseModel):
+    actual_metrics: dict = Field(..., description="事后真实表现：销量/评价/收益等")
+
+
+def _require_task(task_id: str) -> None:
+    if get_selection_decision_store().get(task_id) is None:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+
+@router.get("/tasks/{task_id}/decisions")
+def list_task_decisions(task_id: str):
+    """列出任务下全部决策留痕（拍板时间倒序）"""
+    _require_task(task_id)
+    return {"decisions": get_selection_decision_store().list_decisions_by_task(task_id)}
+
+
+@router.post("/tasks/{task_id}/decisions", status_code=201)
+def submit_decision(task_id: str, req: DecisionRequest):
+    """拍板：创建决策留痕并回填用户决策（幂等由 decision_version 递增表达）"""
+    if req.decision not in VALID_USER_DECISIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"decision 必须是 {'/'.join(VALID_USER_DECISIONS)} 之一，收到: {req.decision}")
+    _require_task(task_id)
+    store = get_selection_decision_store()
+    decision_id = store.record_decision(
+        task_id=task_id,
+        candidate_id=req.candidate_id,
+        category=req.category,
+        evidence_snapshot=req.evidence_snapshot,
+        score_snapshot=req.score_snapshot,
+        recommendation=req.recommendation or "manual",
+    )
+    store.set_user_decision(decision_id, req.decision)
+    logger.info(f"[SelectionDecision:api] 拍板 {decision_id}: {req.decision} "
+                f"(task={task_id}, candidate={req.candidate_id})")
+    return store.get_decision(decision_id)
+
+
+@router.post("/decisions/{decision_id}/feedback")
+def submit_feedback(decision_id: str, req: FeedbackRequest):
+    """表现回填：事后真实销量/评价/收益等，记 feedback_at"""
+    store = get_selection_decision_store()
+    if not store.set_feedback(decision_id, req.actual_metrics):
+        raise HTTPException(status_code=404, detail=f"决策不存在: {decision_id}")
+    logger.info(f"[SelectionDecision:api] 表现回填 {decision_id}")
+    return store.get_decision(decision_id)
