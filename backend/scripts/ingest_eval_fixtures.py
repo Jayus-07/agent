@@ -119,12 +119,28 @@ def main() -> int:
     hash_ids.discard("")
     slugs = set(paths.keys())
     _perm_by_slug = {d["doc_id"]: d.get("permission_scope") or "general" for d in docs}
+    # §6 版本治理（R4）：fixtures 的 version 元数据（TRAVEL_VERSIONS 链）随
+    # slug 行写入 registry —— 索引管线经 doc_row 读出后贯通 chunk metadata
+    _ver_by_slug: dict[str, dict] = {
+        d["doc_id"]: (d.get("version") or {}) for d in docs
+    }
+
+    def _version_meta(slug: str) -> dict:
+        v = _ver_by_slug.get(slug) or {}
+        return {
+            "version_id": v.get("version_id", ""),
+            "effective_from": v.get("effective_from"),
+            "effective_to": v.get("effective_to"),
+            "supersedes_version_id": v.get("supersedes") or "",
+        }
+
     for slug, fpath in paths.items():
         registry.register(
             fpath, doc_id=slug, file_hash=_sha256(Path(fpath)),
             kb_id=KB_ID, chunk_ids=[], doc_db_id="",
             metadata={"doc_type": "general", "department": "general",
-                      "permission_scope": _perm_by_slug.get(slug, "general")},
+                      "permission_scope": _perm_by_slug.get(slug, "general"),
+                      **_version_meta(slug)},
         )
     print(f"slug 行注册: {len(paths)}；待清理 hash doc_id: {len(hash_ids)}")
 
@@ -157,7 +173,8 @@ def main() -> int:
             fpath, doc_id=slug, file_hash="",
             kb_id=KB_ID, chunk_ids=[], doc_db_id="",
             metadata={"doc_type": "general", "department": "general",
-                      "permission_scope": _perm_by_slug.get(slug, "general")},
+                      "permission_scope": _perm_by_slug.get(slug, "general"),
+                      **_version_meta(slug)},
         )
         try:
             ret = indexer._index_file(fpath) or {}

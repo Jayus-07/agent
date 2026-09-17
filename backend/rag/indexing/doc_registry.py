@@ -58,12 +58,34 @@ CREATE TABLE IF NOT EXISTS doc_registry (
     time_refs    TEXT DEFAULT '',
     business_domain TEXT DEFAULT '',
     complexity   TEXT DEFAULT '',
-    permission_scope TEXT DEFAULT 'general'
+    permission_scope TEXT DEFAULT 'general',
+    version_id   TEXT DEFAULT '',
+    effective_from TEXT,
+    effective_to TEXT,
+    supersedes_version_id TEXT DEFAULT '',
+    source_priority INTEGER DEFAULT 0,
+    quality_status TEXT DEFAULT 'unknown'
 );
 CREATE INDEX IF NOT EXISTS idx_registry_doc_id ON doc_registry(doc_id);
 CREATE INDEX IF NOT EXISTS idx_registry_kb_id ON doc_registry(kb_id);
 CREATE INDEX IF NOT EXISTS idx_registry_status ON doc_registry(status);
 """
+
+# §6 治理 11 字段 → 落库列映射（R4 版本治理，2026-09-17）：
+#   document_id → doc_id（已有）    version_id → version_id（新）
+#   content_hash → file_hash（已有）status → status（已有）
+#   effective_from/effective_to/supersedes_version_id/source_priority/
+#   quality_status → 同名列（新）   department/kb_id → 已有
+# 六个新增列的惰性补列清单（双后端共用语义；PG 侧见 doc_registry_pg）。
+VERSION_GOVERNANCE_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    # (列名, SQLite 类型 + DEFAULT, 说明)
+    ("version_id", "TEXT DEFAULT ''", "版本标识（如 v1/v2/v3）"),
+    ("effective_from", "TEXT", "生效日期（ISO date）"),
+    ("effective_to", "TEXT", "失效日期（NULL/空 = 现行版本）"),
+    ("supersedes_version_id", "TEXT DEFAULT ''", "被本版本取代的前版 doc_id"),
+    ("source_priority", "INTEGER DEFAULT 0", "来源权威级（越大越权威，冲突裁决用）"),
+    ("quality_status", "TEXT DEFAULT 'unknown'", "质量门禁裁决 unknown/pass/soft_warning/failed"),
+)
 
 
 class DocumentRegistry:
@@ -102,6 +124,8 @@ class DocumentRegistry:
 
         permission_scope（2026-09-17，§4 权限范围消费方）：文档访问所需权限，
         'general' 对所有主体开放；检索/评测按请求者持有权限集合裁决。
+        R4 版本治理（2026-09-17，§6 治理 11 字段）：六列惰性补齐，
+        存量行取列默认值（version_id 空 = 非版本链文档，检索期视为现行）。
         """
         existing = {r[1] for r in conn.execute("PRAGMA table_info(doc_registry)")}
         if "permission_scope" not in existing:
@@ -109,6 +133,10 @@ class DocumentRegistry:
                 "ALTER TABLE doc_registry ADD COLUMN permission_scope TEXT DEFAULT 'general'"
             )
             logger.info("[doc_registry] 迁移：补列 permission_scope（默认 general）")
+        for col, coldef, desc in VERSION_GOVERNANCE_COLUMNS:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE doc_registry ADD COLUMN {col} {coldef}")
+                logger.info(f"[doc_registry] 迁移：补列 {col}（{desc}）")
 
     def _conn(self) -> sqlite3.Connection:
         return get_connection(self._db_path, row_factory=sqlite3.Row)
@@ -355,6 +383,9 @@ class DocumentRegistry:
             "minhash_sig", "near_dup_id", "doc_type", "summary", "keywords",
             "time_refs", "business_domain", "complexity", "quality_score",
             "quality_issues", "confidence", "permission_scope",
+            # §6 治理 11 字段（R4）：版本治理元数据可回填
+            "version_id", "effective_from", "effective_to",
+            "supersedes_version_id", "source_priority", "quality_status",
         }
         sets = {k: v for k, v in (fields or {}).items() if k in allowed}
         if not sets:
@@ -408,6 +439,14 @@ class DocumentRegistry:
         # §4 权限范围：文档访问所需权限（'general' 开放；受限值由检索侧按
         # 请求者持有权限裁决，见 backend/rag/permissions.py）
         permission_scope = meta.get("permission_scope", "general")
+        # §6 治理 11 字段（R4 版本治理）：版本标识与生效窗口；
+        # 缺省 = 非版本链文档（version_id 空，检索期按现行/无时效处理）
+        version_id = meta.get("version_id", "")
+        effective_from = meta.get("effective_from") or None
+        effective_to = meta.get("effective_to") or None
+        supersedes_version_id = meta.get("supersedes_version_id", "")
+        source_priority = meta.get("source_priority", 0)
+        quality_status = meta.get("quality_status", "unknown")
 
         # 4.1: MinHash 近似重复文档进入 pending_review 审核态（此前只是
         # 静默标记 near_dup_id 后照常 active 入库，检测结果无后续策略）。
@@ -423,8 +462,10 @@ class DocumentRegistry:
                     summary, keywords, time_refs, business_domain, complexity,
                     metadata_fingerprint, doc_version, kb_version, department,
                     permission_scope,
+                    version_id, effective_from, effective_to, supersedes_version_id,
+                    source_priority, quality_status,
                     status, last_indexed, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
                 (
                     file_path, file_name, kb_id, doc_id, file_hash,
                     fsize, fmtime,
@@ -435,6 +476,8 @@ class DocumentRegistry:
                     summary, keywords, time_refs, business_domain, complexity,
                     metadata_fingerprint, doc_version, kb_version, department,
                     permission_scope,
+                    version_id, effective_from, effective_to, supersedes_version_id,
+                    source_priority, quality_status,
                     status,
                 ),
             )

@@ -501,6 +501,18 @@ class IncrementalIndexer:
         # 理由同 department。
         doc_row = self.registry.get_by_path(file_path) or {}
         permission_scope = (doc_row.get("permission_scope") or "general").strip() or "general"
+        # §6 版本治理（2026-09-17 R4）：版本标识与生效窗口同样从 registry 行
+        # 声明值读（入库脚本 register 时写入），随 chunk 落向量库供检索期
+        # as_of/current/all_versions enforcement（backend/rag/versioning.py）。
+        version_id = str(doc_row.get("version_id") or "")
+        effective_from = str(doc_row.get("effective_from") or "")
+        effective_to = str(doc_row.get("effective_to") or "")
+        supersedes_version_id = str(doc_row.get("supersedes_version_id") or "")
+        try:
+            source_priority = int(doc_row.get("source_priority") or 0)
+        except (TypeError, ValueError):
+            source_priority = 0
+        quality_status = str(doc_row.get("quality_status") or "unknown")
 
         # ── ① load（文件读取/元数据收集）──
         load_span = trace_collector.start_span(
@@ -710,6 +722,13 @@ class IncrementalIndexer:
             "kb_id": kb_id,  # 用派生的 kb_id 参数，而非 self.kb_id（否则 kb 隔离失效）
             "department": department,  # 同上：用路径派生值，否则部门隔离失效
             "permission_scope": permission_scope,  # §4 权限范围：registry 行声明值
+            # §6 版本治理：registry 行声明值（R4）
+            "version_id": version_id,
+            "effective_from": effective_from,
+            "effective_to": effective_to,
+            "supersedes_version_id": supersedes_version_id,
+            "source_priority": source_priority,
+            "quality_status": quality_status,
             "doc_type": "general",
             "person_names": "",
         }
@@ -894,6 +913,15 @@ class IncrementalIndexer:
             # §4 权限范围：随 chunk 进向量库/doc_db，检索侧按请求者持有权限
             # 裁决（backend/rag/permissions.py）；缺省 general 行为不变
             ch.metadata["permission_scope"] = permission_scope
+            # §6 版本治理：随 chunk 进向量库/doc_db，检索侧按 as_of/current/
+            # all_versions 要求裁决（backend/rag/versioning.py）；
+            # version_id 空 = 非版本链文档（无时效约束，恒可见）
+            ch.metadata["version_id"] = version_id
+            ch.metadata["effective_from"] = effective_from
+            ch.metadata["effective_to"] = effective_to
+            ch.metadata["supersedes_version_id"] = supersedes_version_id
+            ch.metadata["source_priority"] = source_priority
+            ch.metadata["quality_status"] = quality_status
             # 以 indexer 派生的 doc_id 为权威，覆盖 loader 注入的值，
             # 保证 chroma chunk.doc_id 与 doc_registry/chunk_store 完全一致
             # （避免 loader 与 indexer 两路派生分歧导致评测 doc_id 失配）。
@@ -1161,6 +1189,14 @@ class IncrementalIndexer:
                     # §4 权限范围：沿用 registry 行声明值（doc_meta 已带），
                     # 否则最终 upsert 会把入库脚本预注册的受限标记冲回 general
                     "permission_scope": doc_meta.get("permission_scope", "general"),
+                    # §6 版本治理（R4）：沿用 registry 行声明值，防止最终
+                    # upsert 把入库脚本预注册的版本窗口冲掉
+                    "version_id": doc_meta.get("version_id", ""),
+                    "effective_from": doc_meta.get("effective_from") or None,
+                    "effective_to": doc_meta.get("effective_to") or None,
+                    "supersedes_version_id": doc_meta.get("supersedes_version_id", ""),
+                    "source_priority": doc_meta.get("source_priority", 0),
+                    "quality_status": doc_meta.get("quality_status", "unknown"),
                 },
             )
         except Exception:

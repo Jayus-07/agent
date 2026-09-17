@@ -26,7 +26,11 @@ import psycopg2
 import psycopg2.extras
 
 from backend.config.database import DOC_REGISTRY_PG_CONFIG, DOC_REGISTRY_PG_TABLE
-from backend.rag.indexing.doc_registry import DOC_STATUSES, DocumentRegistry
+from backend.rag.indexing.doc_registry import (
+    DOC_STATUSES,
+    VERSION_GOVERNANCE_COLUMNS,
+    DocumentRegistry,
+)
 from backend.shared.logger import logger
 
 # UTC 时间文本，语义等价 SQLite 的 datetime('now')
@@ -66,6 +70,12 @@ CREATE TABLE IF NOT EXISTS {table} (
     business_domain TEXT DEFAULT '',
     complexity   TEXT DEFAULT '',
     permission_scope TEXT DEFAULT 'general',
+    version_id   TEXT DEFAULT '',
+    effective_from TEXT,
+    effective_to TEXT,
+    supersedes_version_id TEXT DEFAULT '',
+    source_priority INTEGER DEFAULT 0,
+    quality_status TEXT DEFAULT 'unknown',
     expire_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_{table}_doc_id ON {table}(doc_id);
@@ -82,6 +92,8 @@ _REGISTER_VALUE_COLS = (
     "summary", "keywords", "time_refs", "business_domain", "complexity",
     "metadata_fingerprint", "doc_version", "kb_version", "department",
     "permission_scope",
+    "version_id", "effective_from", "effective_to", "supersedes_version_id",
+    "source_priority", "quality_status",
     "status",
 )
 
@@ -133,7 +145,11 @@ class PostgresDocumentRegistry(DocumentRegistry):
             self._ensure_columns(conn)
 
     def _ensure_columns(self, conn) -> None:
-        """存量表惰性加列（幂等），与 SQLite 版 _ensure_columns 对齐。"""
+        """存量表惰性加列（幂等），与 SQLite 版 _ensure_columns 对齐。
+
+        R4 版本治理（§6 治理 11 字段）：六列惰性补齐，与 011 迁移脚本等价
+        （应用侧建表即生效，脚本供容器 init / 手工 psql 两条路）。
+        """
         existing = {
             r["column_name"]
             for r in self._exec(
@@ -149,6 +165,12 @@ class PostgresDocumentRegistry(DocumentRegistry):
                 "ADD COLUMN permission_scope TEXT DEFAULT 'general'"
             )
             logger.info("[doc_registry_pg] 迁移：补列 permission_scope（默认 general）")
+        for col, coldef, desc in VERSION_GOVERNANCE_COLUMNS:
+            if col not in existing:
+                conn.cursor().execute(
+                    f"ALTER TABLE {self._table} ADD COLUMN {col} {coldef}"
+                )
+                logger.info(f"[doc_registry_pg] 迁移：补列 {col}（{desc}）")
 
     # ---- 查询 ----
 
@@ -370,6 +392,9 @@ class PostgresDocumentRegistry(DocumentRegistry):
             "minhash_sig", "near_dup_id", "doc_type", "summary", "keywords",
             "time_refs", "business_domain", "complexity", "quality_score",
             "quality_issues", "confidence", "permission_scope",
+            # §6 治理 11 字段（R4）：版本治理元数据可回填
+            "version_id", "effective_from", "effective_to",
+            "supersedes_version_id", "source_priority", "quality_status",
         }
         sets = {k: v for k, v in (fields or {}).items() if k in allowed}
         if not sets:
@@ -421,6 +446,13 @@ class PostgresDocumentRegistry(DocumentRegistry):
         kb_version = meta.get("kb_version", "v1")
         department = meta.get("department", "")
         permission_scope = meta.get("permission_scope", "general")
+        # §6 治理 11 字段（R4 版本治理），与 SQLite 版 register 语义一致
+        version_id = meta.get("version_id", "")
+        effective_from = meta.get("effective_from") or None
+        effective_to = meta.get("effective_to") or None
+        supersedes_version_id = meta.get("supersedes_version_id", "")
+        source_priority = meta.get("source_priority", 0)
+        quality_status = meta.get("quality_status", "unknown")
 
         status = "pending_review" if near_dup_id else "active"
 
@@ -434,6 +466,8 @@ class PostgresDocumentRegistry(DocumentRegistry):
             summary, keywords, time_refs, business_domain, complexity,
             metadata_fingerprint, doc_version, kb_version, department,
             permission_scope,
+            version_id, effective_from, effective_to, supersedes_version_id,
+            source_priority, quality_status,
             status,
         )
         value_cols = ", ".join(_REGISTER_VALUE_COLS)
