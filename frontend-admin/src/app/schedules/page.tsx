@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Clock, RefreshCw, Check, X, Play } from 'lucide-react'
 import { clsx } from 'clsx'
 import { fetchRaw } from '@/api/client'
+import EmptyState from '@/components/shared/EmptyState'
 
 interface Schedule {
   id: string
@@ -215,7 +216,12 @@ export default function SchedulesPage() {
         </div>
 
         {!loading && schedules.length === 0 && (
-          <p className="text-xs text-text-muted py-4">暂无定时任务</p>
+          <EmptyState
+            title="定时任务"
+            description="创建一个定时任务，让工作流按计划自动运行"
+            actionHref="/"
+            actionLabel="返回管理端首页"
+          />
         )}
       </div>
     </div>

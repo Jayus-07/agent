@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { RefreshCw, ChevronDown, ChevronRight, CheckCircle2, XCircle, AlertCircle, SkipForward } from 'lucide-react'
 import { evaluationService, type RunSummary, type EvalRunDetail } from '@/api/evaluation'
 import { useToast } from '@/components/shared/Toast'
+import EmptyState from '@/components/shared/EmptyState'
 import dynamic from 'next/dynamic'
 
 // recharts 较重，拆为独立 chunk 懒加载，避免路由切换时阻塞渲染
@@ -125,7 +126,14 @@ export default function EvaluationsPage() {
               <RefreshCw size={20} className="animate-spin text-text-muted" />
             </div>
           ) : runs.length === 0 ? (
-            <p className="text-sm text-text-muted text-center py-12">暂无评测记录</p>
+            <div className="p-6">
+              <EmptyState
+                title="评测记录"
+                description="触发一次评测后，运行记录会出现在这里"
+                actionHref="/"
+                actionLabel="返回管理端首页"
+              />
+            </div>
           ) : (
             <div className="divide-y divide-border-subtle">
               {runs.map(run => (
