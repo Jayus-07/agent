@@ -113,13 +113,36 @@ def brief_node(state: dict) -> dict:
             "finished": False,
         }
 
+    # 入口硬校验（2026-09-17 P0）：错误条件放行只会产出误导性空池，先拦下追问
+    errors = brief.validation_errors()
+    warnings = brief.validation_warnings()
+    if errors:
+        ask = "需求条件有问题，先确认一下：\n" + "\n".join(f"- {e}" for e in errors)
+        if warnings:
+            ask += "\n\n另外提醒：\n" + "\n".join(f"- {w}" for w in warnings)
+        ask += "\n\n修正后重新说一次即可，例如「给宠物零食做智能选品 80-150元 毛利率30%」。"
+        return {
+            FUNNEL_BRIEF + "_done": True,
+            "brief": save_brief(brief),
+            "brief_missing": [],
+            "status": STATUS_NEED_INFO,
+            "final_answer": ask,
+            "stage_logs": [{
+                "stage": STAGE_BRIEF, "kept": 0, "dropped": 0,
+                "reasons": [], "notes": errors,
+            }],
+            "finished": False,
+        }
+
+    # 软提示（如未知平台）随漏斗带到报告「数据缺口与说明」
     return {
         "brief": save_brief(brief),
         "brief_missing": [],
+        "notes": list(warnings),
         "status": "ok",
         "stage_logs": [{
             "stage": STAGE_BRIEF, "kept": 0, "dropped": 0,
-            "reasons": [], "notes": [f"类目={brief.category}"],
+            "reasons": [], "notes": [f"类目={brief.category}"] + warnings,
         }],
         "finished": False,
     }

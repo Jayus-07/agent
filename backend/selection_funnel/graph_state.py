@@ -30,10 +30,12 @@ STAGE_VERIFY = "verify"
 STAGE_ECON = "econ"
 STAGE_RANK = "rank"
 
-# 终态口径
+# 终态口径（2026-09-17 四分：淘空不是故障，但系统异常也不能伪装成淘空）
 STATUS_OK = "ok"                    # 漏斗跑完且有推荐
-STATUS_NEED_INFO = "need_info"      # 缺关键槽位（类目），已生成追问
+STATUS_NEED_INFO = "need_info"      # 缺关键槽位（类目）或需求条件非法，已生成追问
 STATUS_EMPTY = "empty_pool"         # 某层把候选淘空（如实报告淘汰原因）
+STATUS_FAILED = "failed"            # 节点异常/数据损坏等系统失败（适配器降级兜底并打观测标记，
+                                    #   域图内节点不自行捕获——异常向上抛，由适配器统一 stamp）
 
 
 class SelectionFunnelState(TypedDict, total=False):
@@ -63,6 +65,7 @@ class SelectionFunnelState(TypedDict, total=False):
     # === 执行态 ===
     status: str                 # STATUS_* 之一
     finished: bool
+    config_snapshot: dict       # 本次运行阈值/口径快照（reporter 产出 → trace metadata）
 
     # === 输出 ===
     final_answer: str

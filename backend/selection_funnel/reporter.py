@@ -47,16 +47,18 @@ def _drop_details(stage_logs: list[dict], limit: int = 20) -> list[str]:
 
 
 def _recommend_table(candidates: list[dict]) -> list[str]:
-    lines = ["| # | 商品 | 平台 | 售价 | 潜力分 | 毛利率 | 理由 |",
-             "|---|---|---|---|---|---|---|"]
+    lines = ["| # | 商品 | 平台 | 售价 | 潜力分 | 贡献利润率 | 商品毛利率 | 理由 |",
+             "|---|---|---|---|---|---|---|---|"]
     for c in candidates:
         econ = c.get("economics") or {}
         margin = econ.get("margin")
+        gross = econ.get("gross_margin")
         lines.append(
             f"| {c.get('rank', '-')} | {(c.get('title') or c.get('url', ''))[:28]} "
             f"| {c.get('platform') or '-'} | {_fmt(c.get('price'))} "
             f"| {(c.get('score') or {}).get('total', '-')} "
             f"| {f'{margin:.1%}' if margin is not None else '-'} "
+            f"| {f'{gross:.0%}' if gross is not None else '-'} "
             f"| {(c.get('reason') or '')[:120]} |")
     return lines
 
@@ -188,28 +190,28 @@ def _decision_draft_lines(candidates: list[dict],
     if min_margin is None:
         from backend.config.selection_funnel import SELECTION_FUNNEL_MIN_MARGIN
         min_margin = SELECTION_FUNNEL_MIN_MARGIN
-    lines = [f"- 口径：规则初判草案（毛利线 {min_margin:.0%}），供人工拍板，"
+    lines = [f"- 口径：规则初判草案（贡献利润率线 {min_margin:.0%}），供人工拍板，"
              "依据全部来自漏斗已算数字"]
     for c in candidates[:3]:
         econ = c.get("economics") or {}
         margin = econ.get("margin")
         title = (c.get("title") or c.get("url", ""))[:24]
         if margin is None:
-            lines.append(f"- 「{title}」→ **条件做**（毛利率缺失：补售价/成本后复测）")
+            lines.append(f"- 「{title}」→ **条件做**（贡献利润率缺失：补售价/成本后复测）")
             continue
         buffer_pp = (margin - min_margin) * 100
         if margin < min_margin:
-            lines.append(f"- 「{title}」→ **放弃**（毛利率 {margin:.1%} 已低于 "
+            lines.append(f"- 「{title}」→ **放弃**（贡献利润率 {margin:.1%} 已低于 "
                          f"{min_margin:.0%} 线）")
             continue
         conditions: list[str] = []
         verdict = "做"
         if buffer_pp < 2:
             verdict = "放弃"
-            conditions = [f"毛利率 {margin:.1%} 贴线（仅高 {buffer_pp:.1f}pp），无缓冲"]
+            conditions = [f"贡献利润率 {margin:.1%} 贴线（仅高 {buffer_pp:.1f}pp），无缓冲"]
         elif buffer_pp < 5:
             verdict = "条件做"
-            conditions.append(f"毛利率缓冲 {buffer_pp:.1f}pp 不足 5pp，控制首单量")
+            conditions.append(f"贡献利润率缓冲 {buffer_pp:.1f}pp 不足 5pp，控制首单量")
         if verdict != "放弃":
             if econ.get("unit_cost_estimated"):
                 verdict = "条件做"
@@ -218,8 +220,27 @@ def _decision_draft_lines(candidates: list[dict],
                 verdict = "条件做"
                 conditions.append("存在差评实证痛点，对策落地后再上量")
         cond = f"；条件：{'；'.join(conditions)}" if conditions else ""
-        lines.append(f"- 「{title}」→ **{verdict}**（毛利率 {margin:.1%}，"
+        lines.append(f"- 「{title}」→ **{verdict}**（贡献利润率 {margin:.1%}，"
                      f"缓冲 {buffer_pp:+.1f}pp{cond}）")
+    return lines
+
+
+def _config_lines(brief, min_margin: float) -> list[str]:
+    """运行配置快照渲染（与 build_config_snapshot 同源，报告可复现）。"""
+    from backend.config.selection_funnel import build_config_snapshot
+    snap = build_config_snapshot(brief.category, min_margin)
+    lines = [
+        f"- 候选池来源优先级：{' → '.join(snap['pool_sources'])}",
+        f"- 初筛线：评分 ≥ {snap['min_rating']:g}，评价/销量线 ≥ {snap['min_reviews']:g}，"
+        f"池上限 {snap['max_pool']:g}",
+        f"- 利润口径：贡献利润率线 {snap['min_margin']:.0%}"
+        f"（扣点 {snap['fee_rate']:.1%} / 物流 {snap['logistics_fee']:g} 元 / "
+        f"推广 {snap['ads_ratio']:.0%} / 退款损耗 {snap['refund_ratio']:.0%}）；"
+        f"商品毛利率仅展示不门控",
+        f"- 输出 Top-N：{snap['top_n']:g}",
+    ]
+    if snap.get("category_rules"):
+        lines.append(f"- 类目差异化规则：{snap['category_rules']}")
     return lines
 
 
@@ -229,18 +250,22 @@ def render_report(brief, stage_logs: list[dict], candidates: list[dict],
                   pains: list[str] | None = None,
                   pool: list[dict] | None = None,
                   moq: float | None = None,
-                  min_margin: float | None = None) -> str:
+                  min_margin: float | None = None,
+                  config_lines: list[str] | None = None) -> str:
     """正常路径报告。knowledge = 合规提示；market/pains = 赛道画像 / 痛点机会；
-    pool = 建池全量（竞争格局）；moq/min_margin = 测款卡首批投入 / 决策草案毛利线。"""
+    pool = 建池全量（竞争格局）；moq/min_margin = 测款卡首批投入 / 决策草案利润线；
+    config_lines = 本次运行配置（阈值/口径快照，可复现）。"""
     lines = [
         f"## 智能选品漏斗报告（{brief.category}）", "",
         f"需求口径：平台 {brief.platform or '不限'}；"
         f"价格带 {f'{brief.price_min:g}-{brief.price_max:g}元' if brief.price_min is not None and brief.price_max is not None else '不限'}；"
-        f"目标毛利率 {brief.target_margin:.0%}" if brief.target_margin else
-        f"需求口径：平台 {brief.platform or '不限'}；价格带 不限；目标毛利率 用类目默认", "",
+        f"目标贡献利润率 {brief.target_margin:.0%}" if brief.target_margin else
+        f"需求口径：平台 {brief.platform or '不限'}；价格带 不限；目标贡献利润率 用类目默认", "",
         "### 漏斗计数", "",
     ]
     lines += _stage_table(stage_logs)
+    if config_lines:
+        lines += ["", "### 运行配置（本次口径）", ""] + config_lines
     lines += ["", "### 推荐 Top-N", ""]
     if candidates:
         lines += _recommend_table(candidates)
@@ -281,6 +306,11 @@ def render_report(brief, stage_logs: list[dict], candidates: list[dict],
 def render_empty_pool(brief, stage_logs: list[dict], notes: list[str]) -> str:
     """漏斗中途淘空的报告：如实说明在哪一层、为什么。"""
     last = stage_logs[-1] if stage_logs else {}
+    from backend.config.selection_funnel import (
+        SELECTION_FUNNEL_MIN_MARGIN, rules_for)
+    min_margin = float(brief.target_margin
+                       or rules_for(brief.category).get("min_margin",
+                                                        SELECTION_FUNNEL_MIN_MARGIN))
     lines = [
         f"## 智能选品漏斗报告（{brief.category}）", "",
         f"**候选在「{_STAGE_LABELS.get(last.get('stage'), last.get('stage', ''))}」层全部淘汰，"
@@ -288,6 +318,7 @@ def render_empty_pool(brief, stage_logs: list[dict], notes: list[str]) -> str:
         "### 漏斗计数", "",
     ]
     lines += _stage_table(stage_logs)
+    lines += ["", "### 运行配置（本次口径）", ""] + _config_lines(brief, min_margin)
     drop_details = _drop_details(stage_logs)
     if drop_details:
         lines += ["", "### 淘汰明细", ""] + drop_details
@@ -337,6 +368,9 @@ def reporter_node(state: dict) -> dict:
                            market=_market_lines(brief.category),
                            pains=_pain_lines(candidates, brief.category),
                            pool=list(state.get("pool") or []),
-                           moq=moq, min_margin=min_margin)
+                           moq=moq, min_margin=min_margin,
+                           config_lines=_config_lines(brief, min_margin))
+    from backend.config.selection_funnel import build_config_snapshot
     return {"final_answer": answer, "status": "ok",
+            "config_snapshot": build_config_snapshot(brief.category, min_margin),
             "finished": True}

@@ -4,6 +4,12 @@
   margin = (price − cost − price×fee_rate − logistics − price×ads_ratio
             − price×refund_ratio) / price
 
+命名纪律（2026-09-17 口径正名）：
+  - margin     = 贡献利润率：扣除平台扣点/物流/推广/退款等可归属成本后的比例，
+                 econ 门控唯一判据；
+  - gross_margin = 商品毛利率：(price − cost) / price，仅扣采购成本，纯展示
+                 不门控——避免用户把贡献利润率误读为"扣完全部费用的净利水平"。
+
 用途：漏斗层五的淘汰判据 + 推荐理由里的数字来源。
 后续要暴露给主图 Planner 时再包 Skill，域内直接 import 本模块。
 """
@@ -27,7 +33,7 @@ def calc_unit_economics(
 
     Returns:
         {price, unit_cost, unit_cost_estimated, platform_fee, logistics_fee,
-         ads_fee, refund_loss, net_profit, margin, warnings}
+         ads_fee, refund_loss, net_profit, margin, gross_margin, warnings}
     """
     warnings: list[str] = []
     unit_cost_estimated = False
@@ -36,6 +42,7 @@ def calc_unit_economics(
                 "unit_cost_estimated": False,
                 "platform_fee": None, "logistics_fee": None, "ads_fee": None,
                 "refund_loss": None, "net_profit": None, "margin": None,
+                "gross_margin": None,
                 "warnings": ["售价缺失或非正，无法测算利润"]}
     if unit_cost is None:
         unit_cost = round(price * default_cost_ratio, 2)
@@ -47,6 +54,7 @@ def calc_unit_economics(
     refund_loss = round(price * refund_ratio, 2)
     net = round(price - unit_cost - platform_fee - logistics_fee - ads_fee - refund_loss, 2)
     margin = round(net / price, 4)
+    gross_margin = round((price - unit_cost) / price, 4)
     if unit_cost >= price:
         warnings.append("成本不低于售价，该品没有利润空间")
     return {
@@ -58,5 +66,6 @@ def calc_unit_economics(
         "refund_loss": refund_loss,
         "net_profit": net,
         "margin": margin,
+        "gross_margin": gross_margin,
         "warnings": warnings,
     }

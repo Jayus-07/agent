@@ -39,7 +39,10 @@ def selection_funnel_graph_node(state: dict) -> dict:
         )
         result = build_funnel_result(final_state)
     except Exception:
+        # 终态四分（2026-09-17 P0）：系统异常 ≠ 淘空——trace 打 funnel_status=failed，
+        # 失败率可与 empty_pool / need_info 分开统计，不伪装成正常终态。
         logger.exception("[selection_funnel_graph_node] 漏斗域图执行异常，降级返回兜底回复")
+        _stamp_failed_status()
         return {
             "final_answer": _FALLBACK_ANSWER,
             "funnel_context": funnel_context or {},
@@ -52,8 +55,20 @@ def selection_funnel_graph_node(state: dict) -> dict:
     }
 
 
+def _stamp_failed_status() -> None:
+    """异常终态观测标记（软失败）：trace.tags 记 funnel_status=failed。"""
+    try:
+        from backend.observability.tracer import trace_collector
+        trace = trace_collector.current()
+        if trace is None:
+            return
+        trace.tags["funnel_status"] = "failed"
+    except Exception:
+        logger.debug("[selection_funnel_graph_node] failed 标记写入失败", exc_info=True)
+
+
 def _stamp_execution_tags(final_state: dict, result: dict) -> None:
-    """漏斗质量指标埋点（软失败）：各层留存数 / 终态，供后续漏斗转化率统计。"""
+    """漏斗质量指标埋点（软失败）：各层留存数 / 终态 / 运行配置，供漏斗转化率统计。"""
     try:
         from backend.observability.tracer import trace_collector
         trace = trace_collector.current()
@@ -63,7 +78,9 @@ def _stamp_execution_tags(final_state: dict, result: dict) -> None:
         brief = final_state.get("brief") or {}
         if brief.get("category"):
             trace.tags["funnel_category"] = brief["category"]
-        trace.metadata["funnel_stage_summary"] = (
-            result.get("funnel_context") or {}).get("stage_summary", [])
+        ctx = result.get("funnel_context") or {}
+        trace.metadata["funnel_stage_summary"] = ctx.get("stage_summary", [])
+        if ctx.get("config_snapshot"):
+            trace.metadata["funnel_config"] = ctx["config_snapshot"]
     except Exception:
         logger.debug("[selection_funnel_graph_node] 执行标签写入失败", exc_info=True)

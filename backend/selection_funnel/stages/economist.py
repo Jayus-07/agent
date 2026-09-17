@@ -1,7 +1,8 @@
 """selection_funnel/stages/economist.py — 漏斗层五：利润测算淘汰
 
-毛利率 = (售价 − 成本 − 平台扣点 − 物流 − 推广费) / 售价，
+贡献利润率 = (售价 − 成本 − 平台扣点 − 物流 − 推广费 − 退款损耗) / 售价，
 低于目标线直接淘汰并给出完整数字明细 —— 淘汰理由必须可复算。
+（口径正名 2026-09-17：本层门控判据是贡献利润率，商品毛利率仅展示不门控。）
 """
 from __future__ import annotations
 
@@ -42,7 +43,7 @@ def econ_candidates(candidates: list[dict], category: str,
             reasons.append({
                 "url": c.get("url", ""), "title": c.get("title") or "",
                 "rule": "min_margin",
-                "value": f"毛利率 {econ['margin']:.1%} < 目标 {min_margin:.0%} "
+                "value": f"贡献利润率 {econ['margin']:.1%} < 目标 {min_margin:.0%} "
                          f"(售价 {econ['price']} − 成本 {econ['unit_cost']} "
                          f"− 扣点 {econ['platform_fee']} − 物流 {econ['logistics_fee']} "
                          f"− 推广 {econ['ads_fee']} − 退款损耗 {econ['refund_loss']})",

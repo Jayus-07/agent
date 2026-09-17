@@ -33,13 +33,17 @@ def build_funnel_result(final_state: dict) -> dict[str, Any]:
         for c in (final_state.get("candidates") or [])
     ]
     brief = final_state.get("brief") or {}
+    context: dict[str, Any] = {
+        "category": brief.get("category", ""),
+        "status": final_state.get("status") or "ok",
+        "top": top,
+        "stage_summary": stage_summary,
+    }
+    # 运行配置快照（reporter 正常路径产出）→ 透传给 trace metadata
+    if final_state.get("config_snapshot"):
+        context["config_snapshot"] = final_state["config_snapshot"]
     return {
         "final_answer": final_state.get("final_answer") or "",
         "status": final_state.get("status") or "ok",
-        "funnel_context": {
-            "category": brief.get("category", ""),
-            "status": final_state.get("status") or "ok",
-            "top": top,
-            "stage_summary": stage_summary,
-        },
+        "funnel_context": context,
     }

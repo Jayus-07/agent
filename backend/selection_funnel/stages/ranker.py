@@ -39,7 +39,7 @@ def build_reason(item: dict) -> str:
     ]
     if econ.get("margin") is not None:
         parts.append(
-            f"毛利率 {econ['margin']:.1%}（售价 {econ['price']}，净利 {econ['net_profit']}/件）")
+            f"贡献利润率 {econ['margin']:.1%}（售价 {econ['price']}，净利 {econ['net_profit']}/件）")
     if item.get("pain_points"):
         parts.append("；".join(item["pain_points"]))
     if score.get("notes"):

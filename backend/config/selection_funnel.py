@@ -106,3 +106,24 @@ def rules_for(category: str) -> dict:
     if not category:
         return {}
     return dict(CATEGORY_RULES.get(category, {}))
+
+
+def build_config_snapshot(category: str, min_margin: float) -> dict:
+    """本次运行的阈值/口径快照（进报告「运行配置」段与 trace metadata）。
+
+    事后回答「这份报告是用哪套阈值跑出来的」——快照与报告同源，
+    env 或类目规则后续变更不影响已产出报告的口径说明。
+    """
+    return {
+        "pool_sources": list(SELECTION_FUNNEL_POOL_SOURCES),
+        "min_rating": SELECTION_FUNNEL_MIN_RATING,
+        "min_reviews": SELECTION_FUNNEL_MIN_REVIEWS,
+        "max_pool": SELECTION_FUNNEL_MAX_POOL,
+        "min_margin": float(min_margin),
+        "fee_rate": SELECTION_FUNNEL_PLATFORM_FEE_RATE,
+        "logistics_fee": SELECTION_FUNNEL_LOGISTICS_FEE_CNY,
+        "ads_ratio": SELECTION_FUNNEL_ADS_RATIO,
+        "refund_ratio": SELECTION_FUNNEL_REFUND_RATIO,
+        "top_n": SELECTION_FUNNEL_TOP_N,
+        "category_rules": dict(CATEGORY_RULES.get(category, {})),
+    }
