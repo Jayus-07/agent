@@ -287,3 +287,14 @@ RAG 层 to_metadata_filter 正解、漏斗→决策任务打通。
   过期类型存根需清子目录）；navConfig+surface 契约测试 28 passed。
 - 此前遗留「/selection 改名需与他会话对齐」随下线自动消掉；
   「漏斗 Top-5 → 决策任务打通」仍是漏斗侧下一步。
+
+## 十四、历史页快览透出：报告正文入 trace + 来源健康/规则版本列（2026-09-17，eae7005）
+
+用户确认「后端功能前端要体现」→ 按「快览 + 报告查看」落地：
+
+- 适配器成功路径埋点 `funnel_report`（报告正文 → trace.metadata；failed 路径无报告不写）。
+- 漏斗历史页加「来源健康」（pool.sources 徽章：ok 中性 / empty 琥珀 / error 红）与
+  「规则版本」（funnel_config.rules_version）两列——数据此前已入 trace，纯前端透出。
+- 行内「查看报告」展开行：渲染报告全文（数据新鲜度披露 / 分层汇总 / 来源健康 / 价格趋势），
+  免回会话翻记录。
+- 验证：selection_funnel 套件 114 passed；前端 tsc --noEmit 0 错误。
