@@ -255,23 +255,3 @@ class TestRegistryPermissionColumn:
         r.update_fields(p, {"permission_scope": "hr_confidential"})
         assert r.get_by_path(p)["permission_scope"] == "hr_confidential"
 
-    def test_legacy_db_migration(self, tmp_path):
-        """存量库（无 permission_scope 列）惰性补列。"""
-        db = str(tmp_path / "legacy.db")
-        conn = sqlite3.connect(db)
-        conn.execute(
-            "CREATE TABLE doc_registry (file_path TEXT PRIMARY KEY, file_name TEXT, "
-            "kb_id TEXT, doc_id TEXT, file_hash TEXT, file_size INTEGER, "
-            "file_mtime REAL, chunk_count INTEGER, chunk_ids TEXT, doc_db_id TEXT, "
-            "doc_type TEXT, confidence REAL, llm_used INTEGER, quality_score REAL, "
-            "quality_issues TEXT, embedding_model TEXT, minhash_sig TEXT, "
-            "near_dup_id TEXT, status TEXT, last_indexed TEXT, created_at TEXT, "
-            "updated_at TEXT)"
-        )
-        conn.commit()
-        conn.close()
-        from backend.rag.indexing.doc_registry import DocumentRegistry
-        r = DocumentRegistry(db)  # init 触发迁移
-        cols = {row[1] for row in sqlite3.connect(db).execute(
-            "PRAGMA table_info(doc_registry)")}
-        assert "permission_scope" in cols

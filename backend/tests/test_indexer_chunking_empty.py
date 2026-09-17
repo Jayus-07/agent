@@ -72,11 +72,12 @@ class TestIndexFileZeroChunks:
             registry=MagicMock(),
         )
 
-        # Mock 掉 parse_and_chunk 让它返 0 chunks(模拟扫描件 PDF / 结构损坏)
-        # 注意:_index_file_inner 是函数内 `from backend.rag.preprocessing.pipeline import parse_and_chunk`,
-        # 每次调用都重新查找模块,所以 patch 原模块的 parse_and_chunk
+        # Mock 掉 parse_and_chunk_full 让它返 0 chunks(模拟扫描件 PDF / 结构损坏)
+        # 注意:_index_file_inner 是函数内 `from backend.rag.preprocessing.pipeline import parse_and_chunk_full`,
+        # 每次调用都重新查找模块,所以 patch 原模块的 parse_and_chunk_full
+        # （旧入口 parse_and_chunk 已被 parse_and_chunk_full 取代,patch 错函数 mock 不生效）
         from backend.rag.preprocessing import pipeline as parse_pipeline_mod
-        monkeypatch.setattr(parse_pipeline_mod, "parse_and_chunk", lambda *_a, **_kw: [])
+        monkeypatch.setattr(parse_pipeline_mod, "parse_and_chunk_full", lambda *_a, **_kw: ([], {}))
 
         with pytest.raises(ChunkingEmptyError) as exc_info:
             indexer._index_file_inner(
@@ -107,7 +108,8 @@ class TestReindexFilePropagatesChunkingEmptyError:
         )
 
         # Mock 掉 _index_file 让它 raise(模拟 chunk_count=0 的实际场景)
-        def fake_index_file(_path, file_hash=None):
+        # reindex_file 会传 reindex_ctx(F4 先写后删),桩签名必须兼容
+        def fake_index_file(_path, file_hash=None, reindex_ctx=None):
             raise ChunkingEmptyError(f"{target.name}: produced 0 chunks")
         indexer._index_file = fake_index_file
 
@@ -128,7 +130,7 @@ class TestReindexFilePropagatesChunkingEmptyError:
             registry=MagicMock(),
         )
 
-        def fake_index_file(_path, file_hash=None):
+        def fake_index_file(_path, file_hash=None, reindex_ctx=None):
             raise ChunkingEmptyError("zero chunks")
         indexer._index_file = fake_index_file
 

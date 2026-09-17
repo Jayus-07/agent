@@ -1,11 +1,22 @@
 """selection 路由契约测试 — 最小 FastAPI app + TestClient + mock recommender"""
 from unittest.mock import patch
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.app.api.routes.selection import router
 from backend.selection.store import reset_selection_store
+from backend.tests.fixtures.pg_env import (  # noqa: F401
+    pg_clean_tables,
+    pg_iso_env,
+)
+
+
+@pytest.fixture(autouse=True)
+def _pg_iso(pg_clean_tables):
+    """SQLite 轨删除：weights 路由走 PG（pgtest_biz_ 前缀），不触生产表。"""
+    yield
 
 _REC_PAYLOAD = {
     "items": [{

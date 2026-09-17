@@ -84,15 +84,18 @@ def clean_tables(rag_env):
 # ── 工厂分发 ─────────────────────────────────────────────────────────
 
 class TestFactoryDispatch:
-    def test_default_is_sqlite(self, monkeypatch):
+    def test_default_also_pg(self, monkeypatch):
+        """2026-09-17 SQLite 轨删除：无 env 时工厂也直连 PG 实现。"""
         import backend.rag.indexing.chunk_store as cs_mod
         import backend.rag.preprocessing.keyword_store as ks_mod
+        from backend.rag.indexing.chunk_store_pg import PostgresChunkStore
+        from backend.rag.preprocessing.keyword_store_pg import PostgresKeywordRuleStore
         monkeypatch.setattr(cs_mod, "_store", None)
         monkeypatch.setattr(ks_mod, "_store", None)
         monkeypatch.delenv("CHUNK_STORE_BACKEND", raising=False)
         monkeypatch.delenv("KEYWORD_STORE_BACKEND", raising=False)
-        assert type(cs_mod.get_chunk_store()) is cs_mod.ChunkStore
-        assert type(ks_mod.get_keyword_store()) is ks_mod.KeywordRuleStore
+        assert isinstance(cs_mod.get_chunk_store(), PostgresChunkStore)
+        assert isinstance(ks_mod.get_keyword_store(), PostgresKeywordRuleStore)
 
     def test_postgres_dispatch(self, clean_tables):
         import backend.rag.indexing.chunk_store as cs_mod

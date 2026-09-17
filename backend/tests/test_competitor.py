@@ -16,6 +16,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from backend.tests.fixtures.pg_env import (  # noqa: F401
+    pg_clean_tables,
+    pg_iso_env,
+)
+
+
+@pytest.fixture(autouse=True)
+def _pg_iso(pg_clean_tables):
+    """SQLite 轨删除：CompetitorStore() 即 PG 实现，表走 pgtest_biz_ 前缀隔离。"""
+    yield
+
+
 # ────────────────────────────────────────────────────────────────────────────
 #  adapters.py 测试
 # ────────────────────────────────────────────────────────────────────────────
@@ -688,9 +700,8 @@ class TestCompetitorStoreWatchlist:
     def test_list_watch_enabled_only(self, store):
         store.add_watch("A", "https://a.com")
         store.add_watch("B", "https://b.com")
-        # 手动停用 B
-        with store._lock, store._connect() as conn:
-            conn.execute("UPDATE competitor_watchlist SET enabled = 0 WHERE url = ?", ("https://b.com",))
+        # 手动停用 B（PG 实现：toggle_watch；旧 sqlite 轨的裸 UPDATE 不再适用）
+        store.toggle_watch("https://b.com", False)
         enabled = store.list_watch(enabled_only=True)
         all_items = store.list_watch(enabled_only=False)
         assert len(enabled) == 1

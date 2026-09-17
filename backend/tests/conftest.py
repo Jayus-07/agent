@@ -16,10 +16,7 @@ if str(_ROOT) not in sys.path:
 
 # Windows cp936 环境下强制 UTF-8 模式，防止含中文的源文件解析失败
 os.environ["PYTHONUTF8"] = "1"
-# 测试环境禁用 Langfuse 上报/读取：保证用例确定性（不依赖外部服务、不联网），
-# tracer 自动降级回 SQLite 路径。必须在任何模块导入前生效。
-os.environ["LANGFUSE_ENABLED"] = "false"
-# 测试环境禁用 P0 结构化分析层双写，防止污染真实 data/analytics.db
+# 测试环境禁用 P0 结构化分析层双写，防止污染真实生产表
 os.environ["OBS_ANALYTICS_ENABLED"] = "false"
 
 
@@ -130,16 +127,13 @@ def _auto_approve_tools(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _reset_langfuse_exporter(monkeypatch):
-    """逐用例重置 exporter 单例，防止模块加载时缓存的 enabled 状态泄漏。"""
-    monkeypatch.setenv("LANGFUSE_ENABLED", "false")
+def _reset_observability_singletons(monkeypatch):
+    """逐用例重置 analytics 单例，防止模块加载时缓存的 enabled 状态泄漏。
+    （Langfuse 已于 2026-09-18 随弃用清理删除，exporter 单例复位一并移除。）"""
     monkeypatch.setenv("OBS_ANALYTICS_ENABLED", "false")
-    import backend.observability.langfuse_exporter as lf_mod
     import backend.observability.analytics_store as as_mod
-    lf_mod._exporter = None
     as_mod._analytics_store = None
     yield
-    lf_mod._exporter = None
     as_mod._analytics_store = None
 
 

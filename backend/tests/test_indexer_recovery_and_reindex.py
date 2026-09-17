@@ -14,6 +14,14 @@ import pytest
 
 from backend.rag.indexing.doc_registry import DocumentRegistry
 from backend.rag.indexing.indexer import IncrementalIndexer, INTERRUPTED_STATUSES
+from backend.tests.fixtures.pg_env import pg_clean_tables, pg_iso_env  # noqa: F401
+
+
+@pytest.fixture(autouse=True)
+def _pg_iso(pg_clean_tables):
+    """PG 轨删除后 DocumentRegistry 无条件落 PG（db_path 形参被忽略），
+    必须打 pgtest_biz_ 前缀表名隔离，否则用例间经生产表互相污染。"""
+    yield
 
 
 @pytest.fixture

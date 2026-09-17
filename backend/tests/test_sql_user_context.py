@@ -94,38 +94,46 @@ from backend.app.api.routes import sql as sql_route
 
 
 class TestResolveUserId:
+    """_resolve_user_id 已收敛到 identity.py（P3）：三模式机 identity_source()，
+    网关契约头固定 X-User-Id（不可配）。旧「sql 模块级 TRUST_USER_HEADER/USER_ID_HEADER
+    常量」已不存在，这里 patch auth 模式机与 config 旧开关（仅 legacy 分支消费）。"""
+
     def _make_request(self, headers=None):
         req = Mock()
         req.headers = headers or {}
         return req
 
+    def _to_legacy(self, monkeypatch, trust: bool):
+        monkeypatch.setattr("backend.config.auth.IDENTITY_SOURCE", "legacy")
+        monkeypatch.setattr("backend.config.TRUST_USER_HEADER", trust)
+
     def test_untrusted_header_ignored(self, monkeypatch):
-        """TRUST_USER_HEADER=false：即使客户端带 X-User-Id 也不采用"""
-        monkeypatch.setattr(sql_route, "TRUST_USER_HEADER", False)
+        """legacy + TRUST_USER_HEADER=false：即使客户端带 X-User-Id 也不采用"""
+        self._to_legacy(monkeypatch, trust=False)
         req = self._make_request({"X-User-Id": "101"})
         assert sql_route._resolve_user_id(req) is None
 
     def test_trusted_header_parsed(self, monkeypatch):
-        monkeypatch.setattr(sql_route, "TRUST_USER_HEADER", True)
+        self._to_legacy(monkeypatch, trust=True)
         req = self._make_request({"X-User-Id": "101"})
         assert sql_route._resolve_user_id(req) == 101
 
     def test_trusted_header_missing(self, monkeypatch):
-        monkeypatch.setattr(sql_route, "TRUST_USER_HEADER", True)
+        self._to_legacy(monkeypatch, trust=True)
         req = self._make_request({})
         assert sql_route._resolve_user_id(req) is None
 
     def test_trusted_header_invalid_int(self, monkeypatch):
-        monkeypatch.setattr(sql_route, "TRUST_USER_HEADER", True)
+        self._to_legacy(monkeypatch, trust=True)
         req = self._make_request({"X-User-Id": "not-a-number"})
         assert sql_route._resolve_user_id(req) is None
 
-    def test_custom_header_name(self, monkeypatch):
-        monkeypatch.setattr(sql_route, "TRUST_USER_HEADER", True)
-        monkeypatch.setattr(sql_route, "USER_ID_HEADER", "X-Auth-User")
+    def test_contract_header_name_fixed(self, monkeypatch):
+        """只认网关契约头 X-User-Id：USER_ID_HEADER 已固化为网关注入契约
+        （与 AuthenticationGlobalFilter 对齐），其他同名语义头不认。"""
+        self._to_legacy(monkeypatch, trust=True)
         req = self._make_request({"X-Auth-User": "42", "X-User-Id": "999"})
-        # 只认配置的头名
-        assert sql_route._resolve_user_id(req) == 42
+        assert sql_route._resolve_user_id(req) == 999
 
 
 # =====================================================

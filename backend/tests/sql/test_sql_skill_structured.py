@@ -213,7 +213,10 @@ class TestSQLSkillContract:
         asyncio.run(run())
 
     def test_step_results_preserves_other_steps(self):
-        """不应清空已有 step_results 中其他 step 的数据。"""
+        """2026-09-15 整改契约：execute 只返回自有步骤增量（不携带他人步骤，
+        全局累积由 AgentState._merge_step_results 按键合并，reducer 有独立测试
+        tests/orchestration/test_state.py）。既有步骤不被破坏 = 返回值不含
+        他人键，且传入 state 的既有步骤无副作用。"""
         async def run():
             fake = SQLResult.success(rows=[{"x": 1}], columns=["x"], sql="SELECT 1")
             state = _make_state()
@@ -223,7 +226,9 @@ class TestSQLSkillContract:
             with mp("backend.skills.sql.skill.get_sql_agent") as get_agent:
                 get_agent.return_value.ask_struct = lambda *a, **k: fake
                 out = await SQLSkill().execute(state)
-            assert "0" in out["step_results"]
-            assert out["step_results"]["0"]["status"] == "success"
-            assert "1" in out["step_results"]
+            # 只返回当前步 1 的增量
+            assert set(out["step_results"]) == {"1"}
+            assert out["step_results"]["1"]["status"] == "success"
+            # 传入 state 中的既有步骤未被修改（无副作用）
+            assert state["step_results"]["0"]["status"] == "success"
         asyncio.run(run())

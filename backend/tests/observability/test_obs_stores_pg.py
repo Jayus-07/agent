@@ -103,12 +103,14 @@ def _trace_dict(tid: str, *, rejected: bool = False, wf: str = "agent",
 # ── 工厂分发 ─────────────────────────────────────────────────────────
 
 class TestFactoryDispatch:
-    def test_default_is_sqlite(self, monkeypatch):
+    def test_default_also_pg(self, monkeypatch):
+        """2026-09-17 SQLite 轨删除：无 env 时工厂也直连 PG 实现。"""
         monkeypatch.delenv("OBS_DB_BACKEND", raising=False)
         import backend.observability.trace_store as ts_mod
         monkeypatch.setattr(ts_mod, "_trace_store", None)
         store = ts_mod.get_trace_store()
-        assert type(store) is ts_mod.TraceStore
+        from backend.observability.trace_store_pg import PostgresTraceStore
+        assert isinstance(store, PostgresTraceStore)
 
     def test_postgres_dispatch(self, monkeypatch):
         import backend.observability.trace_store as ts_mod

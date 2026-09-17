@@ -1,7 +1,7 @@
 """test_doc_registry_pg.py — R1/C19：doc_registry PostgreSQL 连接层测试。
 
 覆盖：
-  1. 引擎分发（DOC_REGISTRY_BACKEND=postgres → PG 子类；默认 sqlite 不受影响）
+  1. 引擎分发（2026-09-17 SQLite 轨删除：构造一律返回 PG 实现，env 仅兼容不再影响分发）
   2. 全接口行为往返（register/upsert/查询/状态机/版本/过期）
   3. 多进程并发批量入库无锁冲突验收（spawn 4 进程 × 25 文档 + 单行争写）
 
@@ -19,6 +19,7 @@ import pytest
 
 from backend.config.database import DOC_REGISTRY_PG_CONFIG
 from backend.rag.indexing.doc_registry import DOC_STATUSES, DocumentRegistry
+from backend.rag.indexing.doc_registry_pg import PostgresDocumentRegistry
 
 PG_TABLE = "doc_registry_r1_test"
 
@@ -87,15 +88,24 @@ class TestDispatch:
         assert isinstance(reg, PostgresDocumentRegistry)
         assert isinstance(reg, DocumentRegistry)  # isinstance 兼容
 
-    def test_default_stays_sqlite(self, monkeypatch, tmp_path):
+    def test_default_returns_pg_impl(self, monkeypatch, tmp_path):
+        """2026-09-17 SQLite 轨删除：无论 env 如何，构造一律返回 PG 实现。"""
         monkeypatch.delenv("DOC_REGISTRY_BACKEND", raising=False)
+        monkeypatch.delenv("DOC_REGISTRY_PG_TABLE", raising=False)
+        monkeypatch.delenv("RAG_STORES_PG_TABLE_PREFIX", raising=False)
+        from backend.rag.indexing.doc_registry_pg import PostgresDocumentRegistry as PGImpl
         reg = DocumentRegistry(str(tmp_path / "reg.db"))
-        assert type(reg) is DocumentRegistry  # 非 PG 子类
+        # 用例内 import + isinstance：全量跑时 pg_env teardown 会 pop doc_registry_pg
+        # 模块重载出**新类对象**，模块级类引用做 type() is 身份断言必然误报
+        assert isinstance(reg, PGImpl)
+        assert isinstance(reg, DocumentRegistry)  # isinstance 兼容
 
-    def test_unknown_value_falls_back_sqlite(self, monkeypatch, tmp_path):
+    def test_unknown_value_still_pg_impl(self, monkeypatch, tmp_path):
+        """旧开关值不再影响分发（env 已被忽略，sqlite 轨无回滚）。"""
         monkeypatch.setenv("DOC_REGISTRY_BACKEND", "whatever")
+        from backend.rag.indexing.doc_registry_pg import PostgresDocumentRegistry as PGImpl
         reg = DocumentRegistry(str(tmp_path / "reg.db"))
-        assert type(reg) is DocumentRegistry
+        assert isinstance(reg, PGImpl)  # 用例内 import，抗模块重载（同上）
 
     def test_status_enum_shared(self):
         assert "pending_review" in DOC_STATUSES and "failed" in DOC_STATUSES

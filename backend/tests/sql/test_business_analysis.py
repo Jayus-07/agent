@@ -189,7 +189,10 @@ class TestBusinessAnalysisSkillContract:
         assert len(skill.description) > 10
 
     def test_step_results_preserves_other_steps(self):
-        """不应清空已有 step_results"""
+        """2026-09-15 整改契约：execute 只返回自有步骤增量（不携带他人步骤，
+        全局累积由 AgentState._merge_step_results 按键合并，reducer 有独立测试
+        tests/orchestration/test_state.py）。既有步骤不被破坏 = 返回值不含
+        他人键，且传入 state 的既有步骤无副作用。"""
         async def run():
             state = _make_state(
                 previous_outputs={"1": _make_sql_result().model_dump()},
@@ -212,10 +215,9 @@ class TestBusinessAnalysisSkillContract:
                     mock_analyze.return_value = _make_insight()
                     out = await BusinessAnalysisSkill().execute(state)
 
-            # step 1 保持不变
-            assert "1" in out["step_results"]
-            assert out["step_results"]["1"]["status"] == "success"
-            # step 2 被添加
-            assert "2" in out["step_results"]
+            # 只返回当前步 2 的增量
+            assert set(out["step_results"]) == {"2"}
             assert out["step_results"]["2"]["status"] == "success"
+            # 传入 state 中的既有步骤未被修改（无副作用）
+            assert state["step_results"]["1"]["status"] == "success"
         asyncio.run(run())

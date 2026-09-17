@@ -11,8 +11,18 @@ from fastapi.testclient import TestClient
 
 import backend.app.api.routes.selection_decision as route_mod
 from backend.selection_decision.store import SelectionDecisionStore
+from backend.tests.fixtures.pg_env import (  # noqa: F401
+    pg_clean_tables,
+    pg_iso_env,
+)
 
 TASK_INPUTS = {"category": "蓝牙耳机", "platforms": ["jd"]}
+
+
+@pytest.fixture(autouse=True)
+def _pg_iso(pg_clean_tables):
+    """SQLite 轨删除：store 直连 PG，表走 pgtest_biz_ 前缀隔离。"""
+    yield
 
 
 @pytest.fixture

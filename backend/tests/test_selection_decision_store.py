@@ -1,10 +1,22 @@
-"""selection_decision store 测试（tmp_path 隔离）"""
-import sqlite3
+"""selection_decision store 测试（PG pgtest_biz_ 前缀隔离）"""
+import os
 from datetime import datetime, timedelta
 
+import psycopg2
 import pytest
 
+from backend.config.database import SELECTION_DECISION_PG_CONFIG
 from backend.selection_decision.store import SelectionDecisionStore
+from backend.tests.fixtures.pg_env import (  # noqa: F401
+    pg_clean_tables,
+    pg_iso_env,
+)
+
+
+@pytest.fixture(autouse=True)
+def _pg_iso(pg_clean_tables):
+    """SQLite 轨删除：store 直连 PG，表走 pgtest_biz_ 前缀隔离。"""
+    yield
 
 
 @pytest.fixture
@@ -62,10 +74,17 @@ def test_mark_stale_running_failed(store):
     fresh_id = store.create({"n": "fresh"})
     # 把 stale 行的 created_at 改成 10 分钟前（ISO 字符串可直接字典序比较）
     old = (datetime.now() - timedelta(minutes=10)).isoformat(timespec="seconds")
-    with sqlite3.connect(store._db_path) as conn:
-        conn.execute("UPDATE selection_tasks SET created_at = ? WHERE id = ?",
-                     (old, stale_id))
+    table = os.getenv("SELECTION_DECISION_PG_TABLE_PREFIX", "") + "selection_tasks"
+    conn = psycopg2.connect(**SELECTION_DECISION_PG_CONFIG)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE {table} SET created_at = %s WHERE id = %s",
+                (old, stale_id),
+            )
         conn.commit()
+    finally:
+        conn.close()
 
     n = store.mark_stale_running_failed(300)
     assert n == 1

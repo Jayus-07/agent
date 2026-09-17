@@ -130,29 +130,27 @@ def clean_tables(pg_env):
 
 
 class TestFactoryDispatch:
-    def test_default_is_sqlite(self, monkeypatch):
+    def test_default_also_pg(self, clean_tables):
+        """2026-09-17 SQLite 轨删除：无 BACKEND 开关，工厂一律直连 PG 实现
+        （clean_tables 提供测试表前缀隔离，不触生产表）。"""
         import backend.competitor.store as comp_mod
         import backend.market_research.store as mr_mod
         import backend.orchestration.inventory.store as inv_mod
         import backend.orchestration.workflow.persistence as wf_mod
         import backend.selection.store as sel_mod
         import backend.selection_decision.store as sd_mod
-        for mod, env in [
-            (wf_mod, "WORKFLOW_DB_BACKEND"),
-            (inv_mod, "INVENTORY_DB_BACKEND"),
-            (sel_mod, "SELECTION_BACKEND"),
-            (sd_mod, "SELECTION_DECISION_BACKEND"),
-            (mr_mod, "MARKET_RESEARCH_BACKEND"),
-            (comp_mod, "COMPETITOR_BACKEND"),
-        ]:
-            monkeypatch.delenv(env, raising=False)
-        _reset_singletons(monkeypatch)
-        assert type(wf_mod.get_workflow_run_store()) is wf_mod.WorkflowRunStore
-        assert type(inv_mod.get_inventory_store()) is inv_mod.InventoryStore
-        assert type(sel_mod.get_selection_store()) is sel_mod.SelectionStore
-        assert type(sd_mod.get_selection_decision_store()) is sd_mod.SelectionDecisionStore
-        assert type(mr_mod.get_market_research_store()) is mr_mod.MarketResearchStore
-        assert type(comp_mod.get_store()) is comp_mod.CompetitorStore
+        from backend.competitor.store_pg import PostgresCompetitorStore
+        from backend.market_research.store_pg import PostgresMarketResearchStore
+        from backend.orchestration.inventory.store_pg import PostgresInventoryStore
+        from backend.orchestration.workflow.persistence_pg import PostgresWorkflowRunStore
+        from backend.selection.store_pg import PostgresSelectionStore
+        from backend.selection_decision.store_pg import PostgresSelectionDecisionStore
+        assert isinstance(wf_mod.get_workflow_run_store(), PostgresWorkflowRunStore)
+        assert isinstance(inv_mod.get_inventory_store(), PostgresInventoryStore)
+        assert isinstance(sel_mod.get_selection_store(), PostgresSelectionStore)
+        assert isinstance(sd_mod.get_selection_decision_store(), PostgresSelectionDecisionStore)
+        assert isinstance(mr_mod.get_market_research_store(), PostgresMarketResearchStore)
+        assert isinstance(comp_mod.get_store(), PostgresCompetitorStore)
 
     def test_postgres_dispatch(self, clean_tables):
         import backend.competitor.store as comp_mod

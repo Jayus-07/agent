@@ -1,9 +1,10 @@
-"""SQLite tracer fixtures — 解决 2d627d7 移除内存 deque 后的测试 fixture 兼容性。
+"""Tracer 测试 fixtures — PG 唯一实现时代的 trace 隔离。
 
 背景：
     旧 fixture 直接操作 `trace_collector._records / _active / _timers / _span_seq / _listeners`
-    等模块级属性。2d627d7 重构后，trace 数据直接写 SQLite（重启不丢），这些内存属性
-    大多已移除或语义变化。本 fixture 用临时 SQLite + 替换全局单例的方式兼容新架构。
+    等模块级属性。2d627d7 重构后 trace 数据直接落库；2026-09-17 SQLite 轨删除后，
+    TraceStore 唯一实现为 PostgresTraceStore。本 fixture 用 `pgtest_biz_` 前缀表
+    （backend/tests/fixtures/pg_env.py 的机制）替换全局单例实现隔离。
 
 关键陷阱：业务模块用 `from backend.observability.tracer import trace_collector` 是模块级绑定，
 monkeypatch 替换 `tracer_mod.trace_collector` 不会自动更新其他模块的本地引用。
@@ -20,6 +21,12 @@ from __future__ import annotations
 
 import pytest
 
+from backend.tests.fixtures.pg_env import (  # noqa: F401
+    drop_pgtest_tables,
+    set_pg_test_env,
+    _pop_store_modules,
+)
+
 
 # 所有 `from backend.observability.tracer import trace_collector` 的业务模块。
 # 加新业务模块时必须同步更新这里，否则测试用 fresh_collector 但业务模块仍用旧实例。
@@ -33,20 +40,23 @@ _REBIND_MODULES = (
 
 
 @pytest.fixture
-def fresh_collector(tmp_path, monkeypatch):
+def fresh_collector(request, monkeypatch):
     """每个测试前：
 
-    1. 注入临时 SQLite 作为 trace_store（测试结束自动清理）
+    1. 注入 pgtest 前缀 PG trace store（用例前后清表，结束自动清理）
     2. 替换全局 trace_collector 为新实例（避免污染其他测试）
     3. 同步 patch 所有业务模块的 trace_collector 引用
     4. 重置 contextvar 防止上一个测试的 _current_trace_var 残留
+    5. 同步化 trace 写入（消除异步 worker 竞态：测试在 finish() 后立即 list()）
     """
     from backend.observability import trace_store as ts_mod
     from backend.observability import tracer as tracer_mod
 
-    # 1. 临时 SQLite DB
-    temp_db = tmp_path / "trace_test.db"
-    store = ts_mod.TraceStore(str(temp_db))
+    # 1. PG 测试表 env + 建表（TraceStore() → PostgresTraceStore，__init__ 建表）
+    set_pg_test_env(monkeypatch)
+    drop_pgtest_tables()
+    request.addfinalizer(_pop_store_modules)  # teardown: 让后续 import 回到生产表名
+    store = ts_mod.TraceStore()
     monkeypatch.setattr(ts_mod, "_trace_store", store)
     # trace_collector 内部 `from backend.observability.trace_store import get_trace_store`
     # 每次都从 ts_mod 模块读 _trace_store，所以 monkeypatch 有效
@@ -71,7 +81,7 @@ def fresh_collector(tmp_path, monkeypatch):
     except Exception:
         pass
 
-    # 5. 同步化 trace 写入（消除异步 worker 竞态：测试在 finish() 后立即 list()）
+    # 5. 同步化 trace 写入（消除异步 worker 竞态）
     from backend.observability import trace_writer as tw_mod
     _orig_enqueue = tw_mod.TraceWriteQueue.enqueue
 
@@ -91,4 +101,4 @@ def fresh_collector(tmp_path, monkeypatch):
 
     yield new_collector
 
-    monkeypatch.setattr(tw_mod.TraceWriteQueue, "enqueue", _orig_enqueue)
+    drop_pgtest_tables()

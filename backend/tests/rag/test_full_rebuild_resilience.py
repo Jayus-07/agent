@@ -14,8 +14,16 @@ import pytest
 from backend.rag.indexing.doc_registry import DocumentRegistry
 from backend.rag.indexing.indexer import IncrementalIndexer
 from backend.rag.indexing.models import SyncResult
+from backend.tests.fixtures.pg_env import pg_clean_tables, pg_iso_env  # noqa: F401
 
 SIG_A = json.dumps(list(range(128)))  # 任意 128 维签名
+
+
+@pytest.fixture(autouse=True)
+def _pg_iso(pg_clean_tables):
+    """PG 轨删除后 DocumentRegistry 无条件落 PG（db_path 形参被忽略），
+    detect_near_dup 全表扫签名，必须打 pgtest_biz_ 前缀隔离生产表。"""
+    yield
 
 
 @pytest.fixture

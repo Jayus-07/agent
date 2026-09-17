@@ -1,20 +1,26 @@
-"""test_persistence.py — workflow_runs SQLite 持久化
+"""test_persistence.py — workflow_runs PG 持久化
 
 覆盖：
 - save / get round-trip
 - list 分页 + workflow_name 过滤
 - save 失败不抛（错误隔离）
 - 不可序列化 outputs 安全降级
-- 不污染生产 DB（用 tmp_path）
+- 隔离：全部用例走 pgtest_biz_ 前缀测试表，前后删表，绝不触碰生产表
+  （2026-09-17 SQLite 轨删除后，db_path 无文件语义，表名由 WORKFLOW_DB_PG_TABLE env 决定）
 """
 from __future__ import annotations
-
-import json as _json
 
 import pytest
 
 from backend.orchestration.workflow.context import WorkflowContext
 from backend.orchestration.workflow.persistence import WorkflowRunStore
+from backend.tests.fixtures.pg_env import pg_clean_tables  # noqa: F401
+
+
+@pytest.fixture(autouse=True)
+def _pg_iso(pg_clean_tables):
+    """套用 pgtest_biz_ 测试表隔离（env 注入 + 前后清表）。"""
+    yield
 
 
 # ─────────────────────────────────────────────────────────────
@@ -24,9 +30,9 @@ from backend.orchestration.workflow.persistence import WorkflowRunStore
 class TestPersistenceRoundTrip:
     """save + get 数据一致性"""
 
-    def test_save_and_get_basic(self, tmp_path):
+    def test_save_and_get_basic(self):
         """保存 ctx 后 get 能拿到"""
-        store = WorkflowRunStore(db_path=str(tmp_path / "runs.db"))
+        store = WorkflowRunStore()
         ctx = WorkflowContext(
             workflow_name="daily_report",
             run_id="run-abc",
@@ -43,9 +49,9 @@ class TestPersistenceRoundTrip:
         assert row["inputs"] == {"x": 1}
         assert row["outputs"] == {"step1": {"y": 2}}
 
-    def test_save_failure_status(self, tmp_path):
+    def test_save_failure_status(self):
         """failed status 能正确保存"""
-        store = WorkflowRunStore(db_path=str(tmp_path / "runs.db"))
+        store = WorkflowRunStore()
         ctx = WorkflowContext("wf", "run-fail")
         ctx.mark_failed("step X 失败")
         store.save(ctx)
@@ -55,17 +61,17 @@ class TestPersistenceRoundTrip:
         assert row["error"] == "step X 失败"
         assert row["finished_at"] is not None
 
-    def test_partial_status_saves(self, tmp_path):
+    def test_partial_status_saves(self):
         """partial status 能正确保存"""
-        store = WorkflowRunStore(db_path=str(tmp_path / "runs.db"))
+        store = WorkflowRunStore()
         ctx = WorkflowContext("wf", "run-partial")
         ctx.mark_partial()
         store.save(ctx)
         assert store.get("run-partial")["status"] == "partial"
 
-    def test_save_updates_existing_run(self, tmp_path):
+    def test_save_updates_existing_run(self):
         """INSERT OR REPLACE：同 run_id 二次 save 会覆盖"""
-        store = WorkflowRunStore(db_path=str(tmp_path / "runs.db"))
+        store = WorkflowRunStore()
         ctx1 = WorkflowContext("wf", "run-rep")
         ctx1.mark_success()
         store.save(ctx1)
@@ -87,14 +93,14 @@ class TestPersistenceRoundTrip:
 class TestPersistenceList:
     """list() 查询"""
 
-    def test_list_empty(self, tmp_path):
+    def test_list_empty(self):
         """空 DB 返回空列表"""
-        store = WorkflowRunStore(db_path=str(tmp_path / "runs.db"))
+        store = WorkflowRunStore()
         assert store.list() == []
 
-    def test_list_filter_by_workflow_name(self, tmp_path):
+    def test_list_filter_by_workflow_name(self):
         """list(workflow_name=X) 只返回 X 的 run"""
-        store = WorkflowRunStore(db_path=str(tmp_path / "runs.db"))
+        store = WorkflowRunStore()
         # 写入 3 条：2 daily + 1 inventory
         for name, run_id in [("daily_report", "d1"), ("daily_report", "d2"), ("inventory_alert", "i1")]:
             ctx = WorkflowContext(name, run_id)
@@ -105,9 +111,9 @@ class TestPersistenceList:
         assert len(store.list(workflow_name="inventory_alert")) == 1
         assert len(store.list(workflow_name="nonexistent")) == 0
 
-    def test_list_pagination(self, tmp_path):
+    def test_list_pagination(self):
         """list 分页正确"""
-        store = WorkflowRunStore(db_path=str(tmp_path / "runs.db"))
+        store = WorkflowRunStore()
         # 写入 25 条
         for i in range(25):
             ctx = WorkflowContext("wf", f"run-{i:02d}")
@@ -125,10 +131,10 @@ class TestPersistenceList:
         ids2 = {r["run_id"] for r in page2}
         assert ids1.isdisjoint(ids2)
 
-    def test_list_returns_descending_order(self, tmp_path):
+    def test_list_returns_descending_order(self):
         """list 按 started_at DESC 排序"""
         import time
-        store = WorkflowRunStore(db_path=str(tmp_path / "runs.db"))
+        store = WorkflowRunStore()
         for i in range(3):
             ctx = WorkflowContext("wf", f"run-{i}")
             ctx.mark_success()
@@ -148,9 +154,9 @@ class TestPersistenceList:
 class TestPersistenceSafeSerialize:
     """_safe_serialize 对不可 JSON 对象的降级"""
 
-    def test_save_unserializable_outputs_does_not_crash(self, tmp_path):
+    def test_save_unserializable_outputs_does_not_crash(self):
         """outputs 含不可序列化对象 → save 不抛"""
-        store = WorkflowRunStore(db_path=str(tmp_path / "runs.db"))
+        store = WorkflowRunStore()
         ctx = WorkflowContext("wf", "run-unsafe")
         ctx.outputs = {"step": object()}  # 不可序列化
         ctx.mark_success()
@@ -161,9 +167,9 @@ class TestPersistenceSafeSerialize:
         assert row is not None
         assert isinstance(row["outputs"]["step"], str)
 
-    def test_save_with_object_in_inputs(self, tmp_path):
+    def test_save_with_object_in_inputs(self):
         """inputs 含不可序列化对象也降级"""
-        store = WorkflowRunStore(db_path=str(tmp_path / "runs.db"))
+        store = WorkflowRunStore()
         ctx = WorkflowContext("wf", "run-unsafe-in")
         ctx.inputs = {"config": object()}
         ctx.mark_success()
@@ -171,9 +177,9 @@ class TestPersistenceSafeSerialize:
         row = store.get("run-unsafe-in")
         assert isinstance(row["inputs"]["config"], str)
 
-    def test_save_with_list_of_objects(self, tmp_path):
+    def test_save_with_list_of_objects(self):
         """outputs 是 list of objects → list of str"""
-        store = WorkflowRunStore(db_path=str(tmp_path / "runs.db"))
+        store = WorkflowRunStore()
         ctx = WorkflowContext("wf", "run-list")
         ctx.outputs = [object(), object()]
         ctx.mark_success()
@@ -190,20 +196,13 @@ class TestPersistenceSafeSerialize:
 class TestPersistenceErrorIsolation:
     """save 失败不应冒泡（executor 已 try/except，但测试验证 storage 自身行为）"""
 
-    def test_get_nonexistent_returns_none(self, tmp_path):
+    def test_get_nonexistent_returns_none(self):
         """get 不存在的 run_id 返回 None（不抛）"""
-        store = WorkflowRunStore(db_path=str(tmp_path / "runs.db"))
+        store = WorkflowRunStore()
         assert store.get("nonexistent-run") is None
 
-    def test_db_path_creates_parent_dir(self, tmp_path):
-        """DB 路径不存在父目录时自动创建"""
-        nested_path = tmp_path / "nested" / "dir" / "runs.db"
-        # 父目录不存在时不应崩
-        store = WorkflowRunStore(db_path=str(nested_path))
-        ctx = WorkflowContext("wf", "run-x")
-        ctx.mark_success()
-        store.save(ctx)
-        assert nested_path.exists()
+    # test_db_path_creates_parent_dir 已随 SQLite 轨删除（2026-09-17）：
+    # PG 模式下 db_path 仅作兼容保留，无文件路径语义。
 
 
 # ─────────────────────────────────────────────────────────────
@@ -216,17 +215,19 @@ class TestExecutorSaveIntegration:
     def test_executor_run_calls_save(
         self, monkeypatch, fresh_registry, patched_trace_collector
     ):
-        """Executor.run 末尾调 save（用 MagicMock 替 save 方法避免 SQLite 副作用）"""
+        """Executor.run 末尾调 save（用 MagicMock 替 save 方法避免真实库副作用）"""
         import asyncio
         from unittest.mock import MagicMock, patch as mp
         from backend.orchestration.workflow import workflow, step
         from backend.orchestration.workflow.executor import WorkflowExecutor
 
-        # MagicMock 整个 WorkflowRunStore.save 方法（避免 SQLite MagicMock 类型问题）
+        # MagicMock executor 的 store 工厂（类属性 patch 会因单例类身份漂移而失灵）
         save_mock = MagicMock()
+        fake_store = MagicMock()
+        fake_store.save = save_mock
         with mp(
-            "backend.orchestration.workflow.persistence.WorkflowRunStore.save",
-            save_mock,
+            "backend.orchestration.workflow.executor.get_workflow_run_store",
+            lambda: fake_store,
         ):
             @workflow(name="t_wf")
             class TWF:
@@ -256,9 +257,11 @@ class TestExecutorSaveIntegration:
         from backend.orchestration.workflow.executor import WorkflowExecutor
 
         save_mock = MagicMock(side_effect=Exception("DB 不可用"))
+        fake_store = MagicMock()
+        fake_store.save = save_mock
         with mp(
-            "backend.orchestration.workflow.persistence.WorkflowRunStore.save",
-            save_mock,
+            "backend.orchestration.workflow.executor.get_workflow_run_store",
+            lambda: fake_store,
         ):
             @workflow(name="t_wf_fail")
             class TWF:

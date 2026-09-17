@@ -1,4 +1,4 @@
-"""analytics_store.py 单元测试 — P0 结构化分析层（本地 SQLite 实现）。
+"""analytics_store.py 单元测试 — P0 结构化分析层（PG 唯一实现）。
 
 覆盖：
 - save 字段抽取与 _row_to_dict 映射
@@ -7,6 +7,8 @@
 - Cost 按日×模型聚合（P2 地基）
 - 禁用开关软失败
 - TraceCollector.finish 双写（trace_store + analytics）
+
+2026-09-17 SQLite 轨删除：store 直连 PG，表走 pgtest_biz_ 前缀隔离。
 """
 import pytest
 
@@ -15,6 +17,16 @@ import backend.observability.trace_store as ts_mod
 from backend.observability.analytics_store import AnalyticsStore
 from backend.observability.trace_store import TraceStore
 from backend.observability.tracer import Span, TraceCollector, TraceRecord
+from backend.tests.fixtures.pg_env import (  # noqa: F401
+    pg_clean_tables,
+    pg_iso_env,
+)
+
+
+@pytest.fixture(autouse=True)
+def _pg_iso(pg_clean_tables):
+    """SQLite 轨删除：store 直连 PG，表走 pgtest_biz_ 前缀隔离。"""
+    yield
 
 
 def _flush():
@@ -75,8 +87,10 @@ class TestSaveAndList:
 
     def test_save_and_field_mapping(self, store):
         assert store.save(_mk_record("t-001")) is True
-        rows = store.list(10)
-        assert len(rows) == 1
+        # pgtest 表为共享表：全量跑时后台 trace worker 可能把其他用例的记录
+        # 异步写入同表（竞态窗口），行数断言必须过滤到本用例的 session_id
+        rows = store.list(10, session_id="sess-1")
+        assert [r["id"] for r in rows] == ["t-001"]
         d = rows[0]
         # _row_to_dict：trace_id→id、ts→timestamp、token 三列→usage
         assert d["id"] == "t-001"
@@ -94,12 +108,15 @@ class TestSaveAndList:
 
     def test_rejected_flag(self, store):
         store.save(_mk_record("t-rej", rejected=True))
-        assert store.list(10)[0]["rejected"] is True
+        rows = store.list(10, session_id="sess-1")
+        assert len(rows) == 1 and rows[0]["rejected"] is True
 
     def test_upsert_same_id(self, store):
         store.save(_mk_record("t-001"))
         store.save(_mk_record("t-001"))
-        assert store.count() == 1
+        # 同 id 覆盖语义：本 session 只应有一行
+        rows = store.list(50, session_id="sess-1")
+        assert len(rows) == 1 and rows[0]["id"] == "t-001"
 
     def test_cost_from_span_metrics(self, store):
         rec = _mk_record("t-cost", cost=0.01)
@@ -108,7 +125,8 @@ class TestSaveAndList:
                               metrics={"cost_usd": 0.005}))
         store.save(rec)
         # 两个 llm span 成本累计
-        assert store.list(10)[0]["cost_usd"] == pytest.approx(0.015)
+        rows = store.list(10, session_id="sess-1")
+        assert len(rows) == 1 and rows[0]["cost_usd"] == pytest.approx(0.015)
 
 
 # ═══════════════════════════════════════════════
@@ -145,22 +163,27 @@ class TestServerSideFilter:
 class TestSessions:
 
     def test_group_by_session(self, store):
-        store.save(_mk_record("t-1", session_id="s1"))
-        store.save(_mk_record("t-2", session_id="s1"))
-        store.save(_mk_record("t-3", session_id="s2", cost=0.004))
+        # ut- 前缀标识符：共享 pgtest 表里其他用例/后台 worker 的残留行
+        # 不得影响本用例断言（sessions 无过滤参数，靠独特键隔离）
+        store.save(_mk_record("t-1", session_id="ut-sess-a"))
+        store.save(_mk_record("t-2", session_id="ut-sess-a"))
+        store.save(_mk_record("t-3", session_id="ut-sess-b", cost=0.004))
         rows = store.sessions(10)
-        assert len(rows) == 2
         by_id = {r["session_id"]: r for r in rows}
-        s1 = by_id["s1"]
+        assert {"ut-sess-a", "ut-sess-b"} <= set(by_id)
+        s1 = by_id["ut-sess-a"]
         assert s1["turns"] == 2
         assert s1["total_tokens"] == 300
         assert s1["total_cost_usd"] == pytest.approx(0.004)
         assert s1["avg_duration_ms"] == pytest.approx(1500)
-        assert by_id["s2"]["total_cost_usd"] == pytest.approx(0.004)
+        assert by_id["ut-sess-b"]["total_cost_usd"] == pytest.approx(0.004)
 
     def test_empty_session_id_excluded(self, store):
         store.save(_mk_record("t-nosess", session_id=""))
-        assert store.sessions(10) == []
+        store.save(_mk_record("t-sess", session_id="ut-sess-iso"))
+        ids = {r["session_id"] for r in store.sessions(10)}
+        # 空 session_id 不参与聚合，非空对照正常分组
+        assert "" not in ids and "ut-sess-iso" in ids
 
 
 # ═══════════════════════════════════════════════
@@ -170,17 +193,18 @@ class TestSessions:
 class TestCostSummary:
 
     def test_group_by_day_model(self, store):
-        store.save(_mk_record("t-1"))
+        # ut- 前缀模型名：cost_summary 无过滤参数，独特模型名隔离共享表残留行
+        r1 = _mk_record("t-1")
+        r1.model = "ut-model-a"
+        store.save(r1)
         r2 = _mk_record("t-2")
         r2.timestamp = "2026-09-02T12:00:00Z"
-        r2.model = "qwen-max"
+        r2.model = "ut-model-b"
         store.save(r2)
-        rows = store.cost_summary(days=7)
-        assert len(rows) == 2
-        by_model = {r["model"]: r for r in rows}
-        assert by_model["qwen-plus"]["traces"] == 1
-        assert by_model["qwen-plus"]["day"] == "2026-09-02"
-        assert by_model["qwen-max"]["total_tokens"] == 150
+        by_model = {r["model"]: r for r in store.cost_summary(days=7)}
+        assert by_model["ut-model-a"]["traces"] == 1
+        assert by_model["ut-model-a"]["day"] == "2026-09-02"
+        assert by_model["ut-model-b"]["total_tokens"] == 150
 
 
 # ═══════════════════════════════════════════════

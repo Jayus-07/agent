@@ -25,6 +25,16 @@ from backend.competitor.anti_ban import (
     PlatformStoppedError,
 )
 from backend.competitor.store import CompetitorStore
+from backend.tests.fixtures.pg_env import (  # noqa: F401
+    pg_clean_tables,
+    pg_iso_env,
+)
+
+
+@pytest.fixture(autouse=True)
+def _pg_iso(pg_clean_tables):
+    """SQLite 轨删除：CompetitorStore() 即 PG 实现，表走 pgtest_biz_ 前缀隔离。"""
+    yield
 
 
 @pytest.fixture

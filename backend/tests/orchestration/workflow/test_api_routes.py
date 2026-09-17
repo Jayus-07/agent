@@ -148,11 +148,13 @@ class TestTriggerWorkflow:
         app, _store = app_with_workflows
         client = TestClient(app)
 
-        # 用 MagicMock 替 save() 方法避免 MagicMock trace_id 类型问题
+        # MagicMock executor 的 store 工厂（类属性 patch 会因单例类身份漂移而失灵）
         save_mock = MagicMock()
+        fake_store = MagicMock()
+        fake_store.save = save_mock
         with mp(
-            "backend.orchestration.workflow.persistence.WorkflowRunStore.save",
-            save_mock,
+            "backend.orchestration.workflow.executor.get_workflow_run_store",
+            lambda: fake_store,
         ):
             resp = client.post("/workflows/trigger_wf/trigger")
             assert resp.status_code == 200, resp.text
@@ -180,9 +182,11 @@ class TestTriggerWorkflow:
         client = TestClient(app)
 
         save_mock = MagicMock()
+        fake_store = MagicMock()
+        fake_store.save = save_mock
         with mp(
-            "backend.orchestration.workflow.persistence.WorkflowRunStore.save",
-            save_mock,
+            "backend.orchestration.workflow.executor.get_workflow_run_store",
+            lambda: fake_store,
         ):
             resp = client.post(
                 "/workflows/trigger_inputs_wf/trigger",

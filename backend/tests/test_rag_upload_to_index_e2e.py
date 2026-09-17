@@ -35,6 +35,17 @@ from backend.rag.indexing.doc_registry import DocumentRegistry
 from backend.rag.indexing.indexer import IncrementalIndexer
 from backend.rag.indexing import chunk_store as chunk_store_mod
 from backend.rag.indexing.chunk_store import ChunkStore
+from backend.tests.fixtures.pg_env import (  # noqa: F401
+    pg_clean_tables, pg_iso_env,
+)
+
+
+@pytest.fixture(autouse=True)
+def _pg_iso(pg_clean_tables):
+    """真实 ChunkStore/DocumentRegistry 走 PG —— 必须用 pgtest_ 前缀表，
+    否则独立运行该文件会把测试文档写进生产 chunk_store/doc_registry
+    （2026-09-18 实测：UTC 时间戳造成污染延迟暴露）。"""
+    yield
 
 
 @pytest.fixture(autouse=True)

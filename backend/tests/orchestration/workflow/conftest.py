@@ -21,6 +21,20 @@ import pytest
 from backend.orchestration.workflow.context import WorkflowContext
 from backend.orchestration.workflow.meta import StepConfig
 from backend.orchestration.workflow.registry import WorkflowRegistry
+from backend.tests.fixtures.pg_env import (  # noqa: F401
+    pg_clean_tables,
+    pg_iso_env,
+)
+
+
+@pytest.fixture(autouse=True)
+def _pg_iso(pg_clean_tables):
+    """SQLite 轨删除：workflow_runs / decision 等走 pgtest_biz_ 前缀隔离。
+
+    patched_persistence 里 WorkflowRunStore(db_path=...) 经 __new__ 分发到
+    PG 实现（db_path 兼容保留），本 fixture 保证其表名落在 pgtest 前缀。
+    """
+    yield
 
 
 # ─────────────────────────────────────────────────────────────

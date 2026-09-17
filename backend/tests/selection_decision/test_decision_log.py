@@ -1,13 +1,27 @@
 """tests/selection_decision/test_decision_log.py — 批次3 决策留痕存储测试
 
-核心验收：快照不可变（触发器 RAISE ABORT）、版本自增、
+核心验收：快照不可变（PG 触发器 RAISE，017 迁移语义）、版本自增、
 user_decision/actual_metrics 专用回填通道不触碰快照。
+2026-09-17 SQLite 轨删除：store 直连 PG，表走 pgtest_biz_ 前缀隔离。
 """
 import json
+import os
 
+import psycopg2
 import pytest
 
+from backend.config.database import SELECTION_DECISION_PG_CONFIG
 from backend.selection_decision.store import SelectionDecisionStore
+from backend.tests.fixtures.pg_env import (  # noqa: F401
+    pg_clean_tables,
+    pg_iso_env,
+)
+
+
+@pytest.fixture(autouse=True)
+def _pg_iso(pg_clean_tables):
+    """SQLite 轨删除：store 直连 PG，表走 pgtest_biz_ 前缀隔离。"""
+    yield
 
 
 @pytest.fixture
@@ -50,17 +64,32 @@ class TestDecisionLog:
         assert store.get_decision(b)["decision_version"] == 1
 
     def test_snapshot_immutable_by_trigger(self, store):
-        """核心验收：直接 UPDATE 快照列 → 触发器 ABORT。"""
+        """核心验收：直接 UPDATE 快照列 → PG 触发器 RAISE（017 迁移语义）。
+
+        触发器函数 trg_decision_log_snapshot_immutable_fn 由 017 迁移建在
+        agent_business 库（库级函数）；pgtest 表上显式挂触发器后验证。
+        """
         did = _record(store)
-        conn = store._conn()
+        table = os.getenv("SELECTION_DECISION_PG_TABLE_PREFIX", "") + "decision_log"
+        conn = psycopg2.connect(**SELECTION_DECISION_PG_CONFIG)
         try:
-            with pytest.raises(Exception, match="快照不可变"):
-                conn.execute(
-                    "UPDATE decision_log SET evidence_snapshot = ? WHERE decision_id = ?",
+            cur = conn.cursor()
+            cur.execute(
+                f"DROP TRIGGER IF EXISTS trg_decision_log_snapshot_immutable "
+                f"ON {table};"
+                f"CREATE TRIGGER trg_decision_log_snapshot_immutable "
+                f"BEFORE UPDATE ON {table} FOR EACH ROW EXECUTE FUNCTION "
+                f"trg_decision_log_snapshot_immutable_fn();"
+            )
+            conn.commit()
+            with pytest.raises(psycopg2.errors.RaiseException, match="快照不可变"):
+                cur.execute(
+                    f"UPDATE {table} SET evidence_snapshot = %s WHERE decision_id = %s",
                     (json.dumps({"tampered": True}), did),
                 )
                 conn.commit()
         finally:
+            conn.rollback()
             conn.close()
         # 原快照未被改动
         assert store.get_decision(did)["evidence_snapshot"] == EV
