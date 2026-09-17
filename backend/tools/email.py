@@ -37,11 +37,17 @@ def send_email_tool(to: str, subject: str, body: str, cc: str = "") -> str:
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
-    from backend.config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM
+    from backend.config import (
+        SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, EMAIL_ENGINE,
+    )
     from backend.security.tool_approval import ensure_approved
     from backend.tools.session import get_tool_user_id
 
-    if not SMTP_USER or not SMTP_PASSWORD:
+    # 2026-09-17 B6 修复：SMTP 凭据检查只对 smtp 引擎生效。原实现无差别
+    # 检查，agently 引擎（不依赖 SMTP 凭据）在未配 SMTP 的环境被
+    # [EMAIL DISABLED] 拦截，永远走不到 agently 发送分支——B6 发送侧
+    # 验收因此从未发生。
+    if EMAIL_ENGINE != "agently" and (not SMTP_USER or not SMTP_PASSWORD):
         return f"[EMAIL DISABLED] 未配置 SMTP。收件人: {to}, 主题: {subject}, 正文长度: {len(body)} 字符"
 
     # 写操作审批门：detail 只含稳定字段（body 用哈希），保证批准后重试命中同指纹
@@ -54,7 +60,6 @@ def send_email_tool(to: str, subject: str, body: str, cc: str = "") -> str:
     if pending is not None:
         return pending
 
-    from backend.config import EMAIL_ENGINE
     if EMAIL_ENGINE == "agently":
         return _send_via_agently(to, subject, body, cc)
 

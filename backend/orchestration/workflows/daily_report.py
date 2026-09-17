@@ -24,6 +24,20 @@ from backend.orchestration.workflow.skill_adapter import (
 from backend.agents.capability.inventory_analyzer import InventoryAnalyzer
 from backend.shared.logger import logger
 
+# 日报邮件收件人（B6 发送侧真实验收）：REPORT_EMAIL_TO 逗号分隔，
+# 未配置回落 demo 地址（保持既有冒烟测试与 demo 行为不变）。
+_DEFAULT_REPORT_EMAIL_TO = "ops@demo.local, ceo@demo.local"
+
+
+def _report_email_recipients() -> str:
+    """收件人配置解析：REPORT_EMAIL_TO 优先，空值/纯逗号回落 demo 默认。"""
+    import os
+    raw = os.getenv("REPORT_EMAIL_TO", "").strip()
+    if not raw:
+        return _DEFAULT_REPORT_EMAIL_TO
+    addrs = [a.strip() for a in raw.split(",") if a.strip()]
+    return ", ".join(addrs) if addrs else _DEFAULT_REPORT_EMAIL_TO
+
 
 @workflow(
     name="daily_report",
@@ -201,9 +215,11 @@ class DailyReport:
         })
         logger.info(f"[DailyReport] 日报已写入 daily_reports: {ctx.run_id}")
 
-        # 发邮件
+        # 发邮件（收件人 REPORT_EMAIL_TO 可配置，未配置回落 demo 地址）
+        recipients = _report_email_recipients()
+        logger.info(f"[DailyReport] 邮件收件人: {recipients}")
         result = await call_email({
-            "to": ["ops@demo.local", "ceo@demo.local"],
+            "to": [a.strip() for a in recipients.split(",") if a.strip()],
             "subject": f"[经营日报] {today}",
             "body": f"# 经营日报 {today}\n\n{body}",
         })

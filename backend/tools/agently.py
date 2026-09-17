@@ -21,6 +21,7 @@ JSON envelope：stdout 为 JSON，错误信息在 error.message；解析失败�
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from typing import Any, Optional
@@ -62,12 +63,15 @@ def _parse_envelope(stdout: str) -> Any:
         return {"raw": s}
 
 
-def _run(args: list[str], timeout_sec: float = 30.0) -> str:
+def _run(args: list[str], timeout_sec: float = 30.0,
+         cwd: Optional[str] = None) -> str:
     """执行 agently-cli 子命令，返回结果字符串。
 
     成功：JSON envelope 序列化（含 data）；失败：`[AGENTLY ERROR:<code>] 消息`
     格式——错误消息含 "Agently"/"授权失效" 等字样，BaseSkill.classify_error
     会归类；exit 3（授权失效）映射为 permission（不可重试）。
+
+    cwd: CLI 工作目录（--body-file 等相对路径以此为基准解析）。
     """
     bin_path = agently_bin()
     if bin_path is None:
@@ -77,7 +81,7 @@ def _run(args: list[str], timeout_sec: float = 30.0) -> str:
         proc = subprocess.run(
             [bin_path, *args],
             capture_output=True, text=True, encoding="utf-8",
-            timeout=timeout_sec,
+            timeout=timeout_sec, cwd=cwd,
         )
     except subprocess.TimeoutExpired:
         logger.warning(f"[Agently] 超时(>{timeout_sec}s): {args[0]} {args[1] if len(args) > 1 else ''}")
@@ -91,10 +95,22 @@ def _run(args: list[str], timeout_sec: float = 30.0) -> str:
 
     msg = _EXIT_MESSAGES.get(proc.returncode, f"未知错误(exit={proc.returncode})")
     # envelope 里的 error.message 优先（照 SKILL.md：错误文案在 error.message，照原文反馈）
+    detail = ""
     if isinstance(envelope, dict) and isinstance(envelope.get("error"), dict):
         detail = envelope["error"].get("message") or ""
-        if detail:
-            msg = f"{msg}: {detail}"
+    if detail:
+        msg = f"{msg}: {detail}"
+    else:
+        # CLI 本地参数校验等错误不走 JSON envelope（Error 文本直接输出，
+        # 2026-09-17 B6 排查实证：markdown 结构校验失败被泛化成
+        # "服务端错误或网络抖动"，掩盖真实原因）→ 原样透传便于定位
+        raw = ""
+        if isinstance(envelope, dict) and envelope.get("raw"):
+            raw = str(envelope["raw"]).strip()
+        if not raw and proc.stderr:
+            raw = proc.stderr.strip()
+        if raw:
+            msg = f"{msg}: {raw[:300]}"
     logger.warning(f"[Agently] exit={proc.returncode} args={args[:2]} msg={msg}")
     return f"[AGENTLY ERROR:{proc.returncode}] {msg}"
 
@@ -151,28 +167,40 @@ def agently_send(to: list[str], subject: str, body: str,
                  timeout_sec: float = 60.0) -> str:
     """发送邮件。审批已由 ensure_approved 门完成，故传 --confirmed 免 CLI 两阶段。
 
-    attachments 必须是相对路径（CLI 规范），调用方负责路径校验。
+    2026-09-17 B6 修复：--body-file 必须是相对路径（CLI 本地校验，绝对路径
+    直接 exit 1），正文临时文件落专用目录，subprocess 以该目录为 cwd，
+    传纯文件名；发送后清理临时文件。attachments 同为相对路径（CLI 规范），
+    调用方负责路径校验。
     """
     args = ["message", "+send", "--confirmed"]
     for addr in to:
         args += ["--to", addr]
     args += ["--subject", subject]
-    if body.lstrip().startswith("<"):
-        args += ["--body-file", _body_tmpfile(body, "html")]
-    else:
-        args += ["--body-file", _body_tmpfile(body, "md")]
+    suffix = "html" if body.lstrip().startswith("<") else "md"
+    body_path = _body_tmpfile(body, suffix)
+    args += ["--body-file", os.path.basename(body_path)]
     for addr in (cc or []):
         args += ["--cc", addr]
     for addr in (bcc or []):
         args += ["--bcc", addr]
     for path in (attachments or []):
         args += ["--attachment", path]
-    return _run(args, timeout_sec)
+    try:
+        return _run(args, timeout_sec=timeout_sec,
+                    cwd=os.path.dirname(body_path) or None)
+    finally:
+        try:
+            os.unlink(body_path)
+        except OSError:
+            pass  # 临时文件清理失败不影响发送结果
 
 
 def _body_tmpfile(body: str, suffix: str) -> str:
-    """正文落临时文件（CLI 的 --body/--body-file 二选一，长正文用文件更稳）。"""
-    import os
+    """正文落临时文件（CLI 的 --body/--body-file 二选一，长正文用文件更稳）。
+
+    返回绝对路径；调用方（agently_send）负责以文件所在目录为 cwd 并传
+    相对文件名给 CLI（--body-file 不接受绝对路径）。
+    """
     import tempfile
     fd, path = tempfile.mkstemp(prefix="agently_body_", suffix=f".{suffix}")
     with os.fdopen(fd, "w", encoding="utf-8") as f:

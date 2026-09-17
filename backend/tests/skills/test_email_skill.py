@@ -74,6 +74,21 @@ class TestSendEngineSwitch:
             result = send_email_tool.invoke({"to": "a@b.c", "subject": "s", "body": "b"})
         assert "[EMAIL DISABLED]" in result
 
+    def test_agently_engine_bypasses_smtp_check(self):
+        """B6 修复回归：引擎=agently 时不依赖 SMTP 凭据（原实现被
+        [EMAIL DISABLED] 无差别拦截，发送侧验收从未真正走到 agently）。"""
+        from backend.tools.email import send_email_tool
+        with patch("backend.config.EMAIL_ENGINE", "agently"), \
+             patch("backend.config.SMTP_USER", ""), \
+             patch("backend.config.SMTP_PASSWORD", ""), \
+             patch("backend.security.tool_approval.TOOL_APPROVAL_MODE", "auto"), \
+             patch("backend.tools.email._send_via_agently",
+                   return_value="邮件已发送(Agently): 收件人 a@b.c") as mock_send:
+            result = send_email_tool.invoke({"to": "a@b.c", "subject": "s", "body": "b"})
+        assert "[EMAIL DISABLED]" not in result
+        assert "已发送" in result
+        mock_send.assert_called_once()
+
     def test_agently_send_success(self):
         from backend.tools import email as email_mod
         with patch("backend.config.EMAIL_ENGINE", "agently"), \
