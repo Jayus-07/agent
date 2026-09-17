@@ -108,16 +108,6 @@ def execute_handoff(
     ticket_id = f"HANDOFF-{uuid.uuid4().hex[:8].upper()}"
     now = datetime.now(timezone.utc).isoformat()
 
-    handoff_data = {
-        "handoff_state": HandoffState.HANDOFF_REQUESTED.value,
-        "trigger_type": trigger_type,
-        "trigger_reason": trigger_reason,
-        "ticket_id": ticket_id,
-        "created_at": now,
-        "updated_at": now,
-    }
-    store.save(user_id, session_id, handoff_data)
-
     # 2026-09-17 修复：工单立即进入排队（HANDOFF_REQUESTED → WAITING_HUMAN）。
     # 此前生产代码没有任何位置执行这一步，工单永久卡在 handoff_requested，
     # 坐席认领 409、工作台输入框永远锁定（演示沙盒方案 §七·阶段2）。
@@ -125,8 +115,18 @@ def execute_handoff(
     handoff_transition(
         HandoffState.HANDOFF_REQUESTED, HandoffState.WAITING_HUMAN,
     )
-    handoff_data["handoff_state"] = HandoffState.WAITING_HUMAN.value
-    handoff_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    # P1 修正（audit-report §P2-16）：两次 store.save 会在 DB 暴露
+    # handoff_requested 中间态 —— 状态机转换全部在内存完成，只持久化
+    # 最终态 WAITING_HUMAN（单次写入，原子可见）。
+    handoff_data = {
+        "handoff_state": HandoffState.WAITING_HUMAN.value,
+        "trigger_type": trigger_type,
+        "trigger_reason": trigger_reason,
+        "ticket_id": ticket_id,
+        "created_at": now,
+        "updated_at": now,
+    }
     store.save(user_id, session_id, handoff_data)
 
     # 实时推送：新工单进入坐席待接入队列（WebSocket，无连接时静默丢弃）

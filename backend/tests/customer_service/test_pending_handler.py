@@ -80,7 +80,9 @@ class TestPendingHandlerExpiry:
 
         assert cmd.goto == "cs_reporter"
         assert cmd.update["confirmation_state"] == "expired"
-        mock_store.clear.assert_called_once_with("u1", "s1")
+        # P1 重构（2026-09-17）：过期走独立终态 expired（此前被 clear
+        # 一律写成 cancelled，审计口径失真）
+        mock_store.clear.assert_called_once_with("u1", "s1", final_state="expired")
 
 
 class TestPendingHandlerConfirm:

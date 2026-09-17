@@ -2,12 +2,33 @@
 
 Phase 5: session-scoped in-memory dict.
 Phase 7: DB-backed via HandoffRepository, in-memory L1 cache retained.
+P1 重构（2026-09-17）: DB 写失败不再静默 cache-only —— 严格模式
+（生产默认）抛 StoreWriteError，工单不持久化就必须失败，禁止内存与
+DB 永久分叉（audit-report §P0-5）。
 """
 from __future__ import annotations
 
 import threading
 
+from backend.customer_service.confirmation_store import (
+    StoreWriteError,
+    _strict_writes,
+)
 from backend.shared.logger import logger
+
+
+def _handoff_db_write_failed(op: str, exc: Exception) -> None:
+    logger.error(
+        "[HandoffStore] DB %s failed (strict=%s): %s",
+        op, _strict_writes(), exc, exc_info=True,
+    )
+    try:
+        from backend.observability.metrics import record_cs_store_db_failure
+        record_cs_store_db_failure("handoff", op)
+    except Exception:
+        logger.debug("[HandoffStore] metrics unavailable")
+    if _strict_writes():
+        raise StoreWriteError("HandoffStore", op) from exc
 
 
 class HandoffStore:
@@ -84,38 +105,44 @@ class HandoffStore:
         try:
             from backend.customer_service._db_loop import run_sync
             return run_sync(self._async_load(user_id, session_id))
-        except Exception:
-            logger.debug("[HandoffStore] DB load failed, cache-only mode")
+        except Exception as exc:
+            logger.warning(
+                "[HandoffStore] DB load failed (cache fallback): %s", exc,
+            )
             return None
 
     def _db_save(self, user_id: str, session_id: str, handoff_data: dict) -> None:
         try:
             from backend.customer_service._db_loop import run_sync
             run_sync(self._async_save(user_id, session_id, handoff_data))
-        except Exception:
-            logger.debug("[HandoffStore] DB save failed, cache-only mode")
+        except Exception as exc:
+            _handoff_db_write_failed("save", exc)
 
     def _db_clear(self, user_id: str, session_id: str) -> None:
         try:
             from backend.customer_service._db_loop import run_sync
             run_sync(self._async_clear(user_id, session_id))
-        except Exception:
-            logger.debug("[HandoffStore] DB clear failed, cache-only mode")
+        except Exception as exc:
+            _handoff_db_write_failed("clear", exc)
 
     def _db_has_active(self, user_id: str) -> bool:
         try:
             from backend.customer_service._db_loop import run_sync
             return run_sync(self._async_has_active(user_id))
-        except Exception:
-            logger.debug("[HandoffStore] DB has_active failed, cache-only mode")
+        except Exception as exc:
+            logger.warning(
+                "[HandoffStore] DB has_active failed (cache fallback): %s", exc,
+            )
             return False
 
     def _db_get_active(self, user_id: str) -> dict | None:
         try:
             from backend.customer_service._db_loop import run_sync
             return run_sync(self._async_get_active(user_id))
-        except Exception:
-            logger.debug("[HandoffStore] DB get_active failed, cache-only mode")
+        except Exception as exc:
+            logger.warning(
+                "[HandoffStore] DB get_active failed (cache fallback): %s", exc,
+            )
             return None
 
     @staticmethod

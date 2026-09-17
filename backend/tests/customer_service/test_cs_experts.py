@@ -297,7 +297,9 @@ class TestComplaintExpert:
         assert result["expert"] == "complaint"
         assert "抱歉" in result["response_draft"]
         assert result["data"]["ticket_id"] == "CMP-001"
-        assert result["data"]["handoff_state"] == "handoff_requested"
+        # P1 重构（2026-09-17）：投诉升级与显式转人工同流程 —— 直接落到
+        # waiting_human 排队（此前卡 handoff_requested，坐席认领 409）
+        assert result["data"]["handoff_state"] == "waiting_human"
         mock_store.save.assert_called_once()
         mock_record.assert_called_once_with("complaint")
 
@@ -332,7 +334,8 @@ class TestComplaintExpert:
         output = complaint_expert_node(state)
         assert output["last_expert_result"]["expert"] == "complaint"
         assert len(output["expert_history"]) == 1
-        assert output["cs_context"]["handoff_state"] == "handoff_requested"
+        # P1 重构（2026-09-17）：投诉升级直接落 waiting_human 排队
+        assert output["cs_context"]["handoff_state"] == "waiting_human"
         assert len(output["cs_audit_entries"]) == 1
 
 
@@ -371,8 +374,9 @@ class TestHandoffExpert:
         assert result["data"]["handoff_state"] == "waiting_human"
         assert result["data"]["handling_mode"] == "human"
         assert result["data"]["ticket_id"].startswith("HANDOFF-")
-        # 两次 save：handoff_requested 建档 + waiting_human 排队
-        assert mock_store.save.call_count == 2
+        # P1 重构（2026-09-17）：状态转换在内存完成，单次落盘最终态
+        # waiting_human（不再向 DB 暴露 handoff_requested 中间态）
+        assert mock_store.save.call_count == 1
 
     @patch("backend.observability.metrics.record_cs_handoff")
     @patch("backend.customer_service.handoff.transition")

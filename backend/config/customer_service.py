@@ -202,6 +202,21 @@ CS_ROUTER_INDEX_DIR = os.path.join(
 # =============================================
 CS_GRAPH_ENABLED = os.getenv("CS_GRAPH_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 CS_EXPERT_MAX_LOOPS = int(os.getenv("CS_EXPERT_MAX_LOOPS", "5"))
+
+# ── 状态写入严格模式（P1 重构 2026-09-17）────────────────────
+# true（生产默认）：HandoffStore/ConfirmationStore 的 DB 写失败 → error 级日志
+#   + 记录指标 + 抛 StoreWriteError（PostgreSQL 是唯一事实源，禁止静默降级
+#   成内存态——此前 cache-only 降级导致内存与 DB 永久分叉，见
+#   docs/customer-service/audit-report.md §P0-5）。
+# false：写失败仅告警并继续用内存态（仅限单元测试/无 DB 的本地调试）。
+# 测试进程（pytest）默认 false，除非显式设置该环境变量。
+import sys as _sys
+
+CS_STORE_STRICT_WRITES = os.getenv("CS_STORE_STRICT_WRITES", "").strip().lower()
+if CS_STORE_STRICT_WRITES in ("", "unset"):
+    CS_STORE_STRICT_WRITES = not ("pytest" in _sys.modules)
+else:
+    CS_STORE_STRICT_WRITES = CS_STORE_STRICT_WRITES in ("1", "true", "yes")
 CS_SUPERVISOR_LLM_ENABLED = os.getenv("CS_SUPERVISOR_LLM_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 CS_SUPERVISOR_LLM_TIMEOUT_MS = int(os.getenv("CS_SUPERVISOR_LLM_TIMEOUT_MS", "800"))
 

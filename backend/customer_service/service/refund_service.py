@@ -148,7 +148,12 @@ class RefundService:
         return result.rows[0]
 
     def _has_existing_refund(self, order_pk: str) -> bool:
-        """Check if a refund record already exists for this order."""
+        """Check if a refund record already exists for this order.
+
+        P1 修正（audit-report §P0-8）：查询失败此前返回 False（放行），
+        降级方向不安全 —— 重复退款闸门失效。改为 fail-closed：无法确认
+        不存在退款记录时拒绝并提示用户，宁可多一次人工介入也不双退款。
+        """
         from backend.sql.executor import execute_sql_struct
 
         sql = """
@@ -159,8 +164,15 @@ class RefundService:
         result = execute_sql_struct(sql, params={"order_id": order_pk})
 
         if result.status not in ("success", "no_data"):
-            logger.warning(f"[RefundService] refunds 查询失败: {result.error}")
-            return False
+            logger.error(
+                "[RefundService] refunds 查询失败，fail-closed 拒绝退款资格检查: "
+                "order=%s status=%s error=%s",
+                order_pk, result.status, result.error,
+            )
+            raise DatabaseError(
+                "暂时无法核实该订单的退款记录，为防止重复退款已拒绝本次申请，"
+                "请稍后重试或联系人工客服。"
+            )
 
         return len(result.rows) > 0
 

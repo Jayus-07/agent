@@ -2,12 +2,48 @@
 
 Phase 4: session-scoped in-memory dict.
 Phase 7: DB-backed via ConfirmationRepository, in-memory L1 cache retained.
+P1 重构（2026-09-17）:
+  - claim_for_execution: 原子认领闸门，防止重复确认双执行。
+  - clear(final_state=...): 终态区分 success/failed/expired/cancelled。
+  - DB 写失败不再静默 cache-only：严格模式下抛 StoreWriteError（生产），
+    非严格模式告警继续（单元测试/无 DB 调试）。
 """
 from __future__ import annotations
 
 import threading
 
+from backend.customer_service.errors import CustomerServiceError
 from backend.shared.logger import logger
+
+
+class StoreWriteError(CustomerServiceError):
+    """PostgreSQL 写失败且严格模式开启 — 禁止静默降级为内存态。"""
+
+    def __init__(self, store: str, op: str):
+        super().__init__(
+            f"[{store}] DB {op} failed (strict mode)",
+            user_message="系统繁忙，请稍后重试；若持续失败请联系人工客服。",
+        )
+
+
+def _strict_writes() -> bool:
+    from backend.config.customer_service import CS_STORE_STRICT_WRITES
+    return bool(CS_STORE_STRICT_WRITES)
+
+
+def _db_write_failed(store: str, op: str, exc: Exception) -> None:
+    """统一失败处理：error 级日志 + 严格模式抛错（绝不静默吞掉）。"""
+    logger.error(
+        "[ConfirmationStore] DB %s failed (strict=%s): %s",
+        op, _strict_writes(), exc, exc_info=True,
+    )
+    try:
+        from backend.observability.metrics import record_cs_store_db_failure
+        record_cs_store_db_failure("confirmation", op)
+    except Exception:
+        logger.debug("[ConfirmationStore] metrics unavailable")
+    if _strict_writes():
+        raise StoreWriteError("ConfirmationStore", op) from exc
 
 
 class ConfirmationStore:
@@ -38,10 +74,50 @@ class ConfirmationStore:
             self._data[(user_id, session_id)] = pending_action
         self._db_save(user_id, session_id, pending_action)
 
-    def clear(self, user_id: str, session_id: str) -> None:
+    def clear(self, user_id: str, session_id: str, *, final_state: str = "cancelled") -> None:
+        """清除 pending 并把 DB 行置为终态。
+
+        final_state: cancelled（用户取消）/ success / failed / expired。
+        P1 修正：此前一律写 cancelled，过期与失败的审计口径失真。
+        """
         with self._lock:
             self._data.pop((user_id, session_id), None)
-        self._db_clear(user_id, session_id)
+        self._db_clear(user_id, session_id, final_state)
+
+    def claim_for_execution(self, user_id: str, session_id: str) -> str | None:
+        """原子认领待确认动作（幂等闸门，P1）。
+
+        DB 侧单条条件 UPDATE pending→confirmed：并发重复确认只有一方成功。
+        DB 不可用时：严格模式抛 StoreWriteError（执行必须失败，不冒双执行
+        之险）；非严格模式（测试/本地调试）降级为进程内 L1 认领并告警。
+        返回 confirmation_id；已被处理/不存在 pending 返回 None。
+        """
+        try:
+            claimed_id = self._db_claim(user_id, session_id)
+            if claimed_id is not None:
+                # DB 认领成功 → 移除 L1 pending 条目
+                with self._lock:
+                    self._data.pop((user_id, session_id), None)
+            return claimed_id
+        except Exception as exc:
+            try:
+                from backend.observability.metrics import record_cs_store_db_failure
+                record_cs_store_db_failure("confirmation", "claim")
+            except Exception:
+                pass
+            if _strict_writes():
+                logger.error(
+                    "[ConfirmationStore] DB claim failed (strict): %s", exc,
+                    exc_info=True,
+                )
+                raise StoreWriteError("ConfirmationStore", "claim") from exc
+            logger.warning(
+                "[ConfirmationStore] DB claim failed, fallback to L1 claim: %s",
+                exc,
+            )
+            with self._lock:
+                pending = self._data.pop((user_id, session_id), None)
+            return pending.get("action_id") if pending else None
 
     def has_pending(self, user_id: str) -> bool:
         with self._lock:
@@ -53,23 +129,29 @@ class ConfirmationStore:
         try:
             from backend.customer_service._db_loop import run_sync
             return run_sync(self._async_load(user_id, session_id))
-        except Exception:
-            logger.debug("[ConfirmationStore] DB load failed, cache-only mode")
+        except Exception as exc:
+            logger.warning(
+                "[ConfirmationStore] DB load failed (cache fallback): %s", exc,
+            )
             return None
 
     def _db_save(self, user_id: str, session_id: str, pending_action: dict) -> None:
         try:
             from backend.customer_service._db_loop import run_sync
             run_sync(self._async_save(user_id, session_id, pending_action))
-        except Exception:
-            logger.debug("[ConfirmationStore] DB save failed, cache-only mode")
+        except Exception as exc:
+            _db_write_failed("ConfirmationStore", "save", exc)
 
-    def _db_clear(self, user_id: str, session_id: str) -> None:
+    def _db_clear(self, user_id: str, session_id: str, final_state: str) -> None:
         try:
             from backend.customer_service._db_loop import run_sync
-            run_sync(self._async_clear(user_id, session_id))
-        except Exception:
-            logger.debug("[ConfirmationStore] DB clear failed, cache-only mode")
+            run_sync(self._async_clear(user_id, session_id, final_state))
+        except Exception as exc:
+            _db_write_failed("ConfirmationStore", "clear", exc)
+
+    def _db_claim(self, user_id: str, session_id: str) -> str | None:
+        from backend.customer_service._db_loop import run_sync
+        return run_sync(self._async_claim(user_id, session_id))
 
     def _db_has_pending(self, user_id: str) -> bool:
         try:
@@ -111,14 +193,30 @@ class ConfirmationStore:
             await db.commit()
 
     @staticmethod
-    async def _async_clear(user_id: str, session_id: str) -> None:
+    async def _async_clear(
+        user_id: str, session_id: str, final_state: str
+    ) -> None:
         from backend.customer_service.repository import ConfirmationRepository
         from backend.memory.database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db:
             repo = ConfirmationRepository(db)
-            await repo.clear(user_id, session_id)
+            if final_state == "cancelled":
+                await repo.clear(user_id, session_id)
+            else:
+                await repo.finalize_current(user_id, session_id, final_state)
             await db.commit()
+
+    @staticmethod
+    async def _async_claim(user_id: str, session_id: str) -> str | None:
+        from backend.customer_service.repository import ConfirmationRepository
+        from backend.memory.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            repo = ConfirmationRepository(db)
+            claimed_id = await repo.claim_pending(user_id, session_id)
+            await db.commit()
+            return claimed_id
 
     @staticmethod
     async def _async_has_pending(user_id: str) -> bool:

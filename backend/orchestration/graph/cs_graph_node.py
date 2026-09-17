@@ -49,7 +49,67 @@ def cs_graph_node(state: dict) -> dict:
         return _fallback_update(state)
 
     _stamp_execution_tags(final_state)
+    _persist_audit_records(final_state)
     return _build_main_state_update(state, result)
+
+
+def _persist_audit_records(final_state: dict) -> None:
+    """把本 turn 的审计条目与业务动作落库（P1，audit-report §P0-7）。
+
+    audit_logs / agent_actions 表此前零写入 —— 审计只活在 graph state。
+    写入失败：error 级日志 + 指标，不阻断 chat 主流程（关键旁路语义），
+    绝不静默吞掉。
+    """
+    audit_entries = [
+        e for e in (final_state.get("cs_audit_entries") or []) if isinstance(e, dict)
+    ]
+    action_result = final_state.get("cs_action_result") or {}
+    action_record = (
+        action_result.get("action_record")
+        if isinstance(action_result, dict)
+        else None
+    )
+
+    if not audit_entries and not action_record:
+        return
+
+    def _write() -> None:
+        from backend.customer_service._db_loop import run_sync
+        run_sync(_async_persist_audit(audit_entries, action_record))
+
+    try:
+        _write()
+    except Exception as exc:
+        logger.error(
+            "[cs_graph_node] 审计落库失败（audit_entries=%d, action_record=%s）: %s",
+            len(audit_entries), bool(action_record), exc, exc_info=True,
+        )
+        try:
+            from backend.observability.metrics import record_cs_store_db_failure
+            record_cs_store_db_failure("audit", "persist")
+        except Exception:
+            logger.debug("[cs_graph_node] metrics unavailable")
+
+
+async def _async_persist_audit(audit_entries: list, action_record: dict | None) -> None:
+    from backend.customer_service.repository import AuditRepository
+    from backend.memory.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        repo = AuditRepository(db)
+        for entry in audit_entries:
+            await repo.insert_audit_log(entry)
+        if action_record and isinstance(action_record, dict):
+            # AgentActionRecord.to_dict() 不含 conversation_id/user_id ——
+            # 从审计条目/动作记录补齐（动作执行必有对应审计条目）
+            first = audit_entries[0] if audit_entries else {}
+            await repo.insert_agent_action({
+                **action_record,
+                "conversation_id": first.get("conversation_id", ""),
+                "user_id": first.get("user_id", ""),
+                "confirmation_state": "success",
+            })
+        await db.commit()
 
 
 def _stamp_execution_tags(final_state: dict) -> None:

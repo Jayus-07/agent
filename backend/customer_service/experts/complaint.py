@@ -27,8 +27,7 @@ def execute_complaint(
         ExpertResult — response_draft 为安抚响应，data 含工单 + handoff 信息
     """
     from backend.customer_service.audit import build_audit_entry
-    from backend.customer_service.handoff import HandoffState
-    from backend.customer_service.handoff_store import get_handoff_store
+    from backend.customer_service.handoff import HandoffState, transition as handoff_transition
     from backend.customer_service.service.complaint_service import get_complaint_service
     from backend.observability.metrics import record_cs_handoff
 
@@ -50,7 +49,10 @@ def execute_complaint(
             if active and active.get("trigger_type") == "complaint_escalation":
                 existing_ticket = active.get("ticket_id")
         except Exception:
-            pass
+            logger.warning(
+                "[ComplaintExpert] handoff store 查询失败，跳过跨 turn 幂等检查",
+                exc_info=True,
+            )
     if existing_ticket:
         logger.info(
             "[ComplaintExpert] 幂等返回: ticket=%s（会话已有投诉工单）",
@@ -88,15 +90,46 @@ def execute_complaint(
 
     answer = service.build_comfort_response(detection, ticket)
 
+    # P1 重构（2026-09-17）：投诉升级与显式转人工同流程 ——
+    # 状态机内存转换 AI_ACTIVE→REQUESTED→WAITING_HUMAN，单次落盘
+    # 最终态 waiting_human（此前卡 handoff_requested，坐席认领 409），
+    # 并与 HandoffExpert 一致发布 conversation.waiting 实时事件。
+    handoff_transition(HandoffState.AI_ACTIVE, HandoffState.HANDOFF_REQUESTED)
+    handoff_transition(
+        HandoffState.HANDOFF_REQUESTED, HandoffState.WAITING_HUMAN,
+    )
+    from datetime import datetime, timezone as _tz
+
+    _now = datetime.now(_tz.utc).isoformat()
     handoff_data = {
-        "handoff_state": HandoffState.HANDOFF_REQUESTED.value,
+        "handoff_state": HandoffState.WAITING_HUMAN.value,
         "trigger_type": "complaint_escalation",
         "trigger_reason": f"投诉升级: severity={detection.severity}",
         "ticket_id": ticket.ticket_id,
+        "created_at": _now,
+        "updated_at": _now,
     }
+    from backend.customer_service.handoff_store import get_handoff_store
+
     store = get_handoff_store()
     store.save(user_id, session_id, handoff_data)
     record_cs_handoff("complaint")
+
+    # 实时推送：投诉工单进入坐席待接入队列（与显式转人工一致）
+    from backend.customer_service.realtime import get_agent_hub
+
+    get_agent_hub().publish(
+        "conversation.waiting",
+        item={
+            "conversation_id": session_id,
+            "user_id": user_id,
+            "handoff_state": HandoffState.WAITING_HUMAN.value,
+            "trigger_type": "complaint_escalation",
+            "trigger_reason": handoff_data["trigger_reason"],
+            "updated_at": _now,
+            "last_message_preview": (user_message[:80] if user_message else None),
+        },
+    )
 
     audit_entry = build_audit_entry(
         user_id=user_id,
@@ -109,7 +142,7 @@ def execute_complaint(
     )
 
     logger.info(
-        "[ComplaintExpert] ticket=%s severity=%s handoff=HANDOFF_REQUESTED",
+        "[ComplaintExpert] ticket=%s severity=%s handoff=WAITING_HUMAN",
         ticket.ticket_id, detection.severity,
     )
 
@@ -120,7 +153,8 @@ def execute_complaint(
         data={
             "ticket_id": ticket.ticket_id,
             "severity": detection.severity,
-            "handoff_state": HandoffState.HANDOFF_REQUESTED.value,
+            "handoff_state": HandoffState.WAITING_HUMAN.value,
+            "handling_mode": "human",
             "audit_entry": audit_entry,
         },
     )
@@ -153,6 +187,8 @@ def complaint_expert_node(state: dict[str, Any]) -> dict[str, Any]:
     cs_context = dict(state.get("cs_context", {}))
     if result.get("data", {}).get("handoff_state"):
         cs_context["handoff_state"] = result["data"]["handoff_state"]
+    if result.get("data", {}).get("handling_mode"):
+        cs_context["handling_mode"] = result["data"]["handling_mode"]
     # 记录已建工单：供 complaint 专家幂等防重入（见 execute_complaint）
     if result.get("data", {}).get("ticket_id") and not result.get("data", {}).get("duplicate"):
         cs_context["complaint_ticket_id"] = result["data"]["ticket_id"]

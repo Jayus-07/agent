@@ -52,25 +52,25 @@ def execute_action(
     from backend.customer_service.security.permission import PermissionChecker
     from backend.observability.metrics import record_cs_intent
 
-    user_id = state.get("user_id", "")
     session_id = state.get("session_id", "default")
     intent = cs_route.get("intent", "as_refund")
 
     record_cs_intent(intent)
 
+    # 身份校验先行（权威 user_id），再打日志（P1 修正：消除死赋值）
+    user_id = PermissionChecker.validate_user_identity(state)
     logger.info(
         "[ActionExpert] intent=%s user_id=%s question=%s...",
         intent, user_id, user_message[:60],
     )
 
-    user_id = PermissionChecker.validate_user_identity(state)
     store = get_confirmation_store()
 
     pending_action = state.get("pending_action") or store.load(user_id, session_id)
 
     if pending_action:
         return _handle_pending_confirmation(
-            pending_action, user_message, user_id, session_id, store,
+            pending_action, user_message, user_id, session_id,
         )
 
     return _build_new_proposal(user_id, intent, cs_route, session_id, store)
@@ -179,149 +179,34 @@ def _handle_pending_confirmation(
     user_message: str,
     user_id: str,
     session_id: str,
-    store: Any,
 ) -> ExpertResult:
-    """处理用户对 pending action 的确认/取消响应。"""
-    from backend.customer_service.audit import build_audit_entry
-    from backend.customer_service.confirmation import (
-        ConfirmationIntent,
-        ConfirmationState,
-        detect_confirmation_intent,
-        is_expired,
-        transition,
+    """处理用户对 pending action 的确认/取消响应。
+
+    P1 重构：状态流转/执行/审计全部委托 confirmation_flow.process_confirmation
+    （与 pending_handler 共用唯一实现，含原子认领幂等闸门）——
+    此处整段重复实现已删除（audit-report §P0-2）。
+    """
+    from backend.customer_service.confirmation_flow import process_confirmation
+
+    outcome = process_confirmation(
+        pending_action, user_message, user_id, session_id,
     )
-    from backend.observability.metrics import record_cs_action, record_cs_confirmation
 
-    action_type = pending_action.get("action_type", "unknown")
-    proposal_text = pending_action.get("proposal_text", "")
-
-    if is_expired(pending_action):
-        transition(ConfirmationState.PENDING_CONFIRMATION, ConfirmationState.EXPIRED)
-        store.clear(user_id, session_id)
-        record_cs_confirmation("expired")
-
-        audit_entry = build_audit_entry(
-            user_id=user_id,
-            action_type=action_type,
-            result="denied",
-            detail="confirmation expired",
-        )
-
-        return ExpertResult(
-            expert="action",
-            status=ExpertStatus.SUCCESS.value,
-            response_draft="操作确认已超时，请重新发起。",
-            data={
-                "confirmation_state": ConfirmationState.EXPIRED.value,
-                "audit_entry": audit_entry,
-            },
-        )
-
-    user_intent = detect_confirmation_intent(user_message)
-
-    if user_intent == ConfirmationIntent.CANCEL:
-        transition(
-            ConfirmationState.PENDING_CONFIRMATION,
-            ConfirmationState.USER_CANCELLED,
-        )
-        store.clear(user_id, session_id)
-        record_cs_confirmation("cancelled")
-
-        audit_entry = build_audit_entry(
-            user_id=user_id,
-            action_type=action_type,
-            result="denied",
-            detail="user cancelled",
-        )
-
-        return ExpertResult(
-            expert="action",
-            status=ExpertStatus.SUCCESS.value,
-            response_draft="操作已取消。如有其他问题，请随时咨询。",
-            data={
-                "confirmation_state": ConfirmationState.USER_CANCELLED.value,
-                "audit_entry": audit_entry,
-            },
-        )
-
-    if user_intent == ConfirmationIntent.CONFIRM:
-        transition(
-            ConfirmationState.PENDING_CONFIRMATION,
-            ConfirmationState.USER_CONFIRMED,
-        )
-        transition(ConfirmationState.USER_CONFIRMED, ConfirmationState.EXECUTING)
-        record_cs_confirmation("confirmed")
-
-        try:
-            record = _simulate_execute(pending_action)
-            transition(ConfirmationState.EXECUTING, ConfirmationState.SUCCESS)
-            store.clear(user_id, session_id)
-            record_cs_action(action_type, "success")
-
-            action_result = {
-                "action_type": action_type,
-                "status": "success",
-                "action_record": record.to_dict(),
-            }
-
-            audit_entry = build_audit_entry(
-                user_id=user_id,
-                action_type=action_type,
-                result="success",
-                target_type=pending_action.get("target_type", ""),
-                target_id=pending_action.get("target_id", ""),
-                detail=f"simulated execution, action_id={record.action_id}",
-            )
-
-            answer = (
-                f"✅ 操作已提交成功！\n\n"
-                f"**操作类型:** {_action_type_label(action_type)}\n"
-                f"*（当前为模拟模式，实际写操作将在 Phase 6 启用）*"
-            )
-
-            return ExpertResult(
-                expert="action",
-                status=ExpertStatus.SUCCESS.value,
-                response_draft=answer,
-                data={
-                    "confirmation_state": ConfirmationState.SUCCESS.value,
-                    "action_result": action_result,
-                    "audit_entry": audit_entry,
-                },
-            )
-
-        except Exception as e:
-            transition(ConfirmationState.EXECUTING, ConfirmationState.FAILED)
-            store.clear(user_id, session_id)
-            record_cs_action(action_type, "failed")
-
-            audit_entry = build_audit_entry(
-                user_id=user_id,
-                action_type=action_type,
-                result="failure",
-                detail=str(e),
-            )
-
-            logger.error("[ActionExpert] 执行失败: %s", e, exc_info=True)
-
-            return ExpertResult(
-                expert="action",
-                status=ExpertStatus.FAILED.value,
-                response_draft="操作执行失败，请稍后重试或联系人工客服。",
-                data={
-                    "confirmation_state": ConfirmationState.FAILED.value,
-                    "audit_entry": audit_entry,
-                },
-            )
+    data: dict[str, Any] = {
+        "confirmation_state": outcome.confirmation_state,
+    }
+    if outcome.pending_action is not None:
+        data["pending_action"] = outcome.pending_action
+    if outcome.action_result is not None:
+        data["action_result"] = outcome.action_result
+    if outcome.audit_entry is not None:
+        data["audit_entry"] = outcome.audit_entry
 
     return ExpertResult(
         expert="action",
         status=ExpertStatus.SUCCESS.value,
-        response_draft=f"您有一个待确认的操作：\n\n{proposal_text}",
-        data={
-            "pending_action": pending_action,
-            "confirmation_state": ConfirmationState.PENDING_CONFIRMATION.value,
-        },
+        response_draft=outcome.answer,
+        data=data,
     )
 
 

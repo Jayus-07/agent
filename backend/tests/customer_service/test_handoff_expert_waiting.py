@@ -40,11 +40,10 @@ def test_execute_handoff_enters_waiting_human(monkeypatch):
         HandoffState.WAITING_HUMAN.value
     )
 
-    # store 两次落盘：先 HANDOFF_REQUESTED，再 WAITING_HUMAN
+    # P1 重构（2026-09-17）：状态机转换（AI_ACTIVE→REQUESTED→WAITING_HUMAN）
+    # 全部在内存完成，只持久化最终态 WAITING_HUMAN —— 单次落盘，
+    # 不再向 DB 暴露 handoff_requested 中间态（audit-report §P2-16）。
     states = [s["handoff_state"] for s in store.saved]
-    assert states == [
-        HandoffState.HANDOFF_REQUESTED.value,
-        HandoffState.WAITING_HUMAN.value,
-    ]
+    assert states == [HandoffState.WAITING_HUMAN.value]
     assert result["data"]["handling_mode"] == "human"
     assert result["response_draft"], "转接提示语不能为空"

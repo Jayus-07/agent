@@ -398,6 +398,11 @@ cs_rag_status_total = Counter(
     "客服 RAG 查询状态总数",
     labelnames=("status",),
 )
+cs_store_db_failure_total = Counter(
+    "cs_store_db_failure_total",
+    "客服状态 Store DB 写失败总数（strict 模式抛错，非 strict 告警降级）",
+    labelnames=("store", "op"),
+)
 
 # ── CS Graph 独立架构指标（Phase 0 新增）──
 cs_supervisor_decision_total = Counter(
@@ -581,6 +586,14 @@ def record_cs_expert_result(expert: str, status: str) -> None:
     """埋点 CS Expert 执行结果（expert: knowledge/query/action/complaint/handoff, status: success/failed/timeout）。"""
     try:
         cs_expert_result_total.labels(expert=expert, status=status).inc()
+    except Exception:
+        pass
+
+
+def record_cs_store_db_failure(store: str, op: str) -> None:
+    """埋点客服状态 Store DB 写失败（store: confirmation/handoff, op: save/clear/claim）。"""
+    try:
+        cs_store_db_failure_total.labels(store=store, op=op).inc()
     except Exception:
         pass
 

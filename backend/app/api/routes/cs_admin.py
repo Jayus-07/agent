@@ -22,6 +22,60 @@ def _use_java_source() -> bool:
     return CS_ADMIN_SOURCE == "java"
 
 
+# ── 身份与归属校验（P1，audit-report §P0-6 / §P1-4）──────────
+# 此前 claim/close/agent-messages 的 agent_id 由客户端自由声明、
+# messages/rating 无归属校验（IDOR）——统一收口到这里。
+
+def _is_service_channel(request: Request) -> bool:
+    from backend.config.auth import AUTH_TYPE_HEADER
+    return (request.headers.get(AUTH_TYPE_HEADER) or "").strip().lower() == "api-key"
+
+
+def _resolve_agent_identity(request: Request, fallback_agent_id: str) -> str:
+    """坐席身份解析：JWT 登录身份优先；服务间 API-Key 通道沿用声明的
+    agent_id（BFF 服务端凭据，非浏览器可见）；真 guest 一律 403。"""
+    from backend.app.api.identity import resolve_identity
+
+    if _is_service_channel(request):
+        agent_id = (fallback_agent_id or "").strip()
+        if not agent_id:
+            raise HTTPException(422, detail="agent_id is required")
+        return agent_id
+
+    ident = resolve_identity(request)
+    if ident.authenticated:
+        return ident.user_name or ident.user_id
+    raise HTTPException(
+        403, detail="坐席操作需要登录身份（或服务间 API Key）",
+    )
+
+
+def _ensure_conversation_access(request: Request, conv_user_id: str) -> None:
+    """会话归属校验：登录用户只能读自己的会话；guest 只能读匿名会话。
+
+    服务间 API-Key 通道（BFF 管理端）放行并记 warning —— 该通道由
+    服务端凭据保护，用户归属在 BFF 信任边界内校验。
+    """
+    from backend.app.api.identity import resolve_identity
+
+    if _is_service_channel(request):
+        logger.warning(
+            "[CSAdmin] api-key 通道访问会话（归属由 BFF 校验）: owner=%s",
+            conv_user_id,
+        )
+        return
+
+    ident = resolve_identity(request)
+    if ident.authenticated:
+        if conv_user_id != ident.user_id:
+            raise HTTPException(403, detail="无权访问他人会话")
+        return
+    # guest（未登录）：仅允许匿名演示会话
+    if (conv_user_id or "").strip() in ("", "anonymous", "guest"):
+        return
+    raise HTTPException(403, detail="请登录后查看您的会话")
+
+
 async def _proxy_to_java(path: str) -> dict:
     """代理请求到 business-service（cutover 后的读源）"""
     from backend.infra.http.business_client import BusinessServiceError, get_json
@@ -175,7 +229,7 @@ async def cs_stats():
 
 
 @router.post("/{conversation_id}/rating")
-async def rate_conversation(conversation_id: str, body: RatingRequest):
+async def rate_conversation(conversation_id: str, body: RatingRequest, request: Request):
     """用户端满意度评分：1-5 星 + 选填备注，写入 conversations 行。"""
     if not (1 <= body.rating <= 5):
         raise HTTPException(422, detail="rating 必须为 1-5 的整数")
@@ -198,6 +252,9 @@ async def rate_conversation(conversation_id: str, body: RatingRequest):
             ).scalar_one_or_none()
             if conv is None:
                 raise HTTPException(404, detail="Conversation not found")
+
+            # P1 归属校验：登录用户只能评自己的会话（guest 仅限匿名会话）
+            _ensure_conversation_access(request, conv.user_id)
 
             conv.rating = body.rating
             conv.rating_comment = (body.comment or "").strip() or None
@@ -386,14 +443,15 @@ async def issue_agent_ws_ticket():
 
 
 @router.post("/{conversation_id}/close")
-async def close_conversation(conversation_id: str, body: ClaimRequest):
+async def close_conversation(conversation_id: str, body: ClaimRequest, request: Request):
     """坐席关闭会话：waiting_human / human_active → closed。
 
     关闭后同步失效 HandoffStore L1 缓存（否则用户侧下个 turn 仍读到
     缓存里的排队中状态），并向坐席侧广播 conversation.closed。
+    P1：agent_id 改为服务端解析（JWT 登录身份优先，api-key 通道沿用
+    声明值），不再信任客户端自由声明。
     """
-    if not body.agent_id.strip():
-        raise HTTPException(422, detail="agent_id is required")
+    agent_id = _resolve_agent_identity(request, body.agent_id)
 
     from datetime import datetime, timezone
 
@@ -463,13 +521,13 @@ async def close_conversation(conversation_id: str, body: ClaimRequest):
         get_agent_hub().publish(
             "conversation.closed",
             conversation_id=conversation_id,
-            closed_by=body.agent_id.strip(),
+            closed_by=agent_id,
         )
 
         return {
             "conversation_id": conversation_id,
             "handoff_state": "closed",
-            "closed_by": body.agent_id.strip(),
+            "closed_by": agent_id,
         }
     except HTTPException:
         raise
@@ -481,21 +539,23 @@ async def close_conversation(conversation_id: str, body: ClaimRequest):
 
 
 @router.post("/{conversation_id}/claim")
-async def claim_conversation(conversation_id: str, body: ClaimRequest):
+async def claim_conversation(conversation_id: str, body: ClaimRequest, request: Request):
     """坐席认领会话：handoff → human_active。
 
     仅允许 waiting_human → human_active；handoff_requested 说明用户刚发起、
     尚未进入排队（由客服运行时流转），返回 409 让坐席稍后再认领。
+    P1（audit-report §P0-4）：认领原子化 —— 单条条件 UPDATE
+    （WHERE handoff_state='waiting_human'）+ 影响行数判定，并发双认领
+    只有一方成功；agent_id 服务端解析。
     """
-    if not body.agent_id.strip():
-        raise HTTPException(422, detail="agent_id is required")
+    agent_id = _resolve_agent_identity(request, body.agent_id)
 
     from backend.customer_service.errors import BusinessRuleError
 
     try:
         from backend.customer_service._db_loop import run_sync
         return await _async_claim(
-            conversation_id, body.agent_id.strip(), run_sync
+            conversation_id, agent_id, run_sync
         )
     except HTTPException:
         raise
@@ -507,15 +567,16 @@ async def claim_conversation(conversation_id: str, body: ClaimRequest):
 
 
 @router.post("/{conversation_id}/agent-messages", response_model=AgentMessageResponse)
-async def post_agent_message(conversation_id: str, body: AgentMessageRequest):
+async def post_agent_message(conversation_id: str, body: AgentMessageRequest, request: Request):
     """坐席发言：落库为 human_agent 消息（用户侧经消息增量接口/后续 SSE 可见）。"""
-    if not body.agent_id.strip() or not body.content.strip():
-        raise HTTPException(422, detail="agent_id and content are required")
+    agent_id = _resolve_agent_identity(request, body.agent_id)
+    if not body.content.strip():
+        raise HTTPException(422, detail="content is required")
 
     try:
         from backend.customer_service._db_loop import run_sync
         return await _async_agent_message(
-            conversation_id, body.agent_id.strip(), body.content.strip(), run_sync
+            conversation_id, agent_id, body.content.strip(), run_sync
         )
     except HTTPException:
         raise
@@ -526,11 +587,38 @@ async def post_agent_message(conversation_id: str, body: AgentMessageRequest):
 
 @router.get("/{conversation_id}/messages", response_model=HandoffMessagesResponse)
 async def get_conversation_messages(
+    request: Request,
     conversation_id: str,
     since_id: int = Query(0, ge=0, description="只返回 id > since_id 的消息"),
     limit: int = Query(100, ge=1, le=200),
 ):
     """会话消息增量拉取（用户侧/坐席侧轮询源，private 消息不返回）。"""
+    # P1 归属校验：登录用户只能拉自己的会话（guest 仅限匿名会话）
+    try:
+        from sqlalchemy import select
+
+        from backend.customer_service.models.conversation import CSConversation
+        from backend.memory.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            conv = (
+                await db.execute(
+                    select(CSConversation.conversation_id, CSConversation.user_id)
+                    .where(CSConversation.conversation_id == conversation_id)
+                    .limit(1)
+                )
+            ).first()
+        if conv is not None:
+            _ensure_conversation_access(request, conv.user_id)
+        else:
+            # 会话不存在：与 404 语义一致（不泄露存在性）
+            raise HTTPException(404, detail="Conversation not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[CSAdmin] messages ownership check failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
     try:
         from backend.customer_service._db_loop import run_sync
         return await _async_messages_since(
@@ -866,43 +954,82 @@ async def _async_handoff_queue(state_list, run_sync):
 
 
 async def _async_claim(conversation_id: str, agent_id: str, run_sync):
-    """认领会话：waiting_human → human_active + conversation.handling_mode=human。"""
+    """认领会话：waiting_human → human_active + conversation.handling_mode=human。
+
+    P1 原子化：认领是单条条件 UPDATE（WHERE handoff_state='waiting_human'），
+    以影响行数判定成败 —— 两个坐席并发认领只有一个 commit 生效，
+    另一个读到 rowcount=0 后重查状态给出明确响应。
+    （此前 SELECT→内存校验→ORM 赋值→commit 存在 TOCTOU，双认领双返回。）
+    """
     from datetime import datetime, timezone
 
     from sqlalchemy import select, update
 
-    from backend.customer_service import handoff as handoff_sm
     from backend.customer_service.models.conversation import CSConversation
     from backend.customer_service.models.handoff import CSHandoff
     from backend.memory.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(CSHandoff).where(
-                CSHandoff.conversation_id == conversation_id,
-                CSHandoff.handoff_state != "closed",
-            ).limit(1)
-        )
-        row = result.scalar_one_or_none()
+        row = (
+            await db.execute(
+                select(CSHandoff.conversation_id, CSHandoff.user_id, CSHandoff.handoff_state)
+                .where(
+                    CSHandoff.conversation_id == conversation_id,
+                    CSHandoff.handoff_state != "closed",
+                )
+                .limit(1)
+            )
+        ).first()
         if row is None:
             raise HTTPException(404, detail="No open handoff for conversation")
-        if row.handoff_state == handoff_sm.HandoffState.HUMAN_ACTIVE.value:
+        handoff_user_id = row.user_id
+        current_state = row.handoff_state
+
+        if current_state == "human_active":
             return {
                 "conversation_id": conversation_id,
-                "handoff_state": row.handoff_state,
+                "handoff_state": current_state,
                 "agent_id": agent_id,
                 "already_claimed": True,
             }
 
-        # 状态机校验（handoff_requested → human_active 为非法转换）
-        handoff_sm.transition(
-            handoff_sm.HandoffState(row.handoff_state),
-            handoff_sm.HandoffState.HUMAN_ACTIVE,
+        # 原子条件更新：只有仍处于 waiting_human 的行才会被认领
+        claim_result = await db.execute(
+            update(CSHandoff)
+            .where(
+                CSHandoff.conversation_id == conversation_id,
+                CSHandoff.handoff_state == "waiting_human",
+            )
+            .values(handoff_state="human_active")
         )
+        claimed = claim_result.rowcount > 0
+        if not claimed:
+            # 并发下已被认领 / 状态已流转 —— 重查给出明确语义
+            fresh = (
+                await db.execute(
+                    select(CSHandoff.handoff_state)
+                    .where(
+                        CSHandoff.conversation_id == conversation_id,
+                        CSHandoff.handoff_state != "closed",
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if fresh == "human_active":
+                return {
+                    "conversation_id": conversation_id,
+                    "handoff_state": fresh,
+                    "agent_id": agent_id,
+                    "already_claimed": True,
+                }
+            raise HTTPException(
+                409,
+                detail=(
+                    f"Conversation handoff is {fresh or 'closed'}, "
+                    "only waiting_human can be claimed"
+                ),
+            )
 
-        # commit 前捕获（expire_on_commit=False 虽安全，仍按 close 同款收口）
-        handoff_user_id = row.user_id
-        row.handoff_state = handoff_sm.HandoffState.HUMAN_ACTIVE.value
         await db.execute(
             update(CSConversation)
             .where(CSConversation.conversation_id == conversation_id)

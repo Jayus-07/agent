@@ -9,6 +9,10 @@ Phase 5: 多轮确认流程处理器。
     → (无 pending) → cs_supervisor
     → (有 pending)  → 处理确认/取消/超时 → cs_reporter
 
+P1 重构（2026-09-17）：核心逻辑收敛到 confirmation_flow.process_confirmation
+（与 ActionExpert 共用单一实现，含原子认领幂等闸门），本模块只做
+Command 输出映射。
+
 设计参考: docs/customer-service/langgraph-multi-expert-design.md §6.3
 """
 from __future__ import annotations
@@ -48,7 +52,7 @@ def cs_pending_handler_node(state: dict[str, Any]) -> Command:
     )
 
     return _process_pending(
-        pending_action, user_message, user_id, session_id, state,
+        pending_action, user_message, user_id, session_id,
     )
 
 
@@ -57,264 +61,56 @@ def _process_pending(
     user_message: str,
     user_id: str,
     session_id: str,
-    state: dict[str, Any],
 ) -> Command:
-    """处理 pending action — 过期检查 → 意图检测 → 状态流转。"""
-    from backend.customer_service.confirmation import (
-        ConfirmationIntent,
-        detect_confirmation_intent,
-        is_expired,
+    """处理 pending action — 全部状态流转委托 confirmation_flow（唯一实现）。"""
+    from backend.customer_service.confirmation_flow import process_confirmation
+
+    outcome = process_confirmation(
+        pending_action, user_message, user_id, session_id,
     )
 
-    if is_expired(pending_action):
-        return _handle_expired(
-            pending_action, user_id, session_id,
-        )
+    update: dict[str, Any] = {
+        "confirmation_state": outcome.confirmation_state,
+    }
 
-    intent = detect_confirmation_intent(user_message)
-
-    if intent == ConfirmationIntent.CONFIRM:
-        return _handle_confirm(
-            pending_action, user_id, session_id, state,
-        )
-
-    if intent == ConfirmationIntent.CANCEL:
-        return _handle_cancel(
-            pending_action, user_id, session_id,
-        )
-
-    proposal_text = pending_action.get("proposal_text", "")
-
-    # 追问上限：意图不明连续超过 CS_MAX_CONFIRMATION_RETRIES 次 →
-    # 按过期处理（PENDING→EXPIRED 转换 + 清 store），防止无限追问
-    from backend.config.customer_service import CS_MAX_CONFIRMATION_RETRIES
-    from backend.customer_service.confirmation_store import get_confirmation_store
-
-    retries = int(pending_action.get("retry_count", 0)) + 1
-    if retries > CS_MAX_CONFIRMATION_RETRIES:
-        logger.warning(
-            "[PendingHandler] 追问达上限 (%d 次)，按过期处理: user=%s",
-            CS_MAX_CONFIRMATION_RETRIES, user_id,
-        )
-        return _handle_expired(pending_action, user_id, session_id)
-    get_confirmation_store().save(
-        user_id, session_id, {**pending_action, "retry_count": retries},
-    )
-
-    return Command(
-        goto="cs_reporter",
-        update={
-            "supervisor_decision": {
-                "next_action": "pending",
-                "decision_layer": 2,
-                "reason": f"pending_handler — 用户意图不明确，重新追问（第 {retries}/{CS_MAX_CONFIRMATION_RETRIES} 次）",
-            },
-            "last_expert_result": {
-                "response_draft": f"您有一个待确认的操作：\n\n{proposal_text}\n\n请回复「确认」继续，或「取消」放弃。",
-            },
-        },
-    )
-
-
-def _handle_expired(
-    pending_action: dict,
-    user_id: str,
-    session_id: str,
-) -> Command:
-    """pending 已超时 → 清理 store → 返回超时回复。"""
-    from backend.customer_service.audit import build_audit_entry
-    from backend.customer_service.confirmation import (
-        ConfirmationState,
-        transition,
-    )
-    from backend.customer_service.confirmation_store import get_confirmation_store
-    from backend.observability.metrics import record_cs_confirmation
-
-    transition(
-        ConfirmationState.PENDING_CONFIRMATION,
-        ConfirmationState.EXPIRED,
-    )
-    get_confirmation_store().clear(user_id, session_id)
-    record_cs_confirmation("expired")
-
-    action_type = pending_action.get("action_type", "unknown")
-    audit_entry = build_audit_entry(
-        user_id=user_id,
-        action_type=action_type,
-        result="denied",
-        detail="confirmation expired",
-    )
-
-    logger.info("[CS PendingHandler] expired: type=%s user=%s", action_type, user_id)
-
-    return Command(
-        goto="cs_reporter",
-        update={
-            "supervisor_decision": {
-                "next_action": "finish",
-                "decision_layer": 2,
-                "reason": "pending_handler — 确认超时",
-                "is_finished": True,
-            },
-            "last_expert_result": {
-                "response_draft": "操作确认已超时，请重新发起。",
-            },
-            "confirmation_state": ConfirmationState.EXPIRED.value,
-            "cs_audit_entries": [audit_entry],
-        },
-    )
-
-
-def _handle_confirm(
-    pending_action: dict,
-    user_id: str,
-    session_id: str,
-    state: dict[str, Any],
-) -> Command:
-    """用户确认 → 状态流转 PENDING→CONFIRMED→EXECUTING → 执行 → SUCCESS/FAILED。"""
-    from backend.customer_service.audit import build_audit_entry
-    from backend.customer_service.confirmation import (
-        ConfirmationState,
-        transition,
-    )
-    from backend.customer_service.confirmation_store import get_confirmation_store
-    from backend.customer_service.experts.action import (
-        _ACTION_TYPE_LABELS,
-        _simulate_execute,
-    )
-    from backend.observability.metrics import record_cs_action, record_cs_confirmation
-
-    transition(
-        ConfirmationState.PENDING_CONFIRMATION,
-        ConfirmationState.USER_CONFIRMED,
-    )
-    transition(ConfirmationState.USER_CONFIRMED, ConfirmationState.EXECUTING)
-    record_cs_confirmation("confirmed")
-
-    action_type = pending_action.get("action_type", "unknown")
-
-    try:
-        record = _simulate_execute(pending_action)
-        transition(ConfirmationState.EXECUTING, ConfirmationState.SUCCESS)
-        get_confirmation_store().clear(user_id, session_id)
-        record_cs_action(action_type, "success")
-
-        action_result = {
-            "action_type": action_type,
-            "status": "success",
-            "action_record": record.to_dict(),
+    if outcome.kind == "reask":
+        update["supervisor_decision"] = {
+            "next_action": "pending",
+            "decision_layer": 2,
+            "reason": (
+                "pending_handler — 用户意图不明确，重新追问"
+                f"（第 {outcome.pending_action.get('retry_count', 0)}"
+                f" 次追问）"
+            ),
         }
+        update["last_expert_result"] = {"response_draft": outcome.answer}
+        return Command(goto="cs_reporter", update=update)
 
-        audit_entry = build_audit_entry(
-            user_id=user_id,
-            action_type=action_type,
-            result="success",
-            target_type=pending_action.get("target_type", ""),
-            target_id=pending_action.get("target_id", ""),
-            detail=f"simulated execution, action_id={record.action_id}",
-        )
+    # 终态：expired / duplicate / success / failed / cancelled
+    finished_reason = {
+        "expired": "pending_handler — 确认超时",
+        "duplicate": "pending_handler — 重复确认（已处理，幂等跳过）",
+        "success": "pending_handler — 用户确认，执行成功",
+        "failed": "pending_handler — 用户确认，执行失败",
+        "cancelled": "pending_handler — 用户取消",
+    }.get(outcome.kind, f"pending_handler — {outcome.kind}")
 
-        label = _ACTION_TYPE_LABELS.get(action_type, action_type)
-        answer = (
-            f"✅ 操作已提交成功！\n\n"
-            f"**操作类型:** {label}\n"
-            f"*（当前为模拟模式，实际写操作将在 Phase 6 启用）*"
-        )
+    update["supervisor_decision"] = {
+        "next_action": "finish",
+        "decision_layer": 2,
+        "reason": finished_reason,
+        "is_finished": True,
+    }
+    update["last_expert_result"] = {"response_draft": outcome.answer}
 
-        logger.info("[CS PendingHandler] confirmed+success: type=%s", action_type)
+    if outcome.kind == "success" and outcome.action_result is not None:
+        update["cs_action_result"] = outcome.action_result
 
-        return Command(
-            goto="cs_reporter",
-            update={
-                "supervisor_decision": {
-                    "next_action": "finish",
-                    "decision_layer": 2,
-                    "reason": "pending_handler — 用户确认，执行成功",
-                    "is_finished": True,
-                },
-                "last_expert_result": {"response_draft": answer},
-                "confirmation_state": ConfirmationState.SUCCESS.value,
-                "cs_action_result": action_result,
-                "cs_audit_entries": [audit_entry],
-            },
-        )
+    if outcome.audit_entry is not None:
+        update["cs_audit_entries"] = [outcome.audit_entry]
 
-    except Exception as e:
-        transition(ConfirmationState.EXECUTING, ConfirmationState.FAILED)
-        get_confirmation_store().clear(user_id, session_id)
-        record_cs_action(action_type, "failed")
-
-        audit_entry = build_audit_entry(
-            user_id=user_id,
-            action_type=action_type,
-            result="failure",
-            detail=str(e),
-        )
-
-        logger.error("[CS PendingHandler] execution failed: %s", e, exc_info=True)
-
-        return Command(
-            goto="cs_reporter",
-            update={
-                "supervisor_decision": {
-                    "next_action": "finish",
-                    "decision_layer": 2,
-                    "reason": "pending_handler — 用户确认，执行失败",
-                    "is_finished": True,
-                },
-                "last_expert_result": {
-                    "response_draft": "操作执行失败，请稍后重试或联系人工客服。",
-                },
-                "confirmation_state": ConfirmationState.FAILED.value,
-                "cs_audit_entries": [audit_entry],
-            },
-        )
-
-
-def _handle_cancel(
-    pending_action: dict,
-    user_id: str,
-    session_id: str,
-) -> Command:
-    """用户取消 → 清理 store → 返回取消回复。"""
-    from backend.customer_service.audit import build_audit_entry
-    from backend.customer_service.confirmation import (
-        ConfirmationState,
-        transition,
+    logger.info(
+        "[CS PendingHandler] outcome=%s type=%s user=%s",
+        outcome.kind, outcome.action_type, user_id,
     )
-    from backend.customer_service.confirmation_store import get_confirmation_store
-    from backend.observability.metrics import record_cs_confirmation
-
-    transition(
-        ConfirmationState.PENDING_CONFIRMATION,
-        ConfirmationState.USER_CANCELLED,
-    )
-    get_confirmation_store().clear(user_id, session_id)
-    record_cs_confirmation("cancelled")
-
-    action_type = pending_action.get("action_type", "unknown")
-    audit_entry = build_audit_entry(
-        user_id=user_id,
-        action_type=action_type,
-        result="denied",
-        detail="user cancelled",
-    )
-
-    logger.info("[CS PendingHandler] cancelled: type=%s user=%s", action_type, user_id)
-
-    return Command(
-        goto="cs_reporter",
-        update={
-            "supervisor_decision": {
-                "next_action": "finish",
-                "decision_layer": 2,
-                "reason": "pending_handler — 用户取消",
-                "is_finished": True,
-            },
-            "last_expert_result": {
-                "response_draft": "操作已取消。如有其他问题，请随时咨询。",
-            },
-            "confirmation_state": ConfirmationState.USER_CANCELLED.value,
-            "cs_audit_entries": [audit_entry],
-        },
-    )
+    return Command(goto="cs_reporter", update=update)

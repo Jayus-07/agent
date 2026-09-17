@@ -95,20 +95,29 @@ def is_terminal(state: ConfirmationState) -> bool:
 
 
 _CONFIRM_KEYWORDS = frozenset({
-    "确认", "确定", "好的", "同意", "可以", "没问题", "是的",
-    "嗯", "对", "ok", "yes", "confirm",
+    "确认", "确定", "好的", "同意", "可以", "没问题", "是的", "对的",
+    "嗯", "ok", "yes", "confirm",
 })
 
+# P1 修正（2026-09-17）：移除裸词「不」「对」——子串匹配误伤严重：
+#   "确认不要了" 因「不」…仍由「不要」命中 CANCEL（保留）；
+#   "对吧" 曾因「对」误判 CONFIRM → 已移除，改用「对的」。
 _CANCEL_KEYWORDS = frozenset({
-    "取消", "算了", "不要", "不", "否", "放弃", "算了不",
-    "cancel", "no",
+    "取消", "算了", "不要", "否", "放弃", "cancel", "no",
 })
+
+# 疑问句不算表态："这个可以取消吗" / "可不可以退" / "确认吗？" → NONE
+# （此前「可以取消吗」会被判成 CANCEL 直接取消用户pending —— P0 级误判）
+_QUESTION_MARKERS = ("吗", "么", "?", "？", "可不可以", "能不能", "要不要", "行不行", "是否")
 
 
 def detect_confirmation_intent(text: str) -> ConfirmationIntent:
     """Detect whether the user text confirms or cancels a pending action."""
     text_lower = text.strip().lower()
     if not text_lower:
+        return ConfirmationIntent.NONE
+
+    if any(marker in text_lower for marker in _QUESTION_MARKERS):
         return ConfirmationIntent.NONE
 
     for kw in _CANCEL_KEYWORDS:
