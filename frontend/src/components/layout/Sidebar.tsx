@@ -21,7 +21,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
   }
 
   return (
-    <aside className="w-64 shrink-0 flex flex-col glass border-r border-black/5">
+    <aside className="w-64 shrink-0 hidden md:flex flex-col glass border-r border-black/5">
       {/* 品牌 */}
       <div className="flex items-center justify-between px-4 py-3.5">
         <div className="flex items-center gap-2">

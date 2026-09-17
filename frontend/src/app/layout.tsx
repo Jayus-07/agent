@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { usePathname } from 'next/navigation'
 import Sidebar from '@/components/layout/Sidebar'
+import MobileTabBar from '@/components/layout/MobileTabBar'
 import AuthGate from '@/components/AuthGate'
 import { ToastProvider } from '@/components/shared/Toast'
 import './globals.css'
@@ -28,10 +29,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {!isTaskMode && !isLoginPage && (
           <Sidebar collapsed={!sidebarOpen} onToggle={() => setSidebarOpen((v) => !v)} />
         )}
-        <main className="flex-1 flex flex-col min-w-0">
+        <main className="flex-1 flex flex-col min-w-0 pb-16 md:pb-0">
           <AuthGate>
             <ToastProvider>{children}</ToastProvider>
           </AuthGate>
+          {/* UX P2-⑨ 移动断点：≤768px 底部四 tab（桌面 md:hidden 由 Sidebar 接管）；
+              /login 免登录页不放导航 */}
+          {!isLoginPage && <MobileTabBar />}
         </main>
       </body>
     </html>
