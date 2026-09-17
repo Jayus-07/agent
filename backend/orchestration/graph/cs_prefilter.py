@@ -14,8 +14,15 @@ from __future__ import annotations
 from backend.shared.logger import logger
 
 
-def try_cs_prefilter(query: str, state: dict) -> dict | None:
+def try_cs_prefilter(query: str, state: dict, forced: bool = False) -> dict | None:
     """CS 域预过滤 + 灰度放量。
+
+    Args:
+        forced: 入口域锁（2026-09-18）——客服窗口（CSDrawer）每条消息带
+            domain_hint=customer_service。用户已显式进入客服窗口，语义上
+            不存在"漏进主图"的实验对照，故跳过域检测门（detect 未命中也进）
+            与灰度判定（恒 treatment）；仅保留 CS_ENABLED 总闸与 InputGuard。
+            域检测仍照常执行，rule_hits 作为 coarse 分类 hint 参与路由。
 
     Returns:
         命中客服域且在放量范围内 → 返回主图 state 更新 dict（route_mode=
@@ -65,14 +72,18 @@ def try_cs_prefilter(query: str, state: dict) -> dict | None:
             # detect_cached：同 query 5min 内复用检测结果（检测只依赖 query、
             # 与 session 无关），省掉重复请求的云端 embedding 往返（实测 1.0~3.4s）。
             detection = detect_cached(query)
-            if not detection.is_cs:
+            if not detection.is_cs and not forced:
                 return None
 
-            # ── 灰度放量判定（domain 命中之后，避免对 control 组白烧检测开销之外逻辑）──
-            if not _in_rollout(session_id):
+            # ── 灰度放量判定（forced 域锁恒 treatment；其余 domain 命中之后判定，
+            # 避免对 control 组白烧检测开销之外逻辑）──────────────────────────
+            if forced:
+                _stamp_variant(session_id, "treatment")
+            elif not _in_rollout(session_id):
                 _stamp_variant(session_id, "control")
                 return None
-            _stamp_variant(session_id, "treatment")
+            else:
+                _stamp_variant(session_id, "treatment")
 
             cs_result = get_cs_router().route(query, detection)
 
@@ -87,7 +98,7 @@ def try_cs_prefilter(query: str, state: dict) -> dict | None:
     cs_target = ROUTE_PATH_TO_CS_TARGET.get(route_path, "cs_pending")
 
     logger.info(
-        f"[CsPrefilter] CS 域命中: domain={cs_result.domain.value} "
+        f"[CsPrefilter] CS 域命中{'(域锁)' if forced else ''}: domain={cs_result.domain.value} "
         f"intent={cs_result.intent} conf={cs_result.confidence:.2f} "
         f"→ {cs_target}"
     )
@@ -114,6 +125,10 @@ def try_cs_prefilter(query: str, state: dict) -> dict | None:
         if trace is not None:
             trace.tags["conversation_id"] = session_id
             trace.tags["cs_target"] = cs_target
+            if forced:
+                # token usage 归因依赖此 tag（proxy._usage_component →
+                # component="customer_service"）；同时供 trace 侧区分锁域轮次
+                trace.tags["cs_domain_lock"] = "1"
             trace.metadata["cs_route"] = {
                 "intent": cs_result.intent,
                 "domain": cs_result.domain.value,

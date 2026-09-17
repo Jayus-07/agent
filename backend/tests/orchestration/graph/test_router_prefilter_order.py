@@ -116,3 +116,77 @@ class TestCheapRuleCount:
     def test_empty_query(self, fake_detector):
         assert dd.cs_rule_hit_count("") == 0
         fake_detector._rule_channel.assert_not_called()
+
+
+class TestDomainHintLock:
+    """客服窗口锁域（2026-09-18）：domain_hint=customer_service 强制 CS 入口。
+
+    背景：CSDrawer 与主问答共用 /chat/stream，此前抽屉内每条消息重新判域，
+    "下周去大阪怎么玩"会被旅游 prefilter 抢走（域漏判进旅游域图硬答）。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_cs_router_cache(self):
+        """关掉 cs_router 模块级缓存（同 test_cs_router.py 手法），防跨测试污染。"""
+        from backend.customer_service.router import cs_router as cs_router_mod
+        original_get = cs_router_mod._cs_cache.get_json
+        original_set = cs_router_mod._cs_cache.set_json
+        cs_router_mod._cs_cache.get_json = lambda key: None
+        cs_router_mod._cs_cache.set_json = lambda key, value: None
+        yield
+        cs_router_mod._cs_cache.get_json = original_get
+        cs_router_mod._cs_cache.set_json = original_set
+
+    def test_domain_hint_forces_cs_past_travel_and_failed_detection(
+        self, fake_detector, travel_on, cs_on, monkeypatch,
+    ):
+        """非客服问法 + 域检测漏判 + 旅游 prefilter 可路由 → 仍强制进 CS。"""
+        import backend.config.customer_service as cc
+        monkeypatch.setattr(cc, "CS_ROLLOUT_PERCENT", 0)
+        monkeypatch.setattr(cc, "CS_ROLLOUT_WHITELIST", set())
+
+        out = rn.router_node({
+            "question": "帮我规划杭州2天旅游行程",
+            "session_id": "s-lock",
+            "domain_hint": "customer_service",
+        })
+        assert out.get("route_mode") == "customer_service"
+
+    def test_domain_hint_skips_travel_even_without_rule_hit(
+        self, fake_detector, travel_on, cs_on,
+    ):
+        """域锁下旅游 prefilter 不参与（灰度默认配置，不额外 patch）。"""
+        out = rn.router_node({
+            "question": "帮我规划杭州2天旅游行程",
+            "session_id": "s-lock2",
+            "domain_hint": "customer_service",
+        })
+        assert out.get("route_mode") == "customer_service"
+        fake_detector.detect.assert_called()  # 域检测仍执行，作 coarse hint
+
+    def test_domain_hint_degrades_to_main_router_when_cs_disabled(
+        self, fake_detector, travel_on, monkeypatch,
+    ):
+        """CS 总闸关闭：域锁降级回主路由（旅游 prefilter 也被跳过）。"""
+        import backend.config.customer_service as cc
+        monkeypatch.setattr(cc, "CS_ENABLED", False)
+
+        def _boom():
+            raise RuntimeError("router off in test")
+        monkeypatch.setattr(rn, "get_router", _boom)
+
+        out = rn.router_node({
+            "question": "退款怎么处理",
+            "session_id": "s-lock-off",
+            "domain_hint": "customer_service",
+        })
+        assert out.get("route_mode") == "plan"  # 主 router 异常兜底路径
+
+    def test_no_domain_hint_keeps_legacy_order(
+        self, fake_detector, travel_on, cs_on,
+    ):
+        """不带 domain_hint 的全局入口：行为与旧顺序完全一致。"""
+        out = rn.router_node({
+            "question": "帮我规划杭州2天旅游行程", "session_id": "s-legacy",
+        })
+        assert out.get("route_mode") == "travel"

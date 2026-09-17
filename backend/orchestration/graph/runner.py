@@ -96,6 +96,7 @@ class GraphRunner:
         *,
         fallback_deltas: bool = True,
         model: str = "",
+        domain_hint: str = "",
     ) -> Generator[dict, None, None]:
         """执行图并产出统一事件流。
 
@@ -103,6 +104,8 @@ class GraphRunner:
             fallback_deltas: 无真流式 delta 时是否用假打字机兜底呈现
                 （SSE 模式 True；ask 模式 False，事件流仅用于取答案）
             model: 按请求模型覆盖（空 = 全局 LLM_MODEL；非法名在 bind 时忽略）
+            domain_hint: 入口域提示（customer_service = 客服窗口锁域，
+                router_node 据此强制走 CS 预过滤并跳过其他域图 prefilter）
         """
         from backend.observability.tracer import SpanKind, trace_collector
 
@@ -157,6 +160,7 @@ class GraphRunner:
                 question, session_id, kb_id, l1.messages,
                 guard_result=guard_result.model_dump(mode="json"),
                 user_id=user_id, department=department,
+                domain_hint=domain_hint,
             )
         except Exception as e:
             trace_collector.end_span(load_span, status="error",
@@ -280,6 +284,8 @@ class GraphRunner:
                         # Phase 4: CS Graph 适配器输出合并后的 cs_context
                         if node_output.get("cs_context"):
                             ctx["cs_context_snapshot"] = node_output["cs_context"]
+                        # P3.1：等待确认的 pending_action → done 帧下发 CSConfirmCard
+                        ctx["cs_pending_action"] = node_output.get("cs_pending_action") or None
                     elif node_name in ("planner", "critique"):
                         # 捕获 plan 用于 trace 重建
                         if node_output.get("plan"):
@@ -373,7 +379,8 @@ class GraphRunner:
             # 内部事件：ask() 从这里取最终回答（SSE 层过滤）
             yield {"event": _ANSWER_EVENT, "data": {"answer": answer}}
             yield make_done_event(answer, ctx["all_step_results"], start_time,
-                                  usage=ctx["usage"])
+                                  usage=ctx["usage"],
+                                  pending_action=ctx.get("cs_pending_action"))
 
         except Exception as e:
             import traceback as _tb

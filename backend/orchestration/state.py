@@ -99,6 +99,11 @@ class AgentState(TypedDict):
     # 每轮由 make_initial_state 写入当前请求值，无跨轮残留问题。
     user_id: str
     department: str
+    # 入口域提示平铺（2026-09-18 客服窗口锁域）：CSDrawer 每条消息带
+    # domain_hint=customer_service，router_node 据此强制走 CS 预过滤
+    # （跳过域检测门/灰度/其他域图 prefilter）；空串 = 全局入口，行为不变。
+    # 每轮由 make_initial_state 写入当前请求值，无跨轮残留问题。
+    domain_hint: str
     # 会话 ID 平铺（与 user_id/department 同一批断链修复，session_id 被漏）：
     # cs_prefilter / travel_prefilter / experts/* 按惯例读 state["session_id"]，
     # 缺此键导致客服域恒回退 "default" —— 转人工工单 conversation_id 全部

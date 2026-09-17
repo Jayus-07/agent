@@ -542,6 +542,24 @@ def reset_turn_usage() -> None:
     _turn_usage_var.set(None)
 
 
+def _usage_component() -> str:
+    """usage 明细行的 component 归因（2026-09-18 窗口级 token 核算）。
+
+    客服域轮次（cs_prefilter 命中时已在 trace.tags 打 cs_target）→
+    "customer_service"；其余主问答/工具链路沿用 PG 列默认 "llm"。
+    token 看板 list_calls/dashboard 已支持按 component 过滤，无需改 store。
+    软失败：trace 不可达时回退默认值，不影响主链路。
+    """
+    try:
+        from backend.observability.tracer import trace_collector
+        t = trace_collector.current()
+        if t is not None and t.tags.get("cs_target"):
+            return "customer_service"
+    except Exception:
+        pass
+    return "llm"
+
+
 def _record_tokens(result, duration_ms: float | None = None):
     """从 LLM 返回值提取 token + finish_reason + cost，存为 dict 供 tracer 读取。
 
@@ -623,6 +641,7 @@ def _record_tokens(result, duration_ms: float | None = None):
                              + f".{int(time.time() % 1 * 1000):03d}Z",
                 "trace_id": trace_id,
                 "session_id": session_id,
+                "component": _usage_component(),
                 "model": model,
                 "provider": _get_provider_for(model),
                 "prompt_tokens": p,

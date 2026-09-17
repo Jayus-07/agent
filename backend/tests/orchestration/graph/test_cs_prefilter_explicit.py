@@ -92,3 +92,46 @@ def test_detect_handoff_trigger_covers_common_phrasings():
     # 非转人工语句不误伤
     for text in ("人工成本分析", "查询技术部有多少人", "本月销售环比"):
         assert detect_handoff_trigger(text) is None, f"误伤: {text}"
+
+
+# ── 入口域锁（2026-09-18）：客服窗口 domain_hint 强制进 CS ─────────────
+
+def test_domain_lock_forces_entry_past_failed_detection(cs_enabled, monkeypatch):
+    """域锁（forced=True）：域检测漏判也必须进客服域——客服窗口内用户
+    已显式进入客服，非客服问法由 CS 域内兜底，不允许漏进主图/旅游域图。"""
+    _fake_detect_not_cs(monkeypatch)
+
+    result = try_cs_prefilter(
+        "下周去大阪怎么玩", {"session_id": "s5", "user_id": "u1"}, forced=True,
+    )
+    assert result is not None, "域锁请求被域检测漏进主图"
+    assert result["route_mode"] == "customer_service"
+    # 非客服 query → 真实 coarse/fine 判 UNKNOWN → 知识检索兜底路径
+    assert result["cs_context"]["cs_target"] == "cs_knowledge"
+
+
+def test_domain_lock_bypasses_rollout_control(cs_enabled, monkeypatch):
+    """灰度 0%（全员 control）时域锁请求仍进客服域：抽屉是显式产品入口，
+    不受实验分组影响。对照组：同条件非 forced 请求必须被灰度拦下。"""
+    _fake_detect_not_cs(monkeypatch)
+
+    forced_result = try_cs_prefilter(
+        "开发票需要什么信息", {"session_id": "s6", "user_id": "u1"}, forced=True,
+    )
+    assert forced_result is not None, "灰度 0% 拦下了域锁请求"
+
+    plain_result = try_cs_prefilter(
+        "开发票需要什么信息", {"session_id": "s7", "user_id": "u1"},
+    )
+    assert plain_result is None, "灰度 0% 未拦下非域锁请求（对照组失真）"
+
+
+def test_domain_lock_still_respects_cs_enabled(cs_enabled, monkeypatch):
+    """CS_ENABLED=false 时域锁同样降级（CS 节点未挂载，不能路由过去）。"""
+    import backend.config.customer_service as cs_config
+    monkeypatch.setattr(cs_config, "CS_ENABLED", False)
+
+    result = try_cs_prefilter(
+        "退款怎么处理", {"session_id": "s8", "user_id": "u1"}, forced=True,
+    )
+    assert result is None

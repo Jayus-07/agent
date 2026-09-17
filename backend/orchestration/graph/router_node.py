@@ -49,44 +49,58 @@ def router_node(state: dict) -> dict:
         logger.debug(f"[RouterNode] CS 规则预判失败，按旧顺序处理: {e}")
         cs_rule_hits = 1  # 保守：视作命中，维持 CS 优先
 
-    def _try_cs_prefilter() -> dict | None:
+    # ── 入口域锁（2026-09-18）：客服窗口（CSDrawer）每条消息带
+    # domain_hint=customer_service。用户已显式进入客服窗口，每条消息
+    # 重新判域会把"下周去大阪怎么玩"这类非客服问法漏进旅游域图（实测），
+    # 故锁域强制走 CS 预过滤：跳过域检测门/灰度判定/旅游与选品 prefilter。
+    # 仅保留 CS_ENABLED 总闸——CS 关闭时降级回主路由（与全局开关语义一致）。
+    domain_hint = (state.get("domain_hint") or "").strip().lower()
+    cs_forced = domain_hint in ("customer_service", "cs")
+
+    def _try_cs_prefilter(forced: bool = False) -> dict | None:
         # 逻辑在 cs_prefilter.py（只判断"是不是客服"，不判断"走哪个 expert"）
         try:
             from backend.orchestration.graph.cs_prefilter import try_cs_prefilter
-            return try_cs_prefilter(query, state)
+            return try_cs_prefilter(query, state, forced=forced)
         except Exception as e:
             logger.warning(f"[RouterNode] CS 预过滤失败，回退到主 Router: {e}")
             return None
 
-    if cs_rule_hits:
+    if cs_forced:
+        cs_update = _try_cs_prefilter(forced=True)
+        if cs_update is not None:
+            return {**state, **cs_update}
+    elif cs_rule_hits:
         cs_update = _try_cs_prefilter()
         if cs_update is not None:
             return {**state, **cs_update}
 
     # ── 旅游预过滤：纯正则，先于 CS 向量检测执行（省一次 embedding）──
-    try:
-        from backend.orchestration.graph.travel_prefilter import try_travel_prefilter
-        travel_update = try_travel_prefilter(query, state)
-        if travel_update is not None:
-            return {**state, **travel_update}
-    except Exception as e:
-        logger.warning(f"[RouterNode] 旅游预过滤失败，回退到主 Router: {e}")
+    # 域锁模式下跳过：抽屉内不路由到其他域图（redirect 由 CS 域内决策，P2）。
+    if not cs_forced:
+        try:
+            from backend.orchestration.graph.travel_prefilter import try_travel_prefilter
+            travel_update = try_travel_prefilter(query, state)
+            if travel_update is not None:
+                return {**state, **travel_update}
+        except Exception as e:
+            logger.warning(f"[RouterNode] 旅游预过滤失败，回退到主 Router: {e}")
 
-    # ── 选品漏斗预过滤：纯正则（~1ms），与旅游同层（2026-09-17 接线）──
-    # 「给宠物零食做一次智能选品」这类请求短路进选品漏斗域图；语义与
-    # selection_decision workflow（上不上架决策）通过 _DECISION_EXCLUDE 互斥。
-    try:
-        from backend.orchestration.graph.selection_funnel_prefilter import (
-            try_selection_funnel_prefilter,
-        )
-        funnel_update = try_selection_funnel_prefilter(query, state)
-        if funnel_update is not None:
-            return {**state, **funnel_update}
-    except Exception as e:
-        logger.warning(f"[RouterNode] 选品预过滤失败，回退到主 Router: {e}")
+        # ── 选品漏斗预过滤：纯正则（~1ms），与旅游同层（2026-09-17 接线）──
+        # 「给宠物零食做一次智能选品」这类请求短路进选品漏斗域图；语义与
+        # selection_decision workflow（上不上架决策）通过 _DECISION_EXCLUDE 互斥。
+        try:
+            from backend.orchestration.graph.selection_funnel_prefilter import (
+                try_selection_funnel_prefilter,
+            )
+            funnel_update = try_selection_funnel_prefilter(query, state)
+            if funnel_update is not None:
+                return {**state, **funnel_update}
+        except Exception as e:
+            logger.warning(f"[RouterNode] 选品预过滤失败，回退到主 Router: {e}")
 
     # ── CS 语义兜底：无 CS 规则命中时，向量通道仍可能判定为客服域 ──
-    if not cs_rule_hits:
+    if not cs_rule_hits and not cs_forced:
         cs_update = _try_cs_prefilter()
         if cs_update is not None:
             return {**state, **cs_update}

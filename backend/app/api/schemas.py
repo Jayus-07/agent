@@ -13,6 +13,7 @@ class ChatRequest(BaseModel):
     user_id: Optional[str] = Field(None, description="用户ID（优先从请求体获取，其次从信任网关注头获取）")
     department: Optional[str] = Field("", description="员工部门ID（检索授权用；空=未声明，按对客最严格集合处理）")
     model: Optional[str] = Field(None, description="按请求模型覆盖（须为已注册模型名，空 = 全局默认）")
+    domain_hint: Optional[str] = Field("", description="入口域提示：customer_service=客服窗口锁域（直接进客服管线，不重新判域/不受灰度影响）；空=全局入口按需路由")
 
 class ChatResponse(BaseModel):
     answer: str

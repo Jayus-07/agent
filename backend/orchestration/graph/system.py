@@ -71,12 +71,14 @@ class MultiAgentSystem:
         user_id: str = "default",
         department: str = "",
         model: str = "",
+        domain_hint: str = "",
     ) -> str:
         """处理用户问题，返回最终 Markdown 回答。
 
         复用 GraphRunner 事件流（fallback_deltas=False：不做打字机增量），
         物化后取 _answer 内部事件作为回答。语义与旧同步实现一致。
         model: 按请求模型覆盖（空 = 全局默认）。
+        domain_hint: 入口域提示（customer_service = 客服窗口锁域）。
         """
         logger.info(f"[MultiAgent] 收到问题: {(question or '')[:80]}... (session={session_id}, kb={kb_id}, user={user_id})")
 
@@ -88,6 +90,7 @@ class MultiAgentSystem:
             department=department,
             fallback_deltas=False,
             model=model,
+            domain_hint=domain_hint,
         ))
 
         answer = ""
@@ -121,6 +124,7 @@ class MultiAgentSystem:
         user_id: str = "default",
         department: str = "",
         model: str = "",
+        domain_hint: str = "",
     ) -> Generator[dict, None, None]:
         """SSE 流式处理。委托 GraphRunner 统一执行核心，过滤内部事件。
 
@@ -135,7 +139,8 @@ class MultiAgentSystem:
                 user_id=user_id,
                 department=department,
                 fallback_deltas=True,
-                model=model):
+                model=model,
+                domain_hint=domain_hint):
             if evt.get("event") == _ANSWER_EVENT:
                 continue  # 内部事件（ask 用），不属于 SSE 协议
             yield evt

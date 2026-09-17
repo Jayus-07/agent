@@ -13,6 +13,9 @@ export interface ChatRequest {
   /** 员工部门ID（检索授权用）：带部门 = employee 主体，按部门矩阵授权；
    *  不带 = 后端按对客最严格集合处理（fail-safe） */
   department?: string;
+  /** 入口域提示：customer_service = 客服窗口锁域（每条消息直接进客服管线，
+   *  不重新判域/不受灰度影响）；不带 = 全局入口按需路由 */
+  domain_hint?: string;
 }
 
 /**

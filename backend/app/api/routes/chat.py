@@ -89,7 +89,7 @@ async def chat(req: ChatRequest, request: Request,
     try:
         answer = await asyncio.to_thread(
             agent.ask, req.question, req.session_id, kb_id=kb_id,
-            model=req.model or "")
+            model=req.model or "", domain_hint=req.domain_hint or "")
         chat_request_total.labels(status="ok").inc()
         return ChatResponse(
             answer=answer,
@@ -164,6 +164,7 @@ async def chat_stream(
                 user_id=user_id,
                 department=req.department or "",
                 model=req.model or "",
+                domain_hint=req.domain_hint or "",
             ):
                 if stop_event.is_set():
                     break

@@ -283,8 +283,13 @@ def emit_delta_events(final_answer: str, stop_event=None) -> Generator[dict, Non
 
 
 def make_done_event(final_answer: str, all_step_results: dict, start_time: float,
-                    usage: dict | None = None) -> dict:
-    """构建 done 事件，附带耗时 + 引用来源 + 本轮 token 用量。"""
+                    usage: dict | None = None,
+                    pending_action: dict | None = None) -> dict:
+    """构建 done 事件，附带耗时 + 引用来源 + 本轮 token 用量。
+
+    P3.1：pending_action 非空时下发（CS 确认流等待用户点击确认卡片），
+    前端据此渲染 CSConfirmCard；其余场景恒为 None，前端无感。
+    """
     from backend.agents.reporter.reporter import _extract_sources_from_steps
     from backend.agents.reporter.context_filter import parse_sources_from_text
     elapsed = time.time() - start_time
@@ -294,6 +299,11 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
     data: dict = {"elapsed": round(elapsed, 1), "sources": sources}
     if usage:
         data["usage"] = usage
+    if pending_action:
+        data["pending_action"] = {
+            "proposal_text": pending_action.get("proposal_text", ""),
+            "action_type": pending_action.get("action_type", "unknown"),
+        }
     return {"event": "done", "data": data}
 
 
@@ -338,7 +348,8 @@ def summarize_turn_usage() -> dict | None:
 
 def make_initial_state(question: str, session_id: str, kb_id: str, messages: list,
                        guard_result: dict | None = None,
-                       user_id: str = "", department: str = "") -> dict:
+                       user_id: str = "", department: str = "",
+                       domain_hint: str = "") -> dict:
     """构建初始 AgentState。
 
     guard_result: Input Guard 判定结果（允许/降级放行时携带，
@@ -349,6 +360,9 @@ def make_initial_state(question: str, session_id: str, kb_id: str, messages: lis
     session_id: 同批平铺（2026-09-17 补漏）——cs_prefilter 此前
     state.get("session_id", "default") 恒取兜底，转人工工单
     conversation_id 全部挤在 "default"，坐席无法按真实会话认领。
+    domain_hint: 入口域提示平铺（2026-09-18）——客服窗口（CSDrawer）
+    每条消息带 domain_hint=customer_service，router_node 据此锁域；
+    空串 = 全局入口，行为不变。
     """
     return {
         "question": question.strip(),
@@ -356,6 +370,7 @@ def make_initial_state(question: str, session_id: str, kb_id: str, messages: lis
         "session_id": session_id,
         "user_id": user_id or "",
         "department": department or "",
+        "domain_hint": (domain_hint or "").strip(),
         "plan": {"nodes": {}, "edges": {}},
         "step_results": {},
         "current_step_id": None,
