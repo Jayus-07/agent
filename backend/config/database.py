@@ -113,6 +113,17 @@ COMPETITOR_PG_CONFIG = _pg_cfg("COMPETITOR_PGDATABASE", "agent_business")
 FEEDBACK_BACKEND = os.getenv("FEEDBACK_BACKEND", "sqlite").strip().lower()
 FEEDBACK_PG_CONFIG = _pg_cfg("FEEDBACK_PGDATABASE", "agent_business")
 
+# === 向量库存储引擎开关（迁移计划 2026-09-17 Chroma → pgvector）===
+# "chroma"（默认，回滚开关）| "pgvector"
+# 作用于 KnowledgeStore 工厂（factory.py）覆盖的向量库：主 RAG chunk 级 /
+# doc 级 / 竞品市场索引；cs_router_index、vector_router 等裸 chromadb 实例
+# 不在本开关范围（后续批次）。切换前置：跑 scripts/export_chroma.py +
+# scripts/import_pgvector.py 完成数据迁移并对账。
+VECTOR_BACKEND = os.getenv("VECTOR_BACKEND", "chroma").strip().lower()
+VECTOR_PG_CONFIG = _pg_cfg("VECTOR_PGDATABASE", "agent_memory")
+# 表名前缀（测试隔离用；生产保持空串 → rag_vectors）
+VECTOR_PG_TABLE_PREFIX = os.getenv("VECTOR_PG_TABLE_PREFIX", "")
+
 # === 连接池参数 ===
 DB_POOL_MIN_CONN = int(os.getenv("DB_POOL_MIN_CONN", "2"))
 DB_POOL_MAX_CONN = int(os.getenv("DB_POOL_MAX_CONN", "10"))

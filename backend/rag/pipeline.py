@@ -18,7 +18,7 @@ except Exception:  # pragma: no cover - 环境缺失时保持旧行为
     pass
 
 from backend.rag.embedding_singleton import get_embedding
-from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
+from backend.rag.vectorstore.factory import get_knowledge_store_class
 
 from backend.rag.preprocessing.metadata import build_all_metadata_async
 from backend.rag.preprocessing.loader import load_documents_from_directory
@@ -257,7 +257,7 @@ class RAGPipeline:
 
     def _load_existing_db(self, db_path: str, db_type: str):
         """加载已有向量库（不做版本检查，不创建）。"""
-        db = ChromaKnowledgeStore(
+        db = get_knowledge_store_class()(
             persist_directory=db_path, embedding_function=self.embedding,
         )
         logger.info(f"加载已有{db_type}向量库: {db_path}")

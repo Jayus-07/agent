@@ -1,14 +1,17 @@
 """selection/market_index.py — 竞品市场语义索引（spec §3.2 / §4.2）
 
-独立 Chroma collection `competitor_market`（persist: data/chroma_market），
-不共用主知识库 persist 目录（ChromaKnowledgeStore 未指定 collection_name）。
-embedding 复用 backend.rag.embedding_singleton 全局 BGE 实例，保证向量空间一致。
+独立 collection `competitor_market`：
+  - VECTOR_BACKEND=chroma（默认）→ 独立 Chroma persist 目录 data/chroma_market；
+  - VECTOR_BACKEND=pgvector → rag_vectors 表 collection='chroma_market'。
+不共用主知识库。embedding 复用 backend.rag.embedding_singleton 全局实例，
+保证向量空间一致。
 
 每条快照 → 一条文档（id = snap-{snapshot_id}，保留时序）。
 """
 import os
 from typing import Any, Optional
 
+from backend.config.database import VECTOR_BACKEND
 from backend.shared.logger import logger
 
 _COLLECTION = "competitor_market"
@@ -53,15 +56,23 @@ class MarketIndex:
 
     def _ensure(self):
         if self._chroma is None:
-            from langchain_chroma import Chroma
             from backend.rag.embedding_singleton import get_embedding
-            os.makedirs(self._persist_directory, exist_ok=True)
-            self._chroma = Chroma(
-                collection_name=_COLLECTION,
-                persist_directory=self._persist_directory,
-                embedding_function=get_embedding(),
-            )
-            logger.info(f"[MarketIndex] 就绪: {self._persist_directory}")
+            if VECTOR_BACKEND == "pgvector":
+                from backend.rag.vectorstore.pgvector_store import PgVectorKnowledgeStore
+                self._chroma = PgVectorKnowledgeStore(
+                    persist_directory=self._persist_directory,
+                    embedding_function=get_embedding(),
+                )
+            else:
+                from langchain_chroma import Chroma
+                os.makedirs(self._persist_directory, exist_ok=True)
+                self._chroma = Chroma(
+                    collection_name=_COLLECTION,
+                    persist_directory=self._persist_directory,
+                    embedding_function=get_embedding(),
+                )
+            logger.info(f"[MarketIndex] 就绪: backend={VECTOR_BACKEND} "
+                        f"collection={_COLLECTION} dir={self._persist_directory}")
         return self._chroma
 
     def index_snapshot(self, snap: dict[str, Any]) -> str:
@@ -69,12 +80,15 @@ class MarketIndex:
         if not snap.get("id"):
             return ""
         doc_id, text, meta = build_doc(snap)
-        self._ensure()._collection.upsert(ids=[doc_id], documents=[text], metadatas=[meta])
+        if VECTOR_BACKEND == "pgvector":
+            self._ensure().upsert_texts([text], [meta], [doc_id])
+        else:
+            self._ensure()._collection.upsert(ids=[doc_id], documents=[text], metadatas=[meta])
         return doc_id
 
     def search_trends(self, query: str, k: int = 10,
                       metadata_filter: Optional[dict] = None) -> list[dict[str, Any]]:
-        """语义趋势检索（独立于主 RAG 管线）"""
+        """语义趋势检索（独立于主 RAG 管线；两后端签名一致，pgvector 侧内部做 where 归一化）"""
         docs = self._ensure().similarity_search_with_score(query, k=k, filter=metadata_filter)
         return [
             {"text": d.page_content, "metadata": d.metadata, "score": float(s)}
@@ -83,6 +97,8 @@ class MarketIndex:
 
     def count(self) -> int:
         """collection 文档总数"""
+        if VECTOR_BACKEND == "pgvector":
+            return self._ensure().count()
         return self._ensure()._collection.count()
 
 
