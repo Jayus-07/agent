@@ -209,23 +209,25 @@ class TestMaintenanceScans:
 # =====================================================
 
 class TestBeatScheduleWiring:
-    def test_beat_schedule_declares_both_scans(self):
+    @staticmethod
+    def _celery_app_src() -> str:
+        # __file__ 锚定（2026-09-18 修复）：原 CWD 相对路径
+        # "backend/tasks/celery_app.py" 只在 repo root 启动 pytest 时成立，
+        # 从 backend/ 启动全量回归时变成 backend/backend/... 直接 FileNotFoundError。
         import pathlib
 
-        src = pathlib.Path(
-            "backend/tasks/celery_app.py",
-        ).read_text(encoding="utf-8")
+        p = pathlib.Path(__file__).resolve().parents[2] / "tasks" / "celery_app.py"
+        return p.read_text(encoding="utf-8")
+
+    def test_beat_schedule_declares_both_scans(self):
+        src = self._celery_app_src()
         assert "cs-handoff-timeout-scan" in src
         assert "cs-confirmation-expiry-scan" in src
         assert "cs.handoff_timeout_scan" in src
         assert "cs.confirmation_expiry_scan" in src
 
     def test_maintenance_module_registered_in_include(self):
-        import pathlib
-
-        src = pathlib.Path(
-            "backend/tasks/celery_app.py",
-        ).read_text(encoding="utf-8")
+        src = self._celery_app_src()
         assert "backend.tasks.cs_maintenance_tasks" in src
 
 

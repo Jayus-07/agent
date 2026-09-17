@@ -39,15 +39,15 @@
 
 验证：test_router.py、test_cs_supervisor.py、test_celery_tasks.py、test_graph_e2e.py。
 
-## P3：前后端业务闭环（剧本 A~E）
+## P3：前后端业务闭环（剧本 A~E）（实施中 ✅ 3.1-3.4 完成 / 3.5 待真实环境验证）
 
-| # | 改动 | 剧本 |
-|---|---|---|
-| 3.1 | CSConfirmCard 接通：SSE done 帧下发 pending_action 结构 → 前端渲染确认卡 → POST /cs/confirm（幂等键）→ 后端执行；保留文本确认作降级 | C |
-| 3.2 | 事件统一格式 + Redis pub/sub 进 realtime + sequence/event_id 去重 + 断线补发（messages 游标已有，事件表补齐） | D/E |
-| 3.3 | WS 过网关：APISIX 加 /ws/* 路由；管理端 CS_WS_URL 配置化去掉 127.0.0.1 硬编码 | D |
-| 3.4 | 用户端 SSE 断线重连 + 轮询退避；用户/坐席消息端点按角色拆分 | — |
-| 3.5 | 五剧本逐一手工+自动化验证（演示账号种子数据核对：订单归属/多订单/无数据反馈） | A~E |
+| # | 改动 | 剧本 | 状态 |
+|---|---|---|---|
+| 3.1 | CSConfirmCard 接通：SSE done 帧下发 pending_action 结构 → 前端渲染确认卡 → POST /cs/confirm（幂等键）→ 后端执行；保留文本确认作降级 | C | ✅ done 帧封套 pending_action → csChat.pendingProposal → CSDrawer 渲染 CSConfirmCard → POST /cs/confirm（409 幂等兜底）；confirm 端点 7 测试 |
+| 3.2 | 事件统一格式 + Redis pub/sub 进 realtime + sequence/event_id 去重 + 断线补发（messages 游标已有，事件表补齐） | D/E | ✅ 封套 {type,event_id,seq,ts,**payload}；customer_service.events 表（0002 迁移）+ EventRepository；AgentHub 落库+Redis pub/sub（cs:events channel，专用订阅线程，无订阅者/不可用双降级）；GET /cs/conversations/{id}/events?after_seq= 补发端点；AgentHub 10 测试 |
+| 3.3 | WS 过网关：APISIX 加 /ws/* 路由；管理端 CS_WS_URL 配置化去掉 127.0.0.1 硬编码 | D | ✅ apisix.yaml 加 cs-ws 路由（app_chat upstream 600s + limit-conn 20/IP，ticket 鉴权不挂 gateway-auth）；csAgentWs.ts WS_BASE 缺省同源推导（NEXT_PUBLIC_CS_WS_URL 可覆盖）；frontend-admin tsc 过 |
+| 3.4 | 用户端 SSE 断线重连 + 轮询退避；用户/坐席消息端点按角色拆分 | — | ✅ 用户端专用 GET /cs/conversations/my/{id}/messages（登录强制 401/本人会话 403/其余透传坐席端实现，4 测试）；useCSHandoffSync 固定 2s → 空闲 4 拍退到 5s、有变化回 2s；SSE 中断已有 catch 分支落错误提示（深重连属 P4 观察项） |
+| 3.5 | 五剧本逐一手工+自动化验证（演示账号种子数据核对：订单归属/多订单/无数据反馈） | A~E | ⏳ 待 docker 环境（需与并行会话协调全量 pytest 约 20 分钟窗口） |
 
 ## P4：验收与生产化
 

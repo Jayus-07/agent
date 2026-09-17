@@ -12,12 +12,14 @@ import { Headphones, Plus, X } from 'lucide-react'
 import { useCSChatStore } from '@/store/csChat'
 import { useCSChat } from '@/hooks/useCSChat'
 import { useCSHandoffSync } from '@/hooks/useCSHandoffSync'
-import { listMyConversations } from '@/api/cs'
+import { listMyConversations, confirmAction } from '@/api/cs'
+import { ApiError } from '@/api/client'
 import CSWelcome from '@/components/cs/CSWelcome'
 import CSMessageList from '@/components/cs/CSMessageList'
 import CSInput from '@/components/cs/CSInput'
 import CSStatusBar from '@/components/cs/CSStatusBar'
 import CSHandoffCard from '@/components/cs/CSHandoffCard'
+import CSConfirmCard from '@/components/cs/CSConfirmCard'
 import CSSatisfactionCard from '@/components/cs/CSSatisfactionCard'
 
 interface CSDrawerProps {
@@ -40,6 +42,33 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
   const currentNode = useCSChatStore((s) => s.currentNode)
   const setError = useCSChatStore((s) => s.setError)
   const newSession = useCSChatStore((s) => s.newSession)
+  const pendingProposal = useCSChatStore((s) => s.pendingProposal)
+  const addMessage = useCSChatStore((s) => s.addMessage)
+  const setPendingProposal = useCSChatStore((s) => s.setPendingProposal)
+
+  // P3.1 确认卡片：POST /cs/confirm 幂等端点（后端原子认领闸门兜底并发）。
+  // 409 = 该待办已被处理（重复提交/另一端先确认）→ 静默清卡片；
+  // 其余失败保留卡片供重试，并把错误落进消息流。
+  const handleConfirmAction = useCallback(
+    async (decision: 'confirm' | 'cancel') => {
+      try {
+        const resp = await confirmAction(currentId, decision)
+        addMessage('assistant', resp.answer, currentId)
+        setPendingProposal(null)
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409) {
+          setPendingProposal(null)
+          return
+        }
+        addMessage(
+          'assistant',
+          `⚠️ 操作处理失败：${err instanceof Error ? err.message : '未知错误'}`,
+          currentId,
+        )
+      }
+    },
+    [currentId, addMessage, setPendingProposal],
+  )
 
   // 人工介入同步：坐席消息轮询入列 + 转接状态卡片（抽屉打开期间生效）
   useCSHandoffSync(currentId, open)
@@ -145,6 +174,13 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
                 currentNode={currentNode}
               />
               {handoffState !== 'none' && <CSHandoffCard handoffState={handoffState} />}
+              {pendingProposal && (
+                <CSConfirmCard
+                  content={pendingProposal.proposalText}
+                  onConfirm={() => handleConfirmAction('confirm')}
+                  onCancel={() => handleConfirmAction('cancel')}
+                />
+              )}
               {showRatingCard && (
                 <CSSatisfactionCard
                   conversationId={currentId}

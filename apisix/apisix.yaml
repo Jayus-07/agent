@@ -137,6 +137,23 @@ routes:
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
 
+  # ── 客服 WS（P3.3：坐席实时推送过网关，此前直连 127.0.0.1:8000 绕网关）──
+  # 鉴权：WS 握手带一次性 ticket（HTTP 端点 /cs/conversations/agent/ws-ticket
+  # 签发，X-API-Key 由 BFF 注入）——浏览器 WS 无法携带 API-Key 头，ticket 即鉴权，
+  # 故本路由不挂 gateway-auth（与直连形态等价，仅多了网关可观测/限流）。
+  # WS 长连接：复用 app_chat upstream（600s read/send），APISIX 原生支持 upgrade。
+  - id: cs-ws
+    uri: /ws/cs/*
+    upstream_id: app_chat
+    plugins:
+      prometheus: {}
+      limit-conn:
+        key: remote_addr
+        conn: 20
+        burst: 10
+        default_conn_delay: 0.1
+        rejected_code: 429
+
   # ── 系统直通（B1 基线兼容；B4 复核收口）──
   - id: sys-health
     uri: /health

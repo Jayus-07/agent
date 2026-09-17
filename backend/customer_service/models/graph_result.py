@@ -24,6 +24,7 @@ class CSGraphResult(TypedDict, total=False):
     answer_meta: dict | None
     handoff_state: str | None
     confirmation_state: str | None
+    pending_action: dict | None
     audit_entries: list[dict]
     status: str
 
@@ -46,6 +47,14 @@ def build_cs_graph_result(final_state: dict[str, Any]) -> CSGraphResult:
         answer_meta=_build_answer_meta(final_state),
         handoff_state=final_state.get("handoff_state") or None,
         confirmation_state=final_state.get("confirmation_state") or None,
+        # P3.1：pending 透传给 Main State → SSE done 帧 → 前端 CSConfirmCard。
+        # 仅在等待确认（pending 态）时有值；终态（success/failed/expired/cancelled）为 None。
+        pending_action=(
+            final_state.get("pending_action")
+            if final_state.get("confirmation_state")
+            in ("pending", "pending_confirmation")
+            else None
+        ),
         audit_entries=final_state.get("cs_audit_entries", []),
         status=status,
     )

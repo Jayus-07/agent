@@ -7,16 +7,23 @@
  * 坐席回复走独立 HTTP 接口落库），setHandoffState 也无人调用 ——
  * 转人工后 CSHandoffCard 永远不出现、坐席回复用户永远看不到。
  *
- * 机制：抽屉打开期间 2s 轮询 GET /api/cs/conversations/{session}/messages?since_id
+ * 机制：抽屉打开期间轮询 GET /api/cs/my/{session}/messages?since_id
+ *   （P3.4 端点拆分：用户侧走 /my/* 专用端点——登录态强制 + 本人会话；
+ *    坐席端 /conversations/{id}/messages 保留 api-key 坐席通道）
  *   - human_agent 消息 → role='agent' 气泡（用户/助手落库消息与本地回显重复，跳过）
  *   - handoff_state → CSHandoffCard（waiting_human→waiting 等）
  *   - 工单消失（坐席关闭/无工单）：上一状态是 active 时显示「已结束」
+ * 退避（P3.4）：空闲（无新消息且状态不变）逐步退到 5s；有变化立即回 2s。
  * 后续演进：换 WS 订阅（与坐席工作台同一 Hub），轮询仅兜底。
  */
 import { useEffect, useRef } from 'react'
 import { fetchRaw } from '@/api/client'
 import { useCSChatStore, type CSMessage } from '@/store/csChat'
 import type { CSHandoffState } from '@/components/cs/constants'
+
+const FAST_INTERVAL_MS = 2000
+const IDLE_INTERVAL_MS = 5000
+const IDLE_STREAK_THRESHOLD = 4 // 连续 4 拍无变化视为空闲
 
 interface HandoffMessageDTO {
   message_id: string
@@ -49,10 +56,14 @@ export function useCSHandoffSync(sessionId: string, enabled: boolean) {
     lastStateRef.current = 'none'
 
     let alive = true
+    let idleStreak = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let changed = false // 本拍是否有新消息/状态变化（退避判据）
+
     const tick = async () => {
       try {
         const res = await fetchRaw(
-          `/api/cs/conversations/${encodeURIComponent(sessionId)}/messages?since_id=${sinceIdRef.current}`,
+          `/api/cs/my/${encodeURIComponent(sessionId)}/messages?since_id=${sinceIdRef.current}`,
         )
         if (!alive || !res.ok) return
         const data = (await res.json()) as HandoffMessagesResponse
@@ -63,6 +74,7 @@ export function useCSHandoffSync(sessionId: string, enabled: boolean) {
         // appendAgentMessage 按 id 去重——切换会话/水合恢复后 since_id 归零
         // 会重拉全量，靠去重防重复气泡）
         const agentMsgs = data.messages.filter((m) => m.sender_type === 'human_agent')
+        if (agentMsgs.length > 0) changed = true
         for (const m of agentMsgs) {
           const msg: CSMessage = {
             id: m.message_id,
@@ -73,27 +85,39 @@ export function useCSHandoffSync(sessionId: string, enabled: boolean) {
           }
           appendAgentMessage(sessionId, msg)
         }
-        if (data.last_id > sinceIdRef.current) sinceIdRef.current = data.last_id
+        if (data.last_id > sinceIdRef.current) {
+          sinceIdRef.current = data.last_id
+          changed = true
+        }
 
         // 状态映射：'none'（无进行中工单）时，刚从 active 消失 → 显示「已结束」
         let mapped = STATE_MAP[data.handoff_state]
         if (!mapped) {
           mapped = lastStateRef.current === 'active' ? 'closed' : 'none'
         }
+        if (mapped !== lastStateRef.current) changed = true // 先判变化再落 ref
         if (mapped !== 'none' && mapped !== 'closed') {
           lastStateRef.current = mapped
         }
         setHandoffState(mapped)
       } catch {
         // 静默重试
+      } finally {
+        // P3.4 退避：空闲逐步退到 5s；任何变化回 2s
+        idleStreak = changed ? 0 : idleStreak + 1
+        changed = false
+        if (alive) {
+          const delay =
+            idleStreak >= IDLE_STREAK_THRESHOLD ? IDLE_INTERVAL_MS : FAST_INTERVAL_MS
+          timer = setTimeout(tick, delay)
+        }
       }
     }
 
     tick()
-    const timer = setInterval(tick, 2000)
     return () => {
       alive = false
-      clearInterval(timer)
+      if (timer) clearTimeout(timer)
     }
   }, [sessionId, enabled])
 }

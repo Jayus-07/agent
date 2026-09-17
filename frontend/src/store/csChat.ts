@@ -4,6 +4,13 @@ import type { SSEStreamEvent } from '@/lib/types'
 import { isTerminalEvent, reduceStreamCore } from '@/store/stream-reduce'
 import type { CSConfirmationState, CSHandoffState } from '@/components/cs/constants'
 import type { MyConversationItem } from '@/api/cs'
+import type { PendingActionInfo } from '@/lib/types'
+
+/** P3.1: 确认卡片数据（done 帧 pending_action → CSConfirmCard） */
+export interface PendingProposal {
+  proposalText: string
+  actionType: string
+}
 
 export interface CSMessage {
   id: string
@@ -36,6 +43,8 @@ interface CSChatState {
   handoffState: CSHandoffState
   currentNode: string | null
   csTimeline: string[]
+  /** P3.1: 非空时渲染 CSConfirmCard（done 帧 pending_action） */
+  pendingProposal: PendingProposal | null
 
   currentMessages: () => CSMessage[]
   newSession: () => string
@@ -54,6 +63,7 @@ interface CSChatState {
   setIntentDetected: (intent: string | null) => void
   setConfirmationState: (state: CSConfirmationState) => void
   setHandoffState: (state: CSHandoffState) => void
+  setPendingProposal: (p: PendingProposal | null) => void
 }
 
 function createCSSession(): CSSession {
@@ -124,6 +134,7 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
     handoffState: 'none',
     currentNode: null,
     csTimeline: [],
+    pendingProposal: null,
 
     currentMessages: () => {
       const s = get().sessions.find((s) => s.id === get().currentId)
@@ -141,6 +152,7 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
         handoffState: 'none',
         currentNode: null,
         csTimeline: [],
+        pendingProposal: null,
       }))
       return s.id
     },
@@ -253,6 +265,7 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
     resetStream: () => set({
       currentStatus: '', deltaText: '',
       currentRequestId: null, currentNode: null, csTimeline: [],
+      pendingProposal: null,
     }),
 
     replaceLastAssistant: (content, sessionId) => {
@@ -280,5 +293,6 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
     setIntentDetected: (intent) => set({ intentDetected: intent }),
     setConfirmationState: (state) => set({ confirmationState: state }),
     setHandoffState: (state) => set({ handoffState: state }),
+    setPendingProposal: (p) => set({ pendingProposal: p }),
   }
 })

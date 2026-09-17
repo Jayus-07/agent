@@ -74,6 +74,14 @@ export interface DoneEvent {
   elapsed: number
   sources?: Source[]
   usage?: TokenUsage
+  /** P3.1：CS 确认流等待用户点击确认卡片（非空时前端渲染 CSConfirmCard） */
+  pending_action?: PendingActionInfo
+}
+
+/** CS 待确认操作摘要（done 帧 pending_action） */
+export interface PendingActionInfo {
+  proposal_text: string
+  action_type: string
 }
 
 export interface ErrorEvent {

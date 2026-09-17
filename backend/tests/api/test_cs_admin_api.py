@@ -333,3 +333,109 @@ class TestResponseModels:
         p = cs_admin.PaginatedConversations(items=[], total=0, has_more=False)
         d = p.model_dump()
         assert d == {"items": [], "total": 0, "has_more": False}
+
+
+class TestMyMessages:
+    """GET /cs/conversations/my/{id}/messages — P3.4 用户侧端点拆分。
+
+    与坐席端差异：登录态强制（401 拒 guest）+ 本人会话精确匹配（403 他人）。
+    """
+
+    @staticmethod
+    def _identity(user_id):
+        from backend.app.api.identity import Identity
+
+        return Identity(
+            user_id=user_id,
+            auth_type="jwt" if user_id else "guest",
+            source="header" if user_id else "guest",
+        )
+
+    @staticmethod
+    def _patch_db(monkeypatch, owner_user_id):
+        """桩掉归属查询：AsyncSessionLocal 返回固定 owner 的假会话。"""
+
+        class _Result:
+            def scalar_one_or_none(self):
+                return owner_user_id
+
+        class _FakeDB:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def execute(self, q):
+                return _Result()
+
+        monkeypatch.setattr(
+            "backend.memory.database.AsyncSessionLocal", lambda: _FakeDB()
+        )
+
+    def test_guest_401(self, client, monkeypatch):
+        """未认证一律 401，不触 DB。"""
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda req: self._identity(""),
+        )
+        resp = client.get("/cs/conversations/my/conv-1/messages")
+        assert resp.status_code == 401
+
+    def test_other_users_conversation_403(self, client, monkeypatch):
+        """登录用户只能拉自己的会话（owner 不匹配 → 403）。"""
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda req: self._identity("user-A"),
+        )
+        self._patch_db(monkeypatch, owner_user_id="user-B")
+        resp = client.get("/cs/conversations/my/conv-1/messages")
+        assert resp.status_code == 403
+
+    def test_own_conversation_returns_messages(self, client, monkeypatch):
+        """本人会话 → 透传 _async_messages_since（since_id/limit）。"""
+        captured = {}
+
+        async def fake_since(conversation_id, since_id, limit, run_sync):
+            captured.update(
+                conversation_id=conversation_id, since_id=since_id, limit=limit
+            )
+            return cs_admin.HandoffMessagesResponse(
+                conversation_id=conversation_id,
+                handoff_state="none",
+                last_id=3,
+                messages=[],
+            )
+
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda req: self._identity("user-A"),
+        )
+        self._patch_db(monkeypatch, owner_user_id="user-A")
+        monkeypatch.setattr(cs_admin, "_async_messages_since", fake_since)
+
+        resp = client.get("/cs/conversations/my/conv-1/messages?since_id=3&limit=50")
+        assert resp.status_code == 200
+        assert captured == {
+            "conversation_id": "conv-1", "since_id": 3, "limit": 50,
+        }
+
+    def test_ownership_check_db_error_503(self, client, monkeypatch):
+        """归属查询 DB 故障 → 503。"""
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda req: self._identity("user-A"),
+        )
+
+        class _BrokenDB:
+            async def __aenter__(self):
+                raise RuntimeError("connection refused")
+
+            async def __aexit__(self, *args):
+                return False
+
+        monkeypatch.setattr(
+            "backend.memory.database.AsyncSessionLocal", lambda: _BrokenDB()
+        )
+        resp = client.get("/cs/conversations/my/conv-1/messages")
+        assert resp.status_code == 503

@@ -92,3 +92,29 @@ export async function getConversationTraces(
   }
 }
 
+
+// ========================================
+// P3.1: 确认卡片交互（CSConfirmCard → POST /cs/confirm）
+// ========================================
+
+export interface ConfirmActionResponse {
+  status: 'success' | 'failed' | 'cancelled' | 'expired' | 'duplicate'
+  answer: string
+  confirmation_state: string
+  action_result?: Record<string, unknown> | null
+}
+
+/**
+ * 确认/取消待执行操作。幂等：并发重复提交由后端原子认领闸门兜底，
+ * 已处理的提交返回 409（调用方静默清卡片即可）。
+ */
+export async function confirmAction(
+  sessionId: string,
+  decision: 'confirm' | 'cancel',
+): Promise<ConfirmActionResponse> {
+  return request<ConfirmActionResponse>('/api/cs/confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, decision }),
+  })
+}

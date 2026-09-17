@@ -16,6 +16,58 @@ from backend.shared.logger import logger
 
 router = APIRouter(prefix="/cs/conversations", tags=["智能客服-管理"])
 
+# P3.1：确认卡片交互端点（CSConfirmCard → POST /cs/confirm）
+confirm_router = APIRouter(prefix="/cs", tags=["智能客服-确认"])
+
+
+class ConfirmActionBody(BaseModel):
+    """确认卡片点击请求。decision: confirm | cancel"""
+    session_id: str
+    decision: str
+
+
+@confirm_router.post("/confirm")
+async def confirm_pending_action(request: Request, body: ConfirmActionBody) -> dict:
+    """确认卡片幂等端点 — 用户点击确认/取消按钮的入口。
+
+    复用 confirmation_flow.process_confirmation 唯一实现（文本路径）：
+    原子认领闸门保证并发双击/重复提交只有一次执行（P0-3 幂等语义）。
+    无待确认项 → 409（卡片已失效，前端清掉即可）。
+    """
+    decision = (body.decision or "").strip().lower()
+    if decision not in ("confirm", "cancel"):
+        raise HTTPException(422, detail="decision 必须为 confirm 或 cancel")
+
+    from backend.app.api.identity import resolve_identity
+    ident = resolve_identity(request)
+    user_id = ident.user_id or "anonymous"
+
+    from backend.customer_service.confirmation_flow import process_confirmation
+    from backend.customer_service.confirmation_store import get_confirmation_store
+
+    store = get_confirmation_store()
+    pending = store.load(user_id, body.session_id)
+    if not pending:
+        raise HTTPException(409, detail="当前没有待确认的操作（可能已处理或已过期）")
+
+    outcome = process_confirmation(
+        pending,
+        "确认" if decision == "confirm" else "取消",
+        user_id,
+        body.session_id,
+    )
+
+    logger.info(
+        "[CSConfirm] card action: user=%s session=%s decision=%s → %s",
+        user_id, body.session_id, decision, outcome.kind,
+    )
+    return {
+        "status": outcome.kind,
+        "answer": outcome.answer,
+        "confirmation_state": outcome.confirmation_state,
+        "action_result": outcome.action_result,
+    }
+
 
 def _use_java_source() -> bool:
     from backend.config.messaging import CS_ADMIN_SOURCE
@@ -225,6 +277,59 @@ async def cs_stats():
         return await _async_cs_stats(run_sync)
     except Exception as e:
         logger.warning(f"[CSAdmin] stats failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
+
+@router.get("/{conversation_id}/events")
+async def replay_conversation_events(
+    request: Request,
+    conversation_id: str,
+    after_seq: int = Query(0, ge=0, description="只返回 seq > after_seq 的事件（断线补发游标）"),
+    limit: int = Query(200, ge=1, le=500),
+):
+    """实时事件断线补发（P3.2）：按 seq 升序回放，客户端按 event_id 幂等去重。
+
+    WS/SSE 断线重连后先调本端点补齐缺口（seq > after_seq），再继续收实时流。
+    归属校验与 messages 端点同口径：登录用户限本人会话，guest 仅限匿名会话。
+    """
+    try:
+        from sqlalchemy import select
+
+        from backend.customer_service.models.conversation import CSConversation
+        from backend.memory.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            conv_user_id = (
+                await db.execute(
+                    select(CSConversation.user_id)
+                    .where(CSConversation.conversation_id == conversation_id)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        if conv_user_id is None:
+            raise HTTPException(404, detail="Conversation not found")
+        _ensure_conversation_access(request, conv_user_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[CSAdmin] events ownership check failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
+    try:
+        from backend.customer_service.repository.event_repo import EventRepository
+        from backend.memory.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            events = await EventRepository(db).replay(
+                conversation_id, after_seq, limit
+            )
+        return {
+            "conversation_id": conversation_id,
+            "after_seq": after_seq,
+            "events": events,
+        }
+    except Exception as e:
+        logger.warning(f"[CSAdmin] events replay failed: {e}")
         raise HTTPException(503, detail="Database unavailable")
 
 
@@ -582,6 +687,63 @@ async def post_agent_message(conversation_id: str, body: AgentMessageRequest, re
         raise
     except Exception as e:
         logger.warning(f"[CSAdmin] agent message failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
+
+@router.get("/my/{conversation_id}/messages", response_model=HandoffMessagesResponse)
+async def get_my_conversation_messages(
+    request: Request,
+    conversation_id: str,
+    since_id: int = Query(0, ge=0, description="只返回 id > since_id 的消息"),
+    limit: int = Query(100, ge=1, le=200),
+):
+    """用户侧消息增量拉取（P3.4 端点拆分）。
+
+    与坐席端 /{conversation_id}/messages 的差异：
+    - 身份：resolve_identity 登录态强制（401 拒 guest）——坐席端走
+      api-key/坐席 JWT（_ensure_conversation_access 的 guest 匿名语义不适用）
+    - 归属：只读本人的会话（user_id 精确匹配，非 guest 匿名放行）
+    路径注册在 /{conversation_id}/* 之后无冲突（3 段 vs 2 段）。
+    """
+    from backend.app.api.identity import resolve_identity
+
+    ident = resolve_identity(request)
+    if not ident.authenticated:
+        raise HTTPException(401, detail="未认证：请登录后拉取会话消息")
+
+    try:
+        from sqlalchemy import select
+
+        from backend.customer_service.models.conversation import CSConversation
+        from backend.memory.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            conv_user_id = (
+                await db.execute(
+                    select(CSConversation.user_id)
+                    .where(CSConversation.conversation_id == conversation_id)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        if conv_user_id is None:
+            raise HTTPException(404, detail="Conversation not found")
+        if conv_user_id != ident.user_id:
+            raise HTTPException(403, detail="无权访问他人会话")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[CSAdmin] my-messages ownership check failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
+    try:
+        from backend.customer_service._db_loop import run_sync
+        return await _async_messages_since(
+            conversation_id, since_id, limit, run_sync
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[CSAdmin] my-messages since failed: {e}")
         raise HTTPException(503, detail="Database unavailable")
 
 
