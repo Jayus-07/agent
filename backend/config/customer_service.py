@@ -141,6 +141,11 @@ CS_DOMAIN_PATTERNS: dict[str, list] = {
             r"(查|看|跟).*(订单|物流|快递|发货|收货|签收)",
             r"(订单|物流|快递).*(状态|进度|到哪|在哪)",
             r"(发货|收货|签收).*(了没|没有|了吗)",
+            # 陈述式抱怨语序（2026-09-17 补召回）："没"在动词前的表述
+            # （"一直没发货/还没到"）此前一条正则都不中
+            r"(订单|快递|包裹|物流).*(没|未).*(发货|发出|到货|收到|动静|更新)",
+            r"(一直没|迟迟没|迟迟不|还没|还没有)(发货|到货|送到|收到|更新|动静)",
+            r"没(发货|到货|动静)",
             r"配送", r"运输", r"tracking",
         ]
     ],
@@ -178,10 +183,13 @@ CS_DOMAIN_PATTERNS: dict[str, list] = {
 # 分数分布不同，固定值易漏判；默认对齐 coarse_router 的 0.60 采纳线）
 # =============================================
 CS_VECTOR_THRESHOLD = float(os.getenv("CS_VECTOR_THRESHOLD", "0.60"))
-# 向量强匹配单独决定线（与 coarse_router 的"≥0.85 决定"语义对齐）：
-# 域检测原本要求 rule≥2 且 vec≥0.70 同时成立，导致"申请退款"(vec=0.94, rule=1hit)
-# 这类明显客服问法被漏判，客服链路几乎无法触发
-CS_VECTOR_DECIDE = float(os.getenv("CS_VECTOR_DECIDE", "0.85"))
+# 向量强匹配单独决定线：域检测原本要求 rule≥2 且 vec≥0.70 同时成立，导致
+# "申请退款"(vec=0.94, rule=1hit) 这类明显客服问法被漏判，客服链路几乎无法触发。
+# 2026-09-17 实测再下调 0.85 → 0.68：云端 embedding 下短问句分数系统性偏低——
+# "物流到哪了"=0.794/"查下我的订单"=0.789/"退货地址是什么"=0.751 全部漏判；
+# 而非客服句实测最高 0.576（"帮我订个餐厅"），真客服最低 0.751，0.68 居中
+# （下方 margin 0.10+，上方 margin 0.07+）。
+CS_VECTOR_DECIDE = float(os.getenv("CS_VECTOR_DECIDE", "0.68"))
 CS_RULE_MIN_HITS = int(os.getenv("CS_RULE_MIN_HITS", "2"))
 CS_CONFIDENCE_ANSWER = 0.85
 CS_CONFIDENCE_CAUTIOUS = 0.60

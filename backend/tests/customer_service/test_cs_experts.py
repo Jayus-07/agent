@@ -366,10 +366,13 @@ class TestHandoffExpert:
         assert result["expert"] == "handoff"
         assert "转接人工客服" in result["response_draft"]
         assert result["data"]["trigger_type"] == "explicit"
-        assert result["data"]["handoff_state"] == "handoff_requested"
+        # 2026-09-17：工单创建后立即流转到排队（HANDOFF_REQUESTED →
+        # WAITING_HUMAN），否则坐席认领 409、工作台输入框永远锁定
+        assert result["data"]["handoff_state"] == "waiting_human"
         assert result["data"]["handling_mode"] == "human"
         assert result["data"]["ticket_id"].startswith("HANDOFF-")
-        mock_store.save.assert_called_once()
+        # 两次 save：handoff_requested 建档 + waiting_human 排队
+        assert mock_store.save.call_count == 2
 
     @patch("backend.observability.metrics.record_cs_handoff")
     @patch("backend.customer_service.handoff.transition")
@@ -423,7 +426,8 @@ class TestHandoffExpert:
 
         output = handoff_expert_node(state)
         assert output["last_expert_result"]["expert"] == "handoff"
-        assert output["cs_context"]["handoff_state"] == "handoff_requested"
+        # 2026-09-17：创建后立即流转 waiting_human（排队），见上例说明
+        assert output["cs_context"]["handoff_state"] == "waiting_human"
         assert output["cs_context"]["handling_mode"] == "human"
 
 

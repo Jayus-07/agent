@@ -21,7 +21,13 @@ class PermissionChecker:
 
     @staticmethod
     def validate_user_identity(state: dict) -> str:
-        """从 state.cs_context 提取 authenticated_user_id。
+        """从 state 提取认证用户 ID。
+
+        兼容两种 state 形态（2026-09-17 修复）：
+        - 主图 OrchestratorState: cs_context.authenticated_user_id
+        - CS 子图 CSGraphState: 平铺 user_id（new_cs_graph_input 里
+          cs_context 恒为空 dict，此前在此形态下必然 AuthenticationError，
+          业务查询/动作链路对任何用户都报"需要登录"）
 
         Returns:
             user_id (str)
@@ -29,8 +35,10 @@ class PermissionChecker:
         Raises:
             AuthenticationError: 缺失或 anonymous
         """
-        cs_context = state.get("cs_context", {})
+        cs_context = state.get("cs_context") or {}
         user_id = cs_context.get("authenticated_user_id")
+        if not user_id:
+            user_id = state.get("user_id")
         if not user_id or user_id == "anonymous":
             logger.warning(
                 f"[Permission] 身份验证失败: user_id={user_id!r}"
