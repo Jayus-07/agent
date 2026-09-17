@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Literal, Protocol, Callable
 from pydantic import BaseModel, Field
 
-ModuleKind = Literal["planner", "rag", "cs", "sql", "e2e"]
+ModuleKind = Literal["planner", "rag", "cs", "sql", "e2e", "travel"]
 
 
 class RunnerFunc(Protocol):

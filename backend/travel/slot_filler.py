@@ -40,7 +40,24 @@ _CN_COMPOUND = (r"(?:\d{1,2}"
                 r"|[一二两三四五六七八九]?十[一二三四五六七八九]?"
                 r"|[一二两三四五六七八九十])")
 
-# 天数：阿拉伯数字或中文数字（含复合） + 天/日
+# 日期保护：「9月21日」的「21日」会被 _RE_DAYS 误读成 21 天（评测数据集
+# T-E02 实测踩过：「9月21日福州一日游」抽出 days=21）。抽天数/区间前先把
+# 日期表达替换为占位符——与 _RE_DATE_CN 同源，另含「9月21到25日」省写区间变体。
+_RE_DATE_RANGE_CN = re.compile(
+    r"\d{1,2}\s*月\s*\d{1,2}\s*[日号]?\s*(?:到|至|[-~—])\s*\d{1,2}\s*[日号]?")
+_DATE_MASK = "▚"
+
+
+def _mask_dates(message: str) -> str:
+    """把日期表达（含省写区间）替换为占位符，防止天数抽取误捕。
+
+    顺序关键：先替换省写区间（长模式），否则「9月21到25日」会被短模式
+    吃成「▚到25日」，残留的「25日」照样被误读成 25 天。
+    """
+    return _RE_DATE_CN.sub(_DATE_MASK, _RE_DATE_RANGE_CN.sub(_DATE_MASK, message))
+
+
+# 天数：阿拉伯数字或中文数字（含复合） + 天/日（原文已先经 _mask_dates 保护）
 _RE_DAYS = re.compile(rf"({_CN_COMPOUND})\s*[天日]")
 # 区间天数：「两三天」「三四天」「2-3天」「两到三天」。
 # 相邻中文数字形式必须排除「十」（否则「十二天」会被当成区间 1-2）；
@@ -105,7 +122,7 @@ def extract_destination(message: str) -> str:
 
 
 def extract_days(message: str) -> int | None:
-    match = _RE_DAYS.search(message)
+    match = _RE_DAYS.search(_mask_dates(message))
     if not match:
         return None
     value = _to_int(match.group(1))
@@ -119,8 +136,9 @@ def extract_days_range(message: str) -> tuple[int, int, str] | None:
     这里负责把「这是区间」这件事暴露出来，供 slot_filler 写提示 note ——
     取上限本身可辩护，但不该让用户毫无感知地被决定了天数。
     """
+    masked = _mask_dates(message)
     for pattern in (_RE_DAYS_RANGE_SEP, _RE_DAYS_RANGE_CN):
-        match = pattern.search(message)
+        match = pattern.search(masked)
         if not match:
             continue
         lo, hi = _to_int(match.group(1)), _to_int(match.group(2))

@@ -1,0 +1,7 @@
+{
+  "version": "1.0",
+  "case_count": 22,
+  "module": "travel",
+  "schema_description": "旅游域规划质量评估数据集 — 按任务书 §15 的 A-F 六组组织用例，metadata.group 标组、metadata.tier 标层级（smoke/core/hard/regression），runner 调旅游子图断言 final_answer/validation 违反/版本链/修复行为。A-F 分组依据 TRAVEL_ARCHITECTURE_AUDIT.md §3.13 的任务书线索落地：A=正常规划，B=槽位抽取，C=跨轮多轮，D=约束修复，E=用户决策（必去闭馆），F=容错失败（Provider 失败注入）。",
+  "notes": "Phase 5 探路版（2026-09-18）。expected 字段为 runner 契约：status/must_contain/must_not_contain/days/party_size/pace/min_plan_version/parent_linked/repair_triggered/decision_required/no_error_violations/violation_codes/confidence_max/notes_contain/notes_not_contain/clarification/destination；跨轮用例 metadata.followup 为第二轮消息（same_thread 同 thread_id），expected.followup 为第二轮断言（同构）。Failure 组 metadata.fail_transit/fail_poi 触发假 Provider 注入（TransitProvider 走 routing.set_route_provider 插槽、POI 走 tools.travel.poi.search_poi 插桩）。"
+}

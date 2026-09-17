@@ -14,6 +14,7 @@ from backend.evaluation.runners.rag import _run_rag
 from backend.evaluation.runners.sql import _run_sql
 from backend.evaluation.runners.e2e import _run_e2e
 from backend.evaluation.runners.cs import _run_cs
+from backend.evaluation.runners.travel import _run_travel
 
 # --- 测试兼容：直接 import 的工具函数 ---
 from backend.evaluation.runners._common import (

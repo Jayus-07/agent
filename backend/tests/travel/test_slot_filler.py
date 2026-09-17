@@ -45,6 +45,24 @@ class TestScalarExtraction:
         assert extract_days("二十五日游") == 25
         assert extract_days("就玩十天") == 10
 
+    def test_date_cn_not_misparsed_as_days(self):
+        """「9月21日」的「21日」是日期不是 21 天（评测 T-E02 实测踩过：
+        「9月21日福州一日游」抽出 days=21，整条行程直接排成 21 天）。"""
+        assert extract_days("9月21日福州一日游，1个人，必去福建博物院") == 1
+        assert extract_days("12月3日出发，玩3日") == 3
+        assert extract_days("4月5日去厦门，安排1天") == 1
+
+    def test_date_range_shorthand_not_misparsed_as_days(self):
+        """省写日期区间「9月21到25日」必须整体保护，残留「25日」也不许误读。"""
+        assert extract_days("9月21到25日去福州玩2天") == 2
+        assert extract_days_range("9月21到25日玩吧") is None
+
+    def test_plain_days_unaffected_by_date_guard(self):
+        """日期保护不能误伤真正的天数表达。"""
+        assert extract_days("玩21天") == 21
+        assert extract_days("福州2天行程") == 2
+        assert extract_days_range("福州玩个两三天") == (2, 3, "两三天")
+
     def test_party_size(self):
         assert extract_party_size("我们3个人去") == 3
 

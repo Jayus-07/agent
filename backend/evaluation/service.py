@@ -237,7 +237,7 @@ class EvaluationService:
             )
 
         module_kinds: list[ModuleKind] = (
-            ["planner", "rag", "sql", "e2e"] if config.module == "all" else [config.module]  # type: ignore
+            ["planner", "rag", "sql", "e2e", "travel"] if config.module == "all" else [config.module]  # type: ignore
         )
 
         all_results: list[EvalResult] = []
