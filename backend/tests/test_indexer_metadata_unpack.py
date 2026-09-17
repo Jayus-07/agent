@@ -54,13 +54,12 @@ class TestDetectBusinessDomainContract:
 class TestIndexerUnpacksDomainTuple:
     """_build_doc_metadata 必须正确解包 3 元组,不抛 too many values to unpack。"""
 
-    def test_build_doc_metadata_does_not_raise_on_pdf(self, tmp_path, monkeypatch):
-        """用真实 PDF 触发 _build_doc_metadata,验证能完整跑完不抛 unpack 错。"""
-        from pathlib import Path
-        pdf_path = Path("backend/data/docs/rag_test_kb/general/03_库存管理制度.pdf")
-        if not pdf_path.exists():
-            pytest.skip("PDF 不存在,跳过集成测试")
+    def test_build_doc_metadata_does_not_raise_on_pdf_text(self, tmp_path):
+        """带业务关键词的 full_text 触发 _build_doc_metadata,验证完整跑完不抛 unpack 错。
 
+        （2026-09-18 改造:原版依赖仓库内 PDF 文件并把二进制 decode 当文本——
+        恒 skip 且名不副实;_build_doc_metadata 只吃字符串,直接构造文本即可。）
+        """
         idx = IncrementalIndexer(
             docs_dir=str(tmp_path),
             vectordb=MagicMock(),
@@ -68,13 +67,16 @@ class TestIndexerUnpacksDomainTuple:
             embedding=MagicMock(),
             registry=MagicMock(),
         )
-        # 用真实 PDF 文本作为 full_text
-        full_text = pdf_path.read_bytes().decode("utf-8", errors="replace")[:2000]
+        full_text = (
+            "跨境电商 Amazon 平台 Amazon Listing 标题 SOP 标准操作流程 "
+            "库存管理制度 采购入库 出库盘点 安全库存 threshold 管理 2026"
+        ) * 10
+        base_meta = {
+            "source_file": "03_库存管理制度.pdf",
+            "file_path": str(tmp_path / "03_库存管理制度.pdf"),
+        }
         try:
-            result = asyncio.run(idx._build_doc_metadata(
-                full_text,
-                base_meta={"source_file": "03_库存管理制度.pdf", "file_path": str(pdf_path)},
-            ))
+            result = asyncio.run(idx._build_doc_metadata(full_text, base_meta=base_meta))
         except ValueError as e:
             if "too many values to unpack" in str(e):
                 pytest.fail(

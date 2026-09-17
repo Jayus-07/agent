@@ -33,12 +33,22 @@ class TestMetricsDefinitions:
     def test_llm_tokens_total_has_model_direction_labels(self):
         llm_tokens_total.labels(model="deepseek-v4-flash", direction="prompt").inc(10)
         llm_tokens_total.labels(model="deepseek-v4-flash", direction="completion").inc(20)
-        # 不抛异常即可
-        assert True
+        body, _ = render_metrics()
+        lines = body.decode().splitlines()
+        for direction in ("prompt", "completion"):
+            assert any(
+                'model="deepseek-v4-flash"' in ln and f'direction="{direction}"' in ln
+                for ln in lines if ln.startswith("llm_tokens_total{")
+            ), f"llm_tokens_total 缺 direction={direction} 样本"
 
     def test_skill_failure_total_has_labels(self):
         skill_failure_total.labels(skill="rag_skill", error_type="timeout").inc()
-        assert True
+        body, _ = render_metrics()
+        lines = body.decode().splitlines()
+        assert any(
+            'skill="rag_skill"' in ln and 'error_type="timeout"' in ln
+            for ln in lines if ln.startswith("skill_failure_total{")
+        ), "skill_failure_total 缺 rag_skill/timeout 样本"
 
 
 class TestMetricsEndpoint:

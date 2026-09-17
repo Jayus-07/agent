@@ -97,14 +97,17 @@ class TestWebSearchToolBasic:
         assert "标题4" in result
         assert "标题5" not in result
     
-    def test_query_parameter_required(self):
-        """query parameter should be validated（mock 网络）"""
+    def test_empty_query_passed_through_to_search_url(self):
+        """空 query 当前无校验、原样透传进搜索 URL（q= 为空）——固化真实契约"""
         from backend.tools.web import web_search_tool
 
         with patch("urllib.request.urlopen",
-                   return_value=_fake_urlopen(_ddg_html(2))):
+                   return_value=_fake_urlopen(_ddg_html(2))) as mock_urlopen:
             result = web_search_tool.invoke({"query": "", "num_results": 3})
         assert isinstance(result, str)
+        req = mock_urlopen.call_args.args[0]
+        assert str(req.full_url).endswith("q="), \
+            f"空 query 应原样透传进 URL，实际: {req.full_url}"
 
 
 class TestWebSearchToolQueryHandling:
@@ -136,29 +139,35 @@ class TestWebSearchToolQueryHandling:
         assert isinstance(result, str)
 
     def test_special_characters_in_query(self):
-        """special characters should be handled"""
+        """special characters should be percent-encoded into the search URL"""
         from backend.tools.web import web_search_tool
 
         with patch("urllib.request.urlopen",
-                   return_value=_fake_urlopen(_ddg_html(2))):
+                   return_value=_fake_urlopen(_ddg_html(2))) as mock_urlopen:
             result = web_search_tool.invoke({
                 "query": "Python + JavaScript tutorial",
                 "num_results": 3
             })
         assert isinstance(result, str)
+        url = str(mock_urlopen.call_args.args[0].full_url)
+        assert "%2B" in url, f"+ 必须被编码为 %2B，实际: {url}"
+        assert " " not in url, f"URL 中不允许出现裸空格，实际: {url}"
 
     def test_unicode_query_handling(self):
-        """unicode characters should be processed correctly"""
+        """unicode characters should be percent-encoded into the search URL"""
         from backend.tools.web import web_search_tool
 
         unicode_query = "人工智能中文教程"
         with patch("urllib.request.urlopen",
-                   return_value=_fake_urlopen(_ddg_html(2))):
+                   return_value=_fake_urlopen(_ddg_html(2))) as mock_urlopen:
             result = web_search_tool.invoke({
                 "query": unicode_query,
                 "num_results": 3
             })
         assert isinstance(result, str)
+        url = str(mock_urlopen.call_args.args[0].full_url)
+        assert "%" in url, f"中文必须被 percent-encode，实际: {url}"
+        assert unicode_query not in url, f"URL 中不应出现未编码中文，实际: {url}"
 
 
 class TestWebSearchResultValidation:
@@ -209,16 +218,17 @@ class TestWebSearchErrorHandling:
                 web_search_tool.invoke({"query": "test", "num_results": 3})
     
     def test_timeout_handling(self):
-        """timeout should be handled internally（10s），异常由 BaseSkill 接管"""
+        """两路搜索都 socket.timeout → 上抛保持 BaseSkill 重试语义（同 URLError 契约）"""
+        import socket
         from backend.tools.web import web_search_tool
 
         with patch("urllib.request.urlopen",
-                   return_value=_fake_urlopen(_ddg_html(1))):
-            result = web_search_tool.invoke({
-                "query": "test timeout",
-                "num_results": 1
-            })
-        assert isinstance(result, str)
+                   side_effect=socket.timeout("timed out")):
+            with pytest.raises(socket.timeout):
+                web_search_tool.invoke({
+                    "query": "test timeout",
+                    "num_results": 1
+                })
 
 
 class TestWebCrawlToolBasic:
@@ -346,38 +356,12 @@ class TestWebCrawlErrorHandling:
                 web_crawl_tool.invoke({"url": "https://example.com/slow-page"})
     
 class TestWebToolsIntegration:
-    """Web Tools 集成测试（需网络环境）"""
-    
-    @pytest.mark.skip(reason="Requires actual internet connection")
-    def test_real_duckduckgo_search(self):
-        """test real search on DuckDuckGo"""
-        from backend.tools.web import web_search_tool
-        
-        result = web_search_tool.invoke({
-            "query": "artificial intelligence",
-            "num_results": 5
-        })
-        
-        assert isinstance(result, str)
-        assert len(result) > 0
-    
-    @pytest.mark.skip(reason="Requires accessible target website")
-    def test_real_website_crawl(self):
-        """test crawling a real accessible website"""
-        from backend.tools.web import web_crawl_tool
-        
-        result = web_crawl_tool.invoke({
-            "url": "https://en.wikipedia.org/wiki/Artificial_intelligence",
-            "mode": "markdown"
-        })
-        
-        assert isinstance(result, str)
-        assert len(result) > 0
-    
+    """Web Tools 集成测试（全部 mock 网络；真实网络用例已删除——等价 mock 覆盖见上文各类）"""
+
     # ==================== 新增：URL 编码测试 ====================
-    
+
     def test_unicode_query_handling(self):
-        """验证 Unicode 查询参数处理（mock 网络）"""
+        """多语言 query 均被 percent-encode 后进入搜索 URL（mock 网络）"""
         from backend.tools.web import web_search_tool
 
         unicode_queries = [
@@ -388,26 +372,32 @@ class TestWebToolsIntegration:
 
         for query in unicode_queries:
             with patch("urllib.request.urlopen",
-                       return_value=_fake_urlopen(_ddg_html(2))):
+                       return_value=_fake_urlopen(_ddg_html(2))) as mock_urlopen:
                 result = web_search_tool.invoke({
                     "query": query,
                     "num_results": 3
                 })
             assert isinstance(result, str), f"Unicode 查询失败：{query}"
+            url = str(mock_urlopen.call_args.args[0].full_url)
+            assert "%" in url, f"{query} 必须被 percent-encode，实际: {url}"
+            assert query not in url, f"URL 中不应出现未编码原文，实际: {url}"
 
     def test_url_encoding_in_search(self):
-        """验证搜索 URL 编码（mock 网络响应）"""
+        """query 中的 & 等保留字符被编码，不破坏 URL 参数结构"""
         from backend.tools.web import web_search_tool
 
         special_char_query = "Python + JavaScript tutorial & examples"
 
         with patch("urllib.request.urlopen",
-                   return_value=_fake_urlopen(_ddg_html(2))):
+                   return_value=_fake_urlopen(_ddg_html(2))) as mock_urlopen:
             result = web_search_tool.invoke({
                 "query": special_char_query,
                 "num_results": 5
             })
         assert isinstance(result, str)
+        url = str(mock_urlopen.call_args.args[0].full_url)
+        assert "%26" in url, f"& 必须被编码为 %26，实际: {url}"
+        assert "examples" in url, "普通词不应被误编码"
     
     # ==================== 新增：结果提取测试 ====================
     
@@ -515,40 +505,9 @@ class TestWebToolsIntegration:
             result = web_crawl_tool.invoke({"url": "https://example.com"})
         assert isinstance(result, str)
     
-    # ==================== 新增：性能基准测试 ====================
-    
-    @pytest.mark.skip(reason="Real network calls may timeout, skipped for CI")
-    def test_web_search_response_time_small_query(self):
-        """Web Search 响应时间 <5s (小查询)"""
-        from backend.tools.web import web_search_tool
-        import time
-        
-        start = time.perf_counter()
-        result = web_search_tool.invoke({
-            "query": "python",
-            "num_results": 3
-        })
-        elapsed = time.perf_counter() - start
-        
-        # 包含网络请求，设置宽松阈值 5s
-        assert elapsed < 5.0, f"搜索耗时{elapsed:.3f}s，超过 5s 基线"
-        assert isinstance(result, str)
-    
-    @pytest.mark.skip(reason="Real network calls may timeout, skipped for CI")
-    def test_web_search_response_time_complex_query(self):
-        """Web Search 响应时间 <10s (复杂查询)"""
-        from backend.tools.web import web_search_tool
-        import time
-        
-        start = time.perf_counter()
-        result = web_search_tool.invoke({
-            "query": "machine learning algorithms comparison",
-            "num_results": 10
-        })
-        elapsed = time.perf_counter() - start
-        
-        assert elapsed < 2.0, f"搜索耗时{elapsed:.3f}s，超过 2s 基线"
-        assert isinstance(result, str)
+    # 真实网络的搜索响应时间基准已删除：恒 skip 死代码（且原 docstring 阈值
+    # 与断言自相矛盾），mock 版基准见 test_web_crawl_page_load_performance。
+
     
     @pytest.mark.benchmark
     def test_web_crawl_page_load_performance(self):

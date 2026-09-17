@@ -216,12 +216,14 @@ class TestProgressListenerE2E:
         # sync 返回 SyncResult（added=1，因为是新文件）
         assert result.added == 1
 
-    @pytest.mark.skip(reason="Phase 1 仅支持 md/txt，pdf 解析失败路径延后到 Phase 2")
     def test_parse_failure_propagates_to_error_stage(self, fresh_collector, tmp_path):
-        """parse 失败 → SSE error 事件（虽然 ProgressListener 不直接发 error，由 _run_index_background 发）"""
-        # 这个测试验证 _run_index_background 的 emit('error') 路径
-        # 实际上 ProgressListener 不会发 error——error 由外层 asyncio.create_task 捕获
-        # 这里只验证 listener 不会把 parse failure 变成 silent drop
+        """parse 失败不中断 sync（per-file 跳过容错），且失败留痕不静默丢失。
+
+        2026-09-18 契约更新:PdfParser 上线后单文件 parse 失败不再让整轮
+        sync 抛 RuntimeError 崩溃回退全量重建，而是记入 SyncResult.failed
+        （ADDED-FAILED 留痕，下次 sync 仍按 ADDED 重试）；listener 仍收到
+        parsing 阶段事件。
+        """
         from backend.rag.progress_listener import ProgressListener
 
         received = []
@@ -234,13 +236,18 @@ class TestProgressListenerE2E:
         indexer = _build_indexer(tmp_path, str(bad_pdf))
         listener = ProgressListener(sync_emit)
         try:
-            with pytest.raises(RuntimeError, match="parse failed"):
-                indexer.sync()
+            # 容错契约:不抛，正常收口
+            result = indexer.sync()
         finally:
             listener.unsub()
 
-        # parsing 失败 → listener 收到 'parsing' 然后 trace 报 error（不影响 listener）
-        # ProgressListener 只在 span end 时调用，parse span end 时 status=error → 也 emit parsing
+        # 坏文件必须留痕，不能 silent drop
+        # （added 与 failed 不互斥:added 是 delta 分类计数，failed 是执行结果——
+        #   行标记 failed 后下次 sync 仍按 ADDED 重试）
+        assert result.failed == 1, f"坏 PDF 应计为 1 个失败文件，实际 {result}"
+        assert result.added == 1
+        assert any("bad.pdf" in f for f in result.failed_files)
+        # parse span 失败结束仍会 emit parsing（ProgressListener 不吞失败）
         assert "parsing" in received
 
 

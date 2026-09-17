@@ -325,7 +325,7 @@ class TestRunIndexBackgroundDispatch:
 
         assert upload_id in ru._celery_routed, "必须打标让 SSE 切到 Worker 通道"
         assert cleaned == [], "锁冲突绝不能删源文件（Worker 正在索引它）"
-        settle.assert_not_called(), "不能按失败收口（Worker 终态还没来）"
+        assert not settle.called, "不能按失败收口（Worker 终态还没来）"
         stages = []
         while not q.empty():
             evt = q.get_nowait()

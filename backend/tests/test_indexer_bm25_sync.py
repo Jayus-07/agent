@@ -5,7 +5,7 @@
 `bm25_store.replace_documents(chunks, k=..., doc_id=..., file_path=...)`。
 
 本测试真实调用 _index_file_inner 验证契约（只 mock 外部边界：
-解析入口 parse_and_chunk / LLM 元数据 / embedding / chunk_store / 各存储）：
+解析入口 parse_and_chunk_full / LLM 元数据 / embedding / chunk_store / 各存储）：
   1. bm25_store 配置时 → replace_documents 必须被调用（携带 doc_id/file_path/k）
   2. replace_documents 失败 → 仅记日志，不得中断索引主流程
   3. bm25_store=None（启动期 sync 场景）→ 跳过 BM25，索引正常完成
