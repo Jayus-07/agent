@@ -257,3 +257,71 @@ class TestCsRedirectMain:
             "domain_hint": "customer_service",
         })
         assert out.get("route_mode") == "customer_service"
+
+    # ── 阶段二（2026-09-18，LLM 语义仲裁，默认 OFF）──────────────────
+
+    def test_llm_non_cs_redirects_to_main_router(
+        self, fake_detector, travel_on, cs_on, monkeypatch,
+    ):
+        """正则未命中 + LLM 高置信判非客服 → 转出，落到主路由（非 CS）。"""
+        from backend.customer_service.analyzer import non_cs_detector as ncd
+        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setattr(
+            ncd, "detect_non_cs_cached",
+            lambda q: ncd.NonCSDetection(
+                is_non_cs=True, confidence=0.9, target_domain="tech",
+            ),
+        )
+
+        def _boom():
+            raise RuntimeError("main router off in test")
+        monkeypatch.setattr(rn, "get_router", _boom)
+
+        out = rn.router_node({
+            "question": "帮我写一个快速排序的代码",
+            "session_id": "s-redirect-llm",
+            "domain_hint": "customer_service",
+        })
+        # 主 router 异常兜底路径：证明已转出域锁、未被 CS prefilter 接管
+        assert out.get("route_mode") == "plan"
+
+    def test_llm_low_confidence_stays_locked(
+        self, fake_detector, travel_on, cs_on, monkeypatch,
+    ):
+        """LLM 置信度低于阈值 → 不转出，forced CS prefilter 留守。"""
+        from backend.customer_service.analyzer import non_cs_detector as ncd
+        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setattr(
+            ncd, "detect_non_cs_cached",
+            lambda q: ncd.NonCSDetection(
+                is_non_cs=True, confidence=0.3, target_domain="tech",
+            ),
+        )
+        out = rn.router_node({
+            "question": "帮我写一个快速排序的代码",
+            "session_id": "s-redirect-llm-low",
+            "domain_hint": "customer_service",
+        })
+        assert out.get("route_mode") == "customer_service"
+
+    def test_llm_disabled_stays_locked(
+        self, fake_detector, travel_on, cs_on, monkeypatch,
+    ):
+        """开关默认 OFF（灰度零调用）：LLM 仲裁完全不触发，留守 CS。"""
+        from backend.customer_service.analyzer import non_cs_detector as ncd
+        monkeypatch.delenv(ncd.ENV_LLM_ENABLED, raising=False)
+        called = {"n": 0}
+
+        def _spy(q):
+            called["n"] += 1
+            return ncd.NonCSDetection(is_non_cs=True, confidence=0.9)
+        # 开关检查在 detect_non_cs_cached 内部：OFF 时应在调内层 LLM 前短路
+        monkeypatch.setattr(ncd, "detect_non_cs", _spy)
+
+        out = rn.router_node({
+            "question": "帮我写一个快速排序的代码",
+            "session_id": "s-redirect-llm-off",
+            "domain_hint": "customer_service",
+        })
+        assert out.get("route_mode") == "customer_service"
+        assert called["n"] == 0  # 开关关闭时 LLM 零调用

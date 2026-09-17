@@ -72,7 +72,8 @@ def router_node(state: dict) -> dict:
     # 拿到旅游/选品的正常回答（设计稿第 4 节 next_action=redirect_main 的
     # 确定性子集）。混合信号（如"订单里的行程单怎么退款"含客服规则）仍守
     # CS 优先——与主路由既有判定一致，避免旅游关键词抢走客服流量。
-    # 阶段二（LLM 语义层 non_cs_confidence≥0.75）待 CS 分析节点接入后启用。
+    # 阶段二（2026-09-18，LLM 语义仲裁）：正则未命中时交给 non_cs 检测器
+    # 判 non_cs_confidence，≥阈值才转出。默认 OFF（CS_REDIRECT_MAIN_LLM_ENABLED）。
     cs_redirect = None
     if cs_forced and not cs_rule_hits:
         try:
@@ -86,6 +87,18 @@ def router_node(state: dict) -> dict:
                 cs_redirect = "selection_funnel_regex_hit"
         except Exception as e:
             logger.debug(f"[RouterNode] redirect_main 正则判定失败，维持锁域: {e}")
+        # 阶段二：正则未命中的域锁 query 走 LLM 语义仲裁（软失败留守 CS）。
+        if cs_redirect is None:
+            try:
+                from backend.customer_service.analyzer.non_cs_detector import (
+                    detect_non_cs_cached,
+                    should_redirect,
+                )
+                det = detect_non_cs_cached(query)
+                if det is not None and should_redirect(det):
+                    cs_redirect = f"llm_non_cs:{det.target_domain or 'unknown'}"
+            except Exception as e:
+                logger.debug(f"[RouterNode] redirect_main LLM 仲裁失败，维持锁域: {e}")
         if cs_redirect:
             logger.info(f"[RouterNode] CS 域锁转出(redirect_main): {cs_redirect} → 主路由")
             try:
