@@ -1,8 +1,7 @@
 """PostgresSelectionStore — selection 两表的 PostgreSQL 连接层（迁移计划 Batch D）。
 
 与 SQLite 版 `SelectionStore` 对外接口完全一致。
-选型开关见 `backend/config/database.py::SELECTION_BACKEND`
-（env `SELECTION_BACKEND=postgres` 启用；默认 sqlite，即回滚开关）。
+PG 为唯一实现（2026-09-17 SQLite 轨删除）。
 
 库归属：agent_business（业务数据，对 NL2SQL 可见）。
 schema 与 backend/sql/migrations/016_business_stores_pg.sql 保持一致。

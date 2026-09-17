@@ -1,8 +1,7 @@
 """PostgresWorkflowRunStore — workflow_runs 的 PostgreSQL 连接层（迁移计划 Batch C）。
 
 与 SQLite 版 `WorkflowRunStore` 对外接口完全一致（save / list / get），
-仅替换连接层与 SQL 方言。选型开关见 `backend/config/database.py::WORKFLOW_DB_BACKEND`
-（env `WORKFLOW_DB_BACKEND=postgres` 启用；默认 sqlite，即回滚开关）。
+仅替换连接层与 SQL 方言。PG 为唯一实现（2026-09-17 SQLite 轨删除）。
 
 库归属：agent_memory（Agent 自身运行状态，不暴露给 NL2SQL）。
 schema 与 backend/sql/migrations/015_orchestration_pg.sql 保持一致。

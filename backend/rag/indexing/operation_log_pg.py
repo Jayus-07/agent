@@ -2,7 +2,7 @@
 
 与 SQLite 版 `DocumentOperationLogger` 对外接口完全一致（log/list/
 get_last_ops_batch），仅替换连接层与 SQL 方言。引擎开关见
-`backend/config/database.py::OPLOG_BACKEND`（env `OPLOG_BACKEND=postgres`）。
+PG 为唯一实现（2026-09-17 SQLite 轨删除）。
 工厂分发见 `backend/app/api/routes/_rag_shared.py::_get_op_logger`。
 
 方言映射要点：

@@ -2,7 +2,7 @@
 
 与 SQLite 版 `ChunkStore` 对外接口完全一致（insert_batch/delete_by_doc_id/
 get_by_doc_id/count_by_doc_id），仅替换连接层与 SQL 方言。引擎开关见
-`backend/config/database.py::CHUNK_STORE_BACKEND`（env `CHUNK_STORE_BACKEND=postgres`）。
+PG 为唯一实现（2026-09-17 SQLite 轨删除）。
 工厂分发见 `chunk_store.py::get_chunk_store`。
 
 方言映射要点：

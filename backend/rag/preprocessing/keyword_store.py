@@ -1,71 +1,26 @@
-"""关键词规则动态管理 — SQLite 持久化 + 热加载。
+"""关键词规则动态管理 — 持久化 + 热加载（PG 实现）。
 
 替代 config/rag.py 中写死的 DEFAULT_KEYWORDS / SIGNAL_RULES。
 config 中的值作为初始种子数据，首次启动自动导入。
+2026-09-17 SQLite 轨已删除，唯一实现为 PostgresKeywordRuleStore
+（keyword_store_pg.py）；本模块保留缓存逻辑与种子映射。
 """
 from __future__ import annotations
 
-import os
-import sqlite3
-import threading
 import time
-from typing import Any
-
-from backend.config import DEFAULT_KEYWORDS, SIGNAL_RULES
-from backend.infra.sqlite import get_connection
-from backend.shared.logger import logger
-
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS keyword_rules (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    keyword    TEXT NOT NULL,             -- 关键词
-    doc_type   TEXT NOT NULL DEFAULT 'general', -- 归属文档类型（faq/product_spec/policy/compliance/legal/general）
-    category   TEXT NOT NULL DEFAULT '',   -- 业务分类（商品管理/订单履约/...）
-    weight     INTEGER NOT NULL DEFAULT 1, -- 权重（越高越重要）
-    enabled    INTEGER NOT NULL DEFAULT 1, -- 1=启用, 0=禁用
-    source     TEXT NOT NULL DEFAULT 'seed', -- seed=种子数据, manual=用户添加
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_kw_enabled ON keyword_rules(enabled);
-CREATE INDEX IF NOT EXISTS idx_kw_doc_type ON keyword_rules(doc_type);
-CREATE INDEX IF NOT EXISTS idx_kw_category ON keyword_rules(category);
-"""
 
 
 class KeywordRuleStore:
-    """关键词规则持久化存储 — 线程安全。
+    """关键词规则持久化存储接口（唯一实现：PostgresKeywordRuleStore）。
 
     缓存策略: 读取时 60s 内命中缓存，超时从 DB 刷新。
     """
+
+    def __new__(cls, *args, **kwargs):
+        # 2026-09-17 SQLite 轨删除：无条件返回 PG 实现（db_path 等参数兼容保留，表名由 env 决定）。
+        from backend.rag.preprocessing.keyword_store_pg import PostgresKeywordRuleStore
+        return super().__new__(PostgresKeywordRuleStore)
     _CACHE_TTL = 60  # 秒
-
-    def __init__(self, db_path: str = "data/keyword_rules.db"):
-        self._db_path = db_path
-        self._lock = threading.Lock()
-        self._cache: dict[str, Any] | None = None
-        self._cache_ts: float = 0
-        self._init_db()
-
-    def _conn(self) -> sqlite3.Connection:
-        return get_connection(self._db_path, row_factory=sqlite3.Row)
-
-    def _init_db(self) -> None:
-        os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
-        conn = self._conn()
-        conn.executescript(SCHEMA_SQL)
-        conn.commit()
-        # 兼容旧表：doc_type 列不存在则追加
-        try:
-            conn.execute("SELECT doc_type FROM keyword_rules LIMIT 1")
-        except sqlite3.OperationalError:
-            conn.execute("ALTER TABLE keyword_rules ADD COLUMN doc_type TEXT NOT NULL DEFAULT 'general'")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_kw_doc_type ON keyword_rules(doc_type)")
-            conn.commit()
-        # 种子数据导入（首次）
-        count = conn.execute("SELECT COUNT(*) FROM keyword_rules").fetchone()[0]
-        if count == 0:
-            self._seed(conn)
 
     # 种子数据 → doc_type 分配规则
     _SEED_DOC_TYPE_MAP = {
@@ -76,77 +31,7 @@ class KeywordRuleStore:
         "legal":       ["合同", "条款", "违约责任", "赔偿", "知识产权", "保密协议", "法律"],
     }
 
-    def _seed(self, conn: sqlite3.Connection) -> None:
-        """从 config 导入初始种子数据，按关键词分配 doc_type。"""
-        # 构建反向索引: keyword → doc_type
-        kw_to_doc: dict[str, str] = {}
-        for doc_type, kws in self._SEED_DOC_TYPE_MAP.items():
-            for kw in kws:
-                kw_lower = kw.lower()
-                if kw_lower not in kw_to_doc:
-                    kw_to_doc[kw_lower] = doc_type
-
-        rows: list[tuple] = []
-        seen: set[str] = set()
-        for kw in DEFAULT_KEYWORDS:
-            w = kw.strip()
-            if w.lower() in seen:
-                continue
-            seen.add(w.lower())
-            dt = kw_to_doc.get(w.lower(), "general")
-            rows.append((w, dt, "", 1, 1, "seed"))
-        for cat, kws in SIGNAL_RULES.items():
-            for kw in kws:
-                w = kw.strip()
-                if w.lower() in seen:
-                    continue
-                seen.add(w.lower())
-                dt = kw_to_doc.get(w.lower(), "general")
-                rows.append((w, dt, cat, 2, 1, "seed"))
-        conn.executemany(
-            "INSERT OR IGNORE INTO keyword_rules (keyword, doc_type, category, weight, enabled, source) VALUES (?, ?, ?, ?, ?, ?)",
-            rows,
-        )
-        conn.commit()
-        logger.info(f"[KeywordStore] 种子数据导入: {len(rows)} 条")
-
     # ── 查询（带缓存）──
-
-    def _refresh_cache(self) -> dict:
-        conn = self._conn()
-        rows = conn.execute(
-            "SELECT keyword, doc_type, category, weight FROM keyword_rules WHERE enabled=1 ORDER BY weight DESC"
-        ).fetchall()
-
-        # 按 doc_type 分组（词串 + 带权重）
-        by_doc_type: dict[str, list[str]] = {}
-        by_doc_type_w: dict[str, list[tuple[str, int]]] = {}
-        all_keywords: list[str] = []
-        signal_rules: dict[str, list[str]] = {}
-        for r in rows:
-            kw = r["keyword"]
-            dt = r["doc_type"]
-            w = r["weight"]
-            if dt not in by_doc_type:
-                by_doc_type[dt] = []
-                by_doc_type_w[dt] = []
-            by_doc_type[dt].append(kw)
-            by_doc_type_w[dt].append((kw, w))
-            all_keywords.append(kw)
-            cat = r["category"]
-            if cat:
-                if cat not in signal_rules:
-                    signal_rules[cat] = []
-                signal_rules[cat].append(kw)
-
-        self._cache = {
-            "keywords": all_keywords,
-            "by_doc_type": by_doc_type,
-            "by_doc_type_w": by_doc_type_w,
-            "signal_rules": signal_rules,
-        }
-        self._cache_ts = time.time()
-        return self._cache
 
     def get_rules_by_doc_type(self) -> dict[str, list[tuple[str, int]]]:
         """返回 {doc_type: [(keyword, weight), ...]}，60s 缓存。
@@ -175,111 +60,14 @@ class KeywordRuleStore:
 
     # ── CRUD ──
 
-    def list_all(self, doc_type: str = "", category: str = "", enabled: int | None = None, search: str = "") -> list[dict]:
-        """列出所有规则（管理页用）"""
-        conditions = []
-        params: list[Any] = []
-        if doc_type:
-            conditions.append("doc_type = ?")
-            params.append(doc_type)
-        if category:
-            conditions.append("category = ?")
-            params.append(category)
-        if enabled is not None:
-            conditions.append("enabled = ?")
-            params.append(enabled)
-        if search:
-            conditions.append("keyword LIKE ?")
-            params.append(f"%{search}%")
-        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-
-        conn = self._conn()
-        rows = conn.execute(
-            f"SELECT * FROM keyword_rules {where} ORDER BY doc_type, weight DESC, keyword",
-            params,
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-    def list_doc_types(self) -> list[str]:
-        """返回所有文档类型"""
-        conn = self._conn()
-        rows = conn.execute(
-            "SELECT DISTINCT doc_type FROM keyword_rules ORDER BY doc_type"
-        ).fetchall()
-        return [r["doc_type"] for r in rows]
-
-    def list_categories(self) -> list[str]:
-        """返回所有分类名"""
-        conn = self._conn()
-        rows = conn.execute(
-            "SELECT DISTINCT category FROM keyword_rules WHERE category != '' ORDER BY category"
-        ).fetchall()
-        return [r["category"] for r in rows]
-
-    def upsert(self, keyword: str, doc_type: str = "general", category: str = "", weight: int = 1, enabled: int = 1) -> dict:
-        """新增或更新"""
-        with self._lock:
-            conn = self._conn()
-            existing = conn.execute(
-                "SELECT id FROM keyword_rules WHERE keyword = ?", (keyword,)
-            ).fetchone()
-            if existing:
-                conn.execute(
-                    """UPDATE keyword_rules SET doc_type=?, category=?, weight=?, enabled=?,
-                       updated_at=datetime('now') WHERE id=?""",
-                    (doc_type, category, weight, enabled, existing["id"]),
-                )
-            else:
-                conn.execute(
-                    """INSERT INTO keyword_rules (keyword, doc_type, category, weight, enabled, source, updated_at)
-                       VALUES (?, ?, ?, ?, ?, 'manual', datetime('now'))""",
-                    (keyword, doc_type, category, weight, enabled),
-                )
-            conn.commit()
-        self._cache = None  # 失效缓存
-        return {"ok": True, "keyword": keyword}
-
-    def batch_upsert(self, items: list[dict]) -> dict:
-        """批量导入 [{keyword, doc_type?, category?, weight?}]"""
-        for item in items:
-            kw = item.get("keyword", "").strip()
-            if not kw:
-                continue
-            self.upsert(kw, item.get("doc_type", "general"), item.get("category", ""),
-                       item.get("weight", 1), item.get("enabled", 1))
-        return {"ok": True, "added": len(items)}
-
-    def delete(self, keyword: str) -> dict:
-        with self._lock:
-            conn = self._conn()
-            conn.execute("DELETE FROM keyword_rules WHERE keyword = ?", (keyword,))
-            conn.commit()
-        self._cache = None
-        return {"ok": True}
-
-    def toggle(self, keyword: str, enabled: int) -> dict:
-        with self._lock:
-            conn = self._conn()
-            conn.execute(
-                "UPDATE keyword_rules SET enabled=?, updated_at=datetime('now') WHERE keyword=?",
-                (enabled, keyword),
-            )
-            conn.commit()
-        self._cache = None
-        return {"ok": True, "enabled": bool(enabled)}
-
-
 # 模块级单例
 _store: KeywordRuleStore | None = None
 
 
-def get_keyword_store(db_path: str = "data/keyword_rules.db") -> KeywordRuleStore:
-    """存储工厂：KEYWORD_STORE_BACKEND=postgres 时返回 PG 实现（接口/语义一致）。"""
+def get_keyword_store(db_path: str | None = None) -> KeywordRuleStore:
+    """存储工厂（2026-09-17 SQLite 轨删除，直连 PG 实现）。db_path 参数保留兼容旧签名。"""
     global _store
     if _store is None:
-        if os.getenv("KEYWORD_STORE_BACKEND", "sqlite").strip().lower() == "postgres":
-            from backend.rag.preprocessing.keyword_store_pg import PostgresKeywordRuleStore
-            _store = PostgresKeywordRuleStore(db_path)
-        else:
-            _store = KeywordRuleStore(db_path)
+        from backend.rag.preprocessing.keyword_store_pg import PostgresKeywordRuleStore
+        _store = PostgresKeywordRuleStore(db_path)
     return _store

@@ -61,63 +61,43 @@ BUSINESS_DB_READONLY_CONFIG = {
     "password": os.getenv("PG_READONLY_PASSWORD", "agent_readonly_dev"),
 }
 
-# === Doc registry 存储引擎开关（R1/C19：SQLite → PostgreSQL）===
-# "sqlite"（默认，回滚开关）| "postgres"
-# 切换 postgres 前，先跑 backend/scripts/migrate_doc_registry_to_pg.py 迁移历史数据。
-DOC_REGISTRY_BACKEND = os.getenv("DOC_REGISTRY_BACKEND", "sqlite").strip().lower()
+# === Doc registry（PostgreSQL，2026-09-17 SQLite 轨删除，PG 为唯一实现）===
 # PG 模式专用库名：默认 agent_memory（Agent 自身元数据库）。
 # ⚠️ 不跟随 PGDATABASE（本地 .env 常把它指到 demo 等业务库）。
 DOC_REGISTRY_PG_CONFIG = _pg_cfg("DOC_REGISTRY_PGDATABASE", "agent_memory")
 # 表名可覆盖（测试隔离用）；生产保持默认 doc_registry。
 DOC_REGISTRY_PG_TABLE = os.getenv("DOC_REGISTRY_PG_TABLE", "doc_registry")
 
-# === 可观测层存储引擎开关（SQLite → PostgreSQL，2026-09-17 迁移计划 Batch A）===
-# "sqlite"（默认，回滚开关）| "postgres"
-# 作用于 trace_store / analytics(trace_summary) / llm_usage 三个存储（get_*_store 工厂分发）。
-# 时间戳语义与 SQLite 版一致：trace_store/trace_summary 用 Python localtime 文本、
+# === 可观测层存储（PostgreSQL，唯一实现）===
+# 作用于 trace_store / analytics(trace_summary) / llm_usage 三个存储（get_*_store 工厂）。
+# 时间戳语义：trace_store/trace_summary 用 Python localtime 文本、
 # llm_usage 用 UTC ISO 文本，均由应用侧生成后作参数写入（不依赖 PG 服务器时区）。
-OBS_DB_BACKEND = os.getenv("OBS_DB_BACKEND", "sqlite").strip().lower()
 OBS_DB_PG_CONFIG = _pg_cfg("OBS_DB_PGDATABASE", "agent_memory")
 # 表名前缀（测试隔离用；生产保持空串 → trace_store / trace_summary / llm_usage）
 OBS_DB_PG_TABLE_PREFIX = os.getenv("OBS_DB_PG_TABLE_PREFIX", "")
 
-# === RAG 索引族存储引擎开关（迁移计划 2026-09-17 Batch B）===
-# "sqlite"（默认，回滚开关）| "postgres"
-# 作用于 chunk_store / keyword_rules / doc_operation_log（各自工厂分发）；
-# doc_registry 已有独立开关 DOC_REGISTRY_BACKEND（R1/C19 先例）。
+# === RAG 索引族存储（PostgreSQL，唯一实现）===
+# 作用于 chunk_store / keyword_rules / doc_operation_log（各自工厂直连 PG）。
 RAG_STORES_PG_CONFIG = _pg_cfg("RAG_STORES_PGDATABASE", "agent_memory")
 # 表名前缀（测试隔离用；生产保持空串 → chunk_store / keyword_rules / doc_operation_log）
 RAG_STORES_PG_TABLE_PREFIX = os.getenv("RAG_STORES_PG_TABLE_PREFIX", "")
-CHUNK_STORE_BACKEND = os.getenv("CHUNK_STORE_BACKEND", "sqlite").strip().lower()
-KEYWORD_STORE_BACKEND = os.getenv("KEYWORD_STORE_BACKEND", "sqlite").strip().lower()
-OPLOG_BACKEND = os.getenv("OPLOG_BACKEND", "sqlite").strip().lower()
 
-# === 编排族存储引擎开关（迁移计划 2026-09-17 Batch C）===
-# "sqlite"（默认，回滚开关）| "postgres"
+# === 编排族存储（PostgreSQL，唯一实现）===
 # 库归属：workflow_runs → agent_memory；inventory_alerts 4 表 → agent_business
-WORKFLOW_DB_BACKEND = os.getenv("WORKFLOW_DB_BACKEND", "sqlite").strip().lower()
 WORKFLOW_DB_PG_CONFIG = _pg_cfg("WORKFLOW_DB_PGDATABASE", "agent_memory")
-INVENTORY_DB_BACKEND = os.getenv("INVENTORY_DB_BACKEND", "sqlite").strip().lower()
 INVENTORY_DB_PG_CONFIG = _pg_cfg("INVENTORY_DB_PGDATABASE", "agent_business")
 
-# === 业务族存储引擎开关（迁移计划 2026-09-17 Batch D，目标库 agent_business）===
-# "sqlite"（默认，回滚开关）| "postgres"；各自 <STORE>_BACKEND 工厂分发
-SELECTION_BACKEND = os.getenv("SELECTION_BACKEND", "sqlite").strip().lower()
+# === 业务族存储（PostgreSQL，唯一实现，目标库 agent_business）===
 SELECTION_PG_CONFIG = _pg_cfg("SELECTION_PGDATABASE", "agent_business")
-SELECTION_DECISION_BACKEND = os.getenv("SELECTION_DECISION_BACKEND", "sqlite").strip().lower()
 SELECTION_DECISION_PG_CONFIG = _pg_cfg("SELECTION_DECISION_PGDATABASE", "agent_business")
-MARKET_RESEARCH_BACKEND = os.getenv("MARKET_RESEARCH_BACKEND", "sqlite").strip().lower()
 MARKET_RESEARCH_PG_CONFIG = _pg_cfg("MARKET_RESEARCH_PGDATABASE", "agent_business")
-COMPETITOR_BACKEND = os.getenv("COMPETITOR_BACKEND", "sqlite").strip().lower()
 COMPETITOR_PG_CONFIG = _pg_cfg("COMPETITOR_PGDATABASE", "agent_business")
-FEEDBACK_BACKEND = os.getenv("FEEDBACK_BACKEND", "sqlite").strip().lower()
 FEEDBACK_PG_CONFIG = _pg_cfg("FEEDBACK_PGDATABASE", "agent_business")
 
-# === 向量库（迁移计划 2026-09-17 Chroma → pgvector，已收口为唯一实现）===
-# 主 RAG chunk 级 / doc 级 / 竞品市场索引 → PgVectorKnowledgeStore（rag_vectors 表）。
-# ChromaKnowledgeStore 与 factory 开关已删除（数据对账=0 + 评测 PASS 后收口，
-# 回滚 = git revert 133e6d5）；cs_router_index、vector_router 等裸 chromadb
-# 实例仍走 Chroma 本地目录，后续批次换模重嵌入。
+# === 向量库（pgvector，唯一实现）===
+# 主 RAG chunk 级 / doc 级 / 竞品市场索引 / 编排路由索引 → PgVectorKnowledgeStore
+# （rag_vectors 表）。ChromaKnowledgeStore / factory / 裸 chromadb 轨均已删除，
+# 回滚 = git revert 对应提交。
 VECTOR_PG_CONFIG = _pg_cfg("VECTOR_PGDATABASE", "agent_memory")
 # 表名前缀（测试隔离用；生产保持空串 → rag_vectors）
 VECTOR_PG_TABLE_PREFIX = os.getenv("VECTOR_PG_TABLE_PREFIX", "")

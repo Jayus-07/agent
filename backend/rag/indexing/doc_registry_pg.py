@@ -1,8 +1,7 @@
 """PostgresDocumentRegistry — doc_registry 的 PostgreSQL 连接层（R1/C19）。
 
 与 SQLite 版 `DocumentRegistry` 对外接口完全一致（同方法名、同参数、同返回结构），
-仅替换连接层与 SQL 方言。选型开关见 `backend/config/database.py::DOC_REGISTRY_BACKEND`
-（env `DOC_REGISTRY_BACKEND=postgres` 启用；默认 sqlite，即回滚开关）。
+仅替换连接层与 SQL 方言。PG 为唯一实现（2026-09-17 SQLite 轨删除）。
 
 方言映射（SQLite → PostgreSQL）：
   - `?` 占位符            → `%s`

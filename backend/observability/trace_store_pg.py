@@ -1,8 +1,7 @@
 """PostgresTraceStore — trace_store 的 PostgreSQL 连接层（2026-09-17 迁移计划 Batch A）。
 
 与 SQLite 版 `TraceStore` 对外接口完全一致（save/save_dict/get/list/list_since），
-仅替换连接层与 SQL 方言。引擎开关见 `backend/config/database.py::OBS_DB_BACKEND`
-（env `OBS_DB_BACKEND=postgres` 启用；默认 sqlite，即回滚开关）。
+仅替换连接层与 SQL 方言。PG 为唯一实现（2026-09-17 SQLite 轨删除）。
 工厂分发见 `trace_store.py::get_trace_store`。
 
 方言映射（SQLite → PostgreSQL）：

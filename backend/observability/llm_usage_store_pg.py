@@ -2,7 +2,7 @@
 
 与 SQLite 版 `LLMUsageStore` 对外接口完全一致（record/by_trace/list_calls/
 dashboard），仅替换连接层与 SQL 方言。引擎开关见
-`backend/config/database.py::OBS_DB_BACKEND`（env `OBS_DB_BACKEND=postgres`）。
+PG 为唯一实现（2026-09-17 SQLite 轨删除）。
 工厂分发见 `llm_usage_store.py::get_llm_usage_store`。
 
 方言映射要点：

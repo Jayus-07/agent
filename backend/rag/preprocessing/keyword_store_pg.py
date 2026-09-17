@@ -3,7 +3,7 @@
 与 SQLite 版 `KeywordRuleStore` 对外接口完全一致（get_active/get_rules_by_doc_type/
 get_keywords_for_doc_type/list_all/list_doc_types/list_categories/upsert/
 batch_upsert/delete/toggle + 60s 缓存），仅替换连接层与 SQL 方言。引擎开关见
-`backend/config/database.py::KEYWORD_STORE_BACKEND`（env `KEYWORD_STORE_BACKEND=postgres`）。
+PG 为唯一实现（2026-09-17 SQLite 轨删除）。
 工厂分发见 `keyword_store.py::get_keyword_store`。
 
 方言映射要点：

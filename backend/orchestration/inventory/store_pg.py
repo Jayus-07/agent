@@ -1,8 +1,7 @@
 """PostgresInventoryStore — 库存告警 4 表的 PostgreSQL 连接层（迁移计划 Batch C）。
 
 与 SQLite 版 `InventoryStore` 对外接口完全一致，仅替换连接层与 SQL 方言。
-选型开关见 `backend/config/database.py::INVENTORY_DB_BACKEND`
-（env `INVENTORY_DB_BACKEND=postgres` 启用；默认 sqlite，即回滚开关）。
+PG 为唯一实现（2026-09-17 SQLite 轨删除）。
 
 库归属：agent_business（业务属性，对 NL2SQL 可见；`agent_readonly` 已挂该库）。
 schema 与 backend/sql/migrations/015_orchestration_pg.sql 保持一致。

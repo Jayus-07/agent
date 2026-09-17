@@ -114,7 +114,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sync-vectordb",
         action="store_true",
-        help="将 knowledge_doc 直写 ChromaDB 向量库（data/chroma/ + data/doc_db/）",
+        help="将 knowledge_doc 直写 pgvector 向量库（rag_vectors 表，collection: chroma/doc_db）",
     )
     return parser
 

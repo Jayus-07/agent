@@ -2,7 +2,7 @@
 
 与 SQLite 版 `AnalyticsStore` 对外接口完全一致（save/save_dict/list/sessions/
 cost_summary/count/enabled），仅替换连接层与 SQL 方言。引擎开关见
-`backend/config/database.py::OBS_DB_BACKEND`（env `OBS_DB_BACKEND=postgres`）。
+PG 为唯一实现（2026-09-17 SQLite 轨删除）。
 工厂分发见 `analytics_store.py::get_analytics_store`。
 
 方言映射要点：

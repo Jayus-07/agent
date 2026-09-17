@@ -45,14 +45,11 @@ _op_logger: DocumentOperationLogger | None = None
 
 
 def _get_op_logger() -> DocumentOperationLogger:
-    """存储工厂：OPLOG_BACKEND=postgres 时返回 PG 实现（接口/语义一致）。"""
+    """存储工厂（2026-09-17 SQLite 轨删除，直连 PG 实现）。"""
     global _op_logger
     if _op_logger is None:
-        if os.getenv("OPLOG_BACKEND", "sqlite").strip().lower() == "postgres":
-            from backend.rag.indexing.operation_log_pg import PostgresDocumentOperationLogger
-            _op_logger = PostgresDocumentOperationLogger(DOC_OPERATION_LOG_PATH)
-        else:
-            _op_logger = DocumentOperationLogger(DOC_OPERATION_LOG_PATH)
+        from backend.rag.indexing.operation_log_pg import PostgresDocumentOperationLogger
+        _op_logger = PostgresDocumentOperationLogger(DOC_OPERATION_LOG_PATH)
     return _op_logger
 
 
