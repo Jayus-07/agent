@@ -209,6 +209,11 @@ rag_permission_filtered_total = Counter(
     "RAG 生成上下文中被文档级权限过滤剔除的越权证据条数（§4 权限范围消费方）",
 )
 
+rag_version_filtered_total = Counter(
+    "rag_version_filtered_total",
+    "RAG 生成上下文中被版本窗口过滤剔除的证据条数（§6 版本治理消费方，R4）",
+)
+
 
 feedback_total = Counter(
     "feedback_total",

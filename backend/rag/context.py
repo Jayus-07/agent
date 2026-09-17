@@ -42,6 +42,9 @@ class RagRequestState:
     metadata_filter: dict = field(default_factory=dict)
     intent_label: str = ""
     query: str = ""
+    # §6 版本治理（R4）：as_of/current/all_versions 检索期 enforcement 的
+    # 请求侧输入；空 dict = any（不约束）。裁决见 backend/rag/versioning.py
+    version_requirement: dict = field(default_factory=dict)
 
     # ── 身份（权威上下文实例，组合借读）──
     # 图路径：RequestContext.bind() 注入 graph 级实例；直连路径（CS/eval/

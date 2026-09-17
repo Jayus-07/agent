@@ -242,14 +242,16 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     p for p in (_annotation.get("permission_scope") or ["general"])
                     if p != "general"
                 }
-                # §4 版本要求消费方：any → 无约束；as_of/current/all_versions
-                # 的检索期 enforcement 依赖 R4 版本治理字段（registry 尚无
-                # version_id/effective_from 列），本轮先校验契约并透传 trace。
+                # §4 版本要求消费方（R4）：any → 无约束；as_of/current/all_versions
+                # 由 backend/rag/versioning.py 在检索证据上做窗口裁决
+                # （chain 生成侧过滤 + runner 判分剔除双路一致）。
                 _vreq = _annotation.get("version_requirement") or {"type": "any"}
                 if _vreq.get("type") not in ("any", "as_of", "current", "all_versions"):
                     logger.warning(
                         f"[RAG eval] {case.id} version_requirement.type 非法: {_vreq}"
                     )
+                from backend.rag.versioning import normalize_requirement
+                _vreq_norm = normalize_requirement(_vreq)
 
                 if ablation_mode != "full":
                     retriever = build_ablation_retriever(
@@ -282,11 +284,12 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         metadata_filter=mf,
                         intent_label="",
                         query=question,
+                        version_requirement=_vreq,
                     )
                     set_context(ctx)
                 else:
                     from backend.rag.context import RagRequestState, set_context
-                    set_context(RagRequestState())
+                    set_context(RagRequestState(version_requirement=_vreq))
 
                 # === Stage 1: Doc 级检索 ===
                 doc_filter = {}
@@ -361,6 +364,9 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 from backend.rag.permissions import (
                     is_accessible, required_permissions,
                 )
+                from backend.rag.versioning import (
+                    candidate_versions, is_version_visible, version_conflict_info,
+                )
                 actual_doc_strs = []
                 seen = set()
                 details = []
@@ -374,7 +380,11 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     # 泄漏进答案），但保留在 details 里供 trace 审计
                     _perm_ok = is_accessible(doc.metadata, _user_perms)
                     _req = sorted(required_permissions(doc.metadata))
-                    if _perm_ok and identifier not in seen:
+                    # §6 版本裁决（R4）：生效窗口不匹配的版本链证据同样剔除出
+                    # 判分（as_of 问 V2 时 V1 的金额不得计入召回），保留在
+                    # details 供留痕。any/all_versions 恒可见。
+                    _v_ok = is_version_visible(doc.metadata, _vreq_norm)
+                    if _perm_ok and _v_ok and identifier not in seen:
                         seen.add(identifier)
                         actual_doc_strs.append(identifier)
 
@@ -386,11 +396,17 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         "department": doc.metadata.get("department", ""),
                         "permission_scope": _req or ["general"],
                         "permission_denied": not _perm_ok,
+                        "version_id": doc.metadata.get("version_id", ""),
+                        "version_visible": _v_ok,
                         "rerank_score": doc.metadata.get("rerank_score"),
                         "source": source,
                         "snippet": doc.page_content[:200].replace("\n", " "),
                         "page_content": doc.page_content,
                     })
+
+                # 版本候选与冲突留证（§6 第 4/5 条，取自未过滤的原始检索集）
+                _v_candidates = candidate_versions([d.metadata for d in retrieved_docs])
+                _v_conflicts = version_conflict_info([d.metadata for d in retrieved_docs])
 
                 # 越权证据剔除：Top-1（检索器排序首位）越权 → 权限拒答
                 # （确定性判定，与置信度阈值无关——用户问的是其无权见的文档，
@@ -399,6 +415,14 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 _denied_details = [d for d in details if d.get("permission_denied")]
                 if _denied_details:
                     details = [d for d in details if not d.get("permission_denied")]
+
+                # 版本窗口剔除（§6 R4）：Top-1 窗口不匹配 → 版本拒答
+                # （缺失不猜：as_of/current 要的版本不在候选里就拒答，
+                # 不允许邻近版本的数值冒充答案）；其余不匹配块剔除后照常分级。
+                _v_top_denied = bool(details) and details[0].get("version_visible") is False
+                _v_denied_details = [d for d in details if d.get("version_visible") is False]
+                if _v_denied_details:
+                    details = [d for d in details if d.get("version_visible") is not False]
 
                 doc_counter = Counter(d["doc_id"] for d in details if d["doc_id"])
                 total = len(details)
@@ -692,6 +716,13 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     confidence = "none"
                     reject_gate = "permission"
                     reject_reason = "permission"
+                elif _v_top_denied or (not details and _v_denied_details):
+                    # §6 版本拒答（R4）：Top-1 窗口不匹配，或证据被版本过滤后
+                    # 全空（缺失不猜——as_of/current 要的版本不在候选里就
+                    # 拒答，不允许邻近版本的数值冒充答案）
+                    confidence = "none"
+                    reject_gate = "version"
+                    reject_reason = "version_not_found"
                 elif not details:
                     confidence = "none"
                     reject_gate = "retrieval"
@@ -946,8 +977,12 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                             # §4 权限范围消费方留痕：请求者持有权限 + 越权证据数
                             "user_permissions": sorted(_user_perms) or ["general"],
                             "permission_denied_count": len(_denied_details),
-                            # §4 版本要求：契约已校验，检索期 enforcement 待 R4
+                            # §6 版本治理消费方留痕（R4）：要求 + 窗口剔除数 +
+                            # 链候选 + 冲突留证（缺失不猜 → gate=version）
                             "version_requirement": _vreq,
+                            "version_filtered_count": len(_v_denied_details),
+                            "version_candidates": _v_candidates,
+                            "version_conflicts": _v_conflicts,
                         },
                         "trace": {
                             "trace_id": trace.id,

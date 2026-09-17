@@ -365,6 +365,70 @@ class RAGChain:
                     input_dict["context"] = docs
             except Exception:  # noqa: BLE001 — 权限过滤故障不得中断主流程
                 logger.debug("[RAGChain] 权限过滤异常，退化为不过滤", exc_info=True)
+            # ── 版本窗口过滤（§6 版本检索消费方，2026-09-17 R4）──
+            # 请求声明 as_of/current/all_versions 时，生效窗口不匹配的
+            # 版本链文档证据不得进入生成上下文（防旧版本答案冒充现行）。
+            # 非版本链文档恒可见；any（缺省）行为完全不变。确定性计算。
+            try:
+                from backend.rag.context import get_context as _gc
+                from backend.rag.versioning import (
+                    candidate_versions,
+                    is_version_visible,
+                    normalize_requirement,
+                    version_conflict_info,
+                )
+                try:
+                    from backend.observability.metrics import rag_version_filtered_total
+                except Exception:  # noqa: BLE001 — 指标缺失不阻断主流程
+                    class _NopV:
+                        def inc(self, _n=1):
+                            pass
+                    rag_version_filtered_total = _NopV()
+                _vreq = normalize_requirement(_gc().version_requirement)
+                if _vreq["type"] != "any":
+                    _metas = [d.metadata for d in docs]
+                    _v_allowed = [
+                        d for d in docs if is_version_visible(d.metadata, _vreq)
+                    ]
+                    _v_denied = len(docs) - len(_v_allowed)
+                    if _v_denied:
+                        logger.info(
+                            f"[RAGChain] 版本过滤: 剔除 {_v_denied}/{len(docs)} 条窗口不匹配证据"
+                            f"(requirement={_vreq['type']}"
+                            f"{':' + _vreq['date'] if _vreq['date'] else ''})"
+                        )
+                        rag_version_filtered_total.inc(_v_denied)
+                        docs = _v_allowed
+                        input_dict["context"] = docs
+                    # 跨文档多候选/冲突留证（§6 第 4/5 条）：trace 带候选清单
+                    # 与冲突描述，rejection 消费方（评测 runner）同源可读
+                    _v_event_data = {
+                        "requirement": _vreq,
+                        "candidates": candidate_versions([d.metadata for d in docs]),
+                        "conflicts": version_conflict_info([d.metadata for d in docs]),
+                        "filtered_out": _v_denied,
+                    }
+                    try:
+                        from backend.observability.tracer import trace_collector as _tc
+                        _v_trace = _tc.current()
+                        _v_span = None
+                        if _v_trace is not None and _v_trace.spans:
+                            for _sp in reversed(_v_trace.spans):
+                                if not _sp.end_time:
+                                    _v_span = _sp
+                                    break
+                            _v_span = _v_span or _v_trace.spans[-1]
+                        if _v_span is not None:
+                            _tc.add_event(
+                                _v_span, "version_filter", "info",
+                                f"requirement={_vreq['type']} kept={len(docs)} "
+                                f"candidates={len(_v_event_data['candidates'])}",
+                                data=_v_event_data,
+                            )
+                    except Exception:  # noqa: BLE001 — trace 故障不影响主流程
+                        logger.debug("[RAGChain] version_filter 事件写入失败", exc_info=True)
+            except Exception:  # noqa: BLE001 — 版本过滤故障不得中断主流程
+                logger.debug("[RAGChain] 版本过滤异常，退化为不过滤", exc_info=True)
             # ── 证据 token 预算（P3）：rerank 后输入顺序即相关性顺序，从头保留，
             # 超出预算的尾部文档整体丢弃（长文档场景仅靠 top_k 条数会挤爆上下文）。
             # 首条文档即使超预算也保留（保证至少有证据可引用）。
