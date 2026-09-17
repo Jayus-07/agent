@@ -37,12 +37,13 @@ export default function CSStatusBar({ currentStatus, isLoading, intentDetected, 
   if (!statusText) return null
 
   return (
-    <div className="px-4 py-1.5 border-t border-border-subtle bg-surface-base">
-      <div className="max-w-3xl mx-auto flex items-center gap-2">
+    // shrink-0：状态栏是抽屉固定底栏之一，避免被内容区挤压变形
+    <div className="shrink-0 px-4 py-1.5 border-t border-border-subtle bg-surface-base">
+      <div className="flex items-center gap-2">
         {isLoading && (
-          <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+          <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse shrink-0" />
         )}
-        <span className={`text-[11px] ${statusColor}`}>{statusText}</span>
+        <span className={`text-[11px] ${statusColor} truncate`}>{statusText}</span>
       </div>
     </div>
   )

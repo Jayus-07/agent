@@ -23,6 +23,10 @@ export default function ProgressCards({ onStop }: { onStop: () => void }) {
   const streamUsage = useChatStore((s) => s.streamUsage)
   const sessions = useChatStore((s) => s.sessions)
   const currentId = useChatStore((s) => s.currentId)
+  // 当前宏观节点（原 StreamingStatusLine 的数据源，2026-09-17 合并为这一处状态行）
+  const currentStatus = useChatStore((s) => s.currentStatus)
+  const nodeLabels = useChatStore((s) => s.nodeLabels)
+  const statusLabel = nodeLabels[currentStatus] || currentStatus || '生成回复中'
 
   const consumed = useMemo(() => {
     const messages = sessions.find((s) => s.id === currentId)?.messages ?? []
@@ -39,11 +43,11 @@ export default function ProgressCards({ onStop }: { onStop: () => void }) {
       <TodoCard />
       <FileOpsCard />
 
-      {/* 运行状态行（流内，WorkBuddy 式） */}
+      {/* 运行状态行（流内唯一状态提示，WorkBuddy 式） */}
       <div className="flex items-center gap-2 pt-0.5">
-        <span className="flex items-center gap-1.5 text-xs text-text-secondary">
+        <span key={statusLabel} className="flex items-center gap-1.5 text-xs text-text-secondary animate-fade-in">
           <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-          生成回复中
+          {statusLabel}
         </span>
         {shown > 0 && (
           <span className="text-xs text-text-muted tabular-nums">

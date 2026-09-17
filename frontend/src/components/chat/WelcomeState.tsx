@@ -1,85 +1,55 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { Sparkles } from 'lucide-react'
-import { getCachedUser } from '@/lib/auth'
+/**
+ * WelcomeState — 空状态欢迎页（WorkBuddy 工作台式复刻）
+ *
+ * 结构：大标题「Agent AI，我帮你」+ 能力胶囊行（点击回填输入框发送）。
+ * 输入框由 ChatView 紧随其后渲染，胶囊行与输入框视觉上成组（对齐 WorkBuddy：
+ * 标题 → 能力胶囊 → 大输入框）。问候语/日期/说明文案让位给 WorkBuddy 式简洁。
+ */
+import { BookOpen, Database, FileText, LineChart } from 'lucide-react'
 
 const EXAMPLES = [
-  { label: '数据查询', text: '查询上个月销量前 10 的商品' },
-  { label: '知识检索', text: '退款审核时间是多少？' },
-  { label: '生成报告', text: '分析最近一个月价格最高商品并生成报告' },
-  { label: '复杂分析', text: '对比各部门绩效，给出改进建议' },
+  { label: '数据查询', text: '查询上个月销量前 10 的商品', Icon: Database },
+  { label: '知识检索', text: '退款审核时间是多少？', Icon: BookOpen },
+  { label: '生成报告', text: '分析最近一个月价格最高商品并生成报告', Icon: FileText },
+  { label: '复杂分析', text: '对比各部门绩效，给出改进建议', Icon: LineChart },
 ]
 
 interface Props {
   onExampleClick?: (question: string) => void
 }
 
-/** 时段问候语（挂载后计算：new Date() 在 SSR 与客户端结果不同，直接渲染会水合不一致） */
-function greeting(): string {
-  const h = new Date().getHours()
-  if (h < 6) return '夜深了'
-  if (h < 12) return '早上好'
-  if (h < 14) return '中午好'
-  if (h < 18) return '下午好'
-  return '晚上好'
-}
-
-function today(): string {
-  return new Date().toLocaleDateString('zh-CN', {
-    year: 'numeric', month: 'long', day: 'numeric', weekday: 'long',
-  })
-}
-
-/** 登录用户显示名：realName 优先，回退 username；未登录/无信息则不出现在欢迎语里 */
-function displayName(): string {
-  const info = (getCachedUser() ?? {}) as { realName?: string; username?: string }
-  return info.realName || info.username || ''
-}
-
 export default function EmptyState({ onExampleClick }: Props) {
-  const [welcome, setWelcome] = useState<string | null>(null)
-
-  useEffect(() => {
-    const name = displayName()
-    setWelcome(name ? `${greeting()}，${name}` : greeting())
-  }, [])
-
   return (
-    <div className="flex flex-col items-center justify-center h-full px-6 py-16">
-      <div className="w-14 h-14 rounded-2xl bg-accent/8 flex items-center justify-center mb-6">
-        <Sparkles size={30} className="text-accent" strokeWidth={1.5} />
-      </div>
-
-      {/* 欢迎语：时段问候 + 用户名 + 日期（挂载后填充，避免水合不一致） */}
-      <div className="mb-5 text-center">
-        <p className="text-[13px] text-text-muted">
-          {welcome ?? ''}
-        </p>
-        <h1 className="text-xl font-semibold text-text-primary mt-1.5 tracking-tight">
-          描述你要完成的任务
+    // 本组件由 ChatView 放进「欢迎区 + 输入框」的居中组内，自身不再承担垂直居中/
+    // 撑满高度（外层用 my-auto 整体居中）；my-auto 兼作对话态下超高时的滚动兜底
+    <div className="flex flex-col items-center py-2">
+      <div className="w-full max-w-3xl my-auto flex flex-col items-center">
+        {/* 大标题（WorkBuddy 式：一句口号，不配图标与副文案） */}
+        <h1 className="text-[26px] sm:text-[30px] font-bold text-text-primary tracking-tight text-center">
+          Agent AI，我帮你
         </h1>
-        <p className="text-[13px] text-text-muted mt-2.5 max-w-md leading-relaxed">
-          {welcome ? `${today()} · ` : ''}AI 自动拆解任务，并行调用数据查询、知识检索与报告引擎，产出可直接使用的结论
-        </p>
-      </div>
 
-      <div className="grid gap-2.5 w-full max-w-2xl">
-        {EXAMPLES.map((ex) => (
-          <button
-            key={ex.text}
-            onClick={() => onExampleClick?.(ex.text)}
-            className="group text-left px-5 py-3 rounded-xl bg-surface-base border border-border-subtle
-              text-sm text-text-secondary hover:text-text-primary hover:border-accent/30 hover:shadow-card
-              hover:-translate-y-px transition-all duration-200"
-          >
-            <span className="inline-block text-accent text-xs font-medium mb-1 bg-accent/5 px-2 py-0.5 rounded-full">
-              {ex.label}
-            </span>
-            <br />
-            <span className="text-text-primary">&ldquo;{ex.text}&rdquo;</span>
-          </button>
-        ))}
+        {/* 能力胶囊行：与下方输入框成组；点击发送完整示例问题，hover 显示全文 */}
+        <div className="flex flex-wrap justify-center gap-2 mt-7">
+          {EXAMPLES.map(({ label, text, Icon }) => (
+            <button
+              key={text}
+              onClick={() => onExampleClick?.(text)}
+              title={text}
+              aria-label={`示例：${text}`}
+              className="flex items-center gap-1.5 rounded-full border border-border-subtle bg-surface-base px-3.5 py-1.5
+                text-xs text-text-secondary shadow-[0_1px_2px_rgba(0,0,0,0.03)]
+                hover:text-accent hover:border-accent/30 hover:bg-accent/[0.04]
+                focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent/40
+                transition-all duration-200"
+            >
+              <Icon size={13} aria-hidden />
+              <span>{label}</span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )

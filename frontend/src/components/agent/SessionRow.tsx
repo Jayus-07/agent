@@ -7,7 +7,7 @@
  * 宽度自适应：外框不设固定宽度，由父容器决定；hover 操作按钮绝对定位在右侧。
  */
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, MessageSquare, Pencil, Trash2 } from 'lucide-react'
+import { Loader2, Pencil, Trash2 } from 'lucide-react'
 import type { SessionMeta } from '@/api/memory'
 import { parseContextSummary } from '@/lib/context-summary'
 import { formatTime } from '@/lib/session-groups'
@@ -77,17 +77,15 @@ export default function SessionRow({
         <button
           ref={activeRef}
           onClick={onSelect}
+          title={`${s.title}（${s.message_count} 条消息）`}
           className={`w-full text-left px-3 py-1.5 pr-14 rounded-lg transition-colors ${
             isActive ? 'text-accent' : 'text-text-secondary'
           }`}
         >
-          <div className="text-[13px] font-medium truncate">{s.title}</div>
-          <div className="flex items-center gap-2 mt-0.5 text-[10px] text-text-muted">
-            <span className="flex items-center gap-1">
-              <MessageSquare size={10} /> {s.message_count}
-            </span>
-            {ctx?.turns ? <span>{ctx.turns} 轮</span> : null}
-            <span className="ml-auto flex items-center gap-1">
+          {/* WorkBuddy 式单行：标题截断 + 右侧相对时间 */}
+          <div className="flex items-baseline gap-2">
+            <span className="flex-1 min-w-0 text-[13px] font-medium truncate">{s.title}</span>
+            <span className="shrink-0 text-[10px] text-text-muted">
               {running ? (
                 <span className="flex items-center gap-1 text-accent" title="生成中">
                   <Loader2 size={10} className="animate-spin" />
@@ -99,7 +97,7 @@ export default function SessionRow({
             </span>
           </div>
           {ctx && (ctx.sql_results || ctx.rag_docs) && (
-            <div className="flex items-center gap-1.5 mt-1 text-[10px]">
+            <div className="flex items-center gap-1.5 mt-0.5 text-[10px]">
               {ctx.sql_results ? <span className="text-accent">SQL×{ctx.sql_results}</span> : null}
               {ctx.rag_docs ? <span className="text-green-500">RAG×{ctx.rag_docs}</span> : null}
             </div>
@@ -109,7 +107,7 @@ export default function SessionRow({
 
       {/* hover 操作按钮（编辑态下隐藏，避免遮挡输入框） */}
       {!editing && (
-        <div className="absolute right-2 top-2 hidden group-hover:flex items-center gap-0.5">
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-0.5">
           <button
             onClick={(e) => {
               e.stopPropagation()

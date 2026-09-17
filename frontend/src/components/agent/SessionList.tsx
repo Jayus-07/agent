@@ -35,12 +35,36 @@ export default function SessionList({ keyword = '', refreshKey = 0, onRefreshing
   const sessionsVersion = useChatStore((s) => s.sessionsVersion)
   const currentId = useChatStore((s) => s.currentId)
   const isStreaming = useChatStore((s) => s.isLoading)
+  // 本地会话实体（用于进行中会话的乐观插入）
+  const storeSessions = useChatStore((s) => s.sessions)
   const router = useRouter()
 
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+
+  // 乐观插入：新会话要等后端 end_turn 持久化 + 1.2s 后刷新才会出现在接口列表里，
+  // 期间发送第一条消息时侧边栏仍是"暂无任务记录"。这里把 store 里当前会话
+  // （已有消息、且尚未出现在远端列表）合并进列表头部，流结束后被远端数据自然替换。
+  const liveMeta = useMemo<SessionMeta | null>(() => {
+    const cur = storeSessions.find((s) => s.id === currentId)
+    if (!cur || cur.messages.length === 0) return null
+    return {
+      session_id: cur.id,
+      title: cur.title,
+      message_count: cur.messages.length,
+      created_at: new Date(cur.createdAt).toISOString(),
+      updated_at: new Date(cur.updatedAt).toISOString(),
+      context_summary: null,
+    }
+  }, [storeSessions, currentId])
+
+  const mergedSessions = useMemo(() => {
+    if (!liveMeta) return sessions
+    if (sessions.some((s) => s.session_id === liveMeta.session_id)) return sessions
+    return [liveMeta, ...sessions]
+  }, [sessions, liveMeta])
 
   // 回调放 ref，避免父组件传内联函数时把 refresh 的引用打穿（导致重复拉取）
   const refreshingCbRef = useRef(onRefreshingChange)
@@ -121,7 +145,7 @@ export default function SessionList({ keyword = '', refreshKey = 0, onRefreshing
     }
   }
 
-  const filtered = useMemo(() => filterByKeyword(sessions, keyword), [sessions, keyword])
+  const filtered = useMemo(() => filterByKeyword(mergedSessions, keyword), [mergedSessions, keyword])
   const groups = useMemo(() => groupByTime(filtered), [filtered])
 
   if (loading) {

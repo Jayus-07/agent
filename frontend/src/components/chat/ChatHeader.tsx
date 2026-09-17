@@ -6,7 +6,7 @@
  * 模型切换已下移到输入框工具栏（ComposerToolbar），此处不再重复。
  * 全局控制台导航在 /agent 下不渲染（见 app/layout.tsx）。
  */
-import { PanelLeft, PanelLeftClose, Plus, Share2 } from 'lucide-react'
+import { Headphones, PanelLeft, PanelLeftClose, Plus, Share2 } from 'lucide-react'
 import { useToast } from '@/components/shared/Toast'
 
 interface Props {
@@ -16,10 +16,12 @@ interface Props {
   onNewTask?: () => void
   /** 当前会话 id，用于生成分享深链 */
   sessionId?: string
+  /** 打开智能客服抽屉（WorkBuddy 式右上胶囊入口；不传则不渲染） */
+  onOpenCS?: () => void
 }
 
 export default function ChatHeader({
-  title, sidebarVisible, onToggleSidebar, onNewTask, sessionId,
+  title, sidebarVisible, onToggleSidebar, onNewTask, sessionId, onOpenCS,
 }: Props) {
   const toast = useToast()
 
@@ -50,6 +52,23 @@ export default function ChatHeader({
       <h1 className="flex-1 min-w-0 truncate text-[15px] font-semibold text-text-primary" title={title}>
         {title}
       </h1>
+
+      {/* 智能客服：WorkBuddy 式右上角白底胶囊入口（不遮挡内容，任何会话状态均可见） */}
+      {onOpenCS && (
+        <button
+          onClick={onOpenCS}
+          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border-subtle bg-white
+            text-xs text-text-secondary shadow-[0_1px_2px_rgba(0,0,0,0.04)]
+            hover:text-text-primary hover:border-black/15 hover:shadow
+            focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent/40
+            transition-colors"
+          aria-label="打开智能客服"
+          title="智能客服"
+        >
+          <Headphones size={13} />
+          智能客服
+        </button>
+      )}
 
       {onNewTask && (
         <button

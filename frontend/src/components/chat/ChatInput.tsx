@@ -10,9 +10,14 @@ import { useState, useRef, useEffect, KeyboardEvent } from 'react'
 import { getSelectedDepartment, setSelectedDepartment } from '@/lib/department'
 import ComposerToolbar from '@/components/agent/ComposerToolbar'
 
-interface Props { onSend: (text: string) => void; isLoading: boolean }
+interface Props {
+  onSend: (text: string) => void
+  isLoading: boolean
+  /** 嵌在空状态居中组内（而非钉在会话底部）：去掉向上渐隐、收紧上下边距 */
+  embedded?: boolean
+}
 
-export default function ChatInput({ onSend, isLoading }: Props) {
+export default function ChatInput({ onSend, isLoading, embedded = false }: Props) {
   const [input, setInput] = useState('')
   const [department, setDepartment] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -43,23 +48,25 @@ export default function ChatInput({ onSend, isLoading }: Props) {
   }
 
   return (
-    <div className="shrink-0 bg-gradient-to-t from-surface-root via-surface-root to-transparent">
-      <div className="max-w-4xl mx-auto px-4 pb-4 pt-2">
+    <div className={embedded ? '' : 'shrink-0 bg-gradient-to-t from-surface-root via-surface-root to-transparent'}>
+      {/* embedded：整组（欢迎区+输入框）由外层 my-auto 居中，此处只留必要呼吸位，
+          pt/pb 对称以免把居中组往下压 */}
+      <div className={`max-w-3xl mx-auto px-4 ${embedded ? 'pt-5 pb-5' : 'pb-4 pt-2'}`}>
         <div className="bg-surface-base rounded-2xl px-4 pt-3 pb-2
           border border-border-subtle shadow-sm
           focus-within:border-accent/40 focus-within:shadow-input
           transition-all duration-250">
-          {/* 上段：文本输入 */}
+          {/* 上段：文本输入（min-h 让空态输入框更舒展，WorkBuddy 式两行视觉高度） */}
           <textarea
             ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="描述你要完成的任务…"
+            placeholder="今天帮你做点什么？"
             rows={1}
             disabled={isLoading}
             className="w-full bg-transparent resize-none outline-none text-sm text-text-primary
-              placeholder:text-text-muted max-h-[200px] disabled:opacity-40 leading-relaxed"
+              placeholder:text-text-muted min-h-[52px] max-h-[200px] disabled:opacity-40 leading-relaxed"
           />
 
           {/* 下段：工具栏 */}

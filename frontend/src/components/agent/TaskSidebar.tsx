@@ -67,15 +67,17 @@ export default function TaskSidebar({ onCollapse, onNewTask }: Props) {
         </div>
       </div>
 
-      {/* 新建任务（主按钮） */}
+      {/* 新建任务（主按钮，WorkBuddy 式白底描边 + 圆圈加号，不再用大色块） */}
       <div className="px-3 pb-2 shrink-0">
         <button
           onClick={onNewTask}
-          className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-accent px-3 py-1.5
-            text-[13px] font-medium text-white shadow-sm
-            hover:bg-accent-hover active:scale-[0.99] transition-all duration-200"
+          className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-black/10 bg-white
+            px-3 py-1.5 text-[13px] font-medium text-text-primary shadow-[0_1px_2px_rgba(0,0,0,0.04)]
+            hover:bg-black/[0.03] hover:border-black/15 active:scale-[0.99] transition-all duration-200"
         >
-          <Plus size={14} />
+          <span className="w-4 h-4 rounded-full border border-current flex items-center justify-center shrink-0">
+            <Plus size={10} strokeWidth={2.5} />
+          </span>
           新建任务
         </button>
       </div>

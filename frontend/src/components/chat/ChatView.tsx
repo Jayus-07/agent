@@ -112,17 +112,25 @@ export default function ChatView() {
       {/* Messages —— Agent 进度卡片（时间线/任务清单/产出文件）已嵌入消息流：
           最后一轮提问之下、回答之上，由 MessageList 控制，流结束自动收起 */}
 
-      {/* Messages */}
-      <div ref={contentRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
-        {messages.length === 0 ? (
-          <WelcomeState onExampleClick={send} />
-        ) : (
-          <MessageList messages={messages} isLoading={isLoading} sessionId={currentId} onStop={stopStream} />
-        )}
-        <div ref={bottomRef} />
-      </div>
-
-      <ChatInput onSend={send} isLoading={isLoading} />
+      {/* 空状态：欢迎区 + 输入框作为【同一个居中组】垂直居中（对齐 WorkBuddy 工作台）——
+          若沿用「输入框置底」的对话态布局，欢迎区在剩余空间里居中会让两者之间
+          拉出一大片空白。此处两者同处一个 flex 列，用 my-auto 整体居中。 */}
+      {messages.length === 0 ? (
+        <div className="flex-1 min-h-0 flex flex-col px-6 py-6">
+          <div className="w-full my-auto">
+            <WelcomeState onExampleClick={send} />
+            <ChatInput onSend={send} isLoading={isLoading} embedded />
+          </div>
+        </div>
+      ) : (
+        <>
+          <div ref={contentRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
+            <MessageList messages={messages} isLoading={isLoading} sessionId={currentId} onStop={stopStream} />
+            <div ref={bottomRef} />
+          </div>
+          <ChatInput onSend={send} isLoading={isLoading} />
+        </>
+      )}
     </div>
   )
 }

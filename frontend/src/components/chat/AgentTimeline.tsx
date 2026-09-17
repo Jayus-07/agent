@@ -30,8 +30,12 @@ interface TimelineNode {
   hasError: boolean              // 是否有 level=error 的 log
 }
 
-/** 从 SSE 事件流派生 TimelineNode[] */
-function buildTimeline(events: SSEStreamEvent[], nodeLabels: Record<string, string>, isLoading: boolean): TimelineNode[] {
+/** 从 SSE 事件流派生 TimelineNode[]
+ *  totalElapsedHint：完成态回看时由 trace.elapsed 传入的总耗时（秒）。
+ *  末节点没有"下一个节点开始时间"可作终点，此前用当前时钟补 → 回看模式下
+ *  末节点耗时随每次重渲染无限增长，且与 CompletionLine 的总耗时口径不一致。
+ *  现改为：回看态用 hint 反推（末节点 = hint − 距首节点的偏移），生成态仍用当前时钟。 */
+function buildTimeline(events: SSEStreamEvent[], nodeLabels: Record<string, string>, isLoading: boolean, totalElapsedHint?: number): TimelineNode[] {
   // 按出现顺序收集所有 status 节点
   const nodeOrder: { name: string; ts: number }[] = []
   for (const evt of events) {
@@ -61,7 +65,16 @@ function buildTimeline(events: SSEStreamEvent[], nodeLabels: Record<string, stri
     const isLast = i === nodeOrder.length - 1
     const isRunning = isLast && isLoading
     const endTs = isRunning ? null : nextTs
-    const elapsedSec = endTs !== null ? Math.max(0, endTs - n.ts) : Math.max(0, nowSec - n.ts)
+    let elapsedSec: number
+    if (endTs !== null) {
+      elapsedSec = Math.max(0, endTs - n.ts)
+    } else if (isLast && !isLoading && totalElapsedHint && totalElapsedHint > 0) {
+      // 完成态回看：末节点终点用 hint 反推，耗时定格且与总耗时口径一致
+      elapsedSec = Math.max(0, totalElapsedHint - (n.ts - nodeOrder[0].ts))
+    } else {
+      // 生成中（running）：实时用当前时钟
+      elapsedSec = Math.max(0, nowSec - n.ts)
+    }
     const logs = logsByNode[n.name] || []
     const hasError = logs.some((l) => l.level === 'error')
 
@@ -84,9 +97,11 @@ interface TimelineProps {
   /** 外部数据源（完成态回看：传入 done 时固化的快照）；缺省订阅 store（生成中） */
   events?: SSEStreamEvent[]
   nodeLabels?: Record<string, string>
+  /** 完成态回看的总耗时（秒，来自 trace.elapsed）：末节点耗时据此定格 */
+  totalElapsedHint?: number
 }
 
-export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, events: eventsProp, nodeLabels: labelsProp }: TimelineProps) {
+export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, events: eventsProp, nodeLabels: labelsProp, totalElapsedHint }: TimelineProps) {
   const [expandedNode, setExpandedNode] = useState<string | null>(null)
   const [showLogs, setShowLogs] = useState(false)
 
@@ -98,7 +113,10 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
   const events = eventsProp ?? storeEvents
   const nodeLabels = labelsProp ?? storeLabels
 
-  const nodes = useMemo(() => buildTimeline(events, nodeLabels, isLoading), [events, nodeLabels, isLoading])
+  const nodes = useMemo(
+    () => buildTimeline(events, nodeLabels, isLoading, totalElapsedHint),
+    [events, nodeLabels, isLoading, totalElapsedHint],
+  )
   const doneCount = nodes.filter((n) => n.status === 'done' || n.status === 'error').length
   const totalElapsed = nodes.reduce((s, n) => s + n.elapsedSec, 0)
   const totalLogs = nodes.reduce((s, n) => s + n.logs.length, 0)
@@ -116,8 +134,10 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
     )
   }
 
-  // 空态：未开始
+  // 空态：区分「已发送、等待首个节点事件」与「未发送」——
+  // 此前 isLoading 时也显示"发送问题后…"，看起来像问题没发出去（2026-09-17 修复）
   if (nodes.length === 0) {
+    const waiting = isLoading
     return (
       <div className="border border-border-subtle rounded-xl bg-surface-elevated overflow-hidden">
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-subtle">
@@ -126,8 +146,15 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
             Agent 执行时间线
           </div>
         </div>
-        <div className="px-4 py-6 text-center text-[11px] text-text-muted">
-          发送问题后，将在此展示 LangGraph 多 Agent 执行过程
+        <div className={`px-4 py-6 text-center text-[11px] ${waiting ? 'text-text-secondary' : 'text-text-muted'}`}>
+          {waiting ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+              正在规划执行步骤，请稍候…
+            </span>
+          ) : (
+            '发送问题后，将在此展示 LangGraph 多 Agent 执行过程'
+          )}
         </div>
       </div>
     )

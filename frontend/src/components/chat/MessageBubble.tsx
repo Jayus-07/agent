@@ -46,20 +46,10 @@ function useChatThinking(): { text: string; seconds: number | null } {
 }
 
 /**
- * 流式阶段状态行 —— 参考通用 AI 对话交互：进度提示置于回复顶部
- * （问题气泡之下、流式正文之上），阶段标签来自 meta 下发的 nodeLabels。
+ * 流式阶段不再渲染独立状态行 —— 状态提示统一由消息流内的 ProgressCards
+ * 「{当前节点} · 已消耗 N tokens [停止生成]」一行承载，避免同一屏出现
+ * 「生成回复中」「思考中」两条互相独立的状态（2026-09-17 修复）。
  */
-function StreamingStatusLine() {
-  const currentStatus = useChatStore((s) => s.currentStatus)
-  const nodeLabels = useChatStore((s) => s.nodeLabels)
-  const label = nodeLabels[currentStatus] || currentStatus || '思考中'
-  return (
-    <div key={currentStatus} className="flex items-center gap-1.5 mb-1.5 text-xs text-text-muted animate-fade-in">
-      <span>{label}</span>
-      <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent/50 animate-pulse" />
-    </div>
-  )
-}
 
 interface MessageBubbleProps {
   message: Message
@@ -97,7 +87,6 @@ function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubb
           <div>
             {isCurrentStreaming ? (
               <div>
-                <StreamingStatusLine />
                 <StreamingThinking />
                 <StreamingContent useDeltaText={useChatDelta} hideDots />
               </div>

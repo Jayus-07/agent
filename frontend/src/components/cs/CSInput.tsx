@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, type KeyboardEvent } from 'react'
-import { Send, Square, Headphones } from 'lucide-react'
+import { Send, Square } from 'lucide-react'
 
 interface Props {
   onSend: (text: string) => void
@@ -36,9 +36,11 @@ export default function CSInput({ onSend, onStop, isLoading }: Props) {
   }
 
   return (
-    <div className="border-t border-border-subtle bg-surface-base px-4 py-3">
-      <div className="max-w-3xl mx-auto flex items-end gap-2">
-        <div className="flex-1 relative">
+    <div className="shrink-0 border-t border-border-subtle bg-surface-base px-4 py-3">
+      {/* 输入框独占整行：原布局在右侧挂了「AI 客服」标签，440px 抽屉内会把
+          输入框挤窄、窄屏下标签自身还会换行；抽屉头部已标明身份，此处移除 */}
+      <div className="flex items-end gap-2">
+        <div className="flex-1 min-w-0 relative">
           <textarea
             ref={textareaRef}
             value={text}
@@ -71,10 +73,6 @@ export default function CSInput({ onSend, onStop, isLoading }: Props) {
               </button>
             )}
           </div>
-        </div>
-        <div className="flex items-center gap-1.5 pb-2">
-          <Headphones size={14} className="text-text-muted" />
-          <span className="text-[10px] text-text-muted">AI 客服</span>
         </div>
       </div>
     </div>
