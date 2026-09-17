@@ -91,16 +91,28 @@ def _cond_sql(key: str, value: Any, params: list) -> str:
         if op == "$in":
             vals = [_scalar_to_text(x) for x in (v or [])]
             params.append(vals)
-            return f"metadata->>'{key}' = ANY(%s)"
+            params.append(vals)
+            # 第二臂：list 型字段（落库为 JSON 数组串，如 person_names）按
+            # 「含任一元素」匹配；LIKE '[%' 守护避免对逗号串/标量做非法 ::jsonb
+            # 强转。历史逗号串数据走第一臂原语义。
+            return (f"(metadata->>'{key}' = ANY(%s) OR ((metadata->>'{key}') LIKE '[%%' "
+                    f"AND (metadata->>'{key}')::jsonb ?| %s))")
         if op == "$nin":
             vals = [_scalar_to_text(x) for x in (v or [])]
             params.append(vals)
-            return f"NOT (metadata->>'{key}' = ANY(%s))"
+            params.append(vals)
+            # 与 $in 对称：数组串形态也参与排除，否则 $nin 永远判不相等
+            return (f"(NOT (metadata->>'{key}' = ANY(%s) OR ((metadata->>'{key}') LIKE '[%%' "
+                    f"AND (metadata->>'{key}')::jsonb ?| %s)))")
         raise ValueError(f"不支持的 Chroma where 操作符: {op}")
     # 标量 → JSONB 包含（GIN 索引命中；类型敏感：number 1 与 text "1" 不互配，
-    # 与 Chroma metadata 类型语义一致）
+    # 与 Chroma metadata 类型语义一致）。
+    # 第二臂：list 型字段（JSON 数组串）按「含该元素」匹配——修复 person_names
+    # 多人文档标量过滤必失配（2026-09-18 实证）；非数组文本不触发，历史数据语义不变。
     params.append(json.dumps({key: "" if value is None else value}, ensure_ascii=False))
-    return "metadata @> %s::jsonb"
+    params.append(_scalar_to_text(value))
+    return (f"(metadata @> %s::jsonb OR ((metadata->>'{key}') LIKE '[%%' "
+            f"AND (metadata->>'{key}')::jsonb @> to_jsonb(%s::text)))")
 
 
 def _node_sql(node: dict, params: list) -> str:
@@ -399,6 +411,17 @@ class PgVectorKnowledgeStore(KnowledgeStore):
                 )
                 return len(cur.fetchall())
         return 0
+
+    def clear(self) -> int:
+        """清空当前 collection 全部向量行，返回删除数（对齐 Chroma `_collection.reset`，
+        供 pipeline 全量重建路径替代原 rmtree 磁盘目录语义）。"""
+        with self._lock, self._conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"DELETE FROM {self._table} WHERE collection = %s RETURNING id",
+                (self._collection,),
+            )
+            return len(cur.fetchall())
 
     def update_metadata_where(self, where: dict, metadata_update: dict) -> int:
         cleaned = _sanitize_metadata(metadata_update)

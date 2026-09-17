@@ -1,10 +1,8 @@
 """RAG 管道 — 主入口"""
 import os
-import hashlib
-import shutil
+import json
 import time
 from collections import OrderedDict
-from pathlib import Path
 
 # R-P0-1（Windows 原生库加载顺序加固）：langchain_text_splitters 顶层会拉起
 # sentence_transformers→torch；若该导入发生在 chroma/doc_db 等原生库已加载
@@ -269,7 +267,6 @@ class RAGPipeline:
         self._rebuild_db(db_path)
         db = create_fn()
         logger.info(f"创建新{db_type}向量库: {db_path}")
-        self._save_db_version(db_path)
         return db
 
     def _sync_registry_after_full_rebuild(self):
@@ -544,58 +541,39 @@ class RAGPipeline:
         return IndexConsistencyChecker(self).check()
 
     # =====================================================
-    # 版本校验
+    # 全量重建判定（pgvector 语义）
     # =====================================================
 
     @staticmethod
-    def _compute_db_version() -> str:
-        h = hashlib.md5()
-        docs_path = Path(DOCS_DIRECTORY)
-        for fpath in sorted(docs_path.rglob("*")):
-            if fpath.is_file():
-                h.update(str(fpath).encode())
-                h.update(str(fpath.stat().st_size).encode())
-                h.update(str(fpath.stat().st_mtime).encode())  # mtime 防同大小替换
-        return h.hexdigest()
-
-    @staticmethod
     def _need_rebuild(db_path: str) -> bool:
-        """纯查询：版本不匹配或缺失则需要重建（不删文件）。"""
-        version_file = os.path.join(db_path, ".version")
-        if not os.path.exists(db_path):
-            return True
-        if os.path.exists(version_file):
-            stored = open(version_file, encoding="utf-8").read().strip()
-            current = RAGPipeline._compute_db_version()
-            if stored == current:
-                logger.info(f"向量库版本匹配: {db_path}")
-                return False
-        logger.warning(f"向量库版本不匹配或缺失，需要重建: {db_path}")
+        """纯查询：collection 内无向量行 = 需要重建（空库或已被清空）。
+
+        原 Chroma 实现比对磁盘 .version 指纹（docs 目录 mtime 哈希）判定
+        语料漂移；pgvector 轨下向量库在 rag_vectors 表、目录恒不存在，
+        指纹读写两端均已失效（2026-09-18 收口确认），且增量由 registry
+        驱动、指纹冗余，改为按 collection 行数判定。此处构造 store 仅做
+        行计数（embedding_function 惰性不被调用）；PG 不可达直接抛错
+        fail-fast，由上层决定走全量重建或启动失败。
+        """
+        store = PgVectorKnowledgeStore(persist_directory=db_path, embedding_function=None)
+        if store.count() > 0:
+            logger.info(f"向量库已有数据（collection 非空）: {db_path}")
+            return False
+        logger.warning(f"向量库为空，需要重建: {db_path}")
         return True
 
     @staticmethod
     def _rebuild_db(db_path: str) -> None:
-        """副作用：删除旧库，由 _need_rebuild + create_fn 配套调用。
+        """副作用：清空该 collection 全部向量行，由 _need_rebuild + create_fn 配套调用。
 
-        注意：Windows 下 Chroma 客户端持有 sqlite 句柄时 rmtree 会失败。
-        原实现 ignore_errors=True 把失败静默吞掉，导致 create_fn 打开的仍是
-        旧维度 collection，后续写入报 "Collection expecting embedding with
-        dimension of 512, got 1024"（2026-09-10 实际踩坑）。此处显式记录
-        失败并抛出，让上层走明确报错而非维度错配的隐蔽故障。
+        原 Chroma 实现 rmtree 磁盘目录（Windows 句柄占用时显式抛错，避免
+        维度错配的隐蔽故障）；pgvector 轨数据在 PG 表，按 collection 精确
+        清空（对齐 Chroma reset 语义）。
         """
-        try:
-            shutil.rmtree(db_path)
-        except OSError as e:
-            logger.error(
-                f"旧向量库删除失败（文件被占用？请先停掉占用进程）: {db_path} → {e}"
-            )
-            raise
-
-    @staticmethod
-    def _save_db_version(db_path: str):
-        version_file = os.path.join(db_path, ".version")
-        with open(version_file, "w", encoding="utf-8") as f:
-            f.write(RAGPipeline._compute_db_version())
+        store = PgVectorKnowledgeStore(persist_directory=db_path, embedding_function=None)
+        cleared = store.clear()
+        if cleared:
+            logger.info(f"已清空旧向量库 collection（{cleared} 行）: {db_path}")
 
     # =====================================================
     # 人名倒排索引
@@ -614,7 +592,9 @@ class RAGPipeline:
                 doc_id = metadata.get('doc_id')
                 person_names = metadata.get('person_names', [])
                 if isinstance(person_names, str):
-                    person_names = [person_names]
+                    # 落库经 _sanitize_metadata，list 型 person_names 读回是
+                    # JSON 数组串；兼容历史逗号串
+                    person_names = json.loads(person_names) if person_names.startswith("[") else [person_names]
                 for person in person_names:
                     if person not in person_index:
                         person_index[person] = set()
