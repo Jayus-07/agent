@@ -22,6 +22,15 @@ from backend.providers.travel.transit import (
     TencentTransitProvider,
     build_transit_provider,
 )
+# 预订契约（任务书 §12，Phase 7 预留）：仅导出形状，未接线、无调用方
+from backend.providers.travel.booking import (
+    BookingProvider,
+    BookingRecord,
+    BookingRequest,
+    BookingStatus,
+    can_transition,
+    make_idempotency_key,
+)
 
 __all__ = [
     "POIProvider",
@@ -32,6 +41,12 @@ __all__ = [
     "TencentTransitProvider",
     "build_transit_provider",
     "install_travel_providers",
+    "BookingProvider",
+    "BookingRequest",
+    "BookingRecord",
+    "BookingStatus",
+    "can_transition",
+    "make_idempotency_key",
 ]
 
 

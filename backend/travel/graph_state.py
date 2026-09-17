@@ -97,6 +97,9 @@ class TravelGraphState(TypedDict, total=False):
     # slot_filler（图入口）从 graph_builder 单例读取后写进 state ——
     # supervisor_decision 携带进 trace，reporter 据此向用户披露降级事实。
     persistence_status: str
+    # 候选方案容器（任务书 §14，Phase 7 预留）：P0 单方案产出，无节点写入，
+    # 仅占位——将来「出 A/B 两版让用户挑」时由规划层填充 CandidatePlan 快照。
+    candidate_plans: list[dict]
 
     # === 输出 ===
     final_answer: str
@@ -251,4 +254,5 @@ def planning_reset() -> dict:
         "stage": "",
         "finished": False,
         "notes": [],
+        "candidate_plans": [],
     }
