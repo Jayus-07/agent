@@ -7,9 +7,11 @@ interface Props {
   onSend: (text: string) => void
   onStop: () => void
   isLoading: boolean
+  /** 输入内容变化回调（双向「输入中」指示上行，节流由调用方负责） */
+  onTyping?: () => void
 }
 
-export default function CSInput({ onSend, onStop, isLoading }: Props) {
+export default function CSInput({ onSend, onStop, isLoading, onTyping }: Props) {
   const [text, setText] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -44,7 +46,10 @@ export default function CSInput({ onSend, onStop, isLoading }: Props) {
           <textarea
             ref={textareaRef}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value)
+              onTyping?.()
+            }}
             onKeyDown={handleKeyDown}
             placeholder="输入您的问题..."
             rows={1}

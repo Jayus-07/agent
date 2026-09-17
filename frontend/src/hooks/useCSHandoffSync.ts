@@ -7,11 +7,14 @@
  * 坐席回复走独立 HTTP 接口落库），setHandoffState 也无人调用 ——
  * 转人工后 CSHandoffCard 永远不出现、坐席回复用户永远看不到。
  *
- * 机制：抽屉打开期间轮询 GET /api/cs/my/{session}/messages?since_id
+ * 机制：抽屉打开期间轮询 GET /api/cs/conversations/my/{session}/messages?since_id
  *   （P3.4 端点拆分：用户侧走 /my/* 专用端点——登录态强制 + 本人会话；
- *    坐席端 /conversations/{id}/messages 保留 api-key 坐席通道）
+ *    坐席端 /conversations/{id}/messages 保留 api-key 坐席通道。
+ *    ⚠️ 网关剥 /api 前缀后必须与后端 /cs/conversations/my/* 全路径一致——
+ *    d4637fd 曾误写 /api/cs/my/*（后端无此路由，404），坐席消息因此到不了用户）
  *   - human_agent 消息 → role='agent' 气泡（用户/助手落库消息与本地回显重复，跳过）
  *   - handoff_state → CSHandoffCard（waiting_human→waiting 等）
+ *   - agent_typing → 「坐席正在输入…」（服务端 TTL 5s 瞬态，停止上报自然消失）
  *   - 工单消失（坐席关闭/无工单）：上一状态是 active 时显示「已结束」
  * 退避（P3.4）：空闲（无新消息且状态不变）逐步退到 5s；有变化立即回 2s。
  * 后续演进：换 WS 订阅（与坐席工作台同一 Hub），轮询仅兜底。
@@ -38,6 +41,7 @@ interface HandoffMessagesResponse {
   handoff_state: string
   last_id: number
   messages: HandoffMessageDTO[]
+  agent_typing?: boolean
 }
 
 const STATE_MAP: Record<string, CSHandoffState> = {
@@ -63,12 +67,12 @@ export function useCSHandoffSync(sessionId: string, enabled: boolean) {
     const tick = async () => {
       try {
         const res = await fetchRaw(
-          `/api/cs/my/${encodeURIComponent(sessionId)}/messages?since_id=${sinceIdRef.current}`,
+          `/api/cs/conversations/my/${encodeURIComponent(sessionId)}/messages?since_id=${sinceIdRef.current}`,
         )
         if (!alive || !res.ok) return
         const data = (await res.json()) as HandoffMessagesResponse
 
-        const { setHandoffState, addMessage } = useCSChatStore.getState()
+        const { setHandoffState, setAgentTyping, addMessage } = useCSChatStore.getState()
 
         // 坐席消息入列（历史补拉 + 增量都走这里；id=message_id 幂等，
         // appendAgentMessage 按 id 去重——切换会话/水合恢复后 since_id 归零
@@ -100,6 +104,8 @@ export function useCSHandoffSync(sessionId: string, enabled: boolean) {
           lastStateRef.current = mapped
         }
         setHandoffState(mapped)
+        // 「坐席正在输入」：服务端 TTL 5s，靠下一拍轮询续期/消退
+        setAgentTyping(data.agent_typing === true)
       } catch {
         // 静默重试
       } finally {

@@ -45,6 +45,8 @@ interface CSChatState {
   csTimeline: string[]
   /** P3.1: 非空时渲染 CSConfirmCard（done 帧 pending_action） */
   pendingProposal: PendingProposal | null
+  /** 双向输入中指示：坐席正在输入（/my/messages 轮询携带，TTL 5s） */
+  agentTyping: boolean
 
   currentMessages: () => CSMessage[]
   newSession: () => string
@@ -64,6 +66,7 @@ interface CSChatState {
   setConfirmationState: (state: CSConfirmationState) => void
   setHandoffState: (state: CSHandoffState) => void
   setPendingProposal: (p: PendingProposal | null) => void
+  setAgentTyping: (v: boolean) => void
 }
 
 function createCSSession(): CSSession {
@@ -135,6 +138,7 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
     currentNode: null,
     csTimeline: [],
     pendingProposal: null,
+    agentTyping: false,
 
     currentMessages: () => {
       const s = get().sessions.find((s) => s.id === get().currentId)
@@ -153,6 +157,7 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
         currentNode: null,
         csTimeline: [],
         pendingProposal: null,
+        agentTyping: false,
       }))
       return s.id
     },
@@ -294,5 +299,6 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
     setConfirmationState: (state) => set({ confirmationState: state }),
     setHandoffState: (state) => set({ handoffState: state }),
     setPendingProposal: (p) => set({ pendingProposal: p }),
+    setAgentTyping: (v) => set({ agentTyping: v }),
   }
 })

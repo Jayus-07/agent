@@ -143,3 +143,25 @@ export async function getCSStats(): Promise<CSStatsResponse> {
     throw new Error(`getCSStats failed: ${(e as Error).message}`);
   }
 }
+
+/**
+ * 坐席「输入中」上报（瞬态，服务端 TTL 5s）：用户端轮询响应 agent_typing 可见。
+ * 静默失败——提示属体验增强，不阻塞坐席输入主链路。
+ */
+export async function notifyAgentTyping(
+  conversationId: string,
+  agentId: string,
+): Promise<void> {
+  try {
+    await request(
+      `/api/cs/conversations/${encodeURIComponent(conversationId)}/typing`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: agentId }),
+      },
+    );
+  } catch {
+    // 静默
+  }
+}

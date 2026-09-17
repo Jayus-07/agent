@@ -494,6 +494,12 @@ class AgentMessageRequest(BaseModel):
     content: str
 
 
+class TypingRequest(BaseModel):
+    """坐席「输入中」上报体（agent_id 可选，仅作审计留痕预留）。"""
+
+    agent_id: str = ""
+
+
 class AgentMessageResponse(BaseModel):
     message_id: str
     sender_type: str
@@ -506,6 +512,8 @@ class HandoffMessagesResponse(BaseModel):
     handoff_state: str
     last_id: int
     messages: list[MessageDTO]
+    # 双向输入中指示（2026-09-18）：坐席正在输入（TTL 5s 瞬态，读 Redis）
+    agent_typing: bool = False
 
 
 @router.get("/handoff/queue", response_model=HandoffQueueResponse)
@@ -690,26 +698,31 @@ async def post_agent_message(conversation_id: str, body: AgentMessageRequest, re
         raise HTTPException(503, detail="Database unavailable")
 
 
-@router.get("/my/{conversation_id}/messages", response_model=HandoffMessagesResponse)
-async def get_my_conversation_messages(
-    request: Request,
-    conversation_id: str,
-    since_id: int = Query(0, ge=0, description="只返回 id > since_id 的消息"),
-    limit: int = Query(100, ge=1, le=200),
-):
-    """用户侧消息增量拉取（P3.4 端点拆分）。
+@router.post("/{conversation_id}/typing")
+async def post_agent_typing(conversation_id: str, body: TypingRequest):
+    """坐席「输入中」上报（瞬态，双向输入中指示 · 坐席→用户方向）。
 
-    与坐席端 /{conversation_id}/messages 的差异：
-    - 身份：resolve_identity 登录态强制（401 拒 guest）——坐席端走
-      api-key/坐席 JWT（_ensure_conversation_access 的 guest 匿名语义不适用）
-    - 归属：只读本人的会话（user_id 精确匹配，非 guest 匿名放行）
-    路径注册在 /{conversation_id}/* 之后无冲突（3 段 vs 2 段）。
+    高频轻量写：Redis SETEX 5s TTL（不可用降级进程内存），不落库不入
+    事件流。用户侧经 /my/{id}/messages 轮询响应的 agent_typing 字段可见。
+    鉴权走本路由组统一的 api-key 中间件（同 /agent-messages）。
+    """
+    from backend.customer_service.typing_state import set_typing
+
+    set_typing("agent", conversation_id)
+    return {"conversation_id": conversation_id, "ok": True}
+
+
+async def _ensure_my_conversation(request: Request, conversation_id: str) -> None:
+    """用户侧归属校验（/my/messages 与 /my/typing 共用）。
+
+    登录强制（401 拒 guest）→ 本人会话精确匹配（user_id 比对，403 他人）
+    → 404 不泄露存在性 → DB 故障 503。
     """
     from backend.app.api.identity import resolve_identity
 
     ident = resolve_identity(request)
     if not ident.authenticated:
-        raise HTTPException(401, detail="未认证：请登录后拉取会话消息")
+        raise HTTPException(401, detail="未认证：请登录后访问会话")
 
     try:
         from sqlalchemy import select
@@ -732,19 +745,62 @@ async def get_my_conversation_messages(
     except HTTPException:
         raise
     except Exception as e:
-        logger.warning(f"[CSAdmin] my-messages ownership check failed: {e}")
+        logger.warning(f"[CSAdmin] my-conversation ownership check failed: {e}")
         raise HTTPException(503, detail="Database unavailable")
+
+
+@router.get("/my/{conversation_id}/messages", response_model=HandoffMessagesResponse)
+async def get_my_conversation_messages(
+    request: Request,
+    conversation_id: str,
+    since_id: int = Query(0, ge=0, description="只返回 id > since_id 的消息"),
+    limit: int = Query(100, ge=1, le=200),
+):
+    """用户侧消息增量拉取（P3.4 端点拆分）。
+
+    与坐席端 /{conversation_id}/messages 的差异：
+    - 身份：resolve_identity 登录态强制（401 拒 guest）——坐席端走
+      api-key/坐席 JWT（_ensure_conversation_access 的 guest 匿名语义不适用）
+    - 归属：只读本人的会话（user_id 精确匹配，非 guest 匿名放行）
+    路径注册在 /{conversation_id}/* 之后无冲突（3 段 vs 2 段）。
+    响应附带 agent_typing（坐席「输入中」瞬态信号，TTL 5s）。
+    """
+    await _ensure_my_conversation(request, conversation_id)
 
     try:
         from backend.customer_service._db_loop import run_sync
-        return await _async_messages_since(
+        result = await _async_messages_since(
             conversation_id, since_id, limit, run_sync
         )
+        from backend.customer_service.typing_state import is_typing
+        result.agent_typing = is_typing("agent", conversation_id)
+        return result
     except HTTPException:
         raise
     except Exception as e:
         logger.warning(f"[CSAdmin] my-messages since failed: {e}")
         raise HTTPException(503, detail="Database unavailable")
+
+
+@router.post("/my/{conversation_id}/typing")
+async def post_my_typing(request: Request, conversation_id: str):
+    """用户「输入中」上报（瞬态，双向输入中指示 · 用户→坐席方向）。
+
+    归属校验同 /my/messages；状态写 Redis TTL 5s，并经 AgentHub 广播
+    user.typing 瞬态事件（persist=False 不落库），坐席 WS 实时可见。
+    """
+    await _ensure_my_conversation(request, conversation_id)
+
+    from backend.customer_service.typing_state import set_typing
+
+    set_typing("user", conversation_id)
+
+    from backend.customer_service.realtime import get_agent_hub
+
+    get_agent_hub().publish(
+        "user.typing", conversation_id=conversation_id, persist=False
+    )
+    return {"conversation_id": conversation_id, "ok": True}
 
 
 @router.get("/{conversation_id}/messages", response_model=HandoffMessagesResponse)

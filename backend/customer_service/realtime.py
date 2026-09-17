@@ -15,6 +15,15 @@
   - 断线补发：事件落库 events 表，GET /cs/conversations/{id}/events?after_seq=N
     按 seq 升序回放（见 replay_events）。
 
+2026-09-18 性能与实用性重构：
+  - 落库与广播解耦：无坐席在线时事件照常落库（events 表是补发/审计的
+    权威源，此前直接丢弃会造成断线补发缺口）；广播环节才看连接数
+  - 落库直连主 loop：_persist_event 已运行在 uvicorn 主 loop 上，去掉
+    「线程池 → run_sync(_db_loop)」的两次线程跳转
+  - 广播并发化：gather 并发发送，单慢客户端不再串行拖住所有坐席；
+    序列化收敛到一处（Redis 订阅路径复用收到的原文，不再二次序列化）
+  - publish(persist=False) 瞬态事件：只广播不落库（typing 类高频信号）
+
 事件流（服务端 → 坐席）:
   hello                连接建立确认
   heartbeat            25s 心跳
@@ -114,14 +123,20 @@ class AgentHub:
 
     # ── publish ──────────────────────────────────────────────
 
-    def publish(self, event_type: str, **payload) -> None:
-        """线程安全 fire-and-forget 广播；无连接 / 未绑 loop 时静默丢弃。
+    def publish(
+        self, event_type: str, *, persist: bool = True, **payload
+    ) -> None:
+        """线程安全 fire-and-forget 广播；未绑 loop 时静默丢弃。
 
         P3.2 封套：event_id/ts 本地生成，seq 由 events 表分配（落库失败
         为 None）。广播统一经 Redis pub/sub（多 worker 广谱覆盖）；
         Redis 不可用降级为本进程直接广播。
+
+        persist=False 为瞬态事件（typing 等）：只广播不落库，不占 seq。
+        无坐席在线时事件仍落库（补发源完整性），仅跳过广播——见
+        _persist_and_broadcast。
         """
-        if not self._connections or self._main_loop is None:
+        if self._main_loop is None:
             return
         envelope = {
             "type": event_type,
@@ -132,7 +147,7 @@ class AgentHub:
         }
         try:
             asyncio.run_coroutine_threadsafe(
-                self._persist_and_broadcast(envelope, payload),
+                self._persist_and_broadcast(envelope, payload, persist),
                 self._main_loop,
             )
         except Exception:
@@ -140,24 +155,37 @@ class AgentHub:
                 "[AgentHub] publish %s failed", event_type, exc_info=True
             )
 
-    async def _persist_and_broadcast(self, envelope: dict, payload: dict) -> None:
-        """落库拿 seq → 经 Redis 广播（不可用则本进程直接广播）。"""
-        try:
-            envelope["seq"] = await self._persist_event(payload, envelope)
-        except Exception:
-            # 防御纵深：_persist_event 内部已全捕获，此处兜底任何意外，
-            # 保证「落库崩」永不拖垮广播（事件尽力而为原则）
-            envelope["seq"] = None
-            logger.warning(
-                "[AgentHub] unexpected persist error (%s)", envelope["type"],
-                exc_info=True,
-            )
+    async def _persist_and_broadcast(
+        self, envelope: dict, payload: dict, persist: bool = True
+    ) -> None:
+        """落库拿 seq → 经 Redis 广播（不可用则本进程直接广播）。
+
+        落库与广播解耦：无坐席在线时只落库（事件源完整性），不广播。
+        """
+        if persist:
+            try:
+                envelope["seq"] = await self._persist_event(payload, envelope)
+            except Exception:
+                # 防御纵深：_persist_event 内部已全捕获，此处兜底任何意外，
+                # 保证「落库崩」永不拖垮广播（事件尽力而为原则）
+                envelope["seq"] = None
+                logger.warning(
+                    "[AgentHub] unexpected persist error (%s)",
+                    envelope["type"],
+                    exc_info=True,
+                )
+        if not self._connections:
+            return
         data = json.dumps(envelope, ensure_ascii=False, default=str)
         if not await self._publish_via_redis(data):
-            await self._broadcast(envelope)
+            await self._broadcast(data)
 
     async def _persist_event(self, payload: dict, envelope: dict) -> int | None:
-        """事件落库（seq 分配）。失败只记日志返回 None，不影响广播。"""
+        """事件落库（seq 分配）。失败只记日志返回 None，不影响广播。
+
+        本协程运行在主 uvicorn loop，直接 await AsyncSessionLocal——
+        此前经 run_in_executor + run_sync(_db_loop) 绕了两道线程切换。
+        """
         conversation_id = payload.get("conversation_id")
         if not conversation_id:
             return None
@@ -165,21 +193,15 @@ class AgentHub:
             from backend.customer_service.repository.event_repo import (
                 EventRepository,
             )
-            from backend.customer_service._db_loop import run_sync
             from backend.memory.database import AsyncSessionLocal
 
-            async def _append():
-                async with AsyncSessionLocal() as db:
-                    return await EventRepository(db).append(
-                        conversation_id=str(conversation_id),
-                        event_id=envelope["event_id"],
-                        type=envelope["type"],
-                        payload=payload,
-                    )
-
-            return await asyncio.get_running_loop().run_in_executor(
-                None, lambda: run_sync(_append())
-            )
+            async with AsyncSessionLocal() as db:
+                return await EventRepository(db).append(
+                    conversation_id=str(conversation_id),
+                    event_id=envelope["event_id"],
+                    type=envelope["type"],
+                    payload=payload,
+                )
         except Exception:
             logger.warning(
                 "[AgentHub] event persist failed (%s), seq=null",
@@ -232,12 +254,18 @@ class AgentHub:
                         data = msg.get("data")
                         if not data or self._main_loop is None:
                             continue
+                        # redis-py 返回 bytes；广播收 str（send_text 契约），
+                        # 原文直传避免 dict→str→dict→str 二次序列化
+                        if isinstance(data, bytes):
+                            data = data.decode("utf-8", "replace")
                         try:
                             envelope = json.loads(data)
                         except Exception:
                             continue
+                        if not envelope:
+                            continue
                         asyncio.run_coroutine_threadsafe(
-                            self._broadcast(envelope), self._main_loop
+                            self._broadcast(data), self._main_loop
                         )
                 except Exception:
                     logger.warning(
@@ -251,16 +279,22 @@ class AgentHub:
         )
         self._subscriber_thread.start()
 
-    async def _broadcast(self, message: dict) -> None:
-        data = json.dumps(message, ensure_ascii=False, default=str)
-        dead: list[WebSocket] = []
-        for ws in list(self._connections):
-            try:
-                await ws.send_text(data)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.disconnect(ws)
+    async def _broadcast(self, data: str) -> None:
+        """并发广播已序列化的帧；死连接统一清理。
+
+        逐个 await 会把慢客户端的 TCP 背压串行放大到所有坐席，gather
+        并发后单慢连接只影响自己。入参收 str：调用方（含 Redis 订阅
+        路径）序列化一次即可，避免 dict→str→dict→str 往返。
+        """
+        conns = list(self._connections)
+        if not conns:
+            return
+        results = await asyncio.gather(
+            *(ws.send_text(data) for ws in conns), return_exceptions=True
+        )
+        for ws, result in zip(conns, results):
+            if isinstance(result, BaseException):
+                self.disconnect(ws)
 
 
 # ── 断线补发（P3.2） ─────────────────────────────────────

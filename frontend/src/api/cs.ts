@@ -42,6 +42,21 @@ export async function listMyConversations(limit = 10): Promise<MyConversationIte
   }
 }
 
+/**
+ * 用户「输入中」上报（瞬态，服务端 TTL 5s）：坐席工作台经 WS 实时可见。
+ * 静默失败——提示属体验增强，不阻塞输入主链路。
+ */
+export async function notifyUserTyping(conversationId: string): Promise<void> {
+  try {
+    await fetchRaw(
+      `/api/cs/conversations/my/${encodeURIComponent(conversationId)}/typing`,
+      { method: "POST" },
+    );
+  } catch {
+    // 静默
+  }
+}
+
 export async function listConversations(params: {
   limit?: number;
   cursor?: string;

@@ -12,7 +12,7 @@ import { Headphones, Plus, X } from 'lucide-react'
 import { useCSChatStore } from '@/store/csChat'
 import { useCSChat } from '@/hooks/useCSChat'
 import { useCSHandoffSync } from '@/hooks/useCSHandoffSync'
-import { listMyConversations, confirmAction } from '@/api/cs'
+import { listMyConversations, confirmAction, notifyUserTyping } from '@/api/cs'
 import { ApiError } from '@/api/client'
 import CSWelcome from '@/components/cs/CSWelcome'
 import CSMessageList from '@/components/cs/CSMessageList'
@@ -43,6 +43,7 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
   const setError = useCSChatStore((s) => s.setError)
   const newSession = useCSChatStore((s) => s.newSession)
   const pendingProposal = useCSChatStore((s) => s.pendingProposal)
+  const agentTyping = useCSChatStore((s) => s.agentTyping)
   const addMessage = useCSChatStore((s) => s.addMessage)
   const setPendingProposal = useCSChatStore((s) => s.setPendingProposal)
 
@@ -100,6 +101,17 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
     },
     [currentId, startStream, setError]
   )
+
+  // 用户「输入中」上行：2s 节流（服务端 TTL 5s，持续输入自然续期）。
+  // 仅转人工后（handoffState='active'）上报——AI 阶段无坐席在线，无需打扰。
+  const lastTypingSentRef = useRef(0)
+  const handleUserTyping = useCallback(() => {
+    if (handoffState !== 'active' || !currentId) return
+    const now = Date.now()
+    if (now - lastTypingSentRef.current < 2000) return
+    lastTypingSentRef.current = now
+    void notifyUserTyping(currentId)
+  }, [handoffState, currentId])
 
   const hasMessages = messages.length > 0
 
@@ -193,6 +205,19 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
           )}
         </div>
 
+        {/* 「坐席正在输入」指示（handoffState='active' 才有意义） */}
+        {agentTyping && handoffState === 'active' && (
+          <div className="shrink-0 px-4 pb-1 flex items-center gap-1.5
+            text-[11px] text-text-muted">
+            <span className="flex gap-0.5" aria-hidden>
+              <i className="w-1 h-1 rounded-full bg-accent animate-bounce" />
+              <i className="w-1 h-1 rounded-full bg-accent animate-bounce [animation-delay:120ms]" />
+              <i className="w-1 h-1 rounded-full bg-accent animate-bounce [animation-delay:240ms]" />
+            </span>
+            坐席正在输入…
+          </div>
+        )}
+
         {/* Status bar */}
         <CSStatusBar
           currentStatus={currentStatus}
@@ -202,7 +227,7 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
         />
 
         {/* Input */}
-        <CSInput onSend={handleSend} onStop={stopStream} isLoading={isLoading} />
+        <CSInput onSend={handleSend} onStop={stopStream} isLoading={isLoading} onTyping={handleUserTyping} />
       </div>
     </>
   )

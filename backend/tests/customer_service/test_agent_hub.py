@@ -46,12 +46,18 @@ async def _redis_ok(self, data: str) -> bool:
 
 async def _no_persist(self, payload, envelope):
     """桩：跳过 events 落库（单测不依赖 DB），seq 保持 None。"""
+    _persist_calls.append(envelope["type"])
     return None
+
+
+_persist_calls: list[str] = []
 
 
 @pytest.fixture(autouse=True)
 def _stub_persist(monkeypatch):
-    """默认跳过 events 落库；Redis 路径用例单独覆盖 _publish_via_redis。"""
+    """默认跳过 events 落库；Redis 路径用例单独覆盖 _publish_via_redis。
+    _persist_calls 记录落库请求（清空于每用例前），供断言调用与否。"""
+    _persist_calls.clear()
     monkeypatch.setattr(AgentHub, "_persist_event", _no_persist)
     monkeypatch.setattr(AgentHub, "_publish_via_redis", _no_redis)
 
@@ -113,16 +119,23 @@ async def test_publish_drops_dead_connections():
     assert dead.sent == []
 
 
-async def test_publish_without_loop_or_connections_is_noop():
+async def test_publish_without_loop_is_noop():
+    """未 bind_loop：无法投递任何东西，静默丢弃（不落库不广播）。"""
     hub = AgentHub()
-    # 无连接：不抛异常
-    hub.publish("conversation.closed", conversation_id="c1")
-    # 有连接但未 bind_loop：静默丢弃
     ws = _FakeWS()
     hub._connections.add(ws)
     hub.publish("conversation.claimed", conversation_id="c1")
     await asyncio.sleep(0.01)
     assert ws.sent == []
+    assert _persist_calls == []
+
+
+async def test_publish_without_connections_still_persists():
+    """无坐席在线：不广播，但事件照常落库（补发源完整性，2026-09-18 优化）。"""
+    hub = _bare_hub()
+    hub.publish("message.created", conversation_id="c1", last_id=1)
+    await asyncio.sleep(0.05)
+    assert _persist_calls == ["message.created"]
 
 
 # ── P3.2：统一封套 ───────────────────────────────────────
@@ -194,3 +207,52 @@ async def test_persist_failure_still_broadcasts(monkeypatch):
     event = json.loads(ws.sent[0])
     assert event["type"] == "conversation.waiting"
     assert event["seq"] is None
+
+
+# ── 2026-09-18：瞬态事件 + 并发广播 ──────────────────────
+
+
+async def test_transient_event_skips_persist():
+    """persist=False（typing 类）：只广播不落库，不占 seq。"""
+    hub = _bare_hub()
+    ws = _FakeWS()
+    hub._connections.add(ws)
+
+    hub.publish("user.typing", conversation_id="c1", persist=False)
+    await asyncio.sleep(0.05)
+
+    assert _persist_calls == []
+    event = json.loads(ws.sent[0])
+    assert event["type"] == "user.typing"
+    assert event["seq"] is None
+
+
+async def test_broadcast_is_concurrent():
+    """并发广播：慢客户端并行发送（两个 0.1s 慢连接总耗时 <0.15s，
+    串行逐发需 ≥0.2s），全部送达且死连接被清理。"""
+    hub = _bare_hub()
+    slow1, slow2 = _FakeWS(), _FakeWS()
+    _orig_send = _FakeWS.send_text
+
+    def _make_slow():
+        async def _send(self, data):
+            await asyncio.sleep(0.1)  # 模拟慢客户端 TCP 背压
+            await _orig_send(self, data)
+        return _send
+
+    slow1.send_text = _make_slow().__get__(slow1)  # type: ignore[method-assign]
+    slow2.send_text = _make_slow().__get__(slow2)  # type: ignore[method-assign]
+    hub._connections.update({slow1, slow2})
+
+    import time as _time
+
+    t0 = _time.monotonic()
+    hub.publish("message.created", conversation_id="c1")
+    while (len(slow1.sent) == 0 or len(slow2.sent) == 0) and (
+        _time.monotonic() - t0 < 1.0
+    ):
+        await asyncio.sleep(0.01)
+    elapsed = _time.monotonic() - t0
+
+    assert len(slow1.sent) == 1 and len(slow2.sent) == 1
+    assert elapsed < 0.15

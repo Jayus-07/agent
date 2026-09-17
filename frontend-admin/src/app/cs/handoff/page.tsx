@@ -15,6 +15,7 @@ import {
   closeConversation,
   getHandoffMessages,
   getHandoffQueue,
+  notifyAgentTyping,
   sendAgentMessage,
 } from "@/api/cs";
 import { useAgentSocket, type AgentEvent } from "@/lib/csAgentWs";
@@ -111,6 +112,9 @@ export default function HandoffWorkbenchPage() {
   const [reply, setReply] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  // 双向「输入中」指示（用户→坐席方向）：WS user.typing 瞬态事件驱动
+  const [userTyping, setUserTyping] = useState(false);
+  const userTypingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sinceIdRef = useRef(0);
   const selectedRef = useRef<HandoffQueueItem | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -260,6 +264,16 @@ export default function HandoffWorkbenchPage() {
           }
           break;
         }
+        case "user.typing": {
+          // 双向「输入中」指示（用户→坐席）：瞬态事件不落库，
+          // 前端保持 4s 展示窗（服务端 TTL 5s，无续期自然消退）
+          if ((e.conversation_id as string) === selectedRef.current?.conversation_id) {
+            setUserTyping(true);
+            if (userTypingTimer.current) clearTimeout(userTypingTimer.current);
+            userTypingTimer.current = setTimeout(() => setUserTyping(false), 4000);
+          }
+          break;
+        }
         case "message.created": {
           const cid = e.conversation_id as string;
           const lastId = Number(e.last_id ?? 0);
@@ -331,12 +345,27 @@ export default function HandoffWorkbenchPage() {
     };
   }, [connected, applyQueue]);
 
-  // 选中会话：重置增量游标
+  // 选中会话：重置增量游标与输入中指示
   const selectConversation = useCallback((item: HandoffQueueItem) => {
     setSelected(item);
     setMessages([]);
     sinceIdRef.current = 0;
+    setUserTyping(false);
+    if (userTypingTimer.current) clearTimeout(userTypingTimer.current);
   }, []);
+
+  // 坐席「输入中」上行（坐席→用户）：2s 节流（服务端 TTL 5s 持续输入续期），
+  // 仅认领会话（human_active）上报，AI 阶段无用户侧语义
+  const lastTypingSentRef = useRef(0);
+  const handleReplyTyping = useCallback(() => {
+    const sel = selectedRef.current;
+    const aid = agentId.trim();
+    if (!sel || sel.handoff_state !== "human_active" || !aid) return;
+    const now = Date.now();
+    if (now - lastTypingSentRef.current < 2000) return;
+    lastTypingSentRef.current = now;
+    void notifyAgentTyping(sel.conversation_id, aid);
+  }, [agentId]);
 
   // toast「查看」：定位到对应会话（队列里还在才可跳）
   const viewToastConversation = useCallback(
@@ -442,14 +471,20 @@ export default function HandoffWorkbenchPage() {
         agentId.trim(),
         reply.trim(),
       );
-      // WS 在线时 message.created 事件会实时追加；这里全量拉一次兜底
-      // （同时拿到落库后的自增 id 作为增量游标）
+      // 增量拉取兜底（2026-09-18：此前每次发送全量重拉 since_id=0，会话
+      // 越长发送越慢）：拿到落库消息 + 最新自增 id 作增量游标。
+      // WS 在线时消息通常已由 message.created 事件追加（按 message_id 去重）。
       const res = await getHandoffMessages(
         selected.conversation_id,
-        0,
+        sinceIdRef.current,
       );
-      setMessages(res.messages);
-      sinceIdRef.current = res.last_id;
+      if (res.messages.length > 0) {
+        setMessages((prev) => {
+          const known = new Set(prev.map((m) => m.message_id));
+          return [...prev, ...res.messages.filter((m) => !known.has(m.message_id))];
+        });
+      }
+      if (res.last_id > sinceIdRef.current) sinceIdRef.current = res.last_id;
       setReply("");
     } catch (e) {
       const msg = (e as Error).message ?? "发送失败";
@@ -657,9 +692,22 @@ export default function HandoffWorkbenchPage() {
                 </div>
               </div>
               <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
-                {messages.length === 0 && (
+                {messages.length === 0 && !userTyping && (
                   <div className="text-sm text-slate-400 text-center py-6">
                     暂无消息
+                  </div>
+                )}
+                {userTyping && (
+                  <div className="flex justify-start">
+                    <div className="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500
+                      text-xs flex items-center gap-1.5">
+                      <span className="flex gap-0.5" aria-hidden>
+                        <i className="w-1 h-1 rounded-full bg-slate-400 animate-bounce" />
+                        <i className="w-1 h-1 rounded-full bg-slate-400 animate-bounce [animation-delay:120ms]" />
+                        <i className="w-1 h-1 rounded-full bg-slate-400 animate-bounce [animation-delay:240ms]" />
+                      </span>
+                      用户正在输入…
+                    </div>
                   </div>
                 )}
                 {messages.map((m) => (
@@ -694,7 +742,10 @@ export default function HandoffWorkbenchPage() {
               <div className="border-t border-slate-200 p-3 flex gap-2">
                 <input
                   value={reply}
-                  onChange={(e) => setReply(e.target.value)}
+                  onChange={(e) => {
+                    setReply(e.target.value);
+                    handleReplyTyping();
+                  }}
                   onKeyDown={(e) => e.key === "Enter" && handleSend()}
                   placeholder={
                     selected.handoff_state === "human_active"

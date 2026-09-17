@@ -439,3 +439,139 @@ class TestMyMessages:
         )
         resp = client.get("/cs/conversations/my/conv-1/messages")
         assert resp.status_code == 503
+
+
+class TestTyping:
+    """双向「输入中」指示端点（2026-09-18）。
+
+    - POST /{id}/typing        坐席上行（api-key 通道，同 /agent-messages）
+    - POST /my/{id}/typing     用户上行（登录强制 + 归属校验，同 /my/messages）
+    - GET  /my/{id}/messages   响应携带 agent_typing 瞬态字段
+    """
+
+    @staticmethod
+    def _identity(user_id):
+        from backend.app.api.identity import Identity
+
+        return Identity(
+            user_id=user_id,
+            auth_type="jwt" if user_id else "guest",
+            source="header" if user_id else "guest",
+        )
+
+    @staticmethod
+    def _patch_db(monkeypatch, owner_user_id):
+        class _Result:
+            def scalar_one_or_none(self):
+                return owner_user_id
+
+        class _FakeDB:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def execute(self, q):
+                return _Result()
+
+        monkeypatch.setattr(
+            "backend.memory.database.AsyncSessionLocal", lambda: _FakeDB()
+        )
+
+    def test_agent_typing_ok(self, client, monkeypatch):
+        """坐席上行：200 + set_typing('agent', cid) 被调用。"""
+        captured = []
+
+        def fake_set(side, cid):
+            captured.append((side, cid))
+
+        monkeypatch.setattr(
+            "backend.customer_service.typing_state.set_typing", fake_set
+        )
+        resp = client.post(
+            "/cs/conversations/conv-1/typing", json={"agent_id": "agent-01"}
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"conversation_id": "conv-1", "ok": True}
+        assert captured == [("agent", "conv-1")]
+
+    def test_user_typing_guest_401(self, client, monkeypatch):
+        """用户上行：未认证 401，不触 DB。"""
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda req: self._identity(""),
+        )
+        resp = client.post("/cs/conversations/my/conv-1/typing")
+        assert resp.status_code == 401
+
+    def test_user_typing_other_users_conversation_403(self, client, monkeypatch):
+        """用户上行：他人会话 403（归属校验复用 _ensure_my_conversation）。"""
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda req: self._identity("user-A"),
+        )
+        self._patch_db(monkeypatch, owner_user_id="user-B")
+        resp = client.post("/cs/conversations/my/conv-1/typing")
+        assert resp.status_code == 403
+
+    def test_user_typing_ok_and_broadcasts_transient_event(
+        self, client, monkeypatch
+    ):
+        """用户上行：200 + set_typing('user') + user.typing 瞬态事件
+        （persist=False：typing 不落库不占 seq）。"""
+        captured = []
+        published = []
+
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda req: self._identity("user-A"),
+        )
+        self._patch_db(monkeypatch, owner_user_id="user-A")
+        monkeypatch.setattr(
+            "backend.customer_service.typing_state.set_typing",
+            lambda side, cid: captured.append((side, cid)),
+        )
+
+        class _FakeHub:
+            def publish(self, event_type, **payload):
+                published.append((event_type, payload))
+
+        monkeypatch.setattr(
+            "backend.customer_service.realtime.get_agent_hub", lambda: _FakeHub()
+        )
+
+        resp = client.post("/cs/conversations/my/conv-1/typing")
+        assert resp.status_code == 200
+        assert captured == [("user", "conv-1")]
+        assert len(published) == 1
+        event_type, payload = published[0]
+        assert event_type == "user.typing"
+        assert payload["conversation_id"] == "conv-1"
+        assert payload["persist"] is False
+
+    def test_my_messages_carries_agent_typing(self, client, monkeypatch):
+        """/my/messages 响应带 agent_typing（读 typing 瞬态状态）。"""
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda req: self._identity("user-A"),
+        )
+        self._patch_db(monkeypatch, owner_user_id="user-A")
+
+        async def fake_since(conversation_id, since_id, limit, run_sync):
+            return cs_admin.HandoffMessagesResponse(
+                conversation_id=conversation_id,
+                handoff_state="human_active",
+                last_id=3,
+                messages=[],
+            )
+
+        monkeypatch.setattr(cs_admin, "_async_messages_since", fake_since)
+        monkeypatch.setattr(
+            "backend.customer_service.typing_state.is_typing",
+            lambda side, cid: side == "agent" and cid == "conv-1",
+        )
+
+        resp = client.get("/cs/conversations/my/conv-1/messages")
+        assert resp.status_code == 200
+        assert resp.json()["agent_typing"] is True
