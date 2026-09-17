@@ -78,6 +78,8 @@ services:
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
       # PostgreSQL — 记忆库（读写，服务账号）
       - PGHOST=postgres
+      # 向量库后端开关（chroma|pgvector，透传 .env；默认 chroma 零变化）
+      - VECTOR_BACKEND=${VECTOR_BACKEND:-chroma}
       - PGPORT=5432
       - PGDATABASE=agent_memory
       - PGUSER=postgres
@@ -182,6 +184,8 @@ services:
       # env_file 注入的是宿主值 localhost，故此处必须显式覆盖为容器网络别名。
       - PGHOST=postgres
       - PGPORT=5432
+      # 向量库后端开关（chroma|pgvector；env_file 已透传，此处显式声明默认值）
+      - VECTOR_BACKEND=${VECTOR_BACKEND:-chroma}
       - PGDATABASE=agent_memory
       - PGUSER=postgres
       - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
@@ -230,6 +234,8 @@ services:
       # SQL 工具（本进程直连业务库）
       - PGHOST=postgres
       - PGPORT=5432
+      # 向量库后端开关（chroma|pgvector；env_file 已透传，此处显式声明默认值）
+      - VECTOR_BACKEND=${VECTOR_BACKEND:-chroma}
       - PGDATABASE=agent_memory
       - PGUSER=postgres
       - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
@@ -282,6 +288,8 @@ services:
       # PostgreSQL — 任务状态权威（agent_memory.tasks）+ LangGraph checkpoint
       - PGHOST=postgres
       - PGPORT=5432
+      # 向量库后端开关（chroma|pgvector；env_file 已透传，此处显式声明默认值）
+      - VECTOR_BACKEND=${VECTOR_BACKEND:-chroma}
       - PGDATABASE=agent_memory
       - PGUSER=postgres
       - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
@@ -335,9 +343,9 @@ services:
       - POSTGRES_DB=agent_memory
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=${PGPASSWORD:?PGPASSWORD is required}
-    # 不对外暴露端口（默认）。本地调试时取消注释：
-    # ports:
-    #   - "127.0.0.1:5432:5432"
+    # 本地调试/迁移脚本通道：绑 127.0.0.1:5433（宿主机 5432 被本机原生 PG 占用）
+    ports:
+      - "127.0.0.1:5433:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
       # 首次初始化：建业务库 + schema + 种子 + 只读角色（仅空卷时执行）

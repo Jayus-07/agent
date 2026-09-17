@@ -74,7 +74,9 @@ def main() -> int:
             (qvec, COLLECTION, qvec))
         prows = cur.fetchall()
         p_ids = [r[0] for r in prows]
-        p_dist1 = float(prows[0][1])
+        # pgvector <=> = 1-cos_sim；Chroma cosine distance = 2-2·cos_sim，恒差 2 倍
+        # （×2 对齐后再比差值，否则 gap 指标失真）
+        p_dist1 = float(prows[0][1]) * 2.0
 
         c_set, p_set = set(filter(None, c_ids)), set(filter(None, p_ids))
         recall = len(c_set & p_set) / len(c_set) if c_set else 1.0
