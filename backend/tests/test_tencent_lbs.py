@@ -809,7 +809,10 @@ class TestRoutingProviderSeam:
         try:
             leg = routing.estimate_leg(26.08, 119.29, 26.09, 119.30)
             assert leg["source"] == routing.SOURCE_LOCAL
-            assert set(leg) == {"distance_km", "mode", "minutes", "cost_cny", "source"}
+            # Phase 1 起本地回落 dict 带时效标注（providers/travel/facts）
+            assert set(leg) == {"distance_km", "mode", "minutes", "cost_cny",
+                                "source", "observed_at", "traffic_aware",
+                                "is_estimate", "fallback_reason"}
         finally:
             routing.set_route_provider(None)
 

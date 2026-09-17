@@ -246,7 +246,7 @@ def resolve_place(name: str, city: str, *, required: bool = False) -> Poi | None
         from backend.tools.travel.poi import resolve_city
 
         city_key = resolve_city(city) or city or hit.get("city") or ""
-        return Poi(
+        poi = Poi(
             # 用腾讯 POI id 构造稳定标识，跨会话可复现
             poi_id=f"lbs_{hit['id'] or abs(hash((name, city))) % 10**12}",
             name=hit["name"],
@@ -265,6 +265,15 @@ def resolve_place(name: str, city: str, *, required: bool = False) -> Poi | None
             required=required,
             source=SOURCE_LBS,
         )
+        # Phase 1 时效标注（providers/travel/facts）：占位营业时间/票价在唯一
+        # 解析出口统一打 unverified —— 任何调用方（resolve_missing_places、
+        # TencentPOIProvider、未来新路径）拿到的都是带标事实，「未核实」
+        # 沿状态链路走到行程单，不允许中途被当成核实事实消费。
+        from backend.providers.travel.facts import UNVERIFIED, now_iso
+
+        poi.verification_status = UNVERIFIED
+        poi.observed_at = now_iso()
+        return poi
     return None
 
 

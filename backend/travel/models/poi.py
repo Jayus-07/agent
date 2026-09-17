@@ -43,6 +43,17 @@ class Poi(BaseModel):
     rating: float = Field(default=0.0, description="热度/评分，用于候选排序")
     required: bool = Field(default=False, description="是否为用户点名必去（must_go 解析产物）")
     source: str = Field(default="seed:local", description="数据来源标识，用于行程单溯源")
+    # —— 时效语义（Phase 1，任务书 §3）：事实必须自带「何时观测、是否核实」——
+    # verification_status=unverified 时，营业时间/票价是占位值，reporter 必须明示，
+    # 不允许以确定语气写进行程单。
+    observed_at: str | None = Field(
+        default=None,
+        description="事实观测时间（ISO 8601 UTC）；None 表示未记录（种子数据静态事实）",
+    )
+    verification_status: str = Field(
+        default="verified",
+        description="verified=已核实（种子数据）；unverified=占位/未核实（外部解析补全）",
+    )
 
     def is_open_on(self, weekday: int) -> bool:
         """给定星期是否开放（weekday: 0=周一）。"""

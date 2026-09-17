@@ -82,6 +82,9 @@ TRAVEL_DRIVE_KMH = float(os.getenv("TRAVEL_DRIVE_KMH", "22"))
 TRAVEL_ROUTE_DETOUR_FACTOR = float(os.getenv("TRAVEL_ROUTE_DETOUR_FACTOR", "1.35"))
 # 超过此距离不再步行，改乘车
 TRAVEL_WALK_MAX_KM = float(os.getenv("TRAVEL_WALK_MAX_KM", "1.5"))
+# 出行日期距今超过该天数时，当日实时路况对那天不再可信，通勤强制本地估算
+# 并标注 fallback_reason（providers/travel 远期降级策略，Phase 1）
+TRAVEL_TRANSIT_FAR_TRIP_DAYS = int(os.getenv("TRAVEL_TRANSIT_FAR_TRIP_DAYS", "14"))
 
 # =============================================
 # 体力约束（校验轴三：日均强度）

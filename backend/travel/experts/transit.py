@@ -131,7 +131,10 @@ def schedule_day(
             notes.append("当日可用时间不足，需另作安排")
 
         if prev_coord is not None:
-            est = estimate_leg(prev_coord[0], prev_coord[1], poi.lat, poi.lng)
+            # 透传出行日期：providers/travel 据此执行「远期出行日期强制本地
+            # 估算」策略（实时路况对远期日期是伪事实）。编排逻辑不变。
+            est = estimate_leg(prev_coord[0], prev_coord[1], poi.lat, poi.lng,
+                               trip_date=day_date)
             day.legs.append(TransitLeg(
                 from_title=prev_item.title if prev_item else "起点",
                 to_title=poi.name, **est,

@@ -45,6 +45,14 @@ def describe_source(source: str) -> str:
     return "来源未登记（请在 reporter._SOURCE_LABELS 中补充说明）"
 
 
+# 通勤降级原因 → 面向用户的说明（Phase 1：降级要可解释，不能让用户对着来源标签猜）
+_FALLBACK_HINTS: dict[str, str] = {
+    "trip_date_beyond_horizon":
+        "出行日期距今天较远，实时路况对那天没有参考意义，"
+        "此段为经验估算 —— 建议临近出发时让我重新规划路线。",
+}
+
+
 def travel_reporter_node(state: dict) -> dict:
     """行程单节点。"""
     answer = _assemble(state)
@@ -131,6 +139,11 @@ def _render_itinerary(state: dict, itinerary) -> str:
                     + (f"，约 ¥{leg.cost_cny:.0f}" if leg.cost_cny else "")
                     + "）"
                 )
+                # Phase 1：通勤降级要可解释 —— 为什么这一段不是实时数据
+                if leg.fallback_reason:
+                    hint = _FALLBACK_HINTS.get(leg.fallback_reason)
+                    if hint:
+                        lines.append(f"  - {hint}")
         lines.append(
             f"\n*当日：活动 {day.active_minutes} 分钟、在途 {day.transit_minutes} 分钟、"
             f"花费约 ¥{day.cost_cny:.0f}*"
@@ -172,6 +185,15 @@ def _render_itinerary(state: dict, itinerary) -> str:
         items += [v.message for v in report.errors]
     items += [f"{w}" for w in itinerary.warnings]
     items += state.get("notes", [])
+    # Phase 1：占位事实字段级披露 —— unverified 的营业时间/票价不再只靠
+    # notes 文案一次性提及，凡出现在行程里的都逐一点名。
+    unverified = [p.name for p in itinerary.all_pois()
+                  if p.verification_status == "unverified"]
+    if unverified:
+        items.append(
+            "以下地点的营业时间与票价未经核实，请出行前自行确认："
+            + "、".join(dict.fromkeys(unverified))
+        )
     if items:
         lines += [f"- {i}" for i in dict.fromkeys(items)]
     else:

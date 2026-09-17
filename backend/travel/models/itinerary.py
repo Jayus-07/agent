@@ -55,6 +55,21 @@ class TransitLeg(BaseModel):
     # tencent:lbs 为腾讯位置服务真实路径规划结果 —— 行程单应如实标注，
     # 避免把估算值当导航结果呈现给用户。
     source: str = Field(default="estimate:local", description="通勤数据来源")
+    # —— 时效语义（Phase 1，任务书 §9）：实时路况有观测时刻与适用窗口 ——
+    # 远期出行日期强制本地估算并给 fallback_reason；未标注时按估算处理（保守）。
+    observed_at: str | None = Field(
+        default=None, description="路况观测时间（ISO 8601 UTC）；本地估算为生成时刻"
+    )
+    traffic_aware: bool = Field(
+        default=False, description="时长是否来自真实路况（tencent:lbs 实时路径）"
+    )
+    is_estimate: bool = Field(
+        default=True, description="数值是否为估算；未标注按估算处理（保守披露）"
+    )
+    fallback_reason: str | None = Field(
+        default=None,
+        description="降级原因（如 trip_date_beyond_horizon=出行日期超出实时数据可信窗口）；无降级为 None",
+    )
 
 
 class ItineraryDay(BaseModel):

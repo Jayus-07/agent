@@ -18,7 +18,10 @@ P1 口径（本文件已实现插槽）：通过 ``set_route_provider`` 注入�
 """
 from __future__ import annotations
 
+import inspect
 import math
+from datetime import date
+from functools import lru_cache
 from typing import Callable
 
 from backend.config import travel as T
@@ -31,8 +34,10 @@ MIN_LEG_MINUTES = {"walk": 5, "drive": 8}
 # 兼容旧引用
 _MIN_MINUTES = MIN_LEG_MINUTES
 
-# 真实路线数据源签名：(from_lat, from_lng, to_lat, to_lng) -> estimate_leg 同构 dict | None
-RouteProvider = Callable[[float, float, float, float], "dict | None"]
+# 真实路线数据源签名：(from_lat, from_lng, to_lat, to_lng[, trip_date]) -> estimate_leg 同构 dict | None
+# Phase 1 起 provider 可声明可选 kw-only 参数 trip_date（providers/travel 远期降级策略）；
+# 旧式 4 位置参数 provider（如 live_leg、测试桩）依然兼容 —— 见 _accepts_trip_date。
+RouteProvider = Callable[..., "dict | None"]
 
 # 数据来源标识，与 travel.models.itinerary.TransitLeg.source 的取值对齐
 SOURCE_LOCAL = "estimate:local"
@@ -56,6 +61,21 @@ def set_route_provider(provider: RouteProvider | None) -> None:
 
 def get_route_provider() -> RouteProvider | None:
     return _route_provider
+
+
+@lru_cache(maxsize=8)
+def _accepts_trip_date(provider: RouteProvider) -> bool:
+    """provider 是否声明了 trip_date 参数（决定 estimate_leg 是否透传出行日期）。
+
+    旧式 4 参 provider（live_leg、测试桩）不认识 trip_date，硬传会 TypeError；
+    签名检查让两种形态并存，注入方无需感知版本差异。结果按 provider 对象缓存。
+    """
+    try:
+        params = inspect.signature(provider).parameters
+    except (TypeError, ValueError):  # 内置/奇异可调用对象，保守不透传
+        return False
+    return any(p.kind is inspect.Parameter.KEYWORD_ONLY and p.name == "trip_date"
+               for p in params.values())
 
 
 def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -101,15 +121,24 @@ def leg_cost_cny(distance_km: float, mode: str) -> float:
 
 def estimate_leg(
     from_lat: float, from_lng: float, to_lat: float, to_lng: float,
+    *,
+    trip_date: date | None = None,
 ) -> dict:
     """一次通勤的完整估算，返回可直接构造 TransitLeg 的字段。
 
     已注入真实路线数据源时优先使用其结果；数据源不可用或查不到时，
     回落到本地直线×绕行系数估算 —— 通勤估算失败不应让整个行程生成失败。
+
+    trip_date：出行日期。仅当 provider 声明支持（kw-only ``trip_date``）时透传，
+    供 providers/travel 执行「远期出行日期强制本地估算」策略；旧式 provider 不受影响。
     """
     if _route_provider is not None:
         try:
-            live = _route_provider(from_lat, from_lng, to_lat, to_lng)
+            if _accepts_trip_date(_route_provider):
+                live = _route_provider(from_lat, from_lng, to_lat, to_lng,
+                                       trip_date=trip_date)
+            else:
+                live = _route_provider(from_lat, from_lng, to_lat, to_lng)
         except Exception as e:  # noqa: BLE001 — 数据源异常不得影响排程主链路
             logger.warning("[TravelRouting] 真实路线数据源异常，回退本地估算: %s", e)
             live = None
@@ -126,7 +155,19 @@ def estimate_leg(
         # 显式标注来源，与 live_leg 的返回保持对称：调用方拿到的 dict 可以直接
         # 构造 TransitLeg，不必依赖模型默认值来补 provenance。
         "source": SOURCE_LOCAL,
+        # 时效标注（Phase 1）：本地估算是「此刻生成的估算」，无实时路况成分
+        "observed_at": _local_observed_at(),
+        "traffic_aware": False,
+        "is_estimate": True,
+        "fallback_reason": None,
     }
+
+
+def _local_observed_at() -> str:
+    """本地估算的观测时刻（惰性导入，避免 facts → config 的加载环）。"""
+    from backend.providers.travel.facts import now_iso
+
+    return now_iso()
 
 
 def day_radius_km(points: list[tuple[float, float]]) -> float:
