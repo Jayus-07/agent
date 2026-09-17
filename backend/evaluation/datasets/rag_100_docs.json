@@ -1,10 +1,10 @@
 {
-  "version": "0.1.0-probe",
+  "version": "0.2.0-full",
   "name": "rag_100_docs",
   "kb_id": "rag_100_docs",
-  "_comment": "R3 探路版测试集（任务书 §4）。8 个标注字段位于每条用例的 annotation 内：doc_id / expected_doc_ids / expected_chunk_ids / key_facts(关键事实) / query_type(查询类型, 7 类) / should_refuse(是否拒答, 辅以 refusal_reason) / version_requirement(版本要求) / permission_scope(权限范围)。expected_chunk_ids 在索引完成前不可知，暂为 null，以 expected_chunk_anchors (原文锚点) 替代，索引后回填。无答案用例 key_facts 为空且应拒答。权限用例的 should_refuse 以「general 权限视角」标注。",
+  "_comment": "R3 全量版测试集（任务书 §4，覆盖 100 份异构语料）。8 个标注字段位于每条用例的 annotation 内：doc_id / expected_doc_ids / expected_chunk_ids / key_facts(关键事实) / query_type(查询类型, 7 类) / should_refuse(是否拒答, 辅以 refusal_reason) / version_requirement(版本要求) / permission_scope(权限范围)。expected 由 annotation 派生，供 harness 执行。expected_chunk_ids 在索引前不可知：已回填的用例由 BACKFILLED_CHUNK_IDS 保住，其余为 null，待 ingest 后回填。无答案用例 key_facts 为空且应拒答；权限用例的 should_refuse 以「general 权限视角」标注。",
   "fixture_dir": "../fixtures/rag_100_docs/files",
-  "documents_count": 27,
+  "documents_count": 100,
   "test_cases": [
     {
       "id": "RD-001",
@@ -58,8 +58,8 @@
           "XC-Guest",
           "密码每月1日更新"
         ],
-        "should_reject": false,
-        "expected_answer": "XC-Guest；密码每月1日更新"
+        "expected_answer": "XC-Guest；密码每月1日更新",
+        "should_reject": false
       }
     },
     {
@@ -110,8 +110,8 @@
         "required_facts": [
           "10个工作日内"
         ],
-        "should_reject": false,
-        "expected_answer": "10个工作日内"
+        "expected_answer": "10个工作日内",
+        "should_reject": false
       }
     },
     {
@@ -164,8 +164,8 @@
           "3个工作日",
           "补办费20元"
         ],
-        "should_reject": false,
-        "expected_answer": "3个工作日；补办费20元"
+        "expected_answer": "3个工作日；补办费20元",
+        "should_reject": false
       }
     },
     {
@@ -218,8 +218,8 @@
           "0591-8888-6677",
           "15分钟内响应"
         ],
-        "should_reject": false,
-        "expected_answer": "0591-8888-6677；15分钟内响应"
+        "expected_answer": "0591-8888-6677；15分钟内响应",
+        "should_reject": false
       }
     },
     {
@@ -274,8 +274,8 @@
           "120万元",
           "2025年3月1日至2027年2月28日"
         ],
-        "should_reject": false,
-        "expected_answer": "120万元；2025年3月1日至2027年2月28日"
+        "expected_answer": "120万元；2025年3月1日至2027年2月28日",
+        "should_reject": false
       }
     },
     {
@@ -313,22 +313,24 @@
         "is_no_answer": false,
         "source": "generated",
         "schema_version": "1.0-probe",
-        "group": "scanned",
-        "kb_id": "rag_100_docs"
+        "kb_id": "rag_100_docs",
+        "group": "scanned"
       },
       "expected": {
         "relevant_docs": [
           "scan_asset_disposal"
         ],
-        "relevant_chunks": [],
+        "relevant_chunks": [
+          "scan_asset_disposal_0"
+        ],
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
         "required_facts": [
           "陈斌",
           "2026-06-12"
         ],
-        "should_reject": false,
-        "expected_answer": "陈斌；2026-06-12"
+        "expected_answer": "陈斌；2026-06-12",
+        "should_reject": false
       }
     },
     {
@@ -395,8 +397,8 @@
           "印章使用管理办法",
           "行政部"
         ],
-        "should_reject": false,
-        "expected_answer": "印章使用管理办法；行政部"
+        "expected_answer": "印章使用管理办法；行政部",
+        "should_reject": false
       }
     },
     {
@@ -447,8 +449,8 @@
         "required_facts": [
           "CU+8位数字"
         ],
-        "should_reject": false,
-        "expected_answer": "CU+8位数字"
+        "expected_answer": "CU+8位数字",
+        "should_reject": false
       }
     },
     {
@@ -515,8 +517,8 @@
           "3次以内含3次且每次不超过10分钟",
           "满2小时起算"
         ],
-        "should_reject": false,
-        "expected_answer": "3次以内含3次且每次不超过10分钟；满2小时起算"
+        "expected_answer": "3次以内含3次且每次不超过10分钟；满2小时起算",
+        "should_reject": false
       }
     },
     {
@@ -563,8 +565,8 @@
         "is_no_answer": false,
         "source": "generated",
         "schema_version": "1.0-probe",
-        "group": "similar_pair",
-        "kb_id": "rag_100_docs"
+        "kb_id": "rag_100_docs",
+        "group": "similar_pair"
       },
       "expected": {
         "relevant_docs": [
@@ -588,8 +590,8 @@
           "08:30至09:00",
           "5次以内含5次且每次不超过15分钟"
         ],
-        "should_reject": false,
-        "expected_answer": "08:30至09:00；5次以内含5次且每次不超过15分钟"
+        "expected_answer": "08:30至09:00；5次以内含5次且每次不超过15分钟",
+        "should_reject": false
       }
     },
     {
@@ -656,8 +658,8 @@
           "星辰办公App",
           "单次最长3小时"
         ],
-        "should_reject": false,
-        "expected_answer": "星辰办公App；单次最长3小时"
+        "expected_answer": "星辰办公App；单次最长3小时",
+        "should_reject": false
       }
     },
     {
@@ -724,8 +726,8 @@
           "综合评分80分及以上",
           "每年3月年审"
         ],
-        "should_reject": false,
-        "expected_answer": "综合评分80分及以上；每年3月年审"
+        "expected_answer": "综合评分80分及以上；每年3月年审",
+        "should_reject": false
       }
     },
     {
@@ -778,8 +780,8 @@
           "12,999元/年",
           "席位不限"
         ],
-        "should_reject": false,
-        "expected_answer": "12,999元/年；席位不限"
+        "expected_answer": "12,999元/年；席位不限",
+        "should_reject": false
       }
     },
     {
@@ -840,8 +842,8 @@
         "required_facts": [
           "486.5万元"
         ],
-        "should_reject": false,
-        "expected_answer": "486.5万元"
+        "expected_answer": "486.5万元",
+        "should_reject": false
       }
     },
     {
@@ -892,8 +894,8 @@
         "required_facts": [
           "A1机房"
         ],
-        "should_reject": false,
-        "expected_answer": "A1机房"
+        "expected_answer": "A1机房",
+        "should_reject": false
       }
     },
     {
@@ -944,8 +946,8 @@
         "required_facts": [
           "168.4万元"
         ],
-        "should_reject": false,
-        "expected_answer": "168.4万元"
+        "expected_answer": "168.4万元",
+        "should_reject": false
       }
     },
     {
@@ -998,8 +1000,8 @@
           "93.8%",
           "41秒"
         ],
-        "should_reject": false,
-        "expected_answer": "93.8%；41秒"
+        "expected_answer": "93.8%；41秒",
+        "should_reject": false
       }
     },
     {
@@ -1075,8 +1077,8 @@
           "120万元",
           "18.5万元"
         ],
-        "should_reject": false,
-        "expected_answer": "120万元；18.5万元"
+        "expected_answer": "120万元；18.5万元",
+        "should_reject": false
       }
     },
     {
@@ -1140,8 +1142,8 @@
         "is_no_answer": false,
         "source": "generated",
         "schema_version": "1.0-probe",
-        "group": "version_chain",
-        "kb_id": "rag_100_docs"
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
       },
       "expected": {
         "relevant_docs": [
@@ -1177,8 +1179,8 @@
           "调整过2次",
           "当前700元/晚"
         ],
-        "should_reject": false,
-        "expected_answer": "调整过2次；当前700元/晚"
+        "expected_answer": "调整过2次；当前700元/晚",
+        "should_reject": false
       }
     },
     {
@@ -1236,8 +1238,8 @@
           "61.2%",
           "168.4万元"
         ],
-        "should_reject": false,
-        "expected_answer": "61.2%；168.4万元"
+        "expected_answer": "61.2%；168.4万元",
+        "should_reject": false
       }
     },
     {
@@ -1292,8 +1294,8 @@
         "required_facts": [
           "提前5个工作日"
         ],
-        "should_reject": false,
-        "expected_answer": "提前5个工作日"
+        "expected_answer": "提前5个工作日",
+        "should_reject": false
       }
     },
     {
@@ -1358,8 +1360,8 @@
         "required_facts": [
           "B1层前台"
         ],
-        "should_reject": false,
-        "expected_answer": "B1层前台"
+        "expected_answer": "B1层前台",
+        "should_reject": false
       }
     },
     {
@@ -1406,8 +1408,8 @@
         "is_no_answer": false,
         "source": "generated",
         "schema_version": "1.0-probe",
-        "group": "version_chain",
-        "kb_id": "rag_100_docs"
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
       },
       "expected": {
         "relevant_docs": [
@@ -1430,8 +1432,8 @@
         "required_facts": [
           "600元/晚"
         ],
-        "should_reject": false,
-        "expected_answer": "600元/晚"
+        "expected_answer": "600元/晚",
+        "should_reject": false
       }
     },
     {
@@ -1477,8 +1479,8 @@
         "is_no_answer": false,
         "source": "generated",
         "schema_version": "1.0-probe",
-        "group": "version_chain",
-        "kb_id": "rag_100_docs"
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
       },
       "expected": {
         "relevant_docs": [
@@ -1500,8 +1502,8 @@
         "required_facts": [
           "500元/晚"
         ],
-        "should_reject": false,
-        "expected_answer": "500元/晚"
+        "expected_answer": "500元/晚",
+        "should_reject": false
       }
     },
     {
@@ -1538,8 +1540,8 @@
         "is_no_answer": false,
         "source": "generated",
         "schema_version": "1.0-probe",
-        "group": "version_chain",
-        "kb_id": "rag_100_docs"
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
       },
       "expected": {
         "relevant_docs": [
@@ -1553,8 +1555,8 @@
         "required_facts": [
           "出差事由与项目编号"
         ],
-        "should_reject": false,
-        "expected_answer": "出差事由与项目编号"
+        "expected_answer": "出差事由与项目编号",
+        "should_reject": false
       }
     },
     {
@@ -1621,8 +1623,8 @@
           "public/internal/confidential三级",
           "数据保护官（DPO）书面审批"
         ],
-        "should_reject": false,
-        "expected_answer": "public/internal/confidential三级；数据保护官（DPO）书面审批"
+        "expected_answer": "public/internal/confidential三级；数据保护官（DPO）书面审批",
+        "should_reject": false
       }
     },
     {
@@ -1675,8 +1677,8 @@
           "58,320件",
           "92.4%"
         ],
-        "should_reject": false,
-        "expected_answer": "58,320件；92.4%"
+        "expected_answer": "58,320件；92.4%",
+        "should_reject": false
       }
     },
     {
@@ -1727,8 +1729,8 @@
         "required_facts": [
           "2026-04-18"
         ],
-        "should_reject": false,
-        "expected_answer": "2026-04-18"
+        "expected_answer": "2026-04-18",
+        "should_reject": false
       }
     },
     {
@@ -1767,22 +1769,24 @@
         "is_no_answer": false,
         "source": "generated",
         "schema_version": "1.0-probe",
-        "group": "scanned",
-        "kb_id": "rag_100_docs"
+        "kb_id": "rag_100_docs",
+        "group": "scanned"
       },
       "expected": {
         "relevant_docs": [
           "scan_access_request"
         ],
-        "relevant_chunks": [],
+        "relevant_chunks": [
+          "scan_access_request_0"
+        ],
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
         "required_facts": [
           "B2层机房",
           "90天（2026-07-01至2026-09-28）"
         ],
-        "should_reject": false,
-        "expected_answer": "B2层机房；90天（2026-07-01至2026-09-28）"
+        "expected_answer": "B2层机房；90天（2026-07-01至2026-09-28）",
+        "should_reject": false
       }
     },
     {
@@ -1841,8 +1845,8 @@
         "required_facts": [
           "5,210.50元"
         ],
-        "should_reject": false,
-        "expected_answer": "5,210.50元"
+        "expected_answer": "5,210.50元",
+        "should_reject": false
       }
     },
     {
@@ -1881,8 +1885,8 @@
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
         "required_facts": [],
-        "should_reject": true,
-        "expected_answer": ""
+        "expected_answer": "",
+        "should_reject": true
       }
     },
     {
@@ -1921,8 +1925,8 @@
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
         "required_facts": [],
-        "should_reject": true,
-        "expected_answer": ""
+        "expected_answer": "",
+        "should_reject": true
       }
     },
     {
@@ -1965,8 +1969,8 @@
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
         "required_facts": [],
-        "should_reject": true,
-        "expected_answer": ""
+        "expected_answer": "",
+        "should_reject": true
       }
     },
     {
@@ -2005,8 +2009,8 @@
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
         "required_facts": [],
-        "should_reject": true,
-        "expected_answer": ""
+        "expected_answer": "",
+        "should_reject": true
       }
     },
     {
@@ -2049,8 +2053,8 @@
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
         "required_facts": [],
-        "should_reject": true,
-        "expected_answer": ""
+        "expected_answer": "",
+        "should_reject": true
       }
     },
     {
@@ -2093,8 +2097,6738 @@
         "match_type": "chunk_id",
         "min_relevant_chunks": 1,
         "required_facts": [],
-        "should_reject": true,
-        "expected_answer": ""
+        "expected_answer": "",
+        "should_reject": true
+      }
+    },
+    {
+      "id": "RD-037",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "公司与深蓝智能签订的双向保密协议，保密期限是多长？",
+      "annotation": {
+        "doc_id": "legal_nnn_agreement",
+        "expected_doc_ids": [
+          "legal_nnn_agreement"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "自签署之日起5年"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "legal",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_nnn_agreement"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "自签署之日起5年"
+        ],
+        "expected_answer": "自签署之日起5年",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-038",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "违反双向保密协议要支付多少违约金？",
+      "annotation": {
+        "doc_id": "legal_nnn_agreement",
+        "expected_doc_ids": [
+          "legal_nnn_agreement"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "50万元"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "legal",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_nnn_agreement"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "50万元"
+        ],
+        "expected_answer": "50万元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-039",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "知识产权转让的总价是多少？付款怎么安排？",
+      "annotation": {
+        "doc_id": "legal_ip_assignment",
+        "expected_doc_ids": [
+          "legal_ip_assignment"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "80万元",
+          "签署后15个工作日内付50%，权属变更登记完成后付剩余50%"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "legal",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_ip_assignment"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "80万元",
+          "签署后15个工作日内付50%，权属变更登记完成后付剩余50%"
+        ],
+        "expected_answer": "80万元；签署后15个工作日内付50%，权属变更登记完成后付剩余50%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-040",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "受让的发明专利与软著，权属变更登记什么时候完成？",
+      "annotation": {
+        "doc_id": "legal_ip_assignment",
+        "expected_doc_ids": [
+          "legal_ip_assignment"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "2025-11-20"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "legal",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_ip_assignment"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "2025-11-20"
+        ],
+        "expected_answer": "2025-11-20",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-041",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "向中科智联采购了多少台 GPU 服务器？合同总价多少？",
+      "annotation": {
+        "doc_id": "legal_purchase_contract_zhongke",
+        "expected_doc_ids": [
+          "legal_purchase_contract_zhongke"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [
+          "合同编号：XC-CG-2026-014"
+        ],
+        "key_facts": [
+          "12台",
+          "468万元"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "legal",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_procurement"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_purchase_contract_zhongke"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "12台",
+          "468万元"
+        ],
+        "expected_answer": "12台；468万元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-042",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "中科智联如果逾期交货，违约金怎么算？有没有上限？",
+      "annotation": {
+        "doc_id": "legal_purchase_contract_zhongke",
+        "expected_doc_ids": [
+          "legal_purchase_contract_zhongke"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "每逾期一日按合同总价0.5%",
+          "累计不超过合同总价的5%"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "legal",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_procurement"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_purchase_contract_zhongke"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "每逾期一日按合同总价0.5%",
+          "累计不超过合同总价的5%"
+        ],
+        "expected_answer": "每逾期一日按合同总价0.5%；累计不超过合同总价的5%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-043",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "争议和解备忘录约定公司一次性支付多少钱？",
+      "annotation": {
+        "doc_id": "legal_settlement_memo",
+        "expected_doc_ids": [
+          "legal_settlement_memo"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "35万元"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "legal",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_settlement_memo"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "35万元"
+        ],
+        "expected_answer": "35万元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-044",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "受控物项清单多久更新一次？出口管制筛查记录要保存多久？",
+      "annotation": {
+        "doc_id": "policy_export_control",
+        "expected_doc_ids": [
+          "policy_export_control"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "每季度更新一次",
+          "保存10年"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_export_control"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "每季度更新一次",
+          "保存10年"
+        ],
+        "expected_answer": "每季度更新一次；保存10年",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-045",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "没做出口管制筛查就签了合同，直接责任人会有什么后果？",
+      "annotation": {
+        "doc_id": "policy_export_control",
+        "expected_doc_ids": [
+          "policy_export_control"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "当年度绩效一票否决"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_export_control"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "当年度绩效一票否决"
+        ],
+        "expected_answer": "当年度绩效一票否决",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-046",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "招聘新增编制（HC）由谁终审？内部推荐成功奖励多少钱？",
+      "annotation": {
+        "doc_id": "policy_recruitment",
+        "expected_doc_ids": [
+          "policy_recruitment"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "CEO终审",
+          "8,000元/人"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_hiring"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_recruitment"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "CEO终审",
+          "8,000元/人"
+        ],
+        "expected_answer": "CEO终审；8,000元/人",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-047",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "发 Offer 之前必须完成什么流程？核心岗位有什么要求？",
+      "annotation": {
+        "doc_id": "policy_recruitment",
+        "expected_doc_ids": [
+          "policy_recruitment"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "背景调查",
+          "核心岗位背调覆盖率100%"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_hiring"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_recruitment"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "背景调查",
+          "核心岗位背调覆盖率100%"
+        ],
+        "expected_answer": "背景调查；核心岗位背调覆盖率100%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-048",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "绩效考核结果的强制分布是怎么规定的？",
+      "annotation": {
+        "doc_id": "policy_performance_appraisal",
+        "expected_doc_ids": [
+          "policy_performance_appraisal"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "A档不超过20%",
+          "D档不低于5%"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_performance_appraisal"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "A档不超过20%",
+          "D档不低于5%"
+        ],
+        "expected_answer": "A档不超过20%；D档不低于5%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-049",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "连续两次绩效考核为 D 会怎么处理？",
+      "annotation": {
+        "doc_id": "policy_performance_appraisal",
+        "expected_doc_ids": [
+          "policy_performance_appraisal"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "进入绩效改进计划PIP",
+          "改进期3个月"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_performance_appraisal"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "进入绩效改进计划PIP",
+          "改进期3个月"
+        ],
+        "expected_answer": "进入绩效改进计划PIP；改进期3个月",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-050",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "生产环境软件正版化率目标是多少？全公司软件盘点在什么时候？",
+      "annotation": {
+        "doc_id": "policy_software_asset",
+        "expected_doc_ids": [
+          "policy_software_asset"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "正版化率100%",
+          "每年12月"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_software_asset"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "正版化率100%",
+          "每年12月"
+        ],
+        "expected_answer": "正版化率100%；每年12月",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-051",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "V1 版费用报销办法的报销时限是多长？审批要过几级？",
+      "annotation": {
+        "doc_id": "policy_expense_v1",
+        "expected_doc_ids": [
+          "policy_expense_v1"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "60日内",
+          "部门负责人→财务部两级审批"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "as_of",
+          "date": "2026-02-01"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_expense_v1"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "60日内",
+          "部门负责人→财务部两级审批"
+        ],
+        "expected_answer": "60日内；部门负责人→财务部两级审批",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-052",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "研发中心每月加班上限是多少小时？工作日加班费怎么计发？",
+      "annotation": {
+        "doc_id": "policy_overtime_rnd",
+        "expected_doc_ids": [
+          "policy_overtime_rnd"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "每月不超过36小时",
+          "工作日按1.5倍计发"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "similar_pair"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_overtime_rnd"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "每月不超过36小时",
+          "工作日按1.5倍计发"
+        ],
+        "expected_answer": "每月不超过36小时；工作日按1.5倍计发",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-053",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "客服部法定节假日加班怎么计发？夜班津贴多少钱？",
+      "annotation": {
+        "doc_id": "policy_overtime_cs",
+        "expected_doc_ids": [
+          "policy_overtime_cs"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "法定节假日按3倍工资计发",
+          "夜班每班次60元"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "similar_pair"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_overtime_cs"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "法定节假日按3倍工资计发",
+          "夜班每班次60元"
+        ],
+        "expected_answer": "法定节假日按3倍工资计发；夜班每班次60元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-054",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "研发中心和客服部，每月加班工时上限分别是多少？",
+      "annotation": {
+        "doc_id": "policy_overtime_rnd",
+        "expected_doc_ids": [
+          "policy_overtime_rnd",
+          "policy_overtime_cs"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "研发中心36小时",
+          "客服部24小时"
+        ],
+        "query_type": "low_confidence",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "similar_pair"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_overtime_rnd",
+          "policy_overtime_cs"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "研发中心36小时",
+          "客服部24小时"
+        ],
+        "expected_answer": "研发中心36小时；客服部24小时",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-055",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "V2 版信息安全管理制度相比旧版，新增了哪些管控要求？",
+      "annotation": {
+        "doc_id": "policy_infosec_v2",
+        "expected_doc_ids": [
+          "policy_infosec_v2"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "远程终端须装管控代理并全盘加密",
+          "第三方人员使用受限账号并录屏留痕",
+          "禁止将confidential级数据输入外部大模型",
+          "禁用移动存储介质"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "current"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_infosec_v2"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "远程终端须装管控代理并全盘加密",
+          "第三方人员使用受限账号并录屏留痕",
+          "禁止将confidential级数据输入外部大模型",
+          "禁用移动存储介质"
+        ],
+        "expected_answer": "远程终端须装管控代理并全盘加密；第三方人员使用受限账号并录屏留痕；禁止将confidential级数据输入外部大模型；禁用移动存储介质",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-056",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "按现行信息安全制度，数据对外导出须经谁审批？",
+      "annotation": {
+        "doc_id": "policy_infosec_v2",
+        "expected_doc_ids": [
+          "policy_infosec_v2"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "数据保护官书面审批"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "current"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_infosec_v2"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "数据保护官书面审批"
+        ],
+        "expected_answer": "数据保护官书面审批",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-057",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "客户退款审核要在多久内完成？超过 5 万元怎么办？",
+      "annotation": {
+        "doc_id": "sop_refund_processing",
+        "expected_doc_ids": [
+          "sop_refund_processing"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "3个工作日内",
+          "超过5万元报财务总监审批"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "sop",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_refund_processing"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "3个工作日内",
+          "超过5万元报财务总监审批"
+        ],
+        "expected_answer": "3个工作日内；超过5万元报财务总监审批",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-058",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "财务付款之后，客户多久能收到退款？",
+      "annotation": {
+        "doc_id": "sop_refund_processing",
+        "expected_doc_ids": [
+          "sop_refund_processing"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "7至15个工作日"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "sop",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_refund_processing"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "7至15个工作日"
+        ],
+        "expected_answer": "7至15个工作日",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-059",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "供应商准入要提交几项材料？要不要交保证金？",
+      "annotation": {
+        "doc_id": "sop_vendor_onboarding",
+        "expected_doc_ids": [
+          "sop_vendor_onboarding"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "5项材料",
+          "履约保证金10万元"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "sop",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_procurement"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_vendor_onboarding"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "5项材料",
+          "履约保证金10万元"
+        ],
+        "expected_answer": "5项材料；履约保证金10万元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-060",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "V1 版故障应急响应 SOP 里，P1 级故障要求多久恢复服务？",
+      "annotation": {
+        "doc_id": "sop_incident_response_v1",
+        "expected_doc_ids": [
+          "sop_incident_response_v1"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "4小时内"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "as_of",
+          "date": "2025-01-01"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "sop",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_incident_response_v1"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "4小时内"
+        ],
+        "expected_answer": "4小时内",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-061",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 年第二季度共处置了多少起安全事件？其中 P1 级几起？",
+      "annotation": {
+        "doc_id": "report_incident_2026q2",
+        "expected_doc_ids": [
+          "report_incident_2026q2"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "14起",
+          "P1级1起"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "report",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_incident"
+      },
+      "expected": {
+        "relevant_docs": [
+          "report_incident_2026q2"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "14起",
+          "P1级1起"
+        ],
+        "expected_answer": "14起；P1级1起",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-062",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "5 月 19 日网关鉴权绕行事件影响了多少个账户？",
+      "annotation": {
+        "doc_id": "report_incident_2026q2",
+        "expected_doc_ids": [
+          "report_incident_2026q2"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "1,243个账户"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "report",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_incident"
+      },
+      "expected": {
+        "relevant_docs": [
+          "report_incident_2026q2"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "1,243个账户"
+        ],
+        "expected_answer": "1,243个账户",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-063",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026Q2 安全事件的平均检测时长是多少？",
+      "annotation": {
+        "doc_id": "report_incident_2026q2",
+        "expected_doc_ids": [
+          "report_incident_2026q2"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "23分钟"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "report",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_incident"
+      },
+      "expected": {
+        "relevant_docs": [
+          "report_incident_2026q2"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "23分钟"
+        ],
+        "expected_answer": "23分钟",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-064",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "生产环境变更窗口定在什么时候？",
+      "annotation": {
+        "doc_id": "manual_ops_runbook",
+        "expected_doc_ids": [
+          "manual_ops_runbook"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "每周二、周四20:00至24:00"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "manual",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "manual_ops_runbook"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "每周二、周四20:00至24:00"
+        ],
+        "expected_answer": "每周二、周四20:00至24:00",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-065",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "核心业务库的备份保留多久？跨季度首周的备份呢？",
+      "annotation": {
+        "doc_id": "manual_ops_runbook",
+        "expected_doc_ids": [
+          "manual_ops_runbook"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "保留30天",
+          "跨季度首周额外保留1年"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "manual",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "manual_ops_runbook"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "保留30天",
+          "跨季度首周额外保留1年"
+        ],
+        "expected_answer": "保留30天；跨季度首周额外保留1年",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-066",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "一级告警触发后，多久要电话通知值班经理？",
+      "annotation": {
+        "doc_id": "manual_ops_runbook",
+        "expected_doc_ids": [
+          "manual_ops_runbook"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "5分钟内"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "manual",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "manual_ops_runbook"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "5分钟内"
+        ],
+        "expected_answer": "5分钟内",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-067",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "数据仓库分哪几层？能不能跨层直接取数？",
+      "annotation": {
+        "doc_id": "spec_data_warehouse",
+        "expected_doc_ids": [
+          "spec_data_warehouse"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "ODS/DWD/DWS/ADS四层",
+          "禁止跨层直连取数"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "spec",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "spec_data_warehouse"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "ODS/DWD/DWS/ADS四层",
+          "禁止跨层直连取数"
+        ],
+        "expected_answer": "ODS/DWD/DWS/ADS四层；禁止跨层直连取数",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-068",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "数仓基线任务须在什么时间前完成？任务失败后重试几次？",
+      "annotation": {
+        "doc_id": "spec_data_warehouse",
+        "expected_doc_ids": [
+          "spec_data_warehouse"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "每日06:30前",
+          "最多重试2次，间隔5分钟"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "spec",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "spec_data_warehouse"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "每日06:30前",
+          "最多重试2次，间隔5分钟"
+        ],
+        "expected_answer": "每日06:30前；最多重试2次，间隔5分钟",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-069",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "核心表质量卡点里，波动率超过多少会自动阻断下游？",
+      "annotation": {
+        "doc_id": "spec_data_warehouse",
+        "expected_doc_ids": [
+          "spec_data_warehouse"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "超过30%"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "spec",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "spec_data_warehouse"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "超过30%"
+        ],
+        "expected_answer": "超过30%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-070",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "劳动合同首次签订期限多久？试用期多久？",
+      "annotation": {
+        "doc_id": "legal_labor_contract_template",
+        "expected_doc_ids": [
+          "legal_labor_contract_template"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "首次3年",
+          "试用期6个月"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "legal",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_labor_contract_template"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "首次3年",
+          "试用期6个月"
+        ],
+        "expected_answer": "首次3年；试用期6个月",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-071",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "竞业限制最长能约定多久？补偿金按什么标准支付？",
+      "annotation": {
+        "doc_id": "legal_labor_contract_template",
+        "expected_doc_ids": [
+          "legal_labor_contract_template"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "不超过2年",
+          "离职前十二个月平均工资的30%按月支付"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "legal",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_labor_contract_template"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "不超过2年",
+          "离职前十二个月平均工资的30%按月支付"
+        ],
+        "expected_answer": "不超过2年；离职前十二个月平均工资的30%按月支付",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-072",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "DPA 里乙方使用子处理者，须提前多久告知甲方？",
+      "annotation": {
+        "doc_id": "legal_dpa_processing",
+        "expected_doc_ids": [
+          "legal_dpa_processing"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "15个工作日"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "legal",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_data_compliance"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_dpa_processing"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "15个工作日"
+        ],
+        "expected_answer": "15个工作日",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-073",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "服务终止后，乙方须在多长时间内删除数据？",
+      "annotation": {
+        "doc_id": "legal_dpa_processing",
+        "expected_doc_ids": [
+          "legal_dpa_processing"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "90天内"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "legal",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_data_compliance"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_dpa_processing"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "90天内"
+        ],
+        "expected_answer": "90天内",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-074",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "公司在办的诉讼与仲裁案件共几起？标的额最高的是多少？",
+      "annotation": {
+        "doc_id": "legal_case_litigation_2026",
+        "expected_doc_ids": [
+          "legal_case_litigation_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "3起",
+          "1,180万元"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "legal_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "legal",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_case_litigation_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "3起",
+          "1,180万元"
+        ],
+        "expected_answer": "3起；1,180万元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-075",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "V2 版故障 SOP 的 P1 恢复时限是多少？故障通报走哪些渠道？",
+      "annotation": {
+        "doc_id": "sop_incident_response_v2",
+        "expected_doc_ids": [
+          "sop_incident_response_v2"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "2小时内",
+          "邮件+短信+企业微信三通道"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "sop",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_incident_response_v2"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "2小时内",
+          "邮件+短信+企业微信三通道"
+        ],
+        "expected_answer": "2小时内；邮件+短信+企业微信三通道",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-076",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "版本发布的灰度比例怎么推进？每个阶段要观察多久？",
+      "annotation": {
+        "doc_id": "sop_release_deploy",
+        "expected_doc_ids": [
+          "sop_release_deploy"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "5%→20%→100%",
+          "每阶段观察不少于30分钟"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "sop",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_release_deploy"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "5%→20%→100%",
+          "每阶段观察不少于30分钟"
+        ],
+        "expected_answer": "5%→20%→100%；每阶段观察不少于30分钟",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-077",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "什么情况下必须回滚？回滚要多久执行完？",
+      "annotation": {
+        "doc_id": "sop_release_deploy",
+        "expected_doc_ids": [
+          "sop_release_deploy"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "出现P1/P2级缺陷或核心接口错误率超过1%",
+          "决策后15分钟内执行完毕"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "sop",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_release_deploy"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "出现P1/P2级缺陷或核心接口错误率超过1%",
+          "决策后15分钟内执行完毕"
+        ],
+        "expected_answer": "出现P1/P2级缺陷或核心接口错误率超过1%；决策后15分钟内执行完毕",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-078",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "备份恢复演练的 RTO 和 RPO 目标分别是多少？",
+      "annotation": {
+        "doc_id": "sop_backup_recovery_drill",
+        "expected_doc_ids": [
+          "sop_backup_recovery_drill"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "RTO 4小时",
+          "RPO 15分钟"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "sop",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_backup_recovery_drill"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "RTO 4小时",
+          "RPO 15分钟"
+        ],
+        "expected_answer": "RTO 4小时；RPO 15分钟",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-079",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "最近一次备份恢复演练是哪天？实际恢复耗时多久？",
+      "annotation": {
+        "doc_id": "sop_backup_recovery_drill",
+        "expected_doc_ids": [
+          "sop_backup_recovery_drill"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "2026-05-20",
+          "2小时48分"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "sop",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_backup_recovery_drill"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "2026-05-20",
+          "2小时48分"
+        ],
+        "expected_answer": "2026-05-20；2小时48分",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-080",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "常规岗位要面试几轮？面评要在多久内提交？",
+      "annotation": {
+        "doc_id": "sop_interview_hiring",
+        "expected_doc_ids": [
+          "sop_interview_hiring"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "3轮（技术面、主管面、HRBP面）",
+          "24小时内提交"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "sop",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_hiring"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_interview_hiring"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "3轮（技术面、主管面、HRBP面）",
+          "24小时内提交"
+        ],
+        "expected_answer": "3轮（技术面、主管面、HRBP面）；24小时内提交",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-081",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "V2 版报销办法的报销时限是多少？超过 5 万元怎么办？",
+      "annotation": {
+        "doc_id": "policy_expense_v2",
+        "expected_doc_ids": [
+          "policy_expense_v2"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "30日内",
+          "单笔超过5万元加签财务总监"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_expense_v2"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "30日内",
+          "单笔超过5万元加签财务总监"
+        ],
+        "expected_answer": "30日内；单笔超过5万元加签财务总监",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-082",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "V2 版报销办法对电子发票新增了什么要求？",
+      "annotation": {
+        "doc_id": "policy_expense_v2",
+        "expected_doc_ids": [
+          "policy_expense_v2"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "电子发票须通过系统查重",
+          "重复报销一律退回并通报"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "policy",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_expense_v2"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "电子发票须通过系统查重",
+          "重复报销一律退回并通报"
+        ],
+        "expected_answer": "电子发票须通过系统查重；重复报销一律退回并通报",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-083",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2025 年末付费客户数是多少？NPS 多少？",
+      "annotation": {
+        "doc_id": "report_product_annual_2025",
+        "expected_doc_ids": [
+          "report_product_annual_2025"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "1,842家",
+          "NPS 46"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "report",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_product"
+      },
+      "expected": {
+        "relevant_docs": [
+          "report_product_annual_2025"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "1,842家",
+          "NPS 46"
+        ],
+        "expected_answer": "1,842家；NPS 46",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-084",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "数据接入平台 1.0 是哪天发布的？",
+      "annotation": {
+        "doc_id": "report_product_annual_2025",
+        "expected_doc_ids": [
+          "report_product_annual_2025"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "2025-09-12"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "report",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_product"
+      },
+      "expected": {
+        "relevant_docs": [
+          "report_product_annual_2025"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "2025-09-12"
+        ],
+        "expected_answer": "2025-09-12",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-085",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "董事会批准的 2026 年度资本性支出预算是多少？",
+      "annotation": {
+        "doc_id": "report_board_resolution_2026",
+        "expected_doc_ids": [
+          "report_board_resolution_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "3,200万元"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "report",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "report_board_resolution_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "3,200万元"
+        ],
+        "expected_answer": "3,200万元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-086",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "新加坡子公司首期注册资本多少？管理层授权有效期多久？",
+      "annotation": {
+        "doc_id": "report_board_resolution_2026",
+        "expected_doc_ids": [
+          "report_board_resolution_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "200万新元",
+          "12个月"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "report",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "report_board_resolution_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "200万新元",
+          "12个月"
+        ],
+        "expected_answer": "200万新元；12个月",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-087",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "单笔超过 1 万元的报销有什么额外要求？",
+      "annotation": {
+        "doc_id": "faq_finance_reimbursement",
+        "expected_doc_ids": [
+          "faq_finance_reimbursement"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "须附合同或采购审批说明"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "faq",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "faq_finance_reimbursement"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "须附合同或采购审批说明"
+        ],
+        "expected_answer": "须附合同或采购审批说明",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-088",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "报销单被退回后，同一单还能重新提交几次？",
+      "annotation": {
+        "doc_id": "faq_finance_reimbursement",
+        "expected_doc_ids": [
+          "faq_finance_reimbursement"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "3次"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "faq",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "faq_finance_reimbursement"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "3次"
+        ],
+        "expected_answer": "3次",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-089",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "星辰盾企业版软件许可授权多少席位？年许可费多少？",
+      "annotation": {
+        "doc_id": "legal_software_license",
+        "expected_doc_ids": [
+          "legal_software_license"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "500个命名用户席位",
+          "年许可费96万元"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "legal",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_software_license"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "500个命名用户席位",
+          "年许可费96万元"
+        ],
+        "expected_answer": "500个命名用户席位；年许可费96万元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-090",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "软件许可的期限是哪一段？",
+      "annotation": {
+        "doc_id": "legal_software_license",
+        "expected_doc_ids": [
+          "legal_software_license"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "2026-01-01至2028-12-31"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "legal",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_software_license"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "2026-01-01至2028-12-31"
+        ],
+        "expected_answer": "2026-01-01至2028-12-31",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-091",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "电子介质的数据怎么销毁？销毁记录保存多久？",
+      "annotation": {
+        "doc_id": "sop_data_destruction",
+        "expected_doc_ids": [
+          "sop_data_destruction"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "逻辑覆写3次后消磁",
+          "保存5年"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "sop",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_data_destruction"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "逻辑覆写3次后消磁",
+          "保存5年"
+        ],
+        "expected_answer": "逻辑覆写3次后消磁；保存5年",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-092",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "按现行报销办法，费用发生后须在多久内提交报销单？",
+      "annotation": {
+        "doc_id": "policy_expense_v3",
+        "expected_doc_ids": [
+          "policy_expense_v3"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "20个工作日内"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "current"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_expense_v3"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "20个工作日内"
+        ],
+        "expected_answer": "20个工作日内",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-093",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "现行报销办法下，单笔金额达到多少就须附合同或验收说明？",
+      "annotation": {
+        "doc_id": "policy_expense_v3",
+        "expected_doc_ids": [
+          "policy_expense_v3"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "5,000元"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "current"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "policy",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_expense_v3"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "5,000元"
+        ],
+        "expected_answer": "5,000元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-094",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "每人每月最多可以远程办公几天？核心在线时段是什么时候？",
+      "annotation": {
+        "doc_id": "policy_remote_work",
+        "expected_doc_ids": [
+          "policy_remote_work"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "不超过6天",
+          "10:00至16:00"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "policy",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_remote_work"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "不超过6天",
+          "10:00至16:00"
+        ],
+        "expected_answer": "不超过6天；10:00至16:00",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-095",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 年 Q2 全链路压测的峰值 TPS 是多少？超出目标多少？",
+      "annotation": {
+        "doc_id": "report_performance_test_2026",
+        "expected_doc_ids": [
+          "report_performance_test_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "3,860",
+          "超出目标28.7%"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "report",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "report_performance_test_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "3,860",
+          "超出目标28.7%"
+        ],
+        "expected_answer": "3,860；超出目标28.7%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-096",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "压测中下单接口的 P99 延迟是多少毫秒？",
+      "annotation": {
+        "doc_id": "report_performance_test_2026",
+        "expected_doc_ids": [
+          "report_performance_test_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "218毫秒"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "report",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "report_performance_test_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "218毫秒"
+        ],
+        "expected_answer": "218毫秒",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-097",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "年度运维服务合同的年度服务费是多少？P1 故障的响应与恢复要求？",
+      "annotation": {
+        "doc_id": "contract_annual_maintenance",
+        "expected_doc_ids": [
+          "contract_annual_maintenance"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "128万元",
+          "15分钟内响应、2小时内恢复"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "finance_restricted"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "contract",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "contract_annual_maintenance"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "128万元",
+          "15分钟内响应、2小时内恢复"
+        ],
+        "expected_answer": "128万元；15分钟内响应、2小时内恢复",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-098",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2025 年公司营业收入和净利润分别是多少？",
+      "annotation": {
+        "doc_id": "layout_report_fin_annual_2025",
+        "expected_doc_ids": [
+          "layout_report_fin_annual_2025"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "4.12亿元",
+          "6,840万元"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "finance_restricted"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "report",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_finance"
+      },
+      "expected": {
+        "relevant_docs": [
+          "layout_report_fin_annual_2025"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "4.12亿元",
+          "6,840万元"
+        ],
+        "expected_answer": "4.12亿元；6,840万元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-099",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2025 年研发投入是多少？占营业收入多少？",
+      "annotation": {
+        "doc_id": "layout_report_fin_annual_2025",
+        "expected_doc_ids": [
+          "layout_report_fin_annual_2025"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "1.02亿元",
+          "24.8%"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "finance_restricted"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "report",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_finance"
+      },
+      "expected": {
+        "relevant_docs": [
+          "layout_report_fin_annual_2025"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "1.02亿元",
+          "24.8%"
+        ],
+        "expected_answer": "1.02亿元；24.8%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-100",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2025 年度合并利润表 3-1 里，营业成本是多少？占营业收入多少？",
+      "annotation": {
+        "doc_id": "layout_report_fin_annual_2025",
+        "expected_doc_ids": [
+          "layout_report_fin_annual_2025"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "17,140万元",
+          "占营业收入41.6%"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "finance_restricted"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "report",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_finance"
+      },
+      "expected": {
+        "relevant_docs": [
+          "layout_report_fin_annual_2025"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "17,140万元",
+          "占营业收入41.6%"
+        ],
+        "expected_answer": "17,140万元；占营业收入41.6%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-101",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "员工手册里通讯补贴多少钱？年度体检安排在什么时候？",
+      "annotation": {
+        "doc_id": "layout_manual_employee_handbook",
+        "expected_doc_ids": [
+          "layout_manual_employee_handbook"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "每人每月150元",
+          "每年9月至10月"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "manual",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "layout_manual_employee_handbook"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "每人每月150元",
+          "每年9月至10月"
+        ],
+        "expected_answer": "每人每月150元；每年9月至10月",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-102",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "每人每年须完成多少学时的学习任务？哪类课程是必修？",
+      "annotation": {
+        "doc_id": "layout_manual_employee_handbook",
+        "expected_doc_ids": [
+          "layout_manual_employee_handbook"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "不少于40学时",
+          "合规类课程为必修"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "manual",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "layout_manual_employee_handbook"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "不少于40学时",
+          "合规类课程为必修"
+        ],
+        "expected_answer": "不少于40学时；合规类课程为必修",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-103",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "正式员工离职须提前多久书面通知？试用期内呢？",
+      "annotation": {
+        "doc_id": "layout_manual_employee_handbook",
+        "expected_doc_ids": [
+          "layout_manual_employee_handbook"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "正式员工提前30日",
+          "试用期内提前3日"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "manual",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "layout_manual_employee_handbook"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "正式员工提前30日",
+          "试用期内提前3日"
+        ],
+        "expected_answer": "正式员工提前30日；试用期内提前3日",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-104",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "API 网关的单请求体上限是多少？默认超时多少？",
+      "annotation": {
+        "doc_id": "layout_spec_api_gateway",
+        "expected_doc_ids": [
+          "layout_spec_api_gateway"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "2MB",
+          "3秒"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "spec",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_product"
+      },
+      "expected": {
+        "relevant_docs": [
+          "layout_spec_api_gateway"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "2MB",
+          "3秒"
+        ],
+        "expected_answer": "2MB；3秒",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-105",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "网关核心参数表 2-1 里，重试次数与退避策略是什么？",
+      "annotation": {
+        "doc_id": "layout_spec_api_gateway",
+        "expected_doc_ids": [
+          "layout_spec_api_gateway"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "重试2次",
+          "指数退避，首次间隔200ms"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "spec",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_product"
+      },
+      "expected": {
+        "relevant_docs": [
+          "layout_spec_api_gateway"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "重试2次",
+          "指数退避，首次间隔200ms"
+        ],
+        "expected_answer": "重试2次；指数退避，首次间隔200ms",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-106",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "JWT 令牌有效期多久？刷新令牌呢？",
+      "annotation": {
+        "doc_id": "layout_spec_api_gateway",
+        "expected_doc_ids": [
+          "layout_spec_api_gateway"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "JWT令牌2小时",
+          "刷新令牌7天"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "spec",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_product"
+      },
+      "expected": {
+        "relevant_docs": [
+          "layout_spec_api_gateway"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "JWT令牌2小时",
+          "刷新令牌7天"
+        ],
+        "expected_answer": "JWT令牌2小时；刷新令牌7天",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-107",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "评标委员会由几名成员组成？外部专家至少几名？",
+      "annotation": {
+        "doc_id": "layout_tender_evaluation",
+        "expected_doc_ids": [
+          "layout_tender_evaluation"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "5名成员",
+          "外部专家不少于2名"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "legal",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "layout_tender_evaluation"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "5名成员",
+          "外部专家不少于2名"
+        ],
+        "expected_answer": "5名成员；外部专家不少于2名",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-108",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "综合评分权重表 3-1 里，技术方案、商务报价、履约能力各占多少？",
+      "annotation": {
+        "doc_id": "layout_tender_evaluation",
+        "expected_doc_ids": [
+          "layout_tender_evaluation"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "技术方案45%",
+          "商务报价35%",
+          "履约能力20%"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "legal",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "layout_tender_evaluation"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "技术方案45%",
+          "商务报价35%",
+          "履约能力20%"
+        ],
+        "expected_answer": "技术方案45%；商务报价35%；履约能力20%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-109",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 年度合规审查发现的高、中、低风险事项各有几项？",
+      "annotation": {
+        "doc_id": "legal_compliance_review_2026",
+        "expected_doc_ids": [
+          "legal_compliance_review_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "高风险3项",
+          "中风险7项",
+          "低风险15项"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "legal_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "legal",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_compliance_review_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "高风险3项",
+          "中风险7项",
+          "低风险15项"
+        ],
+        "expected_answer": "高风险3项；中风险7项；低风险15项",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-110",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "风险事项处置要求表 3-1 里，高风险事项的整改截止日是哪天？",
+      "annotation": {
+        "doc_id": "legal_compliance_review_2026",
+        "expected_doc_ids": [
+          "legal_compliance_review_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "2026-11-30"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "legal_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "legal",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_compliance_review_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "2026-11-30"
+        ],
+        "expected_answer": "2026-11-30",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-111",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "数据出境的接收方是谁？拟出境的数据规模是多少？",
+      "annotation": {
+        "doc_id": "legal_data_export_assessment",
+        "expected_doc_ids": [
+          "legal_data_export_assessment"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "新加坡子公司",
+          "每年12.4万条"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "legal_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "legal",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_data_compliance"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_data_export_assessment"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "新加坡子公司",
+          "每年12.4万条"
+        ],
+        "expected_answer": "新加坡子公司；每年12.4万条",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-112",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "数据出境要素摘要表 3-1 里，评估结论有效期是多久？",
+      "annotation": {
+        "doc_id": "legal_data_export_assessment",
+        "expected_doc_ids": [
+          "legal_data_export_assessment"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "2年",
+          "自2026-05-26起算"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "legal_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "legal",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_data_compliance"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_data_export_assessment"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "2年",
+          "自2026-05-26起算"
+        ],
+        "expected_answer": "2年；自2026-05-26起算",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-113",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "按现行故障 SOP，P1 级故障须多久恢复服务？首次通报不超过多久？",
+      "annotation": {
+        "doc_id": "sop_incident_response_v3",
+        "expected_doc_ids": [
+          "sop_incident_response_v3"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "90分钟内恢复",
+          "首次通报不超过15分钟"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "current"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "sop",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_incident_response_v3"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "90分钟内恢复",
+          "首次通报不超过15分钟"
+        ],
+        "expected_answer": "90分钟内恢复；首次通报不超过15分钟",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-114",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "故障处置 RACI 表 4-1 里，止血处置环节由谁负责、时限多少？",
+      "annotation": {
+        "doc_id": "sop_incident_response_v3",
+        "expected_doc_ids": [
+          "sop_incident_response_v3"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "主值/替补",
+          "90分钟内恢复"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "sop",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_incident_response_v3"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "主值/替补",
+          "90分钟内恢复"
+        ],
+        "expected_answer": "主值/替补；90分钟内恢复",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-115",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "主值多久没响应会升级到替补？替补须在多久内接手？",
+      "annotation": {
+        "doc_id": "sop_incident_response_v3",
+        "expected_doc_ids": [
+          "sop_incident_response_v3"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "主值10分钟内未响应即升级",
+          "替补须15分钟内接手"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "sop",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_incident_response_v3"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "主值10分钟内未响应即升级",
+          "替补须15分钟内接手"
+        ],
+        "expected_answer": "主值10分钟内未响应即升级；替补须15分钟内接手",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-116",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "报销单 BX-2026-0518 的报销金额是多少？什么时候审批完成？",
+      "annotation": {
+        "doc_id": "scan_expense_claim_form",
+        "expected_doc_ids": [
+          "scan_expense_claim_form"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "3,480.00元",
+          "审批完成2026-08-09"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "form",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "scanned"
+      },
+      "expected": {
+        "relevant_docs": [
+          "scan_expense_claim_form"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "3,480.00元",
+          "审批完成2026-08-09"
+        ],
+        "expected_answer": "3,480.00元；审批完成2026-08-09",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-117",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026-06-25 那场培训，应到多少人？实到多少人？",
+      "annotation": {
+        "doc_id": "scan_training_signin",
+        "expected_doc_ids": [
+          "scan_training_signin"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "应到48人",
+          "实到45人"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "form",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "scanned"
+      },
+      "expected": {
+        "relevant_docs": [
+          "scan_training_signin"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "应到48人",
+          "实到45人"
+        ],
+        "expected_answer": "应到48人；实到45人",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-118",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "运维周会定的下周停机维护窗口是什么时间？影响哪些功能？",
+      "annotation": {
+        "doc_id": "notes_weekly_ops_2026",
+        "expected_doc_ids": [
+          "notes_weekly_ops_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "2026-09-12 22:00至23:30",
+          "影响报表与导出功能"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "txt",
+        "doc_type": "notes",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_incident"
+      },
+      "expected": {
+        "relevant_docs": [
+          "notes_weekly_ops_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "2026-09-12 22:00至23:30",
+          "影响报表与导出功能"
+        ],
+        "expected_answer": "2026-09-12 22:00至23:30；影响报表与导出功能",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-119",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "本周运维周会遗留几项问题？责任人是谁？",
+      "annotation": {
+        "doc_id": "notes_weekly_ops_2026",
+        "expected_doc_ids": [
+          "notes_weekly_ops_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "遗留问题3项",
+          "王倩"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "txt",
+        "doc_type": "notes",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_incident"
+      },
+      "expected": {
+        "relevant_docs": [
+          "notes_weekly_ops_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "遗留问题3项",
+          "王倩"
+        ],
+        "expected_answer": "遗留问题3项；王倩",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-120",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 年战略务虚会什么时候在哪里召开？AI 算力预算预留多少？",
+      "annotation": {
+        "doc_id": "notes_strategy_retreat_2026",
+        "expected_doc_ids": [
+          "notes_strategy_retreat_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "2026-08-14至08-15",
+          "福州·闽江畔会议中心",
+          "1,500万元"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "txt",
+        "doc_type": "notes",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "notes_strategy_retreat_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "2026-08-14至08-15",
+          "福州·闽江畔会议中心",
+          "1,500万元"
+        ],
+        "expected_answer": "2026-08-14至08-15；福州·闽江畔会议中心；1,500万元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-121",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2027 年的三条主线分别是什么？",
+      "annotation": {
+        "doc_id": "notes_strategy_retreat_2026",
+        "expected_doc_ids": [
+          "notes_strategy_retreat_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "核心产品由项目制转向订阅制交付",
+          "行业解决方案沉淀为可复制标准产品线",
+          "内部AI能力平台化"
+        ],
+        "query_type": "low_confidence",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "txt",
+        "doc_type": "notes",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "notes_strategy_retreat_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "核心产品由项目制转向订阅制交付",
+          "行业解决方案沉淀为可复制标准产品线",
+          "内部AI能力平台化"
+        ],
+        "expected_answer": "核心产品由项目制转向订阅制交付；行业解决方案沉淀为可复制标准产品线；内部AI能力平台化",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-122",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "VPN 开通后有效期多久？IT 热线电话是多少？",
+      "annotation": {
+        "doc_id": "faq_it_helpdesk",
+        "expected_doc_ids": [
+          "faq_it_helpdesk"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "有效期180天",
+          "0591-8888-6600"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "txt",
+        "doc_type": "faq",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "faq_it_helpdesk"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "有效期180天",
+          "0591-8888-6600"
+        ],
+        "expected_answer": "有效期180天；0591-8888-6600",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-123",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "订单域里 o_order_no 的编码格式是怎么规定的？",
+      "annotation": {
+        "doc_id": "dict_order_domain",
+        "expected_doc_ids": [
+          "dict_order_domain"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "OR + 14位时间戳 + 4位流水号"
+        ],
+        "query_type": "exact_id",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "txt",
+        "doc_type": "reference",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "dict_order_domain"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "OR + 14位时间戳 + 4位流水号"
+        ],
+        "expected_answer": "OR + 14位时间戳 + 4位流水号",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-124",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "权限季度复核里，临时账号要在多久内回收？复核记录保存多久？",
+      "annotation": {
+        "doc_id": "sop_access_review",
+        "expected_doc_ids": [
+          "sop_access_review"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "操作完成后24小时内回收",
+          "保存2年"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "txt",
+        "doc_type": "sop",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_access_review"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "操作完成后24小时内回收",
+          "保存2年"
+        ],
+        "expected_answer": "操作完成后24小时内回收；保存2年",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-125",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "紧急变更要多久补齐审批？变更后出现 P1/P2 异常多久内回滚？",
+      "annotation": {
+        "doc_id": "sop_change_management",
+        "expected_doc_ids": [
+          "sop_change_management"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "处置完成后24小时内补齐审批",
+          "15分钟内执行回滚"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "txt",
+        "doc_type": "sop",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_change_management"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "处置完成后24小时内补齐审批",
+          "15分钟内执行回滚"
+        ],
+        "expected_answer": "处置完成后24小时内补齐审批；15分钟内执行回滚",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-126",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "数据分类分级标准里，数据分为哪几级？核心数据怎么存储？",
+      "annotation": {
+        "doc_id": "policy_data_classification",
+        "expected_doc_ids": [
+          "policy_data_classification"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "公开/内部/敏感/核心四级",
+          "AES-256加密存储"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "txt",
+        "doc_type": "policy",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_data_compliance"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_data_classification"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "公开/内部/敏感/核心四级",
+          "AES-256加密存储"
+        ],
+        "expected_answer": "公开/内部/敏感/核心四级；AES-256加密存储",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-127",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 年预算里营业收入和净利润的目标分别是多少？",
+      "annotation": {
+        "doc_id": "xlsx_finance_budget_2026",
+        "expected_doc_ids": [
+          "xlsx_finance_budget_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "52,000万元",
+          "8,100万元"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "finance_restricted"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_finance"
+      },
+      "expected": {
+        "relevant_docs": [
+          "xlsx_finance_budget_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "52,000万元",
+          "8,100万元"
+        ],
+        "expected_answer": "52,000万元；8,100万元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-128",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "收入预算表里数据服务产品线的预算是多少？占比多少？",
+      "annotation": {
+        "doc_id": "xlsx_finance_budget_2026",
+        "expected_doc_ids": [
+          "xlsx_finance_budget_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "28,600万元",
+          "55.0%"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "finance_restricted"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_finance"
+      },
+      "expected": {
+        "relevant_docs": [
+          "xlsx_finance_budget_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "28,600万元",
+          "55.0%"
+        ],
+        "expected_answer": "28,600万元；55.0%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-129",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "全公司编制数、在职数与缺口合计分别是多少？",
+      "annotation": {
+        "doc_id": "xlsx_hr_headcount_2026",
+        "expected_doc_ids": [
+          "xlsx_hr_headcount_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "编制560",
+          "在职512",
+          "缺口48"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "hr_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_hiring"
+      },
+      "expected": {
+        "relevant_docs": [
+          "xlsx_hr_headcount_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "编制560",
+          "在职512",
+          "缺口48"
+        ],
+        "expected_answer": "编制560；在职512；缺口48",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-130",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "研发序列已发 Offer 多少人？已到岗多少人？",
+      "annotation": {
+        "doc_id": "xlsx_hr_headcount_2026",
+        "expected_doc_ids": [
+          "xlsx_hr_headcount_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "已发Offer 7",
+          "已到岗4"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "hr_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "xlsx_hr_headcount_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "已发Offer 7",
+          "已到岗4"
+        ],
+        "expected_answer": "已发Offer 7；已到岗4",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-131",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "A1 机房有多少个节点？可用冗余多少？",
+      "annotation": {
+        "doc_id": "xlsx_ops_capacity_plan",
+        "expected_doc_ids": [
+          "xlsx_ops_capacity_plan"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "46个节点",
+          "冗余28%"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "it_admin"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "xlsx_ops_capacity_plan"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "46个节点",
+          "冗余28%"
+        ],
+        "expected_answer": "46个节点；冗余28%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-132",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "容量规划表里 CPU 的平均水位、峰值水位和告警阈值分别是多少？",
+      "annotation": {
+        "doc_id": "xlsx_ops_capacity_plan",
+        "expected_doc_ids": [
+          "xlsx_ops_capacity_plan"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "平均63%",
+          "峰值78%",
+          "阈值≤70%"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "it_admin"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "xlsx_ops_capacity_plan"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "平均63%",
+          "峰值78%",
+          "阈值≤70%"
+        ],
+        "expected_answer": "平均63%；峰值78%；阈值≤70%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-133",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026-06 的 MAU、DAU 和付费租户数分别是多少？",
+      "annotation": {
+        "doc_id": "xlsx_product_metrics_2026",
+        "expected_doc_ids": [
+          "xlsx_product_metrics_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "MAU 124,000",
+          "DAU 24,600",
+          "付费租户3,120"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_product"
+      },
+      "expected": {
+        "relevant_docs": [
+          "xlsx_product_metrics_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "MAU 124,000",
+          "DAU 24,600",
+          "付费租户3,120"
+        ],
+        "expected_answer": "MAU 124,000；DAU 24,600；付费租户3,120",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-134",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "收入贡献表里企业版的 ARPU 是多少？",
+      "annotation": {
+        "doc_id": "xlsx_product_metrics_2026",
+        "expected_doc_ids": [
+          "xlsx_product_metrics_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "8,600元/月"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_product"
+      },
+      "expected": {
+        "relevant_docs": [
+          "xlsx_product_metrics_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "8,600元/月"
+        ],
+        "expected_answer": "8,600元/月",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-135",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "合同台账里与中科智联的合同金额是多少？状态如何？",
+      "annotation": {
+        "doc_id": "xlsx_legal_contract_register",
+        "expected_doc_ids": [
+          "xlsx_legal_contract_register"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "468万元",
+          "履行中"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "legal_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_procurement"
+      },
+      "expected": {
+        "relevant_docs": [
+          "xlsx_legal_contract_register"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "468万元",
+          "履行中"
+        ],
+        "expected_answer": "468万元；履行中",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-136",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "合同风险清单里高风险合同几份？R-01 的责任人是谁？",
+      "annotation": {
+        "doc_id": "xlsx_legal_contract_register",
+        "expected_doc_ids": [
+          "xlsx_legal_contract_register"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "高风险合同3份",
+          "陈斌"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "legal_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "xlsx_legal_contract_register"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "高风险合同3份",
+          "陈斌"
+        ],
+        "expected_answer": "高风险合同3份；陈斌",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-137",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026H2 商机漏斗里华东区的商机金额、加权金额和预计赢率是多少？",
+      "annotation": {
+        "doc_id": "xlsx_sales_pipeline_2026h2",
+        "expected_doc_ids": [
+          "xlsx_sales_pipeline_2026h2"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "3,800万元",
+          "1,420万元",
+          "62%"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "xlsx_sales_pipeline_2026h2"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "3,800万元",
+          "1,420万元",
+          "62%"
+        ],
+        "expected_answer": "3,800万元；1,420万元；62%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-138",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026-07 云资源账单合计多少万元？",
+      "annotation": {
+        "doc_id": "table_cloud_cost_2026",
+        "expected_doc_ids": [
+          "table_cloud_cost_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "86.4万元"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_cloud_cost_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "86.4万元"
+        ],
+        "expected_answer": "86.4万元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-139",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026-06 接口调用量、峰值 QPS 和错误率分别是多少？",
+      "annotation": {
+        "doc_id": "table_api_calls_2026",
+        "expected_doc_ids": [
+          "table_api_calls_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "42,100万次",
+          "12,800",
+          "0.31%"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_api_calls_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "42,100万次",
+          "12,800",
+          "0.31%"
+        ],
+        "expected_answer": "42,100万次；12,800；0.31%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-140",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "内部课程目录里总计多少门课程？必修几门？",
+      "annotation": {
+        "doc_id": "table_training_courses",
+        "expected_doc_ids": [
+          "table_training_courses"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "课程总计46门",
+          "必修8门"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_training_courses"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "课程总计46门",
+          "必修8门"
+        ],
+        "expected_answer": "课程总计46门；必修8门",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-141",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "候选人漏斗里在流程人数合计多少？已发 Offer 多少份？",
+      "annotation": {
+        "doc_id": "table_candidate_pipeline",
+        "expected_doc_ids": [
+          "table_candidate_pipeline"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "63人",
+          "17份"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "hr_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_hiring"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_candidate_pipeline"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "63人",
+          "17份"
+        ],
+        "expected_answer": "63人；17份",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-142",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "供应商联系人名录里 A 类供应商有几家？合计几家？",
+      "annotation": {
+        "doc_id": "csv_gbk_supplier_contacts",
+        "expected_doc_ids": [
+          "csv_gbk_supplier_contacts"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "A类4家",
+          "合计6家"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_procurement"
+      },
+      "expected": {
+        "relevant_docs": [
+          "csv_gbk_supplier_contacts"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "A类4家",
+          "合计6家"
+        ],
+        "expected_answer": "A类4家；合计6家",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-143",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "仓库库存台账里处于预警状态的 SKU 有几项？",
+      "annotation": {
+        "doc_id": "csv_gbk_warehouse_inventory",
+        "expected_doc_ids": [
+          "csv_gbk_warehouse_inventory"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "预警SKU 3项"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "csv_gbk_warehouse_inventory"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "预警SKU 3项"
+        ],
+        "expected_answer": "预警SKU 3项",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-144",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2025 年渠道销售里代理渠道的销售额是多少？占比多少？",
+      "annotation": {
+        "doc_id": "csv_gbk_channel_sales_2025",
+        "expected_doc_ids": [
+          "csv_gbk_channel_sales_2025"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "3,240万元",
+          "48.6%"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "csv_gbk_channel_sales_2025"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "3,240万元",
+          "48.6%"
+        ],
+        "expected_answer": "3,240万元；48.6%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-145",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 上半年共办了几场培训？累计参训多少人次？",
+      "annotation": {
+        "doc_id": "csv_gbk_hr_training_records",
+        "expected_doc_ids": [
+          "csv_gbk_hr_training_records"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "5场",
+          "242人次"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "hr_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "table",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "csv_gbk_hr_training_records"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "5场",
+          "242人次"
+        ],
+        "expected_answer": "5场；242人次",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-146",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "在售产品目录里旗舰产品是哪个？当前什么版本？",
+      "annotation": {
+        "doc_id": "csv_utf8_nobom_product_catalog",
+        "expected_doc_ids": [
+          "csv_utf8_nobom_product_catalog"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "星辰盾",
+          "v3.2"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "csv_utf8_nobom_product_catalog"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "星辰盾",
+          "v3.2"
+        ],
+        "expected_answer": "星辰盾；v3.2",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-147",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026-06 月末在职人数是多少？",
+      "annotation": {
+        "doc_id": "table_headcount_monthly",
+        "expected_doc_ids": [
+          "table_headcount_monthly"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "512人"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_headcount_monthly"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "512人"
+        ],
+        "expected_answer": "512人",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-148",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026-06 搜索竞价渠道的投放金额与单线索成本是多少？",
+      "annotation": {
+        "doc_id": "table_marketing_spend_2026",
+        "expected_doc_ids": [
+          "table_marketing_spend_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "286万元",
+          "386元"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_marketing_spend_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "286万元",
+          "386元"
+        ],
+        "expected_answer": "286万元；386元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-149",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 上半年开票金额合计多少？作废几张？",
+      "annotation": {
+        "doc_id": "table_invoice_records_2026",
+        "expected_doc_ids": [
+          "table_invoice_records_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "19,200万元",
+          "作废14张"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "finance_restricted"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "table",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_finance"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_invoice_records_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "19,200万元",
+          "作废14张"
+        ],
+        "expected_answer": "19,200万元；作废14张",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-150",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026-06 的客户 NPS 和满意率是多少？",
+      "annotation": {
+        "doc_id": "table_customer_satisfaction_2026",
+        "expected_doc_ids": [
+          "table_customer_satisfaction_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "46",
+          "91.3%"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_customer_satisfaction_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "46",
+          "91.3%"
+        ],
+        "expected_answer": "46；91.3%",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-151",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 上半年采购订单合计多少单？金额多少？平均交付几天？",
+      "annotation": {
+        "doc_id": "table_purchase_orders_2026",
+        "expected_doc_ids": [
+          "table_purchase_orders_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "236单",
+          "3,180万元",
+          "25天"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "table",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_procurement"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_purchase_orders_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "236单",
+          "3,180万元",
+          "25天"
+        ],
+        "expected_answer": "236单；3,180万元；25天",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-152",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "面试评价记录里评分最高的是哪个岗位？多少分？",
+      "annotation": {
+        "doc_id": "table_interview_records",
+        "expected_doc_ids": [
+          "table_interview_records"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "算法工程师",
+          "4.6分"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "hr_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "table",
+        "difficulty": "medium",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "table_interview_records"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "算法工程师",
+          "4.6分"
+        ],
+        "expected_answer": "算法工程师；4.6分",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-153",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "商标与域名台账里注册商标多少件？域名多少个？",
+      "annotation": {
+        "doc_id": "legal_trademark_list",
+        "expected_doc_ids": [
+          "legal_trademark_list"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "注册商标23件",
+          "域名17个"
+        ],
+        "query_type": "table_value",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "csv",
+        "doc_type": "legal",
+        "difficulty": "easy",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_trademark_list"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "注册商标23件",
+          "域名17个"
+        ],
+        "expected_answer": "注册商标23件；域名17个",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-154",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "公司 2025 年一共发布了多少个版本？当前月活跃用户多少？网关对单请求体大小的限制是多少？",
+      "annotation": {
+        "doc_id": "report_product_annual_2025",
+        "expected_doc_ids": [
+          "report_product_annual_2025",
+          "xlsx_product_metrics_2026",
+          "layout_spec_api_gateway"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "27个版本",
+          "MAU 124,000",
+          "2MB"
+        ],
+        "query_type": "cross_doc",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "docx",
+        "doc_type": "report",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_product"
+      },
+      "expected": {
+        "relevant_docs": [
+          "report_product_annual_2025",
+          "xlsx_product_metrics_2026",
+          "layout_spec_api_gateway"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "27个版本",
+          "MAU 124,000",
+          "2MB"
+        ],
+        "expected_answer": "27个版本；MAU 124,000；2MB",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-155",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "向中科智联采购 GPU 服务器的合同金额是多少？上半年采购订单总额和平均交付天数是多少？供应商准入要交几项材料？",
+      "annotation": {
+        "doc_id": "legal_purchase_contract_zhongke",
+        "expected_doc_ids": [
+          "legal_purchase_contract_zhongke",
+          "table_purchase_orders_2026",
+          "sop_vendor_onboarding",
+          "csv_gbk_supplier_contacts"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "468万元",
+          "3,180万元",
+          "25天",
+          "5项材料"
+        ],
+        "query_type": "cross_doc",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "legal",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_procurement"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_purchase_contract_zhongke",
+          "table_purchase_orders_2026",
+          "sop_vendor_onboarding",
+          "csv_gbk_supplier_contacts"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "468万元",
+          "3,180万元",
+          "25天",
+          "5项材料"
+        ],
+        "expected_answer": "468万元；3,180万元；25天；5项材料",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-156",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "现行故障 SOP 的 P1 恢复时限是多少？2026Q2 实际发生几起 P1 事件？平均检测时长多少？",
+      "annotation": {
+        "doc_id": "sop_incident_response_v3",
+        "expected_doc_ids": [
+          "sop_incident_response_v3",
+          "report_incident_2026q2",
+          "notes_weekly_ops_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "90分钟内恢复",
+          "P1级1起",
+          "23分钟"
+        ],
+        "query_type": "cross_doc",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "current"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "sop",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_incident"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_incident_response_v3",
+          "report_incident_2026q2",
+          "notes_weekly_ops_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "90分钟内恢复",
+          "P1级1起",
+          "23分钟"
+        ],
+        "expected_answer": "90分钟内恢复；P1级1起；23分钟",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-157",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "今年招聘 HC 由谁终审？常规岗位要面试几轮？当前候选人在流程的有多少人？",
+      "annotation": {
+        "doc_id": "policy_recruitment",
+        "expected_doc_ids": [
+          "policy_recruitment",
+          "sop_interview_hiring",
+          "table_candidate_pipeline"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "CEO终审",
+          "3轮",
+          "63人"
+        ],
+        "query_type": "cross_doc",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "hr_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_hiring"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_recruitment",
+          "sop_interview_hiring",
+          "table_candidate_pipeline"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "CEO终审",
+          "3轮",
+          "63人"
+        ],
+        "expected_answer": "CEO终审；3轮；63人",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-158",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "把 2025 年净利润、2026 年净利润预算和 2026 上半年开票金额汇总给我。",
+      "annotation": {
+        "doc_id": "layout_report_fin_annual_2025",
+        "expected_doc_ids": [
+          "layout_report_fin_annual_2025",
+          "xlsx_finance_budget_2026",
+          "table_invoice_records_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "6,840万元",
+          "8,100万元",
+          "19,200万元"
+        ],
+        "query_type": "cross_doc",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "finance_restricted"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "report",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_finance"
+      },
+      "expected": {
+        "relevant_docs": [
+          "layout_report_fin_annual_2025",
+          "xlsx_finance_budget_2026",
+          "table_invoice_records_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "6,840万元",
+          "8,100万元",
+          "19,200万元"
+        ],
+        "expected_answer": "6,840万元；8,100万元；19,200万元",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-159",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "数据出境评估的结论是什么？DPA 里服务终止后多久删除数据？公司数据分级分几级？",
+      "annotation": {
+        "doc_id": "legal_data_export_assessment",
+        "expected_doc_ids": [
+          "legal_data_export_assessment",
+          "legal_dpa_processing",
+          "policy_data_classification"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "结论为可通过",
+          "90天内删除",
+          "四级"
+        ],
+        "query_type": "cross_doc",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general",
+          "legal_confidential"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "legal",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "cross_data_compliance"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_data_export_assessment",
+          "legal_dpa_processing",
+          "policy_data_classification"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "结论为可通过",
+          "90天内删除",
+          "四级"
+        ],
+        "expected_answer": "结论为可通过；90天内删除；四级",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-160",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "故障应急响应 SOP 三个版本里，P1 级故障的修复时限分别是多少？",
+      "annotation": {
+        "doc_id": "sop_incident_response_v3",
+        "expected_doc_ids": [
+          "sop_incident_response_v1",
+          "sop_incident_response_v2",
+          "sop_incident_response_v3"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "V1为4小时",
+          "V2为2小时",
+          "V3为90分钟"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "all_versions",
+          "supersedes_chain": [
+            "sop_incident_response_v1",
+            "sop_incident_response_v2",
+            "sop_incident_response_v3"
+          ]
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "sop",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "sop_incident_response_v1",
+          "sop_incident_response_v2",
+          "sop_incident_response_v3"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "V1为4小时",
+          "V2为2小时",
+          "V3为90分钟"
+        ],
+        "expected_answer": "V1为4小时；V2为2小时；V3为90分钟",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-161",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 年 2 月时执行的费用报销办法，报销时限是多长？",
+      "annotation": {
+        "doc_id": "policy_expense_v1",
+        "expected_doc_ids": [
+          "policy_expense_v1"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "60日内"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "as_of",
+          "date": "2026-02-01"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_expense_v1"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "60日内"
+        ],
+        "expected_answer": "60日内",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-162",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "按现行报销办法，电子发票查重是怎么规定的？",
+      "annotation": {
+        "doc_id": "policy_expense_v3",
+        "expected_doc_ids": [
+          "policy_expense_v3"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "系统统一查重",
+          "重复报销直接退回并通报"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "current"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_expense_v3"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "系统统一查重",
+          "重复报销直接退回并通报"
+        ],
+        "expected_answer": "系统统一查重；重复报销直接退回并通报",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-163",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "三个版本的费用报销办法，报销时限各是多少？",
+      "annotation": {
+        "doc_id": "policy_expense_v3",
+        "expected_doc_ids": [
+          "policy_expense_v1",
+          "policy_expense_v2",
+          "policy_expense_v3"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "V1为60日",
+          "V2为30日",
+          "V3为20个工作日"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "all_versions",
+          "supersedes_chain": [
+            "policy_expense_v1",
+            "policy_expense_v2",
+            "policy_expense_v3"
+          ]
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_expense_v1",
+          "policy_expense_v2",
+          "policy_expense_v3"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "V1为60日",
+          "V2为30日",
+          "V3为20个工作日"
+        ],
+        "expected_answer": "V1为60日；V2为30日；V3为20个工作日",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-164",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 年 3 月时适用的信息安全制度，数据密级分为几级？",
+      "annotation": {
+        "doc_id": "policy_infosec",
+        "expected_doc_ids": [
+          "policy_infosec"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [
+          "三级"
+        ],
+        "query_type": "multi_condition",
+        "should_refuse": false,
+        "refusal_reason": null,
+        "version_requirement": {
+          "type": "as_of",
+          "date": "2026-03-01"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "md",
+        "doc_type": "policy",
+        "difficulty": "hard",
+        "is_no_answer": false,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs",
+        "group": "version_chain"
+      },
+      "expected": {
+        "relevant_docs": [
+          "policy_infosec"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [
+          "三级"
+        ],
+        "expected_answer": "三级",
+        "should_reject": false
+      }
+    },
+    {
+      "id": "RD-165",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "公司 2027 年的营业收入目标是多少？",
+      "annotation": {
+        "doc_id": null,
+        "expected_doc_ids": [],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [],
+        "query_type": "no_evidence",
+        "should_refuse": true,
+        "refusal_reason": "no_evidence",
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "n/a",
+        "doc_type": "n/a",
+        "difficulty": "easy",
+        "is_no_answer": true,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [],
+        "expected_answer": "",
+        "should_reject": true
+      }
+    },
+    {
+      "id": "RD-166",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "公司与远洋控股签署的战略合作协议金额是多少？",
+      "annotation": {
+        "doc_id": null,
+        "expected_doc_ids": [],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [],
+        "query_type": "no_evidence",
+        "should_refuse": true,
+        "refusal_reason": "no_evidence",
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "n/a",
+        "doc_type": "n/a",
+        "difficulty": "easy",
+        "is_no_answer": true,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [],
+        "expected_answer": "",
+        "should_reject": true
+      }
+    },
+    {
+      "id": "RD-167",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "公司当前全公司的人员编制缺口是多少？",
+      "annotation": {
+        "doc_id": "xlsx_hr_headcount_2026",
+        "expected_doc_ids": [
+          "xlsx_hr_headcount_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [],
+        "query_type": "no_evidence",
+        "should_refuse": true,
+        "refusal_reason": "permission",
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "medium",
+        "is_no_answer": true,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "xlsx_hr_headcount_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [],
+        "expected_answer": "",
+        "should_reject": true
+      }
+    },
+    {
+      "id": "RD-168",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "A1 机房部署了多少个在用节点？",
+      "annotation": {
+        "doc_id": "xlsx_ops_capacity_plan",
+        "expected_doc_ids": [
+          "xlsx_ops_capacity_plan"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [],
+        "query_type": "no_evidence",
+        "should_refuse": true,
+        "refusal_reason": "permission",
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "xlsx",
+        "doc_type": "table",
+        "difficulty": "medium",
+        "is_no_answer": true,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "xlsx_ops_capacity_plan"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [],
+        "expected_answer": "",
+        "should_reject": true
+      }
+    },
+    {
+      "id": "RD-169",
+      "kb_id": "rag_100_docs",
+      "module": "rag",
+      "question": "2026 年度合规审查发现的高风险事项具体是哪三项？",
+      "annotation": {
+        "doc_id": "legal_compliance_review_2026",
+        "expected_doc_ids": [
+          "legal_compliance_review_2026"
+        ],
+        "expected_chunk_ids": null,
+        "expected_chunk_anchors": [],
+        "key_facts": [],
+        "query_type": "no_evidence",
+        "should_refuse": true,
+        "refusal_reason": "permission",
+        "version_requirement": {
+          "type": "any"
+        },
+        "permission_scope": [
+          "general"
+        ]
+      },
+      "metadata": {
+        "format": "pdf",
+        "doc_type": "legal",
+        "difficulty": "medium",
+        "is_no_answer": true,
+        "source": "generated",
+        "schema_version": "1.0-probe",
+        "kb_id": "rag_100_docs"
+      },
+      "expected": {
+        "relevant_docs": [
+          "legal_compliance_review_2026"
+        ],
+        "relevant_chunks": [],
+        "match_type": "chunk_id",
+        "min_relevant_chunks": 1,
+        "required_facts": [],
+        "expected_answer": "",
+        "should_reject": true
       }
     }
   ]

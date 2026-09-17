@@ -1,9 +1,9 @@
 {
-  "version": "0.1.0-probe",
+  "version": "0.2.0-full",
   "name": "rag_100_docs",
   "kb_id": "rag_100_docs",
   "generated_at": "2026-09-17",
-  "note": "R3 探路版语料清单（27 份）。每份文档的关键事实在生成期固化在源内容中；is_scanned=true 的 PDF 为文字渲染成图像封装（无真实 OCR，在线 OCR 回填结果应与 key_facts 一致）。expected_chunk_ids 需索引后回填。",
+  "note": "R3 全量版语料清单（100 份，由 27 份探路版扩容而来）。MD/TXT 的关键事实在生成期固化在源内容中；is_scanned=true 的 PDF 为文字渲染成图像封装（无真实 OCR，在线 OCR 回填结果应与 key_facts 一致）。layout=complex 为复杂版面 PDF（双栏 + 表格 + 页眉页脚页码），layout=multi_page 为多页长文；CSV 含 GBK/GB18030/UTF-8 无 BOM/UTF-8-sig 四种编码。expected_chunk_ids 需索引后回填。",
   "documents": [
     {
       "doc_id": "policy_attendance_rnd",
@@ -120,7 +120,13 @@
       "kb_id": "rag_100_docs",
       "permission_scope": "general",
       "department": "数据安全委员会",
-      "version": null,
+      "version": {
+        "version_id": "v1",
+        "effective_from": "2025-01-01",
+        "effective_to": "2026-06-30",
+        "supersedes": null,
+        "superseded_by": "policy_infosec_v2"
+      },
       "is_scanned": false,
       "group": null,
       "key_facts": [
@@ -551,7 +557,8 @@
       "section_anchors": [
         "168.4",
         "华东"
-      ]
+      ],
+      "encoding": "utf-8-sig"
     },
     {
       "doc_id": "table_expense_h1_2026",
@@ -573,7 +580,8 @@
       "section_anchors": [
         "BX-2026-0207",
         "5,210.50"
-      ]
+      ],
+      "encoding": "utf-8-sig"
     },
     {
       "doc_id": "table_tickets_2026",
@@ -594,7 +602,1657 @@
       "section_anchors": [
         "5,120",
         "93.8%"
+      ],
+      "encoding": "utf-8-sig"
+    },
+    {
+      "doc_id": "legal_nnn_agreement",
+      "file": "md/legal_双向保密协议_NNN.md",
+      "format": "md",
+      "doc_type": "legal",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "法务",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "协议编号XC-NDA-2026-007",
+        "保密期限5年",
+        "违约金50万元",
+        "生效日期2026-02-09"
+      ],
+      "section_anchors": [
+        "协议编号：XC-NDA-2026-007",
+        "5 年"
       ]
+    },
+    {
+      "doc_id": "legal_ip_assignment",
+      "file": "md/legal_知识产权转让协议.md",
+      "format": "md",
+      "doc_type": "legal",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "法务",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "转让总价80万元",
+        "3项发明专利2项软件著作权",
+        "权属变更完成2025-11-20"
+      ],
+      "section_anchors": [
+        "80 万元",
+        "2025-11-20"
+      ]
+    },
+    {
+      "doc_id": "legal_purchase_contract_zhongke",
+      "file": "md/legal_设备采购合同_中科智联.md",
+      "format": "md",
+      "doc_type": "legal",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "法务",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_procurement",
+      "key_facts": [
+        "合同编号XC-CG-2026-014",
+        "GPU服务器12台",
+        "总价468万元",
+        "交货期45天",
+        "质保3年",
+        "逾期违约金每日0.5%上限5%"
+      ],
+      "section_anchors": [
+        "12 台",
+        "468 万元",
+        "45 天"
+      ]
+    },
+    {
+      "doc_id": "legal_settlement_memo",
+      "file": "md/legal_争议和解备忘录.md",
+      "format": "md",
+      "doc_type": "legal",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "法务",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "编号XC-HJ-2026-003",
+        "一次性支付35万元",
+        "签署日期2026-07-18"
+      ],
+      "section_anchors": [
+        "35 万元",
+        "2026-07-18"
+      ]
+    },
+    {
+      "doc_id": "policy_export_control",
+      "file": "md/policy_出口管制合规管理办法.md",
+      "format": "md",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "法务",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "受控物项清单每季度更新",
+        "筛查记录保存10年",
+        "违规直接责任人当年度绩效一票否决"
+      ],
+      "section_anchors": [
+        "每季度",
+        "10 年"
+      ]
+    },
+    {
+      "doc_id": "policy_recruitment",
+      "file": "md/policy_招聘管理制度.md",
+      "format": "md",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_hiring",
+      "key_facts": [
+        "编制HC由CEO终审",
+        "内推奖励8,000元/人",
+        "核心岗位背调覆盖率100%"
+      ],
+      "section_anchors": [
+        "CEO 终审",
+        "8,000 元"
+      ]
+    },
+    {
+      "doc_id": "policy_performance_appraisal",
+      "file": "md/policy_绩效考核管理办法.md",
+      "format": "md",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "半年度考核1月与7月",
+        "A档不超过20%",
+        "D档不低于5%",
+        "连续两次D进入PIP改进期3个月"
+      ],
+      "section_anchors": [
+        "20%",
+        "5%",
+        "3 个月"
+      ]
+    },
+    {
+      "doc_id": "policy_software_asset",
+      "file": "md/policy_软件资产管理办法.md",
+      "format": "md",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "IT",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "生产环境软件正版化率目标100%",
+        "每年12月全公司盘点"
+      ],
+      "section_anchors": [
+        "100%",
+        "每年 12 月"
+      ]
+    },
+    {
+      "doc_id": "policy_expense_v1",
+      "file": "md/policy_费用报销管理办法_v1.md",
+      "format": "md",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "财务部",
+      "version": {
+        "version_id": "v1",
+        "effective_from": "2024-07-01",
+        "effective_to": "2025-08-31",
+        "supersedes": null,
+        "superseded_by": "policy_expense_v2"
+      },
+      "is_scanned": false,
+      "group": "version_chain",
+      "key_facts": [
+        "报销时限60日内",
+        "两级审批：部门负责人→财务部",
+        "每月15日与月末两次集中支付"
+      ],
+      "section_anchors": [
+        "60 日"
+      ]
+    },
+    {
+      "doc_id": "policy_overtime_rnd",
+      "file": "md/policy_加班工时管理制度_研发中心.md",
+      "format": "md",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": "similar_pair",
+      "key_facts": [
+        "每月加班不超过36小时",
+        "工作日加班1.5倍",
+        "休息日不能补休的2倍"
+      ],
+      "section_anchors": [
+        "36 小时",
+        "1.5 倍"
+      ]
+    },
+    {
+      "doc_id": "policy_overtime_cs",
+      "file": "md/policy_加班工时管理制度_客服部.md",
+      "format": "md",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": "similar_pair",
+      "key_facts": [
+        "28天为一周期轮班制",
+        "每月加班不超过24小时",
+        "法定节假日3倍",
+        "夜班津贴60元/班次"
+      ],
+      "section_anchors": [
+        "24 小时",
+        "3 倍",
+        "60 元"
+      ]
+    },
+    {
+      "doc_id": "sop_refund_processing",
+      "file": "md/sop_客户退款处理流程.md",
+      "format": "md",
+      "doc_type": "sop",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "客服部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "审核3个工作日内完成",
+        "超5万元报财务总监审批",
+        "到账周期7至15个工作日"
+      ],
+      "section_anchors": [
+        "3 个工作日",
+        "5 万元"
+      ]
+    },
+    {
+      "doc_id": "sop_vendor_onboarding",
+      "file": "md/sop_供应商准入作业流程.md",
+      "format": "md",
+      "doc_type": "sop",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "采购部",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_procurement",
+      "key_facts": [
+        "准入须提交5项材料",
+        "履约保证金10万元",
+        "15个工作日内完成审核"
+      ],
+      "section_anchors": [
+        "5 项材料",
+        "10 万元"
+      ]
+    },
+    {
+      "doc_id": "sop_incident_response_v1",
+      "file": "md/sop_线上故障应急响应_v1.md",
+      "format": "md",
+      "doc_type": "sop",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "IT",
+      "version": {
+        "version_id": "v1",
+        "effective_from": "2024-10-01",
+        "effective_to": "2025-05-31",
+        "supersedes": null,
+        "superseded_by": "sop_incident_response_v2"
+      },
+      "is_scanned": false,
+      "group": "version_chain",
+      "key_facts": [
+        "P1须4小时内恢复服务",
+        "P2 12小时",
+        "P3 3个工作日",
+        "邮件+短信双通道30分钟内首次通报"
+      ],
+      "section_anchors": [
+        "4 小时",
+        "XC-SOP-IT-2024-006"
+      ]
+    },
+    {
+      "doc_id": "report_incident_2026q2",
+      "file": "md/report_2026Q2安全事件报告.md",
+      "format": "md",
+      "doc_type": "report",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "安全应急中心",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_incident",
+      "key_facts": [
+        "二季度安全事件14起其中P1 1起",
+        "网关鉴权绕行影响账户1,243个",
+        "平均检测时长23分钟"
+      ],
+      "section_anchors": [
+        "14 起",
+        "1,243 个",
+        "23 分钟"
+      ]
+    },
+    {
+      "doc_id": "manual_ops_runbook",
+      "file": "md/manual_运维作业手册.md",
+      "format": "md",
+      "doc_type": "manual",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "IT",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "版本v2026.08",
+        "变更窗口周二周四20:00至24:00",
+        "一级告警5分钟内通知值班经理",
+        "核心业务库备份保留30天",
+        "跨季度首周备份额外保留1年"
+      ],
+      "section_anchors": [
+        "20:00 至 24:00",
+        "5 分钟",
+        "30 天"
+      ],
+      "layout": "multi_page"
+    },
+    {
+      "doc_id": "spec_data_warehouse",
+      "file": "md/spec_数据仓库建设规范.md",
+      "format": "md",
+      "doc_type": "spec",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "数据部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "规范版本v3.1生效2026-03-01",
+        "ODS/DWD/DWS/ADS四层禁止跨层直连",
+        "基线任务每日06:30前完成",
+        "失败重试最多2次间隔5分钟",
+        "波动率超过30%阻断下游"
+      ],
+      "section_anchors": [
+        "ODS / DWD / DWS / ADS",
+        "06:30",
+        "30%"
+      ],
+      "layout": "multi_page"
+    },
+    {
+      "doc_id": "policy_infosec_v2",
+      "file": "md/policy_信息安全管理制度_v2.md",
+      "format": "md",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "数据安全委员会",
+      "version": {
+        "version_id": "v2",
+        "effective_from": "2026-07-01",
+        "effective_to": null,
+        "supersedes": "policy_infosec",
+        "superseded_by": null
+      },
+      "is_scanned": false,
+      "group": "version_chain",
+      "key_facts": [
+        "密级仍为public/internal/confidential三级",
+        "新增远程终端管控与全盘加密",
+        "第三方人员受限账号录屏留痕",
+        "禁止将confidential级数据输入外部大模型",
+        "移动存储介质生产区禁用"
+      ],
+      "section_anchors": [
+        "2026-07-01",
+        "三级"
+      ]
+    },
+    {
+      "doc_id": "legal_labor_contract_template",
+      "file": "docx/legal_劳动合同模板_2026版.docx",
+      "format": "docx",
+      "doc_type": "legal",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "首次合同期限3年含试用期6个月",
+        "竞业限制不超过2年",
+        "竞业补偿按离职前十二个月平均工资30%",
+        "工资支付日次月15日"
+      ],
+      "section_anchors": [
+        "3 年",
+        "6 个月",
+        "30%"
+      ]
+    },
+    {
+      "doc_id": "legal_dpa_processing",
+      "file": "docx/legal_数据处理协议_DPA.docx",
+      "format": "docx",
+      "doc_type": "legal",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "法务",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_data_compliance",
+      "key_facts": [
+        "协议编号XC-DPA-2026-002",
+        "子处理者提前15个工作日告知",
+        "服务终止后90天内删除数据",
+        "年度审计每年1次"
+      ],
+      "section_anchors": [
+        "XC-DPA-2026-002",
+        "15 个工作日",
+        "90 天"
+      ],
+      "layout": "multi_page"
+    },
+    {
+      "doc_id": "legal_case_litigation_2026",
+      "file": "docx/legal_2026年在办诉讼进展.docx",
+      "format": "docx",
+      "doc_type": "legal",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "legal_confidential",
+      "department": "法务",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "在办案件3起",
+        "最高标的额1,180万元",
+        "蓝鲸数据案开庭2026-04-22"
+      ],
+      "section_anchors": [
+        "3 起",
+        "1,180 万元"
+      ]
+    },
+    {
+      "doc_id": "sop_incident_response_v2",
+      "file": "docx/sop_线上故障应急响应_v2.docx",
+      "format": "docx",
+      "doc_type": "sop",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "IT",
+      "version": {
+        "version_id": "v2",
+        "effective_from": "2025-06-01",
+        "effective_to": "2026-08-14",
+        "supersedes": "sop_incident_response_v1",
+        "superseded_by": "sop_incident_response_v3"
+      },
+      "is_scanned": false,
+      "group": "version_chain",
+      "key_facts": [
+        "P1须2小时内恢复服务",
+        "P2 8小时",
+        "P3 2个工作日",
+        "三种通道通报首次不超过15分钟"
+      ],
+      "section_anchors": [
+        "2 小时",
+        "15 分钟"
+      ]
+    },
+    {
+      "doc_id": "sop_release_deploy",
+      "file": "docx/sop_版本发布上线流程.docx",
+      "format": "docx",
+      "doc_type": "sop",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "研发中心",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "发布窗口周二周四20:00至24:00",
+        "灰度5%→20%→100%",
+        "每阶段观察不少于30分钟",
+        "回滚须15分钟内执行完毕"
+      ],
+      "section_anchors": [
+        "5% → 20% → 100%",
+        "30 分钟"
+      ]
+    },
+    {
+      "doc_id": "sop_backup_recovery_drill",
+      "file": "docx/sop_备份恢复演练流程.docx",
+      "format": "docx",
+      "doc_type": "sop",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "IT",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "RTO 4小时RPO 15分钟",
+        "每半年演练一次",
+        "最近一次2026-05-20耗时2小时48分"
+      ],
+      "section_anchors": [
+        "RTO",
+        "2026-05-20"
+      ]
+    },
+    {
+      "doc_id": "sop_interview_hiring",
+      "file": "docx/sop_招聘面试流程.docx",
+      "format": "docx",
+      "doc_type": "sop",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_hiring",
+      "key_facts": [
+        "常规岗位3轮面试",
+        "面评24小时内提交",
+        "Offer有效期7天",
+        "总监级另加一轮高管面"
+      ],
+      "section_anchors": [
+        "3 轮",
+        "24 小时"
+      ]
+    },
+    {
+      "doc_id": "policy_expense_v2",
+      "file": "docx/policy_费用报销管理办法_v2.docx",
+      "format": "docx",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "财务部",
+      "version": {
+        "version_id": "v2",
+        "effective_from": "2025-09-01",
+        "effective_to": "2026-06-30",
+        "supersedes": "policy_expense_v1",
+        "superseded_by": "policy_expense_v3"
+      },
+      "is_scanned": false,
+      "group": "version_chain",
+      "key_facts": [
+        "报销时限30日内",
+        "单笔超5万元加签财务总监",
+        "电子发票须系统查重"
+      ],
+      "section_anchors": [
+        "30 日",
+        "5 万元"
+      ]
+    },
+    {
+      "doc_id": "report_product_annual_2025",
+      "file": "docx/report_2025年度产品总结.docx",
+      "format": "docx",
+      "doc_type": "report",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "产品部",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_product",
+      "key_facts": [
+        "全年发布版本27个大版本4个",
+        "年末付费客户1,842家",
+        "NPS 46",
+        "P1级缺陷9个",
+        "数据接入平台1.0于2025-09-12发布"
+      ],
+      "section_anchors": [
+        "1,842",
+        "46",
+        "2025-09-12"
+      ],
+      "layout": "multi_page"
+    },
+    {
+      "doc_id": "report_board_resolution_2026",
+      "file": "docx/report_董事会决议_20260628.docx",
+      "format": "docx",
+      "doc_type": "report",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "董事会办公室",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "2026年度资本性支出预算3,200万元",
+        "新加坡子公司首期注册资本200万新元",
+        "授权有效期12个月"
+      ],
+      "section_anchors": [
+        "3,200 万元",
+        "200 万新元"
+      ]
+    },
+    {
+      "doc_id": "faq_finance_reimbursement",
+      "file": "docx/faq_财务报销常见问题.docx",
+      "format": "docx",
+      "doc_type": "faq",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "财务部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "抬头或税号错误发票不予受理",
+        "单笔1万元以上须附合同或采购审批说明",
+        "同一单可重提3次"
+      ],
+      "section_anchors": [
+        "1 万元",
+        "3 次"
+      ]
+    },
+    {
+      "doc_id": "legal_software_license",
+      "file": "pdf/legal_软件许可协议.pdf",
+      "format": "pdf",
+      "doc_type": "legal",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "法务",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "授权500个命名用户席位",
+        "许可期2026-01-01至2028-12-31",
+        "年许可费96万元"
+      ],
+      "section_anchors": [
+        "500 个命名用户席位",
+        "96 万元"
+      ]
+    },
+    {
+      "doc_id": "sop_data_destruction",
+      "file": "pdf/sop_数据销毁流程.pdf",
+      "format": "pdf",
+      "doc_type": "sop",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "数据安全委员会",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "纸质物理粉碎电子介质逻辑覆写3次后消磁",
+        "部门负责人+数据安全官双签",
+        "销毁记录保存5年"
+      ],
+      "section_anchors": [
+        "5 年",
+        "双签"
+      ]
+    },
+    {
+      "doc_id": "policy_expense_v3",
+      "file": "pdf/policy_费用报销管理办法_v3.pdf",
+      "format": "pdf",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "财务部",
+      "version": {
+        "version_id": "v3",
+        "effective_from": "2026-07-01",
+        "effective_to": null,
+        "supersedes": "policy_expense_v2",
+        "superseded_by": null
+      },
+      "is_scanned": false,
+      "group": "version_chain",
+      "key_facts": [
+        "报销时限20个工作日内",
+        "单笔达5,000元须附合同或验收说明",
+        "两级审批超5万元加签财务总监"
+      ],
+      "section_anchors": [
+        "20 个工作日",
+        "5,000 元"
+      ]
+    },
+    {
+      "doc_id": "policy_remote_work",
+      "file": "pdf/policy_远程办公管理办法.pdf",
+      "format": "pdf",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "每人每月远程办公不超过6天",
+        "提前1个工作日OA审批",
+        "核心在线时段10:00至16:00"
+      ],
+      "section_anchors": [
+        "6 天",
+        "10:00 至 16:00"
+      ]
+    },
+    {
+      "doc_id": "report_performance_test_2026",
+      "file": "pdf/report_压测报告_2026Q2.pdf",
+      "format": "pdf",
+      "doc_type": "report",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "研发中心",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "目标TPS 3,000实测峰值3,860超出28.7%",
+        "下单接口P99 218毫秒",
+        "建议限流阈值上调至4,200 TPS"
+      ],
+      "section_anchors": [
+        "3,860",
+        "218 毫秒"
+      ]
+    },
+    {
+      "doc_id": "contract_annual_maintenance",
+      "file": "pdf/contract_年度运维服务合同.pdf",
+      "format": "pdf",
+      "doc_type": "contract",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "finance_restricted",
+      "department": "IT",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "合同编号XC-HT-2026-027",
+        "服务方维智科技",
+        "服务期2026-01-01至2026-12-31",
+        "年度服务费128万元按季支付",
+        "P1级15分钟内响应2小时内恢复"
+      ],
+      "section_anchors": [
+        "XC-HT-2026-027",
+        "128 万元"
+      ]
+    },
+    {
+      "doc_id": "layout_report_fin_annual_2025",
+      "file": "pdf/report_2025年度财务报告.pdf",
+      "format": "pdf",
+      "doc_type": "report",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "finance_restricted",
+      "department": "财务部",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_finance",
+      "key_facts": [
+        "2025年营业收入4.12亿元",
+        "净利润6,840万元",
+        "毛利率58.4%",
+        "研发投入1.02亿元占24.8%",
+        "期末总资产6.42亿元资产负债率38.7%"
+      ],
+      "section_anchors": [
+        "4.12 亿元",
+        "24.8%",
+        "表 3-1"
+      ],
+      "layout": "complex"
+    },
+    {
+      "doc_id": "layout_manual_employee_handbook",
+      "file": "pdf/manual_员工手册_2026版.pdf",
+      "format": "pdf",
+      "doc_type": "manual",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "2026版v6.2施行日期2026-01-01",
+        "通讯补贴每月150元",
+        "年度体检9至10月",
+        "每年不少于40学时",
+        "正式员工离职提前30日"
+      ],
+      "section_anchors": [
+        "150 元",
+        "40 学时",
+        "9 月至 10 月"
+      ],
+      "layout": "complex"
+    },
+    {
+      "doc_id": "layout_spec_api_gateway",
+      "file": "pdf/spec_API网关技术规范.pdf",
+      "format": "pdf",
+      "doc_type": "spec",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "研发中心",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_product",
+      "key_facts": [
+        "网关版本v3.2",
+        "单请求体上限2MB",
+        "默认超时3秒",
+        "限流租户+接口500 QPS",
+        "JWT令牌2小时刷新令牌7天"
+      ],
+      "section_anchors": [
+        "2MB",
+        "3 秒",
+        "表 2-1"
+      ],
+      "layout": "complex"
+    },
+    {
+      "doc_id": "layout_tender_evaluation",
+      "file": "pdf/legal_评标办法.pdf",
+      "format": "pdf",
+      "doc_type": "legal",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "法务",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "评标委员会5名成员外部专家不少于2名",
+        "技术方案45%商务报价35%履约能力20%",
+        "有效投标人不足3家流标"
+      ],
+      "section_anchors": [
+        "45%",
+        "35%",
+        "20%"
+      ],
+      "layout": "complex"
+    },
+    {
+      "doc_id": "legal_compliance_review_2026",
+      "file": "pdf/legal_2026年度合规审查报告.pdf",
+      "format": "pdf",
+      "doc_type": "legal",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "legal_confidential",
+      "department": "法务",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "高风险3项中风险7项低风险15项",
+        "高风险整改截止2026-11-30",
+        "出具日期2026-09-01"
+      ],
+      "section_anchors": [
+        "2026-11-30",
+        "表 3-1"
+      ],
+      "layout": "complex"
+    },
+    {
+      "doc_id": "legal_data_export_assessment",
+      "file": "pdf/legal_数据出境自评估报告.pdf",
+      "format": "pdf",
+      "doc_type": "legal",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "legal_confidential",
+      "department": "法务",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_data_compliance",
+      "key_facts": [
+        "接收方为新加坡子公司",
+        "出境规模12.4万条/年",
+        "评估结论可通过有效期2年",
+        "标准合同备案日期2026-05-26"
+      ],
+      "section_anchors": [
+        "12.4 万条",
+        "新加坡子公司",
+        "2 年"
+      ],
+      "layout": "complex"
+    },
+    {
+      "doc_id": "sop_incident_response_v3",
+      "file": "pdf/sop_线上故障应急响应_v3.pdf",
+      "format": "pdf",
+      "doc_type": "sop",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "IT",
+      "version": {
+        "version_id": "v3",
+        "effective_from": "2026-08-15",
+        "effective_to": null,
+        "supersedes": "sop_incident_response_v2",
+        "superseded_by": null
+      },
+      "is_scanned": false,
+      "group": "version_chain",
+      "key_facts": [
+        "P1须90分钟内恢复服务",
+        "首次通报不超过15分钟",
+        "主值10分钟未响应升级替补",
+        "替补须15分钟内接手"
+      ],
+      "section_anchors": [
+        "90 分钟",
+        "10 分钟",
+        "XC-SOP-IT-2026-003"
+      ],
+      "layout": "complex"
+    },
+    {
+      "doc_id": "scan_expense_claim_form",
+      "file": "pdf/scan_费用报销单.pdf",
+      "format": "pdf",
+      "doc_type": "form",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "财务部",
+      "version": null,
+      "is_scanned": true,
+      "group": "scanned",
+      "key_facts": [
+        "报销单号BX-2026-0518申请人苏黎",
+        "报销金额3,480.00元",
+        "审批完成日期2026-08-09"
+      ],
+      "section_anchors": [
+        "BX-2026-0518",
+        "2026-08-09"
+      ]
+    },
+    {
+      "doc_id": "scan_training_signin",
+      "file": "pdf/scan_培训签到表.pdf",
+      "format": "pdf",
+      "doc_type": "form",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": null,
+      "is_scanned": true,
+      "group": "scanned",
+      "key_facts": [
+        "培训日期2026-06-25主题数据安全合规宣贯",
+        "应到48人实到45人请假3人",
+        "讲师李洪"
+      ],
+      "section_anchors": [
+        "2026-06-25",
+        "48 人",
+        "45 人"
+      ]
+    },
+    {
+      "doc_id": "notes_weekly_ops_2026",
+      "file": "txt/notes_运维周会纪要_20260907.txt",
+      "format": "txt",
+      "doc_type": "notes",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "IT",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_incident",
+      "key_facts": [
+        "本周处理告警37条二级告警4条",
+        "停机维护窗口2026-09-12 22:00至23:30",
+        "遗留问题3项责任人王倩闭环2026-09-19前"
+      ],
+      "section_anchors": [
+        "2026-09-12",
+        "22:00 至 23:30"
+      ]
+    },
+    {
+      "doc_id": "notes_strategy_retreat_2026",
+      "file": "txt/notes_战略务虚会纪要_2026.txt",
+      "format": "txt",
+      "doc_type": "notes",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "总裁办",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "会议时间2026-08-14至08-15",
+        "地点福州·闽江畔会议中心",
+        "AI算力预算预留1,500万元",
+        "战略解码会2026-09-25"
+      ],
+      "section_anchors": [
+        "1,500 万元",
+        "2026-09-25"
+      ],
+      "layout": "multi_page"
+    },
+    {
+      "doc_id": "faq_it_helpdesk",
+      "file": "txt/faq_IT帮助中心FAQ.txt",
+      "format": "txt",
+      "doc_type": "faq",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "IT",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "IT热线0591-8888-6600",
+        "热线15分钟内响应",
+        "VPN有效期180天",
+        "邮箱默认50GB"
+      ],
+      "section_anchors": [
+        "0591-8888-6600",
+        "180 天"
+      ]
+    },
+    {
+      "doc_id": "dict_order_domain",
+      "file": "txt/readme_数据字典_订单域.txt",
+      "format": "txt",
+      "doc_type": "reference",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "数据部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "o_order_no格式OR+14位时间戳+4位流水号",
+        "o_status五种枚举值",
+        "o_amount单位为分"
+      ],
+      "section_anchors": [
+        "OR + 14 位时间戳"
+      ]
+    },
+    {
+      "doc_id": "sop_access_review",
+      "file": "txt/sop_权限季度复核.txt",
+      "format": "txt",
+      "doc_type": "sop",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "IT",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "每季度复核一次覆盖全部特权账号",
+        "临时账号操作后24小时内回收",
+        "复核记录保存2年"
+      ],
+      "section_anchors": [
+        "2 年",
+        "24 小时"
+      ]
+    },
+    {
+      "doc_id": "sop_change_management",
+      "file": "txt/sop_变更管理.txt",
+      "format": "txt",
+      "doc_type": "sop",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "研发中心",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "标准/常规/紧急三级变更",
+        "紧急变更处置后24小时内补齐审批",
+        "月第二个周三14:00评审会",
+        "P1P2异常15分钟内回滚"
+      ],
+      "section_anchors": [
+        "24 小时",
+        "15 分钟"
+      ]
+    },
+    {
+      "doc_id": "policy_data_classification",
+      "file": "txt/policy_数据分类分级标准.txt",
+      "format": "txt",
+      "doc_type": "policy",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "数据安全委员会",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_data_compliance",
+      "key_facts": [
+        "五级分类：客户/交易/产品/员工/运营数据",
+        "四级分级：公开/内部/敏感/核心",
+        "核心数据AES-256加密存储"
+      ],
+      "section_anchors": [
+        "四级",
+        "AES-256"
+      ]
+    },
+    {
+      "doc_id": "xlsx_finance_budget_2026",
+      "file": "xlsx/table_2026年度预算表.xlsx",
+      "format": "xlsx",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "finance_restricted",
+      "department": "财务部",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_finance",
+      "key_facts": [
+        "2026营业收入预算52,000万元",
+        "净利润预算8,100万元",
+        "人力成本预算12,400万元",
+        "4个工作表"
+      ],
+      "section_anchors": [
+        "52,000 万元",
+        "8,100 万元",
+        "收入预算"
+      ],
+      "sheets": 4
+    },
+    {
+      "doc_id": "xlsx_hr_headcount_2026",
+      "file": "xlsx/table_2026人力编制台账.xlsx",
+      "format": "xlsx",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "hr_confidential",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "合计编制560在职512缺口48",
+        "研发中心编制232在职214",
+        "3个工作表"
+      ],
+      "section_anchors": [
+        "560",
+        "512",
+        "招聘进度"
+      ],
+      "sheets": 3
+    },
+    {
+      "doc_id": "xlsx_ops_capacity_plan",
+      "file": "xlsx/table_容量规划表.xlsx",
+      "format": "xlsx",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "it_admin",
+      "department": "IT",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "A1机房46节点冗余28%",
+        "B2机房38节点冗余21%",
+        "CPU平均63%峰值78%阈值≤70%",
+        "扩容合计24节点1,230万元"
+      ],
+      "section_anchors": [
+        "46",
+        "28%",
+        "扩容计划"
+      ],
+      "sheets": 3
+    },
+    {
+      "doc_id": "xlsx_product_metrics_2026",
+      "file": "xlsx/table_产品核心指标.xlsx",
+      "format": "xlsx",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "产品部",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_product",
+      "key_facts": [
+        "2026-06 MAU 124,000 DAU 24,600付费租户3,120",
+        "2026-06月留存68.2%",
+        "企业版ARPU 8,600元/月"
+      ],
+      "section_anchors": [
+        "124,000",
+        "24,600",
+        "收入贡献"
+      ],
+      "sheets": 3
+    },
+    {
+      "doc_id": "xlsx_legal_contract_register",
+      "file": "xlsx/table_合同台账.xlsx",
+      "format": "xlsx",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "legal_confidential",
+      "department": "法务",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "在册合同187份高风险3份",
+        "中科智联合同468万元",
+        "待履约交付节点14个"
+      ],
+      "section_anchors": [
+        "187 份",
+        "468",
+        "风险清单"
+      ],
+      "sheets": 3
+    },
+    {
+      "doc_id": "xlsx_sales_pipeline_2026h2",
+      "file": "xlsx/table_2026H2商机漏斗.xlsx",
+      "format": "xlsx",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "销售部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "合计商机金额8,600万元加权3,240万元",
+        "华东3,800万元预计赢率62%",
+        "即将签约商机6个500万元"
+      ],
+      "section_anchors": [
+        "8,600",
+        "3,240",
+        "漏斗阶段"
+      ],
+      "sheets": 3
+    },
+    {
+      "doc_id": "table_cloud_cost_2026",
+      "file": "xlsx/table_云资源账单_2026.xlsx",
+      "format": "xlsx",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "财务部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "2026-07云账单合计86.4万元",
+        "2026-05合计62.2万元"
+      ],
+      "section_anchors": [
+        "86.4",
+        "2026-07"
+      ]
+    },
+    {
+      "doc_id": "table_api_calls_2026",
+      "file": "xlsx/table_接口调用量_2026.xlsx",
+      "format": "xlsx",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "研发中心",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "2026-06调用42,100万次峰值QPS 12,800",
+        "2026-06错误率0.31%"
+      ],
+      "section_anchors": [
+        "42,100",
+        "12,800"
+      ]
+    },
+    {
+      "doc_id": "table_training_courses",
+      "file": "xlsx/table_内部课程目录.xlsx",
+      "format": "xlsx",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "课程总计46门必修8门",
+        "年度学时要求40学时",
+        "合规类课程3门"
+      ],
+      "section_anchors": [
+        "46 门",
+        "40 学时"
+      ]
+    },
+    {
+      "doc_id": "table_candidate_pipeline",
+      "file": "xlsx/table_候选人漏斗.xlsx",
+      "format": "xlsx",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "hr_confidential",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_hiring",
+      "key_facts": [
+        "在流程合计63人已发Offer 17份",
+        "整体到面率71%",
+        "研发序列在流程28人"
+      ],
+      "section_anchors": [
+        "63",
+        "17",
+        "71%"
+      ]
+    },
+    {
+      "doc_id": "csv_gbk_supplier_contacts",
+      "file": "csv/table_供应商联系人名录_GBK.csv",
+      "format": "csv",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "采购部",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_procurement",
+      "key_facts": [
+        "共6家供应商其中A类4家",
+        "GBK编码"
+      ],
+      "section_anchors": [
+        "A 类 4 家",
+        "合计 6 家"
+      ],
+      "encoding": "gbk"
+    },
+    {
+      "doc_id": "csv_gbk_warehouse_inventory",
+      "file": "csv/table_仓库库存台账_GBK.csv",
+      "format": "csv",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "仓储部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "在库SKU 6类预警SKU 3项",
+        "光模块10G低于安全库存",
+        "GBK编码"
+      ],
+      "section_anchors": [
+        "预警 SKU 3 项"
+      ],
+      "encoding": "gbk"
+    },
+    {
+      "doc_id": "csv_gbk_channel_sales_2025",
+      "file": "csv/table_渠道销售_2025_GB18030.csv",
+      "format": "csv",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "销售部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "代理渠道3,240万元占48.6%",
+        "线上自助同比+38.4%",
+        "GB18030编码"
+      ],
+      "section_anchors": [
+        "3,240",
+        "48.6%"
+      ],
+      "encoding": "gb18030"
+    },
+    {
+      "doc_id": "csv_gbk_hr_training_records",
+      "file": "csv/table_培训记录_GBK.csv",
+      "format": "csv",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "hr_confidential",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "2026H1共5场累计参训242人次",
+        "GBK编码"
+      ],
+      "section_anchors": [
+        "5 场",
+        "242 人次"
+      ],
+      "encoding": "gbk"
+    },
+    {
+      "doc_id": "csv_utf8_nobom_product_catalog",
+      "file": "csv/table_在售产品目录_UTF8无BOM.csv",
+      "format": "csv",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "产品部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "在售产品9个旗舰星辰盾v3.2",
+        "UTF-8无BOM编码"
+      ],
+      "section_anchors": [
+        "9 个",
+        "星辰盾"
+      ],
+      "encoding": "utf-8"
+    },
+    {
+      "doc_id": "table_headcount_monthly",
+      "file": "csv/table_月度在职人数.csv",
+      "format": "csv",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "2026-06月末512人",
+        "月度离职率区间0.8%~1.3%"
+      ],
+      "section_anchors": [
+        "512",
+        "2026-06"
+      ],
+      "encoding": "utf-8-sig"
+    },
+    {
+      "doc_id": "table_marketing_spend_2026",
+      "file": "csv/table_市场投放费用_2026.csv",
+      "format": "csv",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "市场部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "2026-06搜索竞价286万元单线索成本386元",
+        "内容社区单位获客成本更低"
+      ],
+      "section_anchors": [
+        "286",
+        "386"
+      ],
+      "encoding": "utf-8-sig"
+    },
+    {
+      "doc_id": "table_invoice_records_2026",
+      "file": "csv/table_发票台账_2026.csv",
+      "format": "csv",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "finance_restricted",
+      "department": "财务部",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_finance",
+      "key_facts": [
+        "上半年开票合计19,200万元",
+        "作废14张红冲5张"
+      ],
+      "section_anchors": [
+        "19,200",
+        "14"
+      ],
+      "encoding": "utf-8-sig"
+    },
+    {
+      "doc_id": "table_customer_satisfaction_2026",
+      "file": "csv/table_客户满意度调查_2026.csv",
+      "format": "csv",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "客服部",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "2026-06 NPS 46满意率91.3%",
+        "投诉数降至21件"
+      ],
+      "section_anchors": [
+        "46",
+        "91.3%"
+      ],
+      "encoding": "utf-8-sig"
+    },
+    {
+      "doc_id": "table_purchase_orders_2026",
+      "file": "csv/table_采购订单台账_2026.csv",
+      "format": "csv",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "采购部",
+      "version": null,
+      "is_scanned": false,
+      "group": "cross_procurement",
+      "key_facts": [
+        "合计236单3,180万元",
+        "平均交付25天",
+        "交付天数逐月下降"
+      ],
+      "section_anchors": [
+        "236",
+        "3,180"
+      ],
+      "encoding": "utf-8-sig"
+    },
+    {
+      "doc_id": "table_interview_records",
+      "file": "csv/table_面试评价记录.csv",
+      "format": "csv",
+      "doc_type": "table",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "hr_confidential",
+      "department": "HR",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "共6场面试通过3人",
+        "最高分4.6分为算法工程师"
+      ],
+      "section_anchors": [
+        "4.6",
+        "通过"
+      ],
+      "encoding": "utf-8-sig"
+    },
+    {
+      "doc_id": "legal_trademark_list",
+      "file": "csv/legal_商标与域名台账.csv",
+      "format": "csv",
+      "doc_type": "legal",
+      "kb_id": "rag_100_docs",
+      "permission_scope": "general",
+      "department": "法务",
+      "version": null,
+      "is_scanned": false,
+      "group": null,
+      "key_facts": [
+        "注册商标23件",
+        "域名17个",
+        "星辰盾商标有效期至2031-04-20"
+      ],
+      "section_anchors": [
+        "23 件",
+        "17 个"
+      ],
+      "encoding": "utf-8-sig"
     }
   ],
   "groups": {
@@ -608,9 +2266,90 @@
       "policy_travel_v3"
     ],
     "scanned": [
+      "scan_access_request",
       "scan_asset_disposal",
-      "scan_access_request"
+      "scan_expense_claim_form",
+      "scan_training_signin"
+    ],
+    "similar_pair_overtime": [
+      "policy_overtime_rnd",
+      "policy_overtime_cs"
+    ],
+    "version_chain_incident_sop": [
+      "sop_incident_response_v1",
+      "sop_incident_response_v2",
+      "sop_incident_response_v3"
+    ],
+    "version_chain_expense": [
+      "policy_expense_v1",
+      "policy_expense_v2",
+      "policy_expense_v3"
+    ],
+    "version_chain_infosec": [
+      "policy_infosec",
+      "policy_infosec_v2"
+    ],
+    "cross_doc": {
+      "cross_procurement": [
+        "legal_purchase_contract_zhongke",
+        "sop_vendor_onboarding",
+        "table_purchase_orders_2026"
+      ],
+      "cross_incident": [
+        "report_incident_2026q2",
+        "sop_incident_response_v3",
+        "notes_weekly_ops_2026"
+      ],
+      "cross_hiring": [
+        "policy_recruitment",
+        "sop_interview_hiring",
+        "table_candidate_pipeline"
+      ],
+      "cross_finance": [
+        "layout_report_fin_annual_2025",
+        "xlsx_finance_budget_2026",
+        "table_invoice_records_2026"
+      ],
+      "cross_product": [
+        "report_product_annual_2025",
+        "xlsx_product_metrics_2026",
+        "layout_spec_api_gateway"
+      ],
+      "cross_data_compliance": [
+        "legal_data_export_assessment",
+        "legal_dpa_processing",
+        "policy_data_classification"
+      ]
+    },
+    "complex_layout_pdf": [
+      "layout_manual_employee_handbook",
+      "layout_report_fin_annual_2025",
+      "layout_spec_api_gateway",
+      "layout_tender_evaluation",
+      "legal_compliance_review_2026",
+      "legal_data_export_assessment",
+      "sop_incident_response_v3"
+    ],
+    "multi_page_long_doc": [
+      "legal_dpa_processing",
+      "manual_ops_runbook",
+      "notes_strategy_retreat_2026",
+      "report_product_annual_2025",
+      "spec_data_warehouse"
+    ],
+    "gbk_encoded_csv": [
+      "csv_gbk_channel_sales_2025",
+      "csv_gbk_hr_training_records",
+      "csv_gbk_supplier_contacts",
+      "csv_gbk_warehouse_inventory"
     ]
   },
-  "format_counts": {}
+  "format_counts": {
+    "md": 27,
+    "docx": 15,
+    "pdf": 20,
+    "txt": 10,
+    "xlsx": 13,
+    "csv": 15
+  }
 }

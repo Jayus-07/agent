@@ -29,6 +29,14 @@
   - 不得引入与既有拒答（无证据）用例相冲突的事实：
     RD-026 年假天数 / RD-027 2024 年营业收入 / RD-029 差旅餐费补贴 /
     RD-030 CTO 姓名 / RD-028 会议助手 v1.2 上线日期——新语料一律不涉及。
+    （2026 年报初稿曾写「2024 年营业收入 33,960 万元 / 同比 +21.3%」，会让 RD-027
+      由拒答变成可答，已删除同比列，仅保留 2025 年度口径。）
+  - 落地结果：100 份文档（md 27 / docx 15 / pdf 20 / txt 10 / xlsx 13 / csv 15）、
+    169 条用例（RD-001~RD-169），7 类 query_type 全覆盖；版本链 4 条、相似对 2 组、
+    跨文档关联组 6 组、复杂版面 PDF 7 份、多页长文 5 份、扫描件 4 份。
+  - 已知联动缺陷（本生成器做的是语料侧规避，不是根治）：
+    CsvParser 的多级表头启发式「前 3 行数值占比 < 20% 即判为表头」会把全字符串表的
+    前几行吞成拍平表头，因此新增的全文本表都刻意保留了数值列。
 
 关键事实在生成期即固化在源文件中：
   - 文本类文件直接写入事实文本；
@@ -694,16 +702,6 @@ o_pay_channel 支付渠道，枚举：wechat / alipay / unionpay / corporate。
 o_refundable  是否可退，布尔值，虚拟商品默认 false。
 """
 
-TXT_README_API_GLOSSARY = """对外接口术语表（公服网关 v3.2）
-==================================
-
-Idempotency-Key   幂等键，由调用方生成，服务端保留结果 24 小时。
-cursor            分页游标，不透明字符串，单次请求最大页大小 200 条。
-X-Canary          灰度标，取值 true 时路由到灰度集群，默认走正式集群。
-X-Request-Id      链路追踪标识，服务端回显，用于故障排查定位。
-rate_limit        限流维度为租户 + 接口，默认配额 500 QPS/租户。
-"""
-
 TXT_SOP_ACCESS_REVIEW = """权限季度复核 SOP（IT 部）
 ===========================
 
@@ -740,6 +738,35 @@ TXT_POLICY_DATA_CLASSIFICATION = """数据分类分级标准（v2026.01）
 3. 核心数据：须加密存储（AES-256），访问实名到个人并全程留痕。
 4. 共享：敏感及以上数据跨部门共享须经数据保护官审批。
 5. 出境：受控数据出境须按《数据出境管理办法》完成安全评估后执行。
+6. 与密级的关系：本分级用于确定存储与共享的保护强度，属分类分级维度；
+   对外导出的审批权限仍按《信息安全管理制度》的密级约定执行，二者不得混用。
+"""
+
+MD_POLICY_INFOSEC_V2 = """# 信息安全管理制度（V2）
+
+制度编号：XC-IT-2026-009
+发布部门：数据安全委员会
+发布日期：2026-06-10
+生效日期：2026-07-01，本版本施行后原 V1 版（2025-01-01 起施行）同时废止。
+
+## 1. 密级划分
+密级仍为 public（公开）、internal（内部）、confidential（机密）三级，
+分级命名的沿用不影响既有审批链路。
+
+## 2. 数据导出
+internal 及以上密级数据导出仍须数据保护官书面审批，审批记录留存 3 年。
+
+## 3. 权限回收
+员工离岗当日回收全部权限，临时账号在操作完成后 24 小时内回收。
+
+## 4. 本次修订内容
+4.1 新增远程终端管控：接入内网的个人终端须安装统一终端管控代理并开启全盘加密。
+4.2 新增第三方接入管理：外包与供应商人员一律使用受限账号，操作全程录屏留痕。
+4.3 新增生成式 AI 工具管控：禁止将 confidential 级数据输入外部大模型服务。
+4.4 收紧移动介质管控：U 盘等移动存储介质在生产区一律禁用，确需使用的须备案。
+
+## 5. 例外审批
+因业务需要的例外情形，须由 IT 部与数据保护官双签，有效期不超过 90 天。
 """
 
 # ---------------------------------------------------------------- dataset 用例
@@ -807,6 +834,18 @@ VREQ_AS_OF_202406 = {"type": "as_of", "date": "2024-06-01"}
 VREQ_CURRENT = {"type": "current"}
 VREQ_CHAIN = {"type": "all_versions",
               "supersedes_chain": ["policy_travel_v1", "policy_travel_v2", "policy_travel_v3"]}
+
+# ---- 扩容新增的版本约束：三条新版本链（incident / expense / infosec）----
+VREQ_AS_OF_202602 = {"type": "as_of", "date": "2026-02-01"}
+VREQ_AS_OF_202603 = {"type": "as_of", "date": "2026-03-01"}
+VREQ_AS_OF_202501 = {"type": "as_of", "date": "2025-01-01"}
+VREQ_CHAIN_INCIDENT = {"type": "all_versions",
+                       "supersedes_chain": ["sop_incident_response_v1",
+                                            "sop_incident_response_v2",
+                                            "sop_incident_response_v3"]}
+VREQ_CHAIN_EXPENSE = {"type": "all_versions",
+                      "supersedes_chain": ["policy_expense_v1", "policy_expense_v2",
+                                           "policy_expense_v3"]}
 
 CASES = [
     # ---------------- faq ----------------
@@ -1000,7 +1039,823 @@ CASES = [
                      "no_evidence", refuse=True, reason="permission",
                      perms=("general",)),
      "metadata": M("pdf", "report", difficulty="medium", no_answer=True)},
+
+    # ============ 扩容新增用例（配套 27 → 100 份语料；RD-037 起）============
+    # ---- Legal：法务类（md）----
+    {"id": "RD-037", "kb_id": KB_ID, "module": "rag",
+     "question": "公司与深蓝智能签订的双向保密协议，保密期限是多长？",
+     "annotation": A("legal_nnn_agreement", ["legal_nnn_agreement"], ["自签署之日起5年"],
+                     "exact_id"),
+     "metadata": M("md", "legal")},
+    {"id": "RD-038", "kb_id": KB_ID, "module": "rag",
+     "question": "违反双向保密协议要支付多少违约金？",
+     "annotation": A("legal_nnn_agreement", ["legal_nnn_agreement"], ["50万元"], "exact_id"),
+     "metadata": M("md", "legal")},
+    {"id": "RD-039", "kb_id": KB_ID, "module": "rag",
+     "question": "知识产权转让的总价是多少？付款怎么安排？",
+     "annotation": A("legal_ip_assignment", ["legal_ip_assignment"],
+                     ["80万元", "签署后15个工作日内付50%，权属变更登记完成后付剩余50%"],
+                     "multi_condition"),
+     "metadata": M("md", "legal")},
+    {"id": "RD-040", "kb_id": KB_ID, "module": "rag",
+     "question": "受让的发明专利与软著，权属变更登记什么时候完成？",
+     "annotation": A("legal_ip_assignment", ["legal_ip_assignment"], ["2025-11-20"], "exact_id"),
+     "metadata": M("md", "legal")},
+    {"id": "RD-041", "kb_id": KB_ID, "module": "rag",
+     "question": "向中科智联采购了多少台 GPU 服务器？合同总价多少？",
+     "annotation": A("legal_purchase_contract_zhongke", ["legal_purchase_contract_zhongke"],
+                     ["12台", "468万元"], "multi_condition",
+                     anchors=["合同编号：XC-CG-2026-014"]),
+     "metadata": M("md", "legal", group="cross_procurement")},
+    {"id": "RD-042", "kb_id": KB_ID, "module": "rag",
+     "question": "中科智联如果逾期交货，违约金怎么算？有没有上限？",
+     "annotation": A("legal_purchase_contract_zhongke", ["legal_purchase_contract_zhongke"],
+                     ["每逾期一日按合同总价0.5%", "累计不超过合同总价的5%"], "multi_condition"),
+     "metadata": M("md", "legal", difficulty="hard", group="cross_procurement")},
+    {"id": "RD-043", "kb_id": KB_ID, "module": "rag",
+     "question": "争议和解备忘录约定公司一次性支付多少钱？",
+     "annotation": A("legal_settlement_memo", ["legal_settlement_memo"], ["35万元"], "exact_id"),
+     "metadata": M("md", "legal")},
+
+    # ---- Policy：制度类（md）----
+    {"id": "RD-044", "kb_id": KB_ID, "module": "rag",
+     "question": "受控物项清单多久更新一次？出口管制筛查记录要保存多久？",
+     "annotation": A("policy_export_control", ["policy_export_control"],
+                     ["每季度更新一次", "保存10年"], "multi_condition"),
+     "metadata": M("md", "policy")},
+    {"id": "RD-045", "kb_id": KB_ID, "module": "rag",
+     "question": "没做出口管制筛查就签了合同，直接责任人会有什么后果？",
+     "annotation": A("policy_export_control", ["policy_export_control"],
+                     ["当年度绩效一票否决"], "exact_id"),
+     "metadata": M("md", "policy", difficulty="hard")},
+    {"id": "RD-046", "kb_id": KB_ID, "module": "rag",
+     "question": "招聘新增编制（HC）由谁终审？内部推荐成功奖励多少钱？",
+     "annotation": A("policy_recruitment", ["policy_recruitment"],
+                     ["CEO终审", "8,000元/人"], "multi_condition"),
+     "metadata": M("md", "policy", group="cross_hiring")},
+    {"id": "RD-047", "kb_id": KB_ID, "module": "rag",
+     "question": "发 Offer 之前必须完成什么流程？核心岗位有什么要求？",
+     "annotation": A("policy_recruitment", ["policy_recruitment"],
+                     ["背景调查", "核心岗位背调覆盖率100%"], "multi_condition"),
+     "metadata": M("md", "policy", group="cross_hiring")},
+    {"id": "RD-048", "kb_id": KB_ID, "module": "rag",
+     "question": "绩效考核结果的强制分布是怎么规定的？",
+     "annotation": A("policy_performance_appraisal", ["policy_performance_appraisal"],
+                     ["A档不超过20%", "D档不低于5%"], "multi_condition"),
+     "metadata": M("md", "policy")},
+    {"id": "RD-049", "kb_id": KB_ID, "module": "rag",
+     "question": "连续两次绩效考核为 D 会怎么处理？",
+     "annotation": A("policy_performance_appraisal", ["policy_performance_appraisal"],
+                     ["进入绩效改进计划PIP", "改进期3个月"], "multi_condition"),
+     "metadata": M("md", "policy", difficulty="medium")},
+    {"id": "RD-050", "kb_id": KB_ID, "module": "rag",
+     "question": "生产环境软件正版化率目标是多少？全公司软件盘点在什么时候？",
+     "annotation": A("policy_software_asset", ["policy_software_asset"],
+                     ["正版化率100%", "每年12月"], "multi_condition"),
+     "metadata": M("md", "policy")},
+    {"id": "RD-051", "kb_id": KB_ID, "module": "rag",
+     "question": "V1 版费用报销办法的报销时限是多长？审批要过几级？",
+     "annotation": A("policy_expense_v1", ["policy_expense_v1"],
+                     ["60日内", "部门负责人→财务部两级审批"], "multi_condition",
+                     vreq=VREQ_AS_OF_202602),
+     "metadata": M("md", "policy", difficulty="hard", group="version_chain")},
+    {"id": "RD-052", "kb_id": KB_ID, "module": "rag",
+     "question": "研发中心每月加班上限是多少小时？工作日加班费怎么计发？",
+     "annotation": A("policy_overtime_rnd", ["policy_overtime_rnd"],
+                     ["每月不超过36小时", "工作日按1.5倍计发"], "multi_condition"),
+     "metadata": M("md", "policy", group="similar_pair")},
+    {"id": "RD-053", "kb_id": KB_ID, "module": "rag",
+     "question": "客服部法定节假日加班怎么计发？夜班津贴多少钱？",
+     "annotation": A("policy_overtime_cs", ["policy_overtime_cs"],
+                     ["法定节假日按3倍工资计发", "夜班每班次60元"], "multi_condition"),
+     "metadata": M("md", "policy", group="similar_pair")},
+    {"id": "RD-054", "kb_id": KB_ID, "module": "rag",
+     "question": "研发中心和客服部，每月加班工时上限分别是多少？",
+     "annotation": A("policy_overtime_rnd",
+                     ["policy_overtime_rnd", "policy_overtime_cs"],
+                     ["研发中心36小时", "客服部24小时"], "low_confidence"),
+     "metadata": M("md", "policy", difficulty="hard", group="similar_pair")},
+    {"id": "RD-055", "kb_id": KB_ID, "module": "rag",
+     "question": "V2 版信息安全管理制度相比旧版，新增了哪些管控要求？",
+     "annotation": A("policy_infosec_v2", ["policy_infosec_v2"],
+                     ["远程终端须装管控代理并全盘加密", "第三方人员使用受限账号并录屏留痕",
+                      "禁止将confidential级数据输入外部大模型", "禁用移动存储介质"],
+                     "multi_condition", vreq=VREQ_CURRENT),
+     "metadata": M("md", "policy", difficulty="hard", group="version_chain")},
+    {"id": "RD-056", "kb_id": KB_ID, "module": "rag",
+     "question": "按现行信息安全制度，数据对外导出须经谁审批？",
+     "annotation": A("policy_infosec_v2", ["policy_infosec_v2"],
+                     ["数据保护官书面审批"], "multi_condition", vreq=VREQ_CURRENT),
+     "metadata": M("md", "policy", difficulty="hard", group="version_chain")},
+    {"id": "RD-057", "kb_id": KB_ID, "module": "rag",
+     "question": "客户退款审核要在多久内完成？超过 5 万元怎么办？",
+     "annotation": A("sop_refund_processing", ["sop_refund_processing"],
+                     ["3个工作日内", "超过5万元报财务总监审批"], "multi_condition"),
+     "metadata": M("md", "sop")},
+    {"id": "RD-058", "kb_id": KB_ID, "module": "rag",
+     "question": "财务付款之后，客户多久能收到退款？",
+     "annotation": A("sop_refund_processing", ["sop_refund_processing"],
+                     ["7至15个工作日"], "exact_id"),
+     "metadata": M("md", "sop")},
+    {"id": "RD-059", "kb_id": KB_ID, "module": "rag",
+     "question": "供应商准入要提交几项材料？要不要交保证金？",
+     "annotation": A("sop_vendor_onboarding", ["sop_vendor_onboarding"],
+                     ["5项材料", "履约保证金10万元"], "multi_condition"),
+     "metadata": M("md", "sop", group="cross_procurement")},
+    {"id": "RD-060", "kb_id": KB_ID, "module": "rag",
+     "question": "V1 版故障应急响应 SOP 里，P1 级故障要求多久恢复服务？",
+     "annotation": A("sop_incident_response_v1", ["sop_incident_response_v1"],
+                     ["4小时内"], "exact_id", vreq=VREQ_AS_OF_202501),
+     "metadata": M("md", "sop", difficulty="hard", group="version_chain")},
+
+    # ---- Report / Manual / Spec：长文与多页（md）----
+    {"id": "RD-061", "kb_id": KB_ID, "module": "rag",
+     "question": "2026 年第二季度共处置了多少起安全事件？其中 P1 级几起？",
+     "annotation": A("report_incident_2026q2", ["report_incident_2026q2"],
+                     ["14起", "P1级1起"], "multi_condition"),
+     "metadata": M("md", "report", group="cross_incident")},
+    {"id": "RD-062", "kb_id": KB_ID, "module": "rag",
+     "question": "5 月 19 日网关鉴权绕行事件影响了多少个账户？",
+     "annotation": A("report_incident_2026q2", ["report_incident_2026q2"],
+                     ["1,243个账户"], "exact_id"),
+     "metadata": M("md", "report", group="cross_incident")},
+    {"id": "RD-063", "kb_id": KB_ID, "module": "rag",
+     "question": "2026Q2 安全事件的平均检测时长是多少？",
+     "annotation": A("report_incident_2026q2", ["report_incident_2026q2"],
+                     ["23分钟"], "table_value"),
+     "metadata": M("md", "report", group="cross_incident")},
+    {"id": "RD-064", "kb_id": KB_ID, "module": "rag",
+     "question": "生产环境变更窗口定在什么时候？",
+     "annotation": A("manual_ops_runbook", ["manual_ops_runbook"],
+                     ["每周二、周四20:00至24:00"], "exact_id"),
+     "metadata": M("md", "manual")},
+    {"id": "RD-065", "kb_id": KB_ID, "module": "rag",
+     "question": "核心业务库的备份保留多久？跨季度首周的备份呢？",
+     "annotation": A("manual_ops_runbook", ["manual_ops_runbook"],
+                     ["保留30天", "跨季度首周额外保留1年"], "multi_condition"),
+     "metadata": M("md", "manual", difficulty="medium")},
+    {"id": "RD-066", "kb_id": KB_ID, "module": "rag",
+     "question": "一级告警触发后，多久要电话通知值班经理？",
+     "annotation": A("manual_ops_runbook", ["manual_ops_runbook"], ["5分钟内"], "exact_id"),
+     "metadata": M("md", "manual", difficulty="hard")},
+    {"id": "RD-067", "kb_id": KB_ID, "module": "rag",
+     "question": "数据仓库分哪几层？能不能跨层直接取数？",
+     "annotation": A("spec_data_warehouse", ["spec_data_warehouse"],
+                     ["ODS/DWD/DWS/ADS四层", "禁止跨层直连取数"], "multi_condition"),
+     "metadata": M("md", "spec")},
+    {"id": "RD-068", "kb_id": KB_ID, "module": "rag",
+     "question": "数仓基线任务须在什么时间前完成？任务失败后重试几次？",
+     "annotation": A("spec_data_warehouse", ["spec_data_warehouse"],
+                     ["每日06:30前", "最多重试2次，间隔5分钟"], "multi_condition"),
+     "metadata": M("md", "spec")},
+    {"id": "RD-069", "kb_id": KB_ID, "module": "rag",
+     "question": "核心表质量卡点里，波动率超过多少会自动阻断下游？",
+     "annotation": A("spec_data_warehouse", ["spec_data_warehouse"], ["超过30%"], "exact_id"),
+     "metadata": M("md", "spec", difficulty="medium")},
+    # ---- DOCX：11 份 ----
+    {"id": "RD-070", "kb_id": KB_ID, "module": "rag",
+     "question": "劳动合同首次签订期限多久？试用期多久？",
+     "annotation": A("legal_labor_contract_template", ["legal_labor_contract_template"],
+                     ["首次3年", "试用期6个月"], "multi_condition"),
+     "metadata": M("docx", "legal")},
+    {"id": "RD-071", "kb_id": KB_ID, "module": "rag",
+     "question": "竞业限制最长能约定多久？补偿金按什么标准支付？",
+     "annotation": A("legal_labor_contract_template", ["legal_labor_contract_template"],
+                     ["不超过2年", "离职前十二个月平均工资的30%按月支付"], "multi_condition"),
+     "metadata": M("docx", "legal", difficulty="medium")},
+    {"id": "RD-072", "kb_id": KB_ID, "module": "rag",
+     "question": "DPA 里乙方使用子处理者，须提前多久告知甲方？",
+     "annotation": A("legal_dpa_processing", ["legal_dpa_processing"], ["15个工作日"],
+                     "exact_id"),
+     "metadata": M("docx", "legal", group="cross_data_compliance")},
+    {"id": "RD-073", "kb_id": KB_ID, "module": "rag",
+     "question": "服务终止后，乙方须在多长时间内删除数据？",
+     "annotation": A("legal_dpa_processing", ["legal_dpa_processing"], ["90天内"], "exact_id"),
+     "metadata": M("docx", "legal", group="cross_data_compliance")},
+    {"id": "RD-074", "kb_id": KB_ID, "module": "rag",
+     "question": "公司在办的诉讼与仲裁案件共几起？标的额最高的是多少？",
+     "annotation": A("legal_case_litigation_2026", ["legal_case_litigation_2026"],
+                     ["3起", "1,180万元"], "multi_condition",
+                     perms=("general", "legal_confidential")),
+     "metadata": M("docx", "legal", difficulty="hard")},
+    {"id": "RD-075", "kb_id": KB_ID, "module": "rag",
+     "question": "V2 版故障 SOP 的 P1 恢复时限是多少？故障通报走哪些渠道？",
+     "annotation": A("sop_incident_response_v2", ["sop_incident_response_v2"],
+                     ["2小时内", "邮件+短信+企业微信三通道"], "multi_condition"),
+     "metadata": M("docx", "sop", difficulty="hard", group="version_chain")},
+    {"id": "RD-076", "kb_id": KB_ID, "module": "rag",
+     "question": "版本发布的灰度比例怎么推进？每个阶段要观察多久？",
+     "annotation": A("sop_release_deploy", ["sop_release_deploy"],
+                     ["5%→20%→100%", "每阶段观察不少于30分钟"], "multi_condition"),
+     "metadata": M("docx", "sop")},
+    {"id": "RD-077", "kb_id": KB_ID, "module": "rag",
+     "question": "什么情况下必须回滚？回滚要多久执行完？",
+     "annotation": A("sop_release_deploy", ["sop_release_deploy"],
+                     ["出现P1/P2级缺陷或核心接口错误率超过1%", "决策后15分钟内执行完毕"],
+                     "multi_condition"),
+     "metadata": M("docx", "sop", difficulty="medium")},
+    {"id": "RD-078", "kb_id": KB_ID, "module": "rag",
+     "question": "备份恢复演练的 RTO 和 RPO 目标分别是多少？",
+     "annotation": A("sop_backup_recovery_drill", ["sop_backup_recovery_drill"],
+                     ["RTO 4小时", "RPO 15分钟"], "multi_condition"),
+     "metadata": M("docx", "sop")},
+    {"id": "RD-079", "kb_id": KB_ID, "module": "rag",
+     "question": "最近一次备份恢复演练是哪天？实际恢复耗时多久？",
+     "annotation": A("sop_backup_recovery_drill", ["sop_backup_recovery_drill"],
+                     ["2026-05-20", "2小时48分"], "exact_id"),
+     "metadata": M("docx", "sop")},
+    {"id": "RD-080", "kb_id": KB_ID, "module": "rag",
+     "question": "常规岗位要面试几轮？面评要在多久内提交？",
+     "annotation": A("sop_interview_hiring", ["sop_interview_hiring"],
+                     ["3轮（技术面、主管面、HRBP面）", "24小时内提交"], "multi_condition"),
+     "metadata": M("docx", "sop", group="cross_hiring")},
+    {"id": "RD-081", "kb_id": KB_ID, "module": "rag",
+     "question": "V2 版报销办法的报销时限是多少？超过 5 万元怎么办？",
+     "annotation": A("policy_expense_v2", ["policy_expense_v2"],
+                     ["30日内", "单笔超过5万元加签财务总监"], "multi_condition"),
+     "metadata": M("docx", "policy", difficulty="hard", group="version_chain")},
+    {"id": "RD-082", "kb_id": KB_ID, "module": "rag",
+     "question": "V2 版报销办法对电子发票新增了什么要求？",
+     "annotation": A("policy_expense_v2", ["policy_expense_v2"],
+                     ["电子发票须通过系统查重", "重复报销一律退回并通报"], "multi_condition"),
+     "metadata": M("docx", "policy", group="version_chain")},
+    {"id": "RD-083", "kb_id": KB_ID, "module": "rag",
+     "question": "2025 年末付费客户数是多少？NPS 多少？",
+     "annotation": A("report_product_annual_2025", ["report_product_annual_2025"],
+                     ["1,842家", "NPS 46"], "multi_condition"),
+     "metadata": M("docx", "report", group="cross_product")},
+    {"id": "RD-084", "kb_id": KB_ID, "module": "rag",
+     "question": "数据接入平台 1.0 是哪天发布的？",
+     "annotation": A("report_product_annual_2025", ["report_product_annual_2025"],
+                     ["2025-09-12"], "exact_id"),
+     "metadata": M("docx", "report", group="cross_product")},
+    {"id": "RD-085", "kb_id": KB_ID, "module": "rag",
+     "question": "董事会批准的 2026 年度资本性支出预算是多少？",
+     "annotation": A("report_board_resolution_2026", ["report_board_resolution_2026"],
+                     ["3,200万元"], "exact_id"),
+     "metadata": M("docx", "report")},
+    {"id": "RD-086", "kb_id": KB_ID, "module": "rag",
+     "question": "新加坡子公司首期注册资本多少？管理层授权有效期多久？",
+     "annotation": A("report_board_resolution_2026", ["report_board_resolution_2026"],
+                     ["200万新元", "12个月"], "multi_condition"),
+     "metadata": M("docx", "report", difficulty="medium")},
+    {"id": "RD-087", "kb_id": KB_ID, "module": "rag",
+     "question": "单笔超过 1 万元的报销有什么额外要求？",
+     "annotation": A("faq_finance_reimbursement", ["faq_finance_reimbursement"],
+                     ["须附合同或采购审批说明"], "exact_id"),
+     "metadata": M("docx", "faq")},
+    {"id": "RD-088", "kb_id": KB_ID, "module": "rag",
+     "question": "报销单被退回后，同一单还能重新提交几次？",
+     "annotation": A("faq_finance_reimbursement", ["faq_finance_reimbursement"], ["3次"],
+                     "exact_id"),
+     "metadata": M("docx", "faq")},
+
+    # ---- PDF：单栏文本 6 份 ----
+    {"id": "RD-089", "kb_id": KB_ID, "module": "rag",
+     "question": "星辰盾企业版软件许可授权多少席位？年许可费多少？",
+     "annotation": A("legal_software_license", ["legal_software_license"],
+                     ["500个命名用户席位", "年许可费96万元"], "multi_condition"),
+     "metadata": M("pdf", "legal")},
+    {"id": "RD-090", "kb_id": KB_ID, "module": "rag",
+     "question": "软件许可的期限是哪一段？",
+     "annotation": A("legal_software_license", ["legal_software_license"],
+                     ["2026-01-01至2028-12-31"], "exact_id"),
+     "metadata": M("pdf", "legal")},
+    {"id": "RD-091", "kb_id": KB_ID, "module": "rag",
+     "question": "电子介质的数据怎么销毁？销毁记录保存多久？",
+     "annotation": A("sop_data_destruction", ["sop_data_destruction"],
+                     ["逻辑覆写3次后消磁", "保存5年"], "multi_condition"),
+     "metadata": M("pdf", "sop")},
+    {"id": "RD-092", "kb_id": KB_ID, "module": "rag",
+     "question": "按现行报销办法，费用发生后须在多久内提交报销单？",
+     "annotation": A("policy_expense_v3", ["policy_expense_v3"], ["20个工作日内"],
+                     "multi_condition", vreq=VREQ_CURRENT),
+     "metadata": M("pdf", "policy", difficulty="hard", group="version_chain")},
+    {"id": "RD-093", "kb_id": KB_ID, "module": "rag",
+     "question": "现行报销办法下，单笔金额达到多少就须附合同或验收说明？",
+     "annotation": A("policy_expense_v3", ["policy_expense_v3"], ["5,000元"], "exact_id",
+                     vreq=VREQ_CURRENT),
+     "metadata": M("pdf", "policy", group="version_chain")},
+    {"id": "RD-094", "kb_id": KB_ID, "module": "rag",
+     "question": "每人每月最多可以远程办公几天？核心在线时段是什么时候？",
+     "annotation": A("policy_remote_work", ["policy_remote_work"],
+                     ["不超过6天", "10:00至16:00"], "multi_condition"),
+     "metadata": M("pdf", "policy")},
+    {"id": "RD-095", "kb_id": KB_ID, "module": "rag",
+     "question": "2026 年 Q2 全链路压测的峰值 TPS 是多少？超出目标多少？",
+     "annotation": A("report_performance_test_2026", ["report_performance_test_2026"],
+                     ["3,860", "超出目标28.7%"], "table_value"),
+     "metadata": M("pdf", "report")},
+    {"id": "RD-096", "kb_id": KB_ID, "module": "rag",
+     "question": "压测中下单接口的 P99 延迟是多少毫秒？",
+     "annotation": A("report_performance_test_2026", ["report_performance_test_2026"],
+                     ["218毫秒"], "table_value"),
+     "metadata": M("pdf", "report")},
+    {"id": "RD-097", "kb_id": KB_ID, "module": "rag",
+     "question": "年度运维服务合同的年度服务费是多少？P1 故障的响应与恢复要求？",
+     "annotation": A("contract_annual_maintenance", ["contract_annual_maintenance"],
+                     ["128万元", "15分钟内响应、2小时内恢复"], "multi_condition",
+                     perms=("general", "finance_restricted")),
+     "metadata": M("pdf", "contract", difficulty="medium")},
+
+    # ---- PDF：复杂版面 7 份（双栏 + 表格 + 页眉页脚页码）----
+    {"id": "RD-098", "kb_id": KB_ID, "module": "rag",
+     "question": "2025 年公司营业收入和净利润分别是多少？",
+     "annotation": A("layout_report_fin_annual_2025", ["layout_report_fin_annual_2025"],
+                     ["4.12亿元", "6,840万元"], "multi_condition",
+                     perms=("general", "finance_restricted")),
+     "metadata": M("pdf", "report", difficulty="medium", group="cross_finance")},
+    {"id": "RD-099", "kb_id": KB_ID, "module": "rag",
+     "question": "2025 年研发投入是多少？占营业收入多少？",
+     "annotation": A("layout_report_fin_annual_2025", ["layout_report_fin_annual_2025"],
+                     ["1.02亿元", "24.8%"], "multi_condition",
+                     perms=("general", "finance_restricted")),
+     "metadata": M("pdf", "report", difficulty="hard", group="cross_finance")},
+    {"id": "RD-100", "kb_id": KB_ID, "module": "rag",
+     "question": "2025 年度合并利润表 3-1 里，营业成本是多少？占营业收入多少？",
+     "annotation": A("layout_report_fin_annual_2025", ["layout_report_fin_annual_2025"],
+                     ["17,140万元", "占营业收入41.6%"], "table_value",
+                     perms=("general", "finance_restricted")),
+     "metadata": M("pdf", "report", difficulty="hard", group="cross_finance")},
+    {"id": "RD-101", "kb_id": KB_ID, "module": "rag",
+     "question": "员工手册里通讯补贴多少钱？年度体检安排在什么时候？",
+     "annotation": A("layout_manual_employee_handbook", ["layout_manual_employee_handbook"],
+                     ["每人每月150元", "每年9月至10月"], "multi_condition"),
+     "metadata": M("pdf", "manual", difficulty="medium")},
+    {"id": "RD-102", "kb_id": KB_ID, "module": "rag",
+     "question": "每人每年须完成多少学时的学习任务？哪类课程是必修？",
+     "annotation": A("layout_manual_employee_handbook", ["layout_manual_employee_handbook"],
+                     ["不少于40学时", "合规类课程为必修"], "multi_condition"),
+     "metadata": M("pdf", "manual")},
+    {"id": "RD-103", "kb_id": KB_ID, "module": "rag",
+     "question": "正式员工离职须提前多久书面通知？试用期内呢？",
+     "annotation": A("layout_manual_employee_handbook", ["layout_manual_employee_handbook"],
+                     ["正式员工提前30日", "试用期内提前3日"], "multi_condition"),
+     "metadata": M("pdf", "manual", difficulty="medium")},
+    {"id": "RD-104", "kb_id": KB_ID, "module": "rag",
+     "question": "API 网关的单请求体上限是多少？默认超时多少？",
+     "annotation": A("layout_spec_api_gateway", ["layout_spec_api_gateway"],
+                     ["2MB", "3秒"], "multi_condition"),
+     "metadata": M("pdf", "spec", group="cross_product")},
+    {"id": "RD-105", "kb_id": KB_ID, "module": "rag",
+     "question": "网关核心参数表 2-1 里，重试次数与退避策略是什么？",
+     "annotation": A("layout_spec_api_gateway", ["layout_spec_api_gateway"],
+                     ["重试2次", "指数退避，首次间隔200ms"], "table_value"),
+     "metadata": M("pdf", "spec", difficulty="hard", group="cross_product")},
+    {"id": "RD-106", "kb_id": KB_ID, "module": "rag",
+     "question": "JWT 令牌有效期多久？刷新令牌呢？",
+     "annotation": A("layout_spec_api_gateway", ["layout_spec_api_gateway"],
+                     ["JWT令牌2小时", "刷新令牌7天"], "multi_condition"),
+     "metadata": M("pdf", "spec", group="cross_product")},
+    {"id": "RD-107", "kb_id": KB_ID, "module": "rag",
+     "question": "评标委员会由几名成员组成？外部专家至少几名？",
+     "annotation": A("layout_tender_evaluation", ["layout_tender_evaluation"],
+                     ["5名成员", "外部专家不少于2名"], "multi_condition"),
+     "metadata": M("pdf", "legal")},
+    {"id": "RD-108", "kb_id": KB_ID, "module": "rag",
+     "question": "综合评分权重表 3-1 里，技术方案、商务报价、履约能力各占多少？",
+     "annotation": A("layout_tender_evaluation", ["layout_tender_evaluation"],
+                     ["技术方案45%", "商务报价35%", "履约能力20%"], "table_value"),
+     "metadata": M("pdf", "legal", difficulty="medium")},
+    {"id": "RD-109", "kb_id": KB_ID, "module": "rag",
+     "question": "2026 年度合规审查发现的高、中、低风险事项各有几项？",
+     "annotation": A("legal_compliance_review_2026", ["legal_compliance_review_2026"],
+                     ["高风险3项", "中风险7项", "低风险15项"], "multi_condition",
+                     perms=("general", "legal_confidential")),
+     "metadata": M("pdf", "legal", difficulty="hard")},
+    {"id": "RD-110", "kb_id": KB_ID, "module": "rag",
+     "question": "风险事项处置要求表 3-1 里，高风险事项的整改截止日是哪天？",
+     "annotation": A("legal_compliance_review_2026", ["legal_compliance_review_2026"],
+                     ["2026-11-30"], "table_value",
+                     perms=("general", "legal_confidential")),
+     "metadata": M("pdf", "legal", difficulty="hard")},
+    {"id": "RD-111", "kb_id": KB_ID, "module": "rag",
+     "question": "数据出境的接收方是谁？拟出境的数据规模是多少？",
+     "annotation": A("legal_data_export_assessment", ["legal_data_export_assessment"],
+                     ["新加坡子公司", "每年12.4万条"], "multi_condition",
+                     perms=("general", "legal_confidential")),
+     "metadata": M("pdf", "legal", difficulty="hard", group="cross_data_compliance")},
+    {"id": "RD-112", "kb_id": KB_ID, "module": "rag",
+     "question": "数据出境要素摘要表 3-1 里，评估结论有效期是多久？",
+     "annotation": A("legal_data_export_assessment", ["legal_data_export_assessment"],
+                     ["2年", "自2026-05-26起算"], "table_value",
+                     perms=("general", "legal_confidential")),
+     "metadata": M("pdf", "legal", difficulty="hard", group="cross_data_compliance")},
+    {"id": "RD-113", "kb_id": KB_ID, "module": "rag",
+     "question": "按现行故障 SOP，P1 级故障须多久恢复服务？首次通报不超过多久？",
+     "annotation": A("sop_incident_response_v3", ["sop_incident_response_v3"],
+                     ["90分钟内恢复", "首次通报不超过15分钟"], "multi_condition",
+                     vreq=VREQ_CURRENT),
+     "metadata": M("pdf", "sop", difficulty="hard", group="version_chain")},
+    {"id": "RD-114", "kb_id": KB_ID, "module": "rag",
+     "question": "故障处置 RACI 表 4-1 里，止血处置环节由谁负责、时限多少？",
+     "annotation": A("sop_incident_response_v3", ["sop_incident_response_v3"],
+                     ["主值/替补", "90分钟内恢复"], "table_value"),
+     "metadata": M("pdf", "sop", difficulty="hard", group="version_chain")},
+    {"id": "RD-115", "kb_id": KB_ID, "module": "rag",
+     "question": "主值多久没响应会升级到替补？替补须在多久内接手？",
+     "annotation": A("sop_incident_response_v3", ["sop_incident_response_v3"],
+                     ["主值10分钟内未响应即升级", "替补须15分钟内接手"], "multi_condition"),
+     "metadata": M("pdf", "sop", difficulty="hard", group="version_chain")},
+
+    # ---- PDF：扫描件 2 份（须经 OCR 才可读）----
+    {"id": "RD-116", "kb_id": KB_ID, "module": "rag",
+     "question": "报销单 BX-2026-0518 的报销金额是多少？什么时候审批完成？",
+     "annotation": A("scan_expense_claim_form", ["scan_expense_claim_form"],
+                     ["3,480.00元", "审批完成2026-08-09"], "exact_id"),
+     "metadata": M("pdf", "form", difficulty="medium", group="scanned")},
+    {"id": "RD-117", "kb_id": KB_ID, "module": "rag",
+     "question": "2026-06-25 那场培训，应到多少人？实到多少人？",
+     "annotation": A("scan_training_signin", ["scan_training_signin"],
+                     ["应到48人", "实到45人"], "exact_id"),
+     "metadata": M("pdf", "form", difficulty="medium", group="scanned")},
+    # ---- TXT：8 份 ----
+    {"id": "RD-118", "kb_id": KB_ID, "module": "rag",
+     "question": "运维周会定的下周停机维护窗口是什么时间？影响哪些功能？",
+     "annotation": A("notes_weekly_ops_2026", ["notes_weekly_ops_2026"],
+                     ["2026-09-12 22:00至23:30", "影响报表与导出功能"], "multi_condition"),
+     "metadata": M("txt", "notes", group="cross_incident")},
+    {"id": "RD-119", "kb_id": KB_ID, "module": "rag",
+     "question": "本周运维周会遗留几项问题？责任人是谁？",
+     "annotation": A("notes_weekly_ops_2026", ["notes_weekly_ops_2026"],
+                     ["遗留问题3项", "王倩"], "multi_condition"),
+     "metadata": M("txt", "notes", difficulty="hard", group="cross_incident")},
+    {"id": "RD-120", "kb_id": KB_ID, "module": "rag",
+     "question": "2026 年战略务虚会什么时候在哪里召开？AI 算力预算预留多少？",
+     "annotation": A("notes_strategy_retreat_2026", ["notes_strategy_retreat_2026"],
+                     ["2026-08-14至08-15", "福州·闽江畔会议中心", "1,500万元"],
+                     "multi_condition"),
+     "metadata": M("txt", "notes", difficulty="medium")},
+    {"id": "RD-121", "kb_id": KB_ID, "module": "rag",
+     "question": "2027 年的三条主线分别是什么？",
+     "annotation": A("notes_strategy_retreat_2026", ["notes_strategy_retreat_2026"],
+                     ["核心产品由项目制转向订阅制交付",
+                      "行业解决方案沉淀为可复制标准产品线",
+                      "内部AI能力平台化"], "low_confidence"),
+     "metadata": M("txt", "notes", difficulty="hard")},
+    {"id": "RD-122", "kb_id": KB_ID, "module": "rag",
+     "question": "VPN 开通后有效期多久？IT 热线电话是多少？",
+     "annotation": A("faq_it_helpdesk", ["faq_it_helpdesk"],
+                     ["有效期180天", "0591-8888-6600"], "multi_condition"),
+     "metadata": M("txt", "faq")},
+    {"id": "RD-123", "kb_id": KB_ID, "module": "rag",
+     "question": "订单域里 o_order_no 的编码格式是怎么规定的？",
+     "annotation": A("dict_order_domain", ["dict_order_domain"],
+                     ["OR + 14位时间戳 + 4位流水号"], "exact_id"),
+     "metadata": M("txt", "reference")},
+    {"id": "RD-124", "kb_id": KB_ID, "module": "rag",
+     "question": "权限季度复核里，临时账号要在多久内回收？复核记录保存多久？",
+     "annotation": A("sop_access_review", ["sop_access_review"],
+                     ["操作完成后24小时内回收", "保存2年"], "multi_condition"),
+     "metadata": M("txt", "sop")},
+    {"id": "RD-125", "kb_id": KB_ID, "module": "rag",
+     "question": "紧急变更要多久补齐审批？变更后出现 P1/P2 异常多久内回滚？",
+     "annotation": A("sop_change_management", ["sop_change_management"],
+                     ["处置完成后24小时内补齐审批", "15分钟内执行回滚"], "multi_condition"),
+     "metadata": M("txt", "sop", difficulty="medium")},
+    {"id": "RD-126", "kb_id": KB_ID, "module": "rag",
+     "question": "数据分类分级标准里，数据分为哪几级？核心数据怎么存储？",
+     "annotation": A("policy_data_classification", ["policy_data_classification"],
+                     ["公开/内部/敏感/核心四级", "AES-256加密存储"], "multi_condition"),
+     "metadata": M("txt", "policy", group="cross_data_compliance")},
+
+    # ---- XLSX：多 Sheet 6 + 单 Sheet 4 ----
+    {"id": "RD-127", "kb_id": KB_ID, "module": "rag",
+     "question": "2026 年预算里营业收入和净利润的目标分别是多少？",
+     "annotation": A("xlsx_finance_budget_2026", ["xlsx_finance_budget_2026"],
+                     ["52,000万元", "8,100万元"], "table_value",
+                     perms=("general", "finance_restricted")),
+     "metadata": M("xlsx", "table", difficulty="medium", group="cross_finance")},
+    {"id": "RD-128", "kb_id": KB_ID, "module": "rag",
+     "question": "收入预算表里数据服务产品线的预算是多少？占比多少？",
+     "annotation": A("xlsx_finance_budget_2026", ["xlsx_finance_budget_2026"],
+                     ["28,600万元", "55.0%"], "table_value",
+                     perms=("general", "finance_restricted")),
+     "metadata": M("xlsx", "table", difficulty="hard", group="cross_finance")},
+    {"id": "RD-129", "kb_id": KB_ID, "module": "rag",
+     "question": "全公司编制数、在职数与缺口合计分别是多少？",
+     "annotation": A("xlsx_hr_headcount_2026", ["xlsx_hr_headcount_2026"],
+                     ["编制560", "在职512", "缺口48"], "table_value",
+                     perms=("general", "hr_confidential")),
+     "metadata": M("xlsx", "table", group="cross_hiring")},
+    {"id": "RD-130", "kb_id": KB_ID, "module": "rag",
+     "question": "研发序列已发 Offer 多少人？已到岗多少人？",
+     "annotation": A("xlsx_hr_headcount_2026", ["xlsx_hr_headcount_2026"],
+                     ["已发Offer 7", "已到岗4"], "table_value",
+                     perms=("general", "hr_confidential")),
+     "metadata": M("xlsx", "table", difficulty="hard")},
+    {"id": "RD-131", "kb_id": KB_ID, "module": "rag",
+     "question": "A1 机房有多少个节点？可用冗余多少？",
+     "annotation": A("xlsx_ops_capacity_plan", ["xlsx_ops_capacity_plan"],
+                     ["46个节点", "冗余28%"], "table_value",
+                     perms=("general", "it_admin")),
+     "metadata": M("xlsx", "table")},
+    {"id": "RD-132", "kb_id": KB_ID, "module": "rag",
+     "question": "容量规划表里 CPU 的平均水位、峰值水位和告警阈值分别是多少？",
+     "annotation": A("xlsx_ops_capacity_plan", ["xlsx_ops_capacity_plan"],
+                     ["平均63%", "峰值78%", "阈值≤70%"], "table_value",
+                     perms=("general", "it_admin")),
+     "metadata": M("xlsx", "table", difficulty="hard")},
+    {"id": "RD-133", "kb_id": KB_ID, "module": "rag",
+     "question": "2026-06 的 MAU、DAU 和付费租户数分别是多少？",
+     "annotation": A("xlsx_product_metrics_2026", ["xlsx_product_metrics_2026"],
+                     ["MAU 124,000", "DAU 24,600", "付费租户3,120"], "table_value"),
+     "metadata": M("xlsx", "table", group="cross_product")},
+    {"id": "RD-134", "kb_id": KB_ID, "module": "rag",
+     "question": "收入贡献表里企业版的 ARPU 是多少？",
+     "annotation": A("xlsx_product_metrics_2026", ["xlsx_product_metrics_2026"],
+                     ["8,600元/月"], "table_value"),
+     "metadata": M("xlsx", "table", group="cross_product")},
+    {"id": "RD-135", "kb_id": KB_ID, "module": "rag",
+     "question": "合同台账里与中科智联的合同金额是多少？状态如何？",
+     "annotation": A("xlsx_legal_contract_register", ["xlsx_legal_contract_register"],
+                     ["468万元", "履行中"], "table_value",
+                     perms=("general", "legal_confidential")),
+     "metadata": M("xlsx", "table", difficulty="medium", group="cross_procurement")},
+    {"id": "RD-136", "kb_id": KB_ID, "module": "rag",
+     "question": "合同风险清单里高风险合同几份？R-01 的责任人是谁？",
+     "annotation": A("xlsx_legal_contract_register", ["xlsx_legal_contract_register"],
+                     ["高风险合同3份", "陈斌"], "table_value",
+                     perms=("general", "legal_confidential")),
+     "metadata": M("xlsx", "table", difficulty="hard")},
+    {"id": "RD-137", "kb_id": KB_ID, "module": "rag",
+     "question": "2026H2 商机漏斗里华东区的商机金额、加权金额和预计赢率是多少？",
+     "annotation": A("xlsx_sales_pipeline_2026h2", ["xlsx_sales_pipeline_2026h2"],
+                     ["3,800万元", "1,420万元", "62%"], "table_value"),
+     "metadata": M("xlsx", "table")},
+    {"id": "RD-138", "kb_id": KB_ID, "module": "rag",
+     "question": "2026-07 云资源账单合计多少万元？",
+     "annotation": A("table_cloud_cost_2026", ["table_cloud_cost_2026"], ["86.4万元"],
+                     "table_value"),
+     "metadata": M("xlsx", "table")},
+    {"id": "RD-139", "kb_id": KB_ID, "module": "rag",
+     "question": "2026-06 接口调用量、峰值 QPS 和错误率分别是多少？",
+     "annotation": A("table_api_calls_2026", ["table_api_calls_2026"],
+                     ["42,100万次", "12,800", "0.31%"], "table_value"),
+     "metadata": M("xlsx", "table")},
+    {"id": "RD-140", "kb_id": KB_ID, "module": "rag",
+     "question": "内部课程目录里总计多少门课程？必修几门？",
+     "annotation": A("table_training_courses", ["table_training_courses"],
+                     ["课程总计46门", "必修8门"], "table_value"),
+     "metadata": M("xlsx", "table")},
+    {"id": "RD-141", "kb_id": KB_ID, "module": "rag",
+     "question": "候选人漏斗里在流程人数合计多少？已发 Offer 多少份？",
+     "annotation": A("table_candidate_pipeline", ["table_candidate_pipeline"],
+                     ["63人", "17份"], "table_value",
+                     perms=("general", "hr_confidential")),
+     "metadata": M("xlsx", "table", group="cross_hiring")},
+
+    # ---- CSV：GBK/GB18030 5 份 + UTF-8 无 BOM 1 份 + UTF-8-sig 6 份 ----
+    {"id": "RD-142", "kb_id": KB_ID, "module": "rag",
+     "question": "供应商联系人名录里 A 类供应商有几家？合计几家？",
+     "annotation": A("csv_gbk_supplier_contacts", ["csv_gbk_supplier_contacts"],
+                     ["A类4家", "合计6家"], "table_value"),
+     "metadata": M("csv", "table", group="cross_procurement")},
+    {"id": "RD-143", "kb_id": KB_ID, "module": "rag",
+     "question": "仓库库存台账里处于预警状态的 SKU 有几项？",
+     "annotation": A("csv_gbk_warehouse_inventory", ["csv_gbk_warehouse_inventory"],
+                     ["预警SKU 3项"], "table_value"),
+     "metadata": M("csv", "table")},
+    {"id": "RD-144", "kb_id": KB_ID, "module": "rag",
+     "question": "2025 年渠道销售里代理渠道的销售额是多少？占比多少？",
+     "annotation": A("csv_gbk_channel_sales_2025", ["csv_gbk_channel_sales_2025"],
+                     ["3,240万元", "48.6%"], "table_value"),
+     "metadata": M("csv", "table")},
+    {"id": "RD-145", "kb_id": KB_ID, "module": "rag",
+     "question": "2026 上半年共办了几场培训？累计参训多少人次？",
+     "annotation": A("csv_gbk_hr_training_records", ["csv_gbk_hr_training_records"],
+                     ["5场", "242人次"], "table_value",
+                     perms=("general", "hr_confidential")),
+     "metadata": M("csv", "table", difficulty="medium")},
+    {"id": "RD-146", "kb_id": KB_ID, "module": "rag",
+     "question": "在售产品目录里旗舰产品是哪个？当前什么版本？",
+     "annotation": A("csv_utf8_nobom_product_catalog", ["csv_utf8_nobom_product_catalog"],
+                     ["星辰盾", "v3.2"], "table_value"),
+     "metadata": M("csv", "table")},
+    {"id": "RD-147", "kb_id": KB_ID, "module": "rag",
+     "question": "2026-06 月末在职人数是多少？",
+     "annotation": A("table_headcount_monthly", ["table_headcount_monthly"], ["512人"],
+                     "table_value"),
+     "metadata": M("csv", "table")},
+    {"id": "RD-148", "kb_id": KB_ID, "module": "rag",
+     "question": "2026-06 搜索竞价渠道的投放金额与单线索成本是多少？",
+     "annotation": A("table_marketing_spend_2026", ["table_marketing_spend_2026"],
+                     ["286万元", "386元"], "table_value"),
+     "metadata": M("csv", "table")},
+    {"id": "RD-149", "kb_id": KB_ID, "module": "rag",
+     "question": "2026 上半年开票金额合计多少？作废几张？",
+     "annotation": A("table_invoice_records_2026", ["table_invoice_records_2026"],
+                     ["19,200万元", "作废14张"], "table_value",
+                     perms=("general", "finance_restricted")),
+     "metadata": M("csv", "table", difficulty="medium", group="cross_finance")},
+    {"id": "RD-150", "kb_id": KB_ID, "module": "rag",
+     "question": "2026-06 的客户 NPS 和满意率是多少？",
+     "annotation": A("table_customer_satisfaction_2026",
+                     ["table_customer_satisfaction_2026"], ["46", "91.3%"], "table_value"),
+     "metadata": M("csv", "table")},
+    {"id": "RD-151", "kb_id": KB_ID, "module": "rag",
+     "question": "2026 上半年采购订单合计多少单？金额多少？平均交付几天？",
+     "annotation": A("table_purchase_orders_2026", ["table_purchase_orders_2026"],
+                     ["236单", "3,180万元", "25天"], "table_value"),
+     "metadata": M("csv", "table", group="cross_procurement")},
+    {"id": "RD-152", "kb_id": KB_ID, "module": "rag",
+     "question": "面试评价记录里评分最高的是哪个岗位？多少分？",
+     "annotation": A("table_interview_records", ["table_interview_records"],
+                     ["算法工程师", "4.6分"], "table_value",
+                     perms=("general", "hr_confidential")),
+     "metadata": M("csv", "table", difficulty="medium")},
+    {"id": "RD-153", "kb_id": KB_ID, "module": "rag",
+     "question": "商标与域名台账里注册商标多少件？域名多少个？",
+     "annotation": A("legal_trademark_list", ["legal_trademark_list"],
+                     ["注册商标23件", "域名17个"], "table_value"),
+     "metadata": M("csv", "legal")},
+
+    # ---- 跨文档关联组（§7 跨文档检索）----
+    {"id": "RD-154", "kb_id": KB_ID, "module": "rag",
+     "question": "公司 2025 年一共发布了多少个版本？当前月活跃用户多少？"
+                "网关对单请求体大小的限制是多少？",
+     "annotation": A("report_product_annual_2025",
+                     ["report_product_annual_2025", "xlsx_product_metrics_2026",
+                      "layout_spec_api_gateway"],
+                     ["27个版本", "MAU 124,000", "2MB"], "cross_doc"),
+     "metadata": M("docx", "report", difficulty="hard", group="cross_product")},
+    {"id": "RD-155", "kb_id": KB_ID, "module": "rag",
+     "question": "向中科智联采购 GPU 服务器的合同金额是多少？上半年采购订单总额"
+                "和平均交付天数是多少？供应商准入要交几项材料？",
+     "annotation": A("legal_purchase_contract_zhongke",
+                     ["legal_purchase_contract_zhongke", "table_purchase_orders_2026",
+                      "sop_vendor_onboarding", "csv_gbk_supplier_contacts"],
+                     ["468万元", "3,180万元", "25天", "5项材料"], "cross_doc"),
+     "metadata": M("md", "legal", difficulty="hard", group="cross_procurement")},
+    {"id": "RD-156", "kb_id": KB_ID, "module": "rag",
+     "question": "现行故障 SOP 的 P1 恢复时限是多少？2026Q2 实际发生几起 P1 事件？"
+                "平均检测时长多少？",
+     "annotation": A("sop_incident_response_v3",
+                     ["sop_incident_response_v3", "report_incident_2026q2",
+                      "notes_weekly_ops_2026"],
+                     ["90分钟内恢复", "P1级1起", "23分钟"], "cross_doc",
+                     vreq=VREQ_CURRENT),
+     "metadata": M("pdf", "sop", difficulty="hard", group="cross_incident")},
+    {"id": "RD-157", "kb_id": KB_ID, "module": "rag",
+     "question": "今年招聘 HC 由谁终审？常规岗位要面试几轮？"
+                "当前候选人在流程的有多少人？",
+     "annotation": A("policy_recruitment",
+                     ["policy_recruitment", "sop_interview_hiring",
+                      "table_candidate_pipeline"],
+                     ["CEO终审", "3轮", "63人"], "cross_doc",
+                     perms=("general", "hr_confidential")),
+     "metadata": M("md", "policy", difficulty="hard", group="cross_hiring")},
+    {"id": "RD-158", "kb_id": KB_ID, "module": "rag",
+     "question": "把 2025 年净利润、2026 年净利润预算和 2026 上半年开票金额汇总给我。",
+     "annotation": A("layout_report_fin_annual_2025",
+                     ["layout_report_fin_annual_2025", "xlsx_finance_budget_2026",
+                      "table_invoice_records_2026"],
+                     ["6,840万元", "8,100万元", "19,200万元"], "cross_doc",
+                     perms=("general", "finance_restricted")),
+     "metadata": M("pdf", "report", difficulty="hard", group="cross_finance")},
+    {"id": "RD-159", "kb_id": KB_ID, "module": "rag",
+     "question": "数据出境评估的结论是什么？DPA 里服务终止后多久删除数据？"
+                "公司数据分级分几级？",
+     "annotation": A("legal_data_export_assessment",
+                     ["legal_data_export_assessment", "legal_dpa_processing",
+                      "policy_data_classification"],
+                     ["结论为可通过", "90天内删除", "四级"], "cross_doc",
+                     perms=("general", "legal_confidential")),
+     "metadata": M("pdf", "legal", difficulty="hard", group="cross_data_compliance")},
+
+    # ---- 新增版本链：故障 SOP / 报销办法 / 信息安全制度 ----
+    {"id": "RD-160", "kb_id": KB_ID, "module": "rag",
+     "question": "故障应急响应 SOP 三个版本里，P1 级故障的修复时限分别是多少？",
+     "annotation": A("sop_incident_response_v3",
+                     ["sop_incident_response_v1", "sop_incident_response_v2",
+                      "sop_incident_response_v3"],
+                     ["V1为4小时", "V2为2小时", "V3为90分钟"], "multi_condition",
+                     vreq=VREQ_CHAIN_INCIDENT),
+     "metadata": M("pdf", "sop", difficulty="hard", group="version_chain")},
+    {"id": "RD-161", "kb_id": KB_ID, "module": "rag",
+     "question": "2026 年 2 月时执行的费用报销办法，报销时限是多长？",
+     "annotation": A("policy_expense_v1", ["policy_expense_v1"], ["60日内"],
+                     "multi_condition", vreq=VREQ_AS_OF_202602),
+     "metadata": M("md", "policy", difficulty="hard", group="version_chain")},
+    {"id": "RD-162", "kb_id": KB_ID, "module": "rag",
+     "question": "按现行报销办法，电子发票查重是怎么规定的？",
+     "annotation": A("policy_expense_v3", ["policy_expense_v3"],
+                     ["系统统一查重", "重复报销直接退回并通报"], "multi_condition",
+                     vreq=VREQ_CURRENT),
+     "metadata": M("pdf", "policy", difficulty="hard", group="version_chain")},
+    {"id": "RD-163", "kb_id": KB_ID, "module": "rag",
+     "question": "三个版本的费用报销办法，报销时限各是多少？",
+     "annotation": A("policy_expense_v3",
+                     ["policy_expense_v1", "policy_expense_v2", "policy_expense_v3"],
+                     ["V1为60日", "V2为30日", "V3为20个工作日"], "multi_condition",
+                     vreq=VREQ_CHAIN_EXPENSE),
+     "metadata": M("pdf", "policy", difficulty="hard", group="version_chain")},
+    {"id": "RD-164", "kb_id": KB_ID, "module": "rag",
+     "question": "2026 年 3 月时适用的信息安全制度，数据密级分为几级？",
+     "annotation": A("policy_infosec", ["policy_infosec"], ["三级"], "multi_condition",
+                     vreq=VREQ_AS_OF_202603),
+     "metadata": M("md", "policy", difficulty="hard", group="version_chain")},
+
+    # ---- 拒答：无证据 ----
+    {"id": "RD-165", "kb_id": KB_ID, "module": "rag",
+     "question": "公司 2027 年的营业收入目标是多少？",
+     "annotation": A(None, [], [], "no_evidence", refuse=True, reason="no_evidence"),
+     "metadata": M("n/a", "n/a", no_answer=True)},
+    {"id": "RD-166", "kb_id": KB_ID, "module": "rag",
+     "question": "公司与远洋控股签署的战略合作协议金额是多少？",
+     "annotation": A(None, [], [], "no_evidence", refuse=True, reason="no_evidence"),
+     "metadata": M("n/a", "n/a", no_answer=True)},
+
+    # ---- 拒答：权限不足（general 视角问受限文档）----
+    {"id": "RD-167", "kb_id": KB_ID, "module": "rag",
+     "question": "公司当前全公司的人员编制缺口是多少？",
+     "annotation": A("xlsx_hr_headcount_2026", ["xlsx_hr_headcount_2026"], [],
+                     "no_evidence", refuse=True, reason="permission",
+                     perms=("general",)),
+     "metadata": M("xlsx", "table", difficulty="medium", no_answer=True)},
+    {"id": "RD-168", "kb_id": KB_ID, "module": "rag",
+     "question": "A1 机房部署了多少个在用节点？",
+     "annotation": A("xlsx_ops_capacity_plan", ["xlsx_ops_capacity_plan"], [],
+                     "no_evidence", refuse=True, reason="permission",
+                     perms=("general",)),
+     "metadata": M("xlsx", "table", difficulty="medium", no_answer=True)},
+    {"id": "RD-169", "kb_id": KB_ID, "module": "rag",
+     "question": "2026 年度合规审查发现的高风险事项具体是哪三项？",
+     "annotation": A("legal_compliance_review_2026", ["legal_compliance_review_2026"], [],
+                     "no_evidence", refuse=True, reason="permission",
+                     perms=("general",)),
+     "metadata": M("pdf", "legal", difficulty="medium", no_answer=True)},
 ]
+
+# ---- 已回填的 expected_chunk_ids（索引后由 runner 实测写回，重生成不得清零）----
+# 生成期只做「保住」：A() 里不带 chunk_ids 的用例保持 null，带过的在此回填。
+BACKFILLED_CHUNK_IDS: dict[str, tuple[list[str], list[str]]] = {
+    "RD-001": (["faq_employee_0"], ["访客 Wi-Fi 名称 XC-Guest"]),
+    "RD-002": (["faq_employee_0"], []),
+    "RD-003": (["faq_employee_0"], []),
+    "RD-004": (["faq_ops_0"], []),
+    "RD-005": (["contract_bluewhale_0"], ["合同编号：XC-HT-2025-041"]),
+    "RD-006": (["scan_asset_disposal_0"], []),
+    "RD-007": (["policy_seal_0", "policy_seal_1", "policy_seal_2", "policy_seal_3",
+                 "policy_seal_4", "policy_seal_5", "policy_seal_6", "policy_seal_7"], []),
+    "RD-008": (["dict_customer_0"], []),
+    "RD-009": (["policy_attendance_rnd_0", "policy_attendance_rnd_1",
+                 "policy_attendance_rnd_2", "policy_attendance_rnd_3",
+                 "policy_attendance_rnd_4", "policy_attendance_rnd_5",
+                 "policy_attendance_rnd_6", "policy_attendance_rnd_7"], []),
+    "RD-010": (["policy_attendance_mkt_0", "policy_attendance_mkt_1",
+                 "policy_attendance_mkt_2", "policy_attendance_mkt_3",
+                 "policy_attendance_mkt_4", "policy_attendance_mkt_5",
+                 "policy_attendance_mkt_6", "policy_attendance_mkt_7",
+                 "policy_attendance_mkt_8", "policy_attendance_mkt_9"], []),
+    "RD-011": (["manual_meetingroom_0", "manual_meetingroom_1", "manual_meetingroom_2",
+                 "manual_meetingroom_3", "manual_meetingroom_4", "manual_meetingroom_5",
+                 "manual_meetingroom_6", "manual_meetingroom_7"], []),
+    "RD-012": (["policy_supplier_0", "policy_supplier_1", "policy_supplier_2",
+                 "policy_supplier_3", "policy_supplier_4", "policy_supplier_5",
+                 "policy_supplier_6", "policy_supplier_7"], []),
+    "RD-013": (["table_pricing_0"], []),
+    "RD-014": (["table_hrcost_2026q2_0", "table_hrcost_2026q2_1", "table_hrcost_2026q2_2",
+                 "table_hrcost_2026q2_3", "table_hrcost_2026q2_4",
+                 "table_hrcost_2026q2_5"], []),
+    "RD-015": (["table_servers_0"], []),
+    "RD-016": (["table_sales_2026_0"], []),
+    "RD-017": (["table_tickets_2026_0"], []),
+    "RD-018": (["contract_bluewhale_0", "contract_bluewhale_1", "contract_bluewhale_2",
+                 "contract_bluewhale_3", "contract_bluewhale_4", "contract_bluewhale_5",
+                 "contract_bluewhale_6", "contract_bluewhale_7", "contract_bluewhale_8",
+                 "contract_bluewhale_9", "contract_office_lease_0"], []),
+    "RD-019": (["policy_travel_v1_0", "policy_travel_v1_1", "policy_travel_v1_2",
+                 "policy_travel_v1_3", "policy_travel_v1_4", "policy_travel_v1_5",
+                 "policy_travel_v1_6", "policy_travel_v1_7", "policy_travel_v1_8",
+                 "policy_travel_v2_0", "policy_travel_v2_1", "policy_travel_v2_2",
+                 "policy_travel_v2_3", "policy_travel_v2_4", "policy_travel_v2_5",
+                 "policy_travel_v2_6", "policy_travel_v2_7", "policy_travel_v2_8",
+                 "policy_travel_v2_9", "policy_travel_v3_0"], []),
+    "RD-020": (["report_fin_h1_2026_0", "table_sales_2026_0"], []),
+    "RD-021": (["manual_onboarding_1", "manual_onboarding_5"],
+               ["需提前 5 个工作日 在 OA 上预约答辩时间"]),
+    "RD-022": (["manual_meetingroom_0", "manual_meetingroom_1", "manual_meetingroom_2",
+                 "manual_meetingroom_3", "manual_meetingroom_4", "manual_meetingroom_5",
+                 "manual_meetingroom_6", "manual_meetingroom_7"], []),
+    "RD-023": (["policy_travel_v2_0", "policy_travel_v2_1", "policy_travel_v2_2",
+                 "policy_travel_v2_3", "policy_travel_v2_4", "policy_travel_v2_5",
+                 "policy_travel_v2_6", "policy_travel_v2_7", "policy_travel_v2_8",
+                 "policy_travel_v2_9"], []),
+    "RD-024": (["policy_travel_v1_0", "policy_travel_v1_1", "policy_travel_v1_2",
+                 "policy_travel_v1_3", "policy_travel_v1_4", "policy_travel_v1_5",
+                 "policy_travel_v1_6", "policy_travel_v1_7", "policy_travel_v1_8"], []),
+    "RD-025": (["policy_travel_v3_0"], []),
+    "RD-032": (["policy_infosec_0", "policy_infosec_1", "policy_infosec_2",
+                 "policy_infosec_3", "policy_infosec_4", "policy_infosec_5",
+                 "policy_infosec_6", "policy_infosec_7"], []),
+    "RD-033": (["report_cs_2025_0"], []),
+    "RD-034": (["report_q2_product_0"], []),
+    "RD-035": (["scan_access_request_0"], []),
+    "RD-036": (["table_expense_h1_2026_0", "table_expense_h1_2026_1",
+                 "table_expense_h1_2026_2", "table_expense_h1_2026_3",
+                 "table_expense_h1_2026_4"], []),
+}
 
 # ---------------------------------------------------------------- 文档清单
 
@@ -1203,6 +2058,9 @@ NEW_DOCS = [
         MD_MANUAL_OPS_RUNBOOK, dept="IT", layout="multi_page"),
     doc("spec_data_warehouse", "md/spec_数据仓库建设规范.md", "md", "spec",
         MD_SPEC_DATA_WAREHOUSE, dept="数据部", layout="multi_page"),
+    doc("policy_infosec_v2", "md/policy_信息安全管理制度_v2.md", "md", "policy",
+        MD_POLICY_INFOSEC_V2, dept="数据安全委员会",
+        version=INFOSEC_VERSIONS["policy_infosec_v2"], group="version_chain"),
 
     # ---------------- DOCX（11 份）----------------
     doc("legal_labor_contract_template", "docx/legal_劳动合同模板_2026版.docx", "docx",
@@ -1277,8 +2135,6 @@ NEW_DOCS = [
         dept="IT"),
     doc("dict_order_domain", "txt/readme_数据字典_订单域.txt", "txt", "reference",
         TXT_DICT_ORDER_DOMAIN, dept="数据部"),
-    doc("readme_api_glossary", "txt/readme_接口术语表.txt", "txt", "reference",
-        TXT_README_API_GLOSSARY, dept="研发中心"),
     doc("sop_access_review", "txt/sop_权限季度复核.txt", "txt", "sop", TXT_SOP_ACCESS_REVIEW,
         dept="IT"),
     doc("sop_change_management", "txt/sop_变更管理.txt", "txt", "sop",
@@ -1338,6 +2194,13 @@ NEW_DOCS = [
 ]
 
 DOCS.extend(NEW_DOCS)
+
+# VERSION_PATCH：把版本元数据补挂到探路版既有文档上（正文与 doc_id 一律不动）。
+for _d in DOCS:
+    _v = VERSION_PATCH.get(_d["doc_id"])
+    if _v and not _d["version"]:
+        _d["version"] = _v
+del _d, _v
 
 # ---------------------------------------------------------------- 生成器实现
 
@@ -1404,7 +2267,7 @@ MD_TXT_FILES: dict[str, str] = {
     "txt/notes_战略务虚会纪要_2026.txt": TXT_NOTES_STRATEGY_RETREAT,
     "txt/faq_IT帮助中心FAQ.txt": TXT_FAQ_IT_HELPDESK,
     "txt/readme_数据字典_订单域.txt": TXT_DICT_ORDER_DOMAIN,
-    "txt/readme_接口术语表.txt": TXT_README_API_GLOSSARY,
+    "md/policy_信息安全管理制度_v2.md": MD_POLICY_INFOSEC_V2,
     "txt/sop_权限季度复核.txt": TXT_SOP_ACCESS_REVIEW,
     "txt/sop_变更管理.txt": TXT_SOP_CHANGE_MANAGEMENT,
     "txt/policy_数据分类分级标准.txt": TXT_POLICY_DATA_CLASSIFICATION,
@@ -2086,24 +2949,23 @@ def _pdf_fin_annual(L: _Layout) -> None:
     L.line("报告日期：2026-03-18")
     L.to_two_columns()
     L.h1("一、经营概况")
-    L.p("2025 年公司实现营业收入人民币 4.12 亿元，同比增长 21.3%；"
-        "实现净利润 6,840 万元，同比增长 16.8%。")
+    L.p("2025 年公司实现营业收入人民币 4.12 亿元，实现净利润 6,840 万元。")
     L.p("毛利率 58.4%，较上年下降 1.2 个百分点，主要因交付侧人力成本上升。")
     L.p("研发投入 1.02 亿元，占营业收入的 24.8%，连续三年保持在 20% 以上。")
     L.p("销售费用 7,320 万元，管理费用 4,180 万元，两项合计占营业收入 27.9%。")
-    L.p("截至 2025 年 12 月 31 日，公司在职员工 486 人，其中研发人员 214 人。")
+    L.p("截至 2025 年 12 月 31 日，公司在职员工 478 人，其中研发人员 214 人。")
     L.h1("二、资产负债与现金流")
     L.p("期末总资产 6.42 亿元，总负债 2.48 亿元，资产负债率为 38.7%。")
     L.p("账面货币资金 2.86 亿元，报告期内无短期借款。")
     L.p("全年经营活动产生的现金流量净额为 9,120 万元。")
     L.to_single()
     L.h1("三、合并利润表（简表）")
-    L.table([("科目", "2025 年", "2024 年", "同比"),
-             ("营业收入", "41,200 万元", "33,960 万元", "+21.3%"),
-             ("营业成本", "17,140 万元", "13,753 万元", "+24.6%"),
-             ("研发费用", "10,200 万元", "8,150 万元", "+25.2%"),
-             ("净利润", "6,840 万元", "5,856 万元", "+16.8%")],
-            caption="表 3-1 合并利润表主要科目（单位：万元）")
+    L.table([("科目", "2025 年", "占营业收入比"),
+             ("营业收入", "41,200 万元", "100.0%"),
+             ("营业成本", "17,140 万元", "41.6%"),
+             ("研发费用", "10,200 万元", "24.8%"),
+             ("净利润", "6,840 万元", "16.6%")],
+            caption="表 3-1 合并利润表主要科目（2025 年度）")
     L.to_two_columns()
     L.h1("四、分部经营情况")
     L.p("数据服务分部全年收入 2.36 亿元，占比 57.3%，为公司最主要收入来源。")
@@ -2652,15 +3514,18 @@ CSV_DEFS: dict[str, tuple] = {
         "utf-8-sig"),
 
     # ---- 扩容新增：中文编码专项（GBK / GB18030 / UTF-8 无 BOM）----
+    # 注：本表必须有数值列——否则所有单元格均为字符串，会被多级表头启发式
+    #（前 3 行数值占比 < 20% 即判为表头）整段吞掉。
     "csv_gbk_supplier_contacts": (
-        ["供应商名称", "等级", "联系人", "联系电话", "主营类目"],
-        [("恒信电子设备有限公司", "A", "张伟", "0591-8823-6611", "服务器整机"),
-         ("南方精密制造股份", "A", "刘敏", "020-3877-2244", "机柜与结构件"),
-         ("弘图软件服务", "A", "赵鹏", "010-6255-8890", "中间件与数据库"),
-         ("长风网络科技", "A", "孙倩", "0571-8800-3312", "网络设备"),
-         ("明源仓储服务", "B", "周涛", "0592-5567-1180", "仓储与配送"),
-         ("中新耗材供应", "B", "吴静", "0755-8392-4471", "办公耗材"),
-         ("汇总", "A 类 4 家 / 合计 6 家", "", "", "")],
+        ["供应商名称", "等级", "联系人", "联系电话", "主营类目",
+         "合作起始年份", "年度采购额（万元）"],
+        [("恒信电子设备有限公司", "A", "张伟", "0591-8823-6611", "服务器整机", 2019, 860),
+         ("南方精密制造股份", "A", "刘敏", "020-3877-2244", "机柜与结构件", 2020, 540),
+         ("弘图软件服务", "A", "赵鹏", "010-6255-8890", "中间件与数据库", 2021, 730),
+         ("长风网络科技", "A", "孙倩", "0571-8800-3312", "网络设备", 2018, 420),
+         ("明源仓储服务", "B", "周涛", "0592-5567-1180", "仓储与配送", 2022, 260),
+         ("中新耗材供应", "B", "吴静", "0755-8392-4471", "办公耗材", 2023, 95),
+         ("汇总", "A 类 4 家 / 合计 6 家", "", "", "最早合作 2018 年", 2018, 2905)],
         "gbk"),
     "csv_gbk_warehouse_inventory": (
         ["SKU", "品名", "在库数量", "安全库存", "是否预警"],
@@ -2744,14 +3609,15 @@ CSV_DEFS: dict[str, tuple] = {
          ("2026-06-10", "运维工程师", "王倩", 3.9, "待定"),
          ("2026-06-24", "算法工程师", "陈斌", 4.4, "通过")],
         "utf-8-sig"),
+    # 同 csv_gbk_supplier_contacts：需数值列避免被判为多级表头
     "legal_trademark_list": (
-        ["类别", "注册号 / 备案号", "名称", "有效期至", "状态"],
-        [("商标", "第 3812xxxx 号", "星辰盾", "2031-04-20", "有效"),
-         ("商标", "第 4025xxxx 号", "星辰数据接入", "2032-08-13", "有效"),
-         ("商标", "第 4480xxxx 号", "星辰工单", "2033-02-27", "有效"),
-         ("域名", "闽 ICP 备 2021xxxx 号", "xingchenyun.com", "2027-05-11", "有效"),
-         ("域名", "闽 ICP 备 2021xxxx 号", "xingchen-cloud.cn", "2027-05-11", "有效"),
-         ("汇总", "注册商标 23 件 · 域名 17 个", "", "", "")],
+        ["类别", "注册号 / 备案号", "名称", "有效期至", "核准年份", "剩余年限"],
+        [("商标", "第 3812xxxx 号", "星辰盾", "2031-04-20", 2021, 5),
+         ("商标", "第 4025xxxx 号", "星辰数据接入", "2032-08-13", 2022, 6),
+         ("商标", "第 4480xxxx 号", "星辰工单", "2033-02-27", 2023, 7),
+         ("域名", "闽 ICP 备 2021xxxx 号", "xingchenyun.com", "2027-05-11", 2022, 1),
+         ("域名", "闽 ICP 备 2021xxxx 号", "xingchen-cloud.cn", "2027-05-11", 2022, 1),
+         ("汇总", "注册商标 23 件 · 域名 17 个", "", "", 2021, 20)],
         "utf-8-sig"),
 }
 
@@ -2846,27 +3712,299 @@ MANIFEST_ANNOTATIONS = {
     "table_tickets_2026": (["2026-06工单量5,120件", "2026-06解决率93.8%",
                             "2026-06平均响应41秒"],
                            ["5,120", "93.8%"]),
+
+    # ==================== 扩容新增 73 份（27 → 100）====================
+    # ---- Legal（含 DOCX / PDF / CSV）----
+    "legal_nnn_agreement": (["协议编号XC-NDA-2026-007", "保密期限5年",
+                             "违约金50万元", "生效日期2026-02-09"],
+                            ["协议编号：XC-NDA-2026-007", "5 年"]),
+    "legal_ip_assignment": (["转让总价80万元", "3项发明专利2项软件著作权",
+                             "权属变更完成2025-11-20"],
+                            ["80 万元", "2025-11-20"]),
+    "legal_purchase_contract_zhongke": (["合同编号XC-CG-2026-014", "GPU服务器12台",
+                                         "总价468万元", "交货期45天", "质保3年",
+                                         "逾期违约金每日0.5%上限5%"],
+                                        ["12 台", "468 万元", "45 天"]),
+    "legal_settlement_memo": (["编号XC-HJ-2026-003", "一次性支付35万元",
+                               "签署日期2026-07-18"],
+                              ["35 万元", "2026-07-18"]),
+    "legal_labor_contract_template": (["首次合同期限3年含试用期6个月",
+                                       "竞业限制不超过2年",
+                                       "竞业补偿按离职前十二个月平均工资30%",
+                                       "工资支付日次月15日"],
+                                      ["3 年", "6 个月", "30%"]),
+    "legal_dpa_processing": (["协议编号XC-DPA-2026-002", "子处理者提前15个工作日告知",
+                              "服务终止后90天内删除数据", "年度审计每年1次"],
+                             ["XC-DPA-2026-002", "15 个工作日", "90 天"]),
+    "legal_case_litigation_2026": (["在办案件3起", "最高标的额1,180万元",
+                                    "蓝鲸数据案开庭2026-04-22"],
+                                   ["3 起", "1,180 万元"]),
+    "legal_software_license": (["授权500个命名用户席位", "许可期2026-01-01至2028-12-31",
+                                "年许可费96万元"],
+                               ["500 个命名用户席位", "96 万元"]),
+    "layout_tender_evaluation": (["评标委员会5名成员外部专家不少于2名",
+                                  "技术方案45%商务报价35%履约能力20%",
+                                  "有效投标人不足3家流标"],
+                                 ["45%", "35%", "20%"]),
+    "legal_compliance_review_2026": (["高风险3项中风险7项低风险15项",
+                                      "高风险整改截止2026-11-30", "出具日期2026-09-01"],
+                                     ["2026-11-30", "表 3-1"]),
+    "legal_data_export_assessment": (["接收方为新加坡子公司", "出境规模12.4万条/年",
+                                      "评估结论可通过有效期2年",
+                                      "标准合同备案日期2026-05-26"],
+                                     ["12.4 万条", "新加坡子公司", "2 年"]),
+    "legal_trademark_list": (["注册商标23件", "域名17个", "星辰盾商标有效期至2031-04-20"],
+                             ["23 件", "17 个"]),
+    "contract_annual_maintenance": (["合同编号XC-HT-2026-027", "服务方维智科技",
+                                     "服务期2026-01-01至2026-12-31",
+                                     "年度服务费128万元按季支付",
+                                     "P1级15分钟内响应2小时内恢复"],
+                                    ["XC-HT-2026-027", "128 万元"]),
+
+    # ---- Policy（含 DOCX / PDF / TXT）----
+    "policy_export_control": (["受控物项清单每季度更新", "筛查记录保存10年",
+                               "违规直接责任人当年度绩效一票否决"],
+                              ["每季度", "10 年"]),
+    "policy_recruitment": (["编制HC由CEO终审", "内推奖励8,000元/人",
+                            "核心岗位背调覆盖率100%"],
+                           ["CEO 终审", "8,000 元"]),
+    "policy_performance_appraisal": (["半年度考核1月与7月", "A档不超过20%", "D档不低于5%",
+                                      "连续两次D进入PIP改进期3个月"],
+                                     ["20%", "5%", "3 个月"]),
+    "policy_software_asset": (["生产环境软件正版化率目标100%", "每年12月全公司盘点"],
+                              ["100%", "每年 12 月"]),
+    "policy_expense_v1": (["报销时限60日内", "两级审批：部门负责人→财务部",
+                           "每月15日与月末两次集中支付"],
+                          ["60 日"]),
+    "policy_expense_v2": (["报销时限30日内", "单笔超5万元加签财务总监",
+                           "电子发票须系统查重"],
+                          ["30 日", "5 万元"]),
+    "policy_expense_v3": (["报销时限20个工作日内", "单笔达5,000元须附合同或验收说明",
+                           "两级审批超5万元加签财务总监"],
+                          ["20 个工作日", "5,000 元"]),
+    "policy_overtime_rnd": (["每月加班不超过36小时", "工作日加班1.5倍",
+                             "休息日不能补休的2倍"],
+                            ["36 小时", "1.5 倍"]),
+    "policy_overtime_cs": (["28天为一周期轮班制", "每月加班不超过24小时",
+                            "法定节假日3倍", "夜班津贴60元/班次"],
+                           ["24 小时", "3 倍", "60 元"]),
+    "policy_infosec_v2": (["密级仍为public/internal/confidential三级",
+                           "新增远程终端管控与全盘加密", "第三方人员受限账号录屏留痕",
+                           "禁止将confidential级数据输入外部大模型",
+                           "移动存储介质生产区禁用"],
+                          ["2026-07-01", "三级"]),
+    "policy_remote_work": (["每人每月远程办公不超过6天", "提前1个工作日OA审批",
+                            "核心在线时段10:00至16:00"],
+                           ["6 天", "10:00 至 16:00"]),
+    "policy_data_classification": (["五级分类：客户/交易/产品/员工/运营数据",
+                                    "四级分级：公开/内部/敏感/核心",
+                                    "核心数据AES-256加密存储"],
+                                   ["四级", "AES-256"]),
+
+    # ---- SOP（含 DOCX / PDF / TXT）----
+    "sop_refund_processing": (["审核3个工作日内完成", "超5万元报财务总监审批",
+                               "到账周期7至15个工作日"],
+                              ["3 个工作日", "5 万元"]),
+    "sop_vendor_onboarding": (["准入须提交5项材料", "履约保证金10万元",
+                               "15个工作日内完成审核"],
+                              ["5 项材料", "10 万元"]),
+    "sop_incident_response_v1": (["P1须4小时内恢复服务", "P2 12小时", "P3 3个工作日",
+                                  "邮件+短信双通道30分钟内首次通报"],
+                                 ["4 小时", "XC-SOP-IT-2024-006"]),
+    "sop_incident_response_v2": (["P1须2小时内恢复服务", "P2 8小时", "P3 2个工作日",
+                                  "三种通道通报首次不超过15分钟"],
+                                 ["2 小时", "15 分钟"]),
+    "sop_incident_response_v3": (["P1须90分钟内恢复服务", "首次通报不超过15分钟",
+                                  "主值10分钟未响应升级替补", "替补须15分钟内接手"],
+                                 ["90 分钟", "10 分钟", "XC-SOP-IT-2026-003"]),
+    "sop_release_deploy": (["发布窗口周二周四20:00至24:00", "灰度5%→20%→100%",
+                            "每阶段观察不少于30分钟", "回滚须15分钟内执行完毕"],
+                           ["5% → 20% → 100%", "30 分钟"]),
+    "sop_backup_recovery_drill": (["RTO 4小时RPO 15分钟", "每半年演练一次",
+                                   "最近一次2026-05-20耗时2小时48分"],
+                                  ["RTO", "2026-05-20"]),
+    "sop_interview_hiring": (["常规岗位3轮面试", "面评24小时内提交",
+                              "Offer有效期7天", "总监级另加一轮高管面"],
+                             ["3 轮", "24 小时"]),
+    "sop_data_destruction": (["纸质物理粉碎电子介质逻辑覆写3次后消磁",
+                              "部门负责人+数据安全官双签", "销毁记录保存5年"],
+                             ["5 年", "双签"]),
+    "sop_access_review": (["每季度复核一次覆盖全部特权账号",
+                           "临时账号操作后24小时内回收", "复核记录保存2年"],
+                          ["2 年", "24 小时"]),
+    "sop_change_management": (["标准/常规/紧急三级变更",
+                               "紧急变更处置后24小时内补齐审批",
+                               "月第二个周三14:00评审会", "P1P2异常15分钟内回滚"],
+                              ["24 小时", "15 分钟"]),
+
+    # ---- Report / Manual / Spec / FAQ ----
+    "report_incident_2026q2": (["二季度安全事件14起其中P1 1起",
+                                "网关鉴权绕行影响账户1,243个", "平均检测时长23分钟"],
+                               ["14 起", "1,243 个", "23 分钟"]),
+    "report_product_annual_2025": (["全年发布版本27个大版本4个", "年末付费客户1,842家",
+                                    "NPS 46", "P1级缺陷9个", "数据接入平台1.0于2025-09-12发布"],
+                                   ["1,842", "46", "2025-09-12"]),
+    "report_board_resolution_2026": (["2026年度资本性支出预算3,200万元",
+                                      "新加坡子公司首期注册资本200万新元",
+                                      "授权有效期12个月"],
+                                     ["3,200 万元", "200 万新元"]),
+    "report_performance_test_2026": (["目标TPS 3,000实测峰值3,860超出28.7%",
+                                      "下单接口P99 218毫秒", "建议限流阈值上调至4,200 TPS"],
+                                     ["3,860", "218 毫秒"]),
+    "layout_report_fin_annual_2025": (["2025年营业收入4.12亿元", "净利润6,840万元",
+                                       "毛利率58.4%", "研发投入1.02亿元占24.8%",
+                                       "期末总资产6.42亿元资产负债率38.7%"],
+                                      ["4.12 亿元", "24.8%", "表 3-1"]),
+    "layout_manual_employee_handbook": (["2026版v6.2施行日期2026-01-01",
+                                         "通讯补贴每月150元", "年度体检9至10月",
+                                         "每年不少于40学时", "正式员工离职提前30日"],
+                                       ["150 元", "40 学时", "9 月至 10 月"]),
+    "layout_spec_api_gateway": (["网关版本v3.2", "单请求体上限2MB", "默认超时3秒",
+                                 "限流租户+接口500 QPS", "JWT令牌2小时刷新令牌7天"],
+                                ["2MB", "3 秒", "表 2-1"]),
+    "manual_ops_runbook": (["版本v2026.08", "变更窗口周二周四20:00至24:00",
+                            "一级告警5分钟内通知值班经理", "核心业务库备份保留30天",
+                            "跨季度首周备份额外保留1年"],
+                           ["20:00 至 24:00", "5 分钟", "30 天"]),
+    "spec_data_warehouse": (["规范版本v3.1生效2026-03-01", "ODS/DWD/DWS/ADS四层禁止跨层直连",
+                             "基线任务每日06:30前完成", "失败重试最多2次间隔5分钟",
+                             "波动率超过30%阻断下游"],
+                            ["ODS / DWD / DWS / ADS", "06:30", "30%"]),
+    "faq_finance_reimbursement": (["抬头或税号错误发票不予受理",
+                                   "单笔1万元以上须附合同或采购审批说明",
+                                   "同一单可重提3次"],
+                                  ["1 万元", "3 次"]),
+
+    # ---- Notes / FAQ / Reference（TXT）----
+    "notes_weekly_ops_2026": (["本周处理告警37条二级告警4条",
+                               "停机维护窗口2026-09-12 22:00至23:30",
+                               "遗留问题3项责任人王倩闭环2026-09-19前"],
+                              ["2026-09-12", "22:00 至 23:30"]),
+    "notes_strategy_retreat_2026": (["会议时间2026-08-14至08-15",
+                                     "地点福州·闽江畔会议中心",
+                                     "AI算力预算预留1,500万元",
+                                     "战略解码会2026-09-25"],
+                                    ["1,500 万元", "2026-09-25"]),
+    "faq_it_helpdesk": (["IT热线0591-8888-6600", "热线15分钟内响应",
+                         "VPN有效期180天", "邮箱默认50GB"],
+                        ["0591-8888-6600", "180 天"]),
+    "dict_order_domain": (["o_order_no格式OR+14位时间戳+4位流水号",
+                           "o_status五种枚举值", "o_amount单位为分"],
+                          ["OR + 14 位时间戳"]),
+
+    # ---- 表格：XLSX（多 Sheet / 单 Sheet）----
+    "xlsx_finance_budget_2026": (["2026营业收入预算52,000万元", "净利润预算8,100万元",
+                                  "人力成本预算12,400万元", "4个工作表"],
+                                 ["52,000 万元", "8,100 万元", "收入预算"]),
+    "xlsx_hr_headcount_2026": (["合计编制560在职512缺口48",
+                                "研发中心编制232在职214", "3个工作表"],
+                               ["560", "512", "招聘进度"]),
+    "xlsx_ops_capacity_plan": (["A1机房46节点冗余28%", "B2机房38节点冗余21%",
+                                "CPU平均63%峰值78%阈值≤70%", "扩容合计24节点1,230万元"],
+                               ["46", "28%", "扩容计划"]),
+    "xlsx_product_metrics_2026": (["2026-06 MAU 124,000 DAU 24,600付费租户3,120",
+                                   "2026-06月留存68.2%", "企业版ARPU 8,600元/月"],
+                                  ["124,000", "24,600", "收入贡献"]),
+    "xlsx_legal_contract_register": (["在册合同187份高风险3份",
+                                      "中科智联合同468万元",
+                                      "待履约交付节点14个"],
+                                     ["187 份", "468", "风险清单"]),
+    "xlsx_sales_pipeline_2026h2": (["合计商机金额8,600万元加权3,240万元",
+                                    "华东3,800万元预计赢率62%", "即将签约商机6个500万元"],
+                                   ["8,600", "3,240", "漏斗阶段"]),
+    "table_cloud_cost_2026": (["2026-07云账单合计86.4万元", "2026-05合计62.2万元"],
+                              ["86.4", "2026-07"]),
+    "table_api_calls_2026": (["2026-06调用42,100万次峰值QPS 12,800",
+                              "2026-06错误率0.31%"],
+                             ["42,100", "12,800"]),
+    "table_training_courses": (["课程总计46门必修8门", "年度学时要求40学时",
+                                "合规类课程3门"],
+                               ["46 门", "40 学时"]),
+    "table_candidate_pipeline": (["在流程合计63人已发Offer 17份", "整体到面率71%",
+                                  "研发序列在流程28人"],
+                                 ["63", "17", "71%"]),
+
+    # ---- 表格：CSV（GBK / GB18030 / UTF-8 无 BOM / UTF-8-sig）----
+    "csv_gbk_supplier_contacts": (["共6家供应商其中A类4家", "GBK编码"],
+                                  ["A 类 4 家", "合计 6 家"]),
+    "csv_gbk_warehouse_inventory": (["在库SKU 6类预警SKU 3项", "光模块10G低于安全库存",
+                                     "GBK编码"],
+                                    ["预警 SKU 3 项"]),
+    "csv_gbk_channel_sales_2025": (["代理渠道3,240万元占48.6%", "线上自助同比+38.4%",
+                                    "GB18030编码"],
+                                   ["3,240", "48.6%"]),
+    "csv_gbk_hr_training_records": (["2026H1共5场累计参训242人次", "GBK编码"],
+                                    ["5 场", "242 人次"]),
+    "csv_utf8_nobom_product_catalog": (["在售产品9个旗舰星辰盾v3.2", "UTF-8无BOM编码"],
+                                       ["9 个", "星辰盾"]),
+    "table_headcount_monthly": (["2026-06月末512人", "月度离职率区间0.8%~1.3%"],
+                                ["512", "2026-06"]),
+    "table_marketing_spend_2026": (["2026-06搜索竞价286万元单线索成本386元",
+                                    "内容社区单位获客成本更低"],
+                                   ["286", "386"]),
+    "table_invoice_records_2026": (["上半年开票合计19,200万元", "作废14张红冲5张"],
+                                   ["19,200", "14"]),
+    "table_customer_satisfaction_2026": (["2026-06 NPS 46满意率91.3%", "投诉数降至21件"],
+                                         ["46", "91.3%"]),
+    "table_purchase_orders_2026": (["合计236单3,180万元", "平均交付25天",
+                                    "交付天数逐月下降"],
+                                   ["236", "3,180"]),
+    "table_interview_records": (["共6场面试通过3人", "最高分4.6分为算法工程师"],
+                                ["4.6", "通过"]),
+
+    # ---- 扫描件新增 2 份 ----
+    "scan_expense_claim_form": (["报销单号BX-2026-0518申请人苏黎", "报销金额3,480.00元",
+                                 "审批完成日期2026-08-09"],
+                                ["BX-2026-0518", "2026-08-09"]),
+    "scan_training_signin": (["培训日期2026-06-25主题数据安全合规宣贯",
+                              "应到48人实到45人请假3人", "讲师李洪"],
+                             ["2026-06-25", "48 人", "45 人"]),
 }
 
 
 def build_manifest() -> dict:
     for d in DOCS:
+        # CSV 编码以 CSV_DEFS 为唯一数据源回写到清单元数据（避免两处各写一遍）
+        if d["format"] == "csv":
+            spec = CSV_DEFS.get(d["doc_id"])
+            d["encoding"] = spec[2] if spec else "utf-8-sig"
+        if d["doc_id"] not in MANIFEST_ANNOTATIONS:
+            raise KeyError(f"[MISSING_ANNOTATION] {d['doc_id']} 缺 MANIFEST_ANNOTATIONS 标注")
         kf, anchors = MANIFEST_ANNOTATIONS[d["doc_id"]]
         d["key_facts"] = kf
         d["section_anchors"] = anchors
+    scanned = sorted(d["doc_id"] for d in DOCS if d["is_scanned"])
+    complex_layout = sorted(d["doc_id"] for d in DOCS if d.get("layout") == "complex")
+    multi_page = sorted(d["doc_id"] for d in DOCS if d.get("layout") == "multi_page")
+    gbk_csv = sorted(d["doc_id"] for d in DOCS
+                     if d["format"] == "csv" and str(d.get("encoding", "")).startswith("gb"))
     return {
-        "version": "0.1.0-probe",
+        "version": "0.2.0-full",
         "name": "rag_100_docs",
         "kb_id": KB_ID,
         "generated_at": "2026-09-17",
-        "note": ("R3 探路版语料清单（27 份）。每份文档的关键事实在生成期固化在源内容中；"
-                 "is_scanned=true 的 PDF 为文字渲染成图像封装（无真实 OCR，"
-                 "在线 OCR 回填结果应与 key_facts 一致）。expected_chunk_ids 需索引后回填。"),
+        "note": ("R3 全量版语料清单（100 份，由 27 份探路版扩容而来）。MD/TXT 的关键事实"
+                 "在生成期固化在源内容中；is_scanned=true 的 PDF 为文字渲染成图像封装"
+                 "（无真实 OCR，在线 OCR 回填结果应与 key_facts 一致）。"
+                 "layout=complex 为复杂版面 PDF（双栏 + 表格 + 页眉页脚页码），"
+                 "layout=multi_page 为多页长文；CSV 含 GBK/GB18030/UTF-8 无 BOM/"
+                 "UTF-8-sig 四种编码。expected_chunk_ids 需索引后回填。"),
         "documents": DOCS,
         "groups": {
-            "similar_pair": ["policy_attendance_rnd", "policy_attendance_mkt"],
-            "version_chain": ["policy_travel_v1", "policy_travel_v2", "policy_travel_v3"],
-            "scanned": ["scan_asset_disposal", "scan_access_request"],
+            # ---- 探路版三组（保留）----
+            "similar_pair": SIMILAR_PAIRS["pair_attendance"],
+            "version_chain": VERSION_CHAINS["chain_travel"],
+            "scanned": scanned,
+            # ---- 扩容：更多相似对 / 版本链 / 跨文档关联组 ----
+            "similar_pair_overtime": SIMILAR_PAIRS["pair_overtime"],
+            "version_chain_incident_sop": VERSION_CHAINS["chain_incident_sop"],
+            "version_chain_expense": VERSION_CHAINS["chain_expense"],
+            "version_chain_infosec": VERSION_CHAINS["chain_infosec"],
+            "cross_doc": {k: v for k, v in CROSS_DOC_GROUPS.items()},
+            # ---- 形态专项（§4 覆盖清单）----
+            "complex_layout_pdf": complex_layout,
+            "multi_page_long_doc": multi_page,
+            "gbk_encoded_csv": gbk_csv,
         },
         "format_counts": {},
     }
@@ -2880,9 +4018,20 @@ REQUIRED_FIELDS = ["doc_id", "expected_doc_ids", "expected_chunk_ids", "key_fact
                    "query_type", "should_refuse", "version_requirement", "permission_scope"]
 
 
+EXPECTED_TOTAL = 100          # 任务目标：27 → 100 份
+PERMISSION_LEVELS = {"general", "hr_confidential", "finance_restricted",
+                     "legal_confidential", "it_admin"}
+
+
 def validate(dataset: dict, manifest: dict) -> list[str]:
     errs: list[str] = []
     doc_ids = {d["doc_id"] for d in manifest["documents"]}
+
+    # ---- 一、总量与格式覆盖 ----
+    if len(manifest["documents"]) != EXPECTED_TOTAL:
+        errs.append(f"文档总数应为 {EXPECTED_TOTAL}，实际 {len(manifest['documents'])}")
+    if len(doc_ids) != len(manifest["documents"]):
+        errs.append("存在重复 doc_id")
 
     fc: dict[str, int] = {}
     for d in manifest["documents"]:
@@ -2892,20 +4041,150 @@ def validate(dataset: dict, manifest: dict) -> list[str]:
         if fc.get(fmt, 0) == 0:
             errs.append(f"缺少格式: {fmt}")
 
-    g = manifest["groups"]
-    if len(g["similar_pair"]) != 2:
-        errs.append("相似文档组必须恰好 2 份")
-    if len(g["version_chain"]) != 3:
-        errs.append("版本链必须 3 份")
-    if len(g["scanned"]) < 1:
-        errs.append("扫描件至少 1 份")
-    for rel in g["similar_pair"] + g["version_chain"] + g["scanned"]:
-        if rel not in doc_ids:
-            errs.append(f"group 引用不存在的 doc_id: {rel}")
+    # ---- 二、文件落盘与清单双向匹配 ----
+    listed = {d["file"] for d in manifest["documents"]}
+    on_disk = {str(p.relative_to(FILES_DIR)).replace("\\", "/")
+               for p in FILES_DIR.rglob("*") if p.is_file()}
+    missing = sorted(listed - on_disk)
+    orphan = sorted(on_disk - listed)
+    if missing:
+        errs.append(f"清单有、磁盘无的文件 {len(missing)} 个: {missing[:8]}"
+                    f"{' ...' if len(missing) > 8 else ''}")
+    if orphan:
+        errs.append(f"磁盘有、清单无的孤儿文件 {len(orphan)} 个: {orphan[:8]}"
+                    f"{' ...' if len(orphan) > 8 else ''}")
 
+    # ---- 三、每份文档的必备元数据 ----
+    for d in manifest["documents"]:
+        if not d.get("key_facts"):
+            errs.append(f"{d['doc_id']}: key_facts 为空")
+        if d["permission_scope"] not in PERMISSION_LEVELS:
+            errs.append(f"{d['doc_id']}: 未知权限标记 {d['permission_scope']}")
+        if d["format"] == "csv" and not d.get("encoding"):
+            errs.append(f"{d['doc_id']}: CSV 缺 encoding 标注")
+
+    # ---- 四、版本链 / 相似对 / 跨文档组：引用不得悬空，链长度须 ≥2 ----
+    g = manifest["groups"]
+    group_items: list[tuple[str, list[str]]] = [
+        ("similar_pair", g["similar_pair"]),
+        ("version_chain", g["version_chain"]),
+        ("scanned", g["scanned"]),
+        ("similar_pair_overtime", g["similar_pair_overtime"]),
+        ("version_chain_incident_sop", g["version_chain_incident_sop"]),
+        ("version_chain_expense", g["version_chain_expense"]),
+        ("version_chain_infosec", g["version_chain_infosec"]),
+        ("complex_layout_pdf", g["complex_layout_pdf"]),
+        ("multi_page_long_doc", g["multi_page_long_doc"]),
+        ("gbk_encoded_csv", g["gbk_encoded_csv"]),
+    ]
+    for name, items in group_items:
+        for doc_id in items:
+            if doc_id not in doc_ids:
+                errs.append(f"group[{name}] 引用不存在的 doc_id: {doc_id}")
+    for name in ("similar_pair", "similar_pair_overtime"):
+        if len(g[name]) != 2:
+            errs.append(f"相似文档组 {name} 必须恰好 2 份，实际 {len(g[name])}")
+    for name in ("version_chain", "version_chain_incident_sop",
+                 "version_chain_expense", "version_chain_infosec"):
+        if len(g[name]) < 2:
+            errs.append(f"版本链 {name} 至少 2 份，实际 {len(g[name])}")
+    if len(g["scanned"]) < 2:
+        errs.append("扫描件至少 2 份")
+    if len(g["complex_layout_pdf"]) == 0:
+        errs.append("缺少复杂版面 PDF")
+    if len(g["multi_page_long_doc"]) == 0:
+        errs.append("缺少多页长文")
+    if len(g["gbk_encoded_csv"]) == 0:
+        errs.append("缺少 GBK/GB18030 编码 CSV")
+
+    # 版本链元数据自洽：supersedes / superseded_by 互指且不悬空
+    for doc_id, items in VERSION_CHAINS.items():
+        for i, cur in enumerate(items):
+            v = next((d["version"] for d in manifest["documents"]
+                      if d["doc_id"] == cur and d.get("version")), None)
+            if v is None:
+                errs.append(f"版本链 {doc_id} 中 {cur} 缺 version 元数据")
+                continue
+            prev_expected = items[i - 1] if i > 0 else None
+            next_expected = items[i + 1] if i + 1 < len(items) else None
+            if v.get("supersedes") != prev_expected:
+                errs.append(f"{cur}: version.supersedes 应为 {prev_expected}，"
+                            f"实际 {v.get('supersedes')}")
+            if v.get("superseded_by") != next_expected:
+                errs.append(f"{cur}: version.superseded_by 应为 {next_expected}，"
+                            f"实际 {v.get('superseded_by')}")
+
+    # 跨文档组：组内至少 2 份且全部存在
+    for name, items in CROSS_DOC_GROUPS.items():
+        if len(items) < 2:
+            errs.append(f"跨文档组 {name} 至少 2 份")
+        for doc_id in items:
+            if doc_id not in doc_ids:
+                errs.append(f"跨文档组 {name} 引用不存在的 doc_id: {doc_id}")
+
+    # ---- 五、表格类文件必须能被现有管线读通（CSV 全量 + XLSX 抽检）----
+    # 5.1 GBK/GB18030 CSV：必须能用声明的编码读出来
+    for doc_id in g["gbk_encoded_csv"]:
+        rel = next(d["file"] for d in manifest["documents"] if d["doc_id"] == doc_id)
+        enc = next(d["encoding"] for d in manifest["documents"] if d["doc_id"] == doc_id)
+        p = FILES_DIR / rel
+        if not p.exists():
+            continue
+        try:
+            with open(p, "r", encoding=enc, newline="") as fh:
+                rows = list(csv.reader(fh))
+            if len(rows) < 2 or not rows[0]:
+                errs.append(f"{doc_id}: 按 {enc} 读取后为空表或只有表头")
+        except UnicodeDecodeError as e:
+            errs.append(f"{doc_id}: 按 {enc} 读取失败（非该编码）: {e}")
+
+    # 5.2 全部 CSV：每一行必须与表头等宽（CsvParser 用 pandas，列数不符会整表读失败）
+    for d in manifest["documents"]:
+        if d["format"] != "csv":
+            continue
+        p = FILES_DIR / d["file"]
+        if not p.exists():
+            continue
+        with open(p, "r", encoding=d["encoding"], newline="") as fh:
+            rows = [r for r in csv.reader(fh) if r]
+        if not rows:
+            errs.append(f"{d['doc_id']}: CSV 为空")
+            continue
+        width = len(rows[0])
+        bad = [(i + 1, len(r)) for i, r in enumerate(rows) if len(r) != width]
+        if bad:
+            errs.append(f"{d['doc_id']}: CSV 列数不一致（表头 {width} 列，"
+                        f"异常行 [行号:列数] {bad[:5]}）")
+
+    # 5.3 XLSX：必须能被 ExcelParser 打开且 sheet 数与声明一致
+    for d in manifest["documents"]:
+        if d["format"] != "xlsx":
+            continue
+        p = FILES_DIR / d["file"]
+        if not p.exists():
+            continue
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(p, read_only=True, data_only=True)
+            n_sheet = len(wb.sheetnames)
+            wb.close()
+        except Exception as e:
+            errs.append(f"{d['doc_id']}: XLSX 打开失败 {type(e).__name__}: {e}")
+            continue
+        declared = d.get("sheets")
+        if declared is not None and declared != n_sheet:
+            errs.append(f"{d['doc_id']}: 声明 {declared} 个 sheet，实际 {n_sheet} 个")
+        if n_sheet == 0:
+            errs.append(f"{d['doc_id']}: XLSX 无工作表")
+
+    # ---- 六、用例校验 ----
     covered: set[str] = set()
+    seen_ids: set[str] = set()
     for c in dataset["test_cases"]:
         cid, ann = c["id"], c.get("annotation", {})
+        if cid in seen_ids:
+            errs.append(f"用例 id 重复: {cid}")
+        seen_ids.add(cid)
         missing = [f for f in REQUIRED_FIELDS if f not in ann]
         if missing:
             errs.append(f"{cid}: 缺标注字段 {missing}")
@@ -2923,6 +4202,24 @@ def validate(dataset: dict, manifest: dict) -> list[str]:
         if ann["should_refuse"] and ann["refusal_reason"] == "no_evidence" \
                 and ann["doc_id"] is not None and ann["key_facts"]:
             errs.append(f"{cid}: 拒答用例不应带 key_facts")
+        if not ann["should_refuse"] and not ann["key_facts"]:
+            errs.append(f"{cid}: 非拒答用例必须给出 key_facts")
+        # 权限自洽（双向）：
+        #   · 非拒答用例 → 请求者必须持有目标文档所需权限，否则必然被门禁挡掉；
+        #   · permission 拒答用例 → 请求者必须「不」持有该权限，否则不会拒答。
+        doc_perm = {d["doc_id"]: d["permission_scope"] for d in manifest["documents"]}
+        asked = set(ann["permission_scope"])
+        is_perm_refusal = ann["refusal_reason"] == "permission"
+        for r in refs:
+            need = doc_perm.get(r)
+            if not need or need == "general":
+                continue
+            covers = need in asked
+            if is_perm_refusal and covers:
+                errs.append(f"{cid}: 声明了 {need} 权限却标为权限拒答，语义矛盾（{r}）")
+            if not is_perm_refusal and not covers:
+                errs.append(f"{cid}: 目标文档 {r} 需 {need} 权限，"
+                            f"但用例 permission_scope 未声明，会被权限门禁挡掉")
         covered |= refs
 
     uncovered = doc_ids - covered
@@ -2933,46 +4230,83 @@ def validate(dataset: dict, manifest: dict) -> list[str]:
 
 # ---------------------------------------------------------------- main
 
-def main() -> int:
-    print("== R3 探路版生成器 ==")
-    gen_md_txt();     print("[1/6] MD/TXT 12 份  完成")
-    gen_docx();       print("[2/6] DOCX 4 份    完成")
-    gen_pdf_text();   print("[3/6] 文本 PDF 3 份 完成")
-    gen_pdf_scan();   print("[4/6] 扫描件 PDF 2 份（文字渲染成图）完成")
-    gen_xlsx();       print("[5/6] XLSX 3 份    完成")
-    gen_csv();        print("[6/6] CSV 3 份     完成")
+def apply_backfill(cases: list[dict]) -> int:
+    """把已索引回填过的 expected_chunk_ids / anchors 写回 annotation。
 
+    重生成不得把已回填成果清零：只有 BACKFILLED_CHUNK_IDS 里出现过的用例会被覆盖，
+    其余用例保持 null，等下一轮 ingest 后再回填。
+    """
+    n = 0
+    for c in cases:
+        spec = BACKFILLED_CHUNK_IDS.get(c["id"])
+        if spec is None:
+            continue
+        chunk_ids, anchors = spec
+        c["annotation"]["expected_chunk_ids"] = list(chunk_ids)
+        c["annotation"]["expected_chunk_anchors"] = list(anchors)
+        n += 1
+    return n
+
+
+def main() -> int:
+    print("== R3 全量版生成器（27 → 100 份）==")
+    gen_md_txt();     print("[1/7] MD/TXT 完成")
+    gen_docx();       print("[2/7] DOCX 完成")
+    gen_pdf_text();   print("[3/7] 单栏文本 PDF 完成")
+    gen_pdf_layout(); print("[4/7] 复杂版面 PDF（双栏/表格/页眉页脚）完成")
+    gen_pdf_scan();   print("[5/7] 扫描件 PDF（文字渲染成图）完成")
+    gen_xlsx();       print("[6/7] XLSX（含多 Sheet）完成")
+    gen_csv();        print("[7/7] CSV（GBK/GB18030/UTF-8 无 BOM/UTF-8-sig）完成")
+
+    # 注意：manifest 必须等 validate() 之后再落盘 —— validate 会回填 format_counts，
+    # 且这样能保证校验不通过时不产生半成品文件（与 dataset 写盘的节奏一致）。
     manifest = build_manifest()
-    (HERE / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"manifest.json 写入完成（{len(manifest['documents'])} 份文档）")
 
     dataset = {
-        "version": "0.1.0-probe",
+        "version": "0.2.0-full",
         "name": "rag_100_docs",
         "kb_id": KB_ID,
         "_comment": (
-            "R3 探路版测试集（任务书 §4）。8 个标注字段位于每条用例的 annotation 内："
-            "doc_id / expected_doc_ids / expected_chunk_ids / key_facts(关键事实) / "
-            "query_type(查询类型, 7 类) / should_refuse(是否拒答, 辅以 refusal_reason) / "
-            "version_requirement(版本要求) / permission_scope(权限范围)。"
-            "expected_chunk_ids 在索引完成前不可知，暂为 null，以 expected_chunk_anchors "
-            "(原文锚点) 替代，索引后回填。无答案用例 key_facts 为空且应拒答。"
+            "R3 全量版测试集（任务书 §4，覆盖 100 份异构语料）。8 个标注字段位于每条"
+            "用例的 annotation 内：doc_id / expected_doc_ids / expected_chunk_ids / "
+            "key_facts(关键事实) / query_type(查询类型, 7 类) / should_refuse(是否拒答, "
+            "辅以 refusal_reason) / version_requirement(版本要求) / permission_scope"
+            "(权限范围)。expected 由 annotation 派生，供 harness 执行。"
+            "expected_chunk_ids 在索引前不可知：已回填的用例由 BACKFILLED_CHUNK_IDS 保住，"
+            "其余为 null，待 ingest 后回填。无答案用例 key_facts 为空且应拒答；"
             "权限用例的 should_refuse 以「general 权限视角」标注。"),
         "fixture_dir": "../fixtures/rag_100_docs/files",
         "documents_count": len(manifest["documents"]),
         "test_cases": [{**c, "expected": derive_expected(c)} for c in CASES],
     }
+    n_backfilled = apply_backfill(dataset["test_cases"])
+    # 回填发生在 annotation 上，expected 需重算一次以保持双 schema 一致
+    for c in dataset["test_cases"]:
+        c["expected"] = derive_expected(c)
+    print(f"已回填并保住的 expected_chunk_ids：{n_backfilled} 条用例")
+
     errs = validate(dataset, manifest)
     if errs:
-        print("校验失败：")
+        print(f"校验失败（{len(errs)} 项）：")
         for e in errs:
             print("  -", e)
         return 1
     DATASET_PATH.write_text(
         json.dumps(dataset, ensure_ascii=False, indent=2), encoding="utf-8")
+    (HERE / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    g = manifest["groups"]
+    print(f"manifest.json 写入完成（{len(manifest['documents'])} 份文档，"
+          f"复杂版面 {len(g['complex_layout_pdf'])} 份，多页长文 {len(g['multi_page_long_doc'])} 份，"
+          f"GBK 系列 CSV {len(g['gbk_encoded_csv'])} 份，扫描件 {len(g['scanned'])} 份）")
+    qt: dict[str, int] = {}
+    for c in dataset["test_cases"]:
+        t = c["annotation"]["query_type"]
+        qt[t] = qt.get(t, 0) + 1
     print(f"rag_100_docs.json 校验通过并写入（{len(CASES)} 条用例，"
-          f"{len(manifest['documents'])} 份文档，格式覆盖 {manifest['format_counts']}）")
+          f"{len(manifest['documents'])} 份文档）")
+    print(f"格式覆盖 {manifest['format_counts']}")
+    print(f"query_type 分布 {qt}")
     return 0
 
 
