@@ -48,6 +48,7 @@ export const NAV: NavEntry[] = [
     items: [
       { label: '竞品监控', path: '/competitors' },
       { label: '智能选品', path: '/selection' },
+      { label: '选品漏斗', path: '/selection-funnel' },
       { label: '选品决策', path: '/selection-decision' },
       { label: '报告中心', path: '/reports' },
     ],
