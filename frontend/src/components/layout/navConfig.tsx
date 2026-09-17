@@ -11,6 +11,11 @@
  * 2026-09-17：用户端客服入口走 /agent 顶部栏「智能客服」胶囊按钮
  * （ChatHeader onOpenCS → components/cs/CSDrawer.tsx 滑出抽屉），不设独立导航路由；
  * 坐席工作台 /cs/handoff 仅在管理端 frontend-admin。
+ *
+ * 2026-09-17 UX P1-⑤（X7 收尾）：全局 nav 增「智能客服」直达子项
+ * /agent?cs=1 —— /agent 页检测参数自动滑出 CSDrawer。语义区分：
+ * 用户端「智能客服」= CSDrawer 消费者入口；管理端坐席工作台
+ * /cs/handoff 仍仅 frontend-admin（测试黑名单的 /cs 路由守卫不变）。
  */
 import { Bell, Brain, FileText } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -35,6 +40,8 @@ export const NAV: NavEntry[] = [
     items: [
       { label: '智能问答', path: '/agent' },
       { label: '分析任务', path: '/agent/tasks' },
+      // UX P1-⑤：客服直达（/agent 检测 cs=1 自动开抽屉，见 app/agent/page.tsx）
+      { label: '智能客服', path: '/agent?cs=1' },
     ],
   },
   {

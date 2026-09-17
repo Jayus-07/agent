@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useChatStore } from '@/store/chat'
 import ChatView from '@/components/chat/ChatView'
@@ -13,6 +13,22 @@ export default function AgentChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [csOpen, setCsOpen] = useState(false)
   const router = useRouter()
+
+  // UX P1-⑤ 客服直达：/agent?cs=1 自动滑出客服抽屉（nav「智能客服」入口）。
+  // 读 window.location 而非 useSearchParams：静态页无 Suspense 边界要求。
+  // 关闭抽屉时清掉直达参数 —— 刷新不再自动弹出（打开意图已撤销）。
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('cs') === '1') {
+      setCsOpen(true)
+    }
+  }, [])
+
+  const handleCsClose = () => {
+    setCsOpen(false)
+    if (new URLSearchParams(window.location.search).has('cs')) {
+      window.history.replaceState(null, '', '/agent')
+    }
+  }
 
   // 顶部标题栏：当前会话标题（store 内引用稳定字段，useMemo 派生）
   const sessions = useChatStore((s) => s.sessions)
@@ -51,7 +67,7 @@ export default function AgentChatPage() {
       </div>
 
       {/* 客服抽屉（右侧滑出，见 components/cs/CSDrawer.tsx） */}
-      <CSDrawer open={csOpen} onClose={() => setCsOpen(false)} />
+      <CSDrawer open={csOpen} onClose={handleCsClose} />
     </div>
   )
 }
