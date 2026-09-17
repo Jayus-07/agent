@@ -305,7 +305,12 @@ _analytics_store: AnalyticsStore | None = None
 
 
 def get_analytics_store() -> AnalyticsStore:
+    """存储工厂：OBS_DB_BACKEND=postgres 时返回 PG 实现（接口/语义一致）。"""
     global _analytics_store
     if _analytics_store is None:
-        _analytics_store = AnalyticsStore()
+        if os.getenv("OBS_DB_BACKEND", "sqlite").strip().lower() == "postgres":
+            from backend.observability.analytics_store_pg import PostgresAnalyticsStore
+            _analytics_store = PostgresAnalyticsStore()
+        else:
+            _analytics_store = AnalyticsStore()
     return _analytics_store

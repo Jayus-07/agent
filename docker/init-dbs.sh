@@ -37,5 +37,13 @@ echo "[init-dbs] 4/4 初始化自建认证（auth schema，幂等）..."
 $PSQL -d agent_memory -f /docker-migrations/008_local_auth.sql
 $PSQL -d agent_memory -f /docker-migrations/009_auth_roles.sql
 
+echo "[init-dbs] 5/5 初始化 PG 化存储（doc_registry + 可观测层，幂等）..."
+# 迁移计划 2026-09-17：doc_registry（010/011）与可观测层（012/013）补进首启链路
+# （此前 010/011 仅靠应用侧幂等建表兜底，此处补齐权威 schema 双写）
+$PSQL -d agent_memory -f /docker-migrations/010_doc_registry_pg.sql
+$PSQL -d agent_memory -f /docker-migrations/011_doc_registry_version_governance.sql
+$PSQL -d agent_memory -f /docker-migrations/012_obs_trace_store_pg.sql
+$PSQL -d agent_memory -f /docker-migrations/013_obs_analytics_pg.sql
+
 echo "[init-dbs] 完成。验证只读角色："
 $PSQL -d postgres -c "SELECT rolname, rolcanlogin, rolsuper FROM pg_roles WHERE rolname = 'agent_readonly';"

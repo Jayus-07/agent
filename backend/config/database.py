@@ -71,6 +71,16 @@ DOC_REGISTRY_PG_CONFIG = _pg_cfg("DOC_REGISTRY_PGDATABASE", "agent_memory")
 # 表名可覆盖（测试隔离用）；生产保持默认 doc_registry。
 DOC_REGISTRY_PG_TABLE = os.getenv("DOC_REGISTRY_PG_TABLE", "doc_registry")
 
+# === 可观测层存储引擎开关（SQLite → PostgreSQL，2026-09-17 迁移计划 Batch A）===
+# "sqlite"（默认，回滚开关）| "postgres"
+# 作用于 trace_store / analytics(trace_summary) / llm_usage 三个存储（get_*_store 工厂分发）。
+# 时间戳语义与 SQLite 版一致：trace_store/trace_summary 用 Python localtime 文本、
+# llm_usage 用 UTC ISO 文本，均由应用侧生成后作参数写入（不依赖 PG 服务器时区）。
+OBS_DB_BACKEND = os.getenv("OBS_DB_BACKEND", "sqlite").strip().lower()
+OBS_DB_PG_CONFIG = _pg_cfg("OBS_DB_PGDATABASE", "agent_memory")
+# 表名前缀（测试隔离用；生产保持空串 → trace_store / trace_summary / llm_usage）
+OBS_DB_PG_TABLE_PREFIX = os.getenv("OBS_DB_PG_TABLE_PREFIX", "")
+
 # === 连接池参数 ===
 DB_POOL_MIN_CONN = int(os.getenv("DB_POOL_MIN_CONN", "2"))
 DB_POOL_MAX_CONN = int(os.getenv("DB_POOL_MAX_CONN", "10"))

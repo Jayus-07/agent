@@ -299,9 +299,14 @@ _store_lock = threading.Lock()
 
 
 def get_llm_usage_store() -> LLMUsageStore:
+    """存储工厂：OBS_DB_BACKEND=postgres 时返回 PG 实现（接口/语义一致）。"""
     global _llm_usage_store
     if _llm_usage_store is None:
         with _store_lock:
             if _llm_usage_store is None:
-                _llm_usage_store = LLMUsageStore()
+                if os.getenv("OBS_DB_BACKEND", "sqlite").strip().lower() == "postgres":
+                    from backend.observability.llm_usage_store_pg import PostgresLLMUsageStore
+                    _llm_usage_store = PostgresLLMUsageStore()
+                else:
+                    _llm_usage_store = LLMUsageStore()
     return _llm_usage_store

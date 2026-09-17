@@ -223,7 +223,12 @@ _trace_store: TraceStore | None = None
 
 
 def get_trace_store() -> TraceStore:
+    """存储工厂：OBS_DB_BACKEND=postgres 时返回 PG 实现（接口/语义一致）。"""
     global _trace_store
     if _trace_store is None:
-        _trace_store = TraceStore()
+        if os.getenv("OBS_DB_BACKEND", "sqlite").strip().lower() == "postgres":
+            from backend.observability.trace_store_pg import PostgresTraceStore
+            _trace_store = PostgresTraceStore()
+        else:
+            _trace_store = TraceStore()
     return _trace_store
