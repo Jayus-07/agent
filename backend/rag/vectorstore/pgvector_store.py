@@ -342,9 +342,13 @@ class PgVectorKnowledgeStore(KnowledgeStore):
             cur.execute(sql, params)
             out = []
             for _id, content, meta, dist in cur.fetchall():
+                # ⚠️ 量纲对齐：pgvector `<=>` = 1 - cos_sim，而 Chroma cosine
+                # distance = 2 - 2·cos_sim（实测恒为 2 倍）。下游分数消费
+                # （evidence_gate VEC_MIN_SCORE、adaptive 置信度阈值）均按
+                # Chroma 量纲标定，此处 ×2 保持切换后行为零变化。
                 out.append((
                     Document(page_content=content or "", metadata=meta or {}),
-                    float(dist),
+                    float(dist) * 2.0,
                 ))
             return out
 
