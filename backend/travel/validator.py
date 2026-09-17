@@ -421,6 +421,10 @@ def travel_validator_node(state: dict) -> dict:
     if report.errors:
         itinerary.status = PLAN_STATUS_DEGRADED
     elif report.decision_required:
+        # Phase 6（任务书 §13）：interrupt 模式下必去冲突暂停图等用户决策；
+        # 开关未开或无持久化支撑时回退 Phase 3 软处理（出单+请决定）。
+        if _interrupt_enabled():
+            return _interrupt_for_decisions(state, itinerary, report)
         itinerary.status = PLAN_STATUS_NEEDS_USER_DECISION
     else:
         itinerary.status = PLAN_STATUS_READY
@@ -429,3 +433,127 @@ def travel_validator_node(state: dict) -> dict:
         "itinerary": save_itinerary(itinerary),
         "validation": save_validation(report),
     }
+
+
+# ============================================================
+# 用户决策中断（任务书 §13，Phase 6）
+# ============================================================
+# 语义：必去项与事实冲突（闭馆/超窗口）不是机器能替用户决定的事。
+# interrupt 把图暂停在 validator，payload 结构化列出待决项；用户以
+# Command(resume=...) 恢复——决策值结构化进状态（不可依赖聊天记录重推），
+# 恢复后 validator 按决策改行程/降级违反，继续走 supervisor → reporter。
+# 注意：interrupt resume 后本节点会从头重跑，interrupt() 之前的计算
+#（check_itinerary 等）必须确定性 —— 现状满足。
+def _interrupt_enabled() -> bool:
+    """开关开且持久化可用才允许 interrupt（暂停态靠 checkpointer 存活）。
+
+    延迟 import graph_builder：图装配时 import 本模块，顶层互相引用会循环
+    （slot_filler 同款处理）。无持久化（DISABLED）时回退软处理——中断无处
+    悬挂，等于把用户卡死在半路。
+    """
+    from backend.config import travel as T
+
+    if not T.TRAVEL_USER_DECISION_INTERRUPT:
+        return False
+    try:
+        from backend.travel.graph_builder import (
+            PERSISTENCE_DISABLED, get_persistence_status,
+        )
+        return get_persistence_status() != PERSISTENCE_DISABLED
+    except Exception:  # noqa: BLE001 — 探测失败按软处理走，绝不阻塞出单
+        return False
+
+
+def _decision_payload(report: ValidationReport) -> dict:
+    """把待决项抽成结构化 payload（前端渲染与 resume 匹配的唯一依据）。"""
+    return {
+        "items": [
+            {
+                "code": v.code,
+                "message": v.message,
+                "poi_name": v.detail.get("poi_name", ""),
+                "poi_id": v.detail.get("poi_id", ""),
+                "day_index": v.day_index,
+            }
+            for v in report.decision_required
+        ],
+        "options": {
+            "keep": "保留此安排并接受风险（行程按 degraded 交付）",
+            "drop": "把它从行程移除（需求同步移除，重新交付）",
+        },
+    }
+
+
+def _normalize_decision(decision, report: ValidationReport) -> tuple[set, set]:
+    """把用户决策归一为 (drop_names, keep_names)。
+
+    三种合法形态：
+      {"action": "keep"}            — 全部保留
+      {"action": "drop"}            — 全部移除
+      {"drop": ["福建博物院", ...]}  — 指名移除，其余保留
+    非法/空决策一律按 keep（宁可保守交付，不把用户悬在中断里）。
+    """
+    names = {v.detail.get("poi_name", "") for v in report.decision_required}
+    names.discard("")
+    if not isinstance(decision, dict):
+        return set(), names
+    if decision.get("action") == "drop":
+        return set(names), set()
+    drop_raw = decision.get("drop")
+    if isinstance(drop_raw, (list, tuple)):
+        drops = {str(n) for n in drop_raw} & names
+        return drops, names - drops
+    return set(), names
+
+
+def _interrupt_for_decisions(state: dict, itinerary, report: ValidationReport) -> dict:
+    """interrupt 暂停 → 用户决策 → 按决策改造行程与违反记录。"""
+    from langgraph.types import interrupt
+
+    from backend.travel.graph_state import save_itinerary, save_validation
+    from backend.travel.models.brief import TravelBrief
+
+    decision = interrupt(_decision_payload(report))
+    drops, keeps = _normalize_decision(decision, report)
+
+    # 1) drop：从行程移除 + 从需求 must_go 移除（用户决策=需求变更，结构化落库）
+    brief = TravelBrief(**(state.get("brief") or {}))
+    if drops:
+        for day in itinerary.days:
+            # poi 可为 None（餐食等非 POI 占位项），先判空
+            day.items = [i for i in day.items
+                         if i.poi is None or i.poi.name not in drops
+                         or not i.poi.required]
+        brief.must_go = [n for n in brief.must_go if n not in drops]
+
+    # 2) keep：违反降级为 warning（不阻塞、不再重复询问），detail 留档决策
+    for v in report.violations:
+        if v.level != LEVEL_DECISION_REQUIRED:
+            continue
+        if v.detail.get("poi_name") in drops:
+            report.violations.remove(v)
+        else:
+            v.level = LEVEL_WARNING
+            v.detail["user_decision"] = "keep"
+
+    notes = ["你选择保留冲突项，行程按降级状态交付（风险自担）。"] if keeps else []
+    if drops:
+        notes.append("已按你的决定移除：" + "、".join(sorted(drops)) + "；对应必去需求同步解除。")
+
+    # 3) 保留风险一律如实降级（即使违反只剩 warning）——闭馆是事实
+    itinerary.status = PLAN_STATUS_DEGRADED if keeps else itinerary.status
+    if not report.decision_required and not keeps:
+        # drop 清空待决项后按剩余违反定状态：与主状态机口径一致
+        itinerary.status = (PLAN_STATUS_DEGRADED if report.errors
+                            else PLAN_STATUS_READY)
+    itinerary.confidence = compute_confidence(itinerary, report)
+
+    update = {
+        "itinerary": save_itinerary(itinerary),
+        "validation": save_validation(report),
+        "notes": list(state.get("notes", [])) + notes,
+    }
+    # 需求变更（must_go 移除）写回 state，保证后续轮指纹/重排基于新需求
+    if drops:
+        update["brief"] = brief.model_dump()
+    return update

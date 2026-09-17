@@ -50,6 +50,12 @@ TRAVEL_CHECKPOINT_TTL_DAYS = int(os.getenv("TRAVEL_CHECKPOINT_TTL_DAYS", "7"))
 # worker，跨轮改单会静默失效（用户拿到与上一轮无关的新行程还以为改成功了）。
 # 生产环境若要求「要么真持久、要么明说」，就打开这个开关。
 TRAVEL_REQUIRE_PERSISTENCE = os.getenv("TRAVEL_REQUIRE_PERSISTENCE", "false").strip().lower() in ("1", "true", "yes")
+# 用户决策中断（任务书 §13，Phase 6）：开启后，必去项冲突（decision_required）
+# 不再走「出单+请决定」软处理，而是 LangGraph interrupt 暂停域图，等用户结构化
+# 决策（保留风险 / 移除该点）后 Command(resume) 恢复。默认关——软处理是
+# Phase 3 契约、评测基线依赖它；且 interrupt 依赖 checkpointer（暂停态持久化），
+# 无持久化时即使开启也自动回退软处理。
+TRAVEL_USER_DECISION_INTERRUPT = os.getenv("TRAVEL_USER_DECISION_INTERRUPT", "false").strip().lower() in ("1", "true", "yes")
 
 # =============================================
 # 槽位抽取

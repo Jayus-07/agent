@@ -31,16 +31,60 @@ def travel_graph_node(state: dict) -> dict:
     )
 
     try:
-        final_state = get_travel_graph().invoke(
-            graph_input, config=_build_invoke_config(conversation_id),
-        )
+        # resume 通道：上层在 travel_context.resume_decision 带回用户决策时，
+        # 用 Command(resume=...) 恢复被 interrupt 暂停的域图（thread_id 必须与
+        # 中断轮一致——checkpointer 按 thread 定位暂停态）。
+        resume_decision = travel_context.get("resume_decision")
+        if resume_decision:
+            from langgraph.types import Command
+            final_state = get_travel_graph().invoke(
+                Command(resume=resume_decision), config=_build_invoke_config(conversation_id),
+            )
+        else:
+            final_state = get_travel_graph().invoke(
+                graph_input, config=_build_invoke_config(conversation_id),
+            )
         result = build_travel_graph_result(final_state)
     except Exception:
         logger.exception("[travel_graph_node] 旅游域图执行异常，降级返回兜底回复")
         return _fallback_update(state)
 
+    # interrupt 透传（任务书 §13，Phase 6）：域图暂停等决策时，把待决项
+    # 结构化放 travel_context.pending_decision，final_answer 呈现请决定文案。
+    if isinstance(final_state, dict) and final_state.get("__interrupt__"):
+        return _interrupt_update(state, final_state)
+
     _stamp_execution_tags(final_state, result)
     return _build_main_state_update(result)
+
+
+def _interrupt_update(state: dict, final_state: dict) -> dict:
+    """域图 interrupt 暂停 → 主图状态呈现待决项（结构化 + 可读文案）。"""
+    try:
+        interrupts = final_state.get("__interrupt__") or []
+        payload = {}
+        for it in interrupts:
+            value = getattr(it, "value", None)
+            if isinstance(value, dict) and value.get("items"):
+                payload = value
+                break
+        lines = ["行程已生成，但有几项需要你决定（回复「保留」或「移除：地点名」）："]
+        for item in payload.get("items", []):
+            lines.append(f"- {item.get('message', '')}")
+        for opt, desc in (payload.get("options") or {}).items():
+            lines.append(f"· {opt}: {desc}")
+        original = state.get("travel_context") or {}
+        return {
+            "final_answer": "\n".join(lines),
+            "travel_context": {
+                "conversation_id": original.get("conversation_id", ""),
+                "travel_route": original.get("travel_route", {}),
+                "pending_decision": payload,
+            },
+        }
+    except Exception:
+        logger.exception("[travel_graph_node] interrupt 透传失败，降级兜底")
+        return _fallback_update(state)
 
 
 def _build_main_state_update(result: dict) -> dict:
