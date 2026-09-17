@@ -30,7 +30,6 @@ def _filter_by_metadata(docs: list, metadata_filter: dict | None) -> list:
 
 import re
 
-
 # =====================================================
 # 三层查询路由分类器
 # =====================================================
@@ -39,20 +38,9 @@ import re
 # hybrid_multi_query:  复杂 / 多意图 / 多跳 → Vector + BM25 + LLM 改写多路召回
 
 # 精确标识符正则：检测到任一则 HYBRID（BM25 精确匹配有不可替代的价值）
-# 注意：
-# 1. 全部要求大写/明确边界，避免误伤自然语言中的英文单词
-# 2. 使用 [A-Za-z0-9] 而非 \w，因为 \w 在 Python 中默认匹配 Unicode（含中文）
-_EXACT_IDENTIFIER_PATTERNS = [
-    re.compile(r'\b[A-Z]{2,}[-_]\d{3,}\b'),                      # SKU/型号: AB-1234, XY_5678（须带连字符/下划线）
-    re.compile(r'(?:订单|单号|流水号)[号:]?\s*[A-Za-z0-9]{6,}'),   # 订单号（仅英文数字，不匹配中文）
-    re.compile(r'(?:错误码|错误号|error\s*code)[号:]?\s*[A-Za-z0-9]+', re.I),  # 错误码（仅英文数字）
-    re.compile(r'(?:保单|合同)(?:(?:编号|号|ID)[:：]?\s*|[:：]\s*)[A-Z0-9][A-Z0-9_-]{3,}', re.I),  # 保单/合同编号（须有"编号/号/ID"标签或冒号分隔）
-    re.compile(r'\bv\d+\.\d+(?:\.\d+)?\b', re.I),                 # 版本号: v2.1, v3.0.1（须 v 前缀）
-    re.compile(r'\b[A-Z]{1,4}\d{3,6}\b'),                         # 型号: A1234, AB5678（大写+3位以上数字+词边界）
-    re.compile(r'(?:条款|条例|法规)\s*第?\s*\d+[条款章节]'),        # 法律条款引用
-    re.compile(r'\b0x[A-Fa-f0-9]{4,}\b'),                         # 十六进制错误码: 0x80004005
-    re.compile(r'\b[A-Z]{2,}_\d{2,}\b'),                          # 下划线格式: ERR_1234, CODE_5678
-]
+# 治理 B（单一事实来源）：模式表由 query_router.py 持有（R4-P3 迁移），
+# §7 查询类型路由的 exact_id 判定与本处 Tier 2 判定共用同一份表。
+from backend.rag.retrieval.query_router import EXACT_IDENTIFIER_PATTERNS
 
 # 复杂查询信号：多意图 / 对比 / 多跳推理 / 操作流程 → HYBRID_MULTI_QUERY
 # ⭐ 单一事实来源（治理 B）：multi_query.py 的兜底复杂度检测也引用本清单，
@@ -106,7 +94,7 @@ def _classify_query_tier(query: str) -> str:
     # ── Tier 2: 精确标识符 → HYBRID ──
     # 错误码/订单号/SKU 等在知识库中通常有标准文档，
     # Vector + BM25 精排效果远好于纯向量检索
-    for pattern in _EXACT_IDENTIFIER_PATTERNS:
+    for pattern in EXACT_IDENTIFIER_PATTERNS:
         if pattern.search(q):
             return "hybrid"
 
@@ -268,6 +256,11 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
     query_tier = _classify_query_tier(query)
     logger.info(f"[hybrid_retrieve] query_tier={query_tier} for query='{query[:50]}...'")
 
+    # ── §7 查询类型路由（R4-P3）：5 类判定 + RRF 加权策略 ──
+    # vector_only 路径无融合，权重不消费，仅 query_type 进 trace/metrics
+    from backend.rag.retrieval.query_router import route as route_query
+    qroute = route_query(query)
+
     if query_tier == "vector_only":
         # Vector-only 路径：优先纯向量，避免关键词噪声稀释语义信号；
         # 但向量失败/空召回时降级 BM25 兜底（软降级，不伪装成『没有资料』）
@@ -330,6 +323,7 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
 
         metrics = {
             "query_tier": "vector_only",
+            "query_type": qroute["query_type"],
             "vector_hits": len(vector_docs),
             "bm25_hits": len(bm25_docs),
             "merged_hits": len(merged),
@@ -406,15 +400,20 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
 
     bm25_docs = bm25_docs[:k*2]
 
-    rank_map = {}
+    # ── RRF 融合（§7 查询类型路由加权：vector/bm25 各乘策略权重）──
+    # qroute 权重中性（faq/disabled）时与加权前行为一致；
+    # SQL 旁路自带精确匹配语义，不参与类型加权
+    vw = qroute.get("vector_weight", 1.0)
+    bw = qroute.get("bm25_weight", 1.0)
+    rank_map: dict = {}
 
     for rank, doc in enumerate(vector_docs, start=1):
         cid = doc.metadata.get("chunk_id") or _fallback_id(doc)
-        rank_map[cid] = rank_map.get(cid, 0) + 1 / (rrf_k + rank)
+        rank_map[cid] = rank_map.get(cid, 0) + vw / (rrf_k + rank)
 
     for rank, doc in enumerate(bm25_docs, start=1):
         cid = doc.metadata.get("chunk_id") or _fallback_id(doc)
-        rank_map[cid] = rank_map.get(cid, 0) + 1 / (rrf_k + rank)
+        rank_map[cid] = rank_map.get(cid, 0) + bw / (rrf_k + rank)
 
     # SQL 旁路检索结果参与 RRF 融合（精确匹配，给高权重）
     for rank, doc in enumerate(sql_docs, start=1):
@@ -436,6 +435,10 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
     trace_collector.add_event(span, "rrf_fusion", "info",
         f"Vector:{len(vector_docs)} + BM25:{len(bm25_docs)} → RRF:{len(merged)}",
         data={
+            "query_route": {"query_type": qroute["query_type"],
+                            "signals": qroute.get("signals", []),
+                            "vector_weight": vw, "bm25_weight": bw,
+                            "enabled": qroute.get("enabled", True)},
             "vector_top3": [{"chunk_id": d.metadata.get("chunk_id", ""),
                              "score": round(rank_map.get(d.metadata.get("chunk_id") or _fallback_id(d), 0), 4),
                              "snippet": d.page_content[:120],
@@ -459,7 +462,8 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
     metrics = {"vector_hits": len(vector_docs),
                "bm25_hits": len(bm25_docs),
                "merged_hits": len(merged),
-               "query_tier": query_tier}
+               "query_tier": query_tier,
+               "query_type": qroute["query_type"]}
     if sql_bypass_used:
         metrics["sql_bypass_hits"] = len(sql_docs)
     if failures:

@@ -58,12 +58,18 @@ def _enhanced_hybrid_retrieve_impl(
     complexity = assess_query_complexity(query)
     base_threshold = complexity["threshold"]
     effective_k = int(k * complexity["k_multiplier"])
-    
+
+    # §7 查询类型路由（R4-P3）：5 类判定 + RRF 加权策略
+    from backend.rag.retrieval.query_router import route as route_query
+    qroute = route_query(query)
+    vw = qroute.get("vector_weight", 1.0)
+    bw = qroute.get("bm25_weight", 1.0)
+
     logger.info(f"[EnhancedRetrieve] Query='{query[:50]}...', "
                f"complexity={complexity['level']}, "
                f"base_threshold={base_threshold:.2f} (VEC_MIN_SCORE={VEC_MIN_SCORE}), "
-               f"k={effective_k}")
-    
+               f"k={effective_k}, query_type={qroute['query_type']}")
+
     path_results: list[tuple[list, float]] = []
     metrics = {
         "rule_hits": 0,
@@ -71,6 +77,7 @@ def _enhanced_hybrid_retrieve_impl(
         "sparse_hits": 0,
         "final_k": effective_k,
         "fallback_used": False,
+        "query_type": qroute["query_type"],
     }
 
     # Step 2: 三路并行召回（共享线程池，避免每次检索创建/销毁）
@@ -109,7 +116,8 @@ def _enhanced_hybrid_retrieve_impl(
         dense_docs = dense_future.result()
         metrics["dense_hits"] = len(dense_docs)
         if dense_docs:
-            path_results.append((dense_docs, 3.0))
+            # §7 路由加权：dense 基础权重 3.0 × 策略 vector_weight
+            path_results.append((dense_docs, 3.0 * vw))
     except Exception as e:
         logger.warning(f"[EnhancedRetrieve] Dense retrieval failed: {e}", exc_info=True)
         dense_docs = []
@@ -126,7 +134,8 @@ def _enhanced_hybrid_retrieve_impl(
                     if all(d.metadata.get(k) == v for k, v in metadata_filter.items())
                 ]
             if sparse_docs:
-                path_results.append((sparse_docs, 1.0))
+                # §7 路由加权：sparse 基础权重 1.0 × 策略 bm25_weight
+                path_results.append((sparse_docs, 1.0 * bw))
     except Exception as e:
         logger.warning(f"[EnhancedRetrieve] Sparse retrieval failed: {e}", exc_info=True)
 
@@ -160,6 +169,14 @@ def _enhanced_hybrid_retrieve_impl(
         # TODO: 触发 Query Rewrite 或扩大 k 值重试
         metrics["low_confidence_action"] = "expand_k_or_rewrite"
     
+    # §7 路由可观测：query_route 事件（类型/信号/权重落 trace）
+    trace_collector.add_event(span, "query_route", "info",
+        f"query_type={qroute['query_type']} vw={vw} bw={bw}",
+        data={"query_type": qroute["query_type"],
+              "signals": qroute.get("signals", []),
+              "vector_weight": vw, "bm25_weight": bw,
+              "enabled": qroute.get("enabled", True)})
+
     trace_collector.end_span(span, metrics={
         **metrics,
         "retrieved_chunks": len(merged_docs),
