@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { FileText, AlertTriangle, TrendingUp, Package, ChevronRight } from 'lucide-react'
 import { reportService, type DailyReportSummary } from '@/api/reports'
+import ErrorCard from '@/components/shared/ErrorCard'
 import { clsx } from 'clsx'
 
 interface WorkflowMeta {
@@ -21,7 +22,7 @@ export default function ReportsPage() {
   const [reports, setReports] = useState<DailyReportSummary[]>([])
   const [latestKpi, setLatestKpi] = useState<DailyReportSummary['kpi_summary'] | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<unknown>(null)
 
   useEffect(() => {
     async function load() {
@@ -34,7 +35,7 @@ export default function ReportsPage() {
         setLatestKpi(latestRes.report?.kpi_summary ?? null)
         setError(null)
       } catch (e) {
-        setError(e instanceof Error ? e.message : '加载报告失败')
+        setError(e)
         setReports([])
       } finally {
         setLoading(false)
@@ -92,8 +93,10 @@ export default function ReportsPage() {
         {/* Report List */}
         <div className="space-y-2">
           {loading && <p className="text-xs text-text-muted py-4">加载中...</p>}
-          {!loading && error && (
-            <p className="text-xs text-red-500 py-4">加载失败：{error}</p>
+          {!loading && error !== null && (
+            <div className="py-4">
+              <ErrorCard error={error} onRetry={() => window.location.reload()} />
+            </div>
           )}
           {!loading && !error && reports.length === 0 && (
             <p className="text-xs text-text-muted py-4">暂无报告，请先运行日报 Workflow</p>

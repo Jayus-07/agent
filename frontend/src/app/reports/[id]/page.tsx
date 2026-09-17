@@ -2,23 +2,29 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { ArrowLeft, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react'
+import { ArrowLeft, ChevronDown, ChevronUp } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { reportService, type DailyReportDetail } from '@/api/reports'
+import ErrorCard from '@/components/shared/ErrorCard'
 
 export default function ReportDetailPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
   const [report, setReport] = useState<DailyReportDetail | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<unknown>(null)
   const [showTech, setShowTech] = useState(false)
 
   useEffect(() => {
     reportService.getReport(id).then(r => {
       setReport(r.report)
       setLoading(false)
-    }).catch(() => setLoading(false))
+    }).catch(e => {
+      // 此前错误被静默吞掉（catch 只置 loading=false）→ 失败时永远停在"加载中"（X3）
+      setError(e)
+      setLoading(false)
+    })
   }, [id])
 
   if (loading) {
@@ -29,10 +35,21 @@ export default function ReportDetailPage() {
     )
   }
 
+  if (error) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-6">
+        <ErrorCard error={error} onRetry={() => { setLoading(true); setError(null); window.location.reload() }} />
+      </div>
+    )
+  }
+
   if (!report) {
     return (
-      <div className="flex-1 flex items-center justify-center">
+      <div className="flex-1 flex flex-col items-center justify-center gap-3">
         <p className="text-sm text-text-muted">报告未找到</p>
+        <button onClick={() => router.push('/reports')} className="text-xs text-accent hover:underline">
+          返回报告中心
+        </button>
       </div>
     )
   }
@@ -82,13 +99,10 @@ export default function ReportDetailPage() {
                 <p>KPI Summary: <code className="text-[11px] bg-black/5 px-1 rounded">{JSON.stringify(report.kpi_summary)}</code></p>
               </div>
               {report.trace_id && (
-                <a
-                  href={`/observability/traces/${report.trace_id}`}
-                  target="_blank"
-                  className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
-                >
-                  查看完整 Trace <ExternalLink size={12} />
-                </a>
+                <div className="text-xs text-text-muted">
+                  Trace ID: <code className="text-[11px] bg-black/5 px-1 rounded">{report.trace_id}</code>
+                  <span className="ml-2">（完整 Trace 请在管理端「可观测性」查看）</span>
+                </div>
               )}
               {!report.trace_id && (
                 <p className="text-xs text-text-muted">无关联 Trace</p>
