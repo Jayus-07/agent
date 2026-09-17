@@ -158,6 +158,16 @@ class MarketStore:
         with self._connect() as conn:
             return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
+    def clear_batch(self, batch_id: str) -> int:
+        """按批次清除关键词/差评（2026-09-17 全流程实测补：页面按批次清除此前只覆盖商品表）。"""
+        removed = 0
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM keyword_stats WHERE batch_id = ?", (batch_id,))
+            removed += cur.rowcount
+            cur = conn.execute("DELETE FROM product_reviews WHERE batch_id = ?", (batch_id,))
+            removed += cur.rowcount
+        return removed
+
 
 _default_market: MarketStore | None = None
 

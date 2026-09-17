@@ -151,3 +151,24 @@ def test_api_text_import_unknown_kind_400(client):
     resp = client.post("/selection-funnel/import/text", json={
         "content": "x", "kind": "nope"})
     assert resp.status_code == 400
+
+
+def test_market_store_clear_batch_keywords_and_reviews(isolated_market_store):
+    kw_batch, n_kw, _ = import_keywords(KW_TSV, category="宠物零食")
+    rv_batch, n_rv, _ = import_reviews(RV_TSV, category="宠物零食")
+    assert n_kw == 4 and n_rv >= 4
+    store = isolated_market_store
+    assert len(store.keywords("宠物零食")) == 4
+    assert store.clear_batch(kw_batch) == 4
+    assert store.keywords("宠物零食") == []
+    assert len(store.reviews("宠物零食")) == n_rv  # 差评不受关键词批次清除影响
+    assert store.clear_batch(rv_batch) == n_rv
+    assert store.clear_batch("kw-none") == 0  # 不存在批次返回 0
+
+
+def test_api_delete_keyword_batch(client):
+    kw_batch, _, _ = import_keywords(KW_TSV, category="宠物零食")
+    resp = client.delete(f"/selection-funnel/import/batch/{kw_batch}")
+    assert resp.status_code == 200 and resp.json()["removed"] == 4
+    assert client.delete(
+        f"/selection-funnel/import/batch/{kw_batch}").status_code == 404

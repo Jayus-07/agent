@@ -102,7 +102,10 @@ async def review_pain_points(category: str = "", titles: str = "") -> dict:
 
 @router.delete("/import/batch/{batch_id}", summary="清除指定导入批次")
 async def clear_batch(batch_id: str) -> dict:
-    removed = _ip.get_import_store().clear_batch(batch_id)
+    if batch_id.startswith("imp-"):
+        removed = _ip.get_import_store().clear_batch(batch_id)
+    else:  # kw- / rv- → 市场库（关键词榜/差评），2026-09-17 全流程实测补
+        removed = _md.get_market_store().clear_batch(batch_id)
     if not removed:
         raise HTTPException(status_code=404, detail=f"批次 {batch_id} 不存在")
     return {"batch_id": batch_id, "removed": removed}
