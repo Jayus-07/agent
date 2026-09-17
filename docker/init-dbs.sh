@@ -44,6 +44,7 @@ $PSQL -d agent_memory -f /docker-migrations/010_doc_registry_pg.sql
 $PSQL -d agent_memory -f /docker-migrations/011_doc_registry_version_governance.sql
 $PSQL -d agent_memory -f /docker-migrations/012_obs_trace_store_pg.sql
 $PSQL -d agent_memory -f /docker-migrations/013_obs_analytics_pg.sql
+$PSQL -d agent_memory -f /docker-migrations/014_rag_stores_pg.sql
 
 echo "[init-dbs] 完成。验证只读角色："
 $PSQL -d postgres -c "SELECT rolname, rolcanlogin, rolsuper FROM pg_roles WHERE rolname = 'agent_readonly';"

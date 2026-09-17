@@ -148,7 +148,12 @@ _store: ChunkStore | None = None
 
 
 def get_chunk_store(db_path: str = CHUNK_STORE_PATH) -> ChunkStore:
+    """存储工厂：CHUNK_STORE_BACKEND=postgres 时返回 PG 实现（接口/语义一致）。"""
     global _store
     if _store is None:
-        _store = ChunkStore(db_path)
+        if os.getenv("CHUNK_STORE_BACKEND", "sqlite").strip().lower() == "postgres":
+            from backend.rag.indexing.chunk_store_pg import PostgresChunkStore
+            _store = PostgresChunkStore(db_path)
+        else:
+            _store = ChunkStore(db_path)
     return _store

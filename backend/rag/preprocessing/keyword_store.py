@@ -274,7 +274,12 @@ _store: KeywordRuleStore | None = None
 
 
 def get_keyword_store(db_path: str = "data/keyword_rules.db") -> KeywordRuleStore:
+    """存储工厂：KEYWORD_STORE_BACKEND=postgres 时返回 PG 实现（接口/语义一致）。"""
     global _store
     if _store is None:
-        _store = KeywordRuleStore(db_path)
+        if os.getenv("KEYWORD_STORE_BACKEND", "sqlite").strip().lower() == "postgres":
+            from backend.rag.preprocessing.keyword_store_pg import PostgresKeywordRuleStore
+            _store = PostgresKeywordRuleStore(db_path)
+        else:
+            _store = KeywordRuleStore(db_path)
     return _store

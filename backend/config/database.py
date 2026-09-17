@@ -81,6 +81,17 @@ OBS_DB_PG_CONFIG = _pg_cfg("OBS_DB_PGDATABASE", "agent_memory")
 # 表名前缀（测试隔离用；生产保持空串 → trace_store / trace_summary / llm_usage）
 OBS_DB_PG_TABLE_PREFIX = os.getenv("OBS_DB_PG_TABLE_PREFIX", "")
 
+# === RAG 索引族存储引擎开关（迁移计划 2026-09-17 Batch B）===
+# "sqlite"（默认，回滚开关）| "postgres"
+# 作用于 chunk_store / keyword_rules / doc_operation_log（各自工厂分发）；
+# doc_registry 已有独立开关 DOC_REGISTRY_BACKEND（R1/C19 先例）。
+RAG_STORES_PG_CONFIG = _pg_cfg("RAG_STORES_PGDATABASE", "agent_memory")
+# 表名前缀（测试隔离用；生产保持空串 → chunk_store / keyword_rules / doc_operation_log）
+RAG_STORES_PG_TABLE_PREFIX = os.getenv("RAG_STORES_PG_TABLE_PREFIX", "")
+CHUNK_STORE_BACKEND = os.getenv("CHUNK_STORE_BACKEND", "sqlite").strip().lower()
+KEYWORD_STORE_BACKEND = os.getenv("KEYWORD_STORE_BACKEND", "sqlite").strip().lower()
+OPLOG_BACKEND = os.getenv("OPLOG_BACKEND", "sqlite").strip().lower()
+
 # === 连接池参数 ===
 DB_POOL_MIN_CONN = int(os.getenv("DB_POOL_MIN_CONN", "2"))
 DB_POOL_MAX_CONN = int(os.getenv("DB_POOL_MAX_CONN", "10"))
