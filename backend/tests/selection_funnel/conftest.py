@@ -57,6 +57,14 @@ class FakeCompetitorStore:
 
 
 @pytest.fixture(autouse=True)
+def isolated_rag(monkeypatch):
+    """知识层 RAG 桥默认隔离——测试绝不拉起真实 RAG pipeline
+    （torch/embedding 初始化分钟级拖慢 + 碰真实知识库）。测 RAG 注入的用例自行覆盖。"""
+    import backend.selection_funnel.knowledge as k
+    monkeypatch.setattr(k, "rag_enhance", lambda c, p, top_k=3: ([], ""))
+
+
+@pytest.fixture(autouse=True)
 def isolated_import_store(tmp_path, monkeypatch):
     """导入候选池隔离到临时库——测试绝不碰真实 data/selection_import.db。
 

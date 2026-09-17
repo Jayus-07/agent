@@ -61,8 +61,8 @@ def _recommend_table(candidates: list[dict]) -> list[str]:
 
 
 def render_report(brief, stage_logs: list[dict], candidates: list[dict],
-                  notes: list[str]) -> str:
-    """正常路径报告。"""
+                  notes: list[str], knowledge: list[str] | None = None) -> str:
+    """正常路径报告。knowledge = 知识层合规提示（极限词/平台规则/RAG 片段）。"""
     lines = [
         f"## 智能选品漏斗报告（{brief.category}）", "",
         f"需求口径：平台 {brief.platform or '不限'}；"
@@ -80,6 +80,8 @@ def render_report(brief, stage_logs: list[dict], candidates: list[dict],
     drop_details = _drop_details(stage_logs)
     if drop_details:
         lines += ["", "### 淘汰明细", ""] + drop_details
+    if knowledge:
+        lines += ["", "### 合规与知识层提示", ""] + knowledge
     if notes:
         lines += ["", "### 数据缺口与说明", ""]
         lines += [f"- {n}" for n in dict.fromkeys(notes)]
@@ -134,9 +136,13 @@ def reporter_node(state: dict) -> dict:
                 "status": status,
                 "finished": True}
     from backend.selection_funnel.graph_state import load_brief
+    from backend.selection_funnel.knowledge import compliance_review
     brief = load_brief(state)
+    candidates = list(state.get("candidates") or [])
+    knowledge, knotes = compliance_review(
+        candidates, brief.platform, brief.category)
+    notes = list(state.get("notes") or []) + knotes
     answer = render_report(brief, list(state.get("stage_logs") or []),
-                           list(state.get("candidates") or []),
-                           list(state.get("notes") or []))
+                           candidates, notes, knowledge=knowledge)
     return {"final_answer": answer, "status": "ok",
             "finished": True}
