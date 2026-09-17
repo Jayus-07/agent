@@ -57,14 +57,10 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _refresh_version():
-    from backend.rag.pipeline import RAGPipeline
-    from backend.config.database import CHROMA_PATH, DOC_DB_PATH
-    for db_path in (CHROMA_PATH, DOC_DB_PATH):
-        if Path(db_path).exists():
-            (Path(db_path) / ".version").write_text(
-                RAGPipeline._compute_db_version(), encoding="utf-8"
-            )
+# 2026-09-18 Chroma→pgvector 收口：原 _refresh_version() 向 CHROMA_PATH/DOC_DB_PATH
+# 磁盘目录写 .version 指纹，防 sync 误判触发全量重建。pgvector 轨下向量库在 PG 表、
+# 目录恒不存在，_need_rebuild 的 .version 检查两端均已失效（增量由 registry 驱动），
+# 该函数为 no-op 死代码，删除。
 
 
 def main() -> int:
@@ -145,7 +141,6 @@ def main() -> int:
     print(f"slug 行注册: {len(paths)}；待清理 hash doc_id: {len(hash_ids)}")
 
     # ③ 干净启动（sync：25 slug 行 unchanged、主语料 unchanged、无扫描件）
-    _refresh_version()
     from backend.rag.pipeline import get_rag_pipeline
     pipeline = get_rag_pipeline()
 
@@ -194,7 +189,6 @@ def main() -> int:
         r = rows.get(fpath) or {}
         if r.get("doc_id") != slug or r.get("status") != "active":
             bad.append(slug)
-    _refresh_version()
 
     print("\n===== 汇总 =====")
     print(f"索引成功: {len(ok)} | 失败: {len(failed)} | 行校验异常: {bad or '无'}")
