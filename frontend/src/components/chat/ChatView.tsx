@@ -9,6 +9,7 @@ import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import WelcomeState from './WelcomeState'
 import ContextPanel from './ContextPanel'
+import ErrorCard from '@/components/shared/ErrorCard'
 
 // 模块级稳定空数组，避免 messages 为空时 useMemo 每次返回新 []
 const EMPTY_MESSAGES: Message[] = []
@@ -92,14 +93,14 @@ export default function ChatView() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0 relative">
-      {/* Error toast — P1-16: historyError 已迁移至任务栏（TaskSidebar/SessionList），避免双显示 */}
-      {error && (
-        <div className="shrink-0 mx-5 mt-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-center gap-2.5 animate-fade-in">
-          <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />
-          <span className="text-sm text-red-700 flex-1">{error}</span>
+      {/* Error card（X3 语义化）：存原始异常对象 → ErrorCard 解析语义化文案
+          + 行动指引 + 详情折叠；historyError 在任务栏显示（P1-16），此处只管轮次错误 */}
+      {error !== null && (
+        <div className="shrink-0 mx-5 mt-3 flex items-start gap-2.5 animate-fade-in">
+          <ErrorCard error={error} className="flex-1 max-w-none" />
           <button
             onClick={() => useChatStore.getState().setError(null)}
-            className="text-xs text-red-400 hover:text-red-600 shrink-0 transition-colors"
+            className="text-xs text-gray-400 hover:text-gray-600 shrink-0 mt-1 transition-colors"
           >
             关闭
           </button>

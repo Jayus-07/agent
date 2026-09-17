@@ -22,6 +22,18 @@ export interface ChatRequest {
 export type SSEStreamEvent = TypedSSEStreamEvent;
 
 /**
+ * 构造带 HTTP 状态的 Error（UX P1 尾巴 X3：错误语义化）。
+ * errors.ts 的 describeApiError 会读取 err.status 命中 FALLBACK_BY_STATUS
+ * （401/403/429/5xx → kind + 行动指引）——裸 Error 会丢失整条语义链，
+ * 只剩「操作失败」兜底文案。
+ */
+function httpError(message: string, status?: number): Error {
+  const e = new Error(message);
+  if (status !== undefined) Object.assign(e, { status });
+  return e;
+}
+
+/**
  * POST /chat/stream — 流式对话
  */
 export async function* streamChat(
@@ -50,7 +62,7 @@ export async function* streamChat(
       res = await doFetch();
     } else {
       handleAuthFailure();
-      throw new Error("登录已过期");
+      throw httpError("登录已过期", 401);
     }
   }
 
@@ -61,7 +73,7 @@ export async function* streamChat(
       (typeof detail === "string" && detail) ||
       (typeof detail === "object" && detail?.error) ||
       `HTTP ${res.status}`;
-    throw new Error(String(message));
+    throw httpError(String(message), res.status);
   }
 
   yield* parseSSEStream(res.body, signal) as AsyncGenerator<SSEStreamEvent>;

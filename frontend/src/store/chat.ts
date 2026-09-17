@@ -23,7 +23,9 @@ interface ChatState {
   /** node → emoji 映射表（meta 事件下发） */
   nodeLabels: Record<string, string>
   isLoading: boolean
-  error: string | null
+  /** 当前对话轮次错误。UX P1 尾巴（X3）：存原始异常对象（含 status/code），
+   *  ChatView 用 ErrorCard 解析出语义化文案 + 行动指引；null = 无错误 */
+  error: unknown
   /** 历史消息/会话列表加载失败信息。与 error 分开：error 属于当前对话轮次，
    *  混用会让"历史加载失败"显示在聊天区，误导用户以为本次提问出错 */
   historyError: string | null
@@ -61,7 +63,7 @@ interface ChatState {
 
   // — 状态 —
   setLoading: (v: boolean) => void
-  setError: (e: string | null) => void
+  setError: (e: unknown) => void
   setHistoryError: (e: string | null) => void
   setCurrentRequestId: (id: string | null) => void
   bumpSessionsVersion: () => void

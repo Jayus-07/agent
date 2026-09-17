@@ -94,7 +94,9 @@ export function useSSE() {
       }
     } catch (err: any) {
       if (controller.signal.aborted) return
-      setError(err.message || '请求失败')
+      // X3 语义化：存原始异常对象（streamChat 抛错带 status，ErrorCard 可解析
+      // 出 kind + 行动指引）；err.message 作为流中断消息内容的兜底文案
+      setError(err)
       // 保留已显示内容，不清空
       const finalState = useChatStore.getState()
       if (finalState.deltaText) {

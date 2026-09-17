@@ -101,3 +101,31 @@ describe("映射优先级与健壮性", () => {
     }
   });
 });
+
+describe("对话流错误语义链（UX P1 尾巴 X3：streamChat 抛错带 status）", () => {
+  it("带 status 的裸 Error（api/chat.ts httpError 形态）命中 FALLBACK_BY_STATUS", () => {
+    // api/chat.ts L57-64：非 2xx 响应 → Object.assign(new Error(msg), { status })
+    const err = new Error("HTTP 429");
+    Object.assign(err, { status: 429 });
+    const fb = resolveErrorFeedback(err);
+    expect(fb.kind).toBe("rate_limit");
+    expect(fb.status).toBe(429);
+    expect(fb.retriable).toBe(true);
+    expect(fb.actionText).toBe(KIND_ACTIONS.rate_limit);
+  });
+
+  it("401 → auth 语义（对话流登录过期场景）", () => {
+    const err = new Error("登录已过期");
+    Object.assign(err, { status: 401 });
+    const fb = resolveErrorFeedback(err);
+    expect(fb.kind).toBe("auth");
+    expect(fb.actionText).toContain("重新登录");
+  });
+
+  it("无 status 的裸 Error → unknown 兜底，仍给行动指引", () => {
+    // useSSE catch 里可能收到无 status 的异常（如流解析错误）
+    const fb = resolveErrorFeedback(new Error("stream broken"));
+    expect(fb.kind).toBe("unknown");
+    expect(fb.actionText).toBe(KIND_ACTIONS.unknown);
+  });
+});
