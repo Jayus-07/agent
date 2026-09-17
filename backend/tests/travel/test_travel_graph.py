@@ -26,11 +26,17 @@ from backend.travel.models.graph_result import (
 )
 from backend.travel.models.itinerary import Itinerary
 from backend.travel.models.validation import (
+    LEVEL_DECISION_REQUIRED,
     LEVEL_ERROR,
     ValidationReport,
     Violation,
 )
-from backend.travel.supervisor import TravelStage, decide
+from backend.travel.supervisor import (
+    _STAGE_TO_ACTION,
+    TravelDecision,
+    TravelStage,
+    decide,
+)
 
 
 def _state(**overrides) -> dict:
@@ -151,6 +157,54 @@ class TestSupervisorDecide:
         got = decide(state)
         assert got.stage is TravelStage.REPORT
         assert "自动修复" in got.reason
+
+    def test_decision_required_does_not_trigger_repair(self):
+        """必去项闭馆（decision_required，无 error）→ 直接 REPORT 请用户取舍。
+
+        任务书 §7：decision_required 不进修复队列 —— supervisor 不得把它
+        当成待修违反路由回 REPAIR（否则修复器只会原地报「无自动手段」）。
+        """
+        report = ValidationReport(violations=[Violation(
+            code="TIME_CLOSED", level=LEVEL_DECISION_REQUIRED, message="x",
+            detail={"poi_id": "must", "required": True})])
+        state = _state(
+            expert_history=[{"expert": e} for e in ("poi", "transit", "budget", "risk")],
+            candidates=[{"poi_id": "a"}],
+            itinerary=save_itinerary(_empty_itinerary()),
+            validation=save_validation(report),
+            repair_rounds=0,
+        )
+        got = decide(state)
+        assert got.stage is TravelStage.REPORT
+        assert "需你决定 1 项" in got.reason
+
+    def test_action_naming_covers_all_stages(self):
+        """每个 stage 都有结构化动作命名（trace/评测归因的粒度，任务书 §5）。"""
+        for stage, expected in _STAGE_TO_ACTION.items():
+            assert TravelDecision(stage, "").action == expected
+        # 抽查关键动作语义
+        assert TravelDecision(TravelStage.REPAIR, "").action == "run_repair"
+        assert TravelDecision(TravelStage.REPORT, "").action == "finish_report"
+
+    def test_decision_action_follows_routing(self):
+        """decide 的实际产出也带 action：通过 → finish_report，修复 → run_repair。"""
+        base = dict(
+            expert_history=[{"expert": e} for e in ("poi", "transit", "budget", "risk")],
+            candidates=[{"poi_id": "a"}],
+            itinerary=save_itinerary(_empty_itinerary()),
+        )
+        passed = decide(_state(**base, validation=save_validation(ValidationReport())))
+        assert passed.stage is TravelStage.REPORT
+        assert passed.action == "finish_report"
+
+        failed = decide(_state(
+            **base,
+            validation=save_validation(ValidationReport(violations=[Violation(
+                code="TIME_CLOSED", level=LEVEL_ERROR, message="x")])),
+            repair_rounds=0,
+        ))
+        assert failed.stage is TravelStage.REPAIR
+        assert failed.action == "run_repair"
 
 
 class TestTravelPrefilter:

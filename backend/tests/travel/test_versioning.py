@@ -23,6 +23,7 @@ from backend.travel.models.itinerary import (
     CHANGE_INITIAL,
     CHANGE_REPAIR,
     PLAN_STATUS_DEGRADED,
+    PLAN_STATUS_NEEDS_USER_DECISION,
     PLAN_STATUS_READY,
     PLAN_STATUS_VALIDATING,
     Itinerary,
@@ -32,7 +33,7 @@ from backend.travel.slot_filler import slot_filler_node
 from backend.travel.supervisor import travel_supervisor_node
 from backend.travel.validator import travel_validator_node
 
-from .conftest import make_day, make_item, make_itinerary, make_leg, make_poi
+from .conftest import MONDAY, make_day, make_item, make_itinerary, make_leg, make_poi
 
 
 def _state(**extra) -> dict:
@@ -165,7 +166,8 @@ class TestPlanStatus:
 
     def test_ready_when_no_errors(self, simple_brief):
         poi = make_poi()
-        itin = make_itinerary(brief=simple_brief)
+        day = make_day(items=[make_item(poi=poi, start="09:00", end="10:30")])
+        itin = make_itinerary(brief=simple_brief, days=[day])
         itin.stamp_version(simple_brief)
         state = _state(
             brief=simple_brief.model_dump(),
@@ -176,12 +178,13 @@ class TestPlanStatus:
         update = travel_validator_node(state)
         saved = load_itinerary(update)
         assert saved is not None
-        assert saved.status in (PLAN_STATUS_READY, PLAN_STATUS_DEGRADED)
+        assert saved.status == PLAN_STATUS_READY
 
-    def test_degraded_with_errors(self, simple_brief, monkeypatch):
-        poi = make_poi(required=True, closed_weekdays=[0])
+    def test_degraded_with_errors(self, simple_brief):
+        """error 级违反（非必去闭馆）→ degraded。"""
+        poi = make_poi(closed_weekdays=[0])  # 周一闭馆，非必去
         day = make_day(items=[make_item(poi=poi, start="09:00", end="10:30")],
-                       day_date=None)
+                       day_date=MONDAY)
         itin = make_itinerary(brief=simple_brief, days=[day])
         itin.stamp_version(simple_brief)
         state = _state(
@@ -192,11 +195,24 @@ class TestPlanStatus:
         update = travel_validator_node(state)
         saved = load_itinerary(update)
         assert saved is not None
-        if saved.status == PLAN_STATUS_DEGRADED:
-            assert saved.status == PLAN_STATUS_DEGRADED  # 有 error 即降级
-        else:
-            # 若该行程未触发 error，状态必须是 ready（不允许第三种值）
-            assert saved.status == PLAN_STATUS_READY
+        assert saved.status == PLAN_STATUS_DEGRADED
+
+    def test_needs_user_decision_on_required_closed(self, simple_brief):
+        """必去项闭馆（decision_required，无 error）→ needs_user_decision。"""
+        poi = make_poi(required=True, closed_weekdays=[0])
+        day = make_day(items=[make_item(poi=poi, start="09:00", end="10:30")],
+                       day_date=MONDAY)
+        itin = make_itinerary(brief=simple_brief, days=[day])
+        itin.stamp_version(simple_brief)
+        state = _state(
+            brief=simple_brief.model_dump(),
+            itinerary=save_itinerary(itin),
+            notes=[],
+        )
+        update = travel_validator_node(state)
+        saved = load_itinerary(update)
+        assert saved is not None
+        assert saved.status == PLAN_STATUS_NEEDS_USER_DECISION
 
 
 # =============================================

@@ -30,6 +30,7 @@ from backend.travel.models.validation import (
     CODE_TIME_DAY_OVERRUN,
     CODE_TIME_LONG_WAIT,
     CODE_TIME_OVERLAP,
+    LEVEL_DECISION_REQUIRED,
     LEVEL_ERROR,
     LEVEL_WARNING,
 )
@@ -291,3 +292,58 @@ class TestReportAndConfidence:
         low = compute_confidence(broken, check_itinerary(broken))
         assert low < high
         assert 0.0 <= low <= 1.0
+
+
+class TestDecisionRequiredLevel:
+    """必去项与事实的冲突是用户诉求与现实的对抗（任务书 §7）。
+
+    只能由用户裁决（改时间 / 换日期 / 保留冲突），既不算 error（不触发
+    修复、不挡交付），也不该与提示性 warning 混列 —— 单独一级。
+    """
+
+    def test_required_outside_hours_is_decision_required(self):
+        poi = make_poi(poi_id="must", name="必去馆", required=True)
+        day = make_day(items=[make_item(start="18:00", end="19:30", poi=poi)])
+        report = check_itinerary(make_itinerary(days=[day]))
+        closed = [v for v in report.violations if v.code == CODE_TIME_CLOSED]
+        assert closed
+        assert closed[0].level == LEVEL_DECISION_REQUIRED
+        assert closed[0].detail["required"] is True
+        assert report.errors == []
+        assert report.decision_required
+        assert report.passed is True  # 不挡交付，但行程单必须摆明取舍
+
+    def test_required_closed_weekday_is_decision_required(self):
+        poi = make_poi(poi_id="must", name="必去馆", required=True,
+                       closed_weekdays=(0,))
+        day = make_day(day_date=MONDAY,
+                       items=[make_item(start="09:00", end="10:30", poi=poi)])
+        report = check_itinerary(make_itinerary(days=[day]))
+        closed = [v for v in report.violations
+                  if v.code == CODE_TIME_CLOSED_WEEKDAY]
+        assert closed
+        assert closed[0].level == LEVEL_DECISION_REQUIRED
+        assert report.errors == []
+
+    def test_non_required_closed_still_error(self):
+        """回归护栏：改道只影响必去项 —— 非必去闭馆仍是 error 进修复。"""
+        poi = make_poi(poi_id="late", name="深夜馆", required=False)
+        day = make_day(items=[make_item(start="18:00", end="19:30", poi=poi)])
+        report = check_itinerary(make_itinerary(days=[day]))
+        assert len(report.errors) == 1
+        assert report.errors[0].code == CODE_TIME_CLOSED
+        assert report.decision_required == []
+
+    def test_confidence_weights_decision_required(self):
+        """decision_required 介于 error 与 warning 之间：每条扣 0.10。"""
+        clean = make_itinerary(days=[make_day(
+            items=[make_item(start="09:00", end="10:30", poi=make_poi())])])
+        base = compute_confidence(clean, check_itinerary(clean))
+
+        must = make_poi(poi_id="must", name="必去馆", required=True)
+        decided = make_itinerary(days=[make_day(
+            items=[make_item(start="18:00", end="19:30", poi=must)])])
+        dr_report = check_itinerary(decided)
+        assert len(dr_report.decision_required) == 1  # 唯一差异是 1 条 decision_required
+        lower = compute_confidence(decided, dr_report)
+        assert round(base - lower, 2) == 0.10

@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -57,6 +58,30 @@ class RepairAction:
         return {"code": self.code, "day_index": self.day_index,
                 "dropped": self.dropped, "kept_required": self.kept_required,
                 "reason": self.reason}
+
+
+# ============================================================
+# 防震荡签名（任务书 §6）
+# ============================================================
+def constraint_signature(report: ValidationReport) -> str:
+    """违反集签名：error 级违反的 (code, day, 目标) 有序哈希。
+
+    「修复是否有效」的判据 —— 删了 A 之后同样的违反仍在（同码再现），
+    签名不变；违反集真正缩小/变化，签名才变。只纳入 error 级：
+    warning/decision_required 不进修复队列，不构成「修没修好」。
+    """
+    payload = sorted(
+        f"{v.code}:{v.day_index}:{v.detail.get('poi_id') or v.detail.get('title') or ''}"
+        for v in report.errors
+    )
+    return hashlib.sha1("\n".join(payload).encode("utf-8")).hexdigest()[:8]
+
+
+def plan_signature(itinerary: Itinerary) -> str:
+    """行程形态签名：到访 POI 序列哈希（供 repair_log 归因，不参与判定）。"""
+    seq = [i.poi.poi_id for d in itinerary.days for i in d.items
+           if i.kind == KIND_VISIT and i.poi is not None]
+    return hashlib.sha1("|".join(seq).encode("utf-8")).hexdigest()[:8]
 
 
 def repair_itinerary(
@@ -313,7 +338,13 @@ def _farthest_from_center(day: ItineraryDay) -> ItineraryItem | None:
 
 
 def repair_node(state: dict) -> dict:
-    """修复节点：执行一轮局部修复，并清除上一轮校验结果以触发复检。"""
+    """修复节点：执行一轮局部修复，并清除上一轮校验结果以触发复检。
+
+    防震荡签名（任务书 §6）：每轮把修复前的违反集签名与上一轮的比对 ——
+    连续两轮「违反集无变化」说明修复在原地打转（删了 A 同样的违反还在），
+    继续修只会空转，直接打 repair_stalled 并区分文案
+    「修复无改善」（修了但没修好）与「无自动手段」（根本没法修）。
+    """
     from backend.travel.graph_state import (
         load_itinerary, load_validation, save_itinerary,
     )
@@ -330,6 +361,32 @@ def repair_node(state: dict) -> dict:
             "stage": "report",
             "notes": list(state.get("notes", [])) + [
                 f"行程经 {max_rounds} 轮自动调整后仍有约束无法满足，"
+                "已在行程单中标注，需要你确认取舍"
+            ],
+        }
+
+    # ── 防震荡判定（签名比较在修复之前，比较的是「上轮修复是否有效」）──
+    constraint_sig = constraint_signature(report)
+    plan_sig_before = plan_signature(itinerary)
+    prev_sig = state.get("last_repair_constraint_sig") or ""
+    streak = int(state.get("repair_no_improvement_streak") or 0)
+    # 上轮修复前的违反集与本次相同 → 上轮修复对违反集零改善
+    last_no_improvement = bool(prev_sig) and prev_sig == constraint_sig
+    streak = (streak + 1) if last_no_improvement else 0
+    if streak >= 2:
+        # 连续两轮无改善：再修下去违反集也不会变 —— 如实收尾，
+        # 与「无自动手段」（repair_stalled 常规路径）文案区分
+        return {
+            "stage": "report",
+            "repair_stalled": True,
+            "repair_log": list(state.get("repair_log", [])) + [{
+                "constraint_signature": constraint_sig,
+                "plan_signature_before": plan_sig_before,
+                "no_improvement": True,
+                "reason": "连续两轮修复后违反集无变化，停止重复尝试",
+            }],
+            "notes": list(state.get("notes", [])) + [
+                "自动修复连续两轮未改善约束违反（已停止重复尝试），"
                 "已在行程单中标注，需要你确认取舍"
             ],
         }
@@ -351,18 +408,33 @@ def repair_node(state: dict) -> dict:
         return {
             "stage": "report",
             "repair_stalled": True,
-            "repair_log": log,
+            "repair_log": log + [{
+                "constraint_signature": constraint_sig,
+                "plan_signature_before": plan_sig_before,
+                "no_improvement": False,
+                "reason": "本轮无任何可自动执行的修复动作",
+            }],
             "notes": list(state.get("notes", [])) + [
                 "存在无法自动调整的约束冲突（可能因地点均为必去项），"
                 "已在行程单中标注"
             ],
         }
 
-    return {
+    update: dict = {
         "itinerary": save_itinerary(repaired),
         "validation": None,          # 清除 → supervisor 触发复检
         "stage": "validate",
         "repair_rounds": repaired.repair_rounds,
         "repair_stalled": False,     # 有动作被真正执行 → 解除终态标记
-        "repair_log": log,
+        "repair_log": log + [{
+            "constraint_signature": constraint_sig,
+            "plan_signature_before": plan_sig_before,
+            "plan_signature_after": plan_signature(repaired),
+            "no_improvement": last_no_improvement,
+            "reason": "",
+        }],
+        # 记录本轮修复前的违反集签名：下一轮进入时与其比对，判定上轮是否有效
+        "last_repair_constraint_sig": constraint_sig,
+        "repair_no_improvement_streak": streak,
     }
+    return update

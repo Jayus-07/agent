@@ -25,12 +25,14 @@ KIND_REST = "rest"
 # ============================================================
 # plan 状态机与版本链常量（任务书 §4）
 # ============================================================
-# 状态流转：validating（排程/重排出生时）→ ready / degraded（validator 判定）。
-# needs_clarification / needs_user_decision 属于**图级**状态（无 itinerary 产物），
-# 不在此枚举；failed 时无行程可挂，同样不落此字段。
+# 状态流转：validating（排程/重排出生时）→ ready / degraded / needs_user_decision
+# （validator 判定）。needs_user_decision = 无 error 级违反、但存在必去项冲突
+# 等需用户取舍的约束（任务书 §7 USER_DECISION 层级）——行程可交付但选项要摆明。
+# failed 时无行程可挂，不落此字段。
 PLAN_STATUS_VALIDATING = "validating"
 PLAN_STATUS_READY = "ready"
 PLAN_STATUS_DEGRADED = "degraded"
+PLAN_STATUS_NEEDS_USER_DECISION = "needs_user_decision"
 
 # 版本产生原因
 CHANGE_INITIAL = "initial"        # 全新首版

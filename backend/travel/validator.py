@@ -27,6 +27,7 @@ from backend.config import travel as T
 from backend.shared.logger import logger
 from backend.travel.models.itinerary import (
     PLAN_STATUS_DEGRADED,
+    PLAN_STATUS_NEEDS_USER_DECISION,
     PLAN_STATUS_READY,
     Itinerary,
 )
@@ -44,6 +45,7 @@ from backend.travel.models.validation import (
     CODE_TIME_DAY_OVERRUN,
     CODE_TIME_LONG_WAIT,
     CODE_TIME_OVERLAP,
+    LEVEL_DECISION_REQUIRED,
     LEVEL_ERROR,
     LEVEL_WARNING,
     ValidationReport,
@@ -161,7 +163,12 @@ def check_time(itinerary: Itinerary) -> list[Violation]:
             close_min = to_min(item.poi.close_time, 23 * 60 + 59)
             if start < open_min or end > close_min:
                 out.append(Violation(
-                    code=CODE_TIME_CLOSED, level=LEVEL_ERROR, day_index=day.day_index,
+                    code=CODE_TIME_CLOSED,
+                    # 必去项的时段冲突是用户的明确诉求与事实的对抗，
+                    # 只能由用户裁决（改时间/换日期/保留冲突），不进自动修复
+                    level=(LEVEL_DECISION_REQUIRED if item.poi.required
+                           else LEVEL_ERROR),
+                    day_index=day.day_index,
                     message=(f"第{day.day_index}天「{item.poi.name}」安排在 "
                              f"{item.start}-{item.end}，但其开放时段为 "
                              f"{item.poi.open_time}-{item.poi.close_time}"),
@@ -169,17 +176,22 @@ def check_time(itinerary: Itinerary) -> list[Violation]:
                         "poi_id": item.poi.poi_id, "poi_name": item.poi.name,
                         "visit": [item.start, item.end],
                         "window": [item.poi.open_time, item.poi.close_time],
+                        "required": item.poi.required,
                     },
                 ))
 
             if day.day_date is not None and not item.poi.is_open_on(day.day_date.weekday()):
                 closed = "、".join(item.poi.closed_weekday_names())
                 out.append(Violation(
-                    code=CODE_TIME_CLOSED_WEEKDAY, level=LEVEL_ERROR, day_index=day.day_index,
+                    code=CODE_TIME_CLOSED_WEEKDAY,
+                    level=(LEVEL_DECISION_REQUIRED if item.poi.required
+                           else LEVEL_ERROR),
+                    day_index=day.day_index,
                     message=(f"第{day.day_index}天（{day.day_date.isoformat()}）安排了"
                              f"「{item.poi.name}」，但该馆{closed}闭馆"),
                     detail={"poi_id": item.poi.poi_id, "poi_name": item.poi.name,
-                            "closed_weekdays": item.poi.closed_weekdays},
+                            "closed_weekdays": item.poi.closed_weekdays,
+                            "required": item.poi.required},
                 ))
 
             if item.wait_minutes >= T.TRAVEL_LONG_WAIT_MINUTES:
@@ -368,6 +380,9 @@ def compute_confidence(itinerary: Itinerary, report: ValidationReport) -> float:
     """
     score = 1.0
     score -= 0.15 * len(report.errors)
+    # decision_required 介于 error 与 warning 之间：是未满足的硬事实（比
+    # 提示重），但已如实摆明取舍（比纯 error 轻）
+    score -= 0.10 * len(report.decision_required)
     score -= 0.05 * len(report.warnings)
     if any(p.source.startswith("seed") for p in itinerary.all_pois()):
         score -= 0.20
@@ -400,10 +415,15 @@ def travel_validator_node(state: dict) -> dict:
 
     report = check_itinerary(itinerary)
     itinerary.confidence = compute_confidence(itinerary, report)
-    # plan 状态机判定（任务书 §4）：状态在事实产生处落库 —— 有 error 即
-    # degraded（可能伴随如实披露交付），全过即 ready。
-    itinerary.status = (PLAN_STATUS_READY if not report.errors
-                        else PLAN_STATUS_DEGRADED)
+    # plan 状态机判定（任务书 §4/§7）：状态在事实产生处落库。
+    # errors → degraded；无 error 但有必去冲突等 → needs_user_decision
+    #（行程可交付，取舍选项摆明）；全过 → ready。
+    if report.errors:
+        itinerary.status = PLAN_STATUS_DEGRADED
+    elif report.decision_required:
+        itinerary.status = PLAN_STATUS_NEEDS_USER_DECISION
+    else:
+        itinerary.status = PLAN_STATUS_READY
 
     return {
         "itinerary": save_itinerary(itinerary),

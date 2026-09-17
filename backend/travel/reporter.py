@@ -183,6 +183,10 @@ def _render_itinerary(state: dict, itinerary) -> str:
     items: list[str] = []
     if report is not None:
         items += [v.message for v in report.errors]
+        # USER_DECISION 层级（任务书 §7）：必去项冲突等由用户取舍的约束，
+        # 单列并给出行动选项 —— 与「自动调整说明」混在一起会被当噪音略过
+        for d in report.decision_required:
+            items.append(f"需要你决定：{d.message}（可改日期/换时段，或保留此安排并接受风险）")
     items += [f"{w}" for w in itinerary.warnings]
     items += state.get("notes", [])
     # Phase 1：占位事实字段级披露 —— unverified 的营业时间/票价不再只靠

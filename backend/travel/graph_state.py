@@ -80,6 +80,10 @@ class TravelGraphState(TypedDict, total=False):
     # 缺了它，repair 会被反复调起（同一状态必得同一决策）直到撞 recursion_limit。
     repair_stalled: bool
     repair_log: list[dict]
+    # 防震荡签名（Phase 3，任务书 §6）：上一轮修复前的违反集签名 + 连续
+    # 无改善轮数。repair 节点跨轮比对 —— 连续两轮违反集不变即停止重试。
+    last_repair_constraint_sig: str
+    repair_no_improvement_streak: int
     notes: list[str]
 
     # === 执行态 ===
@@ -232,6 +236,8 @@ def planning_reset() -> dict:
         "repair_rounds": 0,
         "repair_stalled": False,
         "repair_log": [],
+        "last_repair_constraint_sig": "",
+        "repair_no_improvement_streak": 0,
         "expert_history": [],
         "last_expert_result": {},
         "supervisor_decision": {},

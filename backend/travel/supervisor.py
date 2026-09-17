@@ -76,11 +76,33 @@ _STAGE_TO_EXPERT: dict[TravelStage, str] = {
 }
 
 
+# stage → 结构化动作命名（单一事实源，与 _STAGE_TO_NODE 同序维护）
+_STAGE_TO_ACTION: dict[TravelStage, str] = {
+    TravelStage.POI: "run_poi",
+    TravelStage.TRANSIT: "run_transit",
+    TravelStage.BUDGET: "run_budget",
+    TravelStage.RISK: "run_risk",
+    TravelStage.VALIDATE: "run_validation",
+    TravelStage.REPAIR: "run_repair",
+    TravelStage.REPORT: "finish_report",
+    TravelStage.DONE: "finish_done",
+}
+
+
 @dataclass(frozen=True)
 class TravelDecision:
-    """调度决策（stage + 可读理由，理由进日志与 trace）"""
+    """调度决策（stage + action 命名 + 可读理由，理由进日志与 trace）
+
+    action 是任务书 §5 要求的结构化动作命名（如 "run_transit"）：
+    stage 表达图路由，action 表达「这一步在做什么」—— trace 聚合、
+    评测归因与未来的多域能力账本都以 action 为粒度，而不是内部枚举值。
+    """
     stage: TravelStage
     reason: str
+
+    @property
+    def action(self) -> str:
+        return _STAGE_TO_ACTION[self.stage]
 
 
 def _experts_done(state: dict) -> set[str]:
@@ -134,10 +156,11 @@ def decide(state: dict) -> TravelDecision:
         return TravelDecision(TravelStage.VALIDATE, "执行硬约束校验")
 
     if report.passed:
-        return TravelDecision(
-            TravelStage.REPORT,
-            f"校验通过（提示 {len(report.warnings)} 项）",
-        )
+        pending = len(report.decision_required)
+        reason = (f"校验通过（提示 {len(report.warnings)} 项，"
+                  f"需你决定 {pending} 项）" if pending
+                  else f"校验通过（提示 {len(report.warnings)} 项）")
+        return TravelDecision(TravelStage.REPORT, reason)
 
     # 修复器已明确回报「本轮违反无自动修复手段」——再调一次结果必然相同，
     # 直接收尾交由 reporter 如实披露（顺序在轮数判定之前：这种情况往往是
@@ -201,6 +224,7 @@ def travel_supervisor_node(state: dict) -> Command:
             "stage": decision.stage.value,
             "supervisor_decision": {
                 "stage": decision.stage.value,
+                "action": decision.action,
                 "reason": decision.reason,
                 "step": step_count,
                 "layer": "rule",
@@ -221,4 +245,5 @@ __all__ = [
     "decide",
     "EXPERT_TO_NODE",
     "TRAVEL_SUPERVISOR",
+    "_STAGE_TO_ACTION",
 ]

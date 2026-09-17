@@ -13,6 +13,10 @@ from pydantic import BaseModel, Field
 
 LEVEL_ERROR = "error"
 LEVEL_WARNING = "warning"
+# 第三层级（任务书 §7）：必须由用户裁决的约束 —— 典型是「必去项闭馆」：
+# 自动修复只有「删掉它」（违背用户明确诉求）和「保留冲突」（违背事实）两条路，
+# 该由用户选。它不算 error（不触发修复/不挡交付），也不该与提示性 warning 混列。
+LEVEL_DECISION_REQUIRED = "decision_required"
 
 # ── 时间轴 ──
 CODE_TIME_CLOSED = "TIME_CLOSED"               # 安排的到访时刻落在营业时段之外
@@ -63,8 +67,17 @@ class ValidationReport(BaseModel):
         return [v for v in self.violations if v.level == LEVEL_WARNING]
 
     @property
+    def decision_required(self) -> list[Violation]:
+        """需用户裁决的约束（不进修复队列，交付时单列请用户取舍）。"""
+        return [v for v in self.violations if v.level == LEVEL_DECISION_REQUIRED]
+
+    @property
     def passed(self) -> bool:
-        """无 error 级违反即通过 —— warning 不阻塞交付，但要写进行程单。"""
+        """无 error 级违反即通过 —— warning 不阻塞交付，但要写进行程单。
+
+        decision_required 同样不阻塞交付（保留冲突 + 明示取舍是合法交付），
+        但行程单必须把选项摆到用户面前。
+        """
         return not self.errors
 
     def codes(self) -> list[str]:
@@ -78,7 +91,7 @@ class ValidationReport(BaseModel):
     def summary(self) -> str:
         if not self.violations:
             return "全部硬约束校验通过"
-        return (
-            f"{len(self.errors)} 项需修复、{len(self.warnings)} 项提示："
-            + "、".join(self.codes())
-        )
+        parts = [f"{len(self.errors)} 项需修复、{len(self.warnings)} 项提示"]
+        if self.decision_required:
+            parts.append(f"{len(self.decision_required)} 项需你决定")
+        return "、".join(parts) + "：" + "、".join(self.codes())
