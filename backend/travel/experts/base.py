@@ -51,20 +51,28 @@ def run_expert_safely(
 
     单个专家失败不应让整条旅游链路崩掉：返回 status=failed 的结果，
     由 supervisor 决定是跳过还是终止 —— 决策权在调度器，不在专家。
+
+    Phase 4（任务书 §11）：每个专家调用统一建 span —— 此前专家只有
+    duration_ms 日志，与 validator（每轴独立 span）不一致，专家延迟与
+    失败率在 trace 里不可见。软失败：无活跃 trace 时为 noop span。
     """
     t0 = time.monotonic()
     logger.info("[Travel Expert] start expert=%s", expert_name)
+    span = _start_expert_span(expert_name)
     try:
         result = fn(state)
         duration_ms = int((time.monotonic() - t0) * 1000)
         result.setdefault("expert", expert_name)
         result.setdefault("status", TravelExpertStatus.SUCCESS.value)
         result["duration_ms"] = duration_ms
+        _end_expert_span(span, result["status"], duration_ms)
         logger.info("[Travel Expert] done expert=%s status=%s duration_ms=%d",
                     expert_name, result["status"], duration_ms)
         return result
     except Exception as e:
         duration_ms = int((time.monotonic() - t0) * 1000)
+        _end_expert_span(span, TravelExpertStatus.FAILED.value, duration_ms,
+                         error=str(e))
         logger.exception("[Travel Expert] exception expert=%s", expert_name)
         return TravelExpertResult(
             expert=expert_name,
@@ -74,3 +82,35 @@ def run_expert_safely(
             error=str(e),
             duration_ms=duration_ms,
         )
+
+
+def _start_expert_span(expert_name: str):
+    """开专家 span（软失败：任何埋点异常都不影响专家执行）。"""
+    try:
+        from backend.observability.tracer import trace_collector
+        return trace_collector.start_span(
+            f"travel_expert_{expert_name}", name=f"旅游专家:{expert_name}",
+            type="agent", kind="agent", input={},
+        )
+    except Exception:
+        logger.debug("[Travel Expert] span 开启失败（不影响执行）", exc_info=True)
+        return None
+
+
+def _end_expert_span(span, status: str, duration_ms: int,
+                     error: str = "") -> None:
+    """收口专家 span（软失败；span 为 None 说明开启时已失败，直接跳过）。"""
+    if span is None:
+        return
+    try:
+        from backend.observability.tracer import trace_collector
+        metrics = {"expert_status": status, "duration_ms": duration_ms}
+        if error:
+            metrics["error"] = error
+        trace_collector.end_span(
+            span, output={"status": status}, metrics=metrics,
+            status="error" if status == TravelExpertStatus.FAILED.value
+            else "success",
+        )
+    except Exception:
+        logger.debug("[Travel Expert] span 收口失败", exc_info=True)

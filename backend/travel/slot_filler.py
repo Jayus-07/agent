@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from datetime import date
 
+from backend.config import travel as T
 from backend.shared.logger import logger
 from backend.tools.travel import poi_seed
 from backend.travel.graph_state import load_brief
@@ -414,6 +415,20 @@ def slot_filler_node(state: dict) -> dict:
     message = state.get("user_message", "")
     previous = load_brief(state) if state.get("brief") else None
 
+    # 持久化状态（任务书 §10，Phase 4）：图入口每轮把当前状态写进 state
+    # —— 这是该事实的唯一产生点，下游（supervisor_decision / reporter）
+    # 只消费不重算。延迟 import：graph_builder 装配图时顶层 import 本模块，
+    # 顶部 import 会成环（与 stamp_version 的延迟 import 同理）。
+    from backend.travel.graph_builder import get_persistence_status
+
+    persistence_status = get_persistence_status()
+    # 强持久化策略（任务书 §10）：TRAVEL_REQUIRE_PERSISTENCE 开启且已降级时，
+    # **拒绝复用跨轮产物** —— 多 worker 部署下 MemorySaver 各存一份，第二轮
+    # 请求可能被路由到另一个 worker，跨轮改单会静默失效（用户拿到与上一轮
+    # 无关的新行程还以为改成功了）。宁可每轮按全新规划处理，也要如实告知。
+    require_fresh = (persistence_status == "degraded"
+                     and T.TRAVEL_REQUIRE_PERSISTENCE)
+
     brief = extract_brief(message, previous)
     missing = brief.missing_slots()
     clarification = build_clarification(brief, message)
@@ -464,8 +479,24 @@ def slot_filler_node(state: dict) -> dict:
         "brief_missing": missing,
         "clarifications": [clarification] if clarification else [],
         "brief_fingerprint": fingerprint,
+        "persistence_status": persistence_status,
         "stage": "slot",
     }
+
+    if require_fresh:
+        # 强持久化策略下的降级处置（任务书 §10）：无条件清跨轮产物，
+        # 即使指纹没变 —— 降级后端里留着的上一轮产物不可信（多 worker
+        # 不共享、重启即失）。planning_reset 会清 notes，note 必须在其后写。
+        update.update(planning_reset())
+        notes.insert(
+            0,
+            "持久化已降级（当前为临时存储），本轮按全新规划处理；"
+            "在恢复持久化之前，跨轮修改行程暂不可用",
+        )
+        logger.warning(
+            "[TravelSlotFiller] REQUIRE_PERSISTENCE 开启且持久化降级，"
+            "拒绝复用跨轮产物，按全新规划处理"
+        )
 
     if brief_changed:
         # 需求变了：旧行程作废，连同执行态一起清掉重新规划。

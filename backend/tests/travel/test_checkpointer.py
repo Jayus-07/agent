@@ -22,16 +22,22 @@ from backend.travel.graph_state import new_travel_graph_input
 # 一、checkpointer 决策矩阵
 # ============================================================
 class TestCheckpointerSelection:
+    # Phase 4 起 _build_checkpointer 返回 (checkpointer, status) 元组，
+    # status 三态：healthy（postgres 就绪）/ degraded（MemorySaver 降级）/ disabled
     def test_disabled_returns_none(self, monkeypatch):
         monkeypatch.setattr("backend.config.travel.TRAVEL_CHECKPOINTER_ENABLED", False)
-        assert travel_gb._build_checkpointer() is None
+        saver, status = travel_gb._build_checkpointer()
+        assert saver is None
+        assert status == travel_gb.PERSISTENCE_DISABLED
 
     def test_memory_backend_returns_memory_saver(self, monkeypatch):
         from langgraph.checkpoint.memory import MemorySaver
 
         monkeypatch.setattr("backend.config.travel.TRAVEL_CHECKPOINTER_ENABLED", True)
         monkeypatch.setattr("backend.config.travel.TRAVEL_CHECKPOINTER_BACKEND", "memory")
-        assert isinstance(travel_gb._build_checkpointer(), MemorySaver)
+        saver, status = travel_gb._build_checkpointer()
+        assert isinstance(saver, MemorySaver)
+        assert status == travel_gb.PERSISTENCE_DEGRADED
 
     def test_postgres_unavailable_falls_back_to_memory(self, monkeypatch):
         """连不上 Postgres 时必须降级续跑，而不是让整个域瘫掉。"""
@@ -47,7 +53,9 @@ class TestCheckpointerSelection:
 
         fake.Connection = types.SimpleNamespace(connect=_boom)
         monkeypatch.setitem(sys.modules, "psycopg", fake)
-        assert isinstance(travel_gb._build_checkpointer(), MemorySaver)
+        saver, status = travel_gb._build_checkpointer()
+        assert isinstance(saver, MemorySaver)
+        assert status == travel_gb.PERSISTENCE_DEGRADED
 
     def test_checkpointer_is_not_gated_by_domain_switch(self, monkeypatch):
         """域总开关与持久化开关是两件事：TRAVEL_ENABLED 关掉不代表
@@ -55,7 +63,8 @@ class TestCheckpointerSelection:
         monkeypatch.setattr("backend.config.travel.TRAVEL_ENABLED", False)
         monkeypatch.setattr("backend.config.travel.TRAVEL_CHECKPOINTER_ENABLED", True)
         monkeypatch.setattr("backend.config.travel.TRAVEL_CHECKPOINTER_BACKEND", "memory")
-        assert travel_gb._build_checkpointer() is not None
+        saver, _status = travel_gb._build_checkpointer()
+        assert saver is not None
 
 
 @pytest.fixture

@@ -91,12 +91,19 @@ def _stamp_execution_tags(final_state: dict, result: dict) -> None:
                           if v.get("level") == "error"),
             "warnings": sum(1 for v in validation.get("violations", [])
                             if v.get("level") == "warning"),
+            "decision_required": sum(
+                1 for v in validation.get("violations", [])
+                if v.get("level") == "decision_required"),
             "repair_rounds": final_state.get("repair_rounds", 0),
             "steps": final_state.get("step_count", 0),
         }
         itinerary = final_state.get("itinerary") or {}
         if itinerary:
             trace.metadata["travel_confidence"] = itinerary.get("confidence")
+        # 持久化状态（任务书 §10，Phase 4）：降级时间段在 trace 可见，
+        # 「跨轮改单失效」类用户反馈可直接对齐当时的服务端状态。
+        if final_state.get("persistence_status"):
+            trace.metadata["travel_persistence"] = final_state["persistence_status"]
     except Exception:
         logger.debug("[travel_graph_node] 执行标签写入失败", exc_info=True)
 

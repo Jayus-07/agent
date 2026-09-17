@@ -216,6 +216,9 @@ def travel_supervisor_node(state: dict) -> Command:
         "brief_version": brief.version,
         "plan_version": itinerary.plan_version if itinerary else None,
         "plan_status": itinerary.status if itinerary else None,
+        # 持久化状态（任务书 §10，Phase 4）：降级可见性进每一步决策事实 ——
+        # 「跨轮产物不可信」的时间段可在 trace 里与决策直接对齐。
+        "persistence_status": state.get("persistence_status", ""),
     }
 
     return Command(

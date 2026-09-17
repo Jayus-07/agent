@@ -67,6 +67,34 @@ def is_enabled() -> bool:
 
 
 # =============================================
+# LBS 调用 span（任务书 §11，Phase 4）
+# =============================================
+# 此前腾讯 API 往返没有埋点：provider 延迟与失败率在 trace 里不可见，
+# 「行程慢」无法归因到 LBS。span 只住**真实 API 调用**（缓存命中不打，
+# 否则延迟统计失真）；软失败 —— 无活跃 trace 时为 noop，绝不影响取数。
+def _lbs_span(span_id: str, span_name: str, **inputs):
+    # 形参叫 span_name 而非 name：inputs 里可能带 name=（地点名），别占这个名字
+    try:
+        from backend.observability.tracer import trace_collector
+        return trace_collector.start_span(
+            span_id, name=span_name, type="tool_call", kind="tool",
+            input=dict(inputs),
+        )
+    except Exception:
+        return None
+
+
+def _end_lbs_span(span, *, status: str = "success", **metrics) -> None:
+    if span is None:
+        return
+    try:
+        from backend.observability.tracer import trace_collector
+        trace_collector.end_span(span, metrics=metrics, status=status)
+    except Exception:
+        pass
+
+
+# =============================================
 # 1. 通勤时长：真实路线
 # =============================================
 # 路段缓存（2026-09-15 性能优化）：同一段路线在一次会话/多天行程里可能被
@@ -146,8 +174,10 @@ def live_leg(from_lat: float, from_lng: float, to_lat: float, to_lng: float) -> 
     mode = routing.choose_mode(straight * T.TRAVEL_ROUTE_DETOUR_FACTOR)
     tx_mode = "walking" if mode == "walk" else "driving"
 
+    span = _lbs_span("travel_lbs_direction", "LBS路线规划", mode=tx_mode)
     route = api.direction(tx_mode, from_lat, from_lng, to_lat, to_lng)
     if route is None or not route.get("distance_km"):
+        _end_lbs_span(span, status="error", mode=tx_mode, reason="no_route")
         return None
 
     distance_km = float(route["distance_km"])
@@ -170,6 +200,8 @@ def live_leg(from_lat: float, from_lng: float, to_lat: float, to_lng: float) -> 
         "cost_cny": round(cost, 2),
         "source": SOURCE_LBS,
     }
+    _end_lbs_span(span, status="success", mode=tx_mode,
+                  distance_km=round(distance_km, 2), minutes=minutes)
     _LEG_CACHE[ck] = (_t.monotonic(), result)
     return result
 
@@ -224,10 +256,14 @@ def resolve_place(name: str, city: str, *, required: bool = False) -> Poi | None
     if not is_enabled() or not (name or "").strip():
         return None
 
+    span = _lbs_span("travel_lbs_place_search", "LBS地点检索",
+                     name=name.strip(), city=city)
     hits = api.place_search(name.strip(), region=city or None, page_size=5)
     if not hits:
+        _end_lbs_span(span, status="error", reason="no_hits", name=name)
         logger.info("[TravelLiveMap] 腾讯未检索到地点: %s（城市=%s）", name, city)
         return None
+    _end_lbs_span(span, status="success", hits=len(hits))
 
     center = _city_center(city) if city else None
     for hit in hits:

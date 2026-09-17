@@ -44,6 +44,12 @@ TRAVEL_CHECKPOINTER_BACKEND = os.getenv("TRAVEL_CHECKPOINTER_BACKEND", "postgres
 # 清理守护又是全进程单例（谁先启动谁的 TTL 生效），因此该值需与
 # CS_CHECKPOINT_TTL_DAYS 保持一致，不要各自调成不同数字。
 TRAVEL_CHECKPOINT_TTL_DAYS = int(os.getenv("TRAVEL_CHECKPOINT_TTL_DAYS", "7"))
+# 强持久化策略（任务书 §10）：开启后，checkpointer 降级（postgres 不可用退到
+# MemorySaver）时**拒绝复用跨轮产物**——每轮按全新规划处理并如实告知。
+# 背景：多 worker 部署时 MemorySaver 各存一份，第二轮请求可能被路由到另一个
+# worker，跨轮改单会静默失效（用户拿到与上一轮无关的新行程还以为改成功了）。
+# 生产环境若要求「要么真持久、要么明说」，就打开这个开关。
+TRAVEL_REQUIRE_PERSISTENCE = os.getenv("TRAVEL_REQUIRE_PERSISTENCE", "false").strip().lower() in ("1", "true", "yes")
 
 # =============================================
 # 槽位抽取

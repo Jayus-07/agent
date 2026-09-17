@@ -56,11 +56,50 @@ _FALLBACK_HINTS: dict[str, str] = {
 def travel_reporter_node(state: dict) -> dict:
     """行程单节点。"""
     answer = _assemble(state)
+    _stamp_plan_run(state)
     logger.info("[TravelReporter] final_answer length=%d", len(answer))
     return {
         "final_answer": answer,
         "travel_context": build_travel_context(state),
     }
+
+
+def _stamp_plan_run(state: dict) -> None:
+    """运行级汇总 span（任务书 §11 TravelPlanRun，Phase 4）。
+
+    以一条 span 承载本次规划的运行事实（目的地/版本链/状态/校验计数/
+    修复轮数/置信度/持久化状态），评测归因与质量面板据此聚合 ——
+    复用现有 tracer 不新建存储体系，也不把大对象塞进 LangGraph State。
+    无活跃 trace 时 start_span 返回 noop（软失败），不影响出单。
+    """
+    try:
+        from backend.observability.tracer import trace_collector
+
+        itinerary = load_itinerary(state)
+        brief = load_brief(state)
+        report = load_validation(state)
+        metrics = {
+            "destination": brief.destination,
+            "days": len(itinerary.days) if itinerary else 0,
+            "brief_version": brief.version,
+            "plan_version": itinerary.plan_version if itinerary else None,
+            "plan_status": itinerary.status if itinerary else "",
+            "repair_rounds": state.get("repair_rounds", 0),
+            "errors": len(report.errors) if report else 0,
+            "warnings": len(report.warnings) if report else 0,
+            "decision_required": len(report.decision_required) if report else 0,
+            "confidence": itinerary.confidence if itinerary else None,
+            "persistence_status": state.get("persistence_status", ""),
+        }
+        span = trace_collector.start_span(
+            "travel_plan_run", name="旅游规划运行汇总",
+            type="workflow", kind="workflow",
+            input={"destination": brief.destination,
+                   "missing": state.get("brief_missing", [])},
+        )
+        trace_collector.end_span(span, metrics=metrics, status="success")
+    except Exception:
+        logger.debug("[TravelReporter] 运行汇总 span 写入失败", exc_info=True)
 
 
 def _assemble(state: dict) -> str:
@@ -224,4 +263,12 @@ def _render_itinerary(state: dict, itinerary) -> str:
         f"修复轮数 {itinerary.repair_rounds}，硬约束上限 "
         f"{T.TRAVEL_MAX_REPAIR_ROUNDS} 轮。*"
     )
+
+    # 持久化降级披露（任务书 §10，Phase 4）：跨轮改单的可信度受损必须让
+    # 用户知道，而不是只留在服务端日志里。disabled 属配置选择，不作事故披露。
+    if state.get("persistence_status", "") == "degraded":
+        lines.append(
+            "\n*注：多轮对话记忆当前为临时存储（持久化降级）——服务重启后"
+            "「跨轮修改行程」将不可用。*"
+        )
     return "\n".join(lines)

@@ -93,6 +93,10 @@ class TravelGraphState(TypedDict, total=False):
     expert_history: list[dict]
     last_expert_result: dict
     supervisor_decision: dict
+    # 持久化状态（任务书 §10，Phase 4）：healthy / degraded / disabled。
+    # slot_filler（图入口）从 graph_builder 单例读取后写进 state ——
+    # supervisor_decision 携带进 trace，reporter 据此向用户披露降级事实。
+    persistence_status: str
 
     # === 输出 ===
     final_answer: str
@@ -172,6 +176,7 @@ def build_travel_context(state: dict) -> dict:
         "validation_passed": validation.passed if validation else None,
         "day_count": len(itinerary.days) if itinerary else 0,
         "total_cost_cny": itinerary.cost.total if itinerary else 0.0,
+        "persistence_status": state.get("persistence_status", ""),
         "notes": state.get("notes", []),
     }
 

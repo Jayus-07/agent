@@ -88,30 +88,58 @@ def build_travel_graph(checkpointer: Any = None) -> Any:
 _travel_graph: Any = None
 _travel_graph_lock = threading.Lock()
 
+# ============================================================
+# 持久化状态可见性（任务书 §10）
+# ============================================================
+# checkpointer 的三级降级此前只有 logger.warning —— 状态、trace、行程单都
+# 不知道持久化已降级，多 worker 部署时「跨轮改单静默失效」无法归因。
+# 工厂现在返回 (checkpointer, status)，status 在图构建时落模块级单例，
+# 由 slot_filler（图入口）每轮写入 state，沿 supervisor_decision / reporter
+# 传播到 trace 与行程单 —— 降级从「日志里一行」变成「全链路可见的事实」。
+PERSISTENCE_HEALTHY = "healthy"      # postgres 等持久后端就绪
+PERSISTENCE_DEGRADED = "degraded"    # 降级到 MemorySaver（进程内存，重启即失）
+PERSISTENCE_DISABLED = "disabled"    # 未启用 checkpointer（无跨轮能力）
+
+_persistence_status: str = PERSISTENCE_DISABLED
+
+
+def get_persistence_status() -> str:
+    """当前域图单例的持久化状态（healthy / degraded / disabled）。
+
+    在 get_travel_graph() 首次构建时确定。测试可直接改私有变量或走
+    _build_checkpointer() 重算。
+    """
+    return _persistence_status
+
 
 def get_travel_graph() -> Any:
     """获取旅游域图单例（double-checked locking）。"""
-    global _travel_graph
+    global _travel_graph, _persistence_status
     if _travel_graph is None:
         with _travel_graph_lock:
             if _travel_graph is None:
-                _travel_graph = build_travel_graph(checkpointer=_build_checkpointer())
+                checkpointer, status = _build_checkpointer()
+                _persistence_status = status
+                _travel_graph = build_travel_graph(checkpointer=checkpointer)
     return _travel_graph
 
 
-def _build_checkpointer() -> Any:
-    """按 TRAVEL_CHECKPOINTER_ENABLED 构建 checkpointer。
+def _build_checkpointer() -> tuple[Any, str]:
+    """按 TRAVEL_CHECKPOINTER_ENABLED 构建 checkpointer，**返回 (实例, 状态)**。
 
     与 CS 域图 / 主图同策略：默认关；**Postgres 优先**（跨进程、重启保留、
     多 worker 共享），MemorySaver 仅作初始化失败与本地调试的降级 —— 内存实现
     在进程内只增不减，且多 worker 各存一份，不能当生产方案。
 
+    状态语义（任务书 §10）：
+      healthy   持久后端就绪，跨轮改单可信；
+      degraded  postgres 不可用退到 MemorySaver —— 同进程内跨轮仍可用，
+                但重启即失、多 worker 不共享，必须全链路披露；
+      disabled  未启用 checkpointer，无跨轮能力（属配置选择，非事故）。
+
     开启的真实用途是**跨轮改单**：状态里留着上一轮的 slot/brief/itinerary，
     第二轮说「第二天想轻松点」才能在既有骨架上局部重排；否则每轮都从头规划，
     用户会拿到一份与上一轮无关的新行程。
-
-    注：此前这里只要 TRAVEL_ENABLED 就上 MemorySaver（无独立开关、无持久化
-    后端、无 TTL 清理），属未收尾的占位实现，本次按 CS 口径补齐。
     """
     from backend.config.travel import (
         TRAVEL_CHECKPOINT_TTL_DAYS,
@@ -120,7 +148,7 @@ def _build_checkpointer() -> Any:
     )
 
     if not TRAVEL_CHECKPOINTER_ENABLED:
-        return None
+        return None, PERSISTENCE_DISABLED
 
     if TRAVEL_CHECKPOINTER_BACKEND == "postgres":
         try:
@@ -146,10 +174,12 @@ def _build_checkpointer() -> Any:
             except Exception:
                 logger.debug("[TravelGraph] cleanup daemon 启动失败（非致命）",
                              exc_info=True)
-            return checkpointer
+            return checkpointer, PERSISTENCE_HEALTHY
         except Exception:
             # 说清后果：不是「没启用」，而是「启用了但不持久」——
             # 状态只在进程内存里，重启即失、多 worker 各存一份。
+            # 降级状态由 get_persistence_status() 上浮（任务书 §10），
+            # 不再只是日志里的一行。
             logger.warning(
                 "[TravelGraph] 配置的后端 postgres 不可用（多为缺 psycopg v3 / "
                 "langgraph-checkpoint-postgres），已降级为 MemorySaver："
@@ -157,8 +187,8 @@ def _build_checkpointer() -> Any:
 
     try:
         from langgraph.checkpoint.memory import MemorySaver
-        logger.info("[TravelGraph] checkpointer enabled (MemorySaver)")
-        return MemorySaver()
+        logger.info("[TravelGraph] checkpointer enabled (MemorySaver, degraded)")
+        return MemorySaver(), PERSISTENCE_DEGRADED
     except Exception:
         logger.warning("[TravelGraph] checkpointer init failed, running without")
-        return None
+        return None, PERSISTENCE_DEGRADED
