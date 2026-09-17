@@ -137,27 +137,31 @@ class TestDomainHintLock:
         cs_router_mod._cs_cache.get_json = original_get
         cs_router_mod._cs_cache.set_json = original_set
 
-    def test_domain_hint_forces_cs_past_travel_and_failed_detection(
+    def test_domain_hint_forces_cs_past_failed_detection(
         self, fake_detector, travel_on, cs_on, monkeypatch,
     ):
-        """非客服问法 + 域检测漏判 + 旅游 prefilter 可路由 → 仍强制进 CS。"""
+        """域检测漏判的客服问法（无旅游/选品信号）→ 仍强制进 CS。
+
+        （redirect_main 阶段一落地后，域锁仅对他域强信号问法转出，
+        语义类客服漏判如"东西坏了咋办"仍锁进 CS 兜底。）
+        """
         import backend.config.customer_service as cc
         monkeypatch.setattr(cc, "CS_ROLLOUT_PERCENT", 0)
         monkeypatch.setattr(cc, "CS_ROLLOUT_WHITELIST", set())
 
         out = rn.router_node({
-            "question": "帮我规划杭州2天旅游行程",
+            "question": "东西坏了咋办",
             "session_id": "s-lock",
             "domain_hint": "customer_service",
         })
         assert out.get("route_mode") == "customer_service"
 
-    def test_domain_hint_skips_travel_even_without_rule_hit(
+    def test_domain_hint_runs_detection_as_coarse_hint(
         self, fake_detector, travel_on, cs_on,
     ):
-        """域锁下旅游 prefilter 不参与（灰度默认配置，不额外 patch）。"""
+        """锁域普通客服问题：不转出，域检测仍执行作 coarse hint。"""
         out = rn.router_node({
-            "question": "帮我规划杭州2天旅游行程",
+            "question": "开发票需要什么信息",
             "session_id": "s-lock2",
             "domain_hint": "customer_service",
         })
@@ -190,3 +194,66 @@ class TestDomainHintLock:
             "question": "帮我规划杭州2天旅游行程", "session_id": "s-legacy",
         })
         assert out.get("route_mode") == "travel"
+
+
+class TestCsRedirectMain:
+    """redirect_main 阶段一（2026-09-18）：域锁下"明显非客服"的确定性转出。
+
+    无客服规则信号 + 旅游/选品强信号 → 不进 CS，放行 prefilter 自然路由；
+    混合信号（客服规则命中）仍守 CS 优先。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_cs_router_cache(self):
+        from backend.customer_service.router import cs_router as cs_router_mod
+        original_get = cs_router_mod._cs_cache.get_json
+        original_set = cs_router_mod._cs_cache.set_json
+        cs_router_mod._cs_cache.get_json = lambda key: None
+        cs_router_mod._cs_cache.set_json = lambda key, value: None
+        yield
+        cs_router_mod._cs_cache.get_json = original_get
+        cs_router_mod._cs_cache.set_json = original_set
+
+    def test_travel_query_redirects_out_of_locked_cs(
+        self, fake_detector, travel_on, cs_on,
+    ):
+        """抽屉内问旅游（无客服词）：转出域锁，旅游 prefilter 接管。"""
+        out = rn.router_node({
+            "question": "下周去大阪旅游，帮我做一份攻略",
+            "session_id": "s-redirect-travel",
+            "domain_hint": "customer_service",
+        })
+        assert out.get("route_mode") == "travel"
+
+    def test_mixed_cs_signal_stays_locked(
+        self, fake_detector, travel_on, cs_on,
+    ):
+        """混合信号（客服规则命中 + 旅游词）仍守 CS 优先，不转出。"""
+        fake_detector._rule_channel.return_value = (["AFTER_SALES"], 0.33)
+        out = rn.router_node({
+            "question": "订单里的行程单怎么退款",
+            "session_id": "s-redirect-mixed",
+            "domain_hint": "customer_service",
+        })
+        assert out.get("route_mode") == "customer_service"
+
+    def test_funnel_query_redirects_out_of_locked_cs(
+        self, fake_detector, cs_on, monkeypatch,
+    ):
+        import backend.config.selection_funnel as sf
+        monkeypatch.setattr(sf, "SELECTION_FUNNEL_ENABLED", True)
+        out = rn.router_node({
+            "question": "给宠物零食做一次智能选品",
+            "session_id": "s-redirect-funnel",
+            "domain_hint": "customer_service",
+        })
+        assert out.get("route_mode") == "selection_funnel"
+
+    def test_plain_cs_query_stays_locked(self, fake_detector, cs_on):
+        """无他域信号的客服问题维持锁域（不被误转出）。"""
+        out = rn.router_node({
+            "question": "退款怎么处理",
+            "session_id": "s-redirect-cs",
+            "domain_hint": "customer_service",
+        })
+        assert out.get("route_mode") == "customer_service"

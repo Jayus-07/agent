@@ -66,18 +66,48 @@ def router_node(state: dict) -> dict:
             logger.warning(f"[RouterNode] CS 预过滤失败，回退到主 Router: {e}")
             return None
 
-    if cs_forced:
+    # ── redirect_main 阶段一（2026-09-18，确定性正则）────────────────
+    # 域锁下"明显非客服"的问法转出主路由：无任何客服规则信号，且命中
+    # 旅游/选品强信号 → 不进 CS，放行后续 prefilter 自然路由，抽屉内也能
+    # 拿到旅游/选品的正常回答（设计稿第 4 节 next_action=redirect_main 的
+    # 确定性子集）。混合信号（如"订单里的行程单怎么退款"含客服规则）仍守
+    # CS 优先——与主路由既有判定一致，避免旅游关键词抢走客服流量。
+    # 阶段二（LLM 语义层 non_cs_confidence≥0.75）待 CS 分析节点接入后启用。
+    cs_redirect = None
+    if cs_forced and not cs_rule_hits:
+        try:
+            from backend.orchestration.graph.travel_prefilter import is_travel_request
+            from backend.orchestration.graph.selection_funnel_prefilter import (
+                is_selection_funnel_request,
+            )
+            if is_travel_request(query):
+                cs_redirect = "travel_regex_hit"
+            elif is_selection_funnel_request(query):
+                cs_redirect = "selection_funnel_regex_hit"
+        except Exception as e:
+            logger.debug(f"[RouterNode] redirect_main 正则判定失败，维持锁域: {e}")
+        if cs_redirect:
+            logger.info(f"[RouterNode] CS 域锁转出(redirect_main): {cs_redirect} → 主路由")
+            try:
+                from backend.observability.tracer import trace_collector
+                t = trace_collector.current()
+                if t is not None:
+                    t.tags["cs_redirect_main"] = cs_redirect
+            except Exception:
+                pass
+
+    if cs_forced and not cs_redirect:
         cs_update = _try_cs_prefilter(forced=True)
         if cs_update is not None:
             return {**state, **cs_update}
-    elif cs_rule_hits:
+    elif not cs_forced and cs_rule_hits:
         cs_update = _try_cs_prefilter()
         if cs_update is not None:
             return {**state, **cs_update}
 
     # ── 旅游预过滤：纯正则，先于 CS 向量检测执行（省一次 embedding）──
-    # 域锁模式下跳过：抽屉内不路由到其他域图（redirect 由 CS 域内决策，P2）。
-    if not cs_forced:
+    # 域锁且未转出时跳过；转出（redirect_main）或全局入口正常执行。
+    if not cs_forced or cs_redirect:
         try:
             from backend.orchestration.graph.travel_prefilter import try_travel_prefilter
             travel_update = try_travel_prefilter(query, state)
