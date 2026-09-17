@@ -44,6 +44,12 @@ def build_report(inputs: dict[str, Any], outputs: dict[str, Any],
     evidence = outputs.get("market_evidence_assess")
     gate = outputs.get("selection_decision_gate")
     lines += ["", "## 一、市场证据评估与门控（Q1：这个市场要不要做）", ""]
+    cd = outputs.get("competitor_data") or {}
+    if cd.get("source") == "funnel_topn":
+        lines.append(f"- 候选来源：选品漏斗 Top-{cd.get('count', '-')}（承接漏斗推荐单；"
+                     f"{cd.get('note', '')}）")
+    elif cd.get("source"):
+        lines.append(f"- 候选来源：竞品监控池（watchlist）")
     if evidence and not _skipped(evidence):
         ev_label = {"sufficient": "充分", "partial": "部分充分",
                     "insufficient": "不足"}.get(evidence.get("evidence_verdict"),

@@ -184,7 +184,12 @@ def _test_plan_lines(candidates: list[dict], moq: float | None = None) -> list[s
 
 def _decision_draft_lines(candidates: list[dict],
                           min_margin: float | None = None) -> list[str]:
-    """决策草案（规则初判，供人工拍板）；依据全部来自漏斗已算数字。"""
+    """决策草案（规则初判，供人工拍板）；依据全部来自漏斗已算数字。
+
+    分层口径（P2：分层并入判据，不新增平行结构）——档位即本函数的
+    做 / 条件做 / 放弃，依据 = 贡献利润率缓冲 + 成本口径 + 痛点 + 数据质量
+    （完整度 <60% 或数据已过期 → 降级条件做，补数据后复测）。
+    """
     if not candidates:
         return []
     if min_margin is None:
@@ -192,15 +197,19 @@ def _decision_draft_lines(candidates: list[dict],
         min_margin = SELECTION_FUNNEL_MIN_MARGIN
     lines = [f"- 口径：规则初判草案（贡献利润率线 {min_margin:.0%}），供人工拍板，"
              "依据全部来自漏斗已算数字"]
+    tiers = {"做": 0, "条件做": 0, "放弃": 0}
     for c in candidates[:3]:
         econ = c.get("economics") or {}
         margin = econ.get("margin")
         title = (c.get("title") or c.get("url", ""))[:24]
+        dq = c.get("data_quality") or {}
         if margin is None:
+            tiers["条件做"] += 1
             lines.append(f"- 「{title}」→ **条件做**（贡献利润率缺失：补售价/成本后复测）")
             continue
         buffer_pp = (margin - min_margin) * 100
         if margin < min_margin:
+            tiers["放弃"] += 1
             lines.append(f"- 「{title}」→ **放弃**（贡献利润率 {margin:.1%} 已低于 "
                          f"{min_margin:.0%} 线）")
             continue
@@ -219,9 +228,23 @@ def _decision_draft_lines(candidates: list[dict],
             if c.get("pain_points"):
                 verdict = "条件做"
                 conditions.append("存在差评实证痛点，对策落地后再上量")
+            if dq.get("freshness") == "stale":
+                verdict = "条件做"
+                days = dq.get("age_days")
+                day_txt = f"（{days:g} 天）" if isinstance(days, (int, float)) else ""
+                conditions.append(f"数据已过期{day_txt}，重新抓取/导入后复测")
+            elif (dq.get("completeness") is not None
+                  and dq["completeness"] < 0.6):
+                verdict = "条件做"
+                conditions.append(f"数据完整度 {dq['completeness']:.0%} 偏低，"
+                                  "补齐关键字段后复测")
+        tiers[verdict] += 1
         cond = f"；条件：{'；'.join(conditions)}" if conditions else ""
         lines.append(f"- 「{title}」→ **{verdict}**（贡献利润率 {margin:.1%}，"
                      f"缓冲 {buffer_pp:+.1f}pp{cond}）")
+    lines.append(f"- 分层汇总：做 {tiers['做']} 条 / 条件做 {tiers['条件做']} 条 / "
+                 f"放弃 {tiers['放弃']} 条（依据：贡献利润率缓冲 / 成本口径 / "
+                 "痛点 / 数据质量）")
     return lines
 
 

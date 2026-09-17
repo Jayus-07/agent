@@ -222,3 +222,100 @@ def test_evidence_lines_report_freshness():
     lines3 = _evidence_lines([fresh_c])
     fr3 = [ln for ln in lines3 if ln.startswith("- 数据新鲜度")]
     assert len(fr3) == 1 and "天内" in fr3[0]
+
+
+def _draft_cand(url: str, margin: float | None, dq: dict) -> dict:
+    return {"url": url, "title": f"品{url}", "price": 100.0,
+            "economics": {"margin": margin, "unit_cost_estimated": False},
+            "pain_points": [], "data_quality": dq}
+
+
+def test_decision_draft_tiers_with_data_quality():
+    """P2 分层并入决策草案：stale / 低完整度 → 降级条件做；汇总行三档计数。"""
+    from backend.selection_funnel.reporter import _decision_draft_lines
+    cands = [
+        # buffer 12pp、成本实际、无痛点、数据好 → 做
+        _draft_cand("u1", 0.32, {"completeness": 1.0, "missing": [],
+                                 "freshness": "fresh", "age_days": 1.0}),
+        # buffer 12pp 但数据过期 → 条件做（数据已过期）
+        _draft_cand("u2", 0.32, {"completeness": 1.0, "missing": [],
+                                 "freshness": "stale", "age_days": 60.0}),
+        # buffer 12pp 但完整度 50% → 条件做（数据完整度）
+        _draft_cand("u3", 0.32, {"completeness": 0.5, "missing": ["sales"],
+                                 "freshness": "fresh", "age_days": 1.0}),
+    ]
+    lines = _decision_draft_lines(cands, min_margin=0.20)
+    assert "数据已过期（60 天）" in " ".join(lines)
+    assert "数据完整度 50% 偏低" in " ".join(lines)
+    summary = lines[-1]
+    assert summary.startswith("- 分层汇总") and "做 1 条" in summary \
+        and "条件做 2 条" in summary and "放弃 0 条" in summary
+    # age_days 缺失的 stale 不炸（防御口径）
+    lines2 = _decision_draft_lines(
+        [_draft_cand("u9", 0.32, {"completeness": 1.0, "missing": [],
+                                  "freshness": "stale"})], min_margin=0.20)
+    assert "数据已过期，重新抓取" in " ".join(lines2)
+
+
+def test_decision_draft_tier_counts_abandon():
+    """放弃分支也计入分层汇总（利润率低于线）。"""
+    from backend.selection_funnel.reporter import _decision_draft_lines
+    lines = _decision_draft_lines(
+        [_draft_cand("u1", 0.10, {"completeness": 1.0, "missing": [],
+                                  "freshness": "fresh"})], min_margin=0.20)
+    assert "放弃 1 条" in lines[-1]
+    assert any("**放弃**" in ln for ln in lines)
+
+
+def test_candidates_from_funnel_normalization():
+    """漏斗 Top-N → 决策候选：字段归一 / 缺 title 用 url / 脏行剔除 / 空回落。"""
+    from backend.orchestration.workflows.selection_decision import candidates_from_funnel
+    top = [
+        {"rank": 1, "title": "冻干鸡肉", "url": "u-a", "platform": "淘宝",
+         "price": 129.0, "rating": 4.8, "review_count": 12000,
+         "highlights": "冻干", "score_total": 88.0, "margin": 0.276},
+        {"rank": 2, "url": "u-b"},                      # 无 title → 用 url 兜底
+        {"rank": 3, "title": "", "url": ""},            # 双缺 → 剔除
+        "not-a-dict",                                    # 非法行 → 剔除
+    ]
+    cands = candidates_from_funnel({"funnel_candidates": top})
+    assert len(cands) == 2
+    assert cands[0]["title"] == "冻干鸡肉" and cands[0]["review_count"] == 12000
+    assert "score_total" not in cands[0]   # 只取决策所需字段，不带评分/利润
+    assert cands[1]["title"] == "u-b"
+    assert candidates_from_funnel({}) == []
+    assert candidates_from_funnel({"funnel_candidates": []}) == []
+
+
+def test_build_workflow_inputs_injects_funnel_top():
+    """主图执行器输入组装：selection_decision 注入漏斗 Top-N，其他 workflow 不注入。"""
+    from backend.orchestration.graph.direct_executor import _build_workflow_inputs
+    state = {"question": "对Top1跑选品决策", "session_id": "s1",
+             "funnel_context": {"top": [{"title": "a", "url": "u-a"}]}}
+    inputs = _build_workflow_inputs("selection_decision", state)
+    assert inputs["funnel_candidates"] == [{"title": "a", "url": "u-a"}]
+    assert inputs["session_id"] == "s1"
+    # 其他 workflow 契约不变
+    assert "funnel_candidates" not in _build_workflow_inputs("daily_report", state)
+    # 无漏斗上下文 → 不注入
+    assert "funnel_candidates" not in _build_workflow_inputs(
+        "selection_decision", {"question": "q", "session_id": "s2"})
+    # 漏斗空跑（top 空）→ 不注入
+    assert "funnel_candidates" not in _build_workflow_inputs(
+        "selection_decision", {"question": "q", "session_id": "s3",
+                               "funnel_context": {"top": []}})
+
+
+def test_decision_report_discloses_funnel_source():
+    """决策报告披露候选来源：funnel_topn / watchlist 两分支。"""
+    from backend.selection_decision.report import build_report
+    base_out = {"competitor_data": {"candidates": [], "count": 2,
+                                    "source": "funnel_topn",
+                                    "note": "承接漏斗推荐单"}}
+    md = build_report({"category": "宠物零食"}, base_out, verdict="no_go",
+                      failed_gates=["market"])
+    assert "候选来源：选品漏斗 Top-2" in md and "承接漏斗推荐单" in md
+    md2 = build_report({"category": "宠物零食"},
+                       {"competitor_data": {"source": "watchlist"}},
+                       verdict="no_go", failed_gates=["market"])
+    assert "候选来源：竞品监控池" in md2

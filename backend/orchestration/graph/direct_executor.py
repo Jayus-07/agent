@@ -301,6 +301,25 @@ def _coerce_final_answer(step: dict) -> str:
     return str(out)
 
 
+def _build_workflow_inputs(wf_name: str, state: dict) -> dict:
+    """workflow 输入组装（纯函数，P2 选项 A：漏斗 Top-N → selection_decision）。
+
+    同会话先跑过漏斗时，主图状态 funnel_context.top 还在——把它作为
+    funnel_candidates 注入 selection_decision 输入，决策工作流优先吃
+    漏斗推荐单（candidates_from_funnel 为空时自动回落 watchlist）。
+    其他 workflow 维持原 {question, session_id} 契约不变。
+    """
+    inputs = {
+        "question": state.get("question", ""),
+        "session_id": state.get("session_id", ""),
+    }
+    if wf_name == "selection_decision":
+        top = (state.get("funnel_context") or {}).get("top") or []
+        if top:
+            inputs["funnel_candidates"] = top
+    return inputs
+
+
 def workflow_executor_node(state: dict) -> dict:
     """workflow mode: 调已注册的 workflow（daily_report / inventory_alert）。
 
@@ -326,10 +345,8 @@ def workflow_executor_node(state: dict) -> dict:
     try:
         scheduler = get_workflow_scheduler()
         # run_now 是 async
-        ctx = asyncio.run(scheduler.run_now(wf_name, inputs={
-            "question": state.get("question", ""),
-            "session_id": state.get("session_id", ""),
-        }))
+        ctx = asyncio.run(scheduler.run_now(
+            wf_name, inputs=_build_workflow_inputs(wf_name, state)))
 
         # 构造 final_answer：汇总所有 step outputs
         answer_parts = [f"## 工作流 {wf_name} 执行结果\n"]

@@ -27,6 +27,11 @@ def build_funnel_result(final_state: dict) -> dict[str, Any]:
             "url": c.get("url", ""),
             "platform": c.get("platform") or "",
             "price": c.get("price"),
+            # rating/review_count/highlights：selection_decision 衔接（选项 A）所需
+            # ——证据指标用评价数、痛点材料用卖点；仍是 Top-N 轻量摘要不携带整池
+            "rating": c.get("rating"),
+            "review_count": c.get("review_count"),
+            "highlights": c.get("highlights") or "",
             "score_total": (c.get("score") or {}).get("total"),
             "margin": (c.get("economics") or {}).get("margin"),
             "gross_margin": (c.get("economics") or {}).get("gross_margin"),

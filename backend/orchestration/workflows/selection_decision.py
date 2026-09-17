@@ -35,6 +35,30 @@ from backend.shared.logger import logger
 MIN_CANDIDATES = 3       # 证据/门控：候选竞品数下限
 MIN_TOTAL_REVIEWS = 100  # 证据/门控：评价总量下限
 
+# 候选字段 → 决策工作流候选格式（漏斗 Top-N 衔接与 watchlist 共用）
+_CANDIDATE_FIELDS = ("url", "title", "platform", "price", "rating",
+                     "review_count", "highlights")
+
+
+def candidates_from_funnel(inputs: dict[str, Any]) -> list[dict[str, Any]]:
+    """漏斗 Top-N → 决策候选（纯函数；P2 选项 A：漏斗产候选、决策做单品裁决）。
+
+    输入为 funnel_context.top（漏斗域图轻量摘要，含 rating/review_count/highlights）。
+    规矩：只归一化不补造——缺字段保留 None，证据评估如实降级（partial/insufficient）；
+    空/缺输入返回 []，调用方回落 watchlist，不改变原入口行为。
+    """
+    raw = (inputs or {}).get("funnel_candidates") or []
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        if not (item.get("title") or item.get("url")):
+            continue
+        cand = {k: item.get(k) for k in _CANDIDATE_FIELDS}
+        cand["title"] = cand["title"] or cand["url"]
+        out.append(cand)
+    return out
+
 # ── run_if 谓词（Decision 分支，spec §4.3）──────────────
 
 
@@ -120,6 +144,14 @@ class SelectionDecision:
     # ── Layer 0 感知层 ──────────────────────────
     @step(name="竞品数据采集", timeout_sec=120)
     async def competitor_data(self, ctx):
+        # P2 选项 A：漏斗 Top-N 优先（漏斗产候选、决策做单品裁决）；
+        # 无漏斗输入或为空 → 回落 watchlist，原入口行为不变。
+        funnel_cands = candidates_from_funnel(ctx.inputs)
+        if funnel_cands:
+            return {"candidates": funnel_cands, "count": len(funnel_cands),
+                    "source": "funnel_topn",
+                    "note": f"候选来自选品漏斗 Top-{len(funnel_cands)}（承接漏斗推荐单）；"
+                            "缺字段如实降级进证据评估，不补造"}
         store = get_store()
         candidates = []
         for item in store.list_watch(enabled_only=True):
@@ -136,7 +168,8 @@ class SelectionDecision:
             # 输入性错误 → 默认 on_error="abort" fail-fast（不产出 No-Go 报告，
             # 用户应先修复 watchlist；Task 7 API 层会预校验）
             raise ValueError("watchlist 为空或无快照，请先在竞品监控添加商品 URL")
-        return {"candidates": candidates, "count": len(candidates)}
+        return {"candidates": candidates, "count": len(candidates),
+                "source": "watchlist"}
 
     # ── Layer 1 分析层（并行）──────────────────
     @step(depends_on=["competitor_data"], name="市场证据评估", timeout_sec=60)

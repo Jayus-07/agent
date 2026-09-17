@@ -164,6 +164,7 @@ def test_golden_pet_snacks_full_funnel(funnel_graph, patch_stores):
     assert "估算值：2 条成本按默认比例估计" in answer
     assert "数据完整度" in answer
     assert "数据新鲜度" in answer   # P1 余量：新鲜度披露（阈值内 fresh / 过期 stale 都有一句话）
+    assert "分层汇总" in answer     # P2：决策草案分层（做/条件做/放弃 三档计数）
     assert final["candidates"][0]["data_quality"]["completeness"] >= 0.5
     for stage in ("brief", "pool", "screen", "verify", "econ", "rank"):
         assert "elapsed_ms" in _stage(final["stage_logs"], stage)
@@ -248,6 +249,28 @@ def test_golden_stale_freshness_disclosed(funnel_graph, patch_stores):
     assert dq["freshness"] == "stale" and dq["age_days"] > 30
     answer = final["final_answer"]
     assert "1 条已过期" in answer and "重新抓取" in answer
+
+
+def test_golden_funnel_topn_bridge_contract():
+    """P2 选项 A：build_funnel_result.top 带齐决策工作流衔接字段
+    （rating/review_count/highlights —— 证据指标与痛点材料所需）。"""
+    from backend.selection_funnel.models.funnel_result import build_funnel_result
+    result = build_funnel_result({
+        "candidates": [{
+            "rank": 1, "title": "冻干鸡肉", "url": "u-a", "platform": "淘宝",
+            "price": 129.0, "rating": 4.8, "review_count": 12000,
+            "highlights": "冻干,大容量",
+            "score": {"total": 88.0}, "economics": {"margin": 0.276},
+            "data_quality": {"completeness": 0.83, "missing": ["sales"],
+                             "freshness": "fresh", "age_days": 16.0},
+        }],
+        "stage_logs": [], "brief": {"category": "宠物零食"}, "status": "ok",
+    })
+    top = result["funnel_context"]["top"][0]
+    for key in ("rating", "review_count", "highlights",
+                "completeness", "freshness"):
+        assert key in top
+    assert top["review_count"] == 12000 and top["highlights"] == "冻干,大容量"
 
 
 def test_golden_determinism(funnel_graph, patch_stores):
