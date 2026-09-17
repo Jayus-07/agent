@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { Fragment, useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { ShoppingBag, RefreshCw } from "lucide-react";
 import TraceBreadcrumb from "@/components/observability/trace/TraceBreadcrumb";
@@ -8,18 +8,25 @@ import { listFunnelTraces } from "@/lib/observability/source";
 import type { TraceRecord } from "@/types/trace";
 
 /**
- * 选品漏斗运行历史（P1 余量，2026-09-17）。
+ * 选品漏斗运行历史（P1 余量，2026-09-17；快览+报告透出，2026-09-17 晚）。
  *
  * 数据口径：trace.tags 含 funnel_run_id 的主图 trace（漏斗域图跑在主图内，
  * workflow_name 仍是主图，只能以标签为口径；服务端 has_tag=funnel_run_id 过滤）。
  * 指标全部来自适配器埋点：tags.funnel_status/funnel_run_id/funnel_category，
- * metadata.funnel_stage_summary/funnel_duration_ms。
+ * metadata.funnel_stage_summary/funnel_duration_ms/funnel_config/funnel_report。
  */
+
+interface SourceHealth {
+  source: string;
+  status: string;
+  count: number;
+}
 
 interface StageSummary {
   stage: string;
   kept: number;
   dropped: number;
+  sources?: SourceHealth[];
 }
 
 type FunnelStatus = "ok" | "empty_pool" | "need_info" | "failed" | "";
@@ -53,10 +60,39 @@ function fmtTime(ts: string): string {
   return ts.replace("T", " ").slice(0, 19);
 }
 
+/** 来源健康徽章：全 ok 用中性灰弱化；empty 琥珀、error 红色突出。 */
+function SourceHealthCell({ sources }: { sources?: SourceHealth[] }) {
+  if (!sources || sources.length === 0) {
+    return <span className="text-xs text-slate-400">-</span>;
+  }
+  const hasIssue = sources.some((s) => s.status !== "ok");
+  return (
+    <div className="flex flex-wrap items-center gap-1 text-[11px]">
+      {sources.map((s) => (
+        <span
+          key={s.source}
+          className={`rounded px-1.5 py-0.5 font-mono ${
+            s.status === "error"
+              ? "bg-red-50 text-red-600"
+              : s.status === "empty"
+                ? "bg-amber-50 text-amber-700"
+                : hasIssue
+                  ? "bg-slate-100 text-slate-600"
+                  : "bg-slate-50 text-slate-500"
+          }`}
+        >
+          {s.source} {s.status}({s.count})
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export default function SelectionFunnelHistoryPage() {
   const [traces, setTraces] = useState<TraceRecord[]>([]);
   const [mounted, setMounted] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const load = async () => {
     setIsRefreshing(true);
@@ -131,9 +167,11 @@ export default function SelectionFunnelHistoryPage() {
                   <th className="py-2.5 px-3 w-24">类目</th>
                   <th className="py-2.5 px-3 w-24">终态</th>
                   <th className="py-2.5 px-3">各层留存</th>
+                  <th className="py-2.5 px-3 w-56">来源健康</th>
+                  <th className="py-2.5 px-3 w-24">规则版本</th>
                   <th className="py-2.5 px-3 w-20 text-right">漏斗耗时</th>
-                  <th className="py-2.5 px-3 w-44">Run ID</th>
-                  <th className="py-2.5 px-3 w-20"></th>
+                  <th className="py-2.5 px-3 w-40">Run ID</th>
+                  <th className="py-2.5 px-3 w-24"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -143,6 +181,8 @@ export default function SelectionFunnelHistoryPage() {
                   const m = t.metadata as {
                     funnel_stage_summary?: StageSummary[];
                     funnel_duration_ms?: number;
+                    funnel_config?: { rules_version?: string };
+                    funnel_report?: string;
                   };
                   const chain = (m.funnel_stage_summary || [])
                     .filter((s) => CHAIN_STAGES[s.stage])
@@ -151,8 +191,12 @@ export default function SelectionFunnelHistoryPage() {
                       kept: s.kept,
                       dropped: s.dropped,
                     }));
+                  const poolSources = (m.funnel_stage_summary || []).find(
+                    (s) => s.stage === "pool",
+                  )?.sources;
                   return (
-                    <tr key={t.id} className="hover:bg-slate-50/60">
+                    <Fragment key={t.id}>
+                    <tr className="hover:bg-slate-50/60">
                       <td className="py-2.5 px-3 text-xs text-slate-500 whitespace-nowrap">
                         {fmtTime(t.timestamp)}
                       </td>
@@ -181,33 +225,63 @@ export default function SelectionFunnelHistoryPage() {
                           <span className="text-xs text-slate-400">-</span>
                         )}
                       </td>
+                      <td className="py-2.5 px-3">
+                        <SourceHealthCell sources={poolSources} />
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-[11px] text-slate-500">
+                        {m.funnel_config?.rules_version || "-"}
+                      </td>
                       <td className="py-2.5 px-3 text-xs text-slate-600 text-right whitespace-nowrap">
                         {fmtDuration(m.funnel_duration_ms)}
                       </td>
                       <td className="py-2.5 px-3 text-xs text-slate-400 font-mono">
                         {t.tags?.funnel_run_id || "-"}
                       </td>
-                      <td className="py-2.5 px-3 text-right">
+                      <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                        {m.funnel_report && (
+                          <button
+                            type="button"
+                            onClick={() => setExpandedId(expandedId === t.id ? null : t.id)}
+                            className="text-xs text-slate-600 hover:text-slate-900 mr-2"
+                          >
+                            {expandedId === t.id ? "收起报告" : "查看报告"}
+                          </button>
+                        )}
                         <Link
                           href={`/observability/traces/${t.id}`}
-                          className="text-xs text-violet-600 hover:text-violet-800 whitespace-nowrap"
+                          className="text-xs text-violet-600 hover:text-violet-800"
                         >
                           详情
                         </Link>
                       </td>
                     </tr>
+                    {expandedId === t.id && m.funnel_report && (
+                      <tr>
+                        <td colSpan={9} className="bg-slate-50/80 px-6 py-4">
+                          <div className="rounded-lg border border-slate-200 bg-white p-4">
+                            <p className="text-[11px] text-slate-400 mb-2">
+                              漏斗报告全文（含数据新鲜度披露、分层汇总、来源健康、价格趋势）
+                            </p>
+                            <div className="max-h-[420px] overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-slate-700">
+                              {m.funnel_report}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   );
                 })}
                 {mounted && sorted.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="py-12 text-center text-sm text-slate-400">
+                    <td colSpan={9} className="py-12 text-center text-sm text-slate-400">
                       暂无漏斗运行记录 —— 在对话里跑一次「智能选品」后这里会出现运行历史
                     </td>
                   </tr>
                 )}
                 {!mounted && sorted.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="py-12 text-center text-sm text-slate-400">
+                    <td colSpan={9} className="py-12 text-center text-sm text-slate-400">
                       加载中...
                     </td>
                   </tr>
@@ -219,7 +293,8 @@ export default function SelectionFunnelHistoryPage() {
 
         <p className="text-xs text-slate-400 leading-relaxed">
           口径说明：漏斗每次运行在主图 trace 上打 funnel_status / funnel_run_id / funnel_category 标签与
-          funnel_stage_summary / funnel_duration_ms 指标；「系统失败」是漏斗域图异常降级的软失败终态，
+          funnel_stage_summary / funnel_duration_ms 指标；报告正文经 funnel_report 埋点入 trace，
+          「查看报告」展示全文（新鲜度披露 / 分层汇总 / 来源健康 / 价格趋势）；「系统失败」是漏斗域图异常降级的软失败终态，
           与「淘空」（候选被正常淘汰光）分开统计，不伪装成正常输出。
         </p>
       </div>

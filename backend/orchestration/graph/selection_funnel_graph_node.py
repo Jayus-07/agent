@@ -99,6 +99,10 @@ def _stamp_execution_tags(final_state: dict, result: dict,
         trace.metadata["funnel_stage_summary"] = ctx.get("stage_summary", [])
         if ctx.get("config_snapshot"):
             trace.metadata["funnel_config"] = ctx["config_snapshot"]
+        # 报告正文进 trace（2026-09-17 前端透出）：管理端历史页「查看报告」直接读，
+        # 免去回会话翻记录；failed 路径无报告不写
+        if result.get("final_answer"):
+            trace.metadata["funnel_report"] = result["final_answer"]
         trace.metadata["funnel_duration_ms"] = duration_ms
     except Exception:
         logger.debug("[selection_funnel_graph_node] 执行标签写入失败", exc_info=True)

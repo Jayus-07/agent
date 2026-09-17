@@ -319,3 +319,48 @@ def test_adapter_failed_without_trace_still_falls_back(monkeypatch):
     out = mod.selection_funnel_graph_node(
         {"question": "帮我做智能选品", "session_id": "s1"})
     assert out["final_answer"] == mod._FALLBACK_ANSWER
+
+
+# ── 成功路径埋点：报告正文/配置快照/来源健康 → trace.metadata ──
+
+def test_adapter_success_stamps_report_into_metadata(monkeypatch):
+    from backend.observability import tracer
+    from backend.orchestration.graph import selection_funnel_graph_node as mod
+
+    _RESULT = {
+        "final_answer": "# 智能选品报告\n- 数据新鲜度：……",
+        "status": "ok",
+        "funnel_context": {
+            "category": "宠物零食",
+            "top": [{"rank": 1, "title": "A"}],
+            "stage_summary": [
+                {"stage": "pool", "kept": 8, "dropped": 0,
+                 "sources": [{"source": "watchlist", "status": "ok", "count": 8}]},
+                {"stage": "screen", "kept": 5, "dropped": 3},
+            ],
+            "config_snapshot": {"rules_version": "ab12cd34"},
+        },
+    }
+
+    class _OkGraph:
+        def invoke(self, *_a, **_k):
+            return {}
+
+    class _FakeTrace:
+        def __init__(self):
+            self.tags = {}
+            self.metadata = {}
+
+    fake = _FakeTrace()
+    monkeypatch.setattr(mod, "get_selection_funnel_graph", lambda: _OkGraph())
+    monkeypatch.setattr(
+        mod, "build_funnel_result", lambda _s: dict(_RESULT))
+    monkeypatch.setattr(tracer.trace_collector, "current", lambda: fake)
+    mod.selection_funnel_graph_node(
+        {"question": "帮我做智能选品", "session_id": "s1"})
+    assert fake.metadata["funnel_report"] == _RESULT["final_answer"]
+    assert fake.metadata["funnel_config"]["rules_version"] == "ab12cd34"
+    pool_entry = next(e for e in fake.metadata["funnel_stage_summary"]
+                      if e["stage"] == "pool")
+    assert pool_entry["sources"][0]["status"] == "ok"
+    assert fake.tags["funnel_status"] == "ok"
