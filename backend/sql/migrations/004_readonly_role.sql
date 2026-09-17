@@ -50,6 +50,10 @@ GRANT SELECT ON ALL TABLES IN SCHEMA finance TO agent_readonly;
 -- ai 域
 GRANT SELECT ON ALL TABLES IN SCHEMA ai TO agent_readonly;
 
+-- public 域（迁移计划 2026-09-17：inventory_alerts + 业务族 15 表建在 public，
+-- 不授权则 NL2SQL（agent_readonly 身份）查不到这些表）
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO agent_readonly;
+
 -- ═══ 5. 未来新建表自动继承（default privileges）═══
 ALTER DEFAULT PRIVILEGES IN SCHEMA product GRANT SELECT ON TABLES TO agent_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA "order" GRANT SELECT ON TABLES TO agent_readonly;
@@ -58,6 +62,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA customer GRANT SELECT ON TABLES TO agent_read
 ALTER DEFAULT PRIVILEGES IN SCHEMA crawler GRANT SELECT ON TABLES TO agent_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA finance GRANT SELECT ON TABLES TO agent_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA ai GRANT SELECT ON TABLES TO agent_readonly;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO agent_readonly;
 
 -- ═══ 6. 连接限制 ═══
 ALTER ROLE agent_readonly SET statement_timeout = '30s';

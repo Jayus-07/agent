@@ -52,5 +52,8 @@ $PSQL -d agent_memory -f /docker-migrations/015_workflow_runs_pg.sql
 $PSQL -d agent_business -f /docker-migrations/016_inventory_alerts_pg.sql
 $PSQL -d agent_business -f /docker-migrations/017_business_stores_pg.sql
 
+echo "[init-dbs] 7/7 Prompt 管理三表（清库重建缺口补齐，幂等）..."
+$PSQL -d agent_memory -f /docker-migrations/018_prompts_pg.sql
+
 echo "[init-dbs] 完成。验证只读角色："
 $PSQL -d postgres -c "SELECT rolname, rolcanlogin, rolsuper FROM pg_roles WHERE rolname = 'agent_readonly';"
