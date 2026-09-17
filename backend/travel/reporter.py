@@ -60,7 +60,7 @@ def _assemble(state: dict) -> str:
 
     # 1) 必填槽位缺失 → 追问（不猜、不硬排）
     if state.get("brief_missing"):
-        return build_clarification(brief)
+        return build_clarification(brief, state.get("user_message", ""))
 
     # 2) 候选池为空 → 如实说明数据覆盖范围
     if not state.get("candidates"):

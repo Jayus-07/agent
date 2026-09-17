@@ -17,13 +17,17 @@ from backend.travel.slot_filler import (
     extract_brief,
     extract_budget,
     extract_days,
+    extract_days_range,
     extract_destination,
     extract_must_go,
     extract_pace,
     extract_party_size,
     extract_preferences,
     extract_start_date,
+    extract_unsupported_city,
     merge_brief,
+    party_size_source,
+    slot_filler_node,
 )
 
 
@@ -34,8 +38,32 @@ class TestScalarExtraction:
     def test_days_chinese_numeral(self):
         assert extract_days("想玩五天") == 5
 
+    def test_days_compound_cn_numeral(self):
+        """复合中文数字：「十二天」是 12，不能被单字符匹配劈成 2。"""
+        assert extract_days("福州玩十二天") == 12
+        assert extract_days("计划二十天") == 20
+        assert extract_days("二十五日游") == 25
+        assert extract_days("就玩十天") == 10
+
     def test_party_size(self):
         assert extract_party_size("我们3个人去") == 3
+
+    def test_party_size_compound_cn_numeral(self):
+        assert extract_party_size("我们二十五个人去") == 25
+
+    def test_party_family_kou(self):
+        """「一家三口」是明确的人数事实。"""
+        assert extract_party_size("一家三口去福州玩三天") == 3
+        assert extract_party_size("三口之家想去厦门") == 3
+
+    def test_party_companion_phrases(self):
+        """同伴表达的无数字兜底：带爸妈 +2、和女朋友 +1。"""
+        assert extract_party_size("带爸妈去福州玩") == 3
+        assert extract_party_size("和女朋友去厦门") == 2
+        assert extract_party_size("跟朋友一起玩") == 2
+
+    def test_party_numeric_wins_over_companion(self):
+        assert extract_party_size("两个人带着孩子") == 2
 
     def test_budget_requires_currency_unit(self):
         """「3天」不能被当成 3000 元预算。"""
@@ -101,6 +129,125 @@ class TestMustGoAndAvoid:
         brief = extract_brief("福州3天，一定要去三坊七巷")
         assert "福州" not in brief.must_go
         assert "三坊七巷" in brief.must_go
+
+    def test_must_go_with_connector_particles(self):
+        """触发词与地名之间的连接词不得吞进地名。
+
+        实测 bug："再加一个必去的：烟台山" 产出 must_go 含 "的：烟台山"
+        并直出行程单。名录命中会给 "烟台山"，触发词捕获必须给出同一个
+        名字才能去重，而不是并排出 "的：烟台山"。
+        """
+        got = extract_must_go("再加一个必去的：烟台山", "福州")
+        assert got == ["烟台山"]
+        assert "的：烟台山" not in got
+
+        got2 = extract_must_go("想去的是鼓山", "福州")
+        assert "鼓山" in got2
+        assert "是鼓山" not in got2
+
+        got3 = extract_avoid("避开的是河坊街")
+        assert "河坊街" in got3
+        assert "是河坊街" not in got3
+
+    def test_captured_noise_dropped(self):
+        """触发词捕获的半截话不得进清单（实测直出过行程单的脏条目）。"""
+        # 「我想去福州玩」—— 想去 捕获「福州玩」
+        assert "福州玩" not in extract_must_go("我想去福州玩", "福州")
+        # 「想去的地方很多」—— 捕获「地方很多」
+        brief = extract_brief("想去的地方很多，比如三坊七巷")
+        assert "地方很多" not in brief.must_go
+        assert "三坊七巷" in brief.must_go
+        # 「不要去人多拥挤的地方」—— 非地名描述不进避雷清单
+        assert extract_avoid("不要去人多拥挤的地方") == []
+        # 「想去福州玩两天」—— 日期天数不能被吞进地名
+        assert "玩两天" not in extract_must_go("我想去福州玩两天", "福州")
+        assert "两天" not in extract_must_go("我想去福州玩两天", "福州")
+
+
+class TestMergeBrief:
+    def test_party_persists_when_unmentioned(self):
+        prev = extract_brief("福州两天一家三口")
+        merged = extract_brief("节奏改紧凑一点", previous=prev)
+        assert merged.party_size == 3
+        assert merged.pace == "intense"
+
+    def test_avoid_removes_previous_must_go(self):
+        """上一轮必去被这一轮拉黑后必须移出必去清单（avoid 优先）。"""
+        prev = extract_brief("福州两天必去三坊七巷和鼓山")
+        merged = extract_brief("不想去鼓山了", previous=prev)
+        assert "鼓山" in merged.avoid
+        assert "鼓山" not in merged.must_go
+        assert "三坊七巷" in merged.must_go
+
+    def test_destination_switch(self):
+        prev = extract_brief("厦门两天")
+        merged = extract_brief("换成福州，三天", previous=prev)
+        assert merged.destination == "福州"
+        assert merged.days == 3
+
+
+class TestAmbiguityTransparency:
+    """猜测与区间说法不拦流程，但必须产生用户可见的提示。"""
+
+    def test_days_range_detection(self):
+        assert extract_days_range("玩个两三天") == (2, 3, "两三天")
+        assert extract_days_range("安排3-5天") == (3, 5, "3-5天")
+        assert extract_days_range("两到三天") is not None
+        # 复合数字与单数字不是区间
+        assert extract_days_range("福州玩十二天") is None
+        assert extract_days_range("玩两天") is None
+
+    def test_range_days_note_emitted(self):
+        update = slot_filler_node({"user_message": "玩个两三天吧，去福州，两个人"})
+        assert any("区间" in n and "3 天" in n for n in update["notes"])
+
+    def test_party_guess_note_emitted(self):
+        update = slot_filler_node({"user_message": "带爸妈去福州玩两天"})
+        assert any("3 人估算" in n for n in update["notes"])
+
+    def test_explicit_party_no_note(self):
+        update = slot_filler_node({"user_message": "福州两天，3个人"})
+        assert not any("估算" in n for n in update["notes"])
+
+    def test_party_size_source(self):
+        assert party_size_source("我们3个人去") == "explicit"
+        assert party_size_source("一家三口去玩") == "explicit"
+        assert party_size_source("带爸妈去玩") == "guess"
+        assert party_size_source("福州两天") == "none"
+
+
+class TestUnsupportedCity:
+    def test_known_unsupported_city_detected(self):
+        assert extract_unsupported_city("我想去北京玩") == "北京"
+        assert extract_unsupported_city("去泉州逛逛") == "泉州"
+        # 已支持城市不报
+        assert extract_unsupported_city("福州两天") == ""
+        assert extract_unsupported_city("杭州两日游") == ""
+        # 非城市词不报
+        assert extract_unsupported_city("去趟乐园") == ""
+
+    def test_clarification_mentions_unsupported(self):
+        text = build_clarification(TravelBrief(), "我想去北京玩")
+        assert "北京" in text and "暂时无法规划" in text
+        assert "福州" in text  # 仍给出可规划城市
+
+    def test_clarification_generic_without_city(self):
+        text = build_clarification(TravelBrief(), "")
+        assert "暂时无法规划" not in text
+
+    def test_city_not_in_must_go(self):
+        """城市名是目的地槽位的事，不是必去 POI——进了清单必然假警告。"""
+        brief = extract_brief("我想去北京玩")
+        assert brief.must_go == []
+        brief2 = extract_brief("杭州2天，必去三坊七巷")
+        assert brief2.must_go == ["三坊七巷"]
+
+    def test_merge_drops_historical_city_in_must_go(self):
+        """历史脏状态（旧版本把城市写进了 must_go）也要在 merge 时清掉。"""
+        prev = TravelBrief(destination="", must_go=["北京"], days=3)
+        merged = merge_brief(prev, extract_brief("福州三天"))
+        assert "北京" not in merged.must_go
+        assert merged.destination == "福州"
 
 
 class TestBriefAndClarification:
