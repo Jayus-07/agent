@@ -1,0 +1,678 @@
+D:\Program Files\workplace\agent\.venv\lib\site-packages\torch\cuda\__init__.py:61: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+2026-09-18 03:36:56 - rag_system - INFO - [Database] Engine 初始化完成
+2026-09-18 03:36:56 - rag_system - INFO - [Memory] 后台 event loop + DB engine 就绪
+2026-09-18 03:36:59 - rag_system - INFO - [Embedding] Cloud 模式初始化完成 (model=text-embedding-v3, api_base=https://dashscope.aliyuncs.com/compatible-mode/v1)
+2026-09-18 03:36:59 - rag_system - INFO - [Embedding] 全局单例创建完成 (provider=cloud, env_mode=cloud, tracking=True)
+2026-09-18 03:36:59 - rag_system - INFO - 启用增量索引模式
+2026-09-18 03:37:00 - rag_system - INFO - [PgVectorStore] 就绪: table=rag_vectors collection=chroma
+2026-09-18 03:37:00 - rag_system - INFO - 加载已有chunk 级向量库: D:\Program Files\workplace\agent\data\chroma
+2026-09-18 03:37:00 - rag_system - INFO - 加载已有文档级向量库: D:\Program Files\workplace\agent\data\doc_db
+2026-09-18 03:37:00 - rag_system - INFO - [Recovery] 发现 5 个中断文档，开始恢复
+2026-09-18 03:37:00 - rag_system - WARNING - [Recovery] 中断文档恢复失败 C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_in_progress_doc_not_flagg0\wip.md: path is on mount 'C:', start on mount 'D:'
+2026-09-18 03:37:00 - rag_system - WARNING - [Recovery] 中断文档恢复失败 C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_true_orphan_and_bm25_ghos0\wip.md: path is on mount 'C:', start on mount 'D:'
+2026-09-18 03:37:00 - rag_system - WARNING - [Recovery] 中断文档恢复失败 C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_repair_removes_orphans_on0\wip.md: path is on mount 'C:', start on mount 'D:'
+2026-09-18 03:37:01 - rag_system - WARNING - [Recovery] 中断文档恢复失败 C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_bm25_missing_active_doc_d0\wip.md: path is on mount 'C:', start on mount 'D:'
+2026-09-18 03:37:01 - rag_system - WARNING - [Recovery] 中断文档恢复失败 C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_repair_resyncs_bm25_missi0\wip.md: path is on mount 'C:', start on mount 'D:'
+2026-09-18 03:37:01 - rag_system - INFO - [Recovery] 恢复完成: {'recovered': 0, 'cleaned': 0, 'failed': 5}
+2026-09-18 03:37:01 - rag_system - INFO - [DELETED] budget_fin.md
+2026-09-18 03:37:02 - rag_system - INFO - [DELETED] reimbursement_fin.md
+2026-09-18 03:37:02 - rag_system - INFO - [DELETED] faq_常见问题FAQ.md
+2026-09-18 03:37:03 - rag_system - INFO - [DELETED] legal_采购合同.md
+2026-09-18 03:37:04 - rag_system - INFO - [DELETED] logistics_物流SOP.docx
+2026-09-18 03:37:04 - rag_system - INFO - [DELETED] security_数据安全与隐私政策.md
+2026-09-18 03:37:05 - rag_system - INFO - [DELETED] leave_policy_hr.md
+2026-09-18 03:37:06 - rag_system - INFO - [DELETED] payroll_hr.md
+2026-09-18 03:37:07 - rag_system - INFO - [DELETED] table_区域销售月报_2026.csv
+2026-09-18 03:37:07 - rag_system - INFO - [DELETED] table_客服工单统计_2026.csv
+2026-09-18 03:37:08 - rag_system - INFO - [DELETED] table_差旅报销明细_2026H1.csv
+2026-09-18 03:37:09 - rag_system - INFO - [DELETED] manual_会议室使用规范.docx
+2026-09-18 03:37:09 - rag_system - INFO - [DELETED] policy_供应商准入管理办法.docx
+2026-09-18 03:37:10 - rag_system - INFO - [DELETED] policy_差旅费管理办法_v2.docx
+2026-09-18 03:37:10 - rag_system - INFO - [DELETED] report_Q2产品迭代总结_2026.docx
+2026-09-18 03:37:11 - rag_system - INFO - [DELETED] contract_蓝鲸数据服务合同.md
+2026-09-18 03:37:11 - rag_system - INFO - [DELETED] faq_员工常见问题.md
+2026-09-18 03:37:12 - rag_system - INFO - [DELETED] manual_新员工入职手册.md
+2026-09-18 03:37:12 - rag_system - INFO - [DELETED] policy_信息安全管理制度.md
+2026-09-18 03:37:13 - rag_system - INFO - [DELETED] policy_印章使用管理办法.md
+2026-09-18 03:37:14 - rag_system - INFO - [DELETED] policy_差旅费管理办法_v1.md
+2026-09-18 03:37:14 - rag_system - INFO - [DELETED] policy_考勤管理制度_市场部.md
+2026-09-18 03:37:15 - rag_system - INFO - [DELETED] policy_考勤管理制度_研发中心.md
+2026-09-18 03:37:15 - rag_system - INFO - [DELETED] report_客服运营年度报告_2025.md
+2026-09-18 03:37:16 - rag_system - INFO - [DELETED] contract_办公室租赁合同.pdf
+2026-09-18 03:37:17 - rag_system - INFO - [DELETED] policy_差旅费管理办法_v3.pdf
+2026-09-18 03:37:17 - rag_system - INFO - [DELETED] report_2026上半年财务摘要.pdf
+2026-09-18 03:37:18 - rag_system - INFO - [DELETED] faq_运维值班FAQ.txt
+2026-09-18 03:37:19 - rag_system - INFO - [DELETED] notes_产品评审会议纪要_20260830.txt
+2026-09-18 03:37:19 - rag_system - INFO - [DELETED] readme_数据字典_客户域.txt
+2026-09-18 03:37:20 - rag_system - INFO - [DELETED] table_2026Q2部门人力成本.xlsx
+2026-09-18 03:37:20 - rag_system - INFO - [DELETED] table_产品定价表.xlsx
+2026-09-18 03:37:21 - rag_system - INFO - [DELETED] table_服务器资产清单.xlsx
+2026-09-18 03:37:21 - rag_system - INFO - [DELETED] 10_结构混乱的长文档.pdf
+2026-09-18 03:37:22 - rag_system - INFO - [DELETED] 16_一句话FAQ.md
+2026-09-18 03:37:22 - rag_system - INFO - [DELETED] 24_关键词干扰文档.md
+2026-09-18 03:37:23 - rag_system - INFO - [DELETED] 25_同形异义词.md
+2026-09-18 03:37:23 - rag_system - INFO - [DELETED] 26_数字近似陷阱.md
+2026-09-18 03:37:24 - rag_system - INFO - [DELETED] cs_售后FAQ.docx
+2026-09-18 03:37:24 - rag_system - INFO - [DELETED] faq_常见问题FAQ.md
+2026-09-18 03:37:25 - rag_system - INFO - [DELETED] finance_员工报销制度.pdf
+2026-09-18 03:37:25 - rag_system - INFO - [DELETED] hr_员工手册.docx
+2026-09-18 03:37:26 - rag_system - INFO - [DELETED] ops_库存管理制度.pdf
+2026-09-18 03:37:27 - rag_system - INFO - [DELETED] product_商品规格说明.pdf
+2026-09-18 03:37:27 - rag_system - INFO - [DELETED] purchase_采购流程.docx
+2026-09-18 03:37:28 - rag_system - INFO - [DELETED] qc_质检标准SOP.docx
+2026-09-18 03:37:28 - rag_system - INFO - [DELETED] returns_退货政策.pdf
+2026-09-18 03:37:29 - rag_system - INFO - [DELETED] supplier_供应商管理规范.md
+2026-09-18 03:37:29 - rag_system - INFO - [DELETED] tech_技术手册.pdf
+2026-09-18 03:37:31 - rag_system - INFO - [DELETED] active.md
+2026-09-18 03:37:31 - rag_system - INFO - [DELETED] doc-no-bm25.md
+2026-09-18 03:37:32 - rag_system - INFO - [DELETED] active.md
+2026-09-18 03:37:32 - rag_system - INFO - [DELETED] doc.md
+2026-09-18 03:37:33 - rag_system - INFO - [DELETED] doc2.md
+2026-09-18 03:37:34 - rag_system - INFO - [DELETED] active.md
+2026-09-18 03:37:34 - rag_system - INFO - [DELETED] active.md
+2026-09-18 03:37:35 - rag_system - INFO - [DELETED] doc-no-bm25.md
+2026-09-18 03:37:35 - rag_system - INFO - [DELETED] faq.md
+2026-09-18 03:37:36 - rag_system - INFO - [DELETED] v2.docx
+2026-09-18 03:37:37 - rag_system - INFO - [DELETED] v1.md
+2026-09-18 03:37:38 - rag_system - INFO - [DELETED] policy_travel_v1.md
+2026-09-18 03:37:38 - rag_system - INFO - [DELETED] policy_travel_v2.md
+2026-09-18 03:37:40 - rag_system - INFO - [DELETED] policy_travel_v3.md
+2026-09-18 03:37:40 - rag_system - INFO - [DELETED] active.md
+2026-09-18 03:37:41 - rag_system - INFO - [DELETED] b.md
+2026-09-18 03:37:41 - rag_system - INFO - [DELETED] existing.md
+2026-09-18 03:37:43 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\policy_general\finance\budget_fin.md doc_type=financial completeness=0.9445 → FinancialTableChunkStrategy
+2026-09-18 03:37:45 - rag_system - INFO - [Redis] connected: redis://localhost:6379/0
+2026-09-18 03:37:45 - rag_system - WARNING - [PromptLoader] rag_preprocessing_metadata_extract.yaml: key 'rag.preprocessing.metadata_extract' not in registry, skipping
+2026-09-18 03:37:45 - rag_system - INFO - [PromptLoader] Loaded 37 defaults from D:\Program Files\workplace\agent\backend\prompts\defaults
+2026-09-18 03:37:45 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+Building prefix dict from the default dictionary ...
+Loading model from cache C:\Users\wh\AppData\Local\Temp\jieba.cache
+Loading model cost 1.057 seconds.
+Prefix dict has been built successfully.
+2026-09-18 03:37:47 - rag_system - INFO - 正在初始化默认 LLM: qwen3.7-plus@tp
+2026-09-18 03:37:47 - rag_system - INFO - [QuestionGen] 缓存命中 11 chunks
+2026-09-18 03:37:47 - rag_system - INFO - LLM init OK: qwen3.7-plus@tp (provider=qwen_tp)
+2026-09-18 03:37:49 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 557, 'completion_tokens': 64, 'cost_usd': 0.0003, 'model': 'qwen3.7-plus'}
+2026-09-18 03:37:49 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\policy_general\8d38891a89.json (nodes=12, chunks=11, anomalies=0)
+2026-09-18 03:37:50 - rag_system - INFO - [Embed] 缓存命中 11/11
+2026-09-18 03:37:50 - rag_system - INFO - [TraceWriter] Redis 可用，使用 Streams 异步写入
+2026-09-18 03:37:50 - rag_system - INFO - [TraceWriter] worker 启动
+2026-09-18 03:37:51 - rag_system - INFO - [ADDED] budget_fin.md
+2026-09-18 03:37:51 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\policy_general\finance\reimbursement_fin.md doc_type=financial completeness=0.9582 → FinancialTableChunkStrategy
+2026-09-18 03:37:51 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:37:53 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 604, 'completion_tokens': 67, 'cost_usd': 0.000322, 'model': 'qwen3.7-plus'}
+2026-09-18 03:37:54 - rag_system - INFO - [QuestionGen] 缓存命中 9 chunks
+2026-09-18 03:37:54 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\policy_general\04a34059af.json (nodes=10, chunks=9, anomalies=0)
+2026-09-18 03:37:55 - rag_system - INFO - [Embed] 缓存命中 9/9
+2026-09-18 03:37:55 - rag_system - INFO - [ADDED] reimbursement_fin.md
+2026-09-18 03:37:55 - rag_system - INFO - [MarkdownParser] D:\Program Files\workplace\agent\data\docs\policy_general\general\faq_常见问题FAQ.md 识别为 FAQ 文档，产出 15 个 Q/A 对
+2026-09-18 03:37:56 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\policy_general\general\faq_常见问题FAQ.md doc_type=faq completeness=1.0 → QAChunkStrategy
+2026-09-18 03:37:56 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:37:56 - rag_system - INFO - [QuestionGen] 缓存命中 16 chunks
+2026-09-18 03:37:56 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\policy_general\e07b25dc7b.json (nodes=31, chunks=16, anomalies=2)
+2026-09-18 03:37:57 - rag_system - INFO - [Embed] 缓存命中 16/16
+2026-09-18 03:37:58 - rag_system - INFO - [ADDED] faq_常见问题FAQ.md
+2026-09-18 03:37:58 - rag_system - INFO - [Router] legal 但 AST 无「第 N 条」条款 → Structure 降级
+2026-09-18 03:37:58 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\policy_general\general\legal_采购合同.md doc_type=legal completeness=0.9552 → StructureChunkStrategy
+2026-09-18 03:37:58 - rag_system - INFO - [Filter] D:\Program Files\workplace\agent\data\docs\policy_general\general\legal_采购合同.md: 过滤 3/27 个 chunk ({'too_short': 2, 'duplicate': 1})
+2026-09-18 03:37:58 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:37:59 - rag_system - INFO - [QuestionGen] 缓存命中 24 chunks
+2026-09-18 03:38:01 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 1438, 'completion_tokens': 67, 'cost_usd': 0.000656, 'model': 'qwen3.7-plus'}
+2026-09-18 03:38:01 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\policy_general\de3cd3ebdc.json (nodes=28, chunks=24, anomalies=0)
+2026-09-18 03:38:02 - rag_system - INFO - [Embed] 缓存命中 24/24
+2026-09-18 03:38:02 - rag_system - INFO - [ADDED] legal_采购合同.md
+2026-09-18 03:38:03 - rag_system - INFO - [Classify] 胶着仲裁：top4=[('sop', 136), ('compliance', 10), ('financial', 6), ('training', 5)], inner_diff=4
+2026-09-18 03:38:04 - rag_system - INFO - [Classify] LLM 仲裁结果：sop
+2026-09-18 03:38:04 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\policy_general\general\logistics_物流SOP.docx doc_type=sop completeness=0.9489 → StepChunkStrategy
+2026-09-18 03:38:05 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:38:05 - rag_system - INFO - [Classify] 胶着仲裁：top4=[('sop', 100), ('training', 10), ('compliance', 10), ('financial', 6)], inner_diff=4
+2026-09-18 03:38:07 - rag_system - INFO - [Classify] LLM 仲裁结果：sop
+2026-09-18 03:38:08 - rag_system - INFO - [QuestionGen] 缓存命中 5 chunks
+2026-09-18 03:38:08 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\policy_general\880d1d1e31.json (nodes=27, chunks=5, anomalies=0)
+2026-09-18 03:38:09 - rag_system - INFO - [Embed] 缓存命中 5/5
+2026-09-18 03:38:09 - rag_system - INFO - [ADDED] logistics_物流SOP.docx
+2026-09-18 03:38:10 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\policy_general\general\security_数据安全与隐私政策.md doc_type=security completeness=0.9634 → StructureChunkStrategy
+2026-09-18 03:38:10 - rag_system - INFO - [Filter] D:\Program Files\workplace\agent\data\docs\policy_general\general\security_数据安全与隐私政策.md: 过滤 1/23 个 chunk ({'duplicate': 1})
+2026-09-18 03:38:10 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:38:11 - rag_system - INFO - [QuestionGen] 缓存命中 22 chunks
+2026-09-18 03:38:13 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 1325, 'completion_tokens': 69, 'cost_usd': 0.000613, 'model': 'qwen3.7-plus'}
+2026-09-18 03:38:13 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\policy_general\cb33b9ee21.json (nodes=24, chunks=22, anomalies=0)
+2026-09-18 03:38:14 - rag_system - INFO - [Embed] 缓存命中 22/22
+2026-09-18 03:38:15 - rag_system - INFO - [ADDED] security_数据安全与隐私政策.md
+2026-09-18 03:38:15 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\policy_general\hr\leave_policy_hr.md doc_type=policy completeness=0.954 → StructureChunkStrategy
+2026-09-18 03:38:15 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:38:16 - rag_system - INFO - [QuestionGen] 缓存命中 13 chunks
+2026-09-18 03:38:18 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 798, 'completion_tokens': 61, 'cost_usd': 0.000392, 'model': 'qwen3.7-plus'}
+2026-09-18 03:38:18 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\policy_general\be99388a67.json (nodes=14, chunks=13, anomalies=0)
+2026-09-18 03:38:18 - rag_system - INFO - [Embed] 缓存命中 13/13
+2026-09-18 03:38:19 - rag_system - INFO - [ADDED] leave_policy_hr.md
+2026-09-18 03:38:20 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\policy_general\hr\payroll_hr.md doc_type=policy completeness=0.9547 → StructureChunkStrategy
+2026-09-18 03:38:20 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:38:20 - rag_system - INFO - [QuestionGen] 缓存命中 9 chunks
+2026-09-18 03:38:22 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 9 个, tokens: {'prompt_tokens': 581, 'completion_tokens': 58, 'cost_usd': 0.000302, 'model': 'qwen3.7-plus'}
+2026-09-18 03:38:22 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\policy_general\79028b7792.json (nodes=10, chunks=9, anomalies=0)
+2026-09-18 03:38:22 - rag_system - INFO - [Embed] 缓存命中 9/9
+2026-09-18 03:38:23 - rag_system - INFO - [ADDED] payroll_hr.md
+2026-09-18 03:38:23 - rag_system - INFO - [CsvParser] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\csv\table_区域销售月报_2026.csv 解析完成: 6 行 × 4 列
+2026-09-18 03:38:23 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\csv\table_区域销售月报_2026.csv doc_type=general completeness=0.9395 → RecursiveChunkStrategy
+2026-09-18 03:38:23 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:38:25 - rag_system - INFO - [Classify] LLM 复验: financial
+2026-09-18 03:38:25 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:38:26 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 8 个, tokens: {'prompt_tokens': 574, 'completion_tokens': 64, 'cost_usd': 0.000306, 'model': 'qwen3.7-plus'}
+2026-09-18 03:38:26 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\b978d2928a.json (nodes=3, chunks=1, anomalies=0)
+2026-09-18 03:38:27 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:38:28 - rag_system - INFO - [ADDED] table_区域销售月报_2026.csv
+2026-09-18 03:38:28 - rag_system - INFO - [CsvParser] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\csv\table_客服工单统计_2026.csv 解析完成: 6 行 × 4 列
+2026-09-18 03:38:28 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\csv\table_客服工单统计_2026.csv doc_type=general completeness=0.9397 → RecursiveChunkStrategy
+2026-09-18 03:38:29 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:38:31 - rag_system - INFO - [Classify] LLM 复验: general
+2026-09-18 03:38:31 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:38:31 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\1123c19b83.json (nodes=3, chunks=1, anomalies=0)
+2026-09-18 03:38:32 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:38:32 - rag_system - INFO - [ADDED] table_客服工单统计_2026.csv
+2026-09-18 03:38:33 - rag_system - INFO - [CsvParser] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\csv\table_差旅报销明细_2026H1.csv 解析完成: 4 行 × 5 列
+2026-09-18 03:38:33 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\csv\table_差旅报销明细_2026H1.csv doc_type=financial completeness=0.9394 → FinancialTableChunkStrategy
+2026-09-18 03:38:33 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:38:33 - rag_system - INFO - [QuestionGen] 缓存命中 5 chunks
+2026-09-18 03:38:34 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 0 个, tokens: {'prompt_tokens': 422, 'completion_tokens': 1, 'cost_usd': 0.00017, 'model': 'qwen3.7-plus'}
+2026-09-18 03:38:34 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\c1dbf64b6d.json (nodes=3, chunks=5, anomalies=0)
+2026-09-18 03:38:38 - rag_system - INFO - [TableDesc] 生成 4/4 行描述
+2026-09-18 03:38:39 - rag_system - INFO - [Embed] 缓存命中 5/5
+2026-09-18 03:38:39 - rag_system - INFO - [ADDED] table_差旅报销明细_2026H1.csv
+2026-09-18 03:38:40 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\docx\manual_会议室使用规范.docx doc_type=policy completeness=0.98 → StructureChunkStrategy
+2026-09-18 03:38:40 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:38:41 - rag_system - INFO - [QuestionGen] 缓存命中 8 chunks
+2026-09-18 03:38:42 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 379, 'completion_tokens': 61, 'cost_usd': 0.000225, 'model': 'qwen3.7-plus'}
+2026-09-18 03:38:42 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\8fdaf9ead8.json (nodes=9, chunks=8, anomalies=0)
+2026-09-18 03:38:43 - rag_system - INFO - [Embed] 缓存命中 8/8
+2026-09-18 03:38:43 - rag_system - INFO - [ADDED] manual_会议室使用规范.docx
+2026-09-18 03:38:44 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\docx\policy_供应商准入管理办法.docx doc_type=policy completeness=0.9364 → StructureChunkStrategy
+2026-09-18 03:38:44 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:38:45 - rag_system - INFO - [QuestionGen] 缓存命中 8 chunks
+2026-09-18 03:38:46 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 468, 'completion_tokens': 61, 'cost_usd': 0.00026, 'model': 'qwen3.7-plus'}
+2026-09-18 03:38:46 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\534068aca2.json (nodes=6, chunks=8, anomalies=0)
+2026-09-18 03:38:48 - rag_system - INFO - [TableDesc] 生成 3/3 行描述
+2026-09-18 03:38:49 - rag_system - INFO - [Embed] 缓存命中 6/8
+2026-09-18 03:38:50 - rag_system - INFO - [ADDED] policy_供应商准入管理办法.docx
+2026-09-18 03:38:50 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\docx\policy_差旅费管理办法_v2.docx doc_type=policy completeness=0.9824 → StructureChunkStrategy
+2026-09-18 03:38:51 - rag_system - INFO - [Filter] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\docx\policy_差旅费管理办法_v2.docx: 过滤 1/11 个 chunk ({'low_chinese_ratio': 1})
+2026-09-18 03:38:51 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:38:51 - rag_system - INFO - [QuestionGen] 缓存命中 10 chunks
+2026-09-18 03:38:53 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 9 个, tokens: {'prompt_tokens': 503, 'completion_tokens': 69, 'cost_usd': 0.000284, 'model': 'qwen3.7-plus'}
+2026-09-18 03:38:53 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\4215abbb21.json (nodes=12, chunks=10, anomalies=0)
+2026-09-18 03:38:54 - rag_system - INFO - [Embed] 缓存命中 10/10
+2026-09-18 03:38:55 - rag_system - INFO - [ADDED] policy_差旅费管理办法_v2.docx
+2026-09-18 03:38:55 - rag_system - INFO - [Classify] 胶着仲裁：top4=[('faq', 1)], inner_diff=999
+2026-09-18 03:38:56 - rag_system - INFO - [Classify] LLM 仲裁结果：faq
+2026-09-18 03:38:56 - rag_system - INFO - [Router] faq 但 AST 无 qa 节点 → Recursive 兜底
+2026-09-18 03:38:56 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\docx\report_Q2产品迭代总结_2026.docx doc_type=faq completeness=0.9308 → RecursiveChunkStrategy
+2026-09-18 03:38:56 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:38:56 - rag_system - WARNING - [Quality] 文档未通过质量门禁: ['文档偏短(<100字符)', '无标题/章节结构']
+2026-09-18 03:38:56 - rag_system - INFO - [Classify] 胶着仲裁：top4=[('faq', 1)], inner_diff=999
+2026-09-18 03:38:57 - rag_system - INFO - [Classify] LLM 仲裁结果：faq
+2026-09-18 03:38:58 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:38:58 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\2899a88352.json (nodes=5, chunks=1, anomalies=0)
+2026-09-18 03:38:58 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:38:59 - rag_system - INFO - [ADDED] report_Q2产品迭代总结_2026.docx
+2026-09-18 03:38:59 - rag_system - INFO - [Router] legal 但 AST 无「第 N 条」条款 → Structure 降级
+2026-09-18 03:38:59 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\md\contract_蓝鲸数据服务合同.md doc_type=legal completeness=0.9599 → StructureChunkStrategy
+2026-09-18 03:39:00 - rag_system - INFO - [Filter] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\md\contract_蓝鲸数据服务合同.md: 过滤 1/11 个 chunk ({'low_chinese_ratio': 1})
+2026-09-18 03:39:00 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:00 - rag_system - INFO - [QuestionGen] 缓存命中 10 chunks
+2026-09-18 03:39:02 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 593, 'completion_tokens': 116, 'cost_usd': 0.000376, 'model': 'qwen3.7-plus'}
+2026-09-18 03:39:02 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\4274c6734b.json (nodes=12, chunks=10, anomalies=0)
+2026-09-18 03:39:03 - rag_system - INFO - [Embed] 缓存命中 10/10
+2026-09-18 03:39:04 - rag_system - INFO - [ADDED] contract_蓝鲸数据服务合同.md
+2026-09-18 03:39:04 - rag_system - INFO - [Router] faq 但 AST 无 qa 节点 → Recursive 兜底
+2026-09-18 03:39:04 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\md\faq_员工常见问题.md doc_type=faq completeness=0.9588 → RecursiveChunkStrategy
+2026-09-18 03:39:04 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:05 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:39:05 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\384709842e.json (nodes=12, chunks=1, anomalies=0)
+2026-09-18 03:39:06 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:39:06 - rag_system - INFO - [ADDED] faq_员工常见问题.md
+2026-09-18 03:39:06 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\md\manual_新员工入职手册.md doc_type=training completeness=0.9483 → StepChunkStrategy
+2026-09-18 03:39:07 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:07 - rag_system - INFO - [QuestionGen] 缓存命中 6 chunks
+2026-09-18 03:39:07 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\75f020cbdd.json (nodes=10, chunks=6, anomalies=0)
+2026-09-18 03:39:08 - rag_system - INFO - [Embed] 缓存命中 6/6
+2026-09-18 03:39:09 - rag_system - INFO - [ADDED] manual_新员工入职手册.md
+2026-09-18 03:39:09 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\md\policy_信息安全管理制度.md doc_type=policy completeness=0.9626 → StructureChunkStrategy
+2026-09-18 03:39:09 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:10 - rag_system - INFO - [QuestionGen] 缓存命中 8 chunks
+2026-09-18 03:39:11 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 456, 'completion_tokens': 63, 'cost_usd': 0.000258, 'model': 'qwen3.7-plus'}
+2026-09-18 03:39:11 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\eb08652175.json (nodes=9, chunks=8, anomalies=0)
+2026-09-18 03:39:12 - rag_system - INFO - [Embed] 缓存命中 8/8
+2026-09-18 03:39:12 - rag_system - INFO - [ADDED] policy_信息安全管理制度.md
+2026-09-18 03:39:13 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\md\policy_印章使用管理办法.md doc_type=policy completeness=0.9612 → StructureChunkStrategy
+2026-09-18 03:39:13 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:13 - rag_system - INFO - [QuestionGen] 缓存命中 8 chunks
+2026-09-18 03:39:16 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 9 个, tokens: {'prompt_tokens': 497, 'completion_tokens': 67, 'cost_usd': 0.000279, 'model': 'qwen3.7-plus'}
+2026-09-18 03:39:16 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\e18c7885f1.json (nodes=9, chunks=8, anomalies=0)
+2026-09-18 03:39:16 - rag_system - INFO - [Embed] 缓存命中 8/8
+2026-09-18 03:39:17 - rag_system - INFO - [ADDED] policy_印章使用管理办法.md
+2026-09-18 03:39:17 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\md\policy_差旅费管理办法_v1.md doc_type=policy completeness=0.9393 → StructureChunkStrategy
+2026-09-18 03:39:17 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:18 - rag_system - INFO - [QuestionGen] 缓存命中 9 chunks
+2026-09-18 03:39:19 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 9 个, tokens: {'prompt_tokens': 414, 'completion_tokens': 71, 'cost_usd': 0.000251, 'model': 'qwen3.7-plus'}
+2026-09-18 03:39:19 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\190a410e06.json (nodes=10, chunks=9, anomalies=0)
+2026-09-18 03:39:20 - rag_system - INFO - [Embed] 缓存命中 9/9
+2026-09-18 03:39:21 - rag_system - INFO - [ADDED] policy_差旅费管理办法_v1.md
+2026-09-18 03:39:21 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\md\policy_考勤管理制度_市场部.md doc_type=policy completeness=0.9663 → StructureChunkStrategy
+2026-09-18 03:39:21 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:22 - rag_system - INFO - [QuestionGen] 缓存命中 10 chunks
+2026-09-18 03:39:23 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 0 个, tokens: {'prompt_tokens': 742, 'completion_tokens': 1, 'cost_usd': 0.000298, 'model': 'qwen3.7-plus'}
+2026-09-18 03:39:23 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\9ab88d7b30.json (nodes=11, chunks=10, anomalies=0)
+2026-09-18 03:39:24 - rag_system - INFO - [Embed] 缓存命中 10/10
+2026-09-18 03:39:24 - rag_system - INFO - [ADDED] policy_考勤管理制度_市场部.md
+2026-09-18 03:39:25 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\md\policy_考勤管理制度_研发中心.md doc_type=policy completeness=0.9661 → StructureChunkStrategy
+2026-09-18 03:39:25 - rag_system - INFO - [Filter] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\md\policy_考勤管理制度_研发中心.md: 过滤 2/10 个 chunk ({'duplicate': 2})
+2026-09-18 03:39:25 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:26 - rag_system - INFO - [QuestionGen] 缓存命中 8 chunks
+2026-09-18 03:39:27 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 0 个, tokens: {'prompt_tokens': 632, 'completion_tokens': 1, 'cost_usd': 0.000254, 'model': 'qwen3.7-plus'}
+2026-09-18 03:39:27 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\1b009aed62.json (nodes=11, chunks=8, anomalies=0)
+2026-09-18 03:39:27 - rag_system - INFO - [Embed] 缓存命中 8/8
+2026-09-18 03:39:28 - rag_system - INFO - [ADDED] policy_考勤管理制度_研发中心.md
+2026-09-18 03:39:28 - rag_system - INFO - [Classify] 胶着仲裁：top4=[('faq', 1)], inner_diff=999
+2026-09-18 03:39:30 - rag_system - INFO - [Classify] LLM 仲裁结果：faq
+2026-09-18 03:39:30 - rag_system - INFO - [Router] faq 但 AST 无 qa 节点 → Recursive 兜底
+2026-09-18 03:39:30 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\md\report_客服运营年度报告_2025.md doc_type=faq completeness=0.949 → RecursiveChunkStrategy
+2026-09-18 03:39:30 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:30 - rag_system - INFO - [Classify] 胶着仲裁：top4=[('faq', 1)], inner_diff=999
+2026-09-18 03:39:31 - rag_system - INFO - [Classify] LLM 仲裁结果：faq
+2026-09-18 03:39:31 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:39:31 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\9cd7ebde9a.json (nodes=8, chunks=1, anomalies=0)
+2026-09-18 03:39:32 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:39:32 - rag_system - INFO - [ADDED] report_客服运营年度报告_2025.md
+Consider using the pymupdf_layout package for a greatly improved page layout analysis.
+2026-09-18 03:39:33 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\pdf\contract_办公室租赁合同.pdf doc_type=legal completeness=0.1 → RecursiveChunkStrategy
+2026-09-18 03:39:33 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:34 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:39:35 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 291, 'completion_tokens': 66, 'cost_usd': 0.000196, 'model': 'qwen3.7-plus'}
+2026-09-18 03:39:35 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\05752f1e6d.json (nodes=2, chunks=1, anomalies=0)
+2026-09-18 03:39:36 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:39:37 - rag_system - INFO - [ADDED] contract_办公室租赁合同.pdf
+2026-09-18 03:39:37 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\pdf\policy_差旅费管理办法_v3.pdf doc_type=policy completeness=0.1 → RecursiveChunkStrategy
+2026-09-18 03:39:38 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:38 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:39:40 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 306, 'completion_tokens': 75, 'cost_usd': 0.000212, 'model': 'qwen3.7-plus'}
+2026-09-18 03:39:40 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\82324c27b6.json (nodes=2, chunks=1, anomalies=0)
+2026-09-18 03:39:41 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:39:41 - rag_system - INFO - [ADDED] policy_差旅费管理办法_v3.pdf
+2026-09-18 03:39:41 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\pdf\report_2026上半年财务摘要.pdf doc_type=financial completeness=0.1 → RecursiveChunkStrategy
+2026-09-18 03:39:41 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:42 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:39:43 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 5 个, tokens: {'prompt_tokens': 259, 'completion_tokens': 31, 'cost_usd': 0.000141, 'model': 'qwen3.7-plus'}
+2026-09-18 03:39:43 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\e8496375d0.json (nodes=2, chunks=1, anomalies=0)
+2026-09-18 03:39:44 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:39:44 - rag_system - INFO - [ADDED] report_2026上半年财务摘要.pdf
+2026-09-18 03:39:45 - rag_system - WARNING - [PdfParser] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\pdf\scan_设备报废申请单.pdf 文本层为空（0 chars / 1 页），启动 OCR 兜底（dashscope）
+2026-09-18 03:39:45 - rag_system - INFO - [PdfParser] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\pdf\scan_设备报废申请单.pdf OCR 完成: 1 页产出文本
+2026-09-18 03:39:45 - rag_system - INFO - [Classify] 胶着仲裁：top4=[('policy', 10), ('financial', 10)], inner_diff=0
+2026-09-18 03:39:46 - rag_system - INFO - [Classify] LLM 仲裁结果：financial
+2026-09-18 03:39:46 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\pdf\scan_设备报废申请单.pdf doc_type=financial completeness=0.1 → RecursiveChunkStrategy
+2026-09-18 03:39:46 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:46 - rag_system - INFO - [Classify] 胶着仲裁：top4=[('policy', 10), ('financial', 10)], inner_diff=0
+2026-09-18 03:39:47 - rag_system - INFO - [Classify] LLM 仲裁结果：financial
+2026-09-18 03:39:47 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:39:49 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 9 个, tokens: {'prompt_tokens': 307, 'completion_tokens': 59, 'cost_usd': 0.000194, 'model': 'qwen3.7-plus'}
+2026-09-18 03:39:49 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\b12ff35f7b.json (nodes=2, chunks=1, anomalies=1)
+2026-09-18 03:39:50 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:39:50 - rag_system - INFO - [ADDED] scan_设备报废申请单.pdf
+2026-09-18 03:39:51 - rag_system - WARNING - [PdfParser] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\pdf\scan_门禁权限申请表.pdf 文本层为空（0 chars / 1 页），启动 OCR 兜底（dashscope）
+2026-09-18 03:39:51 - rag_system - INFO - [PdfParser] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\pdf\scan_门禁权限申请表.pdf OCR 完成: 1 页产出文本
+2026-09-18 03:39:51 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\pdf\scan_门禁权限申请表.pdf doc_type=security completeness=0.1 → RecursiveChunkStrategy
+2026-09-18 03:39:51 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:52 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:39:53 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 0 个, tokens: {'prompt_tokens': 245, 'completion_tokens': 1, 'cost_usd': 9.9e-05, 'model': 'qwen3.7-plus'}
+2026-09-18 03:39:53 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\5e8c9173d8.json (nodes=2, chunks=1, anomalies=1)
+2026-09-18 03:39:53 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:39:54 - rag_system - INFO - [ADDED] scan_门禁权限申请表.pdf
+2026-09-18 03:39:54 - rag_system - INFO - [Router] faq 但 AST 无 qa 节点 → Recursive 兜底
+2026-09-18 03:39:54 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\txt\faq_运维值班FAQ.txt doc_type=faq completeness=0.9059 → RecursiveChunkStrategy
+2026-09-18 03:39:55 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:55 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:39:55 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\e44efcd5af.json (nodes=7, chunks=1, anomalies=1)
+2026-09-18 03:39:56 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:39:56 - rag_system - INFO - [ADDED] faq_运维值班FAQ.txt
+2026-09-18 03:39:57 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\txt\notes_产品评审会议纪要_20260830.txt doc_type=financial completeness=0.1 → RecursiveChunkStrategy
+2026-09-18 03:39:57 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:39:57 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:39:59 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 9 个, tokens: {'prompt_tokens': 239, 'completion_tokens': 71, 'cost_usd': 0.000181, 'model': 'qwen3.7-plus'}
+2026-09-18 03:39:59 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\c5c12dd194.json (nodes=4, chunks=1, anomalies=0)
+2026-09-18 03:40:00 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:40:00 - rag_system - INFO - [ADDED] notes_产品评审会议纪要_20260830.txt
+2026-09-18 03:40:01 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\txt\readme_数据字典_客户域.txt doc_type=general completeness=0.1 → RecursiveChunkStrategy
+2026-09-18 03:40:01 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:01 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:40:01 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\c39ee47eda.json (nodes=3, chunks=1, anomalies=0)
+2026-09-18 03:40:02 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:40:03 - rag_system - INFO - [ADDED] readme_数据字典_客户域.txt
+2026-09-18 03:40:04 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\xlsx\table_2026Q2部门人力成本.xlsx doc_type=financial completeness=0.9384 → FinancialTableChunkStrategy
+2026-09-18 03:40:04 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:05 - rag_system - INFO - [QuestionGen] 缓存命中 6 chunks
+2026-09-18 03:40:06 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 8 个, tokens: {'prompt_tokens': 343, 'completion_tokens': 54, 'cost_usd': 0.000202, 'model': 'qwen3.7-plus'}
+2026-09-18 03:40:06 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\f3cff62422.json (nodes=3, chunks=6, anomalies=0)
+2026-09-18 03:40:09 - rag_system - INFO - [TableDesc] 生成 5/5 行描述
+2026-09-18 03:40:10 - rag_system - INFO - [Embed] 缓存命中 6/6
+2026-09-18 03:40:10 - rag_system - INFO - [ADDED] table_2026Q2部门人力成本.xlsx
+2026-09-18 03:40:10 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\xlsx\table_产品定价表.xlsx doc_type=general completeness=0.9355 → RecursiveChunkStrategy
+2026-09-18 03:40:11 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:12 - rag_system - INFO - [Classify] LLM 复验: product_spec
+2026-09-18 03:40:12 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:40:12 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\6ad07ee8d9.json (nodes=3, chunks=1, anomalies=0)
+2026-09-18 03:40:13 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:40:13 - rag_system - INFO - [ADDED] table_产品定价表.xlsx
+2026-09-18 03:40:13 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\xlsx\table_服务器资产清单.xlsx doc_type=product_spec completeness=0.9382 → StructureChunkStrategy
+2026-09-18 03:40:14 - rag_system - INFO - [Filter] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\xlsx\table_服务器资产清单.xlsx: 过滤 1/2 个 chunk ({'duplicate': 1})
+2026-09-18 03:40:14 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:14 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:40:14 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\eb7254261e.json (nodes=3, chunks=1, anomalies=0)
+2026-09-18 03:40:15 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:40:15 - rag_system - INFO - [ADDED] table_服务器资产清单.xlsx
+2026-09-18 03:40:15 - rag_system - INFO - [PdfParser] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\10_结构混乱的长文档.pdf 识别 2 个标题（正文字号 10.0）
+2026-09-18 03:40:16 - rag_system - INFO - [Router] faq 但 AST 无 qa 节点 → Recursive 兜底
+2026-09-18 03:40:16 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\10_结构混乱的长文档.pdf doc_type=faq completeness=0.9671 → RecursiveChunkStrategy
+2026-09-18 03:40:16 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:17 - rag_system - INFO - [QuestionGen] 缓存命中 3 chunks
+2026-09-18 03:40:17 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\117b865e4d.json (nodes=15, chunks=3, anomalies=0)
+2026-09-18 03:40:17 - rag_system - INFO - [Embed] 缓存命中 3/3
+2026-09-18 03:40:18 - rag_system - INFO - [ADDED] 10_结构混乱的长文档.pdf
+2026-09-18 03:40:18 - rag_system - INFO - [MarkdownParser] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\16_一句话FAQ.md 识别为 FAQ 文档，产出 1 个 Q/A 对
+2026-09-18 03:40:18 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\16_一句话FAQ.md doc_type=faq completeness=1.0 → QAChunkStrategy
+2026-09-18 03:40:18 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:18 - rag_system - WARNING - [Quality] 文档未通过质量门禁: ['文档偏短(<100字符)', '无标题/章节结构']
+2026-09-18 03:40:19 - rag_system - INFO - [QuestionGen] 缓存命中 2 chunks
+2026-09-18 03:40:19 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\bef6896789.json (nodes=3, chunks=2, anomalies=0)
+2026-09-18 03:40:19 - rag_system - INFO - [Embed] 缓存命中 2/2
+2026-09-18 03:40:20 - rag_system - INFO - [ADDED] 16_一句话FAQ.md
+2026-09-18 03:40:20 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\24_关键词干扰文档.md doc_type=sop completeness=0.9089 → StepChunkStrategy
+2026-09-18 03:40:20 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:21 - rag_system - INFO - [QuestionGen] 缓存命中 2 chunks
+2026-09-18 03:40:21 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\9f3500127c.json (nodes=9, chunks=2, anomalies=0)
+2026-09-18 03:40:21 - rag_system - INFO - [Embed] 缓存命中 2/2
+2026-09-18 03:40:22 - rag_system - INFO - [ADDED] 24_关键词干扰文档.md
+2026-09-18 03:40:22 - rag_system - INFO - [Router] faq 但 AST 无 qa 节点 → Recursive 兜底
+2026-09-18 03:40:22 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\25_同形异义词.md doc_type=faq completeness=0.9495 → RecursiveChunkStrategy
+2026-09-18 03:40:22 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:23 - rag_system - INFO - [QuestionGen] 缓存命中 1 chunks
+2026-09-18 03:40:23 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\a1e6a1c29a.json (nodes=18, chunks=1, anomalies=0)
+2026-09-18 03:40:24 - rag_system - INFO - [Embed] 缓存命中 1/1
+2026-09-18 03:40:25 - rag_system - INFO - [ADDED] 25_同形异义词.md
+2026-09-18 03:40:25 - rag_system - INFO - [Classify] 胶着仲裁：top4=[('policy', 4)], inner_diff=999
+2026-09-18 03:40:26 - rag_system - INFO - [Classify] LLM 仲裁结果：policy
+2026-09-18 03:40:27 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\26_数字近似陷阱.md doc_type=policy completeness=0.956 → StructureChunkStrategy
+2026-09-18 03:40:27 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:28 - rag_system - INFO - [QuestionGen] 缓存命中 10 chunks
+2026-09-18 03:40:31 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 723, 'completion_tokens': 67, 'cost_usd': 0.00037, 'model': 'qwen3.7-plus'}
+2026-09-18 03:40:31 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\e468c48498.json (nodes=11, chunks=10, anomalies=0)
+2026-09-18 03:40:32 - rag_system - INFO - [Embed] 缓存命中 10/10
+2026-09-18 03:40:32 - rag_system - INFO - [ADDED] 26_数字近似陷阱.md
+2026-09-18 03:40:32 - rag_system - INFO - [DocxParser] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\cs_售后FAQ.docx 识别为 FAQ 文档，产出 8 个 Q/A 对
+2026-09-18 03:40:32 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\cs_售后FAQ.docx doc_type=faq completeness=1.0 → QAChunkStrategy
+2026-09-18 03:40:33 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:33 - rag_system - INFO - [QuestionGen] 缓存命中 9 chunks
+2026-09-18 03:40:33 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\e044139401.json (nodes=17, chunks=9, anomalies=2)
+2026-09-18 03:40:34 - rag_system - INFO - [Embed] 缓存命中 9/9
+2026-09-18 03:40:34 - rag_system - INFO - [ADDED] cs_售后FAQ.docx
+2026-09-18 03:40:35 - rag_system - INFO - [MarkdownParser] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\faq_常见问题FAQ.md 识别为 FAQ 文档，产出 18 个 Q/A 对
+2026-09-18 03:40:35 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\faq_常见问题FAQ.md doc_type=faq completeness=1.0 → QAChunkStrategy
+2026-09-18 03:40:35 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:36 - rag_system - INFO - [QuestionGen] 缓存命中 19 chunks
+2026-09-18 03:40:36 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\4b8b61b688.json (nodes=37, chunks=19, anomalies=2)
+2026-09-18 03:40:36 - rag_system - INFO - [Embed] 缓存命中 19/19
+2026-09-18 03:40:37 - rag_system - INFO - [ADDED] faq_常见问题FAQ.md
+2026-09-18 03:40:37 - rag_system - INFO - [PdfParser] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\finance_员工报销制度.pdf 识别 7 个标题（正文字号 10.0）
+2026-09-18 03:40:37 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\finance_员工报销制度.pdf doc_type=financial completeness=0.9896 → FinancialTableChunkStrategy
+2026-09-18 03:40:38 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:38 - rag_system - INFO - [QuestionGen] 缓存命中 14 chunks
+2026-09-18 03:40:40 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 778, 'completion_tokens': 64, 'cost_usd': 0.000388, 'model': 'qwen3.7-plus'}
+2026-09-18 03:40:40 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\8117d97802.json (nodes=15, chunks=14, anomalies=0)
+2026-09-18 03:40:41 - rag_system - INFO - [Embed] 缓存命中 14/14
+2026-09-18 03:40:42 - rag_system - INFO - [ADDED] finance_员工报销制度.pdf
+2026-09-18 03:40:42 - rag_system - INFO - [Classify] 胶着仲裁：top4=[('legal', 20), ('policy', 15), ('compliance', 10), ('financial', 6)], inner_diff=5
+2026-09-18 03:40:43 - rag_system - INFO - [Classify] LLM 仲裁结果：policy
+2026-09-18 03:40:43 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\hr_员工手册.docx doc_type=policy completeness=0.957 → StructureChunkStrategy
+2026-09-18 03:40:43 - rag_system - INFO - [Filter] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\hr_员工手册.docx: 过滤 1/16 个 chunk ({'duplicate': 1})
+2026-09-18 03:40:43 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:44 - rag_system - INFO - [QuestionGen] 缓存命中 15 chunks
+2026-09-18 03:40:46 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 550, 'completion_tokens': 57, 'cost_usd': 0.000288, 'model': 'qwen3.7-plus'}
+2026-09-18 03:40:46 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\093e7e0817.json (nodes=20, chunks=15, anomalies=0)
+2026-09-18 03:40:47 - rag_system - INFO - [Embed] 缓存命中 15/15
+2026-09-18 03:40:48 - rag_system - INFO - [ADDED] hr_员工手册.docx
+2026-09-18 03:40:48 - rag_system - INFO - [PdfParser] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\ops_库存管理制度.pdf 识别 1 个表格
+2026-09-18 03:40:48 - rag_system - INFO - [PdfParser] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\ops_库存管理制度.pdf 识别 6 个标题（正文字号 14.0）
+2026-09-18 03:40:48 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\ops_库存管理制度.pdf doc_type=policy completeness=0.995 → StructureChunkStrategy
+2026-09-18 03:40:49 - rag_system - INFO - [Filter] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\ops_库存管理制度.pdf: 过滤 1/17 个 chunk ({'too_short': 1})
+2026-09-18 03:40:49 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:49 - rag_system - INFO - [QuestionGen] 缓存命中 16 chunks
+2026-09-18 03:40:51 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 1371, 'completion_tokens': 67, 'cost_usd': 0.000629, 'model': 'qwen3.7-plus'}
+2026-09-18 03:40:51 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\1978ae91d7.json (nodes=16, chunks=16, anomalies=0)
+2026-09-18 03:40:53 - rag_system - INFO - [TableDesc] 生成 2/2 行描述
+2026-09-18 03:40:54 - rag_system - INFO - [Embed] 缓存命中 16/16
+2026-09-18 03:40:54 - rag_system - INFO - [ADDED] ops_库存管理制度.pdf
+2026-09-18 03:40:55 - rag_system - INFO - [PdfParser] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\product_商品规格说明.pdf 识别 1 个表格
+2026-09-18 03:40:55 - rag_system - INFO - [PdfParser] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\product_商品规格说明.pdf 识别 5 个标题（正文字号 14.0）
+2026-09-18 03:40:55 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\product_商品规格说明.pdf doc_type=product_spec completeness=0.9968 → StructureChunkStrategy
+2026-09-18 03:40:55 - rag_system - INFO - [Filter] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\product_商品规格说明.pdf: 过滤 1/15 个 chunk ({'too_short': 1})
+2026-09-18 03:40:55 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:40:56 - rag_system - INFO - [QuestionGen] 缓存命中 14 chunks
+2026-09-18 03:40:56 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\06312d6bad.json (nodes=11, chunks=14, anomalies=0)
+2026-09-18 03:40:59 - rag_system - INFO - [TableDesc] 生成 5/5 行描述
+2026-09-18 03:41:00 - rag_system - INFO - [Embed] 缓存命中 14/14
+2026-09-18 03:41:00 - rag_system - INFO - [ADDED] product_商品规格说明.pdf
+2026-09-18 03:41:01 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\purchase_采购流程.docx doc_type=sop completeness=0.9588 → StepChunkStrategy
+2026-09-18 03:41:01 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:41:02 - rag_system - INFO - [QuestionGen] 缓存命中 8 chunks
+2026-09-18 03:41:02 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\583a40a6e8.json (nodes=24, chunks=8, anomalies=0)
+2026-09-18 03:41:02 - rag_system - INFO - [Embed] 缓存命中 8/8
+2026-09-18 03:41:03 - rag_system - INFO - [ADDED] purchase_采购流程.docx
+2026-09-18 03:41:03 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\qc_质检标准SOP.docx doc_type=sop completeness=0.9577 → StepChunkStrategy
+2026-09-18 03:41:03 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:41:04 - rag_system - INFO - [QuestionGen] 缓存命中 8 chunks
+2026-09-18 03:41:04 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\f5f5b913eb.json (nodes=24, chunks=8, anomalies=0)
+2026-09-18 03:41:05 - rag_system - INFO - [Embed] 缓存命中 8/8
+2026-09-18 03:41:06 - rag_system - INFO - [ADDED] qc_质检标准SOP.docx
+2026-09-18 03:41:06 - rag_system - INFO - [PdfParser] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\returns_退货政策.pdf 识别 7 个标题（正文字号 10.0）
+2026-09-18 03:41:06 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\returns_退货政策.pdf doc_type=policy completeness=0.9847 → StructureChunkStrategy
+2026-09-18 03:41:07 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:41:07 - rag_system - INFO - [QuestionGen] 缓存命中 14 chunks
+2026-09-18 03:41:09 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 519, 'completion_tokens': 65, 'cost_usd': 0.000286, 'model': 'qwen3.7-plus'}
+2026-09-18 03:41:09 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\049380acd9.json (nodes=15, chunks=14, anomalies=0)
+2026-09-18 03:41:09 - rag_system - INFO - [Embed] 缓存命中 14/14
+2026-09-18 03:41:10 - rag_system - INFO - [ADDED] returns_退货政策.pdf
+2026-09-18 03:41:10 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\supplier_供应商管理规范.md doc_type=policy completeness=0.9647 → StructureChunkStrategy
+2026-09-18 03:41:11 - rag_system - INFO - [Filter] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\supplier_供应商管理规范.md: 过滤 2/20 个 chunk ({'duplicate': 2})
+2026-09-18 03:41:11 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:41:11 - rag_system - INFO - [QuestionGen] 缓存命中 18 chunks
+2026-09-18 03:41:13 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 1185, 'completion_tokens': 67, 'cost_usd': 0.000554, 'model': 'qwen3.7-plus'}
+2026-09-18 03:41:13 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\e298c1615a.json (nodes=21, chunks=18, anomalies=0)
+2026-09-18 03:41:14 - rag_system - INFO - [Embed] 缓存命中 18/18
+2026-09-18 03:41:15 - rag_system - INFO - [ADDED] supplier_供应商管理规范.md
+2026-09-18 03:41:15 - rag_system - INFO - [PdfParser] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\tech_技术手册.pdf 识别 19 个标题（正文字号 10.5）
+2026-09-18 03:41:15 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\tech_技术手册.pdf doc_type=security completeness=0.9914 → StructureChunkStrategy
+2026-09-18 03:41:15 - rag_system - INFO - [Filter] D:\Program Files\workplace\agent\data\docs\rag_test_kb\general\tech_技术手册.pdf: 过滤 6/38 个 chunk ({'low_chinese_ratio': 4, 'duplicate': 2})
+2026-09-18 03:41:15 - rag_system - WARNING - [MetaLLM] 渲染抽取提示词失败（降级规则路径）: 'Prompt not found in snapshot or defaults: rag.preprocessing.metadata_extract'
+2026-09-18 03:41:16 - rag_system - INFO - [QuestionGen] 缓存命中 32 chunks
+2026-09-18 03:41:18 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 10 个, tokens: {'prompt_tokens': 1665, 'completion_tokens': 68, 'cost_usd': 0.000748, 'model': 'qwen3.7-plus'}
+2026-09-18 03:41:18 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_test_kb\25521d308d.json (nodes=39, chunks=32, anomalies=0)
+2026-09-18 03:41:19 - rag_system - INFO - [Embed] 缓存命中 32/32
+2026-09-18 03:41:19 - rag_system - INFO - [ADDED] tech_技术手册.pdf
+2026-09-18 03:41:19 - rag_system - INFO - 增量索引完成: SyncResult(added=51, modified=0, deleted=66, skipped=0)
+2026-09-18 03:41:19 - rag_system - INFO - 增量索引: SyncResult(added=51, modified=0, deleted=66, skipped=0)
+2026-09-18 03:41:19 - rag_system - INFO - [BM25Store] 索引加载成功: 608 文档, 构建于 2026-09-17 20:50:38
+2026-09-18 03:41:20 - rag_system - INFO - [RAG] 从向量库构建 BM25 语料: 593 chunks
+2026-09-18 03:41:20 - rag_system - INFO - [RAG] BM25 索引与文档目录不一致（残留/缺失），重建...
+2026-09-18 03:41:20 - rag_system - INFO - [BM25Store] 构建索引，593 个文档...
+2026-09-18 03:41:20 - rag_system - INFO - [BM25Store] 索引构建完成: 593 文档, 0.3s, hash=52c87cd663b610f2
+2026-09-18 03:41:21 - rag_system - INFO - LangChain RAG Chain 初始化完成
+2026-09-18 03:41:21 - rag_system - INFO - RAG 管道初始化完成
+2026-09-18 03:41:21 - rag_system - INFO - [RAG eval] 断点续跑：checkpoint 命中 136 条已完成用例，将跳过
+2026-09-18 03:41:21 - rag_system - INFO - [DocIdResolver] 加载 registry: 53 条映射
+2026-09-18 03:41:22 - rag_system - INFO - 关键词重排: query_kw={'出口', '直接', '管制', '后果', '合同', '筛查', '什么', '责任人'}, 命中 5/15
+2026-09-18 03:41:22 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=7 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:41:22 - rag_system - INFO - [Stage1 门控] 排除 8 个文档: ['policy_信息安全管理制度.md', 'policy_信息安全管理制度.md', 'table_差旅报销明细_2026H1.csv', 'table_差旅报销明细_2026H1.csv', 'contract_办公室租赁合同.pdf']... (理由: 无关键词命中且不在相似度 Top3)
+2026-09-18 03:41:22 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='没做出口管制筛查就签了合同，直接责任人会有什么后果？...'
+[EnhancedRetrieve] Low confidence (0.10 < 0.30), triggering query rewrite or扩大检索范围
+2026-09-18 03:41:24 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 20 个 chunks
+2026-09-18 03:41:24 - rag_system - INFO - [Reranker] Cloud 模式初始化完成 (model=qwen3-rerank)
+2026-09-18 03:41:24 - rag_system - INFO - 初始化 Cloud Reranker HTTP (format=dashscope, model=qwen3-rerank, endpoint=https://dashscope.aliyuncs.com/api/v1, timeout=4s)
+2026-09-18 03:41:25 - rag_system - INFO - [Rerank] 淘汰 15/20 篇: ['policy_供应商准入管理办法.docx', 'policy_供应商准入管理办法.docx', 'policy_供应商准入管理办法.docx', 'policy_印章使用管理办法.md', 'policy_供应商准入管理办法.docx']...
+2026-09-18 03:41:25 - rag_system - INFO - [Ollama] ENV_MODE=cloud，本地 Ollama 已禁用，评测生成走降级路径
+Loading weights:   0%|          | 0/393 [00:00<?, ?it/s]Loading weights:  32%|███▏      | 127/393 [00:00<00:00, 1263.21it/s]Loading weights:  67%|██████▋   | 264/393 [00:00<00:00, 1310.71it/s]Loading weights: 100%|██████████| 393/393 [00:00<00:00, 1332.75it/s]
+2026-09-18 03:41:31 - rag_system - WARNING - [SemanticScorer] cross_encoder 加载失败，降级: Torch not compiled with CUDA enabled
+2026-09-18 03:41:32 - rag_system - INFO - [SemanticScorer] Embedding 评分器已加载
+2026-09-18 03:41:33 - rag_system - INFO - 关键词重排: query_kw={'上限', '客服部', '分别', '中心', '多少', '研发', '工时', '加班', '每月'}, 命中 6/15
+2026-09-18 03:41:33 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=6 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:41:33 - rag_system - INFO - [Stage1 门控] 排除 9 个文档: ['report_客服运营年度报告_2025.md', 'report_客服运营年度报告_2025.md', 'table_客服工单统计_2026.csv', 'table_客服工单统计_2026.csv', 'faq_运维值班FAQ.txt']... (理由: 无关键词命中且不在相似度 Top3)
+2026-09-18 03:41:33 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='研发中心和客服部，每月加班工时上限分别是多少？...'
+2026-09-18 03:41:34 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 20 个 chunks
+2026-09-18 03:41:34 - rag_system - INFO - [Rerank] 淘汰 14/20 篇: ['policy_考勤管理制度_研发中心.md', 'policy_考勤管理制度_市场部.md', 'policy_考勤管理制度_研发中心.md', 'policy_考勤管理制度_市场部.md', 'policy_考勤管理制度_市场部.md']...
+2026-09-18 03:41:36 - rag_system - INFO - 关键词重排: query_kw={'检测', '2026Q2', '平均', '安全事件', '多少', '时长'}, 命中 4/15
+2026-09-18 03:41:36 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=7 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:41:36 - rag_system - INFO - [Stage1 门控] 排除 8 个文档: ['report_Q2产品迭代总结_2026.docx', 'faq_运维值班FAQ.txt', 'faq_运维值班FAQ.txt', 'faq_员工常见问题.md', 'report_2026上半年财务摘要.pdf']... (理由: 无关键词命中且不在相似度 Top3)
+2026-09-18 03:41:36 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='2026Q2 安全事件的平均检测时长是多少？...'
+[EnhancedRetrieve] Low confidence (0.10 < 0.30), triggering query rewrite or扩大检索范围
+2026-09-18 03:41:36 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 11 个 chunks
+2026-09-18 03:41:37 - rag_system - INFO - [Rerank] 淘汰 6/11 篇: ['table_2026Q2部门人力成本.xlsx', 'table_2026Q2部门人力成本.xlsx', 'table_2026Q2部门人力成本.xlsx', 'table_2026Q2部门人力成本.xlsx', 'table_2026Q2部门人力成本.xlsx']...
+2026-09-18 03:41:39 - rag_system - INFO - 关键词重排: query_kw={'DPA', '处理', '提前', '甲方', '多久', '告知', '使用', '乙方'}, 命中 2/15
+2026-09-18 03:41:39 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=15 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:41:39 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='DPA 里乙方使用子处理者，须提前多久告知甲方？...'
+[EnhancedRetrieve] Low confidence (0.00 < 0.30), triggering query rewrite or扩大检索范围
+2026-09-18 03:41:41 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 20 个 chunks
+2026-09-18 03:41:41 - rag_system - INFO - [Rerank] 淘汰 14/20 篇: ['policy_考勤管理制度_市场部.md', 'policy_考勤管理制度_研发中心.md', 'policy_考勤管理制度_研发中心.md', 'manual_新员工入职手册.md', 'manual_新员工入职手册.md']...
+2026-09-18 03:41:43 - rag_system - INFO - 关键词重排: query_kw={'时限', '万元', '怎么办', '超过', 'V2', '报销', '办法', '多少'}, 命中 6/15
+2026-09-18 03:41:43 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=6 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:41:43 - rag_system - INFO - [Stage1 门控] 排除 9 个文档: ['scan_设备报废申请单.pdf', 'scan_设备报废申请单.pdf', 'policy_考勤管理制度_市场部.md', 'policy_考勤管理制度_市场部.md', 'table_产品定价表.xlsx']... (理由: 无关键词命中且不在相似度 Top3)
+2026-09-18 03:41:43 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='V2 版报销办法的报销时限是多少？超过 5 万元怎么办？...'
+[EnhancedRetrieve] Low confidence (0.05 < 0.30), triggering query rewrite or扩大检索范围
+2026-09-18 03:41:44 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 18 个 chunks
+2026-09-18 03:41:45 - rag_system - INFO - [Rerank] 淘汰 10/18 篇: ['policy_差旅费管理办法_v1.md', 'policy_差旅费管理办法_v2.docx', 'policy_差旅费管理办法_v2.docx', 'policy_差旅费管理办法_v2.docx', 'policy_差旅费管理办法_v1.md']...
+2026-09-18 03:41:46 - rag_system - INFO - 关键词重排: query_kw={'许可费', '授权', '席位', '许可', '多少', '软件', '星辰', '企业'}, 命中 11/15
+2026-09-18 03:41:46 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=6 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:41:46 - rag_system - INFO - [Stage1 门控] 排除 9 个文档: ['notes_产品评审会议纪要_20260830.txt', 'notes_产品评审会议纪要_20260830.txt', 'contract_蓝鲸数据服务合同.md', 'contract_蓝鲸数据服务合同.md', 'manual_会议室使用规范.docx']... (理由: 无关键词命中且不在相似度 Top3)
+2026-09-18 03:41:46 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='星辰盾企业版软件许可授权多少席位？年许可费多少？...'
+2026-09-18 03:41:47 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 6 个 chunks
+2026-09-18 03:41:47 - rag_system - INFO - [Rerank] 淘汰 4/6 篇: ['contract_办公室租赁合同.pdf', 'contract_办公室租赁合同.pdf', 'scan_门禁权限申请表.pdf', 'scan_门禁权限申请表.pdf']
+2026-09-18 03:41:48 - rag_system - INFO - 关键词重排: query_kw={'营业', '净利润', '分别', '多少', '收入'}, 命中 2/15
+2026-09-18 03:41:48 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=3 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:41:48 - rag_system - INFO - [Stage1 门控] 排除 12 个文档: ['report_客服运营年度报告_2025.md', 'table_区域销售月报_2026.csv', 'table_区域销售月报_2026.csv', 'table_服务器资产清单.xlsx', 'table_服务器资产清单.xlsx']... (理由: 无关键词命中且不在相似度 Top3)
+2026-09-18 03:41:48 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='2025 年公司营业收入和净利润分别是多少？...'
+2026-09-18 03:41:51 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 3 个 chunks
+2026-09-18 03:41:52 - rag_system - INFO - [Rerank] 淘汰 1/3 篇: ['report_客服运营年度报告_2025.md']
+2026-09-18 03:41:53 - rag_system - INFO - 关键词重排: query_kw={'成员', '评标', '组成', '至少', '外部', '几名', '委员会', '专家'}, 命中 2/15
+2026-09-18 03:41:53 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=15 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:41:53 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='评标委员会由几名成员组成？外部专家至少几名？...'
+2026-09-18 03:41:54 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 20 个 chunks
+2026-09-18 03:41:54 - rag_system - INFO - [Rerank] 淘汰 19/20 篇: ['policy_供应商准入管理办法.docx', 'policy_供应商准入管理办法.docx', 'policy_供应商准入管理办法.docx', 'policy_供应商准入管理办法.docx', 'notes_产品评审会议纪要_20260830.txt']...
+2026-09-18 03:41:56 - rag_system - INFO - 关键词重排: query_kw={'完成', '金额', '审批', 'BX', '报销', '多少', '时候', '什么'}, 命中 7/15
+2026-09-18 03:41:56 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=5 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:41:56 - rag_system - INFO - [Stage1 门控] 排除 10 个文档: ['scan_设备报废申请单.pdf', 'scan_设备报废申请单.pdf', 'notes_产品评审会议纪要_20260830.txt', 'notes_产品评审会议纪要_20260830.txt', 'policy_差旅费管理办法_v2.docx']... (理由: 无关键词命中且不在相似度 Top3)
+2026-09-18 03:41:56 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='报销单 BX-2026-0518 的报销金额是多少？什么时候审批完成？...'
+[EnhancedRetrieve] Low confidence (0.17 < 0.35), triggering query rewrite or扩大检索范围
+2026-09-18 03:41:58 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 14 个 chunks
+2026-09-18 03:41:59 - rag_system - INFO - [Rerank] 淘汰 6/14 篇: ['policy_差旅费管理办法_v3.pdf', 'policy_差旅费管理办法_v1.md', 'policy_差旅费管理办法_v1.md', 'policy_差旅费管理办法_v1.md', 'faq_员工常见问题.md']...
+2026-09-18 03:42:00 - rag_system - INFO - 关键词重排: query_kw={'P1', '异常', 'P2', '补齐', '内回', '审批', '多久', '变更', '紧急', '出现'}, 命中 8/15
+2026-09-18 03:42:00 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=7 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:42:00 - rag_system - INFO - [Stage1 门控] 排除 8 个文档: ['policy_信息安全管理制度.md', 'faq_员工常见问题.md', 'manual_新员工入职手册.md', 'manual_新员工入职手册.md', 'policy_考勤管理制度_研发中心.md']... (理由: 无关键词命中且不在相似度 Top3)
+2026-09-18 03:42:00 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='紧急变更要多久补齐审批？变更后出现 P1/P2 异常多久内回滚？...'
+[EnhancedRetrieve] Low confidence (0.30 < 0.35), triggering query rewrite or扩大检索范围
+2026-09-18 03:42:03 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 13 个 chunks
+2026-09-18 03:42:04 - rag_system - INFO - [Rerank] 淘汰 8/13 篇: ['report_Q2产品迭代总结_2026.docx', 'policy_考勤管理制度_市场部.md', 'report_Q2产品迭代总结_2026.docx', 'policy_信息安全管理制度.md', 'policy_考勤管理制度_市场部.md']...
+2026-09-18 03:42:05 - rag_system - INFO - 关键词重排: query_kw={'表里', '贡献', '多少', '收入', '企业', 'ARPU'}, 命中 2/15
+2026-09-18 03:42:05 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=3 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:42:05 - rag_system - INFO - [Stage1 门控] 排除 12 个文档: ['report_2026上半年财务摘要.pdf', 'table_2026Q2部门人力成本.xlsx', 'table_2026Q2部门人力成本.xlsx', 'scan_设备报废申请单.pdf', 'scan_设备报废申请单.pdf']... (理由: 无关键词命中且不在相似度 Top3)
+2026-09-18 03:42:05 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='收入贡献表里企业版的 ARPU 是多少？...'
+[EnhancedRetrieve] Low confidence (0.20 < 0.30), triggering query rewrite or扩大检索范围
+2026-09-18 03:42:06 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 3 个 chunks
+2026-09-18 03:42:08 - rag_system - INFO - 关键词重排: query_kw={'供应商', '人名录', '联系', '供应商管理', '几家', '合计'}, 命中 2/15
+2026-09-18 03:42:08 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=3 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:42:08 - rag_system - INFO - [Stage1 门控] 排除 12 个文档: ['table_服务器资产清单.xlsx', 'report_客服运营年度报告_2025.md', 'report_客服运营年度报告_2025.md', 'table_客服工单统计_2026.csv', 'table_客服工单统计_2026.csv']... (理由: 无关键词命中且不在相似度 Top3)
+2026-09-18 03:42:08 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='供应商联系人名录里 A 类供应商有几家？合计几家？...'
+2026-09-18 03:42:08 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 15 个 chunks
+2026-09-18 03:42:08 - rag_system - INFO - AdaptiveRetriever: Cluster 检测 (docs=['policy_supplier', '534068aca2']) 但置信度低 (avg=0.045, top=0.049) → 跳过 Expansion
+2026-09-18 03:42:09 - rag_system - INFO - [Rerank] 淘汰 10/15 篇: ['policy_供应商准入管理办法.docx', 'policy_供应商准入管理办法.docx', 'policy_供应商准入管理办法.docx', 'policy_供应商准入管理办法.docx', 'policy_供应商准入管理办法.docx']...
+2026-09-18 03:42:10 - rag_system - INFO - 关键词重排: query_kw={'上半年', '平均', '几天', '金额', '多少', '订单', '供应商管理', '交付', '合计', '采购'}, 命中 7/15
+2026-09-18 03:42:10 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=7 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:42:10 - rag_system - INFO - [Stage1 门控] 排除 8 个文档: ['contract_蓝鲸数据服务合同.md', 'contract_蓝鲸数据服务合同.md', 'table_区域销售月报_2026.csv', 'table_区域销售月报_2026.csv', 'notes_产品评审会议纪要_20260830.txt']... (理由: 无关键词命中且不在相似度 Top3)
+2026-09-18 03:42:10 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='2026 上半年采购订单合计多少单？金额多少？平均交付几天？...'
+[EnhancedRetrieve] Low confidence (0.30 < 0.35), triggering query rewrite or扩大检索范围
+2026-09-18 03:42:12 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 9 个 chunks
+2026-09-18 03:42:12 - rag_system - INFO - AdaptiveRetriever: Cluster 检测 (docs=['table_expense_h1_2026']) 但置信度低 (avg=0.062, top=0.064) → 跳过 Expansion
+2026-09-18 03:42:13 - rag_system - INFO - [Rerank] 淘汰 4/9 篇: ['report_客服运营年度报告_2025.md', 'table_客服工单统计_2026.csv', 'table_客服工单统计_2026.csv', 'report_客服运营年度报告_2025.md']
+2026-09-18 03:42:14 - rag_system - INFO - 关键词重排: query_kw={'响应', 'P1', '时限', '三个', '版本', '故障', 'SOP', '修复', '多少', '应急'}, 命中 8/15
+2026-09-18 03:42:14 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=8 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:42:14 - rag_system - INFO - [Stage1 门控] 排除 7 个文档: ['policy_信息安全管理制度.md', 'policy_信息安全管理制度.md', 'policy_考勤管理制度_市场部.md', 'policy_考勤管理制度_市场部.md', 'policy_考勤管理制度_研发中心.md']... (理由: 无关键词命中且不在相似度 Top3)
+2026-09-18 03:42:14 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='故障应急响应 SOP 三个版本里，P1 级故障的修复时限分别是多少？...'
+[EnhancedRetrieve] Low confidence (0.25 < 0.35), triggering query rewrite or扩大检索范围
+2026-09-18 03:42:16 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 8 个 chunks
+2026-09-18 03:42:16 - rag_system - INFO - [Rerank] 淘汰 4/8 篇: ['report_客服运营年度报告_2025.md', 'table_客服工单统计_2026.csv', 'table_客服工单统计_2026.csv', 'report_客服运营年度报告_2025.md']
+2026-09-18 03:42:18 - rag_system - INFO - 关键词重排: query_kw={'发现', '审查', '具体', '事项', '三项', '合规', '高风险', '年度'}, 命中 2/15
+2026-09-18 03:42:18 - rag_system - INFO - ChunkLevelRetriever Stage 1: metadata_filter={'kb_id': 'rag_100_docs'} → doc_ids=15 matched, path=metadata_filter_with_doc_similarity
+2026-09-18 03:42:18 - rag_system - INFO - [hybrid_retrieve] Using ENHANCED multi-path retrieval for query='2026 年度合规审查发现的高风险事项具体是哪三项？...'
+[EnhancedRetrieve] Low confidence (0.10 < 0.30), triggering query rewrite or扩大检索范围
+2026-09-18 03:42:18 - rag_system - INFO - ChunkLevelRetriever Stage 2: 召回 20 个 chunks
+2026-09-18 03:42:19 - rag_system - INFO - [Rerank] 淘汰 15/20 篇: ['notes_产品评审会议纪要_20260830.txt', 'policy_供应商准入管理办法.docx', 'policy_供应商准入管理办法.docx', 'policy_供应商准入管理办法.docx', 'policy_信息安全管理制度.md']...
+2026-09-18 03:42:20 - rag_system - INFO - [RAGAS] 并行评估 15 个 case（workers=2）
+2026-09-18 03:42:21 - rag_system - INFO - [RAGAS-patch] 输出解析安全网已加载
+2026-09-18 03:42:21 - rag_system - INFO - [RAGAS] LLM 初始化完成（DashScope: qwen3.7-plus）
+2026-09-18 03:42:21 - rag_system - INFO - [RAGAS] Embeddings 初始化完成（全局单例）
+D:\Program Files\workplace\agent\.venv\lib\site-packages\pydantic\main.py:475: UserWarning: Pydantic serializer warnings:
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  return self.__pydantic_serializer__.to_python(
+D:\Program Files\workplace\agent\.venv\lib\site-packages\pydantic\main.py:475: UserWarning: Pydantic serializer warnings:
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  return self.__pydantic_serializer__.to_python(
+D:\Program Files\workplace\agent\.venv\lib\site-packages\pydantic\main.py:542: UserWarning: Pydantic serializer warnings:
+  PydanticSerializationUnexpectedValue(Expected `float` - serialized value may not be as expected [field_name='metrics', input_value='missing_context_or_answer', input_type=str])
+  return self.__pydantic_serializer__.to_json(
+
+================================================================
+  评估报告 — RAG 检索 · 实时 LLM 调用
+  时间: 2026-09-18T03:42:21.145705
+================================================================
+
+  【RAG 检索】  通过率=30.0%  (6/20 通过, 14 失败, 0 错误)
+    ── 检索质量 ──
+      召回率@5: 0.2000
+      召回率@10: 0.2000
+      精确率@5 (精确ID): 0.1083
+      平均倒数排名 (MRR): 0.2000
+      NDCG@10: 0.2000
+      Chunk 级召回率: 0.1275
+      Top-1 准确率 (精确ID): 0.2222
+    ── 上下文质量 ──
+      上下文噪声率@10 (精确ID): 0.8917
+      语义上下文召回: 1.0000
+      语义上下文召回(软分): 1.0000
+      语义上下文精确率: 0.5000
+    ── 安全与拒答 ──
+      dept_leak: 0.0000
+      拒答准确率: 1.0000
+      误答率 (自研): 0.0000
+    ── 其他 ──
+      reject_top1_accuracy: 1.0000
+      token_summary: {'sut': {'embedding': 0, 'rerank': 0, 'answer_llm': 0, 'total': 0}, 'evaluator': {'judge': 0, 'total': 0}, 'grand_total': 0, 'window': 'since_run_start'}
+
+  --- 分层评估 ---
+  ❌ [core]  通过率=30.0%  (6/20)  阈值=85.0%
+
+================================================================
+
+[storage] 报告已持久化到: D:\Program Files\workplace\agent\data\eval_runs\2026-09-18T03-42-21-2b83a5
+Release Gate 报告已保存到: D:\Program Files\workplace\agent\data\eval_runs\2026-09-18T03-42-21-2b83a5\eval-rag-20260918-034221.md
+⚠️  [core] 通过率 30.0% < 阈值 85.0%

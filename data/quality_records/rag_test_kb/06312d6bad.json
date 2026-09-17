@@ -1,0 +1,263 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "06312d6bad",
+ "kb_id": "rag_test_kb",
+ "source_file": "product_商品规格说明.pdf",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_test_kb\\general\\product_商品规格说明.pdf",
+ "file_size": 4167,
+ "file_sha256": "16893550f13e2a97959a8ebb34ced8771921d5e3d267438ba14415c3a70783e5",
+ "format": "pdf",
+ "doc_type": "product_spec",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.9968,
+ "parsing": {
+  "node_count": 11,
+  "section_count": 6,
+  "leaf_count": 5,
+  "table_count": 1,
+  "table_total_rows": 6,
+  "table_max_cols": 6,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 986,
+  "cleaned_chars": 939,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 14,
+  "leaf_chunk_count": 9,
+  "parent_chunk_count": 5,
+  "truncated": false,
+  "filtered_count": 1,
+  "filtered_reasons": {
+   "too_short": 1
+  }
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     151.8,
+     67.2,
+     443.5,
+     85.6
+    ],
+    "content_hash": "337bd9beea49bce9",
+    "chars": 17,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     62.7,
+     117.2,
+     166.8,
+     127.4
+    ],
+    "content_hash": "59d04e6f15909517",
+    "chars": 53,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     62.7,
+     142.2,
+     118.7,
+     156.5
+    ],
+    "content_hash": "6b24db9f2828086e",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     62.7,
+     167.4,
+     404.7,
+     178.7
+    ],
+    "content_hash": "e3b55c956d81a73a",
+    "chars": 33,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     62.7,
+     195.2,
+     146.7,
+     209.5
+    ],
+    "content_hash": "2511211c72988188",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     62.7,
+     349.2,
+     146.7,
+     363.5
+    ],
+    "content_hash": "f8fbd475d78ab550",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     62.7,
+     408.4,
+     333.7,
+     419.7
+    ],
+    "content_hash": "dd17ac4406a15663",
+    "chars": 95,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     62.7,
+     436.2,
+     146.7,
+     450.5
+    ],
+    "content_hash": "7252d51143c9d503",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     62.7,
+     478.4,
+     331.9,
+     489.7
+    ],
+    "content_hash": "290b3068d875ad73",
+    "chars": 71,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     79.37007904052734,
+     217.69287109375,
+     515.9054565429688,
+     325.69287109375
+    ],
+    "content_hash": "5846f5cc7e2163aa",
+    "chars": 687,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=939 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=5"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.952 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

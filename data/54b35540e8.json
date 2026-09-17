@@ -1,0 +1,224 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "54b35540e8",
+ "kb_id": "..",
+ "source_file": "budget_fin.md",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\agent_test_data_52_ec473\\docs\\policy_general\\finance\\budget_fin.md",
+ "file_size": 654,
+ "file_sha256": "5a1f857988d4445de7964a91868970641ac6e2c08ee9c4a34eb59f2b6d40fded",
+ "format": "md",
+ "doc_type": "financial",
+ "chunking_strategy": "FinancialTableChunkStrategy",
+ "completeness": 0.9445,
+ "parsing": {
+  "node_count": 12,
+  "section_count": 6,
+  "leaf_count": 6,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 275,
+  "cleaned_chars": 196,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 11,
+  "leaf_chunk_count": 6,
+  "parent_chunk_count": 5,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "943297a8445dcbc0",
+    "chars": 12,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "6194cb25e06a93a2",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "6c2ac4eda0436950",
+    "chars": 53,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "5b51e30885dcb4a1",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "7aa80ae15b2de2ef",
+    "chars": 52,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "615b27032274e7b6",
+    "chars": 9,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "list",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "67306561e679f775",
+    "chars": 17,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "list",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0761471c8aaa1077",
+    "chars": 23,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "list",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "c9feac959fd85d51",
+    "chars": 15,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "1b965d3977798fa5",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n11",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "025355fb01e23e63",
+    "chars": 36,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=196 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=6"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.713 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

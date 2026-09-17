@@ -13,7 +13,7 @@ from backend.config import startup as su
 def _clean_env(monkeypatch):
     """隔离测试环境变量（清掉宿主 .env 的干扰）。"""
     for var in (
-        "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE",
+        "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "MEMORY_PGDATABASE",
         "BUSINESS_PGDATABASE", "DB_POOL_MIN_CONN", "DB_POOL_MAX_CONN",
         "LLM_MODEL", "DEEPSEEK_API_KEY", "LLM_MAX_RETRIES",
         "LLM_RETRY_BACKOFF_BASE", "LLM_FALLBACK_MODEL",

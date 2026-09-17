@@ -99,9 +99,11 @@ interface TimelineProps {
   nodeLabels?: Record<string, string>
   /** 完成态回看的总耗时（秒，来自 trace.elapsed）：末节点耗时据此定格 */
   totalElapsedHint?: number
+  /** 无卡片形态：生成中与完成态回看均用，去掉边框/标题栏，纯文字缩进列表 */
+  bare?: boolean
 }
 
-export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, events: eventsProp, nodeLabels: labelsProp, totalElapsedHint }: TimelineProps) {
+export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, events: eventsProp, nodeLabels: labelsProp, totalElapsedHint, bare = false }: TimelineProps) {
   const [expandedNode, setExpandedNode] = useState<string | null>(null)
   const [showLogs, setShowLogs] = useState(false)
 
@@ -121,8 +123,8 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
   const totalElapsed = nodes.reduce((s, n) => s + n.elapsedSec, 0)
   const totalLogs = nodes.reduce((s, n) => s + n.logs.length, 0)
 
-  // 折叠态：紧凑按钮
-  if (outerCollapsed) {
+  // 折叠态：紧凑按钮（bare 形态不存在折叠态，折叠由外层行负责）
+  if (outerCollapsed && !bare) {
     return (
       <div className="border border-border-subtle rounded-xl bg-surface-elevated px-4 py-2 overflow-hidden">
         <button onClick={onToggle} className="flex items-center gap-2 text-xs text-accent hover:underline">
@@ -134,9 +136,17 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
     )
   }
 
-  // 空态：区分「已发送、等待首个节点事件」与「未发送」——
-  // 此前 isLoading 时也显示"发送问题后…"，看起来像问题没发出去（2026-09-17 修复）
+  // 空态：bare 形态下只渲染一行等待文字，不出卡片
   if (nodes.length === 0) {
+    if (bare) {
+      if (!isLoading) return null
+      return (
+        <div className="flex items-center gap-1.5 py-0.5 text-[11px] text-text-secondary">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+          正在规划执行步骤，请稍候…
+        </div>
+      )
+    }
     const waiting = isLoading
     return (
       <div className="border border-border-subtle rounded-xl bg-surface-elevated overflow-hidden">
@@ -155,6 +165,47 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
           ) : (
             '发送问题后，将在此展示 LangGraph 多 Agent 执行过程'
           )}
+        </div>
+      </div>
+    )
+  }
+
+  // bare 形态：无卡片，缩进列表 + 行内小字元信息，接在外层行下方
+  if (bare) {
+    return (
+      <div className="pl-5 py-0.5">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-[10px] text-text-muted">{doneCount}/{nodes.length} 节点 · {totalElapsed.toFixed(1)}s</span>
+          <button onClick={() => setShowLogs(!showLogs)}
+            className={`text-[10px] transition-colors ${showLogs ? 'text-accent' : 'text-text-muted hover:text-text-secondary'}`}>
+            Logs {totalLogs > 0 && `(${totalLogs})`}
+          </button>
+        </div>
+        {showLogs && (
+          <div className="pl-1 pb-2 space-y-2 max-h-48 overflow-y-auto">
+            {nodes.map((n) => n.logs.length === 0 ? null : (
+              <div key={`logs-${n.name}`} className="text-[11px]">
+                <div className="text-text-muted font-medium mb-0.5">{n.label}</div>
+                {n.logs.map((l, i) => (
+                  <div key={i} className="flex items-start gap-1.5 ml-2 py-0.5">
+                    <span className={`shrink-0 ${l.level === 'error' ? 'text-red-500' : l.level === 'warn' ? 'text-amber-500' : 'text-text-muted'}`}>
+                      {l.level === 'error' ? '✕' : l.level === 'warn' ? '⚠' : '•'}
+                    </span>
+                    <span className="text-text-secondary flex-1">{l.message}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="space-y-1">
+          {nodes.map((node, i) => (
+            <TimelineNodeRow key={`${node.name}-${i}`} node={node} isLast={i === nodes.length - 1}
+              expanded={expandedNode === node.name}
+              onToggle={() => setExpandedNode(expandedNode === node.name ? null : node.name)}
+              isCurrent={currentStatus === node.name}
+            />
+          ))}
         </div>
       </div>
     )

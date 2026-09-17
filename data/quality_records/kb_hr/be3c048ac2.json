@@ -1,0 +1,107 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "be3c048ac2",
+ "kb_id": "kb_hr",
+ "source_file": "薪酬制度.md",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\e2ev_docs_xse8ab3g\\kb_hr\\policy\\薪酬制度.md",
+ "file_size": 98,
+ "file_sha256": "36b03e7e5a4ee52965e7926587e8513b0df52f988cf74a675955f7e6e276cde2",
+ "format": "md",
+ "doc_type": "policy",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.9092,
+ "parsing": {
+  "node_count": 3,
+  "section_count": 2,
+  "leaf_count": 1,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 38,
+  "cleaned_chars": 30,
+  "nodes_cleaned": 1
+ },
+ "chunking": {
+  "chunk_count": 2,
+  "leaf_chunk_count": 1,
+  "parent_chunk_count": 1,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "da3b7597501d8d64",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "321b75433f13279f",
+    "chars": 30,
+    "cleaned": true
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=30 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=1"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.789 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

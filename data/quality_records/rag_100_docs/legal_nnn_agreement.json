@@ -1,0 +1,237 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "legal_nnn_agreement",
+ "kb_id": "rag_100_docs",
+ "source_file": "legal_双向保密协议_NNN.md",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_100_docs\\general\\md\\legal_双向保密协议_NNN.md",
+ "file_size": 922,
+ "file_sha256": "7b408018537d84a397752c703a33965c4851e062013d0658b33ca7275d7bbbc4",
+ "format": "md",
+ "doc_type": "legal",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.9637,
+ "parsing": {
+  "node_count": 13,
+  "section_count": 7,
+  "leaf_count": 6,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 376,
+  "cleaned_chars": 292,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 12,
+  "leaf_chunk_count": 6,
+  "parent_chunk_count": 6,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "c5dec96cfd83dcd0",
+    "chars": 11,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e96e2278f4944e6e",
+    "chars": 68,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0f8a7a0f08792689",
+    "chars": 9,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "a93974f5e7d14f1a",
+    "chars": 47,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "fd528cb77db1adec",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "580d9a10b365934b",
+    "chars": 36,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "71a728366fe0c2cd",
+    "chars": 8,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "a4c25d64865b747f",
+    "chars": 32,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "1b621f6de982c2ad",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "7d4b012d90e7a869",
+    "chars": 61,
+    "cleaned": false
+   },
+   {
+    "node_id": "n11",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "325f4a0fcffae138",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n12",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "99d978df78a411a9",
+    "chars": 48,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=292 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=6"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.777 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

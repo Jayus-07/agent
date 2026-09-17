@@ -76,9 +76,13 @@ class StateTransitionService:
         if _use_java_write():
             return self._java_apply(request)
         from backend.customer_service._db_loop import run_sync
+        operation = self._async_apply(request)
         try:
-            return run_sync(self._async_apply(request))
+            return run_sync(operation)
         except Exception:
+            # run_sync 在提交协程前失败时，不会接管其生命周期；显式关闭，
+            # 避免降级路径产生“coroutine was never awaited”告警。
+            operation.close()
             logger.warning("[StateTransitionService] DB unavailable, returning error result")
             return StateTransitionResult(
                 success=False,
@@ -314,14 +318,32 @@ class StateTransitionService:
 
     async def _load_confirmation_state(self, user_id: str, session_id: str) -> str:
         from backend.customer_service.confirmation_store import get_confirmation_store
-        data = get_confirmation_store().load(user_id, session_id)
+        store = get_confirmation_store()
+        # P3.5：本方法运行在 _db_loop 线程，sync load() 的嵌套 run_sync
+        # 会自死锁（10s 超时）——与 _async_load_snapshot_impl 同款修复
+        data = store.peek_l1(user_id, session_id)
+        if data is None:
+            try:
+                data = await store._async_load(user_id, session_id)
+                if data is not None:
+                    store.cache_l1(user_id, session_id, data)
+            except Exception:
+                data = None
         if data:
             return data.get("confirmation_state", "not_required")
         return "not_required"
 
     async def _load_handoff_state(self, user_id: str, session_id: str) -> str:
         from backend.customer_service.handoff_store import get_handoff_store
-        data = get_handoff_store().load(user_id, session_id)
+        store = get_handoff_store()
+        data = store.peek_l1(user_id, session_id)
+        if data is None:
+            try:
+                data = await store._async_load(user_id, session_id)
+                if data is not None:
+                    store.cache_l1(user_id, session_id, data)
+            except Exception:
+                data = None
         if data:
             return data.get("handoff_state", "ai_active")
         return "ai_active"
@@ -371,7 +393,19 @@ async def _async_load_snapshot_impl(
 
     pending_action = None
     from backend.customer_service.confirmation_store import get_confirmation_store
-    conf_data = get_confirmation_store().load(user_id, session_id)
+    store = get_confirmation_store()
+    # P3.5 死锁修复：此处运行在 _db_loop 线程，若调 sync 的 store.load()
+    # → 内部 run_sync 向同一 loop 提交协程并阻塞等待 = 自死锁（10s 超时
+    # → 快照回默认 → pending 丢失 → 文本确认/取消全失效）。改为 L1 直读
+    # + 复用 store 的 async 协程（同 loop await，无嵌套桥接）。
+    conf_data = store.peek_l1(user_id, session_id)
+    if conf_data is None:
+        try:
+            conf_data = await store._async_load(user_id, session_id)
+            if conf_data is not None:
+                store.cache_l1(user_id, session_id, conf_data)
+        except Exception:
+            conf_data = None
     if conf_data and conf_data.get("confirmation_state") == "pending":
         pending_action = conf_data
 

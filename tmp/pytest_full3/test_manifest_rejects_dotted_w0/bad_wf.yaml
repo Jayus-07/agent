@@ -1,0 +1,12 @@
+capabilities:
+- examples:
+  - a
+  - b
+  name: x.y
+  routed: true
+  skill: s
+version: 1
+workflows:
+- examples:
+  - a
+  name: bad.name

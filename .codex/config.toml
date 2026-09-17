@@ -1,0 +1,42 @@
+[mcp_servers.code-review-graph]
+url = "http://127.0.0.1:5555/mcp"
+
+[mcp_servers.filesystem]
+command = "node"
+args = [
+    "C:/Users/wh/AppData/Roaming/npm/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
+    'D:\Program Files\workplace\agent',
+    'D:\tmp',
+    'C:\Users\wh\Downloads',
+    'C:\Users\wh\Desktop',
+]
+
+[mcp_servers.postgres]
+command = "npx"
+args = [
+    "-y",
+    "@modelcontextprotocol/server-postgres",
+    "postgresql://postgres:123456@localhost:5432/demo",
+]
+
+[mcp_servers.puppeteer]
+command = "node"
+args = ["C:/Users/wh/AppData/Roaming/npm/node_modules/@modelcontextprotocol/server-puppeteer/dist/index.js"]
+
+[mcp_servers.puppeteer.env]
+PUPPETEER_EXECUTABLE_PATH = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+
+[mcp_servers.sequential-thinking]
+command = "npx"
+args = [
+    "-y",
+    "@modelcontextprotocol/server-sequential-thinking",
+]
+
+[mcp_servers.sqlite]
+command = "node"
+args = [
+    "C:/Users/wh/AppData/Roaming/npm/node_modules/mcp-server-sqlite/dist/cli.js",
+    "--db",
+    'D:\Program Files\workplace\agent\data\keyword_rules.db',
+]

@@ -33,6 +33,7 @@ from backend.config import (
     EMBEDDING_API_KEY,
     EMBEDDING_MODEL_PATH,
     EMBEDDING_BATCH_SIZE,
+    EMBEDDING_REQUEST_TIMEOUT,
     TOKEN_USAGE_LOG_PATH,
 )
 from backend.infra.token_tracker import create_tracker_for_embedding
@@ -71,6 +72,8 @@ def _get_cloud_embedding() -> Embeddings:
         # DashScope text-embedding-v3 上限 10；换 SiliconFlow / TEI 时可
         # 在 .env 调大到 32+ 提速索引。
         chunk_size=EMBEDDING_BATCH_SIZE,
+        # 让 HTTP 请求在专家总超时前自行结束，不能依赖外层线程中断。
+        timeout=EMBEDDING_REQUEST_TIMEOUT,
     )
     
     logger.info(

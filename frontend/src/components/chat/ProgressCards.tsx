@@ -1,32 +1,26 @@
 'use client'
 
 /**
- * ProgressCards — 消息流内的 Agent 进度卡片组（WorkBuddy 式）
+ * ProgressCards — 消息流内的 Agent 进度区（生成中）
  *
  * 渲染位置：最后一轮用户提问之下、AI 回答之上（由 MessageList 控制），
  * 仅 isLoading 时显示；流结束后由 MessageBubble 的 TokenInfo/SourceCard 接管结果展示。
- * 包含：Agent 执行时间线（可折叠）/ 任务清单 / 产出文件 / 运行状态行。
+ * 包含：Agent 执行时间线（bare 无卡片形态）/ 任务清单 / 产出文件 / token 消耗小字。
  *
- * 运行状态行对齐 WorkBuddy「生成回复中 · 已消耗 3.67」流内形态：
- * 数据源两级 —— usage 事件实时累计优先，本会话已固化 usage 之和兜底。
+ * token 消耗数据源两级 —— usage 事件实时累计优先，本会话已固化 usage 之和兜底。
+ * 运行状态与停止入口已上移：输入框右下角的发送键在生成中切换为停止键。
  */
 
-import { useMemo, useState } from 'react'
-import { Square } from 'lucide-react'
+import { useMemo } from 'react'
 import AgentTimeline from '@/components/chat/AgentTimeline'
 import TodoCard from '@/components/agent/TodoCard'
 import FileOpsCard from '@/components/agent/FileOpsCard'
 import { useChatStore } from '@/store/chat'
 
-export default function ProgressCards({ onStop }: { onStop: () => void }) {
-  const [tlOpen, setTlOpen] = useState(true)
+export default function ProgressCards() {
   const streamUsage = useChatStore((s) => s.streamUsage)
   const sessions = useChatStore((s) => s.sessions)
   const currentId = useChatStore((s) => s.currentId)
-  // 当前宏观节点（原 StreamingStatusLine 的数据源，2026-09-17 合并为这一处状态行）
-  const currentStatus = useChatStore((s) => s.currentStatus)
-  const nodeLabels = useChatStore((s) => s.nodeLabels)
-  const statusLabel = nodeLabels[currentStatus] || currentStatus || '生成回复中'
 
   const consumed = useMemo(() => {
     const messages = sessions.find((s) => s.id === currentId)?.messages ?? []
@@ -38,33 +32,16 @@ export default function ProgressCards({ onStop }: { onStop: () => void }) {
   const shown = liveTotal > 0 ? liveTotal : consumed
 
   return (
-    <div className="space-y-3 animate-fade-in">
-      <AgentTimeline collapsed={!tlOpen} onToggle={() => setTlOpen((v) => !v)} />
+    <div className="space-y-2 animate-fade-in">
+      {/* 时间线：bare 无卡片形态——未出节点前是一行等待文字，出节点后是缩进列表 */}
+      <AgentTimeline collapsed={false} onToggle={() => {}} bare />
       <TodoCard />
       <FileOpsCard />
-
-      {/* 运行状态行（流内唯一状态提示，WorkBuddy 式） */}
-      <div className="flex items-center gap-2 pt-0.5">
-        <span key={statusLabel} className="flex items-center gap-1.5 text-xs text-text-secondary animate-fade-in">
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-          {statusLabel}
-        </span>
-        {shown > 0 && (
-          <span className="text-xs text-text-muted tabular-nums">
-            · 已消耗 {shown.toLocaleString()} tokens{liveTotal > 0 ? '（实时）' : ''}
-          </span>
-        )}
-        <button
-          type="button"
-          onClick={onStop}
-          className="ml-auto flex items-center gap-1.5 px-3 py-1 rounded-full bg-accent/5
-            border border-accent/20 text-accent text-xs hover:bg-accent/10 transition-all duration-200"
-          title="停止生成"
-        >
-          <Square size={9} className="fill-current" />
-          停止生成
-        </button>
-      </div>
+      {shown > 0 && (
+        <div className="text-[10px] text-text-muted tabular-nums">
+          已消耗 {shown.toLocaleString()} tokens{liveTotal > 0 ? '（实时）' : ''}
+        </div>
+      )}
     </div>
   )
 }

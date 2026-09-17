@@ -1,0 +1,133 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "2899a88352",
+ "kb_id": "rag_100_docs",
+ "source_file": "report_Q2产品迭代总结_2026.docx",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\agent_test_data_ta_npvse\\docs\\rag_100_docs\\general\\docx\\report_Q2产品迭代总结_2026.docx",
+ "file_size": 36851,
+ "file_sha256": "2f27b52d6edd85306489f8d24313d5dae04bb9e06a66a76a7c00d5bf7340f2cd",
+ "format": "docx",
+ "doc_type": "faq",
+ "chunking_strategy": "RecursiveChunkStrategy",
+ "completeness": 0.9308,
+ "parsing": {
+  "node_count": 5,
+  "section_count": 2,
+  "leaf_count": 3,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 111,
+  "cleaned_chars": 93,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 1,
+  "leaf_chunk_count": 1,
+  "parent_chunk_count": 0,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "6a79a5dc2f1cf62c",
+    "chars": 15,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "dbacb3c29c246c4b",
+    "chars": 43,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0eb3aebefefcdb0a",
+    "chars": 32,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "34d7a10d90d749ae",
+    "chars": 18,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=93 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=3"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.838 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

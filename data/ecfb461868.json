@@ -1,0 +1,198 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "ecfb461868",
+ "kb_id": "..",
+ "source_file": "reimbursement_fin.md",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\agent_test_data_52_ec473\\docs\\policy_general\\finance\\reimbursement_fin.md",
+ "file_size": 732,
+ "file_sha256": "61a874b5c306c2b00634e867dabb08bf38505a930ddd5886a6cba1256c04c4c8",
+ "format": "md",
+ "doc_type": "financial",
+ "chunking_strategy": "FinancialTableChunkStrategy",
+ "completeness": 0.9582,
+ "parsing": {
+  "node_count": 10,
+  "section_count": 6,
+  "leaf_count": 4,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 288,
+  "cleaned_chars": 218,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 9,
+  "leaf_chunk_count": 4,
+  "parent_chunk_count": 5,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "8bcb2084b47a9c2e",
+    "chars": 11,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "7c16e963be835f1b",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "f9464895514a33f9",
+    "chars": 53,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0ab65790e8329177",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "229a60d48ce35065",
+    "chars": 66,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "7c0068b0b2102700",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "384679d8a4a4cc7e",
+    "chars": 51,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "76f6092c75ea4b20",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "d52ec968ec9ad926",
+    "chars": 48,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=218 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=4"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.757 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

@@ -84,9 +84,11 @@ interface TimelineProps {
   /** 外部数据源（完成态回看：传入 done 时固化的快照）；缺省订阅 store（生成中） */
   events?: SSEStreamEvent[]
   nodeLabels?: Record<string, string>
+  /** 无卡片形态：完成态展开回看用，去掉边框/标题栏，作为缩进列表接在 CompletionLine 下 */
+  bare?: boolean
 }
 
-export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, events: eventsProp, nodeLabels: labelsProp }: TimelineProps) {
+export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, events: eventsProp, nodeLabels: labelsProp, bare = false }: TimelineProps) {
   const [expandedNode, setExpandedNode] = useState<string | null>(null)
   const [showLogs, setShowLogs] = useState(false)
 
@@ -103,8 +105,8 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
   const totalElapsed = nodes.reduce((s, n) => s + n.elapsedSec, 0)
   const totalLogs = nodes.reduce((s, n) => s + n.logs.length, 0)
 
-  // 折叠态：紧凑按钮
-  if (outerCollapsed) {
+  // 折叠态：紧凑按钮（bare 形态不存在折叠态，外层行自带折叠）
+  if (outerCollapsed && !bare) {
     return (
       <div className="border border-border-subtle rounded-xl bg-surface-elevated px-4 py-2 overflow-hidden">
         <button onClick={onToggle} className="flex items-center gap-2 text-xs text-accent hover:underline">
@@ -116,8 +118,9 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
     )
   }
 
-  // 空态：未开始
+  // 空态：未开始（bare 形态由外层行兜底，直接不渲染）
   if (nodes.length === 0) {
+    if (bare) return null
     return (
       <div className="border border-border-subtle rounded-xl bg-surface-elevated overflow-hidden">
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-subtle">
@@ -128,6 +131,47 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
         </div>
         <div className="px-4 py-6 text-center text-[11px] text-text-muted">
           发送问题后，将在此展示 LangGraph 多 Agent 执行过程
+        </div>
+      </div>
+    )
+  }
+
+  // bare 形态：无卡片，缩进列表 + 行内小字元信息，接在 CompletionLine 下方
+  if (bare) {
+    return (
+      <div className="pl-5 py-0.5">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-[10px] text-text-muted">{doneCount}/{nodes.length} 节点 · {totalElapsed.toFixed(1)}s</span>
+          <button onClick={() => setShowLogs(!showLogs)}
+            className={`text-[10px] transition-colors ${showLogs ? 'text-accent' : 'text-text-muted hover:text-text-secondary'}`}>
+            Logs {totalLogs > 0 && `(${totalLogs})`}
+          </button>
+        </div>
+        {showLogs && (
+          <div className="pl-1 pb-2 space-y-2 max-h-48 overflow-y-auto">
+            {nodes.map((n) => n.logs.length === 0 ? null : (
+              <div key={`logs-${n.name}`} className="text-[11px]">
+                <div className="text-text-muted font-medium mb-0.5">{n.label}</div>
+                {n.logs.map((l, i) => (
+                  <div key={i} className="flex items-start gap-1.5 ml-2 py-0.5">
+                    <span className={`shrink-0 ${l.level === 'error' ? 'text-red-500' : l.level === 'warn' ? 'text-amber-500' : 'text-text-muted'}`}>
+                      {l.level === 'error' ? '✕' : l.level === 'warn' ? '⚠' : '•'}
+                    </span>
+                    <span className="text-text-secondary flex-1">{l.message}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="space-y-1">
+          {nodes.map((node, i) => (
+            <TimelineNodeRow key={`${node.name}-${i}`} node={node} isLast={i === nodes.length - 1}
+              expanded={expandedNode === node.name}
+              onToggle={() => setExpandedNode(expandedNode === node.name ? null : node.name)}
+              isCurrent={currentStatus === node.name}
+            />
+          ))}
         </div>
       </div>
     )

@@ -1,0 +1,302 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "e044139401",
+ "kb_id": "rag_test_kb",
+ "source_file": "cs_售后FAQ.docx",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_test_kb\\general\\cs_售后FAQ.docx",
+ "file_size": 37402,
+ "file_sha256": "1581f201fe10d8b51e4bace5269b29328392c829040625727ad507f5f2a2296e",
+ "format": "docx",
+ "doc_type": "faq",
+ "chunking_strategy": "QAChunkStrategy",
+ "completeness": 1.0,
+ "parsing": {
+  "node_count": 17,
+  "section_count": 1,
+  "leaf_count": 16,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 425,
+  "cleaned_chars": 298,
+  "nodes_cleaned": 6
+ },
+ "chunking": {
+  "chunk_count": 9,
+  "leaf_chunk_count": 8,
+  "parent_chunk_count": 1,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "qa_question",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "af1341a9ff90ee40",
+    "chars": 9,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "qa_answer",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "c905fd9b58671618",
+    "chars": 35,
+    "cleaned": true
+   },
+   {
+    "node_id": "n3",
+    "type": "qa_question",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "f1172e5bfc726a64",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "qa_answer",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "f28b310eea3bb907",
+    "chars": 25,
+    "cleaned": true
+   },
+   {
+    "node_id": "n5",
+    "type": "qa_question",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "fb34c439f8f7977c",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "qa_answer",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "1c5098262c91d8ca",
+    "chars": 26,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "qa_question",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "7516007ee23e6869",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "qa_answer",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "6c0a8ec8ddcd44c4",
+    "chars": 35,
+    "cleaned": true
+   },
+   {
+    "node_id": "n9",
+    "type": "qa_question",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0aba69dff8066b5f",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "qa_answer",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "43a86161c79d3d0a",
+    "chars": 33,
+    "cleaned": true
+   },
+   {
+    "node_id": "n11",
+    "type": "qa_question",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "75b02c02f2772bad",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n12",
+    "type": "qa_answer",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "4b6fb0b5484e19a1",
+    "chars": 29,
+    "cleaned": true
+   },
+   {
+    "node_id": "n13",
+    "type": "qa_question",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "7abb3567e7673b54",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n14",
+    "type": "qa_answer",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "89cb19cf8b137094",
+    "chars": 40,
+    "cleaned": true
+   },
+   {
+    "node_id": "n15",
+    "type": "qa_question",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "7837395bbf25c80d",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n16",
+    "type": "qa_answer",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "3d32db06d0a0431b",
+    "chars": 30,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=298 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=16"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.701 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": [
+   {
+    "check": "value_loss",
+    "value_type": "date",
+    "severity": "warn",
+    "detail": "清洗后丢失 1 个 date，样例: ['2026-08-26']"
+   },
+   {
+    "check": "value_loss",
+    "value_type": "number",
+    "severity": "warn",
+    "detail": "清洗后丢失 1 个 number，样例: ['2026']"
+   }
+  ]
+ }
+}

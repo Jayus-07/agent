@@ -36,10 +36,24 @@ class CSCoarseRouter:
 
         return CSDomain.UNKNOWN, 0.0, "no_match"
 
-    def _rule_classify(self, query: str, keywords: dict) -> tuple[CSDomain, float, str]:
+    def _rule_classify(
+        self,
+        query: str,
+        keywords: dict,
+        patterns: dict | None = None,
+    ) -> tuple[CSDomain, float, str]:
         best_domain, best_count = CSDomain.UNKNOWN, 0
+        if patterns is None:
+            # 正则模式与关键词同权计票（P3.5 实测修复）：CS_DOMAIN_PATTERNS
+            # 此前定义了却从未参与打分，"申请退款"这类单关键词问法全部
+            # 落 UNKNOWN → 域锁兜底 0.5+0.6=0.55 打穿 Supervisor 0.6 闸门
+            from backend.config.customer_service import CS_DOMAIN_PATTERNS
+            patterns = CS_DOMAIN_PATTERNS
         for domain, kws in keywords.items():
             count = sum(1 for kw in kws if kw in query)
+            count += sum(
+                1 for p in patterns.get(domain, []) if p.search(query)
+            )
             if count > best_count:
                 best_domain, best_count = CSDomain(domain), count
 

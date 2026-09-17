@@ -1,0 +1,93 @@
+[
+  {
+    "dir": "D:\\Program Files\\workplace\\agent\\data\\chroma",
+    "collections": {
+      "langchain": {
+        "count": 1313,
+        "dims": {
+          "1024": 1313
+        }
+      },
+      "chunks": {
+        "count": 0,
+        "dims": {}
+      }
+    }
+  },
+  {
+    "dir": "D:\\Program Files\\workplace\\agent\\data\\chroma_market",
+    "collections": {
+      "competitor_market": {
+        "count": 2,
+        "dims": {
+          "384": 2
+        }
+      }
+    }
+  },
+  {
+    "dir": "D:\\Program Files\\workplace\\agent\\data\\chunk_db",
+    "collections": {
+      "langchain": {
+        "count": 0,
+        "dims": {}
+      }
+    }
+  },
+  {
+    "dir": "D:\\Program Files\\workplace\\agent\\data\\cs_router_index",
+    "collections": {
+      "cs_domain_v1": {
+        "count": 30,
+        "dims": {
+          "512": 30
+        }
+      },
+      "cs_coarse_v1": {
+        "count": 40,
+        "dims": {
+          "512": 40
+        }
+      },
+      "cs_fine_v1": {
+        "count": 62,
+        "dims": {
+          "512": 62
+        }
+      }
+    }
+  },
+  {
+    "dir": "D:\\Program Files\\workplace\\agent\\data\\doc_db",
+    "collections": {
+      "langchain": {
+        "count": 99,
+        "dims": {
+          "1024": 99
+        }
+      }
+    }
+  },
+  {
+    "dir": "D:\\Program Files\\workplace\\agent\\data\\long_term_memory",
+    "collections": {
+      "long_term_memory": {
+        "count": 31,
+        "dims": {
+          "512": 31
+        }
+      }
+    }
+  },
+  {
+    "dir": "D:\\Program Files\\workplace\\agent\\data\\router_index",
+    "collections": {
+      "router_v1": {
+        "count": 52,
+        "dims": {
+          "1024": 52
+        }
+      }
+    }
+  }
+]

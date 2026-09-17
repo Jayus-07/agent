@@ -239,6 +239,8 @@ class AgentHub:
             return
 
         def _run():
+            from redis.exceptions import TimeoutError as RedisTimeoutError
+
             from backend.infra.redis.client import get_redis
 
             while True:
@@ -250,23 +252,31 @@ class AgentHub:
                     pubsub = r.pubsub(ignore_subscribe_messages=True)
                     pubsub.subscribe(REDIS_CHANNEL)
                     logger.info("[AgentHub] redis subscriber ready (%s)", REDIS_CHANNEL)
-                    for msg in pubsub.listen():
-                        data = msg.get("data")
-                        if not data or self._main_loop is None:
-                            continue
-                        # redis-py 返回 bytes；广播收 str（send_text 契约），
-                        # 原文直传避免 dict→str→dict→str 二次序列化
-                        if isinstance(data, bytes):
-                            data = data.decode("utf-8", "replace")
+                    while True:
                         try:
-                            envelope = json.loads(data)
-                        except Exception:
+                            for msg in pubsub.listen():
+                                data = msg.get("data")
+                                if not data or self._main_loop is None:
+                                    continue
+                                # redis-py 返回 bytes；广播收 str（send_text 契约），
+                                # 原文直传避免 dict→str→dict→str 二次序列化
+                                if isinstance(data, bytes):
+                                    data = data.decode("utf-8", "replace")
+                                try:
+                                    envelope = json.loads(data)
+                                except Exception:
+                                    continue
+                                if not envelope:
+                                    continue
+                                asyncio.run_coroutine_threadsafe(
+                                    self._broadcast(data), self._main_loop
+                                )
+                        except RedisTimeoutError:
+                            # 共享客户端带 socket_timeout：空闲无消息时 listen
+                            # 抛超时——连接仍活着，同 pubsub 继续听即可。
+                            # 此前当作连接错误断开重连（P3.5 实测 40min 断连
+                            # 200+ 次），重连窗口内发布的事件会丢。
                             continue
-                        if not envelope:
-                            continue
-                        asyncio.run_coroutine_threadsafe(
-                            self._broadcast(data), self._main_loop
-                        )
                 except Exception:
                     logger.warning(
                         "[AgentHub] redis subscriber error, retry in 2s",

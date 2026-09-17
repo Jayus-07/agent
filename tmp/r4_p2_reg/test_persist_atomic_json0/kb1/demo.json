@@ -1,0 +1,99 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "demo",
+ "kb_id": "kb1",
+ "source_file": "demo.md",
+ "file_path": "/tmp/demo.md",
+ "file_size": 1,
+ "file_sha256": "x",
+ "format": "md",
+ "doc_type": "",
+ "chunking_strategy": "",
+ "completeness": null,
+ "parsing": {
+  "node_count": 4,
+  "section_count": 2,
+  "leaf_count": 2,
+  "table_count": 1,
+  "table_total_rows": 3,
+  "table_max_cols": 2,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 4,
+  "cleaned_chars": 53,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 0,
+  "leaf_chunk_count": 0,
+  "parent_chunk_count": 0,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "76d47e6892596c23",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "9be57200a929a202",
+    "chars": 51,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "22d9e7c54b88cacd",
+    "chars": 2,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [],
+  "anomalies": []
+ }
+}

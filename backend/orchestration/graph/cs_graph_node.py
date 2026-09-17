@@ -166,6 +166,9 @@ def _build_main_state_update(original_state: dict, result: dict) -> dict:
         "cs_context": merge_cs_context(original_ctx, result),
         "cs_action_result": result.get("action_result") or {},
         "cs_audit_entries": result.get("audit_entries", []),
+        # P3.1：等待确认时透传 pending_action（runner 快照 → SSE done 帧
+        # → 前端 CSConfirmCard）；非 pending 态为 None
+        "cs_pending_action": result.get("pending_action") or None,
     }
 
 
@@ -181,6 +184,7 @@ def _fallback_update(state: dict) -> dict:
         },
         "cs_action_result": {},
         "cs_audit_entries": [],
+        "cs_pending_action": None,
     }
 
 

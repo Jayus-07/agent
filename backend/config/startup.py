@@ -156,7 +156,7 @@ def _build_settings() -> StartupSettings:
             pg_port=_env_int("PGPORT", 5432),
             pg_user=_env("PGUSER", "postgres"),
             pg_password=_env("PGPASSWORD"),
-            pg_database=_env("PGDATABASE", "agent_memory"),
+            pg_database=_env("MEMORY_PGDATABASE", "agent_memory"),
             business_pgdatabase=_env("BUSINESS_PGDATABASE", "agent_business"),
             pool_min=_env_int("DB_POOL_MIN_CONN", 2),
             pool_max=_env_int("DB_POOL_MAX_CONN", 10),

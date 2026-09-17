@@ -1,0 +1,107 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "table_candidate_pipeline",
+ "kb_id": "rag_100_docs",
+ "source_file": "table_候选人漏斗.xlsx",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_100_docs\\general\\xlsx\\table_候选人漏斗.xlsx",
+ "file_size": 5125,
+ "file_sha256": "3ece33a3c6da7ec39ad84fb3cdf4b8f09dc07e6b7650e58bc4e4b841e18076fa",
+ "format": "xlsx",
+ "doc_type": "general",
+ "chunking_strategy": "RecursiveChunkStrategy",
+ "completeness": 0.9384,
+ "parsing": {
+  "node_count": 3,
+  "section_count": 2,
+  "leaf_count": 1,
+  "table_count": 1,
+  "table_total_rows": 6,
+  "table_max_cols": 4,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 364,
+  "cleaned_chars": 356,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 1,
+  "leaf_chunk_count": 1,
+  "parent_chunk_count": 0,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "2aeb066805e80f99",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "91f49af2b374dec1",
+    "chars": 356,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "table_present",
+    "pass": true,
+    "detail": "table_count=1"
+   },
+   {
+    "check": "table_rows",
+    "pass": true,
+    "detail": "rows=6"
+   },
+   {
+    "check": "table_cols",
+    "pass": true,
+    "detail": "cols=4"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

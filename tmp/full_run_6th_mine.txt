@@ -1,0 +1,934 @@
+........................................................................ [  1%]
+........................................................................ [  3%]
+........................................................................ [  4%]
+........................................................................ [  6%]
+........................................................................ [  7%]
+........................................................................ [  9%]
+........................................................................ [ 11%]
+........................................................................ [ 12%]
+........................................................................ [ 14%]
+........................................................................ [ 15%]
+........................................................................ [ 17%]
+........................................................................ [ 19%]
+........................................................................ [ 20%]
+........................................................................ [ 22%]
+....................ssssssssssssssssssssssssssssssssssssssssssssssssssss [ 23%]
+ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss............ [ 25%]
+........................................................................ [ 27%]
+........................................................................ [ 28%]
+...................................................................F.... [ 30%]
+....FFFFF............................................................... [ 31%]
+........................................................................ [ 33%]
+........................................................................ [ 35%]
+........................................................................ [ 36%]
+........................................................................ [ 38%]
+........................................................................ [ 39%]
+........................................................................ [ 41%]
+........................................................................ [ 42%]
+........................................................................ [ 44%]
+........................................................................ [ 46%]
+........................................................................ [ 47%]
+............................................................s........... [ 49%]
+.................................s...................................... [ 50%]
+........................................................................ [ 52%]
+........................................................................ [ 54%]
+........................................................................ [ 55%]
+........................................................................ [ 57%]
+........................................................................ [ 58%]
+........................................................................ [ 60%]
+.............................................................F.......... [ 62%]
+........................................................................ [ 63%]
+........................................................................ [ 65%]
+........................................................................ [ 66%]
+........................................................................ [ 68%]
+........................................................................ [ 70%]
+........................................................................ [ 71%]
+........................................................................ [ 73%]
+....................................s................................... [ 74%]
+............................F................................F.......... [ 76%]
+........................................................................ [ 78%]
+........................................................................ [ 79%]
+........................................................................ [ 81%]
+......FFFF.............................................................. [ 82%]
+....FF..F............................................................... [ 84%]
+...EFF.................................................................. [ 85%]
+........................................................................ [ 87%]
+........................................................................ [ 89%]
+........................................................................ [ 90%]
+........................................................................ [ 92%]
+........................................................................ [ 93%]
+.........ss........ss................................................... [ 95%]
+........................................................................ [ 97%]
+........................................................................ [ 98%]
+..........................................................               [100%]
+=================================== ERRORS ====================================
+____________ ERROR at setup of TestComputeTrends.test_days_filter _____________
+backend\tests\test_selection_trends.py:24: in store
+    s.save_snapshot({"url": "https://a.com", "platform": "taobao", "title": "A",
+backend\competitor\store_pg.py:202: in save_snapshot
+    return self._insert_returning_id(
+backend\competitor\store_pg.py:123: in _insert_returning_id
+    cur.execute(sql, params)
+E   psycopg2.errors.UndefinedTable: 错误:  关系 "pgtest_biz_competitor_snapshots" 不存在
+E   LINE 1: INSERT INTO pgtest_biz_competitor_snapshots (watchlist_id, u...
+E                       ^
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 03:00:50 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 03:00:50 - rag_system - INFO - [PostgresCompetitorStore] 初始化完成（agent_business）
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+INFO     rag_system:store_pg.py:102 [PostgresCompetitorStore] 初始化完成（agent_business）
+================================== FAILURES ===================================
+__________ test_query_endpoint_degrades_when_datasource_unavailable ___________
+backend\tests\observability\test_gateway_log_ingest.py:102: in test_query_endpoint_degrades_when_datasource_unavailable
+    result = asyncio.run(obs.get_gateway_access_logs(hours=6))
+E   TypeError: get_gateway_access_logs() missing 1 required positional argument: 'request'
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:49:15 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:49:15 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+___________________ TestTraceStorePG.test_list_strips_spans ___________________
+backend\tests\observability\test_obs_stores_pg.py:162: in test_list_strips_spans
+    assert len(rows) == 3
+E   AssertionError: assert 5 == 3
+E    +  where 5 = len([{'id': 'pgtid030', 'timestamp': '2026-09-17 10:00:00', 'session_id': 's-d030', 'workflow_name': 'agent', ...}, {'id':...cf4f9dcc35', 'request_id': '0ecf4f9dcc35', 'timestamp': '2026-09-15T02:20:41.436Z', 'session_id': 'b7f8a09bc050', ...}])
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:49:19 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 02:49:19 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 b0ec139e9d5b: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 b0ec139e9d5b: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 02:49:19 - rag_system - WARNING - [TraceStore-PG] save_dict 失败 f4773d2c683b: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+2026-09-18 02:49:19 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 f4773d2c683b: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+2026-09-18 02:49:19 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 911f14947786: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+2026-09-18 02:49:19 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 0ecf4f9dcc35: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+------------------------------ Captured log call ------------------------------
+WARNING  rag_system:trace_store_pg.py:148 [TraceStore-PG] save_dict 失败 f4773d2c683b: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 f4773d2c683b: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 911f14947786: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 0ecf4f9dcc35: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:49:20 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+____________ TestTraceStorePG.test_list_since_window_and_rejected _____________
+backend\tests\observability\test_obs_stores_pg.py:175: in test_list_since_window_and_rejected
+    assert {r["id"] for r in rows} == {"pgtid0400", "pgtid0401"}
+E   AssertionError: assert {'5a4d71cb113..., 'pgtid0401'} == {'pgtid0400', 'pgtid0401'}
+E     
+E     Extra items in the left set:
+E     '5a4d71cb113a'
+E     Use -v to get more diff
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:49:20 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 02:49:20 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 ac72f15c75fd: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 ac72f15c75fd: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 02:49:20 - rag_system - WARNING - [TraceStore-PG] save_dict 失败 4d645b651000: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+2026-09-18 02:49:20 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 4d645b651000: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+------------------------------ Captured log call ------------------------------
+WARNING  rag_system:trace_store_pg.py:148 [TraceStore-PG] save_dict 失败 4d645b651000: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 4d645b651000: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:49:20 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 5a4d71cb113a: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+2026-09-18 02:49:20 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 5a4d71cb113a: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+__________________ TestAnalyticsStorePG.test_save_list_count __________________
+backend\tests\observability\test_obs_stores_pg.py:189: in test_save_list_count
+    assert len(rows) == 1
+E   AssertionError: assert 2 == 1
+E    +  where 2 = len([{'session_id': 's-0500', 'workflow_name': 'agent', 'workflow_kind': 'other', 'status': 'success', ...}, {'session_id': 's-1', 'workflow_name': 'agent', 'workflow_kind': 'other', 'status': 'success', ...}])
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:49:20 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 02:49:20 - rag_system - WARNING - [TraceStore-PG] save_dict 失败 b0f37a2233ab: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+WARNING  rag_system:trace_store_pg.py:148 [TraceStore-PG] save_dict 失败 b0f37a2233ab: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 02:49:20 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 b0f37a2233ab: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+2026-09-18 02:49:20 - rag_system - WARNING - [TraceStore-PG] save_dict 失败 82993ae73776: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+------------------------------ Captured log call ------------------------------
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 b0f37a2233ab: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+WARNING  rag_system:trace_store_pg.py:148 [TraceStore-PG] save_dict 失败 82993ae73776: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:49:21 - rag_system - WARNING - [TraceStore-PG] save_dict 失败 c7ad5d0b7920: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+2026-09-18 02:49:21 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 c7ad5d0b7920: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+2026-09-18 02:49:21 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+WARNING  rag_system:trace_store_pg.py:148 [TraceStore-PG] save_dict 失败 c7ad5d0b7920: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 c7ad5d0b7920: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_______________ TestAnalyticsStorePG.test_rejected_and_sessions _______________
+backend\tests\observability\test_obs_stores_pg.py:204: in test_rejected_and_sessions
+    assert len(sessions) == 1
+E   AssertionError: assert 2 == 1
+E    +  where 2 = len([{'session_id': 's-0600', 'turns': 1, 'last_ts': '2026-09-17 10:00:00', 'first_ts': '2026-09-17 10:00:00', ...}, {'session_id': 's-1', 'turns': 2, 'last_ts': '2026-09-15T02:22:09.610Z', 'first_ts': '2026-09-15T02:22:09.587Z', ...}])
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:49:21 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 02:49:21 - rag_system - WARNING - [TraceStore-PG] save_dict 失败 24ba3b0310b0: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+WARNING  rag_system:trace_store_pg.py:148 [TraceStore-PG] save_dict 失败 24ba3b0310b0: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 02:49:21 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 24ba3b0310b0: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+2026-09-18 02:49:21 - rag_system - WARNING - [TraceStore-PG] save_dict 失败 ceb834144778: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+2026-09-18 02:49:21 - rag_system - WARNING - [TraceStore-PG] save_dict 失败 16b17a58b5ed: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+------------------------------ Captured log call ------------------------------
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 24ba3b0310b0: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+WARNING  rag_system:trace_store_pg.py:148 [TraceStore-PG] save_dict 失败 ceb834144778: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+WARNING  rag_system:trace_store_pg.py:148 [TraceStore-PG] save_dict 失败 16b17a58b5ed: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:49:22 - rag_system - WARNING - [TraceStore-PG] save_dict 失败 8f4046d4a898: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+2026-09-18 02:49:22 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+WARNING  rag_system:trace_store_pg.py:148 [TraceStore-PG] save_dict 失败 8f4046d4a898: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+___________________ TestAnalyticsStorePG.test_cost_summary ____________________
+backend\tests\observability\test_obs_stores_pg.py:213: in test_cost_summary
+    assert len(cs) == 1
+E   AssertionError: assert 2 == 1
+E    +  where 2 = len([{'day': '2026-09-17', 'model': 'gpt-test', 'traces': 1, 'prompt_tokens': 10, ...}, {'day': '2026-09-15', 'model': '', 'traces': 1, 'prompt_tokens': 0, ...}])
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:49:22 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 02:49:22 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 8f4046d4a898: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+2026-09-18 02:49:22 - rag_system - WARNING - [TraceStore-PG] save_dict 失败 a9264a8238a5: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+------------------------------ Captured log call ------------------------------
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 8f4046d4a898: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+WARNING  rag_system:trace_store_pg.py:148 [TraceStore-PG] save_dict 失败 a9264a8238a5: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:49:22 - rag_system - WARNING - [TraceStore-PG] save_dict 失败 2fc250be415f: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+2026-09-18 02:49:22 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 2fc250be415f: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+2026-09-18 02:49:22 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+WARNING  rag_system:trace_store_pg.py:148 [TraceStore-PG] save_dict 失败 2fc250be415f: 错误:  关系 "pgtest_obs_trace_store" 不存在
+LINE 1: INSERT INTO pgtest_obs_trace_store
+                    ^
+
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 2fc250be415f: 错误:  关系 "pgtest_obs_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_obs_trace_summary (
+                                        ^
+
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+________ test_verify_watchlist_candidate_still_uses_competitor_history ________
+backend\tests\selection_funnel\test_stages.py:441: in test_verify_watchlist_candidate_still_uses_competitor_history
+    from conftest import make_snap
+E   ImportError: cannot import name 'make_snap' from 'conftest' (D:\Program Files\workplace\agent\backend\tests\tools\conftest.py)
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:55:40 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:55:41 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_____ TestSetRequestModelValidation.test_ollama_disabled_in_cloud_ignored _____
+backend\tests\test_llm_bind_tools.py:142: in test_ollama_disabled_in_cloud_ignored
+    monkeypatch.setattr(proxy_mod, "OLLAMA_ENABLED", False)
+E   AttributeError: <module 'backend.infra.llm.proxy' from 'D:\\Program Files\\workplace\\agent\\backend\\infra\\llm\\proxy.py'> has no attribute 'OLLAMA_ENABLED'
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:59:37 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:59:37 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_________ TestAsyncTokenRecording.test_ainvoke_failure_counts_breaker _________
+backend\tests\test_llm_span_fields.py:338: in test_ainvoke_failure_counts_breaker
+    with pytest.raises(RuntimeError):
+E   Failed: DID NOT RAISE RuntimeError
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:59:50 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 02:59:51 - rag_system - INFO - [LLM:resilience] 初始化备用模型: qwen3.7-plus
+2026-09-18 02:59:52 - rag_system - INFO - [LLM:resilience] 备用模型接管成功 (RuntimeError: llm down)
+------------------------------ Captured log call ------------------------------
+INFO     rag_system:proxy.py:251 [LLM:resilience] 初始化备用模型: qwen3.7-plus
+INFO     rag_system:proxy.py:358 [LLM:resilience] 备用模型接管成功 (RuntimeError: llm down)
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:59:53 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_____ TestUploadToIndexChain.test_same_content_second_upload_is_duplicate _____
+backend\tests\test_rag_upload_to_index_e2e.py:461: in test_same_content_second_upload_is_duplicate
+    assert "duplicate" in stages2, f"应命中 duplicate 短路: {stages2}"
+E   AssertionError: 应命中 duplicate 短路: ['uploading', 'uploading', 'uploading', 'error']
+E   assert 'duplicate' in ['uploading', 'uploading', 'uploading', 'error']
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 03:00:17 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 03:00:18 - rag_system - WARNING - [RAG] Celery 入队失败，回退进程内索引: simulated broker down (test fixture)
+2026-09-18 03:00:18 - rag_system - ERROR - [RAG] 后台索引失败: 错误:  关系 "pgtest_biz_doc_registry" 不存在
+LINE 1: SELECT * FROM pgtest_biz_doc_registry WHERE file_path IN ('C...
+                      ^
+
+2026-09-18 03:00:18 - rag_system - INFO - [RAG] 已清理索引失败文件: C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_same_content_second_uploa0\route_docs\policy_general\general\dup.md
+2026-09-18 03:00:18 - rag_system - WARNING - [RAG] Celery 入队失败，回退进程内索引: simulated broker down (test fixture)
+2026-09-18 03:00:18 - rag_system - ERROR - [RAG] 后台索引失败: 错误:  关系 "pgtest_biz_doc_registry" 不存在
+LINE 1: SELECT * FROM pgtest_biz_doc_registry WHERE file_path IN ('C...
+                      ^
+
+2026-09-18 03:00:18 - rag_system - INFO - [RAG] 已清理索引失败文件: C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_same_content_second_uploa0\route_docs\policy_general\general\dup.md
+------------------------------ Captured log call ------------------------------
+WARNING  rag_system:rag_upload.py:911 [RAG] Celery 入队失败，回退进程内索引: simulated broker down (test fixture)
+ERROR    rag_system:rag_upload.py:746 [RAG] 后台索引失败: 错误:  关系 "pgtest_biz_doc_registry" 不存在
+LINE 1: SELECT * FROM pgtest_biz_doc_registry WHERE file_path IN ('C...
+                      ^
+
+INFO     rag_system:rag_upload.py:669 [RAG] 已清理索引失败文件: C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_same_content_second_uploa0\route_docs\policy_general\general\dup.md
+WARNING  rag_system:rag_upload.py:911 [RAG] Celery 入队失败，回退进程内索引: simulated broker down (test fixture)
+ERROR    rag_system:rag_upload.py:746 [RAG] 后台索引失败: 错误:  关系 "pgtest_biz_doc_registry" 不存在
+LINE 1: SELECT * FROM pgtest_biz_doc_registry WHERE file_path IN ('C...
+                      ^
+
+INFO     rag_system:rag_upload.py:669 [RAG] 已清理索引失败文件: C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_same_content_second_uploa0\route_docs\policy_general\general\dup.md
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 03:00:18 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+___ TestUploadToIndexChain.test_changed_content_reindexes_and_updates_hash ____
+backend\tests\test_rag_upload_to_index_e2e.py:481: in test_changed_content_reindexes_and_updates_hash
+    assert stages2[-1] == "done", f"变化内容应重新索引: {stages2}"
+E   AssertionError: 变化内容应重新索引: ['uploading', 'uploading', 'uploading', 'error']
+E   assert 'error' == 'done'
+E     
+E     - done
+E     + error
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 03:00:18 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 03:00:19 - rag_system - WARNING - [RAG] Celery 入队失败，回退进程内索引: simulated broker down (test fixture)
+2026-09-18 03:00:19 - rag_system - INFO - [RAG] 新文件，首次索引: evolve.md (path=C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_changed_content_reindexes0\route_docs\policy_general\general\evolve.md)
+2026-09-18 03:00:20 - rag_system - INFO - [KeywordStore-PG] 种子数据导入: 133 条
+2026-09-18 03:00:20 - rag_system - INFO - [Classify] 胶着仲裁：top4=[('policy', 25), ('sop', 20), ('faq', 8), ('financial', 6)], inner_diff=17
+2026-09-18 03:00:21 - rag_system - INFO - [Classify] LLM 仲裁结果：policy
+2026-09-18 03:00:21 - rag_system - INFO - [ChunkPipeline] C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_changed_content_reindexes0\route_docs\policy_general\general\evolve.md doc_type=policy completeness=0.9434 → StructureChunkStrategy
+2026-09-18 03:00:21 - rag_system - WARNING - [LLMUsageStore-PG] by_trace(32ca315f7298) 查询失败: 错误:  关系 "pgtest_biz_llm_usage" 不存在
+LINE 2:                        FROM pgtest_biz_llm_usage WHERE trace...
+                                    ^
+
+2026-09-18 03:00:21 - rag_system - ERROR - [RAG] 后台索引失败: 错误:  关系 "pgtest_biz_doc_registry" 不存在
+LINE 1: SELECT * FROM pgtest_biz_doc_registry WHERE file_path IN ('C...
+                      ^
+
+2026-09-18 03:00:22 - rag_system - INFO - [RAG] 已清理索引失败文件: C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_changed_content_reindexes0\route_docs\policy_general\general\evolve.md
+2026-09-18 03:00:22 - rag_system - WARNING - [RAG] Celery 入队失败，回退进程内索引: simulated broker down (test fixture)
+2026-09-18 03:00:22 - rag_system - ERROR - [RAG] 后台索引失败: 错误:  关系 "pgtest_biz_doc_registry" 不存在
+LINE 1: SELECT * FROM pgtest_biz_doc_registry WHERE file_path IN ('C...
+                      ^
+
+2026-09-18 03:00:22 - rag_system - INFO - [RAG] 已清理索引失败文件: C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_changed_content_reindexes0\route_docs\policy_general\general\evolve.md
+------------------------------ Captured log call ------------------------------
+WARNING  rag_system:rag_upload.py:911 [RAG] Celery 入队失败，回退进程内索引: simulated broker down (test fixture)
+INFO     rag_system:rag_upload.py:1035 [RAG] 新文件，首次索引: evolve.md (path=C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_changed_content_reindexes0\route_docs\policy_general\general\evolve.md)
+INFO     rag_system:keyword_store_pg.py:135 [KeywordStore-PG] 种子数据导入: 133 条
+INFO     rag_system:metadata.py:360 [Classify] 胶着仲裁：top4=[('policy', 25), ('sop', 20), ('faq', 8), ('financial', 6)], inner_diff=17
+INFO     rag_system:metadata.py:374 [Classify] LLM 仲裁结果：policy
+INFO     rag_system:pipeline.py:90 [ChunkPipeline] C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_changed_content_reindexes0\route_docs\policy_general\general\evolve.md doc_type=policy completeness=0.9434 → StructureChunkStrategy
+WARNING  rag_system:llm_usage_store_pg.py:173 [LLMUsageStore-PG] by_trace(32ca315f7298) 查询失败: 错误:  关系 "pgtest_biz_llm_usage" 不存在
+LINE 2:                        FROM pgtest_biz_llm_usage WHERE trace...
+                                    ^
+
+ERROR    rag_system:rag_upload.py:746 [RAG] 后台索引失败: 错误:  关系 "pgtest_biz_doc_registry" 不存在
+LINE 1: SELECT * FROM pgtest_biz_doc_registry WHERE file_path IN ('C...
+                      ^
+
+INFO     rag_system:rag_upload.py:669 [RAG] 已清理索引失败文件: C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_changed_content_reindexes0\route_docs\policy_general\general\evolve.md
+WARNING  rag_system:rag_upload.py:911 [RAG] Celery 入队失败，回退进程内索引: simulated broker down (test fixture)
+ERROR    rag_system:rag_upload.py:746 [RAG] 后台索引失败: 错误:  关系 "pgtest_biz_doc_registry" 不存在
+LINE 1: SELECT * FROM pgtest_biz_doc_registry WHERE file_path IN ('C...
+                      ^
+
+INFO     rag_system:rag_upload.py:669 [RAG] 已清理索引失败文件: C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_changed_content_reindexes0\route_docs\policy_general\general\evolve.md
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 03:00:22 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+__________ TestUploadToIndexChain.test_queue_vanished_still_indexes ___________
+backend\tests\test_rag_upload_to_index_e2e.py:507: in test_queue_vanished_still_indexes
+    result = rag_upload._do_index_sync(
+backend\app\api\routes\rag_upload.py:1013: in _do_index_sync
+    existing = reg.get_by_path(filepath)
+backend\rag\indexing\doc_registry_pg.py:179: in get_by_path
+    row = self._exec(
+backend\rag\indexing\doc_registry_pg.py:131: in _exec
+    cur.execute(sql, params)
+.venv\lib\site-packages\psycopg2\extras.py:236: in execute
+    return super().execute(query, vars)
+E   psycopg2.errors.UndefinedTable: 错误:  关系 "pgtest_biz_doc_registry" 不存在
+E   LINE 1: SELECT * FROM pgtest_biz_doc_registry WHERE file_path IN ('C...
+E                         ^
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 03:00:22 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 03:00:23 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+__________ TestUploadToIndexChain.test_overwrite_success_removes_bak __________
+backend\tests\test_rag_upload_to_index_e2e.py:526: in test_overwrite_success_removes_bak
+    assert stages2[-1] == "done"
+E   AssertionError: assert 'error' == 'done'
+E     
+E     - done
+E     + error
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 03:00:23 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 03:00:24 - rag_system - WARNING - [RAG] Celery 入队失败，回退进程内索引: simulated broker down (test fixture)
+2026-09-18 03:00:24 - rag_system - ERROR - [RAG] 后台索引失败: 错误:  关系 "pgtest_biz_doc_registry" 不存在
+LINE 1: SELECT * FROM pgtest_biz_doc_registry WHERE file_path IN ('C...
+                      ^
+
+2026-09-18 03:00:24 - rag_system - INFO - [RAG] 已清理索引失败文件: C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_overwrite_success_removes0\route_docs\policy_general\general\bak.md
+2026-09-18 03:00:24 - rag_system - WARNING - [RAG] Celery 入队失败，回退进程内索引: simulated broker down (test fixture)
+2026-09-18 03:00:24 - rag_system - ERROR - [RAG] 后台索引失败: 错误:  关系 "pgtest_biz_doc_registry" 不存在
+LINE 1: SELECT * FROM pgtest_biz_doc_registry WHERE file_path IN ('C...
+                      ^
+
+2026-09-18 03:00:24 - rag_system - INFO - [RAG] 已清理索引失败文件: C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_overwrite_success_removes0\route_docs\policy_general\general\bak.md
+------------------------------ Captured log call ------------------------------
+WARNING  rag_system:rag_upload.py:911 [RAG] Celery 入队失败，回退进程内索引: simulated broker down (test fixture)
+ERROR    rag_system:rag_upload.py:746 [RAG] 后台索引失败: 错误:  关系 "pgtest_biz_doc_registry" 不存在
+LINE 1: SELECT * FROM pgtest_biz_doc_registry WHERE file_path IN ('C...
+                      ^
+
+INFO     rag_system:rag_upload.py:669 [RAG] 已清理索引失败文件: C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_overwrite_success_removes0\route_docs\policy_general\general\bak.md
+WARNING  rag_system:rag_upload.py:911 [RAG] Celery 入队失败，回退进程内索引: simulated broker down (test fixture)
+ERROR    rag_system:rag_upload.py:746 [RAG] 后台索引失败: 错误:  关系 "pgtest_biz_doc_registry" 不存在
+LINE 1: SELECT * FROM pgtest_biz_doc_registry WHERE file_path IN ('C...
+                      ^
+
+INFO     rag_system:rag_upload.py:669 [RAG] 已清理索引失败文件: C:\Users\wh\AppData\Local\Temp\pytest-of-wh\pytest-907\test_overwrite_success_removes0\route_docs\policy_general\general\bak.md
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 03:00:24 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+____________________________ test_list_and_detail _____________________________
+backend\tests\test_selection_decision_api.py:65: in test_list_and_detail
+    detail = client.get(f"/selection-decision/tasks/{task_id}").json()
+.venv\lib\site-packages\starlette\testclient.py:482: in get
+    return super().get(
+.venv\lib\site-packages\httpx\_client.py:1053: in get
+    return self.request(
+.venv\lib\site-packages\starlette\testclient.py:454: in request
+    return super().request(
+.venv\lib\site-packages\httpx\_client.py:825: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+.venv\lib\site-packages\httpx\_client.py:914: in send
+    response = self._send_handling_auth(
+.venv\lib\site-packages\httpx\_client.py:942: in _send_handling_auth
+    response = self._send_handling_redirects(
+.venv\lib\site-packages\httpx\_client.py:979: in _send_handling_redirects
+    response = self._send_single_request(request)
+.venv\lib\site-packages\httpx\_client.py:1014: in _send_single_request
+    response = transport.handle_request(request)
+.venv\lib\site-packages\starlette\testclient.py:356: in handle_request
+    raise exc
+.venv\lib\site-packages\starlette\testclient.py:353: in handle_request
+    portal.call(self.app, scope, receive, send)
+.venv\lib\site-packages\anyio\from_thread.py:334: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+D:\Python\lib\concurrent\futures\_base.py:446: in result
+    return self.__get_result()
+D:\Python\lib\concurrent\futures\_base.py:391: in __get_result
+    raise self._exception
+.venv\lib\site-packages\anyio\from_thread.py:259: in _call_func
+    retval = await retval_or_awaitable
+.venv\lib\site-packages\fastapi\applications.py:1159: in __call__
+    await super().__call__(scope, receive, send)
+.venv\lib\site-packages\starlette\applications.py:90: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv\lib\site-packages\starlette\middleware\errors.py:186: in __call__
+    raise exc
+.venv\lib\site-packages\starlette\middleware\errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.venv\lib\site-packages\starlette\middleware\exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+.venv\lib\site-packages\starlette\_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv\lib\site-packages\starlette\_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv\lib\site-packages\fastapi\middleware\asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+.venv\lib\site-packages\starlette\routing.py:660: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv\lib\site-packages\starlette\routing.py:680: in app
+    await route.handle(scope, receive, send)
+.venv\lib\site-packages\starlette\routing.py:276: in handle
+    await self.app(scope, receive, send)
+.venv\lib\site-packages\fastapi\routing.py:134: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+.venv\lib\site-packages\starlette\_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv\lib\site-packages\starlette\_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv\lib\site-packages\fastapi\routing.py:120: in app
+    response = await f(request)
+.venv\lib\site-packages\fastapi\routing.py:674: in app
+    raw_response = await run_endpoint_function(
+.venv\lib\site-packages\fastapi\routing.py:330: in run_endpoint_function
+    return await run_in_threadpool(dependant.call, **values)
+.venv\lib\site-packages\starlette\concurrency.py:34: in run_in_threadpool
+    return await anyio.to_thread.run_sync(func)
+.venv\lib\site-packages\anyio\to_thread.py:63: in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+.venv\lib\site-packages\anyio\_backends\_asyncio.py:2518: in run_sync_in_worker_thread
+    return await future
+.venv\lib\site-packages\anyio\_backends\_asyncio.py:1002: in run
+    result = context.run(func, *args)
+backend\app\api\routes\selection_decision.py:90: in get_task
+    row = get_selection_decision_store().get(task_id)
+backend\selection_decision\store_pg.py:178: in get
+    row = self._exec(
+backend\selection_decision\store_pg.py:93: in _exec
+    cur.execute(sql, params)
+.venv\lib\site-packages\psycopg2\extras.py:236: in execute
+    return super().execute(query, vars)
+E   psycopg2.errors.UndefinedTable: 错误:  关系 "pgtest_biz_selection_tasks" 不存在
+E   LINE 1: SELECT * FROM pgtest_biz_selection_tasks WHERE id = 'e95bb2f...
+E                         ^
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 03:00:26 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 03:00:27 - rag_system - INFO - [SelectionDecision:api] 任务已提交: e95bb2f7a8be (蓝牙耳机)
+------------------------------ Captured log call ------------------------------
+INFO     rag_system:selection_decision.py:79 [SelectionDecision:api] 任务已提交: e95bb2f7a8be (蓝牙耳机)
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 03:00:28 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_______________________________ test_detail_404 _______________________________
+backend\tests\test_selection_decision_api.py:70: in test_detail_404
+    assert client.get("/selection-decision/tasks/no-such").status_code == 404
+.venv\lib\site-packages\starlette\testclient.py:482: in get
+    return super().get(
+.venv\lib\site-packages\httpx\_client.py:1053: in get
+    return self.request(
+.venv\lib\site-packages\starlette\testclient.py:454: in request
+    return super().request(
+.venv\lib\site-packages\httpx\_client.py:825: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+.venv\lib\site-packages\httpx\_client.py:914: in send
+    response = self._send_handling_auth(
+.venv\lib\site-packages\httpx\_client.py:942: in _send_handling_auth
+    response = self._send_handling_redirects(
+.venv\lib\site-packages\httpx\_client.py:979: in _send_handling_redirects
+    response = self._send_single_request(request)
+.venv\lib\site-packages\httpx\_client.py:1014: in _send_single_request
+    response = transport.handle_request(request)
+.venv\lib\site-packages\starlette\testclient.py:356: in handle_request
+    raise exc
+.venv\lib\site-packages\starlette\testclient.py:353: in handle_request
+    portal.call(self.app, scope, receive, send)
+.venv\lib\site-packages\anyio\from_thread.py:334: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+D:\Python\lib\concurrent\futures\_base.py:446: in result
+    return self.__get_result()
+D:\Python\lib\concurrent\futures\_base.py:391: in __get_result
+    raise self._exception
+.venv\lib\site-packages\anyio\from_thread.py:259: in _call_func
+    retval = await retval_or_awaitable
+.venv\lib\site-packages\fastapi\applications.py:1159: in __call__
+    await super().__call__(scope, receive, send)
+.venv\lib\site-packages\starlette\applications.py:90: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv\lib\site-packages\starlette\middleware\errors.py:186: in __call__
+    raise exc
+.venv\lib\site-packages\starlette\middleware\errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.venv\lib\site-packages\starlette\middleware\exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+.venv\lib\site-packages\starlette\_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv\lib\site-packages\starlette\_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv\lib\site-packages\fastapi\middleware\asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+.venv\lib\site-packages\starlette\routing.py:660: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv\lib\site-packages\starlette\routing.py:680: in app
+    await route.handle(scope, receive, send)
+.venv\lib\site-packages\starlette\routing.py:276: in handle
+    await self.app(scope, receive, send)
+.venv\lib\site-packages\fastapi\routing.py:134: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+.venv\lib\site-packages\starlette\_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv\lib\site-packages\starlette\_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv\lib\site-packages\fastapi\routing.py:120: in app
+    response = await f(request)
+.venv\lib\site-packages\fastapi\routing.py:674: in app
+    raw_response = await run_endpoint_function(
+.venv\lib\site-packages\fastapi\routing.py:330: in run_endpoint_function
+    return await run_in_threadpool(dependant.call, **values)
+.venv\lib\site-packages\starlette\concurrency.py:34: in run_in_threadpool
+    return await anyio.to_thread.run_sync(func)
+.venv\lib\site-packages\anyio\to_thread.py:63: in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+.venv\lib\site-packages\anyio\_backends\_asyncio.py:2518: in run_sync_in_worker_thread
+    return await future
+.venv\lib\site-packages\anyio\_backends\_asyncio.py:1002: in run
+    result = context.run(func, *args)
+backend\app\api\routes\selection_decision.py:90: in get_task
+    row = get_selection_decision_store().get(task_id)
+backend\selection_decision\store_pg.py:178: in get
+    row = self._exec(
+backend\selection_decision\store_pg.py:93: in _exec
+    cur.execute(sql, params)
+.venv\lib\site-packages\psycopg2\extras.py:236: in execute
+    return super().execute(query, vars)
+E   psycopg2.errors.UndefinedTable: 错误:  关系 "pgtest_biz_selection_tasks" 不存在
+E   LINE 1: SELECT * FROM pgtest_biz_selection_tasks WHERE id = 'no-such...
+E                         ^
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 03:00:28 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 03:00:29 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+________________ test_run_task_writes_back_non_success_status _________________
+backend\app\api\routes\selection_decision.py:50: in _run_task
+    get_selection_decision_store().update_result(
+backend\selection_decision\store_pg.py:125: in update_result
+    self._exec(
+backend\selection_decision\store_pg.py:93: in _exec
+    cur.execute(sql, params)
+.venv\lib\site-packages\psycopg2\extras.py:236: in execute
+    return super().execute(query, vars)
+E   psycopg2.errors.UndefinedTable: 错误:  关系 "pgtest_biz_selection_tasks" 不存在
+E   LINE 1: UPDATE pgtest_biz_selection_tasks
+E                  ^
+
+During handling of the above exception, another exception occurred:
+backend\tests\test_selection_decision_api.py:134: in test_run_task_writes_back_non_success_status
+    asyncio.run(sd_routes._run_task(task_id, {"task_id": task_id}))
+D:\Python\lib\asyncio\runners.py:44: in run
+    return loop.run_until_complete(main)
+D:\Python\lib\asyncio\base_events.py:641: in run_until_complete
+    return future.result()
+backend\app\api\routes\selection_decision.py:54: in _run_task
+    get_selection_decision_store().update_result(
+backend\selection_decision\store_pg.py:125: in update_result
+    self._exec(
+backend\selection_decision\store_pg.py:93: in _exec
+    cur.execute(sql, params)
+.venv\lib\site-packages\psycopg2\extras.py:236: in execute
+    return super().execute(query, vars)
+E   psycopg2.errors.UndefinedTable: 错误:  关系 "pgtest_biz_selection_tasks" 不存在
+E   LINE 1: UPDATE pgtest_biz_selection_tasks
+E                  ^
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 03:00:31 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 03:00:32 - rag_system - ERROR - [SelectionDecision:api] 任务 fa67d609a0da 执行异常: 错误:  关系 "pgtest_biz_selection_tasks" 不存在
+LINE 1: UPDATE pgtest_biz_selection_tasks
+               ^
+
+------------------------------ Captured log call ------------------------------
+ERROR    rag_system:selection_decision.py:53 [SelectionDecision:api] 任务 fa67d609a0da 执行异常: 错误:  关系 "pgtest_biz_selection_tasks" 不存在
+LINE 1: UPDATE pgtest_biz_selection_tasks
+               ^
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 03:00:33 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+___________________ TestComputeTrends.test_platform_filter ____________________
+backend\tests\test_selection_trends.py:59: in test_platform_filter
+    t = compute_trends(store, days=0, platform="taobao")
+backend\selection\trends.py:60: in compute_trends
+    watch_names = {w["url"]: w["name"] for w in store.list_watch(enabled_only=False)}
+backend\competitor\store_pg.py:156: in list_watch
+    return [dict(r) for r in self._exec(conn, sql).fetchall()]
+backend\competitor\store_pg.py:118: in _exec
+    cur.execute(sql, params)
+.venv\lib\site-packages\psycopg2\extras.py:236: in execute
+    return super().execute(query, vars)
+E   psycopg2.errors.UndefinedTable: 错误:  关系 "pgtest_biz_competitor_watchlist" 不存在
+E   LINE 1: SELECT * FROM pgtest_biz_competitor_watchlist ORDER BY id
+E                         ^
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 03:00:51 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 03:00:51 - rag_system - INFO - [PostgresCompetitorStore] 初始化完成（agent_business）
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+INFO     rag_system:store_pg.py:102 [PostgresCompetitorStore] 初始化完成（agent_business）
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 03:00:52 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_____________________ TestComputeTrends.test_empty_store ______________________
+backend\tests\test_selection_trends.py:64: in test_empty_store
+    t = compute_trends(s, days=0)
+backend\selection\trends.py:60: in compute_trends
+    watch_names = {w["url"]: w["name"] for w in store.list_watch(enabled_only=False)}
+backend\competitor\store_pg.py:156: in list_watch
+    return [dict(r) for r in self._exec(conn, sql).fetchall()]
+backend\competitor\store_pg.py:118: in _exec
+    cur.execute(sql, params)
+.venv\lib\site-packages\psycopg2\extras.py:236: in execute
+    return super().execute(query, vars)
+E   psycopg2.errors.UndefinedTable: 错误:  关系 "pgtest_biz_competitor_watchlist" 不存在
+E   LINE 1: SELECT * FROM pgtest_biz_competitor_watchlist ORDER BY id
+E                         ^
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 03:00:52 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 03:00:52 - rag_system - INFO - [PostgresCompetitorStore] 初始化完成（agent_business）
+------------------------------ Captured log call ------------------------------
+INFO     rag_system:store_pg.py:102 [PostgresCompetitorStore] 初始化完成（agent_business）
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 03:00:53 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+============================== warnings summary ===============================
+.venv\lib\site-packages\fastapi\testclient.py:1
+  D:\Program Files\workplace\agent\.venv\lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+backend\evaluation\models.py:28
+  D:\Program Files\workplace\agent\backend\evaluation\models.py:28: PytestCollectionWarning: cannot collect test class 'TestCase' because it has a __init__ constructor (from: backend/tests/evaluation/test_eval_characterization.py)
+    class TestCase(BaseModel):
+
+backend\evaluation\models.py:28
+  D:\Program Files\workplace\agent\backend\evaluation\models.py:28: PytestCollectionWarning: cannot collect test class 'TestCase' because it has a __init__ constructor (from: backend/tests/evaluation/test_graph_eval.py)
+    class TestCase(BaseModel):
+
+.venv\lib\site-packages\torch\cuda\__init__.py:61
+  D:\Program Files\workplace\agent\.venv\lib\site-packages\torch\cuda\__init__.py:61: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+    import pynvml  # type: ignore[import]
+
+backend/tests/customer_service/test_conversation_store.py::TestRecordCsTurn::test_soft_fail_on_import_error
+  D:\Program Files\workplace\agent\.venv\lib\site-packages\pluggy\_callers.py:32: RuntimeWarning: coroutine '_async_record_turn' was never awaited
+    teardown: Teardown = cast(Teardown, hook_impl.function(*args))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+backend/tests/customer_service/test_conversation_store.py::TestRecordCsTurn::test_returns_none
+backend/tests/customer_service/test_cs_experts.py::TestQueryExpert::test_execute_query_no_orders
+  D:\Python\lib\unittest\mock.py:2153: RuntimeWarning: coroutine '_async_record_turn' was never awaited
+    self.name = name
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+backend/tests/customer_service/test_maintenance.py::TestMaintenanceScans::test_handoff_scan_normal_path
+  D:\Python\lib\unittest\mock.py:2107: RuntimeWarning: coroutine 'scan_handoff_timeouts.<locals>._scan' was never awaited
+    setattr(_type, entry, MagicProxy(entry, self))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+backend/tests/customer_service/test_maintenance.py::TestMaintenanceScans::test_handoff_scan_normal_path
+  D:\Python\lib\unittest\mock.py:2107: RuntimeWarning: coroutine 'scan_confirmation_expiries.<locals>._scan' was never awaited
+    setattr(_type, entry, MagicProxy(entry, self))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+backend/tests/customer_service/test_message_manager.py::TestCreate::test_create_user_message
+  D:\Python\lib\unittest\mock.py:2153: RuntimeWarning: coroutine 'scan_confirmation_expiries.<locals>._scan' was never awaited
+    self.name = name
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+backend/tests/customer_service/test_state_transition.py::TestLoadSnapshotDBFallback::test_load_snapshot_returns_defaults_on_error
+  D:\Python\lib\unittest\mock.py:1635: RuntimeWarning: coroutine 'StateTransitionService._async_apply' was never awaited
+    return _patch(
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+backend/tests/messaging/test_kafka_publisher.py::TestPublishEvent::test_publish_event_send_exception_returns_false
+  D:\Python\lib\unittest\mock.py:2153: RuntimeWarning: coroutine 'scan_handoff_timeouts.<locals>._scan' was never awaited
+    self.name = name
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED backend/tests/observability/test_gateway_log_ingest.py::test_query_endpoint_degrades_when_datasource_unavailable
+FAILED backend/tests/observability/test_obs_stores_pg.py::TestTraceStorePG::test_list_strips_spans
+FAILED backend/tests/observability/test_obs_stores_pg.py::TestTraceStorePG::test_list_since_window_and_rejected
+FAILED backend/tests/observability/test_obs_stores_pg.py::TestAnalyticsStorePG::test_save_list_count
+FAILED backend/tests/observability/test_obs_stores_pg.py::TestAnalyticsStorePG::test_rejected_and_sessions
+FAILED backend/tests/observability/test_obs_stores_pg.py::TestAnalyticsStorePG::test_cost_summary
+FAILED backend/tests/selection_funnel/test_stages.py::test_verify_watchlist_candidate_still_uses_competitor_history
+FAILED backend/tests/test_llm_bind_tools.py::TestSetRequestModelValidation::test_ollama_disabled_in_cloud_ignored
+FAILED backend/tests/test_llm_span_fields.py::TestAsyncTokenRecording::test_ainvoke_failure_counts_breaker
+FAILED backend/tests/test_rag_upload_to_index_e2e.py::TestUploadToIndexChain::test_same_content_second_upload_is_duplicate
+FAILED backend/tests/test_rag_upload_to_index_e2e.py::TestUploadToIndexChain::test_changed_content_reindexes_and_updates_hash
+FAILED backend/tests/test_rag_upload_to_index_e2e.py::TestUploadToIndexChain::test_queue_vanished_still_indexes
+FAILED backend/tests/test_rag_upload_to_index_e2e.py::TestUploadToIndexChain::test_overwrite_success_removes_bak
+FAILED backend/tests/test_selection_decision_api.py::test_list_and_detail - p...
+FAILED backend/tests/test_selection_decision_api.py::test_detail_404 - psycop...
+FAILED backend/tests/test_selection_decision_api.py::test_run_task_writes_back_non_success_status
+FAILED backend/tests/test_selection_trends.py::TestComputeTrends::test_platform_filter
+FAILED backend/tests/test_selection_trends.py::TestComputeTrends::test_empty_store
+ERROR backend/tests/test_selection_trends.py::TestComputeTrends::test_days_filter
+18 failed, 4384 passed, 119 skipped, 12 warnings, 1 error in 1031.57s (0:17:11)
+Exception closing connection <AdaptedConnection <asyncpg.connection.Connection object at 0x0000028932BB4310>>
+Traceback (most recent call last):
+  File "D:\Program Files\workplace\agent\.venv\lib\site-packages\sqlalchemy\pool\base.py", line 375, in _close_connection
+    self._dialect.do_close(connection)
+  File "D:\Program Files\workplace\agent\.venv\lib\site-packages\sqlalchemy\engine\default.py", line 721, in do_close
+    dbapi_connection.close()
+  File "D:\Program Files\workplace\agent\.venv\lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py", line 903, in close
+    self.await_(self._connection.close())
+  File "D:\Program Files\workplace\agent\.venv\lib\site-packages\sqlalchemy\util\_concurrency_py3k.py", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+  File "D:\Program Files\workplace\agent\.venv\lib\site-packages\sqlalchemy\util\_concurrency_py3k.py", line 196, in greenlet_spawn
+    value = await result
+  File "D:\Program Files\workplace\agent\.venv\lib\site-packages\asyncpg\connection.py", line 1513, in close
+    await self._protocol.close(timeout)
+  File "asyncpg/protocol/protocol.pyx", line 632, in close
+RuntimeError: Task <Task pending name='Task-3558' coro=<MemoryManager._shutdown.<locals>._close() running at D:\Program Files\workplace\agent\backend\memory\manager.py:92> cb=[_chain_future.<locals>._call_set_state() at D:\Python\lib\asyncio\futures.py:391]> got Future <Future pending cb=[BaseProtocol._on_waiter_completed()]> attached to a different loop

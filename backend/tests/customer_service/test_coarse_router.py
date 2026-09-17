@@ -13,7 +13,9 @@ class TestRuleClassify:
             "TRANSACTION": ["订单", "物流", "快递", "发货"],
             "AFTER_SALES": ["退款", "退货", "换货"],
         }
-        domain, conf, reason = cr._rule_classify("查一下订单物流快递", keywords)
+        domain, conf, reason = cr._rule_classify(
+            "查一下订单物流快递", keywords, patterns={}
+        )
         assert domain == CSDomain.TRANSACTION
         assert conf >= 0.8
 
@@ -22,15 +24,32 @@ class TestRuleClassify:
         keywords = {
             "TRANSACTION": ["订单", "物流", "快递", "发货"],
         }
-        domain, conf, reason = cr._rule_classify("查一下订单", keywords)
+        domain, conf, reason = cr._rule_classify(
+            "查一下订单", keywords, patterns={}
+        )
         assert domain == CSDomain.UNKNOWN
         assert conf == 0.0
 
     def test_no_match(self):
         cr = CSCoarseRouter()
         keywords = {"TRANSACTION": ["订单", "物流"]}
-        domain, conf, reason = cr._rule_classify("今天天气不错", keywords)
+        domain, conf, reason = cr._rule_classify(
+            "今天天气不错", keywords, patterns={}
+        )
         assert domain == CSDomain.UNKNOWN
+
+    def test_pattern_hit_counts_toward_votes(self):
+        """P3.5：正则模式与关键词同权计票——单关键词+单模式命中即决定。"""
+        import re
+
+        cr = CSCoarseRouter()
+        keywords = {"AFTER_SALES": ["退款"]}
+        patterns = {"AFTER_SALES": [re.compile(r"申请(退款|退货|换货)")]}
+        domain, conf, reason = cr._rule_classify(
+            "我要给订单 DEMO-1002 申请退款", keywords, patterns=patterns
+        )
+        assert domain == CSDomain.AFTER_SALES
+        assert conf >= 2 / 3
 
 
 class TestCascadeLogic:
@@ -38,6 +57,9 @@ class TestCascadeLogic:
         monkeypatch.setattr(
             "backend.config.customer_service.CS_DOMAIN_KEYWORDS",
             {"TRANSACTION": ["订单", "物流", "快递"]},
+        )
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_DOMAIN_PATTERNS", {}
         )
         cr = CSCoarseRouter()
         domain, conf, reason = cr.classify("查订单物流快递")
@@ -50,6 +72,9 @@ class TestCascadeLogic:
             "backend.config.customer_service.CS_DOMAIN_KEYWORDS",
             {"TRANSACTION": ["订单", "物流"], "AFTER_SALES": ["退款", "退货"]},
         )
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_DOMAIN_PATTERNS", {}
+        )
         cr = CSCoarseRouter()
         domain, conf, reason = cr.classify("订单退款了")
         # "订单"→TRANSACTION 1hit，"退款"→AFTER_SALES 1hit，均不足 2
@@ -59,6 +84,9 @@ class TestCascadeLogic:
         monkeypatch.setattr(
             "backend.config.customer_service.CS_DOMAIN_KEYWORDS",
             {"TRANSACTION": ["订单", "物流"]},
+        )
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_DOMAIN_PATTERNS", {}
         )
         cr = CSCoarseRouter()
         domain, conf, reason = cr.classify("模糊查询", rule_hint=CSDomain.ACCOUNT)
@@ -71,6 +99,9 @@ class TestCascadeLogic:
             "backend.config.customer_service.CS_DOMAIN_KEYWORDS",
             {"TRANSACTION": ["订单", "物流", "快递"]},
         )
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_DOMAIN_PATTERNS", {}
+        )
         cr = CSCoarseRouter()
         domain, conf, reason = cr.classify("查订单物流快递", rule_hint=CSDomain.ACCOUNT)
         assert domain == CSDomain.TRANSACTION
@@ -80,6 +111,9 @@ class TestCascadeLogic:
         monkeypatch.setattr(
             "backend.config.customer_service.CS_DOMAIN_KEYWORDS",
             {"TRANSACTION": ["订单", "物流"]},
+        )
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_DOMAIN_PATTERNS", {}
         )
         cr = CSCoarseRouter()
         domain, conf, reason = cr.classify("模糊查询")

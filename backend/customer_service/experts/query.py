@@ -183,6 +183,20 @@ def _dispatch_service(
         order_service = get_order_service()
 
         if intent == "t_order_status":
+            # P3.5：问句带具体订单号 → detail 精确查（此前一律全量列表，
+            # 「DEMO-1001 到哪了」返回整个订单列表，答非所问）
+            order_no = _extract_order_no(question)
+            if order_no:
+                try:
+                    result = order_service.query_orders(
+                        user_id=user_id, order_id=order_no, query_type="detail",
+                    )
+                    return _format_order_list(result.orders)
+                except Exception:
+                    return (
+                        f"没有找到订单 {order_no} 的记录。请核对订单号，"
+                        "或告诉我「查我的所有订单」，我来帮您列出全部订单。"
+                    )
             result = order_service.query_orders(user_id=user_id)
             return _format_order_list(result.orders)
         return _format_order_list([])
@@ -197,6 +211,25 @@ def _dispatch_service(
         return "暂无物流信息。请先查询您的订单。"
 
     return "该功能正在建设中，请稍后再试。"
+
+
+def _extract_order_no(question: str) -> str | None:
+    """P3.5：从问句提取订单号（DEMO-1002 / ORD-001 / 纯数字长号）。
+
+    与 action expert 各自独立提取（服务不同，耦合收益低）；识别不到
+    返回 None 走全量列表语义。
+    """
+    import re
+
+    if not question:
+        return None
+    m = re.search(r"\b([A-Za-z]{2,10}-\d{2,12})\b", question)
+    if m:
+        return m.group(1).upper()
+    m = re.search(r"订单[号]?\s*[:：为]?\s*(\d{5,20})", question)
+    if m:
+        return m.group(1)
+    return None
 
 
 def _get_latest_order_id(user_id: str) -> str | None:

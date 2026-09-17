@@ -13,11 +13,13 @@ import ComposerToolbar from '@/components/agent/ComposerToolbar'
 interface Props {
   onSend: (text: string) => void
   isLoading: boolean
+  /** 生成中时由输入框右下角按钮承担停止职责（ChatView 传入 stopStream） */
+  onStop?: () => void
   /** 嵌在空状态居中组内（而非钉在会话底部）：去掉向上渐隐、收紧上下边距 */
   embedded?: boolean
 }
 
-export default function ChatInput({ onSend, isLoading, embedded = false }: Props) {
+export default function ChatInput({ onSend, isLoading, onStop, embedded = false }: Props) {
   const [input, setInput] = useState('')
   const [department, setDepartment] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -76,6 +78,7 @@ export default function ChatInput({ onSend, isLoading, embedded = false }: Props
             disabled={isLoading}
             canSend={Boolean(input.trim()) && !isLoading}
             onSend={handleSend}
+            onStop={onStop}
           />
         </div>
         <p className="text-[10px] text-text-muted text-center mt-2.5 select-none">

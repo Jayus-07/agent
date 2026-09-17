@@ -1,0 +1,121 @@
+D:\Program Files\workplace\agent\.venv\lib\site-packages\torch\cuda\__init__.py:61: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+2026-09-18 04:12:00 - rag_system - INFO - [Database] Engine 初始化完成
+2026-09-18 04:12:00 - rag_system - INFO - [Memory] 后台 event loop + DB engine 就绪
+2026-09-18 04:12:05 - rag_system - INFO - [Embedding] Cloud 模式初始化完成 (model=text-embedding-v3, api_base=https://dashscope.aliyuncs.com/compatible-mode/v1)
+2026-09-18 04:12:05 - rag_system - INFO - [Embedding] 全局单例创建完成 (provider=cloud, env_mode=cloud, tracking=True)
+2026-09-18 04:12:06 - rag_system - INFO - 启用增量索引模式
+2026-09-18 04:12:06 - rag_system - INFO - [PgVectorStore] 就绪: table=rag_vectors collection=chroma
+2026-09-18 04:12:06 - rag_system - INFO - 加载已有chunk 级向量库: D:\Program Files\workplace\agent\data\chroma
+2026-09-18 04:12:06 - rag_system - INFO - 加载已有文档级向量库: D:\Program Files\workplace\agent\data\doc_db
+2026-09-18 04:12:07 - rag_system - INFO - [Recovery] 发现 1 个中断文档，开始恢复
+2026-09-18 04:12:08 - rag_system - INFO - [CsvParser] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\csv\table_客户满意度调查_2026.csv 解析完成: 6 行 × 4 列
+2026-09-18 04:12:09 - rag_system - INFO - [Router] faq 但 AST 无 qa 节点 → Recursive 兜底
+2026-09-18 04:12:09 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\csv\table_客户满意度调查_2026.csv doc_type=faq completeness=0.9395 → RecursiveChunkStrategy
+2026-09-18 04:12:10 - rag_system - INFO - [Filter] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\csv\table_客户满意度调查_2026.csv: 过滤 1/1 个 chunk ({'low_chinese_ratio': 1})
+2026-09-18 04:12:10 - rag_system - WARNING - [Quality] 文档未通过质量门禁: ['文档过短(<50字符)', '无标题/章节结构', '噪音过高(100%)']
+2026-09-18 04:12:13 - rag_system - INFO - [Redis] connected: redis://localhost:6379/0
+2026-09-18 04:12:13 - rag_system - WARNING - [PromptLoader] rag_preprocessing_metadata_extract.yaml: key 'rag.preprocessing.metadata_extract' not in registry, skipping
+2026-09-18 04:12:13 - rag_system - INFO - [PromptLoader] Loaded 37 defaults from D:\Program Files\workplace\agent\backend\prompts\defaults
+2026-09-18 04:12:13 - rag_system - INFO - 正在初始化默认 LLM: qwen3.7-plus@tp
+2026-09-18 04:12:13 - rag_system - INFO - LLM init OK: qwen3.7-plus@tp (provider=qwen_tp)
+2026-09-18 04:12:14 - rag_system - INFO - [Classify] LLM 复验: general
+2026-09-18 04:12:14 - rag_system - INFO - [Keyword Fallback] 规则仅0个关键词，强制LLM
+2026-09-18 04:12:15 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 0 个, tokens: {'prompt_tokens': 129, 'completion_tokens': 1, 'cost_usd': 5.3e-05, 'model': 'qwen3.7-plus'}
+2026-09-18 04:12:15 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\98e9d2f725.json (nodes=3, chunks=0, anomalies=1)
+2026-09-18 04:12:16 - rag_system - WARNING - [indexer] table_客户满意度调查_2026.csv produced 0 chunks (ext=.csv, parsed=1) — 索引失败,不上传空 doc
+2026-09-18 04:12:16 - rag_system - INFO - [TraceWriter] Redis 可用，使用 Streams 异步写入
+2026-09-18 04:12:16 - rag_system - INFO - [TraceWriter] worker 启动
+2026-09-18 04:12:16 - rag_system - WARNING - [Recovery] 中断文档恢复失败 D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\csv\table_客户满意度调查_2026.csv: table_客户满意度调查_2026.csv produced 0 chunks (ext=.csv, parsed=1)
+2026-09-18 04:12:17 - rag_system - INFO - [Recovery] 恢复完成: {'recovered': 0, 'cleaned': 0, 'failed': 1}
+2026-09-18 04:12:17 - rag_system - WARNING - 删除 chunk 向量失败 (doc_id=d2): 错误:  无法确定多态类型, 因为输入类型为unknown
+
+2026-09-18 04:12:18 - rag_system - WARNING - 删除 doc 向量失败 (doc_id=d2): 错误:  无法确定多态类型, 因为输入类型为unknown
+
+2026-09-18 04:12:18 - rag_system - INFO - [DELETED] b.md
+2026-09-18 04:12:18 - rag_system - WARNING - 删除 chunk 向量失败 (doc_id=existing_doc): 错误:  无法确定多态类型, 因为输入类型为unknown
+
+2026-09-18 04:12:18 - rag_system - WARNING - 删除 doc 向量失败 (doc_id=existing_doc): 错误:  无法确定多态类型, 因为输入类型为unknown
+
+2026-09-18 04:12:19 - rag_system - INFO - [DELETED] existing.md
+2026-09-18 04:12:19 - rag_system - INFO - [CsvParser] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\csv\table_客户满意度调查_2026.csv 解析完成: 6 行 × 4 列
+2026-09-18 04:12:19 - rag_system - INFO - [Router] faq 但 AST 无 qa 节点 → Recursive 兜底
+2026-09-18 04:12:19 - rag_system - INFO - [ChunkPipeline] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\csv\table_客户满意度调查_2026.csv doc_type=faq completeness=0.9395 → RecursiveChunkStrategy
+2026-09-18 04:12:20 - rag_system - INFO - [Filter] D:\Program Files\workplace\agent\data\docs\rag_100_docs\general\csv\table_客户满意度调查_2026.csv: 过滤 1/1 个 chunk ({'low_chinese_ratio': 1})
+2026-09-18 04:12:20 - rag_system - WARNING - [Quality] 文档未通过质量门禁: ['文档过短(<50字符)', '无标题/章节结构', '噪音过高(100%)']
+2026-09-18 04:12:21 - rag_system - INFO - [Classify] LLM 复验: general
+2026-09-18 04:12:21 - rag_system - INFO - [Keyword Fallback] 规则仅0个关键词，强制LLM
+2026-09-18 04:12:22 - rag_system - INFO - [LLM Keywords] qwen3.7-plus 提取 0 个, tokens: {'prompt_tokens': 129, 'completion_tokens': 1, 'cost_usd': 5.3e-05, 'model': 'qwen3.7-plus'}
+2026-09-18 04:12:22 - rag_system - INFO - [Indexer] 质量记录 data/quality_records\rag_100_docs\98e9d2f725.json (nodes=3, chunks=0, anomalies=1)
+2026-09-18 04:12:23 - rag_system - WARNING - [indexer] table_客户满意度调查_2026.csv produced 0 chunks (ext=.csv, parsed=1) — 索引失败,不上传空 doc
+2026-09-18 04:12:23 - rag_system - ERROR - [ADDED-FAILED] table_客户满意度调查_2026.csv: ChunkingEmptyError: table_客户满意度调查_2026.csv produced 0 chunks (ext=.csv, parsed=1)（跳过，不中断本轮 sync）
+Traceback (most recent call last):
+  File "D:\Program Files\workplace\agent\backend\rag\indexing\indexer.py", line 385, in _apply_delta
+    self._index_file(path)
+  File "D:\Program Files\workplace\agent\backend\rag\indexing\indexer.py", line 453, in _index_file
+    inner_result = self._index_file_inner(
+  File "D:\Program Files\workplace\agent\backend\rag\indexing\indexer.py", line 1164, in _index_file_inner
+    raise ChunkingEmptyError(error_msg)
+backend.rag.indexing.indexer.ChunkingEmptyError: table_客户满意度调查_2026.csv produced 0 chunks (ext=.csv, parsed=1)
+2026-09-18 04:12:23 - rag_system - WARNING - 增量索引完成（含 1 个失败文件，已跳过）: SyncResult(added=1, modified=0, deleted=2, skipped=119, failed=1)
+2026-09-18 04:12:23 - rag_system - INFO - 增量索引: SyncResult(added=1, modified=0, deleted=2, skipped=119, failed=1)
+2026-09-18 04:12:23 - rag_system - INFO - [BM25Store] 索引加载成功: 639 文档, 构建于 2026-09-18 04:09:52
+2026-09-18 04:12:23 - rag_system - INFO - [RAG] 从向量库构建 BM25 语料: 639 chunks
+2026-09-18 04:12:23 - rag_system - INFO - [RAG] BM25 索引从磁盘加载成功 (639 文档, hash=3b1c141b14df69f0)，跳过重建
+2026-09-18 04:12:23 - rag_system - INFO - LangChain RAG Chain 初始化完成
+2026-09-18 04:12:23 - rag_system - INFO - RAG 管道初始化完成
+2026-09-18 04:12:24 - rag_system - INFO - [RAG eval] 断点续跑：checkpoint 命中 151 条已完成用例，将跳过
+2026-09-18 04:12:24 - rag_system - INFO - [DocIdResolver] 加载 registry: 121 条映射
+
+================================================================
+  评估报告 — RAG 检索 · 实时 LLM 调用
+  时间: 2026-09-18T04:12:24.670221
+================================================================
+
+  【RAG 检索】  通过率=100.0%  (20/20 通过, 0 失败, 0 错误)
+    ── 检索质量 ──
+      召回率@5: 0.9608
+      召回率@10: 0.9608
+      精确率@5 (精确ID): 0.5083
+      平均倒数排名 (MRR): 0.9314
+      NDCG@10: 0.9292
+      Chunk 级召回率: 0.8500
+      Top-1 准确率 (精确ID): 1.0000
+    ── 上下文质量 ──
+      上下文噪声率@10 (精确ID): 0.4020
+      语义上下文召回: 0.9833
+      语义上下文召回(软分): 0.8535
+      语义上下文精确率: 0.5959
+      语义 Chunk 召回@1: 0.9216
+      语义 Chunk 召回@3: 0.9804
+      语义 Chunk 召回@5: 0.9804
+    ── 安全与拒答 ──
+      dept_leak: 0.0000
+      拒答准确率: 1.0000
+      误答率 (自研): 0.0000
+    ── 多跳/复杂 ──
+      多跳成功率 (自研): 0.8667
+    ── 其他 ──
+      reject_top1_accuracy: 1.0000
+      token_summary: {'sut': {'embedding': 0, 'rerank': 0, 'answer_llm': 0, 'total': 0}, 'evaluator': {'judge': 0, 'total': 0}, 'grand_total': 0, 'window': 'since_run_start'}
+
+  --- 分层评估 ---
+  ✅ [smoke]  通过率=100.0%  (4/4)  阈值=95.0%
+  ✅ [core]  通过率=100.0%  (12/12)  阈值=85.0%
+  ✅ [hard]  通过率=100.0%  (4/4)  阈值=70.0%
+
+  --- 按题型分组 ---
+  [ambiguous]  通过率=100.0%  (2/2)  语义召回=1.0000
+  [calculation]  通过率=100.0%  (1/1)  语义召回=1.0000
+  [comparison]  通过率=100.0%  (1/1)  语义召回=1.0000
+  [multi_doc]  通过率=100.0%  (2/2)  语义召回=0.8334
+  [negative]  通过率=100.0%  (3/3)  语义召回=1.0000
+  [process]  通过率=100.0%  (1/1)  语义召回=1.0000
+  [reasoning]  通过率=100.0%  (2/2)  语义召回=1.0000
+  [robust_complex]  通过率=100.0%  (2/2)  语义召回=1.0000
+  [single_doc]  通过率=100.0%  (6/6)  语义召回=1.0000
+
+================================================================
+
+[storage] 报告已持久化到: D:\Program Files\workplace\agent\data\eval_runs\2026-09-18T04-12-24-efe47d
+Release Gate 报告已保存到: D:\Program Files\workplace\agent\data\eval_runs\2026-09-18T04-12-24-efe47d\eval-rag-20260918-041224.md

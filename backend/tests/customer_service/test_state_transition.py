@@ -7,6 +7,8 @@ Phase 0.12: 验证状态转换服务的核心行为
 """
 from __future__ import annotations
 
+import gc
+import warnings
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -50,6 +52,26 @@ class TestApplyDBFallback:
             ))
         assert result["success"] is False
         assert "DB unavailable" in result["errors"]
+
+    @pytest.mark.filterwarnings("error::pytest.PytestUnraisableExceptionWarning")
+    def test_apply_closes_coroutine_when_db_bridge_rejects_submission(self):
+        """提交到 DB 线程失败时，不能遗留未 await 的协程告警。"""
+        svc = StateTransitionService()
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always", RuntimeWarning)
+            with patch(
+                "backend.customer_service._db_loop.run_sync",
+                side_effect=RuntimeError("loop stopped"),
+            ):
+                result = svc.apply(StateTransitionRequest(
+                    user_id="u1",
+                    session_id="s1",
+                    conversation_id="c1",
+                ))
+            gc.collect()
+
+        assert result["success"] is False
+        assert not any("was never awaited" in str(item.message) for item in captured)
 
 
 class TestLoadSnapshotDBFallback:

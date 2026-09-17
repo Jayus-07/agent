@@ -1,0 +1,213 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "1b009aed62",
+ "kb_id": "rag_100_docs",
+ "source_file": "policy_考勤管理制度_研发中心.md",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\agent_test_data_ta_npvse\\docs\\rag_100_docs\\general\\md\\policy_考勤管理制度_研发中心.md",
+ "file_size": 713,
+ "file_sha256": "8ef5e3478b441609b1602e213a5ec54d7f6b93ce7b1f3c428f25e0611f39ebad",
+ "format": "md",
+ "doc_type": "policy",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.9661,
+ "parsing": {
+  "node_count": 11,
+  "section_count": 6,
+  "leaf_count": 5,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 331,
+  "cleaned_chars": 261,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 8,
+  "leaf_chunk_count": 3,
+  "parent_chunk_count": 5,
+  "truncated": false,
+  "filtered_count": 2,
+  "filtered_reasons": {
+   "duplicate": 2
+  }
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e75ccdbf5ace08ce",
+    "chars": 12,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "1c3b0f743bd9c2bf",
+    "chars": 46,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0cc4ecb5968f21b1",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "da2d847f7346d271",
+    "chars": 48,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "449b8a415bf71454",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "ab78b37809ce8f02",
+    "chars": 63,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e1013a14bcf37739",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "a38ae4bc904c0b48",
+    "chars": 69,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "9e2712a6fd7e921b",
+    "chars": 8,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "afd0fadc7e270221",
+    "chars": 35,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=261 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=5"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.789 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

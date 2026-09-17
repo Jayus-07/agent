@@ -360,8 +360,11 @@ class MetadataStage:
             "llm_used": bool(kws_llm_objs),
             "llm_strategy": kw_result.llm_strategy,
             "llm_decision": llm_decision,
-            "person_names": ", ".join(person_names) if isinstance(person_names, list)
-                           else str(person_names),
+            # 存 list（落库经 _sanitize_metadata 成 JSON 数组串）：标量实体过滤靠
+            # where→SQL 的数组包含臂命中。此前是 ", ".join 逗号串，多人文档
+            # person_names 标量过滤必失配（2026-09-18 实证缺陷）。
+            "person_names": list(person_names) if isinstance(person_names, (list, tuple))
+                           else ([] if not person_names else [str(person_names)]),
             "entities": entities_nested,   # P1: 结构化实体 {person, org, regulation, ...}
             "summary": summary,
             "sections": list(sections),
@@ -503,8 +506,9 @@ class MetadataStage:
             "llm_used": True,
             "llm_strategy": "unified_extract",
             "llm_decision": {"source": "metadata_llm", "fallback": False},
-            "person_names": ", ".join(person_names) if isinstance(person_names, list)
-                           else str(person_names),
+            # 同规则路径：存 list，过滤语义见上
+            "person_names": list(person_names) if isinstance(person_names, (list, tuple))
+                           else ([] if not person_names else [str(person_names)]),
             "entities": unified.get("entities") or {},
             "summary": summary,
             "sections": list(sections),

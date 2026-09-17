@@ -62,6 +62,21 @@ def _is_explicit_handoff(question: str) -> bool:
         return False
 
 
+def _is_confirmation_text(question: str) -> bool:
+    """是否为确认/取消类短词（P3.5 豁免，同转人工豁免模式）。
+
+    「确认/取消/是的/不了」等确认语义短词会被 guard 的模糊问题→clarify
+    规则拦在图外，CS pending_handler 永远收不到（剧本 C 文本取消路径
+    实测失效）。检测器不可用时返回 False 保持短路行为。
+    """
+    try:
+        from backend.customer_service.confirmation import detect_confirmation_intent
+        from backend.customer_service.confirmation import ConfirmationIntent
+        return detect_confirmation_intent(question or "") != ConfirmationIntent.NONE
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _domain_node_names() -> set[str]:
     """已注册域图的主图节点名集合（cs_graph_node / travel_graph_node / …）。
 
@@ -121,10 +136,13 @@ class GraphRunner:
             # cs_handoff；BLOCK（安全拦截：注入/有害）不豁免。
             if (
                 guard_result.action == GuardAction.CLARIFY
-                and _is_explicit_handoff(question or "")
+                and (
+                    _is_explicit_handoff(question or "")
+                    or _is_confirmation_text(question or "")
+                )
             ):
                 logger.info(
-                    "[Runner] 显式转人工豁免 input_guard clarify，放行进图: "
+                    "[Runner] 显式转人工/确认意图豁免 input_guard clarify，放行进图: "
                     f"{(question or '')[:40]}"
                 )
                 guard_result = guard_result.model_copy(update={

@@ -120,16 +120,16 @@ export default function ChatView() {
         <div className="flex-1 min-h-0 flex flex-col px-6 py-6">
           <div className="w-full my-auto">
             <WelcomeState onExampleClick={send} />
-            <ChatInput onSend={send} isLoading={isLoading} embedded />
+            <ChatInput onSend={send} isLoading={isLoading} onStop={stopStream} embedded />
           </div>
         </div>
       ) : (
         <>
           <div ref={contentRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
-            <MessageList messages={messages} isLoading={isLoading} sessionId={currentId} onStop={stopStream} />
+            <MessageList messages={messages} isLoading={isLoading} sessionId={currentId} />
             <div ref={bottomRef} />
           </div>
-          <ChatInput onSend={send} isLoading={isLoading} />
+          <ChatInput onSend={send} isLoading={isLoading} onStop={stopStream} />
         </>
       )}
     </div>

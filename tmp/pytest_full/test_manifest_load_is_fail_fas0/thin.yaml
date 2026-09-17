@@ -1,0 +1,7 @@
+capabilities:
+- examples:
+  - 只有一条
+  name: x.y
+  routed: true
+  skill: s
+version: 1

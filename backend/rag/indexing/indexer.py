@@ -730,7 +730,7 @@ class IncrementalIndexer:
             "source_priority": source_priority,
             "quality_status": quality_status,
             "doc_type": "general",
-            "person_names": "",
+            "person_names": [],
         }
         try:
             meta_result = _run_async(self._build_doc_metadata(
@@ -1035,7 +1035,9 @@ class IncrementalIndexer:
             "keywords_rule": len(kws_rule) if isinstance(kws_rule, list) else 0,
             "keywords_llm": len(kws_llm) if isinstance(kws_llm, list) else 0,
             "keywords_total": len(kws_all) if isinstance(kws_all, list) else 0,
-            "person_count": len(doc_meta.get("person_names", "").split(",")) if doc_meta.get("person_names") else 0,
+            # person_names 存 list（规则/统一两路已改）；兼容历史逗号串
+            "person_count": len(doc_meta.get("person_names") or []) if isinstance(doc_meta.get("person_names"), (list, tuple))
+                            else (len(str(doc_meta.get("person_names")).split(",")) if doc_meta.get("person_names") else 0),
             "doc_db_id": doc_db_id,
         }
         if chunks_truncated:

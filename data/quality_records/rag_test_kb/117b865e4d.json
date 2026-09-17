@@ -1,0 +1,333 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "117b865e4d",
+ "kb_id": "rag_test_kb",
+ "source_file": "10_结构混乱的长文档.pdf",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_test_kb\\general\\10_结构混乱的长文档.pdf",
+ "file_size": 5047,
+ "file_sha256": "bc724f5e7ab6a51d91dbdca4a2be124d6aec0ac3beab77fe33a283e97bb73a85",
+ "format": "pdf",
+ "doc_type": "faq",
+ "chunking_strategy": "RecursiveChunkStrategy",
+ "completeness": 0.9671,
+ "parsing": {
+  "node_count": 15,
+  "section_count": 3,
+  "leaf_count": 12,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 1396,
+  "cleaned_chars": 1293,
+  "nodes_cleaned": 7
+ },
+ "chunking": {
+  "chunk_count": 3,
+  "leaf_chunk_count": 3,
+  "parent_chunk_count": 0,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     243.6,
+     82.5,
+     351.6,
+     100.9
+    ],
+    "content_hash": "b894195866cd6546",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     108.5,
+     182.1,
+     118.7
+    ],
+    "content_hash": "9d9d7bfb1d1bdc31",
+    "chars": 12,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     192.5,
+     332.1,
+     202.7
+    ],
+    "content_hash": "c4f2ffd2a8f9a3fb",
+    "chars": 145,
+    "cleaned": true
+   },
+   {
+    "node_id": "n4",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     254.5,
+     405.1,
+     264.7
+    ],
+    "content_hash": "1d132b10edad164a",
+    "chars": 107,
+    "cleaned": true
+   },
+   {
+    "node_id": "n5",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     322.5,
+     509.7,
+     344.7
+    ],
+    "content_hash": "84cb06461d311a8f",
+    "chars": 445,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     360.5,
+     514.7,
+     382.7
+    ],
+    "content_hash": "a88c1bdbc4b83fb4",
+    "chars": 56,
+    "cleaned": true
+   },
+   {
+    "node_id": "n7",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     470.5,
+     183.3,
+     480.7
+    ],
+    "content_hash": "eac5d276a90784ae",
+    "chars": 84,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     496.5,
+     513.3,
+     518.7
+    ],
+    "content_hash": "0288b96093e0b261",
+    "chars": 93,
+    "cleaned": true
+   },
+   {
+    "node_id": "n9",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     534.5,
+     339.9,
+     544.7
+    ],
+    "content_hash": "44b89a3c64ff4a1e",
+    "chars": 38,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     560.5,
+     417.4,
+     570.7
+    ],
+    "content_hash": "c9438307bfdf055c",
+    "chars": 35,
+    "cleaned": false
+   },
+   {
+    "node_id": "n11",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     604.5,
+     440.6,
+     614.7
+    ],
+    "content_hash": "0ae901cdd89ba277",
+    "chars": 79,
+    "cleaned": true
+   },
+   {
+    "node_id": "n12",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     648.5,
+     414.8,
+     658.7
+    ],
+    "content_hash": "7d0f5016cce856df",
+    "chars": 88,
+    "cleaned": true
+   },
+   {
+    "node_id": "n13",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     710.5,
+     267.4,
+     720.7
+    ],
+    "content_hash": "67dccb1be49170a0",
+    "chars": 172,
+    "cleaned": false
+   },
+   {
+    "node_id": "n14",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     736.5,
+     284.5,
+     746.7
+    ],
+    "content_hash": "77cb9a9f30c0f3aa",
+    "chars": 23,
+    "cleaned": true
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=1293 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=12"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.926 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

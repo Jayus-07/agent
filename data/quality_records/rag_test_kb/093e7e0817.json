@@ -1,0 +1,330 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "093e7e0817",
+ "kb_id": "rag_test_kb",
+ "source_file": "hr_员工手册.docx",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_test_kb\\general\\hr_员工手册.docx",
+ "file_size": 37627,
+ "file_sha256": "c1b1131978ee508b1fbfa58ba691ab1984ca18c7a0c175e07e93ed7352f8e0cc",
+ "format": "docx",
+ "doc_type": "policy",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.957,
+ "parsing": {
+  "node_count": 20,
+  "section_count": 8,
+  "leaf_count": 12,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 466,
+  "cleaned_chars": 407,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 15,
+  "leaf_chunk_count": 8,
+  "parent_chunk_count": 7,
+  "truncated": false,
+  "filtered_count": 1,
+  "filtered_reasons": {
+   "duplicate": 1
+  }
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "558c605ec7b61c38",
+    "chars": 47,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "a24e5471e8a82ac3",
+    "chars": 20,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "f039e0e0d54ec7f3",
+    "chars": 13,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "03272a37859edf1f",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "f0ffa952ba7cf36e",
+    "chars": 37,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "14424f9484d6f0ea",
+    "chars": 9,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "a6c2424d5de45147",
+    "chars": 51,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e67c2cc9f8045896",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "08d69fcf50159da1",
+    "chars": 67,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "dd6903352cd2d679",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n11",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "47772ba26a1cd4ad",
+    "chars": 37,
+    "cleaned": false
+   },
+   {
+    "node_id": "n12",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "bf9fec847b47768f",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n13",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0592d3e4a47867b9",
+    "chars": 30,
+    "cleaned": false
+   },
+   {
+    "node_id": "n14",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "2539a7960e0cd87f",
+    "chars": 28,
+    "cleaned": false
+   },
+   {
+    "node_id": "n15",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0bb76cc957b086da",
+    "chars": 10,
+    "cleaned": false
+   },
+   {
+    "node_id": "n16",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "ee84d7177a02e81b",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n17",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "80728b1948000b0d",
+    "chars": 34,
+    "cleaned": false
+   },
+   {
+    "node_id": "n18",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e422f98829deffc1",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n19",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "c973848a151898ac",
+    "chars": 33,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=407 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=12"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.873 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

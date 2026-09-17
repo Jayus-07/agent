@@ -49,7 +49,9 @@ def _pg_cfg(db_env_var: str, default_db: str) -> dict:
 
 
 # === Memory 库（Agent 自身 + 聊天记忆 + 长期事实）===
-MEMORY_DB_CONFIG = _pg_cfg("PGDATABASE", "agent_memory")
+# 不复用 PGDATABASE：本地开发常把它指向 demo 业务库；一旦复用，
+# checkpointer / CS 状态会与 RAG 的 agent_memory 存储分裂。
+MEMORY_DB_CONFIG = _pg_cfg("MEMORY_PGDATABASE", "agent_memory")
 
 # === Business 库（业务数据仓库：跨境电商 7 业务 schema）===
 BUSINESS_DB_CONFIG = _pg_cfg("BUSINESS_PGDATABASE", "agent_business")

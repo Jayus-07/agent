@@ -1,0 +1,107 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "c1dbf64b6d",
+ "kb_id": "rag_100_docs",
+ "source_file": "table_差旅报销明细_2026H1.csv",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\agent_test_data_ta_npvse\\docs\\rag_100_docs\\general\\csv\\table_差旅报销明细_2026H1.csv",
+ "file_size": 244,
+ "file_sha256": "b7c1eae2b4e115460a887f4a65b363a89435fc6804827ae652770580ab268b1b",
+ "format": "csv",
+ "doc_type": "financial",
+ "chunking_strategy": "FinancialTableChunkStrategy",
+ "completeness": 0.9394,
+ "parsing": {
+  "node_count": 3,
+  "section_count": 2,
+  "leaf_count": 1,
+  "table_count": 1,
+  "table_total_rows": 5,
+  "table_max_cols": 5,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 530,
+  "cleaned_chars": 504,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 5,
+  "leaf_chunk_count": 4,
+  "parent_chunk_count": 1,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "a3c6c2155906b819",
+    "chars": 23,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "62e9cc0a76a909a2",
+    "chars": 504,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "table_present",
+    "pass": true,
+    "detail": "table_count=1"
+   },
+   {
+    "check": "table_rows",
+    "pass": true,
+    "detail": "rows=5"
+   },
+   {
+    "check": "table_cols",
+    "pass": true,
+    "detail": "cols=5"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

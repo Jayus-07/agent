@@ -1,0 +1,333 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "049380acd9",
+ "kb_id": "rag_test_kb",
+ "source_file": "returns_退货政策.pdf",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_test_kb\\general\\returns_退货政策.pdf",
+ "file_size": 3455,
+ "file_sha256": "fe36670377a3ca6b7f7d0870d0d0ba45194e256e3960052f44b279385ee5826b",
+ "format": "pdf",
+ "doc_type": "policy",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.9847,
+ "parsing": {
+  "node_count": 15,
+  "section_count": 8,
+  "leaf_count": 7,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 339,
+  "cleaned_chars": 270,
+  "nodes_cleaned": 5
+ },
+ "chunking": {
+  "chunk_count": 14,
+  "leaf_chunk_count": 7,
+  "parent_chunk_count": 7,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     187.8,
+     82.5,
+     407.5,
+     100.9
+    ],
+    "content_hash": "fee070aa499d2af9",
+    "chars": 13,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     108.5,
+     182.1,
+     118.7
+    ],
+    "content_hash": "9d9d7bfb1d1bdc31",
+    "chars": 12,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     145.5,
+     162.0,
+     159.8
+    ],
+    "content_hash": "9442bd0c0481d660",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     168.5,
+     384.5,
+     178.7
+    ],
+    "content_hash": "bc6ed8e4b7a853ed",
+    "chars": 33,
+    "cleaned": true
+   },
+   {
+    "node_id": "n5",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     193.5,
+     204.0,
+     207.8
+    ],
+    "content_hash": "55ea0e96aecd1032",
+    "chars": 9,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     252.5,
+     224.1,
+     262.7
+    ],
+    "content_hash": "4311c1337a9b3844",
+    "chars": 71,
+    "cleaned": true
+   },
+   {
+    "node_id": "n7",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     277.5,
+     190.0,
+     291.8
+    ],
+    "content_hash": "68341c87ec9ff4ae",
+    "chars": 8,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     318.5,
+     275.1,
+     328.7
+    ],
+    "content_hash": "c266faadca9bc6a5",
+    "chars": 63,
+    "cleaned": true
+   },
+   {
+    "node_id": "n9",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     343.5,
+     190.0,
+     357.8
+    ],
+    "content_hash": "5061ef6add39b979",
+    "chars": 8,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     366.5,
+     385.5,
+     376.7
+    ],
+    "content_hash": "fd9e777747b3b483",
+    "chars": 32,
+    "cleaned": true
+   },
+   {
+    "node_id": "n11",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     391.5,
+     162.0,
+     405.8
+    ],
+    "content_hash": "e023366129c8b9e1",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n12",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     414.5,
+     295.1,
+     424.7
+    ],
+    "content_hash": "cd9081b41ce52c0f",
+    "chars": 25,
+    "cleaned": false
+   },
+   {
+    "node_id": "n13",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     439.5,
+     162.0,
+     453.8
+    ],
+    "content_hash": "03ef97a3a9832f34",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n14",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     78.0,
+     462.5,
+     381.5,
+     472.7
+    ],
+    "content_hash": "170c6d82d15b9be7",
+    "chars": 34,
+    "cleaned": true
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=270 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=7"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.796 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

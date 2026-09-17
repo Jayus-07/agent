@@ -63,5 +63,11 @@ class CSFineRouter:
 
         if best_count >= 1:
             conf = min(best_count / 2.0, 1.0)
+            # P3.5：规则关键词命中（退款/物流/发票等域专属词）是比
+            # default_fallback 更强的证据，置信度下限对齐 Supervisor
+            # 闸门——否则 coarse hint 0.5 + fine 0.5 平均后 0.55 打穿
+            # 0.6，明确的退款诉求被 Layer1 直接 finish 成兜底ack
+            from backend.config.customer_service import CS_CONFIDENCE_CAUTIOUS
+            conf = max(conf, CS_CONFIDENCE_CAUTIOUS)
             return best_intent, conf, f"{best_intent}({best_count}hits)"
         return "k_faq", 0.0, ""

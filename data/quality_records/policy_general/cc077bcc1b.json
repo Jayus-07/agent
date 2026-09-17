@@ -1,0 +1,94 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "cc077bcc1b",
+ "kb_id": "policy_general",
+ "source_file": "doc.txt",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\pytest-of-wh\\pytest-922\\test_background_task_with_real0\\doc.txt",
+ "file_size": 1542,
+ "file_sha256": "654b2506242ae0a231ff3253abe4f9911e43b58d82c17c2bdc2540773bff92a1",
+ "format": "txt",
+ "doc_type": "listing",
+ "chunking_strategy": "RecursiveChunkStrategy",
+ "completeness": 0.1,
+ "parsing": {
+  "node_count": 2,
+  "section_count": 1,
+  "leaf_count": 1,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 642,
+  "cleaned_chars": 642,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 2,
+  "leaf_chunk_count": 2,
+  "parent_chunk_count": 0,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "654b2506242ae0a2",
+    "chars": 642,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=642 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=1"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=1.000 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

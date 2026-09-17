@@ -1,0 +1,56 @@
+...FF................................................................... [ 36%]
+..............................................................FF........ [ 73%]
+.....................................................                    [100%]
+================================== FAILURES ===================================
+E   AttributeError: <class 'backend.orchestration.workflow.persistence.WorkflowRunStore'> does not have the attribute 'save'
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 01:10:36 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 01:10:36 - rag_system - INFO - [WorkflowRegistry] 初始化
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+INFO     rag_system:registry.py:98 [WorkflowRegistry] 初始化
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 01:10:36 - rag_system - INFO - [WorkflowRegistry] 注册 Workflow: trigger_wf
+------------------------------ Captured log call ------------------------------
+INFO     rag_system:registry.py:118 [WorkflowRegistry] 注册 Workflow: trigger_wf
+D:\Python\lib\unittest\mock.py:1410: AttributeError: <class 'backend.orchestration.workflow.persistence.WorkflowRunStore'> does not have the attribute 'save'
+E   AttributeError: <class 'backend.orchestration.workflow.persistence.WorkflowRunStore'> does not have the attribute 'save'
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 01:10:36 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 01:10:37 - rag_system - INFO - [WorkflowRegistry] 初始化
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+INFO     rag_system:registry.py:98 [WorkflowRegistry] 初始化
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 01:10:37 - rag_system - INFO - [WorkflowRegistry] 注册 Workflow: trigger_inputs_wf
+------------------------------ Captured log call ------------------------------
+INFO     rag_system:registry.py:118 [WorkflowRegistry] 注册 Workflow: trigger_inputs_wf
+D:\Python\lib\unittest\mock.py:1410: AttributeError: <class 'backend.orchestration.workflow.persistence.WorkflowRunStore'> does not have the attribute 'save'
+E   AttributeError: <class 'backend.orchestration.workflow.persistence.WorkflowRunStore'> does not have the attribute 'save'
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 01:12:16 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 01:12:16 - rag_system - INFO - [WorkflowRegistry] 初始化
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+INFO     rag_system:registry.py:98 [WorkflowRegistry] 初始化
+D:\Python\lib\unittest\mock.py:1410: AttributeError: <class 'backend.orchestration.workflow.persistence.WorkflowRunStore'> does not have the attribute 'save'
+E   AttributeError: <class 'backend.orchestration.workflow.persistence.WorkflowRunStore'> does not have the attribute 'save'
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 01:12:16 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 01:12:16 - rag_system - INFO - [WorkflowRegistry] 初始化
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+INFO     rag_system:registry.py:98 [WorkflowRegistry] 初始化
+D:\Python\lib\unittest\mock.py:1410: AttributeError: <class 'backend.orchestration.workflow.persistence.WorkflowRunStore'> does not have the attribute 'save'
+============================== warnings summary ===============================
+.venv\lib\site-packages\fastapi\testclient.py:1
+  D:\Program Files\workplace\agent\.venv\lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED backend/tests/orchestration/workflow/test_api_routes.py::TestTriggerWorkflow::test_trigger_with_empty_body_does_not_422
+FAILED backend/tests/orchestration/workflow/test_api_routes.py::TestTriggerWorkflow::test_trigger_with_inputs
+FAILED backend/tests/orchestration/workflow/test_persistence.py::TestExecutorSaveIntegration::test_executor_run_calls_save
+FAILED backend/tests/orchestration/workflow/test_persistence.py::TestExecutorSaveIntegration::test_executor_run_does_not_crash_on_save_failure
+4 failed, 193 passed, 1 warning in 147.89s (0:02:27)

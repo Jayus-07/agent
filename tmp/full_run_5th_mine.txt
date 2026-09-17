@@ -1,0 +1,414 @@
+........................................................................ [  1%]
+........................................................................ [  3%]
+........................................................................ [  4%]
+........................................................................ [  6%]
+........................................................................ [  7%]
+........................................................................ [  9%]
+........................................................................ [ 11%]
+........................................................................ [ 12%]
+........................................................................ [ 14%]
+........................................................................ [ 15%]
+........................................................................ [ 17%]
+........................................................................ [ 19%]
+........................................................................ [ 20%]
+........................................................................ [ 22%]
+.......sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss [ 23%]
+sssssssssssssssssssssssssssssssssssssssssssssss......................... [ 25%]
+........................................................................ [ 27%]
+........................................................................ [ 28%]
+......................................................F................. [ 30%]
+........................................................................ [ 31%]
+........................................................................ [ 33%]
+........................................................................ [ 34%]
+........................................................................ [ 36%]
+........................................................................ [ 38%]
+........................................................................ [ 39%]
+........................................................................ [ 41%]
+........................................................................ [ 42%]
+........................................................................ [ 44%]
+................................FF...................................... [ 46%]
+........................................................................ [ 47%]
+...............................................s........................ [ 49%]
+....................s................................................... [ 50%]
+........................................................................ [ 52%]
+........................................................................ [ 54%]
+........................................................................ [ 55%]
+........................................................................ [ 57%]
+........................................................................ [ 58%]
+........................................................................ [ 60%]
+.....................................................F.................. [ 61%]
+........................................................................ [ 63%]
+...............................................FFFF...FFF............... [ 65%]
+........................................................................ [ 66%]
+........................................................................ [ 68%]
+........................................................................ [ 69%]
+........................................................................ [ 71%]
+........................................................................ [ 73%]
+............................s........................................... [ 74%]
+.................F.F..................F................................F [ 76%]
+........................................................................ [ 77%]
+........................................................................ [ 79%]
+........................................................................ [ 81%]
+........................................................................ [ 82%]
+........................................................................ [ 84%]
+........................................................................ [ 85%]
+........................................................................ [ 87%]
+........................................................................ [ 88%]
+........................................................................ [ 90%]
+........................................................................ [ 92%]
+........................................................................ [ 93%]
+...................ss........ss......................................... [ 95%]
+........................................................................ [ 96%]
+........................................................................ [ 98%]
+....................................................................     [100%]
+================================== FAILURES ===================================
+__________ test_query_endpoint_degrades_when_datasource_unavailable ___________
+backend\tests\observability\test_gateway_log_ingest.py:102: in test_query_endpoint_degrades_when_datasource_unavailable
+    result = asyncio.run(obs.get_gateway_access_logs(hours=6))
+E   TypeError: get_gateway_access_logs() missing 1 required positional argument: 'request'
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:18:51 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:18:51 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+__________________ TestDispatch.test_default_returns_pg_impl __________________
+backend\tests\rag\test_doc_registry_pg.py:97: in test_default_returns_pg_impl
+    assert type(reg) is PostgresDocumentRegistry
+E   AssertionError: assert <class 'backend.rag.indexing.doc_registry_pg.PostgresDocumentRegistry'> is PostgresDocumentRegistry
+E    +  where <class 'backend.rag.indexing.doc_registry_pg.PostgresDocumentRegistry'> = type(<backend.rag.indexing.doc_registry_pg.PostgresDocumentRegistry object at 0x000001222F44BAC0>)
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:21:23 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:21:24 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+________________ TestDispatch.test_unknown_value_still_pg_impl ________________
+backend\tests\rag\test_doc_registry_pg.py:104: in test_unknown_value_still_pg_impl
+    assert type(reg) is PostgresDocumentRegistry
+E   AssertionError: assert <class 'backend.rag.indexing.doc_registry_pg.PostgresDocumentRegistry'> is PostgresDocumentRegistry
+E    +  where <class 'backend.rag.indexing.doc_registry_pg.PostgresDocumentRegistry'> = type(<backend.rag.indexing.doc_registry_pg.PostgresDocumentRegistry object at 0x000001222C88B760>)
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:21:24 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:21:24 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+________ test_verify_watchlist_candidate_still_uses_competitor_history ________
+backend\tests\selection_funnel\test_stages.py:441: in test_verify_watchlist_candidate_still_uses_competitor_history
+    from conftest import make_snap
+E   ImportError: cannot import name 'make_snap' from 'conftest' (D:\Program Files\workplace\agent\backend\tests\tools\conftest.py)
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:25:28 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:25:28 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_________________ TestSaveAndList.test_save_and_field_mapping _________________
+backend\tests\test_analytics_store.py:91: in test_save_and_field_mapping
+    assert len(rows) == 1
+E   AssertionError: assert 2 == 1
+E    +  where 2 = len([{'session_id': 'travel-e2e', 'workflow_name': 'agent', 'workflow_kind': 'other', 'status': 'success', ...}, {'session_id': 'sess-1', 'workflow_name': 'agent', 'workflow_kind': 'rag_query', 'status': 'success', ...}])
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:25:38 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:25:39 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 a538a4c92c15: 错误:  关系 "pgtest_biz_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_biz_trace_summary (
+                                        ^
+
+2026-09-18 02:25:39 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 a538a4c92c15: 错误:  关系 "pgtest_biz_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_biz_trace_summary (
+                                        ^
+
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_____________________ TestSaveAndList.test_rejected_flag ______________________
+backend\tests\test_analytics_store.py:109: in test_rejected_flag
+    assert store.list(10)[0]["rejected"] is True
+E   assert False is True
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:25:39 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:25:40 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_____________________ TestSaveAndList.test_upsert_same_id _____________________
+backend\tests\test_analytics_store.py:114: in test_upsert_same_id
+    assert store.count() == 1
+E   assert 3 == 1
+E    +  where 3 = count()
+E    +    where count = <backend.observability.analytics_store_pg.PostgresAnalyticsStore object at 0x0000012236823BE0>.count
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:25:40 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 02:25:40 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 c35383339451: 错误:  关系 "pgtest_biz_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_biz_trace_summary (
+                                        ^
+
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 c35383339451: 错误:  关系 "pgtest_biz_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_biz_trace_summary (
+                                        ^
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:25:41 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_________________ TestSaveAndList.test_cost_from_span_metrics _________________
+backend\tests\test_analytics_store.py:123: in test_cost_from_span_metrics
+    assert store.list(10)[0]["cost_usd"] == pytest.approx(0.015)
+E   assert 0.0 == 0.015 ± 1.5e-08
+E     
+E     comparison failed
+E     Obtained: 0.0
+E     Expected: 0.015 ± 1.5e-08
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:25:41 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:25:42 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_____________________ TestSessions.test_group_by_session ______________________
+backend\tests\test_analytics_store.py:164: in test_group_by_session
+    assert len(rows) == 2
+E   AssertionError: assert 3 == 2
+E    +  where 3 = len([{'session_id': 's-1', 'turns': 2, 'last_ts': '2026-09-15T13:03:31.190Z', 'first_ts': '2026-09-15T13:03:31.162Z', ...}...Z', ...}, {'session_id': 's1', 'turns': 2, 'last_ts': '2026-09-02T10:00:00Z', 'first_ts': '2026-09-02T10:00:00Z', ...}])
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:25:46 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 02:25:46 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 997c1a42ea70: 错误:  关系 "pgtest_biz_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_biz_trace_summary (
+                                        ^
+
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 997c1a42ea70: 错误:  关系 "pgtest_biz_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_biz_trace_summary (
+                                        ^
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:25:47 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_________________ TestSessions.test_empty_session_id_excluded _________________
+backend\tests\test_analytics_store.py:175: in test_empty_session_id_excluded
+    assert store.sessions(10) == []
+E   AssertionError: assert [{'session_id...1.403Z', ...}] == []
+E     
+E     Left contains one more item: {'session_id': 's-1', 'turns': 1, 'last_ts': '2026-09-15T13:03:31.403Z', 'first_ts': '2026-09-15T13:03:31.403Z', ...}
+E     Use -v to get more diff
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:25:47 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 02:25:47 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 b60a4b3c73cf: 错误:  关系 "pgtest_biz_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_biz_trace_summary (
+                                        ^
+
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 b60a4b3c73cf: 错误:  关系 "pgtest_biz_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_biz_trace_summary (
+                                        ^
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:25:48 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 600e9224ed57: 错误:  关系 "pgtest_biz_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_biz_trace_summary (
+                                        ^
+
+2026-09-18 02:25:48 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 600e9224ed57: 错误:  关系 "pgtest_biz_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_biz_trace_summary (
+                                        ^
+
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+___________________ TestCostSummary.test_group_by_day_model ___________________
+backend\tests\test_analytics_store.py:191: in test_group_by_day_model
+    assert len(rows) == 2
+E   AssertionError: assert 3 == 2
+E    +  where 3 = len([{'day': '2026-09-15', 'model': 'workflow', 'traces': 1, 'prompt_tokens': 0, ...}, {'day': '2026-09-02', 'model': 'qwe...s': 1, 'prompt_tokens': 100, ...}, {'day': '2026-09-02', 'model': 'qwen-plus', 'traces': 1, 'prompt_tokens': 100, ...}])
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:25:49 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 02:25:49 - rag_system - WARNING - [AnalyticsStore-PG] save_dict 失败 63da95caae82: 错误:  关系 "pgtest_biz_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_biz_trace_summary (
+                                        ^
+
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+WARNING  rag_system:analytics_store_pg.py:177 [AnalyticsStore-PG] save_dict 失败 63da95caae82: 错误:  关系 "pgtest_biz_trace_summary" 不存在
+LINE 2:                     INSERT INTO pgtest_biz_trace_summary (
+                                        ^
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:25:50 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+______________ TestTracerFallback.test_list_falls_back_to_sqlite ______________
+backend\tests\test_langfuse_exporter.py:287: in test_list_falls_back_to_sqlite
+    assert rows and rows[0]["id"] == "t-lf-001"
+E   AssertionError: assert ([{'id': 'a377d46441ea', 'request_id': 'a377d46441ea', 'timestamp': '2026-09-15T02:28:24.343Z', 'session_id': 's1', ...... '59561e486d50', 'request_id': '59561e486d50', 'timestamp': '2026-09-15T02:29:04.710Z', 'session_id': 's-1', ...}, ...] and 'a377d46441ea' == 't-lf-001'
+E     
+E     - t-lf-001
+E     + a377d46441ea)
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:29:33 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 02:29:35 - rag_system - INFO - [TraceWriter] worker 退出
+2026-09-18 02:29:35 - rag_system - INFO - [TraceWriter] worker 启动
+------------------------------ Captured log call ------------------------------
+INFO     rag_system:trace_writer.py:149 [TraceWriter] worker 退出
+INFO     rag_system:trace_writer.py:138 [TraceWriter] worker 启动
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:29:35 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_______ TestTracerFallback.test_list_ignores_langfuse_even_when_enabled _______
+backend\tests\test_langfuse_exporter.py:312: in test_list_ignores_langfuse_even_when_enabled
+    assert rows and rows[0]["id"] == "t-lf-001"
+E   AssertionError: assert ([{'id': 'b516ff41381e', 'request_id': 'b516ff41381e', 'timestamp': '2026-09-15T02:36:26.771Z', 'session_id': 'wf-opt-0...d': '75224fb82d4b', 'request_id': '75224fb82d4b', 'timestamp': '2026-09-15T02:53:43.421Z', 'session_id': '', ...}, ...] and 'b516ff41381e' == 't-lf-001'
+E     
+E     - t-lf-001
+E     + b516ff41381e)
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:29:37 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 02:29:39 - rag_system - INFO - [TraceWriter] worker 退出
+2026-09-18 02:29:40 - rag_system - INFO - [TraceWriter] worker 启动
+------------------------------ Captured log call ------------------------------
+INFO     rag_system:trace_writer.py:149 [TraceWriter] worker 退出
+INFO     rag_system:trace_writer.py:138 [TraceWriter] worker 启动
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:29:40 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_____ TestSetRequestModelValidation.test_ollama_disabled_in_cloud_ignored _____
+backend\tests\test_llm_bind_tools.py:142: in test_ollama_disabled_in_cloud_ignored
+    monkeypatch.setattr(proxy_mod, "OLLAMA_ENABLED", False)
+E   AttributeError: <module 'backend.infra.llm.proxy' from 'D:\\Program Files\\workplace\\agent\\backend\\infra\\llm\\proxy.py'> has no attribute 'OLLAMA_ENABLED'
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:29:41 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:29:41 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+_________ TestAsyncTokenRecording.test_ainvoke_failure_counts_breaker _________
+backend\tests\test_llm_span_fields.py:338: in test_ainvoke_failure_counts_breaker
+    with pytest.raises(RuntimeError):
+E   Failed: DID NOT RAISE RuntimeError
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 02:29:53 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 02:29:53 - rag_system - INFO - [LLM:resilience] 初始化备用模型: qwen3.7-plus
+2026-09-18 02:29:55 - rag_system - INFO - [LLM:resilience] 备用模型接管成功 (RuntimeError: llm down)
+------------------------------ Captured log call ------------------------------
+INFO     rag_system:proxy.py:251 [LLM:resilience] 初始化备用模型: qwen3.7-plus
+INFO     rag_system:proxy.py:358 [LLM:resilience] 备用模型接管成功 (RuntimeError: llm down)
+-------------------------- Captured stdout teardown ---------------------------
+2026-09-18 02:29:55 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+---------------------------- Captured log teardown ----------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+============================== warnings summary ===============================
+.venv\lib\site-packages\fastapi\testclient.py:1
+  D:\Program Files\workplace\agent\.venv\lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+backend\evaluation\models.py:28
+  D:\Program Files\workplace\agent\backend\evaluation\models.py:28: PytestCollectionWarning: cannot collect test class 'TestCase' because it has a __init__ constructor (from: backend/tests/evaluation/test_eval_characterization.py)
+    class TestCase(BaseModel):
+
+backend\evaluation\models.py:28
+  D:\Program Files\workplace\agent\backend\evaluation\models.py:28: PytestCollectionWarning: cannot collect test class 'TestCase' because it has a __init__ constructor (from: backend/tests/evaluation/test_graph_eval.py)
+    class TestCase(BaseModel):
+
+.venv\lib\site-packages\torch\cuda\__init__.py:61
+  D:\Program Files\workplace\agent\.venv\lib\site-packages\torch\cuda\__init__.py:61: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+    import pynvml  # type: ignore[import]
+
+backend/tests/customer_service/test_conversation_store.py::TestRecordCsTurn::test_returns_none
+backend/tests/orchestration/workflow/test_daily_report_smoke.py::TestDailyReportSmoke::test_skip_step_does_not_break_workflow
+  D:\Python\lib\unittest\mock.py:2107: RuntimeWarning: coroutine '_async_record_turn' was never awaited
+    setattr(_type, entry, MagicProxy(entry, self))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+backend/tests/customer_service/test_maintenance.py::TestMaintenanceScans::test_confirmation_scan_db_failure_degrades
+  D:\Python\lib\unittest\mock.py:1766: RuntimeWarning: coroutine 'scan_handoff_timeouts.<locals>._scan' was never awaited
+    return _patch(
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+backend/tests/customer_service/test_message_manager.py::TestCreate::test_create_user_message
+  D:\Python\lib\unittest\mock.py:2107: RuntimeWarning: coroutine 'scan_handoff_timeouts.<locals>._scan' was never awaited
+    setattr(_type, entry, MagicProxy(entry, self))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+backend/tests/customer_service/test_message_manager.py::TestCreate::test_create_user_message
+  D:\Python\lib\unittest\mock.py:2107: RuntimeWarning: coroutine 'scan_confirmation_expiries.<locals>._scan' was never awaited
+    setattr(_type, entry, MagicProxy(entry, self))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+backend/tests/customer_service/test_message_manager.py::TestSaveTypedMessages::test_save_system_message_is_private
+  D:\Python\lib\unittest\mock.py:2088: RuntimeWarning: coroutine 'scan_confirmation_expiries.<locals>._scan' was never awaited
+    orig_magics = _magics | _async_method_magics
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+backend/tests/customer_service/test_state_transition.py::TestLoadSnapshotDBFallback::test_load_snapshot_returns_defaults_on_error
+  D:\Python\lib\unittest\mock.py:1086: RuntimeWarning: coroutine 'StateTransitionService._async_apply' was never awaited
+    _safe_super(CallableMixin, self).__init__(
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED backend/tests/observability/test_gateway_log_ingest.py::test_query_endpoint_degrades_when_datasource_unavailable
+FAILED backend/tests/rag/test_doc_registry_pg.py::TestDispatch::test_default_returns_pg_impl
+FAILED backend/tests/rag/test_doc_registry_pg.py::TestDispatch::test_unknown_value_still_pg_impl
+FAILED backend/tests/selection_funnel/test_stages.py::test_verify_watchlist_candidate_still_uses_competitor_history
+FAILED backend/tests/test_analytics_store.py::TestSaveAndList::test_save_and_field_mapping
+FAILED backend/tests/test_analytics_store.py::TestSaveAndList::test_rejected_flag
+FAILED backend/tests/test_analytics_store.py::TestSaveAndList::test_upsert_same_id
+FAILED backend/tests/test_analytics_store.py::TestSaveAndList::test_cost_from_span_metrics
+FAILED backend/tests/test_analytics_store.py::TestSessions::test_group_by_session
+FAILED backend/tests/test_analytics_store.py::TestSessions::test_empty_session_id_excluded
+FAILED backend/tests/test_analytics_store.py::TestCostSummary::test_group_by_day_model
+FAILED backend/tests/test_langfuse_exporter.py::TestTracerFallback::test_list_falls_back_to_sqlite
+FAILED backend/tests/test_langfuse_exporter.py::TestTracerFallback::test_list_ignores_langfuse_even_when_enabled
+FAILED backend/tests/test_llm_bind_tools.py::TestSetRequestModelValidation::test_ollama_disabled_in_cloud_ignored
+FAILED backend/tests/test_llm_span_fields.py::TestAsyncTokenRecording::test_ainvoke_failure_counts_breaker
+15 failed, 4398 passed, 119 skipped, 11 warnings in 1079.09s (0:17:59)
+Exception closing connection <AdaptedConnection <asyncpg.connection.Connection object at 0x00000122369949A0>>
+Traceback (most recent call last):
+  File "D:\Program Files\workplace\agent\.venv\lib\site-packages\sqlalchemy\pool\base.py", line 375, in _close_connection
+    self._dialect.do_close(connection)
+  File "D:\Program Files\workplace\agent\.venv\lib\site-packages\sqlalchemy\engine\default.py", line 721, in do_close
+    dbapi_connection.close()
+  File "D:\Program Files\workplace\agent\.venv\lib\site-packages\sqlalchemy\dialects\postgresql\asyncpg.py", line 903, in close
+    self.await_(self._connection.close())
+  File "D:\Program Files\workplace\agent\.venv\lib\site-packages\sqlalchemy\util\_concurrency_py3k.py", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+  File "D:\Program Files\workplace\agent\.venv\lib\site-packages\sqlalchemy\util\_concurrency_py3k.py", line 196, in greenlet_spawn
+    value = await result
+  File "D:\Program Files\workplace\agent\.venv\lib\site-packages\asyncpg\connection.py", line 1513, in close
+    await self._protocol.close(timeout)
+  File "asyncpg/protocol/protocol.pyx", line 632, in close
+RuntimeError: Task <Task pending name='Task-3549' coro=<MemoryManager._shutdown.<locals>._close() running at D:\Program Files\workplace\agent\backend\memory\manager.py:92> cb=[_chain_future.<locals>._call_set_state() at D:\Python\lib\asyncio\futures.py:391]> got Future <Future pending cb=[BaseProtocol._on_waiter_completed()]> attached to a different loop

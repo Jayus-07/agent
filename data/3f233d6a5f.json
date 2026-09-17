@@ -1,0 +1,382 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "3f233d6a5f",
+ "kb_id": "..",
+ "source_file": "security_数据安全与隐私政策.md",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\agent_test_data_52_ec473\\docs\\policy_general\\general\\security_数据安全与隐私政策.md",
+ "file_size": 2092,
+ "file_sha256": "b00c119f1889a3db264835b78ddcc17ef9adc6e2c460ac634b1cdc0270d095f7",
+ "format": "md",
+ "doc_type": "security",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.9634,
+ "parsing": {
+  "node_count": 24,
+  "section_count": 11,
+  "leaf_count": 13,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 854,
+  "cleaned_chars": 699,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 22,
+  "leaf_chunk_count": 12,
+  "parent_chunk_count": 10,
+  "truncated": false,
+  "filtered_count": 1,
+  "filtered_reasons": {
+   "duplicate": 1
+  }
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "715007f0851390de",
+    "chars": 18,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "f039e0e0d54ec7f3",
+    "chars": 13,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "5601cc91e3e4e17a",
+    "chars": 57,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "7bf3459e6e317136",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "a666184a5693c2ee",
+    "chars": 71,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "374c0db6f976faab",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "9c803022d73d5678",
+    "chars": 180,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "edbf781d14180fce",
+    "chars": 12,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "b4d2d4818b320f74",
+    "chars": 50,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "ee081720050442bc",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n11",
+    "type": "list",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "f2bb62f8532c36a7",
+    "chars": 35,
+    "cleaned": false
+   },
+   {
+    "node_id": "n12",
+    "type": "list",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0dfd8007759515ee",
+    "chars": 27,
+    "cleaned": false
+   },
+   {
+    "node_id": "n13",
+    "type": "list",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "46a88b5fab1b54db",
+    "chars": 31,
+    "cleaned": false
+   },
+   {
+    "node_id": "n14",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "22547efd17b42a66",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n15",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "527c6ec115cdddf3",
+    "chars": 46,
+    "cleaned": false
+   },
+   {
+    "node_id": "n16",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "015be0b622053926",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n17",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "a83819dcfdc6bea1",
+    "chars": 43,
+    "cleaned": false
+   },
+   {
+    "node_id": "n18",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "21696089adc3a23d",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n19",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "59cdc643ccedfd16",
+    "chars": 43,
+    "cleaned": false
+   },
+   {
+    "node_id": "n20",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "9f0c2180bbc1957c",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n21",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "929d396935e7d5a8",
+    "chars": 62,
+    "cleaned": false
+   },
+   {
+    "node_id": "n22",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "6aea1d047afa999a",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n23",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "7280acab4c03af5c",
+    "chars": 41,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=699 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=13"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.819 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

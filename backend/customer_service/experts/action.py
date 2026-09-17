@@ -73,7 +73,7 @@ def execute_action(
             pending_action, user_message, user_id, session_id,
         )
 
-    return _build_new_proposal(user_id, intent, cs_route, session_id, store)
+    return _build_new_proposal(user_id, intent, cs_route, session_id, store, user_message)
 
 
 def action_expert_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -130,6 +130,7 @@ def _build_new_proposal(
     cs_route: dict,
     session_id: str,
     store: Any,
+    user_message: str = "",
 ) -> ExpertResult:
     """构建新 proposal 并保存到 confirmation store。"""
     from backend.customer_service.action import build_pending_action
@@ -138,7 +139,7 @@ def _build_new_proposal(
     from backend.customer_service.risk import RiskLevel, requires_human_review
     from backend.observability.metrics import record_cs_confirmation
 
-    proposal = _build_proposal(user_id, intent, cs_route)
+    proposal = _build_proposal(user_id, intent, cs_route, user_message)
     pending = build_pending_action(proposal)
 
     store.save(user_id, session_id, pending)
@@ -212,7 +213,9 @@ def _handle_pending_confirmation(
     )
 
 
-def _build_proposal(user_id: str, intent: str, cs_route: dict) -> Any:
+def _build_proposal(
+    user_id: str, intent: str, cs_route: dict, user_message: str = ""
+) -> Any:
     """Dispatch to the appropriate service to build an ActionProposal。"""
     action_type = _INTENT_ACTION_MAP.get(intent, "refund")
 
@@ -221,7 +224,7 @@ def _build_proposal(user_id: str, intent: str, cs_route: dict) -> Any:
         order_id = cs_route.get("metadata", {}).get("order_id", "")
         reason = cs_route.get("metadata", {}).get("reason", "")
         if not order_id:
-            order_id = _extract_order_id_from_context(cs_route)
+            order_id = _extract_order_id_from_message(user_message)
         return get_refund_service().build_refund_proposal(user_id, order_id, reason)
 
     if action_type == "return":
@@ -229,7 +232,7 @@ def _build_proposal(user_id: str, intent: str, cs_route: dict) -> Any:
         order_id = cs_route.get("metadata", {}).get("order_id", "")
         reason = cs_route.get("metadata", {}).get("reason", "")
         if not order_id:
-            order_id = _extract_order_id_from_context(cs_route)
+            order_id = _extract_order_id_from_message(user_message)
         return get_after_sales_service().build_return_proposal(user_id, order_id, reason)
 
     if action_type == "exchange":
@@ -237,7 +240,7 @@ def _build_proposal(user_id: str, intent: str, cs_route: dict) -> Any:
         order_id = cs_route.get("metadata", {}).get("order_id", "")
         reason = cs_route.get("metadata", {}).get("reason", "")
         if not order_id:
-            order_id = _extract_order_id_from_context(cs_route)
+            order_id = _extract_order_id_from_message(user_message)
         return get_after_sales_service().build_exchange_proposal(user_id, order_id, reason)
 
     if action_type == "address":
@@ -255,12 +258,24 @@ def _build_proposal(user_id: str, intent: str, cs_route: dict) -> Any:
     raise ValidationError(f"不支持的操作类型: {intent}")
 
 
-def _extract_order_id_from_context(cs_route: dict) -> str:
-    """Try to extract an order_id from the route metadata。"""
-    metadata = cs_route.get("metadata", {})
-    order_id = metadata.get("order_id", "")
-    if order_id:
-        return order_id
+def _extract_order_id_from_message(user_message: str) -> str:
+    """P3.5：从用户原话提取订单号——此前无人向 cs_route.metadata 填
+    order_id，兜底字符串 "latest" 直查 DB 必然 OrderNotFoundError，
+    退款诉求永远收不到确认卡。
+
+    识别形态：DEMO-1002 / ORD-20260918-001 / #12345 等字母前缀-数字
+    组合；识别不到时回退 "latest"（由服务端语义化处理）。
+    """
+    import re
+
+    if not user_message:
+        return "latest"
+    m = re.search(r"\b([A-Za-z]{2,10}-\d{2,12})\b", user_message)
+    if m:
+        return m.group(1).upper()
+    m = re.search(r"订单[号]?\s*[:：为]?\s*(\d{5,20})", user_message)
+    if m:
+        return m.group(1)
     return "latest"
 
 

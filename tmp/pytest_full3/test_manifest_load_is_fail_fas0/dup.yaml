@@ -1,0 +1,12 @@
+capabilities:
+- examples: &id001
+  - 例一
+  - 例二
+  name: x.y
+  routed: true
+  skill: s
+- examples: *id001
+  name: x.y
+  routed: true
+  skill: s
+version: 1

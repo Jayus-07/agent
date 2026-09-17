@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react'
 import { Bot, GitBranch, RefreshCw, Wrench } from 'lucide-react'
 import { clsx } from 'clsx'
 import PageHeader from '@/components/layout/PageHeader'
+import ErrorState from '@/components/shared/ErrorState'
 import { getAgents, type AgentKind, type AgentNode } from '@/api/registry'
 
 const KIND_META: Record<AgentKind, { label: string; icon: typeof Bot; desc: string }> = {
@@ -26,7 +27,10 @@ function AgentCard({ node }: { node: AgentNode }) {
     <div className="rounded-lg border border-black/5 bg-white p-3">
       <div className="flex items-center justify-between gap-2">
         <span className="text-[13px] font-medium text-text-primary">{node.label}</span>
-        <code className="text-[11px] text-text-muted">{node.name}</code>
+        {/* Skill 节点 label 与 name 相同，右侧重复无信息量，仅在两者不同时展示 */}
+        {node.name !== node.label && (
+          <code className="text-[11px] text-text-muted">{node.name}</code>
+        )}
       </div>
       {node.route_mode && (
         <div className="mt-1 text-[11px] text-text-muted">route_mode: {node.route_mode}</div>
@@ -82,7 +86,7 @@ export default function AgentsPage() {
       {loading ? (
         <div className="rounded-xl border border-black/5 bg-white p-10 text-center text-[13px] text-text-muted shadow-card">加载中…</div>
       ) : error ? (
-        <div className="rounded-xl border border-black/5 bg-white p-10 text-center text-[13px] shadow-card" style={{ color: '#791F1F' }}>{error}</div>
+        <ErrorState title="Agent 注册表加载失败" message={error} onRetry={() => load()} />
       ) : !data || data.agents.length === 0 ? (
         <div className="rounded-xl border border-black/5 bg-white p-10 text-center text-[13px] text-text-muted shadow-card">
           未发现任何 Agent 节点（后端注册表为空，接口未就绪只出骨架 + 空态）

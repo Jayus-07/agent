@@ -50,7 +50,11 @@ INTENT_PROFILES: dict[str, IntentProfile] = {
     "k_faq": IntentProfile(
         intent="k_faq", domain=CSDomain.KNOWLEDGE,
         route_path=CSRoutePath.KNOWLEDGE_QUERY,
-        kb_ids=["cs_faq"],
+        # P3.5：k_faq 是 KNOWLEDGE 域的默认意图（fine 路由未命中时的
+        # 兜底），只搜 cs_faq 会让政策/商品咨询拿不到证据直接 refuse
+        #（实测「美国退货条件」conf=0.10 refuse）。扩到知识域全库，
+        # 证据门禁仍兜底拒答无关内容。
+        kb_ids=["cs_faq", "cs_policy", "cs_product"],
     ),
     "k_promotion": IntentProfile(
         intent="k_promotion", domain=CSDomain.KNOWLEDGE,

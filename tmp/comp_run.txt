@@ -1,0 +1,22 @@
+........................................................................ [ 32%]
+..........................F............................................. [ 64%]
+........................................................................ [ 96%]
+........                                                                 [100%]
+================================== FAILURES ===================================
+E   AttributeError: 'PostgresCompetitorStore' object has no attribute '_connect'
+---------------------------- Captured stdout setup ----------------------------
+2026-09-18 00:58:48 - rag_system - INFO - [TravelRouting] 路线数据源已清除，回退本地直线估算
+2026-09-18 00:58:49 - rag_system - INFO - [PostgresCompetitorStore] 初始化完成（agent_business）
+----------------------------- Captured log setup ------------------------------
+INFO     rag_system:routing.py:57 [TravelRouting] 路线数据源已清除，回退本地直线估算
+INFO     rag_system:store_pg.py:102 [PostgresCompetitorStore] 初始化完成（agent_business）
+---------------------------- Captured stdout call -----------------------------
+2026-09-18 00:58:49 - rag_system - INFO - [PostgresCompetitorStore] watchlist upsert: A (https://a.com)
+2026-09-18 00:58:49 - rag_system - INFO - [PostgresCompetitorStore] watchlist upsert: B (https://b.com)
+------------------------------ Captured log call ------------------------------
+INFO     rag_system:store_pg.py:147 [PostgresCompetitorStore] watchlist upsert: A (https://a.com)
+INFO     rag_system:store_pg.py:147 [PostgresCompetitorStore] watchlist upsert: B (https://b.com)
+D:\Program Files\workplace\agent\backend\tests\test_competitor.py:704: AttributeError: 'PostgresCompetitorStore' object has no attribute '_connect'
+=========================== short test summary info ===========================
+FAILED backend/tests/test_competitor.py::TestCompetitorStoreWatchlist::test_list_watch_enabled_only
+1 failed, 223 passed in 212.16s (0:03:32)

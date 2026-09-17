@@ -15,6 +15,8 @@ Revision ID: 0003
 Revises: 0002
 Create Date: 2026-09-03
 """
+from pathlib import Path
+
 from alembic import op
 
 revision = "0003"
@@ -264,6 +266,14 @@ ALTER TABLE customer_service.conversations DROP COLUMN IF EXISTS last_activity_a
 
 
 def upgrade() -> None:
+    # 006 曾是 Alembic 之外的人工前置步骤，导致空库在本 revision 失败。
+    # 将同一幂等基线纳入版本链，确保全新部署可从 0001 升级到 head。
+    baseline = (
+        Path(__file__).resolve().parents[3]
+        / "migrations"
+        / "006_customer_service.sql"
+    )
+    op.execute(baseline.read_text(encoding="utf-8"))
     op.execute(UPGRADE_SQL)
 
 

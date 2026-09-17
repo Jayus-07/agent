@@ -1,0 +1,201 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "legal_case_litigation_2026",
+ "kb_id": "rag_100_docs",
+ "source_file": "legal_2026年在办诉讼进展.docx",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_100_docs\\general\\docx\\legal_2026年在办诉讼进展.docx",
+ "file_size": 37354,
+ "file_sha256": "446daa6638136b0d98cd7e706cad902c411958884864434051c0d1f6dc99396b",
+ "format": "docx",
+ "doc_type": "legal",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.9942,
+ "parsing": {
+  "node_count": 10,
+  "section_count": 5,
+  "leaf_count": 5,
+  "table_count": 1,
+  "table_total_rows": 4,
+  "table_max_cols": 4,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 552,
+  "cleaned_chars": 503,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 7,
+  "leaf_chunk_count": 4,
+  "parent_chunk_count": 3,
+  "truncated": false,
+  "filtered_count": 2,
+  "filtered_reasons": {
+   "too_short": 1,
+   "duplicate": 1
+  }
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "aaf761ec9a59f22b",
+    "chars": 18,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "19ef5f2a73254b43",
+    "chars": 44,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "72cb63b31d4d5217",
+    "chars": 31,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "78e2ff56bc4ff247",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e115646bde84f9f8",
+    "chars": 9,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "b8ccdaa153daf271",
+    "chars": 71,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0b6400c609b31e03",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "fa6be0fd4dda82ec",
+    "chars": 32,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "d6a8fc37d893c106",
+    "chars": 325,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=503 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=5"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.911 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

@@ -95,6 +95,11 @@ EMBEDDING_MODEL_PATH = os.getenv(
 # DashScope text-embedding-v3 上限 10；SiliconFlow / TEI 可调到 32+ 提速。
 # 换嵌入供应商时同步调整此值。
 EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "10"))
+# 云端 embedding 的单次 HTTP 请求上限。必须小于客服专家总超时，
+# 使底层 I/O 可自行结束，避免外层线程超时后留下孤儿请求。
+EMBEDDING_REQUEST_TIMEOUT = float(
+    os.getenv("EMBEDDING_REQUEST_TIMEOUT", "20")
+)
 # =====================================================
 # Rerank Configuration (P0 - 动态配置)
 # =====================================================

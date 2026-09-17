@@ -1,0 +1,107 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "5d19a0c4d2",
+ "kb_id": "..",
+ "source_file": "table_区域销售月报_2026.csv",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\agent_test_data_52_ec473\\docs\\rag_100_docs\\general\\csv\\table_区域销售月报_2026.csv",
+ "file_size": 218,
+ "file_sha256": "4f17b7d11ff52a4c48a47270a3e3d63eac8dcaf3393483010b3207b790803414",
+ "format": "csv",
+ "doc_type": "general",
+ "chunking_strategy": "RecursiveChunkStrategy",
+ "completeness": 0.9395,
+ "parsing": {
+  "node_count": 3,
+  "section_count": 2,
+  "leaf_count": 1,
+  "table_count": 1,
+  "table_total_rows": 7,
+  "table_max_cols": 4,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 548,
+  "cleaned_chars": 524,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 1,
+  "leaf_chunk_count": 1,
+  "parent_chunk_count": 0,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "ebbb33299288137c",
+    "chars": 21,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "442a1250c07e8a07",
+    "chars": 524,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "table_present",
+    "pass": true,
+    "detail": "table_count=1"
+   },
+   {
+    "check": "table_rows",
+    "pass": true,
+    "detail": "rows=7"
+   },
+   {
+    "check": "table_cols",
+    "pass": true,
+    "detail": "cols=4"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

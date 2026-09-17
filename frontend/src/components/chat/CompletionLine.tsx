@@ -40,9 +40,9 @@ export default function CompletionLine({ trace }: { trace: AgentTrace }) {
       </button>
 
       {open && (hasTimeline || hasTodos) && (
-        <div className="mt-2 space-y-3">
+        <div className="mt-1 space-y-2">
           {hasTimeline && (
-            <AgentTimeline collapsed={false} onToggle={() => {}} events={trace.streamEvents}
+            <AgentTimeline collapsed={false} onToggle={() => {}} bare events={trace.streamEvents}
               nodeLabels={trace.nodeLabels} totalElapsedHint={trace.elapsed > 0 ? trace.elapsed : undefined} />
           )}
           {hasTodos && <TodoCard items={trace.todoItems} />}

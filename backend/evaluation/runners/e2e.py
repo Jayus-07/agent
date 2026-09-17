@@ -51,7 +51,7 @@ _INTERCEPT_ACTIONS = {"block", "clarify"}
 
 def _known_capabilities() -> set[str]:
     """已注册 capability 集合 — 从 Skill 实例派生（ADR-0001 单一事实来源）。"""
-    from backend.orchestration.tool_registry import tool_registry
+    from backend.orchestration.capability_registry import tool_registry
     return set(tool_registry.CAPABILITY_MAP.keys())
 
 

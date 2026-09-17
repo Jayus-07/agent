@@ -6,6 +6,7 @@ import { promptsService, type PromptListItem } from '@/api/prompts'
 import { PROMPT_GROUPS, WHITELIST_KEYS } from '@/config/promptGroups'
 import PromptCard from '@/components/prompts/PromptCard'
 import PageHeader from '@/components/layout/PageHeader'
+import ErrorState from '@/components/shared/ErrorState'
 import Skeleton from '@/components/shared/Skeleton'
 import { useToast } from '@/components/shared/Toast'
 
@@ -62,10 +63,7 @@ export default function PromptsPage() {
         {loading ? (
           <Skeleton rows={6} />
         ) : error ? (
-          <div className="text-center py-12">
-            <p className="text-sm text-red-500 mb-3">{error}</p>
-            <button onClick={load} className="text-xs text-accent hover:underline">重试</button>
-          </div>
+          <ErrorState title="Prompt 加载失败" message={error} onRetry={load} />
         ) : (
           <div className="space-y-8">
             {PROMPT_GROUPS.map(group => {

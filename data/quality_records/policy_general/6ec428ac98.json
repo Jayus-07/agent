@@ -1,0 +1,317 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "6ec428ac98",
+ "kb_id": "policy_general",
+ "source_file": "淘宝平台广告合规管理制度-宠物食品类目.md",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\policy_general\\淘宝平台广告合规管理制度-宠物食品类目.md",
+ "file_size": 2283,
+ "file_sha256": "036fbc0f033ee65af045b24b2dd8e7af348733a38479c36f5c96040e26036aa6",
+ "format": "md",
+ "doc_type": "compliance",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.9744,
+ "parsing": {
+  "node_count": 19,
+  "section_count": 6,
+  "leaf_count": 13,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 828,
+  "cleaned_chars": 699,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 17,
+  "leaf_chunk_count": 12,
+  "parent_chunk_count": 5,
+  "truncated": false,
+  "filtered_count": 1,
+  "filtered_reasons": {
+   "low_chinese_ratio": 1
+  }
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "84622ca45237a4c4",
+    "chars": 20,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0793bf3dc5af5517",
+    "chars": 78,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "18d24975e0d8d3eb",
+    "chars": 11,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "be4d35296ecd61a7",
+    "chars": 49,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "list",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "d7870307366c214e",
+    "chars": 26,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "list",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "1924bbea80ac909d",
+    "chars": 25,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "list",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "af05a49211bf9cfe",
+    "chars": 24,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "list",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "fda7362cff3fecf1",
+    "chars": 19,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "72d417352c6cea36",
+    "chars": 34,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "f46c3a4540ffbc11",
+    "chars": 14,
+    "cleaned": false
+   },
+   {
+    "node_id": "n11",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "98958ecab3975d2f",
+    "chars": 36,
+    "cleaned": false
+   },
+   {
+    "node_id": "n12",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "89cc05660b468a5d",
+    "chars": 147,
+    "cleaned": false
+   },
+   {
+    "node_id": "n13",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "9538f8cec37e7a79",
+    "chars": 19,
+    "cleaned": false
+   },
+   {
+    "node_id": "n14",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "9e1b0320a68a6ffd",
+    "chars": 81,
+    "cleaned": false
+   },
+   {
+    "node_id": "n15",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "aec4754ed5438152",
+    "chars": 72,
+    "cleaned": false
+   },
+   {
+    "node_id": "n16",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "022c1873b55475d1",
+    "chars": 11,
+    "cleaned": false
+   },
+   {
+    "node_id": "n17",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "2e1cd2a827dfa3e7",
+    "chars": 85,
+    "cleaned": false
+   },
+   {
+    "node_id": "n18",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "49a9b5b987e4f4d6",
+    "chars": 23,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=699 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=13"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.844 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

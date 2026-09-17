@@ -4,7 +4,7 @@
  * CompletionLine — AI 回复完成态常驻行（WorkBuddy 式）
  *
  * 形态：「✓ Agent · 已完成 · 12.3s ›」，点击展开回看执行过程
- * （AgentTimeline + 任务清单，数据为 done 时固化进 message.trace 的快照）。
+ * （bare 时间线 + 任务清单，数据为 done 时固化进 message.trace 的快照）。
  * 历史恢复的消息无 trace，不渲染本行。
  * trace.streamEvents 为空（direct 快路径无节点事件）时只展示耗时，不渲染时间线。
  */
@@ -40,9 +40,9 @@ export default function CompletionLine({ trace }: { trace: AgentTrace }) {
       </button>
 
       {open && (hasTimeline || hasTodos) && (
-        <div className="mt-2 space-y-3">
+        <div className="mt-1 space-y-2">
           {hasTimeline && (
-            <AgentTimeline collapsed={false} onToggle={() => {}} events={trace.streamEvents} nodeLabels={trace.nodeLabels} />
+            <AgentTimeline collapsed={false} onToggle={() => {}} bare events={trace.streamEvents} nodeLabels={trace.nodeLabels} />
           )}
           {hasTodos && <TodoCard items={trace.todoItems} />}
         </div>

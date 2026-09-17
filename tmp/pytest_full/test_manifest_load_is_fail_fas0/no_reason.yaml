@@ -1,0 +1,6 @@
+capabilities:
+- examples: []
+  name: x.y
+  routed: false
+  skill: s
+version: 1

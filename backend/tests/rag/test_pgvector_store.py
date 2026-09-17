@@ -48,37 +48,47 @@ class TestWhereToSql:
     def test_flat_scalar_eq(self):
         params: list = []
         sql = where_to_sql({"kb_id": "kb-a"}, params)
-        assert sql == "metadata @> %s::jsonb"
-        assert params == ['{"kb_id": "kb-a"}']
+        assert sql == ("(metadata @> %s::jsonb OR ((metadata->>'kb_id') LIKE '[%%' "
+                       "AND (metadata->>'kb_id')::jsonb @> to_jsonb(%s::text)))")
+        assert params == ['{"kb_id": "kb-a"}', "kb-a"]
+
+    def test_scalar_eq_array_field_second_arm(self):
+        """list 型字段（JSON 数组串落库）标量等值走数组包含臂（person_names 缺陷修复）。"""
+        params: list = []
+        sql = where_to_sql({"person_names": "张伟"}, params)
+        assert "::jsonb @> to_jsonb(%s::text)" in sql
+        assert params == ['{"person_names": "张伟"}', "张伟"]
 
     def test_flat_multi_key_and(self):
         params: list = []
         sql = where_to_sql({"kb_id": "a", "doc_type": "b"}, params)
         assert sql.startswith("(") and " AND " in sql
-        assert len(params) == 2
+        assert len(params) == 4  # 标量等值每条件 2 参数（@> 主臂 + 数组包含臂）
 
     def test_normalized_and_form(self):
         params: list = []
         where = normalize_where({"kb_id": "a", "doc_type": "b"})
         sql = where_to_sql(where, params)
         assert sql.startswith("(") and " AND " in sql
-        assert len(params) == 2
+        assert len(params) == 4
 
     def test_or_group(self):
         params: list = []
         sql = where_to_sql({"$or": [{"kb_id": "a"}, {"kb_id": "b"}]}, params)
-        assert " OR " in sql and len(params) == 2
+        assert " OR " in sql and len(params) == 4
 
     def test_in_operator(self):
         params: list = []
         sql = where_to_sql({"kb_id": {"$in": ["a", "b"]}}, params)
-        assert sql == "metadata->>'kb_id' = ANY(%s)"
-        assert params == [["a", "b"]]
+        assert (sql == "(metadata->>'kb_id' = ANY(%s) OR ((metadata->>'kb_id') LIKE '[%%' "
+                       "AND (metadata->>'kb_id')::jsonb ?| %s))")
+        assert params == [["a", "b"], ["a", "b"]]
 
     def test_nin_operator(self):
         params: list = []
         sql = where_to_sql({"kb_id": {"$nin": ["a"]}}, params)
-        assert "NOT (metadata->>'kb_id' = ANY(%s))" == sql
+        assert (sql == "(NOT (metadata->>'kb_id' = ANY(%s) OR ((metadata->>'kb_id') LIKE '[%%' "
+                       "AND (metadata->>'kb_id')::jsonb ?| %s)))")
 
     def test_numeric_comparison(self):
         params: list = []
@@ -108,12 +118,12 @@ class TestWhereToSql:
         sql = where_to_sql(
             {"$and": [{"kb_id": "a"}, {"$or": [{"dept": "x"}, {"dept": "y"}]}]}, params)
         assert "AND" in sql and "OR" in sql
-        assert len(params) == 3
+        assert len(params) == 6
 
     def test_bool_eq_jsonb_form(self):
         params: list = []
         where_to_sql({"is_latest": True}, params)
-        assert params == ['{"is_latest": true}']
+        assert params == ['{"is_latest": true}', "true"]
 
     def test_unknown_op_raises(self):
         with pytest.raises(ValueError):
@@ -121,6 +131,47 @@ class TestWhereToSql:
 
 
 # ======================= 真 PG 集成冒烟 =======================
+
+class TestArrayFieldFilterIntegration:
+    """list 型字段（person_names 经 _sanitize_metadata 成 JSON 数组串）过滤语义。
+
+    回归 2026-09-18 实证缺陷：多人文档 person_names 标量等值过滤必失配。
+    """
+
+    def test_scalar_eq_matches_array_element(self, store):
+        store.add_texts(
+            texts=["甲文档正文", "乙文档正文"],
+            metadatas=[{"doc_id": "d1", "person_names": ["张伟", "MeridiHome"]},
+                       {"doc_id": "d2", "person_names": ["李娜"]}],
+        )
+        hits = store.similarity_search("甲文档正文", k=10, filter={"person_names": "张伟"})
+        assert {d.metadata["doc_id"] for d in hits} == {"d1"}
+        # 单人文档与历史等值语义一致
+        hits2 = store.similarity_search("甲文档正文", k=10, filter={"person_names": "李娜"})
+        assert {d.metadata["doc_id"] for d in hits2} == {"d2"}
+
+    def test_in_matches_any_array_element(self, store):
+        store.add_texts(
+            texts=["甲文档正文", "乙文档正文"],
+            metadatas=[{"doc_id": "d1", "person_names": ["张伟", "MeridiHome"]},
+                       {"doc_id": "d2", "person_names": ["李娜"]}],
+        )
+        hits = store.similarity_search(
+            "甲文档正文", k=10, filter={"person_names": {"$in": ["张伟", "王五"]}})
+        assert {d.metadata["doc_id"] for d in hits} == {"d1"}
+        hits2 = store.similarity_search(
+            "甲文档正文", k=10, filter={"person_names": {"$nin": ["张伟"]}})
+        assert {d.metadata["doc_id"] for d in hits2} == {"d2"}
+
+    def test_legacy_comma_string_scalar_still_matches(self, store):
+        """历史逗号串数据：单人名（无逗号）走第一臂原语义。"""
+        store.add_texts(
+            texts=["丙文档正文"],
+            metadatas=[{"doc_id": "d3", "person_names": "赵六"}],
+        )
+        hits = store.similarity_search("丙文档正文", k=10, filter={"person_names": "赵六"})
+        assert {d.metadata["doc_id"] for d in hits} == {"d3"}
+
 
 def _pg_available() -> bool:
     try:

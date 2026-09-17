@@ -30,7 +30,7 @@ BEGIN;
 -- ------------------------------------------------------------
 DELETE FROM customer.customers WHERE id = 99001;
 INSERT INTO customer.customers (id, name, gender, level, register_time)
-VALUES (99001, '演示用户（模拟数据）', '未填写', 'gold', now() - INTERVAL '90 days');
+VALUES (99001, '演示用户（模拟数据）', NULL, 'gold', now() - INTERVAL '90 days');
 SELECT setval(pg_get_serial_sequence('customer.customers', 'id'),
               GREATEST((SELECT MAX(id) FROM customer.customers), 1));
 

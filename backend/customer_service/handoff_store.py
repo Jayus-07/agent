@@ -42,6 +42,17 @@ class HandoffStore:
         self._data: dict[tuple[str, str], dict] = {}
         self._lock = threading.Lock()
 
+    def peek_l1(self, user_id: str, session_id: str) -> dict | None:
+        """P3.5：纯内存直读（无 DB 桥接）——供已运行在 _db_loop 线程的
+        async 代码调用（嵌套 run_sync 会自死锁）。"""
+        with self._lock:
+            return self._data.get((user_id, session_id))
+
+    def cache_l1(self, user_id: str, session_id: str, data: dict) -> None:
+        """P3.5：DB 读回填 L1 缓存（与 load 的缓存行为一致）。"""
+        with self._lock:
+            self._data[(user_id, session_id)] = data
+
     def load(self, user_id: str, session_id: str) -> dict | None:
         with self._lock:
             cached = self._data.get((user_id, session_id))

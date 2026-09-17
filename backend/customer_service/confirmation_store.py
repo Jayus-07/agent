@@ -69,6 +69,18 @@ class ConfirmationStore:
                 self._data[(user_id, session_id)] = db_data
         return db_data
 
+    def peek_l1(self, user_id: str, session_id: str) -> dict | None:
+        """P3.5：纯内存直读（无 DB 桥接）——供已运行在 _db_loop 线程的
+        async 代码调用（嵌套 run_sync 会自死锁，见 state_transition）。
+        """
+        with self._lock:
+            return self._data.get((user_id, session_id))
+
+    def cache_l1(self, user_id: str, session_id: str, pending: dict) -> None:
+        """P3.5：DB 读回填 L1 缓存（与 load 的缓存行为一致）。"""
+        with self._lock:
+            self._data[(user_id, session_id)] = pending
+
     def save(self, user_id: str, session_id: str, pending_action: dict) -> None:
         with self._lock:
             self._data[(user_id, session_id)] = pending_action
@@ -98,7 +110,13 @@ class ConfirmationStore:
                 # DB 认领成功 → 移除 L1 pending 条目
                 with self._lock:
                     self._data.pop((user_id, session_id), None)
-            return claimed_id
+                return claimed_id
+            # DB 确认无行（可能是 save 降级未落库）→ 回退 L1 认领。
+            # L1 pop 原子，单进程内幂等保持；DB 有行时走 DB 闸门
+            # （多实例安全），两分支都只认领一次。
+            with self._lock:
+                pending = self._data.pop((user_id, session_id), None)
+            return pending.get("action_id") if pending else None
         except Exception as exc:
             try:
                 from backend.observability.metrics import record_cs_store_db_failure
@@ -140,14 +158,25 @@ class ConfirmationStore:
             from backend.customer_service._db_loop import run_sync
             run_sync(self._async_save(user_id, session_id, pending_action))
         except Exception as exc:
-            _db_write_failed("ConfirmationStore", "save", exc)
+            # P3.5：save 是后置持久化（L1 已写成功、确认卡已可用），DB 慢/
+            # 抖动只降级告警——此前 strict 抛错把整个 expert 打成失败，
+            # 用户看到「处理出错」。strict 闸门只属于 claim（防双执行）。
+            logger.warning(
+                "[ConfirmationStore] DB save failed (L1 kept): %s", exc,
+                exc_info=True,
+            )
 
     def _db_clear(self, user_id: str, session_id: str, final_state: str) -> None:
         try:
             from backend.customer_service._db_loop import run_sync
             run_sync(self._async_clear(user_id, session_id, final_state))
         except Exception as exc:
-            _db_write_failed("ConfirmationStore", "clear", exc)
+            # P3.5：与 _db_save 同理，L1 已清除、终态语义已生效于本进程，
+            # DB 抖动不回滚业务结果，只告警（审计口径以 trace 为准）
+            logger.warning(
+                "[ConfirmationStore] DB clear failed (L1 already cleared): %s",
+                exc, exc_info=True,
+            )
 
     def _db_claim(self, user_id: str, session_id: str) -> str | None:
         from backend.customer_service._db_loop import run_sync

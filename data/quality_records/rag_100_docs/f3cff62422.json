@@ -1,0 +1,107 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "f3cff62422",
+ "kb_id": "rag_100_docs",
+ "source_file": "table_2026Q2部门人力成本.xlsx",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\agent_test_data_ta_npvse\\docs\\rag_100_docs\\general\\xlsx\\table_2026Q2部门人力成本.xlsx",
+ "file_size": 5119,
+ "file_sha256": "c8053b8e2b1a80592354981cb9cfb496d69fbbc4c59f0aef99f220aa2ac1c526",
+ "format": "xlsx",
+ "doc_type": "financial",
+ "chunking_strategy": "FinancialTableChunkStrategy",
+ "completeness": 0.9384,
+ "parsing": {
+  "node_count": 3,
+  "section_count": 2,
+  "leaf_count": 1,
+  "table_count": 1,
+  "table_total_rows": 6,
+  "table_max_cols": 3,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 369,
+  "cleaned_chars": 360,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 6,
+  "leaf_chunk_count": 5,
+  "parent_chunk_count": 1,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "3c6549fc94d5f15d",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "afe8a48254e532ab",
+    "chars": 360,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "table_present",
+    "pass": true,
+    "detail": "table_count=1"
+   },
+   {
+    "check": "table_rows",
+    "pass": true,
+    "detail": "rows=6"
+   },
+   {
+    "check": "table_cols",
+    "pass": true,
+    "detail": "cols=3"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

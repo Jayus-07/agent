@@ -153,6 +153,26 @@ class TestDbUnavailableClaim:
         assert claimed_again is None
 
     @patch("backend.customer_service.confirmation_flow.process_confirmation")
+    def test_db_no_row_falls_back_to_l1_claim(self, _):
+        """DB 无行（save 降级未落库）→ L1 认领兜底（P3.5）。
+
+        此前 DB 返回 None 直接判定 duplicate，L1 pending 被永久锁死。
+        """
+        from backend.customer_service.confirmation_store import ConfirmationStore
+
+        store = ConfirmationStore()
+        store._data[("u1", "s1")] = _pending_action()
+
+        with patch.object(store, "_db_claim", return_value=None):
+            claimed = store.claim_for_execution("u1", "s1")
+
+        assert claimed == "act-001"
+        assert ("u1", "s1") not in store._data  # L1 已消费（幂等）
+        # 第二次 → None（已认领）
+        with patch.object(store, "_db_claim", return_value=None):
+            assert store.claim_for_execution("u1", "s1") is None
+
+    @patch("backend.customer_service.confirmation_flow.process_confirmation")
     def test_store_claim_strict_raises(self, _):
         """DB 认领失败（严格模式）→ 抛 StoreWriteError，不冒双执行之险。"""
         from backend.customer_service.confirmation_store import (

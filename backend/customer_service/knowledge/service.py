@@ -68,8 +68,20 @@ class CSKnowledgeService:
             )
 
             meta = getattr(pipeline, "last_answer_meta", {}) or {}
-            confidence = meta.get("confidence", 0.5)
-            has_evidence = meta.get("can_answer", True) and bool(answer and answer.strip())
+            # P3.5：remote ask 的 meta 依赖 LLM 输出 <!--META--> 注释，
+            # 遵循度不稳（实测 conf 缺失取默认 0.5 → 门禁 refuse 丢弃
+            # 真实答案）。兜底：can_answer=True 且有答案 → 0.65（CAUTIOUS
+            # 档放行，带低置信提示）；can_answer=False → 0.5（走 refuse，
+            # 证据门禁仍守门）。
+            confidence = meta.get("confidence")
+            if confidence is None:
+                answer_ok = bool(answer and answer.strip())
+                confidence = (
+                    0.65 if meta.get("can_answer", True) and answer_ok else 0.5
+                )
+            has_evidence = meta.get("can_answer", True) and bool(
+                answer and answer.strip()
+            )
 
             cs_decision = CSAnswerDecision.decide(confidence, has_evidence)
 

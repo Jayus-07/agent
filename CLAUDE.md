@@ -29,6 +29,14 @@ START → router ─┬─ CS 预过滤命中（灰度放量） ─────�
 - RAG 子链路：改写 → MultiQuery → 混合检索（向量+BM25）→ 同文档扩展 → Rerank → EvidenceGate → 带引用生成 → META 尾拒答判定
 - 流式：节点 status/log + LLM stream_sink delta 汇入 merged_q；SSE 帧序 meta → status/log/delta → done/error
 
+### 入口与异步层（网关 + 队列）
+
+- **网关**：APISIX(9080) 是 Python 项目唯一入口（详见「服务启停与网关边界」）；**主链路 `/chat/stream` 同步执行、不经任何队列**，SSE 直返。
+- **Celery 任务队列**（`backend/tasks/`，Redis 兼作 broker 与 result backend，与业务缓存分库默认 /1）：
+  - 双队列固定路由（`celery_app.py::task_routes`）：`agent`（execute_agent，通用 Agent 任务）｜ `rag_index`（execute_index，RAG 上传索引——吃内存/模型，与 agent 隔离扩缩容）；入口 `POST /rag/upload` → `apply_async`；**状态权威在 PG（agent_memory.tasks）**，result backend 24h 过期仅供查询
+  - 可靠性：payload 仅 `task_id`（json 禁 pickle）｜ acks_late + prefetch=1 + reject_on_worker_lost（Worker 宕机回队）｜ 软/硬双层超时 ｜ 重试 = **自愈式续跑**（从最近 LangGraph checkpoint 继续，已完成节点不重跑；业务终态异常不重试）
+  - 部署：docker-compose `worker` 服务（`backend.workers.agent_worker`，`-Q agent,rag_index`，inspect ping 健康检查）；指标走 celery-exporter（celery_task_{sent,succeeded,failed,retried}_total）
+
 ### 节点职责
 
 - **Planner**：只做任务拆解 → Capability DAG（nodes+edges），禁止调用 Tool/Skill/DB
@@ -187,7 +195,7 @@ start_py.bat / stop_py.bat / restart_py.bat
 #   native 参数 = 宿主机裸跑 uvicorn --reload（仅临时调试：需同时把
 #   apisix/apisix.yaml 的 app 节点改回 host.docker.internal:8000）
 # Java 服务（原生 mvn 热加载：auth-service :8006 / system-service :8002 / api-gateway :8080；
-#   business-service 留容器；mysql/redis/nacos/postgres/kafka 基础设施容器不动）
+#   business-service 留容器；mysql/redis/nacos/postgres 基础设施容器不动）
 start_java.bat / stop_java.bat / restart_java.bat
 #   改了 Java 源码 → build_java.bat → restart_java.bat
 # 前端 :3100（start 脚本默认注入 AUTH_GATEWAY_URL=http://127.0.0.1:9080）
@@ -196,7 +204,7 @@ start_frontend.bat / stop_frontend.bat
 
 - **py 与 Java 是两个独立项目**：py = 本仓库；Java = Enterprise_OA（源码已移出，备份 `.workbuddy/java-legacy-backup/`，割接清单 `docs/java-side-handover.md`）。唯一联系：Java 客服系统调 py agent（`/internal/ai/call` + chat API）。
 - 认证已 py 自建（issuer=agent-platform，`backend/security/local_jwt.py` + `routes/auth_local.py` + migration 008），不再依赖 Java auth-service。
-- **APISIX(9080) 是 Python 项目唯一入口**（声明式 `apisix/apisix.yaml` 进 git + 自研插件 `apisix/plugins/gateway-auth.lua`）；Java SCG 归 Java 项目。容器最小集（6）：postgres/redis/rag-service/mcp-service/app/apisix，kafka 归 java-loop profile。
+- **APISIX(9080) 是 Python 项目唯一入口**（声明式 `apisix/apisix.yaml` 进 git + 自研插件 `apisix/plugins/gateway-auth.lua`）；Java SCG 归 Java 项目。默认容器集：postgres/redis/rag-service/mcp-service/app/apisix + **worker/celery-exporter（Celery 异步任务）**。
 - 认证模型：`gateway-auth`（enforce）验 py 签发 JWT —— **Bearer 优先于 X-API-Key**，带 Bearer 必须走完整 JWT 流防绕过黑名单；+ Redis 黑名单（只读 agent-redis:6379）+ 注入 X-User-Id 等身份头；仅 X-API-Key 无 Bearer 走服务级透传。契约 `docs/contracts/identity-header-protocol.md`
 - 登录链路：前端 `/login` → APISIX `/api/auth/**`（白名单）→ auth-service(JWT)；refresh_token 走 HttpOnly Cookie。回滚 = env 改回 8080 重启前端（SCG 与 Java 服务从未被修改）。
 
