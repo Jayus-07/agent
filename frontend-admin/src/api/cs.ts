@@ -105,3 +105,30 @@ export async function getHandoffMessages(
     `/api/cs/conversations/` + encodeURIComponent(conversationId) + `/messages?since_id=` + sinceId,
   );
 }
+
+// ── 人工介入 v2（WS 推送 + 关闭）────────────────────
+
+export async function issueWsTicket(): Promise<{
+  ticket: string;
+  ws_path: string;
+  ttl: number;
+}> {
+  return request<{ ticket: string; ws_path: string; ttl: number }>(
+    `/api/cs/conversations/agent/ws-ticket`,
+    { method: "POST" },
+  );
+}
+
+export async function closeConversation(
+  conversationId: string,
+  agentId: string,
+): Promise<{ conversation_id: string; handoff_state: string; closed_by: string }> {
+  return request(
+    `/api/cs/conversations/` + encodeURIComponent(conversationId) + `/close`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_id: agentId }),
+    },
+  );
+}

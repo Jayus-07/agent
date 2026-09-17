@@ -1,20 +1,23 @@
 "use client";
 
 /**
- * /cs/handoff — 人工接入坐席工作台（v1）
+ * /cs/handoff — 人工接入坐席工作台（v2）
  *
- * 机制：2s 轮询队列 + 消息增量拉取（since_id）。
- * 企业标准为 WebSocket/SSE 推送坐席队列，v1 用轮询保证实现简单与网关兼容；
- * 演进路径见 docs/customer-service/演示沙盒方案-2026-09-17.md §七。
+ * 下行主通道：WebSocket /ws/cs/agent（ticket 一次性鉴权，断线指数退避重连）。
+ * 降级：WS 未连接时回退 2s 轮询（transport fallback，不进业务逻辑）。
+ * 上行：全走 HTTP（认领 / 发消息 / 关闭，X-API-Key 由 BFF 服务端注入）。
+ * 事件语义见 docs/customer-service/演示沙盒方案-2026-09-17.md §七。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Headphones, Send, UserRound } from "lucide-react";
+import { Headphones, Send, UserRound, XCircle } from "lucide-react";
 import {
   claimConversation,
+  closeConversation,
   getHandoffMessages,
   getHandoffQueue,
   sendAgentMessage,
 } from "@/api/cs";
+import { useAgentSocket, type AgentEvent } from "@/lib/csAgentWs";
 import type {
   HandoffMessageDTO,
   HandoffQueueItem,
@@ -24,6 +27,7 @@ const STATE_BADGES: Record<string, { label: string; cls: string }> = {
   handoff_requested: { label: "已请求", cls: "bg-amber-100 text-amber-700" },
   waiting_human: { label: "排队中", cls: "bg-red-100 text-red-700" },
   human_active: { label: "人工处理中", cls: "bg-emerald-100 text-emerald-700" },
+  closed: { label: "已结束", cls: "bg-slate-100 text-slate-500" },
 };
 
 const SENDER_LABELS: Record<string, string> = {
@@ -44,7 +48,9 @@ export default function HandoffWorkbenchPage() {
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const sinceIdRef = useRef(0);
+  const selectedRef = useRef<HandoffQueueItem | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  selectedRef.current = selected;
 
   // agent_id 持久化
   useEffect(() => {
@@ -54,8 +60,106 @@ export default function HandoffWorkbenchPage() {
     if (agentId) localStorage.setItem(AGENT_ID_KEY, agentId);
   }, [agentId]);
 
-  // 队列轮询（2s）
+  // ── WS 事件处理（下行主通道）────────────────────────
+  const handleAgentEvent = useCallback((e: AgentEvent) => {
+    switch (e.type) {
+      case "conversation.waiting": {
+        const item = e.item as HandoffQueueItem;
+        setQueue((prev) => {
+          const idx = prev.findIndex(
+            (q) => q.conversation_id === item.conversation_id,
+          );
+          if (idx === -1) return [item, ...prev];
+          const next = [...prev];
+          next[idx] = item;
+          return next;
+        });
+        break;
+      }
+      case "conversation.claimed": {
+        const cid = e.conversation_id as string;
+        setQueue((prev) =>
+          prev.map((q) =>
+            q.conversation_id === cid
+              ? { ...q, handoff_state: "human_active" }
+              : q,
+          ),
+        );
+        if (selectedRef.current?.conversation_id === cid) {
+          setSelected((s) =>
+            s && s.conversation_id === cid
+              ? { ...s, handoff_state: "human_active" }
+              : s,
+          );
+        }
+        break;
+      }
+      case "conversation.closed": {
+        const cid = e.conversation_id as string;
+        setQueue((prev) =>
+          prev.filter((q) => q.conversation_id !== cid),
+        );
+        if (selectedRef.current?.conversation_id === cid) {
+          setSelected((s) =>
+            s && s.conversation_id === cid
+              ? { ...s, handoff_state: "closed" }
+              : s,
+          );
+        }
+        break;
+      }
+      case "message.created": {
+        const cid = e.conversation_id as string;
+        const lastId = Number(e.last_id ?? 0);
+        const msg = e.message as HandoffMessageDTO;
+        if (selectedRef.current?.conversation_id !== cid) break;
+        setMessages((prev) => {
+          if (prev.some((m) => m.message_id === msg.message_id)) return prev;
+          return [...prev, msg];
+        });
+        if (lastId > sinceIdRef.current) sinceIdRef.current = lastId;
+        break;
+      }
+      default:
+        // hello / heartbeat / pong：仅保活
+        break;
+    }
+  }, []);
+
+  const { connected } = useAgentSocket(handleAgentEvent);
+
+  // 全量对账：WS 刚连上（或重连）时拉一次队列 + 选中会话消息，
+  // 补齐断线期间漏掉的事件
+  const refreshQueue = useCallback(async () => {
+    try {
+      const res = await getHandoffQueue();
+      setQueue(res.items);
+    } catch {
+      // 静默，下轮重试
+    }
+  }, []);
+
   useEffect(() => {
+    if (!connected) return;
+    refreshQueue();
+    const cid = selectedRef.current?.conversation_id;
+    if (!cid) return;
+    getHandoffMessages(cid, sinceIdRef.current)
+      .then((res) => {
+        if (res.messages.length > 0) {
+          setMessages((prev) => {
+            const known = new Set(prev.map((m) => m.message_id));
+            return [...prev, ...res.messages.filter((m) => !known.has(m.message_id))];
+          });
+          sinceIdRef.current = res.last_id;
+        }
+      })
+      .catch(() => undefined);
+  }, [connected, refreshQueue]);
+
+  // ── 降级轮询（仅 WS 未连接时）────────────────────────
+  useEffect(() => {
+    if (connected) return; // WS 主通道在线，轮询停止
     let alive = true;
     const tick = async () => {
       try {
@@ -71,7 +175,7 @@ export default function HandoffWorkbenchPage() {
       alive = false;
       clearInterval(timer);
     };
-  }, []);
+  }, [connected]);
 
   // 选中会话：重置增量游标
   const selectConversation = useCallback((item: HandoffQueueItem) => {
@@ -80,9 +184,9 @@ export default function HandoffWorkbenchPage() {
     sinceIdRef.current = 0;
   }, []);
 
-  // 消息增量轮询（仅选中会话时，2s）
+  // 消息增量轮询（降级：仅 WS 未连接且选中会话时，2s）
   useEffect(() => {
-    if (!selected) return;
+    if (!selected || connected) return;
     let alive = true;
     const tick = async () => {
       try {
@@ -105,7 +209,7 @@ export default function HandoffWorkbenchPage() {
       alive = false;
       clearInterval(timer);
     };
-  }, [selected]);
+  }, [selected, connected]);
 
   // 自动滚动到底
   useEffect(() => {
@@ -134,6 +238,30 @@ export default function HandoffWorkbenchPage() {
     }
   };
 
+  const handleClose = async () => {
+    if (!selected) return;
+    if (!agentId.trim()) {
+      setError("请先填写坐席 ID");
+      return;
+    }
+    setError(null);
+    try {
+      await closeConversation(selected.conversation_id, agentId.trim());
+      // 乐观更新（WS 在线时 conversation.closed 事件会再次兜底）
+      setQueue((prev) =>
+        prev.filter((q) => q.conversation_id !== selected.conversation_id),
+      );
+      setSelected((s) =>
+        s && s.conversation_id === selected.conversation_id
+          ? { ...s, handoff_state: "closed" }
+          : s,
+      );
+    } catch (e) {
+      const msg = (e as Error).message ?? "关闭失败";
+      setError(msg.includes("409") ? "会话状态不允许关闭" : msg);
+    }
+  };
+
   const handleSend = async () => {
     if (!selected || !reply.trim() || sending) return;
     if (!agentId.trim()) {
@@ -148,7 +276,8 @@ export default function HandoffWorkbenchPage() {
         agentId.trim(),
         reply.trim(),
       );
-      // 全量拉一次，拿到落库后的自增 id 作为增量游标
+      // WS 在线时 message.created 事件会实时追加；这里全量拉一次兜底
+      // （同时拿到落库后的自增 id 作为增量游标）
       const res = await getHandoffMessages(
         selected.conversation_id,
         0,
@@ -177,12 +306,27 @@ export default function HandoffWorkbenchPage() {
     );
   };
 
+  const closable =
+    !!selected &&
+    (selected.handoff_state === "waiting_human" ||
+      selected.handoff_state === "human_active");
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <Headphones size={20} className="text-blue-600" />
           <h1 className="text-lg font-medium">人工接入坐席工作台</h1>
+          <span
+            className={`px-2 py-0.5 rounded-full text-[10px] ${
+              connected
+                ? "bg-emerald-50 text-emerald-600"
+                : "bg-amber-50 text-amber-600"
+            }`}
+            title={connected ? "WebSocket 实时推送在线" : "WS 离线，2s 轮询降级中"}
+          >
+            {connected ? "实时推送" : "轮询降级"}
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <UserRound size={14} className="text-slate-500" />
@@ -268,9 +412,28 @@ export default function HandoffWorkbenchPage() {
                 <span className="text-sm font-medium font-mono">
                   {selected.conversation_id.slice(0, 18)}…
                 </span>
-                {stateBadge(selected.handoff_state)}
+                <div className="flex items-center gap-2">
+                  {stateBadge(selected.handoff_state)}
+                  {closable && (
+                    <button
+                      onClick={handleClose}
+                      className="flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg
+                        border border-slate-300 text-slate-600 hover:bg-slate-100
+                        transition-colors"
+                      title="结束会话（waiting_human / human_active → closed）"
+                    >
+                      <XCircle size={13} />
+                      结束会话
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
+                {messages.length === 0 && (
+                  <div className="text-sm text-slate-400 text-center py-6">
+                    暂无消息
+                  </div>
+                )}
                 {messages.map((m) => (
                   <div
                     key={m.message_id}

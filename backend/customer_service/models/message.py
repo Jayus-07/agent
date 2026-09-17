@@ -43,6 +43,13 @@ class CSMessage(CSBase):
     )
 
     # ── sender ──
+    # 2026-09-17 修复：006 迁移定义了 role NOT NULL（CHECK 同 sender 取值域），
+    # ORM 模型此前缺失该列 → 一切 ORM 落库静默失败（NotNullViolation 被
+    # record_cs_turn 的 fire-and-forget 吞掉），表里只有种子数据。
+    role = Column(
+        String(20), nullable=False, default="user",
+        comment="user|assistant|system|human_agent（与 sender_type 同域）",
+    )
     sender_type = Column(
         String(20), nullable=False, default="user",
         comment="user|assistant|system|human_agent",

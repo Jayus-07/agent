@@ -40,10 +40,13 @@ class MessageManager:
         metadata: dict | None = None,
         attachments: list | None = None,
         trace_id: str | None = None,
+        role: str | None = None,
     ) -> CSMessage:
         msg = CSMessage(
             message_id=message_id or uuid.uuid4().hex,
             conversation_id=conversation_id,
+            # 006 迁移 role NOT NULL：缺省与 sender_type 同域填充
+            role=role or sender_type,
             sender_type=sender_type,
             sender_id=sender_id,
             content=content,

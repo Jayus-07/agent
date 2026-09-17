@@ -51,6 +51,11 @@ class HandoffStore:
             self._data.pop((user_id, session_id), None)
         self._db_clear(user_id, session_id)
 
+    def invalidate(self, user_id: str, session_id: str) -> None:
+        """只失效 L1 内存缓存，不动 DB（坐席侧已直接改库时调用）。"""
+        with self._lock:
+            self._data.pop((user_id, session_id), None)
+
     def has_active_handoff(self, user_id: str) -> bool:
         with self._lock:
             for k, v in self._data.items():

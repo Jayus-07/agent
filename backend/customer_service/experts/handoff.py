@@ -77,6 +77,32 @@ def execute_handoff(
     }
     store.save(user_id, session_id, handoff_data)
 
+    # 2026-09-17 修复：工单立即进入排队（HANDOFF_REQUESTED → WAITING_HUMAN）。
+    # 此前生产代码没有任何位置执行这一步，工单永久卡在 handoff_requested，
+    # 坐席认领 409、工作台输入框永远锁定（演示沙盒方案 §七·阶段2）。
+    # 拦截语义不变：should_intercept 对两个状态都返回 True。
+    handoff_transition(
+        HandoffState.HANDOFF_REQUESTED, HandoffState.WAITING_HUMAN,
+    )
+    handoff_data["handoff_state"] = HandoffState.WAITING_HUMAN.value
+    handoff_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    store.save(user_id, session_id, handoff_data)
+
+    # 实时推送：新工单进入坐席待接入队列（WebSocket，无连接时静默丢弃）
+    from backend.customer_service.realtime import get_agent_hub
+    get_agent_hub().publish(
+        "conversation.waiting",
+        item={
+            "conversation_id": session_id,  # handoff 行的 conversation_id 即 session_id
+            "user_id": user_id,
+            "handoff_state": HandoffState.WAITING_HUMAN.value,
+            "trigger_type": trigger_type,
+            "trigger_reason": trigger_reason,
+            "updated_at": handoff_data["updated_at"],
+            "last_message_preview": (user_message[:80] if user_message else None),
+        },
+    )
+
     answer = "已为您转接人工客服，请稍候。客服人员将尽快为您服务。"
 
     audit_entry = build_audit_entry(
@@ -90,7 +116,7 @@ def execute_handoff(
     )
 
     logger.info(
-        "[HandoffExpert] ticket=%s trigger=%s state=HANDOFF_REQUESTED",
+        "[HandoffExpert] ticket=%s trigger=%s state=WAITING_HUMAN",
         ticket_id, trigger_type,
     )
 
@@ -102,7 +128,7 @@ def execute_handoff(
             "ticket_id": ticket_id,
             "trigger_type": trigger_type,
             "trigger_reason": trigger_reason,
-            "handoff_state": HandoffState.HANDOFF_REQUESTED.value,
+            "handoff_state": HandoffState.WAITING_HUMAN.value,
             "handling_mode": "human",
             "audit_entry": audit_entry,
         },

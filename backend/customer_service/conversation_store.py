@@ -157,7 +157,7 @@ async def _async_record_turn(
             if domain:
                 intent_domain = domain if isinstance(domain, str) else str(domain)
 
-        await msg_mgr.save_turn(
+        q, a = await msg_mgr.save_turn(
             conversation_id, question, answer,
             intent_domain=intent_domain,
             intent_name=intent_name,
@@ -180,6 +180,40 @@ async def _async_record_turn(
         )
 
         await db.commit()
+
+    # 实时推送：坐席工作台 WS 订阅 message.created（fire-and-forget，
+    # 坐席侧按 conversation_id 过滤；无连接时 Hub 静默丢弃）
+    try:
+        from backend.customer_service.realtime import get_agent_hub
+
+        def _msg_payload(msg) -> dict:
+            return {
+                "message_id": msg.message_id,
+                "sender_type": msg.sender_type,
+                "content": msg.content,
+                "content_type": msg.content_type,
+                "created_at": (
+                    msg.created_at.isoformat() if msg.created_at else ""
+                ),
+            }
+
+        hub = get_agent_hub()
+        hub.publish(
+            "message.created",
+            conversation_id=conversation_id,
+            last_id=q.id,
+            message=_msg_payload(q),
+        )
+        hub.publish(
+            "message.created",
+            conversation_id=conversation_id,
+            last_id=a.id,
+            message=_msg_payload(a),
+        )
+    except Exception:
+        logger.debug(
+            "[ConversationStore] ws publish failed", exc_info=True,
+        )
 
     # 发布消息事件到 Kafka（fire-and-forget，Kafka 未启用/不可用时静默跳过）
     try:

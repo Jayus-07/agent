@@ -121,6 +121,16 @@ register_mcp_servers()
 # 启动配置校验（P1-14：pydantic Settings fail-fast）
 # ═══════════════════════════════════════════════════
 @app.on_event("startup")
+async def bind_agent_hub_loop():
+    """坐席 WS Hub 绑定主 loop：业务线程 publish() 跳板（2026-09-17）。"""
+    import asyncio
+
+    from backend.customer_service.realtime import get_agent_hub
+    get_agent_hub().bind_loop(asyncio.get_running_loop())
+    logger.info("[Startup] AgentHub bound to main loop")
+
+
+@app.on_event("startup")
 async def validate_settings():
     """环境变量集中校验：fatal 错误抛出 → 服务拒绝启动（fail-fast）。
 

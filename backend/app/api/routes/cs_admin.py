@@ -218,7 +218,7 @@ async def get_handoff_queue(
         description="逗号分隔 handoff 状态过滤，缺省=全部未关闭",
     ),
 ):
-    """坐席工作台待接入队列（轮询源）。"""
+    """坐席工作台待接入队列（WS 降级轮询源 / 初始全量拉取）。"""
     state_list = (
         [s.strip() for s in states.split(",") if s.strip()] if states else None
     )
@@ -227,6 +227,121 @@ async def get_handoff_queue(
         return await _async_handoff_queue(state_list, run_sync)
     except Exception as e:
         logger.warning(f"[CSAdmin] handoff queue failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
+
+@router.post("/agent/ws-ticket")
+async def issue_agent_ws_ticket():
+    """签发坐席 WS 一次性连接票据（60s TTL、单次使用）。
+
+    鉴权链：本端点受 X-API-Key 保护（BFF 服务端注入），浏览器持 ticket
+    完成 WS 握手 —— API Key 不进浏览器。路径注册在 /{conversation_id}/*
+    之前，"agent" 不会被当作 conversation_id。
+    """
+    from backend.customer_service.realtime import (
+        TICKET_TTL_SECONDS,
+        get_agent_hub,
+    )
+
+    return {
+        "ticket": get_agent_hub().issue_ticket(),
+        "ws_path": "/ws/cs/agent",
+        "ttl": TICKET_TTL_SECONDS,
+    }
+
+
+@router.post("/{conversation_id}/close")
+async def close_conversation(conversation_id: str, body: ClaimRequest):
+    """坐席关闭会话：waiting_human / human_active → closed。
+
+    关闭后同步失效 HandoffStore L1 缓存（否则用户侧下个 turn 仍读到
+    缓存里的排队中状态），并向坐席侧广播 conversation.closed。
+    """
+    if not body.agent_id.strip():
+        raise HTTPException(422, detail="agent_id is required")
+
+    from datetime import datetime, timezone
+
+    from backend.customer_service import handoff as handoff_sm
+    from backend.customer_service.errors import BusinessRuleError
+
+    try:
+        from sqlalchemy import select
+
+        from backend.customer_service.models.handoff import CSHandoff
+        from backend.memory.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            row = (
+                await db.execute(
+                    select(CSHandoff).where(
+                        CSHandoff.conversation_id == conversation_id,
+                        CSHandoff.handoff_state != "closed",
+                    ).limit(1)
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                raise HTTPException(
+                    404, detail="No open handoff for conversation"
+                )
+
+            current = handoff_sm.HandoffState(row.handoff_state)
+            handoff_sm.transition(
+                current, handoff_sm.HandoffState.CLOSED,
+            )
+            row.handoff_state = "closed"
+            row.closed_at = datetime.now(timezone.utc)
+            # 会话关闭前捕获（commit 后实例过期，作用域外不可再访问）
+            handoff_user_id = row.user_id
+
+            # 会话处理模式归位（human / waiting_human → ai）
+            from sqlalchemy import update
+
+            from backend.customer_service.models.conversation import (
+                CSConversation,
+            )
+
+            await db.execute(
+                update(CSConversation)
+                .where(CSConversation.handling_mode != "ai")
+                .where(
+                    CSConversation.conversation_id == conversation_id
+                )
+                .values(
+                    handling_mode="ai",
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            await db.commit()
+
+        # L1 缓存失效（缓存 key = (user_id, session_id)，handoff 行的
+        # conversation_id 即 session_id，user_id 行上有）
+        from backend.customer_service.handoff_store import (
+            get_handoff_store,
+        )
+
+        get_handoff_store().invalidate(handoff_user_id, conversation_id)
+
+        # 广播：工作台队列摘除 + 用户侧卡片状态刷新
+        from backend.customer_service.realtime import get_agent_hub
+
+        get_agent_hub().publish(
+            "conversation.closed",
+            conversation_id=conversation_id,
+            closed_by=body.agent_id.strip(),
+        )
+
+        return {
+            "conversation_id": conversation_id,
+            "handoff_state": "closed",
+            "closed_by": body.agent_id.strip(),
+        }
+    except HTTPException:
+        raise
+    except BusinessRuleError as e:
+        raise HTTPException(409, detail=str(e))
+    except Exception as e:
+        logger.warning(f"[CSAdmin] close failed: {e}")
         raise HTTPException(503, detail="Database unavailable")
 
 
@@ -525,6 +640,15 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
         )
         await db.commit()
 
+    # 广播：其他坐席队列摘除该会话 / 用户侧卡片切「人工已接入」
+    from backend.customer_service.realtime import get_agent_hub
+
+    get_agent_hub().publish(
+        "conversation.claimed",
+        conversation_id=conversation_id,
+        agent_id=agent_id,
+    )
+
     return {
         "conversation_id": conversation_id,
         "handoff_state": "human_active",
@@ -534,6 +658,8 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
 
 
 async def _async_agent_message(conversation_id: str, agent_id: str, content: str, run_sync):
+    from sqlalchemy import select
+
     from backend.customer_service.models.handoff import CSHandoff
     from backend.memory.database import AsyncSessionLocal
 
@@ -553,6 +679,14 @@ async def _async_agent_message(conversation_id: str, agent_id: str, content: str
                 detail=f"Conversation handoff is {row.handoff_state}, claim it first",
             )
 
+        # 会话行可能尚不存在（用户侧 CS turn 落库是 fire-and-forget），
+        # messages.conversation_id 有 FK，先 get_or_create 兜底
+        from backend.customer_service.managers.conversation_manager import (
+            ConversationManager,
+        )
+        conv_mgr = ConversationManager(db)
+        await conv_mgr.get_or_create(conversation_id, row.user_id)
+
         from backend.customer_service.managers.message_manager import MessageManager
 
         mgr = MessageManager(db)
@@ -560,6 +694,28 @@ async def _async_agent_message(conversation_id: str, agent_id: str, content: str
             conversation_id, content, sender_id=agent_id
         )
         await db.commit()
+
+        # 会话关闭前捕获字段（commit 后实例过期，退出作用域后不可再访问）
+        msg_payload = {
+            "message_id": msg.message_id,
+            "sender_type": msg.sender_type,
+            "content": msg.content,
+            "content_type": msg.content_type,
+            "created_at": (
+                msg.created_at.isoformat() if msg.created_at else ""
+            ),
+        }
+        msg_pk = msg.id
+
+    # 广播：坐席消息实时推给用户侧/其他坐席订阅（last_id 作增量游标）
+    from backend.customer_service.realtime import get_agent_hub
+
+    get_agent_hub().publish(
+        "message.created",
+        conversation_id=conversation_id,
+        last_id=msg_pk,
+        message=msg_payload,
+    )
 
     return AgentMessageResponse(
         message_id=msg.message_id,

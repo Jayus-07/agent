@@ -29,6 +29,7 @@ from backend.app.api.routes import (
     selection_decision,
     prompts,
     cs_admin,
+    cs_agent_ws,
     evaluation,
     internal_ai,
     approvals,
@@ -71,6 +72,7 @@ api_router.include_router(selection.router)  # 智能选品
 api_router.include_router(selection_decision.router)  # 选品决策
 api_router.include_router(prompts.router)  # Prompt 管理
 api_router.include_router(cs_admin.router)  # 客服会话管理
+api_router.include_router(cs_agent_ws.router)  # 坐席 WS 实时推送（ticket 鉴权，不走 X-API-Key）
 api_router.include_router(evaluation.router)  # 评测集管理
 api_router.include_router(internal_ai.router)  # Java→Python 工具网关（X-Internal-Token 鉴权）
 api_router.include_router(approvals.router)  # 写操作工具审批门（human-in-the-loop）
