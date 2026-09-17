@@ -192,3 +192,38 @@ econ **7**（毛利线 18%）→ rank **Top-5**：冻干鸡肉 67.0 / 洁齿骨 
 报告四段齐全：漏斗计数表、**极限词「销量第一」被合规层识别**、
 赛道画像（12 词 + 机会词）、痛点实证；RAG 桥接 0 chunks 降级空披露（设计路径实测）。
 跑后测试数据全清（3 批次，库回到 0 行）。
+
+
+## 十一、结果合理性复算 + RAG 知识库真实命中（2026-09-17 第七轮，04d4cfa）
+
+用户问「结果是合理的吗」+「做一个有结果命中的」。两层回应：
+
+### 结果合理性（每层淘汰可对样例数据复算）
+- pool 30→11：funnel_context 显式 platform=淘宝，样例 30 品中淘宝恰 11 品
+  （拼多多 8/天猫 6/京东 5/抖音 4 全被平台过滤），价格带全保留
+- screen 11→10：min_reviews=1000，淘宝 11 品中仅驯鹿骨（评价 350）不达线 → 淘汰 1
+- econ 10→7：毛利线 18% 淘汰 3（低价低毛利款）
+- rank 7→5：综合分排序；Top-1 冻干鸡肉（¥59.9/4.8 分/评价 12000）居首合理
+- 极限词「销量第一」（Top-5 内鸭胸肉冻干）只富化不淘汰（设计纪律）
+
+### RAG 知识库真实命中（从「0 chunks 降级」到「命中注入」）
+灌库：data/docs/policy_general/（第一级子目录名=kb_id，实测踩坑：
+放其他子目录会派生错 kb）新增《淘宝平台广告合规管理制度-宠物食品类目》，
+启动期增量索引 17 chunks，doc_type=compliance 正确析出。
+
+发现**双重死锁**（rag_enhance 原 query「宠物零食 淘宝 …广告法…」必空命中）：
+1. QueryAnalyzer 把「淘宝」析出 person_names → 硬过滤（严格相等），
+   而文档侧 person_names 是 jieba 逗号串含噪声（「严重者, 许可证…」）→ 必假阴性
+2. 「广告法」触发 business_domain=advertising，文档侧规则析出 product → 单值漂移
+
+桥接层修复（04d4cfa）：rag_enhance query 改「{类目} 平台合规规定 禁限售 选品案例」，
+析出仅剩 doc_type $in [policy,compliance]（与文档对齐）。
+**RAG 层待办**（留给 RAG 侧会话）：to_metadata_filter 对 person_names/organization
+的启发式析出不应做硬过滤，可仿 domains 的 $in+阈值改进；doc_registry 表无
+person_names 列（chunk metadata 有值，registry 无列，一致性核查可留）。
+
+命中结果：报告「合规与知识层提示」新增第三段**「知识库相关片段（知识库）」**，
+命中的正是知识库案例《宠物零食类目文案合规整改》——「销量第一」被判违规罚款的
+整改案例，与本次 Top-5 极限词扫描发现**互相印证**（闭环演示）。
+文档演示后已删，索引靠启动期 sync 自愈（delta.deleted → _remove_document）。
+测试 73 passed。
