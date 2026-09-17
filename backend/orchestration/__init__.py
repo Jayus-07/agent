@@ -26,13 +26,13 @@ orchestration — 基于 LangGraph 的 Multi-Agent 工作流系统
 
 # 注意：只 eager 导入轻量模块（state/tool_registry）。
 # graph 严禁在此导入 —— graph → builder → critique → plan_utils →
-# orchestration.tool_registry 会再次触发本包 __init__，若此处 eager 导 graph，
+# orchestration.capability_registry 会再次触发本包 __init__，若此处 eager 导 graph，
 # 任何"先导 planner/tool_registry"的调用方都会撞上循环导入
 # （2026-09-13 test_planner_critique 收集错误根因）。MultiAgentSystem
 # 经 PEP 562 __getattr__ 懒加载，`from backend.orchestration import
 # MultiAgentSystem` 用法保持不变。
 from backend.orchestration.state import AgentState, StepResult
-from backend.orchestration.tool_registry import ToolRegistry, tool_registry
+from backend.orchestration.capability_registry import ToolRegistry, tool_registry
 
 __all__ = [
     "AgentState",

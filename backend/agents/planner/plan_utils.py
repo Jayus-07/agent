@@ -6,12 +6,61 @@ _extract_json / _normalize_plan 历史上定义在 planner.py，critique.py 又�
 critique，形成 planner ↔ critique 循环导入（import 顺序敏感，先导 planner
 即收集失败）。抽到独立模块后 critique → plan_utils，双向依赖消失。
 
-依赖约束：本模块只允许依赖 shared/ + orchestration.tool_registry（轻量），
+依赖约束：本模块只允许依赖 shared/ + orchestration.capability_registry（轻量），
 禁止 import planner / critique / orchestration.graph。
 """
 from backend.observability.alerts import log_degradation, make_alert
-from backend.orchestration.tool_registry import tool_registry
+from backend.orchestration.capability_registry import tool_registry
 from backend.shared.logger import logger
+
+# 计划依赖链（edges 连成的最长路径）允许的最大深度。
+# 依据：supervisor 的 MAX_SUPERVISOR_LOOPS=10 是「全图循环轮次」——深度 d 的
+# 串行链约消耗 d+1 轮调度（逐层派发 + 1 轮完成判定），再留降级重试余量，
+# 8 是安全上限。超过它 supervisor 会在中途把剩余步骤全部判 failed（表现为
+# 「莫名其妙全军覆没」），因此必须在进入 supervisor 之前拦截。
+MAX_PLAN_DEPTH = 8
+
+
+def plan_depth(plan: dict) -> int:
+    """计算 plan 的依赖深度：edges 连成的最长路径上的节点数（纯函数）。
+
+    无环假设下按最长路 DP；若检测到环（拓扑无法收敛），返回
+    MAX_PLAN_DEPTH + 1（环本身就是不可调度的非法计划，直接超限）。
+
+    plan 形如 {"nodes": {...}, "edges": {"3": ["1", "2"]}}，
+    edges[k] = 步骤 k 依赖的步骤列表。
+    """
+    edges: dict[str, list[str]] = plan.get("edges", {}) or {}
+    if not edges:
+        return 0 if not plan.get("nodes") else 1
+
+    # 记忆化最长路（以节点计）。iterative DFS + on-stack 环检测。
+    depth_cache: dict[str, int] = {}
+    on_stack: set[str] = set()
+    has_cycle = False
+
+    def longest(node: str) -> int:
+        nonlocal has_cycle
+        if node in depth_cache:
+            return depth_cache[node]
+        if node in on_stack:  # 环
+            has_cycle = True
+            return 0
+        on_stack.add(node)
+        deps = edges.get(node) or []
+        best = 0
+        for d in deps:
+            best = max(best, longest(d))
+        on_stack.discard(node)
+        depth_cache[node] = best + 1
+        return best + 1
+
+    for sid in set(list(edges.keys()) + [d for ds in edges.values() for d in ds]):
+        longest(str(sid))
+
+    if has_cycle:
+        return MAX_PLAN_DEPTH + 1
+    return max(depth_cache.values()) if depth_cache else 0
 
 
 def extract_json(text: str) -> dict:

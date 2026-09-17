@@ -2,7 +2,7 @@
 """tool_schema 转换器 + validate_params（integer 别名/auto 参数）单测。"""
 import pytest
 
-from backend.orchestration.tool_registry import tool_registry
+from backend.orchestration.capability_registry import tool_registry
 from backend.orchestration.tool_schema import (
     capabilities_to_tools,
     capability_to_function,

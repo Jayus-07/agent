@@ -7,7 +7,7 @@ skills/sql/ — SQL 查询 Skill
 """
 from backend.skills.sql.models import SQLResult
 from backend.skills.sql.skill import SQLSkill, sql_skill_node
-from backend.orchestration.tool_registry import tool_registry
+from backend.orchestration.capability_registry import tool_registry
 
 tool_registry.register_skill_node("sql_skill", sql_skill_node)
 

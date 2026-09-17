@@ -66,7 +66,7 @@ class TestParamsDataset:
     """planner_params.json 健全性：capability 已注册、params 声明合法"""
 
     def test_dataset_loads_and_caps_registered(self):
-        from backend.orchestration.tool_registry import tool_registry
+        from backend.orchestration.capability_registry import tool_registry
 
         data = json.loads(DATASET.read_text(encoding="utf-8"))
         cases = data["test_cases"]

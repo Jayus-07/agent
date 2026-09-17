@@ -97,7 +97,7 @@ class TestSkillNodeSelfRegistration:
     def test_every_skill_has_registered_graph_node(self):
         """每个 Skill 实例都要有 <name>_skill 图节点（否则主图无节点可布线）。"""
         import backend.skills  # noqa: F401
-        from backend.orchestration.tool_registry import tool_registry
+        from backend.orchestration.capability_registry import tool_registry
         from backend.skills import registry as skill_reg
 
         nodes = set(tool_registry.get_skill_node_names())

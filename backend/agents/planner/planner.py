@@ -22,7 +22,7 @@ import json
 from backend.infra.cache import get_cache
 from backend.infra.llm import llm
 from backend.observability.alerts import log_degradation, make_alert
-from backend.orchestration.tool_registry import format_params_schema, tool_registry
+from backend.orchestration.capability_registry import format_params_schema, tool_registry
 from backend.prompts.planner import is_knowledge_question
 from backend.shared.logger import logger
 

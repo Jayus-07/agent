@@ -10,7 +10,7 @@ import pytest
 from backend.skills import (  # noqa: F401
     sql, rag, report, email, data_export, web_search, web_crawl,
 )
-from backend.orchestration.tool_registry import tool_registry
+from backend.orchestration.capability_registry import tool_registry
 
 
 class TestADRDualRegistryMerge:

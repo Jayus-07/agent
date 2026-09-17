@@ -13,6 +13,7 @@ Skill 节点由 tool_registry 自动发现，域图节点由 domain_graph_regist
 """
 
 import asyncio
+import threading
 
 from langgraph.graph import END, START, StateGraph
 
@@ -31,7 +32,7 @@ from backend.orchestration.graph.router_node import route_selector, router_node
 from backend.orchestration.graph.tool_selector import tool_selector_node
 from backend.orchestration.state import AgentState, OrchestratorState
 from backend.orchestration.supervisor.scheduler import route_after_supervisor, supervisor_node
-from backend.orchestration.tool_registry import tool_registry
+from backend.orchestration.capability_registry import tool_registry
 from backend.shared.logger import logger
 
 # 节点名 → 用户可读的阶段标签（单一事实源）。
@@ -71,12 +72,40 @@ def route_after_critique(state: AgentState) -> str:
 # async→sync 适配 (skill 节点是 async，graph 用 sync invoke)
 # =====================================================
 
+# ⚠️ 设计约定（2026-09-17 事件循环复用改造）::
+#   Skill 节点运行在线程本地事件循环上（每 worker 线程一个 loop，跨节点/
+#   跨请求复用）。因此 Skill 内部**禁止持有绑定"某一次调用"事件循环的
+#   全局 async 资源**（全局 aiohttp.ClientSession / asyncpg pool 等）——
+#   下次调用可能落在另一个线程的另一个 loop 上，触发
+#   "attached to a different loop" 错误。
+#   确需共享连接池：绑定到专用单线程 ThreadPoolExecutor(max_workers=1)
+#   并在节点内用 run_in_executor 派发，或直接走同步客户端。
+_thread_local = threading.local()
+
+
+def _get_thread_loop() -> asyncio.AbstractEventLoop:
+    """取当前线程的复用事件循环（懒创建；关闭过则重建）。"""
+    loop = getattr(_thread_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        _thread_local.loop = loop
+    return loop
+
+
 def _make_sync(async_fn):
-    """将 async 函数包装为同步函数，避免 LangGraph sync invoke 报错"""
+    """将 async 函数包装为同步函数，避免 LangGraph sync invoke 报错。
+
+    2026-09-17 前用 ``asyncio.run``——每次调用新建事件循环，开销大且使
+    "loop 内创建的 task/call_later" 无法跨调用观测。现改为线程本地 loop
+    复用（run_until_complete）：同线程内多次调用共享同一 loop，
+    asyncio.create_task / get_running_loop 在协程内照常可用。
+    """
     import functools
+
     @functools.wraps(async_fn)
     def wrapper(state: dict) -> dict:
-        return asyncio.run(async_fn(state))
+        loop = _get_thread_loop()
+        return loop.run_until_complete(async_fn(state))
     return wrapper
 
 

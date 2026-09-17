@@ -516,6 +516,24 @@ async def register_workflows_and_schedules():
         logger.warning(f"[Startup] 定时任务注册失败（非致命）: {e}")
 
 
+@app.on_event("startup")
+async def log_tool_registry_summary():
+    """启动期打印 Tool 层注册汇总（2026-09-17 新增）。
+
+    给 tools/tool_registry 接运行时消费方之二：启动日志即暴露
+    「已加载 Tool 数 / 重复定义 / 异常」。Tool 模块随 skills 包加载
+    （builder 的 import backend.skills），此处汇总数即最终数。
+    软失败：注册表异常不阻塞应用启动。
+    """
+    try:
+        import backend.skills  # noqa: F401  # 确保地图等经 Skill 包导入的 Tool 也已注册
+        from backend.tools.tool_registry import tool_registry
+
+        tool_registry.log_registration_summary()
+    except Exception as e:
+        logger.warning(f"[Startup] Tool 注册汇总失败（非致命）: {e}")
+
+
 # ═══════════════════════════════════════════════════
 # 启动 WhatsApp 闭环 Kafka 消费者（KAFKA_CONSUMER_ENABLED 控制）
 # ═══════════════════════════════════════════════════

@@ -17,7 +17,7 @@ def _capability_owner(cap: str) -> Optional[str]:
     if not cap:
         return None
     try:
-        from backend.orchestration.tool_registry import tool_registry
+        from backend.orchestration.capability_registry import tool_registry
         inst = tool_registry._get_skill_registry().get(cap)
         return f"{inst.name}_skill" if inst else None
     except Exception:  # noqa: BLE001 — 注册表不可用时不过滤（向后兼容）

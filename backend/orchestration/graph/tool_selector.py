@@ -34,7 +34,7 @@ from backend.config import (
 from backend.infra.llm import llm
 from backend.infra.llm.proxy import bind_tools_for_model, get_active_model_name
 from backend.infra.timeout import safe_call_with_timeout
-from backend.orchestration.tool_registry import tool_registry
+from backend.orchestration.capability_registry import tool_registry
 from backend.orchestration.tool_schema import (
     capabilities_to_tools,
     capability_to_function_name,

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from backend.customer_service.graph_builder import build_cs_graph
 from backend.orchestration.graph.builder import build_graph
-from backend.orchestration.tool_registry import tool_registry
+from backend.orchestration.capability_registry import tool_registry
 from backend.travel.graph_builder import build_travel_graph
 
 MAIN_BUILTIN = {

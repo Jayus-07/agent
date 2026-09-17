@@ -20,7 +20,7 @@ import json
 import re
 from typing import Optional
 
-from backend.orchestration.tool_registry import tool_registry
+from backend.orchestration.capability_registry import tool_registry
 
 # OpenAI function name 约束: ^[a-zA-Z0-9_-]+$
 _FUNC_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")

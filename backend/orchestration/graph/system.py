@@ -20,7 +20,7 @@ from backend.orchestration.graph.runner import (
     GraphRunner,
     trace_from_state,
 )
-from backend.orchestration.tool_registry import tool_registry
+from backend.orchestration.capability_registry import tool_registry
 from backend.shared.logger import logger
 
 

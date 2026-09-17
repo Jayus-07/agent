@@ -26,6 +26,27 @@ from backend.shared.logger import logger
 
 _router_cache = get_cache("router", ttl=300)
 
+# 路由缓存键的上下文版本号。当前 RouteDecision 只依赖 query（mode/capability
+# 与用户无关），context 仅作为**预留键位**参与键构造。一旦路由决策开始依赖
+# 上下文（个性化能力、部门级路由等），递增此版本号即可让全部旧缓存自然失
+# 效，无需清理。
+_ROUTE_CACHE_CONTEXT_VERSION = "v1"
+
+
+def _route_cache_key(query: str, context: dict | None = None) -> str:
+    """构造路由缓存键：版本 + 排序后的上下文位 + query 原文。
+
+    2026-09-17 前键只含 ``query.strip().lower()``——路由一旦未来依赖
+    user/department 上下文，不同用户/部门的同文 query 会互串答案。
+    现预留 context 键位：当前调用方传 department/user_id（同值不影响
+    命中率），未来加维度只改调用方与版本号。
+    """
+    parts = [_ROUTE_CACHE_CONTEXT_VERSION]
+    ctx = context or {}
+    parts.extend(f"{k}={ctx[k]}" for k in sorted(ctx))
+    parts.append(query.strip().lower())
+    return "|".join(parts)
+
 
 class Router:
     """3 层 fallback Router。"""
@@ -36,13 +57,12 @@ class Router:
         # 兜底层超时由 ROUTER_LLM_TIMEOUT 统一控制（默认 6s，原 12s）
         self.llm = LLMRouter(timeout=llm_timeout)
 
-    def route(self, query: str) -> RouteDecision:
+    def route(self, query: str, context: dict | None = None) -> RouteDecision:
         """同步路由入口 — 含 Trace Span（每层判断结果记录为 event）。
 
-        链路:
-          1. Rule (0.001s)
-          2. Embedding (0.03s)
-          3. LLM (3-5s)
+        context: 路由缓存键的上下文位（预留）。当前决策不依赖它，但键里
+        会带上——未来路由个性化时无需迁移缓存语义。router_node 传
+        {department, user_id}。
         """
         from backend.observability.metrics import record_router_decision
 
@@ -56,7 +76,7 @@ class Router:
         final_layer = "llm"  # 默认 LLM 兜底
 
         # ── 缓存命中：跳过全部 3 层路由 ──
-        _cached_data = _router_cache.get_json(query.strip().lower())
+        _cached_data = _router_cache.get_json(_route_cache_key(query, context))
         cached = RouteDecision(**_cached_data) if _cached_data is not None else None
         if cached is not None:
             trace_collector.add_event(
@@ -104,7 +124,7 @@ class Router:
                          "mode": result.execution_mode.value},
                 status="success",
             )
-            _router_cache.set_json(query.strip().lower(), result.model_dump())
+            _router_cache.set_json(_route_cache_key(query, context), result.model_dump())
             return result
         else:
             # 弱信号 → 给 hint，交给下层
@@ -139,7 +159,7 @@ class Router:
                          "mode": result.execution_mode.value},
                 status="success",
             )
-            _router_cache.set_json(query.strip().lower(), result.model_dump())
+            _router_cache.set_json(_route_cache_key(query, context), result.model_dump())
             return result
         elif vec_has_candidates and vec_conf >= 0.6:
             final_layer = "embedding"
@@ -161,7 +181,7 @@ class Router:
                          "mode": result.execution_mode.value},
                 status="success",
             )
-            _router_cache.set_json(query.strip().lower(), result.model_dump())
+            _router_cache.set_json(_route_cache_key(query, context), result.model_dump())
             return result
         else:
             vec_top = result.candidates[0].name if (result and result.candidates) else ""
@@ -227,12 +247,12 @@ class Router:
                      "mode": result.execution_mode.value},
             status="success",
         )
-        _router_cache.set_json(query.strip().lower(), result.model_dump())
+        _router_cache.set_json(_route_cache_key(query, context), result.model_dump())
         return result
 
-    async def aroute(self, query: str) -> RouteDecision:
+    async def aroute(self, query: str, context: dict | None = None) -> RouteDecision:
         """异步路由入口（FastAPI 场景）。"""
-        return await asyncio.to_thread(self.route, query)
+        return await asyncio.to_thread(self.route, query, context)
 
 
 # ── 模块级单例 ──

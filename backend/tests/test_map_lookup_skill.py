@@ -11,7 +11,7 @@ import pytest
 
 from backend.orchestration.router.types import ALL_CAPABILITIES
 from backend.orchestration.router.vector_router import ROUTE_EXAMPLES
-from backend.orchestration.tool_registry import tool_registry
+from backend.orchestration.capability_registry import tool_registry
 from backend.skills.map.skill import ACTIONS, MapLookupSkill, map_lookup_tool
 
 

@@ -1,6 +1,7 @@
 # Agent / Skill / Tool / MCP 四层设计规范
 
-- **版本**：v1.3（2026-09-16）· v1.2 → v1.3 修订：§5 域图补 2 步接线（prefilter + `router_node.py` 硬编码链路）、§5 顶部加操作手册入口（见 §7 #19）
+- **版本**：v1.4（2026-09-17）· v1.3 → v1.4 修订：**E7 解决**——orchestration 侧正式改名 `orchestration/capability_registry.py`（35 处 import 同步更新，旧路径留废弃 shim，`backend/tests/orchestration/test_orchestration_debt_fixes.py` 守护）；**E5 部分解决**——Tool 注册表新增 2 个运行时消费方（app 启动期汇总日志 `log_tool_registry_summary` + `GET /agents/tools` 运行时清单）；Planner prompt 补计划深度 ≤8 约束（critique 机器守门，防 supervisor 10 轮上限全军覆没）
+- **历史版本**：v1.3（2026-09-16）· v1.2 → v1.3 修订：§5 域图补 2 步接线（prefilter + `router_node.py` 硬编码链路）、§5 顶部加操作手册入口（见 §7 #19）
 - **历史版本**：v1.2（2026-09-16）· v1.1 → v1.2 修订：§4 补 E9（`routed:false` 对 Planner 不生效）、§8 加 P2 跟进项、`capabilities.yaml` 头部补「反直觉设计」备忘并更正 2 处不实的 `reason`（见 §7 #16–18）
 - **适用范围**：`backend/` 下所有 Agent 编排、Skill、Tool、MCP Server、Workflow 的新增与修改
 - **强制力**：§6 列出的规则由 pytest 守护，违反即测试失败；§4 例外台账内的条目是**登记在案**的偏离，不是可以随意复制的先例
@@ -54,7 +55,7 @@ Tool 不得 import Skill；Skill 不得 import Planner；Infrastructure 不得 i
 | Agent | `orchestration/graph/builder.py`（主图 8 节点，见 §3.1） | `orchestration/graph/system.py` |
 | 域包 | `backend/<domain>/register.py`（`DomainGraph` 四元组，域代码与主图同级的独立包） | 由下面的触发器 import → builder 自动布线 |
 | 域触发器 | `backend/domains/__init__.py`（**每新增一域加一行 import**，当前 2 行）<br>⚠️ `backend/domains/` 只是触发器，**不含任何域代码**；域代码在 `backend/travel/`、`backend/customer_service/` | builder 自动布线（节点 + 条件边 + 直连 END） |
-| Skill | `skills/<name>/skill.py`（类声明）+ `skills/registry.py`（实例登记） | `orchestration/tool_registry.py` 派生 `CAPABILITY_MAP` |
+| Skill | `skills/<name>/skill.py`（类声明）+ `skills/registry.py`（实例登记） | `orchestration/capability_registry.py` 派生 `CAPABILITY_MAP` |
 | Capability 路由 | `orchestration/router/capabilities.yaml` | `router/manifest.py` → `types.py` / `vector_router.py` / `llm_router.py` |
 | Tool | `backend/tools/<mod>.py`（`@tool` + 底部 `tool_registry.register`） | `tools/tool_registry.py` |
 | MCP | `mcp_servers/servers/<name>.py`（`MCPServer` 子类） | `mcp_servers/servers/__init__.py::register_all()` |
@@ -125,7 +126,7 @@ domain_graph_registry.register(DomainGraph(
 
 ```python
 # skills/<name>/__init__.py
-from backend.orchestration.tool_registry import tool_registry
+from backend.orchestration.capability_registry import tool_registry
 from backend.skills.<name>.skill import <Name>Skill, <name>_skill_node
 
 tool_registry.register_skill_node("<name>_skill", <name>_skill_node)
@@ -178,10 +179,10 @@ tool_registry.register(<fn>, __file__)
 > | 模块 | 是什么 | 数据源 | 生产消费方 |
 > |---|---|---|---|
 > | `backend/tools/tool_registry.py` | **Tool** 注册表 | 各 Tool 模块底部 `register()` | **无**（消费方是质量脚本 + 守护测试） |
-> | `backend/orchestration/tool_registry.py` | **Capability** 注册表 | `skills/registry.py` 的 Skill 实例派生 | Planner / Critique / tool_selector / direct_executor / builder / system / supervisor … |
+> | `backend/orchestration/capability_registry.py` | **Capability** 注册表 | `skills/registry.py` 的 Skill 实例派生 | Planner / Critique / tool_selector / direct_executor / builder / system / supervisor … |
 >
 > 本节说的 `tool_registry` 一律指**前者**。`CAPABILITY_SCHEMA` 是**后者**的
-> `cached_property`（`orchestration/tool_registry.py:106`），与 Tool 注册表无关 ——
+> `cached_property`（`orchestration/capability_registry.py:106`），与 Tool 注册表无关 ——
 > 「Planner 用的是 CAPABILITY_SCHEMA」**不等于**「Planner 不用 tool_registry」。
 >
 > **Tool 注册表的职责**（它是 Tool 层的发现与查重权威，不是死代码）：
@@ -246,11 +247,11 @@ MCP 不是新的一层，而是 **Tool 的对外协议封装**。
 | **E2** | Skill 覆盖 `execute()` 绕过输出归一化 | `skills/sql`、`skills/business_analysis` | 需返回结构化结果（`SQLResult.model_dump()` / `BusinessInsight`），由 `output_type="structured"` 语义驱动 | 保留。新增覆盖须在 PR 说明理由并在本表登记 |
 | **E3** | capability 命名风格个别不一致 | `travel.poi_search` 是「域.子域_动词」，其余为「域.动词」 | 结构上合法（正则只要求一个点）；改名会破坏路由/前端契约 | 保留为历史例外。**新 capability 统一用 `<域>.<动词>`** |
 | **E4** | MCP 部分工具参数手写 | `rag.list_documents` / `rag.get_stats` / `sql.list_tables` | 无 Tool 等价物 | 保留，代码内已注明 |
-| **E5** | `tools/tool_registry.py`（Tool 注册表）无运行时消费方 | 消费方是 `scripts/tool_quality_check.py` + `test_layer_consistency.py`，均在运行时之外 | Tool 层与 Capability 层职责分离的必然结果：Planner 的输入是 Capability 层（`orchestration/tool_registry.py`），Tool 层只负责定义、内聚与可发现性 | **不作为缺陷处理**。定位已收窄为「静态发现 + 重复定义防护 + 运行期登记」（§3.3）。若未来要让 MCP 暴露全部 Tool，先评估 prompt 膨胀 |
+| **E5** | `tools/tool_registry.py`（Tool 注册表）运行时消费方不足 | ~~消费方是 `scripts/tool_quality_check.py` + `test_layer_consistency.py`，均在运行时之外~~ **2026-09-17 新增 2 个运行时消费方**：①app 启动钩子 `server.py::log_tool_registry_summary`（打印已加载/重复数）②管理端只读清单 `GET /agents/tools`（含 not_loaded/phantom 漂移检测） | Tool 层与 Capability 层职责分离不变：Planner 的输入是 Capability 层（`orchestration/capability_registry.py`）。Tool 层定位 = 「静态发现 + 重复定义防护 + 运行期登记 + **运行时可观测**」（§3.3）。若未来要让 MCP 暴露全部 Tool，先评估 prompt 膨胀 |
 | **E6** | 两套路由索引 | capability/workflow 走 `vector_router`（manifest 派生）；`orchestration/workflow/router.py::TaskRouter` 自建 embed 索引 | TaskRouter 现仅测试在用 | 生产路由一律以 manifest + `vector_router` 为准；**禁止向 TaskRouter 加新依赖**，长期应下线 |
-| **E7** | 两个同名 `tool_registry` 模块 | `tools/tool_registry.py`（Tool 表）与 `orchestration/tool_registry.py`（Capability 表） | ADR-0001 合并双注册表时未同步改名 | 两处 docstring 已加模块级澄清注释。长期宜把 orchestration 侧改名 `capability_registry.py`（涉及 30+ 处 import，列入 §8 遗留） |
+| **E7** | ~~两个同名 `tool_registry` 模块~~ **✅ 已解决（2026-09-17）** | orchestration 侧已改名 `orchestration/capability_registry.py`，35 处 import 同步更新；旧路径 `orchestration/tool_registry.py` 保留为废弃 shim（import 即 DeprecationWarning）；全仓不得再出现旧路径引用，由 `test_orchestration_debt_fixes.py::test_no_stray_old_import_paths` 机器守护 |
 | **E8** | 存量 Tool 返回非 JSON（Markdown / 纯文本） | 34 个 Tool 中 **16 个 JSON**（`map/` 全部 14 + `travel/poi` + `sql.execute_sql_tool`），**18 个非 JSON**（`competitor` 4 · `email` 4 · `web` 2 · `memory` 2 · `sql.sql_query_tool` 1 · `rag` 1 · `report` 1 · `data_collection` 1 · `calculator` 1 · `export` 1）<br>另：`sql.execute_sql_tool` 的异常分支是 `raise` 而非 `fail(...)`，同样偏离 | 存量 Tool 多为「委托子系统 + 返回人类可读结果」：`sql_query_tool` 走 NL→SQL Agent 输出 Markdown 表格，`search_knowledge_tool` 输出 RAG 生成的文本，`competitor.*` 直接产出 Markdown 报告。这些契约已被前端渲染、evaluation runner 与 `final_answer` 消费，改 JSON 是**破坏性变更**且无功能收益 | 保留。**§3.3 第 3 条已同步收窄为「仅对新增 Tool 强制」**。存量若要统一，须先盘点下游消费方并单独立项，不得在无关改动中顺手改造 |
-| **E9** | `routed: false` 的隔离只覆盖**路由层**，未覆盖 Planner / Critique | 3 个内部能力：`email.watch` · `competitor.watch` · `competitor.history`<br>**已隔离**：`rule_router`（`_COMPETITOR_KEYWORDS` 只指向 `competitor.analyze`）· `vector_router`（`ROUTE_EXAMPLES` 只取 `routed_capabilities`）· `llm_router`（校验 `ALL_CAPABILITIES`，仅 14 个）<br>**未隔离**：`agents/planner/planner.py::_format_capabilities_schema()` 与 `agents/planner/critique.py` 规则 1 都遍历 `tool_registry.get_available_capabilities()`（**17 个全含**） | 数据源不同：路由层消费 `router/types.py::ALL_CAPABILITIES`（manifest 的 `routed_capabilities`），Planner / Critique 消费 `orchestration/tool_registry`（由 Skill 自注册派生，按设计含全部声明过的能力）。`routed` 字段从未被 Planner 链消费 | **保留，但须明确语义**：`routed: false` = 「不参与**用户问题路由**」，**不等于**「Planner 不可见」。<br>**风险点**：Planner prompt 只渲染 `description / params / 示例`，**不渲染 `routed` 与 `reason`**，LLM 无从判断某能力是内部的。`email.watch` 是默认 `timeout_sec=120` 的阻塞长轮询（`tools/email.py::watch_email_tool` → `agently_watch`），其 `reason` 自述「仅通知闭环与 automation 内部使用」，却与 14 个公开能力并列出现在可选清单中。<br>**若需收紧**：在 `_format_capabilities_schema()` 过滤非 routed 能力、或为其追加「内部能力」标记 —— 属**行为变更**（影响 LLM 可见能力集），须单独评估，不在本次改动范围 |
+| **E9** | `routed: false` 的隔离只覆盖**路由层**，未覆盖 Planner / Critique | 3 个内部能力：`email.watch` · `competitor.watch` · `competitor.history`<br>**已隔离**：`rule_router`（`_COMPETITOR_KEYWORDS` 只指向 `competitor.analyze`）· `vector_router`（`ROUTE_EXAMPLES` 只取 `routed_capabilities`）· `llm_router`（校验 `ALL_CAPABILITIES`，仅 14 个）<br>**未隔离**：`agents/planner/planner.py::_format_capabilities_schema()` 与 `agents/planner/critique.py` 规则 1 都遍历 `tool_registry.get_available_capabilities()`（**17 个全含**） | 数据源不同：路由层消费 `router/types.py::ALL_CAPABILITIES`（manifest 的 `routed_capabilities`），Planner / Critique 消费 `orchestration/capability_registry`（由 Skill 自注册派生，按设计含全部声明过的能力）。`routed` 字段从未被 Planner 链消费 | **保留，但须明确语义**：`routed: false` = 「不参与**用户问题路由**」，**不等于**「Planner 不可见」。<br>**风险点**：Planner prompt 只渲染 `description / params / 示例`，**不渲染 `routed` 与 `reason`**，LLM 无从判断某能力是内部的。`email.watch` 是默认 `timeout_sec=120` 的阻塞长轮询（`tools/email.py::watch_email_tool` → `agently_watch`），其 `reason` 自述「仅通知闭环与 automation 内部使用」，却与 14 个公开能力并列出现在可选清单中。<br>**若需收紧**：在 `_format_capabilities_schema()` 过滤非 routed 能力、或为其追加「内部能力」标记 —— 属**行为变更**（影响 LLM 可见能力集），须单独评估，不在本次改动范围 |
 
 ---
 
@@ -330,7 +331,7 @@ MCP 不是新的一层，而是 **Tool 的对外协议封装**。
 | 8 | 上述规则无守护 | 新增 10 条守护断言 | `backend/tests/test_layer_consistency.py`（新） |
 | 9 | **质量脚本跑不起来**（`IndentationError`，L131），是漏注册长期无人发现的真正原因 | 修缩进；补 `sys.path` 自举；期望清单由硬编码 10 条改为 AST 派生 | `scripts/tool_quality_check.py` |
 | 10 | `_clean` 版脚本与主脚本两套清单会漂移 | 收敛为薄包装，实现只留一份 | `scripts/tool_quality_check_clean.py` |
-| 11 | 两个同名 `tool_registry` 模块易混（本次误判的根因） | 两处模块 docstring 加同名澄清；AST 发现逻辑收进 Tool 注册表作唯一判据 | `backend/tools/tool_registry.py`、`backend/orchestration/tool_registry.py` |
+| 11 | 两个同名 `tool_registry` 模块易混（本次误判的根因） | 两处模块 docstring 加同名澄清；AST 发现逻辑收进 Tool 注册表作唯一判据 | `backend/tools/tool_registry.py`、`backend/orchestration/capability_registry.py` |
 | 12 | §3.3「Tool 必须返回 JSON」写成全域必须，但实测仅 16/34 达标，且 §4 台账未登记 | 措辞收窄为「**新增** Tool 必须」+ 补 §4 **E8** 记录存量 18 个非 JSON Tool 的现状、理由与不改造约束 | 本文件 §3.3、§4 |
 | 13 | 11 个 routed capability 的 examples 仅 2–4 条，低于规范自荐的 5–10 条（4 个刚好卡硬下限 2 条） | 逐条补到 6 条，并写入「examples 撰写要点」（条数是召回余量、须落在能力边界内）；`business.analyze` 等 11 个 | `orchestration/router/capabilities.yaml` |
 | 14 | §1 事实源清单把「域包 `register.py`」与「`domains/__init__.py` 触发器」写得像同一目录 | 拆成「域包 / 域触发器」两行，并注明 `backend/domains/` 只是触发器、不含域代码 | 本文件 §1 |
@@ -370,7 +371,7 @@ VectorRouter 启动时会按新的 examples 总数自检并自动重建 Chroma �
 | P1 | E1-② `agents/capability` 只有 1 个实现 | 需拍板：要么落地为业务 agent 唯一基座，要么标记 deprecated |
 | P2 | E6 `TaskRouter` 自建索引仍在测试中使用 | 与 `vector_router` 功能重叠，建议下线并迁移测试 |
 | P2 | `.mcp.json`（仓库根）外部 6 个 MCP server | 属开发机客户端配置，未纳入 §3.4 治理；如需团队统一，应移入受版本控制的配置并文档化 |
-| P2 | E7 两个同名 `tool_registry` 模块 | 已加 docstring 澄清。正式改名 `orchestration/capability_registry.py` 需动 30+ 处 import，建议与下次大范围重构合并执行 |
+| P2 | ~~E7 两个同名 `tool_registry` 模块~~ **✅ 已解决（2026-09-17）** | 已改名 `orchestration/capability_registry.py` 并全仓更新 35 处 import，旧路径留废弃 shim + 守护测试。详见 §4 E7 |
 | P2 | 质量脚本未接入任何门禁 | `scripts/tool_quality_check.py` 已修好可运行，但没有 CI 调用它（见末行）。真正的门禁是 `test_layer_consistency.py`（pytest 覆盖到），脚本定位为人工诊断入口 |
 | P3 | `agent-mcp-service-1` 容器长期 `unhealthy` | 8091 端口的 MCP 服务健康检查未通过，与本层规范无关，需单独排查（容器运行时问题，非代码问题） |
 | P3 | 覆盖率门禁 `--cov-fail-under=55` 形同虚设 | 局部运行会覆写项目级 `coverage.xml` / `.coverage` / `htmlcov/`（`pytest.ini` 的 `addopts` 带 `--cov-report=xml:coverage.xml`，无按运行范围隔离），项目内不存在可信全量覆盖率数字。<br>**2026-09-16 实证**：仅运行 2 个守护测试文件 → 25 个用例全绿，但进程以 `EXIT=1` 退出（`Coverage failure: total of 9 is less than fail-under=55`），且 `coverage.xml` 被覆写为 9% 的部分覆盖率。<br>**规避**：局部跑测试一律加 `--no-cov`（CI 全量跑不受影响）。 |

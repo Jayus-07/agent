@@ -19,9 +19,13 @@ critique.py — Plan Critique 节点（P2 性能优化：规则化）
 import json
 
 from backend.infra.llm import llm
-from backend.orchestration.tool_registry import tool_registry
-from backend.agents.planner.plan_utils import extract_json as _extract_json
-from backend.agents.planner.plan_utils import normalize_plan as _normalize_plan
+from backend.orchestration.capability_registry import tool_registry
+from backend.agents.planner.plan_utils import (
+    MAX_PLAN_DEPTH,
+    extract_json as _extract_json,
+    normalize_plan as _normalize_plan,
+    plan_depth as _plan_depth,
+)
 from backend.observability.alerts import make_alert, log_degradation
 from backend.prompts.service import prompt_service
 from backend.shared.logger import logger
@@ -84,6 +88,22 @@ def _check_redundant_knowledge(question: str, nodes: dict) -> list[str]:
     return []
 
 
+def _check_plan_depth(plan: dict) -> list[str]:
+    """规则5: 依赖深度超限（supervisor 10 轮调度上限的前置守门）。
+
+    MAX_PLAN_DEPTH=8 的推导见 plan_utils。超深计划进了 supervisor 会在
+    中途把剩余步骤全判 failed（浪费 10 轮循环后全军覆没）；在此拦截并
+    要求 LLM 扁平化，LLM 也救不回来时由 critique_node 的 backstop 兜底。
+    """
+    depth = _plan_depth(plan)
+    if depth > MAX_PLAN_DEPTH:
+        return [
+            f"计划依赖深度 {depth} 超过上限 {MAX_PLAN_DEPTH}"
+            f"（supervisor 调度轮次约束），请扁平化：合并串行步骤或改为并行"
+        ]
+    return []
+
+
 def _run_rules(question: str, plan: dict) -> list[str]:
     """跑所有规则，返回问题列表。空列表表示计划无需修正。"""
     nodes = plan.get("nodes", {})
@@ -96,6 +116,7 @@ def _run_rules(question: str, plan: dict) -> list[str]:
     issues += _check_edges_valid(nodes, edges)
     issues += _check_missing_analysis(question, nodes)
     issues += _check_redundant_knowledge(question, nodes)
+    issues += _check_plan_depth(plan)
     return issues
 
 
@@ -149,6 +170,29 @@ def _auto_fix_plan(plan: dict, issues: list[str], question: str) -> dict:
         return plan
 
     return {"nodes": nodes, "edges": edges}
+
+
+def _depth_backstop(plan: dict) -> tuple[dict, bool]:
+    """深度兜底（机器守门，prompt 约束失效时的最后防线）。
+
+    规则引擎已要求 LLM 扁平化；若 LLM 修正后（或修正失败回退时）深度仍
+    超限，**拒绝该计划**（返回空 plan + 告警）——空 plan 会经
+    route_after_critique 直达 Reporter，绝不带超限计划进 supervisor，
+    避免烧满 10 轮循环后剩余步骤全军覆没。
+    """
+    if _plan_depth(plan) <= MAX_PLAN_DEPTH:
+        return plan, False
+    alert = make_alert("PLAN_DEPTH_EXCEEDED", {
+        "depth": _plan_depth(plan),
+        "max": MAX_PLAN_DEPTH,
+        "nodes": len(plan.get("nodes", {})),
+    })
+    log_degradation(alert)
+    logger.error(
+        f"[Critique] 计划依赖深度 {_plan_depth(plan)} 超过上限 "
+        f"{MAX_PLAN_DEPTH} 且无法自动扁平化，拒绝进入 supervisor"
+    )
+    return {"nodes": {}, "edges": {}}, True
 
 
 def critique_node(state: dict) -> dict:
@@ -215,10 +259,15 @@ def critique_node(state: dict) -> dict:
 
         if not corrected or not corrected.get("nodes"):
             logger.warning("[Critique] LLM 返回空计划，使用规则修复结果")
-            plan_changed = json.dumps(plan, sort_keys=True) != json.dumps(auto_fixed, sort_keys=True)
+            auto_fixed, rejected = _depth_backstop(auto_fixed)
+            plan_changed = not rejected and json.dumps(plan, sort_keys=True) != json.dumps(auto_fixed, sort_keys=True)
             return {"plan": auto_fixed, "_plan_critiqued": True, "_plan_changed": plan_changed}
 
         corrected = _normalize_plan(corrected)
+        corrected, rejected = _depth_backstop(corrected)
+        if rejected:
+            return {"plan": corrected, "_plan_critiqued": True, "_plan_changed": True}
+
         plan_changed = (
             json.dumps(plan, sort_keys=True) != json.dumps(corrected, sort_keys=True)
         )
@@ -235,5 +284,6 @@ def critique_node(state: dict) -> dict:
 
     except Exception as e:
         logger.warning(f"[Critique] LLM 审查失败，使用规则修复结果: {e}")
-        plan_changed = json.dumps(plan, sort_keys=True) != json.dumps(auto_fixed, sort_keys=True)
+        auto_fixed, rejected = _depth_backstop(auto_fixed)
+        plan_changed = not rejected and json.dumps(plan, sort_keys=True) != json.dumps(auto_fixed, sort_keys=True)
         return {"plan": auto_fixed, "_plan_critiqued": True, "_plan_changed": plan_changed}

@@ -96,8 +96,14 @@ def router_node(state: dict) -> dict:
         except Exception:
             logger.debug("[RouterNode] router_init span 记录失败", exc_info=True)
             router = get_router()
-        # 同步调用（router 主流程是同步的）
-        decision = router.route(query)
+        # 同步调用（router 主流程是同步的）。
+        # context 进入路由缓存键（预留位）：同文 query 在不同 user/department
+        # 下不会互串缓存。当前路由决策本身不依赖上下文，故不改变行为。
+        route_context = {
+            "department": state.get("department") or "",
+            "user_id": state.get("user_id") or "",
+        }
+        decision = router.route(query, context=route_context)
         logger.info(
             f"[RouterNode] mode={decision.execution_mode.value} "
             f"conf={decision.confidence:.2f} "

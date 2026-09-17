@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 
-from backend.orchestration.tool_registry import tool_registry
+from backend.orchestration.capability_registry import tool_registry
 from backend.orchestration.router.types import ExecutionMode
 from backend.shared.logger import logger
 

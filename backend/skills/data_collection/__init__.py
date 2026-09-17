@@ -1,5 +1,5 @@
 """skills/data_collection — 数据采集 Skill"""
-from backend.orchestration.tool_registry import tool_registry
+from backend.orchestration.capability_registry import tool_registry
 from backend.skills.data_collection.skill import DataCollectionSkill, data_collection_skill_node
 
 # 图节点由本包自注册（与其他 Skill 包同一约定，2026-09-16 归一）

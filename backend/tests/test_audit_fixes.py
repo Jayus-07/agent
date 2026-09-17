@@ -224,7 +224,7 @@ class TestComplaintIdempotency:
 
 class TestParamsSchemaRendering:
     def test_typed_and_legacy_formats(self):
-        from backend.orchestration.tool_registry import format_params_schema
+        from backend.orchestration.capability_registry import format_params_schema
 
         text = format_params_schema({
             "url": {"type": "string", "required": True, "description": "目标地址"},

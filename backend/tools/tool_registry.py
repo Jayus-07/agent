@@ -9,11 +9,11 @@
 ⚠️ 与同名模块的区分（读 import 路径，别看名字）::
 
     backend/tools/tool_registry.py          ← 本模块：**Tool** 注册表（34 个 @tool）
-    backend/orchestration/tool_registry.py  ← **Capability** 注册表（从 Skill 派生，
+    backend/orchestration/capability_registry.py  ← **Capability** 注册表（从 Skill 派生，
                                                被 Planner / tool_selector / builder 消费）
 
 两者同名不同物。本表**不参与** Planner prompt —— Planner 的输入来自
-Capability 层（``CAPABILITY_SCHEMA`` 是 ``orchestration.tool_registry`` 的
+Capability 层（``CAPABILITY_SCHEMA`` 是 ``orchestration.capability_registry`` 的
 派生属性，与本表无关）。
 
 消费方：``scripts/tool_quality_check.py``、``backend/tests/test_layer_consistency.py``

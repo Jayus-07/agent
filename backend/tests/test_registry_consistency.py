@@ -14,7 +14,7 @@ import pytest
 class TestCapabilityDerivation:
     def test_capability_map_derived_from_skills(self):
         """CAPABILITY_MAP 与 skills/registry 实例一一对应，非硬编码。"""
-        from backend.orchestration.tool_registry import tool_registry
+        from backend.orchestration.capability_registry import tool_registry
         from backend.skills import registry as skill_reg
 
         expected = {cap: f"{inst.name}_skill" for cap, inst in skill_reg._registry.items()}
@@ -22,7 +22,7 @@ class TestCapabilityDerivation:
 
     def test_capability_schema_derives_descriptions(self):
         """schema 的 description 与 Skill 类声明同步（Planner prompt 来源）。"""
-        from backend.orchestration.tool_registry import tool_registry
+        from backend.orchestration.capability_registry import tool_registry
         from backend.skills.rag.skill import RAGSkill
 
         schema = tool_registry.get_schema("rag.search")
@@ -30,7 +30,7 @@ class TestCapabilityDerivation:
 
     def test_every_capability_has_executable_skill(self):
         """每个 capability 都能经 get() 拿到 Skill 实例（防打错名运行时才炸）。"""
-        from backend.orchestration.tool_registry import tool_registry
+        from backend.orchestration.capability_registry import tool_registry
         from backend.skills import registry as skill_reg
 
         for cap in tool_registry.get_available_capabilities():

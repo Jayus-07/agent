@@ -1,185 +1,29 @@
 """
-tool_registry.py — **Capability** 注册表（派生视图）
+tool_registry.py — ⚠️ 已废弃别名（deprecated shim）
 
-⚠️ 命名澄清（易混，务必看清 import 路径）::
+本模块原是 **Capability** 注册表本体，2026-09-17 改名为
+``backend/orchestration/capability_registry.py``（与 ``backend/tools/tool_registry.py``
+同名异物曾造成大量误判，详见新模块头部「命名沿革」）。
 
-    backend/orchestration/tool_registry.py  ← 本模块：**Capability** 注册表
-                                              数据源是 Skill（不是 Tool）
-    backend/tools/tool_registry.py          ← **Tool** 注册表（34 个 @tool，
-                                              运行时无消费方）
-
-两者同名不同物。本模块是被 Planner / Critique / tool_selector /
-direct_executor / builder / system 重度消费的那一个 ——
-``CAPABILITY_SCHEMA`` 是**本模块**的派生属性，与 ``tools/tool_registry.py``
-没有任何关系。
-（长期应收敛命名：本模块宜改名 ``capability_registry.py``；涉及 30+ 处
-import，未在 2026-09-16 归一，登记于四层设计规范 §8 遗留项。）
-
-ADR-0001: 合并双注册表
-  - 静态字典 CAPABILITY_MAP / CAPABILITY_SCHEMA 已废弃
-  - 改为从 backend.skills.registry 的 Skill 实例动态派生
-  - 单一事实来源：Skill 类自身的 description/params_schema/examples
-
-Skill 自己持有 Tool，Tool 调用 Infrastructure。
-Planner → Capability → Skill → Tool → Infrastructure
+旧 import 路径暂保留兼容（容器内旧代码 / 外部脚本平滑过渡）。
+**新代码一律 import 新模块**；守护测试扫描全仓，除本 shim 外出现
+``backend.orchestration.tool_registry`` 引用即失败（见
+backend/tests/orchestration/test_capability_registry_rename.py）。
 """
+import warnings
 
-import json
-from functools import cached_property
-from typing import Dict, List, Optional
+warnings.warn(
+    "backend.orchestration.tool_registry 已改名，请 import "
+    "backend.orchestration.capability_registry",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-from backend.shared.logger import logger
+from backend.orchestration.capability_registry import (  # noqa: F401,E402
+    ToolRegistry,
+    _node_name,
+    format_params_schema,
+    tool_registry,
+)
 
-
-# ── 节点名约定 ──────────────────────────────────────────────
-# Skill.name + "_skill" → LangGraph 节点名
-# 例: RAGSkill.name="rag" → 节点名 "rag_skill"
-def _node_name(skill_name: str) -> str:
-    return f"{skill_name}_skill"
-
-
-def format_params_schema(schema_params: dict) -> str:
-    """渲染参数 schema 为 Planner/Critique prompt 可读文本。
-
-    支持两种写法（向后兼容）:
-      - 类型化: {"type": "string", "required": True, "description": ..., "enum": [...]}
-      - 旧式:   "参数说明文本"（视为 string 可选）
-    """
-    lines = []
-    for name, spec in schema_params.items():
-        if isinstance(spec, dict):
-            p_type = spec.get("type", "string")
-            required = "必填" if spec.get("required") else "可选"
-            enum = spec.get("enum")
-            enum_text = f"，可选值: {'|'.join(map(str, enum))}" if enum else ""
-            lines.append(f"- {name} ({p_type}, {required}{enum_text}): {spec.get('description', '')}")
-        else:
-            lines.append(f"- {name} (string, 可选): {spec}")
-    return "\n".join(lines)
-
-
-class ToolRegistry:
-    """Capability 派生注册表。
-
-    所有 capability 元数据从已注册的 Skill 实例派生（不是硬编码）：
-      - CAPABILITY_MAP:    capability → 节点名（f"{skill.name}_skill"）
-      - CAPABILITY_SCHEMA: capability → {description, params, 示例}
-
-    注册一个 Skill（两步）：
-      1. 在 skills/<name>/skill.py 继承 BaseSkill，声明 capabilities + description
-      2. 在 skills/registry.py import → 自动加入
-
-    builder.py / system.py / planner.py 不再硬编码节点名或 capability 列表。
-    """
-
-    def __init__(self):
-        self._skill_nodes: dict[str, object] = {}  # node_name → async node function
-
-    # =====================================================
-    # Skill 节点注册（Skill 包 import 时自注册）
-    # =====================================================
-
-    def register_skill_node(self, name: str, node_func):
-        """Skill 包加载时自行调用，注册节点名 → 节点函数"""
-        self._skill_nodes[name] = node_func
-        logger.debug(f"[ToolRegistry] 注册 Skill: {name}")
-
-    def get_skill_nodes(self) -> dict:
-        """返回 {node_name: node_func}（builder.py 用于 add_node）"""
-        return dict(self._skill_nodes)
-
-    def get_skill_node_names(self) -> set:
-        """返回所有已注册的 Skill 节点名集合（system.py 用于事件分派）"""
-        return set(self._skill_nodes.keys())
-
-    # =====================================================
-    # 派生私有方法：从 skills/registry 读 Skill 实例
-    # =====================================================
-
-    def _get_skill_registry(self) -> dict[str, "BaseSkill"]:
-        """延迟读取 Skill 注册表（避免循环导入）
-
-        所有 Skill 已在 registry 模块级注册（PR-2.x 消除外部惰性加载）。
-        """
-        from backend.skills.registry import _registry as skills
-        return skills
-
-    # =====================================================
-    # 派生属性（替代原静态字典）
-    # =====================================================
-
-    @cached_property
-    def CAPABILITY_MAP(self) -> Dict[str, str]:
-        """派生：capability → LangGraph 节点名"""
-        return {
-            cap: _node_name(inst.name)
-            for cap, inst in self._get_skill_registry().items()
-        }
-
-    @cached_property
-    def CAPABILITY_SCHEMA(self) -> Dict[str, dict]:
-        """派生：capability → Planner prompt schema"""
-        result = {}
-        for cap, inst in self._get_skill_registry().items():
-            result[cap] = {
-                "description": inst.description,
-                "params": dict(inst.params_schema),
-                "示例": inst.examples[0] if inst.examples else {},
-            }
-        return result
-
-    # =====================================================
-    # 公开 API（保持兼容）
-    # =====================================================
-
-    def get_node(self, capability: str) -> Optional[str]:
-        """根据 capability 获取对应的图节点名"""
-        node = self.CAPABILITY_MAP.get(capability)
-        if not node:
-            logger.warning(f"[ToolRegistry] 未知 capability: {capability}")
-        return node
-
-    def get_worker(self, capability: str) -> Optional[str]:
-        """向后兼容别名（同 get_node）"""
-        return self.get_node(capability)
-
-    def get_schema(self, capability: str) -> Optional[dict]:
-        """获取 capability 的参数 schema"""
-        return self.CAPABILITY_SCHEMA.get(capability)
-
-    def get_available_capabilities(self) -> List[str]:
-        """返回所有可用的 capability 列表"""
-        return list(self.CAPABILITY_MAP.keys())
-
-    def get_capabilities_description(self) -> str:
-        """生成 Planner prompt 用的能力描述文本"""
-        lines = []
-        for cap_name, schema in self.CAPABILITY_SCHEMA.items():
-            lines.append(f"  - {cap_name}: {schema['description']}")
-        return "\n".join(lines)
-
-    def get_capabilities_schema_text(self) -> str:
-        """生成完整的 capability schema 文本，用于 Critique prompt"""
-        lines = []
-        for cap_name in self.get_available_capabilities():
-            schema = self.get_schema(cap_name)
-            if not schema:
-                continue
-            lines.append(f"### {cap_name}")
-            lines.append(f"描述: {schema['description']}")
-            lines.append("参数:")
-            lines.append(format_params_schema(schema["params"]))
-            if "示例" in schema:
-                lines.append(f"示例: {json.dumps(schema['示例'], ensure_ascii=False)}")
-            lines.append("")
-        return "\n".join(lines)
-
-    def invalidate_cache(self):
-        """清除 cached_property 缓存（测试 / 动态加载新 Skill 后调用）"""
-        for attr in ("CAPABILITY_MAP", "CAPABILITY_SCHEMA"):
-            if attr in self.__dict__:
-                del self.__dict__[attr]
-
-
-# 全局单例
-tool_registry = ToolRegistry()
+__all__ = ["ToolRegistry", "tool_registry", "format_params_schema", "_node_name"]

@@ -22,7 +22,7 @@ class _FakeRouter:
     def __init__(self, decision):
         self._decision = decision
 
-    def route(self, query):
+    def route(self, query, context=None):
         return self._decision
 
 
