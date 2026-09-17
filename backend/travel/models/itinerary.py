@@ -22,6 +22,21 @@ KIND_VISIT = "visit"
 KIND_MEAL = "meal"
 KIND_REST = "rest"
 
+# ============================================================
+# plan 状态机与版本链常量（任务书 §4）
+# ============================================================
+# 状态流转：validating（排程/重排出生时）→ ready / degraded（validator 判定）。
+# needs_clarification / needs_user_decision 属于**图级**状态（无 itinerary 产物），
+# 不在此枚举；failed 时无行程可挂，同样不落此字段。
+PLAN_STATUS_VALIDATING = "validating"
+PLAN_STATUS_READY = "ready"
+PLAN_STATUS_DEGRADED = "degraded"
+
+# 版本产生原因
+CHANGE_INITIAL = "initial"        # 全新首版
+CHANGE_BRIEF = "brief_changed"    # 需求变化触发的重规划首版
+CHANGE_REPAIR = "repair"          # 校验失败后的修复重排
+
 
 class ItineraryItem(BaseModel):
     """行程中的一项安排
@@ -120,6 +135,62 @@ class Itinerary(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     repair_rounds: int = Field(default=0, description="局部修复轮数，>0 表示首版未通过校验")
+
+    # ============================================================
+    # 版本链与状态机（任务书 §4）
+    # ============================================================
+    # 与 brief_fingerprint 的分工：指纹是「变更检测的快速通道」（每轮比对，
+    # 变了就 planning_reset）；版本号是「产物追溯的账本」——回答
+    # 「这版行程基于哪个需求、哪份数据、从哪一版改来、为什么改」。
+    plan_version: int = Field(default=1, ge=1, description="行程版本号；修复重排 +1")
+    parent_plan_version: int | None = Field(
+        default=None, description="修复自哪一版；重规划首版为 None（旧版已作废）")
+    brief_version: int = Field(
+        default=1, ge=1, description="生成本行程时的需求版本号快照")
+    data_snapshot_version: str = Field(
+        default="", description="候选池数据快照签名（poi_id+source 哈希）；空表示未记录")
+    created_at: str = Field(
+        default="", description="本版生成时刻（ISO 8601 UTC）；空表示未记录")
+    change_reason: str = Field(
+        default=CHANGE_INITIAL, description="本版产生原因：initial/repair/brief_changed")
+    changed_fields: list[str] = Field(
+        default_factory=list,
+        description="相对上一版的变化字段（brief_changed=需求差异键；repair=修复动作摘要）")
+    status: str = Field(
+        default=PLAN_STATUS_VALIDATING,
+        description="plan 状态机：validating → ready/degraded；failed 无产物不落此字段")
+
+    def stamp_version(
+        self,
+        brief: TravelBrief,
+        *,
+        reason: str = CHANGE_INITIAL,
+        parent: "Itinerary | None" = None,
+        data_snapshot: str = "",
+        changed_fields: list[str] | None = None,
+    ) -> None:
+        """在行程出生/重排时盖版本章（唯一写入点，避免各节点各写一套）。
+
+        data_snapshot 传空表示沿用旧值（修复重排时候选池未变）。
+        """
+        # 延迟导入：顶层 import 会经 providers.travel.__init__ 拉起
+        # tools.travel → cost.py → 本模块，形成循环初始化（实测 ImportError）
+        from backend.providers.travel.facts import now_iso
+
+        self.plan_version = (parent.plan_version + 1) if parent is not None else 1
+        self.parent_plan_version = parent.plan_version if parent is not None else None
+        self.brief_version = brief.version
+        # 快照继承：显式传入优先；否则继承 parent（修复重排时候选池未变）；
+        # 无 parent 时保持自身（新构造行程为空串，由调用方显式传入）
+        self.data_snapshot_version = (
+            data_snapshot
+            or (parent.data_snapshot_version if parent is not None else "")
+            or self.data_snapshot_version
+        )
+        self.created_at = now_iso()
+        self.change_reason = reason
+        self.changed_fields = list(changed_fields or [])
+        self.status = PLAN_STATUS_VALIDATING
 
     def total_pois(self) -> int:
         return sum(len(d.visit_items()) for d in self.days)

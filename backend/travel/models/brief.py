@@ -81,6 +81,9 @@ class TravelBrief(BaseModel):
     must_go: list[str] = Field(default_factory=list)
     avoid: list[str] = Field(default_factory=list)
     pace: str = "moderate"
+    # 需求版本号（任务书 §4 三层版本之一）：指纹变化触发重规划时 +1，
+    # 承担「这版行程基于哪个需求」的追溯；指纹只做变更检测的快速通道。
+    version: int = Field(default=1, ge=1, description="需求版本号，重规划时递增")
 
     def missing_slots(self) -> list[str]:
         """返回缺失的必填槽位（保持 REQUIRED_SLOTS 的稳定顺序）。

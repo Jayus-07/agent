@@ -22,6 +22,7 @@ from datetime import date
 from backend.shared.logger import logger
 from backend.tools.travel import poi_seed
 from backend.travel.graph_state import load_brief
+from backend.travel.models.itinerary import CHANGE_BRIEF
 from backend.travel.models.brief import (
     PACE_KEYWORDS,
     PREFERENCE_KEYWORDS,
@@ -422,6 +423,21 @@ def slot_filler_node(state: dict) -> dict:
     # 仅在「有上一轮指纹且不同」时失效：首次进入（无指纹）不算变化
     brief_changed = bool(last_fingerprint) and last_fingerprint != fingerprint
 
+    # 版本链（任务书 §4）：指纹变化 = 需求实质变化 → version +1，并记录
+    # 变化原因与差异字段（transit expert 盖版本章时消费）。必须先递增再
+    # 构造 update —— update["brief"] 要带着新版本号落库。
+    brief_change_reason = ""
+    brief_changed_fields: list[str] = []
+    if brief_changed and previous is not None:
+        brief.version = previous.version + 1
+        brief_change_reason = CHANGE_BRIEF
+        old_dump = previous.model_dump()
+        new_dump = brief.model_dump()
+        brief_changed_fields = sorted(
+            k for k in new_dump
+            if k != "version" and old_dump.get(k) != new_dump[k]
+        )
+
     logger.info(
         "[TravelSlotFiller] destination=%r days=%s missing=%s changed=%s",
         brief.destination, brief.days, missing, brief_changed,
@@ -455,9 +471,14 @@ def slot_filler_node(state: dict) -> dict:
         # 需求变了：旧行程作废，连同执行态一起清掉重新规划。
         # 注意 planning_reset() 会把 notes 置空，所以 notes 必须在它之后写。
         update.update(planning_reset())
+        # 变化原因与差异字段不进 planning_reset 清单：变化当轮产生、当轮被
+        # transit expert 消费（盖版本章），跨轮保留也无害（下次变化会覆盖）。
+        update["brief_change_reason"] = brief_change_reason
+        update["brief_changed_fields"] = brief_changed_fields
         notes.insert(0, "需求已变化，已按新需求重新规划（上一版行程作废）")
-        logger.info("[TravelSlotFiller] 需求指纹变化 %s→%s，清空规划产物重排",
-                    last_fingerprint, fingerprint)
+        logger.info("[TravelSlotFiller] 需求指纹变化 %s→%s（brief v%d，变化字段 %s），清空规划产物重排",
+                    last_fingerprint, fingerprint, brief.version,
+                    brief_changed_fields or "未知")
 
     update["notes"] = notes
     return update

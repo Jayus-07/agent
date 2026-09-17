@@ -209,8 +209,14 @@ def _render_itinerary(state: dict, itinerary) -> str:
 
     confidence = itinerary.confidence
     level = "高" if confidence >= 0.75 else ("中" if confidence >= 0.5 else "低")
+    # 版本脚注（任务书 §4）：让「这版行程基于哪个需求、哪一版改来」可追溯。
+    # 修复产生的版本明示 parent；重规划首版（无 parent）只报需求版本。
+    lineage = (f"自 v{itinerary.parent_plan_version} 修复而来"
+               if itinerary.parent_plan_version else "首版")
     lines.append(
-        f"\n*置信度 {confidence:.2f}（{level}）—— 由约束通过度与数据完备度计算，非模型自评。"
+        f"\n*行程 v{itinerary.plan_version}（{lineage}，需求 v{itinerary.brief_version}，"
+        f"状态 {itinerary.status}）—— 置信度 {confidence:.2f}（{level}），"
+        f"由约束通过度与数据完备度计算，非模型自评。"
         f"修复轮数 {itinerary.repair_rounds}，硬约束上限 "
         f"{T.TRAVEL_MAX_REPAIR_ROUNDS} 轮。*"
     )

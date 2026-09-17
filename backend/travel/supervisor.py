@@ -39,6 +39,7 @@ from backend.travel.graph_state import (
     TRAVEL_SUPERVISOR,
     TRAVEL_TRANSIT_EXPERT,
     TRAVEL_VALIDATOR,
+    load_brief,
     load_itinerary,
     load_validation,
 )
@@ -183,6 +184,17 @@ def travel_supervisor_node(state: dict) -> Command:
         decision.stage.value, target, step_count, decision.reason,
     )
 
+    # 版本事实（任务书 §4/§5）：决策可复现的前提是「产物属于当前需求」。
+    # brief 与 itinerary 的版本号随决策落 trace —— 版本错位（不应发生，
+    # planning_reset 在槽位层已兜住）能在 trace 里一眼定位，而不是靠猜。
+    itinerary = load_itinerary(state)
+    brief = load_brief(state)
+    version_facts = {
+        "brief_version": brief.version,
+        "plan_version": itinerary.plan_version if itinerary else None,
+        "plan_status": itinerary.status if itinerary else None,
+    }
+
     return Command(
         goto=target,
         update={
@@ -192,6 +204,7 @@ def travel_supervisor_node(state: dict) -> Command:
                 "reason": decision.reason,
                 "step": step_count,
                 "layer": "rule",
+                **version_facts,
             },
             "step_count": step_count,
             "current_expert": _STAGE_TO_EXPERT.get(decision.stage, ""),

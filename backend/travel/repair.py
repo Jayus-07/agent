@@ -24,6 +24,7 @@ from backend.tools.travel.cost import estimate_cost
 from backend.tools.travel.routing import route_km
 from backend.travel.experts.transit import rebuild_days
 from backend.travel.models.itinerary import (
+    CHANGE_REPAIR,
     Itinerary,
     ItineraryDay,
     ItineraryItem,
@@ -98,6 +99,14 @@ def repair_itinerary(
     repaired.warnings = list(itinerary.warnings)
     repaired.sources = list(itinerary.sources)
     repaired.cost = estimate_cost(repaired.days, itinerary.brief.party_size)
+    # 版本章（任务书 §4）：修复产物是旧版的直接后继 —— plan_version +1、
+    # parent 指向旧版；候选池未变，data_snapshot 沿用旧值。
+    repaired.stamp_version(
+        itinerary.brief,
+        reason=CHANGE_REPAIR,
+        parent=itinerary,
+        changed_fields=[f"dropped:{','.join(a.dropped)}" for a in actions if a.dropped],
+    )
 
     logger.info("[TravelRepair] 第 %d 轮修复: actions=%d 天数 %d→%d",
                 repaired.repair_rounds, len(actions),

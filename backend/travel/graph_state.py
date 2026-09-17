@@ -64,6 +64,10 @@ class TravelGraphState(TypedDict, total=False):
     # 上一轮 brief 的指纹：跨轮（checkpointer 开启）时用来判断需求是否变化，
     # 变了就清空规划产物重排，避免拿新约束贴旧行程
     brief_fingerprint: str
+    # 需求变化的原因与差异字段（slot_filler 检测到指纹变化时写，transit expert
+    # 构造行程时读取盖版本章；不进 planning_reset 清单——变化当轮产生当轮消费）
+    brief_change_reason: str
+    brief_changed_fields: list[str]
 
     # === 规划产物 ===
     candidates: list[dict]
@@ -190,6 +194,22 @@ def brief_fingerprint(brief: TravelBrief) -> str:
     }
     blob = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
+
+
+def data_snapshot_version(candidates: list[dict]) -> str:
+    """候选池数据快照签名（任务书 §4 三层版本之一）。
+
+    回答「这版行程基于哪份数据」：poi_id + source 的有序哈希 —— 同一 POI
+    换了数据源（seed:local → tencent:lbs）即视为数据版本变化。候选池是
+    排程的完整输入投影，签名稳定且可复现。
+    """
+    if not candidates:
+        return ""
+    payload = sorted(
+        f"{c.get('poi_id', '')}|{c.get('source', '')}" for c in candidates
+    )
+    blob = "\n".join(payload)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:8]
 
 
 def planning_reset() -> dict:

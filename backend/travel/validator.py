@@ -25,7 +25,11 @@ from typing import Callable
 
 from backend.config import travel as T
 from backend.shared.logger import logger
-from backend.travel.models.itinerary import Itinerary
+from backend.travel.models.itinerary import (
+    PLAN_STATUS_DEGRADED,
+    PLAN_STATUS_READY,
+    Itinerary,
+)
 from backend.travel.models.validation import (
     CODE_BUDGET_OVER,
     CODE_BUDGET_TIGHT,
@@ -396,6 +400,10 @@ def travel_validator_node(state: dict) -> dict:
 
     report = check_itinerary(itinerary)
     itinerary.confidence = compute_confidence(itinerary, report)
+    # plan 状态机判定（任务书 §4）：状态在事实产生处落库 —— 有 error 即
+    # degraded（可能伴随如实披露交付），全过即 ready。
+    itinerary.status = (PLAN_STATUS_READY if not report.errors
+                        else PLAN_STATUS_DEGRADED)
 
     return {
         "itinerary": save_itinerary(itinerary),

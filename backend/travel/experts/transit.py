@@ -21,9 +21,15 @@ from backend.shared.logger import logger
 from backend.tools.travel.cost import day_cost
 from backend.tools.travel.routing import estimate_leg, route_km
 from backend.travel.experts.base import run_expert_safely
-from backend.travel.graph_state import load_brief, load_itinerary, save_itinerary
+from backend.travel.graph_state import (
+    data_snapshot_version,
+    load_brief,
+    load_itinerary,
+    save_itinerary,
+)
 from backend.travel.models.brief import TravelBrief
 from backend.travel.models.itinerary import (
+    CHANGE_INITIAL,
     Itinerary,
     ItineraryDay,
     ItineraryItem,
@@ -242,9 +248,20 @@ def transit_expert_node(state: dict) -> dict:
         ]
         _prefetch_day_legs(pois_by_day)
         itinerary, notes = build_itinerary(brief, pois_by_day)
-        logger.info("[TravelTransit] 排程完成 days=%d legs=%d",
+        # 版本章（任务书 §4）：出生即回答「基于哪个需求、哪份数据、为什么产生」。
+        # 重规划轮的 change_reason 由 slot_filler 写入 state；候选池签名按
+        # state.candidates 全集计算（含未排入项 —— 数据版本不等同于行程内容）。
+        itinerary.stamp_version(
+            brief,
+            reason=state.get("brief_change_reason") or CHANGE_INITIAL,
+            data_snapshot=data_snapshot_version(state.get("candidates", [])),
+            changed_fields=list(state.get("brief_changed_fields") or []),
+        )
+        logger.info("[TravelTransit] 排程完成 days=%d legs=%d plan=v%d(brief v%d %s)",
                     len(itinerary.days),
-                    sum(len(d.legs) for d in itinerary.days))
+                    sum(len(d.legs) for d in itinerary.days),
+                    itinerary.plan_version, itinerary.brief_version,
+                    itinerary.change_reason)
         return {"status": "success",
                 "data": {"itinerary": save_itinerary(itinerary)},
                 "notes": notes}
