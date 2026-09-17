@@ -168,6 +168,131 @@ async def get_conversation_traces(conversation_id: str):
     return {"conversation_id": conversation_id, "traces": traces}
 
 
+# ── 人工介入（坐席侧）─────────────────────────────────────
+# v1 坐席工作台走轮询（2s），机制说明见 docs/customer-service/演示沙盒方案-2026-09-17.md §七。
+# 企业标准是 WebSocket/SSE 推送坐席队列，此处先用轮询保证 APISIX 兼容与实现简单。
+
+
+class HandoffQueueItem(BaseModel):
+    conversation_id: str
+    user_id: str
+    handoff_state: str
+    trigger_type: str | None = None
+    trigger_reason: str | None = None
+    updated_at: str
+    last_message_preview: str | None = None
+
+
+class HandoffQueueResponse(BaseModel):
+    items: list[HandoffQueueItem]
+    total: int
+
+
+class ClaimRequest(BaseModel):
+    agent_id: str
+
+
+class AgentMessageRequest(BaseModel):
+    agent_id: str
+    content: str
+
+
+class AgentMessageResponse(BaseModel):
+    message_id: str
+    sender_type: str
+    content: str
+    created_at: str
+
+
+class HandoffMessagesResponse(BaseModel):
+    conversation_id: str
+    handoff_state: str
+    last_id: int
+    messages: list[MessageDTO]
+
+
+@router.get("/handoff/queue", response_model=HandoffQueueResponse)
+async def get_handoff_queue(
+    states: str | None = Query(
+        None,
+        description="逗号分隔 handoff 状态过滤，缺省=全部未关闭",
+    ),
+):
+    """坐席工作台待接入队列（轮询源）。"""
+    state_list = (
+        [s.strip() for s in states.split(",") if s.strip()] if states else None
+    )
+    try:
+        from backend.customer_service._db_loop import run_sync
+        return await _async_handoff_queue(state_list, run_sync)
+    except Exception as e:
+        logger.warning(f"[CSAdmin] handoff queue failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
+
+@router.post("/{conversation_id}/claim")
+async def claim_conversation(conversation_id: str, body: ClaimRequest):
+    """坐席认领会话：handoff → human_active。
+
+    仅允许 waiting_human → human_active；handoff_requested 说明用户刚发起、
+    尚未进入排队（由客服运行时流转），返回 409 让坐席稍后再认领。
+    """
+    if not body.agent_id.strip():
+        raise HTTPException(422, detail="agent_id is required")
+
+    from backend.customer_service.errors import BusinessRuleError
+
+    try:
+        from backend.customer_service._db_loop import run_sync
+        return await _async_claim(
+            conversation_id, body.agent_id.strip(), run_sync
+        )
+    except HTTPException:
+        raise
+    except BusinessRuleError as e:
+        raise HTTPException(409, detail=str(e))
+    except Exception as e:
+        logger.warning(f"[CSAdmin] claim failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
+
+@router.post("/{conversation_id}/agent-messages", response_model=AgentMessageResponse)
+async def post_agent_message(conversation_id: str, body: AgentMessageRequest):
+    """坐席发言：落库为 human_agent 消息（用户侧经消息增量接口/后续 SSE 可见）。"""
+    if not body.agent_id.strip() or not body.content.strip():
+        raise HTTPException(422, detail="agent_id and content are required")
+
+    try:
+        from backend.customer_service._db_loop import run_sync
+        return await _async_agent_message(
+            conversation_id, body.agent_id.strip(), body.content.strip(), run_sync
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[CSAdmin] agent message failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
+
+@router.get("/{conversation_id}/messages", response_model=HandoffMessagesResponse)
+async def get_conversation_messages(
+    conversation_id: str,
+    since_id: int = Query(0, ge=0, description="只返回 id > since_id 的消息"),
+    limit: int = Query(100, ge=1, le=200),
+):
+    """会话消息增量拉取（用户侧/坐席侧轮询源，private 消息不返回）。"""
+    try:
+        from backend.customer_service._db_loop import run_sync
+        return await _async_messages_since(
+            conversation_id, since_id, limit, run_sync
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[CSAdmin] messages since failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
+
 # ── Async helpers ────────────────────────────────────────
 
 async def _async_list_conversations(
@@ -315,3 +440,178 @@ async def _async_get_trace_ids(conversation_id: str, run_sync):
             .order_by(CSMessage.trace_id)
         )
         return [row[0] for row in result.all()]
+
+
+async def _async_handoff_queue(state_list, run_sync):
+    from sqlalchemy import select
+
+    from backend.customer_service.models.handoff import CSHandoff
+    from backend.customer_service.models.message import CSMessage
+    from backend.memory.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        from backend.customer_service.repository import HandoffRepository
+
+        repo = HandoffRepository(db)
+        rows = await repo.list_open(states=state_list)
+
+        items = []
+        for h in rows:
+            last_msg = (
+                await db.execute(
+                    select(CSMessage)
+                    .where(
+                        CSMessage.conversation_id == h.conversation_id,
+                        CSMessage.private.is_(False),
+                    )
+                    .order_by(CSMessage.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            items.append(HandoffQueueItem(
+                conversation_id=h.conversation_id,
+                user_id=h.user_id,
+                handoff_state=h.handoff_state,
+                trigger_type=h.trigger_type,
+                trigger_reason=h.trigger_reason,
+                updated_at=h.updated_at.isoformat() if h.updated_at else "",
+                last_message_preview=(
+                    last_msg.content[:80] if last_msg else None
+                ),
+            ))
+        return HandoffQueueResponse(items=items, total=len(items))
+
+
+async def _async_claim(conversation_id: str, agent_id: str, run_sync):
+    """认领会话：waiting_human → human_active + conversation.handling_mode=human。"""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select, update
+
+    from backend.customer_service import handoff as handoff_sm
+    from backend.customer_service.models.conversation import CSConversation
+    from backend.customer_service.models.handoff import CSHandoff
+    from backend.memory.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(CSHandoff).where(
+                CSHandoff.conversation_id == conversation_id,
+                CSHandoff.handoff_state != "closed",
+            ).limit(1)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            raise HTTPException(404, detail="No open handoff for conversation")
+        if row.handoff_state == handoff_sm.HandoffState.HUMAN_ACTIVE.value:
+            return {
+                "conversation_id": conversation_id,
+                "handoff_state": row.handoff_state,
+                "agent_id": agent_id,
+                "already_claimed": True,
+            }
+
+        # 状态机校验（handoff_requested → human_active 为非法转换）
+        handoff_sm.transition(
+            handoff_sm.HandoffState(row.handoff_state),
+            handoff_sm.HandoffState.HUMAN_ACTIVE,
+        )
+
+        row.handoff_state = handoff_sm.HandoffState.HUMAN_ACTIVE.value
+        await db.execute(
+            update(CSConversation)
+            .where(CSConversation.conversation_id == conversation_id)
+            .values(handling_mode="human", updated_at=datetime.now(timezone.utc))
+        )
+        await db.commit()
+
+    return {
+        "conversation_id": conversation_id,
+        "handoff_state": "human_active",
+        "agent_id": agent_id,
+        "already_claimed": False,
+    }
+
+
+async def _async_agent_message(conversation_id: str, agent_id: str, content: str, run_sync):
+    from backend.customer_service.models.handoff import CSHandoff
+    from backend.memory.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(CSHandoff).where(
+                CSHandoff.conversation_id == conversation_id,
+                CSHandoff.handoff_state != "closed",
+            ).limit(1)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            raise HTTPException(404, detail="No open handoff for conversation")
+        if row.handoff_state != "human_active":
+            raise HTTPException(
+                409,
+                detail=f"Conversation handoff is {row.handoff_state}, claim it first",
+            )
+
+        from backend.customer_service.managers.message_manager import MessageManager
+
+        mgr = MessageManager(db)
+        msg = await mgr.save_human_agent_message(
+            conversation_id, content, sender_id=agent_id
+        )
+        await db.commit()
+
+    return AgentMessageResponse(
+        message_id=msg.message_id,
+        sender_type=msg.sender_type,
+        content=msg.content,
+        created_at=msg.created_at.isoformat() if msg.created_at else "",
+    )
+
+
+async def _async_messages_since(conversation_id: str, since_id: int, limit: int, run_sync):
+    from sqlalchemy import select
+
+    from backend.customer_service.models.handoff import CSHandoff
+    from backend.customer_service.models.message import CSMessage
+    from backend.memory.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        handoff_row = (
+            await db.execute(
+                select(CSHandoff).where(
+                    CSHandoff.conversation_id == conversation_id,
+                    CSHandoff.handoff_state != "closed",
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+
+        rows = (
+            await db.execute(
+                select(CSMessage)
+                .where(
+                    CSMessage.conversation_id == conversation_id,
+                    CSMessage.private.is_(False),
+                    CSMessage.id > since_id,
+                )
+                .order_by(CSMessage.id)
+                .limit(limit)
+            )
+        ).scalars().all()
+
+        last_id = max((r.id for r in rows), default=since_id)
+        return HandoffMessagesResponse(
+            conversation_id=conversation_id,
+            handoff_state=handoff_row.handoff_state if handoff_row else "closed",
+            last_id=last_id,
+            messages=[
+                MessageDTO(
+                    message_id=m.message_id,
+                    sender_type=m.sender_type,
+                    content=m.content,
+                    content_type=m.content_type,
+                    created_at=m.created_at.isoformat() if m.created_at else "",
+                )
+                for m in rows
+            ],
+        )

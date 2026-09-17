@@ -78,6 +78,7 @@ export const NAV: NavEntry[] = [
       { label: '工具审批', path: '/approvals' },
       { label: '客服对话', path: '/cs' },
       { label: '客服会话', path: '/cs/conversations' },
+      { label: '人工接入坐席', path: '/cs/handoff' },
       { label: '库存告警工单', path: '/alerts' },
     ],
   },

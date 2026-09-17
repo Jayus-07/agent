@@ -3,6 +3,8 @@
 import { Headphones } from 'lucide-react'
 import { CS_QUICK_PROMPTS } from './constants'
 
+const DEMO_MODE = process.env.NEXT_PUBLIC_CS_DEMO_MODE === 'true'
+
 interface Props {
   onQuickPrompt: (prompt: string) => void
 }
@@ -18,6 +20,11 @@ export default function CSWelcome({ onQuickPrompt }: Props) {
         <p className="text-xs text-text-muted mb-6">
           您好，我是 AI 客服助手，可以帮您查询订单、追踪物流、处理退款等。请问有什么可以帮您？
         </p>
+        {DEMO_MODE && (
+          <p className="text-[10px] text-amber-600 dark:text-amber-400 mb-4">
+            🧪 演示模式：以下对话使用模拟数据（DEMO- 前缀订单），非真实订单
+          </p>
+        )}
         <div className="flex flex-wrap justify-center gap-2">
           {CS_QUICK_PROMPTS.map((qp) => (
             <button

@@ -50,3 +50,43 @@ export interface ConversationTracesResponse {
   conversation_id: string;
   traces: import("./trace").TraceRecord[];
 }
+
+// ── 人工介入（坐席工作台）────────────────────────────
+// 后端: backend/app/api/routes/cs_admin.py §人工介入（v1 轮询）
+
+export interface HandoffQueueItem {
+  conversation_id: string;
+  user_id: string;
+  handoff_state: string;
+  trigger_type: string | null;
+  trigger_reason: string | null;
+  updated_at: string;
+  last_message_preview: string | null;
+}
+
+export interface HandoffQueueResponse {
+  items: HandoffQueueItem[];
+  total: number;
+}
+
+export interface HandoffClaimResult {
+  conversation_id: string;
+  handoff_state: string;
+  agent_id: string;
+  already_claimed: boolean;
+}
+
+export interface HandoffMessageDTO {
+  message_id: string;
+  sender_type: string;
+  content: string;
+  content_type: string;
+  created_at: string;
+}
+
+export interface HandoffMessagesResponse {
+  conversation_id: string;
+  handoff_state: string;
+  last_id: number;
+  messages: HandoffMessageDTO[];
+}

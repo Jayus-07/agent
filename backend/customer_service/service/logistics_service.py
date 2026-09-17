@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from backend.customer_service.errors import (
@@ -14,6 +15,7 @@ from backend.customer_service.errors import (
     OrderNotFoundError,
 )
 from backend.customer_service.security.permission import PermissionChecker
+from backend.shared.logger import logger
 
 
 @dataclass
@@ -24,6 +26,11 @@ class LogisticsResult:
     status_display: str
     estimated_delivery: Optional[str] = None
     tracking_info: Optional[str] = None
+    trace_events: list = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.trace_events is None:
+            self.trace_events = []
 
 
 _STATUS_DISPLAY = {
@@ -33,6 +40,20 @@ _STATUS_DISPLAY = {
     "completed": "已签收",
     "cancelled": "已取消",
 }
+
+
+def _estimate_delivery(status: str, stale_days: int) -> Optional[str]:
+    """根据状态与停滞天数估算预计送达（演示口径）。"""
+    if status == "completed":
+        return None  # 已签收无需预估
+    if status == "shipped":
+        base = 3 + max(0, stale_days - 2)  # 停滞越久预估越晚
+        eta = datetime.now(timezone.utc) + timedelta(days=base)
+        return eta.strftime("%Y-%m-%d")
+    if status == "paid":
+        eta = datetime.now(timezone.utc) + timedelta(days=7)
+        return eta.strftime("%Y-%m-%d") + "（预计发货后送达）"
+    return None
 
 
 class LogisticsService:
@@ -51,6 +72,9 @@ class LogisticsService:
         """
         PermissionChecker.validate_order_id(order_id)
 
+        from backend.customer_service.service.demo_mode import resolve_user_id
+
+        user_id = resolve_user_id(user_id)
         from backend.sql.executor import execute_sql_struct
 
         sql = """
@@ -74,13 +98,63 @@ class LogisticsService:
         order = result.rows[0]
         status = order.get("status", "unknown")
 
+        tracking_info, trace_events, estimated_delivery = self._resolve_tracking(
+            str(order["order_no"]), status
+        )
+
         return LogisticsResult(
             order_id=str(order["id"]),
             order_no=order["order_no"],
             status=status,
             status_display=_STATUS_DISPLAY.get(status, status),
-            tracking_info=self._build_tracking_info(status, order),
+            estimated_delivery=estimated_delivery,
+            tracking_info=tracking_info,
+            trace_events=trace_events,
         )
+
+    @staticmethod
+    def _resolve_tracking(
+        order_no: str, status: str
+    ) -> tuple[str, list[dict], Optional[str]]:
+        """优先走轨迹 Provider（demo Mock / 未来真实 API），失败回退状态推导。
+
+        Returns:
+            (tracking_info 文本, 轨迹事件列表, 预计送达)
+        """
+        from backend.customer_service.service.logistics_trace import (
+            TraceProviderError,
+            get_trace_provider,
+        )
+
+        provider = get_trace_provider()
+        if provider is not None:
+            try:
+                trace = provider.get_trace(order_no)
+            except TraceProviderError as exc:
+                # 演示降级路径：Provider 失败 → 状态推导摘要 + 降级说明
+                logger.warning(
+                    f"[LogisticsService] 轨迹 Provider 失败，回退状态推导: {exc}"
+                )
+                fallback = LogisticsService._build_tracking_info(status, {})
+                return f"{fallback}\n（轨迹服务暂不可用：{exc}）", [], None
+
+            if trace.events:
+                lines = [f"[{e.time[:16].replace('T', ' ')}] {e.location} — {e.description}" for e in trace.events]
+                latest = trace.latest_event
+                stale = trace.stale_days()
+                info = "物流轨迹（{}）:\n{}".format(trace.provider, "\n".join(lines))
+                if stale >= 3:
+                    info += f"\n⚠️ 包裹已停滞 {stale} 天无更新。"
+                estimated = (
+                    _estimate_delivery(status, stale) if latest else None
+                )
+                return info, [
+                    {"time": e.time, "location": e.location, "description": e.description}
+                    for e in trace.events
+                ], estimated
+
+        # 无 Provider 或空轨迹 → 原有状态推导
+        return LogisticsService._build_tracking_info(status, {}), [], None
 
     @staticmethod
     def _build_tracking_info(status: str, order: dict) -> str:

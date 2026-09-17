@@ -29,27 +29,42 @@ def try_cs_prefilter(query: str, state: dict) -> dict | None:
     except Exception:
         return None
 
-    from backend.customer_service.router.domain_detector import detect_cached
-    from backend.customer_service.router.cs_router import get_cs_router
-
-    # detect_cached：同 query 5min 内复用检测结果（检测只依赖 query、
-    # 与 session 无关），省掉重复请求的云端 embedding 往返（实测 1.0~3.4s）。
-    detection = detect_cached(query)
-    if not detection.is_cs:
-        return None
-
-    # ── 灰度放量判定（domain 命中之后，避免对 control 组白烧检测开销之外逻辑）──
     session_id = state.get("session_id", "default")
-    if not _in_rollout(session_id):
-        _stamp_variant(session_id, "control")
-        return None
-    _stamp_variant(session_id, "treatment")
 
-    cs_result = get_cs_router().route(query, detection)
-    route_path = cs_result.route_path.value
+    # ── 显式触发直通（确定性过滤层，2026-09-17）─────────────────────
+    # 转人工类指令（"转人工"/"找真人"/"转接人工客服"…见 handoff.py 关键词表）
+    # 是用户的硬性意图，不允许被 embedding 域检测漏判、也不允许落进灰度
+    # control 组——否则会像普通模糊查询一样进业务 Agent 的澄清兜底。
+    # 零成本：纯正则，无模型调用；确定性：直接合成 human_handoff 路由结果。
+    from backend.customer_service.handoff import detect_handoff_trigger
+    explicit_trigger = detect_handoff_trigger(query)
+    if explicit_trigger is not None:
+        cs_result = _build_explicit_handoff_result(explicit_trigger)
+        logger.info(
+            f"[CsPrefilter] 显式转人工直通: {explicit_trigger.reason} → cs_handoff"
+        )
+    else:
+        from backend.customer_service.router.domain_detector import detect_cached
+        from backend.customer_service.router.cs_router import get_cs_router
+
+        # detect_cached：同 query 5min 内复用检测结果（检测只依赖 query、
+        # 与 session 无关），省掉重复请求的云端 embedding 往返（实测 1.0~3.4s）。
+        detection = detect_cached(query)
+        if not detection.is_cs:
+            return None
+
+        # ── 灰度放量判定（domain 命中之后，避免对 control 组白烧检测开销之外逻辑）──
+        if not _in_rollout(session_id):
+            _stamp_variant(session_id, "control")
+            return None
+        _stamp_variant(session_id, "treatment")
+
+        cs_result = get_cs_router().route(query, detection)
 
     from backend.observability.metrics import record_cs_intent
     record_cs_intent(cs_result.intent)
+
+    route_path = cs_result.route_path.value
 
     if route_path == "knowledge_query":
         cs_target = "cs_knowledge"
@@ -73,7 +88,6 @@ def try_cs_prefilter(query: str, state: dict) -> dict | None:
     # ── Phase 5: CS Input Guard ──
     from backend.customer_service.security.input_guard import get_cs_input_guard
     user_id = state.get("user_id", "anonymous")
-    session_id = state.get("session_id", "default")
     guard_result = get_cs_input_guard().check(query)
     if guard_result.action.value == "block":
         logger.info(
@@ -108,6 +122,31 @@ def try_cs_prefilter(query: str, state: dict) -> dict | None:
         "route_mode": "customer_service",
         "cs_context": _build_cs_context(cs_result, cs_target, user_id, session_id),
     }
+
+
+def _build_explicit_handoff_result(trigger) -> "CSRouteResult":
+    """显式转人工 → 直接合成 human_handoff 路由结果（不过 classifier）。
+
+    确定性保证：classify 链路（rule/LLM）再准也有漏判概率，而用户说
+    "转人工"时的意图无需推断。conf 固定 1.0，reason 携带触发详情进 trace。
+    """
+    from backend.customer_service.router.types import (
+        CSDomain,
+        CSRoutePath,
+        CSRouteResult,
+    )
+
+    return CSRouteResult(
+        domain=CSDomain.HUMAN,
+        intent="h_handoff",
+        confidence=1.0,
+        requires_auth=False,
+        requires_action=False,
+        risk_level="low",
+        route_path=CSRoutePath.HUMAN_HANDOFF,
+        kb_ids=[],
+        reason=f"explicit_bypass: {trigger.reason}",
+    )
 
 
 def _build_cs_context(cs_result, cs_target: str,

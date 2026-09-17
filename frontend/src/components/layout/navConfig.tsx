@@ -7,6 +7,10 @@
  * 知识运营/竞品/选品/客服/告警工单等全部归管理端 frontend-admin/
  * （见 docs/2026-09-16-前端拆分计划.md §1）。Sidebar 与 /agent 任务页
  * 的「全部功能」菜单（TaskSidebar）都消费本配置。
+ *
+ * 2026-09-17：用户端客服入口走 /agent 右下角「智能客服」浮动按钮
+ * （components/cs/CSDrawer.tsx 滑出抽屉），不设独立导航路由；
+ * 坐席工作台 /cs/handoff 仅在管理端 frontend-admin。
  */
 import { Brain, FileText } from 'lucide-react'
 import type { ReactNode } from 'react'

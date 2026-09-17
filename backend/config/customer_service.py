@@ -228,3 +228,28 @@ CS_ROLLOUT_WHITELIST = {
 CS_QUALITY_ALERT_FALLBACK_RATE = float(os.getenv("CS_QUALITY_ALERT_FALLBACK_RATE", "0.02"))
 CS_QUALITY_ALERT_ROUTE_CONSISTENCY = float(os.getenv("CS_QUALITY_ALERT_ROUTE_CONSISTENCY", "0.85"))
 CS_QUALITY_ALERT_CAPABILITY_HANDOFF_RATE = float(os.getenv("CS_QUALITY_ALERT_CAPABILITY_HANDOFF_RATE", "0.15"))
+
+# =============================================
+# 演示业务沙盒（Demo Business Sandbox）
+# 方案: docs/customer-service/演示沙盒方案-2026-09-17.md
+# =============================================
+# 演示模式总开关：开启后客服业务查询将 user_id 映射为 CS_DEMO_CUSTOMER_ID，
+# 使无真实业务数据的注册账号也能走完整客服流程。默认关闭，不影响生产链路。
+CS_DEMO_MODE = os.getenv("CS_DEMO_MODE", "false").strip().lower() in ("1", "true", "yes")
+# 演示数据归属的客户 ID（须与 backend/sql/seeds/demo_sandbox.sql 播种的 customer_id 一致）
+CS_DEMO_CUSTOMER_ID = os.getenv("CS_DEMO_CUSTOMER_ID", "99001").strip()
+# 物流轨迹 Provider：mock（演示）| 空=不启用（回退订单状态推导，供日后接入真实 API）
+CS_DEMO_TRACE_PROVIDER = os.getenv("CS_DEMO_TRACE_PROVIDER", "mock").strip().lower()
+# 演示故障注入（JSON，仅 demo 模式生效）：
+#   {"logistics.timeout": true}            轨迹 Provider 超时
+#   {"logistics.error": true}              轨迹 Provider 报错
+#   {"logistics.empty": true}              轨迹返回空结果
+#   {"logistics.delay_seconds": 2.0}       轨迹响应人为延迟（演示加载态）
+CS_DEMO_FAULTS: dict = {}
+_faults_raw = os.getenv("CS_DEMO_FAULTS", "").strip()
+if _faults_raw:
+    import json as _json
+    try:
+        CS_DEMO_FAULTS = _json.loads(_faults_raw)
+    except ValueError:
+        CS_DEMO_FAULTS = {}

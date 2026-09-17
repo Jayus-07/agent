@@ -138,3 +138,83 @@ class TestHandoffRepositoryGetActive:
 
         result = await repo.get_active("user1")
         assert result is None
+
+
+class TestHandoffRepositoryAgentSide:
+    """坐席侧新增方法：get_open_by_conversation / list_open（人工介入 v1）。"""
+
+    @pytest.mark.asyncio
+    async def test_get_open_by_conversation_found(self):
+        repo, session = _make_repo()
+        row = MagicMock()
+        row.conversation_id = "conv-1"
+        row.handoff_state = "waiting_human"
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = row
+        session.execute = AsyncMock(return_value=result_mock)
+
+        result = await repo.get_open_by_conversation("conv-1")
+        assert result is row
+
+    @pytest.mark.asyncio
+    async def test_get_open_by_conversation_none(self):
+        repo, session = _make_repo()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = None
+        session.execute = AsyncMock(return_value=result_mock)
+
+        assert await repo.get_open_by_conversation("conv-x") is None
+
+    @pytest.mark.asyncio
+    async def test_list_open_with_state_filter(self):
+        repo, session = _make_repo()
+        rows = [MagicMock(), MagicMock()]
+        scalars = MagicMock()
+        scalars.all.return_value = rows
+        result_mock = MagicMock()
+        result_mock.scalars.return_value = scalars
+        session.execute = AsyncMock(return_value=result_mock)
+
+        result = await repo.list_open(states=["waiting_human", "human_active"])
+        assert result == rows
+
+    @pytest.mark.asyncio
+    async def test_list_open_default_excludes_closed(self):
+        """缺省不过滤状态时走 handoff_state != 'closed' 分支。"""
+        repo, session = _make_repo()
+        scalars = MagicMock()
+        scalars.all.return_value = []
+        result_mock = MagicMock()
+        result_mock.scalars.return_value = scalars
+        session.execute = AsyncMock(return_value=result_mock)
+
+        result = await repo.list_open()
+        assert result == []
+
+
+class TestHandoffClaimTransitionRules:
+    """认领的状态机约束：仅 waiting_human → human_active 合法。"""
+
+    def test_waiting_human_to_human_active_ok(self):
+        from backend.customer_service.handoff import (
+            HandoffState,
+            transition,
+        )
+
+        result = transition(
+            HandoffState.WAITING_HUMAN, HandoffState.HUMAN_ACTIVE
+        )
+        assert result.changed is True
+        assert result.state == HandoffState.HUMAN_ACTIVE
+
+    def test_requested_to_human_active_illegal(self):
+        from backend.customer_service.errors import BusinessRuleError
+        from backend.customer_service.handoff import (
+            HandoffState,
+            transition,
+        )
+
+        with pytest.raises(BusinessRuleError):
+            transition(
+                HandoffState.HANDOFF_REQUESTED, HandoffState.HUMAN_ACTIVE
+            )

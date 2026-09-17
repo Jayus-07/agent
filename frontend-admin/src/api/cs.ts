@@ -3,6 +3,10 @@ import type {
   PaginatedConversations,
   ConversationDetail,
   ConversationTracesResponse,
+  HandoffQueueResponse,
+  HandoffClaimResult,
+  HandoffMessageDTO,
+  HandoffMessagesResponse,
 } from "@/types/cs";
 
 export async function listConversations(params: {
@@ -53,4 +57,51 @@ export async function getConversationTraces(
   } catch (e) {
     throw new Error(`getConversationTraces failed: ${(e as Error).message}`);
   }
+}
+
+// ── 人工介入（坐席工作台，v1 轮询）────────────────────
+
+export async function getHandoffQueue(
+  states?: string,
+): Promise<HandoffQueueResponse> {
+  const sp = states ? `?states=` + encodeURIComponent(states) : "";
+  return request<HandoffQueueResponse>(`/api/cs/conversations/handoff/queue` + sp);
+}
+
+export async function claimConversation(
+  conversationId: string,
+  agentId: string,
+): Promise<HandoffClaimResult> {
+  return request<HandoffClaimResult>(
+    `/api/cs/conversations/` + encodeURIComponent(conversationId) + `/claim`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_id: agentId }),
+    },
+  );
+}
+
+export async function sendAgentMessage(
+  conversationId: string,
+  agentId: string,
+  content: string,
+): Promise<HandoffMessageDTO> {
+  return request<HandoffMessageDTO>(
+    `/api/cs/conversations/` + encodeURIComponent(conversationId) + `/agent-messages`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_id: agentId, content }),
+    },
+  );
+}
+
+export async function getHandoffMessages(
+  conversationId: string,
+  sinceId: number,
+): Promise<HandoffMessagesResponse> {
+  return request<HandoffMessagesResponse>(
+    `/api/cs/conversations/` + encodeURIComponent(conversationId) + `/messages?since_id=` + sinceId,
+  );
 }

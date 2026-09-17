@@ -121,6 +121,9 @@ class RefundService:
         )
 
     def _get_order(self, user_id: str, order_id: str) -> dict:
+        from backend.customer_service.service.demo_mode import resolve_user_id
+
+        user_id = resolve_user_id(user_id)
         from backend.sql.executor import execute_sql_struct
 
         sql = """

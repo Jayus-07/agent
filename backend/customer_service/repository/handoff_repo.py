@@ -96,3 +96,36 @@ class HandoffRepository:
             ).limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def get_open_by_conversation(
+        self, conversation_id: str
+    ) -> CSHandoff | None:
+        """按会话取未关闭的 handoff 行（坐席认领 / 发消息前校验用）。"""
+        result = await self._s.execute(
+            select(CSHandoff).where(
+                CSHandoff.conversation_id == conversation_id,
+                CSHandoff.handoff_state != "closed",
+            ).limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_open(
+        self,
+        *,
+        states: list[str] | None = None,
+        limit: int = 50,
+    ) -> list[CSHandoff]:
+        """列出进行中的 handoff（坐席工作台队列）。
+
+        Args:
+            states: 只取这些状态（缺省=全部未关闭），按 updated_at 升序
+                （最早请求的排最前，避免老会话饿死）。
+        """
+        q = select(CSHandoff)
+        if states:
+            q = q.where(CSHandoff.handoff_state.in_(states))
+        else:
+            q = q.where(CSHandoff.handoff_state != "closed")
+        q = q.order_by(CSHandoff.updated_at).limit(limit)
+        result = await self._s.execute(q)
+        return list(result.scalars().all())

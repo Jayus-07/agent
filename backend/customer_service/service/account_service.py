@@ -35,6 +35,9 @@ class AccountService:
         if not user_id or user_id == "anonymous":
             raise AuthenticationError("user_id is required")
 
+        from backend.customer_service.service.demo_mode import resolve_user_id
+
+        user_id = resolve_user_id(user_id)
         from backend.sql.executor import execute_sql_struct
 
         sql = """

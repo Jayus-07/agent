@@ -79,6 +79,9 @@ class OrderService:
 
     def _get_single_order(self, user_id: str, order_id: str) -> dict:
         """获取单个订单并验证归属。"""
+        from backend.customer_service.service.demo_mode import resolve_user_id
+
+        user_id = resolve_user_id(user_id)
         from backend.sql.executor import execute_sql_struct
 
         sql = """
@@ -104,6 +107,9 @@ class OrderService:
 
     def _get_order_list(self, user_id: str) -> OrderQueryResult:
         """获取用户订单列表。"""
+        from backend.customer_service.service.demo_mode import resolve_user_id
+
+        user_id = resolve_user_id(user_id)
         from backend.sql.executor import execute_sql_struct
 
         sql = """
