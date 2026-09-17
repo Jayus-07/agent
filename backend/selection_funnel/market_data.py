@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -117,7 +118,8 @@ class MarketStore:
         return conn
 
     def add_keywords(self, rows: list[dict], category: str) -> tuple[str, int]:
-        batch_id = f"kw-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        # 批次 id 带随机后缀：同秒两次上传不再碰撞（2026-09-18 实测缺陷修复）
+        batch_id = f"kw-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
         now = datetime.now().isoformat(timespec="seconds")
         with self._connect() as conn:
             conn.executemany(
@@ -129,7 +131,7 @@ class MarketStore:
         return batch_id, len(rows)
 
     def add_reviews(self, rows: list[dict], category: str) -> tuple[str, int]:
-        batch_id = f"rv-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        batch_id = f"rv-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
         now = datetime.now().isoformat(timespec="seconds")
         with self._connect() as conn:
             conn.executemany(
@@ -172,10 +174,24 @@ class MarketStore:
 _default_market: MarketStore | None = None
 
 
+def _new_default_market() -> MarketStore:
+    """按 SELECTION_FUNNEL_DB_BACKEND 新建默认 store（纯分发，可直测）。
+
+    默认 postgres（PostgresMarketStore，agent_business 库，与导入池共享连接池）；
+    显式设 sqlite 走本文件 SQLite 轨（测试逃生舱，conftest 统一注入）。
+    """
+    import os as _os
+    if _os.getenv("SELECTION_FUNNEL_DB_BACKEND", "").lower() == "sqlite":
+        return MarketStore()
+    from backend.selection_funnel.market_data_pg import PostgresMarketStore
+    return PostgresMarketStore()
+
+
 def get_market_store() -> MarketStore:
+    """惰性单例（测试 monkeypatch get_market_store 隔离）。"""
     global _default_market
     if _default_market is None:
-        _default_market = MarketStore()
+        _default_market = _new_default_market()
     return _default_market
 
 

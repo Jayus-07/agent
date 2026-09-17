@@ -22,6 +22,7 @@ import json
 import os
 import re
 import sqlite3
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -260,7 +261,7 @@ class ImportPoolStore:
 
         Returns: (batch_id, 写入行数)
         """
-        batch_id = f"imp-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        batch_id = f"imp-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
         now = datetime.now().isoformat(timespec="seconds")
         with self._connect() as conn:
             conn.executemany(
@@ -291,7 +292,12 @@ class ImportPoolStore:
         return batch_id, len(rows)
 
     def list_candidates(self, category: str = "", platform: str = "") -> list[dict[str, Any]]:
-        """拉取候选（粗过滤）；返回字段与漏斗 _POOL_FIELDS 对齐 + sales/extra。"""
+        """拉取候选（粗过滤，哑管道不去重）。
+
+        同款去重统一由 build_pool 的 duplicate 规则负责（保留最新批次，
+        旧行进 reasons 披露）——数据层与建池层职责单一，双轨（PG/SQLite）同语义。
+        返回字段与漏斗 _POOL_FIELDS 对齐 + sales/extra。
+        """
         sql = "SELECT * FROM import_candidates"
         conds, params = [], []
         if category:
@@ -304,7 +310,7 @@ class ImportPoolStore:
             sql += " WHERE " + " AND ".join(conds)
         sql += " ORDER BY id ASC"
         with self._connect() as conn:
-            rows = conn.execute(sql, params).fetchall()
+            rows = conn.execute(sql, tuple(params)).fetchall()
         out: list[dict[str, Any]] = []
         for r in rows:
             d = dict(r)
@@ -325,11 +331,24 @@ class ImportPoolStore:
 _default_store: ImportPoolStore | None = None
 
 
+def _new_default_store() -> ImportPoolStore:
+    """按 SELECTION_FUNNEL_DB_BACKEND 新建默认 store（纯分发，可直测）。
+
+    默认 postgres（PostgresImportPoolStore，agent_business 库，高并发连接池）；
+    显式设 sqlite 走本文件 SQLite 轨（测试逃生舱，conftest 统一注入）。
+    """
+    import os as _os
+    if _os.getenv("SELECTION_FUNNEL_DB_BACKEND", "").lower() == "sqlite":
+        return ImportPoolStore()
+    from backend.selection_funnel.import_pool_pg import PostgresImportPoolStore
+    return PostgresImportPoolStore()
+
+
 def get_import_store() -> ImportPoolStore:
     """惰性单例（测试 monkeypatch get_import_store 或 IMPORT_DB_PATH 隔离）。"""
     global _default_store
     if _default_store is None:
-        _default_store = ImportPoolStore()
+        _default_store = _new_default_store()
     return _default_store
 
 

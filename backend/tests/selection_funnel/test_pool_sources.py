@@ -43,12 +43,29 @@ def test_watchlist_fallback_when_import_empty(patch_stores):
 
 
 def test_dedup_no_url_by_title_platform(patch_stores):
-    """无 url 候选按 (title, platform) 去重。"""
+    """无 url 候选按 (title, platform) 去重，且保留最新批次（2026-09-18 语义修正）。"""
     _seed_import([IMPORT_ROW, IMPORT_ROW | {"price": 155.0}])
     patch_stores([])
     pool, _notes, reasons, _sources = build_pool("宠物零食")
     assert len(pool) == 1
     assert any(r["rule"] == "duplicate" for r in reasons)
+    assert pool[0]["price"] == 155.0, "同款多批次应保留最新价格（列表序靠后）"
+
+
+def test_dedup_by_url_keeps_latest(patch_stores):
+    """有 url 同款跨批次去重：留最新价；不同 url 不误伤。"""
+    _seed_import([
+        IMPORT_ROW | {"url": "u-1", "price": 100.0},
+        IMPORT_ROW | {"url": "u-1", "price": 80.0},
+        IMPORT_ROW | {"url": "u-2", "price": 60.0},
+    ])
+    patch_stores([])
+    pool, _notes, reasons, _sources = build_pool("宠物零食")
+    assert len(pool) == 2
+    by_url = {c["url"]: c for c in pool}
+    assert by_url["u-1"]["price"] == 80.0, "同款留最新批次"
+    assert by_url["u-2"]["price"] == 60.0
+    assert len([r for r in reasons if r["rule"] == "duplicate"]) == 1
 
 
 def test_unknown_source_skipped_with_note(monkeypatch):

@@ -96,6 +96,33 @@ def _dedup_key(cand: dict) -> tuple[str, str]:
     return ("url", url) if url else ("title", f"{(cand.get('title') or '').strip()}|{cand.get('platform') or ''}")
 
 
+def _dedupe_keep_latest(items: list[dict], reasons: list[dict]) -> list[dict]:
+    """源内同款去重：保留列表序最后一条（= 最新批次/新快照），旧行进 reasons 披露。
+
+    语义修正（2026-09-18）：用户每周更新商品榜时，旧行 id 小排在前，
+    原「先见保留」会留下旧价格——反转之，每源内部以最新一条为准。
+    跨源去重仍由主循环 seen 逻辑负责（先源优先，导入 > watchlist），
+    「最新」只在同源内判定，避免监控池旧快照覆盖用户刚上传的新数据。
+    """
+    if len(items) <= 1:
+        return items
+    latest_idx: dict[tuple[str, str], int] = {}
+    for i, cand in enumerate(items):
+        latest_idx[_dedup_key(cand)] = i
+    if len(latest_idx) == len(items):
+        return items   # 无同款，原样返回（不产生 duplicate 噪音）
+    out: list[dict] = []
+    for i, cand in enumerate(items):
+        if latest_idx[_dedup_key(cand)] != i:
+            reasons.append({
+                "url": cand.get("url") or "", "title": cand.get("title") or "",
+                "rule": "duplicate", "value": "",
+            })
+            continue
+        out.append(cand)
+    return out
+
+
 def build_pool(category: str, platform: str = "",
                price_min: float | None = None,
                price_max: float | None = None,
@@ -134,6 +161,8 @@ def build_pool(category: str, platform: str = "",
             items, src_notes = [], [f"未知数据源「{source}」已跳过（支持: import, watchlist）"]
             sources.append({"source": source, "status": "error", "count": 0})
         notes.extend(src_notes)
+        # 源内同款去重（保留最新批次），旧行进 reasons 披露；watchlist 每款一条，幂等
+        items = _dedupe_keep_latest(items, reasons)
         collected.extend(items)
 
     # 2) 统一过滤 + 去重 + 截断
