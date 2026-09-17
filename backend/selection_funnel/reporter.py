@@ -366,13 +366,14 @@ def _trend_lines(candidates: list[dict]) -> list[str]:
         rt = t.get("rating")
         if rt and rt.get("first") != rt.get("last"):
             parts.append(f"评分 {rt['first']:g}→{rt['last']:g}")
-        lines.append(f"- 「{(c.get('title') or '')[:24]}」近 {n} 次快照："
+        src = "（导入池历史批次）" if t.get("source") == "import_pool" else ""
+        lines.append(f"- 「{(c.get('title') or '')[:24]}」近 {n} 次快照{src}："
                      + ("；".join(parts) if parts else "关键指标持平"))
     if lines and no_history:
         lines.append(f"- 其余 {no_history} 条为单点候选，无历史快照，趋势不可算")
     if not lines:
-        lines.append("- 本轮候选均为单点数据（导入池无时间序列）：把核心竞品加入监控，"
-                     "或同款多次导入后可看价格/热度走势")
+        lines.append("- 本轮候选均为单点数据：同款每周重新导入商品榜（或把核心竞品"
+                     "加入监控），积累 2 次以上即可看价格/热度走势")
     return lines
 
 

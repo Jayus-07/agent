@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS {_TABLE} (
 );
 CREATE INDEX IF NOT EXISTS idx_sf_imp_category ON {_TABLE}(category);
 CREATE INDEX IF NOT EXISTS idx_sf_imp_batch ON {_TABLE}(batch_id);
+CREATE INDEX IF NOT EXISTS idx_sf_imp_url ON {_TABLE}(url);
 """
 
 _INSERT_COLS = (
@@ -86,6 +87,23 @@ def _get_pool() -> Any:
     return _pool
 
 
+@contextmanager
+def pool_conn() -> Iterator[Any]:
+    """从共享连接池借一连接：退出 commit（读也要）——SELECT 开启的事务若不收尾，
+    连接带着 idle-in-transaction 归还池子，长期持锁阻塞 vacuum（2026-09-18 修）。
+    本域两个 PG store 与后续同库新增 store 一律走这里，不各自裸借还。"""
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
+
+
 class PostgresImportPoolStore(ImportPoolStore):
     """导入候选池存储 — PostgreSQL 实现（isinstance 兼容，高并发连接池）。"""
 
@@ -96,16 +114,8 @@ class PostgresImportPoolStore(ImportPoolStore):
 
     @contextmanager
     def _conn(self) -> Iterator[Any]:
-        pool = _get_pool()
-        conn = pool.getconn()
-        try:
+        with pool_conn() as conn:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            pool.putconn(conn)
 
     def _ensure_schema(self) -> None:
         with self._init_lock, self._conn() as conn:
@@ -176,6 +186,51 @@ class PostgresImportPoolStore(ImportPoolStore):
             cur = conn.cursor()
             cur.execute(f"DELETE FROM {_TABLE} WHERE batch_id = %s", (batch_id,))
             return cur.rowcount
+
+    def history_by_keys(self, keys: list[tuple[str, str, str]],
+                        limit: int = 50) -> dict[str, list[dict[str, Any]]]:
+        """批量取同款历史批次（趋势接线，2026-09-18）：一次 ANY 数组查询替代逐候选 N 次。
+
+        Args:
+            keys: [(url, title, platform), ...]（候选集的判定键原料，url 可空）
+            limit: 每款最多返回快照条数（与竞品 store.history 的 limit 同义）
+        Returns:
+            {dedup_key(url,title,platform): [快照 新→旧]}。快照字段对齐
+            scoring 的 history 口径：crawled_at=imported_at（该行的数据时点，
+            供热度日增速计算）；in_stock 不补造（导入表无此列，评分层按中性处理）。
+        """
+        from backend.selection_funnel.import_pool import dedup_key
+        wanted = {dedup_key(u, t, p) for u, t, p in keys}
+        urls = sorted({(u or "").strip() for u, _, _ in keys if (u or "").strip()})
+        titles = sorted({(t or "").strip() for _, t, _ in keys if (t or "").strip()})
+        if not urls and not titles:
+            return {}
+        conds, params = [], []
+        if urls:
+            conds.append("(url <> '' AND url = ANY(%s))")
+            params.append(urls)
+        if titles:
+            conds.append("title = ANY(%s)")
+            params.append(titles)
+        sql = f"SELECT * FROM {_TABLE} WHERE {' OR '.join(conds)} ORDER BY id DESC"
+        with self._conn() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for r in rows:
+            d = dict(r)
+            key = dedup_key(d.get("url") or "", d.get("title") or "",
+                            d.get("platform") or "")
+            if key not in wanted:
+                continue   # title 命中但 (title, platform) 不同款 → 剔除
+            snap = {"title": d.get("title"), "url": d.get("url"),
+                    "platform": d.get("platform"), "price": d.get("price"),
+                    "rating": d.get("rating"), "review_count": d.get("review_count"),
+                    "sales": d.get("sales"), "imported_at": d.get("imported_at"),
+                    "crawled_at": d.get("imported_at")}
+            grouped.setdefault(key, []).append(snap)
+        return {k: v[:limit] for k, v in grouped.items()}
 
     def count(self) -> int:
         with self._conn() as conn:

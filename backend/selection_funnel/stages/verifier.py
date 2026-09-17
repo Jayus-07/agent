@@ -93,27 +93,61 @@ def _default_store() -> Any:
     return get_store()
 
 
+def _import_history(candidates: list[dict],
+                    notes: list[str]) -> dict[str, list[dict]]:
+    """导入候选的同款历史批次（趋势接线，2026-09-18）：一次批量查询替代逐候选取数。
+
+    用户每周重新上传商品榜时，同款商品在导入池里积累出时间序列——
+    此前趋势只认监控池快照，导入候选永远「单点」；接线后 _trend 与
+    scoring 稳定性/热度增速直接复用这些序列。失败降级为空（单点披露），不炸漏斗。
+    """
+    from backend.selection_funnel.import_pool import dedup_key, get_import_store
+    if not candidates:
+        return {}
+    try:
+        return get_import_store().history_by_keys([
+            (c.get("url") or "", c.get("title") or "", c.get("platform") or "")
+            for c in candidates])
+    except Exception as e:
+        logger.warning("[FunnelVerify] 导入池同款历史读取失败: %s", e)
+        notes.append("导入池同款历史读取失败，趋势按单点披露")
+        return {}
+
+
 def verify_candidates(candidates: list[dict],
                       store: Any = None) -> tuple[list[dict], list[str]]:
     """给每个候选挂 score / pain_points。Returns (enriched, notes)。"""
+    from backend.selection_funnel.import_pool import dedup_key
+
     store = store or _default_store()
     pool_latest = candidates  # 评分池 = 当前存活候选（与 scoring 口径一致）
     notes: list[str] = []
+    # 导入候选（带 imported_at）批量取同款历史；监控候选仍走竞品 store.history
+    imported = [c for c in candidates if c.get("imported_at")]
+    import_history = _import_history(imported, notes)
     enriched: list[dict] = []
     for c in candidates:
-        url = c.get("url") or ""
-        try:
-            history = store.history(url, limit=50)
-        except Exception as e:
-            logger.warning("[FunnelVerify] 历史快照读取失败 url=%s: %s", url, e)
-            history = []
-            notes.append(f"{(c.get('title') or url)[:30]}: 历史快照读取失败，稳定性维度按中性分计")
+        if c.get("imported_at"):
+            history = import_history.get(
+                dedup_key(c.get("url") or "", c.get("title") or "",
+                          c.get("platform") or ""), [])
+        else:
+            url = c.get("url") or ""
+            try:
+                history = store.history(url, limit=50)
+            except Exception as e:
+                logger.warning("[FunnelVerify] 历史快照读取失败 url=%s: %s", url, e)
+                history = []
+                notes.append(f"{(c.get('title') or url)[:30]}: 历史快照读取失败，稳定性维度按中性分计")
         score = score_product(c, history, pool_latest, DEFAULT_WEIGHTS)
         item = dict(c)
         item["score"] = score
         item["pain_points"] = extract_pain_points(c)
         item["data_quality"] = _data_quality(c)
-        item["trend"] = _trend(history)
+        trend = _trend(history)
+        if len(history) >= 2 and c.get("imported_at"):
+            trend["source"] = "import_pool"   # 报告层透出趋势数据来自导入批次
+        item["trend"] = trend
         enriched.append(item)
     return enriched, notes
 

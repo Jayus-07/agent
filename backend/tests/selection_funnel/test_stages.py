@@ -398,3 +398,64 @@ def test_config_rules_version_stable_and_changes(monkeypatch):
                         {**cfg.CATEGORY_RULES, "宠物零食": {"min_margin": 0.35}})
     v4 = build_config_snapshot("宠物零食", 0.20)["rules_version"]
     assert v4 != v1
+
+
+# ── 导入池历史趋势接线（2026-09-18）：verifier 批量取同款历史 ──────────
+def test_verify_import_history_wires_trend(isolated_import_store):
+    """同款跨两批次导入 → 趋势从导入池历史算出并标注来源；稳定性不再 insufficient。"""
+    from backend.selection_funnel.stages.verifier import verify_candidates
+    store = isolated_import_store
+    store.add_batch([{"title": "冻干鸡肉", "url": "u-a", "price": 59.0,
+                      "review_count": 100, "rating": 4.6}], category="宠物零食")
+    store.add_batch([{"title": "冻干鸡肉", "url": "u-a", "price": 49.0,
+                      "review_count": 150, "rating": 4.7}], category="宠物零食")
+    cand = {"url": "u-a", "title": "冻干鸡肉", "platform": "淘宝", "price": 49.0,
+            "rating": 4.7, "review_count": 150, "category": "宠物零食",
+            "imported_at": "2026-09-18T00:00:00"}
+    enriched, notes = verify_candidates([cand])
+    t = enriched[0]["trend"]
+    assert t["snapshots"] == 2
+    assert t["source"] == "import_pool"
+    assert t["price"]["first"] == 59.0 and t["price"]["last"] == 49.0
+    assert t["price"]["direction"] == "down"
+    assert "insufficient_history" not in enriched[0]["score"]["notes"]
+    assert notes == []   # 正常路径不产生噪音 note
+
+
+def test_verify_import_history_failure_degrades_to_single_point(monkeypatch,
+                                                                 isolated_import_store):
+    """导入池历史读取失败 → 降级单点披露，不炸验证层。"""
+    from backend.selection_funnel import import_pool
+    from backend.selection_funnel.stages import verifier
+    monkeypatch.setattr(import_pool, "get_import_store",
+                        lambda: (_ for _ in ()).throw(RuntimeError("pg down")))
+    cand = {"title": "冻干鸡肉", "platform": "淘宝", "price": 49.0,
+            "imported_at": "2026-09-18T00:00:00"}
+    enriched, notes = verifier.verify_candidates([cand])
+    assert enriched[0]["trend"] == {"snapshots": 0}   # 历史为空 → 单点/零点如实披露
+    assert any("同款历史读取失败" in n for n in notes)
+
+
+def test_verify_watchlist_candidate_still_uses_competitor_history(patch_stores):
+    """监控候选（无 imported_at）仍走竞品 store.history，趋势口径不变。"""
+    from conftest import make_snap
+    from backend.selection_funnel.stages.verifier import verify_candidates
+    patch_stores([make_snap(url="u-w", price=59.0, review_count=100),
+                  make_snap(url="u-w", price=55.0, review_count=200)])
+    cand = {"url": "u-w", "title": "监控款", "platform": "淘宝", "price": 55.0,
+            "review_count": 200, "crawled_at": "2026-09-10T00:00:00"}
+    enriched, _ = verify_candidates([cand])
+    t = enriched[0]["trend"]
+    assert t["snapshots"] == 2
+    assert "source" not in t   # 竞品历史不标导入来源
+
+
+def test_reporter_trend_lines_show_import_source():
+    """报告趋势段透出「导入池历史批次」来源标签。"""
+    from backend.selection_funnel.reporter import _trend_lines
+    cand = {"url": "u1", "title": "导入款", "trend": {
+        "snapshots": 2, "source": "import_pool",
+        "price": {"first": 59.0, "last": 49.0, "pct": -0.1695, "direction": "down"}}}
+    lines = _trend_lines([cand])
+    assert any("导入池历史批次" in ln for ln in lines)
+    assert any("59→49" in ln for ln in lines)

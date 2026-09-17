@@ -132,7 +132,13 @@ def _stability(history: list[dict]) -> tuple[float, Optional[str]]:
     mean = statistics.mean(priced)
     cv = statistics.pstdev(priced) / mean if mean else 0.0
     cv_score = max(0.0, 1 - cv * 5) * 100  # 变异系数 ≥20% → 0 分
-    stock_rate = sum(1 for s in history if s.get("in_stock")) / len(history) * 100
+    # 有货率只对携带 in_stock 的快照统计：导入池快照无此列，缺字段按中性计
+    # （若按 0 分算，趋势接线后导入候选会被无谓压分）；监控快照全带此列，口径不变
+    stocked = [s for s in history if s.get("in_stock") is not None]
+    if stocked:
+        stock_rate = sum(1 for s in stocked if s.get("in_stock")) / len(stocked) * 100
+    else:
+        stock_rate = _NEUTRAL
     return 0.5 * cv_score + 0.5 * stock_rate, None
 
 

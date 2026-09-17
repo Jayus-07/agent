@@ -319,3 +319,50 @@ keyword_stats / product_reviews）搬 PG，**完全跟随业务族 PG 约定**�
 - 遗留：导入池历史批次 → verifier `_trend` 接线（趋势段当前只认监控池快照），
   数据已在库里，接线改动集中在 verify_candidates 的 history 取数处。
 - 验证：selection_funnel 套件 122 passed（114 基线 + 8 新增，含 PG 集成 7 例）。
+
+## 十六、遗留清单清账：导入池历史趋势接线 + PG 读路径事务收尾（2026-09-18 凌晨）
+
+接 §十五 遗留三项，本轮全部处理（新会话接手完成）：
+
+### 1. 趋势接线 ✅（§十五 遗留 #1，本轮核心功能）
+「价格与热度趋势」此前只认监控池快照，导入候选永远单点。现在导入池里
+同款跨批次的历史序列直接接线进验证层：
+
+- **统一去重键**：`import_pool.dedup_key(url, title, platform)`（url 优先，
+  无 url 退 title|platform）——pool_builder 源内/跨源去重与 verifier 历史分组
+  同一口径，消除两处实现漂移风险（pool_builder._dedup_key 改为委托）。
+- **批量取数**：双后端新增 `history_by_keys([(url,title,platform)...])`——
+  一次查询（SQLite IN / PG `= ANY(数组)`）按同款分组返回快照（新→旧），
+  `crawled_at=imported_at` 映射进 scoring 热度日增速口径；替代逐候选 N 次
+  history 查询（修 verify_candidates 的 N+1，池上限 200 时从 200 查降到 1 查）。
+- **verifier 分流**：带 `imported_at` 的候选批量取导入池历史；监控候选
+  仍走竞品 store.history（口径不变）。导入历史 ≥2 条时 trend 标
+  `source=import_pool`，报告趋势段渲染「（导入池历史批次）」来源标签。
+- **scoring 稳定性配套**：导入快照无 in_stock 列——有货率改为只对携带该
+  字段的快照统计，全缺时按中性 50（旧口径按 0 分会无谓压导入候选）；
+  监控快照全带字段，行为不变。接线后同款每周重传即得稳定性/热度增速/趋势。
+- 用户价值：§六 拍板的「用户每周更新商品榜」工作流第一次有了趋势回报——
+  上传 ≥2 次即看价格/评价/评分走势，Top-N 的稳定性维度同步生效。
+
+### 2. PG 读路径事务收尾 ✅（本轮实测发现的真缺陷）
+`PostgresMarketStore._fetch/keywords/reviews` 裸借还连接不 commit——SELECT
+开启的事务随连接回流池子，挂成 idle-in-transaction（长期持锁、阻塞 vacuum）。
+修复：连接借还统一收口到 `import_pool_pg.pool_conn()`（退出 commit/rollback +
+归还），PostgresImportPoolStore._conn 一并委托，market_data_pg 全方法改走。
+回归测试锁定「SELECT 后连接必回 STATUS_READY」。
+
+### 3. 其余遗留清账
+- **SQLite→PG 存量搬运**：实测 `data/selection_import.db` 三表均 0 行
+  （mock 数据此前已按批次清空），无需搬运脚本，用户直接重新上传即可。
+- **021 迁移**：代码侧 _ensure_schema 幂等建表本已兜底；本轮给
+  import_candidates 补 url 索引（同款历史取数定位），021 文件与双端
+  schema 同步（CREATE INDEX IF NOT EXISTS，重复执行安全）。
+
+### 验证
+- `backend/tests/selection_funnel/` **133 passed**（122 基线 + 11 新增：
+  SQLite/PG history_by_keys 分组与新旧序、verifier 接线/降级/监控口径回归、
+  pool_conn 连接卫生、报告来源标签）
+- 共用 scoring 的回归：test_selection_scoring 27 passed（含稳定性缺字段
+  中性 2 例）、selection_decision api/store/trends 22 passed
+- 运行命令同 §四（PYTHONPATH 前缀 + --basetemp）；PG 集成例带 pg 标记
+  （前缀 pgtest_sf_ 自隔离）

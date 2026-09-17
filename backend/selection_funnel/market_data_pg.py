@@ -23,7 +23,7 @@ from typing import Any
 
 import psycopg2.extras
 
-from backend.selection_funnel.import_pool_pg import _get_pool
+from backend.selection_funnel.import_pool_pg import pool_conn
 from backend.selection_funnel.market_data import MarketStore
 from backend.shared.logger import logger
 
@@ -69,43 +69,33 @@ def _ensure_schema() -> None:
     with _kw_init_lock:
         if _schema_ready:
             return
-        pool = _get_pool()
-        conn = pool.getconn()
-        try:
+        with pool_conn() as conn:
             conn.cursor().execute(_SCHEMA_SQL)
-            conn.commit()
-            _schema_ready = True
-            logger.debug("[PostgresMarketStore] schema 就绪（agent_business）")
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            pool.putconn(conn)
+        _schema_ready = True
+        logger.debug("[PostgresMarketStore] schema 就绪（agent_business）")
 
 
 class PostgresMarketStore(MarketStore):
-    """赛道数据存储 — PostgreSQL 实现（isinstance 兼容，高并发连接池）。"""
+    """赛道数据存储 — PostgreSQL 实现（isinstance 兼容，高并发连接池）。
+
+    借还连接统一走 import_pool_pg.pool_conn（读也 commit，杜绝
+    idle-in-transaction 连接回流池子——2026-09-18 修）。
+    """
 
     def __init__(self, db_path: str = ""):
         _ensure_schema()
 
     @staticmethod
     def _fetch(sql: str, params: tuple = ()) -> list[dict]:
-        pool = _get_pool()
-        conn = pool.getconn()
-        try:
+        with pool_conn() as conn:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cur.execute(sql, params)
             return [dict(r) for r in cur.fetchall()]
-        finally:
-            pool.putconn(conn)
 
     def add_keywords(self, rows: list[dict], category: str) -> tuple[str, int]:
         batch_id = f"kw-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
         now = datetime.now().isoformat(timespec="seconds")
-        pool = _get_pool()
-        conn = pool.getconn()
-        try:
+        with pool_conn() as conn:
             psycopg2.extras.execute_values(
                 conn.cursor(),
                 f"INSERT INTO {_T_KW} (batch_id, category, keyword, search_pop,"
@@ -113,32 +103,18 @@ class PostgresMarketStore(MarketStore):
                 [(batch_id, category, r.get("keyword") or "", r.get("search_pop"),
                   r.get("click_rate"), r.get("pay_rate"), r.get("competition"), now)
                  for r in rows])
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            pool.putconn(conn)
         return batch_id, len(rows)
 
     def add_reviews(self, rows: list[dict], category: str) -> tuple[str, int]:
         batch_id = f"rv-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
         now = datetime.now().isoformat(timespec="seconds")
-        pool = _get_pool()
-        conn = pool.getconn()
-        try:
+        with pool_conn() as conn:
             psycopg2.extras.execute_values(
                 conn.cursor(),
                 f"INSERT INTO {_T_RV} (batch_id, category, product_title,"
                 f" content, star, imported_at) VALUES %s",
                 [(batch_id, category, r.get("product_title") or "",
                   r.get("content") or "", r.get("star"), now) for r in rows])
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            pool.putconn(conn)
         return batch_id, len(rows)
 
     def keywords(self, category: str = "") -> list[dict]:
@@ -161,17 +137,9 @@ class PostgresMarketStore(MarketStore):
     def clear_batch(self, batch_id: str) -> int:
         """按批次清除关键词/差评（batch_id 前缀 kw-/rv- 两表通吃，语义同 SQLite 版）。"""
         removed = 0
-        pool = _get_pool()
-        conn = pool.getconn()
-        try:
+        with pool_conn() as conn:
             for table in (_T_KW, _T_RV):
                 cur = conn.cursor()
                 cur.execute(f"DELETE FROM {table} WHERE batch_id = %s", (batch_id,))
                 removed += cur.rowcount
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            pool.putconn(conn)
         return removed

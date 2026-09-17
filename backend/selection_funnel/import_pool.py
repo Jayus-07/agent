@@ -210,6 +210,19 @@ def parse_table(data: bytes | str, filename: str = "") -> list[dict[str, Any]]:
     return out
 
 
+# ── 同款去重键（漏斗唯一口径，pool_builder / verifier / 存储层共用）────
+def dedup_key(url: str, title: str, platform: str) -> str:
+    """同款判定键：url 优先（有链接以链接为准），无链接退 (title|platform)。
+
+    单一来源定义：pool_builder 的源内/跨源去重与 verifier 的同款历史分组
+    都必须走本函数，避免两处口径漂移。
+    """
+    url = (url or "").strip()
+    if url:
+        return f"url:{url}"
+    return f"title:{(title or '').strip()}|{platform or ''}"
+
+
 # ── SQLite 存储 ────────────────────────────────────────────────────────
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS import_candidates (
@@ -232,6 +245,7 @@ CREATE TABLE IF NOT EXISTS import_candidates (
 );
 CREATE INDEX IF NOT EXISTS idx_import_category ON import_candidates(category);
 CREATE INDEX IF NOT EXISTS idx_import_batch ON import_candidates(batch_id);
+CREATE INDEX IF NOT EXISTS idx_import_url ON import_candidates(url);
 """
 
 _BATCH_NOTE = ""
@@ -322,6 +336,50 @@ class ImportPoolStore:
         with self._connect() as conn:
             cur = conn.execute("DELETE FROM import_candidates WHERE batch_id = ?", (batch_id,))
             return cur.rowcount
+
+    def history_by_keys(self, keys: list[tuple[str, str, str]],
+                        limit: int = 50) -> dict[str, list[dict[str, Any]]]:
+        """批量取同款历史批次（趋势接线，2026-09-18）：一次查询替代逐候选 N 次。
+
+        Args:
+            keys: [(url, title, platform), ...]（候选集的判定键原料，url 可空）
+            limit: 每款最多返回快照条数（与竞品 store.history 的 limit 同义）
+        Returns:
+            {dedup_key(url,title,platform): [快照 新→旧]}。快照字段对齐
+            scoring 的 history 口径：crawled_at=imported_at（该行的数据时点，
+            供热度日增速计算）；in_stock 不补造（导入表无此列，评分层按中性处理）。
+        """
+        wanted = {dedup_key(u, t, p) for u, t, p in keys}
+        if not wanted:
+            return {}
+        urls = sorted({(u or "").strip() for u, _, _ in keys if (u or "").strip()})
+        titles = sorted({(t or "").strip() for _, t, _ in keys if (t or "").strip()})
+        conds, params = [], []
+        if urls:
+            conds.append(f"url IN ({','.join('?' * len(urls))})")
+            params.extend(urls)
+        if titles:
+            conds.append(f"title IN ({','.join('?' * len(titles))})")
+            params.extend(titles)
+        if not conds:
+            return {}
+        sql = (f"SELECT * FROM import_candidates WHERE {' OR '.join(conds)}"
+               " ORDER BY id DESC")
+        with self._connect() as conn:
+            rows = [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for r in rows:
+            key = dedup_key(r.get("url") or "", r.get("title") or "",
+                            r.get("platform") or "")
+            if key not in wanted:
+                continue   # title 命中但 (title, platform) 不同款 → 剔除
+            snap = {"title": r.get("title"), "url": r.get("url"),
+                    "platform": r.get("platform"), "price": r.get("price"),
+                    "rating": r.get("rating"), "review_count": r.get("review_count"),
+                    "sales": r.get("sales"), "imported_at": r.get("imported_at"),
+                    "crawled_at": r.get("imported_at")}
+            grouped.setdefault(key, []).append(snap)
+        return {k: v[:limit] for k, v in grouped.items()}
 
     def count(self) -> int:
         with self._connect() as conn:

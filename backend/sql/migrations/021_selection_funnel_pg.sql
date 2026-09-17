@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS import_candidates (
 );
 CREATE INDEX IF NOT EXISTS idx_sf_imp_category ON import_candidates(category);
 CREATE INDEX IF NOT EXISTS idx_sf_imp_batch ON import_candidates(batch_id);
+-- 同款历史趋势批量取数（verifier → history_by_keys）按 url 定位
+CREATE INDEX IF NOT EXISTS idx_sf_imp_url ON import_candidates(url);
 
 -- ── 关键词榜（赛道画像：top 词 / 机会词）─────────────────────
 CREATE TABLE IF NOT EXISTS keyword_stats (

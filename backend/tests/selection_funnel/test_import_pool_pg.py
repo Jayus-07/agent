@@ -195,3 +195,55 @@ class TestMarketPG:
         assert removed == 2, "只删差评批次"
         assert len(store.reviews()) == 0 and len(store.keywords()) == 1
         assert store.clear_batch(kw_batch) == 1
+
+
+class TestHistoryByKeysPG:
+    """同款历史批量取数（趋势接线 2026-09-18）：一次查询分组，读写路径同池。"""
+
+    def test_groups_across_batches_new_to_old(self, pg_sf):
+        ipp, _mdp = pg_sf
+        store = ipp.PostgresImportPoolStore()
+        store.add_batch([_row("冻干鸡肉", url="u1", price=59.0)], category="宠物零食")
+        store.add_batch([_row("冻干鸡肉", url="u1", price=49.0)], category="宠物零食")
+        hist = store.history_by_keys([("u1", "冻干鸡肉", "淘宝")])
+        snaps = hist["url:u1"]
+        assert [s["price"] for s in snaps] == [49.0, 59.0]   # 新→旧
+        assert snaps[0]["crawled_at"] == snaps[0]["imported_at"]
+
+    def test_title_platform_filtering(self, pg_sf):
+        ipp, _mdp = pg_sf
+        store = ipp.PostgresImportPoolStore()
+        store.add_batch([_row("洁齿骨", price=10.0, platform="淘宝")], category="宠物零食")
+        store.add_batch([_row("洁齿骨", price=12.0, platform="京东")], category="宠物零食")
+        hist = store.history_by_keys([("", "洁齿骨", "淘宝")])
+        assert list(hist) == ["title:洁齿骨|淘宝"]
+        assert [s["price"] for s in hist["title:洁齿骨|淘宝"]] == [10.0]
+
+
+class TestPoolConnHygiene:
+    """pool_conn 统一借还：读路径退出即 commit，连接归还时不挂事务（idle-in-transaction 修）。"""
+
+    def test_read_leaves_connection_ready(self, pg_sf):
+        ipp, _mdp = pg_sf
+        with ipp.pool_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchall()
+        assert conn.status == psycopg2.extensions.STATUS_READY
+
+    def test_market_fetch_leaves_connection_ready(self, pg_sf):
+        """回归：此前 _fetch 裸借还不 commit，连接带事务回流池子。"""
+        _ipp, mdp = pg_sf
+        mdp.PostgresMarketStore().keywords("宠物零食")
+        pool = _ipp_pool()
+        # 借出的任一空闲连接都应是 READY（本前缀测试独占池，SELECT 后必已收尾）
+        conn = pool.getconn()
+        try:
+            assert conn.status == psycopg2.extensions.STATUS_READY
+        finally:
+            pool.putconn(conn)
+
+
+def _ipp_pool():
+    import backend.selection_funnel.import_pool_pg as ipp
+    return ipp._get_pool()

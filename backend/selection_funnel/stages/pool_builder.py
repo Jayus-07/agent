@@ -92,8 +92,11 @@ def _filter_one(cand: dict, category: str, platform: str,
 
 
 def _dedup_key(cand: dict) -> tuple[str, str]:
-    url = (cand.get("url") or "").strip()
-    return ("url", url) if url else ("title", f"{(cand.get('title') or '').strip()}|{cand.get('platform') or ''}")
+    from backend.selection_funnel.import_pool import dedup_key as _shared_key
+    key = _shared_key(cand.get("url") or "", cand.get("title") or "",
+                      cand.get("platform") or "")
+    kind, _, value = key.partition(":")
+    return (kind, value)
 
 
 def _dedupe_keep_latest(items: list[dict], reasons: list[dict]) -> list[dict]:

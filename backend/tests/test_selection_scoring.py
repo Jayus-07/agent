@@ -139,3 +139,23 @@ class TestSplitKeywords:
 
     def test_empty_string(self):
         assert split_keywords("") == set()
+
+
+class TestStabilityWithoutInStock:
+    """导入池快照无 in_stock 列（趋势接线 2026-09-18）：缺字段按中性计，不压分。"""
+
+    def test_missing_in_stock_neutral_not_zero(self):
+        # 两次快照同价（cv=0 → 价格稳定满分），仅缺 in_stock 字段
+        hist = [{"price": 50.0, "crawled_at": "2026-09-10T00:00:00"},
+                {"price": 50.0, "crawled_at": "2026-09-01T00:00:00"}]
+        score = score_product({"price": 50.0}, hist, [{"price": 50.0}])
+        # 有货率缺字段 → 中性 50；合成 0.5*100+0.5*50=75（旧口径会算成 50）
+        assert score["breakdown"]["stability"] == 75.0
+        assert "insufficient_history" not in score["notes"]
+
+    def test_in_stock_present_unchanged(self):
+        """监控快照带 in_stock 字段时口径不变（全有货 → 100）。"""
+        hist = [{"price": 50.0, "in_stock": True},
+                {"price": 50.0, "in_stock": True}]
+        score = score_product({"price": 50.0}, hist, [{"price": 50.0}])
+        assert score["breakdown"]["stability"] == 100.0
