@@ -75,6 +75,13 @@ SELECTION_FUNNEL_DEFAULT_COST_RATIO = float(
 SELECTION_FUNNEL_MIN_MARGIN = float(os.getenv("SELECTION_FUNNEL_MIN_MARGIN", "0.30"))
 
 # =============================================
+# 数据新鲜度（漏斗层四 verify 挂 data_quality.freshness；仅披露不淘汰）
+# =============================================
+# 候选数据时间戳（watchlist crawled_at / 导入表 imported_at）距今超过 N 天
+# 判 stale。stale 不淘汰——只进「证据与假设」披露，提醒重新抓取/导入。
+SELECTION_FUNNEL_STALE_DAYS = float(os.getenv("SELECTION_FUNNEL_STALE_DAYS", "30"))
+
+# =============================================
 # 输出
 # =============================================
 # 最终推荐条数
@@ -124,6 +131,7 @@ def build_config_snapshot(category: str, min_margin: float) -> dict:
         "logistics_fee": SELECTION_FUNNEL_LOGISTICS_FEE_CNY,
         "ads_ratio": SELECTION_FUNNEL_ADS_RATIO,
         "refund_ratio": SELECTION_FUNNEL_REFUND_RATIO,
+        "stale_days": SELECTION_FUNNEL_STALE_DAYS,
         "top_n": SELECTION_FUNNEL_TOP_N,
         "category_rules": dict(CATEGORY_RULES.get(category, {})),
     }

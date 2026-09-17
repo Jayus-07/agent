@@ -31,6 +31,7 @@ def build_funnel_result(final_state: dict) -> dict[str, Any]:
             "margin": (c.get("economics") or {}).get("margin"),
             "gross_margin": (c.get("economics") or {}).get("gross_margin"),
             "completeness": (c.get("data_quality") or {}).get("completeness"),
+            "freshness": (c.get("data_quality") or {}).get("freshness"),
         }
         for c in (final_state.get("candidates") or [])
     ]

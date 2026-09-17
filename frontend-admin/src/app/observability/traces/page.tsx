@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { BellRing, Scale, Download, ShoppingBag } from "lucide-react";
 import TraceFilterBar from "@/components/observability/trace/TraceFilter";
 import StatsBar from "@/components/observability/trace/StatsBar";
 import CSQualityCard from "@/components/observability/trace/CSQualityCard";
@@ -301,25 +302,36 @@ export default function TracesPage() {
           </div>
           <div className="flex items-center gap-2">
             <Link
+              href="/observability/selection-funnel"
+              className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-1.5 transition-colors"
+              title="选品漏斗运行历史（终态四分 + 各层留存）"
+            >
+              <ShoppingBag size={13} />
+              选品漏斗
+            </Link>
+            <Link
               href="/observability/alerts"
               className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-1.5 transition-colors"
               title="降级/告警事件流 + 能力健康度"
             >
-              🚨 系统告警
+              <BellRing size={13} />
+              系统告警
             </Link>
             {compareIds.size >= 2 && (
               <button
                 onClick={goCompare}
                 className="flex items-center gap-1.5 text-xs text-white bg-violet-600 hover:bg-violet-700 rounded-lg px-3 py-1.5 transition-colors"
               >
-                ⚖️ 对比 ({compareIds.size})
+                <Scale size={13} />
+                对比 ({compareIds.size})
               </button>
             )}
             <button
               onClick={exportCsv}
               className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-1.5 transition-colors"
             >
-              📥 导出 CSV
+              <Download size={13} />
+              导出 CSV
             </button>
             <button
               onClick={() => setLive(!live)}
@@ -331,7 +343,7 @@ export default function TracesPage() {
               title={live ? "每 10s 自动拉取新 trace" : "开启后每 10s 自动刷新"}
             >
               <span className={`inline-block w-1.5 h-1.5 rounded-full ${live ? "bg-white" : "bg-emerald-500"}`} />
-              Live
+              实时
             </button>
             <button
               onClick={handleRefresh}
@@ -339,7 +351,7 @@ export default function TracesPage() {
               className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 bg-white border border-slate-200 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50"
             >
               <svg className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 11-2.2-5.9M21 3v6h-6" /></svg>
-              {isRefreshing ? "刷新中..." : "Refresh"}
+              {isRefreshing ? "刷新中..." : "刷新"}
             </button>
           </div>
         </div>

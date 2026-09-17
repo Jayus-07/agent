@@ -25,12 +25,39 @@ _NOTE_LABELS = {
 _KEY_FIELDS = ("title", "price", "rating", "review_count", "sales", "highlights")
 
 
+def _freshness(candidate: dict) -> dict:
+    """数据新鲜度（P1 余量）：crawled_at（监控抓取）优先，imported_at（导入时间）兜底。
+
+    仅披露不淘汰：stale 只进「证据与假设」，提醒重新抓取/导入，
+    绝不因数据旧而静默丢候选（与完整度同纪律）。
+    """
+    from datetime import datetime
+
+    ts = candidate.get("crawled_at") or candidate.get("imported_at")
+    if not ts:
+        return {"freshness": "unknown", "age_days": None}
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)  # 本系统时间戳均为 naive 本地时，统一按 naive 比对
+        age_days = round((datetime.now() - dt).total_seconds() / 86400, 1)
+    except (ValueError, TypeError):
+        return {"freshness": "unknown", "age_days": None}
+    if age_days < 0:
+        age_days = 0.0
+    from backend.config.selection_funnel import SELECTION_FUNNEL_STALE_DAYS
+    level = "stale" if age_days > SELECTION_FUNNEL_STALE_DAYS else "fresh"
+    return {"freshness": level, "age_days": age_days}
+
+
 def _data_quality(candidate: dict) -> dict:
-    """候选级数据质量：关键字段完整度比例 + 缺失清单。"""
+    """候选级数据质量：关键字段完整度比例 + 缺失清单 + 数据新鲜度。"""
     missing = [f for f in _KEY_FIELDS
                if candidate.get(f) is None or candidate.get(f) == ""]
     completeness = round(1 - len(missing) / len(_KEY_FIELDS), 2)
-    return {"completeness": completeness, "missing": missing}
+    dq = {"completeness": completeness, "missing": missing}
+    dq.update(_freshness(candidate))
+    return dq
 
 
 def _default_store() -> Any:

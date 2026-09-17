@@ -90,10 +90,13 @@ from backend.app.api.routes._trace_dto import (  # noqa: E402
 @router.get("/traces")
 async def list_traces(limit: int = Query(20, ge=1, le=200),
                       workflow_name: str | None = Query(None),
-                      session_id: str | None = Query(None)):
+                      session_id: str | None = Query(None),
+                      has_tag: str | None = Query(None)):
     """最近 N 条 trace 摘要（SQLite TraceStore）。
 
     workflow_name / session_id 服务端过滤：前端不再拉 200 条本地 filter。
+    has_tag：按 tags 键存在性过滤（如 has_tag=funnel_run_id → 选品漏斗运行历史，
+    漏斗跑在主图内、workflow_name 仍是主图，只能以标签为口径）。
     """
     stored = trace_collector.list(limit)
     if workflow_name:
@@ -104,6 +107,10 @@ async def list_traces(limit: int = Query(20, ge=1, le=200),
         stored = [d for d in stored
                   if (d.get("session_id") if isinstance(d, dict)
                       else getattr(d, "session_id", "")) == session_id]
+    if has_tag:
+        stored = [d for d in stored
+                  if has_tag in ((d.get("tags") if isinstance(d, dict)
+                                  else getattr(d, "tags", None)) or {})]
     traces = [_stored_dict_to_dto(d) if isinstance(d, dict) else _to_trace_dto(d)
               for d in stored]
     return {"traces": traces}

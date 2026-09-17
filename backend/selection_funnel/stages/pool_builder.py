@@ -29,10 +29,12 @@ from backend.shared.logger import logger
 
 # 快照 → 漏斗候选的归一化字段（缺字段不补造，保留 None 由下游标注）
 # unit_cost：候选级成本（导入表「成本」列），优先于需求级 brief.max_unit_cost
+# imported_at：导入行时间戳（watchlist 走 crawled_at），供数据新鲜度披露
 _POOL_FIELDS = (
     "url", "title", "platform", "price", "original_price", "currency",
     "rating", "review_count", "sales", "unit_cost", "highlights",
-    "promo_text", "in_stock", "category", "crawled_at", "snapshot_id",
+    "promo_text", "in_stock", "category", "crawled_at", "imported_at",
+    "snapshot_id",
 )
 
 

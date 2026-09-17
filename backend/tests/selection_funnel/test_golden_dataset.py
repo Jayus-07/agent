@@ -163,6 +163,7 @@ def test_golden_pet_snacks_full_funnel(funnel_graph, patch_stores):
     assert "实际值：无" in answer          # 全部为估算口径
     assert "估算值：2 条成本按默认比例估计" in answer
     assert "数据完整度" in answer
+    assert "数据新鲜度" in answer   # P1 余量：新鲜度披露（阈值内 fresh / 过期 stale 都有一句话）
     assert final["candidates"][0]["data_quality"]["completeness"] >= 0.5
     for stage in ("brief", "pool", "screen", "verify", "econ", "rank"):
         assert "elapsed_ms" in _stage(final["stage_logs"], stage)
@@ -231,6 +232,22 @@ def test_golden_candidate_level_cost_evidence(funnel_graph, patch_stores):
     assert "实际值：1 条使用明确成本" in answer
     assert "估算值：1 条成本按默认比例估计" in answer
     assert "成本为估计值" in answer   # 决策草案对估算款降级
+
+
+def test_golden_stale_freshness_disclosed(funnel_graph, patch_stores):
+    """数据新鲜度（P1 余量）：旧快照 stale 只披露不淘汰，报告点名 + 给重抓指引。
+
+    固定日期 2026-06-01 随时间只会更旧 → 断言与运行日期解耦，无时间炸弹。
+    """
+    snaps = [dict(s, crawled_at="2026-06-01T10:00:00") for s in _golden_pet_snaps()[:1]]
+    patch_stores(snaps)
+    final = funnel_graph.invoke(
+        new_selection_funnel_graph_input(user_message=PET_MSG))
+    assert final["status"] == "ok"   # stale 不淘汰：强候选照常推荐
+    dq = final["candidates"][0]["data_quality"]
+    assert dq["freshness"] == "stale" and dq["age_days"] > 30
+    answer = final["final_answer"]
+    assert "1 条已过期" in answer and "重新抓取" in answer
 
 
 def test_golden_determinism(funnel_graph, patch_stores):

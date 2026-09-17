@@ -173,3 +173,52 @@ def test_econ_default_cost_ratio_is_estimated():
     econ = kept[0]["economics"]
     assert econ["unit_cost"] == 45.0 and econ["unit_cost_estimated"] is True
     assert any("估计" in w for w in econ["warnings"])
+
+
+def test_verify_freshness_levels():
+    """数据新鲜度（P1 余量）：crawled_at 优先 / imported_at 兜底，超阈值 → stale；仅披露不淘汰。"""
+    from datetime import datetime, timedelta
+    from backend.selection_funnel.stages.verifier import _data_quality
+    now = datetime.now()
+    # stale：crawled_at 60 天前（监控抓取时间）
+    dq = _data_quality({"title": "a",
+                        "crawled_at": (now - timedelta(days=60)).isoformat(timespec="seconds")})
+    assert dq["freshness"] == "stale" and dq["age_days"] > 30
+    # fresh：imported_at 刚刚（导入行时间戳兜底口径）
+    dq2 = _data_quality({"title": "b",
+                         "imported_at": now.isoformat(timespec="seconds")})
+    assert dq2["freshness"] == "fresh"
+    # unknown：无时间戳 / 坏格式，不炸
+    assert _data_quality({"title": "c"})["freshness"] == "unknown"
+    assert _data_quality({"title": "d", "crawled_at": "not-a-date"})["freshness"] == "unknown"
+    # 未来时间戳钳到 0 天，判 fresh
+    dq3 = _data_quality({"title": "e",
+                         "crawled_at": (now + timedelta(days=1)).isoformat(timespec="seconds")})
+    assert dq3["freshness"] == "fresh" and dq3["age_days"] == 0.0
+
+
+def test_evidence_lines_report_freshness():
+    """证据与假设章的新鲜度披露：stale 点名 / 全 fresh 一句话 / 无时间戳给补数指引。"""
+    from datetime import datetime, timedelta
+    from backend.selection_funnel.reporter import _evidence_lines
+    stale_c = {"url": "u1", "title": "老快照", "price": 10.0,
+               "economics": {"margin": 0.35},
+               "data_quality": {"completeness": 1.0, "missing": [],
+                                "freshness": "stale", "age_days": 60.0}}
+    fresh_c = {"url": "u2", "title": "新导入", "price": 10.0,
+               "economics": {"margin": 0.35},
+               "data_quality": {"completeness": 1.0, "missing": [],
+                                "freshness": "fresh", "age_days": 0.1}}
+    fr = [ln for ln in _evidence_lines([stale_c, fresh_c])
+          if ln.startswith("- 数据新鲜度")]
+    assert len(fr) == 1 and "1 条已过期" in fr[0] and "老快照" in fr[0]
+    # 全无时间戳 → 如实说无法判断 + 指引补列
+    unk = [{"url": "u", "title": "x", "economics": {"margin": None},
+            "data_quality": {"completeness": 0.5, "missing": ["price"],
+                             "freshness": "unknown", "age_days": None}}]
+    lines2 = _evidence_lines(unk)
+    assert lines2[-1].startswith("- 数据新鲜度") and "无法判断" in lines2[-1]
+    # 全 fresh → 一句话带阈值
+    lines3 = _evidence_lines([fresh_c])
+    fr3 = [ln for ln in lines3 if ln.startswith("- 数据新鲜度")]
+    assert len(fr3) == 1 and "天内" in fr3[0]

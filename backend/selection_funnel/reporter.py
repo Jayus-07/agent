@@ -284,6 +284,24 @@ def _evidence_lines(candidates: list[dict]) -> list[str]:
             f"- 数据完整度：Top-N 均值 {sum(comps) / len(comps):.0%}，"
             f"最低「{(worst.get('title') or '')[:20]}」{worst_dq.get('completeness', 0):.0%}"
             f"（缺: {missing or '无'}）；完整度仅提示，不参与扣分")
+    fr = [(c.get("data_quality") or {}).get("freshness") or "unknown"
+          for c in candidates]
+    stale_n, unknown_n = fr.count("stale"), fr.count("unknown")
+    from backend.config.selection_funnel import SELECTION_FUNNEL_STALE_DAYS
+    if stale_n:
+        stale_names = "、".join((c.get("title") or c.get("url", ""))[:16]
+                                for c, v in zip(candidates, fr) if v == "stale")
+        lines.append(
+            f"- 数据新鲜度：{stale_n} 条已过期（>{SELECTION_FUNNEL_STALE_DAYS:g} 天，"
+            f"重新抓取/导入后结论更可靠）——{stale_names}；"
+            f"新鲜 {len(fr) - stale_n - unknown_n} 条 / 无时间戳 {unknown_n} 条；"
+            "仅提示不淘汰")
+    elif unknown_n < len(fr):
+        lines.append(f"- 数据新鲜度：全部 {len(fr)} 条在 {SELECTION_FUNNEL_STALE_DAYS:g} 天内，"
+                     "无需重新抓取")
+    else:
+        lines.append("- 数据新鲜度：候选无抓取/导入时间戳，无法判断——"
+                     "导入表格加「抓取时间」列或走监控池后启用")
     return lines
 
 
