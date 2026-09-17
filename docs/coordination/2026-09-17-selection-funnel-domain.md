@@ -54,14 +54,18 @@
 ./.venv/Scripts/python.exe -m pytest backend/tests/selection_funnel/ backend/tests/test_registry_consistency.py backend/tests/test_layer_consistency.py backend/tests/orchestration/router/ -q --no-cov
 ```
 
-## 五、旧 selection_decision workflow 的处置（待用户拍板）
+## 五、旧 selection_decision workflow 的处置（✅ 已拍板选项 A 并落地，2026-09-17）
 
 - 现状：workflow 仍注册且可被向量路由命中（「选品决策/值不值得做」类提问），
   与新域**语义互补不重叠**：漏斗产 Top-N 候选，workflow 对单品做值不值得做的决策。
-- 选项 A（推荐）：保留 workflow，二期把漏斗 Top-N 作为其候选输入（financing/panel/report 模块可复用）。
-- 选项 B：下线 workflow（需同步改 `capabilities.yaml` workflows 段 +
-  `orchestration/workflows/__init__.py::register_all()` + `app/server.py`；
-  重构 246add1 已落地，server.py 不再在途，B 现在可执行）。
+- 选项 A（✅ 已实施，d6d6a0a）：漏斗 Top-N 作为 workflow 候选输入——
+  `funnel_result.top` 补齐 rating/review_count/highlights；主图
+  `_build_workflow_inputs` 在 selection_decision 且同会话有 funnel_context.top
+  时注入 `funnel_candidates`；`candidates_from_funnel` 归一，`competitor_data`
+  优先漏斗候选、空则回落 watchlist；决策报告披露「候选来源」。financing/panel
+  模块经 `ctx.inputs` 通道天然复用。用法：同会话先跑漏斗，再说
+  「对 Top-1 跑选品决策」。
+- ~~选项 B：下线 workflow~~（不采纳——语义互补已兑现，保留）。
 
 ## 六、海选数据源拍板与导入通道（2026-09-17 第二轮）
 
