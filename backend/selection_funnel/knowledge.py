@@ -88,8 +88,16 @@ def rag_enhance(category: str, platform: str, top_k: int = 3) -> tuple[list[str]
     """检索知识库中的合规规则 / 选品案例片段。
 
     Returns: (片段列表, 来源说明)；不可用/无内容 → ([], "")。
+
+    query 构造纪律（2026-09-17 全流程实测教训）：**不带平台名、不提「广告法」**。
+    QueryAnalyzer 对查询做启发式实体/域析出并写入 metadata_filter：
+      - 平台名（如「淘宝」）被 jieba 析出为 person_names → 硬过滤
+        （严格相等），而文档侧 person_names 是逗号串+噪声 → 必假阴性全库空命中；
+      - 「广告法」触发 business_domain=advertising，与文档侧析出（如 product）
+        单值对单值，天然漂移 → 同样空命中。
+    平台差异由 platform_rules() 内置清单覆盖，检索只做类目级合规/案例召回。
     """
-    query = f"{category} {platform or '全平台'} 平台合规规则 禁限售 广告法 选品案例".strip()
+    query = f"{category} 平台合规规定 禁限售 选品案例".strip()
     try:
         from backend.rag.pipeline import get_rag_pipeline
         text = get_rag_pipeline().retrieve_knowledge(query, top_k=top_k)
