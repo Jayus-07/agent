@@ -69,6 +69,7 @@ _USER_CAP_LABELS = {
     "competitor.analyze": "竞品分析",
     "competitor.watch": "竞品监控",
     "competitor.history": "竞品历史",
+    "selection_funnel": "智能选品漏斗",
     "travel.poi_search": "地点检索",
     "map.lookup": "地图查询",
     "email.send": "邮件发送",

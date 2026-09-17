@@ -72,6 +72,19 @@ def router_node(state: dict) -> dict:
     except Exception as e:
         logger.warning(f"[RouterNode] 旅游预过滤失败，回退到主 Router: {e}")
 
+    # ── 选品漏斗预过滤：纯正则（~1ms），与旅游同层（2026-09-17 接线）──
+    # 「给宠物零食做一次智能选品」这类请求短路进选品漏斗域图；语义与
+    # selection_decision workflow（上不上架决策）通过 _DECISION_EXCLUDE 互斥。
+    try:
+        from backend.orchestration.graph.selection_funnel_prefilter import (
+            try_selection_funnel_prefilter,
+        )
+        funnel_update = try_selection_funnel_prefilter(query, state)
+        if funnel_update is not None:
+            return {**state, **funnel_update}
+    except Exception as e:
+        logger.warning(f"[RouterNode] 选品预过滤失败，回退到主 Router: {e}")
+
     # ── CS 语义兜底：无 CS 规则命中时，向量通道仍可能判定为客服域 ──
     if not cs_rule_hits:
         cs_update = _try_cs_prefilter()

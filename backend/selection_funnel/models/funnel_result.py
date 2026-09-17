@@ -1,0 +1,45 @@
+"""selection_funnel/models/funnel_result.py — 漏斗域图 → 主图契约
+
+与 travel.models.graph_result 同职责：把域图终态收敛成稳定 dict，
+适配器只透传，不让主图感知域内状态细节。
+"""
+from __future__ import annotations
+
+from typing import Any
+
+
+def build_funnel_result(final_state: dict) -> dict[str, Any]:
+    """终态 → {final_answer, funnel_context, status}。
+
+    funnel_context 只放轻量摘要（推荐条目 + 各层计数），
+    不携带整份候选池，避免主状态/checkpointer 反复序列化大对象。
+    """
+    stage_logs = final_state.get("stage_logs") or []
+    stage_summary = [
+        {"stage": log.get("stage", ""), "kept": log.get("kept", 0),
+         "dropped": log.get("dropped", 0)}
+        for log in stage_logs
+    ]
+    top = [
+        {
+            "rank": c.get("rank"),
+            "title": c.get("title") or c.get("url", ""),
+            "url": c.get("url", ""),
+            "platform": c.get("platform") or "",
+            "price": c.get("price"),
+            "score_total": (c.get("score") or {}).get("total"),
+            "margin": (c.get("economics") or {}).get("margin"),
+        }
+        for c in (final_state.get("candidates") or [])
+    ]
+    brief = final_state.get("brief") or {}
+    return {
+        "final_answer": final_state.get("final_answer") or "",
+        "status": final_state.get("status") or "ok",
+        "funnel_context": {
+            "category": brief.get("category", ""),
+            "status": final_state.get("status") or "ok",
+            "top": top,
+            "stage_summary": stage_summary,
+        },
+    }
