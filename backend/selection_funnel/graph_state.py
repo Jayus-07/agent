@@ -50,6 +50,7 @@ class SelectionFunnelState(TypedDict, total=False):
     session_id: str
     conversation_id: str
     funnel_context: dict
+    run_id: str                 # 本次运行唯一 ID（适配器生成 → config_snapshot/trace）
 
     # === 槽位 ===
     brief: dict
@@ -78,6 +79,7 @@ def new_selection_funnel_graph_input(
     session_id: str = "",
     conversation_id: str = "",
     funnel_context: dict | None = None,
+    run_id: str = "",
 ) -> dict[str, Any]:
     """构建漏斗域图输入 —— **只放本轮输入，不放任何产物或执行态的默认值**。
 
@@ -91,6 +93,7 @@ def new_selection_funnel_graph_input(
         "session_id": session_id,
         "conversation_id": conversation_id,
         "funnel_context": funnel_context or {},
+        "run_id": run_id,
     }
 
 

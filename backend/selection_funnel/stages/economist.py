@@ -3,6 +3,9 @@
 贡献利润率 = (售价 − 成本 − 平台扣点 − 物流 − 推广费 − 退款损耗) / 售价，
 低于目标线直接淘汰并给出完整数字明细 —— 淘汰理由必须可复算。
 （口径正名 2026-09-17：本层门控判据是贡献利润率，商品毛利率仅展示不门控。）
+
+成本优先级（2026-09-17 P1 候选级补录）：候选级 unit_cost（导入表「成本」列）
+> 需求级 brief.max_unit_cost > 默认 45% 售价估计（estimated 标记不变）。
 """
 from __future__ import annotations
 
@@ -26,8 +29,10 @@ def econ_candidates(candidates: list[dict], category: str,
     reasons: list[dict] = []
     notes: list[str] = []
     for c in candidates:
+        # 候选级成本（导入表「成本」列）优先于需求级 brief.max_unit_cost
+        eff_cost = c.get("unit_cost") if c.get("unit_cost") is not None else unit_cost
         econ = calc_unit_economics(
-            price=c.get("price"), unit_cost=unit_cost,
+            price=c.get("price"), unit_cost=eff_cost,
             fee_rate=fee_rate, logistics_fee=logistics_fee,
             ads_ratio=ads_ratio, refund_ratio=refund_ratio,
             default_cost_ratio=default_cost_ratio,

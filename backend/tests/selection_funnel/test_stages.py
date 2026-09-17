@@ -141,3 +141,35 @@ def test_rank_deterministic_and_reason_traceable():
     assert "88.0" in reason and "29.4%" in reason
     assert "历史快照不足" in reason
     assert "价格战" in reason
+
+
+def test_econ_candidate_level_cost_overrides_brief():
+    """候选级成本（导入表「成本」列）优先于需求级 brief.max_unit_cost（P1 补录源）。"""
+    from backend.selection_funnel.stages.economist import econ_candidates
+    cands = [
+        {"url": "u-1", "title": "a", "price": 100.0, "unit_cost": 20.0},
+        {"url": "u-2", "title": "b", "price": 100.0, "unit_cost": None},
+    ]
+    kept, reasons, notes = econ_candidates(
+        cands, "宠物零食", min_margin=0.20, unit_cost=45.0,
+        fee_rate=0.055, logistics_fee=5.0, ads_ratio=0.15,
+        refund_ratio=0.03, default_cost_ratio=0.45)
+    assert len(kept) == 2 and reasons == []
+    by_url = {c["url"]: c for c in kept}
+    e1, e2 = by_url["u-1"]["economics"], by_url["u-2"]["economics"]
+    assert e1["unit_cost"] == 20.0 and e1["unit_cost_estimated"] is False
+    # 需求级 45 来自 brief（用户明确给的成本）→ actual 而非 estimated
+    assert e2["unit_cost"] == 45.0 and e2["unit_cost_estimated"] is False
+
+
+def test_econ_default_cost_ratio_is_estimated():
+    """无任何成本来源（无候选级/需求级）→ 按默认比例估计并标记 estimated。"""
+    from backend.selection_funnel.stages.economist import econ_candidates
+    cands = [{"url": "u-1", "title": "a", "price": 100.0}]
+    kept, _r, _n = econ_candidates(
+        cands, "宠物零食", min_margin=0.20, unit_cost=None,
+        fee_rate=0.055, logistics_fee=5.0, ads_ratio=0.15,
+        refund_ratio=0.03, default_cost_ratio=0.45)
+    econ = kept[0]["economics"]
+    assert econ["unit_cost"] == 45.0 and econ["unit_cost_estimated"] is True
+    assert any("估计" in w for w in econ["warnings"])

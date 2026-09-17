@@ -5,6 +5,10 @@
 """
 from __future__ import annotations
 
+import time
+import uuid
+from datetime import datetime
+
 from backend.shared.logger import logger
 from backend.selection_funnel.graph_builder import get_selection_funnel_graph
 from backend.selection_funnel.graph_state import new_selection_funnel_graph_input
@@ -13,10 +17,16 @@ from backend.selection_funnel.models.funnel_result import build_funnel_result
 _FALLBACK_ANSWER = "抱歉，智能选品服务暂时不可用，请稍后再试。"
 
 
+def _new_run_id() -> str:
+    """本次漏斗运行唯一 ID：进 config_snapshot / trace，用于事后追溯。"""
+    return f"sel-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
+
+
 def selection_funnel_graph_node(state: dict) -> dict:
     """Main Graph → 漏斗域图 → Main Graph 适配器"""
     funnel_context = state.get("funnel_context") or {}
     session_id = state.get("session_id", "")
+    run_id = _new_run_id()
 
     graph_input = new_selection_funnel_graph_input(
         user_message=state.get("question") or state.get("query") or "",
@@ -27,8 +37,10 @@ def selection_funnel_graph_node(state: dict) -> dict:
             "category": funnel_context.get("category") or "",
             "platform": funnel_context.get("platform") or "",
         },
+        run_id=run_id,
     )
 
+    t0 = time.perf_counter()
     try:
         from backend.config.selection_funnel import (
             SELECTION_FUNNEL_GRAPH_RECURSION_LIMIT,
@@ -42,39 +54,44 @@ def selection_funnel_graph_node(state: dict) -> dict:
         # 终态四分（2026-09-17 P0）：系统异常 ≠ 淘空——trace 打 funnel_status=failed，
         # 失败率可与 empty_pool / need_info 分开统计，不伪装成正常终态。
         logger.exception("[selection_funnel_graph_node] 漏斗域图执行异常，降级返回兜底回复")
-        _stamp_failed_status()
+        _stamp_failed_status(run_id)
         return {
             "final_answer": _FALLBACK_ANSWER,
             "funnel_context": funnel_context or {},
         }
 
-    _stamp_execution_tags(final_state, result)
+    duration_ms = round((time.perf_counter() - t0) * 1000, 1)
+    _stamp_execution_tags(final_state, result, run_id=run_id,
+                          duration_ms=duration_ms)
     return {
         "final_answer": result.get("final_answer") or _FALLBACK_ANSWER,
         "funnel_context": result.get("funnel_context") or {},
     }
 
 
-def _stamp_failed_status() -> None:
-    """异常终态观测标记（软失败）：trace.tags 记 funnel_status=failed。"""
+def _stamp_failed_status(run_id: str) -> None:
+    """异常终态观测标记（软失败）：trace.tags 记 funnel_status=failed + run_id。"""
     try:
         from backend.observability.tracer import trace_collector
         trace = trace_collector.current()
         if trace is None:
             return
         trace.tags["funnel_status"] = "failed"
+        trace.tags["funnel_run_id"] = run_id
     except Exception:
         logger.debug("[selection_funnel_graph_node] failed 标记写入失败", exc_info=True)
 
 
-def _stamp_execution_tags(final_state: dict, result: dict) -> None:
-    """漏斗质量指标埋点（软失败）：各层留存数 / 终态 / 运行配置，供漏斗转化率统计。"""
+def _stamp_execution_tags(final_state: dict, result: dict,
+                          run_id: str = "", duration_ms: float = 0.0) -> None:
+    """漏斗质量指标埋点（软失败）：各层留存数 / 终态 / 运行配置 / 耗时。"""
     try:
         from backend.observability.tracer import trace_collector
         trace = trace_collector.current()
         if trace is None:
             return
         trace.tags["funnel_status"] = result.get("status", "")
+        trace.tags["funnel_run_id"] = run_id
         brief = final_state.get("brief") or {}
         if brief.get("category"):
             trace.tags["funnel_category"] = brief["category"]
@@ -82,5 +99,6 @@ def _stamp_execution_tags(final_state: dict, result: dict) -> None:
         trace.metadata["funnel_stage_summary"] = ctx.get("stage_summary", [])
         if ctx.get("config_snapshot"):
             trace.metadata["funnel_config"] = ctx["config_snapshot"]
+        trace.metadata["funnel_duration_ms"] = duration_ms
     except Exception:
         logger.debug("[selection_funnel_graph_node] 执行标签写入失败", exc_info=True)

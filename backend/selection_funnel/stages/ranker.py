@@ -47,6 +47,12 @@ def build_reason(item: dict) -> str:
                   "single_item_pool": "缺少同类对比",
                   "insufficient_history": "历史快照不足"}
         parts.append("数据缺口: " + "、".join(labels.get(n, n) for n in score["notes"]))
+    dq = item.get("data_quality") or {}
+    if dq.get("completeness") is not None and dq["completeness"] < 1:
+        labels = {"title": "标题", "price": "售价", "rating": "评分",
+                  "review_count": "评价数", "sales": "销量", "highlights": "卖点"}
+        missing = "、".join(labels.get(f, f) for f in (dq.get("missing") or []))
+        parts.append(f"数据完整度 {dq['completeness']:.0%}（缺: {missing}）")
     return "；".join(parts)
 
 

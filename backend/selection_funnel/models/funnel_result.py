@@ -29,6 +29,8 @@ def build_funnel_result(final_state: dict) -> dict[str, Any]:
             "price": c.get("price"),
             "score_total": (c.get("score") or {}).get("total"),
             "margin": (c.get("economics") or {}).get("margin"),
+            "gross_margin": (c.get("economics") or {}).get("gross_margin"),
+            "completeness": (c.get("data_quality") or {}).get("completeness"),
         }
         for c in (final_state.get("candidates") or [])
     ]

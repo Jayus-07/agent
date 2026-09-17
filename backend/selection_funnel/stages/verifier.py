@@ -21,6 +21,17 @@ _NOTE_LABELS = {
     "insufficient_history": "历史快照不足",
 }
 
+# 数据完整度关键字段（P1 评审 §2.5：定量完整度只披露不扣分，不破坏旧评分）
+_KEY_FIELDS = ("title", "price", "rating", "review_count", "sales", "highlights")
+
+
+def _data_quality(candidate: dict) -> dict:
+    """候选级数据质量：关键字段完整度比例 + 缺失清单。"""
+    missing = [f for f in _KEY_FIELDS
+               if candidate.get(f) is None or candidate.get(f) == ""]
+    completeness = round(1 - len(missing) / len(_KEY_FIELDS), 2)
+    return {"completeness": completeness, "missing": missing}
+
 
 def _default_store() -> Any:
     from backend.competitor.store import get_store
@@ -46,6 +57,7 @@ def verify_candidates(candidates: list[dict],
         item = dict(c)
         item["score"] = score
         item["pain_points"] = extract_pain_points(c)
+        item["data_quality"] = _data_quality(c)
         enriched.append(item)
     return enriched, notes
 

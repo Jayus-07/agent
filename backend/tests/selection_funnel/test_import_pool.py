@@ -143,3 +143,26 @@ def test_import_table_failure_degrades(tmp_path):
     """解析失败不炸调用方：("", 0, [原因])。"""
     batch, n, notes = import_table("这不是一个表格", category="x")
     assert batch == "" and n == 0 and notes and "导入失败" in notes[0]
+
+
+# ── 候选级成本列（2026-09-17 P1 人工补录源）─────────────────────────────
+def test_map_columns_unit_cost_aliases():
+    mapping, _ = map_columns(["商品标题", "售价", "成本(元)"])
+    assert mapping[2] == "unit_cost"
+
+
+def test_normalize_row_unit_cost():
+    row = normalize_row({"标题": "宠物零食冻干鸡肉", "成本": "45元"})
+    assert row["unit_cost"] == 45.0
+    row2 = normalize_row({"标题": "x"})
+    assert row2["unit_cost"] is None
+
+
+def test_import_store_unit_cost_roundtrip(isolated_import_store):
+    csv_data = "标题,价格,成本\n冻干鸡肉,59.0,20\n鸡肉干,29.0,\n"
+    batch_id, n, _notes = import_table(csv_data, category="宠物零食")
+    assert n == 2 and batch_id.startswith("imp-")
+    costs = {i["title"]: i.get("unit_cost")
+             for i in isolated_import_store.list_candidates()}
+    assert costs["冻干鸡肉"] == 20.0
+    assert costs["鸡肉干"] is None

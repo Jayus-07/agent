@@ -157,12 +157,22 @@ def test_golden_pet_snacks_full_funnel(funnel_graph, patch_stores):
     assert "贡献利润率" in answer and "商品毛利率" in answer
     assert "贡献利润率 14.3% < 目标 20%" in answer
     assert "运行配置" in answer
+    # P1：执行摘要 / 证据与假设 / 数据完整度 / 节点耗时
+    assert "执行摘要" in answer and "证据与假设" in answer
+    assert "建池 7 条 → 推荐 4 条" in answer
+    assert "实际值：无" in answer          # 全部为估算口径
+    assert "估算值：2 条成本按默认比例估计" in answer
+    assert "数据完整度" in answer
+    assert final["candidates"][0]["data_quality"]["completeness"] >= 0.5
+    for stage in ("brief", "pool", "screen", "verify", "econ", "rank"):
+        assert "elapsed_ms" in _stage(final["stage_logs"], stage)
     assert "unit_cost_estimated" not in answer  # 估计标记走 warnings 而非字段名
 
     snap = final["config_snapshot"]
     assert snap["min_margin"] == 0.2
     assert "import" in snap["pool_sources"] and "watchlist" in snap["pool_sources"]
     assert snap["top_n"] == 5
+    assert "run_id" not in snap  # 直连图未传 run_id → 不注入（答案保持确定性）
 
 
 def test_golden_dress_category_econ_gate(funnel_graph, patch_stores):
@@ -200,6 +210,27 @@ def test_golden_home_empty_pool_with_config(funnel_graph, patch_stores):
     answer = final["final_answer"]
     assert "全部淘汰" in answer and "没有命中类目" in answer
     assert "运行配置" in answer and "贡献利润率线" in answer
+
+
+def test_golden_candidate_level_cost_evidence(funnel_graph, patch_stores):
+    """候选级成本列（P1 补录源）：明确成本不降级，估算成本在草案/证据中如实标注。"""
+    patch_stores([
+        make_snap(url="c-1", title="宠物零食冻干鸡肉", price=100.0,
+                  rating=4.8, review_count=3000, unit_cost=20.0, snapshot_id=21),
+        make_snap(url="c-2", title="宠物零食鸡肉干", price=100.0,
+                  rating=4.7, review_count=2500, snapshot_id=22),
+    ])
+    final = funnel_graph.invoke(new_selection_funnel_graph_input(
+        user_message="帮我给宠物零食做智能选品，目标毛利率20%"))
+    assert final["status"] == "ok"
+    ranked = {c["url"]: c for c in final["candidates"]}
+    assert ranked["c-1"]["economics"]["unit_cost"] == 20.0
+    assert ranked["c-1"]["economics"]["unit_cost_estimated"] is False
+    assert ranked["c-2"]["economics"]["unit_cost_estimated"] is True
+    answer = final["final_answer"]
+    assert "实际值：1 条使用明确成本" in answer
+    assert "估算值：1 条成本按默认比例估计" in answer
+    assert "成本为估计值" in answer   # 决策草案对估算款降级
 
 
 def test_golden_determinism(funnel_graph, patch_stores):

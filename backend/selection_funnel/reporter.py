@@ -225,6 +225,68 @@ def _decision_draft_lines(candidates: list[dict],
     return lines
 
 
+def _summary_lines(pool: list[dict], candidates: list[dict]) -> list[str]:
+    """执行摘要（P1）：一句话结论 + Top-1 关键数字。"""
+    lines = [f"- 建池 {len(pool or [])} 条 → 推荐 {len(candidates)} 条"]
+    if candidates:
+        top = candidates[0]
+        econ = top.get("economics") or {}
+        margin = econ.get("margin")
+        head = (f"- Top-1「{(top.get('title') or '')[:24]}」"
+                f"潜力分 {(top.get('score') or {}).get('total', '-')}")
+        if margin is not None:
+            head += f" / 贡献利润率 {margin:.1%}"
+        lines.append(head)
+        lines.append("- 结论：有可验证候选，按「测款计划」小额试错后再谈放量")
+    else:
+        lines.append("- 结论：本轮无可推荐候选，见淘汰明细与建议")
+    return lines
+
+
+def _evidence_lines(candidates: list[dict]) -> list[str]:
+    """证据与假设（P1）：实际值 / 估算值 / 缺失数据 / 数据完整度，可追溯。"""
+    if not candidates:
+        return []
+    actual: list[dict] = []
+    estimated: list[dict] = []
+    no_margin: list[dict] = []
+    for c in candidates:
+        econ = c.get("economics") or {}
+        if econ.get("margin") is None:
+            no_margin.append(c)
+        elif c.get("unit_cost") is not None:
+            actual.append(c)
+        elif econ.get("unit_cost_estimated"):
+            estimated.append(c)
+        else:
+            actual.append(c)
+    lines = [f"- 实际值：{len(actual)} 条使用明确成本（来源：导入表「成本」列或对话提供）"
+             if actual else "- 实际值：无——本轮全部成本为估算口径"]
+    if estimated:
+        names = "、".join((c.get("title") or c.get("url", ""))[:16]
+                          for c in estimated[:5])
+        more = f"（另 {len(estimated) - 5} 条略）" if len(estimated) > 5 else ""
+        lines.append(f"- 估算值：{len(estimated)} 条成本按默认比例估计——{names}{more}；"
+                     "决策草案已按「条件做」降级")
+    if no_margin:
+        lines.append(f"- 缺失数据：{len(no_margin)} 条缺售价无法测算利润（保留并披露）")
+    comps = [(c.get("data_quality") or {}).get("completeness") for c in candidates]
+    comps = [v for v in comps if v is not None]
+    if comps:
+        field_labels = {"title": "标题", "price": "售价", "rating": "评分",
+                        "review_count": "评价数", "sales": "销量", "highlights": "卖点"}
+        worst = min(candidates,
+                    key=lambda c: (c.get("data_quality") or {}).get("completeness", 1))
+        worst_dq = worst.get("data_quality") or {}
+        missing = "、".join(field_labels.get(f, f)
+                            for f in (worst_dq.get("missing") or []))
+        lines.append(
+            f"- 数据完整度：Top-N 均值 {sum(comps) / len(comps):.0%}，"
+            f"最低「{(worst.get('title') or '')[:20]}」{worst_dq.get('completeness', 0):.0%}"
+            f"（缺: {missing or '无'}）；完整度仅提示，不参与扣分")
+    return lines
+
+
 def _config_lines(brief, min_margin: float) -> list[str]:
     """运行配置快照渲染（与 build_config_snapshot 同源，报告可复现）。"""
     from backend.config.selection_funnel import build_config_snapshot
@@ -257,6 +319,11 @@ def render_report(brief, stage_logs: list[dict], candidates: list[dict],
     config_lines = 本次运行配置（阈值/口径快照，可复现）。"""
     lines = [
         f"## 智能选品漏斗报告（{brief.category}）", "",
+        "### 执行摘要", "",
+    ]
+    lines += _summary_lines(pool or [], candidates)
+    lines += [
+        "",
         f"需求口径：平台 {brief.platform or '不限'}；"
         f"价格带 {f'{brief.price_min:g}-{brief.price_max:g}元' if brief.price_min is not None and brief.price_max is not None else '不限'}；"
         f"目标贡献利润率 {brief.target_margin:.0%}" if brief.target_margin else
@@ -289,6 +356,9 @@ def render_report(brief, stage_logs: list[dict], candidates: list[dict],
     draft = _decision_draft_lines(candidates, min_margin=min_margin)
     if draft:
         lines += ["", "### 决策草案（规则初判）", ""] + draft
+    evidence = _evidence_lines(candidates)
+    if evidence:
+        lines += ["", "### 证据与假设", ""] + evidence
     if notes:
         lines += ["", "### 数据缺口与说明", ""]
         lines += [f"- {n}" for n in dict.fromkeys(notes)]
@@ -371,6 +441,9 @@ def reporter_node(state: dict) -> dict:
                            moq=moq, min_margin=min_margin,
                            config_lines=_config_lines(brief, min_margin))
     from backend.config.selection_funnel import build_config_snapshot
+    snap = build_config_snapshot(brief.category, min_margin)
+    if state.get("run_id"):
+        snap["run_id"] = state["run_id"]
     return {"final_answer": answer, "status": "ok",
-            "config_snapshot": build_config_snapshot(brief.category, min_margin),
+            "config_snapshot": snap,
             "finished": True}

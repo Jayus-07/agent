@@ -28,10 +28,11 @@ from backend.selection_funnel.graph_state import (
 from backend.shared.logger import logger
 
 # 快照 → 漏斗候选的归一化字段（缺字段不补造，保留 None 由下游标注）
+# unit_cost：候选级成本（导入表「成本」列），优先于需求级 brief.max_unit_cost
 _POOL_FIELDS = (
     "url", "title", "platform", "price", "original_price", "currency",
-    "rating", "review_count", "sales", "highlights", "promo_text", "in_stock",
-    "category", "crawled_at", "snapshot_id",
+    "rating", "review_count", "sales", "unit_cost", "highlights",
+    "promo_text", "in_stock", "category", "crawled_at", "snapshot_id",
 )
 
 

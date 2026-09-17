@@ -47,6 +47,7 @@ _COLUMN_ALIASES: dict[str, set[str]] = {
     "platform": {"平台", "渠道", "平台渠道", "platform"},
     "category": {"类目", "品类", "一级类目", "叶子类目", "category"},
     "url": {"链接", "商品链接", "链接地址", "商品地址", "url", "link"},
+    "unit_cost": {"成本", "进货价", "进价", "成本价", "采购价", "成本(元)", "unit_cost", "cost"},
     "promo_text": {"促销", "优惠", "促销信息", "活动信息", "优惠活动", "promo"},
     "highlights": {"卖点", "商品卖点", "亮点", "亮点描述", "核心卖点", "highlights"},
 }
@@ -115,6 +116,7 @@ def normalize_row(raw: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {
         "title": "", "platform": "", "price": None, "original_price": None,
         "rating": None, "review_count": None, "sales": None,
+        "unit_cost": None,
         "category": "", "url": "", "promo_text": "", "highlights": "",
     }
     extra: dict[str, Any] = {}
@@ -219,6 +221,7 @@ CREATE TABLE IF NOT EXISTS import_candidates (
     rating REAL,
     review_count INTEGER,
     sales INTEGER,
+    unit_cost REAL,
     category TEXT DEFAULT '',
     url TEXT DEFAULT '',
     promo_text TEXT DEFAULT '',
@@ -241,6 +244,10 @@ class ImportPoolStore:
         os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            # 旧库平滑迁移：unit_cost 列（2026-09-17 P1 候选级成本补录）
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(import_candidates)")}
+            if "unit_cost" not in cols:
+                conn.execute("ALTER TABLE import_candidates ADD COLUMN unit_cost REAL")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
@@ -258,8 +265,8 @@ class ImportPoolStore:
         with self._connect() as conn:
             conn.executemany(
                 "INSERT INTO import_candidates (batch_id, title, platform, price, original_price,"
-                " rating, review_count, sales, category, url, promo_text, highlights, extra_json, imported_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " rating, review_count, sales, unit_cost, category, url, promo_text, highlights, extra_json, imported_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [
                     (
                         batch_id,
@@ -270,6 +277,7 @@ class ImportPoolStore:
                         r.get("rating"),
                         r.get("review_count"),
                         r.get("sales"),
+                        r.get("unit_cost"),
                         r.get("category") or category,
                         r.get("url") or "",
                         r.get("promo_text") or "",

@@ -11,7 +11,8 @@
 from __future__ import annotations
 
 import threading
-from typing import Any
+import time
+from typing import Any, Callable
 
 from langgraph.graph import END, START, StateGraph
 
@@ -37,6 +38,25 @@ from backend.shared.logger import logger
 
 _PIPELINE = (FUNNEL_POOL, FUNNEL_SCREEN, FUNNEL_VERIFY, FUNNEL_ECON, FUNNEL_RANK)
 
+_STAGE_KEYS = {
+    FUNNEL_BRIEF: "brief", FUNNEL_POOL: "pool", FUNNEL_SCREEN: "screen",
+    FUNNEL_VERIFY: "verify", FUNNEL_ECON: "econ", FUNNEL_RANK: "rank",
+}
+
+
+def _timed(stage: str, fn: Callable) -> Callable:
+    """节点耗时记录（P1）：耗时写进该节点自己追加的 stage_logs 条目。"""
+    def _inner(state: dict) -> dict:
+        t0 = time.perf_counter()
+        out = fn(state)
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+        logs = out.get("stage_logs")
+        if (isinstance(logs, list) and logs and isinstance(logs[-1], dict)
+                and logs[-1].get("stage") == stage):
+            logs[-1]["elapsed_ms"] = elapsed_ms
+        return out
+    return _inner
+
 
 def _route_after_stage(state: dict) -> str:
     """条件边：need_info / 淘空 → 直接进 reporter；否则沿漏斗下行。"""
@@ -50,12 +70,12 @@ def _route_after_stage(state: dict) -> str:
 def build_selection_funnel_graph() -> Any:
     wf = StateGraph(SelectionFunnelState)
 
-    wf.add_node(FUNNEL_BRIEF, brief_node)
-    wf.add_node(FUNNEL_POOL, pool_node)
-    wf.add_node(FUNNEL_SCREEN, screen_node)
-    wf.add_node(FUNNEL_VERIFY, verify_node)
-    wf.add_node(FUNNEL_ECON, econ_node)
-    wf.add_node(FUNNEL_RANK, rank_node)
+    wf.add_node(FUNNEL_BRIEF, _timed(_STAGE_KEYS[FUNNEL_BRIEF], brief_node))
+    wf.add_node(FUNNEL_POOL, _timed(_STAGE_KEYS[FUNNEL_POOL], pool_node))
+    wf.add_node(FUNNEL_SCREEN, _timed(_STAGE_KEYS[FUNNEL_SCREEN], screen_node))
+    wf.add_node(FUNNEL_VERIFY, _timed(_STAGE_KEYS[FUNNEL_VERIFY], verify_node))
+    wf.add_node(FUNNEL_ECON, _timed(_STAGE_KEYS[FUNNEL_ECON], econ_node))
+    wf.add_node(FUNNEL_RANK, _timed(_STAGE_KEYS[FUNNEL_RANK], rank_node))
     wf.add_node(FUNNEL_REPORT, reporter_node)
 
     wf.add_edge(START, FUNNEL_BRIEF)
