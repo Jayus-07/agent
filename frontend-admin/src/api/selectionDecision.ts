@@ -42,6 +42,33 @@ export interface SelectionTaskDetail extends SelectionTask {
   report_md: string | null
 }
 
+/** decision_log 行（B1 拍板闭环，2026-09-17） */
+export interface DecisionRecord {
+  decision_id: string
+  task_id: string | null
+  candidate_id: string
+  category: string | null
+  decision_version: number
+  evidence_snapshot: Record<string, unknown>
+  score_snapshot: Record<string, unknown>
+  recommendation: string
+  user_decision: 'adopted' | 'rejected' | 'deferred' | null
+  decision_at: string
+  actual_metrics: Record<string, unknown> | null
+  feedback_at: string | null
+}
+
+export type UserDecision = 'adopted' | 'rejected' | 'deferred'
+
+export interface DecidePayload {
+  candidate_id: string
+  decision: UserDecision
+  category?: string | null
+  recommendation?: string | null
+  evidence_snapshot?: Record<string, unknown>
+  score_snapshot?: Record<string, unknown>
+}
+
 export const selectionDecisionApi = {
   submit(payload: TaskPayload) {
     return request<{ task_id: string; status: string }>(`${BASE}/tasks`, {
@@ -53,5 +80,21 @@ export const selectionDecisionApi = {
   },
   get(id: string) {
     return request<SelectionTaskDetail>(`${BASE}/tasks/${id}`)
+  },
+  /** B1：任务下决策留痕列表（拍板时间倒序） */
+  listDecisions(taskId: string) {
+    return request<{ decisions: DecisionRecord[] }>(`${BASE}/tasks/${taskId}/decisions`)
+  },
+  /** B1：拍板（留痕 + 用户决策一步完成，幂等由 decision_version 递增表达） */
+  decide(taskId: string, payload: DecidePayload) {
+    return request<DecisionRecord>(`${BASE}/tasks/${taskId}/decisions`, {
+      method: 'POST', body: JSON.stringify(payload), timeout: 15_000,
+    })
+  },
+  /** B1：事后真实表现回填（销量/评价/收益等自由键值） */
+  feedback(decisionId: string, actualMetrics: Record<string, unknown>) {
+    return request<DecisionRecord>(`${BASE}/decisions/${decisionId}/feedback`, {
+      method: 'POST', body: JSON.stringify({ actual_metrics: actualMetrics }), timeout: 15_000,
+    })
   },
 }

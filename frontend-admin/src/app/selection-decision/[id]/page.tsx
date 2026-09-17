@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import MarkdownContent from '@/components/chat/MarkdownContent'
+import DecisionCard from '@/components/selection/DecisionCard'
 import { selectionDecisionApi, SelectionTaskDetail } from '@/api/selectionDecision'
 
 export default function SelectionDecisionReportPage() {
@@ -41,7 +42,11 @@ export default function SelectionDecisionReportPage() {
       {task.status === 'failed' ? (
         <div className="text-red-600">任务失败：{task.error || '未知错误'}</div>
       ) : (
-        <MarkdownContent content={task.report_md || '无报告内容'} />
+        <>
+          <MarkdownContent content={task.report_md || '无报告内容'} />
+          {/* B1 拍板闭环：报告产出后即可拍板；事后表现回填形成闭环（UX P0-③） */}
+          <DecisionCard taskId={params.id} category={task.inputs.category} />
+        </>
       )}
     </div>
   )
