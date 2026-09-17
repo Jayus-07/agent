@@ -1,7 +1,8 @@
 """KnowledgeDocImporter — 种子知识文档直写向量库。
 
-绕过文件系统，将种子 knowledge_doc 的 content 分块后直接写入 ChromaDB，
-同时保留完整的种子 metadata（category/tags/valid_from/channel 等）。
+绕过文件系统，将种子 knowledge_doc 的 content 分块后直接写入向量库
+（pgvector rag_vectors 表），同时保留完整的种子 metadata
+（category/tags/valid_from/channel 等）。
 
 用法:
     from backend.seed.importers.knowledge_importer import KnowledgeDocImporter
@@ -32,8 +33,8 @@ class KnowledgeDocImporter:
     流程:
     1. 加载 knowledge_doc JSON 或接收 dict 列表
     2. 按 500 字符分块（保留 metadata）
-    3. 写入 chunk 级 ChromaDB (data/chroma/)
-    4. 写入 doc 级 ChromaDB (data/doc_db/)
+    3. 写入 chunk 级库（persist_directory → collection "chroma"，沿用历史目录名）
+    4. 写入 doc 级库（persist_directory → collection "doc_db"）
 
     保留的种子 metadata:
     - doc_id, title, category, category_name
@@ -49,12 +50,13 @@ class KnowledgeDocImporter:
         chunk_size: int = 500,
         chunk_overlap: int = 50,
     ):
-        from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
         from backend.rag.embedding_singleton import get_embedding
         from backend.config import (
             CHROMA_PATH, DOC_DB_PATH,
         )
 
+        # 参数名 chroma_path/doc_db_path 保留历史命名（调用方兼容），
+        # 语义现为向量库 collection 目录映射（data/chroma → collection "chroma"）。
         self.chroma_path = chroma_path or CHROMA_PATH
         self.doc_db_path = doc_db_path or DOC_DB_PATH
         self.embedding = get_embedding()  # 全局单例
@@ -64,7 +66,7 @@ class KnowledgeDocImporter:
             separators=["\n\n", "\n", "。", ".", " ", ""],
         )
 
-        # 连接到已有的 ChromaDB（如果存在），否则创建新的
+        # pgvector 构造即「连接 + 幂等建表」（空表 = 空库），天然覆盖连接/创建两种情况
         self._chunk_store = self._connect_or_create(
             self.chroma_path, "chunk"
         )
@@ -75,38 +77,16 @@ class KnowledgeDocImporter:
     def _connect_or_create(self, path: str, db_type: str):
         """连接到已有向量库，不存在则创建空库。
 
-        pgvector 分支：构造即「连接 + 幂等建表」（空表 = 空库），天然覆盖两种情况；
-        chroma 分支保持原逻辑（目录存在性判断 + __new__ 绕过 P0 校验的建空库 hack）。
+        PgVectorKnowledgeStore 构造即「连接 + 幂等建表」（空表 = 空库），
+        天然覆盖两种情况，无需按目录存在性分叉。
         """
-        from backend.rag.vectorstore.factory import get_knowledge_store_class
-        from backend.rag.vectorstore.knowledge_store import ChromaKnowledgeStore
+        from backend.rag.vectorstore.pgvector_store import PgVectorKnowledgeStore
 
-        store_cls = get_knowledge_store_class()
-        if store_cls is not ChromaKnowledgeStore:
-            logger.info(f"[{store_cls.__name__}] 连接/创建 {db_type} 级向量库: {path}")
-            return store_cls(
-                persist_directory=path,
-                embedding_function=self.embedding,
-            )
-
-        if os.path.exists(path) and os.path.isdir(path):
-            logger.info(f"连接已有 {db_type} 级向量库: {path}")
-            return ChromaKnowledgeStore(
-                persist_directory=path,
-                embedding_function=self.embedding,
-            )
-        else:
-            logger.info(f"创建新 {db_type} 级向量库: {path}")
-            store = ChromaKnowledgeStore.__new__(ChromaKnowledgeStore)
-            store.persist_directory = str(path)
-            store.embedding_function = self.embedding
-            # 创建一个空 Chroma
-            from langchain_chroma import Chroma
-            store._chroma = Chroma(
-                persist_directory=str(path),
-                embedding_function=self.embedding,
-            )
-            return store
+        logger.info(f"[PgVectorKnowledgeStore] 连接/创建 {db_type} 级向量库: {path}")
+        return PgVectorKnowledgeStore(
+            persist_directory=path,
+            embedding_function=self.embedding,
+        )
 
     # ---- 导入入口 ----
 

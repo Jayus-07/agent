@@ -1,8 +1,9 @@
-"""test_knowledge_store.py — ChromaKnowledgeStore metadata 清洗。
+"""test_knowledge_store.py — metadata 清洗（_sanitize_metadata）。
 
-ChromaDB 约束：metadata 值只能是标量（str/int/float/bool），
-list 必须非空，dict 和 None 都不允许。chunk 的 section_path 是 list，
-Recursive/QA strategy 产空 list → 入库前必须清洗，否则 upsert 崩溃。
+历史背景：该规则原为 ChromaDB 标量约束而生（metadata 值只能是
+str/int/float/bool，list 必须非空，dict 和 None 都不允许）。
+chunk 的 section_path 是 list，Recursive/QA strategy 产空 list →
+入库前必须清洗。pgvector 实现沿用同一规则保证 JSONB 形态一致。
 """
 from backend.rag.vectorstore.knowledge_store import _sanitize_metadata
 

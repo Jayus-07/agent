@@ -1,17 +1,14 @@
 """selection/market_index.py — 竞品市场语义索引（spec §3.2 / §4.2）
 
-独立 collection `competitor_market`：
-  - VECTOR_BACKEND=chroma（默认）→ 独立 Chroma persist 目录 data/chroma_market；
-  - VECTOR_BACKEND=pgvector → rag_vectors 表 collection='chroma_market'。
-不共用主知识库。embedding 复用 backend.rag.embedding_singleton 全局实例，
-保证向量空间一致。
+独立 collection `competitor_market`（pgvector rag_vectors 表，
+persist_directory basename → collection 名映射，与主知识库不共用）。
+embedding 复用 backend.rag.embedding_singleton 全局实例，保证向量空间一致。
 
 每条快照 → 一条文档（id = snap-{snapshot_id}，保留时序）。
 """
 import os
 from typing import Any, Optional
 
-from backend.config.database import VECTOR_BACKEND
 from backend.shared.logger import logger
 
 _COLLECTION = "competitor_market"
@@ -52,43 +49,32 @@ class MarketIndex:
 
     def __init__(self, persist_directory: str = MARKET_PERSIST_DIR):
         self._persist_directory = persist_directory
-        self._chroma = None
+        self._store = None
 
     def _ensure(self):
-        if self._chroma is None:
+        if self._store is None:
             from backend.rag.embedding_singleton import get_embedding
-            if VECTOR_BACKEND == "pgvector":
-                from backend.rag.vectorstore.pgvector_store import PgVectorKnowledgeStore
-                self._chroma = PgVectorKnowledgeStore(
-                    persist_directory=self._persist_directory,
-                    embedding_function=get_embedding(),
-                )
-            else:
-                from langchain_chroma import Chroma
-                os.makedirs(self._persist_directory, exist_ok=True)
-                self._chroma = Chroma(
-                    collection_name=_COLLECTION,
-                    persist_directory=self._persist_directory,
-                    embedding_function=get_embedding(),
-                )
-            logger.info(f"[MarketIndex] 就绪: backend={VECTOR_BACKEND} "
+            from backend.rag.vectorstore.pgvector_store import PgVectorKnowledgeStore
+
+            self._store = PgVectorKnowledgeStore(
+                persist_directory=self._persist_directory,
+                embedding_function=get_embedding(),
+            )
+            logger.info(f"[MarketIndex] 就绪: backend=pgvector "
                         f"collection={_COLLECTION} dir={self._persist_directory}")
-        return self._chroma
+        return self._store
 
     def index_snapshot(self, snap: dict[str, Any]) -> str:
         """索引一条快照，返回 doc id（无 id 时跳过返回空串）"""
         if not snap.get("id"):
             return ""
         doc_id, text, meta = build_doc(snap)
-        if VECTOR_BACKEND == "pgvector":
-            self._ensure().upsert_texts([text], [meta], [doc_id])
-        else:
-            self._ensure()._collection.upsert(ids=[doc_id], documents=[text], metadatas=[meta])
+        self._ensure().upsert_texts([text], [meta], [doc_id])
         return doc_id
 
     def search_trends(self, query: str, k: int = 10,
                       metadata_filter: Optional[dict] = None) -> list[dict[str, Any]]:
-        """语义趋势检索（独立于主 RAG 管线；两后端签名一致，pgvector 侧内部做 where 归一化）"""
+        """语义趋势检索（独立于主 RAG 管线；store 内部做 where 归一化）"""
         docs = self._ensure().similarity_search_with_score(query, k=k, filter=metadata_filter)
         return [
             {"text": d.page_content, "metadata": d.metadata, "score": float(s)}
@@ -97,9 +83,7 @@ class MarketIndex:
 
     def count(self) -> int:
         """collection 文档总数"""
-        if VECTOR_BACKEND == "pgvector":
-            return self._ensure().count()
-        return self._ensure()._collection.count()
+        return self._ensure().count()
 
 
 _index: Optional[MarketIndex] = None
@@ -111,17 +95,3 @@ def get_market_index() -> MarketIndex:
     if _index is None:
         _index = MarketIndex()
     return _index
-
-
-def reset_market_index() -> None:
-    """重置全局单例（测试隔离）"""
-    global _index
-    _index = None
-
-
-def index_snapshot_safe(snap: dict[str, Any]) -> None:
-    """供 competitor pipeline 调用的安全钩子：失败仅记日志，不影响采集主流程"""
-    try:
-        get_market_index().index_snapshot(snap)
-    except Exception as e:
-        logger.warning(f"[MarketIndex] 快照索引失败（忽略）: {e}")

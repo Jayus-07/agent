@@ -79,7 +79,6 @@ services:
       # PostgreSQL — 记忆库（读写，服务账号）
       - PGHOST=postgres
       # 向量库后端开关（chroma|pgvector，透传 .env；默认 chroma 零变化）
-      - VECTOR_BACKEND=${VECTOR_BACKEND:-chroma}
       - PGPORT=5432
       - PGDATABASE=agent_memory
       - PGUSER=postgres
@@ -185,7 +184,6 @@ services:
       - PGHOST=postgres
       - PGPORT=5432
       # 向量库后端开关（chroma|pgvector；env_file 已透传，此处显式声明默认值）
-      - VECTOR_BACKEND=${VECTOR_BACKEND:-chroma}
       - PGDATABASE=agent_memory
       - PGUSER=postgres
       - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
@@ -235,7 +233,6 @@ services:
       - PGHOST=postgres
       - PGPORT=5432
       # 向量库后端开关（chroma|pgvector；env_file 已透传，此处显式声明默认值）
-      - VECTOR_BACKEND=${VECTOR_BACKEND:-chroma}
       - PGDATABASE=agent_memory
       - PGUSER=postgres
       - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
@@ -289,7 +286,6 @@ services:
       - PGHOST=postgres
       - PGPORT=5432
       # 向量库后端开关（chroma|pgvector；env_file 已透传，此处显式声明默认值）
-      - VECTOR_BACKEND=${VECTOR_BACKEND:-chroma}
       - PGDATABASE=agent_memory
       - PGUSER=postgres
       - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}

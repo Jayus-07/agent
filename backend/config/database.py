@@ -113,13 +113,11 @@ COMPETITOR_PG_CONFIG = _pg_cfg("COMPETITOR_PGDATABASE", "agent_business")
 FEEDBACK_BACKEND = os.getenv("FEEDBACK_BACKEND", "sqlite").strip().lower()
 FEEDBACK_PG_CONFIG = _pg_cfg("FEEDBACK_PGDATABASE", "agent_business")
 
-# === 向量库存储引擎开关（迁移计划 2026-09-17 Chroma → pgvector）===
-# "chroma"（默认，回滚开关）| "pgvector"
-# 作用于 KnowledgeStore 工厂（factory.py）覆盖的向量库：主 RAG chunk 级 /
-# doc 级 / 竞品市场索引；cs_router_index、vector_router 等裸 chromadb 实例
-# 不在本开关范围（后续批次）。切换前置：跑 scripts/export_chroma.py +
-# scripts/import_pgvector.py 完成数据迁移并对账。
-VECTOR_BACKEND = os.getenv("VECTOR_BACKEND", "chroma").strip().lower()
+# === 向量库（迁移计划 2026-09-17 Chroma → pgvector，已收口为唯一实现）===
+# 主 RAG chunk 级 / doc 级 / 竞品市场索引 → PgVectorKnowledgeStore（rag_vectors 表）。
+# ChromaKnowledgeStore 与 factory 开关已删除（数据对账=0 + 评测 PASS 后收口，
+# 回滚 = git revert 133e6d5）；cs_router_index、vector_router 等裸 chromadb
+# 实例仍走 Chroma 本地目录，后续批次换模重嵌入。
 VECTOR_PG_CONFIG = _pg_cfg("VECTOR_PGDATABASE", "agent_memory")
 # 表名前缀（测试隔离用；生产保持空串 → rag_vectors）
 VECTOR_PG_TABLE_PREFIX = os.getenv("VECTOR_PG_TABLE_PREFIX", "")

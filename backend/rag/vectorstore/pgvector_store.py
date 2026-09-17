@@ -1,8 +1,8 @@
 """PgVectorKnowledgeStore — 向量知识库的 PostgreSQL + pgvector 实现。
 
 迁移计划 2026-09-17「Chroma → pgvector」落地（方案见
-docs/chroma-pgvector迁移方案-2026-09-17.md）。与 ChromaKnowledgeStore
-对外接口完全一致（KnowledgeStore ABC），仅替换存储层：
+docs/chroma-pgvector迁移方案-2026-09-17.md）。实现 KnowledgeStore ABC
+（backend/rag/vectorstore/knowledge_store.py），存储层：
 Chroma 本地目录 → PG rag_vectors 表（collection 列区分）。
 
 设计要点：
@@ -16,8 +16,8 @@ Chroma 本地目录 → PG rag_vectors 表（collection 列区分）。
     与 Chroma cosine 距离一致，下游分数消费方无需改动。
   - filter：接受与 Chroma 相同的 where 语法（含 normalize_where 输出形态），
     由 where_to_sql() 翻译为 JSONB 参数化 SQL（纯函数，可独立单测）。
-  - 引擎开关：backend/config/database.py::VECTOR_BACKEND（env VECTOR_BACKEND），
-    工厂分发见 factory.py；默认 chroma，合入后行为零变化。
+  - 唯一实现：VECTOR_BACKEND 开关与 ChromaKnowledgeStore 已于 2026-09-17
+    数据对账=0 + 评测 PASS 后删除，回滚 = git revert 133e6d5。
 
 连接层风格与 rag/indexing/chunk_store_pg.py 一致（psycopg2 短连接 + 幂等 DDL）。
 """
@@ -215,7 +215,7 @@ class PgVectorKnowledgeStore(KnowledgeStore):
             _DDL_DONE.add(self._table)
             logger.info(f"[PgVectorStore] 就绪: table={self._table} collection={self._collection}")
 
-    # ---- 工厂方法（签名与 ChromaKnowledgeStore 对齐）----
+    # ---- 工厂方法（签名与 KnowledgeStore ABC 对齐）----
 
     @classmethod
     def from_documents(

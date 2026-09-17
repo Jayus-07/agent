@@ -18,7 +18,7 @@ except Exception:  # pragma: no cover - 环境缺失时保持旧行为
     pass
 
 from backend.rag.embedding_singleton import get_embedding
-from backend.rag.vectorstore.factory import get_knowledge_store_class
+from backend.rag.vectorstore.pgvector_store import PgVectorKnowledgeStore
 
 from backend.rag.preprocessing.metadata import build_all_metadata_async
 from backend.rag.preprocessing.loader import load_documents_from_directory
@@ -178,14 +178,14 @@ class RAGPipeline:
         """全量重建向量库（兜底/首次运行）。"""
         self.vectordb = self._load_or_create_db(
             CHROMA_PATH,
-            create_fn=lambda: ChromaKnowledgeStore.from_documents(
+            create_fn=lambda: PgVectorKnowledgeStore.from_documents(
                 self.docs, embedding=self.embedding, persist_directory=CHROMA_PATH,
             ),
             db_type="chunk 级",
         )
         self.doc_db = self._load_or_create_db(
             DOC_DB_PATH,
-            create_fn=lambda: ChromaKnowledgeStore.from_texts(
+            create_fn=lambda: PgVectorKnowledgeStore.from_texts(
                 texts=self.doc_level_texts,
                 embedding=self.embedding,
                 metadatas=self.doc_level_meta,
@@ -257,7 +257,7 @@ class RAGPipeline:
 
     def _load_existing_db(self, db_path: str, db_type: str):
         """加载已有向量库（不做版本检查，不创建）。"""
-        db = get_knowledge_store_class()(
+        db = PgVectorKnowledgeStore(
             persist_directory=db_path, embedding_function=self.embedding,
         )
         logger.info(f"加载已有{db_type}向量库: {db_path}")
@@ -433,13 +433,13 @@ class RAGPipeline:
         self.bm25_store = bm25_store  # 保留 store 引用，供删除/重索引时更新
         self.bm25 = bm25_store.load(k=BM25_SEARCH_K)
 
-        # BM25 重建语料源：优先 Chroma（indexer 实际写入的 chunks），
+        # BM25 重建语料源：优先向量库（indexer 实际写入的 chunks），
         # 回退 self.docs（loader chunks）。两者切分策略不同，
-        # Chroma 语料保证 BM25 与向量检索的 chunk 集合一致。
-        # 增量模式下 self.docs 平时不加载，仅 Chroma 语料不可用时懒加载兜底
-        chroma_docs = self._build_bm25_corpus_from_chroma()
-        if chroma_docs:
-            bm25_source = chroma_docs
+        # 向量库语料保证 BM25 与向量检索的 chunk 集合一致。
+        # 增量模式下 self.docs 平时不加载，仅向量库语料不可用时懒加载兜底
+        vectorstore_docs = self._build_bm25_corpus_from_vectorstore()
+        if vectorstore_docs:
+            bm25_source = vectorstore_docs
         else:
             self._ensure_docs_loaded()
             bm25_source = self.docs
@@ -497,12 +497,12 @@ class RAGPipeline:
         except Exception as e:
             logger.warning(f"[RAG] BM25 移除文档失败 ({doc_ids}): {e}")
 
-    def _build_bm25_corpus_from_chroma(self) -> list:
-        """从 Chroma chunk 向量库读取全部文档，作为 BM25 重建语料。
+    def _build_bm25_corpus_from_vectorstore(self) -> list:
+        """从 chunk 向量库读取全部文档，作为 BM25 重建语料。
 
-        Chroma 是 indexer 实际写入的权威数据源；用它构建 BM25 可保证
+        向量库是 indexer 实际写入的权威数据源；用它构建 BM25 可保证
         BM25 chunk 集合与向量检索完全一致，消除 loader/indexer 切分差异。
-        返回空列表表示 Chroma 不可用，调用方应回退 self.docs。
+        返回空列表表示向量库不可用，调用方应回退 self.docs。
         """
         try:
             result = self.vectordb.get()
@@ -517,14 +517,14 @@ class RAGPipeline:
                 text = documents[i] if i < len(documents) else ""
                 meta = metadatas[i] if i < len(metadatas) else {}
                 if text:
-                    docs.append(Document(page_content=text, metadata={**meta, "chroma_id": cid}))
+                    docs.append(Document(page_content=text, metadata={**meta, "vector_id": cid}))
             skipped = len(ids) - len(docs)
             if skipped:
-                logger.warning(f"[RAG] BM25 语料跳过 {skipped} 个空文本 chunk (Chroma {len(ids)} → BM25 {len(docs)})")
-            logger.info(f"[RAG] 从 Chroma 构建 BM25 语料: {len(docs)} chunks")
+                logger.warning(f"[RAG] BM25 语料跳过 {skipped} 个空文本 chunk (向量库 {len(ids)} → BM25 {len(docs)})")
+            logger.info(f"[RAG] 从向量库构建 BM25 语料: {len(docs)} chunks")
             return docs
         except Exception as e:
-            logger.warning(f"[RAG] Chroma BM25 语料读取失败，回退 loader docs: {e}")
+            logger.warning(f"[RAG] BM25 语料读取失败，回退 loader docs: {e}")
             return []
 
     def refresh_bm25_from_store(self) -> None:

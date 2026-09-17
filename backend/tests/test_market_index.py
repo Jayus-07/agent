@@ -1,4 +1,4 @@
-"""market_index 单测 — mock Chroma，验证文档格式与检索封装"""
+"""market_index 单测 — mock 向量库，验证文档格式与检索封装"""
 from unittest.mock import MagicMock
 
 from backend.selection.market_index import MarketIndex, build_doc
@@ -47,31 +47,31 @@ class TestBuildDoc:
 class TestMarketIndex:
     def _make_index(self):
         idx = MarketIndex.__new__(MarketIndex)
-        idx._chroma = MagicMock()
+        idx._store = MagicMock()
         return idx
 
     def test_index_snapshot_calls_upsert(self):
         idx = self._make_index()
         doc_id = idx.index_snapshot(_snap())
         assert doc_id == "snap-42"
-        idx._chroma._collection.upsert.assert_called_once()
+        idx._store.upsert_texts.assert_called_once()
 
     def test_index_snapshot_without_id_returns_empty(self):
         idx = self._make_index()
         snap = _snap()
         snap["id"] = None
         assert idx.index_snapshot(snap) == ""
-        idx._chroma._collection.upsert.assert_not_called()
+        idx._store.upsert_texts.assert_not_called()
 
     def test_search_trends_applies_filter(self):
         idx = self._make_index()
         doc = MagicMock()
         doc.page_content = "正文"
         doc.metadata = {"url": "u"}
-        idx._chroma.similarity_search_with_score.return_value = [(doc, 0.2)]
+        idx._store.similarity_search_with_score.return_value = [(doc, 0.2)]
         hits = idx.search_trends("耳机", k=5, metadata_filter={"platform": "taobao"})
         assert len(hits) == 1
         assert hits[0]["text"] == "正文"
-        idx._chroma.similarity_search_with_score.assert_called_once_with(
+        idx._store.similarity_search_with_score.assert_called_once_with(
             "耳机", k=5, filter={"platform": "taobao"}
         )
