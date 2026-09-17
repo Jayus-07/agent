@@ -75,6 +75,11 @@ class RequestContext:
     # "" = 未声明主体 → 授权未启用（旧行为）。图路径由 RAG 工具层按
     # fail-safe 规则推导后经 pipeline.ask 声明（见 tools/rag.py）。
     subject_type: str = ""
+    # 请求者持有的**文档级**权限集合（§4 权限范围，2026-09-17）：与 KB 级
+    # authorized_kbs 互补的第二层。None = 未声明 → 受限文档 fail-safe 拒绝
+    # （general 文档不受影响，存量语料无受限标记则行为完全不变）。
+    # 见 backend/rag/permissions.py。
+    permissions: tuple[str, ...] | None = None
     # TraceRecord 引用（不注具体类型：避免 observability ← core 导入环）
     trace: Any = None
     # 流式增量回调 sink(text: str) -> None；None = 非流式请求

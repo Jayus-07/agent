@@ -232,6 +232,13 @@ c_channel    获客渠道，枚举 direct / partner / ads。
 
 def A(doc_id, doc_ids, key_facts, qtype, refuse=False, reason=None,
       chunk_ids=None, anchors=None, vreq=None, perms=("general",)):
+    """构造 §4 八字段标注。
+
+    perms 语义（2026-09-17 拍板，消费方 backend/rag/permissions.py +
+    评测 runner 权限门禁）：请求者**持有**的权限集合，general 隐式开放；
+    文档侧所需权限见 DOCS 清单各 doc(perms=...)。权限拒答用例（RD-031）
+    标 general = 无特权用户问受限文档 → 预期拒答。
+    """
     return {
         "doc_id": doc_id,
         "expected_doc_ids": list(doc_ids),
@@ -259,6 +266,9 @@ def derive_expected(case: dict) -> dict:
     双 schema 并存：annotation = 任务书 §4 契约（权威标注），expected = harness
     执行契约（由 annotation 派生，勿手工编辑）。expected_doc_ids 直接以语义
     slug 传递——DocIdResolver 判分时经 registry 桥接 slug ↔ 文件名。
+    version_requirement 消费方（2026-09-17）：any 直接放行；as_of/current/
+    all_versions 由 runner 校验契约并透传 rejection 留痕，检索期 enforcement
+    依赖 R4 版本治理字段。permission_scope 消费方已落地（权限门禁）。
     version_requirement / permission_scope 暂无消费方（§5 门禁全量字段阶段接入）。
     """
     a = case.get("annotation") or {}
@@ -437,7 +447,8 @@ CASES = [
     {"id": "RD-035", "kb_id": KB_ID, "module": "rag",
      "question": "门禁权限申请表里，王倩申请的是哪个区域？权限有效期多久？",
      "annotation": A("scan_access_request", ["scan_access_request"],
-                     ["B2层机房", "90天（2026-07-01至2026-09-28）"], "exact_id"),
+                     ["B2层机房", "90天（2026-07-01至2026-09-28）"], "exact_id",
+                     perms=("general", "it_admin")),
      "metadata": M("pdf", "form", difficulty="medium", group="scanned")},
     {"id": "RD-036", "kb_id": KB_ID, "module": "rag",
      "question": "报销单 BX-2026-0207 的报销金额是多少？",
@@ -473,7 +484,7 @@ CASES = [
      "question": "2026 年上半年公司经营性现金流是多少？",
      "annotation": A("report_fin_h1_2026", ["report_fin_h1_2026"], [],
                      "no_evidence", refuse=True, reason="permission",
-                     perms=("finance_restricted",)),
+                     perms=("general",)),
      "metadata": M("pdf", "report", difficulty="medium", no_answer=True)},
 ]
 

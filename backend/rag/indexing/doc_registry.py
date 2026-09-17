@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS doc_registry (
     keywords     TEXT DEFAULT '',
     time_refs    TEXT DEFAULT '',
     business_domain TEXT DEFAULT '',
-    complexity   TEXT DEFAULT ''
+    complexity   TEXT DEFAULT '',
+    permission_scope TEXT DEFAULT 'general'
 );
 CREATE INDEX IF NOT EXISTS idx_registry_doc_id ON doc_registry(doc_id);
 CREATE INDEX IF NOT EXISTS idx_registry_kb_id ON doc_registry(kb_id);
@@ -93,6 +94,21 @@ class DocumentRegistry:
         os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
         with self._conn() as conn:
             conn.executescript(SCHEMA_SQL)
+            self._ensure_columns(conn)
+
+    @staticmethod
+    def _ensure_columns(conn: sqlite3.Connection) -> None:
+        """存量库惰性加列（幂等）：CREATE TABLE IF NOT EXISTS 不会补旧表的列。
+
+        permission_scope（2026-09-17，§4 权限范围消费方）：文档访问所需权限，
+        'general' 对所有主体开放；检索/评测按请求者持有权限集合裁决。
+        """
+        existing = {r[1] for r in conn.execute("PRAGMA table_info(doc_registry)")}
+        if "permission_scope" not in existing:
+            conn.execute(
+                "ALTER TABLE doc_registry ADD COLUMN permission_scope TEXT DEFAULT 'general'"
+            )
+            logger.info("[doc_registry] 迁移：补列 permission_scope（默认 general）")
 
     def _conn(self) -> sqlite3.Connection:
         return get_connection(self._db_path, row_factory=sqlite3.Row)
@@ -338,7 +354,7 @@ class DocumentRegistry:
         allowed = {
             "minhash_sig", "near_dup_id", "doc_type", "summary", "keywords",
             "time_refs", "business_domain", "complexity", "quality_score",
-            "quality_issues", "confidence",
+            "quality_issues", "confidence", "permission_scope",
         }
         sets = {k: v for k, v in (fields or {}).items() if k in allowed}
         if not sets:
@@ -389,6 +405,9 @@ class DocumentRegistry:
         doc_version = meta.get("doc_version", 1)
         kb_version = meta.get("kb_version", "v1")
         department = meta.get("department", "")
+        # §4 权限范围：文档访问所需权限（'general' 开放；受限值由检索侧按
+        # 请求者持有权限裁决，见 backend/rag/permissions.py）
+        permission_scope = meta.get("permission_scope", "general")
 
         # 4.1: MinHash 近似重复文档进入 pending_review 审核态（此前只是
         # 静默标记 near_dup_id 后照常 active 入库，检测结果无后续策略）。
@@ -403,8 +422,9 @@ class DocumentRegistry:
                     quality_score, quality_issues, embedding_model, minhash_sig, near_dup_id,
                     summary, keywords, time_refs, business_domain, complexity,
                     metadata_fingerprint, doc_version, kb_version, department,
+                    permission_scope,
                     status, last_indexed, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
                 (
                     file_path, file_name, kb_id, doc_id, file_hash,
                     fsize, fmtime,
@@ -414,6 +434,7 @@ class DocumentRegistry:
                     minhash_sig, near_dup_id,
                     summary, keywords, time_refs, business_domain, complexity,
                     metadata_fingerprint, doc_version, kb_version, department,
+                    permission_scope,
                     status,
                 ),
             )

@@ -19,11 +19,26 @@ _SUPPORTED_EXTS = set(PARSABLE_EXTS)
 
 
 def parse_and_chunk(file_path: str, doc_type_hint: str = "") -> List[Document]:
-    """单文件完整切分流水线。返回 leaf + parent 双粒度 chunk。"""
+    """单文件完整切分流水线。返回 leaf + parent 双粒度 chunk。
+
+    兼容包装：需要质量记录上下文（AST/清洗统计）的调用方（indexer 质量门禁）
+    请用 parse_and_chunk_full。
+    """
+    chunks, _qc = parse_and_chunk_full(file_path, doc_type_hint)
+    return chunks
+
+
+def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[Document], dict]:
+    """parse_and_chunk 的完整版：额外返回 §5.1 质量门禁所需上下文。
+
+    qc 字典携带 raw_ast（清洗后节点已含可追溯字段）/normalized_ast/completeness
+    报告/doc_type/strategy 名，供 quality_gate.build_quality_record 消费；
+    普通调用方忽略之即可，行为与旧 parse_and_chunk 完全一致。
+    """
     ext = os.path.splitext(file_path)[1].lower()
     if ext not in _SUPPORTED_EXTS:
         logger.warning(f"[ChunkPipeline] 暂不支持 {ext}（Phase 2），跳过: {file_path}")
-        return []
+        return [], {}
     raw_ast = parse_file(file_path)
 
     # P0-3: 无文字层 PDF（扫描件/纯图片）友好报错，避免 0-chunk 假成功。
@@ -83,4 +98,11 @@ def parse_and_chunk(file_path: str, doc_type_hint: str = "") -> List[Document]:
         for c in chunks:
             c.metadata["ocr_triggered"] = "true"
             c.metadata["ocr_pages"] = int(getattr(raw_ast, "ocr_pages", 0) or 0)
-    return chunks
+    qc = {
+        "raw_ast": raw_ast,
+        "normalized_ast": normalized_ast,
+        "completeness": report,
+        "doc_type": doc_type,
+        "strategy_name": strategy.__class__.__name__,
+    }
+    return chunks, qc

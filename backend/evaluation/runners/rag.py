@@ -234,6 +234,23 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 kb_id = case.metadata.get("kb_id", "default")
                 department = case.metadata.get("department") or ""
 
+                # §4 权限范围消费方（2026-09-17）：annotation.permission_scope =
+                # 请求者**持有**的权限集合（general 隐式开放，见
+                # backend/rag/permissions.py）。检索证据按此裁决可见性。
+                _annotation = case.metadata.get("annotation") or {}
+                _user_perms = {
+                    p for p in (_annotation.get("permission_scope") or ["general"])
+                    if p != "general"
+                }
+                # §4 版本要求消费方：any → 无约束；as_of/current/all_versions
+                # 的检索期 enforcement 依赖 R4 版本治理字段（registry 尚无
+                # version_id/effective_from 列），本轮先校验契约并透传 trace。
+                _vreq = _annotation.get("version_requirement") or {"type": "any"}
+                if _vreq.get("type") not in ("any", "as_of", "current", "all_versions"):
+                    logger.warning(
+                        f"[RAG eval] {case.id} version_requirement.type 非法: {_vreq}"
+                    )
+
                 if ablation_mode != "full":
                     retriever = build_ablation_retriever(
                         pipeline, ablation_mode, kb_id, department,
@@ -341,6 +358,9 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 total_trace_ms = sum(s["duration_ms"] for s in trace_spans)
 
                 # === 组装检索轨迹 ===
+                from backend.rag.permissions import (
+                    is_accessible, required_permissions,
+                )
                 actual_doc_strs = []
                 seen = set()
                 details = []
@@ -350,7 +370,11 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                               or doc.metadata.get("file_path", "").replace("\\", "/").split("/")[-1])
                     canon = resolver.canonical(source or doc_id, kb_id, department)
                     identifier = canon if canon else (source if source else doc_id)
-                    if identifier not in seen:
+                    # 权限裁决：越权文档不得作为证据参与判分（防止越权内容
+                    # 泄漏进答案），但保留在 details 里供 trace 审计
+                    _perm_ok = is_accessible(doc.metadata, _user_perms)
+                    _req = sorted(required_permissions(doc.metadata))
+                    if _perm_ok and identifier not in seen:
                         seen.add(identifier)
                         actual_doc_strs.append(identifier)
 
@@ -360,11 +384,21 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         "title": str(doc.metadata.get("title", ""))[:80],
                         "chunk_id": doc.metadata.get("chunk_id", ""),
                         "department": doc.metadata.get("department", ""),
+                        "permission_scope": _req or ["general"],
+                        "permission_denied": not _perm_ok,
                         "rerank_score": doc.metadata.get("rerank_score"),
                         "source": source,
                         "snippet": doc.page_content[:200].replace("\n", " "),
                         "page_content": doc.page_content,
                     })
+
+                # 越权证据剔除：Top-1（检索器排序首位）越权 → 权限拒答
+                # （确定性判定，与置信度阈值无关——用户问的是其无权见的文档，
+                # 继续走置信度会泄漏机密内容）；其余越权块剔除后照常分级。
+                _top_denied = bool(details) and details[0].get("permission_denied")
+                _denied_details = [d for d in details if d.get("permission_denied")]
+                if _denied_details:
+                    details = [d for d in details if not d.get("permission_denied")]
 
                 doc_counter = Counter(d["doc_id"] for d in details if d["doc_id"])
                 total = len(details)
@@ -651,7 +685,14 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 thresh_high = sem_thresh.get("confidence_high", 0.6)
                 thresh_gap = sem_thresh.get("confidence_gap", 0.15)
 
-                if not details:
+                if _top_denied or (not details and _denied_details):
+                    # §4 权限拒答：Top-1 证据越权，或证据被权限过滤后全空
+                    # （确定性判定，与置信度阈值无关——用户问的是其无权见的
+                    # 文档，继续走置信度分级可能导致机密内容被作答泄漏）
+                    confidence = "none"
+                    reject_gate = "permission"
+                    reject_reason = "permission"
+                elif not details:
                     confidence = "none"
                     reject_gate = "retrieval"
                     reject_reason = "no_evidence"
@@ -902,6 +943,11 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                             "top1_rerank_score": details[0].get("rerank_score") if details else None,
                             "query_entities": query_entities or None,
                             "entity_absent": entity_absent,
+                            # §4 权限范围消费方留痕：请求者持有权限 + 越权证据数
+                            "user_permissions": sorted(_user_perms) or ["general"],
+                            "permission_denied_count": len(_denied_details),
+                            # §4 版本要求：契约已校验，检索期 enforcement 待 R4
+                            "version_requirement": _vreq,
                         },
                         "trace": {
                             "trace_id": trace.id,

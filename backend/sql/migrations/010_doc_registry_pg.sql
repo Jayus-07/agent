@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS doc_registry (
     time_refs    TEXT DEFAULT '',
     business_domain TEXT DEFAULT '',
     complexity   TEXT DEFAULT '',
+    permission_scope TEXT DEFAULT 'general',
     expire_at    TEXT
 );
 

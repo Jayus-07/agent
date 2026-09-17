@@ -109,8 +109,8 @@ class PdfParser(BaseDocumentParser):
             )
             raise
 
-        raw_items: list[tuple[str, float]] = []  # (文本, 字号) — 仅非表格文本
-        table_items: list[tuple[float, list[list[str]]]] = []  # (y_top, rows) — 表格
+        raw_items: list[tuple[str, float, int, tuple]] = []  # (文本, 字号, 页码, bbox) — 仅非表格文本
+        table_items: list[tuple[float, list[list[str]], int, tuple]] = []  # (y_top, rows, 页码, bbox) — 表格
         skipped_pages: list[int] = []
         page_count = len(doc)
         try:
@@ -143,16 +143,17 @@ class PdfParser(BaseDocumentParser):
                         and not _overlaps_table(b.get("bbox", (0, 0, 0, 0)), table_bboxes)
                     ]
                     # 段落合并 + 表格按 y 顺序混排（保持文档阅读顺序）
-                    merged: list[tuple[float, str, object]] = []
-                    self._extract_blocks(text_blocks, merged, table_bboxes)
+                    # §5.2 可追溯：merged 元组携带页码与版面 bbox
+                    merged: list[tuple[float, str, object, int, tuple]] = []
+                    self._extract_blocks(text_blocks, merged, table_bboxes, page_idx + 1)
                     for tbbox, rows in tables:
-                        merged.append((tbbox[1], "table", rows))
+                        merged.append((tbbox[1], "table", rows, page_idx + 1, tbbox))
                     merged.sort(key=lambda x: x[0])
-                    for _, kind, payload in merged:
+                    for _, kind, payload, pno, bbox_ in merged:
                         if kind == "text":
                             raw_items.append(payload)  # type: ignore[arg-type]
                         else:
-                            table_items.append((_, payload))  # type: ignore[arg-type]
+                            table_items.append((_, payload, pno, bbox_))  # type: ignore[arg-type]
                 except Exception as e:
                     logger.warning(
                         f"[PdfParser] 第 {page_idx} 页解析失败: "
@@ -181,7 +182,7 @@ class PdfParser(BaseDocumentParser):
         # 表格无法还原行列结构，不提取。OCR 不可用时返回空（下游按
         # ChunkingEmptyError 报"扫描件无法解析"，与旧行为一致）。
         ocr_pages = 0
-        total_text_chars = sum(len(text) for text, _ in raw_items)
+        total_text_chars = sum(len(text) for text, _, _, _ in raw_items)
         if page_count > 0 and total_text_chars < RAG_OCR_MIN_TEXT_CHARS * page_count:
             from backend.config import rag as rag_cfg
             from backend.rag.preprocessing.parser import ocr as ocr_mod
@@ -200,30 +201,34 @@ class PdfParser(BaseDocumentParser):
                 )
 
         # 标题启发式：统计正文字号（众数），识别标题 → section，其余 → paragraph
-        body_size = _body_font_size([size for _, size in raw_items])
+        body_size = _body_font_size([size for _, size, _, _ in raw_items])
         root = DocumentNode(type="section", text="", level=0)
         current_section = root
         heading_count = 0
         # 文本与表格按 y 顺序混合（表格已按 y 排序进 table_items，此处按出现顺序交错插入）
         # 简化：表格按 y 归入最近的 section —— 遍历文本构建 section 栈后，再按 y 归属表格。
-        for text, size in raw_items:
+        # §5.2 可追溯：段落/标题节点填 page_number（1-based）与 bbox
+        for text, size, page_no, bbox_ in raw_items:
             if not text.strip():
                 continue
             if _is_heading_line(text, size, body_size):
-                section = DocumentNode(type="section", text=text.strip(), level=1)
+                section = DocumentNode(type="section", text=text.strip(), level=1,
+                                       page_number=page_no, bbox=bbox_)
                 root.children.append(section)
                 current_section = section
                 heading_count += 1
             else:
                 current_section.children.append(
-                    DocumentNode(type="paragraph", text=text.strip())
+                    DocumentNode(type="paragraph", text=text.strip(),
+                                 page_number=page_no, bbox=bbox_)
                 )
         # 表格节点挂到当前（最后出现的）section；P1-5 表格保留行列结构
-        for _y, rows in table_items:
+        for _y, rows, page_no, bbox_ in table_items:
             from backend.rag.preprocessing.parser._table_nl import make_table_chunk_text
             sec_title = current_section.text if current_section is not root else ""
             table_text = make_table_chunk_text(rows, section_title=sec_title)
-            table_node = DocumentNode(type="table", text=table_text, rows=rows)
+            table_node = DocumentNode(type="table", text=table_text, rows=rows,
+                                      page_number=page_no, bbox=bbox_)
             current_section.children.append(table_node)
 
         if heading_count:
@@ -232,10 +237,10 @@ class PdfParser(BaseDocumentParser):
                 f"（正文字号 {body_size}）"
             )
 
-        raw_text = "\n".join(text for text, _ in raw_items)
+        raw_text = "\n".join(text for text, _, _, _ in raw_items)
         if table_items:
             raw_text += "\n\n" + "\n\n".join(
-                make_table_chunk_text(rows) for _, rows in table_items
+                make_table_chunk_text(rows) for _, rows, _, _ in table_items
             )
         ast = DocumentAST(root=root, source_file=file_path, raw_text=raw_text)
         # §5.1 质量记录：OCR 兜底发生 → AST 置位（pipeline 据此给 chunk 打标，
@@ -244,15 +249,15 @@ class PdfParser(BaseDocumentParser):
         ast.ocr_pages = ocr_pages
         return ast
 
-    def _ocr_fallback(self, file_path: str, page_count: int) -> list[tuple[str, float]]:
-        """按页渲染 PNG 走 OCR，返回与 raw_items 同构的 (text, size=0) 列表。
+    def _ocr_fallback(self, file_path: str, page_count: int) -> list[tuple[str, float, int, tuple]]:
+        """按页渲染 PNG 走 OCR，返回与 raw_items 同构的 (text, size=0, 页码, bbox=()) 列表。
 
         单页失败只丢该页（与主解析的 per-page 容错一致）；整本失败返回空，
         由下游 ChunkingEmptyError 报业务失败。
         """
         from backend.config import rag as rag_cfg
         from backend.rag.preprocessing.parser import ocr as ocr_mod
-        items: list[tuple[str, float]] = []
+        items: list[tuple[str, float, int, tuple]] = []
         doc = fitz.open(file_path)
         try:
             for page_idx in range(min(page_count, rag_cfg.RAG_OCR_MAX_PAGES)):
@@ -260,7 +265,7 @@ class PdfParser(BaseDocumentParser):
                     pix = doc[page_idx].get_pixmap(dpi=rag_cfg.RAG_OCR_DPI)
                     text = ocr_mod.ocr_image(pix.tobytes("png"))
                     if text and text.strip():
-                        items.append((text.strip(), 0.0))
+                        items.append((text.strip(), 0.0, page_idx + 1, ()))
                 except Exception as e:
                     logger.warning(
                         f"[PdfParser][OCR] {file_path} 第 {page_idx} 页失败: "
@@ -271,11 +276,13 @@ class PdfParser(BaseDocumentParser):
         return items
 
     def _extract_blocks(
-        self, blocks: list, out: list, table_bboxes: list[tuple] | None = None
+        self, blocks: list, out: list, table_bboxes: list[tuple] | None = None,
+        page_number: int = 0,
     ) -> None:
         """从 PyMuPDF blocks 抽取文本块 + 字号，按垂直位置合并段落。
 
-        out 接收 (y_top, "text", (text, size)) 三元组，便于 parse() 与表格按 y 混排。
+        out 接收 (y_top, "text", (text, size, page_number, bbox), page_number, bbox)
+        五元组，便于 parse() 与表格按 y 混排并保留 §5.2 可追溯信息。
         table_bboxes 非空时跳过与表格区域重叠的块（表格内容已由 find_tables 提取）。
         """
         table_bboxes = table_bboxes or []
@@ -286,9 +293,11 @@ class PdfParser(BaseDocumentParser):
 
         current_lines: list[str] = []
         current_sizes: list[float] = []
+        current_bbox: tuple = ()
         current_y_bottom: float = -1.0
 
         def _flush(y_top: float):
+            nonlocal current_bbox
             if current_lines:
                 out.append((
                     y_top,
@@ -296,10 +305,15 @@ class PdfParser(BaseDocumentParser):
                     (
                         "\n".join(current_lines),
                         max(current_sizes) if current_sizes else 0.0,
+                        page_number,
+                        current_bbox,
                     ),
+                    page_number,
+                    current_bbox,
                 ))
                 current_lines.clear()
                 current_sizes.clear()
+                current_bbox = ()
 
         for block in text_blocks:
             block_text = "\n".join(
@@ -329,6 +343,7 @@ class PdfParser(BaseDocumentParser):
 
             current_lines.append(block_text)
             current_sizes.append(block_size)
+            current_bbox = tuple(round(v, 1) for v in block.get("bbox", ()))
             current_y_bottom = block["bbox"][3]
 
         _flush(1e9)

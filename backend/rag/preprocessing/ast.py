@@ -28,6 +28,11 @@ class DocumentNode:
     # R-P0-3 原文可追溯：清洗前原文 + 清洗操作留痕（字段追加在尾部，位置构造兼容）
     raw_text: str = ""                        # 清洗前原始文本；未清洗时为空串（等价 text）
     cleaning_operations: list[str] = field(default_factory=list)  # DocumentCleaner 执行的操作清单
+    # §5.2 原文可追溯（2026-09-17 追加，位置构造兼容）：页码与版面坐标
+    # page_number：1-based 页码，非分页格式（MD/TXT 等）恒 0；bbox：PDF 版面
+    # (x0, y0, x1, y1)，仅 PdfParser 填写，其他解析器为空元组
+    page_number: int = 0
+    bbox: tuple = ()
 
 
 @dataclass

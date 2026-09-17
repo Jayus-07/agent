@@ -1756,7 +1756,8 @@
           "type": "any"
         },
         "permission_scope": [
-          "general"
+          "general",
+          "it_admin"
         ]
       },
       "metadata": {
@@ -2072,7 +2073,7 @@
           "type": "any"
         },
         "permission_scope": [
-          "finance_restricted"
+          "general"
         ]
       },
       "metadata": {

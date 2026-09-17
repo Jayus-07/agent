@@ -118,11 +118,13 @@ def main() -> int:
                 registry.mark_deleted(p)  # 旧路径/异常行一律标删
     hash_ids.discard("")
     slugs = set(paths.keys())
+    _perm_by_slug = {d["doc_id"]: d.get("permission_scope") or "general" for d in docs}
     for slug, fpath in paths.items():
         registry.register(
             fpath, doc_id=slug, file_hash=_sha256(Path(fpath)),
             kb_id=KB_ID, chunk_ids=[], doc_db_id="",
-            metadata={"doc_type": "general", "department": "general"},
+            metadata={"doc_type": "general", "department": "general",
+                      "permission_scope": _perm_by_slug.get(slug, "general")},
         )
     print(f"slug 行注册: {len(paths)}；待清理 hash doc_id: {len(hash_ids)}")
 
@@ -154,7 +156,8 @@ def main() -> int:
         registry.register(
             fpath, doc_id=slug, file_hash="",
             kb_id=KB_ID, chunk_ids=[], doc_db_id="",
-            metadata={"doc_type": "general", "department": "general"},
+            metadata={"doc_type": "general", "department": "general",
+                      "permission_scope": _perm_by_slug.get(slug, "general")},
         )
         try:
             ret = indexer._index_file(fpath) or {}

@@ -336,6 +336,35 @@ class RAGChain:
         # Citation Filter: 注入文档序号 + 自定义文档格式，使 LLM 可内联引用 [1][2]
         def _index_docs(input_dict):
             docs = input_dict.get("context", [])
+            # ── 文档级权限过滤（§4 权限范围消费方，2026-09-17）──
+            # 请求者未持有文档所需权限的证据不得进入生成上下文（防越权泄漏）。
+            # fail-safe：identity.permissions=None（未声明）→ 受限文档一律剔除；
+            # general 文档不受影响。确定性计算，与 KB 级授权同构。
+            try:
+                from backend.rag.context import get_context
+                from backend.rag.permissions import is_accessible
+                try:
+                    from backend.observability.metrics import (
+                        rag_permission_filtered_total,
+                    )
+                except Exception:  # noqa: BLE001 — 指标缺失不阻断主流程
+                    class _Nop:
+                        def inc(self, _n=1):
+                            pass
+                    rag_permission_filtered_total = _Nop()
+                _user_perms = get_context().identity.permissions
+                _allowed = [d for d in docs if is_accessible(d.metadata, _user_perms)]
+                _denied = len(docs) - len(_allowed)
+                if _denied:
+                    logger.info(
+                        f"[RAGChain] 权限过滤: 剔除 {_denied}/{len(docs)} 条越权证据"
+                        f"(user_permissions={sorted(_user_perms) if _user_perms is not None else None})"
+                    )
+                    rag_permission_filtered_total.inc(_denied)
+                    docs = _allowed
+                    input_dict["context"] = docs
+            except Exception:  # noqa: BLE001 — 权限过滤故障不得中断主流程
+                logger.debug("[RAGChain] 权限过滤异常，退化为不过滤", exc_info=True)
             # ── 证据 token 预算（P3）：rerank 后输入顺序即相关性顺序，从头保留，
             # 超出预算的尾部文档整体丢弃（长文档场景仅靠 top_k 条数会挤爆上下文）。
             # 首条文档即使超预算也保留（保证至少有证据可引用）。

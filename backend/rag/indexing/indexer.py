@@ -496,6 +496,11 @@ class IncrementalIndexer:
         # department 必须按文件路径派生，不能用 self.department：批量 sync 时
         # indexer 是单实例跨多部门构建的，self.department 只是构造默认值。
         department = self._derive_department(file_path)
+        # §4 权限范围（2026-09-17）：文档访问所需权限从 registry 行读（上传/
+        # 入库脚本在 register 时写入），缺省 general 开放。不用实例级值，
+        # 理由同 department。
+        doc_row = self.registry.get_by_path(file_path) or {}
+        permission_scope = (doc_row.get("permission_scope") or "general").strip() or "general"
 
         # ── ① load（文件读取/元数据收集）──
         load_span = trace_collector.start_span(
@@ -523,9 +528,10 @@ class IncrementalIndexer:
             input={"file_path": file_path, "ext": ext},
         )
         chunks: list = []
+        _qc: dict = {}
         try:
-            from backend.rag.preprocessing.pipeline import parse_and_chunk
-            chunks = parse_and_chunk(file_path)
+            from backend.rag.preprocessing.pipeline import parse_and_chunk_full
+            chunks, _qc = parse_and_chunk_full(file_path)
             if not chunks:
                 # 空 chunks → 视为"无可索引内容"。
                 # 改用 ChunkingEmptyError(P1-4)而非 RuntimeError,让调用方能区分：
@@ -703,6 +709,7 @@ class IncrementalIndexer:
             "file_path": file_path,
             "kb_id": kb_id,  # 用派生的 kb_id 参数，而非 self.kb_id（否则 kb 隔离失效）
             "department": department,  # 同上：用路径派生值，否则部门隔离失效
+            "permission_scope": permission_scope,  # §4 权限范围：registry 行声明值
             "doc_type": "general",
             "person_names": "",
         }
@@ -738,6 +745,75 @@ class IncrementalIndexer:
         filter_summary = _filter_quality_summary(filtered_details)
         if filter_summary:
             _append_quality_issue(doc_meta, filter_summary)
+
+        # ═══ §5.1–5.3 质量门禁（2026-09-17 R3）：每文档质量记录 + 类型化校验 ═══
+        # 记录 JSON 落盘 data/quality_records/{kb}/{doc_id}.json；硬异常（0 叶子/
+        # 0 字符等）抛错 → 文档 failed 不得伪装 active；软异常（截断/降级/大量
+        # 过滤/值丢失）追加 quality_issues 留痕。门禁自身故障不阻断索引主流程。
+        _raw_ast = _qc.get("raw_ast")
+        if _raw_ast is not None:
+            q_span = trace_collector.start_span(
+                "index_quality",
+                parent_id="index_upload",
+                name="Quality record",
+                type="audit",
+                kind=SpanKind.INDEX_PARSE.value,
+                input={"file_path": file_path, "doc_id": doc_id},
+            )
+            try:
+                from backend.rag.preprocessing.quality_gate import (
+                    anomaly_summary,
+                    build_quality_record,
+                    hard_anomalies,
+                    persist_quality_record,
+                    run_typed_validation,
+                )
+                _record = build_quality_record(
+                    file_path=file_path, doc_id=doc_id, kb_id=kb_id,
+                    raw_ast=_raw_ast, chunks=chunks,
+                    file_size=file_size, file_hash=file_hash or "",
+                    doc_type=_qc.get("doc_type", ""),
+                    strategy_name=_qc.get("strategy_name", ""),
+                    completeness=_qc.get("completeness"),
+                    filtered_details=filtered_details,
+                    truncated=chunks_truncated,
+                    ocr_triggered=bool(getattr(_raw_ast, "ocr_triggered", False)),
+                    ocr_pages=int(getattr(_raw_ast, "ocr_pages", 0) or 0),
+                )
+                _anomalies = run_typed_validation(_record, _raw_ast)
+                _hard = hard_anomalies(_anomalies)
+                if _hard:
+                    # §5.3 硬异常：文档不得伪装 active
+                    raise ValueError(
+                        f"质量门禁硬异常: {_hard[0]['check']}({_hard[0]['detail']})"
+                    )
+                _soft = anomaly_summary(_anomalies)
+                if _soft:
+                    _append_quality_issue(doc_meta, _soft)
+                _qpath = persist_quality_record(_record)
+                doc_meta["quality_record_path"] = _qpath
+                trace_collector.end_span(q_span,
+                    metrics={"anomalies_total": len(_anomalies),
+                             "anomalies_hard": len(_hard),
+                             "anomalies_warn": len(_anomalies) - len(_hard),
+                             "record_path": _qpath})
+                logger.info(
+                    f"[Indexer] 质量记录 {_qpath} "
+                    f"(nodes={_record['parsing']['node_count']}, "
+                    f"chunks={_record['chunking']['chunk_count']}, "
+                    f"anomalies={len(_anomalies)})"
+                )
+            except ValueError:
+                trace_collector.end_span(q_span, status="error",
+                    metrics={"error": "quality_gate_hard_anomaly"})
+                raise
+            except Exception as e:
+                trace_collector.end_span(q_span, status="error",
+                    metrics={"error": str(e)[:200]})
+                logger.warning(
+                    f"[Indexer] 质量记录构建失败（不阻断索引）: "
+                    f"{type(e).__name__}: {e}", exc_info=True,
+                )
 
         # 注入 chunk metadata — 分层：
         #   - doc_type / person_names → 继承文档级（用于 filter）
@@ -815,6 +891,9 @@ class IncrementalIndexer:
             ch.metadata["kb_id"] = kb_id_val
             ch.metadata["business_domain"] = domain_val
             ch.metadata["department"] = department
+            # §4 权限范围：随 chunk 进向量库/doc_db，检索侧按请求者持有权限
+            # 裁决（backend/rag/permissions.py）；缺省 general 行为不变
+            ch.metadata["permission_scope"] = permission_scope
             # 以 indexer 派生的 doc_id 为权威，覆盖 loader 注入的值，
             # 保证 chroma chunk.doc_id 与 doc_registry/chunk_store 完全一致
             # （避免 loader 与 indexer 两路派生分歧导致评测 doc_id 失配）。
@@ -1079,6 +1158,9 @@ class IncrementalIndexer:
                     "doc_version": doc_meta.get("doc_version", 1),
                     "kb_version": doc_meta.get("kb_version", "v1"),
                     "department": doc_meta.get("department", ""),
+                    # §4 权限范围：沿用 registry 行声明值（doc_meta 已带），
+                    # 否则最终 upsert 会把入库脚本预注册的受限标记冲回 general
+                    "permission_scope": doc_meta.get("permission_scope", "general"),
                 },
             )
         except Exception:

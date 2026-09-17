@@ -204,6 +204,11 @@ rag_short_circuit_total = Counter(
     labelnames=("reason",),  # empty_retrieval | evidence_gate
 )
 
+rag_permission_filtered_total = Counter(
+    "rag_permission_filtered_total",
+    "RAG 生成上下文中被文档级权限过滤剔除的越权证据条数（§4 权限范围消费方）",
+)
+
 
 feedback_total = Counter(
     "feedback_total",

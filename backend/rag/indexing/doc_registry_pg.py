@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS {table} (
     time_refs    TEXT DEFAULT '',
     business_domain TEXT DEFAULT '',
     complexity   TEXT DEFAULT '',
+    permission_scope TEXT DEFAULT 'general',
     expire_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_{table}_doc_id ON {table}(doc_id);
@@ -80,6 +81,7 @@ _REGISTER_VALUE_COLS = (
     "quality_score", "quality_issues", "embedding_model", "minhash_sig", "near_dup_id",
     "summary", "keywords", "time_refs", "business_domain", "complexity",
     "metadata_fingerprint", "doc_version", "kb_version", "department",
+    "permission_scope",
     "status",
 )
 
@@ -128,6 +130,25 @@ class PostgresDocumentRegistry(DocumentRegistry):
         """建表（幂等），与 backend/sql/migrations/010_doc_registry_pg.sql 保持一致。"""
         with self._lock, self._conn() as conn:
             conn.cursor().execute(_SCHEMA_SQL.format(table=self._table, now=_NOW_SQL))
+            self._ensure_columns(conn)
+
+    def _ensure_columns(self, conn) -> None:
+        """存量表惰性加列（幂等），与 SQLite 版 _ensure_columns 对齐。"""
+        existing = {
+            r["column_name"]
+            for r in self._exec(
+                conn,
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = %s",
+                (self._table,),
+            ).fetchall()
+        }
+        if "permission_scope" not in existing:
+            conn.cursor().execute(
+                f"ALTER TABLE {self._table} "
+                "ADD COLUMN permission_scope TEXT DEFAULT 'general'"
+            )
+            logger.info("[doc_registry_pg] 迁移：补列 permission_scope（默认 general）")
 
     # ---- 查询 ----
 
@@ -348,7 +369,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
         allowed = {
             "minhash_sig", "near_dup_id", "doc_type", "summary", "keywords",
             "time_refs", "business_domain", "complexity", "quality_score",
-            "quality_issues", "confidence",
+            "quality_issues", "confidence", "permission_scope",
         }
         sets = {k: v for k, v in (fields or {}).items() if k in allowed}
         if not sets:
@@ -399,6 +420,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
         doc_version = meta.get("doc_version", 1)
         kb_version = meta.get("kb_version", "v1")
         department = meta.get("department", "")
+        permission_scope = meta.get("permission_scope", "general")
 
         status = "pending_review" if near_dup_id else "active"
 
@@ -411,6 +433,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
             minhash_sig, near_dup_id,
             summary, keywords, time_refs, business_domain, complexity,
             metadata_fingerprint, doc_version, kb_version, department,
+            permission_scope,
             status,
         )
         value_cols = ", ".join(_REGISTER_VALUE_COLS)
