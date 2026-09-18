@@ -3,8 +3,8 @@
  *
  * 数据源：FastAPI `/api/sys/security/*`（见 backend/app/api/routes/auth_local.py）
  * - overview：灰度开关状态 + 敏感端点清单（只读）
- * - sessions：在线会话列表（扫 Redis auth:session:*）
- * - DELETE sessions/{uid}/{jti}：强制下线（删会话键，enforce 下即刻生效）
+ * - sessions：在线会话列表（2026-09-19 会话实体改造：DB 口径，一行 = 一次设备登录）
+ * - DELETE sessions/{sessionId}：强制下线（撤会话实体 + 家族 refresh + Redis 闸键）
  */
 import { request } from "@/lib/fetcher";
 
@@ -40,19 +40,26 @@ export interface SecurityOverview {
   actor: string;
 }
 
+/** 在线会话（一次设备登录 = refresh token family，轮换/多标签不新增行） */
 export interface SessionRow {
-  key: string;
+  sessionId: string;
   userId: number;
-  jti: string;
-  ttlSeconds: number;
   username: string | null;
   realName: string | null;
   role: string | null;
+  /** 登录时前端上报的 deviceId（localStorage UUID），空 = 未上报 */
+  device: string;
+  /** 登录时 User-Agent 原文（截断 256） */
+  userAgent: string;
+  ip: string;
+  createdAt: string;
+  lastActiveAt: string;
+  /** 会话过期时间 = 家族当前 refresh token 的 expires_at（随轮换滑动续期） */
+  expiresAt: string;
 }
 
 export interface SessionList {
   sessions: SessionRow[];
-  redisAvailable: boolean;
 }
 
 // ── 后端 Result 壳 ────────────────────────────────────
@@ -77,10 +84,10 @@ export async function getSessions(): Promise<SessionList> {
   return res.data;
 }
 
-/** DELETE /sys/security/sessions/{uid}/{jti} — 强制下线 */
-export async function forceLogout(userId: number, jti: string): Promise<{ revoked: boolean }> {
-  const res = await request<Result<{ revoked: boolean; userId: number; jti: string }>>(
-    `/api/sys/security/sessions/${userId}/${jti}`,
+/** DELETE /sys/security/sessions/{sessionId} — 按 session 强制下线 */
+export async function forceLogout(sessionId: string): Promise<{ revoked: boolean; userId: number }> {
+  const res = await request<Result<{ revoked: boolean; userId: number; sessionId: string }>>(
+    `/api/sys/security/sessions/${sessionId}`,
     { method: "DELETE" },
   );
   return res.data;

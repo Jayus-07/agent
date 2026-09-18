@@ -20,11 +20,11 @@
 """
 from __future__ import annotations
 
-import re
 import time
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
 
 from backend.app.api.deps import (
     OperatorIdentity,
@@ -53,8 +53,37 @@ router = APIRouter(prefix="/auth", tags=["认证"])
 sys_router = APIRouter(prefix="/sys", tags=["用户中心"])
 
 _REFRESH_TTL_SECONDS = 7 * 24 * 3600
+# 并发刷新宽限期（2026-09-19 会话实体改造）：多标签页共享同一 refresh cookie，
+# 轮换后短时间内旧 hash 被再次使用属正常竞态而非泄露——宽限期内不轮换、
+# 不动 cookie，按会话当前状态补发 access token；超期重放才撤销整个会话。
+_REFRESH_GRACE_SECONDS = 60
+_REVOKE_REASON_REPLACED = "replaced"            # 同设备重新登录替换
+_REVOKE_REASON_LOGOUT = "logout"                # 用户主动登出
+_REVOKE_REASON_ADMIN = "admin_force_logout"     # 管理员强制下线
+_REVOKE_REASON_REPLAY = "replay_detected"       # refresh token 重放（疑似泄露）
 _COOKIE_KWARGS = {"key": "refresh_token", "httponly": True, "samesite": "lax",
                   "path": "/api/auth", "max_age": _REFRESH_TTL_SECONDS}
+
+
+def _client_ip(request: Request) -> str:
+    """取客户端 IP：网关链路优先 X-Real-IP / XFF 首段，兜底直连地址。
+
+    截断 64 字符与 auth.sessions.ip VARCHAR(64) 对齐；非 IP 形态的
+    伪造头不校验（台账字段，不参与任何访问控制决策）。
+    """
+    real = request.headers.get("x-real-ip")
+    if real:
+        return real.strip()[:64]
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()[:64]
+    host = request.client.host if request.client else ""
+    return (host or "")[:64]
+
+
+def _session_idx_key(user_id, sid: str) -> str:
+    """按 session 聚合 jti 的 Redis 索引键（强制下线 O(1) 定位）。"""
+    return f"auth:session_idx:{user_id}:{sid}"
 
 
 @asynccontextmanager
@@ -103,9 +132,13 @@ def _blacklist_access(token: str) -> bool:
 
 
 def _write_session(issued: dict) -> bool:
-    """登录/刷新后写会话键 auth:session:{userId}:{jti}（TTL=token 剩余有效期）。
+    """登录/刷新后写会话闸键 auth:session:{userId}:{jti}（TTL=token 剩余有效期）。
 
     方案 A 会话闸的写侧：键存在 = token 处于"已签发且未吊销"状态。
+    同时维护 auth:session_idx:{userId}:{sid} 集合（2026-09-19 会话实体改造），
+    记录该会话（auth.sessions.id）签发过的 jti，供按 session 强制下线时
+    O(1) 定位删键；集合 TTL = refresh 有效期 + access 有效期，随活跃续期。
+
     尽力而为：Redis 不可用时记 warning（audit 灰度期无影响；enforce 前必须
     确认 Redis 稳定，否则该 token 会被网关会话闸拒绝——黑名单通道本就
     fail-closed，Redis 稳定性是同一前提）。
@@ -120,7 +153,13 @@ def _write_session(issued: dict) -> bool:
         return False
     try:
         ttl = max(1, int(issued["exp"]) - int(time.time()))
-        client.set(f"auth:session:{issued.get('userId')}:{jti}", "1", ex=ttl)
+        uid = issued.get("userId")
+        client.set(f"auth:session:{uid}:{jti}", "1", ex=ttl)
+        sid = issued.get("sid") or ""
+        if sid:
+            idx = _session_idx_key(uid, sid)
+            client.sadd(idx, jti)
+            client.expire(idx, ttl + _REFRESH_TTL_SECONDS)
         return True
     except Exception:
         logger.warning("[local-auth] 会话键写入异常", exc_info=True)
@@ -128,8 +167,8 @@ def _write_session(issued: dict) -> bool:
 
 
 def _revoke_session(token: str) -> None:
-    """logout 时删除会话键（尽力而为；键不存在/Redis 不可用均静默——
-    黑名单已兜底，本函数只是让会话闸立即生效，不等黑名单 TTL）。"""
+    """logout 时删除会话键并移出 session_idx（尽力而为；键不存在/Redis 不可用
+    均静默——黑名单已兜底，本函数只是让会话闸立即生效，不等黑名单 TTL）。"""
     payload = verify_access_token(token)
     if not payload:
         return
@@ -142,8 +181,59 @@ def _revoke_session(token: str) -> None:
         return
     try:
         client.delete(key)
+        sid = payload.get("sid") or ""
+        jti = payload.get("jti") or ""
+        if sid and jti:
+            client.srem(_session_idx_key(payload.get("userId"), sid), jti)
     except Exception:
         logger.warning("[local-auth] 会话键删除异常", exc_info=True)
+
+
+def _delete_session_redis_keys(user_id, sid: str) -> int:
+    """按 session 清 Redis：删除索引集合内全部 jti 闸键 + 索引本身。
+
+    用于管理员强制下线 / 重放撤销 / 登出撤会话。尽力而为，返回删除的
+    闸键数量；Redis 不可用返回 0（DB 侧吊销是权威，闸键随 access TTL 自然过期）。
+    """
+    client = get_redis()
+    if client is None:
+        return 0
+    deleted = 0
+    try:
+        members = client.smembers(_session_idx_key(user_id, sid)) or set()
+        for jti in members:
+            deleted += client.delete(f"auth:session:{user_id}:{jti}")
+        client.delete(_session_idx_key(user_id, sid))
+    except Exception:
+        logger.warning("[local-auth] 会话 Redis 键清理异常（sid=%s…）", sid[:8], exc_info=True)
+    return deleted
+
+
+async def _create_session(db, *, user_id: int, device_id: str, user_agent: str,
+                          ip: str, ttl_seconds: int) -> str:
+    """创建会话实体（一次设备登录），返回 session id（uuid 字符串）。"""
+    row = (await db.execute(text(
+        "INSERT INTO auth.sessions (user_id, device_id, user_agent, ip, refresh_expires_at) "
+        "VALUES (:uid, :dev, :ua, :ip, now() + make_interval(secs => :ttl)) "
+        "RETURNING id"),
+        {"uid": user_id, "dev": device_id, "ua": user_agent, "ip": ip,
+         "ttl": ttl_seconds})).mappings().first()
+    return str(row["id"])
+
+
+async def _revoke_session_row(db, *, session_id: str, reason: str) -> None:
+    """吊销会话实体：置 revoked_at + 吊销该会话全部 refresh token（轮换链整体失效）。
+
+    幂等：已吊销的会话不再改写 revoke_reason（首次吊销原因优先）。
+    """
+    await db.execute(text(
+        "UPDATE auth.sessions SET revoked_at = now(), revoke_reason = :r "
+        "WHERE id = :sid AND revoked_at IS NULL"),
+        {"r": reason, "sid": session_id})
+    await db.execute(text(
+        "UPDATE auth.refresh_tokens SET revoked = TRUE, revoked_at = now() "
+        "WHERE session_id = :sid AND revoked = FALSE"),
+        {"sid": session_id})
 
 
 # ── /auth/login ──────────────────────────────────────────────
@@ -154,6 +244,8 @@ async def login(request: Request, response: Response):
     username = (body.get("username") or "").strip()
     password = body.get("password") or ""
     device_id = (body.get("deviceId") or "")[:64]
+    user_agent = (request.headers.get("user-agent") or "")[:256]
+    ip = _client_ip(request)
     if not username or not password:
         return _fail("用户名或密码不能为空", code=400)
 
@@ -162,19 +254,33 @@ async def login(request: Request, response: Response):
     if row is None or row["status"] != 1 or not verify_password(password, row["password_hash"]):
         return _fail("用户名或密码错误", code=400)
 
-    issued = issue_access_token(user_id=row["id"], username=row["username"],
-                                dept=row["dept"], device_id=device_id,
-                                roles=[row["role"]])
-    _write_session(issued)
-    raw_refresh, token_hash = new_refresh_token()
     async with _db() as session:
+        # 同设备替换（2026-09-19 会话实体改造）：同一 user + device_id 的活跃
+        # 会话先撤销再建新会话，不留多条同设备活跃会话。旧标签页的 access
+        # token 在剩余 TTL 内仍有效，refresh 即 401（业务已接受该语义）。
+        old = (await session.execute(text(
+            "SELECT id FROM auth.sessions "
+            "WHERE user_id = :uid AND device_id = :dev AND revoked_at IS NULL"),
+            {"uid": row["id"], "dev": device_id})).mappings().first()
+        if old:
+            await _revoke_session_row(session, session_id=str(old["id"]),
+                                      reason=_REVOKE_REASON_REPLACED)
+            _delete_session_redis_keys(row["id"], str(old["id"]))
+        sid = await _create_session(session, user_id=row["id"], device_id=device_id,
+                                    user_agent=user_agent, ip=ip,
+                                    ttl_seconds=_REFRESH_TTL_SECONDS)
+        raw_refresh, token_hash = new_refresh_token()
         await session.execute(text(
-            "INSERT INTO auth.refresh_tokens (user_id, token_hash, device_id, expires_at) "
-            "VALUES (:uid, :th, :dev, now() + make_interval(secs => :ttl))"),
+            "INSERT INTO auth.refresh_tokens (user_id, token_hash, device_id, expires_at, session_id) "
+            "VALUES (:uid, :th, :dev, now() + make_interval(secs => :ttl), :sid)"),
             {"uid": row["id"], "th": token_hash, "dev": device_id,
-             "ttl": _REFRESH_TTL_SECONDS})
+             "ttl": _REFRESH_TTL_SECONDS, "sid": sid})
         await session.commit()
 
+    issued = issue_access_token(user_id=row["id"], username=row["username"],
+                                dept=row["dept"], device_id=device_id,
+                                roles=[row["role"]], session_id=sid)
+    _write_session(issued)
     response.set_cookie(value=raw_refresh, **_COOKIE_KWARGS)
     return _result({
         "token": issued["token"],
@@ -198,24 +304,82 @@ async def refresh(request: Request, response: Response):
 
     async with _db() as session:
         row = (await session.execute(text(
-            "SELECT rt.id, rt.user_id, rt.expires_at, rt.revoked, u.username, u.dept, u.role, u.status "
-            "FROM auth.refresh_tokens rt JOIN auth.users u ON u.id = rt.user_id "
+            "SELECT rt.id, rt.user_id, rt.expires_at, rt.revoked, rt.revoked_at, rt.session_id, "
+            "s.revoked_at AS session_revoked_at, s.device_id AS s_device_id, "
+            "u.username, u.dept, u.role, u.status "
+            "FROM auth.refresh_tokens rt "
+            "LEFT JOIN auth.sessions s ON s.id = rt.session_id "
+            "JOIN auth.users u ON u.id = rt.user_id "
             "WHERE rt.token_hash = :th"), {"th": token_hash})).mappings().first()
+
         from datetime import datetime, timezone
-        if row is None or row["revoked"] or row["expires_at"] <= datetime.now(timezone.utc) or row["status"] != 1:
+        now = datetime.now(timezone.utc)
+        if row is None or row["status"] != 1 or row["expires_at"] <= now:
             return _fail("刷新凭据无效或已过期", code=401)
-        # 轮换：吊销旧 token，签发新对
+
+        sid = str(row["session_id"]) if row["session_id"] else ""
+
+        if row["revoked"]:
+            # 已吊销 token 的两种去向（2026-09-19 会话实体改造）：
+            # ① 宽限期内同 hash 重用 = 多标签并发竞态：不轮换、不 set_cookie
+            #   （浏览器 cookie 已由先到的请求更新），按会话当前状态补发
+            #   access token——两个标签都成功且同一 session，不误吊销。
+            # ② 超出宽限期的重放 = 疑似泄露：撤销整个会话（family 全吊销）。
+            if (sid and row["session_revoked_at"] is None
+                    and row["revoked_at"] is not None
+                    and (now - row["revoked_at"]).total_seconds() <= _REFRESH_GRACE_SECONDS):
+                issued = issue_access_token(user_id=row["user_id"], username=row["username"],
+                                            dept=row["dept"], roles=[row["role"]],
+                                            session_id=sid)
+                _write_session(issued)
+                await session.execute(text(
+                    "UPDATE auth.sessions SET last_active_at = now() WHERE id = :sid"),
+                    {"sid": sid})
+                await session.commit()
+                return _result({"token": issued["token"], "refreshToken": None,
+                                "tokenType": "Bearer", "expiresIn": issued["expiresIn"],
+                                "userInfo": {"userId": row["user_id"],
+                                             "username": row["username"]}})
+            if sid and row["session_revoked_at"] is None:
+                await _revoke_session_row(session, session_id=sid,
+                                          reason=_REVOKE_REASON_REPLAY)
+                await session.commit()
+                _delete_session_redis_keys(row["user_id"], sid)
+                logger.warning("[local-auth] 检测到 refresh token 重放，已撤销整个会话 "
+                               "userId=%s sid=%s…", row["user_id"], sid[:8])
+            return _fail("刷新凭据无效或已过期", code=401)
+
+        if sid and row["session_revoked_at"] is not None:
+            # 会话已被替换/下线：旧家族凭据一律失效（不复活）
+            return _fail("刷新凭据无效或已过期", code=401)
+
+        # 正常轮换：吊销旧 token，新 token 继承同一 session_id（会话实体不变）
         await session.execute(text(
-            "UPDATE auth.refresh_tokens SET revoked = TRUE WHERE id = :id"), {"id": row["id"]})
+            "UPDATE auth.refresh_tokens SET revoked = TRUE, revoked_at = now() "
+            "WHERE id = :id"), {"id": row["id"]})
         raw_new, token_hash_new = new_refresh_token()
-        await session.execute(text(
-            "INSERT INTO auth.refresh_tokens (user_id, token_hash, device_id, expires_at) "
-            "VALUES (:uid, :th, '', now() + make_interval(secs => :ttl))"),
-            {"uid": row["user_id"], "th": token_hash_new, "ttl": _REFRESH_TTL_SECONDS})
+        if sid:
+            await session.execute(text(
+                "INSERT INTO auth.refresh_tokens (user_id, token_hash, device_id, expires_at, session_id) "
+                "VALUES (:uid, :th, :dev, now() + make_interval(secs => :ttl), :sid)"),
+                {"uid": row["user_id"], "th": token_hash_new,
+                 "dev": row["s_device_id"] or "", "ttl": _REFRESH_TTL_SECONDS, "sid": sid})
+            # 会话随家族当前 token 滑动续期（台账与最新 refresh 行的 expires_at 对齐）
+            await session.execute(text(
+                "UPDATE auth.sessions SET last_active_at = now(), "
+                "refresh_expires_at = now() + make_interval(secs => :ttl) "
+                "WHERE id = :sid"), {"sid": sid, "ttl": _REFRESH_TTL_SECONDS})
+        else:
+            # 存量无 session 的旧凭据（023 上线前签发）：按旧逻辑轮换，
+            # session_id 保持 NULL，7 天内自然淘汰，不强行归组
+            await session.execute(text(
+                "INSERT INTO auth.refresh_tokens (user_id, token_hash, device_id, expires_at) "
+                "VALUES (:uid, :th, '', now() + make_interval(secs => :ttl))"),
+                {"uid": row["user_id"], "th": token_hash_new, "ttl": _REFRESH_TTL_SECONDS})
         await session.commit()
 
     issued = issue_access_token(user_id=row["user_id"], username=row["username"],
-                                dept=row["dept"], roles=[row["role"]])
+                                dept=row["dept"], roles=[row["role"]], session_id=sid)
     _write_session(issued)
     response.set_cookie(value=raw_new, **_COOKIE_KWARGS)
     return _result({"token": issued["token"], "refreshToken": None,
@@ -232,11 +396,23 @@ async def logout(request: Request, response: Response):
     if token:
         _revoke_session(token)   # 会话闸：立即删键（方案 A）
         _blacklist_access(token)
+        # 会话实体口径（2026-09-19）：refresh cookie 是浏览器级共享，
+        # 任一标签登出即整个浏览器会话结束——撤销整个 session（含轮换链），
+        # 避免 /security 出现"家族已死但台账仍活跃"的僵尸会话。
+        payload = verify_access_token(token)
+        sid = (payload or {}).get("sid") or ""
+        if sid:
+            async with _db() as session:
+                await _revoke_session_row(session, session_id=sid,
+                                          reason=_REVOKE_REASON_LOGOUT)
+                await session.commit()
+            _delete_session_redis_keys((payload or {}).get("userId"), sid)
     raw = request.cookies.get("refresh_token")
     if raw:
         async with _db() as session:
             await session.execute(text(
-                "UPDATE auth.refresh_tokens SET revoked = TRUE WHERE token_hash = :th"),
+                "UPDATE auth.refresh_tokens SET revoked = TRUE, revoked_at = now() "
+                "WHERE token_hash = :th AND revoked = FALSE"),
                 {"th": hash_refresh_token(raw)})
             await session.commit()
     response.delete_cookie(**{k: v for k, v in _COOKIE_KWARGS.items() if k != "max_age"})
@@ -367,24 +543,6 @@ def _scan_guarded_endpoints(app) -> list[dict]:
     return out
 
 
-async def _attach_usernames(parsed: list[dict]) -> None:
-    """按 userId 批量补 username/realName/role（expanding IN，单次查询）。"""
-    uids = sorted({p["userId"] for p in parsed})
-    if not uids:
-        return
-    async with _db() as session:
-        rows = (await session.execute(
-            text("SELECT id, username, real_name, role FROM auth.users "
-                 "WHERE id IN :ids").bindparams(bindparam("ids", expanding=True)),
-            {"ids": uids})).mappings().all()
-    names = {r["id"]: r for r in rows}
-    for p in parsed:
-        u = names.get(p["userId"])
-        p["username"] = u["username"] if u else None
-        p["realName"] = ((u["real_name"] if u else None) or p["username"]) if u else None
-        p["role"] = u["role"] if u else None
-
-
 @sys_router.get("/security/overview")
 async def security_overview(request: Request,
                             operator: OperatorIdentity = Depends(require_admin_user)):
@@ -423,43 +581,56 @@ async def security_overview(request: Request,
 
 @sys_router.get("/security/sessions")
 async def list_sessions(operator: OperatorIdentity = Depends(require_admin_user)):
-    """在线会话列表（扫 Redis auth:session:*，按 userId 联表补用户信息）。"""
-    client = get_redis()
-    if client is None:
-        return _result({"sessions": [], "redisAvailable": False})
-    try:
-        keys = list(client.scan_iter(match="auth:session:*", count=200))
-    except Exception:
-        logger.warning("[security-ops] 会话扫描异常", exc_info=True)
-        return _result({"sessions": [], "redisAvailable": False})
+    """在线会话列表（2026-09-19 会话实体改造：DB 口径）。
 
-    parsed: list[dict] = []
-    for k in keys:
-        rest = k[len("auth:session:"):]
-        uid_s, sep, jti = rest.partition(":")
-        if not sep or not uid_s.isdigit() or not jti:
-            continue
-        parsed.append({"key": k, "userId": int(uid_s), "jti": jti,
-                       "ttlSeconds": client.ttl(k)})
-    await _attach_usernames(parsed)
-    parsed.sort(key=lambda x: (x["userId"], x["jti"]))
-    return _result({"sessions": parsed, "redisAvailable": True})
+    一行 = 一次设备登录（auth.sessions），refresh 轮换/多标签/页面刷新
+    均不产生新行。活跃口径：revoked_at IS NULL 且 refresh_expires_at 未到。
+    不再扫 Redis——Redis 只是在线闸门，台账以数据库为准（Redis 故障不影响列表）。
+    """
+    async with _db() as session:
+        rows = (await session.execute(text(
+            "SELECT s.id, s.user_id, s.device_id, s.user_agent, s.ip, "
+            "s.created_at, s.last_active_at, s.refresh_expires_at, "
+            "u.username, u.real_name, u.role "
+            "FROM auth.sessions s JOIN auth.users u ON u.id = s.user_id "
+            "WHERE s.revoked_at IS NULL AND s.refresh_expires_at > now() "
+            "ORDER BY s.user_id, s.created_at"))).mappings().all()
+    sessions = [{
+        "sessionId": str(r["id"]),
+        "userId": r["user_id"],
+        "username": r["username"],
+        "realName": r["real_name"] or r["username"],
+        "role": r["role"],
+        "device": r["device_id"],
+        "userAgent": r["user_agent"],
+        "ip": r["ip"],
+        "createdAt": r["created_at"].isoformat(),
+        "lastActiveAt": r["last_active_at"].isoformat(),
+        "expiresAt": r["refresh_expires_at"].isoformat(),
+    } for r in rows]
+    return _result({"sessions": sessions})
 
 
-@sys_router.delete("/security/sessions/{user_id}/{jti}")
-async def force_logout(user_id: int, jti: str,
+@sys_router.delete("/security/sessions/{session_id}")
+async def force_logout(session_id: str,
                        operator: OperatorIdentity = Depends(require_admin_user)):
-    """强制下线：删除该用户的会话键（方案 A 会话闸即刻生效）。"""
-    if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", jti):
-        return _fail("jti 格式非法", code=400)
-    client = get_redis()
-    if client is None:
-        return _fail("Redis 不可用，无法强制下线", code=503)
+    """强制下线（按 session）：撤销会话实体 + 家族全部 refresh token +
+    删除 Redis 内该会话全部 jti 闸键（enforce 下下一次请求即 401）。"""
     try:
-        deleted = bool(client.delete(f"auth:session:{user_id}:{jti}"))
-    except Exception:
-        logger.warning("[security-ops] 强制下线删除键异常", exc_info=True)
-        return _fail("Redis 操作失败，无法强制下线", code=503)
+        sid = str(uuid.UUID(session_id))
+    except ValueError:
+        return _fail("sessionId 格式非法", code=400)
+    async with _db() as session:
+        row = (await session.execute(text(
+            "SELECT user_id, revoked_at FROM auth.sessions WHERE id = :sid"),
+            {"sid": sid})).mappings().first()
+        if row is None:
+            return _fail("会话不存在", code=404)
+        if row["revoked_at"] is None:
+            await _revoke_session_row(session, session_id=sid,
+                                      reason=_REVOKE_REASON_ADMIN)
+            await session.commit()
+    deleted = _delete_session_redis_keys(row["user_id"], sid)
     logger.info(f"[security-ops] 强制下线 actor={operator.actor} "
-                f"userId={user_id} jti={jti[:8]}… deleted={deleted}")
-    return _result({"revoked": deleted, "userId": user_id, "jti": jti})
+                f"userId={row['user_id']} sid={sid[:8]}… redisKeysDeleted={deleted}")
+    return _result({"revoked": True, "userId": row["user_id"], "sessionId": sid})

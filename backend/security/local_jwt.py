@@ -53,6 +53,8 @@ def _b64url_decode(data: str) -> bytes:
 
 def issue_access_token(*, user_id: int, username: str, dept: str = "",
                        device_id: str = "", roles: list[str] | None = None,
+                       tenant_id: str = "default",
+                       session_id: str = "",
                        ttl_seconds: int = _ACCESS_TTL_SECONDS) -> dict:
     """签发 access token。返回 {token, expiresIn(ms), exp, jti}。
 
@@ -60,9 +62,18 @@ def issue_access_token(*, user_id: int, username: str, dept: str = "",
     prompts.py::_check_permission 权限矩阵）。写入 payload["roles"] 供
     前端 resolve_operator_role() 单点消费（2026-09-15 跨会话协同 §5.1）。
 
+    tenant_id（2026-09-18 预算闭环）：写入 payload["tenant_id"] 供
+    gateway-auth 注入 X-Tenant-Id——预算 /me 与治理写都要求可信租户身份，
+    本地单租户平台默认 "default"；客户端伪造的该头由网关剥离。
+
     jti（2026-09-16 方案 A）：令牌唯一标识，签发方据此写 Redis 会话键
     `auth:session:{userId}:{jti}`（TTL=本 token 有效期）；网关/后端校验
     "签名有效且会话存在"——登出删键即全链路即时失效，不再等 TTL。
+
+    sid（2026-09-19 会话实体改造）：会话标识 = auth.sessions.id（一次设备
+    登录 = refresh token family）。jti 仍是令牌级标识，sid 是会话级标识；
+    refresh 轮换后 jti 变、sid 不变。网关/业务鉴权不读取该 claim，
+    仅 py 侧会话管理（强制下线/按 session 聚合）消费。
     """
     now = int(time.time())
     exp = now + ttl_seconds
@@ -70,13 +81,15 @@ def issue_access_token(*, user_id: int, username: str, dept: str = "",
     payload = {"userId": user_id, "username": username, "dept": dept,
                "roles": roles or ["viewer"],
                "type": "access", "deviceId": device_id,
+               "tenant_id": tenant_id or "default",
+               "sid": session_id,
                "iss": _ISSUER, "iat": now, "exp": exp, "jti": jti}
     header = {"alg": "HS512", "typ": "JWT"}
     signing_input = (_b64url(json.dumps(header).encode()) + "." +
                      _b64url(json.dumps(payload).encode()))
     sig = _b64url(hmac.new(_secret().encode(), signing_input.encode(), hashlib.sha512).digest())
     return {"token": f"{signing_input}.{sig}", "expiresIn": ttl_seconds * 1000,
-            "exp": exp, "jti": jti, "userId": str(user_id)}
+            "exp": exp, "jti": jti, "sid": session_id, "userId": str(user_id)}
 
 
 def session_key(payload: dict[str, Any]) -> str | None:
