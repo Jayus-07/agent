@@ -70,7 +70,10 @@ def test_all_ten_questions_must_be_present() -> None:
 
 
 def test_real_decisions_file_is_blocked_and_schema_clean() -> None:
-    """真实决策文件当前只能全量 blocked：没有任何签字结论，不得虚报。"""
+    """真实决策文件必须 schema 干净且如实：签字变化时同步更新本钉住集合。
+
+    2026-09-19 Jayus-07 确认 Q1—Q4/Q8—Q9；Q5/Q6/Q7/Q10 等外部材料，保持 blocked。
+    """
     summary = summarize_decisions(
         json.loads(
             Path(
@@ -80,7 +83,8 @@ def test_real_decisions_file_is_blocked_and_schema_clean() -> None:
     )
 
     assert summary.issues == []
-    assert summary.blocked_ids == [f"Q{i}" for i in range(1, 11)]
+    assert summary.blocked_ids == ["Q5", "Q6", "Q7", "Q10"]
+    assert summary.confirmed_ids == ["Q1", "Q2", "Q3", "Q4", "Q8", "Q9"]
     assert summary.phase0_ready is False
 
 
