@@ -313,6 +313,17 @@ async def start_consistency_sweeper():
     asyncio.create_task(consistency_sweep_loop(), name="consistency-sweeper")
 
 
+@app.on_event("startup")
+async def start_trace_retention_loop():
+    """trace 留存期限清理（2026-09-19 合规确认 §5.5：默认 14 天 / 敏感 180 天）。
+
+    首次延迟 10min 避开启动期；周期默认 24h；任何失败不影响服务。
+    """
+    import asyncio
+    from backend.observability.trace_retention import trace_retention_loop
+    asyncio.create_task(trace_retention_loop(), name="trace-retention")
+
+
 # ═══════════════════════════════════════════════════
 # 启动时后台预热 MultiAgent（避免首请求 5-15s 图编译）
 # ═══════════════════════════════════════════════════

@@ -149,6 +149,44 @@ class PostgresTraceStore(TraceStore):
 
     # ---- 查询 ----
 
+    def iter_before(self, cutoff: str, *, limit: int = 5000) -> list[dict]:
+        """列出 created_at < cutoff 的 trace（留存清理用），返回含 trace_id 的原始 dict。
+
+        cutoff 格式: "2026-09-05 00:00:00"（本地时间文本，与写入同构）。
+        与 list/list_since 不同：本方法服务于清理路径，**不剥离字段、
+        不吞行**——JSON 解析失败的行也要参与判定（trace_id 原样返回，
+        data 置空 dict 由调用方按非敏感处理）。
+        """
+        with self._lock, self._conn() as conn:
+            rows = self._exec(
+                conn,
+                f"SELECT trace_id, data, created_at FROM {self._table} "
+                f"WHERE created_at < %s ORDER BY created_at ASC LIMIT %s",
+                (cutoff, limit),
+            ).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            try:
+                d = json.loads(r["data"]) if r["data"] else {}
+            except Exception:
+                d = {}
+            d["trace_id"] = r["trace_id"]
+            d["_created_at"] = r["created_at"]
+            out.append(d)
+        return out
+
+    def delete_by_ids(self, trace_ids: list[str]) -> int:
+        """按 trace_id 批量删除，返回删除行数（留存清理用；空列表返回 0）。"""
+        if not trace_ids:
+            return 0
+        with self._lock, self._conn() as conn:
+            cur = self._exec(
+                conn,
+                f"DELETE FROM {self._table} WHERE trace_id = ANY(%s)",
+                (list(trace_ids),),
+            )
+            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
     def get(self, trace_id: str) -> dict | None:
         try:
             with self._lock, self._conn() as conn:
