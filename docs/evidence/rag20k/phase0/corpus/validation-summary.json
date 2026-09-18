@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0",
+  "status": "blocked",
+  "blocking_reason": [
+    "语料清单不存在，未提供真实数据: D:/rag20k/manifests/corpus-20000.jsonl"
+  ],
+  "input_path": "D:/rag20k/manifests/corpus-20000.jsonl",
+  "expected_count": 20000
+}

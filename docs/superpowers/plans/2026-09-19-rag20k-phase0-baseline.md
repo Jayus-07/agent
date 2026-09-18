@@ -199,7 +199,7 @@ Commit: `docs(audit): freeze rag20k phase0 decisions`
 - 复合唯一键：`tenant_id + kb_id + doc_id + version`。
 - 必填字段：`tenant_id`、`kb_id`、`doc_id`、`version`、`format`、`size_bytes`、`permission_scope`、`language`、`is_ocr`、`content_sha256`、`object_uri`、`authorization_ref`。
 
-- [ ] **Step 1: 写失败测试，覆盖数量、空值、重复键、格式和 URI**
+- [x] **Step 1: 写失败测试，覆盖数量、空值、重复键、格式和 URI**
 
 ```python
 def test_manifest_rejects_duplicate_compound_key(tmp_path):
@@ -215,15 +215,15 @@ def test_manifest_never_reads_document_body(tmp_path):
     assert result.uri_scheme_counts == {"s3": 1}
 ```
 
-- [ ] **Step 2: 运行测试确认 RED**
+- [x] **Step 2: 运行测试确认 RED**
 
 Run: `D:/Python/python.exe -m pytest backend/tests/audit/test_rag20k_corpus_manifest.py -q --no-cov`
 
-- [ ] **Step 3: 实现流式 JSONL 校验与脱敏统计**
+- [x] **Step 3: 实现流式 JSONL 校验与脱敏统计**
 
 校验器逐行读取，不把 20k 行全部载入内存；输出只包含数量、格式分布、大小分位数、OCR/语言/权限分布、重复键的不可逆哈希和错误行号。`object_uri` 只验证 scheme 与非空，不把完整 URI复制到摘要。未知扩展名、PPT/PPTX/HTML 按审计决策输出明确错误或阻断。
 
-- [ ] **Step 4: 运行测试与真实清单验证**
+- [x] **Step 4: 运行测试与真实清单验证**
 
 Run: `D:/Python/python.exe -m pytest backend/tests/audit/test_rag20k_corpus_manifest.py -q --no-cov`
 
@@ -231,7 +231,7 @@ Run: `D:/Python/python.exe backend/scripts/validate_rag20k_corpus.py D:/rag20k/m
 
 Expected: 未提供真实清单时明确 `blocked`，不得生成伪造的 20k 数据。
 
-- [ ] **Step 5: 提交校验器与脱敏摘要**
+- [x] **Step 5: 提交校验器与脱敏摘要**
 
 Commit: `feat(audit): validate rag20k corpus manifest`
 
