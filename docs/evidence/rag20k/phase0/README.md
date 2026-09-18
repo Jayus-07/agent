@@ -15,10 +15,11 @@
 - 校验：`D:/Python/python.exe backend/scripts/validate_rag20k_decisions.py docs/evidence/rag20k/phase0/decisions/Q1-Q10.json`（当前退出 2 = 存在 blocked）
 - 2026-09-19：签字类 Q1—Q4/Q8—Q9 已由项目所有者 Jayus-07 按暂定假设冻结确认；Q5/Q6/Q7/Q10 的确认前提是外部材料或执行结果（20k 清单、供应商配额函、获授权语料、100 文档双跑），到位前保持 blocked，不得以暂定假设冒充已核实结论。
 
-## 0.3 100 文档双跑（未开始）
+## 0.3 100 文档双跑（比较器就绪，双跑未执行）
 
 - 证据：`evaluation/reproducibility.json`（待产出）
-- 前置：`codex/rag-eval-kb-unification` worktree 合并；实施计划 Task 5（比较器 `backend/scripts/compare_rag_baselines.py` 尚未创建）。
+- 比较器已完成（TDD）：`backend/audit/rag20k/eval_reproducibility.py`（六主指标 + 口径指纹比对，容差 0.005）+ `backend/scripts/compare_rag_baselines.py`。
+- 双跑命令与结论产出：等 `codex/rag-eval-kb-unification` worktree 合并后执行（该 worktree 尚有 20+ 文件在途未提交）；若合并后评测报告字段与比较器契约（`context`+`metrics`，见模块文档）不一致，只加适配层、不放宽比对规则。
 
 ## 0.4 20k 语料清单（校验器就绪，blocked）
 

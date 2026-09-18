@@ -135,7 +135,7 @@ Commit: `feat(audit): add reproducible rag20k baseline capture`
 - `85a0067566c869d2`（12 镜像折叠为 unknown、npm 误报不可用）
 - `005c6543e402b55b`（内容正确，但 capture_id 由自引用指纹算法计算，不可复现）
 
-**有效基线**：`docs/evidence/rag20k/phase0/baseline/8ad9e77f1b4fd9f4/baseline-manifest.json`，阻断项 0；连续两次采集 capture_id 一致（幂等验证通过）；12 镜像均有 RepoDigest；PG 16.14 / Redis 7.4.9（运行容器实测版本）。
+**有效基线**：`docs/evidence/rag20k/phase0/baseline/8ad9e77f1b4fd9f4/baseline-manifest.json`，阻断项 0；连续两次采集 capture_id 一致（幂等验证通过）；12 镜像均有 RepoDigest；PG 16.14 / Redis 7.4.9（运行容器实测版本）。（Task 5 增补 2026-09-19：Step 1-2 比较器 `backend/audit/rag20k/eval_reproducibility.py` + `backend/scripts/compare_rag_baselines.py` 已 TDD 完成；Step 3-5 等待 `codex/rag-eval-kb-unification` worktree 合并——该 worktree 尚有 20+ 文件在途未提交。）
 
 ### Task 2: 冻结 Q1—Q10 决策记录与签字状态
 
@@ -295,7 +295,7 @@ Commit: `feat(audit): validate rag20k golden manifest`
 - `compare_eval_runs(first: Mapping[str, object], second: Mapping[str, object], tolerance: float = 0.005) -> ReproducibilityResult`
 - 必比主指标：`recall@5`、`mrr`、`ndcg@10`、`top1_accuracy`、`citation_accuracy`、`reject_accuracy`。
 
-- [ ] **Step 1: 写失败测试，拒绝口径不一致和差值超限**
+- [x] **Step 1: 写失败测试，拒绝口径不一致和差值超限**
 
 ```python
 def test_compare_rejects_different_dataset_or_config_fingerprint():
@@ -309,7 +309,7 @@ def test_compare_requires_all_primary_metrics_within_0005():
     assert result.metric_deltas["recall@5"] == pytest.approx(0.006)
 ```
 
-- [ ] **Step 2: 运行测试确认 RED，随后实现比较器**
+- [x] **Step 2: 运行测试确认 RED，随后实现比较器**
 
 Run: `D:/Python/python.exe -m pytest backend/tests/audit/test_rag_baseline_reproducibility.py -q --no-cov`
 
