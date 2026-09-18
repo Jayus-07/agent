@@ -207,6 +207,15 @@ _register(PromptSpec(
 ))
 
 _register(PromptSpec(
+    key="rag.preprocessing.metadata_extract",
+    name="文档元数据统一抽取",
+    category="rag_preprocessing",
+    risk_level="low",
+    variables=(R("doc_types"), R("filename"), R("text")),
+    default_file="rag_preprocessing_metadata_extract.yaml",
+))
+
+_register(PromptSpec(
     key="rag.indexing.doc_type",
     name="文档类型二次验证",
     category="rag_preprocessing",
