@@ -32,9 +32,9 @@
         └─────┬─────┘                           └────┬─────┘
               │                                      │
         ┌─────┴─────┐                           ┌────┴─────┐
-        │ ChromaDB  │                           │ ChunkLevel│
-        │ (doc+chunk│                           │ Hybrid   │
-        │  2 库)   │                           │ (Vec+BM25)│
+        │ PostgreSQL│                           │ ChunkLevel│
+        │ pgvector │                           │ Hybrid   │
+        │ doc+chunk│                           │ (Vec+BM25)│
         └───────────┘                           └────┬─────┘
                                                       │
                                                 ┌─────┴─────┐
@@ -65,6 +65,16 @@
 | 自纠 | Self-Correction（LLM 拒答后 query 改写重试） |
 | 忠实度 | Faithfulness NLI（拆 claim → 比对 → 剔除） |
 
+### 1.3 评测知识库隔离与 20k 口径
+
+评测文档统一写入 `kb_id=rag_eval_kb`，并以 `fixture_set` 区分
+`baseline`、`expanded_100` 和 staging 专用的 `scale_20k`。该字段只用于评测范围和
+诊断，不能替代 `permission_scope`，也不会进入生产授权集合。
+
+旧标识 `rag_test_kb`、`rag_100_docs` 保留一个发布周期的只读兼容映射；新入库不得继续
+写入旧 KB。评测必须显式选择 suite，报告记录实际 KB、fixture set、数据版本和检索链
+开关，避免把不同规模的结果混成一个成功率。
+
 ---
 
 ## 2. 索引链路（9 阶段）
@@ -87,8 +97,8 @@ _index_file()  ← 每个文件一棵 trace 树
   ├─ ⑤ index_chunk       → ChunkStrategyRouter + ChunkFilter
   ├─ ⑥ index_metadata    → LLM+规则: 分类/摘要/关键词/实体
   ├─ ⑦ index_embed       → HuggingFaceEmbeddings 逐 chunk 向量化
-  ├─ ⑧ index_vector_db   → ChromaKB.add_documents() 写入 chunk 向量库
-  └─ ⑨ registry          → DocumentRegistry.register() SQLite 持久化
+  ├─ ⑧ index_vector_db   → PgVectorKnowledgeStore 写入 chunk 向量库
+  └─ ⑨ registry          → DocumentRegistry.register() PostgreSQL 持久化
 ```
 
 ### 2.3 11 种清洗（③）
@@ -390,23 +400,23 @@ class KnowledgeStore(ABC):
     def delete(self, ids=None, where=None) -> int: ...
 ```
 
-**当前实现**：`ChromaKnowledgeStore`（封装 `langchain_chroma.Chroma`）
+**当前实现**：`PgVectorKnowledgeStore`（PostgreSQL + pgvector），metadata 与向量同库持久化。
 
-**预留实现**：`PgVectorKnowledgeStore`（pgvector，后续 PR）
+**兼容说明**：历史 Chroma 代码与路径只用于迁移/清理，不是新入库或 20k staging 的目标存储。
 
-### 4.2 两个 ChromaDB
+### 4.2 两个 PostgreSQL vector store
 
 | 库 | 路径 | 写入 | 用途 |
 |---|---|---|---|
-| **chunk 级** | `CHROMA_PATH` | `indexer.py:_index_file()` 步骤 8 | 语义检索主体 |
-| **doc 级** | `DOC_DB_PATH` | 索引时整篇文档 | Stage 1 召回 + Adaptive 扩展 |
+| **chunk 级** | PG vector chunk 表 | `indexer.py:_index_file()` 步骤 8 | 语义检索主体 |
+| **doc 级** | PG vector doc 表 | 索引时整篇文档 | Stage 1 召回 + Adaptive 扩展 |
 
-### 4.3 切换路径
+### 4.3 迁移约束
 
-业务层只依赖 `KnowledgeStore` 抽象，后续切换到 `PgVectorKnowledgeStore` 仅需：
+业务层只依赖 `KnowledgeStore` 抽象；如果未来更换向量实现，只需：
 
 ```
-1. 实现 PgVectorKnowledgeStore
+1. 实现新的 KnowledgeStore
 2. factory 切换
 3. 业务代码无改动
 ```
@@ -683,7 +693,7 @@ def _evaluate(self, answer: str, context_docs: list) -> str:
 | `backend/rag/retrieval/retrievers.py` | ChunkLevelRetriever + AdaptiveRetriever |
 | `backend/rag/retrieval/hybrid.py` | Vector + BM25 + RRF |
 | `backend/rag/retrieval/bm25_store.py` | BM25 持久化 + 增量 |
-| `backend/rag/retrieval/base.py` | CustomRetriever（ChromaDB filter） |
+| `backend/rag/retrieval/base.py` | CustomRetriever（向量库 metadata filter） |
 | `backend/rag/retrieval/query_analyzer.py` | QueryAnalyzer（entities / time / intent） |
 | `backend/rag/retrieval/multi_query.py` | MultiQueryRetriever |
 | `backend/rag/retrieval/kb_filter.py` | 知识库过滤 |
@@ -703,7 +713,7 @@ def _evaluate(self, answer: str, context_docs: list) -> str:
 
 | 文件 | 职责 |
 |---|---|
-| `backend/rag/vectorstore/knowledge_store.py` | KnowledgeStore 抽象 + ChromaKnowledgeStore |
+| `backend/rag/vectorstore/knowledge_store.py` | KnowledgeStore 抽象/兼容层 |
 | `backend/config/rag.py` | RAG 配置（chunk / rerank / doc_type / gates） |
 
 ### 7.4 入口

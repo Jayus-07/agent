@@ -1,4 +1,4 @@
-"""R3 后续：把评测 fixtures（rag_100_docs）部署进主语料目录并索引入库（v3）。
+"""把统一评测 fixtures 部署进隔离测试 KB 并索引入库。
 
 踩坑记录（为什么流程长这样）：
   1. pipeline 启动 sync 是 data/docs 全量 delta diff——registry 中路径不在
@@ -17,7 +17,7 @@
      否则触发全量重建（同 3 的灾难）。
 
 幂等流程：
-  ① 部署 25 份文本 fixtures 到 data/docs/rag_100_docs/general/{format}/
+  ① 部署指定 fixture_set 的文本 fixtures 到 data/docs/rag_eval_kb/general/{format}/
      （is_scanned 的 2 份排除；若早前已部署则移除）
   ② 记录现存 fixture 行的 hash doc_id（待清理向量）；slug 行以
      「真实 file_hash + active」注册（sync 视为 unchanged，不被动）
@@ -30,23 +30,121 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from backend.config.database import DOC_REGISTRY_PATH, DOCS_DIRECTORY  # noqa: E402
+from backend.evaluation.dataset.fixture_catalog import (  # noqa: E402
+    RAG_EVAL_KB_ID,
+    FixtureDocument,
+    load_fixture_catalog,
+)
 from backend.rag.indexing.doc_registry import DocumentRegistry  # noqa: E402
 from backend.shared.logger import logger  # noqa: E402
 
-FIXTURE_DIR = REPO_ROOT / "backend/evaluation/fixtures/rag_100_docs"
-FIXTURE_FILES = FIXTURE_DIR / "files"  # manifest.file 相对此目录
-MANIFEST = FIXTURE_DIR / "manifest.json"
-KB_ID = "rag_100_docs"
+KB_ID = RAG_EVAL_KB_ID
 DEST_DIR = Path(DOCS_DIRECTORY) / KB_ID / "general"
+
+
+@dataclass(frozen=True)
+class FixtureIngestResult:
+    """一次 fixture 入库的可审计结果。"""
+
+    fixture_doc_id: str
+    file_path: str
+    metadata: dict[str, Any]
+    index_result: dict[str, Any]
+    skipped: bool = False
+
+
+def _fixture_source_path(document: FixtureDocument) -> Path:
+    """解析 catalog 中的源文件；不允许以当前工作目录猜测路径。"""
+    source = Path(document.source_file)
+    if source.is_absolute() and source.is_file():
+        return source
+    candidate = REPO_ROOT / source
+    if candidate.is_file():
+        return candidate
+    if document.fixture_set == "expanded_100":
+        candidate = REPO_ROOT / "backend/evaluation/fixtures/rag_100_docs/files" / source
+    if not candidate.is_file():
+        raise FileNotFoundError(f"fixture 源文件不存在: {document.source_file}")
+    return candidate
+
+
+def _fixture_metadata(document: FixtureDocument) -> dict[str, Any]:
+    """构造入库元数据，明确保留统一 KB 与 fixture 范围。"""
+    if document.kb_id != RAG_EVAL_KB_ID:
+        raise ValueError(f"fixture 必须写入 {RAG_EVAL_KB_ID}: {document.kb_id}")
+    metadata = dict(document.metadata)
+    legacy = metadata.pop("legacy_metadata", {})
+    if isinstance(legacy, dict):
+        metadata = {**legacy, **metadata}
+    metadata.update(
+        {
+            "kb_id": RAG_EVAL_KB_ID,
+            "fixture_doc_id": document.fixture_doc_id,
+            "fixture_set": document.fixture_set,
+        }
+    )
+    return metadata
+
+
+def fixture_document_from_path(fixture_path: Path, fixture_set: str) -> FixtureDocument:
+    """从统一 catalog 反查文档，避免调用方手写稳定 ID。"""
+    path = fixture_path.resolve()
+    catalog = load_fixture_catalog()
+    for document in catalog.documents(fixture_set):
+        if _fixture_source_path(document).resolve() == path:
+            return document
+    raise ValueError(f"catalog 中找不到 fixture: set={fixture_set}, path={fixture_path}")
+
+
+def ingest_fixture(
+    document: FixtureDocument,
+    *,
+    registry: Any,
+    indexer: Any,
+) -> FixtureIngestResult:
+    """以稳定 fixture ID 幂等入库单份文档，并把范围写入 registry。"""
+    source_path = _fixture_source_path(document)
+    metadata = _fixture_metadata(document)
+    file_hash = _sha256(source_path)
+    existing = registry.get_by_path(str(source_path)) or {}
+    if (
+        existing.get("doc_id") == document.fixture_doc_id
+        and existing.get("file_hash") == file_hash
+        and existing.get("status") == "active"
+    ):
+        return FixtureIngestResult(
+            fixture_doc_id=document.fixture_doc_id,
+            file_path=str(source_path),
+            metadata=metadata,
+            index_result={"skipped": True, "doc_id": document.fixture_doc_id},
+            skipped=True,
+        )
+
+    registry.register_in_progress(
+        str(source_path),
+        doc_id=document.fixture_doc_id,
+        file_hash=file_hash,
+        kb_id=RAG_EVAL_KB_ID,
+        department=str(metadata.get("department") or "general"),
+    )
+    registry.update_fields(str(source_path), {"fixture_set": document.fixture_set})
+    index_result = indexer._index_file(str(source_path), file_hash=file_hash) or {}
+    return FixtureIngestResult(
+        fixture_doc_id=document.fixture_doc_id,
+        file_path=str(source_path),
+        metadata=metadata,
+        index_result=index_result,
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -65,11 +163,34 @@ def _sha256(path: Path) -> str:
 
 def main() -> int:
     include_scanned = "--include-scanned" in sys.argv
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    docs = manifest["documents"]
-    texts = docs if include_scanned else [
-        d for d in docs if not d.get("is_scanned")]
-    scans = [d for d in docs if d.get("is_scanned")]
+    requested_set = None
+    for index, arg in enumerate(sys.argv):
+        if arg == "--fixture-set" and index + 1 < len(sys.argv):
+            requested_set = sys.argv[index + 1]
+    if requested_set is None:
+        requested_set = "expanded_100"
+        print("[DEPRECATED] 未指定 --fixture-set，兼容映射到 expanded_100；新命令请显式指定。")
+
+    catalog = load_fixture_catalog()
+    catalog.validate()
+    docs = catalog.documents(requested_set)
+    if not docs:
+        print(f"[ABORT] fixture_set={requested_set} 没有可入库文档")
+        return 2
+    legacy_meta = {
+        document.fixture_doc_id: document.metadata.get("legacy_metadata", {})
+        for document in docs
+    }
+    texts = list(docs) if include_scanned else [
+        document for document in docs
+        if not isinstance(legacy_meta[document.fixture_doc_id], dict)
+        or not legacy_meta[document.fixture_doc_id].get("is_scanned")
+    ]
+    scans = [
+        document for document in docs
+        if isinstance(legacy_meta[document.fixture_doc_id], dict)
+        and legacy_meta[document.fixture_doc_id].get("is_scanned")
+    ]
     if include_scanned:
         # OCR 预检：在线 OCR 不可用（供应商 off / 未配 Key）时拒绝把扫描件入库
         from backend.rag.preprocessing.parser import ocr as ocr_mod
@@ -79,29 +200,44 @@ def main() -> int:
             return 2
         print(f"[OCR] 供应商 {ocr_mod.rag_cfg.RAG_OCR_PROVIDER} 就绪，"
               f"扫描件 {len(scans)} 份将走 OCR 入库")
-    print(f"fixtures: {len(docs)} 份（文本 {len(docs) - len(scans)} + 扫描件 {len(scans)}），kb_id={KB_ID}")
+    print(
+        f"fixtures: {len(docs)} 份（文本 {len(texts)} + 扫描件 {len(scans)}），"
+        f"kb_id={KB_ID}, fixture_set={requested_set}"
+    )
 
     registry = DocumentRegistry(DOC_REGISTRY_PATH)
 
     # ① 部署文本 fixtures；扫描件反向清理（不进 data/docs）
     paths: dict[str, str] = {}
-    for d in texts:
-        src = FIXTURE_FILES / d["file"]
+    for document in texts:
+        src = _fixture_source_path(document)
         if not src.is_file():
-            print(f"[MISS] {d['doc_id']} <- {d['file']}")
+            print(f"[MISS] {document.fixture_doc_id} <- {document.source_file}")
             continue
-        dest = DEST_DIR / d["file"]
+        legacy = legacy_meta[document.fixture_doc_id]
+        relative_path = (
+            Path(legacy["file"])
+            if isinstance(legacy, dict) and legacy.get("file")
+            else Path(src.name)
+        )
+        dest = DEST_DIR / relative_path
         dest.parent.mkdir(parents=True, exist_ok=True)
         if not dest.is_file() or dest.stat().st_size != src.stat().st_size:
             shutil.copy2(src, dest)
-        paths[d["doc_id"]] = str(dest)
-    for d in scans:
+        paths[document.fixture_doc_id] = str(dest)
+    for document in scans:
         if include_scanned:
             continue  # 扫描件随文本一起部署（下方 texts 循环已含）
-        stray = DEST_DIR / d["file"]
+        legacy = legacy_meta[document.fixture_doc_id]
+        relative_path = (
+            Path(legacy["file"])
+            if isinstance(legacy, dict) and legacy.get("file")
+            else Path(document.source_file).name
+        )
+        stray = DEST_DIR / relative_path
         if stray.exists():
             stray.unlink()
-            print(f"[PURGE-FILE] 扫描件移出 data/docs: {d['file']}")
+            print(f"[PURGE-FILE] 扫描件移出 data/docs: {document.source_file}")
     print(f"部署: {len(paths)}/{len(texts)} 份文本")
 
     # ② 记录待清理的 hash doc_id；slug 行带真实 hash 注册（sync 跳过）
@@ -113,12 +249,23 @@ def main() -> int:
             if p not in paths.values() or r.get("status") not in ("active",):
                 registry.mark_deleted(p)  # 旧路径/异常行一律标删
     hash_ids.discard("")
-    slugs = set(paths.keys())
-    _perm_by_slug = {d["doc_id"]: d.get("permission_scope") or "general" for d in docs}
+    _perm_by_slug = {
+        document.fixture_doc_id: (
+            legacy_meta[document.fixture_doc_id].get("permission_scope") or "general"
+            if isinstance(legacy_meta[document.fixture_doc_id], dict)
+            else "general"
+        )
+        for document in docs
+    }
     # §6 版本治理（R4）：fixtures 的 version 元数据（TRAVEL_VERSIONS 链）随
     # slug 行写入 registry —— 索引管线经 doc_row 读出后贯通 chunk metadata
     _ver_by_slug: dict[str, dict] = {
-        d["doc_id"]: (d.get("version") or {}) for d in docs
+        document.fixture_doc_id: (
+            legacy_meta[document.fixture_doc_id].get("version") or {}
+            if isinstance(legacy_meta[document.fixture_doc_id], dict)
+            else {}
+        )
+        for document in docs
     }
 
     def _version_meta(slug: str) -> dict:
@@ -136,6 +283,7 @@ def main() -> int:
             kb_id=KB_ID, chunk_ids=[], doc_db_id="",
             metadata={"doc_type": "general", "department": "general",
                       "permission_scope": _perm_by_slug.get(slug, "general"),
+                      "fixture_set": requested_set,
                       **_version_meta(slug)},
         )
     print(f"slug 行注册: {len(paths)}；待清理 hash doc_id: {len(hash_ids)}")
@@ -152,6 +300,7 @@ def main() -> int:
         embedding=pipeline.embedding,
         registry=registry,
         kb_id=KB_ID,
+        fixture_set=requested_set,
         bm25_store=pipeline.bm25_store,
     )
 
@@ -169,6 +318,7 @@ def main() -> int:
             kb_id=KB_ID, chunk_ids=[], doc_db_id="",
             metadata={"doc_type": "general", "department": "general",
                       "permission_scope": _perm_by_slug.get(slug, "general"),
+                      "fixture_set": requested_set,
                       **_version_meta(slug)},
         )
         try:

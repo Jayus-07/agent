@@ -11,6 +11,7 @@ DATA_ROOT 路径即可。
 from __future__ import annotations
 
 import json
+import re
 import os
 import secrets
 import subprocess
@@ -142,7 +143,14 @@ def make_run_id() -> str:
     return f"{timestamp}-{random_suffix}"
 
 
-def persist_report(report: EvalReport) -> Path:
+def validate_run_id(run_id: str) -> str:
+    """校验 run_id 只能作为 data/eval_runs 的单层目录名使用。"""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", run_id):
+        raise ValueError(f"非法评测 run_id: {run_id!r}")
+    return run_id
+
+
+def persist_report(report: EvalReport, run_id: str | None = None) -> Path:
     """持久化 EvalReport 到文件系统。
 
     目录结构:
@@ -152,7 +160,8 @@ def persist_report(report: EvalReport) -> Path:
             meta.json              # git_sha / dataset_version / prompt_versions
     """
     DATA_ROOT.mkdir(parents=True, exist_ok=True)
-    run_id = make_run_id()
+    requested_run_id = run_id or report.metadata.get("run_id")
+    run_id = validate_run_id(str(requested_run_id)) if requested_run_id else make_run_id()
     run_dir = DATA_ROOT / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 

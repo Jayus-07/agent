@@ -7,8 +7,9 @@
 ## 🚀 30 秒看懂
 
 - **这是什么**：给你的 RAG 系统（6 段流水线 + 3 层 Gate）打分，告诉你"哪个环节最该改"
-- **怎么跑**：每周手动跑一次，复制两条命令
-- **在哪看**：`data/rag_eval/report.json` + 控制台摘要
+- **怎么跑**：按 suite 选择 PR baseline、100 文档专项或 20k staging
+- **在哪看**：`data/eval_runs/<run_id>/report.json`、`meta.json`、`per_case/`
+- **中断怎么办**：启动时会打印 `run_id`；重新执行时追加 `--run-id <同一ID>`，默认读取同目录 `results_checkpoint.jsonl` 续跑
 
 ---
 
@@ -65,16 +66,28 @@ cd backend
 ### 跑评测（3 个模块一次性）
 
 ```bash
-# 1. 跑检索评测（已有，37 case）
+# 1. PR baseline：只跑 baseline 语料的快速回归
 PYTHONIOENCODING=utf-8 PYTHONPATH=".." \
-  ../.venv/Scripts/python.exe -m evaluation rag --dataset rag_test_kb.json
+  ../.venv/Scripts/python.exe -m evaluation rag --selection pr_baseline --no-ragas --no-resume
 
-# 2. 跑端到端评测（11 case，含 Gate/Citation）
+# 2. 100 文档专项：完整 RD 案例，发布/夜间运行
+PYTHONIOENCODING=utf-8 PYTHONPATH=".." \
+  ../.venv/Scripts/python.exe -m evaluation rag --selection expanded_100 --multiquery --no-ragas --no-resume
+
+# 3. 20k staging：问题集复用 expanded_100，但要求 staging 已导入 scale_20k
+PYTHONIOENCODING=utf-8 PYTHONPATH=".." \
+  ../.venv/Scripts/python.exe -m evaluation rag --selection scale_20k --multiquery --no-ragas --no-resume
+
+# 中途失败后续跑：去掉 --no-resume，并传入失败前日志中的同一 run_id
+PYTHONIOENCODING=utf-8 PYTHONPATH=".." \
+  ../.venv/Scripts/python.exe -m evaluation rag --selection scale_20k --multiquery --no-ragas --run-id 2026-09-18T10-00-00-a1b2c3
+
+# 4. 跑端到端评测（含 Gate/Citation）
 PYTHONIOENCODING=utf-8 PYTHONPATH=".." \
   ../.venv/Scripts/python.exe -m evaluation e2e --live
 
-# 3. 看报告
-cat data/eval_runs/<最新 run_id>/report.json
+# 5. 看报告
+cat data/eval_runs/<run_id>/report.json
 ```
 
 ### 看输出
@@ -117,7 +130,7 @@ cat data/eval_runs/<最新 run_id>/report.json
 ### 一份典型报告
 
 ```
-通过率=100%  (37/37)
+通过率=100%  （以本次 suite 的实际案例数为准）
   ├─ NDCG@10: 0.97 ✅  排序很好
   ├─ 召回率@10: 1.00 ✅  检索很全
   ├─ Rerank top1: 0.86 ⚠️  ← 这就是问题
@@ -150,7 +163,7 @@ cat data/eval_runs/<run_id>/per_case/<case_id>.json
 | HistoryAware / MultiQuery / AdaptiveExpansion 评测 | 影响小 | V2.0 |
 | Self-Correction 延迟分析 | Gate 评测已覆盖 | V2.0 |
 | QueryAnalyzer / LLM Router 评测 | 不是关键路径 | V2.0 |
-| Ragas 自动扩库 | 需先验证 37 case 够不够 | 看 §7 FAQ |
+| Ragas 自动扩库 | 先完成 canonical suite 的事实覆盖，再决定是否扩充 | 看 §7 FAQ |
 | 异源 Judge（切 qwen2.5:3b） | V1.5 用 DeepSeek 自评 | V2.0 |
 
 **为什么这些不做**：先跑通"基本功能"——能定位哪段退化，比"什么都能查"更重要。
@@ -165,25 +178,29 @@ cat data/eval_runs/<run_id>/per_case/<case_id>.json
 # 看后端是否启动
 cd backend && python -m app.main
 
-# 看 trace 是否生成
-ls data/rag_eval/  # 应该有 report.json
+# 看本轮目录：已完成 case 在 results_checkpoint.jsonl，单 case 轨迹在 per_case/
+ls data/eval_runs/<run_id>/
 ```
 
+默认 `resume=true`，同一 run 目录重跑会跳过已完成用例；错误用例会重试。
+若任务在 suite、入库或 runner 阶段失败，保留 `task-N-report.md` 与
+`.superpowers/sdd/rag-eval-kb-unification/progress.md`，修复后从第一个未完成阶段继续。
 最常见错误：`ModuleNotFoundError: backend.evaluation` → 加 `PYTHONPATH=..`。
 
-### Q2: 37 case 不够怎么办？
+### Q2: baseline 和 100 文档集怎么选？
 
-先扩到 50-100 条（从生产 badcase 录入）。**100+ 后再考虑** Ragas 自动扩库（V2.0）。
+日常提交只跑 `pr_baseline`；发布或夜间跑 `expanded_100`；20k 只允许在独立 staging 使用 `scale_20k`。
 
 ### Q3: 怎么加新 case？
 
-`backend/evaluation/datasets/rag_test_kb.json` 加一条：
+统一 canonical 文件是 `backend/evaluation/datasets/rag/cases.jsonl`；suite 只保存 case ID 和运行范围。
+旧顶层 JSON 仅兼容读取，不应新增案例：
 ```json
 {
   "id": "RT-038",
   "question": "新问题",
   "module": "rag",
-  "kb_id": "rag_test_kb",
+  "kb_id": "rag_eval_kb",
   "expected": {"relevant_docs": ["doc_id"], "relevant_snippets": ["关键词"]}
 }
 ```
@@ -280,4 +297,4 @@ curl -X POST http://localhost:8000/llm/switch -d '{"model":"qwen2.5:3b"}'
 
 ### 9.6 清理脚本
 
-新增 `backend/scripts/cleanup_tmpnl_residuals.py`：幂等删除 GBK 残留 + ChromaDB + chunk_store + registry。
+新增 `backend/scripts/cleanup_tmpnl_residuals.py`：幂等清理临时残留、chunk_store 与 registry。

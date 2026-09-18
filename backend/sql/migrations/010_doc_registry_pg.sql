@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS doc_registry (
     business_domain TEXT DEFAULT '',
     complexity   TEXT DEFAULT '',
     permission_scope TEXT DEFAULT 'general',
+    fixture_set   TEXT DEFAULT '',
     expire_at    TEXT
 );
 

@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS {table} (
     business_domain TEXT DEFAULT '',
     complexity   TEXT DEFAULT '',
     permission_scope TEXT DEFAULT 'general',
+    fixture_set   TEXT DEFAULT '',
     version_id   TEXT DEFAULT '',
     effective_from TEXT,
     effective_to TEXT,
@@ -91,6 +92,7 @@ _REGISTER_VALUE_COLS = (
     "summary", "keywords", "time_refs", "business_domain", "complexity",
     "metadata_fingerprint", "doc_version", "kb_version", "department",
     "permission_scope",
+    "fixture_set",
     "version_id", "effective_from", "effective_to", "supersedes_version_id",
     "source_priority", "quality_status",
     "status",
@@ -164,6 +166,11 @@ class PostgresDocumentRegistry(DocumentRegistry):
                 "ADD COLUMN permission_scope TEXT DEFAULT 'general'"
             )
             logger.info("[doc_registry_pg] 迁移：补列 permission_scope（默认 general）")
+        if "fixture_set" not in existing:
+            conn.cursor().execute(
+                f"ALTER TABLE {self._table} ADD COLUMN fixture_set TEXT DEFAULT ''"
+            )
+            logger.info("[doc_registry_pg] 迁移：补列 fixture_set（评测范围，生产默认为空）")
         for col, coldef, desc in VERSION_GOVERNANCE_COLUMNS:
             if col not in existing:
                 conn.cursor().execute(
@@ -391,6 +398,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
             "minhash_sig", "near_dup_id", "doc_type", "summary", "keywords",
             "time_refs", "business_domain", "complexity", "quality_score",
             "quality_issues", "confidence", "permission_scope",
+            "fixture_set",
             # §6 治理 11 字段（R4）：版本治理元数据可回填
             "version_id", "effective_from", "effective_to",
             "supersedes_version_id", "source_priority", "quality_status",
@@ -445,6 +453,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
         kb_version = meta.get("kb_version", "v1")
         department = meta.get("department", "")
         permission_scope = meta.get("permission_scope", "general")
+        fixture_set = meta.get("fixture_set", "")
         # §6 治理 11 字段（R4 版本治理），与 SQLite 版 register 语义一致
         version_id = meta.get("version_id", "")
         effective_from = meta.get("effective_from") or None
@@ -465,6 +474,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
             summary, keywords, time_refs, business_domain, complexity,
             metadata_fingerprint, doc_version, kb_version, department,
             permission_scope,
+            fixture_set,
             version_id, effective_from, effective_to, supersedes_version_id,
             source_priority, quality_status,
             status,

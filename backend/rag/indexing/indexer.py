@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,18 @@ DOC_LEVEL_TEXT_MAX_CHARS = 16000
 # doc 级文本增强（1.2）：摘要/章节头部最少保住的正文预算——
 # header 过长时正文不至于被挤没，保证 doc 级仍含原始语义
 _DOC_LEVEL_BODY_MIN_CHARS = 2000
+
+_EVAL_FIXTURE_SETS = frozenset({"baseline", "expanded_100", "scale_20k"})
+
+
+def _apply_fixture_metadata(metadata: dict[str, Any], fixture_set: str | None) -> None:
+    """把评测语料范围写入索引元数据；生产文档不强制携带该字段。"""
+    if not fixture_set:
+        return
+    if fixture_set not in _EVAL_FIXTURE_SETS:
+        raise ValueError(f"未知评测 fixture_set: {fixture_set}")
+    # fixture_set 只用于评测范围和诊断，不参与生产授权裁决；授权仍由 kb/permission_scope 控制。
+    metadata["fixture_set"] = fixture_set
 
 
 def _build_doc_level_text(full_text: str, doc_meta: dict) -> str:
@@ -159,6 +172,7 @@ class IncrementalIndexer:
         kb_id: str = "policy_general",
         department: str = "general",
         bm25_store: Any = None,
+        fixture_set: str | None = None,
     ):
         self.docs_dir = Path(docs_dir).resolve()
         self.vectordb = vectordb
@@ -167,6 +181,8 @@ class IncrementalIndexer:
         self.registry = registry
         self.kb_id = kb_id
         self.department = department
+        # 仅评测入库使用；生产索引保持 None，避免把测试范围字段误当授权字段。
+        self.fixture_set = fixture_set
         # 上传/重索引后立即同步 BM25（避免"上传成功但 BM25 未更新"）。
         # 启动期 sync 时 bm25_store 尚未构建（pipeline 先增量索引后建 BM25），传入 None 即跳过。
         self.bm25_store = bm25_store
@@ -435,6 +451,8 @@ class IncrementalIndexer:
                           os.path.splitext(file_path)[1].lower(),
                           "embedding_model": os.path.basename(getattr(self.embedding, "model_name", "")) or
                                              os.path.basename(str(getattr(self.embedding, "model", ""))) or "—"})
+        if self.fixture_set:
+            trace.tags["fixture_set"] = self.fixture_set
 
         # ── ① upload (root) ──
         try:
@@ -499,7 +517,13 @@ class IncrementalIndexer:
         # §4 权限范围（2026-09-17）：文档访问所需权限从 registry 行读（上传/
         # 入库脚本在 register 时写入），缺省 general 开放。不用实例级值，
         # 理由同 department。
-        doc_row = self.registry.get_by_path(file_path) or {}
+        # 兼容旧测试与轻量 mock：registry 正常返回 Mapping；非 Mapping
+        # 返回值不能参与字段读取，否则 MagicMock 会被误识别成 fixture_set。
+        raw_doc_row = self.registry.get_by_path(file_path)
+        doc_row = raw_doc_row if isinstance(raw_doc_row, Mapping) else {}
+        fixture_set = str(doc_row.get("fixture_set") or self.fixture_set or "") or None
+        if fixture_set not in (None, *_EVAL_FIXTURE_SETS):
+            raise ValueError(f"未知评测 fixture_set: {fixture_set}")
         permission_scope = (doc_row.get("permission_scope") or "general").strip() or "general"
         # §6 版本治理（2026-09-17 R4）：版本标识与生效窗口同样从 registry 行
         # 声明值读（入库脚本 register 时写入），随 chunk 落向量库供检索期
@@ -561,6 +585,7 @@ class IncrementalIndexer:
                 raise ChunkingEmptyError(error_msg)
             for ch in chunks:
                 ch.metadata["kb_id"] = kb_id
+                _apply_fixture_metadata(ch.metadata, fixture_set)
             # 共享给后续 clean / chunk / metadata 段使用，避免重复调用 parse_and_chunk
             self._current_chunks = chunks
             trace_collector.end_span(parse_span,
@@ -720,6 +745,7 @@ class IncrementalIndexer:
             "source_file": os.path.basename(file_path),
             "file_path": file_path,
             "kb_id": kb_id,  # 用派生的 kb_id 参数，而非 self.kb_id（否则 kb 隔离失效）
+            "fixture_set": fixture_set or "",
             "department": department,  # 同上：用路径派生值，否则部门隔离失效
             "permission_scope": permission_scope,  # §4 权限范围：registry 行声明值
             # §6 版本治理：registry 行声明值（R4）
@@ -869,6 +895,7 @@ class IncrementalIndexer:
             chunk_llm_model = chunk_llm_model or "qwen2.5:3b"
 
         kb_id_val = doc_meta.get("kb_id", self.kb_id)
+        fixture_set_val = doc_meta.get("fixture_set") or None
         domain_val = doc_meta.get("business_domain", "") or "general"
 
         # 模拟问题（从 doc_meta 拿；metadata 构建阶段已写入 questions_by_chunk）
@@ -908,6 +935,7 @@ class IncrementalIndexer:
             ch.metadata["doc_type"] = doc_type_val
             ch.metadata["person_names"] = person_val
             ch.metadata["kb_id"] = kb_id_val
+            _apply_fixture_metadata(ch.metadata, fixture_set_val)
             ch.metadata["business_domain"] = domain_val
             ch.metadata["department"] = department
             # §4 权限范围：随 chunk 进向量库/doc_db，检索侧按请求者持有权限
@@ -984,6 +1012,7 @@ class IncrementalIndexer:
                  "section_title": ch.metadata.get("section_title", ""),
                  "doc_type": doc_type_val,
                  "kb_id": kb_id_val,
+                 "fixture_set": fixture_set_val or "",
                  "department": department,
                  "simulated_questions": ch.metadata.get("simulated_questions", [])}
                 for i, ch in enumerate(chunks)
@@ -1199,6 +1228,7 @@ class IncrementalIndexer:
                     "supersedes_version_id": doc_meta.get("supersedes_version_id", ""),
                     "source_priority": doc_meta.get("source_priority", 0),
                     "quality_status": doc_meta.get("quality_status", "unknown"),
+                    "fixture_set": fixture_set_val or "",
                 },
             )
         except Exception:
@@ -1573,7 +1603,7 @@ class IncrementalIndexer:
         # 仅复用 active 记录：deleted 记录复用会残留旧 doc_id（如清理后重传
         # 会沿用旧 md5 协议），导致与命名空间协议分裂
         if isinstance(existing, dict) and existing.get("doc_id") \
-                and existing.get("status", "active") == "active":
+                and existing.get("status", "active") in ("active", *INTERRUPTED_STATUSES):
             return str(existing["doc_id"])
         _, _, subpath = parse_kb_dept_subpath_from_path(file_path, str(self.docs_dir))
         return derive_doc_id(

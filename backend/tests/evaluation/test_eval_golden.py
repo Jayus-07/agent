@@ -285,20 +285,3 @@ class TestGenerationQualityBlocking:
                 assert hall <= 0.50, (
                     f"{r.case_id} sem_hallucination_rate={hall:.4f} > 0.50"
                 )
-
-
-# ── CLI 入口：--full 跑完整评测集 ─────────────────────────────
-
-def pytest_addoption(parser):
-    parser.addoption(
-        "--full", action="store_true", default=False,
-        help="运行完整评测集（145 条 canonical）而非 golden set（10 条）",
-    )
-
-
-@pytest.fixture(scope="module")
-def full_results(request):
-    """--full 模式下运行完整评测集。"""
-    if not request.config.getoption("--full"):
-        pytest.skip("未指定 --full，仅运行 golden set")
-    return _run_rag_cases(selection="all")

@@ -1,7 +1,7 @@
 {
   "name": "regression",
-  "description": "Regression detection: smoke + hard cases for baseline comparison",
-  "version": "4.0",
+  "description": "Regression detection: smoke + hard cases for baseline comparison；统一评测 KB=rag_eval_kb，语料范围=baseline。",
+  "version": "5.0.0-unified",
   "case_ids": [
     "RC-001",
     "RC-002",
@@ -32,5 +32,8 @@
     "RC-046",
     "RC-047",
     "RC-048"
-  ]
+  ],
+  "dataset_version": "5.0.0-unified",
+  "kb_id": "rag_eval_kb",
+  "fixture_set": "baseline"
 }

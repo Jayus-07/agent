@@ -57,6 +57,38 @@ def _error_results(cases: list[TestCase], module: ModuleKind, error_msg: str) ->
     ]
 
 
+def _resolve_rag_scope(cases: list[TestCase], config: EvalConfig):
+    """从 suite 案例解析并校验唯一 RAG 运行范围。"""
+    from backend.evaluation.runners.rag import build_eval_scope
+
+    case_kbs = {str(case.metadata.get("kb_id", "")) for case in cases}
+    case_fixture_sets = {str(case.metadata.get("fixture_set", "")) for case in cases}
+    if len(case_kbs) != 1 or len(case_fixture_sets) != 1:
+        raise ValueError(
+            "RAG 评测必须通过显式 suite 解析唯一 kb_id/fixture_set；"
+            f"实际 kb_id={sorted(case_kbs)}, fixture_set={sorted(case_fixture_sets)}"
+        )
+    kb_id = config.kb_id or next(iter(case_kbs))
+    fixture_set = config.fixture_set or next(iter(case_fixture_sets))
+    if kb_id != next(iter(case_kbs)):
+        raise ValueError(f"配置 kb_id={kb_id} 与 suite kb_id={next(iter(case_kbs))} 不一致")
+    if fixture_set != next(iter(case_fixture_sets)):
+        raise ValueError(
+            f"配置 fixture_set={fixture_set} 与 suite fixture_set={next(iter(case_fixture_sets))} 不一致"
+        )
+    scope = build_eval_scope(
+        kb_id=kb_id,
+        fixture_set=fixture_set,
+        multiquery=config.multiquery,
+    )
+    suite_version = str(cases[0].metadata.get("dataset_version", "")) if cases else ""
+    if config.dataset_version and suite_version and config.dataset_version != suite_version:
+        raise ValueError(
+            f"配置 dataset_version={config.dataset_version} 与 suite={suite_version} 不一致"
+        )
+    return scope, config.dataset_version or suite_version
+
+
 def _build_summary(results: list[EvalResult], module: ModuleKind) -> ModuleSummary:
     total = len(results)
     passed = sum(1 for r in results if r.status == "pass")
@@ -205,8 +237,13 @@ class EvaluationService:
     def evaluate(self, config: EvalConfig) -> EvalReport:
         """执行评估，返回 EvalReport。"""
         import time as _time
+        from backend.evaluation.storage import make_run_id
+
         self._ensure_runners()
         reset_token_usage()
+        # 运行一开始就固定 run_id：checkpoint 与最终报告使用同一目录；
+        # 中断后可从目录名取得 ID，再通过 --run-id + 默认 resume 续跑。
+        run_id = config.run_id or make_run_id()
         # token 统计时间窗起点（JSONL 过滤用，防止跨 run 累计污染）
         run_started_ts = _time.time()
 
@@ -222,7 +259,8 @@ class EvaluationService:
             if config.smoke:
                 cases = cases[:5]
             cases = _filter_cases_by_tier(cases, config.tier)
-            results = _run_module("rag", cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume, multiquery=config.multiquery, full_trace=config.full_trace)
+            scope, dataset_version = _resolve_rag_scope(cases, config)
+            results = _run_module("rag", cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume, multiquery=config.multiquery, full_trace=config.full_trace, eval_scope=scope, run_id=run_id)
             summaries = [_build_summary(results, "rag")]
             _inject_token_totals(summaries, run_started_ts)
             return EvalReport(
@@ -234,6 +272,12 @@ class EvaluationService:
                 results=list(results),
                 total_score=None,
                 tier_summaries=evaluate_tiers(cases, results),
+                metadata={
+                    "evaluation_scope": scope.as_dict(),
+                    "dataset_version": dataset_version,
+                    "selection": config.selection,
+                    "run_id": run_id,
+                },
             )
 
         module_kinds: list[ModuleKind] = (
@@ -243,6 +287,7 @@ class EvaluationService:
         all_results: list[EvalResult] = []
         summaries: list[ModuleSummary] = []
         all_cases: list[TestCase] = []
+        report_metadata: dict[str, Any] = {"run_id": run_id}
 
         for m in module_kinds:
             cases = load_dataset(m, selection=config.selection)
@@ -250,7 +295,18 @@ class EvaluationService:
                 cases = cases[:5]
             cases = _filter_cases_by_tier(cases, config.tier)
 
-            results = _run_module(m, cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume, multiquery=config.multiquery, full_trace=config.full_trace)
+            runner_kwargs = dict(
+                live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas,
+                ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds,
+                workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume,
+                multiquery=config.multiquery, full_trace=config.full_trace,
+            )
+            if m == "rag":
+                scope, dataset_version = _resolve_rag_scope(cases, config)
+                runner_kwargs.update(eval_scope=scope, run_id=run_id)
+                report_metadata["evaluation_scope"] = scope.as_dict()
+                report_metadata["dataset_version"] = dataset_version
+            results = _run_module(m, cases, **runner_kwargs)
             all_results.extend(results)
             summaries.append(_build_summary(results, m))
             all_cases.extend(cases)
@@ -274,6 +330,7 @@ class EvaluationService:
             results=all_results,
             total_score=total_score,
             tier_summaries=evaluate_tiers(all_cases, all_results),
+            metadata=report_metadata,
         )
 
 

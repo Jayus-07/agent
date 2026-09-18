@@ -5,6 +5,7 @@ V3.0 扩展：JSONL 为权威格式（每行一条 TestCase），兼容旧 JSON 
 P0: 支持 EVAL_DATASET_PATH 环境变量动态配置数据集路径
 """
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -107,6 +108,19 @@ def _load_suite(
     with open(suite_path, "r", encoding="utf-8") as f:
         suite_data = json.load(f)
 
+    if not isinstance(suite_data, dict):
+        raise ValueError(f"Suite 根节点必须是对象: {suite_path}")
+
+    suite_kb_id = str(suite_data.get("kb_id", ""))
+    fixture_set = str(suite_data.get("fixture_set", ""))
+    dataset_version = str(suite_data.get("dataset_version", ""))
+    if not suite_kb_id:
+        raise ValueError(f"Suite 缺少 kb_id: {suite_path}")
+    if fixture_set not in {"baseline", "expanded_100", "scale_20k"}:
+        raise ValueError(f"Suite fixture_set 无效: {fixture_set}")
+    if not dataset_version:
+        raise ValueError(f"Suite 缺少 dataset_version: {suite_path}")
+
     case_ids = suite_data.get("case_ids", [])
     if not case_ids:
         raise ValueError(f"Suite 文件 case_ids 为空: {suite_path}")
@@ -127,7 +141,37 @@ def _load_suite(
             f"{missing}。请检查 suite 定义或补充 canonical 数据。"
         )
 
-    return [case_map[cid] for cid in case_ids]
+    suite_name = str(suite_data.get("name", suite_path.stem))
+    cases: list[TestCase] = []
+    for case_id in case_ids:
+        case = case_map[case_id]
+        metadata = copy.deepcopy(case.metadata)
+        case_kb_id = metadata.get("kb_id")
+        if case_kb_id and case_kb_id != suite_kb_id:
+            raise ValueError(
+                f"Suite '{suite_name}' 的 kb_id={suite_kb_id} 与案例 {case_id} "
+                f"的 kb_id={case_kb_id} 冲突"
+            )
+
+        source_fixture_set = metadata.get("source_fixture_set")
+        if source_fixture_set and source_fixture_set != fixture_set:
+            # scale_20k 复用 expanded_100 的问题与标注，但运行时必须检索 staging 语料。
+            if not (fixture_set == "scale_20k" and source_fixture_set == "expanded_100"):
+                raise ValueError(
+                    f"Suite '{suite_name}' 的 fixture_set={fixture_set} 与案例 {case_id} "
+                    f"的 source_fixture_set={source_fixture_set} 冲突"
+                )
+
+        metadata.update(
+            {
+                "kb_id": suite_kb_id,
+                "fixture_set": fixture_set,
+                "dataset_version": dataset_version,
+                "suite": suite_name,
+            }
+        )
+        cases.append(case.model_copy(update={"metadata": metadata}))
+    return cases
 
 
 def load_dataset_directory(
