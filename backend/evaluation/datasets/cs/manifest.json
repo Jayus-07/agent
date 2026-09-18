@@ -13,6 +13,6 @@
     "multi_turn": 40,
     "safety": 40
   },
-  "sha256": "3cc0a8a158539bc265b489e3e4090a84da3e6d15c2c69281eb7698669095e208",
+  "sha256": "dd6271284144090679e476299333b01e016bd56ba7bf74f3461487ec392db1cd",
   "notes": "v2.0 锁版（P0 评审拍板 2026-09-19）：意图 20/20 覆盖（映射评审依据 INTENT_PROFILES：a_login_issue/c_feedback→cs_knowledge，h_supervisor→cs_handoff）；C4 子覆盖调整为 显式转人工(h_handoff)14+主管升级(h_supervisor)2+投诉建单(c_complaint)12+情绪升级(c_complaint)10+反馈(c_feedback)2；变更须升版本号并重算 sha256。"
 }

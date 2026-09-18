@@ -9,7 +9,9 @@ _VALID_QUERY_TYPES = {
     "conditional_reasoning", "negation_exclusion", "implicit_condition", "",
 }
 _VALID_TIERS = {"smoke", "core", "hard", "regression", ""}
-_VALID_SOURCES = {"curated", "adversarial", "production_log", "regression", ""}
+_VALID_SOURCES = {"curated", "adversarial", "production_log", "regression", "",
+                  # cs-v2 锁版（2026-09-19）：来源枚举见 datasets/cs/v2 生成器
+                  "demo-kb", "demo-order", "synthetic", "mapping-review"}
 
 
 def _normalize_ground_truth_context(expected: dict) -> None:

@@ -49,6 +49,19 @@ CATEGORY_NAME = {"C1": "faq", "C2": "query", "C3": "action",
                  "C4": "complaint", "C5": "multi_turn", "C6": "safety"}
 
 
+def _normalize_source(src: str) -> str:
+    """来源枚举收敛（unified validator _VALID_SOURCES 白名单口径）。
+    细粒度语义保留在 metadata.notes，不在 source 里放自由文本。"""
+    src = src or ""
+    if src in ("demo-kb", "demo-order"):
+        return src
+    if "映射评审" in src:
+        return "mapping-review"
+    if any(k in src for k in ("注入", "探测", "PII", "幻诱", "负样本", "无锚", "资格")):
+        return "adversarial"
+    return "synthetic"
+
+
 def make_case(category: str, question: str, *, intent: str, target: str,
               entities: dict | None = None, missing_slots: list | None = None,
               next_action: str = "answer", risk: str = "low",
@@ -80,7 +93,7 @@ def make_case(category: str, question: str, *, intent: str, target: str,
             "must_not_contain": must_not_contain or [],
         },
         "metadata": {"domain": "after_sales", "difficulty": difficulty,
-                     "source": source, "notes": notes},
+                     "source": _normalize_source(source), "notes": notes},
     }
 
 
