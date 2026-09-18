@@ -214,24 +214,18 @@ def _dispatch_service(
 
 
 def _extract_order_no(question: str) -> str | None:
-    """P3.5：从问句提取订单号（DEMO-1002 / ORD-001 / ORD-20260915-0042 /
-    纯数字长号）。
+    """订单号提取（P1 收敛：委托 understanding.entities 单一事实源）。
 
-    与 action expert 各自独立提取（服务不同，耦合收益低）；识别不到
-    返回 None 走全量列表语义。
-    P0 实测修复（2026-09-19）：正则允许多段连字，两段式订单号此前被
-    截断为首段（ORD-20260915-0042 → ORD-20260915）。
+    规范化文本上抽取（字母数字混合段/关键词纯数字），识别不到返回 None
+    走全量列表语义。
     """
-    import re
+    from backend.customer_service.understanding.entities import extract_entities
+    from backend.customer_service.understanding.types import EntityType
+    from backend.security.input_guard.normalize import normalize_query
 
-    if not question:
-        return None
-    m = re.search(r"\b([A-Za-z]{2,10}(?:-\d{2,12})+)\b", question)
-    if m:
-        return m.group(1).upper()
-    m = re.search(r"订单[号]?\s*[:：为]?\s*(\d{5,20})", question)
-    if m:
-        return m.group(1)
+    for e in extract_entities(normalize_query(question or "")):
+        if e.type == EntityType.ORDER_ID:
+            return e.match()
     return None
 
 

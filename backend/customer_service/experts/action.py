@@ -289,24 +289,20 @@ def _build_proposal(
 
 
 def _extract_order_id_from_message(user_message: str) -> str:
-    """P3.5：从用户原话提取订单号——此前无人向 cs_route.metadata 填
-    order_id，兜底字符串 "latest" 直查 DB 必然 OrderNotFoundError，
-    退款诉求永远收不到确认卡。
+    """订单号提取（P1 收敛：委托 understanding.entities 单一事实源）。
 
-    识别形态：DEMO-1002 / ORD-20260918-001 / ORD-20260915-0042（多段连字，
-    P0 实测修复：原正则只吃首段导致订单号截断改写）/ #12345 等字母前缀-数字
-    组合；识别不到时回退 "latest"（由服务端 _get_order 语义化处理为最近一单）。
+    understanding 层在规范化文本上抽取（NFKC/零宽剥离复用 Input Guard
+    事实源），支持字母数字混合段（两段式、形近错别字原样认领）与关键词
+    纯数字形态；识别不到时回退 "latest"（由服务端 _get_order 语义化
+    处理为最近一单）。
     """
-    import re
+    from backend.customer_service.understanding.entities import extract_entities
+    from backend.customer_service.understanding.types import EntityType
+    from backend.security.input_guard.normalize import normalize_query
 
-    if not user_message:
-        return "latest"
-    m = re.search(r"\b([A-Za-z]{2,10}(?:-\d{2,12})+)\b", user_message)
-    if m:
-        return m.group(1).upper()
-    m = re.search(r"订单[号]?\s*[:：为]?\s*(\d{5,20})", user_message)
-    if m:
-        return m.group(1)
+    for e in extract_entities(normalize_query(user_message or "")):
+        if e.type == EntityType.ORDER_ID:
+            return e.match()
     return "latest"
 
 

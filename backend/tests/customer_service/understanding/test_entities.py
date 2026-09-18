@@ -38,6 +38,13 @@ class TestOrderIdExtraction:
         # 缺连字符不擅自补（DEMO1006 不是一个合法抽取形态）
         assert _ids("查下 DEMO1006 的状态") == []
 
+    def test_keyword_pure_digit_form(self):
+        # 关键词引导的纯数字单号（action/query 旧第二形态收敛）
+        assert _ids("订单号 123456789 帮我查下") == ["123456789"]
+        assert _ids("订单：00420 状态") == ["00420"]
+        # 无订单关键词的纯数字不认领
+        assert _ids("我等了 1006 天了") == []
+
     def test_digits_in_chinese_text_not_order(self):
         assert _ids("我等了 1006 天了") == []
 

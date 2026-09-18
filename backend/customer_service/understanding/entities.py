@@ -18,6 +18,8 @@ _ORDER_ID = re.compile(
     r"(?<![A-Za-z0-9])(?=[A-Za-z0-9-]*[A-Za-z])"
     r"([A-Za-z0-9]{2,10}(?:-[A-Za-z0-9]{2,12})+)(?![A-Za-z0-9])"
 )
+# 关键词引导的纯数字单号（订单号 12345678）——无字母前缀形态，单独认领
+_ORDER_ID_DIGITS = re.compile(r"订单[号]?\s*[:：为]?\s*(\d{5,20})")
 
 # 快递单号：常见承运商前缀 + 10~15 位数字
 _TRACKING = re.compile(r"(?<![A-Za-z0-9])((?:SF|YT|JD|EMS|ZTO|STO|YUNDA)[A-Za-z]{0,4}\d{10,15})(?![A-Za-z0-9])")
@@ -52,6 +54,14 @@ def extract_entities(normalized_text: str) -> list[EntitySpan]:
     for m in _ORDER_ID.finditer(text):
         out.append(_span(EntityType.ORDER_ID, m.group(1), m,
                          match_value=m.group(1).upper()))
+
+    claimed = {(s.start, s.end) for s in out}
+    for m in _ORDER_ID_DIGITS.finditer(text):
+        if (m.start(1), m.end(1)) in claimed:
+            continue
+        if any(s.start <= m.start(1) < s.end for s in out):
+            continue
+        out.append(_span(EntityType.ORDER_ID, m.group(1), m))
 
     for m in _TRACKING.finditer(text):
         out.append(_span(EntityType.TRACKING_NO, m.group(1), m))
