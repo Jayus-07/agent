@@ -1,0 +1,109 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "af885f7c33",
+ "kb_id": "rag_100_docs",
+ "source_file": "table_培训记录_GBK.csv",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\agent_test_data_a1kncz_p\\docs\\rag_100_docs\\general\\csv\\table_培训记录_GBK.csv",
+ "file_size": 306,
+ "file_sha256": "0c009371f42715059605a616348dad30ef2e6f6f8924028cf36ed26c33e1f99f",
+ "format": "csv",
+ "doc_type": "training",
+ "chunking_strategy": "StepChunkStrategy",
+ "completeness": 0.9401,
+ "parsing": {
+  "node_count": 3,
+  "section_count": 2,
+  "leaf_count": 1,
+  "table_count": 1,
+  "table_total_rows": 7,
+  "table_max_cols": 5,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 796,
+  "cleaned_chars": 775,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 1,
+  "leaf_chunk_count": 1,
+  "parent_chunk_count": 0,
+  "truncated": false,
+  "filtered_count": 1,
+  "filtered_reasons": {
+   "low_chinese_ratio": 1
+  }
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "895b5fa578a9a9e8",
+    "chars": 18,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "6306e4d6f86629f7",
+    "chars": 775,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "table_present",
+    "pass": true,
+    "detail": "table_count=1"
+   },
+   {
+    "check": "table_rows",
+    "pass": true,
+    "detail": "rows=7"
+   },
+   {
+    "check": "table_cols",
+    "pass": true,
+    "detail": "cols=5"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

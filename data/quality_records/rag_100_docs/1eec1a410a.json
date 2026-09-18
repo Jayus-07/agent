@@ -1,0 +1,239 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "1eec1a410a",
+ "kb_id": "rag_100_docs",
+ "source_file": "legal_设备采购合同_中科智联.md",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\agent_test_data__c8f62mm\\docs\\rag_100_docs\\general\\md\\legal_设备采购合同_中科智联.md",
+ "file_size": 823,
+ "file_sha256": "e44df6386f4c8883ded23b806475ce8eb397eb151822ec6facc67fe2e1c46e97",
+ "format": "md",
+ "doc_type": "legal",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.9631,
+ "parsing": {
+  "node_count": 13,
+  "section_count": 7,
+  "leaf_count": 6,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 370,
+  "cleaned_chars": 283,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 11,
+  "leaf_chunk_count": 5,
+  "parent_chunk_count": 6,
+  "truncated": false,
+  "filtered_count": 1,
+  "filtered_reasons": {
+   "duplicate": 1
+  }
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "85c651cac007e1f0",
+    "chars": 18,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "78b871354ae1a96e",
+    "chars": 54,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "1e9f4ef353853927",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "4edc4a2a367f0507",
+    "chars": 41,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "84d7d7142245e293",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "04305817552cb309",
+    "chars": 35,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "c9dc7ba2b9a003f1",
+    "chars": 8,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "62076295ca296ec1",
+    "chars": 45,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "4f4a57f80a5f1eda",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "b3b513ae652c1532",
+    "chars": 34,
+    "cleaned": false
+   },
+   {
+    "node_id": "n11",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "325f4a0fcffae138",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n12",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "2f883d3c640f33d2",
+    "chars": 74,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=283 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=6"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.765 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

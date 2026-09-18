@@ -1,0 +1,107 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "9072e0888c",
+ "kb_id": "..",
+ "source_file": "table_市场投放费用_2026.csv",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\agent_test_data_a1kncz_p\\docs\\rag_100_docs\\general\\csv\\table_市场投放费用_2026.csv",
+ "file_size": 287,
+ "file_sha256": "98b33a180c26db84a34d5329d1f8b613df80644644d826f2dd44ae68a61b3975",
+ "format": "csv",
+ "doc_type": "financial",
+ "chunking_strategy": "FinancialTableChunkStrategy",
+ "completeness": 0.9401,
+ "parsing": {
+  "node_count": 3,
+  "section_count": 2,
+  "leaf_count": 1,
+  "table_count": 1,
+  "table_total_rows": 7,
+  "table_max_cols": 5,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 772,
+  "cleaned_chars": 748,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 7,
+  "leaf_chunk_count": 6,
+  "parent_chunk_count": 1,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "8b864dc816ade866",
+    "chars": 21,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "ecb888f226916ccd",
+    "chars": 748,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "table_present",
+    "pass": true,
+    "detail": "table_count=1"
+   },
+   {
+    "check": "table_rows",
+    "pass": true,
+    "detail": "rows=7"
+   },
+   {
+    "check": "table_cols",
+    "pass": true,
+    "detail": "cols=5"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

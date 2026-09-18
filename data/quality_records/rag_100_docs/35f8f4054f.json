@@ -1,0 +1,224 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "35f8f4054f",
+ "kb_id": "rag_100_docs",
+ "source_file": "faq_财务报销常见问题.docx",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\agent_test_data_a1kncz_p\\docs\\rag_100_docs\\general\\docx\\faq_财务报销常见问题.docx",
+ "file_size": 37191,
+ "file_sha256": "234a6dfa2fae9155c9912bf36f14fd31f886f1444cd79e7aa8f35b767991abdd",
+ "format": "docx",
+ "doc_type": "financial",
+ "chunking_strategy": "FinancialTableChunkStrategy",
+ "completeness": 0.9842,
+ "parsing": {
+  "node_count": 12,
+  "section_count": 7,
+  "leaf_count": 5,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 253,
+  "cleaned_chars": 164,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 11,
+  "leaf_chunk_count": 5,
+  "parent_chunk_count": 6,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "eff32bad452fdf23",
+    "chars": 13,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "a9e8bcda36d98b43",
+    "chars": 14,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "bcab21a4eb400735",
+    "chars": 27,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "bc56f8f94afeb56c",
+    "chars": 14,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "d1a210bc90bd70d3",
+    "chars": 34,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "8a6e858ba09ee9b2",
+    "chars": 15,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "22a6b120bdf5ddbe",
+    "chars": 35,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "57203776b5b96a38",
+    "chars": 10,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "c28ca327e49215e1",
+    "chars": 33,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "599c11f6c0994a3e",
+    "chars": 13,
+    "cleaned": false
+   },
+   {
+    "node_id": "n11",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "765e805ed54afc2d",
+    "chars": 35,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=164 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=5"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.648 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

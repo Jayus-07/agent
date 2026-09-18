@@ -1,0 +1,211 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "925f7a7829",
+ "kb_id": "rag_100_docs",
+ "source_file": "report_2026Q2安全事件报告.md",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\agent_test_data__c8f62mm\\docs\\rag_100_docs\\general\\md\\report_2026Q2安全事件报告.md",
+ "file_size": 589,
+ "file_sha256": "406157b609891fd14db5305f9ec0784d605470f42c14d3c50e4215746f4b37b0",
+ "format": "md",
+ "doc_type": "security",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.96,
+ "parsing": {
+  "node_count": 11,
+  "section_count": 6,
+  "leaf_count": 5,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 281,
+  "cleaned_chars": 209,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 10,
+  "leaf_chunk_count": 5,
+  "parent_chunk_count": 5,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "2fceff49ae229c1c",
+    "chars": 16,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "2cc5e708bf1bc31a",
+    "chars": 27,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "a2b9fac0da5fab2b",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "a147e43fd183c54e",
+    "chars": 51,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "39891d786dbc49f2",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0a5971af718f5004",
+    "chars": 67,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "264966bbcd3c179a",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "1c440b8d743c9d17",
+    "chars": 34,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "4a4ebf9a5b6dc909",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "a8bc67cf7a56c0f4",
+    "chars": 30,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=209 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=5"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.744 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

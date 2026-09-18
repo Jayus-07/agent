@@ -1,0 +1,211 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "bfcdf7850f",
+ "kb_id": "rag_100_docs",
+ "source_file": "sop_客户退款处理流程.md",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\agent_test_data__c8f62mm\\docs\\rag_100_docs\\general\\md\\sop_客户退款处理流程.md",
+ "file_size": 545,
+ "file_sha256": "01c0b7d7e01abcf04cde51e2e16cab85ff19aeb7e0ae47ba09acf57336db815e",
+ "format": "md",
+ "doc_type": "sop",
+ "chunking_strategy": "StepChunkStrategy",
+ "completeness": 0.9556,
+ "parsing": {
+  "node_count": 11,
+  "section_count": 6,
+  "leaf_count": 5,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 253,
+  "cleaned_chars": 194,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 6,
+  "leaf_chunk_count": 5,
+  "parent_chunk_count": 1,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "de3dabd1689c7227",
+    "chars": 10,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "3823876e8bd2dbaf",
+    "chars": 48,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "9345c8a6a9ec6cdb",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "1b0847e1d4d90b3d",
+    "chars": 31,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "deb442d49c532532",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "af3966524dce1dc7",
+    "chars": 46,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0ea2275f171339f4",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "92b741da3b491e13",
+    "chars": 36,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "1e27e01e5e253908",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0e90c10597bb93d8",
+    "chars": 33,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=194 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=5"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.767 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}
