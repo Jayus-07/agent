@@ -1,0 +1,229 @@
+{
+  "generated_at": "2026-09-18 23:09:57",
+  "docs_total": 25,
+  "valid_compared": 15,
+  "llm_calls": 25,
+  "shadow_fail": 10,
+  "parse_fail": 0,
+  "elapsed_min": 0.5,
+  "per_layer": {
+    "L0": {
+      "hits": 15,
+      "agree": 11,
+      "agreement": 0.7333
+    },
+    "L1": {
+      "hits": 0,
+      "agree": 0,
+      "agreement": null
+    },
+    "L2": {
+      "hits": 0,
+      "agree": 0,
+      "agreement": null
+    }
+  },
+  "overall_agreement": 0.7333,
+  "llm_saved_if_cascade_on": "15/15",
+  "top_disagreements": [
+    [
+      "contract_template→legal",
+      2
+    ],
+    [
+      "financial→policy",
+      1
+    ],
+    [
+      "customer_data→general",
+      1
+    ]
+  ],
+  "detail": [
+    {
+      "file": "cs_aftersales/customer/faq-after-sales-process.md",
+      "level": "L0",
+      "shadow": "faq",
+      "shadow_confidence": 0.95,
+      "main": "faq",
+      "main_confidence": 1.0,
+      "agree": true
+    },
+    {
+      "file": "cs_policy/customer/policy-refund-timeline.md",
+      "main": "policy",
+      "shadow": null
+    },
+    {
+      "file": "cs_policy/customer/policy-return-us.md",
+      "main": "policy",
+      "shadow": null
+    },
+    {
+      "file": "policy_general/general/legal_采购合同.md",
+      "level": "L0",
+      "shadow": "legal",
+      "shadow_confidence": 0.95,
+      "main": "contract_template",
+      "main_confidence": 0.98,
+      "agree": false
+    },
+    {
+      "file": "policy_general/hr/payroll_hr.md",
+      "level": "L0",
+      "shadow": "policy",
+      "shadow_confidence": 0.95,
+      "main": "financial",
+      "main_confidence": 0.95,
+      "agree": false
+    },
+    {
+      "file": "rag_100_docs/general/csv/table_发票台账_2026.csv",
+      "level": "L0",
+      "shadow": "financial",
+      "shadow_confidence": 0.95,
+      "main": "financial",
+      "main_confidence": 0.98,
+      "agree": true
+    },
+    {
+      "file": "rag_100_docs/general/csv/table_市场投放费用_2026.csv",
+      "main": "financial",
+      "shadow": null
+    },
+    {
+      "file": "rag_100_docs/general/docx/faq_财务报销常见问题.docx",
+      "main": "faq",
+      "shadow": null
+    },
+    {
+      "file": "rag_100_docs/general/docx/policy_供应商准入管理办法.docx",
+      "level": "L0",
+      "shadow": "policy",
+      "shadow_confidence": 0.95,
+      "main": "policy",
+      "main_confidence": 0.95,
+      "agree": true
+    },
+    {
+      "file": "rag_100_docs/general/docx/sop_备份恢复演练流程.docx",
+      "level": "L0",
+      "shadow": "sop",
+      "shadow_confidence": 0.95,
+      "main": "sop",
+      "main_confidence": 1.0,
+      "agree": true
+    },
+    {
+      "file": "rag_100_docs/general/md/faq_员工常见问题.md",
+      "level": "L0",
+      "shadow": "faq",
+      "shadow_confidence": 0.95,
+      "main": "faq",
+      "main_confidence": 0.98,
+      "agree": true
+    },
+    {
+      "file": "rag_100_docs/general/md/manual_新员工入职手册.md",
+      "main": "training",
+      "shadow": null
+    },
+    {
+      "file": "rag_100_docs/general/md/policy_加班工时管理制度_研发中心.md",
+      "level": "L0",
+      "shadow": "policy",
+      "shadow_confidence": 0.95,
+      "main": "policy",
+      "main_confidence": 0.98,
+      "agree": true
+    },
+    {
+      "file": "rag_100_docs/general/md/policy_考勤管理制度_市场部.md",
+      "level": "L0",
+      "shadow": "policy",
+      "shadow_confidence": 0.95,
+      "main": "policy",
+      "main_confidence": 0.98,
+      "agree": true
+    },
+    {
+      "file": "rag_100_docs/general/md/sop_供应商准入作业流程.md",
+      "level": "L0",
+      "shadow": "sop",
+      "shadow_confidence": 0.95,
+      "main": "sop",
+      "main_confidence": 0.98,
+      "agree": true
+    },
+    {
+      "file": "rag_100_docs/general/pdf/contract_年度运维服务合同.pdf",
+      "level": "L0",
+      "shadow": "legal",
+      "shadow_confidence": 0.95,
+      "main": "contract_template",
+      "main_confidence": 0.98,
+      "agree": false
+    },
+    {
+      "file": "rag_100_docs/general/pdf/manual_员工手册_2026版.pdf",
+      "main": "policy",
+      "shadow": null
+    },
+    {
+      "file": "rag_100_docs/general/pdf/report_压测报告_2026Q2.pdf",
+      "main": "general",
+      "shadow": null
+    },
+    {
+      "file": "rag_100_docs/general/txt/faq_运维值班FAQ.txt",
+      "level": "L0",
+      "shadow": "faq",
+      "shadow_confidence": 0.95,
+      "main": "faq",
+      "main_confidence": 0.95,
+      "agree": true
+    },
+    {
+      "file": "rag_100_docs/general/txt/readme_数据字典_客户域.txt",
+      "level": "L0",
+      "shadow": "general",
+      "shadow_confidence": 0.95,
+      "main": "customer_data",
+      "main_confidence": 0.95,
+      "agree": false
+    },
+    {
+      "file": "rag_100_docs/general/xlsx/table_2026人力编制台账.xlsx",
+      "main": "financial",
+      "shadow": null
+    },
+    {
+      "file": "rag_100_docs/general/xlsx/table_候选人漏斗.xlsx",
+      "main": "general",
+      "shadow": null
+    },
+    {
+      "file": "rag_100_docs/general/xlsx/table_服务器资产清单.xlsx",
+      "main": "general",
+      "shadow": null
+    },
+    {
+      "file": "rag_test_kb/general/cs_售后FAQ.docx",
+      "level": "L0",
+      "shadow": "faq",
+      "shadow_confidence": 0.95,
+      "main": "faq",
+      "main_confidence": 1.0,
+      "agree": true
+    },
+    {
+      "file": "rag_test_kb/general/product_商品规格说明.pdf",
+      "level": "L0",
+      "shadow": "product_spec",
+      "shadow_confidence": 0.95,
+      "main": "product_spec",
+      "main_confidence": 0.98,
+      "agree": true
+    }
+  ]
+}
