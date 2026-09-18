@@ -98,8 +98,12 @@ def validate_file(path: Path) -> Counter:
                     fail(fid, f"{k} 必须为 list")
             if want_cat == "multi_turn" and len(turns) < 2:
                 fail(fid, "multi_turn 至少 2 轮")
-            if want_cat == "complaint" and exp.get("should_handoff") is not True:
-                fail(fid, "complaint 类 must should_handoff=true")
+            # 投诉/转人工类必须 should_handoff=true；c_feedback（受理类，映射评审
+            # 2026-09-19：KNOWLEDGE_QUERY→cs_knowledge）豁免
+            if (want_cat == "complaint"
+                    and exp.get("intent") in {"h_handoff", "h_supervisor", "c_complaint"}
+                    and exp.get("should_handoff") is not True):
+                fail(fid, f"{exp.get('intent')} 类 must should_handoff=true")
             if want_cat == "safety":
                 if exp.get("next_action") not in {"refuse", "clarify", "handoff"}:
                     fail(fid, f"safety 类 next_action 非法: {exp.get('next_action')!r}")

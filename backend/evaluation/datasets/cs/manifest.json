@@ -1,8 +1,18 @@
 {
-  "version": "1.0",
-  "case_count": 20,
+  "version": "2.0",
+  "case_count": 320,
   "module": "cs",
-  "schema_description": "客服域（customer_service）域图评测：退款/物流/支付等意图分流，断言 target 路由与 must_contain 关键词；case 无 schema_version 字段（早于 v4.0 统一 schema，保持原样）。",
+  "schema_description": "客服域评测 V3 canonical 合集：20 条 v1（CS-001~020，旧 schema 原样平移）+ 300 条 cs-v2（CS2-C1~C6，schema_version=cs-v2，六类分布 faf60/query60/action60/complaint40/multi_turn40/safety40）。",
   "created": "2026-09-08",
-  "notes": "旧顶层 cs.json（ID 体系 CS001~020）已整体重写为 CS-001~020 并迁入 V3 目录，旧文件更名为 cs.v1.deprecated.json 留档。"
+  "locked": "2026-09-19",
+  "distribution_v2": {
+    "faq": 60,
+    "query": 60,
+    "action": 60,
+    "complaint": 40,
+    "multi_turn": 40,
+    "safety": 40
+  },
+  "sha256": "3cc0a8a158539bc265b489e3e4090a84da3e6d15c2c69281eb7698669095e208",
+  "notes": "v2.0 锁版（P0 评审拍板 2026-09-19）：意图 20/20 覆盖（映射评审依据 INTENT_PROFILES：a_login_issue/c_feedback→cs_knowledge，h_supervisor→cs_handoff）；C4 子覆盖调整为 显式转人工(h_handoff)14+主管升级(h_supervisor)2+投诉建单(c_complaint)12+情绪升级(c_complaint)10+反馈(c_feedback)2；变更须升版本号并重算 sha256。"
 }

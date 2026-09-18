@@ -98,17 +98,17 @@ def gen_c1() -> list[dict]:
     # ── 基础售后 FAQ ×16（k_faq / k_policy）──────────────
     c1_base = [
         ("你们的退货流程是什么样的？", "k_faq", [A_PROC + "流程"]),
-        ("售后流程具体怎么走？", "k_faq", [A_PROC + "流程"]),
         ("退款一般多久能到账？", "k_policy", [A_REFUND + "时效"]),
         ("退款会原路退回吗？", "k_policy", [A_REFUND + "方式"]),
         ("申请退款需要提供什么？", "k_faq", [A_PROC + "凭证"]),
         ("换货怎么申请？", "k_faq", [A_PROC + "流程"]),
         ("商品有问题找谁处理？", "k_faq", [A_PROC + "流程"]),
-        ("退货之后的钱怎么算？", "k_policy", [A_REFUND + "方式"]),
         ("退货需要保留包装吗？", "k_policy", [A_PROC + "条件"]),
         ("7 天无理由退货支持吗？", "k_policy", [A_PROC + "条件"]),
         ("怎么开发票？", "k_faq", [A_PROC + "凭证"], "medium"),
         ("发票信息填错了能改吗？", "k_faq", [A_PROC + "凭证"], "medium"),
+        ("登录不上怎么办？", "a_login_issue", [], "medium"),
+        ("一直收不到短信验证码，登录不了", "a_login_issue", [], "medium"),
         ("退货运费谁承担？", "k_policy", [A_SHIP + "承担方"]),
         ("退款被拒绝了还能再申请吗？", "k_policy", [A_REFUND + "时效"], "medium"),
         ("退货进度在哪里查？", "k_faq", [A_PROC + "流程"]),
@@ -117,6 +117,16 @@ def gen_c1() -> list[dict]:
     for item in c1_base:
         q, intent, allowed = item[0], item[1], item[2]
         diff = item[3] if len(item) > 3 else "easy"
+        # a_login_issue（INTENT_PROFILES：KNOWLEDGE_QUERY→cs_knowledge，无风险）
+        # 演示 KB 无登录主题文档 → 无锚不编造，编码为澄清（断言 clarification 事件）
+        if intent == "a_login_issue":
+            cases.append(make_case("C1", q, intent=intent, target=T_KNOW,
+                                   next_action="clarify", difficulty=diff,
+                                   source="账号-登录（映射评审 2026-09-19）",
+                                   notes="演示 KB 无登录主题文档：应澄清症状并给自助指引，禁止编造政策",
+                                   must_contain=[],
+                                   forbidden=["编造验证码时效", "编造解锁政策"]))
+            continue
         cases.append(make_case("C1", q, intent=intent, target=T_KNOW,
                                allowed=allowed, difficulty=diff, source="demo-kb"))
 

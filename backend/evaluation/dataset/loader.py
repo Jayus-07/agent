@@ -289,9 +289,15 @@ def _load_jsonl(file_path: Path, default_module: str = "rag") -> list[TestCase]:
 
             _normalize_ground_truth_context(expected)
 
+            # cs-v2 多轮用例（2026-09-19 合入）：事实源是 turns，question 取
+            # 末轮用户输入派生；单轮旧 schema 不受影响。
+            turns = item.get("turns") or []
+            question = item.get("question") or (
+                turns[-1].get("text", "") if turns else "")
+
             cases.append(TestCase(
                 id=item["id"],
-                question=item["question"],
+                question=question,
                 module=item.get("module", default_module),
                 expected=expected,
                 metadata=metadata,

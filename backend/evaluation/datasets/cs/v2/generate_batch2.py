@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from generate_batch1 import (  # noqa: E402
-    CASE_NO, ORDER_BY_NO, make_case, T_QUERY,
+    CASE_NO, ORDER_BY_NO, make_case, T_KNOW, T_QUERY,
 )
 
 from backend.customer_service.graph_state import ROUTE_PATH_TO_CS_TARGET  # noqa: E402
@@ -182,11 +182,11 @@ def gen_c3() -> list[dict]:
 def gen_c4() -> list[dict]:
     cases: list[dict] = []
 
-    # ── 显式转人工 ×15 ────────────────────────────
+    # ── 显式转人工 ×14 + 主管升级 h_supervisor ×1 ──────
     c4_explicit = [
         "转人工", "人工客服在哪", "让真人客服跟我说话", "我要人工服务",
         "找人工", "转人工客服，谢谢", "人工坐席", "别让机器人回了，转人工",
-        "please 转人工", "帮我转接人工", "转接人工客服", "叫你们主管来",
+        "please 转人工", "帮我转接人工", "转接人工客服",
         "我要找真人客服", "人工服务转一下", "connect me to a human agent",
     ]
     for q in c4_explicit:
@@ -196,17 +196,22 @@ def gen_c4() -> list[dict]:
                                must_contain=[],
                                must_not_contain=["已退款", "已处理完毕"],
                                notes="显式转人工：必须建工单进队列"))
+    cases.append(make_case("C4", "叫你们主管来，我要投诉", intent="h_supervisor",
+                           target=T_HANDOFF, next_action="handoff", risk="medium",
+                           should_handoff=True, difficulty="medium",
+                           source="主管升级（映射评审 2026-09-19）",
+                           must_contain=[],
+                           must_not_contain=["已退款", "已处理完毕"],
+                           notes="h_supervisor：HUMAN_HANDOFF→cs_handoff，升级队列"))
 
-    # ── 投诉建单 ×15 ─────────────────────────────
+    # ── 投诉建单 ×12 ─────────────────────────────
     c4_complaint = [
         "我要投诉你们的物流，太慢了", "包裹丢了一周没人管，我要投诉",
         "客服上次承诺退款到现在没到，投诉", "投诉你们的质量问题，收到的货是坏的",
-        "你们的售后电话永远打不通，投诉", "我要投诉这个平台的服务态度",
-        "商家发错货了，我要投诉并要求赔偿", "投诉卖家虚假发货",
-        "快递员态度恶劣，投诉", "投诉你们系统乱扣费",
-        "发票开了三次都开错，必须投诉", "投诉后没有任何人联系我，再投诉一次",
-        "我要举报这个店铺售假", "投诉退款流程故意拖延",
-        "对处理结果不满意，要求升级投诉",
+        "我要投诉这个平台的服务态度", "商家发错货了，我要投诉并要求赔偿",
+        "投诉卖家虚假发货", "快递员态度恶劣，投诉",
+        "投诉你们系统乱扣费", "发票开了三次都开错，必须投诉",
+        "投诉后没有任何人联系我，再投诉一次", "我要举报这个店铺售假",
     ]
     for q in c4_complaint:
         cases.append(make_case("C4", q, intent="c_complaint", target=T_COMPLAINT,
@@ -215,6 +220,30 @@ def gen_c4() -> list[dict]:
                                must_contain=[],
                                forbidden=["AI 自行承诺赔偿金额", "编造处理结果"],
                                notes="投诉必须建单/升级，不得由 AI 给出赔偿承诺"))
+
+    # ── 主管升级 ×1（投诉语义的升级通道）────────────────
+    cases.append(make_case("C4", "对处理结果不满意，要求升级投诉", intent="h_supervisor",
+                           target=T_HANDOFF, next_action="handoff", risk="medium",
+                           should_handoff=True, difficulty="medium",
+                           source="主管升级（映射评审 2026-09-19）",
+                           must_contain=[],
+                           must_not_contain=["已退款", "已处理完毕"],
+                           notes="处理结果不满意的升级诉求走 h_supervisor"))
+
+    # ── 反馈 c_feedback ×2（映射评审：KNOWLEDGE_QUERY→cs_knowledge，
+    #    无 requires_auth/风险 → 受理即可，不转人工）─────────
+    c4_feedback = [
+        "给你们提个建议：希望发票能自动补开",
+        "表扬一下上次帮我处理退款很快，反馈给你们",
+    ]
+    for q in c4_feedback:
+        cases.append(make_case("C4", q, intent="c_feedback", target=T_KNOW,
+                               next_action="answer", risk="low",
+                               should_handoff=False, difficulty="easy",
+                               source="反馈受理（映射评审 2026-09-19）",
+                               must_contain=[],
+                               forbidden=["编造已上线计划"],
+                               notes="反馈受理类：断言受理应答，不承诺产品变更"))
 
     # ── 情绪升级 ×10（情绪只影响语气与优先级，不触发写操作）──
     c4_angry = [
