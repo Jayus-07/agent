@@ -84,11 +84,16 @@ class PostgresChunkStore(ChunkStore):
                     section_title        TEXT NOT NULL DEFAULT '',
                     doc_type             TEXT NOT NULL DEFAULT '',
                     kb_id                TEXT NOT NULL DEFAULT '',
+                    fixture_set          TEXT NOT NULL DEFAULT '',
                     department           TEXT NOT NULL DEFAULT '',
                     simulated_questions  TEXT NOT NULL DEFAULT '[]',
                     created_at           TEXT NOT NULL DEFAULT ''
                 )
             """)
+            # 存量 chunk_store 平滑补列；生产文档默认空值，不影响旧索引读取。
+            conn.cursor().execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS fixture_set TEXT NOT NULL DEFAULT ''"
+            )
             conn.cursor().execute(
                 f"CREATE INDEX IF NOT EXISTS idx_{t}_doc_id ON {t}(doc_id)")
 
@@ -106,6 +111,7 @@ class PostgresChunkStore(ChunkStore):
              c.get("section_title", ""),
              c.get("doc_type", ""),
              c.get("kb_id", ""),
+             c.get("fixture_set", ""),
              c.get("department", ""),
              json.dumps(c.get("simulated_questions", []), ensure_ascii=False),
              _now_utc())
@@ -117,8 +123,8 @@ class PostgresChunkStore(ChunkStore):
                 f"""INSERT INTO {self._table}
                    (doc_id, chunk_index, content, char_count, keywords,
                     llm_keywords, llm_model, section_title, doc_type, kb_id,
-                    department, simulated_questions, created_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    fixture_set, department, simulated_questions, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 rows,
             )
         logger.debug(f"[ChunkStore-PG] 写入 {len(rows)} chunks for doc={doc_id}")
@@ -137,7 +143,7 @@ class PostgresChunkStore(ChunkStore):
             rows = self._exec(
                 conn,
                 f"""SELECT chunk_index, content, char_count, keywords, llm_keywords,
-                           llm_model, section_title, doc_type, kb_id, department,
+                           llm_model, section_title, doc_type, kb_id, fixture_set, department,
                            simulated_questions, created_at
                     FROM {self._table} WHERE doc_id = %s ORDER BY chunk_index""",
                 (doc_id,),

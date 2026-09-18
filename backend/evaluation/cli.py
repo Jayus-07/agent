@@ -93,7 +93,14 @@ def main():
     )
     parser.add_argument(
         "--selection", type=str, default=None, metavar="NAME",
-        help="命名选择集（如 ci_golden），从 datasets/rag/{NAME}.jsonl 加载",
+        help="命名 RAG suite（如 pr_baseline/expanded_100/scale_20k）",
+    )
+    parser.add_argument("--kb-id", type=str, default=None, help="显式校验评测 KB")
+    parser.add_argument("--fixture-set", type=str, default=None, help="显式校验运行时语料范围")
+    parser.add_argument("--dataset-version", type=str, default=None, help="显式校验数据版本")
+    parser.add_argument(
+        "--run-id", type=str, default=None,
+        help="评测运行标识；中断后传入同一 ID 续跑 checkpoint",
     )
     parser.add_argument(
         "--tier", type=str, default="all",
@@ -178,6 +185,10 @@ def main():
         no_ragas=args.no_ragas,
         ragas_level=args.ragas_level,
         selection=args.selection,
+        kb_id=args.kb_id,
+        fixture_set=args.fixture_set,
+        dataset_version=args.dataset_version,
+        run_id=args.run_id,
         semantic_thresholds=semantic_thresholds,
         regression=args.regression,
         promote_baseline=args.promote_baseline,

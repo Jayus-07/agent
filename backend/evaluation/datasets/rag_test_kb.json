@@ -1,5 +1,8 @@
 {
   "version": "4.0",
+  "_deprecated": true,
+  "_replacement": "backend/evaluation/datasets/rag/cases.jsonl + suites/pr_baseline.json",
+  "_deprecation_note": "迁移期只读兼容文件；新评测请使用 rag_eval_kb 与 pr_baseline suite。",
   "_comment": "RAG 评测数据集 v4.0 — rag_test_kb。100 条用例，统一 schema 支持双轨评测(RAGAS + 自研)。新增字段: required_facts(事实点覆盖率), required_docs(多跳/引用指标), expected_answer(RAGAS reference), requires_citation(引用指标开关), base_question_id(鲁棒性同义组)。query_type 覆盖: single_doc/multi_doc/reasoning/calculation/comparison/process/negative/ambiguous/robust_typo/robust_complex。tier 分布: smoke:19, core:62, hard:19。拒答用例 15 条(should_reject=true)。历史: v3.1 及之前为 54 条 RT-xxx 用例，v4.0 重建为 100 条 RC-xxx 用例。",
   "test_cases": [
     {

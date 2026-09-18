@@ -1,7 +1,7 @@
 {
   "name": "smoke",
-  "description": "Quick smoke test: 19 easy cases for fast feedback",
-  "version": "4.0",
+  "description": "Quick smoke test: 19 easy cases for fast feedback；统一评测 KB=rag_eval_kb，语料范围=baseline。",
+  "version": "5.0.0-unified",
   "case_ids": [
     "RC-001",
     "RC-002",
@@ -22,5 +22,8 @@
     "RC-069",
     "RC-071",
     "RC-072"
-  ]
+  ],
+  "dataset_version": "5.0.0-unified",
+  "kb_id": "rag_eval_kb",
+  "fixture_set": "baseline"
 }

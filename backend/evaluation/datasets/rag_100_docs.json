@@ -1,5 +1,8 @@
 {
   "version": "0.2.0-full",
+  "_deprecated": true,
+  "_replacement": "backend/evaluation/datasets/rag/cases.jsonl + suites/expanded_100.json",
+  "_deprecation_note": "迁移期只读兼容文件；新评测请使用 rag_eval_kb 与 expanded_100 suite。",
   "name": "rag_100_docs",
   "kb_id": "rag_100_docs",
   "_comment": "R3 全量版测试集（任务书 §4，覆盖 100 份异构语料）。8 个标注字段位于每条用例的 annotation 内：doc_id / expected_doc_ids / expected_chunk_ids / key_facts(关键事实) / query_type(查询类型, 7 类) / should_refuse(是否拒答, 辅以 refusal_reason) / version_requirement(版本要求) / permission_scope(权限范围)。expected 由 annotation 派生，供 harness 执行。expected_chunk_ids 在索引前不可知：已回填的用例由 BACKFILLED_CHUNK_IDS 保住，其余为 null，待 ingest 后回填。无答案用例 key_facts 为空且应拒答；权限用例的 should_refuse 以「general 权限视角」标注。",

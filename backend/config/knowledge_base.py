@@ -29,7 +29,11 @@ KNOWLEDGE_BASES: Dict[str, dict] = {
     "policy_finance": {"name": "财务制度知识库", "domain": "finance",    "owner_depts": ["finance"], "audience": "internal"},
     # 现装的是 HR/财务内部制度文档；若要转为对客通用库，先迁走内部内容再改标签
     "policy_general": {"name": "企业公共制度知识库", "domain": "general", "owner_depts": ["all"], "audience": "internal"},
-    "rag_test_kb":    {"name": "RAG 评测知识库", "domain": "general", "owner_depts": ["all"], "audience": "test"},
+    # 统一评测库为合成数据，绝不可进入生产兜底检索或对客授权集合。
+    "rag_eval_kb":    {"name": "统一 RAG 评测知识库", "domain": "general", "owner_depts": ["all"], "audience": "test"},
+    # 旧库只读兼容一个迁移周期；新写入应由评测 profile 转向 rag_eval_kb。
+    "rag_test_kb":    {"name": "RAG 小型评测知识库（兼容）", "domain": "general", "owner_depts": ["all"], "audience": "test", "deprecated": True, "read_only": True, "alias_for": "rag_eval_kb"},
+    "rag_100_docs":   {"name": "RAG 100 文档评测知识库（兼容）", "domain": "general", "owner_depts": ["all"], "audience": "test", "deprecated": True, "read_only": True, "alias_for": "rag_eval_kb"},
     "cs_faq":         {"name": "客服FAQ", "domain": "customer_service", "owner_depts": ["customer"], "audience": "customer"},
     "cs_product":     {"name": "产品知识库", "domain": "customer_service", "owner_depts": ["customer", "product_dept"], "audience": "customer"},
     "cs_policy":      {"name": "政策知识库", "domain": "customer_service", "owner_depts": ["customer"], "audience": "customer"},

@@ -113,6 +113,10 @@ def run_all(
     no_ragas: bool = False,
     ragas_level: str = "standard",
     selection: str | None = None,
+    kb_id: str | None = None,
+    fixture_set: str | None = None,
+    dataset_version: str | None = None,
+    run_id: str | None = None,
     semantic_thresholds: dict[str, float] | None = None,
     regression: bool = False,
     promote_baseline: bool = False,
@@ -124,7 +128,7 @@ def run_all(
 ) -> Any:
     """主入口 — 薄包装器，委托给 EvaluationService.evaluate()。
 
-    签名不变，CLI / API / CI 调用方无需修改。
+    新增参数均有默认值，CLI / API / CI 旧调用方无需修改。
     """
     from backend.evaluation.config import EvalConfig
     from backend.evaluation.service import EvaluationService
@@ -140,6 +144,10 @@ def run_all(
         no_ragas=no_ragas,
         ragas_level=ragas_level,
         selection=selection,
+        kb_id=kb_id,
+        fixture_set=fixture_set,
+        dataset_version=dataset_version,
+        run_id=run_id,
         semantic_thresholds=semantic_thresholds,
         regression=regression,
         promote_baseline=promote_baseline,

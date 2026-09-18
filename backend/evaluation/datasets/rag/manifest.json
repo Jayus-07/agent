@@ -1,8 +1,9 @@
 {
-  "version": "4.0",
-  "case_count": 100,
+  "version": "5.0.0-unified",
+  "case_count": 269,
   "module": "rag",
-  "kb_id": "rag_test_kb",
+  "kb_id": "rag_eval_kb",
   "schema_description": "Unified schema for dual-track evaluation (RAGAS + self-built). All cases carry expected_answer for RAGAS reference, required_facts for fact coverage, required_docs for multi-hop/citation metrics.",
-  "created": "2026-09-08"
+  "created": "2026-09-08",
+  "migration_note": "RC baseline 与 RD expanded_100 统一进入 canonical cases.jsonl；旧顶层文件仅保留兼容读取。"
 }

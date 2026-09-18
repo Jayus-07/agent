@@ -2,6 +2,19 @@
 
 > Date: 2026-09-04
 
+## 当前数据与运行范围（2026-09-18）
+
+| Suite | 运行时 KB | fixture_set | 案例范围 | 用途 |
+|---|---|---|---:|---|
+| `pr_baseline` | `rag_eval_kb` | `baseline` | RC quick subset | PR 快速回归 |
+| `expanded_100` | `rag_eval_kb` | `expanded_100` | 全部 RD 案例 | 100 文档发布/夜间评测 |
+| `scale_20k` | `rag_eval_kb` | `scale_20k` | 复用 RD 问题 | 20k staging 容量与检索评测 |
+
+`source_fixture_set` 只表示问题标注来源；`scale_20k` 的运行时语料必须真实存在，不能把
+`expanded_100` 当作 20k 容量结果。评测报告会记录 `evaluation_scope`、数据版本和
+`multiquery` 开关。完整评测入口是 `python -m evaluation rag --selection <suite>`，
+`pytest --full` 不是受支持的入口。
+
 ---
 
 ## Coverage Matrix: Before vs After
@@ -51,7 +64,7 @@
 
 | Stage | What | Input | Output Metrics |
 |-------|------|-------|---------------|
-| S1: Vector | Chroma similarity search | query | Recall@K, MRR, NDCG |
+| S1: Vector | PostgreSQL vector similarity search | query | Recall@K, MRR, NDCG |
 | S2: BM25 | BM25 sparse retrieval | query | Recall@K, MRR, NDCG |
 | S3: Hybrid/RRF | Vector + BM25 + RRF | query | Recall@K, MRR, NDCG, Precision@K |
 | S4: Adaptive | Cluster expansion | S3 results | Recall delta, noise delta |

@@ -100,6 +100,10 @@ class EvalReport(BaseModel):
     results: list[EvalResult]
     total_score: float | None = None  # 加权综合分，仅全量评估时计算
     tier_summaries: list[TierSummary] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="本次评测的 scope、数据版本和检索链配置快照",
+    )
     prompt_versions: dict[str, int | None] = Field(
         default_factory=dict,
         description="评估时活跃的 prompt 版本快照 {key: version}",

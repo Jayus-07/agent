@@ -1,7 +1,7 @@
 {
   "name": "ci_golden",
-  "description": "Full golden set: all 100 cases for comprehensive CI evaluation；RC-080 移出（歧义 query，归 semantic tier，2026-09-13）",
-  "version": "4.0",
+  "description": "Full golden set: all 100 cases for comprehensive CI evaluation；RC-080 移出（歧义 query，归 semantic tier，2026-09-13）；统一评测 KB=rag_eval_kb，语料范围=baseline。",
+  "version": "5.0.0-unified",
   "case_ids": [
     "RC-001",
     "RC-002",
@@ -102,5 +102,8 @@
     "RC-098",
     "RC-099",
     "RC-100"
-  ]
+  ],
+  "dataset_version": "5.0.0-unified",
+  "kb_id": "rag_eval_kb",
+  "fixture_set": "baseline"
 }

@@ -1,7 +1,10 @@
 {
-  "name": "quick_26",
-  "description": "Quick evaluation: 26 stratified cases (~30min). Preserves tier/query_type/reject ratios from full 100-case set.；统一评测 KB=rag_eval_kb，语料范围=baseline。",
+  "name": "pr_baseline",
+  "description": "PR 快速回归：复用 quick_26 的 26 个 baseline 案例。",
   "version": "5.0.0-unified",
+  "dataset_version": "5.0.0-unified",
+  "kb_id": "rag_eval_kb",
+  "fixture_set": "baseline",
   "case_ids": [
     "RC-001",
     "RC-004",
@@ -29,8 +32,5 @@
     "RC-084",
     "RC-092",
     "RC-096"
-  ],
-  "dataset_version": "5.0.0-unified",
-  "kb_id": "rag_eval_kb",
-  "fixture_set": "baseline"
+  ]
 }

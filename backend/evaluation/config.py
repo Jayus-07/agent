@@ -17,6 +17,10 @@ class EvalConfig(BaseModel):
     ragas_level: str = "standard"
     dataset: str | None = None
     selection: str | None = None
+    kb_id: str | None = None             # RAG suite 解析出的实际 KB
+    fixture_set: str | None = None       # RAG 运行时语料范围
+    dataset_version: str | None = None   # suite/canonical 版本快照
+    run_id: str | None = None            # 断点续跑标识；启动时生成或由 CLI 指定
     semantic_thresholds: dict[str, float] | None = None
     regression: bool = False
     promote_baseline: bool = False

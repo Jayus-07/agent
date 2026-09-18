@@ -1,0 +1,31 @@
+{
+  "kb_id": "rag_eval_kb",
+  "fixture_version": "2026-09-18",
+  "migration_note": "迁移期保留旧路径；待一个发布周期内无调用方后，才可复制到本目录并移除兼容字段。",
+  "documents": [
+    {"fixture_doc_id": "baseline_structure_messy", "source_file": "data/docs/rag_test_kb/general/10_结构混乱的长文档.pdf", "source_compat_path": "data/docs/rag_test_kb/general/10_结构混乱的长文档.pdf", "fixture_set": "baseline", "format": "pdf", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_one_sentence_faq", "source_file": "data/docs/rag_test_kb/general/16_一句话FAQ.md", "source_compat_path": "data/docs/rag_test_kb/general/16_一句话FAQ.md", "fixture_set": "baseline", "format": "md", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_keyword_noise", "source_file": "data/docs/rag_test_kb/general/24_关键词干扰文档.md", "source_compat_path": "data/docs/rag_test_kb/general/24_关键词干扰文档.md", "fixture_set": "baseline", "format": "md", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_homograph", "source_file": "data/docs/rag_test_kb/general/25_同形异义词.md", "source_compat_path": "data/docs/rag_test_kb/general/25_同形异义词.md", "fixture_set": "baseline", "format": "md", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_numeric_trap", "source_file": "data/docs/rag_test_kb/general/26_数字近似陷阱.md", "source_compat_path": "data/docs/rag_test_kb/general/26_数字近似陷阱.md", "fixture_set": "baseline", "format": "md", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_after_sales_faq", "source_file": "data/docs/rag_test_kb/general/cs_售后FAQ.docx", "source_compat_path": "data/docs/rag_test_kb/general/cs_售后FAQ.docx", "fixture_set": "baseline", "format": "docx", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_faq", "source_file": "data/docs/rag_test_kb/general/faq_常见问题FAQ.md", "source_compat_path": "data/docs/rag_test_kb/general/faq_常见问题FAQ.md", "fixture_set": "baseline", "format": "md", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_expense", "source_file": "data/docs/rag_test_kb/general/finance_员工报销制度.pdf", "source_compat_path": "data/docs/rag_test_kb/general/finance_员工报销制度.pdf", "fixture_set": "baseline", "format": "pdf", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_employee_handbook", "source_file": "data/docs/rag_test_kb/general/hr_员工手册.docx", "source_compat_path": "data/docs/rag_test_kb/general/hr_员工手册.docx", "fixture_set": "baseline", "format": "docx", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_inventory", "source_file": "data/docs/rag_test_kb/general/ops_库存管理制度.pdf", "source_compat_path": "data/docs/rag_test_kb/general/ops_库存管理制度.pdf", "fixture_set": "baseline", "format": "pdf", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_product_spec", "source_file": "data/docs/rag_test_kb/general/product_商品规格说明.pdf", "source_compat_path": "data/docs/rag_test_kb/general/product_商品规格说明.pdf", "fixture_set": "baseline", "format": "pdf", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_purchase", "source_file": "data/docs/rag_test_kb/general/purchase_采购流程.docx", "source_compat_path": "data/docs/rag_test_kb/general/purchase_采购流程.docx", "fixture_set": "baseline", "format": "docx", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_qc_sop", "source_file": "data/docs/rag_test_kb/general/qc_质检标准SOP.docx", "source_compat_path": "data/docs/rag_test_kb/general/qc_质检标准SOP.docx", "fixture_set": "baseline", "format": "docx", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_returns", "source_file": "data/docs/rag_test_kb/general/returns_退货政策.pdf", "source_compat_path": "data/docs/rag_test_kb/general/returns_退货政策.pdf", "fixture_set": "baseline", "format": "pdf", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_supplier", "source_file": "data/docs/rag_test_kb/general/supplier_供应商管理规范.md", "source_compat_path": "data/docs/rag_test_kb/general/supplier_供应商管理规范.md", "fixture_set": "baseline", "format": "md", "kb_id": "rag_eval_kb"},
+    {"fixture_doc_id": "baseline_tech_manual", "source_file": "data/docs/rag_test_kb/general/tech_技术手册.pdf", "source_compat_path": "data/docs/rag_test_kb/general/tech_技术手册.pdf", "fixture_set": "baseline", "format": "pdf", "kb_id": "rag_eval_kb"}
+  ],
+  "source_manifests": [
+    {
+      "fixture_set": "expanded_100",
+      "source_manifest": "backend/evaluation/fixtures/rag_100_docs/manifest.json",
+      "source_files_prefix": "backend/evaluation/fixtures/rag_100_docs/files",
+      "migration_note": "兼容层引用原有 100 份语料清单，避免首次统一时移动或删除旧文件。"
+    }
+  ]
+}

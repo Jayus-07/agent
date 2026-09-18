@@ -13,6 +13,7 @@ import json
 import math
 import time
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from backend.evaluation.models import EvalResult, TestCase
 from backend.evaluation.registry import register_runner
 from backend.evaluation.runners._common import (
     build_ablation_retriever,
+    build_scope_metadata_filter,
     entities_all_present,
     extract_query_entities,
     gate_mode,
@@ -45,8 +47,33 @@ from backend.shared.logger import logger
 
 _ANSWERS_FILE: Path | None = None
 
-# Stage1 doc 级探针检索的 top-k（诊断指标 S1 用，独立于主检索链路）
-_STAGE1_PROBE_K = 5
+# Stage1 doc 级探针默认 k；运行时可通过 stage1_probe_k 覆盖，避免固定值掩盖 scope 配置。
+_DEFAULT_STAGE1_PROBE_K = 5
+
+
+@dataclass(frozen=True)
+class EvalScope:
+    """一次 RAG 评测实际使用的 KB、语料范围和检索链开关。"""
+
+    kb_id: str
+    fixture_set: str
+    multiquery: bool
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "kb_id": self.kb_id,
+            "fixture_set": self.fixture_set,
+            "multiquery": self.multiquery,
+        }
+
+
+def build_eval_scope(*, kb_id: str, fixture_set: str, multiquery: bool) -> EvalScope:
+    """校验评测范围，拒绝未知集合和旧 KB 的静默回退。"""
+    if kb_id != "rag_eval_kb":
+        raise ValueError(f"评测必须使用统一 KB rag_eval_kb，实际为: {kb_id}")
+    if fixture_set not in {"baseline", "expanded_100", "scale_20k"}:
+        raise ValueError(f"未知 fixture_set: {fixture_set}")
+    return EvalScope(kb_id=kb_id, fixture_set=fixture_set, multiquery=bool(multiquery))
 
 
 def _doc_id_match(actual_id: str, expected_set: set[str], resolver=None, kb_id: str = "", department: str = "") -> bool:
@@ -86,7 +113,8 @@ def _cn_to_q(cn: str) -> str:
 def _get_answers_path(run_id: str | None = None) -> Path:
     from backend.evaluation.storage import DATA_ROOT
     if run_id:
-        return DATA_ROOT / run_id / "answers.jsonl"
+        from backend.evaluation.storage import validate_run_id
+        return DATA_ROOT / validate_run_id(run_id) / "answers.jsonl"
     return DATA_ROOT / "answers.jsonl"
 
 
@@ -173,6 +201,20 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     if not cases:
         return []
 
+    scope = kwargs.get("eval_scope")
+    if scope is None:
+        first = cases[0].metadata
+        scope = build_eval_scope(
+            kb_id=str(first.get("kb_id", "")),
+            fixture_set=str(first.get("fixture_set", "")),
+            multiquery=bool(kwargs.get("multiquery")),
+        )
+    for case in cases:
+        if case.metadata.get("kb_id") != scope.kb_id:
+            raise ValueError(f"案例 {case.id} 的 kb_id 与评测 scope 不一致")
+        if case.metadata.get("fixture_set") != scope.fixture_set:
+            raise ValueError(f"案例 {case.id} 的 fixture_set 与评测 scope 不一致")
+
     pipeline = init_rag_pipeline()
     if pipeline is None:
         return [
@@ -195,10 +237,16 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
         logger.warning(f"[RAG eval] 探测 doc_db KB 列表失败: {e}")
 
     ablation_mode = kwargs.get("ablation_mode", "full")
+    stage1_probe_k = max(1, int(kwargs.get("stage1_probe_k") or _DEFAULT_STAGE1_PROBE_K))
 
     global _ANSWERS_FILE
     _ANSWERS_FILE = _get_answers_path(kwargs.get("run_id"))
     _ANSWERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "[RAG eval] run_id=%s，checkpoint/report 目录=%s",
+        kwargs.get("run_id") or "未指定",
+        _ANSWERS_FILE.parent,
+    )
 
     # ── 断点续跑（checkpoint）──
     # 原实现每轮清空 answers.jsonl 且结果只在内存累积，进程挂掉后
@@ -255,31 +303,28 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
 
                 if ablation_mode != "full":
                     retriever = build_ablation_retriever(
-                        pipeline, ablation_mode, kb_id, department,
+                        pipeline, ablation_mode, kb_id, department, scope.fixture_set,
                     )
                 else:
                     # --multiquery：评测链套上生产链的 MultiQuery 层（口径对齐）
-                    retriever = get_full_retriever(
-                        pipeline, use_multiquery=bool(kwargs.get("multiquery")),
-                    )
+                    retriever = get_full_retriever(pipeline, use_multiquery=scope.multiquery)
                 if (
                     kb_id
                     and kb_id not in ("*", "default")
                     and available_kbs
                     and kb_id not in available_kbs
                 ):
-                    logger.warning(
-                        f"[RAG eval] {case.id} 标注 KB='{kb_id}' 不在 doc_db 中 "
-                        f"(available={sorted(available_kbs)}), fallback to default"
+                    raise ValueError(
+                        f"评测 KB='{kb_id}' 不在 doc_db 中 "
+                        f"(available={sorted(available_kbs)})，拒绝回退 default"
                     )
-                    kb_id = "default"
                 question = case.question
 
                 if kb_id and kb_id != "*" and kb_id != "default":
                     from backend.rag.context import RagRequestState, set_context
-                    mf = {"kb_id": kb_id}
-                    if department:
-                        mf["department"] = department
+                    mf = build_scope_metadata_filter(
+                        kb_id, department, scope.fixture_set,
+                    )
                     ctx = RagRequestState(
                         metadata_filter=mf,
                         intent_label="",
@@ -292,15 +337,13 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     set_context(RagRequestState(version_requirement=_vreq))
 
                 # === Stage 1: Doc 级检索 ===
-                doc_filter = {}
-                if kb_id and kb_id != "*" and kb_id != "default":
-                    doc_filter["kb_id"] = kb_id
-                if department:
-                    doc_filter["department"] = department
+                doc_filter = build_scope_metadata_filter(
+                    kb_id, department, scope.fixture_set,
+                )
                 doc_results = (
-                    pipeline.doc_db.similarity_search(question, k=_STAGE1_PROBE_K, filter=doc_filter)
+                    pipeline.doc_db.similarity_search(question, k=stage1_probe_k, filter=doc_filter)
                     if doc_filter
-                    else pipeline.doc_db.similarity_search(question, k=_STAGE1_PROBE_K)
+                    else pipeline.doc_db.similarity_search(question, k=stage1_probe_k)
                 )
                 stage1_docs = []
                 stage1_doc_ids = []
@@ -434,6 +477,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
 
                 pipeline_info = {
                     "ablation_mode": ablation_mode,
+                    "evaluation_scope": scope.as_dict(),
                     "stage1_docs": len(stage1_docs),
                     "stage1_top_docs": stage1_docs,
                     "stage1_fallback_suspected": stage1_fallback_suspected,
@@ -959,6 +1003,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     actual={
                         "question": question,
                         "kb_id": kb_id,
+                        "fixture_set": scope.fixture_set,
+                        "evaluation_scope": scope.as_dict(),
                         "department": department,
                         "retrieved_docs": actual_doc_strs[:10],
                         "retrieved_departments": sorted(retrieved_depts),
@@ -1021,7 +1067,13 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             except Exception as e:
                 result_holder.append(EvalResult(
                     case_id=case.id, module="rag", status="error",
-                    expected=case.expected, actual={"question": case.question, "kb_id": case.metadata.get("kb_id", "default")},
+                    expected=case.expected,
+                    actual={
+                        "question": case.question,
+                        "kb_id": case.metadata.get("kb_id", "default"),
+                        "fixture_set": scope.fixture_set,
+                        "evaluation_scope": scope.as_dict(),
+                    },
                     error_msg=str(e), duration_ms=int((time.time() - t0) * 1000),
                 ))
         return result_holder[0], (deferred_holder[0] if deferred_holder else None)

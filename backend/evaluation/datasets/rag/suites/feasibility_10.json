@@ -1,7 +1,7 @@
 {
   "name": "feasibility_10",
-  "description": "Feasibility smoke: 10 stratified cases (~5min). 2 smoke / 6 core / 2 hard; 8 positive + 2 reject; covers single_doc, multi_doc, process, reasoning, robust_typo, negative.",
-  "version": "4.0",
+  "description": "Feasibility smoke: 10 stratified cases (~5min). 2 smoke / 6 core / 2 hard; 8 positive + 2 reject; covers single_doc, multi_doc, process, reasoning, robust_typo, negative.；统一评测 KB=rag_eval_kb，语料范围=baseline。",
+  "version": "5.0.0-unified",
   "case_ids": [
     "RC-001",
     "RC-005",
@@ -13,5 +13,8 @@
     "RC-061",
     "RC-024",
     "RC-031"
-  ]
+  ],
+  "dataset_version": "5.0.0-unified",
+  "kb_id": "rag_eval_kb",
+  "fixture_set": "baseline"
 }
