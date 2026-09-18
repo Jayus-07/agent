@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0",
+  "status": "blocked",
+  "blocking_reason": [
+    "黄金集标注文件不存在，500 条真实双审标注未提供: D:/rag20k/manifests/golden-500.jsonl"
+  ],
+  "input_path": "D:/rag20k/manifests/golden-500.jsonl"
+}

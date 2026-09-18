@@ -249,7 +249,7 @@ Commit: `feat(audit): validate rag20k corpus manifest`
 - 九类固定数量：FAQ 100、精确定位 80、表格 80、多条件 70、跨文档 60、权限 40、版本 30、无依据 20、OCR 20。
 - 每条必须有 `case_id`、`category`、`question`、`tenant_id`、`kb_id`、`permission_context`、`expected_doc_ids`、`expected_chunk_ids`、`should_reject`、`annotation_status`、`reviewers`。
 
-- [ ] **Step 1: 写失败测试，覆盖互斥分类、数量和双审比例**
+- [x] **Step 1: 写失败测试，覆盖互斥分类、数量和双审比例**
 
 ```python
 def test_category_distribution_is_exact():
@@ -263,15 +263,15 @@ def test_second_review_covers_at_least_twenty_percent():
     assert result.second_review_ratio < 0.20
 ```
 
-- [ ] **Step 2: 运行测试确认 RED**
+- [x] **Step 2: 运行测试确认 RED**
 
 Run: `D:/Python/python.exe -m pytest backend/tests/audit/test_rag20k_golden_manifest.py -q --no-cov`
 
-- [ ] **Step 3: 实现校验器并保持与统一评测 KB 解耦**
+- [x] **Step 3: 实现校验器并保持与统一评测 KB 解耦**
 
 该任务只校验外部黄金清单，不修改 `backend/evaluation`。等 `codex/rag-eval-kb-unification` 合并后，再在后续实施计划中做导入适配。权限、版本和无依据用例的期望字段必须互斥且可机器判断；分歧未裁决的条目使阶段 0 失败。
 
-- [ ] **Step 4: 运行测试与真实黄金集验证**
+- [x] **Step 4: 运行测试与真实黄金集验证**
 
 Run: `D:/Python/python.exe -m pytest backend/tests/audit/test_rag20k_golden_manifest.py -q --no-cov`
 
@@ -279,7 +279,7 @@ Run: `D:/Python/python.exe backend/scripts/validate_rag20k_golden.py D:/rag20k/m
 
 Expected: 未提供 500 条真实标注时输出 `blocked`，不扩写合成答案冒充业务标注。
 
-- [ ] **Step 5: 提交校验器与脱敏摘要**
+- [x] **Step 5: 提交校验器与脱敏摘要**
 
 Commit: `feat(audit): validate rag20k golden manifest`
 
