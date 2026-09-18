@@ -441,3 +441,21 @@ def test_make_file_event_extracts_paths():
     # dict 直带 file_path key
     evt2 = make_file_event("export", "s3", {"file_path": "D://export//r2.xlsx"})
     assert evt2 is not None and evt2["data"]["files"] == ["D://export//r2.xlsx"]
+def test_tool_selection_clarification_event_exposes_business_labels_only():
+    from backend.orchestration.graph.events import _build_tool_selector_events
+
+    events = list(_build_tool_selector_events({
+        "_tool_selection": {
+            "source": "clarify",
+            "reason": "llm_failed",
+            "candidates": ["sql.query", "rag.search"],
+        },
+    }))
+    clarification = next(event for event in events if event["event"] == "clarification")
+    payload_text = str(clarification["data"])
+    assert clarification["data"]["question"]
+    assert [item["label"] for item in clarification["data"]["options"]] == [
+        "数据库查询", "知识库检索",
+    ]
+    assert "sql.query" not in payload_text
+    assert "rag.search" not in payload_text

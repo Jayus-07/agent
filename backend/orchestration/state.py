@@ -124,3 +124,8 @@ class OrchestratorState(AgentState):
     cs_context: CSContext
     cs_action_result: dict                # 业务操作执行结果
     cs_audit_entries: list[dict]          # 审计日志条目
+    # 拒答转追问标记（2026-09-19）：router（L1 弱命中）/ reporter（L2 拒答）/
+    # cs_graph_node（L2 知识域拒答）在节点输出携带，events.py 据此发
+    # clarification SSE 事件。**必须入 schema**——LangGraph updates 流会剥离
+    # schema 外的键（实测 2026-09-19），剥离后追问事件永远发不出去。
+    _clarify: dict | None

@@ -97,6 +97,12 @@ def make_file_event(node_name: str, step_id: str, output) -> Optional[dict]:
 def stream_node_events(node_name: str, node_output: dict, skill_nodes: set,
                        make_step_payload, make_step_log_event) -> Generator[dict, None, None]:
     """根据节点名分派到对应的事件构建器。"""
+    # 拒答转追问（2026-09-19）：router（L1 弱命中）/ reporter 与 cs_graph_node
+    # （L2 拒答）的节点输出带 _clarify 标记 → 发 clarification 事件。
+    # 注意 _clarify 已入 OrchestratorState schema——LangGraph updates 流会剥离
+    # schema 外的键，不声明就永远到不了这里（实测 2026-09-19）。
+    if isinstance(node_output, dict) and node_output.get("_clarify"):
+        yield from _build_clarify_events(node_output["_clarify"])
     if node_name == "planner":
         yield from _build_planner_events(node_output)
     elif node_name == "critique":
@@ -109,6 +115,28 @@ def stream_node_events(node_name: str, node_output: dict, skill_nodes: set,
         yield from _build_reporter_events(node_output)
     elif node_name in skill_nodes:
         yield from _build_skill_events(node_name, node_output, make_step_payload)
+
+
+def _build_clarify_events(marker: dict) -> Generator[dict, None, None]:
+    """拒答转追问的 clarification 事件（与 tool_selector 的 clarify 同结构）。
+
+    marker 来自 clarify_content.py：{source, question, options, handoff_available}。
+    options 是用户话术（前端点击后原样重发），不做 capability 脱敏转换。
+    """
+    options = [str(o) for o in (marker.get("options") or []) if o]
+    yield {
+        "event": "clarification",
+        "data": {
+            "question": marker.get("question", "请补充一下您的需求："),
+            "options": [
+                {"id": f"option-{index}", "label": label}
+                for index, label in enumerate(dict.fromkeys(options), start=1)
+            ],
+            "handoff_available": bool(marker.get("handoff_available")),
+            "source": marker.get("source", ""),
+            "ts": time.time(),
+        },
+    }
 
 
 def _build_planner_events(output: dict) -> Generator[dict, None, None]:
@@ -149,9 +177,18 @@ def _build_tool_selector_events(output: dict) -> Generator[dict, None, None]:
     """
     sel = output.get("_tool_selection") or {}
     source = sel.get("source", "")
+    candidates = sel.get("candidates", [])
+    safe_candidates = [
+        _tool_user_label(item) for item in candidates if isinstance(item, str)
+    ]
+    safe_capability = (
+        _tool_user_label(sel.get("capability"))
+        if sel.get("capability") else None
+    )
     if source == "fc":
-        cap = sel.get("capability", "")
-        message = (f"工具选择: {cap}（{len(sel.get('candidates', []))} 个候选，"
+        # FC 成功选择属于内部 trace 日志，保留原 capability 以兼容现有
+        # 可观测性；真正面向用户的 clarification 事件只下发业务标签。
+        message = (f"工具选择: {sel.get('capability', safe_capability)}（{len(safe_candidates)} 个候选，"
                    f"第 {sel.get('attempts', 1)} 次尝试，{sel.get('elapsed_ms', 0)}ms）")
         level = "info"
     elif source == "no_match":
@@ -168,14 +205,37 @@ def _build_tool_selector_events(output: dict) -> Generator[dict, None, None]:
             "message": message,
             "payload": {
                 "source": source,
-                "capability": sel.get("capability"),
-                "candidates": sel.get("candidates", []),
+                "capability": safe_capability,
+                "candidates": safe_candidates,
                 "params": sel.get("params"),
                 "elapsed_ms": sel.get("elapsed_ms"),
             },
             "ts": time.time(),
         },
     }
+    if source == "clarify":
+        yield {
+            "event": "clarification",
+            "data": {
+                "question": "这条请求可能有多种处理方式，请选择最符合的一项：",
+                "options": [
+                    {"id": f"option-{index}", "label": label}
+                    for index, label in enumerate(dict.fromkeys(safe_candidates), start=1)
+                ],
+                "handoff_available": False,
+                "ts": time.time(),
+            },
+        }
+
+
+def _tool_user_label(capability: str) -> str:
+    """把内部 capability 转成可下发给用户的业务标签。"""
+    try:
+        from backend.orchestration.graph.direct_executor import _user_label
+
+        return _user_label(capability)
+    except Exception:
+        return "信息查询"
 
 
 def _build_supervisor_events(output: dict, make_step_log_event) -> Generator[dict, None, None]:
@@ -287,7 +347,8 @@ def emit_delta_events(final_answer: str, stop_event=None) -> Generator[dict, Non
 
 def make_done_event(final_answer: str, all_step_results: dict, start_time: float,
                     usage: dict | None = None,
-                    pending_action: dict | None = None) -> dict:
+                    pending_action: dict | None = None,
+                    trace_id: str = "") -> dict:
     """构建 done 事件，附带耗时 + 引用来源 + 本轮 token 用量。
 
     P3.1：pending_action 非空时下发（CS 确认流等待用户点击确认卡片），
@@ -302,6 +363,8 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
     data: dict = {"elapsed": round(elapsed, 1), "sources": sources}
     if usage:
         data["usage"] = usage
+    if trace_id:
+        data["trace_id"] = trace_id
     if pending_action:
         data["pending_action"] = {
             "proposal_text": pending_action.get("proposal_text", ""),

@@ -167,6 +167,8 @@ def build_graph(checkpointer=None):
         "planner": "planner",
         "skill_executor": "tool_selector",
         "workflow_executor": "workflow_executor",
+        # L1 弱命中追问（2026-09-19）：router 短路出追问，reporter 只出短文案
+        "clarify": "reporter",
     }
     for domain in domains.values():
         edge_map[domain.node_name] = domain.node_name

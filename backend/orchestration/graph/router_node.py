@@ -148,6 +148,38 @@ def router_node(state: dict) -> dict:
         if cs_update is not None:
             return {**state, **cs_update}
 
+    # ── L1 入口弱命中追问（2026-09-19 拒答转追问）────────────────
+    # 放在全部域预过滤与 CS 向量兜底之后：客服优先级不被追问抢夺。
+    # 只拦"差一个槽位就能进域"的输入（如 1 个旅游信号词没说城市），
+    # 短路不进主 Router，避免这类输入跑完链路后只换来一句拒答。
+    # _clarify 只活在节点原始输出里（stream_node_events 从这里发
+    # clarification 事件），不依赖 graph state 传递。
+    # 防循环：会话 10 分钟内已被追问过一次则放行原链路（后续拒答
+    # 也不会再追问，同一守卫）。
+    try:
+        from backend.orchestration.graph.clarify_content import (
+            build_entry_clarify,
+            clarify_allowed,
+            mark_clarified,
+        )
+        clarify = build_entry_clarify(query, domain_hint)
+        if clarify is not None and not clarify_allowed(
+                state.get("session_id", "")):
+            clarify = None
+        elif clarify is not None:
+            mark_clarified(state.get("session_id", ""))
+    except Exception as e:
+        logger.warning(f"[RouterNode] 入口追问判定失败，走原链路: {e}")
+        clarify = None
+    if clarify is not None:
+        logger.info(f"[RouterNode] L1 弱命中追问: source={clarify.get('source')}")
+        return {
+            **state,
+            "route_decision": None,
+            "route_mode": "clarify",
+            "_clarify": clarify,
+        }
+
     try:
         # P0-4: get_router() 懒加载（router 索引/向量资源首次初始化）曾贡献
         # 数秒无埋点黑洞；单独成 span 使其在瀑布图中可见（埋点软失败）。
@@ -207,6 +239,10 @@ def route_selector(state: dict) -> str:
         return "skill_executor"
     if mode == "workflow":
         return "workflow_executor"
+    if mode == "clarify":
+        # L1 弱命中追问：直接到 reporter 出短文案（builder edge_map
+        # "clarify" → "reporter"），不执行任何 skill
+        return "clarify"
     from backend.orchestration.domain_registry import domain_graph_registry
     domain = domain_graph_registry.get(mode)
     if domain:

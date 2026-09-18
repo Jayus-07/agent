@@ -205,7 +205,44 @@ class GraphRunner:
             else:
                 finish_guard_trace(session_id, guard_result)
                 yield {"event": "status", "data": {"node": "input_guard", "ts": time.time()}}
-                message = guard_result.message or "## 提示\n\n无法处理该问题。"
+                # ── L1 业务化追问接管（2026-09-19 拒答转追问）────────
+                # guard 的「模糊/看不懂→clarify」只会给数据查询示例的通用
+                # 提示；若弱命中业务域（如"帮我做个行程"差一个目的地槽位），
+                # 优先给业务定向追问卡片。未命中业务倾向则保持 guard 原话术。
+                clarify = None
+                try:
+                    from backend.orchestration.graph.clarify_content import (
+                        CLARIFY_STANDALONE_TEXT,
+                        build_entry_clarify,
+                        clarify_allowed,
+                        mark_clarified,
+                    )
+
+                    if clarify_allowed(session_id):
+                        clarify = build_entry_clarify(question or "", domain_hint)
+                        if clarify is not None:
+                            mark_clarified(session_id)
+                except Exception as e:
+                    logger.warning(f"[Runner] 入口追问判定失败，保持 guard 原话术: {e}")
+                    clarify = None
+                if clarify is not None:
+                    logger.info(
+                        "[Runner] guard clarify 接管为业务追问: "
+                        f"source={clarify.get('source')}"
+                    )
+                    yield {"event": "clarification", "data": {
+                        "question": clarify["question"],
+                        "options": [
+                            {"id": f"option-{i}", "label": label}
+                            for i, label in enumerate(clarify["options"], start=1)
+                        ],
+                        "handoff_available": clarify["handoff_available"],
+                        "source": clarify.get("source", ""),
+                        "ts": time.time(),
+                    }}
+                    message = CLARIFY_STANDALONE_TEXT
+                else:
+                    message = guard_result.message or "## 提示\n\n无法处理该问题。"
                 if fallback_deltas:
                     yield from emit_delta_events(message, stop_event)
                 yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
@@ -452,7 +489,8 @@ class GraphRunner:
             yield {"event": _ANSWER_EVENT, "data": {"answer": answer}}
             yield make_done_event(answer, ctx["all_step_results"], start_time,
                                   usage=ctx["usage"],
-                                  pending_action=ctx.get("cs_pending_action"))
+                                  pending_action=ctx.get("cs_pending_action"),
+                                  trace_id=trace.id)
 
         except Exception as e:
             import traceback as _tb

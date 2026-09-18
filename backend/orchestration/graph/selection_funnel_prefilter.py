@@ -23,6 +23,16 @@ _DECISION_EXCLUDE = re.compile(r"决策|值不值得|能不能上|该不该做|�
 _RE_CATEGORY_HINT = re.compile(r"(品类|类目)")
 
 
+def selection_signal_hits(query: str) -> int:
+    """命中的选品强信号词数量（纯函数；拒答追问定向复用）。"""
+    return sum(1 for p in _FUNNEL_PATTERNS if re.search(p, query))
+
+
+def selection_category_hint(query: str) -> bool:
+    """是否出现「品类/类目」弱信号（无选品动词时不判域，供追问判定复用）。"""
+    return bool(query) and bool(_RE_CATEGORY_HINT.search(query))
+
+
 def is_selection_funnel_request(query: str) -> bool:
     """是否为智能选品（漏斗）请求（纯函数，可单测）。"""
     if not query:

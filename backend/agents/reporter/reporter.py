@@ -25,6 +25,16 @@ from backend.prompts.service import prompt_service
 
 def reporter_node(state: dict) -> dict:
     """LangGraph 节点适配器: state → generate_final_answer → {"final_answer": ...}"""
+    # ── L1 弱命中追问（2026-09-19 拒答转追问）：clarify 模式下不执行任何
+    # 汇总/LLM 逻辑；追问卡片事件已由 router 节点原始输出发出，这里只出
+    # 一句如实告知的短文案（"_clarify" 不重复附带，防双卡片）
+    if state.get("route_mode") == "clarify":
+        from backend.orchestration.graph.clarify_content import (
+            CLARIFY_STANDALONE_TEXT,
+        )
+
+        return {"final_answer": CLARIFY_STANDALONE_TEXT}
+
     question = state.get("question", "")
     step_results = state.get("step_results", {})
 
@@ -33,7 +43,46 @@ def reporter_node(state: dict) -> dict:
         step_results=step_results,
         context_filter=True,
     )
+
+    # ── L2 拒答兜底追问：所有步骤都无有效产出（RAG 拒答话术/空结果）且
+    # 无技术性错误时，在节点原始输出附带 _clarify（events.py 据此发
+    # clarification 事件）。拒答正文照常返回，不做静默替换。
+    clarify = _refusal_clarify_marker(answer, state)
+    if clarify is not None:
+        return {"final_answer": answer, "_clarify": clarify}
     return {"final_answer": answer}
+
+
+def _refusal_clarify_marker(answer: str, state: dict) -> dict | None:
+    """判定本回答是否为"业务性拒答"，是则返回追问标记。
+
+    判定口径：generate_final_answer 的"无有效输出"分支固定以「## 抱歉」开头，
+    技术性错误（服务暂时不可用）同走该分支但不属于拒答，须排除——
+    两者都是本模块自有模板，前缀匹配是模块内稳定契约。
+    延迟导入 clarify_content（调用期取开关/守卫，便于测试替换）。
+    """
+    if not answer.startswith("## 抱歉") or "服务暂时不可用" in answer:
+        return None
+
+    try:
+        from backend.config import REFUSAL_CLARIFY_ENABLED
+        from backend.orchestration.graph.clarify_content import (
+            build_refusal_clarify,
+            clarify_allowed,
+            mark_clarified,
+        )
+
+        if not REFUSAL_CLARIFY_ENABLED:
+            return None
+        session_id = state.get("session_id", "")
+        if not clarify_allowed(session_id):
+            return None
+        mark_clarified(session_id)
+        return build_refusal_clarify(
+            state.get("question", ""), state.get("domain_hint", ""))
+    except Exception as e:
+        logger.warning(f"[Reporter] 拒答追问判定失败，输出原拒答: {e}")
+        return None
 
 
 # =====================================================
@@ -251,7 +300,7 @@ def _is_step_successful(result: dict) -> bool:
     # EvidenceGate 拒答/空话术不是有效产出（实测 2026-09-15：RAG 拒答短语
     # "知识库暂无相关资料。" 长 10 字符绕过长度门槛，被当成有效结果透传，
     # 最终回答只剩这一句，SQL 空结果完全没交代）
-    if output.strip() in _EMPTY_RESULT_PHRASES:
+    if _is_empty_output(output):
         return False
     return True
 
@@ -266,6 +315,18 @@ _EMPTY_RESULT_PHRASES = frozenset({
     "无结果",
     "未能获取任何有效数据。",
 })
+# 前缀变体：RAG self-correction 会在拒答话术后追加改写说明
+# （"知识库暂无相关资料。\n（已尝试改写提问重新检索，仍未找到可靠答案）"），
+# 精确匹配拦不住，被当有效结果透传（实测 2026-09-19，拒答转追问由此漏判）
+_EMPTY_RESULT_PREFIXES = ("知识库暂无相关资料", "未找到相关信息")
+
+
+def _is_empty_output(output: str) -> bool:
+    """空结果话术判定：精确短语 + 带后缀的前缀变体。"""
+    text = output.strip()
+    if text in _EMPTY_RESULT_PHRASES:
+        return True
+    return any(text.startswith(p) for p in _EMPTY_RESULT_PREFIXES)
 
 
 def _extract_rag_references(step_results: dict) -> str:
@@ -409,7 +470,7 @@ def _render_structured_sections(step_results: dict) -> str:
                 f"### {description}\n\n"
                 f"- {label}未获得数据：{reason[:120]}"
             )
-        elif isinstance(output, str) and output.strip() in _EMPTY_RESULT_PHRASES:
+        elif isinstance(output, str) and _is_empty_output(output):
             label = _user_step_label(sr)
             sections.append(
                 f"### {description}\n\n"

@@ -41,6 +41,16 @@ _TRAVEL_PATTERNS: tuple[str, ...] = (
 _RE_DAY_COUNT = re.compile(r"(?<![\d近])(?<!过去)(?<!前)\d{1,2}\s*[天日](?!气)")
 
 
+def travel_signal_hits(query: str) -> int:
+    """命中的旅游强信号词数量（纯函数；弱命中追问复用，不新增抽取）。"""
+    return sum(1 for p in _TRAVEL_PATTERNS if re.search(p, query))
+
+
+def travel_has_city(query: str) -> bool:
+    """query 是否提到种子城市（纯函数）。"""
+    return any(city in query for city in poi_seed.all_cities())
+
+
 def is_travel_request(query: str) -> bool:
     """是否为旅游规划请求（纯函数，可单测）。"""
     if not query:
@@ -48,12 +58,11 @@ def is_travel_request(query: str) -> bool:
 
     from backend.config.travel import TRAVEL_DETECT_MIN_HITS
 
-    hits = sum(1 for p in _TRAVEL_PATTERNS if re.search(p, query))
+    hits = travel_signal_hits(query)
     if hits >= TRAVEL_DETECT_MIN_HITS:
         return True
 
-    has_city = any(city in query for city in poi_seed.all_cities())
-    if not has_city:
+    if not travel_has_city(query):
         return False
 
     return hits >= 1 or bool(_RE_DAY_COUNT.search(query))

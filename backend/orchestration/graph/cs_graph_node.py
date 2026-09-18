@@ -50,7 +50,52 @@ def cs_graph_node(state: dict) -> dict:
 
     _stamp_execution_tags(final_state)
     _persist_audit_records(final_state)
-    return _build_main_state_update(state, result)
+    update = _build_main_state_update(state, result)
+    # L2 拒答兜底追问（2026-09-19）：知识域拒答时在原始输出附带 _clarify
+    # （events.py 据此发 clarification 事件），拒答正文照常返回
+    clarify = _refusal_clarify(final_state, state)
+    if clarify is not None:
+        update["_clarify"] = clarify
+    return update
+
+
+def _refusal_clarify(final_state: dict, main_state: dict) -> dict | None:
+    """CS 知识域拒答判定（结构化条件，不做文本匹配）。
+
+    命中条件 = cs_reporter._summarize_expert_results 落「暂时无法找到相关
+    信息」兜底的结构化前提：正常作答路径（非 handoff/pending）、路由到
+    KNOWLEDGE 域、专家无 response_draft/data、非失败态。
+    """
+    try:
+        from backend.config import REFUSAL_CLARIFY_ENABLED
+        from backend.orchestration.graph.clarify_content import (
+            build_refusal_clarify,
+            clarify_allowed,
+            mark_clarified,
+        )
+
+        if not REFUSAL_CLARIFY_ENABLED:
+            return None
+        decision = final_state.get("supervisor_decision") or {}
+        if decision.get("next_action") in ("handoff", "pending"):
+            return None
+        cs_route = final_state.get("cs_route") or {}
+        if cs_route.get("domain") != "KNOWLEDGE":
+            return None
+        expert = final_state.get("last_expert_result") or {}
+        if (expert.get("response_draft") or expert.get("data")
+                or expert.get("action_result")
+                or expert.get("status") == "failed" or expert.get("error")):
+            return None
+        session_id = main_state.get("session_id", "")
+        if not clarify_allowed(session_id):
+            return None
+        mark_clarified(session_id)
+        return build_refusal_clarify(
+            main_state.get("question", ""), "customer_service")
+    except Exception as e:
+        logger.warning(f"[cs_graph_node] 拒答追问判定失败，输出原回复: {e}")
+        return None
 
 
 def _persist_audit_records(final_state: dict) -> None:
