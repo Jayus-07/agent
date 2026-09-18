@@ -2,53 +2,61 @@
   "schema_version": "1.0",
   "source": "docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md",
   "recorded_at": "2026-09-19",
-  "note": "本文件是审计报告第 0 节 Q1—Q10 的权威状态源。当前没有任何一项取得负责人书面确认，因此全部为 blocked；decision 字段记录的是报告暂定假设，不是签字结论。流转规则：补齐 owner/decided_at/evidence_refs 并把 status 改为 confirmed（或对无法确认项保持 blocked 并更新 blocking_reason），随后运行 backend/scripts/validate_rag20k_decisions.py 验证。",
+  "note": "本文件是审计报告第 0 节 Q1—Q10 的权威状态源。2026-09-19 项目所有者（Jayus-07）对签字类决策 Q1—Q4、Q8—Q9 按本文件记录的暂定假设完成书面确认（decision 原样冻结，未改数值）。Q5/Q6/Q7/Q10 的确认前提是外部材料或执行结果（20k 语料清单、供应商书面配额函、获授权脱敏语料、100 文档双跑），材料未到位前保持 blocked；暂定假设不得冒充已核实结论。流转规则见同目录 Q1-Q10.md。",
   "decisions": [
     {
       "id": "Q1",
       "question": "生产环境是否为真实多租户，同一 kb_id、doc_id 是否可能在不同租户重复？",
-      "decision": "暂定假设（未签字）：是；租户之间必须物理或查询级强隔离，空 tenant_id 在生产环境拒绝写入与查询。",
-      "owner": null,
-      "decided_at": null,
-      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
-      "status": "blocked",
-      "blocking_reason": "租户模型属业务事实，当前仅有报告暂定假设，无负责人书面确认。",
+      "decision": "是；租户之间必须物理或查询级强隔离，空 tenant_id 在生产环境拒绝写入与查询。",
+      "owner": "Jayus-07",
+      "decided_at": "2026-09-19",
+      "evidence_refs": [
+        "docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题",
+        "2026-09-19 项目所有者 Jayus-07 会话书面指示：Q1—Q4/Q8—Q9 按本文件记录的暂定假设冻结为正式决策（单人项目，所有者兼任业务/运维/安全负责人）"
+      ],
+      "status": "confirmed",
       "impact_if_unconfirmed": "无法确认 RAG 数据模型、唯一键和回填规则；属于上线阻断。",
       "latest_confirmation_point": "阶段 0"
     },
     {
       "id": "Q2",
       "question": "目标并发、请求到达率与日峰值是多少？",
-      "decision": "暂定假设（未签字）：集群 100 条并发 SSE、每秒 5 个新会话、RAG 检索 20 QPS，持续 30 分钟。",
-      "owner": null,
-      "decided_at": null,
-      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
-      "status": "blocked",
-      "blocking_reason": "容量目标需业务方书面确认，当前无签字数值。",
+      "decision": "集群 100 条并发 SSE、每秒 5 个新会话、RAG 检索 20 QPS，持续 30 分钟。",
+      "owner": "Jayus-07",
+      "decided_at": "2026-09-19",
+      "evidence_refs": [
+        "docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题",
+        "2026-09-19 项目所有者 Jayus-07 会话书面指示：Q1—Q4/Q8—Q9 按本文件记录的暂定假设冻结为正式决策（单人项目，所有者兼任业务/运维/安全负责人）"
+      ],
+      "status": "confirmed",
       "impact_if_unconfirmed": "无法核算 API、LLM、PostgreSQL、Redis 和连接池容量。",
       "latest_confirmation_point": "阶段 0"
     },
     {
       "id": "Q3",
       "question": "可用性目标与部署平台是什么？",
-      "decision": "暂定假设（未签字）：API 2 副本、RAG 查询服务 2 副本、独立调度器 1 副本、RAG 索引写入者 1 副本；生产平台能够提供健康检查、滚动发布和跨主机调度。",
-      "owner": null,
-      "decided_at": null,
-      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
-      "status": "blocked",
-      "blocking_reason": "可用性目标与部署平台未书面确定。",
+      "decision": "API 2 副本、RAG 查询服务 2 副本、独立调度器 1 副本、RAG 索引写入者 1 副本；生产平台能够提供健康检查、滚动发布和跨主机调度。",
+      "owner": "Jayus-07",
+      "decided_at": "2026-09-19",
+      "evidence_refs": [
+        "docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题",
+        "2026-09-19 项目所有者 Jayus-07 会话书面指示：Q1—Q4/Q8—Q9 按本文件记录的暂定假设冻结为正式决策（单人项目，所有者兼任业务/运维/安全负责人）"
+      ],
+      "status": "confirmed",
       "impact_if_unconfirmed": "若只部署在单台 Docker 主机，只能达到容量上线，不能宣称主机级高可用。",
       "latest_confirmation_point": "阶段 0"
     },
     {
       "id": "Q4",
       "question": "PostgreSQL、Redis、磁盘、网络和备份的生产规格是什么？",
-      "decision": "暂定假设（未签字）：PostgreSQL 8 vCPU/32 GiB/NVMe 200 GiB；Redis 4 GiB 且启用 AOF；服务间网络 RTT P95 ≤ 2 ms。",
-      "owner": null,
-      "decided_at": null,
-      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
-      "status": "blocked",
-      "blocking_reason": "生产资源规格未书面确定。",
+      "decision": "PostgreSQL 8 vCPU/32 GiB/NVMe 200 GiB；Redis 4 GiB 且启用 AOF；服务间网络 RTT P95 ≤ 2 ms。",
+      "owner": "Jayus-07",
+      "decided_at": "2026-09-19",
+      "evidence_refs": [
+        "docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题",
+        "2026-09-19 项目所有者 Jayus-07 会话书面指示：Q1—Q4/Q8—Q9 按本文件记录的暂定假设冻结为正式决策（单人项目，所有者兼任业务/运维/安全负责人）"
+      ],
+      "status": "confirmed",
       "impact_if_unconfirmed": "20k 导入时长、检索延迟、连接池和容灾指标无法承诺。",
       "latest_confirmation_point": "阶段 0"
     },
@@ -91,24 +99,28 @@
     {
       "id": "Q8",
       "question": "RPO、RTO 和灾备范围是什么？",
-      "decision": "暂定假设（未签字）：RPO ≤ 15 分钟，RTO ≤ 60 分钟；覆盖 PostgreSQL、Redis 中未完成任务、原始文档和索引版本。",
-      "owner": null,
-      "decided_at": null,
-      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
-      "status": "blocked",
-      "blocking_reason": "RPO/RTO 目标与灾备范围未书面确定。",
+      "decision": "RPO ≤ 15 分钟，RTO ≤ 60 分钟；覆盖 PostgreSQL、Redis 中未完成任务、原始文档和索引版本。",
+      "owner": "Jayus-07",
+      "decided_at": "2026-09-19",
+      "evidence_refs": [
+        "docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题",
+        "2026-09-19 项目所有者 Jayus-07 会话书面指示：Q1—Q4/Q8—Q9 按本文件记录的暂定假设冻结为正式决策（单人项目，所有者兼任业务/运维/安全负责人）"
+      ],
+      "status": "confirmed",
       "impact_if_unconfirmed": "无法设计备份频率、恢复流程和发布回滚。",
       "latest_confirmation_point": "阶段 0"
     },
     {
       "id": "Q9",
       "question": "原始文档生产存储使用对象存储、共享卷还是本机卷？",
-      "decision": "暂定假设（未签字）：使用 S3 兼容对象存储；数据库只保存 URI、摘要和元数据。",
-      "owner": null,
-      "decided_at": null,
-      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
-      "status": "blocked",
-      "blocking_reason": "生产对象存储方案未书面确定。",
+      "decision": "使用 S3 兼容对象存储；数据库只保存 URI、摘要和元数据。",
+      "owner": "Jayus-07",
+      "decided_at": "2026-09-19",
+      "evidence_refs": [
+        "docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题",
+        "2026-09-19 项目所有者 Jayus-07 会话书面指示：Q1—Q4/Q8—Q9 按本文件记录的暂定假设冻结为正式决策（单人项目，所有者兼任业务/运维/安全负责人）"
+      ],
+      "status": "confirmed",
       "impact_if_unconfirmed": "当前 Docker 命名卷不能支撑跨主机 RAG 副本，也不能满足主机故障恢复。",
       "latest_confirmation_point": "阶段 0"
     },
