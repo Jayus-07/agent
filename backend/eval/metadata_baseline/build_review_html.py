@@ -123,15 +123,24 @@ function render(item, idx) {
   div.className = "card " + (item.source.startsWith("part_a") ? "arbitration" : "confirm");
   div.id = "c" + idx;
   const types = TYPES.map(t =>
-    "<label id='l" + idx + "_" + t + "' onclick='pick(" + idx + ",\"" + t + "\")'>" + t + "</label>").join("");
+    "<label data-t='" + t + "'>" + t + "</label>").join("");
   div.innerHTML = "<h3>" + (idx + 1) + ". " + item.filename + " <small>[" + item.source + "]</small></h3>"
     + "<div class='meta'>" + item.id + "</div>"
     + "<div class='machine'>" + machine_html(item.machine) + "</div>"
     + "<pre class='text'>" + item.text_excerpt.replace(/</g, "&lt;") + "</pre>"
-    + "<div class='types'>" + types + "</div>";
+    + "<div class='types' data-idx='" + idx + "'>" + types + "</div>";
   el.appendChild(div);
   if (item.suggested) pick(idx, item.suggested);
 }
+
+// 事件委托：label 点击 → 定标（避免内联 onclick 的引号嵌套——曾致整页 JS 语法错误）
+el.addEventListener("click", function (ev) {
+  const t = ev.target && ev.target.dataset && ev.target.dataset.t;
+  if (!t) return;
+  const box = ev.target.closest(".types");
+  if (!box) return;
+  pick(parseInt(box.dataset.idx, 10), t);
+});
 
 function pick(idx, t) {
   chosen[idx] = t;
