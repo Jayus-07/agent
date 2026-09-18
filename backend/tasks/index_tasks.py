@@ -135,7 +135,13 @@ def _register_task():
                 upload_id, filepath, filename, source, batch_id, kb_id,
                 upload_elapsed_ms, was_overwrite, 0.0,
                 result=None, emit_fn=_redis_emit_fn(upload_id), exc=exc)
-            return {"status": "error", "reason": "timeout"}
+            from backend.shared.error_protocol import celery_error_result
+            return celery_error_result(
+                exc,
+                source="celery.rag_index",
+                status="error",
+                reason="timeout",
+            )
         except Exception as e:
             retries_left = CELERY_MAX_RETRIES - self.request.retries
             logger.error("[IndexTask] %s failed (剩余重试 %d): %s",

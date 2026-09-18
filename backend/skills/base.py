@@ -15,6 +15,13 @@ from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from backend.shared.logger import logger
+from backend.shared.error_protocol import error_envelope_from_exception
+from backend.skills.validation import (
+    ValidationFailure,
+    validate_invocation,
+    validate_output,
+    validate_semantics,
+)
 
 DEFAULT_TIMEOUT = 60
 DEFAULT_MAX_RETRIES = 2
@@ -278,12 +285,25 @@ class BaseSkill(ABC):
         params = dict(step_info.get("params", {}))
         params.pop("_previous_outputs", None)
 
-        # ── 参数契约校验：失败不可重试，直接落 failed ──
-        param_error = self._validate_params(params)
-        if param_error:
-            error = f"参数校验失败: {param_error}"
+        # ── 四层前置校验：参数 + 权限失败不可进入 Tool ──
+        try:
+            validate_invocation(
+                sr["capability"], params,
+                self._validate_params,
+            )
+        except ValidationFailure as exc:
+            reason = (exc.envelope.details or {}).get("reason", "")
+            error = (
+                f"参数校验失败: {reason}"
+                if exc.layer == "parameter" and reason
+                else exc.envelope.message
+            )
+            error_protocol = error_envelope_from_exception(
+                exc, source="skill"
+            ).to_dict()
             sr.update(status="failed", output=None, error=error,
-                      error_type="invalid_param", retries=0,
+                      error_type=error_protocol["code"].lower(), retries=0,
+                      error_protocol=error_protocol,
                       started_at=time.time(), finished_at=time.time())
             step_results[step_id] = dict(sr)
             logger.warning(f"[{self.name}] step={step_id} {error}")
@@ -332,6 +352,11 @@ class BaseSkill(ABC):
                     timeout=timeout,
                 )
                 output = self._normalize_output(sr["capability"], output)
+                declared_type = self.output_types.get(
+                    sr["capability"], self.output_type
+                )
+                validate_output(sr["capability"], output, declared_type)
+                validate_semantics(sr["capability"], params, output)
 
                 sr["status"] = "success"
                 sr["output"] = output
@@ -349,17 +374,28 @@ class BaseSkill(ABC):
                     metrics={"elapsed_s": round(elapsed, 2), "retries": attempt})
                 break
 
+            except ValidationFailure as e:
+                # 后置校验失败是确定性错误，不重试 Tool，避免重复副作用。
+                last_error = e
+                logger.warning(
+                    f"[{self.name}] step={step_id} 校验失败: {e.layer}"
+                )
+                break
+
             except asyncio.TimeoutError:
-                last_error = f"步骤执行超时（{timeout}s）"
+                last_error = asyncio.TimeoutError(f"步骤执行超时（{timeout}s）")
                 logger.warning(f"[{self.name}] step={step_id} 超时")
                 trace_collector.add_event(tool_span, f"retry_{attempt+1}", "warn",
                     f"超时重试 ({timeout}s)", {"attempt": attempt + 1})
 
             except Exception as e:
-                last_error = str(e)
+                last_error = e
                 logger.warning(f"[{self.name}] step={step_id} 失败: {e}")
-                trace_collector.add_event(tool_span, f"retry_{attempt+1}", "warn",
-                    f"执行失败: {last_error[:80]}", {"attempt": attempt + 1})
+                trace_collector.add_event(
+                    tool_span, f"retry_{attempt+1}", "warn",
+                    f"执行失败: {str(last_error)[:80]}",
+                    {"attempt": attempt + 1},
+                )
 
             if not _is_retryable(str(last_error)):
                 break
@@ -369,19 +405,28 @@ class BaseSkill(ABC):
                 await asyncio.sleep(delay)
 
         if sr.get("status") == "running":
+            error_protocol = error_envelope_from_exception(
+                last_error or RuntimeError("skill execution failed"),
+                source="skill",
+            ).to_dict()
             sr["status"] = "failed"
-            sr["error"] = last_error
-            sr["error_type"] = classify_error(last_error)
+            sr["error"] = error_protocol["message"]
+            sr["error_type"] = (
+                last_error.envelope.code.value.lower()
+                if isinstance(last_error, ValidationFailure)
+                else classify_error(last_error)
+            )
+            sr["error_protocol"] = error_protocol
             sr["finished_at"] = time.time()
             step_results[step_id] = dict(sr)
 
             # ── Tracing: 最终失败 ──
             trace_collector.end_span(tool_span, status="error",
-                metrics={"error": last_error, "retries": max_retries})
+                metrics={"error": str(last_error), "retries": max_retries})
 
             code = ("WORKER_TIMEOUT" if sr["error_type"] == "timeout"
                     else "WORKER_RETRY_EXHAUST")
-            alert = make_alert(code, {"step_id": step_id, "error": last_error})
+            alert = make_alert(code, {"step_id": step_id, "error": str(last_error)})
             log_degradation(alert)
             logger.error(f"[{self.name}] step={step_id} 最终失败: {last_error}")
 

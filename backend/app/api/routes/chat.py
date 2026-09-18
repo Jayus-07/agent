@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from backend.shared.logger import logger
+from backend.shared.error_protocol import sse_error_event as build_sse_error_event
 from backend.config.settings import (
     CHAT_SSE_MAX_WORKERS,
     CHAT_SSE_QUEUE_MAXSIZE,
@@ -76,6 +77,14 @@ def _sse_encode(event: dict) -> str:
     return f"event: {evt_type}\ndata: {payload}\n\n"
 
 
+def _sse_error_event(exc: BaseException, trace_id: str = "") -> dict:
+    """SSE 失败帧统一走错误协议，保留 event:error 兼容旧客户端。"""
+    event = build_sse_error_event(exc, trace_id=trace_id, source="sse")
+    # ts 是旧版前端 ErrorEvent 的兼容字段；协议字段由统一适配器负责。
+    event["data"]["ts"] = time.time()
+    return event
+
+
 # ═══════════════════════════════════════════════════
 # POST /chat — 同步对话（非流式，兼容旧版）
 # ═══════════════════════════════════════════════════
@@ -86,10 +95,16 @@ async def chat(req: ChatRequest, request: Request,
     t0 = time.monotonic()
     agent = get_multi_agent()
     kb_id = req.kb_id or "default"
+    from backend.app.api.identity import resolve_identity
+    ident = resolve_identity(request, body_user_id=req.user_id)
+    user_id = ident.user_id or "default"
     try:
         answer = await asyncio.to_thread(
             agent.ask, req.question, req.session_id, kb_id=kb_id,
-            model=req.model or "", domain_hint=req.domain_hint or "")
+            user_id=user_id, department=ident.department,
+            permissions=ident.permissions, model=req.model or "",
+            domain_hint=req.domain_hint or "", tenant_id=ident.tenant_id,
+            idempotency_key=(request.headers.get("Idempotency-Key") or "").strip())
         chat_request_total.labels(status="ok").inc()
         return ChatResponse(
             answer=answer,
@@ -162,9 +177,12 @@ async def chat_stream(
                 kb_id=kb_id,
                 stop_event=stop_event,
                 user_id=user_id,
-                department=req.department or "",
+                department=ident.department,
+                permissions=ident.permissions,
                 model=req.model or "",
                 domain_hint=req.domain_hint or "",
+                tenant_id=ident.tenant_id,
+                idempotency_key=(r.headers.get("Idempotency-Key") or "").strip(),
             ):
                 if stop_event.is_set():
                     break
@@ -187,10 +205,7 @@ async def chat_stream(
         except Exception as exc:
             chat_stream_event_dropped_total.labels(reason="producer_error").inc()
             try:
-                q.put(
-                    {"event": "error", "data": {"message": str(exc), "ts": time.time()}},
-                    timeout=0.05,
-                )
+                q.put(_sse_error_event(exc), timeout=0.05)
             except queue.Full:
                 pass
         finally:

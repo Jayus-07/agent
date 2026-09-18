@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   CLIENT_ERROR_CODES,
+  PROTOCOL_ERROR_CODES,
   DOMAIN_ERRORS,
   FALLBACK_BY_STATUS,
   TIMEOUT_REASON,
@@ -155,6 +156,29 @@ describe("客户端异常分类：超时 / 取消 / 网络 不可互串", () => 
     expect(r.kind).toBe("network");
     expect(r.code).toBe(CLIENT_ERROR_CODES.NETWORK);
     expect(r.retriable).toBe(true);
+  });
+});
+
+describe("后端统一错误协议：九个通用码各自稳定分派", () => {
+  it("未知协议码按 INTERNAL_ERROR 语义兜底，已知九码不依赖 HTTP 状态", () => {
+    const expectedKinds: Record<string, string> = {
+      INVALID_PARAM: "validation",
+      PERMISSION_DENIED: "permission",
+      NOT_FOUND: "not_found",
+      TIMEOUT: "timeout",
+      UPSTREAM_UNAVAILABLE: "server",
+      RATE_LIMITED: "rate_limit",
+      IDEMPOTENCY_CONFLICT: "conflict",
+      BUDGET_EXCEEDED: "rate_limit",
+      INTERNAL_ERROR: "server",
+    };
+
+    for (const code of Object.values(PROTOCOL_ERROR_CODES)) {
+      const result = describeApiError(fakeApiError(code, 400));
+      expect(result.code).toBe(code);
+      expect(result.kind).toBe(expectedKinds[code]);
+    }
+    expect(describeApiError(fakeApiError("NEW_UNKNOWN_CODE", 500)).kind).toBe("server");
   });
 });
 

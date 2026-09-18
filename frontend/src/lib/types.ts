@@ -87,6 +87,12 @@ export interface PendingActionInfo {
 export interface ErrorEvent {
   message: string
   ts: number
+  /** 后端统一失败协议字段；旧 SSE 客户端只读取 message/ts。 */
+  code?: string
+  retryable?: boolean
+  handoff_available?: boolean
+  trace_id?: string
+  source?: string
 }
 
 // ========================================

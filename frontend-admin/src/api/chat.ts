@@ -2,6 +2,7 @@
  * Chat 业务 API：流式对话 + 中止
  */
 import { request, requestSilent } from "@/lib/fetcher";
+import { ApiError } from "@/api/client";
 import { bearerHeaders, handleAuthFailure, tryRefreshOnce } from "@/lib/auth";
 import { parseSSEStream } from "@/lib/sse-parser";
 import type { SSEStreamEvent as TypedSSEStreamEvent } from "@/lib/types";
@@ -50,18 +51,27 @@ export async function* streamChat(
       res = await doFetch();
     } else {
       handleAuthFailure();
-      throw new Error("登录已过期");
+      throw new ApiError("登录已过期", 401, undefined, "PERMISSION_DENIED");
     }
   }
 
   if (!res.ok || !res.body) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
+    const protocol = err && typeof err === "object" && typeof err.code === "string"
+      ? err
+      : err?.detail && typeof err.detail === "object" ? err.detail : undefined;
     const detail = err?.detail;
     const message =
+      protocol?.message ||
       (typeof detail === "string" && detail) ||
       (typeof detail === "object" && detail?.error) ||
       `HTTP ${res.status}`;
-    throw new Error(String(message));
+    throw new ApiError(
+      String(message),
+      res.status,
+      detail,
+      typeof protocol?.code === "string" ? protocol.code : undefined,
+    );
   }
 
   yield* parseSSEStream(res.body, signal) as AsyncGenerator<SSEStreamEvent>;

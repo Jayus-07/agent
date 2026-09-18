@@ -11,6 +11,8 @@ class DataExportSkill(BaseSkill):
     params_schema = {
         "question": {"type": "string", "required": True, "description": "自然语言查询问题（如 '上周各渠道销售额和订单数'）"},
         "filename": {"type": "string", "required": False, "description": "导出文件名（不含扩展名）"},
+        "idempotency_key": {"type": "string", "required": False,
+                            "description": "客户端幂等键；重复提交同键不会重复导出"},
     }
     examples = [{"question": "上周各渠道销售额和订单数", "filename": "weekly_sales"}]
 

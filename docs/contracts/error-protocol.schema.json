@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-platform.local/contracts/error-protocol.schema.json",
+  "title": "Agent Platform Error Envelope",
+  "description": "跨 HTTP、SSE、Tool、Skill、Celery 边界的统一失败封套。",
+  "type": "object",
+  "required": [
+    "code",
+    "retryable",
+    "handoff_available",
+    "message",
+    "trace_id"
+  ],
+  "properties": {
+    "code": {
+      "type": "string",
+      "enum": [
+        "INVALID_PARAM",
+        "PERMISSION_DENIED",
+        "NOT_FOUND",
+        "TIMEOUT",
+        "UPSTREAM_UNAVAILABLE",
+        "RATE_LIMITED",
+        "IDEMPOTENCY_CONFLICT",
+        "BUDGET_EXCEEDED",
+        "INTERNAL_ERROR"
+      ]
+    },
+    "retryable": { "type": "boolean" },
+    "handoff_available": { "type": "boolean" },
+    "message": { "type": "string", "minLength": 1 },
+    "trace_id": { "type": "string" },
+    "source": { "type": "string" },
+    "details": { "type": "object" },
+    "ts": { "type": "number" }
+  },
+  "additionalProperties": true
+}

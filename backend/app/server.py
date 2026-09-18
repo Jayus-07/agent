@@ -6,6 +6,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse  # 2026-08-11 /ops 看板路由需要
 
@@ -14,6 +15,7 @@ from backend.app.exceptions import (
     http_exception_handler,
     global_exception_handler,
     memory_db_unavailable_handler,
+    request_validation_exception_handler,
 )
 from backend.app.api.middleware.access_log import access_log_middleware
 from backend.app.api.middleware.concurrency import concurrency_limit_middleware
@@ -76,6 +78,7 @@ app.add_middleware(
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from backend.memory.database import MemoryDatabaseUnavailable
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
 # 比 Exception 兜底更具体：Starlette 按 MRO 查找，配置缺失会命中这个而非 500
 app.add_exception_handler(MemoryDatabaseUnavailable, memory_db_unavailable_handler)
 app.add_exception_handler(Exception, global_exception_handler)

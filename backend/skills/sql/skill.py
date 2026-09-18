@@ -14,7 +14,14 @@ import asyncio
 import time
 
 from backend.shared.logger import logger
+from backend.shared.error_protocol import error_envelope_from_exception
 from backend.skills.base import BaseSkill
+from backend.skills.validation import (
+    ValidationFailure,
+    validate_invocation,
+    validate_output,
+    validate_semantics,
+)
 from backend.skills.sql.models import SQLResult
 from backend.sql.sql_agent import get_sql_agent
 from backend.sql.sql_result import SQLResult as AgentSQLResult
@@ -116,6 +123,29 @@ class SQLSkill(BaseSkill):
         step_results[step_id] = sr
 
         agent = get_sql_agent()
+        try:
+            # SQLSkill 为保留 SQLResult 协议重写了 execute，不能绕过
+            # BaseSkill 的前置参数闸门；问题文本由请求状态提供。
+            validate_invocation(
+                step_capability or "sql.query",
+                {"question": question},
+                self._validate_params,
+            )
+        except ValidationFailure as exc:
+            reason = (exc.envelope.details or {}).get("reason", "")
+            error = (
+                f"参数校验失败: {reason}"
+                if exc.layer == "parameter" and reason
+                else exc.envelope.message
+            )
+            protocol = error_envelope_from_exception(exc, source="skill").to_dict()
+            sr.update(
+                status="failed", output=None, error=error,
+                error_type=protocol["code"].lower(),
+                error_protocol=protocol, finished_at=time.time(),
+            )
+            return {"step_results": {step_id: sr}}
+
         last_result: AgentSQLResult | None = None
 
         for attempt in range(max_retries + 1):
@@ -129,8 +159,15 @@ class SQLSkill(BaseSkill):
 
                 # 成功 / 无数据 → 转换为 Pydantic SQLResult
                 if result.status in ("success", "no_data"):
+                    output = _agent_result_to_pydantic(result).model_dump()
+                    validate_output(
+                        step_capability or "sql.query", output, "structured"
+                    )
+                    validate_semantics(
+                        step_capability or "sql.query", {"question": question}, output
+                    )
                     sr["status"] = "success"
-                    sr["output"] = _agent_result_to_pydantic(result).model_dump()
+                    sr["output"] = output
                     sr["row_count"] = result.row_count
                     sr["is_empty"] = result.is_empty
                     sr["error"] = None

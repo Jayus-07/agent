@@ -14,7 +14,14 @@ from __future__ import annotations
 import time
 
 from backend.shared.logger import logger
+from backend.shared.error_protocol import error_envelope_from_exception
 from backend.skills.base import BaseSkill
+from backend.skills.validation import (
+    ValidationFailure,
+    validate_invocation,
+    validate_output,
+    validate_semantics,
+)
 from backend.skills.sql.models import SQLResult
 from backend.skills.business_analysis.models import BusinessInsight
 from backend.skills.business_analysis.analyzer import BusinessAnalyzer
@@ -90,6 +97,29 @@ class BusinessAnalysisSkill(BaseSkill):
         )
         step_results[step_id] = sr
 
+        try:
+            # 本 Skill 为读取 previous_outputs 重写 execute，仍必须执行
+            # 声明式参数/权限闸门；sql_result 是 auto 参数，由运行时注入。
+            validate_invocation(
+                step_capability or "business.analyze",
+                dict(plan_node.get("params") or {}),
+                self._validate_params,
+            )
+        except ValidationFailure as exc:
+            reason = (exc.envelope.details or {}).get("reason", "")
+            error = (
+                f"参数校验失败: {reason}"
+                if exc.layer == "parameter" and reason
+                else exc.envelope.message
+            )
+            protocol = error_envelope_from_exception(exc, source="skill").to_dict()
+            sr.update(
+                status="failed", output=None, error=error,
+                error_type=protocol["code"].lower(),
+                error_protocol=protocol, finished_at=time.time(),
+            )
+            return {"step_results": {step_id: sr}}
+
         # 1. 从前置步骤获取 SQLResult
         previous_outputs: dict = state.get("previous_outputs", {})
         if not previous_outputs:
@@ -139,13 +169,30 @@ class BusinessAnalysisSkill(BaseSkill):
         analyzer = BusinessAnalyzer()
         try:
             insight = analyzer.analyze(sql_result, rag_knowledge)
+            output = insight.model_dump()
+            validate_output(
+                step_capability or "business.analyze", output, "structured"
+            )
+            validate_semantics(
+                step_capability or "business.analyze",
+                dict(plan_node.get("params") or {}),
+                output,
+            )
             sr["status"] = "success"
-            sr["output"] = insight.model_dump()
+            sr["output"] = output
             sr["finished_at"] = time.time()
             logger.info(
                 f"[BusinessAnalysis] step={step_id} 完成: "
                 f"summary={insight.summary[:80]}..."
             )
+        except ValidationFailure as exc:
+            protocol = error_envelope_from_exception(exc, source="skill").to_dict()
+            sr["status"] = "failed"
+            sr["error"] = protocol["message"]
+            sr["error_type"] = protocol["code"].lower()
+            sr["error_protocol"] = protocol
+            sr["finished_at"] = time.time()
+            logger.error("[BusinessAnalysis] 输出校验失败: %s", exc.layer)
         except Exception as e:
             sr["status"] = "failed"
             sr["error"] = f"业务分析失败: {e}"

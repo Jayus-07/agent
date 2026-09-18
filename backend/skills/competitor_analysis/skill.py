@@ -38,6 +38,8 @@ class CompetitorAnalysisSkill(BaseSkill):
         "name": {"type": "string", "required": False, "description": "竞品名称（add 时可选）"},
         "question": {"type": "string", "required": False, "description": "用户原始问题（其中的 URL 会被自动提取）"},
         "enabled": {"type": "boolean", "required": False, "description": "toggle 时是否启用（默认 True）"},
+        "idempotency_key": {"type": "string", "required": False,
+                            "description": "客户端幂等键；重复提交同键不会重复抓取或修改"},
     }
     examples = [
         {"action": "analyze", "url": "https://item.jd.com/100012043978.html", "question": "帮我分析这个竞品的价格"},

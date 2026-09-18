@@ -49,6 +49,31 @@ export interface ErrorDescriptor {
   retriable: boolean;
 }
 
+/** 后端统一失败协议的九个稳定错误码。 */
+export const PROTOCOL_ERROR_CODES = {
+  INVALID_PARAM: "INVALID_PARAM",
+  PERMISSION_DENIED: "PERMISSION_DENIED",
+  NOT_FOUND: "NOT_FOUND",
+  TIMEOUT: "TIMEOUT",
+  UPSTREAM_UNAVAILABLE: "UPSTREAM_UNAVAILABLE",
+  RATE_LIMITED: "RATE_LIMITED",
+  IDEMPOTENCY_CONFLICT: "IDEMPOTENCY_CONFLICT",
+  BUDGET_EXCEEDED: "BUDGET_EXCEEDED",
+  INTERNAL_ERROR: "INTERNAL_ERROR",
+} as const;
+
+const PROTOCOL_ERRORS: Record<string, ErrorDescriptor> = {
+  INVALID_PARAM: { message: "请求参数有误，请检查后重试", kind: "validation", retriable: false },
+  PERMISSION_DENIED: { message: "没有权限执行该操作，请联系管理员", kind: "permission", retriable: false },
+  NOT_FOUND: { message: "请求的资源不存在或已被删除", kind: "not_found", retriable: false },
+  TIMEOUT: { message: "操作超时，请稍后重试", kind: "timeout", retriable: true },
+  UPSTREAM_UNAVAILABLE: { message: "依赖服务暂时不可用，请稍后重试", kind: "server", retriable: true },
+  RATE_LIMITED: { message: "请求过于频繁，请稍后重试", kind: "rate_limit", retriable: true },
+  IDEMPOTENCY_CONFLICT: { message: "请求已处理或正在处理中", kind: "conflict", retriable: false },
+  BUDGET_EXCEEDED: { message: "已达到本次请求预算上限", kind: "rate_limit", retriable: false },
+  INTERNAL_ERROR: { message: "服务器内部错误，请稍后重试", kind: "server", retriable: true },
+};
+
 // ── ① 域错误码登记表（扩展点：后端定义真实码后逐行登记） ────────
 
 /**
@@ -151,6 +176,11 @@ export function isClientErrorCode(value: unknown): value is ClientErrorCode {
   return typeof value === "string" && Object.prototype.hasOwnProperty.call(CLIENT_ERRORS, value);
 }
 
+/** 是否为后端统一失败协议的错误码。 */
+export function isProtocolErrorCode(value: unknown): value is string {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(PROTOCOL_ERRORS, value);
+}
+
 /** 是否为超时（复用 client.ts 的终止原因，避免字符串重复定义） */
 export function isTimeoutError(err: unknown): boolean {
   return err instanceof Error && err.message === TIMEOUT_REASON;
@@ -205,6 +235,9 @@ export function describeApiError(err: unknown): ResolvedError {
   }
   if (isClientErrorCode(code)) {
     return { ...CLIENT_ERRORS[code], code, status, cause: err };
+  }
+  if (isProtocolErrorCode(code)) {
+    return { ...PROTOCOL_ERRORS[code], code, status, cause: err };
   }
 
   // ② 客户端自身异常（顺序：超时 → 取消 → 网络不可达）

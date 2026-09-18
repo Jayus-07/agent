@@ -17,6 +17,8 @@ class DataCollectionSkill(BaseSkill):
         "fetcher_type": {"type": "string", "required": False, "enum": ["static", "http"],
                          "description": "数据源类型（默认 static）"},
         "dedup_keys": {"type": "string", "required": False, "description": "去重键字段，逗号分隔（如 SKU,仓库）"},
+        "idempotency_key": {"type": "string", "required": False,
+                            "description": "客户端幂等键；重复提交同键不会重复写入"},
     }
     examples = [{"source": "static://datasets/products.json", "target_table": "stg_products", "fetcher_type": "static"}]
 

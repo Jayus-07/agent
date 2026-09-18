@@ -36,6 +36,8 @@ class EmailSkill(BaseSkill):
         "subject": {"type": "string", "required": False, "description": "邮件主题（send 必填）"},
         "body": {"type": "string", "required": False, "description": "邮件正文（支持 Markdown/HTML）（send 必填）"},
         "cc": {"type": "string", "required": False, "description": "抄送邮箱"},
+        "idempotency_key": {"type": "string", "required": False,
+                            "description": "客户端幂等键；重复提交同键不会重复发信"},
         "query": {"type": "string", "required": False, "description": "搜索关键词（search 必填）"},
         "folder": {"type": "string", "required": False, "description": "文件夹 inbox/sent/trash/spam（search 可选）"},
         "message_id": {"type": "string", "required": False, "description": "邮件 ID，形如 msg_xxx（read 必填）"},

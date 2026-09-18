@@ -2,6 +2,7 @@
  * Chat 业务 API：流式对话 + 中止
  */
 import { request, requestSilent } from "@/lib/fetcher";
+import { ApiError } from "@/api/client";
 import { bearerHeaders, handleAuthFailure, tryRefreshOnce } from "@/lib/auth";
 import { parseSSEStream } from "@/lib/sse-parser";
 import type { SSEStreamEvent as TypedSSEStreamEvent } from "@/lib/types";
@@ -30,10 +31,8 @@ export type SSEStreamEvent = TypedSSEStreamEvent;
  * （401/403/429/5xx → kind + 行动指引）——裸 Error 会丢失整条语义链，
  * 只剩「操作失败」兜底文案。
  */
-function httpError(message: string, status?: number): Error {
-  const e = new Error(message);
-  if (status !== undefined) Object.assign(e, { status });
-  return e;
+function httpError(message: string, status?: number, code?: string): ApiError {
+  return new ApiError(message, status ?? 0, undefined, code);
 }
 
 /**
@@ -65,18 +64,26 @@ export async function* streamChat(
       res = await doFetch();
     } else {
       handleAuthFailure();
-      throw httpError("登录已过期", 401);
+      throw httpError("登录已过期", 401, "PERMISSION_DENIED");
     }
   }
 
   if (!res.ok || !res.body) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
+    const protocol = err && typeof err === "object" && typeof err.code === "string"
+      ? err
+      : err?.detail && typeof err.detail === "object" ? err.detail : undefined;
     const detail = err?.detail;
     const message =
+      protocol?.message ||
       (typeof detail === "string" && detail) ||
       (typeof detail === "object" && detail?.error) ||
       `HTTP ${res.status}`;
-    throw httpError(String(message), res.status);
+    throw httpError(
+      String(message),
+      res.status,
+      typeof protocol?.code === "string" ? protocol.code : undefined,
+    );
   }
 
   yield* parseSSEStream(res.body, signal) as AsyncGenerator<SSEStreamEvent>;

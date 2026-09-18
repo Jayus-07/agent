@@ -104,9 +104,15 @@ def _register_task():
                 hostname=getattr(self.request, "hostname", "") or socket.gethostname())
         except SoftTimeLimitExceeded:
             # 超时：自动 FAILED（验收要求），checkpoint 保留供人工 resume
-            _fail(task_id, f"任务超时（超过 soft time limit）", TaskStatus.FAILED,
+            timeout_exc = SoftTimeLimitExceeded("任务执行超时")
+            _fail(task_id, "任务超时（超过 soft time limit）", TaskStatus.FAILED,
                   "执行超时")
-            return {"status": "FAILED", "reason": "timeout"}
+            from backend.shared.error_protocol import celery_error_result
+            return celery_error_result(
+                timeout_exc,
+                source="celery.agent",
+                reason="timeout",
+            )
         except Exception as e:
             retries_left = CELERY_MAX_RETRIES - self.request.retries
             logger.error("[AgentTask] %s failed (剩余重试 %d): %s",
