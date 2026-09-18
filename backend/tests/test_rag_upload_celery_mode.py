@@ -115,6 +115,9 @@ class TestSettleIndexResult:
             exc=RuntimeError("boom"))
 
         assert emitted[0][0] == "error"
+        assert emitted[0][1] == "服务器内部错误，请稍后重试。"
+        assert emitted[0][2]["error_protocol"]["code"] == "INTERNAL_ERROR"
+        assert "boom" not in str(emitted[0])
         assert cleaned == ["/docs/x.pdf"]
 
     def test_done_terminal_invalidates_cache(self, monkeypatch):

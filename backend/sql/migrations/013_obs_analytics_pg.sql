@@ -36,7 +36,10 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     id                BIGSERIAL PRIMARY KEY,
     ts                TEXT NOT NULL,      -- ISO8601 UTC（与 trace ts 同格式，支持字典序过滤）
     trace_id          TEXT NOT NULL DEFAULT '',
+    request_id        TEXT NOT NULL DEFAULT '',
     session_id        TEXT NOT NULL DEFAULT '',
+    user_id           TEXT NOT NULL DEFAULT '',
+    tenant_id         TEXT NOT NULL DEFAULT '',
     component         TEXT NOT NULL DEFAULT 'llm',  -- llm | embedding | rerank
     model             TEXT NOT NULL DEFAULT '',
     provider          TEXT NOT NULL DEFAULT '',
@@ -48,9 +51,11 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     cost_usd          DOUBLE PRECISION NOT NULL DEFAULT 0,
     duration_ms       DOUBLE PRECISION NOT NULL DEFAULT 0,
     finish_reason     TEXT NOT NULL DEFAULT '',
+    decision          TEXT NOT NULL DEFAULT 'primary',
     created_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_llm_usage_ts        ON llm_usage(ts);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_model     ON llm_usage(model, ts);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_trace     ON llm_usage(trace_id);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_tenant_user_ts ON llm_usage(tenant_id, user_id, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_component ON llm_usage(component, ts);

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -19,6 +20,7 @@ from backend.app.api.identity import resolve_identity
 from backend.config.tasks import TASKS_LIST_DEFAULT_LIMIT
 from backend.models.task import TaskStatus
 from backend.shared.logger import logger
+from backend.shared.error_protocol import error_envelope_from_exception
 from backend.services import task_service
 from backend.tasks import task_manager
 
@@ -48,7 +50,17 @@ def _identity(request: Request, body_user_id: str | None = None):
     return ident
 
 
-def _tenant(request: Request, explicit: str = "") -> str:
+def _task_error_payload(exc: BaseException) -> dict:
+    """任务 SSE 失败帧：统一协议并保留旧客户端使用的时间戳字段。"""
+    payload = error_envelope_from_exception(exc, source="sse").to_dict()
+    payload["ts"] = time.time()
+    return payload
+
+
+def _tenant(request: Request, explicit: str = "", identity=None) -> str:
+    """解析任务租户；header/strict 模式下忽略请求体租户。"""
+    if identity is not None and identity.source == "header":
+        return identity.tenant_id or "default"
     return explicit or request.headers.get("X-Tenant-Id", "") or "default"
 
 
@@ -67,17 +79,44 @@ def _get_owned_task(task_id: str, user_id: str, tenant_id: str):
 @router.post("")
 async def create_task(body: TaskCreateRequest, request: Request):
     ident = _identity(request, body.user_id or None)
-    record = task_service.create_task(
-        ident.user_id, body.query, tenant_id=_tenant(request, body.tenant_id))
+    tenant_id = _tenant(request, body.tenant_id, identity=ident)
+
+    def _create_and_enqueue() -> dict:
+        record = task_service.create_task(
+            ident.user_id, body.query, tenant_id=tenant_id)
+        try:
+            task_manager.enqueue_task(record)
+        except Exception:
+            logger.error("[TasksAPI] enqueue failed: %s", record.id,
+                         exc_info=True)
+            task_service.update_status(
+                record.id,
+                __import__("backend.models.task", fromlist=["TaskStatus"]).TaskStatus.FAILED,
+                error_message="任务队列不可用（broker 连接失败）",
+            )
+            raise
+        return {"task_id": record.id, "status": "PENDING"}
+
+    # 只有网关注入的可信租户才能启用全局幂等；旧 legacy/body 身份路径
+    # 保持兼容，但不会把 default 当作可信租户放行到幂等执行器。
+    if ident.tenant_id:
+        from backend.shared.idempotency import run_idempotent_operation_for_identity
+
+        result = run_idempotent_operation_for_identity(
+            "tasks.create",
+            {"query": body.query, "tenant_id": tenant_id},
+            _create_and_enqueue,
+            tenant_id=ident.tenant_id,
+            actor_id=ident.user_id,
+            client_key=(request.headers.get("Idempotency-Key") or "").strip(),
+        )
+        return result
+
     try:
-        task_manager.enqueue_task(record)
+        return _create_and_enqueue()
     except Exception as e:
-        logger.error("[TasksAPI] enqueue failed: %s (%s)", record.id, e)
-        task_service.update_status(record.id, __import__(
-            "backend.models.task", fromlist=["TaskStatus"]).TaskStatus.FAILED,
-            error_message="任务队列不可用（broker 连接失败）")
+        logger.error("[TasksAPI] enqueue failed: %s", e)
         raise HTTPException(status_code=503, detail="任务队列暂不可用，请稍后重试")
-    return {"task_id": record.id, "status": "PENDING"}
 
 
 # ═══════════════════════════════════════════════════
@@ -88,7 +127,8 @@ async def create_task(body: TaskCreateRequest, request: Request):
 async def get_task_status(task_id: str, request: Request,
                           user_id: str = Query("", description="legacy 身份")):
     ident = _identity(request, user_id or None)
-    record = _get_owned_task(task_id, ident.user_id, _tenant(request))
+    record = _get_owned_task(task_id, ident.user_id,
+                             _tenant(request, identity=ident))
     return record.to_public_dict()
 
 
@@ -103,7 +143,8 @@ async def list_tasks(request: Request,
                      limit: int = Query(TASKS_LIST_DEFAULT_LIMIT, ge=1, le=100)):
     ident = _identity(request, user_id or None)
     records = task_service.list_tasks_for_user(
-        ident.user_id, tenant_id=_tenant(request), status=status, limit=limit)
+        ident.user_id, tenant_id=_tenant(request, identity=ident),
+        status=status, limit=limit)
     return {"tasks": [r.to_public_dict() for r in records], "count": len(records)}
 
 
@@ -114,7 +155,8 @@ async def list_tasks(request: Request,
 @router.post("/{task_id}/cancel")
 async def cancel_task(task_id: str, request: Request):
     ident = _identity(request)
-    record = _get_owned_task(task_id, ident.user_id, _tenant(request))
+    record = _get_owned_task(task_id, ident.user_id,
+                             _tenant(request, identity=ident))
     if record.status.is_terminal():
         return {"task_id": task_id, "status": record.status.value,
                 "message": "任务已结束，无需取消"}
@@ -131,7 +173,8 @@ async def cancel_task(task_id: str, request: Request):
 @router.post("/{task_id}/pause")
 async def pause_task(task_id: str, request: Request):
     ident = _identity(request)
-    record = _get_owned_task(task_id, ident.user_id, _tenant(request))
+    record = _get_owned_task(task_id, ident.user_id,
+                             _tenant(request, identity=ident))
     if record.status != "RUNNING" and record.status != TaskStatusRef.PENDING:
         raise HTTPException(status_code=409,
                             detail=f"仅 RUNNING/PENDING 任务可暂停（当前 {record.status.value}）")
@@ -148,7 +191,8 @@ async def pause_task(task_id: str, request: Request):
 @router.post("/{task_id}/resume")
 async def resume_task(task_id: str, body: TaskResumeRequest, request: Request):
     ident = _identity(request)
-    _get_owned_task(task_id, ident.user_id, _tenant(request))
+    _get_owned_task(task_id, ident.user_id,
+                    _tenant(request, identity=ident))
     try:
         record = task_manager.resume_task(task_id, body.user_input or "")
     except LookupError:
@@ -170,7 +214,8 @@ _SSE_TERMINAL_EVENTS = {"completed", "failed", "cancelled"}
 async def stream_task_events(task_id: str, request: Request,
                              user_id: str = Query("", description="legacy 身份")):
     ident = _identity(request, user_id or None)
-    record = _get_owned_task(task_id, ident.user_id, _tenant(request))
+    record = _get_owned_task(task_id, ident.user_id,
+                             _tenant(request, identity=ident))
 
     async def event_stream():
         from starlette.concurrency import run_in_threadpool
@@ -184,7 +229,12 @@ async def stream_task_events(task_id: str, request: Request,
 
         pubsub = task_manager.subscribe_events(task_id)
         if pubsub is None:
-            yield _sse_frame("error", {"message": "事件通道（Redis）不可用"})
+            yield _sse_frame(
+                "error",
+                _task_error_payload(
+                    ConnectionError("task event channel unavailable")
+                ),
+            )
             return
 
         try:
@@ -208,7 +258,10 @@ async def stream_task_events(task_id: str, request: Request,
             raise
         except Exception as e:  # noqa: BLE001 — SSE 链路异常不能 500，降级为 error 帧
             logger.debug("[TasksAPI] stream aborted: %s", e, exc_info=True)
-            yield _sse_frame("error", {"message": str(e)})
+            yield _sse_frame(
+                "error",
+                _task_error_payload(e),
+            )
         finally:
             try:
                 pubsub.close()
