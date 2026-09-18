@@ -348,7 +348,7 @@ Commit: `test(audit): freeze reproducible 100-doc rag baseline`
 - `evaluate_phase0(evidence_root: Path) -> PhaseGateResult`
 - 出口门只接受 0.1—0.6 六项机器可读证据均通过；签字类证据必须保留 owner/date/ref。
 
-- [ ] **Step 1: 写失败测试，缺任一证据均不得通过**
+- [x] **Step 1: 写失败测试，缺任一证据均不得通过**
 
 ```python
 def test_phase0_gate_lists_missing_evidence(tmp_path):
@@ -359,25 +359,25 @@ def test_phase0_gate_lists_missing_evidence(tmp_path):
     }
 ```
 
-- [ ] **Step 2: 运行测试确认 RED，随后实现出口门**
+- [x] **Step 2: 运行测试确认 RED，随后实现出口门**
 
 Run: `D:/Python/python.exe -m pytest backend/tests/audit/test_rag20k_phase_gate.py -q --no-cov`
 
-- [ ] **Step 3: 写风险登记册与证据索引**
+- [x] **Step 3: 写风险登记册与证据索引**
 
 每个 P0/P1 风险必须有 `owner`、`due_date`、`trigger`、`mitigation`、`rollback`、`evidence_ref` 和 `status`。`README.md` 列出一条命令重建/校验每项证据；外部材料只链接，不复制敏感正文。
 
-- [ ] **Step 4: 执行阶段 0 出口检查**
+- [x] **Step 4: 执行阶段 0 出口检查**
 
 Run: `D:/Python/python.exe backend/scripts/check_rag20k_phase0.py docs/evidence/rag20k/phase0`
 
 Expected: 证据未齐时退出 2 并列出缺口；schema 错误退出 1；全部通过退出 0。
 
-- [ ] **Step 5: 更新审计报告进度，不虚报外部验收**
+- [x] **Step 5: 更新审计报告进度，不虚报外部验收**
 
 在报告顶部增加“实施进度”表，分别记录 0.1—0.6 的状态、证据路径和阻断项；只有出口命令退出 0 才勾选阶段 0 对应验收框。当前外部配额、20k 真实清单、500 条双审标注未提供时保持未完成。
 
-- [ ] **Step 6: 运行阶段 0 完整验证**
+- [x] **Step 6: 运行阶段 0 完整验证**
 
 Run:
 
