@@ -424,3 +424,6 @@ scripts/_diag_*.py
 
 # code-review-graph 索引库（204MB WAL 反复 churn，暂不入库）
 .code-review-graph/
+
+# Codex 子任务实施使用的隔离 worktree，不进入项目提交
+.worktrees/
