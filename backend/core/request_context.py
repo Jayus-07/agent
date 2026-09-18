@@ -31,8 +31,19 @@ _current_session_id: ContextVar[str] = ContextVar("session_id", default="multi-a
 # 当前请求用户身份：RequestContext.bind() 时设置，工具层读它做权限校验/审计归属。
 # 与 proxy 的 _user_id_var（限流用）分离：工具层不依赖 infra 细节。
 _current_user_id: ContextVar[str] = ContextVar("tool_user_id", default="")
+# 当前请求租户身份：只接受入口解析后的可信值；空值表示未声明，
+# 下游不得将其静默替换成共享租户。
+_current_tenant_id: ContextVar[str] = ContextVar("tool_tenant_id", default="")
+# 客户端幂等键（Idempotency-Key）；未提供时由业务工具从请求体指纹派生。
+_current_idempotency_key: ContextVar[str] = ContextVar(
+    "tool_idempotency_key", default=""
+)
 # 当前请求用户部门：检索侧授权（subject_type=employee 时决定可见知识库范围）
 _current_department: ContextVar[str] = ContextVar("tool_department", default="")
+# 当前请求持有的文档级权限；None 表示可信权限未声明，受限文档拒绝
+_current_permissions: ContextVar[tuple[str, ...] | None] = ContextVar(
+    "tool_permissions", default=None
+)
 
 
 def set_session_id(sid: str) -> None:
@@ -52,6 +63,24 @@ def get_tool_user_id() -> str:
     return _current_user_id.get()
 
 
+def set_tool_tenant_id(tenant_id: str) -> None:
+    _current_tenant_id.set(tenant_id or "")
+
+
+def get_tool_tenant_id() -> str:
+    """当前请求租户 ID；无可信上下文返回空串。"""
+    return _current_tenant_id.get()
+
+
+def set_tool_idempotency_key(idempotency_key: str) -> None:
+    _current_idempotency_key.set(idempotency_key or "")
+
+
+def get_tool_idempotency_key() -> str:
+    """当前请求客户端幂等键；无上下文返回空串。"""
+    return _current_idempotency_key.get()
+
+
 def set_tool_department(department: str) -> None:
     _current_department.set(department or "")
 
@@ -61,12 +90,25 @@ def get_tool_department() -> str:
     return _current_department.get()
 
 
+def set_tool_permissions(permissions: tuple[str, ...] | None) -> None:
+    _current_permissions.set(
+        None if permissions is None else tuple(sorted(set(permissions)))
+    )
+
+
+def get_tool_permissions() -> tuple[str, ...] | None:
+    """当前请求持有的文档级权限；无可信上下文时返回 None。"""
+    return _current_permissions.get()
+
+
 @dataclass
 class RequestContext:
     """一次用户请求的权威执行上下文（身份/会话/检索授权字段唯一定义点）。"""
 
     session_id: str = "default"
     user_id: str = "default"
+    tenant_id: str = ""
+    idempotency_key: str = ""
     kb_id: str = "default"
     # 员工部门（检索侧授权用）：请求体/网关注头带入；空 = 未声明，
     # RAG 工具按 fail-safe 以 customer 主体检索（对客最严格集合）
@@ -100,16 +142,29 @@ class RequestContext:
         from backend.infra.llm.proxy import (
             set_current_user_id, set_request_model, set_stream_sink,
         )
+        from backend.infra.llm.budget import (
+            bind_request_budget, clear_request_budget,
+        )
         from backend.observability.tracer import trace_collector
         from backend.shared.logger import set_log_context
         from backend.rag.context import attach_identity
 
         if self.trace is not None:
             trace_collector.bind(self.trace)
+            trace_id = str(getattr(self.trace, "id", "") or "")
+            if trace_id:
+                bind_request_budget(trace_id)
+            else:
+                clear_request_budget()
+        elif self.bind_sink:
+            clear_request_budget()
         set_session_id(self.session_id)
         set_current_user_id(self.user_id)
         set_tool_user_id(self.user_id)
+        set_tool_tenant_id(self.tenant_id)
+        set_tool_idempotency_key(self.idempotency_key)
         set_tool_department(self.department)
+        set_tool_permissions(self.permissions)
         set_log_context(user_id=self.user_id)
         set_request_model(self.model)
         if self.bind_sink:
@@ -121,8 +176,11 @@ class RequestContext:
         return {
             "session_id": self.session_id,
             "user_id": self.user_id,
+            "tenant_id": self.tenant_id,
+            "idempotency_key": self.idempotency_key,
             "kb_id": self.kb_id,
             "department": self.department,
             "subject_type": self.subject_type,
+            "permissions": self.permissions,
             "model": self.model,
         }

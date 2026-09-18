@@ -3,19 +3,19 @@ from langchain_core.tools import tool
 from backend.shared.logger import logger
 
 @tool
-def export_csv_tool(question: str, filename: str = "") -> str:
+def export_csv_tool(question: str, filename: str = "",
+                    idempotency_key: str = "") -> str:
     """
     查询数据库并导出结果为 CSV 文件（UTF-8 BOM，Excel 兼容打开）。
     question: 自然语言查询问题（如 "上周各渠道销售额"）
     filename: 导出文件名（不含扩展名），默认自动生成
     返回: 导出文件路径和行数
     """
-    import csv
-    from pathlib import Path
-    from datetime import datetime
-    from backend.config import STORAGE_DOCS_DIR
     from backend.security.tool_approval import ensure_approved
-    from backend.tools.session import _get_session_id, get_tool_user_id
+    from backend.tools.session import (
+        _get_session_id, get_tool_idempotency_key, get_tool_tenant_id,
+        get_tool_user_id,
+    )
 
     # 写操作审批门：指纹只用 question（filename 自动生成，不含时间戳则稳定，
     # 含时间戳的默认名在批准后才生成，不参与指纹）
@@ -27,7 +27,31 @@ def export_csv_tool(question: str, filename: str = "") -> str:
     if pending is not None:
         return pending
 
+    payload = {"question": question, "filename": filename}
+    if get_tool_tenant_id():
+        from backend.shared.idempotency import run_idempotent_operation
+
+        result = run_idempotent_operation(
+            "data.export",
+            payload,
+            lambda: {"message": _export_csv_after_approval(question, filename)},
+            client_key=idempotency_key or get_tool_idempotency_key(),
+        )
+        return str(result["message"])
+
+    # 兼容尚未经网关注入租户的旧直调/本地开发路径；有可信租户时不降级。
+    return _export_csv_after_approval(question, filename)
+
+
+def _export_csv_after_approval(question: str, filename: str = "") -> str:
+    """审批通过后的导出执行；全局幂等 claim 在调用此函数之前完成。"""
+    import csv
+    from pathlib import Path
+    from datetime import datetime
+    from backend.config import STORAGE_DOCS_DIR
+
     # 委托 SQL agent 生成并执行 SQL
+    from backend.tools.session import get_tool_user_id
     agent = _get_sql_agent()
     result = agent.ask(question, current_user_id=get_tool_user_id() or None)
 

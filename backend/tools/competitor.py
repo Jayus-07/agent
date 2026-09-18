@@ -42,8 +42,37 @@ def _format_watchlist() -> str:
     return "\n".join(lines)
 
 
+def _run_idempotent_competitor_operation(
+    operation: str,
+    payload: dict,
+    callback,
+    *,
+    client_key: str = "",
+) -> str:
+    """对会写入快照或监控状态的竞品动作加全局幂等边界。"""
+    from backend.tools.session import (
+        get_tool_idempotency_key,
+        get_tool_tenant_id,
+    )
+
+    if not get_tool_tenant_id():
+        # 兼容尚未经网关注入租户的旧直调/本地开发路径；有可信租户时不降级。
+        return str(callback())
+
+    from backend.shared.idempotency import run_idempotent_operation
+
+    result = run_idempotent_operation(
+        operation,
+        payload,
+        lambda: {"message": callback()},
+        client_key=client_key or get_tool_idempotency_key(),
+    )
+    return str(result["message"])
+
+
 @tool
-def competitor_analyze_tool(url: str = "", name: str = "", question: str = "") -> str:
+def competitor_analyze_tool(url: str = "", name: str = "", question: str = "",
+                            idempotency_key: str = "") -> str:
     """
     竞品分析：抓取竞品商品页/官网页，抽取价格、促销、评价等结构化信息，
     存为快照并与历史对比（变价提醒）。
@@ -58,7 +87,12 @@ def competitor_analyze_tool(url: str = "", name: str = "", question: str = "") -
         return ("请提供竞品页面 URL（如 item.jd.com 商品页、竞品官网产品页），"
                 "或先通过监控列表查看已监控的竞品。")
     try:
-        return analyze_url(target_url, name=name)
+        return _run_idempotent_competitor_operation(
+            "competitor.analyze",
+            {"url": target_url, "name": name},
+            lambda: analyze_url(target_url, name=name),
+            client_key=idempotency_key,
+        )
     except Exception as e:
         # 上抛给 BaseSkill：抓取/抽取失败可重试，吞掉会绕过 Skill 层重试机制
         logger.warning(f"[Tool:competitor-analyze] 失败：{e}")
@@ -66,14 +100,19 @@ def competitor_analyze_tool(url: str = "", name: str = "", question: str = "") -
 
 
 @tool
-def competitor_watch_tool() -> str:
+def competitor_watch_tool(idempotency_key: str = "") -> str:
     """
     竞品巡检：巡检监控列表中的全部竞品，汇报价格变动。
 
     返回: Markdown 格式的巡检报告
     """
     try:
-        return scan_watchlist()
+        return _run_idempotent_competitor_operation(
+            "competitor.watch",
+            {"scope": "enabled_watchlist"},
+            scan_watchlist,
+            client_key=idempotency_key,
+        )
     except Exception as e:
         logger.warning(f"[Tool:competitor-watch] 失败：{e}")
         raise
@@ -100,7 +139,8 @@ def competitor_history_tool(url: str = "", question: str = "") -> str:
 
 @tool
 def competitor_watchlist_tool(action: str = "list", url: str = "",
-                              name: str = "", enabled: bool = True) -> str:
+                              name: str = "", enabled: bool = True,
+                              idempotency_key: str = "") -> str:
     """
     竞品监控列表管理：查看、加入、移除、启用/停用监控项。
     注意：add/remove/toggle 属写操作，首次执行需管理员审批。
@@ -115,55 +155,77 @@ def competitor_watchlist_tool(action: str = "list", url: str = "",
     if action not in ("list", "add", "remove", "toggle"):
         return f"未知 action: {action}（支持 list / add / remove / toggle）"
 
+    if action == "list":
+        return _format_watchlist()
+
     if action in _WRITE_ACTIONS:
         from backend.security.tool_approval import ensure_approved
         from backend.tools.session import get_tool_user_id
         pending = ensure_approved(
             "competitor_watchlist", action,
             user_id=get_tool_user_id(),
-            detail={"url": url, "name": name},
+            detail={"action": action, "url": url, "name": name,
+                    "enabled": enabled},
         )
         if pending is not None:
             return pending
 
     try:
-        if action == "list":
-            return _format_watchlist()
-
-        if action == "add":
-            if not url:
-                return "请提供要监控的竞品 URL。"
-            store = get_store()
-            watch = store.add_watch(
-                name=name or url[:50], url=url, platform=detect_platform(url)
-            )
-            # 立即抓一次，建立基线快照
-            first = analyze_url(url, name=watch["name"])
-            return f"已加入监控: {watch['name']}\n\n{first}"
-
-        if action == "remove":
-            if not url:
-                return "请提供要移除监控的竞品 URL。"
-            store = get_store()
-            removed = store.remove_watch(url)
-            if removed:
-                return f"已从监控列表移除: {url}"
-            return f"监控列表中未找到: {url}"
-
-        # toggle
-        if not url:
-            return "请提供要启用/停用的竞品 URL。"
-        store = get_store()
-        watch = store.toggle_watch(url, enabled=enabled)
-        if not watch:
-            return f"监控列表中未找到: {url}"
-        status = "启用" if watch["enabled"] else "停用"
-        return f"已{status}监控: {watch['name']} ({url})"
+        payload = {
+            "action": action,
+            "url": url,
+            "name": name,
+            "enabled": enabled,
+        }
+        return _run_idempotent_competitor_operation(
+            "competitor.watchlist",
+            payload,
+            lambda: _watchlist_after_approval(action, url, name, enabled),
+            client_key=idempotency_key,
+        )
 
     except Exception as e:
         # 上抛给 BaseSkill：抓取/存储失败可重试，吞掉会绕过 Skill 层重试机制
         logger.warning(f"[Tool:competitor-watchlist] 失败：{e}")
         raise
+
+
+def _watchlist_after_approval(
+    action: str, url: str, name: str, enabled: bool,
+) -> str:
+    """审批通过且幂等 claim 成功后的监控列表写操作。"""
+    if action == "list":
+        return _format_watchlist()
+
+    if action == "add":
+        if not url:
+            return "请提供要监控的竞品 URL。"
+        store = get_store()
+        watch = store.add_watch(
+            name=name or url[:50], url=url, platform=detect_platform(url)
+        )
+        # 立即抓一次，建立基线快照
+        first = analyze_url(url, name=watch["name"])
+        return f"已加入监控: {watch['name']}\n\n{first}"
+
+    if action == "remove":
+        if not url:
+            return "请提供要移除监控的竞品 URL。"
+        store = get_store()
+        removed = store.remove_watch(url)
+        if removed:
+            return f"已从监控列表移除: {url}"
+        return f"监控列表中未找到: {url}"
+
+    # toggle
+    if not url:
+        return "请提供要启用/停用的竞品 URL。"
+    store = get_store()
+    watch = store.toggle_watch(url, enabled=enabled)
+    if not watch:
+        return f"监控列表中未找到: {url}"
+    status = "启用" if watch["enabled"] else "停用"
+    return f"已{status}监控: {watch['name']} ({url})"
 
 
 # ==================== Tool Registry 自动注册 ====================

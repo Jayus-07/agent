@@ -26,6 +26,7 @@ def data_collection_tool(
     groupby_keys: str = "",
     write_mode: str = "append",
     enable_analysis: bool = True,
+    idempotency_key: str = "",
 ) -> str:
     """
     从指定数据源采集数据，经清洗+分析后写入数据库（写操作，首次执行需管理员审批）。
@@ -45,7 +46,11 @@ def data_collection_tool(
     返回: Markdown 格式的采集报告，含统计摘要。
     """
     from backend.security.tool_approval import ensure_approved
-    from backend.tools.session import get_tool_user_id
+    from backend.tools.session import (
+        get_tool_idempotency_key,
+        get_tool_tenant_id,
+        get_tool_user_id,
+    )
 
     # 前置处理
     if not source:
@@ -57,10 +62,55 @@ def data_collection_tool(
         "data_collection", "write_db",
         user_id=get_tool_user_id(),
         detail={"source": source, "target_table": target_table,
-                "write_mode": write_mode},
+                "write_mode": write_mode, "fetcher_type": fetcher_type,
+                "dedup_keys": dedup_keys, "groupby_keys": groupby_keys,
+                "enable_analysis": enable_analysis},
     )
     if pending is not None:
         return pending
+
+    if get_tool_tenant_id():
+        from backend.shared.idempotency import run_idempotent_operation
+
+        payload = {
+            "source": source,
+            "target_table": target_table,
+            "fetcher_type": fetcher_type,
+            "dedup_keys": dedup_keys,
+            "groupby_keys": groupby_keys,
+            "write_mode": write_mode,
+            "enable_analysis": enable_analysis,
+        }
+        result = run_idempotent_operation(
+            "data.collect",
+            payload,
+            lambda: {"message": _collect_after_approval(**payload)},
+            client_key=idempotency_key or get_tool_idempotency_key(),
+        )
+        return str(result["message"])
+
+    # 兼容尚未经网关注入租户的旧直调/本地开发路径；有可信租户时不降级。
+    return _collect_after_approval(
+        source=source,
+        target_table=target_table,
+        fetcher_type=fetcher_type,
+        dedup_keys=dedup_keys,
+        groupby_keys=groupby_keys,
+        write_mode=write_mode,
+        enable_analysis=enable_analysis,
+    )
+
+
+def _collect_after_approval(
+    source: str,
+    target_table: str,
+    fetcher_type: str,
+    dedup_keys: str,
+    groupby_keys: str,
+    write_mode: str,
+    enable_analysis: bool,
+) -> str:
+    """审批通过且幂等 claim 成功后的真实采集写入。"""
 
     # 简写 → 完整路径
     if not source.startswith(("static://", "http://", "https://")):

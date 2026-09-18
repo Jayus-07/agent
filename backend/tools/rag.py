@@ -18,7 +18,11 @@ def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
     """
     logger.info(f"[Tool:search_knowledge] 检索：{question[:80]}... (kb={kb_id})")
     pipeline = _get_rag_pipeline()
-    from backend.tools.session import _get_session_id, get_tool_department
+    from backend.tools.session import (
+        _get_session_id,
+        get_tool_department,
+        get_tool_permissions,
+    )
     sid = _get_session_id()
     # 主体解析：请求带部门 → 员工（按 owner_depts 矩阵授权）；未带部门
     # → fail-safe 按对客处理（混合入口下客户问题可能漏进主图，宁严勿漏）。
@@ -31,8 +35,10 @@ def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
         subject_type, dept = "customer", ""
     else:
         subject_type, dept = "", ""
+    permissions = get_tool_permissions()
     return pipeline.ask(question, session_id=sid, kb_id=kb_id,
-                        subject_type=subject_type, department=dept)
+                        subject_type=subject_type, department=dept,
+                        permissions=permissions)
 
 
 # ==================== Tool Registry 自动注册 ====================

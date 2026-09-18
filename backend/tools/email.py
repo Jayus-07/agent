@@ -26,22 +26,23 @@ def _email_fingerprint(to: str, cc: str, subject: str, body: str) -> str:
 
 
 @tool
-def send_email_tool(to: str, subject: str, body: str, cc: str = "") -> str:
+def send_email_tool(to: str, subject: str, body: str, cc: str = "",
+                    idempotency_key: str = "") -> str:
     """
     发送邮件（写操作，首次执行需管理员审批）。
     to: 收件人邮箱，多个用逗号分隔
     subject: 邮件主题
     body: 邮件正文（支持 Markdown）
     cc: 抄送（可选）
+    idempotency_key: 客户端幂等键（可选）
     """
-    import smtplib
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
     from backend.config import (
         SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, EMAIL_ENGINE,
     )
     from backend.security.tool_approval import ensure_approved
-    from backend.tools.session import get_tool_user_id
+    from backend.tools.session import (
+        get_tool_idempotency_key, get_tool_tenant_id, get_tool_user_id,
+    )
 
     # 2026-09-17 B6 修复：SMTP 凭据检查只对 smtp 引擎生效。原实现无差别
     # 检查，agently 引擎（不依赖 SMTP 凭据）在未配 SMTP 的环境被
@@ -59,6 +60,32 @@ def send_email_tool(to: str, subject: str, body: str, cc: str = "") -> str:
     )
     if pending is not None:
         return pending
+
+    payload = {"to": to, "cc": cc, "subject": subject, "body": body}
+    if get_tool_tenant_id():
+        from backend.shared.idempotency import run_idempotent_operation
+
+        result = run_idempotent_operation(
+            "email.send",
+            payload,
+            lambda: {"message": _send_email_after_approval(to, subject, body, cc)},
+            client_key=idempotency_key or get_tool_idempotency_key(),
+        )
+        return str(result["message"])
+
+    # 兼容尚未经网关注入租户的旧直调/本地开发路径；一旦有可信租户，
+    # 必须走 Redis claim + PG 结果存储，Redis 故障不得降级放行。
+    return _send_email_after_approval(to, subject, body, cc)
+
+
+def _send_email_after_approval(to: str, subject: str, body: str, cc: str) -> str:
+    """审批通过后的实际发信；全局幂等 claim 在调用此函数之前完成。"""
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    from backend.config import (
+        SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, EMAIL_ENGINE,
+    )
 
     if EMAIL_ENGINE == "agently":
         return _send_via_agently(to, subject, body, cc)

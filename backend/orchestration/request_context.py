@@ -46,9 +46,12 @@ def get_context_from_state(state: dict | None) -> RequestContext | None:
         return RequestContext(
             session_id=ctx.get("session_id", "default"),
             user_id=ctx.get("user_id", "default"),
+            tenant_id=ctx.get("tenant_id", ""),
+            idempotency_key=ctx.get("idempotency_key", ""),
             kb_id=ctx.get("kb_id", "default"),
             department=ctx.get("department", ""),
             subject_type=ctx.get("subject_type", ""),
+            permissions=tuple(ctx["permissions"]) if ctx.get("permissions") is not None else None,
             model=ctx.get("model", ""),
             trace=None,
             stream_sink=None,
