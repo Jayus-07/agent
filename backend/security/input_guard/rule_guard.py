@@ -52,6 +52,15 @@ _INJECTION_WEAK = [
     r"(?:jailbreak|prompt\s*injection\s*attack)",
 ]
 
+# SQL 注入形态（P1 步骤 4 收敛 2026-09-19：唯一事实源，自 customer_service
+# 侧 CSInputGuard 迁入——恶意输入检测全局只有这一份）
+_SQLI_PATTERNS = [
+    (re.compile(r"'\s*;\s*(DROP|DELETE|UPDATE|INSERT)\s+", re.IGNORECASE), "sql_command"),
+    (re.compile(r"UNION\s+(ALL\s+)?SELECT", re.IGNORECASE), "union_select"),
+    (re.compile(r"\b(OR|AND)\s+\d+\s*=\s*\d+"), "tautology"),
+    (re.compile(r"--\s*$", re.MULTILINE), "sql_comment"),
+]
+
 # 疑问/教学语境豁免 — 命中任一即视为"谈论概念"而非"实施操纵"
 _QUESTION_CONTEXT = [
     r"^请问", r"什么是", r"是什么", r"什么叫", r"啥意思",
@@ -201,6 +210,21 @@ def _security_variants(q: str) -> list[str]:
 
 class RuleGuard:
     """规则层检测器：每个 detect_* 返回 Finding 或 None。"""
+
+    # ── SQL 注入 ──────────────────────────────────────
+    def detect_sql_injection(self, q: str) -> RuleFinding | None:
+        """SQL 注入形态检测（恶意输入；全局唯一事实源）。"""
+        for variant in _security_variants(q):
+            for pat, label in _SQLI_PATTERNS:
+                if pat.search(variant):
+                    return RuleFinding(
+                        category=GuardCategory.PROMPT_INJECTION,
+                        risk=RiskLevel.HIGH,
+                        confidence=0.95,
+                        reason=f"sql_injection:{label}",
+                        hits=[label],
+                    )
+        return None
 
     # ── 注入 ──────────────────────────────────────────
     def detect_injection(self, q: str) -> RuleFinding | None:

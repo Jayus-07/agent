@@ -15,6 +15,7 @@ import threading
 from dataclasses import dataclass
 from enum import Enum
 
+from backend.security.input_guard.rule_guard import RuleGuard
 from backend.shared.logger import logger
 
 
@@ -72,21 +73,10 @@ class CSInputGuardResult:
         return cls(action=GuardAction.ALLOW)
 
 
-# ── 检测模式 ──────────────────────────────────────────────
-
-_INJECTION_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"忽略(之前|上面|以上)(的|地)?(所有|全部)?(的|地)?(指令|规则|设定)"), "ignore_instruction"),
-    (re.compile(r"(你现在|请你?|请)(是|作为|扮演)(一个|一名)?"), "role_override"),
-    (re.compile(r"(系统|system)\s*(prompt|提示词|指令|消息)"), "system_prompt_probe"),
-    (re.compile(r"(DAN|do\s+anything\s+now)", re.IGNORECASE), "dan_mode"),
-]
-
-_SQL_INJECTION_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"'\s*;\s*(DROP|DELETE|UPDATE|INSERT)\s+", re.IGNORECASE), "sql_command"),
-    (re.compile(r"UNION\s+(ALL\s+)?SELECT", re.IGNORECASE), "union_select"),
-    (re.compile(r"\b(OR|AND)\s+\d+\s*=\s*\d+"), "tautology"),
-    (re.compile(r"--\s*$", re.MULTILINE), "sql_comment"),
-]
+# ── 检测模式（P1 步骤 4 边界收敛，2026-09-19）────────────────
+# 注入/SQL 注入/系统探针泄露 = 全局安全策略，唯一事实源在
+# security/input_guard/rule_guard.py（CSInputGuard 委托，不再自维护表）。
+# 本文件只保留 CS 业务校验表：越权范围（SCOPE）与敏感信息收集（SENSITIVE）。
 
 _SCOPE_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"(查|看|查?看)(一下)?(别人|其他|所有)(用户|人)?(的)?.{0,4}(订单|信息|数据)"), "query_other_user"),
@@ -106,7 +96,16 @@ _SYSTEM_PROBE_PATTERNS: list[tuple[re.Pattern, str]] = [
 
 
 class CSInputGuard:
-    """客服输入安全检查"""
+    """客服输入安全检查
+
+    P1 步骤 4 边界（2026-09-19）：注入/SQL 注入 = 全局安全策略，唯一
+    事实源在 security/input_guard/rule_guard.py（本类委托，不自维护表）；
+    本类只维护 CS 业务校验——SCOPE 越权口径 / SENSITIVE 敏感信息收集 /
+    SYSTEM_PROBE 业务口径（clarify 而非 block）。
+    """
+
+    def __init__(self) -> None:
+        self._rules = RuleGuard()
 
     def check(self, query: str, cs_context: dict | None = None) -> CSInputGuardResult:
         """对客服输入执行安全检查。"""
@@ -136,29 +135,29 @@ class CSInputGuard:
         return CSInputGuardResult.aggregate(checks)
 
     def _check_injection(self, query: str) -> CheckResult:
-        """检测 Prompt Injection"""
-        for pattern, label in _INJECTION_PATTERNS:
-            if pattern.search(query):
-                logger.info(f"[CSInputGuard] injection detected: {label}")
-                return CheckResult(
-                    action=GuardAction.BLOCK,
-                    category=GuardCategory.INJECTION,
-                    reason=label,
-                    message="抱歉，无法处理您的请求。",
-                )
+        """检测 Prompt Injection（委托全局 RuleGuard 单一事实源）。"""
+        finding = self._rules.detect_injection(query)
+        if finding:
+            logger.info(f"[CSInputGuard] injection detected: {finding.reason}")
+            return CheckResult(
+                action=GuardAction.BLOCK,
+                category=GuardCategory.INJECTION,
+                reason=finding.reason,
+                message="抱歉，无法处理您的请求。",
+            )
         return CheckResult(action=GuardAction.ALLOW, category=GuardCategory.INJECTION)
 
     def _check_sql_injection(self, query: str) -> CheckResult:
-        """检测 SQL Injection"""
-        for pattern, label in _SQL_INJECTION_PATTERNS:
-            if pattern.search(query):
-                logger.info(f"[CSInputGuard] sql_injection detected: {label}")
-                return CheckResult(
-                    action=GuardAction.BLOCK,
-                    category=GuardCategory.SQL_INJECTION,
-                    reason=label,
-                    message="输入格式有误，请检查后重试。",
-                )
+        """检测 SQL Injection（委托全局 RuleGuard 单一事实源）。"""
+        finding = self._rules.detect_sql_injection(query)
+        if finding:
+            logger.info(f"[CSInputGuard] sql_injection detected: {finding.reason}")
+            return CheckResult(
+                action=GuardAction.BLOCK,
+                category=GuardCategory.SQL_INJECTION,
+                reason=finding.reason,
+                message="抱歉，无法处理您的请求。",
+            )
         return CheckResult(action=GuardAction.ALLOW, category=GuardCategory.SQL_INJECTION)
 
     def _check_scope(self, query: str) -> CheckResult:
