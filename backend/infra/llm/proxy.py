@@ -31,6 +31,7 @@ from backend.config.llm import (
     LLM_FALLBACK_MODEL,
     LLM_MAX_RETRIES,
     LLM_RETRY_BACKOFF_BASE,
+    OLLAMA_ENABLED,
 )
 from backend.infra.llm.factory import get_llm_factory
 from backend.infra.llm.models import AVAILABLE_MODELS, compute_cost_usd
@@ -88,6 +89,13 @@ def set_request_model(model: str) -> None:
         _request_model_var.set("")
         return
     provider = _get_provider_for(model)
+    if provider == "ollama" and not OLLAMA_ENABLED:
+        logger.warning(
+            f"[LLM:proxy] 忽略模型覆盖 {model}: Ollama 当前未启用 "
+            f"(回退全局 {get_active_model_name()})"
+        )
+        _request_model_var.set("")
+        return
     key_env = PROVIDER_API_KEY_ENV.get(provider)
     if key_env and not os.getenv(key_env, "").strip():
         logger.warning(f"[LLM:proxy] 忽略模型覆盖 {model}: {key_env} 未配置 "
@@ -332,6 +340,11 @@ def _handle_terminal_failure(err: BaseException, args, kwargs):
     # 1) 备用模型
     fb = _get_fallback_llm()
     if fb is not None:
+        from backend.infra.llm.budget import reserve_model_call
+
+        # 预算预占必须发生在 fallback 真正执行前；超限不能被下面的
+        # “备用模型失败”兜底逻辑吞掉，否则会绕过硬阻断。
+        reserve_model_call("fallback")
         try:
             result = fb.invoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
@@ -353,6 +366,9 @@ async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
     reason = f"{type(err).__name__}: {str(err)[:120]}"
     fb = _get_fallback_llm()
     if fb is not None:
+        from backend.infra.llm.budget import reserve_model_call
+
+        reserve_model_call("fallback")
         try:
             result = await fb.ainvoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
@@ -370,9 +386,11 @@ async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
 def _call_with_resilience(attr, *args, **kwargs):
     """同步韧性调用：重试 → 熔断/重试耗尽 → fallback。"""
     from backend.infra.circuit_breaker import CircuitBreakerOpenError, llm_circuit_breaker
+    from backend.infra.llm.budget import reserve_model_call
 
     last_err: BaseException | None = None
     for attempt in range(LLM_MAX_RETRIES + 1):
+        reserve_model_call("primary" if attempt == 0 else "retry")
         try:
             return llm_circuit_breaker.call(attr, *args, **kwargs)
         except CircuitBreakerOpenError as e:
@@ -398,9 +416,11 @@ def _call_with_resilience(attr, *args, **kwargs):
 async def _acall_with_resilience(attr, *args, **kwargs):
     """异步韧性调用（对称于 _call_with_resilience）。"""
     from backend.infra.circuit_breaker import CircuitBreakerOpenError, llm_circuit_breaker
+    from backend.infra.llm.budget import reserve_model_call
 
     last_err: BaseException | None = None
     for attempt in range(LLM_MAX_RETRIES + 1):
+        reserve_model_call("primary" if attempt == 0 else "retry")
         try:
             return await llm_circuit_breaker.acall(attr, *args, **kwargs)
         except CircuitBreakerOpenError as e:
@@ -581,6 +601,18 @@ def _record_tokens(result, duration_ms: float | None = None):
             _last_call_meta_var.set({})
             return
 
+        try:
+            from backend.infra.llm.budget import record_model_usage
+
+            record_model_usage(
+                prompt_tokens=p,
+                completion_tokens=c,
+                total_tokens=t,
+            )
+        except Exception:
+            # 预算记录是观测/门禁辅助，不能反向破坏模型主链路。
+            pass
+
         # 细粒度用量：缓存命中 / 推理 token。
         # LangChain 统一在 usage_metadata.input_token_details（cache_read/cache_creation）
         # 与 output_token_details（reasoning）透传；上游未返回时为 0。
@@ -633,14 +665,20 @@ def _record_tokens(result, duration_ms: float | None = None):
 
         # Token 看板明细落库（每调用一行，软失败不影响主链路）
         try:
-            from backend.observability.llm_usage_store import get_llm_usage_store
-            from backend.observability.tracer import current_trace_context
-            trace_id, session_id = current_trace_context()
+            from backend.observability.llm_usage_store import (
+                current_usage_attribution,
+                get_llm_usage_store,
+            )
+            from backend.infra.llm.budget import current_call_decision
+            attribution = current_usage_attribution()
             get_llm_usage_store().record({
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
                              + f".{int(time.time() % 1 * 1000):03d}Z",
-                "trace_id": trace_id,
-                "session_id": session_id,
+                "trace_id": attribution["trace_id"],
+                "request_id": attribution["request_id"],
+                "session_id": attribution["session_id"],
+                "user_id": attribution["user_id"],
+                "tenant_id": attribution["tenant_id"],
                 "component": _usage_component(),
                 "model": model,
                 "provider": _get_provider_for(model),
@@ -651,6 +689,7 @@ def _record_tokens(result, duration_ms: float | None = None):
                 "reasoning_tokens": reasoning,
                 "cost_usd": cost,
                 "finish_reason": finish_reason,
+                "decision": current_call_decision(),
                 "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
             })
         except Exception:
@@ -831,8 +870,11 @@ class _LLMProxy:
             # 韧性链（重试/熔断 fallback）仅覆盖非流式路径。
             if inspect.isasyncgenfunction(attr):
                 async def astream_wrapper(*args, **kwargs):
+                    from backend.infra.llm.budget import reserve_model_call
+
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
                     _enforce_rate_limit(user_id)
+                    reserve_model_call("primary")
                     _t0 = time.monotonic()
                     usage_chunk = None
                     try:
@@ -858,6 +900,8 @@ class _LLMProxy:
             # 仅"第一个内容 chunk 之前"的瞬时错误整体重试；输出后失败直接抛。
             if inspect.isgeneratorfunction(attr):
                 def stream_wrapper(*args, **kwargs):
+                    from backend.infra.llm.budget import reserve_model_call
+
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
                     _enforce_rate_limit(user_id)
                     _t0 = time.monotonic()
@@ -865,6 +909,9 @@ class _LLMProxy:
                     yielded_content = False
                     try:
                         for attempt in range(LLM_MAX_RETRIES + 1):
+                            reserve_model_call(
+                                "primary" if attempt == 0 else "retry"
+                            )
                             try:
                                 for chunk in attr(*args, **kwargs):
                                     if getattr(chunk, "usage_metadata", None):

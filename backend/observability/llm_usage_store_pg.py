@@ -33,9 +33,10 @@ from backend.observability.llm_usage_store import (
 )
 from backend.shared.logger import logger
 
-_COLS = ("ts, trace_id, session_id, component, model, provider, "
+_COLS = ("ts, trace_id, request_id, session_id, user_id, tenant_id, "
+         "component, model, provider, "
          "prompt_tokens, completion_tokens, total_tokens, "
-         "cached_tokens, reasoning_tokens, cost_usd, duration_ms, finish_reason")
+         "cached_tokens, reasoning_tokens, cost_usd, duration_ms, finish_reason, decision")
 
 
 class PostgresLLMUsageStore(LLMUsageStore):
@@ -82,7 +83,10 @@ class PostgresLLMUsageStore(LLMUsageStore):
                     id                BIGSERIAL PRIMARY KEY,
                     ts                TEXT NOT NULL,
                     trace_id          TEXT NOT NULL DEFAULT '',
+                    request_id        TEXT NOT NULL DEFAULT '',
                     session_id        TEXT NOT NULL DEFAULT '',
+                    user_id           TEXT NOT NULL DEFAULT '',
+                    tenant_id         TEXT NOT NULL DEFAULT '',
                     component         TEXT NOT NULL DEFAULT 'llm',
                     model             TEXT NOT NULL DEFAULT '',
                     provider          TEXT NOT NULL DEFAULT '',
@@ -94,13 +98,34 @@ class PostgresLLMUsageStore(LLMUsageStore):
                     cost_usd          DOUBLE PRECISION NOT NULL DEFAULT 0,
                     duration_ms       DOUBLE PRECISION NOT NULL DEFAULT 0,
                     finish_reason     TEXT NOT NULL DEFAULT '',
+                    decision          TEXT NOT NULL DEFAULT 'primary',
                     created_at        TEXT NOT NULL
                 )
             """)
             cur = conn.cursor()
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS request_id "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS user_id "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS tenant_id "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS decision "
+                "TEXT NOT NULL DEFAULT 'primary'"
+            )
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_ts ON {t}(ts)")
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_model ON {t}(model, ts)")
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_trace ON {t}(trace_id)")
+            cur.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{t}_tenant_user_ts "
+                f"ON {t}(tenant_id, user_id, ts DESC)"
+            )
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_component "
                         f"ON {t}(component, ts)")
 
@@ -116,16 +141,20 @@ class PostgresLLMUsageStore(LLMUsageStore):
             with self._lock, self._conn() as conn:
                 self._exec(conn, f"""
                     INSERT INTO {self._table} (
-                        ts, trace_id, session_id, component, model, provider,
+                        ts, trace_id, request_id, session_id, user_id, tenant_id,
+                        component, model, provider,
                         prompt_tokens, completion_tokens, total_tokens,
                         cached_tokens, reasoning_tokens, cost_usd,
-                        duration_ms, finish_reason, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                              %s, %s, %s, %s, %s)
+                        duration_ms, finish_reason, decision, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                              %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     event.get("timestamp") or now,
                     str(event.get("trace_id") or ""),
+                    str(event.get("request_id") or ""),
                     str(event.get("session_id") or ""),
+                    str(event.get("user_id") or ""),
+                    str(event.get("tenant_id") or ""),
                     str(component),
                     str(event.get("model") or ""),
                     str(event.get("provider") or ""),
@@ -137,6 +166,7 @@ class PostgresLLMUsageStore(LLMUsageStore):
                     float(event.get("cost_usd") or 0.0),
                     float(event.get("duration_ms") or 0.0),
                     str(event.get("finish_reason") or ""),
+                    str(event.get("decision") or "primary"),
                     now,
                 ))
                 self._write_count += 1

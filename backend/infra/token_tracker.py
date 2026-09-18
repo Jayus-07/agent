@@ -50,6 +50,10 @@ class TokenUsageEvent:
     timestamp: str = ""
     trace_id: Optional[str] = None
     evaluation_run_id: Optional[str] = None
+    user_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    request_id: Optional[str] = None
+    decision: str = "primary"
     
     def __post_init__(self):
         if not self.timestamp:
@@ -114,6 +118,11 @@ class TokenTracker:
         """装饰器：记录 API 调用的 Token 用量到 JSONL + Prometheus."""
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> Any:
+            from backend.infra.llm.budget import reserve_model_call
+
+            # embedding/rerank 也属于本次请求的模型调用，和 proxy 的
+            # chat 调用共用同一请求级预算。
+            reserve_model_call("primary")
             t0 = time.monotonic()
             status = "success"
             error = None
@@ -162,6 +171,35 @@ class TokenTracker:
                     trace_id=self._trace_id,
                     evaluation_run_id=self._evaluation_run_id,
                 )
+                try:
+                    from backend.observability.llm_usage_store import (
+                        current_usage_attribution,
+                    )
+                    attribution = current_usage_attribution()
+                    event.trace_id = event.trace_id or attribution["trace_id"]
+                    event.user_id = attribution["user_id"]
+                    event.tenant_id = attribution["tenant_id"]
+                    event.request_id = attribution["request_id"]
+                except Exception:
+                    pass
+                try:
+                    from backend.infra.llm.budget import current_call_decision
+
+                    event.decision = current_call_decision()
+                except Exception:
+                    pass
+
+                try:
+                    from backend.infra.llm.budget import record_model_usage
+
+                    record_model_usage(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
+                    )
+                except Exception:
+                    # 预算统计失败不得覆盖原始模型结果/异常。
+                    pass
                 
                 # JSONL 写入 (线程安全)
                 self._write_jsonl(event)
@@ -222,7 +260,11 @@ class TokenTracker:
                 "cost_usd": cost_usd,
                 "duration_ms": event.duration_ms,
                 "trace_id": event.trace_id or "",
+                "request_id": event.request_id or "",
                 "session_id": "",
+                "user_id": event.user_id or "",
+                "tenant_id": event.tenant_id or "",
+                "decision": event.decision,
                 "finish_reason": event.status,
             })
         except Exception as e:

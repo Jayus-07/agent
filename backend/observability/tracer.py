@@ -251,6 +251,19 @@ class TraceCollector:
             workflow_kind=workflow_kind,
             parent_id=prev.id if prev else None,
         )
+        # 反馈/评测闭环需要服务端可验证的 Trace 归属；从权威请求上下文
+        # 注入租户与操作者标签，绝不消费请求体中客户端自报的身份字段。
+        try:
+            from backend.core.request_context import (
+                get_tool_tenant_id,
+                get_tool_user_id,
+            )
+            if get_tool_tenant_id():
+                trace.tags["tenant_id"] = get_tool_tenant_id()
+            if get_tool_user_id():
+                trace.tags["user_id"] = get_tool_user_id()
+        except Exception:
+            logger.debug("[Tracer] Trace 归属标签注入失败", exc_info=True)
         if prev is not None:
             prev.children_ids.append(rid)
             # P1-6: span → 子 trace 关联 — 在触发方 span 上记录子 trace id，

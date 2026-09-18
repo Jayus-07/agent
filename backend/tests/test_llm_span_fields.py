@@ -144,6 +144,48 @@ class TestRecordTokensMeta:
         proxy_mod._record_tokens(r)
         assert proxy_mod._last_call_meta_var.get() == {}
 
+    def test_usage_record_carries_authoritative_identity_fields(
+        self, monkeypatch, fresh_collector,
+    ):
+        """用量行必须携带用户、租户和请求归属，避免预算按共享桶结算。"""
+        from backend.core.request_context import RequestContext
+        from backend.observability import llm_usage_store
+
+        RequestContext(
+            session_id="session-usage",
+            user_id="user-usage",
+            tenant_id="tenant-usage",
+        ).bind()
+        trace = fresh_collector.start(
+            "usage attribution",
+            "session-usage",
+            workflow_name="agent",
+        )
+        events = []
+
+        class _UsageStore:
+            def record(self, event):
+                events.append(event)
+                return True
+
+        monkeypatch.setattr(
+            llm_usage_store, "get_llm_usage_store", lambda: _UsageStore(),
+        )
+        result = self._fake_result(
+            token_usage={
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+            },
+        )
+
+        proxy_mod._record_tokens(result)
+
+        assert len(events) == 1
+        assert events[0]["user_id"] == "user-usage"
+        assert events[0]["tenant_id"] == "tenant-usage"
+        assert events[0]["request_id"] == trace.request_id
+
 
 # ==========================================================
 # 3. chain.py — _timed_stuff 注入 prompt/completion text

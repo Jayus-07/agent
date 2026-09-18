@@ -33,6 +33,41 @@ def _cfg_enabled() -> bool:
     )
 
 
+def current_usage_attribution() -> dict[str, str]:
+    """读取当前请求的权威用量归属，不接受调用参数中的自报身份。"""
+    try:
+        from backend.core.request_context import (
+            get_tool_tenant_id,
+            get_tool_user_id,
+        )
+        user_id = get_tool_user_id() or ""
+        tenant_id = get_tool_tenant_id() or ""
+    except Exception:
+        user_id = ""
+        tenant_id = ""
+
+    trace_id = ""
+    session_id = ""
+    request_id = ""
+    try:
+        from backend.observability.tracer import trace_collector
+
+        trace = trace_collector.current()
+        if trace is not None:
+            trace_id = str(getattr(trace, "id", "") or "")
+            session_id = str(getattr(trace, "session_id", "") or "")
+            request_id = str(getattr(trace, "request_id", "") or trace_id)
+    except Exception:
+        pass
+    return {
+        "user_id": user_id,
+        "tenant_id": tenant_id,
+        "trace_id": trace_id,
+        "session_id": session_id,
+        "request_id": request_id,
+    }
+
+
 class LLMUsageStore:
     """llm_usage 明细存储接口（唯一实现：PostgresLLMUsageStore）。"""
 

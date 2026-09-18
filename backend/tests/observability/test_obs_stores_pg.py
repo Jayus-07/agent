@@ -239,6 +239,36 @@ class TestLLMUsageStorePG:
         assert rows[0]["cached_tokens"] == 8
         assert store.by_trace("") == []
 
+    def test_record_preserves_request_attribution(self, _clean_tables):
+        """预算/用量查询必须能按用户、租户和请求归属回溯。"""
+        from backend.observability.llm_usage_store import get_llm_usage_store
+
+        store = get_llm_usage_store()
+        event = _usage_event("pgtid0801")
+        event.update({
+            "user_id": "user-0801",
+            "tenant_id": "tenant-0801",
+            "request_id": "request-0801",
+        })
+
+        assert store.record(event) is True
+        row = store.by_trace("pgtid0801")[0]
+        assert row["user_id"] == "user-0801"
+        assert row["tenant_id"] == "tenant-0801"
+        assert row["request_id"] == "request-0801"
+
+    def test_record_preserves_call_decision(self, _clean_tables):
+        """用量行必须区分首调、重试和 fallback，便于预算对账。"""
+        from backend.observability.llm_usage_store import get_llm_usage_store
+
+        store = get_llm_usage_store()
+        event = _usage_event("pgtid0802")
+        event["decision"] = "fallback"
+
+        assert store.record(event) is True
+        row = store.by_trace("pgtid0802")[0]
+        assert row["decision"] == "fallback"
+
     def test_list_calls_filter_and_pagination(self, _clean_tables):
         from backend.observability.llm_usage_store import get_llm_usage_store
         store = get_llm_usage_store()
