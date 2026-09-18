@@ -1,0 +1,34 @@
+{
+  "_meta": {
+    "frozen_note": "规划阶段 0.2 冻结快照；更新 = 架构师审批 + 规划文档 §7 台账登记",
+    "plan": "docs/2026-09-19-RAG元数据管道统一抽取与级联路由上线规划.md"
+  },
+  "DOC_TYPE_RULES": {
+    "sha256": "323213a1f070e913",
+    "entries": 13
+  },
+  "DOMAIN_RULES": {
+    "sha256": "8ab5417bac30521b",
+    "entries": 10
+  },
+  "FILENAME_TYPE_HINTS": {
+    "sha256": "c1f468669a183c9e",
+    "entries": 37
+  },
+  "FOLDER_TYPE_HINTS": {
+    "sha256": "3dad37ba3e02429f",
+    "entries": 29
+  },
+  "SIGNAL_RULES": {
+    "sha256": "9befa0941b7d1b34",
+    "entries": 9
+  },
+  "DEFAULT_KEYWORDS": {
+    "sha256": "7b05ab8daecfd60f",
+    "entries": 118
+  },
+  "TIME_PATTERNS": {
+    "sha256": "ac22988fed2cde27",
+    "entries": 10
+  }
+}
