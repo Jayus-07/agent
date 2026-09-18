@@ -52,6 +52,42 @@ KB_ID = RAG_EVAL_KB_ID
 DEST_DIR = Path(DOCS_DIRECTORY) / KB_ID / "general"
 
 
+# 弃用别名库（rag-eval-kb-unification 计划：rag_test_kb / rag_100_docs 保留为
+# 只读兼容别名一个迁移周期）。迁移副本与这些库内容互为拷贝属预期，不是质量事故。
+DEPRECATED_ALIAS_KBS = frozenset({"rag_100_docs", "rag_test_kb"})
+
+
+def activate_reviewed_migration_copies(
+    registry, paths: dict[str, str], deprecated_alias_kbs: frozenset[str] = DEPRECATED_ALIAS_KBS
+) -> list[str]:
+    """迁移副本知情激活：近重复源在弃用别名库中的 pending_review 行翻为 active。
+
+    全局 MinHash 查重（2026-09-17 事故修复）会把与遗留库同内容的迁移副本
+    判为 near_dup → pending_review；本迁移的夹具复用旧 fixture 文件属预期拷贝，
+    必须由本函数显式裁决激活并留痕。同 KB 内部重复或查无来源的近重复
+    不在豁免之列，保持 pending_review 交人工审核。
+    """
+    activated: list[str] = []
+    for slug, fpath in paths.items():
+        row = registry.get_by_path(fpath) or {}
+        if row.get("status") != "pending_review" or not row.get("near_dup_id"):
+            continue
+        source = registry.get_by_doc_id(row["near_dup_id"])
+        if not source or source.get("kb_id") not in deprecated_alias_kbs:
+            print(
+                f"[HOLD-FOR-REVIEW] {slug}: 近重复源 "
+                f"{source.get('kb_id') if source else '未知'}/{row['near_dup_id']} 不在弃用别名库，保持 pending_review"
+            )
+            continue
+        registry.update_status(fpath, "active")
+        activated.append(slug)
+        print(
+            f"[ACTIVATE-REVIEWED] {slug} ← 近重复源 {source.get('kb_id')}/{row['near_dup_id']}"
+            f"（弃用别名库迁移副本，知情激活）"
+        )
+    return activated
+
+
 @dataclass(frozen=True)
 class FixtureIngestResult:
     """一次 fixture 入库的可审计结果。"""
@@ -332,6 +368,10 @@ def main() -> int:
             print(f"[FAIL] {slug}: {type(e).__name__}: {e}")
             logger.warning(f"[ingest] {slug} 索引失败", exc_info=True)
 
+    # ⑤' 迁移副本知情激活（近重复源在弃用别名库 → active；其余保持人工审核）
+    reviewed = activate_reviewed_migration_copies(registry, paths)
+    print(f"知情激活: {len(reviewed)}（弃用别名库迁移副本）")
+
     # ⑥ 校验 + 刷新版本
     rows = registry.list_all()
     bad = []
@@ -341,7 +381,7 @@ def main() -> int:
             bad.append(slug)
 
     print("\n===== 汇总 =====")
-    print(f"索引成功: {len(ok)} | 失败: {len(failed)} | 行校验异常: {bad or '无'}")
+    print(f"索引成功: {len(ok)} | 失败: {len(failed)} | 知情激活: {len(reviewed)} | 行校验异常: {bad or '无'}")
     if failed:
         for slug, err in failed:
             print(f"  FAIL {slug}: {err}")
