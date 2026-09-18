@@ -66,19 +66,31 @@ _COOKIE_KWARGS = {"key": "refresh_token", "httponly": True, "samesite": "lax",
 
 
 def _client_ip(request: Request) -> str:
-    """取客户端 IP：网关链路优先 X-Real-IP / XFF 首段，兜底直连地址。
+    """取客户端 IP：优先 BFF 代理注入的 X-Client-IP（frontend */api/[...path]
+    按浏览器连接算出，最接近终端用户），其次网关链路的 X-Real-IP / XFF 首段，
+    兜底直连地址。
 
-    截断 64 字符与 auth.sessions.ip VARCHAR(64) 对齐；非 IP 形态的
-    伪造头不校验（台账字段，不参与任何访问控制决策）。
+    IPv6 回环归一化为 127.0.0.1（::1 / ::ffff:x.x.x.x → 展示友好）。
+    截断 64 字符与 auth.sessions.ip VARCHAR(64) 对齐；仅作台账展示，
+    不参与任何访问控制决策（外部伪造该头只会污染自己的台账记录）。
     """
-    real = request.headers.get("x-real-ip")
-    if real:
-        return real.strip()[:64]
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()[:64]
-    host = request.client.host if request.client else ""
-    return (host or "")[:64]
+    client_ip = request.headers.get("x-client-ip")
+    if client_ip:
+        ip = client_ip.strip()
+    else:
+        real = request.headers.get("x-real-ip")
+        if real:
+            ip = real.strip()
+        else:
+            xff = request.headers.get("x-forwarded-for")
+            ip = xff.split(",")[0].strip() if xff else ""
+    if not ip:
+        ip = (request.client.host if request.client else "") or ""
+    if ip == "::1" or ip.startswith("::ffff:127.0.0."):
+        ip = "127.0.0.1"
+    elif ip.startswith("::ffff:"):
+        ip = ip[len("::ffff:"):]
+    return ip[:64]
 
 
 def _session_idx_key(user_id, sid: str) -> str:

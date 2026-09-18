@@ -318,3 +318,34 @@ def test_login_writes_session_idx_index(env, user):
     idx = f"auth:session_idx:{user['id']}:{payload['sid']}"
     assert payload["jti"] in fr.smembers(idx)
     assert fr.store.get(f"auth:session:{user['id']}:{payload['jti']}") == "1"
+
+
+# ── 客户端 IP 偏好链（X-Client-IP → X-Real-IP → XFF → client.host）────
+
+def test_client_ip_prefers_bff_injected_header(env, user):
+    """BFF（frontend */api/[...path]）注入的 X-Client-IP 优先于网关头。"""
+    client, _ = env
+    r = client.post("/api/auth/login",
+                    json={"username": user["username"], "password": user["password"],
+                          "deviceId": "dev-ip"},
+                    headers={"X-Client-IP": "203.0.113.9",
+                             "X-Real-IP": "172.21.0.1",
+                             "User-Agent": "TestUA/2.0"})
+    assert r.status_code == 200
+    ip, ua = _pg("SELECT ip, user_agent FROM auth.sessions "
+                 "WHERE user_id = %s AND device_id = 'dev-ip'", (user["id"],))[0]
+    assert ip == "203.0.113.9"
+    assert ua == "TestUA/2.0"
+
+
+def test_client_ip_fallback_to_real_ip(env, user):
+    """无 X-Client-IP 时回退 X-Real-IP（APISIX 注入值），无头时落 client.host。"""
+    client, _ = env
+    r = client.post("/api/auth/login",
+                    json={"username": user["username"], "password": user["password"],
+                          "deviceId": "dev-ip2"},
+                    headers={"X-Real-IP": "172.21.0.1"})
+    assert r.status_code == 200
+    ip, = _pg("SELECT ip FROM auth.sessions "
+              "WHERE user_id = %s AND device_id = 'dev-ip2'", (user["id"],))[0]
+    assert ip == "172.21.0.1"

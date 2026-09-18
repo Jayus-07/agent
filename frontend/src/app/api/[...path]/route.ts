@@ -8,8 +8,10 @@
  * 职责：
  *   1. 透传 `/api/*` 到网关（`${API_URL}/api/...`），保留 query；
  *   2. 服务端注入 `X-API-Key`；
- *   3. 转发 Authorization / Content-Type / Accept / X-Trace-Id，
- *      回传 Content-Type / Content-Disposition / X-Trace-Id；
+ *   3. 转发 Authorization / Content-Type / Accept / User-Agent / Cookie /
+ *      X-Trace-Id，注入 X-Client-IP（会话台账），回传 Content-Type /
+ *      Content-Disposition / X-Trace-Id 及逐条 Set-Cookie（refresh 令牌
+ *      HttpOnly Cookie 的生命周期依赖它，缺失 = 静默刷新必失败）；
  *   4. 响应体流式透传（SSE / 上传 / 下载均不受影响）。
  *
  * 注意：
@@ -32,6 +34,8 @@ const FORWARD_REQ_HEADERS = [
   "authorization",
   "content-type",
   "accept",
+  "user-agent",
+  "cookie",
   "x-trace-id",
 ] as const;
 const FORWARD_RES_HEADERS = [
@@ -56,6 +60,15 @@ async function proxy(
   const apiKey = process.env.API_KEY;
   if (apiKey) headers.set("X-API-Key", apiKey);
 
+  // 客户端真实 IP 透传（2026-09-19 会话台账）：不透传时后端只能看到本服务
+  // 的出口连接（APISIX 侧 X-Real-IP = 容器网桥地址）。优先 Next 按连接算出
+  // 的 req.ip，回退 XFF 首段（上游代理链场景）。仅作台账展示，不参与鉴权。
+  const clientIp =
+    req.ip ||
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    "";
+  if (clientIp) headers.set("X-Client-IP", clientIp);
+
   const method = req.method;
   const body =
     method === "GET" || method === "HEAD"
@@ -76,6 +89,11 @@ async function proxy(
   for (const h of FORWARD_RES_HEADERS) {
     const v = upstream.headers.get(h);
     if (v) resHeaders.set(h, v);
+  }
+  // set-cookie 逐条透传（refresh_token HttpOnly Cookie 的生命周期依赖它；
+  // Headers 复制会合并多条 set-cookie，必须用 getSetCookie 逐条回填）
+  for (const sc of upstream.headers.getSetCookie()) {
+    resHeaders.append("set-cookie", sc);
   }
   return new Response(upstream.body, {
     status: upstream.status,
