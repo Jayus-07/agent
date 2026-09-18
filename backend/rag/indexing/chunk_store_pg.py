@@ -160,3 +160,17 @@ class PostgresChunkStore(ChunkStore):
                 (doc_id,),
             ).fetchone()
         return row[0] if row else 0
+
+    def list_doc_ids(self) -> set[str]:
+        """返回 chunk_store 中出现过的 doc_id 集合。
+
+        一致性清扫只需要去重后的文档键，不应把 20 万级 chunk 正文全部
+        拉回应用进程；`doc_id` 已有索引，查询成本远低于旧 SQLite 全表路径。
+        """
+        with self._conn() as conn:
+            rows = self._exec_scalar(
+                conn,
+                f"SELECT DISTINCT doc_id FROM {self._table} WHERE doc_id <> %s",
+                ("",),
+            ).fetchall()
+        return {row[0] for row in rows if row and row[0]}

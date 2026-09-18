@@ -10,6 +10,7 @@ customer_service/knowledge、mcp_servers/servers/rag.py 等消费方零改动。
     即抛错并给出指引 —— 这些能力归属 rag-service（或切 RAG_MODE=local）
 """
 import threading
+from collections.abc import Iterable
 from typing import Any
 
 import httpx
@@ -51,6 +52,7 @@ class RAGServiceProxy:
         kb_ids: list[str] | None = None,
         subject_type: str = "",
         department: str = "",
+        permissions: Iterable[str] | None = None,
     ) -> str:
         try:
             resp = self._client.post(
@@ -62,6 +64,7 @@ class RAGServiceProxy:
                     "kb_ids": kb_ids,
                     "subject_type": subject_type,
                     "department": department,
+                    "permissions": permissions,
                 },
                 timeout=_ASK_TIMEOUT_S,
             )
@@ -75,11 +78,26 @@ class RAGServiceProxy:
         self.last_answer_meta = payload.get("meta") or {}
         return payload["answer"]
 
-    def retrieve_knowledge(self, question: str, kb_id: str = "default", top_k: int = 3) -> str:
+    def retrieve_knowledge(
+        self,
+        question: str,
+        kb_id: str = "default",
+        top_k: int = 3,
+        subject_type: str = "",
+        department: str = "",
+        permissions: Iterable[str] | None = None,
+    ) -> str:
         try:
             resp = self._client.post(
                 "/retrieve",
-                json={"question": question, "kb_id": kb_id, "top_k": top_k},
+                json={
+                    "question": question,
+                    "kb_id": kb_id,
+                    "top_k": top_k,
+                    "subject_type": subject_type,
+                    "department": department,
+                    "permissions": permissions,
+                },
                 timeout=_RETRIEVE_TIMEOUT_S,
             )
             resp.raise_for_status()

@@ -162,7 +162,27 @@ MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "5000"))
 # ====================================
 DEFAULT_KB_ID = os.getenv("DEFAULT_KB_ID", "default")
 
-BM25_SEARCH_K = int(os.getenv("BM25_SEARCH_K", "10"))
+# PGVector 连接池与 HNSW 查询参数：20K 文档场景下，频繁 connect/close 会放大
+# PostgreSQL 握手成本；ef_search 越大过滤召回越稳，但 CPU/延迟也会增加。
+# 默认值先按单机中等负载取保守档，生产应结合 P95 延迟和 Recall@5 调整。
+VECTOR_PG_POOL_MIN = max(1, int(os.getenv("VECTOR_PG_POOL_MIN", "1")))
+VECTOR_PG_POOL_MAX = max(
+    VECTOR_PG_POOL_MIN, int(os.getenv("VECTOR_PG_POOL_MAX", "10"))
+)
+VECTOR_HNSW_EF_SEARCH = max(1, int(os.getenv("VECTOR_HNSW_EF_SEARCH", "80")))
+
+# 文档级候选池：Stage 1 先扩大候选文档范围，再由关键词门控和 Stage 2 精排。
+# 旧值硬编码为 15，在 2 万份文档中容易把真正相关文档挡在 Stage 2 之外；
+# 50 是召回/延迟的保守起点，生产可按知识库密度调到 100/200。
+RAG_DOC_CANDIDATE_K = max(1, int(os.getenv("RAG_DOC_CANDIDATE_K", "50")))
+
+BM25_SEARCH_K = max(1, int(os.getenv("BM25_SEARCH_K", "10")))
+# BM25 候选池与最终返回数解耦：BM25 不支持向量库的 metadata filter，
+# 必须先取更大的全局候选集，再做 doc_id/KB 过滤，避免目标文档被全局 Top 10 挤掉。
+# 最终返回数量仍由 BM25_SEARCH_K / HYBRID_SEARCH_K 控制。
+BM25_CANDIDATE_K = max(
+    BM25_SEARCH_K, int(os.getenv("BM25_CANDIDATE_K", "100"))
+)
 HYBRID_SEARCH_K = int(os.getenv("HYBRID_SEARCH_K", "8"))
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "8"))
 # Rerank 阈值（sigmoid 归一化后）：CrossEncoder 输出的 logit 经 sigmoid 映射到 0-1。

@@ -19,7 +19,7 @@ from typing import Any, List, Optional
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
 
-from backend.config import BM25_SEARCH_K
+from backend.config import BM25_CANDIDATE_K
 
 from backend.config import BM25_INDEX_DIR
 from backend.shared.logger import logger
@@ -115,13 +115,14 @@ class BM25Store:
 
         Args:
             docs: Document 对象列表
-            k: 检索返回数量，默认取 config.BM25_SEARCH_K
+            k: 检索候选数量，默认取 config.BM25_CANDIDATE_K；最终答案数量由
+               hybrid_retrieve 的 k 控制
 
         Returns:
             可直接使用的 BM25Retriever 实例；文档为空时返回 None
         """
         if k is None:
-            k = BM25_SEARCH_K
+            k = BM25_CANDIDATE_K
         logger.info(f"[BM25Store] 构建索引，{len(docs)} 个文档...")
         t0 = time.time()
 
@@ -162,13 +163,13 @@ class BM25Store:
         """从磁盘加载 BM25 索引。
 
         Args:
-            k: 检索返回数量，默认取 config.BM25_SEARCH_K
+            k: 检索候选数量，默认取 config.BM25_CANDIDATE_K
 
         Returns:
             BM25Retriever 实例，索引不存在或损坏时返回 None
         """
         if k is None:
-            k = BM25_SEARCH_K
+            k = BM25_CANDIDATE_K
         if not self._corpus_path.exists() or not self._docs_path.exists():
             logger.info("[BM25Store] 索引文件不存在，需要重建")
             return None
@@ -206,7 +207,7 @@ class BM25Store:
             return None
 
     def add_documents(
-        self, docs: List[Document], k: int = 20
+        self, docs: List[Document], k: int | None = None
     ) -> BM25Retriever:
         """增量添加文档后全量重建索引。
 
@@ -214,11 +215,13 @@ class BM25Store:
 
         Args:
             docs: 要添加的 Document 列表
-            k: 检索返回数量
+            k: 检索候选数量；为空时使用 config.BM25_CANDIDATE_K
 
         Returns:
             重建后的 BM25Retriever 实例
         """
+        if k is None:
+            k = BM25_CANDIDATE_K
         all_docs: List[Document] = []
         if self._docs_path.exists():
             try:
@@ -236,7 +239,8 @@ class BM25Store:
         return self.build(all_docs, k=k)
 
     def remove_documents(
-        self, doc_ids: List[str], k: int = 20, file_paths: Optional[List[str]] = None
+        self, doc_ids: List[str], k: int | None = None,
+        file_paths: Optional[List[str]] = None
     ) -> Optional[BM25Retriever]:
         """按 doc_id 或 file_path（含 source_file 文件名）删除文档后全量重建索引。
 
@@ -248,11 +252,13 @@ class BM25Store:
         Args:
             doc_ids: 要删除的 doc_id 列表
             file_paths: 要删除的完整文件路径列表（取其 basename 与 metadata.source_file 匹配）
-            k: 检索返回数量
+            k: 检索候选数量；为空时使用 config.BM25_CANDIDATE_K
 
         Returns:
             重建后的 BM25Retriever 实例；无索引时返回 None
         """
+        if k is None:
+            k = BM25_CANDIDATE_K
         if not self._docs_path.exists():
             logger.info("[BM25Store] 索引不存在，跳过删除")
             return None
@@ -283,7 +289,7 @@ class BM25Store:
     def replace_documents(
         self,
         docs: List[Document],
-        k: int = 20,
+        k: int | None = None,
         *,
         doc_id: str = "",
         file_path: str = "",
@@ -298,13 +304,15 @@ class BM25Store:
 
         Args:
             docs: 新的 Document 列表（替换后的完整 chunks）
-            k: 检索返回数量
+            k: 检索候选数量；为空时使用 config.BM25_CANDIDATE_K
             doc_id: 要替换的 doc_id
             file_path: 要替换的文件路径（basename 匹配）
 
         Returns:
             重建后的 BM25Retriever 实例；无索引且无新文档时返回 None
         """
+        if k is None:
+            k = BM25_CANDIDATE_K
         doc_id_set = {doc_id} if doc_id else set()
         file_basenames = {os.path.basename(file_path)} if file_path else set()
 

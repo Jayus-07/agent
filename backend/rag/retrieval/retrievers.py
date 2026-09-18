@@ -19,10 +19,12 @@ from backend.rag.preprocessing.entity import extract_person_names
 from backend.rag.preprocessing.keyword import extract_chunk_keywords
 from backend.config import (
     HYBRID_SEARCH_K,
+    RAG_DOC_CANDIDATE_K,
     ADAPTIVE_CLUSTER_THRESHOLD,
     ADAPTIVE_MAX_CLUSTER_DOCS,
 )
 from backend.shared.logger import logger
+from backend.rag.permissions import filter_documents_by_permission
 
 
 # =====================================================
@@ -254,6 +256,8 @@ class _Staging:
     department: str = ""
     # 主体授权 keep-set；None=未声明主体（授权未启用，旧行为）
     authorized: set | None = None
+    # 文档 permission_scope 所需权限；None=可信权限未声明，受限文档拒绝
+    user_permissions: tuple[str, ...] | None = None
 
     # ── Stage 1 产出 ──
     person_names: list = field(default_factory=list)
@@ -453,6 +457,10 @@ class ChunkLevelRetriever(BaseRetriever):
             identity = getattr(ctx, "identity", None)
             st.subject_type = getattr(identity, "subject_type", "") or ""
             st.department = getattr(identity, "department", "") or ""
+            permissions = getattr(identity, "permissions", None)
+            st.user_permissions = (
+                None if permissions is None else tuple(permissions)
+            )
         except Exception as e:
             # request 上下文缺失 → 按无 filter 全量检索（软降级），留痕
             logger.debug(f"[ChunkLevelRetriever] 读取 request context 失败: {e}", exc_info=True)
@@ -467,8 +475,16 @@ class ChunkLevelRetriever(BaseRetriever):
             st.authorized = set(authorized)
             st.metadata_filter = _scope_kb_filter(st.metadata_filter, st.authorized)
 
-    def _authorized_doc_search(self, st: "_Staging", k: int = 15, flt: dict | None = None) -> list:
-        """Doc 级检索 + 主体授权后过滤（st.authorized 为 None 时零行为变化）。"""
+    def _authorized_doc_search(
+        self, st: "_Staging", k: int | None = None, flt: dict | None = None
+    ) -> list:
+        """Doc 级检索 + 主体授权后过滤（st.authorized 为 None 时零行为变化）。
+
+        候选数从配置读取而非固定 15：文档规模增长后，Stage 1 仍需给
+        关键词门控和 Stage 2 足够的召回宽度；最终回答数量仍由 self.k 控制。
+        """
+        if k is None:
+            k = RAG_DOC_CANDIDATE_K
         docs = (self.doc_db.similarity_search(st.query, k=k, filter=flt)
                 if flt else self.doc_db.similarity_search(st.query, k=k))
         if st.authorized is not None:
@@ -712,6 +728,16 @@ class ChunkLevelRetriever(BaseRetriever):
         elif st.cross_kb_fallback and fallback_docs:
             fallback_docs = _drop_excluded_kb_fallback_docs(fallback_docs, st.span)
         if fallback_docs:
+            before_permission = len(fallback_docs)
+            fallback_docs = filter_documents_by_permission(
+                fallback_docs, st.user_permissions
+            )
+            if len(fallback_docs) != before_permission:
+                logger.info(
+                    "ChunkLevelRetriever: Neighbor Expansion 权限过滤 "
+                    f"{before_permission - len(fallback_docs)} chunks"
+                )
+        if fallback_docs:
             logger.info(f"ChunkLevelRetriever: Neighbor Expansion → {len(fallback_docs)} chunks")
             return fallback_docs[: self.k], {
                 "retrieved_chunks": len(fallback_docs),
@@ -747,6 +773,13 @@ class ChunkLevelRetriever(BaseRetriever):
             st.docs = _keep_docs_in_allowed_kbs(st.docs, st.authorized, st.span)
         elif st.cross_kb_fallback:
             st.docs = _drop_excluded_kb_fallback_docs(st.docs, st.span)
+        before_permission = len(st.docs)
+        st.docs = filter_documents_by_permission(st.docs, st.user_permissions)
+        if len(st.docs) != before_permission:
+            logger.info(
+                "ChunkLevelRetriever: 最终权限过滤 "
+                f"{before_permission - len(st.docs)} chunks"
+            )
 
     def _filter_has_docs(self, metadata_filter: dict) -> bool:
         """探测给定 metadata_filter 在 doc 库中是否还能匹配到文档（不做向量检索，零 embedding 成本）。

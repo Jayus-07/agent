@@ -31,7 +31,7 @@ from backend.rag.preprocessing.parser import PARSABLE_EXTS
 from backend.rag.indexing.models import SyncResult, Delta
 from backend.rag.indexing.doc_id import derive_doc_id, parse_kb_dept_subpath_from_path
 from backend.config.rag import (
-    BM25_SEARCH_K,
+    BM25_CANDIDATE_K,
 )
 from backend.shared.logger import logger
 from backend.infra.async_utils import run_async as _run_async
@@ -1142,7 +1142,7 @@ class IncrementalIndexer:
         if self.bm25_store is not None and chunks:
             try:
                 self.bm25_store.replace_documents(
-                    chunks, k=BM25_SEARCH_K, doc_id=doc_id, file_path=file_path,
+                    chunks, k=BM25_CANDIDATE_K, doc_id=doc_id, file_path=file_path,
                 )
                 logger.info(
                     f"[BM25] 文档已替换 {len(chunks)} chunks: {os.path.basename(file_path)}"

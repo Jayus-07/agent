@@ -129,10 +129,10 @@ def _enhanced_hybrid_retrieve_impl(
             if doc_ids:
                 sparse_docs = [d for d in sparse_docs if d.metadata.get("doc_id") in doc_ids]
             if metadata_filter:
-                sparse_docs = [
-                    d for d in sparse_docs
-                    if all(d.metadata.get(k) == v for k, v in metadata_filter.items())
-                ]
+                # 与原 hybrid 路径共用同一套 where 语义，避免增强路径对
+                # person_names 数组和 $or 过滤产生不同结果。
+                from backend.rag.retrieval.hybrid import _filter_by_metadata
+                sparse_docs = _filter_by_metadata(sparse_docs, metadata_filter)
             if sparse_docs:
                 # §7 路由加权：sparse 基础权重 1.0 × 策略 bm25_weight
                 path_results.append((sparse_docs, 1.0 * bw))

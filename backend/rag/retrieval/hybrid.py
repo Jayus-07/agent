@@ -1,6 +1,7 @@
 from backend.shared.logger import logger
 
 import threading
+import json
 
 # 增强检索递归护栏：enhanced 路径内部空召回时会回调原始 hybrid_retrieve，
 # 若此时再次进入增强分支会无限递归。按线程隔离，防止并发串扰。
@@ -14,17 +15,59 @@ def _fallback_id(doc) -> str:
     return f"{did}:{ci}"
 
 
-def _filter_by_metadata(docs: list, metadata_filter: dict | None) -> list:
-    """按简单 kv 条件过滤文档（metadata_filter 为 {"kb_id": ...} 等简单 dict）。
+def _decode_metadata_value(value):
+    """将 PGVector 兼容层写入的 JSON 数组字符串还原为 Python 值。"""
+    if isinstance(value, str) and value[:1] in ("[", "{"):
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return value
+    return value
 
-    BM25 检索不接受 filter 参数，需在结果返回后手动过滤，
-    否则不同知识库的残留文档会混入检索结果、挤占 RRF 位置。
-    """
+
+def _metadata_value_matches(actual, expected) -> bool:
+    actual = _decode_metadata_value(actual)
+    if isinstance(expected, dict):
+        operator, operand = next(iter(expected.items()))
+        if operator == "$eq":
+            return _metadata_value_matches(actual, operand)
+        if operator == "$ne":
+            return not _metadata_value_matches(actual, operand)
+        if operator == "$in":
+            choices = set(operand or [])
+            if isinstance(actual, list):
+                return bool(set(actual) & choices)
+            return actual in choices
+        if operator == "$nin":
+            choices = set(operand or [])
+            if isinstance(actual, list):
+                return not bool(set(actual) & choices)
+            return actual not in choices
+        raise ValueError(f"不支持的 metadata filter 操作符: {operator}")
+    if isinstance(actual, list):
+        return expected in actual
+    return actual == expected
+
+
+def _metadata_matches(metadata: dict, metadata_filter: dict | None) -> bool:
+    """按向量库 where 语义判断一条 BM25 文档是否在过滤范围内。"""
     if not metadata_filter:
-        return list(docs)
+        return True
+    if "$and" in metadata_filter:
+        return all(_metadata_matches(metadata, part) for part in metadata_filter["$and"])
+    if "$or" in metadata_filter:
+        return any(_metadata_matches(metadata, part) for part in metadata_filter["$or"])
+    return all(
+        _metadata_value_matches(metadata.get(key), expected)
+        for key, expected in metadata_filter.items()
+    )
+
+
+def _filter_by_metadata(docs: list, metadata_filter: dict | None) -> list:
+    """过滤 BM25 候选，兼容数组字段及 `$and`/`$or`。"""
     return [
         d for d in docs
-        if all(d.metadata.get(k) == v for k, v in metadata_filter.items())
+        if _metadata_matches(d.metadata or {}, metadata_filter)
     ]
 
 

@@ -59,7 +59,7 @@ class TestBM25IncrementalSync:
 
     def test_replace_documents_called_when_store_present(self, tmp_path):
         """有 bm25_store + chunks 时，replace_documents 必须被调用（携带 doc_id/file_path/k）。"""
-        from backend.config.rag import BM25_SEARCH_K
+        from backend.config.rag import BM25_CANDIDATE_K
 
         bm25_store = MagicMock()
         indexer = _make_indexer(tmp_path, bm25_store)
@@ -69,7 +69,7 @@ class TestBM25IncrementalSync:
         bm25_store.replace_documents.assert_called_once()
         kwargs = bm25_store.replace_documents.call_args.kwargs
         assert kwargs["doc_id"] == "doc1"
-        assert kwargs["k"] == BM25_SEARCH_K
+        assert kwargs["k"] == BM25_CANDIDATE_K
         assert kwargs["file_path"].endswith("doc.md")
         assert result["chunk_count"] == 1
 

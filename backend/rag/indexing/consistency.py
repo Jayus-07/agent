@@ -307,24 +307,20 @@ class IndexConsistencyChecker:
             ))
 
     def _check_chunk_store(self, report: ConsistencyReport) -> None:
+        """检查 PG chunk_store，避免重新引入已删除的 SQLite 轨。"""
         expected_ids = self._expected_doc_ids()
         try:
             from backend.rag.indexing.chunk_store import get_chunk_store
             cs = get_chunk_store()
-            import sqlite3
-            from backend.config import CHUNK_STORE_PATH
-            conn = sqlite3.connect(f"file:{CHUNK_STORE_PATH}?mode=ro", uri=True)
-            try:
-                rows = conn.execute("SELECT DISTINCT doc_id FROM chunk_store").fetchall()
-            finally:
-                conn.close()
-            cs_doc_ids = {r[0] for r in rows if r[0]}
+            # chunk_store 已于 2026-09-17 收口到 PostgreSQL；通过接口取去重
+            # doc_id，避免读取旧路径、避免把所有 chunk 正文加载到内存。
+            cs_doc_ids = cs.list_doc_ids()
             for orphan_id in cs_doc_ids - expected_ids:
                 report.issues.append(ConsistencyIssue(
                     severity="error",
                     store="chunk_store",
                     doc_id=orphan_id,
-                    detail="chunk_store 有记录但 registry 无 active 记录",
+                    detail="PG chunk_store 有记录但 registry 无 active 记录",
                 ))
         except Exception as e:
             report.issues.append(ConsistencyIssue(

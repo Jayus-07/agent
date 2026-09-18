@@ -3,6 +3,7 @@ import os
 import json
 import time
 from collections import OrderedDict
+from collections.abc import Iterable
 
 # R-P0-1（Windows 原生库加载顺序加固）：langchain_text_splitters 顶层会拉起
 # sentence_transformers→torch；若该导入发生在 chroma/doc_db 等原生库已加载
@@ -26,7 +27,7 @@ from backend.rag.retrieval.bm25_store import BM25Store, source_files_out_of_sync
 from backend.rag.chain import RAGChain
 from backend.config import (
     EMBEDDING_MODEL_PATH,
-    BM25_SEARCH_K,
+    BM25_CANDIDATE_K,
     CHROMA_PATH,
     DOC_DB_PATH,
     DOCS_DIRECTORY,
@@ -428,7 +429,7 @@ class RAGPipeline:
         # BM25: 优先从磁盘加载持久化索引，避免每次启动重建
         bm25_store = BM25Store()
         self.bm25_store = bm25_store  # 保留 store 引用，供删除/重索引时更新
-        self.bm25 = bm25_store.load(k=BM25_SEARCH_K)
+        self.bm25 = bm25_store.load(k=BM25_CANDIDATE_K)
 
         # BM25 重建语料源：优先向量库（indexer 实际写入的 chunks），
         # 回退 self.docs（loader chunks）。两者切分策略不同，
@@ -443,23 +444,25 @@ class RAGPipeline:
 
         if self.bm25 is None:
             logger.info("[RAG] BM25 索引不存在，全量重建...")
-            self.bm25 = bm25_store.build(bm25_source, k=BM25_SEARCH_K)
+            self.bm25 = bm25_store.build(bm25_source, k=BM25_CANDIDATE_K)
         elif bm25_store.is_stale:
             logger.info("[RAG] BM25 索引已过期（文档数为 0），重建...")
-            self.bm25 = bm25_store.build(bm25_source, k=BM25_SEARCH_K)
+            self.bm25 = bm25_store.build(bm25_source, k=BM25_CANDIDATE_K)
         elif source_files_out_of_sync(self.bm25.docs, bm25_source):
             logger.info("[RAG] BM25 索引与文档目录不一致（残留/缺失），重建...")
-            self.bm25 = bm25_store.build(bm25_source, k=BM25_SEARCH_K)
+            self.bm25 = bm25_store.build(bm25_source, k=BM25_CANDIDATE_K)
         elif bm25_store.get_content_hash() and bm25_store.get_content_hash() != compute_content_hash(bm25_source):
             logger.info("[RAG] BM25 索引内容 hash 不匹配（文档已修改），重建...")
-            self.bm25 = bm25_store.build(bm25_source, k=BM25_SEARCH_K)
+            self.bm25 = bm25_store.build(bm25_source, k=BM25_CANDIDATE_K)
         else:
             logger.info(
                 f"[RAG] BM25 索引从磁盘加载成功 "
                 f"({bm25_store.doc_count()} 文档, hash={bm25_store.get_content_hash()})，跳过重建"
             )
 
-        self.person_index = {}  # 懒加载：首次人名查询时构建
+        # 人名索引只存 doc_id，不存正文；启动时构建一次可避免首次查询才付出
+        # doc_db 全量读取成本。命中后仍会经过 Stage 2 授权、过滤和 Evidence Gate。
+        self.person_index = self._build_person_index()
 
         if ENABLE_MEMORY:
             from backend.memory import memory_manager
@@ -486,7 +489,7 @@ class RAGPipeline:
             return
         try:
             new_retriever = self.bm25_store.remove_documents(
-                doc_ids, k=BM25_SEARCH_K, file_paths=file_paths,
+                doc_ids, k=BM25_CANDIDATE_K, file_paths=file_paths,
             )
             if new_retriever is not None:
                 self.bm25 = new_retriever
@@ -525,15 +528,27 @@ class RAGPipeline:
             return []
 
     def refresh_bm25_from_store(self) -> None:
-        """从磁盘 store 重新加载 BM25 索引（indexer 上传/重索引后调用）。"""
+        """刷新 BM25 与人名索引（indexer 上传/重索引后调用）。
+
+        上传会新增/替换 doc_db 记录；如果只刷新 BM25 而不刷新人名索引，
+        新文档直到进程重启前都无法走 person_name 快速路径。
+        """
         if self.bm25_store is None:
             return
-        reloaded = self.bm25_store.load(k=BM25_SEARCH_K)
+        reloaded = self.bm25_store.load(k=BM25_CANDIDATE_K)
         if reloaded is not None:
             self.bm25 = reloaded
             logger.info(f"[RAG] BM25 已从磁盘刷新 ({self.bm25_store.doc_count()} 文档)")
         else:
             logger.warning("[RAG] BM25 磁盘刷新失败，保持当前内存索引")
+        self.refresh_person_index()
+
+    def refresh_person_index(self) -> None:
+        """清空并重建人名倒排索引，同时更新已创建的 RAGChain 引用。"""
+        self._person_to_doc_cache = {}
+        self.person_index = self._build_person_index()
+        if getattr(self, "lc_chain", None) is not None:
+            self.lc_chain.person_index = self.person_index
 
     def check_consistency(self):
         """审计 5 个存储之间的索引一致性。"""
@@ -622,6 +637,7 @@ class RAGPipeline:
         kb_ids: list[str] | None = None,
         subject_type: str = "",
         department: str = "",
+        permissions: Iterable[str] | None = None,
     ) -> str:
         """提问入口：3 段式 — 准备 → 执行 → 清理。
 
@@ -634,7 +650,8 @@ class RAGPipeline:
         self.last_answer_meta: dict = {}
         logger.info(f"收到问题: {question[:80]} (session={session_id}, kb={kb_id})")
         self._prepare_context(kb_id, question, kb_ids=kb_ids,
-                              subject_type=subject_type, department=department)
+                              subject_type=subject_type, department=department,
+                              permissions=permissions)
         try:
             if not self._check_resources():
                 return "系统资源紧张，请稍后重试"
@@ -663,7 +680,8 @@ class RAGPipeline:
             self._cleanup()
 
     def _prepare_context(self, kb_id: str, question: str, kb_ids: list[str] | None = None,
-                         subject_type: str = "", department: str = ""):
+                         subject_type: str = "", department: str = "",
+                         permissions: Iterable[str] | None = None):
         """注入 kb_id + QueryAnalyzer metadata → contextvars metadata_filter。
 
         主体属性以本次调用声明为准回填到运行态借读的权威身份实例
@@ -676,6 +694,18 @@ class RAGPipeline:
         from backend.rag.routing.kb_router import KBRouter
         from backend.rag.retrieval.kb_filter import build_kb_filter
 
+        current_identity = get_context().identity
+        effective_subject_type = (
+            subject_type or getattr(current_identity, "subject_type", "")
+        )
+        effective_department = (
+            department or getattr(current_identity, "department", "")
+        )
+        effective_permissions = (
+            permissions
+            if permissions is not None
+            else getattr(current_identity, "permissions", None)
+        )
         mf: dict = {}
 
         # kb_ids（多知识库）优先级最高 → 显式 kb_id → KB Router 推断
@@ -707,7 +737,14 @@ class RAGPipeline:
         except Exception:
             logger.debug("query_filter 合并失败", exc_info=True)
 
-        if not mf:
+        # 保留旧契约：没有过滤条件且调用方没有声明任何授权属性时，
+        # 不创建新的 RAG 状态，避免覆盖图路径已绑定的身份实例。
+        if (
+            not mf
+            and not effective_subject_type
+            and not effective_department
+            and effective_permissions is None
+        ):
             return
 
         ctx = RagRequestState(
@@ -716,8 +753,13 @@ class RAGPipeline:
             query=question,
             identity=get_context().identity,
         )
-        ctx.identity.subject_type = subject_type
-        ctx.identity.department = department
+        ctx.identity.subject_type = effective_subject_type
+        ctx.identity.department = effective_department
+        ctx.identity.permissions = (
+            None
+            if effective_permissions is None
+            else tuple(sorted(set(effective_permissions)))
+        )
         set_context(ctx)
         logger.info(f"[RAG.ask] metadata_filter={mf}")
 
@@ -780,8 +822,7 @@ class RAGPipeline:
             from backend.config.llm import LLM_MODEL
             ctx = get_context()
             ident = ctx.identity
-            scope = (f"{getattr(ident, 'subject_type', '') or '-'}"
-                     f":{getattr(ident, 'department', '') or '-'}")
+            scope = self._authorization_scope(ident)
             cached = get_answer_cache().get(
                 question, kb_id, ctx.metadata_filter, LLM_MODEL, scope=scope,
             )
@@ -802,8 +843,7 @@ class RAGPipeline:
             from backend.config.llm import LLM_MODEL
             ctx = get_context()
             ident = ctx.identity
-            scope = (f"{getattr(ident, 'subject_type', '') or '-'}"
-                     f":{getattr(ident, 'department', '') or '-'}")
+            scope = self._authorization_scope(ident)
             get_answer_cache().put(
                 question, kb_id, ctx.metadata_filter, LLM_MODEL, answer,
                 scope=scope,
@@ -830,7 +870,28 @@ class RAGPipeline:
         )
         return any(marker in answer for marker in rejection_markers)
 
-    def retrieve_knowledge(self, question: str, kb_id: str = "default", top_k: int = 3) -> str:
+    @staticmethod
+    def _authorization_scope(identity) -> str:
+        """生成包含主体、部门和文档权限的缓存隔离键。"""
+        permissions = getattr(identity, "permissions", None)
+        permission_scope = (
+            "-" if permissions is None else ",".join(sorted(set(permissions))) or "-"
+        )
+        return (
+            f"{getattr(identity, 'subject_type', '') or '-'}:"
+            f"{getattr(identity, 'department', '') or '-'}:"
+            f"{permission_scope}"
+        )
+
+    def retrieve_knowledge(
+        self,
+        question: str,
+        kb_id: str = "default",
+        top_k: int = 3,
+        subject_type: str = "",
+        department: str = "",
+        permissions: Iterable[str] | None = None,
+    ) -> str:
         """轻量检索：只检索不生成回答，供 BusinessAnalyzer 等下游使用。
 
         与 ask() 的区别:
@@ -842,23 +903,34 @@ class RAGPipeline:
         import time as _time
         t0 = _time.monotonic()
 
-        self._prepare_context(kb_id, question)
+        self._prepare_context(
+            kb_id,
+            question,
+            subject_type=subject_type,
+            department=department,
+            permissions=permissions,
+        )
         try:
             # 读取 _prepare_context 注入的 metadata_filter（KB 路由 + QueryAnalyzer）
             try:
                 from backend.rag.context import get_context
                 mf = get_context().metadata_filter
+                user_permissions = get_context().identity.permissions
             except Exception:
                 mf = None
+                user_permissions = None
 
             chunks = []
             # BM25 检索 —— LangChain BM25Retriever 的公开接口是 .invoke(query)
             # （旧代码误用 .search，BM25 腿 100% 断，被软降级吞掉）；它不支持
             # metadata 过滤，结果按 Chroma where 语义手工后过滤。
             try:
+                from backend.rag.permissions import filter_documents_by_permission
                 bm25_results = self.bm25.invoke(question)
                 for doc in bm25_results:
                     if not self._doc_matches_filter(getattr(doc, "metadata", {}), mf):
+                        continue
+                    if not filter_documents_by_permission([doc], user_permissions):
                         continue
                     chunks.append(doc.page_content if hasattr(doc, 'page_content') else str(doc))
             except Exception as e:
@@ -1011,4 +1083,3 @@ def get_rag_pipeline_state() -> dict:
         from backend.config.rag import RAG_SERVICE_URL
         return {"state": "remote", "endpoint": RAG_SERVICE_URL}
     return _get_local_pipeline_state()
-

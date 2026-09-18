@@ -460,6 +460,54 @@ class TestKbIdFallback:
         finally:
             clear_context()
 
+    def test_retriever_filters_restricted_chunks_before_return(self):
+        """KB 授权通过后仍须执行文档 permission_scope 收口。"""
+        from backend.core.request_context import RequestContext
+        from backend.rag.context import RagRequestState, set_context, clear_context
+
+        set_context(RagRequestState(
+            metadata_filter={},
+            query="制度查询",
+            identity=RequestContext(
+                subject_type="employee",
+                department="hr",
+                permissions=None,
+            ),
+        ))
+        try:
+            general = Document(
+                page_content="通用制度",
+                metadata={
+                    "chunk_id": "c-general",
+                    "doc_id": "d-general",
+                    "kb_id": "policy_general",
+                    "permission_scope": "general",
+                },
+            )
+            restricted = Document(
+                page_content="财务制度",
+                metadata={
+                    "chunk_id": "c-finance",
+                    "doc_id": "d-finance",
+                    "kb_id": "policy_general",
+                    "permission_scope": "finance_restricted",
+                },
+            )
+            r = _make_retriever(
+                SimpleNamespace(similarity_search=lambda q, k=15, filter=None: []),
+                SimpleNamespace(
+                    retrieve=lambda q, k=5, doc_ids=None, metadata_filter=None,
+                    expanded_queries=None: [general, restricted],
+                ),
+                SimpleNamespace(invoke=lambda q: []),
+            )
+            r.k = 5
+
+            docs = r._get_relevant_documents("制度查询")
+            assert [doc.metadata["chunk_id"] for doc in docs] == ["c-general"]
+        finally:
+            clear_context()
+
     def test_or_scope_filter_also_relaxed(self):
         """$or 形式的多 KB 候选同样在 0 命中时被放宽。"""
         from backend.rag.context import RagRequestState, set_context, clear_context

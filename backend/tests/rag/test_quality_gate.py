@@ -8,7 +8,8 @@ import sqlite3
 import pytest
 
 from backend.rag.permissions import (
-    is_accessible, normalize_permissions, partition_by_permission,
+    filter_documents_by_permission, is_accessible, normalize_permissions,
+    partition_by_permission,
     required_permissions,
 )
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
@@ -66,6 +67,25 @@ class TestPermissions:
         allowed, denied = partition_by_permission(metas, set())
         assert allowed == [0]
         assert denied == [1, 2]
+
+    def test_filter_documents_removes_restricted_evidence(self):
+        from langchain_core.documents import Document
+
+        docs = [
+            Document(page_content="公开", metadata={"permission_scope": "general"}),
+            Document(page_content="财务", metadata={"permission_scope": "finance_restricted"}),
+        ]
+        visible = filter_documents_by_permission(docs, None)
+        assert [doc.page_content for doc in visible] == ["公开"]
+        assert docs[1].page_content == "财务"
+
+    def test_filter_documents_fails_closed_on_malformed_document(self):
+        class BrokenDocument:
+            @property
+            def metadata(self):
+                raise RuntimeError("metadata unavailable")
+
+        assert filter_documents_by_permission([BrokenDocument()], None) == []
 
 
 # ============ §5.1 质量记录字段 ============
@@ -254,4 +274,3 @@ class TestRegistryPermissionColumn:
         # update_fields 白名单放行
         r.update_fields(p, {"permission_scope": "hr_confidential"})
         assert r.get_by_path(p)["permission_scope"] == "hr_confidential"
-

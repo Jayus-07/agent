@@ -35,8 +35,14 @@ from typing import Any, Iterator
 import numpy as np
 import psycopg2
 import psycopg2.extras
+from psycopg2.pool import ThreadedConnectionPool
 
 from backend.config.database import VECTOR_PG_CONFIG
+from backend.config.rag import (
+    VECTOR_HNSW_EF_SEARCH,
+    VECTOR_PG_POOL_MAX,
+    VECTOR_PG_POOL_MIN,
+)
 from backend.rag.vectorstore.knowledge_store import (
     KnowledgeStore,
     _sanitize_metadata,
@@ -50,6 +56,30 @@ EMBEDDING_DIM = int(os.getenv("VECTOR_PG_DIM", "1024"))
 # 同进程避免重复 DDL（chunk 级 + doc 级等多次构造）
 _DDL_DONE: set[str] = set()
 _DDL_LOCK = threading.Lock()
+_POOL_LOCK = threading.Lock()
+_POOLS: dict[tuple[tuple[str, str], ...], ThreadedConnectionPool] = {}
+
+
+def _pool_key(config: dict) -> tuple[tuple[str, str], ...]:
+    """构造不含明文日志的稳定连接池 key。"""
+    return tuple(sorted((str(key), repr(value)) for key, value in config.items()))
+
+
+def _get_vector_pool() -> ThreadedConnectionPool:
+    """按 PG 连接配置复用进程级连接池，避免每个 collection 各建一池。"""
+    key = _pool_key(VECTOR_PG_CONFIG)
+    with _POOL_LOCK:
+        pool = _POOLS.get(key)
+        if pool is None:
+            # ThreadedConnectionPool 自带借还锁，适配 FastAPI 线程池和索引任务
+            # 并发；连接池初始化失败直接抛出，不能把数据库不可达伪装成空索引。
+            pool = ThreadedConnectionPool(
+                VECTOR_PG_POOL_MIN,
+                VECTOR_PG_POOL_MAX,
+                **VECTOR_PG_CONFIG,
+            )
+            _POOLS[key] = pool
+        return pool
 
 
 # ======================= where → SQL 翻译器（纯函数） =======================
@@ -159,6 +189,7 @@ class PgVectorKnowledgeStore(KnowledgeStore):
         self._collection = _collection_name_from_path(persist_directory)
         self._table = os.getenv("VECTOR_PG_TABLE_PREFIX", "") + "rag_vectors"
         self._lock = threading.Lock()
+        self._pool = _get_vector_pool()
         self._init_db()
 
     # ---- 工具 ----
@@ -174,21 +205,28 @@ class PgVectorKnowledgeStore(KnowledgeStore):
         """确定性 ID：同内容同 metadata 重跑 → 同 ID（幂等 upsert 基础）。"""
         return f"{self._collection}:{self._doc_id_of(meta, text)}:{meta.get('chunk_index', idx)}"
 
-    # ---- 连接层（仿 chunk_store_pg.py）----
+    # ---- 连接层 ----
 
     @contextmanager
     def _conn(self) -> Iterator[Any]:
-        conn = psycopg2.connect(**VECTOR_PG_CONFIG)
+        # 连接池按 PG 配置在进程内共享；借出的连接必须归还，不能 close，
+        # 否则 20K 文档检索下每次请求都会重新握手，吞吐会明显下降。
+        conn = self._pool.getconn()
+        discard = False
         try:
             from pgvector.psycopg2 import register_vector
             register_vector(conn)
             yield conn
             conn.commit()
         except Exception:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                # 回滚失败说明连接可能已损坏；从池中丢弃，避免坏连接污染后续请求。
+                discard = True
             raise
         finally:
-            conn.close()
+            self._pool.putconn(conn, close=discard)
 
     # ---- 建表（幂等）----
 
@@ -351,6 +389,9 @@ class PgVectorKnowledgeStore(KnowledgeStore):
         params.extend([qvec, k])
         with self._conn() as conn:
             cur = conn.cursor()
+            # SET LOCAL 只在当前事务生效，归还连接后不会把本次高召回参数
+            # 泄漏给其他请求；过滤条件越强，适当提高 ef_search 越能减少漏召回。
+            cur.execute("SET LOCAL hnsw.ef_search = %s", (VECTOR_HNSW_EF_SEARCH,))
             cur.execute(sql, params)
             out = []
             for _id, content, meta, dist in cur.fetchall():
