@@ -1,0 +1,228 @@
+{
+  "schema_version": "1.0",
+  "captured_at_utc": "2026-09-18T19:43:53.637497Z",
+  "git": {
+    "commit": "683e1c434bb563665352f0699f28c3e3f56ff4f1",
+    "branch": "main",
+    "dirty": true,
+    "tracked_diff_sha256": "8c40e3254d922e62f3a63807230c26dc125e01d4e215fc6c53ddd33866e03289",
+    "untracked_manifest_sha256": "001001d26f931e6db6f919f7068b67fc1733f0a53805b598b209f4d7367a0373",
+    "workspace_sha256": "255ef4949471cd0f3ddc14459be5fa335ca010a5d79022b52c051e0158289fe2",
+    "changed_path_count": 181,
+    "untracked_path_count": 69,
+    "fingerprint_excludes": [
+      "docs/evidence/rag20k/phase0/baseline"
+    ]
+  },
+  "runtime": {
+    "platform": "Windows-10-10.0.26100-SP0",
+    "python": {
+      "status": "ok",
+      "version": "3.10.2",
+      "executable": "D:\\Python\\python.exe"
+    },
+    "node": {
+      "status": "ok",
+      "version": "v24.12.0"
+    },
+    "npm": {
+      "status": "ok",
+      "version": "11.6.2"
+    },
+    "postgresql": {
+      "status": "ok",
+      "version": "postgres (PostgreSQL) 16.14 (Debian 16.14-1.pgdg12+1)"
+    },
+    "redis": {
+      "status": "ok",
+      "version": "Redis server v=7.4.9 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=b4acab9aea09546d"
+    },
+    "docker": {
+      "status": "ok",
+      "version": "Docker version 29.2.1, build a5c7197"
+    },
+    "docker_compose": {
+      "status": "ok",
+      "version": "Docker Compose version v5.1.0"
+    }
+  },
+  "dependencies": {
+    "pyproject.toml": {
+      "status": "ok",
+      "sha256": "524cd5f01c64f861332ab60d56d9e23dd7762ce0415417b4ebb309967ef0a7fd"
+    },
+    "requirements-lock.txt": {
+      "status": "ok",
+      "sha256": "713df57439ba7f5edadaf3b4b00a7c80fb4494d1e1c13a94ccd5e45cf992fc88"
+    },
+    "frontend/package-lock.json": {
+      "status": "ok",
+      "sha256": "0f8809e7ebfd47c22bc86a4936ff684a9e920089530a232e8eadbf0b0ea31ea8"
+    },
+    "frontend-admin/package-lock.json": {
+      "status": "ok",
+      "sha256": "6066d625320361452dd90e4bb9ea2aedfbc914e96a3beadb311932c47baa876b"
+    }
+  },
+  "docker": {
+    "status": "ok",
+    "images": [
+      {
+        "service": "agent-apisix",
+        "repository": "apache/apisix",
+        "tag": "3.13.0-debian",
+        "image_id": "sha256:c5c7a55ebb5c07abc210dbb963a37f41030e12c91d23bacedbaa168fec633bd7",
+        "repo_digest": "apache/apisix@sha256:c5c7a55ebb5c07abc210dbb963a37f41030e12c91d23bacedbaa168fec633bd7"
+      },
+      {
+        "service": "agent-app-1",
+        "repository": "agent-app",
+        "tag": "latest",
+        "image_id": "sha256:9160e966c84cf19d6551186974b2290268e09a0359ad0f2d80f54816b05d99d3",
+        "repo_digest": "agent-app@sha256:9160e966c84cf19d6551186974b2290268e09a0359ad0f2d80f54816b05d99d3"
+      },
+      {
+        "service": "agent-celery-exporter-1",
+        "repository": "danihodovic/celery-exporter",
+        "tag": "latest",
+        "image_id": "sha256:7e4622746e7d07eca0040a476ba4d904383f70ef7f90ef2db68a49bdf4c1b203",
+        "repo_digest": "danihodovic/celery-exporter@sha256:7e4622746e7d07eca0040a476ba4d904383f70ef7f90ef2db68a49bdf4c1b203"
+      },
+      {
+        "service": "agent-grafana-1",
+        "repository": "grafana/grafana",
+        "tag": "latest",
+        "image_id": "sha256:f772d434e8fab0049deb2b1b30abd43342bcfca1537614aa8d36080232cf4283",
+        "repo_digest": "grafana/grafana@sha256:f772d434e8fab0049deb2b1b30abd43342bcfca1537614aa8d36080232cf4283"
+      },
+      {
+        "service": "agent-mcp-service-1",
+        "repository": "agent-mcp-service",
+        "tag": "latest",
+        "image_id": "sha256:b3886dbfdcde5cbc71c1888b53461cacbe686180704d564fb4cec6e3171c1737",
+        "repo_digest": "agent-mcp-service@sha256:b3886dbfdcde5cbc71c1888b53461cacbe686180704d564fb4cec6e3171c1737"
+      },
+      {
+        "service": "agent-postgres-1",
+        "repository": "pgvector/pgvector",
+        "tag": "pg16",
+        "image_id": "sha256:131dcf7ff6a900545df8e7e092c270aa8c6db2f2c818e408cb45ec21316b74e6",
+        "repo_digest": "docker.m.daocloud.io/pgvector/pgvector@sha256:131dcf7ff6a900545df8e7e092c270aa8c6db2f2c818e408cb45ec21316b74e6"
+      },
+      {
+        "service": "agent-postgres-exporter-1",
+        "repository": "prometheuscommunity/postgres-exporter",
+        "tag": "latest",
+        "image_id": "sha256:ac5ec343104fae0e2d84a27bb8d69b38430a11910c5382cad85d478d2bab713e",
+        "repo_digest": "prometheuscommunity/postgres-exporter@sha256:ac5ec343104fae0e2d84a27bb8d69b38430a11910c5382cad85d478d2bab713e"
+      },
+      {
+        "service": "agent-prometheus-1",
+        "repository": "prom/prometheus",
+        "tag": "latest",
+        "image_id": "sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0",
+        "repo_digest": "prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0"
+      },
+      {
+        "service": "agent-rag-service-1",
+        "repository": "agent-rag-service",
+        "tag": "latest",
+        "image_id": "sha256:82936ff7714badbac898bf64863e6204d9cf6b6f605e4ccdb6b1009fc419277b",
+        "repo_digest": "agent-rag-service@sha256:82936ff7714badbac898bf64863e6204d9cf6b6f605e4ccdb6b1009fc419277b"
+      },
+      {
+        "service": "agent-redis-1",
+        "repository": "redis",
+        "tag": "7-alpine",
+        "image_id": "sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+        "repo_digest": "redis@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99"
+      },
+      {
+        "service": "agent-redis-exporter-1",
+        "repository": "oliver006/redis_exporter",
+        "tag": "latest",
+        "image_id": "sha256:c67a432dba6b4ae30f471e3c77cf14a289133bbeeb89abb0bb03e6092efb2836",
+        "repo_digest": "oliver006/redis_exporter@sha256:c67a432dba6b4ae30f471e3c77cf14a289133bbeeb89abb0bb03e6092efb2836"
+      },
+      {
+        "service": "agent-worker-1",
+        "repository": "agent-worker",
+        "tag": "latest",
+        "image_id": "sha256:d76bff343e4c26db15a767ff75132e7b6fff1f63e70999b9fcc3641351c00e96",
+        "repo_digest": "agent-worker@sha256:d76bff343e4c26db15a767ff75132e7b6fff1f63e70999b9fcc3641351c00e96"
+      }
+    ]
+  },
+  "configuration": {
+    "ENV_MODE": "cloud",
+    "RAG_MODE": "local",
+    "LLM_MODEL": "MiniMax-M3",
+    "EMBEDDING_MODEL": "text-embedding-v3",
+    "VECTOR_PG_DIM": 1024,
+    "EMBEDDING_BATCH_SIZE": 10,
+    "EMBED_BATCH_SIZE": 32,
+    "EMBED_REQUEST_LIMIT": 10,
+    "CHUNK_SIZE": 500,
+    "CHUNK_OVERLAP": 50,
+    "LEAF_CHUNK_TOKENS": 500,
+    "PARENT_CHUNK_TOKENS": 2000,
+    "ENABLE_SEMANTIC_CHUNKING": false,
+    "VECTOR_PG_POOL_MIN": 1,
+    "VECTOR_PG_POOL_MAX": 10,
+    "VECTOR_HNSW_EF_SEARCH": 80,
+    "RAG_DOC_CANDIDATE_K": 50,
+    "BM25_CANDIDATE_K": 100,
+    "HYBRID_SEARCH_K": 8,
+    "RERANK_MODEL": "qwen3-rerank",
+    "RERANK_TOP_K": 8,
+    "RERANK_SCORE_THRESHOLD": 0.3,
+    "MULTI_QUERY_MODE": "auto",
+    "MULTI_QUERY_COUNT": 3,
+    "MULTI_QUERY_TOP_K_PER": 5,
+    "EVIDENCE_GATE_ENABLED": true,
+    "CITATION_SUPPORT_THRESHOLD": 0.4,
+    "DB_POOL_MIN_CONN": 2,
+    "DB_POOL_MAX_CONN": 10,
+    "API_KEY": {
+      "configured": false
+    },
+    "AUTH_REDIS_PASSWORD": {
+      "configured": false
+    },
+    "DASHSCOPE_API_KEY": {
+      "configured": false
+    },
+    "DEEPSEEK_API_KEY": {
+      "configured": false
+    },
+    "EMBEDDING_API_KEY": {
+      "configured": false
+    },
+    "INTERNAL_API_TOKEN": {
+      "configured": false
+    },
+    "JWT_SECRET": {
+      "configured": false
+    },
+    "JWT_SECRET_PREVIOUS": {
+      "configured": false
+    },
+    "PGPASSWORD": {
+      "configured": false
+    },
+    "PG_READONLY_PASSWORD": {
+      "configured": false
+    },
+    "QWEN_API_KEY": {
+      "configured": false
+    },
+    "QWEN_TP_API_KEY": {
+      "configured": false
+    },
+    "REDIS_PASSWORD": {
+      "configured": false
+    }
+  },
+  "blocking_items": [],
+  "capture_id": "8ad9e77f1b4fd9f4"
+}
