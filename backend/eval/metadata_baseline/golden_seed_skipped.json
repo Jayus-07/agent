@@ -1,0 +1,194 @@
+[
+  {
+    "file": "table_仓库库存台账_GBK.csv",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_供应商联系人名录_GBK.csv",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_区域销售月报_2026.csv",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_发票台账_2026.csv",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_在售产品目录_UTF8无BOM.csv",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_培训记录_GBK.csv",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_客户满意度调查_2026.csv",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_客服工单统计_2026.csv",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_差旅报销明细_2026H1.csv",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_市场投放费用_2026.csv",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_月度在职人数.csv",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_渠道销售_2025_GB18030.csv",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_采购订单台账_2026.csv",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_面试评价记录.csv",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "manual_会议室使用规范.docx",
+    "reason": "手册类横跨 sop/training/policy，需逐篇人工"
+  },
+  {
+    "file": "report_2025年度产品总结.docx",
+    "reason": "报告类横跨 financial/政策/安全等，需逐篇人工"
+  },
+  {
+    "file": "report_Q2产品迭代总结_2026.docx",
+    "reason": "报告类横跨 financial/政策/安全等，需逐篇人工"
+  },
+  {
+    "file": "report_董事会决议_20260628.docx",
+    "reason": "报告类横跨 financial/政策/安全等，需逐篇人工"
+  },
+  {
+    "file": "manual_新员工入职手册.md",
+    "reason": "手册类横跨 sop/training/policy，需逐篇人工"
+  },
+  {
+    "file": "manual_运维作业手册.md",
+    "reason": "手册类横跨 sop/training/policy，需逐篇人工"
+  },
+  {
+    "file": "report_2026Q2安全事件报告.md",
+    "reason": "报告类横跨 financial/政策/安全等，需逐篇人工"
+  },
+  {
+    "file": "report_客服运营年度报告_2025.md",
+    "reason": "报告类横跨 financial/政策/安全等，需逐篇人工"
+  },
+  {
+    "file": "spec_数据仓库建设规范.md",
+    "reason": "规范类（数据仓库/API 网关），偏 policy 或 compliance，需人工"
+  },
+  {
+    "file": "manual_员工手册_2026版.pdf",
+    "reason": "手册类横跨 sop/training/policy，需逐篇人工"
+  },
+  {
+    "file": "report_2025年度财务报告.pdf",
+    "reason": "报告类横跨 financial/政策/安全等，需逐篇人工"
+  },
+  {
+    "file": "report_2026上半年财务摘要.pdf",
+    "reason": "报告类横跨 financial/政策/安全等，需逐篇人工"
+  },
+  {
+    "file": "report_压测报告_2026Q2.pdf",
+    "reason": "报告类横跨 financial/政策/安全等，需逐篇人工"
+  },
+  {
+    "file": "scan_培训签到表.pdf",
+    "reason": "扫描件（OCR 产出），文本质量影响标注效率，批次 2 处理"
+  },
+  {
+    "file": "scan_设备报废申请单.pdf",
+    "reason": "扫描件（OCR 产出），文本质量影响标注效率，批次 2 处理"
+  },
+  {
+    "file": "scan_费用报销单.pdf",
+    "reason": "扫描件（OCR 产出），文本质量影响标注效率，批次 2 处理"
+  },
+  {
+    "file": "scan_门禁权限申请表.pdf",
+    "reason": "扫描件（OCR 产出），文本质量影响标注效率，批次 2 处理"
+  },
+  {
+    "file": "spec_API网关技术规范.pdf",
+    "reason": "规范类（数据仓库/API 网关），偏 policy 或 compliance，需人工"
+  },
+  {
+    "file": "notes_产品评审会议纪要_20260830.txt",
+    "reason": "会议纪要，taxonomy 无对应类（趋势上是 general），需确认口径"
+  },
+  {
+    "file": "notes_战略务虚会纪要_2026.txt",
+    "reason": "会议纪要，taxonomy 无对应类（趋势上是 general），需确认口径"
+  },
+  {
+    "file": "notes_运维周会纪要_20260907.txt",
+    "reason": "会议纪要，taxonomy 无对应类（趋势上是 general），需确认口径"
+  },
+  {
+    "file": "table_2026H2商机漏斗.xlsx",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_2026Q2部门人力成本.xlsx",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_2026人力编制台账.xlsx",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_2026年度预算表.xlsx",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_云资源账单_2026.xlsx",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_产品定价表.xlsx",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_产品核心指标.xlsx",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_候选人漏斗.xlsx",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_内部课程目录.xlsx",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_合同台账.xlsx",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_容量规划表.xlsx",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_接口调用量_2026.xlsx",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  },
+  {
+    "file": "table_服务器资产清单.xlsx",
+    "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）"
+  }
+]

@@ -157,6 +157,14 @@ def run_file_predictions(rows: list[dict], pred_path: str | Path) -> list[dict]:
     return [{**r, "pred": by_id[r["id"]]} for r in rows]
 
 
+def _field_coverage(rows: list[dict], field: str) -> float:
+    """gold 字段非空占比（种子集不预标 domain/risk 时对应报告跳过）。"""
+    if not rows:
+        return 0.0
+    filled = sum(1 for r in rows if r.get(field))
+    return filled / len(rows)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="元数据基线评估（规划阶段 1.2/1.3）")
     ap.add_argument("--golden", required=True, help="黄金集 JSONL 路径")
@@ -172,10 +180,14 @@ def main(argv: list[str] | None = None) -> int:
 
     from backend.rag.preprocessing.metadata_schema import DOMAINS, DOC_TYPES
 
+    # 维度覆盖门控：种子集（fixture_seed）不预标 domain/risk → 对应报告置 None，
+    # 避免全 general 的误导性指标混进正式对比
+    domain_report = (evaluate(merged, "domain_gold", list(DOMAINS))
+                     if _field_coverage(rows, "domain_gold") >= 0.5 else None)
     report = {
         "n": len(merged),
         "doc_type": evaluate(merged, "doc_type_gold", list(DOC_TYPES)),
-        "business_domain": evaluate(merged, "domain_gold", list(DOMAINS)),
+        "business_domain": domain_report,
         "risk": risk_recall(merged),
         "latency_ms": latency_percentiles(merged),
     }
