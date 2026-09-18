@@ -17,13 +17,25 @@ from backend.shared.logger import logger
 # cs_target（Router 预过滤产物）→ CS Graph expert 节点名
 # 单一事实源在 customer_service/graph_state.py（cs_graph_node 同用此映射）
 from backend.customer_service.graph_state import CS_TARGET_TO_EXPERT as _TARGET_TO_EXPERT
+from backend.customer_service.router.intents import FINE_INTENTS as _FINE_INTENTS
 
 _VALID_TARGETS = set(_TARGET_TO_EXPERT)
+_VALID_INTENTS = set(_FINE_INTENTS)
+_VALID_NEXT_ACTION = {"answer", "clarify", "refuse", "handoff",
+                      "propose", "propose_with_gap"}
+_VALID_CS_ROUTE = {"hit", "miss_non_cs", "clarify_weak"}
+_CS_EXPERT_NODES = {
+    "cs_knowledge_expert", "cs_query_expert", "cs_action_expert",
+    "cs_complaint_expert", "cs_handoff_expert",
+}
 
 
-def _run_cs(cases: list[TestCase], live: bool = False, **kwargs) -> list[EvalResult]:
+def _run_cs(cases: list[TestCase], live: bool = False,
+            mode: str = "graph_only", **kwargs) -> list[EvalResult]:
     if not live:
         return _run_offline_sanity(cases)
+    if mode == "full_path":
+        return _run_live_full_path(cases)
     return _run_live(cases)
 
 
@@ -40,6 +52,18 @@ def _run_offline_sanity(cases: list[TestCase]) -> list[EvalResult]:
         target = exp.get("target")
         if not target or target not in _VALID_TARGETS:
             problems.append(f"expected.target 非法: {target!r}（合法值 {_VALID_TARGETS}）")
+        # cs-v2 扩展字段（P0 评测集，2026-09-19）：存在即校验；v1 用例无这些键自动跳过
+        if exp.get("intent") is not None and exp["intent"] not in _VALID_INTENTS:
+            problems.append(f"expected.intent 非法: {exp['intent']!r}")
+        if exp.get("cs_route") is not None and exp["cs_route"] not in _VALID_CS_ROUTE:
+            problems.append(f"expected.cs_route 非法: {exp['cs_route']!r}")
+        if exp.get("next_action") is not None and exp["next_action"] not in _VALID_NEXT_ACTION:
+            problems.append(f"expected.next_action 非法: {exp['next_action']!r}")
+        if exp.get("risk_level") not in (None, "low", "medium", "high"):
+            problems.append(f"expected.risk_level 非法: {exp['risk_level']!r}")
+        if exp.get("should_handoff") is not None and not isinstance(
+                exp["should_handoff"], bool):
+            problems.append("expected.should_handoff 必须为 bool")
         results.append(EvalResult(
             case_id=case.id,
             module="cs",
@@ -134,3 +158,78 @@ def _run_live(cases: list[TestCase]) -> list[EvalResult]:
 
 
 register_runner("cs", _run_cs, needs_live=False)
+
+
+def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
+    """full_path 模式（P0 评测集设计稿 §4）：
+    Input Guard → 主图 Router（含 CS/旅游预过滤）→ route_selector → CS 子图全链。
+
+    当前可断言信号（不依赖 P1 CSUnderstanding 契约）：
+      - 域进入：cs_route=hit ⇒ status 流出现 cs_graph_node；
+      - 文本断言：must_contain / must_not_contain / forbidden_facts；
+      - 澄清：next_action=clarify ⇒ 流中出现 clarification 事件。
+    intent/entities 精确断言待 P1 CSUnderstanding 契约落地后在 actual 接线
+    （actual.pending 标注 p1-fields，不计 fail）。多轮 case 暂以末轮输入执行，
+    逐轮会话重放待 runner v2.1。
+    """
+    from backend.orchestration.graph import MultiAgentSystem
+
+    agent = MultiAgentSystem()
+    results: list[EvalResult] = []
+    for case in cases:
+        t0 = time.time()
+        exp = case.expected
+        nodes: set[str] = set()
+        deltas: list[str] = []
+        clarify_seen = False
+        try:
+            for evt in agent.stream_events(
+                case.question, f"eval-cs-v2-{case.id}", kb_id="default",
+                user_id="eval_bot",
+            ):
+                name = evt.get("event")
+                data = evt.get("data") or {}
+                if name == "status" and data.get("node"):
+                    nodes.add(data["node"])
+                elif name == "clarification":
+                    clarify_seen = True
+                elif name == "delta" and isinstance(data.get("content"), str):
+                    deltas.append(data["content"])
+            answer = "".join(deltas)
+            problems: list[str] = []
+            metrics: dict[str, float | None] = {}
+            if exp.get("cs_route") == "hit" and "cs_graph_node" not in nodes:
+                problems.append(f"未进入客服域: nodes={sorted(nodes)}")
+            for kw in exp.get("must_contain") or []:
+                if kw and kw not in answer:
+                    problems.append(f"must_contain 未命中: {kw!r}")
+            for kw in (exp.get("must_not_contain") or []) + (exp.get("forbidden_facts") or []):
+                if kw and kw in answer:
+                    problems.append(f"禁词命中: {kw!r}")
+            if exp.get("next_action") == "clarify" and not clarify_seen:
+                problems.append("期望澄清但未出现 clarification 事件")
+            metrics["cs_domain_entered"] = 1.0 if "cs_graph_node" in nodes else 0.0
+            metrics["clarified"] = 1.0 if clarify_seen else 0.0
+            results.append(EvalResult(
+                case_id=case.id,
+                module="cs",
+                status="fail" if problems else "pass",
+                expected=exp,
+                actual={"nodes": sorted(nodes), "answer_head": answer[:200],
+                        "pending": "p1-fields: intent/entities 断言待 CSUnderstanding"},
+                metrics=metrics,
+                duration_ms=int((time.time() - t0) * 1000),
+                error_msg="; ".join(problems) or None,
+            ))
+        except Exception as e:
+            logger.warning(f"[CS Runner] full_path case {case.id} 执行失败: {e}", exc_info=True)
+            results.append(EvalResult(
+                case_id=case.id,
+                module="cs",
+                status="error",
+                expected=exp,
+                actual={},
+                duration_ms=int((time.time() - t0) * 1000),
+                error_msg=str(e)[:300],
+            ))
+    return results
