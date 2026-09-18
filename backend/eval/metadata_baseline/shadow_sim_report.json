@@ -1,0 +1,147 @@
+{
+  "n": 52,
+  "shadow_errors": 0,
+  "no_decision": 0,
+  "overall": {
+    "hit_rate": 1.0,
+    "agreement_when_hit": 0.7308,
+    "llm_saved_if_cascade_on": 1.0
+  },
+  "per_layer": {
+    "L0": {
+      "hits": 37,
+      "agree": 30,
+      "differ": 7,
+      "hit_rate": 0.7115,
+      "agreement": 0.8108
+    },
+    "L1": {
+      "hits": 4,
+      "agree": 1,
+      "differ": 3,
+      "hit_rate": 0.0769,
+      "agreement": 0.25
+    },
+    "L2": {
+      "hits": 11,
+      "agree": 7,
+      "differ": 4,
+      "hit_rate": 0.2115,
+      "agreement": 0.6364
+    }
+  },
+  "differ_detail": [
+    {
+      "id": "seed-legal-001",
+      "level": "L2",
+      "shadow_doc_type": "compliance",
+      "shadow_confidence": 0.75,
+      "main_doc_type": "legal",
+      "seed_gold": "legal"
+    },
+    {
+      "id": "seed-faq-002",
+      "level": "L1",
+      "shadow_doc_type": "financial",
+      "shadow_confidence": 0.66,
+      "main_doc_type": "faq",
+      "seed_gold": "faq"
+    },
+    {
+      "id": "seed-legal-004",
+      "level": "L2",
+      "shadow_doc_type": "legal",
+      "shadow_confidence": 0.75,
+      "main_doc_type": "contract_template",
+      "seed_gold": "legal"
+    },
+    {
+      "id": "seed-policy-008",
+      "level": "L1",
+      "shadow_doc_type": "financial",
+      "shadow_confidence": 0.63,
+      "main_doc_type": "policy",
+      "seed_gold": "policy"
+    },
+    {
+      "id": "seed-contract-013",
+      "level": "L0",
+      "shadow_doc_type": "legal",
+      "shadow_confidence": 0.95,
+      "main_doc_type": "contract_template",
+      "seed_gold": "legal"
+    },
+    {
+      "id": "seed-legal-017",
+      "level": "L0",
+      "shadow_doc_type": "legal",
+      "shadow_confidence": 0.95,
+      "main_doc_type": "contract_template",
+      "seed_gold": "legal"
+    },
+    {
+      "id": "seed-legal-018",
+      "level": "L0",
+      "shadow_doc_type": "legal",
+      "shadow_confidence": 0.95,
+      "main_doc_type": "contract_template",
+      "seed_gold": "legal"
+    },
+    {
+      "id": "seed-policy-021",
+      "level": "L2",
+      "shadow_doc_type": "legal",
+      "shadow_confidence": 0.75,
+      "main_doc_type": "compliance",
+      "seed_gold": "policy"
+    },
+    {
+      "id": "seed-contract-035",
+      "level": "L0",
+      "shadow_doc_type": "legal",
+      "shadow_confidence": 0.95,
+      "main_doc_type": "contract_template",
+      "seed_gold": "legal"
+    },
+    {
+      "id": "seed-contract-036",
+      "level": "L0",
+      "shadow_doc_type": "legal",
+      "shadow_confidence": 0.95,
+      "main_doc_type": "contract_template",
+      "seed_gold": "legal"
+    },
+    {
+      "id": "seed-legal-038",
+      "level": "L2",
+      "shadow_doc_type": "compliance",
+      "shadow_confidence": 0.75,
+      "main_doc_type": "legal",
+      "seed_gold": "legal"
+    },
+    {
+      "id": "seed-legal-040",
+      "level": "L0",
+      "shadow_doc_type": "legal",
+      "shadow_confidence": 0.95,
+      "main_doc_type": "contract_template",
+      "seed_gold": "legal"
+    },
+    {
+      "id": "seed-policy-042",
+      "level": "L1",
+      "shadow_doc_type": "financial",
+      "shadow_confidence": 0.63,
+      "main_doc_type": "policy",
+      "seed_gold": "policy"
+    },
+    {
+      "id": "seed-readme-049",
+      "level": "L0",
+      "shadow_doc_type": "general",
+      "shadow_confidence": 0.95,
+      "main_doc_type": "customer_data",
+      "seed_gold": "general"
+    }
+  ]
+}

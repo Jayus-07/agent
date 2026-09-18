@@ -1,0 +1,929 @@
+{
+  "generated_at": "2026-09-19",
+  "part_a_seed": {
+    "total": 52,
+    "confirmed": 33,
+    "disputes": [
+      {
+        "id": "seed-legal-001",
+        "seed_gold": "legal",
+        "rule_pred": "compliance",
+        "unified_pred": "legal",
+        "unified_confidence": 0.95,
+        "dispute_pattern": "rule_off"
+      },
+      {
+        "id": "seed-faq-002",
+        "seed_gold": "faq",
+        "rule_pred": "financial",
+        "unified_pred": "faq",
+        "unified_confidence": 0.98,
+        "dispute_pattern": "rule_off"
+      },
+      {
+        "id": "seed-legal-004",
+        "seed_gold": "legal",
+        "rule_pred": "legal",
+        "unified_pred": "contract_template",
+        "unified_confidence": 1.0,
+        "dispute_pattern": "unified_off"
+      },
+      {
+        "id": "seed-policy-008",
+        "seed_gold": "policy",
+        "rule_pred": "financial",
+        "unified_pred": "policy",
+        "unified_confidence": 0.98,
+        "dispute_pattern": "rule_off"
+      },
+      {
+        "id": "seed-contract-013",
+        "seed_gold": "legal",
+        "rule_pred": "legal",
+        "unified_pred": "contract_template",
+        "unified_confidence": 0.98,
+        "dispute_pattern": "unified_off"
+      },
+      {
+        "id": "seed-legal-017",
+        "seed_gold": "legal",
+        "rule_pred": "legal",
+        "unified_pred": "contract_template",
+        "unified_confidence": 0.95,
+        "dispute_pattern": "unified_off"
+      },
+      {
+        "id": "seed-legal-018",
+        "seed_gold": "legal",
+        "rule_pred": "legal",
+        "unified_pred": "contract_template",
+        "unified_confidence": 0.98,
+        "dispute_pattern": "unified_off"
+      },
+      {
+        "id": "seed-policy-019",
+        "seed_gold": "policy",
+        "rule_pred": "policy",
+        "unified_pred": "security",
+        "unified_confidence": 0.98,
+        "dispute_pattern": "unified_off"
+      },
+      {
+        "id": "seed-policy-020",
+        "seed_gold": "policy",
+        "rule_pred": "policy",
+        "unified_pred": "security",
+        "unified_confidence": 0.98,
+        "dispute_pattern": "unified_off"
+      },
+      {
+        "id": "seed-policy-021",
+        "seed_gold": "policy",
+        "rule_pred": "compliance",
+        "unified_pred": "compliance",
+        "unified_confidence": 0.98,
+        "dispute_pattern": "all_differ"
+      },
+      {
+        "id": "seed-policy-030",
+        "seed_gold": "policy",
+        "rule_pred": "financial",
+        "unified_pred": "financial",
+        "unified_confidence": 0.98,
+        "dispute_pattern": "all_differ"
+      },
+      {
+        "id": "seed-contract-035",
+        "seed_gold": "legal",
+        "rule_pred": "legal",
+        "unified_pred": "contract_template",
+        "unified_confidence": 0.98,
+        "dispute_pattern": "unified_off"
+      },
+      {
+        "id": "seed-contract-036",
+        "seed_gold": "legal",
+        "rule_pred": "legal",
+        "unified_pred": "contract_template",
+        "unified_confidence": 0.98,
+        "dispute_pattern": "unified_off"
+      },
+      {
+        "id": "seed-legal-037",
+        "seed_gold": "legal",
+        "rule_pred": "compliance",
+        "unified_pred": "compliance",
+        "unified_confidence": 0.98,
+        "dispute_pattern": "all_differ"
+      },
+      {
+        "id": "seed-legal-038",
+        "seed_gold": "legal",
+        "rule_pred": "compliance",
+        "unified_pred": "legal",
+        "unified_confidence": 0.98,
+        "dispute_pattern": "rule_off"
+      },
+      {
+        "id": "seed-legal-040",
+        "seed_gold": "legal",
+        "rule_pred": "legal",
+        "unified_pred": "contract_template",
+        "unified_confidence": 0.95,
+        "dispute_pattern": "unified_off"
+      },
+      {
+        "id": "seed-policy-042",
+        "seed_gold": "policy",
+        "rule_pred": "financial",
+        "unified_pred": "policy",
+        "unified_confidence": 0.98,
+        "dispute_pattern": "rule_off"
+      },
+      {
+        "id": "seed-policy-048",
+        "seed_gold": "policy",
+        "rule_pred": "security",
+        "unified_pred": "security",
+        "unified_confidence": 0.95,
+        "dispute_pattern": "all_differ"
+      },
+      {
+        "id": "seed-readme-049",
+        "seed_gold": "general",
+        "rule_pred": "general",
+        "unified_pred": "customer_data",
+        "unified_confidence": 0.95,
+        "dispute_pattern": "unified_off"
+      }
+    ]
+  },
+  "part_a_confirmed": [
+    {
+      "id": "seed-legal-003",
+      "seed_gold": "legal",
+      "rule_pred": "legal",
+      "unified_pred": "legal",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-legal-005",
+      "seed_gold": "legal",
+      "rule_pred": "legal",
+      "unified_pred": "legal",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-policy-006",
+      "seed_gold": "policy",
+      "rule_pred": "policy",
+      "unified_pred": "policy",
+      "unified_confidence": 0.95
+    },
+    {
+      "id": "seed-policy-007",
+      "seed_gold": "policy",
+      "rule_pred": "policy",
+      "unified_pred": "policy",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-sop-009",
+      "seed_gold": "sop",
+      "rule_pred": "sop",
+      "unified_pred": "sop",
+      "unified_confidence": 1.0
+    },
+    {
+      "id": "seed-sop-010",
+      "seed_gold": "sop",
+      "rule_pred": "sop",
+      "unified_pred": "sop",
+      "unified_confidence": 1.0
+    },
+    {
+      "id": "seed-sop-011",
+      "seed_gold": "sop",
+      "rule_pred": "sop",
+      "unified_pred": "sop",
+      "unified_confidence": 1.0
+    },
+    {
+      "id": "seed-sop-012",
+      "seed_gold": "sop",
+      "rule_pred": "sop",
+      "unified_pred": "sop",
+      "unified_confidence": 1.0
+    },
+    {
+      "id": "seed-faq-014",
+      "seed_gold": "faq",
+      "rule_pred": "faq",
+      "unified_pred": "faq",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-legal-015",
+      "seed_gold": "legal",
+      "rule_pred": "legal",
+      "unified_pred": "legal",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-legal-016",
+      "seed_gold": "legal",
+      "rule_pred": "legal",
+      "unified_pred": "legal",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-policy-022",
+      "seed_gold": "policy",
+      "rule_pred": "policy",
+      "unified_pred": "policy",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-policy-023",
+      "seed_gold": "policy",
+      "rule_pred": "policy",
+      "unified_pred": "policy",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-policy-024",
+      "seed_gold": "policy",
+      "rule_pred": "policy",
+      "unified_pred": "policy",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-policy-025",
+      "seed_gold": "policy",
+      "rule_pred": "policy",
+      "unified_pred": "policy",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-policy-026",
+      "seed_gold": "policy",
+      "rule_pred": "policy",
+      "unified_pred": "policy",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-policy-027",
+      "seed_gold": "policy",
+      "rule_pred": "policy",
+      "unified_pred": "policy",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-policy-028",
+      "seed_gold": "policy",
+      "rule_pred": "policy",
+      "unified_pred": "policy",
+      "unified_confidence": 0.95
+    },
+    {
+      "id": "seed-policy-029",
+      "seed_gold": "policy",
+      "rule_pred": "policy",
+      "unified_pred": "policy",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-policy-031",
+      "seed_gold": "policy",
+      "rule_pred": "policy",
+      "unified_pred": "policy",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-sop-032",
+      "seed_gold": "sop",
+      "rule_pred": "sop",
+      "unified_pred": "sop",
+      "unified_confidence": 1.0
+    },
+    {
+      "id": "seed-sop-033",
+      "seed_gold": "sop",
+      "rule_pred": "sop",
+      "unified_pred": "sop",
+      "unified_confidence": 1.0
+    },
+    {
+      "id": "seed-sop-034",
+      "seed_gold": "sop",
+      "rule_pred": "sop",
+      "unified_pred": "sop",
+      "unified_confidence": 1.0
+    },
+    {
+      "id": "seed-legal-039",
+      "seed_gold": "legal",
+      "rule_pred": "legal",
+      "unified_pred": "legal",
+      "unified_confidence": 0.95
+    },
+    {
+      "id": "seed-policy-041",
+      "seed_gold": "policy",
+      "rule_pred": "policy",
+      "unified_pred": "policy",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-policy-043",
+      "seed_gold": "policy",
+      "rule_pred": "policy",
+      "unified_pred": "policy",
+      "unified_confidence": 0.98
+    },
+    {
+      "id": "seed-sop-044",
+      "seed_gold": "sop",
+      "rule_pred": "sop",
+      "unified_pred": "sop",
+      "unified_confidence": 1.0
+    },
+    {
+      "id": "seed-sop-045",
+      "seed_gold": "sop",
+      "rule_pred": "sop",
+      "unified_pred": "sop",
+      "unified_confidence": 1.0
+    },
+    {
+      "id": "seed-faq-046",
+      "seed_gold": "faq",
+      "rule_pred": "faq",
+      "unified_pred": "faq",
+      "unified_confidence": 1.0
+    },
+    {
+      "id": "seed-faq-047",
+      "seed_gold": "faq",
+      "rule_pred": "faq",
+      "unified_pred": "faq",
+      "unified_confidence": 0.95
+    },
+    {
+      "id": "seed-readme-050",
+      "seed_gold": "general",
+      "rule_pred": "general",
+      "unified_pred": "general",
+      "unified_confidence": 0.95
+    },
+    {
+      "id": "seed-sop-051",
+      "seed_gold": "sop",
+      "rule_pred": "sop",
+      "unified_pred": "sop",
+      "unified_confidence": 1.0
+    },
+    {
+      "id": "seed-sop-052",
+      "seed_gold": "sop",
+      "rule_pred": "sop",
+      "unified_pred": "sop",
+      "unified_confidence": 1.0
+    }
+  ],
+  "part_b_skipped": {
+    "total": 48,
+    "candidates": 48,
+    "needs_review": 0
+  },
+  "part_b_detail": [
+    {
+      "file": "table_仓库库存台账_GBK.csv",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\csv\\table_仓库库存台账_GBK.csv",
+      "text_chars": 834,
+      "prelabel": {
+        "doc_type": "general",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_供应商联系人名录_GBK.csv",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\csv\\table_供应商联系人名录_GBK.csv",
+      "text_chars": 1230,
+      "prelabel": {
+        "doc_type": "customer_data",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_区域销售月报_2026.csv",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\csv\\table_区域销售月报_2026.csv",
+      "text_chars": 548,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_发票台账_2026.csv",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\csv\\table_发票台账_2026.csv",
+      "text_chars": 676,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.98
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_在售产品目录_UTF8无BOM.csv",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\csv\\table_在售产品目录_UTF8无BOM.csv",
+      "text_chars": 780,
+      "prelabel": {
+        "doc_type": "product_spec",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_培训记录_GBK.csv",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\csv\\table_培训记录_GBK.csv",
+      "text_chars": 796,
+      "prelabel": {
+        "doc_type": "training",
+        "confidence": 0.98
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_客户满意度调查_2026.csv",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\csv\\table_客户满意度调查_2026.csv",
+      "text_chars": 550,
+      "prelabel": {
+        "doc_type": "customer_data",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_客服工单统计_2026.csv",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\csv\\table_客服工单统计_2026.csv",
+      "text_chars": 604,
+      "prelabel": {
+        "doc_type": "general",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_差旅报销明细_2026H1.csv",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\csv\\table_差旅报销明细_2026H1.csv",
+      "text_chars": 530,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.98
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_市场投放费用_2026.csv",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\csv\\table_市场投放费用_2026.csv",
+      "text_chars": 772,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_月度在职人数.csv",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\csv\\table_月度在职人数.csv",
+      "text_chars": 566,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.9
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_渠道销售_2025_GB18030.csv",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\csv\\table_渠道销售_2025_GB18030.csv",
+      "text_chars": 426,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_采购订单台账_2026.csv",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\csv\\table_采购订单台账_2026.csv",
+      "text_chars": 703,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_面试评价记录.csv",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\csv\\table_面试评价记录.csv",
+      "text_chars": 600,
+      "prelabel": {
+        "doc_type": "general",
+        "confidence": 0.9
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "manual_会议室使用规范.docx",
+      "reason": "手册类横跨 sop/training/policy，需逐篇人工",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\docx\\manual_会议室使用规范.docx",
+      "text_chars": 140,
+      "prelabel": {
+        "doc_type": "sop",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "report_2025年度产品总结.docx",
+      "reason": "报告类横跨 financial/政策/安全等，需逐篇人工",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\docx\\report_2025年度产品总结.docx",
+      "text_chars": 658,
+      "prelabel": {
+        "doc_type": "general",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "report_Q2产品迭代总结_2026.docx",
+      "reason": "报告类横跨 financial/政策/安全等，需逐篇人工",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\docx\\report_Q2产品迭代总结_2026.docx",
+      "text_chars": 111,
+      "prelabel": {
+        "doc_type": "general",
+        "confidence": 0.9
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "report_董事会决议_20260628.docx",
+      "reason": "报告类横跨 financial/政策/安全等，需逐篇人工",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\docx\\report_董事会决议_20260628.docx",
+      "text_chars": 407,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "manual_新员工入职手册.md",
+      "reason": "手册类横跨 sop/training/policy，需逐篇人工",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\md\\manual_新员工入职手册.md",
+      "text_chars": 201,
+      "prelabel": {
+        "doc_type": "training",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "manual_运维作业手册.md",
+      "reason": "手册类横跨 sop/training/policy，需逐篇人工",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\md\\manual_运维作业手册.md",
+      "text_chars": 1088,
+      "prelabel": {
+        "doc_type": "sop",
+        "confidence": 0.98
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "report_2026Q2安全事件报告.md",
+      "reason": "报告类横跨 financial/政策/安全等，需逐篇人工",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\md\\report_2026Q2安全事件报告.md",
+      "text_chars": 280,
+      "prelabel": {
+        "doc_type": "security",
+        "confidence": 0.98
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "report_客服运营年度报告_2025.md",
+      "reason": "报告类横跨 financial/政策/安全等，需逐篇人工",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\md\\report_客服运营年度报告_2025.md",
+      "text_chars": 157,
+      "prelabel": {
+        "doc_type": "general",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "spec_数据仓库建设规范.md",
+      "reason": "规范类（数据仓库/API 网关），偏 policy 或 compliance，需人工",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\md\\spec_数据仓库建设规范.md",
+      "text_chars": 741,
+      "prelabel": {
+        "doc_type": "sop",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "manual_员工手册_2026版.pdf",
+      "reason": "手册类横跨 sop/training/policy，需逐篇人工",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\pdf\\manual_员工手册_2026版.pdf",
+      "text_chars": 913,
+      "prelabel": {
+        "doc_type": "policy",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "report_2025年度财务报告.pdf",
+      "reason": "报告类横跨 financial/政策/安全等，需逐篇人工",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\pdf\\report_2025年度财务报告.pdf",
+      "text_chars": 1602,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 1.0
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "report_2026上半年财务摘要.pdf",
+      "reason": "报告类横跨 financial/政策/安全等，需逐篇人工",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\pdf\\report_2026上半年财务摘要.pdf",
+      "text_chars": 184,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 1.0
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "report_压测报告_2026Q2.pdf",
+      "reason": "报告类横跨 financial/政策/安全等，需逐篇人工",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\pdf\\report_压测报告_2026Q2.pdf",
+      "text_chars": 231,
+      "prelabel": {
+        "doc_type": "general",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "scan_培训签到表.pdf",
+      "reason": "扫描件（OCR 产出），文本质量影响标注效率，批次 2 处理",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\pdf\\scan_培训签到表.pdf",
+      "text_chars": 135,
+      "prelabel": {
+        "doc_type": "training",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "scan_设备报废申请单.pdf",
+      "reason": "扫描件（OCR 产出），文本质量影响标注效率，批次 2 处理",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\pdf\\scan_设备报废申请单.pdf",
+      "text_chars": 248,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "scan_费用报销单.pdf",
+      "reason": "扫描件（OCR 产出），文本质量影响标注效率，批次 2 处理",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\pdf\\scan_费用报销单.pdf",
+      "text_chars": 219,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.98
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "scan_门禁权限申请表.pdf",
+      "reason": "扫描件（OCR 产出），文本质量影响标注效率，批次 2 处理",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\pdf\\scan_门禁权限申请表.pdf",
+      "text_chars": 158,
+      "prelabel": {
+        "doc_type": "security",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "spec_API网关技术规范.pdf",
+      "reason": "规范类（数据仓库/API 网关），偏 policy 或 compliance，需人工",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\pdf\\spec_API网关技术规范.pdf",
+      "text_chars": 1071,
+      "prelabel": {
+        "doc_type": "product_spec",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "notes_产品评审会议纪要_20260830.txt",
+      "reason": "会议纪要，taxonomy 无对应类（趋势上是 general），需确认口径",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\txt\\notes_产品评审会议纪要_20260830.txt",
+      "text_chars": 188,
+      "prelabel": {
+        "doc_type": "general",
+        "confidence": 0.9
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "notes_战略务虚会纪要_2026.txt",
+      "reason": "会议纪要，taxonomy 无对应类（趋势上是 general），需确认口径",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\txt\\notes_战略务虚会纪要_2026.txt",
+      "text_chars": 466,
+      "prelabel": {
+        "doc_type": "general",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "notes_运维周会纪要_20260907.txt",
+      "reason": "会议纪要，taxonomy 无对应类（趋势上是 general），需确认口径",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\txt\\notes_运维周会纪要_20260907.txt",
+      "text_chars": 270,
+      "prelabel": {
+        "doc_type": "general",
+        "confidence": 0.9
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_2026H2商机漏斗.xlsx",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\xlsx\\table_2026H2商机漏斗.xlsx",
+      "text_chars": 873,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.9
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_2026Q2部门人力成本.xlsx",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\xlsx\\table_2026Q2部门人力成本.xlsx",
+      "text_chars": 369,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.98
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_2026人力编制台账.xlsx",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\xlsx\\table_2026人力编制台账.xlsx",
+      "text_chars": 853,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.85
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_2026年度预算表.xlsx",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\xlsx\\table_2026年度预算表.xlsx",
+      "text_chars": 1260,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 1.0
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_云资源账单_2026.xlsx",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\xlsx\\table_云资源账单_2026.xlsx",
+      "text_chars": 379,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.98
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_产品定价表.xlsx",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\xlsx\\table_产品定价表.xlsx",
+      "text_chars": 196,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_产品核心指标.xlsx",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\xlsx\\table_产品核心指标.xlsx",
+      "text_chars": 829,
+      "prelabel": {
+        "doc_type": "financial",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_候选人漏斗.xlsx",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\xlsx\\table_候选人漏斗.xlsx",
+      "text_chars": 364,
+      "prelabel": {
+        "doc_type": "general",
+        "confidence": 0.9
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_内部课程目录.xlsx",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\xlsx\\table_内部课程目录.xlsx",
+      "text_chars": 865,
+      "prelabel": {
+        "doc_type": "training",
+        "confidence": 0.98
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_合同台账.xlsx",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\xlsx\\table_合同台账.xlsx",
+      "text_chars": 1123,
+      "prelabel": {
+        "doc_type": "contract_template",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_容量规划表.xlsx",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\xlsx\\table_容量规划表.xlsx",
+      "text_chars": 830,
+      "prelabel": {
+        "doc_type": "general",
+        "confidence": 0.9
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_接口调用量_2026.xlsx",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\xlsx\\table_接口调用量_2026.xlsx",
+      "text_chars": 322,
+      "prelabel": {
+        "doc_type": "general",
+        "confidence": 0.9
+      },
+      "grade": "candidate"
+    },
+    {
+      "file": "table_服务器资产清单.xlsx",
+      "reason": "台账/统计表，doc_type 需按内容判断（发票台账→financial、客户满意度→customer_data）",
+      "file_path": "D:\\Program Files\\workplace\\agent\\backend\\evaluation\\fixtures\\rag_100_docs\\files\\xlsx\\table_服务器资产清单.xlsx",
+      "text_chars": 346,
+      "prelabel": {
+        "doc_type": "general",
+        "confidence": 0.95
+      },
+      "grade": "candidate"
+    }
+  ]
+}
