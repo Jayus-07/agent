@@ -27,7 +27,7 @@ def append_case(
     去重逻辑：若已有 case 的 metadata.trace_id 与当前 case 相同则跳过。
 
     Returns:
-        {"appended": True/False, "reason": str, "path": str}
+        {"appended": bool, "duplicate": bool, "reason": str, "path": str}
     """
     target_module = module or case.module
     base_dir = dataset_dir or DATASET_DIR
@@ -41,7 +41,12 @@ def append_case(
                 existing_cases = _load_jsonl_cases(target_path, target_module)
             except Exception as exc:
                 logger.error(f"[curator] 读取评测集失败: {target_path}: {exc}")
-                return {"appended": False, "reason": f"读取失败: {exc}", "path": str(target_path)}
+                return {
+                    "appended": False,
+                    "duplicate": False,
+                    "reason": f"读取失败: {exc}",
+                    "path": str(target_path),
+                }
 
         new_trace_id = case.metadata.get("trace_id")
         if new_trace_id:
@@ -49,6 +54,7 @@ def append_case(
                 if existing.metadata.get("trace_id") == new_trace_id:
                     return {
                         "appended": False,
+                        "duplicate": True,
                         "reason": f"trace_id={new_trace_id} 已存在 (case_id={existing.id})",
                         "path": str(target_path),
                     }
@@ -56,6 +62,7 @@ def append_case(
         if case.id in {c.id for c in existing_cases}:
             return {
                 "appended": False,
+                "duplicate": True,
                 "reason": f"case_id={case.id} 已存在",
                 "path": str(target_path),
             }
@@ -90,10 +97,20 @@ def append_case(
             except OSError:
                 pass  # 清理失败不掩盖真正的写入错误
             logger.error(f"[curator] 写入评测集失败: {target_path}: {exc}")
-            return {"appended": False, "reason": f"写入失败: {exc}", "path": str(target_path)}
+            return {
+                "appended": False,
+                "duplicate": False,
+                "reason": f"写入失败: {exc}",
+                "path": str(target_path),
+            }
 
     logger.info(f"[curator] 追加 TestCase {case.id} → {target_path}")
-    return {"appended": True, "reason": "ok", "path": str(target_path)}
+    return {
+        "appended": True,
+        "duplicate": False,
+        "reason": "ok",
+        "path": str(target_path),
+    }
 
 
 def _load_jsonl_cases(file_path: Path, default_module: str) -> list[TestCase]:

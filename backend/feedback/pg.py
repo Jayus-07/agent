@@ -4,7 +4,8 @@
 PG 为唯一实现（2026-09-17 SQLite 轨删除）。
 
 库归属：agent_business（业务数据，对 NL2SQL 可见）。
-schema 与 backend/sql/migrations/016_business_stores_pg.sql 保持一致。
+基础 schema 与 backend/sql/migrations/017_business_stores_pg.sql 保持一致；
+反馈审核字段由 022_feedback_review_candidates.sql 追加。
 
 时间语义：SQLite 版 created_at DEFAULT datetime('now') 为 UTC 文本
 （"YYYY-MM-DD HH:MM:SS"），PG 版由应用侧生成同格式 UTC 文本写入，
@@ -23,10 +24,14 @@ import psycopg2
 from backend.config.database import FEEDBACK_PG_CONFIG
 from backend.shared.logger import logger
 
-_TABLE = os.getenv("FEEDBACK_PG_TABLE", "feedback")
+def _table() -> str:
+    """按当前进程配置解析表名，支持测试/租户隔离切换。"""
+    return os.getenv("FEEDBACK_PG_TABLE", "feedback").strip() or "feedback"
 
-_SCHEMA_SQL = f"""
-CREATE TABLE IF NOT EXISTS {_TABLE} (
+
+def _schema_sql(table: str) -> str:
+    return f"""
+CREATE TABLE IF NOT EXISTS {table} (
     id             BIGSERIAL PRIMARY KEY,
     session_id     TEXT NOT NULL,
     msg_id         TEXT,
@@ -34,11 +39,22 @@ CREATE TABLE IF NOT EXISTS {_TABLE} (
     answer_preview TEXT,
     vote           TEXT NOT NULL CHECK (vote IN ('positive', 'negative')),
     reason         TEXT,
+    trace_id       TEXT,
+    user_id        TEXT,
+    tenant_id      TEXT,
+    correction_text TEXT,
+    expected_answer TEXT,
     created_at     TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_feedback_session ON {_TABLE}(session_id);
-CREATE INDEX IF NOT EXISTS idx_feedback_created ON {_TABLE}(created_at);
-CREATE INDEX IF NOT EXISTS idx_feedback_vote ON {_TABLE}(vote);
+ALTER TABLE {table} ADD COLUMN IF NOT EXISTS trace_id TEXT;
+ALTER TABLE {table} ADD COLUMN IF NOT EXISTS user_id TEXT;
+ALTER TABLE {table} ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE {table} ADD COLUMN IF NOT EXISTS correction_text TEXT;
+ALTER TABLE {table} ADD COLUMN IF NOT EXISTS expected_answer TEXT;
+CREATE INDEX IF NOT EXISTS idx_feedback_session ON {table}(session_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_created ON {table}(created_at);
+CREATE INDEX IF NOT EXISTS idx_feedback_vote ON {table}(vote);
+CREATE INDEX IF NOT EXISTS idx_feedback_trace ON {table}(tenant_id, trace_id);
 """
 
 
@@ -64,7 +80,7 @@ def _conn() -> Iterator[Any]:
 def init_db() -> None:
     """创建 feedback 表（幂等）"""
     with _conn() as conn:
-        conn.cursor().execute(_SCHEMA_SQL)
+        conn.cursor().execute(_schema_sql(_table()))
 
 
 def add_feedback(
@@ -74,19 +90,30 @@ def add_feedback(
     question: str = "",
     answer_preview: str = "",
     reason: str = "",
+    trace_id: str = "",
+    user_id: str = "",
+    tenant_id: str = "",
+    correction_text: str = "",
+    expected_answer: str = "",
 ) -> int:
     """写入反馈，返回新 id"""
     if vote not in ("positive", "negative"):
         raise ValueError(f"vote 必须是 positive/negative，得到: {vote}")
+    table = _table()
     with _conn() as conn:
         cur = conn.cursor()
         cur.execute(
-            f"""INSERT INTO {_TABLE}
-            (session_id, msg_id, question, answer_preview, vote, reason, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            f"""INSERT INTO {table}
+            (session_id, msg_id, question, answer_preview, vote, reason,
+             trace_id, user_id, tenant_id, correction_text, expected_answer,
+             created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id""",
             (
                 session_id, msg_id, question[:500], answer_preview[:500],
-                vote, reason[:500], _utc_now_text(),
+                vote, reason[:500], trace_id[:128], user_id[:128],
+                tenant_id[:128], correction_text[:2000],
+                expected_answer[:2000], _utc_now_text(),
             ),
         )
         return cur.fetchone()[0]
@@ -99,14 +126,15 @@ def stats(days: int = 7) -> dict:
         "%Y-%m-%d %H:%M:%S",
         time.gmtime(time.time() - days * 86400),
     )
+    table = _table()
     with _conn() as conn:
         cur = conn.cursor()
         cur.execute(
-            f"SELECT COUNT(*) FROM {_TABLE} WHERE created_at >= %s", (cutoff,)
+            f"SELECT COUNT(*) FROM {table} WHERE created_at >= %s", (cutoff,)
         )
         total = cur.fetchone()[0]
         cur.execute(
-            f"SELECT COUNT(*) FROM {_TABLE} "
+            f"SELECT COUNT(*) FROM {table} "
             "WHERE vote='positive' AND created_at >= %s",
             (cutoff,),
         )
@@ -116,7 +144,7 @@ def stats(days: int = 7) -> dict:
         # Top 失败 query
         cur.execute(
             f"""SELECT question, COUNT(*) as cnt
-               FROM {_TABLE}
+               FROM {table}
                WHERE vote='negative' AND created_at >= %s
                GROUP BY question
                ORDER BY cnt DESC LIMIT 10""",

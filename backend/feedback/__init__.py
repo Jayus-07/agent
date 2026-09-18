@@ -9,6 +9,8 @@ def init_db() -> None:
     """创建 feedback 表（幂等）"""
     from backend.feedback.pg import init_db as _pg_init_db
     _pg_init_db()
+    from backend.feedback.candidates_pg import init_db as _candidate_init_db
+    _candidate_init_db()
 
 
 def add_feedback(
@@ -18,6 +20,11 @@ def add_feedback(
     question: str = "",
     answer_preview: str = "",
     reason: str = "",
+    trace_id: str = "",
+    user_id: str = "",
+    tenant_id: str = "",
+    correction_text: str = "",
+    expected_answer: str = "",
 ) -> int:
     """写入反馈，返回新 id"""
     if vote not in ("positive", "negative"):
@@ -25,7 +32,9 @@ def add_feedback(
     from backend.feedback.pg import add_feedback as _pg_add_feedback
     return _pg_add_feedback(
         session_id, vote, msg_id=msg_id, question=question,
-        answer_preview=answer_preview, reason=reason,
+        answer_preview=answer_preview, reason=reason, trace_id=trace_id,
+        user_id=user_id, tenant_id=tenant_id,
+        correction_text=correction_text, expected_answer=expected_answer,
     )
 
 
