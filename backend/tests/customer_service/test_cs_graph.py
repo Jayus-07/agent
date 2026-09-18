@@ -185,7 +185,8 @@ class TestCSGraphCompiles:
         assert result["expert_history"][0]["expert"] == "knowledge"
 
     @patch("backend.customer_service.graph_builder.get_state_transition_service")
-    def test_low_confidence_knowledge_enters_expert(self, mock_sts):
+    @patch("backend.customer_service.knowledge.get_knowledge_service")
+    def test_low_confidence_knowledge_enters_expert(self, mock_ks, mock_sts):
         """P2.1（audit #156）：低置信但知识类（低风险无权限）→ 放行 knowledge expert。
 
         旧行为直接 finish（标尺错位误拒），知识库明明可答却拿泛化兜底。
@@ -197,6 +198,13 @@ class TestCSGraphCompiles:
             "confirmation_state": "not_required",
             "pending_action": None,
         }
+        fake_result = MagicMock()
+        fake_result.answer = "测试知识回答"
+        fake_result.decision.value = "answered"
+        fake_result.confidence = 0.65
+        fake_result.kb_ids = []
+        fake_result.source_documents = []
+        mock_ks.return_value.answer.return_value = fake_result
 
         from backend.customer_service.graph_builder import build_cs_graph
         graph = build_cs_graph()

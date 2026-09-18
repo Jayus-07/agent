@@ -15,6 +15,7 @@ from backend.app.api.routes.rag_documents import router as documents_router
 from backend.app.api.routes.rag_upload import router as upload_router
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline, require_rag_ready
+from backend.app.api.identity import require_identity
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
 
@@ -30,9 +31,18 @@ router.include_router(upload_router)
 
 # 根 POST — RAG 问答（需保持旧 API 兼容）
 @router.post("", responses={500: {"model": ErrorResponse}, 503: {"model": ErrorResponse}})
-async def rag_ask(req: RAGAskRequest):
+async def rag_ask(req: RAGAskRequest, request: Request):
     require_rag_ready()
+    identity = require_identity(request)
+    subject_type = "employee" if identity.department else "customer"
     # 初始化锁等待与 LLM 问答都是长耗时同步操作，全部移入工作线程
     pipeline = await asyncio.to_thread(get_rag_pipeline)
-    answer = await asyncio.to_thread(pipeline.ask, req.query, session_id=req.session_id or "rag-api")
+    answer = await asyncio.to_thread(
+        pipeline.ask,
+        req.query,
+        session_id=req.session_id or "rag-api",
+        subject_type=subject_type,
+        department=identity.department,
+        permissions=identity.permissions,
+    )
     return {"query": req.query, "answer": answer, "session_id": req.session_id}

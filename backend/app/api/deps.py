@@ -337,3 +337,24 @@ async def require_admin_user(request: Request):
                        "服务级凭据通道不可访问",
         },
     )
+
+
+async def require_rag_user(request: Request):
+    """RAG 管理面用户门禁：只接受网关注入的真实 JWT 身份。"""
+    from backend.app.api.identity import require_identity
+
+    return require_identity(request)
+
+
+async def require_rag_editor(request: Request):
+    """RAG 写操作门禁：真实 JWT 且角色为 editor/admin。"""
+    from backend.app.api.identity import require_identity
+
+    identity = require_identity(request)
+    role = _highest_known_role(identity.roles)
+    if role not in ("editor", "admin"):
+        raise HTTPException(
+            status_code=403,
+            detail="RAG 文档写操作仅限 editor/admin",
+        )
+    return identity

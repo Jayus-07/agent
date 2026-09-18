@@ -83,6 +83,29 @@ def _is_service_channel(request: Request) -> bool:
     return (request.headers.get(AUTH_TYPE_HEADER) or "").strip().lower() == "api-key"
 
 
+def _is_cs_operator(request: Request) -> bool:
+    """判断请求是否来自客服工作台操作者。
+
+    工作台在管理端只对 admin 角色开放；服务间 API-Key 由网关和 BFF
+    共同保护。普通客户 JWT 即使已登录，也不能读取他人的客服会话。
+    """
+    if _is_service_channel(request):
+        return True
+
+    from backend.app.api.identity import resolve_identity
+
+    ident = resolve_identity(request)
+    return ident.authenticated and "admin" in ident.roles
+
+
+def _require_cs_operator(request: Request) -> None:
+    """客服工作台端点统一权限闸。"""
+    if not _is_cs_operator(request):
+        raise HTTPException(
+            403, detail="客服坐席操作需要 admin 角色（或服务间 API Key）",
+        )
+
+
 def _resolve_agent_identity(request: Request, fallback_agent_id: str) -> str:
     """坐席身份解析：JWT 登录身份优先；服务间 API-Key 通道沿用声明的
     agent_id（BFF 服务端凭据，非浏览器可见）；真 guest 一律 403。"""
@@ -95,10 +118,10 @@ def _resolve_agent_identity(request: Request, fallback_agent_id: str) -> str:
         return agent_id
 
     ident = resolve_identity(request)
-    if ident.authenticated:
+    if ident.authenticated and "admin" in ident.roles:
         return ident.user_name or ident.user_id
     raise HTTPException(
-        403, detail="坐席操作需要登录身份（或服务间 API Key）",
+        403, detail="客服坐席操作需要 admin 角色（或服务间 API Key）",
     )
 
 
@@ -118,6 +141,8 @@ def _ensure_conversation_access(request: Request, conv_user_id: str) -> None:
         return
 
     ident = resolve_identity(request)
+    if ident.authenticated and "admin" in ident.roles:
+        return
     if ident.authenticated:
         if conv_user_id != ident.user_id:
             raise HTTPException(403, detail="无权访问他人会话")
@@ -126,6 +151,17 @@ def _ensure_conversation_access(request: Request, conv_user_id: str) -> None:
     if (conv_user_id or "").strip() in ("", "anonymous", "guest"):
         return
     raise HTTPException(403, detail="请登录后查看您的会话")
+
+
+def _assert_current_agent(
+    assigned_agent_id: str | None,
+    agent_id: str,
+) -> None:
+    """限制人工操作只能由当前认领坐席执行。"""
+    if not assigned_agent_id:
+        raise HTTPException(409, detail="会话尚未绑定坐席，请重新认领")
+    if assigned_agent_id != agent_id:
+        raise HTTPException(409, detail="会话已由其他坐席认领")
 
 
 async def _proxy_to_java(path: str) -> dict:
@@ -518,12 +554,14 @@ class HandoffMessagesResponse(BaseModel):
 
 @router.get("/handoff/queue", response_model=HandoffQueueResponse)
 async def get_handoff_queue(
+    request: Request,
     states: str | None = Query(
         None,
         description="逗号分隔 handoff 状态过滤，缺省=全部未关闭",
     ),
 ):
     """坐席工作台待接入队列（WS 降级轮询源 / 初始全量拉取）。"""
+    _require_cs_operator(request)
     state_list = (
         [s.strip() for s in states.split(",") if s.strip()] if states else None
     )
@@ -536,13 +574,14 @@ async def get_handoff_queue(
 
 
 @router.post("/agent/ws-ticket")
-async def issue_agent_ws_ticket():
+async def issue_agent_ws_ticket(request: Request):
     """签发坐席 WS 一次性连接票据（60s TTL、单次使用）。
 
     鉴权链：本端点受 X-API-Key 保护（BFF 服务端注入），浏览器持 ticket
     完成 WS 握手 —— API Key 不进浏览器。路径注册在 /{conversation_id}/*
     之前，"agent" 不会被当作 conversation_id。
     """
+    _require_cs_operator(request)
     from backend.customer_service.realtime import (
         TICKET_TTL_SECONDS,
         get_agent_hub,
@@ -575,6 +614,8 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
         from sqlalchemy import select
 
         from backend.customer_service.models.handoff import CSHandoff
+        from backend.customer_service.models.assignment import CSAssignment
+        from backend.customer_service.models.conversation import CSConversation
         from backend.memory.database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db:
@@ -591,7 +632,19 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
                     404, detail="No open handoff for conversation"
                 )
 
+            conv = (
+                await db.execute(
+                    select(CSConversation).where(
+                        CSConversation.conversation_id == conversation_id,
+                    )
+                )
+            ).scalar_one_or_none()
+
             current = handoff_sm.HandoffState(row.handoff_state)
+            if current == handoff_sm.HandoffState.HUMAN_ACTIVE:
+                if conv is None:
+                    raise HTTPException(409, detail="人工会话缺少会话记录")
+                _assert_current_agent(conv.assigned_agent_id, agent_id)
             handoff_sm.transition(
                 current, handoff_sm.HandoffState.CLOSED,
             )
@@ -603,10 +656,6 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
             # 会话处理模式归位（human / waiting_human → ai）
             from sqlalchemy import update
 
-            from backend.customer_service.models.conversation import (
-                CSConversation,
-            )
-
             await db.execute(
                 update(CSConversation)
                 .where(CSConversation.handling_mode != "ai")
@@ -615,8 +664,17 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
                 )
                 .values(
                     handling_mode="ai",
+                    assigned_agent_id=None,
                     updated_at=datetime.now(timezone.utc),
                 )
+            )
+            await db.execute(
+                update(CSAssignment)
+                .where(
+                    CSAssignment.conversation_id == conversation_id,
+                    CSAssignment.unassigned_at.is_(None),
+                )
+                .values(unassigned_at=datetime.now(timezone.utc))
             )
             await db.commit()
 
@@ -699,13 +757,16 @@ async def post_agent_message(conversation_id: str, body: AgentMessageRequest, re
 
 
 @router.post("/{conversation_id}/typing")
-async def post_agent_typing(conversation_id: str, body: TypingRequest):
+async def post_agent_typing(
+    conversation_id: str, body: TypingRequest, request: Request,
+):
     """坐席「输入中」上报（瞬态，双向输入中指示 · 坐席→用户方向）。
 
     高频轻量写：Redis SETEX 5s TTL（不可用降级进程内存），不落库不入
     事件流。用户侧经 /my/{id}/messages 轮询响应的 agent_typing 字段可见。
     鉴权走本路由组统一的 api-key 中间件（同 /agent-messages）。
     """
+    _require_cs_operator(request)
     from backend.customer_service.typing_state import set_typing
 
     set_typing("agent", conversation_id)
@@ -1171,19 +1232,54 @@ async def _async_handoff_queue(state_list, run_sync):
         return HandoffQueueResponse(items=items, total=len(items))
 
 
-async def _async_claim(conversation_id: str, agent_id: str, run_sync):
-    """认领会话：waiting_human → human_active + conversation.handling_mode=human。
+async def _ensure_cs_agent(db, agent_id: str) -> None:
+    """确保认领所用的坐席档案存在，满足 assignment 的外键约束。
 
-    P1 原子化：认领是单条条件 UPDATE（WHERE handoff_state='waiting_human'），
-    以影响行数判定成败 —— 两个坐席并发认领只有一个 commit 生效，
-    另一个读到 rowcount=0 后重查状态给出明确响应。
-    （此前 SELECT→内存校验→ORM 赋值→commit 存在 TOCTOU，双认领双返回。）
+    JWT 坐席身份来自服务端解析；服务 API-Key 通道的 agent_id 来自受信任
+    的 BFF。首次使用时补齐最小坐席档案，避免认领成功但 assignment 无法落库。
     """
-    from datetime import datetime, timezone
+    from sqlalchemy import select
 
-    from sqlalchemy import select, update
+    from backend.customer_service.models.agent import CSAgent
+
+    existing = (
+        await db.execute(
+            select(CSAgent).where(CSAgent.agent_id == agent_id).limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return
+
+    db.add(
+        CSAgent(
+            agent_id=agent_id,
+            display_name=agent_id,
+            role="agent",
+            available=True,
+        )
+    )
+    await db.flush()
+
+
+async def _load_assigned_agent_id(db, conversation_id: str) -> str | None:
+    """读取当前会话坐席归属，供幂等认领与并发冲突校验使用。"""
+    from sqlalchemy import select
 
     from backend.customer_service.models.conversation import CSConversation
+
+    return (
+        await db.execute(
+            select(CSConversation.assigned_agent_id)
+            .where(CSConversation.conversation_id == conversation_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _async_claim(conversation_id: str, agent_id: str, run_sync):
+    """认领会话并同步写入 handoff、conversation、assignment 三处状态。"""
+    from sqlalchemy import select, update
+
     from backend.customer_service.models.handoff import CSHandoff
     from backend.memory.database import AsyncSessionLocal
 
@@ -1204,6 +1300,22 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
         current_state = row.handoff_state
 
         if current_state == "human_active":
+            assigned_agent_id = await _load_assigned_agent_id(db, conversation_id)
+            if assigned_agent_id and assigned_agent_id != agent_id:
+                raise HTTPException(409, detail="会话已由其他坐席认领")
+            if not assigned_agent_id:
+                # 修复历史上只写 human_active、未写 assignment 的脏状态。
+                await _ensure_cs_agent(db, agent_id)
+                from backend.customer_service.managers.conversation_manager import (
+                    ConversationManager,
+                )
+
+                conv_mgr = ConversationManager(db)
+                await conv_mgr.get_or_create(conversation_id, handoff_user_id)
+                await conv_mgr.assign_agent(
+                    conversation_id, agent_id, assigned_by=agent_id,
+                )
+                await db.commit()
             return {
                 "conversation_id": conversation_id,
                 "handoff_state": current_state,
@@ -1211,7 +1323,7 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
                 "already_claimed": True,
             }
 
-        # 原子条件更新：只有仍处于 waiting_human 的行才会被认领
+        # 原子条件更新：只有仍处于 waiting_human 的行才会被认领。
         claim_result = await db.execute(
             update(CSHandoff)
             .where(
@@ -1222,7 +1334,7 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
         )
         claimed = claim_result.rowcount > 0
         if not claimed:
-            # 并发下已被认领 / 状态已流转 —— 重查给出明确语义
+            # 并发下已被认领 / 状态已流转 —— 重查给出明确响应。
             fresh = (
                 await db.execute(
                     select(CSHandoff.handoff_state)
@@ -1234,6 +1346,11 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
                 )
             ).scalar_one_or_none()
             if fresh == "human_active":
+                assigned_agent_id = await _load_assigned_agent_id(
+                    db, conversation_id,
+                )
+                if assigned_agent_id and assigned_agent_id != agent_id:
+                    raise HTTPException(409, detail="会话已由其他坐席认领")
                 return {
                     "conversation_id": conversation_id,
                     "handoff_state": fresh,
@@ -1248,20 +1365,25 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
                 ),
             )
 
-        await db.execute(
-            update(CSConversation)
-            .where(CSConversation.conversation_id == conversation_id)
-            .values(handling_mode="human", updated_at=datetime.now(timezone.utc))
+        await _ensure_cs_agent(db, agent_id)
+        from backend.customer_service.managers.conversation_manager import (
+            ConversationManager,
+        )
+
+        conv_mgr = ConversationManager(db)
+        await conv_mgr.get_or_create(conversation_id, handoff_user_id)
+        await conv_mgr.escalate_to_human(
+            conversation_id, agent_id, assigned_by=agent_id,
         )
         await db.commit()
 
     # L1 缓存失效：用户侧下个 turn 的 state loader 才能从 DB 读到
-    # human_active（否则仍读缓存里的 waiting_human，回复话术滞后一档）
+    # human_active（否则仍读缓存里的 waiting_human，回复话术滞后一档）。
     from backend.customer_service.handoff_store import get_handoff_store
 
     get_handoff_store().invalidate(handoff_user_id, conversation_id)
 
-    # 广播：其他坐席队列摘除该会话 / 用户侧卡片切「人工已接入」
+    # 广播：其他坐席队列摘除该会话 / 用户侧卡片切「人工已接入」。
     from backend.customer_service.realtime import get_agent_hub
 
     get_agent_hub().publish(
@@ -1306,7 +1428,8 @@ async def _async_agent_message(conversation_id: str, agent_id: str, content: str
             ConversationManager,
         )
         conv_mgr = ConversationManager(db)
-        await conv_mgr.get_or_create(conversation_id, row.user_id)
+        conv, _ = await conv_mgr.get_or_create(conversation_id, row.user_id)
+        _assert_current_agent(conv.assigned_agent_id, agent_id)
 
         from backend.customer_service.managers.message_manager import MessageManager
 

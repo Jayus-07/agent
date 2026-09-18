@@ -1,8 +1,9 @@
 -- gateway-auth.lua — APISIX 入口认证插件（B2）
 --
 -- 行为合同：1:1 平移 Java AuthenticationGlobalFilter（B0 审计 docs/gateway-apisix-audit-report.md §3）
---   ① 无条件剥离入站伪造身份头（六头：X-Auth-Type/X-User-Id/X-User-Name/X-User-Dept
---      + X-Operator-Role/X-Operator-Id；X-Operator-* 为 operator 身份族，B4 未开、py 不消费，
+--   ① 无条件剥离入站伪造身份头（八头：X-Auth-Type/X-User-Id/X-User-Name/X-User-Dept
+--      /X-User-Roles/X-User-Permissions + X-Operator-Role/X-Operator-Id；
+--      X-Operator-* 为 operator 身份族，B4 未开、py 不消费，
 --      此处置为剥离是提前堵「客户端伪造 operator 头」的洞，与 X-User-* 同理）
 --   ② X-Trace-Id 不剥离：有则透传复用，无则生成
 --   ③ OPTIONS 预检放行（路由级白名单由路由配置承担：auth/sys 路由不挂本插件）
@@ -41,15 +42,16 @@ local concat          = table.concat
 -- 与 SCG AuthenticationGlobalFilter 一致的伪造头剥离清单（七头，不含 X-Trace-Id）
 -- 含 X-Operator-Role / X-Operator-Id：operator 身份族，客户端不可伪造（B4 未开、py 不消费 X-Operator-*，
 -- 此处置为剥离属提前防御；大小写变体无需单列——ngx.req.set_header 对头名大小写不敏感，会一并清除）
--- X-User-Roles 2026-09-16 起由本插件注入（JWT roles claim → 逗号分隔），同样禁止客户端伪造
+-- X-User-Roles/X-User-Permissions 由本插件注入（JWT claim → 逗号分隔），同样禁止客户端伪造
 local FORGED_HEADERS  = { "X-Auth-Type", "X-User-Id", "X-User-Name", "X-User-Dept", "X-User-Roles",
-                          "X-Operator-Role", "X-Operator-Id" }
+                          "X-User-Permissions", "X-Operator-Role", "X-Operator-Id" }
 
 local HEADER_AUTH_TYPE = "X-Auth-Type"
 local HEADER_USER_ID   = "X-User-Id"
 local HEADER_USER_NAME = "X-User-Name"
 local HEADER_USER_DEPT = "X-User-Dept"
 local HEADER_USER_ROLES = "X-User-Roles"
+local HEADER_USER_PERMISSIONS = "X-User-Permissions"
 local HEADER_TRACE_ID  = "X-Trace-Id"
 
 -- 进程级配置缓存（init_worker 构建；必须先于 _M.access 声明，否则 access 引用全局 nil）
@@ -460,6 +462,17 @@ function _M.access(_, ctx)
         end
         if #parts > 0 then
             core.request.set_header(ctx, HEADER_USER_ROLES, concat(parts, ","))
+        end
+    end
+    -- permissions claim（数组）→ 逗号分隔注入；缺省不注入，后端按未声明处理。
+    if type(payload.permissions) == "table" and #payload.permissions > 0 then
+        local parts = {}
+        for _, p in ipairs(payload.permissions) do
+            local ps = to_str_or_nil(p)
+            if ps then parts[#parts + 1] = ps end
+        end
+        if #parts > 0 then
+            core.request.set_header(ctx, HEADER_USER_PERMISSIONS, concat(parts, ","))
         end
     end
 end

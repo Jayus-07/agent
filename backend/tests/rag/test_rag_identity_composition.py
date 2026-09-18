@@ -82,8 +82,8 @@ class TestPrepareContextIdentity:
         assert state.identity.subject_type == "employee"
         assert state.identity.department == "hr"
 
-    def test_empty_filter_leaves_identity_untouched(self, monkeypatch):
-        """mf 为空提前返回：身份保持默认空值（授权未启用，旧行为）。"""
+    def test_empty_filter_still_binds_declared_identity(self, monkeypatch):
+        """mf 为空时仍绑定调用方声明的主体，避免绕过 KB 权限矩阵。"""
         _stub_router(monkeypatch, [])  # 无候选 → mf 空
         _stub_analyzer(monkeypatch, {})
         RAGPipeline._prepare_context(
@@ -91,5 +91,5 @@ class TestPrepareContextIdentity:
             subject_type="customer", department="",
         )
         identity = rag_context.get_context().identity
-        assert identity.subject_type == ""
+        assert identity.subject_type == "customer"
         assert identity.department == ""

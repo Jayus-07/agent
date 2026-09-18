@@ -14,14 +14,17 @@ backend/config/auth.py（legacy/header/strict）。
     ident = require_identity(request)                             # strict 语义：未认证 401
 """
 from dataclasses import dataclass
+import re
 
 from fastapi import Request
 
 from backend.config.auth import (
     AUTH_TYPE_HEADER,
+    TENANT_ID_HEADER,
     USER_DEPT_HEADER,
     USER_ID_HEADER,
     USER_NAME_HEADER,
+    USER_PERMISSIONS_HEADER,
     USER_ROLES_HEADER,
     identity_source,
 )
@@ -37,6 +40,8 @@ class Identity:
     auth_type: str = ""        # jwt | guest | ""（legacy 且无头时）
     source: str = ""           # 调试可读：header|body|default|guest
     roles: tuple[str, ...] = ()  # 网关注入的 JWT roles claim（viewer/editor/admin）
+    permissions: tuple[str, ...] | None = None  # 网关注入的 JWT 权限集合；缺失 = 未声明
+    tenant_id: str = ""  # 可信租户身份；空值表示未声明，不能降级成共享租户
 
     @property
     def authenticated(self) -> bool:
@@ -47,6 +52,13 @@ class Identity:
 # X-Auth-Type: anonymous + X-User-Id: anonymous。不能当作真实用户，
 # 否则记忆库/配额会按 "anonymous" 这个共享账号落库。
 _ANONYMOUS = "anonymous"
+_TENANT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+def _normalize_tenant_id(raw: str) -> str:
+    """规范化网关注入的租户标识；非法值按未声明处理。"""
+    value = (raw or "").strip()
+    return value if _TENANT_ID_RE.fullmatch(value) else ""
 
 
 def _from_headers(request: Request) -> Identity:
@@ -58,6 +70,13 @@ def _from_headers(request: Request) -> Identity:
         r.strip() for r in (request.headers.get(USER_ROLES_HEADER) or "").split(",")
         if r.strip()
     )
+    raw_permissions = request.headers.get(USER_PERMISSIONS_HEADER)
+    permissions = None
+    if raw_permissions is not None:
+        normalized = {
+            p.strip() for p in raw_permissions.split(",") if p.strip()
+        }
+        permissions = tuple(sorted(normalized)) or None
     return Identity(
         user_id=uid,
         user_name=(request.headers.get(USER_NAME_HEADER) or "").strip(),
@@ -65,6 +84,8 @@ def _from_headers(request: Request) -> Identity:
         auth_type=auth_type or "jwt",
         source="header",
         roles=roles,
+        permissions=permissions,
+        tenant_id=_normalize_tenant_id(request.headers.get(TENANT_ID_HEADER) or ""),
     )
 
 

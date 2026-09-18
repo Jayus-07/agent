@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, D
 from fastapi.responses import StreamingResponse
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline, require_rag_ready, get_rag_status
+from backend.app.api.identity import require_identity
 import asyncio
 
 from backend.shared.logger import logger
@@ -17,8 +18,9 @@ async def rag_health():
     return get_rag_status()
 
 @router.get("/knowledge-bases")
-async def list_knowledge_bases():
+async def list_knowledge_bases(request: Request):
     """返回知识库列表（含文档计数）。"""
+    require_identity(request)
     from backend.config.knowledge_base import get_kb_list
     kbs = get_kb_list()
     try:
@@ -31,7 +33,8 @@ async def list_knowledge_bases():
             kb["doc_count"] = 0
     return {"knowledge_bases": kbs}
 @router.post("/search")
-async def search_knowledge(req: SearchRequest):
+async def search_knowledge(req: SearchRequest, request: Request):
+    identity = require_identity(request)
     query = req.query
     """检索测试 — 直接调 RAG Pipeline 检索链（不调 LLM）"""
     if not query.strip():
@@ -40,11 +43,45 @@ async def search_knowledge(req: SearchRequest):
         # 事件循环线程不得直接等 pipeline 初始化锁 —— 移到工作线程
         pipeline = await asyncio.to_thread(get_rag_pipeline)
         # 使用 chunk_retriever（CustomRetriever → ChromaDB 语义检索）
-        retriever = getattr(pipeline, 'chunk_retriever', None)
+        try:
+            retriever = getattr(pipeline, "chunk_retriever", None)
+        except RuntimeError:
+            retriever = None
         if not retriever:
-            return {"query": query, "results": [], "error": "检索器未初始化"}
+            # remote 模式没有本地 retriever，仍走同一权限参数到 rag-service。
+            text = await asyncio.to_thread(
+                pipeline.retrieve_knowledge,
+                query,
+                subject_type="employee" if identity.department else "customer",
+                department=identity.department,
+                permissions=identity.permissions,
+            )
+            results = (
+                [{
+                    "index": 0,
+                    "content": text[:300],
+                    "score": None,
+                    "metadata": {},
+                }]
+                if text
+                else []
+            )
+            return {"query": query, "results": results, "total": len(results)}
+        def _retrieve_with_identity():
+            pipeline._prepare_context(
+                "default",
+                query,
+                subject_type="employee" if identity.department else "customer",
+                department=identity.department,
+                permissions=identity.permissions,
+            )
+            try:
+                return retriever.retrieve(query)
+            finally:
+                pipeline._cleanup()
+
         import asyncio as _asyncio
-        docs = await _asyncio.to_thread(retriever.retrieve, query)
+        docs = await _asyncio.to_thread(_retrieve_with_identity)
         results = []
         for i, doc in enumerate(docs[:10]):
             results.append({
@@ -62,13 +99,22 @@ async def search_knowledge(req: SearchRequest):
 # ── 问答（已有）──
 
 @router.post("/ask", responses={500: {"model": ErrorResponse}, 503: {"model": ErrorResponse}})
-async def rag_ask(req: RAGAskRequest):
+async def rag_ask(req: RAGAskRequest, request: Request):
     """知识库检索 + 大模型生成回答"""
     try:
         pipeline = await asyncio.to_thread(get_rag_pipeline)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     kb_id = req.kb_id or "default"
-    answer = await asyncio.to_thread(pipeline.ask, req.question, req.session_id, kb_id=kb_id)
+    identity = require_identity(request)
+    answer = await asyncio.to_thread(
+        pipeline.ask,
+        req.question,
+        req.session_id,
+        kb_id=kb_id,
+        subject_type="employee" if identity.department else "customer",
+        department=identity.department,
+        permissions=identity.permissions,
+    )
     sources = getattr(pipeline.lc_chain, '_last_sources', [])
     return {"answer": answer, "session_id": req.session_id, "sources": sources}

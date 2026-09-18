@@ -3,7 +3,7 @@
 网关（AuthenticationGlobalFilter）验完 JWT 后向下游注入身份头：
 
     X-Auth-Type: jwt | guest          # 认证方式
-    X-User-Id / X-User-Name / X-User-Dept
+    X-User-Id / X-User-Name / X-User-Dept / X-User-Permissions
 
 app 侧不再自行验 JWT，按 IDENTITY_SOURCE 决定信谁：
 
@@ -26,10 +26,13 @@ import os
 AUTH_TYPE_HEADER = "X-Auth-Type"
 USER_ID_HEADER = "X-User-Id"
 USER_NAME_HEADER = "X-User-Name"
+TENANT_ID_HEADER = "X-Tenant-Id"
 USER_DEPT_HEADER = "X-User-Dept"
 # 2026-09-16 起：JWT roles claim（数组）经网关注入为逗号分隔串，
 # resolve_operator_role 消费（prompts RBAC / 审批角色校验）。客户端不可伪造。
 USER_ROLES_HEADER = "X-User-Roles"
+# JWT permissions claim 经网关规范化后注入；客户端不可伪造。
+USER_PERMISSIONS_HEADER = "X-User-Permissions"
 
 _AUTH_MODES = ("legacy", "header", "strict")
 IDENTITY_SOURCE: str = os.getenv("IDENTITY_SOURCE", "header").strip().lower()

@@ -1,9 +1,15 @@
 """RAG 上传路由 — PR-2.x 从 rag.py 抽出。"""
 import asyncio, os, shutil, threading, time, uuid
 from asyncio import Queue
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, Depends
 from fastapi.responses import StreamingResponse
-from backend.app.api.deps import get_rag_pipeline, require_rag_ready
+from backend.app.api.deps import (
+    get_rag_pipeline,
+    require_rag_ready,
+    require_rag_user,
+    require_rag_editor,
+)
+from backend.app.api.identity import resolve_identity
 from backend.config.rag import RAG_MAX_FILE_SIZE, RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE, RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS
 # F7: IncrementalIndexer 不在模块顶层导入（导入链含 langchain/tracer 等重依赖），
 # 改为 _do_index_sync 内惰性导入，路由模块冷启动不再被拖慢。
@@ -18,7 +24,7 @@ from backend.app.api.routes._rag_shared import (
 )
 from backend.shared.logger import logger
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_rag_user)])
 
 
 # ============ 文件锁（P1-2 防止同文件并发 race condition）============
@@ -389,12 +395,13 @@ def _validate_mime(ext: str, content_type: str | None) -> tuple[bool, str]:
     return True, ""
 
 
-@router.post("/upload")
+@router.post("/upload", dependencies=[Depends(require_rag_editor)])
 async def upload_document(request: Request, file: UploadFile = File(...),
                           kb_id: str = Form("policy_general"),
                           department: str = Form("general")):
     """P0-1 流式上传: 临时文件 + atomic rename + 双保险大小限制 + SSE 进度"""
     require_rag_ready()
+    identity = resolve_identity(request)
     from backend.config.knowledge_base import validate_kb_dept
     if not validate_kb_dept(kb_id, department):
         return {"ok": False, "error": f"知识库 '{kb_id}' 不允许选择部门 '{department}'"}
@@ -421,6 +428,9 @@ async def upload_document(request: Request, file: UploadFile = File(...),
             file, request, max_size,
             RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE, RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS,
             kb_id=kb_id, department=department,
+            tenant_id=identity.tenant_id,
+            actor_id=identity.user_id,
+            idempotency_key=(request.headers.get("Idempotency-Key") or "").strip(),
         )
     except Exception as e:
         return {"ok": False, "error": f"upload failed: {type(e).__name__}: {e}"}
@@ -432,6 +442,10 @@ async def upload_document(request: Request, file: UploadFile = File(...),
         result["source"], result["batch_id"], kb_id=kb_id, department=department,
         upload_elapsed_ms=result.get("upload_elapsed_ms"),
         was_overwrite=result.get("was_overwrite", False),  # P0-X
+        file_hash=result.get("file_hash", ""),
+        tenant_id=result.get("tenant_id", ""),
+        actor_id=result.get("actor_id", ""),
+        idempotency_key=result.get("idempotency_key", ""),
     ))
     # 持有引用：无引用的 fire-and-forget task 可能被 GC，异常也会被静默吞掉
     _background_index_tasks.add(task)
@@ -444,6 +458,7 @@ async def upload_document(request: Request, file: UploadFile = File(...),
 async def sync_upload_impl(
     file, request, max_size, tmp_dir, chunk_size, emit_bytes, emit_ms,
     kb_id: str = "policy_general", department: str = "general",
+    tenant_id: str = "", actor_id: str = "", idempotency_key: str = "",
 ) -> dict:
     """P0-1 流式上传 (async def, 直接在 upload_document 事件循环里跑).
     file.read() 是 async method, 必须 await. 写文件是 sync (open + write).
@@ -486,7 +501,16 @@ async def sync_upload_impl(
     # cleanup 策略）。贴近 replace 后窗口缩到备份+replace 两条语句。
 
     ext = safe_name.rsplit(".", 1)[-1].lower()
-    upload_id = uuid.uuid4().hex[:12]
+    # 可信请求复用稳定 upload_id，保证显式键重试或同一文件指纹重试的 SSE
+    # 都指向同一个 Redis 进度镜像；无可信上下文仍使用随机 ID。
+    if tenant_id and actor_id:
+        import hashlib
+        stable_upload_key = idempotency_key or f"{kb_id}:{department}:{safe_name}"
+        upload_id = hashlib.sha256(
+            f"{tenant_id}:{actor_id}:{stable_upload_key}".encode("utf-8")
+        ).hexdigest()[:12]
+    else:
+        upload_id = uuid.uuid4().hex[:12]
     os.makedirs(tmp_dir, exist_ok=True)
     tmp_path = f"{tmp_dir}/{upload_id}.{ext}"
 
@@ -601,6 +625,7 @@ async def sync_upload_impl(
                 return {"ok": False, "error": f"备份旧版本失败,中止覆盖: {bak_err}"}
         os.replace(tmp_path, final_path)
         _safe_put({"stage": "uploading", "progress": 100, "bytes": total})
+        file_hash = sha256_of_file(final_path)
 
         return {
             "ok": True,
@@ -612,6 +637,10 @@ async def sync_upload_impl(
             "batch_id": request.headers.get("X-Batch-Id") or None,
             "upload_elapsed_ms": int((time.time() - _upload_t0_sync) * 1000),
             "was_overwrite": was_overwrite,  # P0-X: 传给 _run_index_background 决定 cleanup 策略
+            "file_hash": file_hash,
+            "tenant_id": tenant_id,
+            "actor_id": actor_id,
+            "idempotency_key": idempotency_key,
         }
     except Exception as e:
         if os.path.exists(tmp_path):
@@ -749,10 +778,25 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
         # P1-4:ChunkingEmptyError 是业务失败(扫描件/结构损坏),保留源文件供排查;
         #      其它异常按孤儿文件处理逻辑清理
         from backend.rag.indexing.indexer import ChunkingEmptyError
+        from backend.shared.error_protocol import (
+            ErrorCode,
+            ProtocolError,
+            error_envelope_from_exception,
+        )
         duration_ms = int((time.time() - upload_t0) * 1000) + (upload_elapsed_ms or 0)
         if isinstance(exc, ChunkingEmptyError):
-            emit_fn("error", f"索引失败:{exc}（源文件已保留,请检查文档内容或解析器兼容性）",
-                    error_type="chunking_empty", recoverable=True)
+            protocol_error = ProtocolError(
+                ErrorCode.INVALID_PARAM,
+                "文档内容无法解析，请检查文件后重试。",
+                source="sse",
+            )
+            emit_fn(
+                "error",
+                protocol_error.envelope.message,
+                error_type="chunking_empty",
+                recoverable=True,
+                error_protocol=protocol_error.envelope.to_dict(),
+            )
             _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
                          result="failed", duration_ms=duration_ms,
                          detail={"error": str(exc)[:200], "error_type": "chunking_empty"})
@@ -760,14 +804,26 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             # P0-2:锁冲突 = 同文件另一请求正在索引。源文件绝不能删 ——
             # 持锁方（Celery Worker 或另一本机任务）可能正在读它，
             # 删除会让对方索引中途断源。标 recoverable 让前端提示可重试。
-            emit_fn("error", "同文件正在被另一请求索引，本请求已让行（可稍后重试）",
-                    error_type="file_locked", recoverable=True)
+            protocol_error = ProtocolError(
+                ErrorCode.IDEMPOTENCY_CONFLICT,
+                "同文件正在被另一请求索引，请稍后重试。",
+                source="sse",
+            )
+            emit_fn(
+                "error",
+                protocol_error.envelope.message,
+                error_type="file_locked",
+                recoverable=True,
+                error_protocol=protocol_error.envelope.to_dict(),
+            )
             _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
                          result="failed", duration_ms=duration_ms,
                          detail={"error": str(exc)[:200], "error_type": "file_locked"})
         else:
+            envelope = error_envelope_from_exception(exc, source="sse")
             _cleanup_failed_upload_sync(filepath, was_overwrite=was_overwrite)
-            emit_fn("error", str(exc))
+            emit_fn("error", envelope.message,
+                    error_protocol=envelope.to_dict())
             _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
                          result="failed", duration_ms=duration_ms,
                          detail={"error": str(exc)[:200]})
@@ -848,7 +904,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
     )
 
 
-def _dispatch_index_to_celery(**kwargs) -> None:
+def _dispatch_index_to_celery(**kwargs) -> dict:
     """上传索引任务入队 Celery（rag_index 队列）。broker 不可达时抛异常。
 
     独立成函数便于测试注入：链路 e2e 测试用 autouse fixture 把它替换为
@@ -857,10 +913,44 @@ def _dispatch_index_to_celery(**kwargs) -> None:
     """
     from backend.tasks.index_tasks import execute_index_task
     from backend.config.tasks import CELERY_RAG_INDEX_QUEUE
-    execute_index_task.apply_async(kwargs=kwargs, queue=CELERY_RAG_INDEX_QUEUE)
+    async_result = execute_index_task.apply_async(
+        kwargs=kwargs, queue=CELERY_RAG_INDEX_QUEUE
+    )
+    return {"queued": True, "celery_task_id": getattr(async_result, "id", "")}
 
 
-async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general", upload_elapsed_ms: int | None = None, was_overwrite: bool = False):
+def _dispatch_index_with_idempotency(
+    *,
+    task_kwargs: dict,
+    file_hash: str,
+    tenant_id: str,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict:
+    """提交 RAG 索引任务；可信请求拒绝绕过幂等边界。"""
+    if not tenant_id or not actor_id:
+        return _dispatch_index_to_celery(**task_kwargs)
+
+    from backend.shared.idempotency import run_idempotent_operation_for_identity
+
+    payload = {
+        "filepath": task_kwargs["filepath"],
+        "filename": task_kwargs["filename"],
+        "file_hash": file_hash,
+        "kb_id": task_kwargs.get("kb_id", ""),
+        "department": task_kwargs.get("department", ""),
+    }
+    return run_idempotent_operation_for_identity(
+        "rag.index.submit",
+        payload,
+        lambda: _dispatch_index_to_celery(**task_kwargs),
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        client_key=idempotency_key,
+    )
+
+
+async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general", upload_elapsed_ms: int | None = None, was_overwrite: bool = False, file_hash: str = "", tenant_id: str = "", actor_id: str = "", idempotency_key: str = ""):
     """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志。
 
     upload_elapsed_ms: sync_upload_impl 实测的 HTTP 上传耗时（POST + 写文件 + atomic rename）。
@@ -894,11 +984,19 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
 
     # ── Celery 队列化分流（固定主路径，无开关）──
     try:
-        _dispatch_index_to_celery(
-            upload_id=upload_id, filepath=filepath, filename=filename,
-            kb_id=kb_id, department=department, source=source,
-            batch_id=batch_id, upload_elapsed_ms=upload_elapsed_ms,
-            was_overwrite=was_overwrite)
+        _dispatch_index_with_idempotency(
+            task_kwargs={
+                "upload_id": upload_id, "filepath": filepath,
+                "filename": filename, "kb_id": kb_id,
+                "department": department, "source": source,
+                "batch_id": batch_id, "upload_elapsed_ms": upload_elapsed_ms,
+                "was_overwrite": was_overwrite,
+            },
+            file_hash=file_hash,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+        )
         # 打标必须在发任何事件之前：SSE 队列模式每轮检查此标记，
         # 看到即切换 Redis 轮询通道消费 Worker 事件（跨进程队列收不到）
         _celery_routed.add(upload_id)
@@ -907,6 +1005,15 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
         # （SSE 订阅切换 Redis 轮询通道；队列残留由定时 GC 回收）
         return
     except Exception as enqueue_err:
+        if tenant_id and actor_id:
+            # 可信请求不能在幂等 Redis/PG 或任务提交失败时静默降级到
+            # 进程内执行，否则会绕过“只执行一次”保证。
+            _settle_index_result(
+                upload_id, filepath, filename, source, batch_id, kb_id,
+                upload_elapsed_ms, was_overwrite, _upload_t0,
+                result=None, emit_fn=emit_fn, exc=enqueue_err)
+            await _finalize_upload_queue(upload_id)
+            return
         # broker 不可达：可用性优先，回退本进程索引（与 task_manager 503 语义对齐）
         logger.warning(f"[RAG] Celery 入队失败，回退进程内索引: {enqueue_err}")
         _celery_routed.discard(upload_id)
@@ -1217,4 +1324,3 @@ async def stream_upload_progress(upload_id: str):
             _progress_queues.pop(upload_id, None)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
-

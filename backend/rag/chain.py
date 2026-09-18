@@ -342,7 +342,7 @@ class RAGChain:
             # general 文档不受影响。确定性计算，与 KB 级授权同构。
             try:
                 from backend.rag.context import get_context
-                from backend.rag.permissions import is_accessible
+                from backend.rag.permissions import filter_documents_by_permission
                 try:
                     from backend.observability.metrics import (
                         rag_permission_filtered_total,
@@ -353,7 +353,7 @@ class RAGChain:
                             pass
                     rag_permission_filtered_total = _Nop()
                 _user_perms = get_context().identity.permissions
-                _allowed = [d for d in docs if is_accessible(d.metadata, _user_perms)]
+                _allowed = filter_documents_by_permission(docs, _user_perms)
                 _denied = len(docs) - len(_allowed)
                 if _denied:
                     logger.info(
@@ -363,8 +363,10 @@ class RAGChain:
                     rag_permission_filtered_total.inc(_denied)
                     docs = _allowed
                     input_dict["context"] = docs
-            except Exception:  # noqa: BLE001 — 权限过滤故障不得中断主流程
-                logger.debug("[RAGChain] 权限过滤异常，退化为不过滤", exc_info=True)
+            except Exception:  # noqa: BLE001 — 权限过滤故障必须安全拒绝
+                logger.error("[RAGChain] 权限过滤异常，拒绝全部证据", exc_info=True)
+                docs = []
+                input_dict["context"] = []
             # ── 版本窗口过滤（§6 版本检索消费方，2026-09-17 R4）──
             # 请求声明 as_of/current/all_versions 时，生效窗口不匹配的
             # 版本链文档证据不得进入生成上下文（防旧版本答案冒充现行）。

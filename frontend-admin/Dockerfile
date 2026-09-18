@@ -14,8 +14,8 @@ RUN npm ci
 # 复制源码
 COPY . .
 
-# API 代理目标（Docker 内部服务名）
-ARG API_URL=http://api:8000
+# API 代理目标：统一经过 APISIX，确保 JWT 验签及坐席身份头注入。
+ARG API_URL=http://apisix:9080
 ENV API_URL=${API_URL}
 
 # 生产构建（standalone 模式）

@@ -8,14 +8,53 @@ from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import unquote
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from backend.app.api.identity import resolve_identity
 from backend.competitor import cookie_manager
 from backend.competitor.store import get_store
 from backend.shared.logger import logger
 
 router = APIRouter(prefix="/competitor", tags=["竞品监控"])
+
+
+def _run_idempotent_write(
+    request: Request,
+    operation: str,
+    payload: dict,
+    callback,
+    *,
+    approval_action: str,
+    approval_detail: dict | None = None,
+):
+    """同步竞品 REST 写入口的审批—幂等边界。"""
+    ident = resolve_identity(request)
+    if not ident.tenant_id or not ident.user_id:
+        # 兼容尚未经网关注入租户的旧直调/本地开发路径；可信上下文不降级。
+        return callback()
+
+    from backend.security.tool_approval import ensure_approved
+
+    pending = ensure_approved(
+        "competitor_api",
+        approval_action,
+        user_id=ident.user_id,
+        detail=approval_detail or payload,
+    )
+    if pending is not None:
+        raise HTTPException(status_code=409, detail=pending)
+
+    from backend.shared.idempotency import run_idempotent_operation_for_identity
+
+    return run_idempotent_operation_for_identity(
+        operation,
+        payload,
+        lambda: {"response": callback()},
+        tenant_id=ident.tenant_id,
+        actor_id=ident.user_id,
+        client_key=(request.headers.get("Idempotency-Key") or "").strip(),
+    )["response"]
 
 
 # ── 请求 / 响应模型 ─────────────────────────────
@@ -89,7 +128,7 @@ def list_watchlist(enabled_only: bool = Query(True, description="是否仅返回
 # ── POST /competitor/watchlist ──────────────────
 
 @router.post("/watchlist")
-def add_watch(req: AddWatchRequest):
+def add_watch(req: AddWatchRequest, request: Request):
     """添加监控项（URL 已存在则更新名称等字段）"""
     from backend.competitor.adapters import detect_platform
 
@@ -97,54 +136,79 @@ def add_watch(req: AddWatchRequest):
     platform = req.platform if req.platform != "auto" else detect_platform(req.url)
     name = req.name or req.url[:60]
 
-    item = store.add_watch(
-        name=name,
-        url=req.url,
-        platform=platform,
-        my_sku=req.my_sku,
-        frequency=req.frequency,
+    payload = {
+        "url": req.url, "name": name, "platform": platform,
+        "my_sku": req.my_sku, "frequency": req.frequency,
+    }
+
+    def _write():
+        item = store.add_watch(
+            name=name,
+            url=req.url,
+            platform=platform,
+            my_sku=req.my_sku,
+            frequency=req.frequency,
+        )
+
+        # 立即建立基线快照（后台执行，不阻塞响应）
+        baseline = None
+        try:
+            from backend.competitor.pipeline import analyze_url
+            analyze_url(req.url, name=name, use_llm=False)
+            snap = store.latest_snapshot(req.url)
+            if snap:
+                baseline = {
+                    "price": snap.get("price"),
+                    "currency": snap.get("currency") or "CNY",
+                    "crawled_at": snap.get("crawled_at"),
+                }
+        except Exception as e:
+            logger.warning(f"[competitor:api] 基线快照失败: {e}")
+
+        return {"item": item, "baseline": baseline}
+
+    return _run_idempotent_write(
+        request, "competitor.api.watchlist.add", payload, _write,
+        approval_action="watchlist_add",
     )
-
-    # 立即建立基线快照（后台执行，不阻塞响应）
-    baseline = None
-    try:
-        from backend.competitor.pipeline import analyze_url
-        result = analyze_url(req.url, name=name, use_llm=False)
-        snap = store.latest_snapshot(req.url)
-        if snap:
-            baseline = {
-                "price": snap.get("price"),
-                "currency": snap.get("currency") or "CNY",
-                "crawled_at": snap.get("crawled_at"),
-            }
-    except Exception as e:
-        logger.warning(f"[competitor:api] 基线快照失败: {e}")
-
-    return {"item": item, "baseline": baseline}
 
 
 # ── DELETE /competitor/watchlist ────────────────
 
 @router.delete("/watchlist")
-def remove_watch(url: str = Query(..., description="待移除的竞品 URL")):
+def remove_watch(request: Request,
+                 url: str = Query(..., description="待移除的竞品 URL")):
     """移除监控项（不删除快照历史）"""
     store = get_store()
-    removed = store.remove_watch(url)
-    if not removed:
-        raise HTTPException(status_code=404, detail=f"监控项不存在: {url}")
-    return {"removed": True, "url": url}
+    def _write():
+        removed = store.remove_watch(url)
+        if not removed:
+            raise HTTPException(status_code=404, detail=f"监控项不存在: {url}")
+        return {"removed": True, "url": url}
+
+    return _run_idempotent_write(
+        request, "competitor.api.watchlist.remove", {"url": url}, _write,
+        approval_action="watchlist_remove",
+    )
 
 
 # ── PATCH /competitor/watchlist ─────────────────
 
 @router.patch("/watchlist")
-def toggle_watch(req: ToggleRequest):
+def toggle_watch(req: ToggleRequest, request: Request):
     """启用/停用监控项"""
     store = get_store()
-    item = store.toggle_watch(req.url, enabled=req.enabled)
-    if not item:
-        raise HTTPException(status_code=404, detail=f"监控项不存在: {req.url}")
-    return {"item": item}
+    def _write():
+        item = store.toggle_watch(req.url, enabled=req.enabled)
+        if not item:
+            raise HTTPException(status_code=404, detail=f"监控项不存在: {req.url}")
+        return {"item": item}
+
+    return _run_idempotent_write(
+        request, "competitor.api.watchlist.toggle",
+        {"url": req.url, "enabled": req.enabled}, _write,
+        approval_action="watchlist_toggle",
+    )
 
 
 # ── GET /competitor/history ─────────────────────
@@ -185,31 +249,44 @@ def get_history(
 # ── POST /competitor/analyze ────────────────────
 
 @router.post("/analyze")
-def analyze_competitor(req: AnalyzeRequest):
+def analyze_competitor(req: AnalyzeRequest, request: Request):
     """立即分析一个竞品页面（抓取→抽取→快照入库）"""
     from backend.competitor.pipeline import analyze_url
 
-    try:
-        result = analyze_url(req.url, use_llm=req.use_llm)
-        return {"result": result, "url": req.url}
-    except Exception as e:
-        logger.error(f"[competitor:api] 分析失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"分析失败: {e}")
+    def _write():
+        try:
+            result = analyze_url(req.url, use_llm=req.use_llm)
+            return {"result": result, "url": req.url}
+        except Exception as e:
+            logger.error(f"[competitor:api] 分析失败: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"分析失败: {e}")
+
+    return _run_idempotent_write(
+        request, "competitor.api.analyze",
+        {"url": req.url, "use_llm": req.use_llm}, _write,
+        approval_action="analyze",
+    )
 
 
 # ── POST /competitor/scan ───────────────────────
 
 @router.post("/scan")
-def scan_all():
+def scan_all(request: Request):
     """巡检全部启用的监控项"""
     from backend.competitor.pipeline import scan_watchlist
 
-    try:
-        report = scan_watchlist()
-        return {"report": report}
-    except Exception as e:
-        logger.error(f"[competitor:api] 巡检失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"巡检失败: {e}")
+    def _write():
+        try:
+            report = scan_watchlist()
+            return {"report": report}
+        except Exception as e:
+            logger.error(f"[competitor:api] 巡检失败: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"巡检失败: {e}")
+
+    return _run_idempotent_write(
+        request, "competitor.api.scan", {"scope": "enabled_watchlist"}, _write,
+        approval_action="scan",
+    )
 
 
 # ── GET /competitor/stats ───────────────────────
@@ -259,30 +336,47 @@ def get_cookies():
 # ── POST /competitor/cookies ──────────────────
 
 @router.post("/cookies")
-def save_cookies(req: CookiesRequest):
+def save_cookies(req: CookiesRequest, request: Request):
     """保存某平台 Cookie 到数据库（立即生效，无需重启）"""
     cookies = req.cookies.strip()
     if not cookies:
         raise HTTPException(status_code=400, detail="Cookie 不能为空")
-    cookie_manager.save_cookies(req.platform, cookies, "manual")
-    return {
-        "saved": True,
-        "platform": cookie_manager.normalize_platform(req.platform),
-        "length": len(cookies),
-    }
+    def _write():
+        cookie_manager.save_cookies(req.platform, cookies, "manual")
+        return {
+            "saved": True,
+            "platform": cookie_manager.normalize_platform(req.platform),
+            "length": len(cookies),
+        }
+
+    return _run_idempotent_write(
+        request, "competitor.api.cookies.save",
+        {"platform": req.platform, "cookies": cookies}, _write,
+        approval_action="cookies_save",
+        # 审批详情不保存 Cookie 原文，避免敏感凭据进入审批表。
+        approval_detail={"platform": req.platform, "length": len(cookies)},
+    )
 
 
 # ── DELETE /competitor/cookies ────────────────
 
 @router.delete("/cookies")
-def clear_cookies(platform: str = Query("", description="指定平台，空=删除全部")):
+def clear_cookies(request: Request,
+                  platform: str = Query("", description="指定平台，空=删除全部")):
     """清除 Cookie 配置（按平台或全部）"""
-    if platform:
-        deleted = cookie_manager.delete_cookies(platform)
-        return {"cleared": deleted, "platform": cookie_manager.normalize_platform(platform)}
-    removed = cookie_manager.delete_all()
-    logger.info(f"[competitor:api] Cookie 全部清除 (removed={removed})")
-    return {"cleared": removed > 0, "removed": removed}
+    def _write():
+        if platform:
+            deleted = cookie_manager.delete_cookies(platform)
+            return {"cleared": deleted,
+                    "platform": cookie_manager.normalize_platform(platform)}
+        removed = cookie_manager.delete_all()
+        logger.info(f"[competitor:api] Cookie 全部清除 (removed={removed})")
+        return {"cleared": removed > 0, "removed": removed}
+
+    return _run_idempotent_write(
+        request, "competitor.api.cookies.clear", {"platform": platform}, _write,
+        approval_action="cookies_clear",
+    )
 
 
 # ── POST /competitor/test-cookies ─────────────
@@ -338,12 +432,20 @@ async def qr_login_start(req: QrLoginRequest):
 # ── POST /competitor/qr-login/poll ────────────
 
 @router.post("/qr-login/poll")
-async def qr_login_poll(req: QrPollRequest):
+async def qr_login_poll(req: QrPollRequest, request: Request):
     """轮询扫码状态，确认后自动提取 Cookie 并入库"""
     from backend.competitor.qr_login import poll_qr_login
 
+    ident = resolve_identity(request)
     try:
-        result = await poll_qr_login(req.platform, req.token, req.session_cookies)
+        result = await poll_qr_login(
+            req.platform,
+            req.token,
+            req.session_cookies,
+            tenant_id=ident.tenant_id,
+            actor_id=ident.user_id,
+            client_key=(request.headers.get("Idempotency-Key") or "").strip(),
+        )
         return {"ok": True, **result}
     except Exception as e:
         logger.error(f"[competitor:api] QR 轮询失败: {e}", exc_info=True)
@@ -362,42 +464,48 @@ def qr_login_platforms():
 # ── POST /competitor/retry-blocked ─────────────
 
 @router.post("/retry-blocked")
-def retry_blocked_urls():
+def retry_blocked_urls(request: Request):
     """重新抓取所有 login_blocked 状态的监控项"""
     from backend.competitor.pipeline import analyze_url
 
-    store = get_store()
-    items = store.list_watch(enabled_only=True)
-    results = []
-    for item in items:
-        snap = store.latest_snapshot(item["url"])
-        if snap and snap.get("extract_method") == "login_blocked":
-            try:
-                report = analyze_url(item["url"], name=item["name"])
-                new_snap = store.latest_snapshot(item["url"])
-                still_blocked = (
-                    new_snap and new_snap.get("extract_method") == "login_blocked"
-                )
-                results.append({
-                    "url": item["url"],
-                    "name": item["name"],
-                    "ok": not still_blocked,
-                    "method": new_snap.get("extract_method") if new_snap else None,
-                })
-            except Exception as e:
-                results.append({
-                    "url": item["url"],
-                    "name": item["name"],
-                    "ok": False,
-                    "error": str(e),
-                })
-    succeeded = sum(1 for r in results if r["ok"])
-    logger.info(f"[competitor:api] 重试 {len(results)} 个被拦截的 URL，成功 {succeeded} 个")
-    return {
-        "retried": len(results),
-        "succeeded": succeeded,
-        "results": results,
-    }
+    def _write():
+        store = get_store()
+        items = store.list_watch(enabled_only=True)
+        results = []
+        for item in items:
+            snap = store.latest_snapshot(item["url"])
+            if snap and snap.get("extract_method") == "login_blocked":
+                try:
+                    analyze_url(item["url"], name=item["name"])
+                    new_snap = store.latest_snapshot(item["url"])
+                    still_blocked = (
+                        new_snap and new_snap.get("extract_method") == "login_blocked"
+                    )
+                    results.append({
+                        "url": item["url"],
+                        "name": item["name"],
+                        "ok": not still_blocked,
+                        "method": new_snap.get("extract_method") if new_snap else None,
+                    })
+                except Exception as e:
+                    results.append({
+                        "url": item["url"],
+                        "name": item["name"],
+                        "ok": False,
+                        "error": str(e),
+                    })
+        succeeded = sum(1 for r in results if r["ok"])
+        logger.info(f"[competitor:api] 重试 {len(results)} 个被拦截的 URL，成功 {succeeded} 个")
+        return {
+            "retried": len(results),
+            "succeeded": succeeded,
+            "results": results,
+        }
+
+    return _run_idempotent_write(
+        request, "competitor.api.retry_blocked", {"scope": "login_blocked"}, _write,
+        approval_action="retry_blocked",
+    )
 
 
 # ── GET /competitor/anti-ban/stats ──────────────
@@ -412,11 +520,18 @@ def anti_ban_stats():
 # ── POST /competitor/anti-ban/resume ────────────
 
 @router.post("/anti-ban/resume")
-def anti_ban_resume():
+def anti_ban_resume(request: Request):
     """人工确认后解除 L2 全局停采（单账号场景不做自动重试，恢复必须人工决策）"""
     from backend.competitor import anti_ban
-    anti_ban.resume_after_halt()
-    return {"ok": True, "message": "全局停采已解除，采集将以保守频率恢复"}
+
+    return _run_idempotent_write(
+        request, "competitor.api.anti_ban.resume", {"action": "resume"},
+        lambda: (
+            anti_ban.resume_after_halt(),
+            {"ok": True, "message": "全局停采已解除，采集将以保守频率恢复"},
+        )[1],
+        approval_action="anti_ban_resume",
+    )
 
 
 # ── GET /competitor/recommendations ─────────

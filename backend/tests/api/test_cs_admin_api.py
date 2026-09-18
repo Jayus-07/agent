@@ -490,7 +490,9 @@ class TestTyping:
             "backend.customer_service.typing_state.set_typing", fake_set
         )
         resp = client.post(
-            "/cs/conversations/conv-1/typing", json={"agent_id": "agent-01"}
+            "/cs/conversations/conv-1/typing",
+            json={"agent_id": "agent-01"},
+            headers={"X-Auth-Type": "api-key"},
         )
         assert resp.status_code == 200
         assert resp.json() == {"conversation_id": "conv-1", "ok": True}

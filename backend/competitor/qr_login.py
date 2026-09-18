@@ -20,6 +20,7 @@
 """
 import asyncio
 import base64
+import hashlib
 import random
 import time
 import uuid
@@ -275,7 +276,13 @@ async def start_qr_login(platform: str) -> dict[str, Any]:
 
 
 async def poll_qr_login(
-    platform: str, token: str, session_cookies: str
+    platform: str,
+    token: str,
+    session_cookies: str,
+    *,
+    tenant_id: str = "",
+    actor_id: str = "",
+    client_key: str = "",
 ) -> dict[str, Any]:
     """轮询扫码状态：检查浏览器 URL 变化和登录 Cookie。
 
@@ -309,7 +316,13 @@ async def poll_qr_login(
                 f"[QR-Login] {platform} URL changed: "
                 f"{initial_url[:50]} → {current_url[:50]}"
             )
-            return await _complete_login(token, session)
+            return await _complete_login(
+                token,
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                client_key=client_key,
+            )
     except Exception as e:
         logger.warning(f"[QR-Login] URL check error: {e}")
 
@@ -324,7 +337,13 @@ async def poll_qr_login(
             logger.info(
                 f"[QR-Login] {platform} new login cookies detected: {matched}"
             )
-            return await _complete_login(token, session)
+            return await _complete_login(
+                token,
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                client_key=client_key,
+            )
     except Exception as e:
         logger.warning(f"[QR-Login] cookie check error: {e}")
 
@@ -350,7 +369,14 @@ async def poll_qr_login(
     return {"status": QrStatus.NEW.value}
 
 
-async def _complete_login(token: str, session: dict) -> dict[str, Any]:
+async def _complete_login(
+    token: str,
+    session: dict,
+    *,
+    tenant_id: str = "",
+    actor_id: str = "",
+    client_key: str = "",
+) -> dict[str, Any]:
     """从浏览器提取 Cookie 并保存到数据库"""
     try:
         cookies = await session["context"].cookies()
@@ -361,13 +387,39 @@ async def _complete_login(token: str, session: dict) -> dict[str, Any]:
         if not cookie_str or len(cookie_str) < 20:
             raise RuntimeError(f"提取的 Cookie 异常短: {len(cookie_str)} 字符")
 
-        # 按平台保存 + 记录来源（扫码登录）
-        from backend.competitor import cookie_manager
-        cookie_manager.save_cookies(session["platform"], cookie_str, "qr")
+        # 按平台保存 + 记录来源（扫码登录）。确认后的轮询可能被客户端重试，
+        # 只有可信租户上下文才进入全局幂等边界；旧脚本/本地直调保留兼容路径。
+        from backend.competitor import anti_ban, cookie_manager
 
-        # 新登录态 = 干净起点: 清除 Cookie 疑似失效标记与失败连击
-        from backend.competitor import anti_ban
-        anti_ban.clear_cookie_suspect(session["platform"])
+        def _persist_login() -> dict[str, Any]:
+            cookie_manager.save_cookies(session["platform"], cookie_str, "qr")
+            # 新登录态 = 干净起点: 清除 Cookie 疑似标记与失败连击
+            anti_ban.clear_cookie_suspect(session["platform"])
+            return {"saved": True, "cookie_length": len(cookie_str)}
+
+        if tenant_id and actor_id:
+            from backend.shared.idempotency import (
+                run_idempotent_operation_for_identity,
+            )
+
+            payload = {
+                "platform": session["platform"],
+                "cookie_sha256": hashlib.sha256(
+                    cookie_str.encode("utf-8")
+                ).hexdigest(),
+                "cookie_length": len(cookie_str),
+            }
+            persisted = run_idempotent_operation_for_identity(
+                "competitor.qr_login.complete",
+                payload,
+                _persist_login,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                # 同一 QR token 是一次登录动作；显式键优先，避免轮询重复保存。
+                client_key=client_key or token,
+            )
+        else:
+            persisted = _persist_login()
 
         logger.info(
             f"[QR-Login] {session['platform']} 登录成功，"
@@ -377,8 +429,7 @@ async def _complete_login(token: str, session: dict) -> dict[str, Any]:
         await _cleanup_session(token)
         return {
             "status": QrStatus.CONFIRMED.value,
-            "saved": True,
-            "cookie_length": len(cookie_str),
+            **persisted,
         }
     except Exception as e:
         logger.error(f"[QR-Login] Cookie 提取失败: {e}", exc_info=True)

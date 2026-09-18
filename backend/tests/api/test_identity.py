@@ -30,6 +30,7 @@ def client(monkeypatch):
             "user_id": ident.user_id, "user_name": ident.user_name,
             "department": ident.department, "auth_type": ident.auth_type,
             "source": ident.source,
+            "permissions": ident.permissions,
         }
 
     @app.get("/strict")
@@ -62,7 +63,7 @@ def test_legacy_no_body_no_trust_header_is_guest(client, monkeypatch):
     monkeypatch.setattr("backend.config.TRUST_USER_HEADER", False)
     r = client.post("/whoami", headers={"X-User-Id": "15"})  # 开关关：头也不认
     assert r.json() == {"user_id": "", "user_name": "", "department": "",
-                        "auth_type": "guest", "source": "guest"}
+                        "auth_type": "guest", "source": "guest", "permissions": None}
 
 
 def test_legacy_falls_back_to_gateway_header(client, monkeypatch):
@@ -87,7 +88,38 @@ def test_header_mode_full_fields(client, monkeypatch):
     r = client.post("/whoami", headers={"X-User-Id": "15", "X-User-Name": "Mint",
                                         "X-User-Dept": "rd"})
     assert r.json() == {"user_id": "15", "user_name": "Mint", "department": "rd",
-                        "auth_type": "jwt", "source": "header"}
+                        "auth_type": "jwt", "source": "header", "permissions": None}
+
+
+def test_header_mode_reads_permissions_from_gateway_header(client, monkeypatch):
+    """权限集合只能从网关注入头读取，并规范化、去重、排序。"""
+    _set_mode(monkeypatch, "header")
+    r = client.post("/whoami", headers={
+        "X-User-Id": "15", "X-Auth-Type": "jwt",
+        "X-User-Permissions": "finance_restricted, hr_confidential, finance_restricted",
+    })
+    assert r.json()["permissions"] == ["finance_restricted", "hr_confidential"]
+
+
+def test_header_mode_reads_and_validates_tenant_from_gateway_header(monkeypatch):
+    """租户只能来自可信身份头，且非法值按未声明处理。"""
+    _set_mode(monkeypatch, "header")
+    trusted = identity_mod._from_headers(_FakeRequest({
+        "X-User-Id": "15", "X-Auth-Type": "jwt", "X-Tenant-Id": "acme-prod",
+    }))
+    assert trusted.tenant_id == "acme-prod"
+
+    invalid = identity_mod._from_headers(_FakeRequest({
+        "X-User-Id": "15", "X-Auth-Type": "jwt", "X-Tenant-Id": "acme/../other",
+    }))
+    assert invalid.tenant_id == ""
+
+
+def test_header_mode_does_not_accept_body_permissions(client, monkeypatch):
+    """请求体没有身份入口，未注入权限时必须保持 None。"""
+    _set_mode(monkeypatch, "header")
+    r = client.post("/whoami?permissions=finance_restricted")
+    assert r.json()["permissions"] is None
 
 
 # ── header：网关 guest 模式的 anonymous 占位身份不算已认证 ──
@@ -98,7 +130,7 @@ def test_header_mode_gateway_anonymous_is_guest(client, monkeypatch):
     _set_mode(monkeypatch, "header")
     r = client.post("/whoami", headers={"X-Auth-Type": "anonymous", "X-User-Id": "anonymous"})
     assert r.json() == {"user_id": "", "user_name": "", "department": "",
-                        "auth_type": "guest", "source": "guest"}
+                        "auth_type": "guest", "source": "guest", "permissions": None}
 
 
 def test_header_mode_anonymous_uid_without_anon_tag_is_guest(client, monkeypatch):

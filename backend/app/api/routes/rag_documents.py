@@ -2,7 +2,13 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, Depends
 from fastapi.responses import StreamingResponse
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
-from backend.app.api.deps import get_rag_pipeline, require_rag_ready, get_rag_status
+from backend.app.api.deps import (
+    get_rag_pipeline,
+    require_rag_ready,
+    get_rag_status,
+    require_rag_user,
+    require_rag_editor,
+)
 import asyncio
 import os
 import time
@@ -32,7 +38,7 @@ from backend.app.api.routes._rag_shared import (
     _safe_log_op,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_rag_user)])
 
 
 @router.get("/stats")
@@ -170,7 +176,7 @@ async def list_pending_docs(page: int = 1, page_size: int = 20):
         return {"items": [], "total": 0, "error": str(e)}
 
 
-@router.post("/pending/{doc_id}/approve")
+@router.post("/pending/{doc_id}/approve", dependencies=[Depends(require_rag_editor)])
 async def approve_pending_doc(doc_id: str, request: Request):
     """批准 pending 文档 → status='active'（2026-08-11）。"""
     source = _extract_source(request)
@@ -206,7 +212,7 @@ async def approve_pending_doc(doc_id: str, request: Request):
         return {"ok": False, "error": str(e)}
 
 
-@router.post("/pending/{doc_id}/reject")
+@router.post("/pending/{doc_id}/reject", dependencies=[Depends(require_rag_editor)])
 async def reject_pending_doc(doc_id: str, request: Request):
     """拒绝 pending 文档 → status='deleted'（2026-08-11）。"""
     source = _extract_source(request)
@@ -293,7 +299,7 @@ async def get_document(doc_id: str):
         return {"ok": False, "error": str(e)}
 
 
-@router.post("/documents/{doc_id}/reindex")
+@router.post("/documents/{doc_id}/reindex", dependencies=[Depends(require_rag_editor)])
 async def reindex_document(doc_id: str, request: Request, force: bool = False):
     """单文件重新索引 — 删除旧向量后重新加载/分块/Embedding/写入"""
     require_rag_ready()
@@ -430,7 +436,7 @@ def _verify_doc_purged(doc_id: str, file_path: str, pipeline) -> list[str]:
     return residue
 
 
-@router.delete("/documents/{doc_id}")
+@router.delete("/documents/{doc_id}", dependencies=[Depends(require_rag_editor)])
 async def delete_document(doc_id: str, request: Request):
     """删除文档 — 软删 registry + 清理两处向量 + 删原文件（防 sync 复活）"""
     source = _extract_source(request)

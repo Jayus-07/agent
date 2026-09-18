@@ -92,12 +92,18 @@ class AskRequest(BaseModel):
     # 默认空串保证旧客户端不传时行为不变。
     subject_type: str = Field("", description="主体类型（customer/employee，空=未声明）")
     department: str = Field("", description="主体部门（employee 授权矩阵用）")
+    permissions: list[str] | None = Field(
+        None, description="请求者持有的文档级权限集合"
+    )
 
 
 class RetrieveRequest(BaseModel):
     question: str = Field(..., min_length=1, description="检索问题")
     kb_id: str = Field("default", description="知识库 ID")
     top_k: int = Field(3, ge=1, le=20, description="返回 chunk 数")
+    subject_type: str = Field("", description="主体类型（customer/employee）")
+    department: str = Field("", description="主体部门")
+    permissions: list[str] | None = Field(None, description="文档级权限集合")
 
 
 # ==================== 本地 pipeline 接入 ====================
@@ -153,6 +159,7 @@ def ask(req: AskRequest) -> dict[str, Any]:
         kb_ids=req.kb_ids,
         subject_type=req.subject_type,
         department=req.department,
+        permissions=req.permissions,
     )
     return {"answer": answer, "meta": getattr(pipeline, "last_answer_meta", {}) or {}}
 
@@ -165,7 +172,12 @@ def retrieve(req: RetrieveRequest) -> dict[str, Any]:
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     result = pipeline.retrieve_knowledge(
-        question=req.question, kb_id=req.kb_id, top_k=req.top_k,
+        question=req.question,
+        kb_id=req.kb_id,
+        top_k=req.top_k,
+        subject_type=req.subject_type,
+        department=req.department,
+        permissions=req.permissions,
     )
     return {"result": result}
 

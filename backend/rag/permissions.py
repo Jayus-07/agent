@@ -62,6 +62,27 @@ def is_accessible(metadata: dict | None, user_permissions: Iterable[str] | None)
     return req <= set(user_permissions)
 
 
+def filter_documents_by_permission(
+    documents: Iterable[Any],
+    user_permissions: Iterable[str] | None,
+) -> list[Any]:
+    """按文档 permission_scope 过滤证据，任何元数据异常都安全拒绝。"""
+    try:
+        normalized_permissions = (
+            None if user_permissions is None else set(user_permissions)
+        )
+        return [
+            document
+            for document in documents
+            if is_accessible(
+                getattr(document, "metadata", None),
+                normalized_permissions,
+            )
+        ]
+    except Exception:
+        return []
+
+
 def partition_by_permission(
     metas: list[dict], user_permissions: Iterable[str] | None
 ) -> tuple[list[int], list[int]]:
