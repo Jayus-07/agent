@@ -189,18 +189,41 @@ Backend: `py_compile` + `pytest tests/sql/ -v` ｜ Frontend: `npx tsc --noEmit` 
 
 ## 服务启停与网关边界（2026-09-15 APISIX 迁移后）
 
+**⚠️ 当前唯一有效的启停入口 = `devctl.bat` 系列**（2026-09-18 起）。旧的
+`start_py.bat` / `stop_py.bat` / `restart_py.bat` / `start_frontend.bat` /
+`stop_frontend.bat` / `start_frontend_admin.bat` / `stop_frontend_admin.bat`
+**已从工作区删除**（未提交）；`start_java.bat` 等 Java 脚本更早已随服务退役移除
+（Java 源码在 `Enterprise_OA`，备份 `.workbuddy/java-legacy-backup/`）。
+
 ```bash
-# Python 后端 :8000 —— 默认容器形态（agent-app-1，compose env 完整）
-start_py.bat / stop_py.bat / restart_py.bat
-#   native 参数 = 宿主机裸跑 uvicorn --reload（仅临时调试：需同时把
-#   apisix/apisix.yaml 的 app 节点改回 host.docker.internal:8000）
-# Java 服务（原生 mvn 热加载：auth-service :8006 / system-service :8002 / api-gateway :8080；
-#   business-service 留容器；mysql/redis/nacos/postgres 基础设施容器不动）
-start_java.bat / stop_java.bat / restart_java.bat
-#   改了 Java 源码 → build_java.bat → restart_java.bat
-# 前端 :3100（start 脚本默认注入 AUTH_GATEWAY_URL=http://127.0.0.1:9080）
-start_frontend.bat / stop_frontend.bat
+# 统一入口（powershell / cmd 均可，参数大小写不敏感）
+.\devctl.bat status                      # 默认动作；空参 = status
+.\devctl.bat start   [backend|admin|web|all]
+.\devctl.bat stop    [backend|admin|web|all] [/y]
+.\devctl.bat restart [backend|admin|web|all] [/y]
+.\devctl.bat all /y                      # stop+start 全量，跳过确认
+
+# 短路入口（等价于 devctl 的同名动作，实现在 dev-svc.bat）
+.\dev-start.bat [backend|admin|web|all]  # 已运行的服务自动 skip
+.\dev-stop.bat  [backend|admin|web|all]  # 默认交互确认，加 /y 跳过
+.\dev-restart.bat [backend|admin|web|all] /y
+.\dev-svc.bat   [status|start|stop|restart] [target] [/y]   # 底层实现，一般不直接调
 ```
+
+服务定义与端口：`backend` = docker compose 的 **`app` 服务**（127.0.0.1:8000，探活
+`/health`）｜`admin` = `frontend-admin` next dev（:3200）｜`web` = `frontend`
+next dev（:3100）。网关入口 `http://127.0.0.1:9080`（APISIX）。
+
+- **`backend` 只按“服务名”操作**：`stop backend` = `docker compose stop app`，**不会**
+  停 postgres/redis/apisix/rag-service/mcp-service/worker；`up -d app` 也只拉起 app 一个容器。
+  需要整套栈另用 `docker compose up -d` / `down`。
+- 前端每次 start 都新开一个空 `NEXT_DIST_DIR=.next-dev-<rand>`（复用非空 distDir 必启动失败），
+  故 `frontend/.next-dev-*`、`frontend-admin/.next-dev-*` 会不断堆积（已实测 16 个目录、~300MB），
+  `.gitignore` 用 `.next-*/` 通配兜住；**该脚本不清理旧 distDir**，需手动删。
+- `stop`/`restart` 的确认提示是 `set /p` 交互式：**脚本化/agent 调用一律加 `/y`**，否则挂住。
+- 仅支持 `cmd`/`powershell` 执行。从 Git Bash 调需用绝对路径
+  `/c/Windows/System32/cmd.exe /c "devctl.bat status"`，且当前目录须已是仓库根
+  （`cd /d D:\Program Files\workplace\agent` 会因路径含空格被截断）。
 
 - **py 与 Java 是两个独立项目**：py = 本仓库；Java = Enterprise_OA（源码已移出，备份 `.workbuddy/java-legacy-backup/`，割接清单 `docs/java-side-handover.md`）。唯一联系：Java 客服系统调 py agent（`/internal/ai/call` + chat API）。
 - 认证已 py 自建（issuer=agent-platform，`backend/security/local_jwt.py` + `routes/auth_local.py` + migration 008），不再依赖 Java auth-service。
@@ -211,6 +234,8 @@ start_frontend.bat / stop_frontend.bat
 ### 启停已知坑（实测，详见 `命令文档.md`、`docs/gateway-apisix-final-report.md`）
 
 - **.bat 必须 ASCII-only**（cmd 按 GBK 解析，中文注释会破坏控制流）；**别用 `timeout /t`**（Git Bash PATH 会解析到 GNU timeout，改用 `ping -n N 127.0.0.1 >nul`）
+- **`dev-svc.bat` 未跟踪**（`?? ` 状态）：它是 `devctl`/`dev-{start,stop,restart}.bat` 四者的共享实现，
+  删旧脚本时务必一起 `git add`，否则新提交的入口脚本会指向一个不存在的文件。
 - 宿主机 `127.0.0.1:8000` 有 Docker 残留僵尸绑定 → 裸跑 uvicorn 前先重启 Docker Desktop
 - app 容器换 IP 后 APISIX 有 ~1-2min 502 窗口（`dns_resolver_valid: 5` 已缓解），急用 `docker compose restart apisix`；oa-auth-service/system 无重启策略，引擎重启后需手动 `docker start`
 - oa-auth 整栈曾被反复 SIGKILL(137)：修复 = `docker start oa-auth-nacos oa-auth-mysql oa-auth-redis oa-auth-service oa-auth-system` → `docker network connect agent_agent-net <容器>` → 重启前端。vpnkit 回环不可靠，**容器名直连是首选**；本机 5432 是宿主机原生 PG，不是 agent-postgres

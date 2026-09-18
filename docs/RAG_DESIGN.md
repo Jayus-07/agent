@@ -32,9 +32,9 @@
         └─────┬─────┘                           └────┬─────┘
               │                                      │
         ┌─────┴─────┐                           ┌────┴─────┐
-        │ ChromaDB  │                           │ ChunkLevel│
+        │ PGVector  │                           │ ChunkLevel│
         │ (doc+chunk│                           │ Hybrid   │
-        │  2 库)   │                           │ (Vec+BM25)│
+        │collection)│                           │ (Vec+BM25)│
         └───────────┘                           └────┬─────┘
                                                       │
                                                 ┌─────┴─────┐
@@ -58,7 +58,7 @@
 | 能力 | 实现 |
 |---|---|
 | 多知识库 | `kb_id` 隔离（policy / tech / finance / hr / default） |
-| 文件类型 | PDF / DOCX / Markdown / TXT |
+| 文件类型 | PDF / DOCX / Markdown / TXT / XLSX / CSV |
 | 元数据 | doc_type / business_domain / summary / chunk_keywords |
 | 引用 | `[1][2]` 内联标注 + 末尾参考文献 |
 | 拒答 | Evidence Gate 三层（Retrieval / Rerank / Generation） |
@@ -87,8 +87,8 @@ _index_file()  ← 每个文件一棵 trace 树
   ├─ ⑤ index_chunk       → ChunkStrategyRouter + ChunkFilter
   ├─ ⑥ index_metadata    → LLM+规则: 分类/摘要/关键词/实体
   ├─ ⑦ index_embed       → HuggingFaceEmbeddings 逐 chunk 向量化
-  ├─ ⑧ index_vector_db   → ChromaKB.add_documents() 写入 chunk 向量库
-  └─ ⑨ registry          → DocumentRegistry.register() SQLite 持久化
+  ├─ ⑧ index_vector_db   → PgVectorKnowledgeStore.add_documents() 写入 chunk 向量库
+  └─ ⑨ registry          → DocumentRegistry.register() 持久化文档索引状态
 ```
 
 ### 2.3 11 种清洗（③）
@@ -390,26 +390,27 @@ class KnowledgeStore(ABC):
     def delete(self, ids=None, where=None) -> int: ...
 ```
 
-**当前实现**：`ChromaKnowledgeStore`（封装 `langchain_chroma.Chroma`）
+**当前实现**：`PgVectorKnowledgeStore`（PostgreSQL + pgvector，`collection` 隔离 doc/chunk 逻辑库）。
 
-**预留实现**：`PgVectorKnowledgeStore`（pgvector，后续 PR）
+连接通过进程级 `ThreadedConnectionPool` 复用；相似度查询使用事务级
+`hnsw.ef_search`。默认 `VECTOR_HNSW_EF_SEARCH=80`，过滤条件很强时可提高，
+但必须用 P95 延迟和 Recall@5 共同验收。
 
-### 4.2 两个 ChromaDB
+### 4.2 PGVector 两个 collection
 
 | 库 | 路径 | 写入 | 用途 |
 |---|---|---|---|
-| **chunk 级** | `CHROMA_PATH` | `indexer.py:_index_file()` 步骤 8 | 语义检索主体 |
-| **doc 级** | `DOC_DB_PATH` | 索引时整篇文档 | Stage 1 召回 + Adaptive 扩展 |
+| **chunk 级** | `CHROMA_PATH` basename → PG `collection` | `indexer.py:_index_file()` 步骤 8 | 语义检索主体 |
+| **doc 级** | `DOC_DB_PATH` basename → PG `collection` | 索引时整篇文档 | Stage 1 召回 + Adaptive 扩展 |
 
-### 4.3 切换路径
+Stage 1 文档候选数由 `RAG_DOC_CANDIDATE_K` 控制，默认 50；BM25 使用独立的
+`BM25_CANDIDATE_K`，默认 100。BM25 先返回候选，再按 `doc_id`/metadata 过滤，
+最终答案条数仍由混合检索的 `k` 控制。
 
-业务层只依赖 `KnowledgeStore` 抽象，后续切换到 `PgVectorKnowledgeStore` 仅需：
+### 4.3 存储实现
 
-```
-1. 实现 PgVectorKnowledgeStore
-2. factory 切换
-3. 业务代码无改动
-```
+业务层只依赖 `KnowledgeStore` 抽象；当前唯一向量实现为 `PgVectorKnowledgeStore`。
+旧 Chroma 说明仅保留在迁移历史文档中，不能作为线上部署依据。
 
 ---
 
@@ -683,7 +684,7 @@ def _evaluate(self, answer: str, context_docs: list) -> str:
 | `backend/rag/retrieval/retrievers.py` | ChunkLevelRetriever + AdaptiveRetriever |
 | `backend/rag/retrieval/hybrid.py` | Vector + BM25 + RRF |
 | `backend/rag/retrieval/bm25_store.py` | BM25 持久化 + 增量 |
-| `backend/rag/retrieval/base.py` | CustomRetriever（ChromaDB filter） |
+| `backend/rag/retrieval/base.py` | CustomRetriever（PGVector filter） |
 | `backend/rag/retrieval/query_analyzer.py` | QueryAnalyzer（entities / time / intent） |
 | `backend/rag/retrieval/multi_query.py` | MultiQueryRetriever |
 | `backend/rag/retrieval/kb_filter.py` | 知识库过滤 |
@@ -703,7 +704,7 @@ def _evaluate(self, answer: str, context_docs: list) -> str:
 
 | 文件 | 职责 |
 |---|---|
-| `backend/rag/vectorstore/knowledge_store.py` | KnowledgeStore 抽象 + ChromaKnowledgeStore |
+| `backend/rag/vectorstore/knowledge_store.py` | KnowledgeStore 抽象 + PgVectorKnowledgeStore |
 | `backend/config/rag.py` | RAG 配置（chunk / rerank / doc_type / gates） |
 
 ### 7.4 入口
