@@ -135,7 +135,7 @@ Commit: `feat(audit): add reproducible rag20k baseline capture`
 - `85a0067566c869d2`（12 镜像折叠为 unknown、npm 误报不可用）
 - `005c6543e402b55b`（内容正确，但 capture_id 由自引用指纹算法计算，不可复现）
 
-**有效基线**：`docs/evidence/rag20k/phase0/baseline/8ad9e77f1b4fd9f4/baseline-manifest.json`，阻断项 0；连续两次采集 capture_id 一致（幂等验证通过）；12 镜像均有 RepoDigest；PG 16.14 / Redis 7.4.9（运行容器实测版本）。（Task 5 增补 2026-09-19：Step 1-2 比较器 `backend/audit/rag20k/eval_reproducibility.py` + `backend/scripts/compare_rag_baselines.py` 已 TDD 完成；Step 3-5 等待 `codex/rag-eval-kb-unification` worktree 合并——该 worktree 尚有 20+ 文件在途未提交。）
+**有效基线**：`docs/evidence/rag20k/phase0/baseline/8ad9e77f1b4fd9f4/baseline-manifest.json`，阻断项 0；连续两次采集 capture_id 一致（幂等验证通过）；12 镜像均有 RepoDigest；PG 16.14 / Redis 7.4.9（运行容器实测版本）。（Task 5 增补 2026-09-19：Step 1-2 比较器已完成并合入 main；worktree 已收尾合并（022 迁移 renumber 为 024）。**Step 3 实证修正**：cloud 模式答案生成需显式 `--judge` 开启（runner 中 `_allow_cloud = judge or ragas`），锁定命令据此增补该开关；rag_eval_kb/expanded_100 已入库（95 active + 1 failed：table_customer_satisfaction_2026 夹具过薄触发 ChunkingEmptyError，如实留档），迁移副本 near-dup 缺陷已修（d7a31cd，95 条知情激活留痕）。索引指纹 `ac633326d7c41bfe`。run-1 已完成且有效（git 2f2ef44，169 case，62 拒答 + 107 有答案）；run-2 两次尝试均失效——第一次并行会话中途提交（R11 应验，口径不一致被比较器正确拒绝），第二次 DashScope 账户欠费（Arrearage，400 拒绝）。**待解阻**：① DashScope 充值；② 约 25 分钟无提交窗口后背靠背重跑 run-2 + 比较。）
 
 ### Task 2: 冻结 Q1—Q10 决策记录与签字状态
 

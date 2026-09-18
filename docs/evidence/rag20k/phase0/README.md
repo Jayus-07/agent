@@ -15,11 +15,15 @@
 - 校验：`D:/Python/python.exe backend/scripts/validate_rag20k_decisions.py docs/evidence/rag20k/phase0/decisions/Q1-Q10.json`（当前退出 2 = 存在 blocked）
 - 2026-09-19：签字类 Q1—Q4/Q8—Q9 已由项目所有者 Jayus-07 按暂定假设冻结确认；Q5/Q6/Q7/Q10 的确认前提是外部材料或执行结果（20k 清单、供应商配额函、获授权语料、100 文档双跑），到位前保持 blocked，不得以暂定假设冒充已核实结论。
 
-## 0.3 100 文档双跑（比较器就绪，双跑未执行）
+## 0.3 100 文档双跑（run-1 有效，run-2 被外部阻断）
 
-- 证据：`evaluation/reproducibility.json`（待产出）
-- 比较器已完成（TDD）：`backend/audit/rag20k/eval_reproducibility.py`（六主指标 + 口径指纹比对，容差 0.005）+ `backend/scripts/compare_rag_baselines.py`。
-- 双跑命令与结论产出：等 `codex/rag-eval-kb-unification` worktree 合并后执行（该 worktree 尚有 20+ 文件在途未提交）；若合并后评测报告字段与比较器契约（`context`+`metrics`，见模块文档）不一致，只加适配层、不放宽比对规则。
+- 已完成：比较器（`eval_reproducibility.py` + `compare_rag_baselines.py`）与适配层（`eval_report_adapter.py`，run_id 不入指纹、NaN 缺席化、fixture_set 回退）。
+- **命令实证修正**：cloud 模式需显式 `--judge` 才生成答案（`_allow_cloud = judge or ragas`），锁定命令已增补；否则 169 个答案全空、citation_accuracy 结构性缺席（run-1 早期尝试实测）。
+- 索引指纹：`ac633326d7c41bfe`（95 active docs / 734 向量 / BM25 hash 209a4732f0f9433e）。
+- run-1（有效）：git `2f2ef44`，169 case = 107 有答案 + 62 RD 拒答（设计使然），报告与 meta 在 `run-1/`。
+- run-2 失败留档：`run-2/eval-rag-20260919-072150.md`——07:00 起 DashScope 欠费（400 Arrearage），169 case 全 error；此前一次尝试因并行会话中途提交（R11）被比较器正确判不可比。
+- 待解阻：DashScope 充值 + 约 25 分钟无提交窗口；之后重跑 run-2 → `compare_rag_baselines.py` 出 reproducibility.json → 出口门刷新。
+- 失败夹具：`table_customer_satisfaction_2026`（161 字节 CSV，内容过薄被质量门禁+中文占比过滤 → ChunkingEmptyError），不修改评测数据设计，如实计入索引失败。
 
 ## 0.4 20k 语料清单（校验器就绪，blocked）
 

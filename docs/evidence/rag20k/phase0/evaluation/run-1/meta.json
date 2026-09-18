@@ -1,0 +1,53 @@
+{
+  "git_sha": "46fc8fb",
+  "git_branch": "main",
+  "dataset_version": {
+    "rag": "5.0.0-unified"
+  },
+  "prompt_versions": {
+    "business_report_polish": "unversioned",
+    "capability_inventory_analyzer": "unversioned",
+    "competitor_extractor": "unversioned",
+    "customer_service_answer": "unversioned",
+    "customer_service_system": "unversioned",
+    "evaluation_judge_user": "unversioned",
+    "market_research_analyzer": "unversioned",
+    "memory_long_term_fact_extraction": "unversioned",
+    "memory_session_summary": "unversioned",
+    "memory_trigger": "unversioned",
+    "planner_critique": "unversioned",
+    "planner_system": "unversioned",
+    "rag_contextualize": "unversioned",
+    "rag_document": "unversioned",
+    "rag_evidence_gate_self_correction": "unversioned",
+    "rag_guardrails_judge": "unversioned",
+    "rag_guardrails_rewrite": "unversioned",
+    "rag_indexing_doc_type": "unversioned",
+    "rag_multi_query": "unversioned",
+    "rag_preprocessing_arbitration": "unversioned",
+    "rag_preprocessing_chunk_batch": "unversioned",
+    "rag_preprocessing_chunk_single": "unversioned",
+    "rag_preprocessing_doc_ollama": "unversioned",
+    "rag_preprocessing_doc_proxy": "unversioned",
+    "rag_preprocessing_llm_enrichment": "unversioned",
+    "rag_preprocessing_metadata_extract": "unversioned",
+    "rag_preprocessing_summary": "unversioned",
+    "rag_qa": "unversioned",
+    "reporter_summary": "unversioned",
+    "reporter_system": "unversioned",
+    "router_llm": "unversioned",
+    "selection_decision_differentiation": "unversioned",
+    "selection_decision_review_pain": "unversioned",
+    "selection_panel_vote": "unversioned",
+    "selection_recommender_reason": "unversioned",
+    "skill_business_analysis": "unversioned",
+    "sql_generator": "unversioned",
+    "sql_router": "unversioned"
+  },
+  "env": {
+    "python_version": "Python 3.10.2",
+    "trigger": "manual",
+    "ci_pr": ""
+  },
+  "run_at": "2026-09-19T06:12:42.088329"
+}

@@ -1,0 +1,22 @@
+{
+  "context": {
+    "dataset": "expanded_100@5.0.0-unified",
+    "git_commit": "46fc8fb",
+    "model": "qwen3.7-plus@tp",
+    "embedding_model": "text-embedding-v3",
+    "config_fingerprint": "7abdedcc60834a4b957de34a1dfc43727e2d347f4bb1aabd86baf7074b9f9abd",
+    "index_version": "ac633326d7c41bfe",
+    "results_fingerprint": "3499c7b8e9257aa0fd0d0fcf0acf263612c908aeabc9c4d3ebfa9a322f3d83fb",
+    "missing_primary_metrics": [
+      "citation_accuracy"
+    ],
+    "case_count": 169
+  },
+  "metrics": {
+    "recall@5": 0.750509,
+    "mrr": 0.75813,
+    "ndcg@10": 0.747472,
+    "top1_accuracy": 0.759494,
+    "reject_accuracy": 1.0
+  }
+}
