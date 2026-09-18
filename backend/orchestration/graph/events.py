@@ -144,7 +144,7 @@ def _build_critique_events(output: dict) -> Generator[dict, None, None]:
 def _build_tool_selector_events(output: dict) -> Generator[dict, None, None]:
     """tool_selector 的 FC 选择结果事件。
 
-    只在 FC 真正介入时发声（fc / no_match）；fast_path / passthrough
+    只在 FC 真正介入时发声（fc / no_match / clarify）；fast_path / passthrough
     直通不发——否则每条 direct 查询都多一条无信息量的日志。
     """
     sel = output.get("_tool_selection") or {}
@@ -156,6 +156,9 @@ def _build_tool_selector_events(output: dict) -> Generator[dict, None, None]:
         level = "info"
     elif source == "no_match":
         message = "未匹配到合适工具，回退默认执行"
+        level = "warn"
+    elif source == "clarify":
+        message = "多个候选工具未能安全收敛，请补充说明后再执行"
         level = "warn"
     else:
         return

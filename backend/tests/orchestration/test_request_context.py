@@ -29,6 +29,17 @@ class TestDataclassContext:
         finally:
             tool_session._current_user_id.reset(token)
 
+    def test_bind_propagates_tenant_id(self):
+        from backend.tools import session as tool_session
+
+        ctx = RequestContext(session_id="s1", user_id="u9", tenant_id="tenant-9")
+        token = tool_session._current_tenant_id.set("")
+        try:
+            ctx.bind()
+            assert tool_session.get_tool_tenant_id() == "tenant-9"
+        finally:
+            tool_session._current_tenant_id.reset(token)
+
     def test_bind_clears_stale_sink(self):
         from backend.infra.llm import proxy
 
@@ -67,20 +78,25 @@ class TestCheckpointSafe:
                              trace=object(), stream_sink=lambda t: None)
         safe = ctx.checkpoint_safe()
         assert safe == {"session_id": "s1", "user_id": "u1",
+                        "tenant_id": "",
+                        "idempotency_key": "",
                         "kb_id": "k1", "department": "",
-                        "subject_type": "", "model": ""}
+                        "subject_type": "", "permissions": None, "model": ""}
         # 可 JSON 序列化（checkpoint 传输前提）
         import json
         json.dumps(safe, ensure_ascii=False)
 
     def test_dict_state_round_trip(self):
         ctx = RequestContext(session_id="s1", user_id="u2", kb_id="k2",
+                             tenant_id="tenant-2", idempotency_key="req-2",
                              model="deepseek-chat", trace=object())
         state = {"request_context": ctx.checkpoint_safe()}
         restored = get_context_from_state(state)
         assert isinstance(restored, RequestContext)
         assert restored.session_id == "s1"
         assert restored.user_id == "u2"
+        assert restored.tenant_id == "tenant-2"
+        assert restored.idempotency_key == "req-2"
         assert restored.model == "deepseek-chat"
         assert restored.subject_type == ""
         assert restored.trace is None

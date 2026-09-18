@@ -153,7 +153,8 @@ class ConversationManager:
         return result
 
     async def escalate_to_human(
-        self, conversation_id: str, agent_id: str,
+        self, conversation_id: str, agent_id: str, *,
+        assigned_by: str = "system",
     ) -> TransitionResult:
         conv = await self.get(conversation_id)
         if not conv:
@@ -171,7 +172,9 @@ class ConversationManager:
         conv.updated_at = _now()
         await self._s.flush()
 
-        await self._record_assignment(conversation_id, agent_id, assigned_by="system")
+        await self._record_assignment(
+            conversation_id, agent_id, assigned_by=assigned_by,
+        )
         return result
 
     async def request_human(

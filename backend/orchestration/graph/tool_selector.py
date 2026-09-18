@@ -11,10 +11,10 @@ question 透传"的旧行为。
     （保持原 direct 快路径，TTFT 不受影响）
   - 其余 capability 或置信灰区（0.6 ≤ score < 0.85）→ FC 选择
 
-降级兜底（每一步失败都等价旧行为，最坏不多花时间）：
-  - LLM 超时/异常/无 tool_calls（含「无匹配」回复、降级话术）→
-    passthrough：candidates[0] + {"question": 原话}，即旧 direct 行为
-  - 选择越界/参数校验失败 → 带反馈重试 1 次，仍失败 → passthrough
+降级策略：
+  - 多候选时 LLM 超时/异常/无 tool_calls/校验重试失败 → 澄清，不执行首项
+  - 单候选仍保留旧 passthrough 兼容行为
+  - 选择越界/参数校验失败 → 带反馈重试 1 次
 """
 from __future__ import annotations
 
@@ -78,6 +78,21 @@ def _passthrough(state: dict, reason: str) -> dict:
     （candidates[0] + question 透传）。"""
     _record("passthrough", reason)
     return {**state, "_tool_selection": {"source": "passthrough", "reason": reason}}
+
+
+def _clarify_selection(state: dict, reason: str, candidates: list[str]) -> dict:
+    """多候选选择失败时阻断执行，交给上层输出澄清提示。"""
+    _record("clarify", reason)
+    return {
+        **state,
+        "selection_blocked": True,
+        "_tool_selection": {
+            "source": "clarify",
+            "reason": reason,
+            "candidates": candidates,
+            "next_action": "clarify",
+        },
+    }
 
 
 def _build_user_prompt(query: str, valid_caps: list[str],
@@ -212,8 +227,10 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
             max_tokens=TOOL_SELECTOR_LLM_MAX_TOKENS,
         )
         if raw is None:
-            # 超时/异常是基础设施问题，重试大概率同样超时 → 直接回退直通
-            logger.warning("[ToolSelector] LLM 超时/异常，passthrough")
+            # 多候选时不能因 FC 故障盲执行首项；单候选保留兼容路径。
+            logger.warning("[ToolSelector] LLM 超时/异常")
+            if len(valid_caps) > 1:
+                return _clarify_selection(state, "llm_failed", valid_caps)
             return _passthrough(state, "llm_failed")
 
         tool_calls = getattr(raw, "tool_calls", None) or []
@@ -225,8 +242,10 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
                 cap, args = recovered
                 logger.info(f"[ToolSelector] 文本兜底解析出工具调用: {cap}")
             else:
-                # 模型明确不调工具（无匹配 / 降级话术 / 纯文本）→ 保守直通
+                # 多候选时模型明确不调工具不能解释为首项可执行。
                 logger.info(f"[ToolSelector] 模型未调用工具: {content[:100]}")
+                if len(valid_caps) > 1:
+                    return _clarify_selection(state, "model_declined", valid_caps)
                 elapsed_ms = int((time.time() - t0) * 1000)
                 _record("no_match", "model_declined", t0=t0)
                 return {**state, "_tool_selection": {
@@ -272,6 +291,8 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
             },
         }
 
+    if len(valid_caps) > 1:
+        return _clarify_selection(state, "fc_invalid_after_retry", valid_caps)
     return _passthrough(state, "fc_invalid_after_retry")
 
 

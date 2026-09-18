@@ -121,3 +121,48 @@ class TestEndTurnSkipsOverwrite:
         asyncio.run(service.end_turn("s-3", "q", "a", user_id="u"))
         assert calls["save_turn"] == 1, "正常落库不受摘要失败影响"
         assert calls["update_summary"] == 0, "摘要失败时不得调用 update_summary 覆盖 DB"
+
+
+class TestMemoryManagerShutdown:
+    def test_disposes_engine_on_engine_owner_loop(self, monkeypatch):
+        """engine 被其他 loop 创建时，退出必须回到 engine 所属 loop 关闭。"""
+        from backend.memory import database
+        from backend.memory.manager import MemoryManager
+
+        manager = MemoryManager.__new__(MemoryManager)
+
+        class _FakeLoop:
+            def is_running(self):
+                return True
+
+            def call_soon_threadsafe(self, _callback):
+                return None
+
+        class _FakeEngine:
+            async def dispose(self):
+                return None
+
+        owner_loop = _FakeLoop()
+        manager_loop = _FakeLoop()
+        manager._loop = manager_loop
+        monkeypatch.setattr(database, "_engine", _FakeEngine())
+        monkeypatch.setattr(database, "_engine_loop", owner_loop)
+
+        submitted_loop = None
+
+        class _Future:
+            def result(self, timeout):
+                assert timeout == 3
+                return None
+
+        def submit(coro, loop):
+            nonlocal submitted_loop
+            submitted_loop = loop
+            coro.close()
+            return _Future()
+
+        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", submit)
+
+        manager._shutdown()
+
+        assert submitted_loop is owner_loop

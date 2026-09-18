@@ -41,12 +41,55 @@ from backend.orchestration.graph.events import (
     summarize_turn_usage,
 )
 from backend.orchestration.request_context import RequestContext, put_context
-from backend.security.input_guard import GuardAction, get_input_guard
+from backend.security.input_guard import (
+    GuardAction,
+    GuardCategory,
+    RiskLevel,
+    get_input_guard,
+)
 from backend.shared.logger import logger
 
 # _answer 是 runner → 调用方的内部事件（携带最终回答文本），
 # 不属于 SSE 协议，stream_events 转发层必须过滤
 _ANSWER_EVENT = "_answer"
+
+
+def _should_bypass_guard_for_human_relay(
+    guard_result,
+    *,
+    domain_hint: str,
+    user_id: str,
+    session_id: str,
+) -> bool:
+    """判断人工接管期是否可以绕过低风险体验型澄清。
+
+    人工会话中的“1”“123”等短消息仍需落客服消息库，不能被全局
+    InputGuard 在客服预过滤之前短路；安全相关澄清不在豁免范围内。
+    """
+    if domain_hint != "customer_service":
+        return False
+    if guard_result.action != GuardAction.CLARIFY:
+        return False
+    if guard_result.risk_level != RiskLevel.LOW:
+        return False
+    if guard_result.category not in {
+        GuardCategory.GARBAGE,
+        GuardCategory.AMBIGUOUS,
+    }:
+        return False
+
+    try:
+        from backend.orchestration.graph.cs_prefilter import (
+            _active_relay_state,
+        )
+
+        return _active_relay_state(user_id, session_id) is not None
+    except Exception:
+        logger.debug(
+            "[GraphRunner] human relay state lookup failed",
+            exc_info=True,
+        )
+        return False
 
 
 def _is_explicit_handoff(question: str) -> bool:
@@ -108,10 +151,13 @@ class GraphRunner:
         stop_event=None,
         user_id: str = "default",
         department: str = "",
+        permissions: tuple[str, ...] | None = None,
         *,
         fallback_deltas: bool = True,
         model: str = "",
         domain_hint: str = "",
+        tenant_id: str = "",
+        idempotency_key: str = "",
     ) -> Generator[dict, None, None]:
         """执行图并产出统一事件流。
 
@@ -139,16 +185,22 @@ class GraphRunner:
                 and (
                     _is_explicit_handoff(question or "")
                     or _is_confirmation_text(question or "")
+                    or _should_bypass_guard_for_human_relay(
+                        guard_result,
+                        domain_hint=domain_hint,
+                        user_id=user_id,
+                        session_id=session_id,
+                    )
                 )
             ):
                 logger.info(
-                    "[Runner] 显式转人工/确认意图豁免 input_guard clarify，放行进图: "
+                    "[Runner] 转人工/确认/人工接管期豁免 input_guard clarify，放行进图: "
                     f"{(question or '')[:40]}"
                 )
                 guard_result = guard_result.model_copy(update={
                     "action": GuardAction.ALLOW,
                     "confidence": 1.0,
-                    "reason": f"explicit_handoff_bypass: {guard_result.reason}",
+                    "reason": f"customer_service_relay_bypass: {guard_result.reason}",
                 })
             else:
                 finish_guard_trace(session_id, guard_result)
@@ -198,7 +250,9 @@ class GraphRunner:
         # trace_middleware 从 state 重新绑定（ContextVar 不跨线程继承）
         request_ctx = RequestContext(
             session_id=session_id, user_id=user_id, kb_id=kb_id,
-            department=department, trace=trace, model=model)
+            tenant_id=tenant_id, idempotency_key=idempotency_key,
+            department=department, permissions=permissions,
+            trace=trace, model=model)
         ctx = {
             "final_answer": "",
             "all_step_results": {},

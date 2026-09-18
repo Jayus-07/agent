@@ -185,12 +185,33 @@ class TestFCSelection:
         assert out["_tool_selection"]["source"] == "no_match"
         assert "resolved_params" not in out
 
+    def test_no_tool_calls_with_multiple_candidates_blocks_execution(self):
+        fake = _FakeLLM([AIMessage(content="无匹配工具")])
+        with patch.object(ts, "llm", fake):
+            out = tool_selector_node(_state([
+                {"name": "report.generate", "score": 0.7},
+                {"name": "web.search", "score": 0.68},
+            ]))
+        assert out["selection_blocked"] is True
+        assert out["_tool_selection"]["reason"] == "model_declined"
+
     def test_llm_exception_passthrough(self):
         fake = _FakeLLM([RuntimeError("connection refused")])
         with patch.object(ts, "llm", fake):
             out = tool_selector_node(_state([{"name": "report.generate", "score": 0.7}]))
         assert out["_tool_selection"]["reason"] == "llm_failed"
         assert "resolved_params" not in out
+
+    def test_llm_exception_with_multiple_candidates_requires_clarification(self):
+        fake = _FakeLLM([RuntimeError("connection refused")])
+        with patch.object(ts, "llm", fake):
+            out = tool_selector_node(_state([
+                {"name": "report.generate", "score": 0.7},
+                {"name": "web.search", "score": 0.68},
+            ]))
+        assert out["selection_blocked"] is True
+        assert out["_tool_selection"]["source"] == "clarify"
+        assert out["_tool_selection"]["next_action"] == "clarify"
 
     def test_candidates_truncated_to_max(self):
         """候选超过 MAX_FC_CANDIDATES(3) 截断——防 prompt 膨胀"""

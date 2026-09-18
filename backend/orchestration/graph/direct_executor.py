@@ -168,6 +168,17 @@ def skill_executor_node(state: dict) -> dict:
     decision = state.get("route_decision") or {}
     candidates = decision.get("candidates", []) if isinstance(decision, dict) else []
 
+    if state.get("selection_blocked"):
+        logger.warning("[SkillExecutor] 工具选择未收敛，阻断候选首项执行")
+        return {
+            **state,
+            "executor_error": "tool_selection_requires_clarification",
+            "step_results": _failed_step(
+                "direct_1", "存在多个可能的执行能力，无法安全确定目标，请补充说明。"
+            ),
+            "executor_mode": "direct",
+        }
+
     if not candidates:
         # 无 candidates → 固定边直达 reporter（skill_executor → reporter），
         # 由 Reporter 输出降级提示；executor_error 留痕供 trace 排查。

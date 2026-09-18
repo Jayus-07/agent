@@ -44,6 +44,25 @@ class TestExtractCapabilityName:
 
 
 class TestSkillExecutorFailureBranches:
+    def test_selection_blocked_does_not_execute_first_candidate(self, monkeypatch):
+        called = []
+
+        async def should_not_run(_state):
+            called.append("executed")
+            return {"step_results": {"direct_1": {"status": "success"}}}
+
+        monkeypatch.setattr(
+            direct_executor.tool_registry, "get_skill_nodes",
+            lambda: {"report_skill": should_not_run, "web_search_skill": should_not_run},
+        )
+        out = skill_executor_node(_state(
+            candidates=_mk_candidates("report.generate"),
+            selection_blocked=True,
+        ))
+        assert out["executor_error"] == "tool_selection_requires_clarification"
+        assert out["step_results"]["direct_1"]["status"] == "failed"
+        assert called == []
+
     def test_no_candidates_returns_failed_step(self, monkeypatch):
         """fix f11：无 candidates 时补 failed step_results 供 reporter/trace 使用"""
         out = skill_executor_node(_state(candidates=[]))

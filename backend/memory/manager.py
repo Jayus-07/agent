@@ -84,14 +84,23 @@ class MemoryManager:
 
     def _shutdown(self) -> None:
         try:
+            from backend.memory import database
+
+            engine = database._engine
+            owner_loop = database._engine_loop
+            if engine is not None and owner_loop is not None and owner_loop.is_running():
+                dispose_coro = engine.dispose()
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        dispose_coro, owner_loop,
+                    )
+                except Exception:
+                    dispose_coro.close()
+                    raise
+                future.result(timeout=3)
+
             loop = self._loop
             if loop is not None and loop.is_running():
-                async def _close():
-                    from backend.memory.database import _engine
-                    if _engine is not None:
-                        await _engine.dispose()
-                future = asyncio.run_coroutine_threadsafe(_close(), loop)
-                future.result(timeout=3)
                 loop.call_soon_threadsafe(loop.stop)
         except Exception:
             logger.debug("[P1-10] async engine 关闭失败（进程退出路径）", exc_info=True)
