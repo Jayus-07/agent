@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-09-18 23:09:57",
+  "generated_at": "2026-09-18 23:51:56",
   "docs_total": 25,
-  "valid_compared": 15,
+  "valid_compared": 21,
   "llm_calls": 25,
-  "shadow_fail": 10,
+  "shadow_fail": 4,
   "parse_fail": 0,
   "elapsed_min": 0.5,
   "per_layer": {
@@ -13,25 +13,37 @@
       "agreement": 0.7333
     },
     "L1": {
-      "hits": 0,
-      "agree": 0,
-      "agreement": null
+      "hits": 4,
+      "agree": 1,
+      "agreement": 0.25
     },
     "L2": {
-      "hits": 0,
-      "agree": 0,
-      "agreement": null
+      "hits": 2,
+      "agree": 1,
+      "agreement": 0.5
     }
   },
-  "overall_agreement": 0.7333,
-  "llm_saved_if_cascade_on": "15/15",
+  "overall_agreement": 0.619,
+  "llm_saved_if_cascade_on": "21/21",
   "top_disagreements": [
+    [
+      "policy→faq",
+      2
+    ],
     [
       "contract_template→legal",
       2
     ],
     [
       "financial→policy",
+      1
+    ],
+    [
+      "faq→financial",
+      1
+    ],
+    [
+      "policy→training",
       1
     ],
     [
@@ -51,13 +63,21 @@
     },
     {
       "file": "cs_policy/customer/policy-refund-timeline.md",
+      "level": "L1",
+      "shadow": "faq",
+      "shadow_confidence": 0.68,
       "main": "policy",
-      "shadow": null
+      "main_confidence": 0.95,
+      "agree": false
     },
     {
       "file": "cs_policy/customer/policy-return-us.md",
+      "level": "L1",
+      "shadow": "faq",
+      "shadow_confidence": 0.7,
       "main": "policy",
-      "shadow": null
+      "main_confidence": 0.98,
+      "agree": false
     },
     {
       "file": "policy_general/general/legal_采购合同.md",
@@ -88,13 +108,21 @@
     },
     {
       "file": "rag_100_docs/general/csv/table_市场投放费用_2026.csv",
+      "level": "L2",
+      "shadow": "financial",
+      "shadow_confidence": 0.75,
       "main": "financial",
-      "shadow": null
+      "main_confidence": 0.95,
+      "agree": true
     },
     {
       "file": "rag_100_docs/general/docx/faq_财务报销常见问题.docx",
+      "level": "L2",
+      "shadow": "financial",
+      "shadow_confidence": 0.75,
       "main": "faq",
-      "shadow": null
+      "main_confidence": 0.98,
+      "agree": false
     },
     {
       "file": "rag_100_docs/general/docx/policy_供应商准入管理办法.docx",
@@ -125,8 +153,12 @@
     },
     {
       "file": "rag_100_docs/general/md/manual_新员工入职手册.md",
+      "level": "L1",
+      "shadow": "training",
+      "shadow_confidence": 0.7,
       "main": "training",
-      "shadow": null
+      "main_confidence": 0.95,
+      "agree": true
     },
     {
       "file": "rag_100_docs/general/md/policy_加班工时管理制度_研发中心.md",
@@ -166,8 +198,12 @@
     },
     {
       "file": "rag_100_docs/general/pdf/manual_员工手册_2026版.pdf",
+      "level": "L1",
+      "shadow": "training",
+      "shadow_confidence": 0.62,
       "main": "policy",
-      "shadow": null
+      "main_confidence": 0.95,
+      "agree": false
     },
     {
       "file": "rag_100_docs/general/pdf/report_压测报告_2026Q2.pdf",
