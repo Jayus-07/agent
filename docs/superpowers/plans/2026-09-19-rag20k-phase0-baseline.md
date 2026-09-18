@@ -151,7 +151,7 @@ Commit: `feat(audit): add reproducible rag20k baseline capture`
 - 每项必须有 `id`、`decision`、`owner`、`decided_at`、`evidence_refs`、`status`。
 - `status` 只允许 `confirmed` 或 `blocked`；`blocked` 必须包含 `blocking_reason`，且整个阶段 0 不通过。
 
-- [ ] **Step 1: 写失败测试，拒绝空 owner、无日期、无证据和模糊数值**
+- [x] **Step 1: 写失败测试，拒绝空 owner、无日期、无证据和模糊数值**
 
 ```python
 def test_decisions_require_owner_date_and_evidence():
@@ -165,23 +165,23 @@ def test_blocked_decision_prevents_phase0_pass():
     assert result.blocked_ids == ["Q6"]
 ```
 
-- [ ] **Step 2: 运行测试确认 RED**
+- [x] **Step 2: 运行测试确认 RED**
 
 Run: `D:/Python/python.exe -m pytest backend/tests/audit/test_rag20k_decisions.py -q --no-cov`
 
 Expected: FAIL，决策校验模块不存在。
 
-- [ ] **Step 3: 实现校验器并录入审计报告现有事实**
+- [x] **Step 3: 实现校验器并录入审计报告现有事实**
 
 Q1—Q5、Q7—Q10 只能在负责人、日期和证据齐全时标记 `confirmed`；未取得供应商书面配额的 Q6 必须标记 `blocked`，决策写明“Embedding 并发固定为 1，不承诺 8 小时导入”。不得把审计报告的暂定假设直接标记成已签字结论。
 
-- [ ] **Step 4: 运行验证并生成机器可读摘要**
+- [x] **Step 4: 运行验证并生成机器可读摘要**
 
 Run: `D:/Python/python.exe backend/scripts/validate_rag20k_decisions.py docs/evidence/rag20k/phase0/decisions/Q1-Q10.json`
 
 Expected: 在仍有 `blocked` 项时退出 2，并打印精确阻断 ID；schema 错误退出 1；全部确认退出 0。
 
-- [ ] **Step 5: 提交决策契约**
+- [x] **Step 5: 提交决策契约**
 
 Commit: `docs(audit): freeze rag20k phase0 decisions`
 

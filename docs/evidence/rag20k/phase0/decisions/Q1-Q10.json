@@ -1,0 +1,128 @@
+{
+  "schema_version": "1.0",
+  "source": "docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md",
+  "recorded_at": "2026-09-19",
+  "note": "本文件是审计报告第 0 节 Q1—Q10 的权威状态源。当前没有任何一项取得负责人书面确认，因此全部为 blocked；decision 字段记录的是报告暂定假设，不是签字结论。流转规则：补齐 owner/decided_at/evidence_refs 并把 status 改为 confirmed（或对无法确认项保持 blocked 并更新 blocking_reason），随后运行 backend/scripts/validate_rag20k_decisions.py 验证。",
+  "decisions": [
+    {
+      "id": "Q1",
+      "question": "生产环境是否为真实多租户，同一 kb_id、doc_id 是否可能在不同租户重复？",
+      "decision": "暂定假设（未签字）：是；租户之间必须物理或查询级强隔离，空 tenant_id 在生产环境拒绝写入与查询。",
+      "owner": null,
+      "decided_at": null,
+      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
+      "status": "blocked",
+      "blocking_reason": "租户模型属业务事实，当前仅有报告暂定假设，无负责人书面确认。",
+      "impact_if_unconfirmed": "无法确认 RAG 数据模型、唯一键和回填规则；属于上线阻断。",
+      "latest_confirmation_point": "阶段 0"
+    },
+    {
+      "id": "Q2",
+      "question": "目标并发、请求到达率与日峰值是多少？",
+      "decision": "暂定假设（未签字）：集群 100 条并发 SSE、每秒 5 个新会话、RAG 检索 20 QPS，持续 30 分钟。",
+      "owner": null,
+      "decided_at": null,
+      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
+      "status": "blocked",
+      "blocking_reason": "容量目标需业务方书面确认，当前无签字数值。",
+      "impact_if_unconfirmed": "无法核算 API、LLM、PostgreSQL、Redis 和连接池容量。",
+      "latest_confirmation_point": "阶段 0"
+    },
+    {
+      "id": "Q3",
+      "question": "可用性目标与部署平台是什么？",
+      "decision": "暂定假设（未签字）：API 2 副本、RAG 查询服务 2 副本、独立调度器 1 副本、RAG 索引写入者 1 副本；生产平台能够提供健康检查、滚动发布和跨主机调度。",
+      "owner": null,
+      "decided_at": null,
+      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
+      "status": "blocked",
+      "blocking_reason": "可用性目标与部署平台未书面确定。",
+      "impact_if_unconfirmed": "若只部署在单台 Docker 主机，只能达到容量上线，不能宣称主机级高可用。",
+      "latest_confirmation_point": "阶段 0"
+    },
+    {
+      "id": "Q4",
+      "question": "PostgreSQL、Redis、磁盘、网络和备份的生产规格是什么？",
+      "decision": "暂定假设（未签字）：PostgreSQL 8 vCPU/32 GiB/NVMe 200 GiB；Redis 4 GiB 且启用 AOF；服务间网络 RTT P95 ≤ 2 ms。",
+      "owner": null,
+      "decided_at": null,
+      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
+      "status": "blocked",
+      "blocking_reason": "生产资源规格未书面确定。",
+      "impact_if_unconfirmed": "20k 导入时长、检索延迟、连接池和容灾指标无法承诺。",
+      "latest_confirmation_point": "阶段 0"
+    },
+    {
+      "id": "Q5",
+      "question": "20,000 文档的真实格式与扫描件占比是多少？",
+      "decision": "暂定假设（未签字）：PDF 9,000（其中扫描 PDF 900）、DOCX 4,000、XLSX 2,000、CSV 2,000、Markdown 1,600、TXT 1,400；PPT/PPTX/HTML 为 0。",
+      "owner": null,
+      "decided_at": null,
+      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
+      "status": "blocked",
+      "blocking_reason": "真实格式分布必须以获授权语料的清单统计为准（阶段 0 Task 3 校验器就绪，等待外部清单）。",
+      "impact_if_unconfirmed": "若业务数据包含 PPT/PPTX/HTML，现有上传白名单与解析器不支持，必须在压测前补齐或明确拒绝。",
+      "latest_confirmation_point": "阶段 0"
+    },
+    {
+      "id": "Q6",
+      "question": "Embedding/LLM 服务的 QPS、TPM、并发、单批上限和 429 计费规则是什么？",
+      "decision": "在取得供应商书面配额前，Embedding 并发固定为 1，不承诺 8 小时全量导入目标。",
+      "owner": null,
+      "decided_at": null,
+      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
+      "status": "blocked",
+      "blocking_reason": "供应商书面配额（QPS/TPM/并发/单批上限/429 计费规则）未取得；属导入验收阻断。",
+      "impact_if_unconfirmed": "无法安全配置并发和估算导入时间；属于导入验收阻断。",
+      "latest_confirmation_point": "阶段 0"
+    },
+    {
+      "id": "Q7",
+      "question": "是否已有获授权、已脱敏、带版本与权限标签的 20k 真实或等价合成语料？",
+      "decision": "暂定假设（未签字）：有，且可以用于独立测试环境；原始文档不提交 Git。",
+      "owner": null,
+      "decided_at": null,
+      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
+      "status": "blocked",
+      "blocking_reason": "获授权且脱敏的 20k 语料尚未实际提供与登记。",
+      "impact_if_unconfirmed": "没有等价语料时，所有 20k 容量与质量结论均无效；属于上线阻断。",
+      "latest_confirmation_point": "阶段 0"
+    },
+    {
+      "id": "Q8",
+      "question": "RPO、RTO 和灾备范围是什么？",
+      "decision": "暂定假设（未签字）：RPO ≤ 15 分钟，RTO ≤ 60 分钟；覆盖 PostgreSQL、Redis 中未完成任务、原始文档和索引版本。",
+      "owner": null,
+      "decided_at": null,
+      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
+      "status": "blocked",
+      "blocking_reason": "RPO/RTO 目标与灾备范围未书面确定。",
+      "impact_if_unconfirmed": "无法设计备份频率、恢复流程和发布回滚。",
+      "latest_confirmation_point": "阶段 0"
+    },
+    {
+      "id": "Q9",
+      "question": "原始文档生产存储使用对象存储、共享卷还是本机卷？",
+      "decision": "暂定假设（未签字）：使用 S3 兼容对象存储；数据库只保存 URI、摘要和元数据。",
+      "owner": null,
+      "decided_at": null,
+      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
+      "status": "blocked",
+      "blocking_reason": "生产对象存储方案未书面确定。",
+      "impact_if_unconfirmed": "当前 Docker 命名卷不能支撑跨主机 RAG 副本，也不能满足主机故障恢复。",
+      "latest_confirmation_point": "阶段 0"
+    },
+    {
+      "id": "Q10",
+      "question": "100 文档基线的正式数值和对应提交、模型、参数是什么？",
+      "decision": "暂定假设（未签字）：必须重新执行并生成机器可读、带配置指纹的基线；现有文档中的数值只作参考。",
+      "owner": null,
+      "decided_at": null,
+      "evidence_refs": ["docs/2026-09-18-架构审计报告-LangGraph-并发-RAG20000.md#0-信息不足假设与待确认问题"],
+      "status": "blocked",
+      "blocking_reason": "100 文档双跑等待 codex/rag-eval-kb-unification 合并后执行（阶段 0 Task 5）。",
+      "impact_if_unconfirmed": "无法判断 20k 相对质量退化，也无法判定参数调优是否有效。",
+      "latest_confirmation_point": "阶段 0"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "note": "测试夹具：Q6 blocked、其余 confirmed 的最小合法决策集，用于锁定 summarize_decisions 的阻断汇总行为。与真实决策文件无关。",
+  "decisions": [
+    {"id": "Q1", "decision": "真实多租户，同 kb_id/doc_id 可跨租户重复", "owner": "夹具-业务负责人", "decided_at": "2026-09-18", "evidence_refs": ["fixtures/q1-q10.md#q1"], "status": "confirmed"},
+    {"id": "Q2", "decision": "100 并发 SSE / 5 新会话每秒 / 检索 20 QPS", "owner": "夹具-业务负责人", "decided_at": "2026-09-18", "evidence_refs": ["fixtures/q1-q10.md#q2"], "status": "confirmed"},
+    {"id": "Q3", "decision": "API 与 RAG 查询各 2 副本，独立调度与索引写入者", "owner": "夹具-业务负责人", "decided_at": "2026-09-18", "evidence_refs": ["fixtures/q1-q10.md#q3"], "status": "confirmed"},
+    {"id": "Q4", "decision": "PG 8C32G/NVMe 200G；Redis 4G+AOF", "owner": "夹具-业务负责人", "decided_at": "2026-09-18", "evidence_refs": ["fixtures/q1-q10.md#q4"], "status": "confirmed"},
+    {"id": "Q5", "decision": "PDF 9000/DOCX 4000/XLSX 2000/CSV 2000/MD 1600/TXT 1400，无 PPT/HTML", "owner": "夹具-业务负责人", "decided_at": "2026-09-18", "evidence_refs": ["fixtures/q1-q10.md#q5"], "status": "confirmed"},
+    {"id": "Q6", "decision": "Embedding 并发固定为 1，不承诺 8 小时导入", "owner": null, "decided_at": null, "evidence_refs": null, "status": "blocked", "blocking_reason": "供应商书面配额（QPS/TPM/并发/单批上限/429 计费）未取得"},
+    {"id": "Q7", "decision": "已有获授权脱敏的 20k 等价语料", "owner": "夹具-业务负责人", "decided_at": "2026-09-18", "evidence_refs": ["fixtures/q1-q10.md#q7"], "status": "confirmed"},
+    {"id": "Q8", "decision": "RPO ≤ 15 分钟，RTO ≤ 60 分钟", "owner": "夹具-业务负责人", "decided_at": "2026-09-18", "evidence_refs": ["fixtures/q1-q10.md#q8"], "status": "confirmed"},
+    {"id": "Q9", "decision": "生产使用 S3 兼容对象存储", "owner": "夹具-业务负责人", "decided_at": "2026-09-18", "evidence_refs": ["fixtures/q1-q10.md#q9"], "status": "confirmed"},
+    {"id": "Q10", "decision": "重跑 100 文档基线并冻结配置指纹", "owner": "夹具-业务负责人", "decided_at": "2026-09-18", "evidence_refs": ["fixtures/q1-q10.md#q10"], "status": "confirmed"}
+  ]
+}
