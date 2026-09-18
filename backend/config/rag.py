@@ -119,6 +119,14 @@ METADATA_CASCADE_L2_CONFIDENCE = float(os.getenv("METADATA_CASCADE_L2_CONFIDENCE
 # taxonomy 索引构建/文档向量单次超时（秒）；超时或异常 → 跳过 L1/L2 直达 L3
 METADATA_CASCADE_EMBED_TIMEOUT = float(os.getenv("METADATA_CASCADE_EMBED_TIMEOUT", "10"))
 
+# 影子采集（规划阶段 5 基建）：主路径统一抽取成功后并行跑级联 L0-L2 只读对比，
+# 不参与任何决策；agree/differ 打点进 metadata_route_total{level=shadow_*}。
+# 默认开启：纯只读 + 独立短超时 + 异常静默，是解锁阶段 5 影子报告的唯一途径
+METADATA_CASCADE_SHADOW_ENABLED = os.getenv("METADATA_CASCADE_SHADOW_ENABLED", "true").lower() == "true"
+# 影子 embedding 独立短超时（秒）：压测实测云端单查询 P95≈338ms（A2 FAIL 记录），
+# 3s 余量足够且确保影子采集不拖累主路径延迟
+METADATA_CASCADE_SHADOW_EMBED_TIMEOUT = float(os.getenv("METADATA_CASCADE_SHADOW_EMBED_TIMEOUT", "3"))
+
 # ====================================
 # Chunk 配置
 # ====================================

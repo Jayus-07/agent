@@ -118,3 +118,68 @@ async def test_build_l3_failure_falls_back_to_rule_path(_stage, monkeypatch):
     out = await _stage.build(_TEXT, _META)
     assert out["doc_type"], "规则链 fallback 必须给出 doc_type"
     assert out.get("llm_strategy") != "cascade_L3"
+
+
+# ============ 影子采集接线（阶段 5 基建） ============
+
+@pytest.mark.asyncio
+async def test_build_shadow_runs_on_main_path_success(_stage, monkeypatch):
+    """影子开启：主路径统一抽取成功后影子跑了，且主路径返回值不受影响。"""
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_ENABLED", False)
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_SHADOW_ENABLED", True)
+
+    async def _fake_extract(full_text, filename, parent_span_id=""):
+        return {"doc_type": "legal", "confidence": 0.9, "business_domain": "general",
+                "summary": "s", "keywords": [], "entities": {}, "time_refs": []}
+
+    async def _fake_shadow(full_text, filename, file_path="", embedding=None):
+        from backend.rag.preprocessing.metadata_router import CascadeDecision
+        return CascadeDecision(level="L0", doc_type="legal", confidence=0.95,
+                               evidence={"domain": "order"})
+
+    monkeypatch.setattr("backend.rag.preprocessing.metadata_llm.extract_metadata_llm_async",
+                        _fake_extract)
+    monkeypatch.setattr("backend.rag.preprocessing.metadata_router.shadow_route",
+                        _fake_shadow)
+    out = await _stage.build(_TEXT, _META)
+    assert out["doc_type"] == "legal" and out["llm_used"] is True, "影子不得改变主路径结果"
+
+
+@pytest.mark.asyncio
+async def test_build_shadow_disabled_skips(_stage, monkeypatch):
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_ENABLED", False)
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_SHADOW_ENABLED", False)
+
+    async def _fake_extract(full_text, filename, parent_span_id=""):
+        return {"doc_type": "legal", "confidence": 0.9, "business_domain": "general",
+                "summary": "s", "keywords": [], "entities": {}, "time_refs": []}
+
+    async def _must_not_shadow(*a, **kw):
+        raise AssertionError("影子关闭时不得采集")
+
+    monkeypatch.setattr("backend.rag.preprocessing.metadata_llm.extract_metadata_llm_async",
+                        _fake_extract)
+    monkeypatch.setattr("backend.rag.preprocessing.metadata_router.shadow_route",
+                        _must_not_shadow)
+    out = await _stage.build(_TEXT, _META)
+    assert out["doc_type"] == "legal"
+
+
+@pytest.mark.asyncio
+async def test_build_shadow_failure_never_breaks_main_path(_stage, monkeypatch):
+    """影子采集抛异常必须被吞掉，主路径照常返回。"""
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_ENABLED", False)
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_SHADOW_ENABLED", True)
+
+    async def _fake_extract(full_text, filename, parent_span_id=""):
+        return {"doc_type": "legal", "confidence": 0.9, "business_domain": "general",
+                "summary": "s", "keywords": [], "entities": {}, "time_refs": []}
+
+    async def _boom(full_text, filename, file_path="", embedding=None):
+        raise RuntimeError("shadow down")
+
+    monkeypatch.setattr("backend.rag.preprocessing.metadata_llm.extract_metadata_llm_async",
+                        _fake_extract)
+    monkeypatch.setattr("backend.rag.preprocessing.metadata_router.shadow_route", _boom)
+    out = await _stage.build(_TEXT, _META)
+    assert out["doc_type"] == "legal", "影子故障不得影响主路径"

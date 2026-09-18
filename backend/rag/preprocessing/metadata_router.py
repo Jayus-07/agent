@@ -284,3 +284,63 @@ async def cascade_route(
         llm_result=llm_result,
     )
     return _seal(d)
+
+
+async def shadow_route(
+    full_text: str,
+    filename: str,
+    file_path: str = "",
+    embedding=None,
+) -> CascadeDecision | None:
+    """影子路由（规划阶段 5 基建）：与主路径并行采集 L0-L2 分类信号，
+    只记录不决策——绝不参与主路径行为，失败静默返回 None。
+
+    与 cascade_route 的区别：
+      - 不跑 L3（主路径统一抽取本身就是 L3，影子对比的就是「级联 L0-L2
+        能否命中且与主路径一致」）；
+      - embedding 超时用独立短超时（METADATA_CASCADE_SHADOW_EMBED_TIMEOUT，
+        默认 3s——压测实测云端单查询 P95≈338ms，3s 余量足够且不拖累主路径）；
+      - 任何异常吞掉记 error 打点（影子观测不得引入主路径故障面）。
+    """
+    from backend.config.rag import (
+        METADATA_CASCADE_L1_MIN_GAP,
+        METADATA_CASCADE_L1_MIN_SIM,
+        METADATA_CASCADE_L1_TOP_K,
+        METADATA_CASCADE_L2_MIN_GAP,
+        METADATA_CASCADE_L2_MIN_SCORE,
+        METADATA_CASCADE_SHADOW_EMBED_TIMEOUT,
+    )
+
+    try:
+        l0 = _l0_strong_prior(filename, file_path)
+        if l0:
+            l0.evidence["domain"] = _rule_domain(full_text)
+            return l0
+
+        ranked: list[tuple[str, float]] | None = None
+        if embedding is not None:
+            ranked = await _taxonomy_index.classify(
+                full_text, embedding, METADATA_CASCADE_SHADOW_EMBED_TIMEOUT)
+        if ranked is None:
+            metadata_route_total.labels(level="shadow_L1", outcome="error").inc()
+            return None
+        top_type, top_sim = ranked[0]
+        second_sim = ranked[1][1] if len(ranked) > 1 else 0.0
+        if (top_sim >= METADATA_CASCADE_L1_MIN_SIM
+                and (top_sim - second_sim) >= METADATA_CASCADE_L1_MIN_GAP):
+            return CascadeDecision(
+                level="L1", doc_type=top_type, confidence=round(top_sim, 2),
+                evidence={"top3": [(t, round(s, 3)) for t, s in ranked[:3]],
+                          "domain": _rule_domain(full_text)})
+
+        candidates = [t for t, _ in ranked[:METADATA_CASCADE_L1_TOP_K]]
+        l2 = _l2_aggregate(full_text, candidates,
+                           METADATA_CASCADE_L2_MIN_GAP, METADATA_CASCADE_L2_MIN_SCORE)
+        if l2:
+            l2.evidence["domain"] = _rule_domain(full_text)
+            return l2
+        return None
+    except Exception as e:
+        logger.warning(f"[MetaRouter] 影子路由异常（不影响主路径）: {e}")
+        metadata_route_total.labels(level="shadow", outcome="error").inc()
+        return None

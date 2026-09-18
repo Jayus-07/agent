@@ -164,3 +164,42 @@ def test_decision_is_jsonable():
     d = CascadeDecision(level="L0", doc_type="faq", confidence=0.95, evidence={"a": 1})
     import json
     assert json.loads(json.dumps(d.__dict__, ensure_ascii=False))["level"] == "L0"
+
+
+# ============ 影子路由（阶段 5 基建） ============
+
+@pytest.mark.asyncio
+async def test_shadow_route_l0_hit_no_llm(_no_llm):
+    from backend.rag.preprocessing.metadata_router import shadow_route
+    d = await shadow_route("文本", "供应商NDA模板.docx", embedding=None)
+    assert d is not None and d.level == "L0" and d.doc_type == "legal"
+    assert _no_llm["n"] == 0, "影子路由绝不触发 LLM"
+
+
+@pytest.mark.asyncio
+async def test_shadow_route_l1_hit(_no_llm):
+    from backend.rag.preprocessing.metadata_router import shadow_route
+    d = await shadow_route("一些法律文本", "unknown.docx",
+                           embedding=_FakeEmbedding(query_dir=_dir("legal")))
+    assert d is not None and d.level == "L1" and d.doc_type == "legal"
+
+
+@pytest.mark.asyncio
+async def test_shadow_route_embedding_failure_returns_none(_no_llm):
+    from backend.rag.preprocessing.metadata_router import shadow_route
+    d = await shadow_route("文本", "unknown.docx",
+                           embedding=_FakeEmbedding(query_dir=_dir("legal"), fail=True))
+    assert d is None, "embedding 故障影子必须静默返回 None"
+
+
+@pytest.mark.asyncio
+async def test_shadow_route_never_raises(monkeypatch):
+    """影子路由任何内部异常都必须吞掉返回 None（不得引入主路径故障面）。"""
+    from backend.rag.preprocessing import metadata_router as mr
+
+    async def _boom(*a, **kw):
+        raise RuntimeError("shadow exploded")
+
+    monkeypatch.setattr(mr, "_l0_strong_prior", _boom)
+    d = await mr.shadow_route("文本", "x.docx", embedding=None)
+    assert d is None
