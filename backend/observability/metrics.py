@@ -80,6 +80,16 @@ chat_stream_event_produced_total = Counter(
 
 # ── 索引一致性 Sweeper（2026-09-17 P0-1 告警闭环）──
 # 五路存储对账检出的问题数：error 级持续增长 = 有数据不一致未修复，需告警
+# ── 元数据管道路由指标（规划阶段 4.2/8.1，2026-09-19）──
+# level: L0|L1|L2|L3（级联层）| rule_fallback（LLM 不可用降级规则链）
+# outcome: hit（该层定案）| miss（该层未命中，流向下一层）| error（该层异常）
+# fallback 触发率 = rule_fallback/hit 与 miss 之和，看板告警阈值 ≤ 5%（阶段 7.2）
+metadata_route_total = Counter(
+    "metadata_route_total",
+    "Metadata pipeline routing decisions by cascade level and outcome",
+    labelnames=("level", "outcome"),
+)
+
 rag_consistency_issues_total = Counter(
     "rag_consistency_issues_total",
     "索引五路存储一致性检查检出的问题数（按存储与严重级别）",

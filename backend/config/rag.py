@@ -100,6 +100,26 @@ ENABLE_LLM_METADATA_EXTRACT = os.getenv("ENABLE_LLM_METADATA_EXTRACT", "true").l
 METADATA_LLM_EXTRACT_MAX_CHARS = int(os.getenv("METADATA_LLM_EXTRACT_MAX_CHARS", "6000"))
 
 # ====================================
+# 元数据级联路由（规划阶段 2.2/3.1，metadata_router.py）
+# L0 文件名/路径强先验 → L1 taxonomy 嵌入检索 → L2 候选内词表复核 → L3 LLM
+# 默认关闭：影子模式（阶段 5）与阈值调优（阶段 3.3）未完成前不切流
+# ====================================
+METADATA_CASCADE_ENABLED = os.getenv("METADATA_CASCADE_ENABLED", "false").lower() == "true"
+# L0 命中置信度（文件名/路径命中类型唯一时直接定案）
+METADATA_CASCADE_L0_CONFIDENCE = float(os.getenv("METADATA_CASCADE_L0_CONFIDENCE", "0.95"))
+# L1 命中条件：top1 相似度下限 + top1-top2 分差下限（confidence = top1 相似度）
+METADATA_CASCADE_L1_MIN_SIM = float(os.getenv("METADATA_CASCADE_L1_MIN_SIM", "0.60"))
+METADATA_CASCADE_L1_MIN_GAP = float(os.getenv("METADATA_CASCADE_L1_MIN_GAP", "0.05"))
+# L1 召回给 L2 的候选数
+METADATA_CASCADE_L1_TOP_K = int(os.getenv("METADATA_CASCADE_L1_TOP_K", "4"))
+# L2 命中条件：候选内词表计分 top1 下限 + top1-top2 分差下限
+METADATA_CASCADE_L2_MIN_SCORE = int(os.getenv("METADATA_CASCADE_L2_MIN_SCORE", "5"))
+METADATA_CASCADE_L2_MIN_GAP = int(os.getenv("METADATA_CASCADE_L2_MIN_GAP", "3"))
+METADATA_CASCADE_L2_CONFIDENCE = float(os.getenv("METADATA_CASCADE_L2_CONFIDENCE", "0.75"))
+# taxonomy 索引构建/文档向量单次超时（秒）；超时或异常 → 跳过 L1/L2 直达 L3
+METADATA_CASCADE_EMBED_TIMEOUT = float(os.getenv("METADATA_CASCADE_EMBED_TIMEOUT", "10"))
+
+# ====================================
 # Chunk 配置
 # ====================================
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))

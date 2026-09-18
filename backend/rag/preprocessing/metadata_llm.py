@@ -18,6 +18,7 @@ import re
 
 from backend.config.llm import LLM_REQUEST_TIMEOUT
 from backend.infra.async_utils import async_safe_call_with_timeout
+from backend.observability.metrics import metadata_route_total
 from backend.observability.tracer import SpanKind, trace_collector
 from backend.rag.preprocessing.llm_enrichment import invoke_metadata_llm
 from backend.shared.logger import logger
@@ -71,51 +72,30 @@ def _first_json_object(text: str) -> str:
 
 
 def parse_extract_response(content: str, valid_types: set[str]) -> dict:
-    """解析并校验 LLM 抽取结果。非法输出抛 MetadataExtractError。"""
+    """解析并校验 LLM 抽取结果。非法输出抛 MetadataExtractError。
+
+    校验逻辑收敛到 metadata_schema.UnifiedMetadata（规划阶段 2.1：统一 schema
+    是唯一契约）；valid_types 仍以调用方运行时派生的集合为准（DOC_TYPE_RULES
+    ∪ general），与 schema 枚举由一致性测试锁定同源。
+    """
+    from pydantic import ValidationError
+
+    from backend.rag.preprocessing.metadata_schema import UnifiedMetadata
+
     obj = json.loads(_first_json_object(_strip_code_fence(content)))
     if not isinstance(obj, dict):
         raise MetadataExtractError("response is not a json object")
 
-    doc_type = str(obj.get("doc_type", "")).strip().lower()
-    if doc_type not in valid_types:
-        raise MetadataExtractError(f"doc_type out of enum: {doc_type!r}")
-
     try:
-        confidence = float(obj.get("confidence", 0.7))
-    except (TypeError, ValueError):
-        confidence = 0.7
-    confidence = min(max(confidence, 0.0), 1.0)
+        model = UnifiedMetadata.model_validate(obj)
+    except ValidationError as e:
+        # doc_type 越界等结构性错误 → 与旧行为一致按抽取失败处理
+        raise MetadataExtractError(f"schema validation failed: {e.errors()[0]['msg']}") from e
 
-    keywords = obj.get("keywords") or []
-    if not isinstance(keywords, list):
-        keywords = []
-    keywords = [str(k).strip() for k in keywords if str(k).strip()][:10]
+    if model.doc_type not in valid_types:
+        raise MetadataExtractError(f"doc_type out of enum: {model.doc_type!r}")
 
-    entities = obj.get("entities") or {}
-    if not isinstance(entities, dict):
-        entities = {}
-    entities = {
-        str(k): [str(x) for x in v if str(x).strip()]
-        for k, v in entities.items() if isinstance(v, list)
-    }
-
-    time_refs = obj.get("time_refs") or []
-    if not isinstance(time_refs, list):
-        time_refs = []
-    time_refs = [str(t).strip() for t in time_refs if str(t).strip()][:20]
-
-    summary = str(obj.get("summary", "")).strip()
-    domain = str(obj.get("business_domain", "")).strip().lower() or "general"
-
-    return {
-        "doc_type": doc_type,
-        "confidence": round(confidence, 2),
-        "business_domain": domain,
-        "summary": summary,
-        "keywords": keywords,
-        "entities": entities,
-        "time_refs": time_refs,
-    }
+    return model.to_extract_dict()
 
 
 def extract_metadata_llm(
@@ -217,16 +197,20 @@ async def extract_metadata_llm_async(
                 "doc_type": result["doc_type"],
                 "confidence": result["confidence"],
                 "keywords": len(result["keywords"]),
+                "risk_level": (result.get("risk") or {}).get("level", "none"),
             })
+        metadata_route_total.labels(level="L3", outcome="hit").inc()
         return result
     except MetadataExtractError as e:
         logger.warning(f"[MetaLLM] 抽取结果非法（降级规则路径）: {e}")
+        metadata_route_total.labels(level="L3", outcome="error").inc()
         if span_id:
             trace_collector.end_span(span_id, status="error",
                                      metrics={"error": str(e)[:200]})
         return None
     except Exception as e:
         logger.warning(f"[MetaLLM] 抽取调用失败（降级规则路径）: {e}")
+        metadata_route_total.labels(level="L3", outcome="error").inc()
         if span_id:
             trace_collector.end_span(span_id, status="error",
                                      metrics={"error": str(e)[:200]})

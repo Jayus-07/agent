@@ -72,12 +72,28 @@ class MetadataStage:
             # （doc_type/domain/summary/keywords/entities/time_refs 一次抽齐），
             # 任何失败自动降级到下方原规则路径。MinHash/质量门禁/复杂度等
             # 纯规则产物两条路径都照常计算。
+            # METADATA_CASCADE_ENABLED=true（规划阶段 2.2）时先走级联路由：
+            # L0 文件名/路径 → L1 嵌入检索 → L2 词表复核，命中零 LLM 成本；
+            # 全部未命中才落 L3（即原单次 LLM 抽取）。
             from backend.config.rag import ENABLE_LLM_METADATA_EXTRACT
+            unified: dict | None = None
             if ENABLE_LLM_METADATA_EXTRACT:
                 try:
-                    from backend.rag.preprocessing.metadata_llm import extract_metadata_llm_async
-                    unified = await extract_metadata_llm_async(
-                        full_text, fname, parent_span_id=parent_span_id)
+                    from backend.config.rag import METADATA_CASCADE_ENABLED
+                    if METADATA_CASCADE_ENABLED:
+                        from backend.rag.preprocessing.metadata_router import cascade_route
+                        decision = await cascade_route(
+                            full_text, fname, fpath, embedding=self._embedding,
+                            parent_span_id=parent_span_id)
+                        if decision.level in ("L0", "L1", "L2"):
+                            return await self.finalize_cascade(
+                                full_text, base_meta, decision,
+                                parent_span_id=parent_span_id, chunks_text=chunks_text)
+                        unified = decision.llm_result
+                    else:
+                        from backend.rag.preprocessing.metadata_llm import extract_metadata_llm_async
+                        unified = await extract_metadata_llm_async(
+                            full_text, fname, parent_span_id=parent_span_id)
                 except Exception as e:
                     logger.warning(f"[MetaLLM] 统一抽取异常（降级规则路径）: {e}")
                     unified = None
@@ -85,6 +101,9 @@ class MetadataStage:
                     return await self.finalize_unified(
                         full_text, base_meta, unified,
                         parent_span_id=parent_span_id, chunks_text=chunks_text)
+                # L3 失败/未命中 → 规则链 fallback（规划阶段 4.2），打点观测触发率
+                from backend.observability.metrics import metadata_route_total
+                metadata_route_total.labels(level="rule_fallback", outcome="hit").inc()
 
             # 质量门禁（P1）— span 收口到 stage_span（异常自动关闭）
             from backend.rag.preprocessing.metadata import assess_quality
@@ -416,11 +435,15 @@ class MetadataStage:
     async def finalize_unified(
         self, full_text: str, base_meta: dict, unified: dict,
         parent_span_id: str = "", chunks_text: list[str] | None = None,
+        route_level: str = "",
     ) -> dict:
         """统一 LLM 抽取成功后的收口：补齐纯规则产物并返回完整 metadata dict。
 
         与 build() 返回契约完全一致，保证下游（chunk 注入、
         doc_db 落库、registry.register）零感知路径差异。
+
+        route_level 非空 = 级联路由 L0-L2 命中（分类零 LLM 成本，结构字段为
+        规则产物）：llm_used=False、llm_strategy 标 cascade_L{N}。
         """
         import hashlib as _hashlib
         from backend.rag.preprocessing.metadata import (
@@ -503,9 +526,15 @@ class MetadataStage:
             "keywords_rule": kws_rule_objs,
             "keywords_llm": kws_llm_objs,
             "llm_tokens": llm_tokens,
-            "llm_used": True,
-            "llm_strategy": "unified_extract",
-            "llm_decision": {"source": "metadata_llm", "fallback": False},
+            "llm_used": not bool(route_level),
+            "llm_strategy": f"cascade_{route_level}" if route_level else "unified_extract",
+            "llm_decision": {
+                "source": "cascade_router" if route_level else "metadata_llm",
+                "fallback": False,
+                "route_level": route_level,
+                # Schema v1 新增 risk 字段：LLM 未输出时缺省 none（级联路径无）
+                **({"risk": unified["risk"]} if unified.get("risk") else {}),
+            },
             # 同规则路径：存 list，过滤语义见上
             "person_names": list(person_names) if isinstance(person_names, (list, tuple))
                            else ([] if not person_names else [str(person_names)]),
@@ -524,3 +553,41 @@ class MetadataStage:
             "department": base_meta.get("department") or self._department,
             "questions_by_chunk": questions_by_chunk,
         }
+
+    async def finalize_cascade(
+        self, full_text: str, base_meta: dict, decision,
+        parent_span_id: str = "", chunks_text: list[str] | None = None,
+    ) -> dict:
+        """级联路由 L0-L2 命中的收口（规划阶段 2.2）：分类用路由结果，
+        结构字段（summary/keywords/entities/time_refs）走规则提取——零 LLM
+        成本。委托 finalize_unified(route_level=...) 保证返回契约与统一
+        抽取路径完全一致，下游零感知。
+
+        keywords 传空：finalize_unified 内部的规则关键词预览会生成
+        source=rule 的关键词；unified["keywords"] 的语义是 LLM 产物，
+        级联路径没有 LLM 关键词。
+        """
+        from backend.rag.preprocessing.metadata import (
+            _extract_first_sentences, extract_time_refs,
+        )
+        from backend.rag.preprocessing.entity import extract_entities
+
+        entities: dict = {}
+        try:
+            entities = extract_entities(full_text) or {}
+        except Exception as e:
+            logger.warning(f"[MetaRouter] 级联实体提取失败（空实体兜底）: {e}")
+
+        unified = {
+            "doc_type": decision.doc_type,
+            "confidence": decision.confidence,
+            "business_domain": (decision.evidence or {}).get("domain") or "general",
+            "summary": _extract_first_sentences(full_text, 3) or "",
+            "keywords": [],
+            "entities": entities,
+            "time_refs": extract_time_refs(full_text) or [],
+        }
+        return await self.finalize_unified(
+            full_text, base_meta, unified,
+            parent_span_id=parent_span_id, chunks_text=chunks_text,
+            route_level=decision.level)
