@@ -214,16 +214,19 @@ def _dispatch_service(
 
 
 def _extract_order_no(question: str) -> str | None:
-    """P3.5：从问句提取订单号（DEMO-1002 / ORD-001 / 纯数字长号）。
+    """P3.5：从问句提取订单号（DEMO-1002 / ORD-001 / ORD-20260915-0042 /
+    纯数字长号）。
 
     与 action expert 各自独立提取（服务不同，耦合收益低）；识别不到
     返回 None 走全量列表语义。
+    P0 实测修复（2026-09-19）：正则允许多段连字，两段式订单号此前被
+    截断为首段（ORD-20260915-0042 → ORD-20260915）。
     """
     import re
 
     if not question:
         return None
-    m = re.search(r"\b([A-Za-z]{2,10}-\d{2,12})\b", question)
+    m = re.search(r"\b([A-Za-z]{2,10}(?:-\d{2,12})+)\b", question)
     if m:
         return m.group(1).upper()
     m = re.search(r"订单[号]?\s*[:：为]?\s*(\d{5,20})", question)

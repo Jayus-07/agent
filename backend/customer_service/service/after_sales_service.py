@@ -170,6 +170,25 @@ class AfterSalesService:
         user_id = resolve_user_id(user_id)
         from backend.sql.executor import execute_sql_struct
 
+        if order_id == "latest":
+            # 语义化兜底（P0 实测缺陷修复 2026-09-19）：退货/换货提案缺订单
+            # 槽位时 action.py 回退 "latest"，此前按字面匹配必然
+            # OrderNotFoundError。与 refund_service._get_order 同构。
+            sql = """
+                SELECT id, order_no, customer_id, total_amount, status,
+                       payment_status, created_at
+                FROM "order".orders
+                WHERE customer_id::text = %(user_id)s
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            """
+            result = execute_sql_struct(sql, params={"user_id": str(user_id)})
+            if result.status not in ("success", "no_data"):
+                raise DatabaseError(f"查询订单失败: {result.error}")
+            if not result.rows:
+                raise OrderNotFoundError(f"No orders found for user {user_id}")
+            return result.rows[0]
+
         sql = """
             SELECT id, order_no, customer_id, total_amount, status,
                    payment_status, created_at

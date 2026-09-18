@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.customer_service.errors import (
+    OrderNotEligibleError,
+    OrderNotFoundError,
+)
 from backend.customer_service.experts.base import ExpertResult, ExpertStatus
 from backend.shared.logger import logger
 
@@ -73,7 +77,33 @@ def execute_action(
             pending_action, user_message, user_id, session_id,
         )
 
-    return _build_new_proposal(user_id, intent, cs_route, session_id, store, user_message)
+    try:
+        return _build_new_proposal(user_id, intent, cs_route, session_id, store, user_message)
+    except OrderNotEligibleError as e:
+        # 业务规则拒绝（P0 实测修复 2026-09-19）：资格不满足是正常业务结论，
+        # 必须向用户给出可读原因与下一步，而不是当作专家异常降级为通用报错。
+        logger.info("[ActionExpert] proposal declined: %s", e)
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=(
+                f"{e}\n\n可以告诉我订单号让我重新核对，"
+                "或回复「查我的所有订单」查看各订单当前状态。"
+            ),
+            data={},
+        )
+    except OrderNotFoundError:
+        # 缺槽位兜底 "latest" 也可能无订单可用（新用户/无演示数据）。
+        logger.info("[ActionExpert] order not found for proposal")
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=(
+                "暂时没有找到可用于该申请的订单。请告诉我订单号"
+                "（例如 DEMO-1002），或回复「查我的所有订单」先查看订单。"
+            ),
+            data={},
+        )
 
 
 def action_expert_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -263,14 +293,15 @@ def _extract_order_id_from_message(user_message: str) -> str:
     order_id，兜底字符串 "latest" 直查 DB 必然 OrderNotFoundError，
     退款诉求永远收不到确认卡。
 
-    识别形态：DEMO-1002 / ORD-20260918-001 / #12345 等字母前缀-数字
-    组合；识别不到时回退 "latest"（由服务端语义化处理）。
+    识别形态：DEMO-1002 / ORD-20260918-001 / ORD-20260915-0042（多段连字，
+    P0 实测修复：原正则只吃首段导致订单号截断改写）/ #12345 等字母前缀-数字
+    组合；识别不到时回退 "latest"（由服务端 _get_order 语义化处理为最近一单）。
     """
     import re
 
     if not user_message:
         return "latest"
-    m = re.search(r"\b([A-Za-z]{2,10}-\d{2,12})\b", user_message)
+    m = re.search(r"\b([A-Za-z]{2,10}(?:-\d{2,12})+)\b", user_message)
     if m:
         return m.group(1).upper()
     m = re.search(r"订单[号]?\s*[:：为]?\s*(\d{5,20})", user_message)
