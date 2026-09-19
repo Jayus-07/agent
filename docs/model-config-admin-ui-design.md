@@ -770,6 +770,39 @@ tab② 的数据源已就位（与探测端点同文件、同待注册批次）�
 - `lastProbe` 恒 `null` —— 探测结果持久化表未建（0018），当前只有内存态；前端按「未验证」灰显，tab⑤ 漂移会点名。
 - 三个端点（清单 + 探测×2）**仍差一行注册**（同 §15.2）。清单端点属只读，对现有前端零影响，可与探测端点一并注册。
 
+### 15.4 P2 数据源：模型角色绑定视图（2026-09-19）
+
+tab①⑤ 的数据源，与 §15.3 同批落码，同样落在独占新文件上。
+
+| 落点 | 改动 | 提交 |
+|---|---|---|
+| `backend/app/api/routes/sys_model_roles.py` | `GET /sys/model-roles`（新增），字段对齐 §5.4 `RoleBinding` | `e608484` |
+| `backend/tests/api/test_sys_model_roles_api.py` | 9 例（新增） | `e608484` |
+
+**端点层做的两处归一化**（都不改 P0 的 `model_roles` —— 它另有消费方与测试）：
+
+| 内部值 | 契约值（§5.4） | 漏掉的后果 |
+|---|---|---|
+| `code-default` | `default` | 前端 TS 判别落到 `else`，静默显示错来源 |
+| `inherit:<父role>` | `inherit`（父 role 走 `inheritedFrom`） | 同上，且该值不在契约联合类型内 |
+
+**一条一致性约束**：`provider` 与 `registered` **必须同源**（都用 `get_available_models()`，即代码层 + DB 动态层）。若 `provider` 沿用 `model_roles.provider_of`（只看代码层 `AVAILABLE_MODELS`），自建模型会显示「已注册但无所属供应商」—— 自相矛盾且无从排查。有测试锁定。
+
+**⚠️ 本轮查实的一个 P0→P1 缺口（未动，需单独立项）**
+
+「模型选型进 DB」（决策 1）目前**只有解析器、没有数据通道**：
+
+1. `model_roles.inject_overrides()` **零调用点** —— 设计上由 `services/sys_config.py` 的刷新循环注入，但 `_fetch_overrides` 的 SQL 是 `WHERE key = ANY(:keys)` 且 `keys = list(_SWITCHES)`，而模型角色不登记在那张表里（`sys_config` 注释明确说明）。存储侧没有障碍：`sys_config` 表本身就是通用 key/value（`key VARCHAR(64) PRIMARY KEY`）。
+2. **即便接线，运行时也不会即时生效** —— `config/llm.py` 的 `LLM_MODEL = _literal_model("main")` 是**模块级赋值 → 导入时冻结**，DB 覆盖在启动后才读到，故只影响下次启动。而主设计 §6.1 对该对象的承诺是「本实例即时，其他实例 ≤1 TTL」。
+
+   → 要做到「本实例即时」，须把消费方从「读 `config.LLM_MODEL` 常量」改成「调用时 `resolve_name(role)`」。落点分散在 `infra/llm/proxy.py`（`_resolve_active_llm` / `get_active_model_name`）、`rag/chain.py`、`infra/llm/factory.py` 等 —— **其中 `rag/chain.py` 与 `proxy.py` 正被并发会话持有未提交改动**。
+
+   → 故本轮**刻意没有**接线 `inject_overrides`：接一个「看起来支持 DB 覆盖、实际要重启」的半成品，比不接更危险（管理员会以为改完就生效）。
+
+**当前 `source` 的取值**：只可能是 `env` / `inherit` / `default`（`db` 是接线后的取值，端点已能如实透传，有测试锁定）。
+
+**仍未落地的两处**：同 §15.3 —— 探测结果持久化表（0018）未建；**四个端点**（清单 + 角色 + 探测×2）仍差一行注册。
+
 ---
 
 ## 16. 测试策略（vitest）
