@@ -126,6 +126,13 @@ METADATA_CASCADE_L2_CONFIDENCE = float(os.getenv("METADATA_CASCADE_L2_CONFIDENCE
 # taxonomy 索引构建/文档向量单次超时（秒）；超时或异常 → 跳过 L1/L2 直达 L3
 METADATA_CASCADE_EMBED_TIMEOUT = float(os.getenv("METADATA_CASCADE_EMBED_TIMEOUT", "10"))
 
+# R1 校准分类器默认只加载/影子验证，不参与线上接受；正式放量前必须通过
+# 黄金集门禁并显式开启。模型卡与当前 taxonomy/rules/feature 指纹不一致时跳过。
+METADATA_CLASSIFIER_ENABLED = os.getenv("METADATA_CLASSIFIER_ENABLED", "false").lower() == "true"
+METADATA_CLASSIFIER_MODEL_PATH = os.getenv("METADATA_CLASSIFIER_MODEL_PATH", "").strip()
+METADATA_CLASSIFIER_MIN_MARGIN = float(os.getenv("METADATA_CLASSIFIER_MIN_MARGIN", "0.05"))
+METADATA_CLASSIFIER_LOAD_TIMEOUT = float(os.getenv("METADATA_CLASSIFIER_LOAD_TIMEOUT", "2"))
+
 # 影子采集（规划阶段 5 基建）：主路径统一抽取成功后并行跑级联 L0-L2 只读对比，
 # 不参与任何决策；agree/differ 打点进 metadata_route_total{level=shadow_*}。
 # 默认开启：纯只读 + 独立短超时 + 异常静默，是解锁阶段 5 影子报告的唯一途径

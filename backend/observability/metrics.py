@@ -90,6 +90,12 @@ metadata_route_total = Counter(
     labelnames=("level", "outcome"),
 )
 
+metadata_classifier_mismatch_total = Counter(
+    "metadata_classifier_mismatch_total",
+    "元数据分类器模型卡与当前运行时契约不一致的次数",
+    labelnames=("reason",),
+)
+
 rag_consistency_issues_total = Counter(
     "rag_consistency_issues_total",
     "索引五路存储一致性检查检出的问题数（按存储与严重级别）",
