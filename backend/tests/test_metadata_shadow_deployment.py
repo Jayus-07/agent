@@ -7,6 +7,7 @@ import yaml
 
 
 COMPOSE_PATH = Path(__file__).resolve().parents[2] / "docker-compose.yml"
+INIT_DBS_PATH = Path(__file__).resolve().parents[2] / "docker" / "init-dbs.sh"
 
 
 def _compose() -> dict:
@@ -24,6 +25,16 @@ def _environment(service: dict) -> dict[str, str]:
         for item in service.get("environment", [])
         if "=" in item
     }
+
+
+def test_fresh_database_init_includes_metadata_migrations():
+    script = INIT_DBS_PATH.read_text(encoding="utf-8")
+
+    assert "/docker-migrations/025_metadata_rule_governance.sql" in script
+    assert "/docker-migrations/026_metadata_shadow_jobs.sql" in script
+    assert script.index("025_metadata_rule_governance.sql") < script.index(
+        "026_metadata_shadow_jobs.sql"
+    )
 
 
 def test_app_and_index_worker_default_to_one_percent_cascade_canary():
