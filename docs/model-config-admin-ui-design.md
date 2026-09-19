@@ -529,7 +529,10 @@ idle ──click──▶ probing ──每级完成──▶ probing(累计 ste
 - **视觉标注「需审批生效」**（主设计 §10 风险 5：同页两个 tab 一个即时、一个要等 24h，不区分用户会以为「改了没生效」）：
   - tab 按钮文案后缀一枚小徽章「需审核」
   - tab 内容顶部一条说明：「本 tab 的变更需**双人审核 + 24 小时灰度**后才生效；其余 tab 即时生效。」
-- 旧路由 `/cost-governance/prices` 重定向到 `?tab=prices` —— 保留它的 `navConfig` 条目还是删除？**删除**（避免两个入口），但重定向保留（外部收藏/文档链接不失效）。
+- 旧路由 `/cost-governance/prices` 重定向到 `?tab=prices`；其 **`navConfig` 条目删除**（2026-09-19 已定，避免两个入口）。**重定向保留** —— 外部收藏与既有文档链接不失效。
+  - **删除是零测试改动**（已核实）：`navConfig.test.ts:31-50` 的「核心路由不丢失」清单（13 条）**不含** `/cost-governance/prices`；「六组齐全」（`:24-29`）与「组 minRole 同语义」（`:103-108`）两条均不受影响。
+  - ⚠️ **已接受的连带后果**：该条目属 **「成本治理」组**（`navConfig.tsx:66-73`），组内仅两条（预算策略 + 模型价格）。删除后**该组只剩「预算策略」一条**。接受单条目组 —— 另一条路是把本页挂到「成本治理」组以填满它，但那会把「配置类」页面与「成本类」页面混组，语义上不如现方案（§2.2 挂「质量与配置」，与 Prompt 管理 / Agent 节点 / 能力与技能同级）。
+  - 该组**无组级 minRole**（故 viewer 可见），而「模型价格」页自带 `RoleGate minRole="editor"` —— 即组门禁与页门禁**本就分离**，删除条目不改这一点。
 
 ---
 
@@ -612,7 +615,43 @@ idle ──click──▶ probing ──每级完成──▶ probing(累计 ste
 
 **permission**：`/llm/switch`（全局）加 `require_admin_user`；`LLMSwitcher` 对非 admin 隐藏「设为全局默认」项。保留 `set_current` 的内存语义作 admin 调试通道（主设计 §3.4）。
 
-**待定细节**：会话级 model 是否需要后端校验（防止 editor 传一个未授权模型名）？→ **需要**，但这属后端 P2 项，见 §14。
+### 13.1 后端校验（已定：需要）—— 但现状是「有校验、无拒绝」
+
+**先纠正一个前提**：会话级 model 的校验**早就存在**，本项不是「新增校验」。
+
+`proxy.py:72-105` 的 `set_request_model` 已做三级检查（口径与 `set_current` 对齐）：
+
+| 检查 | 现状行为 |
+|---|---|
+| 不在 `AVAILABLE_MODELS` | warning + **静默清空**（回退全局默认） |
+| `provider == ollama` 且 `OLLAMA_ENABLED` 关 | warning + 静默清空 |
+| provider 需要 Key 而该 Key 未配置 | warning + 静默清空 |
+
+**缺的是「拒绝」，不是「校验」**：三条全部落到同一句 `_request_model_var.set("")` ——
+非法输入被静默吞掉、**实际在用全局默认模型，而用户以为在用自己选的那个**。
+这与 P0 发现的 `LLM_FALLBACK_MODEL` 未注册、`_get_provider` 静默兜底 ollama 是同源病灶
+（「以为在用 A、实际在用 B，且无从察觉」）。
+
+**契约（已定）**：**API 边界 fail-fast，`set_request_model` 保持宽容**。
+
+```
+POST /chat → ① api 层校验 model（唯一规则来源）
+               非法 → 400，detail 说明原因（未注册 / provider Key 缺失 / Ollama 未启用）
+               合法 → 透传
+           → ② RequestContext → set_request_model()  仍 warning + 清空（不变）
+```
+
+**为什么分两层、且只在前一层严格** —— 这就是「改校验而不破既有契约」的做法：
+
+| 理由 | 内容 |
+|---|---|
+| 职责分离 | `set_request_model` 是**上下文绑定**而非输入校验 —— 它还被非 HTTP 路径调用（评测生成、脚本），拿不到请求上下文来报错 |
+| 不破契约 | `tests/test_llm_bind_tools.py:117-144` 有 **4 例锁定静默语义**（`test_unregistered_model_ignored` / `test_missing_provider_key_ignored` / `test_ollama_disabled_in_cloud_ignored` / `test_valid_model_with_key_accepted`）。让 `set_request_model` 抛错会**直接打破它们**，并波及非 HTTP 调用方 |
+| 规则单点 | 抽 `validate_override_model(model) -> (ok, reason)` 供 **proxy 与 api 层共用**；否则两套规则必然漂移（这正是 §1.1 那类错配的成因） |
+
+**不做模型级 ACL**（显式取舍，非遗漏）：不引入「editor 不许用某模型」的表与 UI。
+理由：可切换的都是**同一批系统已注册模型**，不存在「editor 才不该用」的成员；
+成本由既有 `budget` / `quota` 硬阻断兜住。若将来要分级，那属独立议题。
 
 ---
 
@@ -630,9 +669,10 @@ idle ──click──▶ probing ──每级完成──▶ probing(累计 ste
 | 6 | `GET /sys/config/history` + `POST /sys/config/history/{id}/rollback` | P2（**新写**，历史表已有但无读取端点） | ④ |
 | 7 | `GET /sys/config/drift` | P2（含索引模型比对，见下） | ⑤ |
 
-**两点必须与后端对齐**：
+**三点必须与后端对齐**：
 1. **响应形态逐端点写死**（§1.1 的教训：`/sys/config` 裸 dict、`/sys/security/*` 是 Result 壳，前端曾因此误用）。**决策见 §1.1.1：新端点一律裸 dict**，逐端点不得再靠猜。
 2. **索引模型比对**（tab⑤ 的 `index_model_mismatch`）需要读索引元数据（embedding 模型名 + 维度）。若后端暂不提供，**该检查项须显式标注「暂不支持」而非静默缺失**。
+3. **会话级 model 校验不新增端点**（§13.1）—— 它是既有 `POST /chat` 的请求校验增强，且 `set_request_model` 的静默语义**保持不动**（4 例测试锁定）。属于「改行为」而非「加端点」，故不计入上表 6 项。
 
 ---
 
@@ -671,15 +711,14 @@ idle ──click──▶ probing ──每级完成──▶ probing(累计 ste
 
 ---
 
-## 17. 决策与待确认
+## 17. 决策记录
 
-### 已定（2026-09-19）
+**全部已定**（2026-09-19 拍板完毕，无遗留待确认项）：
 
-1. **§1.1 的「假失败」bug** → **已修**：改前端 1 处 + 加共置契约测试（见 §1.1）。
-2. **新端点响应形态** → **裸 dict**，不带 Result 壳（理由链见 §1.1.1）。
-
-### 待确认
-
-1. **tab② 对 editor 隐藏（而非只读）**：本文按 B.6「查看供应商 = admin」从严。若你认为 editor 应能看到「有哪些供应商（不含 URL/密钥）」，矩阵需放宽。
-2. **会话级模型是否需要后端校验**（editor 传未授权模型名）？本文标记为「需要」，但落在后端 P2。
-3. **`/cost-governance/prices` 的 nav 条目是否删除**？本文建议删（避免两入口）+ 保留重定向。
+| # | 事项 | 决策 | 落点 |
+|---|---|---|---|
+| 1 | §1.1 的「假失败」bug | **修**（已实施） | §1.1；提交 `ecf2e90` |
+| 2 | 新端点响应形态 | **一律裸 dict**，无 Result 壳 | §1.1.1 |
+| 3 | tab② 对 editor | **整 tab 隐藏**（按 B.6「查看供应商 = admin」从严） | §3.3 / §3.4 |
+| 4 | 会话级 model 后端校验 | **需要** —— API 边界 fail-fast 400；`set_request_model` 静默语义**不动** | §13.1 |
+| 5 | `/cost-governance/prices` 的 nav 条目 | **删除**，重定向保留（连带：该组只剩一条，见 §9） | §9 |

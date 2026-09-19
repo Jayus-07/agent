@@ -284,7 +284,8 @@ pending → reviewed_1 → scheduled → canary（需满 24h）→ active
 - 导航：挂「质量与配置」组（`components/layout/navConfig.tsx:74-81`），
   与「Prompt 管理 / Agent 节点 / 能力与技能」同级
 - 权限：**页级 `minRole: 'editor'` + tab 级 `admin`**（2026-09-19 修订）
-- 现有页 `/cost-governance/prices` **重定向**到新页的「价格」tab，避免两个入口
+- 现有页 `/cost-governance/prices` **重定向**到新页的「价格」tab；其 `navConfig` 条目
+  **删除**（2026-09-19 定，避免两个入口）。重定向保留 —— 外部收藏与既有文档链接不失效
 
 > ⚠️ **修订说明（2026-09-19）**：本节原写「`minRole: 'admin'`」，与 §7.2 的
 > 「tab⑤ 体检与漂移 → editor 可见」**自相矛盾** —— 页级 admin 门禁下 editor 根本
@@ -788,6 +789,21 @@ ChatRequest.model (chat.py:105,182)
 
 ⚠️ 与 B.5#3 的耦合：`_request_model_var` 在 `proxy.py:85-88` 对未注册模型是
 **warning + 静默清空** → 自建模型必须先落注册表，否则会话级切换会「选了没反应且无提示」。
+
+**2026-09-19 补充决策（用户拍板「需要后端校验」）：把静默改为 API 边界 fail-fast 400。**
+
+需要纠正一个前提：会话级 model 的**校验早就存在**（`proxy.py:72-105` 已做注册表 /
+Ollama 启用 / provider Key 三级检查），缺的是**拒绝**而非校验 —— 三条全部落到
+`_request_model_var.set("")`，即「非法输入被静默吞掉，用户以为在用 A 实际在用全局默认」，
+与 A.4① 的 `LLM_FALLBACK_MODEL` 未注册是同源病灶。
+
+契约：**`POST /chat` 在 api 层校验收口（非法 → 400），`set_request_model` 自身保持宽容不变。**
+理由：① 它是**上下文绑定**而非输入校验，还被非 HTTP 路径调用（评测生成、脚本），
+拿不到请求上下文报错；② `tests/test_llm_bind_tools.py:117-144` 有 **4 例锁定其静默语义**，
+改成抛错会直接打破并波及非 HTTP 调用方；③ 规则抽 `validate_override_model()`
+供 proxy 与 api 层共用，避免两套规则漂移。
+**不做模型级 ACL**（可切换的都是同一批已注册模型；成本由既有 `budget`/`quota` 兜住）。
+完整契约见 `docs/model-config-admin-ui-design.md` §13.1。
 
 ### ③ 订阅制 provider → **显示「订阅制·不计 token」**
 
