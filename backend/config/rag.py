@@ -132,6 +132,14 @@ METADATA_CASCADE_ROLLOUT_PERCENT = _parse_rollout_percent(
 METADATA_CASCADE_ROLLOUT_KEY = os.getenv(
     "METADATA_CASCADE_ROLLOUT_KEY", "metadata-doc"
 ).strip()
+# 回滚基线由发布系统注入；空值表示启动时不覆盖共享路由指针。
+# 版本值只作为控制面兜底，不会删除数据库中的历史规则或模型文件。
+METADATA_ROLLBACK_RULES_VERSION = os.getenv(
+    "METADATA_ROLLBACK_RULES_VERSION", ""
+).strip()
+METADATA_ROLLBACK_MODEL_VERSION = os.getenv(
+    "METADATA_ROLLBACK_MODEL_VERSION", ""
+).strip()
 # 未显式设置百分比时，保留旧的“打开总开关即全量”测试/运维语义；生产
 # 灰度必须显式设置 1/10/50/100，百分比为 0 且显式配置代表全量关闭。
 _METADATA_CASCADE_ROLLOUT_EXPLICIT = "METADATA_CASCADE_ROLLOUT_PERCENT" in os.environ

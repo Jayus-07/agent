@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from backend.rag.preprocessing import metadata_rule_service as rule_service_module
 from backend.rag.preprocessing.metadata_rule_service import rollback_metadata_route
 
 
@@ -35,3 +36,61 @@ def test_rollback_target_is_versioned(monkeypatch):
     assert result["rules_version"] == "rules-v1"
     assert result["model_version"] == "model-v0"
     assert result["history_preserved"] is True
+
+
+def test_route_pointer_prefers_shared_cache_for_other_workers(monkeypatch):
+    class _PointerCache:
+        def __init__(self):
+            self.value = None
+
+        def get_json(self, key):
+            return self.value
+
+        def set_json(self, key, value, ttl=None):
+            self.value = value
+
+    cache = _PointerCache()
+    monkeypatch.setattr(rule_service_module, "get_cache", lambda *args, **kwargs: cache)
+    monkeypatch.setattr(
+        rule_service_module,
+        "_route_pointer",
+        {"rules_version": "", "model_version": "", "history_preserved": True},
+    )
+
+    rollback_metadata_route("local-rules", "local-model")
+    cache.value = {
+        "rules_version": "shared-rules",
+        "model_version": "shared-model",
+        "history_preserved": True,
+        "changed_at": "2026-09-20T00:00:00+00:00",
+    }
+
+    pointer = rule_service_module.get_metadata_route_pointer()
+
+    assert pointer["rules_version"] == "shared-rules"
+    assert pointer["model_version"] == "shared-model"
+
+
+def test_route_pointer_uses_configured_rollback_versions_when_cache_is_empty(monkeypatch):
+    class _EmptyCache:
+        def get_json(self, key):
+            return None
+
+    monkeypatch.setattr(rule_service_module, "get_cache", lambda *args, **kwargs: _EmptyCache())
+    monkeypatch.setattr(
+        rule_service_module,
+        "_route_pointer",
+        {"rules_version": "", "model_version": "", "history_preserved": True},
+    )
+    monkeypatch.setattr(
+        "backend.config.rag.METADATA_ROLLBACK_RULES_VERSION", "configured-rules"
+    )
+    monkeypatch.setattr(
+        "backend.config.rag.METADATA_ROLLBACK_MODEL_VERSION", "configured-model"
+    )
+
+    pointer = rule_service_module.get_metadata_route_pointer()
+
+    assert pointer["rules_version"] == "configured-rules"
+    assert pointer["model_version"] == "configured-model"
+    assert pointer["source"] == "config"

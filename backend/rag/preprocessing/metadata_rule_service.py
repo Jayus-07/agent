@@ -378,6 +378,21 @@ _route_pointer: dict[str, Any] = {
 }
 
 
+def _is_valid_route_pointer(pointer: Any) -> bool:
+    if not isinstance(pointer, dict):
+        return False
+    rules_version = pointer.get("rules_version")
+    model_version = pointer.get("model_version")
+    return (
+        isinstance(rules_version, str)
+        and isinstance(model_version, str)
+        and bool(rules_version.strip())
+        and bool(model_version.strip())
+        and len(rules_version) <= 256
+        and len(model_version) <= 256
+    )
+
+
 def rollback_metadata_route(rules_version: str, model_version: str) -> dict[str, Any]:
     """切换规则/模型指针，不删除历史快照或模型文件。"""
     rules_version = str(rules_version or "").strip()
@@ -396,6 +411,7 @@ def rollback_metadata_route(rules_version: str, model_version: str) -> dict[str,
             "previous": previous,
             "changed_at": datetime.now(timezone.utc).isoformat(),
             "history_preserved": True,
+            "source": "runtime",
         }
         _route_pointer.clear()
         _route_pointer.update(pointer)
@@ -409,9 +425,34 @@ def rollback_metadata_route(rules_version: str, model_version: str) -> dict[str,
 
 
 def get_metadata_route_pointer() -> dict[str, Any]:
-    """读取当前进程最近一次回滚指针；失败时返回空指针。"""
+    """读取共享回滚指针，按共享缓存、进程内、配置兜底顺序返回。"""
+    try:
+        shared = get_cache("rag_metadata_rollout", ttl=86400).get_json(
+            "metadata:route:pointer"
+        )
+        if _is_valid_route_pointer(shared):
+            return dict(shared)
+    except Exception as exc:
+        logger.debug(f"[MetaRule] 回滚指针共享缓存读取失败: {exc}")
+
     with _route_pointer_lock:
-        return dict(_route_pointer)
+        local = dict(_route_pointer)
+    if _is_valid_route_pointer(local):
+        return local
+
+    from backend.config.rag import (
+        METADATA_ROLLBACK_MODEL_VERSION,
+        METADATA_ROLLBACK_RULES_VERSION,
+    )
+
+    if METADATA_ROLLBACK_RULES_VERSION and METADATA_ROLLBACK_MODEL_VERSION:
+        return {
+            "rules_version": METADATA_ROLLBACK_RULES_VERSION,
+            "model_version": METADATA_ROLLBACK_MODEL_VERSION,
+            "history_preserved": True,
+            "source": "config",
+        }
+    return local
 
 
 def get_metadata_rule_service() -> MetadataRuleService:
