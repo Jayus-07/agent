@@ -737,7 +737,7 @@ POST /chat → ① api 层校验 model（唯一规则来源）
 
 **⚠️ 差一行未生效**：`sys_providers.router` **尚未注册**到 `api_router`。原因：`app/api/router.py` 正被并发会话持有未提交改动（含 `budgets` / `model_prices` / `idempotency` 三个**未提交模块**的 include），提交该文件会连带让主干 import 失败 —— 与 §15.1 第 1 条同类。待它落定后补一行 `include_router(sys_providers.router)` 即生效。
 
-**对 B.8 硬闸门的影响**：P1b 完成后，闸门**只剩 P1a-2**（billing 传播到 `compute_cost_usd` / `budget` / `quota`，卡在并发会话的 `proxy.py` / `budget.py` / `quota.py`）。P1a-2 一旦落定，P2 管理端页面即可开工。
+**对 B.8 硬闸门的影响**：P1b 完成后，闸门**只剩 P1a-2**。⚠️ 但 P1a-2 的**真实范围比此处原写的「billing 传播」更大** —— 见 §15.5：它还包含「proxy 的构建路径不传凭据」这一条，而**那条才是 BYOK 至今不生效的直接原因**。落点仍是并发会话持有的 `proxy.py` / `budget.py` / `quota.py`。
 
 ### 15.3 P2 数据源：供应商清单端点（2026-09-19）
 
@@ -802,6 +802,48 @@ tab①⑤ 的数据源，与 §15.3 同批落码，同样落在独占新文件�
 **当前 `source` 的取值**：只可能是 `env` / `inherit` / `default`（`db` 是接线后的取值，端点已能如实透传，有测试锁定）。
 
 **仍未落地的两处**：同 §15.3 —— 探测结果持久化表（0018）未建；**四个端点**（清单 + 角色 + 探测×2）仍差一行注册。
+
+### 15.5 P1a-2 真实范围的前置核查 + 两条实测缺陷（2026-09-19）
+
+在动手做 P2 页面前，先把「闸门到底还剩什么」查实。结论：**剩下的后端项几乎全部卡在同一处**，且其中一条比原估更严重。
+
+**（一）P1a-2 比「billing 传播」更大：线上聊天路径根本不读 DB 凭据**
+
+| 事实 | 位置 |
+|---|---|
+| 线上聊天用的 `get_llm()` **来自 `proxy`，不是 `factory`** | `infra/llm/__init__.py:17` |
+| `factory` **已经**在调用时解析凭据并传给 provider（P1a-1 的成果） | `infra/llm/factory.py:128` |
+| 但 `proxy._build_llm_for` 自己的分发表**不传凭据**，末尾 `else` 落到 ChatOllama | `infra/llm/proxy.py:208-240` |
+
+→ **后果**：管理端 / DB 里配好的供应商实例与密钥**在真实问答中被忽略**，一律回落 `.env`。
+即 P1a-1 + P1b 的全部产物目前是「能配、能测、不能用」。这是 B.8 闸门要防的「配了不生效」，
+但它发生在**后端**而非页面 —— 所以**即使页面先做出来也不会暴露这个问题**。这直接决定了本轮不做页面。
+
+**（二）`proxy._build_llm_for` 缺 `vllm` 分支（既存缺陷，同类于 2026-09-17 的 `qwen_tp`）**
+
+`models.py:75` 注册了 `vllm`，`models.py:136` 有 `Qwen/Qwen3-32B-AWQ`（provider=`vllm`）在 `AVAILABLE_MODELS` 里（用户可选）。
+选中后落到末尾 `ChatOllama(model="Qwen/Qwen3-32B-AWQ")` → 报一个与真因无关的 Ollama 连接错误。
+`proxy.py:220-225` 的注释显示 `qwen_tp` 曾被同样的问题绊过 —— 这是**第二例同型缺陷**（分发表手写、与 `factory` 双维护）。
+
+> 四条修正建议（`proxy` 复用 `factory` 的分发逻辑、`credentials` 形参、`vllm` 分支、以及 `proxy` 与 `factory` 的**分发一致性守卫测试**）已写入
+> `docs/coordination/2026-09-19-llm-model-config-handoff.md` §2②，附可粘贴的补丁骨架，等 `proxy.py` 的持有会话落定。
+
+**（三）§15.4 那条「即时生效」缺口的消费方清单（实测补全）**
+
+8 个角色常量全部是模块级赋值（导入时冻结）：`config/llm.py:74,83,115,171,231,308`（eval_gen / embedding / rerank / main / tool_selector / fallback）、`config/rag.py:81,98`（ocr / doc）。
+要做到「本实例即时」须改的消费方共 8 处：`infra/llm/proxy.py:28`、`infra/llm/factory.py:31`、`rag/chain.py:848`、
+`rag/indexing/indexer.py:34`、`rag/embedding_singleton.py`、`evaluation/generation.py:16`、`evaluation/ragas_bridge.py:37`、`app/api/routes/rag_upload.py`。
+
+→ **blast radius 远大于设计写下时的预估**，且 `indexer.py` / `rag_upload.py` / `chain.py` 未必在本会话手上。
+→ **建议（待拍板，本轮未动）**：`main`/`fallback` 两个角色的消费点（`proxy.py` + `factory.py`）改为调用时解析，
+其余角色保留「重启生效」；同时把主设计 §6.1 的承诺改写成如实文案，并让 UI 徽章区分「已生效」与「需重启」。
+**不做**「页面说已覆盖、运行时其实没读」的半成品。
+
+**（四）注册死锁的一个新认知（重要）**
+
+`router.py` 不能靠「只提交我这几行」绕开。除「引用未提交模块 → 主干 import 失败」外，还有第二个更隐蔽的后果：
+部分提交后我的行进 HEAD，而持有方的工作区副本**不含**我的行 → 他**下一次提交该文件会把我的行静默删掉**（文件级提交取工作区内容）→ 端点悄然回到 404 且无任何报错。
+故注册只能由 `router.py` 的持有方落定后补，或由其明确授权代加。已写入协同文档 §2①。
 
 ---
 
