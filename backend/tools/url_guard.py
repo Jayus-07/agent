@@ -88,8 +88,33 @@ def _is_forbidden_ip(ip: ipaddress._BaseAddress) -> bool:
     return False
 
 
-def _check_resolved_ips(host: str) -> None:
-    """解析 host 并校验全部解析结果 IP。"""
+# 云元数据服务地址（AWS/GCP/Azure/阿里云等共用的链路本地魔法地址）。
+# 它是「取实例凭据」的入口，泄露后果与「访问内网 LLM」完全不成比例，
+# 故即便调用方显式放行私网也**永远拦截** —— 自建 LLM 服务不可能部署在这里。
+_METADATA_IPS = frozenset({"169.254.169.254", "fd00:ec2::254"})
+
+
+def _blocked_reason(ip: ipaddress._BaseAddress, *, allow_private: bool) -> str | None:
+    """返回该 IP 的拦截原因；None 表示放行。
+
+    `allow_private=True`（显式私网放行，见 `assert_url_allowed`）时跳过
+    网段判定，但元数据地址仍拦。
+    """
+    if str(ip) in _METADATA_IPS:
+        return "云元数据地址（始终禁止）"
+    if allow_private:
+        return None
+    if _is_forbidden_ip(ip):
+        return "内网/保留地址"
+    return None
+
+
+def _check_resolved_ips(host: str, *, allow_private: bool = False) -> None:
+    """解析 host 并校验全部解析结果 IP。
+
+    `allow_private=True` 时跳过网段检查（**只能由调用方依据显式勾选传入**，
+    见 assert_url_allowed 的说明），但云元数据地址仍拦。
+    """
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror as e:
@@ -101,13 +126,12 @@ def _check_resolved_ips(host: str) -> None:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             raise UrlBlockedError(f"非常规地址格式: {ip_str}")
-        if _is_forbidden_ip(ip):
-            raise UrlBlockedError(
-                f"目标 {host} 解析到内网/保留地址 {ip}，已拦截（SSRF 防护）"
-            )
+        reason = _blocked_reason(ip, allow_private=allow_private)
+        if reason is not None:
+            raise UrlBlockedError(f"目标 {host} 解析到{reason} {ip}，已拦截（SSRF 防护）")
 
 
-def assert_url_allowed(url: str) -> str:
+def assert_url_allowed(url: str, *, allow_private: bool = False) -> str:
     """校验 URL 是否允许出站抓取。通过则原样返回，否则抛 UrlBlockedError。
 
     校验内容：
@@ -117,6 +141,15 @@ def assert_url_allowed(url: str) -> str:
 
     可信域名后缀（_TRUSTED_SUFFIXES）跳过 IP 段检查，
     因其 DNS 可能被本地 VPN / 广告拦截器劫持到保留 IP 段。
+
+    `allow_private=True` —— **显式私网放行**，供「管理端勾选『这是内网服务』」
+    的 provider 实例使用（自托管 vLLM / Ollama / 内网中转站）。语义边界：
+
+      - 只放开 **IP 网段**，不放开协议：scheme 白名单、控制字符拦截**照常生效**
+      - 云元数据地址（`_METADATA_IPS`）**始终拦截**，与本参数无关
+      - ⚠️ 调用方必须让本参数来自一个**显式、可审计的选择**（DB 的
+        `network_scope='private'`），**绝不可**写成「解析出来是私网就自动放行」——
+        那会让「公网域名解析到内网 IP」的 DNS rebinding 直接绕过防护
     """
     if not url or not isinstance(url, str):
         raise UrlBlockedError("URL 为空或类型非法")
@@ -151,20 +184,19 @@ def assert_url_allowed(url: str) -> str:
         ip = None
 
     if ip is not None:
-        if _is_forbidden_ip(ip):
-            raise UrlBlockedError(
-                f"目标 IP {ip} 属于内网/保留地址段，已拦截（SSRF 防护）"
-            )
+        reason = _blocked_reason(ip, allow_private=allow_private)
+        if reason is not None:
+            raise UrlBlockedError(f"目标 IP {ip} 是{reason}，已拦截（SSRF 防护）")
     else:
-        _check_resolved_ips(host)
+        _check_resolved_ips(host, allow_private=allow_private)
 
     return url
 
 
-def is_url_allowed(url: str) -> bool:
+def is_url_allowed(url: str, *, allow_private: bool = False) -> bool:
     """非抛异常版：返回 URL 是否允许（拦截时记录 warning 日志）。"""
     try:
-        assert_url_allowed(url)
+        assert_url_allowed(url, allow_private=allow_private)
         return True
     except UrlBlockedError as e:
         logger.warning(f"[UrlGuard] 拦截出站请求: {url!r} — {e}")
