@@ -716,6 +716,29 @@ POST /chat → ① api 层校验 model（唯一规则来源）
 
 **可安全分离的部分已提交**：`models.py` 是纯增量（新增函数，零调用方变更）；`chat.py` 的 fail-fast 对"不传 model"的现有前端完全无影响（现有前端从不传 model）。
 
+### 15.2 P1b 实施状态（2026-09-19）
+
+**P1b（探测服务）三片已全部落码、验证并提交**：
+
+| 落点 | 改动 | 提交 |
+|---|---|---|
+| `backend/infra/llm/registry_store.py` | `refresh_loop()`（15s 轮询，单轮异常不退出） | `a8c21f4` |
+| `backend/app/server.py` | startup 钩子 `start_llm_registry_refresh` | `a8c21f4` |
+| `backend/tools/url_guard.py` | `allow_private` 关键字（默认 False，行为不变） | `153b475` |
+| `backend/services/provider_probe.py` | 四级探测 L0–L3（新增） | `153b475` |
+| `backend/app/api/routes/sys_providers.py` | 两个探测端点 + 滑动窗口限流（新增） | `18bccd2` |
+| 测试 | `test_llm_registry_store.py`(5) + `test_provider_probe.py`(18) + `test_sys_providers_probe_api.py`(14) | 同上 |
+
+**实施时新定的三条决策（原文档未写，勿当成偏离）**：
+
+1. **探测不经 proxy** —— L2/L3 用裸 langchain 客户端（按 driver 构建）。这使 B.4 硬约束 3「探测排除在用量与预算统计之外」**结构性成立**，无需侵入 `token_tracker`（该文件正被并发会话持有）。`test_provider_probe.py` 用 **AST 断言 import 列表**守这条 —— 若有人把探测改成走 proxy，测试会红。
+2. **私网放行比 B.6 原文更严一点** —— 只放开 IP 网段、不放开协议；且云元数据地址（`169.254.169.254` / `fd00:ec2::254`）**即便放行也始终拦**。理由：元数据是「取实例凭据」入口，泄露后果与「访问内网 LLM」完全不成比例。
+3. **只有 L0 失败短路** —— L1 的 404/401 一律降级后继续跑 L2。有些站点 `/models` 需额外 scope，L1 401 不代表 chat 端点也 401，过早判死会毁掉测试按钮的可信度。
+
+**⚠️ 差一行未生效**：`sys_providers.router` **尚未注册**到 `api_router`。原因：`app/api/router.py` 正被并发会话持有未提交改动（含 `budgets` / `model_prices` / `idempotency` 三个**未提交模块**的 include），提交该文件会连带让主干 import 失败 —— 与 §15.1 第 1 条同类。待它落定后补一行 `include_router(sys_providers.router)` 即生效。
+
+**对 B.8 硬闸门的影响**：P1b 完成后，闸门**只剩 P1a-2**（billing 传播到 `compute_cost_usd` / `budget` / `quota`，卡在并发会话的 `proxy.py` / `budget.py` / `quota.py`）。P1a-2 一旦落定，P2 管理端页面即可开工。
+
 ---
 
 ## 16. 测试策略（vitest）
