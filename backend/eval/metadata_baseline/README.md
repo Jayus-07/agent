@@ -34,17 +34,28 @@ python -m backend.eval.metadata_baseline.evaluate \
 python -m backend.eval.metadata_baseline.predict \
     --golden backend/eval/metadata_baseline/golden.jsonl \
     --out backend/eval/metadata_baseline/preds_unified.jsonl
-python -m backend.eval.metadata_baseline.predict --golden ... --out ... --cascade
+python -m backend.eval.metadata_baseline.predict \
+    --golden backend/eval/metadata_baseline/golden.jsonl \
+    --out backend/eval/metadata_baseline/preds_cascade.jsonl \
+    --route cascade
 
 # 3) 评估 + JSON 报告
 python -m backend.eval.metadata_baseline.evaluate \
     --golden backend/eval/metadata_baseline/golden.jsonl \
     --pred backend/eval/metadata_baseline/preds_unified.jsonl \
     --json report_unified.json
+
+# 4) 发布门禁（即使 --allow-dry-run 也不会绕过门禁）
+python -m backend.eval.metadata_baseline.validate_release \
+    --golden backend/eval/metadata_baseline/golden.jsonl \
+    --pred backend/eval/metadata_baseline/preds_unified.jsonl \
+    --allow-dry-run \
+    --report metadata_release_report.json
 ```
 
-运行环境：仓库根、项目 venv 解释器；规则链评估需 DB/Redis 可用
-（动态词库热加载），统一抽取需 LLM proxy 可用。
+运行环境：仓库根、项目 venv 解释器。级联评估必须能加载 Embedding；不可用时命令
+显式失败，不会伪造 R1 结果。发布门禁要求每个类型至少 50 条黄金样本，并要求
+预测文件携带 taxonomy/rules/model/prompt 四类版本指纹、队列增长和回滚耗时证据。
 
 ## 指标口径
 
@@ -55,4 +66,6 @@ python -m backend.eval.metadata_baseline.evaluate \
 ## 与影子模式的关系
 
 阶段 5.1 影子采集可直接落成本预测格式（`id/text/pred`），用
-`evaluate --pred shadow_dump.jsonl` 复用同一指标实现，避免两套口径。
+`evaluate --pred shadow_dump.jsonl` 复用同一指标实现，避免两套口径。现网一致率
+仅作诊断；准确率、coverage、abstain、ECE、路径级 precision 和 load/rollback
+证据才是放量依据。

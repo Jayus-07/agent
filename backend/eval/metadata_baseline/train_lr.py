@@ -44,6 +44,10 @@ def build_model_card(
     dry_run: bool,
     calibrated: bool,
     source_split: bool,
+    label_names: list[str] | None = None,
+    accept_thresholds: dict[str, float] | None = None,
+    per_label_precision: dict[str, float] | None = None,
+    calibration_metrics: dict | None = None,
 ) -> dict:
     """构造可被在线加载器严格校验的模型卡。"""
     from backend.rag.preprocessing.taxonomy_spec import (
@@ -66,9 +70,12 @@ def build_model_card(
         "calibration": "sigmoid" if calibrated else "none",
         "embedding_features_on": embedding_on,
         "feature_names": feature_names,
-        "accept_thresholds": {},
+        "accept_thresholds": accept_thresholds or {
+            label: 0.98 for label in (label_names or [])
+        },
         "min_margin": 0.05,
-        "per_label_precision": {},
+        "per_label_precision": per_label_precision or {},
+        "calibration_metrics": calibration_metrics or {},
         "coverage": 0.0,
         "cv_macro_f1": macro_f1,
         "cv_accuracy": accuracy,
@@ -149,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: 校准训练要求每个标签至少 2 条样本")
         return 1
     clf = _build_classifier(args.calibrate, max(n_splits, 2))
+    per_label_precision: dict[str, float] = {}
     if n_splits >= 2:
         cv_clf = _build_classifier(False, n_splits)
         pred = cross_val_predict(
@@ -157,6 +165,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         macro_f1 = round(f1_score(y, pred, average="macro"), 4)
         accuracy = round(f1_score(y, pred, average="micro"), 4)
+        from sklearn.metrics import precision_score
+
+        labels = sorted(set(y))
+        precision = precision_score(
+            y, pred, labels=labels, average=None, zero_division=0
+        )
+        per_label_precision = {
+            label: round(float(value), 4)
+            for label, value in zip(labels, precision)
+        }
     else:
         macro_f1 = accuracy = None
 
@@ -173,6 +191,12 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
         calibrated=args.calibrate,
         source_split=source_split,
+        label_names=sorted(set(y)),
+        per_label_precision=per_label_precision,
+        calibration_metrics={
+            "method": "sigmoid" if args.calibrate else "none",
+            "ece": None,
+        },
     )
 
     out = Path(args.out)
