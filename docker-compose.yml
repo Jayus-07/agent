@@ -76,10 +76,13 @@ services:
       # 阿里云 DashScope（embedding/rerank/OCR 共用，EMBEDDING_API_KEY 未设时回退此值）
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
-      # 元数据级联：Compose 默认只放 1% 稳定 key 灰度；设 false/0 可立即回退。
+      # 开发环境默认全量走级联；生产请通过环境变量显式设置 1/10/50/100。
       - METADATA_CASCADE_ENABLED=${METADATA_CASCADE_ENABLED:-true}
-      - METADATA_CASCADE_ROLLOUT_PERCENT=${METADATA_CASCADE_ROLLOUT_PERCENT:-1}
+      - METADATA_CASCADE_ROLLOUT_PERCENT=${METADATA_CASCADE_ROLLOUT_PERCENT:-100}
       - METADATA_CLASSIFIER_ENABLED=${METADATA_CLASSIFIER_ENABLED:-false}
+      # 开发阶段关闭影子，避免额外 Embedding 成本；生产观察期显式打开。
+      - METADATA_CASCADE_SHADOW_ENABLED=${METADATA_CASCADE_SHADOW_ENABLED:-false}
+      - METADATA_SHADOW_QUEUE_ENABLED=${METADATA_SHADOW_QUEUE_ENABLED:-false}
       # PostgreSQL — 记忆库（读写，服务账号）
       - PGHOST=postgres
       # 向量库后端开关（chroma|pgvector，透传 .env；默认 chroma 零变化）
@@ -304,8 +307,10 @@ services:
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
       # 与 app 保持同一元数据灰度指针；设 false/0 可立即回退主索引。
       - METADATA_CASCADE_ENABLED=${METADATA_CASCADE_ENABLED:-true}
-      - METADATA_CASCADE_ROLLOUT_PERCENT=${METADATA_CASCADE_ROLLOUT_PERCENT:-1}
+      - METADATA_CASCADE_ROLLOUT_PERCENT=${METADATA_CASCADE_ROLLOUT_PERCENT:-100}
       - METADATA_CLASSIFIER_ENABLED=${METADATA_CLASSIFIER_ENABLED:-false}
+      - METADATA_CASCADE_SHADOW_ENABLED=${METADATA_CASCADE_SHADOW_ENABLED:-false}
+      - METADATA_SHADOW_QUEUE_ENABLED=${METADATA_SHADOW_QUEUE_ENABLED:-false}
       - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
       - RERANKER_MODEL_PATH=${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
       # 索引执行体必须在本地：Celery worker 消费 rag_index 队列跑上传索引，

@@ -37,7 +37,7 @@ def test_fresh_database_init_includes_metadata_migrations():
     )
 
 
-def test_app_and_index_worker_default_to_one_percent_cascade_canary():
+def test_app_and_index_worker_default_to_full_dev_cascade_without_shadow():
     services = _compose()["services"]
 
     for service_name in ("app", "worker"):
@@ -46,10 +46,16 @@ def test_app_and_index_worker_default_to_one_percent_cascade_canary():
             "${METADATA_CASCADE_ENABLED:-true}"
         )
         assert environment["METADATA_CASCADE_ROLLOUT_PERCENT"] == (
-            "${METADATA_CASCADE_ROLLOUT_PERCENT:-1}"
+            "${METADATA_CASCADE_ROLLOUT_PERCENT:-100}"
         )
         assert environment["METADATA_CLASSIFIER_ENABLED"] == (
             "${METADATA_CLASSIFIER_ENABLED:-false}"
+        )
+        assert environment["METADATA_CASCADE_SHADOW_ENABLED"] == (
+            "${METADATA_CASCADE_SHADOW_ENABLED:-false}"
+        )
+        assert environment["METADATA_SHADOW_QUEUE_ENABLED"] == (
+            "${METADATA_SHADOW_QUEUE_ENABLED:-false}"
         )
 
 
