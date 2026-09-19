@@ -335,6 +335,73 @@ class TestResponseModels:
         assert d == {"items": [], "total": 0, "has_more": False}
 
 
+class TestReplayConversationEvents:
+
+    def test_replays_events_after_cursor_in_order(self, client, monkeypatch):
+        """断线补发透传游标，并保持 seq 升序与 event_id。"""
+        class _Result:
+            def scalar_one_or_none(self):
+                return "user-1"
+
+        class _DB:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def execute(self, _query):
+                return _Result()
+
+        calls = []
+
+        class _Repo:
+            def __init__(self, _db):
+                pass
+
+            async def replay(self, conversation_id, after_seq, limit):
+                calls.append((conversation_id, after_seq, limit))
+                return [
+                    {
+                        "seq": 4,
+                        "event_id": "event-4",
+                        "type": "message.created",
+                        "payload": {"message_id": "msg-4"},
+                        "ts": "2026-09-19T14:00:04+00:00",
+                    },
+                    {
+                        "seq": 5,
+                        "event_id": "event-5",
+                        "type": "conversation.claimed",
+                        "payload": {"conversation_id": "conv-1"},
+                        "ts": "2026-09-19T14:00:05+00:00",
+                    },
+                ]
+
+        monkeypatch.setattr(
+            "backend.memory.database.AsyncSessionLocal", lambda: _DB()
+        )
+        monkeypatch.setattr(
+            "backend.customer_service.repository.event_repo.EventRepository",
+            _Repo,
+        )
+
+        resp = client.get(
+            "/cs/conversations/conv-1/events?after_seq=3&limit=2",
+            headers={"X-Auth-Type": "api-key"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["conversation_id"] == "conv-1"
+        assert data["after_seq"] == 3
+        assert [event["seq"] for event in data["events"]] == [4, 5]
+        assert [event["event_id"] for event in data["events"]] == [
+            "event-4", "event-5",
+        ]
+        assert calls == [("conv-1", 3, 2)]
+
+
 class TestMyMessages:
     """GET /cs/conversations/my/{id}/messages — P3.4 用户侧端点拆分。
 

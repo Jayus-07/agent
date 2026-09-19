@@ -117,17 +117,85 @@ def _persist_event_record(event: dict) -> int:
             operation.close()
 
 
+def _is_xautoclaim_unavailable(exc: Exception) -> bool:
+    """只把明确的 XAUTOCLAIM 能力缺失视为可降级错误。"""
+    if isinstance(exc, (AttributeError, NotImplementedError, TypeError)):
+        return True
+    message = str(exc).lower()
+    return "unknown command" in message and "xautoclaim" in message
+
+
+def _claim_with_legacy_api(
+    redis,
+    *,
+    consumer: str,
+    limit: int,
+    min_idle_ms: int,
+) -> list[tuple[Any, Any]]:
+    """在 Redis 不支持 XAUTOCLAIM 时，用 XPENDING + XCLAIM 接管旧消息。"""
+    pending = redis.xpending_range(
+        OUTBOX_STREAM,
+        OUTBOX_GROUP,
+        min="-",
+        max="+",
+        count=limit,
+    )
+    message_ids: list[Any] = []
+    for item in pending or []:
+        if not isinstance(item, dict):
+            continue
+        message_id = item.get("message_id")
+        if message_id is None:
+            message_id = item.get(b"message_id")
+        idle_ms = item.get("time_since_delivered")
+        if idle_ms is None:
+            idle_ms = item.get(b"time_since_delivered")
+        if message_id is None or idle_ms is None:
+            continue
+        if int(idle_ms) >= min_idle_ms:
+            message_ids.append(message_id)
+        if len(message_ids) >= limit:
+            break
+
+    if not message_ids:
+        return []
+    return list(
+        redis.xclaim(
+            OUTBOX_STREAM,
+            OUTBOX_GROUP,
+            consumer,
+            min_idle_ms,
+            message_ids,
+        )
+        or []
+    )
+
+
 def _collect_messages(redis, *, consumer: str, limit: int, min_idle_ms: int):
     """先接管旧 pending，再读取新消息；同一轮按 message id 去重。"""
     messages: list[tuple[Any, Any]] = []
-    claimed = redis.xautoclaim(
-        OUTBOX_STREAM,
-        OUTBOX_GROUP,
-        consumer,
-        min_idle_ms,
-        "0-0",
-        count=limit,
-    )
+    try:
+        claimed = redis.xautoclaim(
+            OUTBOX_STREAM,
+            OUTBOX_GROUP,
+            consumer,
+            min_idle_ms,
+            "0-0",
+            count=limit,
+        )
+    except Exception as exc:
+        if not _is_xautoclaim_unavailable(exc):
+            raise
+        claimed = (
+            "0-0",
+            _claim_with_legacy_api(
+                redis,
+                consumer=consumer,
+                limit=limit,
+                min_idle_ms=min_idle_ms,
+            ),
+            [],
+        )
     if isinstance(claimed, tuple) and len(claimed) >= 2:
         messages.extend(claimed[1] or [])
 
