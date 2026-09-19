@@ -35,15 +35,23 @@ def execute_metadata_shadow_task_impl(shadow_job_id: str) -> dict:
     if status in {"succeeded", "skipped"}:
         return {"status": status, "shadow_job_id": shadow_job_id}
 
+    claimed_job = metadata_shadow._claim_shadow_job(shadow_job_id)
+    if claimed_job is None:
+        latest_job = metadata_shadow._load_shadow_job(shadow_job_id)
+        latest_status = str((latest_job or {}).get("status") or "")
+        if latest_status in {"succeeded", "skipped"}:
+            return {"status": latest_status, "shadow_job_id": shadow_job_id}
+        if latest_status == "running":
+            metadata_shadow_job_total.labels(result="skipped").inc()
+            return {
+                "status": "skipped",
+                "reason": "already_running",
+                "shadow_job_id": shadow_job_id,
+            }
+        raise RuntimeError(f"shadow job {shadow_job_id} was not claimable")
+
+    job = claimed_job
     started = time.monotonic()
-    attempts = int(job.get("attempts") or 0) + 1
-    metadata_shadow._update_shadow_job(
-        shadow_job_id,
-        status="running",
-        attempts=attempts,
-        started_at="now",
-        error="",
-    )
 
     try:
         payload = metadata_shadow._load_shadow_input(job.get("input_cache_key", ""))

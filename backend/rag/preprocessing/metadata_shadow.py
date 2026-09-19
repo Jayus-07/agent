@@ -202,6 +202,30 @@ def _load_shadow_job(job_id: str) -> dict[str, Any] | None:
             return dict(zip(columns, row))
 
 
+def _claim_shadow_job(job_id: str) -> dict[str, Any] | None:
+    """原子抢占待执行/失败 job，避免重复投递造成并行执行。"""
+    with _connect() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE ai.metadata_shadow_jobs
+                SET status = 'running',
+                    attempts = attempts + 1,
+                    started_at = now(),
+                    error = '',
+                    updated_at = now()
+                WHERE id = %s AND status IN ('pending', 'failed')
+                RETURNING *
+                """,
+                (job_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            columns = [desc[0] for desc in cursor.description]
+            return dict(zip(columns, row))
+
+
 def _update_shadow_job(job_id: str, **fields: Any) -> None:
     allowed = {
         "status", "attempts", "error", "started_at", "finished_at",

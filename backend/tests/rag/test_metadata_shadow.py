@@ -228,6 +228,15 @@ def test_shadow_worker_only_receives_job_id_and_never_calls_llm(monkeypatch):
         lambda job_id, **fields: updates.append(fields),
     )
     monkeypatch.setattr(
+        metadata_shadow,
+        "_claim_shadow_job",
+        lambda job_id: (updates.append({"status": "running"}) or {
+            **job,
+            "status": "running",
+            "attempts": 1,
+        }),
+    )
+    monkeypatch.setattr(
         "backend.rag.embedding_singleton.get_embedding",
         lambda: _StageEmbedding(),
     )
@@ -246,3 +255,32 @@ def test_shadow_worker_only_receives_job_id_and_never_calls_llm(monkeypatch):
     assert result["status"] == "succeeded"
     assert result["agreement"] is True
     assert [item["status"] for item in updates] == ["running", "succeeded"]
+
+
+def test_shadow_worker_skips_duplicate_when_job_is_already_running(monkeypatch):
+    """同一 job 被重复投递时，后到 worker 不得重复执行路由。"""
+    from backend.rag.preprocessing import metadata_shadow
+    from backend.tasks import metadata_shadow_tasks
+
+    job = {
+        "status": "running",
+        "attempts": 1,
+    }
+
+    monkeypatch.setattr(metadata_shadow, "_load_shadow_job", lambda job_id: job)
+    monkeypatch.setattr(metadata_shadow, "_claim_shadow_job", lambda job_id: None)
+
+    async def _must_not_run(*args, **kwargs):
+        raise AssertionError("重复影子任务不应再次执行 shadow_route")
+
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_router.shadow_route", _must_not_run
+    )
+
+    result = metadata_shadow_tasks.execute_metadata_shadow_task_impl("job-1")
+
+    assert result == {
+        "status": "skipped",
+        "reason": "already_running",
+        "shadow_job_id": "job-1",
+    }
