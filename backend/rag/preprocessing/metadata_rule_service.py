@@ -370,6 +370,48 @@ class MetadataRuleService:
 
 _service: MetadataRuleService | None = None
 _service_lock = threading.Lock()
+_route_pointer_lock = threading.Lock()
+_route_pointer: dict[str, Any] = {
+    "rules_version": "",
+    "model_version": "",
+    "history_preserved": True,
+}
+
+
+def rollback_metadata_route(rules_version: str, model_version: str) -> dict[str, Any]:
+    """切换规则/模型指针，不删除历史快照或模型文件。"""
+    rules_version = str(rules_version or "").strip()
+    model_version = str(model_version or "").strip()
+    if not rules_version or not model_version:
+        raise ValueError("rules_version and model_version are required")
+    if len(rules_version) > 256 or len(model_version) > 256:
+        raise ValueError("version pointer is too long")
+    from datetime import datetime, timezone
+
+    with _route_pointer_lock:
+        previous = dict(_route_pointer)
+        pointer = {
+            "rules_version": rules_version,
+            "model_version": model_version,
+            "previous": previous,
+            "changed_at": datetime.now(timezone.utc).isoformat(),
+            "history_preserved": True,
+        }
+        _route_pointer.clear()
+        _route_pointer.update(pointer)
+    try:
+        get_cache("rag_metadata_rollout", ttl=86400).set_json(
+            "metadata:route:pointer", pointer
+        )
+    except Exception as exc:
+        logger.warning(f"[MetaRule] 回滚指针共享缓存写入失败: {exc}")
+    return dict(pointer)
+
+
+def get_metadata_route_pointer() -> dict[str, Any]:
+    """读取当前进程最近一次回滚指针；失败时返回空指针。"""
+    with _route_pointer_lock:
+        return dict(_route_pointer)
 
 
 def get_metadata_rule_service() -> MetadataRuleService:
@@ -385,4 +427,6 @@ __all__ = [
     "RuleSnapshot",
     "MetadataRuleService",
     "get_metadata_rule_service",
+    "rollback_metadata_route",
+    "get_metadata_route_pointer",
 ]

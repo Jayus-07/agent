@@ -74,8 +74,14 @@ class MetadataStage:
             from backend.config.rag import (
                 ENABLE_LLM_METADATA_EXTRACT,
                 METADATA_CASCADE_ENABLED,
+                metadata_cascade_rollout_allowed,
             )
-            if METADATA_CASCADE_ENABLED:
+            rollout_key = str(base_meta.get("doc_id") or fpath or fname or "unknown")
+            rollout_allowed = (
+                METADATA_CASCADE_ENABLED
+                and metadata_cascade_rollout_allowed(rollout_key)
+            )
+            if rollout_allowed:
                 from backend.rag.preprocessing.metadata_decision import decide_metadata
 
                 envelope = await decide_metadata(
@@ -92,6 +98,9 @@ class MetadataStage:
                     parent_span_id=parent_span_id,
                     chunks_text=chunks_text,
                 )
+            if METADATA_CASCADE_ENABLED and not rollout_allowed:
+                from backend.observability.metrics import metadata_route_total
+                metadata_route_total.labels(level="rollout", outcome="skip").inc()
 
             # 级联关闭时保留旧的统一 LLM 开关；失败后进入兼容规则路径。
             # 该路径已移除低置信复验、关键词 LLM，避免重复的 metadata 决策调用。
@@ -465,9 +474,14 @@ class MetadataStage:
 
         from backend.rag.preprocessing import metadata_shadow
 
+        if not metadata_shadow.try_acquire_shadow_dispatch_slot():
+            return
+
         async def _dispatch() -> None:
             try:
-                await asyncio.to_thread(
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    metadata_shadow.get_shadow_executor(),
                     metadata_shadow.submit_shadow_job,
                     main_envelope,
                     full_text,
@@ -476,8 +490,14 @@ class MetadataStage:
                 )
             except Exception as exc:
                 logger.warning(f"[MetaShadow] 后台投递异常（不影响主索引）: {exc}")
+            finally:
+                metadata_shadow.release_shadow_dispatch_slot()
 
-        task = asyncio.create_task(_dispatch())
+        try:
+            task = asyncio.create_task(_dispatch())
+        except Exception:
+            metadata_shadow.release_shadow_dispatch_slot()
+            raise
         self._shadow_tasks.add(task)
         task.add_done_callback(self._shadow_tasks.discard)
 

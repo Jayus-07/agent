@@ -9,6 +9,7 @@ import hashlib
 import json
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from backend.infra.cache import get_cache
@@ -22,6 +23,50 @@ from backend.shared.logger import logger
 
 _shadow_cache = None
 _shadow_cache_lock = threading.Lock()
+_shadow_executor: ThreadPoolExecutor | None = None
+_shadow_executor_lock = threading.Lock()
+_shadow_dispatch_slots: threading.BoundedSemaphore | None = None
+
+
+def _configured_shadow_width() -> int:
+    from backend.config.rag import METADATA_SHADOW_CONCURRENCY
+
+    return max(int(METADATA_SHADOW_CONCURRENCY), 1)
+
+
+def get_shadow_executor() -> ThreadPoolExecutor:
+    """返回影子投递专用线程池，避免占用主路径默认线程池。"""
+    global _shadow_executor
+    if _shadow_executor is not None:
+        return _shadow_executor
+    with _shadow_executor_lock:
+        if _shadow_executor is None:
+            _shadow_executor = ThreadPoolExecutor(
+                max_workers=_configured_shadow_width(),
+                thread_name_prefix="metadata-shadow",
+            )
+    return _shadow_executor
+
+
+def try_acquire_shadow_dispatch_slot() -> bool:
+    """非阻塞获取影子提交槽位；满载时直接丢弃，不排队污染内存。"""
+    global _shadow_dispatch_slots
+    if _shadow_dispatch_slots is None:
+        with _shadow_executor_lock:
+            if _shadow_dispatch_slots is None:
+                _shadow_dispatch_slots = threading.BoundedSemaphore(
+                    _configured_shadow_width()
+                )
+    acquired = _shadow_dispatch_slots.acquire(blocking=False)
+    if not acquired:
+        metadata_shadow_dispatch_total.labels(result="backpressure").inc()
+    return acquired
+
+
+def release_shadow_dispatch_slot() -> None:
+    """释放影子提交槽位。"""
+    if _shadow_dispatch_slots is not None:
+        _shadow_dispatch_slots.release()
 
 
 def _sample_text(text: str, max_chars: int) -> str:
@@ -236,6 +281,11 @@ def submit_shadow_job(
     file_path: str,
 ) -> str | None:
     """写入影子任务并尝试投递；任何失败都返回 None。"""
+    from backend.config.rag import METADATA_SHADOW_QUEUE_ENABLED
+
+    if not METADATA_SHADOW_QUEUE_ENABLED:
+        metadata_shadow_dispatch_total.labels(result="disabled").inc()
+        return None
     try:
         job_id = _write_shadow_job(
             envelope=main_envelope,
@@ -267,6 +317,9 @@ def submit_shadow_job(
 
 __all__ = [
     "submit_shadow_job",
+    "get_shadow_executor",
+    "try_acquire_shadow_dispatch_slot",
+    "release_shadow_dispatch_slot",
     "_load_shadow_job",
     "_load_shadow_input",
     "_update_shadow_job",

@@ -164,6 +164,12 @@ metadata_resource_queued = Gauge(
     labelnames=("resource",),
 )
 
+metadata_rule_snapshot_total = Counter(
+    "metadata_rule_snapshot_total",
+    "元数据规则快照治理结果次数",
+    labelnames=("result",),
+)
+
 rag_consistency_issues_total = Counter(
     "rag_consistency_issues_total",
     "索引五路存储一致性检查检出的问题数（按存储与严重级别）",

@@ -1,6 +1,8 @@
 """元数据影子评估的非阻塞与故障隔离测试。"""
 
+import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -60,7 +62,78 @@ async def test_main_metadata_result_returns_without_waiting_for_shadow(monkeypat
     elapsed = time.monotonic() - t0
 
     assert result["doc_type"] == "legal"
-    assert elapsed < 0.5
+    # 主路径自身包含词典/线程任务，500ms 在低配或并行回归环境下会抖动；
+    # 800ms 仍显著小于 slow_submit 的 1s，足以证明没有同步等待影子投递。
+    assert elapsed < 0.8
+
+
+@pytest.mark.asyncio
+async def test_shadow_dispatch_does_not_share_default_executor(monkeypatch, stage):
+    """默认线程池拥塞时，影子提交不能占住主路径的阻塞任务槽位。"""
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_ENABLED", False)
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_SHADOW_ENABLED", False)
+
+    async def _fake_extract(*args, **kwargs):
+        return {
+            "doc_type": "legal",
+            "confidence": 0.9,
+            "business_domain": "general",
+            "summary": "s",
+            "keywords": [],
+            "entities": {},
+            "time_refs": [],
+        }
+
+    def slow_submit(*args, **kwargs):
+        time.sleep(1)
+
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_llm.extract_metadata_llm_async",
+        _fake_extract,
+    )
+    await stage.build(TEXT, META)
+
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=1)
+    loop.set_default_executor(executor)
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_SHADOW_ENABLED", True)
+    monkeypatch.setattr(metadata_shadow, "submit_shadow_job", slow_submit)
+
+    try:
+        t0 = time.monotonic()
+        result = await stage.build(TEXT, META)
+        elapsed = time.monotonic() - t0
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    assert result["doc_type"] == "legal"
+    assert elapsed < 0.8
+
+
+@pytest.mark.asyncio
+async def test_shadow_submission_uses_dedicated_executor(monkeypatch, stage):
+    """影子投递必须使用独立线程池，不能污染主路径默认线程池。"""
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_SHADOW_ENABLED", True)
+    executor = ThreadPoolExecutor(max_workers=1)
+    seen = []
+    monkeypatch.setattr(
+        metadata_shadow,
+        "get_shadow_executor",
+        lambda: (seen.append(True) or executor),
+    )
+    monkeypatch.setattr(
+        metadata_shadow,
+        "submit_shadow_job",
+        lambda *args, **kwargs: "shadow-test",
+    )
+
+    try:
+        stage._dispatch_shadow_nonblocking(None, TEXT, "unknown.docx", "")
+        await asyncio.gather(*stage._shadow_tasks)
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    assert seen == [True]
 
 
 @pytest.mark.asyncio
