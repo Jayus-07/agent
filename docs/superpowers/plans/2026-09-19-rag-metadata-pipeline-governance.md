@@ -953,7 +953,7 @@ The command must fail closed when a metric is missing, a label has fewer than 50
 
 Run: `D:/Python/python.exe -m pytest backend/tests/eval/test_metadata_release_gates.py backend/tests/eval/test_metadata_baseline_eval.py -q --no-cov`
 
-Run: `D:/Python/python.exe -m backend.eval.metadata_baseline.validate_release --golden backend/eval/metadata_baseline/golden_sample.jsonl --pred backend/eval/metadata_baseline/preds_unified_seed.jsonl --allow-dry-run`
+Run: `D:/Python/python.exe -m backend.eval.metadata_baseline.validate_release --golden backend/eval/metadata_baseline/golden_seed.jsonl --pred backend/eval/metadata_baseline/preds_unified_seed.jsonl --allow-dry-run`
 
 Expected: unit tests PASS; the dry-run command explicitly reports that the sample/seed artifact is not a production promotion and exits nonzero if formal gate fields are absent.
 
