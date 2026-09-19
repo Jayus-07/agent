@@ -28,6 +28,14 @@ def build_siliconflow(model_name: str) -> object:
             "siliconflow provider 需要 langchain_openai 包，请 pip install langchain-openai"
         ) from e
 
+    # Qwen3 系是思考混合模型：硅基流动默认开思考（实测问答 47s/297 字思考），
+    # 本平台的结构化任务（路由/抽取/计划/报告）不需要推理链——默认关思考
+    # （对齐 qwen_tp 的 QWEN_ENABLE_THINKING 模式），需要思考链时显式开
+    import os
+    enable_thinking = os.getenv(
+        "SILICONFLOW_ENABLE_THINKING", "false"
+    ).strip().lower() in ("1", "true", "yes")
+
     return ChatOpenAI(
         model=model_name,
         temperature=LLM_TEMPERATURE,
@@ -35,6 +43,7 @@ def build_siliconflow(model_name: str) -> object:
         request_timeout=LLM_REQUEST_TIMEOUT,
         api_key=SILICONFLOW_API_KEY,
         base_url=SILICONFLOW_API_BASE,
+        extra_body={"enable_thinking": enable_thinking},
         # SiliconFlow 兼容 OpenAI 协议；不支持 stream_options 时由调用方降级
         stream_usage=LLM_STREAM_USAGE,
     )

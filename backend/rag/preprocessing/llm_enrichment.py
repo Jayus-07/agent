@@ -33,9 +33,11 @@ def invoke_metadata_llm(prompt: str, llm_obj=None):
 
     try:
         # provider 判断基于 llm_obj 自身（proxy 的 __getattr__ 委托到 active llm；
-        # 测试 FakeLLM 无 model 属性 → "" → 非 qwen → 走普通 invoke 签名）
+        # 测试 FakeLLM 无 model 属性 → "" → 非 qwen → 走普通 invoke 签名）。
+        # qwen（DashScope）与 siliconflow 均支持顶层 enable_thinking——实测
+        # 硅基流动 Qwen3-8B 默认思考 14.3s/727 字，关闭后 0.8s（2026-09-19）。
         model_name = str(getattr(llm_obj, "model", "") or "")
-        if _get_provider_for(model_name) == "qwen":
+        if _get_provider_for(model_name) in ("qwen", "siliconflow"):
             return llm_obj.invoke(prompt, extra_body={"enable_thinking": False})
     except Exception as e:  # 解析失败不影响主流程，按普通调用
         logger.debug(f"[MetadataLLM] 模型解析失败，走普通调用: {e}")

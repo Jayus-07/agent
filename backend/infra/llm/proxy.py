@@ -227,6 +227,9 @@ def _build_llm_for(model_name: str) -> BaseChatModel:
         # 均已注册 qwen_tp，proxy 构建口径 2026-09-17 对齐）
         from backend.infra.llm.providers.qwen_tp import build_qwen_tp
         return build_qwen_tp(model_name)
+    if provider == "siliconflow":
+        from backend.infra.llm.providers.siliconflow import build_siliconflow
+        return build_siliconflow(model_name)
     # ollama / 兜底 — 模型选择完全由 env 配置驱动（LLM_MODEL / 请求覆盖），
     # 构建层不再按 ENV_MODE 拒建（2026-09-17 拍板：不做 cloud/local 区分）。
     # 用户配了本地模型但 Ollama 未运行时，invoke 阶段自然报连接错误。
