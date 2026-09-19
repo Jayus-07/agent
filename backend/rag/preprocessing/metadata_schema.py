@@ -10,23 +10,22 @@ DOC_TYPES 与 DOC_TYPE_RULES（schema 演进流程，规划 §2.2 N6），禁止
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-# ── taxonomy 枚举（单一映射事实源，与 DOC_TYPE_RULES 的 keys 测试锁定）──
-# general 是兜底类，不属于 DOC_TYPE_RULES（规则链对 general 零正则）
-DOC_TYPES: tuple[str, ...] = (
-    "listing", "sop", "ad_policy", "faq", "product_spec", "training",
-    "policy", "compliance", "legal", "security", "financial",
-    "customer_data", "contract_template", "general",
+from backend.rag.preprocessing.taxonomy_spec import (
+    get_taxonomy,
+    normalize_doc_type,
+    normalize_domain,
 )
 
+# ── taxonomy 枚举（单一映射事实源，与 DOC_TYPE_RULES 的 keys 测试锁定）──
+# general 是兜底类，不属于 DOC_TYPE_RULES（规则链对 general 零正则）
+DOC_TYPES: tuple[str, ...] = tuple(get_taxonomy().doc_types)
+
 # business_domain 枚举（与 DOMAIN_RULES keys 一致性测试锁定；general 为兜底）
-DOMAINS: tuple[str, ...] = (
-    "product", "order", "inventory", "logistics", "advertising",
-    "customer", "supplier", "analytics", "data", "financial", "general",
-)
+DOMAINS: tuple[str, ...] = tuple(get_taxonomy().domains)
 
 # 上下限口径（对齐 metadata_llm.parse_extract_response 既有行为）
 KEYWORDS_MAX = 10
@@ -76,7 +75,7 @@ class UnifiedMetadata(BaseModel):
         s = str(v or "").strip().lower()
         if s not in DOC_TYPES:
             raise ValueError(f"doc_type out of enum: {s!r}")
-        return s
+        return normalize_doc_type(s)
 
     @field_validator("confidence", mode="before")
     @classmethod
@@ -90,8 +89,7 @@ class UnifiedMetadata(BaseModel):
     @field_validator("business_domain", mode="before")
     @classmethod
     def _norm_domain(cls, v: Any) -> str:
-        s = str(v or "").strip().lower()
-        return s or "general"
+        return normalize_domain(v)
 
     @field_validator("keywords", mode="before")
     @classmethod
@@ -139,3 +137,100 @@ class UnifiedMetadata(BaseModel):
             "time_refs": list(self.time_refs),
             "risk": self.risk.model_dump(),
         }
+
+
+class DecisionCandidate(BaseModel):
+    """路由器向下游解释候选类型时使用的统一结构。"""
+
+    doc_type: str
+    confidence: float = 0.0
+    source: str = ""
+
+    @field_validator("doc_type", mode="before")
+    @classmethod
+    def _norm_doc_type(cls, v: Any) -> str:
+        raw = str(v or "").strip().lower()
+        normalized = normalize_doc_type(raw)
+        if raw and raw != "general" and normalized == "general":
+            raise ValueError(f"doc_type out of enum: {raw!r}")
+        return normalized
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _norm_confidence(cls, v: Any) -> float:
+        try:
+            return min(max(float(v), 0.0), 1.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+
+class EvidenceItem(BaseModel):
+    """支持某个决策的可审计证据。"""
+
+    kind: str
+    rule_id: str = ""
+    value: str = ""
+    weight: float = 0.0
+    strength: Literal["strong", "medium", "weak"] = "weak"
+
+
+class DecisionEnvelope(BaseModel):
+    """R0/R1/LLM/fallback/human 共用的元数据决策契约。"""
+
+    decision: Literal["accepted", "abstain", "fallback", "review"]
+    doc_type: str
+    business_domain: str = "general"
+    confidence: float = 0.0
+    candidates: list[DecisionCandidate] = Field(default_factory=list)
+    source: Literal["r0", "r1", "llm", "fallback", "human"]
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    conflicts: list[str] = Field(default_factory=list)
+    taxonomy_version: str = ""
+    rules_version: str = ""
+    model_version: str = ""
+    prompt_version: str = ""
+    fallback_reason: str = ""
+    latency_ms: float = 0.0
+    llm_call_count: int = 0
+
+    @field_validator("doc_type", mode="before")
+    @classmethod
+    def _strict_doc_type(cls, v: Any) -> str:
+        raw = str(v or "").strip().lower()
+        normalized = normalize_doc_type(raw)
+        if raw and raw != "general" and normalized == "general":
+            raise ValueError(f"doc_type out of enum: {raw!r}")
+        return normalized
+
+    @field_validator("business_domain", mode="before")
+    @classmethod
+    def _strict_domain(cls, v: Any) -> str:
+        raw = str(v or "").strip().lower()
+        normalized = normalize_domain(raw)
+        if raw and raw != "general" and normalized == "general":
+            raise ValueError(f"business_domain out of enum: {raw!r}")
+        return normalized
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _norm_confidence(cls, v: Any) -> float:
+        try:
+            return round(min(max(float(v), 0.0), 1.0), 4)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @field_validator("latency_ms", mode="before")
+    @classmethod
+    def _norm_latency(cls, v: Any) -> float:
+        try:
+            return max(float(v), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @field_validator("llm_call_count", mode="before")
+    @classmethod
+    def _norm_llm_calls(cls, v: Any) -> int:
+        try:
+            return max(int(v), 0)
+        except (TypeError, ValueError):
+            return 0

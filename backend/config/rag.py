@@ -411,12 +411,25 @@ import hashlib as _hashlib
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../agent/backend/
 _METADATA_RULE_FILES = [
     os.path.join(_BACKEND_DIR, "config", "rag.py"),
+    os.path.join(_BACKEND_DIR, "rag", "preprocessing", "metadata_taxonomy.yaml"),
+    os.path.join(_BACKEND_DIR, "rag", "preprocessing", "taxonomy_spec.py"),
+    os.path.join(_BACKEND_DIR, "rag", "preprocessing", "metadata_schema.py"),
+    os.path.join(_BACKEND_DIR, "rag", "preprocessing", "metadata_llm.py"),
     os.path.join(_BACKEND_DIR, "rag", "preprocessing", "keyword.py"),
     os.path.join(_BACKEND_DIR, "rag", "preprocessing", "metadata.py"),
+    os.path.join(_BACKEND_DIR, "rag", "preprocessing", "metadata_router.py"),
     os.path.join(_BACKEND_DIR, "rag", "preprocessing", "domain_data.py"),
     os.path.join(_BACKEND_DIR, "rag", "preprocessing", "financial_normalizer.py"),
     os.path.join(_BACKEND_DIR, "rag", "indexing", "indexer.py"),
+    os.path.join(
+        _BACKEND_DIR, "prompts", "defaults",
+        "rag_preprocessing_metadata_extract.yaml",
+    ),
 ]
+
+_MODEL_CARD_PATH = os.getenv("METADATA_CLASSIFIER_MODEL_CARD_PATH", "").strip()
+if _MODEL_CARD_PATH:
+    _METADATA_RULE_FILES.append(_MODEL_CARD_PATH)
 
 def compute_metadata_fingerprint() -> str:
     """SHA256 前 12 位：hash 4 个规则源文件，改任何一行自动变化。"""

@@ -135,10 +135,12 @@ async def extract_metadata_llm_async(
         return None
 
     from backend.config.rag import METADATA_LLM_EXTRACT_MAX_CHARS
-    from backend.rag.preprocessing.domain_data import DOC_TYPE_RULES
+    from backend.rag.preprocessing.taxonomy_spec import get_taxonomy
 
-    valid_types = set(DOC_TYPE_RULES.keys()) | {"general"}
-    doc_types_str = ", ".join(sorted(valid_types))
+    taxonomy = get_taxonomy()
+    valid_types = set(taxonomy.doc_types)
+    doc_types_str = ", ".join(taxonomy.doc_types)
+    domains_str = ", ".join(taxonomy.domains)
 
     # 采样：头部 + 中部 + 尾部，兼顾标题区/正文/结尾签名区
     max_chars = METADATA_LLM_EXTRACT_MAX_CHARS
@@ -153,12 +155,15 @@ async def extract_metadata_llm_async(
 
     try:
         from backend.prompts.service import prompt_service
-        prompt = prompt_service.render_sync(
+        prompt_result = prompt_service.render_sync(
             "rag.preprocessing.metadata_extract",
             doc_types=doc_types_str,
+            domains=domains_str,
             filename=filename or "(unknown)",
             text=sample,
-        ).text
+        )
+        prompt = prompt_result.text
+        prompt_version = getattr(prompt_result, "version", None)
     except Exception as e:
         logger.warning(f"[MetaLLM] 渲染抽取提示词失败（降级规则路径）: {e}")
         return None
@@ -189,6 +194,9 @@ async def extract_metadata_llm_async(
 
         content = response.content if hasattr(response, "content") else str(response)
         result = parse_extract_response(content, valid_types)
+        result["prompt_version"] = (
+            f"v{prompt_version}" if isinstance(prompt_version, int) else "default"
+        )
         result["llm_tokens"] = dict(
             getattr(response, "usage_metadata", {}) or {}
         ) or {}
