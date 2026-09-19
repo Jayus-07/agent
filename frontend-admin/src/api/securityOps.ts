@@ -62,6 +62,22 @@ export interface SessionList {
   sessions: SessionRow[];
 }
 
+/**
+ * PUT /sys/config/{key} 的响应 —— **裸 dict，无 Result 壳**。
+ *
+ * 这是本文件里唯一一个不带壳的端点（同文件其余走 `/sys/security/*` 的壳）。
+ * 顶层字段由后端 `sys_config_admin.py:51` 决定，并被
+ * `backend/tests/api/test_sys_config_admin.py:177` 锁定为顶层 `old`/`new`，
+ * 故前端不得按 `Result<T>.data` 取（见 `updateGuardMode` 注释）。
+ */
+export interface GuardModeUpdateResult {
+  key: string;
+  /** 此前无 DB 覆盖时为 null（表示生效的是 env 值） */
+  old: string | null;
+  new: string;
+  changedBy: string;
+}
+
 // ── 后端 Result 壳 ────────────────────────────────────
 
 interface Result<T> {
@@ -93,14 +109,25 @@ export async function forceLogout(sessionId: string): Promise<{ revoked: boolean
   return res.data;
 }
 
-/** PUT /sys/config/{key} — 覆盖写入灰度开关（免重启，本实例即时生效） */
+/**
+ * PUT /sys/config/{key} — 覆盖写入灰度开关（免重启，本实例即时生效）
+ *
+ * ⚠️ 响应是**裸 dict**，**没有 Result 壳** —— 与同前缀 `/sys/security/*` 不同。
+ * `request<T>` 返回的就是响应体本身（`client.ts` 不解包），所以这里**直接 return**，
+ * 绝不能写 `res.data`：那恒为 `undefined`，调用方 `const { old } = ...` 解构即抛
+ * `TypeError: Cannot destructure property 'old' of 'undefined'`。
+ *
+ * 历史 bug（2026-09-19 修）：此前按 `Result<...>` 取 `.data`，导致 admin 切换守卫开关时
+ * 界面显示「切换失败」，**但后端已写库并落审计**（且因抛出而跳过列表刷新）——典型的假失败。
+ * 两套响应形态并存是根因，故新端点一律裸 dict（决策见
+ * docs/model-config-admin-ui-design.md §1.1 / §5.7）。
+ */
 export async function updateGuardMode(
   configKey: string,
   value: string,
-): Promise<{ key: string; old: string | null; new: string }> {
-  const res = await request<Result<{ key: string; old: string | null; new: string }>>(
+): Promise<GuardModeUpdateResult> {
+  return await request<GuardModeUpdateResult>(
     `/api/sys/config/${configKey}`,
     { method: "PUT", body: JSON.stringify({ value }) },
   );
-  return res.data;
 }
