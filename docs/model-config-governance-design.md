@@ -275,13 +275,25 @@ pending → reviewed_1 → scheduled → canary（需满 24h）→ active
 
 ## 7. 管理端
 
+> **实现级展开**：`docs/model-config-admin-ui-design.md`（2026-09-19，组件树 / 字段级契约 /
+> 态设计 / 后端缺口清单）。本节只定「做什么」，实施细节看那份。
+
 ### 7.1 页面位置与权限
 
 - 路由：`/settings/models`，页面名「模型与供应商」
 - 导航：挂「质量与配置」组（`components/layout/navConfig.tsx:74-81`），
   与「Prompt 管理 / Agent 节点 / 能力与技能」同级
-- 权限：`minRole: 'admin'` —— 因含密钥操作，不能给 editor
+- 权限：**页级 `minRole: 'editor'` + tab 级 `admin`**（2026-09-19 修订）
 - 现有页 `/cost-governance/prices` **重定向**到新页的「价格」tab，避免两个入口
+
+> ⚠️ **修订说明（2026-09-19）**：本节原写「`minRole: 'admin'`」，与 §7.2 的
+> 「tab⑤ 体检与漂移 → editor 可见」**自相矛盾** —— 页级 admin 门禁下 editor 根本
+> 进不了页面，§7.2 那条要求无法成立。
+> 改为「页级 `editor` + tab 级 `admin`」，与既有先例
+> `frontend-admin/src/app/cost-governance/prices/page.tsx:29,105` 的
+> `RoleGate minRole="editor"` + `canAdmin = atLeast('admin')` + 顶部只读提示条**逐字一致**。
+> 配套：tab② 供应商与密钥**对 editor 整 tab 隐藏**（非只读，B.6「查看供应商 = admin」），
+> tab④ 的密钥类条目脱敏。完整矩阵见 UI 设计文档 §3.3。
 
 ### 7.2 五个 tab
 
@@ -305,14 +317,26 @@ PUT    /sys/model-roles/{role}           绑定模型（case-sensitive 校验 + 
 GET    /sys/providers                    供应商清单 + 能力矩阵（只读）+ 配置状态
 PUT    /sys/providers/{provider}/credential    写入/轮换密钥（加密落库，审计只落指纹）
 POST   /sys/providers/{provider}/verify        连通性自检（用解密后的 Key 发一次最小请求）
+POST   /sys/providers/verify-draft             草稿态自检（无 id，用于「保存前先测」）
 
 GET    /sys/config/history               合并变更历史（支持 ?object= 过滤）
 POST   /sys/config/history/{id}/rollback 一键回滚
 GET    /sys/config/drift                 漂移与体检报告
 ```
 
-前端 API 层复用 `frontend-admin/src/api/securityOps.ts` 里 `updateGuardMode` →
-`/api/sys/config/{key}` 的写法（网关剥 `/api` 前缀）。
+**响应形态：一律裸 dict，不带 Result 壳** —— 与同前缀 `/sys/config` 一致。
+理由链与决策记录见 `docs/model-config-admin-ui-design.md` §1.1.1。一句话版本：
+`client.ts` 的 `request<T>` **不解包**，用壳等于每个调用点手工 `.data`（靠人记住），
+且壳里的 `code` 与 HTTP 层的 `ApiError` 构成**两套冗余错误通道**。
+
+> ⚠️ **不要把 `securityOps.updateGuardMode` 当模板。** 本节原写「复用它的写法」，
+> **方向恰好相反** —— 它在 2026-09-19 之前是错的：对裸 dict 响应写了 `return res.data`，
+> 造成「界面报切换失败、后端其实已写库」的假失败（`docs/model-config-admin-ui-design.md` §1.1）。
+> 可复用的是它的**路径前缀**（`/api/sys/...`，网关剥 `/api`）；
+> **响应解包方式不可复用**。正确模板是修复后的 `securityOps.ts` 与其共置契约测试
+> `api/securityOps.test.ts`（用真实响应形状驱动，改回 `.data` 会失败）。
+
+前端 API 层路径：`/api/sys/...`（网关剥 `/api` 前缀）。
 
 ### 7.4 交互壳复用
 
