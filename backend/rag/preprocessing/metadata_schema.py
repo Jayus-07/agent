@@ -192,6 +192,7 @@ class DecisionEnvelope(BaseModel):
     fallback_reason: str = ""
     latency_ms: float = 0.0
     llm_call_count: int = 0
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("doc_type", mode="before")
     @classmethod

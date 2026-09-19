@@ -74,7 +74,7 @@ async def test_build_routes_via_cascade_when_enabled(_stage, monkeypatch):
                         _must_not_call)
     out = await _stage.build(_TEXT, _META)
     assert out["doc_type"] == "legal"
-    assert out["llm_strategy"] == "cascade_L0"
+    assert out["llm_strategy"] == "r0"
     assert called["extract"] == 0, "L0 命中时不得触发 LLM 抽取"
 
 
@@ -183,3 +183,36 @@ async def test_build_shadow_failure_never_breaks_main_path(_stage, monkeypatch):
     monkeypatch.setattr("backend.rag.preprocessing.metadata_router.shadow_route", _boom)
     out = await _stage.build(_TEXT, _META)
     assert out["doc_type"] == "legal", "影子故障不得影响主路径"
+
+
+@pytest.mark.asyncio
+async def test_decision_fallback_has_complete_contract_and_no_hidden_llm(_stage, monkeypatch):
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_ENABLED", True)
+
+    async def _boom(*args, **kwargs):
+        raise AssertionError("fallback must not invoke metadata LLM")
+
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_decision.extract_metadata_llm_async",
+        _boom,
+    )
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.keyword.extract_doc_keywords_llm",
+        _boom,
+    )
+
+    out = await _stage.build(
+        "普通会议纪要内容，没有稳定类型证据。",
+        {"source_file": "unknown.docx", "file_path": "", "doc_id": "d2"},
+    )
+    required = {
+        "doc_type", "confidence", "business_domain", "summary", "doc_keywords",
+        "keywords_rule", "keywords_llm", "entities", "time_refs", "risk",
+        "llm_used", "llm_strategy", "llm_decision", "metadata_fingerprint",
+        "sections", "quality_score", "minhash_sig", "near_dup_id", "department",
+        "questions_by_chunk", "decision_envelope", "fallback_reason",
+    }
+    assert required <= set(out)
+    assert out["llm_strategy"] == "fallback"
+    assert out["llm_used"] is False
+    assert out["fallback_reason"] == "llm_unavailable"

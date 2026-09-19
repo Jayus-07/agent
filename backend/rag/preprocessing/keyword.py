@@ -437,7 +437,7 @@ def _compute_llm_score(doc_type: str, confidence: float, complexity: dict) -> tu
 
 def extract_doc_keywords_typed(text: str, doc_type: str = "general",
                                 confidence: float = 0.5, complexity: dict | None = None,
-                                top_k: int = 10) -> KeywordResult:
+                                top_k: int = 10, *, allow_llm: bool = True) -> KeywordResult:
     """关键词提取 + LLM Decision Router 评分决策。"""
     if complexity is None:
         complexity = {}
@@ -445,6 +445,15 @@ def extract_doc_keywords_typed(text: str, doc_type: str = "general",
 
     rule_words = extract_rule_keywords(text, top_k=top_k, doc_type=doc_type)
     result.rule_keywords = [{"word": w, "source": "rule"} for w in rule_words]
+
+    if not allow_llm:
+        result.llm_strategy = "deterministic"
+        result.llm_decision = {
+            "llm_used": False,
+            "llm_score": 0,
+            "llm_reason": "explicitly_disabled",
+        }
+        return result
 
     llm_score, reasons = _compute_llm_score(doc_type, confidence, complexity)
     # 强制类型始终调 LLM

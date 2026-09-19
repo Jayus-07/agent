@@ -67,33 +67,39 @@ class MetadataStage:
             cls_detail: dict | None = None
             domain_detail: dict | None = None
 
-            # ── 阶段2：统一 LLM 元数据抽取（主流化）──
-            # ENABLE_LLM_METADATA_EXTRACT=true 时优先单次 LLM JSON 抽取
-            # （doc_type/domain/summary/keywords/entities/time_refs 一次抽齐），
-            # 任何失败自动降级到下方原规则路径。MinHash/质量门禁/复杂度等
-            # 纯规则产物两条路径都照常计算。
-            # METADATA_CASCADE_ENABLED=true（规划阶段 2.2）时先走级联路由：
-            # L0 文件名/路径 → L1 嵌入检索 → L2 词表复核，命中零 LLM 成本；
-            # 全部未命中才落 L3（即原单次 LLM 抽取）。
-            from backend.config.rag import ENABLE_LLM_METADATA_EXTRACT
+            # ── 统一决策契约路径 ─────────────────────────────────────
+            # 级联打开后，R0/R1/R2/fallback 统一由 DecisionEnvelope 决策，
+            # 不再让 MetadataStage 自己拼接多个隐式分支。
+            from backend.config.rag import (
+                ENABLE_LLM_METADATA_EXTRACT,
+                METADATA_CASCADE_ENABLED,
+            )
+            if METADATA_CASCADE_ENABLED:
+                from backend.rag.preprocessing.metadata_decision import decide_metadata
+
+                envelope = await decide_metadata(
+                    full_text,
+                    fname,
+                    fpath,
+                    embedding=self._embedding,
+                    parent_span_id=parent_span_id,
+                )
+                return await self.finalize_decision(
+                    full_text,
+                    base_meta,
+                    envelope,
+                    parent_span_id=parent_span_id,
+                    chunks_text=chunks_text,
+                )
+
+            # 级联关闭时保留旧的统一 LLM 开关；失败后进入兼容规则路径。
+            # 该路径已移除低置信复验、关键词 LLM，避免重复的 metadata 决策调用。
             unified: dict | None = None
             if ENABLE_LLM_METADATA_EXTRACT:
                 try:
-                    from backend.config.rag import METADATA_CASCADE_ENABLED
-                    if METADATA_CASCADE_ENABLED:
-                        from backend.rag.preprocessing.metadata_router import cascade_route
-                        decision = await cascade_route(
-                            full_text, fname, fpath, embedding=self._embedding,
-                            parent_span_id=parent_span_id)
-                        if decision.level in ("L0", "L1", "L2"):
-                            return await self.finalize_cascade(
-                                full_text, base_meta, decision,
-                                parent_span_id=parent_span_id, chunks_text=chunks_text)
-                        unified = decision.llm_result
-                    else:
-                        from backend.rag.preprocessing.metadata_llm import extract_metadata_llm_async
-                        unified = await extract_metadata_llm_async(
-                            full_text, fname, parent_span_id=parent_span_id)
+                    from backend.rag.preprocessing.metadata_llm import extract_metadata_llm_async
+                    unified = await extract_metadata_llm_async(
+                        full_text, fname, parent_span_id=parent_span_id)
                 except Exception as e:
                     logger.warning(f"[MetaLLM] 统一抽取异常（降级规则路径）: {e}")
                     unified = None
@@ -103,9 +109,8 @@ class MetadataStage:
                     return await self.finalize_unified(
                         full_text, base_meta, unified,
                         parent_span_id=parent_span_id, chunks_text=chunks_text)
-                # L3 失败/未命中 → 规则链 fallback（规划阶段 4.2），打点观测触发率
                 from backend.observability.metrics import metadata_route_total
-                metadata_route_total.labels(level="rule_fallback", outcome="hit").inc()
+                metadata_route_total.labels(level="legacy_rule", outcome="fallback").inc()
 
             # 质量门禁（P1）— span 收口到 stage_span（异常自动关闭）
             from backend.rag.preprocessing.metadata import assess_quality
@@ -193,34 +198,9 @@ class MetadataStage:
             if parent_span_id:
                 trace_collector.end_span(domain_span, metrics={"domain": domain},
                     output=domain_detail or {})
-            # 低置信 LLM 复验（前置：必须在关键词/复杂度之前确定最终 doc_type）
-            # 1.3c 计量约束：本处仅允许本地模型（ChatOllama，无 usage/无成本，
-            # 无需计量）；若未来切到 cloud 模型，必须改走 invoke_metadata_llm
-            # （proxy 层自动落 llm_usage_store），禁止直连云 SDK——否则漏记。
-            if confidence < _idx_rules.llm_reverify_conf_below and doc_type == "general":
-                try:
-                    from backend.config.llm import OLLAMA_ENABLED
-                    from backend.config.rag import DOC_LLM_MODEL
-                    from backend.prompts.service import prompt_service
-                    doc_type_prompt = prompt_service.render_sync(
-                        "rag.indexing.doc_type", full_text=full_text[:1500],
-                    ).text
-                    if DOC_LLM_MODEL and OLLAMA_ENABLED:
-                        from langchain_ollama import ChatOllama
-                        llm_l = ChatOllama(model=DOC_LLM_MODEL, temperature=0.0, num_ctx=2048, request_timeout=20)
-                        llm_type = llm_l.invoke(doc_type_prompt).content.strip()
-                    else:
-                        from backend.rag.preprocessing.llm_enrichment import invoke_metadata_llm
-                        llm_type = invoke_metadata_llm(doc_type_prompt).content.strip()
-                    valid_types = {"policy", "sop", "ad_policy", "compliance", "legal",
-                                   "contract_template", "security", "financial", "customer_data",
-                                   "product_spec", "listing", "faq", "training", "general"}
-                    if llm_type and llm_type.lower() in valid_types:
-                        doc_type = llm_type.lower()
-                        confidence = _idx_rules.llm_reverify_confidence
-                        logger.info(f"[Classify] LLM 复验: {doc_type}")
-                except Exception as e:
-                    logger.warning(f"[Classify] LLM 复验失败: {e}")
+            # 低置信样本不再在规则链内暗中追加 LLM 复验。
+            # 需要升级时必须回到上方的统一 DecisionEnvelope 路径，保证
+            # 每个文档决策最多一次 metadata LLM 调用且可被计量。
 
             # 规则关键词 + 复杂度（在最终 doc_type 确定之后）
             # extract_doc_keywords_typed（含 LLM 调用）与 extract_entities
@@ -231,8 +211,26 @@ class MetadataStage:
             complexity = analyze_complexity(full_text, len(rule_kws_preview), confidence)
             person_names = extract_person_names(full_text)
         except Exception as e:
-            logger.warning(f"[Metadata] 6步预处理失败,fallback general: {e}")
-            return {"doc_type": "general"}
+            logger.warning(f"[Metadata] 6步预处理失败，进入完整确定性兜底: {e}")
+            from backend.rag.preprocessing.metadata_decision import (
+                build_deterministic_fallback,
+            )
+            from backend.rag.preprocessing.metadata_evidence import extract_evidence
+
+            fallback_envelope = build_deterministic_fallback(
+                full_text,
+                fname,
+                fpath,
+                extract_evidence(full_text, fname, fpath),
+                reason="legacy_rule_error",
+            )
+            return await self.finalize_decision(
+                full_text,
+                base_meta,
+                fallback_envelope,
+                parent_span_id=parent_span_id,
+                chunks_text=chunks_text,
+            )
 
         # ⑧ 文档摘要 + 关键词 + 实体 — 三路并发（关键词 LLM 调用放线程池，
         # 与摘要 LLM 调用/实体抽取真正并行；总耗时 = max 而非 sum）
@@ -260,13 +258,17 @@ class MetadataStage:
 
         async def task_summary():
             """LLM 摘要生成（<2KB 采样走抽取式，不调 LLM）"""
-            return await build_llm_summary(sample) if len(sample) >= 2000 else (_extract_first_sentences(sample, 2), [])
+            from backend.config.rag import ENABLE_LLM_METADATA_EXTRACT
+            if not ENABLE_LLM_METADATA_EXTRACT or len(sample) < 2000:
+                return _extract_first_sentences(sample, 2), []
+            return await build_llm_summary(sample)
 
         async def task_keywords():
             """规则+LLM 关键词提取（LLM 调用放线程池，不阻塞事件循环）"""
             return await asyncio.to_thread(
                 extract_doc_keywords_typed, full_text,
                 doc_type=doc_type, confidence=confidence, complexity=complexity,
+                allow_llm=False,
             )
 
         async def task_questions():
@@ -472,10 +474,69 @@ class MetadataStage:
                 logger.debug(f"[MinHash] 单文档签名比对失败，跳过: {e}", exc_info=True)
         return ""
 
+    async def finalize_decision(
+        self,
+        full_text: str,
+        base_meta: dict,
+        envelope,
+        parent_span_id: str = "",
+        chunks_text: list[str] | None = None,
+    ) -> dict:
+        """将所有决策来源收口成同一份下游 metadata 契约。"""
+        from backend.rag.preprocessing.entity import extract_entities
+        from backend.rag.preprocessing.metadata import (
+            _extract_first_sentences,
+            extract_time_refs,
+        )
+
+        unified = dict(getattr(envelope, "metadata", {}) or {})
+        if not unified:
+            try:
+                entities = extract_entities(full_text) or {}
+            except Exception as exc:
+                logger.warning(f"[Metadata] 确定性实体提取失败: {exc}")
+                entities = {}
+            unified = {
+                "doc_type": envelope.doc_type,
+                "confidence": envelope.confidence,
+                "business_domain": envelope.business_domain,
+                "summary": _extract_first_sentences(full_text, 3) or "",
+                "keywords": [],
+                "entities": entities,
+                "time_refs": extract_time_refs(full_text) or [],
+                "risk": {"level": "none", "signals": []},
+            }
+        unified.setdefault("doc_type", envelope.doc_type)
+        unified.setdefault("confidence", envelope.confidence)
+        unified.setdefault("business_domain", envelope.business_domain)
+        unified.setdefault("summary", _extract_first_sentences(full_text, 3) or "")
+        unified.setdefault("keywords", [])
+        unified.setdefault("entities", {})
+        unified.setdefault("time_refs", extract_time_refs(full_text) or [])
+        unified.setdefault("risk", {"level": "none", "signals": []})
+
+        allow_llm_enrichment = envelope.source == "llm"
+        out = await self.finalize_unified(
+            full_text,
+            base_meta,
+            unified,
+            parent_span_id=parent_span_id,
+            chunks_text=chunks_text,
+            route_level="" if envelope.source == "llm" else envelope.source,
+            allow_llm_enrichment=allow_llm_enrichment,
+        )
+        out["llm_used"] = envelope.source == "llm"
+        out["llm_strategy"] = envelope.source
+        out["llm_decision"] = envelope.model_dump()
+        out["decision_envelope"] = envelope.model_dump()
+        out["fallback_reason"] = envelope.fallback_reason
+        out["risk"] = unified.get("risk") or {"level": "none", "signals": []}
+        return out
+
     async def finalize_unified(
         self, full_text: str, base_meta: dict, unified: dict,
         parent_span_id: str = "", chunks_text: list[str] | None = None,
-        route_level: str = "",
+        route_level: str = "", allow_llm_enrichment: bool = True,
     ) -> dict:
         """统一 LLM 抽取成功后的收口：补齐纯规则产物并返回完整 metadata dict。
 
@@ -519,7 +580,7 @@ class MetadataStage:
         question_gen_tokens: dict = {}
         try:
             from backend.config.rag import ENABLE_SIMULATED_QUESTIONS
-            if ENABLE_SIMULATED_QUESTIONS and chunks_text:
+            if allow_llm_enrichment and ENABLE_SIMULATED_QUESTIONS and chunks_text:
                 from backend.rag.preprocessing import question_gen as _qg
                 questions_by_chunk, question_gen_tokens = await asyncio.to_thread(
                     _qg.generate_chunk_questions, chunks_text, unified["doc_type"])
@@ -592,6 +653,7 @@ class MetadataStage:
             "kb_version": "v1",
             "department": base_meta.get("department") or self._department,
             "questions_by_chunk": questions_by_chunk,
+            "risk": unified.get("risk") or {"level": "none", "signals": []},
         }
 
     async def finalize_cascade(

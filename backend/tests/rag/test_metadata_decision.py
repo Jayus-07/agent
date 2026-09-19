@@ -1,0 +1,94 @@
+"""R0/R1/LLM/fallback 统一决策契约测试。"""
+
+import pytest
+
+from backend.rag.preprocessing.metadata_classifier import ClassifierPrediction
+from backend.rag.preprocessing.metadata_decision import decide_metadata
+
+
+@pytest.mark.asyncio
+async def test_r0_accepts_only_unique_strong_signal():
+    result = await decide_metadata("固定编号合同 第一条 适用范围", "approved-contract-id.docx")
+
+    assert result.source == "r0"
+    assert result.decision == "accepted"
+    assert result.doc_type == "legal"
+    assert result.llm_call_count == 0
+
+
+async def _fake_llm_result(*args, **kwargs):
+    return {
+        "doc_type": "legal",
+        "confidence": 0.9,
+        "business_domain": "general",
+        "summary": "s",
+        "keywords": [],
+        "entities": {},
+        "time_refs": [],
+        "risk": {"level": "none", "signals": []},
+        "prompt_version": "default",
+    }
+
+
+async def _low_confidence_prediction(*args, **kwargs):
+    return ClassifierPrediction(
+        label="legal",
+        confidence=0.55,
+        candidates=[("legal", 0.55), ("policy", 0.54)],
+        accepted=False,
+        abstain_reason="below_class_threshold",
+        model_version="test-model",
+        feature_version="test-features",
+    )
+
+
+@pytest.mark.asyncio
+async def test_r1_abstain_falls_to_single_llm_call(monkeypatch):
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_decision._classifier_prediction",
+        _low_confidence_prediction,
+    )
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_decision.extract_metadata_llm_async",
+        _fake_llm_result,
+    )
+
+    result = await decide_metadata("模糊正文", "unknown.docx", embedding=object())
+
+    assert result.source == "llm"
+    assert result.decision == "accepted"
+    assert result.llm_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_llm_failure_uses_complete_deterministic_fallback(monkeypatch):
+    async def _none(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_decision.extract_metadata_llm_async",
+        _none,
+    )
+    result = await decide_metadata("无法判断的正文", "unknown.docx", embedding=None)
+
+    assert result.source == "fallback"
+    assert result.decision in {"fallback", "review"}
+    assert result.doc_type == "general"
+    assert result.fallback_reason == "llm_unavailable"
+    assert result.llm_call_count == 1
+
+
+def test_keyword_fallback_can_explicitly_disable_llm(monkeypatch):
+    from backend.rag.preprocessing import keyword
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("deterministic fallback must not call keyword LLM")
+
+    monkeypatch.setattr(keyword, "extract_doc_keywords_llm", _boom)
+    result = keyword.extract_doc_keywords_typed(
+        "普通正文", doc_type="faq", allow_llm=False
+    )
+
+    assert result.llm_keywords == []
+    assert result.llm_tokens == {}
+    assert result.llm_strategy == "deterministic"

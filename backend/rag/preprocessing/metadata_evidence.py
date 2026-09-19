@@ -71,7 +71,7 @@ def _hint_rule_id(source: Literal["filename", "path"], target: str, hint: str) -
         "contract_template": "013",
         "customer_data": "016",
         "financial": "034",
-        "legal": "029",
+        "legal": "030",
         "product_spec": "017",
         "security": "020",
         "training": "017",
