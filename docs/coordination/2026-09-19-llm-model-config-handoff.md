@@ -73,6 +73,31 @@ api_router.include_router(sys_providers.router)    # LLM 供应商清单 + 连�
 
 这是我这轮查出、且必须由你（持有 `proxy.py`）决定的事。
 
+> **【2026-09-19 15:25 更新 · 已实施，请勿重复修改】**
+> 用户已拍板「改」，我按**方案 b（最小改动）**在 `proxy.py` 落码完成，**仅在工作区、未提交**。
+> 落点与你的改动**完全不相邻**（我的在 200–283 行，你的在 340+ 行）→ **不覆盖你的段**。
+>
+> - **实施选择**：方案 b，但把「第二张分发表」也一并收掉了 —— `_get_provider_for` 改为委托
+>   `models.resolve_provider`（与 `factory._get_provider` **同源**）。这一条不只是整洁：
+>   旧实现只遍历代码层 `AVAILABLE_MODELS` → DB 覆盖层登记的自建模型一律**误判成 ollama**，
+>   而同一个值还会写进 `_last_call_meta["provider"]` 供计价链读取 → **费用归属记到错误的
+>   provider 上**。ollama 兜底改为复用 `providers/ollama.build_ollama`（与 factory 同源；
+>   它是原内联写法的**严格超集**：多 `base_url` 与 `keep_alive=OLLAMA_KEEP_ALIVE`，
+>   当前 `.env`（`OLLAMA_BASE_URL=http://localhost:11434`）下 base_url 取值未变）。
+> - **凭据解析失败兜底**：新增 `_resolve_credentials_or_none()` —— 异常只 warning 并返回 `None`
+>   （= 与改造前逐位一致），**不在聊天热路径新增崩溃点**。
+> - **新增测试** `backend/tests/infra/test_llm_proxy_credentials.py`（10 例），其中两条是结构性契约：
+>   ① proxy 里每个 `build_*` 调用必须两参（凭据不许再被静默丢掉）；
+>   ② 分发表必须覆盖 `models.PROVIDERS` 里的每个 provider（防第三例 `qwen_tp`/`vllm` 型漏项）。
+>   已做**反证验证**：临时把一处改回单参 → 该断言变红 → 按 sha256 还原。
+> - **零行为变化**（已实测）：DB 覆盖层为空时 `resolve_credentials` 一律返回 `source=env`、
+>   且值与 provider 自身回落值相同 —— 即本改动在 0017 表落地前**行为等价**。
+>   这正是它现在落码是安全的原因，也是它现在**不急于提交**的原因（提交也无生产收益）。
+> - 合并回归 **199 passed** 零失败。
+>
+> **你要做的**：不用做额外动作。提交 `proxy.py` 时**照常带上工作区当前内容**即可
+> —— 你的段与我的段已在同一份工作区文件里，一起提交就是对的。
+
 **证据链**（三行代码，可自行复核）：
 
 | 事实 | 位置 |
@@ -114,7 +139,16 @@ def _build_llm_for(model_name: str) -> BaseChatModel:
 
 ### ③ 提交 `proxy.py` 时的顺序约束（只需知道，不需要你做额外动作）
 
-`proxy.py` 单独提交会让主干 `import` 失败（它引用 `budget.release_model_reservation` 等，而 `budget.py`/`quota.py`/`pricing.py` 未提交）。
+`proxy.py` 单独提交会让**运行时**崩在预算路径上：它引用 `budget.release_model_reservation` 与
+`pricing.calculate_current_cost`，而 `budget.py` / `pricing.py` / `quota.py` 未提交。
+
+> **【2026-09-19 15:25 更正】** 我此前在本节写的是「主干 `import` 失败」，**该说法不准确**：
+> 这些 `from backend.infra.llm.budget import (...)` 都是**函数内延迟导入**（429–432 / 468–471 /
+> 706 行），故 `import backend.infra.llm.proxy` 本身**会成功**，故障点在**调用到预算预留/
+> 计价那几行时**才抛 `ImportError`。已实测复核 `git show HEAD:backend/infra/llm/budget.py`
+> 无 `release_model_reservation`、`HEAD:pricing.py` 无 `calculate_current_cost`。
+> 结论不变（仍不应单独提交 `proxy.py`），但**故障形态**从「启动即挂」修正为「聊天路径到预算
+> 那一步才挂」—— 后者更隐蔽，排查时容易误判为预算模块自身的问题。
 请把这几个文件**一起**提交。
 
 **另外**：你提交 `proxy.py` 时会**连带带上我在 37–93 行的 `set_request_model` 改动**（已落码，`test_llm_bind_tools.py` 10 例 + 新测试 10 例全绿）。

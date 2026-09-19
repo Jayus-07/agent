@@ -826,7 +826,8 @@ tab①⑤ 的数据源，与 §15.3 同批落码，同样落在独占新文件�
 `proxy.py:220-225` 的注释显示 `qwen_tp` 曾被同样的问题绊过 —— 这是**第二例同型缺陷**（分发表手写、与 `factory` 双维护）。
 
 > 四条修正建议（`proxy` 复用 `factory` 的分发逻辑、`credentials` 形参、`vllm` 分支、以及 `proxy` 与 `factory` 的**分发一致性守卫测试**）已写入
-> `docs/coordination/2026-09-19-llm-model-config-handoff.md` §2②，附可粘贴的补丁骨架，等 `proxy.py` 的持有会话落定。
+> `docs/coordination/2026-09-19-llm-model-config-handoff.md` §2②，附可粘贴的补丁骨架。
+> **用户已拍板「改」→ 已按方案 b 落码（未提交），见 §15.6。**
 
 **（三）§15.4 那条「即时生效」缺口的消费方清单（实测补全）**
 
@@ -844,6 +845,50 @@ tab①⑤ 的数据源，与 §15.3 同批落码，同样落在独占新文件�
 `router.py` 不能靠「只提交我这几行」绕开。除「引用未提交模块 → 主干 import 失败」外，还有第二个更隐蔽的后果：
 部分提交后我的行进 HEAD，而持有方的工作区副本**不含**我的行 → 他**下一次提交该文件会把我的行静默删掉**（文件级提交取工作区内容）→ 端点悄然回到 404 且无任何报错。
 故注册只能由 `router.py` 的持有方落定后补，或由其明确授权代加。已写入协同文档 §2①。
+
+### 15.6 P1a-2 收口：proxy 构建路径的凭据传参 + 分发统一（2026-09-19，未提交）
+
+用户拍板「改」后，把 §15.5（一）（二）两条一起收掉。**改动仅在工作区、未提交**（原因见下）。
+
+**落点：`backend/infra/llm/proxy.py`（全在 200–283 行，与并发会话的预算改动 340+ 行完全不相邻）**
+
+| 改动 | 内容 |
+|---|---|
+| `_build_llm_for` | 调用时 `resolve_credentials(provider, model_name=…)` 并**显式传入**每个 `build_xxx(model_name, credentials)` |
+| `_build_llm_for` | 补 **`vllm` 分支** → `build_vllm(model_name, credentials)` |
+| `_get_provider_for` | 由「遍历代码层 `AVAILABLE_MODELS`」改为委托 **`models.resolve_provider`**（与 `factory._get_provider` 同源） |
+| ollama 兜底 | 由**内联** `ChatOllama(...)` 改为复用 `providers/ollama.build_ollama`（与 factory 同源） |
+| `_resolve_credentials_or_none`（新） | 凭据解析异常 → 只 warning + 返回 `None`（= 与改造前逐位一致），**不在聊天热路径新增崩溃点** |
+
+**三条实施决策（原文档未写）**
+
+1. **顺手收掉「第二张分发表」**：`_get_provider_for` 统一到 `resolve_provider` 不只是整洁 —— 旧实现只遍历代码层 `AVAILABLE_MODELS`，DB 覆盖层登记的自建模型一律**误判成 ollama**；而同一个值还写进 `_last_call_meta["provider"]` 供计价链读取 → **费用归属记到错误的 provider 上**。即这是一个**独立的计价正确性缺陷**，与凭据链路同源。
+2. **ollama 兜底复用 `build_ollama`**：它是原内联写法的**严格超集**（多 `base_url` 与 `keep_alive=OLLAMA_KEEP_ALIVE=30m`；当前 `.env` 的 `OLLAMA_BASE_URL=http://localhost:11434` 与 config 默认、langchain 默认三者同值 → base_url 取值未变）。两条构建路径至此**完全同源**，这才是 §15.5 那条缺陷的根因修复。
+3. **凭据解析失败兜底为 `None` 而非抛错**：设计约定「不传凭据 == 改造前行为」，故 `None` 是安全值；聊天热路径上新增崩溃点的代价高于「静默回落 env」，且异常仍记 warning、不吞信息。
+
+**新增测试：`backend/tests/infra/test_llm_proxy_credentials.py`（10 例）**
+
+其中两条是**结构性契约**，价值高于普通打桩测试：
+
+- `test_every_provider_build_call_passes_credentials` —— **AST 断言** proxy 模块里每个 `build_*` 调用必须两参。未来任何人给分发表加分支时忘传凭据，测试立刻变红；而「打桩调用一次」只覆盖当时存在的分支。
+- `test_proxy_dispatch_covers_every_known_provider` —— 断言分发表覆盖 `models.PROVIDERS` 的每个 provider，防**第三例** `qwen_tp`(09-17) / `vllm`(09-19) 型漏项。
+
+**已做反证验证**：临时把 `build_vllm(model_name, credentials)` 改回单参 → 上述断言**变红** → 按 sha256 校验还原（`dc2c429d2844` 前后一致）。即该守卫**确实**能抓到「凭据被静默丢弃」，不是一条永远为真的摆设。
+
+**为什么零行为变化（已实测）**：DB 覆盖层为空时 `resolve_credentials` 对全部 provider 返回 `source=env`、且值与 provider 自身回落值**相同**（实测 `deepseek` / `qwen` / `vllm` / `ollama` / `siliconflow` 五家）。故本改动在 0017 表与 P2 写端点落地前**行为等价**。
+
+**为什么未提交**
+
+| 约束 | 说明 |
+|---|---|
+| 同文件并发 | `proxy.py` 同时承载并发会话的预算改动（`reserve_model_call` / `release_model_reservation` / `calculate_current_cost`），路径限定提交**不能剥离**同文件内的他人改动 |
+| 提交即运行时坏 | 这些符号在未提交的 `budget.py` / `pricing.py` 中（已实测 `git show HEAD:` 确认缺失） |
+| ⚠️ **更正一处旧表述** | §15.5 / 交接单此前写「单独提交 `proxy.py` 会让主干 `import` 失败」—— **该说法不准确**。这些 `from backend.infra.llm.budget import (...)` 是**函数内延迟导入**（429–432 / 468–471 / 706 行），`import backend.infra.llm.proxy` **会成功**，故障在**调用到预算预留 / 计价那几行时**才抛 `ImportError`。结论（不该单独提交）不变，但故障形态更隐蔽：**排查时容易误判成预算模块自身的问题**。（§15.5(四) 对 `router.py` 的同一表述是对的 —— 那里的 `include_router` 是**模块级**导入。） |
+| 无生产收益 | 因上一条「零行为变化」，此刻提交不产生任何线上收益 → **不值得**为此承担并发写风险 |
+
+**验证**：合并回归 **199 passed** 零失败（含 `test_url_guard` / `registry_store` / `credentials` / `registry_models` / `model_roles` / `provider_probe` / 三个 api / `override_validation` / `bind_tools` / `llm_usage_component` / `llm_cascade`）。
+
+**对 B.8 闸门的影响**：技术上前置已完成（§15.5 两条缺陷均已修），但**落码未入库、且依赖 0017 与 P2 写端点**。故闸门判定不变 —— 管理端页面的开工时机仍是「`proxy.py` 与 `router.py` 落定 + P2 写端点可用」之后。
 
 ---
 
