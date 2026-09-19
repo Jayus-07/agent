@@ -79,8 +79,10 @@ class CSInputGuardResult:
 # 本文件只保留 CS 业务校验表：越权范围（SCOPE）与敏感信息收集（SENSITIVE）。
 
 _SCOPE_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"(查|看|查?看)(一下)?(别人|其他|所有)(用户|人)?(的)?.{0,4}(订单|信息|数据)"), "query_other_user"),
-    (re.compile(r"(帮我|给我)(修改|改|删除|删)(别人|其他)(的)"), "modify_other_user"),
+    # P1 步骤 4（50 样本门禁回馈）：允许 其他+用户/人+的 的插位，
+    # 名词表补 记录/物流/售后
+    (re.compile(r"(查|看)(一下)?(别人|其他|所有)(用户|人)?(的)?.{0,4}(订单|信息|数据|记录|物流|售后)"), "query_other_user"),
+    (re.compile(r"(帮我|给我)(修改|改|删除|删)(别人|其他)(用户|人)?(的)"), "modify_other_user"),
 ]
 
 _SENSITIVE_PATTERNS: list[tuple[re.Pattern, str]] = [
