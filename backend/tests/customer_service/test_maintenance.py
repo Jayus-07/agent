@@ -142,6 +142,26 @@ class TestCloseStale:
 # =====================================================
 
 class TestMaintenanceScans:
+    def test_db_bridge_failure_closes_scan_coroutine(self):
+        """DB bridge 提交失败时不能遗留未 await 的扫描协程。"""
+        from backend.customer_service import maintenance
+
+        received = []
+
+        def reject(coroutine):
+            received.append(coroutine)
+            raise RuntimeError("db down")
+
+        with patch(
+            "backend.customer_service._db_loop.run_sync",
+            side_effect=reject,
+        ):
+            result = maintenance.scan_handoff_timeouts()
+
+        assert result["ok"] is False
+        assert len(received) == 1
+        assert received[0].cr_frame is None
+
     def test_handoff_scan_db_failure_degrades(self):
         """DB 异常 → ok=False，不向上穿透（beat 任务不应崩溃）。
 
@@ -223,12 +243,26 @@ class TestBeatScheduleWiring:
         src = self._celery_app_src()
         assert "cs-handoff-timeout-scan" in src
         assert "cs-confirmation-expiry-scan" in src
+        assert "cs-event-outbox-compensation" in src
         assert "cs.handoff_timeout_scan" in src
         assert "cs.confirmation_expiry_scan" in src
+        assert "cs.event_outbox_compensation" in src
 
     def test_maintenance_module_registered_in_include(self):
         src = self._celery_app_src()
         assert "backend.tasks.cs_maintenance_tasks" in src
+
+    def test_event_outbox_task_has_retry_and_late_ack_contract(self):
+        import pathlib
+
+        src = (
+            pathlib.Path(__file__).resolve().parents[2]
+            / "tasks"
+            / "cs_maintenance_tasks.py"
+        ).read_text(encoding="utf-8")
+        assert 'name="cs.event_outbox_compensation"' in src
+        assert "acks_late=True" in src
+        assert "autoretry_for=(Exception,)" in src
 
 
 # =====================================================

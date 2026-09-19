@@ -67,5 +67,9 @@ celery_app.conf.update(
             "task": "cs.confirmation_expiry_scan",
             "schedule": 60.0,
         },
+        "cs-event-outbox-compensation": {
+            "task": "cs.event_outbox_compensation",
+            "schedule": 15.0,
+        },
     },
 )

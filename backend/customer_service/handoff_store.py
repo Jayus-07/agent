@@ -74,14 +74,16 @@ class HandoffStore:
         now = datetime.now(timezone.utc).isoformat()
         stamped.setdefault("created_at", now)
         stamped["updated_at"] = now
-        with self._lock:
-            self._data[(user_id, session_id)] = stamped
-        self._db_save(user_id, session_id, stamped)
+        # PostgreSQL 是转人工状态的唯一事实源：持久化成功后才能更新
+        # L1，避免人工队列出现只在当前进程可见的伪成功。
+        if self._db_save(user_id, session_id, stamped):
+            with self._lock:
+                self._data[(user_id, session_id)] = stamped
 
     def clear(self, user_id: str, session_id: str) -> None:
-        with self._lock:
-            self._data.pop((user_id, session_id), None)
-        self._db_clear(user_id, session_id)
+        if self._db_clear(user_id, session_id):
+            with self._lock:
+                self._data.pop((user_id, session_id), None)
 
     def invalidate(self, user_id: str, session_id: str) -> None:
         """只失效 L1 内存缓存，不动 DB（坐席侧已直接改库时调用）。"""
@@ -122,19 +124,33 @@ class HandoffStore:
             )
             return None
 
-    def _db_save(self, user_id: str, session_id: str, handoff_data: dict) -> None:
+    def _db_save(self, user_id: str, session_id: str, handoff_data: dict) -> bool:
         try:
             from backend.customer_service._db_loop import run_sync
-            run_sync(self._async_save(user_id, session_id, handoff_data))
+            operation = self._async_save(user_id, session_id, handoff_data)
+            try:
+                run_sync(operation)
+            except Exception:
+                operation.close()
+                raise
+            return True
         except Exception as exc:
             _handoff_db_write_failed("save", exc)
+            return False
 
-    def _db_clear(self, user_id: str, session_id: str) -> None:
+    def _db_clear(self, user_id: str, session_id: str) -> bool:
         try:
             from backend.customer_service._db_loop import run_sync
-            run_sync(self._async_clear(user_id, session_id))
+            operation = self._async_clear(user_id, session_id)
+            try:
+                run_sync(operation)
+            except Exception:
+                operation.close()
+                raise
+            return True
         except Exception as exc:
             _handoff_db_write_failed("clear", exc)
+            return False
 
     def _db_has_active(self, user_id: str) -> bool:
         try:

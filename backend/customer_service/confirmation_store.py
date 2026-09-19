@@ -82,9 +82,11 @@ class ConfirmationStore:
             self._data[(user_id, session_id)] = pending
 
     def save(self, user_id: str, session_id: str, pending_action: dict) -> None:
-        with self._lock:
-            self._data[(user_id, session_id)] = pending_action
-        self._db_save(user_id, session_id, pending_action)
+        # PostgreSQL 是确认状态的唯一事实源：只有持久化成功后才能更新
+        # L1，否则后续 claim 可能把未落库的动作当成可执行状态。
+        if self._db_save(user_id, session_id, pending_action):
+            with self._lock:
+                self._data[(user_id, session_id)] = pending_action
 
     def clear(self, user_id: str, session_id: str, *, final_state: str = "cancelled") -> None:
         """清除 pending 并把 DB 行置为终态。
@@ -92,9 +94,9 @@ class ConfirmationStore:
         final_state: cancelled（用户取消）/ success / failed / expired。
         P1 修正：此前一律写 cancelled，过期与失败的审计口径失真。
         """
-        with self._lock:
-            self._data.pop((user_id, session_id), None)
-        self._db_clear(user_id, session_id, final_state)
+        if self._db_clear(user_id, session_id, final_state):
+            with self._lock:
+                self._data.pop((user_id, session_id), None)
 
     def claim_for_execution(self, user_id: str, session_id: str) -> str | None:
         """原子认领待确认动作（幂等闸门，P1）。
@@ -153,30 +155,35 @@ class ConfirmationStore:
             )
             return None
 
-    def _db_save(self, user_id: str, session_id: str, pending_action: dict) -> None:
+    def _db_save(self, user_id: str, session_id: str, pending_action: dict) -> bool:
         try:
             from backend.customer_service._db_loop import run_sync
-            run_sync(self._async_save(user_id, session_id, pending_action))
+            operation = self._async_save(user_id, session_id, pending_action)
+            try:
+                run_sync(operation)
+            except Exception:
+                operation.close()
+                raise
+            return True
         except Exception as exc:
-            # P3.5：save 是后置持久化（L1 已写成功、确认卡已可用），DB 慢/
-            # 抖动只降级告警——此前 strict 抛错把整个 expert 打成失败，
-            # 用户看到「处理出错」。strict 闸门只属于 claim（防双执行）。
-            logger.warning(
-                "[ConfirmationStore] DB save failed (L1 kept): %s", exc,
-                exc_info=True,
-            )
+            # DB 失败时不更新 L1；严格模式继续抛错，非严格模式仅用于
+            # 测试/本地诊断，调用方也不会得到一个伪成功的内存状态。
+            _db_write_failed("ConfirmationStore", "save", exc)
+            return False
 
-    def _db_clear(self, user_id: str, session_id: str, final_state: str) -> None:
+    def _db_clear(self, user_id: str, session_id: str, final_state: str) -> bool:
         try:
             from backend.customer_service._db_loop import run_sync
-            run_sync(self._async_clear(user_id, session_id, final_state))
+            operation = self._async_clear(user_id, session_id, final_state)
+            try:
+                run_sync(operation)
+            except Exception:
+                operation.close()
+                raise
+            return True
         except Exception as exc:
-            # P3.5：与 _db_save 同理，L1 已清除、终态语义已生效于本进程，
-            # DB 抖动不回滚业务结果，只告警（审计口径以 trace 为准）
-            logger.warning(
-                "[ConfirmationStore] DB clear failed (L1 already cleared): %s",
-                exc, exc_info=True,
-            )
+            _db_write_failed("ConfirmationStore", "clear", exc)
+            return False
 
     def _db_claim(self, user_id: str, session_id: str) -> str | None:
         from backend.customer_service._db_loop import run_sync

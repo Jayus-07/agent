@@ -4,8 +4,19 @@
 DB 行不会自动清理）。凡"假设该用户无记录"的用例必须使用唯一 user_id。
 """
 import uuid
+from unittest.mock import patch
+
+import pytest
 
 from backend.customer_service.handoff_store import HandoffStore, get_handoff_store
+
+
+@pytest.fixture(autouse=True)
+def mock_db_success(monkeypatch):
+    """Store 单测只验证缓存语义，持久化成功由显式桩表示。"""
+    monkeypatch.setattr(HandoffStore, "_db_save", lambda *args: True)
+    monkeypatch.setattr(HandoffStore, "_db_clear", lambda *args: True)
+    monkeypatch.setattr(HandoffStore, "_db_load", lambda *args: None)
 
 
 def _uid() -> str:
@@ -13,6 +24,15 @@ def _uid() -> str:
 
 
 class TestHandoffStore:
+
+    def test_save_does_not_cache_when_db_write_fails(self):
+        """DB 写失败时不得把未持久化的转人工状态留在 L1。"""
+        store = HandoffStore()
+
+        with patch.object(store, "_db_save", return_value=False):
+            store.save("user1", "session1", {"handoff_state": "handoff_requested"})
+
+        assert store.peek_l1("user1", "session1") is None
 
     def test_save_and_load(self):
         store = HandoffStore()

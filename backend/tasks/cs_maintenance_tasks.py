@@ -8,6 +8,11 @@
 """
 from __future__ import annotations
 
+from backend.config.tasks import (
+    CELERY_MAX_RETRIES,
+    CELERY_RETRY_BACKOFF,
+    CELERY_RETRY_BACKOFF_MAX,
+)
 from backend.shared.logger import logger
 from backend.tasks.celery_app import celery_app
 
@@ -32,3 +37,30 @@ def cs_confirmation_expiry_scan() -> dict:
     if not result.get("ok"):
         logger.error("[CSMaintenanceTask] confirmation scan failed: %s", result.get("error"))
     return {"count": result.get("count", 0)}
+
+
+@celery_app.task(
+    bind=True,
+    name="cs.event_outbox_compensation",
+    acks_late=True,
+    autoretry_for=(Exception,),
+    retry_backoff=CELERY_RETRY_BACKOFF,
+    retry_backoff_max=CELERY_RETRY_BACKOFF_MAX,
+    retry_jitter=True,
+    max_retries=CELERY_MAX_RETRIES,
+)
+def cs_event_outbox_compensation(self) -> dict:
+    """PG 恢复后补偿 Redis Stream 中尚未落库的客服事件。"""
+    from backend.customer_service.event_outbox import drain_pending_events
+
+    result = drain_pending_events()
+    if not result.get("ok"):
+        raise RuntimeError(
+            "客服事件补偿未完成："
+            f"processed={result.get('processed', 0)} "
+            f"failed={result.get('failed', 0)}"
+        )
+    return {
+        "processed": result.get("processed", 0),
+        "failed": result.get("failed", 0),
+    }

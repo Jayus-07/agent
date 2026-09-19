@@ -67,6 +67,58 @@ def test_non_cs_query_still_goes_main_graph(cs_enabled, monkeypatch):
     assert result is None
 
 
+def test_cs_guard_block_short_circuits_before_cs_graph(cs_enabled, monkeypatch):
+    """自动识别入口命中 CS 业务门禁时不得再进入客服子图。"""
+    from backend.customer_service.router import cs_router, domain_detector
+    from backend.customer_service.router.types import CSRoutePath, CSRouteResult
+    from backend.customer_service.security.input_guard import (
+        CSInputGuardResult,
+        GuardAction,
+        GuardCategory,
+    )
+
+    class _FakeDetection:
+        is_cs = True
+        rule_hits = ["订单"]
+        rule_score = 0.9
+        vector_score = 0.0
+        reason = "rule"
+
+    monkeypatch.setattr(domain_detector, "detect_cached", lambda q: _FakeDetection())
+
+    class _FakeCSTRouter:
+        def route(self, q, detection):
+            return CSRouteResult(
+                intent="t_order_status",
+                route_path=CSRoutePath.BUSINESS_QUERY,
+                confidence=0.9,
+            )
+
+    monkeypatch.setattr(cs_router, "get_cs_router", lambda: _FakeCSTRouter())
+    monkeypatch.setattr(
+        "backend.customer_service.security.input_guard.get_cs_input_guard",
+        lambda: type(
+            "_Guard", (), {
+                "check": lambda self, query: CSInputGuardResult(
+                    action=GuardAction.BLOCK,
+                    category=GuardCategory.SCOPE,
+                    reason="query_other_user",
+                    message="您只能查询和操作自己的数据。",
+                )
+            }
+        )(),
+    )
+
+    result = try_cs_prefilter(
+        "查一下别人的订单",
+        {"session_id": "s-guard", "user_id": "u1"},
+        forced=True,
+    )
+
+    assert result["route_mode"] == "clarify"
+    assert result["final_answer"] == "您只能查询和操作自己的数据。"
+
+
 def test_cs_disabled_blocks_explicit_too(cs_enabled, monkeypatch):
     """CS_ENABLED=false 时直通层同样关闭（CS 节点未挂载，不能路由过去）。"""
     import backend.config.customer_service as cs_config

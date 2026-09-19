@@ -50,16 +50,28 @@ async def _no_persist(self, payload, envelope):
     return None
 
 
+async def _no_outbox(self, envelope, payload):
+    """默认不触碰真实 Redis，避免单测产生持久化补偿消息。"""
+    return None
+
+
 _persist_calls: list[str] = []
 
 
 @pytest.fixture(autouse=True)
-def _stub_persist(monkeypatch):
+def _stub_persist(monkeypatch, request):
     """默认跳过 events 落库；Redis 路径用例单独覆盖 _publish_via_redis。
     _persist_calls 记录落库请求（清空于每用例前），供断言调用与否。"""
     _persist_calls.clear()
+    if request.node.name == (
+        "test_persist_event_propagates_database_failure_to_compensation_layer"
+    ):
+        yield
+        return
     monkeypatch.setattr(AgentHub, "_persist_event", _no_persist)
     monkeypatch.setattr(AgentHub, "_publish_via_redis", _no_redis)
+    monkeypatch.setattr(AgentHub, "_enqueue_event_outbox", _no_outbox)
+    yield
 
 
 # ── ticket 鉴权 ──────────────────────────────────────────
@@ -207,6 +219,56 @@ async def test_persist_failure_still_broadcasts(monkeypatch):
     event = json.loads(ws.sent[0])
     assert event["type"] == "conversation.waiting"
     assert event["seq"] is None
+
+
+async def test_persist_failure_enqueues_event_for_compensation(monkeypatch):
+    """PG 故障时事件仍广播，同时必须留下可恢复的补偿记录。"""
+    queued: list[tuple[dict, dict]] = []
+
+    async def _boom(self, payload, envelope):
+        raise RuntimeError("db down")
+
+    async def _queue(self, envelope, payload):
+        queued.append((envelope, payload))
+
+    monkeypatch.setattr(AgentHub, "_persist_event", _boom)
+    # 新方法尚未存在时允许测试继续运行，断言会因没有调用而失败。
+    monkeypatch.setattr(
+        AgentHub, "_enqueue_event_outbox", _queue, raising=False,
+    )
+    monkeypatch.setattr(AgentHub, "_publish_via_redis", _no_redis)
+
+    hub = _bare_hub()
+    ws = _FakeWS()
+    hub._connections.add(ws)
+
+    hub.publish("conversation.waiting", conversation_id="c1")
+    await asyncio.sleep(0.05)
+
+    assert len(queued) == 1
+    envelope, payload = queued[0]
+    assert envelope["event_id"]
+    assert envelope["seq"] is None
+    assert payload["conversation_id"] == "c1"
+
+
+async def test_persist_event_propagates_database_failure_to_compensation_layer(
+    monkeypatch,
+):
+    """底层事件表写失败不能被 _persist_event 吞掉。"""
+    from backend.customer_service.repository.event_repo import EventRepository
+
+    async def _boom(self, **_kwargs):
+        raise RuntimeError("postgres unavailable")
+
+    monkeypatch.setattr(EventRepository, "append", _boom)
+
+    hub = AgentHub()
+    with pytest.raises(RuntimeError, match="postgres unavailable"):
+        await hub._persist_event(
+            {"conversation_id": "c1"},
+            {"event_id": "event-1", "type": "message.created"},
+        )
 
 
 # ── 2026-09-18：瞬态事件 + 并发广播 ──────────────────────

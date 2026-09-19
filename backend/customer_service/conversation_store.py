@@ -12,6 +12,12 @@ from __future__ import annotations
 from backend.shared.logger import logger
 
 
+def _close_pending_operation(operation) -> None:
+    """关闭未被同步 bridge 消费的协程，避免失败路径资源告警。"""
+    if getattr(operation, "cr_frame", None) is not None:
+        operation.close()
+
+
 def _use_java_write() -> bool:
     """cutover 阶段 C 开关：java=消息落库权已移交 business-service。"""
     from backend.config.messaging import CS_WRITE_SOURCE
@@ -42,9 +48,15 @@ def record_cs_turn(
             )
         else:
             from backend.customer_service._db_loop import run_sync
-            run_sync(_async_record_turn(
+            operation = _async_record_turn(
                 conversation_id, user_id, question, answer, trace_id, cs_route,
-            ))
+            )
+            try:
+                run_sync(operation)
+            finally:
+                # 真实 bridge 完成 await 后 frame 已为空；测试桩或提交失败
+                # 时仍可能持有未消费协程，此处统一释放。
+                _close_pending_operation(operation)
     except Exception:
         logger.debug("[ConversationStore] record_cs_turn failed", exc_info=True)
 

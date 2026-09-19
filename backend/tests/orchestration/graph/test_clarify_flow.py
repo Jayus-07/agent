@@ -254,6 +254,17 @@ class TestReporterClarify:
         assert out["final_answer"]
         assert "_clarify" not in out  # 追问事件已由 router 节点发出，不重复
 
+    def test_guard_clarify_preserves_security_message(self, monkeypatch):
+        """CSInputGuard 短路时不能被通用追问文案覆盖。"""
+        from backend.agents.reporter import reporter as reporter_mod
+
+        out = reporter_mod.reporter_node({
+            "route_mode": "clarify",
+            "final_answer": "您只能查询和操作自己的数据。",
+        })
+
+        assert out["final_answer"] == "您只能查询和操作自己的数据。"
+
     def test_l2_refusal_attaches_clarify(self, monkeypatch):
         from backend.agents.reporter import reporter as reporter_mod
 

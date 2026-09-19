@@ -106,16 +106,15 @@ def try_cs_prefilter(query: str, state: dict, forced: bool = False) -> dict | No
     # ── Phase 5: CS Input Guard ──
     from backend.customer_service.security.input_guard import get_cs_input_guard
     guard_result = get_cs_input_guard().check(query)
-    if guard_result.action.value == "block":
+    if guard_result.action.value in {"block", "clarify"}:
         logger.info(
-            f"[CsPrefilter] CS InputGuard BLOCK: "
+            f"[CsPrefilter] CS InputGuard {guard_result.action.value.upper()}: "
             f"category={guard_result.category.value} reason={guard_result.reason}"
         )
         return {
             "route_decision": None,
-            "route_mode": "customer_service",
-            "cs_context": _build_cs_context(cs_result, cs_target, user_id, session_id),
-            "final_answer": guard_result.message,
+            "route_mode": "clarify",
+            "final_answer": guard_result.message or "无法处理该客服请求。",
         }
 
     # ── Trace: stamp conversation_id + cs_route + cs_target（路由一致率用）──

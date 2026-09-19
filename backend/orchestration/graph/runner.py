@@ -249,6 +249,35 @@ class GraphRunner:
                 yield make_done_event(message, {}, start_time)
                 return
 
+        # ── CS 窗口业务门禁：全局 Guard 放行后、域检测/子图之前 ──
+        # 客服窗口已由 domain_hint 明确锁域。SCOPE/SENSITIVE 等客服业务
+        # 规则不属于平台级 InputGuard，必须在这里执行，不能等待域检测结果；
+        # 否则域检测超时/漏判会把越权输入放进主图。
+        if (domain_hint or "").strip().lower() in {"customer_service", "cs"}:
+            from backend.customer_service.security.input_guard import (
+                GuardAction as CSGuardAction,
+                get_cs_input_guard,
+            )
+
+            cs_guard_result = get_cs_input_guard().check(
+                getattr(guard_result, "normalized_query", "") or question or "",
+            )
+            if cs_guard_result.action in (
+                CSGuardAction.BLOCK,
+                CSGuardAction.CLARIFY,
+            ):
+                finish_customer_service_guard_trace(session_id, cs_guard_result)
+                yield {
+                    "event": "status",
+                    "data": {"node": "cs_input_guard", "ts": time.time()},
+                }
+                message = cs_guard_result.message or "无法处理该客服请求。"
+                if fallback_deltas:
+                    yield from emit_delta_events(message, stop_event)
+                yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
+                yield make_done_event(message, {}, start_time)
+                return
+
         # ── Tracing（提前到会话加载之前，使 memory/kb 加载耗时可归因）──
         trace = trace_collector.start(question, session_id, workflow_name="agent")
         trace_collector.start_span("root", parent_id=None,
@@ -582,6 +611,47 @@ def finish_guard_trace(session_id: str, guard_result) -> None:
         )
     except Exception:
         logger.debug("[GraphRunner] Guard 拦截 trace 记录失败", exc_info=True)
+
+
+def finish_customer_service_guard_trace(session_id: str, guard_result) -> None:
+    """为客服业务门禁拦截产出最小 trace，不记录敏感原文。"""
+    from backend.observability.tracer import trace_collector
+
+    try:
+        category = getattr(guard_result.category, "value", "unknown")
+        action = getattr(guard_result.action, "value", "unknown")
+        trace = trace_collector.start(
+            f"[cs-guard-rejected:{category}]",
+            session_id,
+            workflow_name="agent",
+        )
+        span = trace_collector.start_span(
+            "cs_input_guard",
+            parent_id=None,
+            name="CS Input Guard 拦截",
+            type="workflow",
+        )
+        trace_collector.end_span(
+            span,
+            output={
+                "action": action,
+                "category": category,
+                "reason": guard_result.reason,
+            },
+            status="success",
+        )
+        trace_collector.finish(
+            trace,
+            guard_result.message or "",
+            0,
+            "",
+            "",
+        )
+    except Exception:
+        logger.debug(
+            "[GraphRunner] CS Input Guard 拦截 trace 记录失败",
+            exc_info=True,
+        )
 
 
 # =====================================================

@@ -1351,6 +1351,14 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
                 )
                 if assigned_agent_id and assigned_agent_id != agent_id:
                     raise HTTPException(409, detail="会话已由其他坐席认领")
+                if not assigned_agent_id:
+                    # 赢家可能已经提交 handoff 状态，但 assignment 尚未提交；
+                    # 此时不能把竞态失败方误报为幂等成功，否则多个坐席都会
+                    # 看到“认领成功”。等待下一次重试由已提交的 assignment 判定。
+                    raise HTTPException(
+                        409,
+                        detail="会话正在被其他坐席认领，请稍后重试",
+                    )
                 return {
                     "conversation_id": conversation_id,
                     "handoff_state": fresh,

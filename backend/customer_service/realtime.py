@@ -11,7 +11,8 @@
       ts        ISO8601 服务端时间
   - Redis pub/sub：多 worker（uvicorn 多进程/Celery）场景进程内广播失效，
     事件经 ``cs:events`` channel 广播，各进程订阅线程转发给自己持有的 WS。
-    Redis 不可用 → 本进程直接广播降级；落库失败 → seq=null 仍广播。
+    Redis 不可用 → 本进程直接广播降级；落库失败 → 进入 Redis Stream
+    outbox 补偿，同时 seq=null 仍广播。
   - 断线补发：事件落库 events 表，GET /cs/conversations/{id}/events?after_seq=N
     按 seq 升序回放（见 replay_events）。
 
@@ -166,6 +167,7 @@ class AgentHub:
             try:
                 envelope["seq"] = await self._persist_event(payload, envelope)
             except Exception:
+                await self._enqueue_event_outbox(envelope, payload)
                 # 防御纵深：_persist_event 内部已全捕获，此处兜底任何意外，
                 # 保证「落库崩」永不拖垮广播（事件尽力而为原则）
                 envelope["seq"] = None
@@ -180,8 +182,28 @@ class AgentHub:
         if not await self._publish_via_redis(data):
             await self._broadcast(data)
 
+    async def _enqueue_event_outbox(
+        self, envelope: dict, payload: dict,
+    ) -> None:
+        """PG 持久化失败时写入 Redis Stream 补偿队列。"""
+        try:
+            from backend.customer_service.event_outbox import enqueue_event
+
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: enqueue_event(envelope=envelope, payload=payload),
+            )
+        except Exception:
+            # 补偿通道自身不可用时仍不能阻断实时广播；日志必须保留故障证据。
+            logger.error(
+                "[AgentHub] event outbox enqueue failed (%s)",
+                envelope.get("type"),
+                exc_info=True,
+            )
+
     async def _persist_event(self, payload: dict, envelope: dict) -> int | None:
-        """事件落库（seq 分配）。失败只记日志返回 None，不影响广播。
+        """事件落库（seq 分配）。失败抛给 outbox 层，不影响广播。
 
         本协程运行在主 uvicorn loop，直接 await AsyncSessionLocal——
         此前经 run_in_executor + run_sync(_db_loop) 绕了两道线程切换。
@@ -208,7 +230,9 @@ class AgentHub:
                 envelope["type"],
                 exc_info=True,
             )
-            return None
+            # 让 _persist_and_broadcast 进入 outbox 补偿分支；实时广播
+            # 仍由外层 catch 保证继续执行。
+            raise
 
     @staticmethod
     async def _publish_via_redis(data: str) -> bool:

@@ -125,3 +125,57 @@ class _FakeStore:
 class _FakeHub:
     def publish(self, event_type, **payload):
         return None
+
+
+class _RaceResult:
+    def __init__(self, *, row=None, rowcount=None, scalar=None):
+        self._row = row
+        self.rowcount = rowcount
+        self._scalar = scalar
+
+    def first(self):
+        return self._row
+
+    def scalar_one_or_none(self):
+        return self._scalar
+
+
+class _RaceDB:
+    """模拟赢家尚未提交 assignment 时，失败方看到的 DB 快照。"""
+
+    def __init__(self):
+        self.execute_count = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def execute(self, query):
+        self.execute_count += 1
+        if self.execute_count == 1:
+            return _RaceResult(row=_HandoffRow())
+        if self.execute_count == 2:
+            return _RaceResult(rowcount=0)
+        if self.execute_count == 3:
+            return _RaceResult(scalar="human_active")
+        if self.execute_count == 4:
+            return _RaceResult(scalar=None)
+        raise AssertionError("竞态失败方不应继续写入会话或 assignment")
+
+
+@pytest.mark.asyncio
+async def test_claim_race_without_visible_assignment_is_not_success(monkeypatch):
+    """赢家未提交 assignment 时，失败方必须返回 409 而非伪成功。"""
+    db = _RaceDB()
+
+    monkeypatch.setattr(
+        "backend.memory.database.AsyncSessionLocal", lambda: db
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await cs_admin._async_claim("conv-1", "agent-2", None)
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail

@@ -42,9 +42,15 @@ def scan_handoff_timeouts() -> dict[str, Any]:
             await db.commit()
             return closed
 
+    operation = _scan()
     try:
-        closed = run_sync(_scan())
+        closed = run_sync(operation)
+        # 真实 bridge 会等待并接管协程；这里的防御性 close 也兼容
+        # 同步测试桩直接返回结果而未消费 operation 的情况。
+        if operation.cr_frame is not None:
+            operation.close()
     except Exception as e:
+        operation.close()
         logger.error("[CSMaintenance] handoff timeout scan failed: %s", e)
         return {"ok": False, "closed": [], "error": str(e)}
 
@@ -78,9 +84,13 @@ def scan_confirmation_expiries() -> dict[str, Any]:
             await db.commit()
             return expired
 
+    operation = _scan()
     try:
-        expired = run_sync(_scan())
+        expired = run_sync(operation)
+        if operation.cr_frame is not None:
+            operation.close()
     except Exception as e:
+        operation.close()
         logger.error("[CSMaintenance] confirmation expiry scan failed: %s", e)
         return {"ok": False, "expired": [], "error": str(e)}
 

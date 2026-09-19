@@ -33,7 +33,11 @@ def reporter_node(state: dict) -> dict:
             CLARIFY_STANDALONE_TEXT,
         )
 
-        return {"final_answer": CLARIFY_STANDALONE_TEXT}
+        # CSInputGuard 的业务拦截也复用 clarify 短路，但需要保留其
+        # 面向用户的安全提示；普通 L1 追问没有预置答案时才用通用文案。
+        return {
+            "final_answer": state.get("final_answer") or CLARIFY_STANDALONE_TEXT,
+        }
 
     question = state.get("question", "")
     step_results = state.get("step_results", {})
