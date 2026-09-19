@@ -26,10 +26,12 @@ def test_factory_resolves_siliconflow_by_name_not_qwen_heuristic() -> None:
 
 
 def test_set_current_rejects_when_siliconflow_key_missing(monkeypatch) -> None:
-    """Key 未配置时 fail-fast，不得静默构建实例。"""
-    import backend.infra.llm.factory as factory_module
+    """Key 未配置时 fail-fast，不得静默构建实例。
 
-    monkeypatch.setattr(factory_module, "SILICONFLOW_API_KEY", "")
+    2026-09-19：凭据解析收敛到 infra/llm/credentials.py（在**调用时**读 config
+    模块属性，而非导入时拷贝常量），故注入点从 factory 模块移到 config.llm 模块。
+    """
+    monkeypatch.setattr("backend.config.llm.SILICONFLOW_API_KEY", "")
     factory = LLMFactory()
 
     result = factory.set_current("Qwen/Qwen3-8B")

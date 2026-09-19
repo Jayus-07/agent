@@ -6,6 +6,8 @@
 
 模型名沿用硅基流动的 org/model 形式（如 Qwen/Qwen3-8B），
 embedding 与 rerank 也走同一 Key（EMBEDDING_API_KEY 与本 Key 同源）。
+
+凭据在**调用时**解析（credentials，见 infra/llm/credentials.py）。
 """
 
 from backend.config import (
@@ -16,10 +18,13 @@ from backend.config import (
     SILICONFLOW_API_BASE,
     SILICONFLOW_API_KEY,
 )
+from backend.infra.llm.credentials import ProviderCredentials
 from backend.shared.logger import logger
 
 
-def build_siliconflow(model_name: str) -> object:
+def build_siliconflow(
+    model_name: str, credentials: ProviderCredentials | None = None
+) -> object:
     """构建 SiliconFlow 模型实例（通过 OpenAI 兼容协议）"""
     try:
         from langchain_openai import ChatOpenAI
@@ -36,20 +41,27 @@ def build_siliconflow(model_name: str) -> object:
         "SILICONFLOW_ENABLE_THINKING", "false"
     ).strip().lower() in ("1", "true", "yes")
 
+    api_key = (credentials.api_key if credentials else None) or SILICONFLOW_API_KEY
+    base_url = (credentials.base_url if credentials else None) or SILICONFLOW_API_BASE
+
+    body = {"enable_thinking": enable_thinking}
+    if credentials and credentials.extra_body:
+        body.update(credentials.extra_body)
+
     return ChatOpenAI(
         model=model_name,
         temperature=LLM_TEMPERATURE,
         max_tokens=LLM_CONTEXT_LENGTH,
         request_timeout=LLM_REQUEST_TIMEOUT,
-        api_key=SILICONFLOW_API_KEY,
-        base_url=SILICONFLOW_API_BASE,
-        extra_body={"enable_thinking": enable_thinking},
+        api_key=api_key,
+        base_url=base_url,
+        extra_body=body,
         # SiliconFlow 兼容 OpenAI 协议；不支持 stream_options 时由调用方降级
         stream_usage=LLM_STREAM_USAGE,
     )
 
 
-def get_siliconflow_balance() -> dict:
+def get_siliconflow_balance(credentials: ProviderCredentials | None = None) -> dict:
     """查询硅基流动账户余额（/v1/user/info）
 
     返回:
@@ -57,14 +69,17 @@ def get_siliconflow_balance() -> dict:
         或
         {"ok": False, "error": "..."}
     """
-    if not SILICONFLOW_API_KEY:
+    api_key = (credentials.api_key if credentials else None) or SILICONFLOW_API_KEY
+    base_url = (credentials.base_url if credentials else None) or SILICONFLOW_API_BASE
+
+    if not api_key:
         return {"ok": False, "error": "SILICONFLOW_API_KEY 未配置"}
 
     try:
         import requests
         resp = requests.get(
-            f"{SILICONFLOW_API_BASE.rstrip('/')}/user/info",
-            headers={"Authorization": f"Bearer {SILICONFLOW_API_KEY}"},
+            f"{base_url.rstrip('/')}/user/info",
+            headers={"Authorization": f"Bearer {api_key}"},
             timeout=10,
         )
         if resp.status_code != 200:

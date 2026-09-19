@@ -4,6 +4,13 @@ minimax.py — MiniMax Provider（Anthropic Messages API，官方推荐）
 提供:
   - build_minimax(): 构建 ChatAnthropic 实例（MiniMax Anthropic 兼容端点）
   - get_minimax_balance(): MiniMax 余额查询
+
+端点来源：`credentials.MINIMAX_ANTHROPIC_URL`（Anthropic 兼容端点）。
+⚠️ 不要改读 config 的 `MINIMAX_API_BASE` —— 它当前在 `.env` 里恰好同值，
+但**代码默认**是 OpenAI 兼容端点（`https://api.minimax.chat/v1`）。
+改读 config 会在 `.env` 缺失/变更时静默漂移到另一套协议。
+
+凭据在**调用时**解析（credentials，见 infra/llm/credentials.py）。
 """
 
 from backend.config import (
@@ -12,9 +19,12 @@ from backend.config import (
     LLM_TEMPERATURE,
     MINIMAX_API_KEY,
 )
+from backend.infra.llm.credentials import MINIMAX_ANTHROPIC_URL, ProviderCredentials
 
 
-def build_minimax(model_name: str) -> object:
+def build_minimax(
+    model_name: str, credentials: ProviderCredentials | None = None
+) -> object:
     """构建 MiniMax 模型实例（Anthropic Messages API，官方推荐路径）
 
     MiniMax 文档推荐使用 Anthropic 兼容 API:
@@ -29,19 +39,26 @@ def build_minimax(model_name: str) -> object:
             "minimax provider 需要 langchain_anthropic 包，请 pip install langchain-anthropic"
         ) from e
 
+    api_key = (credentials.api_key if credentials else None) or MINIMAX_API_KEY
+    base_url = (credentials.base_url if credentials else None) or MINIMAX_ANTHROPIC_URL
+
+    headers = {"x-api-key": api_key}
+    if credentials and credentials.extra_headers:
+        headers.update(credentials.extra_headers)
+
     # MiniMax Anthropic 端点
     return ChatAnthropic(
         model=model_name,
         temperature=LLM_TEMPERATURE,
         max_tokens=LLM_CONTEXT_LENGTH,
         timeout=LLM_REQUEST_TIMEOUT,
-        anthropic_api_key=MINIMAX_API_KEY,
-        anthropic_api_url="https://api.minimaxi.com/anthropic",
-        default_headers={"x-api-key": MINIMAX_API_KEY},
+        anthropic_api_key=api_key,
+        anthropic_api_url=base_url,
+        default_headers=headers,
     )
 
 
-def get_minimax_balance() -> dict:
+def get_minimax_balance(credentials: ProviderCredentials | None = None) -> dict:
     """MiniMax 余额（官网查询，此处返回固定值）"""
     return {
         "ok": True,

@@ -5,51 +5,85 @@ models.py — Provider 注册表 + 可用模型清单
   1. 在 PROVIDERS 注册
   2. 在 AVAILABLE_MODELS 添加模型条目
   3. 在 providers/ 目录实现 build_xxx() 和 get_xxx_balance() 函数
+
+本模块是**代码层静态注册表**。用户自建（BYOK）的模型与厂商实例走 DB 覆盖层，
+由 `registry_store.py` 读库后经 `set_dynamic_models()` 注入，统一从
+`get_available_models()` / `resolve_provider()` 读取 —— 消费方不要再直接引用
+`AVAILABLE_MODELS` 常量（那是 DB 覆盖之前的旧入口）。
+
+设计见 docs/model-config-governance-design.md（§3.2 / 附录 B）。
+
+⚠️ 顶层只允许 stdlib：本模块处在 backend.infra.llm 的高频导入链上，
+且被 config 侧间接引用，任何重依赖（langchain / torch / sqlalchemy）都会拖慢冷启动。
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from backend.shared.logger import logger
+
 # 注：不要在这里顶层 import langchain_ollama —— 实测它连带 torch/transformers
 # （~8s），而本模块处在 backend.infra.llm 的高频导入链上。registry 的 class
 # 字段无任何消费方（工厂走 build_xxx()），置 None 即可。
-# Provider 注册表：provider_name → {class, default_model, needs_api_key}
+#
+# driver: 协议适配族（openai | anthropic | ollama）—— 决定用哪个客户端类构建。
+#         **代码白名单，用户不可改**（配错即不可用）。
+# billing: 计费口径（metered | subscription | local）—— 决定成本估算与预算阻断：
+#         - metered      按价格表算 USD，计入预算
+#         - subscription 恒 0，但显示「订阅制·不计 token」；不计入预算，仍记用量
+#         - local        恒 0（自托管）；不计入预算，仍记用量
+#         ⚠️ 语义混淆会让报表无法区分「真没花钱」与「价格没录」，勿合并后两者。
 PROVIDERS: dict[str, dict[str, Any]] = {
     "ollama": {
         "class": None,  # 懒加载（langchain_ollama.ChatOllama，见 providers/ollama.py）
         "default_model": "qwen2.5:3b",
         "needs_api_key": False,
+        "driver": "ollama",
+        "billing": "local",
     },
     "deepseek": {
         "class": None,  # 懒加载（兼容 OpenAI 协议的 ChatOpenAI）
         "default_model": "deepseek-v4-flash",
         "needs_api_key": True,
+        "driver": "openai",
+        "billing": "metered",
     },
     "minimax": {
-        "class": None,  # OpenAI 兼容协议
+        "class": None,  # Anthropic Messages API（官方推荐路径，见 providers/minimax.py）
         "default_model": "MiniMax-M3",
         "needs_api_key": True,
+        "driver": "anthropic",
+        "billing": "metered",
     },
     "qwen": {
         "class": None,  # DashScope OpenAI 兼容协议
         "default_model": "qwen3.7-plus",
         "needs_api_key": True,
+        "driver": "openai",
+        "billing": "metered",
     },
     "qwen_tp": {
         "class": None,  # Qwen Token Plan（模型包端点，注册名带 @tp 后缀）
         "default_model": "qwen3.7-plus@tp",
         "needs_api_key": True,
+        "driver": "openai",
+        # 模型包按购买量计费，不走 token 计价 —— 是订阅制，不是「metered 且单价 0」
+        "billing": "subscription",
     },
     "vllm": {
         "class": None,  # 自托管 vLLM（OpenAI 兼容协议），见 providers/vllm.py
         "default_model": "Qwen/Qwen3-32B-AWQ",
         "needs_api_key": True,
+        "driver": "openai",
+        "billing": "local",
     },
     "siliconflow": {
         "class": None,  # 硅基流动（OpenAI 兼容协议），见 providers/siliconflow.py
         "default_model": "Qwen/Qwen3-8B",
         "needs_api_key": True,
+        "driver": "openai",
+        "billing": "metered",
     },
 }
 
@@ -223,3 +257,139 @@ def compute_embedding_cost(model_name: str, total_tokens: int) -> float:
         return 0.0
     price_per_1m = pricing.get("input_per_1m_usd", 0.0)
     return round((total_tokens / 1_000_000) * price_per_1m, 6)
+
+
+# =====================================================
+# 动态注册表（DB 覆盖层）—— 统一读取入口
+# =====================================================
+# DB 里 llm_models / llm_providers 的条目由 registry_store.py 读出后注入这里。
+# 热路径只读进程内列表（零 IO）：DB 访问在后台刷新循环里做（同 sys_config 模式）。
+#
+# P1a 阶段（迁移 0017 已建表但未接线）：动态层恒空 → 行为与纯代码层完全一致。
+_dynamic_models: list[dict] = []
+
+# 未注册模型只告警一次，避免热路径刷屏
+_warned_unknown_models: set[str] = set()
+
+
+class ProviderResolutionError(LookupError):
+    """模型名无法解析出 provider（既不在注册表，也无法从名称判定）。"""
+
+
+def set_dynamic_models(entries: list[dict] | None) -> None:
+    """注入 DB 覆盖层的模型条目（由 registry_store 的刷新循环调用）。
+
+    条目形状与 AVAILABLE_MODELS 一致，另需 `source`（'db'）与 `provider`。
+    同名条目覆盖代码层条目；代码层独有的条目保留（DB 抖动不导致模型消失）。
+    """
+    global _dynamic_models
+    _dynamic_models = list(entries or [])
+
+
+def reset_dynamic_models_for_tests() -> None:
+    """测试态注入点：清空动态层，恢复纯代码层语义。"""
+    _dynamic_models.clear()
+    _warned_unknown_models.clear()
+
+
+def get_available_models() -> list[dict]:
+    """可用模型清单的**唯一读取入口**（代码层 + DB 覆盖层）。
+
+    无动态条目时直接返回代码层对象（零拷贝，保持与历史 `AVAILABLE_MODELS`
+    完全一致的语义与身份）。有覆盖时才合并，同名以 DB 为准。
+    """
+    if not _dynamic_models:
+        return AVAILABLE_MODELS
+    merged = {m["name"]: m for m in AVAILABLE_MODELS}
+    for m in _dynamic_models:
+        merged[m["name"]] = m
+    return list(merged.values())
+
+
+def get_model_entry(model_name: str) -> dict | None:
+    """按模型名取条目（DB 覆盖层优先）。未注册返回 None。"""
+    for m in _dynamic_models:
+        if m["name"] == model_name:
+            return m
+    for m in AVAILABLE_MODELS:
+        if m["name"] == model_name:
+            return m
+    return None
+
+
+def is_known_model(model_name: str) -> bool:
+    """模型是否在当前生效的注册表内（含 DB 覆盖层）。"""
+    return get_model_entry(model_name) is not None
+
+
+def resolve_provider(
+    model_name: str,
+    *,
+    strict: bool = False,
+    default_provider: str = "ollama",
+) -> str:
+    """模型名 → provider。
+
+    `strict=False`（默认）：保持历史行为（与 `LLMFactory._get_provider` 逐位一致）——
+    注册表未命中时按名称启发式推断，仍判不出则回落 `default_provider` 并**记一次
+    warning**（历史实现是完全静默的，静默会让「自建模型被误判成 ollama」无从发现）。
+
+    `strict=True`：判不出即抛 `ProviderResolutionError`。供管理端校验与探测使用。
+
+    ⚠️ 为什么不默认 fail-closed（设计 B.5#4 的完整落地推迟到 P1b）：
+    **Ollama 本地模型名不可穷举**（`llama3` / `qwen2.5:7b` / 任意 pull 下来的名字），
+    而 `OLLAMA_MODEL`（role=eval_gen）等链路今天正是靠这条兜底在工作。
+    贸然改成抛错会直接打断评测生成等非对话链路。真正的修复是让自建模型
+    显式登记（DB 覆盖层），那时兜底自然不再被触发。
+    """
+    entry = get_model_entry(model_name)
+    if entry is not None:
+        return entry["provider"]
+
+    # ── 名称启发式（历史行为，勿改判定顺序）──
+    if "deepseek" in model_name:
+        return "deepseek"
+    lowered = model_name.lower()
+    if "minimax" in lowered:
+        return "minimax"
+    if "qwen" in lowered and ":" not in model_name:
+        # 带冒号标签（如 qwen2.5:3b）是本地 Ollama 模型，此处只匹配在线 Qwen
+        return "qwen"
+
+    if strict:
+        raise ProviderResolutionError(
+            f"模型 {model_name!r} 既不在模型注册表内，也无法从名称判定 provider。"
+            f"请在 AVAILABLE_MODELS 登记，或经管理端新增后重试。"
+        )
+
+    if model_name not in _warned_unknown_models:
+        _warned_unknown_models.add(model_name)
+        logger.warning(
+            "[LLMRegistry] 模型 %r 未在注册表内且名称无法判定 provider，"
+            "按 %s 处理（若为自建云端模型，请在管理端登记 —— 否则会走错端点）",
+            model_name, default_provider,
+        )
+    return default_provider
+
+
+def get_provider_driver(provider: str) -> str | None:
+    """provider → 协议驱动（openai | anthropic | ollama）；未知 provider 返回 None。"""
+    spec = PROVIDERS.get(provider)
+    return spec.get("driver") if spec else None
+
+
+def get_provider_billing(provider: str) -> str:
+    """provider → 计费口径。
+
+    未知 provider 按 `metered` 处理（保守：宁可照常计价，不可静默免费用量）。
+    """
+    spec = PROVIDERS.get(provider)
+    return spec.get("billing", "metered") if spec else "metered"
+
+
+def get_model_billing(model_name: str) -> str:
+    """模型名 → 计费口径（先解析 provider，再查其口径）。"""
+    try:
+        return get_provider_billing(resolve_provider(model_name))
+    except ProviderResolutionError:
+        return "metered"

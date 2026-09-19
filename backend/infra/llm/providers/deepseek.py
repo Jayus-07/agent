@@ -4,6 +4,11 @@ deepseek.py — DeepSeek Provider（云端，兼容 OpenAI 协议）
 提供:
   - build_deepseek(): 构建 ChatOpenAI 实例（用 DeepSeek API base）
   - get_deepseek_balance(): 调 DeepSeek 官方余额查询 API
+
+凭据在**调用时**解析：`credentials` 由调用方给出（见 infra/llm/credentials.py），
+为 None 或字段为空时回落 `.env`（config 常量）。
+⚠️ 不要改回「import 常量后直接用」—— 那是导入时值拷贝，会让运行时轮换
+与免重启生效失效（设计 B.5#1）。
 """
 
 from backend.config import (
@@ -14,10 +19,13 @@ from backend.config import (
     LLM_STREAM_USAGE,
     LLM_TEMPERATURE,
 )
+from backend.infra.llm.credentials import ProviderCredentials
 from backend.shared.logger import logger
 
 
-def build_deepseek(model_name: str) -> object:
+def build_deepseek(
+    model_name: str, credentials: ProviderCredentials | None = None
+) -> object:
     """构建 DeepSeek 模型实例（通过 OpenAI 兼容协议）"""
     try:
         from langchain_openai import ChatOpenAI
@@ -26,19 +34,22 @@ def build_deepseek(model_name: str) -> object:
             "deepseek provider 需要 langchain_openai 包，请 pip install langchain-openai"
         ) from e
 
+    api_key = (credentials.api_key if credentials else None) or DEEPSEEK_API_KEY
+    base_url = (credentials.base_url if credentials else None) or DEEPSEEK_API_BASE
+
     return ChatOpenAI(
         model=model_name,
         temperature=LLM_TEMPERATURE,
         max_tokens=LLM_CONTEXT_LENGTH,
         request_timeout=LLM_REQUEST_TIMEOUT,
-        api_key=DEEPSEEK_API_KEY,
-        base_url=DEEPSEEK_API_BASE,
+        api_key=api_key,
+        base_url=base_url,
         # 流式尾 chunk 携带 token 用量（DeepSeek 官方支持 stream_options.include_usage）
         stream_usage=LLM_STREAM_USAGE,
     )
 
 
-def get_deepseek_balance() -> dict:
+def get_deepseek_balance(credentials: ProviderCredentials | None = None) -> dict:
     """调 DeepSeek 官方余额查询 API
 
     返回:
@@ -46,14 +57,17 @@ def get_deepseek_balance() -> dict:
         或
         {"ok": False, "error": "..."}
     """
-    if not DEEPSEEK_API_KEY:
+    api_key = (credentials.api_key if credentials else None) or DEEPSEEK_API_KEY
+    base_url = (credentials.base_url if credentials else None) or DEEPSEEK_API_BASE
+
+    if not api_key:
         return {"ok": False, "error": "DEEPSEEK_API_KEY 未配置"}
 
     try:
         import requests
         resp = requests.get(
-            f"{DEEPSEEK_API_BASE.rstrip('/')}/user/balance",
-            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+            f"{base_url.rstrip('/')}/user/balance",
+            headers={"Authorization": f"Bearer {api_key}"},
             timeout=10,
         )
         if resp.status_code != 200:
@@ -93,21 +107,26 @@ def get_deepseek_balance() -> dict:
         return {"ok": False, "error": f"请求失败: {e}"}
 
 
-async def get_deepseek_balance_async() -> dict:
+async def get_deepseek_balance_async(
+    credentials: ProviderCredentials | None = None,
+) -> dict:
     """get_deepseek_balance 的异步版（P1-16）。
 
     原同步版用 requests，在 async 路由（/llm/balance）里直接调用会阻塞
     事件循环最长 10s。本版本用 httpx.AsyncClient，语义与返回结构完全一致。
     """
-    if not DEEPSEEK_API_KEY:
+    api_key = (credentials.api_key if credentials else None) or DEEPSEEK_API_KEY
+    base_url = (credentials.base_url if credentials else None) or DEEPSEEK_API_BASE
+
+    if not api_key:
         return {"ok": False, "error": "DEEPSEEK_API_KEY 未配置"}
 
     try:
         import httpx
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
-                f"{DEEPSEEK_API_BASE.rstrip('/')}/user/balance",
-                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+                f"{base_url.rstrip('/')}/user/balance",
+                headers={"Authorization": f"Bearer {api_key}"},
             )
         if resp.status_code != 200:
             return {

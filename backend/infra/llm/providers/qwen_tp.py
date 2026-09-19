@@ -7,9 +7,11 @@ qwen_tp.py — Qwen Token Plan Provider（阿里云百炼模型包端点，OpenA
   - 注册名约定: AVAILABLE_MODELS 中带 @tp 后缀（如 qwen3.7-plus@tp），
     构建时剥掉后缀、把真实模型名发给 API
 
-提供:
-  - build_qwen_tp(): 构建 ChatOpenAI 实例（Token Plan 端点）
-  - get_qwen_tp_balance(): Token Plan 无余额 API，返回用量包提示
+计费口径为 `subscription`（模型包按购买量计费，不走 token 计价，见
+models.PROVIDERS）—— 不得当成「metered 且单价 0」，否则报表无法区分
+「真没花钱」与「价格没录」。
+
+凭据在**调用时**解析（credentials，见 infra/llm/credentials.py）。
 """
 
 from backend.config import (
@@ -20,12 +22,15 @@ from backend.config import (
     QWEN_TP_API_BASE,
     QWEN_TP_API_KEY,
 )
+from backend.infra.llm.credentials import ProviderCredentials
 
 # 注册名后缀 → 真实模型名的分隔符
 _TP_SUFFIX = "@tp"
 
 
-def build_qwen_tp(model_name: str) -> object:
+def build_qwen_tp(
+    model_name: str, credentials: ProviderCredentials | None = None
+) -> object:
     """构建 Qwen Token Plan 模型实例
 
     model_name 带注册后缀（qwen3.7-plus@tp），剥掉后发送真实模型名。
@@ -42,19 +47,26 @@ def build_qwen_tp(model_name: str) -> object:
     import os
     enable_thinking = os.getenv("QWEN_ENABLE_THINKING", "false").strip().lower() in ("1", "true", "yes")
 
+    api_key = (credentials.api_key if credentials else None) or QWEN_TP_API_KEY
+    base_url = (credentials.base_url if credentials else None) or QWEN_TP_API_BASE
+
+    body = {"enable_thinking": enable_thinking}
+    if credentials and credentials.extra_body:
+        body.update(credentials.extra_body)
+
     return ChatOpenAI(
         model=real_model,
         temperature=LLM_TEMPERATURE,
         max_tokens=LLM_CONTEXT_LENGTH,
         request_timeout=LLM_REQUEST_TIMEOUT,
-        api_key=QWEN_TP_API_KEY,
-        base_url=QWEN_TP_API_BASE,
-        extra_body={"enable_thinking": enable_thinking},
+        api_key=api_key,
+        base_url=base_url,
+        extra_body=body,
         stream_usage=LLM_STREAM_USAGE,
     )
 
 
-def get_qwen_tp_balance() -> dict:
+def get_qwen_tp_balance(credentials: ProviderCredentials | None = None) -> dict:
     """Token Plan 无公开余额 API（用量包在控制台看），返回提示"""
     return {
         "ok": True,

@@ -84,6 +84,10 @@
 
 ### 3.2 provider 能力矩阵（留代码，不进 DB）
 
+> ⚠️ **2026-09-19 修订**：本节只界定「**协议与能力**」留代码，未覆盖「**厂商实例**」。
+> 后续需求（用户自建供应商 / BYOK + 连通性自测）要求厂商的可变部分进 DB。
+> 边界勘定为「**驱动留代码，实例进 DB**」，见 **附录 B**。本节其余内容仍然成立。
+
 以下三项属于「随代码发布」的事实，不能由管理端改，否则会把系统配成不可用：
 
 - 协议类型（openai-compatible / anthropic-compatible / dashscope-native / jina / ollama）
@@ -509,3 +513,363 @@ P0 后启动校验会点名（已在真实 `.env` 下验证）：
 2. 决策 A.4① 的处理方式（补注册 `Qwen/Qwen3-30B-A3B-Instruct-2507` 还是换值）。
 3. `backend/shared/crypto.py` 抽取（`competitor/crypto.py` 行为保持不变）。
 4. 迁移编号取 `0017`（当前最新为 `0016_price_governance.py`）。
+
+# 附录 B：用户自建供应商（BYOK）与连通性自测（2026-09-19 追加，未实施）
+
+需求原文：各大厂商有 apikey 和 url，另有 coding plan 套餐也是自己输 apikey 和 url；
+希望用户能自己添加/修改，输入完点测试图标验证能不能用。
+
+## B.0 本附录改了什么前提
+
+§3.2 定「provider 能力矩阵留代码，不进 DB」—— **该结论依然成立**，但它只回答了
+「协议能不能改」，没回答「厂商能不能加」。用户要的不是改协议，是**加一家厂商**。
+
+边界勘定：
+
+| 层 | 内容 | 可否由管理端改 | 理由 |
+|---|---|---|---|
+| **驱动（driver）** | 协议适配（openai / anthropic / ollama）、能力矩阵、请求体形状 | ❌ 代码内置 | 配错会把系统配成不可用（§3.2 原论据，仍有效） |
+| **实例（instance）** | base_url、API Key、模型名、计费模式、额外请求头 | ✅ DB + 管理端 | 纯数据，厂商间差异只有这些 |
+
+## B.1 为什么可行：厂商差异不在代码里（已核实）
+
+| 客户端类 | 覆盖家数 | 厂商 |
+|---|---|---|
+| `ChatOpenAI` | 5 | qwen / qwen_tp / deepseek / siliconflow / vllm |
+| `ChatAnthropic` | 1 | minimax |
+| `ChatOllama` | 1 | ollama |
+
+7 个 `build_xxx()`（共 556 行）里 5 个是同一段 `ChatOpenAI` 的复制，
+差别只有 `base_url` / `api_key` / `extra_body`。
+
+**结论：3 个驱动即可覆盖今天全部 7 家**，也覆盖绝大多数新厂商与 coding plan。
+今天「加一家 = 写 59 行 py + 改 2 张常量表 + 重启」，改造后「加一家 = 填 4 个框」。
+
+## B.2 「coding plan」为什么不是新协议
+
+coding plan（订阅套餐）与按量 API 的差别只有三点，**三点都是数据**：
+
+| 差异 | 落到哪个字段 |
+|---|---|
+| 专用端点（如 `/api/coding/...`） | `base_url` |
+| 订阅制计费、不走 token 计价 | `billing = subscription` |
+| 模型名固定/受限，且**常不实现 `GET /models`** | `llm_models` + 测试策略 |
+
+⚠️ 第三点直接决定测试按钮怎么设计（见 B.4）—— 这是本附录最容易被做浅的地方。
+
+## B.3 数据模型（迁移 0017）
+
+```
+llm_providers                      -- 厂商实例
+  id TEXT PK                       -- slug，如 'glm-coding'
+  display_name TEXT                -- 「GLM Coding Plan」
+  driver TEXT                      -- openai | anthropic | ollama（代码白名单）
+  base_url TEXT
+  network_scope TEXT               -- public | private（private 需显式勾选 + 审计）
+  extra_headers JSONB              -- 键白名单，如 anthropic-version
+  billing TEXT                     -- metered | subscription | local
+  is_builtin BOOL                  -- 现有 7 家在库中也留行，便于统一展示/停用
+  enabled BOOL
+  created_by / created_at / updated_at
+
+llm_provider_credentials           -- 与 provider 1:1
+  provider_id PK/FK
+  key_cipher TEXT                  -- Fernet 密文；必须 TEXT（VARCHAR(128) 装不下）
+  key_fingerprint TEXT             -- sha256[:12]，脱敏展示 + 审计用
+  key_last4 TEXT
+  key_version INT                  -- 轮换计数（缓存失效靠它比对）
+
+llm_models                         -- 用户自建模型（builtin 仍留代码）
+  name TEXT PK                     -- 大小写敏感，如 'glm-4.6'
+  provider_id FK
+  display / capabilities JSONB / context_length / pricing JSONB / enabled / source
+```
+
+**`billing` 三态与成本口径（2026-09-19 已拍板：订阅制显示「订阅制·不计 token」）**
+
+| billing | 成本估算 | 预算阻断 | Token 用量 | 现有归属 |
+|---|---|---|---|---|
+| `metered` | 按价格表算 USD | 计入 | 记录 | qwen / deepseek / minimax / siliconflow |
+| `subscription` | 恒 0，但**显示为「订阅制·不计 token」，不是「免费」** | **不计入** | **仍记录**（容量规划用） | **`qwen_tp`**、新增 coding plan |
+| `local` | 恒 0 | 不计入 | 仍记录 | ollama / vllm |
+
+⚠️ **新发现：`qwen_tp` 今天已经是事实上的订阅制，却被当成「metered + 单价 0」处理**
+（`models.py:73-74` 注释已写「模型包按购买量计费，不走 token 计价」）。
+语义混淆的后果是**成本报表无法区分「真的没花钱」与「价格没录」** —— 这与
+`EMBEDDING_RERANK_PRICING` 缺 SiliconFlow 条目（§6.2 / A.4②）被漏掉是同一类问题。
+补 `billing` 字段后，`qwen_tp` 应改标 `subscription`。
+
+**落地影响（跨模块，须与 P1a 一起做）**：
+- `compute_cost_usd(model_name, ...)`（`models.py:170`）目前只按模型名查价格表，
+  **拿不到 billing** → 签名需带上 provider 或先查 billing，否则无法区分「订阅制」与「免费」
+- `budget.py` / `quota.py` 的成本累加需按 billing 跳过 `subscription` / `local`
+- `observability/tokens` 与 `llm_usage_attribution` 的成本列要能显示「订阅制」
+
+**关键取舍：builtin 也写一行进 DB（`is_builtin=true`），但解析链仍以代码层兜底。**
+不要做「空库启动 = 没有模型」—— DB 抖动时问答会直接不可用。这与 `sys_config` 的
+env 兜底是同构的，沿用既有模式。
+
+**新增一条不变式**（P0 没有的）：`resolve_credentials(provider)` 必须是热路径零 IO，
+凭据随现有 15s 刷新循环进内存缓存。**密钥不得每次调用都解密**（Fernet 是纯 Python，
+且每次要读 DB），也不能让 DB 抖动拖慢问答。
+
+## B.4 连通性测试：分级探测
+
+不能只做一次 `GET /models` —— 大量 coding plan 与中转站点不实现该端点。
+四级探测，**每级失败含义不同**：
+
+| 级别 | 动作 | 验证 | 失败含义 | 超时 |
+|---|---|---|---|---|
+| L0 | `url_guard` + DNS + TCP/TLS | URL 拼写、网络、证书 | URL 写错 / 不可达 | 5s |
+| L1 | `GET {base}/models` | Key 是否被接受 | 404 → 可能少了 `/v1`（给拼写建议） | 8s |
+| L2 | 最小 chat 调用（`max_tokens=16`，prompt 固定） | 模型名在该 Key 下是否可用 | **模型名错**（与 Key 错区分开） | 20s |
+| L3 | 试 `stream=true` 观察是否回传 usage | `stream_usage` 支持性 | 决定是否降级 | — |
+
+**硬约束（逐条都有原因）**：
+
+1. **L1 失败不判死，降级到 L2。** 否则用户会遇到「测试不通过但其实能用」，
+   测试按钮从此没人信。
+2. **L2 必须复用真实构建路径** —— 用 `build_*` 出来的实例 `invoke()` 一次，
+   而不是另写一套 httpx。否则又是「测试通过、线上不通」（真实链路还带限流/
+   韧性链/`stream_usage`）。
+3. **探测调用必须排除在用量与预算统计之外**（打 `probe` 标记）。否则每次点测试
+   都在烧预算，且污染 `/observability/tokens` 与 `llm_usage_attribution`。
+4. **返回原文摘要（截断 200 字）。** 本仓库反复踩「真实原因被埋在 N 层语义错误
+   之下」（`config/llm.py:303`），探测结果是排障第一现场。
+5. **允许草稿态测试**（未保存即可测），否则「填完保存了才知道不能用」。
+   代价是未落库的 URL 也会被探测 → 必须配合 B.6 的限制。
+6. **UI 只承诺「厂商连通性」，不承诺「业务可用」。** 业务链还要过限流 / 预算 /
+   工具绑定，说「可用」是过度承诺。
+
+## B.5 必须一并改的 10 处硬冲突
+
+| # | 冲突 | 证据 | 不修的后果 |
+|---|---|---|---|
+| 1 | **provider 客户端在 import 时把 KEY/BASE_URL 绑死** | `providers/qwen.py:9-16,43-44`；`siliconflow.py:11-18,44-45`；`deepseek.py:9-16,34-35`（`from backend.config import ...` 是**值拷贝**，`config.llm` 只求值一次） | 免重启 / 多实例 / 运行时轮换**全部不成立**。UI 做好了也是重启才生效 |
+| 2 | **`_instance_cache` 无失效机制** | `factory.py:126-127`；`proxy.py:489-497,512-514` 还直接读私有字段绕过工厂方法 | 「测试通过、线上仍用旧 key」，**且不报任何错** —— 最难查的一类 |
+| 3 | **`AVAILABLE_MODELS` 是模块级常量，4 处硬引用** | `proxy.py:37,85-88,206,882-883`；`factory.py:37,71,75,98,158`；`routes/llm.py:14,60`；`startup.py:245-253`。注意 `proxy.py:87` 对未注册模型是 **warning + 静默清空覆盖** | 用户加了模型，却「选了不生效」且无错误提示 |
+| 4 | **`_get_provider` 靠模型名猜 provider，兜底 `return "ollama"`** | `factory.py:156-168`；`proxy.py:205-208` | 自建模型名（`glm-4.6` / `kimi-k2`）被判成 **ollama** → cloud 模式直接拒绝或走错端点 |
+| 5 | **`set_current` 密钥校验是 8 个硬编码 if** | `factory.py:81-92` | 自建 provider 不在其中 → 校验被**静默跳过**，或切过去后调用时才 401 |
+| 6 | **`LLMSwitcher` 无权限门禁** | `navConfig.tsx:74`（组 `minRole: 'editor'`）+ `ComposerToolbar.tsx:102` | editor 能切全局模型；一旦切换变成写 DB 生效，**editor 就能改线上模型** |
+| 7 | **`url_guard` 与自托管直接冲突** | `url_guard.py:78-88` 拦 loopback/私网；而 `VLLM_API_BASE=http://localhost:8000/v1`（`config/llm.py:288`）、Ollama `localhost:11434` | 无脑套防护会把自托管场景打死；但不套防护就是 SSRF 面 |
+| 8 | **密文长度** | §1.1 冲突 4 已定（`VARCHAR(128)` 装不下 Fernet） | 新表 `key_cipher` 必须 `TEXT`；审计**只落指纹**，历史表不得出现明文/密文 |
+| 9 | **embedding/rerank 是第二条凭据链路** | `rag/embedding_singleton.py:47-65` 直接用 `EMBEDDING_API_KEY`/`EMBEDDING_API_BASE`；`config/llm.py:41` 注明与索引强绑定；`RERANK_API_FORMAT=dashscope`（`llm.py:120`）是另一套协议开关 | chat 侧能改而 embedding/rerank 还得回 `.env` 改 → 用户必问「为什么这里能改那里不能」 |
+| 10 | **`.env` 密钥同源关系仍在暗处** | `DASHSCOPE_API_KEY`/`QWEN_API_KEY` 同值、`EMBEDDING_API_KEY`/`RERANK_API_KEY`/`SILICONFLOW_API_KEY` 同源（`config/llm.py:85-95,293`） | 用户改了 A 而 B 跟着变，且无从察觉。必须与 §4.5 凭据去重一起做 |
+
+## B.6 权限、审计与新增的攻击面
+
+自建供应商 = 管理端获得「让服务向任意 URL 发请求」的能力，这是**真实的 SSRF 面**。
+
+| 动作 | 权限 | 审计内容 |
+|---|---|---|
+| 查看供应商 / 模型 | admin | — |
+| 新增 / 改 base_url | admin | who / old / new（URL 可全记） |
+| 写入 / 轮换密钥 | admin | **只记指纹**，不记明文与密文 |
+| 点测试 | admin | who / 目标 URL / 分级结论 / 耗时，**不记 key** |
+| 使用某 provider 跑会话 | editor+ | 走既有 `llm_usage_attribution` |
+
+**测试端点必须加的四道限制**（否则它就是一个「任意 URL 探测代理」）：
+
+1. admin only（复用现有 `require_admin_user`）
+2. 目标 URL 过 `url_guard`；私网需**显式放行且放行项在管理端可见**
+3. **探测报文固定**，不允许用户自定义 body；额外 header 走键白名单
+4. 限流（同 admin 每分钟 N 次），防止被用来扫内网
+
+**私网放行机制（2026-09-19 已拍板：允许 + 显式标注 + 审计）**
+
+**不做全局环境变量白名单，改为「按实例显式勾选」。** 理由：全局白名单一开就是全站放行，
+无法回答「谁允许的、为哪个厂商开的」；而按实例勾选天然可审计。
+
+- `llm_providers.network_scope TEXT`：`public`（默认）| `private`
+- 默认 `public` → 目标 URL 照常走 `url_guard` 全量检查（含私网/环回/元数据拦截）
+- 管理员在新增·编辑抽屉里**显式勾选**「这是内网服务」→ 该实例才跳过 IP 段检查
+- ⚠️ 跳过检查的判定**只能来自这个勾选，不能来自「解析出来是私网就自动放行」**。
+  否则公网域名解析到内网 IP 的 DNS rebinding 就绕过去了
+- scheme 白名单、控制字符拦截**勾选后仍然生效**（只放开网段，不放开协议）
+- 勾选状态在列表以徽章显示；`created_by` / 修改 `network_scope` 的动作进审计
+- 不建议复用 `SSRF_TRUSTED_DOMAINS`：它是**域名后缀**语义，装不下 `localhost:8000`
+  这类 host:port，硬塞会污染竞品抓取的既有行为
+
+## B.7 前端
+
+`/settings/models` 的 tab② 由「只读 + 轮换」升级为 **CRUD + 测试**：
+
+- 列表列：显示名 / 驱动 / base_url / 密钥状态（`已配置 ····a1b2 · 指纹 3f9c1d · 3 天前轮换`）
+  / 模型数 / 最近一次连通性结论 + 时间
+- 新增·编辑抽屉：显示名 · 驱动（下拉，来自代码）· base_url · API Key（粘贴，保存后不可读回）
+  · 模型名（多行）· 计费模式 · 单价（按量时）
+- **测试图标**：放在 base_url / API Key 输入框旁，草稿态可点；结果内联展开为
+  分级清单（L0/L1/L2/L3 各自 ✅/❌ + 原文摘要），不是单个布尔
+- 保存时若未测或未通过 → **允许保存但标红「未验证」**，并在「体检」tab 点名。
+  不硬拦：用户可能先配后开网络白名单。
+- 保存成功回执必须明确：「已生效，当前会话下次调用即使用新凭据」—— 直接对冲 B.5#2 的困惑
+
+交互上两条必须做到，否则用户搞不清：
+1. **区分「Key 错」与「模型名错」** —— 尤其中转 / coding plan 站点，这两种最易混。
+2. **base_url 归一化提示**：去尾斜杠、缺 `/v1` 时给建议（由 L1 的 404 触发）。
+
+## B.8 分期（接 §9，原 P1 拆为两段）
+
+- **P1a — 凭据与注册表通道（无 UI，可独立验收，零行为变化）**
+  - `shared/crypto.py` 抽取（`competitor/crypto.py` 行为不变）
+  - 三张表 + 迁移 0017（含 `network_scope` / `billing` 字段，DB 空表时不影响行为）
+  - 破 B.5#1（provider 改传参式）、#2（`invalidate()` + `key_version` 比对）、
+    #3（`get_available_models()` 统一入口 + fail-closed 回退代码层）、
+    #4（去名称启发式，猜不出显式报错）、#5（收敛 `resolve_credentials`）
+  - 验收：**全部仍读 env、DB 空表**，生效快照与 `41a5df9` 逐项一致 + 定向回归
+  - ⚠️ **文件归属依赖**：`billing` 传播到 `compute_cost_usd` 需要改 `proxy.py` /
+    `budget.py` / `quota.py`，这三个文件当前是「他人未提交」状态（2026-09-19 13:34 核实）。
+    可拆为 **P1a-1**（provider / factory / models / crypto / 迁移，全在净文件与新建文件）
+    与 **P1a-2**（billing 传播，等上述三文件落定）。数字上零变化：`qwen_tp` 现在
+    无论算 metered-0 还是 subscription 都是 0 成本，差别只在展示口径。
+- **P1b — 探测服务**：分级探测 + `POST /sys/providers/{id}/verify`（支持草稿态）+
+  `network_scope` 私网放行 + 探测流量打标排除统计
+- **P2 — 管理端**：tab② CRUD + 测试图标；builtin 也可在页面停用；
+  **`LLMSwitcher` 改会话级 + `chat.ts` 加 `model` 字段 + `/llm/switch` 加 admin 门禁**（B.9②）
+- **P3 — 收尾**：embedding/rerank 凭据与绑定（含重建索引二次确认）、价格合并、
+  `.env` 瘦身、密钥去重与轮换（含 §P1 记的第 312 行明文 Key）
+
+**P1a 与 P1b 之间是硬闸门**：P1a 完成前做 UI，会得到一个「配了不生效」的页面。
+
+## B.9 决策记录（2026-09-19 已拍板）
+
+### ① 自建 provider 允许指向私网 → **允许 + 显式标注 + 审计**
+
+落地见 B.6：按实例 `network_scope` 勾选，不做全局白名单。默认 `public`，未勾选的私网目标
+一律照拦（含 DNS rebinding 情形）。
+
+### ② editor 切模型 → **回收为会话级临时切换，全局默认只 admin 可改**
+
+**核实结论：会话级通道已经完整存在，后端零新增。** 链路是现成的：
+
+```
+ChatRequest.model (chat.py:105,182)
+  → RequestContext(model=...) (orchestration/request_context.py:55)
+  → set_request_model() (core/request_context.py:173)
+  → _request_model_var contextvar (proxy.py:67)
+  → _resolve_active_llm() 优先取它 (proxy.py:487)
+```
+
+所以改动只在三处：
+
+| 位置 | 改动 |
+|---|---|
+| `frontend-admin/src/api/chat.ts` | 加可选 `model` 字段（今天**完全没有传**） |
+| `components/agent/LLMSwitcher.tsx:88` | 从调 `switchLLM()`（全局）改为写会话级状态，由 chat 请求带出 |
+| `POST /llm/switch`（`routes/llm.py:74`） | 加 `require_admin_user`；保留纯内存语义作为 admin debug 通道 |
+
+`set_current()` 的内存语义**原样保留**（它不再是管理端入口，只服务 admin 调试），
+这与 §3.4 的分歧判断一致。附带收益：editor 的临时切换天然是「一次性」的，
+不会出现「偷偷改了线上模型」。
+
+⚠️ 与 B.5#3 的耦合：`_request_model_var` 在 `proxy.py:85-88` 对未注册模型是
+**warning + 静默清空** → 自建模型必须先落注册表，否则会话级切换会「选了没反应且无提示」。
+
+### ③ 订阅制 provider → **显示「订阅制·不计 token」**
+
+落地见 B.3 的 billing 三态表。附带把 `qwen_tp` 从「metered + 单价 0」改标 `subscription`。
+
+---
+
+# 附录 C：P1a-1 实施记录（2026-09-19）
+
+**范围**：provider 传参式、凭据解析唯一入口、可用模型统一入口、实例缓存失效、
+密钥通道原语抽取、迁移 0017 与 DAO。验收口径是「DB 空表 + 全读 env，行为与
+`41a5df9` 逐项一致」。
+
+## C.1 交付物
+
+| 文件 | 状态 | 说明 |
+|---|---|---|
+| `backend/shared/crypto.py` | 新增 | Fernet 原语：按 env 名分桶缓存、`invalidate`、**fail-loud** 与优雅降级双语义、`fingerprint`/`last4`/`mask_secret` |
+| `backend/competitor/crypto.py` | 改 | 委托 shared；保留 `_fernet` 模块变量（既有测试用它重置缓存） |
+| `backend/infra/llm/models.py` | 改 | `get_available_models()` / `get_model_entry()` / `is_known_model()` / `resolve_provider()` / `ProviderResolutionError` / `set_dynamic_models()`；`PROVIDERS` 增 `driver`+`billing`；`get_provider_billing` / `get_model_billing` / `get_provider_driver` |
+| `backend/infra/llm/credentials.py` | 新增 | `ProviderCredentials` + `resolve_credentials()`（调用时读 config 模块属性，非值拷贝）+ `set_db_credentials()` / `credentials_version()` / `missing_key_message()` / `check_provider_usable()` / `snapshot()` |
+| `backend/infra/llm/providers/*.py` | 改 7 个 | `build_xxx(model_name, credentials=None)`、`get_xxx_balance(credentials=None)`；空字段回落 config |
+| `backend/infra/llm/factory.py` | 改 | 走统一入口；`_get_provider` 委托 `resolve_provider`；`_build_instance` 传凭据；`set_current` 的 8 个硬编码 if 收敛；新增 `available_models()` / `invalidate()` / `key_version()` |
+| `backend/infra/llm/registry_store.py` | 新增 | DB 三表读取 → `set_dynamic_models` / `set_db_credentials`；fail-open；凭据解密 fail-loud（单条失败只跳过该 provider） |
+| `backend/sql/alembic/memory/versions/0017_llm_providers.py` | 新增 | 三表 + 索引（⚠️ 见 C.4 提交依赖） |
+| `backend/tests/infra/{test_shared_crypto,test_llm_credentials,test_llm_registry_models,test_llm_provider_passthrough}.py` | 新增 | 56 例 |
+| `backend/tests/infra/test_llm_siliconflow_provider.py` | 改 1 处 | monkeypatch 注入点 factory → `config.llm`（见 C.3②） |
+
+## C.2 与设计的偏差（1 处，理由已核实）
+
+**B.8 写的「#4 去名称启发式，猜不出显式报错」→ 只做了一半。**
+
+实测：`_get_provider` 最后那句 `return "ollama"` **不是无意的 bug，而是唯一的本地模型
+表达方式** —— Ollama 模型名不可穷举（`llama3` / `qwen2.5:7b` / 任意 pull 下来的名字），
+而 `OLLAMA_MODEL`（role=`eval_gen`）今天就靠这条兜底工作。把它改成 fail-closed 会
+**直接打断评测生成等非对话链路**，且这些链路的测试不在本次回归范围内。
+
+故落地为：
+
+- `resolve_provider(name)` 宽松模式 —— 保持历史行为，但**判不出时记一次 warning**
+  （历史实现完全静默，静默正是「自建模型被误判成 ollama 且无从发现」的成因）
+- `resolve_provider(name, strict=True)` —— 判不出抛 `ProviderResolutionError`，
+  供管理端校验（P2）与探测（P1b）使用
+- 自建模型一旦登记进 DB 覆盖层，启发式自然不再触发（`get_model_entry` 先命中）
+
+真正的 fail-closed 切换放到 P1b（那时自建模型有显式 `provider` 归属）。
+
+## C.3 实施中发现的四件事
+
+**① `proxy.py` 有第二条独立的构建路径 —— 运行时凭据链路在 P1a-1 无法打通。**
+`proxy.py:204-231` 自带 `_get_provider_for()` 并**直接调 `build_xxx(model_name)`**，
+不经过 factory。本轮的传参式改动对它是**向后兼容**的（`credentials=None` → 读 config），
+所以不破坏现状；但「管理端改了密钥，会话立刻用新 Key」这条链路必须等 P1a-2
+（`proxy.py` 落定后）才能闭合。**这也是 P1a → P1b 之间那道硬闸门的具体内容。**
+
+**② 收敛 `set_current` 会破坏一个既有测试的注入点。**
+`test_llm_siliconflow_provider.py::test_set_current_rejects_when_siliconflow_key_missing`
+用 `monkeypatch.setattr(factory_module, "SILICONFLOW_API_KEY", "")` 注入 ——
+依赖 factory 模块持有该常量。凭据收敛后 factory 不再持有它，故把注入点改为
+`backend.config.llm.SILICONFLOW_API_KEY`（`resolve_credentials` 在**调用时**
+读 config 模块属性，所以该注入有效）。测试意图与断言未变。
+
+**③ 顺带发现：`proxy.py` 与 factory 的密钥判定口径不一致。**
+`proxy.py` 的 `set_request_model` 用 `os.getenv(key_env)`（运行时读环境变量），
+而 factory 改造前读 `config.llm` 的**导入时常量**。二者在「只改 env 不重启」时
+结论可能不同。本轮的 `resolve_credentials` 统一为「读 config 模块属性」，
+与 factory 历史语义等价；proxy 侧待 P1a-2 一并统一。
+
+**④ 顺带发现：`MINIMAX_API_MASE` 与 provider 硬编码同值不同源。**
+`providers/minimax.py` 用的是**字面量** `https://api.minimaxi.com/anthropic`，
+而 `config.llm.MINIMAX_API_BASE` 的**代码默认**是 `https://api.minimax.chat/v1`
+（OpenAI 兼容端点，另一套协议）；只是当前 `.env` 把它也设成了 Anthropic 端点，
+两者恰好同值。**若「顺手」把 provider 改读 config，`.env` 缺失时会静默漂移到
+另一套协议。** 本轮保留字面量（改由 `credentials.MINIMAX_ANTHROPIC_URL` 承载）。
+
+## C.4 ⚠️ 提交依赖：0017 不能单独提交
+
+`0014` / `0015` / `0016` 当前是**另一会话的在途工作**（`git status` 为 untracked）。
+本迁移 `down_revision = "0016"`，若先于它们提交，`alembic upgrade head` 会报
+`Can't locate revision identified by '0016'` —— **迁移链断裂**。
+故 0017 须与 0016 一并（或在其落地之后）提交。
+
+同理，`proxy.py` / `budget.py` / `quota.py` / `api/router.py` / `test_llm_budget.py` /
+`test_llm_quota.py` 仍是他人未提交状态，本轮**未触碰**。
+
+## C.5 验收证据
+
+| 项 | 结果 |
+|---|---|
+| 8 个模型常量 vs 改造前（P0 快照） | 逐项一致（未改动 `config/llm.py`） |
+| `resolve_provider` vs 旧 `_get_provider` | 25 个用例**逐位一致**（含启发式与 ollama 兜底） |
+| `resolve_credentials` vs providers 实际使用的常量 | 7 个 provider 逐项一致（含 minimax 字面量端点） |
+| provider 传参式（mock 客户端 kwargs） | 不传 = 改造前逐位一致；传了 = 覆盖生效；空字段 = 回落 |
+| 可用性判定 vs 旧 8 个 if 链 | 不可用集合一致；文案逐字保留（含 `（sk-sp- 模型包 Key）` / `（deploy.sh 会生成）`） |
+| `registry_store` 在表不存在时 | `loaded=False`、不清空动态层、凭据回落 env（日志实测 `UndefinedTable`） |
+| competitor crypto 行为 | `TestCrypto` 7 passed（含 `_fernet` 重置约定） |
+| 新增测试 | `tests/infra/` 74 passed |
+| 配置导入链重依赖 | 无 langchain / torch / sqlalchemy（`models.py` 顶层检查） |
+
+**未跑全量 pytest**：仓库约定约 20 分钟且期间不得有并发会话改 `backend/`，
+而本轮实施期间实测另一会话活跃（pytest 缓存 13:32 被写、容器 46 分钟前重建、
+`0014~0016` 新增 untracked）。按约定只跑定向回归。
+
+## C.6 P1a-2 开工前的前置
+
+1. `proxy.py` / `budget.py` / `quota.py` / `router.py` 落定 —— 这是运行时凭据链路的最后一段
+2. `0016` 落地后提交 0017
+3. 决定 `billing` 传播（`compute_cost_usd` 签名需带 provider 或先查 billing）—— 数字上零变化，
+   但会碰 `budget.py` / `quota.py`

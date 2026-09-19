@@ -9,6 +9,12 @@ vllm.py — vLLM 自托管 Provider（OpenAI 兼容协议）
 .env 需配置:
   VLLM_API_BASE=http://localhost:8000/v1   # 经 SSH 隧道或直连
   VLLM_API_KEY=<deploy.sh 生成的 Key>
+
+⚠️ 自托管地址默认指向 loopback，与 `tools/url_guard.py` 的私网拦截天然冲突 ——
+管理端若要让用户在页面里编辑该地址，必须显式勾选「内网服务」（设计 B.6），
+不能靠「解析出来是私网就放行」。
+
+凭据在**调用时**解析（credentials，见 infra/llm/credentials.py）。
 """
 
 from backend.config import (
@@ -19,10 +25,13 @@ from backend.config import (
     VLLM_API_BASE,
     VLLM_API_KEY,
 )
+from backend.infra.llm.credentials import ProviderCredentials
 from backend.shared.logger import logger
 
 
-def build_vllm(model_name: str) -> object:
+def build_vllm(
+    model_name: str, credentials: ProviderCredentials | None = None
+) -> object:
     """构建 vLLM 模型实例（OpenAI 兼容协议，model_name 须与服务器 --model 一致）"""
     try:
         from langchain_openai import ChatOpenAI
@@ -31,6 +40,9 @@ def build_vllm(model_name: str) -> object:
             "vllm provider 需要 langchain_openai 包，请 pip install langchain-openai"
         ) from e
 
+    api_key = (credentials.api_key if credentials else None) or VLLM_API_KEY
+    base_url = (credentials.base_url if credentials else None) or VLLM_API_BASE
+
     # vLLM 对 max_tokens 超出模型上下文的请求会直接 400，
     # 而 ChatOpenAI 默认 max_tokens=None 时不传该字段，这里显式透传全局配置
     return ChatOpenAI(
@@ -38,23 +50,25 @@ def build_vllm(model_name: str) -> object:
         temperature=LLM_TEMPERATURE,
         max_tokens=LLM_CONTEXT_LENGTH,
         request_timeout=LLM_REQUEST_TIMEOUT,
-        api_key=VLLM_API_KEY or "EMPTY",  # 未设 Key 的自托管实例用占位符
-        base_url=VLLM_API_BASE,
+        api_key=api_key or "EMPTY",  # 未设 Key 的自托管实例用占位符
+        base_url=base_url,
         stream_usage=LLM_STREAM_USAGE,
     )
 
 
-def get_vllm_balance() -> dict:
+def get_vllm_balance(credentials: ProviderCredentials | None = None) -> dict:
     """自托管服务无计费概念；用 GET /v1/models 探活代替余额查询。
 
     返回结构与 deepseek 等一致：{"ok": ..., "provider": "vllm", ...}
     """
-    base = VLLM_API_BASE.rstrip("/")
+    api_key = (credentials.api_key if credentials else None) or VLLM_API_KEY
+    base_url = (credentials.base_url if credentials else None) or VLLM_API_BASE
+    base = base_url.rstrip("/")
     try:
         import requests
         resp = requests.get(
             f"{base}/models",
-            headers={"Authorization": f"Bearer {VLLM_API_KEY}"} if VLLM_API_KEY else {},
+            headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
             timeout=5,
         )
         if resp.status_code != 200:

@@ -4,10 +4,23 @@
 - COOKIE_ENCRYPTION_KEY 环境变量设置时自动加密
 - 未设置时明文存储（开发模式）
 - 读取时自动尝试解密，失败则返回明文（向后兼容已有数据）
+
+底层原语已抽到 `backend.shared.crypto`（与出站 API Key 共用密钥通道设施）；
+本模块只保留 Cookie 场景的**优雅降级**语义与键名识别规则。
 """
-import os
 from typing import Optional
 
+from backend.shared.crypto import (
+    decrypt_with,
+    encrypt_with,
+    get_fernet,
+    invalidate_fernet_cache,
+)
+
+_COOKIE_KEY_ENV = "COOKIE_ENCRYPTION_KEY"
+
+# 本模块的 Fernet 缓存槽。保持模块级变量名不变：既有测试用
+# `crypto_mod._fernet = None` 重置缓存（tests/test_competitor.py）。
 _fernet = None
 
 
@@ -16,14 +29,10 @@ def _get_fernet():
     global _fernet
     if _fernet is not None:
         return _fernet
-    key = os.getenv("COOKIE_ENCRYPTION_KEY")
-    if not key:
-        return None
-    try:
-        from cryptography.fernet import Fernet
-        _fernet = Fernet(key.encode() if isinstance(key, str) else key)
-    except Exception:
-        return None
+    # 置 None 表示「重置缓存」：连带清掉 shared 层缓存，
+    # 否则轮换 COOKIE_ENCRYPTION_KEY 后仍会拿旧实例。
+    invalidate_fernet_cache(_COOKIE_KEY_ENV)
+    _fernet = get_fernet(_COOKIE_KEY_ENV)
     return _fernet
 
 
@@ -32,20 +41,12 @@ def encrypt_cookie(value: str) -> str:
     f = _get_fernet()
     if f is None:
         return value
-    return "enc:" + f.encrypt(value.encode()).decode()
+    return encrypt_with(f, value)
 
 
 def decrypt_cookie(value: str) -> str:
     """解密 Cookie 值。未加密或密钥不匹配时返回原文。"""
-    if not value or not value.startswith("enc:"):
-        return value
-    f = _get_fernet()
-    if f is None:
-        return value  # 加密值但无密钥 → 返回原文（无法解密）
-    try:
-        return f.decrypt(value[4:].encode()).decode()
-    except Exception:
-        return value  # 解密失败 → 可能是密钥更换前的旧数据，返回原文
+    return decrypt_with(_get_fernet(), value, strict=False, key_env=_COOKIE_KEY_ENV)
 
 
 # 标记哪些 config key 需要加密（旧全局键 + 多平台分键 crawler_cookies:<platform>）
