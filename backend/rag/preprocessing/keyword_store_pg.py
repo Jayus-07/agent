@@ -26,7 +26,7 @@ import psycopg2
 import psycopg2.extras
 
 from backend.config import DEFAULT_KEYWORDS, SIGNAL_RULES
-from backend.config.database import RAG_STORES_PG_CONFIG
+from backend.config.database import BUSINESS_DB_CONFIG, RAG_STORES_PG_CONFIG
 from backend.rag.preprocessing.keyword_store import KeywordRuleStore
 from backend.shared.logger import logger
 
@@ -137,6 +137,47 @@ class PostgresKeywordRuleStore(KeywordRuleStore):
     # ---- 查询（带缓存）----
 
     def _refresh_cache(self) -> dict:
+        # 版本治理迁移存在时，运行时只读 published 快照；未部署迁移的旧环境
+        # 保留只读兼容，避免升级期间分类链路直接中断。
+        try:
+            snapshot = self.get_active_rule_snapshot()
+            entries = snapshot.get("entries", [])
+            by_doc_type: dict[str, list[str]] = {}
+            by_doc_type_w: dict[str, list[tuple[str, int]]] = {}
+            all_keywords: list[str] = []
+            signal_rules: dict[str, list[str]] = {}
+            for row in entries:
+                kw = str(row["keyword"])
+                dt = str(row["doc_type"])
+                weight = int(row["weight"])
+                by_doc_type.setdefault(dt, []).append(kw)
+                by_doc_type_w.setdefault(dt, []).append((kw, weight))
+                all_keywords.append(kw)
+                if row.get("category"):
+                    signal_rules.setdefault(str(row["category"]), []).append(kw)
+            self._cache = {
+                "keywords": all_keywords,
+                "by_doc_type": by_doc_type,
+                "by_doc_type_w": by_doc_type_w,
+                "signal_rules": signal_rules,
+                "rules_hash": snapshot.get("rules_hash", ""),
+                "version": snapshot.get("version"),
+            }
+            self._cache_ts = time.time()
+            return self._cache
+        except LookupError:
+            # 迁移已存在但尚无 published 版本：fail closed，不读未版本化表。
+            self._cache = {
+                "keywords": [], "by_doc_type": {}, "by_doc_type_w": {},
+                "signal_rules": {}, "rules_hash": "", "version": None,
+            }
+            self._cache_ts = time.time()
+            return self._cache
+        except psycopg2.errors.UndefinedTable:
+            logger.warning(
+                "[KeywordStore-PG] 规则治理表尚未迁移，暂用 legacy keyword_rules 兼容读"
+            )
+
         with self._conn() as conn:
             rows = self._exec(
                 conn,
@@ -170,6 +211,223 @@ class PostgresKeywordRuleStore(KeywordRuleStore):
         }
         self._cache_ts = time.time()
         return self._cache
+
+    # ---- 版本化规则快照治理 ----
+
+    @staticmethod
+    def _snapshot_from_conn(conn: Any, version: int) -> dict[str, Any]:
+        """在同一事务中读取版本与 entries，避免发布期间读到半份快照。"""
+        version_cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        version_cur.execute(
+            "SELECT * FROM ai.metadata_rule_versions WHERE version = %s",
+            (version,),
+        )
+        row = version_cur.fetchone()
+        if row is None:
+            raise LookupError(f"metadata rule version not found: {version}")
+        entry_cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        entry_cur.execute(
+            """
+            SELECT keyword, doc_type, category, weight, enabled
+            FROM ai.metadata_rule_entries
+            WHERE version = %s
+            ORDER BY keyword
+            """,
+            (version,),
+        )
+        result = dict(row)
+        result["entries"] = [dict(item) for item in entry_cur.fetchall()]
+        return result
+
+    def get_active_rule_snapshot(self) -> dict[str, Any]:
+        with self._conn() as conn:
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cursor.execute(
+                """
+                SELECT * FROM ai.metadata_rule_versions
+                WHERE status = 'published'
+                ORDER BY effective_at DESC NULLS LAST, version DESC
+                LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise LookupError("no published metadata rule snapshot")
+            return self._snapshot_from_conn(conn, int(row["version"]))
+
+    def get_rule_snapshot(self, version: int) -> dict[str, Any]:
+        with self._conn() as conn:
+            return self._snapshot_from_conn(conn, int(version))
+
+    def list_rule_snapshots(self, limit: int = 20) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(int(limit), 100))
+        with self._conn() as conn:
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cursor.execute(
+                """
+                SELECT version, status, taxonomy_version, rules_hash, actor,
+                       reason, approval_id, approved_by, effective_at, created_at
+                FROM ai.metadata_rule_versions
+                ORDER BY version DESC
+                LIMIT %s
+                """,
+                (safe_limit,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def invalidate_rule_cache(self) -> None:
+        """发布/回滚后立即清空本进程的旧活动快照。"""
+        self._cache = None
+        self._cache_ts = 0
+
+    def create_rule_snapshot(self, **payload) -> dict[str, Any]:
+        entries = payload.pop("entries", [])
+        with self._lock, self._conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO ai.metadata_rule_versions (
+                    status, taxonomy_version, rules_hash, actor, reason
+                ) VALUES (%s, %s, %s, %s, %s)
+                RETURNING version
+                """,
+                (
+                    payload.get("status", "draft"),
+                    payload.get("taxonomy_version", ""),
+                    payload.get("rules_hash", ""),
+                    payload.get("actor", ""),
+                    payload.get("reason", ""),
+                ),
+            )
+            version = int(cursor.fetchone()[0])
+            psycopg2.extras.execute_batch(
+                conn.cursor(),
+                """
+                INSERT INTO ai.metadata_rule_entries
+                    (version, keyword, doc_type, category, weight, enabled)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    (
+                        version,
+                        item["keyword"],
+                        item["doc_type"],
+                        item.get("category", ""),
+                        int(item.get("weight", 1)),
+                        int(item.get("enabled", 1)),
+                    )
+                    for item in entries
+                ],
+            )
+            return self._snapshot_from_conn(conn, version)
+
+    @staticmethod
+    def _approval_in_conn(conn: Any, approval_id: str) -> tuple[bool, str]:
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT reviewer FROM ai.tool_approval_requests
+                WHERE id = %s AND status = 'approved'
+                """,
+                (approval_id,),
+            )
+            row = cursor.fetchone()
+        except Exception:
+            return False, ""
+        return (row is not None), (str(row[0] or "") if row else "")
+
+    def is_rule_approval_approved(self, approval_id: str) -> str | None:
+        # 审批单属于 agent_business；规则快照属于 agent_memory，不能在
+        # RAG 库连接上查询，否则双库部署时会把“已审批”误判成不存在。
+        conn = None
+        try:
+            conn = psycopg2.connect(**BUSINESS_DB_CONFIG, connect_timeout=3)
+            approved, reviewer = self._approval_in_conn(conn, approval_id)
+            return reviewer if approved else None
+        except Exception as exc:
+            logger.warning(f"[KeywordStore-PG] 审批状态读取失败，发布 fail closed: {exc}")
+            return None
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def publish_rule_snapshot(
+        self, version: int, approval_id: str, actor: str
+    ) -> dict[str, Any]:
+        reviewer = self.is_rule_approval_approved(approval_id)
+        if reviewer is None:
+            raise PermissionError("approved approval_id is required")
+        with self._lock, self._conn() as conn:
+            # 进程内锁只覆盖单 worker； advisory lock 保证多 worker 发布时
+            # 仍然只有一个 published 快照。
+            conn.cursor().execute(
+                "SELECT pg_advisory_xact_lock(hashtext('metadata_rule_publish'))"
+            )
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT status FROM ai.metadata_rule_versions WHERE version = %s FOR UPDATE",
+                (int(version),),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise LookupError(f"metadata rule version not found: {version}")
+            if row[0] not in ("draft", "published"):
+                raise ValueError(f"metadata rule version is not publishable: {version}")
+            cursor.execute(
+                """
+                UPDATE ai.metadata_rule_versions
+                SET status = 'rolled_back', updated_at = now()
+                WHERE status = 'published' AND version <> %s
+                """,
+                (int(version),),
+            )
+            cursor.execute(
+                """
+                UPDATE ai.metadata_rule_versions
+                SET status = 'published', approval_id = %s, approved_by = %s,
+                    actor = %s, effective_at = now(), updated_at = now()
+                WHERE version = %s
+                """,
+                (approval_id, reviewer, actor, int(version)),
+            )
+            return self._snapshot_from_conn(conn, int(version))
+
+    def rollback_rule_snapshot(
+        self, version: int, actor: str, reason: str = "manual rollback"
+    ) -> dict[str, Any]:
+        with self._lock, self._conn() as conn:
+            conn.cursor().execute(
+                "SELECT pg_advisory_xact_lock(hashtext('metadata_rule_publish'))"
+            )
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT status FROM ai.metadata_rule_versions WHERE version = %s FOR UPDATE",
+                (int(version),),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise LookupError(f"metadata rule version not found: {version}")
+            if row[0] not in ("published", "rolled_back"):
+                raise ValueError(f"metadata rule version is not rollbackable: {version}")
+            cursor.execute(
+                """
+                UPDATE ai.metadata_rule_versions
+                SET status = 'rolled_back', updated_at = now()
+                WHERE status = 'published' AND version <> %s
+                """,
+                (int(version),),
+            )
+            cursor.execute(
+                """
+                UPDATE ai.metadata_rule_versions
+                SET status = 'published', actor = %s, reason = %s,
+                    effective_at = now(), updated_at = now()
+                WHERE version = %s
+                """,
+                (actor, reason, int(version)),
+            )
+            return self._snapshot_from_conn(conn, int(version))
 
     # get_rules_by_doc_type / get_active / get_keywords_for_doc_type 继承（读缓存结构）
 

@@ -11,7 +11,12 @@ from celery import Celery
 from backend.config.tasks import (
     CELERY_BROKER_URL,
     CELERY_HARD_TASK_TIMEOUT,
+    CELERY_METADATA_SHADOW_MAX_RETRIES,
+    CELERY_METADATA_SHADOW_QUEUE,
+    CELERY_METADATA_SHADOW_TASK_TIMEOUT,
     CELERY_RESULT_BACKEND,
+    CELERY_RETRY_BACKOFF,
+    CELERY_RETRY_BACKOFF_MAX,
     CELERY_TASK_TIMEOUT,
 )
 
@@ -21,6 +26,7 @@ celery_app = Celery(
     backend=CELERY_RESULT_BACKEND,
     include=["backend.tasks.agent_tasks",     # Worker 启动自动注册任务模块
              "backend.tasks.index_tasks",     # 阶段4：RAG 上传索引队列化任务
+             "backend.tasks.metadata_shadow_tasks",  # 元数据影子隔离队列
              "backend.tasks.cs_maintenance_tasks",  # P2.4：客服全局维护（beat）
              "backend.tasks.signals"],        # 运行时埋点（worker/queue/耗时/异常）
 )
@@ -54,7 +60,21 @@ celery_app.conf.update(
     # 阶段4：RAG 上传索引独立队列（索引吃内存/模型，与 agent 图任务隔离扩缩容）
     task_default_queue="agent",
     task_routes={"tasks.execute_agent": {"queue": "agent"},
-                 "tasks.execute_index": {"queue": "rag_index"}},
+                 "tasks.execute_index": {"queue": "rag_index"},
+                 "tasks.execute_metadata_shadow": {
+                     "queue": CELERY_METADATA_SHADOW_QUEUE,
+                 }},
+
+    # 影子任务有更短的独立超时；任务自身装饰器会使用同一重试退避策略。
+    task_annotations={
+        "tasks.execute_metadata_shadow": {
+            "soft_time_limit": CELERY_METADATA_SHADOW_TASK_TIMEOUT,
+            "time_limit": CELERY_METADATA_SHADOW_TASK_TIMEOUT + 30,
+            "max_retries": CELERY_METADATA_SHADOW_MAX_RETRIES,
+            "retry_backoff": CELERY_RETRY_BACKOFF,
+            "retry_backoff_max": CELERY_RETRY_BACKOFF_MAX,
+        },
+    },
 
     # ── Beat 周期任务（P2.4：客服全局维护，60s 兜底扫描）──
     # 幂等（原子条件 UPDATE）：重复调度/多实例并发安全，无需去重键

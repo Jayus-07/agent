@@ -34,17 +34,57 @@ python -m backend.eval.metadata_baseline.evaluate \
 python -m backend.eval.metadata_baseline.predict \
     --golden backend/eval/metadata_baseline/golden.jsonl \
     --out backend/eval/metadata_baseline/preds_unified.jsonl
-python -m backend.eval.metadata_baseline.predict --golden ... --out ... --cascade
+python -m backend.eval.metadata_baseline.predict \
+    --golden backend/eval/metadata_baseline/golden.jsonl \
+    --out backend/eval/metadata_baseline/preds_cascade.jsonl \
+    --route cascade
 
 # 3) 评估 + JSON 报告
 python -m backend.eval.metadata_baseline.evaluate \
     --golden backend/eval/metadata_baseline/golden.jsonl \
     --pred backend/eval/metadata_baseline/preds_unified.jsonl \
     --json report_unified.json
+
+# 4) 发布门禁（即使 --allow-dry-run 也不会绕过门禁）
+python -m backend.eval.metadata_baseline.validate_release \
+    --golden backend/eval/metadata_baseline/golden.jsonl \
+    --pred backend/eval/metadata_baseline/preds_unified.jsonl \
+    --load-report staging/metadata-load-report.json \
+    --rollback-report staging/metadata-rollback-report.json \
+    --allow-dry-run \
+    --report metadata_release_report.json
 ```
 
-运行环境：仓库根、项目 venv 解释器；规则链评估需 DB/Redis 可用
-（动态词库热加载），统一抽取需 LLM proxy 可用。
+运行环境：仓库根、项目 venv 解释器。级联评估必须能加载 Embedding；不可用时命令
+显式失败，不会伪造 R1 结果。发布门禁要求每个类型至少 50 条黄金样本，并要求
+正式黄金集每条样本还必须带双人 `annotators`（至少 2 人）或非空的
+`adjudication`/`dispute` 仲裁记录；仅有标签数量不算已仲裁支持。预测文件携带
+taxonomy/rules/model/prompt 四类版本指纹；`--load-report` 和
+`--rollback-report` 是 staging 压测/演练的独立证据，不应把聚合指标复制到每条预测行。
+缺少任一证据时门禁 fail-closed。
+
+`metadata-load-v1` 报告必须包含：
+
+```json
+{
+  "report_version": "metadata-load-v1",
+  "peak_multiplier": 2.0,
+  "sustained_queue_growth": false,
+  "queue_age_p95_seconds": 2.4,
+  "primary_p95_ms": 420.0,
+  "shadow_p95_ms": 390.0,
+  "embedding_qps": 18.0,
+  "llm_qps": 6.0,
+  "llm_429_rate": 0.0,
+  "db_pool_wait_p95_ms": 12.0,
+  "duplicate_write_count": 0
+}
+```
+
+`metadata-rollback-v1` 报告必须包含 `rollback_duration_seconds`、
+`old_fingerprint_present`、`idempotent_replay` 和 `duplicate_write_count`；门禁要求
+回滚不超过 600 秒、旧指纹存在、幂等重放成功且重复写入为 0。报告版本不匹配、
+字段缺失、峰值未达到 2× 或 LLM 429/重复写入出现，均直接阻断发布。
 
 ## 指标口径
 
@@ -55,4 +95,6 @@ python -m backend.eval.metadata_baseline.evaluate \
 ## 与影子模式的关系
 
 阶段 5.1 影子采集可直接落成本预测格式（`id/text/pred`），用
-`evaluate --pred shadow_dump.jsonl` 复用同一指标实现，避免两套口径。
+`evaluate --pred shadow_dump.jsonl` 复用同一指标实现，避免两套口径。现网一致率
+仅作诊断；准确率、coverage、abstain、ECE、路径级 precision 和 load/rollback
+证据才是放量依据。

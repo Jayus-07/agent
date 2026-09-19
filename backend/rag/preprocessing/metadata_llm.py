@@ -135,10 +135,12 @@ async def extract_metadata_llm_async(
         return None
 
     from backend.config.rag import METADATA_LLM_EXTRACT_MAX_CHARS
-    from backend.rag.preprocessing.domain_data import DOC_TYPE_RULES
+    from backend.rag.preprocessing.taxonomy_spec import get_taxonomy
 
-    valid_types = set(DOC_TYPE_RULES.keys()) | {"general"}
-    doc_types_str = ", ".join(sorted(valid_types))
+    taxonomy = get_taxonomy()
+    valid_types = set(taxonomy.doc_types)
+    doc_types_str = ", ".join(taxonomy.doc_types)
+    domains_str = ", ".join(taxonomy.domains)
 
     # 采样：头部 + 中部 + 尾部，兼顾标题区/正文/结尾签名区
     max_chars = METADATA_LLM_EXTRACT_MAX_CHARS
@@ -153,12 +155,15 @@ async def extract_metadata_llm_async(
 
     try:
         from backend.prompts.service import prompt_service
-        prompt = prompt_service.render_sync(
+        prompt_result = prompt_service.render_sync(
             "rag.preprocessing.metadata_extract",
             doc_types=doc_types_str,
+            domains=domains_str,
             filename=filename or "(unknown)",
             text=sample,
-        ).text
+        )
+        prompt = prompt_result.text
+        prompt_version = getattr(prompt_result, "version", None)
     except Exception as e:
         logger.warning(f"[MetaLLM] 渲染抽取提示词失败（降级规则路径）: {e}")
         return None
@@ -177,18 +182,27 @@ async def extract_metadata_llm_async(
         # invoke_metadata_llm 是同步调用，async_safe_call_with_timeout 会把它
         # 放线程池执行并施加超时（与摘要路径 build_llm_summary_cached 同款）；
         # 二者均为模块级导入，测试可直接 monkeypatch
-        response = await async_safe_call_with_timeout(
-            invoke_metadata_llm,
-            LLM_REQUEST_TIMEOUT,
-            None,
-            f"元数据抽取 LLM 超时 ({LLM_REQUEST_TIMEOUT}s)",
-            prompt,
+        from backend.observability.metrics import metadata_llm_calls_total
+        from backend.rag.preprocessing.metadata_runtime import run_limited
+
+        response = await run_limited(
+            "llm",
+            lambda: async_safe_call_with_timeout(
+                invoke_metadata_llm,
+                LLM_REQUEST_TIMEOUT,
+                None,
+                f"元数据抽取 LLM 超时 ({LLM_REQUEST_TIMEOUT}s)",
+                prompt,
+            ),
         )
         if response is None:
             raise MetadataExtractError("llm timeout")
 
         content = response.content if hasattr(response, "content") else str(response)
         result = parse_extract_response(content, valid_types)
+        result["prompt_version"] = (
+            f"v{prompt_version}" if isinstance(prompt_version, int) else "default"
+        )
         result["llm_tokens"] = dict(
             getattr(response, "usage_metadata", {}) or {}
         ) or {}
@@ -200,10 +214,13 @@ async def extract_metadata_llm_async(
                 "risk_level": (result.get("risk") or {}).get("level", "none"),
             })
         metadata_route_total.labels(level="L3", outcome="hit").inc()
+        metadata_llm_calls_total.labels(result="success").inc()
         return result
     except MetadataExtractError as e:
         logger.warning(f"[MetaLLM] 抽取结果非法（降级规则路径）: {e}")
         metadata_route_total.labels(level="L3", outcome="error").inc()
+        from backend.observability.metrics import metadata_llm_calls_total
+        metadata_llm_calls_total.labels(result="invalid").inc()
         if span_id:
             trace_collector.end_span(span_id, status="error",
                                      metrics={"error": str(e)[:200]})
@@ -211,6 +228,8 @@ async def extract_metadata_llm_async(
     except Exception as e:
         logger.warning(f"[MetaLLM] 抽取调用失败（降级规则路径）: {e}")
         metadata_route_total.labels(level="L3", outcome="error").inc()
+        from backend.observability.metrics import metadata_llm_calls_total
+        metadata_llm_calls_total.labels(result="error").inc()
         if span_id:
             trace_collector.end_span(span_id, status="error",
                                      metrics={"error": str(e)[:200]})

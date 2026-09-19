@@ -74,7 +74,7 @@ async def test_build_routes_via_cascade_when_enabled(_stage, monkeypatch):
                         _must_not_call)
     out = await _stage.build(_TEXT, _META)
     assert out["doc_type"] == "legal"
-    assert out["llm_strategy"] == "cascade_L0"
+    assert out["llm_strategy"] == "r0"
     assert called["extract"] == 0, "L0 命中时不得触发 LLM 抽取"
 
 
@@ -124,7 +124,7 @@ async def test_build_l3_failure_falls_back_to_rule_path(_stage, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_build_shadow_runs_on_main_path_success(_stage, monkeypatch):
-    """影子开启：主路径统一抽取成功后影子跑了，且主路径返回值不受影响。"""
+    """影子开启：主路径统一抽取成功后提交影子，且主路径不等待它。"""
     monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_ENABLED", False)
     monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_SHADOW_ENABLED", True)
 
@@ -141,6 +141,10 @@ async def test_build_shadow_runs_on_main_path_success(_stage, monkeypatch):
                         _fake_extract)
     monkeypatch.setattr("backend.rag.preprocessing.metadata_router.shadow_route",
                         _fake_shadow)
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_shadow.submit_shadow_job",
+        lambda *a, **k: "shadow-test-1",
+    )
     out = await _stage.build(_TEXT, _META)
     assert out["doc_type"] == "legal" and out["llm_used"] is True, "影子不得改变主路径结果"
 
@@ -167,7 +171,7 @@ async def test_build_shadow_disabled_skips(_stage, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_build_shadow_failure_never_breaks_main_path(_stage, monkeypatch):
-    """影子采集抛异常必须被吞掉，主路径照常返回。"""
+    """影子投递抛异常必须被吞掉，主路径照常返回。"""
     monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_ENABLED", False)
     monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_SHADOW_ENABLED", True)
 
@@ -175,11 +179,46 @@ async def test_build_shadow_failure_never_breaks_main_path(_stage, monkeypatch):
         return {"doc_type": "legal", "confidence": 0.9, "business_domain": "general",
                 "summary": "s", "keywords": [], "entities": {}, "time_refs": []}
 
-    async def _boom(full_text, filename, file_path="", embedding=None):
-        raise RuntimeError("shadow down")
+    def _boom(*args, **kwargs):
+        raise RuntimeError("shadow broker down")
 
     monkeypatch.setattr("backend.rag.preprocessing.metadata_llm.extract_metadata_llm_async",
                         _fake_extract)
-    monkeypatch.setattr("backend.rag.preprocessing.metadata_router.shadow_route", _boom)
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_shadow.submit_shadow_job", _boom
+    )
     out = await _stage.build(_TEXT, _META)
     assert out["doc_type"] == "legal", "影子故障不得影响主路径"
+
+
+@pytest.mark.asyncio
+async def test_decision_fallback_has_complete_contract_and_no_hidden_llm(_stage, monkeypatch):
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_ENABLED", True)
+
+    async def _boom(*args, **kwargs):
+        raise AssertionError("fallback must not invoke metadata LLM")
+
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_decision.extract_metadata_llm_async",
+        _boom,
+    )
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.keyword.extract_doc_keywords_llm",
+        _boom,
+    )
+
+    out = await _stage.build(
+        "普通会议纪要内容，没有稳定类型证据。",
+        {"source_file": "unknown.docx", "file_path": "", "doc_id": "d2"},
+    )
+    required = {
+        "doc_type", "confidence", "business_domain", "summary", "doc_keywords",
+        "keywords_rule", "keywords_llm", "entities", "time_refs", "risk",
+        "llm_used", "llm_strategy", "llm_decision", "metadata_fingerprint",
+        "sections", "quality_score", "minhash_sig", "near_dup_id", "department",
+        "questions_by_chunk", "decision_envelope", "fallback_reason",
+    }
+    assert required <= set(out)
+    assert out["llm_strategy"] == "fallback"
+    assert out["llm_used"] is False
+    assert out["fallback_reason"] == "llm_unavailable"

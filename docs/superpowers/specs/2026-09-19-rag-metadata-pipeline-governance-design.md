@@ -17,7 +17,7 @@
 - LLM、Embedding、数据库写入均采用有界并发；上传接口任务化，索引走 `rag_index` 队列。
 - 影子评估独立异步执行，不得阻塞主索引路径；切流门禁以黄金标签和人工复核为准，现网 LLM 一致率只作诊断指标。
 
-在新链路完成正式评估前，`METADATA_CASCADE_ENABLED` 保持关闭。
+在新链路完成正式评估前，禁止全量开启 `METADATA_CASCADE_ENABLED`；经负责人明确确认后，Compose 只允许以 1% 稳定 key 灰度运行，裸进程默认仍关闭。
 
 ## 2. 目标与非目标
 
@@ -384,3 +384,15 @@ Prometheus/Grafana 至少提供：
 - 影子、Embedding 和 LLM 不阻塞主索引。
 - 高并发下具备队列、背压、幂等、缓存和熔断。
 - 级联只有在逐层 precision、覆盖率、延迟和成本均达标后才开启。
+
+## 13. 实施状态与上线运行口径（2026-09-20）
+
+本设计已进入代码实施阶段。实现重点不是继续堆叠规则，而是把规则变成可审计的证据层和版本快照：规则变更先形成 draft，经审批发布；线上只读取 published snapshot；回滚只切换到已存在的历史版本，并通过数据库 advisory lock 防止多 worker 并发发布产生双主版本。
+
+高并发路径采用“主请求短链路 + 异步影子链路”：主索引只执行统一抽取或已获准的级联决策，不等待影子评估；影子输入经过采样、脱敏/截断和 staging 后进入独立队列。部署上主 Worker 只消费 `agent,rag_index`，`metadata-shadow-worker` 只消费 `rag_metadata_shadow`，两者可以独立扩缩容和设置并发，避免影子积压抢占主索引槽位。LLM、Embedding、DB 和影子任务分别受信号量限制，缓存键包含 taxonomy、rules、model、prompt 版本，幂等键阻止重复任务。这样扩容 worker 时不会把外部模型和数据库无界打满。
+
+裸进程安全默认值仍为 `METADATA_CASCADE_ENABLED=false`、`METADATA_CLASSIFIER_ENABLED=false`、`METADATA_CASCADE_ROLLOUT_PERCENT=0`；当前 Compose 部署经负责人确认改为 `METADATA_CASCADE_ENABLED=true`、`METADATA_CASCADE_ROLLOUT_PERCENT=1`，R1 分类器仍关闭。灰度由稳定 key 哈希到百分比桶，规则/模型路由指针可回滚；shadow queue 也有独立开关。发布校验工具对黄金集支持数、双人标注/仲裁证据、版本指纹、队列/负载/回滚证据执行 fail-closed，缺证据不允许从 1% 继续放量。压测和回滚使用独立的 `metadata-load-v1`、`metadata-rollback-v1` JSON 证据，门禁校验 2× 峰值、队列不持续增长、429/重复写入为零、影子不抬高主路径 P95，以及旧指纹存在、幂等重放成功和 10 分钟内回滚。
+
+企业节省 token 的控制点固定为：R0/R1 命中不调用 LLM；只有 R2 进入一次结构化抽取；R2 输入先截断/采样；相同版本的决策命中缓存；影子只采样并异步执行；fallback 禁止再调 LLM；低置信样本进入 abstain/人工复核而不是重复重试。成本指标必须与准确率、延迟和队列年龄一起看，不能用单纯降 token 换取错误率上升。
+
+代码已覆盖 taxonomy/决策契约、版本化规则治理、确定性 fallback、有界并发、缓存/幂等、影子队列、灰度开关和 release gates。当前只允许 1% 观察性灰度；正式扩大和全量上线仍需真实黄金集、2 倍峰值压测、连续影子报告、回滚演练及安全合规证据。

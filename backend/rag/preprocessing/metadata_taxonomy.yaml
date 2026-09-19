@@ -1,0 +1,1966 @@
+{
+  "version": "v1",
+  "doc_types": {
+    "listing": {
+      "description": "商品 Listing、标题、卖点和搜索展示规范",
+      "rules": [
+        {
+          "rule_id": "doc_type.listing.001",
+          "pattern": "(?<!\\w)listing(?!\\w)",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.listing.002",
+          "pattern": "五点描述",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.listing.003",
+          "pattern": "A\\+内容",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.listing.004",
+          "pattern": "关键词策略",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.listing.005",
+          "pattern": "标题公式",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.listing.006",
+          "pattern": "主图规范",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.listing.007",
+          "pattern": "附图规范",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.listing.008",
+          "pattern": "搜索词",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.listing.009",
+          "pattern": "搜索排名",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.listing.010",
+          "pattern": "(?<!\\w)bsr(?!\\w)",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.listing.011",
+          "pattern": "bestseller",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.listing.012",
+          "pattern": "商品标题",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.listing.013",
+          "pattern": "卖点",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.listing.014",
+          "pattern": "详情页",
+          "weight": 3
+        },
+        {
+          "rule_id": "doc_type.listing.015",
+          "pattern": "类目节点",
+          "weight": 3
+        },
+        {
+          "rule_id": "doc_type.listing.016",
+          "pattern": "变体",
+          "weight": 3
+        },
+        {
+          "rule_id": "doc_type.listing.017",
+          "pattern": "父体",
+          "weight": 3
+        },
+        {
+          "rule_id": "doc_type.listing.018",
+          "pattern": "子体",
+          "weight": 3
+        },
+        {
+          "rule_id": "doc_type.listing.019",
+          "pattern": "bullet ?point",
+          "weight": 3
+        },
+        {
+          "rule_id": "doc_type.listing.020",
+          "pattern": "五点",
+          "weight": 3
+        }
+      ]
+    },
+    "sop": {
+      "description": "标准操作流程、岗位操作和作业指导",
+      "rules": [
+        {
+          "rule_id": "doc_type.sop.001",
+          "pattern": "(?<!\\w)sop(?!\\w)",
+          "weight": 20
+        },
+        {
+          "rule_id": "doc_type.sop.002",
+          "pattern": "标准操作",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.sop.003",
+          "pattern": "操作流程",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.sop.004",
+          "pattern": "标准作业",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.sop.005",
+          "pattern": "作业指导书",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.sop.006",
+          "pattern": "作业指导",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.sop.007",
+          "pattern": "操作手册",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.sop.008",
+          "pattern": "标准流程",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.sop.009",
+          "pattern": "操作规程",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.sop.010",
+          "pattern": "工作指引",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.sop.011",
+          "pattern": "操作规范",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.sop.012",
+          "pattern": "作业标准",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.sop.013",
+          "pattern": "步骤说明",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.sop.014",
+          "pattern": "岗位操作",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.sop.015",
+          "pattern": "标准作业程序",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.sop.016",
+          "pattern": "岗位规范",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.sop.017",
+          "pattern": "standard operating procedure",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.sop.018",
+          "pattern": "operating procedure",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.sop.019",
+          "pattern": "work instruction",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.sop.020",
+          "pattern": "step[- ]by[- ]step",
+          "weight": 4
+        }
+      ]
+    },
+    "ad_policy": {
+      "description": "广告投放政策、竞价策略和广告合规",
+      "rules": [
+        {
+          "rule_id": "doc_type.ad_policy.001",
+          "pattern": "广告政策",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.ad_policy.002",
+          "pattern": "投放规则",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.ad_policy.003",
+          "pattern": "amazon ads",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.ad_policy.004",
+          "pattern": "竞价策略",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.ad_policy.005",
+          "pattern": "广告规范",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.ad_policy.006",
+          "pattern": "广告活动",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.ad_policy.007",
+          "pattern": "广告组",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.ad_policy.008",
+          "pattern": "投放策略",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.ad_policy.009",
+          "pattern": "广告合规",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.ad_policy.010",
+          "pattern": "推广规则",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.ad_policy.011",
+          "pattern": "(?<!\\w)ppc(?!\\w)",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.ad_policy.012",
+          "pattern": "广告政策违规",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.ad_policy.013",
+          "pattern": "广告投放政策",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.ad_policy.014",
+          "pattern": "品牌推广",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.ad_policy.015",
+          "pattern": "广告合规要求",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.ad_policy.016",
+          "pattern": "advertising policy",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.ad_policy.017",
+          "pattern": "bidding strategy",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.ad_policy.018",
+          "pattern": "campaign structure",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.ad_policy.019",
+          "pattern": "(?<!\\w)cpc(?!\\w)",
+          "weight": 4
+        }
+      ]
+    },
+    "faq": {
+      "description": "常见问题、售后问答和故障排查",
+      "rules": [
+        {
+          "rule_id": "doc_type.faq.001",
+          "pattern": "(?<!\\w)faq(?!\\w)",
+          "weight": 15
+        },
+        {
+          "rule_id": "doc_type.faq.002",
+          "pattern": "常见问题",
+          "weight": 15
+        },
+        {
+          "rule_id": "doc_type.faq.003",
+          "pattern": "售后 FAQ",
+          "weight": 20
+        },
+        {
+          "rule_id": "doc_type.faq.004",
+          "pattern": "问答文档",
+          "weight": 15
+        },
+        {
+          "rule_id": "doc_type.faq.005",
+          "pattern": "退货政策",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.faq.006",
+          "pattern": "物流时效",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.faq.007",
+          "pattern": "售后流程",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.faq.008",
+          "pattern": "退换货",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.faq.009",
+          "pattern": "退款流程",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.faq.010",
+          "pattern": "帮助中心",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.faq.011",
+          "pattern": "客户问答",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.faq.012",
+          "pattern": "问题解答",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.faq.013",
+          "pattern": "退换货政策",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.faq.014",
+          "pattern": "售后指南",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.faq.015",
+          "pattern": "答疑",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.faq.016",
+          "pattern": "问答",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.faq.017",
+          "pattern": "客服问答",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.faq.018",
+          "pattern": "frequently asked questions?",
+          "weight": 15
+        },
+        {
+          "rule_id": "doc_type.faq.019",
+          "pattern": "q&a",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.faq.020",
+          "pattern": "troubleshooting",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.faq.021",
+          "pattern": "return policy",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.faq.022",
+          "pattern": "refund policy",
+          "weight": 6
+        }
+      ]
+    },
+    "product_spec": {
+      "description": "产品规格、技术参数和使用说明",
+      "rules": [
+        {
+          "rule_id": "doc_type.product_spec.001",
+          "pattern": "产品规格",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.product_spec.002",
+          "pattern": "材质说明",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.product_spec.003",
+          "pattern": "使用手册",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.product_spec.004",
+          "pattern": "保养指南",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.product_spec.005",
+          "pattern": "故障排查",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.product_spec.006",
+          "pattern": "规格参数",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.product_spec.007",
+          "pattern": "技术参数",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.product_spec.008",
+          "pattern": "产品说明书",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.product_spec.009",
+          "pattern": "参数表",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.product_spec.010",
+          "pattern": "产品特性",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.product_spec.011",
+          "pattern": "功能介绍",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.product_spec.012",
+          "pattern": "规格书",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.product_spec.013",
+          "pattern": "配置清单",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.product_spec.014",
+          "pattern": "型号对照",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.product_spec.015",
+          "pattern": "产品参数",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.product_spec.016",
+          "pattern": "技术规格",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.product_spec.017",
+          "pattern": "product specification",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.product_spec.018",
+          "pattern": "specification",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.product_spec.019",
+          "pattern": "datasheet",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.product_spec.020",
+          "pattern": "user manual",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.product_spec.021",
+          "pattern": "user guide",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.product_spec.022",
+          "pattern": "technical parameters?",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.product_spec.023",
+          "pattern": "maintenance guide",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.product_spec.024",
+          "pattern": "technical specification",
+          "weight": 8
+        }
+      ]
+    },
+    "training": {
+      "description": "培训材料、课程、上岗与学习资料",
+      "rules": [
+        {
+          "rule_id": "doc_type.training.001",
+          "pattern": "培训",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.training.002",
+          "pattern": "新人手册",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.training.003",
+          "pattern": "上岗",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.training.004",
+          "pattern": "考核",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.training.005",
+          "pattern": "培训材料",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.training.006",
+          "pattern": "培训资料",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.training.007",
+          "pattern": "入职培训",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.training.008",
+          "pattern": "岗前培训",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.training.009",
+          "pattern": "操作培训",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.training.010",
+          "pattern": "培训课件",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.training.011",
+          "pattern": "学习手册",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.training.012",
+          "pattern": "培训计划",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.training.013",
+          "pattern": "带教",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.training.014",
+          "pattern": "实习手册",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.training.015",
+          "pattern": "培训课程",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.training.016",
+          "pattern": "新人培训",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.training.017",
+          "pattern": "onboarding",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.training.018",
+          "pattern": "training (course|material|plan|program)",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.training.019",
+          "pattern": "(?<!\\w)trainee(?!\\w)",
+          "weight": 5
+        }
+      ]
+    },
+    "policy": {
+      "description": "制度、政策、管理办法和内部规范",
+      "rules": [
+        {
+          "rule_id": "doc_type.policy.001",
+          "pattern": "制度",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.policy.002",
+          "pattern": "规范",
+          "weight": 3
+        },
+        {
+          "rule_id": "doc_type.policy.003",
+          "pattern": "审批",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.policy.004",
+          "pattern": "规定",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.policy.005",
+          "pattern": "管理条例",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.policy.006",
+          "pattern": "管理办法",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.policy.007",
+          "pattern": "管理规定",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.policy.008",
+          "pattern": "管理制度",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.policy.009",
+          "pattern": "规章制度",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.policy.010",
+          "pattern": "实施细则",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.policy.011",
+          "pattern": "规则",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.policy.012",
+          "pattern": "守则",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.policy.013",
+          "pattern": "工作制度",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.policy.014",
+          "pattern": "管控要求",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.policy.015",
+          "pattern": "暂行",
+          "weight": 3
+        },
+        {
+          "rule_id": "doc_type.policy.016",
+          "pattern": "工作条例",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.policy.017",
+          "pattern": "管理办法实施细则",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.policy.018",
+          "pattern": "policy and procedure",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.policy.019",
+          "pattern": "code of conduct",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.policy.020",
+          "pattern": "(?<!\\w)guidelines?(?!\\w)",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.policy.021",
+          "pattern": "(?<!\\w)policies(?!\\w)",
+          "weight": 4
+        }
+      ]
+    },
+    "compliance": {
+      "description": "合规、监管、隐私与审计要求",
+      "rules": [
+        {
+          "rule_id": "doc_type.compliance.001",
+          "pattern": "合规",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.compliance.002",
+          "pattern": "法规",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.compliance.003",
+          "pattern": "监管",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.compliance.004",
+          "pattern": "(?<!\\w)gdpr(?!\\w)",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.compliance.005",
+          "pattern": "(?<!\\w)ccpa(?!\\w)",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.compliance.006",
+          "pattern": "数据保护",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.compliance.007",
+          "pattern": "个人信息",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.compliance.008",
+          "pattern": "隐私政策",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.compliance.009",
+          "pattern": "数据安全法",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.compliance.010",
+          "pattern": "等保",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.compliance.011",
+          "pattern": "网络安全法",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.compliance.012",
+          "pattern": "合规审查",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.compliance.013",
+          "pattern": "监管要求",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.compliance.014",
+          "pattern": "审计",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.compliance.015",
+          "pattern": "备案",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.compliance.016",
+          "pattern": "反垄断",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.compliance.017",
+          "pattern": "(?<!\\w)iso(?!\\w)",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.compliance.018",
+          "pattern": "网信办",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.compliance.019",
+          "pattern": "合规风险",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.compliance.020",
+          "pattern": "行政处罚",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.compliance.021",
+          "pattern": "监管检查",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.compliance.022",
+          "pattern": "合规管理",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.compliance.023",
+          "pattern": "compliance",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.compliance.024",
+          "pattern": "regulat(ion|ions|ory)",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.compliance.025",
+          "pattern": "(?<!\\w)hipaa(?!\\w)",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.compliance.026",
+          "pattern": "soc ?2",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.compliance.027",
+          "pattern": "pci ?dss",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.compliance.028",
+          "pattern": "data protection",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.compliance.029",
+          "pattern": "privacy policy",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.compliance.030",
+          "pattern": "(?<!\\w)audit(?!\\w)",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.compliance.031",
+          "pattern": "supervis(ion|ory)",
+          "weight": 6
+        }
+      ]
+    },
+    "legal": {
+      "description": "合同、协议、条款、诉讼与法律文书",
+      "rules": [
+        {
+          "rule_id": "doc_type.legal.001",
+          "pattern": "合同",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.legal.002",
+          "pattern": "条款",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.legal.003",
+          "pattern": "违约责任",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.legal.004",
+          "pattern": "赔偿",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.005",
+          "pattern": "知识产权",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.legal.006",
+          "pattern": "保密协议",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.legal.007",
+          "pattern": "法律",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.008",
+          "pattern": "协议",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.009",
+          "pattern": "诉讼",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.010",
+          "pattern": "仲裁",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.011",
+          "pattern": "纠纷",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.012",
+          "pattern": "侵权",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.013",
+          "pattern": "章程",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.legal.014",
+          "pattern": "要约",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.legal.015",
+          "pattern": "担保",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.legal.016",
+          "pattern": "执照",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.legal.017",
+          "pattern": "法律意见",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.018",
+          "pattern": "法律文书",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.019",
+          "pattern": "调解书",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.legal.020",
+          "pattern": "判决书",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.legal.021",
+          "pattern": "法律顾问",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.legal.022",
+          "pattern": "合规协议",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.legal.023",
+          "pattern": "契约",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.legal.024",
+          "pattern": "法务",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.legal.025",
+          "pattern": "甲方",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.legal.026",
+          "pattern": "乙方",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.legal.027",
+          "pattern": "丙方",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.028",
+          "pattern": "签章",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.029",
+          "pattern": "盖章",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.legal.030",
+          "pattern": "第[一二三四五六七八九十\\d]+条",
+          "weight": 12
+        },
+        {
+          "rule_id": "doc_type.legal.031",
+          "pattern": "本合同",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.legal.032",
+          "pattern": "双方协商",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.033",
+          "pattern": "terms and conditions",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.legal.034",
+          "pattern": "(?<!\\w)contract(?!\\w)",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.035",
+          "pattern": "agreement",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.036",
+          "pattern": "(?<!\\w)clause(?!\\w)",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.037",
+          "pattern": "liability",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.038",
+          "pattern": "indemnity",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.039",
+          "pattern": "confidentiality",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.040",
+          "pattern": "arbitration",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.legal.041",
+          "pattern": "breach of contract",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.legal.042",
+          "pattern": "intellectual property",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.legal.043",
+          "pattern": "lawsuit",
+          "weight": 6
+        }
+      ]
+    },
+    "security": {
+      "description": "安全、权限、认证、加密和网络安全",
+      "rules": [
+        {
+          "rule_id": "doc_type.security.001",
+          "pattern": "安全",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.security.002",
+          "pattern": "权限",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.security.003",
+          "pattern": "访问控制",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.security.004",
+          "pattern": "加密",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.security.005",
+          "pattern": "漏洞",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.security.006",
+          "pattern": "认证",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.security.007",
+          "pattern": "信息安全",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.security.008",
+          "pattern": "数据安全",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.009",
+          "pattern": "网络安全",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.010",
+          "pattern": "身份认证",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.011",
+          "pattern": "防火墙",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.012",
+          "pattern": "渗透测试",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.013",
+          "pattern": "安全策略",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.014",
+          "pattern": "零信任",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.015",
+          "pattern": "数据防泄漏",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.016",
+          "pattern": "安全审计",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.017",
+          "pattern": "权限管理",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.018",
+          "pattern": "安全合规",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.019",
+          "pattern": "访问控制策略",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.020",
+          "pattern": "password policy",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.021",
+          "pattern": "encryption",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.security.022",
+          "pattern": "access control",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.security.023",
+          "pattern": "vulnerabilit(y|ies)",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.security.024",
+          "pattern": "authentication",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.security.025",
+          "pattern": "firewall",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.026",
+          "pattern": "penetration test",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.security.027",
+          "pattern": "zero trust",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.security.028",
+          "pattern": "cyber ?security",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.security.029",
+          "pattern": "information security",
+          "weight": 8
+        }
+      ]
+    },
+    "financial": {
+      "description": "财务、预算、发票、报表和会计资料",
+      "rules": [
+        {
+          "rule_id": "doc_type.financial.001",
+          "pattern": "财务",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.financial.002",
+          "pattern": "报销",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.financial.003",
+          "pattern": "预算",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.financial.004",
+          "pattern": "发票",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.financial.005",
+          "pattern": "付款审批",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.financial.006",
+          "pattern": "对账",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.financial.007",
+          "pattern": "坏账",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.financial.008",
+          "pattern": "账务",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.financial.009",
+          "pattern": "账户",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.financial.010",
+          "pattern": "账簿",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.financial.011",
+          "pattern": "账目",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.financial.012",
+          "pattern": "利润表",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.financial.013",
+          "pattern": "资产负债表",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.financial.014",
+          "pattern": "现金流量表",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.financial.015",
+          "pattern": "营收",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.financial.016",
+          "pattern": "税务",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.financial.017",
+          "pattern": "薪酬",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.financial.018",
+          "pattern": "成本",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.financial.019",
+          "pattern": "报表",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.financial.020",
+          "pattern": "审计",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.financial.021",
+          "pattern": "资金",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.financial.022",
+          "pattern": "核算",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.financial.023",
+          "pattern": "毛利",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.financial.024",
+          "pattern": "净利",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.financial.025",
+          "pattern": "决算",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.financial.026",
+          "pattern": "税务申报",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.financial.027",
+          "pattern": "财务报表",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.financial.028",
+          "pattern": "reimbursement",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.financial.029",
+          "pattern": "budget",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.financial.030",
+          "pattern": "(?<!\\w)invoice(?!\\w)",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.financial.031",
+          "pattern": "balance sheet",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.financial.032",
+          "pattern": "income statement",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.financial.033",
+          "pattern": "cash flow",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.financial.034",
+          "pattern": "financial statement",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.financial.035",
+          "pattern": "(?<!\\w)revenue(?!\\w)",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.financial.036",
+          "pattern": "accounting",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.financial.037",
+          "pattern": "(?<!\\w)expenses?(?!\\w)",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.financial.038",
+          "pattern": "tax return",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.financial.039",
+          "pattern": "(?<!\\w)payment(?!\\w)",
+          "weight": 4
+        }
+      ]
+    },
+    "customer_data": {
+      "description": "客户、用户、个人信息和隐私数据",
+      "rules": [
+        {
+          "rule_id": "doc_type.customer_data.001",
+          "pattern": "客户数据",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.customer_data.002",
+          "pattern": "个人信息",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.customer_data.003",
+          "pattern": "用户隐私",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.customer_data.004",
+          "pattern": "数据收集",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.customer_data.005",
+          "pattern": "用户画像",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.customer_data.006",
+          "pattern": "客户信息",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.customer_data.007",
+          "pattern": "用户数据",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.customer_data.008",
+          "pattern": "隐私数据",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.customer_data.009",
+          "pattern": "个人数据",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.customer_data.010",
+          "pattern": "数据主体",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.customer_data.011",
+          "pattern": "数据泄露",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.customer_data.012",
+          "pattern": "数据脱敏",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.customer_data.013",
+          "pattern": "个人信息保护",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.customer_data.014",
+          "pattern": "用户资料",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.customer_data.015",
+          "pattern": "隐私保护",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.customer_data.016",
+          "pattern": "customer data",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.customer_data.017",
+          "pattern": "personal data",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.customer_data.018",
+          "pattern": "user profile",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.customer_data.019",
+          "pattern": "(?<!\\w)pii(?!\\w)",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.customer_data.020",
+          "pattern": "data subject",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.customer_data.021",
+          "pattern": "data breach",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.customer_data.022",
+          "pattern": "data anonymization",
+          "weight": 6
+        },
+        {
+          "rule_id": "doc_type.customer_data.023",
+          "pattern": "personal information",
+          "weight": 8
+        }
+      ]
+    },
+    "contract_template": {
+      "description": "合同/协议模板、范本和标准条款",
+      "rules": [
+        {
+          "rule_id": "doc_type.contract_template.001",
+          "pattern": "合同模板",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.contract_template.002",
+          "pattern": "协议模板",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.contract_template.003",
+          "pattern": "标准条款",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.contract_template.004",
+          "pattern": "模板",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.contract_template.005",
+          "pattern": "合同范本",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.contract_template.006",
+          "pattern": "协议范本",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.contract_template.007",
+          "pattern": "范本",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.contract_template.008",
+          "pattern": "标准合同",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.contract_template.009",
+          "pattern": "格式合同",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.contract_template.010",
+          "pattern": "模板库",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.contract_template.011",
+          "pattern": "合同范本库",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.contract_template.012",
+          "pattern": "协议范本库",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.contract_template.013",
+          "pattern": "contract template",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.contract_template.014",
+          "pattern": "boilerplate",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.contract_template.015",
+          "pattern": "template library",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.contract_template.016",
+          "pattern": "model contract",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.contract_template.017",
+          "pattern": "sample agreement",
+          "weight": 8
+        }
+      ]
+    },
+    "general": {
+      "description": "无法稳定归入其他类型的通用文档",
+      "rules": []
+    }
+  },
+  "domains": {
+    "product": {
+      "description": "商品、SKU、类目和品牌",
+      "rules": {
+        "SKU": 3,
+        "SPU": 3,
+        "Listing": 3,
+        "上架": 2,
+        "下架": 2,
+        "变体": 2,
+        "品类": 2,
+        "类目": 2,
+        "品牌": 2,
+        "条码": 2
+      }
+    },
+    "order": {
+      "description": "订单、履约、退款和售后订单流转",
+      "rules": {
+        "订单": 3,
+        "发货": 3,
+        "签收": 2,
+        "取消": 2,
+        "退款": 2,
+        "退货": 2,
+        "拆单": 2,
+        "履约": 2,
+        "包裹": 1,
+        "售后": 2
+      }
+    },
+    "inventory": {
+      "description": "库存、仓储、FBA 和盘点",
+      "rules": {
+        "库存": 3,
+        "FBA": 3,
+        "海外仓": 2,
+        "调拨": 2,
+        "在途": 2,
+        "安全库存": 2,
+        "滞销": 2,
+        "周转": 2,
+        "盘点": 2
+      }
+    },
+    "logistics": {
+      "description": "物流、清关、追踪和运输时效",
+      "rules": {
+        "头程": 3,
+        "尾程": 3,
+        "清关": 3,
+        "追踪号": 2,
+        "时效": 2,
+        "运费": 2,
+        "承运商": 2,
+        "HS编码": 2,
+        "报关": 2
+      }
+    },
+    "advertising": {
+      "description": "广告、投放、竞价和转化",
+      "rules": {
+        "ACoS": 3,
+        "ROAS": 3,
+        "CPC": 3,
+        "Campaign": 2,
+        "广告": 2,
+        "竞价": 2,
+        "投放": 2,
+        "曝光": 1,
+        "点击": 1,
+        "转化": 1
+      }
+    },
+    "customer": {
+      "description": "客户服务、评价、投诉和客户关系",
+      "rules": {
+        "退货": 2,
+        "差评": 3,
+        "投诉": 3,
+        "Review": 2,
+        "Feedback": 2,
+        "索赔": 3,
+        "保修": 2,
+        "复购": 2
+      }
+    },
+    "supplier": {
+      "description": "供应商、采购、交期和验货",
+      "rules": {
+        "供应商": 2,
+        "供货商": 2,
+        "PO": 2,
+        "交期": 3,
+        "验货": 2,
+        "对账": 2,
+        "采购": 2,
+        "比价": 2,
+        "工厂": 2,
+        "评估": 2,
+        "准入": 2,
+        "资质": 2,
+        "考核": 2
+      }
+    },
+    "analytics": {
+      "description": "经营分析、报表、利润和指标",
+      "rules": {
+        "日报": 3,
+        "周报": 3,
+        "月报": 3,
+        "毛利率": 3,
+        "净利润": 3,
+        "ROI": 2,
+        "客单价": 2,
+        "转化率": 2,
+        "同比": 2,
+        "环比": 2
+      }
+    },
+    "data": {
+      "description": "数据治理、数据质量、元数据和数据平台",
+      "rules": {
+        "数据治理": 3,
+        "数据质量": 3,
+        "数据标准": 3,
+        "数据管理": 3,
+        "数据规范": 3,
+        "数据安全": 2,
+        "元数据": 3,
+        "主数据": 3,
+        "数据采集": 2,
+        "数据仓库": 2,
+        "ETL": 3,
+        "数据血缘": 2,
+        "数据目录": 2
+      }
+    },
+    "financial": {
+      "description": "收入、成本、资产、负债和财务流程",
+      "rules": {
+        "营收": 3,
+        "收入": 2,
+        "利润": 3,
+        "毛利": 3,
+        "成本": 2,
+        "费用": 2,
+        "资产": 3,
+        "负债": 3,
+        "现金流": 3,
+        "预算": 2,
+        "报销": 2,
+        "发票": 2,
+        "对账": 2,
+        "坏账": 3
+      }
+    },
+    "general": {
+      "description": "无法稳定归入其他领域的通用内容",
+      "rules": {}
+    }
+  },
+  "aliases": {
+    "doc_type": {},
+    "domain": {
+      "finance": "financial",
+      "marketing": "advertising",
+      "after_sale": "customer",
+      "aftersales": "customer",
+      "after-sales": "customer"
+    }
+  },
+  "filename_hints": {
+    "政策": "policy",
+    "制度": "policy",
+    "规范": "policy",
+    "管理办法": "policy",
+    "合规": "compliance",
+    "法规": "compliance",
+    "监管": "compliance",
+    "隐私": "compliance",
+    "合同": "legal",
+    "条款": "legal",
+    "协议": "legal",
+    "NDA": "legal",
+    "保密": "legal",
+    "FAQ": "faq",
+    "常见问题": "faq",
+    "问答": "faq",
+    "规格": "product_spec",
+    "参数": "product_spec",
+    "说明书": "product_spec",
+    "SOP": "sop",
+    "操作手册": "sop",
+    "流程": "sop",
+    "Listing": "listing",
+    "广告": "ad_policy",
+    "安全": "security",
+    "权限": "security",
+    "加密": "security",
+    "财务": "financial",
+    "报销": "financial",
+    "发票": "financial",
+    "客户数据": "customer_data",
+    "用户隐私": "customer_data",
+    "合同模板": "contract_template",
+    "协议模板": "contract_template",
+    "README": "general",
+    "readme": "general",
+    "CHANGELOG": "general"
+  },
+  "folder_hints": {
+    "legal": "legal",
+    "contracts": "legal",
+    "合同": "legal",
+    "compliance": "compliance",
+    "法规": "compliance",
+    "regulatory": "compliance",
+    "policy": "policy",
+    "policies": "policy",
+    "制度": "policy",
+    "hr": "policy",
+    "faq": "faq",
+    "help": "faq",
+    "常见问题": "faq",
+    "products": "product_spec",
+    "specs": "product_spec",
+    "规格": "product_spec",
+    "sop": "sop",
+    "operations": "sop",
+    "流程": "sop",
+    "security": "security",
+    "安全": "security",
+    "infosec": "security",
+    "finance": "financial",
+    "财务": "financial",
+    "报销": "financial",
+    "customers": "customer_data",
+    "customer_data": "customer_data",
+    "templates": "contract_template",
+    "模板": "contract_template"
+  },
+  "r0_allowlist": [
+    "doc_type.listing.001",
+    "doc_type.sop.001",
+    "doc_type.ad_policy.003",
+    "doc_type.faq.001",
+    "doc_type.product_spec.017",
+    "doc_type.training.017",
+    "doc_type.compliance.004",
+    "doc_type.compliance.005",
+    "doc_type.legal.030",
+    "doc_type.security.020",
+    "doc_type.financial.034",
+    "doc_type.customer_data.016",
+    "doc_type.contract_template.013"
+  ]
+}

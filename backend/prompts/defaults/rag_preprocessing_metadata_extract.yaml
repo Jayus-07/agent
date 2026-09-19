@@ -5,6 +5,7 @@ risk_level: low
 template_engine: str_format
 variables:
   - {name: doc_types, required: true, description: 允许的文档类型枚举}
+  - {name: domains, required: true, description: 允许的业务领域枚举}
   - {name: filename, required: true, description: 文件名}
   - {name: text, required: true, description: 文档内容采样}
 template: |
@@ -13,6 +14,9 @@ template: |
   允许的 doc_type 枚举（必须从中选一个，无法判断时选 general）:
   {doc_types}
 
+  允许的 business_domain 枚举（必须从中选一个，无法判断时选 general）:
+  {domains}
+
   文件名: {filename}
   文档内容:
   {text}
@@ -20,7 +24,7 @@ template: |
   请严格输出如下 JSON（不要 markdown 代码块，不要任何解释文字）:
   {{"doc_type": "枚举之一",
     "confidence": 0.0到1.0的小数，表示你对 doc_type 判断的把握,
-    "business_domain": "文档所属业务域（如 after_sale/order/customer/logistics/product/marketing/finance/general 之一或更贴切的单词）",
+    "business_domain": "必须是上方枚举之一，无法判断时使用 general",
     "summary": "不超过120字的文档一句话摘要",
     "keywords": ["关键词1", "关键词2", "关键词3", "关键词4", "关键词5"],
     "entities": {{"person": ["人名"], "org": ["组织/公司"], "product": ["产品/SKU"], "regulation": ["法规/制度名"]}},

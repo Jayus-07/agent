@@ -73,13 +73,32 @@ def test_close_call_arbitration_includes_runner_up(monkeypatch):
     from backend.config.indexing_rules import override_rules, reset_rules_override
     override_rules(arbitration_score_gap=100)
     try:
-        result = md.classify_doc_type(text, filename="采购流程.docx")
+        result = md.classify_doc_type(
+            text,
+            filename="采购流程.docx",
+            allow_llm_arbitration=True,
+        )
     finally:
         reset_rules_override()
 
     assert "prompt" in invoked, "分差接近时必须触发 LLM 仲裁"
     assert "sop" in invoked["prompt"], "次名 sop 必须进入仲裁候选"
     assert result == "sop"
+
+
+def test_default_classifier_never_calls_llm(monkeypatch):
+    """生产默认规则分类必须是确定性的，仲裁只能由诊断调用显式开启。"""
+    import backend.rag.preprocessing.metadata as md
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("default classifier must not invoke LLM")
+
+    monkeypatch.setattr(md, "invoke_metadata_llm", _boom)
+    result = md.classify_doc_type(
+        "采购申请需审批，采购申请需审批。合同合同合同条款条款违约责任。",
+        filename="采购流程.docx",
+    )
+    assert result in {"legal", "policy", "sop"}
 
 
 def test_high_confidence_not_arbitrated(monkeypatch):

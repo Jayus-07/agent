@@ -58,6 +58,11 @@ class KeywordRuleStore:
         specific = by_dt.get(doc_type, [])
         return specific + general  # 通用词兜底
 
+    def invalidate_rule_cache(self) -> None:
+        """让发布/回滚后的进程内规则缓存立即失效。"""
+        self._cache = None
+        self._cache_ts = 0
+
     # ── CRUD ──
 
 # 模块级单例

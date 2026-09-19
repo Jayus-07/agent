@@ -14,6 +14,7 @@ from backend.rag.preprocessing.domain_data import DOMAIN_RULES, DOC_TYPE_RULES
 from backend.rag.preprocessing.metadata_schema import (
     DOMAINS,
     DOC_TYPES,
+    DecisionEnvelope,
     KEYWORDS_MAX,
     TIME_REFS_MAX,
     RiskInfo,
@@ -23,7 +24,7 @@ from backend.rag.preprocessing.metadata_schema import (
 GOOD = {
     "doc_type": "financial",
     "confidence": 0.9,
-    "business_domain": "finance",
+    "business_domain": "financial",
     "summary": "本季度报销与预算执行情况说明。",
     "keywords": ["报销", "预算", "发票"],
     "entities": {"person": ["张三"], "org": ["财务部"]},
@@ -100,6 +101,10 @@ class TestUnifiedMetadata:
         m = UnifiedMetadata.model_validate(dict(GOOD, business_domain=""))
         assert m.business_domain == "general"
 
+    def test_business_domain_legacy_alias_is_canonicalized(self):
+        m = UnifiedMetadata.model_validate(dict(GOOD, business_domain="finance"))
+        assert m.business_domain == "financial"
+
 
 # ============ risk 字段 ============
 
@@ -121,3 +126,36 @@ class TestRiskInfo:
     def test_signals_dirty_values_dropped(self):
         r = RiskInfo(signals=["合规", "  ", "", 42, None])
         assert r.signals == ["合规", "42"]
+
+
+class TestDecisionEnvelope:
+    def test_legacy_domain_alias_is_normalized(self):
+        envelope = DecisionEnvelope(
+            decision="accepted",
+            doc_type="financial",
+            business_domain="finance",
+            source="r0",
+        )
+        assert envelope.business_domain == "financial"
+
+    def test_unknown_domain_is_rejected(self):
+        with pytest.raises(ValidationError, match="business_domain"):
+            DecisionEnvelope(
+                decision="abstain",
+                doc_type="general",
+                business_domain="not-a-domain",
+                source="fallback",
+            )
+
+    def test_envelope_keeps_llm_call_count_and_route_metadata(self):
+        envelope = DecisionEnvelope(
+            decision="fallback",
+            doc_type="general",
+            source="fallback",
+            fallback_reason="classifier_mismatch",
+            llm_call_count=0,
+            taxonomy_version="v1",
+            rules_version="v1:abc",
+        )
+        assert envelope.llm_call_count == 0
+        assert envelope.rules_version == "v1:abc"
