@@ -258,6 +258,20 @@ DOMAIN_RULES: Dict[str, Dict[str, int]] = {
     "financial": {"营收": 3, "收入": 2, "利润": 3, "毛利": 3, "成本": 2, "费用": 2, "资产": 3, "负债": 3, "现金流": 3, "预算": 2, "报销": 2, "发票": 2, "对账": 2, "坏账": 3},
 }
 
+# ── 版本化 taxonomy 兼容导出 ───────────────────────────────────────
+# 保留旧模块名，实际内容以 metadata_taxonomy.yaml 为唯一事实源。
+from backend.rag.preprocessing.taxonomy_spec import get_taxonomy
+
+_TAXONOMY = get_taxonomy()
+DOC_TYPE_RULES = _TAXONOMY.legacy_doc_type_rules()
+FILENAME_TYPE_HINTS = dict(_TAXONOMY.filename_hints)
+FOLDER_TYPE_HINTS = dict(_TAXONOMY.folder_hints)
+DOMAIN_RULES = {
+    domain: dict(rules)
+    for domain, rules in _TAXONOMY.domain_rules.items()
+    if domain != "general"
+}
+
 # ====================================
 # 财务指标识别模式（用于 QueryAnalyzer 提取财务指标）
 # ====================================

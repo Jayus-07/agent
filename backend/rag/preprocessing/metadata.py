@@ -41,9 +41,20 @@ _MINHASH_CACHE_MAX_SIZE = 1024  # 最大保留类型数，自动 LRUCache
 # LLM 仲裁提示词 — 已迁移至 prompt_service（key: rag.preprocessing.arbitration）
 
 
-def classify_doc_type(text: str, filename: str = "", file_path: str = "") -> str:
-    """V2 加权计分分类 + 路径上下文 + LLM 胶着仲裁（兼容旧调用方）。"""
-    result, _ = classify_with_confidence(text, filename, file_path)
+def classify_doc_type(
+    text: str,
+    filename: str = "",
+    file_path: str = "",
+    *,
+    allow_llm_arbitration: bool = False,
+) -> str:
+    """V2 确定性计分分类；诊断场景可显式开启 LLM 仲裁。"""
+    result, _ = classify_with_confidence(
+        text,
+        filename,
+        file_path,
+        allow_llm_arbitration=allow_llm_arbitration,
+    )
     return result
 
 
@@ -209,7 +220,14 @@ def _clear_minhash_cache():
     _minhash_cache = {}
 
 
-def classify_with_confidence(text: str, filename: str = "", file_path: str = "", return_detail: bool = False):
+def classify_with_confidence(
+    text: str,
+    filename: str = "",
+    file_path: str = "",
+    return_detail: bool = False,
+    *,
+    allow_llm_arbitration: bool = False,
+):
     """V2 加权计分分类 + 路径上下文 + confidence 计算。
 
     Returns: (doc_type, confidence) 或 (doc_type, confidence, detail_dict)
@@ -354,7 +372,10 @@ def classify_with_confidence(text: str, filename: str = "", file_path: str = "",
         top_type in _ARBITRATION_CANDIDATES
         and (top_score - second_score) <= _irules.arbitration_score_gap
     )
-    if (candidate_narrow_lead or (len(close_set) >= 2 and inner_diff < _irules.arbitration_score_gap)):
+    if allow_llm_arbitration and (
+        candidate_narrow_lead
+        or (len(close_set) >= 2 and inner_diff < _irules.arbitration_score_gap)
+    ):
         # 候选含 top4 全部类型（含 sop/financial 等非仲裁类次名，盲点修复）
         candidates = ", ".join(t for t, _ in top4)
         logger.info(f"[Classify] 胶着仲裁：top4={top4}, inner_diff={inner_diff}")

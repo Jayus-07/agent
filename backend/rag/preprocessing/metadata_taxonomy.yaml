@@ -1951,17 +1951,16 @@
   "r0_allowlist": [
     "doc_type.listing.001",
     "doc_type.sop.001",
-    "doc_type.ad_policy.001",
+    "doc_type.ad_policy.003",
     "doc_type.faq.001",
-    "doc_type.product_spec.001",
-    "doc_type.training.001",
+    "doc_type.product_spec.017",
+    "doc_type.training.017",
     "doc_type.compliance.004",
     "doc_type.compliance.005",
-    "doc_type.legal.001",
-    "doc_type.legal.030",
-    "doc_type.security.001",
-    "doc_type.financial.001",
-    "doc_type.customer_data.001",
-    "doc_type.contract_template.001"
+    "doc_type.legal.029",
+    "doc_type.security.020",
+    "doc_type.financial.034",
+    "doc_type.customer_data.016",
+    "doc_type.contract_template.013"
   ]
 }

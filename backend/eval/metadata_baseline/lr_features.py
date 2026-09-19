@@ -20,10 +20,13 @@ import math
 import os
 import re
 
-from backend.rag.preprocessing.domain_data import (
-    DOC_TYPE_RULES, FILENAME_TYPE_HINTS, FOLDER_TYPE_HINTS,
-)
-from backend.rag.preprocessing.metadata_schema import DOC_TYPES
+from backend.rag.preprocessing.taxonomy_spec import get_taxonomy
+
+_TAXONOMY = get_taxonomy()
+DOC_TYPES = tuple(_TAXONOMY.doc_types)
+DOC_TYPE_RULES = _TAXONOMY.legacy_doc_type_rules()
+FILENAME_TYPE_HINTS = dict(_TAXONOMY.filename_hints)
+FOLDER_TYPE_HINTS = dict(_TAXONOMY.folder_hints)
 
 _RISK_RE = re.compile(r"合同|GDPR|隐私|审计|监管|处罚|罚款|合规|诉讼|知识产权|保密")
 _CLAUSE_RE = re.compile(r"第[一二三四五六七八九十百\d]+条")

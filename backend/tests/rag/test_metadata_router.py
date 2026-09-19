@@ -197,7 +197,7 @@ async def test_shadow_route_never_raises(monkeypatch):
     """影子路由任何内部异常都必须吞掉返回 None（不得引入主路径故障面）。"""
     from backend.rag.preprocessing import metadata_router as mr
 
-    async def _boom(*a, **kw):
+    def _boom(*a, **kw):
         raise RuntimeError("shadow exploded")
 
     monkeypatch.setattr(mr, "_l0_strong_prior", _boom)
