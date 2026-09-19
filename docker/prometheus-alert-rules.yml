@@ -22,6 +22,101 @@ groups:
       - record: chat:tpot_p99_seconds
         expr: histogram_quantile(0.99, sum(rate(chat_tpot_seconds_bucket[10m])) by (le))
 
+  # ── 元数据级联灰度止损信号（2026-09-20）────────────────────
+  # 这些规则只负责发现风险，不自动修改开关；发布编排收到告警后应将
+  # METADATA_CASCADE_ENABLED=false、METADATA_CASCADE_ROLLOUT_PERCENT=0。
+  - name: agent-platform-metadata-canary
+    interval: 30s
+    rules:
+      - record: metadata:shadow_failure_rate:ratio5m
+        expr: |
+          sum(rate(metadata_shadow_job_total{result="failed"}[5m]))
+            / clamp_min(sum(rate(metadata_shadow_job_total[5m])), 0.001)
+
+      - record: metadata:legacy_fallback_rate:ratio5m
+        expr: |
+          sum(rate(metadata_route_total{level="legacy_rule",outcome="fallback"}[5m]))
+            / clamp_min(
+                sum(rate(metadata_route_total{
+                  level=~"R0|R1|R2|L3|legacy_rule|L0|L1|L2",
+                  outcome=~"hit|fallback"
+                }[5m])),
+                0.001
+              )
+
+      - alert: MetadataCascadeFallbackRateHigh
+        expr: metadata:legacy_fallback_rate:ratio5m > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "元数据规则 fallback 比例超过 5%"
+          description: "级联灰度命中后仍频繁回退规则链；检查统一抽取失败、Schema 越界和上游 LLM 状态，必要时立即回退灰度"
+
+      - alert: MetadataShadowFailureRateHigh
+        expr: metadata:shadow_failure_rate:ratio5m > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "元数据影子任务失败率超过 1%"
+          description: "影子任务失败会失去一致率证据，但不得阻塞主索引；检查 Redis、PostgreSQL、缓存命中和独立 worker"
+
+      - alert: MetadataShadowBackpressure
+        expr: |
+          sum(increase(metadata_shadow_dispatch_total{
+            result=~"backpressure|skipped|failed"
+          }[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "元数据影子派发出现持续背压或失败"
+          description: "影子队列已触发有界丢弃/失败策略；先扩 shadow worker 或降低采样，不得让影子抢占主索引资源"
+
+      - alert: MetadataShadowQueueAgeHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(metadata_shadow_queue_age_seconds_bucket[10m])) by (le)
+          ) > 60
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "元数据影子队列 P95 年龄超过 60 秒"
+          description: "影子证据开始滞后；检查 rag_metadata_shadow 消费能力和队列长度，不要因此阻塞主路径"
+
+      - alert: MetadataResourceWaitTimeout
+        expr: increase(metadata_resource_wait_timeout_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "元数据资源槽位出现等待超时"
+          description: "Embedding/LLM/DB/影子资源发生有界等待超时；按 resource 标签判断是否需要扩容或降采样"
+
+      - alert: MetadataRouteError
+        expr: |
+          sum(increase(metadata_route_total{
+            outcome="error"
+          }[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "元数据路由出现错误"
+          description: "检查对应 level 的路由、Embedding、分类器模型卡和统一抽取日志；错误不得静默计入命中"
+
+      - alert: MetadataClassifierMismatch
+        expr: increase(metadata_classifier_mismatch_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "元数据分类器版本或指纹失配"
+          description: "R1 不得继续接管流量；保持分类器关闭并核对 taxonomy/rules/model/feature 指纹"
+
   - name: agent-platform-sli
     rules:
       # ── 可用性 ──────────────────────────────
@@ -220,3 +315,85 @@ groups:
         annotations:
           summary: "任务失败率超过 30%（10 分钟窗口）"
           description: "按 name/queue 标签定位失败任务类型；管理端任务中心看 traceback（/api/admin/tasks/{id}），常见为 LLM 凭据失效或超时"
+
+      # ── 安全 / 幂等 / 预算闭环（WP6）──────────────────────────────
+      - alert: IdempotencyUnavailable
+        expr: increase(idempotency_claim_total{result="unavailable"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "幂等权威存储不可用，写副作用应保持拒绝"
+          description: "检查 Redis/PG 连通性；在恢复前不得绕过幂等门禁执行写操作"
+
+      - alert: IdempotencyConflictSpike
+        expr: increase(idempotency_claim_total{result="conflict"}[10m]) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "幂等冲突量异常升高"
+          description: "检查客户端重试、幂等键复用和请求体漂移；不要通过放宽指纹校验消除告警"
+
+      - alert: BudgetExceededSpike
+        expr: increase(budget_request_total{result="rejected"}[10m]) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "请求预算拒绝量异常升高"
+          description: "按 mode 区分请求级限制与日/月额度；核查是否为真实超限，禁止静默降级模型或写副作用"
+
+      - alert: BudgetThresholdReached
+        expr: increase(budget_threshold_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "用户或租户预算达到 80%/100% 阈值"
+          description: "从 budget_threshold_total 的 scope_type/period_type/threshold 维度查询主体范围；不要在告警文本中写入主体 ID"
+
+      - alert: BudgetHardLimitBlocked
+        expr: increase(budget_quota_total{result="rejected"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "硬预算已阻断新的预算约束操作"
+          description: "只读查询应继续可用；检查价格、日/月 ledger 与策略继承，不得把硬阻断改成无限或静默 fallback"
+
+      - alert: ModelPriceMissing
+        expr: increase(budget_price_total{result=~"missing|unavailable"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "模型价格表缺失或不可用"
+          description: "enforce 模式下应拒绝受硬预算约束的模型调用；observe/off 模式仅统计 token 并告警，先导入并完成双人审核"
+
+      - alert: SideEffectBudgetRejected
+        expr: increase(side_effect_budget_total{result="rejected"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "写副作用被预算门禁拒绝"
+          description: "确认幂等和审批状态未被绕过；只允许在预算周期或策略合法调整后重试"
+
+      - alert: SemanticValidationFailureSpike
+        expr: increase(semantic_validation_total{result="rejected"}[10m]) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tool/Skill 语义校验失败量异常升高"
+          description: "按 layer 定位结构或语义契约回归；不得把校验失败当作 Tool 成功结果继续交给 Reporter"
+
+      - alert: FeedbackCandidateReviewFailure
+        expr: increase(feedback_candidate_total{result="rejected"}[1h]) > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "反馈评测候选审核或 promotion 拒绝量升高"
+          description: "检查审核状态机和 golden set 导出；pending/rejected 候选不得进入生产评测集"
