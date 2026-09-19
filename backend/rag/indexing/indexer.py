@@ -273,7 +273,8 @@ class IncrementalIndexer:
             try:
                 disk_row = disk_files.get(os.path.abspath(path)) or disk_files.get(path)
                 file_hash = disk_row[0] if disk_row else None
-                self._index_file(path, file_hash=file_hash)
+                result = self._index_file(path, file_hash=file_hash)
+                self._log_sync_operation(path, result or {}, "pipeline_recovery")
                 counts["recovered"] += 1
                 logger.info(f"[Recovery] 中断文档已恢复索引: {os.path.basename(path)}")
             except Exception as e:
@@ -385,7 +386,8 @@ class IncrementalIndexer:
             if doc_id:
                 self._remove_document(doc_id, file_path=path)
             try:
-                self._index_file(path)
+                result = self._index_file(path)
+                self._log_sync_operation(path, result or {}, "pipeline_sync_modified")
                 logger.info(f"[MODIFIED] {os.path.basename(path)}")
             except Exception as e:
                 failed.append(path)
@@ -398,7 +400,8 @@ class IncrementalIndexer:
         # 新增
         for path in delta.added:
             try:
-                self._index_file(path)
+                result = self._index_file(path)
+                self._log_sync_operation(path, result or {}, "pipeline_sync_added")
                 logger.info(f"[ADDED] {os.path.basename(path)}")
             except Exception as e:
                 failed.append(path)
@@ -411,6 +414,29 @@ class IncrementalIndexer:
         return failed
 
     # ---- 单文件索引 ----
+
+    def _log_sync_operation(self, path: str, result: dict, source: str) -> None:
+        """sync 触发的索引写操作日志——让 /knowledge/operations 页可见后台
+        重建/增量同步活动（此前只有人工 API 操作才记，批量 sync 是盲区）。
+        trace_id 来自 _index_file 返回值，operations 页可直接点进索引 trace 详情。
+        失败只记 debug（审计日志不阻断索引）。
+        """
+        try:
+            from backend.rag.indexing.operation_log_pg import (
+                PostgresDocumentOperationLogger,
+            )
+            PostgresDocumentOperationLogger().log(
+                doc_id=result.get("doc_id", ""),
+                doc_name=os.path.basename(path),
+                operation="reindex",
+                user_id="system",
+                source=source,
+                trace_id=result.get("trace_id") or None,
+                result="success",
+                detail={"chunk_count": result.get("chunk_count", 0)},
+            )
+        except Exception as e:
+            logger.debug(f"[Sync] 操作日志记录失败 ({os.path.basename(path)}): {e}")
 
     def _index_file(self, file_path: str, file_hash: str | None = None,
                     reindex_ctx: dict | None = None):
