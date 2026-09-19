@@ -863,6 +863,24 @@ tab①⑤ 的数据源，与 §15.3 同批落码，同样落在独占新文件�
 
 **禁止**：为了让测试通过而 mock 掉 `atLeast` —— 权限矩阵测试应通过 `sessionStorage.setItem('agent.user_info', ...)` 真实切换角色（照 `navConfig.test.ts:71-74` 的 `loginAs` 写法）。
 
+### 16.1 批次 A 前半落地（2026-09-19）：类型 + 纯函数
+
+已交付 `frontend-admin/src/types/modelConfig.ts` 与其共置测试 `modelConfig.test.ts`（**28 例全绿**，`tsc --noEmit` 零错误）。
+类型与 §5.4 逐字对齐（含 `ProviderListResponse.source` 的 `db|builtin` 分支 —— 它是 §15.3 fail-open 兜底的可见性出口）；
+纯函数覆盖 §16 第一行的全部条目，另加 §8.1 的 `probeFallbackSummary` / `probeOverallLabel`（把「每级失败含义不同」这条 B.4 约束变成可测的纯函数，而不是散在组件里的三元表达式）。
+
+**两条对 §5.4 签名的有意偏离**（写在此处以免被当成笔误）：
+
+| 函数 | 文档签名 | 实际签名 | 理由 |
+|---|---|---|---|
+| `isModelSelectable` | `(role, model, models)` | **`(model)`** | 可选性只由该模型自身的「是否注册 / 是否缺 Key」决定（§6 明写「唯一判据」）。`models` 是冗余的（调用方本已持有该 `ModelOption`）；`role` 只影响保存时的 `requiresReindex` 二次确认，与可选性无关 —— 留着无用形参会让调用方以为它有作用。 |
+| `sourceLabel` | `(source, inheritedFrom)` | **`(source, inheritedFrom, inheritedValue?)`** | 两参签名**无法**产出文档自己要求的文案「跟随 main（**当前 = xxx**）」。「当前 = xxx」必须由调用方把父角色的生效值传进来；否则退化成「让人猜」，与主设计 §3.1 直接冲突。第 3 参可选，缺省时只给「跟随 main」。 |
+
+**一条刻意的安全网**：`redactForRole` 在当前契约下，`canAdmin` 对四类已知对象**不产生差异**（密钥类对管理员也只给指纹 —— 库里本就没有可展示的值）。
+仍保留该形参并用在 **未知对象类型** 的兜底分支上（非 admin 一律不显示值）：将来新增带秘密的对象类型时，默认就是安全的，而不是等发现泄漏再补。测试用一个 `provider_header` 假类型锁定了这条兜底。
+
+**仍未做**：`api/modelConfig.ts`（对着 mock）—— 等四个端点注册生效后再写，否则模块对着 404 的路径写死，验收时会分不清「前端错」还是「没注册」。
+
 ---
 
 ## 17. 决策记录

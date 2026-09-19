@@ -1,0 +1,258 @@
+import { describe, expect, it } from 'vitest'
+
+import {
+  gradeLabel,
+  isModelSelectable,
+  maskSecret,
+  probeFallbackSummary,
+  probeOverallLabel,
+  redactForRole,
+  roleLabel,
+  sourceLabel,
+  type ConfigHistoryEntry,
+  type ModelOption,
+} from './modelConfig'
+
+// ── gradeLabel：四级文案唯一来源 ──────────────────────────────────────────
+
+describe('gradeLabel', () => {
+  it('四级都有短名，且互不相同', () => {
+    const labels = (['L0', 'L1', 'L2', 'L3'] as const).map(gradeLabel)
+    expect(labels).toEqual(['URL 可达', '端点清单', '模型调用', '流式 usage'])
+    expect(new Set(labels).size).toBe(4)
+  })
+})
+
+// ── sourceLabel：inherit 必须带父角色与父的当前值 ─────────────────────────
+
+describe('sourceLabel', () => {
+  it('四个来源各自成词，且 db 不与 env 混用同一徽章', () => {
+    expect(sourceLabel('db', null)).toBe('DB 覆盖')
+    expect(sourceLabel('env', null)).toBe('环境变量')
+    expect(sourceLabel('default', null)).toBe('代码默认')
+  })
+
+  it('inherit 展开父角色名与父的当前值（不让人猜空值含义）', () => {
+    expect(sourceLabel('inherit', 'main', 'MiniMax-M3')).toBe('跟随 main（当前 = MiniMax-M3）')
+  })
+
+  it('inherit 缺父值时不编造「当前 =」，只给父角色名', () => {
+    expect(sourceLabel('inherit', 'main', null)).toBe('跟随 main')
+    expect(sourceLabel('inherit', null, null)).toBe('跟随 main')
+  })
+
+  it('未知来源原样返回，不冒充「代码默认」', () => {
+    expect(sourceLabel('something-new', null)).toBe('something-new')
+    expect(sourceLabel('', null)).toBe('未知来源')
+  })
+})
+
+// ── maskSecret ────────────────────────────────────────────────────────────
+
+describe('maskSecret', () => {
+  it('两侧齐备时给出掩码与指纹', () => {
+    expect(maskSecret('a1b2', '3f9c1d')).toBe('····a1b2 · 指纹 3f9c1d')
+  })
+
+  it('单侧缺失只渲染存在的那侧', () => {
+    expect(maskSecret('a1b2', null)).toBe('····a1b2')
+    expect(maskSecret(null, '3f9c1d')).toBe('指纹 3f9c1d')
+  })
+
+  it('两侧都缺返回空串（调用方渲染「未配置」而不是半个掩码）', () => {
+    expect(maskSecret(null, null)).toBe('')
+    expect(maskSecret(undefined, undefined)).toBe('')
+  })
+})
+
+// ── isModelSelectable：未注册 / 缺 Key 两分支 ────────────────────────────
+
+describe('isModelSelectable', () => {
+  const chat: ModelOption = {
+    name: 'MiniMax-M3',
+    provider: 'minimax',
+    registered: true,
+    missingKeyEnv: null,
+  }
+
+  it('注册且 Key 齐备 → 可选，无原因', () => {
+    expect(isModelSelectable(chat)).toEqual({ selectable: true, reason: null })
+  })
+
+  it('未注册 → 不可选，原因为「未注册」', () => {
+    expect(isModelSelectable({ ...chat, registered: false })).toEqual({
+      selectable: false,
+      reason: '未注册',
+    })
+  })
+
+  it('缺 Key → 不可选，原因点名环境变量（用户才知道去配哪个）', () => {
+    expect(
+      isModelSelectable({ ...chat, missingKeyEnv: 'MINIMAX_API_KEY' }),
+    ).toEqual({ selectable: false, reason: '缺少 MINIMAX_API_KEY' })
+  })
+
+  it('目录里根本没有该模型（undefined）→ 按未注册处理，不抛异常', () => {
+    expect(isModelSelectable(undefined)).toEqual({ selectable: false, reason: '未注册' })
+  })
+
+  it('未注册优先于缺 Key 报出（先修注册，再修 Key）', () => {
+    expect(
+      isModelSelectable({ ...chat, registered: false, missingKeyEnv: 'X_API_KEY' }),
+    ).toEqual({ selectable: false, reason: '未注册' })
+  })
+})
+
+// ── probeFallbackSummary / probeOverallLabel ─────────────────────────────
+
+describe('probeFallbackSummary', () => {
+  it('fail_degraded 绝不表述成失败（B.4 硬约束 1）', () => {
+    const text = probeFallbackSummary('L1', 'fail_degraded')
+    expect(text).toContain('不影响使用')
+    expect(text).not.toContain('失败')
+  })
+
+  it('L1 的 fail 与 fail_degraded 文案不同（前者要修，后者不用）', () => {
+    expect(probeFallbackSummary('L1', 'fail')).not.toBe(
+      probeFallbackSummary('L1', 'fail_degraded'),
+    )
+  })
+
+  it('每级 fail 都指向不同修法（L0 查地址 / L2 查模型名与权限）', () => {
+    expect(probeFallbackSummary('L0', 'fail')).toContain('地址')
+    expect(probeFallbackSummary('L2', 'fail')).toContain('模型名')
+  })
+
+  it('L3 的 skip 说明记账影响', () => {
+    expect(probeFallbackSummary('L3', 'skip')).toContain('token')
+  })
+})
+
+describe('probeOverallLabel', () => {
+  it('通过时给通过结论', () => {
+    expect(
+      probeOverallLabel({ ok: true, steps: [{ grade: 'L0', status: 'pass' }] }),
+    ).toBe('厂商连通性通过')
+  })
+
+  it('未通过时点名卡在哪一级（fail_degraded 不算卡住）', () => {
+    expect(
+      probeOverallLabel({
+        ok: false,
+        steps: [
+          { grade: 'L0', status: 'pass' },
+          { grade: 'L1', status: 'fail_degraded' },
+          { grade: 'L2', status: 'fail' },
+        ],
+      }),
+    ).toBe('未通过（卡在 L2）')
+  })
+
+  it('没有 fail 级时给中性结论，不编造级别', () => {
+    expect(
+      probeOverallLabel({ ok: false, steps: [{ grade: 'L3', status: 'skip' }] }),
+    ).toBe('未通过')
+  })
+})
+
+// ── redactForRole：三类对象的脱敏矩阵（canAdmin 两侧）────────────────────
+
+const entry = (patch: Partial<ConfigHistoryEntry>): ConfigHistoryEntry => ({
+  id: '1',
+  object: 'role',
+  key: 'main',
+  oldValue: 'MiniMax-M3',
+  newValue: 'Qwen/Qwen3-8B',
+  operator: 'user:1',
+  at: '2026-09-19T15:00:00+08:00',
+  rollbackable: true,
+  ...patch,
+})
+
+describe('redactForRole', () => {
+  it('role 类：两侧都原样显示 旧值 → 新值', () => {
+    for (const canAdmin of [true, false]) {
+      const r = redactForRole(entry({}), canAdmin)
+      expect(r.redacted).toBe(false)
+      expect(r.text).toBe('main: MiniMax-M3 → Qwen/Qwen3-8B')
+    }
+  })
+
+  it('provider 类：显示完整 URL（URL 不是秘密）', () => {
+    const r = redactForRole(
+      entry({
+        object: 'provider',
+        key: 'glm-coding',
+        oldValue: 'https://old.example.com/v1',
+        newValue: 'https://new.example.com/v1',
+      }),
+      false,
+    )
+    expect(r.redacted).toBe(false)
+    expect(r.text).toBe('glm-coding: https://old.example.com/v1 → https://new.example.com/v1')
+  })
+
+  it('provider_network_scope 类：两侧都显示 public/private（私网变更是安全事件，不能糊掉）', () => {
+    const r = redactForRole(
+      entry({ object: 'provider_network_scope', key: 'glm-coding', oldValue: 'public', newValue: 'private' }),
+      false,
+    )
+    expect(r.text).toBe('glm-coding: network_scope public → private')
+  })
+
+  it('密钥类：admin 与 editor 都只给指纹，**任何一侧都不出现旧值/新值**', () => {
+    const secret = entry({
+      object: 'provider_credential',
+      key: 'minimax',
+      oldValue: 'sk-old-plaintext',
+      newValue: 'sk-new-plaintext',
+      secretFingerprint: '3f9c1d',
+    })
+    for (const canAdmin of [true, false]) {
+      const r = redactForRole(secret, canAdmin)
+      expect(r.redacted).toBe(true)
+      expect(r.text).toBe('minimax: 密钥已轮换（指纹 3f9c1d）')
+      expect(r.text).not.toContain('sk-old-plaintext')
+      expect(r.text).not.toContain('sk-new-plaintext')
+    }
+  })
+
+  it('密钥类缺指纹时给破折号，不留空让 UI 出现「指纹 」', () => {
+    const r = redactForRole(
+      entry({ object: 'provider_credential', key: 'minimax', secretFingerprint: null }),
+      false,
+    )
+    expect(r.text).toBe('minimax: 密钥已轮换（指纹 —）')
+  })
+
+  it('未知对象类型：非 admin 隐藏值（安全网），admin 仍可读', () => {
+    const unknown = entry({ object: 'provider_header' as never, key: 'glm-coding' })
+    expect(redactForRole(unknown, false)).toEqual({ text: 'glm-coding: 已变更', redacted: true })
+    expect(redactForRole(unknown, true).text).toBe('glm-coding: MiniMax-M3 → Qwen/Qwen3-8B')
+  })
+})
+
+// ── roleLabel ────────────────────────────────────────────────────────────
+
+describe('roleLabel', () => {
+  it('8 个角色都有中文名', () => {
+    const roles = [
+      'main',
+      'doc',
+      'tool_selector',
+      'fallback',
+      'ocr',
+      'embedding',
+      'rerank',
+      'eval_gen',
+    ]
+    for (const r of roles) {
+      expect(roleLabel(r)).not.toBe(r)
+      expect(roleLabel(r).length).toBeGreaterThan(0)
+    }
+  })
+
+  it('未知角色回落为 role 代码，不显示空白', () => {
+    expect(roleLabel('brand_new_role')).toBe('brand_new_role')
+  })
+})
