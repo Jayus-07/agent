@@ -18,6 +18,50 @@ from backend.orchestration.router import get_router
 from backend.shared.logger import logger
 
 
+def _enrich_with_understanding(cs_update: dict, query: str) -> dict:
+    """P1 步骤 3 接线（2026-09-19）：CSUnderstanding 结果并入 cs_route。
+
+    - 实体（订单号等）入 cs_route.metadata —— action/query expert 直接消费，
+      取代各自散落的正则抽取入口；
+    - normalized_text / missing_slots / decision_layer 随 cs_route 进状态；
+    - decision_layer 写 Trace tags（P1 完成标准：路由 Trace 可查决策层）；
+    - 纯规则零 LLM；任何异常软降级（不阻塞路由）。
+    """
+    try:
+        from backend.customer_service.understanding import build_understanding
+        # cs_prefilter 的产出：route_mode + cs_context（TypedDict，cs_route
+        # 在 cs_context 内，兼容未来顶层直挂的形态）
+        ctx = cs_update.get("cs_context")
+        cs_route = ctx.get("cs_route") if isinstance(ctx, dict) else None
+        if not isinstance(cs_route, dict):
+            cs_route = cs_update.get("cs_route")
+        if not isinstance(cs_route, dict):
+            return cs_update
+        u = build_understanding(query, cs_route)
+        metadata = cs_route.setdefault("metadata", {})
+        order_ids = u.entity_values("order_id")
+        if order_ids:
+            metadata.setdefault("order_id", order_ids[0])
+        metadata["entities"] = [e.model_dump() for e in u.entities]
+        metadata["missing_slots"] = u.missing_slots
+        metadata["normalized_text"] = u.normalized_text
+        metadata["decision_layer"] = u.decision_layer.value
+        try:
+            from backend.observability.tracer import trace_collector
+            t = trace_collector.current()
+            if t is not None:
+                t.tags["decision_layer"] = u.decision_layer.value
+                if u.entities:
+                    t.tags["cs_entities"] = ",".join(
+                        f"{e.type.value}:{e.match()}" for e in u.entities[:6])
+        except Exception:
+            pass
+        return cs_update
+    except Exception as e:
+        logger.warning(f"[RouterNode] CSUnderstanding 软降级: {e}")
+        return cs_update
+
+
 def router_node(state: dict) -> dict:
     """Router 节点：执行 3 层 fallback 路由，存 decision 到 state。
 
@@ -112,11 +156,11 @@ def router_node(state: dict) -> dict:
     if cs_forced and not cs_redirect:
         cs_update = _try_cs_prefilter(forced=True)
         if cs_update is not None:
-            return {**state, **cs_update}
+            return {**state, **_enrich_with_understanding(cs_update, query)}
     elif not cs_forced and cs_rule_hits:
         cs_update = _try_cs_prefilter()
         if cs_update is not None:
-            return {**state, **cs_update}
+            return {**state, **_enrich_with_understanding(cs_update, query)}
 
     # ── 旅游预过滤：纯正则，先于 CS 向量检测执行（省一次 embedding）──
     # 域锁且未转出时跳过；转出（redirect_main）或全局入口正常执行。
@@ -146,7 +190,7 @@ def router_node(state: dict) -> dict:
     if not cs_rule_hits and not cs_forced:
         cs_update = _try_cs_prefilter()
         if cs_update is not None:
-            return {**state, **cs_update}
+            return {**state, **_enrich_with_understanding(cs_update, query)}
 
     # ── L1 入口弱命中追问（2026-09-19 拒答转追问）────────────────
     # 放在全部域预过滤与 CS 向量兜底之后：客服优先级不被追问抢夺。
