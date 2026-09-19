@@ -1,11 +1,12 @@
-"""sys_providers.py — LLM 供应商连通性探测端点（P1b）
-
-两个端点，落实 B.6 的**四道限制**（否则它就是一个「任意 URL 探测代理」）：
+"""sys_providers.py — LLM 供应商清单与连通性探测端点（P1b + P2 数据源）
 
 | 端点 | 用途 | 限流 |
 |---|---|---|
+| `GET  /sys/providers` | 供应商清单（tab② 列表数据源，只读） | — |
 | `POST /sys/providers/{provider_id}/verify` | 已存实例复测（不带 body） | admin · 10 次/分 |
 | `POST /sys/providers/verify-draft` | 草稿态探测（body 带 driver/base_url/apiKey/scope） | admin · **5 次/分**（更严） |
+
+后两个端点落实 B.6 的**四道限制**（否则它就是一个「任意 URL 探测代理」）：
 
 1. **admin only** —— 复用 `require_admin_user`（kind=user + role=admin）。
 2. **目标过 `url_guard`** —— 私网只在实例 `network_scope='private'` 时放行，
@@ -95,6 +96,106 @@ def _credential_for(snap: registry_store.RegistrySnapshot, provider_id: str):
         return credentials_mod.resolve_credentials(provider_id)
     except Exception:  # noqa: BLE001 — 未知 provider／无 env 绑定都按「无凭据」处理
         return None
+
+
+# ── GET /sys/providers：供应商清单（只读）─────────────────────────────────
+#
+# 字段对齐 UI 设计 §6 `ProviderRow`。两条数据分支：
+#   DB 可用   → 快照（含管理员自建实例）
+#   DB 不可用 → **fail-open 兜底为代码层内置厂商 + env 凭据状态**
+# 兜底分支绝不能返回空列表：那会让管理端在库未就绪时显示「一个供应商都没有」，
+# 把运维引向「谁把配置删了」的错误方向。
+
+
+def _count_models_by_provider(entries) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for m in entries:
+        pid = str(m.get("provider") or "")
+        if pid:
+            counts[pid] = counts.get(pid, 0) + 1
+    return counts
+
+
+def _credential_view(configured: bool, meta: dict | None) -> dict:
+    """密钥状态视图，**只有布尔与脱敏指纹**。
+
+    §7.3 硬约束 1：前端从不持有明文，连密文都不下发。
+    """
+    meta = meta or {}
+    return {
+        "configured": configured,
+        "fingerprint": meta.get("fingerprint"),
+        "last4": meta.get("last4"),
+        "rotatedAt": meta.get("rotatedAt"),
+        "rotatedBy": meta.get("rotatedBy"),
+    }
+
+
+def _builtin_rows() -> list[dict]:
+    """DB 不可用时的兜底清单（代码层内置厂商 + env 凭据状态）。"""
+    env = credentials_mod.snapshot()
+    counts = _count_models_by_provider(models_mod.AVAILABLE_MODELS)
+    rows: list[dict] = []
+    for pid, meta in models_mod.PROVIDERS.items():
+        cred = env.get(pid) or {}
+        rows.append({
+            "id": pid,
+            "displayName": pid,
+            "driver": str(meta.get("driver") or ""),
+            "baseUrl": cred.get("baseUrl") or "",
+            "networkScope": "public",
+            "billing": str(meta.get("billing") or "metered"),
+            "isBuiltin": True,
+            "enabled": True,
+            "modelCount": counts.get(pid, 0),
+            "credential": _credential_view(bool(cred.get("hasApiKey")), None),
+            "lastProbe": None,
+        })
+    return rows
+
+
+def _db_rows(snap: registry_store.RegistrySnapshot) -> list[dict]:
+    """DB 快照 → 清单行（`configured` 取「能解密可用」口径，解密失败不算已配置）。
+
+    注意 `_SELECT_PROVIDERS` 只取 `enabled = true`，故此处 `enabled` 恒为 true。
+    「列出已停用项」需要另一条不过滤的查询，随 P2 的停用/编辑功能一起做 ——
+    不为此改动热路径共用的 SQL（`refresh_registry` 与探测端点都吃它）。
+    """
+    counts = _count_models_by_provider(snap.models)
+    rows: list[dict] = []
+    for p in snap.providers:
+        pid = str(p.get("id") or "")
+        rows.append({
+            "id": pid,
+            "displayName": p.get("display_name") or pid,
+            "driver": str(p.get("driver") or ""),
+            "baseUrl": str(p.get("base_url") or ""),
+            "networkScope": _normalize_scope(p.get("network_scope")),
+            "billing": str(p.get("billing") or "metered"),
+            "isBuiltin": bool(p.get("is_builtin")),
+            "enabled": bool(p.get("enabled", True)),
+            "modelCount": counts.get(pid, 0),
+            "credential": _credential_view(
+                pid in snap.credentials, snap.credential_meta.get(pid)
+            ),
+            "lastProbe": None,
+        })
+    return rows
+
+
+@router.get("")
+async def list_providers(ident=Depends(require_admin_user)) -> dict:
+    """供应商清单（tab② 列表数据源）。
+
+    `source` 表明清单来自 `db` 还是代码层 `builtin` 兜底 —— 前端据此在库未就绪时
+    提示「配置暂不可用」，而不是让管理员以为自己把供应商删光了。
+
+    `lastProbe` 恒为 `null`：探测结果持久化表尚未建立（0018），当前只有内存态；
+    前端按「未验证」灰显（tab⑤ 漂移会点名）。
+    """
+    snap = await registry_store.load_registry()
+    rows, source = (_db_rows(snap), "db") if snap.loaded else (_builtin_rows(), "builtin")
+    return {"items": rows, "source": source, "actor": ident.actor}
 
 
 @router.post("/{provider_id}/verify")

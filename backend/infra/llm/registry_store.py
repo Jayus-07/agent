@@ -43,6 +43,11 @@ class RegistrySnapshot:
     providers: list[dict] = field(default_factory=list)
     models: list[dict] = field(default_factory=list)
     credentials: dict[str, ProviderCredentials] = field(default_factory=dict)
+    # provider_id → {fingerprint, last4, rotatedAt, rotatedBy}
+    # 只给管理端展示用（脱敏），**与「能否解密」解耦**：解密失败时仍需让管理员
+    # 看到「已落库但运行时不可用」，否则真因被埋。刻意不塞进 ProviderCredentials
+    # —— 那是出站调用热路径的数据类，展示元数据混进去会让每个构造点背上无关字段。
+    credential_meta: dict[str, dict] = field(default_factory=dict)
     loaded: bool = False
 
 
@@ -63,7 +68,8 @@ _SELECT_MODELS = """
 """
 
 _SELECT_CREDENTIALS = """
-    SELECT provider_id, key_cipher, key_fingerprint, key_last4, key_version
+    SELECT provider_id, key_cipher, key_fingerprint, key_last4, key_version,
+           updated_by, updated_at
     FROM llm_provider_credentials
 """
 
@@ -127,15 +133,25 @@ async def load_registry() -> RegistrySnapshot:
 
     providers_by_id = {r["id"]: dict(r) for r in prow}
     creds: dict[str, ProviderCredentials] = {}
+    meta: dict[str, dict] = {}
     for r in crow:
         cred = _credential(r, providers_by_id)
         if cred is not None:
             creds[r["provider_id"]] = cred
+        # 与解密结果无关地记录展示元数据（见 RegistrySnapshot.credential_meta）
+        updated_at = r["updated_at"]
+        meta[r["provider_id"]] = {
+            "fingerprint": r["key_fingerprint"] or None,
+            "last4": r["key_last4"] or None,
+            "rotatedAt": updated_at.isoformat() if updated_at else None,
+            "rotatedBy": r["updated_by"] or None,
+        }
 
     return RegistrySnapshot(
         providers=[dict(r) for r in prow],
         models=[_model_entry(r) for r in mrow],
         credentials=creds,
+        credential_meta=meta,
         loaded=True,
     )
 
