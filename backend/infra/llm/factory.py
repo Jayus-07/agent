@@ -24,7 +24,15 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
 
-from backend.config import DEEPSEEK_API_KEY, LLM_MODEL, MINIMAX_API_KEY, QWEN_API_KEY, QWEN_TP_API_KEY, VLLM_API_KEY
+from backend.config import (
+    DEEPSEEK_API_KEY,
+    LLM_MODEL,
+    MINIMAX_API_KEY,
+    QWEN_API_KEY,
+    QWEN_TP_API_KEY,
+    SILICONFLOW_API_KEY,
+    VLLM_API_KEY,
+)
 from backend.config.llm import OLLAMA_ENABLED
 from backend.infra.llm.models import AVAILABLE_MODELS
 from backend.shared.logger import logger
@@ -80,6 +88,8 @@ class LLMFactory:
             return {"ok": False, "error": "QWEN_TP_API_KEY 未配置，请在 .env 中设置（sk-sp- 模型包 Key）"}
         if provider == "vllm" and not VLLM_API_KEY:
             return {"ok": False, "error": "VLLM_API_KEY 未配置，请在 .env 中设置（deploy.sh 会生成）"}
+        if provider == "siliconflow" and not SILICONFLOW_API_KEY:
+            return {"ok": False, "error": "SILICONFLOW_API_KEY 未配置，请在 .env 中设置"}
         # cloud 模式禁用本地 Ollama 模型
         if provider == "ollama" and not OLLAMA_ENABLED:
             return {
@@ -137,6 +147,9 @@ class LLMFactory:
         elif provider == "vllm":
             from backend.infra.llm.providers.vllm import build_vllm
             return build_vllm(model_name)
+        elif provider == "siliconflow":
+            from backend.infra.llm.providers.siliconflow import build_siliconflow
+            return build_siliconflow(model_name)
         else:
             raise ValueError(f"未知 provider: {provider}")
 
@@ -185,6 +198,9 @@ class LLMFactory:
         elif provider == "vllm":
             from backend.infra.llm.providers.vllm import get_vllm_balance
             return get_vllm_balance()
+        elif provider == "siliconflow":
+            from backend.infra.llm.providers.siliconflow import get_siliconflow_balance
+            return get_siliconflow_balance()
         else:
             return {"ok": False, "error": f"不支持的 provider: {provider}"}
 

@@ -280,6 +280,22 @@ QWEN_TP_API_BASE = os.getenv(
 VLLM_API_KEY = os.getenv("VLLM_API_KEY", "")
 VLLM_API_BASE = os.getenv("VLLM_API_BASE", "http://localhost:8000/v1")
 
+# SiliconFlow（硅基流动，OpenAI 兼容协议）
+# LLM / Embedding / Rerank 共用同一账号（Key 与 EMBEDDING_API_KEY 同源亦可）；
+# 模型名沿用硅基流动的 org/model 形式（如 Qwen/Qwen3-8B、BAAI/bge-m3）
+SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")
+SILICONFLOW_API_BASE = os.getenv(
+    "SILICONFLOW_API_BASE", "https://api.siliconflow.cn/v1"
+)
+
+# SiliconFlow（硅基流动，OpenAI 兼容协议）——LLM/Embedding/Rerank 三合一供应商
+# 与嵌入/重排共用同一把 Key（EMBEDDING_API_KEY 与本 Key 同源）；模型名沿用
+# 硅基流动的 org/model 形式（如 Qwen/Qwen3-8B）
+SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")
+SILICONFLOW_API_BASE = os.getenv(
+    "SILICONFLOW_API_BASE", "https://api.siliconflow.cn/v1"
+)
+
 # ── P1-7: LLM 韧性（重试 + 熔断 fallback）────────────────────
 # 瞬时错误（超时/连接/限流）的显式重试次数（0 = 不重试）
 # 交互链路 TTFT 考量：默认收紧为 1 次（批处理/评测脚本可 env 调回 2）
@@ -315,5 +331,6 @@ if LLM_BUDGET_MODE not in ("off", "observe", "enforce"):
     LLM_BUDGET_MODE = "off"
 LLM_REQUEST_MAX_CALLS = int(os.getenv("LLM_REQUEST_MAX_CALLS", "8"))
 LLM_REQUEST_MAX_TOKENS = int(os.getenv("LLM_REQUEST_MAX_TOKENS", "32000"))
+LLM_REQUEST_MAX_COST_USD = float(os.getenv("LLM_REQUEST_MAX_COST_USD", "0.50"))
 LLM_REQUEST_MAX_RETRIES = int(os.getenv("LLM_REQUEST_MAX_RETRIES", "2"))
 LLM_REQUEST_MAX_FALLBACKS = int(os.getenv("LLM_REQUEST_MAX_FALLBACKS", "1"))

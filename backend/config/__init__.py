@@ -85,6 +85,10 @@ MAIN_GRAPH_RECURSION_LIMIT = int(os.getenv("MAIN_GRAPH_RECURSION_LIMIT", "80"))
 # Send 并行分支的流式/trace 绑定降级 — 见 orchestration/request_context.py）
 MAIN_GRAPH_CHECKPOINTER_ENABLED = os.getenv("MAIN_GRAPH_CHECKPOINTER_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 
+# 拒答转追问（2026-09-19）：L1 入口弱命中追问 + L2 拒答后业务导航追问。
+# 关闭即回滚为纯拒答行为；追问内容与接线见 orchestration/graph/clarify_content.py
+REFUSAL_CLARIFY_ENABLED = os.getenv("REFUSAL_CLARIFY_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+
 # 通用 settings
 from backend.config.settings import (
     LOG_LEVEL,
@@ -161,6 +165,8 @@ from backend.config.llm import (
     QWEN_TP_API_BASE,
     VLLM_API_KEY,
     VLLM_API_BASE,
+    SILICONFLOW_API_KEY,
+    SILICONFLOW_API_BASE,
 )
 # RAG
 from backend.config.rag import (
@@ -338,6 +344,8 @@ __all__ = [
     # tool 审批门 / MCP / 主图保护
     "TOOL_APPROVAL_MODE", "TOOL_APPROVAL_TTL_SECONDS", "MCP_TOOL_TIMEOUT",
     "MAIN_GRAPH_RECURSION_LIMIT", "MAIN_GRAPH_CHECKPOINTER_ENABLED",
+    # 拒答转追问
+    "REFUSAL_CLARIFY_ENABLED",
     # database
     "RAG_DATA_DIR", "CHUNK_STORE_PATH",
     "BM25_INDEX_DIR", "CHROMA_PATH", "DOC_DB_PATH", "DOCS_DIRECTORY",
@@ -348,7 +356,8 @@ __all__ = [
     "LLM_REQUEST_TIMEOUT", "DEEPSEEK_API_KEY", "DEEPSEEK_API_BASE",
     "MINIMAX_API_KEY", "MINIMAX_API_BASE", "QWEN_API_KEY", "QWEN_API_BASE",
     "QWEN_TP_API_KEY", "QWEN_TP_API_BASE",
-    "VLLM_API_KEY", "VLLM_API_BASE", "EMBEDDING_BATCH_SIZE", "EMBEDDING_REQUEST_TIMEOUT",
+    "VLLM_API_KEY", "VLLM_API_BASE", "SILICONFLOW_API_KEY", "SILICONFLOW_API_BASE",
+    "EMBEDDING_BATCH_SIZE", "EMBEDDING_REQUEST_TIMEOUT",
     "EMBEDDING_PROVIDER", "RERANK_PROVIDER",
     "RERANK_API_FORMAT", "RERANK_BASE_URL",
     "ENABLE_FC_TOOL_SELECTION", "TOOL_SELECTOR_LLM_TIMEOUT",
