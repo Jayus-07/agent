@@ -691,6 +691,31 @@ POST /chat → ① api 层校验 model（唯一规则来源）
 
 **不建议先做 A 的页面骨架**：B.8 的硬闸门是明确的 —— P1a-2 / P1b 未完成前，页面「配了不生效」。只做**纯函数与 API 模块（含 mock 测试）**是安全的，因为它们不产生可点击的 UI。
 
+### 15.1 F 批实施状态（2026-09-19）
+
+**已落码并通过验证**（两端 `tsc --noEmit` 零错误；后端 10 例 + 前端 5 例测试全绿）：
+
+| 落点 | 改动 | 状态 |
+|---|---|---|
+| `backend/infra/llm/models.py` | 新增 `validate_override_model()` —— 覆盖校验的单一事实来源（显式 `ollama_enabled` 注入，纯函数可测） | ✅ 已提交 |
+| `backend/app/api/routes/chat.py` | `/chat` 与 `/chat/stream` 加 `_validate_model_override()`（非法 → 400 fail-fast） | ✅ 已提交 |
+| `backend/tests/test_model_override_validation.py` | 规则单点 + API 边界两层契约（10 例） | ✅ 已提交 |
+| `backend/infra/llm/proxy.py` | `set_request_model` 复用单点规则（保持宽容静默 + 既有 monkeypatch 路径有效） | ⏸ 工作区 |
+| `backend/app/api/routes/llm.py` | `/llm/switch` 叠加 `require_admin_user` | ⏸ 工作区 |
+| `frontend{,-admin}/src/api/chat.ts` | `ChatRequest.model` | ⏸ 工作区 |
+| `frontend{,-admin}/src/hooks/useSSE.ts` | `runStream(…, modelOverride?)` + `startStream`/`regenerate` 透传 | ⏸ 工作区 |
+| `frontend{,-admin}/src/store/chat.ts` | `sessionModel` + `setSessionModel`（与 sessionId 同生命周期，**不进** `resetStream`） | ⏸ 工作区 |
+| `frontend{,-admin}/src/components/agent/LLMSwitcher.tsx` | 受控化：只写会话态 + 「· 本会话」标记 + 回到全局默认；admin 端多一个 `atLeast('admin')` 可见的「设为全局默认」 | ⏸ 工作区 |
+| `frontend/src/hooks/useSSE.test.tsx`、`components/agent/LLMSwitcher.test.tsx` | 透传契约 + 「不调 switchLLM」守卫（5 例） | ⏸ 工作区 |
+
+**⏸ 项为何未提交** —— 三条硬约束，均非疏漏：
+
+1. **`proxy.py` 提交即炸主干**：工作区该文件同时承载并发会话的预算计价改动（`release_model_reservation` / `calculate_current_cost`），而它们依赖的 `budget.py` / `pricing.py` / `quota.py` 仍未提交。单独提交 `proxy.py` 会让主干 import 失败。
+2. **`llm.py` 门禁必须与前端受控化原子提交**：`SENSITIVE_API_GUARD_MODE` 默认 **enforce**，门禁单独上线会让仍在调 `switchLLM` 的旧前端直接 403。收紧本身是想要的，但不能以"点不动"的方式落地。
+3. **前端 6 个改动文件与并发会话的未提交改动同文件**：它们承载另一条功能线（幂等键 / 澄清卡片 / `trace_id`），按路径限定提交也无法剥离**同一文件内**的他人改动。
+
+**可安全分离的部分已提交**：`models.py` 是纯增量（新增函数，零调用方变更）；`chat.py` 的 fail-fast 对"不传 model"的现有前端完全无影响（现有前端从不传 model）。
+
 ---
 
 ## 16. 测试策略（vitest）

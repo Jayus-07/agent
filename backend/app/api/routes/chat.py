@@ -63,6 +63,30 @@ def _request_key(session_id: str, request_id: str) -> str:
     return f"{session_id}:{request_id}"
 
 
+def _validate_model_override(model: str | None) -> None:
+    """API 边界 fail-fast：请求级模型覆盖非法 → 400。
+
+    与上下文绑定层（proxy.set_request_model）的宽容静默**分层**（契约见
+    docs/model-config-admin-ui-design.md §13.1）：
+      - 本层拒绝：HTTP 边界是唯一能拿到「把原因还给用户」的上下文；
+        否则非法 model 被静默吞掉、实际跑全局默认，用户以为在用自己选的模型；
+      - 绑定层仍 warning + 清空：非 HTTP 调用方（评测生成 / 脚本）无请求可报错，
+        且 tests/test_llm_bind_tools.py 有 4 例锁定该静默语义。
+
+    空 model = 不覆盖，直接放行。
+    """
+    if not model:
+        return
+    from backend.infra.llm.models import validate_override_model
+
+    ok, reason = validate_override_model(model)
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "InvalidModelOverride", "message": reason},
+        )
+
+
 # ── node_name → 用户可读标签映射表（通过 meta 事件传给前端）──
 # 2026-09-15 收敛：单一事实源在 builder._NODE_LABELS（build_graph 时动态
 # 补入域图标签）。旧实现自维护一份含过期节点名（sql_worker/rag_worker，
@@ -92,6 +116,7 @@ def _sse_error_event(exc: BaseException, trace_id: str = "") -> dict:
 async def chat(req: ChatRequest, request: Request,
                _rate=Depends(require_rate_limit)):
     """提交自然语言问题，Multi-Agent 自动拆解+执行+汇总"""
+    _validate_model_override(req.model)
     t0 = time.monotonic()
     agent = get_multi_agent()
     kb_id = req.kb_id or "default"
@@ -137,6 +162,8 @@ async def chat_stream(
         req = ChatRequest(**raw)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"ChatRequest 解析失败: {e}")
+
+    _validate_model_override(req.model)
 
     t0 = time.monotonic()
     agent = get_multi_agent()

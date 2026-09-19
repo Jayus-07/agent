@@ -19,6 +19,7 @@ models.py — Provider 注册表 + 可用模型清单
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from backend.shared.logger import logger
@@ -199,6 +200,49 @@ def get_provider_api_key_env(model_name: str) -> str | None:
         if m["name"] == model_name:
             return PROVIDER_API_KEY_ENV.get(m["provider"])
     return None
+
+
+def validate_override_model(
+    model: str,
+    *,
+    ollama_enabled: bool | None = None,
+) -> tuple[bool, str]:
+    """校验「请求级模型覆盖」是否可用 → (ok, reason)。
+
+    这是覆盖校验的**单一事实来源**：`proxy.set_request_model`（上下文绑定，宽容
+    静默）与 API 边界（fail-fast 400）共用同一份判断，避免两套规则漂移
+    （见 docs/model-config-admin-ui-design.md §13.1）。
+
+    规则与 set_request_model 既有口径逐条对齐：
+      - 未在 AVAILABLE_MODELS 注册            → 拒绝
+      - provider == ollama 且 Ollama 未启用    → 拒绝
+      - provider 需要 Key 而该 Key 未配置      → 拒绝
+
+    ollama_enabled: 显式注入 Ollama 开关；None = 读运行时配置。调用方（proxy）传
+      自己的模块级常量，既保持既有 monkeypatch 路径有效，也让本函数保持可测。
+
+    返回 (True, "") 表示可用；否则 reason 为面向用户的中文原因（可直接进 400 detail）。
+    空 model 视为「不覆盖」（调用方自行判断是否需要覆盖），返回 ok。
+    """
+    name = (model or "").strip()
+    if not name:
+        return True, ""
+    if not is_registered_model(name):
+        return False, f"未知模型：{name}"
+    entry = next((m for m in AVAILABLE_MODELS if m["name"] == name), None)
+    provider = str((entry or {}).get("provider") or "")
+    if provider == "ollama":
+        enabled = ollama_enabled
+        if enabled is None:
+            # 延迟导入：config.llm 是上层配置模块，模块级导入会形成循环。
+            from backend.config.llm import OLLAMA_ENABLED
+            enabled = OLLAMA_ENABLED
+        if not enabled:
+            return False, "Ollama 当前未启用（cloud 模式禁用本地模型）"
+    key_env = PROVIDER_API_KEY_ENV.get(provider)
+    if key_env and not os.getenv(key_env, "").strip():
+        return False, f"{key_env} 未配置，无法使用模型 {name}"
+    return True, ""
 
 
 def compute_cost_usd(model_name: str,
