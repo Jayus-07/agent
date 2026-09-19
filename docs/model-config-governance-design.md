@@ -397,3 +397,115 @@ GET    /sys/config/drift                 漂移与体检报告
 | 管理端导航 | `frontend-admin/src/components/layout/navConfig.tsx` |
 | 现有切换器 | `frontend-admin/src/components/agent/LLMSwitcher.tsx` |
 | 敏感端点前端 API 写法 | `frontend-admin/src/api/securityOps.ts:96-102` |
+
+---
+
+# 附录 A：P0 实施记录（2026-09-19，commit `41a5df9`）
+
+P0 已落地。以下记录与原设计不一致之处，以及实施中发现的新事实 —— **P1 开工前必读**。
+
+## A.1 范围收窄：实际只改了 2 个 config 文件，不是 16 个
+
+§9 原写「把 16 个文件的 `os.getenv` 收敛到 `resolve_model(role)`」。实测后收窄为：
+
+| 分类 | 数量 | 处理 |
+|---|---|---|
+| 走 `from backend.config.llm import LLM_MODEL`（**导常量**） | 12 | **零改动** —— 常量求值路径改了，它们自动受益 |
+| 绕过配置层直接 `os.getenv` | 4 | 其中只有 2 处是模型名（`config/rag.py`）；另 2 处是 provider/URL 枚举，归 P1 |
+| 属于 P0 目标但**工作区已被其他会话改动** | 4 | `infra/llm/budget.py`、`proxy.py`、`quota.py`、`rag/chain.py` —— 暂不动，见 A.3 |
+
+实际改动：`config/llm.py`（6 个常量）+ `config/rag.py`（2 个常量）= **8 个模型常量**。
+这正是「导常量」设计的好处：收敛成本远低于预估。
+
+## A.2 实施中发现的三个坑（已在代码里用测试锁住）
+
+1. **`resolve_raw` 与 `resolve_effective` 必须分开。**
+   `DOC_LLM_MODEL` / `TOOL_SELECTOR_MODEL` / `LLM_FALLBACK_MODEL` 的**空串在
+   消费方手里有语义**（如 `if DOC_LLM_MODEL:` 判断是否启用本地 Ollama）。
+   若把常量物化成「继承 main」的模型名，「未配置」会变成「配了」，行为改变。
+   → legacy 常量一律用 `resolve_name`（字面值）；`resolve_effective` 只给新代码用。
+
+2. **模型角色不能登记进 `sys_config._SWITCHES`。**
+   `tests/api/test_sys_config_admin.py::test_get_config_lists_registered_switches`
+   断言 `GET /sys/config` 的返回集合**恰好**是那两个守卫开关。塞进去会直接挂测试。
+   而且模型名大小写敏感，`_normalize()` 的小写归一也会破坏它。
+   → 模型角色注册表放在 `backend/config/model_roles.py`，`sys_config` 只加通用校验能力。
+
+3. **注册表位置受导入链约束。**
+   `config/llm.py` 处在几乎所有模块的导入链上。若把注册表放进
+   `backend/services/`，而 `config/llm.py` 要 import 它，就会把
+   `services/__init__`（可能含 SQLAlchemy）拖进配置导入链。
+   更致命的是：**模块级 import `backend.infra.llm.models` 会先执行
+   `infra/llm/__init__.py` → `factory` + `proxy` → langchain**，并与
+   `proxy.py` 形成循环导入（`proxy` → `config.llm` → 本模块 → `infra.llm` → `proxy`）。
+   → 注册表放 `backend/config/model_roles.py`（纯 stdlib，含 `dataclasses`）；
+     `infra.llm` 的数据一律**函数内延迟 import**。
+   已加两条测试锁住：子进程验证无重依赖、源码级禁止模块级 `infra.llm` 导入。
+
+## A.3 ⚠️ 并发会话状态（P1 开工前必须重新确认）
+
+P0 实施期间实测到另一会话正在活跃（1 小时内改过 `customer_service/maintenance.py`、
+`rag/indexing/indexer.py`、`orchestration/graph/runner.py`，并在期间提交了 `89be962`）。
+
+**当前有 4 个 P1 必需文件处于「他人未提交」状态**，改动它们会污染对方的在途工作、
+且路径限定提交会把对方改动一起收编：
+
+```
+backend/infra/llm/proxy.py       ← 含 5 处 AVAILABLE_MODELS 调用点（§8）
+backend/infra/llm/budget.py
+backend/infra/llm/quota.py
+backend/rag/chain.py
+```
+
+另：工作区约有 300 个未提交文件（`M` 200+ / `??` 60+），`.env` **不在 git 跟踪内**。
+
+→ P1 开工前先 `git status` + 确认这 4 个文件已由对方提交或已确认归属。
+
+## A.4 发现的两个既有缺陷（P0 只点名，未修）
+
+### ① `LLM_FALLBACK_MODEL` 指向未注册模型 —— 熔断兜底实际不可用
+
+实测当前 `.env`：`LLM_FALLBACK_MODEL=Qwen/Qwen3-30B-A3B-Instruct-2507`，
+而 `AVAILABLE_MODELS` 里没有这个模型（可用集：`MiniMax-M3` / `Qwen/Qwen3-32B` /
+`Qwen/Qwen3-32B-AWQ` / `Qwen/Qwen3-8B` / `deepseek-v4-flash` / `qwen2.5:3b` /
+`qwen3.7-plus` / `qwen3.7-plus@tp`）。
+
+`config/llm.py` 的注释写着「须在 `infra/llm/models.py` 注册」，但**没有任何强制**
+—— 配错时熔断开路切备用模型会构建失败，即"以为有兜底，实际没有"。
+P0 后启动校验会点名（已在真实 `.env` 下验证）：
+```
+[Startup 校验] 模型角色 fallback（LLM_FALLBACK_MODEL）的值
+'Qwen/Qwen3-30B-A3B-Instruct-2507' 非法：未在 AVAILABLE_MODELS 注册（可用: [...]）
+```
+
+> 注意：`.env` 在 P0 实施期间被改动过（原先读到的值是 `Qwen/Qwen3-32B`，后来变成
+> 上述值），疑为另一会话在途操作。**未擅自修改** —— 需与对方确认是补注册模型还是换值。
+
+### ② `EMBEDDING_RERANK_PRICING` 缺 SiliconFlow 条目（§6.2 已记，此处重申）
+
+当前 `EMBEDDING_MODEL=BAAI/bge-m3`、`RERANK_MODEL=BAAI/bge-reranker-v2-m3`，
+均不在 `EMBEDDING_RERANK_PRICING` 内 → `compute_embedding_cost` 返回 `0.0`，
+**embedding/rerank 成本在估算中被计为 0**。P3 合并价格页时按硅基流动账单补录。
+
+## A.5 P0 验收证据
+
+| 项 | 结果 |
+|---|---|
+| 8 个模型常量 vs 改造前旧表达式 | **逐项一致**（含 `source` 标注） |
+| `sys_config` 既有测试 | 13 passed（守卫开关行为零变化） |
+| 新增测试 `test_model_roles.py` | 37 passed |
+| 新增测试 `test_sys_config_normalize.py` | 14 passed |
+| 受影响面（startup_validation / tool_selector / llm_resilience / pdf_ocr / production_auth） | 105 passed, 1 skipped |
+| `infra` + `config` 目录 | 51 passed |
+| 真实 `.env` 下启动校验 | 正确点名 A.4① 的未注册模型 |
+| 配置导入链重依赖 | 子进程验证：无 langchain / torch / SQLAlchemy / transformers |
+
+**未做全量 pytest**（仓库约定：约 20 分钟，且期间不得有并发会话改 `backend/`；
+实施期间检测到并发会话活跃，故只跑定向回归）。
+
+## A.6 P1 前置项（按优先级）
+
+1. 确认 A.3 的 4 个文件归属，再动 `proxy.py`。
+2. 决策 A.4① 的处理方式（补注册 `Qwen/Qwen3-30B-A3B-Instruct-2507` 还是换值）。
+3. `backend/shared/crypto.py` 抽取（`competitor/crypto.py` 行为保持不变）。
+4. 迁移编号取 `0017`（当前最新为 `0016_price_governance.py`）。
