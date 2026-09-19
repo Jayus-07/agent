@@ -134,6 +134,24 @@ metadata_shadow_dispatch_total = Counter(
     labelnames=("result",),
 )
 
+metadata_shadow_job_total = Counter(
+    "metadata_shadow_job_total",
+    "元数据影子任务终态次数",
+    labelnames=("result",),
+)
+
+metadata_shadow_queue_age_seconds = Histogram(
+    "metadata_shadow_queue_age_seconds",
+    "元数据影子任务排队年龄",
+    buckets=(0.1, 0.5, 1.0, 5.0, 15.0, 30.0, 60.0, 300.0, 900.0),
+)
+
+metadata_shadow_latency_seconds = Histogram(
+    "metadata_shadow_latency_seconds",
+    "元数据影子任务执行耗时",
+    buckets=(0.05, 0.1, 0.5, 1.0, 3.0, 5.0, 10.0, 30.0),
+)
+
 metadata_resource_active = Gauge(
     "metadata_resource_active",
     "元数据资源当前活动槽位",

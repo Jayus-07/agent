@@ -48,3 +48,15 @@ TASKS_LIST_DEFAULT_LIMIT = int(os.getenv("TASKS_LIST_DEFAULT_LIMIT", "20"))
 # SSE 经 Redis 进度镜像跨进程轮询消费；broker 不可达入队失败时
 # 自动回退进程内索引，上传可用性不受影响。
 CELERY_RAG_INDEX_QUEUE = os.getenv("CELERY_RAG_INDEX_QUEUE", "rag_index")
+
+# 元数据影子评估单独队列：只承载 job_id，允许独立扩缩容；影子失败不得
+# 占满 rag_index worker。默认沿用索引任务的可靠性边界，但单次更短。
+CELERY_METADATA_SHADOW_QUEUE = os.getenv(
+    "CELERY_METADATA_SHADOW_QUEUE", "rag_metadata_shadow"
+)
+CELERY_METADATA_SHADOW_TASK_TIMEOUT = int(
+    os.getenv("CELERY_METADATA_SHADOW_TASK_TIMEOUT", "120")
+)
+CELERY_METADATA_SHADOW_MAX_RETRIES = int(
+    os.getenv("CELERY_METADATA_SHADOW_MAX_RETRIES", str(CELERY_MAX_RETRIES))
+)

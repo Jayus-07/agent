@@ -42,6 +42,7 @@ class MetadataStage:
         self._registry = registry
         self._embedding = embedding
         self._department = department
+        self._shadow_tasks: set[asyncio.Task] = set()
 
     async def build(self, full_text: str, base_meta: dict,
                     parent_span_id: str = "",
@@ -104,8 +105,10 @@ class MetadataStage:
                     logger.warning(f"[MetaLLM] 统一抽取异常（降级规则路径）: {e}")
                     unified = None
                 if unified:
-                    await self._run_cascade_shadow(full_text, fname, fpath, unified,
-                                                   parent_span_id=parent_span_id)
+                    main_envelope = self._legacy_decision_envelope(
+                        full_text, fname, fpath, unified)
+                    self._dispatch_shadow_nonblocking(
+                        main_envelope, full_text, fname, fpath)
                     return await self.finalize_unified(
                         full_text, base_meta, unified,
                         parent_span_id=parent_span_id, chunks_text=chunks_text)
@@ -406,43 +409,89 @@ class MetadataStage:
 
     # ---- 统一抽取路径的收口（纯规则部分照旧计算）----
 
+    @staticmethod
+    def _legacy_decision_envelope(
+        full_text: str,
+        fname: str,
+        fpath: str,
+        unified: dict,
+    ):
+        """把旧统一抽取结果包装为影子任务使用的主结果契约。"""
+        from backend.rag.preprocessing.metadata_evidence import extract_evidence
+        from backend.rag.preprocessing.metadata_schema import (
+            DecisionEnvelope,
+            EvidenceItem,
+            UnifiedMetadata,
+        )
+        from backend.rag.preprocessing.taxonomy_spec import get_taxonomy
+
+        parsed = UnifiedMetadata.model_validate(unified)
+        evidence = extract_evidence(full_text, fname, fpath)
+        return DecisionEnvelope(
+            decision="accepted",
+            doc_type=parsed.doc_type,
+            business_domain=parsed.business_domain,
+            confidence=parsed.confidence,
+            source="llm",
+            evidence=[
+                EvidenceItem(
+                    kind=signal.source,
+                    rule_id=signal.rule_id,
+                    value=signal.value,
+                    weight=signal.score,
+                    strength=signal.strength,
+                )
+                for signal in evidence.signals
+            ],
+            taxonomy_version=get_taxonomy().version,
+            rules_version=evidence.rules_version,
+            model_version="legacy-metadata-llm",
+            prompt_version=str(unified.get("prompt_version", "default")),
+            metadata=parsed.to_extract_dict(),
+        )
+
+    def _dispatch_shadow_nonblocking(
+        self,
+        main_envelope,
+        full_text: str,
+        fname: str,
+        fpath: str,
+    ) -> None:
+        """把影子投递放到线程池，主索引不等待 broker/DB/Redis。"""
+        from backend.config.rag import METADATA_CASCADE_SHADOW_ENABLED
+
+        if not METADATA_CASCADE_SHADOW_ENABLED:
+            return
+
+        from backend.rag.preprocessing import metadata_shadow
+
+        async def _dispatch() -> None:
+            try:
+                await asyncio.to_thread(
+                    metadata_shadow.submit_shadow_job,
+                    main_envelope,
+                    full_text,
+                    fname,
+                    fpath,
+                )
+            except Exception as exc:
+                logger.warning(f"[MetaShadow] 后台投递异常（不影响主索引）: {exc}")
+
+        task = asyncio.create_task(_dispatch())
+        self._shadow_tasks.add(task)
+        task.add_done_callback(self._shadow_tasks.discard)
+
     async def _run_cascade_shadow(self, full_text: str, fname: str, fpath: str,
                                   unified: dict, parent_span_id: str = "") -> None:
-        """影子采集（规划阶段 5 基建）：主路径成功后并行跑级联 L0-L2 只读对比。
-
-        绝不影响主路径：任何异常吞掉；影子结果只进 trace + Prometheus
-        （metadata_route_total{level=shadow_*, outcome=agree|differ|error}），
-        影子报告 = 一致率 ≥ 阈值后才有资格打开 METADATA_CASCADE_ENABLED。
-        """
+        """兼容旧调用方：委托非阻塞影子投递，不在主路径执行路由。"""
+        del parent_span_id
         try:
-            from backend.config.rag import METADATA_CASCADE_SHADOW_ENABLED
-            if not METADATA_CASCADE_SHADOW_ENABLED:
-                return
-            from backend.rag.preprocessing.metadata_router import shadow_route
-            decision = await shadow_route(full_text, fname, fpath,
-                                          embedding=self._embedding)
-            if decision is None:
-                return
-            main_type = unified.get("doc_type", "")
-            agree = decision.doc_type == main_type
-            from backend.observability.metrics import metadata_route_total
-            metadata_route_total.labels(
-                level=f"shadow_{decision.level}",
-                outcome="agree" if agree else "differ").inc()
-            if parent_span_id:
-                sid = trace_collector.start_span(
-                    "cascade_shadow", parent_id=parent_span_id,
-                    name="Cascade shadow compare", type="llm",
-                    kind=SpanKind.INDEX_METADATA.value)
-                trace_collector.end_span(sid, status="success", metrics={
-                    "level": decision.level,
-                    "shadow_doc_type": decision.doc_type,
-                    "main_doc_type": main_type,
-                    "agree": agree,
-                    "shadow_confidence": decision.confidence,
-                })
-        except Exception as e:
-            logger.warning(f"[MetaRouter] 影子采集失败（不影响主路径）: {e}")
+            envelope = self._legacy_decision_envelope(
+                full_text, fname, fpath, unified)
+            self._dispatch_shadow_nonblocking(
+                envelope, full_text, fname, fpath)
+        except Exception as exc:
+            logger.warning(f"[MetaShadow] 影子任务包装失败（不影响主索引）: {exc}")
 
     @staticmethod
     def detect_near_dup(registry, minhash_sig: list[int], doc_type: str,
