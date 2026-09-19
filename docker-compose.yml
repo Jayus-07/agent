@@ -262,7 +262,7 @@ services:
     restart: unless-stopped
 
   # ── Celery Worker（异步任务执行，独立于 API 进程水平扩展）──
-  # 与 app 共用同一镜像；只消费 agent 队列（task_routes 固定路由）。
+  # 与 app 共用同一镜像；只消费 agent/rag_index 队列（task_routes 固定路由）。
   # 纵向扩并发用 CELERY_WORKER_CONCURRENCY，横向扩 = 起多个本服务副本。
   # agent 执行需要 LLM/PG checkpoint/RAG(远端)：LLM key 来自 env_file(.env)，
   # 容器内地址（PG/Redis/RAG/Ollama）在此显式覆盖。
@@ -324,6 +324,56 @@ services:
     # $$ 为 compose 转义 → 运行时由 shell 展开 hostname。
     healthcheck:
       test: ["CMD-SHELL", "celery -A backend.workers.agent_worker inspect ping -d agent-worker@$$(hostname) --timeout 10 | grep -q pong"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 40s
+    networks:
+      - agent-net
+    restart: unless-stopped
+
+  # ── 元数据影子 Worker（独立队列/并发/故障域）────────────────
+  # 影子任务只消费 rag_metadata_shadow；不能并入主 worker，否则影子积压会
+  # 抢占 agent/rag_index 槽位，破坏主索引的高并发隔离。
+  metadata-shadow-worker:
+    build: .
+    command:
+      ["celery", "-A", "backend.workers.agent_worker", "worker",
+       "--loglevel=info", "-Q", "${CELERY_METADATA_SHADOW_QUEUE:-rag_metadata_shadow}",
+       "--concurrency=${METADATA_SHADOW_WORKER_CONCURRENCY:-2}",
+       "-n", "metadata-shadow-worker@%h"]
+    env_file:
+      - .env
+    environment:
+      # broker/result 与主 worker 一致；影子任务只传 job_id，不把正文塞进 Redis broker。
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - CELERY_METADATA_SHADOW_QUEUE=${CELERY_METADATA_SHADOW_QUEUE:-rag_metadata_shadow}
+      - REDIS_ENABLED=true
+      - REDIS_URL=redis://redis:6379/0
+      # 影子任务需要 PG 读取 job/input 状态；显式覆盖宿主机地址。
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGDATABASE=agent_memory
+      - PGUSER=postgres
+      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+      # embedding 在影子 worker 本地加载，使用共享模型缓存；不依赖 rag-service。
+      - RAG_MODE=local
+      - RAG_DATA_DIR=/app/data
+      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+    volumes:
+      - app_data:/app/data
+      - app_cache:/app/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A backend.workers.agent_worker inspect ping -d metadata-shadow-worker@$$(hostname) --timeout 10 | grep -q pong"]
       interval: 30s
       timeout: 15s
       retries: 3

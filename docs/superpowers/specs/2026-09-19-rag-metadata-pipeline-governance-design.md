@@ -389,7 +389,7 @@ Prometheus/Grafana 至少提供：
 
 本设计已进入代码实施阶段。实现重点不是继续堆叠规则，而是把规则变成可审计的证据层和版本快照：规则变更先形成 draft，经审批发布；线上只读取 published snapshot；回滚只切换到已存在的历史版本，并通过数据库 advisory lock 防止多 worker 并发发布产生双主版本。
 
-高并发路径采用“主请求短链路 + 异步影子链路”：主索引只执行统一抽取或已获准的级联决策，不等待影子评估；影子输入经过采样、脱敏/截断和 staging 后进入独立队列。LLM、Embedding、DB 和影子任务分别受信号量限制，缓存键包含 taxonomy、rules、model、prompt 版本，幂等键阻止重复任务。这样扩容 worker 时不会把外部模型和数据库无界打满。
+高并发路径采用“主请求短链路 + 异步影子链路”：主索引只执行统一抽取或已获准的级联决策，不等待影子评估；影子输入经过采样、脱敏/截断和 staging 后进入独立队列。部署上主 Worker 只消费 `agent,rag_index`，`metadata-shadow-worker` 只消费 `rag_metadata_shadow`，两者可以独立扩缩容和设置并发，避免影子积压抢占主索引槽位。LLM、Embedding、DB 和影子任务分别受信号量限制，缓存键包含 taxonomy、rules、model、prompt 版本，幂等键阻止重复任务。这样扩容 worker 时不会把外部模型和数据库无界打满。
 
 上线默认值为 `METADATA_CASCADE_ENABLED=false`、`METADATA_CLASSIFIER_ENABLED=false`、`METADATA_CASCADE_ROLLOUT_PERCENT=0`。灰度由稳定 key 哈希到百分比桶，规则/模型路由指针可回滚；shadow queue 也有独立开关。发布校验工具对黄金集支持数、双人标注/仲裁证据、版本指纹、队列/负载/回滚证据执行 fail-closed，缺证据不允许自动放量。压测和回滚使用独立的 `metadata-load-v1`、`metadata-rollback-v1` JSON 证据，门禁校验 2× 峰值、队列不持续增长、429/重复写入为零、影子不抬高主路径 P95，以及旧指纹存在、幂等重放成功和 10 分钟内回滚。
 
