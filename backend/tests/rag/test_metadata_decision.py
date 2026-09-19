@@ -2,6 +2,7 @@
 
 import pytest
 
+from backend.rag.preprocessing import metadata_runtime
 from backend.rag.preprocessing.metadata_classifier import ClassifierPrediction
 from backend.rag.preprocessing.metadata_decision import decide_metadata
 
@@ -76,6 +77,45 @@ async def test_llm_failure_uses_complete_deterministic_fallback(monkeypatch):
     assert result.doc_type == "general"
     assert result.fallback_reason == "llm_unavailable"
     assert result.llm_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_skips_metadata_llm(monkeypatch):
+    class _Cache:
+        def __init__(self):
+            self.values = {}
+
+        def get_json(self, key):
+            return self.values.get(key)
+
+        def set_json(self, key, value, ttl=None):
+            self.values[key] = value
+
+    calls = {"llm": 0}
+
+    async def _fake_llm(*args, **kwargs):
+        calls["llm"] += 1
+        return await _fake_llm_result()
+
+    async def _no_classifier(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(metadata_runtime, "_metadata_cache", _Cache())
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_decision._classifier_prediction",
+        _no_classifier,
+    )
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_decision.extract_metadata_llm_async",
+        _fake_llm,
+    )
+
+    first = await decide_metadata("没有强类型证据的普通正文", "cache-hit.docx")
+    second = await decide_metadata("没有强类型证据的普通正文", "cache-hit.docx")
+
+    assert first.source == "llm"
+    assert second.source == "llm"
+    assert calls["llm"] == 1
 
 
 def test_keyword_fallback_can_explicitly_disable_llm(monkeypatch):

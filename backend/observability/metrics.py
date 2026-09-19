@@ -96,6 +96,56 @@ metadata_classifier_mismatch_total = Counter(
     labelnames=("reason",),
 )
 
+metadata_route_latency_seconds = Histogram(
+    "metadata_route_latency_seconds",
+    "元数据决策路由耗时",
+    labelnames=("source",),
+    buckets=(0.005, 0.02, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0),
+)
+
+metadata_queue_wait_seconds = Histogram(
+    "metadata_queue_wait_seconds",
+    "元数据资源槽位等待耗时",
+    labelnames=("resource",),
+    buckets=(0.001, 0.005, 0.02, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0),
+)
+
+metadata_resource_wait_timeout_total = Counter(
+    "metadata_resource_wait_timeout_total",
+    "元数据资源槽位等待超时次数",
+    labelnames=("resource",),
+)
+
+metadata_cache_total = Counter(
+    "metadata_cache_total",
+    "元数据决策缓存命中/未命中/错误次数",
+    labelnames=("result",),
+)
+
+metadata_llm_calls_total = Counter(
+    "metadata_llm_calls_total",
+    "元数据 LLM 调用结果次数",
+    labelnames=("result",),
+)
+
+metadata_shadow_dispatch_total = Counter(
+    "metadata_shadow_dispatch_total",
+    "元数据影子任务派发结果次数",
+    labelnames=("result",),
+)
+
+metadata_resource_active = Gauge(
+    "metadata_resource_active",
+    "元数据资源当前活动槽位",
+    labelnames=("resource",),
+)
+
+metadata_resource_queued = Gauge(
+    "metadata_resource_queued",
+    "元数据资源当前等待队列估计",
+    labelnames=("resource",),
+)
+
 rag_consistency_issues_total = Counter(
     "rag_consistency_issues_total",
     "索引五路存储一致性检查检出的问题数（按存储与严重级别）",

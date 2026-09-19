@@ -68,7 +68,7 @@ class _TaxonomyIndex:
         self._labels: list[str] = []
         self._matrix = None  # numpy (N, D)，L2 归一化
 
-    async def _ensure(self, embedding) -> None:
+    async def _ensure(self, embedding, timeout: float | None = None) -> None:
         sig = (id(embedding),
                getattr(embedding, "model_name", "") or str(getattr(embedding, "model", "")))
         if self._sig == sig and self._matrix is not None:
@@ -76,7 +76,13 @@ class _TaxonomyIndex:
         import numpy as np
         labels = list(TAXONOMY_DESCRIPTIONS.keys())
         descs = [TAXONOMY_DESCRIPTIONS[l] for l in labels]
-        vecs = await asyncio.to_thread(embedding.embed_documents, descs)
+        from backend.rag.preprocessing.metadata_runtime import run_limited
+
+        vecs = await run_limited(
+            "embedding",
+            lambda: asyncio.to_thread(embedding.embed_documents, descs),
+            timeout=timeout,
+        )
         m = np.asarray(vecs, dtype="float32")
         norm = np.linalg.norm(m, axis=1, keepdims=True)
         norm[norm == 0] = 1.0
@@ -87,9 +93,17 @@ class _TaxonomyIndex:
     async def classify(self, text: str, embedding, timeout: float) -> list[tuple[str, float]] | None:
         """返回 [(doc_type, sim)] 按相似度降序；embedding 异常/超时返回 None。"""
         try:
-            await asyncio.wait_for(self._ensure(embedding), timeout)
+            await asyncio.wait_for(self._ensure(embedding, timeout), timeout)
+            from backend.rag.preprocessing.metadata_runtime import run_limited
+
             q = await asyncio.wait_for(
-                asyncio.to_thread(embedding.embed_query, text[:2000]), timeout)
+                run_limited(
+                    "embedding",
+                    lambda: asyncio.to_thread(embedding.embed_query, text[:2000]),
+                    timeout=timeout,
+                ),
+                timeout,
+            )
             import numpy as np
             qv = np.asarray([q], dtype="float32")
             qn = np.linalg.norm(qv, axis=1, keepdims=True)

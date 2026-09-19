@@ -6,7 +6,10 @@ import time
 from pathlib import Path
 from typing import Mapping
 
-from backend.observability.metrics import metadata_route_total
+from backend.observability.metrics import (
+    metadata_route_latency_seconds,
+    metadata_route_total,
+)
 from backend.rag.preprocessing.metadata_classifier import (
     ClassifierPrediction,
     MetadataClassifier,
@@ -29,6 +32,35 @@ from backend.shared.logger import logger
 
 _classifier_path: str = ""
 _classifier: MetadataClassifier | None = None
+
+
+def _metadata_model_version() -> str:
+    """返回参与缓存版本的实际模型指针。"""
+    from backend.config.llm import LLM_MODEL
+    from backend.config.rag import METADATA_CLASSIFIER_MODEL_PATH
+
+    classifier = METADATA_CLASSIFIER_MODEL_PATH or "off"
+    return f"llm:{LLM_MODEL}|classifier:{classifier}"
+
+
+def _metadata_prompt_version() -> str:
+    """从 PromptService 当前快照读取版本；默认模板使用稳定标识。"""
+    try:
+        from backend.prompts.service import prompt_service
+
+        version = prompt_service.get_version_for_cache_key(
+            "rag.preprocessing.metadata_extract"
+        )
+        return f"v{version}" if version is not None else "default"
+    except Exception as exc:
+        logger.debug(f"[MetaDecision] prompt version unavailable: {exc}")
+        return "default"
+
+
+def _observe_route_latency(source: str, started: float) -> None:
+    metadata_route_latency_seconds.labels(source=source).observe(
+        max(time.monotonic() - started, 0.0)
+    )
 
 
 def _evidence_models(evidence: EvidenceBundle) -> list[EvidenceItem]:
@@ -197,11 +229,33 @@ async def decide_metadata(
     """按固定顺序完成一次文档级元数据决策。"""
     started = time.monotonic()
     evidence = extract_evidence(full_text, filename, file_path)
+    from backend.rag.preprocessing.metadata_runtime import (
+        get_cached_decision_async,
+        metadata_cache_key,
+        put_cached_decision_async,
+    )
+
+    taxonomy = get_taxonomy()
+    cache_model_version = _metadata_model_version()
+    cache_prompt_version = _metadata_prompt_version()
+    cache_key = metadata_cache_key(
+        full_text,
+        filename,
+        file_path,
+        taxonomy.version,
+        cache_model_version,
+        cache_prompt_version,
+        evidence.rules_version,
+    )
+    cached = await get_cached_decision_async(cache_key)
+    if cached is not None:
+        _observe_route_latency(cached.source, started)
+        return cached
 
     candidate = r0_candidate(evidence)
     if candidate is not None:
         metadata_route_total.labels(level="R0", outcome="hit").inc()
-        return _envelope(
+        envelope = _envelope(
             decision="accepted",
             doc_type=candidate,
             business_domain=_domain_for_text(full_text),
@@ -211,6 +265,9 @@ async def decide_metadata(
             candidates=_candidate_models(tuple(evidence.candidates)),
             latency_ms=(time.monotonic() - started) * 1000,
         )
+        _observe_route_latency(envelope.source, started)
+        await put_cached_decision_async(cache_key, envelope)
+        return envelope
     metadata_route_total.labels(level="R0", outcome="miss").inc()
 
     prediction = await _classifier_prediction(
@@ -218,7 +275,7 @@ async def decide_metadata(
     )
     if prediction is not None and prediction.accepted:
         metadata_route_total.labels(level="R1", outcome="hit").inc()
-        return _envelope(
+        envelope = _envelope(
             decision="accepted",
             doc_type=prediction.label,
             business_domain=_domain_for_text(full_text),
@@ -229,6 +286,9 @@ async def decide_metadata(
             model_version=prediction.model_version,
             latency_ms=(time.monotonic() - started) * 1000,
         )
+        _observe_route_latency(envelope.source, started)
+        await put_cached_decision_async(cache_key, envelope)
+        return envelope
     metadata_route_total.labels(
         level="R1", outcome=(prediction.abstain_reason if prediction else "skip")
     ).inc()
@@ -245,7 +305,7 @@ async def decide_metadata(
         try:
             unified = UnifiedMetadata.model_validate(llm_result)
             metadata_route_total.labels(level="R2", outcome="hit").inc()
-            return _envelope(
+            envelope = _envelope(
                 decision="accepted",
                 doc_type=unified.doc_type,
                 business_domain=unified.business_domain,
@@ -253,19 +313,22 @@ async def decide_metadata(
                 source="llm",
                 evidence=evidence,
                 candidates=_candidate_models([(unified.doc_type, unified.confidence)]),
-                model_version="metadata-llm",
+                model_version=cache_model_version,
                 prompt_version=str(llm_result.get("prompt_version", "default")),
                 latency_ms=(time.monotonic() - started) * 1000,
                 llm_call_count=llm_calls,
                 metadata=unified.to_extract_dict(),
             )
+            _observe_route_latency(envelope.source, started)
+            await put_cached_decision_async(cache_key, envelope)
+            return envelope
         except Exception as exc:
             logger.warning(f"[MetaDecision] LLM 结果未通过统一 Schema: {exc}")
             reason = "llm_schema_invalid"
     else:
         reason = "llm_unavailable"
     metadata_route_total.labels(level="R2", outcome="fallback").inc()
-    return build_deterministic_fallback(
+    envelope = build_deterministic_fallback(
         full_text,
         filename,
         file_path,
@@ -274,3 +337,5 @@ async def decide_metadata(
         llm_call_count=llm_calls,
         latency_ms=(time.monotonic() - started) * 1000,
     )
+    _observe_route_latency(envelope.source, started)
+    return envelope

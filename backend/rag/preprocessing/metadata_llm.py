@@ -182,12 +182,18 @@ async def extract_metadata_llm_async(
         # invoke_metadata_llm 是同步调用，async_safe_call_with_timeout 会把它
         # 放线程池执行并施加超时（与摘要路径 build_llm_summary_cached 同款）；
         # 二者均为模块级导入，测试可直接 monkeypatch
-        response = await async_safe_call_with_timeout(
-            invoke_metadata_llm,
-            LLM_REQUEST_TIMEOUT,
-            None,
-            f"元数据抽取 LLM 超时 ({LLM_REQUEST_TIMEOUT}s)",
-            prompt,
+        from backend.observability.metrics import metadata_llm_calls_total
+        from backend.rag.preprocessing.metadata_runtime import run_limited
+
+        response = await run_limited(
+            "llm",
+            lambda: async_safe_call_with_timeout(
+                invoke_metadata_llm,
+                LLM_REQUEST_TIMEOUT,
+                None,
+                f"元数据抽取 LLM 超时 ({LLM_REQUEST_TIMEOUT}s)",
+                prompt,
+            ),
         )
         if response is None:
             raise MetadataExtractError("llm timeout")
@@ -208,10 +214,13 @@ async def extract_metadata_llm_async(
                 "risk_level": (result.get("risk") or {}).get("level", "none"),
             })
         metadata_route_total.labels(level="L3", outcome="hit").inc()
+        metadata_llm_calls_total.labels(result="success").inc()
         return result
     except MetadataExtractError as e:
         logger.warning(f"[MetaLLM] 抽取结果非法（降级规则路径）: {e}")
         metadata_route_total.labels(level="L3", outcome="error").inc()
+        from backend.observability.metrics import metadata_llm_calls_total
+        metadata_llm_calls_total.labels(result="invalid").inc()
         if span_id:
             trace_collector.end_span(span_id, status="error",
                                      metrics={"error": str(e)[:200]})
@@ -219,6 +228,8 @@ async def extract_metadata_llm_async(
     except Exception as e:
         logger.warning(f"[MetaLLM] 抽取调用失败（降级规则路径）: {e}")
         metadata_route_total.labels(level="L3", outcome="error").inc()
+        from backend.observability.metrics import metadata_llm_calls_total
+        metadata_llm_calls_total.labels(result="error").inc()
         if span_id:
             trace_collector.end_span(span_id, status="error",
                                      metrics={"error": str(e)[:200]})
