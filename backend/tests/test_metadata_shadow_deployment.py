@@ -18,6 +18,30 @@ def _queue_arg(command: list[str]) -> str:
     return command[index + 1]
 
 
+def _environment(service: dict) -> dict[str, str]:
+    return {
+        item.split("=", 1)[0]: item.split("=", 1)[1]
+        for item in service.get("environment", [])
+        if "=" in item
+    }
+
+
+def test_app_and_index_worker_default_to_one_percent_cascade_canary():
+    services = _compose()["services"]
+
+    for service_name in ("app", "worker"):
+        environment = _environment(services[service_name])
+        assert environment["METADATA_CASCADE_ENABLED"] == (
+            "${METADATA_CASCADE_ENABLED:-true}"
+        )
+        assert environment["METADATA_CASCADE_ROLLOUT_PERCENT"] == (
+            "${METADATA_CASCADE_ROLLOUT_PERCENT:-1}"
+        )
+        assert environment["METADATA_CLASSIFIER_ENABLED"] == (
+            "${METADATA_CLASSIFIER_ENABLED:-false}"
+        )
+
+
 def test_primary_worker_does_not_consume_shadow_queue():
     worker = _compose()["services"]["worker"]
 
