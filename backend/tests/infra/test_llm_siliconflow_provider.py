@@ -16,10 +16,13 @@ def test_siliconflow_model_is_registered_with_key_env() -> None:
 
 
 def test_factory_resolves_siliconflow_by_name_not_qwen_heuristic() -> None:
-    """回归锁：'Qwen/Qwen3-8B' 含 qwen 字样，不得被启发式误路由到 DashScope。"""
+    """回归锁：'Qwen/Qwen3-8B'/'Qwen/Qwen3-32B' 含 qwen 字样，不得被启发式误路由到 DashScope。"""
     factory = LLMFactory()
 
     assert factory._get_provider("Qwen/Qwen3-8B") == "siliconflow"
+    assert factory._get_provider("Qwen/Qwen3-32B") == "siliconflow"
+    # 同名前缀的 vLLM 自托管型号不得被 siliconflow 注册表条目遮蔽
+    assert factory._get_provider("Qwen/Qwen3-32B-AWQ") == "vllm"
 
 
 def test_set_current_rejects_when_siliconflow_key_missing(monkeypatch) -> None:

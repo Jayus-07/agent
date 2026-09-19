@@ -108,6 +108,15 @@ AVAILABLE_MODELS = [
     {
         # 硅基流动价格未核（0 会使成本估算低估），接入后按账单回填
         "provider": "siliconflow",
+        "name": "Qwen/Qwen3-32B",
+        "display": "Qwen3 32B - 硅基流动",
+        "description": "硅基流动 Qwen3-32B，OpenAI 兼容协议，需配置 SILICONFLOW_API_KEY",
+        "input_price_per_1m": 0.0,
+        "output_price_per_1m": 0.0,
+    },
+    {
+        # 硅基流动价格未核（0 会使成本估算低估），接入后按账单回填
+        "provider": "siliconflow",
         "name": "Qwen/Qwen3-8B",
         "display": "Qwen3 8B - 硅基流动",
         "description": "硅基流动 Qwen3-8B，OpenAI 兼容协议，需配置 SILICONFLOW_API_KEY",
