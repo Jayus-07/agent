@@ -739,6 +739,37 @@ POST /chat → ① api 层校验 model（唯一规则来源）
 
 **对 B.8 硬闸门的影响**：P1b 完成后，闸门**只剩 P1a-2**（billing 传播到 `compute_cost_usd` / `budget` / `quota`，卡在并发会话的 `proxy.py` / `budget.py` / `quota.py`）。P1a-2 一旦落定，P2 管理端页面即可开工。
 
+### 15.3 P2 数据源：供应商清单端点（2026-09-19）
+
+tab② 的数据源已就位（与探测端点同文件、同待注册批次）。
+
+| 落点 | 改动 | 提交 |
+|---|---|---|
+| `backend/infra/llm/registry_store.py` | `RegistrySnapshot.credential_meta`（指纹/last4/轮换）+ `_SELECT_CREDENTIALS` 补 `updated_by`/`updated_at` | `e76bb2a` |
+| `backend/app/api/routes/sys_providers.py` | `GET /sys/providers` 只读清单（字段对齐 §6 `ProviderRow`） | `e76bb2a` |
+| `backend/tests/api/test_sys_providers_list_api.py` | 6 例（新增） | `e76bb2a` |
+
+**两条分支的语义**（本端点最容易被做错的地方）：
+
+| DB 状态 | `source` | `items` | 前端应表现 |
+|---|---|---|---|
+| 可用 + 有数据 | `db` | 快照（含自建实例） | 正常列表 |
+| 可用 + 表为空 | `db` | `[]` | 「还没有配置供应商」 |
+| 不可用 / 表未建 | `builtin` | 代码层内置厂商 | 「配置暂不可用，展示内置厂商」 |
+
+分支依据是 `loaded`，**不是** `items` 是否为空 —— 二者差别是「真没配」与「故障」，混同会让运维去查错方向。两条都有测试锁定。
+
+**实施时新定的三条决策**：
+
+1. **凭据展示元数据不塞进 `ProviderCredentials`**，另立 `RegistrySnapshot.credential_meta` —— 前者是出站调用热路径的数据类，展示字段混进去会让每个 provider 构造点背无关数据；且它与「能否解密」解耦（解密失败仍要能看到「已落库但不可用」）。
+2. **兜底不是空列表** —— 见上表。空列表会把「库没就绪」伪装成「配置被删光」。
+3. **不为「列出已停用实例」改动 `_SELECT_PROVIDERS`** —— 该 SQL 被 `refresh_registry` 与探测端点共用（都依赖 `enabled=true` 语义）。故清单里 `enabled` 恒 true；停用项展示随 P2 的「停用/编辑」功能另开查询。
+
+**仍未落地的两处（P2 后续，勿当遗漏）**：
+
+- `lastProbe` 恒 `null` —— 探测结果持久化表未建（0018），当前只有内存态；前端按「未验证」灰显，tab⑤ 漂移会点名。
+- 三个端点（清单 + 探测×2）**仍差一行注册**（同 §15.2）。清单端点属只读，对现有前端零影响，可与探测端点一并注册。
+
 ---
 
 ## 16. 测试策略（vitest）
