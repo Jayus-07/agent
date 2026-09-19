@@ -302,6 +302,23 @@ async def start_sys_config_refresh():
 
 
 @app.on_event("startup")
+async def start_llm_registry_refresh():
+    """LLM 注册表 DB 覆盖层：首轮拉取 + 15s 轮询（2026-09-19，P1b 接线）。
+
+    把 `llm_providers` / `llm_models` / `llm_provider_credentials` 三表读成快照，
+    注入进程内动态层，使 `get_available_models()` / `resolve_credentials()` 自动
+    带上 DB 覆盖（管理端改完不必重启）。
+
+    失败不阻塞启动，且方向与守卫开关相反是 **fail-open**：DB 空表 / 表缺失 →
+    动态层保持为空 → 与纯代码层语义逐字一致（零行为变化）；DB 闪断 → 保留上次
+    已知值。详见 infra/llm/registry_store.py 顶部说明。
+    """
+    import asyncio
+    from backend.infra.llm.registry_store import refresh_loop
+    asyncio.create_task(refresh_loop(), name="llm-registry-refresh")
+
+
+@app.on_event("startup")
 async def start_consistency_sweeper():
     """五路存储最终一致性清扫：定期对账孤儿向量 / BM25 幽灵残留并修复。
 

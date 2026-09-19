@@ -23,6 +23,7 @@ P1a 阶段状态：文件与表已就绪，**刷新循环尚未挂载**（P1b �
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 
 from sqlalchemy import text
@@ -154,6 +155,26 @@ async def refresh_registry() -> bool:
         len(snap.providers), len(snap.models), len(snap.credentials),
     )
     return True
+
+
+_REFRESH_INTERVAL_S = 15.0
+
+
+async def refresh_loop(interval: float = _REFRESH_INTERVAL_S) -> None:
+    """后台轮询循环（server startup 挂载；首轮立即拉取，异常不退出）。
+
+    与 `sys_config.refresh_loop` 同构。区别在于失败方向：sys_config 是
+    fail-closed（宁可用默认值），这里是 **fail-open**（保留上次已知值 +
+    代码层），绝不能因一次 DB 抖动把模型清单/凭据覆盖层清空。
+    """
+    while True:
+        try:
+            await refresh_registry()
+        except Exception:
+            logger.warning(
+                "[LLMRegistry] 刷新循环异常，保留上次已知覆盖层", exc_info=True
+            )
+        await asyncio.sleep(interval)
 
 
 def reset_for_tests() -> None:
