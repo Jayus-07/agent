@@ -17,6 +17,32 @@ async def test_r0_accepts_only_unique_strong_signal():
     assert result.llm_call_count == 0
 
 
+@pytest.mark.asyncio
+async def test_r0_skips_cache_io(monkeypatch):
+    """确定性 R0 命中不应为一次零成本决策访问 Redis。"""
+    async def _cache_io_must_not_run(*args, **kwargs):
+        raise AssertionError("R0 命中不应访问元数据决策缓存")
+
+    monkeypatch.setattr(
+        metadata_runtime,
+        "get_cached_decision_async",
+        _cache_io_must_not_run,
+    )
+    monkeypatch.setattr(
+        metadata_runtime,
+        "put_cached_decision_async",
+        _cache_io_must_not_run,
+    )
+
+    result = await decide_metadata(
+        "固定编号合同 第一条 适用范围",
+        "approved-contract-id-cache-bypass.docx",
+    )
+
+    assert result.source == "r0"
+    assert result.llm_call_count == 0
+
+
 async def _fake_llm_result(*args, **kwargs):
     return {
         "doc_type": "legal",

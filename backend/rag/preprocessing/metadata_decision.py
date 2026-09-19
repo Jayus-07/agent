@@ -229,6 +229,26 @@ async def decide_metadata(
     """按固定顺序完成一次文档级元数据决策。"""
     started = time.monotonic()
     evidence = extract_evidence(full_text, filename, file_path)
+
+    # R0 是纯确定性短路：既不需要 LLM，也不需要为一次不会进入
+    # R1/R2 的决策访问 Redis。把它放在缓存之前，避免高并发下缓存连接池
+    # 或 Redis 阻塞把零成本路径拖成排队路径。
+    candidate = r0_candidate(evidence)
+    if candidate is not None:
+        metadata_route_total.labels(level="R0", outcome="hit").inc()
+        envelope = _envelope(
+            decision="accepted",
+            doc_type=candidate,
+            business_domain=_domain_for_text(full_text),
+            confidence=0.99,
+            source="r0",
+            evidence=evidence,
+            candidates=_candidate_models(tuple(evidence.candidates)),
+            latency_ms=(time.monotonic() - started) * 1000,
+        )
+        _observe_route_latency(envelope.source, started)
+        return envelope
+
     from backend.rag.preprocessing.metadata_runtime import (
         get_cached_decision_async,
         metadata_cache_key,
@@ -252,22 +272,6 @@ async def decide_metadata(
         _observe_route_latency(cached.source, started)
         return cached
 
-    candidate = r0_candidate(evidence)
-    if candidate is not None:
-        metadata_route_total.labels(level="R0", outcome="hit").inc()
-        envelope = _envelope(
-            decision="accepted",
-            doc_type=candidate,
-            business_domain=_domain_for_text(full_text),
-            confidence=0.99,
-            source="r0",
-            evidence=evidence,
-            candidates=_candidate_models(tuple(evidence.candidates)),
-            latency_ms=(time.monotonic() - started) * 1000,
-        )
-        _observe_route_latency(envelope.source, started)
-        await put_cached_decision_async(cache_key, envelope)
-        return envelope
     metadata_route_total.labels(level="R0", outcome="miss").inc()
 
     prediction = await _classifier_prediction(
