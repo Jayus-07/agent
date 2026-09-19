@@ -14,6 +14,23 @@ from backend.customer_service.errors import CustomerServiceError
 
 # ── 基础 fixtures ─────────────────────────────────────────────
 
+
+@pytest.fixture(autouse=True)
+def _supervisor_llm_off_by_default(monkeypatch):
+    """CS Supervisor Layer3 LLM 决策默认关闭（测试确定性，P1 2026-09-19）。
+
+    开关默认 true 且开发环境带 DeepSeek key——低置信用例会打出真实 LLM
+    调用（800ms 超时内可达时），expert 派发随模型回答漂移（实测：
+    knowledge 之后被派发 query/action/handoff/complaint 直至循环上限，
+    断言 expert_history 的用例随机挂）。
+    需要覆盖 LLM 层的用例自行 patch 该开关为 True——测试级 patch 晚于
+    本 fixture 应用，可正常覆盖（test_cs_supervisor.py 即此模式）。
+    """
+    import backend.config.customer_service as cs_config
+
+    monkeypatch.setattr(cs_config, "CS_SUPERVISOR_LLM_ENABLED", False)
+
+
 @pytest.fixture
 def sample_conversation_id():
     return "conv-test-001"

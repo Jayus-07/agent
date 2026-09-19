@@ -429,9 +429,17 @@ def make_initial_state(question: str, session_id: str, kb_id: str, messages: lis
     domain_hint: 入口域提示平铺（2026-09-18）——客服窗口（CSDrawer）
     每条消息带 domain_hint=customer_service，router_node 据此锁域；
     空串 = 全局入口，行为不变。
+
+    P1 步骤 3 下游收敛（2026-09-19，规划稿 §五）：state["question"] 使用
+    Input Guard 的 normalized_query（NFKC/零宽剥离/空白折叠）——路由、
+    检索、实体提取的统一处理文本；normalized 为空（Guard 未启用/降级）
+    时回退原文，行为不回归。原文保留在 L1 记忆（start_session 用原始
+    question）与 Trace span 中，仅用于审计与展示。
     """
+    guard = guard_result or {}
+    normalized = (guard.get("normalized_query") or "").strip()
     return {
-        "question": question.strip(),
+        "question": normalized or question.strip(),
         "kb_id": kb_id,
         "session_id": session_id,
         "user_id": user_id or "",
