@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Tags, Search, Plus, Trash2, RefreshCw, Loader2, Pencil, Power, Upload, X, ChevronDown, Scale, ShieldCheck, BookOpen, ShoppingBag, Wallet, Boxes, Layers } from 'lucide-react'
-import { keywordService, type KeywordRule } from '@/api/keyword'
+import { keywordService, type ActiveRuleVersion, type KeywordRule, type RuleMutationResult, type RuleVersionSummary } from '@/api/keyword'
 import { useToast } from '@/components/shared/Toast'
 
 const DOC_TYPE_CN: Record<string, string> = {
@@ -86,6 +86,15 @@ export default function KeywordsPage() {
   const [batchText, setBatchText] = useState('')
   const [batchDocType, setBatchDocType] = useState('general')
   const [batchWeight, setBatchWeight] = useState(5)
+  const [changeReason, setChangeReason] = useState('')
+  const [batchReason, setBatchReason] = useState('')
+  const [deleteReason, setDeleteReason] = useState('')
+  const [activeVersion, setActiveVersion] = useState<ActiveRuleVersion | null>(null)
+  const [versions, setVersions] = useState<RuleVersionSummary[]>([])
+  const [governanceNotice, setGovernanceNotice] = useState<RuleMutationResult | null>(null)
+  const [approvalId, setApprovalId] = useState('')
+  const [publishReason, setPublishReason] = useState('')
+  const [governanceBusy, setGovernanceBusy] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -94,7 +103,17 @@ export default function KeywordsPage() {
     setLoading(false)
   }, [])
 
+  const loadGovernance = useCallback(async () => {
+    const [active, history] = await Promise.all([
+      keywordService.activeVersion().catch(() => null),
+      keywordService.versions().catch(() => ({ items: [] })),
+    ])
+    setActiveVersion(active)
+    setVersions(history.items || [])
+  }, [])
+
   useEffect(() => { load() }, [load])
+  useEffect(() => { loadGovernance() }, [loadGovernance])
   useEffect(() => {
     keywordService.docTypes().then(r => setDocTypes(r.doc_types || []))
     keywordService.categories().then(r => setCategories(r.categories || []))
@@ -158,10 +177,12 @@ export default function KeywordsPage() {
 
   const openCreate = (presetType?: string) => {
     setEditOldKeyword('')
+    setChangeReason('')
     setEditing({ mode: 'create', keyword: '', doc_type: presetType || 'general', category: '', weight: 5, enabled: 1 })
   }
   const openEditWith = (r: KeywordRule) => {
     setEditOldKeyword(r.keyword)
+    setChangeReason('')
     setEditing({ mode: 'edit', keyword: r.keyword, doc_type: r.doc_type, category: r.category || '', weight: r.weight, enabled: r.enabled })
   }
 
@@ -171,37 +192,64 @@ export default function KeywordsPage() {
     setExpandedTypes(prev => prev.includes(type) ? prev : [...prev, type])
   }
 
-  /** 保存：编辑时若关键词文本被修改，upsert 新词后再删旧行（keyword 是主键） */
+  const showDraftNotice = (result: RuleMutationResult) => {
+    setGovernanceNotice(result)
+    loadGovernance()
+    if (result.status === 'draft') {
+      toast.success(`已创建规则草稿 v${result.version}，待审核后生效`)
+    }
+  }
+
+  /** 保存只创建一个完整草稿；改关键词时在同一快照内删除旧词，避免两次写入形成中间态。 */
   const saveEdit = async () => {
     if (!editing) return
     const kw = editing.keyword.trim()
     if (!kw) { toast.error('关键词不能为空'); return }
+    const reason = changeReason.trim()
+    if (!reason) { toast.error('请填写变更原因'); return }
     setSaving(true)
-    const r = await keywordService.upsert({ keyword: kw, doc_type: editing.doc_type, category: editing.category.trim(), weight: editing.weight, enabled: editing.enabled })
-    if (r.ok === false) { setSaving(false); toast.error('保存失败'); return }
-    if (editOldKeyword && editOldKeyword !== kw) await keywordService.delete(editOldKeyword)
-    setSaving(false)
-    toast.success('已保存')
-    setEditing(null)
-    revealType(editing.doc_type)
-    load()
+    try {
+      const entry = { keyword: kw, doc_type: editing.doc_type, category: editing.category.trim(), weight: editing.weight, enabled: editing.enabled }
+      const r = editOldKeyword && editOldKeyword !== kw
+        ? await keywordService.batchUpsert([entry], reason, [editOldKeyword])
+        : await keywordService.upsert(entry, reason)
+      showDraftNotice(r)
+      setEditing(null)
+      revealType(editing.doc_type)
+      load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '保存失败')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const toggle = async (r: KeywordRule) => {
     const next = r.enabled ? 0 : 1
-    const res = await keywordService.toggle(r.keyword, next)
-    if (res.ok === false) { toast.error('操作失败'); return }
-    toast.success(next ? `已启用「${r.keyword}」` : `已停用「${r.keyword}」`)
-    load()
+    const reason = window.prompt('请输入本次变更原因', next ? '重新启用关键词' : '停用低质量关键词')?.trim()
+    if (!reason) return
+    try {
+      const res = await keywordService.toggle(r.keyword, next, reason)
+      showDraftNotice(res)
+      load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '操作失败')
+    }
   }
 
   const confirmDelete = async () => {
     if (!deleteTarget) return
-    const r = await keywordService.delete(deleteTarget.keyword)
-    setDeleteTarget(null)
-    if (r.ok === false) { toast.error('删除失败'); return }
-    toast.success('已删除')
-    load()
+    const reason = deleteReason.trim()
+    if (!reason) { toast.error('请填写变更原因'); return }
+    try {
+      const r = await keywordService.delete(deleteTarget.keyword, reason)
+      showDraftNotice(r)
+      setDeleteTarget(null)
+      setDeleteReason('')
+      load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '删除失败')
+    }
   }
 
   const importBatch = async () => {
@@ -217,15 +265,56 @@ export default function KeywordsPage() {
         weight: parts[3] ? (parseInt(parts[3], 10) || batchWeight) : batchWeight,
       }
     }).filter(it => it.keyword)
+    const reason = batchReason.trim()
+    if (!reason) { toast.error('请填写变更原因'); return }
     setSaving(true)
-    const r = await keywordService.batchUpsert(itemsToUpsert)
-    setSaving(false)
-    if (r.ok === false) { toast.error('批量导入失败'); return }
-    toast.success(`已导入 ${itemsToUpsert.length} 条`)
-    setBatchOpen(false)
-    setBatchText('')
-    revealType(batchDocType)
-    load()
+    try {
+      const r = await keywordService.batchUpsert(itemsToUpsert, reason)
+      showDraftNotice(r)
+      setBatchOpen(false)
+      setBatchText('')
+      setBatchReason('')
+      revealType(batchDocType)
+      load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '批量导入失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const publishVersion = async (version: number) => {
+    const approval = approvalId.trim()
+    const reason = publishReason.trim()
+    if (!approval) { toast.error('请输入已批准的 approval_id'); return }
+    if (!reason) { toast.error('请填写发布原因'); return }
+    setGovernanceBusy(true)
+    try {
+      const result = await keywordService.publish(version, approval, reason)
+      setGovernanceNotice(result)
+      toast.success(`规则 v${version} 已发布并生效`)
+      await Promise.all([load(), loadGovernance()])
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '发布失败')
+    } finally {
+      setGovernanceBusy(false)
+    }
+  }
+
+  const rollbackVersion = async (version: number) => {
+    const reason = window.prompt('请输入回滚原因', '回滚到上一版规则')?.trim()
+    if (!reason) return
+    setGovernanceBusy(true)
+    try {
+      const result = await keywordService.rollback(version, reason)
+      setGovernanceNotice(result)
+      toast.success(`规则已回滚到 v${version}`)
+      await Promise.all([load(), loadGovernance()])
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '回滚失败')
+    } finally {
+      setGovernanceBusy(false)
+    }
   }
 
   const resetFilters = () => { setSearch(''); setCategory(''); setEnabled('') }
@@ -239,7 +328,7 @@ export default function KeywordsPage() {
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2"><Tags size={20} className="text-accent" />词库管理</h1>
           <p className="text-sm text-text-secondary mt-1">
-            按业务场景 → 文档类型两级分组，点击逐级展开；改动约 60 秒内热生效（无需重启服务）
+            按业务场景 → 文档类型两级分组；变更先进入草稿，审核发布后才影响线上路由
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -253,6 +342,62 @@ export default function KeywordsPage() {
             <Plus size={14} />新增关键词
           </button>
         </div>
+      </div>
+
+      {/* 规则治理状态：草稿与线上活动版本明确分离。 */}
+      <div className={`${CARD_CLS} p-4 space-y-3`}>
+        <div className="flex items-center gap-3 flex-wrap">
+          <ShieldCheck size={16} className="text-accent" />
+          <span className="text-sm font-medium">线上规则快照</span>
+          {activeVersion ? (
+            <span className={`px-2 py-0.5 rounded-md text-xs ${activeVersion.status === 'published' ? 'bg-green-50 text-green-600' : 'bg-amber-50 text-amber-600'}`}>
+              {activeVersion.status === 'published' ? '已发布' : activeVersion.status === 'legacy' ? '兼容旧词库' : activeVersion.status}
+            </span>
+          ) : <span className="text-xs text-text-muted">状态加载中…</span>}
+          {activeVersion?.version != null && <span className="text-xs text-text-secondary">v{activeVersion.version} · {activeVersion.rules_hash.slice(0, 12)}</span>}
+          <span className="ml-auto text-xs text-text-muted">草稿不会直接改变线上分类</span>
+        </div>
+        {governanceNotice?.status === 'draft' && governanceNotice.version != null && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-2">
+            <div className="text-xs text-amber-800">规则 v{governanceNotice.version} 已创建，当前状态：待审核。请输入审批系统中已批准的 approval_id 后发布。</div>
+            <div className="flex flex-wrap gap-2">
+              <input value={approvalId} onChange={e => setApprovalId(e.target.value)} className={`${INPUT_CLS} flex-1 min-w-52`} placeholder="approval_id" />
+              <input value={publishReason} onChange={e => setPublishReason(e.target.value)} className={`${INPUT_CLS} flex-1 min-w-52`} placeholder="发布原因" />
+              <button onClick={() => publishVersion(governanceNotice.version!)} className={BTN_PRIMARY} disabled={governanceBusy}>
+                {governanceBusy && <Loader2 size={13} className="animate-spin" />}审核发布
+              </button>
+            </div>
+          </div>
+        )}
+        {governanceNotice && governanceNotice.status !== 'draft' && (
+          <div className="text-xs text-text-secondary">
+            最近操作：规则 v{governanceNotice.version ?? '-'} · {governanceNotice.status === 'published' ? '已发布' : governanceNotice.status === 'rolled_back' ? '已回滚' : governanceNotice.status}
+          </div>
+        )}
+        {versions.length > 0 && (
+          <details>
+            <summary className="cursor-pointer text-xs text-text-secondary">查看版本历史（{versions.length}）</summary>
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead><tr className="text-left text-text-muted border-b border-border-subtle"><th className="py-2 pr-3">版本</th><th className="py-2 pr-3">状态</th><th className="py-2 pr-3">规则哈希</th><th className="py-2 pr-3">原因</th><th className="py-2 text-right">操作</th></tr></thead>
+                <tbody>
+                  {versions.map(version => (
+                    <tr key={version.version} className="border-b border-border-subtle last:border-b-0">
+                      <td className="py-2 pr-3">v{version.version}</td>
+                      <td className="py-2 pr-3">{version.status === 'published' ? '已发布' : version.status === 'rolled_back' ? '已回滚' : '待审核'}</td>
+                      <td className="py-2 pr-3 font-mono text-text-muted">{version.rules_hash.slice(0, 12)}</td>
+                      <td className="py-2 pr-3 text-text-secondary max-w-72 truncate" title={version.reason}>{version.reason || '-'}</td>
+                      <td className="py-2 text-right whitespace-nowrap">
+                        {version.status === 'draft' && version.version != null && <button onClick={() => { setGovernanceNotice(version); setPublishReason('审核通过后发布') }} className="text-accent hover:underline mr-3">发布</button>}
+                        {version.status === 'rolled_back' && version.version != null && <button onClick={() => rollbackVersion(version.version!)} className="text-amber-600 hover:underline">回滚到此版</button>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        )}
       </div>
 
       {/* 筛选栏 */}
@@ -378,7 +523,7 @@ export default function KeywordsPage() {
                                     <td className="px-4 py-2 text-right whitespace-nowrap">
                                       <button onClick={() => openEditWith(r)} className="p-1.5 rounded-md hover:bg-black/5 text-text-secondary" title="编辑"><Pencil size={13} /></button>
                                       <button onClick={() => toggle(r)} className="p-1.5 rounded-md hover:bg-black/5 text-text-secondary" title={r.enabled ? '停用' : '启用'}><Power size={13} /></button>
-                                      <button onClick={() => setDeleteTarget(r)} className="p-1.5 rounded-md hover:bg-red-50 text-red-500" title="删除"><Trash2 size={13} /></button>
+                                      <button onClick={() => { setDeleteTarget(r); setDeleteReason('') }} className="p-1.5 rounded-md hover:bg-red-50 text-red-500" title="删除"><Trash2 size={13} /></button>
                                     </td>
                                   </tr>
                                 ))}
@@ -437,8 +582,8 @@ export default function KeywordsPage() {
               </div>
               <div className="flex gap-3">
                 <div className="flex-1">
-                  <label className="text-xs text-text-secondary">权重（1-20，越高越影响分类）</label>
-                  <input type="number" min={1} max={20} value={editing.weight} onChange={e => setEditing({ ...editing, weight: parseInt(e.target.value, 10) || 1 })} className={`${INPUT_CLS} w-full mt-1`} />
+                  <label className="text-xs text-text-secondary">权重（1-10，越高越影响分类）</label>
+                  <input type="number" min={1} max={10} value={editing.weight} onChange={e => setEditing({ ...editing, weight: parseInt(e.target.value, 10) || 1 })} className={`${INPUT_CLS} w-full mt-1`} />
                 </div>
                 <div className="flex-1">
                   <label className="text-xs text-text-secondary">状态</label>
@@ -447,6 +592,10 @@ export default function KeywordsPage() {
                     <option value={0}>停用</option>
                   </select>
                 </div>
+              </div>
+              <div>
+                <label className="text-xs text-text-secondary">变更原因 *</label>
+                <input value={changeReason} onChange={e => setChangeReason(e.target.value)} className={`${INPUT_CLS} w-full mt-1`} placeholder="说明为什么新增或修改该规则" />
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-1">
@@ -476,12 +625,16 @@ export default function KeywordsPage() {
               </div>
               <div className="flex-1">
                 <label className="text-xs text-text-secondary">默认权重</label>
-                <input type="number" min={1} max={20} value={batchWeight} onChange={e => setBatchWeight(parseInt(e.target.value, 10) || 1)} className={`${INPUT_CLS} w-full mt-1`} />
+                <input type="number" min={1} max={10} value={batchWeight} onChange={e => setBatchWeight(parseInt(e.target.value, 10) || 1)} className={`${INPUT_CLS} w-full mt-1`} />
               </div>
             </div>
             <div>
               <label className="text-xs text-text-secondary">每行一条，格式：<code>关键词,文档类型,分类,权重</code>（后三项可省略）</label>
               <textarea value={batchText} onChange={e => setBatchText(e.target.value)} rows={8} className={`${INPUT_CLS} w-full mt-1 font-mono leading-relaxed`} placeholder={'违约责任,legal,法务,10\n数据安全法,compliance,,8\n退款流程'} />
+            </div>
+            <div>
+              <label className="text-xs text-text-secondary">变更原因 *</label>
+              <input value={batchReason} onChange={e => setBatchReason(e.target.value)} className={`${INPUT_CLS} w-full mt-1`} placeholder="说明本批规则的业务目的" />
             </div>
             <div className="flex justify-end gap-2 pt-1">
               <button onClick={() => setBatchOpen(false)} className={BTN_SECONDARY} disabled={saving}>取消</button>
@@ -499,6 +652,10 @@ export default function KeywordsPage() {
           <div className={`${CARD_CLS} shadow-xl rounded-2xl w-full max-w-sm p-5 space-y-4`} onClick={e => e.stopPropagation()}>
             <h3 className="font-semibold text-sm">删除关键词</h3>
             <p className="text-xs text-text-secondary leading-relaxed">确认删除「{deleteTarget.keyword}」？该词将不再参与文档类型分类与检索关键词抽取。</p>
+            <div>
+              <label className="text-xs text-text-secondary">变更原因 *</label>
+              <input value={deleteReason} onChange={e => setDeleteReason(e.target.value)} className={`${INPUT_CLS} w-full mt-1`} placeholder="说明为什么移除该规则" />
+            </div>
             <div className="flex justify-end gap-2">
               <button onClick={() => setDeleteTarget(null)} className={BTN_SECONDARY}>取消</button>
               <button onClick={confirmDelete} className={BTN_DANGER}>删除</button>
