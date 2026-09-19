@@ -238,24 +238,31 @@ def validate_startup_settings() -> List[str]:
             f"ALERT_WEBHOOK_URL={s.alerts.webhook_url!r} 不是 http(s) URL，webhook 推送将失败"
         )
 
-    # tool_selector 专用模型配置校验（warning 级：配错安全回退全局模型，
-    # 但静默回退会让"以为在用 flash 实际在用主力模型"的问题无法察觉）
-    _tool_selector_model = _env("TOOL_SELECTOR_MODEL").strip()
-    if _tool_selector_model:
-        from backend.infra.llm.models import get_provider_api_key_env, is_registered_model
+    # ── 模型角色配置校验（2026-09-19：从"只查 tool_selector 一处"扩到全角色）──
+    # 改造前只有 TOOL_SELECTOR_MODEL 在启动期校验；其余角色（尤其
+    # LLM_FALLBACK_MODEL）「须在 AVAILABLE_MODELS 注册」只是 .env 里的一句注释，
+    # 无任何强制 —— 配错时表现为静默回退或首次调用才构建失败，排查成本高。
+    # 见 docs/model-config-governance-design.md §1.1 / §8。
+    from backend.config import model_roles
+    from backend.infra.llm.models import get_provider_api_key_env
 
-        if not is_registered_model(_tool_selector_model):
+    # ① 注册表校验：模型名必须在 AVAILABLE_MODELS 内（合法集随代码变化）
+    warnings.extend(model_roles.validate_roles())
+    # ② 密钥可达性：模型已注册但对应 Key 未配置，同样要等到调用时才暴露
+    for _role, _rspec in model_roles.MODEL_ROLES.items():
+        if _rspec.validator is None:
+            continue          # embedding/rerank/ocr 的模型不在注册表，不在此判定
+        _resolved = model_roles.resolve_effective(_role)["value"]
+        if not _resolved:
+            continue
+        _key_env = get_provider_api_key_env(_resolved)
+        if _key_env and not _env(_key_env):
+            _fate = ("将回退其跟随的角色" if _rspec.inherit
+                     else "该链路将在调用时失败")
             warnings.append(
-                f"TOOL_SELECTOR_MODEL={_tool_selector_model} 未在 AVAILABLE_MODELS "
-                f"注册，tool_selector 将回退全局模型"
+                f"模型角色 {_role}（{_rspec.env_key}）使用 {_resolved}，"
+                f"但 {_key_env} 未配置，{_fate}"
             )
-        else:
-            _key_env = get_provider_api_key_env(_tool_selector_model)
-            if _key_env and not _env(_key_env):
-                warnings.append(
-                    f"TOOL_SELECTOR_MODEL={_tool_selector_model} 需要 {_key_env}"
-                    f"（当前为空），tool_selector 将回退全局模型"
-                )
 
     # ── checkpointer 后端可用性（warning 级）──
     # LangGraph 的 PostgresSaver 需要 psycopg v3 + langgraph-checkpoint-postgres。

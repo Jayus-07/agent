@@ -8,6 +8,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# 模型角色解析（唯一入口，见 backend/config/model_roles.py）。
+# 用 resolve_name（字面值）保留空串语义，理由同 config/llm.py。
+from backend.config.model_roles import resolve_name as _literal_model
+
 # ====================================
 # RAG 服务化（阶段 1：独立部署，backend/services/rag_server.py）
 # ====================================
@@ -73,7 +77,8 @@ RAG_OCR_DPI = int(os.getenv("RAG_OCR_DPI", "200"))
 RAG_OCR_MAX_PAGES = int(os.getenv("RAG_OCR_MAX_PAGES", "100"))
 # DashScope 备选配置（key 依次取 OCR_DASHSCOPE_API_KEY → DASHSCOPE_API_KEY
 # → EMBEDDING_API_KEY，通常为同一阿里云账号）
-RAG_OCR_DASHSCOPE_MODEL = os.getenv("RAG_OCR_DASHSCOPE_MODEL", "qwen-vl-max")
+# 模型名走角色注册表（role=ocr，代码默认 qwen-vl-max）
+RAG_OCR_DASHSCOPE_MODEL = _literal_model("ocr")
 RAG_OCR_DASHSCOPE_BASE_URL = os.getenv(
     "RAG_OCR_DASHSCOPE_BASE_URL",
     "https://dashscope.aliyuncs.com/compatible-mode/v1")
@@ -88,7 +93,9 @@ RAG_CONSISTENCY_SWEEP_FIRST_DELAY_MIN = int(os.getenv("RAG_CONSISTENCY_SWEEP_FIR
 RAG_CONSISTENCY_SWEEP_INTERVAL_HOURS = int(os.getenv("RAG_CONSISTENCY_SWEEP_INTERVAL_HOURS", "6"))
 
 # 文档级关键词 LLM 模型 — 设了用本地 Ollama（免费），不设走 _LLMProxy（当前 DeepSeek）
-DOC_LLM_MODEL = os.getenv("DOC_LLM_MODEL", "")
+# 模型名走角色注册表（role=doc，空值 = 跟随 main，且空值本身有语义：
+# 消费方用 `if DOC_LLM_MODEL:` 判断是否启用本地 Ollama，故此处保留空串）
+DOC_LLM_MODEL = _literal_model("doc")
 
 # ====================================
 # 阶段2：元数据统一 LLM 抽取（metadata_llm.py）

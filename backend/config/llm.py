@@ -12,6 +12,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# 模型角色解析（唯一入口，见 backend/config/model_roles.py）。
+# 用 `resolve_name`（= 字面值）而非 `resolve_effective`：本文件的常量是**字面值**，
+# 其空串在消费方手里有语义（如 `if DOC_LLM_MODEL:` 判断是否启用本地 Ollama），
+# 展开成"继承主问答模型"会改变行为。需要实际生效模型时用 resolve_effective。
+# 直接 import 子模块（而非 from backend.config import ...），避免
+# config/__init__.py 的循环导入歧义。
+from backend.config.model_roles import resolve_name as _literal_model
+
 # =====================================================
 # Runtime Mode (P0 - 双模式控制)
 # =====================================================
@@ -62,7 +70,8 @@ elif _OLLAMA_ENABLED_RAW in ("0", "false", "no"):
 else:
     OLLAMA_ENABLED = ENV_MODE == "local"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+# 模型名走角色注册表（role=eval_gen，代码默认 qwen2.5:3b）
+OLLAMA_MODEL = _literal_model("eval_gen")
 # 模型驻留时长（避免空闲卸载后重载权重的冷启动 TTFT 飙升）；"30m" / "-1"（常驻）
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 
@@ -70,10 +79,8 @@ OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 # Embedding Configuration (P0 - 动态配置)
 # =====================================================
 
-EMBEDDING_MODEL = os.getenv(
-    "EMBEDDING_MODEL",
-    "text-embedding-v3",  # Cloud 模式默认模型
-)
+# 模型名走角色注册表（role=embedding，代码默认 text-embedding-v3）
+EMBEDDING_MODEL = _literal_model("embedding")
 
 EMBEDDING_API_BASE = os.getenv(
     "EMBEDDING_API_BASE",
@@ -104,10 +111,8 @@ EMBEDDING_REQUEST_TIMEOUT = float(
 # Rerank Configuration (P0 - 动态配置)
 # =====================================================
 
-RERANK_MODEL = os.getenv(
-    "RERANK_MODEL",
-    "qwen3-rerank",  # Cloud 模式默认模型
-)
+# 模型名走角色注册表（role=rerank，代码默认 qwen3-rerank）
+RERANK_MODEL = _literal_model("rerank")
 
 # Rerank API 协议格式：
 #   dashscope → 阿里云百炼（endpoint = base + /services/rerank/text-rerank/text-rerank）
@@ -162,7 +167,8 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # 模型参数
-LLM_MODEL = os.getenv("LLM_MODEL", "MiniMax-M3")
+# 主问答模型走角色注册表（role=main，代码默认 MiniMax-M3）
+LLM_MODEL = _literal_model("main")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 LLM_CONTEXT_LENGTH = int(os.getenv("LLM_CONTEXT_LENGTH", "4096"))
 
@@ -221,7 +227,8 @@ TOOL_SELECTOR_LLM_TIMEOUT = int(os.getenv("TOOL_SELECTOR_LLM_TIMEOUT", "8"))
 TOOL_SELECTOR_LLM_MAX_TOKENS = int(os.getenv("TOOL_SELECTOR_LLM_MAX_TOKENS", "512"))
 # 选择+填参是小任务，可指定低延迟模型（推荐已注册的 deepseek-v4-flash）；
 # 空 = 跟随全局默认模型。未注册/构建失败自动回退全局模型
-TOOL_SELECTOR_MODEL = os.getenv("TOOL_SELECTOR_MODEL", "").strip()
+# 模型名走角色注册表（role=tool_selector，空值 = 跟随 main，空值有语义）
+TOOL_SELECTOR_MODEL = _literal_model("tool_selector")
 # 灰度放量（照 cs_prefilter 模式）：白名单 session 优先，其余按
 # md5(session_id) 稳定哈希百分比。默认 100 = 全量；0 = 全部直通（回旧行为）
 FC_TOOL_SELECTION_ROLLOUT_PERCENT = int(
@@ -297,7 +304,8 @@ LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "1"))
 LLM_RETRY_BACKOFF_BASE = float(os.getenv("LLM_RETRY_BACKOFF_BASE", "0.5"))
 # 熔断开路/重试耗尽后的备用模型（须是 AVAILABLE_MODELS 中的模型名；
 # 留空 = 不切备用模型，直接按 LLM_ALLOW_DEGRADED_ANSWER 处理）
-LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "")
+# 模型名走角色注册表（role=fallback，空值有语义）；注册校验见 config/startup.py
+LLM_FALLBACK_MODEL = _literal_model("fallback")
 # 是否允许最终降级为固定话术（默认 False = fail-fast，把原始异常抛给调用方）。
 #
 # 2026-09-15 默认值由 true 改为 false（线上实测教训）：

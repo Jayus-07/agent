@@ -34,6 +34,19 @@ from backend.shared.logger import logger
 # ── 开关注册表（唯一事实源）─────────────────────────────────
 # env_key: {allowed: 合法值白名单, default: env 未设置时的缺省, desc: 说明}
 # 新增守卫开关：在此登记 → 路由读 get_mode() → 前端 overview 自动可切。
+#
+# 登记项可选扩展字段（2026-09-19 新增，供模型角色等非守卫登记项使用，
+# 守卫开关不使用、行为与历史完全一致）：
+#   case_sensitive: True 时不做小写归一（模型名大小写敏感）
+#   validator:      可调用 (str) -> bool，替代 allowed（合法集动态变化时用）
+# 详见 docs/model-config-governance-design.md §1.1。
+#
+# ⚠️ 模型角色**不登记在本表**，而是登记在 backend/config/model_roles.py：
+#   1. 本表是守卫开关注册表，GET /sys/config 的返回集合被测试断言为恰好两项
+#      （tests/api/test_sys_config_admin.py::test_get_config_lists_registered_switches）；
+#   2. 模型名大小写敏感、合法集来自 AVAILABLE_MODELS，需要上面两个扩展点；
+#   3. 模型角色的解析入口是 model_roles.resolve_model，热路径在配置导入链上，
+#      不能依赖本模块（本模块 import SQLAlchemy + asyncio，会拖重配置导入）。
 
 _SWITCHES: dict[str, dict[str, Any]] = {
     "JWT_SESSION_GUARD_MODE": {
@@ -57,13 +70,34 @@ _db_meta: dict[str, dict[str, Any]] = {}   # key → {updatedAt, updatedBy}（DB
 _refresh_lock = asyncio.Lock()
 
 
+def _normalize_with(spec: dict[str, Any] | None, raw: Any) -> str | None:
+    """通用值校验（spec 形状见 _SWITCHES，扩展点见模块内说明）。
+
+    - 静态白名单：`spec["allowed"]` 元组
+    - 函数式校验：`spec["validator"]`（可调用，与 allowed 二选一）——
+      用于**合法集随代码变化**的登记项，如模型角色（合法集 = AVAILABLE_MODELS）
+    - 大小写：`case_sensitive=True` 时保留原大小写。模型名
+      `MiniMax-M3` / `Qwen/Qwen3-32B` / `BAAI/bge-m3` 一律不得被 lower 破坏；
+      缺省沿用守卫开关的历史行为（小写归一）。
+
+    非法值一律返回 None，由调用方回退默认并告警（fail-closed）。
+    """
+    if spec is None:
+        return None
+    value = str(raw) if raw is not None else ""
+    value = value.strip() if spec.get("case_sensitive") else value.strip().lower()
+    validator = spec.get("validator")
+    if validator is not None:
+        return value if validator(value) else None
+    return value if value in spec.get("allowed", ()) else None
+
+
 def _env_default(env_key: str) -> str:
-    """env 兜底值（白名单校验，非法 env 值回落注册表缺省）。"""
+    """env 兜底值（校验，非法 env 值回落注册表缺省）。"""
     spec = _SWITCHES.get(env_key)
     if spec is None:
         return ""
-    raw = os.getenv(env_key, "").strip().lower()
-    return raw if raw in spec["allowed"] else spec["default"]
+    return _normalize_with(spec, os.getenv(env_key, "")) or spec["default"]
 
 
 def get_mode(env_key: str) -> str:
@@ -89,19 +123,15 @@ def get_info(env_key: str) -> dict[str, Any]:
     if env_key in _values:
         meta = _db_meta.get(env_key) or {}
         return {"mode": _values[env_key], "source": "db",
-                "allowed": list(spec["allowed"]),
+                "allowed": list(spec.get("allowed", ())),
                 "updatedAt": meta.get("updatedAt"), "updatedBy": meta.get("updatedBy")}
     return {"mode": _env_default(env_key), "source": "env-default",
-            "allowed": list(spec["allowed"]), "updatedAt": None, "updatedBy": None}
+            "allowed": list(spec.get("allowed", ())), "updatedAt": None, "updatedBy": None}
 
 
 def _normalize(env_key: str, raw: Any) -> str | None:
     """白名单校验；非法返回 None（调用方回退默认并告警）。"""
-    spec = _SWITCHES.get(env_key)
-    if spec is None:
-        return None
-    v = (str(raw) if raw is not None else "").strip().lower()
-    return v if v in spec["allowed"] else None
+    return _normalize_with(_SWITCHES.get(env_key), raw)
 
 
 async def _ensure_tables(session) -> None:
