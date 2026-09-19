@@ -144,6 +144,7 @@ routes:
   # WS 长连接：复用 app_chat upstream（600s read/send），APISIX 原生支持 upgrade。
   - id: cs-ws
     uri: /ws/cs/*
+    enable_websocket: true
     upstream_id: app_chat
     plugins:
       prometheus: {}
