@@ -137,3 +137,58 @@ D:/Python/python.exe -m pytest tests/customer_service/test_cs_dispatch_schema.py
 - 若某环境已经执行过本修复前的 028 版本，旧版本遗留的单列外键可能继续存在；本任务遵循禁止破坏性重建/无条件 DROP，需在正式割接前用独立、经批准的约束清理迁移核对该历史状态。
 - 生产存量中的非 NULL 跨租户引用会按设计阻断升级，需要先完成租户归属修复；本轮已用真实 PostgreSQL 回归证明不会静默放行。
 - `event_seq` 单调生成和真实生产存量清理仍由后续任务/运维流程负责，本轮未改变该边界。
+
+## Task 1 fix round 2：审查意见修复
+
+### 修复内容
+
+1. 恢复坐席删除的历史非破坏语义。ORM 的 handoff/assignment 租户复合 agent FK 使用 `ON DELETE SET NULL (assigned_agent_id)` / `ON DELETE SET NULL (agent_id)`；原生 028 使用同样的 PostgreSQL 列级 `SET NULL` 动作，只清空可空的 agent 列而保留非空 `tenant_id`。这避免了直接对复合键整体 `SET NULL` 时把 tenant_id 置 NULL。
+2. assignment 的旧 `conversation_id` 单列 FK 也改为租户复合 FK，新增 conversations 父端 `(tenant_id, conversation_id)` 唯一索引与 ORM `ForeignKeyConstraint`，保持原有 `ON DELETE CASCADE`。
+3. 028 在添加新复合 FK 前，以 `DROP CONSTRAINT IF EXISTS` 条件删除 0003 的 `assignments_conversation_id_fkey`、`assignments_agent_id_fkey`，并兼容早期 028 的 `fk_cs_assignment_handoff`。只删除约束，不删除表或数据；重复执行安全。新增历史链 schema inspection 测试实际执行 0001–0022，再执行 0023 两次，确认 assignment 不再存在任何单列 FK，仅保留三条租户复合 FK，并确认历史行保留。
+
+### Fix round 2 TDD 红灯
+
+先运行新增回归契约：
+
+```text
+D:/Python/python.exe -m pytest tests/customer_service/test_cs_dispatch_schema.py -q --no-cov
+3 failed, 10 passed in 13.42s
+```
+
+红灯暴露了 ORM 复合 agent FK 缺失删除动作、原生迁移尚无 conversation 租户复合关系/旧约束清理；历史链测试初版还校验出 0003 迁移要求其 006 前置状态已是 `open`，随后将测试前置数据调整为该历史迁移的有效输入，未放宽生产断言。
+
+### Fix round 2 绿灯与验证
+
+聚焦迁移测试：
+
+```text
+D:/Python/python.exe -m pytest tests/customer_service/test_cs_dispatch_schema.py -q --no-cov
+.............                                                            [100%]
+13 passed in 10.81s
+```
+
+brief 指定回归命令（本轮新增 1 条历史链测试，因此选择集由原 53 项变为 54 项）：
+
+```text
+D:/Python/python.exe -m pytest tests/customer_service/test_cs_dispatch_schema.py tests/customer_service/test_models.py tests/customer_service/test_handoff_repo.py tests/customer_service/test_event_outbox.py -q --no-cov
+......................................................                   [100%]
+54 passed in 11.24s
+```
+
+必要编译检查：5 个 ORM 模型与 0023 Alembic 迁移通过 `D:/Python/python.exe -m py_compile ...`，退出码 0；`git diff --check` 退出码 0。
+
+### Fix round 2 修改文件
+
+- `backend/customer_service/models/assignment.py`
+- `backend/customer_service/models/conversation.py`
+- `backend/customer_service/models/handoff.py`
+- `backend/sql/migrations/028_cs_dispatch.sql`
+- `backend/tests/customer_service/test_cs_dispatch_schema.py`
+
+0023 Alembic wrapper 无需另改，仍以 028 原生 SQL 为唯一实现源；用户已有 0014–0022、027 overlay 未修改、未加入提交。
+
+### Fix round 2 迁移假设与风险
+
+1. 目标 PostgreSQL 支持列级 `ON DELETE SET NULL (column_name)` 语法；当前项目 PostgreSQL 18 环境已通过真实删除回归。若部署到更旧 PostgreSQL，需要先验证该语法或采用等价触发器方案。
+2. 旧 assignment 单列 FK 的历史名称按 0003/早期 028 实际生成名清理；清理使用 `IF EXISTS`，不会删除 assignment 行。新复合 FK 添加前仍会对 tenant 不一致/孤儿引用显式阻断迁移。
+3. 完整历史链回归使用工作树提供的 0014–0022 overlay 作为只读基线，测试证明从 0001 到 0022 再到 0023 的 assignment FK 结果；这些 overlay 仍不属于本任务提交。

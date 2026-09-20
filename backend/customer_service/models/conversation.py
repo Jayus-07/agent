@@ -41,6 +41,12 @@ class CSConversation(CSBase):
             "conversation_status",
             "updated_at",
         ),
+        Index(
+            "uq_cs_conversation_tenant_conversation_id",
+            "tenant_id",
+            "conversation_id",
+            unique=True,
+        ),
         Index("idx_cs_conv_agent", "assigned_agent_id",
               postgresql_where=text("assigned_agent_id IS NOT NULL")),
         {"schema": "customer_service"},

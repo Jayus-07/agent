@@ -9,7 +9,6 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
-    ForeignKey,
     ForeignKeyConstraint,
     Index,
     Integer,
@@ -58,6 +57,16 @@ class CSAssignment(CSBase):
                 "customer_service.cs_agents.agent_id",
             ],
             name="fk_cs_assignment_tenant_agent",
+            ondelete="SET NULL (agent_id)",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "conversation_id"],
+            [
+                "customer_service.conversations.tenant_id",
+                "customer_service.conversations.conversation_id",
+            ],
+            name="fk_cs_assignment_tenant_conversation",
+            ondelete="CASCADE",
         ),
         Index("idx_cs_assign_conv", "conversation_id", "assigned_at"),
         Index("idx_cs_assign_agent", "agent_id", "assigned_at"),
@@ -82,11 +91,7 @@ class CSAssignment(CSBase):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     tenant_id = Column(String(64), nullable=False, default="default")
     handoff_id = Column(String(64), nullable=True)
-    conversation_id = Column(
-        String(64),
-        ForeignKey("customer_service.conversations.conversation_id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    conversation_id = Column(String(64), nullable=False)
     agent_id = Column(String(64), nullable=True)
 
     state = Column(

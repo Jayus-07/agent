@@ -74,9 +74,7 @@ CREATE TABLE IF NOT EXISTS customer_service.assignments (
     id                  BIGSERIAL PRIMARY KEY,
     tenant_id           VARCHAR(64) NOT NULL DEFAULT 'default',
     handoff_id          VARCHAR(64),
-    conversation_id     VARCHAR(64) NOT NULL
-                        REFERENCES customer_service.conversations(conversation_id)
-                        ON DELETE CASCADE,
+    conversation_id     VARCHAR(64) NOT NULL,
     agent_id            VARCHAR(64),
     state               VARCHAR(20) NOT NULL DEFAULT 'offered',
     attempt_no          INTEGER NOT NULL DEFAULT 1,
@@ -248,8 +246,17 @@ END $$;
 -- 复合键的父端唯一索引必须先存在，才能添加复合外键。
 CREATE UNIQUE INDEX IF NOT EXISTS uq_cs_agent_tenant_agent_id
     ON customer_service.cs_agents (tenant_id, agent_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cs_conversation_tenant_conversation_id
+    ON customer_service.conversations (tenant_id, conversation_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_cs_handoff_tenant_handoff_id
     ON customer_service.handoffs (tenant_id, handoff_id);
+
+-- 0003 及早期 028 的单列 assignment 外键不再表达租户边界。
+-- 仅删除约束，不删除表或行；IF EXISTS 保证升级可重复执行。
+ALTER TABLE customer_service.assignments
+    DROP CONSTRAINT IF EXISTS assignments_conversation_id_fkey,
+    DROP CONSTRAINT IF EXISTS assignments_agent_id_fkey,
+    DROP CONSTRAINT IF EXISTS fk_cs_assignment_handoff;
 
 DO $$
 BEGIN
@@ -276,7 +283,34 @@ BEGIN
         ALTER TABLE customer_service.handoffs
             ADD CONSTRAINT fk_cs_handoff_tenant_agent
             FOREIGN KEY (tenant_id, assigned_agent_id)
-            REFERENCES customer_service.cs_agents(tenant_id, agent_id);
+            REFERENCES customer_service.cs_agents(tenant_id, agent_id)
+            ON DELETE SET NULL (assigned_agent_id);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'customer_service.assignments'::regclass
+          AND conname = 'fk_cs_assignment_tenant_conversation'
+    ) THEN
+        IF EXISTS (
+            SELECT 1
+            FROM customer_service.assignments a
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM customer_service.conversations c
+                WHERE c.tenant_id = a.tenant_id
+                  AND c.conversation_id = a.conversation_id
+            )
+        ) THEN
+            RAISE EXCEPTION
+                'customer_service.assignments has orphan tenant/conversation_id values';
+        END IF;
+        ALTER TABLE customer_service.assignments
+            ADD CONSTRAINT fk_cs_assignment_tenant_conversation
+            FOREIGN KEY (tenant_id, conversation_id)
+            REFERENCES customer_service.conversations(tenant_id, conversation_id)
+            ON DELETE CASCADE;
     END IF;
 
     IF NOT EXISTS (
@@ -329,7 +363,8 @@ BEGIN
         ALTER TABLE customer_service.assignments
             ADD CONSTRAINT fk_cs_assignment_tenant_agent
             FOREIGN KEY (tenant_id, agent_id)
-            REFERENCES customer_service.cs_agents(tenant_id, agent_id);
+            REFERENCES customer_service.cs_agents(tenant_id, agent_id)
+            ON DELETE SET NULL (agent_id);
     END IF;
 
     IF NOT EXISTS (

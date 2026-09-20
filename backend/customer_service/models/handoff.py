@@ -71,6 +71,7 @@ class CSHandoff(CSBase):
                 "customer_service.cs_agents.agent_id",
             ],
             name="fk_cs_handoff_tenant_agent",
+            ondelete="SET NULL (assigned_agent_id)",
         ),
         {"schema": "customer_service"},
     )

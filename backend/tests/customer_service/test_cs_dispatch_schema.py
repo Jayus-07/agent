@@ -27,6 +27,17 @@ from backend.customer_service.models.handoff import CSHandoff, HANDOFF_STATES
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 NATIVE_MIGRATION = BACKEND_ROOT / "sql" / "migrations" / "028_cs_dispatch.sql"
+HISTORICAL_CHAIN = tuple(
+    sorted(
+        (
+            path
+            for path in (BACKEND_ROOT / "sql" / "alembic" / "memory" / "versions")
+            .glob("*.py")
+            if path.name[:4].isdigit() and int(path.name[:4]) < 23
+        ),
+        key=lambda path: int(path.name[:4]),
+    )
+)
 ALEMBIC_MIGRATION = (
     BACKEND_ROOT
     / "sql"
@@ -62,15 +73,19 @@ def _constraint(model, name: str):
     raise AssertionError(f"{model.__name__} 缺少约束 {name}")
 
 
-def _load_alembic_migration():
-    assert ALEMBIC_MIGRATION.exists(), f"缺少 Alembic 迁移: {ALEMBIC_MIGRATION}"
+def _load_migration(path: Path, module_name: str):
+    assert path.exists(), f"缺少 Alembic 迁移: {path}"
     spec = importlib.util.spec_from_file_location(
-        "cs_dispatch_migration", ALEMBIC_MIGRATION
+        module_name, path
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _load_alembic_migration():
+    return _load_migration(ALEMBIC_MIGRATION, "cs_dispatch_migration")
 
 
 def _literal_assignment(tree: ast.Module, name: str):
@@ -208,6 +223,7 @@ def test_dispatch_relationships_use_tenant_scoped_foreign_keys():
         "customer_service.cs_agents.tenant_id",
         "customer_service.cs_agents.agent_id",
     ]
+    assert handoff_agent.ondelete == "SET NULL (assigned_agent_id)"
 
     assignment_handoff = _constraint(
         CSAssignment, "fk_cs_assignment_tenant_handoff"
@@ -217,9 +233,21 @@ def test_dispatch_relationships_use_tenant_scoped_foreign_keys():
     assignment_agent = _constraint(CSAssignment, "fk_cs_assignment_tenant_agent")
     assert isinstance(assignment_agent, ForeignKeyConstraint)
     assert assignment_agent.column_keys == ["tenant_id", "agent_id"]
+    assert assignment_agent.ondelete == "SET NULL (agent_id)"
+
+    assignment_conversation = _constraint(
+        CSAssignment, "fk_cs_assignment_tenant_conversation"
+    )
+    assert isinstance(assignment_conversation, ForeignKeyConstraint)
+    assert assignment_conversation.column_keys == [
+        "tenant_id",
+        "conversation_id",
+    ]
+    assert assignment_conversation.ondelete == "CASCADE"
 
     _index(CSAgent, "uq_cs_agent_tenant_agent_id")
     _index(CSHandoff, "uq_cs_handoff_tenant_handoff_id")
+    _index(CSConversation, "uq_cs_conversation_tenant_conversation_id")
 
 
 def test_event_model_exposes_tenant_event_sequence_and_outbox_contract():
@@ -303,7 +331,10 @@ def test_native_migration_is_idempotent_and_contains_dispatch_contract():
     assert "ADD COLUMN IF NOT EXISTS" in normalized
     assert "CREATE INDEX IF NOT EXISTS" in normalized
     assert "CREATE UNIQUE INDEX IF NOT EXISTS" in normalized
-    assert not re.search(r"\bDROP\s+(TABLE|INDEX|COLUMN|CONSTRAINT)\b", normalized)
+    assert not re.search(
+        r"\bDROP\s+(TABLE|INDEX|COLUMN|CONSTRAINT)\s+(?!IF\s+EXISTS\b)",
+        normalized,
+    )
 
     required_columns = {
         "handoffs": {
@@ -370,6 +401,7 @@ def test_native_migration_is_idempotent_and_contains_dispatch_contract():
         "IDX_CS_AGENT_TENANT_STATUS",
         "UQ_CS_AGENT_TENANT_AGENT_ID",
         "UQ_CS_AGENT_TENANT_AUTH_USER",
+        "UQ_CS_CONVERSATION_TENANT_CONVERSATION_ID",
         "UQ_CS_HANDOFF_TENANT_HANDOFF_ID",
         "UQ_CS_ASSIGNMENT_TENANT_HANDOFF_ACTIVE",
         "IDX_CS_ASSIGNMENT_TENANT_AGENT_STATE",
@@ -384,8 +416,24 @@ def test_native_migration_is_idempotent_and_contains_dispatch_contract():
     assert "SET STATE = 'RELEASED'" in normalized
     assert "FK_CS_ASSIGNMENT_TENANT_HANDOFF" in normalized
     assert "FK_CS_ASSIGNMENT_TENANT_AGENT" in normalized
+    assert "FK_CS_ASSIGNMENT_TENANT_CONVERSATION" in normalized
     assert "FK_CS_HANDOFF_TENANT_AGENT" in normalized
     assert "TENANT_ID, HANDOFF_ID, EVENT_SEQ" in normalized
+    assert "DROP CONSTRAINT IF EXISTS ASSIGNMENTS_CONVERSATION_ID_FKEY" in normalized
+    assert "DROP CONSTRAINT IF EXISTS ASSIGNMENTS_AGENT_ID_FKEY" in normalized
+
+    assert re.search(
+        r"FOREIGN KEY \(TENANT_ID, ASSIGNED_AGENT_ID\).*?"
+        r"ON DELETE SET NULL \(ASSIGNED_AGENT_ID\)",
+        normalized,
+        flags=re.DOTALL,
+    )
+    assert re.search(
+        r"FOREIGN KEY \(TENANT_ID, AGENT_ID\).*?"
+        r"ON DELETE SET NULL \(AGENT_ID\)",
+        normalized,
+        flags=re.DOTALL,
+    )
 
     handoff_create = re.search(
         r"CREATE TABLE IF NOT EXISTS CUSTOMER_SERVICE\.HANDOFFS\s*\(.*?\);",
@@ -477,6 +525,40 @@ def _legacy_schema_sql() -> str:
     """
 
 
+def _historical_006_schema_sql() -> str:
+    """准备 006 raw migration 提供给 0003/0004 的最小前置表。"""
+    return """
+    CREATE SCHEMA customer_service;
+    CREATE TABLE customer_service.conversations (
+        id BIGSERIAL PRIMARY KEY,
+        conversation_id VARCHAR(64) NOT NULL UNIQUE,
+        user_id VARCHAR(64) NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'open',
+        assigned_agent VARCHAR(64),
+        ai_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        closed_at TIMESTAMPTZ
+    );
+    CREATE TABLE customer_service.messages (
+        id BIGSERIAL PRIMARY KEY,
+        conversation_id VARCHAR(64) NOT NULL,
+        role VARCHAR(20) NOT NULL DEFAULT 'user',
+        content TEXT NOT NULL DEFAULT '',
+        intent_domain VARCHAR(64),
+        intent_name VARCHAR(64),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE public.llm_usage (
+        id BIGSERIAL PRIMARY KEY,
+        ts TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    INSERT INTO customer_service.conversations
+        (conversation_id, user_id)
+    VALUES ('historical-conversation', 'historical-user');
+    """
+
+
 @pytest.fixture
 def dispatch_postgres_db():
     """创建临时数据库；不可用时明确 skip，不用 SQLite 伪造迁移验证。"""
@@ -538,14 +620,20 @@ def dispatch_postgres_db():
 
 
 def _run_alembic_upgrade(connection):
-    migration = _load_alembic_migration()
+    _run_migration_upgrade(connection, _load_alembic_migration())
+
+
+def _run_migration_upgrade(connection, migration):
 
     def execute(sql):
         with connection.cursor() as cursor:
             cursor.execute(sql)
         connection.commit()
 
-    migration.op = SimpleNamespace(execute=execute)
+    migration.op = SimpleNamespace(
+        execute=execute,
+        get_bind=lambda: SimpleNamespace(exec_driver_sql=execute),
+    )
     migration.upgrade()
 
 
@@ -610,10 +698,17 @@ def test_alembic_upgrade_handles_legacy_assignments_and_tenant_guards(
         )
         cursor.execute(
             """
+            INSERT INTO customer_service.conversations
+                (conversation_id, user_id, tenant_id)
+            VALUES ('tenant-a-conversation', 'tenant-a-user', 'tenant-a')
+            """
+        )
+        cursor.execute(
+            """
             INSERT INTO customer_service.handoffs
                 (handoff_id, conversation_id, user_id, tenant_id, handoff_state)
             VALUES
-                ('tenant-a-handoff', 'legacy-conversation', 'legacy-user',
+                ('tenant-a-handoff', 'tenant-a-conversation', 'tenant-a-user',
                  'tenant-a', 'waiting_human')
             """
         )
@@ -625,7 +720,7 @@ def test_alembic_upgrade_handles_legacy_assignments_and_tenant_guards(
                 """
                 INSERT INTO customer_service.assignments
                     (tenant_id, handoff_id, conversation_id, agent_id, state)
-                VALUES ('tenant-a', 'tenant-a-handoff', 'legacy-conversation',
+                VALUES ('tenant-a', 'tenant-a-handoff', 'tenant-a-conversation',
                         'tenant-b-agent', 'offered')
                 """
             )
@@ -636,7 +731,7 @@ def test_alembic_upgrade_handles_legacy_assignments_and_tenant_guards(
                 """
                 INSERT INTO customer_service.assignments
                     (tenant_id, handoff_id, conversation_id, agent_id, state)
-                VALUES ('tenant-b', 'tenant-a-handoff', 'legacy-conversation',
+                VALUES ('tenant-b', 'tenant-a-handoff', 'tenant-a-conversation',
                         'tenant-b-agent', 'offered')
                 """
             )
@@ -656,7 +751,7 @@ def test_alembic_upgrade_handles_legacy_assignments_and_tenant_guards(
             """
             INSERT INTO customer_service.assignments
                 (tenant_id, handoff_id, conversation_id, agent_id, state)
-            VALUES ('tenant-a', 'tenant-a-handoff', 'legacy-conversation',
+            VALUES ('tenant-a', 'tenant-a-handoff', 'tenant-a-conversation',
                     'tenant-a-agent', 'offered')
             """
         )
@@ -668,7 +763,7 @@ def test_alembic_upgrade_handles_legacy_assignments_and_tenant_guards(
                 """
                 INSERT INTO customer_service.assignments
                     (tenant_id, handoff_id, conversation_id, agent_id, state)
-                VALUES ('tenant-a', 'tenant-a-handoff', 'legacy-conversation',
+                VALUES ('tenant-a', 'tenant-a-handoff', 'tenant-a-conversation',
                         'tenant-a-agent', 'accepted')
                 """
             )
@@ -711,6 +806,115 @@ def test_empty_database_upgrade_has_one_named_tenant_fk_per_relationship(
             "fk_cs_assignment_tenant_agent",
             "fk_cs_assignment_tenant_handoff",
         ]
+
+
+def test_historical_assignment_fks_are_replaced_before_0023(
+    dispatch_postgres_db,
+):
+    connection = dispatch_postgres_db
+    with connection.cursor() as cursor:
+        cursor.execute(_historical_006_schema_sql())
+    connection.commit()
+
+    assert [int(path.name[:4]) for path in HISTORICAL_CHAIN] == list(
+        range(1, 23)
+    )
+    for path in HISTORICAL_CHAIN:
+        _run_migration_upgrade(
+            connection,
+            _load_migration(path, f"historical_{path.stem}_migration"),
+        )
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO customer_service.cs_agents (agent_id, display_name)
+            VALUES ('historical-agent', 'Historical Agent')
+            """
+        )
+        cursor.execute(
+            """
+            INSERT INTO customer_service.assignments
+                (conversation_id, agent_id)
+            VALUES ('historical-conversation', 'historical-agent')
+            """
+        )
+    connection.commit()
+
+    _run_alembic_upgrade(connection)
+    _run_alembic_upgrade(connection)
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT conname
+            FROM pg_constraint
+            WHERE conrelid = 'customer_service.assignments'::regclass
+              AND contype = 'f'
+              AND array_length(conkey, 1) = 1
+            ORDER BY conname
+            """
+        )
+        assert cursor.fetchall() == []
+
+        cursor.execute(
+            """
+            SELECT conname
+            FROM pg_constraint
+            WHERE conrelid = 'customer_service.assignments'::regclass
+              AND contype = 'f'
+            ORDER BY conname
+            """
+        )
+        assert [row[0] for row in cursor.fetchall()] == [
+            "fk_cs_assignment_tenant_agent",
+            "fk_cs_assignment_tenant_conversation",
+            "fk_cs_assignment_tenant_handoff",
+        ]
+
+        cursor.execute(
+            """
+            SELECT conversation_id, agent_id, tenant_id
+            FROM customer_service.assignments
+            """
+        )
+        assert cursor.fetchall() == [
+            ("historical-conversation", "historical-agent", "default")
+        ]
+
+        cursor.execute(
+            """
+            INSERT INTO customer_service.handoffs
+                (handoff_id, conversation_id, user_id, tenant_id,
+                 assigned_agent_id)
+            VALUES ('historical-handoff', 'historical-conversation',
+                    'historical-user', 'default', 'historical-agent')
+            """
+        )
+
+        cursor.execute(
+            """
+            DELETE FROM customer_service.cs_agents
+            WHERE agent_id = 'historical-agent'
+            """
+        )
+        cursor.execute(
+            """
+            SELECT agent_id, tenant_id
+            FROM customer_service.assignments
+            WHERE conversation_id = 'historical-conversation'
+            """
+        )
+        assert cursor.fetchone() == (None, "default")
+        cursor.execute(
+            """
+            SELECT assigned_agent_id
+            FROM customer_service.handoffs
+            WHERE handoff_id = 'historical-handoff'
+            """
+        )
+        assert cursor.fetchone() == (None,)
+    connection.commit()
 
 
 def test_upgrade_rejects_non_null_active_assignment_duplicates(
