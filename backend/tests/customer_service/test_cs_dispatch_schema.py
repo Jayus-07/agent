@@ -320,7 +320,7 @@ def test_alembic_revision_is_0023_and_leaves_single_head():
             down_revisions.update(down_revision)
 
     assert len([path for path in revisions.values() if path.name == "0023_cs_dispatch.py"]) == 1
-    assert set(revisions) - down_revisions == {"0023"}
+    assert set(revisions) - down_revisions == {"0024"}
 
 
 def test_native_migration_is_idempotent_and_contains_dispatch_contract():

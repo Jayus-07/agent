@@ -6,38 +6,39 @@
 from fastapi import APIRouter
 
 from backend.app.api.routes import (
-    auth_local,
-    chat,
-    sql,
-    rag,
-    report,
-    llm,
-    observability,
-    memory,
-    data,
-    mcp,
+    admin_tasks,
     agents,
+    approvals,
+    auth_local,
     capabilities,
-    workflows,
-    inventory_alerts,
+    chat,
+    competitor,
+    cs_admin,
+    cs_agent_ws,
+    data,
     demo,
+    evaluation,
+    feedback,
+    internal_ai,
+    inventory_alerts,
+    llm,
+    maps,
+    mcp,
+    memory,
+    observability,
+    prompts,
+    rag,
+    rbac,
+    report,
     reports,
     schedules,
-    feedback,
-    competitor,
     selection,
     selection_decision,
     selection_funnel,
-    prompts,
-    cs_admin,
-    cs_agent_ws,
-    evaluation,
-    internal_ai,
-    approvals,
-    maps,
-    tasks,
-    admin_tasks,
+    sql,
     sys_config_admin,
+    tasks,
+    workflows,
 )
 from backend.app.api.routes.health import router as health_router
 from backend.app.api.routes.keyword_routes import router as keyword_router
@@ -47,6 +48,7 @@ api_router = APIRouter()
 # ── 业务路由 ──────────────────────────────────
 api_router.include_router(auth_local.router)  # 自建认证（2026-09-15 拆分，替代 Java auth-service）
 api_router.include_router(auth_local.sys_router)  # 用户中心（register）
+api_router.include_router(rbac.router)  # 管理端 RBAC、客服档案与会话撤销
 api_router.include_router(sys_config_admin.router)  # 灰度开关动态配置（2026-09-16 Lite，管理员闸）
 api_router.include_router(chat.router)
 api_router.include_router(sql.router)

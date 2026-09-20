@@ -23,9 +23,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.app.api.routes import auth_local
 from backend.config.database import MEMORY_DB_CONFIG
 from backend.security.local_jwt import hash_password, verify_access_token
-from backend.app.api.routes import auth_local
 
 ADMIN_HEADERS = {"X-User-Id": "1", "X-User-Roles": "admin"}
 
@@ -293,6 +293,24 @@ def test_s8_list_works_without_redis(env, user, monkeypatch):
     assert r.status_code == 200
     mine = [s for s in r.json()["data"]["sessions"] if s["userId"] == user["id"]]
     assert len(mine) == 1
+
+
+def test_login_and_refresh_user_info_contains_current_rbac_fields(env, user):
+    client, _ = env
+    login_response = _login(client, user)
+    login_info = login_response.json()["data"]["userInfo"]
+    assert login_info["roles"] == ["admin"]
+    assert login_info["platformRole"] == "admin"
+    assert login_info["tenantId"] == "default"
+    assert login_info["csRole"] is None
+
+    refresh_response = client.post("/api/auth/refresh")
+    assert refresh_response.status_code == 200, refresh_response.text
+    refresh_info = refresh_response.json()["data"]["userInfo"]
+    assert refresh_info["roles"] == ["admin"]
+    assert refresh_info["platformRole"] == "admin"
+    assert refresh_info["tenantId"] == "default"
+    assert refresh_info["csRole"] is None
 
 
 # ── 语义补充：logout 撤整个会话 / 索引一致性 ─────────────────
