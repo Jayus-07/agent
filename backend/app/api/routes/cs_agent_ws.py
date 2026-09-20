@@ -18,7 +18,7 @@ from backend.shared.logger import logger
 
 router = APIRouter()
 
-_HEARTBEAT_INTERVAL_SECONDS = 25
+_HEARTBEAT_INTERVAL_SECONDS = 15
 
 
 @router.websocket("/ws/cs/agent")
@@ -29,7 +29,8 @@ async def cs_agent_ws(
     from backend.customer_service.realtime import get_agent_hub
 
     hub = get_agent_hub()
-    if not hub.redeem_ticket(ticket):
+    claims = hub.redeem_ticket_claims(ticket)
+    if not claims:
         # accept 后再带自定义关闭码：accept 前 close 会被 Starlette
         # 折叠成 HTTP 403，客户端拿不到 4401 语义
         await websocket.accept()
@@ -37,7 +38,19 @@ async def cs_agent_ws(
         logger.warning("[AgentWS] reject connection: invalid/expired ticket")
         return
 
-    await hub.connect(websocket)
+    if not hub.refresh_presence(
+        agent_id=claims["agent_id"], tenant_id=claims["tenant_id"]
+    ):
+        await websocket.accept()
+        await websocket.close(code=1013)
+        logger.warning("[AgentWS] reject connection: Redis unavailable")
+        return
+
+    await hub.connect(
+        websocket,
+        agent_id=claims["agent_id"],
+        tenant_id=claims["tenant_id"],
+    )
     try:
         await websocket.send_json({
             "type": "hello",
@@ -48,13 +61,25 @@ async def cs_agent_ws(
         return
 
     heartbeat_task = asyncio.create_task(
-        _heartbeat_loop(websocket), name="agent-ws-heartbeat",
+        _heartbeat_loop(
+            websocket,
+            hub,
+            agent_id=claims["agent_id"],
+            tenant_id=claims["tenant_id"],
+        ),
+        name="agent-ws-heartbeat",
     )
     try:
         while True:
             # 客户端仅发 "ping" 保活；其余消息忽略（上行业务走 HTTP）
             raw = await websocket.receive_text()
             if raw == "ping":
+                if not hub.refresh_presence(
+                    agent_id=claims["agent_id"],
+                    tenant_id=claims["tenant_id"],
+                ):
+                    await websocket.close(code=1013)
+                    break
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
         pass
@@ -65,11 +90,20 @@ async def cs_agent_ws(
         hub.disconnect(websocket)
 
 
-async def _heartbeat_loop(ws: WebSocket) -> None:
+async def _heartbeat_loop(
+    ws: WebSocket,
+    hub,
+    *,
+    agent_id: str,
+    tenant_id: str,
+) -> None:
     """服务端心跳：断连（客户端崩溃/网络中断）时抛异常退出并清理。"""
     try:
         while True:
             await asyncio.sleep(_HEARTBEAT_INTERVAL_SECONDS)
+            if not hub.refresh_presence(agent_id=agent_id, tenant_id=tenant_id):
+                await ws.close(code=1013)
+                return
             await ws.send_json({"type": "heartbeat"})
     except Exception:
         pass

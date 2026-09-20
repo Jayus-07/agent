@@ -577,21 +577,61 @@ async def get_handoff_queue(
 async def issue_agent_ws_ticket(request: Request):
     """签发坐席 WS 一次性连接票据（60s TTL、单次使用）。
 
-    鉴权链：本端点受 X-API-Key 保护（BFF 服务端注入），浏览器持 ticket
-    完成 WS 握手 —— API Key 不进浏览器。路径注册在 /{conversation_id}/*
-    之前，"agent" 不会被当作 conversation_id。
+    鉴权链：JWT/受信服务身份头只提供 user + tenant，坐席 agent_id 必须
+    从 PostgreSQL 的 cs_agents.auth_user_id 反查；浏览器不能提交可信
+    agent_id。浏览器持 ticket 完成 WS 握手，Redis 不可用时拒绝签发。
     """
-    _require_cs_operator(request)
+    agent_id, tenant_id = await _resolve_ws_agent_identity(request)
     from backend.customer_service.realtime import (
         TICKET_TTL_SECONDS,
         get_agent_hub,
     )
 
+    ticket = get_agent_hub().issue_ticket(
+        agent_id=agent_id,
+        tenant_id=tenant_id,
+    )
+    if not ticket:
+        raise HTTPException(503, detail="Realtime ticket service unavailable")
     return {
-        "ticket": get_agent_hub().issue_ticket(),
+        "ticket": ticket,
         "ws_path": "/ws/cs/agent",
         "ttl": TICKET_TTL_SECONDS,
     }
+
+
+async def _resolve_ws_agent_identity(request: Request) -> tuple[str, str]:
+    """从可信 user/tenant 身份反查启用坐席，不接受客户端 agent_id。"""
+    from sqlalchemy import select
+
+    from backend.app.api.identity import resolve_identity
+    from backend.customer_service.models.agent import CSAgent
+    from backend.memory.database import AsyncSessionLocal
+
+    identity = resolve_identity(request)
+    if not identity.authenticated:
+        raise HTTPException(401, detail="未认证：缺少坐席身份")
+    if not identity.tenant_id:
+        raise HTTPException(403, detail="缺少可信租户身份")
+
+    try:
+        async with AsyncSessionLocal() as db:
+            agent_id = (
+                await db.execute(
+                    select(CSAgent.agent_id).where(
+                        CSAgent.tenant_id == identity.tenant_id,
+                        CSAgent.auth_user_id == identity.user_id,
+                        CSAgent.enabled.is_(True),
+                    ).limit(1)
+                )
+            ).scalar_one_or_none()
+    except Exception as exc:
+        logger.warning("[CSAdmin] resolve ws agent failed: %s", exc)
+        raise HTTPException(503, detail="Database unavailable") from exc
+
+    if not agent_id:
+        raise HTTPException(403, detail="当前用户未绑定启用的客服坐席")
+    return str(agent_id), identity.tenant_id
 
 
 @router.post("/{conversation_id}/close")
@@ -613,9 +653,9 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
     try:
         from sqlalchemy import select
 
-        from backend.customer_service.models.handoff import CSHandoff
         from backend.customer_service.models.assignment import CSAssignment
         from backend.customer_service.models.conversation import CSConversation
+        from backend.customer_service.models.handoff import CSHandoff
         from backend.memory.database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db:
@@ -986,8 +1026,8 @@ async def _async_list_conversations(
 ) -> PaginatedConversations:
     from datetime import datetime
 
-    from sqlalchemy import func, select
     from sqlalchemy import desc as desc_col
+    from sqlalchemy import func, select
 
     from backend.customer_service.models.conversation import CSConversation
     from backend.customer_service.models.message import CSMessage
@@ -1175,7 +1215,7 @@ async def _async_get_conversation(conversation_id: str, run_sync):
 
 
 async def _async_get_trace_ids(conversation_id: str, run_sync):
-    from sqlalchemy import select, distinct
+    from sqlalchemy import distinct, select
 
     from backend.customer_service.models.message import CSMessage
     from backend.memory.database import AsyncSessionLocal
@@ -1195,7 +1235,6 @@ async def _async_get_trace_ids(conversation_id: str, run_sync):
 async def _async_handoff_queue(state_list, run_sync):
     from sqlalchemy import select
 
-    from backend.customer_service.models.handoff import CSHandoff
     from backend.customer_service.models.message import CSMessage
     from backend.memory.database import AsyncSessionLocal
 

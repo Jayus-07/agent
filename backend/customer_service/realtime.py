@@ -57,10 +57,19 @@ from datetime import datetime, timezone
 
 from fastapi import WebSocket
 
+from backend.infra.redis.client import get_redis
 from backend.shared.logger import logger
 
 TICKET_TTL_SECONDS = 60
+PRESENCE_TTL_SECONDS = 45
 REDIS_CHANNEL = "cs:events"
+_TICKET_KEY_PREFIX = "cs:agent:ws-ticket:"
+_PRESENCE_KEY_PREFIX = "cs:agent:presence:"
+_GETDEL_LUA = (
+    "local value = redis.call('get', KEYS[1]); "
+    "if value then redis.call('del', KEYS[1]); end; "
+    "return value"
+)
 
 
 def _now_iso() -> str:
@@ -72,7 +81,9 @@ class AgentHub:
 
     def __init__(self) -> None:
         self._connections: set[WebSocket] = set()
-        self._tickets: dict[str, float] = {}  # ticket -> 过期时刻 (monotonic)
+        self._connection_identity: dict[WebSocket, tuple[str, str]] = {}
+        # 仅保留旧 bool API 的过期时间提示；ticket 权威始终是 Redis。
+        self._tickets: dict[str, float] = {}
         self._main_loop: asyncio.AbstractEventLoop | None = None
         self._subscriber_thread: threading.Thread | None = None
 
@@ -86,16 +97,40 @@ class AgentHub:
         if start_subscriber:
             self._ensure_subscriber()
 
-    async def connect(self, ws: WebSocket) -> None:
+    async def connect(
+        self,
+        ws: WebSocket,
+        *,
+        agent_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> bool:
+        """注册带租户边界的坐席连接。
+
+        新 WS 路径必须提供已由 ticket 核销得到的身份；无身份的调用仅
+        保留给旧的单元测试/内部广播兼容，不会进入在线 presence。
+        """
         await ws.accept()
-        self._connections.add(ws)
+        self.register_connection(
+            ws,
+            agent_id=agent_id or "",
+            tenant_id=tenant_id or "",
+        )
         logger.info(
             "[AgentHub] agent connected, total=%d", len(self._connections)
         )
+        return True
+
+    def register_connection(
+        self, ws: WebSocket, *, agent_id: str, tenant_id: str
+    ) -> None:
+        """保存连接身份，广播过滤只信任这份服务端核销结果。"""
+        self._connections.add(ws)
+        self._connection_identity[ws] = (tenant_id, agent_id)
 
     def disconnect(self, ws: WebSocket) -> None:
         if ws in self._connections:
             self._connections.discard(ws)
+            self._connection_identity.pop(ws, None)
             logger.info(
                 "[AgentHub] agent disconnected, total=%d",
                 len(self._connections),
@@ -107,20 +142,121 @@ class AgentHub:
 
     # ── ticket 鉴权 ──────────────────────────────────────────
 
-    def issue_ticket(self) -> str:
+    @staticmethod
+    def ticket_key(token: str) -> str:
+        return f"{_TICKET_KEY_PREFIX}{token}"
+
+    @staticmethod
+    def presence_key(tenant_id: str, agent_id: str) -> str:
+        return f"{_PRESENCE_KEY_PREFIX}{tenant_id}:{agent_id}"
+
+    @staticmethod
+    def _redis():
+        return get_redis()
+
+    def issue_ticket(
+        self,
+        *,
+        agent_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> str | None:
+        """写入 Redis 一次性 ticket；Redis 不可用时 fail-closed。"""
+        # 旧单测/内部兼容调用没有身份参数；它仍写 Redis，不能用于新 WS
+        # 路径（新路由总是传入真实的数据库绑定身份）。
+        legacy_call = agent_id is None and tenant_id is None
+        if legacy_call:
+            agent_id = "legacy"
+            tenant_id = "legacy"
+        agent_id = str(agent_id or "").strip()
+        tenant_id = str(tenant_id or "").strip()
+        if not agent_id or not tenant_id:
+            return None
+
+        redis_client = self._redis()
+        if redis_client is None:
+            return None
+
         token = secrets.token_urlsafe(24)
-        now = time.monotonic()
-        # 顺手清理过期 ticket，防长驻进程缓慢泄漏
-        self._tickets = {
-            t: exp for t, exp in self._tickets.items() if exp > now
-        }
-        self._tickets[token] = now + TICKET_TTL_SECONDS
+        payload = json.dumps(
+            {
+                "agent_id": agent_id,
+                "tenant_id": tenant_id,
+                "issued_at": _now_iso(),
+                "ttl": TICKET_TTL_SECONDS,
+            },
+            ensure_ascii=False,
+        )
+        try:
+            stored = redis_client.setex(
+                self.ticket_key(token), TICKET_TTL_SECONDS, payload
+            )
+        except Exception:
+            logger.warning("[AgentHub] issue ws ticket failed", exc_info=True)
+            return None
+        if stored is False:
+            logger.warning("[AgentHub] issue ws ticket was not stored")
+            return None
+        if legacy_call:
+            self._tickets[token] = time.monotonic() + TICKET_TTL_SECONDS
         return token
 
+    def redeem_ticket_claims(self, token: str) -> dict[str, str] | None:
+        """用 Redis GETDEL/Lua 原子核销并返回服务端绑定身份。"""
+        token = str(token or "").strip()
+        if not token:
+            return None
+        redis_client = self._redis()
+        if redis_client is None:
+            return None
+        try:
+            if hasattr(redis_client, "getdel"):
+                raw = redis_client.getdel(self.ticket_key(token))
+            else:
+                raw = redis_client.eval(_GETDEL_LUA, 1, self.ticket_key(token))
+        except Exception:
+            logger.warning("[AgentHub] redeem ws ticket failed", exc_info=True)
+            return None
+        if not raw:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        try:
+            claims = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        agent_id = str(claims.get("agent_id") or "").strip()
+        tenant_id = str(claims.get("tenant_id") or "").strip()
+        if not agent_id or not tenant_id:
+            return None
+        return {"agent_id": agent_id, "tenant_id": tenant_id}
+
     def redeem_ticket(self, token: str) -> bool:
-        """一次性核销：有效返回 True，过期/不存在/已用一律 False。"""
-        exp = self._tickets.pop(token, None)
-        return exp is not None and exp > time.monotonic()
+        """兼容旧调用方的布尔核销接口；新 WS 路径使用 claims 接口。"""
+        legacy_expiry = self._tickets.pop(token, None)
+        claims = self.redeem_ticket_claims(token)
+        if legacy_expiry is not None and legacy_expiry <= time.monotonic():
+            return False
+        return claims is not None
+
+    def refresh_presence(self, *, agent_id: str, tenant_id: str) -> bool:
+        """刷新 Redis presence TTL；不把在线状态写入 PostgreSQL。"""
+        agent_id = str(agent_id or "").strip()
+        tenant_id = str(tenant_id or "").strip()
+        if not agent_id or not tenant_id:
+            return False
+        redis_client = self._redis()
+        if redis_client is None:
+            return False
+        try:
+            stored = redis_client.setex(
+                self.presence_key(tenant_id, agent_id),
+                PRESENCE_TTL_SECONDS,
+                "1",
+            )
+        except Exception:
+            logger.warning("[AgentHub] refresh presence failed", exc_info=True)
+            return False
+        return stored is not False
 
     # ── publish ──────────────────────────────────────────────
 
@@ -320,7 +456,22 @@ class AgentHub:
         并发后单慢连接只影响自己。入参收 str：调用方（含 Redis 订阅
         路径）序列化一次即可，避免 dict→str→dict→str 往返。
         """
+        try:
+            envelope = json.loads(data)
+        except (TypeError, ValueError):
+            return
+
+        target_agent_id = str(envelope.get("target_agent_id") or "").strip()
+        target_tenant_id = str(envelope.get("tenant_id") or "").strip()
         conns = list(self._connections)
+        if target_agent_id:
+            if not target_tenant_id:
+                return
+            conns = [
+                ws for ws in conns
+                if self._connection_identity.get(ws)
+                == (target_tenant_id, target_agent_id)
+            ]
         if not conns:
             return
         results = await asyncio.gather(
