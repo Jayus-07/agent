@@ -1477,5 +1477,12 @@ import 单向无环；`tsc --noEmit` 零错；frontend-admin 348 例全绿。
 
 #### B.16.4 遗留
 
-- 全量 pytest 回归（本节写作时进行中），对照历史基线 65 failed/3 error；
-- P0（宿主 5432 原生 PG 误迁移）已拍板：**保留不回滚**（2026-09-21）。
+- ✅ 全量 pytest 已回归（2026-09-21，14m06s，PGHOST=127.0.0.1 PGPORT=5433）：
+  **5217 passed / 51 failed / 3 errors / 2 xfailed**，对照历史基线 65 failed/3 error
+  **净减 14 例**（含本批修复的 4 例 + 基线统计时点差异）；3 errors 仍为 rerank 顺序
+  既有组；model-config 改动面（sys_providers / sys_model_roles / siliconflow /
+  authority）**零失败**，51 例全部落在既有无关区域（competitor、rag_upload、
+  lineage、tool_approval、email 幂等、memory_routes 503 等）；
+- P0（宿主 5432 原生 PG 误迁移）已拍板：**保留不回滚**（2026-09-21）；
+- 待拍板：`test_database_model_config_authority` 2 例 xfail 背后的「删除 env 开发
+  兼容路径」产品决策；活服务容器未重建，B3 读权限放行需随下次变更窗口生效。
