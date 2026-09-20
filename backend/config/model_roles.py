@@ -76,7 +76,7 @@ class RoleSpec:
                 env 为空是否具有**语义**（而非仅表示"没配"）。
                 True 时 legacy 常量必须保留空值，不能物化成继承后的模型名。
     validator:  校验器名（见 validate_roles）；None = 无注册表校验
-               （embedding/rerank/ocr 的模型不在 AVAILABLE_MODELS 内）
+               （embedding/rerank 等专项模型走专用校验，不在此判定）
     requires_reindex:
                 改值后必须全量重建向量索引（与向量索引语义空间强绑定）
     """
@@ -377,12 +377,17 @@ _VALIDATORS: dict[str, Any] = {}
 
 
 def _registered_model(value: str) -> tuple[bool, str]:
-    """校验模型名已注册。延迟 import（硬约束 2）。"""
+    """校验模型名已在 DB 注册表（§B.15 起 DB-only）。延迟 import（硬约束 2）。"""
     from backend.infra.llm.models import get_available_models
     names = {m["name"] for m in get_available_models()}
     if value in names:
         return True, ""
-    return False, f"未在 AVAILABLE_MODELS 注册（可用: {sorted(names)}）"
+    if not names:
+        return False, (
+            "数据库模型注册表为空或尚未加载 —— 请先在管理端「供应商」页登记模型，"
+            "或稍后重试（注册表由后台刷新循环从 DB 加载）"
+        )
+    return False, f"未在数据库模型注册表中登记（可用: {sorted(names)}）"
 
 
 _VALIDATORS["registered_model"] = _registered_model

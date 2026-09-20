@@ -44,7 +44,8 @@ from backend.shared.logger import logger
 # ⚠️ 模型角色**不登记在本表**，而是登记在 backend/config/model_roles.py：
 #   1. 本表是守卫开关注册表，GET /sys/config 的返回集合被测试断言为恰好两项
 #      （tests/api/test_sys_config_admin.py::test_get_config_lists_registered_switches）；
-#   2. 模型名大小写敏感、合法集来自 AVAILABLE_MODELS，需要上面两个扩展点；
+#   2. 模型名大小写敏感、合法集来自数据库模型注册表（§B.15 起 DB-only），
+#      需要上面两个扩展点；
 #   3. 模型角色的解析入口是 model_roles.resolve_model，热路径在配置导入链上，
 #      不能依赖本模块（本模块 import SQLAlchemy + asyncio，会拖重配置导入）。
 
@@ -75,7 +76,7 @@ def _normalize_with(spec: dict[str, Any] | None, raw: Any) -> str | None:
 
     - 静态白名单：`spec["allowed"]` 元组
     - 函数式校验：`spec["validator"]`（可调用，与 allowed 二选一）——
-      用于**合法集随代码变化**的登记项，如模型角色（合法集 = AVAILABLE_MODELS）
+      用于**合法集随 DB 变化**的登记项，如模型角色（合法集 = 数据库模型注册表）
     - 大小写：`case_sensitive=True` 时保留原大小写。模型名
       `MiniMax-M3` / `Qwen/Qwen3-32B` / `BAAI/bge-m3` 一律不得被 lower 破坏；
       缺省沿用守卫开关的历史行为（小写归一）。

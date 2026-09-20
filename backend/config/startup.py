@@ -244,7 +244,7 @@ def validate_startup_settings() -> List[str]:
     from backend.config import model_roles
     from backend.infra.llm import credentials
 
-    # ① 注册表校验：模型名必须在 AVAILABLE_MODELS 内（合法集随代码变化）
+    # ① 注册表校验：模型名必须在数据库模型注册表内（§B.15 起合法集 = llm_models）
     warnings.extend(model_roles.validate_roles())
     # ② 密钥可达性：只检查数据库注册表注入的凭据，绝不读取旧 env。
     # 注册表刷新由 server startup 在本校验前完成；单测/独立调用时没有 DB

@@ -171,6 +171,10 @@ def test_vllm_is_a_selectable_registered_model():
     """回归锁：models 层确实注册了 vllm provider 的可选模型（否则上面的分支没意义）。"""
     from backend.infra.llm import models as models_mod
 
+    # §B.15 起注册表 DB-only：注入迁移 0023 的 vllm 条目模拟注册表已加载
+    models_mod.set_dynamic_models([
+        {"name": "Qwen/Qwen3-32B-AWQ", "provider": "vllm", "source": "db"},
+    ])
     vllm_models = [
         m for m in models_mod.get_available_models() if m.get("provider") == "vllm"
     ]

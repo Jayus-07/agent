@@ -13,7 +13,11 @@ def _reset_dynamic_catalog():
     models.reset_dynamic_models_for_tests()
 
 
-def test_legacy_code_model_without_kind_is_chat() -> None:
+def test_db_row_without_kind_is_chat() -> None:
+    """DB 行缺 `model_kind`（历史行/迁移前数据）→ 按 chat 兼容（§B.15 后入口为 DB-only）。"""
+    models.set_dynamic_models([
+        {"name": "qwen3.7-plus", "provider": "qwen", "source": "db"},
+    ])
     entry = next(item for item in models.get_available_models() if item["name"] == "qwen3.7-plus")
 
     assert models.model_kind_of(entry) == "chat"

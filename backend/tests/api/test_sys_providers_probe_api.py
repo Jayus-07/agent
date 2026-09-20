@@ -296,10 +296,10 @@ def test_saved_provider_forwards_registered_model_kind(client, monkeypatch):
     assert captured["model_kind"] == "embedding"
 
 
-def test_saved_builtin_provider_uses_code_registered_model_when_db_models_empty(
+def test_saved_provider_without_db_models_probes_with_empty_model_name(
     client, monkeypatch
 ):
-    """内置供应商的模型来自代码注册表时，复测也必须带上默认模型名。"""
+    """§B.15 起清单 DB-only：DB 无模型行 → 复测不带模型名（不再回落代码注册表）。"""
     snap = RegistrySnapshot(
         providers=[{
             "id": "deepseek",
@@ -308,6 +308,45 @@ def test_saved_builtin_provider_uses_code_registered_model_when_db_models_empty(
             "driver": "openai",
         }],
         models=[],
+        credentials={},
+        loaded=True,
+    )
+    monkeypatch.setattr(sys_providers.registry_store, "load_registry",
+                        AsyncMock(return_value=snap))
+    monkeypatch.setattr(
+        credentials_mod,
+        "resolve_credentials",
+        lambda provider, **kw: ProviderCredentials(
+            provider=provider, api_key="sk-from-env", source="env", version=0
+        ),
+    )
+    captured: dict = {}
+
+    async def _capture(**kw):
+        captured.update(kw)
+        return _ok_result()
+
+    monkeypatch.setattr(sys_providers.provider_probe, "probe_provider", _capture)
+
+    resp = client.post("/sys/providers/deepseek/verify")
+
+    assert resp.status_code == 200
+    assert captured["model_name"] == ""
+
+
+def test_saved_provider_takes_model_from_db_row(client, monkeypatch):
+    """复测用的模型名来自 DB 模型行（快照第一行），与列表 modelCount 同口径。"""
+    snap = RegistrySnapshot(
+        providers=[{
+            "id": "deepseek",
+            "base_url": "https://api.deepseek.com/v1",
+            "network_scope": "public",
+            "driver": "openai",
+        }],
+        models=[{
+            "name": "deepseek-v4-flash", "provider": "deepseek",
+            "display": "DeepSeek V4-Flash", "model_kind": "chat", "source": "db",
+        }],
         credentials={},
         loaded=True,
     )

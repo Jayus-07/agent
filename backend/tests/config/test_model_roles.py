@@ -41,10 +41,20 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 @pytest.fixture(autouse=True)
 def _clean_overrides():
-    """_overrides 是模块级状态，前后各清一次防止跨测试污染。"""
+    """_overrides 是模块级状态，前后各清一次防止跨测试污染。
+
+    §B.15 起模型注册表为 DB-only：注入与迁移 0023 等价的种子清单，
+    模拟 registry_store 启动刷新后的状态。
+    """
+    from backend.infra.llm import models as llm_models
+
+    from backend.tests.infra.test_llm_registry_models import SEED_MODELS
     reset_overrides()
+    llm_models.reset_dynamic_models_for_tests()
+    llm_models.set_dynamic_models([dict(m) for m in SEED_MODELS])
     yield
     reset_overrides()
+    llm_models.reset_dynamic_models_for_tests()
 
 
 def _clear_role_env(monkeypatch) -> None:
@@ -257,7 +267,7 @@ def test_provider_of_registered_model():
 
 
 def test_provider_of_unregistered_model_is_none():
-    """embedding/rerank/ocr 的模型不在 AVAILABLE_MODELS 内，应返回 None 而非报错。"""
+    """未登记的模型（如向量模型名）不在注册表内，应返回 None 而非报错。"""
     assert provider_of("BAAI/bge-m3") is None
     assert provider_of("") is None
 
@@ -296,7 +306,7 @@ def test_validate_roles_catches_unregistered(monkeypatch):
     _clear_role_env(monkeypatch)
     inject_overrides({"fallback": "Not/A-Registered-Model"})
     warns = validate_roles()
-    assert any("fallback" in w and "未在 AVAILABLE_MODELS 注册" in w for w in warns)
+    assert any("fallback" in w and "未在数据库模型注册表中登记" in w for w in warns)
 
 
 def test_validate_roles_silent_when_all_registered(monkeypatch):

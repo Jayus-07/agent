@@ -1,16 +1,35 @@
 from __future__ import annotations
 
+import pytest
+
 from backend.infra.llm.factory import LLMFactory
 from backend.infra.llm.models import (
-    AVAILABLE_MODELS,
     PROVIDER_API_KEY_ENV,
     get_model_pricing,
+    set_dynamic_models,
 )
+
+# §B.15 起注册表 DB-only：注入迁移 0023 的 siliconflow/vllm 条目模拟注册表已加载
+_SF_SEED = [
+    {"name": "Qwen/Qwen3-32B", "provider": "siliconflow", "source": "db"},
+    {"name": "Qwen/Qwen3-8B", "provider": "siliconflow", "source": "db"},
+    {"name": "Qwen/Qwen3-32B-AWQ", "provider": "vllm", "source": "db"},
+]
+
+
+@pytest.fixture(autouse=True)
+def _seeded_registry():
+    set_dynamic_models([dict(m) for m in _SF_SEED])
+    yield
+    from backend.infra.llm import models as _m
+    _m.reset_dynamic_models_for_tests()
 
 
 def test_siliconflow_model_is_registered_with_key_env() -> None:
     """Qwen/Qwen3-8B 必须注册为 siliconflow provider，Key 环境变量单一事实源。"""
-    entry = next(m for m in AVAILABLE_MODELS if m["name"] == "Qwen/Qwen3-8B")
+    from backend.infra.llm.models import get_available_models
+
+    entry = next(m for m in get_available_models() if m["name"] == "Qwen/Qwen3-8B")
     assert entry["provider"] == "siliconflow"
     assert PROVIDER_API_KEY_ENV["siliconflow"] == "SILICONFLOW_API_KEY"
 

@@ -86,14 +86,17 @@ type ModelRemoval = {
   error: string | null
 }
 
-/** 该模型能否被移除，以及不能的原因（用于就地禁用按钮并说明）。 */
+/** 该模型能否被移除，以及不能的原因（用于就地禁用按钮并说明）。
+ *
+ *  §B.15 起清单 DB-only：后端恒回 `source='user'`，「代码层内置不可移除」
+ *  分支已退役 —— 不能移除的唯一原因是被角色占用。
+ */
 function modelRemovalBlockReason(model: {
   source?: 'user' | 'builtin'
   usedByRoles?: string[]
 }): string | null {
   const roles = model.usedByRoles ?? []
   if (roles.length) return `正被角色 ${roles.join('、')} 使用，需先改绑`
-  if (model.source !== 'user') return '代码层内置模型，不可移除'
   return null
 }
 
@@ -1093,7 +1096,7 @@ export default function ProvidersTab({
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
         <div>
           <h2 className="text-xs font-medium text-text-primary">供应商与密钥</h2>
-          <p className="mt-1 text-[11px] text-text-muted">只列出已配置的供应商；每个供应商下平铺它已登记的模型。自建模型可移除，代码层内置模型与被角色占用的模型会就地标明原因。</p>
+          <p className="mt-1 text-[11px] text-text-muted">只列出已配置的供应商；每个供应商下平铺它已登记的模型。模型清单统一存于数据库；被角色占用的模型会就地标明原因，需先改绑才能移除。</p>
         </div>
         <div className="flex items-center gap-2">
           {source !== 'db' && <span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] text-amber-700">DB 未就绪</span>}
@@ -1110,7 +1113,7 @@ export default function ProvidersTab({
               : [{
                   name: row.modelName || defaultModels[row.id] || '—',
                   modelKind: (row.modelKind || 'chat') as ModelKind,
-                  source: 'builtin' as const,
+                  source: 'user' as const,
                   usedByRoles: [],
                 }]
             return (

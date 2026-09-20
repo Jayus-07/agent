@@ -35,8 +35,8 @@ from backend.config.llm import (
 )
 from backend.infra.llm.factory import get_llm_factory
 from backend.infra.llm.models import (
-    AVAILABLE_MODELS,
     compute_cost_usd,
+    get_available_models,
     is_registered_model,
     resolve_provider,
 )
@@ -95,7 +95,7 @@ def set_request_model(model: str) -> None:
     ok, reason = validate_override_model(model, ollama_enabled=OLLAMA_ENABLED)
     if not ok:
         if not is_registered_model(model):
-            reason = f"{reason} (可用: {[m['name'] for m in AVAILABLE_MODELS]})"
+            reason = f"{reason} (可用: {[m['name'] for m in get_available_models()]})"
         logger.warning(f"[LLM:proxy] 忽略模型覆盖 {model}: {reason} "
                        f"(回退全局 {get_active_model_name()})")
         _request_model_var.set("")

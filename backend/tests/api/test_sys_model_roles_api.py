@@ -45,6 +45,10 @@ def client() -> TestClient:
 
 @pytest.fixture(autouse=True)
 def _clean():
+    """§B.15 起注册表 DB-only：预置迁移 0023 的种子清单模拟注册表已加载。"""
+    from backend.tests.infra.test_llm_registry_models import SEED_MODELS
+
+    models_mod.set_dynamic_models([dict(m) for m in SEED_MODELS])
     yield
     model_roles.reset_overrides()
     models_mod.reset_dynamic_models_for_tests()
@@ -52,8 +56,10 @@ def _clean():
 
 
 def _a_registered_qwen_model() -> str:
-    """取一个 provider='qwen' 的已注册模型名（不写字面量，避免与清单漂移）。"""
-    entry = next(m for m in models_mod.AVAILABLE_MODELS if m["provider"] == "qwen")
+    """取一个 provider='qwen' 的已注册模型名（§B.15 后从 DB 种子注入层取）。"""
+    entry = next(
+        m for m in models_mod.get_available_models() if m["provider"] == "qwen"
+    )
     return str(entry["name"])
 
 

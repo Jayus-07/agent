@@ -1395,3 +1395,53 @@ DELETE /sys/providers/{provider_id}/models?modelName=<urlencoded>
   vitest + `tsc --noEmit` 零错。
 - 实施过程注意：对同一文件**并行发多个 Edit 会互相覆盖**（本次 3 处补字段语句
   被吞，靠 vitest 红灯逐个找回）——同文件多处修改必须串行编辑 + grep 复核。
+
+## B.15 模型清单 DB 统一控制：代码层种子退役（2026-09-21）
+
+**决策**（源自用户：「不需要种子，只要 DB 来统一控制；DB 里没有却被引用的应该报错」）：
+
+`AVAILABLE_MODELS` 代码种子是「合并视图」时代的残留。0017 已把 9 个厂商行迁入
+`llm_providers`，本批把最后 8 条模型行迁入 `llm_models`，自此 **DB 是模型清单的
+唯一事实来源**（含 `qwen3.7-plus@tp` —— 它此前只存在于代码层）。
+
+### B.15.1 迁移 0023（`0023_seed_builtin_models_to_db.py`）
+
+- 8 条模型（qwen/qwen3.7-plus、qwen_tp/qwen3.7-plus@tp、ollama/qwen2.5:3b、
+  deepseek/deepseek-v4-flash、minimax/MiniMax-M3、vllm/Qwen3-32B-AWQ、
+  siliconflow×2）`INSERT ... ON CONFLICT (name) DO NOTHING`，单价进 pricing JSONB；
+- `source='builtin'`（`llm_models_source_check` 仅允许 builtin/user），
+  `created_by='migration-0023'` 供 downgrade 精确回滚与溯源；
+- ⚠️ 实施教训：**host 侧跑 alembic 必须 `PGHOST=127.0.0.1 PGPORT=5433` 前缀**。
+  `backend/config/database.py` 顶层 `load_dotenv()` 会把 `.env` 的
+  `PGHOST=localhost/PGPORT=5432` 读进来，而 **宿主 5432 是本机原生 PG**（非 agent
+  容器；compose 注释已注明「本地调试/迁移脚本通道：绑 127.0.0.1:5433」）。首次
+  执行时迁移被带到了原生 PG 的 agent_memory（0019→0023，种入 8 行）——该库为
+  同链陈旧副本，改动幂等无害，但**处置待定**（保留 or `downgrade 0022` 回退）。
+
+### B.15.2 代码侧变更
+
+| 文件 | 变更 |
+|---|---|
+| `models.py` | `AVAILABLE_MODELS` 清空退役（空列表仅为兼容）；`get_available_models()`/`get_model_entry()` 改 **DB-only**，返回动态层拷贝；模块头「新增模型走管理端」 |
+| `proxy.py` | 错误提示里的可用清单改读 `get_available_models()` |
+| `sys_providers.py` | `_merged_models` → DB-only；`_decorate_models` 恒 `source='user'`（「代码层内置不可移除」判定退役）；`_builtin_rows` env 兜底分支不再产出模型 |
+| `model_roles.py` | `_registered_model` 报错改「未在数据库模型注册表中登记（可用: …）」；注册表为空时给专门提示 |
+| `sys_config.py` / `startup.py` / `config/llm.py` | 注释同步（合法集 = llm_models） |
+| 前端 `ProvidersTab.tsx` | 删「代码层内置模型，不可移除」分支与页脚说明；合成占位行 source 改 user |
+
+### B.15.3 三层报错（用户要求的「DB 没有就报错」）
+
+1. **绑定时**：角色校验（`_registered_model`）未命中 → 拒绝并列出可用清单；
+2. **启动时**：`validate_roles()` 对默认/备用/各角色指向的未登记模型发告警；
+3. **运行时**：`validate_override_model` / proxy 对未注册模型名 fail-fast（既有）。
+
+### B.15.4 测试与验收
+
+- 受影响 13 个测试文件全部转 DB 注入（`SEED_MODELS` fixture 模拟 registry 已加载），
+  **168+ 例通过**；基线复跑确认 4 个**既有失败**与本批无关：
+  `test_missing_key_env_reported_when_key_absent`（断言已废弃的 env 分支）、
+  `test_llm_siliconflow_provider::test_set_current_rejects_when_siliconflow_key_missing`
+  （报错文案已改断言未跟）、`test_database_model_config_authority` 2 例（OCR/embedding
+  旧 env 语义）；
+- 前端 `tsc --noEmit` 零错，`ProvidersTab.test.tsx` 37/37；
+- ⚠️ 全量 pytest 未在本批重跑（历史基线另有 65 failed/3 error 均为无关区域，见 B.14）。

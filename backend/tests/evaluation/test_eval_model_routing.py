@@ -36,6 +36,12 @@ def test_eval_gen_has_no_implicit_local_default(monkeypatch):
 
 def test_eval_gen_rejects_unregistered_or_disabled_local_model(monkeypatch):
     """评测角色只能绑定已登记且当前可用的模型。"""
+    from backend.infra.llm import models as llm_models
+
+    # §B.15 起注册表 DB-only：注入 ollama 条目使 qwen2.5:3b 成为已登记模型
+    llm_models.set_dynamic_models([
+        {"name": "qwen2.5:3b", "provider": "ollama", "source": "db"},
+    ])
     monkeypatch.setattr(model_config, "OLLAMA_ENABLED", False)
 
     assert model_config._model_validation_issue(

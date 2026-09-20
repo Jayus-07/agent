@@ -2,14 +2,14 @@
 models.py — Provider 注册表 + 可用模型清单
 
 新增 Provider 只需:
-  1. 在 PROVIDERS 注册
-  2. 在 AVAILABLE_MODELS 添加模型条目
-  3. 在 providers/ 目录实现 build_xxx() 和 get_xxx_balance() 函数
+  1. 在 PROVIDERS 注册（协议族 driver 白名单）
+  2. 在 providers/ 目录实现 build_xxx() 和 get_xxx_balance() 函数
+新增/移除**模型**：一律走管理端供应商页（DB `llm_models` 表）—— §B.15 起
+DB 是模型清单的唯一事实来源，代码层不再维护种子清单。
 
-本模块是**代码层静态注册表**。用户自建（BYOK）的模型与厂商实例走 DB 覆盖层，
-由 `registry_store.py` 读库后经 `set_dynamic_models()` 注入，统一从
-`get_available_models()` / `resolve_provider()` 读取 —— 消费方不要再直接引用
-`AVAILABLE_MODELS` 常量（那是 DB 覆盖之前的旧入口）。
+本模块保留**代码层静态**的 Provider 元数据（label / driver / billing 白名单）；
+模型清单由 `registry_store.py` 读库后经 `set_dynamic_models()` 注入，统一从
+`get_available_models()` / `resolve_provider()` 读取。
 
 设计见 docs/model-config-governance-design.md（§3.2 / 附录 B）。
 
@@ -97,76 +97,12 @@ PROVIDERS: dict[str, dict[str, Any]] = {
 }
 
 
-# 可用模型清单（前端展示 + set_current 校验用 + cost 估算）
-# input_price_per_1m / output_price_per_1m: USD per 1M tokens（cost 估算用）
-AVAILABLE_MODELS = [
-    {
-        "provider": "qwen",
-        "name": "qwen3.7-plus",
-        "display": "Qwen 3.7 Plus - 在线",
-        "description": "阿里云百炼 Qwen3.7-Plus，OpenAI 兼容协议，需要 API Key",
-        "input_price_per_1m": 0.4,
-        "output_price_per_1m": 1.2,
-    },
-    {
-        "provider": "qwen_tp",
-        "name": "qwen3.7-plus@tp",
-        "display": "Qwen 3.7 Plus - Token Plan",
-        "description": "阿里云百炼模型包端点（sk-sp- Key），需配置 QWEN_TP_API_KEY",
-        "input_price_per_1m": 0.0,   # 模型包按购买量计费，不走 token 计价
-        "output_price_per_1m": 0.0,
-    },
-    {
-        "provider": "ollama",
-        "name": "qwen2.5:3b",
-        "display": "Qwen 2.5 (3B) - 本地",
-        "description": "本地 Ollama，免费，无需 API Key",
-        "input_price_per_1m": 0.0,
-        "output_price_per_1m": 0.0,
-    },
-    {
-        "provider": "deepseek",
-        "name": "deepseek-v4-flash",
-        "display": "DeepSeek V4-Flash - 云端",
-        "description": "DeepSeek V4-Flash，高并发低延迟，需要 API Key",
-        "input_price_per_1m": 0.14,
-        "output_price_per_1m": 0.28,
-    },
-    {
-        "provider": "minimax",
-        "name": "MiniMax-M3",
-        "display": "MiniMax M3 - 云端",
-        "description": "MiniMax-M3，OpenAI 兼容协议，需要 API Key",
-        "input_price_per_1m": 3.0,
-        "output_price_per_1m": 15.0,
-    },
-    {
-        "provider": "vllm",
-        "name": "Qwen/Qwen3-32B-AWQ",
-        "display": "Qwen3 32B (AWQ) - 自托管",
-        "description": "自托管 vLLM（OpenAI 兼容），需配置 VLLM_API_BASE/VLLM_API_KEY",
-        "input_price_per_1m": 0.0,
-        "output_price_per_1m": 0.0,
-    },
-    {
-        # 硅基流动价格未核（0 会使成本估算低估），接入后按账单回填
-        "provider": "siliconflow",
-        "name": "Qwen/Qwen3-32B",
-        "display": "Qwen3 32B - 硅基流动",
-        "description": "硅基流动 Qwen3-32B，OpenAI 兼容协议，需在供应商页配置 API Key",
-        "input_price_per_1m": 0.0,
-        "output_price_per_1m": 0.0,
-    },
-    {
-        # 硅基流动价格未核（0 会使成本估算低估），接入后按账单回填
-        "provider": "siliconflow",
-        "name": "Qwen/Qwen3-8B",
-        "display": "Qwen3 8B - 硅基流动",
-        "description": "硅基流动 Qwen3-8B，OpenAI 兼容协议，需在供应商页配置 API Key",
-        "input_price_per_1m": 0.0,
-        "output_price_per_1m": 0.0,
-    },
-]
+# 模型清单的代码层种子已退役（2026-09-21，设计 §B.15）：
+# 原 8 条内置模型已由迁移 0023 种入 llm_models（source='builtin'），自此
+# **DB 是模型清单的唯一事实来源** —— 新增/修改/移除模型一律走管理端供应商页，
+# 不再改代码清单。`AVAILABLE_MODELS` 保留为空列表仅为兼容少数测试与旧引用，
+# 任何新代码都不得向它添加条目（合并语义已删，加了也不会生效）。
+AVAILABLE_MODELS: list[dict[str, Any]] = []
 
 
 def get_model_pricing(model_name: str) -> tuple[float, float]:
@@ -235,7 +171,7 @@ def is_model_kind_compatible(role: str, model_kind: str | None) -> bool:
 
 
 def is_registered_model(model_name: str) -> bool:
-    """模型名是否在当前生效注册表中（代码层 + DB 动态层）。"""
+    """模型名是否在当前生效注册表中（DB 动态层）。"""
     return any(m["name"] == model_name for m in get_available_models())
 
 
@@ -379,10 +315,12 @@ class ProviderResolutionError(LookupError):
 
 
 def set_dynamic_models(entries: list[dict] | None) -> None:
-    """注入 DB 覆盖层的模型条目（由 registry_store 的刷新循环调用）。
+    """注入 DB 模型清单（由 registry_store 的刷新循环调用）——**唯一事实来源**。
 
-    条目形状与 AVAILABLE_MODELS 一致，另需 `source`（'db'）与 `provider`。
-    同名条目覆盖代码层条目；代码层独有的条目保留（DB 抖动不导致模型消失）。
+    条目形状见 `registry_store._model_entry`（含 `source: 'db'` 与 `provider`）。
+    自 §B.15（迁移 0023）起代码层种子已退役：这里注入什么，`get_available_models()`
+    就返回什么 —— 不再有「代码层 ∪ DB」合并。DB 抖动时 registry_store 按 fail-open
+    保留上一轮快照，不会注入空表清空运行时视图。
     """
     global _dynamic_models
     _dynamic_models = list(entries or [])
@@ -422,25 +360,18 @@ def get_provider_ids() -> list[str]:
 
 
 def get_available_models() -> list[dict]:
-    """可用模型清单的**唯一读取入口**（代码层 + DB 覆盖层）。
+    """可用模型清单的**唯一读取入口**（§B.15 起为 DB-only）。
 
-    无动态条目时直接返回代码层对象（零拷贝，保持与历史 `AVAILABLE_MODELS`
-    完全一致的语义与身份）。有覆盖时才合并，同名以 DB 为准。
+    返回动态层的拷贝 —— 调用方拿到的列表可安全变更，不影响进程内注册表。
+    动态层为空（单测 / registry 未刷新）时返回空列表：调用方应把「清单为空」
+    视为「尚未从 DB 加载」，而不是「系统无模型」。
     """
-    if not _dynamic_models:
-        return AVAILABLE_MODELS
-    merged = {m["name"]: m for m in AVAILABLE_MODELS}
-    for m in _dynamic_models:
-        merged[m["name"]] = m
-    return list(merged.values())
+    return list(_dynamic_models)
 
 
 def get_model_entry(model_name: str) -> dict | None:
-    """按模型名取条目（DB 覆盖层优先）。未注册返回 None。"""
+    """按模型名取条目（DB 注册表）。未注册返回 None。"""
     for m in _dynamic_models:
-        if m["name"] == model_name:
-            return m
-    for m in AVAILABLE_MODELS:
         if m["name"] == model_name:
             return m
     return None

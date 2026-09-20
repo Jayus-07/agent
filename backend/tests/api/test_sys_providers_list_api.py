@@ -238,10 +238,10 @@ def test_provider_rows_include_specialized_provider_and_models(client, monkeypat
 
 
 def test_model_entries_carry_source_and_role_usage(client, monkeypatch):
-    """列表要就地说明「为什么不能移除」：仅代码层的标 builtin，被角色占用的标出角色。
+    """列表要就地说明「为什么不能移除」：被角色占用的模型标出角色。
 
-    这两项是管理端「移除模型」按钮的禁用依据 —— 放在列表里而不是等 409 才知道，
-    否则用户点完才被拒，还不知道原因。
+    §B.15 起清单 DB-only：不再有「仅代码层 → builtin 不可移除」——
+    不能移除的唯一原因是角色占用。
     """
     snapshot = registry_store.RegistrySnapshot(
         providers=[
@@ -286,11 +286,8 @@ def test_model_entries_carry_source_and_role_usage(client, monkeypatch):
     assert db_model["source"] == "user"
     assert db_model["usedByRoles"] == ["embedding"]
 
-    builtin_model = next(
-        m for m in items["siliconflow"]["models"] if m["name"] == "Qwen/Qwen3-32B"
-    )
-    assert builtin_model["source"] == "builtin"
-    assert builtin_model["usedByRoles"] == []
+    # siliconflow 无 DB 模型行 → 不再凭代码种子凭空出现模型
+    assert items["siliconflow"]["models"] == []
 
 
 def test_base_url_only_override_is_not_reported_as_managed_key(client, monkeypatch):

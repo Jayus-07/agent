@@ -214,18 +214,17 @@ def _decorate_models(
 ) -> None:
     """就地为模型条目补 `source` 与 `usedByRoles`（管理端「移除模型」的判定字段）。
 
-    - `source`：`user` = 在 `llm_models` 里有行（可移除）；`builtin` = 仅存在于代码层
-      `AVAILABLE_MODELS`（移除无意义 —— 下次合并会原样回来，故不允许）。
+    §B.15（迁移 0023）起清单为 **DB-only**：进入本函数的条目全部来自
+    `llm_models` 表，一律可移除（`source='user'`），判定只剩角色占用。
+    `db_keys` 参数保留只为兼容 `_builtin_rows` 的 env 兜底分支（该分支
+    没有 DB 行，但代码层种子已退役，同样不会产生 builtin 模型）。
     - `usedByRoles`：该模型正被哪些角色占用。**放在列表里而不是等到 409 才知道**，
       是为了让「移除」按钮能就地禁用并说明原因，而不是让用户点完再被拒。
-
-    判定「是否在 DB」用 `(provider, name)` 是否出现在 `snap.models`，不依赖模型自带的
-    `source` 字段（`_SELECT_MODELS` 并未选取该列，硬读会得到一个恒为默认值的假信号）。
     """
     for pid, items in grouped.items():
         for item in items:
             name = str(item.get("name") or "")
-            item["source"] = "user" if (pid, name) in db_keys else "builtin"
+            item["source"] = "user"
             item["usedByRoles"] = sorted(roles_by_model.get(name, []))
 
 
@@ -238,17 +237,11 @@ def _roles_by_model(snap: registry_store.RegistrySnapshot) -> dict[str, list[str
 
 
 def _merged_models(snap: registry_store.RegistrySnapshot) -> list[dict]:
-    """代码层模型 + DB 自建模型合并，避免 seeded provider 显示 0 个模型。"""
-    merged = {
-        (str(item.get("provider") or ""), str(item.get("name") or "")): item
-        for item in models_mod.AVAILABLE_MODELS
+    """DB 模型清单（§B.15 起 DB-only，代码层种子已随迁移 0023 退役）。"""
+    return [
+        item for item in snap.models
         if item.get("provider") and item.get("name")
-    }
-    for item in snap.models:
-        key = (str(item.get("provider") or ""), str(item.get("name") or ""))
-        if all(key):
-            merged[key] = item
-    return list(merged.values())
+    ]
 
 
 def _credential_view(configured: bool, meta: dict | None) -> dict:
@@ -267,11 +260,14 @@ def _credential_view(configured: bool, meta: dict | None) -> dict:
 
 
 def _builtin_rows() -> list[dict]:
-    """DB 不可用时的兜底清单（代码层内置厂商 + env 凭据状态）。"""
+    """DB 不可用时的兜底清单（代码层内置厂商 + env 凭据状态）。
+
+    §B.15 起代码层模型种子已退役：兜底分支列出的厂商行 `modelCount` 恒为 0、
+    无模型平铺（`modelName` 回落 `default_model` 仅供展示）。模型数据只在 DB。
+    """
     env = credentials_mod.snapshot()
-    counts = _count_models_by_provider(models_mod.AVAILABLE_MODELS)
-    grouped_models = _models_by_provider(models_mod.AVAILABLE_MODELS)
-    # env 兜底分支没有 DB 行：全部是代码层内置模型 → 一律不可移除、无角色占用。
+    counts = _count_models_by_provider(models_mod.get_available_models())
+    grouped_models = _models_by_provider(models_mod.get_available_models())
     _decorate_models(grouped_models, set(), {})
     rows: list[dict] = []
     for pid, meta in models_mod.PROVIDERS.items():
@@ -444,8 +440,8 @@ async def verify_saved_provider(
                      or provider.get("extra_headers") or {})
     scope = _normalize_scope(provider.get("network_scope"))
     driver = provider.get("driver") or models_mod.get_provider_driver(provider_id) or ""
-    # 与供应商列表的 modelCount 保持同一口径：内置模型来自代码注册表，
-    # 自建/覆盖模型来自 DB；只查 snap.models 会让内置供应商拿到空模型名。
+    # 与供应商列表的 modelCount 保持同一口径（§B.15 起均为 DB-only）：
+    # 只查 snap.models 即可，代码层种子已随迁移 0023 退役。
     model_entry = next(
         (m for m in _merged_models(snap) if str(m.get("provider")) == provider_id),
         None,

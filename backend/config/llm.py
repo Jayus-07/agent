@@ -283,8 +283,8 @@ LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "1"))
 # 重试退避基数（秒），第 n 次重试等待 base**n；1.5 时 2 次重试累计等 3.75s，
 # 交互场景改 0.5 把尾延迟压到 0.75s
 LLM_RETRY_BACKOFF_BASE = float(os.getenv("LLM_RETRY_BACKOFF_BASE", "0.5"))
-# 熔断开路/重试耗尽后的备用模型（须是 AVAILABLE_MODELS 中的模型名；
-# 留空 = 不切备用模型，直接按 LLM_ALLOW_DEGRADED_ANSWER 处理）
+# 熔断开路/重试耗尽后的备用模型（须是数据库模型注册表中的模型名，§B.15 起
+# 合法集 = llm_models 表；留空 = 不切备用模型，直接按 LLM_ALLOW_DEGRADED_ANSWER 处理）
 # 模型名走角色注册表（role=fallback，空值有语义）；注册校验见 config/startup.py
 LLM_FALLBACK_MODEL = _literal_model("fallback")
 # 是否允许最终降级为固定话术（默认 False = fail-fast，把原始异常抛给调用方）。

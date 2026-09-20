@@ -90,11 +90,11 @@ def test_load_success_injects_model_and_credential(monkeypatch):
     assert models.resolve_provider("glm-4.6", strict=True) == "custom"
 
 
-def test_loaded_but_empty_snapshot_restores_code_layer(monkeypatch):
-    """表存在但为空（首次部署）→ 动态层清空 → 与纯代码层逐字一致。
+def test_loaded_but_empty_snapshot_clears_dynamic_layer(monkeypatch):
+    """表存在但为空（首次部署）→ 动态层清空 → 清单为空。
 
-    这是「DB 空表不影响行为」这条验收标准的守卫：必须回到**同一对象**
-    （零拷贝），而不是一个内容相同的新列表。
+    §B.15 起代码层种子已退役：DB 空表意味着清单**确实为空**（不再是
+    「回落代码层」）。启动校验会告警缺模型，这是期望行为而非回归。
     """
     models.set_dynamic_models([{"name": "glm-4.6", "provider": "custom"}])
     monkeypatch.setattr(
@@ -103,10 +103,10 @@ def test_loaded_but_empty_snapshot_restores_code_layer(monkeypatch):
     )
 
     assert asyncio.run(registry_store.refresh_registry()) is True
-    assert models.get_available_models() is models.AVAILABLE_MODELS
+    assert models.get_available_models() == []
 
 
 def test_reset_for_tests_clears_both_layers():
     models.set_dynamic_models([{"name": "glm-4.6", "provider": "custom"}])
     registry_store.reset_for_tests()
-    assert models.get_available_models() is models.AVAILABLE_MODELS
+    assert models.get_available_models() == []
