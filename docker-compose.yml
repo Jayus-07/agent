@@ -345,6 +345,62 @@ services:
       - agent-net
     restart: unless-stopped
 
+  # ── 客服自动派单 dispatcher（P6）────────────────────────────
+  # 与 app/worker 共用镜像，但没有 HTTP 端口：只消费 PostgreSQL 的
+  # waiting_human 队列并写 agent_offered。
+  #   - 水平扩展：本服务声明 2 副本（deploy.replicas），正确性由
+  #     FOR UPDATE SKIP LOCKED + 活动 assignment 部分唯一索引保证，
+  #     副本之间不通信、不抢 Redis 锁。
+  #   - 不需要 API/Celery 队列：派单是周期轮询而非任务投递。
+  #   - 连接占用：本服务只用一个 AsyncSession 小池，与 API 实例的连接上限
+  #     总和须低于 PG max_connections 的 70%（方案 §八）。
+  #   - 默认 CS_DISPATCH_MODE=off：容器可以先起，确认候选与容量后再切
+  #     shadow/enforce，不需要重建镜像。
+  cs-dispatcher:
+    build: .
+    command: ["python", "-m", "backend.workers.cs_dispatcher"]
+    env_file:
+      - .env
+    environment:
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGDATABASE=agent_memory
+      - PGUSER=postgres
+      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+      # 在线状态与心跳都走业务 Redis（db0，与 AgentHub 的 pub/sub 同库）
+      - REDIS_ENABLED=true
+      - REDIS_URL=redis://redis:6379/0
+      # off | shadow | enforce
+      - CS_DISPATCH_MODE=${CS_DISPATCH_MODE:-off}
+      - CS_OFFER_TIMEOUT_SECONDS=${CS_OFFER_TIMEOUT_SECONDS:-30}
+      - CS_MAX_DISPATCH_ATTEMPTS=${CS_MAX_DISPATCH_ATTEMPTS:-5}
+      - CS_HANDOFF_TIMEOUT_SECONDS=${CS_HANDOFF_TIMEOUT_SECONDS:-600}
+      - CS_DISPATCH_INTERVAL_SECONDS=${CS_DISPATCH_INTERVAL_SECONDS:-1.0}
+      - CS_DISPATCHER_HEARTBEAT_TTL_SECONDS=${CS_DISPATCHER_HEARTBEAT_TTL_SECONDS:-30}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # 存活判定：本服务无 HTTP 端口，直接看容器 PID 1 的 argv 是否是
+    # dispatcher 入口（不依赖 procps/pgrep 是否装进镜像）。
+    # 是否"真的在派单"另以 Redis 心跳判定：cs:dispatcher:heartbeat:<hostname>，TTL 30s。
+    healthcheck:
+      test:
+        ["CMD-SHELL",
+         "python -c \"import sys; sys.exit(0 if b'cs_dispatcher' in open('/proc/1/cmdline','rb').read() else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      # 2 副本是最低生产要求（一轮 dispatcher 挂掉不影响派单）
+      replicas: 2
+    networks:
+      - agent-net
+    restart: unless-stopped
+
   # ── 元数据影子 Worker（独立队列/并发/故障域）────────────────
   # 影子任务只消费 rag_metadata_shadow；不能并入主 worker，否则影子积压会
   # 抢占 agent/rag_index 槽位，破坏主索引的高并发隔离。
