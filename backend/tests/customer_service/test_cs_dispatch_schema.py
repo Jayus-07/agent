@@ -22,8 +22,7 @@ from backend.customer_service.models.agent import CSAgent
 from backend.customer_service.models.assignment import ASSIGNMENT_STATES, CSAssignment
 from backend.customer_service.models.conversation import CSConversation
 from backend.customer_service.models.event import CSEvent
-from backend.customer_service.models.handoff import CSHandoff, HANDOFF_STATES
-
+from backend.customer_service.models.handoff import HANDOFF_STATES, CSHandoff
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 NATIVE_MIGRATION = BACKEND_ROOT / "sql" / "migrations" / "028_cs_dispatch.sql"
@@ -46,6 +45,15 @@ ALEMBIC_MIGRATION = (
     / "versions"
     / "0023_cs_dispatch.py"
 )
+P2_ALEMBIC_MIGRATION = (
+    BACKEND_ROOT
+    / "sql"
+    / "alembic"
+    / "memory"
+    / "versions"
+    / "0024_rbac_audit.py"
+)
+P2_NATIVE_MIGRATION = BACKEND_ROOT / "sql" / "migrations" / "029_rbac_audit.sql"
 
 
 def _column(model, name: str):
@@ -304,8 +312,11 @@ def test_dispatch_states_are_explicit_and_preserve_legacy_values():
 
 def test_alembic_revision_is_0023_and_leaves_single_head():
     migration = _load_alembic_migration()
+    p2_migration = _load_migration(P2_ALEMBIC_MIGRATION, "rbac_audit_migration")
     assert migration.revision == "0023"
     assert migration.down_revision == "0022"
+    assert p2_migration.revision == "0024"
+    assert p2_migration.down_revision == "0023"
 
     revisions: dict[str, Path] = {}
     down_revisions: set[str] = set()
@@ -321,6 +332,84 @@ def test_alembic_revision_is_0023_and_leaves_single_head():
 
     assert len([path for path in revisions.values() if path.name == "0023_cs_dispatch.py"]) == 1
     assert set(revisions) - down_revisions == {"0024"}
+
+
+def test_rbac_native_migration_is_idempotent_and_has_no_implicit_tenant_default():
+    assert P2_NATIVE_MIGRATION.exists(), f"缺少原生迁移: {P2_NATIVE_MIGRATION}"
+    sql = P2_NATIVE_MIGRATION.read_text(encoding="utf-8")
+    normalized = re.sub(r"\s+", " ", sql).upper()
+
+    assert "ADD COLUMN IF NOT EXISTS VERSION" in normalized
+    assert "ADD COLUMN IF NOT EXISTS TENANT_ID" in normalized
+    assert "CREATE TABLE IF NOT EXISTS AUTH.RBAC_AUDITS" in normalized
+    assert "CREATE INDEX IF NOT EXISTS" in normalized
+    assert "TENANT_ID VARCHAR(64) NOT NULL DEFAULT 'DEFAULT'" not in normalized
+
+
+def _run_p2_upgrade(connection):
+    _run_migration_upgrade(
+        connection,
+        _load_migration(P2_ALEMBIC_MIGRATION, "rbac_audit_real_migration"),
+    )
+
+
+def test_p2_migration_chain_is_repeatable_and_real_display_name_constraint_holds(
+    dispatch_postgres_db,
+):
+    psycopg2 = pytest.importorskip("psycopg2")
+    connection = dispatch_postgres_db
+    _run_alembic_upgrade(connection)
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            CREATE SCHEMA IF NOT EXISTS auth;
+            CREATE TABLE IF NOT EXISTS auth.users (
+                id BIGSERIAL PRIMARY KEY,
+                username VARCHAR(20) NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role VARCHAR(20) NOT NULL DEFAULT 'viewer',
+                status SMALLINT NOT NULL DEFAULT 1,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+    connection.commit()
+
+    _run_p2_upgrade(connection)
+    _run_p2_upgrade(connection)
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'auth' AND table_name = 'users'
+            AND column_name IN ('version', 'tenant_id')
+            ORDER BY column_name
+            """
+        )
+        assert [row[0] for row in cursor.fetchall()] == ["tenant_id", "version"]
+
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_schema = 'auth' AND table_name = 'rbac_audits'
+            """
+        )
+        assert cursor.fetchone()[0] == 1
+
+        with pytest.raises(psycopg2.errors.NotNullViolation):
+            cursor.execute(
+                """
+                INSERT INTO customer_service.cs_agents
+                    (agent_id, tenant_id, auth_user_id, role)
+                VALUES ('missing-display-name', 'tenant-a', '1', 'agent')
+                """
+            )
+        connection.rollback()
 
 
 def test_native_migration_is_idempotent_and_contains_dispatch_contract():

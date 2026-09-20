@@ -23,11 +23,17 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.app.api.routes import auth_local
+from backend.app.api.routes import auth_local, rbac
 from backend.config.database import MEMORY_DB_CONFIG
 from backend.security.local_jwt import hash_password, verify_access_token
+from backend.security.session_service import access_session_key
 
-ADMIN_HEADERS = {"X-User-Id": "1", "X-User-Roles": "admin"}
+ADMIN_HEADERS = {
+    "X-Auth-Type": "jwt",
+    "X-User-Id": "1",
+    "X-User-Roles": "admin",
+    "X-Tenant-Id": "default",
+}
 
 
 class FakeRedis:
@@ -86,9 +92,15 @@ def env(monkeypatch):
     fr = FakeRedis()
     monkeypatch.setattr("backend.infra.redis.client.get_redis", lambda: fr)
     monkeypatch.setattr("backend.app.api.routes.auth_local.get_redis", lambda: fr)
+    monkeypatch.setattr(
+        rbac,
+        "_session_service",
+        auth_local.SessionService(redis_getter=lambda: fr),
+    )
     app = FastAPI()
     app.include_router(auth_local.router, prefix="/api")
     app.include_router(auth_local.sys_router, prefix="/api")
+    app.include_router(rbac.router, prefix="/api")
     yield TestClient(app), fr
 
 
@@ -99,23 +111,38 @@ def user():
     with psycopg2.connect(**MEMORY_DB_CONFIG) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO auth.users (username, password_hash, real_name, role) "
-                "VALUES (%s, %s, '会话测试', 'admin') RETURNING id",
+                "INSERT INTO auth.users "
+                "(username, password_hash, real_name, role, tenant_id) "
+                "VALUES (%s, %s, '会话测试', 'admin', 'default') RETURNING id",
                 (username, hash_password("pw-123456")))
             uid = cur.fetchone()[0]
         conn.commit()
     yield {"id": uid, "username": username, "password": "pw-123456"}
     with psycopg2.connect(**MEMORY_DB_CONFIG) as conn:
         with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM customer_service.cs_agents WHERE auth_user_id = %s",
+                (str(uid),),
+            )
             cur.execute("DELETE FROM auth.users WHERE id = %s", (uid,))
         conn.commit()
 
 
-def _login(client, user, device_id="dev-A", user_agent="TestUA/1.0"):
+def _login(
+    client,
+    user,
+    device_id="dev-A",
+    user_agent="TestUA/1.0",
+    tenant_id="default",
+):
     r = client.post("/api/auth/login", json={
         "username": user["username"], "password": user["password"],
-        "deviceId": device_id}, headers={"User-Agent": user_agent})
+        "deviceId": device_id}, headers={
+            "User-Agent": user_agent,
+            "X-Tenant-Id": tenant_id,
+    })
     assert r.status_code == 200, r.text
+    client.headers.update({"X-Tenant-Id": tenant_id})
     return r
 
 
@@ -313,6 +340,153 @@ def test_login_and_refresh_user_info_contains_current_rbac_fields(env, user):
     assert refresh_info["csRole"] is None
 
 
+@pytest.fixture()
+def tenant_cs_user():
+    """创建非 default 租户的客服用户，验证登录与刷新均取可信租户。"""
+    username = f"tenant-cs-{uuid.uuid4().hex[:10]}"
+    with psycopg2.connect(**MEMORY_DB_CONFIG) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO auth.users "
+                "(username, password_hash, real_name, role, tenant_id) "
+                "VALUES (%s, %s, '租户客服', 'viewer', 'tenant-b') RETURNING id",
+                (username, hash_password("pw-tenant")),
+            )
+            uid = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO customer_service.cs_agents "
+                "(agent_id, tenant_id, display_name, auth_user_id, role) "
+                "VALUES (%s, 'tenant-b', '租户客服', %s, 'supervisor')",
+                (f"agent-{uuid.uuid4().hex[:12]}", str(uid)),
+            )
+        conn.commit()
+    yield {"id": uid, "username": username, "password": "pw-tenant"}
+    with psycopg2.connect(**MEMORY_DB_CONFIG) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM customer_service.cs_agents WHERE auth_user_id = %s",
+                (str(uid),),
+            )
+            cur.execute("DELETE FROM auth.users WHERE id = %s", (uid,))
+        conn.commit()
+
+
+def test_login_and_refresh_user_info_uses_trusted_non_default_tenant(
+    env,
+    tenant_cs_user,
+):
+    client, _ = env
+
+    login_response = _login(client, tenant_cs_user, tenant_id="tenant-b")
+    login_info = login_response.json()["data"]["userInfo"]
+    assert login_info["tenantId"] == "tenant-b"
+    assert login_info["csRole"] == "supervisor"
+
+    refresh_response = client.post(
+        "/api/auth/refresh",
+        headers={"X-Tenant-Id": "tenant-b"},
+    )
+    assert refresh_response.status_code == 200, refresh_response.text
+    refresh_info = refresh_response.json()["data"]["userInfo"]
+    assert refresh_info["tenantId"] == "tenant-b"
+    assert refresh_info["csRole"] == "supervisor"
+
+
+@pytest.fixture()
+def tenant_session_user():
+    """创建同租户 admin 与客服用户，供角色变更真实会话失效测试使用。"""
+    suffix = uuid.uuid4().hex[:10]
+    actor_name = f"actor-{suffix}"
+    target_name = f"target-{suffix}"
+    with psycopg2.connect(**MEMORY_DB_CONFIG) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO auth.users "
+                "(username, password_hash, real_name, role, tenant_id) "
+                "VALUES (%s, %s, '租户管理员', 'admin', 'tenant-b') RETURNING id",
+                (actor_name, hash_password("pw-actor")),
+            )
+            actor_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO auth.users "
+                "(username, password_hash, real_name, role, tenant_id) "
+                "VALUES (%s, %s, '目标客服', 'viewer', 'tenant-b') RETURNING id",
+                (target_name, hash_password("pw-target")),
+            )
+            target_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO customer_service.cs_agents "
+                "(agent_id, tenant_id, display_name, auth_user_id, role) "
+                "VALUES (%s, 'tenant-b', '目标客服', %s, 'agent')",
+                (f"agent-{suffix}", str(target_id)),
+            )
+        conn.commit()
+    yield {
+        "actor": {"id": actor_id, "username": actor_name, "password": "pw-actor"},
+        "target": {"id": target_id, "username": target_name, "password": "pw-target"},
+    }
+    with psycopg2.connect(**MEMORY_DB_CONFIG) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM customer_service.cs_agents WHERE auth_user_id IN (%s, %s)",
+                (str(actor_id), str(target_id)),
+            )
+            cur.execute(
+                "DELETE FROM auth.users WHERE id IN (%s, %s)",
+                (actor_id, target_id),
+            )
+        conn.commit()
+
+
+def test_cs_role_change_revokes_real_access_gate_and_refresh_family(
+    env,
+    tenant_session_user,
+):
+    client, redis = env
+    target = tenant_session_user["target"]
+    actor = tenant_session_user["actor"]
+
+    login_response = _login(client, target, tenant_id="tenant-b")
+    access_token = login_response.json()["data"]["token"]
+    payload = verify_access_token(access_token)
+    sid = payload["sid"]
+    jti = payload["jti"]
+    old_refresh = _cookie_of(client)
+    assert redis.store.get(access_session_key(target["id"], jti)) == "1"
+
+    update_response = client.patch(
+        f"/api/sys/rbac/users/{target['id']}",
+        json={"version": 0, "csRole": "supervisor"},
+        headers={
+            "X-Auth-Type": "jwt",
+            "X-User-Id": str(actor["id"]),
+            "X-User-Roles": "admin",
+            "X-Tenant-Id": "tenant-b",
+        },
+    )
+    assert update_response.status_code == 200, update_response.text
+
+    session_row = _pg(
+        "SELECT revoked_at FROM auth.sessions WHERE id = %s",
+        (sid,),
+    )[0]
+    assert session_row[0] is not None
+    active_tokens, = _pg(
+        "SELECT count(*) FROM auth.refresh_tokens "
+        "WHERE session_id = %s AND revoked = FALSE",
+        (sid,),
+    )[0]
+    assert active_tokens == 0
+    assert access_session_key(target["id"], jti) not in redis.store
+
+    client.cookies.set("refresh_token", old_refresh)
+    refresh_response = client.post(
+        "/api/auth/refresh",
+        headers={"X-Tenant-Id": "tenant-b"},
+    )
+    assert refresh_response.status_code == 401
+
+
 # ── 语义补充：logout 撤整个会话 / 索引一致性 ─────────────────
 
 def test_logout_revokes_whole_session(env, user):
@@ -348,6 +522,7 @@ def test_client_ip_prefers_bff_injected_header(env, user):
                           "deviceId": "dev-ip"},
                     headers={"X-Client-IP": "203.0.113.9",
                              "X-Real-IP": "172.21.0.1",
+                             "X-Tenant-Id": "default",
                              "User-Agent": "TestUA/2.0"})
     assert r.status_code == 200
     ip, ua = _pg("SELECT ip, user_agent FROM auth.sessions "
@@ -362,7 +537,8 @@ def test_client_ip_fallback_to_real_ip(env, user):
     r = client.post("/api/auth/login",
                     json={"username": user["username"], "password": user["password"],
                           "deviceId": "dev-ip2"},
-                    headers={"X-Real-IP": "172.21.0.1"})
+                    headers={"X-Real-IP": "172.21.0.1",
+                             "X-Tenant-Id": "default"})
     assert r.status_code == 200
     ip, = _pg("SELECT ip FROM auth.sessions "
               "WHERE user_id = %s AND device_id = 'dev-ip2'", (user["id"],))[0]

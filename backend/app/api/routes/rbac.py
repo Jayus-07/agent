@@ -62,9 +62,11 @@ def _row_value(row: Any, key: str, default: Any = None) -> Any:
 
 
 def _tenant_id(request: Request) -> str:
-    """只消费统一身份入口提供的租户，不信任请求体。"""
+    """只消费统一身份入口提供的租户，缺失时拒绝而不是猜 default。"""
     identity = resolve_identity(request)
-    return identity.tenant_id or "default"
+    if not identity.authenticated or not identity.tenant_id:
+        raise _http_error("缺少可信租户身份", 403)
+    return identity.tenant_id
 
 
 def _actor_user_id(operator: OperatorIdentity) -> int | None:
@@ -96,6 +98,15 @@ def _iso(value: Any) -> str | None:
 
 def _http_error(message: str, status_code: int) -> HTTPException:
     return HTTPException(status_code=status_code, detail=message)
+
+
+def _stable_display_name(user: Any, user_id: int) -> str:
+    """客服档案显示名只取服务端用户资料，并提供稳定的最终回退。"""
+    for key in ("real_name", "username"):
+        value = _row_value(user, key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return f"user-{user_id}"
 
 
 def _validate_body(body: Any, *, require_version: bool) -> dict[str, Any]:
@@ -170,11 +181,12 @@ def _validate_body(body: Any, *, require_version: bool) -> dict[str, Any]:
 
 async def _load_cs_agent(db, *, tenant_id: str, user_id: int):
     row = (await db.execute(text(
-        "SELECT agent_id, tenant_id, auth_user_id, role, max_conversations, "
+        "SELECT agent_id, tenant_id, auth_user_id, display_name, role, "
+        "max_conversations, "
         "enabled, accepting FROM customer_service.cs_agents "
         "WHERE tenant_id = :tenant_id AND auth_user_id = CAST(:uid AS VARCHAR) "
         "FOR UPDATE"),
-        {"tenant_id": tenant_id, "uid": user_id})).mappings().first()
+        {"tenant_id": tenant_id, "uid": str(user_id)})).mappings().first()
     # 兼容只返回部分列的测试/旧边界替身；没有 agent_id 就不是客服档案。
     return row if _row_value(row, "agent_id") else None
 
@@ -191,6 +203,7 @@ def _cs_public(agent: Any) -> dict[str, Any] | None:
         return None
     return {
         "agentId": _row_value(agent, "agent_id"),
+        "displayName": _row_value(agent, "display_name"),
         "role": _row_value(agent, "role"),
         "maxConversations": _row_value(agent, "max_conversations"),
         "enabled": _row_value(agent, "enabled"),
@@ -203,6 +216,7 @@ def _state(user: Any, agent: Any) -> dict[str, Any]:
         "platformRole": _row_value(user, "role", "viewer"),
         "status": int(_row_value(user, "status", 1)),
         "csRole": _cs_role(agent),
+        "displayName": _row_value(agent, "display_name") if agent else None,
         "maxConversations": _row_value(agent, "max_conversations") if agent else None,
         "enabled": _row_value(agent, "enabled") if agent else None,
         "accepting": _row_value(agent, "accepting") if agent else None,
@@ -226,10 +240,21 @@ async def update_user_in_transaction(
 ) -> UserUpdateOutcome:
     """执行用户、客服档案、会话撤销与审计的同事务部分。"""
     parsed = _validate_body(body, require_version=require_version)
+    # 所有 RBAC 写操作先争抢同一事务级 advisory lock，再按固定顺序锁
+    # active admin 与目标用户，避免两个管理员并发降权时交叉持锁死锁。
+    await db.execute(text(
+        "SELECT pg_advisory_xact_lock(hashtext("
+        "'auth.users:rbac-active-admins'))"))
+    admin_rows = (await db.execute(text(
+        "SELECT id FROM auth.users "
+        "WHERE tenant_id = :tenant_id AND role = 'admin' AND status = 1 "
+        "ORDER BY id FOR UPDATE"),
+        {"tenant_id": tenant_id})).mappings().all()
     current = (await db.execute(text(
-        "SELECT id, username, real_name, dept, role, status, version "
-        "FROM auth.users WHERE id = :uid FOR UPDATE"),
-        {"uid": user_id})).mappings().first()
+        "SELECT id, username, real_name, dept, role, status, version, tenant_id "
+        "FROM auth.users "
+        "WHERE id = :uid AND tenant_id = :tenant_id FOR UPDATE"),
+        {"uid": user_id, "tenant_id": tenant_id})).mappings().first()
     if current is None:
         raise _http_error("用户不存在", 404)
 
@@ -255,10 +280,6 @@ async def update_user_in_transaction(
     )
     loses_admin_access = new_role != "admin" or new_status != 1
     if was_active_admin and loses_admin_access:
-        # 锁住所有当前 active admin，避免两个并发降级都观察到同一个旧计数。
-        admin_rows = (await db.execute(text(
-            "SELECT id FROM auth.users "
-            "WHERE role = 'admin' AND status = 1 FOR UPDATE"))).mappings().all()
         if len(admin_rows) <= 1:
             raise _http_error("不能降级或禁用最后一个 active admin", 409)
 
@@ -270,10 +291,12 @@ async def update_user_in_transaction(
     updated = (await db.execute(text(
         "UPDATE auth.users SET role = :role, status = :status, "
         "version = version + 1, updated_at = now() "
-        "WHERE id = :uid AND version = :expected_version "
-        "RETURNING id, username, real_name, dept, role, status, version"),
+        "WHERE id = :uid AND tenant_id = :tenant_id "
+        "AND version = :expected_version "
+        "RETURNING id, username, real_name, dept, role, status, version, tenant_id"),
         {
             "uid": user_id,
+            "tenant_id": tenant_id,
             "role": new_role,
             "status": new_status,
             "expected_version": expected_version,
@@ -332,6 +355,7 @@ async def update_user_in_transaction(
                 "agent_id": f"cs-{uuid.uuid4().hex}",
                 "tenant_id": tenant_id,
                 "auth_user_id": str(user_id),
+                "display_name": _stable_display_name(current, user_id),
                 "role": "agent" if requested_role is _MISSING else requested_role,
                 "max_conversations": (
                     10 if parsed["max_conversations"] is _MISSING
@@ -346,9 +370,10 @@ async def update_user_in_transaction(
             }
             await db.execute(text(
                 "INSERT INTO customer_service.cs_agents "
-                "(agent_id, tenant_id, auth_user_id, role, max_conversations, "
+                "(agent_id, tenant_id, auth_user_id, display_name, role, "
+                "max_conversations, "
                 "enabled, accepting) VALUES "
-                "(:agent_id, :tenant_id, :auth_user_id, :role, "
+                "(:agent_id, :tenant_id, :auth_user_id, :display_name, :role, "
                 ":max_conversations, :enabled, :accepting)"), values)
             after_agent = values
 
@@ -384,8 +409,12 @@ async def update_user_in_transaction(
 
     role_changed = new_role != _row_value(current, "role", "viewer")
     disabled = new_status != int(_row_value(current, "status", 1)) and new_status != 1
+    cs_authorization_changed = any(
+        before_state.get(field) != after_state.get(field)
+        for field in ("csRole", "enabled", "accepting")
+    )
     revoked_sessions: list[SessionRef] = []
-    if role_changed or disabled:
+    if role_changed or disabled or cs_authorization_changed:
         revoked_sessions = await _session_service.revoke_user_sessions(
             db, user_id, reason="rbac_changed"
         )
@@ -412,6 +441,18 @@ async def _rollback(db) -> None:
         logger.warning("[RBAC] 事务回滚失败", exc_info=True)
 
 
+def _is_concurrency_conflict(exc: BaseException) -> bool:
+    """识别 PostgreSQL 并发/唯一性冲突，统一映射为可重试的 409。"""
+    candidates = [exc, getattr(exc, "orig", None)]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        code = getattr(candidate, "sqlstate", None) or getattr(candidate, "pgcode", None)
+        if code in {"40001", "40P01", "55P03", "23505"}:
+            return True
+    return False
+
+
 @router.get("/users")
 async def list_users(
     request: Request,
@@ -424,16 +465,16 @@ async def list_users(
     del operator
     search = search.strip()
     tenant_id = _tenant_id(request)
-    where = ""
+    where = " WHERE u.tenant_id = :tenant_id"
     params: dict[str, Any] = {
         "limit": page_size,
         "offset": (page - 1) * page_size,
         "tenant_id": tenant_id,
     }
     if search:
-        where = (
-            " WHERE u.username ILIKE :search OR u.real_name ILIKE :search "
-            "OR u.dept ILIKE :search"
+        where += (
+            " AND (u.username ILIKE :search OR u.real_name ILIKE :search "
+            "OR u.dept ILIKE :search)"
         )
         params["search"] = f"%{search}%"
 
@@ -443,9 +484,10 @@ async def list_users(
         total = int(total_result.scalar() or 0)
         rows = (await db.execute(text(
             "SELECT u.id AS user_id, u.username, u.real_name, u.dept, "
-            "u.role AS platform_role, u.status, u.version, "
+             "u.role AS platform_role, u.status, u.version, u.tenant_id, "
             "COUNT(DISTINCT s.id) AS session_count, "
-            "a.agent_id AS cs_agent_id, a.role AS cs_role, "
+             "a.agent_id AS cs_agent_id, a.display_name AS cs_display_name, "
+             "a.role AS cs_role, "
             "a.max_conversations AS cs_max_conversations, "
             "a.enabled AS cs_enabled, a.accepting AS cs_accepting "
             "FROM auth.users u "
@@ -456,7 +498,8 @@ async def list_users(
             "AND a.tenant_id = :tenant_id "
             f"{where} "
             "GROUP BY u.id, u.username, u.real_name, u.dept, u.role, u.status, "
-            "u.version, a.agent_id, a.role, a.max_conversations, a.enabled, "
+             "u.version, u.tenant_id, a.agent_id, a.display_name, a.role, "
+             "a.max_conversations, a.enabled, "
             "a.accepting ORDER BY u.id LIMIT :limit OFFSET :offset"),
             params)).mappings().all()
 
@@ -466,6 +509,7 @@ async def list_users(
         if _row_value(row, "cs_agent_id"):
             agent = {
                 "agent_id": _row_value(row, "cs_agent_id"),
+                "display_name": _row_value(row, "cs_display_name"),
                 "role": _row_value(row, "cs_role"),
                 "max_conversations": _row_value(row, "cs_max_conversations"),
                 "enabled": _row_value(row, "cs_enabled"),
@@ -510,6 +554,8 @@ async def update_user(
         raise
     except Exception as exc:
         await _rollback(db)
+        if _is_concurrency_conflict(exc):
+            raise HTTPException(status_code=409, detail="RBAC 更新发生并发冲突，请重试") from exc
         logger.exception("[RBAC] 用户更新事务失败 user_id=%s", user_id)
         raise HTTPException(status_code=500, detail="RBAC 更新事务失败") from exc
 
