@@ -5,9 +5,18 @@ from __future__ import annotations
 import ast
 import importlib.util
 import re
+import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
-from sqlalchemy import BigInteger, Integer, String
+import pytest
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    ForeignKeyConstraint,
+    Integer,
+    String,
+)
 
 from backend.customer_service.models.agent import CSAgent
 from backend.customer_service.models.assignment import ASSIGNMENT_STATES, CSAssignment
@@ -44,6 +53,13 @@ def _index(model, name: str):
         if index.name == name:
             return index
     raise AssertionError(f"{model.__name__} 缺少索引 {name}")
+
+
+def _constraint(model, name: str):
+    for constraint in model.__table__.constraints:
+        if constraint.name == name:
+            return constraint
+    raise AssertionError(f"{model.__name__} 缺少约束 {name}")
 
 
 def _load_alembic_migration():
@@ -175,6 +191,36 @@ def test_assignment_model_exposes_offer_state_and_active_indexes():
         "state",
     ]
 
+    active_handoff = _constraint(
+        CSAssignment, "ck_cs_assignment_active_handoff_required"
+    )
+    assert isinstance(active_handoff, CheckConstraint)
+    assert "handoff_id IS NOT NULL" in str(active_handoff.sqltext)
+
+
+def test_dispatch_relationships_use_tenant_scoped_foreign_keys():
+    handoff_agent = _constraint(CSHandoff, "fk_cs_handoff_tenant_agent")
+    assert isinstance(handoff_agent, ForeignKeyConstraint)
+    assert handoff_agent.column_keys == ["tenant_id", "assigned_agent_id"]
+    assert [
+        element.target_fullname for element in handoff_agent.elements
+    ] == [
+        "customer_service.cs_agents.tenant_id",
+        "customer_service.cs_agents.agent_id",
+    ]
+
+    assignment_handoff = _constraint(
+        CSAssignment, "fk_cs_assignment_tenant_handoff"
+    )
+    assert isinstance(assignment_handoff, ForeignKeyConstraint)
+    assert assignment_handoff.column_keys == ["tenant_id", "handoff_id"]
+    assignment_agent = _constraint(CSAssignment, "fk_cs_assignment_tenant_agent")
+    assert isinstance(assignment_agent, ForeignKeyConstraint)
+    assert assignment_agent.column_keys == ["tenant_id", "agent_id"]
+
+    _index(CSAgent, "uq_cs_agent_tenant_agent_id")
+    _index(CSHandoff, "uq_cs_handoff_tenant_handoff_id")
+
 
 def test_event_model_exposes_tenant_event_sequence_and_outbox_contract():
     expected_fields = {
@@ -304,7 +350,15 @@ def test_native_migration_is_idempotent_and_contains_dispatch_contract():
         "conversations": {"tenant_id"},
     }
     for table, columns in required_columns.items():
-        table_sql = normalized[normalized.find(f"{table.upper()}") :]
+        table_sql = " ".join(
+            re.findall(
+                rf"ALTER TABLE\s+CUSTOMER_SERVICE\.{table.upper()}\s+"
+                rf"(ADD COLUMN IF NOT EXISTS.*?);",
+                normalized,
+                flags=re.DOTALL,
+            )
+        )
+        assert table_sql, f"{table} 缺少对应 ALTER TABLE 语句"
         for column in columns:
             assert re.search(
                 rf"ADD COLUMN IF NOT EXISTS\s+{column.upper()}\b", table_sql
@@ -314,7 +368,9 @@ def test_native_migration_is_idempotent_and_contains_dispatch_contract():
         "UQ_CS_HANDOFF_TENANT_CONVERSATION_ACTIVE",
         "IDX_CS_HANDOFF_DISPATCH_QUEUE",
         "IDX_CS_AGENT_TENANT_STATUS",
+        "UQ_CS_AGENT_TENANT_AGENT_ID",
         "UQ_CS_AGENT_TENANT_AUTH_USER",
+        "UQ_CS_HANDOFF_TENANT_HANDOFF_ID",
         "UQ_CS_ASSIGNMENT_TENANT_HANDOFF_ACTIVE",
         "IDX_CS_ASSIGNMENT_TENANT_AGENT_STATE",
         "UQ_CS_EVENT_TENANT_HANDOFF_SEQ",
@@ -324,5 +380,372 @@ def test_native_migration_is_idempotent_and_contains_dispatch_contract():
         assert index_name in normalized
 
     assert "HANDOFF_STATE <> 'CLOSED'" in normalized
-    assert "STATE IN ('OFFERED', 'ACCEPTED')" in normalized
+    assert "HANDOFF_ID IS NOT NULL AND STATE IN ('OFFERED', 'ACCEPTED')" in normalized
+    assert "SET STATE = 'RELEASED'" in normalized
+    assert "FK_CS_ASSIGNMENT_TENANT_HANDOFF" in normalized
+    assert "FK_CS_ASSIGNMENT_TENANT_AGENT" in normalized
+    assert "FK_CS_HANDOFF_TENANT_AGENT" in normalized
     assert "TENANT_ID, HANDOFF_ID, EVENT_SEQ" in normalized
+
+    handoff_create = re.search(
+        r"CREATE TABLE IF NOT EXISTS CUSTOMER_SERVICE\.HANDOFFS\s*\(.*?\);",
+        normalized,
+        flags=re.DOTALL,
+    )
+    assert handoff_create is not None
+    assert "ASSIGNED_AGENT_ID VARCHAR(64) REFERENCES" not in handoff_create.group(0)
+
+    assignment_create = re.search(
+        r"CREATE TABLE IF NOT EXISTS CUSTOMER_SERVICE\.ASSIGNMENTS\s*\(.*?\);",
+        normalized,
+        flags=re.DOTALL,
+    )
+    assert assignment_create is not None
+    assert "FK_CS_ASSIGNMENT_HANDOFF" not in assignment_create.group(0)
+    assert "AGENT_ID VARCHAR(64) REFERENCES" not in assignment_create.group(0)
+
+
+def _legacy_schema_sql() -> str:
+    return """
+    CREATE SCHEMA customer_service;
+    CREATE TABLE customer_service.cs_agents (
+        id BIGSERIAL PRIMARY KEY,
+        agent_id VARCHAR(64) NOT NULL UNIQUE,
+        display_name VARCHAR(128) NOT NULL,
+        email VARCHAR(128),
+        role VARCHAR(20) NOT NULL DEFAULT 'agent',
+        available BOOLEAN NOT NULL DEFAULT TRUE,
+        max_conversations BIGINT NOT NULL DEFAULT 10,
+        custom_fields JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE customer_service.conversations (
+        id BIGSERIAL PRIMARY KEY,
+        conversation_id VARCHAR(64) NOT NULL UNIQUE,
+        user_id VARCHAR(64) NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'active',
+        channel VARCHAR(20) NOT NULL DEFAULT 'web',
+        assigned_agent VARCHAR(64),
+        ai_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        summary TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        closed_at TIMESTAMPTZ
+    );
+    CREATE TABLE customer_service.handoffs (
+        id BIGSERIAL PRIMARY KEY,
+        handoff_id VARCHAR(64) NOT NULL UNIQUE,
+        conversation_id VARCHAR(64) NOT NULL,
+        user_id VARCHAR(64) NOT NULL,
+        handoff_state VARCHAR(20) NOT NULL DEFAULT 'initiated',
+        trigger_type VARCHAR(30),
+        trigger_reason TEXT,
+        ticket_id VARCHAR(64),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        closed_at TIMESTAMPTZ
+    );
+    CREATE TABLE customer_service.assignments (
+        id BIGSERIAL PRIMARY KEY,
+        conversation_id VARCHAR(64) NOT NULL,
+        agent_id VARCHAR(64),
+        assigned_by VARCHAR(64),
+        assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        unassigned_at TIMESTAMPTZ
+    );
+    CREATE TABLE customer_service.events (
+        id BIGSERIAL PRIMARY KEY,
+        conversation_id VARCHAR(64) NOT NULL,
+        event_id VARCHAR(64) NOT NULL UNIQUE,
+        type VARCHAR(64) NOT NULL,
+        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    INSERT INTO customer_service.cs_agents (agent_id, display_name)
+    VALUES ('legacy-agent', 'Legacy Agent');
+    INSERT INTO customer_service.conversations (conversation_id, user_id)
+    VALUES ('legacy-conversation', 'legacy-user');
+    INSERT INTO customer_service.handoffs
+        (handoff_id, conversation_id, user_id, handoff_state)
+    VALUES ('legacy-handoff', 'legacy-conversation', 'legacy-user', 'waiting_human');
+    INSERT INTO customer_service.assignments
+        (conversation_id, agent_id)
+    VALUES
+        ('legacy-conversation', 'legacy-agent'),
+        ('legacy-conversation', 'legacy-agent');
+    """
+
+
+@pytest.fixture
+def dispatch_postgres_db():
+    """创建临时数据库；不可用时明确 skip，不用 SQLite 伪造迁移验证。"""
+    psycopg2 = pytest.importorskip("psycopg2")
+    from psycopg2 import sql as pg_sql
+
+    from backend.config.database import MEMORY_DB_CONFIG
+
+    database_name = f"cs_dispatch_test_{uuid.uuid4().hex[:16]}"
+    admin_config = {**MEMORY_DB_CONFIG, "dbname": "postgres"}
+    try:
+        admin = psycopg2.connect(**admin_config, connect_timeout=2)
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL 不可用，跳过真实迁移测试: {exc}")
+
+    try:
+        admin.autocommit = True
+        with admin.cursor() as cursor:
+            cursor.execute(
+                pg_sql.SQL("CREATE DATABASE {}\n").format(
+                    pg_sql.Identifier(database_name)
+                )
+            )
+    except Exception as exc:
+        admin.close()
+        pytest.skip(f"无法创建临时 PostgreSQL 数据库，跳过真实迁移测试: {exc}")
+    finally:
+        if not admin.closed:
+            admin.close()
+
+    test_config = {**MEMORY_DB_CONFIG, "dbname": database_name}
+    try:
+        connection = psycopg2.connect(**test_config, connect_timeout=2)
+    except Exception as exc:
+        cleanup = psycopg2.connect(**admin_config, connect_timeout=2)
+        cleanup.autocommit = True
+        with cleanup.cursor() as cursor:
+            cursor.execute(
+                pg_sql.SQL("DROP DATABASE IF EXISTS {}\n").format(
+                    pg_sql.Identifier(database_name)
+                )
+            )
+        cleanup.close()
+        pytest.skip(f"无法连接临时 PostgreSQL 数据库，跳过真实迁移测试: {exc}")
+
+    try:
+        yield connection
+    finally:
+        connection.close()
+        cleanup = psycopg2.connect(**admin_config, connect_timeout=2)
+        cleanup.autocommit = True
+        with cleanup.cursor() as cursor:
+            cursor.execute(
+                pg_sql.SQL("DROP DATABASE IF EXISTS {}\n").format(
+                    pg_sql.Identifier(database_name)
+                )
+            )
+        cleanup.close()
+
+
+def _run_alembic_upgrade(connection):
+    migration = _load_alembic_migration()
+
+    def execute(sql):
+        with connection.cursor() as cursor:
+            cursor.execute(sql)
+        connection.commit()
+
+    migration.op = SimpleNamespace(execute=execute)
+    migration.upgrade()
+
+
+def test_alembic_upgrade_handles_legacy_assignments_and_tenant_guards(
+    dispatch_postgres_db,
+):
+    psycopg2 = pytest.importorskip("psycopg2")
+    connection = dispatch_postgres_db
+    with connection.cursor() as cursor:
+        cursor.execute(_legacy_schema_sql())
+    connection.commit()
+
+    _run_alembic_upgrade(connection)
+    _run_alembic_upgrade(connection)
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT state, COUNT(*)
+            FROM customer_service.assignments
+            WHERE handoff_id IS NULL
+            GROUP BY state
+            """
+        )
+        assert cursor.fetchall() == [("released", 2)]
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM customer_service.assignments
+            WHERE handoff_id IS NULL AND state IN ('offered', 'accepted')
+            """
+        )
+        assert cursor.fetchone()[0] == 0
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM customer_service.assignments
+            WHERE state IN ('offered', 'accepted') AND handoff_id IS NULL
+            """
+        )
+        assert cursor.fetchone()[0] == 0
+
+        with pytest.raises(psycopg2.errors.CheckViolation):
+            cursor.execute(
+                """
+                INSERT INTO customer_service.assignments
+                    (tenant_id, handoff_id, conversation_id, agent_id, state)
+                VALUES ('tenant-a', NULL, 'legacy-conversation',
+                        'legacy-agent', 'offered')
+                """
+            )
+        connection.rollback()
+
+        cursor.execute(
+            """
+            INSERT INTO customer_service.cs_agents
+                (agent_id, tenant_id, display_name)
+            VALUES
+                ('tenant-a-agent', 'tenant-a', 'Tenant A'),
+                ('tenant-b-agent', 'tenant-b', 'Tenant B')
+            """
+        )
+        cursor.execute(
+            """
+            INSERT INTO customer_service.handoffs
+                (handoff_id, conversation_id, user_id, tenant_id, handoff_state)
+            VALUES
+                ('tenant-a-handoff', 'legacy-conversation', 'legacy-user',
+                 'tenant-a', 'waiting_human')
+            """
+        )
+    connection.commit()
+
+    with connection.cursor() as cursor:
+        with pytest.raises(psycopg2.errors.ForeignKeyViolation):
+            cursor.execute(
+                """
+                INSERT INTO customer_service.assignments
+                    (tenant_id, handoff_id, conversation_id, agent_id, state)
+                VALUES ('tenant-a', 'tenant-a-handoff', 'legacy-conversation',
+                        'tenant-b-agent', 'offered')
+                """
+            )
+        connection.rollback()
+
+        with pytest.raises(psycopg2.errors.ForeignKeyViolation):
+            cursor.execute(
+                """
+                INSERT INTO customer_service.assignments
+                    (tenant_id, handoff_id, conversation_id, agent_id, state)
+                VALUES ('tenant-b', 'tenant-a-handoff', 'legacy-conversation',
+                        'tenant-b-agent', 'offered')
+                """
+            )
+        connection.rollback()
+
+        with pytest.raises(psycopg2.errors.ForeignKeyViolation):
+            cursor.execute(
+                """
+                UPDATE customer_service.handoffs
+                SET assigned_agent_id = 'tenant-b-agent'
+                WHERE handoff_id = 'tenant-a-handoff'
+                """
+            )
+        connection.rollback()
+
+        cursor.execute(
+            """
+            INSERT INTO customer_service.assignments
+                (tenant_id, handoff_id, conversation_id, agent_id, state)
+            VALUES ('tenant-a', 'tenant-a-handoff', 'legacy-conversation',
+                    'tenant-a-agent', 'offered')
+            """
+        )
+    connection.commit()
+
+    with connection.cursor() as cursor:
+        with pytest.raises(psycopg2.errors.UniqueViolation):
+            cursor.execute(
+                """
+                INSERT INTO customer_service.assignments
+                    (tenant_id, handoff_id, conversation_id, agent_id, state)
+                VALUES ('tenant-a', 'tenant-a-handoff', 'legacy-conversation',
+                        'tenant-a-agent', 'accepted')
+                """
+            )
+        connection.rollback()
+
+
+def test_empty_database_upgrade_has_one_named_tenant_fk_per_relationship(
+    dispatch_postgres_db,
+):
+    connection = dispatch_postgres_db
+    _run_alembic_upgrade(connection)
+    _run_alembic_upgrade(connection)
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT conname
+            FROM pg_constraint
+            WHERE conrelid = 'customer_service.handoffs'::regclass
+              AND confrelid = 'customer_service.cs_agents'::regclass
+            """
+        )
+        assert [row[0] for row in cursor.fetchall()] == [
+            "fk_cs_handoff_tenant_agent"
+        ]
+
+        cursor.execute(
+            """
+            SELECT conname
+            FROM pg_constraint
+            WHERE conrelid = 'customer_service.assignments'::regclass
+              AND confrelid IN (
+                  'customer_service.handoffs'::regclass,
+                  'customer_service.cs_agents'::regclass
+              )
+            ORDER BY conname
+            """
+        )
+        assert [row[0] for row in cursor.fetchall()] == [
+            "fk_cs_assignment_tenant_agent",
+            "fk_cs_assignment_tenant_handoff",
+        ]
+
+
+def test_upgrade_rejects_non_null_active_assignment_duplicates(
+    dispatch_postgres_db,
+):
+    psycopg2 = pytest.importorskip("psycopg2")
+    connection = dispatch_postgres_db
+    with connection.cursor() as cursor:
+        cursor.execute(_legacy_schema_sql())
+        cursor.execute(
+            """
+            ALTER TABLE customer_service.cs_agents
+                ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT 'tenant-a';
+            ALTER TABLE customer_service.conversations
+                ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT 'tenant-a';
+            ALTER TABLE customer_service.handoffs
+                ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT 'tenant-a';
+            ALTER TABLE customer_service.assignments
+                ADD COLUMN tenant_id VARCHAR(64) NOT NULL DEFAULT 'tenant-a',
+                ADD COLUMN handoff_id VARCHAR(64),
+                ADD COLUMN state VARCHAR(20) NOT NULL DEFAULT 'offered';
+            UPDATE customer_service.assignments
+            SET handoff_id = 'duplicate-handoff';
+            UPDATE customer_service.handoffs
+            SET handoff_id = 'duplicate-handoff';
+            """
+        )
+    connection.commit()
+
+    with connection.cursor() as cursor:
+        with pytest.raises(psycopg2.errors.RaiseException, match="duplicate active"):
+            _run_alembic_upgrade(connection)
+        connection.rollback()
+        cursor.execute(
+            "SELECT COUNT(*) FROM customer_service.assignments "
+            "WHERE handoff_id = 'duplicate-handoff'"
+        )
+        assert cursor.fetchone()[0] == 2

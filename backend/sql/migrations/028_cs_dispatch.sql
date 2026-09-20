@@ -57,9 +57,7 @@ CREATE TABLE IF NOT EXISTS customer_service.handoffs (
     trigger_reason      TEXT,
     ticket_id           VARCHAR(64),
     priority            INTEGER NOT NULL DEFAULT 50,
-    assigned_agent_id   VARCHAR(64)
-                        REFERENCES customer_service.cs_agents(agent_id)
-                        ON DELETE SET NULL,
+    assigned_agent_id   VARCHAR(64),
     assignment_version  INTEGER NOT NULL DEFAULT 0,
     attempt_count       INTEGER NOT NULL DEFAULT 0,
     idempotency_key     VARCHAR(128),
@@ -79,9 +77,7 @@ CREATE TABLE IF NOT EXISTS customer_service.assignments (
     conversation_id     VARCHAR(64) NOT NULL
                         REFERENCES customer_service.conversations(conversation_id)
                         ON DELETE CASCADE,
-    agent_id            VARCHAR(64)
-                        REFERENCES customer_service.cs_agents(agent_id)
-                        ON DELETE SET NULL,
+    agent_id            VARCHAR(64),
     state               VARCHAR(20) NOT NULL DEFAULT 'offered',
     attempt_no          INTEGER NOT NULL DEFAULT 1,
     offer_version       INTEGER NOT NULL DEFAULT 0,
@@ -93,10 +89,8 @@ CREATE TABLE IF NOT EXISTS customer_service.assignments (
     assigned_by         VARCHAR(64),
     assigned_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     unassigned_at       TIMESTAMPTZ,
-    CONSTRAINT fk_cs_assignment_handoff
-        FOREIGN KEY (handoff_id)
-        REFERENCES customer_service.handoffs(handoff_id)
-        ON DELETE CASCADE
+    CONSTRAINT ck_cs_assignment_active_handoff_required
+        CHECK (state NOT IN ('offered', 'accepted') OR handoff_id IS NOT NULL)
 );
 
 CREATE TABLE IF NOT EXISTS customer_service.events (
@@ -220,6 +214,13 @@ BEGIN
     END IF;
 END $$;
 
+-- legacy assignment 没有 handoff_id，不能被视为当前活动派单。
+-- 统一降级为 released；NULL handoff 由后续复合 FK/唯一性检查排除。
+UPDATE customer_service.assignments
+SET state = 'released'
+WHERE handoff_id IS NULL
+  AND state IN ('offered', 'accepted');
+
 -- 5. events：持久事件与 outbox 状态；event_seq 不设应用硬编码默认值。
 DO $$
 BEGIN
@@ -243,14 +244,20 @@ BEGIN
     END IF;
 END $$;
 
--- 新增关联保持 ORM 与数据库一致；存量孤儿引用显式阻断，不静默改写。
+-- 复合关联保持 ORM 与数据库一致；存量孤儿引用显式阻断，不静默改写。
+-- 复合键的父端唯一索引必须先存在，才能添加复合外键。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cs_agent_tenant_agent_id
+    ON customer_service.cs_agents (tenant_id, agent_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cs_handoff_tenant_handoff_id
+    ON customer_service.handoffs (tenant_id, handoff_id);
+
 DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1
         FROM pg_constraint
         WHERE conrelid = 'customer_service.handoffs'::regclass
-          AND conname = 'fk_cs_handoff_assigned_agent'
+          AND conname = 'fk_cs_handoff_tenant_agent'
     ) THEN
         IF EXISTS (
             SELECT 1
@@ -259,24 +266,24 @@ BEGIN
               AND NOT EXISTS (
                   SELECT 1
                   FROM customer_service.cs_agents a
-                  WHERE a.agent_id = h.assigned_agent_id
+                  WHERE a.tenant_id = h.tenant_id
+                    AND a.agent_id = h.assigned_agent_id
               )
         ) THEN
             RAISE EXCEPTION
-                'customer_service.handoffs has orphan assigned_agent_id values';
+                'customer_service.handoffs has orphan tenant/assigned_agent_id values';
         END IF;
         ALTER TABLE customer_service.handoffs
-            ADD CONSTRAINT fk_cs_handoff_assigned_agent
-            FOREIGN KEY (assigned_agent_id)
-            REFERENCES customer_service.cs_agents(agent_id)
-            ON DELETE SET NULL;
+            ADD CONSTRAINT fk_cs_handoff_tenant_agent
+            FOREIGN KEY (tenant_id, assigned_agent_id)
+            REFERENCES customer_service.cs_agents(tenant_id, agent_id);
     END IF;
 
     IF NOT EXISTS (
         SELECT 1
         FROM pg_constraint
         WHERE conrelid = 'customer_service.assignments'::regclass
-          AND conname = 'fk_cs_assignment_handoff'
+          AND conname = 'fk_cs_assignment_tenant_handoff'
     ) THEN
         IF EXISTS (
             SELECT 1
@@ -285,17 +292,55 @@ BEGIN
               AND NOT EXISTS (
                   SELECT 1
                   FROM customer_service.handoffs h
-                  WHERE h.handoff_id = a.handoff_id
+                  WHERE h.tenant_id = a.tenant_id
+                    AND h.handoff_id = a.handoff_id
               )
         ) THEN
             RAISE EXCEPTION
-                'customer_service.assignments has orphan handoff_id values';
+                'customer_service.assignments has orphan tenant/handoff_id values';
         END IF;
         ALTER TABLE customer_service.assignments
-            ADD CONSTRAINT fk_cs_assignment_handoff
-            FOREIGN KEY (handoff_id)
-            REFERENCES customer_service.handoffs(handoff_id)
+            ADD CONSTRAINT fk_cs_assignment_tenant_handoff
+            FOREIGN KEY (tenant_id, handoff_id)
+            REFERENCES customer_service.handoffs(tenant_id, handoff_id)
             ON DELETE CASCADE;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'customer_service.assignments'::regclass
+          AND conname = 'fk_cs_assignment_tenant_agent'
+    ) THEN
+        IF EXISTS (
+            SELECT 1
+            FROM customer_service.assignments a
+            WHERE a.agent_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM customer_service.cs_agents agent
+                  WHERE agent.tenant_id = a.tenant_id
+                    AND agent.agent_id = a.agent_id
+              )
+        ) THEN
+            RAISE EXCEPTION
+                'customer_service.assignments has orphan tenant/agent_id values';
+        END IF;
+        ALTER TABLE customer_service.assignments
+            ADD CONSTRAINT fk_cs_assignment_tenant_agent
+            FOREIGN KEY (tenant_id, agent_id)
+            REFERENCES customer_service.cs_agents(tenant_id, agent_id);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'customer_service.assignments'::regclass
+          AND conname = 'ck_cs_assignment_active_handoff_required'
+    ) THEN
+        ALTER TABLE customer_service.assignments
+            ADD CONSTRAINT ck_cs_assignment_active_handoff_required
+            CHECK (state NOT IN ('offered', 'accepted') OR handoff_id IS NOT NULL);
     END IF;
 END $$;
 
@@ -316,7 +361,8 @@ BEGIN
     IF EXISTS (
         SELECT 1
         FROM customer_service.assignments
-        WHERE state IN ('offered', 'accepted')
+        WHERE handoff_id IS NOT NULL
+          AND state IN ('offered', 'accepted')
         GROUP BY tenant_id, handoff_id
         HAVING COUNT(*) > 1
     ) THEN
@@ -365,7 +411,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_cs_agent_tenant_auth_user
 -- assignment 活动 offer 唯一性与按坐席状态查询。
 CREATE UNIQUE INDEX IF NOT EXISTS uq_cs_assignment_tenant_handoff_active
     ON customer_service.assignments (tenant_id, handoff_id)
-    WHERE state IN ('offered', 'accepted');
+    WHERE handoff_id IS NOT NULL
+      AND state IN ('offered', 'accepted');
 CREATE INDEX IF NOT EXISTS idx_cs_assignment_tenant_agent_state
     ON customer_service.assignments (tenant_id, agent_id, state);
 

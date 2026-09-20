@@ -6,9 +6,11 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -36,6 +38,27 @@ ASSIGNMENT_STATES = (
 class CSAssignment(CSBase):
     __tablename__ = "assignments"
     __table_args__ = (
+        CheckConstraint(
+            "state NOT IN ('offered', 'accepted') OR handoff_id IS NOT NULL",
+            name="ck_cs_assignment_active_handoff_required",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "handoff_id"],
+            [
+                "customer_service.handoffs.tenant_id",
+                "customer_service.handoffs.handoff_id",
+            ],
+            name="fk_cs_assignment_tenant_handoff",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            [
+                "customer_service.cs_agents.tenant_id",
+                "customer_service.cs_agents.agent_id",
+            ],
+            name="fk_cs_assignment_tenant_agent",
+        ),
         Index("idx_cs_assign_conv", "conversation_id", "assigned_at"),
         Index("idx_cs_assign_agent", "agent_id", "assigned_at"),
         Index(
@@ -43,7 +66,9 @@ class CSAssignment(CSBase):
             "tenant_id",
             "handoff_id",
             unique=True,
-            postgresql_where=text("state IN ('offered', 'accepted')"),
+            postgresql_where=text(
+                "handoff_id IS NOT NULL AND state IN ('offered', 'accepted')"
+            ),
         ),
         Index(
             "idx_cs_assignment_tenant_agent_state",
@@ -56,21 +81,13 @@ class CSAssignment(CSBase):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     tenant_id = Column(String(64), nullable=False, default="default")
-    handoff_id = Column(
-        String(64),
-        ForeignKey("customer_service.handoffs.handoff_id", ondelete="CASCADE"),
-        nullable=True,
-    )
+    handoff_id = Column(String(64), nullable=True)
     conversation_id = Column(
         String(64),
         ForeignKey("customer_service.conversations.conversation_id", ondelete="CASCADE"),
         nullable=False,
     )
-    agent_id = Column(
-        String(64),
-        ForeignKey("customer_service.cs_agents.agent_id", ondelete="SET NULL"),
-        nullable=True,
-    )
+    agent_id = Column(String(64), nullable=True)
 
     state = Column(
         String(20),

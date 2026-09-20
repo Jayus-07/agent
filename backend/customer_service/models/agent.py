@@ -28,6 +28,12 @@ class CSAgent(CSBase):
     __table_args__ = (
         Index("idx_cs_agent_email", "email", unique=True),
         Index(
+            "uq_cs_agent_tenant_agent_id",
+            "tenant_id",
+            "agent_id",
+            unique=True,
+        ),
+        Index(
             "idx_cs_agent_tenant_status",
             "tenant_id",
             "enabled",

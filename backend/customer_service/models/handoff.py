@@ -8,7 +8,7 @@ from sqlalchemy import (
     BigInteger,
     Column,
     DateTime,
-    ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -51,12 +51,26 @@ class CSHandoff(CSBase):
             postgresql_where=text("handoff_state <> 'closed'"),
         ),
         Index(
+            "uq_cs_handoff_tenant_handoff_id",
+            "tenant_id",
+            "handoff_id",
+            unique=True,
+        ),
+        Index(
             "idx_cs_handoff_dispatch_queue",
             "tenant_id",
             "handoff_state",
             text("priority DESC"),
             "created_at",
             "id",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "assigned_agent_id"],
+            [
+                "customer_service.cs_agents.tenant_id",
+                "customer_service.cs_agents.agent_id",
+            ],
+            name="fk_cs_handoff_tenant_agent",
         ),
         {"schema": "customer_service"},
     )
@@ -76,11 +90,7 @@ class CSHandoff(CSBase):
     trigger_reason = Column(Text, nullable=True)
     ticket_id = Column(String(64), nullable=True)
     priority = Column(Integer, nullable=False, default=50)
-    assigned_agent_id = Column(
-        String(64),
-        ForeignKey("customer_service.cs_agents.agent_id", ondelete="SET NULL"),
-        nullable=True,
-    )
+    assigned_agent_id = Column(String(64), nullable=True)
     assignment_version = Column(Integer, nullable=False, default=0)
     attempt_count = Column(Integer, nullable=False, default=0)
     idempotency_key = Column(String(128), nullable=True)
