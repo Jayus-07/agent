@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { CheckCircle2, Edit3, FlaskConical, KeyRound, LockKeyhole, Plus, Save, Trash2, X } from 'lucide-react'
 import {
   addProviderModel,
@@ -192,6 +192,173 @@ function unresolvedPlaceholder(baseUrl: string): string | null {
   return match ? match[1] : null
 }
 
+/** base_url 的 host（小写）。解析不出返回 ''。 */
+function baseUrlHost(raw: string): string {
+  const trimmed = (raw || '').trim()
+  const marker = trimmed.indexOf('://')
+  if (marker < 0) return ''
+  const rest = trimmed.slice(marker + 3)
+  const slash = rest.indexOf('/')
+  return (slash < 0 ? rest : rest.slice(0, slash)).toLowerCase()
+}
+
+/** base_url 的 path（含前导 `/`）。根路径与无路径一律返回 ''。 */
+function baseUrlPath(raw: string): string {
+  const trimmed = (raw || '').trim()
+  const marker = trimmed.indexOf('://')
+  const rest = marker < 0 ? trimmed : trimmed.slice(marker + 3)
+  const slash = rest.indexOf('/')
+  if (slash < 0) return ''
+  return rest.slice(slash).replace(/\/+$/, '')
+}
+
+/** 预置目录里 OpenAI 兼容端点的路径样本（按出现频次取前几个）。
+ *
+ *  用于把「你这个路径在目录里没有先例」说成**可核对的事实**，
+ *  而不是让界面瞎猜厂商规范。
+ */
+function openaiPathSamples(presets: ProviderPreset[]): string[] {
+  const counts = new Map<string, number>()
+  for (const item of presets) {
+    if (item.driver !== 'openai') continue
+    const path = baseUrlPath(item.baseUrl)
+    if (!path) continue
+    counts.set(path, (counts.get(path) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([path]) => path)
+}
+
+/** base_url 诊断结论。每一种都由预置目录推导，不内置厂商知识。 */
+type BaseUrlDiagnosis =
+  /** 地址为空，不打扰。 */
+  | { kind: 'empty' }
+  /** 与某条预置逐字一致（协议也一致）。 */
+  | { kind: 'matched'; preset: ProviderPreset; label: string }
+  /** 地址命中预置，但那条属于**别的计费计划** —— 「按量端点用在 Coding Plan 上」会多花钱。 */
+  | {
+      kind: 'plan-mismatch'
+      hit: ProviderPreset
+      hitLabel: string
+      hitPlanLabel: string
+      currentPlanLabel: string
+      /** 一键切回本计划端点的目标；无从确定时为 null（只警告不动手）。 */
+      restore: ProviderPreset | null
+    }
+  /** 用户先选了预置、又手改了地址 —— 预置信息仍然挂在界面上，必须显式标出偏离。 */
+  | { kind: 'deviated'; preset: ProviderPreset; label: string }
+  /** 域名在预置里，但路径不是收录值：给出候选端点让用户选，而不是替他猜。 */
+  | { kind: 'suggest'; host: string; candidates: Array<{ preset: ProviderPreset; label: string }> }
+  /** 域名不认识，但路径形如 `/api/vN` 这种厂商原生版本号前缀 —— 只提示，不断言。 */
+  | { kind: 'suspect'; path: string; samples: string[]; total: number }
+  /** 查无所获：自建网关的常态，不渲染任何东西。 */
+  | { kind: 'custom' }
+
+function presetLabelFor(preset: ProviderPreset, plans: PresetPlan[]): string {
+  const planLabel = plans.find((item) => item.id === preset.plan)?.label ?? ''
+  return presetDisplayName(preset, planLabel)
+}
+
+/** 路径形态在预置目录里**从未出现**的疑似原生前缀（如 `/api/v1`）。
+ *
+ *  刻意做得很窄：只在路径命中「`/api/` + 版本号」这种厂商原生前缀形状、
+ *  且目录里确实没有同写法时才提示。宁可漏报 —— 把合法的自建网关误报成
+ *  错误，比不提示更糟；而这个形状恰好是本次 404 事故的输入。
+ *
+ *  背景：这类地址下 `GET {base}/models` 往往**照样 200**（原生路由也在），
+ *  于是 L1 给绿灯，直到 L2 最小调用才 404，且错误名还被 SDK 伪装成
+ *  `ModelNotFound` —— 用户会一头扎进「模型名对不对」，而问题在路径。
+ */
+function suspectForeignPath(url: string, presets: ProviderPreset[]): BaseUrlDiagnosis | null {
+  const path = baseUrlPath(url)
+  if (!/^\/api\/v\d+$/.test(path)) return null
+  if (presets.some((item) => baseUrlPath(item.baseUrl) === path)) return null
+  return { kind: 'suspect', path, samples: openaiPathSamples(presets), total: presets.length }
+}
+
+/** 地址诊断。
+ *
+ *  存在的意义是堵住一类真实事故 —— 把厂商**原生协议**前缀当成 OpenAI
+ *  兼容基址填进来（见 `suspectForeignPath` 的注释），以及「先套预置、
+ *  再手改地址」之后界面继续拿预置的 Key 格式与端点口径误导用户。
+ */
+function diagnoseBaseUrl(
+  draft: Draft,
+  presets: ProviderPreset[],
+  plans: PresetPlan[],
+): BaseUrlDiagnosis {
+  const url = normalizeBaseUrl(draft.baseUrl)
+  if (!url) return { kind: 'empty' }
+  if (presets.length === 0) return { kind: 'custom' }
+
+  const selected = presets.find((item) => item.id === draft.presetId) ?? null
+  // 协议也算匹配条件：同一 URL 的 openai 与 anthropic 条目是两回事。
+  const sameDriver = presets.filter(
+    (item) => item.driver === draft.driver && normalizeBaseUrl(item.baseUrl) === url,
+  )
+  if (sameDriver.length > 0) {
+    const hit = selected && sameDriver.some((item) => item.id === selected.id) ? selected : sameDriver[0]
+    const label = presetLabelFor(hit, plans)
+    // 命中预置不代表用对端点：同一域名下按量付费用 `/api/v3`、Coding Plan 用
+    // `/api/coding/v3`，两条都是合法预置。若命中的那条不属于当前所选计划，
+    // 说明用户正把另一个计划的端点拿来用 —— 官方口径是「用错会产生额外费用」，
+    // 界面必须点名，不能只给一个「已匹配」的绿灯。
+    if (draft.plan && hit.plan !== draft.plan) {
+      const backToSelected = selected && selected.id !== hit.id ? selected : null
+      const host = baseUrlHost(url)
+      return {
+        kind: 'plan-mismatch',
+        hit,
+        hitLabel: label,
+        hitPlanLabel: plans.find((item) => item.id === hit.plan)?.label ?? hit.plan,
+        currentPlanLabel: plans.find((item) => item.id === draft.plan)?.label ?? draft.plan,
+        // 切回本计划端点的目标，按可靠性依次找：
+        // ① 用户原本选中的那条（最常见：选了预置又手改地址）；
+        // ② 同域名 + 同协议 + 本计划的条目（「先选计划、再粘贴地址」时 presetId
+        //    为空，只能靠这条 —— 它必须按**域名**找，不能只在 URL 相同的预置里找，
+        //    否则按钮在最需要的时候恰好消失）；
+        // ③ 找不到就不给按钮，只警告 —— 不猜。
+        restore: backToSelected
+          ?? presets.find((item) =>
+            item.plan === draft.plan
+            && item.driver === draft.driver
+            && baseUrlHost(item.baseUrl) === host
+            && item.id !== hit.id,
+          )
+          ?? null,
+      }
+    }
+    return { kind: 'matched', preset: hit, label }
+  }
+
+  // 先选预置、又改了地址：这是最需要点名的一种状态 —— 界面上其余字段
+  // （Key 格式、计费口径、显示名）说的都还是那条预置。
+  if (selected) {
+    return { kind: 'deviated', preset: selected, label: presetLabelFor(selected, plans) }
+  }
+
+  const host = baseUrlHost(url)
+  const path = baseUrlPath(url)
+  const candidates = presets.filter(
+    (item) => baseUrlHost(item.baseUrl) === host && baseUrlPath(item.baseUrl) !== path,
+  )
+  if (candidates.length > 0) {
+    // 排序只为把「你已经在用的计划 / 协议」排前面，**不裁定唯一正解** ——
+    // 同一域名常有两三个端点（如火山 `/api/v3` 与 `/api/coding/v3`），
+    // 谁对取决于计费计划，界面不该替用户拍板，故全部列为可点候选。
+    const rank = (item: ProviderPreset) =>
+      (item.plan === draft.plan ? 4 : 0) + (item.driver === draft.driver ? 2 : 0)
+    const ranked = [...candidates]
+      .sort((a, b) => rank(b) - rank(a))
+      .map((preset) => ({ preset, label: presetLabelFor(preset, plans) }))
+    return { kind: 'suggest', host, candidates: ranked.slice(0, 3) }
+  }
+
+  return suspectForeignPath(url, presets) ?? { kind: 'custom' }
+}
+
 function formatElapsed(ms: number): string {
   if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`
   return `${(ms / 1000).toFixed(1)}s`
@@ -237,6 +404,120 @@ function ProbeResultDetails({ result }: { result: ProbeResponse }) {
         </ol>
         {result.suggestion && <div className="mt-1.5 break-words border-t border-current/10 pt-1.5">建议：{result.suggestion}</div>}
       </details>
+    </div>
+  )
+}
+
+function AdvisorButton({
+  children,
+  onClick,
+  disabled,
+}: {
+  children: ReactNode
+  onClick: () => void
+  disabled: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="rounded-md border border-amber-300 bg-white px-2 py-1 text-left font-mono text-[10px] text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+    >
+      {children}
+    </button>
+  )
+}
+
+/** Base URL 旁的地址助手。
+ *
+ *  只做四件事：指出「已偏离预置」并给一键还原、指出「这个地址是另一个计费
+ *  计划的端点」、指出「同域名下的收录端点」并给一键替换、指出「这个路径在
+ *  目录里没有先例」。**不校验、不拦截、不替用户拍板** —— 自建网关可以用
+ *  任意地址，把合法输入判成错误比漏报更糟。
+ */
+function BaseUrlAdvisor({
+  diagnosis,
+  busy,
+  onUsePreset,
+}: {
+  diagnosis: BaseUrlDiagnosis
+  busy: boolean
+  onUsePreset: (presetId: string) => void
+}) {
+  if (diagnosis.kind === 'empty' || diagnosis.kind === 'custom') return null
+
+  if (diagnosis.kind === 'matched') {
+    return (
+      <div data-testid="base-url-advisor" className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-[11px] text-emerald-800">
+        地址与预置「{diagnosis.label}」一致。
+      </div>
+    )
+  }
+
+  if (diagnosis.kind === 'plan-mismatch') {
+    const restore = diagnosis.restore
+    return (
+      <div data-testid="base-url-advisor" data-kind="plan-mismatch" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+        <div className="font-medium">这个地址是「{diagnosis.hitPlanLabel}」的端点</div>
+        <div className="mt-1 break-all text-amber-800">
+          它与预置「{diagnosis.hitLabel}」一致，但那条属于<span className="font-medium">{diagnosis.hitPlanLabel}</span>，而当前选的是「{diagnosis.currentPlanLabel}」。
+        </div>
+        <div className="mt-1 text-amber-700">官方口径：按量付费与 Token Plan / Coding Plan 走的是不同端点，用错会产生额外费用。</div>
+        {restore && (
+          <div className="mt-2">
+            <AdvisorButton disabled={busy} onClick={() => onUsePreset(restore.id)}>
+              改用「{diagnosis.currentPlanLabel}」端点 · {baseUrlPath(restore.baseUrl) || '/'}
+            </AdvisorButton>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (diagnosis.kind === 'deviated') {
+    return (
+      <div data-testid="base-url-advisor" data-kind="deviated" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+        <div className="font-medium">地址已偏离预置「{diagnosis.label}」</div>
+        <div className="mt-1 break-all text-amber-800">预置原值是 <span className="font-mono">{diagnosis.preset.baseUrl}</span></div>
+        <div className="mt-1 text-amber-700">偏离后，上方「API Key 格式」与计费口径说的仍是那条预置，可能不再适用；探测失败时请优先怀疑这个地址。</div>
+        <div className="mt-2">
+          <AdvisorButton disabled={busy} onClick={() => onUsePreset(diagnosis.preset.id)}>还原为预置地址</AdvisorButton>
+        </div>
+      </div>
+    )
+  }
+
+  if (diagnosis.kind === 'suggest') {
+    return (
+      <div data-testid="base-url-advisor" data-kind="suggest" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+        <div className="font-medium">域名 <span className="font-mono">{diagnosis.host}</span> 在预置目录里是这些端点</div>
+        <div className="mt-1 text-amber-700">同一域名的不同端点往往对应不同协议或计费计划，用错端点会产生额外费用。</div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {diagnosis.candidates.map(({ preset, label }) => (
+            <AdvisorButton key={preset.id} disabled={busy} onClick={() => onUsePreset(preset.id)}>
+              {label} · {baseUrlPath(preset.baseUrl) || '/'}
+            </AdvisorButton>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div data-testid="base-url-advisor" data-kind="suspect" className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-text-secondary">
+      <div className="font-medium text-text-primary">路径 <span className="font-mono">{diagnosis.path}</span> 在预置目录里没有先例</div>
+      <div className="mt-1">
+        收录的 {diagnosis.total} 条预置中，
+        {diagnosis.samples.length > 0
+          ? <>OpenAI 兼容的路径形如 {diagnosis.samples.map((item) => `「${item}」`).join('、')}。</>
+          : <>没有任何一条用这种写法。</>}
+        自建网关可以用任意路径，所以这不代表填错。
+      </div>
+      <div className="mt-1 text-text-muted">
+        但若这是照厂商文档抄的<span className="font-medium">原生协议</span>地址，
+        <span className="font-mono">GET {'{base}'}/models</span> 往往照样通过，直到最小调用才报「404 且响应体为空」—— 届时先回来检查这里的路径。
+      </div>
     </div>
   )
 }
@@ -865,6 +1146,7 @@ function ProviderEditor({
   const planPresets = presets.filter((item) => item.plan === draft.plan)
   const selectedPreset = presets.find((item) => item.id === draft.presetId) ?? null
   const placeholder = unresolvedPlaceholder(draft.baseUrl)
+  const baseUrlDiagnosis = diagnoseBaseUrl(draft, presets, plans)
 
   // 协议可选性：内置供应商的 driver 后端锁定（改了会 422）；ollama / specialized
   // 不在预置目录里，也不该被这个下拉悄悄改掉，故一并锁住。
@@ -925,7 +1207,7 @@ function ProviderEditor({
             {!draft.plan && catalogReady && <span className="mt-1 block text-[10px] text-text-muted">先选计费计划，这里才会列出该计划下的厂商端点。</span>}
           </label>
 
-          {selectedPreset && (selectedPreset.note || selectedPreset.apiKeyHint) && <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[11px]">{selectedPreset.apiKeyHint && <div className="text-text-muted">API Key 格式：{selectedPreset.apiKeyHint}</div>}{selectedPreset.note && <div className="mt-0.5 text-amber-700">{selectedPreset.note}</div>}</div>}
+          {selectedPreset && (selectedPreset.note || selectedPreset.apiKeyHint) && <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[11px]">{selectedPreset.apiKeyHint && <div className="text-text-muted">API Key 格式：{selectedPreset.apiKeyHint}</div>}{selectedPreset.note && <div className="mt-0.5 text-amber-700">{selectedPreset.note}</div>}{baseUrlDiagnosis.kind === 'deviated' && <div className="mt-0.5 text-amber-700">以上按预置「{baseUrlDiagnosis.label}」填写，而地址已被改过 —— 可能不适用。</div>}</div>}
 
           <label className="block text-xs text-text-secondary">显示名
             <input data-testid="provider-display-name" value={draft.displayName} onChange={(event) => update({ displayName: event.target.value })} maxLength={128} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm" placeholder="例如：火山引擎 · Coding Plan" autoComplete="off" />
@@ -944,6 +1226,8 @@ function ProviderEditor({
             </label>
           </div>
           <span className="block text-[10px] text-text-muted">{driverLocked ? '内置供应商的协议由代码锁定，不可更改。' : '协议随预置自动选定，也可手动修改。'}</span>
+
+          <BaseUrlAdvisor diagnosis={baseUrlDiagnosis} busy={busy} onUsePreset={onPresetChange} />
 
           {placeholder && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">地址里的 {'{'} {placeholder} {'}'} 是占位符，必须替换成你自己的取值才能测试。</div>}
 

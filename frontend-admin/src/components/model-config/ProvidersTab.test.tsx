@@ -588,6 +588,131 @@ describe('ProvidersTab 编辑态的前置拦截', () => {
   })
 })
 
+describe('ProvidersTab 地址助手', () => {
+  function advisor(container: HTMLElement): HTMLElement | null {
+    return container.querySelector<HTMLElement>('[data-testid="base-url-advisor"]')
+  }
+
+  function baseUrlValue(container: HTMLElement): string {
+    return container.querySelector<HTMLInputElement>('[data-testid="provider-base-url"]')!.value
+  }
+
+  it('地址与预置一致时只给一句确认，不出告警', async () => {
+    const container = mount()
+    await openNewProvider(container)
+    choose(container, 'provider-plan', 'coding_plan')
+    choose(container, 'provider-preset', 'volc-coding-openai')
+
+    const box = advisor(container)!
+    expect(box).toBeTruthy()
+    expect(box.getAttribute('data-kind')).toBeNull()
+    expect(box.textContent).toContain('一致')
+    expect(box.querySelectorAll('button').length).toBe(0)
+  })
+
+  it('选中预置后手改地址会点名偏离，并给一键还原', async () => {
+    const container = mount()
+    await openNewProvider(container)
+    choose(container, 'provider-plan', 'coding_plan')
+    choose(container, 'provider-preset', 'volc-coding-openai')
+
+    typeInto(container, 'provider-base-url', 'https://my-gateway.internal/openai/v1')
+
+    const box = advisor(container)!
+    expect(box.getAttribute('data-kind')).toBe('deviated')
+    expect(box.textContent).toContain('已偏离预置')
+    expect(box.textContent).toContain('https://ark.cn-beijing.volces.com/api/coding/v3')
+    // 预置的 Key 格式提示必须显式声明「可能不适用」，否则就是本次事故的误导来源。
+    expect(container.textContent).toContain('而地址已被改过')
+
+    await click(findButton(container, '还原为预置地址'))
+    expect(baseUrlValue(container)).toBe('https://ark.cn-beijing.volces.com/api/coding/v3')
+    expect(advisor(container)!.getAttribute('data-kind')).toBeNull()
+  })
+
+  it('地址落在别的计费计划端点上时点名计划不符，并可切回本计划端点', async () => {
+    const container = mount()
+    await openNewProvider(container)
+    choose(container, 'provider-plan', 'coding_plan')
+    choose(container, 'provider-preset', 'volc-coding-openai')
+
+    // Coding Plan 下填按量付费端点 —— 两条都是合法预置，所以不能只给「已匹配」绿灯。
+    typeInto(container, 'provider-base-url', 'https://ark.cn-beijing.volces.com/api/v3')
+
+    const box = advisor(container)!
+    expect(box.getAttribute('data-kind')).toBe('plan-mismatch')
+    expect(box.textContent).toContain('按量付费')
+    expect(box.textContent).toContain('Coding Plan')
+
+    await click(findButton(container, '改用「Coding Plan」端点'))
+    expect(baseUrlValue(container)).toBe('https://ark.cn-beijing.volces.com/api/coding/v3')
+  })
+
+  it('未选过预置、只选了计划再粘贴地址时，计划不符仍要给出可切回的端点', async () => {
+    const container = mount()
+    await openNewProvider(container)
+    // 刻意不选预置：此时 presetId 为空，「还原到原预置」无从谈起，
+    // 只能按域名找本计划的端点 —— 若实现只在 URL 相同的预置里找，这里就没了按钮。
+    choose(container, 'provider-plan', 'coding_plan')
+    typeInto(container, 'provider-base-url', 'https://ark.cn-beijing.volces.com/api/v3')
+
+    const box = advisor(container)!
+    expect(box.getAttribute('data-kind')).toBe('plan-mismatch')
+
+    await click(findButton(container, '改用「Coding Plan」端点'))
+    expect(baseUrlValue(container)).toBe('https://ark.cn-beijing.volces.com/api/coding/v3')
+  })
+
+  it('域名认识但路径不是收录值时，列出该域名的端点供选择而不替用户拍板', async () => {
+    const container = mount()
+    await openNewProvider(container)
+    choose(container, 'provider-plan', 'metered')
+    typeInto(container, 'provider-base-url', 'https://ark.cn-beijing.volces.com/api/v9')
+
+    const box = advisor(container)!
+    expect(box.getAttribute('data-kind')).toBe('suggest')
+    expect(box.textContent).toContain('ark.cn-beijing.volces.com')
+    // 同域名下两个端点都要出现，不能只给一个「正解」。
+    expect(box.textContent).toContain('/api/v3')
+    expect(box.textContent).toContain('/api/coding/v3')
+
+    // 同计划的候选排在最前，故按量地址是第一个按钮。
+    await click(findButton(container, '/api/v3'))
+    expect(baseUrlValue(container)).toBe('https://ark.cn-beijing.volces.com/api/v3')
+  })
+
+  it('陌生域名配 /api/vN 原生前缀只提示不判死，且不提供动作按钮', async () => {
+    const container = mount()
+    await openNewProvider(container)
+    typeInto(container, 'provider-base-url', 'https://maas.qianwenaiapi.com/api/v1')
+
+    const box = advisor(container)!
+    expect(box.getAttribute('data-kind')).toBe('suspect')
+    expect(box.textContent).toContain('/api/v1')
+    expect(box.textContent).toContain('没有先例')
+    // 关键：自建网关可用任意路径，措辞必须留余地，且不提供「改成 X」的伪正解。
+    expect(box.textContent).toContain('不代表填错')
+    expect(box.textContent).toContain('404 且响应体为空')
+    expect(box.querySelectorAll('button').length).toBe(0)
+  })
+
+  it('合法自建网关与带业务空间的按量地址都不触发任何提示', async () => {
+    const container = mount()
+    await openNewProvider(container)
+
+    typeInto(container, 'provider-base-url', 'https://gateway.internal.example/v1')
+    // 先证明值真的写进去了，否则下面的 toBeNull 会因「什么都没发生」而假阳性通过。
+    expect(baseUrlValue(container)).toBe('https://gateway.internal.example/v1')
+    expect(advisor(container)).toBeNull()
+
+    // 预置里 {WorkspaceId} 是占位符域名，替换成真实取值后反查必然落空，
+    // 不能因此把真实的按量付费地址误报成异常。
+    typeInto(container, 'provider-base-url', 'https://ws-abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1')
+    expect(baseUrlValue(container)).toBe('https://ws-abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1')
+    expect(advisor(container)).toBeNull()
+  })
+})
+
 afterEach(() => {
   apiMock.verifyProvider.mockReset()
   apiMock.verifyDraftProvider.mockReset()
