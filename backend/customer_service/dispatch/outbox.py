@@ -154,6 +154,25 @@ async def relay_pending_events(
         if oldest is not None:
             lag = max(0.0, (now - oldest).total_seconds())
 
+    # P8 指标：单事件计数 + 队列深度/lag gauge（失败静默，指标不是业务路径）。
+    try:
+        from backend.observability.metrics import (
+            record_cs_outbox_publish,
+            set_cs_outbox_lag,
+            set_cs_outbox_pending,
+        )
+
+        for _ in range(published):
+            record_cs_outbox_publish("published")
+        for _ in range(failed):
+            record_cs_outbox_publish("deferred")
+        async with session.begin():
+            set_cs_outbox_pending(await repository.count_pending_outbox(session))
+        if lag is not None:
+            set_cs_outbox_lag(lag)
+    except Exception:
+        logger.debug("[cs-outbox] metrics update failed", exc_info=True)
+
     if failed:
         logger.warning(
             "[cs-outbox] %s/%s events deferred to the next relay tick",

@@ -162,6 +162,10 @@ async def _release_offer(
         conversation.handling_mode = "waiting_human"
         conversation.updated_at = now
 
+    from backend.observability.metrics import record_cs_reaped
+
+    record_cs_reaped("released")
+
     outbox.append_event(
         session,
         tenant_id=tenant_id,

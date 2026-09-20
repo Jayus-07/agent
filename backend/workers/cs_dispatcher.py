@@ -52,6 +52,7 @@ from backend.customer_service.dispatch.reaper import ReapResult
 from backend.customer_service.dispatch.service import DispatchResult
 from backend.customer_service.realtime import get_agent_hub
 from backend.memory.database import AsyncSessionLocal
+from backend.observability import metrics as cs_metrics
 from backend.shared.logger import logger
 
 _sleep = asyncio.sleep
@@ -152,11 +153,47 @@ async def relay_stage(now=None) -> RelayResult | None:
         return await outbox.relay_pending_events(session, now=now)
 
 
+async def refresh_gauges() -> None:
+    """刷新 P8 队列/坐席/outbox 深度 gauge（失败静默：指标不是业务路径）。"""
+    try:
+        async with AsyncSessionLocal() as session:
+            waiting = await repository.count_queue_by_tenant(session)
+            offering = await repository.count_offering_by_tenant(session)
+            enabled = await repository.count_enabled_agents_by_tenant(session)
+            pending = await repository.count_pending_outbox(session)
+        depth = sum(waiting.values()) + sum(offering.values())
+        cs_metrics.set_cs_queue_depth(depth)
+        cs_metrics.set_cs_online_agents(sum(enabled.values()))
+        cs_metrics.set_cs_outbox_pending(pending)
+    except Exception:
+        logger.debug("[cs-dispatcher] gauge refresh failed", exc_info=True)
+
+
 async def run_tick(now=None) -> TickResult:
-    """一个完整 tick：reaper → dispatch → outbox relay。"""
+    """一个完整 tick：reaper → dispatch → outbox relay → gauge 刷新。"""
     reaped = await reap_stage(now)
     dispatch = await run_once(now)
     relayed = await relay_stage(now)
+
+    # P8 指标：派单结果计数、reaper 计数、outbox 投递计数与 lag。
+    try:
+        cs_metrics.record_cs_dispatch_result(dispatch.status)
+        if reaped is not None:
+            for _ in range(reaped.released):
+                cs_metrics.record_cs_reaped("released")
+            for _ in range(reaped.closed):
+                cs_metrics.record_cs_reaped("closed")
+        if relayed is not None:
+            for _ in range(relayed.published):
+                cs_metrics.record_cs_outbox_publish("published")
+            for _ in range(relayed.failed):
+                cs_metrics.record_cs_outbox_publish("deferred")
+            if relayed.oldest_pending_lag_seconds is not None:
+                cs_metrics.set_cs_outbox_lag(relayed.oldest_pending_lag_seconds)
+    except Exception:
+        logger.debug("[cs-dispatcher] metrics record failed", exc_info=True)
+    await refresh_gauges()
+
     return TickResult(dispatch=dispatch, reaped=reaped, relayed=relayed)
 
 

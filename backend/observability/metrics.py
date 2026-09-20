@@ -709,6 +709,105 @@ def record_trace_finish(status: str, rejection_layer: str,
         pass
 
 
+# ── 客服高并发派单指标（P8，方案 §六）──────────────────────
+
+cs_dispatch_queue_depth = Gauge(
+    "cs_dispatch_queue_depth",
+    "当前排队中的转人工工单数（waiting_human + agent_offered）",
+)
+cs_dispatch_offered_total = Counter(
+    "cs_dispatch_offered_total",
+    "自动派单结果计数（dispatched/no_candidate/presence_unavailable/contended）",
+    ["result"],
+)
+cs_dispatch_wait_seconds = Histogram(
+    "cs_dispatch_wait_seconds",
+    "工单从入池到被派出的等待时长（含重派前的全部排队时间）",
+    buckets=(1, 2, 5, 10, 30, 60, 120, 300, 600),
+)
+cs_dispatch_reaped_total = Counter(
+    "cs_dispatch_reaped_total",
+    "reaper 处理计数（released=回队列重派 / closed 原因=max_attempts|total_deadline）",
+    ["action"],
+)
+cs_dispatch_online_agents = Gauge(
+    "cs_dispatch_online_agents",
+    "当前启用且可接单的坐席数（用于在线坐席掉底告警）",
+)
+cs_outbox_pending = Gauge(
+    "cs_outbox_pending",
+    "outbox 中尚未成功投递的事件数（持续增长 = relay 故障）",
+)
+cs_outbox_lag_seconds = Gauge(
+    "cs_outbox_lag_seconds",
+    "最旧 pending 事件距现在的秒数（方案 P8 完成标准：P99 < 2 秒）",
+)
+cs_outbox_published_total = Counter(
+    "cs_outbox_published_total",
+    "outbox 事件投递计数（published / deferred）",
+    ["result"],
+)
+
+
+def record_cs_dispatch_result(result: str) -> None:
+    """埋点一次派单尝试的终态。"""
+    try:
+        cs_dispatch_offered_total.labels(result=result).inc()
+    except Exception:
+        pass
+
+
+def record_cs_dispatch_wait(seconds: float) -> None:
+    """埋点工单等待时长（入池 → 派出）。"""
+    try:
+        cs_dispatch_wait_seconds.observe(max(0.0, seconds))
+    except Exception:
+        pass
+
+
+def record_cs_reaped(action: str) -> None:
+    """埋点 reaper 动作：released / closed_max_attempts / closed_total_deadline。"""
+    try:
+        cs_dispatch_reaped_total.labels(action=action).inc()
+    except Exception:
+        pass
+
+
+def set_cs_queue_depth(depth: int) -> None:
+    try:
+        cs_dispatch_queue_depth.set(max(0, depth))
+    except Exception:
+        pass
+
+
+def set_cs_online_agents(count: int) -> None:
+    try:
+        cs_dispatch_online_agents.set(max(0, count))
+    except Exception:
+        pass
+
+
+def set_cs_outbox_pending(count: int) -> None:
+    try:
+        cs_outbox_pending.set(max(0, count))
+    except Exception:
+        pass
+
+
+def set_cs_outbox_lag(seconds: float) -> None:
+    try:
+        cs_outbox_lag_seconds.set(max(0.0, seconds))
+    except Exception:
+        pass
+
+
+def record_cs_outbox_publish(result: str) -> None:
+    try:
+        cs_outbox_published_total.labels(result=result).inc()
+    except Exception:
+        pass
+
+
 __all__ = [
     "chat_request_total",
     "chat_request_duration_seconds",
@@ -763,6 +862,23 @@ __all__ = [
     "record_cs_expert_result",
     "cs_supervisor_decision_total",
     "cs_expert_result_total",
+    # CS 派单/outbox 指标（P8）
+    "cs_dispatch_queue_depth",
+    "cs_dispatch_offered_total",
+    "cs_dispatch_wait_seconds",
+    "cs_dispatch_reaped_total",
+    "cs_dispatch_online_agents",
+    "cs_outbox_pending",
+    "cs_outbox_lag_seconds",
+    "cs_outbox_published_total",
+    "record_cs_dispatch_result",
+    "record_cs_dispatch_wait",
+    "record_cs_reaped",
+    "set_cs_queue_depth",
+    "set_cs_online_agents",
+    "set_cs_outbox_pending",
+    "set_cs_outbox_lag",
+    "record_cs_outbox_publish",
     # Trace 数据质量指标（2026-09-03）
     "trace_finish_total",
     "trace_rejection_total",

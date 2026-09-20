@@ -405,6 +405,11 @@ async def dispatch_once(
             assignment_version=version,
             offer_expires_at=offer_expires_at,
         )
+        # P8 等待时长：从入池到本次派出的全部排队时间（含此前超时重派的轮次）。
+        if handoff.created_at is not None:
+            from backend.observability.metrics import record_cs_dispatch_wait
+
+            record_cs_dispatch_wait((now - handoff.created_at).total_seconds())
         envelope = outbox.envelope_for(event)
 
     # 提交之后才广播；广播失败只记日志，绝不影响已提交的绑定。

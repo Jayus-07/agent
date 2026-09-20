@@ -316,6 +316,10 @@ def test_offer_timeout_matches_frozen_decision() -> None:
     assert config.CS_MAX_DISPATCH_ATTEMPTS == 5
 
 
+async def fake_gauges() -> None:
+    return None
+
+
 async def test_tick_runs_reaper_and_relay_around_dispatch(monkeypatch) -> None:
     """tick 顺序固定为 reaper → dispatch → relay（回收后才能同 tick 重派）。"""
     order: list[str] = []
@@ -335,6 +339,7 @@ async def test_tick_runs_reaper_and_relay_around_dispatch(monkeypatch) -> None:
     monkeypatch.setattr(cs_dispatcher, "reap_stage", fake_reap)
     monkeypatch.setattr(cs_dispatcher, "run_once", fake_dispatch)
     monkeypatch.setattr(cs_dispatcher, "relay_stage", fake_relay)
+    monkeypatch.setattr(cs_dispatcher, "refresh_gauges", fake_gauges)
 
     tick = await cs_dispatcher.run_tick()
 
@@ -380,7 +385,63 @@ async def test_off_mode_still_reaps_and_relays(monkeypatch) -> None:
     monkeypatch.setattr(cs_dispatcher, "reap_stage", fake_reap)
     monkeypatch.setattr(cs_dispatcher, "relay_stage", fake_relay)
 
+    monkeypatch.setattr(cs_dispatcher, "refresh_gauges", fake_gauges)
+
     tick = await cs_dispatcher.run_tick()
 
     assert tick.status == "disabled"
     assert calls == ["reap", "relay"]
+
+
+async def test_tick_records_p8_metrics(monkeypatch) -> None:
+    """run_tick 埋点：派单结果、reaper 动作、outbox 投递与 lag gauge。"""
+    recorded: list[tuple[str, str]] = []
+    gauge_values: dict[str, float] = {}
+
+    async def fake_reap(now=None):
+        return ReapResult(released=1, closed=2)
+
+    async def fake_dispatch(now=None):
+        return service.DispatchResult(status="no_candidate")
+
+    async def fake_relay(now=None):
+        return RelayResult(
+            scanned=3,
+            published=2,
+            failed=1,
+            oldest_pending_lag_seconds=1.5,
+        )
+
+    monkeypatch.setattr(cs_dispatcher, "reap_stage", fake_reap)
+    monkeypatch.setattr(cs_dispatcher, "run_once", fake_dispatch)
+    monkeypatch.setattr(cs_dispatcher, "relay_stage", fake_relay)
+    monkeypatch.setattr(cs_dispatcher, "refresh_gauges", fake_gauges)
+    monkeypatch.setattr(
+        cs_dispatcher.cs_metrics,
+        "record_cs_dispatch_result",
+        lambda result: recorded.append(("dispatch", result)),
+    )
+    monkeypatch.setattr(
+        cs_dispatcher.cs_metrics,
+        "record_cs_reaped",
+        lambda action: recorded.append(("reaped", action)),
+    )
+    monkeypatch.setattr(
+        cs_dispatcher.cs_metrics,
+        "record_cs_outbox_publish",
+        lambda result: recorded.append(("outbox", result)),
+    )
+    monkeypatch.setattr(
+        cs_dispatcher.cs_metrics,
+        "set_cs_outbox_lag",
+        lambda seconds: gauge_values.setdefault("lag", seconds),
+    )
+
+    await cs_dispatcher.run_tick()
+
+    assert ("dispatch", "no_candidate") in recorded
+    assert recorded.count(("reaped", "released")) == 1
+    assert recorded.count(("reaped", "closed")) == 2
+    assert recorded.count(("outbox", "published")) == 2
+    assert recorded.count(("outbox", "deferred")) == 1
+    assert gauge_values["lag"] == 1.5
