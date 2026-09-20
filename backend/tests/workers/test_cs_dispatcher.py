@@ -10,6 +10,8 @@ import pytest
 
 from backend.config import cs_dispatch as config
 from backend.customer_service.dispatch import presence, service
+from backend.customer_service.dispatch.outbox import RelayResult
+from backend.customer_service.dispatch.reaper import ReapResult
 from backend.workers import cs_dispatcher
 
 
@@ -263,12 +265,12 @@ async def test_run_forever_survives_iteration_errors(monkeypatch) -> None:
         outcome = outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
-        return outcome
+        return cs_dispatcher.TickResult(dispatch=outcome)
 
     async def fake_sleep(seconds: float) -> None:
         sleeps.append(seconds)
 
-    monkeypatch.setattr(cs_dispatcher, "run_once", flaky)
+    monkeypatch.setattr(cs_dispatcher, "run_tick", flaky)
     monkeypatch.setattr(cs_dispatcher, "_sleep", fake_sleep)
     monkeypatch.setattr(cs_dispatcher, "bind_hub_loop", lambda: None)
 
@@ -283,14 +285,17 @@ async def test_run_forever_writes_a_heartbeat_each_iteration(monkeypatch) -> Non
     heartbeats: list[str] = []
 
     async def ok():
-        return service.DispatchResult(status="no_handoff")
+        return cs_dispatcher.TickResult(
+            dispatch=service.DispatchResult(status="no_handoff")
+        )
 
     async def fake_sleep(_seconds: float) -> None:
         return None
 
-    monkeypatch.setattr(cs_dispatcher, "run_once", ok)
+    monkeypatch.setattr(cs_dispatcher, "run_tick", ok)
     monkeypatch.setattr(cs_dispatcher, "_sleep", fake_sleep)
     monkeypatch.setattr(cs_dispatcher, "bind_hub_loop", lambda: None)
+
     async def fake_heartbeat(instance_id: str) -> bool:
         heartbeats.append(instance_id)
         return True
@@ -309,3 +314,73 @@ def test_default_mode_is_off() -> None:
 def test_offer_timeout_matches_frozen_decision() -> None:
     assert config.CS_OFFER_TIMEOUT_SECONDS == 30
     assert config.CS_MAX_DISPATCH_ATTEMPTS == 5
+
+
+async def test_tick_runs_reaper_and_relay_around_dispatch(monkeypatch) -> None:
+    """tick 顺序固定为 reaper → dispatch → relay（回收后才能同 tick 重派）。"""
+    order: list[str] = []
+
+    async def fake_reap(now=None):
+        order.append("reap")
+        return ReapResult(released=1)
+
+    async def fake_dispatch(now=None):
+        order.append("dispatch")
+        return service.DispatchResult(status="dispatched")
+
+    async def fake_relay(now=None):
+        order.append("relay")
+        return RelayResult(scanned=1, published=1)
+
+    monkeypatch.setattr(cs_dispatcher, "reap_stage", fake_reap)
+    monkeypatch.setattr(cs_dispatcher, "run_once", fake_dispatch)
+    monkeypatch.setattr(cs_dispatcher, "relay_stage", fake_relay)
+
+    tick = await cs_dispatcher.run_tick()
+
+    assert order == ["reap", "dispatch", "relay"]
+    assert tick.status == "dispatched"
+    assert tick.reaped == ReapResult(released=1)
+    assert tick.relayed == RelayResult(scanned=1, published=1)
+
+
+async def test_reap_stage_is_skipped_when_disabled(monkeypatch) -> None:
+    async def explode(*_a, **_k):  # pragma: no cover - 不应被调用
+        raise AssertionError("开关关闭时不得触库")
+
+    monkeypatch.setattr(cs_dispatcher.config, "CS_REAPER_ENABLED", False)
+    monkeypatch.setattr(cs_dispatcher.reaper, "reap_once", explode)
+
+    assert await cs_dispatcher.reap_stage() is None
+
+
+async def test_relay_stage_is_skipped_when_disabled(monkeypatch) -> None:
+    async def explode(*_a, **_k):  # pragma: no cover - 不应被调用
+        raise AssertionError("开关关闭时不得触库")
+
+    monkeypatch.setattr(cs_dispatcher.config, "CS_OUTBOX_RELAY_ENABLED", False)
+    monkeypatch.setattr(cs_dispatcher.outbox, "relay_pending_events", explode)
+
+    assert await cs_dispatcher.relay_stage() is None
+
+
+async def test_off_mode_still_reaps_and_relays(monkeypatch) -> None:
+    """``off`` 只关派单：回收与投递是恢复/投递路径，必须继续运行。"""
+    monkeypatch.setattr(cs_dispatcher.config, "CS_DISPATCH_MODE", "off")
+    calls: list[str] = []
+
+    async def fake_reap(now=None):
+        calls.append("reap")
+        return ReapResult()
+
+    async def fake_relay(now=None):
+        calls.append("relay")
+        return RelayResult()
+
+    monkeypatch.setattr(cs_dispatcher, "reap_stage", fake_reap)
+    monkeypatch.setattr(cs_dispatcher, "relay_stage", fake_relay)
+
+    tick = await cs_dispatcher.run_tick()
+
+    assert tick.status == "disabled"
+    assert calls == ["reap", "relay"]

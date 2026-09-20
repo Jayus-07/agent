@@ -11,12 +11,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BellRing, Headphones, Send, UserRound, Volume2, VolumeX, XCircle } from "lucide-react";
 import {
+  acceptOffer,
   claimConversation,
   closeConversation,
+  declineOffer,
   getHandoffMessages,
   getHandoffQueue,
+  getMyOffers,
   notifyAgentTyping,
   sendAgentMessage,
+  type MyOfferItem,
 } from "@/api/cs";
 import { useAgentSocket, type AgentEvent } from "@/lib/csAgentWs";
 import type {
@@ -27,6 +31,7 @@ import type {
 const STATE_BADGES: Record<string, { label: string; cls: string }> = {
   handoff_requested: { label: "已请求", cls: "bg-amber-100 text-amber-700" },
   waiting_human: { label: "排队中", cls: "bg-red-100 text-red-700" },
+  agent_offered: { label: "待接单", cls: "bg-blue-100 text-blue-700" },
   human_active: { label: "人工处理中", cls: "bg-emerald-100 text-emerald-700" },
   closed: { label: "已结束", cls: "bg-slate-100 text-slate-500" },
 };
@@ -38,7 +43,6 @@ const SENDER_LABELS: Record<string, string> = {
   system: "系统",
 };
 
-const AGENT_ID_KEY = "cs_handoff_agent_id";
 const MUTE_KEY = "cs_handoff_muted";
 
 // ── 通知基建（模块级，纯浏览器 API）──────────────────────
@@ -105,13 +109,21 @@ type WaitingToast = {
 };
 
 export default function HandoffWorkbenchPage() {
-  const [agentId, setAgentId] = useState("");
+  // P7：坐席身份由后端从登录身份（cs_agents.auth_user_id）反查，
+  // 页面不再有手工 agent ID 输入。
   const [queue, setQueue] = useState<HandoffQueueItem[]>([]);
+  const [offers, setOffers] = useState<MyOfferItem[]>([]);
   const [selected, setSelected] = useState<HandoffQueueItem | null>(null);
   const [messages, setMessages] = useState<HandoffMessageDTO[]>([]);
   const [reply, setReply] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  // offer 倒计时每秒重渲染
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
   // 双向「输入中」指示（用户→坐席方向）：WS user.typing 瞬态事件驱动
   const [userTyping, setUserTyping] = useState(false);
   const userTypingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -119,14 +131,6 @@ export default function HandoffWorkbenchPage() {
   const selectedRef = useRef<HandoffQueueItem | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   selectedRef.current = selected;
-
-  // agent_id 持久化
-  useEffect(() => {
-    setAgentId(localStorage.getItem(AGENT_ID_KEY) ?? "");
-  }, []);
-  useEffect(() => {
-    if (agentId) localStorage.setItem(AGENT_ID_KEY, agentId);
-  }, [agentId]);
 
   // ── 转人工通知层（toast + 提示音 + 桌面通知 + 标题角标）──────
   const [toasts, setToasts] = useState<WaitingToast[]>([]);
@@ -215,6 +219,18 @@ export default function HandoffWorkbenchPage() {
     document.title = waiting > 0 ? `(${waiting}) 待接入 — ${base}` : base;
   }, [queue]);
 
+  // ── P7 待接单（我的 offer）──────────────────────────
+  const refreshOffers = useCallback(async () => {
+    try {
+      const res = await getMyOffers();
+      setOffers(res.items);
+    } catch {
+      // 静默：下轮 WS 事件 / 轮询兜底重拉
+    }
+  }, []);
+  const refreshOffersRef = useRef(refreshOffers);
+  refreshOffersRef.current = refreshOffers;
+
   // ── WS 事件处理（下行主通道）────────────────────────
   const handleAgentEvent = useCallback(
     (e: AgentEvent) => {
@@ -264,6 +280,16 @@ export default function HandoffWorkbenchPage() {
           }
           break;
         }
+        case "conversation.offered":
+        case "conversation.offer_expired":
+        case "conversation.offer_declined":
+        case "conversation.reassigned":
+        case "conversation.handoff_closed": {
+          // P7 offer 生命周期事件：名单以 /agents/me/offers 为权威，
+          // 收到任意生命周期事件就重拉本人的待接单列表（廉价、幂等）。
+          void refreshOffersRef.current();
+          break;
+        }
         case "user.typing": {
           // 双向「输入中」指示（用户→坐席）：瞬态事件不落库，
           // 前端保持 4s 展示窗（服务端 TTL 5s，无续期自然消退）
@@ -310,6 +336,7 @@ export default function HandoffWorkbenchPage() {
   useEffect(() => {
     if (!connected) return;
     refreshQueue();
+    refreshOffers();
     const cid = selectedRef.current?.conversation_id;
     if (!cid) return;
     getHandoffMessages(cid, sinceIdRef.current)
@@ -359,13 +386,12 @@ export default function HandoffWorkbenchPage() {
   const lastTypingSentRef = useRef(0);
   const handleReplyTyping = useCallback(() => {
     const sel = selectedRef.current;
-    const aid = agentId.trim();
-    if (!sel || sel.handoff_state !== "human_active" || !aid) return;
+    if (!sel || sel.handoff_state !== "human_active") return;
     const now = Date.now();
     if (now - lastTypingSentRef.current < 2000) return;
     lastTypingSentRef.current = now;
-    void notifyAgentTyping(sel.conversation_id, aid);
-  }, [agentId]);
+    void notifyAgentTyping(sel.conversation_id);
+  }, []);
 
   // toast「查看」：定位到对应会话（队列里还在才可跳）
   const viewToastConversation = useCallback(
@@ -410,13 +436,9 @@ export default function HandoffWorkbenchPage() {
   }, [messages]);
 
   const handleClaim = async (item: HandoffQueueItem) => {
-    if (!agentId.trim()) {
-      setError("请先填写坐席 ID");
-      return;
-    }
     setError(null);
     try {
-      await claimConversation(item.conversation_id, agentId.trim());
+      await claimConversation(item.conversation_id);
       selectConversation(item);
       applyQueue(
         queueRef.current.map((q) =>
@@ -431,15 +453,46 @@ export default function HandoffWorkbenchPage() {
     }
   };
 
-  const handleClose = async () => {
-    if (!selected) return;
-    if (!agentId.trim()) {
-      setError("请先填写坐席 ID");
-      return;
-    }
+  // P7：接受派给我的 offer（agent_offered → human_active）
+  const handleAccept = async (offer: MyOfferItem) => {
     setError(null);
     try {
-      await closeConversation(selected.conversation_id, agentId.trim());
+      const res = await acceptOffer(offer.handoff_id, offer.assignment_version);
+      setOffers((prev) => prev.filter((o) => o.handoff_id !== offer.handoff_id));
+      await refreshQueue();
+      const item = queueRef.current.find(
+        (q) => q.conversation_id === res.conversation_id,
+      );
+      if (item) selectConversation(item);
+    } catch (e) {
+      const msg = (e as Error).message ?? "接单失败";
+      setError(
+        msg.includes("409")
+          ? "offer 已过期或已被重新派单，请刷新待接单列表"
+          : msg,
+      );
+      void refreshOffersRef.current();
+    }
+  };
+
+  // P7：拒单（agent_offered → waiting_human，本坐席进入该工单冷却期）
+  const handleDecline = async (offer: MyOfferItem) => {
+    setError(null);
+    try {
+      await declineOffer(offer.handoff_id, offer.assignment_version);
+      setOffers((prev) => prev.filter((o) => o.handoff_id !== offer.handoff_id));
+    } catch (e) {
+      const msg = (e as Error).message ?? "拒单失败";
+      setError(msg.includes("409") ? "offer 已过期，无需拒单" : msg);
+      void refreshOffersRef.current();
+    }
+  };
+
+  const handleClose = async () => {
+    if (!selected) return;
+    setError(null);
+    try {
+      await closeConversation(selected.conversation_id);
       // 乐观更新（WS 在线时 conversation.closed 事件会再次兜底）
       applyQueue(
         queueRef.current.filter(
@@ -459,18 +512,10 @@ export default function HandoffWorkbenchPage() {
 
   const handleSend = async () => {
     if (!selected || !reply.trim() || sending) return;
-    if (!agentId.trim()) {
-      setError("请先填写坐席 ID");
-      return;
-    }
-    setSending(true);
     setError(null);
+    setSending(true);
     try {
-      await sendAgentMessage(
-        selected.conversation_id,
-        agentId.trim(),
-        reply.trim(),
-      );
+      await sendAgentMessage(selected.conversation_id, reply.trim());
       // 增量拉取兜底（2026-09-18：此前每次发送全量重拉 since_id=0，会话
       // 越长发送越慢）：拿到落库消息 + 最新自增 id 作增量游标。
       // WS 在线时消息通常已由 message.created 事件追加（按 message_id 去重）。
@@ -555,13 +600,9 @@ export default function HandoffWorkbenchPage() {
         </div>
         <div className="flex items-center gap-2">
           <UserRound size={14} className="text-slate-500" />
-          <input
-            value={agentId}
-            onChange={(e) => setAgentId(e.target.value)}
-            placeholder="坐席 ID（如 agent-01）"
-            className="w-44 px-2 py-1.5 text-sm border border-slate-200 rounded-lg
-              focus:outline-none focus:border-blue-400"
-          />
+          <span className="text-xs text-slate-500" title="坐席身份由后端从登录账号反查，无需填写">
+            已登录坐席身份
+          </span>
         </div>
       </div>
 
@@ -612,8 +653,67 @@ export default function HandoffWorkbenchPage() {
       <div className="grid grid-cols-5 gap-4">
         {/* 队列 */}
         <div className="col-span-2 border border-slate-200 rounded-xl overflow-hidden">
+          {/* P7 待接单（派给我的 offer，带倒计时） */}
+          {offers.length > 0 && (
+            <div className="border-b-2 border-blue-100">
+              <div className="px-4 py-2.5 bg-blue-50 border-b border-blue-100 text-sm font-medium text-blue-700">
+                待接单（{offers.length}）
+              </div>
+              {offers.map((offer) => {
+                const left = offer.offer_expires_at
+                  ? Math.max(
+                      0,
+                      Math.round(
+                        (new Date(offer.offer_expires_at).getTime() - Date.now()) / 1000,
+                      ),
+                    )
+                  : null;
+                return (
+                  <div
+                    key={offer.handoff_id}
+                    className="px-4 py-3 bg-blue-50/40"
+                    data-tick={tick}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-slate-500 font-mono">
+                        {offer.conversation_id.slice(0, 12)}…
+                      </span>
+                      <span
+                        className={`text-[11px] font-medium ${
+                          left !== null && left <= 5
+                            ? "text-red-600"
+                            : "text-blue-600"
+                        }`}
+                      >
+                        {left !== null ? `${left}s 后超时` : ""}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <button
+                        onClick={() => void handleAccept(offer)}
+                        className="px-2.5 py-1 text-xs rounded-lg bg-emerald-600 text-white
+                          hover:bg-emerald-700 transition-colors"
+                      >
+                        接单
+                      </button>
+                      <button
+                        onClick={() => void handleDecline(offer)}
+                        className="px-2.5 py-1 text-xs rounded-lg border border-slate-300
+                          text-slate-600 hover:bg-slate-100 transition-colors"
+                      >
+                        拒单
+                      </button>
+                      <span className="text-[11px] text-slate-400">
+                        用户 {offer.user_id.slice(0, 10)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
           <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 text-sm font-medium">
-            待接入队列（{queue.length}）
+            处理中 / 排队（{queue.length}）
           </div>
           <div className="max-h-[60vh] overflow-y-auto divide-y divide-slate-100">
             {queue.length === 0 && (

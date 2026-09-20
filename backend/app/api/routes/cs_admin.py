@@ -108,9 +108,16 @@ def _require_cs_operator(request: Request) -> None:
         )
 
 
-def _resolve_agent_identity(request: Request, fallback_agent_id: str) -> str:
-    """坐席身份解析：JWT 登录身份优先；服务间 API-Key 通道沿用声明的
-    agent_id（BFF 服务端凭据，非浏览器可见）；真 guest 一律 403。"""
+async def _resolve_agent_identity(request: Request, fallback_agent_id: str) -> str:
+    """坐席身份解析（P7：不再用 user_name 冒充 agent_id）。
+
+    JWT 通道必须能用 ``cs_agents.auth_user_id`` 反查到**启用**坐席，否则
+    403 —— 这是「浏览器不再提交可信 agent_id」的落点：坐席身份的唯一权威
+    是服务端绑定关系，任何客户端提交的 agent_id 都被忽略。
+
+    服务间 API-Key 通道沿用声明的 agent_id（BFF 服务端凭据，非浏览器可见；
+    网关 Bearer 优先，因此浏览器流量不会走到这一支）。
+    """
     from backend.app.api.identity import resolve_identity
 
     if _is_service_channel(request):
@@ -120,11 +127,35 @@ def _resolve_agent_identity(request: Request, fallback_agent_id: str) -> str:
         return agent_id
 
     ident = resolve_identity(request)
-    if ident.authenticated and "admin" in ident.roles:
-        return ident.user_name or ident.user_id
-    raise HTTPException(
-        403, detail="客服坐席操作需要 admin 角色（或服务间 API Key）",
-    )
+    if not ident.authenticated:
+        raise HTTPException(401, detail="未认证：缺少坐席身份")
+    if not ident.tenant_id:
+        raise HTTPException(403, detail="缺少可信租户身份")
+
+    try:
+        agent_id = await _lookup_bound_agent_id(
+            tenant_id=ident.tenant_id, user_id=ident.user_id
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("[CSAdmin] resolve agent identity failed: %s", exc)
+        raise HTTPException(503, detail="Database unavailable") from exc
+
+    if not agent_id:
+        raise HTTPException(403, detail="当前用户未绑定启用的客服坐席")
+    return str(agent_id)
+
+
+async def _lookup_bound_agent_id(*, tenant_id: str, user_id: str) -> str | None:
+    """按登录用户反查启用坐席 ID（坐席身份的唯一权威来源）。"""
+    from backend.customer_service.dispatch import repository as dispatch_repo
+    from backend.memory.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        return await dispatch_repo.find_enabled_agent_id(
+            db, tenant_id=tenant_id, auth_user_id=user_id
+        )
 
 
 def _ensure_conversation_access(request: Request, conv_user_id: str) -> None:
@@ -524,11 +555,13 @@ class HandoffQueueResponse(BaseModel):
 
 
 class ClaimRequest(BaseModel):
-    agent_id: str
+    # P7：浏览器不再提交可信 agent_id —— JWT 通道由服务端从
+    # cs_agents.auth_user_id 反查；仅服务间 API-Key 通道仍需声明值。
+    agent_id: str = ""
 
 
 class AgentMessageRequest(BaseModel):
-    agent_id: str
+    agent_id: str = ""
     content: str
 
 
@@ -606,12 +639,8 @@ async def issue_agent_ws_ticket(request: Request):
 
 async def _resolve_ws_agent_identity(request: Request) -> tuple[str, str]:
     """从可信 user/tenant 身份反查启用坐席，不接受客户端 agent_id。"""
-    from sqlalchemy import select
-
     from backend.app.api.identity import resolve_identity
     from backend.config.auth import AUTH_TYPE_HEADER
-    from backend.customer_service.models.agent import CSAgent
-    from backend.memory.database import AsyncSessionLocal
 
     auth_type = (request.headers.get(AUTH_TYPE_HEADER) or "").strip().lower()
     if auth_type == "api-key":
@@ -627,16 +656,9 @@ async def _resolve_ws_agent_identity(request: Request) -> tuple[str, str]:
         raise HTTPException(403, detail="缺少可信租户身份")
 
     try:
-        async with AsyncSessionLocal() as db:
-            agent_id = (
-                await db.execute(
-                    select(CSAgent.agent_id).where(
-                        CSAgent.tenant_id == identity.tenant_id,
-                        CSAgent.auth_user_id == identity.user_id,
-                        CSAgent.enabled.is_(True),
-                    ).limit(1)
-                )
-            ).scalar_one_or_none()
+        agent_id = await _lookup_bound_agent_id(
+            tenant_id=identity.tenant_id, user_id=identity.user_id
+        )
     except Exception as exc:
         logger.warning("[CSAdmin] resolve ws agent failed: %s", exc)
         raise HTTPException(503, detail="Database unavailable") from exc
@@ -652,10 +674,11 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
 
     关闭后同步失效 HandoffStore L1 缓存（否则用户侧下个 turn 仍读到
     缓存里的排队中状态），并向坐席侧广播 conversation.closed。
-    P1：agent_id 改为服务端解析（JWT 登录身份优先，api-key 通道沿用
-    声明值），不再信任客户端自由声明。
+    P1：agent_id 改为服务端解析；P7（去手工 agent ID）：**已分配出去的
+    工单（agent_offered / human_active）只能由被分配坐席关闭**，其他坐席
+    一律 409 —— 主管要改派走 /handoffs/{id}/reassign，不是替人关闭。
     """
-    agent_id = _resolve_agent_identity(request, body.agent_id)
+    agent_id = await _resolve_agent_identity(request, body.agent_id)
 
     from datetime import datetime, timezone
 
@@ -693,7 +716,11 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
             ).scalar_one_or_none()
 
             current = handoff_sm.HandoffState(row.handoff_state)
-            if current == handoff_sm.HandoffState.HUMAN_ACTIVE:
+            if current in (
+                handoff_sm.HandoffState.HUMAN_ACTIVE,
+                handoff_sm.HandoffState.AGENT_OFFERED,
+            ):
+                # 已分配出去（含仅派出未接单）的工单：只有被分配坐席能关
                 if conv is None:
                     raise HTTPException(409, detail="人工会话缺少会话记录")
                 _assert_current_agent(conv.assigned_agent_id, agent_id)
@@ -771,7 +798,7 @@ async def claim_conversation(conversation_id: str, body: ClaimRequest, request: 
     （WHERE handoff_state='waiting_human'）+ 影响行数判定，并发双认领
     只有一方成功；agent_id 服务端解析。
     """
-    agent_id = _resolve_agent_identity(request, body.agent_id)
+    agent_id = await _resolve_agent_identity(request, body.agent_id)
 
     from backend.customer_service.errors import BusinessRuleError
 
@@ -791,8 +818,12 @@ async def claim_conversation(conversation_id: str, body: ClaimRequest, request: 
 
 @router.post("/{conversation_id}/agent-messages", response_model=AgentMessageResponse)
 async def post_agent_message(conversation_id: str, body: AgentMessageRequest, request: Request):
-    """坐席发言：落库为 human_agent 消息（用户侧经消息增量接口/后续 SSE 可见）。"""
-    agent_id = _resolve_agent_identity(request, body.agent_id)
+    """坐席发言：落库为 human_agent 消息（用户侧经消息增量接口/后续 SSE 可见）。
+
+    P7：坐席身份由服务端从 ``cs_agents.auth_user_id`` 反查；只有该会话当前
+    被分配的坐席能发言（``_async_agent_message`` 内的归属断言给 409）。
+    """
+    agent_id = await _resolve_agent_identity(request, body.agent_id)
     if not body.content.strip():
         raise HTTPException(422, detail="content is required")
 

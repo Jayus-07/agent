@@ -1,8 +1,17 @@
 """customer_service/handoff.py — 人工转接状态机
 
-5 状态流转:
+状态流转（2026-09-21 P7 补齐 ``agent_offered``）：
+
   AI_ACTIVE → HANDOFF_REQUESTED → WAITING_HUMAN → HUMAN_ACTIVE → CLOSED
+  WAITING_HUMAN → AGENT_OFFERED → HUMAN_ACTIVE            （P6 自动派单）
+  AGENT_OFFERED → WAITING_HUMAN                           （拒绝/超时回收）
+  AGENT_OFFERED → CLOSED                                  （超次数/超总期限）
   HANDOFF_REQUESTED → AI_ACTIVE (回退)
+
+``agent_offered`` 自 P6 起就会写进 ``handoffs.handoff_state``，但枚举当时
+没有它，导致 ``HandoffState("agent_offered")`` 抛 ``ValueError`` —— 坐席
+关闭/拦截判定路径要么 503 要么（被兜底成 AI_ACTIVE 时）误判为 AI 在服务。
+P7 把它补成一等状态。
 
 纯函数模块 — 不持有状态，只校验转换并返回结果。
 持久化由 HandoffStore 负责。
@@ -22,6 +31,7 @@ class HandoffState(str, Enum):
     AI_ACTIVE = "ai_active"
     HANDOFF_REQUESTED = "handoff_requested"
     WAITING_HUMAN = "waiting_human"
+    AGENT_OFFERED = "agent_offered"
     HUMAN_ACTIVE = "human_active"
     CLOSED = "closed"
 
@@ -37,7 +47,13 @@ VALID_TRANSITIONS: dict[HandoffState, frozenset[HandoffState]] = {
         HandoffState.CLOSED,
     }),
     HandoffState.WAITING_HUMAN: frozenset({
+        HandoffState.AGENT_OFFERED,
         HandoffState.HUMAN_ACTIVE,
+        HandoffState.CLOSED,
+    }),
+    HandoffState.AGENT_OFFERED: frozenset({
+        HandoffState.HUMAN_ACTIVE,
+        HandoffState.WAITING_HUMAN,
         HandoffState.CLOSED,
     }),
     HandoffState.HUMAN_ACTIVE: frozenset({
@@ -51,6 +67,9 @@ TERMINAL_STATES = frozenset({HandoffState.CLOSED})
 INTERCEPT_STATES = frozenset({
     HandoffState.HANDOFF_REQUESTED,
     HandoffState.WAITING_HUMAN,
+    # 已派出但坐席尚未接单：用户仍在排队，AI 不能抢答（否则会出现
+    # 「AI 一边答、坐席一边接」的双写同一会话）。
+    HandoffState.AGENT_OFFERED,
     HandoffState.HUMAN_ACTIVE,
 })
 

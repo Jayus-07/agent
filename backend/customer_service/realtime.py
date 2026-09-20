@@ -455,6 +455,27 @@ class AgentHub:
         )
         self._subscriber_thread.start()
 
+    @staticmethod
+    async def publish_envelope(envelope: dict) -> bool:
+        """同步把**已构造好的封套**投递到 Redis 频道（P8 outbox relay 专用）。
+
+        与 ``publish()`` 的差别是回执语义：
+
+        - ``publish()`` 是 fire-and-forget，调用方拿不到"到底投出去没有"，
+          因此只能用于"尽力而为"的快速路径；
+        - ``publish_envelope()`` 等 ``PUBLISH`` 返回**订阅者数**，
+          ``receivers == 0``（例如 API 实例全挂、无人订阅）返回 ``False``，
+          调用方据此把事件留在 outbox 里下一轮重投 —— 这是方案 §六 P8
+          「杀死 dispatcher 后事件不丢」的实现基础。
+
+        刻意不改 ``_persist_and_broadcast`` 的「无本地连接就早退」行为：
+        那个早退对 API 进程是合理的优化，但对 relay 是致命的（dispatcher
+        容器永远没有本地 WS 连接，早退会让定向事件永远发不出去）。
+        """
+        return await AgentHub._publish_via_redis(  # noqa: SLF001 - 同类内部复用
+            json.dumps(envelope, ensure_ascii=False, default=str)
+        )
+
     async def _broadcast(self, data: str) -> None:
         """并发广播已序列化的帧；死连接统一清理。
 

@@ -17,10 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config.cs_dispatch import CS_OFFER_TIMEOUT_SECONDS
 from backend.config.customer_service import CS_HANDOFF_TIMEOUT_SECONDS
-from backend.customer_service.dispatch import event_relay, presence, repository
+from backend.customer_service.dispatch import event_relay, outbox, presence, repository
 from backend.customer_service.models.assignment import CSAssignment
 from backend.customer_service.models.conversation import CSConversation
-from backend.customer_service.models.event import CSEvent
 from backend.customer_service.models.handoff import CSHandoff
 from backend.memory.database import MemoryDatabaseUnavailable
 from backend.shared.logger import logger
@@ -311,7 +310,12 @@ async def dispatch_once(
             )
 
         agent = await repository.lock_least_loaded_agent(
-            session, tenant_id=tenant_id, online_agent_ids=sorted(online)
+            session,
+            tenant_id=tenant_id,
+            online_agent_ids=sorted(online),
+            # P7：排除刚在本工单上超时/拒绝过的坐席（冷却期内不再重复派给他）
+            handoff_id=handoff.handoff_id,
+            now=now,
         )
         if agent is None:
             return DispatchResult(
@@ -368,7 +372,6 @@ async def dispatch_once(
         conversation.handling_mode = "waiting_human"
         conversation.updated_at = now
 
-        event_id = uuid.uuid4().hex
         payload = {
             "conversation_id": handoff.conversation_id,
             "handoff_id": handoff.handoff_id,
@@ -379,19 +382,19 @@ async def dispatch_once(
             "priority": handoff.priority,
             "offer_expires_at": _iso(offer_expires_at),
         }
-        event = CSEvent(
-            conversation_id=handoff.conversation_id,
-            event_id=event_id,
+        # 事件与状态变更同事务落库（outbox）；提交后才做一次快速广播，
+        # 真正的投递保证由 P8 relay 按 pending 行重放承担。
+        event = outbox.append_event(
+            session,
             tenant_id=tenant_id,
-            handoff_id=handoff.handoff_id,
-            target_agent_id=agent.agent_id,
-            event_seq=None,
+            conversation_id=handoff.conversation_id,
             type=OFFER_EVENT_TYPE,
             payload=payload,
-            outbox_status="pending",
-            created_at=now,
+            handoff_id=handoff.handoff_id,
+            target_agent_id=agent.agent_id,
+            actor_user_id=_ASSIGNED_BY,
+            now=now,
         )
-        session.add(event)
         await session.flush()
 
         result = DispatchResult(
@@ -402,14 +405,7 @@ async def dispatch_once(
             assignment_version=version,
             offer_expires_at=offer_expires_at,
         )
-        envelope = {
-            "type": OFFER_EVENT_TYPE,
-            "event_id": event_id,
-            "seq": event.id,
-            "ts": _iso(now),
-            "target_agent_id": agent.agent_id,
-            **payload,
-        }
+        envelope = outbox.envelope_for(event)
 
     # 提交之后才广播；广播失败只记日志，绝不影响已提交的绑定。
     if envelope is not None:
