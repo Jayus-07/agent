@@ -5,8 +5,8 @@ deepseek.py — DeepSeek Provider（云端，兼容 OpenAI 协议）
   - build_deepseek(): 构建 ChatOpenAI 实例（用 DeepSeek API base）
   - get_deepseek_balance(): 调 DeepSeek 官方余额查询 API
 
-凭据在**调用时**解析：`credentials` 由调用方给出（见 infra/llm/credentials.py），
-为 None 或字段为空时回落 `.env`（config 常量）。
+凭据在**调用时**解析：`credentials` 由调用方给出（见 infra/llm/credentials.py）。
+运行时没有数据库凭据就明确失败，不回落到 `.env`。
 ⚠️ 不要改回「import 常量后直接用」—— 那是导入时值拷贝，会让运行时轮换
 与免重启生效失效（设计 B.5#1）。
 """
@@ -34,8 +34,8 @@ def build_deepseek(
             "deepseek provider 需要 langchain_openai 包，请 pip install langchain-openai"
         ) from e
 
-    api_key = (credentials.api_key if credentials else None) or DEEPSEEK_API_KEY
-    base_url = (credentials.base_url if credentials else None) or DEEPSEEK_API_BASE
+    api_key = credentials.api_key if credentials is not None else ""
+    base_url = credentials.base_url if credentials is not None else ""
 
     return ChatOpenAI(
         model=model_name,
@@ -57,11 +57,11 @@ def get_deepseek_balance(credentials: ProviderCredentials | None = None) -> dict
         或
         {"ok": False, "error": "..."}
     """
-    api_key = (credentials.api_key if credentials else None) or DEEPSEEK_API_KEY
-    base_url = (credentials.base_url if credentials else None) or DEEPSEEK_API_BASE
+    api_key = credentials.api_key if credentials is not None else ""
+    base_url = credentials.base_url if credentials is not None else ""
 
     if not api_key:
-        return {"ok": False, "error": "DEEPSEEK_API_KEY 未配置"}
+        return {"ok": False, "error": "供应商 deepseek 未在数据库配置 API Key"}
 
     try:
         import requests
@@ -115,11 +115,11 @@ async def get_deepseek_balance_async(
     原同步版用 requests，在 async 路由（/llm/balance）里直接调用会阻塞
     事件循环最长 10s。本版本用 httpx.AsyncClient，语义与返回结构完全一致。
     """
-    api_key = (credentials.api_key if credentials else None) or DEEPSEEK_API_KEY
-    base_url = (credentials.base_url if credentials else None) or DEEPSEEK_API_BASE
+    api_key = credentials.api_key if credentials is not None else ""
+    base_url = credentials.base_url if credentials is not None else ""
 
     if not api_key:
-        return {"ok": False, "error": "DEEPSEEK_API_KEY 未配置"}
+        return {"ok": False, "error": "供应商 deepseek 未在数据库配置 API Key"}
 
     try:
         import httpx

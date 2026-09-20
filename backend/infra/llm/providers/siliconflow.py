@@ -41,8 +41,8 @@ def build_siliconflow(
         "SILICONFLOW_ENABLE_THINKING", "false"
     ).strip().lower() in ("1", "true", "yes")
 
-    api_key = (credentials.api_key if credentials else None) or SILICONFLOW_API_KEY
-    base_url = (credentials.base_url if credentials else None) or SILICONFLOW_API_BASE
+    api_key = credentials.api_key if credentials is not None else ""
+    base_url = credentials.base_url if credentials is not None else ""
 
     body = {"enable_thinking": enable_thinking}
     if credentials and credentials.extra_body:
@@ -69,11 +69,11 @@ def get_siliconflow_balance(credentials: ProviderCredentials | None = None) -> d
         或
         {"ok": False, "error": "..."}
     """
-    api_key = (credentials.api_key if credentials else None) or SILICONFLOW_API_KEY
-    base_url = (credentials.base_url if credentials else None) or SILICONFLOW_API_BASE
+    api_key = credentials.api_key if credentials is not None else ""
+    base_url = credentials.base_url if credentials is not None else ""
 
     if not api_key:
-        return {"ok": False, "error": "SILICONFLOW_API_KEY 未配置"}
+        return {"ok": False, "error": "供应商 siliconflow 未在数据库配置 API Key"}
 
     try:
         import requests

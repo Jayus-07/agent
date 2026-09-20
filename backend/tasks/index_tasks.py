@@ -69,7 +69,7 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
         # main_loop 传 None：Worker 进程无 asyncio 主循环，
         # _do_index_sync 的 sync_emit 在队列不存在时只写 Redis，不碰 loop
         result = _do_index_sync(upload_id, filepath, filename, None,
-                                kb_id, department)
+                                kb_id, department, batch_id=batch_id)
     except Exception as e:
         from backend.rag.indexing.indexer import ChunkingEmptyError
         no_retry = isinstance(e, ChunkingEmptyError) or retries >= CELERY_MAX_RETRIES

@@ -3,6 +3,7 @@
 """
 import asyncio
 import concurrent.futures
+import contextvars
 import threading
 from typing import Callable, Any
 from backend.shared.logger import logger
@@ -56,8 +57,11 @@ async def async_safe_call_with_timeout(
         else:
             # 同步函数 - 在线程池中执行
             loop = asyncio.get_event_loop()
+            context = contextvars.copy_context()
             result = await asyncio.wait_for(
-                loop.run_in_executor(None, lambda: func(*args, **kwargs)),
+                loop.run_in_executor(
+                    None, lambda: context.run(func, *args, **kwargs)
+                ),
                 timeout=timeout,
             )
         return result

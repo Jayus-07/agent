@@ -332,8 +332,18 @@ def ensure_approved(tool_name: str, action: str,
     """
     detail = detail or {}
 
+    def _side_effect_budget_gate() -> None:
+        from backend.core.request_context import get_tool_tenant_id
+        from backend.infra.llm.quota import enforce_side_effect_budget
+
+        enforce_side_effect_budget(
+            user_id=user_id,
+            tenant_id=get_tool_tenant_id(),
+        )
+
     if TOOL_APPROVAL_MODE == "auto":
         logger.info(f"[ToolApproval] auto 模式放行: {tool_name}.{action} (user={user_id})")
+        _side_effect_budget_gate()
         return None
 
     fp = _fingerprint(tool_name, action, detail)
@@ -344,6 +354,7 @@ def ensure_approved(tool_name: str, action: str,
     if consumed is not None:
         logger.info(f"[ToolApproval] 审批单已批准,放行执行: {tool_name}.{action} "
                     f"(id={consumed['id']}, user={user_id})")
+        _side_effect_budget_gate()
         return None
 
     # 2) 幂等：同指纹 pending 已存在则复用单号，不重复建单

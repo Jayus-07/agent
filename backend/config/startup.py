@@ -78,15 +78,6 @@ class LLMSettings(BaseModel):
     retry_backoff_base: float = Field(gt=0)
     fallback_model: str = ""
 
-    @model_validator(mode="after")
-    def _provider_credential(self):
-        if self.llm_model.startswith("deepseek") and not (self.deepseek_api_key or "").strip():
-            raise ValueError(
-                f"LLM_MODEL={self.llm_model} 需要 DEEPSEEK_API_KEY（当前为空）"
-            )
-        return self
-
-
 class AuthSettings(BaseModel):
     api_key: Optional[str] = None
     allow_unauthenticated: bool = False
@@ -150,6 +141,13 @@ def _normalize_env(raw: str) -> str:
 
 
 def _build_settings() -> StartupSettings:
+    # 模型名由数据库注册表注入到 model_roles；这里不再读取任何模型相关 env。
+    # 启动校验在注册表刷新前也可能被单独调用，因此保留代码默认值作为
+    # Pydantic 快照的非敏感占位，不把它当作凭据或可用性证明。
+    from backend.config import model_roles
+
+    main_model = model_roles.resolve_effective("main").get("value") or "unconfigured"
+    fallback_model = model_roles.resolve_raw("fallback").get("value") or ""
     return StartupSettings(
         database=DatabaseSettings(
             pg_host=_env("PGHOST", "localhost"),
@@ -162,11 +160,11 @@ def _build_settings() -> StartupSettings:
             pool_max=_env_int("DB_POOL_MAX_CONN", 10),
         ),
         llm=LLMSettings(
-            llm_model=_env("LLM_MODEL", "deepseek-v4-flash"),
-            deepseek_api_key=_env("DEEPSEEK_API_KEY") or None,
+            llm_model=str(main_model),
+            deepseek_api_key=None,
             max_retries=_env_int("LLM_MAX_RETRIES", 2),
             retry_backoff_base=_env_float("LLM_RETRY_BACKOFF_BASE", 1.5),
-            fallback_model=_env("LLM_FALLBACK_MODEL"),
+            fallback_model=str(fallback_model),
         ),
         auth=AuthSettings(
             api_key=_env("API_KEY") or None,
@@ -244,24 +242,26 @@ def validate_startup_settings() -> List[str]:
     # 无任何强制 —— 配错时表现为静默回退或首次调用才构建失败，排查成本高。
     # 见 docs/model-config-governance-design.md §1.1 / §8。
     from backend.config import model_roles
-    from backend.infra.llm.models import get_provider_api_key_env
+    from backend.infra.llm import credentials
 
     # ① 注册表校验：模型名必须在 AVAILABLE_MODELS 内（合法集随代码变化）
     warnings.extend(model_roles.validate_roles())
-    # ② 密钥可达性：模型已注册但对应 Key 未配置，同样要等到调用时才暴露
+    # ② 密钥可达性：只检查数据库注册表注入的凭据，绝不读取旧 env。
+    # 注册表刷新由 server startup 在本校验前完成；单测/独立调用时没有 DB
+    # 覆盖则明确提示未配置，而不是把宿主机 env 当成可用凭据。
     for _role, _rspec in model_roles.MODEL_ROLES.items():
         if _rspec.validator is None:
             continue          # embedding/rerank/ocr 的模型不在注册表，不在此判定
         _resolved = model_roles.resolve_effective(_role)["value"]
         if not _resolved:
             continue
-        _key_env = get_provider_api_key_env(_resolved)
-        if _key_env and not _env(_key_env):
+        _provider = model_roles.provider_of(_resolved)
+        if _provider and credentials.missing_key_message(_provider):
             _fate = ("将回退其跟随的角色" if _rspec.inherit
                      else "该链路将在调用时失败")
             warnings.append(
                 f"模型角色 {_role}（{_rspec.env_key}）使用 {_resolved}，"
-                f"但 {_key_env} 未配置，{_fate}"
+                f"但供应商 {_provider} 未在数据库配置 API Key，{_fate}"
             )
 
     # ── checkpointer 后端可用性（warning 级）──

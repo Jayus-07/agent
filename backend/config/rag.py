@@ -69,20 +69,19 @@ RAG_PDF_PRECHECK_PAGES = int(os.getenv("RAG_PDF_PRECHECK_PAGES", "10"))
 # ── PDF OCR 兜底（扫描件/无文本层）──
 # 供应商：rapidocr（默认，离线免费）| dashscope（备选，qwen-vl 逐页识别，
 # token 用量计入 /observability/tokens 的 OCR 维度）| off（关闭，入口拒绝扫描件）
-RAG_OCR_PROVIDER = os.getenv("RAG_OCR_PROVIDER", "rapidocr").lower()
+# 云端 OCR 供应商由数据库中的 ocr 角色绑定决定；旧 env 不再参与解析。
+RAG_OCR_PROVIDER = "rapidocr"
 # 触发阈值：平均每页文本层字符数低于该值视为无文本层（扫描件/纯图片）。
 # 按页均而非全文总量判定，避免"1 页只有几行字"的真实短文档被误触发 OCR
 RAG_OCR_MIN_TEXT_CHARS = int(os.getenv("RAG_OCR_MIN_TEXT_CHARS", "30"))
 # 渲染 DPI（越高越准越慢）与单文档 OCR 页数上限（防异常大文档失控烧钱/耗时）
 RAG_OCR_DPI = int(os.getenv("RAG_OCR_DPI", "200"))
 RAG_OCR_MAX_PAGES = int(os.getenv("RAG_OCR_MAX_PAGES", "100"))
-# DashScope 备选配置（key 依次取 OCR_DASHSCOPE_API_KEY → DASHSCOPE_API_KEY
-# → EMBEDDING_API_KEY，通常为同一阿里云账号）
+# 云端 OCR 的供应商、Key、URL 与模型由管理端 ocr 角色绑定和凭据表提供。
 # 模型名走角色注册表（role=ocr，代码默认 qwen-vl-max）
 RAG_OCR_DASHSCOPE_MODEL = _literal_model("ocr")
-RAG_OCR_DASHSCOPE_BASE_URL = os.getenv(
-    "RAG_OCR_DASHSCOPE_BASE_URL",
-    "https://dashscope.aliyuncs.com/compatible-mode/v1")
+# 云端 OCR 地址从数据库供应商记录读取；空值只为兼容旧 import。
+RAG_OCR_DASHSCOPE_BASE_URL = ""
 RAG_OCR_DASHSCOPE_TIMEOUT = int(os.getenv("RAG_OCR_DASHSCOPE_TIMEOUT", "60"))
 # 云端 OCR 成本控制（D6 ③，2026-09-17）：按页缓存（同页图像幂等重跑不重复计费）
 # + 相邻调用最小间隔毫秒（批量入库限流，防平台 429）。仅对 dashscope 供应商生效
@@ -173,7 +172,10 @@ METADATA_CASCADE_EMBED_TIMEOUT = float(os.getenv("METADATA_CASCADE_EMBED_TIMEOUT
 # R1 校准分类器默认只加载/影子验证，不参与线上接受；正式放量前必须通过
 # 黄金集门禁并显式开启。模型卡与当前 taxonomy/rules/feature 指纹不一致时跳过。
 METADATA_CLASSIFIER_ENABLED = os.getenv("METADATA_CLASSIFIER_ENABLED", "false").lower() == "true"
-METADATA_CLASSIFIER_MODEL_PATH = os.getenv("METADATA_CLASSIFIER_MODEL_PATH", "").strip()
+METADATA_CLASSIFIER_MODEL_PATH = os.getenv(
+    "METADATA_CLASSIFIER_MODEL_PATH",
+    os.path.join(RAG_DATA_DIR, "models", "metadata_lr", "lr_model.joblib"),
+).strip()
 METADATA_CLASSIFIER_MIN_MARGIN = float(os.getenv("METADATA_CLASSIFIER_MIN_MARGIN", "0.05"))
 METADATA_CLASSIFIER_LOAD_TIMEOUT = float(os.getenv("METADATA_CLASSIFIER_LOAD_TIMEOUT", "2"))
 
@@ -229,6 +231,12 @@ SEMANTIC_EMBED_RETRY = int(os.getenv("SEMANTIC_EMBED_RETRY", "3"))
 ENABLE_SIMULATED_QUESTIONS = os.getenv("ENABLE_SIMULATED_QUESTIONS", "true").lower() == "true"
 # 成本护栏：超长文档只对前 N chunk 走 LLM 生成问题，其余规则兜底
 QUESTION_GEN_MAX_CHUNKS = int(os.getenv("QUESTION_GEN_MAX_CHUNKS", "24"))
+# 问题生成提示词/输出契约变更时递增，避免旧问题缓存污染新索引。
+QUESTION_GEN_PROMPT_VERSION = os.getenv("QUESTION_GEN_PROMPT_VERSION", "v1")
+# 表格行语义描述提示词版本：变更提示词或输出契约时自然失效旧缓存。
+TABLE_DESC_PROMPT_VERSION = os.getenv("TABLE_DESC_PROMPT_VERSION", "v1")
+# 云端 OCR 的固定提取指令版本：变更指令时禁止复用旧页级 OCR 结果。
+OCR_PROMPT_VERSION = os.getenv("OCR_PROMPT_VERSION", "v1")
 
 # C1 修复：Legal 策略的虚拟 parent 分组大小（每 N 个条款 leaf 挂一个 parent，
 # 供「命中 leaf → 取 parent 扩上下文」的 parent-child 检索使用）

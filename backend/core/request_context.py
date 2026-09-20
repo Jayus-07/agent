@@ -153,7 +153,11 @@ class RequestContext:
             trace_collector.bind(self.trace)
             trace_id = str(getattr(self.trace, "id", "") or "")
             if trace_id:
-                bind_request_budget(trace_id)
+                bind_request_budget(
+                    trace_id,
+                    user_id=self.user_id,
+                    tenant_id=self.tenant_id,
+                )
             else:
                 clear_request_budget()
         elif self.bind_sink:

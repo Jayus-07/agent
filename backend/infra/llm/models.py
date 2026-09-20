@@ -19,7 +19,6 @@ models.py — Provider 注册表 + 可用模型清单
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from backend.shared.logger import logger
@@ -145,7 +144,7 @@ AVAILABLE_MODELS = [
         "provider": "siliconflow",
         "name": "Qwen/Qwen3-32B",
         "display": "Qwen3 32B - 硅基流动",
-        "description": "硅基流动 Qwen3-32B，OpenAI 兼容协议，需配置 SILICONFLOW_API_KEY",
+        "description": "硅基流动 Qwen3-32B，OpenAI 兼容协议，需在供应商页配置 API Key",
         "input_price_per_1m": 0.0,
         "output_price_per_1m": 0.0,
     },
@@ -154,7 +153,7 @@ AVAILABLE_MODELS = [
         "provider": "siliconflow",
         "name": "Qwen/Qwen3-8B",
         "display": "Qwen3 8B - 硅基流动",
-        "description": "硅基流动 Qwen3-8B，OpenAI 兼容协议，需配置 SILICONFLOW_API_KEY",
+        "description": "硅基流动 Qwen3-8B，OpenAI 兼容协议，需在供应商页配置 API Key",
         "input_price_per_1m": 0.0,
         "output_price_per_1m": 0.0,
     },
@@ -163,7 +162,7 @@ AVAILABLE_MODELS = [
 
 def get_model_pricing(model_name: str) -> tuple[float, float]:
     """返回 (input_price_per_1m, output_price_per_1m) USD。未匹配返回 (0, 0)。"""
-    for m in AVAILABLE_MODELS:
+    for m in get_available_models():
         if m["name"] == model_name:
             return (
                 float(m.get("input_price_per_1m", 0.0)),
@@ -172,8 +171,9 @@ def get_model_pricing(model_name: str) -> tuple[float, float]:
     return 0.0, 0.0
 
 
-# provider → 启用该 provider 模型所需的环境变量名（None = 无需 key）。
-# provider→key 的单一事实来源：startup 校验、专用模型配置校验共用
+# provider → 历史环境变量名（仅兼容旧 API 字段与文档迁移，不参与运行时取值）。
+# provider→是否需要 Key 的兼容事实来源：startup 校验、专用模型配置校验共用；
+# 实际 Key 必须从数据库加密凭据表解析。
 PROVIDER_API_KEY_ENV = {
     "ollama": None,
     "deepseek": "DEEPSEEK_API_KEY",
@@ -184,10 +184,50 @@ PROVIDER_API_KEY_ENV = {
     "siliconflow": "SILICONFLOW_API_KEY",
 }
 
+# 模型用途类型与协议类型解耦：同一个 OpenAI 兼容供应商可以同时提供
+# chat、embedding、rerank，调用端必须按用途选择对应适配器和端点。
+MODEL_KINDS = ("chat", "embedding", "rerank", "vision", "speech")
+MODEL_KIND_LABELS = {
+    "chat": "文本模型",
+    "embedding": "向量模型",
+    "rerank": "重排模型",
+    "vision": "视觉模型",
+    "speech": "语音模型",
+}
+_SPECIALIZED_MODEL_ROLES = {"embedding", "rerank"}
+
+
+def normalize_model_kind(value: str | None) -> str:
+    """规范化模型用途；历史未标注模型按文本模型兼容。"""
+    kind = (value or "chat").strip().lower()
+    if kind not in MODEL_KINDS:
+        raise ValueError(
+            f"模型用途必须是 {', '.join(MODEL_KINDS)}，当前为 {value!r}"
+        )
+    return kind
+
+
+def model_kind_of(entry: dict | None) -> str:
+    """读取目录条目的用途；旧代码/静态条目缺字段时按 chat。"""
+    return normalize_model_kind((entry or {}).get("model_kind"))
+
+
+def expected_model_kind(role: str) -> str:
+    """返回角色允许绑定的模型用途。"""
+    return role if role in _SPECIALIZED_MODEL_ROLES else "chat"
+
+
+def is_model_kind_compatible(role: str, model_kind: str | None) -> bool:
+    """判断角色与模型用途是否匹配。非法用途不应被管理端保存。"""
+    try:
+        return expected_model_kind(role) == normalize_model_kind(model_kind)
+    except ValueError:
+        return False
+
 
 def is_registered_model(model_name: str) -> bool:
-    """模型名是否在 AVAILABLE_MODELS 注册。"""
-    return any(m["name"] == model_name for m in AVAILABLE_MODELS)
+    """模型名是否在当前生效注册表中（代码层 + DB 动态层）。"""
+    return any(m["name"] == model_name for m in get_available_models())
 
 
 def get_provider_api_key_env(model_name: str) -> str | None:
@@ -196,7 +236,7 @@ def get_provider_api_key_env(model_name: str) -> str | None:
     未注册的模型返回 None（校验方应先过 is_registered_model）；
     ollama 等本地 provider 返回 None（无需 key）。
     """
-    for m in AVAILABLE_MODELS:
+    for m in get_available_models():
         if m["name"] == model_name:
             return PROVIDER_API_KEY_ENV.get(m["provider"])
     return None
@@ -229,7 +269,7 @@ def validate_override_model(
         return True, ""
     if not is_registered_model(name):
         return False, f"未知模型：{name}"
-    entry = next((m for m in AVAILABLE_MODELS if m["name"] == name), None)
+    entry = next((m for m in get_available_models() if m["name"] == name), None)
     provider = str((entry or {}).get("provider") or "")
     if provider == "ollama":
         enabled = ollama_enabled
@@ -239,9 +279,16 @@ def validate_override_model(
             enabled = OLLAMA_ENABLED
         if not enabled:
             return False, "Ollama 当前未启用（cloud 模式禁用本地模型）"
-    key_env = PROVIDER_API_KEY_ENV.get(provider)
-    if key_env and not os.getenv(key_env, "").strip():
-        return False, f"{key_env} 未配置，无法使用模型 {name}"
+    if provider != "ollama":
+        # 凭据唯一来自 DB；不要在请求级模型覆盖校验中重新读取旧 env。
+        from backend.infra.llm.credentials import resolve_credentials
+
+        try:
+            configured = resolve_credentials(provider).api_key
+        except Exception:
+            configured = None
+        if not configured:
+            return False, f"供应商 {provider} 未在数据库配置 API Key，无法使用模型 {name}"
     return True, ""
 
 
@@ -309,8 +356,10 @@ def compute_embedding_cost(model_name: str, total_tokens: int) -> float:
 # DB 里 llm_models / llm_providers 的条目由 registry_store.py 读出后注入这里。
 # 热路径只读进程内列表（零 IO）：DB 访问在后台刷新循环里做（同 sys_config 模式）。
 #
-# P1a 阶段（迁移 0017 已建表但未接线）：动态层恒空 → 行为与纯代码层完全一致。
+# 动态层由 registry_store 后台刷新注入；数据库不可用时保留上一轮快照，避免热路径
+# 因瞬时 DB 故障丢失可用模型。
 _dynamic_models: list[dict] = []
+_dynamic_providers: dict[str, dict[str, Any]] = {}
 
 # 未注册模型只告警一次，避免热路径刷屏
 _warned_unknown_models: set[str] = set()
@@ -333,7 +382,34 @@ def set_dynamic_models(entries: list[dict] | None) -> None:
 def reset_dynamic_models_for_tests() -> None:
     """测试态注入点：清空动态层，恢复纯代码层语义。"""
     _dynamic_models.clear()
+    _dynamic_providers.clear()
     _warned_unknown_models.clear()
+
+
+def set_dynamic_providers(entries: list[dict] | None) -> None:
+    """注入 DB 供应商元数据，供凭据解析和协议构建使用。
+
+    ``driver`` 是迁移层 CHECK 约束保护的协议族；动态层只补实例地址、
+    计费口径等元数据，不允许借此执行任意 Python 代码。
+    """
+    _dynamic_providers.clear()
+    for entry in entries or []:
+        provider_id = str(entry.get("id") or "").strip()
+        if not provider_id:
+            continue
+        _dynamic_providers[provider_id] = dict(entry)
+
+
+def get_provider_entry(provider: str) -> dict[str, Any] | None:
+    """按 provider 取当前生效元数据，DB 实例优先于代码默认。"""
+    if provider in _dynamic_providers:
+        return _dynamic_providers[provider]
+    return PROVIDERS.get(provider)
+
+
+def get_provider_ids() -> list[str]:
+    """返回代码层与 DB 动态层的 provider id，保持稳定去重顺序。"""
+    return list(dict.fromkeys([*PROVIDERS, *_dynamic_providers]))
 
 
 def get_available_models() -> list[dict]:
@@ -382,9 +458,9 @@ def resolve_provider(
 
     ⚠️ 为什么不默认 fail-closed（设计 B.5#4 的完整落地推迟到 P1b）：
     **Ollama 本地模型名不可穷举**（`llama3` / `qwen2.5:7b` / 任意 pull 下来的名字），
-    而 `OLLAMA_MODEL`（role=eval_gen）等链路今天正是靠这条兜底在工作。
-    贸然改成抛错会直接打断评测生成等非对话链路。真正的修复是让自建模型
-    显式登记（DB 覆盖层），那时兜底自然不再被触发。
+    评测生成等受治理的链路现在要求通过 `eval_gen` 显式绑定已登记模型；
+    这里仍保留宽松回落，仅兼容 Ollama 的其它历史调用点。贸然全局改成抛错
+    会打断尚未迁移的本地链路。自建模型应显式登记到 DB 覆盖层。
     """
     entry = get_model_entry(model_name)
     if entry is not None:
@@ -418,7 +494,7 @@ def resolve_provider(
 
 def get_provider_driver(provider: str) -> str | None:
     """provider → 协议驱动（openai | anthropic | ollama）；未知 provider 返回 None。"""
-    spec = PROVIDERS.get(provider)
+    spec = get_provider_entry(provider)
     return spec.get("driver") if spec else None
 
 
@@ -427,7 +503,7 @@ def get_provider_billing(provider: str) -> str:
 
     未知 provider 按 `metered` 处理（保守：宁可照常计价，不可静默免费用量）。
     """
-    spec = PROVIDERS.get(provider)
+    spec = get_provider_entry(provider)
     return spec.get("billing", "metered") if spec else "metered"
 
 

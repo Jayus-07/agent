@@ -54,6 +54,10 @@ class TokenUsageEvent:
     tenant_id: Optional[str] = None
     request_id: Optional[str] = None
     decision: str = "primary"
+    run_id: Optional[str] = None
+    step_id: Optional[str] = None
+    role: Optional[str] = None
+    stage: Optional[str] = None
     
     def __post_init__(self):
         if not self.timestamp:
@@ -122,7 +126,9 @@ class TokenTracker:
 
             # embedding/rerank 也属于本次请求的模型调用，和 proxy 的
             # chat 调用共用同一请求级预算。
-            reserve_model_call("primary")
+            reserve_model_call(
+                "primary", model_name=self.model_name, component=self.component,
+            )
             t0 = time.monotonic()
             status = "success"
             error = None
@@ -180,6 +186,10 @@ class TokenTracker:
                     event.user_id = attribution["user_id"]
                     event.tenant_id = attribution["tenant_id"]
                     event.request_id = attribution["request_id"]
+                    event.run_id = attribution["run_id"] or None
+                    event.step_id = attribution["step_id"] or None
+                    event.role = attribution["role"] or None
+                    event.stage = attribution["stage"] or None
                 except Exception:
                     pass
                 try:
@@ -191,11 +201,26 @@ class TokenTracker:
 
                 try:
                     from backend.infra.llm.budget import record_model_usage
+                    from backend.infra.llm.budget import current_request_budget
+                    from backend.infra.llm.pricing import calculate_current_cost
+
+                    budget_state = current_request_budget()
+                    cost_usd = calculate_current_cost(
+                        self.model_name,
+                        self.component,
+                        {"input": total_tokens or 0},
+                        enforce=bool(
+                            budget_state
+                            and budget_state.mode == "enforce"
+                            and budget_state.quota_store is not None
+                        ),
+                    )
 
                     record_model_usage(
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
                         total_tokens=total_tokens,
+                        cost_usd=cost_usd,
                     )
                 except Exception:
                     # 预算统计失败不得覆盖原始模型结果/异常。
@@ -266,6 +291,10 @@ class TokenTracker:
                 "tenant_id": event.tenant_id or "",
                 "decision": event.decision,
                 "finish_reason": event.status,
+                "run_id": event.run_id or "",
+                "step_id": event.step_id or "",
+                "role": event.role or "",
+                "stage": event.stage or "",
             })
         except Exception as e:
             # 软失败：SQLite 写入失败不影响主流程和 JSONL 记录

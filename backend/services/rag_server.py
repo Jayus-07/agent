@@ -137,8 +137,30 @@ def _kick_init() -> None:
 
 
 @app.on_event("startup")
-def _startup() -> None:
-    """启动即后台预热索引，不阻塞端口监听（readyz 期间返回 503）。"""
+async def _startup() -> None:
+    """先载入管理端专项模型配置，再后台预热索引。
+
+    RAG 服务是独立进程，不能依赖 app 进程的 registry 刷新循环；如果不在
+    这里先注入 DB 覆盖层，启动预热会错误地使用旧的 env embedding/rerank。
+    启动后继续轮询，保证管理端轮换供应商或模型后无需重启 RAG 服务。
+    """
+    try:
+        from backend.infra.llm.registry_store import refresh_loop, refresh_registry
+
+        loaded = await refresh_registry()
+        logger.info(
+            "[rag-server] LLM 注册表启动加载完成 loaded=%s",
+            loaded,
+        )
+        import asyncio
+
+        asyncio.create_task(refresh_loop(), name="rag-llm-registry-refresh")
+    except Exception:
+        # 注册表失败时保留 env 兜底；pipeline 仍可按既有配置启动。
+        logger.warning(
+            "[rag-server] LLM 注册表启动加载失败，继续使用 env 兜底",
+            exc_info=True,
+        )
     _kick_init()
 
 

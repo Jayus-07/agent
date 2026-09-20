@@ -7,8 +7,11 @@
 |---|---|---|
 | L0 | url_guard + TCP/TLS | 地址写错 / 不可达 |
 | L1 | `GET {base}/models` | 404 → 可能少 `/v1`，**降级不判死** |
-| L2 | 最小 chat 调用（`max_tokens=16`，prompt 固定） | 区分「Key 错」与「模型名错」 |
-| L3 | `stream=true` 观察是否回传 usage | 不回传 → `skip`（记账会缺 token 数） |
+| L2 | 最小 chat 调用（快速模式取首个流式分片，完整模式等非流式结果） | 区分「Key 错」与「模型名错」 |
+| L3 | `stream=true` 观察是否回传 usage（完整模式） | 不回传 → `skip`（记账会缺 token 数） |
+
+默认探测为快速模式：L0–L2 通过即可判定供应商可用，并附带一个「L3 已跳过」步骤；只有
+调用方显式传入 `include_stream_usage=True` 才执行可能较慢的完整流式检查。
 
 三条实现约定（都有原因，勿擅改）：
 
@@ -35,6 +38,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
+from backend.services import specialized_model_probe
 from backend.shared.logger import logger
 from backend.tools.url_guard import UrlBlockedError, assert_url_allowed
 
@@ -42,15 +46,20 @@ DETAIL_LIMIT = 200
 
 _L0_TIMEOUT = 5.0
 _L1_TIMEOUT = 8.0
+_L2_FAST_TIMEOUT = 10.0
 _L2_TIMEOUT = 20.0
 
 _PROBE_PROMPT = "ping"
 _PROBE_MAX_TOKENS = 16
+_PROBE_FAST_MAX_TOKENS = 1
+_TP_MODEL_SUFFIX = "@tp"
 
 STATUS_PASS = "pass"
 STATUS_FAIL = "fail"
 STATUS_DEGRADED = "fail_degraded"
 STATUS_SKIP = "skip"
+
+_MODEL_KINDS = frozenset({"chat", "embedding", "rerank", "vision", "speech"})
 
 # 失败归因的文本线索（顺序有意义：先判更具体的「模型名」再判「Key」）
 _MODEL_ERROR_HINTS = (
@@ -208,24 +217,28 @@ def build_probe_client(
     api_key: str,
     base_url: str,
     extra_headers: dict[str, str] | None = None,
+    fast: bool = False,
 ) -> Any:
     """按 **driver**（协议）构建最小客户端。
 
     草稿态探测没有 provider id，模型可能也未注册，故只能按 driver 构建 ——
     这正是 B.1「厂商差异不在代码里」的直接推论。内置 provider 的 `build_*`
-    与之使用同一组 langchain 客户端与参数（P1a-1 已统一为传参式），差别仅在
-    探测固定了 `max_tokens=16` 与 `temperature=0`。
+    与之使用同一组 langchain 客户端与参数（P1a-1 已统一为传参式），完整探测固定
+    `max_tokens=16` 与 `temperature=0`；快速探测将输出上限降为 1，并按需取首片。
 
     各客户端**延迟导入**（照 providers/*.py 约定），避免把重依赖拖进导入链。
     """
     d = (driver or "").strip().lower()
+
+    max_tokens = _PROBE_FAST_MAX_TOKENS if fast else _PROBE_MAX_TOKENS
+    client_timeout = _L2_FAST_TIMEOUT if fast else _L2_TIMEOUT
 
     if d == "ollama":
         from langchain_ollama import ChatOllama
 
         return ChatOllama(
             model=model_name, base_url=base_url,
-            temperature=0.0, num_predict=_PROBE_MAX_TOKENS,
+            temperature=0.0, num_predict=max_tokens,
         )
 
     if d == "anthropic":
@@ -238,22 +251,35 @@ def build_probe_client(
             anthropic_api_key=api_key,
             anthropic_api_url=base_url,
             default_headers=headers,
-            max_tokens=_PROBE_MAX_TOKENS,
-            timeout=_L2_TIMEOUT,
+            max_tokens=max_tokens,
+            timeout=client_timeout,
         )
 
     if d in ("openai", ""):
         from langchain_openai import ChatOpenAI
 
-        return ChatOpenAI(
-            model=model_name,
-            api_key=api_key,
-            base_url=base_url,
-            default_headers=dict(extra_headers) if extra_headers else None,
-            max_tokens=_PROBE_MAX_TOKENS,
-            temperature=0.0,
-            request_timeout=_L2_TIMEOUT,
-        )
+        kwargs: dict[str, Any] = {
+            # qwen_tp 的 @tp 只用于内部注册名，Token Plan API 只接受真实模型名。
+            "model": model_name.removesuffix(_TP_MODEL_SUFFIX),
+            "api_key": api_key,
+            "base_url": base_url,
+            "default_headers": dict(extra_headers) if extra_headers else None,
+            "max_tokens": max_tokens,
+            "temperature": 0.0,
+            "request_timeout": client_timeout,
+        }
+        parsed_host = (urlparse(base_url).hostname or "").lower()
+        if (
+            fast
+            and parsed_host.endswith("siliconflow.cn")
+            and "qwen3" in model_name.lower()
+            and "thinking" not in model_name.lower()
+        ):
+            # SiliconFlow 的 Qwen3 默认可能进入思考模式；快速探测只验证
+            # 鉴权与模型可调用，不应等待完整思考链。该参数仅发给明确匹配的
+            # SiliconFlow Qwen3，避免污染其他 OpenAI 兼容供应商的请求。
+            kwargs["extra_body"] = {"enable_thinking": False}
+        return ChatOpenAI(**kwargs)
 
     raise ValueError(f"不支持的驱动: {driver or '(空)'}（可选 openai / anthropic / ollama）")
 
@@ -266,9 +292,27 @@ def _invoke_once(client: Any) -> str:
     return content if isinstance(content, str) else str(content)
 
 
-def _classify_l2_failure(exc: Exception) -> str:
+def _stream_first_chunk(client: Any) -> str:
+    """只取首个流式分片，并主动关闭迭代器，避免快速测试等待完整生成。"""
+    from langchain_core.messages import HumanMessage
+
+    stream = client.stream([HumanMessage(content=_PROBE_PROMPT)])
+    try:
+        chunk = next(iter(stream))
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
+
+    content = getattr(chunk, "content", chunk)
+    return content if isinstance(content, str) else str(content)
+
+
+def _classify_l2_failure(exc: Exception, api_key: str = "") -> str:
     """把 L2 异常归因到「Key 错」或「模型名错」—— 用户最需要分清的一步。"""
     raw = f"{type(exc).__name__}: {exc}"
+    if api_key:
+        raw = raw.replace(api_key, "<API_KEY>")
     low = raw.lower()
     if any(h in low for h in _MODEL_ERROR_HINTS):
         return f"模型名错误或该 Key 无权访问该模型 —— {_clip(raw)}"
@@ -284,6 +328,7 @@ async def probe_l2(
     api_key: str,
     base_url: str,
     extra_headers: dict[str, str] | None = None,
+    fast: bool = False,
 ) -> ProbeStep:
     t0 = time.monotonic()
     if not model_name:
@@ -292,23 +337,29 @@ async def probe_l2(
     try:
         client = build_probe_client(
             driver, model_name=model_name, api_key=api_key,
-            base_url=base_url, extra_headers=extra_headers,
+            base_url=base_url, extra_headers=extra_headers, fast=fast,
         )
     except Exception as e:  # noqa: BLE001
         return _step("L2", STATUS_FAIL,
                      f"客户端构建失败：{type(e).__name__}: {e}", t0=t0)
 
+    timeout = _L2_FAST_TIMEOUT if fast else _L2_TIMEOUT
+    invoke = _stream_first_chunk if fast else _invoke_once
     try:
-        content = await asyncio.wait_for(asyncio.to_thread(_invoke_once, client),
-                                         timeout=_L2_TIMEOUT)
+        content = await asyncio.wait_for(asyncio.to_thread(invoke, client),
+                                         timeout=timeout)
     except asyncio.TimeoutError:
         return _step("L2", STATUS_FAIL,
-                     f"最小调用超时（{int(_L2_TIMEOUT)}s）：模型可能不可用或响应过慢",
+                     f"最小调用超时（{int(timeout)}s）：模型可能不可用或响应过慢",
                      t0=t0)
     except Exception as e:  # noqa: BLE001
-        return _step("L2", STATUS_FAIL, _classify_l2_failure(e), t0=t0)
+        return _step("L2", STATUS_FAIL, _classify_l2_failure(e, api_key), t0=t0)
 
-    return _step("L2", STATUS_PASS, "模型名可用（已用真实客户端调用）",
+    summary = (
+        "模型名可用（已收到首个流式分片）"
+        if fast else "模型名可用（已用真实客户端调用）"
+    )
+    return _step("L2", STATUS_PASS, summary,
                  detail=f"返回：{content}", t0=t0)
 
 
@@ -360,6 +411,64 @@ async def probe_l3(
                  detail=text, t0=t0)
 
 
+async def _probe_specialized_kind(
+    *,
+    driver: str,
+    base_url: str,
+    api_key: str,
+    model_name: str,
+    model_kind: str,
+    network_scope: str,
+) -> ProbeResult:
+    """用专项适配器测试 embedding/rerank，并转换为统一探测结果。"""
+    if driver.strip().lower() not in {"openai", "specialized"}:
+        step = ProbeStep(
+            level="L2",
+            status=STATUS_FAIL,
+            summary=f"{model_kind} 模型测试仅支持 OpenAI 兼容协议",
+            detail="请将协议设置为 openai；历史专项供应商也会复用同一套探测",
+        )
+        return ProbeResult(
+            ok=False,
+            blocked_at="L2",
+            steps=[step],
+            summary=f"未通过（卡在 L2）：{step.summary}",
+        )
+
+    from backend.services.specialized_model_adapters import infer_adapter
+
+    adapter = infer_adapter(model_kind, base_url)
+    specialized = await specialized_model_probe.probe_specialized(
+        role=model_kind,
+        adapter=adapter,
+        base_url=base_url,
+        api_key=api_key,
+        model_name=model_name,
+        network_scope=network_scope,
+    )
+    status = STATUS_PASS if specialized.ok else STATUS_FAIL
+    step = ProbeStep(
+        level="L2",
+        status=status,
+        summary=specialized.summary,
+        detail=specialized.detail,
+        elapsed_ms=specialized.elapsed_ms,
+    )
+    if not specialized.ok:
+        return ProbeResult(
+            ok=False,
+            blocked_at="L2",
+            steps=[step],
+            summary=f"未通过（卡在 L2）：{specialized.summary}：{specialized.detail}",
+        )
+    return ProbeResult(
+        ok=True,
+        blocked_at=None,
+        steps=[step],
+        summary=f"{model_kind} 模型连通性通过",
+    )
+
+
 # ── 入口 ────────────────────────────────────────────────────────────────
 
 
@@ -371,12 +480,40 @@ async def probe_provider(
     model_name: str,
     network_scope: str = "public",
     extra_headers: dict[str, str] | None = None,
+    include_stream_usage: bool = False,
+    model_kind: str = "chat",
 ) -> ProbeResult:
-    """执行四级探测。
+    """执行快速或完整探测。
 
     只有 **L0 失败短路**（地址不通时后续无意义）；L1 的 404/401 等**都不判死**，
-    继续用 L2 拿到更准确的结论（B.4 硬约束 1）。
+    继续用 L2 拿到更准确的结论（B.4 硬约束 1）。L3 只在完整模式执行，且不参与
+    「模型可调用」的判定。
     """
+    kind = (model_kind or "chat").strip().lower()
+    if kind not in _MODEL_KINDS:
+        step = ProbeStep(
+            level="L2",
+            status=STATUS_FAIL,
+            summary=f"不支持的模型用途：{model_kind}",
+            detail="可选用途：chat、embedding、rerank、vision、speech",
+        )
+        return ProbeResult(
+            ok=False,
+            blocked_at="L2",
+            steps=[step],
+            summary=f"未通过（卡在 L2）：{step.summary}",
+        )
+
+    if kind in {"embedding", "rerank"}:
+        return await _probe_specialized_kind(
+            driver=driver,
+            base_url=base_url,
+            api_key=api_key,
+            model_name=model_name,
+            model_kind=kind,
+            network_scope=network_scope,
+        )
+
     allow_private = (network_scope or "public").strip().lower() == "private"
     steps: list[ProbeStep] = []
 
@@ -389,8 +526,10 @@ async def probe_provider(
     l1 = await probe_l1(base_url, api_key, extra_headers=extra_headers)
     steps.append(l1)
 
-    l2 = await probe_l2(driver, model_name=model_name, api_key=api_key,
-                        base_url=base_url, extra_headers=extra_headers)
+    l2 = await probe_l2(
+        driver, model_name=model_name, api_key=api_key, base_url=base_url,
+        extra_headers=extra_headers, fast=not include_stream_usage,
+    )
     steps.append(l2)
 
     if l2.status != STATUS_PASS:
@@ -400,6 +539,19 @@ async def probe_provider(
         )
         return ProbeResult(ok=False, blocked_at="L2", steps=steps,
                            summary=f"未通过（卡在 L2）：{l2.summary}")
+
+    if not include_stream_usage:
+        steps.append(_step(
+            "L3", STATUS_SKIP,
+            "快速测试已跳过流式 usage 检查（不影响模型可用性）",
+            detail="如需核对流式 usage，请执行完整测试",
+        ))
+        return ProbeResult(
+            ok=True,
+            blocked_at=None,
+            steps=steps,
+            summary="模型连通性通过（快速测试）",
+        )
 
     l3 = await probe_l3(driver, model_name=model_name, api_key=api_key,
                         base_url=base_url, extra_headers=extra_headers)

@@ -40,8 +40,8 @@ def build_vllm(
             "vllm provider 需要 langchain_openai 包，请 pip install langchain-openai"
         ) from e
 
-    api_key = (credentials.api_key if credentials else None) or VLLM_API_KEY
-    base_url = (credentials.base_url if credentials else None) or VLLM_API_BASE
+    api_key = credentials.api_key if credentials is not None else ""
+    base_url = credentials.base_url if credentials is not None else ""
 
     # vLLM 对 max_tokens 超出模型上下文的请求会直接 400，
     # 而 ChatOpenAI 默认 max_tokens=None 时不传该字段，这里显式透传全局配置
@@ -61,8 +61,8 @@ def get_vllm_balance(credentials: ProviderCredentials | None = None) -> dict:
 
     返回结构与 deepseek 等一致：{"ok": ..., "provider": "vllm", ...}
     """
-    api_key = (credentials.api_key if credentials else None) or VLLM_API_KEY
-    base_url = (credentials.base_url if credentials else None) or VLLM_API_BASE
+    api_key = credentials.api_key if credentials is not None else ""
+    base_url = credentials.base_url if credentials is not None else ""
     base = base_url.rstrip("/")
     try:
         import requests

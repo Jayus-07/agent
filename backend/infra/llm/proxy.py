@@ -34,7 +34,12 @@ from backend.config.llm import (
     OLLAMA_ENABLED,
 )
 from backend.infra.llm.factory import get_llm_factory
-from backend.infra.llm.models import AVAILABLE_MODELS, compute_cost_usd
+from backend.infra.llm.models import (
+    AVAILABLE_MODELS,
+    compute_cost_usd,
+    is_registered_model,
+    resolve_provider,
+)
 from backend.shared.logger import logger
 
 # =====================================================
@@ -42,6 +47,7 @@ from backend.shared.logger import logger
 # =====================================================
 
 _default_llm = None
+_default_llm_model: str | None = None
 _default_lock = threading.Lock()
 
 # PR-0.4: 当前请求的 user_id（限流用）— 调用方可通过 set_current_user_id() 设置。
@@ -72,33 +78,25 @@ _request_model_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
 def set_request_model(model: str) -> None:
     """设置当前请求的模型覆盖。空串清除；非法模型名忽略（回退全局 LLM_MODEL）。
 
-    校验口径与 LLMFactory.set_current 对齐（2026-09-16）：
-    除注册表外，还校验 provider API Key 与 cloud 模式 Ollama 禁用——
-    否则配置缺失要拖到首次 invoke 才暴露（401/构建异常）。
+    校验规则收敛到 models.validate_override_model（单一事实来源，2026-09-19）——
+    与 API 边界的 fail-fast 共用同一份判断（见 model-config-admin-ui-design.md §13.1）。
+
+    本层**保持宽容**：非法输入只 warning + 清空，不抛错。原因有二——
+      ① 本层职责是「上下文绑定」而非输入校验：非 HTTP 调用方（评测生成、脚本）
+         拿不到请求上下文来报错；
+      ② tests/test_llm_bind_tools.py 有 4 例锁定该静默语义。
     """
     model = (model or "").strip()
     if not model:
         _request_model_var.set("")
         return
-    import os
+    from backend.infra.llm.models import validate_override_model
 
-    from backend.infra.llm.models import AVAILABLE_MODELS, PROVIDER_API_KEY_ENV
-    if model not in {m["name"] for m in AVAILABLE_MODELS}:
-        logger.warning(f"[LLM:proxy] 忽略非法模型覆盖: {model} "
-                       f"(可用: {[m['name'] for m in AVAILABLE_MODELS]})")
-        _request_model_var.set("")
-        return
-    provider = _get_provider_for(model)
-    if provider == "ollama" and not OLLAMA_ENABLED:
-        logger.warning(
-            f"[LLM:proxy] 忽略模型覆盖 {model}: Ollama 当前未启用 "
-            f"(回退全局 {get_active_model_name()})"
-        )
-        _request_model_var.set("")
-        return
-    key_env = PROVIDER_API_KEY_ENV.get(provider)
-    if key_env and not os.getenv(key_env, "").strip():
-        logger.warning(f"[LLM:proxy] 忽略模型覆盖 {model}: {key_env} 未配置 "
+    ok, reason = validate_override_model(model, ollama_enabled=OLLAMA_ENABLED)
+    if not ok:
+        if not is_registered_model(model):
+            reason = f"{reason} (可用: {[m['name'] for m in AVAILABLE_MODELS]})"
+        logger.warning(f"[LLM:proxy] 忽略模型覆盖 {model}: {reason} "
                        f"(回退全局 {get_active_model_name()})")
         _request_model_var.set("")
         return
@@ -119,6 +117,32 @@ def _get_override_llm(model_name: str) -> BaseChatModel:
             inst = _build_llm_for(model_name)
             _override_llm_cache[model_name] = inst
         return inst
+
+
+def invalidate_runtime_caches() -> None:
+    """清空 proxy/factory 的模型实例缓存，使配置变更立即进入新实例。
+
+    供应商 URL、API Key、请求头和角色绑定都可能在 DB 刷新时变化；只刷新
+    ``credentials`` 字典而保留已构建的 LangChain 客户端，会让客户端继续持有
+    旧凭据。该函数由注册表刷新层调用，避免管理端写入与后台刷新走两套失效逻辑。
+    """
+    global _default_llm, _default_llm_model, _fallback_llm
+    with _default_lock:
+        _default_llm = None
+        _default_llm_model = None
+    with _fallback_lock:
+        _fallback_llm = None
+    with _override_llm_lock:
+        _override_llm_cache.clear()
+    try:
+        # 不因后台刷新而首次创建 factory；只清理已经存在的单例。
+        from backend.infra.llm import factory as factory_module
+
+        factory = factory_module._factory
+        if factory is not None:
+            factory.invalidate()
+    except Exception:
+        logger.warning("[LLM:proxy] 清理工厂实例缓存失败", exc_info=True)
 
 
 # =====================================================
@@ -202,46 +226,87 @@ def extract_chunk_reasoning(chunk) -> str:
 
 
 def _get_provider_for(model_name: str) -> str:
-    """根据模型名查找所属 provider"""
-    for m in AVAILABLE_MODELS:
-        if m["name"] == model_name:
-            return m["provider"]
-    return "ollama"  # 兜底
+    """根据模型名查找所属 provider。
+
+    委托 `models.resolve_provider`（与 `LLMFactory._get_provider` **同源**）。
+
+    此前这里只遍历代码层 `AVAILABLE_MODELS`，与 factory 的判定分叉，带来两个后果：
+      ① 自建 / DB 覆盖层登记的模型判不出 provider → 误判成 ollama，构建出错的实例；
+      ② 本函数同时供 `_last_call_meta["provider"]` 使用（计价链读取），
+         误判会让**费用归属**记到错误的 provider 上。
+    2026-09-19 统一（与 `_build_llm_for` 的凭据链路修复同批）。
+    """
+    return resolve_provider(model_name)
+
+
+def _resolve_credentials_or_none(provider: str, model_name: str):
+    """解析某 provider 当前生效的数据库凭据。
+
+    返回 None 时，调用方仍会得到清晰的未配置错误；绝不能把它解释为旧 env
+    或 config 常量的回退信号。
+
+    未知 provider 在此**不抛错**：本函数处在聊天热路径上，沿用它原有的兜底语义
+    （落到末尾的 ollama 分支）比新增崩溃点更安全；真正的修法是让自建 provider
+    显式登记（DB 覆盖层）。异常只记 warning，不静默吞掉信息。
+    """
+    from backend.infra.llm.credentials import resolve_credentials
+    try:
+        return resolve_credentials(provider, model_name=model_name)
+    except Exception as e:
+        logger.warning(
+            f"[LLM:proxy] 凭据解析失败 provider={provider} model={model_name}: {e} "
+            "→ 保持未配置状态"
+        )
+        return None
 
 
 def _build_llm_for(model_name: str) -> BaseChatModel:
-    """按模型名构建 Provider 实例（不缓存 — 缓存由调用方管理）。"""
+    """按模型名构建 Provider 实例（不缓存 — 缓存由调用方管理）。
+
+    **凭据在调用时解析并显式传入**（P1a-2 收口，2026-09-19）。这是本函数的关键
+    契约：DB 覆盖层（管理端配置的自建供应商 + 托管密钥）只有沿这条路径才会生效。
+
+    此前本函数调 `build_xxx(model_name)` **不传凭据**，而 `factory._build_instance`
+    已在调用时解析并传入 —— 两条构建路径分叉的后果是：管理端配好的供应商与密钥
+    在真实问答中被**绕开**（`infra/llm/__init__.py` 的 `get_llm` 来自本模块，
+    故线上聊天走的正是这条无凭据路径）。即 P1a-1 + P1b 交付的能力此前处于
+    「能配、能测、不能用」状态（见 model-config-admin-ui-design.md §15.5）。
+    """
     provider = _get_provider_for(model_name)
+    credentials = _resolve_credentials_or_none(provider, model_name)
     if provider == "deepseek":
         from backend.infra.llm.providers.deepseek import build_deepseek
-        return build_deepseek(model_name)
+        return build_deepseek(model_name, credentials)
     if provider == "minimax":
         from backend.infra.llm.providers.minimax import build_minimax
-        return build_minimax(model_name)
+        return build_minimax(model_name, credentials)
     if provider == "qwen":
         from backend.infra.llm.providers.qwen import build_qwen
-        return build_qwen(model_name)
+        return build_qwen(model_name, credentials)
     if provider == "qwen_tp":
         # Token Plan 模型包端点（@tp 后缀）。此前 proxy 缺此分支，
         # @tp 模型落到 ollama 兜底被 cloud 模式拒绝（models.py/factory.py
         # 均已注册 qwen_tp，proxy 构建口径 2026-09-17 对齐）
         from backend.infra.llm.providers.qwen_tp import build_qwen_tp
-        return build_qwen_tp(model_name)
+        return build_qwen_tp(model_name, credentials)
+    if provider == "vllm":
+        # 自建 vLLM（OpenAI 兼容协议）。此前 proxy **缺此分支**，而 models.py
+        # 注册了 Qwen/Qwen3-32B-AWQ(provider=vllm) 供选择 → 选它会落到末尾的
+        # ollama 兜底、报一个与真因无关的 Ollama 连接错误。
+        # 与 2026-09-17 修过的 qwen_tp 属同型缺陷（手写分发表与 factory 双维护）。
+        from backend.infra.llm.providers.vllm import build_vllm
+        return build_vllm(model_name, credentials)
     if provider == "siliconflow":
         from backend.infra.llm.providers.siliconflow import build_siliconflow
-        return build_siliconflow(model_name)
+        return build_siliconflow(model_name, credentials)
     # ollama / 兜底 — 模型选择完全由 env 配置驱动（LLM_MODEL / 请求覆盖），
     # 构建层不再按 ENV_MODE 拒建（2026-09-17 拍板：不做 cloud/local 区分）。
     # 用户配了本地模型但 Ollama 未运行时，invoke 阶段自然报连接错误。
-    from langchain_ollama import ChatOllama
-
-    from backend.config import LLM_CONTEXT_LENGTH, LLM_REQUEST_TIMEOUT, LLM_TEMPERATURE
-    return ChatOllama(
-        model=model_name,
-        temperature=LLM_TEMPERATURE,
-        num_ctx=LLM_CONTEXT_LENGTH,
-        request_timeout=LLM_REQUEST_TIMEOUT,
-    )
+    # 复用 providers/ollama.build_ollama（与 factory 同源）：它是这里的严格超集 ——
+    # 多出 base_url（credentials > OLLAMA_BASE_URL > 默认，当前三者同为
+    # localhost:11434）与 keep_alive（OLLAMA_KEEP_ALIVE=30m，config 既有意图）。
+    from backend.infra.llm.providers.ollama import build_ollama
+    return build_ollama(model_name, credentials)  # type: ignore[return-value]
 
 
 # P1-7: 备用模型实例缓存（独立于主模型，失败不相互污染）
@@ -252,15 +317,16 @@ _fallback_lock = threading.Lock()
 def _get_fallback_llm() -> BaseChatModel | None:
     """获取备用模型实例（未配置 LLM_FALLBACK_MODEL 时返回 None）。"""
     global _fallback_llm
-    if not LLM_FALLBACK_MODEL:
+    fallback_model = _configured_fallback_model()
+    if not fallback_model:
         return None
     if _fallback_llm is not None:
         return _fallback_llm
     with _fallback_lock:
         if _fallback_llm is None:
             try:
-                logger.info(f"[LLM:resilience] 初始化备用模型: {LLM_FALLBACK_MODEL}")
-                _fallback_llm = _build_llm_for(LLM_FALLBACK_MODEL)
+                logger.info(f"[LLM:resilience] 初始化备用模型: {fallback_model}")
+                _fallback_llm = _build_llm_for(fallback_model)
             except Exception as e:
                 logger.warning(f"[LLM:resilience] 备用模型初始化失败: {e}")
                 return None
@@ -343,15 +409,16 @@ def _handle_terminal_failure(err: BaseException, args, kwargs):
     # 1) 备用模型
     fb = _get_fallback_llm()
     if fb is not None:
+        fallback_model = _configured_fallback_model()
         from backend.infra.llm.budget import reserve_model_call
 
         # 预算预占必须发生在 fallback 真正执行前；超限不能被下面的
         # “备用模型失败”兜底逻辑吞掉，否则会绕过硬阻断。
-        reserve_model_call("fallback")
+        reserve_model_call("fallback", model_name=fallback_model)
         try:
             result = fb.invoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
-            _notify_degradation("LLM_FALLBACK_USED", {"reason": reason, "model": LLM_FALLBACK_MODEL})
+            _notify_degradation("LLM_FALLBACK_USED", {"reason": reason, "model": fallback_model})
             return result
         except Exception as e:
             logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
@@ -369,13 +436,14 @@ async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
     reason = f"{type(err).__name__}: {str(err)[:120]}"
     fb = _get_fallback_llm()
     if fb is not None:
+        fallback_model = _configured_fallback_model()
         from backend.infra.llm.budget import reserve_model_call
 
-        reserve_model_call("fallback")
+        reserve_model_call("fallback", model_name=fallback_model)
         try:
             result = await fb.ainvoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
-            _notify_degradation("LLM_FALLBACK_USED", {"reason": reason, "model": LLM_FALLBACK_MODEL})
+            _notify_degradation("LLM_FALLBACK_USED", {"reason": reason, "model": fallback_model})
             return result
         except Exception as e:
             logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
@@ -389,19 +457,28 @@ async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
 def _call_with_resilience(attr, *args, **kwargs):
     """同步韧性调用：重试 → 熔断/重试耗尽 → fallback。"""
     from backend.infra.circuit_breaker import CircuitBreakerOpenError, llm_circuit_breaker
-    from backend.infra.llm.budget import reserve_model_call
+    from backend.infra.llm.budget import (
+        release_model_reservation,
+        reserve_model_call,
+    )
 
     last_err: BaseException | None = None
+    model_name = get_active_model_name()
     for attempt in range(LLM_MAX_RETRIES + 1):
-        reserve_model_call("primary" if attempt == 0 else "retry")
+        reserve_model_call(
+            "primary" if attempt == 0 else "retry",
+            model_name=model_name,
+        )
         try:
             return llm_circuit_breaker.call(attr, *args, **kwargs)
         except CircuitBreakerOpenError as e:
+            release_model_reservation()
             # 熔断开路：立即兜底（快速失败是熔断的目的，不做无意义等待）
             logger.warning(f"[LLM:resilience] 熔断开路: {e}")
             _notify_degradation("LLM_CIRCUIT_OPEN", {"retry_in": round(e.retry_in, 1)})
             return _handle_terminal_failure(e, args, kwargs)
         except Exception as e:
+            release_model_reservation()
             last_err = e
             if not _is_transient(e):
                 break  # 非瞬时错误（鉴权/参数等）重试无意义
@@ -419,18 +496,27 @@ def _call_with_resilience(attr, *args, **kwargs):
 async def _acall_with_resilience(attr, *args, **kwargs):
     """异步韧性调用（对称于 _call_with_resilience）。"""
     from backend.infra.circuit_breaker import CircuitBreakerOpenError, llm_circuit_breaker
-    from backend.infra.llm.budget import reserve_model_call
+    from backend.infra.llm.budget import (
+        release_model_reservation,
+        reserve_model_call,
+    )
 
     last_err: BaseException | None = None
+    model_name = get_active_model_name()
     for attempt in range(LLM_MAX_RETRIES + 1):
-        reserve_model_call("primary" if attempt == 0 else "retry")
+        reserve_model_call(
+            "primary" if attempt == 0 else "retry",
+            model_name=model_name,
+        )
         try:
             return await llm_circuit_breaker.acall(attr, *args, **kwargs)
         except CircuitBreakerOpenError as e:
+            release_model_reservation()
             logger.warning(f"[LLM:resilience] 熔断开路: {e}")
             _notify_degradation("LLM_CIRCUIT_OPEN", {"retry_in": round(e.retry_in, 1)})
             return await _ahandle_terminal_failure(e, args, kwargs)
         except Exception as e:
+            release_model_reservation()
             last_err = e
             if not _is_transient(e):
                 break
@@ -446,19 +532,67 @@ async def _acall_with_resilience(attr, *args, **kwargs):
 
 
 def _build_default_llm():
-    """根据 LLM_MODEL 构建正确的 Provider 实例"""
-    global _default_llm
-    if _default_llm is not None:
+    """根据当前 ``main`` 角色构建默认 Provider 实例。"""
+    global _default_llm, _default_llm_model
+    model_name = _configured_main_model()
+    if _default_llm is not None and _default_llm_model == model_name:
         return _default_llm
 
     with _default_lock:
-        if _default_llm is not None:
+        if _default_llm is not None and _default_llm_model == model_name:
             return _default_llm
 
-        logger.info(f"正在初始化默认 LLM: {LLM_MODEL}")
-        _default_llm = _build_llm_for(LLM_MODEL)
-        logger.info(f"LLM init OK: {LLM_MODEL} (provider={_get_provider_for(LLM_MODEL)})")
+        logger.info(f"正在初始化默认 LLM: {model_name}")
+        _default_llm = _build_llm_for(model_name)
+        _default_llm_model = model_name
+        logger.info(
+            f"LLM init OK: {model_name} (provider={_get_provider_for(model_name)})"
+        )
         return _default_llm
+
+
+def _configured_main_model() -> str:
+    """取 main 角色的当前生效模型；DB 覆盖优先于旧模块常量。"""
+    try:
+        from backend.config import model_roles
+
+        value = model_roles.resolve_effective("main").get("value")
+        return str(value or LLM_MODEL)
+    except Exception:
+        logger.warning("[LLM:proxy] 读取 main 模型角色失败，回落 LLM_MODEL", exc_info=True)
+        return LLM_MODEL
+
+
+def get_llm_for_role(role: str) -> BaseChatModel:
+    """按模型角色获取带缓存的 LLM 实例。
+
+    入库链路的不同阶段不能隐式共用 ``main`` 角色。角色解析仍复用现有
+    DB → env → code-default/inherit 规则和模型实例缓存；调用包装由调用方
+    继续通过 ``_BoundLLMProxy`` 或普通实例完成。
+    """
+
+    from backend.config import model_roles
+
+    effective = model_roles.resolve_effective(role)
+    model_name = str(effective.get("value") or "").strip()
+    if not model_name:
+        raise RuntimeError(f"模型角色 {role!r} 没有可用模型")
+    return _get_override_llm(model_name)
+
+
+def _configured_fallback_model() -> str:
+    """取 fallback 角色的字面值；空值保持「不启用备用模型」语义。"""
+    try:
+        from backend.config import model_roles
+
+        info = model_roles.resolve_raw("fallback")
+        if info.get("source") == model_roles.SOURCE_DB:
+            return str(info.get("value") or "")
+    except Exception:
+        logger.warning(
+            "[LLM:proxy] 读取 fallback 模型角色失败，回落旧常量", exc_info=True
+        )
+    return LLM_FALLBACK_MODEL
 
 
 def _resolve_active_llm() -> BaseChatModel:
@@ -474,6 +608,15 @@ def _resolve_active_llm() -> BaseChatModel:
             if cached is not None:
                 return cached
         return _get_override_llm(override)
+    # 管理端的 main 角色是持久化控制面，优先于仅存在于进程内的旧 factory
+    # 切换；这样保存配置后下一次请求即可生效，不必重启或再点一次旧切换器。
+    try:
+        from backend.config import model_roles
+
+        if model_roles.resolve_raw("main").get("source") == model_roles.SOURCE_DB:
+            return _build_default_llm()
+    except Exception:
+        logger.warning("[LLM:proxy] 判断 main DB 覆盖失败，继续旧 factory 路径", exc_info=True)
     factory = get_llm_factory()
     if factory is not None:
         cached = factory._instance_cache.get(factory._current_model)
@@ -491,10 +634,18 @@ def get_active_model_name() -> str:
     override = _request_model_var.get()
     if override:
         return override
+    try:
+        from backend.config import model_roles
+
+        main = model_roles.resolve_raw("main")
+        if main.get("source") == model_roles.SOURCE_DB:
+            return _configured_main_model()
+    except Exception:
+        logger.warning("[LLM:proxy] 读取 main DB 覆盖失败，继续旧 factory 路径", exc_info=True)
     factory = get_llm_factory()
     if factory is not None:
         return factory._current_model
-    return LLM_MODEL
+    return _configured_main_model()
 
 
 # =====================================================
@@ -583,7 +734,11 @@ def _usage_component() -> str:
     return "llm"
 
 
-def _record_tokens(result, duration_ms: float | None = None):
+def _record_tokens(
+    result,
+    duration_ms: float | None = None,
+    model_name: str | None = None,
+):
     """从 LLM 返回值提取 token + finish_reason + cost，存为 dict 供 tracer 读取。
 
     无 token_usage 时清空 _last_tokens_var 和 _last_call_meta_var。
@@ -602,19 +757,13 @@ def _record_tokens(result, duration_ms: float | None = None):
         if not t:
             _last_tokens_var.set({})
             _last_call_meta_var.set({})
+            try:
+                from backend.infra.llm.budget import record_model_usage
+
+                record_model_usage(total_tokens=0, cost_usd=0)
+            except Exception:
+                pass
             return
-
-        try:
-            from backend.infra.llm.budget import record_model_usage
-
-            record_model_usage(
-                prompt_tokens=p,
-                completion_tokens=c,
-                total_tokens=t,
-            )
-        except Exception:
-            # 预算记录是观测/门禁辅助，不能反向破坏模型主链路。
-            pass
 
         # 细粒度用量：缓存命中 / 推理 token。
         # LangChain 统一在 usage_metadata.input_token_details（cache_read/cache_creation）
@@ -651,8 +800,41 @@ def _record_tokens(result, duration_ms: float | None = None):
                 "finish_reason",
                 result.response_metadata.get("stop_reason", "unknown"),
             )
-        model = model or LLM_MODEL
-        cost = compute_cost_usd(model, p, c)
+        model = model or str(model_name or "") or LLM_MODEL
+        from backend.infra.llm.budget import current_request_budget
+        from backend.infra.llm.pricing import calculate_current_cost
+
+        budget_state = current_request_budget()
+        cost_decimal = calculate_current_cost(
+            model,
+            "llm",
+            {
+                "input": p,
+                "output": c,
+                "cache_read": cached,
+                "cache_write": int(in_details.get("cache_creation", 0) or 0),
+                "reasoning": reasoning,
+                "tool_call": int(tu.get("tool_calls", 0) or 0),
+            },
+            enforce=bool(
+                budget_state
+                and budget_state.mode == "enforce"
+                and budget_state.quota_store is not None
+            ),
+        )
+        cost = float(cost_decimal)
+        try:
+            from backend.infra.llm.budget import record_model_usage
+
+            record_model_usage(
+                prompt_tokens=p,
+                completion_tokens=c,
+                total_tokens=t,
+                cost_usd=cost_decimal,
+            )
+        except Exception:
+            # 预算记录是观测/门禁辅助，不能反向破坏模型主链路。
+            pass
         _last_call_meta_var.set({
             "prompt_tokens": p,
             "completion_tokens": c,
@@ -694,12 +876,30 @@ def _record_tokens(result, duration_ms: float | None = None):
                 "finish_reason": finish_reason,
                 "decision": current_call_decision(),
                 "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
+                "run_id": attribution["run_id"],
+                "step_id": attribution["step_id"],
+                "role": attribution["role"],
+                "stage": attribution["stage"],
             })
         except Exception:
             pass
     except Exception:
         _last_tokens_var.set({})
         _last_call_meta_var.set({})
+
+
+def record_llm_result(
+    result,
+    *,
+    duration_ms: float | None = None,
+    model_name: str | None = None,
+) -> None:
+    """记录绕过 ``_LLMProxy`` 的专用角色调用。
+
+    入库阶段按角色获取的是底层 LangChain 实例，不能假设所有调用都经过
+    全局 ``llm`` 代理；专用富化入口用这个显式适配器复用同一计量口径。
+    """
+    _record_tokens(result, duration_ms=duration_ms, model_name=model_name)
 
 def _wrap_result(result):
     """递归剥离 LLM 返回值中的 <think> 块，兼容 str / AIMessage / list / dict"""
@@ -834,8 +1034,8 @@ def bind_tools_for_model(model_name: str, tools) -> "_BoundLLMProxy | None":
     if not model_name:
         return None
     try:
-        from backend.infra.llm.models import AVAILABLE_MODELS
-        if model_name not in {m["name"] for m in AVAILABLE_MODELS}:
+        from backend.infra.llm.models import get_available_models
+        if model_name not in {m["name"] for m in get_available_models()}:
             logger.warning(
                 f"[LLM:proxy] 专用模型未注册: {model_name}，回退全局模型")
             return None
@@ -873,11 +1073,16 @@ class _LLMProxy:
             # 韧性链（重试/熔断 fallback）仅覆盖非流式路径。
             if inspect.isasyncgenfunction(attr):
                 async def astream_wrapper(*args, **kwargs):
-                    from backend.infra.llm.budget import reserve_model_call
+                    from backend.infra.llm.budget import (
+                        release_model_reservation,
+                        reserve_model_call,
+                    )
 
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
                     _enforce_rate_limit(user_id)
-                    reserve_model_call("primary")
+                    reserve_model_call(
+                        "primary", model_name=get_active_model_name(),
+                    )
                     _t0 = time.monotonic()
                     usage_chunk = None
                     try:
@@ -893,6 +1098,8 @@ class _LLMProxy:
                                 usage_chunk,
                                 duration_ms=(time.monotonic() - _t0) * 1000,
                             )
+                        else:
+                            release_model_reservation()
                 return astream_wrapper
             # sync generator（stream）：修好此前走通用 wrapper 的坏路径
             # （generator 未消费就被 _record_tokens，token 清空），
@@ -903,7 +1110,10 @@ class _LLMProxy:
             # 仅"第一个内容 chunk 之前"的瞬时错误整体重试；输出后失败直接抛。
             if inspect.isgeneratorfunction(attr):
                 def stream_wrapper(*args, **kwargs):
-                    from backend.infra.llm.budget import reserve_model_call
+                    from backend.infra.llm.budget import (
+                        release_model_reservation,
+                        reserve_model_call,
+                    )
 
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
                     _enforce_rate_limit(user_id)
@@ -913,7 +1123,8 @@ class _LLMProxy:
                     try:
                         for attempt in range(LLM_MAX_RETRIES + 1):
                             reserve_model_call(
-                                "primary" if attempt == 0 else "retry"
+                                "primary" if attempt == 0 else "retry",
+                                model_name=get_active_model_name(),
                             )
                             try:
                                 for chunk in attr(*args, **kwargs):
@@ -925,6 +1136,7 @@ class _LLMProxy:
                                     yield wrapped
                                 break  # 正常结束
                             except Exception as e:
+                                release_model_reservation()
                                 if yielded_content or not _is_transient(e) \
                                         or attempt >= LLM_MAX_RETRIES:
                                     raise
@@ -942,6 +1154,8 @@ class _LLMProxy:
                                 usage_chunk,
                                 duration_ms=(time.monotonic() - _t0) * 1000,
                             )
+                        else:
+                            release_model_reservation()
                 return stream_wrapper
             # async 方法（ainvoke/agenerate）：coroutine 必须先 await 才能取结果，
             # 否则 _record_tokens 作用在未执行的 coroutine 上会把 token 清空（既有 bug）。

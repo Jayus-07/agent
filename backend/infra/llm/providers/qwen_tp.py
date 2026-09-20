@@ -47,8 +47,8 @@ def build_qwen_tp(
     import os
     enable_thinking = os.getenv("QWEN_ENABLE_THINKING", "false").strip().lower() in ("1", "true", "yes")
 
-    api_key = (credentials.api_key if credentials else None) or QWEN_TP_API_KEY
-    base_url = (credentials.base_url if credentials else None) or QWEN_TP_API_BASE
+    api_key = credentials.api_key if credentials is not None else ""
+    base_url = credentials.base_url if credentials is not None else ""
 
     body = {"enable_thinking": enable_thinking}
     if credentials and credentials.extra_body:

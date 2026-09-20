@@ -13,6 +13,19 @@ from typing import Any, Callable
 from backend.shared.error_protocol import ErrorCode, ProtocolError
 
 
+def _record_validation_metric(layer: str, result: str) -> None:
+    """记录四层校验结果；观测失败不能改变校验结论。"""
+    try:
+        from backend.observability import metrics
+
+        metrics.semantic_validation_total.labels(
+            layer=layer, result=result
+        ).inc()
+    except Exception:
+        # 校验是安全门，指标后端不可用时仍必须保持原有阻断结论。
+        return
+
+
 class ValidationFailure(ProtocolError):
     """带校验层标识的安全失败。"""
 
@@ -237,6 +250,7 @@ def _validate_permission_context(capability: str) -> None:
 def validate_output(capability: str, output: Any, declared_type: str) -> None:
     """执行输出结构层校验。"""
     if output is None:
+        _record_validation_metric("output", "rejected")
         raise ValidationFailure(
             "output", ErrorCode.INTERNAL_ERROR,
             f"{capability} 返回 None",
@@ -245,6 +259,7 @@ def validate_output(capability: str, output: Any, declared_type: str) -> None:
     # 能力才把结构不符视为阻断，避免改写成功响应语义。
     if (declared_type == "structured" and not isinstance(output, dict)
             and capability in HIGH_RISK_CAPABILITIES):
+        _record_validation_metric("output", "rejected")
         raise ValidationFailure(
             "output", ErrorCode.INTERNAL_ERROR,
             f"{capability} 应返回 object，实际为 {type(output).__name__}",
@@ -253,17 +268,21 @@ def validate_output(capability: str, output: Any, declared_type: str) -> None:
     if declared_type == "structured" and isinstance(output, dict) and required:
         missing = sorted(required.difference(output))
         if missing:
+            _record_validation_metric("output", "rejected")
             raise ValidationFailure(
                 "output", ErrorCode.INTERNAL_ERROR,
                 f"{capability} 缺少输出字段: {', '.join(missing)}",
             )
     if declared_type != "structured" and not isinstance(output, str):
+        _record_validation_metric("output", "rejected")
         raise ValidationFailure(
             "output", ErrorCode.INTERNAL_ERROR,
             f"{capability} 应返回 text，实际为 {type(output).__name__}",
         )
     if isinstance(output, str) and not output.strip():
+        _record_validation_metric("output", "rejected")
         raise ValidationFailure("output", ErrorCode.INTERNAL_ERROR, f"{capability} 返回空文本")
+    _record_validation_metric("output", "passed")
 
 
 def validate_semantics(capability: str, params: dict, output: Any) -> None:
@@ -286,22 +305,26 @@ def validate_semantics(capability: str, params: dict, output: Any) -> None:
             if any(word in detail for word in ("未找到", "不存在", "查不到"))
             else ErrorCode.UPSTREAM_UNAVAILABLE
         )
+        _record_validation_metric("semantic", "rejected")
         raise ValidationFailure(
             "semantic", code,
             f"{capability} 返回工具错误: {detail[:120]}",
         )
 
     if not isinstance(output, str):
+        _record_validation_metric("semantic", "passed")
         return
 
     stripped = output.strip()
     if stripped.startswith(_FAILURE_PREFIXES):
+        _record_validation_metric("semantic", "rejected")
         raise ValidationFailure(
             "semantic", ErrorCode.UPSTREAM_UNAVAILABLE,
             f"{capability} 返回失败标记",
         )
 
     if "需要人工审批后执行" in stripped:
+        _record_validation_metric("semantic", "rejected")
         raise ValidationFailure(
             "permission", ErrorCode.PERMISSION_DENIED,
             f"{capability} 尚未完成人工审批",
@@ -310,10 +333,12 @@ def validate_semantics(capability: str, params: dict, output: Any) -> None:
     if capability.startswith("competitor."):
         action = params.get("action")
         if action in _WRITE_ACTIONS and "请提供" in stripped:
+            _record_validation_metric("semantic", "rejected")
             raise ValidationFailure(
                 "semantic", ErrorCode.INVALID_PARAM,
                 f"{capability} 的写操作未形成有效目标",
             )
+    _record_validation_metric("semantic", "passed")
 
 
 __all__ = [

@@ -6,14 +6,16 @@
 
 模型选型原先散落在 `.env` 的十几个变量名里，靠「变量名后缀」表达语义
 （`LLM_MODEL` / `DOC_LLM_MODEL` / `TOOL_SELECTOR_MODEL` / `LLM_FALLBACK_MODEL`
-/ `EMBEDDING_MODEL` / `RERANK_MODEL` / `OLLAMA_MODEL` / `RAG_OCR_DASHSCOPE_MODEL`）。
+/ `EMBEDDING_MODEL` / `RERANK_MODEL` / `EVAL_GEN_MODEL` / `RAG_OCR_DASHSCOPE_MODEL`）。
 本模块把它们收敛为显式的 **role（角色）**，并提供唯一解析入口，
 使「当前哪个角色用哪个模型、值从哪来」可被程序回答，而不是靠人读 .env。
 
-## P0 范围（2026-09-19）
+## 当前范围（2026-09-19）
 
-只做收敛，不改行为：解析链 = env → 代码默认，DB 覆盖层留空。
-`config/llm.py` / `config/rag.py` 的既有常量改由本模块物化，值与改造前逐位一致。
+解析链 = DB 覆盖 → 代码默认。
+模型配置已切换为数据库唯一来源；环境变量名只作为管理端兼容展示字段保留，
+不会再参与模型选择。`config/llm.py` / `config/rag.py` 的既有常量仍由本模块物化，
+但没有数据库覆盖时只代表未配置的代码默认值。
 
 ## 硬约束（勿破）
 
@@ -38,7 +40,6 @@
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -48,11 +49,13 @@ __all__ = [
     "resolve_raw",
     "resolve_effective",
     "resolve_name",
+    "resolve_runtime_name",
     "provider_of",
     "get_secret",
     "effective_snapshot",
     "validate_roles",
     "inject_overrides",
+    "set_override",
     "reset_overrides",
 ]
 
@@ -65,7 +68,7 @@ __all__ = [
 class RoleSpec:
     """一个模型角色的静态定义。
 
-    env_key:    对应的环境变量名（P0 的取值来源；P1 起降级为兜底）
+    env_key:    历史环境变量名（仅兼容展示，不再作为运行时取值来源）
     default:    代码默认值 —— 必须与改造前 config/*.py 里的默认值逐位一致
     desc:       用途说明（管理端展示）
     inherit:    本角色 env 为空时跟随的角色（None = 无继承概念）
@@ -103,6 +106,30 @@ MODEL_ROLES: dict[str, RoleSpec] = {
         has_inherit_semantics=True,
         validator="registered_model",
     ),
+    "metadata_extract": RoleSpec(
+        env_key="METADATA_EXTRACT_MODEL",
+        default="",
+        desc="入库链路文档级统一元数据结构化抽取",
+        inherit="main",
+        has_inherit_semantics=True,
+        validator="registered_model",
+    ),
+    "question_gen": RoleSpec(
+        env_key="QUESTION_GEN_MODEL",
+        default="",
+        desc="入库链路模拟问题生成（Document Expansion）",
+        inherit="main",
+        has_inherit_semantics=True,
+        validator="registered_model",
+    ),
+    "table_describe": RoleSpec(
+        env_key="TABLE_DESCRIBE_MODEL",
+        default="",
+        desc="入库链路表格行语义描述",
+        inherit="main",
+        has_inherit_semantics=True,
+        validator="registered_model",
+    ),
     "tool_selector": RoleSpec(
         env_key="TOOL_SELECTOR_MODEL",
         default="",
@@ -135,9 +162,10 @@ MODEL_ROLES: dict[str, RoleSpec] = {
         desc="检索结果重排模型",
     ),
     "eval_gen": RoleSpec(
-        env_key="OLLAMA_MODEL",
-        default="qwen2.5:3b",
-        desc="本地 Ollama：评测生成 / chunk 关键词 / RAGAS local 后端",
+        env_key="EVAL_GEN_MODEL",
+        default="",
+        desc="评测答案生成 / RAGAS（需绑定已登记且可用的模型）",
+        validator="registered_model",
     ),
 }
 
@@ -151,9 +179,8 @@ SOURCE_DEFAULT = "code-default"
 # =====================================================
 # 覆盖层（P1 由 services/sys_config 注入）
 # =====================================================
-# P0 恒为空 —— 解析链退化为 env → 代码默认，与改造前行为一致。
-# P1 起由 sys_config.refresh_loop 调 inject_overrides() 写入，
-# 本模块的 resolve_* 仍只读内存，保持热路径零 IO。
+# 由 registry_store.refresh_registry() 注入；本模块的 resolve_* 仍只读内存，
+# 保持热路径零 IO。
 _overrides: dict[str, str] = {}
 _override_meta: dict[str, dict[str, Any]] = {}
 
@@ -172,8 +199,28 @@ def inject_overrides(values: dict[str, str],
                 _override_meta[role] = dict(info)
 
 
+def set_override(
+    role: str,
+    value: str,
+    meta: dict[str, Any] | None = None,
+) -> None:
+    """增量写入一个 DB 覆盖，不影响其它角色的热缓存。
+
+    管理端单角色保存后会先调用该函数，再等待后台注册表刷新；不能用
+    ``inject_overrides`` 直接替换整张表，否则一次保存会把其它角色的覆盖
+    短暂清空，造成并发请求看到混合配置。
+    """
+    if role not in MODEL_ROLES:
+        raise KeyError(f"未注册的模型角色: {role!r}")
+    _overrides[role] = value
+    if meta is None:
+        _override_meta.pop(role, None)
+    else:
+        _override_meta[role] = dict(meta)
+
+
 def reset_overrides() -> None:
-    """测试态注入点：清空覆盖层，恢复 env 语义。"""
+    """测试态注入点：清空数据库覆盖层，恢复代码默认语义。"""
     _overrides.clear()
     _override_meta.clear()
 
@@ -183,17 +230,13 @@ def reset_overrides() -> None:
 # =====================================================
 
 def _env_of(role: str) -> str:
-    """读该角色的 env 原始值（同样只在 MODEL_ROLES 登记范围内）。
-
-    strip 是**有意的收紧**：模型名不存在含首尾空白的合法值，而 `.env` 里
-    写行内注释/尾随空格是已知踩法（该文件对 ENV_MODE 专门写了
-    "不要写行内注释"）。改造前 `LLM_MODEL` 等未做 strip，属潜在坑，此处统一。
-    """
-    return os.getenv(MODEL_ROLES[role].env_key, "").strip()
+    """兼容保留的 env 读取入口；模型配置已禁止从 env 取值。"""
+    del role
+    return ""
 
 
 def resolve_raw(role: str) -> dict[str, Any]:
-    """解析角色的**字面**生效值：DB 覆盖 → env → 代码默认。
+    """解析角色的**字面**生效值：DB 覆盖 → 代码默认。
 
     不做 inherit 展开。用于物化 legacy 常量（`config/llm.py` 的 `LLM_MODEL`
     等）—— 这些常量的空值在消费方手里有语义（`if DOC_LLM_MODEL:` 之类），
@@ -209,19 +252,13 @@ def resolve_raw(role: str) -> dict[str, Any]:
                 "updated_by": (_override_meta.get(role) or {}).get("updatedBy"),
                 "updated_at": (_override_meta.get(role) or {}).get("updatedAt")}
 
-    raw = _env_of(role)
-    if raw:
-        return {"role": role, "value": raw, "source": SOURCE_ENV,
-                "env_key": spec.env_key, "explicit": True,
-                "updated_by": None, "updated_at": None}
-
     return {"role": role, "value": spec.default, "source": SOURCE_DEFAULT,
             "env_key": spec.env_key, "explicit": False,
             "updated_by": None, "updated_at": None}
 
 
 def resolve_effective(role: str) -> dict[str, Any]:
-    """解析角色的**实际会用**的模型：DB 覆盖 → env → inherit → 代码默认。
+    """解析角色的**实际会用**的模型：DB 覆盖 → inherit → 代码默认。
 
     与 `resolve_raw` 的唯一差别是多了 inherit 展开。新代码（管理端、启动校验）
     用这个；物化 legacy 常量用 `resolve_raw`。
@@ -250,6 +287,22 @@ def resolve_name(role: str) -> str:
     return resolve_raw(role)["value"]
 
 
+def resolve_runtime_name(role: str, legacy_value: str | None = None) -> str:
+    """读取运行时模型名，优先 DB 覆盖并兼容历史模块常量。
+
+    绝大多数旧调用点在模块导入时已经拿到环境变量常量，不能直接把它们全部
+    替换成 ``resolve_effective``，否则测试桩和现有的环境变量语义会发生变化。
+    该入口只在确有 DB 覆盖时切到热配置；没有 DB 覆盖时返回代码默认解析结果。
+    `legacy_value` 只作为旧调用方的显式空值兼容参数，不再承载 env 模型。
+    """
+    info = resolve_effective(role)
+    if info.get("source") == SOURCE_DB:
+        return str(info.get("value") or "")
+    if legacy_value is not None and not info.get("value"):
+        return legacy_value
+    return str(info.get("value") or "")
+
+
 # =====================================================
 # provider 归属 / 密钥
 # =====================================================
@@ -261,8 +314,8 @@ def provider_of(model_name: str) -> str | None:
     """
     if not model_name:
         return None
-    from backend.infra.llm.models import AVAILABLE_MODELS
-    for item in AVAILABLE_MODELS:
+    from backend.infra.llm.models import get_available_models
+    for item in get_available_models():
         if item["name"] == model_name:
             return item["provider"]
     return None
@@ -278,23 +331,18 @@ def get_secret(provider: str) -> str | None:
     的错误信息之下 —— 与 `config/llm.py` 记录的"真实原因被埋在 N 层语义错误
     之下"是同一类问题。
 
-    P0：只读 env。P1：改为读加密凭据库（provider_credentials），
-    解密失败同样走 None + 告警，不降级为返回密文。
+    只读加密凭据库（provider_credentials），解密失败同样走 None + 告警，
+    不降级为读取环境变量或返回密文。
     """
     if not provider:
         return None
-    from backend.infra.llm.models import PROVIDER_API_KEY_ENV
-    env_key = PROVIDER_API_KEY_ENV.get(provider)
-    if env_key is None:
-        # ollama 等本地 provider 无密钥；未登记的 provider 同样视为无密钥
+    try:
+        from backend.infra.llm.credentials import resolve_credentials
+
+        value = resolve_credentials(provider).api_key
+    except Exception:
         return None
-    value = os.getenv(env_key, "").strip()
-    if not value:
-        return None
-    if value.startswith("enc:"):
-        # 加密值走错了通道（P1 之前不该出现在 env 里）——视为坏值而非密钥
-        return None
-    return value
+    return value or None
 
 
 # =====================================================
@@ -330,8 +378,8 @@ _VALIDATORS: dict[str, Any] = {}
 
 def _registered_model(value: str) -> tuple[bool, str]:
     """校验模型名已注册。延迟 import（硬约束 2）。"""
-    from backend.infra.llm.models import AVAILABLE_MODELS
-    names = {m["name"] for m in AVAILABLE_MODELS}
+    from backend.infra.llm.models import get_available_models
+    names = {m["name"] for m in get_available_models()}
     if value in names:
         return True, ""
     return False, f"未在 AVAILABLE_MODELS 注册（可用: {sorted(names)}）"

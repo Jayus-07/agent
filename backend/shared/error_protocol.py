@@ -141,6 +141,8 @@ def _exception_code(exc: BaseException) -> ErrorCode:
         return http_code
     if isinstance(exc, ProtocolError):
         return exc.envelope.code
+    if getattr(exc, "code", "") == ErrorCode.BUDGET_EXCEEDED.value:
+        return ErrorCode.BUDGET_EXCEEDED
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
         return ErrorCode.TIMEOUT
     if isinstance(exc, PermissionError):

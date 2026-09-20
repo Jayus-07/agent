@@ -27,6 +27,18 @@ _TRANSITIONS = {
 }
 
 
+def _record_candidate_metric(action: str, result: str) -> None:
+    """记录候选审核指标；观测故障不得改变审核事务。"""
+    try:
+        from backend.observability import metrics
+
+        metrics.feedback_candidate_total.labels(
+            action=action, result=result
+        ).inc()
+    except Exception:
+        return
+
+
 def _table() -> str:
     explicit = os.getenv("FEEDBACK_CANDIDATE_PG_TABLE", "").strip()
     if explicit:
@@ -140,12 +152,15 @@ def create_candidate(
         )
         row = cur.fetchone()
         if row is None:
+            _record_candidate_metric("create", "duplicate")
             cur.execute(
                 f"""SELECT {columns} FROM {table}
                        WHERE tenant_id=%s AND trace_id=%s""",
                 (tenant_id, trace_id),
             )
             row = cur.fetchone()
+        else:
+            _record_candidate_metric("create", "pending")
     return dict(row)
 
 
@@ -178,14 +193,28 @@ def list_candidates(
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
             f"""SELECT candidate_id, feedback_id, tenant_id, actor_id, trace_id,
-                      module, status, reviewer_id, review_note,
+                      module, status, reviewer_id, review_note, case_json,
                       promoted_case_id, created_at, updated_at
                    FROM {table}
                    WHERE {' AND '.join(clauses)}
                    ORDER BY updated_at DESC LIMIT %s""",
             tuple(params),
         )
-        return [dict(row) for row in cur.fetchall()]
+        items = []
+        for row in cur.fetchall():
+            item = dict(row)
+            try:
+                case_payload = json.loads(item.pop("case_json") or "{}")
+            except (TypeError, ValueError):
+                case_payload = {}
+                item.pop("case_json", None)
+            metadata = case_payload.get("metadata") or {}
+            item["correction_text"] = metadata.get("correction_text", "")
+            item["expected_answer"] = case_payload.get("expected_answer", "")
+            item["summary"] = case_payload.get("question", "")
+            item["reviewer"] = item.get("reviewer_id", "")
+            items.append(item)
+        return items
 
 
 def transition_candidate(
@@ -210,6 +239,7 @@ def transition_candidate(
             raise LookupError("候选不存在")
         current = row["status"]
         if current == target_status:
+            _record_candidate_metric("review", "replay")
             return dict(row)
         if target_status not in _TRANSITIONS[current]:
             raise ValueError(f"非法候选状态迁移: {current} -> {target_status}")
@@ -224,6 +254,7 @@ def transition_candidate(
                 candidate_id, tenant_id,
             ),
         )
+        _record_candidate_metric("review", target_status)
         return dict(cur.fetchone())
 
 
@@ -246,10 +277,13 @@ def mark_promoted(
         )
         row = cur.fetchone()
         if row is not None:
+            _record_candidate_metric("promote", "promoted")
             return dict(row)
     existing = get_candidate(candidate_id, tenant_id)
     if existing and existing["status"] == "promoted":
+        _record_candidate_metric("promote", "replay")
         return existing
+    _record_candidate_metric("promote", "rejected")
     raise ValueError("候选当前不允许 promotion")
 
 

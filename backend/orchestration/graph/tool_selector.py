@@ -31,6 +31,7 @@ from backend.config import (
     TOOL_SELECTOR_MAX_CANDIDATES,
     TOOL_SELECTOR_MODEL,
 )
+from backend.config import model_roles
 from backend.infra.llm import llm
 from backend.infra.llm.proxy import bind_tools_for_model, get_active_model_name
 from backend.infra.timeout import safe_call_with_timeout
@@ -48,6 +49,11 @@ from backend.skills.base import validate_params
 FAST_PATH_CAPS = {"sql.query", "rag.search", "business.analyze"}
 FAST_PATH_SCORE = TOOL_SELECTOR_FAST_PATH_SCORE
 MAX_FC_CANDIDATES = TOOL_SELECTOR_MAX_CANDIDATES
+
+
+def _configured_tool_selector_model() -> str:
+    """读取工具选择角色；无 DB 覆盖时保留历史模块常量语义。"""
+    return model_roles.resolve_runtime_name("tool_selector", TOOL_SELECTOR_MODEL)
 
 _SYSTEM_PROMPT = """你是电商运营平台的工具选择器。根据用户问题，从候选工具中选出最合适的一个，并从问题中抽取该工具需要的全部参数。
 
@@ -179,7 +185,7 @@ def _select_via_fc(state: dict, valid_caps: list[str], t0: float) -> dict:
                 input={
                     "query": (state.get("question") or "")[:200],
                     "candidates": valid_caps,
-                    "model": TOOL_SELECTOR_MODEL or get_active_model_name(),
+                    "model": _configured_tool_selector_model() or get_active_model_name(),
                 },
             )
     except Exception:
@@ -214,7 +220,7 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
 
     # 专用轻量模型优先（选择+填参小任务），未配置/不可用回退全局模型；
     # 两者都经 _BoundLLMProxy 走限流/韧性链/token 记录
-    bound = bind_tools_for_model(TOOL_SELECTOR_MODEL, tools) or llm.bind_tools(tools)
+    bound = bind_tools_for_model(_configured_tool_selector_model(), tools) or llm.bind_tools(tools)
     feedback = ""
     for attempt in range(2):
         raw = safe_call_with_timeout(
@@ -276,7 +282,7 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
         elapsed_ms = int((time.time() - t0) * 1000)
         _record("fc", "ok", capability=cap, t0=t0)
         logger.info(
-            f"[ToolSelector] FC 选定 {cap} model={TOOL_SELECTOR_MODEL or get_active_model_name()} "
+            f"[ToolSelector] FC 选定 {cap} model={_configured_tool_selector_model() or get_active_model_name()} "
             f"params={list(params.keys())} "
             f"(attempt={attempt + 1}, {elapsed_ms}ms)"
         )
@@ -375,7 +381,7 @@ def _write_trace_metadata(result: dict) -> None:
             "params": sel.get("params"),
             "candidates": sel.get("candidates", []),
             "attempts": sel.get("attempts"),
-            "model": TOOL_SELECTOR_MODEL or get_active_model_name(),
+            "model": _configured_tool_selector_model() or get_active_model_name(),
             "elapsed_ms": sel.get("elapsed_ms"),
         }
     except Exception:

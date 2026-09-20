@@ -6,7 +6,10 @@
 - 只调度不承载 Agent 状态：任务 payload 仅 task_id（json 可序列化）
 - acks_late + prefetch=1：Worker 宕机任务自动回队；多实例公平消费
 """
+import asyncio
+
 from celery import Celery
+from celery.signals import worker_process_init
 
 from backend.config.tasks import (
     CELERY_BROKER_URL,
@@ -19,6 +22,7 @@ from backend.config.tasks import (
     CELERY_RETRY_BACKOFF_MAX,
     CELERY_TASK_TIMEOUT,
 )
+from backend.shared.logger import logger
 
 celery_app = Celery(
     "agent_tasks",
@@ -93,3 +97,28 @@ celery_app.conf.update(
         },
     },
 )
+
+
+def refresh_worker_model_registry() -> bool:
+    """在 Worker 进程内加载数据库模型覆盖层。
+
+    app 和 rag-service 的启动流程会主动刷新注册表，但 Celery prefork
+    子进程有独立的 Python 内存。若不在这里刷新，索引任务会退回空的
+    env/code-default 配置，进而把管理端已经保存的 OCR/Embedding 误判为未配置。
+    """
+    try:
+        from backend.infra.llm.registry_store import refresh_registry
+
+        loaded = bool(asyncio.run(refresh_registry()))
+        if not loaded:
+            logger.warning("[Worker] 模型注册表未加载，保留现有进程内配置")
+        return loaded
+    except Exception:
+        logger.warning("[Worker] 模型注册表刷新失败，任务将使用上次已知配置", exc_info=True)
+        return False
+
+
+@worker_process_init.connect(weak=False)
+def _on_worker_process_init(**_kwargs) -> None:
+    """prefork 子进程启动时建立自己的模型配置快照。"""
+    refresh_worker_model_registry()

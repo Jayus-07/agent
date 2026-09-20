@@ -7,12 +7,11 @@
 
 现在凭据由本模块在**调用时**解析（模块属性访问，而非值拷贝），并通过
 `ProviderCredentials` 显式传给 `build_xxx(model, credentials=...)`。
-调用方不传（`credentials=None`）时 `providers/*` 回落 config 常量 —— 与改造前逐位一致。
+云供应商没有数据库凭据时返回未配置快照，禁止回落旧 env；本地 Ollama
+仅保留本机地址这一项基础设施默认值。
 
-**P1a 阶段的边界**：DB 覆盖层（`llm_provider_credentials`）尚未接线，
-`resolve_credentials` 一律返回 `source='env'`、`version=0`。
-接线的数据来自 `registry_store.py`，届时把 DB 值注入 `_db_overrides` 即可，
-热路径仍是纯字典读取（零 IO）。
+DB 覆盖层由 `registry_store.py` 刷新时注入 `_db_overrides`；热路径始终只读
+进程内字典（零 IO）。
 
 设计见 docs/model-config-governance-design.md 附录 B.3 / B.5。
 """
@@ -22,24 +21,17 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from backend.config import llm as _llm
-from backend.infra.llm.models import PROVIDER_API_KEY_ENV, PROVIDERS
+from backend.infra.llm.models import (
+    PROVIDER_API_KEY_ENV,
+    PROVIDERS,
+    get_provider_entry,
+    get_provider_ids,
+)
 
 # MiniMax 走 Anthropic Messages API（官方推荐路径）。该 URL 原为
 # providers/minimax.py 内的硬编码字面量，**不是** config 的 MINIMAX_API_BASE
 # （那是另一个 OpenAI 兼容端点，值不同）。搬到这里只为集中，值不变。
 MINIMAX_ANTHROPIC_URL = "https://api.minimaxi.com/anthropic"
-
-# provider → (api_key 的 config 属性名, base_url 的 config 属性名)
-# base_url 为 None 表示「不来自 config」（ollama 读环境变量、minimax 用字面量）
-_PROVIDER_ENV_BINDING: dict[str, tuple[str, str | None]] = {
-    "ollama": ("", "OLLAMA_BASE_URL"),
-    "deepseek": ("DEEPSEEK_API_KEY", "DEEPSEEK_API_BASE"),
-    "minimax": ("MINIMAX_API_KEY", None),
-    "qwen": ("QWEN_API_KEY", "QWEN_API_BASE"),
-    "qwen_tp": ("QWEN_TP_API_KEY", "QWEN_TP_API_BASE"),
-    "vllm": ("VLLM_API_KEY", "VLLM_API_BASE"),
-    "siliconflow": ("SILICONFLOW_API_KEY", "SILICONFLOW_API_BASE"),
-}
 
 # 密钥缺失报错的可操作补充（原文案逐字保留，避免前端/运维文档失配）
 _KEY_HINTS: dict[str, str] = {
@@ -60,8 +52,8 @@ class UnknownProviderError(LookupError):
 class ProviderCredentials:
     """一次调用所需的出站凭据快照。
 
-    字段为 None / 空表示「调用方未覆盖，请回落 config 常量」——
-    `providers/*` 依赖这个约定来保证「不传凭据 == 改造前行为」。
+    字段为 None / 空表示「数据库尚未配置该项」。云供应商不能把它解释为
+    旧 env 或 config 常量的回退信号。
     """
 
     provider: str
@@ -69,8 +61,8 @@ class ProviderCredentials:
     base_url: str | None = None
     extra_headers: Mapping[str, str] = field(default_factory=dict)
     extra_body: Mapping[str, Any] = field(default_factory=dict)
-    # env | db | default —— 生效快照与管理端展示「这个值从哪来」
-    source: str = "env"
+    # db | unconfigured —— 生效快照与管理端展示「这个值从哪来」
+    source: str = "unconfigured"
     # DB 轮换计数；与缓存实例比对可发现「密钥已换但仍用旧实例」（B.5#2）
     version: int = 0
 
@@ -81,13 +73,13 @@ class ProviderCredentials:
         return out
 
 
-# ── DB 覆盖层注入点（P1b 接线；P1a 恒空）──────────────────────────────
+# ── DB 覆盖层注入点（由 registry_store 后台刷新）───────────────────────
 # provider_id → ProviderCredentials；由 registry_store 的刷新循环写入。
 _db_overrides: dict[str, ProviderCredentials] = {}
 
 
 def set_db_credentials(overrides: dict[str, ProviderCredentials] | None) -> None:
-    """注入 DB 覆盖的凭据（registry_store 调用）。None / 空 = 清空回 env。"""
+    """注入 DB 凭据（registry_store 调用）。None / 空 = 清空 DB 热缓存。"""
     _db_overrides.clear()
     if overrides:
         _db_overrides.update(overrides)
@@ -107,6 +99,30 @@ def invalidate_credentials_cache() -> None:
     _db_overrides.clear()
 
 
+def _resolve_unconfigured_credentials(
+    provider: str,
+    provider_entry: Mapping[str, Any],
+) -> ProviderCredentials:
+    """构造未在数据库配置的凭据快照，不读取任何模型 env。"""
+    # 本地 Ollama 地址属于本机运行时基础设施，不是云供应商密钥；保留代码默认
+    # 地址以便明确绑定到 ollama 的本地模型仍可工作。云端 URL 必须来自 DB。
+    base_url = None
+    if provider == "ollama":
+        base_url = provider_entry.get("base_url") or "http://localhost:11434"
+    else:
+        base_url = provider_entry.get("base_url") or None
+
+    return ProviderCredentials(
+        provider=provider,
+        api_key=None,
+        base_url=base_url,
+        extra_headers=provider_entry.get("extra_headers") or {},
+        extra_body=provider_entry.get("extra_body") or {},
+        source="unconfigured",
+        version=0,
+    )
+
+
 def resolve_credentials(
     provider: str,
     *,
@@ -114,10 +130,11 @@ def resolve_credentials(
 ) -> ProviderCredentials:
     """解析某 provider 当前生效的凭据（热路径安全：纯内存读取）。
 
-    优先级：DB 覆盖层 → `.env`（config 常量）→ 代码默认。
+    唯一来源：数据库注册表；未登记的供应商返回未配置快照。
     `model_name` 预留：同一 provider 下不同模型可能绑定不同 Key（P1b）。
     """
-    if provider not in PROVIDERS:
+    provider_entry = get_provider_entry(provider)
+    if provider_entry is None:
         raise UnknownProviderError(
             f"未知 provider: {provider!r}（已知: {sorted(PROVIDERS)}）"
         )
@@ -125,27 +142,11 @@ def resolve_credentials(
     override = _db_overrides.get(provider)
     if override is not None:
         return override
-
-    api_key_attr, base_url_attr = _PROVIDER_ENV_BINDING.get(provider, ("", None))
-    api_key = getattr(_llm, api_key_attr, "") if api_key_attr else ""
-    if base_url_attr:
-        base_url = getattr(_llm, base_url_attr, "") or None
-    elif provider == "minimax":
-        base_url = MINIMAX_ANTHROPIC_URL
-    else:
-        base_url = None
-
-    return ProviderCredentials(
-        provider=provider,
-        api_key=(api_key or None),
-        base_url=base_url,
-        source="env",
-        version=0,
-    )
+    return _resolve_unconfigured_credentials(provider, provider_entry)
 
 
 def credentials_version(provider: str) -> int:
-    """凭据版本（DB 轮换计数）。P1a-1 无 DB 覆盖 → 恒 0。"""
+    """凭据版本（DB 轮换计数）；没有 DB 覆盖时返回 0。"""
     override = _db_overrides.get(provider)
     return override.version if override else 0
 
@@ -163,7 +164,7 @@ def missing_key_message(provider: str) -> str | None:
         return None  # 未登记密钥的 provider（自建/未知）不做密钥校验
     if resolve_credentials(provider).api_key:
         return None
-    return f"{api_key_env} 未配置，请在 .env 中设置{_KEY_HINTS.get(provider, '')}"
+    return f"供应商 {provider} 未在数据库配置 API Key{_KEY_HINTS.get(provider, '')}"
 
 
 def check_provider_usable(provider: str) -> str | None:
@@ -176,7 +177,7 @@ def check_provider_usable(provider: str) -> str | None:
         if not getattr(_llm, "OLLAMA_ENABLED", False):
             return _OLLAMA_DISABLED_MESSAGE
         return None
-    if provider not in PROVIDERS:
+    if get_provider_entry(provider) is None:
         return f"未知 provider: {provider}"
     return missing_key_message(provider)
 
@@ -187,14 +188,16 @@ def snapshot() -> dict[str, dict[str, Any]]:
     **不含密钥明文**：只给「是否已配置 + 指纹级别信息」。
     """
     out: dict[str, dict[str, Any]] = {}
-    for provider in PROVIDERS:
+    provider_ids = list(dict.fromkeys([*PROVIDERS, *get_provider_ids()]))
+    for provider in provider_ids:
         cred = resolve_credentials(provider)
+        provider_entry = get_provider_entry(provider) or {}
         out[provider] = {
             "provider": provider,
             "hasApiKey": bool(cred.api_key),
             "baseUrl": cred.base_url,
-            "driver": PROVIDERS[provider].get("driver"),
-            "billing": PROVIDERS[provider].get("billing"),
+            "driver": provider_entry.get("driver"),
+            "billing": provider_entry.get("billing"),
             "source": cred.source,
             "version": cred.version,
             "usable": check_provider_usable(provider),

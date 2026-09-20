@@ -20,6 +20,18 @@ from backend.shared.logger import logger
 _UNCERTAIN_ERROR_CODE = "IDEMPOTENCY_UNCERTAIN"
 
 
+def _record_idempotency_metric(metric_name: str, operation: str, result: str) -> None:
+    """记录幂等闭环指标；观测失败不得改变副作用协议。"""
+    try:
+        from backend.observability import metrics
+
+        getattr(metrics, metric_name).labels(
+            operation=operation or "unknown", result=result
+        ).inc()
+    except Exception as exc:
+        logger.warning("[Idempotency] 指标写入失败: %s", exc)
+
+
 def canonical_fingerprint(payload: Any) -> str:
     """对请求体做稳定 JSON 规范化并计算 SHA-256。"""
     canonical = json.dumps(
@@ -360,9 +372,15 @@ class RedisIdempotencyStore:
 class IdempotencyExecutor:
     """把 claim、一次副作用执行和终态写回收敛成一个可复用边界。"""
 
-    def __init__(self, store: Any, result_store: Any | None = None):
+    def __init__(
+        self,
+        store: Any,
+        result_store: Any | None = None,
+        pre_execute=None,
+    ):
         self.store = store
         self.result_store = result_store
+        self.pre_execute = pre_execute
 
     def execute(
         self,
@@ -373,9 +391,27 @@ class IdempotencyExecutor:
         if self.result_store is not None:
             replay = self.result_store.get(key, payload)
             if replay is not None:
+                _record_idempotency_metric(
+                    "idempotency_claim_total", key.operation, "replay"
+                )
+                _record_idempotency_metric(
+                    "idempotency_execution_total", key.operation, "replay"
+                )
                 return dict(replay)
-        claim = self.store.claim(key, payload)
+        try:
+            claim = self.store.claim(key, payload)
+        except IdempotencyUnavailable:
+            _record_idempotency_metric(
+                "idempotency_claim_total", key.operation, "unavailable"
+            )
+            raise
+        _record_idempotency_metric(
+            "idempotency_claim_total", key.operation, claim.status.value
+        )
         if claim.status == ClaimStatus.SUCCEEDED:
+            _record_idempotency_metric(
+                "idempotency_execution_total", key.operation, "replay"
+            )
             return dict(claim.result or {})
         if claim.status == ClaimStatus.CONFLICT:
             if claim.error_code == _UNCERTAIN_ERROR_CODE:
@@ -388,6 +424,8 @@ class IdempotencyExecutor:
         result_persisted = False
         operation_succeeded = False
         try:
+            if self.pre_execute is not None:
+                self.pre_execute()
             result = operation()
             if not isinstance(result, dict):
                 raise TypeError("幂等副作用结果必须是 dict")
@@ -396,6 +434,9 @@ class IdempotencyExecutor:
                 self.result_store.complete(key, payload, result)
                 result_persisted = True
             self.store.complete(claim.lease_id, result, key=key)
+            _record_idempotency_metric(
+                "idempotency_execution_total", key.operation, "success"
+            )
             return result
         except Exception as exc:
             error_code = (
@@ -418,6 +459,10 @@ class IdempotencyExecutor:
                 self.store.fail(claim.lease_id, error_code, key=key)
             except Exception:
                 logger.error("[Idempotency] Redis 失败状态回写失败", exc_info=True)
+            _record_idempotency_metric(
+                "idempotency_execution_total", key.operation,
+                "uncertain" if error_code == _UNCERTAIN_ERROR_CODE else "failure",
+            )
             raise
 
 
@@ -453,6 +498,47 @@ class PostgresIdempotencyResultStore:
         if row[1] != ClaimStatus.SUCCEEDED.value:
             return None
         return dict(row[2] or {})
+
+    def get_status(
+        self, *, tenant_id: str, actor_id: str, client_key: str
+    ) -> dict[str, Any] | None:
+        """按可信身份查询幂等安全摘要，不返回副作用结果正文。"""
+        try:
+            with self._connection_factory() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT operation, status, error_code, attempt,
+                           created_at, updated_at, expires_at, result
+                    FROM ai.idempotency_records
+                    WHERE tenant_id = %s AND actor_id = %s AND client_key = %s
+                      AND (expires_at IS NULL OR expires_at > now())
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (tenant_id, actor_id, client_key),
+                )
+                row = cur.fetchone()
+        except Exception as exc:
+            raise IdempotencyUnavailable("PG 幂等状态读取失败") from exc
+        if row is None:
+            return None
+
+        status = (
+            "uncertain"
+            if row[2] == _UNCERTAIN_ERROR_CODE
+            else str(row[1])
+        )
+        return {
+            "client_key": client_key,
+            "operation": str(row[0]),
+            "status": status,
+            "attempt": int(row[3] or 0),
+            "error_code": row[2] or None,
+            "has_result": row[7] is not None,
+            "created_at": _iso_or_none(row[4]),
+            "updated_at": _iso_or_none(row[5]),
+            "expires_at": _iso_or_none(row[6]),
+        }
 
     def complete(
         self, key: IdempotencyKey, payload: Any, result: dict[str, Any]
@@ -525,6 +611,13 @@ def _decode_redis_value(value: Any) -> str:
     return str(value)
 
 
+def _iso_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    isoformat = getattr(value, "isoformat", None)
+    return isoformat() if callable(isoformat) else str(value)
+
+
 def run_idempotent_operation(
     operation: str,
     payload: Any,
@@ -576,8 +669,18 @@ def run_idempotent_operation_for_identity(
     executor = IdempotencyExecutor(
         RedisIdempotencyStore(redis_client),
         PostgresIdempotencyResultStore(),
+        pre_execute=lambda: _enforce_side_effect_budget(
+            user_id=actor_id,
+            tenant_id=tenant_id,
+        ),
     )
     return executor.execute(key, payload, callback)
+
+
+def _enforce_side_effect_budget(*, user_id: str, tenant_id: str) -> None:
+    from backend.infra.llm.quota import enforce_side_effect_budget
+
+    enforce_side_effect_budget(user_id=user_id, tenant_id=tenant_id)
 
 
 __all__ = [

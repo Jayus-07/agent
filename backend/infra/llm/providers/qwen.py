@@ -5,8 +5,8 @@ qwen.py — Qwen Provider（阿里云百炼在线模型，OpenAI 兼容协议）
   - build_qwen(): 构建 ChatOpenAI 实例（DashScope OpenAI 兼容端点）
   - get_qwen_balance(): Qwen 余额查询（无公开 API，引导官网查询）
 
-凭据在**调用时**解析（credentials，见 infra/llm/credentials.py），
-为 None 或字段为空时回落 `.env`（config 常量）。
+凭据在**调用时**解析（credentials，见 infra/llm/credentials.py）；
+运行时没有数据库凭据就明确失败，不回落到 `.env`。
 """
 
 from backend.config import (
@@ -41,8 +41,8 @@ def build_qwen(
     import os
     enable_thinking = os.getenv("QWEN_ENABLE_THINKING", "false").strip().lower() in ("1", "true", "yes")
 
-    api_key = (credentials.api_key if credentials else None) or QWEN_API_KEY
-    base_url = (credentials.base_url if credentials else None) or QWEN_API_BASE
+    api_key = credentials.api_key if credentials is not None else ""
+    base_url = credentials.base_url if credentials is not None else ""
 
     body = {"enable_thinking": enable_thinking}
     if credentials and credentials.extra_body:
