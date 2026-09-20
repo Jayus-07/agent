@@ -3,9 +3,12 @@ import { describe, expect, it } from 'vitest'
 import {
   gradeLabel,
   isModelSelectable,
+  isSpecializedModelRole,
   maskSecret,
+  probeFailureReason,
   probeFallbackSummary,
   probeOverallLabel,
+  probeStepSummary,
   redactForRole,
   roleLabel,
   sourceLabel,
@@ -51,11 +54,11 @@ describe('sourceLabel', () => {
 
 describe('maskSecret', () => {
   it('两侧齐备时给出掩码与指纹', () => {
-    expect(maskSecret('a1b2', '3f9c1d')).toBe('····a1b2 · 指纹 3f9c1d')
+    expect(maskSecret('a1b2', '3f9c1d')).toBe('****a1b2 · 指纹 3f9c1d')
   })
 
   it('单侧缺失只渲染存在的那侧', () => {
-    expect(maskSecret('a1b2', null)).toBe('····a1b2')
+    expect(maskSecret('a1b2', null)).toBe('****a1b2')
     expect(maskSecret(null, '3f9c1d')).toBe('指纹 3f9c1d')
   })
 
@@ -92,6 +95,19 @@ describe('isModelSelectable', () => {
     ).toEqual({ selectable: false, reason: '缺少 MINIMAX_API_KEY' })
   })
 
+  it('模型用途与角色不一致时不可选，并说明需要哪一类模型', () => {
+    expect(isModelSelectable({ ...chat, modelKind: 'embedding' }, 'chat')).toEqual({
+      selectable: false,
+      reason: '用途不匹配：需要文本模型，当前是向量模型',
+    })
+  })
+
+  it('供应商不可用 → 不可选，并展示后端返回的具体原因', () => {
+    expect(
+      isModelSelectable({ ...chat, availabilityReason: 'Ollama 当前未启用' }),
+    ).toEqual({ selectable: false, reason: 'Ollama 当前未启用' })
+  })
+
   it('目录里根本没有该模型（undefined）→ 按未注册处理，不抛异常', () => {
     expect(isModelSelectable(undefined)).toEqual({ selectable: false, reason: '未注册' })
   })
@@ -100,6 +116,26 @@ describe('isModelSelectable', () => {
     expect(
       isModelSelectable({ ...chat, registered: false, missingKeyEnv: 'X_API_KEY' }),
     ).toEqual({ selectable: false, reason: '未注册' })
+  })
+})
+
+describe('isSpecializedModelRole', () => {
+  it('识别使用专项适配器的角色', () => {
+    expect(isSpecializedModelRole('embedding')).toBe(true)
+    expect(isSpecializedModelRole('ocr')).toBe(true)
+    expect(isSpecializedModelRole('eval_gen')).toBe(false)
+    expect(isSpecializedModelRole('main')).toBe(false)
+  })
+})
+
+describe('modelKindLabel', () => {
+  it('给五类模型稳定显示用途名称', async () => {
+    const { modelKindLabel } = await import('./modelConfig')
+    expect(modelKindLabel('chat')).toBe('文本模型')
+    expect(modelKindLabel('embedding')).toBe('向量模型')
+    expect(modelKindLabel('rerank')).toBe('重排模型')
+    expect(modelKindLabel('vision')).toBe('视觉模型')
+    expect(modelKindLabel('speech')).toBe('语音模型')
   })
 })
 
@@ -125,6 +161,24 @@ describe('probeFallbackSummary', () => {
 
   it('L3 的 skip 说明记账影响', () => {
     expect(probeFallbackSummary('L3', 'skip')).toContain('token')
+  })
+})
+
+describe('probeStepSummary / probeFailureReason', () => {
+  it('后端给出具体错误时优先展示具体错误，不丢掉字段级原因', () => {
+    expect(probeStepSummary({
+      grade: 'L2',
+      status: 'fail',
+      summary: 'HTTP 400：该 API Key 无权访问 qwen3.7-plus',
+    })).toContain('无权访问')
+  })
+
+  it('后端摘要缺失时按探测级别给可操作兜底', () => {
+    expect(probeFailureReason({
+      ok: false,
+      summary: '',
+      steps: [{ grade: 'L2', status: 'fail', summary: '' }],
+    })).toContain('模型名')
   })
 })
 

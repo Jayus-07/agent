@@ -23,12 +23,16 @@ interface ChatState {
   /** node → emoji 映射表（meta 事件下发） */
   nodeLabels: Record<string, string>
   isLoading: boolean
-  error: string | null
+  /** 当前对话轮次错误；保留统一错误封套供 ErrorCard 决定动作。 */
+  error: unknown
   /** 历史消息/会话列表加载失败信息。与 error 分开：error 属于当前对话轮次，
    *  混用会让"历史加载失败"显示在聊天区，误导用户以为本次提问出错 */
   historyError: string | null
   /** 当前请求的 request_id（用于中止） */
   currentRequestId: string | null
+  /** 会话级模型覆盖（B.9 决策②）：null = 跟随全局默认。
+   *  与 sessionId 同生命周期——resetStream（每轮流重置）**不**清它。 */
+  sessionModel: string | null
   /** 会话列表刷新信号：SSE done 后自增，HistorySidebar 监听它自动重新拉取 */
   sessionsVersion: number
   /** 任务列表快照（todo 事件，全量替换）。chat 私有：csChat 无 planner，不进共享归约 */
@@ -54,16 +58,18 @@ interface ChatState {
   addStreamEvent: (evt: SSEStreamEvent, sessionId?: string) => void
   removeLastAssistant: (sessionId?: string) => void
   replaceLastAssistant: (content: string, sessionId?: string, sources?: any[], usage?: import('@/lib/types').TokenUsage,
-    thinking?: string, thinkingSeconds?: number) => void
+    thinking?: string, thinkingSeconds?: number, traceId?: string) => void
 
   /** done 时固化执行过程快照到尾部 assistant 消息（CompletionLine 回看用） */
   attachTrace: (sessionId: string, trace: import('@/lib/types').AgentTrace) => void
 
   // — 状态 —
   setLoading: (v: boolean) => void
-  setError: (e: string | null) => void
+  setError: (e: unknown) => void
   setHistoryError: (e: string | null) => void
   setCurrentRequestId: (id: string | null) => void
+  /** 设置/清除会话级模型覆盖（B.9）；null = 回到全局默认 */
+  setSessionModel: (model: string | null) => void
   bumpSessionsVersion: () => void
   resetStream: () => void
 }
@@ -101,6 +107,8 @@ export const useChatStore = create<ChatState>((set, get) => {
     error: null,
     historyError: null,
     currentRequestId: null,
+    // 会话级模型覆盖（B.9）：null = 跟随全局默认；与 sessionId 同生命周期
+    sessionModel: null,
     sessionsVersion: 0,
     todoItems: [],
     streamUsage: null,
@@ -265,6 +273,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     setCurrentRequestId: (id) => set({ currentRequestId: id }),
+    setSessionModel: (model) => set({ sessionModel: model }),
 
     resetStream: () => set({
       streamEvents: [], currentStatus: '', deltaText: '',
@@ -288,7 +297,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       })
     },
 
-    replaceLastAssistant: (content, sessionId, sources, usage, thinking, thinkingSeconds) => {
+    replaceLastAssistant: (content, sessionId, sources, usage, thinking, thinkingSeconds, traceId) => {
       set((state) => ({
         sessions: state.sessions.map((s) => {
           const sid = targetId(state, sessionId)
@@ -303,6 +312,7 @@ export const useChatStore = create<ChatState>((set, get) => {
               usage: usage || msgs[lastIdx].usage,
               thinking: thinking ?? msgs[lastIdx].thinking,
               thinkingSeconds: thinkingSeconds ?? msgs[lastIdx].thinkingSeconds,
+              trace_id: traceId ?? msgs[lastIdx].trace_id,
               timestamp: Date.now(),
             }
           }

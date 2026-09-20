@@ -9,7 +9,7 @@
  *   1. 透传 `/api/*` 到网关（`${API_URL}/api/...`），保留 query；
  *   2. 服务端注入 `X-API-Key`；
  *   3. 转发 Authorization / Content-Type / Accept / User-Agent / Cookie /
- *      X-Trace-Id，注入 X-Client-IP（会话台账），回传 Content-Type /
+ *      Idempotency-Key / X-Trace-Id，注入 X-Client-IP（会话台账），回传 Content-Type /
  *      Content-Disposition / X-Trace-Id 及逐条 Set-Cookie（refresh 令牌
  *      HttpOnly Cookie 的生命周期依赖它，缺失 = 静默刷新必失败）；
  *   4. 响应体流式透传（SSE / 上传 / 下载均不受影响）。
@@ -36,6 +36,7 @@ const FORWARD_REQ_HEADERS = [
   "accept",
   "user-agent",
   "cookie",
+  "idempotency-key",
   "x-trace-id",
 ] as const;
 const FORWARD_RES_HEADERS = [

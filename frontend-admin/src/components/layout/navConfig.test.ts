@@ -38,7 +38,6 @@ describe('NAV — 导航配置完整性', () => {
       '/selection-decision',
       '/reports',
       '/competitors',
-      '/cs',
       '/cs/conversations',
       '/alerts',
       '/schedules',
@@ -48,6 +47,14 @@ describe('NAV — 导航配置完整性', () => {
     ]) {
       expect(allPaths, `核心路由 ${p} 丢失`).toContain(p)
     }
+  })
+
+  it('模型与供应商入口仅 admin 可见，旧模型价格入口不再出现在导航', () => {
+    const quality = NAV.find((entry) => entry.label === '质量与配置')
+    expect(quality?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: '模型与供应商', path: '/settings/models', minRole: 'admin' }),
+    ]))
+    expect(allPaths).not.toContain('/cost-governance/prices')
   })
 
   it('管理端导航不含用户端独有入口（拆分边界不回渗）', () => {
@@ -108,4 +115,3 @@ describe('visibleNav — 按角色过滤（2026-09-16 角色硬闸的 UI 层）'
     }
   })
 })
-

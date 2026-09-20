@@ -17,7 +17,15 @@ const authMock = vi.hoisted(() => ({
 
 vi.mock("@/lib/auth", () => authMock);
 
-import { ApiError, backendBaseUrl, fetchRaw, request, requestSilent } from "./client";
+import {
+  ApiError,
+  apiErrorFromEnvelope,
+  backendBaseUrl,
+  fetchRaw,
+  mutationFetchRaw,
+  request,
+  requestSilent,
+} from "./client";
 import { CLIENT_ERROR_CODES, describeApiError } from "./errors";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -141,6 +149,29 @@ describe("request 请求构造", () => {
 });
 
 describe("request 错误模型", () => {
+  it("统一错误封套保留字符串 detail，而不是退化成通用提示", () => {
+    const err = apiErrorFromEnvelope({ detail: "请求参数有误：model_name 不能为空" }, 422);
+    expect(err.message).toBe("请求参数有误：model_name 不能为空");
+    expect(err.status).toBe(422);
+    expect(err.detail).toBe("请求参数有误：model_name 不能为空");
+  });
+
+  it("FastAPI 422 detail 数组展示字段位置与具体原因", () => {
+    const err = apiErrorFromEnvelope({
+      detail: [{ loc: ["body", "base_url"], msg: "不能为空" }],
+    }, 422);
+    expect(err.message).toBe("body.base_url：不能为空");
+  });
+
+  it("request 遇到 422 时也把参数字段错误交给调用方", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ detail: [{ loc: ["body", "model_name"], msg: "不能为空" }] }, 422),
+    );
+
+    const err = (await request("/x").catch((e: unknown) => e)) as ApiError;
+    expect(err.message).toBe("body.model_name：不能为空");
+  });
+
   it("非 2xx 抛 ApiError，携带 status 与 FastAPI detail", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({ detail: "boom" }, 500),
@@ -245,6 +276,57 @@ describe("401 语义（拆分前后必须一致）", () => {
     const res = await fetchRaw("/stream");
     expect(res.status).toBe(200);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("mutationFetchRaw 幂等原始写请求", () => {
+  it("注入稳定幂等键，并在 401 刷新后复用同一个键", async () => {
+    authMock.tryRefreshOnce.mockResolvedValue(true);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ detail: "unauth" }, 401))
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+    const response = await mutationFetchRaw("/upload", {
+      operation: "rag.upload",
+      idempotencyKey: "upload-key-1",
+      dedupeKey: "file-1",
+      method: "POST",
+      body: new FormData(),
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    for (const call of fetchSpy.mock.calls) {
+      const headers = new Headers((call[1] as RequestInit).headers);
+      expect(headers.get("Idempotency-Key")).toBe("upload-key-1");
+    }
+  });
+
+  it("同一原始写操作在途时只发一个请求，并为调用方提供可读取的响应副本", async () => {
+    let release!: (response: Response) => void;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      () => new Promise<Response>((resolve) => { release = resolve; }),
+    );
+
+    const first = mutationFetchRaw("/write", {
+      operation: "write",
+      dedupeKey: "same-payload",
+      method: "POST",
+      body: new FormData(),
+    });
+    const second = mutationFetchRaw("/write", {
+      operation: "write",
+      dedupeKey: "same-payload",
+      method: "POST",
+      body: new FormData(),
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    release(jsonResponse({ ok: true }));
+    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+    await expect(firstResponse.json()).resolves.toEqual({ ok: true });
+    await expect(secondResponse.json()).resolves.toEqual({ ok: true });
   });
 });
 

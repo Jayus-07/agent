@@ -11,11 +11,13 @@
  * - 确认在弹窗内二次完成，列表按钮只打开弹窗；
  * - reviewer 不传，后端取网关注入的身份头（缺省记 unknown，不冒充 admin）。
  * - pending 列表 15s 轮询，避免管理员盯着手动刷新。
+ *
+ * 布局对齐 /observability/traces（2026-09-18）：min-h 容器 +
+ * 左标题右操作头部 + slate 白卡体系。
  */
 import { useCallback, useEffect, useState } from 'react'
 import { Check, ChevronDown, ChevronRight, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import { clsx } from 'clsx'
-import PageHeader from '@/components/layout/PageHeader'
 import { useToast } from '@/components/shared/Toast'
 import { approvalService, type ApprovalRequest, type ApprovalStatus } from '@/api/approvals'
 
@@ -28,10 +30,10 @@ const TABS: { key: ApprovalStatus | ''; label: string }[] = [
 ]
 
 const STATUS_STYLE: Record<string, { text: string; bg: string }> = {
-  pending: { text: '#633806', bg: '#FAEEDA' },
-  approved: { text: '#2F7D32', bg: '#E8F3E9' },
-  rejected: { text: '#791F1F', bg: '#FCEBEB' },
-  executed: { text: '#1D4ED8', bg: '#E3EAFB' },
+  pending: { text: '#b45309', bg: '#fef3c7' },
+  approved: { text: '#047857', bg: '#d1fae5' },
+  rejected: { text: '#b91c1c', bg: '#fee2e2' },
+  executed: { text: '#1d4ed8', bg: '#dbeafe' },
 }
 
 /** 审批单的副作用摘要：尽量给出人能读的一行说明 */
@@ -110,81 +112,94 @@ export default function ApprovalsPage() {
   }
 
   return (
-    <div>
-      <PageHeader
-        title="工具审批"
-        desc="写操作工具的人工审批门 · 批准后 TTL 内重试相同操作即可执行 · 审计字段记录审批人与理由"
-      />
-
-      {/* 状态 tab */}
-      <div className="mb-4 flex items-center gap-1 rounded-lg bg-black/[0.03] p-0.5 text-[12px]" style={{ width: 'fit-content' }}>
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={clsx('rounded-[6px] px-3 py-1.5 transition-colors',
-              tab === t.key ? 'bg-white text-accent font-medium shadow-sm' : 'text-text-secondary hover:text-text-primary')}
-          >
-            {t.label}
-          </button>
-        ))}
-        <button
-          onClick={() => load()}
-          className="ml-1 flex items-center gap-1 rounded-[6px] px-2 py-1.5 text-text-muted transition-colors hover:text-text-primary"
-          title="刷新"
-        >
-          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-        </button>
-      </div>
-
-      {tab === 'pending' && (
-        <div className="mb-3 flex items-center gap-1.5 rounded-lg px-3 py-2 text-[12px]" style={{ background: '#FAEEDA', color: '#633806' }}>
-          <ShieldCheck size={14} />
-          以下写操作被审批门拦下，请核对参数后处置 · 15 秒自动刷新
-        </div>
-      )}
-
-      {/* 列表 */}
-      <div className="overflow-hidden rounded-xl border border-black/5 bg-white shadow-card">
-        {loading ? (
-          <div className="p-10 text-center text-[13px] text-text-muted">加载中…</div>
-        ) : error ? (
-          <div className="p-10 text-center text-[13px]" style={{ color: '#791F1F' }}>{error}</div>
-        ) : items.length === 0 ? (
-          <div className="p-10 text-center text-[13px] text-text-muted">
-            {tab === 'pending' ? '没有待审批的操作' : '暂无记录'}
+    <div className="min-h-screen bg-slate-50">
+      <div className="max-w-[1440px] mx-auto px-6 py-6 space-y-5">
+        {/* Header：左标题 + 右操作（计数 / 刷新），同 traces 页布局 */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-lg font-semibold text-slate-800">工具审批</h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              写操作工具的人工审批门 · 批准后 TTL 内重试相同操作即可执行 · 审计字段记录审批人与理由
+            </p>
           </div>
-        ) : (
-          <table className="w-full text-[13px]">
-            <thead>
-              <tr className="border-b border-black/5 text-left text-[12px] text-text-muted">
-                <th className="px-4 py-2.5 font-normal">操作</th>
-                <th className="px-4 py-2.5 font-normal">摘要</th>
-                <th className="px-4 py-2.5 font-normal">发起人</th>
-                <th className="px-4 py-2.5 font-normal">创建时间</th>
-                <th className="px-4 py-2.5 font-normal">状态</th>
-                <th className="px-4 py-2.5 font-normal text-right">处置</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((req) => {
-                const open = expanded === req.id
-                const st = STATUS_STYLE[req.status] ?? { text: '#6b7280', bg: 'rgba(0,0,0,0.04)' }
-                return (
-                  <FragmentRow
-                    key={req.id}
-                    req={req}
-                    open={open}
-                    st={st}
-                    onToggle={() => setExpanded(open ? null : req.id)}
-                    onDecide={(approve) => { setReason(''); setDeciding({ req, approve }) }}
-                    showActions={req.status === 'pending'}
-                  />
-                )
-              })}
-            </tbody>
-          </table>
+          <div className="flex items-center gap-3 text-xs text-slate-400">
+            {!loading && !error && (
+              <span>共 {items.length.toLocaleString('zh-CN')} 条</span>
+            )}
+            <button
+              onClick={() => load()}
+              disabled={loading}
+              className="flex items-center gap-1.5 text-slate-500 hover:text-slate-700 bg-white border border-slate-200 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50"
+              title="刷新"
+            >
+              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> 刷新
+            </button>
+          </div>
+        </div>
+
+        {/* 状态 tab */}
+        <div className="flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white p-0.5 text-xs" style={{ width: 'fit-content' }}>
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={clsx('rounded-md px-3 py-1.5 transition-colors',
+                tab === t.key ? 'bg-violet-50 font-medium text-violet-700' : 'text-slate-500 hover:text-slate-800')}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {tab === 'pending' && (
+          <div className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            <ShieldCheck size={14} />
+            以下写操作被审批门拦下，请核对参数后处置 · 15 秒自动刷新
+          </div>
         )}
+
+        {/* 列表 */}
+        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          {loading ? (
+            <div className="py-12 text-center text-sm text-slate-400">加载中…</div>
+          ) : error ? (
+            <div className="py-12 text-center text-sm text-red-500">{error}</div>
+          ) : items.length === 0 ? (
+            <div className="py-12 text-center text-sm text-slate-400">
+              {tab === 'pending' ? '没有待审批的操作' : '暂无记录'}
+            </div>
+          ) : (
+            <table className="w-full text-[13px]">
+              <thead>
+                <tr className="border-b border-slate-200 text-left text-xs font-medium text-slate-500">
+                  <th className="px-4 py-2.5 font-medium">操作</th>
+                  <th className="px-4 py-2.5 font-medium">摘要</th>
+                  <th className="px-4 py-2.5 font-medium">发起人</th>
+                  <th className="px-4 py-2.5 font-medium">创建时间</th>
+                  <th className="px-4 py-2.5 font-medium">状态</th>
+                  <th className="px-4 py-2.5 font-medium text-right">处置</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {items.map((req) => {
+                  const open = expanded === req.id
+                  const st = STATUS_STYLE[req.status] ?? { text: '#64748b', bg: '#f1f5f9' }
+                  return (
+                    <FragmentRow
+                      key={req.id}
+                      req={req}
+                      open={open}
+                      st={st}
+                      onToggle={() => setExpanded(open ? null : req.id)}
+                      onDecide={(approve) => { setReason(''); setDeciding({ req, approve }) }}
+                      showActions={req.status === 'pending'}
+                    />
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
       </div>
 
       {/* 决策弹窗（二次确认 + 理由必填） */}
@@ -194,29 +209,29 @@ export default function ApprovalsPage() {
             <div className="mb-3 flex items-center gap-2">
               <span
                 className="flex h-7 w-7 items-center justify-center rounded-lg"
-                style={{ background: deciding.approve ? '#E8F3E9' : '#FCEBEB' }}
+                style={{ background: deciding.approve ? '#d1fae5' : '#fee2e2' }}
               >
                 {deciding.approve
-                  ? <Check size={15} style={{ color: '#2F7D32' }} />
-                  : <X size={15} style={{ color: '#791F1F' }} />}
+                  ? <Check size={15} style={{ color: '#047857' }} />
+                  : <X size={15} style={{ color: '#b91c1c' }} />}
               </span>
-              <h3 className="text-[15px] font-medium text-text-primary">
+              <h3 className="text-[15px] font-medium text-slate-800">
                 {deciding.approve ? '批准' : '驳回'}该写操作？
               </h3>
             </div>
 
-            <div className="mb-3 rounded-lg bg-surface-elevated p-3 text-[12px] leading-relaxed">
-              <div className="font-medium text-text-primary">
+            <div className="mb-3 rounded-lg bg-slate-50 border border-slate-200 p-3 text-[12px] leading-relaxed">
+              <div className="font-medium text-slate-800">
                 {deciding.req.tool_name}.{deciding.req.action}
               </div>
               {summarize(deciding.req) && (
-                <div className="mt-1 break-all text-text-secondary">{summarize(deciding.req)}</div>
+                <div className="mt-1 break-all text-slate-600">{summarize(deciding.req)}</div>
               )}
-              <div className="mt-1 text-text-muted">发起人 {deciding.req.user_id || 'unknown'} · {fmtTime(deciding.req.created_at)}</div>
+              <div className="mt-1 text-slate-400">发起人 {deciding.req.user_id || 'unknown'} · {fmtTime(deciding.req.created_at)}</div>
             </div>
 
-            <label className="mb-1.5 block text-[12px] text-text-secondary">
-              审批理由 <span style={{ color: '#791F1F' }}>*</span>
+            <label className="mb-1.5 block text-[12px] text-slate-500">
+              审批理由 <span className="text-red-500">*</span>
             </label>
             <textarea
               value={reason}
@@ -224,15 +239,14 @@ export default function ApprovalsPage() {
               rows={3}
               autoFocus
               placeholder={deciding.approve ? '例如：已核对 SQL 仅更新目标行' : '例如：参数范围超出预期，驳回重发'}
-              className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-[13px] outline-none transition-shadow focus:border-accent"
-              style={{ boxShadow: 'var(--shadow-input, none)' }}
+              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-700 outline-none transition-colors focus:border-violet-400"
             />
 
             <div className="mt-4 flex justify-end gap-2">
               <button
                 onClick={() => setDeciding(null)}
                 disabled={submitting}
-                className="rounded-lg border border-black/10 px-4 py-2 text-[13px] text-text-secondary transition-colors hover:bg-black/[0.03] disabled:opacity-60"
+                className="rounded-lg border border-slate-200 px-4 py-2 text-[13px] text-slate-500 transition-colors hover:bg-slate-50 disabled:opacity-60"
               >
                 取消
               </button>
@@ -240,7 +254,7 @@ export default function ApprovalsPage() {
                 onClick={submitDecision}
                 disabled={submitting || !reason.trim()}
                 className="rounded-lg px-4 py-2 text-[13px] font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                style={{ background: deciding.approve ? '#2F7D32' : '#B91C1C' }}
+                style={{ background: deciding.approve ? '#047857' : '#dc2626' }}
               >
                 {submitting ? '提交中…' : deciding.approve ? '确认批准' : '确认驳回'}
               </button>
@@ -264,18 +278,18 @@ function FragmentRow(props: {
   const { req, open, st, onToggle, onDecide, showActions } = props
   return (
     <>
-      <tr className="border-b border-black/[0.04] transition-colors hover:bg-black/[0.02]">
+      <tr className="transition-colors hover:bg-slate-50/60">
         <td className="px-4 py-3">
-          <button onClick={onToggle} className="flex items-center gap-1.5 text-left font-medium text-text-primary hover:text-accent">
+          <button onClick={onToggle} className="flex items-center gap-1.5 text-left font-medium text-slate-800 hover:text-violet-600">
             {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
             {req.tool_name}.{req.action}
           </button>
         </td>
-        <td className="max-w-[320px] truncate px-4 py-3 text-text-secondary" title={summarize(req)}>
+        <td className="max-w-[320px] truncate px-4 py-3 text-slate-500" title={summarize(req)}>
           {summarize(req) || '—'}
         </td>
-        <td className="px-4 py-3 text-text-secondary">{req.user_id || 'unknown'}</td>
-        <td className="px-4 py-3 text-text-muted">{fmtTime(req.created_at)}</td>
+        <td className="px-4 py-3 text-slate-500">{req.user_id || 'unknown'}</td>
+        <td className="px-4 py-3 text-slate-400">{fmtTime(req.created_at)}</td>
         <td className="px-4 py-3">
           <span className="rounded-full px-2 py-0.5 text-[11px]" style={{ color: st.text, background: st.bg }}>
             {TABS.find((t) => t.key === req.status)?.label ?? req.status}
@@ -286,38 +300,36 @@ function FragmentRow(props: {
             <span className="inline-flex gap-1.5">
               <button
                 onClick={() => onDecide(true)}
-                className="rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors"
-                style={{ background: '#E8F3E9', color: '#2F7D32' }}
+                className="rounded-md bg-emerald-50 px-2.5 py-1 text-[12px] font-medium text-emerald-700 transition-colors hover:bg-emerald-100"
               >
                 批准
               </button>
               <button
                 onClick={() => onDecide(false)}
-                className="rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors"
-                style={{ background: '#FCEBEB', color: '#791F1F' }}
+                className="rounded-md bg-red-50 px-2.5 py-1 text-[12px] font-medium text-red-700 transition-colors hover:bg-red-100"
               >
                 驳回
               </button>
             </span>
           ) : (
-            <span className="text-[12px] text-text-muted">
+            <span className="text-[12px] text-slate-400">
               {req.reviewer ? `${req.reviewer} · ${fmtTime(req.decided_at)}` : '—'}
             </span>
           )}
         </td>
       </tr>
       {open && (
-        <tr className="border-b border-black/[0.04]" style={{ background: '#fafbfc' }}>
+        <tr className="bg-slate-50/80">
           <td colSpan={6} className="px-4 py-3">
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
               <div>
-                <div className="mb-1 text-[11px] font-medium text-text-muted">调用参数</div>
-                <pre className="max-h-56 overflow-auto rounded-lg bg-white p-3 text-[12px] leading-relaxed" style={{ border: '1px solid var(--border-subtle)' }}>
+                <div className="mb-1 text-[11px] font-medium text-slate-400">调用参数</div>
+                <pre className="max-h-56 overflow-auto rounded-lg border border-slate-200 bg-white p-3 text-[12px] leading-relaxed text-slate-700">
                   {JSON.stringify(req.detail ?? {}, null, 2)}
                 </pre>
               </div>
-              <div className="text-[12px] leading-relaxed text-text-secondary">
-                <div className="mb-1 text-[11px] font-medium text-text-muted">审批信息</div>
+              <div className="text-[12px] leading-relaxed text-slate-500">
+                <div className="mb-1 text-[11px] font-medium text-slate-400">审批信息</div>
                 <div>单号：<span className="font-mono">{req.id}</span></div>
                 <div>指纹：<span className="break-all font-mono text-[11px]">{req.fingerprint}</span></div>
                 <div>批准后 TTL 内重试相同操作即可执行；驳回后同指纹再次触发会新建审批单。</div>

@@ -36,23 +36,13 @@ const COMPONENT_OPTIONS = [
 ];
 
 type MetricMode = "tokens" | "cost";
-type CurrencyMode = "usd" | "cny";
-
-const USD_CNY = 7.25;
-
 function formatNum(n: number | undefined | null): string {
   return (n ?? 0).toLocaleString("zh-CN");
 }
 
-function formatCost(n: number | undefined | null, currency: CurrencyMode = "usd"): string {
+function formatCost(n: number | undefined | null): string {
   const usd = n ?? 0;
-  if (currency === "cny") {
-    const v = usd * USD_CNY;
-    if (v > 0 && v < 0.01) return `¥${v.toFixed(4)}`;
-    return `¥${v.toFixed(2)}`;
-  }
-  if (usd > 0 && usd < 0.01) return `$${usd.toFixed(6)}`;
-  return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(2)}`;
 }
 
 function compact(n: number): string {
@@ -70,7 +60,6 @@ export default function TokensPage() {
   const [days, setDays] = useState(7);
   const [component, setComponent] = useState("all");
   const [metric, setMetric] = useState<MetricMode>("tokens");
-  const [currency, setCurrency] = useState<CurrencyMode>("usd");
 
   // ── 调用明细 ─
   const [calls, setCalls] = useState<TokenCallRow[]>([]);
@@ -134,7 +123,7 @@ export default function TokensPage() {
     { icon: <Coins size={16} />, label: "总 Token", value: formatNum(totals?.total_tokens), sub: `${formatNum(totals?.calls)} 次 LLM 调用` },
     { icon: <ArrowDownToLine size={16} />, label: "输入 Token", value: formatNum(totals?.prompt_tokens), sub: hasCached ? `含缓存命中 ${formatNum(totals?.cached_tokens)}` : "prompt" },
     { icon: <ArrowUpFromLine size={16} />, label: "输出 Token", value: formatNum(totals?.completion_tokens), sub: hasReasoning ? `含推理 ${formatNum(totals?.reasoning_tokens)}` : "completion" },
-    { icon: <Wallet size={16} />, label: "预估成本", value: formatCost(totals?.cost_usd, currency), sub: currency === "cny" ? "按模型单价估算 (¥)" : "按模型单价估算" },
+    { icon: <Wallet size={16} />, label: "预估成本", value: formatCost(totals?.cost_usd), sub: "按后端生效价格表计费" },
     { icon: <Hash size={16} />, label: "请求轮次", value: formatNum(totals?.requests), sub: "按 trace 去重" },
   ];
 
@@ -179,25 +168,6 @@ export default function TokensPage() {
                   {opt.label}
                 </button>
               ))}
-            </div>
-            {/* 货币切换 */}
-            <div className="flex rounded-lg border border-slate-200 bg-white overflow-hidden">
-              <button
-                onClick={() => setCurrency("usd")}
-                className={`px-2.5 py-1.5 text-xs transition-colors ${
-                  currency === "usd" ? "bg-accent text-white" : "text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                $ USD
-              </button>
-              <button
-                onClick={() => setCurrency("cny")}
-                className={`px-2.5 py-1.5 text-xs transition-colors ${
-                  currency === "cny" ? "bg-accent text-white" : "text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                ¥ CNY
-              </button>
             </div>
             <button
               onClick={() => load(days, component)}
@@ -254,7 +224,7 @@ export default function TokensPage() {
               暂无数据 — 发起对话后这里会展示每日趋势
             </div>
           ) : (
-            <TokenCharts data={chartData} metric={metric} currency={currency} />
+            <TokenCharts data={chartData} metric={metric} />
           )}
         </div>
 
@@ -301,7 +271,7 @@ export default function TokensPage() {
                       <td className="px-4 py-2.5 text-right font-mono tabular-nums font-medium">{formatNum(m.total_tokens)}</td>
                       {hasCached && <td className="px-4 py-2.5 text-right font-mono tabular-nums text-emerald-600">{formatNum(m.cached_tokens)}</td>}
                       {hasReasoning && <td className="px-4 py-2.5 text-right font-mono tabular-nums text-violet-600">{formatNum(m.reasoning_tokens)}</td>}
-                      <td className="px-4 py-2.5 text-right font-mono tabular-nums">{formatCost(m.cost_usd, currency)}</td>
+                      <td className="px-4 py-2.5 text-right font-mono tabular-nums">{formatCost(m.cost_usd)}</td>
                     </tr>
                   ))
                 )}
@@ -402,7 +372,7 @@ export default function TokensPage() {
                           <td className="px-4 py-2 text-right font-mono tabular-nums font-medium">{formatNum(c.total_tokens)}</td>
                           {hasCached && <td className="px-4 py-2 text-right font-mono tabular-nums text-emerald-600">{formatNum(c.cached_tokens)}</td>}
                           {hasReasoning && <td className="px-4 py-2 text-right font-mono tabular-nums text-violet-600">{formatNum(c.reasoning_tokens)}</td>}
-                          <td className="px-4 py-2 text-right font-mono tabular-nums">{formatCost(c.cost_usd, currency)}</td>
+                          <td className="px-4 py-2 text-right font-mono tabular-nums">{formatCost(c.cost_usd)}</td>
                           <td className="px-4 py-2 text-right font-mono tabular-nums text-slate-500">
                             {c.duration_ms ? `${(c.duration_ms / 1000).toFixed(1)}s` : "-"}
                           </td>
@@ -454,7 +424,7 @@ export default function TokensPage() {
         </div>
 
         <p className="mt-4 text-[11px] text-slate-400">
-          成本按 <code className="font-mono">AVAILABLE_MODELS</code> 单价表估算{currency === "cny" ? `（汇率 $1 = ¥${USD_CNY}）` : ""}，未登记单价的模型计为 {currency === "cny" ? "¥0" : "$0"}；
+          成本由后端价格治理表按 USD 计算并返回，页面仅负责展示；未登记生效价格时不会伪造成本。
           缓存命中 / 推理 Token 取决于上游 API 是否返回对应明细。
         </p>
       </div>

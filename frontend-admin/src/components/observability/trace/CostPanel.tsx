@@ -39,9 +39,7 @@ export default function CostPanel({ trace }: Props) {
         {collected ? (
           <>
             <p className="font-mono text-xl font-bold text-emerald-600">{formatCost(totalUsd)}</p>
-            <p className="text-[10px] text-slate-400 mt-0.5">
-              ≈ {Math.round(totalUsd * 7.25 * 100) / 100} CNY
-            </p>
+            <p className="text-[10px] text-slate-400 mt-0.5">后端价格表权威值</p>
           </>
         ) : (
           <p className="text-xs text-slate-400 mt-1" title="llm_usage 明细缺失，无法计算本次调用成本">未采集</p>

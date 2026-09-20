@@ -10,9 +10,9 @@ import { useState, useRef, useEffect, KeyboardEvent } from 'react'
 import { getSelectedDepartment, setSelectedDepartment } from '@/lib/department'
 import ComposerToolbar from '@/components/agent/ComposerToolbar'
 
-interface Props { onSend: (text: string) => void; isLoading: boolean }
+interface Props { onSend: (text: string) => void; isLoading: boolean; budgetBlocked?: boolean }
 
-export default function ChatInput({ onSend, isLoading }: Props) {
+export default function ChatInput({ onSend, isLoading, budgetBlocked = false }: Props) {
   const [input, setInput] = useState('')
   const [department, setDepartment] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -34,7 +34,7 @@ export default function ChatInput({ onSend, isLoading }: Props) {
 
   function handleSend() {
     const trimmed = input.trim()
-    if (!trimmed || isLoading) return
+    if (!trimmed || isLoading || budgetBlocked) return
     setInput(''); onSend(trimmed)
   }
 
@@ -57,7 +57,7 @@ export default function ChatInput({ onSend, isLoading }: Props) {
             onKeyDown={handleKeyDown}
             placeholder="描述你要完成的任务…"
             rows={1}
-            disabled={isLoading}
+            disabled={isLoading || budgetBlocked}
             className="w-full bg-transparent resize-none outline-none text-sm text-text-primary
               placeholder:text-text-muted max-h-[200px] disabled:opacity-40 leading-relaxed"
           />
@@ -66,11 +66,12 @@ export default function ChatInput({ onSend, isLoading }: Props) {
           <ComposerToolbar
             department={department}
             onDepartmentChange={handleDepartmentChange}
-            disabled={isLoading}
-            canSend={Boolean(input.trim()) && !isLoading}
+            disabled={isLoading || budgetBlocked}
+            canSend={Boolean(input.trim()) && !isLoading && !budgetBlocked}
             onSend={handleSend}
           />
         </div>
+        {budgetBlocked && <p className="mt-2 text-center text-[11px] text-red-600">硬额度已达到上限，发送和写操作暂时不可用；历史与只读页面仍可访问。</p>}
         <p className="text-[10px] text-text-muted text-center mt-2.5 select-none">
           Agent AI &middot; 答案由 AI 生成，请核实关键信息
         </p>

@@ -51,6 +51,152 @@ export class ApiError extends Error {
   }
 }
 
+function readableErrorDetail(value: unknown): string | undefined {
+  if (typeof value === "string") return value.trim() || undefined;
+  if (Array.isArray(value)) {
+    const messages = value.map((item) => {
+      if (typeof item === "string") return item.trim();
+      if (!item || typeof item !== "object") return "";
+      const record = item as Record<string, unknown>;
+      const message = [record.msg, record.message, record.error]
+        .find((candidate): candidate is string => typeof candidate === "string" && Boolean(candidate.trim()));
+      if (!message) return "";
+      const location = Array.isArray(record.loc)
+        ? record.loc.filter((part) => typeof part === "string" || typeof part === "number").join(".")
+        : typeof record.loc === "string" ? record.loc : "";
+      return location ? `${location}：${message}` : message;
+    }).filter(Boolean);
+    return messages.length ? messages.join("；") : undefined;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return [record.message, record.error, record.msg]
+      .find((candidate): candidate is string => typeof candidate === "string" && Boolean(candidate.trim()));
+  }
+  return undefined;
+}
+
+/** 将 HTTP/SSE 的统一错误封套转成同一个 ApiError。 */
+export function apiErrorFromEnvelope(payload: unknown, status = 0): ApiError {
+  const body = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  const detail = "detail" in body ? body.detail : payload;
+  const message = readableErrorDetail(detail) || readableErrorDetail(body) || "操作失败，请稍后重试";
+  const detailObject = detail && typeof detail === "object" ? detail as Record<string, unknown> : undefined;
+  const code = typeof detailObject?.code === "string" ? detailObject.code : undefined;
+  return new ApiError(message, status, detail, code);
+}
+
+export interface MutationRequestOptions extends Omit<RequestOptions, "body" | "method"> {
+  /** 逻辑写操作名；同一操作在途时共享请求和幂等键。 */
+  operation: string;
+  body?: unknown;
+  method?: string;
+  /** 恢复原操作时显式复用服务端返回的键。 */
+  idempotencyKey?: string;
+}
+
+const mutationInFlight = new Map<string, Promise<unknown>>();
+const mutationRawInFlight = new Map<string, Promise<Response>>();
+
+function stableSerialize(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`).join(",")}}`;
+}
+
+export function createIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `idem-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
+}
+
+export interface MutationFetchRawOptions extends RequestInit {
+  /** 逻辑写操作名；同一操作在途时共享请求与幂等键。 */
+  operation: string;
+  /** 恢复原操作时显式复用服务端返回的键。 */
+  idempotencyKey?: string;
+  /** FormData 等无法安全序列化的请求体使用显式去重指纹。 */
+  dedupeKey?: string;
+  /** 目标后端，默认 core。 */
+  backend?: BackendId;
+}
+
+/**
+ * 统一原始响应写请求：支持 FormData/SSE 前置请求，并保留 401 刷新语义。
+ * 每个调用方拿到独立 Response 副本，避免并发调用共同消费同一个 body 流。
+ */
+export async function mutationFetchRaw(
+  path: string,
+  options: MutationFetchRawOptions,
+): Promise<Response> {
+  const {
+    operation,
+    idempotencyKey: requestedKey,
+    dedupeKey,
+    backend = "core",
+    ...init
+  } = options;
+  const method = (init.method ?? "POST").toUpperCase();
+  if (method === "GET" || method === "HEAD") {
+    throw new TypeError("mutationFetchRaw 只允许写方法");
+  }
+  const bodyFingerprint = dedupeKey ?? (
+    typeof init.body === "string" ? init.body : ""
+  );
+  const fingerprint = `${operation}:${method}:${path}:${bodyFingerprint}`;
+  const existing = mutationRawInFlight.get(fingerprint);
+  if (existing) return existing.then((response) => response.clone());
+
+  const idempotencyKey = requestedKey ?? createIdempotencyKey();
+  const headers = Object.fromEntries(new Headers(init.headers).entries());
+  const promise = fetchRaw(path, {
+    ...init,
+    method,
+    headers: {
+      ...headers,
+      "Idempotency-Key": idempotencyKey,
+    },
+  }, backend).finally(() => {
+    if (mutationRawInFlight.get(fingerprint) === promise) {
+      mutationRawInFlight.delete(fingerprint);
+    }
+  });
+  mutationRawInFlight.set(fingerprint, promise);
+  return promise.then((response) => response.clone());
+}
+
+/** 管理端写操作的单飞去重与幂等键注入。 */
+export async function mutationRequest<T = unknown>(
+  path: string,
+  options: MutationRequestOptions,
+): Promise<T> {
+  const method = (options.method ?? "POST").toUpperCase();
+  if (method === "GET" || method === "HEAD") throw new TypeError("mutationRequest 只允许写方法");
+  const bodyText = typeof options.body === "string"
+    ? options.body
+    : options.body === undefined ? undefined : JSON.stringify(options.body);
+  const fingerprint = `${options.operation}:${method}:${path}:${stableSerialize(options.body ?? null)}`;
+  const existing = mutationInFlight.get(fingerprint);
+  if (existing) return existing as Promise<T>;
+  const idempotencyKey = options.idempotencyKey ?? createIdempotencyKey();
+  const { operation: _operation, idempotencyKey: _key, body: _body, ...requestOptions } = options;
+  const mutationHeaders = Object.fromEntries(new Headers(requestOptions.headers).entries());
+  let promise: Promise<T>;
+  promise = request<T>(path, {
+    ...requestOptions,
+    method,
+    body: bodyText,
+    headers: {
+      ...mutationHeaders,
+      "Idempotency-Key": idempotencyKey,
+    },
+  } as RequestOptions).finally(() => {
+    if (mutationInFlight.get(fingerprint) === promise) mutationInFlight.delete(fingerprint);
+  });
+  mutationInFlight.set(fingerprint, promise);
+  return promise;
+}
+
 /**
  * 从响应体里尽力取出业务错误码（P0-1b）。
  *
@@ -121,7 +267,7 @@ function buildHeaders(init?: RequestInit): Record<string, string> {
   // 旧变量 NEXT_PUBLIC_API_KEY 已废弃，请勿在此引用（会重新泄漏进 bundle）。
   return {
     ...bearerHeaders(),
-    ...((init?.headers as Record<string, string>) || {}),
+    ...Object.fromEntries(new Headers(init?.headers).entries()),
   };
 }
 
@@ -223,18 +369,20 @@ export async function request<T = unknown>(
       }
       // 后端 FastAPI 习惯：detail 字段含错误信息
       const detail = (data as Record<string, unknown>)?.detail;
+      const payload = data && typeof data === "object"
+        && (["retryable", "handoff_available", "trace_id", "source", "details"] as const)
+          .some((key) => key in (data as Record<string, unknown>))
+        ? data
+        : detail;
       const message =
-        (typeof detail === "string" && detail) ||
-        (typeof detail === "object" &&
-          detail &&
-          ((detail as Record<string, string>).error ||
-            (detail as Record<string, string>).message)) ||
+        readableErrorDetail(detail) ||
+        readableErrorDetail(data) ||
         res.statusText ||
         `HTTP ${res.status}`;
       throw new ApiError(
         String(message),
         res.status,
-        detail,
+        payload,
         extractErrorCode(data),
       );
     }

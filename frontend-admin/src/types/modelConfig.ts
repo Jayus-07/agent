@@ -32,6 +32,8 @@ export interface RoleBinding {
   provider: string | null
   registered: boolean
   missingKeyEnv: string | null
+  available: boolean
+  availabilityReason: string | null
   requiresReindex: boolean
   updatedBy: string | null
   updatedAt: string | null
@@ -39,6 +41,28 @@ export interface RoleBinding {
 
 export type BillingMode = 'metered' | 'subscription' | 'local'
 export type NetworkScope = 'public' | 'private'
+export type ModelKind = 'chat' | 'embedding' | 'rerank' | 'vision' | 'speech'
+
+export function modelKindLabel(kind: ModelKind): string {
+  switch (kind) {
+    case 'embedding':
+      return '向量模型'
+    case 'rerank':
+      return '重排模型'
+    case 'vision':
+      return '视觉模型'
+    case 'speech':
+      return '语音模型'
+    default:
+      return '文本模型'
+  }
+}
+
+export function roleModelKind(role: string): ModelKind {
+  if (role === 'embedding') return 'embedding'
+  if (role === 'rerank') return 'rerank'
+  return 'chat'
+}
 
 export type ProbeGrade = 'L0' | 'L1' | 'L2' | 'L3'
 export type ProbeStatus = 'pass' | 'fail' | 'skip' | 'fail_degraded'
@@ -58,13 +82,23 @@ export interface ProbeResult {
   steps: ProbeStep[]
   /** 如「可能缺少 /v1 后缀」 */
   suggestion?: string
+  /** 后端返回的整体结论；失败时优先展示它，不能只显示「卡在 L2」。 */
+  summary?: string
+  blocked_at?: ProbeGrade | null
 }
 
 export interface ProviderRow {
   id: string
   displayName: string
-  driver: 'openai' | 'anthropic' | 'ollama'
+  driver: 'openai' | 'anthropic' | 'ollama' | 'specialized'
   baseUrl: string
+  modelName?: string | null
+  modelKind?: ModelKind
+  models?: Array<{
+    name: string
+    display?: string
+    modelKind: ModelKind
+  }>
   networkScope: NetworkScope
   billing: BillingMode
   isBuiltin: boolean
@@ -83,6 +117,90 @@ export interface ProviderRow {
     ok: boolean
     worstGrade: ProbeGrade | null
   } | null
+}
+
+export type SpecializedRole = 'embedding' | 'rerank'
+
+export interface SpecializedProbeItem {
+  role: SpecializedRole
+  adapter: string
+  ok: boolean
+  statusCode?: number | null
+  summary: string
+  detail: string
+  elapsedMs: number
+}
+
+export interface SpecializedModelBinding {
+  role: SpecializedRole
+  modelName: string
+  providerId: string
+  providerName: string
+  adapter: string
+  baseUrl: string
+  options: Record<string, unknown>
+  enabled: boolean
+  credential: {
+    configured: boolean
+    fingerprint?: string | null
+    last4?: string | null
+  }
+  lastProbe?: {
+    ok: boolean
+    summary?: string | null
+    elapsedMs?: number | null
+    at?: string | null
+  } | null
+  requiresReindex: boolean
+}
+
+export interface SpecializedModelResponse {
+  items: SpecializedModelBinding[]
+  adapters: string[]
+  /** 专项供应商的根地址；向量 / 重排端点地址单独保存在各 binding 中。 */
+  providerBaseUrl?: string
+  source: 'db' | 'fallback'
+}
+
+export interface SpecializedModelConfigureInput {
+  provider: {
+    displayName: string
+    providerId?: string
+    baseUrl: string
+    apiKey?: string
+    networkScope?: NetworkScope
+    billing?: BillingMode
+  }
+  bindings: Partial<Record<SpecializedRole, {
+    modelName: string
+    adapter: string
+    baseUrl: string
+    options?: Record<string, unknown>
+  }>>
+}
+
+export interface SpecializedConfigureResponse {
+  ok: boolean
+  saved: boolean
+  summary?: string
+  provider?: {
+    id: string
+    displayName: string
+    driver: 'specialized'
+    baseUrl: string
+    credential: {
+      configured: boolean
+      fingerprint?: string | null
+      last4?: string | null
+    }
+  }
+  tests: SpecializedProbeItem[]
+  bindings?: Array<{
+    role: SpecializedRole
+    modelName: string
+    adapter: string
+    requiresReindex: boolean
+  }>
 }
 
 /** 供应商清单响应（`GET /sys/providers`，裸 dict 无 Result 壳） */
@@ -120,6 +238,13 @@ export const ROLE_LABELS: Record<string, string> = {
   eval_gen: '评测生成模型',
 }
 
+/** 使用专项适配器的角色；角色绑定编辑仍统一从已登记模型目录选择。 */
+export const SPECIALIZED_MODEL_ROLES = new Set(['ocr', 'embedding', 'rerank'])
+
+export function isSpecializedModelRole(role: string): boolean {
+  return SPECIALIZED_MODEL_ROLES.has(role)
+}
+
 export function roleLabel(role: string): string {
   return ROLE_LABELS[role] ?? role
 }
@@ -150,13 +275,13 @@ export function sourceLabel(
   }
 }
 
-/** 密钥掩码：`····a1b2 · 指纹 3f9c1d`。两侧都缺时返回空串（调用方渲染「未配置」）。 */
+/** 密钥掩码：`****a1b2 · 指纹 3f9c1d`。两侧都缺时返回空串。 */
 export function maskSecret(
   last4: string | null | undefined,
   fingerprint: string | null | undefined,
 ): string {
   const parts: string[] = []
-  if (last4) parts.push(`····${last4}`)
+  if (last4) parts.push(`****${last4}`)
   if (fingerprint) parts.push(`指纹 ${fingerprint}`)
   return parts.join(' · ')
 }
@@ -166,10 +291,12 @@ export function maskSecret(
 export interface ModelOption {
   name: string
   provider: string | null
+  modelKind?: ModelKind
   /** 是否在可用模型清单内（后端 `get_available_models()` = 代码层 + DB 动态层） */
   registered: boolean
   /** 缺哪个 Key 环境名（如 `SILICONFLOW_API_KEY`）；null = 齐备 */
   missingKeyEnv: string | null
+  availabilityReason?: string | null
 }
 
 export interface SelectableVerdict {
@@ -184,12 +311,24 @@ export interface SelectableVerdict {
  * ⚠️ 不可选的模型**必须仍渲染为 `disabled` 的 option + 原因**，不能过滤掉 ——
  * 否则用户会问「我明明加了模型怎么找不到」（§6 原文）。
  */
-export function isModelSelectable(model: ModelOption | undefined): SelectableVerdict {
+export function isModelSelectable(
+  model: ModelOption | undefined,
+  expectedKind?: ModelKind,
+): SelectableVerdict {
   if (!model) {
     return { selectable: false, reason: '未注册' }
   }
   if (!model.registered) {
     return { selectable: false, reason: '未注册' }
+  }
+  if (expectedKind && model.modelKind && model.modelKind !== expectedKind) {
+    return {
+      selectable: false,
+      reason: `用途不匹配：需要${modelKindLabel(expectedKind)}，当前是${modelKindLabel(model.modelKind)}`,
+    }
+  }
+  if (model.availabilityReason) {
+    return { selectable: false, reason: model.availabilityReason }
   }
   if (model.missingKeyEnv) {
     return { selectable: false, reason: `缺少 ${model.missingKeyEnv}` }
@@ -254,6 +393,19 @@ export function probeFallbackSummary(grade: ProbeGrade, status: ProbeStatus): st
     default:
       return '未通过'
   }
+}
+
+/** 单级探测的最终展示文案：后端原文优先，缺失时按级别兜底。 */
+export function probeStepSummary(step: Pick<ProbeStep, 'grade' | 'status' | 'summary'>): string {
+  return step.summary.trim() || probeFallbackSummary(step.grade, step.status)
+}
+
+/** 失败探测的可读原因，供表格、toast 等入口共用。 */
+export function probeFailureReason(result: Pick<ProbeResult, 'ok' | 'steps' | 'summary'>): string {
+  if (result.ok) return ''
+  if (result.summary?.trim()) return result.summary.trim()
+  const failed = result.steps.find((step) => step.status === 'fail')
+  return failed ? probeStepSummary(failed) : '探测未通过'
 }
 
 /** 结论一句话（§8.2）：通过 / 未通过（卡在哪一级）。短路级 = 第一个 `fail`。 */

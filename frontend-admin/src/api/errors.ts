@@ -217,6 +217,38 @@ export interface ResolvedError extends ErrorDescriptor {
   status?: number;
   /** 原始错误，供上报 / 日志使用；**不要**直接渲染给用户 */
   cause: unknown;
+  /** 后端协议字段；retryable 与旧字段 retriable 同时保留兼容。 */
+  retryable: boolean;
+  handoffAvailable: boolean;
+  traceId?: string;
+  source?: string;
+  details?: Record<string, unknown>;
+}
+
+function protocolPayload(err: unknown): Record<string, unknown> {
+  if (!err || typeof err !== "object") return {};
+  const detail = (err as { detail?: unknown }).detail;
+  if (detail && typeof detail === "object") return detail as Record<string, unknown>;
+  return err as Record<string, unknown>;
+}
+
+function resolveDescriptor(descriptor: ErrorDescriptor, err: unknown, code?: string, status?: number): ResolvedError {
+  const payload = protocolPayload(err);
+  const retryable = typeof payload.retryable === "boolean" ? payload.retryable : descriptor.retriable;
+  return {
+    ...descriptor,
+    retriable: retryable,
+    retryable,
+    code,
+    status,
+    handoffAvailable: payload.handoff_available === true,
+    traceId: typeof payload.trace_id === "string" ? payload.trace_id : undefined,
+    source: typeof payload.source === "string" ? payload.source : undefined,
+    details: payload.details && typeof payload.details === "object"
+      ? payload.details as Record<string, unknown>
+      : undefined,
+    cause: err,
+  };
 }
 
 /**
@@ -231,53 +263,38 @@ export function describeApiError(err: unknown): ResolvedError {
   // ① 已登记的码优先（登记表刻意为空时直接落到后面）
   if (isDomainErrorCode(code)) {
     const hit = domainIndex[code];
-    if (hit) return { ...hit, code, status, cause: err };
+    if (hit) return resolveDescriptor(hit, err, code, status);
   }
   if (isClientErrorCode(code)) {
-    return { ...CLIENT_ERRORS[code], code, status, cause: err };
+    return resolveDescriptor(CLIENT_ERRORS[code], err, code, status);
   }
   if (isProtocolErrorCode(code)) {
-    return { ...PROTOCOL_ERRORS[code], code, status, cause: err };
+    return resolveDescriptor(PROTOCOL_ERRORS[code], err, code, status);
   }
 
   // ② 客户端自身异常（顺序：超时 → 取消 → 网络不可达）
   if (isTimeoutError(err)) {
-    return {
-      ...CLIENT_ERRORS[CLIENT_ERROR_CODES.TIMEOUT],
-      code: CLIENT_ERROR_CODES.TIMEOUT,
-      status,
-      cause: err,
-    };
+    return resolveDescriptor(CLIENT_ERRORS[CLIENT_ERROR_CODES.TIMEOUT], err, CLIENT_ERROR_CODES.TIMEOUT, status);
   }
   if (isCanceledError(err)) {
-    return {
-      ...CLIENT_ERRORS[CLIENT_ERROR_CODES.CANCELED],
-      code: CLIENT_ERROR_CODES.CANCELED,
-      status,
-      cause: err,
-    };
+    return resolveDescriptor(CLIENT_ERRORS[CLIENT_ERROR_CODES.CANCELED], err, CLIENT_ERROR_CODES.CANCELED, status);
   }
   if (err instanceof TypeError) {
     // fetch 在网络不可达时抛 TypeError（如 "Failed to fetch"）
-    return {
-      ...CLIENT_ERRORS[CLIENT_ERROR_CODES.NETWORK],
-      code: CLIENT_ERROR_CODES.NETWORK,
-      status,
-      cause: err,
-    };
+    return resolveDescriptor(CLIENT_ERRORS[CLIENT_ERROR_CODES.NETWORK], err, CLIENT_ERROR_CODES.NETWORK, status);
   }
 
   // ③ 按 HTTP 状态兜底
   if (status !== undefined) {
     const exact = FALLBACK_BY_STATUS[status];
-    if (exact) return { ...exact, code, status, cause: err };
+    if (exact) return resolveDescriptor(exact, err, code, status);
     // 未登记的具体状态码 → 按大类兜底，避免落到"未知"
-    if (status >= 500) return { ...FALLBACK_BY_STATUS[500], code, status, cause: err };
-    if (status >= 400) return { ...FALLBACK_BY_STATUS[400], code, status, cause: err };
+    if (status >= 500) return resolveDescriptor(FALLBACK_BY_STATUS[500], err, code, status);
+    if (status >= 400) return resolveDescriptor(FALLBACK_BY_STATUS[400], err, code, status);
   }
 
   // ④ 全兜底
-  return { ...UNKNOWN_ERROR, code, status, cause: err };
+  return resolveDescriptor(UNKNOWN_ERROR, err, code, status);
 }
 
 /**

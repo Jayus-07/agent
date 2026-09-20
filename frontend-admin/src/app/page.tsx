@@ -13,7 +13,7 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import {
   Activity, AlertTriangle, CheckCircle2, ChevronRight, Clock,
-  Database, ShieldCheck, Sparkles, TrendingUp, XCircle,
+  Database, ShieldCheck, Sparkles, TrendingUp, XCircle, WalletCards, MessageSquareText,
 } from 'lucide-react'
 import { getTokensSummary, getTraceStats, type TokensSummary } from '@/api/observability'
 import { evaluationService } from '@/api/evaluation'
@@ -21,6 +21,10 @@ import { approvalService } from '@/api/approvals'
 import { competitorService } from '@/api/competitor'
 import { selectionDecisionApi } from '@/api/selectionDecision'
 import { fetchRaw } from '@/api/client'
+import { getBudgetSummary } from '@/api/budgets'
+import { listPriceVersions } from '@/api/modelPrices'
+import { listFeedbackCandidates } from '@/api/feedbackCandidates'
+import { atLeast } from '@/lib/auth'
 
 type Loadable<T> = { state: 'loading' | 'ok' | 'error'; data: T | null }
 
@@ -179,6 +183,13 @@ export default function AdminDashboard() {
     return { failed: tasks.filter((t) => t.status === 'failed').length, total: tasks.length }
   })
 
+  const budget = useAsync(getBudgetSummary)
+  const prices = useAsync(listPriceVersions)
+  const feedback = useAsync(async () => {
+    if (!atLeast('admin')) return { items: [] }
+    return listFeedbackCandidates('pending')
+  })
+
   const daily = tokens.data?.daily ?? []
   const today = daily[daily.length - 1]
   const ragOk = health.data?.rag?.status ? health.data.rag.status !== 'error' : null
@@ -202,7 +213,7 @@ export default function AdminDashboard() {
       </div>
 
       {/* 系统状态 + 用量 */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
         <StatCard
           icon={<Activity size={14} />}
           title="服务状态"
@@ -250,6 +261,22 @@ export default function AdminDashboard() {
           }
           href="/observability/traces"
         />
+        <StatCard
+          icon={<WalletCards size={14} />}
+          title="预算阻断"
+          state={budget.state}
+          value={fmtInt(budget.data?.blocked_subjects)}
+          sub={budget.data ? `价格覆盖率 ${fmtPct(budget.data.price_coverage_ratio)}` : undefined}
+          href="/cost-governance/budgets"
+        />
+        <StatCard
+          icon={<MessageSquareText size={14} />}
+          title="待反馈候选"
+          state={feedback.state}
+          value={fmtInt(feedback.data?.items.length)}
+          sub={atLeast('admin') ? '待审核后才能进入评测集' : '管理员可查看'}
+          href="/evaluations/feedback"
+        />
       </div>
 
       {/* 待办 + 业务概览 两栏 */}
@@ -264,6 +291,31 @@ export default function AdminDashboard() {
             error={approvals.state === 'error'}
             href="/approvals"
             tone="danger"
+          />
+          <TodoRow
+            icon={<WalletCards size={16} />}
+            title="预算已达上限主体"
+            count={budget.state === 'ok' ? budget.data?.blocked_subjects ?? 0 : null}
+            loading={budget.state === 'loading'}
+            error={budget.state === 'error'}
+            href="/cost-governance/budgets"
+            tone="danger"
+          />
+          <TodoRow
+            icon={<AlertTriangle size={16} />}
+            title="价格缺口或待审核版本"
+            count={prices.state === 'ok' ? (budget.data && budget.data.price_coverage_ratio < 1 ? 1 : (prices.data?.items.filter((item) => item.status === 'pending' || item.status === 'reviewed_1').length ?? 0)) : null}
+            loading={prices.state === 'loading' || budget.state === 'loading'}
+            error={prices.state === 'error' || budget.state === 'error'}
+            href="/cost-governance/prices"
+          />
+          <TodoRow
+            icon={<MessageSquareText size={16} />}
+            title="待审核反馈候选"
+            count={feedback.state === 'ok' ? feedback.data?.items.length ?? 0 : null}
+            loading={feedback.state === 'loading'}
+            error={feedback.state === 'error'}
+            href="/evaluations/feedback"
           />
           <TodoRow
             icon={<Database size={16} />}

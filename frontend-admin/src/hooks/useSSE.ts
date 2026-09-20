@@ -3,6 +3,7 @@
 import { useCallback } from 'react'
 import { useChatStore } from '@/store/chat'
 import { streamChat, abortChat } from '@/api/chat'
+import { apiErrorFromEnvelope } from '@/api/client'
 import { invalidateSessionsCache } from '@/lib/sessions-cache'
 import { getSelectedDepartment } from '@/lib/department'
 import { nanoid } from 'nanoid'
@@ -14,7 +15,12 @@ let activeController: AbortController | null = null
 export function useSSE() {
   /** 执行一轮流式请求：重置流状态 → assistant 占位 → 消费 SSE 事件。
    *  不追加 user 消息——消息编排由调用方决定（send 先追加提问，regenerate 复用已有提问）。 */
-  const runStream = useCallback(async (question: string, sessionId: string) => {
+  const runStream = useCallback(async (
+    question: string,
+    sessionId: string,
+    // 会话级模型覆盖（B.9 决策②）；null / 缺省 = 走后端全局默认
+    modelOverride?: string | null,
+  ) => {
     // Abort any previous in-flight stream
     activeController?.abort()
     const controller = new AbortController()
@@ -37,7 +43,10 @@ export function useSSE() {
     try {
       for await (const evt of streamChat(
         { question, session_id: sessionId, request_id: requestId,
-          department: getSelectedDepartment() || undefined },
+          department: getSelectedDepartment() || undefined,
+          idempotency_key: requestId,
+          // 会话级模型覆盖：只有本次会话显式选过模型才带，否则用后端全局默认
+          model: modelOverride || undefined },
         controller.signal,
       )) {
         if (controller.signal.aborted) return
@@ -56,6 +65,7 @@ export function useSSE() {
 
         // error 事件 → 立即持久化到消息内容
         if (evt.event === 'error') {
+          setError(apiErrorFromEnvelope(evt.data))
           replaceLastAssistant(
             `## ${evt.data.message}`,
             sessionId,
@@ -83,6 +93,7 @@ export function useSSE() {
             evt.data.usage,
             finalState.thinkingText,
             finalState.thinkingSeconds ?? undefined,
+            evt.data.trace_id,
           )
           // 持久化由后端 end_turn 统一完成（finally 中 save_turn），
           // 前端不再调 /chat/messages 二次写入 —— 双写会让历史恢复时消息重复、
@@ -116,7 +127,7 @@ export function useSSE() {
 
   const startStream = useCallback(async (question: string, sessionId: string) => {
     useChatStore.getState().addMessage('user', question, sessionId)
-    await runStream(question, sessionId)
+    await runStream(question, sessionId, useChatStore.getState().sessionModel)
   }, [runStream])
 
   /** 重新生成最后一条回答：移除尾部 assistant 消息，用最近一条 user 提问重跑一轮。
@@ -138,7 +149,8 @@ export function useSSE() {
     if (!question) return
 
     store.removeLastAssistant(sessionId)
-    await runStream(question, sessionId)
+    // 重新生成沿用同一模型：否则「重新生成」会换模型，两次结果不可比（B.9）
+    await runStream(question, sessionId, store.sessionModel)
   }, [runStream])
 
   /** 停止生成：断开连接 + 发送中止信号 */

@@ -9,23 +9,14 @@ import type { TokenUsageDaily } from '@/api/observability'
 
 export type TokenChartRow = TokenUsageDaily & { label: string }
 export type MetricMode = 'tokens' | 'cost'
-export type CurrencyMode = 'usd' | 'cny'
-
-const USD_CNY = 7.25
 
 function formatNum(n: number | undefined | null): string {
   return (n ?? 0).toLocaleString('zh-CN')
 }
 
-function formatCost(n: number | undefined | null, currency: CurrencyMode = 'usd'): string {
+function formatCost(n: number | undefined | null): string {
   const usd = n ?? 0
-  if (currency === 'cny') {
-    const v = usd * USD_CNY
-    if (v > 0 && v < 0.01) return `¥${v.toFixed(4)}`
-    return `¥${v.toFixed(2)}`
-  }
-  if (usd > 0 && usd < 0.01) return `$${usd.toFixed(6)}`
-  return `$${usd.toFixed(4)}`
+  return `$${usd.toFixed(2)}`
 }
 
 function compact(n: number): string {
@@ -34,7 +25,7 @@ function compact(n: number): string {
   return String(n)
 }
 
-export default function TokenCharts({ data, metric, currency = 'usd' }: { data: TokenChartRow[]; metric: MetricMode; currency?: CurrencyMode }) {
+export default function TokenCharts({ data, metric }: { data: TokenChartRow[]; metric: MetricMode }) {
   if (metric === 'tokens') {
     return (
       <div className="h-64">
@@ -63,11 +54,11 @@ export default function TokenCharts({ data, metric, currency = 'usd' }: { data: 
           <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
           <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#94a3b8" />
           <YAxis
-            tickFormatter={(v: number) => currency === 'cny' ? `¥${compact(v * USD_CNY)}` : `$${compact(v)}`}
+            tickFormatter={(v: number) => `$${compact(v)}`}
             tick={{ fontSize: 11 }} stroke="#94a3b8"
           />
           <Tooltip
-            formatter={((v: unknown) => [formatCost(Number(v), currency), '成本']) as never}
+            formatter={((v: unknown) => [formatCost(Number(v)), '成本']) as never}
             labelFormatter={((l: unknown) => `日期 ${String(l)}`) as never}
           />
           <Line type="monotone" dataKey="cost_usd" stroke="#4D6BFE" strokeWidth={2} dot={{ r: 3 }} />

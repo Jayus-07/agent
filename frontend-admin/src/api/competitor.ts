@@ -5,7 +5,7 @@
  * 经 next.config.js rewrite 由 /api/competitor 代理）。
  */
 
-import { request } from '@/lib/fetcher'
+import { mutationRequest, request } from '@/api/client'
 
 const BASE = '/api/competitor'
 
@@ -156,34 +156,36 @@ export const competitorService = {
 
   /** 添加监控项 */
   addWatch: (params: AddWatchParams) =>
-    request<{ item: WatchItem; baseline: { price: number | null; currency: string; crawled_at: string } | null }>(
+    mutationRequest<{ item: WatchItem; baseline: { price: number | null; currency: string; crawled_at: string } | null }>(
       `${BASE}/watchlist`,
       {
+        operation: 'competitor.watchlist.add',
         method: 'POST',
-        body: JSON.stringify({
+        body: {
           url: params.url,
           name: params.name || '',
           platform: params.platform || 'auto',
           my_sku: params.my_sku || '',
           frequency: params.frequency || 'daily',
-        }),
+        },
       },
     ),
 
   /** 移除监控项 */
   removeWatch: (url: string) =>
-    request<{ removed: boolean; url: string }>(
+    mutationRequest<{ removed: boolean; url: string }>(
       `${BASE}/watchlist?url=${encodeURIComponent(url)}`,
-      { method: 'DELETE' },
+      { operation: 'competitor.watchlist.remove', method: 'DELETE' },
     ),
 
   /** 启用/停用监控项 */
   toggleWatch: (url: string, enabled: boolean) =>
-    request<{ item: WatchItem }>(
+    mutationRequest<{ item: WatchItem }>(
       `${BASE}/watchlist`,
       {
+        operation: 'competitor.watchlist.toggle',
         method: 'PATCH',
-        body: JSON.stringify({ url, enabled }),
+        body: { url, enabled },
       },
     ),
 
@@ -201,21 +203,24 @@ export const competitorService = {
 
   /** 立即分析竞品 */
   analyze: (url: string, useLlm = true) =>
-    request<{ result: string; url: string }>(
+    mutationRequest<{ result: string; url: string }>(
       `${BASE}/analyze`,
       {
+        operation: 'competitor.analyze',
         method: 'POST',
-        body: JSON.stringify({ url, use_llm: useLlm }),
+        body: { url, use_llm: useLlm },
         timeout: 120_000, // 抓取可能较慢
       },
     ),
 
   /** 全量巡检 */
   scanAll: () =>
-    request<{ report: string }>(
+    mutationRequest<{ report: string }>(
       `${BASE}/scan`,
       {
+        operation: 'competitor.scan',
         method: 'POST',
+        body: {},
         timeout: 300_000, // 多项巡检可能很慢
       },
     ),
@@ -226,59 +231,62 @@ export const competitorService = {
 
   /** 保存某平台 Cookie（立即生效，无需重启） */
   saveCookies: (cookies: string, platform: string) =>
-    request<{ saved: boolean; platform: string; length: number }>(
+    mutationRequest<{ saved: boolean; platform: string; length: number }>(
       `${BASE}/cookies`,
-      { method: 'POST', body: JSON.stringify({ cookies, platform }) },
+      { operation: 'competitor.cookies.save', method: 'POST', body: { cookies, platform } },
     ),
 
   /** 清除 Cookie（指定平台或全部） */
   clearCookies: (platform?: string) =>
-    request<{ cleared: boolean }>(
+    mutationRequest<{ cleared: boolean }>(
       `${BASE}/cookies${platform ? `?platform=${encodeURIComponent(platform)}` : ''}`,
-      { method: 'DELETE' },
+      { operation: 'competitor.cookies.clear', method: 'DELETE' },
     ),
 
   /** 测试 Cookie 是否生效 */
   testCookies: (url?: string) =>
-    request<CookieTestResult>(
+    mutationRequest<CookieTestResult>(
       `${BASE}/test-cookies`,
       {
+        operation: 'competitor.cookies.test',
         method: 'POST',
-        body: JSON.stringify({ url: url || '' }),
+        body: { url: url || '' },
         timeout: 120_000,
       },
     ),
 
   /** 启动扫码登录 */
   startQrLogin: (platform: string) =>
-    request<QrLoginResult>(
+    mutationRequest<QrLoginResult>(
       `${BASE}/qr-login/start`,
       {
+        operation: 'competitor.qr_login.start',
         method: 'POST',
-        body: JSON.stringify({ platform }),
+        body: { platform },
         timeout: 90_000, // 抖音弹窗 QR 异步渲染，后端最坏 ~61s（goto 30s 上限 + 等待 + QR 25s）
       },
     ),
 
   /** 轮询扫码状态 */
   pollQrLogin: (platform: string, token: string, sessionCookies: string) =>
-    request<QrPollResult>(
+    mutationRequest<QrPollResult>(
       `${BASE}/qr-login/poll`,
       {
+        operation: 'competitor.qr_login.poll',
         method: 'POST',
-        body: JSON.stringify({
+        body: {
           platform,
           token,
           session_cookies: sessionCookies,
-        }),
+        },
         timeout: 15_000,
       },
     ),
 
   /** 重试所有被登录拦截的监控项 */
   retryBlocked: () =>
-    request<RetryResult>(
+    mutationRequest<RetryResult>(
       `${BASE}/retry-blocked`,
-      { method: 'POST', timeout: 300_000 },
+      { operation: 'competitor.retry_blocked', method: 'POST', body: {}, timeout: 300_000 },
     ),
 }

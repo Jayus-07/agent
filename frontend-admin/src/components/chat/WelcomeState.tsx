@@ -11,9 +11,10 @@ const EXAMPLES = [
 
 interface Props {
   onExampleClick?: (question: string) => void
+  budgetBlocked?: boolean
 }
 
-export default function EmptyState({ onExampleClick }: Props) {
+export default function EmptyState({ onExampleClick, budgetBlocked = false }: Props) {
   return (
     <div className="flex flex-col items-center justify-center h-full px-6 py-16">
       <div className="w-14 h-14 rounded-2xl bg-accent/8 flex items-center justify-center mb-6">
@@ -31,6 +32,7 @@ export default function EmptyState({ onExampleClick }: Props) {
         {EXAMPLES.map((ex) => (
           <button
             key={ex.text}
+            disabled={budgetBlocked}
             onClick={() => onExampleClick?.(ex.text)}
             className="group text-left px-5 py-3 rounded-xl bg-surface-base border border-border-subtle
               text-sm text-text-secondary hover:text-text-primary hover:border-accent/30 hover:shadow-card

@@ -9,6 +9,8 @@ import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import WelcomeState from './WelcomeState'
 import ContextPanel from './ContextPanel'
+import ErrorCard from '@/components/shared/ErrorCard'
+import BudgetStatusBar from './BudgetStatusBar'
 
 // 模块级稳定空数组，避免 messages 为空时 useMemo 每次返回新 []
 const EMPTY_MESSAGES: Message[] = []
@@ -26,6 +28,7 @@ export default function ChatView() {
   const isLoading = useChatStore((s) => s.isLoading)
   const error = useChatStore((s) => s.error)
   const { send, stopStream } = useSendMessage()
+  const [budgetBlocked, setBudgetBlocked] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -93,10 +96,9 @@ export default function ChatView() {
   return (
     <div className="flex-1 flex flex-col min-h-0 relative">
       {/* Error toast — P1-16: historyError 已迁移至任务栏（TaskSidebar/SessionList），避免双显示 */}
-      {error && (
-        <div className="shrink-0 mx-5 mt-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-center gap-2.5 animate-fade-in">
-          <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />
-          <span className="text-sm text-red-700 flex-1">{error}</span>
+      {error != null && (
+        <div className="shrink-0 mx-5 mt-3 flex items-start gap-2.5 animate-fade-in">
+          <ErrorCard error={error} actionsDisabled={budgetBlocked} />
           <button
             onClick={() => useChatStore.getState().setError(null)}
             className="text-xs text-red-400 hover:text-red-600 shrink-0 transition-colors"
@@ -105,6 +107,8 @@ export default function ChatView() {
           </button>
         </div>
       )}
+
+      <BudgetStatusBar onBlockedChange={setBudgetBlocked} />
 
       {/* Memory context panel */}
       <ContextPanel sessionId={currentId} />
@@ -115,14 +119,14 @@ export default function ChatView() {
       {/* Messages */}
       <div ref={contentRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
         {messages.length === 0 ? (
-          <WelcomeState onExampleClick={send} />
+          <WelcomeState onExampleClick={send} budgetBlocked={budgetBlocked} />
         ) : (
-          <MessageList messages={messages} isLoading={isLoading} sessionId={currentId} onStop={stopStream} />
+          <MessageList messages={messages} isLoading={isLoading} sessionId={currentId} onStop={stopStream} budgetBlocked={budgetBlocked} />
         )}
         <div ref={bottomRef} />
       </div>
 
-      <ChatInput onSend={send} isLoading={isLoading} />
+      <ChatInput onSend={send} isLoading={isLoading} budgetBlocked={budgetBlocked} />
     </div>
   )
 }

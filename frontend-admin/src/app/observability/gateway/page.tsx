@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { RefreshCw, ShieldAlert } from 'lucide-react'
 import { clsx } from 'clsx'
-import PageHeader from '@/components/layout/PageHeader'
+import TraceBreadcrumb from '@/components/observability/trace/TraceBreadcrumb'
 import {
   getGatewayAuthMetrics,
   getGatewayAccessLogs,
@@ -60,12 +60,12 @@ function BarRow(props: { label: string; value: number; max: number; color: strin
   const pct = max > 0 ? Math.max(2, (value / max) * 100) : 2
   return (
     <div className="flex items-center gap-3 py-1.5">
-      <span className="w-44 shrink-0 truncate text-[12px] text-text-secondary" title={label}>{label}</span>
-      <div className="h-4 flex-1 overflow-hidden rounded bg-black/[0.04]">
-        <div className="h-full rounded" style={{ width: `${pct}%`, background: color }} />
+      <span className="w-44 shrink-0 truncate text-[12px] text-slate-500" title={label}>{label}</span>
+      <div className="h-4 flex-1 overflow-hidden rounded-sm bg-slate-100">
+        <div className="h-full rounded-sm" style={{ width: `${pct}%`, background: color }} />
       </div>
-      <span className="w-16 shrink-0 text-right text-[12px] tabular-nums text-text-primary">{value.toLocaleString('zh-CN')}</span>
-      {note && <span className="w-24 shrink-0 truncate text-[11px] text-text-muted">{note}</span>}
+      <span className="w-16 shrink-0 text-right text-[12px] tabular-nums text-slate-800">{value.toLocaleString('zh-CN')}</span>
+      {note && <span className="w-24 shrink-0 truncate text-[11px] text-slate-400">{note}</span>}
     </div>
   )
 }
@@ -73,7 +73,7 @@ function BarRow(props: { label: string; value: number; max: number; color: strin
 /** 内联 sparkline（纯 div 柱状，5 分钟粒度；带 y 峰值与 x 首尾时间标注） */
 function Sparkbars({ series }: { series: { ts: number; value: number }[] }) {
   if (series.length === 0) {
-    return <div className="py-8 text-center text-[12px] text-text-muted">窗口内无拒绝记录</div>
+    return <div className="py-8 text-center text-[12px] text-slate-400">窗口内无拒绝记录</div>
   }
   const max = Math.max(...series.map((p) => p.value), 0.0001)
   const maxInt = Math.ceil(max)
@@ -83,14 +83,14 @@ function Sparkbars({ series }: { series: { ts: number; value: number }[] }) {
   return (
     <div>
       {/* y 轴峰值标注 */}
-      <div className="mb-0.5 text-right text-[10px] tabular-nums text-text-muted">峰值 {maxInt.toLocaleString('zh-CN')} / 格</div>
-      <div className="flex h-20 items-end gap-[2px]">
+      <div className="mb-0.5 text-right text-[10px] tabular-nums text-slate-400">峰值 {maxInt.toLocaleString('zh-CN')} / 格</div>
+      <div className="flex h-20 items-end gap-[3px]">
         {series.map((p) => {
           const h = Math.max(3, (p.value / max) * 100)
           return (
             <div
               key={p.ts}
-              className="flex-1 rounded-t bg-accent/60"
+              className="flex-1 rounded-t-sm bg-violet-300 transition-colors hover:bg-violet-400"
               style={{ height: `${h}%` }}
               title={`${new Date(p.ts * 1000).toLocaleString('zh-CN')}：${Math.round(p.value)} 次`}
             />
@@ -98,7 +98,7 @@ function Sparkbars({ series }: { series: { ts: number; value: number }[] }) {
         })}
       </div>
       {/* x 轴首尾时间 */}
-      <div className="mt-1 flex justify-between text-[10px] tabular-nums text-text-muted">
+      <div className="mt-1 flex justify-between text-[10px] tabular-nums text-slate-400">
         <span>{fmtAxis(first)}</span>
         <span>{fmtAxis(last)}</span>
       </div>
@@ -130,114 +130,130 @@ export default function GatewayPage() {
   const maxDenied = Math.max(...denied.map((d) => d.count), 0)
 
   return (
-    <div>
-      <PageHeader
-        title="网关安全"
-        desc="APISIX 认证拒绝与限流命中 · 数据源 Prometheus（observability profile），30s 内为近似实时"
-      />
+    <div className="min-h-screen bg-slate-50">
+      <div className="max-w-[1440px] mx-auto px-6 py-6 space-y-5">
+        <TraceBreadcrumb crumbs={[{ label: '可观测中心', href: '/observability' }, { label: '网关安全' }]} />
 
-      {/* 窗口切换 */}
-      <div className="mb-4 flex items-center gap-2">
-        <div className="flex items-center gap-1 rounded-lg bg-black/[0.03] p-0.5 text-[12px]">
-          {WINDOWS.map((w) => (
-            <button
-              key={w.hours}
-              onClick={() => setHours(w.hours)}
-              className={clsx('rounded-[6px] px-3 py-1.5 transition-colors',
-                hours === w.hours ? 'bg-white text-accent font-medium shadow-sm' : 'text-text-secondary hover:text-text-primary')}
-            >
-              {w.label}
-            </button>
-          ))}
-        </div>
-        <button
-          onClick={() => load()}
-          className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[12px] text-text-secondary transition-colors hover:bg-black/[0.03]"
-        >
-          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> 刷新
-        </button>
-      </div>
-
-      {loading ? (
-        <div className="rounded-xl border border-black/5 bg-white p-10 text-center text-[13px] text-text-muted shadow-card">加载中…</div>
-      ) : error ? (
-        <div className="rounded-xl border border-black/5 bg-white p-10 text-center text-[13px] shadow-card" style={{ color: '#791F1F' }}>{error}</div>
-      ) : !data?.available ? (
-        /* Prometheus 未启动：显式降级 + 指引 */
-        <div className="rounded-xl border border-black/5 bg-white p-10 text-center shadow-card">
-          <ShieldAlert size={28} className="mx-auto mb-3 text-text-muted" />
-          <div className="text-[14px] font-medium text-text-primary">Prometheus 数据源不可用</div>
-          <p className="mx-auto mt-2 max-w-[440px] text-[12px] leading-relaxed text-text-muted">
-            网关指标由 Prometheus 抓取（observability profile，可选）。启动后本页自动恢复：
-          </p>
-          <code className="mt-3 inline-block rounded-lg bg-black/[0.03] px-3 py-1.5 text-[12px]">
-            docker compose --profile observability up -d prometheus
-          </code>
-        </div>
-      ) : (
-        <>
-          {/* 汇总卡 */}
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-            <div className="rounded-xl border border-black/5 bg-white p-4 shadow-card">
-              <div className="text-[12px] text-text-secondary">认证拒绝（{WINDOWS.find((w) => w.hours === hours)?.label}）</div>
-              <div className="mt-2 text-2xl font-semibold" style={{ color: (data.total_denied ?? 0) > 100 ? '#791F1F' : 'var(--text-primary)' }}>
-                {(data.total_denied ?? 0).toLocaleString('zh-CN')}
-              </div>
-              <div className="mt-1 text-[11px] text-text-muted" title="口径：gateway-auth 插件验签被拒次数（denied_total 按拒绝原因聚合）；与右侧 401 计数不同——401 还包含限流等其他来源">
-                按拒绝原因聚合 · 超 100 触发告警
-              </div>
-            </div>
-            {(data.status_codes ?? []).map((c) => (
-              <div key={c.code} className="rounded-xl border border-black/5 bg-white p-4 shadow-card">
-                <div className="text-[12px] text-text-secondary">{CODE_LABELS[c.code] ?? c.code}</div>
-                <div className="mt-2 text-2xl font-semibold text-text-primary">{Math.round(c.count).toLocaleString('zh-CN')}</div>
-                <div className="mt-1 text-[11px] text-text-muted" title="口径：apisix_http_status 按 HTTP 状态码计数，范围比左侧「认证拒绝」宽">
-                  按 HTTP 状态码聚合（含 deny 与限流）
-                </div>
-              </div>
-            ))}
+        {/* Header：左标题 + 右操作（时间窗切换 / 刷新），同 traces 页布局 */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-lg font-semibold text-slate-800">网关安全</h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              APISIX 认证拒绝与限流命中 · 数据源 Prometheus（observability profile）· 30s 内为近似实时
+            </p>
           </div>
-
-          {/* 拒绝趋势 */}
-          <section className="mt-4 rounded-xl border border-black/5 bg-white p-4 shadow-card">
-            <h2 className="mb-3 text-[13px] font-medium text-text-primary">拒绝趋势（5 分钟粒度）</h2>
-            <Sparkbars series={data.denied_series ?? []} />
-          </section>
-
-          {/* 原因分布 */}
-          <section className="mt-4 rounded-xl border border-black/5 bg-white p-4 shadow-card">
-            <h2 className="mb-2 text-[13px] font-medium text-text-primary">拒绝原因分布</h2>
-            {denied.length === 0 ? (
-              <div className="py-6 text-center text-[12px] text-text-muted">窗口内无拒绝记录</div>
-            ) : (
-              denied.map((d) => (
-                <BarRow
-                  key={d.reason}
-                  label={reasonLabel(d.reason)}
-                  value={Math.round(d.count)}
-                  max={maxDenied}
-                  color="#B45309"
-                />
-              ))
-            )}
-          </section>
-
-          {/* shadow 观测（灰度复测时用） */}
-          {(data.would_deny_by_reason?.length ?? 0) > 0 && (
-            <section className="mt-4 rounded-xl border border-black/5 bg-white p-4 shadow-card">
-              <h2 className="mb-2 text-[13px] font-medium text-text-primary">
-                would-deny（shadow 模式「本该拒绝」计数，当前为 enforce 时恒为 0）
-              </h2>
-              {data.would_deny_by_reason!.map((d) => (
-                <BarRow key={d.reason} label={reasonLabel(d.reason)} value={Math.round(d.count)} max={Math.max(...data.would_deny_by_reason!.map((x) => x.count))} color="#6b7280" />
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white p-0.5 text-xs">
+              {WINDOWS.map((w) => (
+                <button
+                  key={w.hours}
+                  onClick={() => setHours(w.hours)}
+                  className={clsx('rounded-md px-3 py-1.5 transition-colors',
+                    hours === w.hours ? 'bg-violet-50 font-medium text-violet-700' : 'text-slate-500 hover:text-slate-800')}
+                >
+                  {w.label}
+                </button>
               ))}
-            </section>
-          )}
-        </>
-      )}
+            </div>
+            <button
+              onClick={() => load()}
+              disabled={loading}
+              className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 bg-white border border-slate-200 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> 刷新
+            </button>
+          </div>
+        </div>
 
-      {/* 访问审计明细：数据源独立于 Prometheus（PG 表），指标不可用时本区块仍可用 */}
-      <AccessLogsSection hours={hours} />
+        {loading ? (
+          <div className="bg-white border border-slate-200 rounded-xl py-12 text-center text-sm text-slate-400">加载中…</div>
+        ) : error ? (
+          <div className="bg-white border border-slate-200 rounded-xl py-12 text-center text-sm text-red-500">{error}</div>
+        ) : !data?.available ? (
+          /* Prometheus 未启动：显式降级 + 指引 */
+          <div className="bg-white border border-slate-200 rounded-xl p-12 text-center">
+            <ShieldAlert size={28} className="mx-auto mb-3 text-slate-400" />
+            <div className="text-sm font-medium text-slate-800">Prometheus 数据源不可用</div>
+            <p className="mx-auto mt-2 max-w-[440px] text-xs leading-relaxed text-slate-500">
+              网关指标由 Prometheus 抓取（observability profile，可选）。启动后本页自动恢复：
+            </p>
+            <code className="mt-3 inline-block rounded-lg bg-slate-50 border border-slate-200 px-3 py-1.5 text-xs font-mono text-slate-600">
+              docker compose --profile observability up -d prometheus
+            </code>
+          </div>
+        ) : (
+          <>
+            {/* 汇总 KPI 卡（同 traces StatsBar 口径：小标签 + 等宽大数字） */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="bg-white border border-slate-200 rounded-xl px-4 py-3">
+                <p className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">
+                  认证拒绝（{WINDOWS.find((w) => w.hours === hours)?.label}）
+                </p>
+                <p
+                  className="text-lg font-bold font-mono tabular-nums"
+                  style={{ color: (data.total_denied ?? 0) > 100 ? '#ef4444' : '#1e293b' }}
+                  title="口径：gateway-auth 插件验签被拒次数（denied_total 按拒绝原因聚合）；与 401 计数不同——401 还包含限流等其他来源"
+                >
+                  {(data.total_denied ?? 0).toLocaleString('zh-CN')}
+                </p>
+                <p className="text-[10px] text-slate-400 mt-0.5">按拒绝原因聚合 · 超 100 触发告警</p>
+              </div>
+              {(data.status_codes ?? []).map((c) => (
+                <div key={c.code} className="bg-white border border-slate-200 rounded-xl px-4 py-3">
+                  <p className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">{CODE_LABELS[c.code] ?? c.code}</p>
+                  <p
+                    className="text-lg font-bold font-mono tabular-nums text-slate-800"
+                    title="口径：apisix_http_status 按 HTTP 状态码计数，范围比「认证拒绝」宽"
+                  >
+                    {Math.round(c.count).toLocaleString('zh-CN')}
+                  </p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">按 HTTP 状态码聚合（含 deny 与限流）</p>
+                </div>
+              ))}
+            </div>
+
+            {/* 拒绝趋势 + 原因分布：大屏并排（趋势 3 : 分布 2），窄屏退化为纵排 */}
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
+              <section className="bg-white border border-slate-200 rounded-xl p-4 xl:col-span-3">
+                <h2 className="mb-3 text-[13px] font-medium text-slate-800">拒绝趋势（5 分钟粒度）</h2>
+                <Sparkbars series={data.denied_series ?? []} />
+              </section>
+
+              <section className="bg-white border border-slate-200 rounded-xl p-4 xl:col-span-2">
+                <h2 className="mb-2 text-[13px] font-medium text-slate-800">拒绝原因分布</h2>
+                {denied.length === 0 ? (
+                  <div className="py-6 text-center text-[12px] text-slate-400">窗口内无拒绝记录</div>
+                ) : (
+                  denied.map((d) => (
+                    <BarRow
+                      key={d.reason}
+                      label={reasonLabel(d.reason)}
+                      value={Math.round(d.count)}
+                      max={maxDenied}
+                      color="#B45309"
+                    />
+                  ))
+                )}
+              </section>
+            </div>
+
+            {/* shadow 观测（灰度复测时用） */}
+            {(data.would_deny_by_reason?.length ?? 0) > 0 && (
+              <section className="bg-white border border-slate-200 rounded-xl p-4">
+                <h2 className="mb-2 text-[13px] font-medium text-slate-800">
+                  would-deny（shadow 模式「本该拒绝」计数，当前为 enforce 时恒为 0）
+                </h2>
+                {data.would_deny_by_reason!.map((d) => (
+                  <BarRow key={d.reason} label={reasonLabel(d.reason)} value={Math.round(d.count)} max={Math.max(...data.would_deny_by_reason!.map((x) => x.count))} color="#94a3b8" />
+                ))}
+              </section>
+            )}
+          </>
+        )}
+
+        {/* 访问审计明细：数据源独立于 Prometheus（PG 表），指标不可用时本区块仍可用 */}
+        <AccessLogsSection hours={hours} />
+      </div>
     </div>
   )
 }
@@ -294,39 +310,39 @@ function AccessLogsSection({ hours }: { hours: number }) {
   const total = data?.total ?? 0
 
   return (
-    <section className="mt-4 rounded-xl border border-black/5 bg-white p-4 shadow-card">
+    <section className="bg-white border border-slate-200 rounded-xl p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-[13px] font-medium text-text-primary">
+        <h2 className="text-[13px] font-medium text-slate-800">
           访问审计明细
-          <span className="ml-2 text-[11px] font-normal text-text-muted">
+          <span className="ml-2 text-[11px] font-normal text-slate-400">
             谁从哪个 IP 访问了什么端点 · 30s 自动刷新（后台暂停）
           </span>
         </h2>
         <div className="flex flex-wrap items-center gap-1.5">
           {/* 视角切换：默认仅异常（4xx/5xx）。心跳/自引用默认排除，防 30s 轮询自膨胀 */}
-          <div className="flex items-center gap-0.5 rounded-lg bg-black/[0.03] p-0.5 text-[12px]">
+          <div className="flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white p-0.5 text-xs">
             <button
               type="button"
               onClick={() => setAbnormalOnly(true)}
-              className={clsx('rounded-[6px] px-2.5 py-1 transition-colors',
-                abnormalOnly ? 'bg-white font-medium text-accent shadow-sm' : 'text-text-secondary hover:text-text-primary')}
+              className={clsx('rounded-md px-2.5 py-1 transition-colors',
+                abnormalOnly ? 'bg-violet-50 font-medium text-violet-700' : 'text-slate-500 hover:text-slate-800')}
             >
               仅异常
             </button>
             <button
               type="button"
               onClick={() => setAbnormalOnly(false)}
-              className={clsx('rounded-[6px] px-2.5 py-1 transition-colors',
-                !abnormalOnly ? 'bg-white font-medium text-accent shadow-sm' : 'text-text-secondary hover:text-text-primary')}
+              className={clsx('rounded-md px-2.5 py-1 transition-colors',
+                !abnormalOnly ? 'bg-violet-50 font-medium text-violet-700' : 'text-slate-500 hover:text-slate-800')}
             >
               全部
             </button>
           </div>
           <label
-            className="flex cursor-pointer select-none items-center gap-1 text-[11px] text-text-secondary"
+            className="flex cursor-pointer select-none items-center gap-1 text-[11px] text-slate-500"
             title="包含 /health 心跳与 /observability 自引用查询（默认排除，防审计列表自我膨胀）"
           >
-            <input type="checkbox" checked={includeNoise} onChange={(e) => setIncludeNoise(e.target.checked)} className="accent-[var(--accent)]" />
+            <input type="checkbox" checked={includeNoise} onChange={(e) => setIncludeNoise(e.target.checked)} className="rounded accent-violet-600" />
             含心跳/自引用
           </label>
           <form
@@ -340,30 +356,31 @@ function AccessLogsSection({ hours }: { hours: number }) {
             value={draft.userId}
             onChange={(e) => setDraft({ ...draft, userId: e.target.value })}
             placeholder="用户 ID"
-            className="w-24 rounded-lg border border-black/10 px-2 py-1 text-[12px] outline-none focus:border-accent"
+            className="w-24 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 outline-none transition-colors focus:border-violet-400"
           />
           <input
             value={draft.ip}
             onChange={(e) => setDraft({ ...draft, ip: e.target.value })}
             placeholder="IP"
-            className="w-28 rounded-lg border border-black/10 px-2 py-1 text-[12px] outline-none focus:border-accent"
+            className="w-28 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 outline-none transition-colors focus:border-violet-400"
           />
           <input
             value={draft.path}
             onChange={(e) => setDraft({ ...draft, path: e.target.value })}
             placeholder="路径"
-            className="w-28 rounded-lg border border-black/10 px-2 py-1 text-[12px] outline-none focus:border-accent"
+            className="w-28 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 outline-none transition-colors focus:border-violet-400"
           />
           <button
             type="submit"
-            className="rounded-lg border border-black/10 px-2.5 py-1 text-[12px] text-text-secondary transition-colors hover:bg-black/[0.03]"
+            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 transition-colors hover:text-slate-800"
           >
             查询
           </button>
           <button
             type="button"
             onClick={() => refetch()}
-            className="flex items-center gap-1 rounded-lg border border-black/10 px-2 py-1 text-[12px] text-text-secondary transition-colors hover:bg-black/[0.03]"
+            title="刷新"
+            className="flex items-center rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 transition-colors hover:text-slate-700"
           >
             <RefreshCw size={12} className={isFetching ? 'animate-spin' : ''} />
           </button>
@@ -372,13 +389,13 @@ function AccessLogsSection({ hours }: { hours: number }) {
       </div>
 
       {error ? (
-        <div className="py-6 text-center text-[12px]" style={{ color: '#791F1F' }}>
+        <div className="py-8 text-center text-[12px] text-red-500">
           {error instanceof Error ? error.message : '加载失败'}
         </div>
       ) : !data?.available ? (
-        <div className="rounded-lg bg-black/[0.02] p-6 text-center text-[12px] leading-relaxed text-text-muted">
+        <div className="rounded-lg bg-slate-50 border border-slate-200 p-6 text-center text-[12px] leading-relaxed text-slate-500">
           访问日志数据源不可用（迁移未跑或 PostgreSQL 不可达）
-          <code className="mt-2 block rounded bg-black/[0.04] px-2 py-1 text-[11px]">
+          <code className="mt-2 block rounded bg-white border border-slate-200 px-2 py-1 text-[11px] font-mono text-slate-600">
             alembic upgrade head
           </code>
         </div>
@@ -398,40 +415,40 @@ function AccessLogsSection({ hours }: { hours: number }) {
                   <th className="py-2.5 px-3 w-40">Trace ID</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-100">
                 {logs.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-6 text-center text-[12px] text-text-muted">
+                    <td colSpan={8} className="py-12 text-center text-[12px] text-slate-400">
                       窗口内无访问记录
                     </td>
                   </tr>
                 ) : (
                   logs.map((l, i) => (
-                    <tr key={`${l.trace_id}-${l.ts}-${i}`} className="border-b border-slate-100 text-[12px]">
-                      <td className="py-2 px-3 tabular-nums text-text-secondary" title={l.ts}>{fmtTime(l.ts)}</td>
-                      <td className="py-2 px-3 font-mono text-[11px]">{l.client_ip || '-'}</td>
-                      <td className="py-2 px-3">
+                    <tr key={`${l.trace_id}-${l.ts}-${i}`} className="text-[12px] hover:bg-slate-50/60">
+                      <td className="py-2 px-3 tabular-nums text-slate-500" title={l.ts}>{fmtTime(l.ts)}</td>
+                      <td className="py-2 px-3 font-mono text-[11px] text-slate-700">{l.client_ip || '-'}</td>
+                      <td className="py-2 px-3 text-slate-700">
                         {/* 用户名列优先：后端 LEFT JOIN auth.users 回显（user_id 纯数字才关联） */}
                         {l.username ? (
                           <span title={`ID: ${l.user_id ?? '-'}`}>{l.username}</span>
                         ) : l.user_id ? (
                           <span className="font-mono text-[11px]" title="user_id 非数字 ID，未关联到用户表">{l.user_id}</span>
                         ) : (
-                          <span className="text-text-muted">guest</span>
+                          <span className="text-slate-400">guest</span>
                         )}
                         {l.user_id && !l.auth_type && (
-                          <span className="ml-1 rounded bg-black/[0.05] px-1 py-0.5 text-[10px] text-text-muted" title="auth/sys 白名单路由，头为客户端自带，未经网关验签">未验签</span>
+                          <span className="ml-1 rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-400" title="auth/sys 白名单路由，头为客户端自带，未经网关验签">未验签</span>
                         )}
                       </td>
-                      <td className="py-2 px-3 text-text-secondary">{l.method}</td>
-                      <td className="py-2 px-3 font-mono text-[11px]">
+                      <td className="py-2 px-3 text-slate-500">{l.method}</td>
+                      <td className="py-2 px-3 font-mono text-[11px] text-slate-700">
                         <span className="block max-w-[420px] truncate" title={`${l.uri}${l.query ? `?${l.query}` : ''}  ·  ${l.ua}`}>
-                          {l.uri}{l.query && <span className="text-text-muted">?{l.query}</span>}
+                          {l.uri}{l.query && <span className="text-slate-400">?{l.query}</span>}
                         </span>
                       </td>
                       <td className="py-2 px-3 font-medium tabular-nums" style={{ color: statusColor(l.status) }}>{l.status}</td>
-                      <td className="py-2 px-3 text-right tabular-nums text-text-secondary">{l.duration_ms.toFixed(1)}ms</td>
-                      <td className="py-2 px-3 font-mono text-[11px] text-text-muted" title={l.trace_id}>
+                      <td className="py-2 px-3 text-right tabular-nums text-slate-500">{l.duration_ms.toFixed(1)}ms</td>
+                      <td className="py-2 px-3 font-mono text-[11px] text-slate-400" title={l.trace_id}>
                         {l.trace_id ? l.trace_id.slice(-14) : '-'}
                       </td>
                     </tr>
@@ -441,20 +458,20 @@ function AccessLogsSection({ hours }: { hours: number }) {
             </table>
           </div>
           {/* 分页 */}
-          <div className="mt-3 flex items-center justify-between text-[12px] text-text-secondary">
+          <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500">
             <span>共 {total.toLocaleString('zh-CN')} 条 · 本页 {logs.length} 条</span>
             <div className="flex gap-1.5">
               <button
                 disabled={offset === 0}
                 onClick={() => setOffset(Math.max(0, offset - ACCESS_LOG_LIMIT))}
-                className="rounded-lg border border-black/10 px-2.5 py-1 transition-colors hover:bg-black/[0.03] disabled:opacity-40"
+                className="rounded border border-slate-200 px-3 py-1 transition-colors hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 上一页
               </button>
               <button
                 disabled={offset + ACCESS_LOG_LIMIT >= total}
                 onClick={() => setOffset(offset + ACCESS_LOG_LIMIT)}
-                className="rounded-lg border border-black/10 px-2.5 py-1 transition-colors hover:bg-black/[0.03] disabled:opacity-40"
+                className="rounded border border-slate-200 px-3 py-1 transition-colors hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 下一页
               </button>

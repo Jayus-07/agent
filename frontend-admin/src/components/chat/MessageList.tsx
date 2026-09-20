@@ -5,7 +5,7 @@ import type { Message } from '@/lib/types'
 import MessageBubble from './MessageBubble'
 import ProgressCards from './ProgressCards'
 
-interface Props { messages: Message[]; isLoading: boolean; sessionId?: string; onStop?: () => void }
+interface Props { messages: Message[]; isLoading: boolean; sessionId?: string; onStop?: () => void; budgetBlocked?: boolean }
 
 /**
  * MessageList 渲染一组消息。
@@ -17,7 +17,7 @@ interface Props { messages: Message[]; isLoading: boolean; sessionId?: string; o
  *   - WorkBuddy 式进度卡片：isLoading 时嵌入最后一轮 user 消息之下、回答之上
  *     （AgentTimeline / TodoCard / FileOpsCard），流结束自动消失。
  */
-export default function MessageList({ messages, isLoading, sessionId, onStop }: Props) {
+export default function MessageList({ messages, isLoading, sessionId, onStop, budgetBlocked = false }: Props) {
   const last = messages.length - 1
   // 最后一轮 user 提问的位置：进度卡片插在其后
   let lastUserIdx = -1
@@ -39,6 +39,7 @@ export default function MessageList({ messages, isLoading, sessionId, onStop }: 
               isLast={i === last}
               sessionId={sessionId}
               question={question}
+              budgetBlocked={budgetBlocked}
             />
             {isLoading && i === lastUserIdx && <ProgressCards onStop={onStop ?? (() => {})} />}
           </Fragment>

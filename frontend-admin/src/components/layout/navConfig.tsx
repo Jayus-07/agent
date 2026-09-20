@@ -9,7 +9,7 @@
  */
 import {
   Activity, Clock, Database, LayoutDashboard,
-  ScrollText, ShieldCheck, TrendingUp,
+  ScrollText, ShieldCheck, TrendingUp, WalletCards,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { atLeast, type RoleName } from '@/lib/auth'
@@ -64,19 +64,26 @@ export const NAV: NavEntry[] = [
     ],
   },
   {
+    icon: <WalletCards size={18} />, label: '成本治理',
+    items: [
+      { label: '预算策略', path: '/cost-governance/budgets' },
+    ],
+  },
+  {
     icon: <ScrollText size={18} />, label: '质量与配置', minRole: 'editor',
     items: [
       { label: 'Prompt 管理', path: '/prompts' },
       { label: 'Agent 节点', path: '/agents' },
       { label: '能力与技能', path: '/skills' },
       { label: '评测结果', path: '/evaluations' },
+      { label: '反馈候选', path: '/evaluations/feedback', minRole: 'admin' },
+      { label: '模型与供应商', path: '/settings/models', minRole: 'admin' },
     ],
   },
   {
     icon: <ShieldCheck size={18} />, label: '运营干预', minRole: 'admin',
     items: [
       { label: '工具审批', path: '/approvals' },
-      { label: '客服对话', path: '/cs' },
       { label: '客服会话', path: '/cs/conversations' },
       { label: '人工接入坐席', path: '/cs/handoff' },
       { label: '库存告警工单', path: '/alerts' },
@@ -106,4 +113,3 @@ export function visibleNav(baseline = false): NavEntry[] {
   if (baseline) return NAV.filter((e) => !e.minRole)
   return NAV.filter((e) => !e.minRole || atLeast(e.minRole))
 }
-

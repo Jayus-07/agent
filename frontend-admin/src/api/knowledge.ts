@@ -1,14 +1,17 @@
 // Knowledge service — 对接 RAG API
 // eslint-disable
 export interface KnowledgeStats { doc_count: number; kb_count: number; total_chunks: number; chunk_count: number; embedding_model: string; vector_db: string; [key: string]: any }
-export interface KnowledgeDoc { doc_id: string; file_name: string; doc_type: string; status: string; chunk_count: number; updated_at: string; id: string; name: string; type: string; path: string; kb_id: string; department: string; business_domain: string; size: number; chunks: number; last_indexed: string; created_at: string; embedding_model: string; chunk_size: number; overlap: number; index_version: string; hash: string; last_operation_at: string; last_operation: string; last_trace_id: string; [key: string]: any }
+export interface KnowledgeDoc { doc_id: string; file_name: string; doc_type: string; status: string; chunk_count: number; updated_at: string; id: string; name: string; type: string; path: string; kb_id: string; department: string; business_domain: string; size: number; chunks: number; last_indexed: string; created_at: string; embedding_model: string; chunk_size: number; overlap: number; index_version: string; hash: string; last_operation_at: string; last_operation: string; last_trace_id: string; last_processing_run_id?: string; pipeline_version?: string; metadata_route?: string; ocr_used?: boolean; ocr_model?: string; metadata_model?: string; model_count?: number; processing_status?: string; processing_finished_at?: string; [key: string]: any }
+export interface ProcessingRun { run_id: string; doc_id: string; file_hash?: string; operation?: string; status: string; pipeline_version?: string; task_id?: string; batch_id?: string; trace_id?: string; started_at?: string; finished_at?: string; error_message?: string; model_summary?: Array<Record<string, any>>; [key: string]: any }
+export interface ProcessingStep { step_id: string; run_id: string; stage: string; status: string; role?: string; engine_type?: string; provider?: string; model_name?: string; model_revision?: string; config_source?: string; prompt_version?: string; taxonomy_version?: string; rules_version?: string; schema_fingerprint?: string; input_count?: number; output_count?: number; total_tokens?: number; cached_tokens?: number; duration_ms?: number; skip_reason?: string; fallback_reason?: string; [key: string]: any }
+export interface ProcessingRunDetail extends ProcessingRun { steps: ProcessingStep[]; usage?: Array<Record<string, any>> }
 export interface OperationLog { id: number; doc_id: string; doc_name: string; operation: string; result: string; created_at: string; trace_id?: string; batch_id: string; detail: any; duration_ms: number; user_id: string; source: string; [key: string]: any }
 /** 操作日志里的 operation 字段类型 — /knowledge/operations 页筛选下拉依赖此类型 */
 export type OperationType = 'upload' | 'reindex' | 'delete' | ''
 
 const BASE = '/api/rag'
 
-import { fetchRaw } from '@/api/client'
+import { createIdempotencyKey, fetchRaw, mutationFetchRaw } from '@/api/client'
 
 /** 构建查询字符串，自动过滤 undefined/null/空字符串，避免 URLSearchParams 将其转为字面字符串 "undefined" */
 const qs = (params: Record<string, any>) => {
@@ -27,6 +30,14 @@ export const knowledgeService: any = {
 
   getDocument: (id: string) =>
     fetchRaw(`${BASE}/documents/${id}`).then(r => r.json()).catch(() => ({})),
+
+  getProcessingRuns: (id: string, params: { page?: number; page_size?: number } = {}) =>
+    fetchRaw(`${BASE}/documents/${id}/processing-runs?${qs(params)}`)
+      .then(r => r.json()).catch(() => ({ items: [], total: 0 })),
+
+  getProcessingRun: (id: string, runId: string): Promise<ProcessingRunDetail> =>
+    fetchRaw(`${BASE}/documents/${id}/processing-runs/${runId}`)
+      .then(r => r.json()).catch(() => ({ run_id: runId, doc_id: id, steps: [], error: '处理运行查询失败' })),
 
   // P0 审核 Dashboard（2026-08-11）
   getPendingDocs: (params: { page?: number; page_size?: number } = {}) =>
@@ -64,17 +75,36 @@ export const knowledgeService: any = {
     if (department) fd.append('department', department)
     const headers: Record<string, string> = {}
     if (batchId) headers['X-Batch-Id'] = batchId
+    const idempotencyKey = createIdempotencyKey()
+    const dedupeKey = [
+      batchId || '', kbId || 'policy_general', department || 'general',
+      file.name, file.size, file.lastModified,
+    ].join(':')
 
     // P1: ServerBusy(并发槽满 503)退避重试 — 后端 concurrency 中间件非阻塞拒接,
     // 旧实现直接把 503 当失败报给用户;批量上传场景极易触发。非 ServerBusy 的 503
     // (如服务未就绪)不重试,由下方友好提示接管。
     const postWithBusyRetry = async (): Promise<Response> => {
-      let res = await fetchRaw(`${BASE}/upload`, { method: 'POST', body: fd, headers })
+      let res = await mutationFetchRaw(`${BASE}/upload`, {
+        operation: 'rag.upload',
+        idempotencyKey,
+        dedupeKey,
+        method: 'POST',
+        body: fd,
+        headers,
+      })
       for (let attempt = 1; attempt <= 2 && res.status === 503; attempt++) {
         const text = await res.clone().text().catch(() => '')
         if (!text.includes('ServerBusy')) break
         await new Promise(r => setTimeout(r, 1500 * attempt))
-        res = await fetchRaw(`${BASE}/upload`, { method: 'POST', body: fd, headers })
+        res = await mutationFetchRaw(`${BASE}/upload`, {
+          operation: 'rag.upload',
+          idempotencyKey,
+          dedupeKey,
+          method: 'POST',
+          body: fd,
+          headers,
+        })
       }
       return res
     }

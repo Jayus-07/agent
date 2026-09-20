@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { FileText, Search, Trash2, RefreshCw, Grid3X3, Loader2, ChevronLeft, ChevronRight, CheckSquare, Square, X } from 'lucide-react'
+import { FileText, Search, Trash2, RefreshCw, Grid3X3, Cpu, Loader2, ChevronLeft, ChevronRight, CheckSquare, Square, X } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useDocuments } from '@/hooks/useKnowledge'
 import { knowledgeService } from '@/api/knowledge'
@@ -25,6 +25,16 @@ const DOMAIN_CN: Record<string, string> = {
   product: '商品', order: '订单', inventory: '库存', logistics: '物流',
   customer: '客户', supplier: '供应商', marketing: '营销', advertising: '广告',
   analytics: '数据分析', data: '数据治理', general: '通用',
+}
+
+const PROCESSING_STAGE_CN: Record<string, string> = {
+  load: '读取文件', parser: '解析', ocr: 'OCR', metadata: '元数据编排',
+  metadata_extract: '元数据抽取', metadata_summary: '摘要', question_gen: '模拟问题',
+  table_describe: '表格描述', embedding: '向量化', vector_write: '写入向量库',
+}
+
+const PROCESSING_STATUS_CN: Record<string, string> = {
+  success: '成功', skipped: '跳过', cached: '缓存命中', fallback: '降级', failed: '失败',
 }
 
 /** 格式化文档时间：年-月-日 时:分:秒 */
@@ -62,6 +72,10 @@ export default function DocumentsPage() {
   const [batchReindexing, setBatchReindexing] = useState(false)
   const [batchDeleting, setBatchDeleting] = useState(false)
   const [batchDeleteTarget, setBatchDeleteTarget] = useState<number | null>(null)
+  const [lineageDoc, setLineageDoc] = useState<{ id: string; name: string } | null>(null)
+  const [lineageRuns, setLineageRuns] = useState<any[]>([])
+  const [lineageDetail, setLineageDetail] = useState<any | null>(null)
+  const [lineageLoading, setLineageLoading] = useState(false)
   // 受控搜索：本地 input 状态（立即响应）+ 防抖同步到 store（API 调用）
   const [inputValue, setInputValue] = useState(keyword)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>()
@@ -108,6 +122,32 @@ export default function DocumentsPage() {
         next.delete(id)
         return next
       })
+    }
+  }
+
+  const openLineage = async (doc: { id: string; name: string }) => {
+    setLineageDoc(doc)
+    setLineageLoading(true)
+    setLineageDetail(null)
+    try {
+      const result = await knowledgeService.getProcessingRuns(doc.id, { page: 1, page_size: 10 })
+      const runs = result.items ?? []
+      setLineageRuns(runs)
+      if (runs[0]?.run_id) {
+        setLineageDetail(await knowledgeService.getProcessingRun(doc.id, runs[0].run_id))
+      }
+    } finally {
+      setLineageLoading(false)
+    }
+  }
+
+  const selectLineageRun = async (runId: string) => {
+    if (!lineageDoc) return
+    setLineageLoading(true)
+    try {
+      setLineageDetail(await knowledgeService.getProcessingRun(lineageDoc.id, runId))
+    } finally {
+      setLineageLoading(false)
     }
   }
 
@@ -317,13 +357,27 @@ export default function DocumentsPage() {
                   <td className="px-4 py-2.5 text-text-muted text-[10px]">{DEPT_LABELS[d.department || ''] || d.department || '-'}</td>
                   <td className="px-4 py-2.5 text-text-muted text-[10px]">{DOMAIN_CN[d.business_domain || ''] || d.business_domain || '-'}</td>
                   <td className="px-4 py-2.5 text-text-muted">{DOC_TYPE_CN[d.doc_type || ''] || d.doc_type || '-'}</td>
-                  <td className="px-4 py-2.5"><StatusBadge status={d.status} /></td>
+                  <td className="px-4 py-2.5">
+                    <StatusBadge status={d.status} />
+                    {(d.processing_status || d.metadata_route || d.model_count) && (
+                      <div className="mt-1 text-[10px] text-text-muted">
+                        {d.metadata_route ? `路由 ${d.metadata_route}` : '已处理'}
+                        {typeof d.model_count === 'number' ? ` · ${d.model_count} 个模型` : ''}
+                      </div>
+                    )}
+                    {typeof d.ocr_used === 'boolean' && (
+                      <div className="mt-1 text-[10px] text-text-muted">
+                        OCR：{d.ocr_used ? (d.ocr_model || '已执行') : '未触发'}
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-2.5 text-text-muted text-[10px]">
                     {d.last_operation_at ? `${fmtDocTime(d.last_operation_at)} ${d.last_operation === 'upload' ? '上传' : d.last_operation === 'reindex' ? '重建' : d.last_operation === 'delete' ? '删除' : d.last_operation}` : '-'}
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-1">
                       <button onClick={(e) => handleStopPropagation(e, () => openDocDetail(d))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看Chunks"><Grid3X3 size={13} /></button>
+                      <button onClick={(e) => handleStopPropagation(e, () => openLineage({ id: d.id, name: d.name }))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看模型血缘"><Cpu size={13} /></button>
                       <button onClick={(e) => handleStopPropagation(e, () => handleReindex(d.id))} disabled={reindexing.has(d.id)} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors disabled:opacity-50" title="重新解析">
                         {reindexing.has(d.id) ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                       </button>
@@ -353,6 +407,48 @@ export default function DocumentsPage() {
       </div>
     </div>
     <UploadDialog open={uploadOpen} onClose={() => setUploadOpen(false)} onSuccess={refresh} />
+
+    {/* 上传/重索引实际模型血缘：以 processing_runs 为权威，不显示当前配置冒充历史模型 */}
+    {lineageDoc && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" onClick={() => setLineageDoc(null)}>
+        <div className="bg-surface-base rounded-2xl border border-border-subtle shadow-xl w-[760px] max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center gap-3 px-6 py-4 border-b border-border-subtle">
+            <Cpu size={16} className="text-accent" />
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-text-primary">模型处理血缘</h3>
+              <p className="text-[10px] text-text-muted truncate">{lineageDoc.name}</p>
+            </div>
+            <button onClick={() => setLineageDoc(null)} className="ml-auto p-1 text-text-muted hover:text-text-primary"><X size={15} /></button>
+          </div>
+          <div className="flex min-h-[360px] max-h-[calc(85vh-64px)]">
+            <div className="w-[210px] border-r border-border-subtle overflow-y-auto p-3">
+              <div className="text-[10px] text-text-muted px-2 pb-2">处理运行（最新在前）</div>
+              {lineageRuns.map(run => (
+                <button key={run.run_id} onClick={() => selectLineageRun(run.run_id)} className={`w-full text-left rounded-lg px-3 py-2 mb-1 transition-colors ${lineageDetail?.run_id === run.run_id ? 'bg-accent/10 text-accent' : 'hover:bg-surface-hover text-text-secondary'}`}>
+                  <div className="text-[11px] font-mono truncate">{run.run_id}</div>
+                  <div className="text-[10px] mt-1 flex justify-between"><span>{run.status || '-'}</span><span>{fmtDocTime(run.started_at)}</span></div>
+                </button>
+              ))}
+              {!lineageLoading && lineageRuns.length === 0 && <div className="text-[10px] text-text-muted px-2 py-5">暂无运行记录</div>}
+            </div>
+            <div className="flex-1 overflow-y-auto p-5">
+              {lineageLoading && <div className="text-xs text-text-muted animate-pulse">加载血缘中...</div>}
+              {!lineageLoading && lineageDetail && (
+                <>
+                  <div className="grid grid-cols-2 gap-2 mb-4 text-[10px]">
+                    <div className="rounded-lg bg-surface-elevated px-3 py-2"><span className="text-text-muted">Pipeline</span><div className="font-mono text-text-primary mt-1">{lineageDetail.pipeline_version || '-'}</div></div>
+                    <div className="rounded-lg bg-surface-elevated px-3 py-2"><span className="text-text-muted">Trace / Task</span><div className="font-mono text-text-primary mt-1 truncate">{lineageDetail.trace_id || lineageDetail.task_id || '-'}</div></div>
+                  </div>
+                  {!!lineageDetail.model_summary?.length && <div className="mb-5"><div className="text-xs font-medium text-text-primary mb-2">本次实际使用模型</div><div className="flex flex-wrap gap-2">{lineageDetail.model_summary.map((model: any, index: number) => <span key={`${model.role || model.stage}-${index}`} className="rounded-full bg-accent/10 text-accent px-2.5 py-1 text-[10px]">{model.stage || model.role}: {model.provider ? `${model.provider}/` : ''}{model.model_name || '-'}</span>)}</div></div>}
+                  <div className="text-xs font-medium text-text-primary mb-2">阶段时间线</div>
+                   <div className="space-y-2">{(lineageDetail.steps || []).map((step: any) => <div key={step.step_id} className="rounded-lg border border-border-subtle px-3 py-2"><div className="flex items-center gap-2"><span className="text-xs font-medium text-text-primary">{PROCESSING_STAGE_CN[step.stage] || step.stage}</span><span className="text-[10px] text-text-muted">{step.role || step.engine_type || '-'}</span><span className="ml-auto text-[10px] text-text-muted">{PROCESSING_STATUS_CN[step.status] || step.status}</span></div><div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-text-muted"><span>模型：<b className="font-mono text-text-secondary">{step.model_name ? `${step.provider ? `${step.provider}/` : ''}${step.model_name}` : (step.skip_reason || '确定性处理')}</b></span><span>输入/输出：{step.input_count ?? 0}/{step.output_count ?? 0}</span>{step.total_tokens ? <span>Token：{step.total_tokens}</span> : null}{step.duration_ms ? <span>耗时：{Math.round(step.duration_ms)}ms</span> : null}{step.cache_status && step.cache_status !== 'miss' ? <span>缓存：{step.cache_status}</span> : null}{step.prompt_version ? <span>Prompt：{step.prompt_version}</span> : null}{step.rules_version ? <span>规则：{step.rules_version}</span> : null}{step.taxonomy_version ? <span>Taxonomy：{step.taxonomy_version}</span> : null}</div></div>)}</div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
 
     {/* 删除确认对话框 */}
     {deleteTarget && (

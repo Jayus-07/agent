@@ -56,6 +56,19 @@ describe("BFF 代理转发契约", () => {
     expect(upstreamHeaders.get("x-client-ip")).toBe("203.0.113.9");
   });
 
+  it("透传 Idempotency-Key，治理写接口才能通过后端幂等门", async () => {
+    const req = makeReq("/api/sys/model-roles/fallback", {
+      "content-type": "application/json",
+      "idempotency-key": "fallback-change-1",
+      authorization: "Bearer test-token",
+    });
+    const ctx = { params: { path: ["sys", "model-roles", "fallback"] } };
+    await GET(req as never, ctx as never);
+
+    const upstreamHeaders = fetchMock.mock.calls[0][1].headers as Headers;
+    expect(upstreamHeaders.get("idempotency-key")).toBe("fallback-change-1");
+  });
+
   it("无 XFF 时回退 req.ip 作为 X-Client-IP", async () => {
     const req = makeReq("/api/auth/login", { "content-type": "application/json" });
     Object.defineProperty(req, "ip", { value: "127.0.0.1" });
