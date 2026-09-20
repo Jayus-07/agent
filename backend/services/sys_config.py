@@ -59,6 +59,11 @@ _SWITCHES: dict[str, dict[str, Any]] = {
         "default": "enforce",
         "desc": "敏感端点统一守卫（require_user_actor / require_admin_user）处置模式",
     },
+    "CS_DISPATCH_ROLLOUT_PERCENT": {
+        "validator": lambda v: v.isdigit() and 0 <= int(v) <= 100,
+        "default": "100",
+        "desc": "客服自动派单灰度放量百分比（enforce 下按会话稳定哈希分桶；P9 梯子 5/20/50/100）",
+    },
 }
 
 _REFRESH_INTERVAL_S = 15.0

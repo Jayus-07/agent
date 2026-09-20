@@ -7,6 +7,7 @@ P6（``dispatch_once``）：在一个 PostgreSQL 事务内完成优先级取单�
 """
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import cs_dispatch as config
 from backend.config.cs_dispatch import CS_OFFER_TIMEOUT_SECONDS
 from backend.config.customer_service import CS_HANDOFF_TIMEOUT_SECONDS
 from backend.customer_service.dispatch import event_relay, outbox, presence, repository
@@ -248,6 +250,7 @@ async def dispatch_once(
     - ``contended``             预读到的候选在取锁前被别的 worker 拿走/状态变化
     - ``presence_unavailable``  Redis 不可用 → fail-closed，本轮不派单
     - ``no_candidate``          在线坐席为空或全部满载
+    - ``rollout_skipped``       灰度放量门控（P9）：本会话不在当前放量桶内
 
     事务边界：所有写操作都在同一个 ``session.begin()`` 里；广播在提交之后，
     广播异常不回滚绑定（方案 §六 P6 第 6 步）。
@@ -289,6 +292,33 @@ async def dispatch_once(
             return DispatchResult(
                 status="contended", conversation_id=candidate.conversation_id
             )
+
+        # P9 灰度放量门控：enforce 下按 conversation_id 稳定哈希分桶，
+        # 只对 < percent 的会话真实派单；shadow 全量计算不受影响。
+        # 生效值走 sys_config（DB 覆盖 → env 兜底），免重启放量。
+        if not dry_run:
+            from backend.services.sys_config import get_mode
+
+            try:
+                percent = int(
+                    get_mode("CS_DISPATCH_ROLLOUT_PERCENT")
+                    or config.CS_DISPATCH_ROLLOUT_PERCENT
+                )
+            except (TypeError, ValueError):
+                percent = config.CS_DISPATCH_ROLLOUT_PERCENT
+            if percent < 100:
+                bucket = int(
+                    hashlib.sha1(
+                        f"{tenant_id}:{candidate.conversation_id}".encode("utf-8")
+                    ).hexdigest(),
+                    16,
+                ) % 100
+                if bucket >= max(0, percent):
+                    return DispatchResult(
+                        status="rollout_skipped",
+                        handoff_id=handoff.handoff_id,
+                        conversation_id=handoff.conversation_id,
+                    )
 
         candidate_ids = await repository.list_accepting_agent_ids(
             session, tenant_id=tenant_id

@@ -1,0 +1,67 @@
+{
+  "script": "cs_dispatch_pg_acceptance.py",
+  "database": "cs_dispatch_acceptance_12f8b149fa",
+  "started_at": "2026-09-20T19:25:26.199029+00:00",
+  "groups": [
+    {
+      "group": "A_concurrent_binding",
+      "tenant_id": "acceptance-A",
+      "statuses": {
+        "dispatched": 40,
+        "no_handoff": 8,
+        "contended": 674
+      },
+      "active_assignments": 40,
+      "duplicated_handoffs": [],
+      "over_capacity": false,
+      "per_agent_load": {
+        "a-0": 10,
+        "a-1": 10,
+        "a-2": 10,
+        "a-3": 10
+      },
+      "state_assignment_mismatch": [],
+      "passed": true
+    },
+    {
+      "group": "B_capacity_limit",
+      "tenant_id": "acceptance-B",
+      "statuses": {
+        "contended": 10,
+        "dispatched": 2,
+        "no_candidate": 2
+      },
+      "active_assignments": 2,
+      "duplicated_handoffs": [],
+      "over_capacity": false,
+      "per_agent_load": {
+        "b-only": 2
+      },
+      "state_assignment_mismatch": [],
+      "passed": true
+    },
+    {
+      "group": "C_load_balancing",
+      "tenant_id": "acceptance-C",
+      "statuses": {
+        "contended": 80,
+        "dispatched": 15,
+        "no_handoff": 3
+      },
+      "active_assignments": 15,
+      "duplicated_handoffs": [],
+      "over_capacity": false,
+      "per_agent_load": {
+        "c-0": 5,
+        "c-1": 5,
+        "c-2": 5
+      },
+      "state_assignment_mismatch": [],
+      "passed": true
+    }
+  ],
+  "passed": true,
+  "migration_applied": true,
+  "temp_db_dropped": true,
+  "finished_at": "2026-09-20T19:25:37.246887+00:00"
+}

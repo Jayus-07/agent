@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -22,6 +23,7 @@ from sqlalchemy.dialects import postgresql
 
 from backend.config.cs_dispatch import CS_OFFER_TIMEOUT_SECONDS
 from backend.customer_service.dispatch import event_relay, presence, repository, service
+from backend.services import sys_config
 from backend.customer_service.models.agent import CSAgent
 from backend.customer_service.models.assignment import CSAssignment
 from backend.customer_service.models.conversation import CSConversation
@@ -613,3 +615,64 @@ def test_real_postgres_dispatch_requires_p1_schema() -> None:
         )
 
     assert present == 4
+
+
+# ── P9 灰度放量门控 ─────────────────────────────────────────
+
+
+def _bucket_for(conversation_id: str) -> int:
+    return int(
+        hashlib.sha1(f"{TENANT}:{conversation_id}".encode("utf-8")).hexdigest(),
+        16,
+    ) % 100
+
+
+async def test_rollout_percent_zero_skips_enforce_but_not_shadow(
+    scenario: Scenario, monkeypatch
+) -> None:
+    """percent=0：enforce 全部 rollout_skipped；shadow 仍全量计算。"""
+    monkeypatch.setattr(
+        sys_config, "get_mode", lambda key: "0" if key == "CS_DISPATCH_ROLLOUT_PERCENT" else ""
+    )
+
+    result = await _dispatch(scenario)
+    assert result.status == "rollout_skipped"
+    assert scenario.handoff.handoff_state == "waiting_human"
+    assert scenario.session.added == []
+
+    shadow = await service.dispatch_once(
+        scenario.session, tenant_id=TENANT, now=NOW, dry_run=True
+    )
+    assert shadow.status == "shadow"
+    assert shadow.agent_id == "agent-1"
+
+
+async def test_rollout_percent_boundary_is_stable(
+    scenario: Scenario, monkeypatch
+) -> None:
+    """同一会话的桶位稳定：percent=桶位+1 放行，percent=桶位 拦截。"""
+    bucket = _bucket_for("conv-1")
+
+    monkeypatch.setattr(
+        sys_config,
+        "get_mode",
+        lambda key: str(bucket) if key == "CS_DISPATCH_ROLLOUT_PERCENT" else "",
+    )
+    result = await _dispatch(scenario)
+    assert result.status == "rollout_skipped"
+
+    scenario.handoff.handoff_state = "waiting_human"
+    scenario.handoff.assigned_agent_id = None
+    monkeypatch.setattr(
+        sys_config,
+        "get_mode",
+        lambda key: str(bucket + 1) if key == "CS_DISPATCH_ROLLOUT_PERCENT" else "",
+    )
+    result = await _dispatch(scenario)
+    assert result.status == "dispatched"
+
+
+async def test_rollout_default_100_does_not_gate(scenario: Scenario) -> None:
+    """默认 100%：未配置 DB 覆盖时全部放行（env 缺省）。"""
+    result = await _dispatch(scenario)
+    assert result.status == "dispatched"

@@ -85,3 +85,16 @@ CS_OUTBOX_RELAY_BATCH_LIMIT = int(
 CS_OUTBOX_LAG_ALERT_SECONDS = float(
     os.getenv("CS_OUTBOX_LAG_ALERT_SECONDS", "2.0")
 )
+
+# ── 灰度放量（P9）────────────────────────────────────────────
+# 放量梯子：shadow → 5% → 20% → 50% → 100%（方案 §六 P9）。
+# - ``enforce`` 下按 conversation_id 稳定哈希分桶，仅对 < percent 的会话
+#   真实派单，其余返回 ``rollout_skipped``（不写行，下一 tick 不再碰）；
+# - ``shadow`` 不受影响（dry-run 永远全量计算，用于对比算法输出）；
+# - 生效值优先走 sys_config DB 覆盖（TTL 15s，免重启放量），env 兜底。
+CS_DISPATCH_ROLLOUT_PERCENT = int(
+    os.getenv("CS_DISPATCH_ROLLOUT_PERCENT", "100")
+)
+
+# 放量梯子的合法档位（运营/控制器脚本共用；不挡 0-100 的任意整数值）。
+CS_DISPATCH_ROLLOUT_LADDER = (5, 20, 50, 100)
