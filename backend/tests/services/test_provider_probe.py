@@ -117,6 +117,43 @@ def test_l1_401_is_fail_pointing_at_key(monkeypatch):
     assert "API Key" in step.summary
 
 
+# 百炼原生 `/api/v1/models` 的真实响应形状（实测 200，507 个模型）。
+_NATIVE_ENVELOPE = (
+    '{"code":null,"message":null,"success":true,'
+    '"output":{"total":507,"page_no":1,"page_size":20,'
+    '"models":[{"model":"qwen3.8-max","name":"Qwen3.8-Max"}]}}'
+)
+
+
+def test_l1_200_native_envelope_is_degraded_and_hints_base_url(monkeypatch):
+    """地址填成「厂商原生协议端点」时必须点破 —— 否则 L1 通过、L2 必然 404。
+
+    实测：`{base}/models` 在原生前缀下**也**是 200，于是 L1 会给绿灯；但 OpenAI
+    协议要打的 `/chat/completions` 在该前缀下不存在（404 且 body 为空），用户只会
+    看到一个 404 然后去猜模型名。这里要求降级并直接提示补 `/compatible-mode`。
+    """
+    _patch_httpx(monkeypatch, _FakeResponse(200, _NATIVE_ENVELOPE))
+    step = _run(P.probe_l1("https://maas.example.com/api/v1", "sk-x"))
+    assert step.status == P.STATUS_DEGRADED
+    assert "/compatible-mode" in step.summary
+    # 降级不等于判死：L1 永远不能短路探测（B.4 硬约束 1）
+    assert step.status != P.STATUS_FAIL
+
+
+def test_l1_200_openai_list_object_stays_pass(monkeypatch):
+    _patch_httpx(monkeypatch, _FakeResponse(
+        200, '{"object":"list","data":[{"id":"m","object":"model"}]}'))
+    step = _run(P.probe_l1("https://api.example.com/v1", "sk-x"))
+    assert step.status == P.STATUS_PASS
+
+
+def test_l1_200_opaque_body_stays_pass(monkeypatch):
+    """形状判断不了时保持宽容 —— 宁可漏报，不可误报「地址错了」。"""
+    _patch_httpx(monkeypatch, _FakeResponse(200, "<html>not json</html>"))
+    step = _run(P.probe_l1("https://api.example.com/v1", "sk-x"))
+    assert step.status == P.STATUS_PASS
+
+
 # ── L2：Key 错 vs 模型名错 ──────────────────────────────────────────────
 
 
@@ -166,10 +203,45 @@ def test_fast_l2_only_waits_for_first_stream_chunk(monkeypatch):
     ("NotFoundError: model not found: gpt-9", "模型名"),
     ("Model `foo` does not exist", "模型名"),
     ("connection reset by peer", "最小调用失败"),
+    # langchain_openai 把任何 404 都包成这个类名；名字里的 CamelCase
+    # "ModelNotFound" 无空格无下划线，早期提示词表匹配不到 → 退化成「最小调用失败」。
+    ("OpenAIModelNotFoundError: Error code: 404 - {'error': {'code': 'model_not_found'}}",
+     "模型名"),
 ])
 def test_l2_failure_attribution(message, expected):
     out = P._classify_l2_failure(RuntimeError(message))
     assert expected in out
+
+
+class _HttpError(Exception):
+    """带 `status_code` 的异常，模拟 openai SDK 的 APIStatusError。"""
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def test_l2_404_with_empty_body_blames_base_url_not_model_name():
+    """空 body 的 404 = 路由不存在 → 必须指向 base_url，不能把人骗去改模型名。
+
+    实测真身：`OpenAIModelNotFoundError: Error code: 404`（body 为空）。上游在鉴权
+    之前就 404，说明该前缀下根本没有 `/chat/completions`；此时改模型名永远无效。
+    """
+    exc = _HttpError("Error code: 404", status_code=404)
+    out = P._classify_l2_failure(exc, api_key="sk-secret")
+    assert "/compatible-mode" in out
+    assert "模型名" not in out
+
+
+def test_l2_404_with_structured_body_still_blames_model_name():
+    """带结构化 body 的 404 才是真的「模型不存在」，不能被上一条抢走。"""
+    exc = _HttpError(
+        "Error code: 404 - {'error': {'code': 'model_not_found', 'message': 'no such model'}}",
+        status_code=404,
+    )
+    out = P._classify_l2_failure(exc)
+    assert "模型名" in out
+    assert "/compatible-mode" not in out
 
 
 def test_l2_detail_is_clipped():

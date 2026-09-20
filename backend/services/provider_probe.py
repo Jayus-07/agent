@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import socket
 import ssl
 import time
@@ -65,6 +66,9 @@ _MODEL_KINDS = frozenset({"chat", "embedding", "rerank", "vision", "speech"})
 _MODEL_ERROR_HINTS = (
     "model not found", "does not exist", "unknown model", "no such model",
     "invalid model", "model_not_found", "not a valid model",
+    # CamelCase 异常类名拼成的一整串（如 langchain_openai 的
+    # `OpenAIModelNotFoundError`），没有空格也没有下划线，上面几条都匹配不到。
+    "modelnotfound",
 )
 _KEY_ERROR_HINTS = (
     "invalid api key", "incorrect api key", "invalid_api_key", "unauthorized",
@@ -171,6 +175,32 @@ async def probe_l0(base_url: str, *, allow_private: bool) -> ProbeStep:
 # ── L1：GET {base}/models ───────────────────────────────────────────────
 
 
+def _models_body_is_openai_shaped(body: str) -> bool | None:
+    """`/models` 响应体是否为 OpenAI 形状：``{"object":"list","data":[...]}``。
+
+    返回 ``True`` / ``False`` / ``None``（判断不了 → 保持宽容，不降级）。
+
+    这条嗅探专门用来抓「**base_url 填成了厂商原生协议端点**」：阿里云百炼的原生
+    `/api/v1/models` 返回 ``{"success":true,"output":{"models":[...]}}``，**同样是
+    200**，于是 L1 会「通过」，但 OpenAI 协议要打的 `/chat/completions` 在那个前缀
+    下并不存在（实测 404 且 body 为空），L2 必然失败 —— 用户只会看到一个 404，然后
+    去猜模型名。形状不符时降级 + 直接提示改地址，比让用户在错误的地址上反复试模型名
+    有用得多。注意 L1 依旧**不判死**（B.4 硬约束 1）。
+    """
+    try:
+        data = json.loads(body)
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(data, dict):
+        return None
+    if isinstance(data.get("data"), list):
+        return True
+    # 明确的「厂商原生信封」特征（百炼原生：code / message / success / output）
+    if {"output", "success", "code"} & data.keys():
+        return False
+    return None
+
+
 async def probe_l1(
     base_url: str, api_key: str, *, extra_headers: dict[str, str] | None = None
 ) -> ProbeStep:
@@ -191,6 +221,14 @@ async def probe_l1(
 
     body = resp.text
     if resp.status_code == 200:
+        if _models_body_is_openai_shaped(body) is False:
+            return _step(
+                "L1", STATUS_DEGRADED,
+                "端点有响应，但返回的不是 OpenAI 兼容的模型列表（疑似该厂商的"
+                "原生协议端点）：OpenAI 协议对话会 404 —— base_url 可能需要补 "
+                "`/compatible-mode` 或 `/v1`",
+                detail=body, t0=t0,
+            )
         return _step("L1", STATUS_PASS, "端点响应正常（/models 可用）",
                      detail=body, t0=t0)
     if resp.status_code == 404:
@@ -309,15 +347,38 @@ def _stream_first_chunk(client: Any) -> str:
 
 
 def _classify_l2_failure(exc: Exception, api_key: str = "") -> str:
-    """把 L2 异常归因到「Key 错」或「模型名错」—— 用户最需要分清的一步。"""
+    """把 L2 异常归因到「地址不是 OpenAI 兼容基址」/「模型名错」/「Key 错」。
+
+    归因顺序有讲究（探测结果是排障第一现场，B.4 硬约束 4）：
+
+    1. **先判「地址错」，再判「模型名错」**。上游对不存在的路径常直接甩一个
+       **空 body 的 404**（甚至发生在鉴权之前）；而 langchain_openai 会把**任何**
+       404 一律包装成 `OpenAIModelNotFoundError`，类名里的 "ModelNotFound" 极易
+       把人骗去改模型名。实测的典型坑：把某厂商的**原生协议地址**当 OpenAI 兼容
+       基址填（例如百炼的 `/api/v1` vs `/compatible-mode/v1`）—— 此时 L1 因为
+       原生 `/models` 也存在而「通过」，L2 却必然 404，且换任何模型名都无效。
+       **空 body 正是区分二者的关键**：真正的「模型不存在」上游会回一段结构化
+       JSON（含 error code / message）。
+    2. 其余 404（带 body）仍归「模型名错」。
+    """
     raw = f"{type(exc).__name__}: {exc}"
     if api_key:
         raw = raw.replace(api_key, "<API_KEY>")
     low = raw.lower()
+    status = getattr(exc, "status_code", None)
+
+    if status == 404 and "{" not in raw:
+        return (
+            "端点没有该对话路由（HTTP 404 且响应体为空）：base_url 很可能不是 "
+            "OpenAI 兼容基址 —— 检查是否漏了 `/v1` 或 `/compatible-mode/v1`"
+            f" —— {_clip(raw)}"
+        )
     if any(h in low for h in _MODEL_ERROR_HINTS):
         return f"模型名错误或该 Key 无权访问该模型 —— {_clip(raw)}"
     if any(h in low for h in _KEY_ERROR_HINTS):
         return f"Key 无效或无权访问 —— {_clip(raw)}"
+    if status == 404:
+        return f"模型名错误或该 Key 无权访问该模型 —— {_clip(raw)}"
     return f"最小调用失败：{_clip(raw)}"
 
 
