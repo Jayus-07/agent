@@ -19,8 +19,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import os
+from dataclasses import replace
+from contextlib import nullcontext
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -41,6 +44,8 @@ from backend.infra.async_utils import run_async as _run_async
 # （_sample_for_summary 一并迁移，此处 re-export 兼容旧导入路径）
 from backend.rag.indexing.stages.embedding_stage import EmbeddingStage
 from backend.rag.indexing.stages.metadata_stage import MetadataStage, _sample_for_summary  # noqa: F401
+from backend.rag.indexing.processing_lineage import ModelIdentity, ProcessingRunContext
+from backend.rag.indexing.processing_lineage_recorder import ProcessingRunRecorder
 
 # 索引中途崩溃/重启后视为"待恢复"的 registry 状态（任务持久化的 recovery 口径）
 INTERRUPTED_STATUSES = ("uploading", "parsing", "embedding")
@@ -116,6 +121,87 @@ def _append_quality_issue(doc_meta: dict, issue: str) -> None:
     doc_meta["quality_issues"] = (f"{prev}, " if prev else "") + issue
 
 
+def _processing_config_snapshot() -> dict[str, Any]:
+    """截取影响入库结果的非敏感配置，作为运行级版本快照。"""
+    from backend.config import model_roles, rag as rag_cfg
+    from backend.rag.preprocessing.taxonomy_spec import (
+        get_taxonomy,
+        metadata_rule_version,
+    )
+    from backend.rag.preprocessing.parser.ocr import get_ocr_model_identity
+
+    role_snapshot = {
+        role: {
+            "value": str(model_roles.resolve_effective(role).get("value") or ""),
+            "source": str(model_roles.resolve_effective(role).get("source") or ""),
+        }
+        for role in ("metadata_extract", "question_gen", "table_describe", "ocr")
+    }
+    ocr_identity = get_ocr_model_identity()
+    return {
+        "model_roles": role_snapshot,
+        "metadata_cascade_enabled": bool(rag_cfg.METADATA_CASCADE_ENABLED),
+        "metadata_classifier_model_path": str(
+            rag_cfg.METADATA_CLASSIFIER_MODEL_PATH or ""
+        ),
+        # OCR 可能来自数据库专项/角色配置；快照必须使用实际运行时身份，
+        # 不能再把旧 env 默认值写成“本轮使用的模型”。
+        "ocr_provider": str(ocr_identity.provider or ""),
+        "ocr_model": str(ocr_identity.model_name or ""),
+        "ocr_model_revision": str(ocr_identity.model_revision or ""),
+        "ocr_config_source": str(ocr_identity.config_source or ""),
+        "ocr_config_revision": str(ocr_identity.config_revision or ""),
+        "taxonomy_version": get_taxonomy().version,
+        "rules_version": metadata_rule_version(),
+        "metadata_schema_fingerprint": str(
+            rag_cfg.METADATA_SCHEMA_FINGERPRINT or ""
+        ),
+        "question_gen_prompt_version": str(
+            rag_cfg.QUESTION_GEN_PROMPT_VERSION or ""
+        ),
+        "table_desc_prompt_version": str(
+            rag_cfg.TABLE_DESC_PROMPT_VERSION or ""
+        ),
+        "ocr_prompt_version": str(rag_cfg.OCR_PROMPT_VERSION or ""),
+    }
+
+
+def _embedding_model_identity(embedding: Any) -> ModelIdentity:
+    """从 embedding 实例读取当前运行时模型身份，不读取待处理配置。"""
+    candidates = (
+        getattr(embedding, "_model_name", None),
+        getattr(embedding, "model_name", None),
+        getattr(embedding, "model", None),
+    )
+    model_name = next((item for item in candidates if isinstance(item, str) and item), None)
+    provider_candidates = (
+        getattr(embedding, "_provider", None),
+        getattr(embedding, "provider", None),
+    )
+    provider = next((item for item in provider_candidates if isinstance(item, str) and item), None)
+    model_revision = getattr(embedding, "_model_revision", None) or getattr(
+        embedding, "model_revision", None
+    )
+    try:
+        from backend.config import EMBEDDING_PROVIDER, model_roles
+
+        effective = model_roles.resolve_effective("embedding")
+        provider = provider or str(effective.get("provider") or EMBEDDING_PROVIDER or "")
+        model_revision = model_revision or str(
+            effective.get("updated_at") or effective.get("source") or ""
+        )
+    except Exception as exc:
+        logger.debug("[Indexer] 读取 embedding 版本失败，使用实例字段: %s", exc)
+    return ModelIdentity(
+        role="embedding",
+        engine_type="embedding",
+        provider=provider,
+        model_name=model_name,
+        model_revision=model_revision,
+        config_source="runtime",
+    )
+
+
 class ChunkingEmptyError(Exception):
     """文档解析/切片成功但最终未产出任何有效 chunk（chunk_count=0）。
 
@@ -173,6 +259,9 @@ class IncrementalIndexer:
         department: str = "general",
         bm25_store: Any = None,
         fixture_set: str | None = None,
+        processing_lineage_repository: Any = None,
+        processing_task_id: str | None = None,
+        processing_batch_id: str | None = None,
     ):
         self.docs_dir = Path(docs_dir).resolve()
         self.vectordb = vectordb
@@ -186,6 +275,11 @@ class IncrementalIndexer:
         # 上传/重索引后立即同步 BM25（避免"上传成功但 BM25 未更新"）。
         # 启动期 sync 时 bm25_store 尚未构建（pipeline 先增量索引后建 BM25），传入 None 即跳过。
         self.bm25_store = bm25_store
+        # 运行血缘仓储由生产入口显式注入，测试/离线工具可不连接 PG；
+        # 内存状态仍会生成，避免主索引链路依赖观测库可用性。
+        self.processing_lineage_repository = processing_lineage_repository
+        self.processing_task_id = processing_task_id
+        self.processing_batch_id = processing_batch_id
 
     # ---- 主入口 ----
 
@@ -480,6 +574,22 @@ class IncrementalIndexer:
         if self.fixture_set:
             trace.tags["fixture_set"] = self.fixture_set
 
+        lineage_recorder = None
+        if self.processing_lineage_repository is not None:
+            lineage_context = ProcessingRunContext.create(
+                doc_id=doc_id,
+                file_hash=file_hash,
+                operation="reindex" if reindex_ctx else "upload",
+                task_id=self.processing_task_id,
+                batch_id=self.processing_batch_id,
+                trace_id=trace.id,
+                config_snapshot=_processing_config_snapshot(),
+            )
+            lineage_recorder = ProcessingRunRecorder(
+                lineage_context, self.processing_lineage_repository
+            )
+            lineage_recorder.start()
+
         # ── ① upload (root) ──
         try:
             file_size = os.path.getsize(file_path)
@@ -495,7 +605,34 @@ class IncrementalIndexer:
         )
         try:
             inner_result = self._index_file_inner(
-                file_path, kb_id, doc_id, file_hash, reindex_ctx=reindex_ctx)
+                file_path, kb_id, doc_id, file_hash,
+                reindex_ctx=reindex_ctx,
+                lineage_recorder=lineage_recorder,
+            )
+            if lineage_recorder is not None:
+                lineage_recorder.finish(
+                    "duplicate" if inner_result.get("skipped") else "success"
+                )
+                lineage_snapshot = lineage_recorder.context.snapshot()
+                try:
+                    self.registry.update_fields(
+                        file_path,
+                        {
+                            "last_processing_run_id": lineage_snapshot.run_id,
+                            "pipeline_version": lineage_snapshot.pipeline_version,
+                            "processing_status": lineage_snapshot.status,
+                            "model_count": len(lineage_snapshot.model_summary),
+                            "processing_finished_at": (
+                                lineage_snapshot.finished_at.isoformat()
+                                if lineage_snapshot.finished_at else None
+                            ),
+                        },
+                    )
+                except Exception as registry_error:
+                    logger.warning(
+                        "[ProcessingLineage] registry 摘要回填失败: %s",
+                        registry_error,
+                    )
             trace_collector.end_span(upload_span,
                 metrics={"doc_id": doc_id, "kb_id": kb_id})
             trace_collector.finish(trace, os.path.basename(file_path),
@@ -509,8 +646,19 @@ class IncrementalIndexer:
                 "doc_db_id": inner_result.get("doc_db_id", ""),
                 "file_hash": inner_result.get("file_hash", file_hash),
                 "status": "active",
+                "processing_run_id": (
+                    lineage_snapshot.run_id if lineage_recorder is not None else ""
+                ),
+                "model_summary": (
+                    lineage_snapshot.model_summary if lineage_recorder is not None else []
+                ),
             }
         except Exception as e:
+            if lineage_recorder is not None:
+                try:
+                    lineage_recorder.fail(str(e))
+                except Exception as lineage_error:
+                    logger.warning("[ProcessingLineage] 失败收口异常: %s", lineage_error)
             trace_collector.end_span(upload_span, status="error",
                 metrics={"error": str(e)[:200]})
             try:
@@ -523,7 +671,8 @@ class IncrementalIndexer:
             raise
 
     def _index_file_inner(self, file_path: str, kb_id: str, doc_id: str,
-                          file_hash: str, reindex_ctx: dict | None = None) -> dict:
+                          file_hash: str, reindex_ctx: dict | None = None,
+                          lineage_recorder: ProcessingRunRecorder | None = None) -> dict:
         """_index_file 的实际工作，被 index_upload span 包裹。
 
         新流程: load → parse → clean → dedup → chunk → metadata → embed → vector_db
@@ -573,10 +722,21 @@ class IncrementalIndexer:
             kind=SpanKind.INDEX_LOAD.value,
             input={"file_path": file_path, "ext": ext},
         )
+        load_lineage = None
+        if lineage_recorder is not None:
+            load_lineage = lineage_recorder.begin_stage(
+                "load", role=None, engine_type="runtime",
+                metadata={"file_ext": ext},
+            )
         try:
             file_size = os.path.getsize(file_path)
         except OSError:
             file_size = 0
+        if load_lineage is not None:
+            lineage_recorder.finish_stage(
+                load_lineage[0], status="success", started_at=load_lineage[1],
+                output_count=1,
+            )
         trace_collector.end_span(load_span,
             metrics={"file_size": file_size, "ext": ext})
 
@@ -591,9 +751,106 @@ class IncrementalIndexer:
         )
         chunks: list = []
         _qc: dict = {}
+        parser_lineage = None
+        ocr_lineage = None
+        if lineage_recorder is not None:
+            parser_lineage = lineage_recorder.begin_stage(
+                "parser", role=None, engine_type="parser",
+                metadata={"file_ext": ext},
+            )
+            if ext == ".pdf":
+                ocr_lineage = lineage_recorder.begin_stage(
+                    "ocr", role="ocr", engine_type="ocr",
+                    metadata={"file_ext": ext},
+                )
+            else:
+                ocr_lineage = lineage_recorder.begin_stage(
+                    "ocr", role="ocr", engine_type="ocr",
+                    skip_reason="not_pdf", metadata={"file_ext": ext},
+                )
+                lineage_recorder.persist_stage(ocr_lineage[0])
         try:
             from backend.rag.preprocessing.pipeline import parse_and_chunk_full
-            chunks, _qc = parse_and_chunk_full(file_path)
+            if ext == ".pdf":
+                from backend.rag.preprocessing.parser import ocr as _ocr_mod
+
+                _ocr_mod.reset_ocr_tracking()
+            bind_step = (
+                ocr_lineage[0] if ext == ".pdf" and ocr_lineage is not None
+                else parser_lineage[0] if parser_lineage is not None
+                else None
+            )
+            with lineage_recorder.bind_stage(bind_step) if lineage_recorder else nullcontext():
+                chunks, _qc = parse_and_chunk_full(file_path)
+            if ocr_lineage is not None and ext == ".pdf":
+                raw_ast = _qc.get("raw_ast")
+                ocr_triggered = bool(getattr(raw_ast, "ocr_triggered", False))
+                ocr_required = bool(
+                    getattr(raw_ast, "ocr_required", ocr_triggered)
+                )
+                ocr_attempted = bool(
+                    getattr(raw_ast, "ocr_attempted", ocr_triggered)
+                )
+                from backend.rag.preprocessing.parser.ocr import (
+                    get_ocr_model_identity, get_ocr_result_meta,
+                )
+                ocr_stats = get_ocr_result_meta()
+                ocr_pages = int(getattr(raw_ast, "ocr_pages", 0) or 0)
+                ocr_calls = int(ocr_stats.get("calls") or 0)
+                ocr_failures = int(ocr_stats.get("failures") or 0)
+                ocr_successes = int(
+                    ocr_stats["successes"]
+                    if "successes" in ocr_stats
+                    else max(ocr_calls - ocr_failures, 0)
+                )
+                ocr_successes = max(ocr_successes, ocr_pages)
+                ocr_input_count = max(ocr_calls, ocr_pages + ocr_failures)
+                ocr_info = get_ocr_model_identity()
+                actual_model = str(ocr_stats.get("model_name") or "").strip()
+                if actual_model:
+                    ocr_info = replace(ocr_info, model_name=actual_model)
+
+                if ocr_required and ocr_attempted:
+                    if ocr_info.model_name:
+                        lineage_recorder.set_stage_model(
+                            ocr_lineage[0], ocr_info
+                        )
+                    if ocr_failures:
+                        ocr_status = "fallback" if ocr_successes else "failed"
+                        ocr_fallback_reason = "ocr_page_failed"
+                    elif not ocr_successes:
+                        ocr_status = "failed"
+                        ocr_fallback_reason = "ocr_no_output"
+                    elif (
+                        ocr_input_count
+                        and int(ocr_stats.get("cache_hits") or 0) == ocr_input_count
+                    ):
+                        ocr_status = "cached"
+                        ocr_fallback_reason = None
+                    else:
+                        ocr_status = "success"
+                        ocr_fallback_reason = None
+                    cache_hits = int(ocr_stats.get("cache_hits") or 0)
+                    lineage_recorder.finish_stage(
+                        ocr_lineage[0], status=ocr_status,
+                        started_at=ocr_lineage[1], input_count=ocr_input_count,
+                        output_count=ocr_pages,
+                        cache_status=(
+                            "hit" if ocr_input_count and cache_hits == ocr_input_count
+                            else "partial" if cache_hits else "miss"
+                        ),
+                        fallback_reason=ocr_fallback_reason,
+                    )
+                else:
+                    lineage_recorder.finish_stage(
+                        ocr_lineage[0], status="skipped",
+                        started_at=ocr_lineage[1],
+                        skip_reason=(
+                            "feature_disabled"
+                            if ocr_required
+                            else "text_layer_sufficient"
+                        ),
+                    )
             if not chunks:
                 # 空 chunks → 视为"无可索引内容"。
                 # 改用 ChunkingEmptyError(P1-4)而非 RuntimeError,让调用方能区分：
@@ -614,6 +871,11 @@ class IncrementalIndexer:
                 _apply_fixture_metadata(ch.metadata, fixture_set)
             # 共享给后续 clean / chunk / metadata 段使用，避免重复调用 parse_and_chunk
             self._current_chunks = chunks
+            if parser_lineage is not None:
+                lineage_recorder.finish_stage(
+                    parser_lineage[0], status="success",
+                    started_at=parser_lineage[1], output_count=len(chunks),
+                )
             trace_collector.end_span(parse_span,
                 metrics={"doc_count": len(chunks),
                          "page_count": len(chunks),
@@ -697,6 +959,12 @@ class IncrementalIndexer:
             type="chunk",
             kind=SpanKind.INDEX_CHUNK.value,
         )
+        chunk_lineage = None
+        if lineage_recorder is not None:
+            chunk_lineage = lineage_recorder.begin_stage(
+                "semantic_chunk", role=None, engine_type="chunker",
+                metadata={"strategy": "pipeline", "overlap": 50},
+            )
         try:
             from backend.config import LEAF_CHUNK_TOKENS
             # 复用 parse 段的 chunks，避免重复调用 parse_and_chunk
@@ -752,7 +1020,20 @@ class IncrementalIndexer:
                         "chunk_overlap": chunk_overlap,
                         # R-P1-3: 明细持久化进 trace（截断到 20 条防膨胀）
                         "filtered_details": filtered_details[:20]})
+            if chunk_lineage is not None:
+                lineage_recorder.finish_stage(
+                    chunk_lineage[0], status="success",
+                    started_at=chunk_lineage[1],
+                    input_count=total_before_filter,
+                    output_count=len(filtered_chunks),
+                )
         except Exception as e:
+            if chunk_lineage is not None:
+                lineage_recorder.finish_stage(
+                    chunk_lineage[0], status="failed",
+                    started_at=chunk_lineage[1],
+                    error_message=str(e),
+                )
             trace_collector.end_span(chunk_span, status="error",
                 metrics={"error": str(e)[:200]})
             raise
@@ -784,14 +1065,58 @@ class IncrementalIndexer:
             "doc_type": "general",
             "person_names": [],
         }
+        metadata_lineage = None
+        if lineage_recorder is not None:
+            metadata_lineage = lineage_recorder.begin_stage(
+                "metadata", role=None, engine_type="orchestrator",
+                metadata={"chunk_count": len(chunks)},
+            )
         try:
+            metadata_kwargs = {
+                "parent_span_id": meta_span.span_id,
+                "chunks_text": [ch.page_content for ch in chunks],
+            }
+            if lineage_recorder is not None:
+                # 允许存量插件/测试替身继续使用旧签名；仓库内实现支持该参数
+                # 时才注入，避免兼容性 TypeError 把元数据误判为降级。
+                try:
+                    params = inspect.signature(self._build_doc_metadata).parameters
+                    supports_lineage = (
+                        "processing_recorder" in params
+                        or any(
+                            p.kind is inspect.Parameter.VAR_KEYWORD
+                            for p in params.values()
+                        )
+                    )
+                except (TypeError, ValueError):
+                    # 无法反射的可调用对象按新签名处理，真实异常仍由下方
+                    # 元数据阶段统一捕获并留痕。
+                    supports_lineage = True
+                if supports_lineage:
+                    metadata_kwargs["processing_recorder"] = lineage_recorder
             meta_result = _run_async(self._build_doc_metadata(
-                full_text, doc_meta,
-                parent_span_id=meta_span.span_id,
-                chunks_text=[ch.page_content for ch in chunks],
+                full_text, doc_meta, **metadata_kwargs
             ))
             doc_meta.update(meta_result)
+            runtime_embedding = _embedding_model_identity(self.embedding)
+            if runtime_embedding.model_name:
+                # Registry 摘要供文档列表直接展示，必须与本次实际向量化
+                # 的客户端一致，不能保留旧 env/default 模型名。
+                doc_meta["embedding_model"] = runtime_embedding.model_name
+            if metadata_lineage is not None:
+                lineage_recorder.finish_stage(
+                    metadata_lineage[0], status="success",
+                    started_at=metadata_lineage[1], input_count=1,
+                    output_count=1,
+                )
         except Exception as e:
+            if metadata_lineage is not None:
+                lineage_recorder.finish_stage(
+                    metadata_lineage[0], status="fallback",
+                    started_at=metadata_lineage[1], input_count=1,
+                    output_count=1, fallback_reason="metadata_default",
+                    error_message=str(e),
+                )
             logger.warning(f"元数据构建失败（使用默认值）: {e}")
 
         # 截断留痕：分块超上限被 _enrich 截断时，检索覆盖天然不完整，
@@ -932,18 +1257,76 @@ class IncrementalIndexer:
             i for i, ch in enumerate(chunks)
             if ch.metadata.get("chunk_type") == "table_row"
         ]
+        table_lineage = None
+        if lineage_recorder is not None and not table_row_indexes:
+            table_lineage = lineage_recorder.begin_stage(
+                "table_describe", role="table_describe", engine_type="llm",
+                skip_reason="no_table_rows",
+            )
+            lineage_recorder.persist_stage(table_lineage[0])
         if table_row_indexes:
+            if lineage_recorder is not None:
+                table_lineage = lineage_recorder.begin_stage(
+                    "table_describe", role="table_describe", engine_type="llm",
+                    metadata={"row_count": len(table_row_indexes)},
+                )
             try:
                 from backend.rag.preprocessing.table_describe import generate_table_descriptions
                 # 同步直调：_index_file_inner 整体在线程池执行，无事件循环阻塞问题
-                row_descs = generate_table_descriptions(
-                    [chunks[i].page_content for i in table_row_indexes],
-                    table_summary=doc_meta.get("summary", "") or "",
+                with lineage_recorder.bind_stage(table_lineage[0]) if lineage_recorder and table_lineage else nullcontext():
+                    row_descs = generate_table_descriptions(
+                        [chunks[i].page_content for i in table_row_indexes],
+                        table_summary=doc_meta.get("summary", "") or "",
+                    )
+                from backend.rag.preprocessing.table_describe import (
+                    get_last_generation_meta,
                 )
+                table_result_meta = get_last_generation_meta()
                 for i, desc in row_descs.items():
                     if 0 <= i < len(table_row_indexes):
                         chunks[table_row_indexes[i]].metadata["table_desc"] = desc
+                if lineage_recorder is not None and table_lineage is not None:
+                    table_status = str(table_result_meta.get("status") or "success")
+                    if table_status not in {"success", "cached", "fallback", "skipped"}:
+                        table_status = "success"
+                    if table_status != "skipped":
+                        lineage_recorder.set_stage_model(
+                            table_lineage[0],
+                            MetadataStage._role_model_identity(
+                                "table_describe",
+                                str(table_result_meta.get("model") or ""),
+                            ),
+                        )
+                    from backend.config.rag import (
+                        METADATA_SCHEMA_FINGERPRINT,
+                        TABLE_DESC_PROMPT_VERSION,
+                    )
+                    lineage_recorder.finish_stage(
+                        table_lineage[0], status=table_status,
+                        started_at=table_lineage[1],
+                        input_count=len(table_row_indexes),
+                        output_count=len(row_descs),
+                        cache_status=str(table_result_meta.get("cache_status") or (
+                            "hit" if table_status == "cached" else "miss"
+                        )),
+                        fallback_reason=str(
+                            table_result_meta.get("fallback_reason") or ""
+                        ) or None,
+                        skip_reason=str(
+                            table_result_meta.get("skip_reason") or ""
+                        ) or None,
+                        prompt_key="rag.preprocessing.table_describe",
+                        prompt_version=TABLE_DESC_PROMPT_VERSION,
+                        schema_fingerprint=METADATA_SCHEMA_FINGERPRINT,
+                    )
             except Exception as e:
+                if lineage_recorder is not None and table_lineage is not None:
+                    lineage_recorder.finish_stage(
+                        table_lineage[0], status="failed",
+                        started_at=table_lineage[1],
+                        input_count=len(table_row_indexes),
+                        error_message=str(e),
+                    )
                 logger.warning(f"[TableDesc] 生成失败（无描述降级）: {e}")
 
         # ── 4.3a/4.3b: 实体与时间引用随 chunk 落库（数据可达性）──
@@ -1145,10 +1528,36 @@ class IncrementalIndexer:
             kind=SpanKind.INDEX_EMBED.value,
         )
         embed_span.metrics["chunk_count"] = len(chunks)
+        embedding_lineage = None
+        if lineage_recorder is not None:
+            embedding_lineage = lineage_recorder.begin_stage(
+                "embedding", role="embedding", engine_type="embedding",
+                model=_embedding_model_identity(self.embedding),
+                metadata={"chunk_count": len(chunks)},
+            )
         # 预嵌入：除失败预检外，成功向量直接传给 vectordb.add_documents(embeddings=...)，
         # 避免 langchain 内部对同一批文本再次全量嵌入（原先向量被丢弃，成本翻倍）
-        precomputed_vectors = self._embed_with_retry(
-            chunks, embed_span, doc_summary=doc_meta.get("summary", "") or "")
+        with lineage_recorder.bind_stage(embedding_lineage[0]) if lineage_recorder and embedding_lineage else nullcontext():
+            precomputed_vectors = self._embed_with_retry(
+                chunks, embed_span, doc_summary=doc_meta.get("summary", "") or "")
+        if embedding_lineage is not None:
+            embedding_status = (
+                "success" if len(precomputed_vectors) == len(chunks) else "fallback"
+            )
+            lineage_recorder.finish_stage(
+                embedding_lineage[0], status=embedding_status,
+                started_at=embedding_lineage[1], input_count=len(chunks),
+                output_count=len(precomputed_vectors),
+                cache_status=(
+                    "hit" if embed_span.metrics.get("embedding_cache_hit", 0) == len(chunks)
+                    else "partial" if embed_span.metrics.get("embedding_cache_hit", 0)
+                    else "miss"
+                ),
+                fallback_reason=(
+                    "vector_store_reembed"
+                    if embedding_status == "fallback" else None
+                ),
+            )
         trace_collector.end_span(embed_span,
             metrics={"attempted": len(chunks),
                      "succeeded": len(precomputed_vectors),
@@ -1162,25 +1571,38 @@ class IncrementalIndexer:
             type="vector_db",
             kind=SpanKind.INDEX_VECTOR_DB.value,
         )
+        vector_lineage = None
+        if lineage_recorder is not None:
+            vector_lineage = lineage_recorder.begin_stage(
+                "vector_write", role=None, engine_type="vector_db",
+                metadata={"collection": getattr(self.vectordb, "_collection_name", "")},
+            )
         try:
-            if chunks:
-                if len(precomputed_vectors) == len(chunks):
-                    # 预嵌入全部成功 → 直接传入向量，跳过 add_documents 内部的二次嵌入
-                    chunk_ids = self.vectordb.add_documents(
-                        chunks, embeddings=precomputed_vectors) or []
+            with lineage_recorder.bind_stage(vector_lineage[0]) if lineage_recorder and vector_lineage else nullcontext():
+                if chunks:
+                    if len(precomputed_vectors) == len(chunks):
+                        # 预嵌入全部成功 → 直接传入向量，跳过 add_documents 内部的二次嵌入
+                        chunk_ids = self.vectordb.add_documents(
+                            chunks, embeddings=precomputed_vectors) or []
+                    else:
+                        # 预嵌入不完整（部分 chunk 嵌入失败）→ 回退由向量库统一嵌入，
+                        # 保证不产生向量空洞；此时预嵌入仅充当失败预检
+                        logger.warning(
+                            f"[Embed] 预嵌入不完整 ({len(precomputed_vectors)}/{len(chunks)})，"
+                            f"回退由向量库嵌入: {os.path.basename(file_path)}"
+                        )
+                        chunk_ids = self.vectordb.add_documents(chunks) or []
                 else:
-                    # 预嵌入不完整（部分 chunk 嵌入失败）→ 回退由向量库统一嵌入，
-                    # 保证不产生向量空洞；此时预嵌入仅充当失败预检
-                    logger.warning(
-                        f"[Embed] 预嵌入不完整 ({len(precomputed_vectors)}/{len(chunks)})，"
-                        f"回退由向量库嵌入: {os.path.basename(file_path)}"
-                    )
-                    chunk_ids = self.vectordb.add_documents(chunks) or []
-            else:
-                chunk_ids = []
+                    chunk_ids = []
             trace_collector.end_span(vdb_span,
                 metrics={"written": len(chunk_ids),
                          "table": getattr(self.vectordb, "_collection_name", "")})
+            if vector_lineage is not None:
+                lineage_recorder.finish_stage(
+                    vector_lineage[0], status="success",
+                    started_at=vector_lineage[1], input_count=len(chunks),
+                    output_count=len(chunk_ids),
+                )
         except Exception as e:
             logger.error(f"Chunk 写入失败: {e}")
             trace_collector.end_span(vdb_span, status="error",
@@ -1217,6 +1639,26 @@ class IncrementalIndexer:
             )
             logger.warning(f"[indexer] {error_msg} — 索引失败,不上传空 doc")
             raise ChunkingEmptyError(error_msg)
+        lineage_registry_meta: dict[str, Any] = {}
+        if lineage_recorder is not None:
+            lineage_snapshot = lineage_recorder.context.snapshot()
+            lineage_steps = {
+                item.stage: item for item in lineage_snapshot.steps
+            }
+            ocr_step = lineage_steps.get("ocr")
+            metadata_step = lineage_steps.get("metadata_extract")
+            lineage_registry_meta = {
+                "last_processing_run_id": lineage_snapshot.run_id,
+                "pipeline_version": lineage_snapshot.pipeline_version,
+                "metadata_route": doc_meta.get("llm_strategy", ""),
+                # cached/fallback/failed 也表示本次确实进入过 OCR；只有 skipped
+                # 才代表文本层充足或功能关闭。
+                "ocr_used": bool(ocr_step and ocr_step.status != "skipped"),
+                "ocr_model": (ocr_step.model_name if ocr_step else "") or "",
+                "metadata_model": (metadata_step.model_name if metadata_step else "") or "",
+                "model_count": len(lineage_snapshot.model_summary),
+                "processing_status": "active",
+            }
         try:
             self.registry.register(
                 file_path=file_path,
@@ -1255,6 +1697,7 @@ class IncrementalIndexer:
                     "source_priority": doc_meta.get("source_priority", 0),
                     "quality_status": doc_meta.get("quality_status", "unknown"),
                     "fixture_set": fixture_set_val or "",
+                    **lineage_registry_meta,
                 },
             )
         except Exception:
@@ -1300,7 +1743,10 @@ class IncrementalIndexer:
     def _report_cache_metrics(parent_span, hits: int, total: int) -> None:
         EmbeddingStage.report_cache_metrics(parent_span, hits, total)
 
-    async def _build_doc_metadata(self, full_text: str, base_meta: dict, parent_span_id: str = "", chunks_text: list[str] | None = None) -> dict:
+    async def _build_doc_metadata(self, full_text: str, base_meta: dict,
+                                  parent_span_id: str = "",
+                                  chunks_text: list[str] | None = None,
+                                  processing_recorder=None) -> dict:
         """构建文档级元数据 — 委托 MetadataStage（stages/metadata_stage.py）。
 
         返回 dict 契约与拆分前完全一致（下游 chunk 注入 / doc_db 落库 /
@@ -1308,7 +1754,8 @@ class IncrementalIndexer:
         """
         return await self._meta_stage.build(
             full_text, base_meta,
-            parent_span_id=parent_span_id, chunks_text=chunks_text)
+            parent_span_id=parent_span_id, chunks_text=chunks_text,
+            processing_recorder=processing_recorder)
 
     @property
     def _meta_stage(self) -> MetadataStage:

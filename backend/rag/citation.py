@@ -53,12 +53,30 @@ class CitationFormatter:
     （如可注入不同的 type_label_map 或 threshold）。
     """
 
+    # 分点边界：句末标点/冒号后紧跟「N.」且 N 后不是另一位数字（排除小数如 3.5）。
+    # 只在同行内匹配（[^行首]），已有换行处 lookbehind 看到 \n 不成立，不会产生双换行。
+    _POINT_BOUNDARY_RE = re.compile(r"(?<=[。！？；：;:])[ \t]*(?=\d{1,2}\.(?!\d))")
+
     def strip_think(self, text: str) -> str:
         """剥离 <think>...</think> 推理块。未闭合标签保留后续内容，避免误删。"""
         cleaned = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL)
         if "<think>" in cleaned and "</think>" not in cleaned:
             cleaned = re.sub(r"<think>.*", "", cleaned, flags=re.DOTALL)
         return cleaned.strip()
+
+    def normalize_point_layout(self, text: str) -> str:
+        """确定性分点归一化：句号+序号边界处补换行。
+
+        提示词要求模型分点呈现，但生成随机性下仍偶发把两个要点写在同一行
+        （如「…[E1]。2. **日本**…3. **美国**」）。这里在句末标点后紧跟
+        「N.」处补一个换行，保证前端按点换行。零 LLM 成本、幂等：
+        - 已分行（序号在行首）→ lookbehind 是 \n，不匹配，原样返回
+        - 小数（「3.5 个工作日」）→ (?!\d) 排除
+        - 「如下：1.」冒号后首个序号 → 同样补行
+        """
+        if not text:
+            return text
+        return self._POINT_BOUNDARY_RE.sub("\n", text)
 
     def verify_support(self, answer: str, docs: list, question: str = "") -> tuple[str, list]:
         """Citation Filter: 复用 Rerank 阶段的 CrossEncoder 分数，避免重复推理。

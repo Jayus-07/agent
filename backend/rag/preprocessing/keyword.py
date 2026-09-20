@@ -14,7 +14,7 @@ from typing import List, Set, Dict
 
 import jieba.analyse
 
-from backend.config import DOMAIN_RULES, blacklist
+from backend.config import DOMAIN_RULES, blacklist, model_roles
 from backend.shared.logger import logger
 
 # LLM Decision Router 评分阈值
@@ -294,9 +294,10 @@ def extract_doc_keywords_llm(text: str, top_k: int = 10) -> tuple:
     """
     from backend.config.llm import OLLAMA_ENABLED
     from backend.config.rag import DOC_LLM_MODEL
+    doc_model = model_roles.resolve_runtime_name("doc", DOC_LLM_MODEL)
 
-    if DOC_LLM_MODEL and OLLAMA_ENABLED:
-        return _extract_doc_keywords_ollama(text, top_k, DOC_LLM_MODEL)
+    if doc_model and OLLAMA_ENABLED:
+        return _extract_doc_keywords_ollama(text, top_k, doc_model)
     return _extract_doc_keywords_proxy(text, top_k)
 
 

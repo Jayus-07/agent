@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextvars import ContextVar
 from typing import Callable, Optional
 
 from backend.shared.logger import logger
@@ -37,9 +38,22 @@ from backend.shared.logger import logger
 from backend.config.rag import (
     ENABLE_SIMULATED_QUESTIONS,
     QUESTION_GEN_MAX_CHUNKS,
+    QUESTION_GEN_PROMPT_VERSION,
 )
 
 _LAST_META_CLEANUP_RE = re.compile(r"\{.*\}", re.DOTALL)
+_last_generation_meta: ContextVar[dict] = ContextVar(
+    "question_generation_last_meta", default={}
+)
+
+
+def _set_generation_meta(**values) -> None:
+    _last_generation_meta.set(dict(values))
+
+
+def get_last_generation_meta() -> dict:
+    """返回本次问题生成的阶段状态，不改变历史 tokens 返回契约。"""
+    return dict(_last_generation_meta.get() or {})
 
 
 def _fallback_questions(chunk_text: str) -> list[str]:
@@ -115,7 +129,7 @@ def _invoke_llm(prompt: str, llm_obj=None):
     qwen 云模型自动关思考模式，且 proxy 层自动计量落 llm_usage_store。
     """
     from backend.rag.preprocessing.llm_enrichment import invoke_metadata_llm
-    return invoke_metadata_llm(prompt, llm_obj=llm_obj)
+    return invoke_metadata_llm(prompt, llm_obj=llm_obj, role="question_gen")
 
 
 def _read_last_tokens() -> dict:
@@ -133,15 +147,38 @@ def _read_last_tokens() -> dict:
         return {}
 
 
+def _cache_version() -> str:
+    """返回影响问题结果的角色、供应商、模型和契约版本。"""
+    try:
+        from backend.config import model_roles
+        from backend.config.rag import METADATA_SCHEMA_FINGERPRINT
+        from backend.infra.llm.models import resolve_provider
+
+        effective = model_roles.resolve_effective("question_gen")
+        model = str(effective.get("value") or "")
+        provider = resolve_provider(model) if model else ""
+        source = str(effective.get("source") or "")
+        revision = str(effective.get("updated_at") or "")
+    except Exception as exc:
+        logger.debug(f"[QuestionGen] 读取模型版本失败，使用空版本: {exc}")
+        provider = model = source = revision = ""
+        try:
+            from backend.config.rag import METADATA_SCHEMA_FINGERPRINT
+        except Exception:
+            METADATA_SCHEMA_FINGERPRINT = ""
+    return "|".join(("question_gen", provider, model, source, revision,
+                     QUESTION_GEN_PROMPT_VERSION, METADATA_SCHEMA_FINGERPRINT))
+
+
 def _cache_key(chunks_text: list[str], doc_type: str) -> str:
-    """批级缓存键：全部 chunk 文本 + doc_type 的 sha256。
+    """批级缓存键：内容、文档类型、实际模型和提示词版本共同寻址。
 
     内容寻址保证：同内容重索引/副本文档 → 相同问题 → 前缀稳定 →
     embedding 缓存（3.1）可命中。LLM 非确定性输出若不缓存，
     会在重索引时生成不同问题、击穿下游嵌入缓存（运行时验收发现）。
     """
     import hashlib
-    joined = doc_type + "\x00" + "\x00".join(chunks_text)
+    joined = _cache_version() + "\x00" + doc_type + "\x00" + "\x00".join(chunks_text)
     return "question_gen:" + hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
@@ -192,7 +229,11 @@ def generate_chunk_questions(chunks_text: list[str],
         - tokens: 本次 LLM 调用用量（prompt_tokens/completion_tokens/cost_usd），
           LLM 未调用或缓存命中时为 {}。
     """
-    if not ENABLE_SIMULATED_QUESTIONS or not chunks_text:
+    if not chunks_text:
+        _set_generation_meta(status="skipped", skip_reason="no_chunks")
+        return [], {}
+    if not ENABLE_SIMULATED_QUESTIONS:
+        _set_generation_meta(status="skipped", skip_reason="feature_disabled")
         return [], {}
 
     # 内容寻址缓存：同内容重索引/副本 → 相同问题（前缀稳定 → 嵌入缓存可命中）
@@ -200,6 +241,7 @@ def generate_chunk_questions(chunks_text: list[str],
     cached = _cache_get(ckey)
     if cached is not None and len(cached) == len(chunks_text):
         logger.info(f"[QuestionGen] 缓存命中 {len(cached)} chunks")
+        _set_generation_meta(status="cached", cache_status="hit")
         return cached, {}
 
     # 成本护栏：超长文档只对前 N chunk 走 LLM，其余规则兜底
@@ -208,6 +250,7 @@ def generate_chunk_questions(chunks_text: list[str],
 
     fallback_result = [_fallback_questions(ct) for ct in chunks_text]
     if not llm_scope:
+        _set_generation_meta(status="fallback", fallback_reason="llm_scope_empty")
         return fallback_result, {}
 
     prompt = _build_prompt(llm_scope, doc_type)
@@ -215,12 +258,25 @@ def generate_chunk_questions(chunks_text: list[str],
         result = _invoke_llm(prompt)
         content = result.content.strip() if hasattr(result, "content") else str(result)
         tokens = _read_last_tokens()
+        actual_model = ""
+        try:
+            from backend.infra.llm.proxy import _last_call_meta_var
+
+            actual_model = str((_last_call_meta_var.get() or {}).get("model") or "")
+        except Exception:
+            pass
+        _set_generation_meta(status="success", cache_status="miss", model=actual_model)
         parsed = _extract_json_questions(content, len(llm_scope), llm_scope)
         if parsed is None:
+            _set_generation_meta(
+                status="fallback", fallback_reason="invalid_response",
+                model=actual_model,
+            )
             return fallback_result, tokens
         result_questions = parsed + [_fallback_questions(ct) for ct in tail_scope]
         _cache_put(ckey, result_questions)
         return result_questions, tokens
     except Exception as e:
         logger.warning(f"[QuestionGen] LLM 调用失败，规则降级: {type(e).__name__}: {e}")
+        _set_generation_meta(status="fallback", fallback_reason="llm_error")
         return fallback_result, {}

@@ -76,6 +76,15 @@ CREATE TABLE IF NOT EXISTS {table} (
     supersedes_version_id TEXT DEFAULT '',
     source_priority INTEGER DEFAULT 0,
     quality_status TEXT DEFAULT 'unknown',
+    last_processing_run_id TEXT DEFAULT '',
+    pipeline_version TEXT DEFAULT '',
+    metadata_route TEXT DEFAULT '',
+    ocr_used BOOLEAN DEFAULT FALSE,
+    ocr_model TEXT DEFAULT '',
+    metadata_model TEXT DEFAULT '',
+    model_count INTEGER DEFAULT 0,
+    processing_status TEXT DEFAULT '',
+    processing_finished_at TEXT,
     expire_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_{table}_doc_id ON {table}(doc_id);
@@ -95,6 +104,9 @@ _REGISTER_VALUE_COLS = (
     "fixture_set",
     "version_id", "effective_from", "effective_to", "supersedes_version_id",
     "source_priority", "quality_status",
+    "last_processing_run_id", "pipeline_version", "metadata_route",
+    "ocr_used", "ocr_model", "metadata_model", "model_count", "processing_status",
+    "processing_finished_at",
     "status",
 )
 
@@ -177,6 +189,23 @@ class PostgresDocumentRegistry(DocumentRegistry):
                     f"ALTER TABLE {self._table} ADD COLUMN {col} {coldef}"
                 )
                 logger.info(f"[doc_registry_pg] 迁移：补列 {col}（{desc}）")
+        lineage_columns = (
+            ("last_processing_run_id", "TEXT DEFAULT ''"),
+            ("pipeline_version", "TEXT DEFAULT ''"),
+            ("metadata_route", "TEXT DEFAULT ''"),
+            ("ocr_used", "BOOLEAN DEFAULT FALSE"),
+            ("ocr_model", "TEXT DEFAULT ''"),
+            ("metadata_model", "TEXT DEFAULT ''"),
+            ("model_count", "INTEGER DEFAULT 0"),
+            ("processing_status", "TEXT DEFAULT ''"),
+            ("processing_finished_at", "TEXT"),
+        )
+        for col, coldef in lineage_columns:
+            if col not in existing:
+                conn.cursor().execute(
+                    f"ALTER TABLE {self._table} ADD COLUMN {col} {coldef}"
+                )
+                logger.info(f"[doc_registry_pg] 迁移：补列 {col}（处理血缘）")
 
     # ---- 查询 ----
 
@@ -402,6 +431,9 @@ class PostgresDocumentRegistry(DocumentRegistry):
             # §6 治理 11 字段（R4）：版本治理元数据可回填
             "version_id", "effective_from", "effective_to",
             "supersedes_version_id", "source_priority", "quality_status",
+            "last_processing_run_id", "pipeline_version", "metadata_route",
+            "ocr_used", "ocr_model", "metadata_model", "model_count", "processing_status",
+            "processing_finished_at",
         }
         sets = {k: v for k, v in (fields or {}).items() if k in allowed}
         if not sets:
@@ -461,6 +493,15 @@ class PostgresDocumentRegistry(DocumentRegistry):
         supersedes_version_id = meta.get("supersedes_version_id", "")
         source_priority = meta.get("source_priority", 0)
         quality_status = meta.get("quality_status", "unknown")
+        last_processing_run_id = meta.get("last_processing_run_id", "")
+        pipeline_version = meta.get("pipeline_version", "")
+        metadata_route = meta.get("metadata_route", "")
+        ocr_used = bool(meta.get("ocr_used", False))
+        ocr_model = meta.get("ocr_model", "")
+        metadata_model = meta.get("metadata_model", "")
+        model_count = int(meta.get("model_count") or 0)
+        processing_status = meta.get("processing_status", "")
+        processing_finished_at = meta.get("processing_finished_at") or None
 
         status = "pending_review" if near_dup_id else "active"
 
@@ -477,6 +518,9 @@ class PostgresDocumentRegistry(DocumentRegistry):
             fixture_set,
             version_id, effective_from, effective_to, supersedes_version_id,
             source_priority, quality_status,
+            last_processing_run_id, pipeline_version, metadata_route,
+            ocr_used, ocr_model, metadata_model, model_count, processing_status,
+            processing_finished_at,
             status,
         )
         value_cols = ", ".join(_REGISTER_VALUE_COLS)

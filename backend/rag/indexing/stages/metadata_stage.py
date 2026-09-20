@@ -15,10 +15,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
+from concurrent.futures import Future
+from contextlib import nullcontext
 
 from backend.observability.tracer import trace_collector, SpanKind
 from backend.rag.indexing.stages.contracts import stage_span
 from backend.shared.logger import logger
+from backend.rag.indexing.processing_lineage import ModelIdentity
 
 
 # 摘要采样：按文档长度自适应，保证头尾关键信息不丢
@@ -42,11 +46,168 @@ class MetadataStage:
         self._registry = registry
         self._embedding = embedding
         self._department = department
-        self._shadow_tasks: set[asyncio.Task] = set()
+        self._shadow_tasks: set[Future] = set()
+
+    @staticmethod
+    def _embedding_model_name(embedding) -> str:
+        """读取 Embedding 包装器中的实际模型名。"""
+        for attribute in ("_model_name", "model_name", "model"):
+            value = getattr(embedding, attribute, None)
+            if isinstance(value, str) and value.strip():
+                return os.path.basename(value.strip())
+        return ""
+
+    @staticmethod
+    def _role_model_identity(role: str, actual_model: str | None = None) -> ModelIdentity:
+        """读取本次入库实际生效的角色模型，不读取待提交配置。"""
+        from backend.config import model_roles
+
+        effective = model_roles.resolve_effective(role)
+        model_name = str(actual_model or "").strip() or str(
+            effective.get("value") or ""
+        ).strip() or None
+        # provider 必须走运行时模型注册表：管理端新增/覆盖的模型可能不在
+        # 旧的 model_roles 快照里，否则血缘会留下 model_name 但 provider 为空。
+        if model_name:
+            from backend.infra.llm.models import resolve_provider
+
+            provider = resolve_provider(model_name)
+        else:
+            provider = None
+        return ModelIdentity(
+            role=role,
+            engine_type="llm",
+            provider=provider,
+            model_name=model_name,
+            config_source=str(effective.get("source") or "") or None,
+            config_revision=str(effective.get("updated_at") or "") or None,
+        )
+
+    @staticmethod
+    def _begin_lineage_stage(recorder, stage: str, role: str | None,
+                             engine_type: str = "llm", *,
+                             metadata: dict | None = None):
+        if recorder is None:
+            return None
+        return recorder.begin_stage(
+            stage,
+            role=role,
+            engine_type=engine_type,
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _finish_lineage_stage(recorder, token, *, status: str,
+                              model: ModelIdentity | None = None,
+                              input_count: int = 0, output_count: int = 0,
+                              usage: dict | None = None,
+                              cache_status: str = "miss",
+                              fallback_reason: str | None = None,
+                              error_message: str | None = None,
+                              skip_reason: str | None = None,
+                              prompt_key: str | None = None,
+                              prompt_version: str | None = None,
+                              prompt_hash: str | None = None,
+                              taxonomy_version: str | None = None,
+                              rules_version: str | None = None,
+                              schema_fingerprint: str | None = None,
+                              metadata: dict | None = None) -> None:
+        if recorder is None or token is None:
+            return
+        if model is not None:
+            recorder.set_stage_model(token[0], model)
+        recorder.finish_stage(
+            token[0],
+            status=status,
+            started_at=token[1],
+            input_count=input_count,
+            output_count=output_count,
+            cache_status=cache_status,
+            usage=usage,
+            fallback_reason=fallback_reason,
+            error_message=error_message,
+            skip_reason=skip_reason,
+            prompt_key=prompt_key,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
+            taxonomy_version=taxonomy_version,
+            rules_version=rules_version,
+            schema_fingerprint=schema_fingerprint,
+            metadata=metadata,
+        )
+
+    async def _generate_questions_with_lineage(
+        self, chunks_text: list[str], doc_type: str, recorder=None,
+    ) -> tuple[list[list[str]], dict]:
+        """生成模拟问题，并把 question_gen 独立记录为一个阶段。"""
+        if not chunks_text:
+            return [], {}
+        from backend.rag.preprocessing import question_gen as _qg
+
+        token = self._begin_lineage_stage(
+            recorder, "question_gen", "question_gen", metadata={"chunk_count": len(chunks_text)}
+        )
+        try:
+            def _generate_in_worker():
+                generated = _qg.generate_chunk_questions(chunks_text, doc_type)
+                return generated[0], generated[1], _qg.get_last_generation_meta()
+
+            with recorder.bind_stage(token[0]) if recorder and token else nullcontext():
+                questions, usage, generation_meta = await asyncio.to_thread(
+                    _generate_in_worker,
+                )
+            from backend.config.rag import (
+                METADATA_SCHEMA_FINGERPRINT,
+                QUESTION_GEN_PROMPT_VERSION,
+            )
+            stage_status = str(
+                usage.get("stage_status")
+                or generation_meta.get("status")
+                or "success"
+            )
+            if stage_status not in {"success", "skipped", "cached", "fallback", "failed"}:
+                stage_status = "success"
+            actual_model = str(
+                usage.get("model") or generation_meta.get("model") or ""
+            )
+            self._finish_lineage_stage(
+                recorder, token, status=stage_status,
+                model=(None if stage_status == "skipped" else
+                       self._role_model_identity("question_gen", actual_model)),
+                input_count=len(chunks_text),
+                output_count=sum(len(item or []) for item in questions or []),
+                usage=usage,
+                cache_status=str(usage.get("cache_status") or generation_meta.get(
+                    "cache_status"
+                ) or (
+                    "hit" if stage_status == "cached" else "miss"
+                )),
+                fallback_reason=str(
+                    usage.get("fallback_reason")
+                    or generation_meta.get("fallback_reason")
+                    or ""
+                ) or None,
+                skip_reason=str(
+                    usage.get("skip_reason")
+                    or generation_meta.get("skip_reason")
+                    or ""
+                ) or None,
+                prompt_key="rag.preprocessing.question_gen",
+                prompt_version=QUESTION_GEN_PROMPT_VERSION,
+                schema_fingerprint=METADATA_SCHEMA_FINGERPRINT,
+            )
+            return questions, usage
+        except Exception as exc:
+            self._finish_lineage_stage(
+                recorder, token, status="failed",
+                input_count=len(chunks_text), error_message=str(exc),
+            )
+            raise
 
     async def build(self, full_text: str, base_meta: dict,
                     parent_span_id: str = "",
-                    chunks_text: list[str] | None = None) -> dict:
+                    chunks_text: list[str] | None = None,
+                    processing_recorder=None) -> dict:
         """异步构建文档级元数据 — LLM Decision Router 评分决策。
 
         P2-2: LLM 计算异步批处理 —— 摘要、关键词、实体抽取并发执行
@@ -84,12 +245,99 @@ class MetadataStage:
             if rollout_allowed:
                 from backend.rag.preprocessing.metadata_decision import decide_metadata
 
-                envelope = await decide_metadata(
-                    full_text,
-                    fname,
-                    fpath,
-                    embedding=self._embedding,
-                    parent_span_id=parent_span_id,
+                decision_lineage = self._begin_lineage_stage(
+                    processing_recorder,
+                    "metadata_extract",
+                    "metadata_extract",
+                    metadata={"route": "cascade"},
+                )
+                try:
+                    with processing_recorder.bind_stage(decision_lineage[0]) if processing_recorder and decision_lineage else nullcontext():
+                        envelope = await decide_metadata(
+                            full_text,
+                            fname,
+                            fpath,
+                            embedding=self._embedding,
+                            parent_span_id=parent_span_id,
+                        )
+                except Exception as exc:
+                    self._finish_lineage_stage(
+                        processing_recorder,
+                        decision_lineage,
+                        status="failed",
+                        input_count=1,
+                        error_message=str(exc),
+                    )
+                    raise
+                source = str(getattr(envelope, "source", "") or "")
+                if source == "r0":
+                    self._finish_lineage_stage(
+                        processing_recorder, decision_lineage, status="skipped",
+                        input_count=1, skip_reason="route_r0",
+                        taxonomy_version=str(getattr(envelope, "taxonomy_version", "") or "") or None,
+                        rules_version=str(getattr(envelope, "rules_version", "") or "") or None,
+                        schema_fingerprint=_metadata_fp,
+                    )
+                elif source == "r1":
+                    classifier_model = str(getattr(envelope, "model_version", "") or "")
+                    self._finish_lineage_stage(
+                        processing_recorder, decision_lineage, status="success",
+                        model=ModelIdentity(
+                            role="metadata_extract",
+                            engine_type="classifier",
+                            provider="local",
+                            model_name=classifier_model or "metadata_classifier",
+                            artifact_fingerprint=classifier_model or None,
+                        ),
+                        input_count=1, output_count=1,
+                        taxonomy_version=str(getattr(envelope, "taxonomy_version", "") or "") or None,
+                        rules_version=str(getattr(envelope, "rules_version", "") or "") or None,
+                        schema_fingerprint=_metadata_fp,
+                    )
+                elif source == "llm":
+                    envelope_metadata = getattr(envelope, "metadata", {}) or {}
+                    actual_model = str(envelope_metadata.get("actual_model") or "")
+                    llm_usage = dict(envelope_metadata.get("llm_tokens") or {})
+                    usage_status = str(
+                        envelope_metadata.get("llm_usage_status")
+                        or ("reported" if llm_usage else "unavailable")
+                    )
+                    self._finish_lineage_stage(
+                        processing_recorder, decision_lineage, status="success",
+                        model=self._role_model_identity(
+                            "metadata_extract", actual_model
+                        ),
+                        input_count=1, output_count=1,
+                        prompt_key="rag.preprocessing.metadata_extract",
+                        prompt_version=str(getattr(envelope, "prompt_version", "") or "") or None,
+                        taxonomy_version=str(getattr(envelope, "taxonomy_version", "") or "") or None,
+                        rules_version=str(getattr(envelope, "rules_version", "") or "") or None,
+                        schema_fingerprint=_metadata_fp,
+                        usage=llm_usage or None,
+                        metadata={"llm_usage_status": usage_status},
+                    )
+                else:
+                    actual_model = str(
+                        (getattr(envelope, "metadata", {}) or {}).get("actual_model")
+                        or ""
+                    )
+                    self._finish_lineage_stage(
+                        processing_recorder, decision_lineage, status="fallback",
+                        model=(self._role_model_identity("metadata_extract", actual_model)
+                               if getattr(envelope, "llm_call_count", 0) else None),
+                        input_count=1, output_count=1,
+                        fallback_reason=str(getattr(envelope, "fallback_reason", "") or source),
+                        prompt_key=("rag.preprocessing.metadata_extract"
+                                    if getattr(envelope, "llm_call_count", 0) else None),
+                        prompt_version=str(getattr(envelope, "prompt_version", "") or "") or None,
+                        taxonomy_version=str(getattr(envelope, "taxonomy_version", "") or "") or None,
+                        rules_version=str(getattr(envelope, "rules_version", "") or "") or None,
+                        schema_fingerprint=_metadata_fp,
+                    )
+                # 级联路径也必须采集影子证据。提交在专用线程池中非阻塞，
+                # 影子失败不能影响主决策与入库；开关关闭时由方法内部直接返回。
+                self._dispatch_shadow_nonblocking(
+                    envelope, full_text, fname, fpath
                 )
                 return await self.finalize_decision(
                     full_text,
@@ -97,6 +345,7 @@ class MetadataStage:
                     envelope,
                     parent_span_id=parent_span_id,
                     chunks_text=chunks_text,
+                    processing_recorder=processing_recorder,
                 )
             if METADATA_CASCADE_ENABLED and not rollout_allowed:
                 from backend.observability.metrics import metadata_route_total
@@ -106,11 +355,46 @@ class MetadataStage:
             # 该路径已移除低置信复验、关键词 LLM，避免重复的 metadata 决策调用。
             unified: dict | None = None
             if ENABLE_LLM_METADATA_EXTRACT:
+                decision_lineage = self._begin_lineage_stage(
+                    processing_recorder,
+                    "metadata_extract",
+                    "metadata_extract",
+                    metadata={"route": "legacy"},
+                )
                 try:
                     from backend.rag.preprocessing.metadata_llm import extract_metadata_llm_async
-                    unified = await extract_metadata_llm_async(
-                        full_text, fname, parent_span_id=parent_span_id)
+                    with processing_recorder.bind_stage(decision_lineage[0]) if processing_recorder and decision_lineage else nullcontext():
+                        unified = await extract_metadata_llm_async(
+                            full_text, fname, parent_span_id=parent_span_id)
+                    self._finish_lineage_stage(
+                        processing_recorder, decision_lineage,
+                        status="success" if unified else "fallback",
+                        model=self._role_model_identity(
+                            "metadata_extract",
+                            str((unified or {}).get("actual_model") or ""),
+                        ),
+                        input_count=1, output_count=1 if unified else 0,
+                        usage=dict((unified or {}).get("llm_tokens") or {}) or None,
+                        fallback_reason=None if unified else "llm_unavailable",
+                        prompt_key="rag.preprocessing.metadata_extract",
+                        prompt_version=str((unified or {}).get("prompt_version", "") or "") or None,
+                        schema_fingerprint=_metadata_fp,
+                        metadata={
+                            "llm_usage_status": str(
+                                (unified or {}).get("llm_usage_status")
+                                or (
+                                    "reported"
+                                    if (unified or {}).get("llm_tokens")
+                                    else "unavailable"
+                                )
+                            ),
+                        },
+                    )
                 except Exception as e:
+                    self._finish_lineage_stage(
+                        processing_recorder, decision_lineage,
+                        status="failed", input_count=1, error_message=str(e),
+                    )
                     logger.warning(f"[MetaLLM] 统一抽取异常（降级规则路径）: {e}")
                     unified = None
                 if unified:
@@ -120,7 +404,8 @@ class MetadataStage:
                         main_envelope, full_text, fname, fpath)
                     return await self.finalize_unified(
                         full_text, base_meta, unified,
-                        parent_span_id=parent_span_id, chunks_text=chunks_text)
+                        parent_span_id=parent_span_id, chunks_text=chunks_text,
+                        processing_recorder=processing_recorder)
                 from backend.observability.metrics import metadata_route_total
                 metadata_route_total.labels(level="legacy_rule", outcome="fallback").inc()
 
@@ -242,6 +527,7 @@ class MetadataStage:
                 fallback_envelope,
                 parent_span_id=parent_span_id,
                 chunks_text=chunks_text,
+                processing_recorder=processing_recorder,
             )
 
         # ⑧ 文档摘要 + 关键词 + 实体 — 三路并发（关键词 LLM 调用放线程池，
@@ -273,7 +559,30 @@ class MetadataStage:
             from backend.config.rag import ENABLE_LLM_METADATA_EXTRACT
             if not ENABLE_LLM_METADATA_EXTRACT or len(sample) < 2000:
                 return _extract_first_sentences(sample, 2), []
-            return await build_llm_summary(sample)
+            summary_lineage = self._begin_lineage_stage(
+                processing_recorder,
+                "metadata_summary",
+                "metadata_extract",
+                metadata={"sample_chars": len(sample)},
+            )
+            try:
+                with processing_recorder.bind_stage(summary_lineage[0]) if processing_recorder and summary_lineage else nullcontext():
+                    result = await build_llm_summary(sample)
+                self._finish_lineage_stage(
+                    processing_recorder, summary_lineage, status="success",
+                    model=self._role_model_identity("metadata_extract"),
+                    input_count=1, output_count=1 if result and result[0] else 0,
+                    prompt_key="rag.preprocessing.summary",
+                    prompt_version="default",
+                    schema_fingerprint=_metadata_fp,
+                )
+                return result
+            except Exception as exc:
+                self._finish_lineage_stage(
+                    processing_recorder, summary_lineage, status="failed",
+                    input_count=1, error_message=str(exc),
+                )
+                raise
 
         async def task_keywords():
             """规则+LLM 关键词提取（LLM 调用放线程池，不阻塞事件循环）"""
@@ -292,9 +601,8 @@ class MetadataStage:
             """
             if not chunks_text:
                 return [], {}
-            from backend.rag.preprocessing import question_gen as _qg
-            return await asyncio.to_thread(
-                _qg.generate_chunk_questions, chunks_text, doc_type,
+            return await self._generate_questions_with_lineage(
+                chunks_text, doc_type, processing_recorder,
             )
 
         # 并行执行：总耗时 = max(各任务耗时) 而非 sum；
@@ -405,8 +713,7 @@ class MetadataStage:
             "sections": list(sections),
             "quality_score": quality.get("score", 0),
             "quality_issues": ", ".join(quality.get("issues", [])),
-            "embedding_model": os.path.basename(getattr(self._embedding, "model_name", "") or
-                                                 str(getattr(self._embedding, "model", ""))) or "",
+            "embedding_model": self._embedding_model_name(self._embedding),
             "minhash_sig": json.dumps(minhash_sig),
             "near_dup_id": near_dup_id,
             "metadata_fingerprint": _metadata_fp,
@@ -456,7 +763,14 @@ class MetadataStage:
             rules_version=evidence.rules_version,
             model_version="legacy-metadata-llm",
             prompt_version=str(unified.get("prompt_version", "default")),
-            metadata=parsed.to_extract_dict(),
+            metadata={
+                **parsed.to_extract_dict(),
+                "llm_tokens": dict(unified.get("llm_tokens") or {}),
+                "llm_usage_status": str(
+                    unified.get("llm_usage_status")
+                    or ("reported" if unified.get("llm_tokens") else "unavailable")
+                ),
+            },
         )
 
     def _dispatch_shadow_nonblocking(
@@ -477,29 +791,34 @@ class MetadataStage:
         if not metadata_shadow.try_acquire_shadow_dispatch_slot():
             return
 
-        async def _dispatch() -> None:
+        try:
+            # 这里必须直接提交到独立线程池。索引器通过 asyncio.run() 桥接
+            # 同步 Celery 任务；若先 create_task，再由临时事件循环驱动，
+            # build() 返回时 task 可能尚未真正提交就被取消，影子证据会丢失。
+            future = metadata_shadow.get_shadow_executor().submit(
+                metadata_shadow.submit_shadow_job,
+                main_envelope,
+                full_text,
+                fname,
+                fpath,
+            )
+        except Exception as exc:
+            metadata_shadow.release_shadow_dispatch_slot()
+            logger.warning(f"[MetaShadow] 后台投递异常（不影响主索引）: {exc}")
+            return
+
+        self._shadow_tasks.add(future)
+
+        def _on_done(done: Future) -> None:
+            self._shadow_tasks.discard(done)
             try:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(
-                    metadata_shadow.get_shadow_executor(),
-                    metadata_shadow.submit_shadow_job,
-                    main_envelope,
-                    full_text,
-                    fname,
-                    fpath,
-                )
+                done.result()
             except Exception as exc:
                 logger.warning(f"[MetaShadow] 后台投递异常（不影响主索引）: {exc}")
             finally:
                 metadata_shadow.release_shadow_dispatch_slot()
 
-        try:
-            task = asyncio.create_task(_dispatch())
-        except Exception:
-            metadata_shadow.release_shadow_dispatch_slot()
-            raise
-        self._shadow_tasks.add(task)
-        task.add_done_callback(self._shadow_tasks.discard)
+        future.add_done_callback(_on_done)
 
     async def _run_cascade_shadow(self, full_text: str, fname: str, fpath: str,
                                   unified: dict, parent_span_id: str = "") -> None:
@@ -550,6 +869,7 @@ class MetadataStage:
         envelope,
         parent_span_id: str = "",
         chunks_text: list[str] | None = None,
+        processing_recorder=None,
     ) -> dict:
         """将所有决策来源收口成同一份下游 metadata 契约。"""
         from backend.rag.preprocessing.entity import extract_entities
@@ -593,6 +913,7 @@ class MetadataStage:
             chunks_text=chunks_text,
             route_level="" if envelope.source == "llm" else envelope.source,
             allow_llm_enrichment=allow_llm_enrichment,
+            processing_recorder=processing_recorder,
         )
         out["llm_used"] = envelope.source == "llm"
         out["llm_strategy"] = envelope.source
@@ -606,6 +927,7 @@ class MetadataStage:
         self, full_text: str, base_meta: dict, unified: dict,
         parent_span_id: str = "", chunks_text: list[str] | None = None,
         route_level: str = "", allow_llm_enrichment: bool = True,
+        processing_recorder=None,
     ) -> dict:
         """统一 LLM 抽取成功后的收口：补齐纯规则产物并返回完整 metadata dict。
 
@@ -620,7 +942,10 @@ class MetadataStage:
             assess_quality, analyze_complexity, compute_minhash,
             extract_sections, extract_person_names, extract_time_refs,
         )
-        from backend.config.rag import METADATA_SCHEMA_FINGERPRINT as _metadata_fp
+        from backend.config.rag import (
+            METADATA_SCHEMA_FINGERPRINT as _metadata_fp,
+            QUESTION_GEN_PROMPT_VERSION,
+        )
 
         fname = base_meta.get("source_file", "")
         doc_id = base_meta.get("doc_id", "")
@@ -650,9 +975,28 @@ class MetadataStage:
         try:
             from backend.config.rag import ENABLE_SIMULATED_QUESTIONS
             if allow_llm_enrichment and ENABLE_SIMULATED_QUESTIONS and chunks_text:
-                from backend.rag.preprocessing import question_gen as _qg
-                questions_by_chunk, question_gen_tokens = await asyncio.to_thread(
-                    _qg.generate_chunk_questions, chunks_text, unified["doc_type"])
+                questions_by_chunk, question_gen_tokens = await self._generate_questions_with_lineage(
+                    chunks_text,
+                    unified["doc_type"],
+                    processing_recorder,
+                )
+            elif processing_recorder is not None:
+                question_lineage = self._begin_lineage_stage(
+                    processing_recorder,
+                    "question_gen",
+                    "question_gen",
+                    metadata={"chunk_count": len(chunks_text or [])},
+                )
+                self._finish_lineage_stage(
+                    processing_recorder,
+                    question_lineage,
+                    status="skipped",
+                    skip_reason=("route_no_llm" if not allow_llm_enrichment
+                                 else "disabled_or_empty"),
+                    prompt_key="rag.preprocessing.question_gen",
+                    prompt_version=QUESTION_GEN_PROMPT_VERSION,
+                    schema_fingerprint=_metadata_fp,
+                )
         except Exception as e:
             logger.warning(f"[MetaLLM] 模拟问题生成失败（不影响元数据）: {e}")
 
@@ -713,8 +1057,7 @@ class MetadataStage:
             "sections": list(sections),
             "quality_score": quality.get("score", 0),
             "quality_issues": ", ".join(quality.get("issues", [])),
-            "embedding_model": os.path.basename(getattr(self._embedding, "model_name", "") or
-                                                 str(getattr(self._embedding, "model", ""))) or "",
+            "embedding_model": self._embedding_model_name(self._embedding),
             "minhash_sig": json.dumps(minhash_sig),
             "near_dup_id": near_dup_id,
             "metadata_fingerprint": _metadata_fp,
@@ -728,6 +1071,7 @@ class MetadataStage:
     async def finalize_cascade(
         self, full_text: str, base_meta: dict, decision,
         parent_span_id: str = "", chunks_text: list[str] | None = None,
+        processing_recorder=None,
     ) -> dict:
         """级联路由 L0-L2 命中的收口（规划阶段 2.2）：分类用路由结果，
         结构字段（summary/keywords/entities/time_refs）走规则提取——零 LLM
@@ -761,4 +1105,5 @@ class MetadataStage:
         return await self.finalize_unified(
             full_text, base_meta, unified,
             parent_span_id=parent_span_id, chunks_text=chunks_text,
-            route_level=decision.level)
+            route_level=decision.level,
+            processing_recorder=processing_recorder)

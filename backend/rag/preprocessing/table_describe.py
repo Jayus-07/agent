@@ -14,18 +14,109 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
+from contextvars import ContextVar
 
-from backend.config.rag import ENABLE_TABLE_DESCRIPTIONS, TABLE_DESC_MAX_ROWS
+from backend.config.rag import (
+    ENABLE_TABLE_DESCRIPTIONS,
+    METADATA_CACHE_TTL_SECONDS,
+    METADATA_SCHEMA_FINGERPRINT,
+    TABLE_DESC_MAX_ROWS,
+    TABLE_DESC_PROMPT_VERSION,
+)
 from backend.shared.logger import logger
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+_last_generation_meta: ContextVar[dict] = ContextVar(
+    "table_description_last_generation_meta", default={}
+)
+
+
+def _set_generation_meta(**values) -> None:
+    _last_generation_meta.set(dict(values))
+
+
+def get_last_generation_meta() -> dict:
+    """返回本次调用的阶段状态和实际响应模型摘要。"""
+    return dict(_last_generation_meta.get() or {})
+
+
+def _read_actual_model() -> str:
+    try:
+        from backend.infra.llm.proxy import _last_call_meta_var
+
+        return str((_last_call_meta_var.get() or {}).get("model") or "")
+    except Exception:
+        return ""
+
+
+def _cache_version() -> str:
+    """返回表格描述结果的模型/配置版本，避免跨模型复用旧描述。"""
+    try:
+        from backend.config import model_roles
+        from backend.infra.llm.models import resolve_provider
+
+        effective = model_roles.resolve_effective("table_describe")
+        model = str(effective.get("value") or "")
+        provider = resolve_provider(model) if model else ""
+        source = str(effective.get("source") or "")
+        revision = str(effective.get("updated_at") or "")
+        return "|".join((provider, model, source, revision,
+                         TABLE_DESC_PROMPT_VERSION, METADATA_SCHEMA_FINGERPRINT))
+    except Exception as exc:
+        logger.debug("[TableDesc] 读取缓存版本失败，按空版本处理: %s", exc)
+        return f"|{TABLE_DESC_PROMPT_VERSION}|{METADATA_SCHEMA_FINGERPRINT}"
+
+
+def _cache_key(scope: list[str], table_summary: str) -> str:
+    payload = "\x00".join((_cache_version(), table_summary or "", *scope))
+    return "table_desc:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _cache_get(key: str) -> dict[int, str] | None:
+    try:
+        from backend.config.redis import REDIS_KEY_PREFIX
+        from backend.infra.redis.client import get_redis
+
+        client = get_redis()
+        if client is None:
+            return None
+        raw = client.get(f"{REDIS_KEY_PREFIX}{key}")
+        if raw is None:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        value = json.loads(raw)
+        if not isinstance(value, dict):
+            return None
+        return {int(index): str(description) for index, description in value.items()}
+    except Exception as exc:
+        logger.debug("[TableDesc] 缓存读取失败（按 miss）: %s", exc)
+        return None
+
+
+def _cache_put(key: str, value: dict[int, str]) -> None:
+    try:
+        from backend.config.redis import REDIS_KEY_PREFIX
+        from backend.infra.redis.client import get_redis
+
+        client = get_redis()
+        if client is None:
+            return
+        client.setex(
+            f"{REDIS_KEY_PREFIX}{key}",
+            int(METADATA_CACHE_TTL_SECONDS),
+            json.dumps(value, ensure_ascii=False),
+        )
+    except Exception as exc:
+        logger.debug("[TableDesc] 缓存写入失败: %s", exc)
 
 
 def _invoke_llm(prompt: str, llm_obj=None):
     """LLM 调用桩（测试 monkeypatch 点）——走 proxy 自动计量。"""
     from backend.rag.preprocessing.llm_enrichment import invoke_metadata_llm
-    return invoke_metadata_llm(prompt, llm_obj=llm_obj)
+    return invoke_metadata_llm(prompt, llm_obj=llm_obj, role="table_describe")
 
 
 def _build_prompt(kv_texts: list[str], table_summary: str) -> str:
@@ -49,16 +140,31 @@ def generate_table_descriptions(kv_texts: list[str],
     Returns:
         {行索引: 描述}；功能关闭/失败/长度不符时返回 {}（调用方无前缀）。
     """
-    if not ENABLE_TABLE_DESCRIPTIONS or not kv_texts:
+    if not kv_texts:
+        _set_generation_meta(status="skipped", skip_reason="no_table_rows")
+        return {}
+    if not ENABLE_TABLE_DESCRIPTIONS:
+        _set_generation_meta(status="skipped", skip_reason="feature_disabled")
         return {}
 
     scope = kv_texts[:TABLE_DESC_MAX_ROWS]
+    cache_key = _cache_key(scope, table_summary)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        logger.info("[TableDesc] 缓存命中 %s 行", len(cached))
+        _set_generation_meta(status="cached", cache_status="hit")
+        return cached
     prompt = _build_prompt(scope, table_summary)
     try:
         result = _invoke_llm(prompt)
         content = result.content.strip() if hasattr(result, "content") else str(result)
+        actual_model = _read_actual_model()
         match = _JSON_RE.search(content)
         if not match:
+            _set_generation_meta(
+                status="fallback", fallback_reason="invalid_response",
+                model=actual_model,
+            )
             return {}
         data = json.loads(match.group())
         raw = data.get("descriptions")
@@ -67,6 +173,10 @@ def generate_table_descriptions(kv_texts: list[str],
                 "[TableDesc] descriptions 长度不符 (%s/%s)，放弃描述",
                 len(raw) if isinstance(raw, list) else 0, len(scope),
             )
+            _set_generation_meta(
+                status="fallback", fallback_reason="invalid_response",
+                model=actual_model,
+            )
             return {}
         cleaned = {
             i: str(d).strip()[:80]
@@ -74,7 +184,12 @@ def generate_table_descriptions(kv_texts: list[str],
             if str(d).strip() and len(str(d).strip()) >= 4
         }
         logger.info(f"[TableDesc] 生成 {len(cleaned)}/{len(scope)} 行描述")
+        _cache_put(cache_key, cleaned)
+        _set_generation_meta(
+            status="success", cache_status="miss", model=actual_model,
+        )
         return cleaned
     except Exception as e:
         logger.warning(f"[TableDesc] LLM 调用失败（无描述降级）: {type(e).__name__}: {e}")
+        _set_generation_meta(status="fallback", fallback_reason="llm_error")
         return {}

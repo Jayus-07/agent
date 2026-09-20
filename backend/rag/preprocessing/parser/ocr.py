@@ -17,7 +17,9 @@
 from __future__ import annotations
 
 import base64
+from contextvars import ContextVar
 import hashlib
+import importlib.metadata
 import json
 import os
 import threading
@@ -25,25 +27,162 @@ import time
 from pathlib import Path
 from typing import Any
 
+from backend.config import model_roles
 from backend.config import rag as rag_cfg
+from backend.infra.llm import credentials as credentials_mod
+from backend.infra.llm import models as models_mod
 from backend.config.database import RAG_DATA_DIR
+from backend.rag.indexing.processing_lineage import ModelIdentity
 from backend.shared.logger import logger
 
 
 def _resolve_dashscope_key() -> str:
-    """DashScope API Key 解析：OCR 专用 → 通用 DashScope → Embedding key 兜底
-    （三者通常是同一个阿里云账号）。"""
-    import os
+    """开发兼容入口：无 DB OCR 角色时读取旧 env，DB 绑定优先。"""
+    for env_key in (
+        "OCR_DASHSCOPE_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "EMBEDDING_API_KEY",
+    ):
+        value = os.getenv(env_key, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _configured_ocr_model() -> str:
+    """读取 OCR 角色；无 DB 覆盖时保持旧版 rag 配置语义。"""
+    return model_roles.resolve_runtime_name("ocr", rag_cfg.RAG_OCR_DASHSCOPE_MODEL)
+
+
+def _resolve_ocr_runtime_config() -> dict[str, str]:
+    """解析 OCR 当前出站配置，数据库角色绑定是唯一云端配置来源。"""
+    effective = model_roles.resolve_effective("ocr")
+    model = _configured_ocr_model()
+    if effective.get("source") == model_roles.SOURCE_DB:
+        provider_id = ""
+        base_url = ""
+        if model:
+            entry = models_mod.get_model_entry(model)
+            provider_id = str(entry.get("provider") or "").strip() if entry else ""
+            provider = models_mod.get_provider_entry(provider_id) or {}
+            if entry and models_mod.model_kind_of(entry) == "chat":
+                try:
+                    credentials = credentials_mod.resolve_credentials(
+                        provider_id,
+                        model_name=model,
+                    )
+                except credentials_mod.UnknownProviderError:
+                    credentials = None
+                if credentials is not None:
+                    base_url = str(
+                        credentials.base_url
+                        or provider.get("base_url")
+                        or ""
+                    ).strip().rstrip("/")
+                    if provider_id and base_url:
+                        return {
+                            "provider": provider_id,
+                            "model": model,
+                            "api_key": credentials.api_key or "",
+                            "base_url": base_url,
+                        }
+
+        # 已明确选择 DB 角色时禁止静默回退到旧 env，避免显示与实际调用错位。
+        return {
+            "provider": provider_id or "db",
+            "model": model,
+            "api_key": "",
+            "base_url": base_url,
+        }
+
+    return {
+        "provider": "dashscope",
+        "model": model,
+        "api_key": _resolve_dashscope_key(),
+        "base_url": "",
+    }
+
+
+def _ocr_cloud_configured() -> bool:
+    """数据库已绑定 OCR 或旧 dashscope env 开启云端 OCR。"""
+    effective = model_roles.resolve_effective("ocr")
     return (
-        os.getenv("OCR_DASHSCOPE_API_KEY")
-        or os.getenv("DASHSCOPE_API_KEY")
-        or os.getenv("EMBEDDING_API_KEY")
-        or ""
+        effective.get("source") == model_roles.SOURCE_DB
+        or (rag_cfg.RAG_OCR_PROVIDER or "").lower() == "dashscope"
+    )
+
+
+def get_ocr_model_identity() -> ModelIdentity:
+    """返回当前 OCR 引擎的非敏感身份信息。"""
+
+    runtime = _resolve_ocr_runtime_config()
+    provider = runtime["provider"]
+    effective = model_roles.resolve_effective("ocr")
+    if provider != "dashscope" or effective.get("source") == model_roles.SOURCE_DB:
+        return ModelIdentity(
+            role="ocr",
+            engine_type="ocr",
+            provider=provider,
+            model_name=runtime["model"],
+            model_revision=None,
+            config_source=str(effective.get("source") or ""),
+            config_revision=str(effective.get("updated_at") or "") or None,
+            artifact_fingerprint=None,
+        )
+
+    provider = (rag_cfg.RAG_OCR_PROVIDER or "").lower()
+    if provider == "rapidocr":
+        try:
+            revision = importlib.metadata.version("rapidocr_onnxruntime")
+        except importlib.metadata.PackageNotFoundError:
+            revision = None
+        return ModelIdentity(
+            role="ocr",
+            engine_type="ocr",
+            provider="rapidocr",
+            model_name="RapidOCR",
+            model_revision=revision,
+            config_source="code-default",
+            config_revision=None,
+            artifact_fingerprint=(
+                f"rapidocr_onnxruntime:{revision}" if revision else None
+            ),
+        )
+    if provider == "dashscope":
+        info = model_roles.resolve_effective("ocr")
+        return ModelIdentity(
+            role="ocr",
+            engine_type="ocr",
+            provider="dashscope",
+            model_name=_configured_ocr_model(),
+            model_revision=None,
+            config_source=str(info.get("source") or ""),
+            config_revision=str(info.get("updated_at") or "") or None,
+            artifact_fingerprint=None,
+        )
+    return ModelIdentity(
+        role="ocr",
+        engine_type="ocr",
+        provider=provider or None,
+        model_name=None,
+        model_revision=None,
+        config_source=None,
+        config_revision=None,
+        artifact_fingerprint=None,
     )
 
 
 def ocr_available() -> bool:
     """当前配置的 OCR 供应商是否可用（惰性探测，不初始化引擎）。"""
+    effective = model_roles.resolve_effective("ocr")
+    if effective.get("source") == model_roles.SOURCE_DB:
+        if not _resolve_ocr_runtime_config()["api_key"]:
+            logger.warning(
+                "[OCR] 数据库角色已绑定云端 OCR，但当前供应商没有可用 API Key"
+            )
+            return False
+        return True
+
     provider = (rag_cfg.RAG_OCR_PROVIDER or "").lower()
     if provider == "off" or not provider:
         return False
@@ -57,11 +196,10 @@ def ocr_available() -> bool:
                 "OCR 兜底不可用（pip install rapidocr_onnxruntime）"
             )
             return False
-    if provider == "dashscope":
-        if not _resolve_dashscope_key():
+    if _ocr_cloud_configured():
+        if not _resolve_ocr_runtime_config()["api_key"]:
             logger.warning(
-                "[OCR] RAG_OCR_PROVIDER=dashscope 但未配置 "
-                "OCR_DASHSCOPE_API_KEY/DASHSCOPE_API_KEY/EMBEDDING_API_KEY"
+                "[OCR] 云端 OCR 已启用但当前已登记供应商没有可用 API Key"
             )
             return False
         return True
@@ -104,23 +242,31 @@ def _ocr_image_rapidocr(png_bytes: bytes) -> str:
 
 
 def _record_ocr_usage(model: str, prompt_tokens: int, completion_tokens: int,
-                      duration_ms: int, status: str = "success") -> None:
+                      duration_ms: int, status: str = "success",
+                      provider: str = "dashscope") -> None:
     """DashScope OCR 用量写入 llm_usage_store（软失败不影响 OCR 主流程）。"""
     try:
         from backend.observability.llm_usage_store import get_llm_usage_store
-        from backend.observability.tracer import current_trace_context
-        trace_id, session_id = current_trace_context()
+        from backend.observability.llm_usage_store import current_usage_attribution
+        attribution = current_usage_attribution()
         get_llm_usage_store().record({
             "component": "ocr",
             "model": model,
-            "provider": "dashscope",
+            "provider": provider,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
             "cost_usd": 0.0,
             "duration_ms": duration_ms,
-            "trace_id": trace_id or "",
-            "session_id": session_id or "",
+            "trace_id": attribution["trace_id"],
+            "session_id": attribution["session_id"],
+            "request_id": attribution["request_id"],
+            "user_id": attribution["user_id"],
+            "tenant_id": attribution["tenant_id"],
+            "run_id": attribution["run_id"],
+            "step_id": attribution["step_id"],
+            "role": attribution["role"] or "ocr",
+            "stage": attribution["stage"] or "ocr",
             "finish_reason": status,
         })
     except Exception as e:
@@ -128,12 +274,13 @@ def _record_ocr_usage(model: str, prompt_tokens: int, completion_tokens: int,
 
 
 def _ocr_image_dashscope(png_bytes: bytes) -> str:
-    """DashScope qwen-vl 识别单页 PNG；用量计入 token 可观测（component=ocr）。"""
+    """兼容 OpenAI Chat 的视觉 OCR；用量计入 token 可观测（component=ocr）。"""
     from openai import OpenAI
-    model = rag_cfg.RAG_OCR_DASHSCOPE_MODEL
+    runtime = _resolve_ocr_runtime_config()
+    model = runtime["model"]
     client = OpenAI(
-        api_key=_resolve_dashscope_key(),
-        base_url=rag_cfg.RAG_OCR_DASHSCOPE_BASE_URL,
+        api_key=runtime["api_key"],
+        base_url=runtime["base_url"],
         timeout=rag_cfg.RAG_OCR_DASHSCOPE_TIMEOUT,
     )
     b64 = base64.b64encode(png_bytes).decode("ascii")
@@ -153,15 +300,21 @@ def _ocr_image_dashscope(png_bytes: bytes) -> str:
             }],
         )
     except Exception as e:
-        _record_ocr_usage(model, 0, 0,
-                          int((time.monotonic() - t0) * 1000), status="error")
+        _record_ocr_usage(
+            model, 0, 0, int((time.monotonic() - t0) * 1000),
+            status="error", provider=runtime["provider"],
+        )
         raise
     usage = getattr(resp, "usage", None)
+    actual_model = str(getattr(resp, "model", "") or "").strip()
+    if actual_model:
+        _ocr_actual_model.set(actual_model)
     _record_ocr_usage(
         model,
         getattr(usage, "prompt_tokens", 0) or 0,
         getattr(usage, "completion_tokens", 0) or 0,
         int((time.monotonic() - t0) * 1000),
+        provider=runtime["provider"],
     )
     return resp.choices[0].message.content or ""
 
@@ -172,12 +325,23 @@ def ocr_image(png_bytes: bytes) -> str:
     云端供应商（dashscope）外层套 按页缓存 + 限流（D6 ③：在线 API 有成本，
     幂等重跑不重复调用）；离线 rapidocr 免费，直连不缓存。
     """
+    effective = model_roles.resolve_effective("ocr")
     provider = (rag_cfg.RAG_OCR_PROVIDER or "").lower()
-    if provider == "rapidocr":
-        return _ocr_image_rapidocr(png_bytes)
-    if provider == "dashscope":
-        return _ocr_image_cloud_cached(png_bytes)
-    raise RuntimeError(f"OCR 供应商不可用: {provider!r}")
+    try:
+        if effective.get("source") == model_roles.SOURCE_DB:
+            if not _resolve_ocr_runtime_config()["api_key"]:
+                raise RuntimeError("OCR 数据库供应商未配置 API Key")
+            return _ocr_image_cloud_cached(png_bytes)
+        if provider == "rapidocr":
+            result = _ocr_image_rapidocr(png_bytes)
+            _record_ocr_result(status="success", cache_status="miss")
+            return result
+        if _ocr_cloud_configured():
+            return _ocr_image_cloud_cached(png_bytes)
+        raise RuntimeError(f"OCR 供应商不可用: {provider!r}")
+    except Exception:
+        _record_ocr_result(status="failed", cache_status="miss")
+        raise
 
 
 # ── 云端 OCR：按页缓存 + 限流（D6 ③）──
@@ -185,12 +349,67 @@ def ocr_image(png_bytes: bytes) -> str:
 _ocr_cache_dir = Path(RAG_DATA_DIR) / "ocr_cache"
 _cloud_lock = threading.Lock()
 _last_call_mono: float = 0.0
+_ocr_result_meta: ContextVar[dict] = ContextVar("ocr_result_meta", default={})
+_ocr_actual_model: ContextVar[str | None] = ContextVar(
+    "ocr_actual_model", default=None
+)
+
+
+def reset_ocr_tracking() -> None:
+    """开始一份文档的 OCR 统计，避免复用 worker 线程时串入上一份文档。"""
+    _ocr_result_meta.set({
+        "calls": 0,
+        "successes": 0,
+        "failures": 0,
+        "cache_hits": 0,
+        "status": "",
+        "cache_status": "miss",
+        "model_name": None,
+        "model_revision": None,
+        "provider": None,
+    })
+    _ocr_actual_model.set(None)
+
+
+def get_ocr_result_meta() -> dict:
+    """返回当前文档 OCR 调用/缓存摘要，不包含图片或识别原文。"""
+    return dict(_ocr_result_meta.get() or {})
+
+
+def _record_ocr_result(
+    *, status: str, cache_status: str, model_name: str | None = None
+) -> None:
+    current = get_ocr_result_meta()
+    current["calls"] = int(current.get("calls") or 0) + 1
+    if cache_status == "hit":
+        current["cache_hits"] = int(current.get("cache_hits") or 0) + 1
+    if status in {"success", "cached"}:
+        current["successes"] = int(current.get("successes") or 0) + 1
+    if status == "failed":
+        current["failures"] = int(current.get("failures") or 0) + 1
+    current["status"] = status
+    current["cache_status"] = cache_status
+    identity = get_ocr_model_identity()
+    current["model_name"] = (
+        model_name
+        or _ocr_actual_model.get()
+        or identity.model_name
+    )
+    current["model_revision"] = identity.model_revision
+    current["provider"] = identity.provider
+    _ocr_result_meta.set(current)
 
 
 def _cache_path(png_bytes: bytes) -> Path:
-    """缓存键 = sha256(provider|model|页面图像字节)。图像不变即命中。"""
+    """缓存键包含供应商、模型、配置和指令版本，避免跨版本脏命中。"""
+    role_info = model_roles.resolve_effective("ocr")
+    runtime = _resolve_ocr_runtime_config()
     h = hashlib.sha256(
-        f"{(rag_cfg.RAG_OCR_PROVIDER or '').lower()}|{rag_cfg.RAG_OCR_DASHSCOPE_MODEL}|".encode()
+        (
+            f"{runtime['provider']}|{runtime['model']}|{runtime['base_url']}|"
+            f"{role_info.get('source', '')}|{role_info.get('updated_at', '')}|"
+            f"{getattr(rag_cfg, 'OCR_PROMPT_VERSION', 'v1')}|"
+        ).encode()
         + png_bytes
     ).hexdigest()
     return _ocr_cache_dir / f"{h}.json"
@@ -213,21 +432,25 @@ def _ocr_image_cloud_cached(png_bytes: bytes) -> str:
     """云端 OCR 带缓存入口：命中直接返回；未命中限流后调用并落盘（软失败）。"""
     if not rag_cfg.RAG_OCR_CACHE_ENABLED:
         _throttle_cloud()
-        return _ocr_image_dashscope(png_bytes)
+        result = _ocr_image_dashscope(png_bytes)
+        _record_ocr_result(status="success", cache_status="miss")
+        return result
     path = _cache_path(png_bytes)
     try:
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data.get("text"), str):
+                _record_ocr_result(status="cached", cache_status="hit")
                 return data["text"]
     except Exception as e:
         logger.debug(f"[OCR] 缓存读取失败（走直连）: {e}")
     text = _throttled_call(png_bytes)
+    _record_ocr_result(status="success", cache_status="miss")
     try:
         _ocr_cache_dir.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(
-            {"text": text, "model": rag_cfg.RAG_OCR_DASHSCOPE_MODEL,
+            {"text": text, "model": _configured_ocr_model(),
              "ts": int(time.time())}, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)  # 原子落盘，多 worker 同页竞争无半写文件
     except Exception as e:

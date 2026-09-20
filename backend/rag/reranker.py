@@ -61,9 +61,71 @@ from backend.config import (
     RERANKER_DEVICE,
     TOKEN_USAGE_LOG_PATH,
 )
+from backend.config import model_roles
+from backend.infra.llm import credentials as credentials_mod
+from backend.infra.llm import specialized as specialized_mod
 from backend.infra.token_tracker import create_tracker_for_rerank
 from pathlib import Path
 from backend.shared.logger import logger
+
+
+def _configured_rerank_model() -> str:
+    """读取重排角色；无 DB 覆盖时保持历史模块常量语义。"""
+    return model_roles.resolve_runtime_name("rerank", RERANK_MODEL)
+
+
+def _resolve_rerank_runtime_config() -> dict[str, str]:
+    """解析专项 DB 绑定；未配置时返回未配置状态，不读取旧 env。"""
+    binding = specialized_mod.resolve_binding("rerank")
+    if binding is None:
+        return {
+            "model": _configured_rerank_model(),
+            "api_key": "",
+            "api_format": RERANK_API_FORMAT,
+            "base_url": "",
+            "provider": "database",
+        }
+
+    credentials = credentials_mod.resolve_credentials(
+        binding.provider_id,
+        model_name=binding.model_name,
+    )
+    adapter_format = {
+        "dashscope_rerank": "dashscope",
+        "jina_rerank": "jina",
+    }.get(binding.adapter)
+    if adapter_format is None:
+        raise RuntimeError(f"未知重排适配器：{binding.adapter}")
+    return {
+        "model": binding.model_name,
+        "api_key": credentials.api_key or "",
+        "api_format": adapter_format,
+        "base_url": binding.base_url,
+        "provider": binding.provider_id,
+    }
+
+
+def _reranker_runtime_signature() -> tuple[Any, ...]:
+    """返回影响重排客户端的配置签名，供已存在的 RAGPipeline 热切换。"""
+    binding = specialized_mod.resolve_binding("rerank")
+    if binding is not None:
+        return (
+            "specialized",
+            binding.provider_id,
+            binding.adapter,
+            binding.model_name,
+            binding.base_url,
+            repr(sorted(dict(binding.options).items())),
+            credentials_mod.credentials_version(binding.provider_id),
+        )
+    return (
+        "unconfigured",
+        RERANK_PROVIDER,
+        _configured_rerank_model(),
+        RERANK_API_FORMAT,
+        "",
+        False,
+    )
 
 
 # ═══════════════════════════════════════════════════════════
@@ -116,10 +178,8 @@ _DASHSCOPE_RERANK_PATH = "/services/rerank/text-rerank/text-rerank"
 _JINA_RERANK_PATH = "/rerank"
 
 def _resolve_rerank_base() -> str:
-    """Rerank base URL 解析：RERANK_BASE_URL > DASHSCOPE_API_BASE(兼容旧env) > 协议默认值"""
-    return (os.getenv("RERANK_BASE_URL")
-            or os.getenv("DASHSCOPE_API_BASE")
-            or _DEFAULT_RERANK_BASE.get(RERANK_API_FORMAT, _DEFAULT_RERANK_BASE["dashscope"]))
+    """兼容入口：运行时地址必须来自数据库专项绑定。"""
+    return ""
 
 class DashScopeReranker(BaseDocumentCompressor):
     """云端 Reranker API 实现（直接 HTTP，无需 dashscope SDK）
@@ -133,13 +193,23 @@ class DashScopeReranker(BaseDocumentCompressor):
     P0: 模型名从 RERANK_MODEL 配置读取，不再硬编码
     """
 
-    def __init__(self, api_key: str, timeout: int = 5):
+    def __init__(
+        self,
+        api_key: str,
+        timeout: int = 5,
+        *,
+        model: str | None = None,
+        api_format: str | None = None,
+        base_url: str | None = None,
+    ):
         if not api_key:
-            raise RuntimeError("云端 Reranker 需要 DASHSCOPE_API_KEY（dashscope）或 RERANK_API_KEY（jina）")
+            raise RuntimeError("云端 Reranker 需要在管理端数据库配置供应商 API Key")
 
-        base_url = _resolve_rerank_base().rstrip("/")
-        endpoint = base_url + (
-            _DASHSCOPE_RERANK_PATH if RERANK_API_FORMAT == "dashscope" else _JINA_RERANK_PATH
+        resolved_format = api_format or RERANK_API_FORMAT
+        resolved_model = model or _configured_rerank_model()
+        resolved_base_url = (base_url or _resolve_rerank_base()).rstrip("/")
+        endpoint = resolved_base_url + (
+            _DASHSCOPE_RERANK_PATH if resolved_format == "dashscope" else _JINA_RERANK_PATH
         )
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -150,11 +220,13 @@ class DashScopeReranker(BaseDocumentCompressor):
         self.__dict__['timeout'] = timeout
         self.__dict__['_endpoint'] = endpoint
         self.__dict__['_headers'] = headers
+        self.__dict__['_model'] = resolved_model
+        self.__dict__['_api_format'] = resolved_format
         self.__dict__['_last_total_tokens'] = 0
 
         logger.info(
             f"初始化 Cloud Reranker HTTP "
-            f"(format={RERANK_API_FORMAT}, model={RERANK_MODEL}, endpoint={base_url}, timeout={timeout}s)"
+            f"(format={resolved_format}, model={resolved_model}, endpoint={resolved_base_url}, timeout={timeout}s)"
         )
 
     def rank(self, query: str, documents: list[str], top_k: int = 8) -> list[tuple[int, float]]:
@@ -163,10 +235,10 @@ class DashScopeReranker(BaseDocumentCompressor):
         Returns:
             list[tuple[int, float]]: (index, relevance_score) 列表，score 已在 0-1 区间
         """
-        if RERANK_API_FORMAT == "jina":
+        if self._api_format == "jina":
             # Jina 兼容格式（SiliconFlow / TEI / jina rerank）
             payload = {
-                "model": RERANK_MODEL,
+                "model": self._model,
                 "query": query,
                 "documents": documents,
                 "top_n": top_k,
@@ -174,7 +246,7 @@ class DashScopeReranker(BaseDocumentCompressor):
         else:
             # DashScope 原生格式
             payload = {
-                "model": RERANK_MODEL,  # P0: 动态模型名
+                "model": self._model,
                 "input": {
                     "query": query,
                     "documents": documents,
@@ -203,7 +275,7 @@ class DashScopeReranker(BaseDocumentCompressor):
                 data = resp.json()
                 # dashscope: output.results / jina: results（字段名 index、relevance_score 一致）
                 results = (data.get("output", {}).get("results")
-                           if RERANK_API_FORMAT == "dashscope"
+                           if self._api_format == "dashscope"
                            else data.get("results")) or []
                 scored = [(r["index"], r["relevance_score"]) for r in results]
 
@@ -282,7 +354,7 @@ class DashScopeReranker(BaseDocumentCompressor):
             trace_id, session_id = current_trace_context()
             get_llm_usage_store().record({
                 "component": "rerank",
-                "model": RERANK_MODEL,
+                "model": _configured_rerank_model(),
                 "provider": RERANK_API_FORMAT,
                 "prompt_tokens": total_tokens,
                 "completion_tokens": 0,
@@ -432,7 +504,7 @@ def _get_tracker() -> "TokenTracker":
     if _reranker_tracker is None:
         _reranker_tracker = create_tracker_for_rerank(
             log_path=str(Path(TOKEN_USAGE_LOG_PATH).expanduser().resolve()),
-            model_name=RERANK_MODEL if RERANK_PROVIDER == "cloud" else RERANKER_MODEL_PATH,
+            model_name=_configured_rerank_model() if RERANK_PROVIDER == "cloud" else RERANKER_MODEL_PATH,
             backend=RERANK_PROVIDER,
         )
     return _reranker_tracker
@@ -452,20 +524,25 @@ def get_reranker_backend() -> BaseDocumentCompressor:
       - Cloud 模式下 API key 缺失时明确报错
       - Token Tracker 记录用量
     """
-    if RERANK_PROVIDER == "cloud":
+    binding = specialized_mod.resolve_binding("rerank")
+    if RERANK_PROVIDER == "cloud" or binding is not None:
         # Cloud 模式：强制使用云端 API，缺少 API Key 时明确报错
-        # dashscope 格式用 DASHSCOPE_API_KEY；jina 格式优先 RERANK_API_KEY
-        # （SiliconFlow 等），未设则回退 DASHSCOPE_API_KEY
-        api_key = (os.getenv("RERANK_API_KEY")
-                   if RERANK_API_FORMAT == "jina" else None) or os.getenv("DASHSCOPE_API_KEY")
+        # 协议与凭据均由数据库专项绑定解析；不同供应商可以使用不同 Key。
+        runtime_config = _resolve_rerank_runtime_config()
+        api_key = runtime_config["api_key"]
         if not api_key:
             raise RuntimeError(
-                "Cloud 模式需要 DASHSCOPE_API_KEY（dashscope 格式）"
-                "或 RERANK_API_KEY（jina 格式，如 SiliconFlow），请在 .env 中设置.\n"
-                "或设置 RERANK_PROVIDER=local（或 ENV_MODE=local）使用本地 BGE Reranker."
+                "数据库未配置可用的 rerank 供应商 API Key，请先在管理端测试并保存"
+                "重排模型；如需本地模型，请显式使用本地模式。"
             )
-        logger.info(f"[Reranker] Cloud 模式初始化完成 (model={RERANK_MODEL})")
-        return DashScopeReranker(api_key=api_key, timeout=RERANK_TIMEOUT)
+        logger.info(f"[Reranker] Cloud 模式初始化完成 (model={runtime_config['model']})")
+        return DashScopeReranker(
+            api_key=api_key,
+            timeout=RERANK_TIMEOUT,
+            model=runtime_config["model"],
+            api_format=runtime_config["api_format"],
+            base_url=runtime_config["base_url"],
+        )
     else:
         # Local 模式：使用 CrossEncoder
         logger.info(f"[Reranker] Local 模式初始化完成 (model={RERANKER_MODEL_PATH})")
@@ -490,16 +567,24 @@ class RerankCompressor(BaseDocumentCompressor):
         # 此时 self.top_k 应通过 Pydantic 机制可用
         self.__dict__['backend'] = None
         self.__dict__['_backend_type'] = "unknown"
+        self.__dict__['_backend_signature'] = None
 
     def _ensure_backend(self):
         """懒加载后端实例（线程安全）"""
-        if self.backend is None:
+        signature = _reranker_runtime_signature()
+        # 兼容测试/调用方注入 backend 的旧契约：没有签名时视为调用方已经
+        # 明确提供实例，不因热切换检查把它替换掉。
+        if self.backend is not None and self._backend_signature is None:
+            self.__dict__['_backend_signature'] = signature
+            return
+        if self.backend is None or self._backend_signature != signature:
             import threading
             if not hasattr(self, '_ensure_lock'):
                 self.__dict__['_ensure_lock'] = threading.Lock()
             with self._ensure_lock:
-                if self.backend is None:
+                if self.backend is None or self._backend_signature != signature:
                     self.__dict__['backend'] = get_reranker_backend()
+                    self.__dict__['_backend_signature'] = signature
                     if isinstance(self.backend, DashScopeReranker):
                         self.__dict__['_backend_type'] = "dashscope"
                     else:
@@ -591,5 +676,3 @@ class RerankCompressor(BaseDocumentCompressor):
             # 降级契约：重排是增强组件，失败不得减少召回数量 —— 透传原文档，
             # 由下游 Evidence Gate 基于其他信号判定，而非静默清空触发误拒答
             return list(documents)[: self.top_k]
-
-

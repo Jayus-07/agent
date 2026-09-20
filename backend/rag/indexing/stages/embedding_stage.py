@@ -220,10 +220,54 @@ class EmbeddingStage:
         """3.1: embedding 结果缓存读写器（实例级懒创建）。"""
         if self._cache is None:
             from backend.rag.indexing.embed_cache import EmbeddingCache
-            model_name = (getattr(self._embedding, "model_name", "") or
-                          os.path.basename(str(getattr(self._embedding, "model", "") or "")) or
-                          "unknown")
-            self._cache = EmbeddingCache(model_name)
+            model_candidates = (
+                getattr(self._embedding, "model_name", None),
+                getattr(self._embedding, "_model_name", None),
+            )
+            model_name = next(
+                (item for item in model_candidates if isinstance(item, str) and item),
+                "",
+            )
+            if not model_name:
+                raw_model = getattr(self._embedding, "model", None)
+                if isinstance(raw_model, str) and raw_model:
+                    model_name = os.path.basename(raw_model)
+            model_name = model_name or "unknown"
+            provider_candidates = (
+                getattr(self._embedding, "_provider", None),
+                getattr(self._embedding, "provider", None),
+            )
+            provider = next(
+                (item for item in provider_candidates if isinstance(item, str) and item),
+                "",
+            )
+            revision_candidates = (
+                getattr(self._embedding, "_model_revision", None),
+                getattr(self._embedding, "model_revision", None),
+            )
+            model_revision = next(
+                (item for item in revision_candidates if isinstance(item, str) and item),
+                "",
+            )
+            try:
+                from backend.config import model_roles
+
+                effective = model_roles.resolve_effective("embedding")
+                provider = provider or str(effective.get("provider") or "")
+                model_revision = model_revision or str(
+                    effective.get("updated_at") or effective.get("source") or ""
+                )
+                if not provider and model_name != "unknown":
+                    from backend.infra.llm.models import resolve_provider
+
+                    provider = resolve_provider(model_name)
+            except Exception as exc:
+                logger.debug("[Embed] 读取缓存模型版本失败，使用运行时身份: %s", exc)
+            self._cache = EmbeddingCache(
+                model_name,
+                provider=provider,
+                model_revision=model_revision,
+            )
         return self._cache
 
     @staticmethod

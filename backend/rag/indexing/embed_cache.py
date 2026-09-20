@@ -1,11 +1,11 @@
-"""Embedding 结果缓存（3.1）— Redis 层，键 = 模型 + 文本 sha256。
+"""Embedding 结果缓存（3.1）— Redis 层，键 = 运行时模型身份 + 文本 sha256。
 
 收益场景：重索引/局部修改文档时，未变化 chunk（含 Contextual Prefix 的
 最终嵌入文本）免重复嵌入——嵌入是索引链路最贵的计算。
 
 设计：
-- 键 `rag:emb:{model}:{sha256(embed_text)}`——embed_text 是含前缀的最终
-  文本，前缀变化自然产生新键，无脏读；
+- 键包含 provider/model/revision 和 `embed_text` 的 sha256——embed_text 是含
+  前缀的最终文本，前缀或模型身份变化自然产生新键，无脏读；
 - 值 JSON 数组（float 列表）；TTL 默认 30 天；
 - Redis 不可用/未配置 → 全部 miss + 写入 no-op，主流程零影响；
 - 开关 `RAG_EMBED_CACHE_ENABLED`（默认 on）。
@@ -22,12 +22,17 @@ class EmbeddingCache:
     """批量 get/put 的 embedding Redis 缓存读写器（无状态，可每实例新建）。"""
 
     def __init__(self, model_name: str, enabled: bool = True,
-                 ttl_seconds: int = 30 * 86400):
+                 ttl_seconds: int = 30 * 86400, *, provider: str = "",
+                 model_revision: str = ""):
         from backend.config.rag import RAG_EMBED_CACHE_ENABLED, RAG_EMBED_CACHE_TTL_SECONDS
         self.model_name = (model_name or "").strip() or "unknown"
+        self.provider = (provider or "").strip() or "unknown"
+        self.model_revision = (model_revision or "").strip() or "unknown"
         self.enabled = enabled and RAG_EMBED_CACHE_ENABLED
         self.ttl = ttl_seconds or RAG_EMBED_CACHE_TTL_SECONDS
-        self.prefix = f"rag:emb:{self.model_name}:"
+        identity = "|".join((self.provider, self.model_name, self.model_revision))
+        namespace = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+        self.prefix = f"rag:emb:{namespace}:"
 
     @staticmethod
     def _key(prefix: str, text: str) -> str:

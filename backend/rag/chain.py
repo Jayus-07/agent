@@ -96,12 +96,12 @@ DEFAULT_QA_SYSTEM = """你是电商企业知识库助手。你只能依据「资
 
 ## 回答格式
 
-正文用 Markdown。每个事实必须带 Evidence 引用 [En]（如 [E1]、[E2]）。
+正文用 Markdown。多个要点必须用有序列表分点呈现（每点独占一行：`1. xxx [E1]` 换行 `2. xxx [E2]`），禁止把多个要点挤在同一段落。每个事实必须带 Evidence 引用 [En]（如 [E1]、[E2]）。
 
 资料充分时示例：
 ```
-客服需要审核退货原因和凭证真实性。[E1]
-差评处理要求48小时内给出具体解决方案。[E2]
+1. 通用售后流程：审核结果为 1-2 个工作日内反馈。[E1]
+2. 差评处理要求：48小时内给出具体解决方案。[E2]
 ```
 
 信息不足时：
@@ -1279,6 +1279,8 @@ class RAGChain:
         from backend.observability.tracer import SpanName as _SpanName
         meta_span = trace_collector.start_span("meta_parse", name=_SpanName.META_PARSE)
         cleaned_answer, meta = parse_meta_comment(raw_answer)
+        # 分点归一化：句号+序号边界补换行（提示词约束不住的同行要点，此处确定性修复）
+        cleaned_answer = self.formatter.normalize_point_layout(cleaned_answer)
         self._last_meta = meta
         trace_collector.end_span(meta_span,
                                  metrics={"can_answer": meta.get("can_answer"),

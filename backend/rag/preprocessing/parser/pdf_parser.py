@@ -181,12 +181,16 @@ class PdfParser(BaseDocumentParser):
         # OCR 页无字号信息（size=0），标题仅靠「第N章/一、/1.」编号模式识别；
         # 表格无法还原行列结构，不提取。OCR 不可用时返回空（下游按
         # ChunkingEmptyError 报"扫描件无法解析"，与旧行为一致）。
+        ocr_required = False
+        ocr_attempted = False
         ocr_pages = 0
         total_text_chars = sum(len(text) for text, _, _, _ in raw_items)
         if page_count > 0 and total_text_chars < RAG_OCR_MIN_TEXT_CHARS * page_count:
+            ocr_required = True
             from backend.config import rag as rag_cfg
             from backend.rag.preprocessing.parser import ocr as ocr_mod
             if ocr_mod.ocr_available():
+                ocr_attempted = True
                 logger.warning(
                     f"[PdfParser] {file_path} 文本层为空"
                     f"（{total_text_chars} chars / {page_count} 页），"
@@ -245,6 +249,8 @@ class PdfParser(BaseDocumentParser):
         ast = DocumentAST(root=root, source_file=file_path, raw_text=raw_text)
         # §5.1 质量记录：OCR 兜底发生 → AST 置位（pipeline 据此给 chunk 打标，
         # indexer 汇总进 registry quality_issues，门禁按 ocr_triggered 审计）
+        ast.ocr_required = ocr_required
+        ast.ocr_attempted = ocr_attempted
         ast.ocr_triggered = ocr_pages > 0
         ast.ocr_pages = ocr_pages
         return ast

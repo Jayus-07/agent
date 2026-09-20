@@ -28,6 +28,37 @@ class MetadataExtractError(Exception):
     """抽取失败信号（调用方据此降级到规则路径）。"""
 
 
+def _normalize_usage_metadata(raw_usage) -> dict:
+    """把不同 OpenAI 兼容供应商的 usage 字段统一成平台口径。"""
+    if not isinstance(raw_usage, dict) or not raw_usage:
+        return {}
+
+    prompt = raw_usage.get("prompt_tokens", raw_usage.get("input_tokens"))
+    completion = raw_usage.get(
+        "completion_tokens", raw_usage.get("output_tokens")
+    )
+    normalized = {}
+    if prompt is not None:
+        normalized["prompt_tokens"] = int(prompt or 0)
+    if completion is not None:
+        normalized["completion_tokens"] = int(completion or 0)
+    total = raw_usage.get("total_tokens")
+    if total is not None:
+        normalized["total_tokens"] = int(total or 0)
+    elif "prompt_tokens" in normalized or "completion_tokens" in normalized:
+        normalized["total_tokens"] = (
+            int(normalized.get("prompt_tokens") or 0)
+            + int(normalized.get("completion_tokens") or 0)
+        )
+
+    for key in ("cached_tokens", "reasoning_tokens"):
+        if raw_usage.get(key) is not None:
+            normalized[key] = int(raw_usage[key] or 0)
+    if raw_usage.get("cost_usd") is not None:
+        normalized["cost_usd"] = float(raw_usage["cost_usd"] or 0.0)
+    return normalized
+
+
 def _strip_code_fence(text: str) -> str:
     """剥掉 LLM 可能包裹的 ```json ... ``` 围栏。"""
     t = text.strip()
@@ -203,9 +234,21 @@ async def extract_metadata_llm_async(
         result["prompt_version"] = (
             f"v{prompt_version}" if isinstance(prompt_version, int) else "default"
         )
-        result["llm_tokens"] = dict(
+        result["llm_tokens"] = _normalize_usage_metadata(
             getattr(response, "usage_metadata", {}) or {}
-        ) or {}
+        )
+        result["llm_usage_status"] = (
+            "reported" if result["llm_tokens"] else "unavailable"
+        )
+        response_metadata = getattr(response, "response_metadata", {}) or {}
+        actual_model = (
+            response_metadata.get("model_name")
+            or response_metadata.get("model")
+            or ""
+        )
+        if actual_model:
+            # 仅保存模型标识，不保存完整响应；由决策信封带到处理血缘。
+            result["actual_model"] = str(actual_model)
         if span_id:
             trace_collector.end_span(span_id, status="success", metrics={
                 "doc_type": result["doc_type"],

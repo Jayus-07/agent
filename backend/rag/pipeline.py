@@ -230,6 +230,9 @@ class RAGPipeline:
 
         # 执行增量同步
         try:
+            from backend.rag.indexing.processing_lineage_pg import (
+                get_processing_lineage_repository,
+            )
             indexer = IncrementalIndexer(
                 docs_dir=DOCS_DIRECTORY,
                 vectordb=self.vectordb,
@@ -237,6 +240,7 @@ class RAGPipeline:
                 embedding=self.embedding,
                 registry=registry,
                 kb_id="default",  # 触发 _derive_kb_id 按第一级子目录派生，实现 kb 隔离
+                processing_lineage_repository=get_processing_lineage_repository(),
             )
             result = indexer.sync()
             logger.info(f"增量索引: {result}")
@@ -290,6 +294,9 @@ class RAGPipeline:
         registry.clear()
 
         # 扫描所有文档
+        from backend.rag.indexing.processing_lineage_pg import (
+            get_processing_lineage_repository,
+        )
         indexer = IncrementalIndexer(
             docs_dir=DOCS_DIRECTORY,
             vectordb=self.vectordb,
@@ -297,6 +304,7 @@ class RAGPipeline:
             embedding=self.embedding,
             registry=registry,
             kb_id="default",  # 触发 _derive_kb_id 按第一级子目录派生，实现 kb 隔离
+            processing_lineage_repository=get_processing_lineage_repository(),
         )
         disk_files = indexer._scan_disk()
 

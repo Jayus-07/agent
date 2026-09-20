@@ -8,6 +8,7 @@ from functools import lru_cache
 from typing import List, Set, Dict, Any, Optional, Literal, Tuple
 
 from backend.config.rag import DOC_TYPE_RULES, FILENAME_TYPE_HINTS, FOLDER_TYPE_HINTS, TIME_PATTERNS, DOMAIN_RULES, SUMMARY_MAX_LENGTH
+from backend.config import model_roles
 from backend.config.llm import LLM_REQUEST_TIMEOUT
 from backend.infra.llm import llm
 from backend.rag.preprocessing.entity import extract_person_names
@@ -608,6 +609,7 @@ async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = 
     """
     from backend.config.llm import OLLAMA_ENABLED
     from backend.config.rag import DOC_LLM_MODEL
+    doc_model = model_roles.resolve_runtime_name("doc", DOC_LLM_MODEL)
 
     # <2KB 文档：提取式摘要，不调 LLM
     if len(text) < 2000:
@@ -623,15 +625,15 @@ async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = 
         safe_text=safe_text, max_length=str(max_length),
     ).text
 
-    if DOC_LLM_MODEL and OLLAMA_ENABLED:
+    if doc_model and OLLAMA_ENABLED:
         # 本地 Ollama —— 同步调用（indexer 线程内）
         try:
             from langchain_ollama import ChatOllama
-            llm_local = ChatOllama(model=DOC_LLM_MODEL, temperature=0.0, num_ctx=4096, request_timeout=30)
+            llm_local = ChatOllama(model=doc_model, temperature=0.0, num_ctx=4096, request_timeout=30)
             response = llm_local.invoke(prompt)
             summary = response.content.strip() if hasattr(response, "content") else str(response).strip()
             summary = _smart_truncate(summary, max_length)
-            logger.info(f"[Summary Ollama] {DOC_LLM_MODEL} → {len(summary)}字")
+            logger.info(f"[Summary Ollama] {doc_model} → {len(summary)}字")
             return summary, []
         except Exception as e:
             logger.warning(f"[Summary Ollama] 失败: {e}")
@@ -645,7 +647,7 @@ async def build_llm_summary_cached(text_hash: str, text: str, max_length: int = 
             None,
             f"LLM摘要生成超时 ({LLM_REQUEST_TIMEOUT}s)",
             prompt,
-            llm_obj=llm,
+            role="metadata_extract",
         )
 
         if response is None:

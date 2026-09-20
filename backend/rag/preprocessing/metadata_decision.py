@@ -38,9 +38,11 @@ def _metadata_model_version() -> str:
     """返回参与缓存版本的实际模型指针。"""
     from backend.config.llm import LLM_MODEL
     from backend.config.rag import METADATA_CLASSIFIER_MODEL_PATH
+    from backend.config import model_roles
 
     classifier = METADATA_CLASSIFIER_MODEL_PATH or "off"
-    return f"llm:{LLM_MODEL}|classifier:{classifier}"
+    metadata_model = model_roles.resolve_effective("metadata_extract").get("value") or LLM_MODEL
+    return f"llm:{metadata_model}|classifier:{classifier}"
 
 
 def _metadata_prompt_version() -> str:
@@ -321,7 +323,19 @@ async def decide_metadata(
                 prompt_version=str(llm_result.get("prompt_version", "default")),
                 latency_ms=(time.monotonic() - started) * 1000,
                 llm_call_count=llm_calls,
-                metadata=unified.to_extract_dict(),
+                metadata={
+                    **unified.to_extract_dict(),
+                    "actual_model": str(llm_result.get("actual_model") or ""),
+                    "llm_tokens": dict(llm_result.get("llm_tokens") or {}),
+                    "llm_usage_status": str(
+                        llm_result.get("llm_usage_status")
+                        or (
+                            "reported"
+                            if llm_result.get("llm_tokens")
+                            else "unavailable"
+                        )
+                    ),
+                },
             )
             _observe_route_latency(envelope.source, started)
             await put_cached_decision_async(cache_key, envelope)

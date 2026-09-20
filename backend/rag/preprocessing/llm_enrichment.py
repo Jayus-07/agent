@@ -7,11 +7,12 @@
 from __future__ import annotations
 
 import re
+import time
 
 from backend.shared.logger import logger
 
 
-def invoke_metadata_llm(prompt: str, llm_obj=None):
+def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extract"):
     """RAG 元数据提取专用 LLM 调用 — qwen3 混合思考模型关闭思考模式。
 
     qwen3.x-plus/max 默认开启思考（thinking budget ~4k token），结构化提取
@@ -20,8 +21,9 @@ def invoke_metadata_llm(prompt: str, llm_obj=None):
 
     Args:
         prompt: 提示词
-        llm_obj: 可选 LLM 对象。调用方（如 metadata.py）传模块级 llm，
-            保持测试 monkeypatch 透传；None 时用全局默认 llm。
+        llm_obj: 可选 LLM 对象。调用方传入后保持测试和本地模型兼容；
+            None 时按 role 解析专用模型角色。
+        role: 模型角色，入库阶段默认 ``metadata_extract``。
 
     Returns: LLM 消息对象（与 llm.invoke 一致）
     Raises: 与 llm.invoke 一致（调用方自行 try/except 降级）
@@ -29,7 +31,27 @@ def invoke_metadata_llm(prompt: str, llm_obj=None):
     from backend.infra.llm.proxy import _get_provider_for
 
     if llm_obj is None:
-        from backend.infra.llm import llm as llm_obj
+        from backend.infra.llm.proxy import get_llm_for_role
+        llm_obj = get_llm_for_role(role)
+
+    started = time.monotonic()
+
+    def _invoke_and_record(*args, **kwargs):
+        response = llm_obj.invoke(*args, **kwargs)
+        # get_llm_for_role 返回的是底层 LangChain 实例，不经过 _LLMProxy；
+        # 这里补一次统一计量。显式传入的 proxy 自己已记录，避免重复落库。
+        if type(llm_obj).__name__ not in {"_LLMProxy", "_BoundLLMProxy"}:
+            try:
+                from backend.infra.llm.proxy import record_llm_result
+
+                record_llm_result(
+                    response,
+                    duration_ms=(time.monotonic() - started) * 1000,
+                    model_name=str(getattr(llm_obj, "model", "") or ""),
+                )
+            except Exception as exc:
+                logger.debug(f"[MetadataLLM] 直接调用计量失败: {exc}")
+        return response
 
     try:
         # provider 判断基于 llm_obj 自身（proxy 的 __getattr__ 委托到 active llm；
@@ -38,10 +60,12 @@ def invoke_metadata_llm(prompt: str, llm_obj=None):
         # 硅基流动 Qwen3-8B 默认思考 14.3s/727 字，关闭后 0.8s（2026-09-19）。
         model_name = str(getattr(llm_obj, "model", "") or "")
         if _get_provider_for(model_name) in ("qwen", "siliconflow"):
-            return llm_obj.invoke(prompt, extra_body={"enable_thinking": False})
+            return _invoke_and_record(
+                prompt, extra_body={"enable_thinking": False}
+            )
     except Exception as e:  # 解析失败不影响主流程，按普通调用
         logger.debug(f"[MetadataLLM] 模型解析失败，走普通调用: {e}")
-    return llm_obj.invoke(prompt)
+    return _invoke_and_record(prompt)
 
 
 def _extract_first_sentences(text: str, n: int = 2) -> str:

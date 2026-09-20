@@ -3,7 +3,7 @@
 架构设计 (P0 - 硬性约束):
 1. EMBEDDING_PROVIDER=cloud → Cloud Embedding (OpenAIEmbeddings，DashScope/SiliconFlow 等)
 2. EMBEDDING_PROVIDER=local → Local Embedding (HuggingFaceEmbeddings)
-3. Cloud 模式必须校验 EMBEDDING_API_KEY，不存在时明确报错
+3. Cloud 模式必须校验数据库供应商 API Key，不存在时明确报错
 4. 禁止 Cloud 配置错误时静默降级到 Local
 5. Token Tracker 记录用量，Local 模式无法获取 usage 时 total_tokens=null
 
@@ -29,13 +29,16 @@ from backend.config import (
     ENV_MODE,
     EMBEDDING_PROVIDER,
     EMBEDDING_MODEL,
+    EMBEDDING_MODEL_PATH,
     EMBEDDING_API_BASE,
     EMBEDDING_API_KEY,
-    EMBEDDING_MODEL_PATH,
     EMBEDDING_BATCH_SIZE,
     EMBEDDING_REQUEST_TIMEOUT,
     TOKEN_USAGE_LOG_PATH,
 )
+from backend.config import model_roles
+from backend.infra.llm import credentials as credentials_mod
+from backend.infra.llm import specialized as specialized_mod
 from backend.infra.token_tracker import create_tracker_for_embedding
 from backend.shared.logger import logger
 
@@ -44,12 +47,72 @@ from backend.shared.logger import logger
 # =====================================================
 
 
+def _configured_embedding_model() -> str:
+    """读取向量化角色；无 DB 覆盖时保持历史配置常量。"""
+    return model_roles.resolve_runtime_name("embedding", EMBEDDING_MODEL)
+
+
+def _embedding_runtime_signature() -> tuple[Any, ...]:
+    """返回影响 embedding 客户端的配置签名，供已构建的包装器热切换。"""
+    binding = specialized_mod.resolve_binding("embedding")
+    if binding is not None:
+        return (
+            "specialized",
+            binding.provider_id,
+            binding.adapter,
+            binding.model_name,
+            binding.base_url,
+            repr(sorted(dict(binding.options).items())),
+            credentials_mod.credentials_version(binding.provider_id),
+        )
+    return (
+        "database-unconfigured",
+        EMBEDDING_PROVIDER,
+        _configured_embedding_model(),
+    )
+
+
+def _embedding_is_cloud() -> bool:
+    """判断当前 embedding 是否应走远端协议。"""
+    return (
+        EMBEDDING_PROVIDER == "cloud"
+        or specialized_mod.resolve_binding("embedding") is not None
+    )
+
+
+def _resolve_cloud_embedding_config() -> dict[str, Any]:
+    """解析专项 DB 配置；开发阶段无绑定时兼容旧 env/code 配置。"""
+    binding = specialized_mod.resolve_binding("embedding")
+    if binding is None:
+        return {
+            "model": _configured_embedding_model(),
+            "api_key": EMBEDDING_API_KEY or os.getenv("EMBEDDING_API_KEY", ""),
+            "base_url": EMBEDDING_API_BASE or os.getenv("EMBEDDING_API_BASE", ""),
+            "dimensions": None,
+            "provider": "env",
+        }
+
+    credentials = credentials_mod.resolve_credentials(
+        binding.provider_id,
+        model_name=binding.model_name,
+    )
+    dimensions = binding.options.get("dimensions")
+    return {
+        "model": binding.model_name,
+        "api_key": credentials.api_key or "",
+        "base_url": binding.base_url,
+        "dimensions": int(dimensions) if dimensions is not None else None,
+        "provider": binding.provider_id,
+    }
+
+
 def _get_cloud_embedding() -> Embeddings:
     """获取 Cloud Embedding (DashScope OpenAI 兼容)."""
-    if not EMBEDDING_API_KEY:
+    runtime_config = _resolve_cloud_embedding_config()
+    if not runtime_config["api_key"]:
         raise RuntimeError(
-            "Cloud 模式需要 EMBEDDING_API_KEY，请在 .env 中设置.\n"
-            "或设置 EMBEDDING_PROVIDER=local（或 ENV_MODE=local）使用本地 BGE 模型."
+            "数据库未配置可用的 embedding 供应商 API Key，请先在管理端测试并保存"
+            "向量模型；如需本地模型，请显式使用本地模式。"
         )
     
     try:
@@ -59,26 +122,29 @@ def _get_cloud_embedding() -> Embeddings:
             "Cloud 模式需要 langchain-openai: pip install langchain-openai"
         )
     
-    embedding = OpenAIEmbeddings(
-        model=EMBEDDING_MODEL,
-        api_key=EMBEDDING_API_KEY,
-        base_url=EMBEDDING_API_BASE,
+    embedding_kwargs: dict[str, Any] = {
+        "model": runtime_config["model"],
+        "api_key": runtime_config["api_key"],
+        "base_url": runtime_config["base_url"],
         # DashScope 兼容模式只接受字符串数组；默认开启的 tiktoken 分词会把文本
         # 转成 token id 数组发给 API，触发 400 "contents is neither str nor
         # list of str"，导致启动时全量索引重建失败（chroma 0 embeddings）。
         # 关闭本地分词后直接发原文。
-        check_embedding_ctx_length=False,
+        "check_embedding_ctx_length": False,
         # 单次请求携带的文本条数（EMBEDDING_BATCH_SIZE，默认 10）：
         # DashScope text-embedding-v3 上限 10；换 SiliconFlow / TEI 时可
         # 在 .env 调大到 32+ 提速索引。
-        chunk_size=EMBEDDING_BATCH_SIZE,
+        "chunk_size": EMBEDDING_BATCH_SIZE,
         # 让 HTTP 请求在专家总超时前自行结束，不能依赖外层线程中断。
-        timeout=EMBEDDING_REQUEST_TIMEOUT,
-    )
+        "timeout": EMBEDDING_REQUEST_TIMEOUT,
+    }
+    if runtime_config["dimensions"] is not None:
+        embedding_kwargs["dimensions"] = runtime_config["dimensions"]
+    embedding = OpenAIEmbeddings(**embedding_kwargs)
     
     logger.info(
         "[Embedding] Cloud 模式初始化完成 "
-        f"(model={EMBEDDING_MODEL}, api_base={EMBEDDING_API_BASE})"
+        f"(model={runtime_config['model']}, api_base={runtime_config['base_url']})"
     )
     return embedding
 
@@ -112,22 +178,50 @@ class _TrackedEmbedding(Embeddings):
     def __init__(self, inner: Embeddings, tracker):
         self._inner = inner
         self._tracker = tracker
-        self._model_name = EMBEDDING_MODEL if EMBEDDING_PROVIDER == "cloud" else EMBEDDING_MODEL_PATH
-        self._provider = "dashscope" if EMBEDDING_PROVIDER == "cloud" else "local"
+        self._refresh_lock = threading.RLock()
+        self._config_signature = _embedding_runtime_signature()
+        cloud_enabled = _embedding_is_cloud()
+        self._model_name = _configured_embedding_model() if cloud_enabled else EMBEDDING_MODEL_PATH
+        self._provider = "cloud" if cloud_enabled else "local"
         # 单次 embed_documents 调用的最优文本条数，供索引链路取批大小：
         # cloud 模式受 DashScope 单请求上限约束（外层攒 32 条会被
         # OpenAIEmbeddings 内部再拆 10+10+10+2，白多 3 次 RTT），直接取上限；
         # local 模式批推理走矩阵运算，维持配置批大小。
-        if EMBEDDING_PROVIDER == "cloud":
+        if cloud_enabled:
             from backend.config.rag import EMBED_REQUEST_LIMIT
             self.embed_batch_size = max(1, EMBED_REQUEST_LIMIT)
         else:
             from backend.config.rag import EMBED_BATCH_SIZE
             self.embed_batch_size = max(1, EMBED_BATCH_SIZE)
 
+    def _refresh_if_changed(self) -> None:
+        """配置轮询后，在下一次调用前替换旧的出站 embedding 客户端。"""
+        signature = _embedding_runtime_signature()
+        if signature == self._config_signature:
+            return
+        with self._refresh_lock:
+            if signature == self._config_signature:
+                return
+            cloud_enabled = _embedding_is_cloud()
+            self._inner = _get_cloud_embedding() if cloud_enabled else _get_local_embedding()
+            self._config_signature = signature
+            self._model_name = _configured_embedding_model() if cloud_enabled else EMBEDDING_MODEL_PATH
+            self._provider = "cloud" if cloud_enabled else "local"
+            if cloud_enabled:
+                from backend.config.rag import EMBED_REQUEST_LIMIT
+                self.embed_batch_size = max(1, EMBED_REQUEST_LIMIT)
+            else:
+                from backend.config.rag import EMBED_BATCH_SIZE
+                self.embed_batch_size = max(1, EMBED_BATCH_SIZE)
+            logger.info(
+                "[Embedding] 检测到配置变化，已热切换客户端 (model=%s)",
+                self._model_name,
+            )
+
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         t0 = time.monotonic()
         try:
+            self._refresh_if_changed()
             result = self._inner.embed_documents(texts)
             # DashScope Cloud 模式可能返回 usage；本地模式没有
             total_tokens = self._estimate_tokens(texts)
@@ -140,6 +234,7 @@ class _TrackedEmbedding(Embeddings):
     def embed_query(self, text: str) -> List[float]:
         t0 = time.monotonic()
         try:
+            self._refresh_if_changed()
             result = self._inner.embed_query(text)
             total_tokens = self._estimate_tokens([text])
             self._record(total_tokens, 1, (time.monotonic() - t0) * 1000)
@@ -159,8 +254,8 @@ class _TrackedEmbedding(Embeddings):
         """写入 SQLite（LLMUsageStore）。软失败不影响主流程。"""
         try:
             from backend.observability.llm_usage_store import get_llm_usage_store
-            from backend.observability.tracer import current_trace_context
-            trace_id, session_id = current_trace_context()
+            from backend.observability.llm_usage_store import current_usage_attribution
+            attribution = current_usage_attribution()
             get_llm_usage_store().record({
                 "component": "embedding",
                 "model": self._model_name,
@@ -170,8 +265,15 @@ class _TrackedEmbedding(Embeddings):
                 "total_tokens": total_tokens or 0,
                 "cost_usd": 0.0,
                 "duration_ms": duration_ms,
-                "trace_id": trace_id or "",
-                "session_id": session_id or "",
+                "trace_id": attribution["trace_id"],
+                "session_id": attribution["session_id"],
+                "request_id": attribution["request_id"],
+                "user_id": attribution["user_id"],
+                "tenant_id": attribution["tenant_id"],
+                "run_id": attribution["run_id"],
+                "step_id": attribution["step_id"],
+                "role": attribution["role"] or "embedding",
+                "stage": attribution["stage"] or "embedding",
                 "finish_reason": status,
             })
         except Exception:
@@ -191,9 +293,13 @@ def _init_tracker():
     """懒加载 TokenTracker."""
     global _tracker
     if _tracker is None:
+        cloud_enabled = (
+            EMBEDDING_PROVIDER == "cloud"
+            or specialized_mod.resolve_binding("embedding") is not None
+        )
         _tracker = create_tracker_for_embedding(
             log_path=str(Path(TOKEN_USAGE_LOG_PATH).expanduser().resolve()),
-            model_name=EMBEDDING_MODEL if EMBEDDING_PROVIDER == "cloud" else EMBEDDING_MODEL_PATH,
+            model_name=_configured_embedding_model() if cloud_enabled else EMBEDDING_MODEL_PATH,
             backend=EMBEDDING_PROVIDER,
         )
     return _tracker
@@ -219,7 +325,10 @@ def get_embedding() -> Embeddings:
         with _lock:
             if _embedding is None:
                 # 根据 EMBEDDING_PROVIDER 选择后端
-                if EMBEDDING_PROVIDER == "cloud":
+                if (
+                    EMBEDDING_PROVIDER == "cloud"
+                    or specialized_mod.resolve_binding("embedding") is not None
+                ):
                     base_embedding = _get_cloud_embedding()
                 else:
                     base_embedding = _get_local_embedding()
