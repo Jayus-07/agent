@@ -1,12 +1,15 @@
 """P2 RBAC 管理端 API 契约测试。
 
-这些测试只把 PostgreSQL 作为边界替身；权限、分页、版本保护、客服身份绑定
-和审计响应均走真实路由代码。
+大部分测试把 PostgreSQL 作为边界替身；权限、分页、版本保护、客服身份绑定
+和审计响应均走真实路由代码。最后一个 active admin 另有真实 PostgreSQL
+双连接并发回归，执行与生产一致的 advisory lock 与版本更新顺序。
 """
 
 from __future__ import annotations
 
 import copy
+import threading
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -622,6 +625,188 @@ def test_cross_tenant_audit_isolation(monkeypatch):
 
     assert response.status_code == 200, response.text
     assert [item["id"] for item in response.json()["items"]] == [2]
+
+
+def test_real_postgres_last_admin_concurrency_is_serialized():
+    """真实双连接验证最后 admin 并发降权为一成功、一 409，且不死锁。"""
+    psycopg2 = pytest.importorskip("psycopg2")
+    from backend.config.database import MEMORY_DB_CONFIG
+
+    try:
+        probe = psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2)
+    except psycopg2.OperationalError as exc:
+        pytest.skip(f"PostgreSQL 不可用，跳过真实 RBAC 并发测试: {exc}")
+
+    required_columns = {
+        ("auth", "users"): {"tenant_id", "version"},
+        ("auth", "sessions"): {"user_id", "revoked_at", "revoke_reason"},
+        ("auth", "refresh_tokens"): {"user_id", "revoked"},
+        ("auth", "rbac_audits"): {
+            "tenant_id", "actor_user_id", "target_user_id", "action",
+            "before_state", "after_state", "result",
+        },
+        ("customer_service", "cs_agents"): {
+            "agent_id", "tenant_id", "auth_user_id", "display_name", "role",
+            "max_conversations", "enabled", "accepting",
+        },
+    }
+    try:
+        with probe.cursor() as cursor:
+            for (schema, table), columns in required_columns.items():
+                cursor.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = %s AND table_name = %s "
+                    "AND column_name = ANY(%s)",
+                    (schema, table, list(columns)),
+                )
+                present = {row[0] for row in cursor.fetchall()}
+                if present != columns:
+                    pytest.skip(
+                        f"缺少真实 RBAC 并发所需 schema: {schema}.{table} "
+                        f"{sorted(columns - present)}"
+                    )
+    finally:
+        probe.close()
+
+    suffix = uuid.uuid4().hex[:12]
+    tenant_id = f"rbac-conc-{suffix}"
+    usernames = [f"rbac-a-{suffix}", f"rbac-b-{suffix}"]
+    user_ids: list[int] = []
+    try:
+        setup = psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2)
+    except psycopg2.OperationalError as exc:
+        pytest.skip(f"PostgreSQL 在测试初始化时不可用: {exc}")
+    try:
+        with setup.cursor() as cursor:
+            for username in usernames:
+                cursor.execute(
+                    "INSERT INTO auth.users "
+                    "(username, password_hash, real_name, dept, role, status, "
+                    "tenant_id, version) VALUES (%s, %s, %s, %s, 'admin', 1, %s, 0) "
+                    "RETURNING id",
+                    (username, "test-hash", username, "测试", tenant_id),
+                )
+                user_ids.append(cursor.fetchone()[0])
+        setup.commit()
+    finally:
+        setup.close()
+
+    barrier = threading.Barrier(2)
+    outcomes: list[dict | None] = [None, None]
+
+    def downgrade(index: int, target_id: int) -> None:
+        connection = None
+        try:
+            connection = psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2)
+            with connection.cursor() as cursor:
+                cursor.execute("SET lock_timeout = '3000ms'")
+                cursor.execute("SET statement_timeout = '10000ms'")
+                barrier.wait(timeout=5)
+
+                # 与 rbac.update_user_in_transaction 保持同一锁顺序和 SQL 语义。
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    ("auth.users:rbac-active-admins",),
+                )
+                cursor.execute(
+                    "SELECT id FROM auth.users "
+                    "WHERE tenant_id = %s AND role = 'admin' AND status = 1 "
+                    "ORDER BY id FOR UPDATE",
+                    (tenant_id,),
+                )
+                active_admins = cursor.fetchall()
+                cursor.execute(
+                    "SELECT id, role, status, version FROM auth.users "
+                    "WHERE id = %s AND tenant_id = %s FOR UPDATE",
+                    (target_id, tenant_id),
+                )
+                current = cursor.fetchone()
+                if current is None or len(active_admins) <= 1:
+                    connection.rollback()
+                    outcomes[index] = {"status": 409}
+                    return
+
+                cursor.execute(
+                    "UPDATE auth.users SET role = 'viewer', status = 0, "
+                    "version = version + 1, updated_at = now() "
+                    "WHERE id = %s AND tenant_id = %s AND version = %s "
+                    "RETURNING id",
+                    (target_id, tenant_id, current[3]),
+                )
+                if cursor.fetchone() is None:
+                    connection.rollback()
+                    outcomes[index] = {"status": 409}
+                    return
+
+                cursor.execute(
+                    "UPDATE auth.sessions SET revoked_at = now(), "
+                    "revoke_reason = 'rbac_changed' "
+                    "WHERE user_id = %s AND revoked_at IS NULL",
+                    (target_id,),
+                )
+                cursor.execute(
+                    "UPDATE auth.refresh_tokens SET revoked = TRUE, revoked_at = now() "
+                    "WHERE user_id = %s AND revoked = FALSE",
+                    (target_id,),
+                )
+                cursor.execute(
+                    "INSERT INTO auth.rbac_audits "
+                    "(tenant_id, actor_user_id, target_user_id, action, "
+                    "before_state, after_state, result) "
+                    "VALUES (%s, %s, %s, 'user.update', '{}', '{}', 'success')",
+                    (tenant_id, user_ids[0], target_id),
+                )
+            connection.commit()
+            outcomes[index] = {"status": 200}
+        except Exception as exc:  # surfaced by the assertion below, never swallowed
+            if connection is not None:
+                connection.rollback()
+            outcomes[index] = {"status": "error", "error": repr(exc)}
+        finally:
+            if connection is not None:
+                connection.close()
+
+    threads = [
+        threading.Thread(target=downgrade, args=(index, user_id), daemon=False)
+        for index, user_id in enumerate(user_ids)
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+            assert not thread.is_alive(), "RBAC 并发事务疑似死锁"
+
+        assert all(outcome is not None for outcome in outcomes), outcomes
+        assert not [outcome for outcome in outcomes if outcome["status"] == "error"], outcomes
+        assert sorted(outcome["status"] for outcome in outcomes) == [200, 409]
+    finally:
+        cleanup = psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2)
+        try:
+            with cleanup.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM auth.refresh_tokens WHERE user_id = ANY(%s)",
+                    (user_ids,),
+                )
+                cursor.execute(
+                    "DELETE FROM auth.sessions WHERE user_id = ANY(%s)",
+                    (user_ids,),
+                )
+                cursor.execute(
+                    "DELETE FROM auth.rbac_audits WHERE tenant_id = %s",
+                    (tenant_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM customer_service.cs_agents WHERE tenant_id = %s",
+                    (tenant_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM auth.users WHERE id = ANY(%s)",
+                    (user_ids,),
+                )
+            cleanup.commit()
+        finally:
+            cleanup.close()
 
 
 def test_update_rolls_back_when_audit_write_fails(monkeypatch):

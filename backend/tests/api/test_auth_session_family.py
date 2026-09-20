@@ -23,10 +23,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.app.api.middleware import auth as auth_middleware
 from backend.app.api.routes import auth_local, rbac
 from backend.config.database import MEMORY_DB_CONFIG
 from backend.security.local_jwt import hash_password, verify_access_token
 from backend.security.session_service import access_session_key
+from backend.services import sys_config
 
 ADMIN_HEADERS = {
     "X-Auth-Type": "jwt",
@@ -51,6 +53,9 @@ class FakeRedis:
     def delete(self, key):
         n = 1 if self.store.pop(key, None) is not None else 0
         return n + (1 if self.sets.pop(key, None) is not None else 0)
+
+    def exists(self, key):
+        return int(key in self.store or key in self.sets)
 
     def ttl(self, key):
         return self.ttls.get(key, -2)
@@ -89,6 +94,12 @@ def _pg(sql, params=()):
 def env(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "k" * 32)
     monkeypatch.setenv("SENSITIVE_API_GUARD_MODE", "enforce")
+    monkeypatch.setenv("JWT_SESSION_GUARD_MODE", "enforce")
+    monkeypatch.delitem(
+        sys_config._values, "JWT_SESSION_GUARD_MODE", raising=False
+    )
+    monkeypatch.setattr(auth_middleware, "API_KEY", "test-key")
+    monkeypatch.setattr(auth_middleware, "ALLOW_UNAUTHENTICATED", False)
     fr = FakeRedis()
     monkeypatch.setattr("backend.infra.redis.client.get_redis", lambda: fr)
     monkeypatch.setattr("backend.app.api.routes.auth_local.get_redis", lambda: fr)
@@ -101,7 +112,15 @@ def env(monkeypatch):
     app.include_router(auth_local.router, prefix="/api")
     app.include_router(auth_local.sys_router, prefix="/api")
     app.include_router(rbac.router, prefix="/api")
-    yield TestClient(app), fr
+    app.middleware("http")(auth_middleware.api_key_middleware)
+
+    @app.get("/protected-rbac")
+    async def protected_rbac():
+        return {"ok": True}
+
+    client = TestClient(app)
+    client.headers.update({"X-API-Key": "test-key"})
+    yield client, fr
 
 
 @pytest.fixture()
@@ -454,6 +473,15 @@ def test_cs_role_change_revokes_real_access_gate_and_refresh_family(
     old_refresh = _cookie_of(client)
     assert redis.store.get(access_session_key(target["id"], jti)) == "1"
 
+    live_before = client.get(
+        "/protected-rbac",
+        headers={
+            "X-API-Key": "test-key",
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
+    assert live_before.status_code == 200
+
     update_response = client.patch(
         f"/api/sys/rbac/users/{target['id']}",
         json={"version": 0, "csRole": "supervisor"},
@@ -478,6 +506,16 @@ def test_cs_role_change_revokes_real_access_gate_and_refresh_family(
     )[0]
     assert active_tokens == 0
     assert access_session_key(target["id"], jti) not in redis.store
+
+    live_response = client.get(
+        "/protected-rbac",
+        headers={
+            "X-API-Key": "test-key",
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
+    assert live_response.status_code == 401
+    assert "会话已失效" in live_response.json()["detail"]
 
     client.cookies.set("refresh_token", old_refresh)
     refresh_response = client.post(
