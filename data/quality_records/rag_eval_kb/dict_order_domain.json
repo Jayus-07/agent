@@ -1,0 +1,107 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "dict_order_domain",
+ "kb_id": "rag_eval_kb",
+ "source_file": "readme_数据字典_订单域.txt",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_eval_kb\\general\\txt\\readme_数据字典_订单域.txt",
+ "file_size": 492,
+ "file_sha256": "7cc89f51d291e55fce92bbb6e0f90098071e970c1fece29a35f619cd181d8c34",
+ "format": "txt",
+ "doc_type": "general",
+ "chunking_strategy": "RecursiveChunkStrategy",
+ "completeness": 0.1,
+ "parsing": {
+  "node_count": 3,
+  "section_count": 1,
+  "leaf_count": 2,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 303,
+  "cleaned_chars": 300,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 1,
+  "leaf_chunk_count": 1,
+  "parent_chunk_count": 0,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "69ab0e73fe0aeb56",
+    "chars": 51,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "2be9e4bdf40b9d79",
+    "chars": 249,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=300 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=2"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.990 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

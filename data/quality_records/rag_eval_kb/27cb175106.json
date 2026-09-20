@@ -1,0 +1,487 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "27cb175106",
+ "kb_id": "rag_eval_kb",
+ "source_file": "legal_2026年度合规审查报告.pdf",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_eval_kb\\general\\pdf\\legal_2026年度合规审查报告.pdf",
+ "file_size": 45695,
+ "file_sha256": "c3c1e6c22ebf9f39fb5ecd19cd1a3a078432453a3b08fccdfa2d2f75740abf0e",
+ "format": "pdf",
+ "doc_type": "compliance",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.9903,
+ "parsing": {
+  "node_count": 23,
+  "section_count": 13,
+  "leaf_count": 10,
+  "table_count": 1,
+  "table_total_rows": 4,
+  "table_max_cols": 4,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 945,
+  "cleaned_chars": 505,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 13,
+  "leaf_chunk_count": 5,
+  "parent_chunk_count": 8,
+  "truncated": false,
+  "filtered_count": 11,
+  "filtered_reasons": {
+   "too_short": 9,
+   "duplicate": 2
+  }
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     56.7,
+     30.0,
+     538.6,
+     38.0
+    ],
+    "content_hash": "d3b2a915a9d8f925",
+    "chars": 35,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     182.1,
+     121.5,
+     413.1,
+     143.5
+    ],
+    "content_hash": "5c285939a67c833e",
+    "chars": 13,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     186.6,
+     194.0,
+     408.6,
+     206.0
+    ],
+    "content_hash": "dea8092283a1c1b4",
+    "chars": 52,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     56.7,
+     809.5,
+     84.7,
+     817.5
+    ],
+    "content_hash": "ded61ffd4d21a88f",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     56.7,
+     30.0,
+     538.6,
+     38.0
+    ],
+    "content_hash": "d3b2a915a9d8f925",
+    "chars": 35,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     62.7,
+     70.3,
+     188.7,
+     84.3
+    ],
+    "content_hash": "58e8ecea8a0e6dd0",
+    "chars": 9,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     62.7,
+     152.8,
+     222.7,
+     162.8
+    ],
+    "content_hash": "1a8ac5155512e6cd",
+    "chars": 88,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     62.7,
+     180.3,
+     146.7,
+     194.3
+    ],
+    "content_hash": "0c742f4b6b46a7c0",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     62.7,
+     262.8,
+     142.7,
+     272.8
+    ],
+    "content_hash": "f27c087d72b20382",
+    "chars": 63,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     62.7,
+     290.3,
+     160.7,
+     304.3
+    ],
+    "content_hash": "1a6163cf03a60d9d",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n11",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     62.7,
+     411.8,
+     122.7,
+     421.8
+    ],
+    "content_hash": "afc79eac8575423e",
+    "chars": 96,
+    "cleaned": false
+   },
+   {
+    "node_id": "n12",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     56.7,
+     809.5,
+     84.7,
+     817.5
+    ],
+    "content_hash": "f0abcd127cd9f668",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n13",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     56.7,
+     30.0,
+     538.6,
+     38.0
+    ],
+    "content_hash": "d3b2a915a9d8f925",
+    "chars": 35,
+    "cleaned": false
+   },
+   {
+    "node_id": "n14",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     62.7,
+     69.6,
+     166.2,
+     78.6
+    ],
+    "content_hash": "126b2a1bed02c4c8",
+    "chars": 14,
+    "cleaned": false
+   },
+   {
+    "node_id": "n15",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     56.7,
+     809.5,
+     84.7,
+     817.5
+    ],
+    "content_hash": "d56c92dd19f335ba",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n16",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 4,
+    "bbox": [
+     56.7,
+     30.0,
+     538.6,
+     38.0
+    ],
+    "content_hash": "d3b2a915a9d8f925",
+    "chars": 35,
+    "cleaned": false
+   },
+   {
+    "node_id": "n17",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 4,
+    "bbox": [
+     62.7,
+     70.3,
+     146.7,
+     84.3
+    ],
+    "content_hash": "8e2030940d2526c6",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n18",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 4,
+    "bbox": [
+     62.7,
+     152.8,
+     142.7,
+     162.8
+    ],
+    "content_hash": "180d94f551e4475c",
+    "chars": 68,
+    "cleaned": false
+   },
+   {
+    "node_id": "n19",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 4,
+    "bbox": [
+     62.7,
+     180.3,
+     146.7,
+     194.3
+    ],
+    "content_hash": "7fa56023d5e9c2d4",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n20",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 4,
+    "bbox": [
+     62.7,
+     223.8,
+     172.7,
+     233.8
+    ],
+    "content_hash": "65d77cb2e4c2acf1",
+    "chars": 33,
+    "cleaned": false
+   },
+   {
+    "node_id": "n21",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 4,
+    "bbox": [
+     56.7,
+     809.5,
+     84.7,
+     817.5
+    ],
+    "content_hash": "3217e2650371e970",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n22",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     62.692909240722656,
+     85.3621826171875,
+     532.5827026367188,
+     157.3621826171875
+    ],
+    "content_hash": "c4ae39208f4df3f0",
+    "chars": 331,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=505 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=10"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.534 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": [
+   {
+    "check": "value_loss",
+    "value_type": "date",
+    "severity": "warn",
+    "detail": "清洗后丢失 1 个 date，样例: ['2026-09-01']"
+   }
+  ]
+ }
+}

@@ -1,0 +1,115 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "dc7d042c99",
+ "kb_id": "rag_eval_kb",
+ "source_file": "table_客户满意度调查_2026.csv",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_eval_kb\\general\\csv\\table_客户满意度调查_2026.csv",
+ "file_size": 161,
+ "file_sha256": "93522885a5b22c53d9d882deff44421213f2acc96114ce60a1421f96af96fd47",
+ "format": "csv",
+ "doc_type": "faq",
+ "chunking_strategy": "RecursiveChunkStrategy",
+ "completeness": 0.9395,
+ "parsing": {
+  "node_count": 3,
+  "section_count": 2,
+  "leaf_count": 1,
+  "table_count": 1,
+  "table_total_rows": 7,
+  "table_max_cols": 4,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 550,
+  "cleaned_chars": 525,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 0,
+  "leaf_chunk_count": 0,
+  "parent_chunk_count": 0,
+  "truncated": false,
+  "filtered_count": 1,
+  "filtered_reasons": {
+   "low_chinese_ratio": 1
+  }
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "85a82dbc8aa7dfe1",
+    "chars": 22,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "1f57e7f36f288401",
+    "chars": 525,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "table_present",
+    "pass": true,
+    "detail": "table_count=1"
+   },
+   {
+    "check": "table_rows",
+    "pass": true,
+    "detail": "rows=7"
+   },
+   {
+    "check": "table_cols",
+    "pass": true,
+    "detail": "cols=4"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": [
+   {
+    "check": "heavy_filtering",
+    "severity": "warn",
+    "detail": "过滤 1/1 超阈值 50%，原因: {'low_chinese_ratio': 1}"
+   }
+  ]
+ }
+}

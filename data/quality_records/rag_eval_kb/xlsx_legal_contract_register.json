@@ -1,0 +1,159 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "xlsx_legal_contract_register",
+ "kb_id": "rag_eval_kb",
+ "source_file": "table_合同台账.xlsx",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_eval_kb\\general\\xlsx\\table_合同台账.xlsx",
+ "file_size": 6806,
+ "file_sha256": "fb7148186f1b4152db7d259c2ac56caa2a913d9641ab872e5978a8b6090db567",
+ "format": "xlsx",
+ "doc_type": "legal",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.9964,
+ "parsing": {
+  "node_count": 7,
+  "section_count": 4,
+  "leaf_count": 3,
+  "table_count": 3,
+  "table_total_rows": 15,
+  "table_max_cols": 4,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 1124,
+  "cleaned_chars": 1101,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 12,
+  "leaf_chunk_count": 6,
+  "parent_chunk_count": 6,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "4f4ae499f6056238",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e1bad994a6b6bd74",
+    "chars": 400,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "73e22ccd9e9715a8",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "25c8732005dad15c",
+    "chars": 397,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "a3be1a3fcfab208e",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "037ccfd02aeb9a26",
+    "chars": 304,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "table_present",
+    "pass": true,
+    "detail": "table_count=3"
+   },
+   {
+    "check": "table_rows",
+    "pass": true,
+    "detail": "rows=15"
+   },
+   {
+    "check": "table_cols",
+    "pass": true,
+    "detail": "cols=4"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

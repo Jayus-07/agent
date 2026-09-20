@@ -1,0 +1,159 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "34e44a23f7",
+ "kb_id": "rag_eval_kb",
+ "source_file": "table_2026人力编制台账.xlsx",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_eval_kb\\general\\xlsx\\table_2026人力编制台账.xlsx",
+ "file_size": 6502,
+ "file_sha256": "788958e9e47b85e472b443b7d27cb1dd0283928cda4e02aa5e44b4ba21dd32af",
+ "format": "xlsx",
+ "doc_type": "general",
+ "chunking_strategy": "RecursiveChunkStrategy",
+ "completeness": 0.9948,
+ "parsing": {
+  "node_count": 7,
+  "section_count": 4,
+  "leaf_count": 3,
+  "table_count": 3,
+  "table_total_rows": 15,
+  "table_max_cols": 4,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 853,
+  "cleaned_chars": 830,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 3,
+  "leaf_chunk_count": 3,
+  "parent_chunk_count": 0,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "b2471d0529c8ee4d",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "ff39e6afa0a6219a",
+    "chars": 315,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "49a68e8955119a1b",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "13c968d16a7bbee2",
+    "chars": 263,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "44ea3c5d86c92cfd",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "beb31e565cb43aed",
+    "chars": 252,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "table_present",
+    "pass": true,
+    "detail": "table_count=3"
+   },
+   {
+    "check": "table_rows",
+    "pass": true,
+    "detail": "rows=15"
+   },
+   {
+    "check": "table_cols",
+    "pass": true,
+    "detail": "cols=4"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

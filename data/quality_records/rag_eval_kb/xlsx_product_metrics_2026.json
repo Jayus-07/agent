@@ -1,0 +1,159 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "xlsx_product_metrics_2026",
+ "kb_id": "rag_eval_kb",
+ "source_file": "table_产品核心指标.xlsx",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_eval_kb\\general\\xlsx\\table_产品核心指标.xlsx",
+ "file_size": 6313,
+ "file_sha256": "3eaccee029ea8ce16eaec286a2477e16b8135ff8f986d4e0c4eb582cb6ad8a42",
+ "format": "xlsx",
+ "doc_type": "general",
+ "chunking_strategy": "RecursiveChunkStrategy",
+ "completeness": 0.9947,
+ "parsing": {
+  "node_count": 7,
+  "section_count": 4,
+  "leaf_count": 3,
+  "table_count": 3,
+  "table_total_rows": 12,
+  "table_max_cols": 4,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 829,
+  "cleaned_chars": 810,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 2,
+  "leaf_chunk_count": 2,
+  "parent_chunk_count": 0,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e85e590b63fe54b5",
+    "chars": 2,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "01a0a585f9bbe8cc",
+    "chars": 303,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "38eaa91a260d14cb",
+    "chars": 2,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "20ff75fd3cb806a3",
+    "chars": 272,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "3163c98e4bdcbda1",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0aefe81425321d06",
+    "chars": 235,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "table_present",
+    "pass": true,
+    "detail": "table_count=3"
+   },
+   {
+    "check": "table_rows",
+    "pass": true,
+    "detail": "rows=12"
+   },
+   {
+    "check": "table_cols",
+    "pass": true,
+    "detail": "cols=4"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

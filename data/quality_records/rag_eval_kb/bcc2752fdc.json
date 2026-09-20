@@ -1,0 +1,179 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "bcc2752fdc",
+ "kb_id": "rag_eval_kb",
+ "source_file": "notes_运维周会纪要_20260907.txt",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_eval_kb\\general\\txt\\notes_运维周会纪要_20260907.txt",
+ "file_size": 565,
+ "file_sha256": "bdcade9547e3577eb9a664cfd66e91fbca8091942c4922585cacd3bb6cf1df9c",
+ "format": "txt",
+ "doc_type": "security",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.8259,
+ "parsing": {
+  "node_count": 8,
+  "section_count": 6,
+  "leaf_count": 2,
+  "table_count": 0,
+  "table_total_rows": 0,
+  "table_max_cols": 0,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 271,
+  "cleaned_chars": 65,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 5,
+  "leaf_chunk_count": 0,
+  "parent_chunk_count": 5,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "0c5c542c4a7dce90",
+    "chars": 46,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "df3be7cac51ab430",
+    "chars": 19,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "bff541eeaaef8b19",
+    "chars": 29,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "4bf8cfa04c4c36c2",
+    "chars": 47,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "5d7caa803b038474",
+    "chars": 34,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "2ebb18ff44174c60",
+    "chars": 35,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "47bed9518035946f",
+    "chars": 37,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=65 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=2"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.240 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": [
+   {
+    "check": "value_loss",
+    "value_type": "date",
+    "severity": "warn",
+    "detail": "清洗后丢失 2 个 date，样例: ['2026-09-12', '2026-09-19']"
+   }
+  ]
+ }
+}

@@ -1,0 +1,185 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "xlsx_finance_budget_2026",
+ "kb_id": "rag_eval_kb",
+ "source_file": "table_2026年度预算表.xlsx",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_eval_kb\\general\\xlsx\\table_2026年度预算表.xlsx",
+ "file_size": 7274,
+ "file_sha256": "1a34fd0f5961c690859d523bba52daac77950edd49821d695d0099c55c7d6026",
+ "format": "xlsx",
+ "doc_type": "financial",
+ "chunking_strategy": "FinancialTableChunkStrategy",
+ "completeness": 0.9952,
+ "parsing": {
+  "node_count": 9,
+  "section_count": 5,
+  "leaf_count": 4,
+  "table_count": 4,
+  "table_total_rows": 20,
+  "table_max_cols": 4,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 1260,
+  "cleaned_chars": 1231,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 17,
+  "leaf_chunk_count": 13,
+  "parent_chunk_count": 4,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "bd0a402474977e76",
+    "chars": 2,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "715d61d91f51555c",
+    "chars": 441,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "d278138910f726c7",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "8299943232928514",
+    "chars": 223,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "3a00b0fef3f0398c",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "98a4bba3015c503a",
+    "chars": 318,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "2eab9dd43ceea360",
+    "chars": 4,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "55d9f00682a68219",
+    "chars": 249,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "table_present",
+    "pass": true,
+    "detail": "table_count=4"
+   },
+   {
+    "check": "table_rows",
+    "pass": true,
+    "detail": "rows=20"
+   },
+   {
+    "check": "table_cols",
+    "pass": true,
+    "detail": "cols=4"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

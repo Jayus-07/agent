@@ -1,0 +1,457 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "7983bfc56b",
+ "kb_id": "rag_eval_kb",
+ "source_file": "spec_API网关技术规范.pdf",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_eval_kb\\general\\pdf\\spec_API网关技术规范.pdf",
+ "file_size": 46752,
+ "file_sha256": "45f916ddcb3e43de68be81c3444e145ec40fdbc13f2426504a58be9e4cbcacd3",
+ "format": "pdf",
+ "doc_type": "policy",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.9934,
+ "parsing": {
+  "node_count": 21,
+  "section_count": 13,
+  "leaf_count": 8,
+  "table_count": 1,
+  "table_total_rows": 6,
+  "table_max_cols": 3,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 1071,
+  "cleaned_chars": 532,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 12,
+  "leaf_chunk_count": 4,
+  "parent_chunk_count": 8,
+  "truncated": false,
+  "filtered_count": 9,
+  "filtered_reasons": {
+   "too_short": 8,
+   "duplicate": 1
+  }
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     56.7,
+     30.0,
+     538.6,
+     38.0
+    ],
+    "content_hash": "36a40adbb1b77aae",
+    "chars": 25,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     62.7,
+     70.3,
+     174.7,
+     84.3
+    ],
+    "content_hash": "f590f170a990dbdf",
+    "chars": 10,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     62.7,
+     113.8,
+     422.7,
+     123.8
+    ],
+    "content_hash": "8c5e10d272919c4e",
+    "chars": 72,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     62.7,
+     141.3,
+     139.7,
+     155.3
+    ],
+    "content_hash": "0189077bd5b6c970",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     62.7,
+     211.8,
+     357.7,
+     221.8
+    ],
+    "content_hash": "e73c20f757644354",
+    "chars": 112,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     62.7,
+     239.3,
+     111.7,
+     253.3
+    ],
+    "content_hash": "d73144e47ed78b1d",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     62.7,
+     287.8,
+     372.7,
+     297.8
+    ],
+    "content_hash": "8578eb83ea23b30f",
+    "chars": 64,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     56.7,
+     809.5,
+     84.7,
+     817.5
+    ],
+    "content_hash": "ded61ffd4d21a88f",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     56.7,
+     30.0,
+     538.6,
+     38.0
+    ],
+    "content_hash": "36a40adbb1b77aae",
+    "chars": 25,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     62.7,
+     69.6,
+     175.2,
+     78.6
+    ],
+    "content_hash": "1d2b27e7303b5f9d",
+    "chars": 15,
+    "cleaned": false
+   },
+   {
+    "node_id": "n11",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     56.7,
+     809.5,
+     84.7,
+     817.5
+    ],
+    "content_hash": "f0abcd127cd9f668",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n12",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     56.7,
+     30.0,
+     538.6,
+     38.0
+    ],
+    "content_hash": "36a40adbb1b77aae",
+    "chars": 25,
+    "cleaned": false
+   },
+   {
+    "node_id": "n13",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     62.7,
+     70.3,
+     111.7,
+     84.3
+    ],
+    "content_hash": "b05fa45d971d4cba",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n14",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     62.7,
+     174.8,
+     187.7,
+     184.8
+    ],
+    "content_hash": "b27dc4019ff092e3",
+    "chars": 104,
+    "cleaned": false
+   },
+   {
+    "node_id": "n15",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     62.7,
+     202.3,
+     153.7,
+     216.3
+    ],
+    "content_hash": "9f4b97bfccf899ec",
+    "chars": 8,
+    "cleaned": false
+   },
+   {
+    "node_id": "n16",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     62.7,
+     323.8,
+     152.7,
+     333.8
+    ],
+    "content_hash": "3bfeaba8b310daf4",
+    "chars": 121,
+    "cleaned": false
+   },
+   {
+    "node_id": "n17",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     62.7,
+     351.3,
+     139.7,
+     365.3
+    ],
+    "content_hash": "eabcb758a99d50e8",
+    "chars": 7,
+    "cleaned": false
+   },
+   {
+    "node_id": "n18",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     62.7,
+     433.8,
+     182.7,
+     443.8
+    ],
+    "content_hash": "25ee2ea2137a3dca",
+    "chars": 71,
+    "cleaned": false
+   },
+   {
+    "node_id": "n19",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     56.7,
+     809.5,
+     84.7,
+     817.5
+    ],
+    "content_hash": "d56c92dd19f335ba",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n20",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     62.692909240722656,
+     85.3621826171875,
+     532.5827026367188,
+     193.3621826171875
+    ],
+    "content_hash": "f3837dc5328939d2",
+    "chars": 427,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=532 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=8"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.497 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": [
+   {
+    "check": "value_loss",
+    "value_type": "date",
+    "severity": "warn",
+    "detail": "清洗后丢失 2 个 date，样例: ['2026-04-30', '2026-05-06']"
+   },
+   {
+    "check": "value_loss",
+    "value_type": "number",
+    "severity": "warn",
+    "detail": "清洗后丢失 1 个 number，样例: ['2026']"
+   }
+  ]
+ }
+}

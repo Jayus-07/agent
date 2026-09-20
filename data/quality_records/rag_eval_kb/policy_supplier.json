@@ -1,0 +1,146 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "policy_supplier",
+ "kb_id": "rag_eval_kb",
+ "source_file": "policy_供应商准入管理办法.docx",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_eval_kb\\general\\docx\\policy_供应商准入管理办法.docx",
+ "file_size": 37142,
+ "file_sha256": "1ca5daec8b9c21a996b99385c28bb9b93dc7121119dc34ec7a71643459bb05a1",
+ "format": "docx",
+ "doc_type": "policy",
+ "chunking_strategy": "StructureChunkStrategy",
+ "completeness": 0.9364,
+ "parsing": {
+  "node_count": 6,
+  "section_count": 2,
+  "leaf_count": 4,
+  "table_count": 1,
+  "table_total_rows": 4,
+  "table_max_cols": 3,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 304,
+  "cleaned_chars": 291,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 8,
+  "leaf_chunk_count": 6,
+  "parent_chunk_count": 2,
+  "truncated": false,
+  "filtered_count": 0,
+  "filtered_reasons": {}
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "39ef26ebeff44038",
+    "chars": 9,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "db816e1d57e73881",
+    "chars": 32,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "beee4837a571801d",
+    "chars": 29,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "5ab6671c6316f9fe",
+    "chars": 23,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "7fae89d54ca0f25a",
+    "chars": 207,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=291 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=4"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.957 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": []
+ }
+}

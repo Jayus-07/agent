@@ -1,0 +1,631 @@
+{
+ "schema_version": "1.0",
+ "doc_id": "layout_report_fin_annual_2025",
+ "kb_id": "rag_eval_kb",
+ "source_file": "report_2025年度财务报告.pdf",
+ "file_path": "D:\\Program Files\\workplace\\agent\\data\\docs\\rag_eval_kb\\general\\pdf\\report_2025年度财务报告.pdf",
+ "file_size": 44961,
+ "file_sha256": "e3f8121d3e31a3c2f2fd12da5d7744c766711776deca10b555e599ef7848f34a",
+ "format": "pdf",
+ "doc_type": "financial",
+ "chunking_strategy": "FinancialTableChunkStrategy",
+ "completeness": 0.9951,
+ "parsing": {
+  "node_count": 31,
+  "section_count": 15,
+  "leaf_count": 16,
+  "table_count": 2,
+  "table_total_rows": 9,
+  "table_max_cols": 4,
+  "ocr_triggered": false,
+  "ocr_pages": 0,
+  "degraded": false,
+  "degrade_reason": ""
+ },
+ "cleaning": {
+  "raw_chars": 1602,
+  "cleaned_chars": 934,
+  "nodes_cleaned": 0
+ },
+ "chunking": {
+  "chunk_count": 21,
+  "leaf_chunk_count": 10,
+  "parent_chunk_count": 11,
+  "truncated": false,
+  "filtered_count": 14,
+  "filtered_reasons": {
+   "too_short": 10,
+   "duplicate": 4
+  }
+ },
+ "index_errors": [],
+ "traceability": {
+  "nodes": [
+   {
+    "node_id": "n0",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": null,
+    "bbox": null,
+    "content_hash": "e3b0c44298fc1c14",
+    "chars": 0,
+    "cleaned": false
+   },
+   {
+    "node_id": "n1",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     56.7,
+     30.0,
+     538.6,
+     38.0
+    ],
+    "content_hash": "d7335ce0df24192d",
+    "chars": 33,
+    "cleaned": false
+   },
+   {
+    "node_id": "n2",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     198.6,
+     131.5,
+     396.6,
+     153.5
+    ],
+    "content_hash": "5c6158ccd7bcc352",
+    "chars": 9,
+    "cleaned": false
+   },
+   {
+    "node_id": "n3",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     246.6,
+     188.0,
+     348.6,
+     200.0
+    ],
+    "content_hash": "7d9e458c77dbb52c",
+    "chars": 11,
+    "cleaned": false
+   },
+   {
+    "node_id": "n4",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     237.6,
+     264.0,
+     357.6,
+     276.0
+    ],
+    "content_hash": "cdf6f4b41419136c",
+    "chars": 50,
+    "cleaned": false
+   },
+   {
+    "node_id": "n5",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 1,
+    "bbox": [
+     56.7,
+     809.5,
+     84.7,
+     817.5
+    ],
+    "content_hash": "ded61ffd4d21a88f",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n6",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     56.7,
+     30.0,
+     538.6,
+     38.0
+    ],
+    "content_hash": "d7335ce0df24192d",
+    "chars": 33,
+    "cleaned": false
+   },
+   {
+    "node_id": "n7",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     62.7,
+     70.3,
+     146.7,
+     84.3
+    ],
+    "content_hash": "6ed1a641b8eb35cf",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n8",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     62.7,
+     269.8,
+     187.7,
+     279.8
+    ],
+    "content_hash": "585f1a88a94cdcbb",
+    "chars": 218,
+    "cleaned": false
+   },
+   {
+    "node_id": "n9",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     62.7,
+     297.3,
+     202.7,
+     311.3
+    ],
+    "content_hash": "0fe88b9ab3a4fb36",
+    "chars": 10,
+    "cleaned": false
+   },
+   {
+    "node_id": "n10",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     62.7,
+     384.8,
+     287.7,
+     394.8
+    ],
+    "content_hash": "4f3b2955e5353275",
+    "chars": 93,
+    "cleaned": false
+   },
+   {
+    "node_id": "n11",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 2,
+    "bbox": [
+     56.7,
+     809.5,
+     84.7,
+     817.5
+    ],
+    "content_hash": "f0abcd127cd9f668",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n12",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     56.7,
+     30.0,
+     538.6,
+     38.0
+    ],
+    "content_hash": "d7335ce0df24192d",
+    "chars": 33,
+    "cleaned": false
+   },
+   {
+    "node_id": "n13",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     62.7,
+     70.3,
+     216.7,
+     84.3
+    ],
+    "content_hash": "4758315cb17879e0",
+    "chars": 11,
+    "cleaned": false
+   },
+   {
+    "node_id": "n14",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     62.7,
+     96.6,
+     233.7,
+     105.6
+    ],
+    "content_hash": "262aeee6f946a629",
+    "chars": 24,
+    "cleaned": false
+   },
+   {
+    "node_id": "n15",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     56.7,
+     809.5,
+     84.7,
+     817.5
+    ],
+    "content_hash": "d56c92dd19f335ba",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n16",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 4,
+    "bbox": [
+     56.7,
+     30.0,
+     538.6,
+     38.0
+    ],
+    "content_hash": "d7335ce0df24192d",
+    "chars": 33,
+    "cleaned": false
+   },
+   {
+    "node_id": "n17",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 4,
+    "bbox": [
+     62.7,
+     70.3,
+     174.7,
+     84.3
+    ],
+    "content_hash": "897666dcf23f43f8",
+    "chars": 8,
+    "cleaned": false
+   },
+   {
+    "node_id": "n18",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 4,
+    "bbox": [
+     62.7,
+     191.8,
+     152.7,
+     201.8
+    ],
+    "content_hash": "cb04cf3d2f1e2e97",
+    "chars": 114,
+    "cleaned": false
+   },
+   {
+    "node_id": "n19",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 4,
+    "bbox": [
+     56.7,
+     809.5,
+     84.7,
+     817.5
+    ],
+    "content_hash": "3217e2650371e970",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n20",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 5,
+    "bbox": [
+     56.7,
+     30.0,
+     538.6,
+     38.0
+    ],
+    "content_hash": "d7335ce0df24192d",
+    "chars": 33,
+    "cleaned": false
+   },
+   {
+    "node_id": "n21",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 5,
+    "bbox": [
+     62.7,
+     69.6,
+     148.2,
+     78.6
+    ],
+    "content_hash": "15132af1e21787f7",
+    "chars": 12,
+    "cleaned": false
+   },
+   {
+    "node_id": "n22",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 5,
+    "bbox": [
+     56.7,
+     809.5,
+     84.7,
+     817.5
+    ],
+    "content_hash": "17fb5929938b93a4",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n23",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 6,
+    "bbox": [
+     56.7,
+     30.0,
+     538.6,
+     38.0
+    ],
+    "content_hash": "d7335ce0df24192d",
+    "chars": 33,
+    "cleaned": false
+   },
+   {
+    "node_id": "n24",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 6,
+    "bbox": [
+     62.7,
+     70.3,
+     216.7,
+     84.3
+    ],
+    "content_hash": "7692c1838d618c05",
+    "chars": 11,
+    "cleaned": false
+   },
+   {
+    "node_id": "n25",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 6,
+    "bbox": [
+     62.7,
+     191.8,
+     227.7,
+     201.8
+    ],
+    "content_hash": "573caba4019323ff",
+    "chars": 123,
+    "cleaned": false
+   },
+   {
+    "node_id": "n26",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 6,
+    "bbox": [
+     62.7,
+     219.3,
+     146.7,
+     233.3
+    ],
+    "content_hash": "c0f98b02aaf3da4b",
+    "chars": 6,
+    "cleaned": false
+   },
+   {
+    "node_id": "n27",
+    "type": "section",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 6,
+    "bbox": [
+     62.7,
+     262.8,
+     197.7,
+     272.8
+    ],
+    "content_hash": "8a450a74dc4bbaaf",
+    "chars": 41,
+    "cleaned": false
+   },
+   {
+    "node_id": "n28",
+    "type": "paragraph",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 6,
+    "bbox": [
+     56.7,
+     809.5,
+     84.7,
+     817.5
+    ],
+    "content_hash": "b81a4b1b591b1169",
+    "chars": 5,
+    "cleaned": false
+   },
+   {
+    "node_id": "n29",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 3,
+    "bbox": [
+     62.692909240722656,
+     112.3621826171875,
+     532.5827026367188,
+     202.3621826171875
+    ],
+    "content_hash": "fea6d68fef30ebee",
+    "chars": 354,
+    "cleaned": false
+   },
+   {
+    "node_id": "n30",
+    "type": "table",
+    "source_range": [
+     0,
+     0
+    ],
+    "page_number": 5,
+    "bbox": [
+     62.692909240722656,
+     85.3621826171875,
+     532.5827026367188,
+     157.3621826171875
+    ],
+    "content_hash": "725b279d2893bce3",
+    "chars": 316,
+    "cleaned": false
+   }
+  ]
+ },
+ "validation": {
+  "checks": [
+   {
+    "check": "cleaned_chars",
+    "pass": true,
+    "detail": "cleaned_chars=934 < 20"
+   },
+   {
+    "check": "leaf_nodes",
+    "pass": true,
+    "detail": "leaf_count=16"
+   },
+   {
+    "check": "clean_ratio",
+    "pass": true,
+    "detail": "cleaned/raw=0.583 超出 [0.1, 3.0]（疑似解析重复或清洗吞内容）"
+   },
+   {
+    "check": "table_split_nonempty",
+    "pass": true,
+    "detail": "0 个空表格节点"
+   }
+  ],
+  "anomalies": [
+   {
+    "check": "value_loss",
+    "value_type": "date",
+    "severity": "warn",
+    "detail": "清洗后丢失 1 个 date，样例: ['2026-03-18']"
+   }
+  ]
+ }
+}
