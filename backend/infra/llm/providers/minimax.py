@@ -6,9 +6,10 @@ minimax.py — MiniMax Provider（Anthropic Messages API，官方推荐）
   - get_minimax_balance(): MiniMax 余额查询
 
 端点来源：`credentials.MINIMAX_ANTHROPIC_URL`（Anthropic 兼容端点）。
-⚠️ 不要改读 config 的 `MINIMAX_API_BASE` —— 它当前在 `.env` 里恰好同值，
-但**代码默认**是 OpenAI 兼容端点（`https://api.minimax.chat/v1`）。
-改读 config 会在 `.env` 缺失/变更时静默漂移到另一套协议。
+⚠️ 不要改读 config 的 `MINIMAX_API_BASE` —— 它的语义是 **OpenAI 兼容端点**，与这里走的
+Anthropic Messages API 不是一套协议；`backend/config/llm.py` 里它的默认值是**空串**
+（不是某个域名），`.env` 里当前恰好同值只是巧合。改读 config 后，`.env` 一旦缺失或变更
+就会静默漂移到另一套协议，而 `PROVIDERS["minimax"]["driver"] == "anthropic"` 仍宣称相反。
 
 凭据在**调用时**解析（credentials，见 infra/llm/credentials.py）。
 """

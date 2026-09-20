@@ -25,8 +25,8 @@ from backend.infra.llm import provider_presets as pp
 def test_expected_plan_distribution():
     """三张表的条数 —— 少一条就是复制时漏了某家厂商/某个协议。"""
     counts = Counter(item["plan"] for item in pp.PROVIDER_PRESETS)
-    assert counts == {"token_plan": 16, "coding_plan": 8, "metered": 19}
-    assert len(pp.PROVIDER_PRESETS) == 43
+    assert counts == {"token_plan": 16, "coding_plan": 8, "metered": 25}
+    assert len(pp.PROVIDER_PRESETS) == 49
 
 
 def test_ids_are_unique():
@@ -91,6 +91,82 @@ def test_workspace_id_placeholder_only_on_aliyun_metered():
         if item["placeholders"]:
             assert item["placeholders"] == ["WorkspaceId"]
             assert "WorkspaceId" in item["note"]
+
+
+# ── 2026-09-21 补录的厂商与端点（各自锁一条会安静出错的口径）─────────────
+
+
+def test_minimax_cn_domain_is_minimaxi_not_dot_cn():
+    """MiniMax 国内域名是 `api.minimaxi.com`（末尾带 i）。
+
+    目录里曾写成 `api.minimax.cn` —— 全仓仅此一处，且无任何官方来源；
+    而 `credentials.MINIMAX_ANTHROPIC_URL`、`scripts/migrate_model_env_to_db.py`
+    与两个既有测试用的都是 `api.minimaxi.com`。域名写错的症状是连不通/401，
+    但管理员看到的是「官方预置」，不会怀疑地址本身。
+    """
+    assert pp.get_preset("minimax-metered-cn-openai")["base_url"] == (
+        "https://api.minimaxi.com/v1"
+    )
+
+
+def test_minimax_cn_has_anthropic_endpoint():
+    """国内侧必须有 anthropic 端点 —— `models.PROVIDERS["minimax"]["driver"]`
+    就是 `anthropic`（官方推荐路径）。此前国内只有 openai 条目，
+    国内用户照目录配会落到国际端点 `api.minimax.io` 上（Key 不互通 → 401）。
+    """
+    cn = pp.get_preset("minimax-metered-cn-anthropic")
+    assert cn["base_url"] == "https://api.minimaxi.com/anthropic"
+    assert cn["driver"] == "anthropic"
+    assert cn["base_url"] != pp.get_preset("minimax-metered-intl-anthropic")["base_url"]
+
+
+def test_anthropic_presets_never_suffix_v1():
+    """`anthropic` 协议条目的基址**不含** `/v1` —— 客户端自己拼 `/v1/messages`。
+
+    目录内各家的官方 anthropic 端点（阿里云 `/apps/anthropic`、智谱 `/api/anthropic`、
+    DeepSeek `/anthropic`、MiniMax `/anthropic`、Anthropic 官方根路径）都是这个口径，
+    连 MiniMax 官方文档写的也是 `/anthropic/v1/messages`。写成
+    `https://api.anthropic.com/v1` 会拼出 `/v1/v1/messages`。
+    """
+    for item in pp.PROVIDER_PRESETS:
+        if item["driver"] == "anthropic":
+            assert not item["base_url"].rstrip("/").endswith("/v1"), item["id"]
+            assert "/v1/" not in item["base_url"], item["id"]
+
+
+def test_gemini_uses_openai_compatible_endpoint():
+    """Gemini 只收录 OpenAI 兼容入口。
+
+    原生协议路径是 `models/{model}:generateContent`，与 `PRESET_DRIVERS`
+    （openai / anthropic）都对不上 —— 那种地址填进目录会被 openai 客户端打出 404。
+    要收录原生协议就得新增 driver，届时应另开条目而不是改这一条。
+    """
+    gemini = pp.get_preset("gemini-metered-openai")
+    assert gemini["driver"] == "openai"
+    assert gemini["base_url"] == (
+        "https://generativelanguage.googleapis.com/v1beta/openai/"
+    )
+    assert ":generateContent" not in gemini["base_url"]
+
+
+def test_previously_absent_vendors_are_registered():
+    """OpenAI / Anthropic / 硅基流动 / 百度千帆国际 此前在目录里完全缺席。
+
+    其中硅基流动尤其别扭：`models.PROVIDERS` 认它（解析链），但登记链选不到，
+    管理员只能手填地址 —— 两条链对同一家厂商的口径不一致。
+    """
+    assert pp.get_preset("openai-metered-openai")["base_url"] == (
+        "https://api.openai.com/v1"
+    )
+    assert pp.get_preset("anthropic-metered-anthropic")["base_url"] == (
+        "https://api.anthropic.com"
+    )
+    assert pp.get_preset("siliconflow-metered-openai")["base_url"] == (
+        "https://api.siliconflow.cn/v1"
+    )
+    assert pp.get_preset("qianfan-metered-intl-openai")["base_url"] == (
+        "https://api.baiduqianfan.ai/v1"
+    )
 
 
 # ── 计划 → billing（设计文档 B.2 / B.3 拍板，勿改成一一对应）─────────────
@@ -215,3 +291,26 @@ def test_list_presets_filters_by_plan_without_aliasing():
 def test_get_preset_returns_none_for_unknown_id():
     assert pp.get_preset("nope") is None
     assert pp.get_preset(None) is None
+
+
+# ── apiKeyHint：Key 长什么样的说明 ──────────────────────────────────────
+
+
+def test_aliyun_token_plan_hint_is_the_team_version_prefix():
+    """阿里云百炼 Token Plan 是团队/企业版，Key 是 `sk-sp-` 前缀。
+
+    这里锁住是因为它**错得很安静**：提示写成通用的「sk- 开头」时，用户拿个人版
+    Key 去填不会报错，只会在调用时被上游拒掉，然后回来怀疑地址和模型名。
+    """
+    for item in pp.list_presets(pp.PLAN_TOKEN):
+        if item["vendor"] != "阿里云百炼":
+            continue
+        assert item["api_key_hint"] == "sk-sp- 开头", item["id"]
+
+
+def test_mimo_hint_stays_plain_sk_prefix():
+    """小米 MiMo 是另一家厂商，Key 前缀不同 —— 别被上一条顺手改掉。"""
+    hints = {i["id"]: i["api_key_hint"] for i in pp.list_presets(pp.PLAN_TOKEN)
+             if i["vendor"] == "小米 MiMo"}
+    assert hints, "小米 MiMo 的 Token Plan 预置不应消失"
+    assert set(hints.values()) == {"sk- 开头"}

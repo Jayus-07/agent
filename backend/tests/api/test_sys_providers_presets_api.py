@@ -112,9 +112,9 @@ def test_anthropic_rows_are_reachable(client):
     """
     items = client.get("/sys/providers/presets").json()["items"]
     anthropic = [i for i in items if i["driver"] == "anthropic"]
-    assert len(anthropic) == 17
+    assert len(anthropic) == 19
     assert {i["vendor"] for i in anthropic} >= {
-        "火山引擎（方舟）", "DeepSeek", "MiniMax", "小米 MiMo", "Kimi Code"
+        "火山引擎（方舟）", "DeepSeek", "MiniMax", "小米 MiMo", "Kimi Code", "Anthropic"
     }
 
 

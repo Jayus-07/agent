@@ -1063,8 +1063,11 @@ base_url 也全靠手敲，而同一家厂商在不同计费计划下的端点**
 
 ### B.11.2 目录落点：代码内置 + 只读下发
 
-- `backend/infra/llm/provider_presets.py` —— 43 条预置（Token Plan 16 / Coding Plan 8 /
-  按量付费 19），只含静态数据与纯函数，无 IO、不读 env、**不参与任何解析链**。
+- `backend/infra/llm/provider_presets.py` —— 49 条预置（Token Plan 16 / Coding Plan 8 /
+  按量付费 25），只含静态数据与纯函数，无 IO、不读 env、**不参与任何解析链**。
+  （2026-09-21 按「视觉/OCR 模型端点表」补录 6 条：MiniMax 国内 Anthropic 端点、OpenAI、
+  Anthropic、Google Gemini（收录的是 OpenAI 兼容入口 `/v1beta/openai/`，非原生协议）、
+  硅基流动、百度千帆国际；同时修正 MiniMax 国内域名 `api.minimax.cn` → `api.minimaxi.com`。）
 - `GET /api/sys/providers/presets` —— admin only（与 B.6 的 SSRF 边界同源），返回
   `{plans, items, actor}`，条目为 camelCase，字段受白名单约束（**不得出现名为 `apiKey` 的字段**，
   `apiKeyHint` 只是「Key 长什么样」的说明）。
@@ -1286,7 +1289,8 @@ DELETE /sys/providers/{provider_id}/models?modelName=<urlencoded>
   一致时只给确认不出告警、偏离后一键还原、计划不符可切回、**未选预置时同样给出可切回端点**、
   同域名列出多候选、陌生域名 `api/vN` 只提示且**不含任何按钮**、
   合法自建网关与「带业务空间的按量地址」**都不触发提示**（含取值断言防假阳性）。
-- **活服务实测**（真实 43 条预置目录，浏览器经 :3200 → 登录 admin → 供应商 tab）：
+- **活服务实测**（当时为真实 43 条预置目录，浏览器经 :3200 → 登录 admin → 供应商 tab；
+  目录已于 2026-09-21 扩至 49 条，本次实测结论不受影响）：
   - 选 `阿里云百炼 · 北京 · OpenAI 兼容` → `matched`，`baseUrl` 确为
     `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`。
   - 覆写成工单地址 `https://maas.qianwenaiapi.com/api/v1` → `deviated`，预置原值与
@@ -1305,7 +1309,7 @@ DELETE /sys/providers/{provider_id}/models?modelName=<urlencoded>
   探测结果区重构（归因配下一步动作、失败自动滚入视野）+ 底部 4 个平级按钮收敛为 3 个。
 - **B3**：列表页筛选/搜索 + 角色占用徽标 +「去改绑」跳转；editor 只读可见。
 - **B4**：1003 行单文件拆成 `providers/` 子目录（纯重构，零行为变化）。
-- **`apiKeyHint` 的团队版文案**（`provider_presets.py:148` 写「sk- 开头」，而官方团队版
+- **`apiKeyHint` 的团队版文案**（`provider_presets.py:171` 写「sk- 开头」，而官方团队版
   是 `sk-sp-` 开头）：属后端预置内容变更，随 B2 一并处理并需重建容器。
 - **偏离时的「显示名」陈旧**：`applyPlan()` 会清 `presetId` 与地址，但**不清
   `displayName`**；先选预置再换计划时，显示名可能仍留着上一个计划的字样。本批未动

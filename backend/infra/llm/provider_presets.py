@@ -95,6 +95,29 @@ _KIMI_CODE_NOTE = "Kimi Code 只提供 Anthropic 兼容端点，没有 OpenAI �
 
 _DEEPSEEK_NOTE = "DeepSeek 官方允许不带 /v1 的基址（等价于 /v1），探测会按官方口径归一化"
 
+#:「anthropic 协议条目的基址**不含** /v1」——客户端自己拼 `/v1/messages`。
+#: 目录内 9 家厂商的 anthropic 端点（阿里云 `/apps/anthropic`、智谱 `/api/anthropic`、
+#: DeepSeek `/anthropic`、MiniMax `/anthropic` …）无一带 `/v1`，即为此口径。
+_ANTHROPIC_BASE_NOTE = (
+    "官方只提供 Messages API（/v1/messages），没有 OpenAI 兼容入口；"
+    "基址**不要带 /v1**（客户端会自己拼），填成 /v1 会拼出 /v1/v1/messages"
+)
+
+#: Gemini 有两套协议，本项目只走 OpenAI 兼容那一套 —— 原生协议
+#: （`models/{model}:generateContent`）既非 OpenAI 兼容，也不在 `PRESET_DRIVERS` 里，
+#: 填进本目录会被 openai 客户端打出 404。
+_GEMINI_NOTE = (
+    "Google 原生协议（models/{model}:generateContent）不是 OpenAI 兼容，"
+    "本条目固定用官方 OpenAI 兼容入口 /v1beta/openai/，与其它厂商同走 openai 协议"
+)
+
+#: 国内版域名是 `minimaxi.com`（末尾带 i），与旧的 `minimax.chat`、
+#: 国际版 `minimax.io` 都不是一回事；三个域名对应三套互不通用的 Key 与账号。
+_MINIMAX_CN_NOTE = (
+    "国内域名是 api.minimaxi.com（末尾带 i）；与国际版 api.minimax.io 的账号与 Key"
+    "互不通用，混用返回 401"
+)
+
 
 def _preset(
     preset_id: str,
@@ -137,7 +160,9 @@ def _placeholders_of(base_url: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# 目录本体（43 条）
+# 目录本体（49 条：token_plan 16 / coding_plan 8 / metered 25）。
+# 条数由 `backend/tests/infra/test_provider_presets.py::test_expected_plan_distribution`
+# 锁定 —— 改这里就该同步改那条断言，别让注释和数字各自漂移。
 # ---------------------------------------------------------------------------
 
 PROVIDER_PRESETS: tuple[dict[str, Any], ...] = (
@@ -145,22 +170,22 @@ PROVIDER_PRESETS: tuple[dict[str, Any], ...] = (
     _preset(
         "aliyun-token-plan-cn-openai", PLAN_TOKEN, "阿里云百炼", "北京", "openai",
         "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
-        "sk- 开头",
+        "sk-sp- 开头",
     ),
     _preset(
         "aliyun-token-plan-cn-anthropic", PLAN_TOKEN, "阿里云百炼", "北京", "anthropic",
         "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
-        "sk- 开头",
+        "sk-sp- 开头",
     ),
     _preset(
         "aliyun-token-plan-sg-openai", PLAN_TOKEN, "阿里云百炼", "新加坡", "openai",
         "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
-        "sk- 开头",
+        "sk-sp- 开头",
     ),
     _preset(
         "aliyun-token-plan-sg-anthropic", PLAN_TOKEN, "阿里云百炼", "新加坡", "anthropic",
         "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
-        "sk- 开头",
+        "sk-sp- 开头",
     ),
     _preset(
         "qianfan-token-plan-personal-openai", PLAN_TOKEN, "百度千帆", "个人版", "openai",
@@ -266,7 +291,7 @@ PROVIDER_PRESETS: tuple[dict[str, Any], ...] = (
         "",
         _KIMI_CODE_NOTE,
     ),
-    # ---------------- 按量付费（19）----------------
+    # ---------------- 按量付费（25）----------------
     _preset(
         "aliyun-metered-cn-openai", PLAN_METERED, "阿里云百炼", "北京", "openai",
         "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
@@ -303,6 +328,11 @@ PROVIDER_PRESETS: tuple[dict[str, Any], ...] = (
     _preset(
         "qianfan-metered-openai", PLAN_METERED, "百度千帆", "", "openai",
         "https://qianfan.baidubce.com/v2",
+        "千帆 API Key",
+    ),
+    _preset(
+        "qianfan-metered-intl-openai", PLAN_METERED, "百度千帆", "国际", "openai",
+        "https://api.baiduqianfan.ai/v1",
         "千帆 API Key",
     ),
     _preset(
@@ -353,8 +383,15 @@ PROVIDER_PRESETS: tuple[dict[str, Any], ...] = (
     ),
     _preset(
         "minimax-metered-cn-openai", PLAN_METERED, "MiniMax", "国内", "openai",
-        "https://api.minimax.cn/v1",
+        "https://api.minimaxi.com/v1",
         "MiniMax API Key",
+        _MINIMAX_CN_NOTE,
+    ),
+    _preset(
+        "minimax-metered-cn-anthropic", PLAN_METERED, "MiniMax", "国内", "anthropic",
+        "https://api.minimaxi.com/anthropic",
+        "MiniMax API Key",
+        _MINIMAX_CN_NOTE,
     ),
     _preset(
         "minimax-metered-intl-openai", PLAN_METERED, "MiniMax", "国际", "openai",
@@ -365,6 +402,30 @@ PROVIDER_PRESETS: tuple[dict[str, Any], ...] = (
         "minimax-metered-intl-anthropic", PLAN_METERED, "MiniMax", "国际", "anthropic",
         "https://api.minimax.io/anthropic",
         "MiniMax API Key",
+    ),
+    # —— 海外直连与聚合平台（2026-09-21 按「视觉/OCR 模型端点表」补录）——
+    # 这些厂商的端点与国产厂商一样只是登记候选；本目录增删不改变任何运行时行为。
+    _preset(
+        "openai-metered-openai", PLAN_METERED, "OpenAI", "", "openai",
+        "https://api.openai.com/v1",
+        "sk- 开头",
+    ),
+    _preset(
+        "anthropic-metered-anthropic", PLAN_METERED, "Anthropic", "", "anthropic",
+        "https://api.anthropic.com",
+        "sk-ant- 开头",
+        _ANTHROPIC_BASE_NOTE,
+    ),
+    _preset(
+        "gemini-metered-openai", PLAN_METERED, "Google Gemini", "", "openai",
+        "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "AIza 开头",
+        _GEMINI_NOTE,
+    ),
+    _preset(
+        "siliconflow-metered-openai", PLAN_METERED, "硅基流动", "", "openai",
+        "https://api.siliconflow.cn/v1",
+        "sk- 开头",
     ),
 )
 
