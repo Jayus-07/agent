@@ -1445,3 +1445,37 @@ DELETE /sys/providers/{provider_id}/models?modelName=<urlencoded>
   旧 env 语义）；
 - 前端 `tsc --noEmit` 零错，`ProvidersTab.test.tsx` 37/37；
 - ⚠️ 全量 pytest 未在本批重跑（历史基线另有 65 failed/3 error 均为无关区域，见 B.14）。
+
+### B.16 B3 列表体验 + B4 文件拆分（2026-09-21 续会话，提交 067aa8c / 2a30b92）
+
+#### B.16.1 B3（提交 067aa8c，7 文件 +282/-31）
+
+| 项 | 实现 |
+|---|---|
+| 列表筛选/搜索 | ProvidersTab 工具条：搜索（显示名/ID/地址/模型名）+ 用途/状态下拉 + `N/M 家` 计数 + 双空态（无供应商 vs 筛选无结果）；纯客户端过滤 |
+| 角色占用徽标 | `usedByRoles` 逐角色紫色徽标，点击 `onGoToRoles(role)` → 切角色 tab 并以 URL `?role=` 带参；RoleBindingsTab 接 `highlightRole`，目标行琥珀高亮 + `scrollIntoView` 居中 |
+| editor 只读可见 | **后端配套**：`GET /sys/providers` 由 `require_admin_user` 放宽为 `require_user_actor`（与 model-roles 读同档，service/API-Key 身份仍拦；写/探测/目录端点不变）；前端 tab 过滤与 query `enabled` 同步放开，写操作仍按 canAdmin 门控 |
+| applyPlan 不清 displayName | 现状已满足，补回归测试固化（换计划清地址、保留手改显示名） |
+
+#### B.16.2 B4（提交 2a30b92，纯重构，行为零改动）
+
+`ProvidersTab.tsx` 1860 行 → 主文件 632 行（列表渲染 + 数据编排）+ `providers/` 11 子模块：
+`presets.ts`（预置反查/六态地址诊断）、`draft.ts`（草稿类型/工厂）、`format.ts`、
+`catalogSections.ts`、`fixHints.ts` 纯函数 + `ProbeResultDetails` / `BaseUrlAdvisor` /
+`ErrorNote` / `ModelCatalogPicker` / `ProviderEditor` / `ProviderModelEditor` 组件。
+import 单向无环；`tsc --noEmit` 零错；frontend-admin 348 例全绿。
+
+#### B.16.3 既有失败处置（提交 7baab20）
+
+- `test_missing_key_env_*` → 改写为 `test_missing_key_env_is_none_in_db_mode`
+  （missingKeyEnv 在 DB 模式恒 None）；
+- siliconflow 拒绝用例断言对齐新文案「未在数据库配置 API Key」；
+- `test_database_model_config_authority` 2 例 **xfail(strict=False)** 显式标注：
+  实现侧保留「无 DB 绑定回退旧 env」开发兼容（embedding_singleton / ocr docstring
+  明示），与收口目标态断言冲突 —— **是否删除兼容路径待拍板**：删除会使无 DB
+  绑定的开发环境失去 embedding/OCR 云端能力。
+
+#### B.16.4 遗留
+
+- 全量 pytest 回归（本节写作时进行中），对照历史基线 65 failed/3 error；
+- P0（宿主 5432 原生 PG 误迁移）已拍板：**保留不回滚**（2026-09-21）。
