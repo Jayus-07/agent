@@ -16,6 +16,7 @@ import {
 } from '@/types/modelConfig'
 import { formatRelative } from '@/types/trace'
 import { useToast } from '@/components/shared/Toast'
+import EmptyState from '@/components/shared/EmptyState'
 
 interface Props {
   roles: RoleBinding[]
@@ -353,8 +354,24 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
           </tbody>
         </table>
         {!groups.length && (
-          <div className="px-4 py-10 text-center text-xs text-text-muted">
-            {onlyProblem ? '所有角色当前都可用。' : '未登记任何模型角色'}
+          <div className="px-4 py-8">
+            {onlyProblem ? (
+              <EmptyState
+                kind="no_data"
+                title="所有角色当前都可用"
+                description="「只看不可用」没有筛出任何角色，关闭筛选可查看全部角色绑定。"
+                onAction={() => setOnlyProblem(false)}
+                actionLabel="查看全部角色"
+              />
+            ) : (
+              <EmptyState
+                kind="no_data"
+                title="未登记任何模型角色"
+                description="角色清单来自后端预置目录；若持续为空，请确认 /sys/model-roles 接口是否正常返回。"
+                onAction={onSaved}
+                actionLabel="重新加载"
+              />
+            )}
           </div>
         )}
       </div>

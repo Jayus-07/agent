@@ -411,7 +411,16 @@ question_gen / table_describe / tool_selector / fallback / ocr / embedding / rer
 **编辑态的可用性列**：进入编辑后，可用性列按**下拉所选值**重算（`roleVerdict`），而不是停留在当前生效值的
 旧结论 —— 否则用户在下拉里换了个不可用的模型，要等保存后才知道。
 
-**筛选空态**：「只看不可用」筛空时显示「所有角色当前都可用。」（表体不渲染任何分组行）
+**筛选空态**：「只看不可用」筛空时渲染 `EmptyState no_data`（title「所有角色当前都可用」），
+出路动作 = 关闭筛选（满足 UX §4.6「空态必须可导航」）；表体不渲染任何分组行。
+
+**页面头摘要卡**：随 tab 切换，每张卡描述当前 tab 正在看的内容，而不是全 tab 共用一套
+（原实现中「供应商」「已验证」对非 admin 恒为「—」占位）：
+- 角色绑定：模型角色 / 不可用角色（红绿）/ 登记模型 / 严重漂移
+- 供应商与密钥：供应商 / 已验证 / 预置端点 / 严重漂移
+- 体检与漂移：漂移项 / 严重漂移 / 提醒项 / 登记模型
+- 变更历史：变更记录 / 模型角色 / 登记模型 / 严重漂移
+- 模型价格：模型角色 / 登记模型 / 严重漂移 / 不可用角色
 
 **行内编辑**（不弹窗，改动小）：
 - 点击「修改」→ 所有角色统一变为 `<select>`，选项 = `get_available_models()` 中与角色用途匹配的已登记模型，并保留当前失效值为禁用项及原因；`eval_gen` 另提供「未配置（停用评测生成）」选项；没有对应分类模型时提示先到供应商页面新增并测试模型；
@@ -425,7 +434,9 @@ question_gen / table_describe / tool_selector / fallback / ocr / embedding / rer
 
 —— 用 Modal 而非 `window.confirm`（密钥类操作不可逆，`window.confirm` 在浏览器里可被「不再显示」勾掉，且项目已有 Modal 先例；价格页用 `window.prompt` 是其历史写法，不复制）。
 
-**空态**：`GET /sys/model-roles` 未就绪 → `EmptyState under_construction` + 文案指向主设计文档。
+**空态**：未登记任何角色时渲染 `EmptyState no_data`（title「未登记任何模型角色」），description
+提示确认 `/sys/model-roles` 是否正常返回，出路动作 = 触发重新加载。注：接口失败与真空数据在
+组件层不可区分（父级传 `roles.data?.items ?? []`），错误场景由页面级错误条兜底，故用 `no_data`。
 
 ---
 
@@ -616,7 +627,7 @@ idle ──click──▶ probing ──每级完成──▶ probing(累计 ste
 
 | tab | 加载中 | 接口未就绪（404/501） | 数据为空 | 错误 |
 |---|---|---|---|---|
-| ① | `<Skeleton rows={8} cols={5} />` | `EmptyState under_construction` +「模型角色注册表尚未接通（P0 已完成契约层，等待 P1）」 | `no_data` +「未登记任何角色」（不该发生，视为缺陷） | ErrorCard |
+| ① | `<Skeleton rows={8} cols={5} />` | 见 §6 空态注记：组件层不区分「未就绪」与「真空」，统一 `EmptyState no_data`（description 提示确认 `/sys/model-roles`），错误由页级错误条兜底 | `no_data` +「未登记任何模型角色」+ 重新加载（§6） | ErrorCard |
 | ② | Skeleton | `under_construction` +「供应商注册表尚未接通（等待 P1b）」 | `no_data` +「尚无自建供应商」+ **CTA「新增供应商」**（canEdit） | ErrorCard |
 | ③ | Skeleton | 复用价格页既有空态 | 既有 | 既有 |
 | ④ | Skeleton | `under_construction` | `no_data` +「暂无变更记录」 | ErrorCard |
