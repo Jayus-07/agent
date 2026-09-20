@@ -32,23 +32,34 @@ export default function ModelConfigPage() {
   const canEditor = atLeast('editor')
   const canAdmin = atLeast('admin')
   const [tab, setTab] = useState<Tab>('roles')
+  // 「去改绑」来源角色：供应商页徽标 → 角色绑定页高亮定位（B3）。
+  const [highlightRole, setHighlightRole] = useState<string | null>(null)
 
   useEffect(() => {
-    const initial = new URLSearchParams(window.location.search).get('tab')
-    const parsed = readTab(initial)
-    setTab(parsed === 'providers' && !canAdmin ? 'roles' : parsed)
-  }, [canAdmin])
+    const params = new URLSearchParams(window.location.search)
+    const initial = params.get('tab')
+    // B3：providers tab 对 editor 只读可见，不再强制回退到 roles。
+    setTab(readTab(initial))
+    const role = params.get('role')
+    if (role && readTab(initial) === 'roles') setHighlightRole(role)
+  }, [])
 
-  function changeTab(next: Tab) {
+  function changeTab(next: Tab, role?: string | null) {
     setTab(next)
+    if (next === 'roles' && role) setHighlightRole(role)
+    else if (next !== 'roles') setHighlightRole(null)
     const params = new URLSearchParams(window.location.search)
     params.set('tab', next)
+    if (next === 'roles' && role) params.set('role', role)
+    else params.delete('role')
     window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`)
   }
 
   const roles = useQuery({ queryKey: ['model-config-roles'], queryFn: listModelRoles, enabled: canEditor })
   const catalog = useQuery({ queryKey: ['model-config-catalog'], queryFn: listModelCatalog, enabled: canEditor })
-  const providers = useQuery({ queryKey: ['model-config-providers'], queryFn: listProviders, enabled: canEditor && canAdmin })
+  // B3：清单读端点后端已放宽为 JWT 用户可读，editor 也拉取（只读浏览，
+  // 写操作在 ProvidersTab 内部仍按 canAdmin 门控）。
+  const providers = useQuery({ queryKey: ['model-config-providers'], queryFn: listProviders, enabled: canEditor })
   // 预置端点目录：admin only（与 providers 同门槛）。请求失败不影响页面 ——
   // ProvidersTab 会降级为手填 Base URL，所以这里不把 isError 计入全局错误条。
   const presets = useQuery({ queryKey: ['model-config-provider-presets'], queryFn: listProviderPresets, enabled: canAdmin, staleTime: 5 * 60_000 })
@@ -82,9 +93,9 @@ export default function ModelConfigPage() {
     }
     if (current === 'providers') {
       return [
-        { icon: <KeyRound size={15} />, label: '供应商', value: canAdmin ? String(providers.data?.items.length ?? 0) : '—', note: canAdmin ? (providers.data?.source === 'db' ? '注册表已接通' : '代码层兜底') : '管理员可见' },
-        { icon: <CheckCircle2 size={15} />, label: '已验证', value: canAdmin ? `${verified}/${providers.data?.items.length ?? 0}` : '—', note: canAdmin ? '最近一次探测通过' : '管理员可见', tone: (verified === (providers.data?.items.length ?? 0) && verified > 0 ? 'good' : 'neutral') as 'good' | 'neutral' },
-        { icon: <Database size={15} />, label: '预置端点', value: canAdmin ? String(presetCount) : '—', note: '内置厂商目录' },
+        { icon: <KeyRound size={15} />, label: '供应商', value: String(providers.data?.items.length ?? 0), note: providers.data?.source === 'db' ? '注册表已接通' : '代码层兜底' },
+        { icon: <CheckCircle2 size={15} />, label: '已验证', value: `${verified}/${providers.data?.items.length ?? 0}`, note: '最近一次探测通过', tone: (verified === (providers.data?.items.length ?? 0) && verified > 0 ? 'good' : 'neutral') as 'good' | 'neutral' },
+        { icon: <Database size={15} />, label: '预置端点', value: canAdmin ? String(presetCount) : '—', note: canAdmin ? '内置厂商目录' : '管理员可见' },
         driftCard,
       ]
     }
@@ -121,14 +132,15 @@ export default function ModelConfigPage() {
   }
 
   function renderContent() {
-    if (tab === 'roles') return <RoleBindingsTab roles={roles.data?.items ?? []} catalog={catalog.data?.models ?? []} canAdmin={canAdmin} onSaved={refreshAll} />
-    if (tab === 'providers' && canAdmin) return <ProvidersTab providers={providers.data?.items ?? []} defaultModels={defaultModels} source={providers.data?.source ?? 'builtin'} canAdmin={canAdmin} onChanged={refreshAll} plans={presets.data?.plans ?? []} presets={presets.data?.items ?? []} presetsLoading={presets.isLoading} />
+    if (tab === 'roles') return <RoleBindingsTab roles={roles.data?.items ?? []} catalog={catalog.data?.models ?? []} canAdmin={canAdmin} highlightRole={highlightRole} onSaved={refreshAll} />
+    if (tab === 'providers') return <ProvidersTab providers={providers.data?.items ?? []} defaultModels={defaultModels} source={providers.data?.source ?? 'builtin'} canAdmin={canAdmin} onChanged={refreshAll} plans={presets.data?.plans ?? []} presets={presets.data?.items ?? []} presetsLoading={presets.isLoading} onGoToRoles={(role) => changeTab('roles', role)} />
     if (tab === 'prices') return <PriceTab />
     if (tab === 'history') return <ConfigHistoryTab items={history.data?.items ?? []} canAdmin={canAdmin} onChanged={refreshAll} />
     return <DriftTab items={driftItems} />
   }
 
-  const visibleTabs = TABS.filter((item) => item.id !== 'providers' || canAdmin)
+  // B3：providers tab 对 editor 只读可见（写操作在组件内按 canAdmin 门控）。
+  const visibleTabs = TABS
   return <RoleGate minRole="editor" pageName="模型与供应商"><div className="flex-1 overflow-y-auto"><div className="mx-auto max-w-7xl px-6 py-8"><PageHeader title="模型与供应商" desc="集中管理模型角色、供应商地址、托管密钥与价格治理；每次变更都可追溯。" />
     <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">{cards.map((card) => <SummaryCard key={card.label} {...card} />)}</div>
     {critical > 0 && <button onClick={() => changeTab('drift')} className="mb-5 flex w-full items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-left text-xs text-red-800"><AlertTriangle size={15} />存在 {critical} 项严重配置问题，点击查看处理建议。</button>}

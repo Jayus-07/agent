@@ -236,3 +236,22 @@ describe('RoleBindingsTab 版式', () => {
     expect(container.textContent).toContain('重排模型')
   })
 })
+
+describe('RoleBindingsTab 供应商页跳转高亮（B3）', () => {
+  it('highlightRole 高亮目标角色行并滚动定位', () => {
+    // jsdom 未实现 scrollIntoView，stub 掉以验证「被调用」即可
+    const scrollSpy = vi.fn()
+    ;(Element.prototype as unknown as Record<string, unknown>).scrollIntoView = scrollSpy
+    const container = mount({ highlightRole: 'rerank' })
+
+    const row = container.querySelector('[data-role-row="rerank"]')
+    expect(row).toBeTruthy()
+    expect(row?.className).toContain('bg-amber-50')
+    expect(scrollSpy).toHaveBeenCalled()
+  })
+
+  it('未传 highlightRole 时无行被高亮', () => {
+    const container = mount()
+    expect(container.querySelector('[data-role-row="rerank"]')?.className).not.toContain('bg-amber-50')
+  })
+})

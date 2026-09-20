@@ -17,7 +17,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.app.api.deps import require_admin_user
+from backend.app.api.deps import require_user_actor
 from backend.app.api.routes import sys_providers
 from backend.infra.llm import models as models_mod
 from backend.infra.llm import registry_store
@@ -30,11 +30,17 @@ class _FakeIdent:
     kind = "user"
 
 
+class _FakeEditorIdent:
+    actor = "user:test-editor"
+    role = "editor"
+    kind = "user"
+
+
 @pytest.fixture
 def client() -> TestClient:
     a = FastAPI()
     a.include_router(sys_providers.router)
-    a.dependency_overrides[require_admin_user] = lambda: _FakeIdent()
+    a.dependency_overrides[require_user_actor] = lambda: _FakeIdent()
     return TestClient(a)
 
 
@@ -82,14 +88,25 @@ def _db_snapshot() -> registry_store.RegistrySnapshot:
     )
 
 
-# ── 限制 1：admin only ──────────────────────────────────────────────────
+# ── 限制 1：JWT 用户身份（B3 起读端点放宽，service 身份仍拒）────────────
 
 
-def test_requires_admin():
-    """不覆盖鉴权依赖 → 走真实 `require_admin_user`（无 JWT 应被拒）。"""
+def test_requires_jwt_user():
+    """不覆盖鉴权依赖 → 走真实 `require_user_actor`（无 JWT 应被拒）。"""
     a = FastAPI()
     a.include_router(sys_providers.router)
     assert TestClient(a).get("/sys/providers").status_code in (401, 403)
+
+
+def test_editor_role_can_read(monkeypatch):
+    """B3：editor 只读可见 —— role=editor 的 JWT 用户可拉清单。"""
+    monkeypatch.setattr(registry_store, "load_registry", AsyncMock(return_value=_db_snapshot()))
+    a = FastAPI()
+    a.include_router(sys_providers.router)
+    a.dependency_overrides[require_user_actor] = lambda: _FakeEditorIdent()
+    body = TestClient(a).get("/sys/providers").json()
+    assert body["actor"] == "user:test-editor"
+    assert len(body["items"]) == 2
 
 
 # ── 响应形态：裸 dict（§1.1.1）────────────────────────────────────────

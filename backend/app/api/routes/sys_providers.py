@@ -2,7 +2,7 @@
 
 | 端点 | 用途 | 限流 |
 |---|---|---|
-| `GET  /sys/providers` | 供应商清单（tab② 列表数据源，只读） | — |
+| `GET  /sys/providers` | 供应商清单（tab② 列表数据源，只读；B3 起 JWT 用户可读，editor 只读可见） | — |
 | `GET  /sys/providers/presets` | 预置端点目录（新增/编辑抽屉的厂商·协议候选，只读静态数据） | — |
 | `POST /sys/providers/{provider_id}/verify` | 已存实例复测（默认快速，`mode=full` 才检查流式 usage） | admin · 10 次/分 |
 | `POST /sys/providers/verify-draft` | 草稿态探测（body 带 driver/base_url/apiKey/scope） | admin · **5 次/分**（更严） |
@@ -20,6 +20,10 @@
 四个探测/目录端点落实 B.6 的**四道限制**（否则它就是一个「任意 URL 探测代理」）：
 
 1. **admin only** —— 复用 `require_admin_user`（kind=user + role=admin）。
+   **例外**：`GET /sys/providers` 清单读端点自 2026-09-21（B3）起放宽为
+   `require_user_actor`（任意 JWT 用户身份）—— editor 需要在「供应商与密钥」
+   tab 只读浏览模型占用情况（角色徽标跳转改绑的入口）。写/探测/目录端点不变；
+   service / API-Key 身份仍被敏感 guard 拦截（kind 门槛未动）。
 2. **目标过 `url_guard`** —— 私网只在实例 `network_scope='private'` 时放行，
    且该值来自 DB 显式勾选，不由「解析结果」推导（防 DNS rebinding）。目录端点同样
    会带着密钥出站，因此**走同一道闸门**，不因为是「只读」就放宽。
@@ -45,7 +49,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.app.api.deps import require_admin_user
+from backend.app.api.deps import require_admin_user, require_user_actor
 from backend.infra.llm import credentials as credentials_mod
 from backend.infra.llm import models as models_mod
 from backend.infra.llm import provider_presets
@@ -399,8 +403,12 @@ async def list_provider_presets(ident=Depends(require_admin_user)) -> dict:
 
 
 @router.get("")
-async def list_providers(ident=Depends(require_admin_user)) -> dict:
+async def list_providers(ident=Depends(require_user_actor)) -> dict:
     """供应商清单（tab② 列表数据源）。
+
+    权限：B3（2026-09-21）起由 admin-only 放宽为 `require_user_actor` ——
+    editor 只读可见（角色占用徽标要跳「模型角色」页改绑，得先能看到清单）。
+    与 `GET /sys/model-roles` 同档；service / API-Key 身份仍被拦。
 
     `source` 表明清单来自 `db` 还是代码层 `builtin` 兜底 —— 前端据此在库未就绪时
     提示「配置暂不可用」，而不是让管理员以为自己把供应商删光了。

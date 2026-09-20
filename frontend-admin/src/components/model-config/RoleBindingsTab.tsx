@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, CheckCircle2, CircleAlert, Edit3, Save, X } from 'lucide-react'
 import type { ModelCatalogEntry } from '@/api/modelConfig'
 import { saveModelRole } from '@/api/modelConfig'
@@ -23,6 +23,8 @@ interface Props {
   catalog: ModelCatalogEntry[]
   canAdmin: boolean
   onSaved: () => Promise<unknown>
+  /** B3：从供应商页角色徽标跳转而来 —— 高亮该角色行并滚动定位，直到用户离开。 */
+  highlightRole?: string | null
 }
 
 /**
@@ -72,7 +74,7 @@ function roleVerdict(
   return isModelSelectable(option, expectedKind)
 }
 
-export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: Props) {
+export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, highlightRole }: Props) {
   const toast = useToast()
   const [editing, setEditing] = useState<string | null>(null)
   const [value, setValue] = useState('')
@@ -81,6 +83,13 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
   const [onlyProblem, setOnlyProblem] = useState(false)
   const byName = useMemo(() => new Map(catalog.map((item) => [item.name, item])), [catalog])
   const byRole = useMemo(() => new Map(roles.map((item) => [item.role, item])), [roles])
+
+  // 高亮定位：等表格渲染完（roles 数据到达后）再滚动，避免对空 DOM 查询。
+  useEffect(() => {
+    if (!highlightRole) return
+    const node = document.querySelector(`[data-role-row="${highlightRole}"]`)
+    node?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [highlightRole, roles])
 
   const unavailableCount = useMemo(
     () => roles.filter((row) => !roleVerdict(row, row.effectiveModel, byName.get(row.effectiveModel), roleModelKind(row.role)).selectable).length,
@@ -215,6 +224,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
                 {group.rows.map((row) => {
                   const expectedKind = roleModelKind(row.role)
                   const isEditing = editing === row.role
+                  const isHighlighted = highlightRole === row.role
                   const compatibleModels = catalog.filter((item) => (item.modelKind || 'chat') === expectedKind)
                   const currentEntry = byName.get(row.effectiveModel)
                   const shownModel = isEditing ? value : row.effectiveModel
@@ -224,7 +234,8 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
                   return (
                     <tr
                       key={row.role}
-                      className={`border-b border-slate-50 align-top last:border-0 ${isEditing ? 'bg-accent/5' : ''}`}
+                      data-role-row={row.role}
+                      className={`border-b border-slate-50 align-top last:border-0 ${isEditing ? 'bg-accent/5' : isHighlighted ? 'bg-amber-50 ring-1 ring-inset ring-amber-200' : ''}`}
                     >
                       <td className="px-4 py-3">
                         <div className="font-medium text-text-primary">{roleLabel(row.role)}</div>

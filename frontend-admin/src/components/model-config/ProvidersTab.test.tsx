@@ -82,7 +82,12 @@ const PRESETS: ProviderPreset[] = [
   },
 ]
 
-function mount(configured = false, specialized = false, catalogPresets: ProviderPreset[] = PRESETS) {
+function mount(
+  configured = false,
+  specialized = false,
+  catalogPresets: ProviderPreset[] = PRESETS,
+  opts: { usedByRoles?: string[]; onGoToRoles?: (role: string) => void } = {},
+) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -101,7 +106,7 @@ function mount(configured = false, specialized = false, catalogPresets: Provider
         modelName: 'qwen3.7-plus',
         modelKind: 'chat',
         models: [
-          { name: 'qwen3.7-plus', modelKind: 'chat' },
+          { name: 'qwen3.7-plus', modelKind: 'chat', ...(opts.usedByRoles ? { usedByRoles: opts.usedByRoles } : {}) },
           { name: 'qwen3.7-text-embedding', modelKind: 'embedding' },
           { name: 'qwen3.7-text-rerank', modelKind: 'rerank' },
           { name: 'qwen3.7-vl', modelKind: 'vision' },
@@ -141,6 +146,7 @@ function mount(configured = false, specialized = false, catalogPresets: Provider
         plans={catalogPresets.length > 0 ? PLANS : []}
         presets={catalogPresets}
         presetsLoading={false}
+        {...(opts.onGoToRoles ? { onGoToRoles: opts.onGoToRoles } : {})}
       />,
   ))
   mounted.push({ container, root })
@@ -262,7 +268,11 @@ describe('ProvidersTab 探测失败详情', () => {
       await Promise.resolve()
     })
 
-    const select = container.querySelector('select') as HTMLSelectElement
+    // B3 起列表头部有筛选下拉，第一个 <select> 不再是弹窗里的「模型用途」，
+    // 必须在新增模型弹窗内精确定位。
+    const dialog = container.querySelector('[role="dialog"][aria-label^="新增 Qwen Token Plan 模型"]') as HTMLElement
+    expect(dialog).toBeTruthy()
+    const select = dialog.querySelector('select') as HTMLSelectElement
     expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
       '文本模型（对话 / 评测 / 文档处理）',
       '向量模型（Embedding）',
@@ -906,6 +916,78 @@ describe('ProvidersTab 模型目录与「去修」动作（B2）', () => {
     expect(container.querySelector('[data-testid="provider-probe-depth"]')).toBeTruthy()
     expect(container.querySelectorAll('[data-testid="provider-test"]')).toHaveLength(1)
     expect(container.textContent).not.toContain('完整测试中')
+  })
+})
+
+describe('ProvidersTab 列表筛选/搜索与角色占用徽标（B3）', () => {
+  it('搜索词匹配显示名与模型名，不匹配的供应商隐藏并显示计数', () => {
+    const container = mount(false, true)
+    expect(container.querySelector('[data-testid="provider-filter-count"]')!.textContent).toBe('2/2 家')
+
+    // 「voice」只出现在 Qwen Token Plan 的模型名里
+    typeInto(container, 'provider-search', 'voice')
+    expect(container.querySelector('[data-testid="provider-filter-count"]')!.textContent).toBe('1/2 家')
+    const cards = container.querySelectorAll('[data-testid="provider-card"]')
+    expect(cards).toHaveLength(1)
+    expect(cards[0].textContent).toContain('Qwen Token Plan')
+  })
+
+  it('用途筛选按该供应商下任一模型命中即保留', () => {
+    const container = mount(false, true)
+    // 两家都有 rerank 模型
+    choose(container, 'provider-kind-filter', 'rerank')
+    expect(container.querySelector('[data-testid="provider-filter-count"]')!.textContent).toBe('2/2 家')
+    // vision 只有 Qwen Token Plan 有
+    choose(container, 'provider-kind-filter', 'vision')
+    expect(container.querySelectorAll('[data-testid="provider-card"]')).toHaveLength(1)
+  })
+
+  it('状态筛选区分已验证/未验证，全部未探测时「已验证」给空态', () => {
+    const container = mount(false, true)
+    choose(container, 'provider-status-filter', 'unverified')
+    expect(container.querySelector('[data-testid="provider-filter-count"]')!.textContent).toBe('2/2 家')
+    choose(container, 'provider-status-filter', 'verified')
+    expect(container.querySelector('[data-testid="provider-filter-count"]')!.textContent).toBe('0/2 家')
+    expect(container.textContent).toContain('没有匹配当前筛选条件')
+  })
+
+  it('角色占用徽标逐角色渲染，点击触发 onGoToRoles 前往改绑', async () => {
+    const onGoToRoles = vi.fn()
+    const container = mount(false, false, PRESETS, { usedByRoles: ['doc', 'fallback'], onGoToRoles })
+
+    const docBadge = container.querySelector('[data-testid="used-by-role-doc"]') as HTMLButtonElement
+    const fallbackBadge = container.querySelector('[data-testid="used-by-role-fallback"]') as HTMLButtonElement
+    expect(docBadge).toBeTruthy()
+    expect(fallbackBadge).toBeTruthy()
+    expect(container.textContent).toContain('使用中，移除前需先改绑')
+    // 被占用的模型仍不可移除
+    const removeButton = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('移除') && button.getAttribute('aria-label')?.includes('qwen3.7-plus')) as HTMLButtonElement
+    expect(removeButton?.disabled).toBe(true)
+
+    await click(docBadge)
+    expect(onGoToRoles).toHaveBeenCalledWith('doc')
+  })
+
+  it('未传 onGoToRoles 时徽标仅展示不可点', () => {
+    const container = mount(false, false, PRESETS, { usedByRoles: ['doc'] })
+    const badge = container.querySelector('[data-testid="used-by-role-doc"]') as HTMLButtonElement
+    expect(badge.disabled).toBe(true)
+  })
+
+  it('切换计费计划保留手改的显示名（applyPlan 不清 displayName）', async () => {
+    const container = mount()
+    await openNewProvider(container)
+
+    choose(container, 'provider-plan', 'coding_plan')
+    choose(container, 'provider-preset', 'volc-coding-openai')
+    typeInto(container, 'provider-display-name', '我的火山主力')
+
+    choose(container, 'provider-plan', 'metered')
+    // 地址被清（换计划不能沿用上个计划的端点），但用户手改的显示名必须保留
+    expect(container.querySelector<HTMLInputElement>('[data-testid="provider-base-url"]')!.value).toBe('')
+    expect(container.querySelector<HTMLInputElement>('[data-testid="provider-display-name"]')!.value)
+      .toBe('我的火山主力')
   })
 })
 

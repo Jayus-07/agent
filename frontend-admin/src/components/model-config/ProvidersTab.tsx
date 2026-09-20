@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { CheckCircle2, Edit3, FlaskConical, KeyRound, ListChecks, LockKeyhole, Plus, Save, Trash2, Wrench, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { CheckCircle2, Edit3, FlaskConical, KeyRound, ListChecks, LockKeyhole, Plus, Save, Search, SlidersHorizontal, Trash2, Wrench, X } from 'lucide-react'
 import {
   addProviderModel,
   createProvider,
@@ -43,6 +43,8 @@ interface Props {
   /** 预置端点目录。为空表示接口不可用，抽屉降级为手填 Base URL。 */
   presets: ProviderPreset[]
   presetsLoading: boolean
+  /** B3：点角色占用徽标 → 跳「模型角色」页并高亮该角色。缺省则徽标只展示不可点。 */
+  onGoToRoles?: (role: string) => void
 }
 
 type Draft = {
@@ -771,8 +773,15 @@ export default function ProvidersTab({
   plans,
   presets,
   presetsLoading,
+  onGoToRoles,
 }: Props) {
   const toast = useToast()
+  // ── B3：列表筛选/搜索 ──
+  // 搜索匹配显示名 / ID / Base URL / 已登记模型名；用途按该供应商下任一模型
+  // 命中即保留（无 models 数据时退回 row.modelKind）；状态看最近一次探测。
+  const [search, setSearch] = useState('')
+  const [kindFilter, setKindFilter] = useState<'all' | ModelKind>('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'verified' | 'failed' | 'unverified'>('all')
   const [editing, setEditing] = useState<Draft | null>(null)
   const [addingModel, setAddingModel] = useState<ModelDraft | null>(null)
   const [removingModel, setRemovingModel] = useState<ModelRemoval | null>(null)
@@ -786,6 +795,35 @@ export default function ProvidersTab({
   const [testingMode, setTestingMode] = useState<ProbeMode | null>(null)
   const [testingSince, setTestingSince] = useState<number | null>(null)
   const [testingElapsedMs, setTestingElapsedMs] = useState(0)
+
+  const filteredProviders = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return providers.filter((row) => {
+      if (kindFilter !== 'all') {
+        const kinds = row.models?.length
+          ? row.models.map((model) => model.modelKind)
+          : [row.modelKind ?? ('chat' as ModelKind)]
+        if (!kinds.includes(kindFilter)) return false
+      }
+      if (statusFilter !== 'all') {
+        const hasProbe = Boolean(row.lastProbe)
+        const ok = row.lastProbe?.ok === true
+        if (statusFilter === 'verified' && !ok) return false
+        if (statusFilter === 'failed' && (!hasProbe || ok)) return false
+        if (statusFilter === 'unverified' && hasProbe) return false
+      }
+      if (q) {
+        const haystack = [
+          row.displayName,
+          row.id,
+          row.baseUrl,
+          ...(row.models ?? []).map((model) => model.name),
+        ].join('\n').toLowerCase()
+        if (!haystack.includes(q)) return false
+      }
+      return true
+    })
+  }, [providers, search, kindFilter, statusFilter])
 
   useEffect(() => {
     if (testingSince === null) return
@@ -1103,8 +1141,51 @@ export default function ProvidersTab({
           {canAdmin && source === 'db' && <button onClick={beginNew} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-[11px] text-white hover:bg-accent/90"><Plus size={13} />新增供应商</button>}
         </div>
       </div>
+        {/* B3：列表筛选/搜索。纯客户端过滤 —— 清单量级（供应商数）不需要服务端分页。 */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/60 px-4 py-2.5">
+          <div className="relative min-w-[200px] flex-1">
+            <Search size={12} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
+            <input
+              data-testid="provider-search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="搜索显示名 / ID / 地址 / 模型名"
+              className="w-full rounded-lg border border-black/10 bg-white py-1.5 pl-7 pr-2 text-[11px] text-text-primary placeholder:text-text-muted"
+              autoComplete="off"
+            />
+          </div>
+          <select
+            data-testid="provider-kind-filter"
+            value={kindFilter}
+            onChange={(event) => setKindFilter(event.target.value as typeof kindFilter)}
+            className="rounded-lg border border-black/10 bg-white px-2 py-1.5 text-[11px] text-text-secondary"
+            aria-label="按模型用途筛选"
+          >
+            <option value="all">全部用途</option>
+            <option value="chat">文本</option>
+            <option value="embedding">向量</option>
+            <option value="rerank">重排</option>
+            <option value="vision">视觉</option>
+            <option value="speech">语音</option>
+          </select>
+          <select
+            data-testid="provider-status-filter"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
+            className="rounded-lg border border-black/10 bg-white px-2 py-1.5 text-[11px] text-text-secondary"
+            aria-label="按验证状态筛选"
+          >
+            <option value="all">全部状态</option>
+            <option value="verified">已验证</option>
+            <option value="failed">探测失败</option>
+            <option value="unverified">未验证</option>
+          </select>
+          <span data-testid="provider-filter-count" className="shrink-0 font-mono text-[10px] text-text-muted">
+            {filteredProviders.length}/{providers.length} 家
+          </span>
+        </div>
         <div className="divide-y divide-slate-100">
-          {providers.map((row) => {
+          {filteredProviders.map((row) => {
             const liveResult = probeResults[row.id]
             const liveError = probeErrors[row.id]
             const isTesting = testingTarget === row.id
@@ -1161,7 +1242,25 @@ export default function ProvidersTab({
                           {model.source !== 'user' && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-text-muted">内置</span>}
                         </div>
                         <div className="flex flex-shrink-0 items-center gap-2">
-                          {blockReason && <span className="text-[10px] text-text-muted">{blockReason}</span>}
+                          {/* B3：角色占用徽标 —— 每个占用角色一枚，可点跳「模型角色」页改绑。 */}
+                          {(model.usedByRoles?.length ?? 0) > 0 && (
+                            <span className="flex flex-wrap items-center gap-1">
+                              {model.usedByRoles!.map((role) => (
+                                <button
+                                  key={role}
+                                  type="button"
+                                  data-testid={`used-by-role-${role}`}
+                                  title={onGoToRoles ? `点击前往「模型角色」页改绑 ${role}` : undefined}
+                                  disabled={!onGoToRoles}
+                                  onClick={() => onGoToRoles?.(role)}
+                                  className="flex items-center gap-0.5 rounded bg-purple-50 px-1.5 py-0.5 text-[10px] text-purple-700 hover:bg-purple-100 disabled:cursor-default disabled:hover:bg-purple-50"
+                                >
+                                  <SlidersHorizontal size={10} />{role}
+                                </button>
+                              ))}
+                              <span className="text-[10px] text-text-muted">使用中，移除前需先改绑</span>
+                            </span>
+                          )}
                           {canAdmin && source === 'db' && <button disabled={Boolean(blockReason)} title={blockReason ?? undefined} aria-label={`移除模型 ${model.name}`} onClick={() => beginRemoveModel(row, model)} className="flex items-center gap-1 rounded-lg border border-black/10 px-2 py-1 text-[11px] text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"><Trash2 size={11} />移除</button>}
                         </div>
                       </div>
@@ -1182,6 +1281,9 @@ export default function ProvidersTab({
             )
           })}
           {!providers.length && <div className="px-4 py-10 text-center text-xs text-text-muted">暂无供应商配置</div>}
+          {Boolean(providers.length) && !filteredProviders.length && (
+            <div className="px-4 py-10 text-center text-xs text-text-muted">没有匹配当前筛选条件的供应商 —— 试试清空搜索词或放宽用途/状态。</div>
+          )}
         </div>
 
       {editing && <ProviderEditor
