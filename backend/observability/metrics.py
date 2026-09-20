@@ -65,6 +65,53 @@ skill_failure_total = Counter(
     labelnames=("skill", "error_type"),
 )
 
+# ── 安全 / 幂等 / 预算闭环指标（WP6；标签禁止携带用户、租户、Trace、请求或幂等键）──
+idempotency_claim_total = Counter(
+    "idempotency_claim_total",
+    "幂等 claim 结果（按稳定操作名与结果）",
+    labelnames=("operation", "result"),
+)
+idempotency_execution_total = Counter(
+    "idempotency_execution_total",
+    "幂等副作用执行终态（按稳定操作名与结果）",
+    labelnames=("operation", "result"),
+)
+budget_request_total = Counter(
+    "budget_request_total",
+    "请求级预算门禁结果",
+    labelnames=("mode", "result"),
+)
+budget_quota_total = Counter(
+    "budget_quota_total",
+    "用户/租户日月额度预占与结算结果",
+    labelnames=("scope_type", "period_type", "result"),
+)
+budget_threshold_total = Counter(
+    "budget_threshold_total",
+    "用户/租户额度阈值事件",
+    labelnames=("scope_type", "period_type", "threshold"),
+)
+budget_price_total = Counter(
+    "budget_price_total",
+    "模型价格表读取结果",
+    labelnames=("component", "result"),
+)
+side_effect_budget_total = Counter(
+    "side_effect_budget_total",
+    "写副作用预算门禁结果",
+    labelnames=("result",),
+)
+semantic_validation_total = Counter(
+    "semantic_validation_total",
+    "Tool/Skill 语义校验结果",
+    labelnames=("layer", "result"),
+)
+feedback_candidate_total = Counter(
+    "feedback_candidate_total",
+    "反馈评测候选审核与 promotion 结果",
+    labelnames=("action", "result"),
+)
+
 # ── 流式事件可观测性（P0-1：SSE 队列 backpressure 丢弃计数）──
 chat_stream_event_dropped_total = Counter(
     "chat_stream_event_dropped_total",
@@ -714,6 +761,15 @@ __all__ = [
     "chat_request_duration_seconds",
     "llm_tokens_total",
     "skill_failure_total",
+    "idempotency_claim_total",
+    "idempotency_execution_total",
+    "budget_request_total",
+    "budget_quota_total",
+    "budget_threshold_total",
+    "budget_price_total",
+    "side_effect_budget_total",
+    "semantic_validation_total",
+    "feedback_candidate_total",
     "chat_stream_event_dropped_total",
     "chat_stream_event_produced_total",
     "chat_tpot_seconds",

@@ -1,19 +1,16 @@
 """评测答案生成后端 — LLM Judge 的推理链路。
 
-两个后端：
-- Ollama（本地）：仅 ENV_MODE=local 启用；ENV_MODE=cloud 时跳过（不连本地服务）
-- DashScope（云）：OpenAI 兼容端点，与 ragas_bridge 同配置族（QWEN_API_KEY/
-  QWEN_API_BASE/RAGAS_CLOUD_MODEL）。**仅在评测显式 opt-in（--judge/--ragas）
-  时使用**——默认行为保持"cloud 模式不生成答案"，避免改变既有基线口径。
+评测生成统一使用 `eval_gen` 角色绑定的模型。模型可以来自已登记的云端供应商
+或本地 Ollama；云端模型仅在评测显式 opt-in（--judge/--ragas）时使用，避免
+改变既有基线口径。
 
 统一入口 generate_answer(question, context, allow_cloud=...)：
 allow_cloud=True 且本地 Ollama 不可用时走云后端；否则回落 Ollama 行为。
 """
 from __future__ import annotations
 
-import os
-
-from backend.config.llm import OLLAMA_BASE_URL, OLLAMA_ENABLED, OLLAMA_MODEL
+from backend.config.llm import OLLAMA_BASE_URL, OLLAMA_ENABLED
+from backend.config import model_roles
 from backend.shared.logger import logger
 
 _ollama_skip_logged = False
@@ -27,6 +24,39 @@ _token_usage = {"prompt_tokens": 0, "completion_tokens": 0}
 # 由 service._inject_token_totals 并入 evaluator 侧。
 _evaluator_token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "llm_calls": 0}
 _chat_cache: dict[tuple, object] = {}
+
+
+class EvalModelConfigurationError(RuntimeError):
+    """评测角色没有配置或当前供应商不可用。"""
+
+
+def _configured_eval_model() -> str:
+    """读取评测生成角色，不再回落到本地 Ollama 默认模型。"""
+    return model_roles.resolve_runtime_name("eval_gen")
+
+
+def resolve_eval_model() -> tuple[str, str]:
+    """解析评测模型及供应商，并在调用前给出可操作的失败原因。"""
+    model_name = _configured_eval_model().strip()
+    if not model_name:
+        raise EvalModelConfigurationError(
+            "未配置评测生成模型，请在模型管理的角色绑定中选择已登记模型"
+        )
+
+    from backend.infra.llm.credentials import check_provider_usable
+    from backend.infra.llm.models import ProviderResolutionError, resolve_provider
+
+    try:
+        provider = resolve_provider(model_name, strict=True)
+    except ProviderResolutionError as exc:
+        raise EvalModelConfigurationError(str(exc)) from exc
+
+    reason = check_provider_usable(provider)
+    if reason:
+        raise EvalModelConfigurationError(
+            f"评测模型 {model_name} 不可用（供应商 {provider}）：{reason}"
+        )
+    return model_name, provider
 
 
 def get_token_usage() -> dict[str, int]:
@@ -91,17 +121,35 @@ class EvaluatorTokenCallback:
 
 
 def _make_chat(model: str | None = None, base_url: str | None = None, temperature: float = 0.1):
-    from langchain_ollama import ChatOllama
-    key = (model or OLLAMA_MODEL, base_url or OLLAMA_BASE_URL, temperature)
-    cached = _chat_cache.get(key)
-    if cached is not None:
-        return cached
-    chat = ChatOllama(
-        model=key[0],
-        temperature=key[2],
-        base_url=key[1],
-    )
-    _chat_cache[key] = chat
+    # 只有显式传入本地参数的兼容调用才直接构造 Ollama；角色默认路径统一
+    # 经过 infra/llm，才能复用 DB 供应商、密钥和协议适配。
+    if model is not None or base_url is not None:
+        if not OLLAMA_ENABLED:
+            raise EvalModelConfigurationError(
+                "Ollama 当前未启用，不能使用显式本地评测模型"
+            )
+        from langchain_ollama import ChatOllama
+
+        key = (model or _configured_eval_model(), base_url or OLLAMA_BASE_URL, temperature)
+        cached = _chat_cache.get(key)
+        if cached is not None:
+            return cached
+        chat = ChatOllama(
+            model=key[0],
+            temperature=key[2],
+            base_url=key[1],
+        )
+        _chat_cache[key] = chat
+        return chat
+
+    _model_name, provider = resolve_eval_model()
+    from backend.infra.llm import proxy as llm_proxy
+
+    chat = llm_proxy.get_llm_for_role("eval_gen")
+    # 评测问题生成使用略高温度；bind 不改变供应商实例缓存，凭据轮换仍由
+    # registry_store 统一清理缓存。
+    if temperature != 0.1 and hasattr(chat, "bind"):
+        return chat.bind(temperature=temperature)
     return chat
 
 
@@ -112,11 +160,22 @@ def _invoke_chat(
     base_url: str | None = None,
     temperature: float = 0.1,
 ) -> str:
-    """调用 ChatOllama，累计 token 用量，返回文本。"""
+    """调用评测角色客户端，累计 token 用量，返回文本。"""
     global _ollama_skip_logged
-    if not OLLAMA_ENABLED:
+    if model is None and base_url is None:
+        try:
+            _model_name, provider = resolve_eval_model()
+        except EvalModelConfigurationError as exc:
+            logger.warning("[EvalGen] %s", exc)
+            return ""
+        if provider == "ollama" and not OLLAMA_ENABLED:
+            if not _ollama_skip_logged:
+                logger.info("[Ollama] 本地 Ollama 未启用，评测生成走降级路径")
+                _ollama_skip_logged = True
+            return ""
+    elif not OLLAMA_ENABLED:
         if not _ollama_skip_logged:
-            logger.info("[Ollama] ENV_MODE=cloud，本地 Ollama 已禁用，评测生成走降级路径")
+            logger.info("[Ollama] 本地 Ollama 未启用，显式本地评测调用被跳过")
             _ollama_skip_logged = True
         return ""
     from langchain_core.messages import HumanMessage
@@ -129,7 +188,7 @@ def _invoke_chat(
         _token_usage["completion_tokens"] += usage.get("output_tokens", 0)
         return response.content.strip()
     except Exception as e:
-        logger.warning(f"[Ollama] 调用失败: {e}")
+        logger.warning(f"[EvalGen] 调用失败（provider={provider if model is None and base_url is None else 'ollama'}）: {e}")
         return ""
 
 
@@ -180,49 +239,14 @@ def _build_prompt(question: str, context: list[str]) -> str:
 
 
 def _invoke_cloud(prompt: str) -> str:
-    """DashScope 云生成（OpenAI 兼容端点），累计 token 用量，失败返回空串。"""
-    global _cloud_skip_logged
-    api_key = os.getenv("QWEN_API_KEY", "")
-    if not api_key:
-        if not _cloud_skip_logged:
-            logger.warning("[CloudGen] QWEN_API_KEY 未配置，云生成不可用")
-            _cloud_skip_logged = True
-        return ""
-    from langchain_core.messages import HumanMessage
-
-    chat = _make_cloud_chat(api_key)
-    try:
-        response = chat.invoke([HumanMessage(content=prompt)])
-        usage = getattr(response, "usage_metadata", None) or {}
-        _token_usage["prompt_tokens"] += usage.get("input_tokens", 0)
-        _token_usage["completion_tokens"] += usage.get("output_tokens", 0)
-        return (response.content or "").strip()
-    except Exception as e:
-        logger.warning(f"[CloudGen] 调用失败: {e}")
-        return ""
+    """兼容旧调用名，实际走 eval_gen 角色绑定的数据库供应商。"""
+    return _invoke_chat(prompt)
 
 
-def _make_cloud_chat(api_key: str):
-    from langchain_openai import ChatOpenAI
-    key = (
-        os.getenv("RAGAS_CLOUD_MODEL", "qwen3.7-plus"),
-        os.getenv("QWEN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-        0.1,
-    )
-    cached = _chat_cache.get(("cloud",) + key)
-    if cached is not None:
-        return cached
-    chat = ChatOpenAI(
-        model=key[0],
-        temperature=key[2],
-        max_tokens=2048,
-        request_timeout=120,
-        api_key=api_key,
-        base_url=key[1],
-        extra_body={"enable_thinking": False},
-    )
-    _chat_cache[("cloud",) + key] = chat
-    return chat
+def _make_cloud_chat(api_key: str | None = None):
+    """兼容旧调用名；API Key/base URL/model 均从 eval_gen 数据库绑定解析。"""
+    del api_key
+    return _make_chat(temperature=0.1)
 
 
 def _strip_meta(raw: str) -> str:
@@ -239,16 +263,29 @@ def generate_answer(
 ) -> str:
     """统一生成入口。
 
-    allow_cloud=True（评测显式 opt-in --judge/--ragas）且本地 Ollama 不可用时，
-    走 DashScope 云后端；其余情况回落 generate_answer_ollama 原行为
-    （cloud 环境返回空串，保持既有基线口径不变）。
+    allow_cloud=True（评测显式 opt-in --judge/--ragas）时，使用 eval_gen
+    角色绑定的供应商；未显式允许云调用时保持 cloud 模式不生成答案的旧口径。
     """
     prompt = _build_prompt(question, context)
-    if allow_cloud and not OLLAMA_ENABLED:
-        raw = _invoke_cloud(prompt)
-        if raw:
-            return _strip_meta(raw)
-    return _invoke_chat(prompt)
+    try:
+        _model_name, provider = resolve_eval_model()
+    except EvalModelConfigurationError as exc:
+        logger.warning("[EvalGen] %s", exc)
+        return ""
+    if provider != "ollama" and not allow_cloud:
+        logger.info("[EvalGen] 云端评测模型未获得显式 opt-in，跳过答案生成")
+        return ""
+    if provider == "ollama" and not OLLAMA_ENABLED:
+        logger.warning("[EvalGen] 已绑定本地 Ollama 模型，但 Ollama 当前未启用")
+        return ""
+    raw = _invoke_chat(prompt)
+    return _strip_meta(raw) if raw else raw
+
+
+def get_eval_chat_model(*, temperature: float = 0.0):
+    """返回评测/RAGAS 使用的已绑定模型实例。"""
+    resolve_eval_model()
+    return _make_chat(temperature=temperature)
 
 
 def generate_answer_ollama(
@@ -258,12 +295,12 @@ def generate_answer_ollama(
     model: str | None = None,
     base_url: str | None = None,
 ) -> str:
-    """通过 ChatOllama 生成答案。
+    """兼容入口：通过显式本地参数或 eval_gen 角色生成答案。
 
     Args:
         question: 用户问题
         context: 检索到的上下文片段列表
-        model: Ollama 模型名（默认读 OLLAMA_MODEL 环境变量）
+        model: Ollama 模型名（可选；不再隐式回落 qwen2.5:3b）
         base_url: Ollama 服务地址（默认取 config.OLLAMA_BASE_URL，跟随 OLLAMA_BASE_URL 环境变量）
 
     Returns:

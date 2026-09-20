@@ -308,7 +308,7 @@ def write_markdown_report(
             icon = "✅" if passed else "❌"
             lines.append(f"| {label} | **{val:.4f}** | {th} | {icon} |")
     lines.append("")
-    lines.append("_RAGAS 基于 LLM-as-Judge (qwen2.5:3b)，离线模式下指标为 NaN。_")
+    lines.append("_RAGAS 的 LLM-as-Judge 使用 `eval_gen` 角色绑定的模型；未配置或离线时指标为 NaN。_")
     lines.append("")
 
     # ── 11. 双轨对比 ──

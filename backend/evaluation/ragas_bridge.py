@@ -23,21 +23,17 @@ from typing import Any
 from backend.shared.logger import logger
 
 # ── RAGAS LLM 配置 ──────────────────────────────────────────────
-# 默认使用 DashScope 云 API（qwen3.7-plus），本地 Ollama 作为可选 fallback
+# 兼容旧环境变量；实际模型统一由 eval_gen 角色决定。
 _RAGAS_LLM_BACKEND = os.getenv("RAGAS_LLM_BACKEND", "cloud")  # "cloud" | "local"
 
-# Cloud LLM (DashScope OpenAI 兼容端点)
-_RAGAS_CLOUD_MODEL = os.getenv("RAGAS_CLOUD_MODEL", "qwen3.7-plus")
-_RAGAS_CLOUD_API_KEY = os.getenv("QWEN_API_KEY", "")
-_RAGAS_CLOUD_API_BASE = os.getenv(
-    "QWEN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-)
+# 模型、Base URL、API Key 均由 eval_gen 角色绑定的数据库配置提供，
+# 不再保留旧的 RAGAS_CLOUD_* / QWEN_API_* 运行时读取。
+from backend.config import model_roles
 
-# Local LLM (Ollama fallback — 仅 RAGAS_LLM_BACKEND=local 且 ENV_MODE=local 时使用)
-from backend.config.llm import OLLAMA_BASE_URL, OLLAMA_ENABLED, OLLAMA_MODEL
 
-_OLLAMA_HOST = OLLAMA_BASE_URL
-_OLLAMA_MODEL = OLLAMA_MODEL
+def _configured_eval_model() -> str:
+    """读取评测生成角色；不再回落到本地 Ollama 默认模型。"""
+    return model_roles.resolve_runtime_name("eval_gen")
 
 # RAGAS 单 case 超时（秒）。Cloud API 4 个指标串行 LLM 调用，180s 留足余量。
 _RAGAS_CASE_TIMEOUT = int(os.getenv("RAGAS_CASE_TIMEOUT", "180"))
@@ -256,46 +252,37 @@ _embeddings: Any = None
 _init_lock = __import__("threading").Lock()
 
 
-def _init_cloud_llm() -> Any:
-    """初始化 LangchainLLMWrapper(ChatOpenAI) — DashScope 云 API。"""
-    from langchain_openai import ChatOpenAI
+def _init_configured_llm() -> Any:
+    """按 eval_gen 角色初始化 RAGAS LLM，复用统一供应商路由。"""
     from ragas.llms import LangchainLLMWrapper
 
-    if not _RAGAS_CLOUD_API_KEY:
-        raise RuntimeError(
-            "RAGAS cloud LLM 需要 QWEN_API_KEY 环境变量，"
-            "或设置 RAGAS_LLM_BACKEND=local 使用本地 Ollama"
-        )
-
-    chat = ChatOpenAI(
-        model=_RAGAS_CLOUD_MODEL,
-        temperature=0,
-        max_tokens=4096,
-        request_timeout=60,
-        api_key=_RAGAS_CLOUD_API_KEY,
-        base_url=_RAGAS_CLOUD_API_BASE,
-        extra_body={"enable_thinking": False},
-        # 模型级回调：RAGAS 经 LangchainLLMWrapper 内部调用，拿不到原始返回值，
-        # token 计量只能走 on_llm_end 回调（计入 evaluator 侧统计）
-        callbacks=[_get_evaluator_token_handler()],
+    from backend.evaluation.generation import (
+        get_eval_chat_model,
+        resolve_eval_model,
     )
+
+    model_name, provider = resolve_eval_model()
+    chat = get_eval_chat_model(temperature=0)
+    if provider == "ollama" and hasattr(chat, "bind"):
+        chat = chat.bind(format="json", num_predict=1024)
+    try:
+        # 统一代理返回的实例不一定在构造器暴露 callbacks，使用 Runnable 配置
+        # 绑定 evaluator 计量，避免 RAGAS 调用被统一路由后 token 统计丢失。
+        chat = chat.with_config({"callbacks": [_get_evaluator_token_handler()]})
+    except (AttributeError, TypeError, ValueError) as exc:
+        logger.warning("[RAGAS] evaluator token callback 绑定失败：%s", exc)
+    logger.info("[RAGAS] 使用 eval_gen=%s（provider=%s）", model_name, provider)
     return LangchainLLMWrapper(chat)
+
+
+def _init_cloud_llm() -> Any:
+    """兼容旧调用名：实际按 eval_gen 角色选择云端供应商。"""
+    return _init_configured_llm()
 
 
 def _init_local_llm() -> Any:
-    """初始化 LangchainLLMWrapper(ChatOllama) — 本地 Ollama（fallback）。"""
-    from langchain_ollama import ChatOllama
-    from ragas.llms import LangchainLLMWrapper
-
-    chat = ChatOllama(
-        model=_OLLAMA_MODEL,
-        temperature=0,
-        base_url=_OLLAMA_HOST,
-        format="json",
-        num_predict=1024,
-        callbacks=[_get_evaluator_token_handler()],
-    )
-    return LangchainLLMWrapper(chat)
+    """兼容旧调用名：实际按 eval_gen 角色选择本地或云端供应商。"""
+    return _init_configured_llm()
 
 
 def _init_embeddings() -> Any:
@@ -334,19 +321,13 @@ def _get_llm() -> Any:
     if _llm_wrapper is None:
         with _init_lock:
             if _llm_wrapper is None:
-                backend = _RAGAS_LLM_BACKEND
-                if backend == "local" and not OLLAMA_ENABLED:
-                    logger.warning(
-                        "[RAGAS] RAGAS_LLM_BACKEND=local 但 ENV_MODE=cloud，"
-                        "本地 Ollama 已禁用，改用云端 DashScope"
+                if _RAGAS_LLM_BACKEND in {"local", "cloud"}:
+                    logger.info(
+                        "[RAGAS] RAGAS_LLM_BACKEND=%s 仅作兼容标记，模型由 eval_gen 角色决定",
+                        _RAGAS_LLM_BACKEND,
                     )
-                    backend = "cloud"
-                if backend == "local":
-                    _llm_wrapper = _init_local_llm()
-                    logger.info(f"[RAGAS] LLM 初始化完成（本地 Ollama: {_OLLAMA_MODEL}）")
-                else:
-                    _llm_wrapper = _init_cloud_llm()
-                    logger.info(f"[RAGAS] LLM 初始化完成（DashScope: {_RAGAS_CLOUD_MODEL}）")
+                _llm_wrapper = _init_configured_llm()
+                logger.info("[RAGAS] LLM 初始化完成（eval_gen 角色）")
     return _llm_wrapper
 
 

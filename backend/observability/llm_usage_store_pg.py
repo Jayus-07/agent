@@ -37,6 +37,7 @@ _COLS = ("ts, trace_id, request_id, session_id, user_id, tenant_id, "
          "component, model, provider, "
          "prompt_tokens, completion_tokens, total_tokens, "
          "cached_tokens, reasoning_tokens, cost_usd, duration_ms, finish_reason, decision")
+_COLS += ", run_id, step_id, role, stage"
 
 
 class PostgresLLMUsageStore(LLMUsageStore):
@@ -119,6 +120,22 @@ class PostgresLLMUsageStore(LLMUsageStore):
                 f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS decision "
                 "TEXT NOT NULL DEFAULT 'primary'"
             )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS run_id "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS step_id "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS role "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS stage "
+                "TEXT NOT NULL DEFAULT ''"
+            )
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_ts ON {t}(ts)")
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_model ON {t}(model, ts)")
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_trace ON {t}(trace_id)")
@@ -128,6 +145,10 @@ class PostgresLLMUsageStore(LLMUsageStore):
             )
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_component "
                         f"ON {t}(component, ts)")
+            cur.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{t}_processing "
+                f"ON {t}(run_id, step_id, ts)"
+            )
 
     # ---- 写入 ----
 
@@ -145,9 +166,11 @@ class PostgresLLMUsageStore(LLMUsageStore):
                         component, model, provider,
                         prompt_tokens, completion_tokens, total_tokens,
                         cached_tokens, reasoning_tokens, cost_usd,
-                        duration_ms, finish_reason, decision, created_at
+                        duration_ms, finish_reason, decision,
+                        run_id, step_id, role, stage, created_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
-                              %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                              %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                              %s, %s, %s, %s, %s)
                 """, (
                     event.get("timestamp") or now,
                     str(event.get("trace_id") or ""),
@@ -167,6 +190,10 @@ class PostgresLLMUsageStore(LLMUsageStore):
                     float(event.get("duration_ms") or 0.0),
                     str(event.get("finish_reason") or ""),
                     str(event.get("decision") or "primary"),
+                    str(event.get("run_id") or ""),
+                    str(event.get("step_id") or ""),
+                    str(event.get("role") or ""),
+                    str(event.get("stage") or ""),
                     now,
                 ))
                 self._write_count += 1
@@ -201,6 +228,26 @@ class PostgresLLMUsageStore(LLMUsageStore):
             return [dict(r) for r in rows]
         except Exception as e:
             logger.warning(f"[LLMUsageStore-PG] by_trace({trace_id}) 查询失败: {e}")
+            return []
+
+    def by_processing_run(self, run_id: str, limit: int = 500) -> list[dict[str, Any]]:
+        """返回一次入库运行关联的实际模型调用明细。"""
+        if not run_id:
+            return []
+        try:
+            with self._lock, self._conn() as conn:
+                rows = self._exec(
+                    conn,
+                    f"""SELECT {_COLS}
+                       FROM {self._table}
+                      WHERE run_id = %s
+                      ORDER BY ts ASC, id ASC
+                      LIMIT %s""",
+                    (run_id, min(max(int(limit), 1), 2000)),
+                ).fetchall()
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.warning(f"[LLMUsageStore-PG] by_processing_run({run_id}) 查询失败: {e}")
             return []
 
     def list_calls(self, days: int = 7, model: str | None = None,

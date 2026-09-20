@@ -575,7 +575,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         rerank_scores, relevant_mask,
                     )
 
-                # === 答案生成（仅 ENV_MODE=local 走本地 Ollama；cloud 模式内部直接跳过）===
+                # === 答案生成（由 eval_gen 角色决定供应商；云端需显式评测开关）===
                 gate = gate_mode()
 
                 from backend.evaluation.generation import get_token_usage as _get_token_usage

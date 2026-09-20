@@ -59,12 +59,32 @@ def current_usage_attribution() -> dict[str, str]:
             request_id = str(getattr(trace, "request_id", "") or trace_id)
     except Exception:
         pass
+    run_id = ""
+    step_id = ""
+    role = ""
+    stage = ""
+    try:
+        from backend.shared.processing_context import get_processing_binding
+
+        binding = get_processing_binding()
+        if binding is not None:
+            run_id = binding.run_id
+            step_id = binding.step_id
+            role = binding.role or ""
+            stage = binding.stage
+    except Exception:
+        pass
+
     return {
         "user_id": user_id,
         "tenant_id": tenant_id,
         "trace_id": trace_id,
         "session_id": session_id,
         "request_id": request_id,
+        "run_id": run_id,
+        "step_id": step_id,
+        "role": role,
+        "stage": stage,
     }
 
 
@@ -80,6 +100,11 @@ class LLMUsageStore:
     def _cutoff_iso(days: int) -> str:
         """N 天前（含当天）的 UTC 零点，ISO 格式；llm_usage.ts 为 ISO 字典序可比。"""
         return time.strftime("%Y-%m-%dT00:00:00", time.gmtime(time.time() - (days - 1) * 86400))
+
+    def by_processing_run(self, run_id: str, limit: int = 500) -> list[dict]:
+        """按入库运行查询模型调用；具体存储实现负责数据库访问。"""
+        del run_id, limit
+        return []
 
 
 # 模块级单例
