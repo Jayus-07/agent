@@ -179,17 +179,19 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[780px] text-left text-xs">
+        <table className="w-full min-w-[860px] text-left text-xs">
           <colgroup>
-            <col className="w-[24%]" />
-            <col className="w-[42%]" />
-            <col className="w-[24%]" />
+            <col className="w-[21%]" />
+            <col className="w-[29%]" />
+            <col className="w-[27%]" />
+            <col className="w-[13%]" />
             <col className="w-[10%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-slate-100 text-[10px] text-text-muted">
               <th scope="col" className="px-4 py-3 font-normal">角色</th>
               <th scope="col" className="px-4 py-3 font-normal">当前绑定</th>
+              <th scope="col" className="px-4 py-3 font-normal">来源</th>
               <th scope="col" className="px-4 py-3 font-normal">可用性</th>
               <th scope="col" className="px-4 py-3 text-right font-normal">操作</th>
             </tr>
@@ -198,7 +200,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
             {groups.map((group) => (
               <Fragment key={group.id}>
                 <tr className="bg-slate-50/80">
-                  <td colSpan={4} className="px-4 py-2">
+                  <td colSpan={5} className="px-4 py-2">
                     <span className="text-[11px] font-medium text-text-secondary">{group.label}</span>
                     <span className="ml-2 text-[10px] text-text-muted">{group.hint} · {group.rows.length} 个角色</span>
                   </td>
@@ -260,23 +262,30 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
                             </div>
                           </>
                         ) : (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className={usable ? 'font-mono text-text-primary' : 'font-mono text-red-700'}>
+                              {row.effectiveModel || '—'}
+                            </span>
+                            {currentEntry?.modelKind && (
+                              <span className="rounded bg-slate-100 px-1.5 py-0.5 font-sans text-[10px] text-text-muted">
+                                {modelKindLabel(currentEntry.modelKind)}
+                              </span>
+                            )}
+                            {row.provider && (
+                              <span className="rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
+                                {row.provider}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        {isEditing ? (
+                          <span className="text-[10px] text-text-muted">沿用当前来源，保存后更新</span>
+                        ) : (
                           <>
                             <div className="flex flex-wrap items-center gap-1.5">
-                              <span className={usable ? 'font-mono text-text-primary' : 'font-mono text-red-700'}>
-                                {row.effectiveModel || '—'}
-                              </span>
-                              {currentEntry?.modelKind && (
-                                <span className="rounded bg-slate-100 px-1.5 py-0.5 font-sans text-[10px] text-text-muted">
-                                  {modelKindLabel(currentEntry.modelKind)}
-                                </span>
-                              )}
-                              {row.provider && (
-                                <span className="rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
-                                  {row.provider}
-                                </span>
-                              )}
-                            </div>
-                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                               <span className={`rounded-full border px-2 py-0.5 text-[10px] ${sourceTone}`}>
                                 {sourceLabel(row.source, row.inheritedFrom)}
                               </span>

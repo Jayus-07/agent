@@ -181,6 +181,14 @@ describe('RoleBindingsTab 版式', () => {
     expect(container.textContent).toContain('检索链路')
     expect(container.textContent).toContain('最后由 admin')
     expect(container.textContent).toContain('2 天前')
+
+    // 分列版式回归锚点：来源/审计/字面值在独立的「来源」列，
+    // 不再堆进「当前绑定」单元格（曾导致继承 + 空值行叠四层信息）。
+    const sourceCell = Array.from(container.querySelectorAll('td'))
+      .find((td) => td.textContent?.includes('最后由 admin'))
+    expect(sourceCell).toBeTruthy()
+    expect(sourceCell?.textContent).not.toContain('qwen3.7-plus')
+    expect(sourceCell?.textContent).not.toContain('主问答模型')
   })
 
   it('「只看不可用」只留下判定不可用的角色', async () => {

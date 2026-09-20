@@ -387,8 +387,12 @@ export interface DriftItem {
 
 ## 6. tab① 角色绑定
 
-**布局**：单表格，**4 列**，按**业务链路分组**渲染（分组常量 = `frontend-admin/src/types/modelConfig.ts::ROLE_GROUPS`：
+**布局**：单表格，**5 列**，按**业务链路分组**渲染（分组常量 = `frontend-admin/src/types/modelConfig.ts::ROLE_GROUPS`：
 问答链路 / 入库链路 / 检索链路 / 评测链路，未登记角色落末位「其他」组）。
+
+> 版式沿革：最初 5 列（来源独立）→ 2026-09-21 上午并成 4 列（来源徽章并入「当前绑定」）→
+> 实机发现信息堆叠过密（继承 + 空值行叠四层，行高失控）→ 当日改回 **5 列**，
+> 「当前绑定」只留模型信息，配置状态（来源 / 审计 / 字面值）独立成「来源」列。
 
 行数 = 后端 `MODEL_ROLES` 的角色数，**2026-09-21 起为 11 个**（main / doc / metadata_extract /
 question_gen / table_describe / tool_selector / fallback / ocr / embedding / rerank / eval_gen）。
@@ -398,7 +402,8 @@ question_gen / table_describe / tool_selector / fallback / ocr / embedding / rer
 | 列 | 内容 | 态 |
 |---|---|---|
 | 角色 | 中文名（`ROLE_LABELS`）+ `role` 代码（`font-mono text-[10px] text-text-muted`） | — |
-| 当前绑定 | 第一行：`effectiveModel`（`font-mono`，非法时红字）+ 用途徽章（**仅当模型目录能查到该模型**才渲染，避免用期望用途冒充事实）+ provider 徽章；第二行：**来源徽章** + 审计「最后由 who · 相对时间」（`updatedBy`/`updatedAt`）；`literalValue !== effectiveValue` 时第三行给「配置值」 | 编辑时第一行换成 `<select>` |
+| 当前绑定 | 只留模型信息：`effectiveModel`（`font-mono`，非法时红字）+ 用途徽章（**仅当模型目录能查到该模型**才渲染，避免用期望用途冒充事实）+ provider 徽章 | 编辑时换成 `<select>` |
+| 来源 | 第一行：**来源徽章** + 审计「最后由 who · 相对时间」（`updatedBy`/`updatedAt`）；`literalValue !== effectiveValue` 时第二行给「配置值」 | 编辑时显示「沿用当前来源，保存后更新」 |
 | 可用性 | 图标 + 结论；不可用时直接给 `availabilityReason`；`requiresReindex` 的角色另起一行「变更需重建索引」 | 编辑时**按下拉所选值实时重算** |
 | 操作 | 「修改」/「保存」+「取消」 | 非 canEdit 不渲染 |
 
