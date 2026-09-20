@@ -1,10 +1,11 @@
 -- gateway-auth.lua — APISIX 入口认证插件（B2）
 --
 -- 行为合同：1:1 平移 Java AuthenticationGlobalFilter（B0 审计 docs/gateway-apisix-audit-report.md §3）
---   ① 无条件剥离入站伪造身份头（八头：X-Auth-Type/X-User-Id/X-User-Name/X-User-Dept
---      /X-User-Roles/X-User-Permissions + X-Operator-Role/X-Operator-Id；
+--   ① 无条件剥离入站伪造身份头（九头：X-Auth-Type/X-User-Id/X-User-Name/X-User-Dept
+--      /X-User-Roles/X-User-Permissions/X-Tenant-Id + X-Operator-Role/X-Operator-Id；
 --      X-Operator-* 为 operator 身份族，B4 未开、py 不消费，
---      此处置为剥离是提前堵「客户端伪造 operator 头」的洞，与 X-User-* 同理）
+--      此处置为剥离是提前堵「客户端伪造 operator 头」的洞，与 X-User-* 同理；
+--      X-Tenant-Id 2026-09-18 加入：预算/治理链路要求可信租户，客户端不可伪造）
 --   ② X-Trace-Id 不剥离：有则透传复用，无则生成
 --   ③ OPTIONS 预检放行（路由级白名单由路由配置承担：auth/sys 路由不挂本插件）
 --   ④ 带 X-API-Key → 打标 X-Auth-Type: api-key 透传（服务级 Key 仍由 FastAPI 校验）
@@ -39,12 +40,13 @@ local tostring        = tostring
 local find            = string.find
 local concat          = table.concat
 
--- 与 SCG AuthenticationGlobalFilter 一致的伪造头剥离清单（七头，不含 X-Trace-Id）
+-- 与 SCG AuthenticationGlobalFilter 一致的伪造头剥离清单（九头，不含 X-Trace-Id）
 -- 含 X-Operator-Role / X-Operator-Id：operator 身份族，客户端不可伪造（B4 未开、py 不消费 X-Operator-*，
 -- 此处置为剥离属提前防御；大小写变体无需单列——ngx.req.set_header 对头名大小写不敏感，会一并清除）
--- X-User-Roles/X-User-Permissions 由本插件注入（JWT claim → 逗号分隔），同样禁止客户端伪造
+-- X-User-Roles/X-User-Permissions/X-Tenant-Id 由本插件注入（JWT claim → 逗号分隔/原值），
+-- 同样禁止客户端伪造
 local FORGED_HEADERS  = { "X-Auth-Type", "X-User-Id", "X-User-Name", "X-User-Dept", "X-User-Roles",
-                          "X-User-Permissions", "X-Operator-Role", "X-Operator-Id" }
+                          "X-User-Permissions", "X-Tenant-Id", "X-Operator-Role", "X-Operator-Id" }
 
 local HEADER_AUTH_TYPE = "X-Auth-Type"
 local HEADER_USER_ID   = "X-User-Id"
@@ -52,6 +54,7 @@ local HEADER_USER_NAME = "X-User-Name"
 local HEADER_USER_DEPT = "X-User-Dept"
 local HEADER_USER_ROLES = "X-User-Roles"
 local HEADER_USER_PERMISSIONS = "X-User-Permissions"
+local HEADER_TENANT_ID = "X-Tenant-Id"
 local HEADER_TRACE_ID  = "X-Trace-Id"
 
 -- 进程级配置缓存（init_worker 构建；必须先于 _M.access 声明，否则 access 引用全局 nil）
@@ -474,6 +477,12 @@ function _M.access(_, ctx)
         if #parts > 0 then
             core.request.set_header(ctx, HEADER_USER_PERMISSIONS, concat(parts, ","))
         end
+    end
+    -- tenant_id claim（2026-09-18 预算闭环）→ X-Tenant-Id 注入；预算 /me 与
+    -- 治理写（幂等租户隔离）都要求可信租户。缺省不注入，后端按未声明 fail-closed。
+    local tenant = to_str_or_nil(payload.tenant_id)
+    if tenant then
+        core.request.set_header(ctx, HEADER_TENANT_ID, tenant)
     end
 end
 

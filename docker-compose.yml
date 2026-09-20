@@ -64,22 +64,18 @@ services:
     # 环境变量来源（2026-09-15 固化）：.env 全量注入。
     # 显式 environment 条目优先级更高——列表中的容器内地址（PGHOST=postgres、
     # REDIS_URL=redis://...）不会被 .env 的宿主值覆盖。
-    # 背景：environment 是白名单式，新增凭据 / base URL 极易漏传，实测
-    # 漏 QWEN_API_BASE → LLM 401（且降级话术冒充模型输出，误报成 SQL 语法错）。
+      # 模型供应商、Base URL、模型名与凭据统一从数据库注册表读取；这里只保留
+      # 容器网络、数据库、队列和本地推理等基础设施配置。
     env_file:
       - .env
     environment:
-      # LLM
-      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - QWEN_API_KEY=${QWEN_API_KEY:-}
-      # 阿里云 DashScope（embedding/rerank/OCR 共用，EMBEDDING_API_KEY 未设时回退此值）
-      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      # LLM 供应商配置不从 env 注入，统一由数据库注册表提供。
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
       # 开发环境默认全量走级联；生产请通过环境变量显式设置 1/10/50/100。
       - METADATA_CASCADE_ENABLED=${METADATA_CASCADE_ENABLED:-true}
       - METADATA_CASCADE_ROLLOUT_PERCENT=${METADATA_CASCADE_ROLLOUT_PERCENT:-100}
       - METADATA_CLASSIFIER_ENABLED=${METADATA_CLASSIFIER_ENABLED:-false}
+      - METADATA_CLASSIFIER_MODEL_PATH=${METADATA_CLASSIFIER_MODEL_PATH:-/app/data/models/metadata_lr/lr_model_dryrun.joblib}
       # 开发阶段关闭影子，避免额外 Embedding 成本；生产观察期显式打开。
       - METADATA_CASCADE_SHADOW_ENABLED=${METADATA_CASCADE_SHADOW_ENABLED:-false}
       - METADATA_SHADOW_QUEUE_ENABLED=${METADATA_SHADOW_QUEUE_ENABLED:-false}
@@ -196,11 +192,7 @@ services:
       - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
       # RAG 数据根目录指向 app_data 卷（与 app 共享同一份注册表/索引/文档）
       - RAG_DATA_DIR=/app/data
-      # 显式传 embedding 模型：必须与宿主机建索引用的模型一致（宿主 .env 为 text-embedding-v3），
-      # 否则增量 sync 会用不同模型重嵌入全量文档
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-v3}
-      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      # 向量/重排/生成模型及凭据由数据库注册表提供；本地模型路径仍由 env 注入。
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
       - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
       - RERANKER_MODEL_PATH=${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
@@ -246,8 +238,6 @@ services:
       - BUSINESS_PGDATABASE=agent_business
       - PG_READONLY_USER=agent_readonly
       - PG_READONLY_PASSWORD=${PG_READONLY_PASSWORD:?PG_READONLY_PASSWORD is required}
-      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - LOG_FORMAT=${LOG_FORMAT:-json}
     volumes:
       - app_data:/app/data
@@ -299,16 +289,13 @@ services:
       - TRAVEL_CHECKPOINTER_ENABLED=${TRAVEL_CHECKPOINTER_ENABLED:-true}
       - TRAVEL_CHECKPOINTER_BACKEND=${TRAVEL_CHECKPOINTER_BACKEND:-postgres}
       - TRAVEL_CHECKPOINT_TTL_DAYS=${TRAVEL_CHECKPOINT_TTL_DAYS:-7}
-      # LLM / 模型
-      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - QWEN_API_KEY=${QWEN_API_KEY:-}
-      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      # LLM / 模型供应商配置由数据库注册表提供。
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
       # 与 app 保持同一元数据灰度指针；设 false/0 可立即回退主索引。
       - METADATA_CASCADE_ENABLED=${METADATA_CASCADE_ENABLED:-true}
       - METADATA_CASCADE_ROLLOUT_PERCENT=${METADATA_CASCADE_ROLLOUT_PERCENT:-100}
       - METADATA_CLASSIFIER_ENABLED=${METADATA_CLASSIFIER_ENABLED:-false}
+      - METADATA_CLASSIFIER_MODEL_PATH=${METADATA_CLASSIFIER_MODEL_PATH:-/app/data/models/metadata_lr/lr_model_dryrun.joblib}
       - METADATA_CASCADE_SHADOW_ENABLED=${METADATA_CASCADE_SHADOW_ENABLED:-false}
       - METADATA_SHADOW_QUEUE_ENABLED=${METADATA_SHADOW_QUEUE_ENABLED:-false}
       - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
@@ -374,7 +361,6 @@ services:
       - RAG_MODE=local
       - RAG_DATA_DIR=/app/data
       - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
-      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
       - LOG_FORMAT=${LOG_FORMAT:-json}
     volumes:

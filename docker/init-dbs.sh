@@ -67,6 +67,7 @@ $PSQL -d agent_memory -f /docker-migrations/020_alembic_gaps_pg.sql
 echo "[init-dbs] 9/9 元数据规则治理与影子任务（幂等）..."
 $PSQL -d agent_memory -f /docker-migrations/025_metadata_rule_governance.sql
 $PSQL -d agent_memory -f /docker-migrations/026_metadata_shadow_jobs.sql
+$PSQL -d agent_memory -f /docker-migrations/027_rag_processing_lineage.sql
 
 echo "[init-dbs] 完成。验证只读角色："
 $PSQL -d postgres -c "SELECT rolname, rolcanlogin, rolsuper FROM pg_roles WHERE rolname = 'agent_readonly';"

@@ -49,6 +49,12 @@ MEMORY_MIGRATIONS = [
     "002_agent_memory_schema.sql",
     "006_customer_service.sql",
     "003_agent_memory_seed.sql",
+    "010_doc_registry_pg.sql",
+    "011_doc_registry_version_governance.sql",
+    "012_obs_trace_store_pg.sql",
+    "013_obs_analytics_pg.sql",
+    "014_rag_stores_pg.sql",
+    "027_rag_processing_lineage.sql",
 ]
 
 # "已存在 / 已导入"类错误码（幂等跳过，不算失败）

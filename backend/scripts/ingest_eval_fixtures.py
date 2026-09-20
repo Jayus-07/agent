@@ -329,6 +329,9 @@ def main() -> int:
     pipeline = get_rag_pipeline()
 
     from backend.rag.indexing.indexer import IncrementalIndexer
+    from backend.rag.indexing.processing_lineage_pg import (
+        get_processing_lineage_repository,
+    )
     indexer = IncrementalIndexer(
         docs_dir=str(Path(DOCS_DIRECTORY)),
         vectordb=pipeline.vectordb,
@@ -338,6 +341,9 @@ def main() -> int:
         kb_id=KB_ID,
         fixture_set=requested_set,
         bm25_store=pipeline.bm25_store,
+        processing_lineage_repository=get_processing_lineage_repository(),
+        processing_task_id="eval_fixture_ingest",
+        processing_batch_id=requested_set,
     )
 
     # ④ 清理 hash doc_id 的全部存储残留
