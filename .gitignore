@@ -427,3 +427,21 @@ scripts/_diag_*.py
 
 # Codex 子任务实施使用的隔离 worktree，不进入项目提交
 .worktrees/
+
+# ============================================
+# AI 助手工具产物（本地工作文件，一律不入库）
+# 2026-09-20：以下条目曾因「gitignore 规则晚于 git add」而被跟踪，
+# 已用 git rm --cached 取消跟踪（本地文件保留）。
+# 再次 git add -A 前请确认不属于此类。
+# ============================================
+.claude/
+.codex/
+.learnings/
+.superpowers/
+.qoderignore
+.mcp.json
+# 测试夹具临时输出（scripts 侧生成）
+.tmp-sf/
+# 手工备份文件
+AGENTS.md.bak-*
+*.bak-20*
