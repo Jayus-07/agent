@@ -344,7 +344,7 @@ describe('ProvidersTab 探测失败详情', () => {
     expect(container.textContent).not.toContain('正在测试')
   })
 
-  it('同一供应商行合并五类模型，且不再渲染专项模型独立卡片', () => {
+  it('同一供应商行合并五类模型，不再引入独立的专项模型卡片', () => {
     const container = mount(false, true)
 
     // 同一张供应商卡片内平铺全部已登记模型（不再按用途拆成独立区块）。
@@ -355,7 +355,8 @@ describe('ProvidersTab 探测失败详情', () => {
       expect(card.textContent).toContain(name)
     }
     expect(container.textContent).toContain('阿里云百炼专项')
-    expect(container.querySelector('[data-testid="specialized-models-card"]')).toBeNull()
+    // 「专项模型」独立卡片（SpecializedModelsCard.tsx）已于 2026-09-21 删除：
+    // 供应商页统一承载五类模型的登记与测试，专项能力不再有独立入口 —— 别再往回加。
     expect(container.textContent).not.toContain('配置专项模型')
   })
 

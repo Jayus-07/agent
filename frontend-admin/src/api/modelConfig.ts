@@ -217,6 +217,12 @@ export async function verifyDraftProvider(body: DraftProbeInput, options: ProbeO
   return normalizeProbeResponse(result)
 }
 
+/** 专项模型（embedding/rerank）供应商配置的两个端点封装。
+ *
+ *  ⚠️ 当前**无 UI 调用方** —— 承载它的 `SpecializedModelsCard.tsx` 已于 2026-09-21 删除，
+ *  专项能力改由供应商页统一登记与测试。这里的封装与类型保留（后端端点仍在、api 测试仍覆盖），
+ *  但若长期无人调用，应当连同后端端点一起决策，不要只删前端这一侧。
+ */
 export async function listSpecializedModels(): Promise<SpecializedModelResponse> {
   return request<SpecializedModelResponse>('/api/sys/specialized-models')
 }

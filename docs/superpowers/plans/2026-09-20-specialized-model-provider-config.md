@@ -149,6 +149,13 @@ Expected: PASS.
 
 ### Task 4: 管理端专项配置界面
 
+> ⚠️ **口径更新（2026-09-21）**：本 Task 要求的「在 roles tab 挂一张 `SpecializedModelsCard` 独立卡片」
+> **未以该形态保留**。后续方向改为「同一供应商行合并五类模型」（约束见 `ProvidersTab.test.tsx`），
+> 该卡片从未被任何页面引用；2026-09-21 已删除 `SpecializedModelsCard.tsx` 与其测试。
+> 下面的 Step 1–4 保留为**历史执行记录，不要按此重新创建组件**。API 封装
+> `listSpecializedModels` / `testAndSaveSpecialized` 与后端 `/sys/specialized-models` 端点仍在，
+> 但前端当前无 UI 调用方。
+
 **Files:**
 - Modify: `frontend-admin/src/api/modelConfig.ts`
 - Modify: `frontend-admin/src/types/modelConfig.ts`

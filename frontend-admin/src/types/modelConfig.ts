@@ -266,10 +266,19 @@ export interface DriftItem {
 
 // ── 角色中文名（前端常量，不从后端取；与 backend/config/model_roles.py 的 desc 语义一致）──
 
-/** 8 个模型角色的中文显示名。后端 `RoleSpec.desc` 是**长说明**，这里是**列名**，两者不混用。 */
+/** 模型角色的中文显示名，与 `backend/config/model_roles.py` 的 `MODEL_ROLES` **一一对应**。
+ *
+ *  后端 `RoleSpec.desc` 是**长说明**，这里是**列名**，两者不混用。
+ *  ⚠️ 后端新增角色时必须同批补齐此处 —— 漏补不会报错，只会让表格里直接显示英文代码
+ *  （`roleLabel` 回落为 role）。2026-09-21 补齐过 `metadata_extract` / `question_gen` /
+ *  `table_describe`，它们此前缺失，导致角色列三行显示英文。
+ */
 export const ROLE_LABELS: Record<string, string> = {
   main: '主问答模型',
   doc: '文档抽取模型',
+  metadata_extract: '元数据抽取模型',
+  question_gen: '问题生成模型',
+  table_describe: '表格描述模型',
   tool_selector: '工具选择模型',
   fallback: '兜底模型',
   ocr: 'OCR 模型',
@@ -278,8 +287,13 @@ export const ROLE_LABELS: Record<string, string> = {
   eval_gen: '评测生成模型',
 }
 
-/** 使用专项适配器的角色；角色绑定编辑仍统一从已登记模型目录选择。 */
-export const SPECIALIZED_MODEL_ROLES = new Set(['ocr', 'embedding', 'rerank'])
+/** 使用专项协议适配器的角色，与后端 `infra/llm/models.py::_SPECIALIZED_MODEL_ROLES` 对齐。
+ *
+ *  ⚠️ 只有 embedding / rerank —— 后端 `expected_model_kind()` 把 `ocr` 的期望用途判为
+ *  `chat`，把它列进这里会让前端以为 ocr 需要视觉模型，与后端校验打架。
+ *  角色绑定编辑仍统一从已登记模型目录选择。
+ */
+export const SPECIALIZED_MODEL_ROLES = new Set(['embedding', 'rerank'])
 
 export function isSpecializedModelRole(role: string): boolean {
   return SPECIALIZED_MODEL_ROLES.has(role)
@@ -287,6 +301,55 @@ export function isSpecializedModelRole(role: string): boolean {
 
 export function roleLabel(role: string): string {
   return ROLE_LABELS[role] ?? role
+}
+
+// ── 角色分组（按业务链路，纯展示用，不参与任何写操作）─────────────────────
+
+export interface RoleGroup {
+  id: string
+  label: string
+  hint: string
+  roles: string[]
+}
+
+/** 角色按**业务链路**分组；数组顺序即表格渲染顺序。
+ *
+ *  `roles` 没覆盖到的角色统一落到末位「其他」组 —— 后端新增角色时它不会从界面上消失，
+ *  只是暂时没有分组归属（配合 `ROLE_LABELS` 同批补齐即可）。
+ */
+export const ROLE_GROUPS: RoleGroup[] = [
+  {
+    id: 'chat',
+    label: '问答链路',
+    hint: '用户提问到生成答案：主问答、工具选择、熔断兜底',
+    roles: ['main', 'tool_selector', 'fallback'],
+  },
+  {
+    id: 'ingest',
+    label: '入库链路',
+    hint: '文档解析到建索引：抽取、问题生成、表格描述、扫描件 OCR',
+    roles: ['doc', 'metadata_extract', 'question_gen', 'table_describe', 'ocr'],
+  },
+  {
+    id: 'retrieve',
+    label: '检索链路',
+    hint: '向量化与重排，与向量索引的语义空间强绑定',
+    roles: ['embedding', 'rerank'],
+  },
+  {
+    id: 'eval',
+    label: '评测链路',
+    hint: '评测答案生成与 RAGAS 打分',
+    roles: ['eval_gen'],
+  },
+]
+
+/** 未登记进 `ROLE_GROUPS` 的角色所属分组 id。 */
+export const OTHER_ROLE_GROUP_ID = 'other'
+
+/** 角色的分组 id；未登记的角色返回 `other`（页面会把它渲染在末位）。 */
+export function roleGroupOf(role: string): string {
+  return ROLE_GROUPS.find((group) => group.roles.includes(role))?.id ?? OTHER_ROLE_GROUP_ID
 }
 
 // ── 一、来源与密钥的展示（§6「不让人猜空值含义」）─────────────────────────

@@ -5,11 +5,15 @@ import {
   isModelSelectable,
   isSpecializedModelRole,
   maskSecret,
+  OTHER_ROLE_GROUP_ID,
   probeFailureReason,
   probeFallbackSummary,
   probeOverallLabel,
   probeStepSummary,
   redactForRole,
+  ROLE_GROUPS,
+  ROLE_LABELS,
+  roleGroupOf,
   roleLabel,
   sourceLabel,
   type ConfigHistoryEntry,
@@ -120,9 +124,13 @@ describe('isModelSelectable', () => {
 })
 
 describe('isSpecializedModelRole', () => {
-  it('识别使用专项适配器的角色', () => {
+  it('与后端 SPECIALIZED_ROLES 对齐：只有 embedding/rerank 有专用适配器', () => {
+    // backend/infra/llm/specialized.py: SPECIALIZED_ROLES = {embedding, rerank}
+    // OCR 是"专项能力"，但没有专用适配器，期望用途仍是 chat
+    // （backend/infra/llm/models.py::expected_model_kind），故不在此列。
     expect(isSpecializedModelRole('embedding')).toBe(true)
-    expect(isSpecializedModelRole('ocr')).toBe(true)
+    expect(isSpecializedModelRole('rerank')).toBe(true)
+    expect(isSpecializedModelRole('ocr')).toBe(false)
     expect(isSpecializedModelRole('eval_gen')).toBe(false)
     expect(isSpecializedModelRole('main')).toBe(false)
   })
@@ -289,10 +297,15 @@ describe('redactForRole', () => {
 // ── roleLabel ────────────────────────────────────────────────────────────
 
 describe('roleLabel', () => {
-  it('8 个角色都有中文名', () => {
+  it('后端 MODEL_ROLES 全部角色都有中文名', () => {
+    // 快照对齐 backend/config/model_roles.py 的 MODEL_ROLES（11 个）。
+    // 后端新增角色时这里会失败 —— 那是提醒，不是噪声：漏补中文名的下场是表格里显示英文代码。
     const roles = [
       'main',
       'doc',
+      'metadata_extract',
+      'question_gen',
+      'table_describe',
       'tool_selector',
       'fallback',
       'ocr',
@@ -300,6 +313,7 @@ describe('roleLabel', () => {
       'rerank',
       'eval_gen',
     ]
+    expect(roles).toHaveLength(11)
     for (const r of roles) {
       expect(roleLabel(r)).not.toBe(r)
       expect(roleLabel(r).length).toBeGreaterThan(0)
@@ -308,5 +322,22 @@ describe('roleLabel', () => {
 
   it('未知角色回落为 role 代码，不显示空白', () => {
     expect(roleLabel('brand_new_role')).toBe('brand_new_role')
+  })
+})
+
+// ── 角色分组 ─────────────────────────────────────────────────────────────
+
+describe('ROLE_GROUPS', () => {
+  it('覆盖 ROLE_LABELS 的全部角色，且不重复登记', () => {
+    const grouped = ROLE_GROUPS.flatMap((group) => group.roles)
+    expect(new Set(grouped).size).toBe(grouped.length)
+    // 漏登记的角色会掉进界面的「其他」组，结构上不该出现这种情况
+    expect([...Object.keys(ROLE_LABELS)].filter((role) => !grouped.includes(role))).toEqual([])
+  })
+
+  it('roleGroupOf 命中已登记角色，未知角色归入 other', () => {
+    expect(roleGroupOf('main')).toBe('chat')
+    expect(roleGroupOf('embedding')).toBe('retrieve')
+    expect(roleGroupOf('brand_new_role')).toBe(OTHER_ROLE_GROUP_ID)
   })
 })

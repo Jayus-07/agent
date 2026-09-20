@@ -387,15 +387,31 @@ export interface DriftItem {
 
 ## 6. tab① 角色绑定
 
-**布局**：单表格，8 行（= 8 个 role）。
+**布局**：单表格，**4 列**，按**业务链路分组**渲染（分组常量 = `frontend-admin/src/types/modelConfig.ts::ROLE_GROUPS`：
+问答链路 / 入库链路 / 检索链路 / 评测链路，未登记角色落末位「其他」组）。
+
+行数 = 后端 `MODEL_ROLES` 的角色数，**2026-09-21 起为 11 个**（main / doc / metadata_extract /
+question_gen / table_describe / tool_selector / fallback / ocr / embedding / rerank / eval_gen）。
+⚠️ 后端新增角色时，`ROLE_LABELS` 与 `ROLE_GROUPS` 必须**同批补齐** —— 漏补不报错，只会让角色列
+显示英文代码（`roleLabel` 回落为 role），`types/modelConfig.test.ts` 的两条用例即为此设的护栏。
 
 | 列 | 内容 | 态 |
 |---|---|---|
-| 角色 | 中文名 + `role` 代码（`font-mono text-[10px] text-text-muted`） | — |
-| 生效模型 | `effectiveModel`，`font-mono` | 非法时红字 + 冒号后原因 |
-| 来源 | 徽章：`DB 覆盖`(蓝) / `环境变量`(灰) / `跟随 main`(紫) / `代码默认`(浅灰) | `inherit` 时后缀「（当前 = xxx）」 |
-| 校验 | `registered`+`missingKeyEnv` 合成的结论 | 未注册 / 缺 Key → **红** |
-| 操作 | 「修改」（canEdit） | 非 canEdit 不渲染 |
+| 角色 | 中文名（`ROLE_LABELS`）+ `role` 代码（`font-mono text-[10px] text-text-muted`） | — |
+| 当前绑定 | 第一行：`effectiveModel`（`font-mono`，非法时红字）+ 用途徽章（**仅当模型目录能查到该模型**才渲染，避免用期望用途冒充事实）+ provider 徽章；第二行：**来源徽章** + 审计「最后由 who · 相对时间」（`updatedBy`/`updatedAt`）；`literalValue !== effectiveValue` 时第三行给「配置值」 | 编辑时第一行换成 `<select>` |
+| 可用性 | 图标 + 结论；不可用时直接给 `availabilityReason`；`requiresReindex` 的角色另起一行「变更需重建索引」 | 编辑时**按下拉所选值实时重算** |
+| 操作 | 「修改」/「保存」+「取消」 | 非 canEdit 不渲染 |
+
+**来源徽章分色**：`DB 覆盖`(蓝) / `环境变量`(灰) / `跟随 main`(紫) / `代码默认`(浅灰)；未知来源走保守灰，
+不冒充「代码默认」（§6 原则「不让人猜空值含义」）。
+
+**分组与筛选**：分组行显示链路名 + 一句话口径 + 该组角色数；表头右侧有「只看不可用」开关，
+计数取后端 `availabilityReason` 判定为不可用的角色数，与页头「严重漂移」红条呼应。
+
+**编辑态的可用性列**：进入编辑后，可用性列按**下拉所选值**重算（`roleVerdict`），而不是停留在当前生效值的
+旧结论 —— 否则用户在下拉里换了个不可用的模型，要等保存后才知道。
+
+**筛选空态**：「只看不可用」筛空时显示「所有角色当前都可用。」（表体不渲染任何分组行）
 
 **行内编辑**（不弹窗，改动小）：
 - 点击「修改」→ 所有角色统一变为 `<select>`，选项 = `get_available_models()` 中与角色用途匹配的已登记模型，并保留当前失效值为禁用项及原因；`eval_gen` 另提供「未配置（停用评测生成）」选项；没有对应分类模型时提示先到供应商页面新增并测试模型；
