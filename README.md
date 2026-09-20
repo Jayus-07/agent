@@ -44,8 +44,8 @@ flowchart TB
     APP --> RAGS["rag-service :8090<br/>混合检索 + Rerank + Evidence Gate"]:::main
     APP --> PG["PostgreSQL :5432<br/>agent_business + agent_memory"]:::store
     APP --> RD["Redis :6379<br/>Celery broker + result"]:::store
-    APP --> OBS["自建 Tracer（9 阶段）+ Prometheus"]:::main
-    RAGS --> CH["ChromaDB + pgvector"]:::store
+    APP --> OBS["自建 Tracer（44 种 SpanKind）+ Prometheus"]:::main
+    RAGS --> CH["pgvector<br/>rag_vectors 表（agent_memory）"]:::store
 ```
 
 > Java 侧（Spring Boot + SCG）是**独立项目**，不在本仓库的启动链路里；`--profile java-loop` 只为联调保留。
@@ -178,7 +178,7 @@ Skill      — 业务能力封装（rag.search / sql.query / report.generate）
    ↓
 Tool       — 无状态底层执行（vector_search / postgres_query / send_email）
    ↓
-External   — PostgreSQL / ChromaDB / SMTP / MCP / 地图服务
+External   — PostgreSQL（含 pgvector）/ SMTP / MCP / 地图服务
 ```
 
 方向固定：`Planner → capability → Skill → Tool → Infrastructure`。
@@ -257,9 +257,9 @@ SLO 定义见 [docs/observability/slo.md](docs/observability/slo.md)。
 | 接入 | Apache APISIX（standalone）+ FastAPI + SSE Streaming |
 | Agent | LangGraph（StateGraph + Send API + checkpointer） |
 | LLM | DeepSeek / Qwen / Ollama（`sys_config` + 管理端可切换） |
-| 向量 | ChromaDB + HuggingFace BGE |
+| 向量 | PostgreSQL + pgvector（`rag_vectors`，HNSW + cosine）｜embedding 双轨：text-embedding-v3 1024d / bge-small-zh-v1.5 512d |
 | 检索 | BM25 + Vector → RRF → CrossEncoder Rerank |
-| 数据 | PostgreSQL + pgvector（业务库 7 schema × 18 表 / 元数据库 17 表） |
+| 数据 | PostgreSQL（业务库 7 schema × 18 表｜元数据库 17 表，含向量表 `rag_vectors`） |
 | 异步 | Celery + Redis（双队列）+ Kafka（`java-loop` profile，默认不启） |
 | 可观测 | 自建 Tracer + Prometheus + Grafana |
 | MCP | stdio / HTTP SSE |
