@@ -1154,6 +1154,147 @@ class ModelConfigService:
             },
         }
 
+    async def remove_provider_model(
+        self,
+        provider_id: str,
+        model_name: str,
+        operator: str,
+    ) -> dict[str, Any]:
+        """从供应商下移除一个自建模型条目；内置模型与被占用的模型一律拒绝。
+
+        三条红线都在**删除前**挡住 —— 这些引用表都没有外键，删完留下的悬空引用补不回来：
+
+        1. 仅存在于代码层 `AVAILABLE_MODELS` 的模型不可移除：DB 本来就没有行，删了
+           下次 `_merged_models` 合并还会原样出现，属于「假装成功」。
+        2. 被 `llm_model_role_bindings` 占用的不可移除：该表没有外键，删模型会让角色
+           指向不存在的模型，而 main / embedding / rerank 这类角色缺失会直接让能力不可用。
+           要删先去「角色绑定」改绑。
+        3. 被 `llm_specialized_model_bindings` 或 `model_price` 引用的同样不可移除。
+
+        历史记录复用 `object_type='provider'`（`llm_config_history` 的 CHECK 只有
+        role / provider / provider_credential / provider_network_scope，加一个 `model`
+        要动 schema），并显式置 `rollbackable=false`：模型删除不是一次 UPDATE 能回放的，
+        回滚需要重新探测并重建条目，不能让历史回放假装完成。
+        """
+        provider_id = (provider_id or "").strip()
+        model_name = (model_name or "").strip()
+        if not provider_id:
+            raise ModelConfigNotFound("供应商 ID 不能为空")
+        if not model_name:
+            raise ValueError("模型名不能为空")
+
+        removed: dict[str, Any] | None = None
+        async for session in get_session():
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT provider_id, display_name, model_kind "
+                        "FROM llm_models WHERE name = :model_name"
+                    ),
+                    {"model_name": model_name},
+                )
+            ).mappings().first()
+
+            if row is None:
+                code_entry = models_mod.get_model_entry(model_name)
+                if (
+                    code_entry is not None
+                    and str(code_entry.get("provider") or "") == provider_id
+                ):
+                    raise ModelConfigConflict(
+                        f"模型 {model_name} 是代码层内置模型，不能从管理端移除"
+                    )
+                raise ModelConfigNotFound(
+                    f"供应商 {provider_id} 下未找到模型 {model_name}"
+                )
+
+            owner = str(row.get("provider_id") or "")
+            if owner != provider_id:
+                raise ModelConfigConflict(
+                    f"模型 {model_name} 属于供应商 {owner}，请到该供应商下移除"
+                )
+
+            role_rows = (
+                await session.execute(
+                    text(
+                        "SELECT role FROM llm_model_role_bindings "
+                        "WHERE model_name = :model_name ORDER BY role"
+                    ),
+                    {"model_name": model_name},
+                )
+            ).mappings().all()
+            if role_rows:
+                roles = "、".join(str(item.get("role")) for item in role_rows)
+                raise ModelConfigConflict(
+                    f"模型 {model_name} 正被角色 {roles} 使用，不能移除；"
+                    "请先在「角色绑定」里改绑到其他模型"
+                )
+
+            specialized_rows = (
+                await session.execute(
+                    text(
+                        "SELECT role FROM llm_specialized_model_bindings "
+                        "WHERE model_name = :model_name ORDER BY role"
+                    ),
+                    {"model_name": model_name},
+                )
+            ).mappings().all()
+            if specialized_rows:
+                roles = "、".join(str(item.get("role")) for item in specialized_rows)
+                raise ModelConfigConflict(
+                    f"模型 {model_name} 仍绑定在专项通道 {roles} 上，不能移除"
+                )
+
+            price_row = (
+                await session.execute(
+                    text(
+                        "SELECT count(*) AS total FROM model_price "
+                        "WHERE model_name = :model_name"
+                    ),
+                    {"model_name": model_name},
+                )
+            ).mappings().first()
+            if price_row and int(price_row.get("total") or 0) > 0:
+                raise ModelConfigConflict(
+                    f"模型 {model_name} 仍配置了价格表，请先清除价格后再移除"
+                )
+
+            model_kind = models_mod.normalize_model_kind(row.get("model_kind"))
+            await session.execute(
+                text("DELETE FROM llm_models WHERE name = :model_name"),
+                {"model_name": model_name},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO llm_config_history "
+                    "(object_type, object_key, old_value, new_value, operator, rollbackable) "
+                    "VALUES ('provider', :key, :old_value, NULL, :operator, false)"
+                ),
+                {
+                    "key": provider_id,
+                    "old_value": _json_value(
+                        {
+                            "removedModel": model_name,
+                            "displayName": row.get("display_name") or model_name,
+                            "modelKind": model_kind,
+                        }
+                    ),
+                    "operator": operator,
+                },
+            )
+            await session.commit()
+            removed = {
+                "providerId": provider_id,
+                "name": model_name,
+                "display": row.get("display_name") or model_name,
+                "modelKind": model_kind,
+            }
+            break
+
+        await registry_store.refresh_registry()
+        assert removed is not None
+        return removed
+
     async def create_provider(
         self,
         payload: Mapping[str, Any],

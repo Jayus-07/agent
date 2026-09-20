@@ -220,9 +220,77 @@ def test_provider_rows_include_specialized_provider_and_models(client, monkeypat
 
     assert "specialized-rag" in items
     assert items["specialized-rag"]["models"] == [
-        {"name": "qwen3.7-text-embedding", "display": "qwen3.7-text-embedding", "modelKind": "embedding"},
-        {"name": "qwen3.7-text-rerank", "display": "qwen3.7-text-rerank", "modelKind": "rerank"},
+        {
+            "name": "qwen3.7-text-embedding",
+            "display": "qwen3.7-text-embedding",
+            "modelKind": "embedding",
+            "source": "user",
+            "usedByRoles": [],
+        },
+        {
+            "name": "qwen3.7-text-rerank",
+            "display": "qwen3.7-text-rerank",
+            "modelKind": "rerank",
+            "source": "user",
+            "usedByRoles": [],
+        },
     ]
+
+
+def test_model_entries_carry_source_and_role_usage(client, monkeypatch):
+    """列表要就地说明「为什么不能移除」：仅代码层的标 builtin，被角色占用的标出角色。
+
+    这两项是管理端「移除模型」按钮的禁用依据 —— 放在列表里而不是等 409 才知道，
+    否则用户点完才被拒，还不知道原因。
+    """
+    snapshot = registry_store.RegistrySnapshot(
+        providers=[
+            {
+                "id": "siliconflow",
+                "display_name": "硅基流动",
+                "driver": "openai",
+                "base_url": "https://api.siliconflow.cn/v1",
+                "network_scope": "public",
+                "billing": "metered",
+                "is_builtin": True,
+                "enabled": True,
+            },
+            {
+                "id": "specialized-rag",
+                "display_name": "阿里云百炼专项",
+                "driver": "specialized",
+                "base_url": "https://dashscope.example",
+                "network_scope": "public",
+                "billing": "metered",
+                "is_builtin": False,
+                "enabled": True,
+            },
+        ],
+        models=[
+            {
+                "name": "qwen3.7-text-embedding",
+                "provider": "specialized-rag",
+                "model_kind": "embedding",
+            }
+        ],
+        roles={"embedding": "qwen3.7-text-embedding"},
+        loaded=True,
+    )
+    monkeypatch.setattr(registry_store, "load_registry", AsyncMock(return_value=snapshot))
+
+    items = {r["id"]: r for r in client.get("/sys/providers").json()["items"]}
+
+    db_model = next(
+        m for m in items["specialized-rag"]["models"] if m["name"] == "qwen3.7-text-embedding"
+    )
+    assert db_model["source"] == "user"
+    assert db_model["usedByRoles"] == ["embedding"]
+
+    builtin_model = next(
+        m for m in items["siliconflow"]["models"] if m["name"] == "Qwen/Qwen3-32B"
+    )
+    assert builtin_model["source"] == "builtin"
+    assert builtin_model["usedByRoles"] == []
 
 
 def test_base_url_only_override_is_not_reported_as_managed_key(client, monkeypatch):

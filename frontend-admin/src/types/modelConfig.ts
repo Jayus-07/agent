@@ -43,6 +43,42 @@ export type BillingMode = 'metered' | 'subscription' | 'local'
 export type NetworkScope = 'public' | 'private'
 export type ModelKind = 'chat' | 'embedding' | 'rerank' | 'vision' | 'speech'
 
+// ── 预置端点目录（后端 `GET /api/sys/providers/presets`）────────────────
+//
+// 计费计划「三选一」。它决定**候选端点**（以及推荐 billing），
+// 但它本身不是新的 billing 值：按设计文档 B.2/B.3，Token Plan 与
+// Coding Plan 都是预付/订阅制，都落 `subscription`，只有按量付费落 `metered`。
+export type PlanId = 'token_plan' | 'coding_plan' | 'metered'
+
+export interface PresetPlan {
+  id: PlanId
+  label: string
+  billing: BillingMode
+}
+
+export interface ProviderPreset {
+  id: string
+  plan: PlanId
+  vendor: string
+  /** 地域 / 版本区分，如「北京」「个人版」；无区分时为空串。 */
+  variant: string
+  driver: 'openai' | 'anthropic'
+  driverLabel: string
+  baseUrl: string
+  /** Key 长什么样的说明（如「sk- 开头」）—— **不是密钥**。 */
+  apiKeyHint: string
+  /** 用错端点会多花钱一类的提醒。 */
+  note: string
+  /** base_url 里待用户替换的占位符，如 `['WorkspaceId']`。 */
+  placeholders: string[]
+}
+
+export interface ProviderPresetsResponse {
+  plans: PresetPlan[]
+  items: ProviderPreset[]
+  actor: string
+}
+
 export function modelKindLabel(kind: ModelKind): string {
   switch (kind) {
     case 'embedding':
@@ -98,6 +134,10 @@ export interface ProviderRow {
     name: string
     display?: string
     modelKind: ModelKind
+    /** `user` = 落在数据库里、管理端可移除；`builtin` = 仅代码层登记，移除无意义 */
+    source?: 'user' | 'builtin'
+    /** 正占用该模型的角色。非空即不可移除 —— 删了会让角色指向不存在的模型 */
+    usedByRoles?: string[]
   }>
   networkScope: NetworkScope
   billing: BillingMode

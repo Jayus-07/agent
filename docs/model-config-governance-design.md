@@ -960,3 +960,167 @@ Ollama 启用 / provider Key 三级检查），缺的是**拒绝**而非校验 �
 本地管理端真实配置并测试 `qwen3.7-text-embedding` 与 `qwen3.7-text-rerank` 均通过；RAG
 运行时实际返回 1024 维向量和有效重排分数。测试耗时在页面展示，Key 只显示掩码。生产发布时
 除迁移 `0019` 外，还必须把 `SECRETS_ENCRYPTION_KEY` 纳入持久化密钥托管与备份。
+
+## B.11 当前实施补充：预置端点目录与「三选一」新增流程（2026-09-20）
+
+B.7 把新增抽屉写成「显示名 · 驱动 · base_url · API Key · 模型名 · 计费模式」，但**驱动下拉从未
+落地**（`newDraft()` 硬编码 `driver: 'openai'`），于是大量 Anthropic 兼容端点根本登记不进来；
+base_url 也全靠手敲，而同一家厂商在不同计费计划下的端点**完全不同**（火山引擎按量
+`/api/v3` vs Coding Plan `/api/coding/v3`），填错会产生额外费用。本次补齐这条链路。
+
+### B.11.1 关键决策：三选一计划只映射到两个 billing
+
+交互上先做「Token Plan / Coding Plan / 按量付费」三选一，但它**不是**三个新的 billing 值：
+
+| 计划 | billing | 依据 |
+|---|---|---|
+| Token Plan | `subscription` | B.2「三点都是数据」+ B.3 的 `subscription` 归属已含 `qwen_tp` |
+| Coding Plan | `subscription` | 同上 |
+| 按量付费 | `metered` | 原语义不变 |
+
+⚠️ **不要为此新增第 4 个 billing 值。** 那要连带改 DB CHECK 约束、`ModelConfigService` 三处
+白名单、`get_provider_billing`、以及 `compute_cost_usd` / `budget.py` / `quota.py`（B.8 已注明
+这三个文件曾是「他人未提交」状态）。计划类型的区分靠 `display_name` 与 provider id 足够。
+
+### B.11.2 目录落点：代码内置 + 只读下发
+
+- `backend/infra/llm/provider_presets.py` —— 43 条预置（Token Plan 16 / Coding Plan 8 /
+  按量付费 19），只含静态数据与纯函数，无 IO、不读 env、**不参与任何解析链**。
+- `GET /api/sys/providers/presets` —— admin only（与 B.6 的 SSRF 边界同源），返回
+  `{plans, items, actor}`，条目为 camelCase，字段受白名单约束（**不得出现名为 `apiKey` 的字段**，
+  `apiKeyHint` 只是「Key 长什么样」的说明）。
+- 放代码而非 DB，依据 B.0 边界：**驱动与厂商能力矩阵留代码，不进 DB**。
+
+### B.11.3 编辑态靠反查回填，不新增字段
+
+库里没有 `preset_id`。编辑时按 `(driver, base_url)` 归一化后反查（去尾斜杠、scheme/host 小写，
+**但不折叠路径语义** —— `/api/v3` 与 `/api/coding/v3` 必须仍然不同），并用实例自身的 `billing`
+消歧：智谱 `open.bigmodel.cn/api/anthropic` 在 Coding Plan 与按量付费下是**同一 URL**，源数据
+本身就有这个歧义。反查**不做模糊匹配**，落空即显示「未套用预置」，不把自建/内网地址
+误标成某家厂商的官方端点。
+
+### B.11.4 一并修掉的三件事
+
+1. **显示名终于有输入入口。** 此前 `displayName` 只能由 `urlparse(base_url).hostname` 兜底，
+   UI 无任何入口。预置选中时会自动填「厂商 · 地域 · 计划」，Anthropic 条目额外标注以区分同厂
+   同计划的另一协议（否则 slug 会撞成 `xxx-2`）。
+2. **协议下拉落地（B.7 原要求）。** 内置供应商的 driver 由后端锁定，前端同步禁用；
+   `ollama` / `specialized` 也不允许被这个下拉悄悄改掉。
+3. **删除靠 id 字符串匹配认计划类型的 `providerOptionLabel()`**（原实现用
+   `row.id === 'qwen_tp'` / `row.id.includes('coding')` 推断），改为目录驱动。
+
+另外补了两处**前置拦截**，用于替代原先「必然失败的探测 + 无从下手的报错」：
+
+- **已登记模型不可改用途**：`_upsert_model` 对已登记模型一律拒绝改 `model_kind`，而前端
+  `needsTest` 会因用途变化先跑探测、失败后直接中断保存 —— 后端那条精确的 409 文案永远展示不出来。
+  现在该下拉对已登记模型直接锁定并给出说明。
+- **模型名全局占用**：模型名唯一（`llm_models.name` PK），撞名必然 409。编辑态提前点名占用方，
+  不再让用户白等一轮厂商往返。
+- **`{WorkspaceId}` 占位符**：阿里云百炼按量付费已迁移到业务空间专属域名，照抄模板必然在
+  L0 就挂。提交/探测前直接拦下并指名要替换的占位符。
+
+### B.11.5 明确未做
+
+- **探测失败仍然硬拦截保存**（B.7 建议「允许保存但标红未验证」**未采纳**）。原因是后端
+  `create_provider` / `add_provider_model` 内部各自再 probe 一次、失败即 422，这是一条独立
+  且有意保留的硬约束；要真正放宽必须前后端同时改，属独立变更。
+- 未新增 `preset_id` 字段，未改任何解析链、计价链与 DB 结构（本次**零迁移**）。
+
+### B.11.6 降级行为
+
+预置目录接口不可用（后端未部署 / 请求失败）时，抽屉落回**手填 Base URL + 高级设置里选计费口径**，
+即改造前的行为，并显式提示「预置厂商目录不可用」。不能因为一个参考数据接口不可用就让
+「新增供应商」变成死路。
+
+## B.12 当前实施补充：模型级移除与供应商卡片分组（2026-09-20）
+
+需求原文：`/settings/models?tab=providers` 「只显示已配置的厂商，一个厂商下面平铺它已配置的多个模型，
+未配置的厂商不显示；并且可以编辑已保存的模型，优化界面」。
+
+### B.12.1 先说结论：列表口径本就正确，缺的是「编辑」
+
+`GET /sys/providers` 的 `_db_rows()` **只回 DB 里真实存在的供应商**，未配置厂商不会出现；
+每个供应商的 `models` 本就是数组（多模型）。所以「只显示已配置 + 一厂商多模型」**无需改动**，
+本次真正的缺口是「已保存模型不能编辑」，以及列表仍是六列表格、读不出「谁被角色占用」。
+
+### B.12.2 编辑语义收窄为「移除」（含引用检查）
+
+对**已保存**的模型，管理端提供的动作是**移除**，不是就地改字段。理由是模型名是
+`llm_models.name` 主键、用途（`model_kind`）又是 `_upsert_model` 明确拒绝变更的字段
+（B.11.4 已锁），「改」实际上只有「删掉再按新名/新用途新增」一条路。因此：
+
+- 新增服务方法 `ModelConfigService.remove_provider_model(provider_id, model_name, operator)`。
+- 新增接口 `DELETE /sys/providers/{provider_id}/models`。
+
+### B.12.3 引用红线：三类被引用一律拒绝，不留悬空引用
+
+移除前在同一事务语义内检查，命中任一条即抛 `ModelConfigConflict`（HTTP 409）：
+
+| 引用来源 | 表 | 拒绝文案 |
+|---|---|---|
+| 角色绑定 | `llm_model_role_bindings` | 列出具体角色，要求先改绑 |
+| 专项绑定 | `llm_specialized_model_bindings` | 该模型被专项模型占用 |
+| 价格表 | `model_price`（count > 0） | 存在计费记录，先清理价格 |
+
+此外两条边界：
+
+- 模型不在 `llm_models`，但**命中代码层 `AVAILABLE_MODELS`** → 拒绝并说明「代码层内置模型，
+  不能从管理端移除」（与前端的 `source='builtin'` 判断同口径）。
+- 模型存在但归属的 `provider` 不是当前 `provider_id` → 拒绝并**点名真实归属方**，避免跨厂商误删。
+
+### B.12.4 审计记账：复用 `provider` 类型 + `rollbackable=false`
+
+`llm_config_history.object_type` 的 CHECK **只允许** `role` / `provider` / `provider_credential` /
+`provider_network_scope`，没有 `model`。本项**不改 CHECK**（改它需迁移且影响面大），而是：
+
+- `object_type='provider'`，`old_value` 存 JSON `{removedModel, displayName, modelKind}`，
+  `new_value=NULL`；
+- `rollbackable=false` —— 模型删除**不是可重放的 UPDATE**，回滚需要重新 INSERT（含用途、归属校验），
+  把它标成可一键回滚会造成「点了回滚但状态没回去」的假象。**回滚要人工重加**。
+- 落库后调用 `refresh_registry()`，让运行中的注册表立刻感知模型消失。
+
+### B.12.5 接口形态：模型名走 query 而非路径段
+
+模型名可含 `/`（如 `Qwen/Qwen3-32B`），放进路径段会被当成分隔符、路由匹配错乱。因此：
+
+```
+DELETE /sys/providers/{provider_id}/models?modelName=<urlencoded>
+```
+
+并要求 `require_idempotency_key(request)`（与其它写接口一致）。返回
+`{providerId, name, display, modelKind}`。
+
+### B.12.6 列表响应新增两个只读装饰字段
+
+`_decorate_models()` 给每个模型条目补：
+
+- `source`：`user`（在 `llm_models` 里）/ `builtin`（仅代码层）；判定键是 `(provider, name)` 二元组，
+  **不能只看 name** —— 同一模型名在不同厂商下语义不同。
+- `usedByRoles`：从 `RegistrySnapshot.roles`（role→model 映射）反查得出，**不额外查库**。
+
+### B.12.7 前端：卡片分组 + 就地说明为什么不能删
+
+- 六列表格改为**供应商卡片**（`data-testid="provider-card"`）：卡片头放显示名 / 内置·自建 /
+  驱动 / 网络与计费 / baseUrl / 密钥状态 / 探测状态 + 动作按钮；卡片体平铺该厂商全部模型，
+  每行 `用途徽标 + 模型名 + 内置标记 + 〔移除〕`。
+- 用途徽标用缩写（文本 / 向量 / 重排 / 视觉 / 语音），避免挤掉模型名。
+- **不能移除的模型按钮就地禁用并写明原因**（`modelRemovalBlockReason()`）：被角色占用 →
+  「正被角色 X 使用，需先改绑」；代码层内置 → 「代码层内置模型，不可移除」。
+  **不隐藏按钮** —— 藏起来会让用户以为功能缺失；灰掉 + 说明才是可自助的。
+- 移除走二次确认弹窗（红色），并在弹窗内提示「若仍被角色或价格表引用，后端会拒绝并说明原因」。
+
+### B.12.8 验收证据
+
+- 后端：`backend/tests/services/test_model_config_remove_model.py`（新增 8 例：成功+记账、
+  内置拒绝、不存在、归属不符、角色占用、专项占用、价格占用、空参）+ `test_model_config_write_api.py`
+  新增 3 例（幂等键缺失、query 传名断言、409 映射）+ `test_sys_providers_list_api.py` 更新 1 例、
+  新增 1 例（`source`/`usedByRoles` 正确性）。
+- 前端：`ProvidersTab.test.tsx` 22 例全过（含卡片分组、专项供应商并卡、移除拦截）；
+  `tsc --noEmit` 零错；全量 `vitest run` 322 例全过。
+
+### B.12.9 明确未做
+
+- **未提供模型改名 / 改用途**：与 B.11.4 的硬约束冲突，属独立变更。
+- **未引入 `object_type='model'`**：不动 CHECK、不加迁移。
+- **未做批量移除**：逐个确认，避免一次误删多个被引用模型。
+- 未改列表分页 / 搜索（本次只动展示与移除链路）。

@@ -1,10 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Edit3, FlaskConical, KeyRound, LockKeyhole, Plus, Save, X } from 'lucide-react'
+import { CheckCircle2, Edit3, FlaskConical, KeyRound, LockKeyhole, Plus, Save, Trash2, X } from 'lucide-react'
 import {
   addProviderModel,
   createProvider,
+  removeProviderModel,
   saveProvider,
   verifyDraftProvider,
   verifyProvider,
@@ -19,6 +20,9 @@ import {
   probeStepSummary,
   maskSecret,
   type ModelKind,
+  type PlanId,
+  type PresetPlan,
+  type ProviderPreset,
   type ProviderRow,
 } from '@/types/modelConfig'
 import { useToast } from '@/components/shared/Toast'
@@ -29,11 +33,15 @@ interface Props {
   source: 'db' | 'builtin'
   canAdmin: boolean
   onChanged: () => Promise<unknown>
+  /** 计费计划「三选一」选项（来自后端预置目录接口）。 */
+  plans: PresetPlan[]
+  /** 预置端点目录。为空表示接口不可用，抽屉降级为手填 Base URL。 */
+  presets: ProviderPreset[]
+  presetsLoading: boolean
 }
 
 type Draft = {
   id: string | null
-  kind: 'custom' | 'coding' | 'provider'
   displayName: string
   driver: ProviderRow['driver']
   baseUrl: string
@@ -42,6 +50,10 @@ type Draft = {
   networkScope: ProviderRow['networkScope']
   billing: ProviderRow['billing']
   enabled: boolean
+  /** 计费计划（三选一）。`''` = 未套用预置（自建 / 内网 / 目录不可用）。 */
+  plan: PlanId | ''
+  /** 命中的预置条目 id；`null` = 自定义或未命中。 */
+  presetId: string | null
   apiKey?: string
   clearApiKey?: boolean
   originalBaseUrl: string
@@ -60,6 +72,42 @@ type ModelDraft = {
   error: string | null
 }
 
+/** 移除模型前的确认态。后端对内置/被占用的模型会回 409，理由直接展示。 */
+type ModelRemoval = {
+  provider: ProviderRow
+  name: string
+  modelKind: ModelKind
+  busy: boolean
+  error: string | null
+}
+
+/** 该模型能否被移除，以及不能的原因（用于就地禁用按钮并说明）。 */
+function modelRemovalBlockReason(model: {
+  source?: 'user' | 'builtin'
+  usedByRoles?: string[]
+}): string | null {
+  const roles = model.usedByRoles ?? []
+  if (roles.length) return `正被角色 ${roles.join('、')} 使用，需先改绑`
+  if (model.source !== 'user') return '代码层内置模型，不可移除'
+  return null
+}
+
+function modelKindShortLabel(kind: ModelKind): string {
+  if (kind === 'embedding') return '向量'
+  if (kind === 'rerank') return '重排'
+  if (kind === 'vision') return '视觉'
+  if (kind === 'speech') return '语音'
+  return '文本'
+}
+
+function modelKindBadgeClass(kind: ModelKind): string {
+  if (kind === 'embedding') return 'bg-indigo-50 text-indigo-700'
+  if (kind === 'rerank') return 'bg-amber-50 text-amber-700'
+  if (kind === 'vision') return 'bg-sky-50 text-sky-700'
+  if (kind === 'speech') return 'bg-rose-50 text-rose-700'
+  return 'bg-slate-100 text-text-muted'
+}
+
 function probeStatusLabel(status: ProbeStatus): string {
   if (status === 'pass') return '通过'
   if (status === 'fail_degraded') return '降级跳过'
@@ -67,10 +115,81 @@ function probeStatusLabel(status: ProbeStatus): string {
   return '失败'
 }
 
-function providerOptionLabel(row: ProviderRow): string {
-  if (row.id === 'qwen_tp') return 'Token Plan（通义千问）'
-  if (row.id.includes('coding')) return `Coding Plan（${row.displayName}）`
-  return row.displayName
+/** 计划 → 推荐 billing。
+ *
+ *  与后端 `provider_presets.PLAN_BILLING` 同口径（设计文档 B.2/B.3 已拍板）：
+ *  Token Plan 与 Coding Plan 都是预付/订阅制 → `subscription`，
+ *  只有按量付费 → `metered`。**计划不是第 4 个 billing 值**，别在这里造新值。
+ */
+function billingForPlan(plans: PresetPlan[], plan: Draft['plan']): ProviderRow['billing'] | null {
+  if (!plan) return null
+  return plans.find((item) => item.id === plan)?.billing ?? null
+}
+
+/** 预置条目在下拉里的文案：「厂商 · 地域/版本 · 协议」。 */
+function presetOptionLabel(preset: ProviderPreset): string {
+  return [preset.vendor, preset.variant, preset.driverLabel].filter(Boolean).join(' · ')
+}
+
+/** 预置回填的显示名。
+ *
+ *  同厂同计划下常有两个协议的条目，显示名必须能区分，
+ *  否则落库时 slug 会撞成 `xxx-2`（`_provider_slug` 的去重后缀）。
+ */
+function presetDisplayName(preset: ProviderPreset, planLabel: string): string {
+  const base = [preset.vendor, preset.variant, planLabel].filter(Boolean).join(' · ')
+  return preset.driver === 'anthropic' ? `${base}（Anthropic）` : base
+}
+
+/** 归一化 base URL 以便反查预置。
+ *
+ *  与后端 `provider_presets.normalize_base_url` 同口径：去尾斜杠、
+ *  scheme/host 转小写，但**不折叠路径语义** —— `/api/v3` 与
+ *  `/api/coding/v3` 归一化后必须仍然不同，否则回填会串端点。
+ */
+function normalizeBaseUrl(raw: string): string {
+  const trimmed = (raw || '').trim()
+  if (!trimmed) return ''
+  const marker = trimmed.indexOf('://')
+  if (marker < 0) return trimmed.replace(/\/+$/, '')
+  const scheme = trimmed.slice(0, marker).toLowerCase()
+  const rest = trimmed.slice(marker + 3)
+  const slash = rest.indexOf('/')
+  if (slash < 0) return `${scheme}://${rest.toLowerCase()}`.replace(/\/+$/, '')
+  const host = rest.slice(0, slash).toLowerCase()
+  const path = rest.slice(slash + 1).replace(/\/+$/, '')
+  return (path ? `${scheme}://${host}/${path}` : `${scheme}://${host}`).replace(/\/+$/, '')
+}
+
+/** 按（协议, base_url）反查命中的预置。
+ *
+ *  编辑态没有 preset id 可读（库里不存），只能反查。`billing` 用于消歧：
+ *  智谱 `open.bigmodel.cn/api/anthropic` 在 Coding Plan 与按量付费下是同一
+ *  URL，靠实例自身的 billing 才能选出正确计划。**不做模糊匹配** ——
+ *  匹配不到就返回 null，界面落「未套用预置」，不把自建地址误标成官方端点。
+ */
+function findPresetForRow(
+  row: ProviderRow,
+  presets: ProviderPreset[],
+  plans: PresetPlan[],
+): ProviderPreset | null {
+  const target = normalizeBaseUrl(row.baseUrl)
+  if (!target) return null
+  const candidates = presets.filter(
+    (preset) => preset.driver === row.driver && normalizeBaseUrl(preset.baseUrl) === target,
+  )
+  if (candidates.length === 0) return null
+  return candidates.find((preset) => billingForPlan(plans, preset.plan) === row.billing) ?? candidates[0]
+}
+
+/** base_url 里还没被替换的占位符名（如 `WorkspaceId`）。
+ *
+ *  阿里云百炼按量付费用的是业务空间专属域名，照抄模板必然在 L0 就挂 ——
+ *  与其让用户等一次失败的探测，不如提交前就点出来。
+ */
+function unresolvedPlaceholder(baseUrl: string): string | null {
+  const match = baseUrl.match(/\{([^}]+)\}/)
+  return match ? match[1] : null
 }
 
 function formatElapsed(ms: number): string {
@@ -122,12 +241,19 @@ function ProbeResultDetails({ result }: { result: ProbeResponse }) {
   )
 }
 
-function draftFromRow(row: ProviderRow, defaultModels: Record<string, string>): Draft {
+function draftFromRow(
+  row: ProviderRow,
+  defaultModels: Record<string, string>,
+  presets: ProviderPreset[],
+  plans: PresetPlan[],
+): Draft {
   const modelName = row.modelName || defaultModels[row.id] || ''
   const modelKind = row.modelKind || row.models?.find((item) => item.name === modelName)?.modelKind || 'chat'
+  // 计划与厂商由（协议, base_url）反查回填。库未就绪或地址是自建时反查落空，
+  // 此时 plan='' / presetId=null，界面显示「未套用预置」，不假装它属于某家厂商。
+  const matched = findPresetForRow(row, presets, plans)
   return {
     id: row.id,
-    kind: 'provider',
     displayName: row.displayName,
     driver: row.driver,
     baseUrl: row.baseUrl,
@@ -136,6 +262,8 @@ function draftFromRow(row: ProviderRow, defaultModels: Record<string, string>): 
     networkScope: row.networkScope,
     billing: row.billing,
     enabled: row.enabled,
+    plan: matched?.plan ?? '',
+    presetId: matched?.id ?? null,
     originalBaseUrl: row.baseUrl,
     originalModelName: modelName,
     originalModelKind: modelKind,
@@ -147,7 +275,6 @@ function draftFromRow(row: ProviderRow, defaultModels: Record<string, string>): 
 function newDraft(): Draft {
   return {
     id: null,
-    kind: 'custom',
     displayName: '',
     driver: 'openai',
     baseUrl: '',
@@ -156,6 +283,8 @@ function newDraft(): Draft {
     networkScope: 'public',
     billing: 'metered',
     enabled: true,
+    plan: '',
+    presetId: null,
     originalBaseUrl: '',
     originalModelName: '',
     originalModelKind: 'chat',
@@ -164,19 +293,20 @@ function newDraft(): Draft {
   }
 }
 
-function codingDraft(): Draft {
-  return {
-    ...newDraft(),
-    kind: 'coding',
-    displayName: 'Coding Plan',
-    billing: 'subscription',
-  }
-}
-
-export default function ProvidersTab({ providers, defaultModels, source, canAdmin, onChanged }: Props) {
+export default function ProvidersTab({
+  providers,
+  defaultModels,
+  source,
+  canAdmin,
+  onChanged,
+  plans,
+  presets,
+  presetsLoading,
+}: Props) {
   const toast = useToast()
   const [editing, setEditing] = useState<Draft | null>(null)
   const [addingModel, setAddingModel] = useState<ModelDraft | null>(null)
+  const [removingModel, setRemovingModel] = useState<ModelRemoval | null>(null)
   const [modelBusy, setModelBusy] = useState(false)
   const [busy, setBusy] = useState(false)
   const [probeResults, setProbeResults] = useState<Record<string, ProbeResponse>>({})
@@ -224,7 +354,7 @@ export default function ProvidersTab({ providers, defaultModels, source, canAdmi
 
   function begin(row: ProviderRow) {
     resetProbe()
-    setEditing(draftFromRow(row, defaultModels))
+    setEditing(draftFromRow(row, defaultModels, presets, plans))
   }
 
   function beginAddModel(row: ProviderRow) {
@@ -257,22 +387,71 @@ export default function ProvidersTab({ providers, defaultModels, source, canAdmi
     }
   }
 
-  function chooseProvider(value: string) {
-    if (value === '__custom') {
-      setEditing(newDraft())
-      resetProbe()
-      return
+  function beginRemoveModel(row: ProviderRow, model: { name: string; modelKind: ModelKind }) {
+    setRemovingModel({
+      provider: row,
+      name: model.name,
+      modelKind: model.modelKind,
+      busy: false,
+      error: null,
+    })
+  }
+
+  async function confirmRemoveModel() {
+    if (!removingModel) return
+    setRemovingModel({ ...removingModel, busy: true, error: null })
+    try {
+      await removeProviderModel(removingModel.provider.id, removingModel.name)
+      toast.success(`已移除模型 ${removingModel.name}`)
+      setRemovingModel(null)
+      await onChanged()
+    } catch (error) {
+      // 不弹 toast：409 的原因（被哪个角色占用）就在弹窗里，用户要能对着看
+      const message = error instanceof Error ? error.message : '移除模型失败'
+      setRemovingModel({ ...removingModel, busy: false, error: message })
     }
-    if (value === '__coding') {
-      setEditing(codingDraft())
-      resetProbe()
-      return
-    }
-    const row = providers.find((item) => item.id === value)
-    if (row) {
-      setEditing(draftFromRow(row, defaultModels))
-      resetProbe()
-    }
+  }
+
+  /** 切换计费计划（三选一）。
+   *
+   *  若当前地址是「上一个计划的预置」带出来的，必须一并清掉 —— 留着它
+   *  正是本功能要消灭的事故：把火山引擎按量 `/api/v3` 用在 Coding Plan 上。
+   *  手填的自定义地址则保留，不丢用户输入。
+   */
+  function applyPlan(nextPlan: PlanId | '') {
+    setEditing((current) => {
+      if (!current) return current
+      const cameFromPreset = current.presetId !== null
+      return {
+        ...current,
+        plan: nextPlan,
+        presetId: null,
+        baseUrl: cameFromPreset ? '' : current.baseUrl,
+        billing: billingForPlan(plans, nextPlan) ?? current.billing,
+      }
+    })
+    resetProbe()
+  }
+
+  /** 选中预置条目：一次回填地址、协议、显示名与推荐计费口径。 */
+  function applyPreset(presetId: string) {
+    setEditing((current) => {
+      if (!current) return current
+      if (presetId === '__custom') return { ...current, presetId: null }
+      const preset = presets.find((item) => item.id === presetId)
+      if (!preset) return current
+      const planLabel = plans.find((item) => item.id === preset.plan)?.label ?? ''
+      return {
+        ...current,
+        plan: preset.plan,
+        presetId: preset.id,
+        driver: preset.driver,
+        baseUrl: preset.baseUrl,
+        displayName: presetDisplayName(preset, planLabel),
+        billing: billingForPlan(plans, preset.plan) ?? current.billing,
+      }
+    })
+    resetProbe()
   }
 
   function draftPayload(draft: Draft) {
@@ -292,6 +471,13 @@ export default function ProvidersTab({ providers, defaultModels, source, canAdmi
     const modelName = editing.modelName.trim()
     if (!baseUrl) {
       const message = 'Base URL 不能为空'
+      setDraftProbeError(message)
+      toast.error(message)
+      return null
+    }
+    const placeholder = unresolvedPlaceholder(baseUrl)
+    if (placeholder) {
+      const message = `请先把 Base URL 里的 {${placeholder}} 替换为你的实际取值`
       setDraftProbeError(message)
       toast.error(message)
       return null
@@ -344,6 +530,13 @@ export default function ProvidersTab({ providers, defaultModels, source, canAdmi
     const modelName = editing.modelName.trim()
     if (!modelName) {
       const message = '模型名称不能为空'
+      setDraftProbeError(message)
+      toast.error(message)
+      return
+    }
+    const placeholder = unresolvedPlaceholder(editing.baseUrl.trim())
+    if (placeholder) {
+      const message = `请先把 Base URL 里的 {${placeholder}} 替换为你的实际取值`
       setDraftProbeError(message)
       toast.error(message)
       return
@@ -434,83 +627,104 @@ export default function ProvidersTab({ providers, defaultModels, source, canAdmi
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
         <div>
           <h2 className="text-xs font-medium text-text-primary">供应商与密钥</h2>
-           <p className="mt-1 text-[11px] text-text-muted">文本、OCR、向量、重排、视觉和语音模型都在这里按供应商登记；同一供应商的模型会合并展示，每个模型可独立测试和追加。</p>
+          <p className="mt-1 text-[11px] text-text-muted">只列出已配置的供应商；每个供应商下平铺它已登记的模型。自建模型可移除，代码层内置模型与被角色占用的模型会就地标明原因。</p>
         </div>
         <div className="flex items-center gap-2">
           {source !== 'db' && <span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] text-amber-700">DB 未就绪</span>}
           {canAdmin && source === 'db' && <button onClick={beginNew} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-[11px] text-white hover:bg-accent/90"><Plus size={13} />新增供应商</button>}
         </div>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[960px] text-left text-xs">
-          <thead>
-            <tr className="border-b border-slate-100 text-[10px] text-text-muted">
-              <th className="px-4 py-3">供应商</th>
-              <th className="px-4 py-3">协议 / 地址</th>
-              <th className="px-4 py-3">密钥</th>
-              <th className="px-4 py-3">模型</th>
-              <th className="px-4 py-3">探测</th>
-              <th className="px-4 py-3 text-right">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {providers.map((row) => {
-              const liveResult = probeResults[row.id]
-              const liveError = probeErrors[row.id]
-              const isTesting = testingTarget === row.id
-              const visibleModels = row.models?.length
-                ? row.models
-                : [{ name: row.modelName || defaultModels[row.id] || '—', modelKind: row.modelKind || 'chat' as ModelKind }]
-              return (
-                <tr key={row.id} className="border-b border-slate-50 align-top last:border-0">
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-text-primary">{row.displayName}</div>
-                    <div className="mt-0.5 font-mono text-[10px] text-text-muted">{row.id}{row.isBuiltin ? ' · 内置' : ' · 自建'}</div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="font-mono text-[10px] text-text-secondary">{row.driver}</div>
-                    <div className="mt-1 max-w-[330px] truncate text-[11px] text-text-muted">{row.baseUrl || '跟随环境变量 / 默认地址'}</div>
-                    <div className="mt-1 text-[10px] text-text-muted">{row.networkScope === 'private' ? '内网白名单' : '公网地址'} · {row.billing}</div>
-                  </td>
-                  <td className="px-4 py-3">
-                    {row.credential.configured ? <span className="flex items-center gap-1 text-emerald-700"><LockKeyhole size={13} />已配置 <span className="font-mono text-[10px]">{maskSecret(row.credential.last4, null) || '****'}</span></span> : <span className="text-text-muted">未托管（可走环境变量）</span>}
-                    {row.credential.fingerprint && <div className="mt-1 font-mono text-[10px] text-text-muted">指纹 {row.credential.fingerprint}</div>}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-[10px] text-text-secondary">
-                    <div className="mb-1 font-sans text-[10px] text-text-muted">已配置 {visibleModels.filter((model) => model.name !== '—').length} 个模型</div>
-                    {visibleModels.map((model) => <div key={model.name} className="mb-1 last:mb-0"><span className="mr-1 rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-sans text-text-muted">{modelKindLabel(model.modelKind)}</span>{model.name}</div>)}
-                  </td>
-                  <td className="px-4 py-3">
-                     {isTesting ? <div role="status" className="rounded-lg border border-accent/20 bg-accent/5 px-2.5 py-2 text-[10px] text-accent">正在{probeModeLabel(testingMode || 'fast')} · 已耗时 {formatLiveElapsed(testingElapsedMs)}</div> : liveResult ? <ProbeResultDetails result={liveResult} /> : row.lastProbe ? <>
-                      <span className={row.lastProbe.ok ? 'flex items-center gap-1 text-emerald-700' : 'text-red-700'}>
-                        {row.lastProbe.ok && <CheckCircle2 size={13} />}
-                        {row.lastProbe.ok ? '已通过' : `卡在 ${row.lastProbe.worstGrade || '未知'}`}
-                      </span>
-                      {!row.lastProbe.ok && row.lastProbe.worstGrade && <div className="mt-1 max-w-[250px] text-[10px] text-red-700">建议：{probeFallbackSummary(row.lastProbe.worstGrade, 'fail')}</div>}
-                    </> : <span className="text-text-muted">未验证</span>}
-                    {liveError && <div className="mt-2 max-w-[280px] break-words rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[10px] text-red-800">{liveError}</div>}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex justify-end gap-1.5">
-                      <button disabled={!canAdmin || busy || source !== 'db'} onClick={() => { void testSaved(row, 'fast') }} className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-text-secondary disabled:opacity-40"><FlaskConical size={12} />{isTesting && testingMode === 'fast' ? `测试中 ${formatLiveElapsed(testingElapsedMs)}` : '测试'}</button>
-                      <button disabled={!canAdmin || busy || source !== 'db'} onClick={() => { void testSaved(row, 'full') }} className="flex items-center gap-1 rounded-lg border border-accent/20 px-2.5 py-1.5 text-[11px] text-accent disabled:opacity-40">{isTesting && testingMode === 'full' ? `完整测试中 ${formatLiveElapsed(testingElapsedMs)}` : '完整测试'}</button>
-                      {canAdmin && source === 'db' && <><button onClick={() => beginAddModel(row)} className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5"><Plus size={12} />新增模型</button><button onClick={() => begin(row)} className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5"><Edit3 size={12} />编辑</button></>}
+        <div className="divide-y divide-slate-100">
+          {providers.map((row) => {
+            const liveResult = probeResults[row.id]
+            const liveError = probeErrors[row.id]
+            const isTesting = testingTarget === row.id
+            const visibleModels: NonNullable<ProviderRow['models']> = row.models?.length
+              ? row.models
+              : [{
+                  name: row.modelName || defaultModels[row.id] || '—',
+                  modelKind: (row.modelKind || 'chat') as ModelKind,
+                  source: 'builtin' as const,
+                  usedByRoles: [],
+                }]
+            return (
+              <div key={row.id} data-testid="provider-card" className="px-4 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-text-primary">{row.displayName}</span>
+                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-text-muted">{row.isBuiltin ? '内置' : '自建'}</span>
+                      <span className="rounded bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] text-accent">{row.driver}</span>
+                      <span className="text-[10px] text-text-muted">{row.networkScope === 'private' ? '内网白名单' : '公网'} · {row.billing}</span>
                     </div>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-        {!providers.length && <div className="px-4 py-10 text-center text-xs text-text-muted">暂无供应商配置</div>}
-      </div>
+                    <div className="mt-1.5 truncate font-mono text-[10px] text-text-secondary">{row.baseUrl || '跟随环境变量 / 默认地址'}</div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-text-muted">
+                      <span className="font-mono">{row.id}</span>
+                      {row.credential.configured
+                        ? <span className="flex items-center gap-1 text-emerald-700"><LockKeyhole size={11} />密钥已配置 <span className="font-mono">{maskSecret(row.credential.last4, null) || '****'}</span></span>
+                        : <span>未托管密钥（可走环境变量）</span>}
+                      {row.credential.fingerprint && <span className="font-mono">指纹 {row.credential.fingerprint}</span>}
+                      {isTesting
+                        ? <span className="text-accent">正在{probeModeLabel(testingMode || 'fast')} · 已耗时 {formatLiveElapsed(testingElapsedMs)}</span>
+                        : row.lastProbe
+                          ? <span className={row.lastProbe.ok ? 'flex items-center gap-1 text-emerald-700' : 'text-red-700'}>
+                              {row.lastProbe.ok && <CheckCircle2 size={11} />}
+                              {row.lastProbe.ok ? '已通过' : `卡在 ${row.lastProbe.worstGrade || '未知'}`}
+                            </span>
+                          : <span>未验证</span>}
+                    </div>
+                  </div>
+                  <div className="flex flex-shrink-0 flex-wrap justify-end gap-1.5">
+                    <button disabled={!canAdmin || busy || source !== 'db'} onClick={() => { void testSaved(row, 'fast') }} className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-text-secondary disabled:opacity-40"><FlaskConical size={12} />{isTesting && testingMode === 'fast' ? `测试中 ${formatLiveElapsed(testingElapsedMs)}` : '测试'}</button>
+                    <button disabled={!canAdmin || busy || source !== 'db'} onClick={() => { void testSaved(row, 'full') }} className="flex items-center gap-1 rounded-lg border border-accent/20 px-2.5 py-1.5 text-[11px] text-accent disabled:opacity-40">{isTesting && testingMode === 'full' ? `完整测试中 ${formatLiveElapsed(testingElapsedMs)}` : '完整测试'}</button>
+                    {canAdmin && source === 'db' && <><button onClick={() => beginAddModel(row)} className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5"><Plus size={12} />新增模型</button><button onClick={() => begin(row)} className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5"><Edit3 size={12} />编辑</button></>}
+                  </div>
+                </div>
+
+                <div className="mt-3 overflow-hidden rounded-lg border border-slate-100">
+                  {visibleModels.map((model) => {
+                    const blockReason = modelRemovalBlockReason(model)
+                    return (
+                      <div key={model.name} className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-50 px-3 py-2 last:border-0">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] ${modelKindBadgeClass(model.modelKind)}`}>{modelKindShortLabel(model.modelKind)}</span>
+                          <span className="truncate font-mono text-[11px] text-text-secondary">{model.name}</span>
+                          {model.source !== 'user' && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-text-muted">内置</span>}
+                        </div>
+                        <div className="flex flex-shrink-0 items-center gap-2">
+                          {blockReason && <span className="text-[10px] text-text-muted">{blockReason}</span>}
+                          {canAdmin && source === 'db' && <button disabled={Boolean(blockReason)} title={blockReason ?? undefined} aria-label={`移除模型 ${model.name}`} onClick={() => beginRemoveModel(row, model)} className="flex items-center gap-1 rounded-lg border border-black/10 px-2 py-1 text-[11px] text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"><Trash2 size={11} />移除</button>}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {(liveResult || liveError || (!isTesting && row.lastProbe && !row.lastProbe.ok)) && (
+                  <div className="mt-2 space-y-2">
+                    {liveResult && <ProbeResultDetails result={liveResult} />}
+                    {liveError && <div className="break-words rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[10px] text-red-800">{liveError}</div>}
+                    {!liveResult && !liveError && !isTesting && row.lastProbe && !row.lastProbe.ok && row.lastProbe.worstGrade && (
+                      <div className="rounded-lg border border-red-100 bg-red-50/60 px-2.5 py-2 text-[10px] text-red-700">建议：{probeFallbackSummary(row.lastProbe.worstGrade, 'fail')}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          {!providers.length && <div className="px-4 py-10 text-center text-xs text-text-muted">暂无供应商配置</div>}
+        </div>
 
       {editing && <ProviderEditor
         draft={editing}
         providers={providers}
+        plans={plans}
+        presets={presets}
+        presetsLoading={presetsLoading}
         busy={busy}
         setDraft={setEditing}
-        onProviderChange={chooseProvider}
+        onPlanChange={applyPlan}
+        onPresetChange={applyPreset}
         probeResult={draftProbe}
         probeError={draftProbeError}
         testingMode={testingTarget === 'draft' ? testingMode : null}
@@ -527,6 +741,31 @@ export default function ProvidersTab({ providers, defaultModels, source, canAdmi
         onSave={() => { void saveAddedModel() }}
         onCancel={() => setAddingModel(null)}
       />}
+      {removingModel && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6" role="dialog" aria-modal="true" aria-label={`移除模型 ${removingModel.name}`}>
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 text-sm font-semibold text-text-primary"><Trash2 size={15} className="text-red-700" />移除模型</div>
+                <p className="mt-1 text-[11px] text-text-muted">供应商：{removingModel.provider.displayName}</p>
+              </div>
+              <button onClick={() => setRemovingModel(null)} className="text-text-muted hover:text-text-primary" aria-label="关闭"><X size={16} /></button>
+            </div>
+            <div className="mt-5 space-y-3">
+              <div className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                <span className={`rounded px-1.5 py-0.5 text-[10px] ${modelKindBadgeClass(removingModel.modelKind)}`}>{modelKindShortLabel(removingModel.modelKind)}</span>
+                <span className="font-mono text-xs text-text-secondary">{removingModel.name}</span>
+              </div>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">移除后该模型从供应商目录消失。若仍被角色或价格表引用，后端会拒绝并说明原因，不会留下悬空引用。</div>
+              {removingModel.error && <div className="break-words rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800">{removingModel.error}</div>}
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button disabled={removingModel.busy} onClick={() => setRemovingModel(null)} className="rounded-lg border border-black/10 px-3 py-2 text-xs text-text-secondary">取消</button>
+              <button disabled={removingModel.busy} onClick={() => { void confirmRemoveModel() }} className="flex items-center gap-1 rounded-lg bg-red-700 px-3 py-2 text-xs text-white disabled:opacity-50"><Trash2 size={13} />{removingModel.busy ? '移除中…' : '确认移除'}</button>
+            </div>
+          </div>
+        </div>
+      )}
       </section>
     </div>
   )
@@ -583,9 +822,13 @@ function ProviderModelEditor({
 function ProviderEditor({
   draft,
   providers,
+  plans,
+  presets,
+  presetsLoading,
   busy,
   setDraft,
-  onProviderChange,
+  onPlanChange,
+  onPresetChange,
   probeResult,
   probeError,
   testingMode,
@@ -597,9 +840,13 @@ function ProviderEditor({
 }: {
   draft: Draft
   providers: ProviderRow[]
+  plans: PresetPlan[]
+  presets: ProviderPreset[]
+  presetsLoading: boolean
   busy: boolean
   setDraft: (value: Draft) => void
-  onProviderChange: (value: string) => void
+  onPlanChange: (value: PlanId | '') => void
+  onPresetChange: (value: string) => void
   probeResult: ProbeResponse | null
   probeError: string | null
   testingMode: ProbeMode | null
@@ -611,41 +858,106 @@ function ProviderEditor({
 }) {
   const update = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch })
   const isNew = !draft.id
-  const selectedValue = draft.id || (draft.kind === 'coding' ? '__coding' : '__custom')
+  const row = draft.id ? providers.find((item) => item.id === draft.id) ?? null : null
+
+  // 预置目录可用性。不可用时整块降级为手填 —— 不能把「新增供应商」做成死路。
+  const catalogReady = plans.length > 0 && presets.length > 0
+  const planPresets = presets.filter((item) => item.plan === draft.plan)
+  const selectedPreset = presets.find((item) => item.id === draft.presetId) ?? null
+  const placeholder = unresolvedPlaceholder(draft.baseUrl)
+
+  // 协议可选性：内置供应商的 driver 后端锁定（改了会 422）；ollama / specialized
+  // 不在预置目录里，也不该被这个下拉悄悄改掉，故一并锁住。
+  const driverOptions: Array<{ value: string; label: string }> = [
+    { value: 'openai', label: 'OpenAI 兼容' },
+    { value: 'anthropic', label: 'Anthropic 兼容' },
+  ]
+  const driverLocked = !isNew && (
+    Boolean(row?.isBuiltin) || (draft.driver !== 'openai' && draft.driver !== 'anthropic')
+  )
+
+  // 已登记模型：决定「模型用途」能不能改 —— 后端对已登记模型一律拒绝改用途，
+  // 所以这里必须前置拦住，否则用户只会看到一次必然失败的探测。
+  const registeredModels = row?.models ?? []
+  const trimmedName = draft.modelName.trim()
+  const currentRegistered = registeredModels.find((model) => model.name === trimmedName) ?? null
+  const kindLocked = Boolean(currentRegistered)
+  // 模型名全局唯一：被别的供应商占了就一定会 409，提前点名。
+  // 已经是本供应商自己的模型时不再提示 —— 那是「改自己」，不是「撞别人」。
+  const occupiedBy = trimmedName && !currentRegistered
+    ? providers.find((provider) => provider.id !== draft.id
+        && (provider.models ?? []).some((model) => model.name === trimmedName)) ?? null
+    : null
+
+  function changeModelName(next: string) {
+    // 改成另一个已登记模型名时，用途跟着走 —— 否则必然撞上「不可改用途」的 409。
+    const registered = registeredModels.find((model) => model.name === next.trim())
+    update(registered ? { modelName: next, modelKind: registered.modelKind } : { modelName: next })
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6" role="dialog" aria-modal="true" aria-label={isNew ? '新增供应商' : `编辑 ${draft.displayName}`}>
       <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold text-text-primary"><KeyRound size={16} className="text-accent" />{isNew ? '新增供应商' : `编辑 ${draft.displayName}`}</div>
-            <p className="mt-1 text-[11px] text-text-muted">输入 API Key 和模型名称，先快速测试连接再保存；完整测试可选。</p>
+            <p className="mt-1 text-[11px] text-text-muted">先选计费计划与厂商端点（自动填地址与协议），再填 API Key 和模型名称，测试通过后保存。</p>
           </div>
           <button onClick={onCancel} className="text-text-muted hover:text-text-primary" aria-label="关闭"><X size={16} /></button>
         </div>
 
         <div className="mt-5 space-y-3">
-          <label className="block text-xs text-text-secondary">供应商
-            <select disabled={!isNew} value={selectedValue} onChange={(event) => onProviderChange(event.target.value)} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm disabled:bg-slate-50">
-              <option value="__custom">自定义 API（OpenAI 兼容）</option>
-              <option value="__coding">Coding Plan（OpenAI 兼容）</option>
-              {providers.map((row) => <option key={row.id} value={row.id}>{providerOptionLabel(row)}</option>)}
+          {!catalogReady && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">{presetsLoading ? '预置厂商目录加载中…' : '预置厂商目录不可用（后端未部署该接口或请求失败）。可手动填写 Base URL，并在「高级设置」里选定计费口径。'}</div>}
+
+          <label className="block text-xs text-text-secondary">计费计划
+            <select data-testid="provider-plan" value={draft.plan} onChange={(event) => onPlanChange(event.target.value as PlanId | '')} disabled={!catalogReady} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm disabled:bg-slate-50">
+              <option value="">未套用预置（自建 / 内网）</option>
+              {plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.label}</option>)}
             </select>
+            <span className="mt-1 block text-[10px] text-text-muted">按量付费与 Token Plan / Coding Plan 走的是不同端点，用错会产生额外费用。</span>
           </label>
 
-          <label className="block text-xs text-text-secondary">Base URL
-            <input value={draft.baseUrl} onChange={(event) => update({ baseUrl: event.target.value })} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="https://api.example.com/v1" autoComplete="url" />
+          <label className="block text-xs text-text-secondary">厂商 · 协议
+            <select data-testid="provider-preset" value={draft.presetId ?? '__custom'} onChange={(event) => onPresetChange(event.target.value)} disabled={!catalogReady || !draft.plan} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm disabled:bg-slate-50">
+              <option value="__custom">自定义（手填 Base URL）</option>
+              {planPresets.map((preset) => <option key={preset.id} value={preset.id}>{presetOptionLabel(preset)}</option>)}
+            </select>
+            {!draft.plan && catalogReady && <span className="mt-1 block text-[10px] text-text-muted">先选计费计划，这里才会列出该计划下的厂商端点。</span>}
           </label>
+
+          {selectedPreset && (selectedPreset.note || selectedPreset.apiKeyHint) && <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[11px]">{selectedPreset.apiKeyHint && <div className="text-text-muted">API Key 格式：{selectedPreset.apiKeyHint}</div>}{selectedPreset.note && <div className="mt-0.5 text-amber-700">{selectedPreset.note}</div>}</div>}
+
+          <label className="block text-xs text-text-secondary">显示名
+            <input data-testid="provider-display-name" value={draft.displayName} onChange={(event) => update({ displayName: event.target.value })} maxLength={128} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm" placeholder="例如：火山引擎 · Coding Plan" autoComplete="off" />
+            <span className="mt-1 block text-[10px] text-text-muted">留空则由地址域名兜底；显示名会参与生成供应商 ID。</span>
+          </label>
+
+          <div className="grid gap-3 md:grid-cols-[1fr,2fr]">
+            <label className="block text-xs text-text-secondary">协议
+              <select data-testid="provider-driver" value={draft.driver} onChange={(event) => update({ driver: event.target.value as Draft['driver'] })} disabled={driverLocked} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs disabled:bg-slate-50">
+                {!driverOptions.some((option) => option.value === draft.driver) && <option value={draft.driver}>{draft.driver}</option>}
+                {driverOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <label className="block text-xs text-text-secondary">Base URL
+              <input data-testid="provider-base-url" value={draft.baseUrl} onChange={(event) => update({ baseUrl: event.target.value })} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="https://api.example.com/v1" autoComplete="url" />
+            </label>
+          </div>
+          <span className="block text-[10px] text-text-muted">{driverLocked ? '内置供应商的协议由代码锁定，不可更改。' : '协议随预置自动选定，也可手动修改。'}</span>
+
+          {placeholder && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">地址里的 {'{'} {placeholder} {'}'} 是占位符，必须替换成你自己的取值才能测试。</div>}
 
           <label className="block text-xs text-text-secondary">API Key
-            <input type="password" value={draft.apiKey || ''} onChange={(event) => update({ apiKey: event.target.value || undefined, clearApiKey: false })} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" autoComplete="new-password" placeholder={draft.credentialConfigured ? `已配置 ${maskSecret(draft.keyLast4, null) || '****'}，留空则保持不变` : '输入你的 API Key'} />
+            <input data-testid="provider-api-key" type="password" value={draft.apiKey || ''} onChange={(event) => update({ apiKey: event.target.value || undefined, clearApiKey: false })} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" autoComplete="new-password" placeholder={draft.credentialConfigured ? `已配置 ${maskSecret(draft.keyLast4, null) || '****'}，留空则保持不变` : '输入你的 API Key'} />
           </label>
 
           <label className="block text-xs text-text-secondary">模型名称
-            <input value={draft.modelName} onChange={(event) => update({ modelName: event.target.value })} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm" placeholder="例如：deepseek-v4-pro、qwen3.7-plus" autoComplete="off" />
+            <input data-testid="provider-model-name" value={draft.modelName} onChange={(event) => changeModelName(event.target.value)} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm" placeholder="例如：deepseek-v4-pro、qwen3.7-plus" autoComplete="off" />
           </label>
+          {occupiedBy && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800">模型名「{trimmedName}」已属于供应商「{occupiedBy.displayName}」。模型名全局唯一，保存会被拒绝 —— 请换个名字，或改去那个供应商下追加。</div>}
 
           <label className="block text-xs text-text-secondary">模型用途
-            <select value={draft.modelKind} onChange={(event) => update({ modelKind: event.target.value as ModelKind })} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs">
+            <select data-testid="provider-model-kind" value={kindLocked ? currentRegistered!.modelKind : draft.modelKind} onChange={(event) => update({ modelKind: event.target.value as ModelKind })} disabled={kindLocked} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs disabled:bg-slate-50">
             <option value="chat">文本模型（对话 / 评测 / 文档处理）</option>
             <option value="embedding">向量模型（Embedding）</option>
             <option value="rerank">重排模型（Rerank）</option>
@@ -654,12 +966,21 @@ function ProviderEditor({
             </select>
             <span className="mt-1 block text-[10px] text-text-muted">用途决定可绑定的角色和测试接口，协议仍由供应商配置决定。</span>
           </label>
+          {currentRegistered && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">「{currentRegistered.name}」已登记为{modelKindLabel(currentRegistered.modelKind)}，用途不可更改。要换用途请改用另一个模型名。</div>}
+
+          {!isNew && registeredModels.length > 0 && <div className="rounded-lg border border-slate-100 px-3 py-2">
+            <div className="text-[11px] text-text-secondary">该供应商已登记 {registeredModels.length} 个模型</div>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">{registeredModels.map((model) => <span key={model.name} className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-text-muted">{model.name} · {modelKindLabel(model.modelKind)}</span>)}</div>
+            <div className="mt-1.5 text-[10px] text-text-muted">上面的「模型名称」填的是要新增的模型；填一个未登记过的名字就是追加，原有模型都会保留。</div>
+          </div>}
 
           <details className="rounded-lg border border-slate-100 px-3 py-2 text-xs text-text-secondary">
             <summary className="cursor-pointer select-none">高级设置</summary>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               <label>网络范围<select value={draft.networkScope} onChange={(event) => update({ networkScope: event.target.value as Draft['networkScope'] })} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs"><option value="public">公网</option><option value="private">内网（显式放行）</option></select></label>
-              <label>计费模式<select value={draft.billing} onChange={(event) => update({ billing: event.target.value as Draft['billing'] })} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs"><option value="metered">按量计费</option><option value="subscription">订阅制</option><option value="local">本地</option></select></label>
+              <label>计费口径<select data-testid="provider-billing" value={draft.billing} onChange={(event) => update({ billing: event.target.value as Draft['billing'] })} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs"><option value="metered">按量计费</option><option value="subscription">订阅制</option><option value="local">本地</option></select>
+                <span className="mt-1 block text-[10px] text-text-muted">默认由计费计划派生（Token Plan / Coding Plan → 订阅制），可覆盖。</span>
+              </label>
             </div>
             {!isNew && draft.credentialConfigured && <label className="mt-3 flex items-center gap-2 text-[11px] text-red-700"><input type="checkbox" checked={Boolean(draft.clearApiKey)} onChange={(event) => update({ clearApiKey: event.target.checked, apiKey: undefined })} />清除托管 API Key</label>}
           </details>

@@ -5,6 +5,7 @@ import type {
   ModelKind,
   ProbeResult,
   ProviderListResponse,
+  ProviderPresetsResponse,
   ProviderRow,
   RoleBinding,
   SpecializedConfigureResponse,
@@ -134,6 +135,17 @@ export async function listProviders(): Promise<ProviderListResponse> {
   return request<ProviderListResponse>('/api/sys/providers')
 }
 
+/**
+ * 预置端点目录（新增/编辑抽屉的「厂商 · 协议」候选）。
+ *
+ * 静态参考数据，只读；**不注入幂等键**（不是写操作）。
+ * 返回空是合法状态（后端未部署该端点时），调用方需按「目录不可用」
+ * 降级到手填 Base URL，而不是把抽屉做成死的。
+ */
+export async function listProviderPresets(): Promise<ProviderPresetsResponse> {
+  return request<ProviderPresetsResponse>('/api/sys/providers/presets')
+}
+
 export async function saveProvider(providerId: string, body: ProviderUpdateInput): Promise<ProviderRow> {
   return mutationRequest<ProviderRow>(`/api/sys/providers/${encodeURIComponent(providerId)}`, {
     operation: `model-provider:${providerId}`,
@@ -161,6 +173,25 @@ export async function addProviderModel(
       method: 'POST',
       body,
       timeout: 60000,
+    },
+  )
+}
+
+/** 移除供应商下的自建模型条目。
+ *
+ * 模型名走 query 参数：`Qwen/Qwen3-32B` 这类名字自带斜杠，放进路径段会被拆开。
+ * 内置模型、被角色/专项/价格占用的模型后端会返回 409，原因在错误体里，直接展示即可。
+ */
+export async function removeProviderModel(
+  providerId: string,
+  modelName: string,
+): Promise<Record<string, unknown>> {
+  return mutationRequest<Record<string, unknown>>(
+    `/api/sys/providers/${encodeURIComponent(providerId)}/models?modelName=${encodeURIComponent(modelName)}`,
+    {
+      operation: `model-provider-model-remove:${providerId}:${modelName}`,
+      method: 'DELETE',
+      timeout: 30000,
     },
   )
 }

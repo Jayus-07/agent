@@ -134,6 +134,16 @@ class _FakeService:
         )
 
 
+        self.remove_provider_model = AsyncMock(
+            return_value={
+                "providerId": "custom-example-com",
+                "name": "custom-embedding",
+                "display": "custom-embedding",
+                "modelKind": "embedding",
+            }
+        )
+
+
 def _client(service: _FakeService) -> TestClient:
     app = FastAPI()
     app.include_router(model_config.router)
@@ -383,6 +393,54 @@ def test_credential_history_cannot_be_rolled_back() -> None:
     service.rollback.assert_awaited_once()
 
 
+def test_remove_model_requires_idempotency_key() -> None:
+    service = _FakeService()
+    client = _client(service)
+
+    response = client.delete(
+        "/sys/providers/custom-example-com/models",
+        params={"modelName": "custom-embedding"},
+    )
+
+    assert response.status_code == 400
+    assert service.remove_provider_model.await_count == 0
+
+
+def test_remove_model_passes_model_name_from_query() -> None:
+    service = _FakeService()
+    client = _client(service)
+
+    # 模型名自带斜杠（Qwen/Qwen3-32B）：必须走 query，放进路径段会被拆成多段而匹配不到
+    response = client.delete(
+        "/sys/providers/siliconflow/models",
+        params={"modelName": "Qwen/Qwen3-32B"},
+        headers={"Idempotency-Key": "remove-model-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "custom-embedding"
+    service.remove_provider_model.assert_awaited_once_with(
+        "siliconflow", "Qwen/Qwen3-32B", "user:test-admin"
+    )
+
+
+def test_remove_model_conflict_maps_to_409() -> None:
+    service = _FakeService()
+    service.remove_provider_model.side_effect = ModelConfigConflict(
+        "模型 qwen3.7-plus 正被角色 main 使用，不能移除"
+    )
+    client = _client(service)
+
+    response = client.delete(
+        "/sys/providers/qwen/models",
+        params={"modelName": "qwen3.7-plus"},
+        headers={"Idempotency-Key": "remove-model-2"},
+    )
+
+    assert response.status_code == 409
+    assert "角色" in response.text
+
+
 def test_model_config_routes_are_registered_on_main_router() -> None:
     paths = {route.path for route in api_router.routes}
     assert {
@@ -393,6 +451,7 @@ def test_model_config_routes_are_registered_on_main_router() -> None:
         "/sys/model-roles/{role}",
         "/sys/providers/{provider_id}",
         "/sys/providers",
+        "/sys/providers/{provider_id}/models",
         "/sys/config/history",
         "/sys/config/history/{history_id}/rollback",
         "/sys/config/drift",

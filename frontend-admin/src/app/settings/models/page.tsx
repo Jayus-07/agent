@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import RoleGate from '@/components/auth/RoleGate'
 import PageHeader from '@/components/layout/PageHeader'
 import { atLeast } from '@/lib/auth'
-import { getConfigDrift, listConfigHistory, listModelCatalog, listModelRoles, listProviders } from '@/api/modelConfig'
+import { getConfigDrift, listConfigHistory, listModelCatalog, listModelRoles, listProviderPresets, listProviders } from '@/api/modelConfig'
 import RoleBindingsTab from '@/components/model-config/RoleBindingsTab'
 import ProvidersTab from '@/components/model-config/ProvidersTab'
 import ConfigHistoryTab from '@/components/model-config/ConfigHistoryTab'
@@ -49,6 +49,9 @@ export default function ModelConfigPage() {
   const roles = useQuery({ queryKey: ['model-config-roles'], queryFn: listModelRoles, enabled: canEditor })
   const catalog = useQuery({ queryKey: ['model-config-catalog'], queryFn: listModelCatalog, enabled: canEditor })
   const providers = useQuery({ queryKey: ['model-config-providers'], queryFn: listProviders, enabled: canEditor && canAdmin })
+  // 预置端点目录：admin only（与 providers 同门槛）。请求失败不影响页面 ——
+  // ProvidersTab 会降级为手填 Base URL，所以这里不把 isError 计入全局错误条。
+  const presets = useQuery({ queryKey: ['model-config-provider-presets'], queryFn: listProviderPresets, enabled: canAdmin, staleTime: 5 * 60_000 })
   const history = useQuery({ queryKey: ['model-config-history'], queryFn: () => listConfigHistory(), enabled: canEditor && tab === 'history' })
   const drift = useQuery({ queryKey: ['model-config-drift'], queryFn: getConfigDrift, enabled: canEditor, refetchInterval: 60_000 })
 
@@ -69,7 +72,7 @@ export default function ModelConfigPage() {
 
   function renderContent() {
     if (tab === 'roles') return <RoleBindingsTab roles={roles.data?.items ?? []} catalog={catalog.data?.models ?? []} canAdmin={canAdmin} onSaved={refreshAll} />
-    if (tab === 'providers' && canAdmin) return <ProvidersTab providers={providers.data?.items ?? []} defaultModels={defaultModels} source={providers.data?.source ?? 'builtin'} canAdmin={canAdmin} onChanged={refreshAll} />
+    if (tab === 'providers' && canAdmin) return <ProvidersTab providers={providers.data?.items ?? []} defaultModels={defaultModels} source={providers.data?.source ?? 'builtin'} canAdmin={canAdmin} onChanged={refreshAll} plans={presets.data?.plans ?? []} presets={presets.data?.items ?? []} presetsLoading={presets.isLoading} />
     if (tab === 'prices') return <PriceTab />
     if (tab === 'history') return <ConfigHistoryTab items={history.data?.items ?? []} canAdmin={canAdmin} onChanged={refreshAll} />
     return <DriftTab items={driftItems} />

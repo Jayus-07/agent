@@ -3,6 +3,7 @@
 | 端点 | 用途 | 限流 |
 |---|---|---|
 | `GET  /sys/providers` | 供应商清单（tab② 列表数据源，只读） | — |
+| `GET  /sys/providers/presets` | 预置端点目录（新增/编辑抽屉的厂商·协议候选，只读静态数据） | — |
 | `POST /sys/providers/{provider_id}/verify` | 已存实例复测（默认快速，`mode=full` 才检查流式 usage） | admin · 10 次/分 |
 | `POST /sys/providers/verify-draft` | 草稿态探测（body 带 driver/base_url/apiKey/scope） | admin · **5 次/分**（更严） |
 
@@ -36,6 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.app.api.deps import require_admin_user
 from backend.infra.llm import credentials as credentials_mod
 from backend.infra.llm import models as models_mod
+from backend.infra.llm import provider_presets
 from backend.infra.llm import registry_store
 from backend.services import provider_probe
 from backend.services.model_config import get_model_config_service
@@ -174,6 +176,36 @@ def _models_by_provider(entries) -> dict[str, list[dict]]:
     return grouped
 
 
+def _decorate_models(
+    grouped: dict[str, list[dict]],
+    db_keys: set[tuple[str, str]],
+    roles_by_model: dict[str, list[str]],
+) -> None:
+    """就地为模型条目补 `source` 与 `usedByRoles`（管理端「移除模型」的判定字段）。
+
+    - `source`：`user` = 在 `llm_models` 里有行（可移除）；`builtin` = 仅存在于代码层
+      `AVAILABLE_MODELS`（移除无意义 —— 下次合并会原样回来，故不允许）。
+    - `usedByRoles`：该模型正被哪些角色占用。**放在列表里而不是等到 409 才知道**，
+      是为了让「移除」按钮能就地禁用并说明原因，而不是让用户点完再被拒。
+
+    判定「是否在 DB」用 `(provider, name)` 是否出现在 `snap.models`，不依赖模型自带的
+    `source` 字段（`_SELECT_MODELS` 并未选取该列，硬读会得到一个恒为默认值的假信号）。
+    """
+    for pid, items in grouped.items():
+        for item in items:
+            name = str(item.get("name") or "")
+            item["source"] = "user" if (pid, name) in db_keys else "builtin"
+            item["usedByRoles"] = sorted(roles_by_model.get(name, []))
+
+
+def _roles_by_model(snap: registry_store.RegistrySnapshot) -> dict[str, list[str]]:
+    """role → 模型名 反转为 模型名 → [role]（快照已带 roles，无需额外查询）。"""
+    inverted: dict[str, list[str]] = {}
+    for role, model_name in (snap.roles or {}).items():
+        inverted.setdefault(str(model_name), []).append(str(role))
+    return inverted
+
+
 def _merged_models(snap: registry_store.RegistrySnapshot) -> list[dict]:
     """代码层模型 + DB 自建模型合并，避免 seeded provider 显示 0 个模型。"""
     merged = {
@@ -208,6 +240,8 @@ def _builtin_rows() -> list[dict]:
     env = credentials_mod.snapshot()
     counts = _count_models_by_provider(models_mod.AVAILABLE_MODELS)
     grouped_models = _models_by_provider(models_mod.AVAILABLE_MODELS)
+    # env 兜底分支没有 DB 行：全部是代码层内置模型 → 一律不可移除、无角色占用。
+    _decorate_models(grouped_models, set(), {})
     rows: list[dict] = []
     for pid, meta in models_mod.PROVIDERS.items():
         cred = env.get(pid) or {}
@@ -247,6 +281,11 @@ def _db_rows(snap: registry_store.RegistrySnapshot) -> list[dict]:
     merged_models = _merged_models(snap)
     counts = _count_models_by_provider(merged_models)
     grouped_models = _models_by_provider(merged_models)
+    _decorate_models(
+        grouped_models,
+        {(str(m.get("provider") or ""), str(m.get("name") or "")) for m in snap.models},
+        _roles_by_model(snap),
+    )
     rows: list[dict] = []
     for p in snap.providers:
         pid = str(p.get("id") or "")
@@ -294,6 +333,42 @@ def _db_rows(snap: registry_store.RegistrySnapshot) -> list[dict]:
             ),
         })
     return rows
+
+
+@router.get("/presets")
+async def list_provider_presets(ident=Depends(require_admin_user)) -> dict:
+    """供应商预置端点目录（新增/编辑抽屉的厂商·协议·端点候选）。
+
+    静态参考数据，来自 `backend/infra/llm/provider_presets.py`（代码内置，
+    不进 DB —— 见设计文档 B.0 的「驱动与厂商能力矩阵留代码」边界）。
+    **不参与任何解析链**：它只提供「实例」字段的推荐值，改这里不改运行时行为。
+
+    前端据此把「新增供应商」从「手敲 Base URL」变成
+    「选计费计划 → 选厂商·协议 → 自动回填」，避免把按量端点与
+    Coding Plan 端点填混（火山引擎 `/api/v3` vs `/api/coding/v3`）。
+
+    `plans` 是「三选一」的计划选项，`billing` 是**派生值**：按设计文档 B.2/B.3，
+    Token Plan 与 Coding Plan 都落 `subscription`，只有按量付费落 `metered`。
+    """
+    return {
+        "plans": provider_presets.list_plans(),
+        "items": [
+            {
+                "id": item["id"],
+                "plan": item["plan"],
+                "vendor": item["vendor"],
+                "variant": item["variant"],
+                "driver": item["driver"],
+                "driverLabel": provider_presets.driver_label(item["driver"]),
+                "baseUrl": item["base_url"],
+                "apiKeyHint": item["api_key_hint"],
+                "note": item["note"],
+                "placeholders": list(item["placeholders"]),
+            }
+            for item in provider_presets.list_presets()
+        ],
+        "actor": ident.actor,
+    }
 
 
 @router.get("")

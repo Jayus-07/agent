@@ -207,6 +207,27 @@ async def add_provider_model(
         raise _error(exc) from exc
 
 
+@router.delete("/sys/providers/{provider_id}/models")
+async def remove_provider_model(
+    provider_id: str,
+    request: Request,
+    model_name: str = Query(..., alias="modelName"),
+    operator: OperatorIdentity = Depends(require_admin_user),
+) -> dict[str, Any]:
+    """移除供应商下的自建模型条目。
+
+    模型名走 **query 参数**而非路径段：`Qwen/Qwen3-32B`、`BAAI/bge-m3` 这类名字
+    自带斜杠，放进路径会被拆成多段而匹配不到 `{model_name}`。
+    """
+    require_idempotency_key(request)
+    try:
+        return await _service(request).remove_provider_model(
+            provider_id, model_name, operator.actor
+        )
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
 @router.get("/sys/providers/{provider_id}/models")
 async def list_provider_models(
     provider_id: str,
