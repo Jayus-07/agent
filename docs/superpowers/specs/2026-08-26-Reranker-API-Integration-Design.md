@@ -213,7 +213,7 @@ def get_reranker() -> BaseReranker:
 - 添加两行：
   ```bash
   RERANKER_BACKEND=dashscope
-  DASHSCOPE_API_KEY=sk-ws-H.EYXEYIX.jEsu.MEQCIHMC54vqDxdqwgpKa4qgzLtZ6ANUgAIjPJvlUzorsDv1AiAfJJ2JrFjcdyVUWG77YJR9NMiITpaXTGdJcyjCp69bKw
+  DASHSCOPE_API_KEY=<DASHSCOPE_API_KEY>  # 原为真实 Key 明文，已随 PUBLIC 仓库泄露并于 2026-09-20 脱敏，请从环境变量注入并轮换
   ```
 
 ### 2. 依赖检查

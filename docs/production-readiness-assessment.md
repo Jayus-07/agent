@@ -94,7 +94,7 @@
 **问题：**
 | 问题 | 严重度 | 证据 |
 |------|:---:|------|
-| **真实 PG 密码硬编码在 git 跟踪文件中**：`PGPASSWORD=9t792LgUaqL1VWfTRYjeSJd1` | **P0** | backend/.env.example:6（已人工复核确认） |
+| **真实 PG 密码硬编码在 git 跟踪文件中**（**两个不同凭据**，均已随 PUBLIC 仓库公开） | **P0** | backend/.env.example:6（32 字符口令，本轮复核时仍在）；本文档原第 97 行曾**二次明文抄录** 24 字符口令。**处置（2026-09-20）**：两处明文已改为占位符；因仓库 `isPrivate: false` 且已 push，旧值须视为已泄露，**必须轮换 PG 口令**，仅脱敏不轮换不构成修复。 |
 | **认证可静默失效**：未配置 API_KEY 时全部端点放行，仅 warning；且运行日志显示当前环境正是无认证状态（"API_KEY 未配置！所有 API 端点公开可访问"，2026-08-21 18:15） | **P0** | app/api/middleware/auth.py:36-39（已复核） |
 | web_crawl 对 URL 零校验：无 scheme 白名单、无私网 IP/云元数据地址（169.254.169.254）拦截，LLM 生成的 URL 可探测内网（SSRF） | **P1** | tools/web.py:88-113 |
 | 行级权限/敏感列/脱敏机制已实现但**配置全空未启用**；`current_user_id` 由客户端自报可伪造 | P1 | sql/data/schema_config.py:262-268 |
