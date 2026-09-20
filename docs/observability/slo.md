@@ -66,12 +66,33 @@ TTFT 与 TPOT 受不同因素影响，分开考核才能正确定位：
 - 应用层的 `backend/rag/answer_cache.py` 是**结果缓存**（按查询哈希），
   与引擎侧 prefix cache（KV 级复用）互补：前者省掉整次生成，后者省掉 prefill。
 
-## 6. 告警级别约定
+## 6. 安全、幂等、预算与反馈闭环
+
+WP6 新增 9 个固定标签指标，标签只允许稳定的操作名、组件、层、周期和结果枚举，
+禁止写入用户、租户、Trace、request 或幂等键。指标及对应告警如下：
+
+| 指标 | 关注点 | 告警 |
+|---|---|---|
+| `idempotency_claim_total` | claim 新建、重放、冲突、不可用 | `IdempotencyUnavailable` / `IdempotencyConflictSpike` |
+| `idempotency_execution_total` | 副作用成功、失败、重放、不确定 | 结合幂等存储告警排查 |
+| `budget_request_total` | 请求级预算允许/拒绝 | `BudgetExceededSpike` |
+| `budget_quota_total` | 日/月额度预占、结算、释放、拒绝 | `BudgetHardLimitBlocked` |
+| `budget_threshold_total` | 80%/100% 阈值去重事件 | `BudgetThresholdReached` |
+| `budget_price_total` | 价格命中、缺失、不可用 | `ModelPriceMissing` |
+| `side_effect_budget_total` | 写副作用预算门禁 | `SideEffectBudgetRejected` |
+| `semantic_validation_total` | 输出/语义层通过或拒绝 | `SemanticValidationFailureSpike` |
+| `feedback_candidate_total` | 候选创建、审核、promotion | `FeedbackCandidateReviewFailure` |
+
+成本硬阻断的放量顺序固定为：导入 `model_price` pending → 两名不同审核人批准 →
+`observe` 观察 7 天 → 核对价格覆盖率与误判 → 小流量 `enforce` → 扩大灰度。
+价格缺失时 enforce 拒绝模型调用；off/observe 只保留 token 统计并发出告警。
+
+## 7. 告警级别约定
 
 - **critical**：服务不可用，立即处理（page）
 - **warning**：降级运行，工作时间处理（ticket）
 
-## 7. 怎么看这些指标
+## 8. 怎么看这些指标
 
 | 方式 | 入口 | 适用 |
 |---|---|---|

@@ -1,8 +1,9 @@
 # RAG 元数据管道治理与高并发抽取设计
 
 > 日期：2026-09-19
-> 状态：设计稿，待用户复核
+> 状态：方案已确认，已进入实施与验收阶段
 > 关联规划：[2026-09-19-RAG元数据管道统一抽取与级联路由上线规划.md](../../2026-09-19-RAG元数据管道统一抽取与级联路由上线规划.md)
+> 实施计划：[2026-09-20-rag-processing-model-lineage.md](../plans/2026-09-20-rag-processing-model-lineage.md)
 
 ## 1. 设计结论
 
@@ -396,3 +397,150 @@ Prometheus/Grafana 至少提供：
 企业节省 token 的控制点固定为：R0/R1 命中不调用 LLM；只有 R2 进入一次结构化抽取；R2 输入先截断/采样；相同版本的决策命中缓存；影子只采样并异步执行；fallback 禁止再调 LLM；低置信样本进入 abstain/人工复核而不是重复重试。成本指标必须与准确率、延迟和队列年龄一起看，不能用单纯降 token 换取错误率上升。
 
 代码已覆盖 taxonomy/决策契约、版本化规则治理、确定性 fallback、有界并发、缓存/幂等、影子队列、灰度开关和 release gates。开发环境可先以 100% 级联完成性能和成本验证；正式生产扩大和全量上线仍需真实黄金集、2 倍峰值压测、连续影子报告、回滚演练及安全合规证据。
+
+2026-09-20 已补开发阶段 `metadata-load-v1` 压测入口和指标聚合：在当前 Compose Worker 峰值 4 的 2 倍（8 个并发执行槽）下，64 个缓存命中血缘任务全部成功，血缘详情 API 64/64 成功，队列最终排空，重复阶段键为 0，LLM/Embedding/OCR 外部调用为 0，缓存命中率 100%。这条证据覆盖血缘写入、连接池等待、队列年龄、详情 API P95 和 token 节省口径；由于使用的是零外部调用的缓存命中 profile，不能冒充真实模型冷启动、限流或影子开启压测，生产上线前仍需在隔离配额下补真实模型负载和回滚演练。
+
+同日已补 `metadata-rollback-v1` 回滚演练：只切换共享规则/模型路由指针，旧指纹存在、幂等重放成功、重复写入为 0，且演练结束恢复原指针；不删除历史规则、模型文件或处理血缘。生产上线前剩余主要是隔离配额下的真实 OCR/Embedding/统一抽取 2× 峰值和生产等价的连续影子观测。
+
+同日已补 [metadata-shadow-v1-20260920.json](../../../docs/evidence/metadata/metadata-shadow-v1-20260920.json) 影子烟测：3 份文件通过真实上传入口完成，影子独立队列 3/3 成功且未阻塞主索引；FAQ 样本命中 R0，`metadata_extract` 明确记录为 `skipped/route_r0`，元数据 LLM 调用和 Token 均为 0，影子 `L0` 与主结果一致。该证据只覆盖开发小规模链路，不替代生产等价 2× 峰值、外部模型限流和连续影子观测。
+
+实现注意：级联路径必须和统一抽取路径一样提交影子任务；索引器通过同步 Celery 任务桥接异步阶段时，不能依赖临时事件循环里的 `asyncio.create_task`，应直接提交到专用影子线程池，并以 future 回调回收并发槽位。这样即使主任务返回，影子任务也不会静默丢失。
+
+## 14. 上传到入库的完整模型血缘（已确认）
+
+### 14.1 目标口径
+
+用户上传不同类型文件后，系统必须能够回答：
+
+> 这份文件在本次处理、抽取、向量化和入库过程中，实际调用过哪些模型或处理引擎？每个模型当时是什么版本、配置和 Prompt/规则版本？
+
+因此不能只在 `doc_registry` 保留一个 `model_version` 或 `llm_used`。一次上传/重索引是一条不可变的 `processing_run`，每个实际处理阶段是一条 `processing_step`。文档表只保留最后一次成功运行的摘要和指针。
+
+### 14.2 完整处理链
+
+```text
+上传
+  → 文件解析
+      → PDF 文本层充足：PyMuPDF
+      → PDF 文本层不足：OCR（RapidOCR 或 DashScope qwen-vl）
+  → 清洗 / 结构分析 / 分块
+      → 开启语义切分时可能提前调用 Embedding
+  → 元数据级联
+      → R0 规则 / R1 分类器 / R2 metadata_extract LLM
+  → 可选富化
+      → question_gen / table_describe / legacy keyword
+  → Embedding
+  → BM25 / 向量库 / 文档注册表写入
+```
+
+不同文件类型只记录实际经过的阶段。未触发的阶段必须记录 `status=skipped` 和明确原因，例如 `text_layer_sufficient`、`route_r0`、`not_table` 或 `feature_disabled`，不得伪造模型名。
+
+处理引擎和模型统一进入血缘，但要区分：
+
+- `engine_type=parser|ocr|llm|embedding|rule`；
+- 解析器、清洗器、规则属于引擎/算法版本，不填写不存在的模型；
+- 云端模型记录供应商返回的实际模型名，若有 deployment/revision/system fingerprint 一并记录；
+- 本地模型记录包版本、模型文件指纹、运行设备；
+- Rerank 属于问答检索阶段，不进入上传入库运行，在查询 Trace 中单独展示。
+
+### 14.3 运行与阶段数据模型
+
+新增 `rag_processing_runs`：
+
+| 字段 | 说明 |
+|---|---|
+| `run_id` | 每个文件每次上传/重索引的唯一 ID |
+| `doc_id`、`file_hash` | 文档和输入内容身份 |
+| `operation`、`batch_id`、`task_id`、`trace_id` | 操作和异步任务关联 |
+| `status`、`started_at`、`finished_at` | 运行状态和耗时 |
+| `pipeline_version`、`git_sha` | 代码/处理算法版本 |
+| `config_snapshot_hash` | 运行开始时的有效配置快照指纹 |
+| `model_summary` | 供列表快速展示的去重模型摘要 |
+
+新增 `rag_processing_steps`，一行表示一个逻辑阶段；发生重试或模型降级时用 `attempt_no` 保留实际尝试：
+
+```text
+run_id, step_id, stage, attempt_no, status
+role, engine_type, provider, model_name, model_revision
+config_source, config_revision, artifact_fingerprint
+prompt_key, prompt_version, prompt_hash
+taxonomy_version, rules_version, schema_fingerprint
+cache_status, input_count, output_count
+prompt_tokens, completion_tokens, total_tokens, cached_tokens
+duration_ms, retry_count, fallback_reason, error_message
+```
+
+`llm_usage` 和 Embedding 用量记录增加 `run_id`、`step_id`、`role`、`stage`，使 Token 和成本可以精确归属到文档、运行和阶段。Trace 继续用于调试，但不是血缘数据的唯一来源。
+
+### 14.4 版本语义
+
+以下概念不能混用：
+
+| 版本 | 语义 |
+|---|---|
+| `doc_version` / `version_id` | 业务文档版本 |
+| `run_id` | 一次实际处理运行 |
+| `pipeline_version` / `git_sha` | 代码和处理算法版本 |
+| `config_revision` / `config_snapshot_hash` | 当时绑定的配置版本 |
+| `model_name` / `model_revision` | 实际执行的模型身份 |
+| `prompt_version` | Prompt 内容版本 |
+| `rules_version` / `taxonomy_version` | 规则和分类体系版本 |
+| `schema_fingerprint` | 输出契约版本 |
+
+管理端模型配置重构尚未完成时，先记录 `config_source=env|code-default` 和规范化配置快照 hash；配置中心恢复后再填充数据库 revision，不阻塞开发和上线。
+
+运行开始时固定有效配置快照，避免一次运行中途配置热更新导致前后阶段使用不同绑定。缓存键必须包含对应的模型、Prompt、规则、Taxonomy 和 Schema 版本；缓存命中也要写入阶段记录。
+
+### 14.5 文档表和前端展示
+
+`doc_registry` 只增加面向列表的当前摘要：
+
+```text
+last_processing_run_id
+pipeline_version
+metadata_route
+ocr_used, ocr_model
+metadata_model
+embedding_model
+processing_status, processing_finished_at
+```
+
+前端文档列表显示 OCR 状态、R0/R1/R2、元数据模型、Embedding 模型、最后处理时间和模型数量。文档详情/操作详情新增“处理模型血缘”时间线：
+
+```text
+解析 → OCR → 元数据决策 → 模拟问题 → 表格描述 → Embedding → 入库
+```
+
+每个阶段显示执行/跳过/缓存/降级/失败、实际模型、供应商、配置快照、Prompt/规则版本、Token、耗时和原因；支持查看同一文档的历史 `run_id`。Rerank 在问答 Trace 的“查询模型”区域单独展示。
+
+新增接口建议为：
+
+- `GET /api/rag/documents/{doc_id}/processing-runs`：历史运行列表；
+- `GET /api/rag/documents/{doc_id}/processing-runs/{run_id}`：阶段和模型详情；
+- 文档列表和上传完成 SSE 只增加轻量 `last_processing_run_id`、摘要和 `run_id`，禁止逐 Chunk 查询。
+
+### 14.6 高并发和 Token 约束
+
+- 每个文件只创建一个运行记录，每个逻辑阶段只做一次汇总 upsert；详细调用沿用用量表关联，不按 Chunk 写完整血缘 JSON。
+- 文档列表读取文档摘要，详情读取运行和阶段两张表，避免 N+1 查询。
+- 不保存完整 Prompt、原文和模型响应，只保存 hash、统计值和必要的错误摘要。
+- R0/R1 命中不调用 metadata LLM；R2 只做一次结构化抽取；问题生成和表格描述分别受开关、长度和缓存控制。
+- OCR 云端按页缓存，缓存键包含 OCR provider、model 和输入图片 hash；本地 OCR 记录引擎/模型指纹但不产生 Token。
+- Embedding、LLM、数据库写入仍受现有有界并发和队列背压控制；血缘记录失败不得让主索引重复调用模型，主处理完成后允许异步补写诊断摘要。
+
+### 14.7 验收标准
+
+1. 文本 PDF、扫描 PDF、DOCX、XLSX/CSV 各有一条可验证的运行记录。
+2. 扫描 PDF 能区分未触发 OCR、RapidOCR、云端 OCR 和 OCR 缓存命中。
+3. R0 文档显示未调用 metadata LLM；R2 文档显示真实 metadata_extract 模型。
+4. 问题生成、表格描述和 Embedding 能分别显示模型，不再全部显示 `main`。
+5. 模型配置变更后，历史运行展示旧模型，新运行展示新模型。
+6. 重试、降级、缓存命中和失败阶段不丢失实际模型信息。
+7. 文档列表不产生逐文档 N+1 查询；2 倍峰值压测下血缘写入不造成队列持续增长。
+
+2026-09-20 开发环境真实供应商验收已完成：数据库绑定的 OCR
+`qwen3.5-ocr` 与 Embedding `qwen3.7-text-embedding` 通过正式上传入口完成
+扫描 PDF、文本 PDF、DOCX、XLSX 四种文件入库；四条运行记录均为 `success`。
+详情 API 可看到 OCR 的 `cached`、文本层充分的 `skipped`、非 PDF 的
+`not_pdf`，以及 Embedding 的实际模型与缓存命中状态。供应商返回的模型版本
+不可用时保持 `null`，同时保留配置修订时间和配置快照哈希；开发阶段回滚演练已完成，生产上线前仍需补生产等价数据的 2 倍峰值压测、外部模型限流验证和连续影子观测。

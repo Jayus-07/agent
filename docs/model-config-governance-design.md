@@ -2,7 +2,11 @@
 
 > 2026-09-19 起草。背景：`agent/.env` 已膨胀到 339 行 / 109 个变量，模型相关配置散落在
 > 三处互不知情的事实来源上，管理端已有的模型切换器写的是进程内存态（重启即失效）。
-> 本文给出收敛设计与实施分期。**本轮只出设计，不含代码改动。**
+> 本文给出收敛设计与实施分期。原文是设计阶段基线；管理端闭环已在本轮落码并完成本地验证，
+> 当前实现、测试统计、迁移与上线前事项以 `docs/model-config-governance-progress-report-2026-09-19.md` §10 为准。
+>
+> **2026-09-20 实施补充**：附录 B 的通用 Chat BYOK 方案已落地；其中 embedding / rerank
+> 专项链路已按 B.10 的独立协议适配器实现，当前状态以进度报告 §10.6 为准。
 
 ## 0. 决策记录
 
@@ -25,8 +29,9 @@
 4. 权限收口：写接口挂 `require_admin_user`（`app/api/deps.py:328`）
 5. fail-closed：DB/值非法/键未知一律回退「上次已知值 → env 默认」
 
-在同一套机制外再建一层会制造重复。**本设计的实质工作是扩展 `sys_config` 以承载
-「模型角色」与「密钥」两类新配置**，而不是另起炉灶。
+在同一套机制外再建一层会制造重复。设计阶段原计划扩展 `sys_config`；当前实现将模型治理
+配置拆成专用的 `llm_providers` / `llm_provider_credentials` / `llm_model_role_bindings` 表，
+由 `registry_store` 注入同一进程内覆盖层，避免把可逆密文塞进 `sys_config_history`。
 
 ### 1.1 现有实现的五处不满足（本设计的核心工作量）
 
@@ -77,7 +82,7 @@
 | `ocr` | 扫描件 OCR | `RAG_OCR_DASHSCOPE_MODEL` | 与 embedding 用不同 Key，归属不清 |
 | `embedding` | 向量化 | `EMBEDDING_MODEL` + `EMBEDDING_PROVIDER` | 与向量索引强绑定，切换需全量重建 |
 | `rerank` | 重排 | `RERANK_MODEL` + `RERANK_PROVIDER` | 同上，另有 `RERANK_API_FORMAT` 协议开关 |
-| `eval_gen` | 评测生成 / RAGAS | `OLLAMA_MODEL` | 与 `OLLAMA_ENABLED` 联动 |
+| `eval_gen` | 评测答案生成 / RAGAS | `EVAL_GEN_MODEL` 或 DB 角色绑定 | 必须绑定已登记且可用的供应商模型；空值表示停用 |
 
 「留空 = 跟随 main」这类**继承语义显式化**：登记为 `inherit: main`，而非空字符串。
 管理端据此渲染「跟随 main（当前 = xxx）」而不是让人猜空值含义。
@@ -107,6 +112,10 @@
 
 `resolve_model` 沿用 `get_mode()` 的「热路径零阻塞」不变量：守卫与问答热路径绝不能
 因为 DB 抖动而被拖慢。DB 轮询仍由后台 `refresh_loop` 承担。
+
+> 实施口径：`main`、`fallback`、`doc`、`tool_selector`、`ocr`、`rerank`、`eval_gen`
+> 已由实际调用点读取 DB 覆盖；`embedding` 受单例和向量索引一致性约束，管理端保存后必须
+> 配合全量索引重建，当前索引不会自动切换。
 
 ### 3.4 与 `LLMFactory` 的关系（本次必须一并修）
 
@@ -539,7 +548,7 @@ P0 后启动校验会点名（已在真实 `.env` 下验证）：
 3. `backend/shared/crypto.py` 抽取（`competitor/crypto.py` 行为保持不变）。
 4. 迁移编号取 `0017`（当前最新为 `0016_price_governance.py`）。
 
-# 附录 B：用户自建供应商（BYOK）与连通性自测（2026-09-19 追加，未实施）
+# 附录 B：用户自建供应商（BYOK）与连通性自测（2026-09-19 追加，历史方案）
 
 需求原文：各大厂商有 apikey 和 url，另有 coding plan 套餐也是自己输 apikey 和 url；
 希望用户能自己添加/修改，输入完点测试图标验证能不能用。
@@ -752,7 +761,8 @@ env 兜底是同构的，沿用既有模式。
 - **P2 — 管理端**：tab② CRUD + 测试图标；builtin 也可在页面停用；
   **`LLMSwitcher` 改会话级 + `chat.ts` 加 `model` 字段 + `/llm/switch` 加 admin 门禁**（B.9②）
 - **P3 — 收尾**：embedding/rerank 凭据与绑定（含重建索引二次确认）、价格合并、
-  `.env` 瘦身、密钥去重与轮换（含 §P1 记的第 312 行明文 Key）
+  `.env` 瘦身、密钥去重与轮换（含 §P1 记的第 312 行明文 Key）。其中专项凭据与绑定已在
+  2026-09-20 通过迁移 `0019` 和独立适配器提前落地；价格合并与 `.env` 瘦身仍是后续工作。
 
 **P1a 与 P1b 之间是硬闸门**：P1a 完成前做 UI，会得到一个「配了不生效」的页面。
 
@@ -838,8 +848,9 @@ Ollama 启用 / provider Key 三级检查），缺的是**拒绝**而非校验 �
 
 实测：`_get_provider` 最后那句 `return "ollama"` **不是无意的 bug，而是唯一的本地模型
 表达方式** —— Ollama 模型名不可穷举（`llama3` / `qwen2.5:7b` / 任意 pull 下来的名字），
-而 `OLLAMA_MODEL`（role=`eval_gen`）今天就靠这条兜底工作。把它改成 fail-closed 会
-**直接打断评测生成等非对话链路**，且这些链路的测试不在本次回归范围内。
+而评测生成此前依赖 `OLLAMA_MODEL=qwen2.5:3b` 这类本地默认值。现在 `eval_gen`
+要求显式绑定已登记模型，未配置或不可用时由管理端展示原因并跳过评测生成，避免
+把云端模型名误送到 Ollama。
 
 故落地为：
 
@@ -913,3 +924,39 @@ Ollama 启用 / provider Key 三级检查），缺的是**拒绝**而非校验 �
 2. `0016` 落地后提交 0017
 3. 决定 `billing` 传播（`compute_cost_usd` 签名需带 provider 或先查 billing）—— 数字上零变化，
    但会碰 `budget.py` / `quota.py`
+
+## B.10 当前实施补充：embedding / rerank 专项适配器（2026-09-20）
+
+本节覆盖附录 B 原方案没有展开的第二条协议链路。专项模型不是通用 Chat 模型，不能复用
+`GET /models` 或 Chat 最小请求作为唯一测试：Anthropic Messages、OpenAI Chat、DashScope
+原生 Rerank 的 URL、请求体和成功响应字段均不同。
+
+### B.10.1 边界与数据
+
+- `llm_providers` 继续保存供应商实例；`driver=specialized` 只表示它由专项适配器使用，
+  不进入通用 Chat 供应商列表。
+- `llm_specialized_model_bindings`（迁移 `0019`）按 `embedding` / `rerank` 一角色一行保存
+  `provider_id`、`adapter`、`model_name`、`base_url`、`options` 和最近探测状态。
+- API Key 仍只写入 `llm_provider_credentials.key_cipher`，由 `SECRETS_ENCRYPTION_KEY`
+  保护；接口只返回指纹和末四位。缺少主密钥时拒绝写入，禁止明文降级。
+
+### B.10.2 适配器与测试契约
+
+当前白名单：`dashscope_embedding`、`openai_embedding`、`dashscope_rerank`、`jina_rerank`。
+每个适配器负责拼接端点、注入 Bearer Key、构造固定最小探测请求和判定响应结构；前端只提交
+适配器名称与模型名，不拼接厂商协议。
+
+测试保存流程：
+
+1. 对每个已填写角色执行一次真实最小请求，记录 HTTP 状态、摘要、截断安全错误和 `elapsedMs`。
+2. 任一角色失败则返回失败明细且不落库；全部通过才写入供应商、加密凭据、角色绑定和审计记录。
+3. RAG 独立服务启动前加载注册表，并每 15 秒刷新；已创建的 embedding wrapper / rerank wrapper
+   在下一次调用时检测配置签名，轮换 Key 或模型后切换出站客户端。
+4. embedding 模型切换只解决“新请求使用哪个模型”，不改变旧向量的语义空间；仍必须全量重建
+   索引，并在体检页确认索引状态。
+
+### B.10.3 已验证事实
+
+本地管理端真实配置并测试 `qwen3.7-text-embedding` 与 `qwen3.7-text-rerank` 均通过；RAG
+运行时实际返回 1024 维向量和有效重排分数。测试耗时在页面展示，Key 只显示掩码。生产发布时
+除迁移 `0019` 外，还必须把 `SECRETS_ENCRYPTION_KEY` 纳入持久化密钥托管与备份。

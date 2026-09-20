@@ -1,0 +1,15 @@
+{
+  "candidate_model_version": "metadata-candidate-model-v2",
+  "candidate_rules_version": "metadata-candidate-rules-v2",
+  "duplicate_write_count": 0,
+  "history_preserved": true,
+  "idempotent_replay": true,
+  "old_fingerprint_present": true,
+  "old_model_version": "model-v0",
+  "old_rules_version": "rules-v1",
+  "pointer_write_count": 3,
+  "report_version": "metadata-rollback-v1",
+  "restored_before_run_pointer": true,
+  "rollback_duration_seconds": 0.0,
+  "write_scope": "shared_route_pointer_only"
+}

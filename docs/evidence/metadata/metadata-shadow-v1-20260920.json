@@ -1,0 +1,74 @@
+{
+  "report_version": "metadata-shadow-v1",
+  "generated_at": "2026-09-20",
+  "environment": "development-compose",
+  "scope": "controlled_upload_smoke_not_peak_load",
+  "run_tags": [
+    "20260920111103-44c895",
+    "20260920111245-4cf0cb"
+  ],
+  "main_path": {
+    "uploads": 3,
+    "terminal_done": 3,
+    "route_counts": {
+      "r0": 1,
+      "fallback": 2
+    },
+    "faq_r0": {
+      "doc_id": "c55b6467bf",
+      "metadata_route": "r0",
+      "metadata_model": null,
+      "llm_used": 0,
+      "metadata_extract_status": "skipped",
+      "metadata_extract_skip_reason": "route_r0",
+      "metadata_prompt_tokens": 0,
+      "metadata_total_tokens": 0,
+      "embedding_model": "qwen3.7-text-embedding"
+    }
+  },
+  "shadow_path": {
+    "queue": "rag_metadata_shadow",
+    "queue_isolated": true,
+    "main_path_waits_for_shadow": false,
+    "submitted_jobs": 3,
+    "succeeded_jobs": 3,
+    "failed_jobs": 0,
+    "error_count": 0,
+    "observations": [
+      {
+        "main_doc_type": "faq",
+        "shadow_level": "L0",
+        "agreement": true,
+        "latency_ms": 609.4
+      },
+      {
+        "main_doc_type": "general",
+        "shadow_level": "L2",
+        "agreement": false,
+        "latency_ms_range": [
+          452.1,
+          572.2
+        ],
+        "count": 2
+      }
+    ]
+  },
+  "token_observation": {
+    "faq_r0_metadata_llm_calls": 0,
+    "faq_r0_metadata_tokens": 0,
+    "shadow_llm_calls": 0,
+    "non_r0_main_route": "fallback_after_provider_arrearage",
+    "note": "非 R0 样本的统一抽取受到 DashScope Arrearage 影响并进入确定性 fallback；本报告不把失败重试或整个 Worker 时间窗的网络日志当作零请求证明。"
+  },
+  "limitations": [
+    "本轮是开发环境小规模上传烟测，不等价于生产数据下的 2 倍峰值压测。",
+    "重建 Worker 后存在历史恢复任务，烟测端到端等待时间受到队列积压影响。",
+    "真实外部 OCR/Embedding/统一抽取冷启动、429/限流和成本曲线仍需隔离配额验收。"
+  ],
+  "gate": {
+    "shadow_submission_non_blocking": true,
+    "faq_r0_zero_metadata_llm": true,
+    "shadow_jobs_succeeded": true,
+    "production_ready": false
+  }
+}

@@ -4,8 +4,10 @@
 > 主文档定「做什么、谁能做、流程多重」；本文定「用什么组件、字段怎么摆、态怎么分、请求怎么发」。
 > **冲突裁决**：权限与流程以主文档为准；命中本文 §3.1 指出的内部矛盾时，以本文的修正方案为准（已在主文档加修订批注）。
 >
-> **状态**：设计定稿，**未实施**。属主文档 B.8 的 **P2**。
-> **前置依赖**：P1a-2（凭据链路闭合）、P1b（探测服务）。**两者未完成前做本页，会得到一个「配了不生效」的页面**（B.8 硬闸门）。
+> **状态**：设计定稿；管理端模型配置闭环已于 2026-09-19 实施并完成本地验证。
+> 当前实现、迁移和上线前剩余事项以 `docs/model-config-governance-progress-report-2026-09-19.md` §10 为准。
+> 本文 §14–§16 中的「缺口 / 未实施」文字保留为设计过程快照，不能按当前线上状态解读。
+> **前置依赖**：P1a-2（凭据链路闭合）、P1b（探测服务）已满足；生产上线仍需执行迁移并按发布流程灰度。
 >
 > 日期：2026-09-19 ｜ 关联：UX 架构 `docs/2026-09-17-UX体验架构设计.md`（§4.2 门禁 / §4.6 空态 / §五 token）
 
@@ -298,7 +300,7 @@ export interface RoleBinding {
   provider: string | null         // 归属 provider（自建模型必填，B.5#3）
   registered: boolean             // 是否在可用模型清单内
   missingKeyEnv: string | null    // 缺哪个 Key 环境名（null = 齐备）
-  requiresReindex: boolean        // embedding/rerank 类改值需重建索引
+  requiresReindex: boolean        // embedding 改值需重建索引；rerank 不改变向量空间
   updatedBy: string | null
   updatedAt: string | null
 }
@@ -379,7 +381,7 @@ export interface DriftItem {
 | `sourceLabel(source, inheritedFrom)` | `inherit` → 「跟随 main（当前 = xxx）」—— 落实主设计 §3.1 的「不让人猜空值含义」 |
 | `maskSecret(last4, fingerprint)` | `····a1b2 · 指纹 3f9c1d` |
 | `redactForRole(entry, canAdmin)` | §3.4 的脱敏收敛点 |
-| `isModelSelectable(role, model, models)` | 标红/禁选的唯一判据（未注册 / 缺 Key） |
+| `isModelSelectable(model)` | 所有角色共用的标红/禁选判据（未注册 / 缺 Key / 用途不匹配）；角色编辑统一从已登记模型目录选择 |
 
 ---
 
@@ -396,11 +398,11 @@ export interface DriftItem {
 | 操作 | 「修改」（canEdit） | 非 canEdit 不渲染 |
 
 **行内编辑**（不弹窗，改动小）：
-- 点击「修改」→ 该行生效模型单元格变为 `<select>`，选项 = `get_available_models()` ∩ 有 Key 的 provider；
+- 点击「修改」→ 所有角色统一变为 `<select>`，选项 = `get_available_models()` 中与角色用途匹配的已登记模型，并保留当前失效值为禁用项及原因；`eval_gen` 另提供「未配置（停用评测生成）」选项；没有对应分类模型时提示先到供应商页面新增并测试模型；
 - 未注册或该 provider 缺 Key 的模型：**渲染为 `<option disabled>` + 后缀说明**（而不是过滤掉 —— 让用户看到「有但不可选」的原因，避免「我明明加了模型怎么找不到」）；
 - 保存 → `PUT /sys/model-roles/{role}` → 成功 toast + invalidate。
 
-**`requiresReindex` 的二次确认**（embedding / rerank）：改值弹 `window.confirm` 风格确认，文案须含代价：
+**`requiresReindex` 的二次确认**（embedding）：改值弹确认，文案须含代价：
 
 > 修改 embedding 模型后，**已有索引与查询向量不在同一空间**，检索结果会不可用，必须全量重建索引（耗时较长）。
 > 确认修改？
@@ -465,6 +467,25 @@ export interface DriftItem {
 
 - 列表以徽章显示「内网」（`bg-amber-50 text-amber-700`），与 `public` 一眼可分
 - **不得实现为「自动识别私网就放行」**（B.6 明令：DNS rebinding 会绕过）。前端唯一职责是把勾选值如实传给后端；判定在后端。
+
+### 7.5 模型用途目录（2026-09-20 实施）
+
+供应商是协议、地址和凭据的容器，模型是供应商下可独立切换的目录条目。每个模型必须带用途：
+
+| 用途 | 标签 | 可绑定角色 | 测试请求 |
+|---|---|---|---|
+| `chat` | 文本模型 | `main`、`doc`、`tool_selector`、`fallback`、`eval_gen` | 最小 Chat 请求 |
+| `embedding` | 向量模型 | `embedding` | OpenAI 兼容 `/embeddings` |
+| `rerank` | 重排模型 | `rerank` | Jina 兼容 `/rerank` |
+
+`llm_models.model_kind` 是唯一类型来源，历史无类型数据按 `chat` 兼容。供应商列表逐模型显示
+用途徽章；“新增模型”只填写模型名和用途，后端使用该供应商已保存的 URL/Key 测试，通过后才
+写入目录。已有模型不能直接改用途，避免一个模型名在运行时被错误适配器调用；需要切换用途时
+新增一个模型条目。
+
+角色下拉框按目标用途过滤，同时保留后端的最终校验。Embedding 仍需在切换后全量重建向量索引，
+因为用途标签不会改变既有向量的语义空间。向量、重排、OCR 均通过供应商页登记；若不同模型使用
+不同 API Key，应分别新增供应商，不能依赖同一供应商凭据。
 
 ---
 
@@ -655,9 +676,11 @@ POST /chat → ① api 层校验 model（唯一规则来源）
 
 ---
 
-## 14. 后端缺口清单（本页的阻塞项）
+## 14. 后端缺口清单（设计时阻塞项；历史快照）
 
-⚠️ **本页无法纯前端独立交付** —— 6 个端点不存在。核实于 2026-09-19：`backend/app/api/routes/sys_config_admin.py` **全文件仅 51 行、仅 2 个端点**（`GET /sys/config`、`PUT /sys/config/{key}`）；`/sys/model-roles`、`/sys/providers`、`/sys/config/history`、`/sys/config/drift` **均不存在**。
+⚠️ 以下结论来自页面设计阶段的核查快照，不再代表当前状态。当前端点已由
+`sys_model_roles.py`、`sys_providers.py`、`model_config.py` 接入主 `api_router`；
+实现明细和验证证据见治理进度报告 §10。
 
 | # | 端点 | 依赖阶段 | 阻塞的 tab |
 |---|---|---|---|
@@ -666,6 +689,7 @@ POST /chat → ① api 层校验 model（唯一规则来源）
 | 3 | `GET /sys/providers` | P2 | ②⑤ |
 | 4 | `PUT /sys/providers/{id}`（含 credential / network_scope） | P2 | ② |
 | 5 | `POST /sys/providers/{id}/verify` + `POST /sys/providers/verify-draft` | **P1b** | ②（测试图标） |
+| 5a | `POST /sys/providers/{id}/models` + `GET /sys/providers/{id}/models?modelKind=...` | P2 | ②（按用途新增/过滤模型） |
 | 6 | `GET /sys/config/history` + `POST /sys/config/history/{id}/rollback` | P2（**新写**，历史表已有但无读取端点） | ④ |
 | 7 | `GET /sys/config/drift` | P2（含索引模型比对，见下） | ⑤ |
 
@@ -735,7 +759,8 @@ POST /chat → ① api 层校验 model（唯一规则来源）
 2. **私网放行比 B.6 原文更严一点** —— 只放开 IP 网段、不放开协议；且云元数据地址（`169.254.169.254` / `fd00:ec2::254`）**即便放行也始终拦**。理由：元数据是「取实例凭据」入口，泄露后果与「访问内网 LLM」完全不成比例。
 3. **只有 L0 失败短路** —— L1 的 404/401 一律降级后继续跑 L2。有些站点 `/models` 需额外 scope，L1 401 不代表 chat 端点也 401，过早判死会毁掉测试按钮的可信度。
 
-**⚠️ 差一行未生效**：`sys_providers.router` **尚未注册**到 `api_router`。原因：`app/api/router.py` 正被并发会话持有未提交改动（含 `budgets` / `model_prices` / `idempotency` 三个**未提交模块**的 include），提交该文件会连带让主干 import 失败 —— 与 §15.1 第 1 条同类。待它落定后补一行 `include_router(sys_providers.router)` 即生效。
+✅ 当前已完成注册：`sys_providers.router` 已包含在 `api_router`，并已通过实际
+TestClient 读取验证。下文关于「差一行未生效」的内容属于注册前快照。
 
 **对 B.8 硬闸门的影响**：P1b 完成后，闸门**只剩 P1a-2**。⚠️ 但 P1a-2 的**真实范围比此处原写的「billing 传播」更大** —— 见 §15.5：它还包含「proxy 的构建路径不传凭据」这一条，而**那条才是 BYOK 至今不生效的直接原因**。落点仍是并发会话持有的 `proxy.py` / `budget.py` / `quota.py`。
 
@@ -765,10 +790,10 @@ tab② 的数据源已就位（与探测端点同文件、同待注册批次）�
 2. **兜底不是空列表** —— 见上表。空列表会把「库没就绪」伪装成「配置被删光」。
 3. **不为「列出已停用实例」改动 `_SELECT_PROVIDERS`** —— 该 SQL 被 `refresh_registry` 与探测端点共用（都依赖 `enabled=true` 语义）。故清单里 `enabled` 恒 true；停用项展示随 P2 的「停用/编辑」功能另开查询。
 
-**仍未落地的两处（P2 后续，勿当遗漏）**：
+**实现后的状态（原缺口已关闭）**：
 
-- `lastProbe` 恒 `null` —— 探测结果持久化表未建（0018），当前只有内存态；前端按「未验证」灰显，tab⑤ 漂移会点名。
-- 三个端点（清单 + 探测×2）**仍差一行注册**（同 §15.2）。清单端点属只读，对现有前端零影响，可与探测端点一并注册。
+- `lastProbe` 已在迁移 0018 后持久化到 provider 表；尚未探测的 provider 仍为 `null`，前端按「未验证」灰显，tab⑤ 漂移会点名。
+- 清单与两个探测端点已注册；本段早期的「差一行注册」是实现前快照。
 
 ### 15.4 P2 数据源：模型角色绑定视图（2026-09-19）
 
@@ -788,20 +813,22 @@ tab①⑤ 的数据源，与 §15.3 同批落码，同样落在独占新文件�
 
 **一条一致性约束**：`provider` 与 `registered` **必须同源**（都用 `get_available_models()`，即代码层 + DB 动态层）。若 `provider` 沿用 `model_roles.provider_of`（只看代码层 `AVAILABLE_MODELS`），自建模型会显示「已注册但无所属供应商」—— 自相矛盾且无从排查。有测试锁定。
 
-**⚠️ 本轮查实的一个 P0→P1 缺口（未动，需单独立项）**
+**⚠️ 本轮查实的一个 P0→P1 缺口（设计阶段记录；本轮已补齐）**
 
-「模型选型进 DB」（决策 1）目前**只有解析器、没有数据通道**：
+「模型选型进 DB」（决策 1）在设计阶段**只有解析器、没有数据通道**：
 
-1. `model_roles.inject_overrides()` **零调用点** —— 设计上由 `services/sys_config.py` 的刷新循环注入，但 `_fetch_overrides` 的 SQL 是 `WHERE key = ANY(:keys)` 且 `keys = list(_SWITCHES)`，而模型角色不登记在那张表里（`sys_config` 注释明确说明）。存储侧没有障碍：`sys_config` 表本身就是通用 key/value（`key VARCHAR(64) PRIMARY KEY`）。
-2. **即便接线，运行时也不会即时生效** —— `config/llm.py` 的 `LLM_MODEL = _literal_model("main")` 是**模块级赋值 → 导入时冻结**，DB 覆盖在启动后才读到，故只影响下次启动。而主设计 §6.1 对该对象的承诺是「本实例即时，其他实例 ≤1 TTL」。
+1. 当时 `model_roles.inject_overrides()` **零调用点** —— 旧设计上由 `services/sys_config.py` 的刷新循环注入，但该循环只处理守卫开关。
+2. **即便接线，旧运行时也不会即时生效** —— `config/llm.py` 的 `LLM_MODEL = _literal_model("main")` 是**模块级赋值 → 导入时冻结**。
 
    → 要做到「本实例即时」，须把消费方从「读 `config.LLM_MODEL` 常量」改成「调用时 `resolve_name(role)`」。落点分散在 `infra/llm/proxy.py`（`_resolve_active_llm` / `get_active_model_name`）、`rag/chain.py`、`infra/llm/factory.py` 等 —— **其中 `rag/chain.py` 与 `proxy.py` 正被并发会话持有未提交改动**。
 
-   → 故本轮**刻意没有**接线 `inject_overrides`：接一个「看起来支持 DB 覆盖、实际要重启」的半成品，比不接更危险（管理员会以为改完就生效）。
+   → 本轮通过 `registry_store` 刷新动态注入角色覆盖，并在 `proxy` 的 active/default 解析路径按请求读取，因此主问答模型保存后无需重启即可对后续请求生效。
 
-**当前 `source` 的取值**：只可能是 `env` / `inherit` / `default`（`db` 是接线后的取值，端点已能如实透传，有测试锁定）。
+**当前 `source` 的取值**：可为 `db` / `env` / `inherit` / `default`；DB 覆盖由
+`registry_store` 注入，端点与运行时共享同一快照。
 
-**仍未落地的两处**：同 §15.3 —— 探测结果持久化表（0018）未建；**四个端点**（清单 + 角色 + 探测×2）仍差一行注册。
+**实现后的状态**：探测结果已由迁移 0018 持久化；清单、角色和探测端点已注册，
+写入、历史、回滚和漂移端点由 `model_config.py` 提供。旧「仍未落地」结论仅是设计阶段快照。
 
 ### 15.5 P1a-2 真实范围的前置核查 + 两条实测缺陷（2026-09-19）
 
@@ -836,9 +863,10 @@ tab①⑤ 的数据源，与 §15.3 同批落码，同样落在独占新文件�
 `rag/indexing/indexer.py:34`、`rag/embedding_singleton.py`、`evaluation/generation.py:16`、`evaluation/ragas_bridge.py:37`、`app/api/routes/rag_upload.py`。
 
 → **blast radius 远大于设计写下时的预估**，且 `indexer.py` / `rag_upload.py` / `chain.py` 未必在本会话手上。
-→ **建议（待拍板，本轮未动）**：`main`/`fallback` 两个角色的消费点（`proxy.py` + `factory.py`）改为调用时解析，
-其余角色保留「重启生效」；同时把主设计 §6.1 的承诺改写成如实文案，并让 UI 徽章区分「已生效」与「需重启」。
-**不做**「页面说已覆盖、运行时其实没读」的半成品。
+→ **当前实现状态（2026-09-19）**：新增 `model_roles.resolve_runtime_name()` 作为兼容入口，
+`main`、`fallback`、`doc`、`tool_selector`、`ocr`、`rerank`、`eval_gen` 的实际调用点已改为在 DB 覆盖存在时读取新值；
+`embedding` 仍保留单例与向量空间安全门槛，页面明确提示必须重建索引，不能在线切换当前索引。
+因此 UI 不再统一显示「下一次请求生效」，而按角色提示热切换或重建索引要求。
 
 **（四）注册死锁的一个新认知（重要）**
 
@@ -846,9 +874,10 @@ tab①⑤ 的数据源，与 §15.3 同批落码，同样落在独占新文件�
 部分提交后我的行进 HEAD，而持有方的工作区副本**不含**我的行 → 他**下一次提交该文件会把我的行静默删掉**（文件级提交取工作区内容）→ 端点悄然回到 404 且无任何报错。
 故注册只能由 `router.py` 的持有方落定后补，或由其明确授权代加。已写入协同文档 §2①。
 
-### 15.6 P1a-2 收口：proxy 构建路径的凭据传参 + 分发统一（2026-09-19，未提交）
+### 15.6 P1a-2 收口：proxy 构建路径的凭据传参 + 分发统一（2026-09-19）
 
-用户拍板「改」后，把 §15.5（一）（二）两条一起收掉。**改动仅在工作区、未提交**（原因见下）。
+用户拍板「改」后，把 §15.5（一）（二）两条一起收掉。当前改动已在工作区完成并验证，
+是否提交由发布流程另行决定。
 
 **落点：`backend/infra/llm/proxy.py`（全在 200–283 行，与并发会话的预算改动 340+ 行完全不相邻）**
 
@@ -888,7 +917,8 @@ tab①⑤ 的数据源，与 §15.3 同批落码，同样落在独占新文件�
 
 **验证**：合并回归 **199 passed** 零失败（含 `test_url_guard` / `registry_store` / `credentials` / `registry_models` / `model_roles` / `provider_probe` / 三个 api / `override_validation` / `bind_tools` / `llm_usage_component` / `llm_cascade`）。
 
-**对 B.8 闸门的影响**：技术上前置已完成（§15.5 两条缺陷均已修），但**落码未入库、且依赖 0017 与 P2 写端点**。故闸门判定不变 —— 管理端页面的开工时机仍是「`proxy.py` 与 `router.py` 落定 + P2 写端点可用」之后。
+**对 B.8 闸门的影响**：§15.5 两条缺陷、0018 迁移、P2 写端点和页面均已在本轮
+完成本地验证；生产上线仍需执行迁移、部署并按 §10.3 灰度。
 
 ---
 
@@ -924,7 +954,8 @@ tab①⑤ 的数据源，与 §15.3 同批落码，同样落在独占新文件�
 **一条刻意的安全网**：`redactForRole` 在当前契约下，`canAdmin` 对四类已知对象**不产生差异**（密钥类对管理员也只给指纹 —— 库里本就没有可展示的值）。
 仍保留该形参并用在 **未知对象类型** 的兜底分支上（非 admin 一律不显示值）：将来新增带秘密的对象类型时，默认就是安全的，而不是等发现泄漏再补。测试用一个 `provider_header` 假类型锁定了这条兜底。
 
-**仍未做**：`api/modelConfig.ts`（对着 mock）—— 等四个端点注册生效后再写，否则模块对着 404 的路径写死，验收时会分不清「前端错」还是「没注册」。
+**已实现**：`frontend-admin/src/api/modelConfig.ts` 已对接上述裸 dict 端点，并有
+请求形状测试；组件和页面状态见治理进度报告 §10。
 
 ---
 
