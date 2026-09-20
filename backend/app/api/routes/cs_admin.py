@@ -9,6 +9,8 @@ traces 端点始终走 Python（trace 数据在 observability.trace_store）。
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
@@ -577,9 +579,10 @@ async def get_handoff_queue(
 async def issue_agent_ws_ticket(request: Request):
     """签发坐席 WS 一次性连接票据（60s TTL、单次使用）。
 
-    鉴权链：JWT/受信服务身份头只提供 user + tenant，坐席 agent_id 必须
+    鉴权链：仅接受 JWT 身份头提供的 user + tenant，坐席 agent_id 必须
     从 PostgreSQL 的 cs_agents.auth_user_id 反查；浏览器不能提交可信
-    agent_id。浏览器持 ticket 完成 WS 握手，Redis 不可用时拒绝签发。
+    agent_id。API-Key 通道没有按坐席/租户绑定的可信映射，明确拒绝签发。
+    浏览器持 ticket 完成 WS 握手，Redis 不可用时拒绝签发。
     """
     agent_id, tenant_id = await _resolve_ws_agent_identity(request)
     from backend.customer_service.realtime import (
@@ -587,7 +590,8 @@ async def issue_agent_ws_ticket(request: Request):
         get_agent_hub,
     )
 
-    ticket = get_agent_hub().issue_ticket(
+    ticket = await asyncio.to_thread(
+        get_agent_hub().issue_ticket,
         agent_id=agent_id,
         tenant_id=tenant_id,
     )
@@ -605,8 +609,16 @@ async def _resolve_ws_agent_identity(request: Request) -> tuple[str, str]:
     from sqlalchemy import select
 
     from backend.app.api.identity import resolve_identity
+    from backend.config.auth import AUTH_TYPE_HEADER
     from backend.customer_service.models.agent import CSAgent
     from backend.memory.database import AsyncSessionLocal
+
+    auth_type = (request.headers.get(AUTH_TYPE_HEADER) or "").strip().lower()
+    if auth_type == "api-key":
+        raise HTTPException(
+            403,
+            detail="WS ticket 需要绑定客服用户的 JWT 身份，API-Key 通道不支持",
+        )
 
     identity = resolve_identity(request)
     if not identity.authenticated:

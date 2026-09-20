@@ -36,6 +36,21 @@ async def test_ws_ticket_rejects_missing_tenant_identity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ws_ticket_rejects_unbound_api_key_channel() -> None:
+    request = _request(
+        {
+            "X-Auth-Type": "api-key",
+            "X-API-Key": "service-key",
+        }
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await issue_agent_ws_ticket(request)
+
+    assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_ws_ticket_does_not_accept_browser_agent_id(monkeypatch: pytest.MonkeyPatch) -> None:
     request = _request(
         {

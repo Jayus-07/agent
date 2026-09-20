@@ -42,8 +42,9 @@
   - 广播/落库失败仅记日志，永不影响业务主链路。
 
 鉴权：
-  HTTP 端点（X-API-Key 保护）签发一次性 ticket（默认 60s TTL、单次使用），
-  浏览器凭 ticket 查询参数完成 WS 握手 —— API Key 不进浏览器。
+  HTTP 端点使用绑定客服用户的 JWT 身份签发一次性 ticket（默认 60s TTL、
+  单次使用）；未建立坐席/租户绑定的 API-Key 通道被拒绝。浏览器凭 ticket
+  查询参数完成 WS 握手，API Key/JWT 均不进入浏览器 WS URL。
 """
 from __future__ import annotations
 
@@ -54,6 +55,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from fastapi import WebSocket
 
@@ -148,7 +150,11 @@ class AgentHub:
 
     @staticmethod
     def presence_key(tenant_id: str, agent_id: str) -> str:
-        return f"{_PRESENCE_KEY_PREFIX}{tenant_id}:{agent_id}"
+        # 租户校验允许 ':'；对两个组件分别编码，避免 tenant/agent 拼接碰撞。
+        return (
+            f"{_PRESENCE_KEY_PREFIX}{quote(tenant_id, safe='')}:"
+            f"{quote(agent_id, safe='')}"
+        )
 
     @staticmethod
     def _redis():
