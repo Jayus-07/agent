@@ -1,0 +1,187 @@
+{
+  "timestamp": "2026-09-20T20:11:08.534642+00:00",
+  "container": "agent-postgres-1",
+  "database": "agent_memory",
+  "read_only": true,
+  "migrations": {
+    "028": {
+      "total": 18,
+      "present": 0,
+      "missing": [
+        "customer_service.handoffs.priority",
+        "customer_service.handoffs.assignment_version",
+        "customer_service.handoffs.attempt_count",
+        "customer_service.handoffs.offer_expires_at",
+        "customer_service.cs_agents.tenant_id",
+        "customer_service.cs_agents.auth_user_id",
+        "customer_service.assignments.state",
+        "customer_service.assignments.attempt_no",
+        "customer_service.events.outbox_status",
+        "customer_service.events.event_seq",
+        "customer_service.conversations.tenant_id",
+        "idx_cs_handoff_dispatch_queue",
+        "uq_cs_handoff_tenant_conversation_active",
+        "uq_cs_agent_tenant_auth_user",
+        "idx_cs_event_outbox_pending",
+        "fk_cs_handoff_tenant_agent",
+        "fk_cs_assignment_tenant_conversation",
+        "ck_cs_assignment_active_handoff_required"
+      ],
+      "applied": false,
+      "checks": [
+        {
+          "category": "column",
+          "name": "customer_service.handoffs.priority",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "column",
+          "name": "customer_service.handoffs.assignment_version",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "column",
+          "name": "customer_service.handoffs.attempt_count",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "column",
+          "name": "customer_service.handoffs.offer_expires_at",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "column",
+          "name": "customer_service.cs_agents.tenant_id",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "column",
+          "name": "customer_service.cs_agents.auth_user_id",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "column",
+          "name": "customer_service.assignments.state",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "column",
+          "name": "customer_service.assignments.attempt_no",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "column",
+          "name": "customer_service.events.outbox_status",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "column",
+          "name": "customer_service.events.event_seq",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "column",
+          "name": "customer_service.conversations.tenant_id",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "index",
+          "name": "idx_cs_handoff_dispatch_queue",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "index",
+          "name": "uq_cs_handoff_tenant_conversation_active",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "index",
+          "name": "uq_cs_agent_tenant_auth_user",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "index",
+          "name": "idx_cs_event_outbox_pending",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "constraint",
+          "name": "fk_cs_handoff_tenant_agent",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "constraint",
+          "name": "fk_cs_assignment_tenant_conversation",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "constraint",
+          "name": "ck_cs_assignment_active_handoff_required",
+          "present": false,
+          "error": null
+        }
+      ]
+    },
+    "029": {
+      "total": 4,
+      "present": 0,
+      "missing": [
+        "auth.users.version",
+        "auth.users.tenant_id",
+        "auth.rbac_audits",
+        "idx_rbac_audits_tenant_created"
+      ],
+      "applied": false,
+      "checks": [
+        {
+          "category": "column",
+          "name": "auth.users.version",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "column",
+          "name": "auth.users.tenant_id",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "table",
+          "name": "auth.rbac_audits",
+          "present": false,
+          "error": null
+        },
+        {
+          "category": "index",
+          "name": "idx_rbac_audits_tenant_created",
+          "present": false,
+          "error": null
+        }
+      ]
+    }
+  },
+  "risk_items": {
+    "assignments_legacy_active_rows": "N/A(存量schema缺列,由028自检兜底)",
+    "handoffs_orphan_tenant_agent": "N/A(存量schema缺列,由028自检兜底)",
+    "handoffs_duplicate_active": "N/A(存量schema缺列,由028自检兜底)",
+    "cs_agents_duplicate_auth_user": "N/A(存量schema缺列,由028自检兜底)"
+  },
+  "conclusion": "PENDING_DEPLOY"
+}

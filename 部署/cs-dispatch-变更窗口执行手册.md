@@ -110,6 +110,16 @@ python scripts/cs_dispatch_chaos.py --target dispatcher --apply
 
 | 门槛 | 状态 | 证据 |
 |---|---|---|
-| 028/029 共享库部署 | 未执行（待变更窗口） | `docs/reports/cs-dispatch-migrate-preflight-*.json`（PENDING_DEPLOY） |
+| 028/029 共享库部署 | ✅ **已执行**（2026-09-21 04:12，操作人 `workbuddy-20260921T0411`，低峰窗口） | 执行前预检 `cs-dispatch-migrate-preflight-20260921T041116.json`（PENDING_DEPLOY，风险项全 N/A）；备份 `backup-pre-028-029.sql`（475KB，customer_service+auth 双 schema，容器 `/tmp` 与 worktree 根各一份）；执行后复核 `cs-dispatch-migrate-apply-20260921T041215.json`（**ALL_APPLIED**）；人工抽查 handoffs 新列 5/5、`auth.rbac_audits` 建表、`auth.users` 补 version/tenant_id；存量数据零降级（assignments 仅 1 条 released）、共享后端 /health 正常 |
 | 网关挂载压测 | 未执行（待隔离环境） | 2026-09-20 误压已终止，无残留进程 |
-| 容器级故障演练 | dispatcher 受控项可跑；Redis/PG/API 待窗口 | `docs/reports/cs-dispatch-chaos-*.json` |
+| 容器级故障演练 | dispatcher 受控项就绪（dispatcher shadow 已启动）；Redis/PG/API 停启演练待窗口 | chaos 只读预检 `cs-dispatch-chaos-20260920T202023.json`（⚠️ 该脚本读 `.env` 默认连本机 `localhost:5432/demo`，对共享库跑必须显式覆盖 `PGHOST=127.0.0.1 PGPORT=5433 PGDATABASE=agent_memory`，否则误报 028 未应用） |
+
+## 部署后启用进度（随窗口滚动更新）
+
+| 步骤 | 状态 | 备注 |
+|---|---|---|
+| 1. 028/029 部署 + 复核 | ✅ 2026-09-21 04:12 | ALL_APPLIED |
+| 2. 启动 dispatcher | ✅ 2026-09-21 04:24 | `CS_DISPATCH_MODE=shadow` 双副本 healthy；启动期每副本 1 条 `dispatch iteration failed`（event loop 重建瞬时错误，不复发）；心跳 `cs:dispatcher:heartbeat:*` 双实例各 1 条 |
+| 3. shadow 观察 ≥24h | 🕐 进行中（至 2026-09-22） | 观察 `/cs/ops/dispatch/stats` + Prometheus `agent-platform-cs-dispatch`；**启动 1 分钟内 relay 已把存量 456 条 pending outbox 全部投递清零**；shadow 零真实绑定（assignments 无新增、agent_offered=0）已实测 |
+| 4. 放量 5→20→50→100 | ⬜ 未开始 | `scripts/cs_dispatch_rollout.py --set 5` |
+| 5. 切 enforce | ⬜ 未开始 | 100% 稳定后 |
