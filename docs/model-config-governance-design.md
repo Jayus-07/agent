@@ -1117,6 +1117,13 @@ DELETE /sys/providers/{provider_id}/models?modelName=<urlencoded>
   新增 1 例（`source`/`usedByRoles` 正确性）。
 - 前端：`ProvidersTab.test.tsx` 22 例全过（含卡片分组、专项供应商并卡、移除拦截）；
   `tsc --noEmit` 零错；全量 `vitest run` 322 例全过。
+- **活服务实测（重建 `app` 容器后）**：`openapi.json` 实测该路径为
+  `['delete','get','post']`；缺 `Idempotency-Key` → 400；被角色占用 → 409（点名角色）；
+  代码层内置 → 409；归属不符 → 409（点名真实归属方）；不存在 → 404；editor → 403；
+  **200 成功路径**用一次性行做真机 E2E（插入 → 200 → 行消失 → 审计
+  `object_type=provider` / `rollbackable=false` → 重复调用 404），验证数据已清理。
+- 实测事实补充：治理表在 **`agent_memory`** 库（`agent_business` 只有业务表）；
+  `llm_models` 的列名是 `provider_id` 而非 `provider`。
 
 ### B.12.9 明确未做
 
