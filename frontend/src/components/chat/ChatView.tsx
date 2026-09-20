@@ -10,6 +10,9 @@ import ChatInput from './ChatInput'
 import WelcomeState from './WelcomeState'
 import ContextPanel from './ContextPanel'
 import ErrorCard from '@/components/shared/ErrorCard'
+import BudgetStatusBar from './BudgetStatusBar'
+import ClarificationCard from './ClarificationCard'
+import { lastUserQuestion } from './chatRetry'
 
 // 模块级稳定空数组，避免 messages 为空时 useMemo 每次返回新 []
 const EMPTY_MESSAGES: Message[] = []
@@ -26,7 +29,10 @@ export default function ChatView() {
   )
   const isLoading = useChatStore((s) => s.isLoading)
   const error = useChatStore((s) => s.error)
+  const clarification = useChatStore((s) => s.clarification)
+  const retryQuestion = useMemo(() => lastUserQuestion(messages), [messages])
   const { send, stopStream } = useSendMessage()
+  const [budgetBlocked, setBudgetBlocked] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -97,7 +103,12 @@ export default function ChatView() {
           + 行动指引 + 详情折叠；historyError 在任务栏显示（P1-16），此处只管轮次错误 */}
       {error !== null && (
         <div className="shrink-0 mx-5 mt-3 flex items-start gap-2.5 animate-fade-in">
-          <ErrorCard error={error} className="flex-1 max-w-none" />
+          <ErrorCard
+            error={error}
+            className="flex-1 max-w-none"
+            actionsDisabled={budgetBlocked}
+            onRetry={retryQuestion ? () => { void send(retryQuestion) } : undefined}
+          />
           <button
             onClick={() => useChatStore.getState().setError(null)}
             className="text-xs text-gray-400 hover:text-gray-600 shrink-0 mt-1 transition-colors"
@@ -105,6 +116,21 @@ export default function ChatView() {
             关闭
           </button>
         </div>
+      )}
+
+      <BudgetStatusBar onBlockedChange={setBudgetBlocked} />
+
+      {clarification && (
+        <ClarificationCard
+          event={clarification}
+          disabled={isLoading || budgetBlocked}
+          onSelect={(label) => {
+            void send(label)
+          }}
+          onHandoff={() => {
+            void send('请转人工客服处理上一条请求')
+          }}
+        />
       )}
 
       {/* Memory context panel */}
@@ -119,17 +145,17 @@ export default function ChatView() {
       {messages.length === 0 ? (
         <div className="flex-1 min-h-0 flex flex-col px-6 py-6">
           <div className="w-full my-auto">
-            <WelcomeState onExampleClick={send} />
-            <ChatInput onSend={send} isLoading={isLoading} onStop={stopStream} embedded />
+            <WelcomeState onExampleClick={send} budgetBlocked={budgetBlocked} />
+            <ChatInput onSend={send} isLoading={isLoading} onStop={stopStream} embedded budgetBlocked={budgetBlocked} />
           </div>
         </div>
       ) : (
         <>
           <div ref={contentRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
-            <MessageList messages={messages} isLoading={isLoading} sessionId={currentId} />
+            <MessageList messages={messages} isLoading={isLoading} sessionId={currentId} budgetBlocked={budgetBlocked} />
             <div ref={bottomRef} />
           </div>
-          <ChatInput onSend={send} isLoading={isLoading} onStop={stopStream} />
+          <ChatInput onSend={send} isLoading={isLoading} onStop={stopStream} budgetBlocked={budgetBlocked} />
         </>
       )}
     </div>

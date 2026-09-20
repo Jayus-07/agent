@@ -21,6 +21,7 @@
 
 import { useState } from "react";
 import { describeApiError, type ResolvedError } from "@/api/errors";
+import { getIdempotencyOperationStatus, type IdempotencyOperationSummary } from "@/api/idempotency";
 
 /** RAG 拒答语义码 → 行动指引（预登记契约，后端 C4 接通前不命中） */
 export const RAG_REJECTION_ACTIONS: Record<string, string> = {
@@ -44,6 +45,45 @@ export const KIND_ACTIONS: Record<string, string> = {
   unknown: "操作失败：请稍后重试或联系管理员",
 };
 
+const BUDGET_SCOPE_LABELS: Record<string, string> = {
+  request: "本次请求预算",
+  user: "用户",
+  tenant: "租户",
+  price: "价格覆盖",
+};
+
+const BUDGET_PERIOD_LABELS: Record<string, string> = {
+  daily: "日额度",
+  day: "日额度",
+  monthly: "月额度",
+  month: "月额度",
+};
+
+function budgetActionText(resolved: ResolvedError): string {
+  const scope = resolved.details?.budget_kind;
+  const period = resolved.details?.limit_kind ?? resolved.details?.period_type;
+  if (typeof scope !== "string") return "预算条件未满足：请查看预算状态或联系管理员";
+  if (scope === "request") return "本次请求预算已用尽：减少任务范围后重新发起";
+  const scopeLabel = BUDGET_SCOPE_LABELS[scope] ?? "预算";
+  const periodLabel = typeof period === "string" ? (BUDGET_PERIOD_LABELS[period] ?? period) : "额度";
+  const resetAt = resolved.details?.reset_at;
+  const resetText = typeof resetAt === "string" ? `，预计 ${formatTime(resetAt)} 恢复` : "，请联系管理员查看策略";
+  return `已达到${scopeLabel}${periodLabel}${resetText}`;
+}
+
+function formatTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 export interface ErrorFeedback extends ResolvedError {
   /** 行动指引文案（RAG 语义码优先于 kind 映射） */
   actionText: string;
@@ -56,7 +96,10 @@ export function resolveErrorFeedback(err: unknown): ErrorFeedback {
     typeof resolved.code === "string" ? RAG_REJECTION_ACTIONS[resolved.code] : undefined;
   return {
     ...resolved,
-    actionText: ragAction ?? KIND_ACTIONS[resolved.kind] ?? KIND_ACTIONS.unknown,
+    actionText: ragAction
+      ?? (resolved.code === "BUDGET_EXCEEDED" ? budgetActionText(resolved) : undefined)
+      ?? KIND_ACTIONS[resolved.kind]
+      ?? KIND_ACTIONS.unknown,
   };
 }
 
@@ -73,17 +116,39 @@ export default function ErrorCard({
   /** 已解析好的反馈（可选，便于调用方复用同一次 resolve） */
   feedback,
   onRetry,
+  onHandoff,
+  actionsDisabled = false,
   className = "",
 }: {
   error?: unknown;
   feedback?: ErrorFeedback;
   /** 重试回调；仅在反馈标记 retriable 时渲染 */
   onRetry?: () => void;
+  /** 后端明确允许转人工时显示；默认进入客服入口。 */
+  onHandoff?: () => void;
+  /** 硬额度下隐藏会发起模型/写操作的错误动作；只读详情仍保留。 */
+  actionsDisabled?: boolean;
   className?: string;
 }) {
   const [openDetail, setOpenDetail] = useState(false);
+  const [operationStatus, setOperationStatus] = useState<IdempotencyOperationSummary | null>(null);
+  const [operationLoading, setOperationLoading] = useState(false);
+  const [operationError, setOperationError] = useState("");
   const fb = feedback ?? resolveErrorFeedback(error);
   const summary = causeSummary(fb.cause);
+
+  const viewOperationStatus = async () => {
+    if (!fb.idempotencyKey || operationLoading) return;
+    setOperationLoading(true);
+    setOperationError("");
+    try {
+      setOperationStatus(await getIdempotencyOperationStatus(fb.idempotencyKey));
+    } catch {
+      setOperationError("原操作状态暂时无法查询，请稍后刷新重试");
+    } finally {
+      setOperationLoading(false);
+    }
+  };
 
   return (
     <div
@@ -99,7 +164,8 @@ export default function ErrorCard({
         </p>
       </div>
 
-      {fb.retriable && onRetry && (
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+      {!actionsDisabled && fb.retryable && onRetry && (
         <button
           type="button"
           onClick={onRetry}
@@ -108,6 +174,44 @@ export default function ErrorCard({
           重试
         </button>
       )}
+
+      {!actionsDisabled && fb.handoffAvailable && (
+        <button
+          type="button"
+          onClick={onHandoff ?? (() => { window.location.assign("/agent?handoff=1"); })}
+          className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
+        >
+          转人工
+        </button>
+      )}
+
+      {fb.traceId && (
+        <button
+          type="button"
+          onClick={() => { void navigator.clipboard?.writeText(fb.traceId ?? ""); }}
+          className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+        >
+          复制 Trace ID
+        </button>
+      )}
+      {fb.code === "IDEMPOTENCY_CONFLICT" && fb.idempotencyKey && (
+        <button
+          type="button"
+          onClick={() => { void viewOperationStatus(); }}
+          disabled={operationLoading}
+          className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+        >
+          {operationLoading ? "查询中…" : "查看原操作状态"}
+        </button>
+      )}
+      </div>
+
+      {operationStatus && (
+        <p className="mt-2 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
+          原操作状态：{operationStatus.status === "running" ? "处理中" : operationStatus.status === "succeeded" ? "已完成" : operationStatus.status === "uncertain" ? "结果待确认" : "失败"}
+        </p>
+      )}
+      {operationError && <p className="mt-2 text-xs text-red-600">{operationError}</p>}
 
       <button
         type="button"
@@ -121,8 +225,10 @@ export default function ErrorCard({
         <div className="mt-2 space-y-1 rounded-lg border border-gray-100 bg-gray-50 p-3 font-mono text-[11px] leading-relaxed text-gray-500">
           {fb.code && <p>code: {fb.code}</p>}
           {fb.status !== undefined && <p>http_status: {fb.status}</p>}
-          <p>kind: {fb.kind} · retriable: {String(fb.retriable)}</p>
-          {summary && <p className="break-all">cause: {summary}</p>}
+          <p>kind: {fb.kind} · retryable: {String(fb.retryable)}</p>
+          {fb.traceId && <p>trace_id: {fb.traceId}</p>}
+          {fb.source && <p>source: {fb.source}</p>}
+          {summary && <p>错误详情已隐藏，便于保护内部实现信息</p>}
         </div>
       )}
     </div>

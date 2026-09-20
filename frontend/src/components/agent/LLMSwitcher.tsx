@@ -9,24 +9,31 @@
  *   - 黑色文字 (#1f1f1f) + Google Blue (#1a73e8) 强调
  *   - 圆角 20px (胶囊) / 16px (下拉)
  *   - 状态用"勾号 ✓" + 500ms 反馈，不滥用转圈
+ *
+ * B.9 决策②（2026-09-19）—— 受控化，语义变更：
+ *   - 选模型 = **会话级临时覆盖**（只写 store.sessionModel，**不调 switchLLM**）
+ *   - 「当前模型」= 会话覆盖 ?? 全局默认（全局默认只读）
+ *   - 会话覆盖生效时触发器加「· 本会话」后缀，避免误以为动了全局
+ *   - 写全局的入口已收敛到 admin（POST /llm/switch 有 require_admin_user 门禁），
+ *     本组件（web 端无角色体系）不再提供
  */
 
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { Sparkles, ChevronDown, Check, Loader2, AlertCircle, X } from 'lucide-react'
+import { Sparkles, ChevronDown, Check, Loader2, AlertCircle, X, RotateCcw } from 'lucide-react'
 import {
   listLLMModels,
   getCurrentLLM,
-  switchLLM,
   getLLMBalance,
   type LLMModel,
   type LLMBalance,
 } from '@/lib/api'
+import { useChatStore } from '@/store/chat'
 
 export default function LLMSwitcher() {
   const [models, setModels] = useState<LLMModel[]>([])
-  const [current, setCurrent] = useState<string>('')
+  /** 全局默认模型（只读）：仅用于展示与「回到全局默认」的目标名 */
+  const [globalModel, setGlobalModel] = useState<string>('')
   const [loading, setLoading] = useState(false)
-  const [switching, setSwitching] = useState(false)
   const [justSwitched, setJustSwitched] = useState(false)  // 切换成功的瞬间反馈
   const [error, setError] = useState<string>('')
   const [balance, setBalance] = useState<LLMBalance | null>(null)
@@ -34,14 +41,21 @@ export default function LLMSwitcher() {
   const [open, setOpen] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
 
-  // 加载模型列表 + 当前模型
+  // 会话级模型覆盖（B.9）：null = 跟随全局默认，与 sessionId 同生命周期
+  const sessionModel = useChatStore((s) => s.sessionModel)
+  const setSessionModel = useChatStore((s) => s.setSessionModel)
+
+  // 实际生效的模型 = 会话覆盖 ?? 全局默认
+  const current = sessionModel || globalModel
+
+  // 加载模型列表 + 全局默认模型
   const refresh = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
       const [list, cur] = await Promise.all([listLLMModels(), getCurrentLLM()])
       setModels(list.models)
-      setCurrent(cur.model)
+      setGlobalModel(cur.model)
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败')
     } finally {
@@ -78,25 +92,30 @@ export default function LLMSwitcher() {
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  // 切换模型
-  const handleSwitch = async (modelName: string) => {
-    if (modelName === current || switching) return
-    setSwitching(true)
+  const flashSwitched = () => {
+    setJustSwitched(true)
+    setTimeout(() => setJustSwitched(false), 1500)
+  }
+
+  /** 选择**本次会话**使用的模型（B.9）：只写会话态，不触碰全局默认。
+   *  选中项若等于全局默认值，则等价于「清除覆盖」，存 null 以保持状态干净。 */
+  const handleSwitch = (modelName: string) => {
+    if (modelName === current) return
     setError('')
     setOpen(false)
-    try {
-      await switchLLM(modelName)
-      setCurrent(modelName)
-      setJustSwitched(true)
-      setTimeout(() => setJustSwitched(false), 1500)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '切换失败')
-    } finally {
-      setSwitching(false)
-    }
+    setSessionModel(modelName === globalModel ? null : modelName)
+    flashSwitched()
+  }
+
+  /** 清除会话覆盖 → 回到全局默认 */
+  const clearOverride = () => {
+    setSessionModel(null)
+    setOpen(false)
+    flashSwitched()
   }
 
   const currentModel = models.find((m) => m.name === current)
+  const globalModelDisplay = models.find((m) => m.name === globalModel)?.display || globalModel
 
   // 余额徽章内容
   const renderBalance = () => {
@@ -133,7 +152,7 @@ export default function LLMSwitcher() {
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        disabled={loading || switching}
+        disabled={loading}
         className={`
           group flex items-center gap-2.5 h-9 pl-3 pr-3
           bg-white border border-[#dadce0] rounded-full
@@ -147,14 +166,17 @@ export default function LLMSwitcher() {
       >
         <Sparkles className="w-4 h-4 text-[#1a73e8]" strokeWidth={2} />
 
-        {switching ? (
-          <Loader2 className="w-3.5 h-3.5 animate-spin text-[#5f6368]" />
-        ) : justSwitched ? (
+        {justSwitched ? (
           <Check className="w-3.5 h-3.5 text-[#1e8e3e]" strokeWidth={2.5} />
         ) : (
           <span className="max-w-[110px] sm:max-w-[180px] truncate">
             {currentModel?.display || current || '加载中'}
           </span>
+        )}
+
+        {/* 会话级覆盖生效标记：明确"改的是本会话，不是全局" */}
+        {sessionModel && !justSwitched && (
+          <span className="text-[11px] text-[#1a73e8] font-normal shrink-0">· 本会话</span>
         )}
 
         {/* 分隔点（subtle 风格） */}
@@ -182,19 +204,40 @@ export default function LLMSwitcher() {
         >
           {/* 标题栏 */}
           <div className="px-3 pt-2.5 pb-1.5 border-b border-[#f1f3f4]">
-            <div className="text-[12px] font-medium text-[#1f1f1f]">选择 LLM</div>
+            <div className="text-[12px] font-medium text-[#1f1f1f]">选择本次会话的模型</div>
+            <div className="text-[11px] text-[#5f6368] mt-0.5 leading-snug">
+              只影响本会话；全局默认由管理员控制
+            </div>
           </div>
+
+          {/* 回到全局默认（仅覆盖生效时出现） */}
+          {sessionModel && (
+            <div className="p-1 border-b border-[#f1f3f4]">
+              <button
+                type="button"
+                onClick={clearOverride}
+                className="
+                  w-full px-2 py-1.5 rounded-lg text-left
+                  flex items-center gap-2 text-[12px] text-[#1a73e8]
+                  hover:bg-[#f8f9fa] active:bg-[#f1f3f4] transition-colors duration-100
+                "
+              >
+                <RotateCcw className="w-3.5 h-3.5 shrink-0" strokeWidth={2} />
+                <span className="truncate">回到全局默认（{globalModelDisplay || '—'}）</span>
+              </button>
+            </div>
+          )}
 
           {/* 模型列表 */}
           <div className="max-h-[240px] overflow-y-auto py-0.5">
             {models.map((m) => {
               const isCurrent = m.name === current
+              const isGlobal = m.name === globalModel
               return (
                 <button
                   type="button"
                   key={m.name}
                   onClick={(e) => { e.preventDefault(); handleSwitch(m.name) }}
-                  disabled={switching}
                   className={`
                     w-full px-3 py-2 text-left flex items-start gap-2.5
                     transition-colors duration-100
@@ -202,7 +245,6 @@ export default function LLMSwitcher() {
                       ? 'bg-[#e8f0fe]'
                       : 'hover:bg-[#f8f9fa] active:bg-[#f1f3f4]'
                     }
-                    disabled:opacity-50
                   `}
                 >
                   <div className="mt-0.5 shrink-0">
@@ -222,8 +264,13 @@ export default function LLMSwitcher() {
                   </div>
 
                   <div className="flex-1 min-w-0">
-                    <div className="text-[13px] font-medium text-[#1f1f1f]">
-                      {m.display}
+                    <div className="text-[13px] font-medium text-[#1f1f1f] flex items-center gap-1.5">
+                      <span className="truncate">{m.display}</span>
+                      {isGlobal && (
+                        <span className="shrink-0 text-[10px] font-normal text-[#5f6368] bg-[#f1f3f4] rounded px-1 py-px">
+                          全局
+                        </span>
+                      )}
                     </div>
                     <div className="text-[11px] text-[#5f6368] mt-0.5 leading-snug">
                       {m.description}

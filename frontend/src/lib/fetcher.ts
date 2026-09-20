@@ -12,8 +12,14 @@
 export {
   ApiError,
   backendBaseUrl,
+  createIdempotencyKey,
   fetchRaw,
+  mutationFetchRaw,
   request,
   requestSilent,
 } from "@/api/client";
-export type { BackendId, RequestOptions } from "@/api/client";
+export type {
+  BackendId,
+  MutationFetchRawOptions,
+  RequestOptions,
+} from "@/api/client";

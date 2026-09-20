@@ -2,7 +2,7 @@
  * Chat 业务 API：流式对话 + 中止
  */
 import { request, requestSilent } from "@/lib/fetcher";
-import { ApiError } from "@/api/client";
+import { apiErrorFromEnvelope } from "@/api/client";
 import { bearerHeaders, handleAuthFailure, tryRefreshOnce } from "@/lib/auth";
 import { parseSSEStream } from "@/lib/sse-parser";
 import type { SSEStreamEvent as TypedSSEStreamEvent } from "@/lib/types";
@@ -17,6 +17,12 @@ export interface ChatRequest {
   /** 入口域提示：customer_service = 客服窗口锁域（每条消息直接进客服管线，
    *  不重新判域/不受灰度影响）；不带 = 全局入口按需路由 */
   domain_hint?: string;
+  /** 当前逻辑发送操作的幂等键；重试时保持不变。 */
+  idempotency_key?: string;
+  /** 会话级模型覆盖（B.9 决策②）：仅本次请求生效，不改动全局默认。
+   *  后端 API 边界会校验（未注册 / provider Key 缺失 → 400 fail-fast），
+   *  非法值不会被静默吞掉再跑全局模型。 */
+  model?: string;
 }
 
 /**
@@ -24,16 +30,6 @@ export interface ChatRequest {
  * 这样 store/chat 等已有消费方不需要改类型签名
  */
 export type SSEStreamEvent = TypedSSEStreamEvent;
-
-/**
- * 构造带 HTTP 状态的 Error（UX P1 尾巴 X3：错误语义化）。
- * errors.ts 的 describeApiError 会读取 err.status 命中 FALLBACK_BY_STATUS
- * （401/403/429/5xx → kind + 行动指引）——裸 Error 会丢失整条语义链，
- * 只剩「操作失败」兜底文案。
- */
-function httpError(message: string, status?: number, code?: string): ApiError {
-  return new ApiError(message, status ?? 0, undefined, code);
-}
 
 /**
  * POST /chat/stream — 流式对话
@@ -47,6 +43,7 @@ export async function* streamChat(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "Idempotency-Key": req.idempotency_key || req.request_id,
         // 凭据收口（2026-09-16 方案 B）：X-API-Key 由 BFF 代理路由
         // （app/api/[...path]/route.ts）服务端注入。勿引用 NEXT_PUBLIC_API_KEY ——
         // NEXT_PUBLIC_* 会被 Next 内联进浏览器 bundle，等于重新泄漏服务级密钥。
@@ -64,7 +61,11 @@ export async function* streamChat(
       res = await doFetch();
     } else {
       handleAuthFailure();
-      throw httpError("登录已过期", 401, "PERMISSION_DENIED");
+      throw apiErrorFromEnvelope({
+        code: "PERMISSION_DENIED",
+        message: "登录已过期",
+        retryable: false,
+      }, 401);
     }
   }
 
@@ -73,17 +74,7 @@ export async function* streamChat(
     const protocol = err && typeof err === "object" && typeof err.code === "string"
       ? err
       : err?.detail && typeof err.detail === "object" ? err.detail : undefined;
-    const detail = err?.detail;
-    const message =
-      protocol?.message ||
-      (typeof detail === "string" && detail) ||
-      (typeof detail === "object" && detail?.error) ||
-      `HTTP ${res.status}`;
-    throw httpError(
-      String(message),
-      res.status,
-      typeof protocol?.code === "string" ? protocol.code : undefined,
-    );
+    throw apiErrorFromEnvelope(protocol ?? err, res.status);
   }
 
   yield* parseSSEStream(res.body, signal) as AsyncGenerator<SSEStreamEvent>;

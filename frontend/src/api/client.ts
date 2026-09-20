@@ -49,6 +49,132 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
   }
+
+  /** 同一写操作的原始幂等键，供冲突后查询服务端状态。 */
+  idempotencyKey?: string;
+}
+
+/** 将 HTTP/SSE 的统一错误封套转成同一个 ApiError。 */
+export function apiErrorFromEnvelope(payload: unknown, status = 0): ApiError {
+  const body = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  const detail = body.detail && typeof body.detail === "object" ? body.detail as Record<string, unknown> : body;
+  const message = typeof detail.message === "string" ? detail.message : "操作失败，请稍后重试";
+  const code = typeof detail.code === "string" ? detail.code : undefined;
+  return new ApiError(message, status, detail, code);
+}
+
+export interface MutationRequestOptions extends Omit<RequestOptions, "body" | "method"> {
+  /** 逻辑写操作名；同一操作在途时共享请求和幂等键。 */
+  operation: string;
+  body?: unknown;
+  method?: string;
+  /** 恢复原操作时显式复用服务端返回的键。 */
+  idempotencyKey?: string;
+}
+
+const mutationInFlight = new Map<string, Promise<unknown>>();
+const mutationRawInFlight = new Map<string, Promise<Response>>();
+
+function stableSerialize(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`).join(",")}}`;
+}
+
+export function createIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `idem-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
+}
+
+export interface MutationFetchRawOptions extends RequestInit {
+  /** 逻辑写操作名；同一操作在途时共享请求与幂等键。 */
+  operation: string;
+  /** 恢复原操作时显式复用服务端返回的键。 */
+  idempotencyKey?: string;
+  /** FormData 等无法安全序列化的请求体使用显式去重指纹。 */
+  dedupeKey?: string;
+  /** 目标后端，默认 core。 */
+  backend?: BackendId;
+}
+
+/**
+ * 统一原始响应写请求：支持 FormData/SSE 前置请求，并保留 401 刷新语义。
+ * 每个调用方拿到独立 Response 副本，避免并发调用共同消费同一个 body 流。
+ */
+export async function mutationFetchRaw(
+  path: string,
+  options: MutationFetchRawOptions,
+): Promise<Response> {
+  const {
+    operation,
+    idempotencyKey: requestedKey,
+    dedupeKey,
+    backend = "core",
+    ...init
+  } = options;
+  const method = (init.method ?? "POST").toUpperCase();
+  if (method === "GET" || method === "HEAD") {
+    throw new TypeError("mutationFetchRaw 只允许写方法");
+  }
+  const bodyFingerprint = dedupeKey ?? (
+    typeof init.body === "string" ? init.body : ""
+  );
+  const fingerprint = `${operation}:${method}:${path}:${bodyFingerprint}`;
+  const existing = mutationRawInFlight.get(fingerprint);
+  if (existing) return existing.then((response) => response.clone());
+
+  const idempotencyKey = requestedKey ?? createIdempotencyKey();
+  const headers = Object.fromEntries(new Headers(init.headers).entries());
+  const promise = fetchRaw(path, {
+    ...init,
+    method,
+    headers: {
+      ...headers,
+      "Idempotency-Key": idempotencyKey,
+    },
+  }, backend).finally(() => {
+    if (mutationRawInFlight.get(fingerprint) === promise) {
+      mutationRawInFlight.delete(fingerprint);
+    }
+  });
+  mutationRawInFlight.set(fingerprint, promise);
+  return promise.then((response) => response.clone());
+}
+
+/** 统一写请求：同一逻辑操作在途时只发送一次，并注入稳定幂等键。 */
+export async function mutationRequest<T = unknown>(
+  path: string,
+  options: MutationRequestOptions,
+): Promise<T> {
+  const method = (options.method ?? "POST").toUpperCase();
+  if (method === "GET" || method === "HEAD") throw new TypeError("mutationRequest 只允许写方法");
+  const bodyText = typeof options.body === "string"
+    ? options.body
+    : options.body === undefined ? undefined : JSON.stringify(options.body);
+  const fingerprint = `${options.operation}:${method}:${path}:${stableSerialize(options.body ?? null)}`;
+  const existing = mutationInFlight.get(fingerprint);
+  if (existing) return existing as Promise<T>;
+  const idempotencyKey = options.idempotencyKey ?? createIdempotencyKey();
+  const { operation: _operation, idempotencyKey: _key, body: _body, ...requestOptions } = options;
+  const mutationHeaders = Object.fromEntries(new Headers(requestOptions.headers).entries());
+  let promise: Promise<T>;
+  promise = request<T>(path, {
+    ...requestOptions,
+    method,
+    body: bodyText,
+    headers: {
+      ...mutationHeaders,
+      "Idempotency-Key": idempotencyKey,
+    },
+  } as RequestOptions).catch((error: unknown) => {
+    if (error instanceof ApiError) error.idempotencyKey = idempotencyKey;
+    throw error;
+  }).finally(() => {
+    if (mutationInFlight.get(fingerprint) === promise) mutationInFlight.delete(fingerprint);
+  });
+  mutationInFlight.set(fingerprint, promise);
+  return promise;
 }
 
 /**
@@ -121,7 +247,7 @@ function buildHeaders(init?: RequestInit): Record<string, string> {
   // 旧变量 NEXT_PUBLIC_API_KEY 已废弃，请勿在此引用（会重新泄漏进 bundle）。
   return {
     ...bearerHeaders(),
-    ...((init?.headers as Record<string, string>) || {}),
+    ...Object.fromEntries(new Headers(init?.headers).entries()),
   };
 }
 
@@ -223,6 +349,11 @@ export async function request<T = unknown>(
       }
       // 后端 FastAPI 习惯：detail 字段含错误信息
       const detail = (data as Record<string, unknown>)?.detail;
+      const payload = data && typeof data === "object"
+        && (["retryable", "handoff_available", "trace_id", "source", "details"] as const)
+          .some((key) => key in (data as Record<string, unknown>))
+        ? data
+        : detail;
       const message =
         (typeof detail === "string" && detail) ||
         (typeof detail === "object" &&
@@ -234,7 +365,7 @@ export async function request<T = unknown>(
       throw new ApiError(
         String(message),
         res.status,
-        detail,
+        payload,
         extractErrorCode(data),
       );
     }

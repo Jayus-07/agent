@@ -129,3 +129,42 @@ describe("对话流错误语义链（UX P1 尾巴 X3：streamChat 抛错带 stat
     expect(fb.actionText).toBe(KIND_ACTIONS.unknown);
   });
 });
+
+describe("预算错误动作", () => {
+  it("按预算层级和周期给出明确恢复提示，且不允许重试", () => {
+    const err = new Error("budget") as Error & { code?: string; status?: number; detail?: unknown };
+    err.code = "BUDGET_EXCEEDED";
+    err.status = 429;
+    err.detail = {
+      retryable: false,
+      details: {
+        budget_kind: "tenant",
+        limit_kind: "monthly",
+        reset_at: "2026-09-18T16:00:00Z",
+      },
+    };
+    const fb = resolveErrorFeedback(err);
+    expect(fb.retriable).toBe(false);
+    expect(fb.actionText).toContain("租户月额度");
+    expect(fb.actionText).toContain("2026");
+  });
+});
+
+describe("幂等冲突状态查询契约", () => {
+  it("保留原操作键，且不允许冲突错误自动重试", () => {
+    const err = new Error("conflict") as Error & {
+      code?: string;
+      status?: number;
+      idempotencyKey?: string;
+    };
+    Object.assign(err, {
+      code: "IDEMPOTENCY_CONFLICT",
+      status: 409,
+      idempotencyKey: "req-status-1",
+    });
+
+    const fb = resolveErrorFeedback(err);
+    expect(fb.idempotencyKey).toBe("req-status-1");
+    expect(fb.retryable).toBe(false);
+  });
+});

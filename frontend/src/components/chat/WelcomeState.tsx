@@ -18,9 +18,10 @@ const EXAMPLES = [
 
 interface Props {
   onExampleClick?: (question: string) => void
+  budgetBlocked?: boolean
 }
 
-export default function EmptyState({ onExampleClick }: Props) {
+export default function EmptyState({ onExampleClick, budgetBlocked = false }: Props) {
   return (
     // 本组件由 ChatView 放进「欢迎区 + 输入框」的居中组内，自身不再承担垂直居中/
     // 撑满高度（外层用 my-auto 整体居中）；my-auto 兼作对话态下超高时的滚动兜底
@@ -36,6 +37,7 @@ export default function EmptyState({ onExampleClick }: Props) {
           {EXAMPLES.map(({ label, text, Icon }) => (
             <button
               key={text}
+              disabled={budgetBlocked}
               onClick={() => onExampleClick?.(text)}
               title={text}
               aria-label={`示例：${text}`}

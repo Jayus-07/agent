@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
-import type { Session, Message, ChatMode, SSEStreamEvent, TodoItem, TokenUsage } from '@/lib/types'
+import type { Session, Message, ChatMode, SSEStreamEvent, TodoItem, TokenUsage, ClarificationEvent } from '@/lib/types'
 import { isTerminalEvent, reduceStreamCore } from '@/store/stream-reduce'
 
 interface ChatState {
@@ -31,6 +31,9 @@ interface ChatState {
   historyError: string | null
   /** 当前请求的 request_id（用于中止） */
   currentRequestId: string | null
+  /** 会话级模型覆盖（B.9 决策②）：null = 跟随全局默认。
+   *  与 sessionId 同生命周期——resetStream（每轮流重置）**不**清它。 */
+  sessionModel: string | null
   /** 会话列表刷新信号：SSE done 后自增，HistorySidebar 监听它自动重新拉取 */
   sessionsVersion: number
   /** 任务列表快照（todo 事件，全量替换）。chat 私有：csChat 无 planner，不进共享归约 */
@@ -39,6 +42,8 @@ interface ChatState {
   streamUsage: TokenUsage | null
   /** 工具产出文件（file 事件展开为文件级记录，按路径去重、新的覆盖旧的） */
   fileOps: { path: string; node: string; step_id: string; ts: number }[]
+  /** 工具选择未收敛时的结构化澄清卡片 */
+  clarification: ClarificationEvent | null
 
   // — 计算属性 —
   currentMessages: () => Message[]
@@ -56,7 +61,7 @@ interface ChatState {
   addStreamEvent: (evt: SSEStreamEvent, sessionId?: string) => void
   removeLastAssistant: (sessionId?: string) => void
   replaceLastAssistant: (content: string, sessionId?: string, sources?: any[], usage?: import('@/lib/types').TokenUsage,
-    thinking?: string, thinkingSeconds?: number) => void
+    thinking?: string, thinkingSeconds?: number, traceId?: string) => void
 
   /** done 时固化执行过程快照到尾部 assistant 消息（CompletionLine 回看用） */
   attachTrace: (sessionId: string, trace: import('@/lib/types').AgentTrace) => void
@@ -66,6 +71,9 @@ interface ChatState {
   setError: (e: unknown) => void
   setHistoryError: (e: string | null) => void
   setCurrentRequestId: (id: string | null) => void
+  /** 设置/清除会话级模型覆盖（B.9）；null = 回到全局默认 */
+  setSessionModel: (model: string | null) => void
+  setClarification: (value: ClarificationEvent | null) => void
   bumpSessionsVersion: () => void
   resetStream: () => void
 }
@@ -103,10 +111,13 @@ export const useChatStore = create<ChatState>((set, get) => {
     error: null,
     historyError: null,
     currentRequestId: null,
+    // 会话级模型覆盖（B.9）：null = 跟随全局默认；与 sessionId 同生命周期
+    sessionModel: null,
     sessionsVersion: 0,
     todoItems: [],
     streamUsage: null,
     fileOps: [],
+    clarification: null,
 
     // —— 计算属性 ——
     currentMessages: () => {
@@ -209,6 +220,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         let todoItems = state.todoItems
         let streamUsage = state.streamUsage
         let fileOps = state.fileOps
+        let clarification = state.clarification
         if (isCurrentSession) {
           if (evt.event === 'todo') {
             todoItems = evt.data.items
@@ -221,6 +233,8 @@ export const useChatStore = create<ChatState>((set, get) => {
               path: p, node: evt.data.node, step_id: evt.data.step_id, ts: evt.data.ts,
             }))
             fileOps = [...fileOps.filter((f) => !incoming.some((i) => i.path === f.path)), ...incoming]
+          } else if (evt.event === 'clarification') {
+            clarification = evt.data
           }
         }
 
@@ -262,17 +276,19 @@ export const useChatStore = create<ChatState>((set, get) => {
           return { ...s, messages: msgs, updatedAt: Date.now() }
         })
 
-        return { sessions, streamEvents: storeEvents, thinkingText, thinkingSeconds, thinkingStartAt, todoItems, streamUsage, fileOps, ...core }
+        return { sessions, streamEvents: storeEvents, thinkingText, thinkingSeconds, thinkingStartAt, todoItems, streamUsage, fileOps, clarification, ...core }
       })
     },
 
     setCurrentRequestId: (id) => set({ currentRequestId: id }),
+    setSessionModel: (model) => set({ sessionModel: model }),
+    setClarification: (value) => set({ clarification: value }),
 
     resetStream: () => set({
       streamEvents: [], currentStatus: '', deltaText: '',
       thinkingText: '', thinkingSeconds: null, thinkingStartAt: 0,
       currentRequestId: null,
-      todoItems: [], streamUsage: null, fileOps: [],
+      todoItems: [], streamUsage: null, fileOps: [], clarification: null,
     }),
 
     // 重新生成：移除尾部 assistant 占位/旧回答（user 提问保留，问题由调用方重发）
@@ -290,7 +306,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       })
     },
 
-    replaceLastAssistant: (content, sessionId, sources, usage, thinking, thinkingSeconds) => {
+    replaceLastAssistant: (content, sessionId, sources, usage, thinking, thinkingSeconds, traceId) => {
       set((state) => ({
         sessions: state.sessions.map((s) => {
           const sid = targetId(state, sessionId)
@@ -305,6 +321,7 @@ export const useChatStore = create<ChatState>((set, get) => {
               usage: usage || msgs[lastIdx].usage,
               thinking: thinking ?? msgs[lastIdx].thinking,
               thinkingSeconds: thinkingSeconds ?? msgs[lastIdx].thinkingSeconds,
+              trace_id: traceId ?? msgs[lastIdx].trace_id,
               timestamp: Date.now(),
             }
           }

@@ -27,6 +27,8 @@ function resetStore() {
     currentRequestId: null,
     todoItems: [],
     streamUsage: null,
+    fileOps: [],
+    clarification: null,
   })
 }
 
@@ -137,6 +139,38 @@ describe('addStreamEvent — ping 保活心跳（P0 防空闲断流）', () => {
     )
     expect(useChatStore.getState().deltaText).toBe('abc')
     expect(useChatStore.getState().currentStatus).toBe('reporter')
+  })
+})
+
+describe('addStreamEvent — 结构化澄清', () => {
+  it('保存澄清选项且不暴露内部 capability 标识', () => {
+    useChatStore.getState().addStreamEvent(
+      {
+        event: 'clarification',
+        data: {
+          question: '请选择处理方式',
+          options: [{ id: 'option-1', label: '数据库查询' }],
+          handoff_available: false,
+          ts: 1,
+        },
+      } as any,
+      'local1',
+    )
+    expect(useChatStore.getState().clarification).toEqual({
+      question: '请选择处理方式',
+      options: [{ id: 'option-1', label: '数据库查询' }],
+      handoff_available: false,
+      ts: 1,
+    })
+    expect(JSON.stringify(useChatStore.getState().clarification)).not.toContain('.')
+  })
+
+  it('新一轮流开始时清空旧澄清状态', () => {
+    useChatStore.setState({ clarification: {
+      question: '旧问题', options: [], handoff_available: false, ts: 1,
+    } as any })
+    useChatStore.getState().resetStream()
+    expect(useChatStore.getState().clarification).toBeNull()
   })
 })
 

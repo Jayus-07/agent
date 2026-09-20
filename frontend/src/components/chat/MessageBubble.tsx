@@ -56,9 +56,10 @@ interface MessageBubbleProps {
   isLast: boolean
   sessionId?: string
   question?: string
+  budgetBlocked?: boolean
 }
 
-function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubbleProps) {
+function MessageBubbleImpl({ message, isLast, sessionId, question, budgetBlocked = false }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   // 只订阅 isLoading —— 单字段、引用稳定；流式文本/思考链由子组件单独订阅
   const isLoading = useChatStore((s) => s.isLoading)
@@ -81,6 +82,7 @@ function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubb
               isLast={isLast}
               sessionId={sessionId}
               msgId={message.id}
+              budgetBlocked={budgetBlocked}
             />
           </div>
         ) : (
@@ -127,6 +129,8 @@ function MessageBubbleImpl({ message, isLast, sessionId, question }: MessageBubb
                   sessionId={sessionId}
                   msgId={message.id}
                   question={question}
+                  traceId={message.trace_id}
+                  budgetBlocked={budgetBlocked}
                   onRegenerate={sessionId ? () => regenerate(sessionId) : undefined}
                 />
               </>
@@ -149,7 +153,7 @@ function StreamingThinking() {
 // store 在流式期间 sessions 引用变，会让 MessageList 重渲染，但只要 message 引用稳定，
 // N-1 条历史气泡就被 memo 拦截，避免 MarkdownContent 重复解析整篇。
 const MessageBubble = memo(MessageBubbleImpl, (prev, next) =>
-  prev.isLast === next.isLast && prev.message === next.message,
+  prev.isLast === next.isLast && prev.message === next.message && prev.budgetBlocked === next.budgetBlocked,
 )
 
 export default MessageBubble

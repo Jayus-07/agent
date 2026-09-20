@@ -17,9 +17,10 @@ interface Props {
   onStop?: () => void
   /** 嵌在空状态居中组内（而非钉在会话底部）：去掉向上渐隐、收紧上下边距 */
   embedded?: boolean
+  budgetBlocked?: boolean
 }
 
-export default function ChatInput({ onSend, isLoading, onStop, embedded = false }: Props) {
+export default function ChatInput({ onSend, isLoading, onStop, embedded = false, budgetBlocked = false }: Props) {
   const [input, setInput] = useState('')
   const [department, setDepartment] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -41,7 +42,7 @@ export default function ChatInput({ onSend, isLoading, onStop, embedded = false 
 
   function handleSend() {
     const trimmed = input.trim()
-    if (!trimmed || isLoading) return
+    if (!trimmed || isLoading || budgetBlocked) return
     setInput(''); onSend(trimmed)
   }
 
@@ -66,7 +67,7 @@ export default function ChatInput({ onSend, isLoading, onStop, embedded = false 
             onKeyDown={handleKeyDown}
             placeholder="今天帮你做点什么？"
             rows={1}
-            disabled={isLoading}
+            disabled={isLoading || budgetBlocked}
             className="w-full bg-transparent resize-none outline-none text-sm text-text-primary
               placeholder:text-text-muted min-h-[52px] max-h-[200px] disabled:opacity-40 leading-relaxed"
           />
@@ -75,12 +76,13 @@ export default function ChatInput({ onSend, isLoading, onStop, embedded = false 
           <ComposerToolbar
             department={department}
             onDepartmentChange={handleDepartmentChange}
-            disabled={isLoading}
-            canSend={Boolean(input.trim()) && !isLoading}
+            disabled={isLoading || budgetBlocked}
+            canSend={Boolean(input.trim()) && !isLoading && !budgetBlocked}
             onSend={handleSend}
             onStop={onStop}
           />
         </div>
+        {budgetBlocked && <p className="mt-2 text-center text-[11px] text-red-600">硬额度已达到上限，发送和写操作暂时不可用；历史与只读页面仍可访问。</p>}
         <p className="text-[10px] text-text-muted text-center mt-2.5 select-none">
           Agent AI &middot; 答案由 AI 生成，请核实关键信息
         </p>

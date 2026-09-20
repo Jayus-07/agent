@@ -72,6 +72,7 @@ export interface TokenUsage {
 
 export interface DoneEvent {
   elapsed: number
+  trace_id?: string
   sources?: Source[]
   usage?: TokenUsage
   /** P3.1：CS 确认流等待用户点击确认卡片（非空时前端渲染 CSConfirmCard） */
@@ -93,6 +94,7 @@ export interface ErrorEvent {
   handoff_available?: boolean
   trace_id?: string
   source?: string
+  details?: Record<string, unknown>
 }
 
 // ========================================
@@ -129,6 +131,19 @@ export interface PingEvent {
   ts: number
 }
 
+/** 工具选择无法安全收敛时的用户可见澄清卡片。 */
+export interface ClarificationOption {
+  id: string
+  label: string
+}
+
+export interface ClarificationEvent {
+  question: string
+  options: ClarificationOption[]
+  handoff_available: boolean
+  ts: number
+}
+
 /** SSE v2 事件联合类型 */
 export type SSEStreamEvent =
   | { event: 'meta';     data: MetaEvent }
@@ -139,6 +154,7 @@ export type SSEStreamEvent =
   | { event: 'todo';     data: TodoEvent }
   | { event: 'usage';    data: UsageEvent }
   | { event: 'file';     data: FileEvent }
+  | { event: 'clarification'; data: ClarificationEvent }
   /** SSE 保活心跳（后端空闲 >间隔 发 ping 防断流，消费方零语义、不入渲染流） */
   | { event: 'ping';     data: PingEvent }
   | { event: 'done';     data: DoneEvent }
@@ -167,6 +183,7 @@ export interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
+  trace_id?: string
   timestamp: number
   /** 执行过程快照（done 时写入；历史恢复的消息无此字段） */
   trace?: AgentTrace
