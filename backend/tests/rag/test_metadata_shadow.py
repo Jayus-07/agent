@@ -1,6 +1,7 @@
 """元数据影子评估的非阻塞与故障隔离测试。"""
 
 import asyncio
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -114,8 +115,11 @@ async def test_shadow_dispatch_does_not_share_default_executor(monkeypatch, stag
 async def test_shadow_submission_uses_dedicated_executor(monkeypatch, stage):
     """影子投递必须使用独立线程池，不能污染主路径默认线程池。"""
     monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_SHADOW_ENABLED", True)
+    monkeypatch.setattr(metadata_shadow, "try_acquire_shadow_dispatch_slot", lambda: True)
+    monkeypatch.setattr(metadata_shadow, "release_shadow_dispatch_slot", lambda: None)
     executor = ThreadPoolExecutor(max_workers=1)
     seen = []
+    submitted = threading.Event()
     monkeypatch.setattr(
         metadata_shadow,
         "get_shadow_executor",
@@ -124,12 +128,12 @@ async def test_shadow_submission_uses_dedicated_executor(monkeypatch, stage):
     monkeypatch.setattr(
         metadata_shadow,
         "submit_shadow_job",
-        lambda *args, **kwargs: "shadow-test",
+        lambda *args, **kwargs: (submitted.set() or "shadow-test"),
     )
 
     try:
         stage._dispatch_shadow_nonblocking(None, TEXT, "unknown.docx", "")
-        await asyncio.gather(*stage._shadow_tasks)
+        assert await asyncio.to_thread(submitted.wait, 1.0)
     finally:
         executor.shutdown(wait=True, cancel_futures=True)
 
@@ -164,6 +168,38 @@ async def test_shadow_dispatch_failure_does_not_fail_primary_index(monkeypatch, 
     result = await stage.build(TEXT, META)
 
     assert result["doc_type"] == "legal"
+
+
+def test_shadow_submission_survives_sync_async_bridge(monkeypatch, stage):
+    """同步 indexer 关闭临时事件循环后，影子提交仍必须继续执行。"""
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_SHADOW_ENABLED", True)
+    monkeypatch.setattr(metadata_shadow, "try_acquire_shadow_dispatch_slot", lambda: True)
+    monkeypatch.setattr(metadata_shadow, "release_shadow_dispatch_slot", lambda: None)
+    executor = ThreadPoolExecutor(max_workers=1)
+    submitted = threading.Event()
+
+    def _submit(*args, **kwargs):
+        submitted.set()
+        return "shadow-test"
+
+    monkeypatch.setattr(metadata_shadow, "get_shadow_executor", lambda: executor)
+    monkeypatch.setattr(metadata_shadow, "submit_shadow_job", _submit)
+    monkeypatch.setattr(
+        asyncio,
+        "create_task",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("影子提交不能依赖临时事件循环 task")
+        ),
+    )
+
+    async def _schedule_only():
+        stage._dispatch_shadow_nonblocking(None, TEXT, "unknown.docx", "")
+
+    try:
+        asyncio.run(_schedule_only())
+        assert submitted.wait(1.0)
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
 
 
 def test_shadow_input_is_bounded_and_sampled(monkeypatch):

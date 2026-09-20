@@ -18,7 +18,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.app.api.deps import require_admin_user
+from backend.app.api.deps import require_user_actor
 from backend.app.api.routes import sys_model_roles
 from backend.config import llm as config_llm
 from backend.config import model_roles
@@ -39,7 +39,7 @@ class _FakeIdent:
 def client() -> TestClient:
     a = FastAPI()
     a.include_router(sys_model_roles.router)
-    a.dependency_overrides[require_admin_user] = lambda: _FakeIdent()
+    a.dependency_overrides[require_user_actor] = lambda: _FakeIdent()
     return TestClient(a)
 
 
@@ -136,6 +136,18 @@ def test_unregistered_model_reported_as_not_registered(client):
     assert main["registered"] is False
     assert main["provider"] is None
     assert main["missingKeyEnv"] is None      # 无 provider → 不报缺 Key（不是同一种问题）
+
+
+def test_disabled_ollama_role_reports_actionable_unavailable_reason(client, monkeypatch):
+    monkeypatch.setattr(sys_model_roles.config_llm, "OLLAMA_ENABLED", False)
+    model_roles.inject_overrides({"eval_gen": "qwen2.5:3b"})
+
+    row = {
+        r["role"]: r for r in client.get("/sys/model-roles").json()["items"]
+    }["eval_gen"]
+
+    assert row["available"] is False
+    assert "Ollama 当前未启用" in row["availabilityReason"]
 
 
 # ── missingKeyEnv ───────────────────────────────────────────────────────

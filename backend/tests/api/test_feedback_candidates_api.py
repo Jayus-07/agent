@@ -25,13 +25,21 @@ def _request() -> Request:
         "type": "http",
         "method": "POST",
         "path": "/feedback/candidates/candidate-1/promote",
-        "headers": [],
+        "headers": [(b"idempotency-key", b"feedback-test-key")],
         "query_string": b"",
     })
 
 
+def _passthrough_idempotency(_request, _operation, _payload, callback):
+    """本文件验证候选业务互斥；幂等执行器由契约测试单独覆盖。"""
+    return callback()
+
+
 def test_promote_candidate_uses_tenant_trace_database_lock(monkeypatch):
     locks: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        feedback_route, "run_authenticated_mutation", _passthrough_idempotency,
+    )
 
     @contextmanager
     def fake_lock(tenant_id: str, trace_id: str):
@@ -80,6 +88,9 @@ def test_promote_candidate_uses_tenant_trace_database_lock(monkeypatch):
 
 
 def test_promote_candidate_does_not_mark_promoted_when_export_fails(monkeypatch):
+    monkeypatch.setattr(
+        feedback_route, "run_authenticated_mutation", _passthrough_idempotency,
+    )
     @contextmanager
     def fake_lock(_tenant_id: str, _trace_id: str):
         yield
@@ -131,6 +142,9 @@ def test_candidate_review_and_promotion_are_pg_isolated_and_idempotent(
     monkeypatch, tmp_path, pg_clean_tables,
 ):
     """真实 PG 验收：审核后才能导出，跨租户不可见，重复 promotion 不重复写文件。"""
+    monkeypatch.setattr(
+        feedback_route, "run_authenticated_mutation", _passthrough_idempotency,
+    )
     monkeypatch.setenv("FEEDBACK_PG_TABLE", "pgtest_biz_feedback_candidate_api")
     candidates_pg.init_db()
     candidates_pg.create_candidate(

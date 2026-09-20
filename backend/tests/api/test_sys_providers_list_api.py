@@ -165,6 +165,89 @@ def test_db_rows_field_mapping(client, monkeypatch):
     assert qwen["credential"]["fingerprint"] is None
 
 
+def test_provider_rows_keep_all_models_when_names_overlap(client, monkeypatch):
+    """不同供应商可以登记同名模型，管理端不能因全局去重而漏显示。"""
+    snapshot = _db_snapshot()
+    snapshot.models.append({"name": "qwen3.7-plus", "provider": "glm-coding"})
+    monkeypatch.setattr(
+        registry_store, "load_registry", AsyncMock(return_value=snapshot)
+    )
+
+    items = {r["id"]: r for r in client.get("/sys/providers").json()["items"]}
+
+    assert {model["name"] for model in items["qwen"]["models"]} == {
+        "qwen3.7-plus",
+        "qwen3.7-flash",
+    }
+    assert {model["name"] for model in items["glm-coding"]["models"]} == {
+        "glm-4.6",
+        "qwen3.7-plus",
+    }
+    assert items["qwen"]["modelCount"] == 2
+    assert items["glm-coding"]["modelCount"] == 2
+
+
+def test_provider_rows_include_specialized_provider_and_models(client, monkeypatch):
+    """专项配置也属于供应商目录，向量/重排模型必须在供应商页可见。"""
+    snapshot = _db_snapshot()
+    snapshot.providers.append({
+        "id": "specialized-rag",
+        "display_name": "阿里云百炼专项",
+        "driver": "specialized",
+        "base_url": "https://dashscope.example",
+        "network_scope": "public",
+        "billing": "metered",
+        "is_builtin": False,
+        "enabled": True,
+    })
+    snapshot.models.extend([
+        {
+            "name": "qwen3.7-text-embedding",
+            "provider": "specialized-rag",
+            "model_kind": "embedding",
+        },
+        {
+            "name": "qwen3.7-text-rerank",
+            "provider": "specialized-rag",
+            "model_kind": "rerank",
+        },
+    ])
+    monkeypatch.setattr(
+        registry_store, "load_registry", AsyncMock(return_value=snapshot)
+    )
+
+    items = {r["id"]: r for r in client.get("/sys/providers").json()["items"]}
+
+    assert "specialized-rag" in items
+    assert items["specialized-rag"]["models"] == [
+        {"name": "qwen3.7-text-embedding", "display": "qwen3.7-text-embedding", "modelKind": "embedding"},
+        {"name": "qwen3.7-text-rerank", "display": "qwen3.7-text-rerank", "modelKind": "rerank"},
+    ]
+
+
+def test_base_url_only_override_is_not_reported_as_managed_key(client, monkeypatch):
+    """provider 表的地址覆盖不应伪装成已托管 API Key。"""
+    snapshot = registry_store.RegistrySnapshot(
+        providers=[{
+            "id": "qwen_tp", "display_name": "Qwen Token Plan", "driver": "openai",
+            "base_url": "https://token-plan.example/v1", "network_scope": "public",
+            "billing": "subscription", "is_builtin": True, "enabled": True,
+        }],
+        credentials={
+            "qwen_tp": ProviderCredentials(
+                provider="qwen_tp", base_url="https://token-plan.example/v1", source="db"
+            )
+        },
+        credential_meta={},
+        loaded=True,
+    )
+    monkeypatch.setattr(registry_store, "load_registry", AsyncMock(return_value=snapshot))
+
+    item = client.get("/sys/providers").json()["items"][0]
+
+    assert item["credential"]["configured"] is False
+
+
 # ── 脱敏：任何密钥载体都不得出现在响应里 ────────────────────────────────
 
 

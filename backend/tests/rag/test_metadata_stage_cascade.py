@@ -7,8 +7,10 @@
   3. build() 接线：级联关闭时行为与旧链一致（extract_metadata_llm_async 被调）。
 """
 import pytest
+from contextlib import nullcontext
 
 from backend.rag.preprocessing.metadata_router import CascadeDecision
+from backend.rag.preprocessing.metadata_schema import DecisionEnvelope
 from backend.rag.indexing.stages.metadata_stage import MetadataStage
 
 CASCADE_KEYS_ADDED = {"llm_strategy", "llm_decision"}
@@ -76,6 +78,98 @@ async def test_build_routes_via_cascade_when_enabled(_stage, monkeypatch):
     assert out["doc_type"] == "legal"
     assert out["llm_strategy"] == "r0"
     assert called["extract"] == 0, "L0 命中时不得触发 LLM 抽取"
+
+
+@pytest.mark.asyncio
+async def test_build_cascade_dispatches_shadow_for_decision(_stage, monkeypatch):
+    """级联主路径也必须提交影子，且提交不能改变主决策。"""
+    from backend.rag.preprocessing.metadata_schema import DecisionEnvelope
+
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_ENABLED", True)
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_SHADOW_ENABLED", True)
+
+    async def _fake_decide(*args, **kwargs):
+        return DecisionEnvelope(
+            decision="accepted",
+            doc_type="legal",
+            business_domain="order",
+            confidence=0.95,
+            source="r0",
+        )
+
+    captured = []
+
+    def _capture_shadow(envelope, full_text, filename, file_path):
+        captured.append((envelope, full_text, filename, file_path))
+
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_decision.decide_metadata",
+        _fake_decide,
+    )
+    monkeypatch.setattr(_stage, "_dispatch_shadow_nonblocking", _capture_shadow)
+
+    out = await _stage.build(_TEXT, _META)
+
+    assert out["doc_type"] == "legal"
+    assert out["llm_used"] is False
+    assert len(captured) == 1
+    assert captured[0][0].source == "r0"
+    assert captured[0][2] == _META["source_file"]
+
+
+@pytest.mark.asyncio
+async def test_build_cascade_forwards_llm_usage_to_lineage(_stage, monkeypatch):
+    """级联 LLM 成功后的 token 不能在 DecisionEnvelope→stage 时丢失。"""
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_ENABLED", True)
+    monkeypatch.setattr("backend.config.rag.METADATA_CASCADE_SHADOW_ENABLED", False)
+
+    async def _fake_decide(*args, **kwargs):
+        return DecisionEnvelope(
+            decision="accepted",
+            doc_type="general",
+            business_domain="general",
+            confidence=0.8,
+            source="llm",
+            metadata={
+                "actual_model": "qwen3.7-plus@tp",
+                "llm_tokens": {
+                    "prompt_tokens": 101,
+                    "completion_tokens": 9,
+                    "total_tokens": 110,
+                },
+            },
+            prompt_version="v3",
+        )
+
+    class _Recorder:
+        def __init__(self):
+            self.finished = []
+
+        def begin_stage(self, *args, **kwargs):
+            return ("metadata-step", 0.0)
+
+        def bind_stage(self, *args, **kwargs):
+            return nullcontext()
+
+        def set_stage_model(self, *args, **kwargs):
+            pass
+
+        def finish_stage(self, step_id, **kwargs):
+            self.finished.append((step_id, kwargs))
+
+    async def _fake_finalize(*args, **kwargs):
+        return {"doc_type": "general", "llm_used": True}
+
+    recorder = _Recorder()
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_decision.decide_metadata",
+        _fake_decide,
+    )
+    monkeypatch.setattr(_stage, "finalize_decision", _fake_finalize)
+
+    await _stage.build(_TEXT, _META, processing_recorder=recorder)
+
+    assert recorder.finished[0][1]["usage"]["total_tokens"] == 110
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,7 @@ def _limits(**overrides):
     values = {
         "max_calls": 8,
         "max_total_tokens": 32000,
+        "max_cost_usd": "0.50",
         "max_retries": 2,
         "max_fallbacks": 1,
     }
@@ -64,6 +65,36 @@ def test_budget_observe_mode_records_without_blocking():
     assert snapshot.calls == 2
     assert snapshot.retries == 1
     assert snapshot.exceeded == ("request_calls",)
+
+
+def test_budget_observe_does_not_apply_pg_hard_block():
+    from backend.infra.llm.budget import RequestBudget
+    from backend.infra.llm.quota import QuotaExceeded
+
+    class _HardQuotaStore:
+        def reserve(self, **kwargs):
+            raise QuotaExceeded("tenant-a", "day")
+
+    budget = RequestBudget(
+        _limits(), mode="observe", user_id="user-a", tenant_id="tenant-a",
+        quota_store=_HardQuotaStore(),
+    )
+    budget.reserve("primary", model_name="m1")
+    assert budget.snapshot().calls == 1
+
+
+def test_budget_blocks_request_cost_after_usage_is_recorded():
+    from backend.infra.llm.budget import RequestBudget, RequestBudgetExceeded
+
+    budget = RequestBudget(_limits(max_cost_usd="0.50"), mode="enforce")
+    budget.reserve("primary")
+    budget.record_usage(
+        prompt_tokens=1, completion_tokens=1, total_tokens=2,
+        cost_usd="0.50",
+    )
+    with pytest.raises(RequestBudgetExceeded) as exc_info:
+        budget.reserve("primary")
+    assert exc_info.value.reason == "request_cost"
 
 
 def test_budget_error_maps_to_protocol_budget_exceeded():

@@ -216,3 +216,59 @@ class TestIntegration:
         assert "b.txt" in ref_md
         assert "制度规范" in ref_md
         assert "SOP" in ref_md
+
+
+# ==========================================================
+# 6. normalize_point_layout（分点归一化，2026-09-19）
+# ==========================================================
+
+class TestNormalizePointLayout:
+    def test_runon_points_get_line_breaks(self, f):
+        """句号+序号同行 → 补换行（模型偶发把两个要点挤一行的确定性修复）。"""
+        text = "审核时效如下：1. **通用**：1-2 个工作日 [E1]。2. **日本**：5 个工作日 [E2]。3. **美国**：3-5 个工作日 [E4]。"
+        result = f.normalize_point_layout(text)
+        lines = [l for l in result.split("\n") if l.strip()]
+        # 冒号引导语与各要点分行（列表独立成行，前端渲染更清晰）
+        assert len(lines) == 4
+        assert lines[0] == "审核时效如下："
+        assert lines[1].startswith("1.")
+        assert lines[2].startswith("2.")
+        assert lines[3].startswith("3.")
+
+    def test_no_space_boundary_also_breaks(self, f):
+        """句号后无空格直接跟序号（「[E1]。3.**英国**」）也补换行。"""
+        text = "验收合格后退款 [E1]。3.**英国**：14 天内全额退款 [E5]。"
+        result = f.normalize_point_layout(text)
+        assert "\n3." in result
+
+    def test_already_multiline_untouched(self, f):
+        """已分行（序号在行首）→ 幂等，不产生双换行。"""
+        text = "如下：\n1. 通用 [E1]\n2. 日本 [E2]\n"
+        assert f.normalize_point_layout(text) == text
+
+    def test_decimal_not_broken(self, f):
+        """小数不受影响（「3.5 个工作日」前是普通空格，非句末标点）。"""
+        text = "耗时 3.5 个工作日完成审核。"
+        assert f.normalize_point_layout(text) == text
+
+    def test_decimal_after_sentence_end_not_broken(self, f):
+        """句末标点后紧跟「N.」但 N 后还有数字（如「。3.5」）→ 排除，不误切。"""
+        text = "周期为 3 天。3.5 天为上限。"
+        assert f.normalize_point_layout(text) == text
+
+    def test_citation_marker_preserved(self, f):
+        """归一化不丢失任何 [En] 引用标注。"""
+        text = "审核 1-2 天 [E1]。2. 日本 5 天 [E2]。3. 英国 14 天 [E5]。"
+        result = f.normalize_point_layout(text)
+        for m in ("[E1]", "[E2]", "[E5]"):
+            assert m in result
+
+    def test_two_digit_number(self, f):
+        """两位数序号（「10.」）也识别。"""
+        text = "共 9 条规则。10. 特别条款适用 [E1]。"
+        result = f.normalize_point_layout(text)
+        assert "\n10." in result
+
+    def test_empty_and_none_safe(self, f):
+        """空串安全。"""
+        assert f.normalize_point_layout("") == ""

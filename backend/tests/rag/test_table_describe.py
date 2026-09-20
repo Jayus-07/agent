@@ -51,6 +51,7 @@ class TestTableDescribe:
     def test_disabled_returns_empty(self, monkeypatch):
         monkeypatch.setattr(td, "ENABLE_TABLE_DESCRIPTIONS", False)
         assert generate_table_descriptions(["行1"]) == {}
+        assert td.get_last_generation_meta()["status"] == "skipped"
 
     def test_max_rows_guard(self, monkeypatch):
         captured = {}
@@ -67,6 +68,39 @@ class TestTableDescribe:
         # 超限行无描述
         assert all(i not in out for i in range(td.TABLE_DESC_MAX_ROWS, len(kv)))
         assert len(out) == td.TABLE_DESC_MAX_ROWS  # 超限的 10 行不生成
+
+    def test_llm_call_uses_table_describe_role(self, monkeypatch):
+        from backend.rag.preprocessing import llm_enrichment
+
+        captured = {}
+        monkeypatch.setattr(td, "_cache_get", lambda key: None)
+
+        def fake_invoke(prompt, llm_obj=None, **kwargs):
+            captured.update(kwargs)
+            msg = MagicMock()
+            msg.content = json.dumps({"descriptions": ["这一行记录业务金额。"]})
+            return msg
+
+        monkeypatch.setattr(llm_enrichment, "invoke_metadata_llm", fake_invoke)
+        generate_table_descriptions(["科目 货币资金\n金额 123"])
+
+        assert captured["role"] == "table_describe"
+
+    def test_cache_key_changes_with_prompt_version(self, monkeypatch):
+        key1 = td._cache_key(["科目 货币资金"], "资产表")
+        monkeypatch.setattr(td, "TABLE_DESC_PROMPT_VERSION", "v2")
+        key2 = td._cache_key(["科目 货币资金"], "资产表")
+        assert key1 != key2
+
+    def test_cache_hit_skips_llm(self, monkeypatch):
+        monkeypatch.setattr(td, "_cache_get", lambda key: {0: "缓存描述"})
+        monkeypatch.setattr(
+            td, "_invoke_llm", lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("缓存命中不应调用模型")
+            ),
+        )
+        assert td.generate_table_descriptions(["科目 货币资金"]) == {0: "缓存描述"}
+        assert td.get_last_generation_meta()["status"] == "cached"
 
 
 class TestEmbedPrefix:

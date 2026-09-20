@@ -31,7 +31,12 @@ class TestPromptToDict:
 
         result = _prompt_to_dict(mock_prompt)
         assert result["variable_count"] == 2
-        assert result["variables"] == ["var1", "var2"]
+        # 管理端契约：variables 是 {name, required, description} 对象列表
+        # （2026-09-19 修复：DB 存字符串名，序列化时按注册表 spec 归一化，前端渲染 {undefined}）
+        assert result["variables"] == [
+            {"name": "var1", "required": False, "description": ""},
+            {"name": "var2", "required": False, "description": ""},
+        ]
 
     def test_variable_count_zero_for_none(self):
         mock_prompt = MagicMock()

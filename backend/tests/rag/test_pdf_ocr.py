@@ -18,6 +18,7 @@ import backend.rag.preprocessing.parser.ocr as ocr_mod
 import backend.rag.preprocessing.parser.pdf_parser as pdf_parser_mod
 from backend.config import rag as rag_cfg
 from backend.rag.preprocessing.parser.pdf_parser import PdfParser
+from backend.shared.processing_context import ProcessingBinding, bind_processing
 
 
 # ============ 测试基建 ============
@@ -68,6 +69,17 @@ class TestPdfParserOcrFallback:
         PdfParser().parse(pdf)
         assert ocr_on["n"] == 0, "有文本层的 PDF 不得触发 OCR"
 
+    def test_scanned_pdf_records_ocr_required_but_disabled(self, tmp_path, monkeypatch):
+        """扫描件需要 OCR 但供应商关闭时，AST 要保留可解释的跳过原因。"""
+        monkeypatch.setattr(ocr_mod, "ocr_available", lambda: False)
+        pdf = _make_pdf(tmp_path, "scan-disabled.pdf", pages=1)
+
+        ast = PdfParser().parse(pdf)
+
+        assert ast.ocr_required is True
+        assert ast.ocr_attempted is False
+        assert ast.ocr_triggered is False
+
     def test_min_text_chars_threshold(self, tmp_path, ocr_on, monkeypatch):
         """文本层仅有页码级噪音（< 阈值）→ 视为无文本层，触发 OCR。"""
         monkeypatch.setattr(pdf_parser_mod, "RAG_OCR_MIN_TEXT_CHARS", 50)
@@ -93,6 +105,19 @@ class TestProviderRouting:
     def test_unknown_provider_unavailable(self, monkeypatch):
         monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "baidu")
         assert ocr_mod.ocr_available() is False
+
+    def test_rapidocr_identity_uses_lineage_model_contract(self, monkeypatch):
+        from backend.rag.indexing.processing_lineage import ModelIdentity
+
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "rapidocr")
+
+        identity = ocr_mod.get_ocr_model_identity()
+
+        assert isinstance(identity, ModelIdentity)
+        assert identity.role == "ocr"
+        assert identity.engine_type == "ocr"
+        assert identity.provider == "rapidocr"
+        assert identity.model_name == "RapidOCR"
 
     def test_dashscope_with_key_available(self, monkeypatch):
         monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
@@ -143,7 +168,11 @@ class TestDashScopeUsageRecording:
         monkeypatch.setattr(store_mod, "get_llm_usage_store",
                             lambda: SimpleNamespace(record=recorded.append))
 
-        text = ocr_mod._ocr_image_dashscope(b"\x89PNG-fake")
+        binding = ProcessingBinding(
+            run_id="run-ocr", step_id="step-ocr", role="ocr", stage="ocr"
+        )
+        with bind_processing(binding):
+            text = ocr_mod._ocr_image_dashscope(b"\x89PNG-fake")
         assert text == "识别出的文本"
         assert len(recorded) == 1
         evt = recorded[0]
@@ -153,6 +182,10 @@ class TestDashScopeUsageRecording:
         assert evt["completion_tokens"] == 50
         assert evt["total_tokens"] == 150
         assert evt["model"] == rag_cfg.RAG_OCR_DASHSCOPE_MODEL
+        assert evt["run_id"] == "run-ocr"
+        assert evt["step_id"] == "step-ocr"
+        assert evt["role"] == "ocr"
+        assert evt["stage"] == "ocr"
 
     def test_record_failure_soft(self, monkeypatch):
         """用量记录失败不影响 OCR 主流程。"""
@@ -265,10 +298,15 @@ class TestCloudCacheAndThrottle:
 
     def test_cache_hit_no_recost(self, cloud_env):
         png = b"\x89PNG-same-page"
+        ocr_mod.reset_ocr_tracking()
         t1 = ocr_mod.ocr_image(png)
         t2 = ocr_mod.ocr_image(png)
         assert t1 == t2 == "识别文本-1"
         assert cloud_env["n"] == 1, "同页图像第二次调用必须命中缓存，不得重复计费"
+        stats = ocr_mod.get_ocr_result_meta()
+        assert stats["calls"] == 2
+        assert stats["cache_hits"] == 1
+        assert stats["cache_status"] == "hit"
 
     def test_different_page_both_called(self, cloud_env):
         ocr_mod.ocr_image(b"page-a")
@@ -310,6 +348,30 @@ class TestCloudCacheAndThrottle:
         files = list((tmp_path / "ocr_cache").glob("*.json"))
         assert len(files) == 1
         assert _json.loads(files[0].read_text(encoding="utf-8"))["text"] == "识别文本-1"
+
+    def test_tracking_counts_partial_page_failure(self, monkeypatch):
+        """一份扫描件中成功页和失败页都必须进入同一 OCR 阶段统计。"""
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "rapidocr")
+        ocr_mod.reset_ocr_tracking()
+        calls = {"n": 0}
+
+        def _fake_rapidocr(_png):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("page failed")
+            return "识别文本"
+
+        monkeypatch.setattr(ocr_mod, "_ocr_image_rapidocr", _fake_rapidocr)
+
+        assert ocr_mod.ocr_image(b"page-1") == "识别文本"
+        with pytest.raises(RuntimeError, match="page failed"):
+            ocr_mod.ocr_image(b"page-2")
+
+        stats = ocr_mod.get_ocr_result_meta()
+        assert stats["calls"] == 2
+        assert stats["successes"] == 1
+        assert stats["failures"] == 1
+        assert stats["model_name"] == "RapidOCR"
 
 
 # ============ ocr_triggered 标记贯通（AST → chunk metadata → quality_issues）============

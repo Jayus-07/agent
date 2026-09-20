@@ -69,6 +69,23 @@ DRAFT = {
 }
 
 
+def test_draft_probe_forwards_model_kind(client, monkeypatch):
+    captured: dict = {}
+
+    async def _capture(**kw):
+        captured.update(kw)
+        return _ok_result()
+
+    monkeypatch.setattr(sys_providers.provider_probe, "probe_provider", _capture)
+    resp = client.post(
+        "/sys/providers/verify-draft",
+        json={**DRAFT, "model_kind": "embedding"},
+    )
+
+    assert resp.status_code == 200
+    assert captured["model_kind"] == "embedding"
+
+
 # ── 限制 1：admin only ──────────────────────────────────────────────────
 
 
@@ -100,6 +117,51 @@ def test_draft_success_returns_bare_dict_carrying_probe_result(client, monkeypat
     assert body["provider"] is None
     assert body["ok"] is True
     assert body["steps"][0]["level"] == "L0"
+
+
+def test_draft_accepts_frontend_camel_case_payload(client, monkeypatch):
+    """管理端使用 camelCase 时，后端不能把草稿误判成缺少参数。"""
+    captured: dict = {}
+
+    async def _capture(**kw):
+        captured.update(kw)
+        return _ok_result()
+
+    monkeypatch.setattr(sys_providers.provider_probe, "probe_provider", _capture)
+    resp = client.post(
+        "/sys/providers/verify-draft",
+        json={
+            "driver": "openai",
+            "baseUrl": "https://api.example.com/v1",
+            "apiKey": "sk-draft",
+            "modelName": "glm-4.6",
+            "networkScope": "public",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert captured["base_url"] == "https://api.example.com/v1"
+    assert captured["model_name"] == "glm-4.6"
+    assert captured["api_key"] == "sk-draft"
+
+
+@pytest.mark.parametrize("mode,expected", [("fast", False), ("full", True)])
+def test_draft_probe_mode_controls_stream_usage(client, monkeypatch, mode, expected):
+    captured: dict = {}
+
+    async def _capture(**kw):
+        captured.update(kw)
+        return _ok_result()
+
+    monkeypatch.setattr(sys_providers.provider_probe, "probe_provider", _capture)
+    resp = client.post(
+        "/sys/providers/verify-draft",
+        params={"mode": mode},
+        json=DRAFT,
+    )
+
+    assert resp.status_code == 200
+    assert captured["include_stream_usage"] is expected
 
 
 @pytest.mark.parametrize("given,expected", [
@@ -194,6 +256,129 @@ def test_saved_provider_uses_db_scope_and_resolved_model(client, monkeypatch):
     assert captured["api_key"] == "sk-from-env"
     assert captured["model_name"] == "glm-4.6"
     assert resp.json()["provider"] == "custom"
+
+
+def test_saved_provider_forwards_registered_model_kind(client, monkeypatch):
+    snap = RegistrySnapshot(
+        providers=[{
+            "id": "custom",
+            "base_url": "https://api.example.com/v1",
+            "network_scope": "public",
+            "driver": "openai",
+        }],
+        models=[{
+            "name": "embed-model",
+            "provider": "custom",
+            "model_kind": "embedding",
+        }],
+        credentials={},
+        loaded=True,
+    )
+    monkeypatch.setattr(sys_providers.registry_store, "load_registry", AsyncMock(return_value=snap))
+    monkeypatch.setattr(
+        credentials_mod,
+        "resolve_credentials",
+        lambda provider, **kw: ProviderCredentials(
+            provider=provider, api_key="sk-from-env", source="env", version=0
+        ),
+    )
+    captured: dict = {}
+
+    async def _capture(**kw):
+        captured.update(kw)
+        return _ok_result()
+
+    monkeypatch.setattr(sys_providers.provider_probe, "probe_provider", _capture)
+
+    resp = client.post("/sys/providers/custom/verify")
+
+    assert resp.status_code == 200
+    assert captured["model_kind"] == "embedding"
+
+
+def test_saved_builtin_provider_uses_code_registered_model_when_db_models_empty(
+    client, monkeypatch
+):
+    """内置供应商的模型来自代码注册表时，复测也必须带上默认模型名。"""
+    snap = RegistrySnapshot(
+        providers=[{
+            "id": "deepseek",
+            "base_url": "https://api.deepseek.com/v1",
+            "network_scope": "public",
+            "driver": "openai",
+        }],
+        models=[],
+        credentials={},
+        loaded=True,
+    )
+    monkeypatch.setattr(sys_providers.registry_store, "load_registry",
+                        AsyncMock(return_value=snap))
+    monkeypatch.setattr(
+        credentials_mod,
+        "resolve_credentials",
+        lambda provider, **kw: ProviderCredentials(
+            provider=provider, api_key="sk-from-env", source="env", version=0
+        ),
+    )
+    captured: dict = {}
+
+    async def _capture(**kw):
+        captured.update(kw)
+        return _ok_result()
+
+    monkeypatch.setattr(sys_providers.provider_probe, "probe_provider", _capture)
+
+    resp = client.post("/sys/providers/deepseek/verify")
+
+    assert resp.status_code == 200
+    assert captured["model_name"] == "deepseek-v4-flash"
+
+
+def test_saved_provider_merges_env_key_when_snapshot_only_overrides_base_url(
+    client, monkeypatch
+):
+    """探测路由不能因快照的地址覆盖绕过环境变量 Key。"""
+    snap = RegistrySnapshot(
+        providers=[{
+            "id": "qwen_tp",
+            "base_url": "https://db.example/v1",
+            "network_scope": "public",
+            "driver": "openai",
+        }],
+        models=[{"name": "qwen3.7-plus@tp", "provider": "qwen_tp"}],
+        credentials={
+            "qwen_tp": ProviderCredentials(
+                provider="qwen_tp", base_url="https://db.example/v1", source="db"
+            )
+        },
+        loaded=True,
+    )
+    monkeypatch.setattr(sys_providers.registry_store, "load_registry",
+                        AsyncMock(return_value=snap))
+    monkeypatch.setattr(
+        credentials_mod,
+        "resolve_credentials",
+        lambda provider, **kw: ProviderCredentials(
+            provider=provider,
+            api_key="sk-from-env",
+            base_url="https://env.example/v1",
+            source="env",
+            version=0,
+        ),
+    )
+    captured: dict = {}
+
+    async def _capture(**kw):
+        captured.update(kw)
+        return _ok_result()
+
+    monkeypatch.setattr(sys_providers.provider_probe, "probe_provider", _capture)
+
+    resp = client.post("/sys/providers/qwen_tp/verify")
+
+    assert resp.status_code == 200
+    assert captured["api_key"] == "sk-from-env"
+    assert captured["base_url"] == "https://db.example/v1"
 
 
 def test_saved_provider_422_when_base_url_missing(client, monkeypatch):

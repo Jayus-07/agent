@@ -6,7 +6,9 @@ import sys
 
 import pytest
 
+from backend.config import model_roles
 from backend.config import startup as su
+from backend.infra.llm import credentials
 
 
 @pytest.fixture(autouse=True)
@@ -25,14 +27,27 @@ def _clean_env(monkeypatch):
         "TRAVEL_CHECKPOINTER_ENABLED",
     ):
         monkeypatch.delenv(var, raising=False)
+    model_roles.reset_overrides()
+    credentials.reset_credentials_for_tests()
+    yield
+    model_roles.reset_overrides()
+    credentials.reset_credentials_for_tests()
 
 
 @pytest.fixture
 def valid_env(monkeypatch):
-    """一组能通过校验的最小环境。"""
+    """一组能通过校验的最小基础环境；模型配置走 DB 内存覆盖。"""
     monkeypatch.setenv("PGPASSWORD", "strong-password-123")
-    monkeypatch.setenv("LLM_MODEL", "deepseek-v4-flash")
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    model_roles.inject_overrides({"main": "deepseek-v4-flash"})
+    credentials.set_db_credentials({
+        "deepseek": credentials.ProviderCredentials(
+            provider="deepseek",
+            api_key="db-test-key",
+            base_url="https://db.example/v1",
+            source="db",
+            version=1,
+        ),
+    })
     monkeypatch.setenv("API_KEY", "x" * 32)
 
 
@@ -55,10 +70,10 @@ class TestFatalCases:
         with pytest.raises(su.SettingsValidationError):
             su.validate_startup_settings()
 
-    def test_deepseek_without_key(self, valid_env, monkeypatch):
-        monkeypatch.delenv("DEEPSEEK_API_KEY")
-        with pytest.raises(su.SettingsValidationError):
-            su.validate_startup_settings()
+    def test_deepseek_without_db_key_is_warning(self, valid_env):
+        credentials.reset_credentials_for_tests()
+        warnings = su.validate_startup_settings()
+        assert any("数据库配置 API Key" in w for w in warnings)
 
     def test_pool_order_inverted(self, valid_env, monkeypatch):
         monkeypatch.setenv("DB_POOL_MIN_CONN", "10")
@@ -81,10 +96,11 @@ class TestFatalCases:
         with pytest.raises(su.SettingsValidationError):
             su.validate_startup_settings()
 
-    def test_empty_llm_model(self, valid_env, monkeypatch):
-        monkeypatch.setenv("LLM_MODEL", "")
-        with pytest.raises(su.SettingsValidationError):
-            su.validate_startup_settings()
+    def test_empty_db_model_does_not_read_legacy_env(self, valid_env, monkeypatch):
+        model_roles.inject_overrides({"main": ""})
+        monkeypatch.setenv("LLM_MODEL", "env-only-model")
+        warnings = su.validate_startup_settings()
+        assert isinstance(warnings, list)
 
 
 class TestWarningCases:
@@ -125,8 +141,8 @@ class TestWarningCases:
         assert any("ALERT_WEBHOOK_URL" in w for w in warnings)
 
     def test_non_deepseek_model_no_key_needed(self, valid_env, monkeypatch):
-        monkeypatch.setenv("LLM_MODEL", "qwen2.5:7b")
-        monkeypatch.delenv("DEEPSEEK_API_KEY")
+        model_roles.inject_overrides({"main": "qwen2.5:7b"})
+        credentials.reset_credentials_for_tests()
         warnings = su.validate_startup_settings()  # 不抛
         assert isinstance(warnings, list)
 
@@ -138,33 +154,32 @@ class TestToolSelectorModelValidation:
     """
 
     def test_unregistered_model_warns(self, valid_env, monkeypatch):
-        monkeypatch.setenv("TOOL_SELECTOR_MODEL", "ghost-model")
+        model_roles.inject_overrides({"tool_selector": "ghost-model"})
         warnings = su.validate_startup_settings()
         assert any("TOOL_SELECTOR_MODEL" in w and "注册" in w for w in warnings)
 
     def test_missing_provider_key_warns(self, valid_env, monkeypatch):
-        # 主模型换 qwen（deepseek 前缀会触发 LLMSettings 的 fatal 校验，
-        # 到不了 warning 段），专用模型用 deepseek 验 key 缺失 warning
-        monkeypatch.setenv("LLM_MODEL", "qwen3.7-plus")
-        monkeypatch.setenv("TOOL_SELECTOR_MODEL", "deepseek-v4-flash")
-        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        model_roles.inject_overrides({
+            "main": "qwen3.7-plus",
+            "tool_selector": "deepseek-v4-flash",
+        })
+        credentials.set_db_credentials({})
         warnings = su.validate_startup_settings()
-        assert any("TOOL_SELECTOR_MODEL" in w and "DEEPSEEK_API_KEY" in w
+        assert any("TOOL_SELECTOR_MODEL" in w and "数据库配置 API Key" in w
                    for w in warnings)
 
     def test_valid_config_no_warning(self, valid_env, monkeypatch):
-        monkeypatch.setenv("TOOL_SELECTOR_MODEL", "deepseek-v4-flash")
-        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+        model_roles.inject_overrides({"tool_selector": "deepseek-v4-flash"})
         warnings = su.validate_startup_settings()
         assert not any("TOOL_SELECTOR_MODEL" in w for w in warnings)
 
     def test_empty_no_warning(self, valid_env, monkeypatch):
-        monkeypatch.setenv("TOOL_SELECTOR_MODEL", "")
+        model_roles.inject_overrides({"main": "deepseek-v4-flash", "tool_selector": ""})
         warnings = su.validate_startup_settings()
         assert not any("TOOL_SELECTOR_MODEL" in w for w in warnings)
 
     def test_local_model_needs_no_key(self, valid_env, monkeypatch):
-        monkeypatch.setenv("TOOL_SELECTOR_MODEL", "qwen2.5:3b")
+        model_roles.inject_overrides({"tool_selector": "qwen2.5:3b"})
         warnings = su.validate_startup_settings()
         assert not any("TOOL_SELECTOR_MODEL" in w for w in warnings)
 

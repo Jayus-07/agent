@@ -76,9 +76,12 @@ class TestParseExtractResponse:
 # ============ 抽取调用 ============
 
 class _FakeResp:
-    def __init__(self, content: str):
+    def __init__(self, content: str, usage_metadata: dict | None = None):
         self.content = content
-        self.usage_metadata = {"prompt_tokens": 10, "completion_tokens": 5}
+        self.usage_metadata = usage_metadata or {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+        }
 
 
 @pytest.fixture
@@ -105,6 +108,34 @@ async def test_extract_success(_patch_prompt, monkeypatch):
     assert r is not None
     assert r["doc_type"] == "financial"
     assert r["llm_tokens"]["prompt_tokens"] == 10
+
+
+@pytest.mark.asyncio
+async def test_extract_normalizes_input_output_usage(_patch_prompt, monkeypatch):
+    import backend.rag.preprocessing.metadata_llm as m
+
+    monkeypatch.setattr(
+        m,
+        "invoke_metadata_llm",
+        lambda prompt: _FakeResp(
+            json.dumps(GOOD, ensure_ascii=False),
+            {"input_tokens": 17, "output_tokens": 8, "total_tokens": 25},
+        ),
+        raising=False,
+    )
+
+    async def _passthrough(fn, *args, **kwargs):
+        return fn(*args[3:], **kwargs)
+
+    monkeypatch.setattr(m, "async_safe_call_with_timeout", _passthrough, raising=False)
+
+    result = await extract_metadata_llm_async("一些文本", "usage.md")
+
+    assert result["llm_tokens"] == {
+        "prompt_tokens": 17,
+        "completion_tokens": 8,
+        "total_tokens": 25,
+    }
 
 
 @pytest.mark.asyncio

@@ -88,6 +88,45 @@ async def test_r1_abstain_falls_to_single_llm_call(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_llm_usage_is_carried_in_decision_envelope(monkeypatch):
+    """LLM 成功时，调用用量必须跟随统一决策契约进入血缘层。"""
+    async def _no_classifier(*args, **kwargs):
+        return None
+
+    async def _fake_llm(*args, **kwargs):
+        result = await _fake_llm_result()
+        result.update({
+            "actual_model": "qwen3.7-plus@tp",
+            "llm_tokens": {
+                "prompt_tokens": 101,
+                "completion_tokens": 9,
+                "total_tokens": 110,
+                "cached_tokens": 3,
+                "cost_usd": 0.001,
+            },
+        })
+        return result
+
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_decision._classifier_prediction",
+        _no_classifier,
+    )
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_decision.extract_metadata_llm_async",
+        _fake_llm,
+    )
+
+    result = await decide_metadata(
+        "没有稳定类型证据的普通正文-usage-envelope",
+        "usage-envelope.md",
+    )
+
+    assert result.source == "llm"
+    assert result.metadata["actual_model"] == "qwen3.7-plus@tp"
+    assert result.metadata["llm_tokens"]["total_tokens"] == 110
+
+
+@pytest.mark.asyncio
 async def test_llm_failure_uses_complete_deterministic_fallback(monkeypatch):
     async def _none(*args, **kwargs):
         return None

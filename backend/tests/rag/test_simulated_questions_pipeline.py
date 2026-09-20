@@ -109,6 +109,41 @@ class TestQuestionGenModule:
         assert result == []
         assert tokens == {}
 
+    def test_llm_call_uses_question_gen_role(self, monkeypatch):
+        from backend.rag.preprocessing import question_gen
+        from backend.rag.preprocessing import llm_enrichment
+
+        captured = {}
+
+        def fake_invoke(prompt, llm_obj=None, **kwargs):
+            captured.update(kwargs)
+            msg = MagicMock()
+            msg.content = json.dumps({
+                "simulated_questions": [["这个流程怎么执行？"]],
+            })
+            return msg
+
+        monkeypatch.setattr(llm_enrichment, "invoke_metadata_llm", fake_invoke)
+        monkeypatch.setattr(question_gen, "_cache_get", lambda key: None)
+        monkeypatch.setattr(question_gen, "_cache_put", lambda key, value: None)
+
+        question_gen.generate_chunk_questions(["第一条流程内容。"], doc_type="policy")
+
+        assert captured["role"] == "question_gen"
+
+    def test_question_cache_key_contains_model_prompt_version(self, monkeypatch):
+        import backend.rag.preprocessing.question_gen as question_gen
+
+        monkeypatch.setattr(question_gen, "_cache_version", lambda: "model-a|prompt-1")
+        key1 = question_gen._cache_key(["正文"], "policy")
+        monkeypatch.setattr(question_gen, "_cache_version", lambda: "model-b|prompt-1")
+        key2 = question_gen._cache_key(["正文"], "policy")
+        monkeypatch.setattr(question_gen, "_cache_version", lambda: "model-b|prompt-2")
+        key3 = question_gen._cache_key(["正文"], "policy")
+
+        assert key1 != key2
+        assert key2 != key3
+
 
 # ---------- 2. _build_doc_metadata 接线契约 ----------
 

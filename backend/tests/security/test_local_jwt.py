@@ -24,6 +24,21 @@ def test_issue_and_verify_roundtrip(monkeypatch):
     assert payload["type"] == "access"
 
 
+def test_issue_token_carries_tenant_claim(monkeypatch):
+    """预算/治理链路要求可信租户身份：token 必须带 tenant_id claim，
+    未显式指定时落平台默认租户（gateway-auth 据此注入 X-Tenant-Id）。"""
+    monkeypatch.setenv("JWT_SECRET", "k" * 32)
+    out = issue_access_token(user_id=7, username="u1")
+    payload = verify_access_token(out["token"])
+    assert payload is not None
+    assert payload["tenant_id"] == "default"
+
+    out2 = issue_access_token(user_id=7, username="u1", tenant_id="acme")
+    payload2 = verify_access_token(out2["token"])
+    assert payload2 is not None
+    assert payload2["tenant_id"] == "acme"
+
+
 def test_verify_rejects_tampered_signature(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "k" * 32)
     out = issue_access_token(user_id=1, username="u")

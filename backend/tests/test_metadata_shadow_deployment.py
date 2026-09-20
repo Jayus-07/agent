@@ -32,8 +32,12 @@ def test_fresh_database_init_includes_metadata_migrations():
 
     assert "/docker-migrations/025_metadata_rule_governance.sql" in script
     assert "/docker-migrations/026_metadata_shadow_jobs.sql" in script
+    assert "/docker-migrations/027_rag_processing_lineage.sql" in script
     assert script.index("025_metadata_rule_governance.sql") < script.index(
         "026_metadata_shadow_jobs.sql"
+    )
+    assert script.index("026_metadata_shadow_jobs.sql") < script.index(
+        "027_rag_processing_lineage.sql"
     )
 
 
@@ -50,6 +54,9 @@ def test_app_and_index_worker_default_to_full_dev_cascade_without_shadow():
         )
         assert environment["METADATA_CLASSIFIER_ENABLED"] == (
             "${METADATA_CLASSIFIER_ENABLED:-false}"
+        )
+        assert environment["METADATA_CLASSIFIER_MODEL_PATH"] == (
+            "${METADATA_CLASSIFIER_MODEL_PATH:-/app/data/models/metadata_lr/lr_model_dryrun.joblib}"
         )
         assert environment["METADATA_CASCADE_SHADOW_ENABLED"] == (
             "${METADATA_CASCADE_SHADOW_ENABLED:-false}"

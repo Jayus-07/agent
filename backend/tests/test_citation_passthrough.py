@@ -74,12 +74,20 @@ class TestRagServerAskPassthrough:
         class FakePipeline:
             last_answer_meta = {"confidence": 0.9, "sources": _SOURCES}
 
+            def __init__(self):
+                self.received_permissions = None
+
+            # 签名对齐 rag_server.ask 的调用面（permissions 2026-09-16 安全加固加入，
+            # 曾因 mock 未同步导致 passthrough 测试假失败）
             def ask(self, question, session_id="default", kb_id="default",
-                   kb_ids=None, subject_type="", department=""):
+                   kb_ids=None, subject_type="", department="", permissions=None):
+                self.received_permissions = permissions
                 return "答案"
 
+        fake = FakePipeline()
+        self.fake = fake
         monkeypatch.setattr(server, "_kick_init", lambda: None)
-        monkeypatch.setattr(server, "_get_pipeline", lambda: FakePipeline())
+        monkeypatch.setattr(server, "_get_pipeline", lambda: fake)
         with TestClient(server.app) as c:
             yield c
 
@@ -90,3 +98,10 @@ class TestRagServerAskPassthrough:
         assert payload["answer"] == "答案"
         assert payload["meta"]["sources"] == _SOURCES
         assert payload["meta"]["confidence"] == 0.9
+
+    def test_ask_passes_permissions_through(self, client):
+        """permissions 必须原样透传给 pipeline（文档级授权入参，不能在服务层被丢）。"""
+        resp = client.post("/ask", json={"question": "退货流程", "permissions": ["doc:a", "doc:b"]})
+        assert resp.status_code == 200
+        assert resp.json()["answer"] == "答案"
+        assert self.fake.received_permissions == ["doc:a", "doc:b"]
