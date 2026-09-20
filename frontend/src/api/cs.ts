@@ -27,6 +27,35 @@ export interface MyConversationsResponse {
   items: MyConversationItem[];
 }
 
+export interface HandoffResponse {
+  handoff_id: string;
+  conversation_id: string;
+  handoff_state: 'waiting_human' | 'agent_offered' | 'human_active' | 'closed';
+  total_deadline_at: string | null;
+  reused: boolean;
+}
+
+/**
+ * 用户显式请求人工客服。
+ *
+ * 幂等键放在请求头而不是请求体；后端 PostgreSQL 活动工单是最终事实源，
+ * 网络超时后的重试即使换了前端调用栈，也只会复用同一活动工单。
+ */
+export async function requestHandoff(
+  conversationId: string,
+  idempotencyKey: string,
+): Promise<HandoffResponse> {
+  return request<HandoffResponse>(
+    `/api/cs/conversations/${encodeURIComponent(conversationId)}/handoff`,
+    {
+      method: 'POST',
+      headers: {
+        'Idempotency-Key': idempotencyKey,
+      },
+    },
+  );
+}
+
 /**
  * 用户侧「我的客服会话」（含消息）——客服抽屉刷新后恢复历史。
  * 后端按网关注入身份过滤，guest 返回 401（此时前端静默跳过恢复）。

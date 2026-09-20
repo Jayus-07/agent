@@ -8,11 +8,16 @@
  * 组件装配方式与管理端 frontend-admin/src/app/cs/page.tsx 保持一致。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Headphones, Plus, X } from 'lucide-react'
+import { Headphones, Plus, UserRound, X } from 'lucide-react'
 import { useCSChatStore } from '@/store/csChat'
 import { useCSChat } from '@/hooks/useCSChat'
 import { useCSHandoffSync } from '@/hooks/useCSHandoffSync'
-import { listMyConversations, confirmAction, notifyUserTyping } from '@/api/cs'
+import {
+  listMyConversations,
+  confirmAction,
+  notifyUserTyping,
+  requestHandoff,
+} from '@/api/cs'
 import { ApiError } from '@/api/client'
 import CSWelcome from '@/components/cs/CSWelcome'
 import CSMessageList from '@/components/cs/CSMessageList'
@@ -41,11 +46,16 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
   const handoffState = useCSChatStore((s) => s.handoffState)
   const currentNode = useCSChatStore((s) => s.currentNode)
   const setError = useCSChatStore((s) => s.setError)
+  const setHandoffState = useCSChatStore((s) => s.setHandoffState)
   const newSession = useCSChatStore((s) => s.newSession)
   const pendingProposal = useCSChatStore((s) => s.pendingProposal)
   const agentTyping = useCSChatStore((s) => s.agentTyping)
   const addMessage = useCSChatStore((s) => s.addMessage)
   const setPendingProposal = useCSChatStore((s) => s.setPendingProposal)
+
+  const [handoffPending, setHandoffPending] = useState(false)
+  const handoffRequestRef = useRef(false)
+  const handoffKeyRef = useRef<{ conversationId: string; key: string } | null>(null)
 
   // P3.1 确认卡片：POST /cs/confirm 幂等端点（后端原子认领闸门兜底并发）。
   // 409 = 该待办已被处理（重复提交/另一端先确认）→ 静默清卡片；
@@ -102,6 +112,45 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
     [currentId, startStream, setError]
   )
 
+  // P4：显式按钮直连入池接口，不把“转人工”伪装成一条自然语言问题。
+  // key 在同一会话内保持稳定：即使请求超时但数据库已经提交，重试仍会
+  // 命中同一幂等语义；切换会话后再生成新 key。
+  const handleRequestHandoff = useCallback(async () => {
+    if (
+      !currentId
+      || isLoading
+      || handoffState !== 'none'
+      || handoffRequestRef.current
+    ) return
+
+    handoffRequestRef.current = true
+    setHandoffPending(true)
+    setError(null)
+    setHandoffState('requested')
+
+    let key = handoffKeyRef.current
+    if (!key || key.conversationId !== currentId) {
+      key = { conversationId: currentId, key: crypto.randomUUID() }
+      handoffKeyRef.current = key
+    }
+
+    try {
+      const response = await requestHandoff(currentId, key.key)
+      const state = response.handoff_state === 'human_active'
+        ? 'active'
+        : response.handoff_state === 'closed'
+          ? 'closed'
+          : 'waiting'
+      setHandoffState(state)
+    } catch (err) {
+      setHandoffState('none')
+      setError(`转接人工失败：${err instanceof Error ? err.message : '请稍后重试'}`)
+    } finally {
+      handoffRequestRef.current = false
+      setHandoffPending(false)
+    }
+  }, [currentId, handoffState, isLoading, setError, setHandoffState])
+
   // 用户「输入中」上行：2s 节流（服务端 TTL 5s，持续输入自然续期）。
   // 仅转人工后（handoffState='active'）上报——AI 阶段无坐席在线，无需打扰。
   const lastTypingSentRef = useRef(0)
@@ -144,6 +193,21 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
             <p className="text-[10px] text-text-muted truncate">AI 驱动的客户服务中心</p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            {hasMessages && handoffState === 'none' && (
+              <button
+                onClick={handleRequestHandoff}
+                disabled={isLoading || handoffPending}
+                title="转接人工客服"
+                aria-label="转接人工客服"
+                className="flex items-center gap-1 px-2 h-7 rounded-lg
+                  border border-border-subtle text-[11px] text-text-secondary
+                  hover:text-text-primary hover:border-accent/40
+                  disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+              >
+                <UserRound size={13} />
+                <span className="hidden sm:inline">转人工</span>
+              </button>
+            )}
             <button
               onClick={() => newSession()}
               title="新客服会话"
@@ -201,7 +265,15 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
               )}
             </>
           ) : (
-            <CSWelcome onQuickPrompt={handleSend} />
+            <>
+              {handoffState !== 'none' && <CSHandoffCard handoffState={handoffState} />}
+              <CSWelcome
+                onQuickPrompt={handleSend}
+                onRequestHandoff={handleRequestHandoff}
+                handoffDisabled={!hasMessages || isLoading || handoffState !== 'none'}
+                handoffPending={handoffPending}
+              />
+            </>
           )}
         </div>
 
