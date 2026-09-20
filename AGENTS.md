@@ -13,16 +13,21 @@ DB: PostgreSQL `agent_business`（业务仓库）+ `agent_memory`（元数据库
 
 ```
 POST /chat/stream → GraphRunner（Input Guard 门禁 → memory.start_session → graph.stream）
-START → router ─┬─ CS 预过滤命中（灰度放量） ────────→ 客服域图 cs_graph_node → END
+START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/prefilter）→ 客服域图 cs_graph_node → END
+                ├─ CS 预过滤命中（CS_ENABLED + 灰度放量）──────→ 客服域图 cs_graph_node → END
                 ├─ 旅游预过滤命中（TRAVEL_ENABLED） → 旅游域图 travel_graph_node → END
+                ├─ 选品预过滤命中（SELECTION_FUNNEL_ENABLED）→ 选品漏斗域图 → END
                 └─ 三层 Router（rule→vector→LLM）→ route_selector
                       ├─ direct   → skill_executor（跳过 Planner 直调 skill）→ reporter → END
                       ├─ workflow → workflow_executor → reporter → END
                       └─ plan     → planner → critique → supervisor（Send 并行）→ reporter → END
 ```
 
+- **域图两条入口，勿混为一谈**：①**客服窗口锁域** —— 前端客服抽屉 `CSDrawer`（`useCSChat.ts`）每条消息带 `domain_hint=customer_service`，`router_node` 置 `cs_forced` 后**跳过域检测门/灰度/旅游与选品 prefilter** 直进 CS 管线（仍受 `CS_ENABLED` 总闸，关闭则降级主路由）；②**全局入口**（`domain_hint` 空）—— 走 CS 廉价规则预判 → 旅游正则 → 选品正则 → CS 完整检测，CS 命中后再过 `CS_ROLLOUT_PERCENT` 灰度。锁域**非绝对**：无客服规则信号且命中旅游/选品强信号时仍走 `redirect_main` 转出（LLM 仲裁阶段默认 OFF = `CS_REDIRECT_MAIN_LLM_ENABLED`）。守护用例 `tests/orchestration/graph/test_router_prefilter_order.py`。
+- 域开关代码默认**全关**（`CS_ENABLED`/`TRAVEL_ENABLED`/`SELECTION_FUNNEL_ENABLED` 均 `false`），由根 `.env` 决定实际取值；三个 prefilter 均已接线（选品漏斗 2026-09-17 与旅游同层），无「待接线」项。
+
 - 主图核心节点固定 8 个，顺序与命名不得随意改动（`builder.py`）；Skill 节点与域图节点由自动发现加入，**不得手写进 builder**。
-- planner→critique→supervisor 是 plan 支线专属；direct/workflow/两个域图均绕过。预过滤优先级：客服 > 旅游（"订单里的行程单"属客服诉求）。
+- planner→critique→supervisor 是 plan 支线专属；direct/workflow/三个域图均绕过。预过滤优先级：客服 > 旅游（"订单里的行程单"属客服诉求）。
 - 客服子图：state_loader → pending_handler → cs_supervisor（handoff 拦截/循环上限/LLM 兜底）→ 5 专家 → 回 supervisor → cs_reporter
 - 旅游子图：travel_slot_filler → travel_supervisor（纯规则）→ poi/transit/budget/risk 专家 → travel_validator →（未通过）travel_repair → 回 supervisor → travel_reporter
 - RAG 子链路：改写 → MultiQuery → 混合检索（向量+BM25）→ 同文档扩展 → Rerank → EvidenceGate → 带引用生成 → META 尾拒答判定

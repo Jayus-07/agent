@@ -9,7 +9,7 @@
 ## 总览
 
 **主线**（实线，默认启用）：用户端 / 管理端 → APISIX 网关 → `app` → 主图三条支线（direct / workflow / plan）→ reporter。
-**扩展**（虚线，默认关闭或待接线）：3 个垂直域图、Kafka `java-loop`、Ollama `local-llm`、Prometheus/Grafana。小程序为客户端扩展。
+**扩展**（虚线，由开关控制）：3 个垂直域图（客服 / 旅游 / 选品漏斗，代码默认关闭）、Kafka `java-loop`、Ollama `local-llm`、Prometheus/Grafana。小程序为客户端扩展。
 
 ```mermaid
 flowchart TB
@@ -36,9 +36,10 @@ flowchart TB
     WE --> REP
     PL --> REP
 
-    ROUTER -.->|"预过滤命中 · CS_ENABLED"| CS["客服域图"]:::ext
+    ROUTER -.->|"域锁 · domain_hint=cs"| CS["客服域图"]:::ext
+    ROUTER -.->|"预过滤命中 · CS_ENABLED"| CS
     ROUTER -.->|"TRAVEL_ENABLED"| TR["旅游域图"]:::ext
-    ROUTER -.->|"prefilter 待接线"| SF["选品漏斗域图"]:::ext
+    ROUTER -.->|"SELECTION_FUNNEL_ENABLED"| SF["选品漏斗域图"]:::ext
 
     APP --> SQL["NL2SQL 子系统<br/>6 层硬校验 + 行级权限"]:::main
     APP --> RAGS["rag-service :8090<br/>混合检索 + Rerank + Evidence Gate"]:::main
@@ -61,7 +62,7 @@ flowchart TB
 | Capability | 17（其中 3 个 `routed: false` 内部能力） | `backend/orchestration/router/capabilities.yaml` |
 | Tool | 34 | `backend/tools/`（`@tool` + 文件底部 `tool_registry.register`） |
 | Workflow | 4 | `backend/orchestration/workflows/__init__.py::register_all()` |
-| 域图 / 业务 Agent | 3（客服 / 旅游 / 选品漏斗，**默认全部关闭**） | `backend/domains/__init__.py` |
+| 域图 / 业务 Agent | 3（客服 / 旅游 / 选品漏斗，代码默认关闭；进法见「垂直域图」） | `backend/domains/__init__.py` |
 | MCP Server / Tool | 2 / 5 | `mcp_servers/servers/` |
 | 后端用例 | 5293（`pytest --collect-only`，55s） | `backend/tests/` |
 | 前端路由 | 用户端 7 / 管理端 41 | `*/src/app/**/page.tsx` |
@@ -86,8 +87,10 @@ flowchart TB
 固定 8 个核心节点，**顺序与命名不得随意改动**；Skill 节点与域图节点由自动发现加入：
 
 ```
-START → router ─┬─ 客服预过滤命中（CS_ENABLED）    → 客服域图 → END
-                ├─ 旅游预过滤命中（TRAVEL_ENABLED）→ 旅游域图 → END
+START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度）→ 客服域图 → END
+                ├─ 客服预过滤命中（CS_ENABLED + 灰度）     → 客服域图 → END
+                ├─ 旅游预过滤命中（TRAVEL_ENABLED）        → 旅游域图 → END
+                ├─ 选品预过滤命中（SELECTION_FUNNEL_ENABLED）→ 选品漏斗域图 → END
                 └─ 三层 Router（rule → vector → LLM）→ route_selector
                       ├─ direct   → skill_executor   → reporter → END
                       ├─ workflow → workflow_executor → reporter → END
@@ -108,14 +111,24 @@ START → router ─┬─ 客服预过滤命中（CS_ENABLED）    → 客服�
 
 ### 垂直域图（Domain Graph）
 
-三个域图**默认全部关闭**，由网关/router 预过滤命中后进入；预过滤优先级 **客服 > 旅游**（"订单里的行程单"按客服诉求处理）。
+三个域图的**代码默认全关**（`CS_ENABLED` / `TRAVEL_ENABLED` / `SELECTION_FUNNEL_ENABLED` 均为 `false`，新 clone 拿到的是这个）；当前仓库根 `.env` 三个已全部打开。进入域图有**两条独立通路**：
+
+| 入口 | 触发方式 | 行为 |
+|---|---|---|
+| **客服窗口锁域** | 用户端客服抽屉 `CSDrawer` 每条消息带 `domain_hint=customer_service`（`frontend/src/hooks/useCSChat.ts`） | `router_node` 置 `cs_forced` → **跳过域检测门、跳过灰度判定（恒 treatment）、跳过旅游/选品 prefilter**，直接进客服管线。仍受 `CS_ENABLED` 总闸约束（关闭则降级回主路由） |
+| **全局入口** | `domain_hint` 为空（普通对话页） | 在 router 内按序判定：CS 廉价规则预判（~1ms）→ 旅游正则 → 选品正则 → CS 完整检测（含向量兜底）；CS 命中后还须过服务端灰度 `CS_ROLLOUT_PERCENT`（默认 100），落 control 组则回主图 |
+
+预过滤优先级 **客服 > 旅游**（"订单里的行程单"按客服诉求处理）。
+
+> **客服窗口为什么必须锁域**（代码注释原话）：用户已显式进入客服窗口，每条消息重新判域会把"下周去大阪怎么玩"这类非客服问法漏进旅游域图硬答（实测）。
+> **但锁域不等于绝对**：域锁下若「无任何客服规则信号 **且** 命中旅游/选品强信号」，仍会走 `redirect_main` 正则阶段转出主路由；阶段二 LLM 语义仲裁默认 OFF（`CS_REDIRECT_MAIN_LLM_ENABLED`）。目的是让抽屉里问旅游/选品也能拿到正常回答。混合信号（如"订单里的行程单怎么退款"含客服规则）**仍守 CS 优先**。行为有测试守护：`backend/tests/orchestration/graph/test_router_prefilter_order.py`（**19 例全绿**，覆盖锁域越过检测失败 / CS 关闭降级主路由 / 旅游转出 / 混合信号留守 / 灰度顺序等）。
 
 - **客服域图**：`state_loader → pending_handler → cs_supervisor → 5 专家 → cs_reporter`
   - `cs_supervisor` 承担三件事：handoff 拦截、循环上限、LLM 兜底
 - **旅游域图**：`travel_slot_filler → travel_supervisor → poi/transit/budget/risk 专家 → travel_validator →（未过）travel_repair → travel_reporter`
   - `travel_validator` 是旅游域的 Evidence Gate：纯规则零 LLM 零 IO，**只判定不修改**（修复在 `repair.py`），四轴校验（时间/地理/体力/预算）
   - error 级违反**阻塞交付**并触发修复；局部修复只动被点名的天与条目，用户点名必去条目永不被静默丢弃（`kept_required`）
-- **选品漏斗域图**：已注册，prefilter 接线待落地，默认关闭
+- **选品漏斗域图**：prefilter **已接线**（`router_node` 内与旅游同层，2026-09-17）；仅受 `SELECTION_FUNNEL_ENABLED` 开关控制，无域锁通路
 
 **跨轮状态契约**（checkpointer 关闭时同样必须遵守，Domained Graph 通用）：
 
@@ -395,7 +408,7 @@ agent/
 │   ├── domains/               # 域图注册入口（→ 下面三个垂直域）
 │   ├── customer_service/      # 客服域图
 │   ├── travel/                # 旅游域图
-│   ├── selection_funnel/      # 选品漏斗域图（prefilter 待接线）
+│   ├── selection_funnel/      # 选品漏斗域图（prefilter 已接线）
 │   ├── rag/                   # RAG 管道（检索 / 索引 / 预处理）
 │   ├── sql/                   # NL2SQL（6 层校验 + 行级权限）
 │   ├── memory/                # 三层记忆
