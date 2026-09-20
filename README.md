@@ -6,6 +6,52 @@
 
 ---
 
+## 总览
+
+**主线**（实线，默认启用）：用户端 / 管理端 → APISIX 网关 → `app` → 主图三条支线（direct / workflow / plan）→ reporter。
+**扩展**（虚线，默认关闭或待接线）：3 个垂直域图、Kafka `java-loop`、Ollama `local-llm`、Prometheus/Grafana。小程序为客户端扩展。
+
+```mermaid
+flowchart TB
+    classDef main fill:#e8f3ff,stroke:#2b7de9,stroke-width:2px,color:#0b2545
+    classDef ext  fill:#f6f7f9,stroke:#9aa4b2,stroke-dasharray:4 3,color:#4a5568
+    classDef store fill:#eefaf1,stroke:#2f9e5f,color:#0b3d20
+
+    W["用户端 :3100"]:::main
+    AD["管理端 :3200"]:::main
+    MP["微信小程序（Taro）"]:::ext
+    GW["APISIX :9080 · 唯一入口<br/>验签 Bearer / Redis 黑名单 / 限流 → 注入身份头"]:::main
+    APP["app · FastAPI :8000（仅绑 127.0.0.1）<br/>POST /chat/stream（SSE 直返，不经队列）"]:::main
+
+    W --> GW
+    AD --> GW
+    MP --> GW
+    GW --> APP
+
+    APP --> ROUTER{"主图 router · 三层路由<br/>rule → vector → LLM"}
+    ROUTER -->|direct| SE["skill_executor"]:::main
+    ROUTER -->|workflow| WE["workflow_executor"]:::main
+    ROUTER -->|"plan（主线）"| PL["planner → critique → supervisor（Send 并行）"]:::main
+    SE --> REP["reporter → END"]:::main
+    WE --> REP
+    PL --> REP
+
+    ROUTER -.->|"预过滤命中 · CS_ENABLED"| CS["客服域图"]:::ext
+    ROUTER -.->|"TRAVEL_ENABLED"| TR["旅游域图"]:::ext
+    ROUTER -.->|"prefilter 待接线"| SF["选品漏斗域图"]:::ext
+
+    APP --> SQL["NL2SQL 子系统<br/>6 层硬校验 + 行级权限"]:::main
+    APP --> RAGS["rag-service :8090<br/>混合检索 + Rerank + Evidence Gate"]:::main
+    APP --> PG["PostgreSQL :5432<br/>agent_business + agent_memory"]:::store
+    APP --> RD["Redis :6379<br/>Celery broker + result"]:::store
+    APP --> OBS["自建 Tracer（9 阶段）+ Prometheus"]:::main
+    RAGS --> CH["ChromaDB + pgvector"]:::store
+```
+
+> Java 侧（Spring Boot + SCG）是**独立项目**，不在本仓库的启动链路里；`--profile java-loop` 只为联调保留。
+
+---
+
 ## 系统规模（2026-09-20 实测口径）
 
 | 资产 | 数量 | 事实源 |
@@ -17,7 +63,7 @@
 | Workflow | 4 | `backend/orchestration/workflows/__init__.py::register_all()` |
 | 域图 / 业务 Agent | 3（客服 / 旅游 / 选品漏斗，**默认全部关闭**） | `backend/domains/__init__.py` |
 | MCP Server / Tool | 2 / 5 | `mcp_servers/servers/` |
-| 后端用例 | 5186（`pytest --collect-only`） | `backend/tests/` |
+| 后端用例 | 5293（`pytest --collect-only`，55s） | `backend/tests/` |
 | 前端路由 | 用户端 7 / 管理端 41 | `*/src/app/**/page.tsx` |
 
 > ⚠️ **口径纪律**：不要把"节点""Skill""Tool"统称 Agent。四层定义与例外台账见
@@ -62,10 +108,20 @@ START → router ─┬─ 客服预过滤命中（CS_ENABLED）    → 客服�
 
 ### 垂直域图（Domain Graph）
 
+三个域图**默认全部关闭**，由网关/router 预过滤命中后进入；预过滤优先级 **客服 > 旅游**（"订单里的行程单"按客服诉求处理）。
+
 - **客服域图**：`state_loader → pending_handler → cs_supervisor → 5 专家 → cs_reporter`
+  - `cs_supervisor` 承担三件事：handoff 拦截、循环上限、LLM 兜底
 - **旅游域图**：`travel_slot_filler → travel_supervisor → poi/transit/budget/risk 专家 → travel_validator →（未过）travel_repair → travel_reporter`
-  - `travel_validator` 是旅游域的 Evidence Gate：纯规则零 LLM 零 IO，只判定不修改，四轴校验（时间/地理/体力/预算）
+  - `travel_validator` 是旅游域的 Evidence Gate：纯规则零 LLM 零 IO，**只判定不修改**（修复在 `repair.py`），四轴校验（时间/地理/体力/预算）
+  - error 级违反**阻塞交付**并触发修复；局部修复只动被点名的天与条目，用户点名必去条目永不被静默丢弃（`kept_required`）
 - **选品漏斗域图**：已注册，prefilter 接线待落地，默认关闭
+
+**跨轮状态契约**（checkpointer 关闭时同样必须遵守，Domained Graph 通用）：
+
+1. `new_*_graph_input()` **只放本轮输入**，不预置产物/执行态默认值 —— checkpointer 会把 input 当对上轮状态的**更新**合并，预置 `brief: {}` 等于每轮清空成果
+2. 读状态一律 `.get()` —— 本轮没写过的键不在最终状态里
+3. `brief_fingerprint` 变 → 只在 slot_filler 里 `planning_reset()`；不清则 supervisor 会把**上一轮行程**当新需求输出
 
 ### NL2SQL 数据分析
 
@@ -88,6 +144,26 @@ START → router ─┬─ 客服预过滤命中（CS_ENABLED）    → 客服�
 | L1 短期 | 消息缓冲区 | 单次会话 |
 | L2 会话 | PostgreSQL | 持久化 |
 | L3 长期 | pgvector | 跨会话检索 + 衰减归档 |
+
+---
+
+## 评测结果（实测，非目标值）
+
+| 模块 | 数据集 / 子集 | 用例数 | 关键指标 | 运行记录 |
+|------|--------------|:---:|------|------|
+| RAG 检索 | `datasets/rag/suites/expanded_100.json` | 100 | Recall@5 **0.9588** ｜ MRR **0.8980** ｜ Top-1 **1.0000** ｜ 通过 **99%** | `data/eval_runs/2026-09-17T20-54-57-c76a1b/` |
+| RAG 快评 | 20 例子集 | 20 | Recall@5 **0.9608** ｜ MRR **0.9314** ｜ Top-1 **1.0000** ｜ 通过 **100%** | `data/eval_runs/2026-09-18T04-12-24-efe47d/` |
+| 旅游规划 | `datasets/travel/cases.jsonl` | 22 | **22/22**，pass_rate **1.000**（A–F 六组 × smoke/core/hard/regression 分层） | `docs/2026-09-18-旅游域P1候选交接.md` |
+| NL2SQL | `datasets/sql/cases.jsonl` | 15 | Release Gate **PASS**（准确率 / 拒答指标当前为「无数据」，尚未启用） | `data/eval_runs/2026-09-10T09-01-00-e81bc8/` |
+| 端到端 | `datasets/e2e/cases.jsonl` | 13（报告口径） | Release Gate **PASS** | `data/eval_runs/2026-09-11T08-55-26-153602/` |
+
+复现：
+```bash
+python -m backend.evaluation rag --selection expanded_100 --live --compare latest
+```
+
+> ⚠️ **引用指标必须同时写明 suite 与 run id。** `datasets/rag/cases.jsonl` 现为 **269 例 unified v5.0.0**，上表 100 / 20 是套在其上的 suite 子集而非全量。
+> 历史上曾出现「同名不同 schema」的误口径运行 —— 同一天同时存在 30% FAIL 与 100% PASS 两份报告，FAIL 那份是把 `rag_100_docs.json` 的 V1/V2 schema 喂给 V4 评测器而产生的假阴性，**不是真实回归**。判定依据与清理过程见 `docs/2026-09-18-全站存储收口交接报告.md` §3.4。
 
 ---
 
@@ -164,7 +240,8 @@ mcp_servers/
 
 ## Observability
 
-- **Trace**：9 阶段全链路（Input → Planner → Critique → Supervisor → Skill Select → Retrieval → Tool Execute → LLM Generate → Citation Verify → Final），每 Span 记录 latency / token_usage / retrieval_score / tool_args / execution_result
+- **Trace**：主图节点、Skill、Tool、检索与索引阶段均落 Span，类型由 `observability/tracer.py::SpanKind` 枚举强约束（**照 G2 不在此手抄阶段清单**）；每 Span 记录 latency / token_usage / retrieval_score / tool_args / execution_result
+  - Evidence Gate 有 4 个专有 Span：`retrieval_gate` / `rerank_gate` / `faithfulness_gate` / `self_correction`
 - **Metrics**：Prometheus `/metrics`；黄金信号 = 首 token 延迟（TTFT P99 < 3s）/ 每 token 耗时（TPOT P99 < 200ms）/ 错误率 / 并发占用
 - **告警**：`docker/prometheus-alert-rules.yml`（16 条，warning/critical 两级）
 - **成本治理**：`GET /observability/tokens/calls` 逐次调用 token 与成本；budgets + prices 可在管理端配置
@@ -192,7 +269,24 @@ SLO 定义见 [docs/observability/slo.md](docs/observability/slo.md)。
 
 ## 快速开始
 
-### 一键启停（唯一入口 = `devctl.bat`）
+### 0. 环境准备（首次运行）
+
+| 依赖 | 版本 | 用途 |
+|------|------|------|
+| Docker Desktop | 近期版本 | 起 apisix / app / postgres / redis / rag-service / mcp-service / worker |
+| Python | **3.10** | 后端与评测；`.venv` 必须是 3.10 |
+| Node.js | **22** | 两个 Next.js 前端 |
+| Ollama | 可选 | 仅 `local-llm` profile 与本地推理场景 |
+
+```bash
+cp .env.example .env
+# 至少填 PGPASSWORD / PG_READONLY_PASSWORD —— compose 用 ${VAR:?} 强校验，缺失直接起不来
+```
+
+- 根 `.env` 才是**生效配置**（`backend/.env` 不会被加载）。根 `.env.example` 是最小可启动集；86 项完整清单（逐项带注释）见 `backend/.env.example`。
+- 模型 provider / model / api_key **不在 env 里配** —— 走 `sys_config`，由管理端「模型配置」页维护（DB override + 环境变量 fallback）。
+
+### 1. 一键启停（唯一入口 = `devctl.bat`）
 
 ```bat
 devctl.bat status                  :: 查看三服务状态（空参 = status）
@@ -215,6 +309,16 @@ docker compose down               # ⚠️ 加 -v 会连数据卷一起删
 ```
 
 `devctl backend` 只操作 compose 的 `app` 服务，**不会**动 postgres / redis / apisix / rag-service / mcp-service / worker。
+
+### 非 Windows 环境（macOS / Linux）
+
+一键启停脚本目前是 Windows 批处理，其他平台用等价的 compose / node 命令即可，功能无差异：
+
+```bash
+docker compose up -d --build                                   # 等价 devctl start backend
+cd frontend       && npm install && npx next dev -p 3100       # 等价 devctl start web
+cd frontend-admin && npm install && npx next dev -p 3200       # 等价 devctl start admin
+```
 
 ### 访问入口
 
@@ -282,31 +386,43 @@ Tool / Skill / Workflow / MCP / 域图的改动点位与隐藏接线点见
 
 ```
 agent/
-├── apisix/                    # 网关声明式配置（standalone，进 Git）
+├── apisix/                    # 网关声明式配置（standalone，进 Git；改完 docker restart apisix 即生效）
 ├── backend/
 │   ├── app/                   # FastAPI（routes / middleware / server）
 │   ├── orchestration/         # LangGraph 运行时（graph / router / workflows / skill_executor）
 │   ├── skills/                # 12 个 Skill（业务能力封装）
 │   ├── tools/                 # 34 个 Tool（无状态可测试）
+│   ├── domains/               # 域图注册入口（→ 下面三个垂直域）
 │   ├── customer_service/      # 客服域图
 │   ├── travel/                # 旅游域图
-│   ├── selection_funnel/      # 选品漏斗域图（默认关闭）
+│   ├── selection_funnel/      # 选品漏斗域图（prefilter 待接线）
 │   ├── rag/                   # RAG 管道（检索 / 索引 / 预处理）
 │   ├── sql/                   # NL2SQL（6 层校验 + 行级权限）
 │   ├── memory/                # 三层记忆
 │   ├── tasks/                 # Celery（双队列 + worker）
+│   ├── evaluation/            # 评测框架（datasets/ 数据集 + runners/）
 │   ├── observability/         # Tracer / Metrics / Alerts
 │   ├── security/              # 认证 / 审批门 / 守卫
 │   ├── infra/                 # LLM 代理 / 计价 / 预算 / 限流
-│   └── tests/                 # 5186 用例
+│   └── tests/                 # 5293 用例
 ├── mcp_servers/               # MCP 服务（2 server / 5 tool）
 ├── frontend/                  # 用户端 Next.js（:3100）
 ├── frontend-admin/            # 管理端 Next.js（:3200）
-├── frontend-mp/               # 微信小程序（Taro）
+├── frontend-mp/               # 微信小程序（Taro，客户端扩展）
+├── docker/                    # init-dbs.sh + Prometheus 告警规则等
+├── 部署/                       # 部署脚本与说明
 ├── scripts/                   # 运维 / 验收 / 网关基线脚本
-├── docs/                      # 架构文档 + ADR + 交接报告
-└── devctl.bat                 # 统一启停入口
+├── docs/                      # 架构文档 + ADR + 交接报告（含 HANDOFF.md、TRAVEL_ARCHITECTURE_AUDIT.md）
+├── data/                      # 评测语料与运行产物（eval_runs/、docs/ 语料库）
+├── tmp/                       # 临时工作区（语料加工中间产物）
+├── docker-compose.yml         # apisix + app + postgres + redis + rag-service + mcp-service + worker
+├── docker-compose.observability.yml
+├── .env.example               # 根 env 最小可启动集（→ cp 成 .env）
+├── devctl.bat                 # 统一启停入口（dev-start/dev-stop/dev-restart 为短路写法）
+└── AGENTS.md                  # 项目级硬约束（改代码前先读）
 ```
+
+> `data/` 与 `tmp/` 目前有较多语料/中间产物直接入库（分别约 760 / 1500 个文件）。**这是已知待清理项**：语料本体宜转为按需拉取，仓库只保留 schema 与小型固件集。
 
 ---
 
@@ -322,9 +438,36 @@ agent/
 | [docs/gateway-apisix-migration-plan.md](docs/gateway-apisix-migration-plan.md) | 网关迁移计划（B0→B4 分批 + 审批门禁） |
 | [docs/2026-09-16-总交接与实施计划.md](docs/2026-09-16-总交接与实施计划.md) | 跨会话交接与施工顺序（推荐入口） |
 | [docs/未完成功能进度汇总-2026-09-16.md](docs/未完成功能进度汇总-2026-09-16.md) | 功能欠账 + 开工顺序 |
+| [docs/HANDOFF.md](docs/HANDOFF.md) | 会话交接记录 |
+| [docs/TRAVEL_ARCHITECTURE_AUDIT.md](docs/TRAVEL_ARCHITECTURE_AUDIT.md) | 旅游域架构审计（Phase 0，含数据 Provider 层缺口） |
+| [docs/production-readiness-assessment.md](docs/production-readiness-assessment.md) | 生产就绪风险清单（P0/P1，含未修复项） |
+| [docs/2026-09-18-全站存储收口交接报告.md](docs/2026-09-18-全站存储收口交接报告.md) | 评测口径澄清与存储收口 |
 
 ---
 
 ## License
 
-Private — 仅供内部使用。
+**All rights reserved —— 保留全部权利。源码公开仅用于展示与技术交流，未经授权不得用于商业用途。**
+
+本仓库是 Public，但**不是**开源项目：仓库内没有 `LICENSE` 文件，即默认保留全部权利。
+若需在其他项目中使用其中代码或设计，请先联系作者取得授权。
+
+<!-- 若要改为真正的开源许可：在仓库根放一份 LICENSE（MIT / Apache-2.0 等），
+     并把上面这段替换为对应声明即可。当前写法是「公开展示但不授权」的保守默认。 -->
+
+---
+
+<!--
+## 演示素材（待补）
+
+建议加 2~3 张截图 / 一段 GIF，放在 `docs/assets/` 下再引用，例如：
+
+![用户端任务模式](docs/assets/agent-task-mode.png)
+![管理端模型配置](docs/assets/admin-model-config.png)
+![RAG 引用与拒答](docs/assets/rag-citation.png)
+
+推荐取材：`/agent` 任务模式（流式 + 工具调用过程）、管理端模型配置与成本页、
+RAG 的引用标注与 Evidence Gate 拒答、NL2SQL 的执行计划与脱敏结果。
+截图时注意不要带真实业务数据与密钥。
+-->
+

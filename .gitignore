@@ -154,6 +154,9 @@ autosave*
 .env.test
 *.env.example
 .env.*.local
+# 例外：根 .env.example 是「最小可启动集」模板，需要入库；
+# 上面的 *.env.example 会把它一起忽略掉（原来也导致根模板一直没能提交）
+!/.env.example
 *.key
 *.pem
 *.crt
