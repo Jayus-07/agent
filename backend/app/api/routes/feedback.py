@@ -3,7 +3,11 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from backend.app.api.deps import OperatorIdentity, require_admin_user
+from backend.app.api.deps import (
+    OperatorIdentity,
+    require_admin_user,
+    run_authenticated_mutation,
+)
 from backend.app.api.identity import Identity, resolve_identity
 from backend.evaluation.curator import append_case, list_cases
 from backend.evaluation.models import TestCase
@@ -97,49 +101,57 @@ async def post_feedback(req: FeedbackRequest, request: Request):
             raise HTTPException(403, "无权访问该 Trace")
         if _trace_value(trace, "session_id") != req.session_id:
             raise HTTPException(403, "反馈会话与 Trace 不匹配")
-    try:
-        new_id = add_feedback(
-            session_id=req.session_id,
-            vote=req.vote,
-            msg_id=req.msg_id,
-            question=req.question,
-            answer_preview=req.answer_preview,
-            reason=req.reason,
-            trace_id=req.trace_id,
-            user_id=identity.user_id,
-            tenant_id=identity.tenant_id,
-            correction_text=req.correction_text,
-            expected_answer=req.expected_answer,
-        )
-        # 埋点运营指标
-        record_feedback(req.vote)
-        response = {"ok": True, "id": new_id}
-        should_create_candidate = bool(
-            trace is not None
-            and (
-                req.vote == "negative"
-                or req.correction_text.strip()
-                or req.expected_answer.strip()
-            )
-        )
-        if should_create_candidate:
-            case = _candidate_case(trace, req)
-            candidate = create_candidate(
-                feedback_id=new_id,
-                tenant_id=identity.tenant_id,
-                actor_id=identity.user_id,
+    def persist_feedback() -> dict:
+        try:
+            new_id = add_feedback(
+                session_id=req.session_id,
+                vote=req.vote,
+                msg_id=req.msg_id,
+                question=req.question,
+                answer_preview=req.answer_preview,
+                reason=req.reason,
                 trace_id=req.trace_id,
-                module=case.module,
-                case_payload=case.model_dump(mode="json"),
+                user_id=identity.user_id,
+                tenant_id=identity.tenant_id,
+                correction_text=req.correction_text,
+                expected_answer=req.expected_answer,
             )
-            response.update({
-                "candidate_id": candidate["candidate_id"],
-                "candidate_status": candidate["status"],
-            })
-        return response
-    except Exception as e:
-        logger.error(f"[Feedback] 写入失败: {e}")
-        raise HTTPException(503, "反馈写入失败，请稍后重试") from e
+            # 埋点运营指标也必须位于幂等副作用边界内，避免重放重复计数。
+            record_feedback(req.vote)
+            response = {"ok": True, "id": new_id}
+            should_create_candidate = bool(
+                trace is not None
+                and (
+                    req.vote == "negative"
+                    or req.correction_text.strip()
+                    or req.expected_answer.strip()
+                )
+            )
+            if should_create_candidate:
+                case = _candidate_case(trace, req)
+                candidate = create_candidate(
+                    feedback_id=new_id,
+                    tenant_id=identity.tenant_id,
+                    actor_id=identity.user_id,
+                    trace_id=req.trace_id,
+                    module=case.module,
+                    case_payload=case.model_dump(mode="json"),
+                )
+                response.update({
+                    "candidate_id": candidate["candidate_id"],
+                    "candidate_status": candidate["status"],
+                })
+            return response
+        except Exception as e:
+            logger.error(f"[Feedback] 写入失败: {e}")
+            raise HTTPException(503, "反馈写入失败，请稍后重试") from e
+
+    return run_authenticated_mutation(
+        request,
+        "feedback.submit",
+        req.model_dump(mode="json"),
+        persist_feedback,
+    )
 
 
 @router.get("/feedback/stats")
@@ -181,10 +193,25 @@ async def approve_feedback_candidate(
     if not identity.tenant_id:
         raise HTTPException(401, "候选审核需要可信租户身份")
     try:
-        candidate = transition_candidate(
-            candidate_id, identity.tenant_id, "approved", operator.actor, body.note,
+        return run_authenticated_mutation(
+            request,
+            "feedback.candidate.review",
+            {
+                "candidate_id": candidate_id,
+                "decision": "approved",
+                "note": body.note,
+            },
+            lambda: {
+                "ok": True,
+                "candidate": transition_candidate(
+                    candidate_id,
+                    identity.tenant_id,
+                    "approved",
+                    operator.actor,
+                    body.note,
+                ),
+            },
         )
-        return {"ok": True, "candidate": candidate}
     except LookupError as e:
         raise HTTPException(404, str(e))
     except ValueError as e:
@@ -203,10 +230,25 @@ async def reject_feedback_candidate(
     if not identity.tenant_id:
         raise HTTPException(401, "候选审核需要可信租户身份")
     try:
-        candidate = transition_candidate(
-            candidate_id, identity.tenant_id, "rejected", operator.actor, body.note,
+        return run_authenticated_mutation(
+            request,
+            "feedback.candidate.review",
+            {
+                "candidate_id": candidate_id,
+                "decision": "rejected",
+                "note": body.note,
+            },
+            lambda: {
+                "ok": True,
+                "candidate": transition_candidate(
+                    candidate_id,
+                    identity.tenant_id,
+                    "rejected",
+                    operator.actor,
+                    body.note,
+                ),
+            },
         )
-        return {"ok": True, "candidate": candidate}
     except LookupError as e:
         raise HTTPException(404, str(e))
     except ValueError as e:
@@ -223,21 +265,8 @@ async def promote_feedback_candidate(
     identity = resolve_identity(request)
     if not identity.tenant_id:
         raise HTTPException(401, "候选 promotion 需要可信租户身份")
-    candidate = get_candidate(candidate_id, identity.tenant_id)
-    if candidate is None:
-        raise HTTPException(404, "候选不存在")
-    if candidate["status"] == "promoted":
-        return {
-            "ok": True,
-            "status": "promoted",
-            "case_id": candidate.get("promoted_case_id", ""),
-            "appended": False,
-        }
-    if candidate["status"] != "approved":
-        raise HTTPException(409, "只有 approved 候选可以 promotion")
     try:
-        with promotion_lock(identity.tenant_id, candidate["trace_id"]):
-            # 在锁内重新读取，避免等待期间另一实例已经完成 promotion。
+        def promote() -> dict:
             candidate = get_candidate(candidate_id, identity.tenant_id)
             if candidate is None:
                 raise HTTPException(404, "候选不存在")
@@ -251,29 +280,51 @@ async def promote_feedback_candidate(
             if candidate["status"] != "approved":
                 raise HTTPException(409, "只有 approved 候选可以 promotion")
 
-            case = TestCase.model_validate(json.loads(candidate["case_json"]))
-            result = append_case(case)
-            case_id = case.id
-            if not result.get("appended"):
-                if not result.get("duplicate", False):
-                    raise HTTPException(503, "评测集导出失败，请稍后重试")
-                existing = next(
-                    (
-                        item for item in list_cases(case.module)
-                        if item.metadata.get("trace_id") == candidate["trace_id"]
-                    ),
-                    None,
+            with promotion_lock(identity.tenant_id, candidate["trace_id"]):
+                # 在锁内重新读取，避免等待期间另一实例已经完成 promotion。
+                candidate = get_candidate(candidate_id, identity.tenant_id)
+                if candidate is None:
+                    raise HTTPException(404, "候选不存在")
+                if candidate["status"] == "promoted":
+                    return {
+                        "ok": True,
+                        "status": "promoted",
+                        "case_id": candidate.get("promoted_case_id", ""),
+                        "appended": False,
+                    }
+                if candidate["status"] != "approved":
+                    raise HTTPException(409, "只有 approved 候选可以 promotion")
+
+                case = TestCase.model_validate(json.loads(candidate["case_json"]))
+                result = append_case(case)
+                case_id = case.id
+                if not result.get("appended"):
+                    if not result.get("duplicate", False):
+                        raise HTTPException(503, "评测集导出失败，请稍后重试")
+                    existing = next(
+                        (
+                            item for item in list_cases(case.module)
+                            if item.metadata.get("trace_id") == candidate["trace_id"]
+                        ),
+                        None,
+                    )
+                    case_id = existing.id if existing else case.id
+                promoted = mark_promoted(
+                    candidate_id, identity.tenant_id, case_id, operator.actor,
                 )
-                case_id = existing.id if existing else case.id
-            promoted = mark_promoted(
-                candidate_id, identity.tenant_id, case_id, operator.actor,
-            )
-            return {
-                "ok": True,
-                "status": promoted["status"],
-                "case_id": promoted.get("promoted_case_id", case_id),
-                "appended": bool(result.get("appended")),
-            }
+                return {
+                    "ok": True,
+                    "status": promoted["status"],
+                    "case_id": promoted.get("promoted_case_id", case_id),
+                    "appended": bool(result.get("appended")),
+                }
+
+        return run_authenticated_mutation(
+            request,
+            "feedback.candidate.promote",
+            {"candidate_id": candidate_id},
+            promote,
+        )
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
     except ValueError as e:

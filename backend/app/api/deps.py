@@ -6,12 +6,27 @@
 import hmac
 import threading
 from dataclasses import dataclass
+from typing import Any, Callable
 
 from fastapi import HTTPException, Request
 
 from backend.config import ALLOW_UNAUTHENTICATED, ENVIRONMENT
 from backend.services.sys_config import get_mode
 from backend.shared.logger import logger
+
+
+def require_idempotency_key(request: Request) -> str:
+    """治理类写操作必须显式携带客户端幂等键。"""
+    key = request.headers.get("Idempotency-Key", "").strip()
+    if not key:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_PARAM",
+                "message": "写操作必须提供 Idempotency-Key",
+            },
+        )
+    return key
 
 _lock = threading.Lock()
 _multi_agent = None
@@ -336,6 +351,69 @@ async def require_admin_user(request: Request):
             "message": "该端点仅限管理员（role=admin）访问；"
                        "服务级凭据通道不可访问",
         },
+    )
+
+
+def run_authenticated_mutation(
+    request: Request,
+    operation: str,
+    payload: Any,
+    callback: Callable[[], dict[str, Any]],
+    *,
+    identity_error: str = "写操作需要可信用户与租户身份",
+    unavailable_error: str = "幂等控制面暂不可用，拒绝执行写操作",
+) -> dict[str, Any]:
+    """以可信用户身份执行一次副作用写操作，并收口幂等错误。"""
+    from backend.app.api.identity import resolve_identity
+    from backend.shared.idempotency import (
+        IdempotencyContextMissing,
+        IdempotencyUnavailable,
+        run_idempotent_operation_for_identity,
+    )
+
+    identity = resolve_identity(request)
+    if not identity.authenticated or not identity.tenant_id:
+        raise HTTPException(401, identity_error)
+    client_key = require_idempotency_key(request)
+    try:
+        return run_idempotent_operation_for_identity(
+            operation,
+            payload,
+            callback,
+            tenant_id=identity.tenant_id,
+            actor_id=identity.user_id,
+            client_key=client_key,
+        )
+    except ValueError as exc:
+        if str(exc) == "IDEMPOTENCY_CONFLICT":
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "IDEMPOTENCY_CONFLICT",
+                    "message": "相同幂等键对应的请求内容不同，禁止重复提交",
+                },
+            ) from exc
+        raise
+    except IdempotencyContextMissing as exc:
+        raise HTTPException(401, "治理写操作身份上下文不完整") from exc
+    except IdempotencyUnavailable as exc:
+        raise HTTPException(503, unavailable_error) from exc
+
+
+def run_governance_mutation(
+    request: Request,
+    operator: OperatorIdentity,
+    operation: str,
+    payload: Any,
+    callback: Callable[[], dict[str, Any]],
+) -> dict[str, Any]:
+    """以可信用户身份执行一次治理写操作，并收口幂等错误。"""
+    return run_authenticated_mutation(
+        request,
+        operation,
+        payload,
+        callback,
+        identity_error="治理写操作需要可信用户与租户身份",
     )
 
 

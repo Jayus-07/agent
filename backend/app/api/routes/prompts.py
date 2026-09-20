@@ -104,6 +104,28 @@ def _check_permission(risk_level: str, action: str, role: str) -> None:
 
 # ── Serialization ─────────────────────────────────────────────
 
+def _variables_meta(key: str, raw: list | None) -> list[dict]:
+    """DB 存的是变量名列表（str），管理端契约是 {name, required, description}。
+
+    以注册表 spec 为权威补齐 required/description；spec 缺失（DB 行先于注册表）
+    或存量已是对象时原样保留，避免回归。
+    """
+    spec = PROMPT_REGISTRY.get(key)
+    spec_vars = {v.name: v for v in spec.variables} if spec else {}
+    out: list[dict] = []
+    for item in raw or []:
+        if isinstance(item, dict):
+            out.append(item)
+            continue
+        v = spec_vars.get(item)
+        out.append({
+            "name": item,
+            "required": bool(v.required) if v else False,
+            "description": v.description if v else "",
+        })
+    return out
+
+
 def _prompt_to_dict(p, *, include_template: bool = False, mask: bool = False) -> dict:
     d = {
         "id": p.id,
@@ -113,7 +135,7 @@ def _prompt_to_dict(p, *, include_template: bool = False, mask: bool = False) ->
         "category": p.category,
         "risk_level": p.risk_level,
         "template_engine": p.template_engine,
-        "variables": p.variables or [],
+        "variables": _variables_meta(p.key, p.variables),
         "variable_count": len(p.variables or []),
         "active_version": p.active_version,
         "is_code_controlled": p.is_code_controlled,
@@ -125,12 +147,12 @@ def _prompt_to_dict(p, *, include_template: bool = False, mask: bool = False) ->
     return d
 
 
-def _version_to_dict(v, *, mask: bool = False) -> dict:
+def _version_to_dict(v, *, key: str = "", mask: bool = False) -> dict:
     return {
         "id": v.id,
         "version": v.version,
         "template": "*** CODE-CONTROLLED ***" if mask else v.template,
-        "variables": v.variables or [],
+        "variables": _variables_meta(key, v.variables),
         "status": v.status,
         "change_note": v.change_note,
         "created_by": v.created_by,
@@ -297,7 +319,7 @@ async def list_versions(
         versions = await repo.list_versions(prompt.id)
 
     mask = spec.code_controlled
-    return {"items": [_version_to_dict(v, mask=mask) for v in versions], "total": len(versions)}
+    return {"items": [_version_to_dict(v, key=key, mask=mask) for v in versions], "total": len(versions)}
 
 
 # ── GET /prompts/{key}/versions/{version} ─────────────────────
@@ -326,7 +348,7 @@ async def get_version(
         if not ver:
             raise HTTPException(404, f"Version {version} not found for {key}")
 
-    return _version_to_dict(ver, mask=spec.code_controlled)
+    return _version_to_dict(ver, key=key, mask=spec.code_controlled)
 
 
 # ── GET /prompts/{key}/diff ───────────────────────────────────

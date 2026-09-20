@@ -843,7 +843,9 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             stage_elapsed["uploading"] = upload_elapsed_ms
         total_ms = (upload_elapsed_ms or 0) + int((time.time() - upload_t0) * 1000)
         emit_fn("duplicate", "文件已存在，未重复索引",
-                doc=duplicate_doc, trace_id="", stage_elapsed=stage_elapsed, total_ms=total_ms)
+                doc=duplicate_doc, trace_id="", stage_elapsed=stage_elapsed, total_ms=total_ms,
+                processing_run_id=result.get("processing_run_id", ""),
+                model_summary=result.get("model_summary", []))
         _remove_bak(filepath)  # 内容未变,旧版本备份无保留价值
         _safe_log_op(
             duplicate_doc.get("doc_id", ""), filename, "upload", source,
@@ -875,6 +877,8 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             stage_elapsed["uploading"] = max(total_ms - others, 0)
         emit_fn("done", "索引完成", doc=new_doc,
                 trace_id=result.get("trace_id") or "",
+                processing_run_id=result.get("processing_run_id") or "",
+                model_summary=result.get("model_summary") or [],
                 stage_elapsed=stage_elapsed,
                 total_ms=total_ms)
         _remove_bak(filepath)  # 新版本已确认入库,清理覆盖备份
@@ -897,6 +901,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             "chunk_count": result.get("chunk_count", 0),
             "file_hash": result.get("file_hash", ""),
             "duplicate": False,
+            "processing_run_id": result.get("processing_run_id", ""),
             "doc_type": (new_doc or {}).get("doc_type", "general"),
             "llm_used": bool((new_doc or {}).get("llm_used", False)),
             "confidence": (new_doc or {}).get("confidence", 0),
@@ -1032,8 +1037,15 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
             await emit("uploading",
                        f"索引队列繁忙（最大并发 {_INDEX_CONCURRENCY_LIMIT}），排队等待中...")
         async with sem:
+            from functools import partial
             result = await loop.run_in_executor(
-                None, _do_index_sync, upload_id, filepath, filename, loop, kb_id, department)
+                None,
+                partial(
+                    _do_index_sync,
+                    upload_id, filepath, filename, loop, kb_id, department,
+                    batch_id=batch_id,
+                ),
+            )
     except FileLockedByOtherError:
         # P0-2 双重投递兜底：Celery 任务实际已入队（broker 响应丢失被误判为
         # 入队失败）+ 本机回退同时执行，本机抢锁失败即此场景。
@@ -1074,7 +1086,11 @@ def _remove_bak(filepath: str) -> None:
         logger.warning(f"[RAG] .bak 清理失败 {bak}: {exc}")
 
 
-def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyncio.AbstractEventLoop, kb_id: str = "policy_general", department: str = "general"):
+def _do_index_sync(upload_id: str, filepath: str, filename: str,
+                   main_loop: asyncio.AbstractEventLoop,
+                   kb_id: str = "policy_general",
+                   department: str = "general",
+                   batch_id: str | None = None):
     """同步执行索引，通过 _progress_queues[upload_id] 推送阶段（从线程内调用）。
 
     P1 改造：
@@ -1150,6 +1166,9 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
         listener = ProgressListener(sync_emit)
         # F7: 惰性导入（模块顶层已移除该重依赖导入）
         from backend.rag.indexing.indexer import IncrementalIndexer
+        from backend.rag.indexing.processing_lineage_pg import (
+            get_processing_lineage_repository,
+        )
         indexer = IncrementalIndexer(
             docs_dir=DOCS_DIRECTORY,
             vectordb=pipeline.vectordb,
@@ -1159,6 +1178,9 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str, main_loop: asyn
             kb_id=kb_id,
             department=department,
             bm25_store=pipeline.bm25_store,  # P0-1: 上传后立即同步 BM25
+            processing_lineage_repository=get_processing_lineage_repository(),
+            processing_task_id=upload_id,
+            processing_batch_id=batch_id,
         )
         try:
             result = indexer.reindex_file(filepath, file_hash=file_hash)

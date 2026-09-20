@@ -16,21 +16,17 @@
    不用 `model_roles.provider_of` —— 它只看代码层 `AVAILABLE_MODELS`，会让自建模型
    出现「registered=true 但 provider=null」的自相矛盾。
 
-⚠️ **读 `source` 前必读（DB 覆盖层现状）**：`model_roles.inject_overrides()` 至今
-**零调用点** —— `services/sys_config.py::_fetch_overrides` 只捞 `_SWITCHES` 的键，
-模型角色不登记在那张表里。故当前 `source` 只可能是 `env` / `inherit` / `default`；
-`db` 是接线后的取值，本端点已能如实透传（有测试锁定）。详见
-docs/model-config-admin-ui-design.md §15.4。
-
-⚠️ **尚未注册**到 `api_router`（同 `sys_providers.py` 的处境）：`app/api/router.py`
-被并发会话持有未提交改动，提交它会连带让主干 import 失败。待其落定后一并注册。
+DB 角色覆盖由 `registry_store` 刷新时注入 `model_roles`，因此 `source=db` 是真实
+可观测状态；无覆盖时仍按 `env` / `inherit` / `default` 返回。该路由已注册到
+`api_router`，并与角色写入端点共享同一套模型清单。
 """
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from backend.app.api.deps import require_admin_user
+from backend.app.api.deps import require_user_actor
 from backend.config import model_roles
+from backend.config import llm as config_llm
 from backend.infra.llm import credentials as credentials_mod
 from backend.infra.llm import models as models_mod
 
@@ -55,24 +51,52 @@ def _schema_source(source: str) -> str:
 
 
 def _missing_key_env(provider: str | None) -> str | None:
-    """角色生效模型所属 provider 缺哪个 Key 环境变量；齐备 / 无需 Key → None。
+    """兼容字段：数据库配置模式下不再返回 Key 环境变量名。
 
-    与 `credentials.missing_key_message` 的区别：后者给**可操作报错全文**（带
-    `.env` 指引），契约这里只要 env 名 —— 文案由前端拼，避免两处措辞漂移。
-
-    `ollama` 与「未登记 Key 的 provider」都返回 None：它们不属于「缺 Key」，
-    可用性问题由 `check_provider_usable` / 探测按钮负责（kind 不同，勿混）。
+    Key 已迁移到加密数据库，前端不应再引导用户编辑 env；可操作原因由
+    ``availabilityReason`` 返回。
     """
-    if not provider or provider == "ollama":
+    del provider
+    return None
+
+
+def _availability_reason(
+    *,
+    role: str,
+    effective: str,
+    provider: str | None,
+    registered: bool,
+    missing_key_env: str | None,
+    model_kind: str | None,
+) -> str | None:
+    """给管理端返回可直接展示的角色可用性原因。"""
+    if not effective:
+        return "未配置"
+    if not registered:
+        return "未注册"
+    expected_kind = models_mod.expected_model_kind(role)
+    if model_kind != expected_kind:
+        return (
+            f"用途不匹配：需要{models_mod.MODEL_KIND_LABELS[expected_kind]}，"
+            f"当前是{models_mod.MODEL_KIND_LABELS.get(model_kind or 'chat', '未知用途')}"
+        )
+    if provider == "ollama" and not config_llm.OLLAMA_ENABLED:
+        return "Ollama 当前未启用（cloud 模式禁用本地模型）"
+    if missing_key_env:
+        return f"缺少 {missing_key_env}"
+    try:
+        reason = credentials_mod.check_provider_usable(provider or "")
+        if reason:
+            return reason
+        if provider != "ollama" and not credentials_mod.resolve_credentials(provider).api_key:
+            return "未配置 API Key"
         return None
-    env_name = models_mod.PROVIDER_API_KEY_ENV.get(provider)
-    if not env_name:
-        return None
-    return None if credentials_mod.resolve_credentials(provider).api_key else env_name
+    except Exception:
+        return "供应商可用性暂时无法确认"
 
 
 @router.get("")
-async def list_model_roles(ident=Depends(require_admin_user)) -> dict:
+async def list_model_roles(ident=Depends(require_user_actor)) -> dict:
     """全部模型角色：生效模型、来源、归属 provider 与可用性（tab①⑤ 数据源）。
 
     响应裸 dict（§1.1.1 决策），字段见 §5.4 `RoleBinding`；`label` 不在其中
@@ -80,14 +104,25 @@ async def list_model_roles(ident=Depends(require_admin_user)) -> dict:
     """
     # name → provider，一次遍历同时供 provider / registered 使用（同源，见模块头第 3 条）
     catalog = {
-        str(m.get("name") or ""): str(m.get("provider") or "")
+        str(m.get("name") or ""): m
         for m in models_mod.get_available_models()
         if m.get("name")
     }
     items: list[dict] = []
     for row in model_roles.effective_snapshot():
         effective = row["value"] or ""
-        provider = catalog.get(effective) or None
+        entry = catalog.get(effective) or {}
+        provider = str(entry.get("provider") or "") or None
+        registered = bool(effective) and effective in catalog
+        missing_key_env = _missing_key_env(provider)
+        availability_reason = _availability_reason(
+            role=row["role"],
+            effective=effective,
+            provider=provider,
+            registered=registered,
+            missing_key_env=missing_key_env,
+            model_kind=models_mod.model_kind_of(entry) if entry else None,
+        )
         items.append({
             "role": row["role"],
             "effectiveModel": effective,
@@ -95,8 +130,10 @@ async def list_model_roles(ident=Depends(require_admin_user)) -> dict:
             "source": _schema_source(row["source"]),
             "inheritedFrom": row["inheritedFrom"],
             "provider": provider,
-            "registered": bool(effective) and effective in catalog,
-            "missingKeyEnv": _missing_key_env(provider),
+            "registered": registered,
+            "missingKeyEnv": missing_key_env,
+            "available": availability_reason is None and bool(effective),
+            "availabilityReason": availability_reason,
             "requiresReindex": row["requiresReindex"],
             "updatedBy": row["updatedBy"],
             "updatedAt": row["updatedAt"],

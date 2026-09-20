@@ -11,6 +11,7 @@ from urllib.parse import unquote
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from backend.app.api.deps import require_idempotency_key
 from backend.app.api.identity import resolve_identity
 from backend.competitor import cookie_manager
 from backend.competitor.store import get_store
@@ -31,8 +32,8 @@ def _run_idempotent_write(
     """同步竞品 REST 写入口的审批—幂等边界。"""
     ident = resolve_identity(request)
     if not ident.tenant_id or not ident.user_id:
-        # 兼容尚未经网关注入租户的旧直调/本地开发路径；可信上下文不降级。
-        return callback()
+        raise HTTPException(401, "竞品写操作需要可信用户与租户身份")
+    client_key = require_idempotency_key(request)
 
     from backend.security.tool_approval import ensure_approved
 
@@ -53,7 +54,7 @@ def _run_idempotent_write(
         lambda: {"response": callback()},
         tenant_id=ident.tenant_id,
         actor_id=ident.user_id,
-        client_key=(request.headers.get("Idempotency-Key") or "").strip(),
+        client_key=client_key,
     )["response"]
 
 

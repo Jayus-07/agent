@@ -23,11 +23,24 @@ def _embedding_model_name() -> str:
     路径的 basename。原实现固定取 EMBEDDING_MODEL_PATH 的 basename，
     云端模式下文档列表/统计永远错误显示本地模型名（bge-small-zh-v1.5）。
     """
+    # 专项模型配置来自数据库；优先读取运行时绑定，不能让旧 env 默认值
+    # 覆盖管理端刚保存的 Embedding 模型名。
+    try:
+        from backend.infra.llm.specialized import resolve_binding
+
+        binding = resolve_binding("embedding")
+        if binding is not None:
+            return binding.model_name
+    except Exception as exc:
+        logger.debug("[RAG] 读取专项 Embedding 模型失败，使用兼容回退: %s", exc)
     if ENV_MODE == "cloud":
         return EMBEDDING_MODEL
     return os.path.basename(EMBEDDING_MODEL_PATH)
 from backend.config.rag import METADATA_SCHEMA_FINGERPRINT
 from backend.rag.indexing.indexer import IncrementalIndexer
+from backend.rag.indexing.processing_lineage_pg import (
+    get_processing_lineage_repository,
+)
 from backend.shared.logger import logger
 # 显式导入替代 import *：_rag_shared 声明了 __all__，星号导入会静默丢掉
 # os/time/logger 等名字，连 except 分支里的 logger 也变成 NameError（兜底失效直接 500）
@@ -99,6 +112,7 @@ async def list_documents(
         def _format_doc(d: dict) -> dict:
             file_name = d.get("file_name", "")
             ext = file_name.rsplit(".", 1)[-1] if "." in file_name else "unknown"
+            actual_embedding_model = d.get("embedding_model") or embedding_model_name
             return {
                 "id": d["doc_id"],
                 "name": file_name,
@@ -110,7 +124,7 @@ async def list_documents(
                 "chunks": d.get("chunk_count", 0),  # 向后兼容旧字段名
                 "hash": d.get("file_hash", ""),
                 "status": d.get("status", "active"),
-                "embedding_model": embedding_model_name,
+                "embedding_model": actual_embedding_model,
                 "index_version": 1,
                 "last_indexed": d.get("last_indexed"),
                 "created_at": d.get("created_at"),
@@ -128,6 +142,15 @@ async def list_documents(
                 "kb_id": d.get("kb_id", "policy_general"),
                 "department": d.get("department", ""),
                 "kb_version": d.get("kb_version", "v1"),
+                "last_processing_run_id": d.get("last_processing_run_id", ""),
+                "pipeline_version": d.get("pipeline_version", ""),
+                "metadata_route": d.get("metadata_route", ""),
+                "ocr_used": bool(d.get("ocr_used", False)),
+                "ocr_model": d.get("ocr_model", ""),
+                "metadata_model": d.get("metadata_model", ""),
+                "model_count": int(d.get("model_count") or 0),
+                "processing_status": d.get("processing_status", ""),
+                "processing_finished_at": d.get("processing_finished_at"),
             }
 
         return {
@@ -268,7 +291,7 @@ async def get_document(doc_id: str):
 
         file_name = doc.get("file_name", "")
         ext = file_name.rsplit(".", 1)[-1] if "." in file_name else "unknown"
-        embedding_model_name = _embedding_model_name()
+        embedding_model_name = doc.get("embedding_model") or _embedding_model_name()
 
         return {
             "ok": True,
@@ -292,11 +315,62 @@ async def get_document(doc_id: str):
                 "updated_at": doc.get("updated_at"),
                 "parse_time_ms": None,
                 "index_time_ms": None,
+                "last_processing_run_id": doc.get("last_processing_run_id", ""),
+                "pipeline_version": doc.get("pipeline_version", ""),
+                "metadata_route": doc.get("metadata_route", ""),
+                "ocr_used": bool(doc.get("ocr_used", False)),
+                "ocr_model": doc.get("ocr_model", ""),
+                "metadata_model": doc.get("metadata_model", ""),
+                "model_count": int(doc.get("model_count") or 0),
+                "processing_status": doc.get("processing_status", ""),
+                "processing_finished_at": doc.get("processing_finished_at"),
             },
         }
     except Exception as e:
         logger.error(f"[RAG] 文档详情失败: {e}")
         return {"ok": False, "error": str(e)}
+
+
+@router.get("/documents/{doc_id}/processing-runs")
+async def list_processing_runs(doc_id: str, page: int = 1, page_size: int = 20):
+    """返回文档历次入库运行及其模型血缘摘要。"""
+    try:
+        result = await asyncio.to_thread(
+            get_processing_lineage_repository().list_runs,
+            doc_id,
+            page=page,
+            page_size=page_size,
+        )
+        return {"doc_id": doc_id, **result}
+    except Exception as e:
+        logger.error(f"[RAG] 处理运行列表查询失败: {e}")
+        return {"doc_id": doc_id, "items": [], "total": 0, "error": str(e)}
+
+
+@router.get("/documents/{doc_id}/processing-runs/{run_id}")
+async def get_processing_run_detail(doc_id: str, run_id: str):
+    """返回一次入库运行的阶段、模型、版本和 token 明细。"""
+    try:
+        detail = await asyncio.to_thread(
+            get_processing_lineage_repository().get_run_detail,
+            doc_id,
+            run_id,
+        )
+        if detail is None:
+            return {"doc_id": doc_id, "run_id": run_id, "error": "处理运行不存在"}
+        try:
+            from backend.observability.llm_usage_store import get_llm_usage_store
+            detail["usage"] = await asyncio.to_thread(
+                get_llm_usage_store().by_processing_run,
+                run_id,
+            )
+        except Exception as usage_error:
+            logger.warning(f"[RAG] 处理运行用量查询失败: {usage_error}")
+            detail["usage"] = []
+        return detail
+    except Exception as e:
+        logger.error(f"[RAG] 处理运行详情查询失败: {e}")
+        return {"doc_id": doc_id, "run_id": run_id, "steps": [], "error": str(e)}
 
 
 @router.post("/documents/{doc_id}/reindex", dependencies=[Depends(require_rag_editor)])
@@ -329,6 +403,9 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
 
         # 复用 pipeline 单例的 store/embedding（不再每次 new 加载模型；doc_db 路径与 upload 一致）
         pipeline = await asyncio.to_thread(get_rag_pipeline)
+        from backend.rag.indexing.processing_lineage_pg import (
+            get_processing_lineage_repository,
+        )
         # F2: 从 registry 回读归属传入 indexer，避免重索引把 kb_id/department
         # 覆盖成默认值（与 upload 路径行为对齐）。kb_id 传 "default" 才能触发
         # indexer._derive_kb_id() 的路径反推兜底；department 缺失时退 "general"。
@@ -339,6 +416,9 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
             kb_id=reg_kb or "default",
             department=reg_dept or "general",
             bm25_store=pipeline.bm25_store,  # P0-1: 重索引后立即同步 BM25
+            processing_lineage_repository=get_processing_lineage_repository(),
+            processing_task_id=f"reindex:{doc_id}",
+            processing_batch_id=batch_id,
         )
 
         # 执行重索引

@@ -135,11 +135,16 @@ async def bind_agent_hub_loop():
 
 @app.on_event("startup")
 async def validate_settings():
-    """环境变量集中校验：fatal 错误抛出 → 服务拒绝启动（fail-fast）。
+    """集中校验基础配置与数据库模型配置：fatal 错误抛出 → 服务拒绝启动。
 
     校验失败时 FastAPI 会中断 startup，uvicorn 退出，
     避免带着坏配置对外提供半残服务。
     """
+    # 模型/凭据已切换为 DB 唯一来源。先装载一次注册表，确保下面的
+    # 角色与密钥校验针对数据库真实配置，而不是旧 .env 快照。
+    from backend.infra.llm.registry_store import refresh_registry
+
+    await refresh_registry()
     from backend.config.startup import validate_startup_settings
     validate_startup_settings()
 

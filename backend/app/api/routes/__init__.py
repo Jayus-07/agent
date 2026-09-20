@@ -1,2 +1,7 @@
-"""API 路由包"""
-from backend.app.api.routes import chat, sql, rag, report, llm, observability, memory, data, mcp, health, competitor, selection_decision, maps
+"""API 路由包。
+
+不要在包初始化阶段导入全部路由。索引 Worker 只需要复用上传路由中的
+同步索引函数，若这里提前加载 MCP、客服和其它重路由，会把不相关的可选
+依赖带进 Worker，并在多进程环境中放大导入路径问题。需要的子模块由
+``backend.app.api.router`` 显式导入。
+"""
