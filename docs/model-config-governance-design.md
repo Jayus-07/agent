@@ -655,8 +655,8 @@ env 兜底是同构的，沿用既有模式。
 | 级别 | 动作 | 验证 | 失败含义 | 超时 |
 |---|---|---|---|---|
 | L0 | `url_guard` + DNS + TCP/TLS | URL 拼写、网络、证书 | URL 写错 / 不可达 | 5s |
-| L1 | `GET {base}/models` | Key 是否被接受 | 404 → 可能少了 `/v1`（给拼写建议） | 8s |
-| L2 | 最小 chat 调用（`max_tokens=16`，prompt 固定） | 模型名在该 Key 下是否可用 | **模型名错**（与 Key 错区分开） | 20s |
+| L1 | `GET {base}/models` | Key 是否被接受 + **响应体是否为 OpenAI 形状** | 404 → 可能少了 `/v1`（给拼写建议）；**200 但非 OpenAI 形状 → 降级**（见 B.4.1） | 8s |
+| L2 | 最小 chat 调用（`max_tokens=16`，prompt 固定） | 模型名在该 Key 下是否可用 | **401/404 分流**：404 且 body 为空 → **地址错**；带 body 的 404 → **模型名错**；401 → Key 错（见 B.4.2） | 20s |
 | L3 | 试 `stream=true` 观察是否回传 usage | `stream_usage` 支持性 | 决定是否降级 | — |
 
 **硬约束（逐条都有原因）**：
@@ -674,6 +674,85 @@ env 兜底是同构的，沿用既有模式。
    代价是未落库的 URL 也会被探测 → 必须配合 B.6 的限制。
 6. **UI 只承诺「厂商连通性」，不承诺「业务可用」。** 业务链还要过限流 / 预算 /
    工具绑定，说「可用」是过度承诺。
+
+### B.4.1 L1 形状嗅探：200 不等于「这是 OpenAI 兼容基址」（2026-09-21 补充）
+
+**触发场景（实测）**：用户在「阿里云百炼 · 北京 · Token Plan」新增模型，L0 / L1 通过，
+L2 报 `最小调用失败：OpenAIModelNotFoundError: Error code: 404`。
+
+根因**与模型名无关**：他把厂商**原生协议前缀**当成了 OpenAI 兼容基址。
+
+| 请求（假 Key 探测） | 结果 |
+|---|---|
+| `GET  https://maas.qianwenaiapi.com/api/v1/models` | **401** —— 原生路由也存在，故 L1「通过」 |
+| `POST https://maas.qianwenaiapi.com/api/v1/chat/completions` | **404，body 为空** ← 该前缀下没这条路由 |
+| `POST https://maas.qianwenaiapi.com/compatible-mode/v1/chat/completions` | **401** ← 路由存在，先鉴权 |
+
+`404` 发生在鉴权**之前**且 body 为空 = 网关没有这条路由 → **换任何模型名都无效**。
+
+**本次新增的通用判别法**：`401` = 路由存在（网关先鉴权）；`404` = 路由不存在。
+拿一个**假 Key** 打一发即可分辨，无需真凭据。
+
+> 附：`qianwenaiapi.com` 看着像野域名，但证书 Subject 为
+> `O=Alibaba (China) Technology Co., Ltd.`、SAN 覆盖 `*.cn-beijing.maas.qianwenaiapi.com`
+> —— 是阿里云 MaaS 的正式域名，与 `aliyuncs.com` 同族。差别只在路径前缀。
+> 另：全仓 grep `qianwenaiapi` **零命中**，说明该地址是手工填写，不是预置带出的。
+
+**L1 的假绿灯**：百炼原生 `/api/v1/models` 同样返回 **200**，body 形状是
+`{"code":null,"message":null,"success":true,"output":{"total":507,…}}` —— 这**不是** OpenAI
+形状（OpenAI 的 `/models` 是 `{"object":"list","data":[…]}`）。而 L1 原本只探
+「`GET {base}/models` 通不通」，于是给出了通过。
+
+**修法**：新增 `_models_body_is_openai_shaped(body) -> bool | None`
+
+| 判定 | 条件 | 动作 |
+|---|---|---|
+| `True` | `data` 是 list | 通过（原行为） |
+| `False` | 无 `data`，但命中厂商原生信封特征（键含 `output` / `success` / `code`） | **降级** + 提示「疑似该厂商原生协议端点；OpenAI 协议对话会 404 —— base_url 可能需要补 `/compatible-mode` 或 `/v1`」 |
+| `None` | JSON 解析失败 / 不是 dict / 形状不认识 | 通过（**保持宽容**，不降级） |
+
+设计取向：**只降级不判死**（硬约束 1 不变）—— 形状嗅探可能误伤，故 `None` 一律放行；
+只有明确命中「原生信封」才降级，且降级文案直接给出**改地址的方向**，
+而不是让用户在错误的地址上反复试模型名。
+
+### B.4.2 L2 归因：先判「地址错」，再判「模型名错」（2026-09-21 补充）
+
+原实现只有「模型名错 / Key 错」二分，所以上面那类**地址错**要么被误归到「模型名错」，
+要么被关键字表漏掉、落到兜底文案「最小调用失败」——**最没用的那一句**。
+
+**两个把人带偏的机制**：
+
+1. **SDK 异常名撒谎**：`langchain_openai` 把**任何**上游 404 一律重包为
+   `OpenAIModelNotFoundError`（`class OpenAIModelNotFoundError(openai.NotFoundError, ModelNotFoundError)`）。
+   类名里的 `ModelNotFound` **只代表「上游 404」**，不代表模型名错。
+2. **关键字表漏 CamelCase**：原表只有 `"model not found"` / `"model_not_found"`，
+   匹配不上异常类名拼成的 `openaaimodelnotfounderror`（无空格、无下划线）→ 掉兜底分支。
+
+**新归因顺序（顺序即语义）**：
+
+| 序 | 条件 | 归因文案 |
+|---|---|---|
+| 1 | `status_code == 404` 且原文中**不含 `{`** | **端点没有该对话路由（404 且响应体为空）：base_url 很可能不是 OpenAI 兼容基址 —— 检查是否漏了 `/v1` 或 `/compatible-mode/v1`** |
+| 2 | 命中模型关键字（原表 + 新增 `modelnotfound`） | 模型名错误或该 Key 无权访问该模型 |
+| 3 | 命中 Key 关键字 | Key 无效或无权访问 |
+| 4 | 其余 `404`（**带 body**） | 模型名错误或该 Key 无权访问该模型 |
+
+**为什么用「body 是否为空」区分**：上游真报「模型不存在」时会回**结构化 JSON**
+（含 error code / message）；而路径不存在常是网关层的**空 body** 404。
+这是当前唯一低成本可用的信号。
+
+**验证（真实端点三组对照）**：
+
+| 填的 base_url | 归因结果 |
+|---|---|
+| `…/api/v1`（用户填的） | 「端点没有该对话路由（404 且响应体为空）… 检查是否漏了 `/v1` 或 `/compatible-mode/v1`」 |
+| `…/compatible-mode/v1` | 「Key 无效或无权访问」（401，阿里云标准错误体） |
+| 官方 Token Plan 地址 | 同上 |
+
+换地址后归因立刻从「地址错」跳到「Key 错」—— 判别**有效，非巧合**。
+
+**对硬约束 4 的强化**：探测结果是排障第一现场，故归因文案**必须带上下一步动作**
+（改地址 / 换模型名 / 换 Key），而不是只贴异常原文。
 
 ## B.5 必须一并改的 10 处硬冲突
 
