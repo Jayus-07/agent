@@ -451,6 +451,11 @@ def tenant_session_user():
                 (str(actor_id), str(target_id)),
             )
             cur.execute(
+                "DELETE FROM auth.rbac_audits "
+                "WHERE tenant_id = 'tenant-b' AND target_user_id = %s",
+                (target_id,),
+            )
+            cur.execute(
                 "DELETE FROM auth.users WHERE id IN (%s, %s)",
                 (actor_id, target_id),
             )

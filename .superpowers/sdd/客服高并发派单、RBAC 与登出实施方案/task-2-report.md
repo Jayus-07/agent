@@ -4,7 +4,7 @@
 
 已针对审查意见完成 P2 修复，未修改 P3 文件、前端、原工作树、P1 模型/迁移或用户的 `0014–0022/027` overlay。修复 commit message：`fix: close P2 RBAC review gaps`。
 
-本轮复审补证仍保持 P2 范围，仅增加真实行为测试与本报告；未修改生产代码或 P3 文件。
+本轮修复轮次 3 仍保持 P2 范围，仅修改真实行为测试与本报告；未修改生产代码或 P3 文件。
 
 ## 本轮修复内容
 
@@ -15,7 +15,8 @@
 - operator RBAC 回归改为通过真实身份解析和 `X-User-Roles`；另有真实请求证明伪造 `X-Operator-Role` 不能提权。
 - `029` 幂等迁移补充 `auth.users.tenant_id`、索引和审计租户约束；schema 测试覆盖 Alembic `0023 -> 0024`、原生迁移重复执行和真实 `display_name NOT NULL` 约束。
 - `test_auth_session_family.py` 通过真实 `api_key_middleware`、非 skip 的 `/protected-rbac` 路由、`X-API-Key` 和 `JWT_SESSION_GUARD_MODE=enforce` 验证旧 access token：角色变更前 200，变更后实际 middleware `_session_guard` 返回 401，并断言“会话已失效”。
-- `test_rbac_api.py` 使用两个独立 psycopg2 连接/事务和与生产一致的 advisory lock、active-admin 固定排序、版本更新及 session/refresh/audit SQL，验证并发最后 admin 降权一方成功、一方 409、线程在超时前结束；schema 不具备时显式 skip。
+- `test_rbac_api.py` 的真实并发回归在同一个 `asyncio.run` 中创建两个独立 `AsyncSessionLocal`/真实 `AsyncSession`，通过 Event+Lock 起跑门同时调用生产函数 `backend.app.api.routes.rbac.update_user_in_transaction`；每个 worker 独立 commit/rollback，断言一方真实成功、一方捕获生产 `HTTPException(409)`、无协程错误/死锁且最终 active admin 数为 1。psycopg2 只用于真实 PostgreSQL 的 schema 探针、测试数据准备和清理，schema/数据库不可用时明确 `pytest.skip`，其它异常失败。
+- `tenant_session_user` fixture 在删除目标用户前只删除该目标用户对应的 `auth.rbac_audits`（限定 `tenant_id` 与 `target_user_id`），不删除租户内其它审计。
 
 ## TDD 证据
 
@@ -41,14 +42,42 @@ D:/Python/python.exe -m pytest tests/api/test_auth_session_family.py::test_cs_ro
 
 首次退出码 1，断言得到 `200 == 401`；日志显示 fake Redis 缺少 `exists`，使真实 `_session_guard` 按 Redis 异常降级放行。补齐 fake 的 `exists` 仅作为 Redis 边界替身能力后，重新运行得到 `1 passed, 1 warning`，并实际经过 middleware 401 分支。
 
-真实 PostgreSQL 并发证据在测试先写入后运行：
+上一轮真实 PostgreSQL 并发证据在测试先写入后运行：
 
 ```text
 D:/Python/python.exe -m pytest tests/api/test_rbac_api.py::test_real_postgres_last_admin_concurrency_is_serialized -q --no-cov
 1 passed in 11.48s
 ```
 
-该项是针对已有 advisory-lock 生产实现的真实回归测试，首跑即通过，因此没有伪造一个生产缺陷来制造 RED；PostgreSQL 不可用或所需 schema 缺失时只走明确 `pytest.skip`，连接/事务内的其他异常会进入断言失败。
+该项是上一轮针对 advisory-lock 生产实现的真实回归；本轮已将其手写 SQL 改为直接调用生产更新函数，以下是替换后的真实性证据。
+
+### 修复轮次 3 RED/GREEN
+
+先运行改写后的真实并发测试：
+
+```text
+D:/Python/python.exe -m pytest tests/api/test_rbac_api.py::test_real_postgres_last_admin_concurrency_is_serialized -q --no-cov
+AttributeError: module 'asyncio' has no attribute 'Barrier'
+1 failed in 9.38s
+```
+
+当前 Python 运行时没有 `asyncio.Barrier`，该失败暴露了测试同步实现问题；随后在不改变生产代码的前提下改为同一事件循环内的 Event+Lock 确定性起跑门，再运行：
+
+```text
+D:/Python/python.exe -m pytest tests/api/test_rbac_api.py::test_real_postgres_last_admin_concurrency_is_serialized -q --no-cov
+1 passed in 8.02s
+```
+
+该通过结果明确经过 `await rbac.update_user_in_transaction(...)`：两个真实异步事务分别使用 `version=0`、`platformRole=viewer`、`status=0`，同一测试租户与真实 `OperatorIdentity(role="admin", actor="user:...")`；生产 advisory lock 串行化后，结果为 `[200, 409]`，最终 active admin 数为 `1`。测试不再以手写 SQL 模拟生产更新路径。
+
+真实旧 access token 行为测试复跑：
+
+```text
+D:/Python/python.exe -m pytest tests/api/test_auth_session_family.py::test_cs_role_change_revokes_real_access_gate_and_refresh_family -q --no-cov
+1 passed, 1 warning in 8.18s
+```
+
+该测试挂载真实 `api_key_middleware` 与非 skip 受保护路由，旧 token 在角色变更前得到 200，变更后由实际 `_session_guard` 得到 401；fixture 清理目标用户前删除该用户的租户限定审计行。
 
 ### GREEN
 
@@ -56,14 +85,14 @@ D:/Python/python.exe -m pytest tests/api/test_rbac_api.py::test_real_postgres_la
 
 ```text
 D:/Python/python.exe -m pytest tests/api/test_rbac_api.py tests/security/test_session_service.py tests/api/test_auth_session_family.py tests/api/test_operator_role_rbac.py tests/customer_service/test_cs_dispatch_schema.py -q --no-cov
-66 passed, 6 warnings in 52.61s
+66 passed, 7 warnings in 40.47s
 ```
 
 分组结果：
 
 ```text
 D:/Python/python.exe -m pytest tests/customer_service/test_cs_dispatch_schema.py -q --no-cov
-15 passed in 10.50s
+15 passed in 11.09s
 
 D:/Python/python.exe -m pytest tests/api/test_auth_session_family.py -q --no-cov
 17 passed, 7 warnings in 38.31s
@@ -97,6 +126,8 @@ D:/Python/python.exe -m py_compile tests/api/test_auth_session_family.py tests/a
 exit 0
 ```
 
+本轮完成后的 P2 相关静态检查再次执行，结果仍为 `All checks passed!` / `exit 0`；检查范围包含生产 RBAC/auth/session 路径、0024、P2/P1 focused tests，以及本轮两个测试文件。`git diff --check` 同样退出 0。
+
 对包含未修改 `backend/app/api/middleware/auth.py` 的扩大 ruff 列表执行时，唯一失败为该既有文件的 `F401 os imported but unused`；本轮未为清理该 P3/既有问题扩大提交范围。
 
 ## 修改文件
@@ -126,6 +157,12 @@ exit 0
 - P2 schema 测试在临时 PostgreSQL 中实际执行 0024 两次，并验证 `auth.users.tenant_id/version`、`auth.rbac_audits` 和 `cs_agents.display_name NOT NULL`。
 - 共享本地数据库直接完整执行 028 时，在既有数据上触发了 P1 的重复 active handoff fail-fast，事务已回滚；本任务没有清理或修改该 P1 数据。因此“共享库完整 028→029 链路”未在本轮验证，属于环境阻塞，必须在干净/已治理的 P1 数据库中由 P9/部署验收补做。029 的独立真实链路已验证。
 - 本轮真实 middleware 测试只验证应用内 `api_key_middleware` 与 Redis session guard；APISIX `GATEWAY_SESSION_CHECK` 默认 `audit`、APISIX 到 app 的租户头注入链及网关实际 session 校验仍未作为单元测试验证，保留为 P9/deployment gate。
+
+## 本轮未能验证、留待 P9/deployment gate 的项
+
+- 共享库在既有数据上无法完成无清理的完整 028→029 部署链；本轮只验证了 029 独立真实链路与幂等测试，未声称共享库完整链已验证。
+- APISIX `GATEWAY_SESSION_CHECK` 默认 `audit` 行为、APISIX 注入租户头到 app 的完整链路、以及网关实际 session 校验未作为本轮单元/集成测试验证。
+- 共享 advisory lock 的跨租户串行代价仍未优化；它满足最后 active admin 的一致性契约，但跨租户性能属于 Minor 风险，需后续评估按租户分片且保持固定锁顺序。
 
 ## 风险
 

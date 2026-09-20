@@ -7,20 +7,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
-import threading
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from backend.app.api import deps
 from backend.app.api.routes import rbac
 from backend.app.api.routes.rbac import router as rbac_router
 from backend.config import auth as auth_config
+from backend.memory.database import AsyncSessionLocal
 from backend.security.session_service import (
     SessionService,
     access_session_key,
@@ -628,7 +630,7 @@ def test_cross_tenant_audit_isolation(monkeypatch):
 
 
 def test_real_postgres_last_admin_concurrency_is_serialized():
-    """真实双连接验证最后 admin 并发降权为一成功、一 409，且不死锁。"""
+    """通过生产更新函数验证最后 admin 并发降权为一成功、一 409。"""
     psycopg2 = pytest.importorskip("psycopg2")
     from backend.config.database import MEMORY_DB_CONFIG
 
@@ -638,9 +640,12 @@ def test_real_postgres_last_admin_concurrency_is_serialized():
         pytest.skip(f"PostgreSQL 不可用，跳过真实 RBAC 并发测试: {exc}")
 
     required_columns = {
-        ("auth", "users"): {"tenant_id", "version"},
+        ("auth", "users"): {
+            "id", "username", "password_hash", "real_name", "dept", "role",
+            "status", "tenant_id", "version",
+        },
         ("auth", "sessions"): {"user_id", "revoked_at", "revoke_reason"},
-        ("auth", "refresh_tokens"): {"user_id", "revoked"},
+        ("auth", "refresh_tokens"): {"user_id", "revoked", "revoked_at"},
         ("auth", "rbac_audits"): {
             "tenant_id", "actor_user_id", "target_user_id", "action",
             "before_state", "after_state", "result",
@@ -691,95 +696,73 @@ def test_real_postgres_last_admin_concurrency_is_serialized():
     finally:
         setup.close()
 
-    barrier = threading.Barrier(2)
-    outcomes: list[dict | None] = [None, None]
+    async def run_real_rbac_concurrency() -> tuple[list[dict | None], int]:
+        start_event = asyncio.Event()
+        ready_lock = asyncio.Lock()
+        ready_count = 0
+        outcomes: list[dict | None] = [None, None]
 
-    def downgrade(index: int, target_id: int) -> None:
-        connection = None
+        async def downgrade(index: int, target_id: int) -> None:
+            nonlocal ready_count
+            async with AsyncSessionLocal() as session:
+                try:
+                    async with ready_lock:
+                        ready_count += 1
+                        if ready_count == 2:
+                            start_event.set()
+                    await start_event.wait()
+                    outcome = await rbac.update_user_in_transaction(
+                        session,
+                        user_id=target_id,
+                        body={"version": 0, "platformRole": "viewer", "status": 0},
+                        operator=deps.OperatorIdentity(
+                            role="admin", actor=f"user:{user_ids[0]}"
+                        ),
+                        tenant_id=tenant_id,
+                    )
+                    await session.commit()
+                    outcomes[index] = {
+                        "status": 200,
+                        "user_id": outcome.user["userId"],
+                    }
+                except HTTPException as exc:
+                    await session.rollback()
+                    outcomes[index] = {"status": exc.status_code}
+                except Exception as exc:  # surfaced by the assertion below
+                    await session.rollback()
+                    outcomes[index] = {"status": "error", "error": repr(exc)}
+
+        from backend.memory import database
+
         try:
-            connection = psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2)
-            with connection.cursor() as cursor:
-                cursor.execute("SET lock_timeout = '3000ms'")
-                cursor.execute("SET statement_timeout = '10000ms'")
-                barrier.wait(timeout=5)
-
-                # 与 rbac.update_user_in_transaction 保持同一锁顺序和 SQL 语义。
-                cursor.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
-                    ("auth.users:rbac-active-admins",),
-                )
-                cursor.execute(
-                    "SELECT id FROM auth.users "
-                    "WHERE tenant_id = %s AND role = 'admin' AND status = 1 "
-                    "ORDER BY id FOR UPDATE",
-                    (tenant_id,),
-                )
-                active_admins = cursor.fetchall()
-                cursor.execute(
-                    "SELECT id, role, status, version FROM auth.users "
-                    "WHERE id = %s AND tenant_id = %s FOR UPDATE",
-                    (target_id, tenant_id),
-                )
-                current = cursor.fetchone()
-                if current is None or len(active_admins) <= 1:
-                    connection.rollback()
-                    outcomes[index] = {"status": 409}
-                    return
-
-                cursor.execute(
-                    "UPDATE auth.users SET role = 'viewer', status = 0, "
-                    "version = version + 1, updated_at = now() "
-                    "WHERE id = %s AND tenant_id = %s AND version = %s "
-                    "RETURNING id",
-                    (target_id, tenant_id, current[3]),
-                )
-                if cursor.fetchone() is None:
-                    connection.rollback()
-                    outcomes[index] = {"status": 409}
-                    return
-
-                cursor.execute(
-                    "UPDATE auth.sessions SET revoked_at = now(), "
-                    "revoke_reason = 'rbac_changed' "
-                    "WHERE user_id = %s AND revoked_at IS NULL",
-                    (target_id,),
-                )
-                cursor.execute(
-                    "UPDATE auth.refresh_tokens SET revoked = TRUE, revoked_at = now() "
-                    "WHERE user_id = %s AND revoked = FALSE",
-                    (target_id,),
-                )
-                cursor.execute(
-                    "INSERT INTO auth.rbac_audits "
-                    "(tenant_id, actor_user_id, target_user_id, action, "
-                    "before_state, after_state, result) "
-                    "VALUES (%s, %s, %s, 'user.update', '{}', '{}', 'success')",
-                    (tenant_id, user_ids[0], target_id),
-                )
-            connection.commit()
-            outcomes[index] = {"status": 200}
-        except Exception as exc:  # surfaced by the assertion below, never swallowed
-            if connection is not None:
-                connection.rollback()
-            outcomes[index] = {"status": "error", "error": repr(exc)}
+            await asyncio.wait_for(
+                asyncio.gather(
+                    downgrade(0, user_ids[0]),
+                    downgrade(1, user_ids[1]),
+                ),
+                timeout=15,
+            )
+            async with AsyncSessionLocal() as verify_session:
+                active_admins = (await verify_session.execute(text(
+                    "SELECT COUNT(*) FROM auth.users "
+                    "WHERE tenant_id = :tenant_id AND role = 'admin' AND status = 1"),
+                    {"tenant_id": tenant_id})).scalar_one()
+            return outcomes, int(active_admins)
         finally:
-            if connection is not None:
-                connection.close()
+            if database._engine is not None:
+                await database._engine.dispose()
+                database._engine = None
+                database._sessionmaker = None
+                database._engine_loop = None
 
-    threads = [
-        threading.Thread(target=downgrade, args=(index, user_id), daemon=False)
-        for index, user_id in enumerate(user_ids)
-    ]
     try:
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=15)
-            assert not thread.is_alive(), "RBAC 并发事务疑似死锁"
-
+        outcomes, active_admin_count = asyncio.run(run_real_rbac_concurrency())
         assert all(outcome is not None for outcome in outcomes), outcomes
-        assert not [outcome for outcome in outcomes if outcome["status"] == "error"], outcomes
+        assert not [
+            outcome for outcome in outcomes if outcome["status"] == "error"
+        ], outcomes
         assert sorted(outcome["status"] for outcome in outcomes) == [200, 409]
+        assert active_admin_count == 1
     finally:
         cleanup = psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2)
         try:
