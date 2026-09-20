@@ -120,6 +120,6 @@ python scripts/cs_dispatch_chaos.py --target dispatcher --apply
 |---|---|---|
 | 1. 028/029 部署 + 复核 | ✅ 2026-09-21 04:12 | ALL_APPLIED |
 | 2. 启动 dispatcher | ✅ 2026-09-21 04:24 | `CS_DISPATCH_MODE=shadow` 双副本 healthy；启动期每副本 1 条 `dispatch iteration failed`（event loop 重建瞬时错误，不复发）；心跳 `cs:dispatcher:heartbeat:*` 双实例各 1 条 |
-| 3. shadow 观察 ≥24h | 🕐 进行中（至 2026-09-22） | 观察 `/cs/ops/dispatch/stats` + Prometheus `agent-platform-cs-dispatch`；**启动 1 分钟内 relay 已把存量 456 条 pending outbox 全部投递清零**；shadow 零真实绑定（assignments 无新增、agent_offered=0）已实测 |
-| 4. 放量 5→20→50→100 | ⬜ 未开始 | `scripts/cs_dispatch_rollout.py --set 5` |
-| 5. 切 enforce | ⬜ 未开始 | 100% 稳定后 |
+| 3. shadow 观察 ≥24h | ⏭️ **取消**（用户决策：开发阶段不灰度，2026-09-21 04:37） | shadow 实际运行 13 分钟（04:24–04:37）已完成使命：relay 清空 456 条积压、零脏绑定 |
+| 4. 放量 5→20→50→100 | ⏭️ 不适用 | `CS_DISPATCH_ROLLOUT_PERCENT` env 兜底默认即 100（`backend/config/cs_dispatch.py:96`），sys_config 无覆盖行，enforce 天然全量 |
+| 5. 切 enforce | ✅ 2026-09-21 04:37 | 双副本 `--force-recreate` 为 `CS_DISPATCH_MODE=enforce`，日志确认 `mode=enforce`、零错误、心跳换新实例；当前队列空闲（19 closed / 2 human_active），首个真实转人工将秒级派单 |
